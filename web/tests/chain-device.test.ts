@@ -75,11 +75,12 @@ test("the patch is the truth: the chain's knobs turned in the patch alone give w
     ...p,
     modules: p.modules.map((m) => {
       if (m.id === 'cratarr/tunnel') return { ...m, knobs: { ...m.knobs, tunnel: set.tunnel } };
-      if (m.id === 'accent') return { ...m, knobs: { ...m.knobs, accent: set.flash } };
       if (m.id === 'cratarr/show/curve') return { ...m, knobs: { ...m.knobs, haze: set.haze } };
       if (m.id === 'cratarr/flame') return { ...m, knobs: { ...m.knobs, 'continuity.2': 0.2 } };
       return m;
     }),
+    // Flash is the rack's macro on the Accent's knob (0..2).
+    macros: p.macros.map((x) => (x.id === 'flash' ? { ...x, value: set.flash / 2 } : x)),
   });
   const continuity = [...DEFAULTS.continuity];
   continuity[2] = 0.2;

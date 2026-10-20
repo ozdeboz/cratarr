@@ -10,9 +10,13 @@ import { DEFAULTS, RANGES } from './settings.svelte';
 
 export type V2Type = ModuleType & { ports?: Ports };
 
+/** The Whole frame's walks (Look's and Behaviour's columns) are not the rack's: Randoms and the Dice now (0057). */
+const WALKS = new Set(['lookWalk', 'behaviourWalk']);
+
 export function v2TypeList(chain: readonly ModuleType[] = cratarrTypes(RANGES, DEFAULTS)): V2Type[] {
   const show = chain.find((t) => t.type === 'show');
-  return [...EXTRA_TYPES, ...chain, ...ENGINE_MODULES, ...GRAPH_MODULES, ...PICTURE_MODULES, ...(show ? showPartTypes(show) : [])];
+  const rack = chain.map((t) => (t.type === 'frame' ? { ...t, knobs: t.knobs.filter((k) => !WALKS.has(k.id)) } : t));
+  return [...EXTRA_TYPES, ...rack, ...ENGINE_MODULES, ...GRAPH_MODULES, ...PICTURE_MODULES, ...(show ? showPartTypes(show) : [])];
 }
 
 /** The types by name (a later one of a name over an earlier, as picture-graph.ts's map has them). */

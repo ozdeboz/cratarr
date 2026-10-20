@@ -52,8 +52,6 @@ const CHANNELS = BANDS;
 const MERGE_MODES = ['sum', 'mean', 'max', 'geometric'] as const;
 /** The engine's own module types (ports.ts), for their knobs' tapers where the caller's types do not have them. */
 const ENGINE_TYPES: Record<string, ModuleType> = Object.fromEntries(ENGINE_MODULES.map((t) => [t.type, t]));
-/** A Music output's slow reading (`level:slow`: its slow follower's, normal.ts). */
-const SLOW = ':slow';
 /** A knob's own inputs beside its value (ports.ts): a level knob's gain, a step knob's trigger to its next step. */
 const GAIN = ':gain';
 const NEXT = ':next';
@@ -261,13 +259,15 @@ const ADSR_KNOBS = { attack: 0, decay: 0, sustain: 0, release: 0.15, retrigger: 
 /** No channels yet (a VCA, Merge or Ducker not yet worked out), and a scratch for working one out. */
 const NO_CHANNELS = new Float64Array(64);
 const SCRATCH = new Float64Array(6);
+/** A new track's strike (all of it, as it starts), for its ADSR. */
+const TRACK_STRIKE = { since: Infinity, velocity: 1, next: null };
 
 /** A cable as the hot loops take it: its source's type, and its shape as its value was when last asked. */
 type Entry = { c: CableV2; type: string; v: CableV2['value']; shape: Shape };
 const entryOf = (c: CableV2, typeOf: Map<string, string>): Entry => ({ c, type: typeOf.get(c.from.module) ?? c.from.module, v: c.value, shape: shapeOf(c.value) });
 
-/** How a Music row is read: its signal, its reading, slow or not. */
-type Reading = { signal: string; reference?: (typeof READINGS)[number]; speed?: 'slow' };
+/** How a Music row is read: its signal and its reading. */
+type Reading = { signal: string; reference?: (typeof READINGS)[number] };
 
 /** The cables into each module's ports (those whose name ends in `suffix`, by the name before it), reaching each
  *  channel; a channel-less cable from a band's signal as one a channel, each its band's (VCV's polyphonic cable). */
@@ -283,13 +283,18 @@ function byPort(into: Map<string, CableV2[]>, typeOf: Map<string, string>, suffi
       cs
         .filter((c) => c.to.channel === undefined || c.to.channel === ch)
         .map((c) => {
-          const band = (typeOf.get(c.from.module) ?? c.from.module) === 'music' && BAND_PORTS.has(c.from.port.endsWith(SLOW) ? c.from.port.slice(0, -SLOW.length) : c.from.port);
+          const band = (typeOf.get(c.from.module) ?? c.from.module) === 'music' && BAND_PORTS.has(c.from.port);
           return entryOf(band && c.from.channel === undefined && c.to.channel === undefined ? { ...c, from: { ...c.from, channel: ch } } : c, typeOf);
         }),
     );
     (out.get(module) ?? out.set(module, new Map()).get(module)!).set(name, reaching);
   }
   return out;
+}
+
+/** An ADSR keyed by a new track (Music's `newtrack`, 0057 §7f: what the Track's pulse was): one channel, not a band's. */
+function trackAdsr(id: string, typeOf: Map<string, string>, into: Map<string, CableV2[]>): boolean {
+  return (into.get(`${id}|gate`) ?? []).some((c) => (typeOf.get(c.from.module) ?? c.from.module) === 'music' && c.from.port === 'newtrack');
 }
 
 /** The VCAs something polyphonic reaches: a cable onto one channel, from a band's signal or an ADSR without one, or
@@ -306,8 +311,7 @@ function polyphonicOf(p: PatchV2, typeOf: Map<string, string>, into: Map<string,
         if (c.to.channel !== undefined) return true;
         if (c.from.channel !== undefined) return false;
         const type = typeOf.get(c.from.module) ?? c.from.module;
-        const port = c.from.port.endsWith(SLOW) ? c.from.port.slice(0, -SLOW.length) : c.from.port;
-        return (type === 'music' && BAND_PORTS.has(port)) || type === 'adsr' || type === 'shaper' || (type === 'vca' && out.has(c.from.module));
+        return (type === 'music' && BAND_PORTS.has(c.from.port)) || (type === 'adsr' && !trackAdsr(c.from.module, typeOf, into)) || type === 'shaper' || (type === 'vca' && out.has(c.from.module));
       });
       if (poly) {
         out.add(x.id);
@@ -332,6 +336,11 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
   const moduleOf = new Map(p.modules.map((x) => [x.id, x]));
   const first = new Map<string, Module>();
   for (const x of p.modules) if (!first.has(x.type)) first.set(x.type, x);
+  // The Loudness: the first Envelope Follower on Music's loudness (its input uncabled, at its normal), stepped by the
+  // engine itself; every other runs as a modulator.
+  const loudness = p.modules.find((x) => x.type === 'envelope' && !p.cables.some((c) => c.to.module === x.id && c.to.port === 'in'));
+  if (loudness) first.set('envelope', loudness);
+  else first.delete('envelope');
   const flame = first.get('flame');
   const gateOf = new Map<string, CableV2>();
   for (const c of p.cables) if (typeOf.get(c.to.module) === 'adsr' && c.to.port === 'gate' && (typeOf.get(c.from.module) ?? c.from.module) === 'music') gateOf.set(c.to.module, c);
@@ -340,7 +349,7 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
     const key = `${c.to.module}|${c.to.port}`;
     (into.get(key) ?? into.set(key, []).get(key)!).push(c);
   }
-  const running = p.modules.filter((x) => modulatorTypeIn(types, x.type));
+  const running = p.modules.filter((x) => x !== loudness && modulatorTypeIn(types, x.type));
   const macroIds = new Set(p.macros.map((x) => x.id));
   const targets = new Map<string, { macro: Macro; from: number; to: number }[]>();
   for (const macro of p.macros)
@@ -448,11 +457,17 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   };
   /** The chain's settings from its modules' knobs (the patch is the truth, 0057 Phase B); a knob a patch has no module
    *  for, as the settings had it. */
+  // Intensity, Flash and Speed are the rack's macros on these knobs (0057: the Whole frame gone): as last frame left them.
+  const macroedKnob = (x: Module | undefined, knob: string, or: number) => {
+    let base = knobOf(x, knob, or);
+    for (const g of (x && plan.targetsOf.get(x.id)?.get(knob)) || []) base = g.from + (g.to - g.from) * finite(st.macros[g.macro.id], clamp(finite(g.macro.value), 0, 1));
+    return base;
+  };
   const chainSettings = {
     lighting: s.lighting,
-    flash: knobOf(ofType('accent'), 'accent', s.flash),
-    speed: knobOf(ofType('clock'), 'speed', s.speed),
-    intensity: knobOf(ofType('envelope'), 'intensity', s.intensity),
+    flash: macroedKnob(ofType('accent'), 'accent', s.flash),
+    speed: macroedKnob(ofType('clock'), 'speed', s.speed),
+    intensity: macroedKnob(ofType('envelope'), 'intensity', s.intensity),
     continuity: s.continuity.map((v, k) => knobOf(flameModule, CONTINUITY_AT[k], v)),
     evolution: s.evolution.map((v, k) => knobOf(flameModule, EVOLUTION_AT[k], v)),
     fluid: knobOf(inChain('fluid'), 'fluid', s.fluid),
@@ -463,8 +478,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     smoothing: knobOf(inChain('show/blur'), 'smoothing', s.smoothing),
     haze: knobOf(inChain('show/curve'), 'haze', s.haze),
   } as VisualSettings;
-  // How a Music row is read (its `reference.<signal>` knob: 0057 §7e, a cable no longer says), slow from its `:slow`
-  // output; unset, as normal.ts reads it by default.
+  // How a Music row is read (its `reference.<signal>` knob: 0057 §7e, a cable no longer says); unset, as normal.ts
+  // reads it by default.
   const musicModule = ofType('music');
   const readingOf = (port: string): Reading => {
     const kept = plan.readings.get(port);
@@ -475,11 +490,9 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     return reading;
   };
   const readingNow = (port: string): Reading => {
-    const slow = port.endsWith(SLOW);
-    const signal = slow ? port.slice(0, -SLOW.length) : port;
-    const r = musicModule?.knobs[`reference.${signal}`];
+    const r = musicModule?.knobs[`reference.${port}`];
     const reference = typeof r === 'number' && Number.isFinite(r) ? READINGS[clamp(Math.round(r), 0, READINGS.length - 1)] : undefined;
-    return { signal, ...(reference ? { reference } : {}), ...(slow ? { speed: 'slow' as const } : {}) };
+    return { signal: port, ...(reference ? { reference } : {}) };
   };
   /** How an ADSR reads its strikes (its `reference` knob; absolute where unset, as the routes read the hits). */
   const adsrReading = (id: string) => READINGS[clamp(Math.round(finite(moduleOf.get(id)?.knobs.reference, 2)), 0, READINGS.length - 1)];
@@ -487,7 +500,9 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   const gateOf = plan.gateOf;
 
   // Music's raw signals, the Envelope, the Track's pulse.
-  const env = stepEnvelope(st.envelope, m.intensity, m.playing, chainSettings.intensity, step);
+  const loud = ofType('envelope');
+  const loudId = loud?.id ?? 'envelope';
+  const env = stepEnvelope(st.envelope, m.intensity, m.playing, chainSettings.intensity, step, knobOf(loud, 'attack', 0.2), knobOf(loud, 'release', 0.2));
   const raw = st.signals;
   raw.set(m.track);
   raw[T.loudness] = env.level;
@@ -499,10 +514,9 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   const trackSeed = seedOf(m.key ?? 'cratarr') / 4294967296;
   raw[T.track] = pulse;
   const bands = m.bands ?? st.standIn;
-  outputs['envelope.level'] = env.level;
-  outputs['envelope.out'] = env.out;
-  outputs['envelope.glow'] = env.glow;
-  outputs['track.pulse'] = pulse;
+  outputs[`${loudId}.level`] = env.level;
+  outputs[`${loudId}.out`] = env.out;
+  outputs[`${loudId}.glow`] = env.glow;
   const index = m.beat?.index ?? null;
   const onBeat = index !== null && st.beat !== undefined && index !== st.beat ? 1 : 0;
   st.beat = index;
@@ -562,10 +576,9 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
         const b = B[r.signal as keyof typeof B];
         return b !== undefined && f.channel !== undefined ? (bands[f.channel]?.[b] ?? 0) * (opts.still && HALVED.has(r.signal) ? 0.5 : 1) : 0;
       }
-      return clamp(finite(read({ signal: r.signal, band: f.channel, reference: r.reference, speed: r.speed })) / 2, 0, 1);
+      return clamp(finite(read({ signal: r.signal, band: f.channel, reference: r.reference })) / 2, 0, 1);
     }
-    if (type === 'track') return pulse;
-    if (type === 'envelope') return f.port === 'out' ? env.out : env.level;
+    if (type === 'envelope' && f.module === loudId) return f.port === 'out' ? env.out : env.level;
     if (type === 'clock') return f.port === 'beat' || f.port === 'bar' || f.port === 'phrase' ? ticks[f.port] : (outputs['clock.rate'] ?? st.clock.rate);
     // A Grid's channel: each point's index, distance, angle, row or column (0..1).
     if (type === 'grid') return finite(st.grids[f.module]?.grid.channels[f.channel ?? 0]?.[f.port as 'index']);
@@ -580,12 +593,25 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
    *  the signal). */
   function adsrOut(id: string, ch: number | undefined): number {
     const gate = gateOf.get(id);
+    // A new track's: one strike as it starts (the visuals opening on one too), its knobs the first channel's.
+    const onTrack = gate?.from.port === 'newtrack';
     const kind = gate && STRIKES[gate.from.port];
-    if (!gate || !kind || ch === undefined) return 0;
+    if (!gate || (!kind && !onTrack)) return 0;
+    if (onTrack) ch = 0;
+    else if (ch === undefined) return 0;
     const k = moduleOf.get(id)?.knobs ?? {};
-    const strike = m.strikes?.[ch]?.[kind] ?? NO_STRIKE;
+    if (onTrack) {
+      TRACK_STRIKE.since = st.track.key === undefined ? Infinity : Math.max(0, (opts.now - st.track.at) / 1000);
+      ADSR_KNOBS.attack = 0;
+      ADSR_KNOBS.decay = finite(k[DECAY_AT[0]]);
+      ADSR_KNOBS.sustain = finite(k[SUSTAIN_AT[0]]);
+      ADSR_KNOBS.release = finite(k[RELEASE_AT[0]], 0.25);
+      ADSR_KNOBS.retrigger = 0;
+      return adsrOf(TRACK_STRIKE, ADSR_KNOBS) * finite(k.amount, 1);
+    }
+    const strike = m.strikes?.[ch!]?.[kind!] ?? NO_STRIKE;
     const reference = adsrReading(id);
-    const velocity = (v: number) => (reference === 'absolute' ? v : finite(read({ signal: readingOf(gate.from.port).signal, band: ch, reference, value: v })));
+    const velocity = (v: number) => (reference === 'absolute' ? v : finite(read({ signal: readingOf(gate.from.port).signal, band: ch!, reference, value: v })));
     STRUCK.since = strike.since;
     STRUCK.velocity = velocity(strike.velocity);
     if (strike.next) {
@@ -753,7 +779,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
       if (type === 'music' || type === 'adsr') {
         const r = readingOf(c.from.port);
         const v =
-          type === 'adsr' ? adsrOut(c.from.module, c.from.channel) : r.reference === 'absolute' ? (xOf(c) ?? 0) : finite(read({ signal: r.signal, band: c.from.channel, reference: r.reference, speed: r.speed }));
+          type === 'adsr' ? adsrOut(c.from.module, c.from.channel) : r.reference === 'absolute' ? (xOf(c) ?? 0) : finite(read({ signal: r.signal, band: c.from.channel, reference: r.reference }));
         sum += (sh.table ? 2 * heightOf(sh, clamp(v / 2, 0, 1)) : sh.end * v) * w;
         continue;
       }
@@ -897,7 +923,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   outputs['clock.rate'] = clock;
   const trackInto = (a: Aspect) => {
     let sum = 0;
-    for (const c of (plan.trackCables[a] ??= columnOf(a).flatMap((key) => into.get(at + key) ?? []))) if ((typeOf.get(c.from.module) ?? c.from.module) === 'track') sum += depthOf(c) * heightOf(shapeOf(c.value), pulse) * walkOf(c);
+    for (const c of (plan.trackCables[a] ??= columnOf(a).flatMap((key) => into.get(at + key) ?? []))) if (trackAdsr(c.from.module, typeOf, into)) sum += depthOf(c) * heightOf(shapeOf(c.value), finite(xOf(c))) * walkOf(c);
     return sum;
   };
   const aspects = !flameModule

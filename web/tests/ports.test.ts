@@ -14,7 +14,8 @@ test('every module type has typed ports: a knob is a value input, a picture modu
     const p = portsOf(t);
     const ids = p.in.map((x) => x.id);
     assert.equal(new Set(ids).size, ids.length, `${t.type}: an input twice`);
-    for (const k of polyKnobs(t).knobs.filter((k) => !k.device)) assert.equal(p.in.find((x) => x.id === k.id)?.type, 'value', `${t.type}.${k.id}`);
+    // Music's readings are set, not cabled (0057 §7e item 10: as few jacks as can be).
+    for (const k of polyKnobs(t).knobs.filter((k) => !k.device && !(t.type === 'music' && k.id.startsWith('reference.')))) assert.equal(p.in.find((x) => x.id === k.id)?.type, 'value', `${t.type}.${k.id}`);
     const pic = (x: { type: string }) => x.type === 'picture' || x.type === 'light';
     if (t.place === 'module' || t.place === 'loop') assert.ok(p.in.some(pic) && p.out.some(pic), t.type);
     // A source gives a picture (or the flame its light), and takes none but its own last light.
@@ -24,12 +25,12 @@ test('every module type has typed ports: a knob is a value input, a picture modu
 });
 
 test("today's hidden behaviours are modules; the beats and hits are triggers, a band's signals six channels", () => {
-  assert.deepEqual(ENGINE_MODULES.map((m) => m.type), ['music', 'track', 'envelope', 'dice', 'shaper', 'clock', 'accent', 'vca', 'merge', 'meter', 'compressor', 'ducker', 'adsr', 'sequencer', 'looper', 'grid', 'fold', 'instance', 'filterbank']);
+  assert.deepEqual(ENGINE_MODULES.map((m) => m.type), ['music', 'envelope', 'dice', 'shaper', 'clock', 'accent', 'vca', 'merge', 'meter', 'compressor', 'ducker', 'adsr', 'sequencer', 'looper', 'grid', 'fold', 'instance', 'filterbank']);
   const music = portsOf(ENGINE_MODULES[0]);
   assert.equal(music.out.find((x) => x.id === 'beat')?.type, 'trigger');
   assert.equal(music.out.find((x) => x.id === 'hits')?.channels, 6);
   assert.equal(music.out.find((x) => x.id === 'loudness')?.type, 'value');
-  assert.deepEqual(portsOf(ENGINE_MODULES[2]).in[0].normal, { module: 'music', port: 'loudness' });
+  assert.deepEqual(portsOf(ENGINE_MODULES.find((t) => t.type === 'envelope')!).in[0].normal, { module: 'music', port: 'loudness' });
 });
 
 test('a cable fits by type: the same, or a trigger into a value', () => {

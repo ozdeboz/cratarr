@@ -6,11 +6,12 @@
 //    knobs (patch.ts SETTING_KNOB, ASPECT_KNOB); a column's scale is its knob's own value.
 // 2. A route from the loudness comes from the Loudness module's `level` (the loudness as Intensity lets it count), and
 //    is never scaled by it (`depth: null`).
-// 3. A route from the track comes from Track's `pulse`.
+// 3. A route from the track comes from an ADSR on Music's `newtrack` (Track folded into Music, 0057 §7f).
 // 4. Every other route comes from Music's port of its signal (a band's as that channel), read as the routes read it
 //    (`reference: 'absolute'`), its depth normalled to the Loudness's `out`.
 // 5. A route's cable keeps the route's key as its id, its value (an amount or a curve, walking or not) and its mode.
-// 6. Intensity, Flash and Speed move to the modules that do them: Loudness, Accent (Flash renamed, 0057 §7e), Clock. Show is split into its
+// 6. Intensity, Flash and Speed move to the modules that do them: the Loudness (an Envelope Follower), Accent (Flash
+//    renamed, 0057 §7e), Clock; each a rack macro on that knob, as Wild is on the Duckers'. Show is split into its
 //    device's modules (ports.ts SHOW_PARTS), its knobs exposed under their old names, so a route into
 //    `show.<knob>` keeps its address (`flatten` leads it to the module behind); Show's Size is the Flame's `zoom`.
 // 7. The extras' modules come as they are; their cables from Music's or a modulator's port.
@@ -30,9 +31,11 @@ import { extraType } from './registry';
 /** A cable as the conversion carries it until the end: how it reads its signal, its speed and its mode still on it; they
  *  leave the wire at the end (`toWire`). */
 type Wire = Omit<CableV2, 'from'> & { from: PortRef & { reference?: (typeof READINGS)[number]; speed?: 'fast' | 'slow' }; mode: 'level' | 'swing' };
-import type { VisualSettings } from './settings.svelte';
+import { RANGES, type VisualSettings } from './settings.svelte';
 
 const BANDS = 6;
+/** The ADSR on Music's `newtrack`: the Track's pulse (all of it as a track starts, gone over about a beat). */
+const NEWTRACK = 'newtrack';
 
 /** The settings that leave the frame for the module that does them (6). */
 const MOVED: Record<string, [string, string]> = { intensity: ['envelope', 'intensity'], flash: ['accent', 'accent'], speed: ['clock', 'speed'] };
@@ -41,7 +44,7 @@ const MOVED: Record<string, [string, string]> = { intensity: ['envelope', 'inten
 function routeFrom(c: Cable): Pick<Wire, 'from' | 'depth'> {
   const from = c.from as { signal: string; band?: number };
   if (from.signal === 'loudness' && from.band === undefined) return { from: { module: 'envelope', port: 'level' }, depth: null };
-  if (from.signal === 'track') return { from: { module: 'track', port: 'pulse' } };
+  if (from.signal === 'track') return { from: { module: NEWTRACK, port: 'out' } };
   return { from: { module: 'music', port: from.signal, ...(from.band !== undefined ? { channel: from.band } : {}), reference: 'absolute' } };
 }
 
@@ -180,7 +183,7 @@ function cablesAdd(modules: Module[], cables: Wire[]): { modules: Module[]; cabl
   const shapeAt = new Map<string, 'level' | 'moment' | 'mean'>();
   // A cable carrying the bands: one band of them (its channel), or all six at once (from a band's port with no channel:
   // Music's band rows, an ADSR).
-  const banded = (c: Wire) => c.from.channel !== undefined || (c.from.module === 'music' && (BAND_SIGNALS as readonly string[]).includes(c.from.port.replace(/:slow$/, ''))) || typeOf.get(c.from.module) === 'adsr';
+  const banded = (c: Wire) => c.from.channel !== undefined || (c.from.module === 'music' && (BAND_SIGNALS as readonly string[]).includes(c.from.port)) || (typeOf.get(c.from.module) === 'adsr' && c.from.module !== NEWTRACK);
   for (const c of cables) {
     const key = `${c.to.module}.${c.to.port}`;
     const aspect = ASPECT_AT.get(key);
@@ -255,7 +258,7 @@ function sidechained(modules: Module[], cables: Wire[], wild: number, limits: Pa
   const wildFactor = 2 ** (2 * (wild - 0.5));
   // Wild, a macro on the five thresholds (the owner): along the threshold's exponential taper from half to twice
   // (× 1.5) of the limit, so at today's Wild it is exactly today's factor 2^(2(wild − ½)).
-  const macro: Macro = { id: 'wild', on: 'frame', label: 'Wild', value: wild, targets: [] };
+  const macro: Macro = { id: 'wild', on: 'rack', label: 'Wild', value: wild, targets: [] };
   for (const { kind, meter, into } of SIDECHAIN) {
     const id = `duck-${kind}`;
     const limit = limits[meter] ?? DEFAULT_LIMITS[meter];
@@ -273,9 +276,26 @@ function sidechained(modules: Module[], cables: Wire[], wild: number, limits: Pa
 
 /** The cables as wires (0057 §7e item 10): how each signal is read goes to its Music row (`reference.<signal>`: 'absolute'
  *  wherever a route reads the row, as routes do, else what its cables read; a cable reading otherwise keeps its row's,
- *  rare), and an ADSR's gate's to that ADSR; a slow reading to Music's `<signal>:slow`; the mode gone (cables only add,
- *  the levels already through VCAs). */
-function toWire(modules: Module[], wires: Wire[]): CableV2[] {
+ *  rare), and an ADSR's gate's to that ADSR; a slow reading through an Envelope Follower at the slow times (one a
+ *  signal and band, `slow-<signal>[-<band>]`); the mode gone (cables only add, the levels already through VCAs). */
+function toWire(given: Module[], all: Wire[]): { modules: Module[]; cables: CableV2[] } {
+  const modules = [...given];
+  const followers = new Map<string, Wire>();
+  const wires = all.map((w): Wire => {
+    if (w.from.speed !== 'slow' || w.from.module !== 'music') return w;
+    const { speed: _speed, ...from } = w.from;
+    // An ADSR's gate: its release is its own slowness.
+    if (modules.find((m) => m.id === w.to.module)?.type === 'adsr') return { ...w, from };
+    const id = ['slow', from.port, from.channel].filter((x) => x !== undefined).join('-');
+    if (!followers.has(id)) {
+      modules.push({ id, type: 'envelope', knobs: { attack: 0.4, release: 1.5, intensity: 1 } });
+      followers.set(id, { id: `${id}-in`, from, to: { module: id, port: 'in' }, value: 1, mode: 'swing', depth: null });
+    }
+    // The band now the cable's end's (the follower is one channel).
+    const to = from.channel !== undefined && w.to.channel === undefined ? { ...w.to, channel: from.channel } : w.to;
+    return { ...w, from: { module: id, port: 'level' }, to };
+  });
+  wires.push(...followers.values());
   const music = modules.find((m) => m.id === 'music');
   const reading = new Map<string, (typeof READINGS)[number]>();
   for (const w of wires) {
@@ -285,13 +305,13 @@ function toWire(modules: Module[], wires: Wire[]): CableV2[] {
     if (!was || r === 'absolute') reading.set(w.from.port, r);
   }
   if (music) for (const [signal, r] of reading) if (r !== 'track') music.knobs[`reference.${signal}`] = READINGS.indexOf(r);
-  return wires.map(({ mode: _mode, ...w }) => {
-    const { reference, speed, ...from } = w.from;
+  const cables = wires.map(({ mode: _mode, ...w }) => {
+    const { reference, speed: _speed, ...from } = w.from;
     const adsr = modules.find((m) => m.id === w.to.module && m.type === 'adsr');
     if (adsr && from.module === 'music') adsr.knobs.reference = READINGS.indexOf(reference ?? 'track');
-    const slow = speed === 'slow' && from.module === 'music' ? { port: `${from.port}:slow` } : {};
-    return { ...w, from: { ...from, ...slow } };
+    return { ...w, from };
   });
+  return { modules, cables };
 }
 
 /** Today's settings (with their extras) as a v2 patch.
@@ -305,8 +325,7 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
   const frame = modules.find((m) => m.id === 'frame');
   const engine = new Map<string, Module>([
     ['music', { id: 'music', type: 'music', knobs: {} }],
-    ['track', { id: 'track', type: 'track', knobs: {} }],
-    ['envelope', { id: 'envelope', type: 'envelope', knobs: { time: 0.2 } }],
+    ['envelope', { id: 'envelope', type: 'envelope', knobs: { attack: 0.2, release: 0.2 } }],
     ['clock', { id: 'clock', type: 'clock', knobs: { beats: 32 } }],
     ['accent', { id: 'accent', type: 'accent', knobs: { course: 0.3 } }],
   ]);
@@ -314,8 +333,15 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
     engine.get(module)!.knobs[knob] = (s as unknown as Record<string, number>)[setting];
     if (frame) delete frame.knobs[setting];
   }
-  // The walks are Randoms now (§7e item 5): the frame's walk columns go.
-  if (frame) for (const k of ['lookWalk', 'behaviourWalk']) delete frame.knobs[k];
+  // The Whole frame goes (0057): Intensity, Flash and Speed rack macros on the knobs they moved to, Wild one on the
+  // Duckers' thresholds (sidechained); the device's own settings (quality, frame rate, brightness) the device's; the
+  // walks Randoms now (§7e item 5), their columns gone with it. Effects stays on it until the effects are modules.
+  const rackMacros: Macro[] = (Object.entries(MOVED) as [string, [string, string]][]).map(([setting, [module, knob]]) => {
+    const [lo, hi] = RANGES[setting as keyof typeof RANGES];
+    const v = (s as unknown as Record<string, number>)[setting];
+    return { id: setting, on: 'rack', label: setting[0].toUpperCase() + setting.slice(1), value: Math.min(1, Math.max(0, (v - lo) / (hi - lo))), targets: [{ module, knob, from: lo, to: hi }] };
+  });
+  if (frame) frame.knobs = 'effects' in frame.knobs ? { effects: frame.knobs.effects } : {};
   // Show as a device (0057 §6): its modules in the order that draws today's picture, each with the knob it took; its
   // knobs exposed under their old names, so the routes into `show.<knob>` keep their address. Its Size is the Flame's
   // own zoom.
@@ -365,6 +391,7 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
   const showAsDevice = modules.find((x) => x.id === 'show') as Device | undefined;
   for (const part of showAsDevice?.patch.modules ?? []) for (const k of Object.keys(part.knobs)) if (SCALE_OF.has(`show.${k}`)) part.knobs[k] = 0;
   for (const c of p.cables) {
+    if (c.to.module === 'frame' && c.to.knob !== 'effects') continue;
     const to = target(c.to);
     const value = scaled(c.value, scaleOf(c.to));
     if (isRoute(c.id, BANDS) && !extraIds.has(c.id)) {
@@ -375,11 +402,19 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
     } else cables.push({ id: c.id, from: viaAdsr(extraFrom(c)), to, value, mode: c.mode });
   }
   for (const a of adsrs.values()) cables.push(a.gate);
+  // The Track's pulse: an ADSR struck by a new track, where something reads it.
+  const newtrack: Module[] = [];
+  if (cables.some((c) => c.from.module === NEWTRACK)) {
+    const knobs: Record<string, number> = { retrigger: 0, amount: 1, reference: READINGS.indexOf('absolute') };
+    for (let b = 0; b < BANDS; b++) Object.assign(knobs, { [`attack.${b}`]: 0, [`decay.${b}`]: 0, [`sustain.${b}`]: 0, [`release.${b}`]: 0.25 });
+    newtrack.push({ id: NEWTRACK, type: 'adsr', knobs });
+    cables.push({ id: `${NEWTRACK}-gate`, from: { module: 'music', port: 'newtrack', reference: 'absolute' }, to: { module: NEWTRACK, port: 'gate' }, value: 1, mode: 'swing', depth: null });
+  }
   // Pausing dims in sight (0057 §7e item 6, claude-5f's): 1 − playing, followed over half a second, lowers Tone map's
   // Level gain by up to 0.45 (0.55 paused, 1 playing), starting at 1 as the visuals open.
   const pause: Module[] = [
     { id: 'pause-invert', type: 'vca', knobs: { gain: 1 } },
-    { id: 'pause-follow', type: 'slow', knobs: { attack: 0.5, release: 0.5, full: 1, amount: 1 } },
+    { id: 'pause-follow', type: 'envelope', knobs: { attack: 0.5, release: 0.5, intensity: 1 } },
     { id: 'pause-dim', type: 'vca', knobs: { gain: 1 } },
   ];
   cables.push(
@@ -388,11 +423,12 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
     { id: 'pause-follow-out', from: { module: 'pause-follow', port: 'out' }, to: { module: 'pause-dim', port: 'cv' }, value: -0.45, mode: 'swing', depth: null },
     { id: 'pause-dim-out', from: { module: 'pause-dim', port: 'out' }, to: { module: 'show', port: 'level:gain' }, value: 1, mode: 'swing', depth: null },
   );
-  const all = [...engine.values(), ...[...adsrs.values()].map((a) => a.module), ...modules, ...pause];
+  const all = [...engine.values(), ...newtrack, ...[...adsrs.values()].map((a) => a.module), ...modules, ...pause];
   const adding = opts.addOnly === false ? { modules: all, cables } : cablesAdd(all, cables);
   const added = opts.sidechain === false ? adding : sidechained(adding.modules, adding.cables, s.wild, opts.limits ?? {});
   const wiring = pictureWiring(p);
   const wildMacro = (added as { macro?: Macro }).macro;
-  const macros: Macro[] = wildMacro ? [...p.macros, wildMacro] : p.macros;
-  return { v: 2, modules: [...added.modules, ...wiring.modules], cables: [...toWire(added.modules, added.cables), ...wiring.cables], macros, pins: p.pins };
+  const macros: Macro[] = [...p.macros, ...rackMacros, ...(wildMacro ? [wildMacro] : [])];
+  const wired = toWire(added.modules, added.cables);
+  return { v: 2, modules: [...wired.modules, ...wiring.modules], cables: [...wired.cables, ...wiring.cables], macros, pins: p.pins };
 }

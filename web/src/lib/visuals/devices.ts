@@ -70,7 +70,7 @@ export const DEVICES: readonly Device[] = [
   device(
     'breather',
     'Breather',
-    [m('breath', 'slow', { attack: 0.8, release: 2.5, full: 2, amount: 1 })],
+    [m('breath', 'envelope', { attack: 0.8, release: 2.5 })],
     [],
     // Music's loudness is cabled in.
     [port('in', 'Input', 'breath', 'in')],
@@ -80,7 +80,7 @@ export const DEVICES: readonly Device[] = [
         { module: 'breath', knob: 'attack', from: 0.2, to: 2 },
         { module: 'breath', knob: 'release', from: 0.5, to: 5 },
       ]),
-      macro('depth', 'Depth', 1, [{ module: 'breath', knob: 'amount', from: 0.3, to: 1 }]),
+      macro('depth', 'Depth', 1, [{ module: 'breath', knob: 'intensity', from: 0.3, to: 1 }]),
     ],
   ),
   // Motion with time, not the music: a smooth random wander.

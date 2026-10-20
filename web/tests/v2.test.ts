@@ -11,21 +11,22 @@ const { CHAINS } = await import('../src/lib/visuals/chains.ts');
 type VisualSettings = typeof DEFAULTS;
 const copy = (s: VisualSettings): VisualSettings => JSON.parse(JSON.stringify(s));
 
-test('the routes as cables: loudness from the Loudness (unscaled), track from Track, the rest from Music as the routes read it', () => {
+test('the routes as cables: loudness from the Loudness (unscaled), track from an ADSR on a new track, the rest from Music as the routes read it', () => {
   const s = copy(DEFAULTS);
-  s.routes = { [routeKey('loudness', null, 'size')]: 0.6, [routeKey('track', null, 'look')]: -1, [routeKey('hits', 2, 'lights')]: 1, [routeKey('beat', null, 'size')]: 0 };
+  s.routes = { [routeKey('loudness', null, 'size')]: 0.6, [routeKey('track', null, 'trails')]: -1, [routeKey('hits', 2, 'lights')]: 1, [routeKey('beat', null, 'size')]: 0 };
   const v = toV2(s);
   const by = Object.fromEntries(v.cables.map((c) => [c.id, c]));
   assert.deepEqual(by[routeKey('loudness', null, 'size')].from, { module: 'envelope', port: 'level' });
   assert.equal(by[routeKey('loudness', null, 'size')].depth, null);
-  assert.deepEqual(by[routeKey('track', null, 'look')].from, { module: 'track', port: 'pulse' });
+  assert.deepEqual(by[routeKey('track', null, 'trails')].from, { module: 'newtrack', port: 'out' });
+  assert.deepEqual(by['newtrack-gate'].from, { module: 'music', port: 'newtrack' }, 'Track folded into Music: its pulse an ADSR struck by a new track');
   assert.deepEqual(by[routeKey('hits', 2, 'lights')].from, { module: 'adsr', port: 'out', channel: 2 }, 'the hits through their ADSR');
   assert.equal(by[routeKey('hits', 2, 'lights')].depth, undefined);
   assert.deepEqual(by[routeKey('hits', 2, 'lights')].to, { module: 'flame', port: 'lights' });
   assert.equal(by[routeKey('beat', null, 'size')], undefined, 'a route at nothing is no cable');
 });
 
-test('Intensity, Flash and Speed move to the modules that do them', () => {
+test('Intensity, Flash and Speed move to the modules that do them, each a rack macro on its knob; the Whole frame keeps only Effects', () => {
   const s = copy(DEFAULTS);
   s.intensity = 0.3;
   s.flash = 1.4;
@@ -36,10 +37,13 @@ test('Intensity, Flash and Speed move to the modules that do them', () => {
   assert.equal(m.envelope.knobs.intensity, 0.3);
   assert.equal(m.accent.knobs.accent, 1.4);
   assert.equal(m.clock.knobs.speed, 0.7);
-  for (const k of ['intensity', 'flash', 'speed']) assert.ok(!(k in m.frame.knobs), k);
+  assert.deepEqual(Object.keys(m.frame.knobs), ['effects']);
+  const macro = Object.fromEntries(v.macros.map((x) => [x.id, x]));
+  assert.deepEqual(macro.flash.targets, [{ module: 'accent', knob: 'accent', from: 0, to: 2 }]);
+  assert.ok(Math.abs(macro.flash.value - 0.7) < 1e-9 && Math.abs(macro.speed.value - 0.35) < 1e-9 && macro.intensity.value === 0.3);
   assert.equal(m.flame.knobs.zoom, 0, "Show's Size is the Flame's zoom; its scale went into the cables, the knob its resting value (§7e item 2)");
   assert.equal(m.show.type, 'device');
-  for (const id of ['music', 'track', 'envelope', 'clock', 'accent', 'frame', 'flame', 'show', 'fluid', 'tunnel', 'dive', 'trails', 'loop-effect', 'fx1', 'fx2', 'fx3']) assert.ok(m[id], id);
+  for (const id of ['music', 'envelope', 'clock', 'accent', 'frame', 'flame', 'show', 'fluid', 'tunnel', 'dive', 'trails', 'loop-effect', 'fx1', 'fx2', 'fx3']) assert.ok(m[id], id);
 });
 
 test('the extras come as they are: their modules, and their cables from a modulator or from Music with their reference and speed', () => {
@@ -51,7 +55,8 @@ test('the extras come as they are: their modules, and their cables from a modula
   for (const m of calm.extra.modulators) assert.ok(ids.has(m.id), m.id);
   const by = Object.fromEntries(v.cables.map((c) => [c.id, c]));
   assert.deepEqual(by['calm-size'].from, { module: 'breath', port: 'out' });
-  assert.deepEqual(by['calm-hue'].from, { module: 'music', port: 'swell:slow' }, 'its slow reading Music’s slow output');
+  assert.deepEqual(by['calm-hue'].from, { module: 'slow-swell', port: 'level' }, 'its slow reading through an Envelope Follower');
+  assert.deepEqual(by['slow-swell-in'].from, { module: 'music', port: 'swell' });
   assert.deepEqual(by['calm-in'].to, { module: 'breath', port: 'in' });
   assert.deepEqual(by['calm-size'].to, { module: 'flame', port: 'zoom' }, "a cable into Show's size goes into the Flame's zoom");
   assert.deepEqual(by['calm-saturation'].to, { module: 'show', port: 'saturation' }, "Show's saturation keeps its address");

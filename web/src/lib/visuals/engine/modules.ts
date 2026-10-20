@@ -5,13 +5,14 @@
 /** A beat's turn of the transforms: once around in 32 beats (aspects.ts's STEP). */
 export const STEP = (2 * Math.PI) / 32;
 
-/** Envelope: the loudness as heard, followed over a fifth of a second, as far as Intensity lets it count (`level`, what
- *  a cable from the loudness reads); `out` that, while playing, else nothing: every cable's depth (normalled). `glow`:
- *  1 playing, dimmer paused, followed over half a second. */
+/** The Loudness (an Envelope Follower on Music's loudness): the loudness as heard, followed (rising over `attack`,
+ *  falling over `release`, s), as far as Intensity lets it count (`level`, what a cable from the loudness reads); `out`
+ *  that, while playing, else nothing: every cable's depth (normalled). `glow`: 1 playing, dimmer paused, followed over
+ *  half a second. */
 export type EnvelopeState = { intensity: number; lit: number; glow: number };
 export const newEnvelope = (): EnvelopeState => ({ intensity: 0.5, lit: 0.5, glow: 1 });
-export function stepEnvelope(st: EnvelopeState, heard: number, playing: boolean, intensity: number, dt: number) {
-  st.intensity += (heard - st.intensity) * Math.min(1, dt * 5);
+export function stepEnvelope(st: EnvelopeState, heard: number, playing: boolean, intensity: number, dt: number, attack = 0.2, release = 0.2) {
+  st.intensity += (heard - st.intensity) * Math.min(1, dt / Math.max(1e-3, heard > st.intensity ? attack : release));
   st.lit = 1 - intensity * (1 - st.intensity);
   st.glow += ((playing ? 1 : 0.55) - st.glow) * Math.min(1, dt * 2);
   return { level: st.lit, out: playing ? st.lit : 0, glow: st.glow };

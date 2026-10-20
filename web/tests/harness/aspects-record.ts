@@ -14,6 +14,7 @@ const { newAspects, stepAspects } = await import('../../src/lib/visuals/aspects.
 const { FLUID_FULL } = await import('../../src/lib/visuals/settings.svelte.ts');
 
 import type { AspectsNow } from '../../src/lib/visuals/aspects.ts';
+import { ASPECTS } from '../../src/lib/visuals/routes.ts';
 import type { Music } from '../../src/lib/visuals/music-core.ts';
 import type { VisualSettings } from '../../src/lib/visuals/settings.svelte.ts';
 import type { Signals } from '../../src/lib/visuals/signals.ts';
@@ -43,12 +44,15 @@ export function todays(): Engine {
   return { name: 'aspects.ts', step: (m, s, dt, opts) => stepAspects(st, m, s, dt, opts) };
 }
 
+const WALKS = new Set([ASPECTS.indexOf('look'), ASPECTS.indexOf('behaviour')]);
+
 /** A frame's outcome as named numbers: everything AspectsNow says, each part's and band's apart, the moments as 0/1. */
 export function flatten(a: AspectsNow): Map<string, number> {
   const out = new Map<string, number>();
   const put = (k: string, v: number | boolean) => out.set(k, typeof v === 'boolean' ? (v ? 1 : 0) : v);
-  a.given.forEach((v, i) => put(`given.${i}`, v));
-  for (const k of ['lit', 'glow', 'turn', 'scale', 'keep', 'gamma', 'flash', 'saturation', 'smoothing', 'floor', 'fluid', 'warp', 'tunnel', 'effects', 'facets', 'dive', 'look', 'behaviour'] as const) put(k, a[k]);
+  // The walks (Look's and Behaviour's columns) left with the Whole frame (0057: Randoms and the Dice now): not compared.
+  a.given.forEach((v, i) => WALKS.has(i) || put(`given.${i}`, v));
+  for (const k of ['lit', 'glow', 'turn', 'scale', 'keep', 'gamma', 'flash', 'saturation', 'smoothing', 'floor', 'fluid', 'warp', 'tunnel', 'effects', 'facets', 'dive'] as const) put(k, a[k]);
   a.rates.forEach((v, i) => put(`rates.${i}`, v));
   a.shape.forEach((v, i) => put(`shape.${i}`, v));
   a.hits.forEach((v, i) => put(`hits.${i}`, v));

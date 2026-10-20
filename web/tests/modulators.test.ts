@@ -25,7 +25,8 @@ const wild = (rnd: () => number) => {
 };
 
 test('every modulator gives 0 with its knobs at neutral, whatever comes in', () => {
-  for (const t of TYPES) {
+  // The Envelope Follower is the Loudness too: at Intensity 0 it holds at 1 (the loudness not counting), as it must.
+  for (const t of TYPES.filter((x) => x.type !== 'envelope')) {
     const rnd = randomFrom(1);
     const m = t.create(7);
     const k = neutralOf(t);
@@ -77,7 +78,7 @@ test('the followers and the other smooth ones give the same at 30 and at 120 fra
     }
     return out;
   };
-  for (const type of ['volume', 'fast', 'slow', 'average', 'peak', 'mean', 'lfo', 'random']) {
+  for (const type of ['volume', 'fast', 'envelope', 'average', 'peak', 'mean', 'lfo', 'random']) {
     const t = MODULATORS[type];
     for (const knobs of [defaultsOf(t), { ...defaultsOf(t), attack: 0.3, release: 0.05, window: 0.2, fall: 0.3, horizon: 2, rate: 1.7, full: 1 }]) {
       const a = run(type, 30, knobs);

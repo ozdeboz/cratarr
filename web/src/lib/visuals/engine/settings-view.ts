@@ -1,7 +1,8 @@
 // A patch seen as today's settings (decision 0057, the switch): what the renderer's side and the meters still read
 // (`how`: the effects, the dive, the show, the look) while they read settings, each from the knob toV2 put it in. The
 // inverse of toV2's mapping (v2.ts): the Cratarr device's modules found beside its Flame (at the top level, or inside it),
-// the Show's parts inside its device, the Envelope's, Accent's and Clock's knobs for Intensity, Flash and Speed, Music's
+// the Show's parts inside its device, the Loudness's, Accent's and Clock's knobs for Intensity, Flash and Speed (as the
+// rack's macros set them; Wild the rack's macro's own value), Music's
 // hold for each band's Linger. A column's scale is in its cables' amounts now (0057 §7e): those settings read 1. What a
 // patch has no knob for, as `base` has it (the device's own settings: quality, frame rate, brightness).
 
@@ -20,13 +21,15 @@ const SHOW_PART = new Map(SHOW_PARTS.map((p) => [p.knob, p.type]));
 /** `p` as today's settings, over `base`. */
 export function settingsOfPatch(p: PatchV2, base: VisualSettings): VisualSettings {
   const byId = new Map(p.modules.map((m) => [m.id, m]));
-  const ofType = (type: string) => p.modules.find((m) => m.type === type);
+  // The Loudness: the Envelope Follower on Music's loudness (its input uncabled), as the engine finds it.
+  const ofType = (type: string) => p.modules.find((m) => m.type === type && (type !== 'envelope' || !p.cables.some((c) => c.to.module === m.id && c.to.port === 'in')));
   const flame = ofType('flame');
   const at = flame ? flame.id.slice(0, flame.id.lastIndexOf('/') + 1) : '';
   const inChain = (rel: string) => byId.get(at + rel);
   const out = { ...base } as unknown as Record<string, unknown>;
   const read = (m: Module | undefined, knob: string) => {
-    const v = m?.knobs[knob];
+    let v = m?.knobs[knob];
+    for (const x of p.macros) for (const t of x.targets) if (m && t.module === m.id && t.knob === knob) v = t.from + (t.to - t.from) * Math.min(1, Math.max(0, x.value));
     return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
   };
   for (const [setting, [module, knob]] of Object.entries(SETTING_KNOB)) {
@@ -38,6 +41,8 @@ export function settingsOfPatch(p: PatchV2, base: VisualSettings): VisualSetting
     const v = moved ? read(ofType(moved[0]), moved[1]) : module === 'show' ? read(inChain(`show/${SHOW_PART.get(knob) ?? knob}`), knob) : read(inChain(module), knob);
     if (v !== undefined) out[setting] = v;
   }
+  const wild = p.macros.find((x) => x.id === 'wild');
+  if (wild && Number.isFinite(wild.value)) out.wild = wild.value;
   const music = ofType('music');
   out.lighting = (base.lighting ?? []).map((v, b) => read(music, `hold.${b}`) ?? v);
   for (const k of ['continuity', 'evolution'] as const) out[k] = Array.from({ length: BANDS }, (_, b) => read(flame, `${k}.${b}`) ?? base[k][b]);

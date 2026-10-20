@@ -1,8 +1,9 @@
 // What each of the music's pushes is worth to the fluid (decision 0057, the switch; stirring.ts asks it as `gain`): the
 // cables from that signal (that band's, or the whole track's) into the Cratarr device's Fluid's Stir, Flow or Swirl,
 // each its curve's height at the push's strength, added up. What the routes' matrix (heightOn) and the extras' cables
-// (chain-cables.ts cableGain) gave between them, from the patch's own cables. The loudness comes from the Envelope's
-// level, the Track's pulse from the Track, the hits through their ADSRs (v2.ts), as toV2 wires them.
+// (chain-cables.ts cableGain) gave between them, from the patch's own cables. The loudness comes from the Loudness's
+// level, the Track's pulse from the ADSR on a new track, the hits through their ADSRs, a slow signal through its
+// Envelope Follower (v2.ts), as toV2 wires them.
 
 import { heightOf, shapeOf, type Shape } from '../evaluate';
 import type { PatchV2 } from '../ports';
@@ -12,7 +13,6 @@ export type FluidAspect = 'stir' | 'flow' | 'swirl';
 export type FluidGain = (signal: string, band: number | null, aspect: FluidAspect, x: number) => number;
 
 const BANDS = new Set<string>(BAND_SIGNALS);
-const SLOW = ':slow';
 const gains = new WeakMap<PatchV2, Map<string, Shape[]>>();
 
 /** The patch's fluid gains (a flattened patch's; worked out once a patch object). */
@@ -32,9 +32,12 @@ function indexOf(p: PatchV2): Map<string, Shape[]> {
   const typeOf = new Map(p.modules.map((m) => [m.id, m.type]));
   const fluid = p.modules.find((m) => m.type === 'fluid');
   if (!fluid) return out;
-  // Each ADSR's gate: the Music signal it strikes on.
+  // Each ADSR's gate: the Music signal it strikes on (a new track's: the track's pulse). Each Envelope Follower's input:
+  // the Music signal it follows (and its band); the Loudness's, uncabled, the loudness.
   const gate = new Map<string, string>();
-  for (const c of p.cables) if (typeOf.get(c.to.module) === 'adsr' && c.to.port === 'gate') gate.set(c.to.module, c.from.port);
+  for (const c of p.cables) if (typeOf.get(c.to.module) === 'adsr' && c.to.port === 'gate') gate.set(c.to.module, c.from.port === 'newtrack' ? 'track' : c.from.port);
+  const follows = new Map<string, { signal: string; channel?: number }>();
+  for (const c of p.cables) if (typeOf.get(c.to.module) === 'envelope' && c.to.port === 'in' && typeOf.get(c.from.module) === 'music') follows.set(c.to.module, { signal: c.from.port, channel: c.from.channel });
   const add = (aspect: string, signal: string, band: number | null, sh: Shape) => {
     const key = `${aspect}|${signal}|${band ?? '-'}`;
     (out.get(key) ?? out.set(key, []).get(key)!).push(sh);
@@ -48,11 +51,12 @@ function indexOf(p: PatchV2): Map<string, Shape[]> {
     const aspect = into.get(c.to.module);
     return aspect && c.to.port === 'in' ? [{ c, aspect, channel: c.to.channel ?? c.from.channel }] : [];
   });
-  for (const { c, aspect, channel } of pushes) {
+  for (const { c, aspect, channel: given } of pushes) {
     const type = typeOf.get(c.from.module) ?? c.from.module;
     const sh = shapeOf(c.value);
-    const port = c.from.port.endsWith(SLOW) ? c.from.port.slice(0, -SLOW.length) : c.from.port;
-    const signal = type === 'envelope' && port === 'level' ? 'loudness' : type === 'track' ? 'track' : type === 'adsr' ? gate.get(c.from.module) : type === 'music' ? port : undefined;
+    const followed = type === 'envelope' ? follows.get(c.from.module) : undefined;
+    const channel = given ?? followed?.channel;
+    const signal = type === 'envelope' ? (followed?.signal ?? (c.from.port === 'level' ? 'loudness' : undefined)) : type === 'adsr' ? gate.get(c.from.module) : type === 'music' ? c.from.port : undefined;
     if (!signal) continue;
     // A band's signal with no channel of its own: every band's (a polyphonic cable).
     if (channel === undefined && BANDS.has(signal)) for (let b = 0; b < 6; b++) add(aspect, signal, b, sh);

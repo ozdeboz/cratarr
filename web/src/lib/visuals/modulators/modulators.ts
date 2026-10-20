@@ -1,6 +1,6 @@
 // The visuals' modulators (decision 0056): modules with no picture, whose outputs feed cables as the music's signals do.
-// The set is what curated MilkDrop presets build by hand before they drive anything: summed volume, fast and slow
-// followers, moving averages, peak and mean trackers, "above typical" beat gates, counters, LFOs and random,
+// The set is what curated MilkDrop presets build by hand before they drive anything: summed volume, a fast follower and
+// the Envelope Follower, moving averages, peak and mean trackers, "above typical" beat gates, counters, LFOs and random,
 // sample-and-hold.
 //
 // - Inputs are cables, as in a modular: the engine sums the cables into each port (`inputs`) and passes the sum as that
@@ -134,7 +134,19 @@ const follower = (type: string, label: string, attack: number, release: number) 
     };
   });
 const fast = follower('fast', 'Fast follower', 0.01, 0.15);
-const slow = follower('slow', 'Slow follower', 0.4, 1.5);
+
+/** The Envelope Follower's knobs (one type for the Loudness and the slow follower it replaced, 0057 §7e): its rise and
+ *  fall (s), and Intensity, how far what it follows counts (1: all of it; 0: none, the output held at 1). */
+export const ENVELOPE_KNOBS: Knob[] = [knob('attack', 'Attack', 0, 2, 0, 0.2), knob('release', 'Release', 0, 5, 0, 0.2), knob('intensity', 'Intensity', 0, 1, 1, 1)];
+/** An Envelope Follower: its input followed (rising over its attack, falling over its release), as far as Intensity
+ *  lets it count. The Loudness's, on Music's loudness, the engine steps itself (graph.ts); every other runs as this. */
+const envelope = define('envelope', 'Envelope Follower', 'unipolar', ENVELOPE_KNOBS, IN, () => {
+  let y = 0;
+  return (dt, _signals, k) => {
+    y = k.in + (y - k.in) * keep(dt, k.in > y ? k.attack : k.release);
+    return 1 - k.intensity * (1 - clamp(y, 0, 1));
+  };
+});
 
 // A moving average over about its window, from silence.
 const average = define('average', 'Average', 'unipolar', [knob('window', 'Window', 0, 8, 0, 1), FULL, AMOUNT], IN, () => {
@@ -361,11 +373,12 @@ const hold = define(
 
 /** Every modulator, by its type. */
 export const MODULATORS: Record<string, ModulatorType> = Object.fromEntries(
-  [volume, fast, slow, average, peak, mean, gate, counter, lfo, random, hold].map((t) => [t.type, t]),
+  [volume, fast, envelope, average, peak, mean, gate, counter, lfo, random, hold].map((t) => [t.type, t]),
 );
 
-/** Types saved under an old name (v1 patches, until toV2 converts them): Drift is Random at Shape 0. */
-export const RENAMED: Readonly<Record<string, string>> = { drift: 'random' };
+/** Types saved under an old name (v1 patches, until toV2 converts them): Drift is Random at Shape 0; the Slow follower
+ *  an Envelope Follower. */
+export const RENAMED: Readonly<Record<string, string>> = { drift: 'random', slow: 'envelope' };
 /** A modulator by its type, or by a name it had. */
 export const modulatorOf = (type: string): ModulatorType | undefined => MODULATORS[type] ?? MODULATORS[RENAMED[type]];
 

@@ -5,6 +5,7 @@
 // modules that hold today's hidden behaviours are declared here, so every one of them shows.
 import type { RouteValue } from './curves';
 import { CLOCK_TRIGGER_KNOBS } from './engine/clock';
+import { ENVELOPE_KNOBS } from './modulators/modulators';
 import { BUSY, type Knob, type Macro, type Module, type ModuleType, type Place } from './patch';
 import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 
@@ -163,7 +164,8 @@ export const MUSIC: Declared = {
   // A band's envelope's fall (s): its hold, what today's lighting times gave the envelope (claude-5f).
   knobs: MUSIC_KNOBS,
   ports: {
-    in: MUSIC_KNOBS.map(knobPortOf),
+    // Hold a cable can move; the readings are set, not cabled (as few jacks as can be).
+    in: MUSIC_KNOBS.filter((k) => !k.id.startsWith('reference.')).map(knobPortOf),
     out: [
       out('audio', 'Sound', 'audio'),
       // 1 while the music plays, 0 paused (0057 §7e: the pause's dimming, cabled in sight).
@@ -174,19 +176,8 @@ export const MUSIC: Declared = {
       out('seed', 'Track seed'),
       ...TRACK_SIGNALS.map((s) => out(s, label(s), TRIGGER_SIGNALS.has(s) ? 'trigger' : 'value')),
       ...BAND_SIGNALS.map((s) => out(s, label(s), TRIGGER_SIGNALS.has(s) ? 'trigger' : 'value', 6)),
-      // Each value signal's slow form (the speed a cable no longer says).
-      ...TRACK_SIGNALS.filter((s) => !TRIGGER_SIGNALS.has(s)).map((s) => out(`${s}:slow`, `${label(s)} (slow)`)),
-      ...BAND_SIGNALS.filter((s) => !TRIGGER_SIGNALS.has(s)).map((s) => out(`${s}:slow`, `${label(s)} (slow)`, 'value', 6)),
     ],
   },
-};
-
-export const TRACK: Declared = {
-  type: 'track',
-  label: 'Track',
-  place: 'modulator',
-  knobs: [],
-  ports: { in: [], out: [out('pulse', 'New track'), out('seed', 'Seed')] },
 };
 
 /** A module declared by its knobs (each a value input), its other inputs before them, and its outputs. */
@@ -194,14 +185,16 @@ function declared(type: string, name: string, place: Place, knobs: Knob[], input
   return { type, label: name, place, knobs, ports: { in: [...inputs, ...knobs.map(knobPort)], out: outputs } };
 }
 
+/** The Envelope Follower (0057 §7e: the Loudness and the Slow follower one type): its input followed, as far as
+ *  Intensity lets it count. On Music's loudness (its normal) it is the Loudness. */
 export const ENVELOPE = declared(
   'envelope',
-  'Loudness',
+  'Envelope Follower',
   'modulator',
-  [knob('intensity', 'Intensity', 0, 1, 0.5, 'level', 0), knob('time', 'Time', 0.02, 2, 0.2)],
+  ENVELOPE_KNOBS,
   [{ id: 'in', label: 'Input', type: 'value', normal: { module: 'music', port: 'loudness' } }],
-  // `level`: the loudness as Intensity lets it count (what a loudness cable reads); `out`: that while playing, else 0
-  // (every other cable's depth is normalled to it).
+  // `level`: what it follows as Intensity lets it count (what a loudness cable reads); `out`: that while playing, else
+  // 0 (every other cable's depth is normalled to the Loudness's).
   [out('level', 'Level'), VALUE_OUT],
 );
 
@@ -498,7 +491,7 @@ export const SHAPER = declared(
   [{ ...VALUE_OUT, channels: 6 }],
 );
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, DICE, SHAPER, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, ENVELOPE, DICE, SHAPER, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 

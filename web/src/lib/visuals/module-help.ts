@@ -45,8 +45,7 @@ export const moduleHelp: Record<string, string> = {
   feedback: 'The picture its input had last frame: the only way to close a picture loop.',
 
   // Modulators.
-  track: 'A pulse as each new track starts, and the track’s seed, which sets its own look.',
-  envelope: 'An envelope follower on the loudness; it scales every cable’s depth unless unplugged.',
+  envelope: 'An envelope follower: on Music’s loudness, it scales every cable’s depth unless unplugged.',
   clock: 'The tempo’s clock: a turn every so many beats, and beat, bar and phrase triggers.',
   accent: 'Splits a value into a slow course and the swing about it, and keeps Accent’s share of the swing.',
   vca: 'A VCA: its input times its gain, the one way one signal multiplies another.',
@@ -69,7 +68,6 @@ export const moduleHelp: Record<string, string> = {
   hold: 'Sample and hold: takes its input at a rate and holds it.',
   volume: 'The bands’ levels added up, each by its weight (MilkDrop’s vol).',
   fast: 'An envelope follower with a short attack and release: follows its input closely.',
-  slow: 'An envelope follower with a long attack and release: follows its input’s broad changes.',
   average: 'A moving average of its input over its window.',
   peak: 'Peak hold: the highest input lately, falling back over its Fall.',
   mean: 'The running mean of its input over its horizon, from its first value on.',
@@ -223,11 +221,11 @@ export const portHelp: Record<string, Record<string, string>> = {
     ...numbered(4, (i) => `amount${i}`, (i) => `How much of picture ${i} shows.`),
   },
   feedback: { picture: 'In: the picture to hold back a frame; out: that picture as it was last frame.' },
-  track: { pulse: 'A pulse as each new track starts.', seed: 'The track’s own number: the same track, the same look.' },
   envelope: {
     in: 'What it follows: Music’s loudness unless another cable is plugged in.',
-    time: 'How quickly it follows (seconds).',
-    level: 'The loudness, as far as Intensity lets it count.',
+    attack: 'How quickly it follows a rise (seconds).',
+    release: 'How quickly it follows a fall (seconds).',
+    level: 'What it follows, as far as Intensity lets it count.',
     out: 'The level while the music plays, else 0: every cable’s depth unless unplugged.',
   },
   clock: {
@@ -340,7 +338,6 @@ export const portHelp: Record<string, Record<string, string>> = {
   hold: { rate: 'Samples a second.', glide: 'How long it glides to each new value (seconds); a jump at 0.', full: FULL, amount: AMOUNT_OUT },
   volume: { ...numbered(6, (i) => `band${i}`, () => 'This band’s weight in the sum; left out at 0.'), full: FULL, amount: AMOUNT_OUT },
   fast: { attack: ATTACK, release: RELEASE, full: FULL, amount: AMOUNT_OUT },
-  slow: { attack: ATTACK, release: RELEASE, full: FULL, amount: AMOUNT_OUT },
   average: { window: 'About how many seconds it averages over.', full: FULL, amount: AMOUNT_OUT },
   peak: { fall: 'How quickly the held peak falls back (seconds).', full: FULL, amount: AMOUNT_OUT },
   mean: { horizon: 'About how many seconds back it remembers.', full: FULL, amount: AMOUNT_OUT },
@@ -363,7 +360,6 @@ export const portHelp: Record<string, Record<string, string>> = {
     percussiveHits: 'A trigger on each drum hit in a band, held notes left out, its strength with it.',
     hold: 'How long each band’s envelope takes to fall (seconds).',
     ...Object.fromEntries([...TRACK_SIGNALS, ...BAND_SIGNALS].map((s) => [`reference.${s}`, 'How this row is read: against this track’s typical, lately’s, or as it is.'])),
-    ...Object.fromEntries([...TRACK_SIGNALS, ...BAND_SIGNALS].filter((s) => !TRIGGER_SIGNALS.has(s)).map((s) => [`${s}:slow`, 'This row, followed slowly.'])),
   },
   filterbank: {
     audio: 'The sound to split: Music’s unless unplugged.',
@@ -408,7 +404,8 @@ export const HELP_KEY: Record<string, Record<string, string>> = (() => {
   for (const [setting, [module, id]] of Object.entries(SETTING_KNOB)) if (HELP[setting]) add(SLOT_TYPE[module] ?? module, id, setting);
   // Show's parts took their knob from Show, id and all.
   for (const part of SHOW_PARTS) if (out.show?.[part.knob]) add(part.type, part.knob, out.show[part.knob]);
-  // The flame's per-band times, the walks' cable ends, and the knobs the whole frame's settings are.
+  // The flame's per-band times, the walks' cable ends (the old route matrix's), and the knobs the whole frame's
+  // settings were.
   for (const id of ['lighting', 'evolution', 'continuity']) add('flame', id, id);
   add('frame', 'lookWalk', 'aspect:look');
   add('frame', 'behaviourWalk', 'aspect:behaviour');

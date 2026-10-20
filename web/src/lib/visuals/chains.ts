@@ -66,7 +66,7 @@ const cable = (id: string, from: Cable['from'], module: string, knob: string, va
 
 export const CHAINS: readonly Chain[] = [
   {
-    // A slow follower of the loudness breathes the size and the colour's strength; the turning wanders with time; the
+    // An Envelope Follower, slow, on the loudness breathes the size and the colour's strength; the turning wanders with time; the
     // hue moves with the swells, slowly.
     id: 'calm',
     label: 'Calm',
@@ -74,7 +74,7 @@ export const CHAINS: readonly Chain[] = [
     routes: {},
     extra: {
       ...emptyExtra(),
-      modulators: [mod('slow', 'breath', { attack: 0.8, release: 2.5 }), mod('random', 'wander', { rate: 0.05, amount: 1 })],
+      modulators: [mod('envelope', 'breath', { attack: 0.8, release: 2.5 }), mod('random', 'wander', { rate: 0.05, amount: 1 })],
       cables: [
         cable('calm-in', { signal: 'loudness' }, 'breath', 'in', 1),
         cable('calm-size', { modulator: 'breath' }, 'flame', 'zoom', 0.5),
@@ -153,7 +153,7 @@ export const CHAINS: readonly Chain[] = [
     extra: {
       ...emptyExtra(),
       loop: [mod('warp', 'tunnel-warp', { zoom: 0.15 }), mod('keep', 'tunnel-keep', { amount: 0.75, trails: 0.6 })],
-      modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.2, amount: 1 }), mod('slow', 'breath'), mod('random', 'wander', { rate: 0.05, amount: 1 })],
+      modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.2, amount: 1 }), mod('envelope', 'breath'), mod('random', 'wander', { rate: 0.05, amount: 1 })],
       cables: [
         cable('tunnel-kick-in', { signal: 'hits', band: 1 }, 'kick', 'in', 1),
         cable('tunnel-zoom', { modulator: 'kick' }, 'tunnel-warp', 'zoom', 0.3),
@@ -193,7 +193,7 @@ export const CHAINS: readonly Chain[] = [
     routes: {},
     extra: {
       ...emptyExtra(),
-      modulators: [mod('counter', 'bars', { length: 4, amount: 1 }), mod('slow', 'breath'), mod('random', 'wander', { rate: 0.05, amount: 1 })],
+      modulators: [mod('counter', 'bars', { length: 4, amount: 1 }), mod('envelope', 'breath'), mod('random', 'wander', { rate: 0.05, amount: 1 })],
       cables: [
         cable('mosaic-bars-in', { signal: 'downbeat' }, 'bars', 'in', 1),
         cable('mosaic-tiles', { modulator: 'bars' }, 'fx1', 'k1', 0.6),
