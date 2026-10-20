@@ -314,6 +314,18 @@ That's clean". So:
   values, pins kept, structure untouched, undoable, morphed in. Resetting the whole synthesizer stays what it is: back
   to an empty patch (Start from scratch). Both are in the Reset menu.
 
+### 4f. Lens, a module of its own
+
+The owner: "lenses aren't inherently coupled to flame. Lens should be a modular thing." Today's lenses (Eyefish,
+Bubble, Spherical, Swirl …) are the flame's final transform. They become a **Lens** module:
+
+- Knobs: its kind (a step, with `next`) and its amount.
+- Polymorphic, as Blur is:
+  - on `points` (the flame's points, a Grid's) it moves each point, exactly as the flame's final transform does;
+  - on a picture it remaps the pixels the same way (TouchDesigner's Remap, Hydra's modulate).
+- The flame's own lens is a Lens cabled between the flame's points and its light, inside the Cratarr device. It can be
+  unplugged, swapped, or joined by others anywhere. The conversion places it so, exact.
+
 ### 5. Pictures as inputs
 
 A module may take a second `picture` input: Hydra's modulate, TouchDesigner's composite inputs. The first ones:
