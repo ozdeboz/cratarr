@@ -3,6 +3,7 @@
   // held a second then falling (as Surge XT's and Vital's meters do), a threshold as a line; a reduction (gain taken
   // away, 1 none) fills from the right; several channels, a short bar each, side by side. `t`: the frame's time (s),
   // for the peak's hold.
+  import { untrack } from 'svelte';
   import { meterFill, peakStep, type Peak } from './face';
 
   let {
@@ -31,7 +32,9 @@
   const fill = $derived(meterFill(value, max, reduction));
   let held = $state.raw<Peak | null>(null);
   $effect(() => {
-    if (peak && value !== null) held = peakStep(held, meterFill(value, max), t);
+    const v = value;
+    const now = t;
+    if (peak && v !== null) held = untrack(() => peakStep(held, meterFill(v, max), now));
   });
   const LABEL_W = $derived(label ? 12 : 0);
   const W = $derived(width - LABEL_W);

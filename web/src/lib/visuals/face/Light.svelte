@@ -1,6 +1,7 @@
 <script lang="ts">
   // A Light (face.ts): a trigger's or a gate's LED, as a module's panel has them: lit as far as its value (0..1), and
   // flashing bright on a pulse (a rising edge through ½), fading over a quarter second. Its colour its wire's.
+  import { untrack } from 'svelte';
   import { pulsed } from './face';
   import type { PortType } from '../ports';
 
@@ -10,7 +11,7 @@
   let flashes = $state(0);
   $effect(() => {
     const now = value;
-    if (pulsed(before, now)) flashes++;
+    if (pulsed(before, now)) untrack(() => flashes++);
     before = now;
   });
   const lit = $derived(value === null ? 0 : Math.min(1, Math.max(0, value)));

@@ -2,6 +2,7 @@
   // A Scope (face.ts; after NexusUI's oscilloscope, MIT: one line across, its stroke `height / 100 + 2`, a centre line
   // while nothing comes): a value's last two seconds, the newest at the right; a threshold (a gate's Above) as a dashed
   // line across. Each new reading comes with the frame's time `t` (s).
+  import { untrack } from 'svelte';
   import { scopePath, scopePush, scopeRange, scopeStroke, scopeY, type Sample } from './face';
 
   let { value, t, threshold = null, width = 130, height = 30 }: { value: number | null; t: number; threshold?: number | null; width?: number; height?: number } = $props();
@@ -10,7 +11,8 @@
   $effect(() => {
     const now = t;
     const v = value;
-    seen = scopePush(seen, v, now);
+    // Its own samples are not what it follows (only the new reading and its time).
+    seen = untrack(() => scopePush(seen, v, now));
   });
   const range = $derived(scopeRange(seen, threshold));
   const path = $derived(scopePath(seen, width, height, range, t));
