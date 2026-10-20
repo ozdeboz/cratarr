@@ -14,7 +14,7 @@
   import Face from './Face.svelte';
   import { areaParts, partValue } from './face';
   import { clockLights } from '../faces';
-  import { countLabel, FAR_IN, FAR_OUT, GRAPH, gainPort, knobHandle, nextPort, polyTurned, type GraphActions, type KnobView, type ModuleData } from '../patchgraph';
+  import { countLabel, GRAPH, gainPort, knobHandle, nextPort, polyTurned, type GraphActions, type KnobView, type ModuleData } from '../patchgraph';
 
   let { id, data, selected }: { id: string; data: ModuleData; selected?: boolean } = $props();
   const graph = getContext<GraphActions>(GRAPH);
@@ -32,8 +32,6 @@
   const knobJack = 'top: auto; bottom: -8px';
 
   // The far form's sockets: what comes in on the side the node takes in, what goes out on the other.
-  const farIn = $derived(graph.portrait() ? Position.Top : Position.Left);
-  const farOut = $derived(graph.portrait() ? Position.Bottom : Position.Right);
 
   // Its face: what it reads live (the graph's frame, by the module's path from the top), the lights on its outputs.
   const live = $derived(data.face ? graph.live() : null);
@@ -71,7 +69,8 @@
     {#if data.pinned}<span class="pinned" title="Pinned" aria-label="Pinned"><Icon name="pin" size={13} /></span>{/if}
     {#if data.device}<button class="plus nodrag" aria-label="Open {data.label} here" title="Open here" onclick={() => graph.toggle(id)}>+</button>{/if}
   </span>
-  <button class="sum nodrag" tabindex="-1" onclick={() => graph.open(id)}
+  <!-- Far out (no knobs to turn), the whole node is its drag handle: its one line is no nodrag; its jacks stay jacks. -->
+  <button class="sum" tabindex="-1" onclick={() => graph.open(id)}
     ><b>{data.label}</b>{#if countLabel(data.cables)}<span class="n">{' · '}{countLabel(data.cables)}</span>{/if}</button
   >
   {#if data.in || data.out || data.ports.length || data.outs.length}
@@ -119,8 +118,6 @@
     </div>
   {/if}
   {#if data.face && area.length}<Face parts={area} {live} {path} knobs={data.face.knobs} lanes={data.face.lanes} thumbs={graph.thumbs()} />{/if}
-  <Handle type="target" id={FAR_IN} position={farIn} isConnectable={false} class="jack farh" />
-  <Handle type="source" id={FAR_OUT} position={farOut} isConnectable={false} class="jack farh" />
 </div>
 
 <style>
@@ -375,14 +372,9 @@
   .sum > .n {
     flex: 1 1 0px;
   }
-  /* The far sockets: only far out, over the node's edge, above its name. */
-  .node :global(.jack.farh) {
-    visibility: hidden;
-    pointer-events: none;
+  /* Far out every jack stays where it is, over the node's one line, so each cable still lands on its own port. */
+  :global(.far) .node :global(.jack) {
     z-index: 2;
-  }
-  :global(.far) .node :global(.jack.farh) {
-    visibility: visible;
   }
   /* At 100% a node is as wide as its title needs; only far out (its one line over it) does a name end in "…". */
   :global(.far) .node .title,

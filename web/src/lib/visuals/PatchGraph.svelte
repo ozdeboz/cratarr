@@ -63,7 +63,6 @@
     crumbsOf,
     EDGE_Z,
     editKey,
-    farEdges,
     graphOfV2,
     GRAPH,
     knobHandle,
@@ -157,7 +156,6 @@
     const d = nodes.find((n) => n.id === fine!.node)?.data as NodeData | undefined;
     return d?.kind === 'module' ? (helpFor(d.type, fine.knob) ?? null) : null;
   });
-  const farNow = $derived(zoom < FAR);
   // What the view fits round: clear of the legend and crumbs above, the chips and an open sheet below.
   const pad = $derived({ top: 56, left: 16, right: 16, bottom: Math.round(sheetHeight) + 60 });
   const padding = $derived<FitViewOptions['padding']>({ top: `${pad.top}px`, left: `${pad.left}px`, right: `${pad.right}px`, bottom: `${pad.bottom}px` });
@@ -345,8 +343,7 @@
       if (elkDone?.key === key) Object.assign(g, fromElk(elkDone.laid, g.nodes, g.edges, (id) => !!placed[id], sz));
       else untrack(() => askElk(key, toElk(g.nodes, g.edges, sz, { portrait })));
     }
-    // Far out, every cable on its nodes' far sockets (none ends inside a node); every cable over the nodes (EDGE_Z).
-    if (farNow) g.edges = farEdges(g.edges, g.nodes);
+    // Every cable over the nodes (EDGE_Z), on its own ports' jacks at every zoom (the owner, 71.1: VCV's way).
     g.edges = g.edges.map((e) => ({ ...e, zIndex: EDGE_Z }));
     untrack(() => {
       // What Svelte Flow knows of each node (its size, selection, a drag under way) carries over; its size not where its

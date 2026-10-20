@@ -943,19 +943,12 @@ test('a cable ends at its jack’s centre: half a jack in from the edge point on
   assert.equal(g.edges.find((e) => e.id === 'p1')?.data?.step, true);
 });
 
-test('far out every cable is on its nodes’ far sockets (in on the input side, out on the output side), bundled', () => {
-  const { farEdges, FAR_IN, FAR_OUT } = await_graph;
+test('no far sockets: a cable’s ends are its own ports’ jacks at every zoom (the owner, 71.1)', () => {
+  const graph = await_graph as Record<string, unknown>;
+  assert.equal(graph.farEdges, undefined);
+  assert.equal(graph.FAR_IN, undefined);
   const g = graphOfV2({ patch: sample(), types });
-  const far = farEdges(g.edges, g.nodes);
-  assert.equal(far.length, g.edges.length);
-  for (const e of far) {
-    assert.equal(e.sourceHandle, FAR_OUT, e.id);
-    assert.equal(e.targetHandle, FAR_IN, e.id);
-  }
-  // A frame (a device opened in place) has none: its edges as they are.
-  const open = graphOfV2({ patch: v2patch(), types: v2types, open: new Set(['show']) });
-  const boxed = farEdges([{ id: 'x', source: 'show', target: 'flame', sourceHandle: 'out', targetHandle: 'in' }], open.nodes);
-  assert.deepEqual([boxed[0].sourceHandle, boxed[0].targetHandle], ['out', FAR_IN]);
+  assert.ok(g.edges.every((e) => !String(e.sourceHandle).startsWith('far') && !String(e.targetHandle).startsWith('far')));
 });
 
 test('a node’s far form counts its cables in and out ("6 in · 12 out"), not its normals', () => {

@@ -13,7 +13,7 @@
 
 import type { ELK, ElkExtendedEdge, ElkNode, ElkPort } from 'elkjs/lib/elk-api';
 import type { Category } from './rack';
-import { FAR_IN, MOD_OUT, withRoom, type GraphEdge, type GraphNode, type NodeData, type Size, type XY } from './patchgraph';
+import { MOD_OUT, withRoom, type GraphEdge, type GraphNode, type NodeData, type Size, type XY } from './patchgraph';
 
 export type ElkOptions = { portrait?: boolean };
 
@@ -30,7 +30,7 @@ export function flowOrder(c: Category, handles: readonly string[]): number {
 
 /** Which of a node's handles take cables in (the rest give them out). */
 function isInput(handle: string): boolean {
-  return handle === 'in' || handle === 'fbin' || handle === FAR_IN || handle.startsWith('k:');
+  return handle === 'in' || handle === 'fbin' || handle.startsWith('k:');
 }
 
 /** The graph as ELK takes it. Lane headers are not ELK's (laneHeads puts them). */
@@ -74,7 +74,7 @@ export function toElk(nodes: GraphNode[], edges: GraphEdge[], size: (n: GraphNod
       },
     };
   };
-  const elkEdges: ElkExtendedEdge[] = drawn.map((e) => ({ id: e.id, sources: [portId(e.source, e.sourceHandle ?? MOD_OUT)], targets: [portId(e.target, e.targetHandle ?? FAR_IN)] }));
+  const elkEdges: ElkExtendedEdge[] = drawn.map((e) => ({ id: e.id, sources: [portId(e.source, e.sourceHandle ?? MOD_OUT)], targets: [portId(e.target, e.targetHandle ?? 'in')] }));
   return {
     id: '@root',
     layoutOptions: {

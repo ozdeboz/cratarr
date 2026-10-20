@@ -408,16 +408,6 @@ export function countLabel(c: Count | undefined): string {
   return [c.in ? `${c.in} in` : '', c.out ? `${c.out} out` : ''].filter(Boolean).join(' · ');
 }
 
-/** The far form's sockets (0057 §7b): one for what comes in, on the side the node takes in, one for what goes out, on
- *  the side it gives out; far out every cable is led to these (bundled there), so none ends inside a node. */
-export const FAR_IN = 'far-in';
-export const FAR_OUT = 'far-out';
-/** The edges as the far form draws them: each end on its node's far socket (a frame's edges, which have none, as they
- *  are). */
-export function farEdges<E extends { source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null }>(edges: E[], nodes: { id: string; data: NodeData }[]): E[] {
-  const socketed = new Set(nodes.filter((n) => n.data.kind === 'module').map((n) => n.id));
-  return edges.map((e) => ({ ...e, ...(socketed.has(e.source) ? { sourceHandle: FAR_OUT } : {}), ...(socketed.has(e.target) ? { targetHandle: FAR_IN } : {}) }));
-}
 
 /** How far right a node's far form may reach (its `room`): to the next node beside it that its row overlaps, less a
  *  little; far from any, `ROOM_MOST`. Positions as laid out (a node in a box by its box's). */
