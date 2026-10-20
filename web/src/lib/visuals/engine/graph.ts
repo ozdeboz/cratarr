@@ -213,7 +213,10 @@ type Plan = {
   columnInputs: { a: number; module: string; knob: string; gain: boolean }[] | null;
   columnOffsets: { a: number; rel: string; knob: string }[] | null;
   trackCables: Partial<Record<Aspect, CableV2[]>>;
-  withColumns: Map<string, boolean>;
+  /** Each module's ports' cables, by module then port; the modules past the chain whose knobs the engine moves
+   *  (worked out at the first frame). */
+  intoOf: Map<string, Map<string, CableV2[]>>;
+  others: { x: Module; t: ModuleType }[] | null;
   /** Each module's knobs' macro targets, by module then knob. */
   targetsOf: Map<string, Map<string, { macro: Macro; from: number; to: number }[]>>;
   /** The VCAs whose channels differ (something polyphonic reaches them); the rest are worked out once, a channel. */
@@ -227,6 +230,9 @@ const ATTACK_AT = Array.from({ length: 64 }, (_, ch) => `attack.${ch}`);
 const DECAY_AT = Array.from({ length: 64 }, (_, ch) => `decay.${ch}`);
 const SUSTAIN_AT = Array.from({ length: 64 }, (_, ch) => `sustain.${ch}`);
 const RELEASE_AT = Array.from({ length: 64 }, (_, ch) => `release.${ch}`);
+const CONTINUITY_AT = Array.from({ length: 64 }, (_, k) => `continuity.${k}`);
+const EVOLUTION_AT = Array.from({ length: 64 }, (_, k) => `evolution.${k}`);
+const NO_CABLES: CableV2[] = [];
 const STRUCK_NEXT = { until: 0, velocity: 0 };
 const STRUCK: { since: number; velocity: number; next: { until: number; velocity: number } | null } = { since: Infinity, velocity: 0, next: null };
 const ADSR_KNOBS = { attack: 0, decay: 0, sustain: 0, release: 0.15 };
@@ -361,8 +367,16 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
     outKeys: p.modules.filter((x) => PROCESSORS.has(x.type)).map((x) => `${x.id}.out`),
     columnInputs: null,
     columnOffsets: null,
+    intoOf: (() => {
+      const out = new Map<string, Map<string, CableV2[]>>();
+      for (const c of p.cables) {
+        const ports = out.get(c.to.module) ?? out.set(c.to.module, new Map()).get(c.to.module)!;
+        (ports.get(c.to.port) ?? ports.set(c.to.port, []).get(c.to.port)!).push(c);
+      }
+      return out;
+    })(),
+    others: null,
     trackCables: {},
-    withColumns: new Map(),
     targetsOf: (() => {
       const out = new Map<string, Map<string, { macro: Macro; from: number; to: number }[]>>();
       for (const macro of p.macros)
@@ -412,8 +426,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     flash: knobOf(ofType('accent'), 'accent', s.flash),
     speed: knobOf(ofType('clock'), 'speed', s.speed),
     intensity: knobOf(ofType('envelope'), 'intensity', s.intensity),
-    continuity: s.continuity.map((v, k) => knobOf(flameModule, `continuity.${k}`, v)),
-    evolution: s.evolution.map((v, k) => knobOf(flameModule, `evolution.${k}`, v)),
+    continuity: s.continuity.map((v, k) => knobOf(flameModule, CONTINUITY_AT[k], v)),
+    evolution: s.evolution.map((v, k) => knobOf(flameModule, EVOLUTION_AT[k], v)),
     fluid: knobOf(inChain('fluid'), 'fluid', s.fluid),
     facets: knobOf(inChain('fluid'), 'facets', s.facets),
     tunnel: knobOf(inChain('tunnel'), 'tunnel', s.tunnel),
@@ -843,15 +857,16 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
       );
 
   // Every other module's knobs, as the evaluator moves a knob.
-  for (const x of p.modules) {
-    if (knobs[x.id] || live.has(x.id)) continue;
-    const t = types[x.type];
-    if (!t) continue;
-    let column = plan.withColumns.get(x.id);
-    if (column === undefined) plan.withColumns.set(x.id, (column = t.knobs.some((knob) => colAt(`${x.id}|${knob.id}`) !== undefined)));
-    if (column) continue;
-    knobs[x.id] = knobsOf(x, t);
+  if (!plan.others) {
+    plan.others = [];
+    for (const x of p.modules) {
+      const t = types[x.type];
+      if (!t || live.has(x.id) || PROCESSORS.has(x.type)) continue;
+      if (t.knobs.some((knob) => colAt(`${x.id}|${knob.id}`) !== undefined)) continue;
+      plan.others.push({ x, t });
+    }
   }
+  for (const { x, t } of plan.others) if (!knobs[x.id]) knobs[x.id] = knobsOf(x, t);
   return { aspects, knobs, outputs, macros, moments, points };
 
   /** A module's knobs as its macros and cables move them. */
@@ -873,7 +888,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     for (const knob of t.knobs) {
       let base = finite(x.knobs[knob.id], knob.default);
       if (knob.kind !== 'step') base = macroed(x.id, knob, base);
-      k[knob.id] = moved(x.id, knob, base, into.get(`${x.id}|${knob.id}`) ?? []);
+      k[knob.id] = moved(x.id, knob, base, plan.intoOf.get(x.id)?.get(knob.id) ?? NO_CABLES);
     }
     return k;
   }
