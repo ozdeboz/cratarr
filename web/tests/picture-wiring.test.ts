@@ -14,7 +14,8 @@ type VisualSettings = typeof DEFAULTS;
 const types = v2Types(cratarrTypes(RANGES, DEFAULTS));
 const extraOf = (id: string) => EXAMPLES.find((c) => c.id === id)!.extra;
 const settings = (extra?: VisualSettings['extra']): VisualSettings => ({ ...JSON.parse(JSON.stringify(DEFAULTS)), ...(extra ? { extra } : {}) });
-const layered = () => ({ ...extraOf('example-kaleido-layer'), layers: [...extraOf('example-kaleido-layer').layers, ...extraOf('example-window').layers], loop: extraOf('example-feedback').loop });
+// The window example's layer as a plain one (its Glow off: a Glow on a layer is the walk's, tested below).
+const layered = () => ({ ...extraOf('example-kaleido-layer'), layers: [...extraOf('example-kaleido-layer').layers, ...extraOf('example-window').layers.map((l) => ({ ...l, modules: [] }))], loop: extraOf('example-feedback').loop });
 
 test("today's chain converted is whole: the flame's light loop, Show, the layers, the effects, the screen", () => {
   const c = compile(toV2(settings()), types);
