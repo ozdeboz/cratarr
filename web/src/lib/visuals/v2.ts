@@ -59,7 +59,7 @@ function extraFrom(c: Cable): Wire['from'] {
 }
 
 /** The picture side's cables for a patch (claude-632's, step 3); none until theirs is in. */
-export type Wiring = { modules: Module[]; cables: Wire[] };
+export type Wiring = { modules: Module[]; cables: CableV2[] };
 export let pictureWiring: (p: Patch) => Wiring = () => ({ modules: [], cables: [] });
 export function setPictureWiring(f: (p: Patch) => Wiring) {
   pictureWiring = f;
