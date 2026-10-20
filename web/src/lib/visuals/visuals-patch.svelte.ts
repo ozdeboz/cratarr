@@ -12,6 +12,10 @@ import { toV2 } from './v2';
 import './picture-wiring';
 
 export const PATCH_KEY = 'cratarr-visuals-patch';
+
+/** An empty rack: only what every rack has (0057: the Meter and the Screen, its flash guard never removed); Music's
+ *  signals come as modules once a cable wants one. */
+export const emptyRack = (): PatchV2 => ({ v: 2, modules: ['meter', 'screen'].map((type) => ({ id: type, type, knobs: {} })), cables: [], macros: [], pins: [] });
 /** How long after the last change it is kept (ms): a knob dragged changes it every frame. */
 const SAVE_MS = 500;
 

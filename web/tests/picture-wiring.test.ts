@@ -140,11 +140,11 @@ test('the walk draws the picture’s own loop as one pass: its Feedback, its War
   assert.equal(loopsOf(c.order.filter((n) => ids.has(n.id)), (id) => (id === 'loop-mix' ? { ...knobs(id), mode2: 0 } : knobs(id))).size, 0);
 });
 
-test('every preset is drawn whole: no errors, its stages (Start from scratch: at most that nothing reaches a Screen)', async () => {
-  const { PRESETS } = await import('../src/lib/visuals/presets.ts');
-  for (const p of PRESETS) {
-    const c = compile(p.patch(), types);
-    if (p.id === 'scratch') assert.ok(c.errors.every((e) => e === 'Nothing reaches a Screen: there is none.'), c.errors.join(' · '));
-    else assert.ok(!c.errors.length && stagesOf(c), `${p.id}: ${c.errors.join(' · ')}`);
+test('every chain and example converted is drawn whole: no errors, its stages', async () => {
+  const { chainRoutes, CHAINS, EXAMPLES } = await import('../src/lib/visuals/chains.ts');
+  for (const c0 of [...CHAINS, ...EXAMPLES]) {
+    const v = toV2({ ...settings(), ...(c0.settings ?? {}), routes: chainRoutes(c0, 6), extra: JSON.parse(JSON.stringify(c0.extra)) } as never);
+    const c = compile(v, types);
+    assert.ok(!c.errors.length && stagesOf(c), `${c0.id}: ${c.errors.join(' · ')}`);
   }
 });

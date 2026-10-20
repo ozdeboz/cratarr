@@ -7,7 +7,7 @@
   // the track's own look again, or everything (ResetMenu). Snapshots: saved patches on the server, every device's.
   import { onMount } from 'svelte';
   import { fade } from 'svelte/transition';
-  import type { VisualsSnapshot } from '../api';
+  import { getVisualsSnapshots, type VisualsSnapshot } from '../api';
   import Icon from '../Icon.svelte';
   import { longpress } from '../longpress';
   import { sheetDrag } from '../sheetDrag';
@@ -31,14 +31,13 @@
   import { applyPanel, type PanelEdit } from './patch-edits';
   import { cratarrTypes } from './patch';
   import { v2Types } from './picture-graph';
-  import { PRESETS } from './presets';
   import type { RANDOMIZE_SCOPES } from './ports';
   import type { Category } from './rack';
   import { DEFAULTS, RANGES, visualSettings } from './settings.svelte';
   import { patchOfSnapshot, snapshotOfPatch } from './snapshot-v2';
   import { v2TypeRecord } from './v2-types';
   import { VisualsLoop } from './visuals-loop';
-  import { visualsPatch } from './visuals-patch.svelte';
+  import { emptyRack, visualsPatch } from './visuals-patch.svelte';
 
   // `docked`: beside the page, in the panel at the right (App.svelte), rather than over all of it.
   let { onclose, docked = false }: { onclose: () => void; docked?: boolean } = $props();
@@ -118,6 +117,7 @@
   }
   function togglePanel() {
     panel = !panel;
+    if (panel) void loadLibrary();
     if (panel && sheet) openSheet(true);
     if (!panel && history.state?.sheet) history.back();
     showChrome();
@@ -132,12 +132,25 @@
     visualsPatch.change((p) => applyPanel(p, e, TYPES), key);
     showChrome();
   }
+  // The presets are the snapshot library's (the server's, every device's: the owner, "that snapshot library needs to
+  // be used"), read when the rack opens; one chosen is recalled as the Snapshots sheet recalls one.
+  let library = $state<VisualsSnapshot[]>([]);
+  const loadLibrary = () => getVisualsSnapshots().then((l) => (library = l ?? []), () => {});
+  const libraryList = $derived(library.map((x) => ({ id: x.id, label: x.name.replace(/ · \d\d:\d\d$/, ''), line: '' })));
   function choosePreset(id: string) {
-    const p = PRESETS.find((x) => x.id === id);
-    if (!p) return;
-    visualsPatch.replace(p.patch());
+    const snap = library.find((x) => x.id === id);
+    if (!snap) return;
+    visualsPatch.replace(patchOfSnapshot(snap.settings));
     preset = id;
     presetPatch = visualsPatch.patch;
+    showChrome();
+  }
+  /** Everything back: the library's Default, else an empty rack. */
+  function resetEverything() {
+    const def = library.find((x) => x.name.replace(/ · \d\d:\d\d$/, '') === 'Default');
+    if (def) return choosePreset(def.id);
+    visualsPatch.replace(emptyRack());
+    preset = null;
     showChrome();
   }
   type Scope = (typeof RANDOMIZE_SCOPES)[number];
@@ -157,7 +170,8 @@
   // ---- Snapshots: saved patches on the server ---------------------------------------------------------------------
   let snapshotsOpen = $state(false);
   function recall(snap: VisualsSnapshot) {
-    visualsPatch.replace(snap.id === STANDARD.id ? PRESETS[0].patch() : patchOfSnapshot(snap.settings));
+    if (snap.id === STANDARD.id) return resetEverything();
+    visualsPatch.replace(patchOfSnapshot(snap.settings));
     preset = null;
     showChrome();
   }
@@ -425,7 +439,7 @@
           onpointerdown={(e) => e.stopPropagation()}
           onpointerup={(e) => e.stopPropagation()}
         >
-          <VisualsPanel patch={visualsPatch.patch} types={TYPES} onedit={panelEdit} presets={PRESETS} preset={presetNow} onpreset={choosePreset} onrandomize={randomizeFrom} live={liveFaces.frame} bind:path={panelPath} />
+          <VisualsPanel patch={visualsPatch.patch} types={TYPES} onedit={panelEdit} presets={libraryList} preset={presetNow} onpreset={choosePreset} onrandomize={randomizeFrom} live={liveFaces.frame} bind:path={panelPath} />
           {#if !panelPath.length}
             <div class="foot">
               <span class="fps">{fps} fps</span>
@@ -460,7 +474,7 @@
     <DiceMenu onroll={(scope) => roll(scope)} onclose={() => (diceMenu = false)} />
   {/if}
   {#if resetMenu}
-    <ResetMenu onseed={() => loop?.resetToSeed()} oneverything={() => choosePreset('default')} onclose={() => (resetMenu = false)} />
+    <ResetMenu onseed={() => loop?.resetToSeed()} oneverything={resetEverything} onclose={() => (resetMenu = false)} />
   {/if}
   {#if snapshotsOpen}
     <SnapshotsSheet
