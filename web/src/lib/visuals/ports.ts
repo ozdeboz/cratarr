@@ -393,12 +393,14 @@ export const SCREEN = declared('screen', 'Screen', 'finish', [], [PICTURE_IN], [
 
 export const GRAPH_MODULES: readonly Declared[] = [MIX, FEEDBACK, SCREEN];
 
-/** Whether a picture cycle passes through a Feedback, as every one must (§4): the cables' picture graph, by module. */
+/** Whether a picture cycle passes through a Feedback, as every one must (§4): the cables' picture and light graph, by
+ *  module (the flame's own loop is light). */
 export function cyclesClosed(p: PatchV2, typeOf: (type: string) => (ModuleType & { ports?: Ports }) | undefined): boolean {
   const type = new Map(p.modules.map((m) => [m.id, m.type]));
   const isPicture = (c: CableV2) => {
     const t = typeOf(type.get(c.from.module) ?? '');
-    return !!t && portsOf(t).out.find((x) => x.id === c.from.port)?.type === 'picture';
+    const kind = t ? portsOf(t).out.find((x) => x.id === c.from.port)?.type : undefined;
+    return kind === 'picture' || kind === 'light';
   };
   const next = new Map<string, string[]>();
   for (const c of p.cables) if (isPicture(c) && type.get(c.from.module) !== 'feedback') next.set(c.from.module, [...(next.get(c.from.module) ?? []), c.to.module]);

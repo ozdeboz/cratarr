@@ -68,3 +68,13 @@ test("the flame and its own loop carry light; Show's device takes light and give
   assert.equal(t('flame').in[0].type, 'light');
   for (const id of ['trails', 'fluid', 'tunnel', 'loop-effect', 'dive']) assert.ok(t(id).in[0].type === 'light' && t(id).out[0].type === 'light', id);
 });
+
+test('a light loop must pass through a Feedback too', async () => {
+  const { cyclesClosed } = await import('../src/lib/visuals/ports.ts');
+  const chain = cratarrTypes(RANGES, DEFAULTS);
+  const types = new Map([...chain, ...ENGINE_MODULES].map((t) => [t.type, t]));
+  const m = (id: string) => ({ id, type: id, knobs: {} });
+  const c = (id: string, from: string, to: string) => ({ id, from: { module: from, port: 'light' }, to: { module: to, port: 'light' }, value: 1, mode: 'swing' as const });
+  const p = { v: 2 as const, modules: [m('flame'), m('trails')], cables: [c('1', 'flame', 'trails'), c('2', 'trails', 'flame')], macros: [], pins: [] };
+  assert.ok(!cyclesClosed(p, (t) => types.get(t)));
+});

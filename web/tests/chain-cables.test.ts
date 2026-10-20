@@ -57,7 +57,7 @@ test('a swing adds to its column as a route does; a level multiplies; the loudne
 test("a band's cable: its part's own column, else the bands' mean (a moment's: their largest)", () => {
   const out = given(BANDS);
   const src = sources({ level3: 2 });
-  giveCables(out, [cable('h', { signal: 'level', band: 3 }, 'flame', 'hue', 1), cable('s', { signal: 'level', band: 3 }, 'show', 'size', 1), cable('m', { signal: 'level', band: 3 }, 'flame', 'symmetry', 1)], src, 1);
+  giveCables(out, [cable('h', { signal: 'level', band: 3 }, 'flame', 'hue', 1), cable('s', { signal: 'level', band: 3 }, 'flame', 'zoom', 1), cable('m', { signal: 'level', band: 3 }, 'flame', 'symmetry', 1)], src, 1);
   near(out.band[3][A.hue], 1);
   near(out.whole[A.hue], 0);
   near(out.whole[A.size], 1 / BANDS);
