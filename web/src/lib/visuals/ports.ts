@@ -7,6 +7,7 @@ import type { RouteValue } from './curves';
 import { CLOCK_TRIGGER_KNOBS } from './engine/clock';
 import { BUSY, type Knob, type Macro, type Module, type ModuleType, type Place } from './patch';
 import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
+import { LENSES } from './flame';
 
 /** `light`: the flame's accumulated light (its RGBA and its bands' shares) before Show turns it into a picture; the
  *  flame's own loop works on it (claude-632, step 3). Only Show converts light into a picture. */
@@ -458,7 +459,26 @@ export const DISPLACE = declared(
 );
 /** Threshold: a luma key, only the picture's bright parts (for Bloom). */
 export const THRESHOLD = declared('threshold', 'Threshold', 'module', [knob('threshold', 'Threshold', 0, 1, 0.6, 'level'), knob('softness', 'Softness', 0, 1, 0.1)], [PICTURE_IN], [PICTURE_OUT]);
-export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD];
+/** Lens (0057 §4f, §4g; the owner: "Lens should be a modular thing"): points, light or a picture through one of the
+ *  flame's lenses (a warp: Spherical, Swirl …; or a shape of the one set: Heart, Cratarr, Polygon, Star …), the same
+ *  type out. On points it moves each; on a picture it remaps its pixels the same way. Sides and Depth are Polygon's and
+ *  Star's. */
+const LENS_TYPES: readonly PortType[] = ['points', 'light', 'picture'];
+export const LENS = declared(
+  'lens',
+  'Lens',
+  'module',
+  [
+    knob('kind', 'Lens', 1, LENSES.length, 1, 'step'),
+    knob('amount', 'Amount', 0, 1, 1, 'level'),
+    knob('sides', 'Sides', 3, 48, 5),
+    knob('depth', 'Depth', 0, 1, 0.5),
+  ],
+  [{ id: 'in', label: 'In', type: 'points', polymorphic: LENS_TYPES }],
+  [{ id: 'out', label: 'Out', type: 'points', polymorphic: LENS_TYPES }],
+);
+
+export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD, LENS];
 
 /** The Randomize scopes (0057 §4d), in the dice's menu's order. */
 export const RANDOMIZE_SCOPES = ['everything', 'sources', 'effects', 'mixers', 'modulators', 'cables'] as const;
