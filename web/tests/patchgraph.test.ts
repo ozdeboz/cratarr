@@ -322,11 +322,22 @@ test('a picture, light or points input takes one cable: a new one replaces the o
 test('far out the whole node is its handle: drag (no nodrag on its one line), long press and tap (inside the node’s long press; one toggle)', async () => {
   const fs = await import('node:fs');
   const frame = fs.readFileSync(new URL('../src/lib/visuals/face/NodeFrame.svelte', import.meta.url), 'utf8');
-  const sum = /<button class="([^"]*sum[^"]*)"/.exec(frame);
+  const sum = /<button class="([^"]*sum[^"]*)"/.exec(frame);
   assert.ok(sum && !sum[1].split(' ').includes('nodrag'), 'its far line drags the node');
   assert.ok(frame.indexOf('use:longpress={() => graph.menu(id)}') < frame.indexOf('class="sum'), 'inside the node, so its long press is the node’s');
   const graph = fs.readFileSync(new URL('../src/lib/visuals/PatchGraph.svelte', import.meta.url), 'utf8');
   assert.ok(/open\(id\) \{[\s\S]{0,300}if \(selecting\) return;/.test(graph), 'a tap toggles once (Svelte Flow’s node click), not twice');
+});
+
+test('cable opacity (a view option): 10 to 100 %, drawn as Rack draws it (to the power 1.5)', () => {
+  const { cableOpacity, drawnOpacity, CABLE_OPACITY_MIN } = await_graph;
+  assert.equal(cableOpacity(0.5), 0.5);
+  assert.equal(cableOpacity(0), CABLE_OPACITY_MIN);
+  assert.equal(cableOpacity(3), 1);
+  assert.equal(cableOpacity(Number.NaN), 1);
+  assert.equal(cableOpacity('x'), 1);
+  assert.equal(drawnOpacity(1), 1);
+  assert.ok(Math.abs(drawnOpacity(0.25) - 0.125) < 1e-9);
 });
 
 test('cables sag as VCV Rack’s do: through the midpoint lowered by (1 − tension)(150 + length)', () => {
