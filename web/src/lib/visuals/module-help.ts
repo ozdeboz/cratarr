@@ -58,6 +58,7 @@ export const moduleHelp: Record<string, string> = {
   threshold: 'Only the picture’s bright parts, the rest black: a luma key.',
   adsr: 'An ADSR envelope on each gate or trigger, one a channel.',
   sequencer: 'A step sequencer: up to sixteen values, one a clock step.',
+  shaper: 'A value through a curve, as a curved cable shapes it.',
   dice: 'The panel’s dice as a module: a trigger randomizes every knob in its scope that is not pinned, from its seed.',
   looper: 'Records a value over a number of bars and loops it in time with the Clock.',
   grid: 'Points on a lattice, with each point’s values as channels.',
@@ -257,6 +258,15 @@ export const portHelp: Record<string, Record<string, string>> = {
     reference: 'How it reads a strike’s strength: against this track’s typical, lately’s, or as it is.',
     amount: 'The peak’s height.',
     out: 'One envelope a channel.',
+  },
+  shaper: {
+    in: 'The value to shape, a channel a band.',
+    h: 'The curve’s height at its end.',
+    h1x: 'The first handle, across.',
+    h1y: 'The first handle’s height.',
+    h2x: 'The second handle, across.',
+    h2y: 'The second handle’s height.',
+    out: 'The curve’s height at the value, a channel a band.',
   },
   dice: {
     trigger: 'Randomizes on each trigger.',

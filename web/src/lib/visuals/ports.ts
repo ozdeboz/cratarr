@@ -447,7 +447,25 @@ export const DICE = declared(
   [out('done', 'Randomized', 'trigger')],
 );
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, DICE, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
+/** Shaper (0057 §7f, the owner: curved cables kept exact): a value through a curve, as a cable's own curve shapes it
+ *  (curves.ts: the end's height and two handles). A curved cable from Music reads it before the loudness's VCA. A shape
+ *  is a choice, not a value: none of its knobs are randomized. */
+export const SHAPER = declared(
+  'shaper',
+  'Shaper',
+  'modulator',
+  [
+    { ...knob('h', 'Height', -2, 2, 1), randomize: false },
+    { ...knob('h1x', 'Handle 1 across', 0, 1, 1 / 3), randomize: false },
+    { ...knob('h1y', 'Handle 1 height', -2, 2, 1 / 3), randomize: false },
+    { ...knob('h2x', 'Handle 2 across', 0, 1, 2 / 3), randomize: false },
+    { ...knob('h2y', 'Handle 2 height', -2, 2, 2 / 3), randomize: false },
+  ],
+  [{ id: 'in', label: 'In', type: 'value', channels: 6 }],
+  [{ ...VALUE_OUT, channels: 6 }],
+);
+
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, DICE, SHAPER, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 
