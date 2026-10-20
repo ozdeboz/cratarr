@@ -14,7 +14,7 @@ import type { Levers } from './sidechain';
 import { modulatorOf, type ModulatorType } from '../modulators/modulators';
 import type { Music } from '../music-core';
 import { ASPECT_KNOB, type Knob, type Macro, type Module, type ModuleType, type Modulator, type SignalRef } from '../patch';
-import { ENGINE_MODULES, READINGS, SHOW_PARTS, type CableV2, type PatchV2, type PortRef } from '../ports';
+import { COLUMN_OFFSETS, ENGINE_MODULES, READINGS, SHOW_PARTS, type CableV2, type PatchV2, type PortRef } from '../ports';
 import { A, ASPECTS, B, BAND_SIGNALS, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, type Aspect, type Given } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
 import { newChain, stepChain, type ChainState } from './chain';
@@ -127,8 +127,9 @@ export function newEngine(): EngineState {
 }
 
 export type EngineFrame = {
-  /** What the picture is drawn with this frame (today's renderer's input, until step 3's modules take knob values). */
-  aspects: AspectsNow;
+  /** What the picture is drawn with this frame (today's renderer's input, until step 3's modules take knob values); null
+   *  where the patch has no Cratarr chain (a blank slate: nothing is drawn). */
+  aspects: AspectsNow | null;
   /** Every module's knobs as their cables move them (the chain's: its settings, its columns given in `aspects`). */
   knobs: Record<string, Record<string, number>>;
   /** Every value output this frame, by `module.port`. */
@@ -160,6 +161,33 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   const typeOf = new Map(p.modules.map((x) => [x.id, x.type]));
   const moduleOf = new Map(p.modules.map((x) => [x.id, x]));
   const outputs: Record<string, number> = {};
+  // The Cratarr chain (0057 §3; the owner: a device, "Cratarr"), where the patch has it: found by its Flame, its other
+  // modules beside it (the Flame's path: the top level, or inside the device as flatten names them). None: a blank
+  // slate, nothing drawn.
+  const flameModule = p.modules.find((x) => x.type === 'flame');
+  const at = flameModule ? flameModule.id.slice(0, flameModule.id.lastIndexOf('/') + 1) : '';
+  const ofType = (type: string) => p.modules.find((x) => x.type === type);
+  const inChain = (rel: string) => moduleOf.get(at + rel);
+  const knobOf = (x: Module | undefined, knob: string, or: number) => finite(x?.knobs[knob], or);
+  /** A key (`module|knob`, flattened) as the chain's column it is. */
+  const colAt = (key: string) => (key.startsWith(at) ? COLUMN.get(key.slice(at.length)) : undefined);
+  /** The chain's settings from its modules' knobs (the patch is the truth, 0057 Phase B); a knob a patch has no module
+   *  for, as the settings had it. */
+  const chainSettings = {
+    ...s,
+    flash: knobOf(ofType('accent'), 'accent', s.flash),
+    speed: knobOf(ofType('clock'), 'speed', s.speed),
+    intensity: knobOf(ofType('envelope'), 'intensity', s.intensity),
+    continuity: s.continuity.map((v, k) => knobOf(flameModule, `continuity.${k}`, v)),
+    evolution: s.evolution.map((v, k) => knobOf(flameModule, `evolution.${k}`, v)),
+    fluid: knobOf(inChain('fluid'), 'fluid', s.fluid),
+    facets: knobOf(inChain('fluid'), 'facets', s.facets),
+    tunnel: knobOf(inChain('tunnel'), 'tunnel', s.tunnel),
+    dive: knobOf(inChain('dive'), 'dive', s.dive),
+    effects: knobOf(inChain('frame'), 'effects', s.effects),
+    smoothing: knobOf(inChain('show/blur'), 'smoothing', s.smoothing),
+    haze: knobOf(inChain('show/curve'), 'haze', s.haze),
+  } as VisualSettings;
   // How a Music row is read (its `reference.<signal>` knob: 0057 §7e, a cable no longer says), slow from its `:slow`
   // output; unset, as normal.ts reads it by default.
   const musicModule = p.modules.find((x) => x.type === 'music');
@@ -177,7 +205,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   for (const c of p.cables) if (typeOf.get(c.to.module) === 'adsr' && c.to.port === 'gate' && (typeOf.get(c.from.module) ?? c.from.module) === 'music') gateOf.set(c.to.module, c);
 
   // Music's raw signals, the Envelope, the Track's pulse.
-  const env = stepEnvelope(st.envelope, m.intensity, m.playing, s.intensity, step);
+  const env = stepEnvelope(st.envelope, m.intensity, m.playing, chainSettings.intensity, step);
   const raw = st.signals;
   raw.set(m.track);
   raw[T.loudness] = env.level;
@@ -462,7 +490,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   for (const own of got.band) own.fill(0);
   const n = got.band.length;
   for (const [key, cables] of into) {
-    const a = COLUMN.get(key);
+    const a = colAt(key);
     if (a === undefined) continue;
     for (const c of perChannel(cables)) {
       const x = xOf(c);
@@ -496,7 +524,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     const gain = key.endsWith(GAIN);
     if (!gain && !key.endsWith(NEXT)) continue;
     const base = key.slice(0, -(gain ? GAIN : NEXT).length);
-    const a = COLUMN.get(base);
+    const a = colAt(base);
     if (a === undefined) continue;
     const [module, knob] = base.split('|');
     if (gain && IS_LEVEL[a]) got.level[a] *= gainOf(module, knob);
@@ -509,11 +537,24 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     if (!gain && IS_MOMENT[a]) firedNow[ASPECTS[a]] ||= fired(module, knob) ?? false;
   }
 
+  // Each swing column's knob, its resting value (0057 §7e, VCV's rule: the knob the offset, the cables adding to it).
+  for (const offset of COLUMN_OFFSETS) {
+    const [type, knob] = offset.split('.');
+    const rel = type === 'flame' || type === 'trails' ? type : `show/${type}`;
+    const a = colAt(`${at}${rel}|${knob}`);
+    if (a !== undefined) got.whole[a] += knobOf(inChain(rel), knob, 0);
+  }
+
   // The chain's own modules, each as its gain inputs hold it (the sidechains' Duckers, 0057 §7e): the Clock's speed
   // (its pace), the Accent's accent (the flash guard: its swing, and its courses slower), the Flame's evolving times
   // (a time's gain stretches it). Levers given (today's sidechaining, until the patch has its Duckers) act with them.
-  const held: Levers = { ...L, pace: L.pace * gainOf('clock', 'speed'), swing: L.swing * gainOf('accent', 'accent'), evolution: L.evolution / Math.max(0.01, gainOf('flame', 'evolution')) };
-  const clock = stepClock(st.clock, m.bps, m.playing, s.speed, held.pace, opts.still, step);
+  const held: Levers = {
+    ...L,
+    pace: L.pace * gainOf(ofType('clock')?.id ?? 'clock', 'speed'),
+    swing: L.swing * gainOf(ofType('accent')?.id ?? 'accent', 'accent'),
+    evolution: L.evolution / Math.max(0.01, gainOf(flameModule?.id ?? 'flame', 'evolution')),
+  };
+  const clock = stepClock(st.clock, m.bps, m.playing, chainSettings.speed, held.pace, opts.still, step);
   // The picture's level: the Tone map's Level knob as its gain input holds it (the pause's dimming, wired), where the
   // patch has the Tone map; else the Envelope's glow (today's).
   const tonemap = p.modules.find((x) => x.type === 'tonemap');
@@ -521,24 +562,26 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   outputs['clock.rate'] = clock;
   const trackInto = (a: Aspect) => {
     let sum = 0;
-    for (const c of columnOf(a).flatMap((key) => into.get(key) ?? [])) if ((typeOf.get(c.from.module) ?? c.from.module) === 'track') sum += depthOf(c) * heightOf(shapeOf(c.value), pulse) * walkOf(c);
+    for (const c of columnOf(a).flatMap((key) => into.get(at + key) ?? [])) if ((typeOf.get(c.from.module) ?? c.from.module) === 'track') sum += depthOf(c) * heightOf(shapeOf(c.value), pulse) * walkOf(c);
     return sum;
   };
-  const aspects = stepChain(
-    st.chain,
-    m,
-    s,
-    { given: got, track: raw, bands, lit: env.level, envelope: env.out, glow, clock, trackWalk: { look: trackInto('look'), behaviour: trackInto('behaviour') }, fired: firedNow },
-    step,
-    { ...opts, levers: held },
-  );
+  const aspects = !flameModule
+    ? null
+    : stepChain(
+        st.chain,
+        m,
+        chainSettings,
+        { given: got, track: raw, bands, lit: env.level, envelope: env.out, glow, clock, trackWalk: { look: trackInto('look'), behaviour: trackInto('behaviour') }, fired: firedNow },
+        step,
+        { ...opts, levers: held },
+      );
 
   // Every other module's knobs, as the evaluator moves a knob.
   for (const x of p.modules) {
     if (knobs[x.id] || live.has(x.id)) continue;
     const t = types[x.type];
     if (!t) continue;
-    if (t.knobs.some((knob) => COLUMN.has(`${x.id}|${knob.id}`))) continue;
+    if (t.knobs.some((knob) => colAt(`${x.id}|${knob.id}`) !== undefined)) continue;
     knobs[x.id] = knobsOf(x, t);
   }
   return { aspects, knobs, outputs, macros, moments, points };
