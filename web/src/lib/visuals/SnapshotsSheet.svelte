@@ -20,12 +20,15 @@
     trackName,
     recall,
     over,
+    settingsNow = snapshotNow,
   }: {
     onclose: () => void;
     /** A small picture of the visuals now (a JPEG data URL), or null where none could be taken. */
     capture: () => Promise<string | null>;
     trackName: string | null;
     recall: (snap: VisualsSnapshot) => void;
+    /** What a snapshot keeps (0057's switch: the patch, snapshot-v2.ts); the settings' by default. */
+    settingsNow?: () => Record<string, unknown>;
     /** Over the full-screen visuals (not beside the page). */
     over: boolean;
   } = $props();
@@ -50,7 +53,7 @@
     saving = true;
     try {
       const picture = await capture();
-      const made = await saveVisualsSnapshot(`${trackName ?? 'Visuals'} · ${time()}`, snapshotNow(), picture);
+      const made = await saveVisualsSnapshot(`${trackName ?? 'Visuals'} · ${time()}`, settingsNow(), picture);
       list = [made, ...list.filter((x) => x.id !== made.id)];
       // Its name at once, ready to change (Enter or a tap away keeps it).
       edit(made);
@@ -84,7 +87,7 @@
     saving = true;
     try {
       const picture = await capture();
-      const done = await saveOverVisualsSnapshot(snap.id, snapshotNow(), picture, name && name !== snap.name ? name : undefined);
+      const done = await saveOverVisualsSnapshot(snap.id, settingsNow(), picture, name && name !== snap.name ? name : undefined);
       list = list.map((x) => (x.id === snap.id ? { ...x, ...done } : x));
     } catch (e) {
       toast.fail(e, 'Not saved');
