@@ -692,12 +692,13 @@ test('faces: a Random’s recent output, a line while smooth, steps once stepped
   assert.equal(faces.FACES.random, 'random');
 });
 
-test('v2: a cable into a knob its module does not declare is not drawn; one into a band of a polyphonic knob, onto it', () => {
+test('v2: a cable into a port its module does not declare, on a port row of its own (none hidden); one into a band of a polyphonic knob, onto it', () => {
   const p = v2patch();
   p.cables.push({ id: 'z', from: { module: 'clock', port: 'phase' }, to: { module: 'flame', port: 'nowhere' }, value: 1, mode: 'swing' });
   p.cables.push({ id: 'r', from: { module: 'clock', port: 'phase' }, to: { module: 'adsr', port: 'release.3' }, value: 1, mode: 'swing' });
   const g = graphOfV2({ patch: p, types: v2types });
-  assert.equal(g.edges.find((e) => e.id === 'z'), undefined);
+  assert.equal(g.edges.find((e) => e.id === 'z')?.targetHandle, 'k:nowhere');
+  assert.ok((g.nodes.find((n) => n.id === 'flame')!.data as ModuleData).ports.some((x) => x.id === 'nowhere'));
   const adsr = g.nodes.find((n) => (n.data as ModuleData).type === 'adsr');
   if (adsr) assert.equal(g.edges.find((e) => e.id === 'r')?.targetHandle, adsr.id === 'adsr' ? 'k:release' : undefined);
 });
@@ -837,4 +838,30 @@ test("a level knob's gain is a dot beside it, not a port row; its cables do not 
   assert.equal(amount.ring, null);
   assert.ok(!d.ports.some((x) => x.id.endsWith(':gain')));
   assert.equal(g.edges.find((e) => e.id === 'g')?.targetHandle, 'k:amount:gain');
+});
+
+test('portrait: the picture runs down (a layer, the blend, the loop, finish, the screen), the modulators in a column beside it', () => {
+  const g = graphOf({ patch: sample(), types, portrait: true });
+  const n = (id: string) => g.nodes.find((x) => x.id === id)!;
+  const abs = (id: string) => {
+    const x = n(id);
+    const p = x.parentId ? n(x.parentId).position : { x: 0, y: 0 };
+    return { x: p.x + x.position.x, y: p.y + x.position.y };
+  };
+  // Down a layer's box: its source over its module.
+  assert.ok(abs('s1').y < abs('k1').y && abs('s1').x === abs('k1').x);
+  assert.deepEqual([(n('s1').data as ModuleData).out, (n('k1').data as ModuleData).in], ['bottom', 'top']);
+  // Then the blend, the loop, finish and the screen, each under the last.
+  const order = ['@blend', '@loop', 'f1', 'f2', '@screen'].map((id) => n(id).position.y);
+  assert.deepEqual([...order].sort((a, b) => a - b), order);
+  assert.ok(order[0] > n(layerBox('two')).position.y);
+  // The modulators in a column right of the picture's, from its top; the far labels room to the right of each.
+  const column = Math.max(...['@blend', '@loop', '@screen', layerBox('one'), layerBox('two')].map((id) => n(id).position.x + (n(id).width ?? sizeOfTest(n(id).data).width)));
+  assert.ok(n('lfo').position.x > column && n('fol').position.x === n('lfo').position.x);
+  assert.ok(Math.min(n('lfo').position.y, n('fol').position.y) === 0);
+  const room = (id: string) => (n(id).data as ModuleData).room!;
+  assert.ok(room('k1') > sizeOfTest(n('k1').data).width, 'beside a picture module, room to the modulators');
+  assert.ok(abs('k1').x + room('k1') <= n('lfo').position.x, 'never over the next');
+  // A loop's way back leaves at the right.
+  assert.equal((n('m2').data as ModuleData).fbSide, 'right');
 });

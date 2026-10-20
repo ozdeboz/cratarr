@@ -67,6 +67,10 @@ export type ModuleData = {
   /** A loop's last module (its picture also goes back to the loop's first), and that first. */
   feedback: boolean;
   feedbackIn: boolean;
+  /** Where a loop's way back leaves and comes in (portrait: the right; else under). */
+  fbSide?: Side;
+  /** How far right of its left edge the node's far form may reach before the next node (flow px). */
+  room?: number;
   modulator: boolean;
   /** Drawn from a v2 patch (graphOfV2): its ports whole, which of them the picture handles and the `mod` handle are,
    *  every handle connectable. */
@@ -79,8 +83,8 @@ export type PortView = { id: string; label: string; type: PortType; channels?: n
 /** An output jack: its handle (`mod`, or `o:<port>`). */
 export type OutView = { id: string; label: string; type: PortType; handle: string; connectable?: boolean };
 /** A signal of Music's: its type (an event's a trigger, the sound audio), a band's six at once `channels` 6. */
-export type SignalData = { kind: 'signal'; label: string; ref: SignalRef; type: PortType; channels?: number };
-export type MarkData = { kind: 'blend' | 'screen'; label: string; in: Side; out: Side | null };
+export type SignalData = { kind: 'signal'; label: string; ref: SignalRef; type: PortType; channels?: number; room?: number };
+export type MarkData = { kind: 'blend' | 'screen'; label: string; in: Side; out: Side | null; room?: number };
 /** A layer's box, or the loop's; `add`: where a module added from its "+" goes (the layer's id, or `loop`). */
 export type BoxData = { kind: 'box'; label: string; add?: string; device?: true };
 /** A layer that is off, as one row: what brings it back is its id (the flame's: `flame`). */
@@ -181,6 +185,13 @@ const KNOBS_ACROSS = 6;
 /** How many knobs a module shows before it is opened out (its cabled ones always); a modulator shows its cabled ones. */
 const SHOWN = 3;
 const GAP_X = 56;
+/** Down the picture's column (portrait). */
+const GAP_Y = 44;
+/** How wide a lane's rows run (portrait, v2), and the room between its modules for a far label. */
+const PORTRAIT_ACROSS = 900;
+const PORTRAIT_BESIDE = 150;
+/** Between the picture's column and the modulators' (portrait): room for a far label beside each. */
+const PORTRAIT_GAP = 200;
 const PAD = 16;
 const BOX_TOP = 30;
 /** Signals and modulators: at most this many rows; one goes to another row rather than this far right of its place. */
@@ -311,6 +322,31 @@ export function knobViews(
 /** What a face reads of its module's knobs: each at its default, as set, a polyphonic one's channels too. */
 export const faceKnobs = (m: Module, t: ModuleType): Record<string, number> => ({ ...Object.fromEntries(t.knobs.map((k) => [k.id, k.default])), ...m.knobs });
 
+/** How far right a node's far form may reach (its `room`): to the next node beside it that its row overlaps, less a
+ *  little; far from any, `ROOM_MOST`. Positions as laid out (a node in a box by its box's). */
+const ROOM_MOST = 900;
+export function withRoom(nodes: GraphNode[], size: (n: GraphNode) => Size) {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const abs = (n: GraphNode): XY => {
+    const p = n.parentId ? byId.get(n.parentId) : undefined;
+    const at = p ? abs(p) : { x: 0, y: 0 };
+    return { x: at.x + n.position.x, y: at.y + n.position.y };
+  };
+  const boxes = nodes
+    .filter((n) => n.type === 'patch' && n.data.kind !== 'box')
+    .map((n) => {
+      const at = abs(n);
+      const sz = size(n);
+      return { n, x: at.x, y: at.y, w: sz.width, h: sz.height };
+    });
+  for (const a of boxes) {
+    if (a.n.data.kind !== 'module' && a.n.data.kind !== 'signal' && a.n.data.kind !== 'blend' && a.n.data.kind !== 'screen') continue;
+    let room = ROOM_MOST;
+    for (const b of boxes) if (b !== a && b.x > a.x && b.y < a.y + a.h && b.y + b.h > a.y) room = Math.min(room, b.x - a.x - 12);
+    a.n.data = { ...a.n.data, room: Math.max(a.w, room) };
+  }
+}
+
 /** A node's size before it is measured, from what it shows. */
 export function sizeOf(d: NodeData): Size {
   if (d.kind === 'off') return { width: 200, height: 36 };
@@ -340,6 +376,8 @@ export type GraphInput = {
   adds?: boolean;
   /** Which boxes take a module from their "+" (a layer's id, or `loop`); every one when not given. */
   addTo?: (where: string) => boolean;
+  /** A screen taller than wide (a phone upright): the picture runs down, the modulators in rows under it. */
+  portrait?: boolean;
 };
 
 /** Whether a layer is off: blended at nothing, so none of it is seen. */
@@ -348,7 +386,10 @@ export const layerOff = (l: Pick<Patch['layers'][number], 'blend'>) => l.blend.a
 /** The patch as Svelte Flow's nodes and edges. The picture runs left to right: each layer a row in its box (its own
  *  loop at the row's end), the layers stacked, then the blend, the loop, finish and the screen in one row; the frame
  *  under the screen. Signals and modulators sit under the knobs they move, so their cables run short and mostly up. */
-export function graphOf({ patch, types, positions = {}, signals = [], open = new Set(), sizes = {}, adds = false, addTo = () => true }: GraphInput): { nodes: GraphNode[]; edges: GraphEdge[] } {
+export function graphOf({ patch, types, positions = {}, signals = [], open = new Set(), sizes = {}, adds = false, addTo = () => true, portrait = false }: GraphInput): { nodes: GraphNode[]; edges: GraphEdge[] } {
+  // The way the picture runs: across, or (portrait) down.
+  const IN: Side = portrait ? 'top' : 'left';
+  const OUT: Side = portrait ? 'bottom' : 'right';
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
   const into = new Map<string, Cable[]>();
@@ -416,6 +457,7 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
       out: flow.out,
       feedback: !!flow.feedback,
       feedbackIn: !!flow.feedbackIn,
+      ...(portrait ? { fbSide: 'right' as const } : {}),
       modulator,
     };
   };
@@ -443,17 +485,20 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
     const inside: GraphNode[] = [];
     const loops = row.length - loopAt > 1;
     let x = PAD;
+    let y = BOX_TOP;
     row.forEach((m, i) => {
-      const flow: Flow = { in: i === 0 ? firstIn : 'left', out: 'right', feedback: loops && i === row.length - 1, feedbackIn: loops && i === loopAt };
-      const n = node(m.id, moduleData(m, flow), { x, y: BOX_TOP }, boxId);
+      const flow: Flow = { in: i === 0 ? firstIn : IN, out: OUT, feedback: loops && i === row.length - 1, feedbackIn: loops && i === loopAt };
+      const n = node(m.id, moduleData(m, flow), { x, y }, boxId);
       inside.push(n);
-      x += size(n).width + GAP_X;
+      if (portrait) y += size(n).height + GAP_Y;
+      else x += size(n).width + GAP_X;
     });
     for (let i = 1; i < row.length; i++) picture(row[i - 1].id, row[i].id);
     if (loops)
       edges.push({ id: `fb:${row.at(-1)!.id}>${row[loopAt].id}`, source: row.at(-1)!.id, target: row[loopAt].id, sourceHandle: 'fb', targetHandle: 'fbin', type: 'smoothstep', class: 'feedback', style: wireStyle(gives.get(row.at(-1)!.id) ?? 'picture'), label: 'feedback', deletable: false, selectable: false });
     box.width = Math.max(120, ...inside.map((n) => n.position.x + size(n).width)) + PAD;
-    box.height = Math.max(60, ...inside.map((n) => n.position.y + size(n).height)) + PAD + (loops ? 24 : 0);
+    box.height = Math.max(60, ...inside.map((n) => n.position.y + size(n).height)) + PAD + (loops && !portrait ? 24 : 0);
+    if (loops && portrait) box.width += 32;
     return { box, last: row.at(-1)?.id ?? null };
   };
 
@@ -483,28 +528,37 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
   }
   let bottom = Math.max(0, y - 40);
 
-  // The blend, the picture's loop, finish and the screen, in a row level with the layers' middle.
+  // The blend, the picture's loop, finish and the screen: in a row level with the layers' middle, or (portrait) on
+  // down under them.
   const mid = Math.max(0, bottom / 2 - 18);
-  const blend = node(BLEND, { kind: 'blend', label: 'Blend', in: 'left', out: 'right' }, { x: right + GAP_X, y: mid });
+  let x = right + GAP_X;
+  let down = bottom + 48;
+  /** Where the next part goes, and past it. */
+  const at = (dy = 0): XY => (portrait ? { x: 0, y: down } : { x, y: Math.max(0, mid + dy) });
+  const past = (n: GraphNode) => {
+    if (portrait) down = n.position.y + (n.height ?? size(n).height) + GAP_Y;
+    else x = n.position.x + (n.width ?? size(n).width) + GAP_X;
+    bottom = Math.max(bottom, n.position.y + (n.height ?? size(n).height));
+  };
+  const blend = node(BLEND, { kind: 'blend', label: 'Blend', in: IN, out: OUT }, at());
+  past(blend);
   for (const f of toBlend) picture(f.id, BLEND, f.label);
   let from = BLEND;
-  let x = blend.position.x + size(blend).width + GAP_X;
   if (patch.loop.length) {
-    const { box, last } = chain(LOOP, 'Loop', patch.loop, 0, 'left', { x, y: Math.max(0, mid - BOX_TOP - 4) }, 'loop');
+    const { box, last } = chain(LOOP, 'Loop', patch.loop, 0, IN, at(-BOX_TOP - 4), 'loop');
     picture(BLEND, patch.loop[0].id);
     from = last!;
-    x = box.position.x + box.width! + GAP_X;
-    bottom = Math.max(bottom, box.position.y + box.height!);
+    past(box);
   }
   for (const m of patch.finish) {
-    const n = node(m.id, moduleData(m, { in: 'left', out: 'right' }), { x, y: Math.max(0, mid - 4) });
+    const n = node(m.id, moduleData(m, { in: IN, out: OUT }), at(-4));
     picture(from, m.id);
     from = m.id;
-    x = n.position.x + size(n).width + GAP_X;
-    bottom = Math.max(bottom, n.position.y + size(n).height);
+    past(n);
   }
-  const screen = node(SCREEN, { kind: 'screen', label: 'Screen', in: 'left', out: null }, { x, y: mid });
+  const screen = node(SCREEN, { kind: 'screen', label: 'Screen', in: IN, out: null }, at());
   picture(from, SCREEN);
+  past(screen);
   bottom = Math.max(bottom, screen.position.y + 36);
 
   // The whole frame: knobs, no picture; under the screen.
@@ -576,9 +630,25 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
     const xs = (links.get(x.id) ?? []).map((l) => placedAt.get(l.module)).filter((v): v is number => v !== undefined);
     return xs.length ? Math.min(...xs) - (sizes[x.id] ?? sizeOf(x.data)).width / 2 - 24 : Infinity;
   };
+  // Portrait: in columns beside the picture's, as tall as it, in the order of what they move (so the whole is about
+  // as tall as wide as a phone's screen above a sheet, and a far label has the room beside it).
+  const column = { x: Math.max(...nodes.filter((n) => !n.parentId).map((n) => n.position.x + (n.width ?? size(n).width)), 0) + PORTRAIT_GAP, y: 0, w: 0 };
+  const tall = Math.max(bottom, 600);
   for (const x of [...first, ...later]) {
     if (later.includes(x)) x.want = toPort(x);
     const sz = sizes[x.id] ?? sizeOf(x.data);
+    if (portrait) {
+      if (column.y > 0 && column.y + sz.height > tall) {
+        column.x += column.w + PORTRAIT_GAP;
+        column.y = 0;
+        column.w = 0;
+      }
+      node(x.id, x.data, { x: column.x, y: column.y });
+      placedAt.set(x.id, column.x);
+      column.y += sz.height + GAP_Y;
+      column.w = Math.max(column.w, sz.width);
+      continue;
+    }
     const desired = Number.isFinite(x.want) ? x.want - sz.width / 2 : Math.max(0, ...rows.map((r) => r.cursor));
     let row = rows.find((r) => r.cursor <= desired + SLACK);
     if (!row && rows.length < SOURCE_ROWS) rows.push((row = { cursor: -Infinity, items: [] }));
@@ -589,6 +659,7 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
     row.cursor = at + sz.width + 16;
   }
   let sy = bottom + 120;
+  if (portrait) sy = 0;
   for (const r of rows) {
     for (const it of r.items) {
       const n = node(it.s.id, it.s.data, { x: Math.round(it.x), y: sy });
@@ -599,7 +670,7 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
   }
   if (adds) {
     const first = patch.modulators.map((m) => placedAt.get(m.id)).filter((v): v is number => v !== undefined);
-    const n = node(ADD_MODULATOR, { kind: 'add', to: 'modulator', label: '+ Add modulator' }, { x: Math.round(first.length ? Math.min(...first) : 0), y: sy });
+    const n = node(ADD_MODULATOR, { kind: 'add', to: 'modulator', label: '+ Add modulator' }, portrait ? { x: column.x, y: column.y } : { x: Math.round(first.length ? Math.min(...first) : 0), y: sy });
     Object.assign(n, { selectable: false, connectable: false, draggable: false });
   }
 
@@ -623,6 +694,7 @@ export function graphOf({ patch, types, positions = {}, signals = [], open = new
     const data: CableData = { amount: '', wire: n.wire, normal: true };
     edges.push({ id: `normal:${n.to}.${n.port}`, source: n.from, target: n.to, sourceHandle: n.handle, targetHandle: knobHandle(n.port), type: 'cable', class: `normal w-${n.wire}`, style: wireStyle(n.wire), deletable: false, selectable: false, data });
   }
+  withRoom(nodes, size);
   return { nodes, edges };
 }
 
@@ -781,6 +853,8 @@ export type V2Input = {
   open?: ReadonlySet<string>;
   positions?: Record<string, XY>;
   sizes?: Record<string, Size>;
+  /** A screen taller than wide: each lane's row turns at about a phone's width, so the lanes run down. */
+  portrait?: boolean;
 };
 
 /** The patch inside the devices `at` leads through; null where one is not there. */
@@ -892,7 +966,10 @@ const intoOf = (p: PatchV2) => {
 };
 
 /** The v2 patch as Svelte Flow's nodes and edges, at the level `at` leads to. */
-export function graphOfV2({ patch, types, at = [], open = new Set(), positions = {}, sizes = {} }: V2Input): { nodes: GraphNode[]; edges: GraphEdge[] } {
+export function graphOfV2({ patch, types, at = [], open = new Set(), positions = {}, sizes = {}, portrait = false }: V2Input): { nodes: GraphNode[]; edges: GraphEdge[] } {
+  // Portrait: rows a little wider than a phone at a readable zoom, a far label's room between the modules.
+  const ACROSS = portrait ? PORTRAIT_ACROSS : LANE_ACROSS;
+  const BESIDE = portrait ? PORTRAIT_BESIDE : 0;
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
   const top = patchAt(patch, at);
@@ -902,7 +979,14 @@ export function graphOfV2({ patch, types, at = [], open = new Set(), positions =
 
   /** A module's node data at a level (`into`: that level's cables by `module.port`). */
   const view = (m: Module, id: string, into: Map<string, CableV2[]>, level: PatchV2): ModuleData => {
-    const ports = portsFor(m) ?? { in: [], out: [] };
+    const declared = portsFor(m) ?? { in: [], out: [] };
+    // A cable into a port its type does not declare (toV2's flame.zoom until it is): a port row of its own, so no cable
+    // is hidden; a channel of a polyphonic knob or a knob's next or gain is its knob's.
+    const known = new Set([...declared.in.map((x) => x.id), ...(types[m.type]?.knobs ?? []).map((k) => k.id)]);
+    const stray = [...new Set(level.cables.filter((c) => c.to.module === m.id).map((c) => c.to.port))]
+      .filter((p) => !known.has(p) && !known.has(p.replace(/\.\d+$/, '')) && !known.has(p.replace(/:(next|gain)$/, '')))
+      .map((p): Port => ({ id: p, label: p.charAt(0).toUpperCase() + p.slice(1), type: 'value' }));
+    const ports = stray.length ? { ...declared, in: [...declared.in, ...stray] } : declared;
     const cabled = (port: string) => into.has(`${m.id}.${port}`);
     const cablesInto = (port: string) => into.get(`${m.id}.${port}`) ?? [];
     const pinPort = ports.in.find((x) => PICTURE_TYPES.has(x.type));
@@ -1017,11 +1101,11 @@ export function graphOfV2({ patch, types, at = [], open = new Set(), positions =
         nodes.push(head);
         y += LANE_HEAD;
       }
-      const gap = cat === 'effects' ? GAP_X : 24;
+      const gap = Math.max(cat === 'effects' ? GAP_X : 24, BESIDE);
       let x = 0;
       let rowH = 0;
       for (const it of ms) {
-        if (x > 0 && x + it.size.width > LANE_ACROSS) {
+        if (x > 0 && x + it.size.width > ACROSS) {
           x = 0;
           y += rowH + 40;
           rowH = 0;
@@ -1063,7 +1147,7 @@ export function graphOfV2({ patch, types, at = [], open = new Set(), positions =
         target: to.node,
         sourceHandle,
         targetHandle,
-        ...(picture ? {} : { type: 'cable' as const }),
+        type: picture ? ('smoothstep' as const) : ('cable' as const),
         class: !c ? `normal w-${wire}` : picture ? wire : 'cable',
         style: wireStyle(wire),
         deletable: !!c,
@@ -1088,6 +1172,7 @@ export function graphOfV2({ patch, types, at = [], open = new Set(), positions =
     return { width: w, height: h };
   };
   level(top, '', undefined, { x: 0, y: 0 });
+  withRoom(nodes, (n) => sizes[n.id] ?? sizeOf(n.data));
   return { nodes, edges };
 }
 

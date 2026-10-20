@@ -19,8 +19,9 @@
   const update = useUpdateNodeInternals();
 
   const SIDE: Record<Side, Position> = { left: Position.Left, right: Position.Right, top: Position.Top, bottom: Position.Bottom };
-  // Picture handles sit on the title's line at the sides.
-  const at = (s: Side) => (s === 'left' || s === 'right' ? 'top: 19px' : undefined);
+  // Picture handles sit on the title's line at the sides; an output under the node (portrait) at its right corner,
+  // clear of the knobs' sockets along its bottom.
+  const at = (s: Side) => (s === 'left' || s === 'right' ? 'top: 19px' : s === 'bottom' ? 'left: calc(100% - 16px)' : undefined);
   // A polyphonic knob turned as one: every channel as far.
   function turn(k: KnobView, v: number) {
     if (!k.channels) return graph.knob(id, k.id, v);
@@ -69,18 +70,20 @@
   {@const to = data.to}
   <button class="node add nodrag" onclick={() => graph.adding(to)}>{data.label}</button>
 {:else if data.kind === 'signal'}
-  <div class="node mod" class:sel={selected} ondblclick={() => graph.open(id)} role="presentation">
+  <div class="node mod" style:--room={data.room ? `${data.room}px` : null} class:sel={selected} ondblclick={() => graph.open(id)} role="presentation">
     <span class="t">{data.label}</span>
-    <span class="sum only">{data.label}</span>
+    <span class="sum only"><b>{data.label}</b></span>
     <Handle type="source" id={MOD_OUT} position={Position.Top} class="out t-{data.type}" />
   </div>
 {:else if data.kind === 'module'}
-  <div class="node" class:mod={data.modulator} class:src={data.place === 'source'} class:sel={selected} ondblclick={() => graph.open(id)} role="presentation" use:longpress={() => graph.removable(id) && graph.menu(id)}>
+  <div class="node" style:--room={data.room ? `${data.room}px` : null} class:mod={data.modulator} class:src={data.place === 'source'} class:sel={selected} ondblclick={() => graph.open(id)} role="presentation" use:longpress={() => graph.removable(id) && graph.menu(id)}>
     <span class="title">
       <button class="t nodrag" onclick={() => graph.open(id)}>{data.label}<span class="chev">›</span></button>
       {#if data.device}<button class="plus nodrag" aria-label="Open {data.label} here" title="Open here" onclick={() => graph.toggle(id)}>+</button>{/if}
     </span>
-    <button class="sum nodrag" tabindex="-1" onclick={() => graph.open(id)}><b>{data.label}</b> · {data.knobs.filter((k) => k.ring).length + data.ports.filter((p) => p.cabled).length} cabled</button>
+    <button class="sum nodrag" tabindex="-1" onclick={() => graph.open(id)}
+      ><b>{data.label}</b><span class="n">{' · '}{data.knobs.filter((k) => k.ring).length + data.ports.filter((p) => p.cabled).length} cabled</span></button
+    >
     {#if data.ports.length}
       <div class="ports">
         {#each data.ports as p (p.id)}
@@ -126,16 +129,16 @@
     {#if data.face && data.face.kind !== 'clock'}<PatchFace {id} face={data.face} />{/if}
     {#if data.in}<Handle type="target" id="in" position={SIDE[data.in]} isConnectable={!!data.v2} class="pic t-picture" style={at(data.in)} />{/if}
     {#if data.out}<Handle type="source" id="out" position={SIDE[data.out]} isConnectable={!!data.v2} class="pic" style={at(data.out)} />{/if}
-    {#if data.feedback}<Handle type="source" id="fb" position={Position.Bottom} isConnectable={false} class="fb" />{/if}
-    {#if data.feedbackIn}<Handle type="target" id="fbin" position={Position.Bottom} isConnectable={false} class="fb" />{/if}
+    {#if data.feedback}<Handle type="source" id="fb" position={SIDE[data.fbSide ?? 'bottom']} isConnectable={false} class="fb" />{/if}
+    {#if data.feedbackIn}<Handle type="target" id="fbin" position={SIDE[data.fbSide ?? 'bottom']} isConnectable={false} class="fb" />{/if}
     {#if data.modulator && !data.outs.length}
       <Handle type="source" id={MOD_OUT} position={Position.Top} class="out t-{data.gives?.type ?? 'value'}" />
     {/if}
   </div>
 {:else}
-  <div class="node mark" class:sel={selected}>
+  <div class="node mark" style:--room={data.room ? `${data.room}px` : null} class:sel={selected}>
     <span class="t">{data.label}</span>
-    <span class="sum only">{data.label}</span>
+    <span class="sum only"><b>{data.label}</b></span>
     <Handle type="target" id="in" position={SIDE[data.in]} isConnectable={false} class="pic" />
     {#if data.out}<Handle type="source" id="out" position={SIDE[data.out]} isConnectable={false} class="pic" />{/if}
   </div>
@@ -394,14 +397,22 @@
   :global(.small) .node :global(.knob span) {
     visibility: hidden;
   }
+  /* Over the node from its left, as wide as its name needs, up to the room beside it (--room: never over the next
+     node); a name longer than that ends in an ellipsis. */
   .sum {
     display: none;
     position: absolute;
-    inset: 0;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: max-content;
+    min-width: 100%;
+    max-width: var(--room, 100%);
     z-index: 1;
-    padding: 4px 8px;
+    padding: 0 calc(6px / var(--z, 1));
     border-radius: inherit;
     background: inherit;
+    box-shadow: 0 0 0 calc(1px / var(--z, 1)) var(--border);
     color: var(--muted);
     font-size: calc(11px / var(--z, 1));
     line-height: 1.15;
@@ -414,9 +425,21 @@
   :global(.far) .node .sum {
     display: flex;
     align-items: center;
+    justify-content: center;
+  }
+  /* Short of room, the count gives way first, then the name; each ends in an ellipsis, never cut. */
+  .sum > b,
+  .sum > .n {
+    min-width: 0;
     white-space: pre;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .sum > b {
+    flex: 0 1 auto;
+  }
+  .sum > .n {
+    flex: 1 1 0px;
   }
   .sum.only {
     color: var(--text);
@@ -474,7 +497,7 @@
       inset: -9px;
       border-radius: 50%;
     }
-    .kw :global(.svelte-flow__handle.in-mod) {
+    .kw :global(.svelte-flow__handle.in-mod:not(.next)) {
       top: auto !important;
       bottom: -6px !important;
     }

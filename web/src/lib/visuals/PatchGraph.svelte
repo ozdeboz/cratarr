@@ -108,6 +108,7 @@
     openAtStart = [],
     sheetHeight = 0,
     helpFor,
+    onedges,
   }: {
     patch?: Patch;
     /** A v2 patch drawn instead (the lab's, until a5's step brings the app over). */
@@ -143,6 +144,8 @@
     sheetHeight?: number;
     /** A module's help (module-help.ts), for its long press's menu. */
     helpFor?: (type: string, port?: string) => string | null | undefined;
+    /** The edges as drawn, each time they change (the lab's check that every cable ends on its sockets). */
+    onedges?: (edges: { id: string; source: string; target: string; sourceHandle?: string | null; targetHandle?: string | null }[]) => void;
   } = $props();
 
   const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
@@ -180,12 +183,29 @@
   type Menu = { kind: 'cable'; id: string; at: XY } | { kind: 'node'; id: string } | { kind: 'add'; to: AddTo } | { kind: 'make'; ids: string[] };
   // The knobs chosen as a device's macros while it is being made (`<node>|<knob>`).
   let picks = $state<string[]>([]);
+  // Selecting (v2: a module's long press, Select): taps add or take away modules, for Make device; a finger's way to
+  // what Shift and a drag do.
+  let selecting = $state(false);
+  let sel = $state<string[]>([]);
+  function togglePick(id: string) {
+    const d = nodes.find((n) => n.id === id)?.data as NodeData | undefined;
+    if (d?.kind !== 'module') return;
+    sel = sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id];
+  }
+  $effect(() => {
+    const on = selecting ? new Set(sel) : null;
+    untrack(() => {
+      if (on) nodes = nodes.map((n) => (!!n.selected === on.has(n.id) ? n : { ...n, selected: on.has(n.id) }));
+    });
+  });
   let menu = $state<Menu | null>(null);
   let reroute = $state<{ id: string; at: XY } | null>(null);
   /** Until the viewer pans, zooms or moves something, the graph keeps all of the patch in view. */
   let touched = $state(false);
   let width = $state(0);
   let height = $state(0);
+  // Taller than wide where the graph shows (above an open sheet): the picture runs down (a phone upright).
+  const portrait = $derived(width > 0 && height - sheetHeight > width);
 
   // The cables' opacity (VCV Rack's cable opacity), this device's.
   const OPACITY_KEY = 'cratarr-graph-cable-opacity';
@@ -257,9 +277,9 @@
       sizes[id] = { width, height };
     }
     const g = v2
-      ? graphOfV2({ patch: v2.patch, types, at: v2.at, open: opened, positions: placed, sizes })
+      ? graphOfV2({ patch: v2.patch, types, at: v2.at, open: opened, positions: placed, sizes, portrait })
       : patch
-        ? graphOf({ patch, types, positions: placed, signals, open: opened, sizes, adds, addTo: (w) => !!onaddmodule && canAddTo(w) })
+        ? graphOf({ patch, types, positions: placed, signals, open: opened, sizes, adds, addTo: (w) => !!onaddmodule && canAddTo(w), portrait })
         : { nodes: [], edges: [] };
     untrack(() => {
       // What Svelte Flow knows of each node (its size, selection, a drag under way) carries over.
@@ -284,6 +304,7 @@
     const key = focusKey;
     untrack(() => (edges = dress(edges, key)));
   });
+  $effect(() => onedges?.(edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle }))));
 
   // What the view fits to: the top-level nodes' places and sizes, and the graph's own size.
   const layout = $derived(
@@ -321,6 +342,7 @@
       else onknob?.(module, knob, value);
     },
     open(id) {
+      if (selecting) return togglePick(id);
       // A device's title: into it.
       if (v2) {
         const d = nodes.find((n) => n.id === id)?.data as NodeData | undefined;
@@ -340,7 +362,7 @@
     removable: (id) => {
       const d = nodes.find((n) => n.id === id)?.data as NodeData | undefined;
       if (d?.kind !== 'module') return false;
-      return v2 ? !!d.device || !!helpFor?.(d.type) : !!onremove && removable(id);
+      return v2 ? true : !!onremove && removable(id);
     },
     menu(id) {
       holdStill();
@@ -394,6 +416,8 @@
     v2.onedit({ kind: 'make', scope: [...v2.at, ...scope], modules: ids.map((id) => id.split('/').pop()!), macros });
     menu = null;
     picks = [];
+    selecting = false;
+    sel = [];
   }
   const knobsOfNode = (id: string) => {
     const d = nodes.find((n) => n.id === id)?.data as NodeData | undefined;
@@ -480,7 +504,7 @@
 
 <svelte:window onkeydown={(e) => e.key === 'Escape' && reroute && !menu && (reroute = null)} />
 
-<div class="patch-graph" class:small={zoom < 1} class:far={zoom < FAR} class:narrow={width < 600} style:--cable-alpha={drawnOpacity(opacity)} style:--z={zoom} bind:clientWidth={width} bind:clientHeight={height}>
+<div class="patch-graph" style:--graph-w="{width}px" class:small={zoom < 1} class:far={zoom < FAR} class:narrow={width < 600} style:--cable-alpha={drawnOpacity(opacity)} style:--z={zoom} bind:clientWidth={width} bind:clientHeight={height}>
   <SvelteFlow
     bind:nodes
     bind:edges
@@ -511,14 +535,23 @@
     onnodepointerleave={() => (hovered = null)}
     onedgepointerenter={({ edge }) => (hoveredCable = edge.id)}
     onedgepointerleave={() => (hoveredCable = null)}
-    onedgeclick={({ edge }) => edge.type === 'cable' && openIt(edge.id)}
+    onedgeclick={({ edge }) => edge.type === 'cable' && !selecting && openIt(edge.id)}
+    onnodeclick={({ node }) => selecting && togglePick(node.id)}
     onpaneclick={() => (reroute = null)}
   >
     <PatchFit {layout} active={!touched} {padding} onzoom={(z) => (zoom = z)} />
     <Panel position="bottom-left" class="chips-panel">
       <div class="bottom">
-        {#if chosen.length > 1}<button class="opacity make" onclick={() => (menu = { kind: 'make', ids: chosen })}>Make device</button>{/if}
-        <PatchChips {parts} {padding} onjump={() => (touched = true)} />
+        {#if selecting}
+          <div class="selbar" role="toolbar" aria-label="Selecting">
+            <span>{sel.length}</span>
+            <button class="opacity make" disabled={chosen.length < 2} onclick={() => (menu = { kind: 'make', ids: chosen })}>Make device</button>
+            <button class="opacity" onclick={() => ((selecting = false), (sel = []))}>Cancel</button>
+          </div>
+        {:else}
+          {#if chosen.length > 1}<button class="opacity make" onclick={() => (menu = { kind: 'make', ids: chosen })}>Make device</button>{/if}
+          <PatchChips {parts} {padding} onjump={() => (touched = true)} />
+        {/if}
         <button class="opacity" aria-label="Cable opacity" title="Cable opacity" onclick={cycleOpacity}>{Math.round(opacity * 100)}%</button>
       </div>
     </Panel>
@@ -563,6 +596,16 @@
   <MenuSheet label={nodeName(id)} title={nodeName(id)} onclose={() => (menu = null)} over>
     {#if help}<p class="help">{help}</p>{/if}
     <div role="menu">
+      {#if v2 && d?.kind === 'module'}
+        <MenuEntry
+          label="Select"
+          onclick={() => {
+            menu = null;
+            selecting = true;
+            sel = [id];
+          }}
+        />
+      {/if}
       {#if v2 && d?.kind === 'module' && d.device}
         <MenuEntry
           icon="expand"
@@ -792,6 +835,22 @@
     display: flex;
     gap: 8px;
     align-items: center;
+    max-width: calc(var(--graph-w, 100vw) - 32px - env(safe-area-inset-left) - env(safe-area-inset-right));
+  }
+  .bottom > :global(.chips) {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .selbar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .make:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
   .patch-graph :global(.svelte-flow__panel.top-left),
   .patch-graph :global(.svelte-flow__panel.top-right) {

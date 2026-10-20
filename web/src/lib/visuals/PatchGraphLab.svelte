@@ -277,6 +277,7 @@
     openAtStart={query.get('open')?.split(',') ?? []}
     sheetHeight={sheetH}
     {helpFor}
+    onedges={(list) => ((window as unknown as { __edges: unknown }).__edges = list)}
     {onconnect}
     {ondisconnect}
     {onknob}
