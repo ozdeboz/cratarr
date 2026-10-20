@@ -1,10 +1,10 @@
-<script lang="ts">
+<script lang="ts" generics="C extends { id: string; value: RouteValue; mode?: string }">
   // What moves a knob (decision 0056): its cables, routes and extras alike, a row each: where it comes from, its curve
   // drawn small, how much at most. A tap opens it (CableSheet), a long press offers to delete or reroute it (CableMenu);
   // "+ Add" picks a source (SourcePicker).
   import { longpress } from '../longpress';
   import { curveOf, endOf } from './curves';
-  import type { Cable } from './patch';
+  import type { RouteValue } from './curves';
 
   let {
     cables,
@@ -14,9 +14,10 @@
     onlongpress,
     onadd,
   }: {
-    cables: Cable[];
+    /** A v1 cable or a v2 one (no mode: cables only add). */
+    cables: C[];
     /** A cable's name in its row (its source: "Beat", "Level · Bass", a modulator's). */
-    label: (c: Cable) => string;
+    label: (c: C) => string;
     /** The cable open now, marked. */
     open?: string | null;
     onopen: (id: string) => void;
@@ -28,13 +29,13 @@
   const W = 36;
   const H = 18;
   /** A curve as a glyph: across what comes in, up what it gives (the zero line through the middle). */
-  function glyph(c: Cable): string {
+  function glyph(c: C): string {
     const k = curveOf(c.value);
     const x = (v: number) => (v * W).toFixed(1);
     const y = (v: number) => (H / 2 - v * (H / 2 - 1)).toFixed(1);
     return `M 0 ${y(0)} C ${x(k.h1[0])} ${y(k.h1[1])}, ${x(k.h2[0])} ${y(k.h2[1])}, ${W} ${y(k.h)}`;
   }
-  const amount = (c: Cable) => {
+  const amount = (c: C) => {
     const v = Math.round(endOf(c.value) * 100);
     return `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v)}%`;
   };

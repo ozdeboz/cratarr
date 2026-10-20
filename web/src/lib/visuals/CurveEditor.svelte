@@ -27,11 +27,12 @@
     live: { x: number; y: number } | null;
     /** How often the signal has been at each of the bins across, the most 1 (none: not known yet). */
     density: Float32Array | null;
+    /** Whether it walks with the behaviour (v1); with no `onwalks` (v2: walks are Randoms) there is no Walk to set. */
     walks: boolean;
     pinned: boolean;
     /** The curve changed (`done`: the drag let go). */
     onchange: (c: Curve, done: boolean) => void;
-    onwalks: (on: boolean) => void;
+    onwalks?: (on: boolean) => void;
     onpin: (on: boolean) => void;
   } = $props();
 
@@ -124,7 +125,7 @@
   <div class="controls">
     <output>{curve.h > 0 ? '+' : ''}{Math.round(curve.h * 100)}%</output>
     <button class="chip" use:held={'route:zero'} disabled={curve.h === 0 && isStraight(curve) && !mixed} onclick={() => onchange(straight(0), true)}>0</button>
-    <button class="chip" class:on={walks} aria-pressed={walks} use:held={'route:walks'} onclick={() => onwalks(!walks)}>Walk</button>
+    {#if onwalks}<button class="chip" class:on={walks} aria-pressed={walks} use:held={'route:walks'} onclick={() => onwalks(!walks)}>Walk</button>{/if}
     <button class="pin" class:on={pinned} aria-pressed={pinned} aria-label={pinned ? 'Unpin route' : 'Pin route'} use:held={'route:pin'} onclick={() => onpin(!pinned)}
       ><Icon name="pin" size={16} /></button
     >
