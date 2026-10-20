@@ -8,7 +8,7 @@
 // What aspects.ts and evaluate.ts did between them, in one place and all of it wired.
 
 import type { AspectsNow } from '../aspects';
-import { MOMENT_GAP, heightOf, shapeOf, type MomentRequest, type Shape } from '../evaluate';
+import { heightOf, shapeOf, type Shape } from '../evaluate';
 import { seedOf } from '../flame';
 import type { Levers } from './sidechain';
 import { modulatorOf, type ModulatorType } from '../modulators/modulators';
@@ -23,6 +23,7 @@ import { newClockTriggers, stepClockTriggers, type ClockTriggerState, type Clock
 import { gridOf, type Grid, type GridPoint } from './grid';
 import { FLASH_GUARD } from './sidechain';
 import type { MeterValues } from '../meters';
+import { slotKnobOf, slotOf } from './effect-slots';
 import { NO_STRIKE, adsrOf, newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from './modules';
 
 const NA = ASPECTS.length;
@@ -88,7 +89,6 @@ export type EngineState = {
   beat?: number | null;
   /** Each macro's last value; each step's moment (ready, and how long since it last came). */
   macros: Record<string, number>;
-  moments: Record<string, { armed: boolean; since: number }>;
   /** Each VCA's and Merge's channels last frame (a cycle through one reads them). */
   poly: Record<string, Float64Array>;
   /** Each trigger input's last value (`module|knob:next`): it fires as it rises past a half. */
@@ -120,7 +120,6 @@ export function newEngine(): EngineState {
     modulators: {},
     values: {},
     macros: {},
-    moments: {},
     poly: {},
     triggers: {},
     duckers: {},
@@ -130,6 +129,9 @@ export function newEngine(): EngineState {
     grids: {},
   };
 }
+
+/** A step knob to move on (its module flattened). */
+export type NextRequest = { module: string; knob: string };
 
 export type EngineFrame = {
   /** What the picture is drawn with this frame (today's renderer's input, until step 3's modules take knob values); null
@@ -143,7 +145,8 @@ export type EngineFrame = {
   /** Each macro's value this frame. */
   macros: Record<string, number>;
   /** The steps past the chain whose cables ask for a moment (morph.ts takes it at the module's neutral). */
-  moments: MomentRequest[];
+  /** The steps whose Next a trigger fired this frame (0057 §7e): each to move on to its next step. */
+  nexts: NextRequest[];
   /** Each Grid's points (its `points` output, for Instance: claude-632's compositor). */
   points: Record<string, GridPoint[]>;
   /** What reaches each points input (`module.port`: a Fluid's `at`, where it pushes): what is cabled into it (a Flame's
@@ -155,7 +158,8 @@ export type EngineFrame = {
 };
 
 /** A Dice's roll: which, the seed its seed input gives (Music's `seed`: the track's own), its scope. */
-export type DiceRoll = { module: string; seed: number; scope: (typeof RANDOMIZE_SCOPES)[number] };
+/** A Dice's roll: its seed, its scope, and how far from where each knob is (`reach` 0..1: 1, anywhere in its range). */
+export type DiceRoll = { module: string; seed: number; scope: (typeof RANDOMIZE_SCOPES)[number]; reach: number };
 
 export type EngineOptions = {
   still: boolean;
@@ -451,10 +455,19 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   /** A key (`module|knob`, flattened) as the chain's column it is. */
   const colAt = (key: string) => {
     if (plan.columns.has(key)) return plan.columns.get(key);
-    const a = key.startsWith(at) ? COLUMN.get(key.slice(at.length)) : undefined;
+    const a = key.startsWith(at) ? COLUMN.get(key.slice(at.length)) : effectColumn(key);
     plan.columns.set(key, a);
     return a;
   };
+  /** An effect module's knob (0057 §3, wherever it sits) as its slot's column: `fx-rotate|amount` Effect 1's Amount. */
+  function effectColumn(key: string): number | undefined {
+    const bar = key.indexOf('|');
+    const id = key.slice(0, bar);
+    const type = typeOf.get(id);
+    const slot = type ? slotOf(id, type) : null;
+    const knob = slot && slotKnobOf(type!, key.slice(bar + 1));
+    return slot && knob ? COLUMN.get(`${slot}|${knob}`) : undefined;
+  }
   /** The chain's settings from its modules' knobs (the patch is the truth, 0057 Phase B); a knob a patch has no module
    *  for, as the settings had it. */
   // Intensity, Flash and Speed are the rack's macros on these knobs (0057: the Whole frame gone): as last frame left them.
@@ -474,7 +487,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     facets: knobOf(inChain('fluid'), 'facets', s.facets),
     tunnel: knobOf(inChain('tunnel'), 'tunnel', s.tunnel),
     dive: knobOf(inChain('dive'), 'dive', s.dive),
-    effects: knobOf(inChain('frame'), 'effects', s.effects),
+    // Effects: the rack's macro on the effects' Amounts (folded into them: 1) where the Whole frame is gone.
+    effects: knobOf(inChain('frame'), 'effects', inChain('frame') ? s.effects : 1),
     smoothing: knobOf(inChain('show/blur'), 'smoothing', s.smoothing),
     haze: knobOf(inChain('show/curve'), 'haze', s.haze),
   } as VisualSettings;
@@ -792,9 +806,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   for (const id of Object.keys(st.macros)) if (!macroIds.has(id)) delete st.macros[id];
   const macros: Record<string, number> = {};
   const macroOf = (x: Macro) => (x.id in macros ? macros[x.id] : finite(st.macros[x.id], clamp(finite(x.value), 0, 1)));
-  const moments: MomentRequest[] = [];
+  const nexts: NextRequest[] = [];
   const modulesNow = plan.modulesNow;
-  for (const key of Object.keys(st.moments)) if (!modulesNow.has(key.slice(0, key.indexOf('|')))) delete st.moments[key];
 
   // The macros and the modulators, in the order their cables (and a modulator's macros) need.
   const knobs: Record<string, Record<string, number>> = {};
@@ -891,7 +904,10 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
       got.whole[a] *= g;
       for (const own of got.band) own[a] *= g;
     }
-    if (!gain && IS_MOMENT[a]) firedNow[ASPECTS[a]] ||= fired(module, knob) ?? false;
+    if (!gain && IS_MOMENT[a] && fired(module, knob)) {
+      firedNow[ASPECTS[a]] = true;
+      nexts.push({ module, knob });
+    }
   }
 
   // Each swing column's knob, its resting value (0057 §7e, VCV's rule: the knob the offset, the cables adding to it).
@@ -960,7 +976,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     if (!rose) continue;
     const seeded = plan.ports.get(x.id)?.get('seed');
     const seed = seeded && seeded[0].length ? Math.floor(clamp(sumOf(seeded, 0), 0, 1 - 2 ** -33) * 4294967296) : Math.floor(opts.now) >>> 0;
-    dice.push({ module: x.id, seed, scope: RANDOMIZE_SCOPES[clamp(Math.round(finite(x.knobs.scope, 0)), 0, RANDOMIZE_SCOPES.length - 1)] });
+    dice.push({ module: x.id, seed, scope: RANDOMIZE_SCOPES[clamp(Math.round(finite(x.knobs.scope, 0)), 0, RANDOMIZE_SCOPES.length - 1)], reach: clamp(finite(x.knobs.reach, 1), 0, 1) });
   }
   // What reaches each Fluid's `at`: the points output cabled into it (a Flame's, a Grid's), else the Flame's (its normal).
   const pointsOf = (r: PortRef): readonly (Point | null)[] | null => {
@@ -975,7 +991,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     const got = cabled ? pointsOf(cabled.from) : flameModule ? (opts.flamePoints ?? null) : null;
     if (got) pointsAt[`${x.id}.at`] = got;
   }
-  return { aspects, knobs, outputs, macros, moments, points, pointsAt, dice };
+  return { aspects, knobs, outputs, macros, nexts, points, pointsAt, dice };
 
   /** A module's knobs as its macros and cables move them. */
   /** A knob's base as its macros set it, along its taper (an exponential knob's geometrically: 0057's Wild). */
@@ -1004,10 +1020,13 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   /** A knob moved from its base by its cables (evaluate.ts's rule, cables only adding: 0057 §7e; a band's cable
    *  into a knob not a band's own, the bands' mean and geometric mean). */
   function moved(module: string, k: Knob, base: number, cables: CableV2[]): number {
-    if (k.kind === 'step' && fired(module, k.id)) moments.push({ module, knob: k.id });
-    else if (k.kind !== 'step') base = k.time ? base / Math.max(0.01, gainOf(module, k.id)) : base * gainOf(module, k.id);
+    // A step moves on only as a trigger fires its Next (0057 §7e), to its next step; its cables move nothing.
+    if (k.kind === 'step') {
+      if (fired(module, k.id)) nexts.push({ module, knob: k.id });
+      return clamp(base, k.min, k.max);
+    }
+    base = k.time ? base / Math.max(0.01, gainOf(module, k.id)) : base * gainOf(module, k.id);
     if (!cables.length) return clamp(base, k.min, k.max);
-    const bandSums = k.kind === 'step' ? new Float64Array(BANDS) : null;
     const ownBand = /\.\d+$/.test(k.id);
     let swing = 0;
     let bandSwing = 0;
@@ -1018,26 +1037,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
       const y = heightOf(sh, x);
       const w = walkOf(c);
       const e = depthOf(c);
-      const apart = c.from.channel !== undefined && !ownBand;
-      if (apart) {
-        bandSwing += e * y * w;
-        const ch = c.from.channel!;
-        if (bandSums && ch >= 0 && ch < BANDS) bandSums[ch] += e * y * w;
-      } else swing += e * y * w;
-    }
-    if (bandSums) {
-      // A step is not moved: what its cables give (the bands' largest) rising past a half asks for a moment.
-      const key = `${module}|${k.id}`;
-      const asked = swing + Math.max(...bandSums);
-      const mo = (st.moments[key] ??= { armed: true, since: Infinity });
-      mo.since += step;
-      if (asked < 1 / 3) mo.armed = true;
-      if (asked > 0.5 && mo.armed && mo.since >= MOMENT_GAP) {
-        mo.armed = false;
-        mo.since = 0;
-        moments.push({ module, knob: k.id });
-      }
-      return clamp(base, k.min, k.max);
+      if (c.from.channel !== undefined && !ownBand) bandSwing += e * y * w;
+      else swing += e * y * w;
     }
     return clamp(base + (swing + bandSwing / BANDS) * ((k.max - k.min) / 2), k.min, k.max);
   }

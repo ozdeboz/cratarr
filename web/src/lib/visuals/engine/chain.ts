@@ -10,15 +10,15 @@ import type { Levers } from './sidechain';
 import type { Music } from '../music-core';
 import { A, AMOUNT_ASPECTS, KNOB_ASPECTS, MOMENT_ASPECTS, type Given } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
-import { courseStep, newAccent, newMoment, stepAccent, stepMoment, type AccentState, type MomentState } from './modules';
+import { courseStep, newAccent, stepAccent, type AccentState } from './modules';
 
 /** Nothing held back (the sidechaining's levers all open). */
 const OPEN: Levers = { swing: 1, pace: 1, evolution: 1, hue: 1, size: 1, gap: 1 };
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
-type MomentAspect = (typeof MOMENT_ASPECTS)[number];
+type StepAspect = (typeof MOMENT_ASPECTS)[number];
 
 /** What the chain keeps from frame to frame: the whole picture's turn; each part's turn, evolving aspects, steps and
- *  presence; the moments; the Accent courses (each part's lights, the glow, the size, the saturation). */
+ *  presence; the steps their Next fired; the Accent courses (each part's lights, the glow, the size, the saturation). */
 export type ChainState = {
   turn: number;
   turned: number[];
@@ -28,9 +28,8 @@ export type ChainState = {
   pending: number[];
   rates: number[];
   presence: number[];
-  moments: Record<MomentAspect, MomentState>;
-  /** Which moments came this frame (the same object each frame). */
-  momentsNow: Record<MomentAspect, boolean>;
+  /** Which steps their Next fired this frame (the same object each frame). */
+  nextsNow: Record<StepAspect, boolean>;
   courses: { lights: AccentState[]; glow: AccentState; size: AccentState; saturation: AccentState };
 };
 
@@ -44,8 +43,7 @@ export function newChain(): ChainState {
     pending: Array<number>(PARTS).fill(0),
     rates: Array<number>(PARTS).fill(0),
     presence: Array<number>(PARTS).fill(0),
-    moments: Object.fromEntries(MOMENT_ASPECTS.map((a) => [a, newMoment()])) as Record<MomentAspect, MomentState>,
-    momentsNow: Object.fromEntries(MOMENT_ASPECTS.map((a) => [a, false])) as Record<MomentAspect, boolean>,
+    nextsNow: Object.fromEntries(MOMENT_ASPECTS.map((a) => [a, false])) as Record<StepAspect, boolean>,
     courses: { lights: Array.from({ length: PARTS }, newAccent), glow: newAccent(), size: newAccent(), saturation: newAccent() },
   };
 }
@@ -63,7 +61,7 @@ export type ChainInputs = {
   clock: number;
   /** What the Track pulse gives the Look and the Behaviour walks (aspects.ts's walkOf subtracts it). */
   trackWalk: { look: number; behaviour: number };
-  /** The moments a Gate fired into a step's `next` (0057 §7e), where one is plugged in: in place of the moment's own. */
+  /** The steps a trigger fired into their `next` (0057 §7e: a Gate's, in sight); a step moves on nothing else. */
   fired?: Partial<Record<string, boolean>>;
 };
 
@@ -126,8 +124,8 @@ export function stepChain(
     });
     hits.push(clamp(accented(clamp(W[A.lights] + own[A.lights], -1, 3) * (still ? 0.5 : 1), st.courses.lights[i]), -1, 3));
   }
-  const moments = st.momentsNow;
-  for (const a of MOMENT_ASPECTS) moments[a] = !still && (x.fired?.[a] !== undefined ? x.fired[a]! : stepMoment(st.moments[a], W[A[a]], now, L.gap));
+  const nexts = st.nextsNow;
+  for (const a of MOMENT_ASPECTS) nexts[a] = !still && !!x.fired?.[a];
   const walkOf = (a: number, track: number) => (W[a] - track) / L.evolution;
   const fluid = opts.fluidFull * levelOf(got, s.fluid, A.fluid);
   const haze = hazeOf(clamp(s.haze * got.level[A.haze], -1, 1));
@@ -158,7 +156,7 @@ export function stepChain(
     dive: levelOf(got, s.dive, A.dive),
     look: walkOf(A.look, x.trackWalk.look),
     behaviour: walkOf(A.behaviour, x.trackWalk.behaviour),
-    moments,
+    nexts,
     routed: { amounts: AMOUNT_ASPECTS.map((a) => got.level[A[a]]), knobs: KNOB_ASPECTS.map((a) => clamp(W[A[a]], -1, 1)) },
   };
 }

@@ -484,7 +484,11 @@ export const DICE = declared(
   'dice',
   'Dice',
   'modulator',
-  [{ ...knob('scope', 'Scope', 0, RANDOMIZE_SCOPES.length - 1, 0, 'step'), randomize: false }],
+  [
+    { ...knob('scope', 'Scope', 0, RANDOMIZE_SCOPES.length - 1, 0, 'step'), randomize: false },
+    // How far each knob it reaches moves toward its roll: all the way at 1, not at all at 0.
+    { ...knob('reach', 'Reach', 0, 1, 1, 'level'), randomize: false },
+  ],
   [
     { id: 'trigger', label: 'Trigger', type: 'trigger' },
     { id: 'seed', label: 'Seed', type: 'value' },

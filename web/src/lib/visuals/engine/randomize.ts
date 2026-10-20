@@ -6,9 +6,10 @@
 //
 // As VCV has it: each knob, uniformly within its range (VCV's ParamQuantity::randomize), unless it says not to (its
 // `randomize: false`, VCV's randomizeEnabled); and modules that draw their knobs together do so themselves (VCV's
-// onRandomize). Here that is the Cratarr device's draw, one over the flame, the effect slots, the loop effect and the
+// onRandomize). Here that is the Cratarr device's draw, one over the flame, the effects, the loop effect and the
 // facets (flame.ts drawing: the flame's form surveyed until it draws something), so a track's seed gives the values it
-// gave before 0057. Each other module draws from its own stream of the seed, so one module more or less changes no
+// gave before 0057. The effects are modules (0057 §3), and Randomize keeps the rack as it is (the owner): each effect
+// module keeps its effect, the draw drawn around it, its Amount and controls drawn; a slot with no module, nothing. Each other module draws from its own stream of the seed, so one module more or less changes no
 // other's draw.
 //
 // Pinned (0057 §4d), left as it is and drawn around: a knob (`<module>.<knob>`), a polyphonic knob's channel
@@ -20,6 +21,7 @@ import { SETTING_KNOB, type Knob, type Module, type ModuleType } from '../patch'
 import { isDevice, type CableV2, type PatchV2 } from '../ports';
 import type { Curve, RouteValue } from '../curves';
 import { categoryOf, deviceCategory, portsFrom } from '../rack';
+import { ownKnob, placeOf, slotKnobOf, slotModules, slotOf, SLOT_IDS, SLOT_SETTINGS, type Slot } from './effect-slots';
 
 /** Which knobs Randomize reaches: a module's knob (a polyphonic one's channels together). */
 export type Scope = (module: Module, knob: Knob) => boolean;
@@ -36,9 +38,13 @@ export type RandomizeOptions = {
 /** The new values: each module's knobs by id (a device's modules under `<device>/<module>`, as flatten names them). */
 export type Randomized = Record<string, Record<string, number>>;
 
-/** The Cratarr device's draw: each key flame.ts's drawing gives (PRESET_KEYS), the knob it is in the chain. */
-const CHAIN_DRAW = PRESET_KEYS.flatMap((key) => (SETTING_KNOB[key] ? [{ key, module: SETTING_KNOB[key][0], knob: SETTING_KNOB[key][1] }] : []));
+/** The slots' settings, each its slot and which of it. */
+const SLOT_KEY = new Map(SLOT_IDS.flatMap((slot) => (Object.entries(SLOT_SETTINGS[slot]) as [keyof (typeof SLOT_SETTINGS)[Slot], string][]).map(([which, key]) => [key, { slot, which }] as const)));
+/** The Cratarr device's draw: each key flame.ts's drawing gives (PRESET_KEYS), the knob it is in the chain (the slots'
+ *  apart: their modules are the effects'). */
+const CHAIN_DRAW = PRESET_KEYS.flatMap((key) => (SETTING_KNOB[key] && !SLOT_KEY.has(key) ? [{ key, module: SETTING_KNOB[key][0], knob: SETTING_KNOB[key][1] }] : []));
 const CHAIN_DRAWN = new Set(CHAIN_DRAW.map((l) => `${l.module}.${l.knob}`));
+const SLOT_DRAWN = PRESET_KEYS.filter((key) => SLOT_KEY.has(key));
 
 /** A Dice's scope (ports.ts RANDOMIZE_SCOPES) as Randomize's: everything, or a category's modules (rack.ts); the
  *  cables' amounts are another roll (null here). */
@@ -56,7 +62,7 @@ export function scopeNamed(name: string, types: Record<string, ModuleType>): Sco
 }
 
 /** The knobs a track's seed reached before 0057 (the chain's draw): what the equivalence holds Randomize to. */
-export const SEEDED_BEFORE: Scope = (m, k) => CHAIN_DRAWN.has(`${m.id}.${k.id}`);
+export const SEEDED_BEFORE: Scope = (m, k) => CHAIN_DRAWN.has(`${m.id}.${k.id}`) || (!!slotOf(m.id, m.type) && !!slotKnobOf(m.type, k.id));
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const finite = (v: unknown, or: number) => (typeof v === 'number' && Number.isFinite(v) ? v : or);
@@ -103,16 +109,36 @@ function* into(
 
   // The Cratarr device's draw, as one: what is pinned of it kept, and drawn around (as before 0057).
   const chain = at ? [] : CHAIN_DRAW.filter((l) => byId.has(l.module));
+  const effects = chain.length ? slotModules(p.modules) : new Map<Slot, Module>();
+  const claimed = new Set(chain.map((l) => `${l.module}.${l.knob}`));
+  for (const m of effects.values()) for (const k of ['amount', ownKnob(m.type, 'k1'), ownKnob(m.type, 'k2')]) if (k) claimed.add(`${m.id}.${k}`);
   if (chain.length) {
     const fixed: Partial<Record<keyof Preset, number>> = {};
     for (const l of chain) {
       const m = byId.get(l.module)!;
       if (isPinned(m, l.knob)) fixed[l.key as keyof Preset] = finite(m.knobs[l.knob], knobOf(m, l.knob).default);
     }
+    // Each effect module keeps its effect (the rack as it is); a knob of it pinned, that knob.
+    for (const key of SLOT_DRAWN) {
+      const { slot, which } = SLOT_KEY.get(key)!;
+      const m = effects.get(slot);
+      if (!m) continue;
+      const knob = which === 'effect' ? null : which === 'amount' ? 'amount' : ownKnob(m.type, which);
+      if (which === 'effect') fixed[key as keyof Preset] = placeOf(slot, m.type);
+      else if (knob && isPinned(m, knob)) fixed[key as keyof Preset] = finite(m.knobs[knob], knobOf(m, knob).default);
+    }
     const drawn = yield* drawing(opts.seed, fixed as Partial<Preset>);
     for (const l of chain) set(byId.get(l.module)!, l.knob, drawn.preset[l.key as keyof Preset] as number);
+    // Each effect module's Amount and controls, as the draw has its slot's.
+    for (const [slot, m] of effects) {
+      const names = SLOT_SETTINGS[slot];
+      set(m, 'amount', finite(drawn.preset[names.amount as keyof Preset], 0));
+      for (const k of ['k1', 'k2'] as const) {
+        const own = ownKnob(m.type, k);
+        if (own) set(m, own, finite(drawn.preset[names[k] as keyof Preset], 0.5));
+      }
+    }
   }
-  const claimed = new Set(chain.map((l) => `${l.module}.${l.knob}`));
 
   for (const m of p.modules) {
     if (isDevice(m)) {

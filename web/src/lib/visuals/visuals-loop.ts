@@ -20,19 +20,18 @@ import { LivePatch } from './engine/live-patch';
 import { randomize, randomizeCables, scopeNamed, type Randomized } from './engine/randomize';
 import { settingsOfPatch } from './engine/settings-view';
 import { holding, leversOf, STANDING, type Levers } from './engine/sidechain';
-import { between, coloured, evolved, flameOf, measuring, partsAt, PRESET_KEYS, randomFrom, seedOf, type ColourMode, type Flame, type Preset } from './flame';
+import { between, coloured, evolved, flameOf, measuring, partsAt, PRESET_KEYS, seedOf, type ColourMode, type Flame, type Preset } from './flame';
 import type { FrameStats, MeterValues } from './meters';
 import { musicNow, stopMusic } from './music.svelte';
 import { newNormalState, signalsFor } from './normal';
 import { coverPalette, type PaletteColour } from './palette';
 import type { ModuleType, SignalRef } from './patch';
-import { SETTING_KNOB } from './patch';
 import { isDevice, RANDOMIZE_SCOPES, type PatchV2 } from './ports';
 import { precheckingPatch, type Checked } from './precheck';
 import { ceilingOf } from './quality';
 import { FlameRenderer, type PictureInputs } from './render';
-import { A, B, MOMENT_ASPECTS, T } from './routes';
-import { FLUID_FULL, RANGES, type VisualSettings } from './settings.svelte';
+import { A, B, T } from './routes';
+import { FLUID_FULL, type VisualSettings } from './settings.svelte';
 import { signalsOf } from './signals';
 import { newStirring, stir } from './stirring';
 
@@ -45,21 +44,7 @@ const MIN_POINTS = 1 << 14;
 const TRIES = 8;
 const SHAPING = PRESET_KEYS.filter((k) => k !== 'spread' && k !== 'purity');
 const BY_DEGREES = new Set<string>(['detail', 'twist', 'warp', 'hue', 'lightness', 'vividness']);
-/** Each engine's choice and its controls (a moment resets them). */
-const ENGINE_KNOBS: Partial<Record<string, readonly string[]>> = { fx1: ['fx1K1', 'fx1K2'], fx2: ['fx2K1', 'fx2K2'], fx3: ['fx3K1', 'fx3K2'], fxLoop: ['fxLoopK1', 'fxLoopK2'] };
 const modeOf = (family: number): ColourMode => (family >= 5 ? 'fire' : family >= 4 ? 'cover' : 'rainbow');
-
-/** What a moment moves a discrete setting to (Visuals.svelte's momentOf): another of its values, drawn with `rnd` (the
- *  same on every device for the same track and beat). */
-function momentOf(a: (typeof MOMENT_ASPECTS)[number], v: number, rnd: () => number): number {
-  const range = (RANGES as Record<string, [number, number]>)[a];
-  const other = (lo: number, hi: number) => (hi <= lo ? v : lo + ((Math.round(v) - lo + 1 + Math.floor(rnd() * (hi - lo))) % (hi - lo + 1)));
-  if (a === 'symmetry') return ((v + Math.floor(rnd() * 7)) % 8) + 1;
-  if (a === 'mirror' || a === 'lattice') return v ? 0 : 1;
-  if (a === 'family') return v > 3 ? v : other(0, 3);
-  if (a === 'fx1' || a === 'fx2' || a === 'fx3' || a === 'fxLoop') return v > 0 ? other(1, range[1]) : v;
-  return other(range[0], range[1]);
-}
 
 /** A module of a patch by its flattened id (`show/curve`: the Show device's Curve), devices opened. */
 function moduleAt(p: PatchV2, id: string) {
@@ -81,14 +66,7 @@ function applyKnobs(p: PatchV2, values: Randomized) {
   }
 }
 
-/** A setting's knob in the patch (SETTING_KNOB, as toV2 placed it), beside the Flame: its flattened module id and knob. */
-function settingAt(flat: PatchV2, setting: string): [string, string] | null {
-  const k = SETTING_KNOB[setting];
-  if (!k) return null;
-  const flame = flat.modules.find((m) => m.type === 'flame');
-  const at = flame ? flame.id.slice(0, flame.id.lastIndexOf('/') + 1) : '';
-  return [at + k[0], k[1]];
-}
+
 
 type Pace = { points: number; passes: number; fit: number; ceiling: { cost: number; until: number } | null };
 const PACE = 'cratarr-visuals-pace';
@@ -248,14 +226,14 @@ export class VisualsLoop {
     // or the dice's (tried against the track, an edit).
     let rolling: Generator<void, { values: Randomized; cables: Record<string, PatchV2['cables'][number]['value']> }> | null = null;
     let rollingAs: { edit: string | null; ms: number } = { edit: null, ms: BLEND_MS };
-    const rollOf = function* (seed: number, roll: Roll, check: { key: string; position: number } | null) {
+    const rollOf = function* (seed: number, roll: Roll, check: { key: string; position: number } | null, reach = 1) {
       const patch = host.store.patch;
       const scope = typeof roll === 'string' ? roll : null;
       const ids = typeof roll === 'string' ? null : new Set(roll.module);
       const knobsScope = scope ? scopeNamed(scope, host.types) : (m: { id: string }) => ids!.has(m.id);
       const withCables = scope === 'everything' || scope === 'cables';
-      const values: Randomized = knobsScope ? yield* randomize(patch, host.types, { seed, scope: knobsScope }) : {};
-      const cables = withCables ? randomizeCables(patch, host.types, { seed }) : {};
+      const values: Randomized = knobsScope ? yield* randomize(patch, host.types, { seed, scope: knobsScope, reach }) : {};
+      const cables = withCables ? randomizeCables(patch, host.types, { seed, reach }) : {};
       if (!check) return { values, cables };
       // The dice: this seed and the next ones, each checked against the track (its sidechains taken out), the first
       // within the limits taken, else the least over them.
@@ -266,8 +244,8 @@ export class VisualsLoop {
       const limits = Object.fromEntries(Object.entries(STANDING).map(([k, v]) => [k, v * 2 ** (2 * (wild - 0.5))]));
       let best: { values: Randomized; cables: typeof cables; by: number } | null = null;
       for (let t = 0; t < TRIES; t++) {
-        const tryValues: Randomized = t === 0 ? values : knobsScope ? yield* randomize(patch, host.types, { seed: seed + t, scope: knobsScope }) : {};
-        const tryCables = t === 0 ? cables : withCables ? randomizeCables(patch, host.types, { seed: seed + t }) : {};
+        const tryValues: Randomized = t === 0 ? values : knobsScope ? yield* randomize(patch, host.types, { seed: seed + t, scope: knobsScope, reach }) : {};
+        const tryCables = t === 0 ? cables : withCables ? randomizeCables(patch, host.types, { seed: seed + t, reach }) : {};
         const candidate = structuredClone(patch);
         applyKnobs(candidate, tryValues);
         for (const c of candidate.cables) if (c.id in tryCables) c.value = tryCables[c.id];
@@ -461,30 +439,16 @@ export class VisualsLoop {
       // A new track's look, as the patch's Dice roll it: worked out over the next frames, a performance.
       for (const r of stepped.dice) {
         if (rolling) break;
-        rolling = rollOf(r.seed, r.scope, null);
+        rolling = rollOf(r.seed, r.scope, null, r.reach);
         // The first look shows at once; each next one blends in over a new track's time.
         rollingAs = { edit: null, ms: looked ? BLEND_MS : 0 };
         looked = true;
         lookCame = 'track';
       }
-      // The moments: the chain's steps moved on (the same on every device for the track and beat), a performance.
-      const at = `${m.key}|${m.beat ? m.beat.index : Math.floor(m.position * 2)}`;
+      // Each step whose Next a trigger fired (0057 §7e: a Gate's, in sight): its next step, a performance. The rack as
+      // it is: an effect is a module, not a step, so nothing here swaps one.
       const moved: Randomized = {};
-      for (const a of MOMENT_ASPECTS) {
-        if (!d.moments[a]) continue;
-        const place = settingAt(flat, a);
-        if (!place || patch.pins.includes(`${place[0]}.${place[1]}`)) continue;
-        const was = lookOf(a);
-        const next = momentOf(a, was, randomFrom(seedOf(`${a}|${at}`)));
-        if (next === was) continue;
-        (moved[place[0]] ??= {})[place[1]] = next;
-        for (const k of ENGINE_KNOBS[a] ?? []) {
-          const kp = settingAt(flat, k);
-          if (kp && !patch.pins.includes(`${kp[0]}.${kp[1]}`)) (moved[kp[0]] ??= {})[kp[1]] = 0.5;
-        }
-      }
-      // Any other module's step its cables moved on (a Gate into its next): its next step.
-      for (const r of stepped.moments) {
+      for (const r of stepped.nexts) {
         const mod = flat.modules.find((x) => x.id === r.module);
         const knob = mod && host.types[mod.type]?.knobs.find((k) => k.id === r.knob);
         if (!mod || !knob || patch.pins.includes(`${r.module}.${r.knob}`)) continue;
@@ -494,7 +458,7 @@ export class VisualsLoop {
       if (Object.keys(moved).length) {
         apply(moved, {}, 0, null, now);
         nextBlend = ANOTHER_MS;
-        lookCame = 'moment';
+        lookCame = 'next';
       }
 
       if (!to) return;
@@ -599,7 +563,7 @@ export class VisualsLoop {
         scale: d.scale,
         saturation: d.saturation,
         look: lookCame,
-        symmetry: d.moments.symmetry,
+        symmetry: d.nexts.symmetry,
       };
       lookCame = null;
       renderer.meterAdd(stats);

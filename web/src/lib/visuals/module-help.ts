@@ -306,6 +306,7 @@ export const portHelp: Record<string, Record<string, string>> = {
     seed: 'Where its randomness starts: the same seed, the same values (a track’s seed, the same look).',
     scope: 'Which knobs it reaches: everything, or the sources, effects, mixers, modulators or cables alone.',
     done: 'A trigger as it randomizes.',
+    reach: 'How far each knob moves toward its roll: all the way at 100 %, not at all at 0.',
   },
   sequencer: {
     clock: 'Moves on a step; the Clock’s beat unless unplugged.',

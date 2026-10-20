@@ -102,7 +102,7 @@ test('the one engine over the cables of a v2 patch gives what the routes gave', 
   }
 });
 
-test("the extras (modulators, macros, a layer's knobs) as evaluate.ts moved them; an engine on a layer moved too, its steps asking for moments", async () => {
+test("the extras (modulators, macros, a layer's knobs) as evaluate.ts moved them; an engine on a layer moved too, its step moved on by its Gate's Next", async () => {
   const { evaluate, newEvalState } = await import('../src/lib/visuals/evaluate.ts');
   const { EXTRA_TYPES } = await import('../src/lib/visuals/registry.ts');
   const { defaultsOf } = await import('../src/lib/visuals/modulators/modulators.ts');
@@ -171,15 +171,15 @@ test("the extras (modulators, macros, a layer's knobs) as evaluate.ts moved them
       assert.ok(d <= 1e-6, `frame ${k}: shapes-1.${knob} ${mine.knobs['shapes-1'][knob]} against ${v}`);
     }
     // An effect engine on a layer (its type also the chain's finish's) is moved by both (evaluate.ts by id since a5's
-    // fix), and its Effect (a step) asks for its moments.
+    // fix), and its Effect (a step) moves on as the Gate toV2 made fires its Next.
     assert.ok(mine.knobs.kal && mine.knobs.kal.effect === 1);
     for (const [knob, v] of Object.entries(theirs.knobs.kal)) assert.ok(Math.abs(v - mine.knobs.kal[knob]) <= 1e-6, `frame ${k}: kal.${knob}`);
     for (const id of ['fol', 'osc']) assert.ok(Math.abs(theirs.outputs[id] - mine.outputs[id]) <= 1e-9, `frame ${k}: ${id}`);
     assert.ok(Math.abs(theirs.macros.mac - mine.macros.mac) <= 1e-9);
-    assert.ok(mine.moments.every((x) => x.module === 'kal' && x.knob === 'effect'));
+    assert.ok(mine.nexts.every((x) => x.module === 'kal' && x.knob === 'effect'));
     if (theirs.moments.length) theirFrames.push(k);
-    if (mine.moments.length) myFrames.push(k);
-    moments += mine.moments.length;
+    if (mine.nexts.length) myFrames.push(k);
+    moments += mine.nexts.length;
   }
   // The Gate's gap is "more than two seconds" (the chain's moments' rule); evaluate.ts's was "two or more", so a moment
   // exactly two seconds after the last comes a frame later (0057 §7e item 3).

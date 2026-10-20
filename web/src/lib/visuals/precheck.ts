@@ -81,8 +81,8 @@ export function measure(meters: Meters, a: AspectsNow, t: number, settings: Visu
     scale: a.scale,
     saturation: a.saturation,
     // A moment (another symmetry, lens, effect…) is a new look, as the visuals count it (65.1: it was never counted).
-    look: Object.values(a.moments).some(Boolean) ? 'moment' : null,
-    symmetry: a.moments.symmetry,
+    look: Object.values(a.nexts).some(Boolean) ? 'next' : null,
+    symmetry: a.nexts.symmetry,
     tiles: [screenTile(t, luminance)],
     // What the look's effects add, the waves where nothing flows and the zooms' streaming out, as the visuals' meters
     // take them (65): so a recipe's effects, waves and zooms are held to the limits.

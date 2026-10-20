@@ -46,7 +46,7 @@ export function todays(): Engine {
 
 const WALKS = new Set([ASPECTS.indexOf('look'), ASPECTS.indexOf('behaviour')]);
 
-/** A frame's outcome as named numbers: everything AspectsNow says, each part's and band's apart, the moments as 0/1. */
+/** A frame's outcome as named numbers: everything AspectsNow says, each part's and band's apart, the steps' Nexts as 0/1. */
 export function flatten(a: AspectsNow): Map<string, number> {
   const out = new Map<string, number>();
   const put = (k: string, v: number | boolean) => out.set(k, typeof v === 'boolean' ? (v ? 1 : 0) : v);
@@ -60,7 +60,7 @@ export function flatten(a: AspectsNow): Map<string, number> {
     for (const k of ['turn', 'size', 'morph', 'hue', 'spread', 'weight'] as const) put(`parts.${i}.${k}`, p[k] ?? 0);
   });
   for (const [k, v] of Object.entries(a.levels)) put(`levels.${k}`, v);
-  for (const [k, v] of Object.entries(a.moments)) put(`moments.${k}`, v);
+  for (const [k, v] of Object.entries(a.nexts)) put(`nexts.${k}`, v);
   a.routed.amounts.forEach((v, i) => put(`routed.amounts.${i}`, v));
   a.routed.knobs.forEach((v, i) => put(`routed.knobs.${i}`, v));
   return out;

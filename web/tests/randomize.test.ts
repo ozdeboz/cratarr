@@ -12,12 +12,13 @@ const { ENGINE_MODULES, GRAPH_MODULES, showPartTypes } = await import('../src/li
 const { toV2 } = await import('../src/lib/visuals/v2.ts');
 const { drawing, seedOf, PRESET_KEYS } = await import('../src/lib/visuals/flame.ts');
 const { randomize, SEEDED_BEFORE, EVERYTHING } = await import('../src/lib/visuals/engine/randomize.ts');
+const { EFFECT_TYPES } = await import('../src/lib/visuals/effect-modules.ts');
 type ModuleType = import('../src/lib/visuals/patch.ts').ModuleType;
 type PatchV2 = import('../src/lib/visuals/ports.ts').PatchV2;
 
 const chain = cratarrTypes(RANGES as Record<string, [number, number]>, DEFAULTS);
 const types: Record<string, ModuleType> = Object.fromEntries(
-  [...EXTRA_TYPES, ...chain, ...ENGINE_MODULES, ...GRAPH_MODULES, ...showPartTypes(chain.find((t) => t.type === 'show')!)].map((t) => [t.type, t]),
+  [...EXTRA_TYPES, ...chain, ...ENGINE_MODULES, ...GRAPH_MODULES, ...EFFECT_TYPES, ...showPartTypes(chain.find((t) => t.type === 'show')!)].map((t) => [t.type, t]),
 );
 function run<T>(g: Generator<void, T>): T {
   for (;;) {
@@ -40,22 +41,24 @@ test("a track's seed gives what it drew before 0057 (presetDraws), value for val
       assert.equal(mine[m]?.[knob], drawn[k], `${key}: ${m}.${knob}`);
       n++;
     }
-    assert.ok(n >= 25, `${key}: ${n} of the chain's draw`);
+    assert.ok(n >= 17, `${key}: ${n} of the chain's draw`);
     // Nothing past the chain's draw.
-    for (const [m, knobs] of Object.entries(mine)) for (const knob of Object.keys(knobs)) assert.ok(SEEDED_BEFORE({ id: m, type: '', knobs: {} }, { id: knob } as never), `${m}.${knob}`);
+    const typeOf = new Map(p.modules.map((x) => [x.id, x.type]));
+    for (const [m, knobs] of Object.entries(mine)) for (const knob of Object.keys(knobs)) assert.ok(SEEDED_BEFORE({ id: m, type: typeOf.get(m) ?? '', knobs: {} }, { id: knob } as never), `${m}.${knob}`);
   }
 });
 
-test("pins are kept, and the chain's draw drawn around them as before", () => {
+test("pins are kept, and the chain's draw drawn around them as before (an effect module pinned whole keeps its effect)", () => {
   const s = structuredClone(DEFAULTS);
-  const p: PatchV2 = { ...toV2(s), pins: ['flame.hue', 'fx1.effect'] };
+  // Effect 1 on Rotate (the kaleidoscope's third), its module pinned whole.
+  const v = toV2(s);
+  const p: PatchV2 = { ...v, modules: [...v.modules, { id: 'fx-rotate', type: 'fx-rotate', knobs: { amount: 0.6 } }], pins: ['flame.hue', 'module:fx-rotate'] };
   const flame = p.modules.find((m) => m.id === 'flame')!;
-  const fx1 = p.modules.find((m) => m.id === 'fx1')!;
   const seed = seedOf('subsonic/tr-10329');
-  const drawn = run(drawing(seed, { hue: flame.knobs.hue, fx1: fx1.knobs.effect })).preset as Record<string, number>;
+  const drawn = run(drawing(seed, { hue: flame.knobs.hue, fx1: 3, fx1Amount: 0.6, fx1K1: 0.5, fx1K2: 0.5 })).preset as Record<string, number>;
   const mine = run(randomize(p, types, { seed, scope: EVERYTHING }));
   assert.equal(mine.flame.hue, undefined);
-  assert.equal(mine.fx1?.effect, undefined);
+  assert.equal(mine['fx-rotate'], undefined);
   assert.equal(mine.flame.form, drawn.form);
   assert.equal(mine.flame.twist, drawn.twist);
 });
@@ -187,5 +190,18 @@ test('the Cables roll: new amounts for the cables into knobs, none of the plumbi
   for (const id of Object.keys(none)) {
     const c = p.cables.find((x) => x.id === id)!;
     assert.equal(typeof none[id] === 'number' ? none[id] : (none[id] as { h: number }).h, typeof c.value === 'number' ? c.value : c.value.h);
+  }
+});
+
+test("the rack as it is: an effect module keeps its effect, the draw drawn around it, its Amount and controls drawn", () => {
+  const v = toV2(structuredClone(DEFAULTS));
+  // Effect 1 on Rotate (the kaleidoscope's third: its Speed and Way).
+  const p: PatchV2 = { ...v, modules: [...v.modules, { id: 'fx-rotate', type: 'fx-rotate', knobs: { amount: 0.6, speed: 0.5, way: 0.5 } }] };
+  for (const key of KEYS) {
+    const seed = seedOf(key);
+    const drawn = run(drawing(seed, { fx1: 3 })).preset as Record<string, number>;
+    const mine = run(randomize(p, types, { seed, scope: EVERYTHING }));
+    assert.deepEqual(mine['fx-rotate'], { amount: drawn.fx1Amount, speed: drawn.fx1K1, way: drawn.fx1K2 }, key);
+    for (const id of Object.keys(mine)) assert.ok(p.modules.some((m) => m.id === id) || id.includes('/'), `${key}: ${id} is the rack's`);
   }
 });

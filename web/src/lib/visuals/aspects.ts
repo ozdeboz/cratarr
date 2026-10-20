@@ -125,9 +125,9 @@ export type AspectsNow = {
   behaviour: number;
   /** Each level's share of its setting its routes let through now (1: all of it). */
   levels: { fluid: number; smoothing: number; haze: number; tunnel: number; dive: number };
-  /** The moments that come this frame (none with reduced motion): another symmetry, lens, form… (routes.ts
-   *  `MOMENT_ASPECTS`; Visuals.svelte moves the settings). */
-  moments: Record<MomentAspect, boolean>;
+  /** The steps whose Next fired this frame (none with reduced motion): another symmetry, lens, form… (routes.ts
+   *  `MOMENT_ASPECTS`; the loop moves each on to its next step). */
+  nexts: Record<MomentAspect, boolean>;
   /** The effects as their routes have them now (65.1; effects.ts `routed`): each engine's and the Loop's Amount, the
    *  share its routes let through (a level), and each control's swing about where it is set (−1..1 added, then 0..1). */
   routed: { amounts: number[]; knobs: number[] };
@@ -360,7 +360,7 @@ export function stepAspects(
     dive: levelOf(st.got, s.dive, A.dive),
     look: walkOf(A.look),
     behaviour: walkOf(A.behaviour),
-    moments,
+    nexts: moments,
     routed: { amounts: AMOUNT_ASPECTS.map((a) => st.got.level[A[a]]), knobs: KNOB_ASPECTS.map((a) => clamp(W[A[a]], -1, 1)) },
   };
 }

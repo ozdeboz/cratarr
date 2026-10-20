@@ -32,7 +32,7 @@ export type FrameStats = {
   /** Its colourfulness as drawn (0..1.25). */
   saturation: number;
   /** A new look started this frame, and why (a track's own does not count against the budget). */
-  look: 'track' | 'dice' | 'moment' | null;
+  look: 'track' | 'dice' | 'next' | null;
   /** A new symmetry this frame (a moment). */
   symmetry: boolean;
   /** Each part's weight in the drawing (Presence, 65: its share of the points against the others'); none: all alike. */
@@ -206,7 +206,7 @@ export class Meters {
   add(s: FrameStats) {
     for (const tiles of s.tiles) this.flashes.add(tiles);
     this.flash = this.flashes.rates(s.t);
-    if (s.look === 'dice' || s.look === 'moment') this.looks.push(s.t);
+    if (s.look === 'dice' || s.look === 'next') this.looks.push(s.t);
     while (this.looks.length && this.looks[0] <= s.t - 60) this.looks.shift();
     const was = this.last;
     this.last = s;
