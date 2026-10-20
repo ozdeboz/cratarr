@@ -130,6 +130,10 @@ export function newEngine(): EngineState {
   };
 }
 
+/** A module's face outputs' keys: a Gate's input, a Ducker's reduction, a Merge's channels in. */
+type FaceKeys = { input: string; reduction: string; in: string[] };
+const faceKeys = (id: string): FaceKeys => ({ input: `${id}.in`, reduction: `${id}.reduction`, in: Array.from({ length: CHANNELS }, (_, ch) => `${id}.in.${ch}`) });
+
 /** A step knob to move on (its module flattened). */
 export type NextRequest = { module: string; knob: string };
 
@@ -240,6 +244,8 @@ type Plan = {
   others: { x: Module; t: ModuleType }[] | null;
   /** Each module's knobs' macro targets, by module then knob. */
   targetsOf: Map<string, Map<string, { macro: Macro; from: number; to: number }[]>>;
+  /** The modules' face outputs' keys (their faces read these), made once a plan. */
+  faceKeys: Record<string, FaceKeys>;
   /** The VCAs whose channels differ (something polyphonic reaches them); the rest are worked out once, a channel. */
   polyphonic: Set<string>;
 };
@@ -416,6 +422,7 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
     })(),
     others: null,
     trackCables: {},
+    faceKeys: {},
     targetsOf: (() => {
       const out = new Map<string, Map<string, { macro: Macro; from: number; to: number }[]>>();
       for (const macro of p.macros)
@@ -591,7 +598,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
       return clamp(finite(read({ signal: r.signal, band: f.channel, reference: r.reference })) / 2, 0, 1);
     }
     if (type === 'envelope' && f.module === loudId) return f.port === 'out' ? env.out : env.level;
-    if (type === 'clock') return f.port === 'beat' || f.port === 'bar' || f.port === 'phrase' ? ticks[f.port] : (outputs['clock.rate'] ?? st.clock.rate);
+    if (type === 'clock') return f.port === 'beat' || f.port === 'bar' || f.port === 'phrase' ? ticks[f.port] : f.port === 'phase' ? st.clock.phase : (outputs['clock.rate'] ?? st.clock.rate);
     // A Grid's channel: each point's index, distance, angle, row or column (0..1).
     if (type === 'grid') return finite(st.grids[f.module]?.grid.channels[f.channel ?? 0]?.[f.port as 'index']);
     if (st.modulators[f.module]) {
@@ -720,7 +727,10 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
         hysteresis: finite(k.hysteresis, 1),
       };
       const input = plugged(x.id, 'in', 0) ? takes(x.id, 'in', 0) : 1;
-      out.fill(stepDucker((st.duckers[x.id] ??= newDucker()), input, takes(x.id, 'key', 0), knobs, step).out);
+      const ducked = stepDucker((st.duckers[x.id] ??= newDucker()), input, takes(x.id, 'key', 0), knobs, step);
+      out.fill(ducked.out);
+      // Its gain reduction (dB) for its face, as the Compressor gives one.
+      outputs[(plan.faceKeys[x.id] ??= faceKeys(x.id)).reduction] = ducked.reduction;
       (st.poly[x.id] ??= new Float64Array(CHANNELS)).set(out);
       return;
     }
@@ -754,6 +764,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
       let one = mode === 'max' ? -Infinity : mode === 'geometric' ? 1 : 0;
       for (let ch = 0; ch < CHANNELS; ch++) {
         const v = sumOf(into, ch);
+        // Each channel in, for its face.
+        outputs[(plan.faceKeys[x.id] ??= faceKeys(x.id)).in[ch]] = v;
         if (mode === 'max') one = Math.max(one, v);
         else if (mode === 'geometric') one *= v;
         else one += v;
@@ -834,6 +846,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     }
     knobs[x.id] = k;
     outputs[x.id] = st.modulators[x.id].run.step(step, read, k);
+    // A Gate's input, for its face's scope.
+    if (x.type === 'gate') outputs[(plan.faceKeys[x.id] ??= faceKeys(x.id)).input] = finite(k.in);
   }
   for (const id of Object.keys(st.modulators)) if (id in outputs) st.values[id] = outputs[id];
   for (let i = 0; i < plan.processorIds.length; i++) outputs[plan.outKeys[i]] = channelsOf(plan.processorIds[i])[0];
@@ -939,6 +953,9 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   const tonemap = p.modules.find((x) => x.type === 'tonemap');
   const glow = tonemap ? finite(tonemap.knobs.level, 1) * gainOf(tonemap.id, 'level') : env.glow;
   outputs['clock.rate'] = clock;
+  // Its Turn: where in the turn it is (0..1), the rate run on.
+  st.clock.phase = (((st.clock.phase + (clock * step) / (2 * Math.PI)) % 1) + 1) % 1;
+  outputs['clock.phase'] = st.clock.phase;
   const trackInto = (a: Aspect) => {
     let sum = 0;
     for (const c of (plan.trackCables[a] ??= columnOf(a).flatMap((key) => into.get(at + key) ?? []))) if (trackAdsr(c.from.module, typeOf, into)) sum += depthOf(c) * heightOf(shapeOf(c.value), finite(xOf(c))) * walkOf(c);

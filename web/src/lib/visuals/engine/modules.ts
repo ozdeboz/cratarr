@@ -21,8 +21,9 @@ export function stepEnvelope(st: EnvelopeState, heard: number, playing: boolean,
 /** Clock: the turning's rate at the track's tempo (`bps`), a route's full amount turning a part once round in 16 beats,
  *  at Speed (and the sidechaining's pace); a quarter with reduced motion; paused, it slows to a stop over two thirds of a
  *  second. */
-export type ClockState = { rate: number };
-export const newClock = (): ClockState => ({ rate: 0 });
+/** Its rate (radians a second) and where in a turn it is (`phase`, 0..1: its Turn output). */
+export type ClockState = { rate: number; phase: number };
+export const newClock = (): ClockState => ({ rate: 0, phase: 0 });
 export function stepClock(st: ClockState, bps: number, playing: boolean, speed: number, pace: number, dt: number) {
   const want = playing ? STEP * bps * speed * pace : 0;
   st.rate += (want - st.rate) * Math.min(1, dt * 1.5);
