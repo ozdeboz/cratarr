@@ -180,9 +180,8 @@ type Plan = {
   /** The chain's path (beside its Flame). */
   at: string;
   gateOf: Map<string, CableV2>;
-  /** Each port's cables (`module|port`), and those reaching each channel. */
+  /** Each port's cables (`module|port`). */
   into: Map<string, CableV2[]>;
-  reaching: Map<string, CableV2[][]>;
   running: Module[];
   /** The macros, modulators, VCAs, Merges and Duckers in the order their cables need. */
   order: Node[];
@@ -195,14 +194,16 @@ type Plan = {
   /** Each key's (`module|port`) chain column, where it is one. */
   columns: Map<string, number | undefined>;
   /** Each module's ports' cables reaching each channel (a channel-less one from a band's signal as that channel's). */
-  ports: Map<string, Map<string, CableV2[][]>>;
+  ports: Map<string, Map<string, Entry[][]>>;
   /** Each module's knobs' gain inputs and next triggers, by the knob. */
-  gains: Map<string, Map<string, CableV2[][]>>;
-  nexts: Map<string, Map<string, CableV2[][]>>;
+  gains: Map<string, Map<string, Entry[][]>>;
+  nexts: Map<string, Map<string, Entry[][]>>;
   /** Each cable's shape, as its value was when last asked. */
   shapes: WeakMap<CableV2, { v: CableV2['value']; shape: Shape }>;
-  /** The chain's columns and the cables into each, as a knob takes them (worked out at the first frame). */
-  columnCables: { a: number; cables: CableV2[] }[] | null;
+  /** The chain's columns and the cables into each, as a knob takes them, each with its source's type and its shape
+   *  (worked out at the first frame); the columns a band's cable reaches. */
+  columnCables: { a: number; cables: { c: CableV2; type: string; v: CableV2['value']; shape: Shape }[] }[] | null;
+  bandColumns: number[];
   /** The modulators' ids; each Music row's reading, and the knob value it was read at. */
   live: Set<string>;
   readings: Map<string, { at: unknown; knob: string; reading: Reading }>;
@@ -240,13 +241,17 @@ const ADSR_KNOBS = { attack: 0, decay: 0, sustain: 0, release: 0.15 };
 const NO_CHANNELS = new Float64Array(64);
 const SCRATCH = new Float64Array(6);
 
+/** A cable as the hot loops take it: its source's type, and its shape as its value was when last asked. */
+type Entry = { c: CableV2; type: string; v: CableV2['value']; shape: Shape };
+const entryOf = (c: CableV2, typeOf: Map<string, string>): Entry => ({ c, type: typeOf.get(c.from.module) ?? c.from.module, v: c.value, shape: shapeOf(c.value) });
+
 /** How a Music row is read: its signal, its reading, slow or not. */
 type Reading = { signal: string; reference?: (typeof READINGS)[number]; speed?: 'slow' };
 
 /** The cables into each module's ports (those whose name ends in `suffix`, by the name before it), reaching each
  *  channel; a channel-less cable from a band's signal as one a channel, each its band's (VCV's polyphonic cable). */
-function byPort(into: Map<string, CableV2[]>, typeOf: Map<string, string>, suffix: string): Map<string, Map<string, CableV2[][]>> {
-  const out = new Map<string, Map<string, CableV2[][]>>();
+function byPort(into: Map<string, CableV2[]>, typeOf: Map<string, string>, suffix: string): Map<string, Map<string, Entry[][]>> {
+  const out = new Map<string, Map<string, Entry[][]>>();
   for (const [key, cs] of into) {
     const bar = key.indexOf('|');
     const module = key.slice(0, bar);
@@ -258,7 +263,7 @@ function byPort(into: Map<string, CableV2[]>, typeOf: Map<string, string>, suffi
         .filter((c) => c.to.channel === undefined || c.to.channel === ch)
         .map((c) => {
           const band = (typeOf.get(c.from.module) ?? c.from.module) === 'music' && BAND_PORTS.has(c.from.port.endsWith(SLOW) ? c.from.port.slice(0, -SLOW.length) : c.from.port);
-          return band && c.from.channel === undefined && c.to.channel === undefined ? { ...c, from: { ...c.from, channel: ch } } : c;
+          return entryOf(band && c.from.channel === undefined && c.to.channel === undefined ? { ...c, from: { ...c.from, channel: ch } } : c, typeOf);
         }),
     );
     (out.get(module) ?? out.set(module, new Map()).get(module)!).set(name, reaching);
@@ -314,8 +319,6 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
     const key = `${c.to.module}|${c.to.port}`;
     (into.get(key) ?? into.set(key, []).get(key)!).push(c);
   }
-  const reaching = new Map<string, CableV2[][]>();
-  for (const [key, cs] of into) reaching.set(key, Array.from({ length: CHANNELS }, (_, ch) => cs.filter((c) => c.to.channel === undefined || c.to.channel === ch)));
   const running = p.modules.filter((x) => modulatorTypeIn(types, x.type));
   const macroIds = new Set(p.macros.map((x) => x.id));
   const targets = new Map<string, { macro: Macro; from: number; to: number }[]>();
@@ -346,7 +349,6 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
     at: flame ? flame.id.slice(0, flame.id.lastIndexOf('/') + 1) : '',
     gateOf,
     into,
-    reaching,
     running,
     order,
     macroIds,
@@ -361,6 +363,7 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
     nexts: byPort(into, typeOf, NEXT),
     shapes: new WeakMap(),
     columnCables: null,
+    bandColumns: [],
     live: new Set(running.map((x) => x.id)),
     readings: new Map(),
     processorIds: p.modules.filter((x) => PROCESSORS.has(x.type)).map((x) => x.id),
@@ -506,9 +509,9 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   /** A cable's source now: a signal raw (absolute, as routes read it) or on 1 = typical halved into 0..1 (as cables
    *  read it otherwise), the Track's pulse, the Envelope's, a modulator's output (a bipolar one from its middle); null
    *  where its module is not there. */
-  const xOf = (c: CableV2): number | null => {
+  const xOf = (c: CableV2, known?: string): number | null => {
     const f = c.from;
-    const type = typeOf.get(f.module) ?? f.module;
+    const type = known ?? typeOf.get(f.module) ?? f.module;
     // A VCA's or a Merge's output, as it is (a Merge's one channel whichever is asked); a Ducker's too.
     if (type === 'vca' || type === 'merge' || type === 'ducker') return channelsOf(f.module)[type === 'vca' ? (f.channel ?? 0) : 0];
     if (type === 'meter') return opts.meters ? finite(METER_OF[f.port]?.(opts.meters)) : 0;
@@ -608,18 +611,19 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   /** What a cable gives a port on channel `ch` (a knob's cable's rule: its curve at its source's x, times its depth
    *  and its walk); a VCA's or a Merge's source taken as it is, along its straight line where the value is a number. */
   // (A channel-less cable from a band's signal comes as its channel's, from the plan.)
-  const giveOf = (c: CableV2, ch: number): number => {
-    const type = typeOf.get(c.from.module) ?? c.from.module;
-    const sh = shapeFor(c);
+  const giveOf = (entry: Entry, ch: number): number => {
+    const { c, type } = entry;
+    if (entry.v !== c.value) [entry.v, entry.shape] = [c.value, shapeOf(c.value)];
+    const sh = entry.shape;
     if (type === 'vca' || type === 'merge' || type === 'ducker') {
       const v = channelsOf(c.from.module)[type === 'vca' ? (c.from.channel ?? ch) : 0];
-      return (sh.table ? heightOf(sh, clamp(v, 0, 1)) : sh.end * v) * depthOf(c) * walkOf(c);
+      return (sh.table ? heightOf(sh, clamp(v, 0, 1)) : sh.end * v) * depthOf(c) * (sh.walks ? walkOf(c) : 1);
     }
-    const x = xOf(c);
-    return x === null ? 0 : heightOf(sh, x) * depthOf(c) * walkOf(c);
+    const x = xOf(c, type);
+    return x === null ? 0 : heightOf(sh, x) * depthOf(c) * (sh.walks ? walkOf(c) : 1);
   };
   /** What a port takes on channel `ch`: its cables' sum (a cable with no channel of its own reaches every channel). */
-  const sumOf = (reaching: CableV2[][] | undefined, ch: number): number => {
+  const sumOf = (reaching: Entry[][] | undefined, ch: number): number => {
     let sum = 0;
     if (reaching) for (const c of reaching[ch]) sum += giveOf(c, ch);
     return sum;
@@ -758,16 +762,20 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     plan.columnCables = [];
     for (const [key, cables] of into) {
       const a = colAt(key);
-      if (a !== undefined) plan.columnCables.push({ a, cables: perChannel(cables) });
+      if (a === undefined) continue;
+      plan.columnCables.push({ a, cables: perChannel(cables).map((c) => ({ c, type: typeOf.get(c.from.module) ?? c.from.module, v: c.value, shape: shapeOf(c.value) })) });
+      if (!IS_LEVEL[a] && !IS_PART[a] && perChannel(cables).some((c) => c.from.channel !== undefined) && !plan.bandColumns.includes(a)) plan.bandColumns.push(a);
     }
   }
   for (const { a, cables } of plan.columnCables) {
-    for (const c of cables) {
-      const x = xOf(c);
+    for (const entry of cables) {
+      const c = entry.c;
+      const x = xOf(c, entry.type);
       if (x === null) continue;
       const band = c.from.channel ?? null;
       if (band !== null && !(band >= 0 && band < n)) continue;
-      const sh = shapeFor(c);
+      if (entry.v !== c.value) [entry.v, entry.shape] = [c.value, shapeOf(c.value)];
+      const sh = entry.shape;
       const y = heightOf(sh, x);
       const w = walkOf(c);
       const e = depthOf(c);
@@ -778,8 +786,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
       else got.band[band][a] += e * y * w;
     }
   }
-  for (let a = 0; a < NA; a++) {
-    if (IS_LEVEL[a] || IS_PART[a]) continue;
+  // The bands' mean (a moment's: their largest) into the whole, for the columns a band's cable reaches (the rest have none).
+  for (const a of plan.bandColumns) {
     let sum = 0;
     let most = -Infinity;
     for (let b = 0; b < n; b++) {
