@@ -52,13 +52,11 @@
   import { holding, leversOf, STANDING, type Levers } from './engine/sidechain';
   import { toast } from '../toast.svelte';
   import type { MeterValues } from './meters';
-  import type { TrialLoop } from './trial.svelte';
   import { beatsOf } from './beats';
   import { DEFAULT_LIMITS, prechecking, type Checked } from './precheck';
   import { recipeFor, settingsOf, STIRRING, type Recipe, type Scope } from './recipe';
   import { signalsOf } from './signals';
   import type { FrameStats } from './meters';
-  import { trial } from './trial.svelte';
   import { appInfo, inApp } from '../app.svelte';
   import { coverPalette, type PaletteColour } from './palette';
   import { setVisualsSide, visuals } from './shown.svelte';
@@ -1398,16 +1396,8 @@
     let engineWalk: Record<string, number> = {};
     // How the music stirs the fluid (stirring.ts).
     const stirring = newStirring();
-    // What the visuals do, measured (meters.ts), and when the rating page last had them.
-    // The trial the meters last measured: each new one (the rating page's A, then B) starts them anew,
-    // so one segment's flashes and motion are not counted, nor held back, in the next.
-    let trialSeen: VisualSettings | null = null;
+    // When the meters were last read (four times a second).
     let meteredAt = 0;
-    // The hits seen since the rating page last had the loop's numbers (each band's last one, and how many came).
-    const hitsSeen = Array<number>(BANDS).fill(-1);
-    let hitsCounted = 0;
-    // Which device this is, for the rating page: the app's own player, else the browser's platform.
-    const device = () => (inApp && appInfo.player) || (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform || navigator.platform || 'browser';
     // The look's walk (drift.ts): when it last walked, and the time since. A track's own look goes into the settings
     // as far as the Track row's route into Drift says: at -100 % all of it (as before Drift), at -50 % half way, at 0
     // none, above 0 away from it. After the panel's Reset (`whole`), all of it.
@@ -1418,9 +1408,6 @@
     // What the patch's cables make of today's settings that are no column (chain-cables.ts), as last worked out: the
     // look's as the flame is made, Purity as drawn, the bands' times and the behaviour as the aspects take them.
     let cabled: Cabled = { settings: {}, bands: {} };
-    // The settings cables moved when the flame was last made: one let go of (a trial starting, a cable taken out) returns
-    // to its setting, not a change from outside.
-    let cabledBefore = new Set<string>();
     const lookOf = (k: string) => ((cabled.settings as Record<string, number | undefined>)[k] ?? s[k as keyof VisualSettings]) as number;
     // The walking routes' factors (`Matrix.walks` order) and the matrix they are for (a route changed: none till the
     // next step).
@@ -1428,11 +1415,6 @@
     let routeWalkFor: typeof matrix | null = null;
     let drifted = 0;
     let driftDt = 0;
-    // For the rating page: the look's settings Drift's walk and the Symmetry moments moved since the last frame (how it
-    // behaves), so a change of the look from anywhere else is told apart (counted, and while it blends in, settling).
-    const behaviourMoved = new Set<string>();
-    let looksOutside = 0;
-    let blendOutside = false;
     const trackLook = (drawn: Drawn, blend: number, whole: boolean) => {
       nextBlend = blend;
       lookCame = 'track';
@@ -1440,7 +1422,7 @@
         loadPreset(drawn.preset);
         return;
       }
-      const how = trial.settings ?? s;
+      const how = s;
       const out = stepDrift(drifting, {
         amount: 0,
         trackEvent: endOf(how.routes[routeKey('track', null, 'look')] ?? 0),
@@ -1526,8 +1508,8 @@
       // The Meter's readings, first in a frame (flashmeter.ts).
       renderer.tiles();
 
-      // How it behaves: as the settings say, or as the rating page's trial does (the look stays the settings').
-      const how = trial.settings ?? s;
+      // How it behaves: as the settings say.
+      const how = s;
       // The sound's waveform only while a Waves layer draws it (listening costs a tablet much of a frame).
       const m = musicNow(now, cabled.bands.lighting ?? how.lighting, s.extra.layers.some((l) => l.source.type === 'waves' && l.blend.amount > 0));
       if (m.key !== key || resets !== resetsSeen) {
@@ -1627,31 +1609,25 @@
         if (changed.length) base = flameOf(Object.fromEntries(PRESET_KEYS.map((k) => [k, lookOf(k)])) as Preset, false);
         const coverCame = !changed.length && madeColours.startsWith('cover/') && colours.startsWith('cover/') && from;
         const blend = nextBlend ?? (changed.every((k) => BY_DEGREES.has(k)) && colours === madeColours ? 0 : coverCame ? null : ANOTHER_MS);
-        // A cable's move is the patch's own, not from outside.
-        const outside = colours !== madeColours || changed.some((k) => !behaviourMoved.has(k) && !(k in cabled.settings) && !cabledBefore.has(k));
-        if (outside) looksOutside++;
         if (blend && shown) {
           from = shown;
           blendStart = now;
           blendMs = blend;
-          blendOutside = outside;
         }
         made = Object.fromEntries(SHAPING.map((k) => [k, lookOf(k)]));
-        cabledBefore = new Set(Object.keys(cabled.settings));
         madeColours = colours;
         to = coloured(base!, mode, covered);
         if (!from) shown = to;
       }
       // A preset that changed nothing (all of it pinned) leaves nothing to blend.
       nextBlend = null;
-      behaviourMoved.clear();
       // What is drawn, as the music and the patch give it (the engine). Reduced motion: a quarter of the turning, all
       // of it steady, half the beats' and hits' share, no moments.
       const still = reducedMotion();
-      // How it behaves now: as set, each walking slider at its walk's share of it (not with the rating page's trial).
-      const walked = trial.settings ? how : ({ ...how, ...Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, how[k] * (walkFactor[k] ?? 1)])) } as VisualSettings);
+      // How it behaves now: as set, each walking slider at its walk's share of it.
+      const walked = { ...how, ...Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, how[k] * (walkFactor[k] ?? 1)])) } as VisualSettings;
       // And as the patch's cables into today's settings move it (last frame's: read once the engine has the signals).
-      const behaving = trial.settings ? how : ({ ...walked, ...cabled.settings, ...cabled.bands } as VisualSettings);
+      const behaving = { ...walked, ...cabled.settings, ...cabled.bands } as VisualSettings;
       // The signals, read once a frame (normal.ts), with the Track pulse the engine makes (it reads none before making
       // it: the Track pulse goes into Music's own track, which the next frame makes anew).
       let signals: ((ref: SignalRef) => number) | null = null;
@@ -1678,13 +1654,8 @@
       // made, the behaviour's for the next frame; from the signals and the modulators as last stepped.
       const envelope = stepped.outputs['envelope.out'] ?? 0;
       const src = { signals: cableSignals(read, still), outputs: evalState.values, modulators: s.extra?.modulators ?? [], types: GRAPH_TYPES };
-      cabled = trial.settings ? { settings: {}, bands: {} } : cabledSettings(walked as unknown as Record<string, unknown>, extraCables, src, envelope, GRAPH_TYPES, cableWalk, BANDS);
+      cabled = cabledSettings(walked as unknown as Record<string, unknown>, extraCables, src, envelope, GRAPH_TYPES, cableWalk, BANDS);
       const { turn, hits, parts, track } = d;
-      if (m.playing && m.hits)
-        m.hits.forEach((h, b) => {
-          if (h.index > hitsSeen[b] && hitsSeen[b] >= 0 && h.index - hitsSeen[b] <= 3) hitsCounted += h.index - hitsSeen[b];
-          hitsSeen[b] = h.index;
-        });
       if (panel && now - metered > 100) {
         metered = now;
         meters = { track: Array.from(track), bands: d.bands.map((v) => Array.from(v)), lit: d.lit };
@@ -1698,7 +1669,6 @@
         if (!still) {
           const bar = Math.floor((m.beat ? m.beat.index : m.position * 2) / 4);
           const walked = stepDrift(drifting, { amount: d.look, trackEvent: 0, dt: driftDt, seed: seedOf(m.key ?? 'cratarr'), bar, pins: s.pins, own: current ?? (lookNow() as Preset), now: lookNow() as Preset });
-          for (const k of Object.keys(walked)) behaviourMoved.add(k);
           Object.assign(s, walked);
         }
         // The behaviour's: its Track row once a track, its walk (none with reduced motion), under the set values; the
@@ -1735,7 +1705,6 @@
         const next = momentOf(a, s[a], randomFrom(seedOf(`${a}|${at}`)));
         if (next === s[a]) continue;
         s[a] = next;
-        behaviourMoved.add(a);
         // Another of an engine's effects: its controls back to their middle, as when one is chosen by hand.
         const knobs = ENGINE_KNOBS[a as keyof typeof ENGINE_KNOBS];
         for (const k of knobs ?? []) if (!s.pins.includes(k)) s[k] = 0.5;
@@ -1901,12 +1870,7 @@
         extras,
       );
       // What this frame did, measured (meters.ts): the screen read into tiles (back two or more frames later), the parts'
-      // motion and change, a new look and why. The meters' values for the rating page four times a second.
-      if (trial.settings !== trialSeen) {
-        trialSeen = trial.settings;
-        renderer.meterReset();
-        meterValues = undefined;
-      }
+      // motion and change, a new look and why. The meters' values four times a second, for the sidechains.
       renderer.measure(w, h, now / 1000);
       const stats: Omit<FrameStats, 'tiles'> = {
         t: now / 1000,
@@ -1933,9 +1897,7 @@
       if (now - meteredAt >= 250) {
         const values = renderer.meterValues;
         meterValues = values;
-        const since = Math.max(0.05, (now - meteredAt) / 1000);
         meteredAt = now;
-        trial.meters = values;
         if (panel) {
           live = {
             ...Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, behaving[k] * (k in d.levels ? d.levels[k as keyof typeof d.levels] : 1)])),
@@ -1948,21 +1910,6 @@
             ? densityOf(heard, isBandSignal(cell.signal) ? { signal: B[cell.signal as keyof typeof B], band: pick } : { track: T[cell.signal as keyof typeof T] })
             : null;
         }
-        trial.loop = {
-          intensity: m.intensity,
-          bps: m.bps,
-          hitsPerSecond: hitsCounted / since,
-          activity: d.lit,
-          swing: levers.swing,
-          looks: looksOutside,
-          settling: !!from && blendOutside,
-          view: [canvas.clientWidth, canvas.clientHeight],
-          points: renderer.pointCount,
-          steps: passes,
-          fps,
-          device: device(),
-        };
-        hitsCounted = 0;
         const marks = { flash: holding(levers, 'swing'), speed: holding(levers, 'pace'), wild: (['swing', 'pace', 'evolution', 'hue', 'size', 'gap'] as const).some((k) => holding(levers, k)) };
         if (marks.flash !== !!heldBack.flash || marks.speed !== !!heldBack.speed || marks.wild !== !!heldBack.wild) heldBack = marks;
       }
