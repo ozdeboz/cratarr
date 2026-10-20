@@ -15,6 +15,24 @@ export const BAD = `bool bad(float x) { return (floatBitsToUint(x) & 0x7f800000u
 float clean1(float x) { return bad(x) ? (x > 0.0 ? 60000.0 : 0.0) : clamp(x, 0.0, 60000.0); }
 vec4 clean(vec4 v) { return vec4(clean1(v.x), clean1(v.y), clean1(v.z), clean1(v.w)); }`;
 
+const NONE = new WeakMap<WebGL2RenderingContext, WebGLTexture>();
+
+/** One black pixel, for a sampler with nothing to read (an input not cabled, no flow): a unit a program samples must
+ *  never be left with no texture (WebGL warns each draw, and gives up after a few: the tablet, 2026-10-20). */
+export function none(gl: WebGL2RenderingContext): WebGLTexture {
+  let t = NONE.get(gl);
+  if (!t) {
+    t = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 0]));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    NONE.set(gl, t);
+  }
+  return t;
+}
+
 /** A program's uniform locations, each looked up once. */
 export function uniforms(gl: WebGL2RenderingContext) {
   const locs = new WeakMap<WebGLProgram, Map<string, WebGLUniformLocation | null>>();

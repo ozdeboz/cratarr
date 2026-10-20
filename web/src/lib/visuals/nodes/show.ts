@@ -7,7 +7,7 @@ import { program } from '../sources/gl';
 import type { ShowParams } from '../chain-params';
 import type { Light } from './light';
 import type { FlamePoints } from './points';
-import { BAD, FULL, uniforms } from './shared';
+import { BAD, FULL, none, uniforms } from './shared';
 
 const SHOW = `#version 300 es
 precision highp float;
@@ -178,13 +178,12 @@ export class Show {
     const wave = fluid ? undefined : look.flow?.wave;
     gl.uniform4f(this.u(this.show, 'uWave'), wave ? WAVE_BEND * wave.amount : 0, wave ? Math.cos(wave.angle) : 1, wave ? Math.sin(wave.angle) : 0, wave ? wave.phase : 0);
     gl.uniform1f(this.u(this.show, 'uWaveK'), WAVE_K);
-    if (fluid && warp) {
-      gl.activeTexture(gl.TEXTURE3);
-      gl.bindTexture(gl.TEXTURE_2D, fluid.velocity);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.uniform1i(this.u(this.show, 'uVelocity'), 3);
-      gl.uniform2fv(this.u(this.show, 'uUvPerCell'), fluid.uvPerCell);
-    }
+    // The flow's unit is sampled with or without one: a black pixel there without.
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, fluid && warp ? fluid.velocity : none(gl));
+    gl.activeTexture(gl.TEXTURE0);
+    gl.uniform1i(this.u(this.show, 'uVelocity'), 3);
+    if (fluid && warp) gl.uniform2fv(this.u(this.show, 'uUvPerCell'), fluid.uvPerCell);
     gl.bindVertexArray(this.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
