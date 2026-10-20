@@ -6,7 +6,10 @@
 //
 // Done in slices (`prechecking`), so a slow tablet keeps its frames: a step is a few hundredths of a millisecond.
 
-import { newAspects, stepAspects, wavesMotion, zoomsMotion, type AspectsNow } from './aspects';
+import { wavesMotion, zoomsMotion, type AspectsNow } from './aspects';
+import { newEngine, stepEngine } from './engine/graph';
+import { newNormalState, signalsFor } from './normal';
+import { flatten, toV2 } from './v2';
 import type { Beats } from './beats';
 import { BUDGETED, budgetOf } from './budget';
 import { settingsReport, type Report } from './effects';
@@ -46,7 +49,7 @@ const SLICE = 30;
  *  rate), kept by the look: fitting the part to dive into takes a few milliseconds on a PC, several times that on a
  *  tablet, and a roll's eight recipes share their base's look. */
 const diveTurns = new Map<string, number>();
-function diveTurnPerRate(settings: VisualSettings): number {
+export function diveTurnPerRate(settings: VisualSettings): number {
   const look = PRESET_KEYS.map((k) => settings[k]).join('|');
   let turn = diveTurns.get(look);
   if (turn === undefined) {
@@ -99,7 +102,11 @@ export function* prechecking(
   const settings = settingsOf(recipe, base, scope);
   // The dive's turn, as the visuals count it (the renderer's, beside each part's own); none where it cannot dive.
   const divePerRate = settings.dive > 0 ? diveTurnPerRate(settings) : 0;
-  const aspects = newAspects();
+  // The one engine over the recipe's patch, without its sidechains: the check asks what the recipe does on its own, as
+  // today's ran without the governor; the patch's sidechains hold back whatever passes (decision 0057).
+  const patch = flatten(toV2(settings, { sidechain: false }));
+  const engine = newEngine();
+  const normal = newNormalState();
   const state = newMusicState();
   const meters = new Meters();
   const worst: Record<string, number> = {};
@@ -111,7 +118,8 @@ export function* prechecking(
     if (k > 0 && k % SLICE === 0) yield;
     const t = from + k * dt;
     const m = musicOf(signals, beats, t, true, { state, at: t * 1000, lighting: settings.lighting });
-    const a = stepAspects(aspects, m, settings, dt, { still: false, now: t * 1000, fluidFull: FLUID_FULL });
+    const a = stepEngine(engine, patch, {}, m, signalsFor(normal, m, t * 1000), settings, dt, { still: false, now: t * 1000, fluidFull: FLUID_FULL }).aspects;
+    if (!a) break;
     measure(meters, a, k * dt, settings, divePerRate);
     if (k * dt < SETTLE_S) continue;
     // The budgeted meters over their budget at the music's activity now (Wild at its middle), as the governor holds

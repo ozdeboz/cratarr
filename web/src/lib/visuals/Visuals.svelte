@@ -50,8 +50,6 @@
   import { densityOf, newHistory, remember } from './history';
   import { budgetOf, BUDGETED, LEVERS, STANDING, type Budgeted, type Levers } from './governor';
   import { holding, leversOf } from './engine/sidechain';
-  import { fresh, limitsOf, type Learned } from './learning';
-  import { getVisualsLimits } from '../api';
   import { toast } from '../toast.svelte';
   import type { MeterValues } from './meters';
   import type { TrialLoop } from './trial.svelte';
@@ -238,26 +236,10 @@
   }
 
   // What the meters last measured (four times a second in the loop): the patch's sidechains' key (its Meter, 0057 §7e;
-  // the governor is gone). The limits as the thumbs had learned them (learning.ts), for the dice's check until it runs on
-  // the one engine.
+  // the governor is gone). The dice's check holds a recipe to the standing limits (nothing learned: the owner dropped
+  // taste and learning, 0057).
   let meterValues: MeterValues | undefined;
-  let learned = $state<Learned>(fresh(STANDING));
-  let learnedVersion = 0;
-  const limitsNow = $derived(limitsOf(learned));
-  const status = (e: unknown) => (e && typeof e === 'object' && 'status' in e ? (e as { status?: number }).status : undefined);
-  async function loadLearned() {
-    try {
-      const got = await getVisualsLimits();
-      learnedVersion = got.version;
-      learned = { ...fresh(STANDING), ...got.limits } as Learned;
-    } catch (e) {
-      // None learned yet (or not to be had now): where they start.
-      if (status(e) === 404) {
-        learnedVersion = 0;
-        learned = fresh(STANDING);
-      }
-    }
-  }
+  const limitsNow = STANDING;
 
   // The dice: everything at random, a look and how it behaves (a recipe: recipe.ts), both to the group. Each try draws
   // its look first (65: a look brings its effects, which count against the limits) and runs the recipe with it against
@@ -1327,7 +1309,6 @@
     document.addEventListener('fullscreenchange', fullscreenChanged);
     // The sync group this device plays in, if any: its visuals followed, this one's changes sent to it.
     const stopGroup = followGroup();
-    void loadLearned();
 
     // Where this device's pace settled last time (points, steps, resolution's share; and a level it could not hold
     // lately, not tried again until then): the visuals open there, not at the settings' most, and do not hunt for it
