@@ -30,10 +30,6 @@ export const SHAPES: ModuleType = {
     knob('hueSpread', 'Hue spread', 0, 1, 0.12),
     knob('saturation', 'Saturation', 0, 1, 0.75),
     knob('additive', 'Additive', 0, 1, 1),
-    // How it meets the picture under it (compose.ts, at the blend): its colours the flame's around it, its light
-    // spread soft. The owner: shapes "do not blend well" with the flame.
-    knob('tint', 'Flame colours', 0, 1, 0.7),
-    knob('glow', 'Glow', 0, 1, 0.4),
   ],
 };
 

@@ -115,13 +115,10 @@ void main() { o = texture(uIn, vUv); }`);
     // Without a first, the rest over nothing.
     bind(0, first?.tex ?? rest[0]?.t?.tex ?? null, 'uBase');
     gl.uniform1f(gl.getUniformLocation(p, 'uBaseGain'), first ? (k.amount1 ?? 1) : 0);
-    gl.uniform1f(gl.getUniformLocation(p, 'uTint0'), first && rest[0] ? (k[`tint${rest[0].i}`] ?? 0) : 0);
-    gl.uniform2f(gl.getUniformLocation(p, 'uAspect'), Math.min(1, this.spec.h / this.spec.w), Math.min(1, this.spec.w / this.spec.h));
     rest.forEach(({ i, t }, j) => {
       bind(1 + j, t!.tex, `uLayer${j}`);
       gl.uniform1i(gl.getUniformLocation(p!, `uMode${j}`), Math.round(k[`mode${i}`] ?? 1));
       gl.uniform1f(gl.getUniformLocation(p!, `uAmount${j}`), k[`amount${i}`] ?? 1);
-      gl.uniform1f(gl.getUniformLocation(p!, `uGlow${j}`), k[`glow${i}`] ?? 0);
     });
     gl.activeTexture(gl.TEXTURE0);
     gl.bindVertexArray(this.empty);

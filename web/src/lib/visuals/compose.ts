@@ -33,21 +33,12 @@ void main() {
 /** The Mix of `n` layers over the picture in one pass (decision 0057 §4), each over the picture so far (both
  *  premultiplied) as its mode says (MIX_MODES): added, screened, laid over, multiplied, the picture seen through it
  *  (window: dimmed by its amount where the layer is not), or the brighter of the two (lighten), by its amount; the
- *  picture so far kept in the shader, not in a target between. Before that, a layer's glow (its light spread over a
- *  ring of taps) and the first's tint (its colours the picture's around it: the hue of a wider ring's mean, at its own
- *  brightness; its own where the picture is dark): a later layer that tints reads the picture so far around it, so it
- *  starts a pass of its own. Taps one by one, no arrays (Mali's float[] miscompiles). */
+ *  picture so far kept in the shader, not in a target between. A layer's glow and tint are modules of their own
+ *  (nodes/modules.ts: Glow, Tint). No arrays (Mali's float[] miscompiles). */
 export function mixShader(n: number): string {
   const layer = (i: number) => `  {
     vec4 b = texture(uLayer${i}, vUv);
-    if (uGlow${i} > 0.0) b += (ring(uLayer${i}, 0.012) * 0.5 + ring(uLayer${i}, 0.03) * 0.3) / 8.0 * 2.5 * uGlow${i};
-${i === 0 ? `    if (uTint0 > 0.0) {
-      vec3 m = ring(uBase, 0.06).rgb / 8.0 * uBaseGain;
-      float top = max(max(m.r, m.g), m.b);
-      float lit = max(max(b.r, b.g), b.b);
-      b.rgb = mix(b.rgb, lit * m / max(top, 1e-3), uTint0 * smoothstep(0.01, 0.12, top));
-    }
-` : ''}    float cover = clamp(max(max(b.r, b.g), max(b.b, b.a)) * 1.5, 0.0, 1.0);
+    float cover = clamp(max(max(b.r, b.g), max(b.b, b.a)) * 1.5, 0.0, 1.0);
     b *= uAmount${i};
     if (uMode${i} == 1) c = c + b.rgb - c * b.rgb;
     else if (uMode${i} == 2) c = b.rgb + c * (1.0 - b.a);
@@ -63,16 +54,7 @@ in vec2 vUv;
 out vec4 outColor;
 uniform sampler2D uBase;
 uniform float uBaseGain;
-uniform float uTint0;
-uniform vec2 uAspect;
-${each((i) => `uniform sampler2D uLayer${i};\nuniform int uMode${i};\nuniform float uAmount${i};\nuniform float uGlow${i};`)}
-vec4 ring(sampler2D t, float r) {
-  vec2 d = uAspect * r;
-  float h = 0.7071;
-  return texture(t, vUv + vec2(d.x, 0.0)) + texture(t, vUv - vec2(d.x, 0.0)) + texture(t, vUv + vec2(0.0, d.y)) +
-    texture(t, vUv - vec2(0.0, d.y)) + texture(t, vUv + d * h) + texture(t, vUv - d * h) +
-    texture(t, vUv + vec2(d.x, -d.y) * h) + texture(t, vUv + vec2(-d.x, d.y) * h);
-}
+${each((i) => `uniform sampler2D uLayer${i};\nuniform int uMode${i};\nuniform float uAmount${i};`)}
 void main() {
   vec3 c = texture(uBase, vUv).rgb * uBaseGain;
 ${each(layer)}
@@ -163,16 +145,14 @@ export class Compositor {
     let base: WebGLTexture = picture;
     let mixed: Target | null = null;
     let gain = Math.min(1, Math.max(0, flame));
-    type Drawn = { t: Target; mode: Layer['blend']['mode']; amount: number; tint: number; glow: number };
+    type Drawn = { t: Target; mode: Layer['blend']['mode']; amount: number };
     const drawn: Drawn[] = [];
     for (const layer of extra.layers) {
       if (layer.blend.amount <= 0) continue;
       const t = this.drawLayer(layer, knobsOf, frame);
-      const k = knobsOf(layer.source);
-      if (t) drawn.push({ t, mode: layer.blend.mode, amount: layer.blend.amount, tint: k.tint ?? 0, glow: k.glow ?? 0 });
+      if (t) drawn.push({ t, mode: layer.blend.mode, amount: layer.blend.amount });
     }
-    // The Mix: as many layers a pass as it takes, a pass ending before a later layer that tints (it reads the picture
-    // so far around it), or with none, the flame's share alone.
+    // The Mix: up to four layers a pass, or with none, the flame's share alone.
     const pass = (layers: Drawn[]) => {
       const t = this.pool.take(this.spec);
       const p = this.mixProgram(layers.length);
@@ -182,13 +162,10 @@ export class Compositor {
       gl.useProgram(p);
       this.bind(0, base, 'uBase', p);
       gl.uniform1f(gl.getUniformLocation(p, 'uBaseGain'), gain);
-      gl.uniform1f(gl.getUniformLocation(p, 'uTint0'), layers[0]?.tint ?? 0);
-      gl.uniform2f(gl.getUniformLocation(p, 'uAspect'), Math.min(1, this.spec.h / this.spec.w), Math.min(1, this.spec.w / this.spec.h));
       layers.forEach((l, i) => {
         this.bind(1 + i, l.t.tex, `uLayer${i}`, p);
         gl.uniform1i(gl.getUniformLocation(p, `uMode${i}`), BLENDS.indexOf(l.mode));
         gl.uniform1f(gl.getUniformLocation(p, `uAmount${i}`), l.amount);
-        gl.uniform1f(gl.getUniformLocation(p, `uGlow${i}`), l.glow);
       });
       this.full();
       if (mixed) this.pool.give(mixed);
@@ -198,7 +175,7 @@ export class Compositor {
     };
     let run: Drawn[] = [];
     for (const l of drawn) {
-      if (run.length && (l.tint > 0 || run.length === MIX_PASS)) (pass(run), (run = []));
+      if (run.length === MIX_PASS) (pass(run), (run = []));
       run.push(l);
     }
     if (run.length || gain < 1) pass(run);

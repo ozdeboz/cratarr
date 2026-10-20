@@ -206,8 +206,6 @@ export class FlameRenderer {
         x.layers.forEach((l, i) => {
           k[`mode${i + 2}`] = MIX_MODES.indexOf(l.blend.mode);
           k[`amount${i + 2}`] = l.blend.amount;
-          k[`glow${i + 2}`] = extras.knobsOf(l.source).glow ?? 0;
-          k[`tint${i + 2}`] = extras.knobsOf(l.source).tint ?? 0;
         });
         return k;
       }
