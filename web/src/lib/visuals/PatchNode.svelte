@@ -1,10 +1,11 @@
 <script lang="ts">
-  // A node of the patch graph (patchgraph.ts): a module (its knobs, its picture in and out), a modulator or a signal
-  // (an output to cable from), the blend, the screen, or a box around a layer or the loop; a layer that is off as one
-  // row ("+ bring back"); "+ Add layer", "+ Add modulator". Tapping its title, or double-clicking it, opens its page; a
-  // knob tapped, what moves it; a long press (or right click) on a module that can go, its menu (lib/longpress).
-  // Each handle by its port's type (0057 §1: the wire's colour; a trigger's a diamond, the sound's a ring); a modulator
-  // with several outputs, a row of jacks (the Clock's Beat, Bar and Phrase blink); a control source, its face.
+  // A node of the patch graph (patchgraph.ts): a module (its knobs, its ports, its picture in and out), a modulator (an
+  // output to cable from), a device (its exposed ports, its macros) or the frame round a device opened in place; a
+  // category's lane's header (its pin, its "+"). Tapping its title, or double-clicking it, opens its page (a device:
+  // into it); a knob tapped, what moves it; a long press (or right click) on a module, its menu (lib/longpress).
+  // Every jack labelled, inputs down its left edge and outputs down its right (its picture's first, then the rest: a
+  // modulator's Out, the Clock's Beat, Bar and Phrase, which blink), each by its port's type (0057 §1: the wire's
+  // colour; a trigger's a diamond, a flow's a double ring); a knob's input under its name; a control source, its face.
   import { getContext } from 'svelte';
   import { Handle, Position, useUpdateNodeInternals } from '@xyflow/svelte';
   import { longpress } from '../longpress';
@@ -12,28 +13,23 @@
   import PatchFace from './PatchFace.svelte';
   import Icon from '../Icon.svelte';
   import { clockLights } from './faces';
-  import { countLabel, FAR_IN, FAR_OUT, GRAPH, gainPort, knobHandle, MOD_OUT, nextPort, polyTurned, type GraphActions, type KnobView, type NodeData, type Side } from './patchgraph';
+  import { countLabel, FAR_IN, FAR_OUT, GRAPH, gainPort, knobHandle, nextPort, polyTurned, type GraphActions, type KnobView, type NodeData } from './patchgraph';
 
   let { id, data, selected }: { id: string; data: NodeData; selected?: boolean } = $props();
   const graph = getContext<GraphActions>(GRAPH);
   const update = useUpdateNodeInternals();
 
-  const SIDE: Record<Side, Position> = { left: Position.Left, right: Position.Right, top: Position.Top, bottom: Position.Bottom };
-  // Picture handles sit on the title's line at the sides; an output under the node (portrait) at its right corner,
-  // clear of the knobs' sockets along its bottom.
-  const at = (s: Side) => (s === 'left' || s === 'right' ? 'top: 19px' : s === 'bottom' ? 'left: calc(100% - 16px)' : undefined);
-  // A polyphonic knob turned as one: every channel as far.
+  // A polyphonic knob turned as one: every channel as far, in one change.
   function turn(k: KnobView, v: number) {
     if (!k.channels) return graph.knob(id, k.id, v);
-    for (const c of polyTurned(k, v)) graph.knob(id, c.id, c.value);
+    graph.knobs(id, k.id, polyTurned(k, v));
   }
   // A polyphonic knob opened out to its channels, or one of them back to the one.
   const polyOf = (k: KnobView) => (k.channels ? k.id : /^(.+)\.\d+$/.exec(k.id)?.[1]);
   const pair = (k: KnobView) => `${id}.${polyOf(k)}`;
 
-  // A knob's jack: under its dial's middle; on touch under the dial, clear of it (a finger turns the dial).
-  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
-  const knobJack = coarse ? 'top: auto; bottom: -6px' : 'top: 17.5px; bottom: auto';
+  // A knob's jack: under its label (as a module's panel has it), clear of the dial and the name.
+  const knobJack = 'top: auto; bottom: -8px';
 
   // The far form's sockets: what comes in on the side the node takes in, what goes out on the other (portrait: top and
   // bottom), every cable led there far out (patchgraph.ts farEdges).
@@ -52,10 +48,9 @@
 </script>
 
 {#if data.kind === 'box'}
-  {@const add = data.add}
   <div class="box" class:dev={data.device} ondblclick={() => graph.open(id)} role="presentation">
     <span class="bl"
-      >{data.label}{#if add}<button class="plus nodrag" aria-label="Add to {data.label}" title="Add to {data.label}" onclick={() => graph.adding({ box: add })}>+</button>{/if}{#if data.device}<button
+      >{data.label}{#if data.device}<button
           class="plus nodrag"
           aria-label="Close {data.label}"
           title="Close"
@@ -72,22 +67,8 @@
     >
     <button class="plus nodrag" aria-label="Add to {lane.label}" title="Add" onclick={() => graph.adding({ category: lane.category, scope: lane.scope })}>+</button>
   </div>
-{:else if data.kind === 'off'}
-  {@const layer = data.layer}
-  <div class="node off"><span class="t">{data.label} · off</span><button class="back nodrag" onclick={() => graph.bringBack(layer)}>+ bring back</button></div>
-{:else if data.kind === 'add'}
-  {@const to = data.to}
-  <button class="node add nodrag" onclick={() => graph.adding(to)}>{data.label}</button>
-{:else if data.kind === 'signal'}
-  <div class="node mod" style:--room={data.room ? `${data.room}px` : null} class:sel={selected} ondblclick={() => graph.open(id)} role="presentation">
-    <span class="t">{data.label}</span>
-    <span class="sum only"><b>{data.label}</b></span>
-    <Handle type="source" id={MOD_OUT} position={Position.Top} class="jack out t-{data.type}" />
-    <Handle type="target" id={FAR_IN} position={farIn} isConnectable={false} class="jack farh" />
-    <Handle type="source" id={FAR_OUT} position={farOut} isConnectable={false} class="jack farh" />
-  </div>
-{:else if data.kind === 'module'}
-  <div class="node" style:--room={data.room ? `${data.room}px` : null} class:mod={data.modulator} class:src={data.place === 'source'} class:sel={selected} ondblclick={() => graph.open(id)} role="presentation" use:longpress={() => graph.removable(id) && graph.menu(id)}>
+{:else}
+  <div class="node" style:--room={data.room ? `${data.room}px` : null} class:mod={data.modulator} class:src={data.place === 'source'} class:sel={selected} ondblclick={() => graph.open(id)} role="presentation" use:longpress={() => graph.menu(id)}>
     <span class="title">
       <button class="t nodrag" onclick={() => graph.open(id)}>{data.label}<span class="chev">›</span></button>
       {#if data.device}<button class="plus nodrag" aria-label="Open {data.label} here" title="Open here" onclick={() => graph.toggle(id)}>+</button>{/if}
@@ -95,24 +76,48 @@
     <button class="sum nodrag" tabindex="-1" onclick={() => graph.open(id)}
       ><b>{data.label}</b>{#if countLabel(data.cables)}<span class="n">{' · '}{countLabel(data.cables)}</span>{/if}</button
     >
-    {#if data.ports.length}
-      <div class="ports">
-        {#each data.ports as p (p.id)}
-          <div class="port" class:cabled={p.cabled}>
-            {p.label}
-            <Handle type="target" id={knobHandle(p.id)} position={Position.Left} class="jack in-mod t-{p.type}" style="left: -10px" />
-          </div>
-        {/each}
+    {#if data.in || data.out || data.ports.length || data.outs.length}
+      {@const pin = data.v2.pin}
+      {@const pout = data.v2.pout}
+      <div class="io">
+        <div class="ins">
+          {#if data.in && pin}
+            <div class="port" use:longpress={() => graph.help(id, pin)}>
+              <span class="pl">{data.v2.ports.in.find((x) => x.id === pin)?.label ?? 'In'}</span>
+              <Handle type="target" id="in" position={Position.Left} class="jack pic t-{data.pinType ?? 'picture'}" style="left: -10px" />
+            </div>
+          {/if}
+          {#each data.ports as p (p.id)}
+            <div class="port" class:cabled={p.cabled} use:longpress={() => graph.help(id, p.id)}>
+              <span class="pl">{p.label}</span>
+              <Handle type="target" id={knobHandle(p.id)} position={Position.Left} class="jack in-mod t-{p.type}" style="left: -10px" />
+            </div>
+          {/each}
+        </div>
+        <div class="outs">
+          {#if data.out && pout}
+            <div class="port out" use:longpress={() => graph.help(id, pout)}>
+              <span class="pl">{data.v2.ports.out.find((x) => x.id === pout)?.label ?? 'Out'}</span>
+              <Handle type="source" id="out" position={Position.Right} class="jack pic t-{data.poutType ?? 'picture'}" style="right: -10px" />
+            </div>
+          {/if}
+          {#each data.outs as o (o.id)}
+            <div class="port out" use:longpress={() => graph.help(id, o.id)}>
+              {#if lights && o.type === 'trigger'}<i class="light" style:--lit={lights[o.id] ?? 0}></i>{/if}<span class="pl">{o.label}</span>
+              <Handle type="source" id={o.handle} position={Position.Right} class="jack out t-{o.type}" style="right: -10px" />
+            </div>
+          {/each}
+        </div>
       </div>
     {/if}
     {#if data.knobs.length || data.hidden || graph.opened(id)}
       <div class="knobs">
         {#each data.knobs as k (k.id)}
           <div class="kw">
-            <PatchKnob knob={k} onturn={(v) => turn(k, v)} ontap={() => graph.openKnob(id, k.channels ? `${k.id}.0` : k.id)} />
+            <PatchKnob knob={k} onturn={(v) => turn(k, v)} ontap={() => graph.openKnob(id, k.id)} onfine={(f) => graph.fine(f && { ...f, node: id, knob: k.id, label: k.label, min: k.min, max: k.max, kind: k.kind })} />
             <Handle type="target" id={knobHandle(k.id)} position={Position.Bottom} class="jack in-mod t-value" style={knobJack} />
-            {#if k.next}<Handle type="target" id={knobHandle(nextPort(k.id))} position={Position.Left} class="jack in-mod t-trigger next" style="top: 6px; left: 2px" />{/if}
-            {#if k.gain}<Handle type="target" id={knobHandle(gainPort(k.id))} position={Position.Right} class="jack in-mod t-value next" style="top: 6px; right: 2px" />{/if}
+            {#if k.next}<Handle type="target" id={knobHandle(nextPort(k.id))} position={Position.Left} class={['jack in-mod t-trigger next', !k.nextOn && 'quiet']} style="top: 6px; left: 2px" />{/if}
+            {#if k.gain}<Handle type="target" id={knobHandle(gainPort(k.id))} position={Position.Right} class={['jack in-mod t-value next', !k.gainOn && 'quiet']} style="top: 6px; right: 2px" />{/if}
             {#if k.channels}
               <button class="poly nodrag" aria-label="{k.label}: each band" title="Each band" onclick={() => graph.toggle(pair(k))}>{k.channels.length}</button>
             {:else if polyOf(k) && graph.opened(pair(k)) && k.id.endsWith('.0')}
@@ -127,35 +132,9 @@
         {/if}
       </div>
     {/if}
-    {#if data.outs.length}
-      <div class="outs">
-        {#each data.outs as o (o.id)}
-          <div class="jack">
-            <i class="light t-{o.type}" style:--lit={lights?.[o.id] ?? 0}></i><span class="jl">{o.label}</span>
-            <Handle type="source" id={o.handle} position={Position.Top} isConnectable={o.connectable || o.handle === MOD_OUT} class="jack out t-{o.type}" />
-          </div>
-        {/each}
-      </div>
-    {/if}
     {#if data.face && data.face.kind !== 'clock'}<PatchFace {id} face={data.face} />{/if}
-    {#if data.in}<Handle type="target" id="in" position={SIDE[data.in]} isConnectable={!!data.v2} class="jack pic t-picture" style={at(data.in)} />{/if}
-    {#if data.out}<Handle type="source" id="out" position={SIDE[data.out]} isConnectable={!!data.v2} class="jack pic t-picture" style={at(data.out)} />{/if}
-    {#if data.feedback}<Handle type="source" id="fb" position={SIDE[data.fbSide ?? 'bottom']} isConnectable={false} class="jack fb t-picture" />{/if}
-    {#if data.feedbackIn}<Handle type="target" id="fbin" position={SIDE[data.fbSide ?? 'bottom']} isConnectable={false} class="jack fb t-picture" />{/if}
     <Handle type="target" id={FAR_IN} position={farIn} isConnectable={false} class="jack farh" />
     <Handle type="source" id={FAR_OUT} position={farOut} isConnectable={false} class="jack farh" />
-    {#if data.modulator && !data.outs.length}
-      <Handle type="source" id={MOD_OUT} position={Position.Top} class="jack out t-{data.gives?.type ?? 'value'}" />
-    {/if}
-  </div>
-{:else}
-  <div class="node mark" style:--room={data.room ? `${data.room}px` : null} class:sel={selected}>
-    <span class="t">{data.label}</span>
-    <span class="sum only"><b>{data.label}</b></span>
-    <Handle type="target" id={FAR_IN} position={farIn} isConnectable={false} class="jack farh" />
-    <Handle type="source" id={FAR_OUT} position={farOut} isConnectable={false} class="jack farh" />
-    <Handle type="target" id="in" position={SIDE[data.in]} isConnectable={false} class="jack pic t-picture" />
-    {#if data.out}<Handle type="source" id="out" position={SIDE[data.out]} isConnectable={false} class="jack pic t-picture" />{/if}
   </div>
 {/if}
 
@@ -207,36 +186,8 @@
     background: linear-gradient(var(--node-bg), var(--node-bg)), var(--patch-bg);
     border-color: color-mix(in srgb, var(--patch-mod) 35%, var(--border));
   }
-  .node.mark {
-    min-width: 0;
-    padding: 8px 12px;
-  }
-  /* A layer that is off: one faint row. */
-  .node.off {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-    min-width: 0;
-    padding: 8px 12px;
-    border-style: dashed;
-    background: none;
-    color: var(--muted);
-  }
-  .back,
-  .node.add {
-    color: var(--muted);
-    font-size: 12.5px;
-  }
-  .back:hover,
-  .node.add:hover,
   .plus:hover {
     color: var(--text);
-  }
-  .node.add {
-    min-width: 0;
-    padding: 6px 12px;
-    border-style: dashed;
-    background: none;
   }
   .plus {
     margin-left: 6px;
@@ -268,16 +219,32 @@
     color: var(--muted);
     font-weight: 400;
   }
-  .ports {
+  /* Its jacks: inputs down the left, outputs down the right, each with its name. */
+  .io {
+    display: grid;
+    grid-template-columns: auto auto;
+    justify-content: space-between;
+    column-gap: 16px;
     margin-top: 6px;
+  }
+  .ins,
+  .outs {
     display: grid;
     gap: 2px;
+    align-content: start;
   }
   .port {
     position: relative;
     height: 18px;
     font-size: 11.5px;
     color: var(--muted);
+    white-space: nowrap;
+  }
+  .port.out {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+    justify-content: flex-end;
   }
   .port.cabled {
     color: var(--text);
@@ -286,7 +253,9 @@
     display: flex;
     flex-wrap: wrap;
     max-width: calc(6 * 44px);
-    gap: 6px 0;
+    /* Room under each knob for its jack, clear of the row below. */
+    gap: 16px 0;
+    padding-bottom: 8px;
     margin-top: 8px;
     align-items: flex-start;
   }
@@ -347,6 +316,14 @@
   .node :global(.jack.t-points) {
     --jack-ring: var(--wire-points);
   }
+  /* A flow's jack: its ring doubled (the wire's double line), so a field's socket is told from a value's. */
+  .node :global(.jack.t-flow) {
+    --jack-ring: var(--wire-flow);
+    box-shadow:
+      inset 0 0 0 1.5px var(--jack-ring),
+      inset 0 0 0 2.5px var(--jack-hole, #0b0c0f),
+      inset 0 0 0 3.5px var(--jack-ring);
+  }
   .node :global(.jack.t-trigger) {
     background: none;
     box-shadow: none;
@@ -367,44 +344,28 @@
   .node :global(.jack.connectingto) {
     box-shadow: inset 0 0 0 3px var(--jack-ring);
   }
-  .outs {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px 2px;
-    max-width: calc(6 * 44px);
-    margin-top: 10px;
+  /* A step knob's diamond and a level knob's gain dot with nothing in them: shown only on the node in focus (hovered or
+     selected), or while a cable is being drawn onto it. */
+  .node :global(.jack.quiet) {
+    opacity: 0;
+    transition: opacity 0.12s;
   }
-  .jack {
-    position: relative;
-    display: grid;
-    justify-items: center;
-    gap: 2px;
-    min-width: 26px;
-    max-width: 44px;
-    padding-top: 6px;
-    font-size: 11px;
-    color: var(--muted);
+  .node:hover :global(.jack.quiet),
+  .node.sel :global(.jack.quiet),
+  .node :global(.jack.quiet.connectingto) {
+    opacity: 1;
   }
-  .jl {
-    max-width: 44px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+  /* The Clock's lights, beside its outputs' names. */
   .light {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: color-mix(in srgb, var(--wire-value) 25%, transparent);
-  }
-  .light.t-trigger {
     background: color-mix(in srgb, var(--wire-trigger) calc(18% + 82% * var(--lit, 0)), transparent);
     box-shadow: 0 0 calc(6px * var(--lit, 0)) var(--wire-trigger);
   }
   /* Text that would be under 11 px on screen is not drawn (PatchGraph's .small: zoomed under 1). Far out (.far: so far
      that a title would be), a node is its name and how much of it is cabled, over it at 11 px or more. */
-  :global(.small) .node .port,
-  :global(.small) .node .jl,
+  :global(.small) .node .pl,
   :global(.small) .node .poly,
   :global(.small) .node .more,
   :global(.small) .node :global(.knob span) {
@@ -454,14 +415,8 @@
   .sum > .n {
     flex: 1 1 0px;
   }
-  .sum.only {
-    color: var(--text);
-    font-weight: 600;
-  }
-  /* Far out the boxes' names give way to the chips; a row's or a mark's own text to its one line. */
-  :global(.far) .bl,
-  :global(.far) .node.add,
-  :global(.far) .node.off .back {
+  /* Far out the frames' names give way to the chips. */
+  :global(.far) .bl {
     visibility: hidden;
   }
   /* The far sockets: only far out, over the node's edge, above its name. */
@@ -509,8 +464,9 @@
   .pin:hover {
     opacity: 1;
   }
-  .title,
-  .t {
+  /* At 100% a node is as wide as its title needs; only far out (its one line over it) does a name end in "…". */
+  :global(.far) .node .title,
+  :global(.far) .node .t {
     min-width: 0;
     max-width: 100%;
     overflow: hidden;

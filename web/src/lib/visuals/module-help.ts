@@ -57,6 +57,7 @@ export const moduleHelp: Record<string, string> = {
   mask: 'The picture let through only where another is bright.',
   displace: 'The picture pushed about by another.',
   threshold: 'Only the picture’s bright parts, the rest black: a luma key.',
+  lens: 'Points, light or a picture through a lens: a warp (Spherical, Swirl …) or a shape (Heart, Cratarr, Star …).',
   adsr: 'An ADSR envelope on each gate or trigger, one a channel.',
   sequencer: 'A step sequencer: up to sixteen values, one a clock step.',
   shaper: 'A value through a curve, as a curved cable shapes it.',
@@ -261,6 +262,13 @@ export const portHelp: Record<string, Record<string, string>> = {
   mask: { amount: 'How strongly it masks.', invert: 'Let through where the other is dark instead.', by: 'The picture that decides where.' },
   displace: { amount: 'How far it pushes.', scale: 'How fine the pushing is.', mode: 'By the other’s brightness, or by its red and green.', by: 'The picture that pushes.' },
   threshold: { threshold: 'The brightness under which it goes black.', softness: 'How soft the edge is.' },
+  lens: {
+    in: 'Points, light or a picture to send through the lens; out the same.',
+    kind: 'Which lens: a warp of the whole, or a shape the points are sent into.',
+    amount: 'How much of the lens: none at 0.',
+    sides: 'Polygon’s and Star’s sides.',
+    depth: 'Star’s depth: 0 a polygon.',
+  },
   compressor: {
     in: 'The signal it compresses.',
     key: 'The sidechain: the signal whose level sets how far it compresses.',

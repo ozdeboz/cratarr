@@ -1,8 +1,10 @@
 <script lang="ts">
   // Jump chips over the graph (inside PatchGraph's SvelteFlow): "All" fits the whole patch; each of the picture lane's
   // parts (a layer, the loop, a device opened in place, a module of the picture's own) zooms to it. Svelte Flow's own
-  // fitView does the moving.
+  // fitView does the moving, never below the zoom where modules show whole (FULL_ZOOM): "All" centres the patch there
+  // when it is bigger than the view.
   import { useSvelteFlow, type FitViewOptions } from '@xyflow/svelte';
+  import { FULL_ZOOM } from './patchgraph';
 
   let { parts, padding, onjump }: { parts: { id: string; label: string }[]; padding: FitViewOptions['padding']; onjump?: () => void } = $props();
   const flow = useSvelteFlow();
@@ -25,7 +27,7 @@
 
   function jump(id: string | null) {
     onjump?.();
-    void flow.fitView({ padding, duration: 250, ...(id ? { nodes: [{ id }], maxZoom: 1.4 } : {}) });
+    void flow.fitView({ padding, duration: 250, minZoom: FULL_ZOOM, maxZoom: id ? 1.4 : FULL_ZOOM, ...(id ? { nodes: [{ id }] } : {}) });
   }
 </script>
 
