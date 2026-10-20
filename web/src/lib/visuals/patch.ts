@@ -95,6 +95,9 @@ export type FrameInfo = {
   signals: (ref: SignalRef) => number;
   /** The sound's recent samples (−1..1), where there are any (the page's own player, or the app's: 0056 step 5). */
   waveform: Float32Array | null;
+  /** The drawing module's typed inputs this frame by port (0057 §1), where the compositor passes them: an `audio` port's
+   *  samples. */
+  inputs?: Readonly<Record<string, Float32Array | null>>;
 };
 
 /** A module that draws or changes a picture (step 4): into `out`, from `input` (the picture before it; none for a

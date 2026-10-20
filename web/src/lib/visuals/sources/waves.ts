@@ -1,36 +1,50 @@
 // The Waves source (decision 0056, step 4): MilkDrop's kind of wave, written anew. The sound's recent samples drawn as
 // a line, or where there are none (no live sound) a wave made of the bands' levels. Line, circle and radial are knobs
-// mixed point by point, never a switch. Nothing at the width's neutral, or the opacity's.
+// mixed point by point, never a switch. Nothing at the width's neutral, or the opacity's. The sound comes in by its
+// `audio` port (0057 §1), normalled from Music's.
 import type { FrameInfo, ModuleType, PictureModule } from '../patch';
+import type { Ports } from '../ports';
 import { BANDS, SEGMENT_FLOATS, TAU, WAVE_POINTS, closeSeam, hsv, resample, smooth, synthWave, waveSegments } from './geometry';
 import { Mesh, QUAD, done, program, target } from './gl';
 import { knob, values } from './knob';
 
-export const WAVES: ModuleType = {
+const KNOBS = [
+  knob('width', 'Width', 0, 0.05, 0.006, 'level'),
+  knob('opacity', 'Opacity', 0, 1, 0.9, 'level'),
+  knob('amplitude', 'Height', 0, 1, 0.35),
+  knob('circle', 'Circle', 0, 1, 0),
+  knob('radial', 'Radial', 0, 1, 0),
+  knob('radius', 'Radius', 0, 1, 0.45),
+  knob('length', 'Length', 0, 1, 1),
+  knob('x', 'Across', -1, 1, 0),
+  knob('y', 'Up', -1, 1, 0),
+  knob('rotation', 'Rotation', 0, 1, 0),
+  knob('spin', 'Spin', -1, 1, 0),
+  knob('smoothing', 'Smoothing', 0, 1, 0.3),
+  knob('hue', 'Hue', 0, 1, 0.5),
+  knob('hueSpread', 'Hue along', 0, 1, 0),
+  knob('saturation', 'Saturation', 0, 1, 0.6),
+  // How it meets the picture under it (compose.ts, at the blend), as the Shapes'.
+  knob('tint', 'Flame colours', 0, 1, 0.7),
+  knob('glow', 'Glow', 0, 1, 0.4),
+];
+
+export const WAVES: ModuleType & { ports: Ports } = {
   type: 'waves',
   label: 'Waves',
   place: 'source',
-  knobs: [
-    knob('width', 'Width', 0, 0.05, 0.006, 'level'),
-    knob('opacity', 'Opacity', 0, 1, 0.9, 'level'),
-    knob('amplitude', 'Height', 0, 1, 0.35),
-    knob('circle', 'Circle', 0, 1, 0),
-    knob('radial', 'Radial', 0, 1, 0),
-    knob('radius', 'Radius', 0, 1, 0.45),
-    knob('length', 'Length', 0, 1, 1),
-    knob('x', 'Across', -1, 1, 0),
-    knob('y', 'Up', -1, 1, 0),
-    knob('rotation', 'Rotation', 0, 1, 0),
-    knob('spin', 'Spin', -1, 1, 0),
-    knob('smoothing', 'Smoothing', 0, 1, 0.3),
-    knob('hue', 'Hue', 0, 1, 0.5),
-    knob('hueSpread', 'Hue along', 0, 1, 0),
-    knob('saturation', 'Saturation', 0, 1, 0.6),
-    // How it meets the picture under it (compose.ts, at the blend), as the Shapes'.
-    knob('tint', 'Flame colours', 0, 1, 0.7),
-    knob('glow', 'Glow', 0, 1, 0.4),
-  ],
+  knobs: KNOBS,
+  ports: {
+    in: [{ id: 'audio', label: 'Sound', type: 'audio', normal: { module: 'music', port: 'audio' } }, ...KNOBS.map((k) => ({ id: k.id, label: k.label, type: 'value' as const }))],
+    out: [{ id: 'picture', label: 'Picture', type: 'picture' }],
+  },
 };
+
+/** The sound a frame gives Waves: its `audio` input's samples, else the frame's own (where nothing passes inputs). */
+export function soundOf(frame: Pick<FrameInfo, 'inputs' | 'waveform'>): Float32Array | null {
+  const v = frame.inputs?.audio ?? frame.waveform;
+  return v && v.length >= 2 ? v : null;
+}
 
 const VERTEX = `#version 300 es
 layout(location = 0) in vec4 aSegment;
@@ -95,7 +109,8 @@ export class Waves implements PictureModule {
     target(gl, out, width, height);
     if (k.width <= 0 || k.opacity <= 0) return;
     const v = this.samples;
-    if (frame.waveform && frame.waveform.length >= 2) resample(frame.waveform, v);
+    const sound = soundOf(frame);
+    if (sound) resample(sound, v);
     else {
       for (let b = 0; b < BANDS; b++) this.levels[b] = frame.signals({ signal: 'level', band: b });
       synthWave(this.levels, frame.time, v);

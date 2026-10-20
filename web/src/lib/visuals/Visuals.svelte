@@ -86,6 +86,9 @@
   import type { Cable, Knob, Module, PatchExtra, SignalRef } from './patch';
   import { ENGINE_TYPES, EXTRA_TYPES, extraType, PICTURE_LOOP_TYPES } from './registry';
   import PatchGraph from './PatchGraph.svelte';
+  import { withModulator, type PickRequest } from './patchgraph';
+  import { LiveFaces } from './faces.svelte';
+  import { helpFor } from './module-help';
   import { BLENDS, cratarrPatch, cratarrTypes, modulesOf, type ModuleType } from './patch';
   import { SOURCE_TYPES } from './sources/index';
   import { MODULATORS } from './modulators/modulators';
@@ -864,9 +867,20 @@
     const id = newId(pick.newModulator);
     return { from: { modulator: id }, cables: { ...cs, extra: { ...cs.extra, modulators: [...cs.extra.modulators, freshModule(pick.newModulator, id)] } } };
   }
-  // "+ Add" on a knob's page: a cable from the picked source at half, opened.
+  // "+ Add" on a knob's page: a cable from the picked source at half, opened. A new modulator comes synced to the Clock
+  // (patchgraph.ts withModulator: its trigger inputs cabled from the beat), where a drag in the graph let go of it.
   function addCable(mk: string, pick: Source) {
     const [mid, kid] = splitKnob(mk);
+    if ('newModulator' in pick && extraType(pick.newModulator)) {
+      const id = newId(pick.newModulator);
+      const made = withModulator(cablesNow(), freshModule(pick.newModulator, id), extraType(pick.newModulator)!, { module: mid, knob: kid }, kindOf({ module: mid, knob: kid }));
+      if (pickedAt) graphMove(id, pickedAt.x, pickedAt.y);
+      pickedAt = null;
+      setCables(made.cables);
+      path = [...path.slice(0, -1), `cable:${made.cable.id}`];
+      return;
+    }
+    pickedAt = null;
     const made = sourceFrom(pick, cablesNow());
     const c = newCable(made.from as never, { module: mid, knob: kid }, kindOf({ module: mid, knob: kid }), freeCableId(made.cables));
     const cs = made.cables;
@@ -926,6 +940,14 @@
     return () => removeEventListener('resize', resized);
   });
   const graphShown = $derived(panel && wide && !docked);
+  // The graph's live faces (an ADSR's stage, an LFO's phase, the Clock's beats), fed from the frame loop while it shows.
+  const liveFaces = new LiveFaces();
+  // A cable dragged from a knob into the empty: that knob's source picker, a new module's node where it was let go.
+  let pickedAt: { x: number; y: number } | null = null;
+  function graphPick(r: PickRequest, at: { x: number; y: number }) {
+    pickedAt = at;
+    graphPage(`cableadd:${r.module}.${r.knob}`);
+  }
   function graphConnect(from: Cable['from'], to: Cable['to']) {
     const aspect = ASPECT_OF.get(`${to.module}.${to.knob}`);
     if ('signal' in from && aspect && !from.reference && !from.speed) {
@@ -981,6 +1003,29 @@
     cell = null;
     panelBox?.scrollTo(0, 0);
     showChrome();
+  }
+  // The graph's cables and adds (claude-632's PatchGraph, after 70): a cable's page, a knob's What moves, removing,
+  // a dragged end (rerouteCable), the "+"s as the panel's own adds.
+  const graphPage = (page: string) => {
+    path = [page];
+    cell = null;
+    panelBox?.scrollTo(0, 0);
+    showChrome();
+  };
+  function graphRemove(ids: string[]) {
+    const cables = ids.filter((id) => patchNow.cables.some((c) => c.id === id));
+    if (cables.length) setCables(removeCables(cablesNow(), cables));
+    path = path.filter((p) => !cables.some((id) => p === `cable:${id}`));
+    for (const id of ids) {
+      if (id === 'flame') set('flameLayer', 0);
+      else if (!cables.includes(id) && extraModule(id)) removeExtra(id);
+    }
+  }
+  function graphAdd(where: 'layer' | 'loop' | 'modulators' | string, type: string) {
+    if (where === 'layer' && type === 'flame') return (set('flameLayer', 1), graphPage('layer:flame'));
+    path = [where === 'layer' ? 'newlayer' : where === 'loop' ? 'newloop' : where === 'modulators' ? 'newmodulator' : `newmodule:${where}`];
+    if (where === 'layer') addLayer(type);
+    else addTo(where, type);
   }
 
   // A page's name in the breadcrumb.
@@ -1833,6 +1878,7 @@
         evaluated = p.layers.length > 1 || p.loop.length || p.modulators.length ? evaluate(p, GRAPH_TYPES, read, evalState, dt, { envelope: d.lit, frame: { beat: m.beat }, walk: cableWalk }) : null;
         // A step its cables move on: taken at its module's next neutral.
         for (const r of evaluated?.moments ?? []) askStep(morph, r.module, r.knob, GRAPH_TYPES);
+        if (graphShown) liveFaces.offer(now, () => ({ time: now / 1000, beat: m.beat, outputs: evaluated?.outputs ?? {} }));
         const flameTo = s.flameLayer ?? 1;
         flameShown = flameTo > flameShown ? Math.min(flameTo, flameShown + dt / (ANOTHER_MS / 1000)) : Math.max(flameTo, flameShown - dt / (ANOTHER_MS / 1000));
         extras = { extra, knobsOf, frame: { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null }, flame: flameShown, flameTo: s.flameLayer ?? 1 };
@@ -2195,6 +2241,19 @@
             onknob={graphKnob}
             onmove={graphMove}
             onopen={graphOpen}
+            addTypes={EXTRA_TYPES}
+            removable={(id) => id === 'flame' || !!extraModule(id)}
+            canAddTo={(where) => where === 'loop' || s.extra.layers.some((l) => l.id === where)}
+            onopencable={(id) => graphPage(`cable:${id}`)}
+            onopenknob={(mid, kid) => graphPage(`moves:${mid}.${kid}`)}
+            onremove={graphRemove}
+            onreroute={(id, end, next) => rerouteCable(id, end, next as never)}
+            onaddlayer={(type) => graphAdd('layer', type)}
+            onaddmodule={graphAdd}
+            onaddmodulator={(type) => graphAdd('modulators', type)}
+            onpick={graphPick}
+            live={liveFaces}
+            {helpFor}
           />
         </div>
       {/if}
