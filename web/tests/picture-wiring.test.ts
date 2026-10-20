@@ -98,21 +98,32 @@ test('lazy: the flame’s layer at nothing cuts the flame and its own loop, unle
   assert.ok(live(0, 1).includes('flame'), 'coming back: still gathering');
 });
 
-test('the compose step: its modules, from Show’s picture to what goes on; fused where it is the converted chain’s', async () => {
-  const { composeOf, fused } = await import('../src/lib/visuals/picture-graph.ts');
+test('the compose step: its modules, from Show’s picture to what goes on', async () => {
+  const { composeOf } = await import('../src/lib/visuals/picture-graph.ts');
   const c = compile(toV2(settings(layered())), types);
   const cs = composeOf(c)!;
   assert.equal(cs.from, 'show/saturate');
   assert.equal(cs.to, 'loop-mix');
   for (const id of ['shapes-source', 'shapes-kaleido', 'window-source', 'layers', 'example-warp', 'example-keep', 'loop-mix', 'loop-feedback']) assert.ok(cs.ids.has(id), id);
   assert.ok(!cs.ids.has('fx1') && !cs.ids.has('show/saturate'));
-  assert.ok(c.order.filter((n) => cs.ids.has(n.id)).every(fused), 'the converted chain is drawn fused');
-  // A Glow on a layer: the walk draws it.
+  // A Glow on a layer: in the compose step.
   const v = toV2(settings(layered()));
   const glowed = { ...v, modules: [...v.modules, { id: 'glow-1', type: 'glow', knobs: { glow: 0.5 } }], cables: v.cables.map((x) => (x.from.module === 'window-source' ? { ...x, from: { module: 'glow-1', port: 'picture' } } : x)).concat({ id: 'g', from: { module: 'window-source', port: 'picture' }, to: { module: 'glow-1', port: 'picture' }, value: 1, mode: 'swing' }) };
   const g = compile(glowed, types);
   assert.deepEqual(g.errors, []);
   const gs = composeOf(g)!;
   assert.ok(gs.ids.has('glow-1'));
-  assert.ok(!g.order.filter((n) => gs.ids.has(n.id)).every(fused));
+});
+
+test('the walk draws the picture’s own loop as one pass: its Feedback, its Warps and Keeps, a Mix keeping the brighter', async () => {
+  const { composeOf } = await import('../src/lib/visuals/picture-graph.ts');
+  const { loopsOf } = await import('../src/lib/visuals/nodes/walker.ts');
+  const v = toV2(settings(layered()));
+  const c = compile(v, types);
+  const ids = composeOf(c)!.ids;
+  const knobs = (id: string) => v.modules.find((m) => m.id === id)?.knobs ?? {};
+  const loops = loopsOf(c.order.filter((n) => ids.has(n.id)), knobs);
+  assert.deepEqual([...loops.entries()], [['loop-mix', { feedback: 'loop-feedback', chain: [{ id: 'example-warp', type: 'warp' }, { id: 'example-keep', type: 'keep' }] }]]);
+  // Not lightened: drawn module by module.
+  assert.equal(loopsOf(c.order.filter((n) => ids.has(n.id)), (id) => (id === 'loop-mix' ? { ...knobs(id), mode2: 0 } : knobs(id))).size, 0);
 });

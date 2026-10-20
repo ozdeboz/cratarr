@@ -58,13 +58,10 @@ const driver = (r: Made, draw: Driver['draw'], meter: Driver['meter']): Driver =
   dispose: () => r.dispose(),
 });
 
-/** Today's renderer; `generic`: its compose step always the graph's own walk (nodes/walker.ts), not the fused one. */
-const today =
-  (generic: boolean) =>
-  async (canvas: HTMLCanvasElement, points: number, options: RendererOptions): Promise<Driver> => {
+/** Today's renderer. */
+const today = async (canvas: HTMLCanvasElement, points: number, options: RendererOptions): Promise<Driver> => {
     const [{ FlameRenderer }, { v2Types }, { toV2 }, { cratarrTypes }, { DEFAULTS, RANGES }] = await Promise.all([import('./render'), import('./picture-graph'), import('./v2'), import('./patch'), import('./settings.svelte')]);
     const r = new FlameRenderer(canvas, points, 'high-performance', options);
-    r.generic = generic;
     const types = v2Types(cratarrTypes(RANGES, DEFAULTS));
     let patched = '';
     return driver(r, (f, all) => {
@@ -78,7 +75,7 @@ const today =
         if (r.errors.length) throw new Error(r.errors.join(' '));
         patched = ids.join();
       }
-      if (f.pruned) r.prune(f.pruned);
+      if (f.pruned) r.prune();
       const c = f.compose;
       r.frame(f.passes, chainOfShown(lookOf(f.look)), f.w, f.h, c ? { extra: c.extra, knobsOf: (m) => c.knobs[m.id] ?? m.knobs, frame: frameOf(c), flame: c.flame, flameTo: c.flameTo } : null);
     }, (stats) => {
@@ -88,11 +85,10 @@ const today =
   };
 
 /** The pipelines a replay can run: today's renderer (`current`: the patch's picture side as a graph, the nodes'
- *  values, its own compose step; `generic`: that step the graph's own walk) and the frozen copies every step is
- *  compared with (`legacy`: render-legacy.ts and compose-legacy.ts, the look as one, the compose step as a hook). */
+ *  values, its compose step the graph's own walk) and the frozen copies every step is compared with (`legacy`:
+ *  render-legacy.ts and compose-legacy.ts, the look as one, the compose step as a hook). */
 const PIPELINES: Record<string, (canvas: HTMLCanvasElement, points: number, options: RendererOptions) => Promise<Driver>> = {
-  current: today(false),
-  generic: today(true),
+  current: today,
   legacy: async (canvas, points, options) => {
     const [{ FlameRenderer }, { Compositor }] = await Promise.all([import('./render-legacy'), import('./compose-legacy')]);
     const r = new FlameRenderer(canvas, points, 'high-performance', options);
@@ -109,8 +105,12 @@ const PIPELINES: Record<string, (canvas: HTMLCanvasElement, points: number, opti
       prepare(r, canvas, f);
       if (f.pruned) compositor.prune(f.pruned);
       const c = f.compose;
-      const knobsOf = (m: Module) => c?.knobs[m.id] ?? m.knobs;
-      r.compose = c ? { active: true, run: (picture, width, height) => compositor.run(picture, width, height, c.extra, knobsOf, frameOf(c), c.flame) } : null;
+      // A layer's Glow and Tint modules as the frozen one had them: its source's own knobs, at the blend.
+      const own = new Map<string, Record<string, number>>();
+      for (const l of c?.extra.layers ?? [])
+        for (const m of l.modules) if (m.type === 'glow' || m.type === 'tint') own.set(l.source.id, { ...own.get(l.source.id), [m.type]: (c!.knobs[m.id] ?? m.knobs)[m.type] ?? 0 });
+      const knobsOf = (m: Module) => ({ ...(c?.knobs[m.id] ?? m.knobs), ...own.get(m.id) });
+      r.compose = c && Compositor.active(c.extra, knobsOf, c.flame) ? { active: true, run: (picture, width, height) => compositor.run(picture, width, height, c.extra, knobsOf, frameOf(c), c.flame) } : null;
       r.frame(f.passes, lookOf(f.look), f.w, f.h);
     }, (stats) => {
       meters.add({ ...stats, tiles: unread.splice(0) });
@@ -298,6 +298,17 @@ async function replay(name: string, a: string, b: string, bits: 0 | 8 | 16 | 32,
     return { name: key, canvas, renderer, tiles: [], pixels: new Uint8Array(0), digest: 0x811c9dc5 };
   };
   const sides = [await make(a, SEED), await make(b, seedB)];
+  // Each side's passes (its full-screen draws: the points' are not counted) over the frames.
+  const passes = sides.map((s) => {
+    const gl = s.renderer.context;
+    const count = { n: 0 };
+    const draw = gl.drawArrays.bind(gl);
+    gl.drawArrays = (mode, first, n) => {
+      if (mode === gl.TRIANGLES) count.n++;
+      draw(mode, first, n);
+    };
+    return count;
+  });
   const perFrame: number[] = [];
   let worst = 0;
   let worstAt = -1;
@@ -376,6 +387,8 @@ async function replay(name: string, a: string, b: string, bits: 0 | 8 | 16 | 32,
     tiles: { a: sides[0].tiles.length, b: sides[1].tiles.length, matched: tilesMatched, max: tilesWorst },
     /** The meters' largest difference over the frames (each value in its own units). */
     meters: metersWorst,
+    /** Each side's passes a frame, on average. */
+    passes: passes.map((c) => c.n / rec.frames.length),
     gpu: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : '?',
     seconds: (performance.now() - started) / 1000,
   };

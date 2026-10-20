@@ -5,8 +5,8 @@
 //   after every reader of what it held), refusing a cycle not through a Feedback and, in this version, any light but
 //   one flame's own loop.
 // - `plan` (each frame): the lazy rules. A Mix input at amount 0 is cut with what feeds only it; a module at rest
-//   passes its picture on (an alias); a Mix of one picture over or added at 1 is that picture; one coming back (its
-//   morph's target above neutral) keeps running. Then each live output's readers.
+//   passes its picture on (an alias); a Mix of one picture over, added or lightened at 1 is that picture; one coming
+//   back (its morph's target above neutral) keeps running. Then each live output's readers.
 // - `walk` (each frame): the plan drawn with targets from a `Pool` by size and format, each given back once its last
 //   reader has drawn; a Feedback adopts its input's target rather than copying it.
 // Devices are opened first (v2.ts `flatten`): they cost nothing. A polymorphic port takes light or a picture, its
@@ -14,9 +14,7 @@
 import { ENGINE_MODULES, GRAPH_MODULES, LIGHT_CARRIERS, MIX_MODES, PICTURE_MODULES, portsOf, showPartTypes, SHOW_PARTS, type Port, type PatchV2, type PortRef, type Ports, type PortType } from './ports';
 import { effectOf } from './effects';
 import type { ModuleType } from './patch';
-import { ENGINE_TYPES, EXTRA_TYPES } from './registry';
-import { SOURCE_TYPES } from './sources/index';
-import { FLUID_LOOP } from './fluid-loop';
+import { EXTRA_TYPES } from './registry';
 import { flatten } from './v2';
 // A converted patch's picture side (v2.ts's hook).
 import './picture-wiring';
@@ -311,7 +309,7 @@ export type Plan = {
 };
 
 const NEVER_LAZY = new Set(['screen', 'feedback']);
-const MIX_ALIASED = new Set<number>([MIX_MODES.indexOf('over'), MIX_MODES.indexOf('add')]);
+const MIX_ALIASED = new Set<number>([MIX_MODES.indexOf('over'), MIX_MODES.indexOf('add'), MIX_MODES.indexOf('lighten')]);
 
 /** This frame's drawing of `c` under the lazy rules. */
 export function plan(c: Compiled, rules: FrameRules): Plan {
@@ -504,11 +502,6 @@ export function walk<T>(p: Plan, pool: Pool<T>, io: WalkIO<T>, state: WalkState<
 
 /** The converted chain's compose modules, drawn fused (compose.ts): the layers' sources, modules and engines, the
  *  picture loop's Warp, Keep and modules, the layers' Mix, the loop's Mix and Feedback. */
-/** The modules compose.ts runs on a layer or in the loop (its MODULE_MAKERS'). */
-const FUSED_MODULES: ReadonlySet<string> = new Set([FLUID_LOOP.type, ...ENGINE_TYPES.map((t) => t.type)]);
-export const fused = (n: PictureNode) =>
-  SOURCE_TYPES.some((t) => t.type === n.type) || FUSED_MODULES.has(n.type) || n.type === 'warp' || n.type === 'keep' || (n.type === 'mix' && (n.id === 'layers' || n.id === 'loop-mix')) || (n.type === 'feedback' && n.id === 'loop-feedback');
-
 /** The compose step's modules (with its loops' Feedbacks), the module whose picture it starts from (Show's), and the
  *  one it gives on (into the effects or the screen); none where it has none. */
 export function composeOf(c: Compiled): { ids: Set<string>; from: string; to: string } | null {
