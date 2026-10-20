@@ -111,6 +111,9 @@
   span.w-audio {
     color: var(--wire-audio);
   }
+  span.w-flow {
+    color: var(--wire-flow);
+  }
   span.selected {
     color: var(--text);
   }

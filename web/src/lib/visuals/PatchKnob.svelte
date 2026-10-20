@@ -4,9 +4,41 @@
   // the arrow keys; a step knob by whole steps. Tapped without turning, `ontap` (what moves it). Drawn at true size; the
   // cable handle is the node's, under it. A polyphonic knob (a band's six, `knob.channels`) is one dial at their mean
   // with a tick at each channel's value.
-  import { turned, type KnobView } from './patchgraph';
+  //
+  // Held (a long press; a mouse's right click, lib/longpress) it is fine-adjusted, as the player's waveform lens is
+  // scrubbed: sideways sets it, slower the further the finger has gone up (patchgraph.ts fineSpeed, fineStep); the
+  // graph shows the lens (`onfine`); let go and it closes. The value goes out through `onturn` as it moves (the store
+  // keeps a knob's turns as one step).
+  import { longpress } from '../longpress';
+  import { fineSpeed, fineStep, turned, type KnobView } from './patchgraph';
 
-  let { knob, size = 26, onturn, ontap }: { knob: KnobView; size?: number; onturn: (value: number) => void; ontap?: () => void } = $props();
+  let {
+    knob,
+    size = 26,
+    onturn,
+    ontap,
+    onfine,
+  }: { knob: KnobView; size?: number; onturn: (value: number) => void; ontap?: () => void; onfine?: (f: { value: number; speed: number; at: { x: number; y: number } } | null) => void } = $props();
+  // Where the pointer was last, and the fine adjust under way (its unrounded value, its last x, where it was held).
+  let last = { x: 0, y: 0 };
+  let fine: { raw: number; x: number; y0: number } | null = null;
+  function startFine(at: { x: number; y: number }) {
+    fine = { raw: knob.value, x: at.x, y0: at.y };
+    onfine?.({ value: knob.value, speed: 1, at: { x: at.x, y: at.y } });
+  }
+  function moveFine(e: PointerEvent) {
+    if (!fine) return;
+    const speed = fineSpeed(fine.y0 - e.clientY);
+    const next = fineStep(knob, fine.raw, e.clientX - fine.x, speed);
+    fine.raw = next.raw;
+    fine.x = e.clientX;
+    if (next.value !== knob.value) onturn(next.value);
+    onfine?.({ value: next.value, speed, at: { x: e.clientX, y: fine.y0 } });
+  }
+  function endFine() {
+    fine = null;
+    onfine?.(null);
+  }
 
   const A0 = 0.75 * Math.PI;
   const SWEEP = 1.5 * Math.PI;
@@ -23,21 +55,32 @@
   const shown = $derived(knob.kind === 'step' ? String(Math.round(knob.value)) : Math.abs(knob.value) >= 10 ? knob.value.toFixed(0) : knob.value.toFixed(2));
 
   function down(e: PointerEvent) {
+    last = { x: e.clientX, y: e.clientY };
     if (e.button !== 0) return;
     e.stopPropagation();
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
     drag = { y: e.clientY, value: knob.value, moved: false };
   }
   function move(e: PointerEvent) {
+    last = { x: e.clientX, y: e.clientY };
+    if (fine) return moveFine(e);
     if (!drag) return;
     if (Math.abs(drag.y - e.clientY) > 4) drag.moved = true;
     const v = turned(knob, drag.value, drag.y - e.clientY);
     if (v !== knob.value) onturn(v);
   }
   function up(e: PointerEvent) {
-    const tap = drag && !drag.moved && e.type === 'pointerup';
+    const tap = drag && !drag.moved && e.type === 'pointerup' && !fine;
     drag = null;
+    if (fine) endFine();
     if (tap) ontap?.();
+  }
+  // A mouse's right click (no capture of its own): the window's moves scrub until a click lets go.
+  function windowMove(e: PointerEvent) {
+    if (fine && !drag) moveFine(e);
+  }
+  function windowDown() {
+    if (fine && !drag) endFine();
   }
   const nudge = (dir: number) => {
     const v = turned(knob, knob.value, 0) + (knob.kind === 'step' ? dir : (dir * (knob.max - knob.min)) / 100);
@@ -57,6 +100,7 @@
   }
 </script>
 
+<svelte:window onpointermove={windowMove} onpointerdown={windowDown} />
 <div
   class="knob nodrag nopan nowheel"
   class:turning={drag}
@@ -72,6 +116,11 @@
   onpointercancel={up}
   onwheel={wheel}
   onkeydown={key}
+  oncontextmenu={(e) => e.stopPropagation()}
+  use:longpress={(rect) => {
+    if (drag?.moved) return;
+    startFine(drag ? last : { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+  }}
 >
   <svg width={size} height={size} viewBox="0 0 {size} {size}">
     <path d={arc(0, 1, r - 2)} class="track" />
