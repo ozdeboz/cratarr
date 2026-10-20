@@ -23,12 +23,10 @@ export type Knob = {
   busy?: Busy;
   /** A polyphonic knob (0057 §4b): one value a channel, kept as `<id>.<channel>` among its module's knobs. */
   channels?: number;
-  /** A time (seconds): its gain stretches it (set ÷ gain), as a time CV does (0057 §7e). */
-  time?: boolean;
-  /** Never rolled by Randomize (VCV's randomizeEnabled off): a choice of how, not a value. */
-  randomize?: false;
   /** false: Randomize leaves it (VCV's randomizeEnabled), for a knob that is a choice of how, not a value. */
   randomize?: false;
+  /** A time (seconds): its gain input stretches it (its value ÷ the gain), as a time CV does (0057 §7e). */
+  time?: true;
 };
 
 /** Where a module can sit: a layer's source, a module on a layer (or after the blend), a loop (a layer's own, or the

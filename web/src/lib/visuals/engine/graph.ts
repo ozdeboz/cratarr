@@ -18,6 +18,9 @@ import { SHOW_PARTS, type CableV2, type PatchV2, type PortRef } from '../ports';
 import { A, ASPECTS, B, BAND_SIGNALS, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, type Aspect, type Given } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
 import { newChain, stepChain, type ChainState } from './chain';
+import { newDucker, stepDucker, type DuckerState } from './compressor';
+import { FLASH_GUARD } from './sidechain';
+import type { MeterValues } from '../meters';
 import { NO_STRIKE, adsrOf, newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from './modules';
 
 const NA = ASPECTS.length;
@@ -46,6 +49,14 @@ const MERGE_MODES = ['sum', 'mean', 'max', 'geometric'] as const;
 /** A knob's own inputs beside its value (ports.ts): a level knob's gain, a step knob's trigger to its next step. */
 const GAIN = ':gain';
 const NEXT = ':next';
+/** A Meter's outputs (ports.ts METER, 0057 §3b's kinds), each the measure it is (meters.ts). */
+const METER_OF: Record<string, (m: MeterValues) => number> = {
+  motion: (m) => m.motion,
+  shape: (m) => m.shapeChurn,
+  colour: (m) => m.colourChurn,
+  zoom: (m) => m.zoomPumping,
+  looks: (m) => m.looksPerMinute,
+};
 /** Halved with reduced motion, as the routes read them. */
 const HALVED = new Set(['beat', 'downbeat', 'section']);
 const OPEN: Levers = { swing: 1, pace: 1, evolution: 1, hue: 1, size: 1, gap: 1 };
@@ -76,6 +87,8 @@ export type EngineState = {
   poly: Record<string, Float64Array>;
   /** Each trigger input's last value (`module|knob:next`): it fires as it rises past a half. */
   triggers: Record<string, number>;
+  /** Each Ducker's state, and the Screen's flash guard's. */
+  duckers: Record<string, DuckerState>;
 };
 
 export function newEngine(): EngineState {
@@ -97,6 +110,7 @@ export function newEngine(): EngineState {
     moments: {},
     poly: {},
     triggers: {},
+    duckers: {},
   };
 }
 
@@ -120,6 +134,8 @@ export type EngineOptions = {
   levers?: Levers;
   /** Each walking cable's factor now, by its id (1: as set). */
   walk?: Record<string, number>;
+  /** What the Meter measured of the last frame drawn (meters.ts; the precheck's measure()): the sidechains' keys. */
+  meters?: MeterValues;
 };
 
 /** One frame. `read`: the music's signals on 1 = typical (normal.ts signalsFor), for cables that read them so; `s`: the
@@ -172,8 +188,10 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   const xOf = (c: CableV2): number | null => {
     const f = c.from;
     const type = typeOf.get(f.module) ?? f.module;
-    // A VCA's or a Merge's output, as it is (a Merge's one channel whichever is asked).
-    if (type === 'vca' || type === 'merge') return channelsOf(f.module)[type === 'merge' ? 0 : (f.channel ?? 0)];
+    // A VCA's or a Merge's output, as it is (a Merge's one channel whichever is asked); a Ducker's too.
+    if (type === 'vca' || type === 'merge' || type === 'ducker') return channelsOf(f.module)[type === 'vca' ? (f.channel ?? 0) : 0];
+    if (type === 'meter') return opts.meters ? finite(METER_OF[f.port]?.(opts.meters)) : 0;
+    if (type === 'screen' && f.port === 'guard') return guard;
     if (type === 'adsr') {
       const gate = gateOf.get(f.module);
       // Its strikes read as its gate reads them: as they are (0..), or against the typical (1 = a typical one, halved
@@ -227,6 +245,12 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     return finite(st.values[r.module]);
   };
   const walkOf = (c: CableV2) => (shapeOf(c.value).walks ? finite(opts.walk?.[c.id], 1) : 1);
+  // The Screen's flash guard (WCAG 2.3.1; claude-632's limiter on the output, step 3): fixed, keyed by the flashes the
+  // last frame made, a tenth at most held back; no knob in it.
+  const guard =
+    p.modules.some((x) => x.type === 'screen') && opts.meters
+      ? Math.max(0.1, stepDucker((st.duckers['screen|guard'] ??= newDucker()), 1, Math.max(opts.meters.flash, opts.meters.redFlash), FLASH_GUARD, step).gain)
+      : 1;
   // The VCAs' and Merges' channels this frame (last frame's until each is worked out).
   const poly: Record<string, Float64Array> = {};
   const channelsOf = (id: string) => poly[id] ?? st.poly[id] ?? new Float64Array(CHANNELS);
@@ -236,8 +260,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     const type = typeOf.get(c.from.module) ?? c.from.module;
     const sh = shapeOf(c.value);
     const along = c.from.channel === undefined && c.to.channel === undefined ? { ...c, from: { ...c.from, channel: ch } } : c;
-    if (type === 'vca' || type === 'merge') {
-      const v = channelsOf(c.from.module)[type === 'merge' ? 0 : (c.from.channel ?? ch)];
+    if (type === 'vca' || type === 'merge' || type === 'ducker') {
+      const v = channelsOf(c.from.module)[type === 'vca' ? (c.from.channel ?? ch) : 0];
       return (sh.table ? heightOf(sh, clamp(v, 0, 1)) : sh.end * v) * depthOf(c) * walkOf(c);
     }
     const x = xOf(type === 'music' && BAND_PORTS.has(c.from.port) ? along : c);
@@ -254,6 +278,23 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
    *  1) or a Merge (its channels' sum, mean, largest or geometric mean), channel by channel. */
   function process(x: Module) {
     const out = new Float64Array(CHANNELS);
+    if (x.type === 'ducker') {
+      // A Ducker (compressor.ts): its input (normalled to 1) held down while its key is over its threshold (the
+      // threshold's gain input moving it, as the music's activity does a budget).
+      const k = x.knobs;
+      const knobs = {
+        threshold: finite(k.threshold, 1) * gainOf(x.id, 'threshold'),
+        depth: finite(k.depth, 0),
+        attack: finite(k.attack, 0),
+        hold: finite(k.hold, 0),
+        release: finite(k.release, 1),
+        hysteresis: finite(k.hysteresis, 1),
+      };
+      const input = plugged(x.id, 'in', 0) ? takes(x.id, 'in', 0) : 1;
+      out.fill(stepDucker((st.duckers[x.id] ??= newDucker()), input, takes(x.id, 'key', 0), knobs, step).out);
+      poly[x.id] = out;
+      return;
+    }
     if (x.type === 'vca') {
       const gain = finite(x.knobs.gain, 1);
       for (let ch = 0; ch < CHANNELS; ch++) out[ch] = (plugged(x.id, 'in', ch) ? takes(x.id, 'in', ch) : 1) * clamp(gain + takes(x.id, 'cv', ch), 0, 2);
@@ -323,7 +364,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   // The macros and the modulators, in the order their cables (and a modulator's macros) need.
   const knobs: Record<string, Record<string, number>> = {};
   type Node = { id: string; macro?: Macro; module?: Module };
-  const processors = p.modules.filter((x) => x.type === 'vca' || x.type === 'merge');
+  const processors = p.modules.filter((x) => x.type === 'vca' || x.type === 'merge' || x.type === 'ducker');
   const nodes: Node[] = [...p.macros.map((macro) => ({ id: macro.id, macro })), ...running.map((module) => ({ id: module.id, module })), ...processors.map((module) => ({ id: module.id, module }))];
   const ids = new Set(nodes.map((x) => x.id));
   const needs = new Map<string, Set<string>>(nodes.map((x) => [x.id, new Set<string>()]));
@@ -338,7 +379,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
       continue;
     }
     const x = next.module!;
-    if (x.type === 'vca' || x.type === 'merge') {
+    if (x.type === 'vca' || x.type === 'merge' || x.type === 'ducker') {
       process(x);
       continue;
     }
@@ -351,6 +392,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   for (const id of Object.keys(st.modulators)) if (id in outputs) st.values[id] = outputs[id];
   st.poly = { ...poly };
   for (const [id, v] of Object.entries(poly)) outputs[`${id}.out`] = v[0];
+  outputs['screen.guard'] = guard;
   for (const id of Object.keys(macros)) st.macros[id] = macros[id];
 
   // The chain's columns: what their cables give, by the routes' rules.
@@ -405,11 +447,20 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     if (a === undefined) continue;
     const [module, knob] = base.split('|');
     if (gain && IS_LEVEL[a]) got.level[a] *= gainOf(module, knob);
+    // A swing column's gain scales its modulation (Bitwig's modulation scaling): its cables, a part's own among them.
+    if (gain && !IS_LEVEL[a] && !IS_MOMENT[a]) {
+      const g = gainOf(module, knob);
+      got.whole[a] *= g;
+      for (const own of got.band) own[a] *= g;
+    }
     if (!gain && IS_MOMENT[a]) firedNow[ASPECTS[a]] ||= fired(module, knob) ?? false;
   }
 
-  // The chain's own modules.
-  const clock = stepClock(st.clock, m.bps, m.playing, s.speed, L.pace, opts.still, step);
+  // The chain's own modules, each as its gain inputs hold it (the sidechains' Duckers, 0057 §7e): the Clock's speed
+  // (its pace), the Accent's accent (the flash guard: its swing, and its courses slower), the Flame's evolving times
+  // (a time's gain stretches it). Levers given (today's sidechaining, until the patch has its Duckers) act with them.
+  const held: Levers = { ...L, pace: L.pace * gainOf('clock', 'speed'), swing: L.swing * gainOf('accent', 'accent'), evolution: L.evolution / Math.max(0.01, gainOf('flame', 'evolution')) };
+  const clock = stepClock(st.clock, m.bps, m.playing, s.speed, held.pace, opts.still, step);
   outputs['clock.rate'] = clock;
   const trackInto = (a: Aspect) => {
     let sum = 0;
@@ -422,7 +473,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     s,
     { given: got, track: raw, bands, lit: env.level, envelope: env.out, glow: env.glow, clock, trackWalk: { look: trackInto('look'), behaviour: trackInto('behaviour') }, fired: firedNow },
     step,
-    opts,
+    { ...opts, levers: held },
   );
 
   // Every other module's knobs, as the evaluator moves a knob.
@@ -450,7 +501,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
    *  into a knob not a band's own, the bands' mean and geometric mean). */
   function moved(module: string, k: Knob, base: number, cables: CableV2[]): number {
     if (k.kind === 'step' && fired(module, k.id)) moments.push({ module, knob: k.id });
-    else if (k.kind !== 'step') base *= gainOf(module, k.id);
+    else if (k.kind !== 'step') base = k.time ? base / Math.max(0.01, gainOf(module, k.id)) : base * gainOf(module, k.id);
     if (!cables.length) return clamp(base, k.min, k.max);
     const bandSums = k.kind === 'step' ? new Float64Array(BANDS) : null;
     const ownBand = /\.\d+$/.test(k.id);
