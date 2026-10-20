@@ -341,6 +341,24 @@ set of components, modules of which some are inserted as devices, but they are i
 - In the model a device is a module of type `device` whose `patch` is a v2 patch of its own, plus its exposed ports and
   macros. The engine and the compositor flatten it before running, so it costs nothing.
 
+### 6b. The devices we offer
+
+The owner asked which sets of modules are common and powerful enough to offer as devices, and agreed to nine, from
+the preset study and other modular tools, plus one new standard module, **Threshold** (a luma key: only a picture's
+bright parts). Each sits in the module picker, opens to show its modules, and has a few macros:
+
+| Device | Inside | Macros |
+|---|---|---|
+| Feedback Tunnel | Feedback → Warp → Keep → Mix (lighten) | Zoom, Turn, Trail |
+| Kick | Music's bass hits → Beat gate (above typical) → ADSR | Sensitivity, Punch, Decay |
+| Breather | Loudness → Slow follower | Smoothness, Depth |
+| Wanderer | Random (smooth), clocked to the bars | Speed, Range |
+| Bloom | Blur → Threshold → Mix (add) | Threshold, Size, Strength |
+| Scope | Music's sound → Waves → Glow → Tint | Height, Glow, Colour |
+| Grid Particles | Grid → Instance → Shapes, distance into size | Count, Spacing, Pulse |
+| Echo Trails | Feedback → Echo → Mix (lighten) | Length, Drift |
+| Fractal Spiral | Feedback → Fold (kaleidoscope) → Warp → Keep | Folds, Turn, Depth |
+
 ### 7. One store
 
 - The patch is the truth: kept, shared and saved in snapshots as a v2 patch.
