@@ -309,7 +309,7 @@
       pictureTypes: PICTURE_TYPES,
       onPace: (p) => (fps = p.fps),
       onFrame: (frame) => {
-        if (graphShown || panelShown) liveFaces.offer(performance.now(), () => ({ time: performance.now() / 1000, beat: null, outputs: { ...frame.outputs } }));
+        if (graphShown || panelShown) liveFaces.offer(performance.now(), () => ({ time: performance.now() / 1000, beat: null, outputs: { ...frame.outputs }, points: frame.points }));
       },
       onUnsupported: () => (unsupported = true),
     });
