@@ -5,7 +5,7 @@
 // a store's draft, in place.
 
 import { applyV2, patchAt, type V2Edit } from './patchgraph';
-import type { CableV2, PatchV2, PortRef } from './ports';
+import type { CableV2, Device, PatchV2, PortRef } from './ports';
 import type { ModuleType } from './patch';
 
 export type PanelEdit =
@@ -13,7 +13,8 @@ export type PanelEdit =
   | { kind: 'cable'; scope: string[]; id: string; value?: CableV2['value']; depth?: PortRef | null; channel?: number | null }
   | { kind: 'reroute'; scope: string[]; id: string; end: 'from' | 'to'; to: PortRef }
   | { kind: 'removeModule'; scope: string[]; id: string }
-  | { kind: 'pinOne'; scope: string[]; pin: string; on: boolean };
+  | { kind: 'pinOne'; scope: string[]; pin: string; on: boolean }
+  | { kind: 'addDevice'; scope: string[]; device: Device };
 
 /** The store's key for an edit: a knob's turns, a cable's curve drawn, one undo step each. */
 export function panelKey(e: PanelEdit): string | null {
@@ -24,9 +25,17 @@ export function panelKey(e: PanelEdit): string | null {
 
 /** An edit applied to `p` in place, and `p`. */
 export function applyPanel(p: PatchV2, e: PanelEdit, types?: Record<string, ModuleType>): PatchV2 {
-  if (e.kind !== 'cable' && e.kind !== 'reroute' && e.kind !== 'removeModule' && e.kind !== 'pinOne') return applyV2(p, e, types);
+  if (e.kind !== 'cable' && e.kind !== 'reroute' && e.kind !== 'removeModule' && e.kind !== 'pinOne' && e.kind !== 'addDevice') return applyV2(p, e, types);
   const inside = patchAt(p, e.scope);
   if (!inside) return p;
+  if (e.kind === 'addDevice') {
+    // A copy, its id free at the level (`<device>`, else `<device>-2` …).
+    const taken = new Set(inside.modules.map((m) => m.id));
+    let id = e.device.id;
+    for (let n = 2; taken.has(id); n++) id = `${e.device.id}-${n}`;
+    inside.modules.push({ ...structuredClone(e.device), id });
+    return p;
+  }
   if (e.kind === 'pinOne') {
     inside.pins = inside.pins.filter((x) => x !== e.pin);
     if (e.on) inside.pins.push(e.pin);

@@ -13,7 +13,8 @@
   import { panelKey, type PanelEdit } from './patch-edits';
   import { categoryPin, labelOf, patchAt, typesOf } from './patchgraph';
   import { fits, isDevice, type CableV2, type Device, type PatchV2, type Port, type PortRef } from './ports';
-  import { byCategory, CATEGORIES, CATEGORY_LABEL, portsFrom, type Category } from './rack';
+  import { byCategory, CATEGORIES, CATEGORY_LABEL, deviceCategory, portsFrom, type Category } from './rack';
+  import { DEVICES } from './devices';
   import { RANGES, saveVisualSettings, visualSettings as s } from './settings.svelte';
   import type { Module } from './patch';
   import type { V2Type } from './v2-types';
@@ -371,6 +372,18 @@
     {@const level = levelAt(scope)}
     {#if level}
       <div class="rows">
+        {#each DEVICES.filter((d) => { const ports = portsOf(d); return ports && deviceCategory(ports) === cat; }) as d (d.id)}
+          <button
+            class="go"
+            onclick={() => {
+              const taken = new Set(level.modules.map((m) => m.id));
+              let id = d.id;
+              for (let n = 2; taken.has(id); n++) id = `${d.id}-${n}`;
+              edit({ kind: 'addDevice', scope, device: d });
+              path = [...path.slice(0, -1), `m|${[...scope, id].join('/')}`];
+            }}><span class="name">{d.label}<small>Device</small></span></button
+          >
+        {/each}
         {#each typesOf(cat as Category, types) as t (t.type)}
           <button
             class="go"
