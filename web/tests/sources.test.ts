@@ -36,7 +36,8 @@ test('every knob continuous, its neutral and default in its range; the levels’
       assert.ok(k.min < k.max, `${t.type}.${k.id}`);
       assert.ok(k.min <= k.neutral && k.neutral <= k.max, `${t.type}.${k.id} neutral`);
       assert.ok(k.min <= k.default && k.default <= k.max, `${t.type}.${k.id} default`);
-      assert.notEqual(k.kind, 'step', `${t.type}.${k.id} is a step`);
+      // Continuous, but for Irregular shapes' shape: a list stepped through (0057 §4g).
+      if (k.kind === 'step') assert.ok(t.type === 'irregular' && k.id === 'shape', `${t.type}.${k.id} is a step`);
       if (k.kind === 'level') assert.equal(k.neutral, k.min);
     }
   }
@@ -154,4 +155,36 @@ test('the wave’s shapes: a line open at its ends, a circle closed, spokes out 
   }
   const half = seg(0.5, 0);
   for (let j = 0; j < n * SEGMENT_FLOATS; j++) if (j % SEGMENT_FLOATS < 4) assert.ok(close(half[j], (line[j] + ring[j]) / 2, 1e-5));
+});
+
+test('Regular and Irregular shapes (0057 §4g): one layout and stroke, a different pick; Irregular light only', async () => {
+  const { IRREGULAR_SHAPES, shapeCorners } = await import('../src/lib/visuals/sources/shapes.ts');
+  const { IRREGULAR, regularOutline } = await import('../src/lib/visuals/shape-set.ts');
+  const { categoryOf } = await import('../src/lib/visuals/rack.ts');
+  const { portsOf } = await import('../src/lib/visuals/ports.ts');
+  const ids = (t: typeof SHAPES) => t.knobs.map((k) => k.id);
+  const shared = ids(IRREGULAR_SHAPES).filter((id) => id !== 'shape');
+  for (const id of shared) assert.deepEqual(IRREGULAR_SHAPES.knobs.find((k) => k.id === id), SHAPES.knobs.find((k) => k.id === id), id);
+  assert.deepEqual(ids(SHAPES).filter((id) => !shared.includes(id)), ['sides', 'depth', 'hue', 'hueSpread', 'saturation', 'tint', 'glow']);
+  assert.equal(SHAPES.knobs.find((k) => k.id === 'depth')!.default, 0, 'the polygon as it was');
+  const shape = IRREGULAR_SHAPES.knobs.find((k) => k.id === 'shape')!;
+  assert.deepEqual([shape.kind, shape.min, shape.max], ['step', 0, IRREGULAR.length - 1]);
+  assert.equal(categoryOf(IRREGULAR_SHAPES), 'sources');
+  assert.ok(portsOf(IRREGULAR_SHAPES).in.some((p) => p.id === 'shape:next'), 'its shape steps on a trigger');
+  assert.deepEqual(portsOf(SHAPES).out.map((p) => [p.id, p.type]), [['picture', 'picture'], ['corners', 'points']]);
+  assert.deepEqual(portsOf(IRREGULAR_SHAPES).out.map((p) => p.id), ['picture']);
+  // White light where there is no hue.
+  const out = new Float32Array(MOST_SHAPES * SHAPE_FLOATS);
+  const n = shapeLayout(defaults(IRREGULAR_SHAPES), { orbit: 0, spin: 0 }, 16 / 9, 1, out);
+  assert.ok(n > 0);
+  for (let i = 0; i < n; i++) assert.deepEqual([...out.subarray(i * SHAPE_FLOATS + 4, i * SHAPE_FLOATS + 7)], [1, 1, 1]);
+  // The corners: as many a shape as its sides round to, on its outline, turned with it.
+  const rk = { ...defaults(SHAPES), sides: 6.3, depth: 0.4 };
+  const lay = new Float32Array(MOST_SHAPES * SHAPE_FLOATS);
+  const m = shapeLayout(rk, { orbit: 0.2, spin: 0.7 }, 16 / 9, 1, lay);
+  const corners = new Float32Array(2 * 400);
+  assert.equal(shapeCorners(rk, lay, m, corners), m * 6);
+  const [cx, cy, radius, turn] = lay.subarray(0, 4);
+  assert.ok(close(Math.hypot(corners[0] - cx, corners[1] - cy), radius * regularOutline(0, 6.3, 0.4), 1e-5));
+  assert.ok(close(Math.atan2(corners[1] - cy, corners[0] - cx), Math.atan2(Math.sin(turn), Math.cos(turn)), 1e-5));
 });

@@ -94,8 +94,12 @@ export function portsOf(t: ModuleType & { ports?: Ports }): Ports {
   // track's every part. Into any one-channel knob, six channels are the bands' mean (a Merge, in the conversion).
   if (t.type === 'flame') return { in: [LIGHT('light', 'Last light'), ...knobs.map((p) => (FLAME_PARTS.has(p.id) ? { ...p, channels: 6 } : p))], out: [LIGHT('light', 'Light')] };
   if (LIGHT_CARRIERS.has(t.type)) return { in: [LIGHT('light', 'Light'), ...knobs], out: [LIGHT('light', 'Light')] };
-  return { in: [...(TAKES_PICTURE.has(t.place) ? [PICTURE_IN] : []), ...knobs], out: [PICTURE_OUT] };
+  return { in: [...(TAKES_PICTURE.has(t.place) ? [PICTURE_IN] : []), ...knobs], out: [PICTURE_OUT, ...(POINTS_OUT[t.type] ?? [])] };
 }
+
+/** The sources whose geometry is an output too (0057 §4g): Regular shapes' corners, for Instance (a corner fractal:
+ *  corners → Instance → Feedback). */
+const POINTS_OUT: Record<string, Port[]> = { shapes: [{ id: 'corners', label: 'Corners', type: 'points' }] };
 
 const LIGHT = (id: string, label: string): Port => ({ id, label, type: 'light' });
 /** The flame's part columns: polyphonic inputs, a part a channel. */
