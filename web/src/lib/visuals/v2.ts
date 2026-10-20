@@ -59,7 +59,7 @@ function extraFrom(c: Cable): Wire['from'] {
 }
 
 /** The picture side's cables for a patch (claude-632's, step 3); none until theirs is in. */
-export type Wiring = { modules: Module[]; cables: Wire[] };
+export type Wiring = { modules: Module[]; cables: CableV2[] };
 export let pictureWiring: (p: Patch) => Wiring = () => ({ modules: [], cables: [] });
 export function setPictureWiring(f: (p: Patch) => Wiring) {
   pictureWiring = f;
@@ -102,12 +102,15 @@ export function flatten(p: PatchV2): PatchV2 {
   return opened(p).patch;
 }
 
-/** `p` flattened, and where each of its devices' exposed ports leads (by `device.port`), through nested ones
- *  (claude-632's fix). */
-function opened(p: PatchV2): { patch: PatchV2; behind: Map<string, PortRef> } {
+/** Where a device's exposed ports lead, by `device.port`: an input to one inner port or several (a fan-out, as Bloom's
+ *  picture), an output from one. Inputs and outputs apart, as one name may be both. */
+type Behind = { in: Map<string, PortRef[]>; out: Map<string, PortRef[]> };
+
+/** `p` flattened, and where its devices' exposed ports lead, through nested ones (claude-632's fix). */
+function opened(p: PatchV2): { patch: PatchV2; behind: Behind } {
   const modules: Module[] = [];
   const cables: CableV2[] = [];
-  const behind = new Map<string, PortRef>();
+  const behind: Behind = { in: new Map(), out: new Map() };
   for (const m of p.modules) {
     if (!isDevice(m)) {
       modules.push(m);
@@ -117,16 +120,18 @@ function opened(p: PatchV2): { patch: PatchV2; behind: Map<string, PortRef> } {
     const at = (id: string) => `${m.id}/${id}`;
     modules.push(...inner.patch.modules.map((x) => ({ ...x, id: at(x.id) })));
     cables.push(...inner.patch.cables.map((c) => ({ ...c, id: at(c.id), from: { ...c.from, module: at(c.from.module) }, to: { ...c.to, module: at(c.to.module) } })));
-    for (const e of [...m.inputs, ...m.outputs]) {
-      const r = inner.behind.get(`${e.module}.${e.port}`) ?? e;
-      behind.set(`${m.id}.${e.as}`, { module: at(r.module), port: r.port, ...(e.channel !== undefined ? { channel: e.channel } : {}) });
-    }
+    for (const [dir, list] of [['in', m.inputs], ['out', m.outputs]] as const)
+      for (const e of list) {
+        const key = `${m.id}.${e.as}`;
+        const map = behind[dir];
+        for (const r of inner.behind[dir].get(`${e.module}.${e.port}`) ?? [e]) map.set(key, [...(map.get(key) ?? []), { module: at(r.module), port: r.port, ...(e.channel !== undefined ? { channel: e.channel } : {}) }]);
+      }
   }
-  const lead = <T extends PortRef>(r: T): T => {
-    const b = behind.get(`${r.module}.${r.port}`);
-    return b ? { ...r, module: b.module, port: b.port } : r;
-  };
-  for (const c of p.cables) cables.push({ ...c, from: lead(c.from), to: lead(c.to) });
+  const lead = <T extends PortRef>(r: T, dir: 'in' | 'out'): T[] => (behind[dir].get(`${r.module}.${r.port}`) ?? [r]).map((b) => (b === r ? r : { ...r, module: b.module, port: b.port }));
+  for (const c of p.cables) {
+    const from = lead(c.from, 'out')[0];
+    for (const [i, t] of lead(c.to, 'in').entries()) cables.push({ ...c, ...(i ? { id: `${c.id}~${i}` } : {}), from, to: t });
+  }
   return { patch: { ...p, modules, cables }, behind };
 }
 

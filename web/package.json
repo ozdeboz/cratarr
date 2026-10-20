@@ -26,6 +26,7 @@
     "@xyflow/svelte": "1.7.0",
     "d3-force": "3.0.0",
     "d3-selection": "3.0.0",
-    "d3-zoom": "3.0.0"
+    "d3-zoom": "3.0.0",
+    "elkjs": "0.12.0"
   }
 }

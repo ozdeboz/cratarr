@@ -40,7 +40,9 @@
     type Preset,
   } from './flame';
   import { musicNow, stopMusic } from './music.svelte';
-  import { newAspects, stepAspects, wavesMotion, zoomsMotion } from './aspects';
+  import { wavesMotion, zoomsMotion } from './aspects';
+  import { newEngine, stepEngine } from './engine/graph';
+  import type { PatchV2 } from './ports';
   import { newBehaviourWalk, newDrift, stepBehaviourWalk, stepDrift } from './drift';
   import { curveOf, endOf, heightAt, straight, tableOf, valueOf as kept, walksOf, type Curve, type RouteValue } from './curves';
   import { ASPECT_KNOB, emptyExtra, SETTING_KNOB } from './patch';
@@ -68,11 +70,11 @@
   import { newStirring, stir } from './stirring';
   import { FlameRenderer, type Extras } from './render';
   import { v2Types } from './picture-graph';
-  import { toV2 } from './v2';
+  import { flatten, toV2 } from './v2';
   import { recordPictures } from './recorder';
   import { chainNow as nodesNow } from './chain-params';
   import { newNormalState, signalsFor } from './normal';
-  import { cabledSettings, cableGain, cableSignals, giveCables, type Cabled } from './chain-cables';
+  import { cabledSettings, cableGain, cableSignals, type Cabled } from './chain-cables';
   import { shapeOf } from './evaluate';
   import { evaluate, newEvalState, type Evaluated } from './evaluate';
   import { askStep, morphTo, newMorph, stepMorph } from './morph';
@@ -86,6 +88,9 @@
   import type { Cable, Knob, Module, PatchExtra, SignalRef } from './patch';
   import { ENGINE_TYPES, EXTRA_TYPES, extraType, PICTURE_LOOP_TYPES } from './registry';
   import PatchGraph from './PatchGraph.svelte';
+  import { withModulator, type PickRequest } from './patchgraph';
+  import { LiveFaces } from './faces.svelte';
+  import { helpFor } from './module-help';
   import { BLENDS, cratarrPatch, cratarrTypes, modulesOf, type ModuleType } from './patch';
   import { SOURCE_TYPES } from './sources/index';
   import { MODULATORS } from './modulators/modulators';
@@ -864,9 +869,20 @@
     const id = newId(pick.newModulator);
     return { from: { modulator: id }, cables: { ...cs, extra: { ...cs.extra, modulators: [...cs.extra.modulators, freshModule(pick.newModulator, id)] } } };
   }
-  // "+ Add" on a knob's page: a cable from the picked source at half, opened.
+  // "+ Add" on a knob's page: a cable from the picked source at half, opened. A new modulator comes synced to the Clock
+  // (patchgraph.ts withModulator: its trigger inputs cabled from the beat), where a drag in the graph let go of it.
   function addCable(mk: string, pick: Source) {
     const [mid, kid] = splitKnob(mk);
+    if ('newModulator' in pick && extraType(pick.newModulator)) {
+      const id = newId(pick.newModulator);
+      const made = withModulator(cablesNow(), freshModule(pick.newModulator, id), extraType(pick.newModulator)!, { module: mid, knob: kid }, kindOf({ module: mid, knob: kid }));
+      if (pickedAt) graphMove(id, pickedAt.x, pickedAt.y);
+      pickedAt = null;
+      setCables(made.cables);
+      path = [...path.slice(0, -1), `cable:${made.cable.id}`];
+      return;
+    }
+    pickedAt = null;
     const made = sourceFrom(pick, cablesNow());
     const c = newCable(made.from as never, { module: mid, knob: kid }, kindOf({ module: mid, knob: kid }), freeCableId(made.cables));
     const cs = made.cables;
@@ -926,6 +942,20 @@
     return () => removeEventListener('resize', resized);
   });
   const graphShown = $derived(panel && wide && !docked);
+  // The engine's patch is made anew once the settings changed (the frame loop's, below).
+  let enginePatchStale = true;
+  $effect(() => {
+    $state.snapshot(s);
+    enginePatchStale = true;
+  });
+  // The graph's live faces (an ADSR's stage, an LFO's phase, the Clock's beats), fed from the frame loop while it shows.
+  const liveFaces = new LiveFaces();
+  // A cable dragged from a knob into the empty: that knob's source picker, a new module's node where it was let go.
+  let pickedAt: { x: number; y: number } | null = null;
+  function graphPick(r: PickRequest, at: { x: number; y: number }) {
+    pickedAt = at;
+    graphPage(`cableadd:${r.module}.${r.knob}`);
+  }
   function graphConnect(from: Cable['from'], to: Cable['to']) {
     const aspect = ASPECT_OF.get(`${to.module}.${to.knob}`);
     if ('signal' in from && aspect && !from.reference && !from.speed) {
@@ -981,6 +1011,29 @@
     cell = null;
     panelBox?.scrollTo(0, 0);
     showChrome();
+  }
+  // The graph's cables and adds (claude-632's PatchGraph, after 70): a cable's page, a knob's What moves, removing,
+  // a dragged end (rerouteCable), the "+"s as the panel's own adds.
+  const graphPage = (page: string) => {
+    path = [page];
+    cell = null;
+    panelBox?.scrollTo(0, 0);
+    showChrome();
+  };
+  function graphRemove(ids: string[]) {
+    const cables = ids.filter((id) => patchNow.cables.some((c) => c.id === id));
+    if (cables.length) setCables(removeCables(cablesNow(), cables));
+    path = path.filter((p) => !cables.some((id) => p === `cable:${id}`));
+    for (const id of ids) {
+      if (id === 'flame') set('flameLayer', 0);
+      else if (!cables.includes(id) && extraModule(id)) removeExtra(id);
+    }
+  }
+  function graphAdd(where: 'layer' | 'loop' | 'modulators' | string, type: string) {
+    if (where === 'layer' && type === 'flame') return (set('flameLayer', 1), graphPage('layer:flame'));
+    path = [where === 'layer' ? 'newlayer' : where === 'loop' ? 'newloop' : where === 'modulators' ? 'newmodulator' : `newmodule:${where}`];
+    if (where === 'layer') addLayer(type);
+    else addTo(where, type);
   }
 
   // A page's name in the breadcrumb.
@@ -1294,7 +1347,7 @@
     let patched = '';
     const normal = newNormalState();
     // The patch's cables, modulators and macros made into each knob's value this frame (claude-632's evaluate.ts):
-    // what the compositor draws with; today's chain stays with aspects.ts.
+    // what the compositor draws with; today's chain is the engine's.
     const evalState = newEvalState();
     let evaluated: Evaluated | null = null;
     // The morph (claude-632's morph.ts): the extras' knobs from one state to the next, never a cut; a chain change's
@@ -1355,8 +1408,12 @@
         stopIdle = () => clearTimeout(id);
       }
     };
-    // The mapping from the music and the settings to what is drawn (aspects.ts), and the moments' gap.
-    const aspects = newAspects();
+    // The one engine (0057 §2, claude-5f's engine/graph.ts): today's settings as a v2 patch, its devices opened up, made
+    // anew only when the settings or the walks change (half a millisecond each); the walks' factors by cable id.
+    const engine = newEngine();
+    const ENGINE_TYPES = Object.fromEntries(EXTRA_TYPES.map((t) => [t.type, t]));
+    let enginePatch: PatchV2 | null = null;
+    let engineWalk: Record<string, number> = {};
     // How the music stirs the fluid (stirring.ts).
     const stirring = newStirring();
     // What the visuals do, measured (meters.ts), and when the rating page last had them.
@@ -1608,35 +1665,38 @@
       // A preset that changed nothing (all of it pinned) leaves nothing to blend.
       nextBlend = null;
       behaviourMoved.clear();
-      // What is drawn, as the music and the settings give it (aspects.ts). Reduced motion: a quarter of the turning, all
+      // What is drawn, as the music and the patch give it (the engine). Reduced motion: a quarter of the turning, all
       // of it steady, half the beats' and hits' share, no moments.
       const still = reducedMotion();
       // How it behaves now: as set, each walking slider at its walk's share of it (not with the rating page's trial).
       const walked = trial.settings ? how : ({ ...how, ...Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, how[k] * (walkFactor[k] ?? 1)])) } as VisualSettings);
-      // And as the patch's cables move it (last frame's: they are read once the aspects have the signals).
+      // And as the patch's cables into today's settings move it (last frame's: read once the engine has the signals).
       const behaving = trial.settings ? how : ({ ...walked, ...cabled.settings, ...cabled.bands } as VisualSettings);
-      // The signals, read once a frame (normal.ts), with the Track pulse aspects.ts makes; and the patch's cables into
-      // today's columns (chain-cables.ts) given beside the routes, from them and the modulators as last stepped.
-      let read: (ref: SignalRef) => number = () => 0;
+      // The signals, read once a frame (normal.ts), with the Track pulse the engine makes (it reads none before making
+      // it: the Track pulse goes into Music's own track, which the next frame makes anew).
+      let signals: ((ref: SignalRef) => number) | null = null;
+      const read = (ref: SignalRef) => {
+        if (!signals) {
+          m.track[T.track] = engine.signals[T.track];
+          signals = signalsFor(normal, m, now);
+        }
+        return signals(ref);
+      };
       const extraCables = s.extra?.cables ?? [];
       const cableWalk = Object.fromEntries(extraCables.map((c) => [c.id, walkFactor[`cable:${c.id}`] ?? 1]));
-      const d = stepAspects(aspects, m, behaving, dt, {
-        still,
-        now,
-        matrix: trial.settings ? undefined : matrix,
-        fluidFull: FLUID_FULL,
-        levers: governor.levers,
-        routeWalk: routeWalkFor === matrix ? routeWalk : undefined,
-        // The Track pulse goes into Music's own track (which the next frame makes anew) for signalsFor to read; the
-        // modulators feeding these cables are last frame's (the evaluator steps after, on the envelope made here).
-        extra: (got, trackNow, envelope) => {
-          m.track[T.track] = trackNow[T.track];
-          read = signalsFor(normal, m, now);
-          const src = { signals: cableSignals(read, still), outputs: evalState.values, modulators: s.extra?.modulators ?? [], types: GRAPH_TYPES };
-          if (extraCables.length && !trial.settings) giveCables(got, extraCables, src, envelope, cableWalk, BANDS);
-          cabled = trial.settings ? { settings: {}, bands: {} } : cabledSettings(walked as unknown as Record<string, unknown>, extraCables, src, envelope, GRAPH_TYPES, cableWalk, BANDS);
-        },
-      });
+      if (enginePatchStale || !enginePatch) {
+        enginePatchStale = false;
+        enginePatch = flatten(toV2($state.snapshot(walked) as VisualSettings));
+      }
+      const stepped = stepEngine(engine, enginePatch, ENGINE_TYPES, m, read, behaving, dt, { still, now, fluidFull: FLUID_FULL, levers: governor.levers, walk: engineWalk });
+      // A patch with no Cratarr chain draws nothing (toV2 always makes one).
+      if (!stepped.aspects) return;
+      const d = stepped.aspects;
+      // The patch's cables into today's settings that are no column (chain-cables.ts): the look's as the flame is
+      // made, the behaviour's for the next frame; from the signals and the modulators as last stepped.
+      const envelope = stepped.outputs['envelope.out'] ?? 0;
+      const src = { signals: cableSignals(read, still), outputs: evalState.values, modulators: s.extra?.modulators ?? [], types: GRAPH_TYPES };
+      cabled = trial.settings ? { settings: {}, bands: {} } : cabledSettings(walked as unknown as Record<string, unknown>, extraCables, src, envelope, GRAPH_TYPES, cableWalk, BANDS);
       const { turn, hits, parts, track } = d;
       if (m.playing && m.hits)
         m.hits.forEach((h, b) => {
@@ -1673,6 +1733,12 @@
         });
         routeWalk = Float32Array.from(matrix.walks, (k) => walkFactor[`route:${k}`] ?? 1);
         routeWalkFor = matrix;
+        // The engine's: a route's cable keeps its key as its id (v2.ts); the walked sliders go into its patch anew.
+        engineWalk = {
+          ...Object.fromEntries(matrix.walks.map((k) => [k, walkFactor[`route:${k}`] ?? 1])),
+          ...Object.fromEntries((s.extra?.cables ?? []).map((c) => [c.id, walkFactor[`cable:${c.id}`] ?? 1])),
+        };
+        enginePatchStale = true;
         if (m.playing) remember(heard, track, d.bands);
         driftDt = 0;
       }
@@ -1791,15 +1857,9 @@
         waves: wavesNow,
         position: m.position,
         center: [0.5, 0.5],
-        // What each push is worth: its route into Stir, Flow or Swirl (the trial's own routes with the rating page's),
-        // times that column's scale.
+        // What each push is worth: its route into Stir, Flow or Swirl, times that column's scale.
         gain: (signal, band, aspect, x) =>
-          behaving[aspect] *
-          (trial.settings
-            ? aspects.matrix
-              ? heightOn(aspects.matrix, signal, band, aspect, x)
-              : x
-            : heightOn(matrix, signal, band, aspect, x, routeWalkFor === matrix ? routeWalk : undefined) + cableGain(extraCables, signal, band, aspect, x, cableWalk)),
+          behaving[aspect] * (heightOn(matrix, signal, band, aspect, x, routeWalkFor === matrix ? routeWalk : undefined) + cableGain(extraCables, signal, band, aspect, x, cableWalk)),
       });
       // The patch past the flame, this frame: on when there is anything of it, morphed to the extras as set.
       const extraSet = extraNow;
@@ -1833,6 +1893,7 @@
         evaluated = p.layers.length > 1 || p.loop.length || p.modulators.length ? evaluate(p, GRAPH_TYPES, read, evalState, dt, { envelope: d.lit, frame: { beat: m.beat }, walk: cableWalk }) : null;
         // A step its cables move on: taken at its module's next neutral.
         for (const r of evaluated?.moments ?? []) askStep(morph, r.module, r.knob, GRAPH_TYPES);
+        if (graphShown) liveFaces.offer(now, () => ({ time: now / 1000, beat: m.beat, outputs: evaluated?.outputs ?? {} }));
         const flameTo = s.flameLayer ?? 1;
         flameShown = flameTo > flameShown ? Math.min(flameTo, flameShown + dt / (ANOTHER_MS / 1000)) : Math.max(flameTo, flameShown - dt / (ANOTHER_MS / 1000));
         extras = { extra, knobsOf, frame: { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null }, flame: flameShown, flameTo: s.flameLayer ?? 1 };
@@ -2195,6 +2256,19 @@
             onknob={graphKnob}
             onmove={graphMove}
             onopen={graphOpen}
+            addTypes={EXTRA_TYPES}
+            removable={(id) => id === 'flame' || !!extraModule(id)}
+            canAddTo={(where) => where === 'loop' || s.extra.layers.some((l) => l.id === where)}
+            onopencable={(id) => graphPage(`cable:${id}`)}
+            onopenknob={(mid, kid) => graphPage(`moves:${mid}.${kid}`)}
+            onremove={graphRemove}
+            onreroute={(id, end, next) => rerouteCable(id, end, next as never)}
+            onaddlayer={(type) => graphAdd('layer', type)}
+            onaddmodule={graphAdd}
+            onaddmodulator={(type) => graphAdd('modulators', type)}
+            onpick={graphPick}
+            live={liveFaces}
+            {helpFor}
           />
         </div>
       {/if}

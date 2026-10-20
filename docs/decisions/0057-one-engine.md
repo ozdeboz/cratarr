@@ -160,7 +160,7 @@ does with signals, as modular synths and video synthesizers group them (LZX, Tou
 
 | Category | Does | Ours |
 |---|---|---|
-| **Sources** | make a picture | Flame, Shapes, Waves; later Plasma, Gradient, Cells, Cover |
+| **Sources** | make a picture | Flame, Regular shapes, Irregular shapes, Waves, Noise; later Gradient, Cells, Cover |
 | **Effects** | a picture in, a picture out | Fold, Bend, Blur, Tone map, Curve, Saturate, Warp, Keep, Glow, Tint, Displace, the flame's own loop |
 | **Mixers** | several pictures into one | Mix, Mask, Feedback |
 | **Modulators** | the signals that move knobs | LFO, Random, ADSR, Clock, Compressor, Grid; later Sequencer, Looper |
@@ -195,7 +195,13 @@ The owner: "freely routable". The picture side is a free graph, as the value sid
 
 - **Full screen** (the owner: MilkDrop "has full screen graphics. Everything is still a shape drawn on blackness"). Three
   things make MilkDrop fill the screen, and each gets a module:
-  - **Full-screen sources:** Plasma (noise), Gradient, Cells, the Cover.
+  - **Full-screen sources:** Noise, in this version (the owner, 2026-10-20: noise and grain "together with filter can
+    be used to great effect"); Gradient, Cells and the Cover later.
+    - **Noise:** monochrome (colour a Tint's, §4g), its scale, detail (octaves) and speed. At its finest scale, new each
+      frame, it is grain: no Grain module.
+    - **Filters on pictures:** Blur is the low-pass (noise into clouds); the high-pass is a picture less its blur, by
+      Mix's new **Subtract** mode (edges, grit). Nothing invented: LZX's noise, Hydra's `noise()`, TouchDesigner's
+      Noise TOP.
   - **A Warp field:** every point moving its own way (swirl, ripple, push toward a point), driven by values or by a
     picture through Displace. Not one move for the whole picture.
   - **Feedback that fills:** a high Keep with an outward zoom, so trails reach the edges and the screen never goes
@@ -313,6 +319,47 @@ That's clean". So:
   as when the track began. Whatever the dice, "Another look" or the knobs changed since is put back to the track's own
   values, pins kept, structure untouched, undoable, morphed in. Resetting the whole synthesizer stays what it is: back
   to an empty patch (Start from scratch). Both are in the Reset menu.
+
+### 4f. Lens, a module of its own
+
+The owner: "lenses aren't inherently coupled to flame. Lens should be a modular thing." Today's lenses (Eyefish,
+Bubble, Spherical, Swirl …) are the flame's final transform. They become a **Lens** module:
+
+- Knobs: its kind (a step, with `next`) and its amount.
+- Polymorphic, as Blur is:
+  - on `points` (the flame's points, a Grid's) it moves each point, exactly as the flame's final transform does;
+  - on a picture it remaps the pixels the same way (TouchDesigner's Remap, Hydra's modulate).
+- The flame's own lens is a Lens cabled between the flame's points and its light, inside the Cratarr device. It can be
+  unplugged, swapped, or joined by others anywhere. The conversion places it so, exact.
+
+### 4g. One set of shapes
+
+The owner (2026-10-20): "I want the same set of shapes everywhere shapes are used." Two modules work with shapes:
+Shapes (it draws them) and Lens (it sends points into them). Each had its own: Shapes the regular polygons, Lens Heart
+and Cratarr. Now one set, each shape defined once (`shape-set.ts`) and used by both:
+
+- **Regular:** polygon (3–48 sides) and star (3–48 points, a depth; depth 0 the polygon). They morph: the sides go
+  through the fractions, the depth through its range.
+- **Irregular**, a list stepped through (with `next`), never morphed:
+  - Heart and Cratarr (the logo: the record's rings and its slice, `MARK`);
+  - ring, cross, arrow, crescent, drop (the owner's pick of common symbols);
+  - the 11 forms of the warps (Spherical, Swirl, Julia, Fisheye, Eyefish, Bubble, Polar, Disc, Sinusoidal, Horseshoe,
+    Handkerchief): each the form its warp makes of a disc, as Heart's is.
+
+The owner: "a difference between morphable shapes and non-morphable shapes … two different modules":
+
+- **Regular shapes** (the Shapes module of 70, renamed): sides and depth. It also gives its **corners** as `points`,
+  so a corner fractal (Sierpinski, Koch) is standard modules: corners → Instance (a smaller copy at each) → Feedback.
+  Only regular shapes have corners; a feedback fractal (Fractal Spiral) takes any picture.
+- **Irregular shapes**: a shape knob (a step).
+- Both keep the same layout knobs (count on a ring, spread, orbit, spin, twist, taper) and the same stroke: an outline
+  of a width, a fill, or both. One code; they differ only in how they pick their shape.
+- **Monochrome** (the owner: "all monochrome"): they draw light only. Colour is a Tint's after them (its own hue, or a
+  picture's colours by its second input), one meaning a module; hue, hue spread and saturation leave them for Tint, as
+  70.1's tint and glow do (§5). The conversion puts a Tint behind every coloured Shapes of today, so it looks the same.
+- **Lens stays one module** (the owner): its kind steps through the 11 warps, Polygon, Star and the irregular shapes;
+  Polygon and Star take Sides and Depth knobs. A warp kind moves points as today; a shape kind sends them into the
+  shape evenly, as the Cratarr lens does. The kinds of today keep their numbers, so every track's look stays.
 
 ### 5. Pictures as inputs
 

@@ -14,8 +14,6 @@ const cable = (from: End, to: End): CableV2 => ({
   from: { module: from[0], port: from[1] },
   to: { module: to[0], port: to[1] },
   value: 1,
-  // A picture has no level of its own to give (as Show's cables inside it).
-  mode: 'swing',
 });
 
 /** The flame's own loop, in the order its carry pass applies them. */

@@ -7,9 +7,23 @@
 import { keptPerSecond } from './loopmods';
 import { BLENDS, type FrameInfo, type Layer, type Module, type PatchExtra, type PictureModule } from './patch';
 import { Pool, type Spec } from './picture-graph';
-import { createSource } from './sources/index';
+import { createSource, SOURCE_TYPES } from './sources/index';
+import { portsOf, type PortRef } from './ports';
 import { createFluidLoop, FLUID_LOOP } from './fluid-loop';
 import { createEngine } from './engine-module';
+
+/** What an `audio` port's normal gives this frame: Music's sound (the frame's samples); nothing else gives one yet. */
+const audioOf = (n: PortRef | undefined, frame: FrameInfo) => (n?.module === 'music' && n.port === 'audio' ? frame.waveform : null);
+/** Each source type's audio inputs (0057 §1), by type. */
+const AUDIO_IN = new Map(SOURCE_TYPES.map((t) => [t.type, portsOf(t).in.filter((p) => p.type === 'audio')]));
+
+/** The frame as a module of `type` takes it: with its typed inputs (its audio ports' samples, from their normals; no
+ *  cable carries sound yet), or as it is where it has none. */
+export function withInputs(type: string, frame: FrameInfo): FrameInfo {
+  const ports = AUDIO_IN.get(type);
+  if (!ports?.length) return frame;
+  return { ...frame, inputs: Object.fromEntries(ports.map((p) => [p.id, audioOf(p.normal, frame)])) };
+}
 
 /** The picture modules the compositor runs by type: those a layer carries after its source, and those in the
  *  picture's own loop besides Warp and Keep (drawn here). Each draws `input` into `out`, an exact copy at its neutral. */
@@ -295,7 +309,7 @@ export class Compositor {
     }
     if (!s.module) return null;
     let t = this.pool.take(this.spec);
-    s.module.draw(gl, null, t.fbo, this.spec.w, this.spec.h, knobsOf(layer.source), frame);
+    s.module.draw(gl, null, t.fbo, this.spec.w, this.spec.h, knobsOf(layer.source), withInputs(layer.source.type, frame));
     done(gl);
     for (const m of layer.modules) {
       const run = this.module(m.id, m.type);
