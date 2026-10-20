@@ -555,6 +555,25 @@ claude-a5 coordinates and owns this record. Interfaces are fixed in step 1 (patc
 them. Until step 1 lands, steps 2 and 3 work behind today's interfaces (the equivalence harness; the compositor's
 graph walk).
 
+### The switch (the owner, 2026-10-20: "the switch comes first")
+
+The app on the v2 patch as its one truth, the engine and the compositor in its frame loop, the graph and the panel
+both views of the store; then step 6; then a tablet check and a release. New modules (the Fluid's picture side, grids,
+edges) wait. Small differences in the picture are accepted (the owner: "identical was not necessary"); curved cables
+stay exact (§7f).
+
+| Part | What | Owner |
+|---|---|---|
+| S1 | **The store as truth** (`visuals-patch.svelte.ts`): the patch (v2, unflattened) with undo and redo; loaded from its own key, else converted once from the saved settings (toV2); saved; this device's own settings (Quality, FPS, Brightness) apart from it; the phone driving the tablet sends the patch whole (sync groups are not in this version) | claude-a5 |
+| S2 | **The frame loop out of the page** (`visuals-loop.ts`) and **onto the store**: the engine on the flattened patch (a new object only when its structure changes), the look from the Flame's knobs as the engine moves them, the moments and the Dice from the engine's frame, the one morph on v2, the walks gone (Randoms in the patch); `precheckPatch` and the dice's try-and-pick | claude-5f |
+| S3 | **The panel over the store** (`VisualsPanel.svelte` and v2 cable pages): pages by the five categories (rack.ts), a module's knobs from its type, cables as CableV2 (Delete, Reroute, the curve), pins (knobs and whole categories), Randomize's long-press scopes, Reset (to seed, everything), presets and snapshots as v2 patches with their pins | claude-a5 |
+| S4 | **The graph v2-only** (`patch` and `onchange` from the store); the harness over the switched app; the tablet check | claude-632 |
+| S5 | **Step 6:** aspects.ts, routes.ts's matrix, chain-cables.ts, evaluate.ts on extras, drift.ts, recipe.ts, the v1 keys | claude-5f, with a5 and 632 for their files |
+
+Order, so the page is never edited by two at once: S2's extraction of the loop first (claude-5f); meanwhile S1 and
+S3 are built as new files; then the page mounts the store, the loop and the panel. The seam is the store's API:
+`patch` (raw state), `change(f, key?)` (one undo step, coalesced by key), `replace(p)`, `undo()`, `redo()`.
+
 ### Conversion details (claude-632, step 3)
 
 - A v1 effects stage samples once with every shape effect applied in slot order, then colours at the final
