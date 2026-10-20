@@ -553,7 +553,9 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     return base;
   }
   /** An engine module's knob's base: as set, its macros' (the Ducker's threshold under Wild). */
-  const baseOf = (x: Module, id: string, or: number) => macroed(x.id, (types[x.type] ?? ENGINE_TYPES[x.type])?.knobs.find((k) => k.id === id) ?? ({ id } as Knob), finite(x.knobs[id], or));
+  function baseOf(x: Module, id: string, or: number) {
+    return macroed(x.id, (types[x.type] ?? ENGINE_TYPES[x.type])?.knobs.find((k) => k.id === id) ?? ({ id } as Knob), finite(x.knobs[id], or));
+  }
 
   function knobsOf(x: Module, t: ModuleType): Record<string, number> {
     const k: Record<string, number> = { ...x.knobs };

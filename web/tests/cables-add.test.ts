@@ -4,7 +4,7 @@
 // equivalence harness holds to today's).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TRACKS, compare, record, track, type Engine } from './harness/aspects-record.ts';
+import { TRACKS, compare, record, todays, track, type Engine } from './harness/aspects-record.ts';
 
 const { DEFAULTS } = await import('../src/lib/visuals/settings.svelte.ts');
 const { newEngine, stepEngine } = await import('../src/lib/visuals/engine/graph.ts');
@@ -57,7 +57,7 @@ test('the conversion has what it says: VCAs into gains, a Merge and a Gate into 
 
 const MOMENT_GIVEN = new Set(MOMENT_ASPECTS.map((a) => `given.${ASPECTS.indexOf(a)}`));
 
-test('cables only add: the engine over the converted patch gives what it gave, frame by frame, on every recorded track', () => {
+test('cables only add: the engine over the converted patch gives what today’s engine gave, frame by frame, on every recorded track', () => {
   const variants: [string, typeof busy][] = [
     ['the Cratarr chain', structuredClone(DEFAULTS)],
     ['every kind of cable', busy],
@@ -65,7 +65,8 @@ test('cables only add: the engine over the converted patch gives what it gave, f
   for (const id of TRACKS) {
     const t = track(id);
     for (const [name, s] of variants) {
-      const a = record(engineOver(false), t, s, 30, 30, false);
+      // Today's engine (level cables letting through, moments its own) against the one engine over the conversion.
+      const a = record(todays(), t, s, 30, 30, false);
       const b = record(engineOver(true), t, s, 30, 30, false);
       for (const [k, d] of compare(a, b)) {
         // A moment column's own sum is the Merge's now (what it gives is the Gate's firing, compared with the rest).

@@ -382,6 +382,6 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
   const adding = opts.addOnly === false ? { modules: all, cables } : cablesAdd(all, cables);
   const added = opts.sidechain === false ? adding : sidechained(adding.modules, adding.cables, s.wild, opts.limits ?? {});
   const wiring = pictureWiring(p);
-  const macros = 'macro' in added && added.macro ? [...p.macros, added.macro] : p.macros;
+  const macros: Macro[] = [...p.macros, ...('macro' in added && added.macro ? [added.macro as Macro] : [])];
   return { v: 2, modules: [...added.modules, ...wiring.modules], cables: [...toWire(added.modules, added.cables), ...wiring.cables], macros, pins: p.pins };
 }
