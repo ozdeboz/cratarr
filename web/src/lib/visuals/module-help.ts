@@ -14,7 +14,9 @@ import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 export const moduleHelp: Record<string, string> = {
   // Sources.
   flame: 'The fractal flame: six parts, one for each band of the sound, drawn as light.',
-  shapes: 'Polygons on a ring, outlined or filled, each spinning as the ring turns.',
+  shapes: 'Polygons and stars on a ring, outlined or filled, each spinning as the ring turns; their sides and depth morph.',
+  irregular: 'A heart, the Cratarr mark, an arrow or another shape on a ring, outlined or filled, in white light.',
+  noise: 'Clouds of noise over the whole picture, in white light; at its finest scale, moving, film grain.',
   waves: 'The sound’s waveform drawn as a line, a circle or spokes (without live sound, the bands’ levels).',
 
   // Effects.
@@ -105,27 +107,46 @@ const SUFFIX: Record<string, string> = {
 
 const numbered = (n: number, id: (i: number) => string, line: (i: number) => string) => Object.fromEntries(Array.from({ length: n }, (_, i) => [id(i + 1), line(i + 1)]));
 
+/** Where both shape sources lay their shapes and how they stroke them (sources/shapes.ts). */
+const SHAPE_RING = {
+  count: 'How many shapes on the ring; none at 0.',
+  radius: 'How big each shape is.',
+  thickness: 'How wide the outline is.',
+  fill: 'From an outline (0) to filled (1).',
+  spread: 'How far out the ring is drawn.',
+  x: ACROSS,
+  y: UP,
+  orbit: 'How fast the shapes travel round the ring; below 0 the other way.',
+  rotation: 'Turns every shape.',
+  spin: SPIN,
+  twist: 'Turns each shape a little more than the one before.',
+  taper: 'Each shape smaller (above 0) or larger (below 0) than the one before.',
+  additive: 'From covering what is under it (0) to adding its light to it (1).',
+};
+
 /** A port's or knob's own line, where its label does not say it all and help.ts has none. */
 export const portHelp: Record<string, Record<string, string>> = {
   flame: { light: 'Its light: in, as it was last frame; out, as drawn now, before Tone map.', points: 'Where its parts are: where the Fluid pushes, unless cabled otherwise.' },
   shapes: {
-    count: 'How many shapes on the ring; none at 0.',
+    ...SHAPE_RING,
     sides: 'Corners a shape; between whole numbers it morphs, near a circle at many.',
-    radius: 'How big each shape is.',
-    thickness: 'How wide the outline is.',
-    fill: 'From an outline (0) to filled (1).',
-    spread: 'How far out the ring is drawn.',
-    x: ACROSS,
-    y: UP,
-    orbit: 'How fast the shapes travel round the ring; below 0 the other way.',
-    rotation: 'Turns every shape.',
-    spin: SPIN,
-    twist: 'Turns each shape a little more than the one before.',
-    taper: 'Each shape smaller (above 0) or larger (below 0) than the one before.',
+    depth: 'From the polygon (0) to a star whose points go deeper.',
+    corners: 'Each shape’s corners as points, for Instance: a smaller copy at each makes a corner fractal.',
     hue: HUE,
     hueSpread: 'How far the colour moves round the wheel from shape to shape.',
     saturation: SATURATION,
     additive: 'From covering what is under it (0) to adding its light to it (1).',
+  },
+  noise: {
+    amount: 'How bright it is; none at 0.',
+    scale: 'From the finest, a speck a pixel or two (grain), to clouds the size of the picture.',
+    detail: 'Layers of finer noise over it, 1 to 6; between whole numbers the last fades in.',
+    speed: 'How fast it changes, by its own size: at the finest scale a new pattern every frame.',
+    contrast: 'From soft greys (0) through as it is (50%) to hard black and white.',
+  },
+  irregular: {
+    ...SHAPE_RING,
+    shape: 'Which shape of the set: Heart, Cratarr, Ring, Cross, Arrow, Crescent, Drop, Polar or Handkerchief.',
   },
   waves: {
     audio: 'The sound to draw: Music’s unless unplugged.',
@@ -198,7 +219,7 @@ export const portHelp: Record<string, Record<string, string>> = {
   },
   mix: {
     in1: 'The bottom picture; the others go over it in order.',
-    ...numbered(4, (i) => `mode${i}`, (i) => `How picture ${i} blends: add, screen, over, multiply, window or lighten.`),
+    ...numbered(4, (i) => `mode${i}`, (i) => `How picture ${i} blends: add, screen, over, multiply, window, lighten or subtract.`),
     ...numbered(4, (i) => `amount${i}`, (i) => `How much of picture ${i} shows.`),
   },
   feedback: { picture: 'In: the picture to hold back a frame; out: that picture as it was last frame.' },
@@ -368,6 +389,7 @@ export const portHelp: Record<string, Record<string, string>> = {
 const PLAIN_ANYWHERE: ReadonlySet<string> = new Set(['picture', 'in', 'out']);
 export const PLAIN: Record<string, readonly string[]> = {
   shapes: ['opacity'],
+  irregular: ['opacity'],
   waves: ['opacity'],
   clock: ['beat', 'bar', 'phrase'],
   grid: ['row', 'column'],

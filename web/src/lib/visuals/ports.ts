@@ -116,8 +116,12 @@ export function portsOf(t: ModuleType & { ports?: Ports }): Ports {
   if (LIGHT_CARRIERS.has(t.type)) return { in: [LIGHT('light', 'Light'), ...knobs], out: [LIGHT('light', 'Light')] };
   // Hydra's Stream too.
   if (t.type === 'hydra-engine') return { in: [PICTURE_IN, FLOW_IN, ...knobs], out: [PICTURE_OUT] };
-  return { in: [...(TAKES_PICTURE.has(t.place) ? [PICTURE_IN] : []), ...knobs], out: [PICTURE_OUT] };
+  return { in: [...(TAKES_PICTURE.has(t.place) ? [PICTURE_IN] : []), ...knobs], out: [PICTURE_OUT, ...(POINTS_OUT[t.type] ?? [])] };
 }
+
+/** The sources whose geometry is an output too (0057 §4g): Regular shapes' corners, for Instance (a corner fractal:
+ *  corners → Instance → Feedback). */
+const POINTS_OUT: Record<string, Port[]> = { shapes: [{ id: 'corners', label: 'Corners', type: 'points' }] };
 
 const LIGHT = (id: string, label: string): Port => ({ id, label, type: 'light' });
 const FLUID_TYPES: readonly PortType[] = ['light', 'picture', 'points'];
@@ -517,7 +521,9 @@ export const READINGS = ['track', 'lately', 'absolute'] as const;
 export type PatchV2 = { v: 2; modules: Module[]; cables: CableV2[]; macros: Macro[]; pins: string[] };
 
 /** The blends a Mix input takes (0056's, as a step knob per input). */
-export const MIX_MODES = ['add', 'screen', 'over', 'multiply', 'window', 'lighten'] as const;
+// Appended only: a saved Mix keeps its modes by their place (Subtract, 0057 §4: a picture less another, its high-pass
+// a picture less its blur).
+export const MIX_MODES = ['add', 'screen', 'over', 'multiply', 'window', 'lighten', 'subtract'] as const;
 /** How many pictures a Mix takes. */
 export const MIX_INPUTS = 4;
 
