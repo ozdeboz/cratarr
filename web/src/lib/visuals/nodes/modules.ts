@@ -10,6 +10,7 @@ import { done, program } from '../sources/gl';
 import { WAVE_BEND, WAVE_K } from '../fluid';
 import { keptPerSecond } from '../loopmods';
 import { inverse, toScreen, transformOf } from '../transform';
+import { none } from './shared';
 
 /** A module's pass: its picture inputs by port (`picture`, `by`), drawn into `out` at `width` × `height`. */
 export type ModuleNode = {
@@ -214,7 +215,7 @@ export function createNode(type: string, gl: WebGL2RenderingContext): ModuleNode
       gl.useProgram(p);
       [inputs.picture, inputs.by ?? null].forEach((t, i) => {
         gl.activeTexture(gl.TEXTURE0 + i);
-        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.bindTexture(gl.TEXTURE_2D, t ?? none(gl));
       });
       gl.activeTexture(gl.TEXTURE0);
       gl.uniform1i(at('uIn'), 0);

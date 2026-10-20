@@ -8,7 +8,7 @@ import { IDENTITY, type Affine } from '../transform';
 import { program } from '../sources/gl';
 import type { PointsParams } from '../chain-params';
 import type { Light } from './light';
-import { uniforms } from './shared';
+import { none, uniforms } from './shared';
 
 // The six parts, rotations up to eight arms and as many mirrors.
 const MAX_XFORMS = 22;
@@ -632,11 +632,11 @@ export class FlamePoints {
     return t;
   }
 
-  /** This frame's steps into the light in use (bound, blending on): `passes` steps of every point, each drawn where
-   *  it lands, after the unseen ones of the points still settling. */
   /** The light's Transforms as one (transform.ts): where each point lands after the camera. */
   view: Affine = IDENTITY;
 
+  /** This frame's steps into the light in use (bound, blending on): `passes` steps of every point, each drawn where
+   *  it lands, after the unseen ones of the points still settling. */
   draw(light: Light, look: PointsParams, passes: number, since: number) {
     const gl = this.gl;
     const flame = this.flame!;
@@ -647,11 +647,10 @@ export class FlamePoints {
     gl.uniformMatrix2fv(this.u(this.iterate, 'uView'), false, this.view.m);
     gl.uniform2f(this.u(this.iterate, 'uViewAt'), this.view.at[0], this.view.at[1]);
     this.diveStep(look.dive, since);
-    if (this.table) {
-      gl.activeTexture(gl.TEXTURE0 + TABLE_UNIT);
-      gl.bindTexture(gl.TEXTURE_2D, this.table);
-      gl.activeTexture(gl.TEXTURE0);
-    }
+    // The table's unit is sampled whether or not a Lens needs it: a black pixel there without one.
+    gl.activeTexture(gl.TEXTURE0 + TABLE_UNIT);
+    gl.bindTexture(gl.TEXTURE_2D, this.table ?? none(gl));
+    gl.activeTexture(gl.TEXTURE0);
     gl.blendFunc(gl.ONE, gl.ONE);
     gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, this.feedback);
     const unseen = this.fuse;
