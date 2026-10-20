@@ -247,7 +247,7 @@ const EVOLUTION_AT = Array.from({ length: 64 }, (_, k) => `evolution.${k}`);
 const NO_CABLES: CableV2[] = [];
 const STRUCK_NEXT = { until: 0, velocity: 0 };
 const STRUCK: { since: number; velocity: number; next: { until: number; velocity: number } | null } = { since: Infinity, velocity: 0, next: null };
-const ADSR_KNOBS = { attack: 0, decay: 0, sustain: 0, release: 0.15 };
+const ADSR_KNOBS = { attack: 0, decay: 0, sustain: 0, release: 0.15, retrigger: 0 };
 /** No channels yet (a VCA, Merge or Ducker not yet worked out), and a scratch for working one out. */
 const NO_CHANNELS = new Float64Array(64);
 const SCRATCH = new Float64Array(6);
@@ -586,6 +586,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     ADSR_KNOBS.decay = finite(k[DECAY_AT[ch]]);
     ADSR_KNOBS.sustain = finite(k[SUSTAIN_AT[ch]]);
     ADSR_KNOBS.release = finite(k[RELEASE_AT[ch]], 0.15);
+    ADSR_KNOBS.retrigger = finite(k.retrigger, 0);
     return adsrOf(STRUCK, ADSR_KNOBS) * finite(k.amount, 1);
   }
   /** What scales a cable: its depth's value (null: nothing, 1; undefined: the Envelope's, normalled). */
