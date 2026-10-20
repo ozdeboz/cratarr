@@ -137,6 +137,10 @@ export const MUSIC: Declared = {
       out('audio', 'Sound', 'audio'),
       // 1 while the music plays, 0 paused (0057 §7e: the pause's dimming, cabled in sight).
       out('playing', 'Playing'),
+      // A trigger as a track starts (the visuals opening on one too), and the track's seed (0..1, the same for the same
+      // track): Track folded into Music (0057 §7f).
+      out('newtrack', 'New track', 'trigger'),
+      out('seed', 'Track seed'),
       ...TRACK_SIGNALS.map((s) => out(s, label(s), TRIGGER_SIGNALS.has(s) ? 'trigger' : 'value')),
       ...BAND_SIGNALS.map((s) => out(s, label(s), TRIGGER_SIGNALS.has(s) ? 'trigger' : 'value', 6)),
       // Each value signal's slow form (the speed a cable no longer says).
@@ -423,7 +427,26 @@ export const DISPLACE = declared(
 export const THRESHOLD = declared('threshold', 'Threshold', 'module', [knob('threshold', 'Threshold', 0, 1, 0.6, 'level'), knob('softness', 'Softness', 0, 1, 0.1)], [PICTURE_IN], [PICTURE_OUT]);
 export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD];
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
+/** The Randomize scopes (0057 §4d), in the dice's menu's order. */
+export const RANDOMIZE_SCOPES = ['everything', 'sources', 'effects', 'mixers', 'modulators', 'cables'] as const;
+
+/** Randomizer (0057 §7f, the owner: "same randomize"): the dice as a module. A trigger randomizes every knob in its
+ *  scope that is not pinned, as the dice do (the flame's settings rolled together and checked), from its seed: the same
+ *  seed, the same values. Music's New track and Track seed into it are a track's look (the Track Look device). */
+export const RANDOMIZER = declared(
+  'randomizer',
+  'Randomizer',
+  'modulator',
+  [{ ...knob('scope', 'Scope', 0, RANDOMIZE_SCOPES.length - 1, 0, 'step'), randomize: false }],
+  [
+    { id: 'trigger', label: 'Trigger', type: 'trigger' },
+    { id: 'seed', label: 'Seed', type: 'value' },
+  ],
+  // A trigger as it randomizes (to morph or flash with it).
+  [out('done', 'Randomized', 'trigger')],
+);
+
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, RANDOMIZER, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 
