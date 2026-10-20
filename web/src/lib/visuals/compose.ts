@@ -32,8 +32,7 @@ export const MODULE_MAKERS: Record<string, (gl: WebGL2RenderingContext) => Pictu
 
 /** The Mix of `n` layers over the picture in one pass (decision 0057 §4), each over the picture so far (both
  *  premultiplied) as its mode says (MIX_MODES): added, screened, laid over, multiplied, the picture seen through it
- *  (window: dimmed by its amount where the layer is not), the brighter of the two (lighten), or the picture less it
- *  (subtract: never below black), by its amount; the
+ *  (window: dimmed by its amount where the layer is not), or the brighter of the two (lighten), by its amount; the
  *  picture so far kept in the shader, not in a target between. A layer's glow and tint are modules of their own
  *  (nodes/modules.ts: Glow, Tint). No arrays (Mali's float[] miscompiles). */
 export function mixShader(n: number): string {
