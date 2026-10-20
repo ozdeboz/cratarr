@@ -362,6 +362,21 @@ The owner: "a difference between morphable shapes and non-morphable shapes … t
   Polygon and Star take Sides and Depth knobs. A warp kind moves points as today; a shape kind sends them into the
   shape evenly, as the Cratarr lens does. The kinds of today keep their numbers, so every track's look stays.
 
+### 4h. A modular Fluid
+
+The owner, 2026-10-20 (through claude-632's session): "Yes, this is what I want"; "Fluid should also be applicable to
+grids". No hidden couplings left:
+
+- **Polymorphic:** Fluid takes light, a picture or points and gives the same type out: in the flame's loop, on any
+  layer, in the finish, as many as wanted. On points it moves them along its flow, so Grid → Fluid → Instance makes a
+  grid that swims.
+- **Its forces in sight:** Stir, Flow and Swirl stay cable-able knobs; where the pushes land is a `points` input
+  (`at`), normalled to the flame's new `points` output (where its parts are), as today.
+- **Its flow out:** a new port type, `flow` (a velocity field). Fluid's **Flow field** output is normalled into Show's
+  Bend (today's hidden read-back) and into Stream's (the Loop effect's and Hydra's), and can be cabled into Displace.
+- The default patch wires it as today, picture identical. On the tablet a fluid costs about 1.2–1.7 ms: at most one
+  or two there.
+
 ### 5. Pictures as inputs
 
 A module may take a second `picture` input: Hydra's modulate, TouchDesigner's composite inputs. The first ones:
@@ -539,6 +554,25 @@ engine over recorded tracks (the precheck's harness), within a tolerance, before
 claude-a5 coordinates and owns this record. Interfaces are fixed in step 1 (patch.ts) before steps 2 and 3 build on
 them. Until step 1 lands, steps 2 and 3 work behind today's interfaces (the equivalence harness; the compositor's
 graph walk).
+
+### The switch (the owner, 2026-10-20: "the switch comes first")
+
+The app on the v2 patch as its one truth, the engine and the compositor in its frame loop, the graph and the panel
+both views of the store; then step 6; then a tablet check and a release. New modules (the Fluid's picture side, grids,
+edges) wait. Small differences in the picture are accepted (the owner: "identical was not necessary"); curved cables
+stay exact (§7f).
+
+| Part | What | Owner |
+|---|---|---|
+| S1 | **The store as truth** (`visuals-patch.svelte.ts`): the patch (v2, unflattened) with undo and redo; loaded from its own key, else converted once from the saved settings (toV2); saved; this device's own settings (Quality, FPS, Brightness) apart from it; the phone driving the tablet sends the patch whole (sync groups are not in this version) | claude-a5 |
+| S2 | **The frame loop out of the page** (`visuals-loop.ts`) and **onto the store**: the engine on the flattened patch (a new object only when its structure changes), the look from the Flame's knobs as the engine moves them, the moments and the Dice from the engine's frame, the one morph on v2, the walks gone (Randoms in the patch); `precheckPatch` and the dice's try-and-pick | claude-5f |
+| S3 | **The panel over the store** (`VisualsPanel.svelte` and v2 cable pages): pages by the five categories (rack.ts), a module's knobs from its type, cables as CableV2 (Delete, Reroute, the curve), pins (knobs and whole categories), Randomize's long-press scopes, Reset (to seed, everything), presets and snapshots as v2 patches with their pins | claude-a5 |
+| S4 | **The graph v2-only** (`patch` and `onchange` from the store); the harness over the switched app; the tablet check | claude-632 |
+| S5 | **Step 6:** aspects.ts, routes.ts's matrix, chain-cables.ts, evaluate.ts on extras, drift.ts, recipe.ts, the v1 keys | claude-5f, with a5 and 632 for their files |
+
+Order, so the page is never edited by two at once: S2's extraction of the loop first (claude-5f); meanwhile S1 and
+S3 are built as new files; then the page mounts the store, the loop and the panel. The seam is the store's API:
+`patch` (raw state), `change(f, key?)` (one undo step, coalesced by key), `replace(p)`, `undo()`, `redo()`.
 
 ### Conversion details (claude-632, step 3)
 

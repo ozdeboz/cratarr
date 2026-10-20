@@ -213,6 +213,8 @@ export const WIRES: Readonly<Record<PortType, { dash: string | null; width: numb
   audio: { dash: null, width: 4.5, double: true },
   // A chain line: dash, dot (0057 §4c).
   points: { dash: '7 3 0.1 3', width: 2, double: false },
+  // A flow (0057 §4h): a double line in long dashes, a field moving.
+  flow: { dash: '12 4', width: 4, double: true },
 };
 /** A muted cable's dash, whatever its type. */
 export const MUTED_DASH = '2 8';

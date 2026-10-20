@@ -728,6 +728,7 @@
     --wire-audio: #72d39f;
     --wire-light: #f0b04a;
     --wire-points: #e98fc8;
+    --wire-flow: #6fc3e8;
     --patch-bg: color-mix(in srgb, var(--bg) 92%, var(--text));
     width: 100%;
     height: 100%;
@@ -789,6 +790,9 @@
   .patch-graph :global(.svelte-flow__edge.w-points .svelte-flow__edge-path) {
     stroke: var(--wire-points);
     stroke-linecap: round;
+  }
+  .patch-graph :global(.svelte-flow__edge.w-flow .svelte-flow__edge-path) {
+    stroke: var(--wire-flow);
   }
   /* A port's normal: what it is wired to until a cable is plugged in; faint, not to be tapped. */
   .patch-graph :global(.svelte-flow__edge.normal) {
@@ -865,6 +869,9 @@
   .legend path.w-points {
     stroke: var(--wire-points);
     stroke-linecap: round;
+  }
+  .legend path.w-flow {
+    stroke: var(--wire-flow);
   }
   .legend path.gap {
     stroke: var(--patch-bg);

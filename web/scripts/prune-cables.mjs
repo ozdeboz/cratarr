@@ -28,6 +28,11 @@ const only = option('only', '');
 const jsonOut = option('json', '');
 const sheetOut = option('sheet', '');
 const sheetOf = option('sheet-of', '');
+// How far the pruned picture may stray from the whole's (the owner accepts differences: a preset's essence, judged by
+// eye on its sheet): the largest difference (of 255) and the least PSNR. --sheet-dir: a sheet for every input there.
+const maxDiff = Number(option('max-diff', '2'));
+const minPsnr = Number(option('min-psnr', '45'));
+const sheetDir = option('sheet-dir', '');
 const inputs = readInputs(args, { chains: flag('chains'), defaults: flag('defaults') }).filter((x) => !only || only.split(',').some((o) => x.name.toLowerCase().includes(o.toLowerCase())));
 
 const b = await openBrowser(base);
@@ -36,8 +41,8 @@ let bad = 0;
 try {
   for (const input of inputs) {
     const t0 = Date.now();
-    const sheet = !!sheetOut && !!sheetOf && input.name.toLowerCase().includes(sheetOf.toLowerCase());
-    const given = { settings: input.v1, ...(sheet ? { shots: [10, 30, 55, 80] } : {}) };
+    const sheet = !!sheetDir || (!!sheetOut && !!sheetOf && input.name.toLowerCase().includes(sheetOf.toLowerCase()));
+    const given = { settings: input.v1, maxDiff, minPsnr, ...(sheet ? { shots: [10, 30, 55, 80] } : {}) };
     const { identifier } = (await b.send('Page.addScriptToEvaluateOnNewDocument', { source: `window.pruneLab = { input: ${JSON.stringify(given)} };` })).result;
     let r;
     try {
@@ -52,7 +57,7 @@ try {
     }
     // A PSNR of ∞ (no difference) comes over the protocol as null.
     const db = (d) => d.psnr ?? Infinity;
-    const ok = r.diff.max <= 2 && db(r.diff) >= 45;
+    const ok = r.diff.max <= maxDiff && db(r.diff) >= minPsnr;
     if (!ok) bad++;
     const psnr = (d) => (Number.isFinite(db(d)) ? `${db(d).toFixed(1)} dB` : '∞');
     const mergedKept = r.keep.filter((k) => k.merged).length;
@@ -62,8 +67,9 @@ try {
     );
     for (const k of r.keep) console.log(`    kept ${k.id}${k.merged ? ' (six bands)' : ''}: ${k.protectedBy ? `unjudged, acts through ${k.protectedBy}` : k.why === 'elsewhere' ? 'acts outside the drawn seconds' : k.cost ? `alone ${k.cost.max}/255, mean ${k.cost.mean.toFixed(4)}, ${psnr(k.cost)}` : k.why}`);
     if (sheet && r.sheet) {
-      writeFileSync(sheetOut, Buffer.from(r.sheet.split(',')[1], 'base64'));
-      console.log(`    sheet: ${sheetOut}`);
+      const to = sheetDir ? `${sheetDir}/${input.name.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase()}.png` : sheetOut;
+      writeFileSync(to, Buffer.from(r.sheet.split(',')[1], 'base64'));
+      console.log(`    sheet: ${to}`);
     }
     const { sheet: _, ...rest } = r;
     out.push({ name: input.name, kind: input.kind, ...rest });
