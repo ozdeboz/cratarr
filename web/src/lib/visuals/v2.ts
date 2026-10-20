@@ -365,15 +365,17 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
     } else cables.push({ id: c.id, from: viaAdsr(extraFrom(c)), to, value, mode: c.mode });
   }
   for (const a of adsrs.values()) cables.push(a.gate);
-  // Pausing dims in sight (0057 §7e item 6, claude-5f's): Music's playing, followed over half a second, into a VCA
-  // (0.55 paused, 1 playing) into Tone map's Level gain.
+  // Pausing dims in sight (0057 §7e item 6, claude-5f's): 1 − playing, followed over half a second, lowers Tone map's
+  // Level gain by up to 0.45 (0.55 paused, 1 playing), starting at 1 as the visuals open.
   const pause: Module[] = [
+    { id: 'pause-invert', type: 'vca', knobs: { gain: 1 } },
     { id: 'pause-follow', type: 'slow', knobs: { attack: 0.5, release: 0.5, full: 1, amount: 1 } },
-    { id: 'pause-dim', type: 'vca', knobs: { gain: 0.55 } },
+    { id: 'pause-dim', type: 'vca', knobs: { gain: 1 } },
   ];
   cables.push(
-    { id: 'pause-playing', from: { module: 'music', port: 'playing' }, to: { module: 'pause-follow', port: 'in' }, value: 1, mode: 'swing', depth: null },
-    { id: 'pause-follow-out', from: { module: 'pause-follow', port: 'out' }, to: { module: 'pause-dim', port: 'cv' }, value: 0.45, mode: 'swing', depth: null },
+    { id: 'pause-playing', from: { module: 'music', port: 'playing' }, to: { module: 'pause-invert', port: 'cv' }, value: -1, mode: 'swing', depth: null },
+    { id: 'pause-invert-out', from: { module: 'pause-invert', port: 'out' }, to: { module: 'pause-follow', port: 'in' }, value: 1, mode: 'swing', depth: null },
+    { id: 'pause-follow-out', from: { module: 'pause-follow', port: 'out' }, to: { module: 'pause-dim', port: 'cv' }, value: -0.45, mode: 'swing', depth: null },
     { id: 'pause-dim-out', from: { module: 'pause-dim', port: 'out' }, to: { module: 'show', port: 'level:gain' }, value: 1, mode: 'swing', depth: null },
   );
   const all = [...engine.values(), ...[...adsrs.values()].map((a) => a.module), ...modules, ...pause];
