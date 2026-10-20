@@ -7,7 +7,7 @@
 import { HELP } from './help';
 import { RENAMED } from './modulators/modulators';
 import { SETTING_KNOB } from './patch';
-import { SHOW_PARTS } from './ports';
+import { SHOW_PARTS, TRIGGER_SIGNALS } from './ports';
 import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 
 /** What a module does to the picture or the values, a line each, by its type. */
@@ -50,6 +50,12 @@ export const moduleHelp: Record<string, string> = {
   vca: 'A VCA: its input times its gain, the one way one signal multiplies another.',
   merge: 'Makes one channel of a polyphonic cable’s several (VCV’s poly to mono).',
   compressor: 'A sidechain compressor on values: turns its input down as the sidechain goes over the threshold.',
+  ducker: 'A sidechain ducker: lowers its input while the sidechain stands over the threshold, for counts like looks a minute.',
+  glow: 'A soft halo around the picture’s light.',
+  tint: 'The picture in the colours of another, by its brightness.',
+  mask: 'The picture let through only where another is bright.',
+  displace: 'The picture pushed about by another.',
+  threshold: 'Only the picture’s bright parts, the rest black: a luma key.',
   adsr: 'An ADSR envelope on each gate or trigger, one a channel.',
   sequencer: 'A step sequencer: up to sixteen values, one a clock step.',
   looper: 'Records a value over a number of bars and loops it in time with the Clock.',
@@ -84,8 +90,6 @@ const FULL = 'The input that gives a full output (1 is typical): higher needs a 
 const LIGHT = 'The flame’s light, before Tone map turns it into a picture.';
 const HUE = 'The colour, round the colour wheel.';
 const SATURATION = 'How vivid the colours are: grey at 0.';
-const TINT = 'How much it takes the flame’s colours around it.';
-const GLOW = 'How much soft light spreads around it.';
 const ACROSS = 'Moves it left or right.';
 const UP = 'Moves it up or down.';
 const SPIN = 'How fast it turns; below 0 the other way.';
@@ -93,7 +97,7 @@ const ATTACK = 'How quickly it rises to a higher input (seconds).';
 const RELEASE = 'How quickly it falls to a lower input (seconds).';
 /** Lines for the inputs every level knob and every step knob has (ports.ts): `<knob>:gain`, `<knob>:next`. */
 const SUFFIX: Record<string, string> = {
-  gain: 'Its knob times this, from 0 to 1: a VCA’s output cabled in; 1 while unplugged.',
+  gain: 'How much of it gets through, 1 while unplugged: a level’s value, a swing’s movement; a time divided by it.',
   next: 'A trigger here moves its knob on to the next step, at its module’s neutral.',
 };
 
@@ -120,8 +124,6 @@ export const portHelp: Record<string, Record<string, string>> = {
     hueSpread: 'How far the colour moves round the wheel from shape to shape.',
     saturation: SATURATION,
     additive: 'From covering what is under it (0) to adding its light to it (1).',
-    tint: TINT,
-    glow: GLOW,
   },
   waves: {
     audio: 'The sound to draw: Music’s unless unplugged.',
@@ -139,15 +141,25 @@ export const portHelp: Record<string, Record<string, string>> = {
     hue: HUE,
     hueSpread: 'How far the colour moves round the wheel along the line.',
     saturation: SATURATION,
-    tint: TINT,
-    glow: GLOW,
   },
-  tonemap: { light: LIGHT },
-  fluid: { light: LIGHT },
-  tunnel: { light: LIGHT },
-  dive: { light: LIGHT },
+  tonemap: { light: LIGHT, level: 'The whole picture’s brightness, as a fader: 1 as set; the pause dims it through its gain.' },
+  fluid: {
+    light: LIGHT,
+    fluid: 'How much the picture flows like smoke: the most it reaches; cables into its gain take it lower.',
+    stir: 'How much of what its cables give pushes the fluid.',
+    flow: 'How much of what its cables give makes the fluid flow.',
+    swirl: 'How much of what its cables give sets the fluid whirling.',
+    facets: 'How much the fluid breaks into facets: the most it reaches; cables into its gain take it lower.',
+  },
+  tunnel: { light: LIGHT, tunnel: 'How fast the picture streams outward for ever: the most it reaches; cables into its gain take it lower.' },
+  dive: { light: LIGHT, dive: 'How fast the view dives into the flame for ever: the most it reaches; cables into its gain take it lower.' },
   trails: { light: LIGHT },
-  'loop-effect': { light: LIGHT },
+  'loop-effect': { light: LIGHT, amount: 'How strongly the loop’s effect acts: the most it reaches; cables into its gain take it lower.' },
+  'kaleidoscope-engine': { amount: 'How strongly its effect shows: the most it reaches; cables into its gain take it lower.' },
+  'eyedo-engine': { amount: 'How strongly its effect shows: the most it reaches; cables into its gain take it lower.' },
+  'hydra-engine': { amount: 'How strongly its effect shows: the most it reaches; cables into its gain take it lower.' },
+  blur: { smoothing: 'How wide sparse areas blur, up to twelve pixels: the most it reaches; cables into its gain take it lower.' },
+  curve: { haze: 'Lifts the faint mist into view (up) or sinks it to black (down): the most either way; cables into its gain take it toward 0.' },
   fold: {
     grid: 'A Grid’s points set the symmetry; without one, its own centre and Count.',
     mode: 'Mosaic, kaleidoscope, mirror or pixelate.',
@@ -194,6 +206,10 @@ export const portHelp: Record<string, Record<string, string>> = {
     beats: 'Beats a turn: how many beats it takes to go once round.',
     phase: 'Where it is in its turn, from 0 to 1.',
     rate: 'How fast it turns now.',
+    beatRatio: 'The Beat output: every beat, or the beats divided or multiplied (÷4 to ×4).',
+    barRatio: 'The Bar output: every bar, or the bars divided or multiplied (÷4 to ×4).',
+    phraseRatio: 'The Phrase output: every phrase, or the phrases divided or multiplied (÷4 to ×4).',
+    phraseBars: 'How many bars make a phrase.',
   },
   accent: {
     in: 'The value to split.',
@@ -202,6 +218,22 @@ export const portHelp: Record<string, Record<string, string>> = {
   },
   vca: { gain: 'The gain: 0 shuts the input off, 1 lets it through as it is, 2 doubles it.', cv: 'The gain as a signal (CV), cabled in.' },
   merge: { mode: 'Sum, mean, largest or geometric mean of the channels.' },
+  ducker: {
+    key: 'The sidechain: the count it watches.',
+    in: 'The signal it lowers; 1 when unplugged.',
+    threshold: 'The count above which it starts to duck.',
+    depth: 'How far it lowers at most (dB).',
+    attack: 'How quickly it ducks (seconds).',
+    hold: 'How long it stays down once the count is back under (seconds).',
+    release: 'How quickly it comes back up (seconds).',
+    hysteresis: 'How far under the threshold the count must fall before it lets go, as a share.',
+    out: 'Its input, ducked.',
+  },
+  glow: { glow: 'How much halo.' },
+  tint: { tint: 'How much of the other picture’s colours.', by: 'The picture whose colours it takes.' },
+  mask: { amount: 'How strongly it masks.', invert: 'Let through where the other is dark instead.', by: 'The picture that decides where.' },
+  displace: { amount: 'How far it pushes.', scale: 'How fine the pushing is.', mode: 'By the other’s brightness, or by its red and green.', by: 'The picture that pushes.' },
+  threshold: { threshold: 'The brightness under which it goes black.', softness: 'How soft the edge is.' },
   compressor: {
     in: 'The signal it compresses.',
     key: 'The sidechain: the signal whose level sets how far it compresses.',
@@ -221,6 +253,7 @@ export const portHelp: Record<string, Record<string, string>> = {
     sustain: 'Sustain: the level held while the gate stays open.',
     release: 'Release: the time to fall to 0 once the gate closes (seconds).',
     retrigger: 'A trigger while one rings starts from the higher of the two (0) or from where it is (1).',
+    reference: 'How it reads a strike’s strength: against this track’s typical, lately’s, or as it is.',
     amount: 'The peak’s height.',
     out: 'One envelope a channel.',
   },
@@ -254,7 +287,8 @@ export const portHelp: Record<string, Record<string, string>> = {
     clock: 'Plugged in, Rate counts in beats instead of seconds.',
     reset: 'Starts the wave again; on the Clock’s bar unless unplugged.',
     rate: 'Cycles a second, or a beat while a clock is plugged in.',
-    shape: 'From a sine (0) to a triangle (1).',
+    ratio: 'With a clock plugged in, the clock divided or multiplied (÷4 to ×4).',
+    shape: 'Sine (0), triangle (1), saw (2), square (3), and blends between.',
     offset: 'Where in its cycle it starts.',
     amount: AMOUNT_OUT,
   },
@@ -276,7 +310,15 @@ export const portHelp: Record<string, Record<string, string>> = {
     amount: AMOUNT_OUT,
   },
   counter: { length: 'Steps to a full count: at 4, beats into it count a bar.', amount: AMOUNT_OUT },
-  music: { audio: 'The sound itself, its recent samples.', playing: '1 while the music plays, 0 while it is paused.', hold: 'How long each band’s envelope takes to fall (seconds).' },
+  music: {
+    audio: 'The sound itself, its recent samples.',
+    playing: '1 while the music plays, 0 while it is paused.',
+    hits: 'A trigger on each hit in a band, such as a drum or a plucked note, its strength with it.',
+    percussiveHits: 'A trigger on each drum hit in a band, held notes left out, its strength with it.',
+    hold: 'How long each band’s envelope takes to fall (seconds).',
+    ...Object.fromEntries([...TRACK_SIGNALS, ...BAND_SIGNALS].map((s) => [`reference.${s}`, 'How this row is read: against this track’s typical, lately’s, or as it is.'])),
+    ...Object.fromEntries([...TRACK_SIGNALS, ...BAND_SIGNALS].filter((s) => !TRIGGER_SIGNALS.has(s)).map((s) => [`${s}:slow`, 'This row, followed slowly.'])),
+  },
   filterbank: {
     audio: 'The sound to split: Music’s unless unplugged.',
     ...numbered(5, (i) => `split${i}`, (i) => `Where band ${i} ends and band ${i + 1} begins (Hz).`),
@@ -291,7 +333,10 @@ export const portHelp: Record<string, Record<string, string>> = {
     looks: 'How many new looks a minute.',
   },
   screen: { guard: 'How far the flash guard is holding back now (at most three flashes a second over a large area).' },
-  frame: { loose: 'Set by a double tap of the dice: up to twice Wild’s limits until the next roll, an undo or a reset.' },
+  frame: {
+    effects: 'The most of every effect’s Amount: the most it reaches; cables into its gain take it lower.',
+    loose: 'Set by a double tap of the dice (going with the dice’s Randomize).',
+  },
 };
 
 /** Ports whose label says all there is (no line): on any type, and on these. */

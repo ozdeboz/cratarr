@@ -24,8 +24,8 @@ test('removed: a route to 0 (so its default does not come back), an extra droppe
 });
 
 test("new: a route where it can be one, else an extra; a level knob's cable lets through", () => {
-  assert.equal(newCable({ signal: 'beat' }, { module: 'show', knob: 'size' }, 'level', 'cable-9').id, R);
-  const ref = newCable({ signal: 'beat', reference: 'lately' }, { module: 'show', knob: 'size' }, 'swing', 'cable-9');
+  assert.equal(newCable({ signal: 'beat' }, { module: 'flame', knob: 'zoom' }, 'level', 'cable-9').id, R);
+  const ref = newCable({ signal: 'beat', reference: 'lately' }, { module: 'flame', knob: 'zoom' }, 'swing', 'cable-9');
   assert.equal(ref.id, 'cable-9');
   const mod = newCable({ modulator: 'lfo' }, { module: 'flame', knob: 'detail' }, 'level', 'cable-9');
   assert.deepEqual([mod.id, mod.mode, mod.value], ['cable-9', 'level', 0.5]);
@@ -34,7 +34,7 @@ test("new: a route where it can be one, else an extra; a level knob's cable lets
 
 test('a route read as a cable; rerouted: its value kept, a route where it can be, else an extra', () => {
   const c = cables();
-  assert.deepEqual(cableOf(c, R), { id: R, from: { signal: 'beat' }, to: { module: 'show', knob: 'size' }, value: 0.5, mode: 'swing' });
+  assert.deepEqual(cableOf(c, R), { id: R, from: { signal: 'beat' }, to: { module: 'flame', knob: 'zoom' }, value: 0.5, mode: 'swing' });
   assert.equal(cableOf(c, routeKey('beat', null, 'fluid'))?.mode ?? 'level', 'level');
   // Beat → Size moved to Hue: still a route.
   const hue = reroute(c, R, 'to', { module: 'flame', knob: 'hue' }, 'swing')!;

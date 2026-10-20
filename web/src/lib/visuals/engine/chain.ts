@@ -29,6 +29,8 @@ export type ChainState = {
   rates: number[];
   presence: number[];
   moments: Record<MomentAspect, MomentState>;
+  /** Which moments came this frame (the same object each frame). */
+  momentsNow: Record<MomentAspect, boolean>;
   courses: { lights: AccentState[]; glow: AccentState; size: AccentState; saturation: AccentState };
 };
 
@@ -43,6 +45,7 @@ export function newChain(): ChainState {
     rates: Array<number>(PARTS).fill(0),
     presence: Array<number>(PARTS).fill(0),
     moments: Object.fromEntries(MOMENT_ASPECTS.map((a) => [a, newMoment()])) as Record<MomentAspect, MomentState>,
+    momentsNow: Object.fromEntries(MOMENT_ASPECTS.map((a) => [a, false])) as Record<MomentAspect, boolean>,
     courses: { lights: Array.from({ length: PARTS }, newAccent), glow: newAccent(), size: newAccent(), saturation: newAccent() },
   };
 }
@@ -123,9 +126,8 @@ export function stepChain(
     });
     hits.push(clamp(accented(clamp(W[A.lights] + own[A.lights], -1, 3) * (still ? 0.5 : 1), st.courses.lights[i]), -1, 3));
   }
-  const moments = Object.fromEntries(
-    MOMENT_ASPECTS.map((a) => [a, !still && (x.fired?.[a] !== undefined ? x.fired[a]! : stepMoment(st.moments[a], W[A[a]], now, L.gap))]),
-  ) as Record<MomentAspect, boolean>;
+  const moments = st.momentsNow;
+  for (const a of MOMENT_ASPECTS) moments[a] = !still && (x.fired?.[a] !== undefined ? x.fired[a]! : stepMoment(st.moments[a], W[A[a]], now, L.gap));
   const walkOf = (a: number, track: number) => (W[a] - track) / L.evolution;
   const fluid = opts.fluidFull * levelOf(got, s.fluid, A.fluid);
   const haze = hazeOf(clamp(s.haze * got.level[A.haze], -1, 1));

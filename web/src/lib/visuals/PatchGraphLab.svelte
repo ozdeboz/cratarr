@@ -106,7 +106,7 @@
     const has = (id: string) => p.modules.some((m) => m.id === id);
     const chainOf = [['flame', 'light', 'show', 'light'], ['show', 'picture', 'fx1', 'picture'], ['fx1', 'picture', 'fx2', 'picture'], ['fx2', 'picture', 'fx3', 'picture']];
     chainOf.forEach(([a, ap, b, bp], i) => {
-      if (has(a) && has(b)) p.cables.push({ id: `lab-${i + 1}`, from: { module: a, port: ap }, to: { module: b, port: bp }, value: 1, mode: 'swing' });
+      if (has(a) && has(b)) p.cables.push({ id: `lab-${i + 1}`, from: { module: a, port: ap }, to: { module: b, port: bp }, value: 1 });
     });
     return p;
   }

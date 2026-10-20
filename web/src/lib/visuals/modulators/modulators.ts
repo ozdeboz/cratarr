@@ -13,6 +13,7 @@
 //
 // Pure: no WebGL, no DOM.
 
+import { RATIOS, UNIT_RATIO, ratioOf } from '../engine/clock';
 import type { Knob, Modulator, ModuleType, SignalRef } from '../patch';
 
 /** The music's signals now, 1 = typical. */
@@ -23,6 +24,9 @@ export type ModulatorType = ModuleType & {
   place: 'modulator';
   range: 'unipolar' | 'bipolar';
   inputs?: string[];
+  /** Its trigger inputs (ports.ts TRIGGER_INPUTS declares their ports): each 1 on the frame it fires, else 0, given
+   *  only where something is plugged in or normalled (left out of `set`, or not a number: nothing is). */
+  triggers?: string[];
   create(seed?: number): Modulator;
 };
 
@@ -50,13 +54,15 @@ const FULL = knob('full', 'Full at', 0.25, 4, 1, 2);
 const unit = (x: number, full: number) => clamp(x / full, 0, 1);
 const IN = ['in'];
 
-/** Each knob as set, within its range, its default where it is not set; each port's sum as it came (0 uncabled). */
-function settled(knobs: Knob[], ports: string[], set: Record<string, number>, into: Record<string, number>) {
+/** Each knob as set, within its range, its default where it is not set; each port's sum as it came (0 uncabled); each
+ *  trigger as it came, NaN where nothing is plugged in. */
+function settled(knobs: Knob[], ports: string[], triggers: string[], set: Record<string, number>, into: Record<string, number>) {
   for (const k of knobs) {
     const v = set[k.id];
     into[k.id] = Number.isFinite(v) ? clamp(v, k.min, k.max) : k.default;
   }
   for (const p of ports) into[p] = finite(set[p]);
+  for (const p of triggers) into[p] = Number.isFinite(set[p]) ? set[p] : NaN;
   return into;
 }
 
@@ -69,6 +75,7 @@ function define(
   knobs: Knob[],
   inputs: string[] | undefined,
   make: (seed: number) => Step,
+  triggers?: string[],
 ): ModulatorType {
   const [lo, hi] = range === 'bipolar' ? [-1, 1] : [0, 1];
   return {
@@ -78,12 +85,13 @@ function define(
     range,
     knobs,
     ...(inputs ? { inputs } : {}),
+    ...(triggers ? { triggers } : {}),
     create(seed = 0): Modulator {
       const step = make(seed);
       const k: Record<string, number> = {};
       return {
         step(dt, signals, set) {
-          const v = step(Number.isFinite(dt) ? Math.max(0, dt) : 0, signals, settled(knobs, inputs ?? [], set, k));
+          const v = step(Number.isFinite(dt) ? Math.max(0, dt) : 0, signals, settled(knobs, inputs ?? [], triggers ?? [], set, k));
           return Number.isFinite(v) ? clamp(v, lo, hi) : 0;
         },
       };
@@ -161,7 +169,8 @@ const mean = define('mean', 'Mean', 'unipolar', [knob('horizon', 'Horizon', 0, 6
 
 // The beat gate: opens when its input goes above Above (1: above typical, where MilkDrop's beat tests sit), closes
 // below that less its Hysteresis share. Each opening lifts the next one's threshold by Lift, which fades over Recover,
-// as presets' adaptive thresholds do. Open it gives 1; shut it falls over Release.
+// as presets' adaptive thresholds do. It opens no sooner than Gap after it last did (a step's moments: 2 s). Open it
+// gives 1; shut it falls over Release.
 const gate = define(
   'gate',
   'Beat gate',
@@ -172,7 +181,7 @@ const gate = define(
     knob('lift', 'Lift', 0, 2, 0, 0.3),
     knob('recover', 'Recover', 0, 4, 0, 0.5),
     knob('release', 'Release', 0, 2, 0, 0.1),
-    knob('gap', 'Gap', 0, 10, 0, 0),
+    { ...knob('gap', 'Gap', 0, 10, 0, 0), time: true },
     AMOUNT,
   ],
   IN,
@@ -184,7 +193,8 @@ const gate = define(
     return (dt, _signals, k) => {
       lifted *= keep(dt, k.recover);
       since += dt;
-      if (!open && k.in > k.above + lifted && since >= k.gap) {
+      // More than Gap since it last opened (a frame exactly Gap on is not yet: a sum of frames' times is a hair off).
+      if (!open && k.in > k.above + lifted && (k.gap <= 0 || since > k.gap + 1e-9)) {
         open = true;
         lifted += k.lift;
         since = 0;
@@ -215,27 +225,91 @@ const counter = define('counter', 'Counter', 'unipolar', [knob('length', 'Length
   };
 });
 
-// An LFO: Rate cycles a second, from a sine (Shape 0) to a triangle (1), started Offset of a cycle in.
+/** The LFO's waves at a phase `p` (cycles), each −1..1 and starting at 0 rising, as the sine does: sine, triangle, saw,
+ *  square (VCV's LFO's four). */
+const WAVES: readonly ((p: number) => number)[] = [
+  (p) => Math.sin(2 * Math.PI * p),
+  (p) => 4 * Math.abs(frac(p - 0.25) - 0.5) - 1,
+  (p) => 2 * frac(p + 0.5) - 1,
+  (p) => (frac(p) < 0.5 ? 1 : -1),
+];
+
+// An LFO: Rate cycles a second, its wave by Shape (0 a sine, 1 a triangle, 2 a saw, 3 a square, gliding between
+// neighbours), started Offset of a cycle in. Clocked (a trigger plugged into `clock`, ports.ts TRIGGER_INPUTS): Ratio
+// cycles a clock tick instead of Rate (÷4 … ×4, clock.ts RATIOS, read at its nearest; continuous as every knob here,
+// and a change of it changes the pace, never the phase), locked to the ticks: between two it runs on at the last
+// two's period, holding at the next tick's place should that one be late, and a tick early moves it on to its place.
+// `reset` (normalled to the Clock's bar) puts it back to the cycle's start. Unclocked, `reset` does nothing, so an LFO
+// with nothing plugged in runs as it always has.
 const lfo = define(
   'lfo',
   'LFO',
   'bipolar',
-  [knob('rate', 'Rate', 0, 8, 0, 0.25), knob('shape', 'Shape', 0, 1, 0, 0), knob('offset', 'Offset', 0, 1, 0, 0), AMOUNT],
+  [
+    knob('rate', 'Rate', 0, 8, 0, 0.25),
+    knob('shape', 'Shape', 0, WAVES.length - 1, 0, 0),
+    knob('offset', 'Offset', 0, 1, 0, 0),
+    knob('ratio', 'Ratio', 0, RATIOS.length - 1, UNIT_RATIO, UNIT_RATIO),
+    AMOUNT,
+  ],
   undefined,
   () => {
     let u = 0;
+    // Clocked: seconds since the last tick, the last two's period (0: not known yet), the share of it gone as last
+    // given, whether a tick has come since it was plugged in, and whether each trigger is still high from its last
+    // firing (a trigger counts rising past RISE, as the counter's).
+    let since = 0;
+    let period = 0;
+    let between = 0;
+    let seen = false;
+    let clockHigh = false;
+    let resetHigh = false;
     return (dt, _signals, k) => {
-      u = frac(u + k.rate * dt);
+      if (Number.isFinite(k.clock)) {
+        since += dt;
+        const reset = !resetHigh && k.reset > RISE;
+        if (reset) resetHigh = true;
+        else if (resetHigh && !(k.reset >= RESET)) resetHigh = false;
+        const tick = !clockHigh && k.clock > RISE;
+        if (tick) clockHigh = true;
+        else if (clockHigh && !(k.clock >= RESET)) clockHigh = false;
+        // How far on it goes this frame, in ticks.
+        let advance: number;
+        if (tick) {
+          advance = seen ? 1 - between : 0;
+          if (seen) period = since;
+          seen = true;
+          since = 0;
+          between = 0;
+        } else {
+          const now = period > 0 ? Math.min(1, since / period) : between;
+          advance = now - between;
+          between = now;
+        }
+        u = reset ? 0 : frac(u + advance * ratioOf(k.ratio));
+        if (reset) {
+          since = 0;
+          between = 0;
+        }
+      } else {
+        seen = false;
+        between = 0;
+        clockHigh = false;
+        resetHigh = false;
+        u = frac(u + k.rate * dt);
+      }
       const p = u + k.offset;
-      const sine = Math.sin(2 * Math.PI * p);
-      const triangle = 4 * Math.abs(frac(p - 0.25) - 0.5) - 1;
-      return k.amount * (sine + (triangle - sine) * k.shape);
+      // Between two waves: Shape's share of the way from one to the next (the first two as the LFO always had them).
+      const i = k.shape <= 1 ? 0 : Math.min(WAVES.length - 2, Math.ceil(k.shape) - 1);
+      const a = WAVES[i](p);
+      return k.amount * (a + (WAVES[i + 1](p) - a) * (k.shape - i));
     };
   },
+  ['clock', 'reset'],
 );
 
-/** A number −1..1 for each whole step of a walk, the same for the same seed (an integer hash). */
-function point(seed: number, i: number): number {
+/** A number −1..1 for each whole step of a walk, the same for the same seed (an integer hash); the Grid's jitter too. */
+export function point(seed: number, i: number): number {
   let h = Math.imul(i ^ Math.imul(seed, 0x9e3779b9), 0x85ebca6b);
   h ^= h >>> 13;
   h = Math.imul(h, 0xc2b2ae35);

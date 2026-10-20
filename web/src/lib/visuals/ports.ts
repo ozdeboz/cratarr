@@ -4,6 +4,7 @@
 // modulator's `inputs` are value inputs, a picture module takes and gives a picture, a modulator gives a value. The
 // modules that hold today's hidden behaviours are declared here, so every one of them shows.
 import type { RouteValue } from './curves';
+import { CLOCK_TRIGGER_KNOBS } from './engine/clock';
 import { BUSY, type Knob, type Macro, type Module, type ModuleType, type Place } from './patch';
 import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 
@@ -60,9 +61,10 @@ export function polyKnobs(t: ModuleType): ModuleType {
 }
 
 const knobPortOf = (k: Knob): Port => ({ ...knobPort(k), ...(k.channels ? { channels: k.channels } : {}) });
-/** A level knob's gain (0057 §7e item 1): its value times this (0..1), normalled to 1; a VCA's out cabled in, as a
- *  module's CV-controlled level. */
-const gainPortOf = (k: Knob): Port[] => (k.kind === 'level' ? [{ id: `${k.id}:gain`, label: `${k.label}: gain`, type: 'value', ...(k.channels ? { channels: k.channels } : {}) }] : []);
+/** A knob's gain (0057 §7e), normalled to 1: a level's value times it (a module's CV-controlled level); a swing's
+ *  modulation (its cables' sum) times it (Bitwig's modulation amount); a time's value divided by it (a time CV). A VCA's
+ *  or a Ducker's out is cabled in. Steps have none. */
+const gainPortOf = (k: Knob): Port[] => (k.kind === 'step' ? [] : [{ id: `${k.id}:gain`, label: `${k.label}: gain`, type: 'value', ...(k.channels ? { channels: k.channels } : {}) }]);
 /** A step knob's trigger (0057 §7e): it moves on to its next step at its module's neutral, as a Gate fires it. */
 const nextPortOf = (k: Knob): Port[] => (k.kind === 'step' && k.randomize !== false ? [{ id: `${k.id}:next`, label: `${k.label}: next`, type: 'trigger' }] : []);
 
@@ -88,12 +90,16 @@ export function portsOf(t: ModuleType & { ports?: Ports }): Ports {
   if (t.place === 'frame') return { in: knobs, out: [] };
   // The flame and its own loop work on light (claude-632, step 3): the flame takes last frame's light and gives its
   // light; Trails, Fluid, Tunnel, the Loop effect and Dive carry light on.
-  if (t.type === 'flame') return { in: [LIGHT('light', 'Last light'), ...knobs], out: [LIGHT('light', 'Light')] };
+  // The flame's part columns take six channels, one a part (0057 §4b): a band's cable reaches its part; a whole
+  // track's every part. Into any one-channel knob, six channels are the bands' mean (a Merge, in the conversion).
+  if (t.type === 'flame') return { in: [LIGHT('light', 'Last light'), ...knobs.map((p) => (FLAME_PARTS.has(p.id) ? { ...p, channels: 6 } : p))], out: [LIGHT('light', 'Light')] };
   if (LIGHT_CARRIERS.has(t.type)) return { in: [LIGHT('light', 'Light'), ...knobs], out: [LIGHT('light', 'Light')] };
   return { in: [...(TAKES_PICTURE.has(t.place) ? [PICTURE_IN] : []), ...knobs], out: [PICTURE_OUT] };
 }
 
 const LIGHT = (id: string, label: string): Port => ({ id, label, type: 'light' });
+/** The flame's part columns: polyphonic inputs, a part a channel. */
+export const FLAME_PARTS: ReadonlySet<string> = new Set(['shape', 'rotation', 'lights', 'hue', 'spread', 'presence']);
 /** The flame's own loop, on its light (Dive last: a pass-through whose rate the points' camera reads). */
 export const LIGHT_CARRIERS: ReadonlySet<string> = new Set(['trails', 'fluid', 'tunnel', 'loop-effect', 'dive']);
 
@@ -113,7 +119,11 @@ type Declared = ModuleType & { ports: Ports };
 
 /** Today's hidden behaviours as modules (0057 §3). Their knobs are what the old settings held; their ports normalled
  *  to where the behaviour reaches today. claude-5f's engine steps them; the views draw them as any other. */
-const MUSIC_KNOBS: Knob[] = [{ ...knob('hold', 'Hold', 0.02, 1, 0.15), channels: 6 }];
+const MUSIC_KNOBS: Knob[] = [
+  { ...knob('hold', 'Hold', 0.02, 1, 0.15), channels: 6 },
+  // How each row is read (0057 §7e item 10): 0 against this track's typical, 1 lately's, 2 as it is.
+  ...[...TRACK_SIGNALS, ...BAND_SIGNALS].map((s) => ({ ...knob(`reference.${s}`, `${label(s)}: reading`, 0, 2, 0, 'step'), randomize: false as const })),
+];
 
 export const MUSIC: Declared = {
   type: 'music',
@@ -129,6 +139,9 @@ export const MUSIC: Declared = {
       out('playing', 'Playing'),
       ...TRACK_SIGNALS.map((s) => out(s, label(s), TRIGGER_SIGNALS.has(s) ? 'trigger' : 'value')),
       ...BAND_SIGNALS.map((s) => out(s, label(s), TRIGGER_SIGNALS.has(s) ? 'trigger' : 'value', 6)),
+      // Each value signal's slow form (the speed a cable no longer says).
+      ...TRACK_SIGNALS.filter((s) => !TRIGGER_SIGNALS.has(s)).map((s) => out(`${s}:slow`, `${label(s)} (slow)`)),
+      ...BAND_SIGNALS.filter((s) => !TRIGGER_SIGNALS.has(s)).map((s) => out(`${s}:slow`, `${label(s)} (slow)`, 'value', 6)),
     ],
   },
 };
@@ -161,7 +174,7 @@ export const CLOCK = declared(
   'clock',
   'Clock',
   'modulator',
-  [knob('speed', 'Speed', 0, 2, 1, 'level', 0), knob('beats', 'Beats a turn', 4, 128, 32)],
+  [knob('speed', 'Speed', 0, 2, 1, 'level', 0), knob('beats', 'Beats a turn', 4, 128, 32), ...CLOCK_TRIGGER_KNOBS],
   [{ id: 'tempo', label: 'Tempo', type: 'value', normal: { module: 'music', port: 'tempo' } }],
   [out('phase', 'Turn'), out('rate', 'Rate'), out('beat', 'Beat', 'trigger'), out('bar', 'Bar', 'trigger'), out('phrase', 'Phrase', 'trigger')],
 );
@@ -233,6 +246,8 @@ export const ADSR = declared(
     // is (1, the textbook's).
     { ...knob('retrigger', 'Retrigger', 0, 1, 0, 'step'), randomize: false },
     knob('amount', 'Amount', 0, 1, 1, 'level'),
+    // How it reads a strike's strength (READINGS): the reading its gate's cable had.
+    { ...knob('reference', 'Reading', 0, 2, 0, 'step'), randomize: false },
   ],
   [{ id: 'gate', label: 'Gate', type: 'trigger', channels: 6 }],
   [out('out', 'Out', 'value', 6)],
@@ -280,10 +295,21 @@ export const SHOW_PARTS: readonly { knob: string; type: string; label: string; p
 export function showPartTypes(show: ModuleType): Declared[] {
   return SHOW_PARTS.map(({ knob: id, type, label: name, polymorphic }) => {
     const k = show.knobs.find((x) => x.id === id);
-    const knobs = k ? [k] : [];
+    // Tone map's Level (0057 §7e item 6): the whole picture's brightness as a fader, 1 as set; the pause dims it
+    // through its gain.
+    const knobs = [...(k ? [k] : []), ...(type === 'tonemap' ? [knob('level', 'Level', 0, 1, 1, 'level')] : [])];
     const input: Port = type === 'tonemap' ? { id: 'light', label: 'Light', type: 'light' } : polymorphic ? { ...PICTURE_IN, polymorphic } : PICTURE_IN;
     return declared(type, name, 'module', knobs, [input], [polymorphic ? { ...PICTURE_OUT, polymorphic } : PICTURE_OUT]);
   });
+}
+
+/** The swing columns of today's chain as v2 has them (0057 §7e item 2, VCV's rule): the column's resting value, the
+ *  cables adding to it; bipolar about 0 (a full cable gives ±1 in the same units). Their scale went into the cables. */
+export const COLUMN_OFFSETS: ReadonlySet<string> = new Set(['flame.shape', 'flame.rotation', 'flame.lights', 'flame.presence', 'flame.zoom', 'trails.trails', 'tonemap.glow', 'saturate.saturation', 'bend.waves']);
+
+/** Today's chain's types as v2 has them: the swing columns as offsets (−1..1, at 0). */
+export function v2ChainType(t: ModuleType): ModuleType {
+  return { ...t, knobs: t.knobs.map((k) => (COLUMN_OFFSETS.has(`${t.type}.${k.id}`) ? { ...k, min: -1, max: 1, neutral: 0, default: 0, kind: 'swing' as const } : k)) };
 }
 
 /** The lattices a Grid lays its points on (0057 §4c). */
@@ -291,7 +317,8 @@ export const LATTICES = ['square', 'hexagonal', 'triangular', 'rings', 'spiral']
 /** The most points a Grid gives (its channels). */
 export const MOST_POINTS = 64;
 
-/** Grid (0057 §4c; TouchDesigner's Grid SOP): points on a lattice, and each point's values as channels. */
+/** Grid (0057 §4c; TouchDesigner's Grid SOP): points on a lattice, and each point's values as channels. Its frame is
+ *  centred, y up, the screen's short side −1..1 (as Fold and Instance read it). */
 export const GRID = declared(
   'grid',
   'Grid',
@@ -348,20 +375,73 @@ export const FILTER_BANK = declared(
   [out('bands', 'Bands', 'audio', 6), out('level', 'Level', 'value', 6)],
 );
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
+/** The kind of busyness each knob makes (0057 §7e, claude-5f's sidechain): the Ducker of that kind holds it back. */
+export const BUSY_OF: Readonly<Record<string, (typeof BUSY)[number]>> = {
+  'clock.speed': 'motion',
+  'flame.hue': 'colour',
+  'flame.zoom': 'zoom',
+  'flame.evolution': 'shape',
+  'gate.gap': 'looks',
+};
+
+/** Ducker (0057 §7e; the broadcast sidechain, claude-5f's): its input lowered by up to Depth (dB) while its key stands
+ *  over the threshold (attack, hold, release; let go under Hysteresis × the threshold). For counts (flashes a second,
+ *  looks a minute), which a ratio compressor in a closed loop cannot settle. Its input unplugged is 1. */
+export const DUCKER = declared(
+  'ducker',
+  'Ducker',
+  'modulator',
+  [
+    { ...knob('threshold', 'Threshold', 0.001, 10, 1), taper: 'exp' as const },
+    knob('depth', 'Depth (dB)', 0, 40, 12),
+    knob('attack', 'Attack', 0, 5, 1),
+    knob('hold', 'Hold', 0, 10, 0),
+    knob('release', 'Release', 0, 20, 3),
+    knob('hysteresis', 'Hysteresis', 0, 1, 0.8),
+  ].map((k) => ({ ...k, randomize: false as const })),
+  [
+    { id: 'key', label: 'Sidechain', type: 'value' },
+    { id: 'in', label: 'Input', type: 'value' },
+  ],
+  [VALUE_OUT],
+);
+
+/** The picture modules of 0057 §5 and §6b (claude-632's ids): `picture` in and out; `by` a second picture. */
+const BY: Port = { id: 'by', label: 'By', type: 'picture' };
+export const GLOW = declared('glow', 'Glow', 'module', [knob('glow', 'Glow', 0, 1, 0.4, 'level')], [PICTURE_IN], [PICTURE_OUT]);
+export const TINT = declared('tint', 'Tint', 'module', [knob('tint', 'Tint', 0, 1, 0.7, 'level')], [PICTURE_IN, BY], [PICTURE_OUT]);
+export const MASK = declared('mask', 'Mask', 'module', [knob('amount', 'Amount', 0, 1, 1, 'level'), knob('invert', 'Invert', 0, 1, 0, 'step')], [PICTURE_IN, BY], [PICTURE_OUT]);
+export const DISPLACE = declared(
+  'displace',
+  'Displace',
+  'module',
+  [knob('amount', 'Amount', 0, 1, 0.3, 'level'), knob('scale', 'Scale', 0, 1, 0.5), knob('mode', 'Mode', 0, 1, 0, 'step')],
+  [PICTURE_IN, BY],
+  [PICTURE_OUT],
+);
+/** Threshold: a luma key, only the picture's bright parts (for Bloom). */
+export const THRESHOLD = declared('threshold', 'Threshold', 'module', [knob('threshold', 'Threshold', 0, 1, 0.6, 'level'), knob('softness', 'Softness', 0, 1, 0.1)], [PICTURE_IN], [PICTURE_OUT]);
+export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD];
+
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 
 /** A cable between typed ports. From a signal port of Music it keeps 0056's reference and speed; its `depth` is the
  *  port that scales it (undefined: normalled to the Envelope; null: unplugged). */
+/** A cable (0057 §7e item 10, the owner): its amount (a curve; the plain amount the straight one), its depth (what
+ *  scales it: undefined normalled to the Loudness's out, null none, else that port), its channel (one band, in its
+ *  ends). It only adds. How a signal is read is its Music row's; its slow form a Music output of its own. */
 export type CableV2 = {
   id: string;
-  from: PortRef & { reference?: 'track' | 'lately' | 'absolute'; speed?: 'fast' | 'slow' };
+  from: PortRef;
   to: PortRef;
   value: RouteValue;
-  mode: 'level' | 'swing';
   depth?: PortRef | null;
 };
+
+/** How a Music row reads its signal (0057, "reference per row"): against this track's typical, lately's, or as it is. */
+export const READINGS = ['track', 'lately', 'absolute'] as const;
 
 export type PatchV2 = { v: 2; modules: Module[]; cables: CableV2[]; macros: Macro[]; pins: string[] };
 
@@ -393,12 +473,14 @@ export const SCREEN = declared('screen', 'Screen', 'finish', [], [PICTURE_IN], [
 
 export const GRAPH_MODULES: readonly Declared[] = [MIX, FEEDBACK, SCREEN];
 
-/** Whether a picture cycle passes through a Feedback, as every one must (§4): the cables' picture graph, by module. */
+/** Whether a picture cycle passes through a Feedback, as every one must (§4): the cables' picture and light graph, by
+ *  module (the flame's own loop is light). */
 export function cyclesClosed(p: PatchV2, typeOf: (type: string) => (ModuleType & { ports?: Ports }) | undefined): boolean {
   const type = new Map(p.modules.map((m) => [m.id, m.type]));
   const isPicture = (c: CableV2) => {
     const t = typeOf(type.get(c.from.module) ?? '');
-    return !!t && portsOf(t).out.find((x) => x.id === c.from.port)?.type === 'picture';
+    const kind = t ? portsOf(t).out.find((x) => x.id === c.from.port)?.type : undefined;
+    return kind === 'picture' || kind === 'light';
   };
   const next = new Map<string, string[]>();
   for (const c of p.cables) if (isPicture(c) && type.get(c.from.module) !== 'feedback') next.set(c.from.module, [...(next.get(c.from.module) ?? []), c.to.module]);

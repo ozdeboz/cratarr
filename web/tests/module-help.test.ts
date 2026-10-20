@@ -7,12 +7,12 @@ import assert from 'node:assert/strict';
 const { DEFAULTS, RANGES } = await import('../src/lib/visuals/settings.svelte.ts');
 const { cratarrTypes } = await import('../src/lib/visuals/patch.ts');
 const { EXTRA_TYPES } = await import('../src/lib/visuals/registry.ts');
-const { ENGINE_MODULES, GRAPH_MODULES, polyKnobs, portsOf, showPartTypes } = await import('../src/lib/visuals/ports.ts');
+const { ENGINE_MODULES, GRAPH_MODULES, PICTURE_MODULES, polyKnobs, portsOf, showPartTypes } = await import('../src/lib/visuals/ports.ts');
 const { HELP } = await import('../src/lib/visuals/help.ts');
 const { HELP_KEY, PLAIN, helpFor, isPlain, moduleHelp, portHelp } = await import('../src/lib/visuals/module-help.ts');
 
 const chain = cratarrTypes(RANGES, DEFAULTS);
-const all = [...EXTRA_TYPES, ...chain, ...ENGINE_MODULES, ...GRAPH_MODULES, ...showPartTypes(chain.find((t) => t.type === 'show')!)];
+const all = [...EXTRA_TYPES, ...chain, ...ENGINE_MODULES, ...GRAPH_MODULES, ...PICTURE_MODULES, ...showPartTypes(chain.find((t) => t.type === 'show')!)];
 const types = new Map(all.map((t) => [t.type, t]));
 /** Every id a type has a port or a knob by (a polyphonic knob once). */
 const idsOf = (type: string) => {
@@ -47,9 +47,11 @@ test('no line, pointer or plain mark for a port or type that is not there', () =
 test('a pointer into help.ts finds its text; a type’s own line comes first', () => {
   for (const [type, keys] of Object.entries(HELP_KEY)) for (const [id, key] of Object.entries(keys)) assert.ok(HELP[key], `${type}.${id} → ${key}: not in help.ts`);
   assert.equal(helpFor('flame', 'form'), HELP.form);
-  assert.equal(helpFor('blur', 'smoothing'), HELP.smoothing);
-  assert.equal(helpFor('kaleidoscope-engine', 'amount'), HELP.fx1Amount);
-  assert.equal(helpFor('music', 'hits'), HELP['signal:hits']);
+  // Where help.ts still tells the old architecture (routes, the governor, Lighting), the type's own line comes first.
+  assert.equal(helpFor('blur', 'smoothing'), portHelp.blur.smoothing);
+  assert.equal(helpFor('kaleidoscope-engine', 'amount'), portHelp['kaleidoscope-engine'].amount);
+  assert.equal(helpFor('music', 'hits'), portHelp.music.hits);
+  assert.equal(helpFor('music', 'level'), HELP['signal:level']);
   assert.equal(helpFor('shapes', 'spread'), portHelp.shapes.spread, 'a Shapes knob is not the flame’s by its id');
 });
 

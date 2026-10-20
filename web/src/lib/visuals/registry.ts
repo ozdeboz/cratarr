@@ -8,7 +8,7 @@ import { FLUID_LOOP } from './fluid-loop';
 import { MODULATORS, RENAMED } from './modulators/modulators';
 import type { Knob, ModuleType } from './patch';
 import { SOURCE_TYPES } from './sources/index';
-import { ADSR } from './ports';
+import { ADSR, GLOW, TINT } from './ports';
 
 const knob = (id: string, label: string, min: number, max: number, def: number, kind: Knob['kind'], neutral: number): Knob => ({ id, label, min, max, neutral, default: def, kind });
 
@@ -30,7 +30,8 @@ export const ENGINE_TYPES: ModuleType[] = ENGINES.map((e) => ({
 export const PICTURE_LOOP_TYPES: ModuleType[] = [...LOOP_TYPES, FLUID_LOOP];
 
 // The ADSR (0057 §4b): a knob's "New ▸ ADSR" makes one; claude-5f's engine runs it.
-export const EXTRA_TYPES: ModuleType[] = [...SOURCE_TYPES, ...ENGINE_TYPES, ...PICTURE_LOOP_TYPES, ...Object.values(MODULATORS), ADSR];
+// Glow and Tint (0057 §5): on a layer, as the sources' own tint and glow were.
+export const EXTRA_TYPES: ModuleType[] = [...SOURCE_TYPES, ...ENGINE_TYPES, ...PICTURE_LOOP_TYPES, ...Object.values(MODULATORS), ADSR, GLOW, TINT];
 
 const BY_TYPE = new Map(EXTRA_TYPES.map((t) => [t.type, t]));
 for (const [was, now] of Object.entries(RENAMED)) BY_TYPE.set(was, BY_TYPE.get(now)!);

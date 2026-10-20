@@ -23,7 +23,13 @@ export type Knob = {
   busy?: Busy;
   /** A polyphonic knob (0057 §4b): one value a channel, kept as `<id>.<channel>` among its module's knobs. */
   channels?: number;
-  /** false: Randomize leaves it (VCV's randomizeEnabled), for a knob that is a choice of how, not a value. */
+  /** A time (seconds): its gain stretches it (set ÷ gain), as a time CV does (0057 §7e). */
+  time?: boolean;
+  /** How its value follows its position (0057): 'exp' an exponential taper, as a frequency or time knob has (equal
+   *  steps of position multiply the value). A macro moves a knob along its taper, so a macro on an exponential knob
+   *  multiplies. */
+  taper?: 'exp';
+  /** Never rolled by Randomize (VCV's randomizeEnabled off): a choice of how, not a value. */
   randomize?: false;
 };
 
@@ -155,7 +161,7 @@ export const SETTING_KNOB: Record<string, [string, string]> = {
   rotation: ['flame', 'rotation'],
   lights: ['flame', 'lights'],
   presence: ['flame', 'presence'],
-  size: ['show', 'size'],
+  size: ['flame', 'zoom'],
   glow: ['show', 'glow'],
   saturation: ['show', 'saturation'],
   smoothing: ['show', 'smoothing'],
@@ -198,7 +204,7 @@ export const ASPECT_KNOB: Record<Aspect, [string, string]> = {
   spread: ['flame', 'spread'],
   presence: ['flame', 'presence'],
   brightness: ['show', 'glow'],
-  size: ['show', 'size'],
+  size: ['flame', 'zoom'],
   saturation: ['show', 'saturation'],
   trails: ['trails', 'trails'],
   smoothing: ['show', 'smoothing'],
@@ -277,7 +283,8 @@ export function cratarrTypes(ranges: Record<string, [number, number]>, defaults:
   add('frame', knob('lookWalk', LABELS.lookWalk, [0, 1], 0, 'swing', 0));
   add('frame', knob('behaviourWalk', LABELS.behaviourWalk, [0, 1], 0, 'swing', 0));
   for (const key of BAND_KNOBS)
-    for (let b = 0; b < BANDS; b++) add('flame', knob(`${key}.${b}`, `${BAND_LABEL[key]} ${b + 1}`, ranges[key], defaults[key][b], 'swing', defaults[key][b]));
+    for (let b = 0; b < BANDS; b++)
+      add('flame', { ...knob(`${key}.${b}`, `${BAND_LABEL[key]} ${b + 1}`, ranges[key], defaults[key][b], 'swing', defaults[key][b]), ...(key === 'evolution' ? { time: true } : {}) });
   const type = (id: string, label: string, place: Place): ModuleType => ({ type: id, label, place, knobs: byModule.get(id) ?? [] });
   return [
     type('frame', 'Whole frame', 'frame'),
@@ -346,7 +353,8 @@ export function extraFrom(kept: unknown, typeOf: (type: string) => ModuleType | 
   const cableIds = new Set<string>();
   for (const c of listOf(kept.cables)) {
     if (!isObject(c) || typeof c.id !== 'string' || c.id.length > 80 || cableIds.has(c.id) || !isObject(c.from) || !isObject(c.to)) continue;
-    const to = c.to;
+    // Show's Size is the Flame's zoom (0057): a cable kept before into show.size goes there.
+    const to = c.to.module === 'show' && c.to.knob === 'size' ? { ...c.to, module: 'flame', knob: 'zoom' } : c.to;
     if (typeof to.module !== 'string' || typeof to.knob !== 'string' || !knobsOf.get(to.module)?.has(to.knob)) continue;
     let from: Cable['from'] | null = null;
     if (typeof c.from.modulator === 'string') from = modulatorIds.has(c.from.modulator) ? { modulator: c.from.modulator } : null;

@@ -77,7 +77,7 @@ export const CHAINS: readonly Chain[] = [
       modulators: [mod('slow', 'breath', { attack: 0.8, release: 2.5 }), mod('random', 'wander', { rate: 0.05, amount: 1 })],
       cables: [
         cable('calm-in', { signal: 'loudness' }, 'breath', 'in', 1),
-        cable('calm-size', { modulator: 'breath' }, 'show', 'size', 0.5),
+        cable('calm-size', { modulator: 'breath' }, 'flame', 'zoom', 0.5),
         cable('calm-saturation', { modulator: 'breath' }, 'show', 'saturation', 0.6),
         cable('calm-turn', { modulator: 'wander' }, 'flame', 'rotation', 0.3),
         cable('calm-hue', { signal: 'swell', speed: 'slow' }, 'flame', 'hue', 0.15),
@@ -100,8 +100,8 @@ export const CHAINS: readonly Chain[] = [
       layers: [
         {
           id: 'pulse-shapes',
-          source: mod('shapes', 'pulse-shapes-source', { count: 6, sides: 6, radius: 0.16, spread: 0.55, fill: 0.35, thickness: 0.008, opacity: 0.7, tint: 0.9, glow: 0.7, orbit: 0.02 }),
-          modules: [],
+          source: mod('shapes', 'pulse-shapes-source', { count: 6, sides: 6, radius: 0.16, spread: 0.55, fill: 0.35, thickness: 0.008, opacity: 0.7, orbit: 0.02 }),
+          modules: [mod('glow', 'pulse-shapes-glow', { glow: 0.7 }), mod('tint', 'pulse-shapes-tint', { tint: 0.9 })],
           loop: [],
           blend: { mode: 'screen', amount: 0.8 },
         },
@@ -110,7 +110,7 @@ export const CHAINS: readonly Chain[] = [
       modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.15, amount: 1 }), mod('random', 'wander', { rate: 0.1, amount: 1 })],
       cables: [
         cable('pulse-kick-in', { signal: 'hits', band: 1 }, 'kick', 'in', 1),
-        cable('pulse-size', { modulator: 'kick' }, 'show', 'size', 0.3),
+        cable('pulse-size', { modulator: 'kick' }, 'flame', 'zoom', 0.3),
         cable('pulse-glow', { modulator: 'kick' }, 'show', 'glow', 0.4),
         cable('pulse-radius', { modulator: 'kick' }, 'pulse-shapes-source', 'radius', 0.25),
         cable('pulse-turn', { modulator: 'wander' }, 'flame', 'rotation', 0.3),
@@ -173,7 +173,7 @@ export const CHAINS: readonly Chain[] = [
     routes: {},
     extra: {
       ...emptyExtra(),
-      layers: [{ id: 'scope', source: mod('waves', 'scope-source', { width: 0.01, opacity: 0.9, tint: 0.85, glow: 0.7 }), modules: [], loop: [], blend: { mode: 'screen', amount: 1 } }],
+      layers: [{ id: 'scope', source: mod('waves', 'scope-source', { width: 0.01, opacity: 0.9 }), modules: [mod('glow', 'scope-glow', { glow: 0.7 }), mod('tint', 'scope-tint', { tint: 0.85 })], loop: [], blend: { mode: 'screen', amount: 1 } }],
       loop: [mod('warp', 'scope-warp', { zoom: 0.05 }), mod('keep', 'scope-keep', { amount: 0.7, trails: 0.5 })],
       modulators: [mod('fast', 'body'), mod('random', 'wander', { rate: 0.05, amount: 1 })],
       cables: [
@@ -198,7 +198,7 @@ export const CHAINS: readonly Chain[] = [
         cable('mosaic-bars-in', { signal: 'downbeat' }, 'bars', 'in', 1),
         cable('mosaic-tiles', { modulator: 'bars' }, 'fx1', 'k1', 0.6),
         cable('mosaic-breath-in', { signal: 'loudness' }, 'breath', 'in', 1),
-        cable('mosaic-size', { modulator: 'breath' }, 'show', 'size', 0.4),
+        cable('mosaic-size', { modulator: 'breath' }, 'flame', 'zoom', 0.4),
         cable('mosaic-turn', { modulator: 'wander' }, 'flame', 'rotation', 0.3),
       ],
     },
@@ -214,7 +214,7 @@ export const CHAINS: readonly Chain[] = [
     extra: {
       ...emptyExtra(),
       // A ring of the sound in the flame's colours, drawn into the spiral and carried in by it.
-      layers: [{ id: 'fractal-ring', source: mod('waves', 'fractal-ring-source', { circle: 1, radius: 0.3, width: 0.006, opacity: 0.8, tint: 0.95, glow: 0.6 }), modules: [], loop: [], blend: { mode: 'screen', amount: 0.7 } }],
+      layers: [{ id: 'fractal-ring', source: mod('waves', 'fractal-ring-source', { circle: 1, radius: 0.3, width: 0.006, opacity: 0.8 }), modules: [mod('glow', 'fractal-ring-glow', { glow: 0.6 }), mod('tint', 'fractal-ring-tint', { tint: 0.95 })], loop: [], blend: { mode: 'screen', amount: 0.7 } }],
       loop: [mod('warp', 'fractal-warp', { zoom: 0.1, turn: 0.1 }), mod('keep', 'fractal-keep', { amount: 0.7, trails: 0.6 })],
       modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.3, amount: 1 }), mod('random', 'wander', { rate: 0.05, amount: 1 })],
       cables: [
@@ -269,7 +269,7 @@ export const EXAMPLES: readonly Chain[] = [
     routes: {},
     extra: {
       ...emptyExtra(),
-      layers: [{ id: 'window', source: mod('shapes', 'window-source', { count: 3, sides: 6, radius: 0.3, spread: 0.5, fill: 1, glow: 0.5, tint: 0, spin: 0.03 }), modules: [], loop: [], blend: { mode: 'window', amount: 0.85 } }],
+      layers: [{ id: 'window', source: mod('shapes', 'window-source', { count: 3, sides: 6, radius: 0.3, spread: 0.5, fill: 1, spin: 0.03 }), modules: [mod('glow', 'window-glow', { glow: 0.5 })], loop: [], blend: { mode: 'window', amount: 0.85 } }],
     },
     settings: { ...QUIET },
   },
@@ -292,7 +292,7 @@ export const EXAMPLES: readonly Chain[] = [
     extra: {
       ...emptyExtra(),
       modulators: [mod('gate', 'kick', { above: 1, amount: 1 })],
-      cables: [cable('example-kick-in', { signal: 'hits', band: 1 }, 'kick', 'in', 1), cable('example-size', { modulator: 'kick' }, 'show', 'size', 0.4)],
+      cables: [cable('example-kick-in', { signal: 'hits', band: 1 }, 'kick', 'in', 1), cable('example-size', { modulator: 'kick' }, 'flame', 'zoom', 0.4)],
     },
     settings: { ...QUIET },
   },

@@ -17,6 +17,7 @@ const DECLARED: Record<string, Category> = {
   mix: 'mixers',
   feedback: 'mixers',
   mask: 'mixers',
+  ducker: 'modulators',
   music: 'io',
   filterbank: 'io',
   meter: 'io',

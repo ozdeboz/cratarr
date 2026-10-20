@@ -127,7 +127,7 @@ test('knobs: a few shown, the cabled ones always, never the device’s; opened o
   const o = (id: string) => open.nodes.find((n) => n.id === id)!.data as ModuleData;
   assert.equal(o('s1').knobs.length, 5);
   assert.equal(o('s1').hidden, 0);
-  assert.deepEqual(o('lfo').knobs.map((k) => k.id), ['rate', 'shape', 'offset', 'amount']);
+  assert.deepEqual(o('lfo').knobs.map((k) => k.id), ['rate', 'shape', 'offset', 'ratio', 'amount']);
 });
 
 test('signals and modulators sit under what they move, a port’s feed beside its modulator', () => {
@@ -563,7 +563,7 @@ test('v2: Show is one device node, its exposed light in, picture out and knobs; 
   assert.ok(show.device && !show.device.open);
   assert.equal(show.label, 'Show');
   assert.deepEqual([show.v2!.pin, show.v2!.pout], ['light', 'picture']);
-  assert.deepEqual(show.knobs.map((k) => k.id), SHOW_PARTS.filter((x) => x.knob !== 'size').map((x) => x.knob));
+  assert.deepEqual(show.knobs.map((k) => k.id), [...SHOW_PARTS.filter((x) => x.knob !== 'size').map((x) => x.knob), 'level']);
   assert.ok(!g.nodes.some((n) => n.id.startsWith('show/')), 'its modules not drawn while it is closed');
   const wire = g.edges.find((e) => e.id === 'lab-1')!;
   assert.deepEqual([wire.source, wire.sourceHandle, wire.target, wire.targetHandle, wire.data?.wire], ['flame', 'out', 'show', 'in', 'light']);
@@ -571,7 +571,7 @@ test('v2: Show is one device node, its exposed light in, picture out and knobs; 
   // modulators under them, In / Out last.
   const at = (id: string) => g.nodes.find((n) => n.id === id)!.position;
   const heads = g.nodes.filter((n) => n.data.kind === 'lane').map((n) => n.id);
-  assert.deepEqual(heads, ['@lane:sources', '@lane:effects', '@lane:modulators', '@lane:io']);
+  assert.deepEqual(heads, ['@lane:sources', '@lane:effects', '@lane:mixers', '@lane:modulators', '@lane:io']);
   assert.ok(at('@lane:sources').y < at('flame').y && at('flame').y < at('@lane:effects').y && at('@lane:effects').y < at('show').y);
   assert.ok(at('show').y < at('@lane:modulators').y && at('music').y > at('@lane:io').y);
   const control = g.nodes.filter((n) => (n.data as ModuleData).modulator);

@@ -37,7 +37,7 @@ test('Intensity, Flash and Speed move to the modules that do them', () => {
   assert.equal(m.accent.knobs.accent, 1.4);
   assert.equal(m.clock.knobs.speed, 0.7);
   for (const k of ['intensity', 'flash', 'speed']) assert.ok(!(k in m.frame.knobs), k);
-  assert.equal(m.flame.knobs.zoom, 1, "Show's Size is the Flame's zoom; as a column's scale it went into the cables (§7e item 2)");
+  assert.equal(m.flame.knobs.zoom, 0, "Show's Size is the Flame's zoom; its scale went into the cables, the knob its resting value (§7e item 2)");
   assert.equal(m.show.type, 'device');
   for (const id of ['music', 'track', 'envelope', 'clock', 'accent', 'frame', 'flame', 'show', 'fluid', 'tunnel', 'dive', 'trails', 'loop-effect', 'fx1', 'fx2', 'fx3']) assert.ok(m[id], id);
 });
@@ -51,7 +51,7 @@ test('the extras come as they are: their modules, and their cables from a modula
   for (const m of calm.extra.modulators) assert.ok(ids.has(m.id), m.id);
   const by = Object.fromEntries(v.cables.map((c) => [c.id, c]));
   assert.deepEqual(by['calm-size'].from, { module: 'breath', port: 'out' });
-  assert.deepEqual(by['calm-hue'].from, { module: 'music', port: 'swell', speed: 'slow' });
+  assert.deepEqual(by['calm-hue'].from, { module: 'music', port: 'swell:slow' }, 'its slow reading Music’s slow output');
   assert.deepEqual(by['calm-in'].to, { module: 'breath', port: 'in' });
   assert.deepEqual(by['calm-size'].to, { module: 'flame', port: 'zoom' }, "a cable into Show's size goes into the Flame's zoom");
   assert.deepEqual(by['calm-saturation'].to, { module: 'show', port: 'saturation' }, "Show's saturation keeps its address");
@@ -84,8 +84,10 @@ test("the bands' Linger: Music's hold and the hits' ADSR release; a hits route f
   assert.ok(!m['adsr-drums'], 'no ADSR where no cable needs one');
   const by = Object.fromEntries(v.cables.map((c) => [c.id, c]));
   assert.deepEqual(by[routeKey('hits', 2, 'lights')].from, { module: 'adsr', port: 'out', channel: 2 });
-  assert.deepEqual(by['adsr-gate'].from, { module: 'music', port: 'hits', reference: 'absolute' });
-  assert.deepEqual(by[routeKey('level', 1, 'hue')].from, { module: 'music', port: 'level', channel: 1, reference: 'absolute' });
+  assert.deepEqual(by['adsr-gate'].from, { module: 'music', port: 'hits' });
+  assert.equal(m.adsr.knobs.reference, 2, 'the ADSR reads its strikes as the routes did');
+  assert.deepEqual(by[routeKey('level', 1, 'hue')].from, { module: 'music', port: 'level', channel: 1 });
+  assert.equal(m.music.knobs['reference.level'], 2, 'the row read as it is, as routes read it');
 });
 
 test("an extra cable from the hits keeps its reading: its own ADSR, the gate reading against the track's typical", () => {
@@ -96,7 +98,8 @@ test("an extra cable from the hits keeps its reading: its own ADSR, the gate rea
   const v = toV2(s);
   const by = Object.fromEntries(v.cables.map((c) => [c.id, c]));
   assert.deepEqual(by['pulse-kick-in'].from, { module: 'adsr-track', port: 'out', channel: 1 });
-  assert.deepEqual(by['adsr-track-gate'].from, { module: 'music', port: 'hits', reference: 'track' });
+  assert.deepEqual(by['adsr-track-gate'].from, { module: 'music', port: 'hits' });
+  assert.equal(v.modules.find((x) => x.id === 'adsr-track')!.knobs.reference, 0, 'reading against the track’s typical');
   assert.deepEqual(by[routeKey('hits', 0, 'lights')].from, { module: 'adsr', port: 'out', channel: 0 }, 'the route through the absolute one');
 });
 
@@ -108,7 +111,7 @@ test('a Drift converts to a Random at its smooth end', () => {
   assert.equal(wander.knobs.shape, 0);
 });
 
-test("a column's scale goes into its cables' amounts (curves' heights too), the column knob at 1; the fluid's stirring left", () => {
+test("a column's scale goes into its cables' amounts (curves' heights too), the column knob at rest (0); the fluid's stirring left", () => {
   const s = copy(DEFAULTS);
   s.size = 0.5;
   s.rotation = 2;
@@ -124,6 +127,6 @@ test("a column's scale goes into its cables' amounts (curves' heights too), the 
   assert.deepEqual(by[routeKey('beat', null, 'rotation')].value, { h1: [1 / 3, 0.2], h2: [2 / 3, 0.8], h: 1.6 });
   assert.equal(by[routeKey('beat', null, 'stir')].value, 1);
   const m = Object.fromEntries(v.modules.map((x) => [x.id, x]));
-  assert.equal(m.flame.knobs.zoom, 1);
-  assert.equal(m.flame.knobs.rotation, 1);
+  assert.equal(m.flame.knobs.zoom, 0, 'the column knob its resting value, the cables adding to it');
+  assert.equal(m.flame.knobs.rotation, 0);
 });

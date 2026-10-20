@@ -310,14 +310,15 @@ export function labelOf(t: Pick<ModuleType, 'type' | 'label'>): string {
 const RENAMED: Record<string, string> = { flash: 'Accent' };
 
 /** A cable's amount as its label shows it: a swing signed, a level as a share. */
-export function amountLabel(value: RouteValue, mode: Cable['mode']): string {
+/** A v2 cable (0057 §7e item 10) has no mode: it adds, a swing. */
+export function amountLabel(value: RouteValue, mode: Cable['mode'] = 'swing'): string {
   const pc = Math.round(endOf(value) * 100);
   return mode === 'swing' && pc > 0 ? `+${pc}%` : `${pc}%`.replace('-', '−');
 }
 
 /** The stretch of a knob's range (0..1) its cables move it over: a swing's amount above (or below) where it is set, a
  *  level's share under it. Amounts are of the knob's whole range; none where nothing is cabled. */
-export function ringOf(at: number, cables: Pick<Cable, 'value' | 'mode'>[]): [number, number] | null {
+export function ringOf(at: number, cables: (Pick<Cable, 'value'> & { mode?: Cable['mode'] })[]): [number, number] | null {
   if (!cables.length) return null;
   let up = 0;
   let down = 0;
@@ -368,7 +369,7 @@ const isNext = (port: string) => port.endsWith(':next') || port.endsWith(':gain'
 export function knobViews(
   m: Module,
   t: ModuleType,
-  o: { open: ReadonlySet<string>; room: number; cabled: (knob: string) => boolean; cablesInto: (knob: string) => Pick<Cable, 'value' | 'mode'>[] },
+  o: { open: ReadonlySet<string>; room: number; cabled: (knob: string) => boolean; cablesInto: (knob: string) => (Pick<Cable, 'value'> & { mode?: Cable['mode'] })[] },
 ): { knobs: KnobView[]; hidden: number } {
   const flat = t.knobs.filter((k) => !k.device);
   const byId = new Map(flat.map((k) => [k.id, k]));
@@ -927,7 +928,7 @@ export function pictureFits(
   const p: PatchV2 = {
     v: 2,
     modules: ids.map((id) => ({ id, type: typeOf(id), knobs: {} })),
-    cables: ends.map((e, i) => ({ id: `p${i}`, from: { module: e.source, port: 'picture' }, to: { module: e.target, port: 'picture' }, value: 1, mode: 'level' })),
+    cables: ends.map((e, i) => ({ id: `p${i}`, from: { module: e.source, port: 'picture' }, to: { module: e.target, port: 'picture' }, value: 1 })),
     macros: [],
     pins: [],
   };
@@ -1333,7 +1334,7 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
       }
       return { node: id, port: r.port };
     };
-    const edge = (id: string, from: { node: string; port: string }, to: { node: string; port: string }, c: Pick<CableV2, 'value' | 'mode'> | null, channel?: number) => {
+    const edge = (id: string, from: { node: string; port: string }, to: { node: string; port: string }, c: Pick<CableV2, 'value'> | null, channel?: number) => {
       const a = data.get(from.node);
       const b = data.get(to.node);
       const sourceHandle = a && handleAt(a, 'out', from.port);
@@ -1343,7 +1344,7 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
       const wire = out?.type ?? 'value';
       const channels = channel === undefined ? out?.channels : undefined;
       const picture = PICTURE_TYPES.has(wire);
-      const cd: CableData = { amount: c ? amountLabel(c.value, c.mode) : '', wire, ...(channels ? { channels } : {}), ...(c ? {} : { normal: true as const }), ...(picture ? { step: true } : {}) };
+      const cd: CableData = { amount: c ? amountLabel(c.value) : '', wire, ...(channels ? { channels } : {}), ...(c ? {} : { normal: true as const }), ...(picture ? { step: true } : {}) };
       edges.push({
         id,
         source: from.node,
@@ -1445,7 +1446,7 @@ export function applyV2(p: PatchV2, e: V2Edit, types?: Record<string, ModuleType
   const taken = new Set(inside.cables.map((c) => c.id));
   let n = inside.cables.length + 1;
   while (taken.has(`cable-${n}`)) n++;
-  inside.cables.push({ id: `cable-${n}`, from: e.from, to: e.to, value: 1, mode: 'swing' });
+  inside.cables.push({ id: `cable-${n}`, from: e.from, to: e.to, value: 1 });
   return p;
 }
 
@@ -1481,7 +1482,7 @@ export function connectionV2(
   const to = { module: c.target.split('/').pop()!, port: into.id };
   if (inside.cables.some((x) => x.from.module === from.module && x.from.port === from.port && x.to.module === to.module && x.to.port === to.port)) return null;
   if (PICTURE_TYPES.has(out.type)) {
-    const next: PatchV2 = { ...inside, cables: [...inside.cables, { id: '?', from, to, value: 1, mode: 'swing' }] };
+    const next: PatchV2 = { ...inside, cables: [...inside.cables, { id: '?', from, to, value: 1 }] };
     const pictureOut = (t: string): (ModuleType & { ports?: Ports }) | undefined => (t === FEEDBACK.type ? FEEDBACK : types[t]);
     if (!cyclesClosed(next, pictureOut)) return null;
   }

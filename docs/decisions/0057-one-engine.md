@@ -83,8 +83,8 @@ Each of today's hidden behaviours becomes a module with ports, in the graph:
 | Module | Kind | What it is today |
 |---|---|---|
 | **Music** | source of values and triggers | the analysis: the whole track's signals, each band's level, hits and envelope; reference and speed per cable (0056) |
-| **Track** | source | a new track's pulse and its seed: a new track is a seeded Randomize of the patch (§4e) |
-| **Loudness** (type `envelope`) | modulator | the loudness as heard over a fifth of a second (Intensity sets how far it counts); normalled into every cable's depth |
+| ~~Track~~ | — | folded into Music (§7f): its New track trigger and Track seed |
+| **Envelope Follower** (type `envelope`) | modulator | the loudness as heard over a fifth of a second (Intensity sets how far it counts); keys the Loudness Follow device's VCA (§7f), normalled into nothing |
 | **Clock** | modulator | the tempo's turning clock (once round in 32 beats at Speed); its phase feeds whatever turns |
 | **Flash** | modulator, one per target | the course-and-swing filter (a slow course, Flash's share of the swing about it) |
 | **Random** (the walks) | modulator | drift.ts's Look and Behaviour walks: no module of their own (the owner: "we already have walks … we have control generators"); a Random cabled where the walk acts. Drift is renamed Random, as VCV, Vital and Bitwig name it, with a Shape knob from smooth (Drift as it was) to stepped (a random sample-and-hold) |
@@ -120,14 +120,18 @@ Each of today's hidden behaviours becomes a module with ports, in the graph:
     through which the cables into knobs of that kind run (each knob declares its kind, `busy`). Today's behaviour is
     that wiring with today's limits as the thresholds. Everything in it can be seen, re-keyed, re-patched or removed.
   - **No Taste, no learning in this version** (the owner: "we drop taste altogether. We defer it to a future version,
-    maybe not even the next version"). The thumbs and learning.ts go. The Compressors' thresholds start at the limits
-    as they stand when the patch is converted (learned values included, frozen), and are plain knobs from then on. The
-    server keeps what was learned, untouched, for whenever the learning returns.
+    maybe not even the next version"). The thumbs and learning.ts go. The Duckers' thresholds start at the default
+    limits (nothing learned) and are plain knobs from then on, Wild a macro on them. What the server stored of the
+    learning has no reader left, and goes with the /limits retirement.
   - **No rating page** (the owner: "Yes, the rating page should also go"). It existed to calibrate the governor and the
     learning. Its fitting (fit.ts) and the trial's plumbing go with aspects.ts.
   - **The Screen's flash guard** is a limiter on the output: three flashes a second over the area the owner chose
     (WCAG). It is safety, not taste: never learned, never removable, last.
   - The precheck and the dice read the same thresholds.
+  - **Thresholds and Wild** (the owner, via claude-5f): each Ducker's threshold starts at its default limit × 1.5,
+    nothing learned. **Wild is a macro on the five thresholds**, moving each along its exponential taper (a knob's
+    taper: equal steps of position multiply the value, as a frequency knob's do) from half to twice. So Wild gives
+    exactly today's factor 2^(2(wild − ½)). Randomize's reach is a setting of its own, no longer Wild's.
 - **Show, split into standard modules and kept as a device** (§6; the owner: "it makes it more coherent"). Show is the flame's output stage, a
   sound synth's channel strip, and each of its parts becomes the module it is. Only the first converts:
   | Module | Was Show's | Sound equivalent |
@@ -156,7 +160,7 @@ does with signals, as modular synths and video synthesizers group them (LZX, Tou
 
 | Category | Does | Ours |
 |---|---|---|
-| **Sources** | make a picture | Flame, Shapes, Waves; later Plasma, Gradient, Cells, Cover |
+| **Sources** | make a picture | Flame, Regular shapes, Irregular shapes, Waves, Noise; later Gradient, Cells, Cover |
 | **Effects** | a picture in, a picture out | Fold, Bend, Blur, Tone map, Curve, Saturate, Warp, Keep, Glow, Tint, Displace, the flame's own loop |
 | **Mixers** | several pictures into one | Mix, Mask, Feedback |
 | **Modulators** | the signals that move knobs | LFO, Random, ADSR, Clock, Compressor, Grid; later Sequencer, Looper |
@@ -191,7 +195,13 @@ The owner: "freely routable". The picture side is a free graph, as the value sid
 
 - **Full screen** (the owner: MilkDrop "has full screen graphics. Everything is still a shape drawn on blackness"). Three
   things make MilkDrop fill the screen, and each gets a module:
-  - **Full-screen sources:** Plasma (noise), Gradient, Cells, the Cover.
+  - **Full-screen sources:** Noise, in this version (the owner, 2026-10-20: noise and grain "together with filter can
+    be used to great effect"); Gradient, Cells and the Cover later.
+    - **Noise:** monochrome (colour a Tint's, §4g), its scale, detail (octaves) and speed. At its finest scale, new each
+      frame, it is grain: no Grain module.
+    - **Filters on pictures:** Blur is the low-pass (noise into clouds); the high-pass is a picture less its blur, by
+      Mix's new **Subtract** mode (edges, grit). Nothing invented: LZX's noise, Hydra's `noise()`, TouchDesigner's
+      Noise TOP.
   - **A Warp field:** every point moving its own way (swirl, ripple, push toward a point), driven by values or by a
     picture through Displace. Not one move for the whole picture.
   - **Feedback that fills:** a high Keep with an outward zoom, so trails reach the edges and the screen never goes
@@ -241,7 +251,8 @@ come later** (the owner):
   lighting as it runs, the Sequencer's step.
 - A knob's "+ Add" offers "New ▸ LFO / ADSR / Sequencer / Looper": the module and its cable in one step, synced to
   the Clock.
-- The loudness follower, so as not to be confused with the ADSR, is named Loudness.
+- The loudness follower is named **Envelope Follower** (the owner, 2026-10-20; the standard name: "Envelope" clashes with
+  Music's per-band Envelope output and with the ADSR, an envelope generator).
 
 ### 4c. Grids
 
@@ -310,6 +321,47 @@ That's clean". So:
   values, pins kept, structure untouched, undoable, morphed in. Resetting the whole synthesizer stays what it is: back
   to an empty patch (Start from scratch). Both are in the Reset menu.
 
+### 4f. Lens, a module of its own
+
+The owner: "lenses aren't inherently coupled to flame. Lens should be a modular thing." Today's lenses (Eyefish,
+Bubble, Spherical, Swirl …) are the flame's final transform. They become a **Lens** module:
+
+- Knobs: its kind (a step, with `next`) and its amount.
+- Polymorphic, as Blur is:
+  - on `points` (the flame's points, a Grid's) it moves each point, exactly as the flame's final transform does;
+  - on a picture it remaps the pixels the same way (TouchDesigner's Remap, Hydra's modulate).
+- The flame's own lens is a Lens cabled between the flame's points and its light, inside the Cratarr device. It can be
+  unplugged, swapped, or joined by others anywhere. The conversion places it so, exact.
+
+### 4g. One set of shapes
+
+The owner (2026-10-20): "I want the same set of shapes everywhere shapes are used." Two modules work with shapes:
+Shapes (it draws them) and Lens (it sends points into them). Each had its own: Shapes the regular polygons, Lens Heart
+and Cratarr. Now one set, each shape defined once (`shape-set.ts`) and used by both:
+
+- **Regular:** polygon (3–48 sides) and star (3–48 points, a depth; depth 0 the polygon). They morph: the sides go
+  through the fractions, the depth through its range.
+- **Irregular**, a list stepped through (with `next`), never morphed:
+  - Heart and Cratarr (the logo: the record's rings and its slice, `MARK`);
+  - ring, cross, arrow, crescent, drop (the owner's pick of common symbols);
+  - the 11 forms of the warps (Spherical, Swirl, Julia, Fisheye, Eyefish, Bubble, Polar, Disc, Sinusoidal, Horseshoe,
+    Handkerchief): each the form its warp makes of a disc, as Heart's is.
+
+The owner: "a difference between morphable shapes and non-morphable shapes … two different modules":
+
+- **Regular shapes** (the Shapes module of 70, renamed): sides and depth. It also gives its **corners** as `points`,
+  so a corner fractal (Sierpinski, Koch) is standard modules: corners → Instance (a smaller copy at each) → Feedback.
+  Only regular shapes have corners; a feedback fractal (Fractal Spiral) takes any picture.
+- **Irregular shapes**: a shape knob (a step).
+- Both keep the same layout knobs (count on a ring, spread, orbit, spin, twist, taper) and the same stroke: an outline
+  of a width, a fill, or both. One code; they differ only in how they pick their shape.
+- **Monochrome** (the owner: "all monochrome"): they draw light only. Colour is a Tint's after them (its own hue, or a
+  picture's colours by its second input), one meaning a module; hue, hue spread and saturation leave them for Tint, as
+  70.1's tint and glow do (§5). The conversion puts a Tint behind every coloured Shapes of today, so it looks the same.
+- **Lens stays one module** (the owner): its kind steps through the 11 warps, Polygon, Star and the irregular shapes;
+  Polygon and Star take Sides and Depth knobs. A warp kind moves points as today; a shape kind sends them into the
+  shape evenly, as the Cratarr lens does. The kinds of today keep their numbers, so every track's look stays.
+
 ### 5. Pictures as inputs
 
 A module may take a second `picture` input: Hydra's modulate, TouchDesigner's composite inputs. The first ones:
@@ -340,6 +392,24 @@ set of components, modules of which some are inserted as devices, but they are i
   examples are presets. A device can be saved and inserted alone too.
 - In the model a device is a module of type `device` whose `patch` is a v2 patch of its own, plus its exposed ports and
   macros. The engine and the compositor flatten it before running, so it costs nothing.
+
+### 6b. The devices we offer
+
+The owner asked which sets of modules are common and powerful enough to offer as devices, and agreed to nine, from
+the preset study and other modular tools, plus one new standard module, **Threshold** (a luma key: only a picture's
+bright parts). Each sits in the module picker, opens to show its modules, and has a few macros:
+
+| Device | Inside | Macros |
+|---|---|---|
+| Feedback Tunnel | Feedback → Warp → Keep → Mix (lighten) | Zoom, Turn, Trail |
+| Kick | Music's bass hits → Beat gate (above typical) → ADSR | Sensitivity, Punch, Decay |
+| Breather | Loudness → Slow follower | Smoothness, Depth |
+| Wanderer | Random (smooth), clocked to the bars | Speed, Range |
+| Bloom | Blur → Threshold → Mix (add) | Threshold, Size, Strength |
+| Scope | Music's sound → Waves → Glow → Tint | Height, Glow, Colour |
+| Grid Particles | Grid → Instance → Shapes, distance into size | Count, Spacing, Pulse |
+| Echo Trails | Feedback → Echo → Mix (lighten) | Length, Drift |
+| Fractal Spiral | Feedback → Fold (kaleidoscope) → Warp → Keep | Folds, Turn, Depth |
 
 ### 7. One store
 
@@ -402,8 +472,39 @@ what a modular system does:
 9. **Accent, not Flash.** The course-and-swing filter is renamed Accent, so "flash" means only the Screen's flash
    guard.
 
+10. **A cable is amount, depth and channel** (the owner: "yes, amount, depth, channel. and most definitely amount as
+    a curve"). Its amount is a curve (the plain amount the straight one); its depth what scales it (normalled to the
+    Envelope); its channel one band of a polyphonic source. Everything else leaves the wire: its mode (item 1), its
+    walk (item 5), its speed (Music gives a slow output beside each signal, `<signal>:slow`, or a Slow follower does
+    it), and its reading (a reference a Music row, item 8: how a signal is read is settled at its source, not per
+    wire).
+
 Kept on purpose, documented: reduced motion (the system's accessibility setting, as the flash guard is safety), and
 each module's own inner maths (the flame's parts and light ranges).
+
+### 7f. No special modules: common patterns as devices
+
+The owner, 2026-10-20 (through claude-632's session): "yes, folded into music"; "yes, no special module needs to
+remain"; on the follower's normal into every depth, "Yes, please"; on shipping the patterns as devices, "agree". These
+supersede what §3, §4b, §4e and §7e say of Track, the Loudness and the depth normal.
+
+- **Track folds into Music.** Music gives **New track** (a trigger) and **Track seed** (a fixed number per track). A
+  track's look is a standard **Random** (sample-and-hold) triggered by New track and seeded by the Track seed, so the
+  same track keeps the same look. No Track module, no Track logic.
+- **No depth normal.** A cable has no depth unless one is cabled. The loudness scales once at the source: a
+  polyphonic **VCA on Music's outputs** (the band rows through as channels), keyed by the Envelope Follower; everything
+  from Music goes through it. Loudness's own row bypasses it, as a visible cable from Music directly. A modulator that
+  followed the loudness gets the same VCA at its output. The Follower's out-0-when-paused goes: pausing is the one
+  Playing → VCA → Tone map cable. The picture stays identical (cable × envelope = VCA(source) × cable), proved by the
+  picture harness.
+- **Common patterns ship as devices**, and the default patch is built from them. No special code: each opens, edits,
+  and can be unmade into loose modules. toV2 emits them, so converted patches show them:
+  - **Loudness Follow:** Envelope Follower → the VCA on Music's outputs (macros Intensity, Time);
+  - **Track Look:** Music's New track → Random (sample-and-hold, seeded per track) → the look's knobs;
+  - **Pause Dim:** Music's Playing → VCA → Tone map's level;
+  - **Calm:** Meter → a Ducker per busy kind → the knobs' gain inputs (§7e's sidechain, as a device; Wild its macro);
+  - **Hit Lights:** Music's Hits → ADSR → the flame's lights (Linger);
+  - Feedback Tunnel and Echo Trails are among the nine already (§6b).
 
 ### 8. Seeing it work
 

@@ -40,23 +40,26 @@
     type Preset,
   } from './flame';
   import { musicNow, stopMusic } from './music.svelte';
-  import { newAspects, stepAspects, wavesMotion, zoomsMotion } from './aspects';
+  import { wavesMotion, zoomsMotion } from './aspects';
+  import { newEngine, stepEngine } from './engine/graph';
+  import type { PatchV2 } from './ports';
   import { newBehaviourWalk, newDrift, stepBehaviourWalk, stepDrift } from './drift';
   import { curveOf, endOf, heightAt, straight, tableOf, valueOf as kept, walksOf, type Curve, type RouteValue } from './curves';
   import { ASPECT_KNOB, emptyExtra, SETTING_KNOB } from './patch';
   import CurveEditor from './CurveEditor.svelte';
   import { densityOf, newHistory, remember } from './history';
-  import { budgetOf, BUDGETED, holding, LEVERS, newGovernor, STANDING, stepGovernor, type Budgeted, type Levers } from './governor';
+  import { budgetOf, BUDGETED, LEVERS, STANDING, type Budgeted, type Levers } from './governor';
+  import { holding, leversOf } from './engine/sidechain';
   import { fresh, limitsOf, type Learned } from './learning';
   import { getVisualsLimits } from '../api';
   import { toast } from '../toast.svelte';
-  import type { MeterValues, Tiles } from './meters';
+  import type { MeterValues } from './meters';
   import type { TrialLoop } from './trial.svelte';
   import { beatsOf } from './beats';
   import { DEFAULT_LIMITS, prechecking, type Checked } from './precheck';
   import { recipeFor, settingsOf, STIRRING, type Recipe, type Scope } from './recipe';
   import { signalsOf } from './signals';
-  import { Meters, type FrameStats } from './meters';
+  import type { FrameStats } from './meters';
   import { trial } from './trial.svelte';
   import { appInfo, inApp } from '../app.svelte';
   import { coverPalette, type PaletteColour } from './palette';
@@ -66,10 +69,13 @@
   import { held } from './held.svelte';
   import Help from './Help.svelte';
   import { newStirring, stir } from './stirring';
-  import { FlameRenderer } from './render';
-  import { Compositor } from './compose';
+  import { FlameRenderer, type Extras } from './render';
+  import { v2Types } from './picture-graph';
+  import { flatten, toV2 } from './v2';
+  import { recordPictures } from './recorder';
+  import { chainNow as nodesNow } from './chain-params';
   import { newNormalState, signalsFor } from './normal';
-  import { cabledSettings, cableGain, cableSignals, giveCables, type Cabled } from './chain-cables';
+  import { cabledSettings, cableGain, cableSignals, type Cabled } from './chain-cables';
   import { shapeOf } from './evaluate';
   import { evaluate, newEvalState, type Evaluated } from './evaluate';
   import { askStep, morphTo, newMorph, stepMorph } from './morph';
@@ -89,8 +95,7 @@
   import { BLENDS, cratarrPatch, cratarrTypes, modulesOf, type ModuleType } from './patch';
   import { SOURCE_TYPES } from './sources/index';
   import { MODULATORS } from './modulators/modulators';
-  import { DIVE_MOST, TUNNEL_MOST } from './zoom';
-  import { effectsNow, ENGINE_EFFECTS, ENGINES, knobLabel, LOOP_EFFECTS, settingsReport, type Effect } from './effects';
+  import { ENGINE_EFFECTS, ENGINES, knobLabel, LOOP_EFFECTS, settingsReport, type Effect } from './effects';
   import {
     A,
     ASPECT_LABEL,
@@ -232,10 +237,10 @@
     showChrome();
   }
 
-  // The governor (governor.ts), stepped with the meters four times a second in the loop; and the limits it holds the
-  // picture within, as the thumbs had learned them (learning.ts), frozen: no thumbs or learning in this version
-  // (decision 0057: "we drop taste altogether"); the server keeps them as they are.
-  const governor = newGovernor();
+  // What the meters last measured (four times a second in the loop): the patch's sidechains' key (its Meter, 0057 §7e;
+  // the governor is gone). The limits as the thumbs had learned them (learning.ts), for the dice's check until it runs on
+  // the one engine.
+  let meterValues: MeterValues | undefined;
   let learned = $state<Learned>(fresh(STANDING));
   let learnedVersion = 0;
   const limitsNow = $derived(limitsOf(learned));
@@ -833,6 +838,8 @@
   const KNOB_MORPH = 0.15;
   let morphNext: number | null = null;
   const GRAPH_TYPES: Record<string, ModuleType> = Object.fromEntries([...EXTRA_TYPES, ...cratarrTypes(RANGES, DEFAULTS)].map((t) => [t.type, t]));
+  // Every type a v2 patch holds, for its picture side (picture-graph.ts).
+  const PICTURE_TYPES = v2Types(cratarrTypes(RANGES, DEFAULTS));
   // ---- Cables in the rack (the owner on 70: "each line is clickable, removable"; a long press "to get the option to
   // delete or reroute"): claude-5f's KnobCables, CableSheet, CableMenu and SourcePicker over cable-actions.ts ----------
   const cablesNow = (): Cables => ({ routes: $state.snapshot(s.routes) as Record<string, RouteValue>, extra: $state.snapshot(s.extra) as PatchExtra });
@@ -936,6 +943,12 @@
     return () => removeEventListener('resize', resized);
   });
   const graphShown = $derived(panel && wide && !docked);
+  // The engine's patch is made anew once the settings changed (the frame loop's, below).
+  let enginePatchStale = true;
+  $effect(() => {
+    $state.snapshot(s);
+    enginePatchStale = true;
+  });
   // The graph's live faces (an ADSR's stage, an LFO's phase, the Clock's beats), fed from the frame loop while it shows.
   const liveFaces = new LiveFaces();
   // A cable dragged from a knob into the empty: that knob's source picker, a new module's node where it was let go.
@@ -1329,17 +1342,13 @@
       console.warn('Visuals:', e);
       unsupported = true;
     }
-    // The patch past the flame (decision 0056): the other layers and the picture's own loop, drawn between the flame's
-    // show and finish (compose.ts). Its knobs as set for now; the cables move them once the evaluator is in.
-    let compositor: Compositor | null = null;
-    try {
-      compositor = renderer ? new Compositor(renderer.context) : null;
-    } catch (e) {
-      console.warn('Visuals: no layers past the flame on this device', e);
-    }
+    // The picture lab's recorder (development only, where the lab asks): each frame's inputs, for a replay.
+    if (import.meta.env.DEV && renderer) recordPictures(renderer);
+    // The patch's structure as the renderer last had it (its picture side: picture-graph.ts).
+    let patched = '';
     const normal = newNormalState();
     // The patch's cables, modulators and macros made into each knob's value this frame (claude-632's evaluate.ts):
-    // what the compositor draws with; today's chain stays with aspects.ts.
+    // what the compositor draws with; today's chain is the engine's.
     const evalState = newEvalState();
     let evaluated: Evaluated | null = null;
     // The morph (claude-632's morph.ts): the extras' knobs from one state to the next, never a cut; a chain change's
@@ -1400,12 +1409,15 @@
         stopIdle = () => clearTimeout(id);
       }
     };
-    // The mapping from the music and the settings to what is drawn (aspects.ts), and the moments' gap.
-    const aspects = newAspects();
+    // The one engine (0057 §2, claude-5f's engine/graph.ts): today's settings as a v2 patch, its devices opened up, made
+    // anew only when the settings or the walks change (half a millisecond each); the walks' factors by cable id.
+    const engine = newEngine();
+    const ENGINE_TYPES = Object.fromEntries(EXTRA_TYPES.map((t) => [t.type, t]));
+    let enginePatch: PatchV2 | null = null;
+    let engineWalk: Record<string, number> = {};
     // How the music stirs the fluid (stirring.ts).
     const stirring = newStirring();
     // What the visuals do, measured (meters.ts), and when the rating page last had them.
-    let metering = new Meters();
     // The trial the meters and the governor last measured: each new one (the rating page's A, then B) starts them anew,
     // so one segment's flashes and motion are not counted, nor held back, in the next.
     let trialSeen: VisualSettings | null = null;
@@ -1501,8 +1513,6 @@
     let measured = 0;
     let measure: ReturnType<typeof measuring> | null = null;
     let counted = { since: performance.now(), frames: 0 };
-    // The flash meter's readings, taken first in a frame (flashmeter.ts) and given to the meters with its stats.
-    let unread: Tiles[] = [];
 
 
     const loop = (now: number) => {
@@ -1532,7 +1542,8 @@
         unsupported = true;
         return;
       }
-      unread.push(...renderer.tiles());
+      // The Meter's readings, first in a frame (flashmeter.ts).
+      renderer.tiles();
 
       // How it behaves: as the settings say, or as the rating page's trial does (the look stays the settings').
       const how = trial.settings ?? s;
@@ -1653,35 +1664,40 @@
       // A preset that changed nothing (all of it pinned) leaves nothing to blend.
       nextBlend = null;
       behaviourMoved.clear();
-      // What is drawn, as the music and the settings give it (aspects.ts). Reduced motion: a quarter of the turning, all
+      // What is drawn, as the music and the patch give it (the engine). Reduced motion: a quarter of the turning, all
       // of it steady, half the beats' and hits' share, no moments.
       const still = reducedMotion();
       // How it behaves now: as set, each walking slider at its walk's share of it (not with the rating page's trial).
       const walked = trial.settings ? how : ({ ...how, ...Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, how[k] * (walkFactor[k] ?? 1)])) } as VisualSettings);
-      // And as the patch's cables move it (last frame's: they are read once the aspects have the signals).
+      // And as the patch's cables into today's settings move it (last frame's: read once the engine has the signals).
       const behaving = trial.settings ? how : ({ ...walked, ...cabled.settings, ...cabled.bands } as VisualSettings);
-      // The signals, read once a frame (normal.ts), with the Track pulse aspects.ts makes; and the patch's cables into
-      // today's columns (chain-cables.ts) given beside the routes, from them and the modulators as last stepped.
-      let read: (ref: SignalRef) => number = () => 0;
+      // The signals, read once a frame (normal.ts), with the Track pulse the engine makes (it reads none before making
+      // it: the Track pulse goes into Music's own track, which the next frame makes anew).
+      let signals: ((ref: SignalRef) => number) | null = null;
+      const read = (ref: SignalRef) => {
+        if (!signals) {
+          m.track[T.track] = engine.signals[T.track];
+          signals = signalsFor(normal, m, now);
+        }
+        return signals(ref);
+      };
       const extraCables = s.extra?.cables ?? [];
       const cableWalk = Object.fromEntries(extraCables.map((c) => [c.id, walkFactor[`cable:${c.id}`] ?? 1]));
-      const d = stepAspects(aspects, m, behaving, dt, {
-        still,
-        now,
-        matrix: trial.settings ? undefined : matrix,
-        fluidFull: FLUID_FULL,
-        levers: governor.levers,
-        routeWalk: routeWalkFor === matrix ? routeWalk : undefined,
-        // The Track pulse goes into Music's own track (which the next frame makes anew) for signalsFor to read; the
-        // modulators feeding these cables are last frame's (the evaluator steps after, on the envelope made here).
-        extra: (got, trackNow, envelope) => {
-          m.track[T.track] = trackNow[T.track];
-          read = signalsFor(normal, m, now);
-          const src = { signals: cableSignals(read, still), outputs: evalState.values, modulators: s.extra?.modulators ?? [], types: GRAPH_TYPES };
-          if (extraCables.length && !trial.settings) giveCables(got, extraCables, src, envelope, cableWalk, BANDS);
-          cabled = trial.settings ? { settings: {}, bands: {} } : cabledSettings(walked as unknown as Record<string, unknown>, extraCables, src, envelope, GRAPH_TYPES, cableWalk, BANDS);
-        },
-      });
+      if (enginePatchStale || !enginePatch) {
+        enginePatchStale = false;
+        enginePatch = flatten(toV2($state.snapshot(walked) as VisualSettings));
+      }
+      const stepped = stepEngine(engine, enginePatch, ENGINE_TYPES, m, read, behaving, dt, { still, now, fluidFull: FLUID_FULL, meters: meterValues, walk: engineWalk });
+      // How much the patch's sidechains hold back now (its Duckers, the Screen's guard), where the page still reads levers.
+      const levers = leversOf(stepped.outputs);
+      // A patch with no Cratarr chain draws nothing (toV2 always makes one).
+      if (!stepped.aspects) return;
+      const d = stepped.aspects;
+      // The patch's cables into today's settings that are no column (chain-cables.ts): the look's as the flame is
+      // made, the behaviour's for the next frame; from the signals and the modulators as last stepped.
+      const envelope = stepped.outputs['envelope.out'] ?? 0;
+      const src = { signals: cableSignals(read, still), outputs: evalState.values, modulators: s.extra?.modulators ?? [], types: GRAPH_TYPES };
+      cabled = trial.settings ? { settings: {}, bands: {} } : cabledSettings(walked as unknown as Record<string, unknown>, extraCables, src, envelope, GRAPH_TYPES, cableWalk, BANDS);
       const { turn, hits, parts, track } = d;
       if (m.playing && m.hits)
         m.hits.forEach((h, b) => {
@@ -1718,6 +1734,12 @@
         });
         routeWalk = Float32Array.from(matrix.walks, (k) => walkFactor[`route:${k}`] ?? 1);
         routeWalkFor = matrix;
+        // The engine's: a route's cable keeps its key as its id (v2.ts); the walked sliders go into its patch anew.
+        engineWalk = {
+          ...Object.fromEntries(matrix.walks.map((k) => [k, walkFactor[`route:${k}`] ?? 1])),
+          ...Object.fromEntries((s.extra?.cables ?? []).map((c) => [c.id, walkFactor[`cable:${c.id}`] ?? 1])),
+        };
+        enginePatchStale = true;
         if (m.playing) remember(heard, track, d.bands);
         driftDt = 0;
       }
@@ -1816,7 +1838,7 @@
       const beatNow = m.playing && !still ? m.beat : null;
       // The waves' height, held back with the pace as the turning is (their phase stays the track's, so a group waves
       // alike).
-      const wavesNow = still ? 0 : d.given[A.waves] * governor.levers.pace;
+      const wavesNow = still ? 0 : d.given[A.waves] * levers.pace;
       const stirred = stir(stirring, {
         t: now / 1000,
         dt,
@@ -1836,15 +1858,9 @@
         waves: wavesNow,
         position: m.position,
         center: [0.5, 0.5],
-        // What each push is worth: its route into Stir, Flow or Swirl (the trial's own routes with the rating page's),
-        // times that column's scale.
+        // What each push is worth: its route into Stir, Flow or Swirl, times that column's scale.
         gain: (signal, band, aspect, x) =>
-          behaving[aspect] *
-          (trial.settings
-            ? aspects.matrix
-              ? heightOn(aspects.matrix, signal, band, aspect, x)
-              : x
-            : heightOn(matrix, signal, band, aspect, x, routeWalkFor === matrix ? routeWalk : undefined) + cableGain(extraCables, signal, band, aspect, x, cableWalk)),
+          behaving[aspect] * (heightOn(matrix, signal, band, aspect, x, routeWalkFor === matrix ? routeWalk : undefined) + cableGain(extraCables, signal, band, aspect, x, cableWalk)),
       });
       // The patch past the flame, this frame: on when there is anything of it, morphed to the extras as set.
       const extraSet = extraNow;
@@ -1857,10 +1873,23 @@
       const morphFrame = stepMorph(morph, dt, m.bps > 0 ? 1 / m.bps : null, GRAPH_TYPES);
       shownKnobs = { ...morphFrame.knobs, ...Object.fromEntries(morphFrame.leaving.map((l) => [l.id, l.knobs])) };
       const extra = withLeaving(extraSet, drawnExtra, leavingIds(morphFrame.leaving));
-      if (compositor && (extraChanged || morphFrame.leaving.length !== goingBefore)) compositor.prune(extra);
+      if (renderer && (extraChanged || morphFrame.leaving.length !== goingBefore)) renderer.prune(extra);
+      // The effects' order follows what each slot draws (a shape or a colour: picture-wiring.ts).
+      const effectsDrawn = `${Math.round(s.fx1)},${Math.round(s.fx2)},${Math.round(s.fx3)}`;
+      if (renderer && (extraChanged || patched !== effectsDrawn)) {
+        patched = effectsDrawn;
+        try {
+          renderer.setPatch(toV2($state.snapshot(s) as VisualSettings), PICTURE_TYPES);
+          if (renderer.errors.length) console.warn('Visuals:', renderer.errors);
+        } catch (e) {
+          console.warn('Visuals: the patch could not be drawn as a graph', e);
+        }
+      }
       goingBefore = morphFrame.leaving.length;
       drawnExtra = extra;
-      if (compositor && renderer) {
+      // The layers past the flame and the picture's own loop (compose.ts), with their knobs as the cables move them.
+      let extras: Extras | null = null;
+      if (renderer) {
         const p = morphedPatch(patchNow, morphFrame.knobs);
         evaluated = p.layers.length > 1 || p.loop.length || p.modulators.length ? evaluate(p, GRAPH_TYPES, read, evalState, dt, { envelope: d.lit, frame: { beat: m.beat }, walk: cableWalk }) : null;
         // A step its cables move on: taken at its module's next neutral.
@@ -1868,70 +1897,43 @@
         if (graphShown) liveFaces.offer(now, () => ({ time: now / 1000, beat: m.beat, outputs: evaluated?.outputs ?? {} }));
         const flameTo = s.flameLayer ?? 1;
         flameShown = flameTo > flameShown ? Math.min(flameTo, flameShown + dt / (ANOTHER_MS / 1000)) : Math.max(flameTo, flameShown - dt / (ANOTHER_MS / 1000));
-        const flame = flameShown;
-        const active = Compositor.active(extra, knobsOf, flame);
-        renderer.compose = active
-          ? {
-              active,
-              run: (picture, width, height) =>
-                compositor!.run(picture, width, height, extra, knobsOf, { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null }, flame),
-            }
-          : null;
+        extras = { extra, knobsOf, frame: { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null }, flame: flameShown, flameTo: s.flameLayer ?? 1 };
       }
       renderer.frame(
         passes,
-        {
-          brightness: 1,
-          keep: d.keep,
-          gamma: d.gamma,
-          vibrancy: 1,
-          turn,
-          scale: scaleNow,
-          zoom: 1,
-          flash: d.flash,
-          hits,
+        nodesNow(d, {
+          how,
+          levers: levers,
+          still,
           ceiling: s.brightness,
-          saturation: d.saturation,
-          // The whole picture as bright however much of its frame the flame covers: a flame spread over most of it is
-          // shown dimmer, one gathered into a few cells brighter (against one covering a third of its frame), so its
-          // shape's changes are not flares.
-          exposure: frame ? Math.min(1.5, Math.max(0.4, 0.33 / Math.max(0.05, frame.coverage))) : 1,
-          smoothing: d.smoothing,
-          floor: d.floor,
+          coverage: frame ? frame.coverage : null,
           fire,
-          fluid: fluidNow,
-          // The zooms (zoom.ts): as fast as their routes let their sliders, held back with the pace; none with reduced
-          // motion.
-          tunnel: still ? 0 : TUNNEL_MOST * d.tunnel * governor.levers.pace,
-          // The look's effects, as far as the Effects setting and its routes let them, moving with the track's time.
-          effects: effectsNow(how, d.effects, m.position, beatNow, governor.levers, still, d.routed),
-          facets: { amount: d.facets, hex: Math.round(how.lattice) === 1 },
-          dive: still ? 0 : DIVE_MOST * d.dive * governor.levers.pace,
+          position: m.position,
+          beat: beatNow,
           forces: stirred.forces,
           flow: stirred.flow,
-          // At the Speed setting's pace, as the turning (a quarter with reduced motion; none at 0). The fluid takes at most
-          // 0.05 s a step: at 30 frames a second, Speed past 150 % flows no faster.
-          dt: dt * behaving.speed * governor.levers.pace * (still ? 0.25 : 1),
-          warp: d.warp,
-        },
+          dt,
+          speed: behaving.speed,
+        }),
         w,
         h,
+        extras,
       );
       // What this frame did, measured (meters.ts): the screen read into tiles (back two or more frames later), the parts'
       // motion and change, a new look and why. The meters' values for the rating page four times a second.
       if (trial.settings !== trialSeen) {
         trialSeen = trial.settings;
-        metering = new Meters();
-        Object.assign(governor, newGovernor());
+        renderer.meterReset();
+        meterValues = undefined;
       }
       renderer.measure(w, h, now / 1000);
-      const stats: FrameStats = {
+      const stats: Omit<FrameStats, 'tiles'> = {
         t: now / 1000,
         // What the effects add (as the governor lets them), the waves' motion where nothing flows, and the zooms'
         // streaming out at the rates the renderer is given (aspects.ts).
         extra: (() => {
-          const fx = settingsReport(how, d.effects, governor.levers, still, d.routed);
-          const zooms = still ? 0 : zoomsMotion(d.tunnel * governor.levers.pace, d.dive * governor.levers.pace);
+          const fx = settingsReport(how, d.effects, levers, still, d.routed);
+          const zooms = still ? 0 : zoomsMotion(d.tunnel * levers.pace, d.dive * levers.pace);
           return { ...fx, motion: (fx.motion ?? 0) + wavesMotion(wavesNow, d.fluid) + zooms };
         })(),
         // The dive's turn counts as each part's.
@@ -1944,14 +1946,12 @@
         saturation: d.saturation,
         look: lookCame,
         symmetry: d.moments.symmetry,
-        tiles: unread.splice(0),
       };
       lookCame = null;
-      metering.add(stats);
+      renderer.meterAdd(stats);
       if (now - meteredAt >= 250) {
-        const values = metering.now();
-        // With the trial of the rating page, only the flashes' rule: its budgets are what the ratings are to tell.
-        const l = stepGovernor(governor, values, { dt: Math.min(1, (now - meteredAt) / 1000), limits: limitsNow, wild: wildNow(how.wild), activity: d.lit, budgets: !trial.settings });
+        const values = renderer.meterValues;
+        meterValues = values;
         const since = Math.max(0.05, (now - meteredAt) / 1000);
         meteredAt = now;
         trial.meters = values;
@@ -1972,7 +1972,7 @@
           bps: m.bps,
           hitsPerSecond: hitsCounted / since,
           activity: d.lit,
-          swing: l.swing,
+          swing: levers.swing,
           looks: looksOutside,
           settling: !!from && blendOutside,
           view: [canvas.clientWidth, canvas.clientHeight],
@@ -1982,7 +1982,7 @@
           device: device(),
         };
         hitsCounted = 0;
-        const marks = { flash: holding(l, 'swing'), speed: holding(l, 'pace'), wild: (['swing', 'pace', 'evolution', 'hue', 'size', 'gap'] as const).some((k) => holding(l, k)) };
+        const marks = { flash: holding(levers, 'swing'), speed: holding(levers, 'pace'), wild: (['swing', 'pace', 'evolution', 'hue', 'size', 'gap'] as const).some((k) => holding(levers, k)) };
         if (marks.flash !== !!governed.flash || marks.speed !== !!governed.speed || marks.wild !== !!governed.wild) governed = marks;
       }
       // A picture for a snapshot, while this frame is still in the canvas.
@@ -2072,7 +2072,6 @@
       lock?.release().catch(() => {});
       // The full screen the visuals over the page went to ends with them; beside it, they made none.
       if (!docked && document.fullscreenElement) document.exitFullscreen().catch(() => {});
-      compositor?.dispose();
       renderer?.dispose();
       stopGroup();
       stopIdle?.();

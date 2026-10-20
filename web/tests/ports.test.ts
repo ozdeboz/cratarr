@@ -24,7 +24,7 @@ test('every module type has typed ports: a knob is a value input, a picture modu
 });
 
 test("today's hidden behaviours are modules; the beats and hits are triggers, a band's signals six channels", () => {
-  assert.deepEqual(ENGINE_MODULES.map((m) => m.type), ['music', 'track', 'envelope', 'clock', 'accent', 'vca', 'merge', 'meter', 'compressor', 'adsr', 'sequencer', 'looper', 'grid', 'fold', 'instance', 'filterbank']);
+  assert.deepEqual(ENGINE_MODULES.map((m) => m.type), ['music', 'track', 'envelope', 'clock', 'accent', 'vca', 'merge', 'meter', 'compressor', 'ducker', 'adsr', 'sequencer', 'looper', 'grid', 'fold', 'instance', 'filterbank']);
   const music = portsOf(ENGINE_MODULES[0]);
   assert.equal(music.out.find((x) => x.id === 'beat')?.type, 'trigger');
   assert.equal(music.out.find((x) => x.id === 'hits')?.channels, 6);
@@ -67,4 +67,14 @@ test("the flame and its own loop carry light; Show's device takes light and give
   assert.equal(t('flame').out[0].type, 'light');
   assert.equal(t('flame').in[0].type, 'light');
   for (const id of ['trails', 'fluid', 'tunnel', 'loop-effect', 'dive']) assert.ok(t(id).in[0].type === 'light' && t(id).out[0].type === 'light', id);
+});
+
+test('a light loop must pass through a Feedback too', async () => {
+  const { cyclesClosed } = await import('../src/lib/visuals/ports.ts');
+  const chain = cratarrTypes(RANGES, DEFAULTS);
+  const types = new Map([...chain, ...ENGINE_MODULES].map((t) => [t.type, t]));
+  const m = (id: string) => ({ id, type: id, knobs: {} });
+  const c = (id: string, from: string, to: string) => ({ id, from: { module: from, port: 'light' }, to: { module: to, port: 'light' }, value: 1, mode: 'swing' as const });
+  const p = { v: 2 as const, modules: [m('flame'), m('trails')], cables: [c('1', 'flame', 'trails'), c('2', 'trails', 'flame')], macros: [], pins: [] };
+  assert.ok(!cyclesClosed(p, (t) => types.get(t)));
 });
