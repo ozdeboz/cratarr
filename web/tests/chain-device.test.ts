@@ -92,3 +92,29 @@ test("the patch is the truth: the chain's knobs turned in the patch alone give w
     for (const [k, d] of compare(a, b)) assert.ok(d.most <= 1e-4, `${id}: ${k} differs by ${d.most} at frame ${d.frame}`);
   }
 });
+
+test("Music's newtrack fires once as each track starts (the first frame too), its seed the same for the same track", () => {
+  const t = track(TRACKS[0]);
+  const st = newEngine();
+  const music = newMusicState();
+  const p: PatchV2 = {
+    v: 2,
+    modules: [{ id: 'music', type: 'music', knobs: {} }, { id: 'v', type: 'vca', knobs: { gain: 0 } }, { id: 's', type: 'vca', knobs: { gain: 0 } }],
+    cables: [
+      { id: 'a', from: { module: 'music', port: 'newtrack' }, to: { module: 'v', port: 'cv' }, value: 1, depth: null },
+      { id: 'b', from: { module: 'music', port: 'seed' }, to: { module: 's', port: 'cv' }, value: 1, depth: null },
+    ],
+    macros: [],
+    pins: [],
+  } as PatchV2;
+  const seen: { fired: number; seed: number }[] = [];
+  for (let k = 0; k < 90; k++) {
+    const at = 20 + k / 30;
+    const key = k < 30 ? 'subsonic/a' : k < 60 ? 'subsonic/b' : 'subsonic/a';
+    const m = { ...musicOf(t.signals, t.beats, at, true, { state: music, at: at * 1000, lighting: DEFAULTS.lighting }), key };
+    const f = stepEngine(st, p, {}, m, () => 0, DEFAULTS, 1 / 30, { still: false, now: at * 1000, fluidFull: FLUID_FULL });
+    seen.push({ fired: f.outputs['v.out'], seed: f.outputs['s.out'] });
+  }
+  assert.deepEqual(seen.flatMap((x, k) => (x.fired > 0.5 ? [k] : [])), [0, 30, 60]);
+  assert.ok(seen[0].seed > 0 && seen[0].seed < 1 && seen[0].seed !== seen[30].seed && seen[0].seed === seen[60].seed);
+});

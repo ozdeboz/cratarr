@@ -468,7 +468,11 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   raw.set(m.track);
   raw[T.loudness] = env.level;
   if (opts.still) for (const t of [T.beat, T.downbeat, T.section]) raw[t] *= 0.5;
+  // A new track (0057 §7f, Music's `newtrack`: a trigger the frame it starts, the visuals opening on one too) and its
+  // seed (Music's `seed`: the same for the same track, 0..1, as flame.ts seedOf has it).
+  const newTrack = m.key !== st.track.key ? 1 : 0;
   const pulse = stepTrack(st.track, m.key, opts.now, m.bps);
+  const trackSeed = seedOf(m.key ?? 'cratarr') / 4294967296;
   raw[T.track] = pulse;
   const bands = m.bands ?? st.standIn;
   outputs['envelope.level'] = env.level;
@@ -525,6 +529,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     }
     if (type === 'music') {
       if (f.port === 'playing') return m.playing ? 1 : 0;
+      if (f.port === 'newtrack') return newTrack;
+      if (f.port === 'seed') return trackSeed;
       const r = readingOf(f.port);
       if (r.reference === 'absolute') {
         const t = T[r.signal as keyof typeof T];
