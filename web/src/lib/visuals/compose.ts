@@ -31,12 +31,12 @@ void main() {
 }`;
 
 /** The Mix of `n` layers over the picture in one pass (decision 0057 §4), each over the picture so far (both
- *  premultiplied) as its mode says: added, screened, laid over, multiplied, or the picture seen through it (window:
- *  dimmed by its amount where the layer is not), by its amount; the picture so far kept in the shader, not in a target
- *  between. Before that, a layer's glow (its light spread over a ring of taps) and the first's tint (its colours the
- *  picture's around it: the hue of a wider ring's mean, at its own brightness; its own where the picture is dark): a
- *  later layer that tints reads the picture so far around it, so it starts a pass of its own. Taps one by one, no
- *  arrays (Mali's float[] miscompiles). */
+ *  premultiplied) as its mode says (MIX_MODES): added, screened, laid over, multiplied, the picture seen through it
+ *  (window: dimmed by its amount where the layer is not), or the brighter of the two (lighten), by its amount; the
+ *  picture so far kept in the shader, not in a target between. Before that, a layer's glow (its light spread over a
+ *  ring of taps) and the first's tint (its colours the picture's around it: the hue of a wider ring's mean, at its own
+ *  brightness; its own where the picture is dark): a later layer that tints reads the picture so far around it, so it
+ *  starts a pass of its own. Taps one by one, no arrays (Mali's float[] miscompiles). */
 export function mixShader(n: number): string {
   const layer = (i: number) => `  {
     vec4 b = texture(uLayer${i}, vUv);
@@ -53,6 +53,7 @@ ${i === 0 ? `    if (uTint0 > 0.0) {
     else if (uMode${i} == 2) c = b.rgb + c * (1.0 - b.a);
     else if (uMode${i} == 3) c = c * mix(vec3(1.0), b.rgb / max(b.a, 1e-4), b.a);
     else if (uMode${i} == 4) c = c * mix(1.0 - uAmount${i}, 1.0, cover);
+    else if (uMode${i} == 5) c = max(c, b.rgb);
     else c = c + b.rgb;
   }`;
   const each = (f: (i: number) => string) => Array.from({ length: n }, (_, i) => f(i)).join('\n');
