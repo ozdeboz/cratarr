@@ -90,8 +90,6 @@ const FULL = 'The input that gives a full output (1 is typical): higher needs a 
 const LIGHT = 'The flame’s light, before Tone map turns it into a picture.';
 const HUE = 'The colour, round the colour wheel.';
 const SATURATION = 'How vivid the colours are: grey at 0.';
-const TINT = 'How much it takes the flame’s colours around it.';
-const GLOW = 'How much soft light spreads around it.';
 const ACROSS = 'Moves it left or right.';
 const UP = 'Moves it up or down.';
 const SPIN = 'How fast it turns; below 0 the other way.';
@@ -126,8 +124,6 @@ export const portHelp: Record<string, Record<string, string>> = {
     hueSpread: 'How far the colour moves round the wheel from shape to shape.',
     saturation: SATURATION,
     additive: 'From covering what is under it (0) to adding its light to it (1).',
-    tint: TINT,
-    glow: GLOW,
   },
   waves: {
     audio: 'The sound to draw: Music’s unless unplugged.',
@@ -145,8 +141,6 @@ export const portHelp: Record<string, Record<string, string>> = {
     hue: HUE,
     hueSpread: 'How far the colour moves round the wheel along the line.',
     saturation: SATURATION,
-    tint: TINT,
-    glow: GLOW,
   },
   tonemap: { light: LIGHT, level: 'The whole picture’s brightness, as a fader: 1 as set; the pause dims it through its gain.' },
   fluid: {

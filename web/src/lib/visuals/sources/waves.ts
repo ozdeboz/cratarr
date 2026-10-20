@@ -24,9 +24,6 @@ const KNOBS = [
   knob('hue', 'Hue', 0, 1, 0.5),
   knob('hueSpread', 'Hue along', 0, 1, 0),
   knob('saturation', 'Saturation', 0, 1, 0.6),
-  // How it meets the picture under it (compose.ts, at the blend), as the Shapes'.
-  knob('tint', 'Flame colours', 0, 1, 0.7),
-  knob('glow', 'Glow', 0, 1, 0.4),
 ];
 
 export const WAVES: ModuleType & { ports: Ports } = {

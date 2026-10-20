@@ -53,13 +53,13 @@
   import { fresh, limitsOf, type Learned } from './learning';
   import { getVisualsLimits } from '../api';
   import { toast } from '../toast.svelte';
-  import type { MeterValues, Tiles } from './meters';
+  import type { MeterValues } from './meters';
   import type { TrialLoop } from './trial.svelte';
   import { beatsOf } from './beats';
   import { DEFAULT_LIMITS, prechecking, type Checked } from './precheck';
   import { recipeFor, settingsOf, STIRRING, type Recipe, type Scope } from './recipe';
   import { signalsOf } from './signals';
-  import { Meters, type FrameStats } from './meters';
+  import type { FrameStats } from './meters';
   import { trial } from './trial.svelte';
   import { appInfo, inApp } from '../app.svelte';
   import { coverPalette, type PaletteColour } from './palette';
@@ -1418,7 +1418,6 @@
     // How the music stirs the fluid (stirring.ts).
     const stirring = newStirring();
     // What the visuals do, measured (meters.ts), and when the rating page last had them.
-    let metering = new Meters();
     // The trial the meters and the governor last measured: each new one (the rating page's A, then B) starts them anew,
     // so one segment's flashes and motion are not counted, nor held back, in the next.
     let trialSeen: VisualSettings | null = null;
@@ -1514,8 +1513,6 @@
     let measured = 0;
     let measure: ReturnType<typeof measuring> | null = null;
     let counted = { since: performance.now(), frames: 0 };
-    // The flash meter's readings, taken first in a frame (flashmeter.ts) and given to the meters with its stats.
-    let unread: Tiles[] = [];
 
 
     const loop = (now: number) => {
@@ -1545,7 +1542,8 @@
         unsupported = true;
         return;
       }
-      unread.push(...renderer.tiles());
+      // The Meter's readings, first in a frame (flashmeter.ts).
+      renderer.tiles();
 
       // How it behaves: as the settings say, or as the rating page's trial does (the look stays the settings').
       const how = trial.settings ?? s;
@@ -1925,11 +1923,11 @@
       // motion and change, a new look and why. The meters' values for the rating page four times a second.
       if (trial.settings !== trialSeen) {
         trialSeen = trial.settings;
-        metering = new Meters();
+        renderer.meterReset();
         meterValues = undefined;
       }
       renderer.measure(w, h, now / 1000);
-      const stats: FrameStats = {
+      const stats: Omit<FrameStats, 'tiles'> = {
         t: now / 1000,
         // What the effects add (as the governor lets them), the waves' motion where nothing flows, and the zooms'
         // streaming out at the rates the renderer is given (aspects.ts).
@@ -1948,12 +1946,11 @@
         saturation: d.saturation,
         look: lookCame,
         symmetry: d.moments.symmetry,
-        tiles: unread.splice(0),
       };
       lookCame = null;
-      metering.add(stats);
+      renderer.meterAdd(stats);
       if (now - meteredAt >= 250) {
-        const values = metering.now();
+        const values = renderer.meterValues;
         meterValues = values;
         const since = Math.max(0.05, (now - meteredAt) / 1000);
         meteredAt = now;
