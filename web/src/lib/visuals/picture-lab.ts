@@ -77,7 +77,7 @@ const PIPELINES: Record<string, (canvas: HTMLCanvasElement, points: number, opti
       }
       if (f.pruned) r.prune(f.pruned);
       const c = f.compose;
-      r.frame(f.passes, chainOfShown(lookOf(f.look)), f.w, f.h, c ? { extra: c.extra, knobsOf: (m) => c.knobs[m.id] ?? m.knobs, frame: frameOf(c), flame: c.flame } : null);
+      r.frame(f.passes, chainOfShown(lookOf(f.look)), f.w, f.h, c ? { extra: c.extra, knobsOf: (m) => c.knobs[m.id] ?? m.knobs, frame: frameOf(c), flame: c.flame, flameTo: c.flameTo } : null);
     });
   },
   legacy: async (canvas, points, options) => {
@@ -112,6 +112,8 @@ export const SCENES: Record<string, Partial<VisualSettings>> = {
   // Rotate (Kaleidoscope's third), Pulse (EYEDO's first) and Echo (Hydra's first).
   effects: { effects: 1, fx1: 3, fx1Amount: 1, fx2: 1, fx2Amount: 0.8, fx3: 1, fx3Amount: 0.8, pins: FX },
   layers: { extra: layered, pins: FX },
+  // The flame's layer at nothing under the layers: the lazy rules cut the flame (the frozen renderer draws it unseen).
+  noflame: { extra: layered, flameLayer: 0, pins: FX },
 };
 
 // ---- The stand-in track: 120 beats a minute, a bar of four, six bands' hits and levels, sections every 16 bars ----

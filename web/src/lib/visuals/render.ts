@@ -13,10 +13,10 @@
 import type { ChainNow } from './chain-params';
 import { Compositor } from './compose';
 import type { FrameInfo, Module, PatchExtra } from './patch';
-import { compile, effectRuns, STAGES, stagesOf, type Stage, type TypeOf } from './picture-graph';
+import { compile, effectRuns, plan, STAGES, stagesOf, type Compiled, type Stage, type TypeOf } from './picture-graph';
 import type { PatchV2 } from './ports';
 import type { Flame } from './flame';
-import type { Flow, Force, Loop } from './fluid';
+import type { Fluid, Flow, Force, Loop } from './fluid';
 import { EffectClocks } from './effects';
 import type { Tiles } from './meters';
 import { Carry } from './nodes/carry';
@@ -86,8 +86,8 @@ export type Shown = {
 export type RendererOptions = { random?: () => number; now?: () => number };
 
 /** The compose step's inputs this frame (compose.ts: the layers past the flame and the picture's own loop): the
- *  extras as drawn, each module's knobs, the frame, the flame layer's share. */
-export type Extras = { extra: PatchExtra; knobsOf: (m: Module) => Record<string, number>; frame: FrameInfo; flame: number };
+ *  extras as drawn, each module's knobs, the frame, the flame layer's share and where its morph is going. */
+export type Extras = { extra: PatchExtra; knobsOf: (m: Module) => Record<string, number>; frame: FrameInfo; flame: number; flameTo?: number };
 
 export class FlameRenderer {
   private gl: WebGL2RenderingContext;
@@ -101,6 +101,9 @@ export class FlameRenderer {
   private fxOrder: number[] = [0, 1, 2];
   /** The slots whose Echo is fed back the line's own finished picture (Feedback → Echo → Mix). */
   private fxLooped = new Set<number>();
+  private compiled: Compiled | null = null;
+  /** Whether the lazy rules cut the flame last frame. */
+  private cut = false;
   errors: string[] = [];
   /** The context, for what draws beside the flame (the compositor). */
   get context(): WebGL2RenderingContext {
@@ -166,6 +169,7 @@ export class FlameRenderer {
   setPatch(p: PatchV2, typeOf: TypeOf) {
     const c = compile(p, typeOf);
     const stages = stagesOf(c);
+    this.compiled = stages ? c : null;
     this.errors = stages ? c.errors : [...c.errors, 'This version draws the picture in its own order only.'];
     this.stages = new Set(stages ?? STAGES);
     const fx = c.order.filter((n) => /^fx\d$/.test(n.id)).map((n) => Number(n.id.slice(2)) - 1);
@@ -231,11 +235,6 @@ export class FlameRenderer {
     const gl = this.gl;
     const light = this.light;
     if (!this.points.flame || !light.acc || !light.accFbo) return;
-    light.tend();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, light.accFbo);
-    gl.viewport(0, 0, light.width, light.height);
-    gl.enable(gl.BLEND);
-
     const at = this.now();
     const since = this.shownAt ? Math.min(0.25, (at - this.shownAt) / 1000) : 0;
     this.shownAt = at;
@@ -247,10 +246,26 @@ export class FlameRenderer {
       fxl && fxl.loop && fxl.loopAmount > 0
         ? { id: fxl.loop, amount: fxl.loopAmount, time: [...this.clocks.times[3], ...this.clocks.moved[3]] as Loop['time'], frames: this.fxFrames, knobs: fxl.loopKnobs }
         : null;
-    // Fade what is there; with the Fluid setting, carry it along the flow as it fades, into the other set of buffers
-    // (as the scrub copies), and draw on there.
-    const fluid = this.carry.draw(light, now.carry, since, loop);
-    this.points.draw(light, now.points, passes, since);
+    // The lazy rules (picture-graph.ts plan): the flame's layer at nothing, and not coming back, cuts the flame and all
+    // that feeds only it (decision 0057, its 5th: one coming back keeps gathering its light). The rest is lazy within
+    // its pass: an effect, a layer, the loop at nothing.
+    const drawn = !this.compiled || !extras || !this.compositor || plan(this.compiled, {
+      knobs: (id): Record<string, number> => (id === 'layers' ? { mode1: 0, amount1: extras.flame } : {}),
+      target: (id, knob) => (id === 'layers' && knob === 'amount1' ? (extras.flameTo ?? 1) : 1),
+    }).live.some((n) => n.type === 'flame');
+    let fluid: Fluid | null = null;
+    if (drawn && this.cut) light.clear();
+    this.cut = !drawn;
+    if (drawn) {
+      light.tend();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, light.accFbo);
+      gl.viewport(0, 0, light.width, light.height);
+      gl.enable(gl.BLEND);
+      // Fade what is there; with the Fluid setting, carry it along the flow as it fades, into the other set of
+      // buffers (as the scrub copies), and draw on there.
+      fluid = this.carry.draw(light, now.carry, since, loop);
+      this.points.draw(light, now.points, passes, since);
+    }
 
     // Show it. The points held at a time: each frame's, kept 1/(1 − keep) frames; their mean per pixel sets k2. Where a
     // chain of effects is set, into the picture at the buffer's size, for the chain's pass to finish.
@@ -262,9 +277,11 @@ export class FlameRenderer {
     const compose = this.stages.has('compose') && extras && this.compositor && Compositor.active(extras.extra, extras.knobsOf, extras.flame) ? this.compositor : null;
     const composing = !!compose;
     const into = chain.length || composing ? this.fin.targets(light.width, light.height) : null;
-    gl.bindFramebuffer(gl.FRAMEBUFFER, into ? into.fbo[2] : null);
-    if (into) viewWidth = light.width, viewHeight = light.height;
-    this.show.draw(light, this.points, now.show, passes, fluid, this.carry.warpShown, viewWidth, viewHeight);
+    if (drawn) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, into ? into.fbo[2] : null);
+      if (into) viewWidth = light.width, viewHeight = light.height;
+      this.show.draw(light, this.points, now.show, passes, fluid, this.carry.warpShown, viewWidth, viewHeight);
+    }
     const picture = into && compose ? compose.run(into.tex[2], into.w, into.h, extras!.extra, extras!.knobsOf, extras!.frame, extras!.flame) : into ? into.tex[2] : null;
     if (chain.length && into && picture) {
       // Each run from the last one's picture; the first into the picture's own targets, as before.

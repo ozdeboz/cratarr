@@ -1835,7 +1835,7 @@
         for (const r of evaluated?.moments ?? []) askStep(morph, r.module, r.knob, GRAPH_TYPES);
         const flameTo = s.flameLayer ?? 1;
         flameShown = flameTo > flameShown ? Math.min(flameTo, flameShown + dt / (ANOTHER_MS / 1000)) : Math.max(flameTo, flameShown - dt / (ANOTHER_MS / 1000));
-        extras = { extra, knobsOf, frame: { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null }, flame: flameShown };
+        extras = { extra, knobsOf, frame: { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null }, flame: flameShown, flameTo: s.flameLayer ?? 1 };
       }
       renderer.frame(
         passes,

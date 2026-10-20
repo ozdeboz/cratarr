@@ -265,6 +265,17 @@ export class Light {
     this.query = null;
   }
 
+  /** Both sets to nothing (the flame drawn again after the lazy rules cut it: it gathers its light anew). */
+  clear() {
+    const gl = this.gl;
+    gl.clearColor(0, 0, 0, 0);
+    for (const f of this.fbos) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
   /** Every 120 frames (two to four seconds), the scrub; first the last one's answer, where the GPU has it. */
   tend() {
     this.heard();

@@ -83,3 +83,15 @@ test('an Echo with shapes after it is a visible loop: Feedback → Echo → Mix 
   const plain = compile(toV2({ ...settings(), fx3: 1, fx3Amount: 0.8 }), types);
   assert.ok(!plain.order.some((n) => n.id === 'fx3-feedback'));
 });
+
+test('lazy: the flame’s layer at nothing cuts the flame and its own loop, unless its morph brings it back', async () => {
+  const { plan } = await import('../src/lib/visuals/picture-graph.ts');
+  const c = compile(toV2(settings()), types);
+  const live = (share: number, to: number) =>
+    plan(c, { knobs: (id): Record<string, number> => (id === 'layers' ? { mode1: 0, amount1: share } : {}), target: (id, k) => (id === 'layers' && k === 'amount1' ? to : 1) }).live.map((n) => n.id);
+  assert.ok(live(1, 1).includes('flame'));
+  const cut = live(0, 0);
+  for (const id of ['flame', 'trails', 'fluid', 'show/tonemap', 'light-feedback']) assert.ok(!cut.includes(id), id);
+  assert.ok(cut.includes('screen'));
+  assert.ok(live(0, 1).includes('flame'), 'coming back: still gathering');
+});
