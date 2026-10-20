@@ -66,8 +66,11 @@
   import { held } from './held.svelte';
   import Help from './Help.svelte';
   import { newStirring, stir } from './stirring';
-  import { FlameRenderer } from './render';
-  import { Compositor } from './compose';
+  import { FlameRenderer, type Extras } from './render';
+  import { v2Types } from './picture-graph';
+  import { toV2 } from './v2';
+  import { recordPictures } from './recorder';
+  import { chainNow as nodesNow } from './chain-params';
   import { newNormalState, signalsFor } from './normal';
   import { cabledSettings, cableGain, cableSignals, giveCables, type Cabled } from './chain-cables';
   import { shapeOf } from './evaluate';
@@ -86,8 +89,7 @@
   import { BLENDS, cratarrPatch, cratarrTypes, modulesOf, type ModuleType } from './patch';
   import { SOURCE_TYPES } from './sources/index';
   import { MODULATORS } from './modulators/modulators';
-  import { DIVE_MOST, TUNNEL_MOST } from './zoom';
-  import { effectsNow, ENGINE_EFFECTS, ENGINES, knobLabel, LOOP_EFFECTS, settingsReport, type Effect } from './effects';
+  import { ENGINE_EFFECTS, ENGINES, knobLabel, LOOP_EFFECTS, settingsReport, type Effect } from './effects';
   import {
     A,
     ASPECT_LABEL,
@@ -830,6 +832,8 @@
   const KNOB_MORPH = 0.15;
   let morphNext: number | null = null;
   const GRAPH_TYPES: Record<string, ModuleType> = Object.fromEntries([...EXTRA_TYPES, ...cratarrTypes(RANGES, DEFAULTS)].map((t) => [t.type, t]));
+  // Every type a v2 patch holds, for its picture side (picture-graph.ts).
+  const PICTURE_TYPES = v2Types(cratarrTypes(RANGES, DEFAULTS));
   // ---- Cables in the rack (the owner on 70: "each line is clickable, removable"; a long press "to get the option to
   // delete or reroute"): claude-5f's KnobCables, CableSheet, CableMenu and SourcePicker over cable-actions.ts ----------
   const cablesNow = (): Cables => ({ routes: $state.snapshot(s.routes) as Record<string, RouteValue>, extra: $state.snapshot(s.extra) as PatchExtra });
@@ -1284,14 +1288,10 @@
       console.warn('Visuals:', e);
       unsupported = true;
     }
-    // The patch past the flame (decision 0056): the other layers and the picture's own loop, drawn between the flame's
-    // show and finish (compose.ts). Its knobs as set for now; the cables move them once the evaluator is in.
-    let compositor: Compositor | null = null;
-    try {
-      compositor = renderer ? new Compositor(renderer.context) : null;
-    } catch (e) {
-      console.warn('Visuals: no layers past the flame on this device', e);
-    }
+    // The picture lab's recorder (development only, where the lab asks): each frame's inputs, for a replay.
+    if (import.meta.env.DEV && renderer) recordPictures(renderer);
+    // The patch's structure as the renderer last had it (its picture side: picture-graph.ts).
+    let patched = '';
     const normal = newNormalState();
     // The patch's cables, modulators and macros made into each knob's value this frame (claude-632's evaluate.ts):
     // what the compositor draws with; today's chain stays with aspects.ts.
@@ -1812,64 +1812,50 @@
       const morphFrame = stepMorph(morph, dt, m.bps > 0 ? 1 / m.bps : null, GRAPH_TYPES);
       shownKnobs = { ...morphFrame.knobs, ...Object.fromEntries(morphFrame.leaving.map((l) => [l.id, l.knobs])) };
       const extra = withLeaving(extraSet, drawnExtra, leavingIds(morphFrame.leaving));
-      if (compositor && (extraChanged || morphFrame.leaving.length !== goingBefore)) compositor.prune(extra);
+      if (renderer && (extraChanged || morphFrame.leaving.length !== goingBefore)) renderer.prune(extra);
+      // The effects' order follows what each slot draws (a shape or a colour: picture-wiring.ts).
+      const effectsDrawn = `${Math.round(s.fx1)},${Math.round(s.fx2)},${Math.round(s.fx3)}`;
+      if (renderer && (extraChanged || patched !== effectsDrawn)) {
+        patched = effectsDrawn;
+        try {
+          renderer.setPatch(toV2($state.snapshot(s) as VisualSettings), PICTURE_TYPES);
+          if (renderer.errors.length) console.warn('Visuals:', renderer.errors);
+        } catch (e) {
+          console.warn('Visuals: the patch could not be drawn as a graph', e);
+        }
+      }
       goingBefore = morphFrame.leaving.length;
       drawnExtra = extra;
-      if (compositor && renderer) {
+      // The layers past the flame and the picture's own loop (compose.ts), with their knobs as the cables move them.
+      let extras: Extras | null = null;
+      if (renderer) {
         const p = morphedPatch(patchNow, morphFrame.knobs);
         evaluated = p.layers.length > 1 || p.loop.length || p.modulators.length ? evaluate(p, GRAPH_TYPES, read, evalState, dt, { envelope: d.lit, frame: { beat: m.beat }, walk: cableWalk }) : null;
         // A step its cables move on: taken at its module's next neutral.
         for (const r of evaluated?.moments ?? []) askStep(morph, r.module, r.knob, GRAPH_TYPES);
         const flameTo = s.flameLayer ?? 1;
         flameShown = flameTo > flameShown ? Math.min(flameTo, flameShown + dt / (ANOTHER_MS / 1000)) : Math.max(flameTo, flameShown - dt / (ANOTHER_MS / 1000));
-        const flame = flameShown;
-        const active = Compositor.active(extra, knobsOf, flame);
-        renderer.compose = active
-          ? {
-              active,
-              run: (picture, width, height) =>
-                compositor!.run(picture, width, height, extra, knobsOf, { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null }, flame),
-            }
-          : null;
+        extras = { extra, knobsOf, frame: { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null }, flame: flameShown, flameTo: s.flameLayer ?? 1 };
       }
       renderer.frame(
         passes,
-        {
-          brightness: 1,
-          keep: d.keep,
-          gamma: d.gamma,
-          vibrancy: 1,
-          turn,
-          scale: scaleNow,
-          zoom: 1,
-          flash: d.flash,
-          hits,
+        nodesNow(d, {
+          how,
+          levers: governor.levers,
+          still,
           ceiling: s.brightness,
-          saturation: d.saturation,
-          // The whole picture as bright however much of its frame the flame covers: a flame spread over most of it is
-          // shown dimmer, one gathered into a few cells brighter (against one covering a third of its frame), so its
-          // shape's changes are not flares.
-          exposure: frame ? Math.min(1.5, Math.max(0.4, 0.33 / Math.max(0.05, frame.coverage))) : 1,
-          smoothing: d.smoothing,
-          floor: d.floor,
+          coverage: frame ? frame.coverage : null,
           fire,
-          fluid: fluidNow,
-          // The zooms (zoom.ts): as fast as their routes let their sliders, held back with the pace; none with reduced
-          // motion.
-          tunnel: still ? 0 : TUNNEL_MOST * d.tunnel * governor.levers.pace,
-          // The look's effects, as far as the Effects setting and its routes let them, moving with the track's time.
-          effects: effectsNow(how, d.effects, m.position, beatNow, governor.levers, still, d.routed),
-          facets: { amount: d.facets, hex: Math.round(how.lattice) === 1 },
-          dive: still ? 0 : DIVE_MOST * d.dive * governor.levers.pace,
+          position: m.position,
+          beat: beatNow,
           forces: stirred.forces,
           flow: stirred.flow,
-          // At the Speed setting's pace, as the turning (a quarter with reduced motion; none at 0). The fluid takes at most
-          // 0.05 s a step: at 30 frames a second, Speed past 150 % flows no faster.
-          dt: dt * behaving.speed * governor.levers.pace * (still ? 0.25 : 1),
-          warp: d.warp,
-        },
+          dt,
+          speed: behaving.speed,
+        }),
         w,
         h,
+        extras,
       );
       // What this frame did, measured (meters.ts): the screen read into tiles (back two or more frames later), the parts'
       // motion and change, a new look and why. The meters' values for the rating page four times a second.
@@ -2026,7 +2012,6 @@
       lock?.release().catch(() => {});
       // The full screen the visuals over the page went to ends with them; beside it, they made none.
       if (!docked && document.fullscreenElement) document.exitFullscreen().catch(() => {});
-      compositor?.dispose();
       renderer?.dispose();
       stopGroup();
       stopIdle?.();
