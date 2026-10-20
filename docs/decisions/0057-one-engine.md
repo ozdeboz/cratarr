@@ -488,19 +488,28 @@ The owner, 2026-10-20 (through claude-632's session): "yes, folded into music"; 
 remain"; on the follower's normal into every depth, "Yes, please"; on shipping the patterns as devices, "agree". These
 supersede what §3, §4b, §4e and §7e say of Track, the Loudness and the depth normal.
 
-- **Track folds into Music.** Music gives **New track** (a trigger) and **Track seed** (a fixed number per track). A
-  track's look is a standard **Random** (sample-and-hold) triggered by New track and seeded by the Track seed, so the
-  same track keeps the same look. No Track module, no Track logic.
+- **Track folds into Music.** Music gives **New track** (a trigger) and **Track seed** (0..1, the same for the same
+  track). No Track module, no Track logic.
+- **A track's look is the dice's own Randomize** (the owner, 2026-10-20: "same randomize", not a Random per knob): a
+  **Randomizer** module, the dice as a module, with a `trigger` and a `seed` input and its scope as a knob (Everything,
+  Sources, Effects, Mixers, Modulators, Cables). It draws as the dice do: the flame's settings rolled together and
+  checked until the flame draws something (`drawing`/`survey`), pins kept. Music's New track → Randomizer, seeded by
+  Track seed, so every track keeps exactly today's look. The dice in the panel trigger the same Randomize with a fresh
+  seed.
+- **Track's pulse** ("all of it as a track starts, gone over its first beat") is New track → an ADSR whose release is
+  about a beat (claude-5f).
 - **No depth normal.** A cable has no depth unless one is cabled. The loudness scales once at the source: a
   polyphonic **VCA on Music's outputs** (the band rows through as channels), keyed by the Envelope Follower; everything
   from Music goes through it. Loudness's own row bypasses it, as a visible cable from Music directly. A modulator that
   followed the loudness gets the same VCA at its output. The Follower's out-0-when-paused goes: pausing is the one
-  Playing → VCA → Tone map cable. The picture stays identical (cable × envelope = VCA(source) × cable), proved by the
-  picture harness.
+  Playing → VCA → Tone map cable. A straight cable stays identical (cable × envelope = VCA(source) × cable). A
+  **curved** cable (its value a curve) would not, the curve then reading the quieted signal; the owner: keep them
+  exact. Such a cable reads Music before the VCA, through a visible **Shaper** (its curve) and then a VCA of its own
+  keyed by the Follower. The picture harness proves the whole identical.
 - **Common patterns ship as devices**, and the default patch is built from them. No special code: each opens, edits,
   and can be unmade into loose modules. toV2 emits them, so converted patches show them:
   - **Loudness Follow:** Envelope Follower → the VCA on Music's outputs (macros Intensity, Time);
-  - **Track Look:** Music's New track → Random (sample-and-hold, seeded per track) → the look's knobs;
+  - **Track Look:** Music's New track and Track seed → the Randomizer (scope Everything, the pins kept);
   - **Pause Dim:** Music's Playing → VCA → Tone map's level;
   - **Calm:** Meter → a Ducker per busy kind → the knobs' gain inputs (§7e's sidechain, as a device; Wild its macro);
   - **Hit Lights:** Music's Hits → ADSR → the flame's lights (Linger);
