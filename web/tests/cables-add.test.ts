@@ -81,3 +81,35 @@ test('cables only add: the engine over the converted patch gives what today’s 
     }
   }
 });
+
+test("a Shaper gives each channel its curve's height at its input, as a cable's curve does", async () => {
+  const { heightOf, shapeOf } = await import('../src/lib/visuals/evaluate.ts');
+  const { B } = await import('../src/lib/visuals/routes.ts');
+  const { musicOf, newMusicState } = await import('../src/lib/visuals/music-core.ts');
+  const { FLUID_FULL } = await import('../src/lib/visuals/settings.svelte.ts');
+  const t = track(TRACKS[0]);
+  const curve = { h1: [0.1, 0.9] as [number, number], h2: [0.5, 0.2] as [number, number], h: 0.7 };
+  const p: PatchV2 = {
+    v: 2,
+    modules: [{ id: 'music', type: 'music', knobs: { 'reference.level': 2 } }, { id: 'shape', type: 'shaper', knobs: { h: 0.7, h1x: 0.1, h1y: 0.9, h2x: 0.5, h2y: 0.2 } }],
+    cables: [{ id: 'in', from: { module: 'music', port: 'level' }, to: { module: 'shape', port: 'in' }, value: 1, depth: null }],
+    macros: [],
+    pins: [],
+  } as PatchV2;
+  const st = newEngine();
+  const music = newMusicState();
+  const sh = shapeOf(curve);
+  let bent = 0;
+  for (let k = 0; k < 120; k++) {
+    const at = 20 + k / 30;
+    const m = musicOf(t.signals, t.beats, at, true, { state: music, at: at * 1000, lighting: DEFAULTS.lighting });
+    stepEngine(st, p, {}, m, () => 0, DEFAULTS, 1 / 30, { still: false, now: at * 1000, fluidFull: FLUID_FULL });
+    for (let ch = 0; ch < 6; ch++) {
+      const x = m.bands![ch][B.level];
+      const want = heightOf(sh, x);
+      assert.ok(Math.abs(st.poly.shape[ch] - want) < 1e-9, `frame ${k} channel ${ch}: ${st.poly.shape[ch]} against ${want}`);
+      if (Math.abs(want - 0.7 * x) > 0.01) bent++;
+    }
+  }
+  assert.ok(bent > 100, `the curve bends (${bent})`);
+});
