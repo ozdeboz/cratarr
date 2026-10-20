@@ -28,7 +28,7 @@ const DECLARED: Record<string, Category> = {
 const BY_PLACE: Record<Place, Category> = { source: 'sources', module: 'effects', loop: 'effects', finish: 'effects', modulator: 'modulators', frame: 'io' };
 
 /** A type's category: as declared, else by its place. */
-export const categoryOf = (t: ModuleType): Category => DECLARED[t.type] ?? BY_PLACE[t.place] ?? 'effects';
+export const categoryOf = (t: ModuleType): Category => DECLARED[t.type] ?? (t.type.startsWith('music-') ? 'io' : undefined) ?? BY_PLACE[t.place] ?? 'effects';
 
 const PICTURE = new Set(['picture', 'light']);
 

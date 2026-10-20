@@ -559,6 +559,25 @@ export const SHAPER = declared(
   [{ ...VALUE_OUT, channels: 6 }],
 );
 
+/** A Music signal on its own (the owner, 2026-10-20: "a module for a specific music output instead of having one music
+ *  module with many outputs"): one output, `out`, of the type Music gives it (a band's six channels at once), as many
+ *  as wanted, placed beside what each feeds; all read the same analysis. Its reading (against this track, lately, or
+ *  as it is) is its own knob, and the bands' envelope its Hold. Type `music-<signal>`. */
+export const MUSIC_SIGNAL_MODULES: readonly Declared[] = MUSIC.ports.out.map((o) =>
+  declared(
+    `music-${o.id}`,
+    o.label,
+    'modulator',
+    [
+      ...(MUSIC_KNOBS.some((k) => k.id === `reference.${o.id}`) ? [{ ...knob('reference', 'Reading', 0, 2, 0, 'step'), randomize: false as const }] : []),
+      ...(o.id === 'envelope' ? [{ ...knob('hold', 'Hold', 0.02, 1, 0.15), channels: 6 }] : []),
+    ],
+    [],
+    [{ ...o, id: 'out' }],
+  ),
+);
+export const musicSignalOf = (type: string): string | null => (type.startsWith('music-') ? type.slice('music-'.length) : null);
+
 export const ENGINE_MODULES: readonly Declared[] = [MUSIC, ENVELOPE, DICE, SHAPER, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
