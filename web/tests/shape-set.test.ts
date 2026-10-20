@@ -221,11 +221,27 @@ test('a lens’s shape: its points sent into the shape, Polygon and Star by its 
     const edge = name === 'polygon' ? regular(6, 0).edge : name === 'star' ? regular(6, 0.6).edge : (x: number, y: number) => S.irregularEdge(name, x, y);
     let outside = 0;
     for (let k = 0; k < 400; k++) {
-      // Its own affine taken back off: the shape is where the lens sends a point.
+      // Wherever a point is, the lens sends it into the shape.
       const [x, y] = S.lensInto(name, rnd() * 2 - 1, rnd() * 2 - 1, rnd(), { sides: 6, depth: 0.6 });
       if (edge(x, y) > 0.01) outside++;
     }
     assert.ok(outside <= 4, `${name}: ${outside} outside`);
     assert.doesNotThrow(() => apply(final, 0.3, -0.2, rnd));
   }
+});
+
+test('the shader’s copy of the Lens’s symbols’ tables: the share through each wedge, and every ring of it', () => {
+  const names = S.LENS_SHAPES.slice(2) as unknown as (typeof S.IRREGULAR)[number][];
+  const tex = S.fillTexture(names);
+  names.forEach((name, k) => {
+    const { rings, through, total } = S.fillTable(name);
+    for (let i = 0; i < S.FILL_ANGLES; i++) {
+      assert.ok(rings[i].length <= S.TABLE_RINGS, `${name}: wedge ${i} has ${rings[i].length} rings`);
+      assert.ok(Math.abs(tex[(k * 3 * S.FILL_ANGLES + i) * 4] - through[i] / total) < 1e-6);
+      rings[i].forEach(([a, b], j) => {
+        const at = ((k * 3 + 1 + (j >> 1)) * S.FILL_ANGLES + i) * 4 + (j & 1) * 2;
+        assert.ok(Math.abs(tex[at] - a) < 1e-6 && Math.abs(tex[at + 1] - b) < 1e-6);
+      });
+    }
+  });
 });
