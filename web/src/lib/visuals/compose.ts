@@ -30,23 +30,41 @@ void main() {
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
-// A layer over the picture so far (both premultiplied): added, screened, laid over, multiplied, or the picture seen
-// through it (window: dimmed by `uAmount` where the layer is not), by `uAmount`. Before that, the layer meets the
-// picture: its glow (its light spread over a ring of taps, `uGlow`) and its colours the picture's around it (`uTint`:
-// the hue of a wider ring's mean, at the layer's own brightness; its own where the picture is dark). Taps one by one,
-// no arrays (Mali's float[] miscompiles).
-const BLEND = `#version 300 es
+/** The Mix of `n` layers over the picture in one pass (decision 0057 §4), each over the picture so far (both
+ *  premultiplied) as its mode says: added, screened, laid over, multiplied, or the picture seen through it (window:
+ *  dimmed by its amount where the layer is not), by its amount; the picture so far kept in the shader, not in a target
+ *  between. Before that, a layer's glow (its light spread over a ring of taps) and the first's tint (its colours the
+ *  picture's around it: the hue of a wider ring's mean, at its own brightness; its own where the picture is dark): a
+ *  later layer that tints reads the picture so far around it, so it starts a pass of its own. Taps one by one, no
+ *  arrays (Mali's float[] miscompiles). */
+export function mixShader(n: number): string {
+  const layer = (i: number) => `  {
+    vec4 b = texture(uLayer${i}, vUv);
+    if (uGlow${i} > 0.0) b += (ring(uLayer${i}, 0.012) * 0.5 + ring(uLayer${i}, 0.03) * 0.3) / 8.0 * 2.5 * uGlow${i};
+${i === 0 ? `    if (uTint0 > 0.0) {
+      vec3 m = ring(uBase, 0.06).rgb / 8.0 * uBaseGain;
+      float top = max(max(m.r, m.g), m.b);
+      float lit = max(max(b.r, b.g), b.b);
+      b.rgb = mix(b.rgb, lit * m / max(top, 1e-3), uTint0 * smoothstep(0.01, 0.12, top));
+    }
+` : ''}    float cover = clamp(max(max(b.r, b.g), max(b.b, b.a)) * 1.5, 0.0, 1.0);
+    b *= uAmount${i};
+    if (uMode${i} == 1) c = c + b.rgb - c * b.rgb;
+    else if (uMode${i} == 2) c = b.rgb + c * (1.0 - b.a);
+    else if (uMode${i} == 3) c = c * mix(vec3(1.0), b.rgb / max(b.a, 1e-4), b.a);
+    else if (uMode${i} == 4) c = c * mix(1.0 - uAmount${i}, 1.0, cover);
+    else c = c + b.rgb;
+  }`;
+  const each = (f: (i: number) => string) => Array.from({ length: n }, (_, i) => f(i)).join('\n');
+  return `#version 300 es
 precision highp float;
 in vec2 vUv;
 out vec4 outColor;
 uniform sampler2D uBase;
-uniform sampler2D uLayer;
-uniform int uMode;
-uniform float uAmount;
 uniform float uBaseGain;
-uniform float uTint;
-uniform float uGlow;
+uniform float uTint0;
 uniform vec2 uAspect;
+${each((i) => `uniform sampler2D uLayer${i};\nuniform int uMode${i};\nuniform float uAmount${i};\nuniform float uGlow${i};`)}
 vec4 ring(sampler2D t, float r) {
   vec2 d = uAspect * r;
   float h = 0.7071;
@@ -55,25 +73,14 @@ vec4 ring(sampler2D t, float r) {
     texture(t, vUv + vec2(d.x, -d.y) * h) + texture(t, vUv + vec2(-d.x, d.y) * h);
 }
 void main() {
-  vec4 a = texture(uBase, vUv) * uBaseGain;
-  vec4 b = texture(uLayer, vUv);
-  if (uGlow > 0.0) b += (ring(uLayer, 0.012) * 0.5 + ring(uLayer, 0.03) * 0.3) / 8.0 * 2.5 * uGlow;
-  if (uTint > 0.0) {
-    vec3 m = ring(uBase, 0.06).rgb / 8.0 * uBaseGain;
-    float top = max(max(m.r, m.g), m.b);
-    float lit = max(max(b.r, b.g), b.b);
-    b.rgb = mix(b.rgb, lit * m / max(top, 1e-3), uTint * smoothstep(0.01, 0.12, top));
-  }
-  float cover = clamp(max(max(b.r, b.g), max(b.b, b.a)) * 1.5, 0.0, 1.0);
-  b *= uAmount;
-  vec3 c;
-  if (uMode == 1) c = a.rgb + b.rgb - a.rgb * b.rgb;
-  else if (uMode == 2) c = b.rgb + a.rgb * (1.0 - b.a);
-  else if (uMode == 3) c = a.rgb * mix(vec3(1.0), b.rgb / max(b.a, 1e-4), b.a);
-  else if (uMode == 4) c = a.rgb * mix(1.0 - uAmount, 1.0, cover);
-  else c = a.rgb + b.rgb;
+  vec3 c = texture(uBase, vUv).rgb * uBaseGain;
+${each(layer)}
   outColor = vec4(c, 1.0);
 }`;
+}
+
+/** The most layers a Mix takes in one pass (its inputs past the flame's). */
+const MIX_PASS = 4;
 
 // The picture's own loop: the last picture read where the Warp moves it from (about the middle: zoomed, turned,
 // drifted, stretched, wobbled), kept by the Keep's share, and the new picture over it: the brighter of the two, so the
@@ -115,7 +122,7 @@ export function composeActive(extra: PatchExtra, knobsOf: (m: Module) => Record<
 
 export class Compositor {
   private gl: WebGL2RenderingContext;
-  private blend: WebGLProgram;
+  private mixes = new Map<number, WebGLProgram>();
   private loop: WebGLProgram;
   private empty: WebGLVertexArrayObject;
   private spec: Spec = { w: 0, h: 0, format: 'rgba8' };
@@ -132,7 +139,6 @@ export class Compositor {
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
-    this.blend = program(gl, FULL, BLEND);
     this.loop = program(gl, FULL, LOOP);
     this.empty = gl.createVertexArray()!;
     // Half floats where they can be drawn into (the loop's faint trails would band in 8 bits), else 8 bits.
@@ -156,36 +162,46 @@ export class Compositor {
     let base: WebGLTexture = picture;
     let mixed: Target | null = null;
     let gain = Math.min(1, Math.max(0, flame));
-    const over = (drawn: WebGLTexture, mode: Layer['blend']['mode'], amount: number, tint = 0, glow = 0) => {
+    type Drawn = { t: Target; mode: Layer['blend']['mode']; amount: number; tint: number; glow: number };
+    const drawn: Drawn[] = [];
+    for (const layer of extra.layers) {
+      if (layer.blend.amount <= 0) continue;
+      const t = this.drawLayer(layer, knobsOf, frame);
+      const k = knobsOf(layer.source);
+      if (t) drawn.push({ t, mode: layer.blend.mode, amount: layer.blend.amount, tint: k.tint ?? 0, glow: k.glow ?? 0 });
+    }
+    // The Mix: as many layers a pass as it takes, a pass ending before a later layer that tints (it reads the picture
+    // so far around it), or with none, the flame's share alone.
+    const pass = (layers: Drawn[]) => {
       const t = this.pool.take(this.spec);
+      const p = this.mixProgram(layers.length);
       gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo);
       gl.viewport(0, 0, this.spec.w, this.spec.h);
       gl.disable(gl.BLEND);
-      gl.useProgram(this.blend);
-      this.bind(0, base, 'uBase', this.blend);
-      this.bind(1, drawn, 'uLayer', this.blend);
-      gl.uniform1i(gl.getUniformLocation(this.blend, 'uMode'), BLENDS.indexOf(mode));
-      gl.uniform1f(gl.getUniformLocation(this.blend, 'uTint'), tint);
-      gl.uniform1f(gl.getUniformLocation(this.blend, 'uGlow'), glow);
-      gl.uniform2f(gl.getUniformLocation(this.blend, 'uAspect'), Math.min(1, this.spec.h / this.spec.w), Math.min(1, this.spec.w / this.spec.h));
-      gl.uniform1f(gl.getUniformLocation(this.blend, 'uAmount'), amount);
-      gl.uniform1f(gl.getUniformLocation(this.blend, 'uBaseGain'), gain);
+      gl.useProgram(p);
+      this.bind(0, base, 'uBase', p);
+      gl.uniform1f(gl.getUniformLocation(p, 'uBaseGain'), gain);
+      gl.uniform1f(gl.getUniformLocation(p, 'uTint0'), layers[0]?.tint ?? 0);
+      gl.uniform2f(gl.getUniformLocation(p, 'uAspect'), Math.min(1, this.spec.h / this.spec.w), Math.min(1, this.spec.w / this.spec.h));
+      layers.forEach((l, i) => {
+        this.bind(1 + i, l.t.tex, `uLayer${i}`, p);
+        gl.uniform1i(gl.getUniformLocation(p, `uMode${i}`), BLENDS.indexOf(l.mode));
+        gl.uniform1f(gl.getUniformLocation(p, `uAmount${i}`), l.amount);
+        gl.uniform1f(gl.getUniformLocation(p, `uGlow${i}`), l.glow);
+      });
       this.full();
       if (mixed) this.pool.give(mixed);
       mixed = t;
       base = t.tex;
       gain = 1;
     };
-    for (const layer of extra.layers) {
-      if (layer.blend.amount <= 0) continue;
-      const drawn = this.drawLayer(layer, knobsOf, frame);
-      const k = knobsOf(layer.source);
-      if (drawn) {
-        over(drawn.tex, layer.blend.mode, layer.blend.amount, k.tint ?? 0, k.glow ?? 0);
-        this.pool.give(drawn);
-      }
+    let run: Drawn[] = [];
+    for (const l of drawn) {
+      if (run.length && (l.tint > 0 || run.length === MIX_PASS)) (pass(run), (run = []));
+      run.push(l);
     }
-    if (gain < 1) over(picture, 'add', 0);
+    if (run.length || gain < 1) pass(run);
+    for (const l of drawn) this.pool.give(l.t);
     // The picture's own loop: its Warps summed, its Keeps multiplied (each by its Amount).
     let keep = 1;
     let kept = false;
@@ -253,6 +269,13 @@ export class Compositor {
     this.held = next;
     this.given = next;
     return next.tex;
+  }
+
+  /** The one-pass Mix's program for `n` layers (made once each). */
+  private mixProgram(n: number): WebGLProgram {
+    let p = this.mixes.get(n);
+    if (!p) this.mixes.set(n, (p = program(this.gl, FULL, mixShader(n))));
+    return p;
   }
 
   /** A layer's picture: its source drawn into a target, then its modules, each from the last into another. */
@@ -364,7 +387,7 @@ export class Compositor {
     const gl = this.gl;
     for (const s of [...this.sources.values(), ...this.running.values()]) s.module?.dispose(gl);
     this.pool.clear();
-    gl.deleteProgram(this.blend);
+    for (const p of this.mixes.values()) gl.deleteProgram(p);
     gl.deleteProgram(this.loop);
     gl.deleteVertexArray(this.empty);
   }
