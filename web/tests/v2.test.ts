@@ -100,7 +100,8 @@ test("an extra cable from the hits keeps its reading: its own ADSR, the gate rea
   const pulse = CHAINS.find((c) => c.id === 'pulse')!;
   s.extra = JSON.parse(JSON.stringify(pulse.extra));
   s.routes = { [routeKey('hits', 0, 'lights')]: 1 };
-  const v = toV2(s);
+  // The wiring as converted, before Hit Lights packs the ADSRs into a device.
+  const v = toV2(s, { devices: false });
   const by = Object.fromEntries(v.cables.map((c) => [c.id, c]));
   assert.deepEqual(by['pulse-kick-in'].from, { module: 'adsr-track', port: 'out', channel: 1 });
   assert.deepEqual(by['adsr-track-gate'].from, { module: 'music', port: 'hits' });
@@ -134,4 +135,15 @@ test("a column's scale goes into its cables' amounts (curves' heights too), the 
   const m = Object.fromEntries(v.modules.map((x) => [x.id, x]));
   assert.equal(m.flame.knobs.zoom, 0, 'the column knob its resting value, the cables adding to it');
   assert.equal(m.flame.knobs.rotation, 0);
+});
+
+test('the common patterns as devices: Calm, Pause Dim, Hit Lights; a Dice for a new track’s look', async () => {
+  const v = toV2(copy(DEFAULTS));
+  const device = (id: string) => v.modules.find((m) => m.id === id) as { label?: string; patch?: { modules: { id: string }[] } } | undefined;
+  assert.equal(device('calm')?.label, 'Calm');
+  assert.ok(device('calm')!.patch!.modules.some((m) => m.id === 'duck-motion'));
+  assert.equal(device('pause')?.label, 'Pause Dim');
+  assert.ok(!v.modules.some((m) => m.id.startsWith('duck-') || m.id.startsWith('pause-')), 'none left loose');
+  assert.ok(v.modules.some((m) => m.type === 'dice'));
+  assert.ok(v.cables.some((c) => c.from.module === 'music' && c.from.port === 'newtrack' && c.to.module === 'dice'));
 });

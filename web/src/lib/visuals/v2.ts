@@ -27,6 +27,7 @@ import { BUSY } from './engine/sidechain';
 import { ASPECT_KNOB, cratarrPatch, modulesOf, type Cable, type Macro, type Module, type Patch } from './patch';
 import { isDevice, READINGS, SHOW_PARTS, type CableV2, type Device, type PatchV2, type PortRef } from './ports';
 import { extraType } from './registry';
+import { makeDevice } from './device-make';
 
 /** A cable as the conversion carries it until the end: how it reads its signal, its speed and its mode still on it; they
  *  leave the wire at the end (`toWire`). */
@@ -318,7 +319,7 @@ function toWire(given: Module[], all: Wire[]): { modules: Module[]; cables: Cabl
  *  - `addOnly` (default true): cables only add (0057 §7e); false gives the patch before that step, for the proof.
  *  - `sidechain` (default true): the sidechain in sight; false leaves it out, for the proof.
  *  - `limits`: the limits as learned (the app's `limitsNow`), frozen into the Duckers; else the defaults. */
-export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: boolean; limits?: Partial<Record<Budgeted, number>> } = {}): PatchV2 {
+export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: boolean; limits?: Partial<Record<Budgeted, number>>; devices?: boolean } = {}): PatchV2 {
   const p = cratarrPatch(s);
   // Drift is Random now (its smooth end: Shape 0), as VCV, Vital and Bitwig name it (the owner).
   const modules: Module[] = [...modulesOf(p).values()].map((m) => (m.type === 'drift' ? { ...m, type: 'random', knobs: { ...m.knobs, shape: 0 } } : { ...m, knobs: { ...m.knobs } }));
@@ -440,5 +441,17 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
   const wildMacro = (added as { macro?: Macro }).macro;
   const macros: Macro[] = [...p.macros, ...rackMacros, ...(wildMacro ? [wildMacro] : [])];
   const wired = toWire(added.modules, added.cables);
-  return { v: 2, modules: [...wired.modules, ...wiring.modules], cables: [...wired.cables, ...wiring.cables], macros, pins: p.pins };
+  const rack: PatchV2 = { v: 2, modules: [...wired.modules, ...wiring.modules], cables: [...wired.cables, ...wiring.cables], macros, pins: p.pins };
+  return opts.devices === false ? rack : packed(rack);
+}
+
+/** The common patterns as devices (0057 §7f: "common patterns that replace removed special cases ship as ready-made
+ *  devices"): the sidechain's Duckers and their activity VCAs as Calm, the pause's dimming as Pause Dim, the hits'
+ *  envelopes as Hit Lights. Each opens to its modules and can be unmade. */
+function packed(p: PatchV2): PatchV2 {
+  const ids = (f: (m: Module) => boolean) => p.modules.filter(f).map((m) => m.id);
+  makeDevice(p, ids((m) => m.id.startsWith('duck-')), { id: 'calm', label: 'Calm' });
+  makeDevice(p, ids((m) => m.id.startsWith('pause-')), { id: 'pause', label: 'Pause Dim' });
+  makeDevice(p, ids((m) => m.type === 'adsr' && m.id !== NEWTRACK), { id: 'hit-lights', label: 'Hit Lights' });
+  return p;
 }

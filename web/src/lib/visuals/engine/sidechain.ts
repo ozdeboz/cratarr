@@ -43,14 +43,18 @@ export const holding = (l: Levers, lever: keyof Levers) => (lever === 'evolution
 
 /** The levers as a patch's sidechains hold them this frame (the one engine's outputs: each kind's Ducker, the Screen's
  *  guard; 1 where a patch has none), for what the page still reads as levers. */
-export const leversOf = (o: Record<string, number>): Levers => ({
-  swing: o['screen.guard'] ?? 1,
-  pace: o['duck-motion.out'] ?? 1,
-  evolution: 1 / (o['duck-shape.out'] ?? 1),
-  hue: o['duck-colour.out'] ?? 1,
-  size: o['duck-zoom.out'] ?? 1,
-  gap: 1 / (o['duck-looks.out'] ?? 1),
-});
+export const leversOf = (o: Record<string, number>): Levers => {
+  // An output by its module's own id, at the top or inside a device (`calm/duck-motion.out`: the Calm device's).
+  const at = (key: string) => o[key] ?? Object.entries(o).find(([k]) => k.endsWith(`/${key}`))?.[1];
+  return {
+    swing: at('screen.guard') ?? 1,
+    pace: at('duck-motion.out') ?? 1,
+    evolution: 1 / (at('duck-shape.out') ?? 1),
+    hue: at('duck-colour.out') ?? 1,
+    size: at('duck-zoom.out') ?? 1,
+    gap: 1 / (at('duck-looks.out') ?? 1),
+  };
+};
 
 export type SidechainState = { flash: DuckerState; busy: Record<Budgeted, DuckerState> };
 export const newSidechain = (): SidechainState => ({ flash: newDucker(), busy: Object.fromEntries(BUDGETED.map((k) => [k, newDucker()])) as Record<Budgeted, DuckerState> });
