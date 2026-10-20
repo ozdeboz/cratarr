@@ -2,7 +2,7 @@
 // typed ports, once, for the one engine. The value side follows the contract agreed with claude-5f, so the engine on
 // a converted patch gives what aspects.ts gives on the settings:
 //
-// 1. Today's chain keeps its module ids (frame, flame, show, fluid, tunnel, dive, trails, loop-effect, fx1–3) and its
+// 1. Today's chain keeps its module ids (flame, show, fluid, tunnel, dive, trails; the effects their modules') and its
 //    knobs (patch.ts SETTING_KNOB, ASPECT_KNOB); a column's scale is its knob's own value.
 // 2. A route from the loudness comes from the Loudness module's `level` (the loudness as Intensity lets it count), and
 //    is never scaled by it (`depth: null`).
@@ -19,7 +19,7 @@
 // The picture side's wiring (which picture goes into which, and the modules it needs: the Screen, the Feedbacks, the
 // Mixes) is claude-632's (step 3): `pictureWiring`, none until theirs lands.
 
-import { slotsAsEffects } from './effect-modules';
+import { effectOfType, slotsAsEffects } from './effect-modules';
 import { endOf, type RouteValue } from './curves';
 import { ASPECTS, BAND_SIGNALS, COLUMN_SCALES, isRoute, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, routeKey, type Aspect } from './routes';
 import { shapeOf } from './evaluate';
@@ -340,14 +340,14 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
     if (frame) delete frame.knobs[setting];
   }
   // The Whole frame goes (0057): Intensity, Flash and Speed rack macros on the knobs they moved to, Wild one on the
-  // Duckers' thresholds (sidechained); the device's own settings (quality, frame rate, brightness) the device's; the
-  // walks Randoms now (§7e item 5), their columns gone with it. Effects stays on it until the effects are modules.
+  // Duckers' thresholds (sidechained), Effects one on the effects' Amounts (below); the device's own settings (quality,
+  // frame rate, brightness) the device's; the walks Randoms now (§7e item 5), their columns gone with it.
   const rackMacros: Macro[] = (Object.entries(MOVED) as [string, [string, string]][]).map(([setting, [module, knob]]) => {
     const [lo, hi] = RANGES[setting as keyof typeof RANGES];
     const v = (s as unknown as Record<string, number>)[setting];
     return { id: setting, on: 'rack', label: setting[0].toUpperCase() + setting.slice(1), value: Math.min(1, Math.max(0, (v - lo) / (hi - lo))), targets: [{ module, knob, from: lo, to: hi }] };
   });
-  if (frame) frame.knobs = 'effects' in frame.knobs ? { effects: frame.knobs.effects } : {};
+  if (frame) modules.splice(modules.indexOf(frame), 1);
   // Show as a device (0057 §6): its modules in the order that draws today's picture, each with the knob it took; its
   // knobs exposed under their old names, so the routes into `show.<knob>` keep their address. Its Size is the Flame's
   // own zoom.
@@ -398,6 +398,7 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
   for (const part of showAsDevice?.patch.modules ?? []) for (const k of Object.keys(part.knobs)) if (SCALE_OF.has(`show.${k}`)) part.knobs[k] = 0;
   for (const c of p.cables) {
     if (c.to.module === 'frame' && c.to.knob !== 'effects') continue;
+    // The Effects column's routes: each effect's Amount's too, in series with its own (below).
     const to = target(c.to);
     const value = scaled(c.value, scaleOf(c.to));
     if (isRoute(c.id, BANDS) && !extraIds.has(c.id)) {
@@ -441,6 +442,13 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
   }
   // One module per effect (0057 §3): each slot as the module of the effect it draws, its cables and pins with it.
   const effects = slotsAsEffects(modules, cables, p.pins, p.macros);
+  // Effects, the most of the effects, a rack macro on each one's Amount (0 to as it is set); its routes into each
+  // Amount beside the Amount's own, so their VCAs run in series (the Effects column's share times the Amount's).
+  const fxModules = effects.modules.filter((m) => effectOfType(m.type));
+  const intoEffects = effects.cables.filter((c) => c.to.module === 'frame');
+  effects.cables = effects.cables.filter((c) => c.to.module !== 'frame');
+  for (const fx of fxModules) for (const c of intoEffects) effects.cables.push({ ...c, id: `${c.id}-${fx.id}`, to: { module: fx.id, port: 'amount' } });
+  rackMacros.push({ id: 'effects', on: 'rack', label: 'Effects', value: Math.min(1, Math.max(0, s.effects)), targets: fxModules.map((fx) => ({ module: fx.id, knob: 'amount', from: 0, to: fx.knobs.amount ?? 1 })) });
   const all = [...engine.values(), ...newtrack, ...[...adsrs.values()].map((a) => a.module), ...effects.modules, ...pause, ...dice];
   const adding = opts.addOnly === false ? { modules: all, cables: effects.cables } : cablesAdd(all, effects.cables);
   const added = opts.sidechain === false ? adding : sidechained(adding.modules, adding.cables, s.wild, opts.limits ?? {});

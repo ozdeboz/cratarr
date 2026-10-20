@@ -59,6 +59,8 @@ export function settingsOfPatch(p: PatchV2, base: VisualSettings): VisualSetting
       out[names[k]] = (own && read(m, own)) ?? 0.5;
     }
   }
+  // Effects is the rack's macro on the effects' Amounts now (the Whole frame gone): folded into them, it reads 1.
+  if (!ofType('frame')) out.effects = 1;
   const wild = p.macros.find((x) => x.id === 'wild');
   if (wild && Number.isFinite(wild.value)) out.wild = wild.value;
   const music = ofType('music');

@@ -486,7 +486,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     facets: knobOf(inChain('fluid'), 'facets', s.facets),
     tunnel: knobOf(inChain('tunnel'), 'tunnel', s.tunnel),
     dive: knobOf(inChain('dive'), 'dive', s.dive),
-    effects: knobOf(inChain('frame'), 'effects', s.effects),
+    // Effects: the rack's macro on the effects' Amounts (folded into them: 1) where the Whole frame is gone.
+    effects: knobOf(inChain('frame'), 'effects', inChain('frame') ? s.effects : 1),
     smoothing: knobOf(inChain('show/blur'), 'smoothing', s.smoothing),
     haze: knobOf(inChain('show/curve'), 'haze', s.haze),
   } as VisualSettings;

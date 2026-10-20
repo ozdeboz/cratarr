@@ -26,7 +26,7 @@ test('the routes as cables: loudness from the Loudness (unscaled), track from an
   assert.equal(by[routeKey('beat', null, 'size')], undefined, 'a route at nothing is no cable');
 });
 
-test('Intensity, Flash and Speed move to the modules that do them, each a rack macro on its knob; the Whole frame keeps only Effects', () => {
+test('Intensity, Flash and Speed move to the modules that do them, each a rack macro on its knob; the Whole frame gone', () => {
   const s = copy(DEFAULTS);
   s.intensity = 0.3;
   s.flash = 1.4;
@@ -37,14 +37,14 @@ test('Intensity, Flash and Speed move to the modules that do them, each a rack m
   assert.equal(m.envelope.knobs.intensity, 0.3);
   assert.equal(m.accent.knobs.accent, 1.4);
   assert.equal(m.clock.knobs.speed, 0.7);
-  assert.deepEqual(Object.keys(m.frame.knobs), ['effects']);
+  assert.equal(m.frame, undefined, 'the Whole frame is gone');
   const macro = Object.fromEntries(v.macros.map((x) => [x.id, x]));
   assert.deepEqual(macro.flash.targets, [{ module: 'accent', knob: 'accent', from: 0, to: 2 }]);
   assert.ok(Math.abs(macro.flash.value - 0.7) < 1e-9 && Math.abs(macro.speed.value - 0.35) < 1e-9 && macro.intensity.value === 0.3);
   assert.equal(m.flame.knobs.zoom, 0, "Show's Size is the Flame's zoom; its scale went into the cables, the knob its resting value (§7e item 2)");
   assert.equal(m.show.type, 'device');
   // The effects' slots are their effects' modules (effect-modules.ts): none here, on no effect.
-  for (const id of ['music', 'envelope', 'clock', 'accent', 'frame', 'flame', 'show', 'fluid', 'tunnel', 'dive', 'trails']) assert.ok(m[id], id);
+  for (const id of ['music', 'envelope', 'clock', 'accent', 'flame', 'show', 'fluid', 'tunnel', 'dive', 'trails']) assert.ok(m[id], id);
 });
 
 test('the extras come as they are: their modules, and their cables from a modulator or from Music with their reference and speed', () => {
@@ -147,4 +147,20 @@ test('the common patterns as devices: Calm, Pause Dim, Hit Lights; a Dice for a 
   assert.ok(!v.modules.some((m) => m.id.startsWith('duck-') || m.id.startsWith('pause-')), 'none left loose');
   assert.ok(v.modules.some((m) => m.type === 'dice'));
   assert.ok(v.cables.some((c) => c.from.module === 'music' && c.from.port === 'newtrack' && c.to.module === 'dice'));
+});
+
+test("Effects, a rack macro on each effect's Amount; its routes into each Amount beside the Amount's own", () => {
+  const s = copy(DEFAULTS);
+  Object.assign(s, { effects: 0.6, fx1: 3, fx1Amount: 0.8, fx2: 1, fx2Amount: 0.5 });
+  s.routes = { ...s.routes, [routeKey('loudness', null, 'effects')]: 0.5 };
+  const v = toV2(s, { devices: false });
+  const macro = v.macros.find((x) => x.id === 'effects')!;
+  assert.equal(macro.on, 'rack');
+  assert.equal(macro.value, 0.6);
+  assert.deepEqual(macro.targets, [
+    { module: 'fx-rotate', knob: 'amount', from: 0, to: 0.8 },
+    { module: 'fx-pulse', knob: 'amount', from: 0, to: 0.5 },
+  ]);
+  for (const fx of ['fx-rotate', 'fx-pulse']) assert.ok(v.cables.some((c) => c.to.module === fx && c.to.port === 'amount:gain'), `${fx}: the Effects route's VCA into its Amount's gain`);
+  assert.ok(!v.cables.some((c) => c.to.module === 'frame'));
 });
