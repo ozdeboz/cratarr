@@ -324,7 +324,7 @@
     if (v2 && layout === 'elk') {
       const sz = (n: Node | (typeof g.nodes)[number]) => sizes[n.id] ?? sizeOf((n as (typeof g.nodes)[number]).data);
       const key = layoutKey(g.nodes, g.edges, sz, { portrait });
-      if (elkDone?.key === key) Object.assign(g, fromElk(elkDone.laid, g.nodes, g.edges, (id) => !!placed[id]));
+      if (elkDone?.key === key) Object.assign(g, fromElk(elkDone.laid, g.nodes, g.edges, (id) => !!placed[id], sz));
       else untrack(() => askElk(key, toElk(g.nodes, g.edges, sz, { portrait })));
     }
     // Far out, every cable on its nodes' far sockets (none ends inside a node); every cable over the nodes (EDGE_Z).

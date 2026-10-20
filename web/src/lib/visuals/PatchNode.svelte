@@ -99,7 +99,7 @@
       <div class="ports">
         {#each data.ports as p (p.id)}
           <div class="port" class:cabled={p.cabled}>
-            {p.label}
+            <span class="pl">{p.label}</span>
             <Handle type="target" id={knobHandle(p.id)} position={Position.Left} class="jack in-mod t-{p.type}" style="left: -10px" />
           </div>
         {/each}
@@ -403,7 +403,7 @@
   }
   /* Text that would be under 11 px on screen is not drawn (PatchGraph's .small: zoomed under 1). Far out (.far: so far
      that a title would be), a node is its name and how much of it is cabled, over it at 11 px or more. */
-  :global(.small) .node .port,
+  :global(.small) .node .pl,
   :global(.small) .node .jl,
   :global(.small) .node .poly,
   :global(.small) .node .more,

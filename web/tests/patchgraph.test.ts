@@ -939,7 +939,9 @@ test('ELK’s graph: ports by the cables’ sockets, inputs west and outputs eas
   assert.equal(e.layoutOptions!['elk.hierarchyHandling'], 'INCLUDE_CHILDREN');
   const flame = e.children!.find((n) => n.id === 'flame')!;
   assert.equal(flame.layoutOptions!['elk.portConstraints'], 'FIXED_ORDER');
-  assert.equal(flame.layoutOptions!['elk.partitioning.partition'], '0', 'Sources first');
+  // Partitions in the order signals flow: In (Music), Modulators, Sources, Effects, Mixers, Out.
+  assert.equal(flame.layoutOptions!['elk.partitioning.partition'], '2', 'Sources after the Modulators');
+  assert.equal(e.children!.find((n) => n.id === 'music')!.layoutOptions!['elk.partitioning.partition'], '0', 'Music in');
   const side = (n: typeof flame, h: string) => n.ports!.find((p) => p.id === `${n.id}::${h}`)?.layoutOptions!['elk.port.side'];
   assert.equal(side(flame, 'out'), 'EAST');
   assert.equal(side(flame, 'k:shape'), 'WEST');
@@ -961,8 +963,8 @@ test('ELK lays the v2 patch: the categories in order, the picture wires routed, 
   const g = graphOfV2({ patch: v2patch(), types: v2types });
   const laid = await elkMod.elkLayout(elkNow, g.nodes, g.edges, sizeBy as never, (id: string) => id === 'clock');
   const at = (id: string) => laid.nodes.find((n) => n.id === id)!.position;
-  // Partitions left to right: Sources, Effects, …, In / Out.
-  assert.ok(at('flame').x < at('show').x && at('show').x < at('music').x, JSON.stringify([at('flame'), at('show'), at('music')]));
+  // Partitions left to right as signals flow: Music, the modulators, the flame, its effects.
+  assert.ok(at('music').x < at('envelope').x && at('envelope').x < at('flame').x && at('flame').x < at('show').x, JSON.stringify([at('music'), at('envelope'), at('flame'), at('show')]));
   // The clock was put somewhere by the viewer: where it was.
   assert.deepEqual(at('clock'), g.nodes.find((n) => n.id === 'clock')!.position);
   // A picture wire has its route; a lane's head is just above its first node.

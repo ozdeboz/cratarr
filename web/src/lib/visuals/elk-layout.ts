@@ -6,19 +6,28 @@
 // Pure but for the ELK instance handed in (the page's runs in a web worker, the tests' in-process):
 // - toElk: the graph's nodes (a frame round a device opened in place a compound node, its modules inside) and their
 //   cables' sockets as ports, inputs on the side the picture comes in (west, or north in portrait) and outputs on the
-//   other, in their order; the categories as ELK partitions, so their lanes stay in order.
+//   other, in their order; the categories as ELK partitions in the order signals flow (flowOrder), so their lanes stay
+//   in order.
 // - fromElk: ELK's places for the nodes (a node the viewer put somewhere stays there), a frame's size, and each picture
 //   wire's route (its bends; its ends are its jacks' centres, PatchWire).
 // - laneHeads: each category's header over its lane's nodes once ELK has placed them.
 
 import type { ELK, ElkExtendedEdge, ElkNode, ElkPort } from 'elkjs/lib/elk-api';
-import { CATEGORIES, type Category } from './rack';
-import { FAR_IN, MOD_OUT, type GraphEdge, type GraphNode, type NodeData, type Size, type XY } from './patchgraph';
+import type { Category } from './rack';
+import { FAR_IN, MOD_OUT, withRoom, type GraphEdge, type GraphNode, type NodeData, type Size, type XY } from './patchgraph';
 
 export type ElkOptions = { portrait?: boolean };
 
 /** A port's ELK id: its node's and its handle's. */
 const portId = (node: string, handle: string) => `${node}::${handle}`;
+
+/** A category's partition, in the order signals flow (so ELK's layers run with the cables, not against them): what
+ *  comes in (In: Music, the Filter bank; an In / Out module that only gives), the Modulators, the Sources, the Effects,
+ *  the Mixers, what goes out (Out: the Screen, the whole frame). The lanes keep the five categories' names. */
+export function flowOrder(c: Category, handles: readonly string[]): number {
+  if (c === 'io') return handles.length && handles.every((h) => !isInput(h)) ? 0 : 5;
+  return { modulators: 1, sources: 2, effects: 3, mixers: 4 }[c];
+}
 
 /** Which of a node's handles take cables in (the rest give them out). */
 function isInput(handle: string): boolean {
@@ -53,6 +62,7 @@ export function toElk(nodes: GraphNode[], edges: GraphEdge[], size: (n: GraphNod
       layoutOptions: { 'elk.port.side': isInput(h) ? inSide : outSide, 'elk.port.index': String(i) },
     }));
     const category = (n.data as { category?: Category }).category;
+    const partition = category ? flowOrder(category, handles) : null;
     const children = laid.filter((c) => c.parentId === n.id).map(elkNode);
     return {
       id: n.id,
@@ -61,7 +71,7 @@ export function toElk(nodes: GraphNode[], edges: GraphEdge[], size: (n: GraphNod
       ...(children.length ? { children } : {}),
       layoutOptions: {
         'elk.portConstraints': 'FIXED_ORDER',
-        ...(category ? { 'elk.partitioning.partition': String(CATEGORIES.indexOf(category)) } : {}),
+        ...(partition !== null ? { 'elk.partitioning.partition': String(partition) } : {}),
         ...(children.length ? { 'elk.padding': '[top=34,left=16,bottom=16,right=16]' } : {}),
       },
     };
@@ -93,7 +103,7 @@ export function toElk(nodes: GraphNode[], edges: GraphEdge[], size: (n: GraphNod
 
 /** ELK's layout as the graph's: each node's place (relative to its frame, as Svelte Flow has it) but where the viewer
  *  put it (`kept`), a frame's size, each wire's bends (`data.route`, the flow's coordinates). */
-export function fromElk(laid: ElkNode, nodes: GraphNode[], edges: GraphEdge[], kept: (id: string) => boolean): { nodes: GraphNode[]; edges: GraphEdge[] } {
+export function fromElk(laid: ElkNode, nodes: GraphNode[], edges: GraphEdge[], kept: (id: string) => boolean, size?: (n: GraphNode) => Size): { nodes: GraphNode[]; edges: GraphEdge[] } {
   const at = new Map<string, ElkNode>();
   const walk = (n: ElkNode) => {
     at.set(n.id, n);
@@ -123,17 +133,21 @@ export function fromElk(laid: ElkNode, nodes: GraphNode[], edges: GraphEdge[], k
     if (!r || moved.has(e.source) || moved.has(e.target)) return e;
     return { ...e, data: { ...(e.data ?? { amount: '', wire: 'picture' as const }), route: r } };
   });
-  return { nodes: laneHeads(placed), edges: routed };
+  const out = laneHeads(placed);
+  // The far labels' room as ELK placed the nodes.
+  if (size) withRoom(out, size);
+  return { nodes: out, edges: routed };
 }
 
-/** Each category's header (a lane node, `@lane:<category>`) just above its lane's nodes as placed. */
+/** Each category's header (a lane node, `@lane:<category>`) just above its lane's topmost node as placed (the
+ *  leftmost of those level with it). */
 export function laneHeads(nodes: GraphNode[]): GraphNode[] {
   const box = new Map<Category, { x: number; y: number }>();
   for (const n of nodes) {
     const c = (n.data as { category?: Category }).category;
-    if (!c || n.parentId) continue;
+    if (!c || n.parentId || n.data.kind === 'lane') continue;
     const b = box.get(c);
-    box.set(c, b ? { x: Math.min(b.x, n.position.x), y: Math.min(b.y, n.position.y) } : { ...n.position });
+    if (!b || n.position.y < b.y - 0.5 || (Math.abs(n.position.y - b.y) <= 0.5 && n.position.x < b.x)) box.set(c, { ...n.position });
   }
   return nodes.map((n) => {
     const d = n.data as NodeData;
@@ -157,6 +171,6 @@ export function layoutKey(nodes: GraphNode[], edges: GraphEdge[], size: (n: Grap
 /** The layout ELK makes of the graph (asynchronously: the page's ELK runs in a worker). */
 export async function elkLayout(elk: Pick<ELK, 'layout'>, nodes: GraphNode[], edges: GraphEdge[], size: (n: GraphNode) => Size, kept: (id: string) => boolean, o: ElkOptions = {}) {
   const laid = await elk.layout(toElk(nodes, edges, size, o));
-  return fromElk(laid as ElkNode, nodes, edges, kept);
+  return fromElk(laid as ElkNode, nodes, edges, kept, size);
 }
 

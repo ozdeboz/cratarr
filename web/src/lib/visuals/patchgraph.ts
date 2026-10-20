@@ -483,9 +483,11 @@ export function withRoom(nodes: GraphNode[], size: (n: GraphNode) => Size) {
       const sz = size(n);
       return { n, x: at.x, y: at.y, w: sz.width, h: sz.height };
     });
+  // Never past the graph's own right edge (a fit would leave it off the screen).
+  const right = Math.max(0, ...boxes.map((b) => b.x + b.w));
   for (const a of boxes) {
     if (a.n.data.kind !== 'module' && a.n.data.kind !== 'signal' && a.n.data.kind !== 'blend' && a.n.data.kind !== 'screen') continue;
-    let room = ROOM_MOST;
+    let room = Math.min(ROOM_MOST, right - a.x);
     for (const b of boxes) if (b !== a && b.x > a.x && b.y < a.y + a.h && b.y + b.h > a.y) room = Math.min(room, b.x - a.x - 12);
     a.n.data = { ...a.n.data, room: Math.max(a.w, room) };
   }
