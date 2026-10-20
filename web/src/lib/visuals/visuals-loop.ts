@@ -18,7 +18,7 @@ import { newEngine, stepEngine, type EngineFrame } from './engine/graph';
 import { LivePatch } from './engine/live-patch';
 import { randomize, randomizeCables, scopeNamed, type Randomized } from './engine/randomize';
 import { settingsOfPatch } from './engine/settings-view';
-import { holding, leversOf, STANDING, type Levers } from './engine/sidechain';
+import { FREE, holding, leversOf, STANDING, type Levers } from './engine/sidechain';
 import { between, coloured, evolved, flameOf, measuring, partsAt, PRESET_KEYS, seedOf, type ColourMode, type Flame, type Preset } from './flame';
 import type { FrameStats, MeterValues } from './meters';
 import { musicNow, stopMusic } from './music.svelte';
@@ -426,7 +426,10 @@ export class VisualsLoop {
         return [w, h, resized, top];
       };
       const stepped = stepEngine(engine, flat, host.types, m, read, how, dt, { now, fluidFull: FLUID_FULL, meters: meterValues, flamePoints: partsWhere });
-      const levers = leversOf(stepped.outputs);
+      // The sidechains act only through their cables (toV2's holds, in sight); what they hold back is read off the
+      // Duckers' outputs for the page's mark, nothing else.
+      const sidechains = leversOf(stepped.outputs);
+      const levers = FREE;
       // The layers past the flame and the picture's own loop: the compositor's, from the patch (setPatch), each
       // module's knobs as the engine moves them; where a roll is easing in, where each knob is going.
       const inputs: PictureInputs = {
@@ -577,7 +580,7 @@ export class VisualsLoop {
       if (now - meteredAt >= 250) {
         meterValues = renderer.meterValues;
         meteredAt = now;
-        const held = { flash: holding(levers, 'swing'), speed: holding(levers, 'pace'), wild: (['swing', 'pace', 'evolution', 'hue', 'size', 'gap'] as const).some((kk) => holding(levers, kk)) };
+        const held = { flash: holding(sidechains, 'swing'), speed: holding(sidechains, 'pace'), wild: (['swing', 'pace', 'evolution', 'hue', 'size', 'gap'] as const).some((kk) => holding(sidechains, kk)) };
         if (held.flash !== heldBefore.flash || held.speed !== heldBefore.speed || held.wild !== heldBefore.wild) {
           heldBefore = held;
           host.onHeld?.(held);
@@ -585,7 +588,7 @@ export class VisualsLoop {
       }
       if (now - reported >= 250) {
         reported = now;
-        host.onFrame?.(stepped, levers);
+        host.onFrame?.(stepped, sidechains);
       }
       if (this.#pictureWanted) {
         const done = this.#pictureWanted;

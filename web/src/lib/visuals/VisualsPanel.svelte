@@ -10,6 +10,9 @@
   import { held } from './held.svelte';
   import CurveEditor from './CurveEditor.svelte';
   import KnobCables from './KnobCables.svelte';
+  import Face from './face/Face.svelte';
+  import { faceOf } from './face/face';
+  import type { LiveFrame } from './faces';
   import { curveOf, valueOf as kept, type Curve } from './curves';
   import { panelKey, type PanelEdit } from './patch-edits';
   import { categoryPin, labelOf, patchAt, typesOf } from './patchgraph';
@@ -28,6 +31,7 @@
     preset = null,
     onpreset,
     onrandomize,
+    live = null,
     path = $bindable([]),
   }: {
     patch: PatchV2;
@@ -40,6 +44,8 @@
     onpreset: (id: string) => void;
     /** Randomize a module (its path) or a category's whole. */
     onrandomize: (what: { module: string[] } | { category: Category }) => void;
+    /** The engine's values now (four times a second), for a module's face. */
+    live?: LiveFrame | null;
     /** The pages open, the latest last (a page's name: see `go`'s callers). */
     path?: string[];
   } = $props();
@@ -320,6 +326,10 @@
           <button class="go danger" onclick={() => (edit({ kind: 'removeModule', scope, id: m.id }), back())}><span class="name">Remove</span></button>
         </div>
       {:else}
+        {@const face = faceOf(t, portsOf(m))}
+        {#if face.length}
+          <div class="rows face"><Face parts={face} {live} path={at.join('/')} knobs={m.knobs} width={300} /></div>
+        {/if}
         {@const knobs = (t?.knobs ?? []).filter((k) => !k.device)}
         {#if knobs.length}
           <div class="rows">

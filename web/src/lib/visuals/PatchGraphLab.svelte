@@ -61,11 +61,25 @@
     last = `new ${type} → ${r.module.join('/')}.${r.knob}`;
   }
 
+  // The thumbnails stood in for (the renderer draws them in the app): a wash of each module's own hue, moving.
+  function standInThumb(module: string, canvas: HTMLCanvasElement): boolean {
+    const g = canvas.getContext('2d');
+    if (!g) return false;
+    const hue = [...module].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 360, 7);
+    const t = performance.now() / 1000;
+    const grad = g.createLinearGradient(0, 0, canvas.width, canvas.height);
+    grad.addColorStop(0, `hsl(${hue} 70% 18%)`);
+    grad.addColorStop(0.5 + 0.4 * Math.sin(t + hue), `hsl(${(hue + 40) % 360} 85% 55%)`);
+    grad.addColorStop(1, `hsl(${(hue + 80) % 360} 70% 12%)`);
+    g.fillStyle = grad;
+    g.fillRect(0, 0, canvas.width, canvas.height);
+    return true;
+  }
+
   // The live faces: the beat at 120 a minute, the LFO stepped as the engine steps it, the ADSRs stood in for (a gate on
   // each beat; one band's hit a beat, in turn).
   const live = new LiveFaces();
   onMount(() => {
-    if (!query.has('wires')) return;
     const lfo = MODULATORS.lfo.create();
     const t0 = performance.now();
     let before = t0;
@@ -85,7 +99,14 @@
       const beats = t * 2;
       const index = Math.floor(beats);
       const beat: FrameInfo['beat'] = { index, since: (beats - index) / 2, length: 0.5, strength: 1 };
+      // Every other module's outputs stood in for (a slow wave each, its own pace), so meters, scopes and lights move.
       const outputs: Record<string, number> = {};
+      for (const [i, m] of store.now.modules.entries()) {
+        if (m.type === 'lfo' || m.type === 'adsr') continue;
+        const w = 0.5 + 0.5 * Math.sin(t * (0.7 + (i % 5) * 0.37) + i);
+        for (const port of ['out', 'level', 'in', 'reduction', 'gain']) outputs[`${m.id}.${port}`] = port === 'reduction' ? 1 - 0.6 * w : w;
+        for (const port of ['beat', 'bar', 'phrase', 'newtrack', 'downbeat', 'section']) outputs[`${m.id}.${port}`] = port === 'beat' ? (beat.since < 0.06 ? 1 : 0) : port === 'bar' ? (index % 4 === 0 && beat.since < 0.06 ? 1 : 0) : 0;
+      }
       for (const m of store.now.modules) {
         const k = { amount: 1, ...Object.fromEntries((types[m.type]?.knobs ?? []).map((x) => [x.id, x.default])), ...m.knobs };
         if (m.type === 'lfo') outputs[m.id] = lfo.step(dt, () => 0, k);
@@ -120,6 +141,7 @@
     onopenknob={(module, knob) => (last = `open knob ${module.join('/')}.${knob}`)}
     {onpick}
     {live}
+    thumbnail={standInThumb}
     openAtStart={query.get('open')?.split(',') ?? []}
     sheetHeight={sheetH}
     layout={query.get('layout') === 'hand' ? 'hand' : 'elk'}

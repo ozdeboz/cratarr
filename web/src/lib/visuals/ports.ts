@@ -105,7 +105,18 @@ export function portsOf(t: ModuleType & { ports?: Ports }): Ports {
   // track's every part. Into any one-channel knob, six channels are the bands' mean (a Merge, in the conversion).
   // The flame gives where its parts are too (0057 §4h: where the Fluid's pushes land, unless cabled otherwise).
   if (t.type === 'flame')
-    return { in: [LIGHT('light', 'Last light'), ...knobs.map((p) => (FLAME_PARTS.has(p.id) ? { ...p, channels: 6 } : p))], out: [LIGHT('light', 'Light'), { id: 'points', label: 'Points', type: 'points' }] };
+    return {
+      in: [LIGHT('light', 'Last light'), ...knobs.map((p) => (FLAME_PARTS.has(p.id) ? { ...p, channels: 6 } : p))],
+      out: [
+        LIGHT('light', 'Light'),
+        { id: 'points', label: 'Points', type: 'points' },
+        // Where it is and how much it covers (0057 audit row 8: the framing and exposure on cables, a Camera's).
+        out('x', 'Centre across'),
+        out('y', 'Centre up'),
+        out('size', 'Size'),
+        out('coverage', 'Coverage'),
+      ],
+    };
   // Fluid (0057 §4h, the owner): light, a picture or points through its flow, the same type out; its pushes at the
   // points into `at` (the flame's parts unless cabled); its flow out, for Show's read-back, Stream and Displace.
   if (t.type === 'fluid' || t.type === 'fluid-loop')
@@ -148,7 +159,21 @@ const knob = (id: string, label: string, min: number, max: number, def: number, 
 const out = (id: string, label: string, type: PortType = 'value', channels?: number): Port => ({ id, label, type, ...(channels ? { channels } : {}) });
 const label = (id: string) => id.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
 
-type Declared = ModuleType & { ports: Ports };
+/** A part of a module's face (claude-632's face/, the standard panel every node draws): what it shows live past its
+ *  knobs. `of`: the output (or else the knob) it reads, `out` by default; `threshold`: a knob drawn as a line across
+ *  it; a meter's `peak` held, its `max` (1 by default), `reduction` drawn as gain taken away (1: none), `channels` a bar
+ *  each; a light on an output sits beside that output's name. `adsr` and `lfo`: their own shapes. */
+export type FacePart = {
+  kind: 'meter' | 'scope' | 'light' | 'thumb' | 'number' | 'adsr' | 'lfo';
+  of?: string;
+  threshold?: string;
+  peak?: boolean;
+  max?: number;
+  reduction?: boolean;
+  channels?: number;
+  label?: string;
+};
+type Declared = ModuleType & { ports: Ports; face?: FacePart[] };
 
 /** Today's hidden behaviours as modules (0057 §3). Their knobs are what the old settings held; their ports normalled
  *  to where the behaviour reaches today. claude-5f's engine steps them; the views draw them as any other. */
@@ -171,6 +196,8 @@ export const MUSIC: Declared = {
       out('audio', 'Sound', 'audio'),
       // 1 while the music plays, 0 paused (0057 §7e: the pause's dimming, cabled in sight).
       out('playing', 'Playing'),
+      // The playing track's cover, as a picture (0057 audit row 14: its colours into a Tint's `by`, not fetched out of sight).
+      out('cover', 'Cover', 'picture'),
       // A trigger as a track starts (the visuals opening on one too), and the track's seed (0..1, the same for the same
       // track): Track folded into Music (0057 §7f).
       out('newtrack', 'New track', 'trigger'),
@@ -471,7 +498,20 @@ export const LENS = declared(
   [{ id: 'out', label: 'Out', type: 'points', polymorphic: LENS_TYPES }],
 );
 
-export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD, LENS];
+/** Transform (the owner, 2026-10-20: "a transform module"): light or a picture moved across and up, scaled and
+ *  turned, every one a knob to cable (TouchDesigner's Transform, Hydra's scroll, scale and rotate). The Camera is a
+ *  device of it: the Flame's centre and size, followed slowly, into these knobs (devices.ts). */
+const TRANSFORM_TYPES: readonly PortType[] = ['light', 'picture'];
+export const TRANSFORM = declared(
+  'transform',
+  'Transform',
+  'module',
+  [knob('x', 'Across', -1, 1, 0), knob('y', 'Up', -1, 1, 0), knob('scale', 'Scale', 0.25, 4, 1), knob('rotate', 'Turn', -1, 1, 0)],
+  [{ id: 'in', label: 'In', type: 'light', polymorphic: TRANSFORM_TYPES }],
+  [{ id: 'out', label: 'Out', type: 'light', polymorphic: TRANSFORM_TYPES }],
+);
+
+export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD, LENS, TRANSFORM];
 
 /** The Randomize scopes (0057 §4d), in the dice's menu's order. */
 export const RANDOMIZE_SCOPES = ['everything', 'sources', 'effects', 'mixers', 'modulators', 'cables'] as const;
@@ -484,7 +524,11 @@ export const DICE = declared(
   'dice',
   'Dice',
   'modulator',
-  [{ ...knob('scope', 'Scope', 0, RANDOMIZE_SCOPES.length - 1, 0, 'step'), randomize: false }],
+  [
+    { ...knob('scope', 'Scope', 0, RANDOMIZE_SCOPES.length - 1, 0, 'step'), randomize: false },
+    // How far each knob it reaches moves toward its roll: all the way at 1, not at all at 0.
+    { ...knob('reach', 'Reach', 0, 1, 1, 'level'), randomize: false },
+  ],
   [
     { id: 'trigger', label: 'Trigger', type: 'trigger' },
     { id: 'seed', label: 'Seed', type: 'value' },
@@ -510,6 +554,25 @@ export const SHAPER = declared(
   [{ id: 'in', label: 'In', type: 'value', channels: 6 }],
   [{ ...VALUE_OUT, channels: 6 }],
 );
+
+/** A Music signal on its own (the owner, 2026-10-20: "a module for a specific music output instead of having one music
+ *  module with many outputs"): one output, `out`, of the type Music gives it (a band's six channels at once), as many
+ *  as wanted, placed beside what each feeds; all read the same analysis. Its reading (against this track, lately, or
+ *  as it is) is its own knob, and the bands' envelope its Hold. Type `music-<signal>`. */
+export const MUSIC_SIGNAL_MODULES: readonly Declared[] = MUSIC.ports.out.map((o) =>
+  declared(
+    `music-${o.id}`,
+    o.label,
+    'modulator',
+    [
+      ...(MUSIC_KNOBS.some((k) => k.id === `reference.${o.id}`) ? [{ ...knob('reference', 'Reading', 0, 2, 0, 'step'), randomize: false as const }] : []),
+      ...(o.id === 'envelope' ? [{ ...knob('hold', 'Hold', 0.02, 1, 0.15), channels: 6 }] : []),
+    ],
+    [],
+    [{ ...o, id: 'out' }],
+  ),
+);
+export const musicSignalOf = (type: string): string | null => (type.startsWith('music-') ? type.slice('music-'.length) : null);
 
 export const ENGINE_MODULES: readonly Declared[] = [MUSIC, ENVELOPE, DICE, SHAPER, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
 
@@ -562,6 +625,17 @@ export const FEEDBACK = declared('feedback', 'Feedback', 'module', [], [{ ...PIC
 export const SCREEN = declared('screen', 'Screen', 'finish', [], [PICTURE_IN], [out('guard', 'Flash guard')]);
 
 export const GRAPH_MODULES: readonly Declared[] = [MIX, FEEDBACK, SCREEN];
+
+// ---- Faces: what each module's node shows live (claude-632's face/; a module without one: face/face.ts's defaults) --
+ENVELOPE.face = [{ kind: 'meter', of: 'level', peak: true }];
+COMPRESSOR.face = [{ kind: 'meter', of: 'reduction', reduction: true }];
+DUCKER.face = [{ kind: 'meter', of: 'reduction', reduction: true }];
+MIX.face = Array.from({ length: MIX_INPUTS }, (_, i): FacePart => ({ kind: 'meter', of: `amount${i + 1}`, label: `${i + 1}` }));
+VCA.face = [{ kind: 'meter', of: 'gain', max: 2 }];
+MERGE.face = [{ kind: 'meter', of: 'in', channels: 6 }, { kind: 'meter', of: 'out' }];
+ADSR.face = [{ kind: 'adsr' }];
+CLOCK.face = (['beat', 'bar', 'phrase'] as const).map((of): FacePart => ({ kind: 'light', of }));
+MUSIC.face = MUSIC.ports.out.filter((o) => o.type === 'trigger').map((o): FacePart => ({ kind: 'light', of: o.id }));
 
 /** Whether a picture cycle passes through a Feedback, as every one must (§4): the cables' picture and light graph, by
  *  module (the flame's own loop is light). */

@@ -4,7 +4,7 @@
 // normals: the flame's light through the Fluid and the Loop effect back into it by a Feedback, its points into the
 // Fluid's pushes, the Fluid's flow into Bend (and the Loop effect's by its normal), Waves (its sound by its normal) bent
 // into a Mix to the screen, values dashed, triggers dotted, a band's six at once "· 6", the Clock into a Sequencer by
-// its normals; an LFO, a single ADSR and one on the six bands, each with its face.
+// its normals; an LFO, a single ADSR and one on the six bands, a beat Gate on the bass, each with its face.
 
 import type { ModuleType } from './patch';
 import type { CableV2, PatchV2 } from './ports';
@@ -60,6 +60,7 @@ export function wiresV2(): PatchV2 {
       m('waves', 'waves'),
       m('bend', 'bend'),
       m('mix', 'mix'),
+      m('gate', 'gate'),
       m('screen', 'screen'),
     ],
     cables: [
@@ -79,6 +80,8 @@ export function wiresV2(): PatchV2 {
       c('bands.out', 'flame.lights', 0.5),
       c('music.level', 'waves.amplitude', 0.4, 1),
       c('seq.out', 'waves.radius', 0.25),
+      c('music.level', 'gate.in', 1, 0),
+      c('gate.out', 'mix.amount2', 0.5),
     ],
     macros: [],
     pins: [],

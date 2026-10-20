@@ -20,7 +20,8 @@ test('every module type has typed ports: a knob is a value input, a picture modu
     if (t.place === 'module' || t.place === 'loop') assert.ok(p.in.some(pic) && p.out.some(pic), t.type);
     // A source gives a picture (or the flame its light), and takes none but its own last light.
     if (t.place === 'source') assert.ok(!p.in.some((x) => x.type === 'picture') && p.out.some(pic), t.type);
-    if (t.place === 'modulator') assert.ok(p.out.length > 0 && p.out.every((x) => x.type !== 'picture'), t.type);
+    // Music (In / Out, not a modulator at heart) gives the cover as a picture.
+    if (t.place === 'modulator') assert.ok(p.out.length > 0 && p.out.every((x) => x.type !== 'picture' || t.type === 'music'), t.type);
   }
 });
 
