@@ -502,13 +502,13 @@ export function walk<T>(p: Plan, pool: Pool<T>, io: WalkIO<T>, state: WalkState<
 
 /** The converted chain's compose modules, drawn fused (compose.ts): the layers' sources, modules and engines, the
  *  picture loop's Warp, Keep and modules, the layers' Mix, the loop's Mix and Feedback. */
-/** The compose step's modules (with its loops' Feedbacks), the module whose picture it starts from (Show's), and the
- *  one it gives on (into the effects or the screen); none where it has none. */
-export function composeOf(c: Compiled): { ids: Set<string>; from: string; to: string } | null {
+/** The compose step's modules (with its loops' Feedbacks), the module whose picture it starts from (Show's; none
+ *  where there is no flame), and the one it gives on (into the effects or the screen); none where it has none. */
+export function composeOf(c: Compiled): { ids: Set<string>; from: string | null; to: string } | null {
   const byId = new Map(c.order.map((n) => [n.id, n]));
   const ids = new Set(c.order.filter((n) => stageOf(n) === 'compose').map((n) => n.id));
   for (const n of c.order) if (n.type === 'feedback' && n.inputs.some((f) => ids.has(f.from.module))) ids.add(n.id);
   const from = c.order.flatMap((n) => (ids.has(n.id) ? n.inputs : [])).find((f) => stageOf(byId.get(f.from.module)!) === 'show')?.from.module;
   const to = c.order.flatMap((n) => (ids.has(n.id) || n.type === 'feedback' ? [] : n.inputs)).find((f) => ids.has(f.from.module))?.from.module;
-  return ids.size && from && to ? { ids, from, to } : null;
+  return ids.size && to ? { ids, from: from ?? null, to } : null;
 }
