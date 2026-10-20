@@ -151,6 +151,8 @@ export const SETTING_KNOB: Record<string, [string, string]> = {
   symmetry: ['flame', 'symmetry'],
   mirror: ['flame', 'mirror'],
   final: ['flame', 'final'],
+  lensSides: ['flame', 'lensSides'],
+  lensDepth: ['flame', 'lensDepth'],
   family: ['flame', 'family'],
   hue: ['flame', 'hue'],
   lightness: ['flame', 'lightness'],
@@ -254,12 +256,12 @@ const STEP_KNOBS = new Set(['form', 'symmetry', 'mirror', 'final', 'family', 'la
 const DEVICE_KNOBS = new Set(['quality', 'fps', 'brightness']);
 /** The column scales' and the levels' neutral is their least (the music leaves it at rest, or nothing of the module);
  *  the look's has none of its own: a source's neutral is its layer's blend at 0. */
-const LOOK_KNOBS = new Set(['form', 'detail', 'twist', 'warp', 'symmetry', 'mirror', 'final', 'family', 'hue', 'lightness', 'vividness', 'spread', 'purity']);
+const LOOK_KNOBS = new Set(['form', 'detail', 'twist', 'warp', 'symmetry', 'mirror', 'final', 'lensSides', 'lensDepth', 'family', 'hue', 'lightness', 'vividness', 'spread', 'purity']);
 
 const LABELS: Record<string, string> = {
   quality: 'Quality', fps: 'FPS', brightness: 'Brightness', intensity: 'Intensity', flash: 'Flash', speed: 'Speed', wild: 'Wild',
   loose: 'Loose', effects: 'Effects', lookWalk: 'Look walk', behaviourWalk: 'Behaviour walk', form: 'Form', detail: 'Detail',
-  twist: 'Twist', warp: 'Warp', symmetry: 'Symmetry', mirror: 'Mirror', final: 'Lens', family: 'Colours', hue: 'Hue',
+  twist: 'Twist', warp: 'Warp', symmetry: 'Symmetry', mirror: 'Mirror', final: 'Lens', lensSides: 'Lens sides', lensDepth: 'Lens depth', family: 'Colours', hue: 'Hue',
   lightness: 'Lightness', vividness: 'Vividness', spread: 'Spread', purity: 'Purity', shape: 'Shape', rotation: 'Rotation',
   lights: 'Lights', presence: 'Presence', size: 'Size', glow: 'Glow', saturation: 'Saturation', smoothing: 'Smoothing',
   haze: 'Haze', waves: 'Waves', fluid: 'Fluid', stir: 'Stir', flow: 'Flow', swirl: 'Swirl', facets: 'Facets',

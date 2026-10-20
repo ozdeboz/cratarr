@@ -7,7 +7,7 @@
 // Changed live from the visuals' panel and kept on this device (a phone and a tablet want different ones); a browser
 // that keeps nothing (a private window) starts from the defaults each time.
 
-import { FORMS, LENSES, PRESET_KEYS, type Preset } from './flame';
+import { FORMS, LENS_DEPTH, LENS_SIDES, LENSES, PRESET_KEYS, type Preset } from './flame';
 import { ENGINE_EFFECTS, LOOP_EFFECTS } from './effects';
 import { defaultRoutes, isRoute, keyNow, SCALE_KEYS, type RouteValue } from './routes';
 import { curveFrom, valueOf } from './curves';
@@ -168,6 +168,8 @@ export const DEFAULTS: VisualSettings = {
   fxLoopK2: 0.5,
   facets: 0,
   lattice: 0,
+  lensSides: LENS_SIDES,
+  lensDepth: LENS_DEPTH,
   pins: [],
   // A kick rings longer than a hat.
   lighting: [0.2, 0.18, 0.15, 0.13, 0.1, 0.08],
@@ -238,6 +240,8 @@ export const RANGES: Record<Ranged, [number, number]> = {
   fxLoopK2: [0, 1],
   facets: [0, 1],
   lattice: [0, 1],
+  lensSides: [3, 48],
+  lensDepth: [0, 1],
   effects: [0, 1],
   flameLayer: [0, 1],
   loose: [0, 1],

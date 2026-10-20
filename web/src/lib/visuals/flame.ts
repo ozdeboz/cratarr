@@ -6,6 +6,10 @@
 // music, and blended into the next. The drawing is lib/visuals/render.ts.
 import { DRAWN_ROOM } from './budget';
 import { ENGINE_EFFECTS, ENGINES, LOOP_EFFECTS, settingsReport } from './effects';
+import { LENS_SHAPES, lensInto, markOf } from './shape-set';
+import { warpOf } from './warps';
+
+export { MARK, markOf } from './shape-set';
 
 
 /** A flame's parts: its first transforms, one for each of the music's six bands, low to high (decision 0046, amended). */
@@ -52,7 +56,11 @@ export const VARIATIONS = {
   // Cratarr's own (not flam3's): its mark (the Cratarr lens, `MARK`).
   cratarr: 99,
 } as const;
-export type Variation = (typeof VARIATIONS)[keyof typeof VARIATIONS];
+/** The lens's shapes of the one set (0057 §4g; shape-set.ts `LENS_SHAPES`, in its order): a point sent into the shape.
+ *  Numbers of their own, past flam3's and Cratarr's (flam3 has a Cross variation of its own). */
+export const LENS_SHAPE_VARIATIONS = { polygon: 100, star: 101, ring: 102, cross: 103, arrow: 104, crescent: 105, drop: 106 } as const;
+const LENS_SHAPE_FIRST = LENS_SHAPE_VARIATIONS.polygon;
+export type Variation = (typeof VARIATIONS)[keyof typeof VARIATIONS] | (typeof LENS_SHAPE_VARIATIONS)[keyof typeof LENS_SHAPE_VARIATIONS];
 
 export type Affine = [number, number, number, number, number, number];
 
@@ -76,6 +84,8 @@ export type Xform = {
   colorReach?: number;
   /** Turned by the animation (a symmetry's rotations and mirrors are not). */
   turns: boolean;
+  /** A lens's shape's sides and depth (its Polygon and Star: the Lens's Sides and Depth settings). */
+  shape?: { sides: number; depth: number };
 };
 
 /** The lightness and chroma of a flame's colours (OKLCH); each transform has its own hue. `lights`: each part's own
@@ -223,61 +233,30 @@ const FINALS: Variation[] = [
   VARIATIONS.handkerchief,
   VARIATIONS.heart,
   VARIATIONS.cratarr,
+  // The rest of the one set of shapes (0057 §4g), after Cratarr's, so every track's look stays as it was drawn.
+  ...Object.values(LENS_SHAPE_VARIATIONS),
 ];
 /** The finals a preset draws among: the ones before Cratarr's, so every track's own look stays as it was drawn (the
  *  Cratarr lens is one to pick). */
 const DRAWN_FINALS = FINALS.indexOf(VARIATIONS.cratarr);
 
-/** Cratarr's mark (lib/Mark.svelte, tools/brand/record.py's `full`), the Cratarr lens's shape: the record's rings (inner
- *  and outer radius, of its whole) outside its slice, the sixth about the right, and in the slice the thin rings that
- *  are gaps elsewhere. `share`: the slice's share of the mark's area. The lens sends each point into the slice or the
- *  rest by its angle, as their areas share, and its distance into their rings by area, so both are filled evenly. */
-export const MARK = (() => {
-  const of = (rings: number[][]) => rings.map(([a, b]) => [a / 24, b / 24] as [number, number]);
-  const rings = of([[0, 3], [8, 12.4], [13.6, 16.4], [17.6, 20.4], [21.6, 24]]);
-  const slice = of([[12.4, 13.6], [16.4, 17.6], [20.4, 21.6]]);
-  const area = (list: [number, number][]) => list.reduce((s, [a, b]) => s + b * b - a * a, 0);
-  const outside = (area(rings) * 5) / 6;
-  const inside = area(slice) / 6;
-  return { rings, slice, share: inside / (outside + inside) };
-})();
-
-/** A distance into `rings` by `u` (0..1), as their areas share it. */
-function ringAt(rings: [number, number][], u: number): number {
-  const total = rings.reduce((s, [a, b]) => s + b * b - a * a, 0);
-  let left = Math.min(1, Math.max(0, u)) * total;
-  for (const [a, b] of rings) {
-    const area = b * b - a * a;
-    if (left < area) return Math.sqrt(a * a + left);
-    left -= area;
-  }
-  return rings[rings.length - 1][1];
-}
-
-/** The Cratarr lens on a point (its distance `r`): into the mark. */
-export function markOf(x: number, y: number, r: number): [number, number] {
-  const t = (Math.atan2(y, x) + Math.PI) / (2 * Math.PI);
-  const u = (r / (1 + r)) ** 2;
-  const inSlice = t < MARK.share;
-  const to = inSlice ? -Math.PI / 6 + (t / MARK.share) * (Math.PI / 3) : Math.PI / 6 + ((t - MARK.share) / (1 - MARK.share)) * ((5 * Math.PI) / 3);
-  const out = ringAt(inSlice ? MARK.slice : MARK.rings, u);
-  return [out * Math.cos(to), out * Math.sin(to)];
-}
-
 /** The finals' names, for the Lens setting (1 is the first). */
 export const LENSES = FINALS.map((v) => {
-  const name = Object.entries(VARIATIONS).find(([, n]) => n === v)![0];
+  const name = Object.entries({ ...VARIATIONS, ...LENS_SHAPE_VARIATIONS }).find(([, n]) => n === v)![0];
   return name[0].toUpperCase() + name.slice(1);
 });
 
 /** A final transform (the Lens setting's `lens`, one of `FINALS`), by its form's draws (`f`): near the identity, then
- *  the warp, up to half of it the plain picture. Cratarr's all of it: any plain picture added would fill its slice. */
-function finalOf(f: number[], lens: number): Xform {
+ *  the warp, up to half of it the plain picture. A shape's (Cratarr's and the rest of the set's) all of it: any plain
+ *  picture added would fill around it; Polygon's and Star's by the Lens's sides and depth. */
+function finalOf(f: number[], lens: number, shape: { sides: number; depth: number }): Xform {
   const warp = FINALS[(lens - 1) % FINALS.length];
+  const whole = warp >= VARIATIONS.cratarr;
   return {
     affine: affineOf(f[0] * Math.PI * 2, 0.8 + f[1] * 0.5, 0.8 + f[2] * 0.5, (f[3] - 0.5) * 0.3, (f[4] - 0.5) * 0.3, (f[5] - 0.5) * 0.3),
+    ...(warp >= LENS_SHAPE_FIRST ? { shape } : {}),
     variations:
-      warp === VARIATIONS.cratarr
+      whole
         ? new Map([[warp, 1]])
         : new Map([
             [warp, 0.5 + f[6] * 0.5],
@@ -385,7 +364,14 @@ export type Preset = {
    *  and the lattice (0 square, 1 hex). */
   facets: number;
   lattice: number;
+  /** The Lens's Polygon and Star (0057 §4g): their sides (3–48, through the fractions) and the star's depth (0..1: 0 the
+   *  polygon). Only those two lenses read them; a draw leaves them as they are. */
+  lensSides: number;
+  lensDepth: number;
 };
+/** The Lens's sides and depth as a draw leaves them (a pentagon; a star half deep). */
+export const LENS_SIDES = 5;
+export const LENS_DEPTH = 0.5;
 export const PRESET_KEYS = [
   'form',
   'detail',
@@ -418,6 +404,8 @@ export const PRESET_KEYS = [
   'fxLoopK2',
   'facets',
   'lattice',
+  'lensSides',
+  'lensDepth',
 ] as const;
 /** No effects. */
 const NO_EFFECTS = {
@@ -441,7 +429,7 @@ const NO_EFFECTS = {
 export const FORMS = 1000;
 
 /** A preset that always draws something, for when no draw from a seed passes the check. */
-const STANDBY: Preset = { form: 0, detail: 0.5, twist: 0.7, warp: 0.8, symmetry: 4, mirror: 0, final: 0, family: 0, hue: 0, lightness: 0.5, vividness: 0.5, spread: 1, purity: 0.75, ...NO_EFFECTS, facets: 0, lattice: 0 };
+const STANDBY: Preset = { form: 0, detail: 0.5, twist: 0.7, warp: 0.8, symmetry: 4, mirror: 0, final: 0, family: 0, hue: 0, lightness: 0.5, vividness: 0.5, spread: 1, purity: 0.75, ...NO_EFFECTS, facets: 0, lattice: 0, lensSides: LENS_SIDES, lensDepth: LENS_DEPTH };
 
 /** Drawn effects held within the room the flame leaves under each limit (budget.ts `DRAWN_ROOM`), so a track's own
  *  look never trips the governor, quiet or loud: every amount (the picture's and the loop's) by one factor, the least
@@ -501,7 +489,8 @@ function build(p: Preset): Flame {
   const order = Math.max(1, Math.round(p.symmetry));
   const mirror = Math.round(p.mirror) === 1;
   const colours = { light: 0.55 + 0.3 * p.lightness, chroma: 0.06 + 0.2 * p.vividness };
-  return withSymmetry({ xforms: parts, final: lens > 0 ? finalOf(f, lens) : undefined, symmetry: { order, mirror }, colours, center: [0, 0], size: 1 }, order, mirror);
+  const final = lens > 0 ? finalOf(f, lens, { sides: p.lensSides ?? LENS_SIDES, depth: p.lensDepth ?? LENS_DEPTH }) : undefined;
+  return withSymmetry({ xforms: parts, final, symmetry: { order, mirror }, colours, center: [0, 0], size: 1 }, order, mirror);
 }
 
 /** The flame of a preset, framed; or not (`framed` false), where whatever draws it frames it again anyway (the
@@ -557,6 +546,8 @@ export function* drawing(seed: number, fixed: Partial<Preset> = {}): Generator<v
       purity: 0.6 + rnd() * 0.35,
       ...effects,
       ...facets,
+      lensSides: LENS_SIDES,
+      lensDepth: LENS_DEPTH,
     };
     const preset = { ...own, ...fixed };
     if (attempt > 0) yield;
@@ -791,15 +782,7 @@ export function apply(t: Xform, px: number, py: number, rnd: () => number): [num
     let vx = x;
     let vy = y;
     switch (v) {
-      case VARIATIONS.sinusoidal: vx = Math.sin(x); vy = Math.sin(y); break;
-      case VARIATIONS.spherical: vx = x / r2; vy = y / r2; break;
-      case VARIATIONS.swirl: vx = x * Math.sin(r2) - y * Math.cos(r2); vy = x * Math.cos(r2) + y * Math.sin(r2); break;
-      case VARIATIONS.horseshoe: vx = ((x - y) * (x + y)) / r; vy = (2 * x * y) / r; break;
-      case VARIATIONS.polar: vx = theta / Math.PI; vy = r - 1; break;
-      case VARIATIONS.handkerchief: vx = r * Math.sin(theta + r); vy = r * Math.cos(theta - r); break;
-      case VARIATIONS.heart: vx = r * Math.sin(theta * r); vy = -r * Math.cos(theta * r); break;
       case VARIATIONS.cratarr: [vx, vy] = markOf(x, y, r); break;
-      case VARIATIONS.disc: vx = (theta / Math.PI) * Math.sin(Math.PI * r); vy = (theta / Math.PI) * Math.cos(Math.PI * r); break;
       case VARIATIONS.spiral: vx = (Math.cos(theta) + Math.sin(r)) / r; vy = (Math.sin(theta) - Math.cos(r)) / r; break;
       case VARIATIONS.hyperbolic: vx = Math.sin(theta) / r; vy = r * Math.cos(theta); break;
       case VARIATIONS.diamond: vx = Math.sin(theta) * Math.cos(r); vy = Math.cos(theta) * Math.sin(r); break;
@@ -810,20 +793,10 @@ export function apply(t: Xform, px: number, py: number, rnd: () => number): [num
         vy = r * (p0 - p1);
         break;
       }
-      case VARIATIONS.julia: {
-        const om = rnd() < 0.5 ? 0 : Math.PI;
-        const sr = Math.sqrt(r);
-        vx = sr * Math.cos(theta / 2 + om);
-        vy = sr * Math.sin(theta / 2 + om);
-        break;
-      }
       case VARIATIONS.bent: vx = x < 0 ? 2 * x : x; vy = y < 0 ? y / 2 : y; break;
-      case VARIATIONS.fisheye: vx = (2 / (r + 1)) * y; vy = (2 / (r + 1)) * x; break;
       case VARIATIONS.exponential: { const k = Math.exp(x - 1); vx = k * Math.cos(Math.PI * y); vy = k * Math.sin(Math.PI * y); break; }
       case VARIATIONS.power: { const k = r ** Math.sin(theta); vx = k * Math.cos(theta); vy = k * Math.sin(theta); break; }
       case VARIATIONS.cosine: vx = Math.cos(Math.PI * x) * Math.cosh(y); vy = -Math.sin(Math.PI * x) * Math.sinh(y); break;
-      case VARIATIONS.eyefish: vx = (2 / (r + 1)) * x; vy = (2 / (r + 1)) * y; break;
-      case VARIATIONS.bubble: vx = (4 / (r2 + 4)) * x; vy = (4 / (r2 + 4)) * y; break;
       case VARIATIONS.cylinder: vx = Math.sin(x); vy = y; break;
       case VARIATIONS.tangent: vx = Math.sin(x) / Math.cos(y); vy = Math.tan(y); break;
       case VARIATIONS.cross: { const k = 1 / Math.abs(x * x - y * y + 1e-12); vx = k * x; vy = k * y; break; }
@@ -858,6 +831,12 @@ export function apply(t: Xform, px: number, py: number, rnd: () => number): [num
         vx = x * k;
         vy = x * (k - s * Math.PI);
         break;
+      }
+      default: {
+        // The lens's warps (warps.ts), and its shapes (shape-set.ts: the point sent into the shape evenly).
+        const warped = warpOf(v, x, y, r2, r, theta, rnd);
+        if (warped) [vx, vy] = warped;
+        else if (v >= LENS_SHAPE_FIRST) [vx, vy] = lensInto(LENS_SHAPES[v - LENS_SHAPE_FIRST], x, y, r, t.shape);
       }
     }
     ox += w * vx;
@@ -963,7 +942,8 @@ export function between(from: Flame, to: Flame, k: number): Flame {
           const q = to.final ?? plain;
           const variations = new Map<Variation, number>();
           for (const v of new Set([...p.variations.keys(), ...q.variations.keys()])) variations.set(v, mix(p.variations.get(v) ?? 0, q.variations.get(v) ?? 0, k));
-          return { ...plain, affine: blendAffine(p.affine, q.affine, k), variations };
+          const shape = p.shape && q.shape ? { sides: mix(p.shape.sides, q.shape.sides, k), depth: mix(p.shape.depth, q.shape.depth, k) } : (q.shape ?? p.shape);
+          return { ...plain, affine: blendAffine(p.affine, q.affine, k), variations, ...(shape ? { shape } : {}) };
         })()
       : undefined;
   return {

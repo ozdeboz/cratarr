@@ -112,7 +112,9 @@ export const HELP: Record<string, string> = {
     'One of the Loop effect’s own controls: its label says what it sets. At 50% the effect is as it was made.',
   fxLoopK2:
     'One of the Loop effect’s own controls: its label says what it sets. At 50% the effect is as it was made.',
-  final: 'A lens over the whole picture, such as a sphere, a bubble or a swirl, each bending the flame as a whole. Off shows the flame without one.',
+  final: 'A lens over the whole picture, such as a sphere, a bubble or a swirl, each bending the flame as a whole, or a shape it gathers the flame into, such as a star or a ring. Off shows the flame without one.',
+  lensSides: 'The corners of the Polygon and Star lenses; between whole numbers it morphs.',
+  lensDepth: 'How deep the Star lens’s points go; at 0 it is the polygon.',
   pin: 'You moved this setting, so it keeps your value when the next track starts, and Another look and the dice leave it alone. Tap the pin to let each track set it again.',
   snapshots:
     'Snapshots: the visuals saved with every setting and a small picture. Tap one to bring it back: every setting returns as it was saved, and its Look settings are pinned, so the next track keeps that look. Hold one to rename or delete it. They are kept on the server, so every device sees them.',
