@@ -118,3 +118,22 @@ test("Music's newtrack fires once as each track starts (the first frame too), it
   assert.deepEqual(seen.flatMap((x, k) => (x.fired > 0.5 ? [k] : [])), [0, 30, 60]);
   assert.ok(seen[0].seed > 0 && seen[0].seed < 1 && seen[0].seed !== seen[30].seed && seen[0].seed === seen[60].seed);
 });
+
+test("Fluid's at: the Flame's points by default (its normal), a Grid's where one is cabled in", () => {
+  const t = track(TRACKS[0]);
+  const music = newMusicState();
+  const flamePoints = [[0.5, 0.5], null, [0.2, 0.8], [0.9, 0.1], null, [0.4, 0.6]] as const;
+  const base = flatten(toV2(structuredClone(DEFAULTS)));
+  const fluid = base.modules.find((x) => x.type === 'fluid')!;
+  const grid = { id: 'dots', type: 'grid', knobs: { lattice: 0, count: 4, spacing: 0.5, rotation: 0, jitter: 0 } };
+  const withGrid: PatchV2 = { ...base, modules: [...base.modules, grid], cables: [...base.cables, { id: 'g', from: { module: 'dots', port: 'points' }, to: { module: fluid.id, port: 'at' }, value: 1, depth: null }] };
+  const at = 20;
+  const m = musicOf(t.signals, t.beats, at, true, { state: music, at: at * 1000, lighting: DEFAULTS.lighting });
+  const opts = { still: false, now: at * 1000, fluidFull: FLUID_FULL, flamePoints: flamePoints as never };
+  const plain = stepEngine(newEngine(), base, {}, m, () => 0, DEFAULTS, 1 / 30, opts);
+  assert.deepEqual(plain.pointsAt[`${fluid.id}.at`], flamePoints);
+  const gridded = stepEngine(newEngine(), withGrid, {}, m, () => 0, DEFAULTS, 1 / 30, opts);
+  const got = gridded.pointsAt[`${fluid.id}.at`]!;
+  assert.equal(got.length, 4);
+  for (const q of got) assert.ok(q && q[0] >= 0 && q[0] <= 1 && q[1] >= 0 && q[1] <= 1);
+});
