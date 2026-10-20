@@ -263,7 +263,7 @@ const LABELS: Record<string, string> = {
   lightness: 'Lightness', vividness: 'Vividness', spread: 'Spread', purity: 'Purity', shape: 'Shape', rotation: 'Rotation',
   lights: 'Lights', presence: 'Presence', size: 'Size', glow: 'Glow', saturation: 'Saturation', smoothing: 'Smoothing',
   haze: 'Haze', waves: 'Waves', fluid: 'Fluid', stir: 'Stir', flow: 'Flow', swirl: 'Swirl', facets: 'Facets',
-  lattice: 'Lattice', tunnel: 'Tunnel', dive: 'Dive', trails: 'Trails', effect: 'Effect', amount: 'Amount',
+  lattice: 'Lattice', zoom: 'Zoom', tunnel: 'Tunnel', dive: 'Dive', trails: 'Trails', effect: 'Effect', amount: 'Amount',
   k1: 'Control 1', k2: 'Control 2',
 };
 

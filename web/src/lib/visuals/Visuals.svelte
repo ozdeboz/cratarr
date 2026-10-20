@@ -776,6 +776,11 @@
   // A knob of any module, the extras' or today's chain's (claude-5f's chain-cables.ts moves those by the extras' cables).
   const anyKnob = (mid: string, kid: string): Knob | undefined =>
     GRAPH_TYPES[extraModule(mid)?.type ?? modulesOf(patchNow).get(mid)?.type ?? '']?.knobs.find((k) => k.id === kid);
+  // A six-band knob tapped whole (the graph's `flame.lighting`): its bands' own knobs, else none.
+  const bandKnobs = (mk: string): string[] | null => {
+    const [mid, kid] = splitKnob(mk);
+    return !anyKnob(mid, kid) && anyKnob(mid, `${kid}.0`) ? Array.from({ length: BANDS }, (_, b) => `${mk}.${b}`) : null;
+  };
   // `module.knob` (a band's knob has its own dot: `flame.lighting.2`).
   const splitKnob = (mk: string): [string, string] => [mk.slice(0, mk.indexOf('.')), mk.slice(mk.indexOf('.') + 1)];
   const cableable = (mk: string) => {
@@ -2246,7 +2251,18 @@
             </div>
           {:else if here.startsWith('moves:')}
             {@const mk = here.slice('moves:'.length)}
-            <KnobCables cables={cablesInto(mk)} label={(c) => sourceLabel(c.from, s.extra.modulators, GRAPH_TYPES)} onopen={(id) => go(`cable:${id}`)} onlongpress={(id) => (menuCable = id)} onadd={() => go(`cableadd:${mk}`)} />
+            {@const bands = bandKnobs(mk)}
+            {#if bands}
+              <!-- A six-band knob: each band's cables, a group each. -->
+              {#each bands as bk, b (bk)}
+                <div class="rows">
+                  <h3>{BAND_ROWS[b]}</h3>
+                  <KnobCables cables={cablesInto(bk)} label={(c) => sourceLabel(c.from, s.extra.modulators, GRAPH_TYPES)} onopen={(id) => go(`cable:${id}`)} onlongpress={(id) => (menuCable = id)} onadd={() => go(`cableadd:${bk}`)} />
+                </div>
+              {/each}
+            {:else}
+              <KnobCables cables={cablesInto(mk)} label={(c) => sourceLabel(c.from, s.extra.modulators, GRAPH_TYPES)} onopen={(id) => go(`cable:${id}`)} onlongpress={(id) => (menuCable = id)} onadd={() => go(`cableadd:${mk}`)} />
+            {/if}
           {:else if here.startsWith('cable:')}
             {@const id = here.slice('cable:'.length)}
             {@const c = cableOf({ routes: s.routes, extra: s.extra }, id)}
