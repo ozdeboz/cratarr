@@ -18,10 +18,11 @@ import type { PatchV2 } from './ports';
 import type { Flame } from './flame';
 import type { Fluid, Flow, Force, Loop } from './fluid';
 import { EffectClocks } from './effects';
-import type { Tiles } from './meters';
+import type { FrameStats, MeterValues, Tiles } from './meters';
 import { Carry } from './nodes/carry';
 import { Finish } from './nodes/finish';
 import { Light } from './nodes/light';
+import { Meter } from './nodes/meter';
 import { FlamePoints } from './nodes/points';
 import { Screen } from './nodes/screen';
 import { Show } from './nodes/show';
@@ -119,6 +120,7 @@ export class FlameRenderer {
   private show: Show;
   private fin: Finish;
   private screen: Screen;
+  private meter: Meter;
   /** The effects' own times (effects.ts), and this frame's length in sixtieths of a second (a stall counted as at most
    *  four, so nothing that feeds back lurches). */
   private clocks = new EffectClocks();
@@ -160,6 +162,7 @@ export class FlameRenderer {
     this.show = new Show(gl);
     this.fin = new Finish(gl, this.now);
     this.screen = new Screen(gl);
+    this.meter = new Meter(gl);
     try {
       this.compositor = new Compositor(gl);
     } catch (e) {
@@ -295,21 +298,35 @@ export class FlameRenderer {
     else this.fin.idle();
   }
 
-  /** The screen just shown (`viewWidth` x `viewHeight`) read into tiles for the flash meter (meters.ts), as of `t`
-   *  seconds; read back two or more frames later with `tiles`. */
+  /** The Meter on what the screen just showed (`viewWidth` x `viewHeight`, as of `t` seconds: nodes/meter.ts):
+   *  read back two or more frames later with `tiles`. */
   measure(viewWidth: number, viewHeight: number, t: number) {
-    this.screen.measure(viewWidth, viewHeight, t);
+    this.meter.capture(viewWidth, viewHeight, t);
   }
 
-  /** The screen's readings the GPU has finished, the oldest first. Once a frame, before `frame` or anything else draws
+  /** The Meter's readings the GPU has finished, the oldest first. Once a frame, before `frame` or anything else draws
    *  (flashmeter.ts). */
   tiles(): Tiles[] {
-    return this.screen.tiles();
+    return this.meter.read();
   }
 
-  /** The flash meter's readings let go unread, its ring full. */
+  /** The frame's own numbers into the Meter, with its readings in since; its values (meters.ts) for the engine. */
+  meterAdd(stats: Omit<FrameStats, 'tiles'>) {
+    this.meter.add(stats);
+  }
+
+  get meterValues(): MeterValues {
+    return this.meter.values();
+  }
+
+  /** The Meter measuring anew (a trial of the rating page). */
+  meterReset() {
+    this.meter.reset();
+  }
+
+  /** The Meter's readings let go unread, its ring full. */
   get meterDropped(): number {
-    return this.screen.meterDropped;
+    return this.meter.dropped;
   }
 
   /** Whether the GPU took the context away (the page should stop and drop the renderer). */
@@ -319,7 +336,7 @@ export class FlameRenderer {
 
   dispose() {
     this.compositor?.dispose();
-    for (const n of [this.carry, this.screen, this.points, this.light, this.show, this.fin]) n.dispose();
+    for (const n of [this.carry, this.screen, this.meter, this.points, this.light, this.show, this.fin]) n.dispose();
     this.gl.getExtension('WEBGL_lose_context')?.loseContext();
   }
 }
