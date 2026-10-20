@@ -55,19 +55,6 @@ export function stepAccent(course: AccentState, v: number, follow: number, accen
   return course[1] + accent * swingLever * held * (v - course[1]);
 }
 
-/** Moments: what a step's cables give rising past a half fires it; ready again once that falls under a third, and not
- *  within MOMENT_GAP_MS (times the sidechaining's gap). */
-export const MOMENT_GAP_MS = 2000;
-export type MomentState = { armed: boolean; at: number };
-export const newMoment = (): MomentState => ({ armed: true, at: -Infinity });
-export function stepMoment(mo: MomentState, given: number, now: number, gapLever: number): boolean {
-  if (given < 1 / 3) mo.armed = true;
-  if (!(given > 0.5 && mo.armed && now - mo.at > MOMENT_GAP_MS * gapLever)) return false;
-  mo.armed = false;
-  mo.at = now;
-  return true;
-}
-
 /** A trigger's strike on one channel, as an ADSR reads it: how long since the last (s; Infinity: none yet) and its
  *  velocity, and the next one where it is known ahead (the server's hits): how long until it, and its velocity. */
 export type Strike = { since: number; velocity: number; next: { until: number; velocity: number } | null };
