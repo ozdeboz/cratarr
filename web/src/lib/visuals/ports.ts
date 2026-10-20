@@ -4,6 +4,7 @@
 // modulator's `inputs` are value inputs, a picture module takes and gives a picture, a modulator gives a value. The
 // modules that hold today's hidden behaviours are declared here, so every one of them shows.
 import type { RouteValue } from './curves';
+import { CLOCK_TRIGGER_KNOBS } from './engine/clock';
 import { BUSY, type Knob, type Macro, type Module, type ModuleType, type Place } from './patch';
 import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 
@@ -161,7 +162,7 @@ export const CLOCK = declared(
   'clock',
   'Clock',
   'modulator',
-  [knob('speed', 'Speed', 0, 2, 1, 'level', 0), knob('beats', 'Beats a turn', 4, 128, 32)],
+  [knob('speed', 'Speed', 0, 2, 1, 'level', 0), knob('beats', 'Beats a turn', 4, 128, 32), ...CLOCK_TRIGGER_KNOBS],
   [{ id: 'tempo', label: 'Tempo', type: 'value', normal: { module: 'music', port: 'tempo' } }],
   [out('phase', 'Turn'), out('rate', 'Rate'), out('beat', 'Beat', 'trigger'), out('bar', 'Bar', 'trigger'), out('phrase', 'Phrase', 'trigger')],
 );
@@ -291,7 +292,8 @@ export const LATTICES = ['square', 'hexagonal', 'triangular', 'rings', 'spiral']
 /** The most points a Grid gives (its channels). */
 export const MOST_POINTS = 64;
 
-/** Grid (0057 §4c; TouchDesigner's Grid SOP): points on a lattice, and each point's values as channels. */
+/** Grid (0057 §4c; TouchDesigner's Grid SOP): points on a lattice, and each point's values as channels. Its frame is
+ *  centred, y up, the screen's short side −1..1 (as Fold and Instance read it). */
 export const GRID = declared(
   'grid',
   'Grid',

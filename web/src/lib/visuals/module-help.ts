@@ -253,6 +253,7 @@ export const portHelp: Record<string, Record<string, string>> = {
     clock: 'Plugged in, Rate counts in beats instead of seconds.',
     reset: 'Starts the wave again; on the Clock’s bar unless unplugged.',
     rate: 'Cycles a second, or a beat while a clock is plugged in.',
+    ratio: 'With a clock plugged in, the clock divided or multiplied (÷4 to ×4).',
     shape: 'From a sine (0) to a triangle (1).',
     offset: 'Where in its cycle it starts.',
     amount: AMOUNT_OUT,
