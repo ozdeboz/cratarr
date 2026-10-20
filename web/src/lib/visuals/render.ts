@@ -128,10 +128,11 @@ export class FlameRenderer {
   /** The compose step, the graph's own walk (nodes/walker.ts): its modules, the module whose picture it starts from
    *  (Show's), the one it gives on; each module's knobs as the patch has them. */
   private walker: Walker | null = null;
-  private composed: { ids: Set<string>; from: string; to: string } | null = null;
+  private composed: { ids: Set<string>; from: string | null; to: string } | null = null;
   private knobsIn = new Map<string, Record<string, number>>();
-  /** Whether the lazy rules cut the flame last frame. */
+  /** Whether the lazy rules cut the flame last frame; whether the last frame was blank. */
   private cut = false;
+  private blanked = false;
   errors: string[] = [];
   /** The context, for what draws beside the flame (the compositor). */
   get context(): WebGL2RenderingContext {
@@ -256,20 +257,22 @@ export class FlameRenderer {
     this.points.setFlame(flame);
   }
 
-  /** One frame: the old picture fades by `now.carry.keep`, `passes` more steps of every point fall into it, and it
-   *  shows. */
-  frame(passes: number, now: ChainNow, viewWidth: number, viewHeight: number, inputs: PictureInputs | Extras | null = null) {
+  /** One frame of the patch: the flame (its light faded by `now.carry.keep`, `passes` more steps of every point in it,
+   *  shown), what the compose step draws, the effects, onto the screen. `now` null: no flame data (no Cratarr chain):
+   *  its stages are skipped and the rest drawn as the patch wires it; where nothing reaches the screen, it is blank. */
+  frame(passes: number, now: ChainNow | null, viewWidth: number, viewHeight: number, inputs: PictureInputs | Extras | null = null) {
     const given = inputs && 'extra' in inputs ? inputsOfExtras(inputs) : inputs;
     const knobsAt = (id: string) => given?.knobs(id) ?? this.knobsIn.get(id) ?? {};
     const [screenWidth, screenHeight] = [viewWidth, viewHeight];
     const gl = this.gl;
     const light = this.light;
-    if (!this.points.flame || !light.acc || !light.accFbo) return;
+    const flamed = !!now && !!this.points.flame && !!light.acc && !!light.accFbo;
+    if (now && !flamed) return;
     const at = this.now();
     const since = this.shownAt ? Math.min(0.25, (at - this.shownAt) / 1000) : 0;
     this.shownAt = at;
     // The loop slot's effect, where there is one.
-    const fxl = now.effects;
+    const fxl = now?.effects;
     this.fxFrames = Math.min(4, since * 60);
     if (fxl) this.clocks.run(fxl);
     const loop =
@@ -279,7 +282,7 @@ export class FlameRenderer {
     // The lazy rules (picture-graph.ts plan): the flame's layer at nothing, and not coming back, cuts the flame and all
     // that feeds only it (decision 0057, its 5th: one coming back keeps gathering its light). The rest is lazy within
     // its pass: an effect, a layer, the loop at nothing.
-    const drawn = !this.compiled || !given || plan(this.compiled, { knobs: knobsAt, target: given.target }).live.some((n) => n.type === 'flame');
+    const drawn = flamed && (!this.compiled || !given || plan(this.compiled, { knobs: knobsAt, target: given.target }).live.some((n) => n.type === 'flame'));
     let fluid: Fluid | null = null;
     if (drawn && this.cut) light.clear();
     this.cut = !drawn;
@@ -290,13 +293,13 @@ export class FlameRenderer {
       gl.enable(gl.BLEND);
       // Fade what is there; with the Fluid setting, carry it along the flow as it fades, into the other set of
       // buffers (as the scrub copies), and draw on there.
-      fluid = this.carry.draw(light, now.carry, since, loop);
-      this.points.draw(light, now.points, passes, since);
+      fluid = this.carry.draw(light, now!.carry, since, loop);
+      this.points.draw(light, now!.points, passes, since);
     }
 
     // Show it. The points held at a time: each frame's, kept 1/(1 − keep) frames; their mean per pixel sets k2. Where a
     // chain of effects is set, into the picture at the buffer's size, for the chain's pass to finish.
-    const fx = now.effects;
+    const fx = now?.effects;
     const chain = this.stages.has('effects') && fx ? effectRuns(this.fxOrder, fx.ids, fx.amounts, this.fxLooped).flatMap((ids) => {
       const p = this.fin.chainFor({ ...fx, ids }, this.clocks);
       return p ? [{ p, ids }] : [];
@@ -304,14 +307,17 @@ export class FlameRenderer {
     const walks = this.stages.has('compose') && this.compiled && this.composed;
     if (walks) this.walker ??= new Walker(gl);
     const walking = walks ? this.walker!.planned(this.compiled!, this.composed!.ids, this.composed!.from, this.composed!.to, knobsAt) : null;
+    if (!drawn && !walking) return this.blank(screenWidth, screenHeight);
+    this.blanked = false;
     const into = chain.length || walking ? this.fin.targets(light.width, light.height) : null;
     if (drawn) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, into ? into.fbo[2] : null);
       if (into) viewWidth = light.width, viewHeight = light.height;
-      this.show.draw(light, this.points, now.show, passes, fluid, this.carry.warpShown, viewWidth, viewHeight);
+      this.show.draw(light, this.points, now!.show, passes, fluid, this.carry.warpShown, viewWidth, viewHeight);
     }
     const info = given?.frame ?? { dt: since, time: at / 1000, beat: null, signals: () => 0, waveform: null };
-    const picture = into && walking ? this.walker!.run(walking, into.tex[2], into.w, into.h, knobsAt, info) : into ? into.tex[2] : null;
+    // Without the flame drawn, the compose step starts from nothing where Show's picture would be.
+    const picture = into && walking ? this.walker!.run(walking, drawn ? into.tex[2] : null, into.w, into.h, knobsAt, info) : into ? into.tex[2] : null;
     if (chain.length && into && picture) {
       // Each run from the last one's picture; the first into the picture's own targets, as before.
       let shown = picture;
@@ -319,6 +325,23 @@ export class FlameRenderer {
       this.screen.toScreen(shown, screenWidth, screenHeight);
     } else if (into && picture) this.screen.toScreen(picture, screenWidth, screenHeight);
     else this.fin.idle();
+  }
+
+  /** The screen black, and what the picture kept from frame to frame let go of: the flame's light, the loops' and the
+   *  echoes' last pictures (so a chain coming back starts from nothing). `frame` does it itself where nothing reaches
+   *  the screen; the screen is cleared each such frame, the rest once. */
+  blank(screenWidth = this.gl.drawingBufferWidth, screenHeight = this.gl.drawingBufferHeight) {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, screenWidth, screenHeight);
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    if (this.blanked) return;
+    this.blanked = true;
+    if (this.light.accFbo) this.light.clear();
+    this.cut = true;
+    this.walker?.forget();
+    this.fin.freeFx();
   }
 
   /** The Meter on what the screen just showed (`viewWidth` x `viewHeight`, as of `t` seconds: nodes/meter.ts):
