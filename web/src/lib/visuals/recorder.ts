@@ -1,7 +1,6 @@
 // The picture lab's recorder (decision 0057, step 3; development only): each frame's inputs to the renderer and the
 // compositor, kept as plain data for picture-lab.html to replay through two pipelines and compare pixel by pixel. On
 // only where the lab asks for it (`globalThis.cratarrPictureRecord`), before the visuals open.
-import { composeActive } from './compose';
 import type { Flame, Xform } from './flame';
 import type { FrameInfo, Module, PatchExtra, SignalRef } from './patch';
 import { shownOf } from './chain-params';
@@ -65,7 +64,8 @@ export function recordPictures(renderer: FlameRenderer) {
   const rec: Recording = { v: 1, name: want.name, points: renderer.pointCount, frames: [] };
   want.recording = rec;
   let flame: Flame | null = null;
-  let pruned: PatchExtra | undefined;
+  // The extras changed: the next frame's go with it (the frozen compositor lets go of what is not in them).
+  let pruned = false;
   const setFlame = renderer.setFlame.bind(renderer);
   renderer.setFlame = (f) => {
     flame = f;
@@ -73,17 +73,19 @@ export function recordPictures(renderer: FlameRenderer) {
   };
   const prune = renderer.prune.bind(renderer);
   renderer.prune = (extra) => {
-    pruned = plain(extra);
+    pruned = true;
     prune(extra);
   };
   const frame = renderer.frame.bind(renderer);
-  renderer.frame = (passes, now, w, h, extras = null) => {
-    if (want.done || !flame) return frame(passes, now, w, h, extras);
-    const pending: RecordedFrame = { at: performance.now(), passes, look: plain(shownOf(now)), flame: plain(flame), w, h, bw: renderer.width, bh: renderer.height, points: renderer.pointCount, compose: null, ...(pruned ? { pruned } : {}) };
-    pruned = undefined;
-    // The compose step as drawn: only where it draws (compose.ts `active`), its signals as they are read.
-    let given = extras;
-    if (extras && composeActive(extras.extra, extras.knobsOf, extras.flame)) {
+  renderer.frame = (passes, now, w, h, inputs = null) => {
+    if (want.done || !flame) return frame(passes, now, w, h, inputs);
+    // The page's extras (v1) as the lab replays them; a store's inputs go on unrecorded.
+    const extras = inputs && 'extra' in inputs ? inputs : null;
+    const pending: RecordedFrame = { at: performance.now(), passes, look: plain(shownOf(now)), flame: plain(flame), w, h, bw: renderer.width, bh: renderer.height, points: renderer.pointCount, compose: null, ...(pruned && extras ? { pruned: plain(extras.extra) } : {}) };
+    pruned = false;
+    // The compose step's inputs, its signals as they are read.
+    let given = inputs;
+    if (extras) {
       const signals: Record<string, number> = {};
       const modules: Module[] = [...extras.extra.layers.flatMap((l) => [l.source, ...l.modules]), ...extras.extra.loop];
       const info = extras.frame;
