@@ -107,7 +107,7 @@ const numbered = (n: number, id: (i: number) => string, line: (i: number) => str
 
 /** A port's or knob's own line, where its label does not say it all and help.ts has none. */
 export const portHelp: Record<string, Record<string, string>> = {
-  flame: { light: 'Its light: in, as it was last frame; out, as drawn now, before Tone map.' },
+  flame: { light: 'Its light: in, as it was last frame; out, as drawn now, before Tone map.', points: 'Where its parts are: where the Fluid pushes, unless cabled otherwise.' },
   shapes: {
     count: 'How many shapes on the ring; none at 0.',
     sides: 'Corners a shape; between whole numbers it morphs, near a circle at many.',
@@ -152,14 +152,17 @@ export const portHelp: Record<string, Record<string, string>> = {
     flow: 'How much of what its cables give makes the fluid flow.',
     swirl: 'How much of what its cables give sets the fluid whirling.',
     facets: 'How much the fluid breaks into facets: the most it reaches; cables into its gain take it lower.',
+    at: 'Where its pushes land: the flame’s parts unless cabled (a Grid’s points, an edge’s).',
+    field: 'Its flow field, where it moves things and how fast: into Show’s Bend, Stream or a Displace.',
   },
   tunnel: { light: LIGHT, tunnel: 'How fast the picture streams outward for ever: the most it reaches; cables into its gain take it lower.' },
   dive: { light: LIGHT, dive: 'How fast the view dives into the flame for ever: the most it reaches; cables into its gain take it lower.' },
   trails: { light: LIGHT },
-  'loop-effect': { light: LIGHT, amount: 'How strongly the loop’s effect acts: the most it reaches; cables into its gain take it lower.' },
+  bend: { field: 'The flow it reads the picture along, as the fluid moves it: the Fluid’s unless cabled.' },
+  'loop-effect': { light: LIGHT, field: 'The flow Stream reads the picture along: the Fluid’s unless cabled.', amount: 'How strongly the loop’s effect acts: the most it reaches; cables into its gain take it lower.' },
   'kaleidoscope-engine': { amount: 'How strongly its effect shows: the most it reaches; cables into its gain take it lower.' },
   'eyedo-engine': { amount: 'How strongly its effect shows: the most it reaches; cables into its gain take it lower.' },
-  'hydra-engine': { amount: 'How strongly its effect shows: the most it reaches; cables into its gain take it lower.' },
+  'hydra-engine': { field: 'The flow Stream reads the picture along: the Fluid’s unless cabled.', amount: 'How strongly its effect shows: the most it reaches; cables into its gain take it lower.' },
   blur: { smoothing: 'How wide sparse areas blur, up to twelve pixels: the most it reaches; cables into its gain take it lower.' },
   curve: { haze: 'Lifts the faint mist into view (up) or sinks it to black (down): the most either way; cables into its gain take it toward 0.' },
   fold: {
@@ -185,6 +188,9 @@ export const portHelp: Record<string, Record<string, string>> = {
     trails: 'How long the trails last: a tenth of a second at 0, six seconds at 1.',
   },
   'fluid-loop': {
+    light: 'Light, a picture or points, carried along its flow; out the same.',
+    at: 'Where its pushes land: the flame’s parts unless cabled (a Grid’s points, an edge’s).',
+    field: 'Its flow field, where it moves things and how fast: into Show’s Bend, Stream or a Displace.',
     amount: 'How far the picture moves with the flow: not at all at 0.',
     stir: 'How hard the music pushes the flow.',
     flow: 'How long the flow’s motion lasts.',

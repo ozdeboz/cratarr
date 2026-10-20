@@ -87,6 +87,9 @@
   .plug.w-points {
     fill: var(--wire-points);
   }
+  .plug.w-flow {
+    fill: var(--wire-flow);
+  }
   .plug.normal {
     opacity: 0.45;
   }
