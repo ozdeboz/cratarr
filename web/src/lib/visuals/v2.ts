@@ -68,7 +68,7 @@ export function setPictureWiring(f: (p: Patch) => Wiring) {
 /** The Show device: Bend, Blur, Tone map, Curve and Saturate in a row, light in and a picture out, each knob of Show's
  *  (but Size) exposed under its own name. */
 function showDevice(show: Module): Device {
-  const parts = SHOW_PARTS.map(({ knob, type }) => ({ id: type, type, knobs: knob in show.knobs ? { [knob]: show.knobs[knob] } : {} }));
+  const parts = SHOW_PARTS.map(({ knob, type }) => ({ id: type, type, knobs: { ...(knob in show.knobs ? { [knob]: show.knobs[knob] } : {}), ...(type === 'tonemap' ? { level: 1 } : {}) } }));
   const wire = (i: number): CableV2 => ({
     id: `show-${i}`,
     from: { module: SHOW_PARTS[i].type, port: 'picture' },
@@ -84,6 +84,9 @@ function showDevice(show: Module): Device {
     inputs: [
       { as: 'light', label: 'Light', module: SHOW_PARTS[0].type, port: 'picture' },
       ...SHOW_PARTS.map(({ knob, type, label }) => ({ as: knob, label, module: type, port: knob })),
+      // Tone map's Level and its gain (0057 §7e item 6: the pause's dimming).
+      { as: 'level', label: 'Level', module: 'tonemap', port: 'level' },
+      { as: 'level:gain', label: 'Level: gain', module: 'tonemap', port: 'level:gain' },
       // Its level knobs' gains (0057 §7e item 1), for the VCAs cables now go through.
       ...SHOW_PARTS.filter(({ knob }) => LEVEL_KNOBS.has(`show.${knob}`)).map(({ knob, type, label }) => ({ as: `${knob}:gain`, label: `${label}: gain`, module: type, port: `${knob}:gain` })),
     ],
@@ -355,7 +358,18 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
     } else cables.push({ id: c.id, from: viaAdsr(extraFrom(c)), to, value, mode: c.mode });
   }
   for (const a of adsrs.values()) cables.push(a.gate);
-  const all = [...engine.values(), ...[...adsrs.values()].map((a) => a.module), ...modules];
+  // Pausing dims in sight (0057 §7e item 6, claude-5f's): Music's playing, followed over half a second, into a VCA
+  // (0.55 paused, 1 playing) into Tone map's Level gain.
+  const pause: Module[] = [
+    { id: 'pause-follow', type: 'slow', knobs: { attack: 0.5, release: 0.5, full: 1, amount: 1 } },
+    { id: 'pause-dim', type: 'vca', knobs: { gain: 0.55 } },
+  ];
+  cables.push(
+    { id: 'pause-playing', from: { module: 'music', port: 'playing' }, to: { module: 'pause-follow', port: 'in' }, value: 1, mode: 'swing', depth: null },
+    { id: 'pause-follow-out', from: { module: 'pause-follow', port: 'out' }, to: { module: 'pause-dim', port: 'cv' }, value: 0.45, mode: 'swing', depth: null },
+    { id: 'pause-dim-out', from: { module: 'pause-dim', port: 'out' }, to: { module: 'show', port: 'level:gain' }, value: 1, mode: 'swing', depth: null },
+  );
+  const all = [...engine.values(), ...[...adsrs.values()].map((a) => a.module), ...modules, ...pause];
   const adding = opts.addOnly === false ? { modules: all, cables } : cablesAdd(all, cables);
   const added = opts.sidechain === false ? adding : sidechained(adding.modules, adding.cables, s.wild, opts.limits ?? {});
   const wiring = pictureWiring(p);

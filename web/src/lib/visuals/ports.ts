@@ -291,7 +291,9 @@ export const SHOW_PARTS: readonly { knob: string; type: string; label: string; p
 export function showPartTypes(show: ModuleType): Declared[] {
   return SHOW_PARTS.map(({ knob: id, type, label: name, polymorphic }) => {
     const k = show.knobs.find((x) => x.id === id);
-    const knobs = k ? [k] : [];
+    // Tone map's Level (0057 §7e item 6): the whole picture's brightness as a fader, 1 as set; the pause dims it
+    // through its gain.
+    const knobs = [...(k ? [k] : []), ...(type === 'tonemap' ? [knob('level', 'Level', 0, 1, 1, 'level')] : [])];
     const input: Port = type === 'tonemap' ? { id: 'light', label: 'Light', type: 'light' } : polymorphic ? { ...PICTURE_IN, polymorphic } : PICTURE_IN;
     return declared(type, name, 'module', knobs, [input], [polymorphic ? { ...PICTURE_OUT, polymorphic } : PICTURE_OUT]);
   });

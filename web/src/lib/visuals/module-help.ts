@@ -147,7 +147,7 @@ export const portHelp: Record<string, Record<string, string>> = {
     tint: TINT,
     glow: GLOW,
   },
-  tonemap: { light: LIGHT },
+  tonemap: { light: LIGHT, level: 'The whole picture’s brightness, as a fader: 1 as set; the pause dims it through its gain.' },
   fluid: { light: LIGHT },
   tunnel: { light: LIGHT },
   dive: { light: LIGHT },
