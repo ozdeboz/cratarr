@@ -31,6 +31,17 @@ test('a change is a new object, one undo step a key while it runs; undo and redo
   assert.equal(visualsPatch.patch.modules.find((m) => m.id === flame.id)!.knobs.hue, 0.2);
 });
 
+test('a performance (a moment, a track’s look) is no undo step', () => {
+  const flame = visualsPatch.patch.modules.find((m) => m.type === 'flame')!;
+  visualsPatch.change((p) => void (p.modules.find((m) => m.id === flame.id)!.knobs.hue = 0.3), 'knob:hue-a');
+  const edited = visualsPatch.patch;
+  visualsPatch.perform((p) => void (p.modules.find((m) => m.id === flame.id)!.knobs.symmetry = 3));
+  assert.equal(visualsPatch.patch.modules.find((m) => m.id === flame.id)!.knobs.symmetry, 3);
+  assert.notEqual(visualsPatch.patch, edited);
+  visualsPatch.undo();
+  assert.notEqual(visualsPatch.patch.modules.find((m) => m.id === flame.id)!.knobs.hue, 0.3, 'the undo is the edit’s');
+});
+
 test('only a v2 patch is taken as kept', () => {
   assert.equal(patchFrom({ v: 1, modules: [], cables: [] }), null);
   assert.equal(patchFrom(null), null);

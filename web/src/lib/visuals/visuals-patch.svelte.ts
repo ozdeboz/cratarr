@@ -67,6 +67,13 @@ export const visualsPatch = {
   change(f: (p: PatchV2) => PatchV2 | void, key: string | null = null) {
     set(changed(store, f, key));
   },
+  /** A change the visuals make as they play (a moment, a new track's look): a performance, not an edit, so no undo
+   *  step; an undo after it goes back to the edit before. */
+  perform(f: (p: PatchV2) => PatchV2 | void) {
+    const draft = structuredClone(store.now);
+    const next = f(draft) ?? draft;
+    set({ ...store, now: next });
+  },
   /** A patch from elsewhere (a preset, a snapshot, the phone driving this device): the patch now, one undo step. */
   replace(p: PatchV2) {
     set(replaced(store, p));
