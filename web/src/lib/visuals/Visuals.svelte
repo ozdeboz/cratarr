@@ -48,7 +48,8 @@
   import { ASPECT_KNOB, emptyExtra, SETTING_KNOB } from './patch';
   import CurveEditor from './CurveEditor.svelte';
   import { densityOf, newHistory, remember } from './history';
-  import { budgetOf, BUDGETED, holding, LEVERS, newGovernor, STANDING, stepGovernor, type Budgeted, type Levers } from './governor';
+  import { budgetOf, BUDGETED, LEVERS, STANDING, type Budgeted, type Levers } from './governor';
+  import { holding, leversOf } from './engine/sidechain';
   import { fresh, limitsOf, type Learned } from './learning';
   import { getVisualsLimits } from '../api';
   import { toast } from '../toast.svelte';
@@ -236,10 +237,10 @@
     showChrome();
   }
 
-  // The governor (governor.ts), stepped with the meters four times a second in the loop; and the limits it holds the
-  // picture within, as the thumbs had learned them (learning.ts), frozen: no thumbs or learning in this version
-  // (decision 0057: "we drop taste altogether"); the server keeps them as they are.
-  const governor = newGovernor();
+  // What the meters last measured (four times a second in the loop): the patch's sidechains' key (its Meter, 0057 §7e;
+  // the governor is gone). The limits as the thumbs had learned them (learning.ts), for the dice's check until it runs on
+  // the one engine.
+  let meterValues: MeterValues | undefined;
   let learned = $state<Learned>(fresh(STANDING));
   let learnedVersion = 0;
   const limitsNow = $derived(limitsOf(learned));
@@ -1688,7 +1689,9 @@
         enginePatchStale = false;
         enginePatch = flatten(toV2($state.snapshot(walked) as VisualSettings));
       }
-      const stepped = stepEngine(engine, enginePatch, ENGINE_TYPES, m, read, behaving, dt, { still, now, fluidFull: FLUID_FULL, levers: governor.levers, walk: engineWalk });
+      const stepped = stepEngine(engine, enginePatch, ENGINE_TYPES, m, read, behaving, dt, { still, now, fluidFull: FLUID_FULL, meters: meterValues, walk: engineWalk });
+      // How much the patch's sidechains hold back now (its Duckers, the Screen's guard), where the page still reads levers.
+      const levers = leversOf(stepped.outputs);
       // A patch with no Cratarr chain draws nothing (toV2 always makes one).
       if (!stepped.aspects) return;
       const d = stepped.aspects;
@@ -1837,7 +1840,7 @@
       const beatNow = m.playing && !still ? m.beat : null;
       // The waves' height, held back with the pace as the turning is (their phase stays the track's, so a group waves
       // alike).
-      const wavesNow = still ? 0 : d.given[A.waves] * governor.levers.pace;
+      const wavesNow = still ? 0 : d.given[A.waves] * levers.pace;
       const stirred = stir(stirring, {
         t: now / 1000,
         dt,
@@ -1902,7 +1905,7 @@
         passes,
         nodesNow(d, {
           how,
-          levers: governor.levers,
+          levers: levers,
           still,
           ceiling: s.brightness,
           coverage: frame ? frame.coverage : null,
@@ -1923,7 +1926,7 @@
       if (trial.settings !== trialSeen) {
         trialSeen = trial.settings;
         metering = new Meters();
-        Object.assign(governor, newGovernor());
+        meterValues = undefined;
       }
       renderer.measure(w, h, now / 1000);
       const stats: FrameStats = {
@@ -1931,8 +1934,8 @@
         // What the effects add (as the governor lets them), the waves' motion where nothing flows, and the zooms'
         // streaming out at the rates the renderer is given (aspects.ts).
         extra: (() => {
-          const fx = settingsReport(how, d.effects, governor.levers, still, d.routed);
-          const zooms = still ? 0 : zoomsMotion(d.tunnel * governor.levers.pace, d.dive * governor.levers.pace);
+          const fx = settingsReport(how, d.effects, levers, still, d.routed);
+          const zooms = still ? 0 : zoomsMotion(d.tunnel * levers.pace, d.dive * levers.pace);
           return { ...fx, motion: (fx.motion ?? 0) + wavesMotion(wavesNow, d.fluid) + zooms };
         })(),
         // The dive's turn counts as each part's.
@@ -1951,8 +1954,7 @@
       metering.add(stats);
       if (now - meteredAt >= 250) {
         const values = metering.now();
-        // With the trial of the rating page, only the flashes' rule: its budgets are what the ratings are to tell.
-        const l = stepGovernor(governor, values, { dt: Math.min(1, (now - meteredAt) / 1000), limits: limitsNow, wild: wildNow(how.wild), activity: d.lit, budgets: !trial.settings });
+        meterValues = values;
         const since = Math.max(0.05, (now - meteredAt) / 1000);
         meteredAt = now;
         trial.meters = values;
@@ -1973,7 +1975,7 @@
           bps: m.bps,
           hitsPerSecond: hitsCounted / since,
           activity: d.lit,
-          swing: l.swing,
+          swing: levers.swing,
           looks: looksOutside,
           settling: !!from && blendOutside,
           view: [canvas.clientWidth, canvas.clientHeight],
@@ -1983,7 +1985,7 @@
           device: device(),
         };
         hitsCounted = 0;
-        const marks = { flash: holding(l, 'swing'), speed: holding(l, 'pace'), wild: (['swing', 'pace', 'evolution', 'hue', 'size', 'gap'] as const).some((k) => holding(l, k)) };
+        const marks = { flash: holding(levers, 'swing'), speed: holding(levers, 'pace'), wild: (['swing', 'pace', 'evolution', 'hue', 'size', 'gap'] as const).some((k) => holding(levers, k)) };
         if (marks.flash !== !!governed.flash || marks.speed !== !!governed.speed || marks.wild !== !!governed.wild) governed = marks;
       }
       // A picture for a snapshot, while this frame is still in the canvas.
