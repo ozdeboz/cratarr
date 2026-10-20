@@ -50,8 +50,11 @@
   import type { LiveFaces } from './faces.svelte';
   import { CATEGORY_LABEL } from './rack';
   import { Thumbs, type Thumbnailer } from './face/face';
+  import { MUSIC_SIGNALS, musicModuleFor, SIGNAL_OUT } from './music-signals';
+  import { fits } from './ports';
   import {
     applyV2,
+    freeModuleId,
     CABLE_OPACITIES,
     connectionV2,
     crumbsOf,
@@ -200,7 +203,15 @@
   /** The cable last tapped: its configuration is what the parent shows. */
   let openCable = $state<string | null>(null);
   /** A long press's menu: a cable's, a module's, a knob's or port's help; the types to add somewhere; Make device. */
-  type Menu = { kind: 'cable'; id: string; at: XY } | { kind: 'node'; id: string } | { kind: 'add'; to: AddTo } | { kind: 'make'; ids: string[] } | { kind: 'help'; id: string; port: string };
+  type Menu =
+    | { kind: 'cable'; id: string; at: XY }
+    | { kind: 'node'; id: string }
+    | { kind: 'add'; to: AddTo }
+    | { kind: 'make'; ids: string[] }
+    | { kind: 'help'; id: string; port: string }
+    // Music ▸ a signal: a music module of it, added at a level; or (from a knob dragged into the empty) cabled into it.
+    | { kind: 'music'; scope: string[] }
+    | { kind: 'pick'; node: string; port: string; at: XY };
   // The knobs chosen as a device's macros while it is being made (`<node>|<knob>`).
   let picks = $state<string[]>([]);
   // Selecting (a module's or a cable's long press, Select): taps add or take away modules, devices and cables, and the
@@ -507,10 +518,37 @@
   // A cable dragged from a knob and let go on nothing: a source for the knob to be picked.
   function connectEnd(_: MouseEvent | TouchEvent, state: { fromHandle?: { id?: string | null; nodeId: string; type: string } | null; toHandle?: unknown; to?: XY | null }) {
     const h = state.fromHandle;
-    if (!onpick || !h || state.toHandle || h.type !== 'target' || !h.id?.startsWith('k:') || !state.to) return;
+    if (!h || state.toHandle || h.type !== 'target' || !h.id?.startsWith('k:') || !state.to) return;
     const d = dataOf(h.nodeId);
     if (d?.kind !== 'module' || !d.knobs.some((k) => knobHandle(k.id) === h.id)) return;
-    onpick({ from: 'knob', module: path(h.nodeId), knob: h.id.slice(2) }, { x: Math.round(state.to.x), y: Math.round(state.to.y) });
+    // The music signals first (a module of one, cabled in, in one change), then the parent's other sources.
+    menu = { kind: 'pick', node: h.nodeId, port: h.id.slice(2), at: { x: Math.round(state.to.x), y: Math.round(state.to.y) } };
+  }
+  /** The music signals that fit a node's input. */
+  function signalsInto(node: string, port: string) {
+    const d = dataOf(node);
+    const into = d?.kind === 'module' ? d.v2.ports.in.find((x) => x.id === port) : undefined;
+    return MUSIC_SIGNALS.filter((sg) => fits(sg.type, into?.type ?? 'value', into?.polymorphic));
+  }
+  /** A music module of `signal` cabled into a node's input, just left of the node, in one change. */
+  function musicInto(node: string, port: string, signal: string) {
+    const parts = node.split('/');
+    const scope = [...at, ...parts.slice(0, -1)];
+    const inside = patchAt(patch, scope);
+    if (!inside) return;
+    const made = musicModuleFor(signal);
+    const id = freeModuleId(inside, signal.replace(/[^\w-]/g, '_'));
+    edit([
+      { kind: 'add', scope, type: made.type, id, knobs: made.knobs },
+      { kind: 'connect', scope, from: { module: id, port: SIGNAL_OUT }, to: { module: parts[parts.length - 1], port } },
+    ]);
+    const n = nodes.find((x) => x.id === node);
+    if (n) {
+      const key = `${levelKey}|${[...parts.slice(0, -1), id].join('/')}`;
+      const where = { x: Math.round(n.position.x - 200), y: Math.round(n.position.y) };
+      if (!positions) moved = { ...moved, [key]: where };
+      onmove?.(key, where.x, where.y);
+    }
   }
   // What is selected: modules and devices, cables (the select mode's, or a desktop's Shift- or Ctrl-clicks); the
   // modules at one level are what "Make device" makes a device of.
@@ -846,10 +884,46 @@
       <MenuEntry icon="intoBox" label="Make" onclick={() => make(ids)} />
     </div>
   </MenuSheet>
+{:else if menu?.kind === 'pick'}
+  {@const pick = menu}
+  <MenuSheet label="Into {nodeName(pick.node)}" title="Into {nodeName(pick.node)}" onclose={() => (menu = null)} over>
+    <div role="menu">
+      {#each signalsInto(pick.node, pick.port) as sg (sg.id)}<MenuEntry
+          label="Music ▸ {sg.label}"
+          onclick={() => {
+            menu = null;
+            musicInto(pick.node, pick.port, sg.id);
+          }}
+        />{/each}
+      {#if onpick}<MenuEntry
+          label="Other sources…"
+          onclick={() => {
+            menu = null;
+            onpick({ from: 'knob', module: path(pick.node), knob: pick.port }, pick.at);
+          }}
+        />{/if}
+    </div>
+  </MenuSheet>
+{:else if menu?.kind === 'music'}
+  {@const scope = menu.scope}
+  <MenuSheet label="Music" title="Music" onclose={() => (menu = null)} over>
+    <div role="menu">
+      {#each MUSIC_SIGNALS as sg (sg.id)}<MenuEntry
+          label={sg.label}
+          onclick={() => {
+            menu = null;
+            const made = musicModuleFor(sg.id);
+            const inside = patchAt(patch, [...at, ...scope]);
+            if (inside) edit([{ kind: 'add', scope: [...at, ...scope], type: made.type, id: freeModuleId(inside, sg.id.replace(/[^\w-]/g, '_')), knobs: made.knobs }]);
+          }}
+        />{/each}
+    </div>
+  </MenuSheet>
 {:else if menu?.kind === 'add'}
   {@const to = menu.to}
   <MenuSheet label={addTitle(to)} title={addTitle(to)} onclose={() => (menu = null)} over>
     <div role="menu">
+      {#if to.category === 'modulators' || to.category === 'io'}<MenuEntry label="Music ▸" onclick={() => (menu = { kind: 'music', scope: to.scope })} />{/if}
       {#each typesOf(to.category, types) as t (t.type)}<MenuEntry
           label={labelOf(t)}
           onclick={() => {

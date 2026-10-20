@@ -13,6 +13,7 @@ import type { Cable, Knob, Module, ModuleType, Place, SignalRef } from './patch'
 import { ENGINES } from './effects';
 import { cyclesClosed, FEEDBACK, fits, isDevice, polyKnobs, portsOf, type CableV2, type Device, type ExposedPort, type PatchV2, type Polymorphic, type Port, type PortRef, type PortType, type Ports } from './ports';
 import { byCategory, CATEGORIES, CATEGORY_LABEL, categoryOf, type Category } from './rack';
+import { signalOf } from './music-signals';
 import { areaParts, faceHeight as partsHeight, faceOf, type FacePart, type Thumbs } from './face/face';
 import { freeCableId, newCable, type Cables } from './cable-actions';
 import { makeDevice, unmakeDevice, type MacroPick } from './device-make';
@@ -83,6 +84,8 @@ export type ModuleData = {
   device?: { open: boolean };
   /** Pinned whole (`module:<id>`, a module or a device). */
   pinned?: boolean;
+  /** A music module of one signal (music-signals.ts): which; it sits beside what it feeds (its category theirs). */
+  music?: string;
 };
 /** A typed input port on a node (not a knob): cabled, or else normalled where its type says so. */
 export type PortView = { id: string; label: string; type: PortType; channels?: number; cabled: boolean; normal?: PortRef; polymorphic?: Polymorphic };
@@ -209,7 +212,8 @@ export function openView(b: Rect, view: Size, pad: Pad, zoom = FULL_ZOOM, first?
 export function firstModule(nodes: { position: XY; parentId?: string; data: NodeData }[], _portrait = false): XY | undefined {
   const top = nodes.filter((n) => !n.parentId && (n.data.kind === 'module' || n.data.kind === 'box'));
   if (!top.length) return undefined;
-  const givers = top.filter((n) => n.data.kind === 'module' && n.data.cables && !n.data.cables.in && n.data.cables.out > 0);
+  // (Not a music module of one signal: a small one beside what it feeds, not where the rack starts.)
+  const givers = top.filter((n) => n.data.kind === 'module' && !n.data.music && n.data.cables && !n.data.cables.in && n.data.cables.out > 0);
   if (givers.length) return givers.reduce((a, b) => ((b.data as ModuleData).cables!.out > (a.data as ModuleData).cables!.out ? b : a)).position;
   const corner = { x: Math.min(...top.map((n) => n.position.x)), y: Math.min(...top.map((n) => n.position.y)) };
   const far = (p: XY) => Math.hypot(p.x - corner.x, p.y - corner.y);
@@ -690,6 +694,18 @@ const intoOf = (p: PatchV2) => {
   return m;
 };
 
+/** A music module of one signal takes the category of the first module it feeds, so ELK's partitions (and the lanes)
+ *  put it beside what it feeds rather than in a far In / Out lane: short local cables. */
+export function besideTargets(nodes: GraphNode[], edges: GraphEdge[]) {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  for (const n of nodes) {
+    if (n.data.kind !== 'module' || !n.data.music) continue;
+    const to = edges.find((e) => e.source === n.id && !e.data?.normal);
+    const cat = to && (byId.get(to.target)?.data as ModuleData | undefined)?.category;
+    if (cat) n.data = { ...n.data, category: cat };
+  }
+}
+
 /** An edge drawn as its wire's type: a picture's or light's a wire (in steps), anything else a sagging cable; a normal
  *  faint. */
 function wired(e: GraphEdge, wire: PortType): GraphEdge {
@@ -819,6 +835,7 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
       v2: { ports, pin: pinPort?.id ?? null, pout: poutPort?.id ?? null, mod: modulator ? (values[0]?.id ?? null) : null },
       ...(isDevice(m) ? { device: { open: false } } : {}),
       ...(level.pins.includes(`module:${m.id}`) ? { pinned: true } : {}),
+      ...(signalOf(m) ? { music: signalOf(m)!.id } : {}),
     };
     data.set(id, d);
     return d;
@@ -934,6 +951,7 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
     return { width: w, height: h };
   };
   level(top, '', undefined, { x: 0, y: 0 });
+  besideTargets(nodes, edges);
   withCarried(nodes, edges);
   withRoom(nodes, (n) => sizes[n.id] ?? sizeOf(n.data));
   withCounts(nodes, edges);
@@ -953,7 +971,7 @@ export type V2Edit =
   | { kind: 'removeModules'; scope: string[]; modules: string[] }
   | { kind: 'pinOne'; scope: string[]; pin: string; on: boolean }
   | { kind: 'pin'; scope: string[]; category: Category; on: boolean }
-  | { kind: 'add'; scope: string[]; type: string }
+  | { kind: 'add'; scope: string[]; type: string; id?: string; knobs?: Record<string, number> }
   | { kind: 'make'; scope: string[]; modules: string[]; macros: MacroPick[]; label?: string }
   | { kind: 'unmake'; scope: string[]; device: string };
 
@@ -996,10 +1014,7 @@ export function applyV2(p: PatchV2, e: V2Edit, types?: Record<string, ModuleType
     return p;
   }
   if (e.kind === 'add') {
-    const taken = new Set(inside.modules.map((m) => m.id));
-    let n = 1;
-    while (taken.has(`${e.type}-${n}`)) n++;
-    inside.modules.push({ id: `${e.type}-${n}`, type: e.type, knobs: {} });
+    inside.modules.push({ id: e.id && !inside.modules.some((m) => m.id === e.id) ? e.id : freeModuleId(inside, e.type), type: e.type, knobs: { ...(e.knobs ?? {}) } });
     return p;
   }
   if (e.kind === 'remove') {
@@ -1056,10 +1071,19 @@ function removeModules(p: PatchV2, scope: readonly string[], gone: ReadonlySet<s
   outside.cables = outside.cables.filter((c) => !(c.to.module === device.id && ins.has(c.to.port)) && !(c.from.module === device.id && outs.has(c.from.port)));
 }
 
+/** An id no module at this level has: `<base>-<n>`. */
+export function freeModuleId(p: PatchV2, base: string): string {
+  const taken = new Set(p.modules.map((m) => m.id));
+  let n = 1;
+  while (taken.has(`${base}-${n}`)) n++;
+  return `${base}-${n}`;
+}
+
 /** The types a category's "+" offers (v2), by name. */
 export const typesOf = (cat: Category, types: Record<string, ModuleType>): ModuleType[] =>
   Object.values(types)
-    .filter((t) => categoryOf(t) === cat && t.place !== 'frame' && t.type !== 'music' && t.type !== 'screen')
+    // Music's signals are its own entry (Music ▸), not a type each.
+    .filter((t) => categoryOf(t) === cat && t.place !== 'frame' && t.type !== 'music' && t.type !== 'screen' && !signalOf({ type: t.type }))
     .sort((a, b) => labelOf(a).localeCompare(labelOf(b)));
 
 /** What a connection drawn in the v2 graph makes, where it may: both ends at one level (the scope: the devices both
