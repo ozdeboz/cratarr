@@ -171,12 +171,16 @@ test('the Cables roll: new amounts for the cables into knobs, none of the plumbi
   const p = flatten(toV2(structuredClone(DEFAULTS)));
   const typeOf = new Map(p.modules.map((m) => [m.id, m.type]));
   const rolled = randomizeCables(p, types, { seed: 4242 });
+  const { followsOf } = await import('../src/lib/visuals/engine/follow.ts');
+  const follows = followsOf(p);
   const ids = Object.keys(rolled);
   assert.ok(ids.length > 20, `${ids.length} cables rolled`);
   const PLUMBING = ['vca', 'merge', 'gate', 'shaper', 'ducker', 'meter', 'screen', 'dice'];
   for (const id of ids) {
     const c = p.cables.find((x) => x.id === id)!;
-    assert.ok(!PLUMBING.includes(typeOf.get(c.from.module)!) && !PLUMBING.includes(typeOf.get(c.to.module)!), `${id} is no plumbing`);
+    // A cable through the Loudness Follow is the cable from the signal behind it.
+    const from = follows.get(c.from.module)?.from.module ?? c.from.module;
+    assert.ok(!PLUMBING.includes(typeOf.get(from)!) && (c.to.port === 'in' || !PLUMBING.includes(typeOf.get(c.to.module)!)), `${id} is no plumbing`);
     const v = rolled[id];
     const h = typeof v === 'number' ? v : v.h;
     assert.ok(h >= -1 && h <= 1, `${id}: ${h}`);

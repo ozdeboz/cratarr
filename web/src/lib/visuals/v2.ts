@@ -29,6 +29,7 @@ import { slotKnobOf, slotOf } from './engine/effect-slots';
 import { ASPECT_KNOB, cratarrPatch, modulesOf, type Cable, type Macro, type Module, type Patch } from './patch';
 import { isDevice, READINGS, SHOW_PARTS, type CableV2, type Device, type PatchV2, type PortRef } from './ports';
 import { extraType } from './registry';
+import { modulatorOf } from './modulators/modulators';
 import { makeDevice } from './device-make';
 
 /** A cable as the conversion carries it until the end: how it reads its signal, its speed and its mode still on it; they
@@ -457,8 +458,8 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
   const macros: Macro[] = [...effects.macros, ...rackMacros, ...(wildMacro ? [wildMacro] : [])];
   const wired = toWire(added.modules, added.cables);
   const rack: PatchV2 = { v: 2, modules: [...wired.modules, ...wiring.modules], cables: [...wired.cables, ...wiring.cables], macros, pins: effects.pins };
-  // The loudness's VCAs in sight (`follow`): off until the engine reads a cable through one as it read the normal.
-  const follows = opts.follow ? followed(rack) : rack;
+  // The loudness's VCAs in sight (`follow`, on unless asked not to: the engine has no normal).
+  const follows = opts.follow !== false ? followed(rack) : rack;
   return opts.devices === false ? follows : packed(follows);
 }
 
@@ -486,7 +487,10 @@ function followed(p: PatchV2): PatchV2 {
   };
   for (const c of p.cables) {
     // A picture's cable (picture-wiring.ts) is no value scaled.
-    if (c.depth !== undefined || c.id.startsWith('picture:')) {
+    // Nor is an ADSR's gate (its strikes are Music's) or a modulator's input: the normal never scaled them.
+    const toType = p.modules.find((m) => m.id === c.to.module)?.type ?? '';
+    const mod = modulatorOf(toType);
+    if (c.depth !== undefined || c.id.startsWith('picture:') || (c.to.port === 'gate' && toType === 'adsr') || (mod && [...(mod.inputs ?? []), ...(mod.triggers ?? [])].includes(c.to.port))) {
       cables.push(c);
       continue;
     }

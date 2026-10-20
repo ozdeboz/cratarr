@@ -569,7 +569,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     const f = c.from;
     const type = known ?? typeOf.get(f.module) ?? f.module;
     // A VCA's or a Merge's output, as it is (a Merge's one channel whichever is asked); a Ducker's too.
-    if (PROCESSORS.has(type)) return channelsOf(f.module)[CHANNELLED.has(type) ? (f.channel ?? 0) : 0];
+    if (PROCESSORS.has(type)) return channelsOf(f.module)[channelled(type, f.module) ? (f.channel ?? 0) : 0];
     if (type === 'meter') return opts.meters ? finite(METER_OF[f.port]?.(opts.meters)) : 0;
     if (type === 'screen' && f.port === 'guard') return guard;
     if (type === 'adsr') {
@@ -640,10 +640,10 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     ADSR_KNOBS.retrigger = finite(k.retrigger, 0);
     return adsrOf(STRUCK, ADSR_KNOBS) * finite(k.amount, 1);
   }
-  /** What scales a cable: its depth's value (null: nothing, 1; undefined: the Envelope's, normalled). */
+  /** What scales a cable: its depth's value (none: nothing, 1). The loudness scaling is in sight now, the Loudness
+   *  Follow's VCAs (0057 §7f; toV2), no normal. */
   const depthOf = (c: CableV2): number => {
-    if (c.depth === null) return 1;
-    if (c.depth === undefined) return env.out;
+    if (c.depth === null || c.depth === undefined) return 1;
     return clamp(finite(valueAt(c.depth), 1), 0, 1);
   };
   const valueAt = (r: PortRef): number => {
@@ -668,7 +668,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     cables.flatMap((c) => {
       if (c.from.channel !== undefined) return [c];
       const type = typeOf.get(c.from.module) ?? c.from.module;
-      const poly = (type === 'music' && BAND_PORTS.has(readingOf(c.from.port).signal)) || type === 'adsr' || CHANNELLED.has(type);
+      // A VCA is polyphonic only where something polyphonic reaches it (a follow VCA on one signal is one channel).
+      const poly = (type === 'music' && BAND_PORTS.has(readingOf(c.from.port).signal)) || (type === 'adsr' && !trackAdsr(c.from.module, typeOf, into)) || (type === 'vca' ? plan.polyphonic.has(c.from.module) : CHANNELLED.has(type));
       return poly ? Array.from({ length: CHANNELS }, (_, ch) => ({ ...c, from: { ...c.from, channel: ch } })) : [c];
     });
   // The Screen's flash guard (WCAG 2.3.1; claude-632's limiter on the output, step 3): fixed, keyed by the flashes the
@@ -679,6 +680,9 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
       : 1;
   // The VCAs', Merges' and Duckers' channels: each one's buffer, last frame's until it is worked out this frame.
   const channelsOf = (id: string) => st.poly[id] ?? NO_CHANNELS;
+  /** Whether a processor's output differs by channel (a VCA only where something polyphonic reaches it: else its one
+   *  channel, whichever is asked). */
+  const channelled = (type: string, id: string) => CHANNELLED.has(type) && (type !== 'vca' || plan.polyphonic.has(id));
   /** What a cable gives a port on channel `ch` (a knob's cable's rule: its curve at its source's x, times its depth
    *  and its walk); a VCA's or a Merge's source taken as it is, along its straight line where the value is a number. */
   // (A channel-less cable from a band's signal comes as its channel's, from the plan.)
@@ -687,7 +691,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     if (entry.v !== c.value) [entry.v, entry.shape] = [c.value, shapeOf(c.value)];
     const sh = entry.shape;
     if (PROCESSORS.has(type)) {
-      const v = channelsOf(c.from.module)[CHANNELLED.has(type) ? (c.from.channel ?? ch) : 0];
+      const v = channelsOf(c.from.module)[channelled(type, c.from.module) ? (c.from.channel ?? ch) : 0];
       return (sh.table ? heightOf(sh, clamp(v, 0, 1)) : sh.end * v) * depthOf(c) * (sh.walks ? walkOf(c) : 1);
     }
     const x = xOf(c, type);

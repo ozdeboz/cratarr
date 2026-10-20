@@ -14,7 +14,7 @@ const copy = (s: VisualSettings): VisualSettings => JSON.parse(JSON.stringify(s)
 test('the routes as cables: loudness from the Loudness (unscaled), track from an ADSR on a new track, the rest from Music as the routes read it', () => {
   const s = copy(DEFAULTS);
   s.routes = { [routeKey('loudness', null, 'size')]: 0.6, [routeKey('track', null, 'trails')]: -1, [routeKey('hits', 2, 'lights')]: 1, [routeKey('beat', null, 'size')]: 0 };
-  const v = toV2(s);
+  const v = toV2(s, { follow: false });
   const by = Object.fromEntries(v.cables.map((c) => [c.id, c]));
   assert.deepEqual(by[routeKey('loudness', null, 'size')].from, { module: 'envelope', port: 'level' });
   assert.equal(by[routeKey('loudness', null, 'size')].depth, null);
@@ -51,7 +51,7 @@ test('the extras come as they are: their modules, and their cables from a modula
   const s = copy(DEFAULTS);
   const calm = CHAINS.find((c) => c.id === 'calm')!;
   s.extra = JSON.parse(JSON.stringify(calm.extra));
-  const v = toV2(s);
+  const v = toV2(s, { follow: false });
   const ids = new Set(v.modules.map((m) => m.id));
   for (const m of calm.extra.modulators) assert.ok(ids.has(m.id), m.id);
   const by = Object.fromEntries(v.cables.map((c) => [c.id, c]));
@@ -81,7 +81,7 @@ test("the bands' Linger: Music's hold and the hits' ADSR release; a hits route f
   const s = copy(DEFAULTS);
   s.lighting = [0.2, 0.18, 0.15, 0.13, 0.1, 0.08];
   s.routes = { [routeKey('hits', 2, 'lights')]: 1, [routeKey('level', 1, 'hue')]: 0.5 };
-  const v = toV2(s);
+  const v = toV2(s, { follow: false });
   const m = Object.fromEntries(v.modules.map((x) => [x.id, x]));
   assert.equal(m.music.knobs['hold.3'], 0.13);
   assert.equal(m.adsr.knobs['release.2'], 0.15);
@@ -102,7 +102,7 @@ test("an extra cable from the hits keeps its reading: its own ADSR, the gate rea
   s.extra = JSON.parse(JSON.stringify(pulse.extra));
   s.routes = { [routeKey('hits', 0, 'lights')]: 1 };
   // The wiring as converted, before Hit Lights packs the ADSRs into a device.
-  const v = toV2(s, { devices: false });
+  const v = toV2(s, { devices: false, follow: false });
   const by = Object.fromEntries(v.cables.map((c) => [c.id, c]));
   assert.deepEqual(by['pulse-kick-in'].from, { module: 'adsr-track', port: 'out', channel: 1 });
   assert.deepEqual(by['adsr-track-gate'].from, { module: 'music', port: 'hits' });
@@ -128,7 +128,7 @@ test("a column's scale goes into its cables' amounts (curves' heights too), the 
     [routeKey('beat', null, 'rotation')]: { h1: [1 / 3, 0.1], h2: [2 / 3, 0.4], h: 0.8 },
     [routeKey('beat', null, 'stir')]: 1,
   };
-  const v = toV2(s);
+  const v = toV2(s, { follow: false });
   const by = Object.fromEntries(v.cables.map((c) => [c.id, c]));
   assert.equal(by[routeKey('loudness', null, 'size')].value, 0.3);
   assert.deepEqual(by[routeKey('beat', null, 'rotation')].value, { h1: [1 / 3, 0.2], h2: [2 / 3, 0.8], h: 1.6 });
