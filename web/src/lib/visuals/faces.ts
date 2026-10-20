@@ -16,6 +16,8 @@ export type LiveFrame = {
   beat: FrameInfo['beat'];
   /** Each output now: by module id (one output) or `module.port`, a channel's `module.port.<n>`. */
   outputs: Readonly<Record<string, number>>;
+  /** Each points output this frame (the engine's `points`: a Grid's, x and y in 0..1), by module id. */
+  points?: Readonly<Record<string, readonly { x: number; y: number }[]>>;
 };
 
 

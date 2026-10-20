@@ -51,6 +51,7 @@ export function wiresV2(): PatchV2 {
       m('bend', 'bend'),
       m('mix', 'mix'),
       m('gate', 'gate'),
+      m('grid', 'grid'),
       m('screen', 'screen'),
     ],
     cables: [

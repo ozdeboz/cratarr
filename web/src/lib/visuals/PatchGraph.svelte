@@ -48,7 +48,8 @@
   import type { PatchV2, PortType } from './ports';
   import type { LiveFaces } from './faces.svelte';
   import { CATEGORIES, CATEGORY_LABEL } from './rack';
-  import { Thumbs, type Thumbnailer } from './face/face';
+  import { previewOf, previewTarget, Thumbs, type Thumbnailer } from './face/face';
+  import Preview from './face/Preview.svelte';
   import { MUSIC_SIGNALS, musicModuleFor, SIGNAL_OUT } from './music-signals';
   import { fits } from './ports';
   import {
@@ -717,6 +718,15 @@
     const k = to?.kind === 'module' ? (to.knobs.find((x) => x.id === port)?.label ?? to.v2.ports.in.find((x) => x.id === port)?.label ?? port) : port;
     return `${nodeName(e.source)} → ${nodeName(e.target)} · ${k}`;
   }
+  // The one preview (the owner, 71.1): of the one module picked, or (nothing picked) the one last tapped.
+  let tapped = $state<string | null>(null);
+  const preview = $derived.by(() => {
+    const id = previewTarget(picked, pickedCables.length, tapped);
+    const d = id ? dataOf(id) : undefined;
+    const kind = d?.kind === 'module' && !d.device ? previewOf(d.v2.ports) : null;
+    return id && d?.kind === 'module' && kind ? { path: path(id).join('/'), label: d.label, kind } : null;
+  });
+
   // The module browser: its search; where a module added goes (the view's centre, or right of the one picked).
   let query = $state('');
   const music = $derived.by(() => {
@@ -790,9 +800,10 @@
       if (event.shiftKey || event.ctrlKey || event.metaKey) return;
       if (edge.type === 'cable') openIt(edge.id);
     }}
-    onnodeclick={({ node }) => selecting && togglePick(node.id)}
+    onnodeclick={({ node }) => (selecting ? togglePick(node.id) : (tapped = node.id))}
     onpaneclick={() => {
       reroute = null;
+      tapped = null;
       if (selecting) endSelect();
     }}
   >
@@ -843,6 +854,9 @@
           >
         {/each}
       </div>
+      {#if preview}
+        <div class="previewbox"><Preview module={preview.path} label={preview.label} kind={preview.kind} live={live?.frame ?? null} thumbs={thumbnail ? thumbs : null} /></div>
+      {/if}
     </Panel>
   </SvelteFlow>
   {#if barShown}
@@ -1117,6 +1131,11 @@
     stroke: var(--patch-bg);
     stroke-width: 1.6px;
     stroke-dasharray: none;
+  }
+  .previewbox {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 10px;
   }
   .topleft {
     display: flex;

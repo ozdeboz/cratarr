@@ -21,7 +21,8 @@
   const query = new URLSearchParams(location.search);
   const types = labTypes();
   // ?split: Music's hub split into a module a signal beside what each feeds (what toV2 will do).
-  const first = query.has('wires') ? wiresV2() : labV2();
+  // ?empty: an empty rack (its "+" the way in).
+  const first = query.has('empty') ? { v: 2 as const, modules: [], cables: [], macros: [], pins: [] } : query.has('wires') ? wiresV2() : labV2();
   let store = $state.raw(newStore(query.has('split') ? splitMusic(first) : first));
   let at = $state<string[]>([]);
   let positions = $state.raw<Record<string, XY>>({});
@@ -117,7 +118,11 @@
         if (m.id === 'bands') for (let c = 0; c < 6; c++) outputs[`${m.id}.out.${c}`] = env(((beats - c / 3 + 60) % 2) / 2, k, 0.08);
         else outputs[m.id] = env(beat.since, k, 0.2);
       }
-      live.offer(now, () => ({ time: t, beat, outputs }));
+      // A Grid's points stood in for (the engine's frame gives them in the app): a lattice, breathing.
+      const points: Record<string, { x: number; y: number }[]> = {};
+      for (const m of store.now.modules)
+        if (m.type === 'grid') points[m.id] = Array.from({ length: 64 }, (_, i) => ({ x: 0.5 + ((i % 8) - 3.5) * 0.11 * (1 + 0.15 * Math.sin(t)), y: 0.5 + (Math.floor(i / 8) - 3.5) * 0.11 * (1 + 0.15 * Math.cos(t)) }));
+      live.offer(now, () => ({ time: t, beat, outputs, points }));
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);

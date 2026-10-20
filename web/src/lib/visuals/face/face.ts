@@ -30,13 +30,35 @@ export const DEFAULT_FACES: Readonly<Record<string, readonly FacePart[]>> = {
 
 const PICTURES: ReadonlySet<PortType> = new Set<PortType>(['picture', 'light']);
 
-/** A module type's face: declared, else the default for its type, else (a picture module) a thumbnail of its picture
- *  output, else none. */
-export function faceOf(t: (ModuleType & { face?: readonly FacePart[] }) | undefined, ports: Ports | null): FacePart[] {
+/** A module type's face: declared, else the default for its type, else none. (A picture's or points' preview is not a
+ *  face part: one popover shows it, for the module picked: previewOf.) */
+export function faceOf(t: (ModuleType & { face?: readonly FacePart[] }) | undefined, _ports?: Ports | null): FacePart[] {
   if (t?.face) return [...t.face];
   if (t && DEFAULT_FACES[t.type]) return [...DEFAULT_FACES[t.type]];
-  const pic = ports?.out.find((o) => PICTURES.has(o.type));
-  return pic ? [{ kind: 'thumb', of: pic.id }] : [];
+  return [];
+}
+
+/** What a module's preview shows (the owner, 71.1: only the module picked): its picture (or light) output through the
+ *  renderer's thumbnail; else its points output as dots (no GPU pass); else none. */
+export function previewOf(ports: Ports | null | undefined): 'picture' | 'points' | null {
+  if (ports?.out.some((o) => PICTURES.has(o.type))) return 'picture';
+  if (ports?.out.some((o) => o.type === 'points')) return 'points';
+  return null;
+}
+/** Whose preview shows: the one module picked alone (select mode), else (nothing picked) the one last tapped. */
+export function previewTarget(picked: readonly string[], cables: number, tapped: string | null): string | null {
+  if (picked.length === 1 && !cables) return picked[0];
+  return picked.length || cables ? null : tapped;
+}
+/** A module's points this frame (the engine's frame, by its path or by its id after the last `/`). */
+export function pointsOf(frame: { points?: Readonly<Record<string, readonly { x: number; y: number }[]>> } | null | undefined, path: string): readonly { x: number; y: number }[] | null {
+  const all = frame?.points;
+  if (!all) return null;
+  if (all[path]) return all[path];
+  const last = path.slice(path.lastIndexOf('/') + 1);
+  if (all[last]) return all[last];
+  for (const k in all) if (k.endsWith(`/${last}`)) return all[k];
+  return null;
 }
 
 /** The parts drawn in the face's own area (a light on an output sits beside that output instead). */

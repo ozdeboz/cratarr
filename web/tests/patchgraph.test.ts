@@ -759,8 +759,22 @@ test('the standard face (face/face.ts): declared, else by type, else a picture m
   assert.deepEqual(of('random'), [{ kind: 'scope', of: 'out' }]);
   assert.deepEqual(of('clock').map((p) => [p.kind, p.of]), [['light', 'beat'], ['light', 'bar'], ['light', 'phrase']]);
   assert.ok(of('music').length >= 4 && of('music').every((p) => p.kind === 'light'), 'Music: its triggers lit');
-  assert.deepEqual(of('glow'), [{ kind: 'thumb', of: 'picture' }], 'a picture module: its thumbnail');
-  assert.deepEqual(of('flame'), [{ kind: 'thumb', of: 'light' }], 'the flame’s light');
+  assert.deepEqual(of('glow'), [], 'a picture module: no tile (its preview is the popover’s)');
+  assert.deepEqual(ff.previewOf(ports('glow')), 'picture');
+  assert.deepEqual(ff.previewOf(ports('flame')), 'picture', 'the flame’s light');
+  assert.deepEqual(ff.previewOf(ports('grid')), 'points', 'a Grid: its points as dots');
+  assert.equal(ff.previewOf(ports('lfo')), null);
+  // Whose preview: the one module picked alone; nothing picked, the one last tapped; else none.
+  assert.equal(ff.previewTarget(['a'], 0, 'b'), 'a');
+  assert.equal(ff.previewTarget([], 0, 'b'), 'b');
+  assert.equal(ff.previewTarget(['a', 'c'], 0, 'b'), null);
+  assert.equal(ff.previewTarget(['a'], 1, 'b'), null);
+  assert.equal(ff.previewTarget([], 0, null), null);
+  // Its points from the engine's frame, by path or by its id after the last '/'.
+  const pts = [{ x: 0.5, y: 0.5 }];
+  assert.equal(ff.pointsOf({ points: { 'dev/grid-1': pts } }, 'grid-1'), pts);
+  assert.equal(ff.pointsOf({ points: { 'grid-1': pts } }, 'dev/grid-1'), pts);
+  assert.equal(ff.pointsOf({}, 'grid-1'), null);
   assert.deepEqual(of('sequencer'), [], 'none');
   // Lights on outputs sit beside them, not in the area; the area's height by its parts.
   assert.deepEqual(ff.areaParts(of('gate'), ['out']), [{ kind: 'scope', of: 'in', threshold: 'above' }]);
@@ -772,7 +786,7 @@ test('the standard face (face/face.ts): declared, else by type, else a picture m
   assert.equal(dataOf(g, 'clock').face?.parts.length, 3);
   assert.equal(faceHeightOf(dataOf(g, 'clock').face, dataOf(g, 'clock').outs.map((o) => o.id)), 0);
   assert.ok(faceHeightOf(dataOf(g, 'vca').face) > 0);
-  assert.equal(dataOf(g, 'glow').face?.parts[0].kind, 'thumb');
+  assert.equal(dataOf(g, 'glow').face, null, 'no tile on the node');
   assert.equal(labelOf({ type: 'flash', label: 'Flash' }), 'Accent');
 });
 
