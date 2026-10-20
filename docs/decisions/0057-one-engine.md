@@ -83,8 +83,8 @@ Each of today's hidden behaviours becomes a module with ports, in the graph:
 | Module | Kind | What it is today |
 |---|---|---|
 | **Music** | source of values and triggers | the analysis: the whole track's signals, each band's level, hits and envelope; reference and speed per cable (0056) |
-| **Track** | source | a new track's pulse and its seed: a new track is a seeded Randomize of the patch (§4e) |
-| **Loudness** (type `envelope`) | modulator | the loudness as heard over a fifth of a second (Intensity sets how far it counts); normalled into every cable's depth |
+| ~~Track~~ | — | folded into Music (§7f): its New track trigger and Track seed |
+| **Envelope Follower** (type `envelope`) | modulator | the loudness as heard over a fifth of a second (Intensity sets how far it counts); keys the Loudness Follow device's VCA (§7f), normalled into nothing |
 | **Clock** | modulator | the tempo's turning clock (once round in 32 beats at Speed); its phase feeds whatever turns |
 | **Flash** | modulator, one per target | the course-and-swing filter (a slow course, Flash's share of the swing about it) |
 | **Random** (the walks) | modulator | drift.ts's Look and Behaviour walks: no module of their own (the owner: "we already have walks … we have control generators"); a Random cabled where the walk acts. Drift is renamed Random, as VCV, Vital and Bitwig name it, with a Shape knob from smooth (Drift as it was) to stepped (a random sample-and-hold) |
@@ -251,7 +251,8 @@ come later** (the owner):
   lighting as it runs, the Sequencer's step.
 - A knob's "+ Add" offers "New ▸ LFO / ADSR / Sequencer / Looper": the module and its cable in one step, synced to
   the Clock.
-- The loudness follower, so as not to be confused with the ADSR, is named Loudness.
+- The loudness follower is named **Envelope Follower** (the owner, 2026-10-20; the standard name: "Envelope" clashes with
+  Music's per-band Envelope output and with the ADSR, an envelope generator).
 
 ### 4c. Grids
 
@@ -480,6 +481,30 @@ what a modular system does:
 
 Kept on purpose, documented: reduced motion (the system's accessibility setting, as the flash guard is safety), and
 each module's own inner maths (the flame's parts and light ranges).
+
+### 7f. No special modules: common patterns as devices
+
+The owner, 2026-10-20 (through claude-632's session): "yes, folded into music"; "yes, no special module needs to
+remain"; on the follower's normal into every depth, "Yes, please"; on shipping the patterns as devices, "agree". These
+supersede what §3, §4b, §4e and §7e say of Track, the Loudness and the depth normal.
+
+- **Track folds into Music.** Music gives **New track** (a trigger) and **Track seed** (a fixed number per track). A
+  track's look is a standard **Random** (sample-and-hold) triggered by New track and seeded by the Track seed, so the
+  same track keeps the same look. No Track module, no Track logic.
+- **No depth normal.** A cable has no depth unless one is cabled. The loudness scales once at the source: a
+  polyphonic **VCA on Music's outputs** (the band rows through as channels), keyed by the Envelope Follower; everything
+  from Music goes through it. Loudness's own row bypasses it, as a visible cable from Music directly. A modulator that
+  followed the loudness gets the same VCA at its output. The Follower's out-0-when-paused goes: pausing is the one
+  Playing → VCA → Tone map cable. The picture stays identical (cable × envelope = VCA(source) × cable), proved by the
+  picture harness.
+- **Common patterns ship as devices**, and the default patch is built from them. No special code: each opens, edits,
+  and can be unmade into loose modules. toV2 emits them, so converted patches show them:
+  - **Loudness Follow:** Envelope Follower → the VCA on Music's outputs (macros Intensity, Time);
+  - **Track Look:** Music's New track → Random (sample-and-hold, seeded per track) → the look's knobs;
+  - **Pause Dim:** Music's Playing → VCA → Tone map's level;
+  - **Calm:** Meter → a Ducker per busy kind → the knobs' gain inputs (§7e's sidechain, as a device; Wild its macro);
+  - **Hit Lights:** Music's Hits → ADSR → the flame's lights (Linger);
+  - Feedback Tunnel and Echo Trails are among the nine already (§6b).
 
 ### 8. Seeing it work
 
