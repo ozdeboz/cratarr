@@ -130,7 +130,7 @@ export const DEVICES: readonly Device[] = [
   device(
     'grid-particles',
     'Grid Particles',
-    [m('grid', 'grid', { lattice: 1, count: 24, spacing: 0.25 }), m('dot', 'shapes', { count: 1, sides: 6, radius: 0.06, fill: 0.8, opacity: 0.9 }), m('each', 'instance', { amount: 1 })],
+    [m('grid', 'grid', { lattice: 1, count: 24, spacing: 0.25 }), m('dot', 'shapes', { count: 1, spread: 0, sides: 6, radius: 0.06, fill: 0.8, opacity: 0.9 }), m('each', 'instance', { amount: 1 })],
     [c('grid', 'points', 'each', 'points'), c('dot', 'picture', 'each', 'picture')],
     [],
     [port('picture', 'Picture', 'each', 'picture')],

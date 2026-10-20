@@ -93,7 +93,13 @@ export type RendererOptions = { random?: () => number; now?: () => number };
 /** What the picture past the flame takes each frame, beside the patch (setPatch): each module's knobs as the engine and
  *  the morph give them now (`knobs`, by the module's id; none: the patch's own), where a knob's morph is going
  *  (`target`; none: where it is), and the frame (the sources' time, beat, signals and sound). */
-export type PictureInputs = { knobs: (id: string) => Record<string, number> | undefined; target?: (id: string, knob: string) => number; frame: FrameInfo };
+export type PictureInputs = {
+  knobs: (id: string) => Record<string, number> | undefined;
+  target?: (id: string, knob: string) => number;
+  frame: FrameInfo;
+  /** The points a module gives this frame (a Grid's: the engine's `points`, by its id), for Instance and Fold. */
+  points?: (moduleId: string) => readonly { x: number; y: number }[] | undefined;
+};
 
 /** The page's extras of today (a v1 PatchExtra): its layers past the flame and the picture's own loop as drawn, each
  *  module's knobs, the frame, the flame layer's share and where its morph is going. */
@@ -132,6 +138,8 @@ export class FlameRenderer {
   /** Whether the lazy rules cut the flame last frame; whether the last frame was blank. */
   private cut = false;
   private blanked = false;
+  /** Each Instance's and Fold's points by the module that gives them. */
+  private pointsFrom = new Map<string, string>();
   /** The Transforms on the flame's light (the points' camera's view), in order. */
   private lightTransforms: string[] = [];
   /** The pictures this frame has of its own, by module (flattened ids), at the buffer's size: for the graph's
@@ -204,7 +212,11 @@ export class FlameRenderer {
     this.compiled = stages ? c : null;
     this.errors = stages ? c.errors : [...c.errors, 'This version draws the picture in its own order only.'];
     this.stages = new Set(stages ?? STAGES);
-    this.knobsIn = new Map(flatten(p).modules.map((m) => [m.id, m.knobs]));
+    const flat = flatten(p);
+    this.knobsIn = new Map(flat.modules.map((m) => [m.id, m.knobs]));
+    // What gives each Instance its points and each Fold its grid.
+    const typeOfId = new Map(flat.modules.map((m) => [m.id, m.type]));
+    this.pointsFrom = new Map(flat.cables.filter((c) => (c.to.port === 'points' && typeOfId.get(c.to.module) === 'instance') || (c.to.port === 'grid' && typeOfId.get(c.to.module) === 'fold')).map((c) => [c.to.module, c.from.module]));
     this.composed = stages ? composeOf(c) : null;
     this.lightTransforms = stages ? c.order.filter((n) => n.type === 'transform' && stageOf(n) === 'points').map((n) => n.id) : [];
     this.walker?.prune(this.composed?.ids ?? new Set());
@@ -330,7 +342,8 @@ export class FlameRenderer {
     const info = given?.frame ?? { dt: since, time: at / 1000, beat: null, signals: () => 0, waveform: null };
     // Without the flame drawn, the compose step starts from nothing where Show's picture would be.
     const effects = { t: fx?.t ?? info.time, beat: fx?.beat, frames: this.fxFrames, fluid: this.carry.fluid };
-    const picture = into && walking ? this.walker!.run(walking, drawn ? into.tex : null, into.w, into.h, knobsAt, info, effects) : null;
+    const pointsOf = (id: string) => (this.pointsFrom.has(id) ? (given?.points?.(this.pointsFrom.get(id)!) ?? null) : null);
+    const picture = into && walking ? this.walker!.run(walking, drawn ? into.tex : null, into.w, into.h, knobsAt, info, effects, pointsOf) : null;
     if (picture) this.screen.toScreen(picture, screenWidth, screenHeight);
     else this.fin.idle();
     this.pictures = picture ? new Map([...this.walker!.shown, [this.compiled!.screen!, picture]]) : new Map();

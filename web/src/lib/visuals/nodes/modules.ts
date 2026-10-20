@@ -12,9 +12,10 @@ import { keptPerSecond } from '../loopmods';
 import { inverse, toScreen, transformOf } from '../transform';
 import { none } from './shared';
 
-/** A module's pass: its picture inputs by port (`picture`, `by`), drawn into `out` at `width` × `height`. */
+/** A module's pass: its picture inputs by port (`picture`, `by`), drawn into `out` at `width` × `height`; the points
+ *  cabled into it (Instance's, Fold's grid: points-pictures.ts), where it reads them. */
 export type ModuleNode = {
-  draw(gl: WebGL2RenderingContext, inputs: { picture: WebGLTexture | null; by?: WebGLTexture | null }, out: WebGLFramebuffer, width: number, height: number, knobs: Record<string, number>, frame: FrameInfo): void;
+  draw(gl: WebGL2RenderingContext, inputs: { picture: WebGLTexture | null; by?: WebGLTexture | null }, out: WebGLFramebuffer, width: number, height: number, knobs: Record<string, number>, frame: FrameInfo, points?: readonly { x: number; y: number }[] | null): void;
   dispose(gl: WebGL2RenderingContext): void;
 };
 

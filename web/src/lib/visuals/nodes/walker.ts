@@ -20,6 +20,8 @@ import { program } from '../sources/gl';
 import { createNode, nodeOf, PICTURE_NODES, type ModuleNode } from './modules';
 import { outputsOf } from '../thumbnails';
 import { transformIdle } from '../transform';
+import type { Point } from '../points-pictures';
+import { POINTS_NODES } from './points-pictures';
 
 type Target = { tex: WebGLTexture; fbo: WebGLFramebuffer };
 /** A loop drawn as one pass, by its Mix: its Feedback, and the Warps and Keeps between them. */
@@ -131,7 +133,7 @@ void main() { o = texture(uIn, vUv); }`);
   }
 
   /** The walk drawn from `picture` (`from`'s; null: nothing, black): the texture the effects or the screen read next. */
-  run(w: Walk, given: WebGLTexture | null, width: number, height: number, knobs: (id: string) => Record<string, number>, frame: FrameInfo, effects: FxFrame): WebGLTexture {
+  run(w: Walk, given: WebGLTexture | null, width: number, height: number, knobs: (id: string) => Record<string, number>, frame: FrameInfo, effects: FxFrame, points: (id: string) => readonly Point[] | null = () => null): WebGLTexture {
     this.sized(width, height);
     if (this.given && ![...this.state.held.values()].some((h) => h.t === this.given)) this.pool.give(this.given);
     this.given = null;
@@ -153,7 +155,7 @@ void main() { o = texture(uIn, vUv); }`);
         let own: Target | void = undefined;
         if (r) own = this.fxPass(n.id, r, w.fx, inputs.get('picture')?.tex ?? picture, inputs.get('trails')?.tex ?? null, t, effects);
         else if (l) this.loopPass(l, inputs.get('in2')?.tex ?? picture, t!, knobs, frame);
-        else this.draw(n, inputs, t!, knobs(n.id), frame);
+        else this.draw(n, inputs, t!, knobs(n.id), frame, points(n.id));
         if (own ?? t) draws.push([n.id, (own ?? t)!]);
         return own;
       },
@@ -167,13 +169,13 @@ void main() { o = texture(uIn, vUv); }`);
     return got.tex;
   }
 
-  private draw(n: PictureNode, inputs: Map<string, Target | null>, out: Target, k: Record<string, number>, frame: FrameInfo) {
+  private draw(n: PictureNode, inputs: Map<string, Target | null>, out: Target, k: Record<string, number>, frame: FrameInfo, points: readonly Point[] | null) {
     const gl = this.gl;
     const { w, h } = this.spec;
     if (n.type === 'mix') return this.mix(inputs, out, k);
     const node = this.node(n.id, n.type);
     if (!node) return;
-    node.draw(gl, { picture: (inputs.get('picture') ?? inputs.get('in'))?.tex ?? null, by: inputs.get('by')?.tex ?? null }, out.fbo, w, h, k, withInputs(n.type, frame));
+    node.draw(gl, { picture: (inputs.get('picture') ?? inputs.get('in'))?.tex ?? null, by: inputs.get('by')?.tex ?? null }, out.fbo, w, h, k, withInputs(n.type, frame), points);
   }
 
   /** A run of effects in one pass (Finish's), from `input`, its Echo trailing `trails` (a Feedback's) or its own last
@@ -313,7 +315,7 @@ void main() { o = texture(uIn, vUv); }`);
       let node: ModuleNode | null = null;
       try {
         const source = SOURCES.has(type) ? createSource(type, this.gl) : null;
-        node = source ? nodeOf(source) : type in MODULE_MAKERS ? nodeOf(MODULE_MAKERS[type](this.gl)) : PICTURE_NODES.has(type) ? createNode(type, this.gl) : null;
+        node = source ? nodeOf(source) : type in MODULE_MAKERS ? nodeOf(MODULE_MAKERS[type](this.gl)) : type in POINTS_NODES ? POINTS_NODES[type](this.gl) : PICTURE_NODES.has(type) ? createNode(type, this.gl) : null;
       } catch (e) {
         console.warn('Visuals: a module could not be made here', type, e);
       }
