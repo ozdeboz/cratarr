@@ -18,6 +18,7 @@ import type { PortRef } from '../ports';
 import { createSource, SOURCE_TYPES } from '../sources/index';
 import { program } from '../sources/gl';
 import { createNode, nodeOf, PICTURE_NODES, type ModuleNode } from './modules';
+import { outputsOf } from '../thumbnails';
 
 type Target = { tex: WebGLTexture; fbo: WebGLFramebuffer };
 /** A loop drawn as one pass, by its Mix: its Feedback, and the Warps and Keeps between them. */
@@ -81,6 +82,8 @@ export class Walker {
   private fxPrograms = new Map<string, WebGLProgram | null>();
   private clocks = new Map<string, EffectClocks>();
   private trails = new Map<string, Target>();
+  /** Each module's picture of its own as the last walk left it (for a thumbnail: thumbnails.ts). */
+  shown = new Map<string, WebGLTexture>();
 
   constructor(gl: WebGL2RenderingContext, fin: Finish, now: () => number) {
     this.gl = gl;
@@ -136,19 +139,24 @@ void main() { o = texture(uIn, vUv); }`);
     // What the walk gives on is read after it: one reader more, so it is not given back within.
     p.readers.set(outKey(out), (p.readers.get(outKey(out)) ?? 0) + 1);
     const outside: Target = { tex: picture, fbo: null as unknown as WebGLFramebuffer };
+    const draws: [string, Target][] = from && given ? [[from, outside]] : [];
     const io = {
       spec: (n: PictureNode) => (fused.has(n.id) ? null : runs.get(n.id)?.own ? ('own' as const) : this.spec),
       draw: (n: PictureNode, inputs: Map<string, Target | null>, t: Target | null) => {
         if (fused.has(n.id)) return;
         const r = runs.get(n.id);
-        if (r) return this.fxPass(n.id, r, w.fx, inputs.get('picture')?.tex ?? picture, inputs.get('trails')?.tex ?? null, t, effects);
         const l = loops.get(n.id);
-        if (l) return this.loopPass(l, inputs.get('in2')?.tex ?? picture, t!, knobs, frame);
-        this.draw(n, inputs, t!, knobs(n.id), frame);
+        let own: Target | void = undefined;
+        if (r) own = this.fxPass(n.id, r, w.fx, inputs.get('picture')?.tex ?? picture, inputs.get('trails')?.tex ?? null, t, effects);
+        else if (l) this.loopPass(l, inputs.get('in2')?.tex ?? picture, t!, knobs, frame);
+        else this.draw(n, inputs, t!, knobs(n.id), frame);
+        if (own ?? t) draws.push([n.id, (own ?? t)!]);
+        return own;
       },
       copy: (a: Target, b: Target) => this.copied(a, b),
     };
     const values = walk(p, this.pool, io, this.state, new Map(from ? [[from, outside]] : []));
+    this.shown = new Map([...outputsOf(draws, p.alias)].map(([id, t]) => [id, t.tex]));
     const got = values.get(out.module) ?? null;
     if (!got || got === outside) return picture;
     this.given = got;
@@ -319,6 +327,7 @@ void main() { o = texture(uIn, vUv); }`);
     this.clocks.clear();
     if (this.given) this.pool.give(this.given);
     this.state = newWalkState();
+    this.shown.clear();
     this.given = null;
   }
 
@@ -334,6 +343,7 @@ void main() { o = texture(uIn, vUv); }`);
     if (this.black) this.free(this.black);
     this.black = null;
     this.state = newWalkState();
+    this.shown.clear();
     this.trails.clear();
     this.given = null;
     this.spec = { ...this.spec, w: width, h: height };
