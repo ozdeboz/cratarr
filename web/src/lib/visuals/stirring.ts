@@ -42,7 +42,7 @@ export type StirInput = {
   t: number;
   dt: number;
   amount: number;
-  parts: ([number, number] | null)[];
+  parts: readonly (readonly [number, number] | null)[];
   turns: number[];
   lights: number[];
   level: number[];
