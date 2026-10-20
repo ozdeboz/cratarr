@@ -27,6 +27,7 @@ import { Light } from './nodes/light';
 import { Meter } from './nodes/meter';
 import { FlamePoints } from './nodes/points';
 import { Screen } from './nodes/screen';
+import { Thumbs } from './nodes/thumbs';
 import { Show } from './nodes/show';
 
 /** Everything the nodes read in a frame, as one (the frozen renderer's look; chain-params.ts groups it by node). */
@@ -130,6 +131,11 @@ export class FlameRenderer {
   /** Whether the lazy rules cut the flame last frame; whether the last frame was blank. */
   private cut = false;
   private blanked = false;
+  /** The pictures this frame has of its own, by module (flattened ids), at the buffer's size: for the graph's
+   *  thumbnails. */
+  private pictures = new Map<string, WebGLTexture>();
+  private picturesAt: [number, number] = [0, 0];
+  private thumbs: Thumbs | null = null;
   errors: string[] = [];
   /** The context, for what draws beside the flame (the compositor). */
   get context(): WebGL2RenderingContext {
@@ -198,6 +204,7 @@ export class FlameRenderer {
     this.knobsIn = new Map(flatten(p).modules.map((m) => [m.id, m.knobs]));
     this.composed = stages ? composeOf(c) : null;
     this.walker?.prune(this.composed?.ids ?? new Set());
+    this.pictures = new Map();
   }
 
   /** Lets go of what modules no longer in the patch held. setPatch does it too; the page of today calls this as its
@@ -320,6 +327,18 @@ export class FlameRenderer {
     const picture = into && walking ? this.walker!.run(walking, drawn ? into.tex : null, into.w, into.h, knobsAt, info, effects) : null;
     if (picture) this.screen.toScreen(picture, screenWidth, screenHeight);
     else this.fin.idle();
+    this.pictures = picture ? new Map([...this.walker!.shown, [this.compiled!.screen!, picture]]) : new Map();
+    if (into) this.picturesAt = [into.w, into.h];
+  }
+
+  /** `moduleId`'s picture this frame (a flattened id: `show/saturate`) onto `canvas`, a sixteenth of the buffer's
+   *  sides, where the frame drew it anyway; false where it has none of its own (fused into a pass, on the light, or
+   *  nothing drawn). One small pass and one small read: the graph asks for one a frame. */
+  thumbnail(moduleId: string, canvas: HTMLCanvasElement): boolean {
+    const picture = this.pictures.get(moduleId);
+    if (!picture) return false;
+    this.thumbs ??= new Thumbs(this.gl);
+    return this.thumbs.draw(picture, this.picturesAt[0], this.picturesAt[1], canvas);
   }
 
   /** The screen black, and what the picture kept from frame to frame let go of: the flame's light, the loops' and the
@@ -337,6 +356,7 @@ export class FlameRenderer {
     this.cut = true;
     this.walker?.forget();
     this.fin.freeFx();
+    this.pictures = new Map();
   }
 
   /** The Meter on what the screen just showed (`viewWidth` x `viewHeight`, as of `t` seconds: nodes/meter.ts):
@@ -377,6 +397,7 @@ export class FlameRenderer {
 
   dispose() {
     this.walker?.dispose();
+    this.thumbs?.dispose();
     for (const n of [this.carry, this.screen, this.meter, this.points, this.light, this.show, this.fin]) n.dispose();
     this.gl.getExtension('WEBGL_lose_context')?.loseContext();
   }
