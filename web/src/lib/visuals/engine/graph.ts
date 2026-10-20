@@ -14,7 +14,7 @@ import type { Levers } from './sidechain';
 import { modulatorOf, type ModulatorType } from '../modulators/modulators';
 import type { Music } from '../music-core';
 import { ASPECT_KNOB, type Knob, type Macro, type Module, type ModuleType, type Modulator, type SignalRef } from '../patch';
-import { COLUMN_OFFSETS, ENGINE_MODULES, READINGS, SHOW_PARTS, type CableV2, type PatchV2, type PortRef } from '../ports';
+import { COLUMN_OFFSETS, ENGINE_MODULES, RANDOMIZE_SCOPES, READINGS, SHOW_PARTS, type CableV2, type PatchV2, type PortRef } from '../ports';
 import { A, ASPECTS, B, BAND_SIGNALS, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, type Aspect, type Given } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
 import { newChain, stepChain, type ChainState } from './chain';
@@ -148,7 +148,13 @@ export type EngineFrame = {
   moments: MomentRequest[];
   /** Each Grid's points (its `points` output, for Instance: claude-632's compositor). */
   points: Record<string, GridPoint[]>;
+  /** The Dice whose trigger rose this frame (0057 §7f): each one's seed and scope, for the page to randomize the patch
+   *  with (randomize.ts: over frames, as one undoable change through the store). */
+  dice: DiceRoll[];
 };
+
+/** A Dice's roll: which, the seed its seed input gives (Music's `seed`: the track's own), its scope. */
+export type DiceRoll = { module: string; seed: number; scope: (typeof RANDOMIZE_SCOPES)[number] };
 
 export type EngineOptions = {
   still: boolean;
@@ -191,6 +197,7 @@ type Plan = {
   grids: Module[];
   /** Each port's cables as a knob takes them (a polyphonic one as one a channel), the same objects each frame. */
   expanded: WeakMap<readonly CableV2[], CableV2[]>;
+  dice: Module[];
   /** Each key's (`module|port`) chain column, where it is one. */
   columns: Map<string, number | undefined>;
   /** Each module's ports' cables reaching each channel (a channel-less one from a band's signal as that channel's). */
@@ -355,6 +362,7 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
     targets,
     modulesNow: new Set(p.modules.map((x) => x.id)),
     grids: p.modules.filter((x) => x.type === 'grid'),
+    dice: p.modules.filter((x) => x.type === 'dice'),
     expanded: new WeakMap(),
     columns: new Map(),
     polyphonic: polyphonicOf(p, typeOf, into),
@@ -881,7 +889,21 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     }
   }
   for (const { x, t } of plan.others) if (!knobs[x.id]) knobs[x.id] = knobsOf(x, t);
-  return { aspects, knobs, outputs, macros, moments, points };
+  // Each Dice: a roll as its trigger rises past a half (its `done` a trigger the same frame), seeded by its seed input
+  // (0..1 back to the 32 bits it came from; none plugged: the frame's time), over its scope.
+  const dice: DiceRoll[] = [];
+  for (const x of plan.dice) {
+    const v = sumOf(plan.ports.get(x.id)?.get('trigger'), 0);
+    const key = `${x.id}|trigger`;
+    const rose = v > 0.5 && finite(st.triggers[key], 0) <= 0.5;
+    st.triggers[key] = v;
+    outputs[`${x.id}.done`] = rose ? 1 : 0;
+    if (!rose) continue;
+    const seeded = plan.ports.get(x.id)?.get('seed');
+    const seed = seeded && seeded[0].length ? Math.floor(clamp(sumOf(seeded, 0), 0, 1 - 2 ** -33) * 4294967296) : Math.floor(opts.now) >>> 0;
+    dice.push({ module: x.id, seed, scope: RANDOMIZE_SCOPES[clamp(Math.round(finite(x.knobs.scope, 0)), 0, RANDOMIZE_SCOPES.length - 1)] });
+  }
+  return { aspects, knobs, outputs, macros, moments, points, dice };
 
   /** A module's knobs as its macros and cables move them. */
   /** A knob's base as its macros set it, along its taper (an exponential knob's geometrically: 0057's Wild). */

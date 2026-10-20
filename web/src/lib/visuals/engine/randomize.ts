@@ -39,6 +39,21 @@ export type Randomized = Record<string, Record<string, number>>;
 const CHAIN_DRAW = PRESET_KEYS.flatMap((key) => (SETTING_KNOB[key] ? [{ key, module: SETTING_KNOB[key][0], knob: SETTING_KNOB[key][1] }] : []));
 const CHAIN_DRAWN = new Set(CHAIN_DRAW.map((l) => `${l.module}.${l.knob}`));
 
+/** A Dice's scope (ports.ts RANDOMIZE_SCOPES) as Randomize's: everything, or a category's modules (rack.ts); the
+ *  cables' amounts are another roll (null here). */
+export function scopeNamed(name: string, types: Record<string, ModuleType>): Scope | null {
+  if (name === 'everything') return EVERYTHING;
+  if (name === 'cables') return null;
+  const ports = portsFrom(types);
+  return (m) => {
+    if (isDevice(m)) {
+      const d = ports(m);
+      return !!d && deviceCategory(d) === name;
+    }
+    return !!types[m.type] && categoryOf(types[m.type]) === name;
+  };
+}
+
 /** The knobs a track's seed reached before 0057 (the chain's draw): what the equivalence holds Randomize to. */
 export const SEEDED_BEFORE: Scope = (m, k) => CHAIN_DRAWN.has(`${m.id}.${k.id}`);
 

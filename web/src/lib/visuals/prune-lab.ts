@@ -4,7 +4,7 @@
 // (render.ts, chain-params.ts chainNow), as Visuals.svelte draws a frame; the screens compared with the whole patch's.
 //
 // Held as the whole patch has them, both sides alike: the look (its walk, its moments: the cables into them are kept,
-// unjudged), the camera's framing (measured once), the governor's levers (free), the colours' cover. The fluid's pushes
+// unjudged), the camera's framing (measured once), the sidechaining's levers (free), the colours' cover. The fluid's pushes
 // follow the cables into Stir, Flow and Swirl (prune.ts stirGain), as Visuals gives them from the routes.
 //
 // window.pruneLab.input (set before the page loads): { settings, frames?, warm?, windows?, guard?, maxDiff?, minPsnr?,
@@ -13,7 +13,7 @@ import { decode as decodeBeats, type Beats } from './beats';
 import { chainNow } from './chain-params';
 import { newEngine, stepEngine } from './engine/graph';
 import { coloured, evolved, flameOf, measure, partsAt, PRESET_KEYS, randomFrom, type Flame, type Preset } from './flame';
-import { FREE } from './governor';
+import { FREE } from './engine/sidechain';
 import { musicOf, newMusicState } from './music-core';
 import { newNormalState, signalsFor } from './normal';
 import { cratarrTypes, type ModuleType } from './patch';
@@ -278,7 +278,7 @@ export async function pruneCables(v2: PatchV2, input: Input, report: (p: string)
   const first = await (async () => {
     const t = await trackOf(windows[0].track);
     const m = musicOf(t.signals, t.beats, windows[0].from, true, { state: newMusicState(), at: windows[0].from * 1000, lighting: s.lighting, key: 'lab' });
-    const d = stepEngine(newEngine(), f, ENGINE_TYPES, m, signalsFor(newNormalState(), m, windows[0].from * 1000), s, dt, { still: false, now: windows[0].from * 1000, fluidFull: FLUID_FULL, levers: FREE }).aspects;
+    const d = stepEngine(newEngine(), f, ENGINE_TYPES, m, signalsFor(newNormalState(), m, windows[0].from * 1000), s, dt, { still: false, now: windows[0].from * 1000, fluidFull: FLUID_FULL, levers: FREE }).aspects!;
     const seen = measure(evolved(baseFlame(s).flame, d.parts, s.purity, s.spread));
     return seen ? { center: seen.center, size: seen.size, coverage: seen.coverage } : { center: [0, 0] as [number, number], size: 1, coverage: 0.33 };
   })();

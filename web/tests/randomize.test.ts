@@ -129,3 +129,35 @@ test('pinned whole: a module (module:<id>), a category (category:<name>), a poly
   const after: PatchV2 = { ...p, modules: p.modules.map((m) => (rolled[m.id] ? { ...m, knobs: { ...m.knobs, ...rolled[m.id] } } : m)) };
   assert.deepEqual(run(randomize(after, types, { seed })), all);
 });
+
+test("Dice: rolls as its trigger rises, seeded by its seed input (Music's: the track's own), its scope from its knob", async () => {
+  const { newEngine, stepEngine } = await import('../src/lib/visuals/engine/graph.ts');
+  const { musicOf, newMusicState } = await import('../src/lib/visuals/music-core.ts');
+  const { TRACKS, track } = await import('./harness/aspects-record.ts');
+  const { FLUID_FULL } = await import('../src/lib/visuals/settings.svelte.ts');
+  const t = track(TRACKS[0]);
+  const st = newEngine();
+  const music = newMusicState();
+  const p: PatchV2 = {
+    v: 2,
+    modules: [{ id: 'music', type: 'music', knobs: {} }, { id: 'look', type: 'dice', knobs: { scope: 0 } }],
+    cables: [
+      { id: 'a', from: { module: 'music', port: 'newtrack' }, to: { module: 'look', port: 'trigger' }, value: 1, depth: null },
+      { id: 'b', from: { module: 'music', port: 'seed' }, to: { module: 'look', port: 'seed' }, value: 1, depth: null },
+    ],
+    macros: [],
+    pins: [],
+  } as PatchV2;
+  const rolls: { k: number; seed: number; scope: string; done: number }[] = [];
+  for (let k = 0; k < 90; k++) {
+    const at = 20 + k / 30;
+    const key = k < 40 ? 'subsonic/tr-10329' : 'subsonic/tr-8934';
+    const m = { ...musicOf(t.signals, t.beats, at, true, { state: music, at: at * 1000, lighting: DEFAULTS.lighting }), key };
+    const f = stepEngine(st, p, {}, m, () => 0, DEFAULTS, 1 / 30, { still: false, now: at * 1000, fluidFull: FLUID_FULL });
+    for (const r of f.dice) rolls.push({ k, seed: r.seed, scope: r.scope, done: f.outputs['look.done'] });
+  }
+  assert.deepEqual(rolls, [
+    { k: 0, seed: seedOf('subsonic/tr-10329'), scope: 'everything', done: 1 },
+    { k: 40, seed: seedOf('subsonic/tr-8934'), scope: 'everything', done: 1 },
+  ]);
+});
