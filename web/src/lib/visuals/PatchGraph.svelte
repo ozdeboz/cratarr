@@ -663,7 +663,12 @@
     onedgepointerenter={({ edge }) => (hoveredCable = edge.id)}
     onedgepointerleave={() => (hoveredCable = null)}
     multiSelectionKey={['Shift', 'Control', 'Meta']}
-    onedgeclick={({ edge }) => (selecting ? toggleCable(edge.id) : edge.type === 'cable' && openIt(edge.id))}
+    onedgeclick={({ edge, event }) => {
+      if (selecting) return toggleCable(edge.id);
+      // A Shift- or Ctrl-click only picks it (Svelte Flow's multi-selection); a plain one opens it.
+      if (event.shiftKey || event.ctrlKey || event.metaKey) return;
+      if (edge.type === 'cable') openIt(edge.id);
+    }}
     onnodeclick={({ node }) => selecting && togglePick(node.id)}
     onpaneclick={() => (reroute = null)}
   >

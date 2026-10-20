@@ -922,7 +922,7 @@ test('ELK: a device opened here has room round its modules, and modules room bet
   assert.ok(Number(e.layoutOptions!['elk.spacing.nodeNode']) >= 48 && Number(e.layoutOptions!['elk.layered.spacing.nodeNodeBetweenLayers']) >= 96);
 });
 
-test('too big for the view, the graph opens at its first module (the one nearest the top left corner)', () => {
+test('too big for the view, the graph opens at its first module (the one that only gives, the most; else nearest the top left)', () => {
   const { openView, firstModule } = await_graph;
   const pad = { top: 56, right: 16, bottom: 60, left: 16 };
   const nodes = [
@@ -934,6 +934,13 @@ test('too big for the view, the graph opens at its first module (the one nearest
   assert.deepEqual(firstModule(nodes), { x: 400, y: 30 }, 'not the leftmost far down');
   assert.deepEqual(firstModule(nodes, true), { x: 400, y: 30 });
   assert.deepEqual(firstModule([{ position: { x: 0, y: 40 }, data: { kind: 'module' } }, { position: { x: 300, y: 0 }, data: { kind: 'module' } }] as never[]), { x: 0, y: 40 });
+  // Music (only gives, the most) over a Meter at the corner, and over a module cabled both ways.
+  const music = [
+    { position: { x: 0, y: 0 }, data: { kind: 'module', cables: { in: 0, out: 5 } } },
+    { position: { x: 50, y: 900 }, data: { kind: 'module', cables: { in: 0, out: 41 } } },
+    { position: { x: 20, y: 400 }, data: { kind: 'module', cables: { in: 3, out: 60 } } },
+  ] as never[];
+  assert.deepEqual(firstModule(music), { x: 50, y: 900 });
   const v = openView({ x: 0, y: 0, width: 3000, height: 3000 }, { width: 390, height: 500 }, pad, 1, firstModule(nodes, true));
   assert.deepEqual(v, { x: 16 - 400, y: 56 - 30, zoom: 1 });
 });
