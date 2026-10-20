@@ -54,6 +54,8 @@
   import { fits } from './ports';
   import {
     applyV2,
+    deleteEdits,
+    unmakeEdits,
     freeModuleId,
     CABLE_OPACITIES,
     connectionV2,
@@ -222,7 +224,7 @@
   let selCables = $state<string[]>([]);
   function togglePick(id: string) {
     const d = nodes.find((n) => n.id === id)?.data as NodeData | undefined;
-    if (d?.kind !== 'module') return;
+    if (d?.kind !== 'module' || d.type === 'screen') return;
     sel = sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id];
   }
   function toggleCable(id: string) {
@@ -573,8 +575,16 @@
       picked.every((id) => (dataOf(id) as { pinned?: boolean } | undefined)?.pinned) &&
       pickedCables.every((id) => (edges.find((e) => e.id === id)?.data as CableData | undefined)?.pinned),
   );
+  // Modules, devices and cables picked, deleted in one change (one undo step); never the Screen.
+  const deletable = (id: string) => (dataOf(id) as { type?: string } | undefined)?.type !== 'screen';
+  // The devices picked: unmade at once (one change), each as its own menu's Unmake does.
+  const pickedDevices = $derived(picked.filter((id) => (dataOf(id) as { device?: unknown } | undefined)?.device));
+  function unmakePicked() {
+    edit(unmakeEdits(at, pickedDevices));
+    endSelect();
+  }
   function deletePicked() {
-    unplug({ nodes: [], edges: edges.filter((e) => pickedCables.includes(e.id)) });
+    edit(deleteEdits(at, picked, pickedCables, deletable));
     endSelect();
   }
   // A knob's lens after its fine adjust, settled (its pin): until a tap elsewhere or Escape.
@@ -774,7 +784,8 @@
     <SelectBar label="Selected" count="{n}/{nodes.filter((x) => (x.data as NodeData).kind === 'module').length + edges.filter((e) => e.deletable !== false).length}" onclose={endSelect}>
       <button aria-label={allPinned ? 'Unpin' : 'Pin'} title={allPinned ? 'Unpin' : 'Pin'} disabled={!n} onclick={() => pinPicked(!allPinned)}><Icon name={allPinned ? 'pinOff' : 'pin'} size={24} /></button>
       <button aria-label="Make device" title="Make device" disabled={chosen.length < 2 || pickedCables.length > 0} onclick={() => (menu = { kind: 'make', ids: chosen })}><Icon name="intoBox" size={24} /></button>
-      <button aria-label="Delete cables" title="Delete" disabled={!pickedCables.length || picked.length > 0} onclick={deletePicked}><Icon name="trash" size={24} /></button>
+      {#if pickedDevices.length}<button aria-label="Unmake {pickedDevices.length === 1 ? 'device' : 'devices'}" title="Unmake" onclick={unmakePicked}><Icon name="expand" size={24} /></button>{/if}
+      <button aria-label="Delete" title="Delete" disabled={!pickedCables.length && !picked.some(deletable)} onclick={deletePicked}><Icon name="trash" size={24} /></button>
     </SelectBar>
   {/if}
 </div>
@@ -851,7 +862,7 @@
           }}
         />
       {/if}
-      {#if d?.kind === 'module'}
+      {#if d?.kind === 'module' && d.type !== 'screen'}
         <MenuEntry
           icon="trash"
           label="Delete"

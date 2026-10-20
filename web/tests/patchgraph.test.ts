@@ -249,6 +249,41 @@ test('every picture cable of today’s settings (toV2, its picture side wired) i
   assert.equal(lab2.cables.filter((c) => c.id.startsWith('picture:')).length, pic.length, 'the lab’s default as the app’s');
 });
 
+test('deleting picked modules and cables: one change, cables then modules at their levels, never the Screen', () => {
+  const { deleteEdits } = await_graph;
+  const keep = (id: string) => id !== 'screen';
+  assert.deepEqual(deleteEdits([], ['lfo', 'screen', 'dev/k1'], ['c1', 'dev/x1'], keep), [
+    { kind: 'remove', scope: [], cables: ['c1'] },
+    { kind: 'remove', scope: ['dev'], cables: ['x1'] },
+    { kind: 'removeModules', scope: [], modules: ['lfo'] },
+    { kind: 'removeModules', scope: ['dev'], modules: ['k1'] },
+  ]);
+  assert.deepEqual(deleteEdits(['dev'], ['k1'], []), [{ kind: 'removeModules', scope: ['dev'], modules: ['k1'] }], 'entered: the device’s');
+  let p = sample();
+  for (const e of deleteEdits([], ['lfo', 'fol'], ['p1'])) p = applyV2(structuredClone(p), e, types);
+  assert.ok(!p.modules.some((m) => m.id === 'lfo' || m.id === 'fol'));
+  assert.deepEqual(p.cables.map((c) => c.id), ['c4']);
+  const g = graphOfV2({ patch: { ...sample([]), modules: [mod('screen', 'screen'), mod('k1', 'fx')] }, types: labTypes });
+  assert.equal(g.nodes.find((n) => n.id === 'screen')!.selectable, false, 'the Screen never picked');
+  assert.equal(g.nodes.find((n) => n.id === 'k1')!.selectable, undefined);
+});
+
+test('unmaking picked devices: one change, each as its menu’s Unmake', () => {
+  const { unmakeEdits } = await_graph;
+  assert.deepEqual(unmakeEdits([], ['a', 'outer/b']), [
+    { kind: 'unmake', scope: [], device: 'a' },
+    { kind: 'unmake', scope: ['outer'], device: 'b' },
+  ]);
+  let p = sample();
+  p = applyV2(structuredClone(p), { kind: 'make', scope: [], modules: ['lfo', 'k1'], macros: [] }, types);
+  p = applyV2(structuredClone(p), { kind: 'make', scope: [], modules: ['fol', 's1'], macros: [] }, types);
+  const devices = p.modules.filter((m) => m.type === 'device').map((m) => m.id);
+  assert.equal(devices.length, 2);
+  for (const e of unmakeEdits([], devices)) p = applyV2(structuredClone(p), e, types);
+  assert.ok(!p.modules.some((m) => m.type === 'device'));
+  assert.deepEqual(new Set(p.modules.map((m) => m.id)), new Set(sample().modules.map((m) => m.id)));
+});
+
 test('cables sag as VCV Rack’s do: through the midpoint lowered by (1 − tension)(150 + length)', () => {
   assert.deepEqual(slumpOf({ x: 0, y: 0 }, { x: 100, y: 0 }, 1), { x: 50, y: 0 });
   assert.deepEqual(slumpOf({ x: 0, y: 0 }, { x: 100, y: 0 }, 0.5), { x: 50, y: 125 });
