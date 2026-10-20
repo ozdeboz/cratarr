@@ -19,6 +19,7 @@ import { createSource, SOURCE_TYPES } from '../sources/index';
 import { program } from '../sources/gl';
 import { createNode, nodeOf, PICTURE_NODES, type ModuleNode } from './modules';
 import { outputsOf } from '../thumbnails';
+import { transformIdle } from '../transform';
 
 type Target = { tex: WebGLTexture; fbo: WebGLFramebuffer };
 /** A loop drawn as one pass, by its Mix: its Feedback, and the Warps and Keeps between them. */
@@ -119,9 +120,12 @@ void main() { o = texture(uIn, vUv); }`);
     const loops = loopsOf(sub.order, knobs);
     // A loop none of whose Keeps keeps anything is gone: its Mix is the other picture.
     const kept = (l: Loop) => l.chain.some((x) => x.type === 'keep' && (knobs(x.id).amount ?? 0) > 0);
-    const idle = (id: string) => runs.has(id) && runIdle(runs.get(id)!.fx.map((f) => fx.get(f)!));
+    const types = new Map(order.map((n) => [n.id, n.type]));
+    const idle = (id: string) => (runs.has(id) ? runIdle(runs.get(id)!.fx.map((f) => fx.get(f)!)) : types.get(id) === 'transform' && transformIdle(knobs(id)));
     const p = plan(sub, { knobs: (id) => (loops.has(id) && !kept(loops.get(id)!) ? { ...knobs(id), amount1: 0 } : knobs(id)), idle });
-    let out = { module: to, port: 'picture' };
+    // What it gives on, by the port the Screen (or what follows) reads it at (a Transform's is `out`).
+    const port = c.order.flatMap((n) => (ids.has(n.id) ? [] : n.inputs)).find((f) => f.from.module === to)?.from.port ?? 'picture';
+    let out = { module: to, port };
     for (let i = 0; p.alias.has(out.module) && i < sub.order.length; i++) out = p.alias.get(out.module)!;
     return out.module === from ? null : { p, from, out, loops, runs, fx };
   }
@@ -169,7 +173,7 @@ void main() { o = texture(uIn, vUv); }`);
     if (n.type === 'mix') return this.mix(inputs, out, k);
     const node = this.node(n.id, n.type);
     if (!node) return;
-    node.draw(gl, { picture: inputs.get('picture')?.tex ?? null, by: inputs.get('by')?.tex ?? null }, out.fbo, w, h, k, withInputs(n.type, frame));
+    node.draw(gl, { picture: (inputs.get('picture') ?? inputs.get('in'))?.tex ?? null, by: inputs.get('by')?.tex ?? null }, out.fbo, w, h, k, withInputs(n.type, frame));
   }
 
   /** A run of effects in one pass (Finish's), from `input`, its Echo trailing `trails` (a Feedback's) or its own last

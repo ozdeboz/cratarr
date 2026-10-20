@@ -2,13 +2,14 @@
 // second picture, where it takes one) into a target: Glow (its own light spread round it), Tint (its colours the
 // hue of `by` round it), Mask (dimmed where `by` is not: 70.1's window), Displace (read where `by` pushes it),
 // Threshold (only its bright parts: Bloom's), Blur and Bend on a picture (on the light they are Show's own pass), and
-// Warp and Keep on their own.
+// Warp and Keep on their own, Transform on a picture (transform.ts).
 // Glow's, Tint's and Mask's maths are the Mix's (compose.ts), so a module drawn there or here gives the same. Taps one
 // by one, no arrays, level-0 reads where the read is moved (the Mali rules).
 import type { FrameInfo, PictureModule } from '../patch';
 import { done, program } from '../sources/gl';
 import { WAVE_BEND, WAVE_K } from '../fluid';
 import { keptPerSecond } from '../loopmods';
+import { inverse, toScreen, transformOf } from '../transform';
 
 /** A module's pass: its picture inputs by port (`picture`, `by`), drawn into `out` at `width` × `height`. */
 export type ModuleNode = {
@@ -44,6 +45,20 @@ float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 
 /** Each module's fragment shader body (after HEAD), and its uniforms from its knobs. */
 const PASSES: Record<string, { glsl: string; uniforms: (k: Record<string, number>, frame: FrameInfo, w: number, h: number) => Record<string, number | [number, number] | [number, number, number] | [number, number, number, number]> }> = {
+  // Each pixel read where the Transform brought it from (its map back), mirrored past the edges as the shapes read.
+  transform: {
+    glsl: `uniform vec4 uBack;
+uniform vec2 uBackAt;
+uniform vec2 uK;
+void main() {
+  vec2 from = (mat2(uBack.xy, uBack.zw) * ((vUv * 2.0 - 1.0) / uK) + uBackAt) * uK * 0.5 + 0.5;
+  o = textureLod(uIn, 1.0 - abs(1.0 - mod(from, 2.0)), 0.0);
+}`,
+    uniforms: (k, _frame, w, h) => {
+      const back = inverse(transformOf(k, w / h));
+      return { uBack: back.m, uBackAt: back.at, uK: toScreen(w / h) };
+    },
+  },
   glow: {
     glsl: `uniform float uGlow;
 void main() {

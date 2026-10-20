@@ -4,6 +4,7 @@
 import { LENS_SHAPE_VARIATIONS, MARK, colourOf, PARTS, type Flame } from '../flame';
 import { FILL_ANGLES, LENS_SHAPES, fillTexture, type Irregular } from '../shape-set';
 import { diveCamera, diveFit, diveTarget, type DiveFit } from '../zoom';
+import { IDENTITY, type Affine } from '../transform';
 import { program } from '../sources/gl';
 import type { PointsParams } from '../chain-params';
 import type { Light } from './light';
@@ -152,6 +153,9 @@ uniform float uLensSides;
 uniform float uLensDepth;
 uniform highp sampler2D uLensTable;
 uniform vec4 uCamera;
+// The light's Transforms (transform.ts), in the camera's square space.
+uniform mat2 uView;
+uniform vec2 uViewAt;
 uniform vec2 uTurn;
 // The dive (zoom.ts): its part, how far into the loop (0..1: also the share of points drawn as that part's copy), and
 // the camera's zoom and turn about the part's fixed point (a complex factor, then the point).
@@ -378,6 +382,7 @@ void main() {
   // The camera: centred, the flame's size to the shorter side, turned slowly as a whole.
   vec2 v = (shown - uCamera.xy) * uCamera.z;
   v = vec2(uTurn.x * v.x - uTurn.y * v.y, uTurn.y * v.x + uTurn.x * v.y);
+  v = uView * v + uViewAt;
   if (uCamera.w > 1.0) v.x /= uCamera.w; else v.y *= uCamera.w;
   gl_Position = lost ? vec4(2.0, 2.0, 0.0, 1.0) : vec4(v, 0.0, 1.0);
   gl_PointSize = 1.0;
@@ -629,6 +634,9 @@ export class FlamePoints {
 
   /** This frame's steps into the light in use (bound, blending on): `passes` steps of every point, each drawn where
    *  it lands, after the unseen ones of the points still settling. */
+  /** The light's Transforms as one (transform.ts): where each point lands after the camera. */
+  view: Affine = IDENTITY;
+
   draw(light: Light, look: PointsParams, passes: number, since: number) {
     const gl = this.gl;
     const flame = this.flame!;
@@ -636,6 +644,8 @@ export class FlamePoints {
     gl.useProgram(this.iterate);
     gl.uniform4f(this.u(this.iterate, 'uCamera'), flame.center[0], flame.center[1], look.scale / flame.size, light.width / light.height);
     gl.uniform2f(this.u(this.iterate, 'uTurn'), Math.cos(look.turn), Math.sin(look.turn));
+    gl.uniformMatrix2fv(this.u(this.iterate, 'uView'), false, this.view.m);
+    gl.uniform2f(this.u(this.iterate, 'uViewAt'), this.view.at[0], this.view.at[1]);
     this.diveStep(look.dive, since);
     if (this.table) {
       gl.activeTexture(gl.TEXTURE0 + TABLE_UNIT);
