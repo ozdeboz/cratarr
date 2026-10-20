@@ -193,6 +193,10 @@ export const portHelp: Record<string, Record<string, string>> = {
     beats: 'Beats a turn: how many beats it takes to go once round.',
     phase: 'Where it is in its turn, from 0 to 1.',
     rate: 'How fast it turns now.',
+    beatRatio: 'The Beat output: every beat, or the beats divided or multiplied (÷4 to ×4).',
+    barRatio: 'The Bar output: every bar, or the bars divided or multiplied (÷4 to ×4).',
+    phraseRatio: 'The Phrase output: every phrase, or the phrases divided or multiplied (÷4 to ×4).',
+    phraseBars: 'How many bars make a phrase.',
   },
   accent: {
     in: 'The value to split.',
