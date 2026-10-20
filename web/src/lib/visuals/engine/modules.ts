@@ -23,8 +23,8 @@ export function stepEnvelope(st: EnvelopeState, heard: number, playing: boolean,
  *  second. */
 export type ClockState = { rate: number };
 export const newClock = (): ClockState => ({ rate: 0 });
-export function stepClock(st: ClockState, bps: number, playing: boolean, speed: number, pace: number, still: boolean, dt: number) {
-  const want = playing ? STEP * bps * (still ? 0.25 : 1) * speed * pace : 0;
+export function stepClock(st: ClockState, bps: number, playing: boolean, speed: number, pace: number, dt: number) {
+  const want = playing ? STEP * bps * speed * pace : 0;
   st.rate += (want - st.rate) * Math.min(1, dt * 1.5);
   return st.rate;
 }

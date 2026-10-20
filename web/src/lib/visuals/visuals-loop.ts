@@ -8,7 +8,6 @@
 // Read from the device's own settings: Quality, FPS, Brightness (`device`). Everything else is the patch's.
 
 import { coverUrl } from '../api';
-import { reducedMotion } from '../motion';
 import { playing } from '../remote.svelte';
 import { wavesMotion, zoomsMotion } from './aspects';
 import { beatsOf } from './beats';
@@ -114,6 +113,7 @@ export class VisualsLoop {
   #stop: (() => void) | null = null;
   #pictureWanted: ((picture: string | null) => void) | null = null;
   #rollWanted: { scope: Roll; seed: number | null; edit: string } | null = null;
+  #renderer: FlameRenderer | null = null;
 
   constructor(private host: LoopHost) {}
 
@@ -133,8 +133,15 @@ export class VisualsLoop {
     return new Promise((done) => (this.#pictureWanted = done));
   }
 
+  /** A module's own picture this frame drawn small into `canvas` (the graph's live thumbnails, render.ts); false where
+   *  it has none of its own, or before the loop runs. */
+  thumbnail(module: string, canvas: HTMLCanvasElement): boolean {
+    return this.#renderer?.thumbnail(module, canvas) ?? false;
+  }
+
   stop() {
     cancelAnimationFrame(this.#raf);
+    this.#renderer = null;
     this.#stop?.();
     this.#stop = null;
   }
@@ -152,6 +159,7 @@ export class VisualsLoop {
       host.onUnsupported?.();
       return;
     }
+    this.#renderer = renderer;
 
     // The patch as the engine runs it, and what it gives the picture's side and the meters as settings.
     const live = new LivePatch();
@@ -390,7 +398,6 @@ export class VisualsLoop {
       nextBlend = null;
 
       // The engine over the patch, its sidechains keyed by the meters; the Flame's parts its points.
-      const still = reducedMotion();
       let signals: ((ref: SignalRef) => number) | null = null;
       const read = (ref: SignalRef) => {
         if (!signals) {
@@ -418,7 +425,7 @@ export class VisualsLoop {
         renderer!.resize(bw, bh);
         return [w, h, resized, top];
       };
-      const stepped = stepEngine(engine, flat, host.types, m, read, how, dt, { still, now, fluidFull: FLUID_FULL, meters: meterValues, flamePoints: partsWhere });
+      const stepped = stepEngine(engine, flat, host.types, m, read, how, dt, { now, fluidFull: FLUID_FULL, meters: meterValues, flamePoints: partsWhere });
       const levers = leversOf(stepped.outputs);
       // The layers past the flame and the picture's own loop: the compositor's, from the patch (setPatch), each
       // module's knobs as the engine moves them; where a roll is easing in, where each knob is going.
@@ -515,8 +522,8 @@ export class VisualsLoop {
         }
       }
       const fluidAt = Object.entries(stepped.pointsAt)[0]?.[1];
-      const beatNow = m.playing && !still ? m.beat : null;
-      const wavesNow = still ? 0 : d.given[A.waves] * levers.pace;
+      const beatNow = m.playing ? m.beat : null;
+      const wavesNow = d.given[A.waves] * levers.pace;
       const gains = fluidGains(flat);
       const stirred = stir(stirring, {
         t: now / 1000,
@@ -526,11 +533,11 @@ export class VisualsLoop {
         turns: d.rates,
         lights: d.hits,
         level: d.bands.map((v) => v[B.level]),
-        continuity: still ? how.continuity.map(() => 1) : how.continuity,
+        continuity: how.continuity,
         hits: m.playing && m.hits ? m.hits.map((hh) => (hh.index < 0 ? null : { index: hh.index, strength: hh.weight, nextIn: hh.nextIn })) : [],
         beat: beatNow ? { ...beatNow, nextIn: beatNow.length - beatNow.since } : null,
-        downbeat: still ? 0 : d.track[T.downbeat],
-        section: still ? 0 : d.track[T.section],
+        downbeat: d.track[T.downbeat],
+        section: d.track[T.section],
         loudness: d.lit,
         swell: d.track[T.swell],
         bps: m.bps,
@@ -542,7 +549,7 @@ export class VisualsLoop {
 
       renderer.frame(
         passes,
-        chainNow(d, { how, levers, still, ceiling: device.brightness, coverage: frame ? frame.coverage : null, fire, position: m.position, beat: beatNow, forces: stirred.forces, flow: stirred.flow, dt, speed: how.speed }),
+        chainNow(d, { how, levers, ceiling: device.brightness, coverage: frame ? frame.coverage : null, fire, position: m.position, beat: beatNow, forces: stirred.forces, flow: stirred.flow, dt, speed: how.speed }),
         w,
         h,
         inputs,
@@ -551,8 +558,8 @@ export class VisualsLoop {
       const stats: Omit<FrameStats, 'tiles'> = {
         t: now / 1000,
         extra: (() => {
-          const fx = settingsReport(how, d.effects, levers, still, d.routed);
-          const zooms = still ? 0 : zoomsMotion(d.tunnel * levers.pace, d.dive * levers.pace);
+          const fx = settingsReport(how, d.effects, levers, d.routed);
+          const zooms = zoomsMotion(d.tunnel * levers.pace, d.dive * levers.pace);
           return { ...fx, motion: (fx.motion ?? 0) + wavesMotion(wavesNow, d.fluid) + zooms };
         })(),
         turnRates: renderer.diveTurnRate ? d.rates.map((rr) => rr + renderer!.diveTurnRate) : d.rates,

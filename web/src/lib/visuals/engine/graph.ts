@@ -162,7 +162,6 @@ export type EngineFrame = {
 export type DiceRoll = { module: string; seed: number; scope: (typeof RANDOMIZE_SCOPES)[number]; reach: number };
 
 export type EngineOptions = {
-  still: boolean;
   now: number;
   fluidFull: number;
   levers?: Levers;
@@ -520,7 +519,6 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   const raw = st.signals;
   raw.set(m.track);
   raw[T.loudness] = env.level;
-  if (opts.still) for (const t of [T.beat, T.downbeat, T.section]) raw[t] *= 0.5;
   // A new track (0057 §7f, Music's `newtrack`: a trigger the frame it starts, the visuals opening on one too) and its
   // seed (Music's `seed`: the same for the same track, 0..1, as flame.ts seedOf has it).
   const newTrack = m.key !== st.track.key ? 1 : 0;
@@ -588,7 +586,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
         const t = T[r.signal as keyof typeof T];
         if (f.channel === undefined && t !== undefined) return raw[t];
         const b = B[r.signal as keyof typeof B];
-        return b !== undefined && f.channel !== undefined ? (bands[f.channel]?.[b] ?? 0) * (opts.still && HALVED.has(r.signal) ? 0.5 : 1) : 0;
+        return b !== undefined && f.channel !== undefined ? (bands[f.channel]?.[b] ?? 0) : 0;
       }
       return clamp(finite(read({ signal: r.signal, band: f.channel, reference: r.reference })) / 2, 0, 1);
     }
@@ -935,7 +933,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     swing: L.swing * gainOf(ofType('accent')?.id ?? 'accent', 'accent'),
     evolution: L.evolution / Math.max(0.01, gainOf(flameModule?.id ?? 'flame', 'evolution')),
   };
-  const clock = stepClock(st.clock, m.bps, m.playing, chainSettings.speed, held.pace, opts.still, step);
+  const clock = stepClock(st.clock, m.bps, m.playing, chainSettings.speed, held.pace, step);
   // The picture's level: the Tone map's Level knob as its gain input holds it (the pause's dimming, wired), where the
   // patch has the Tone map; else the Envelope's glow (today's).
   const tonemap = p.modules.find((x) => x.type === 'tonemap');

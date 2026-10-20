@@ -28,7 +28,6 @@ export type ChainNow = { points: PointsParams; carry: CarryParams; show: ShowPar
 export type ChainContext = {
   how: EffectSettings & { lattice: number };
   levers: Levers;
-  still: boolean;
   ceiling: number;
   coverage: number | null;
   fire: number;
@@ -48,19 +47,19 @@ export function chainNow(d: AspectsNow, c: ChainContext): ChainNow {
       turn: d.turn,
       scale: d.scale,
       // The dive (zoom.ts): as fast as its routes let its slider, held back with the pace; none with reduced motion.
-      dive: c.still ? 0 : DIVE_MOST * d.dive * pace,
+      dive: DIVE_MOST * d.dive * pace,
     },
     carry: {
       keep: d.keep,
       fluid: d.fluid,
       // The tunnel likewise.
-      tunnel: c.still ? 0 : TUNNEL_MOST * d.tunnel * pace,
+      tunnel: TUNNEL_MOST * d.tunnel * pace,
       facets: { amount: d.facets, hex: Math.round(c.how.lattice) === 1 },
       forces: c.forces,
       flow: c.flow,
       // At the Speed setting's pace, as the turning (a quarter with reduced motion; none at 0). The fluid takes at most
       // 0.05 s a step: at 30 frames a second, Speed past 150 % flows no faster.
-      dt: c.dt * c.speed * pace * (c.still ? 0.25 : 1),
+      dt: c.dt * c.speed * pace,
       warp: d.warp,
     },
     show: {
@@ -83,7 +82,7 @@ export function chainNow(d: AspectsNow, c: ChainContext): ChainNow {
       flow: c.flow,
     },
     // The look's effects, as far as the Effects setting and its routes let them, moving with the track's time.
-    effects: effectsNow(c.how, d.effects, c.position, c.beat, c.levers, c.still, d.routed),
+    effects: effectsNow(c.how, d.effects, c.position, c.beat, c.levers, d.routed),
   };
 }
 

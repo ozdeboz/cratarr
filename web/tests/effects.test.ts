@@ -152,22 +152,6 @@ test('pow only of what is positive (of a negative it is undefined: NaN on Mali)'
   for (const e of EFFECTS) for (const m of e.glsl.matchAll(/\bpow\(([^,]+),/g)) assert.ok(positive.has(m[1].trim()), `${e.name}: pow(${m[1]}, …)`);
 });
 
-test('reduced motion: every effect that changes over time rests, the steady ones stay; Echo’s zoom is motion', async () => {
-  const { effectsNow, settingsReport, moves, reportOf } = await import('../src/lib/visuals/effects.ts');
-  const knobs = { fx1K1: 0.5, fx1K2: 0.5, fx2K1: 0.5, fx2K2: 0.5, fx3K1: 0.5, fx3K2: 0.5, fxLoopK1: 0.5, fxLoopK2: 0.5 };
-  // Kaleid (folds, churning), Pulse (on the beat), Posterize (steady); Rotate in the loop.
-  const how = { fx1: 1, fx1Amount: 1, fx2: 1, fx2Amount: 1, fx3: 7, fx3Amount: 1, fxLoop: 5, fxLoopAmount: 1, ...knobs };
-  const still = effectsNow(how, 1, 0, null, undefined, true);
-  assert.deepEqual(still.ids, [1, 16, 2]);
-  assert.deepEqual(still.amounts, [0, 0, 1], 'only Posterize stays');
-  assert.equal(still.loopAmount, 0, 'the loop’s Rotate rests');
-  assert.deepEqual(settingsReport(how, 1, undefined, true), {}, 'and adds nothing to the meters');
-  assert.ok(!moves(6, [0.5, 0.5]) && !moves(12, [0.5, 0.5]) && moves(9, [0.5, 0.5]), 'Hue and Saturate steady, Echo not');
-  // Echo zooming only, no turn: its stream counts as motion, about 3.5 a second at all of it.
-  assert.ok(Math.abs(reportOf([9], [1], 'picture', [[1, 0]]).motion! - 60 * Math.log(1.06)) < 1e-12);
-  assert.ok(!moves(9, [0, 0]), 'Echo neither zooming nor turning: steady');
-});
-
 test('a drawn look’s effects stay within the room the flame leaves under each limit; one within it is kept as drawn', async () => {
   const { withinRoom, effectsDrawn } = await import('../src/lib/visuals/flame.ts');
   const { DRAWN_ROOM } = await import('../src/lib/visuals/budget.ts');
@@ -201,14 +185,14 @@ test('the routes on the effects: levels take each amount down, swings move each 
   const { effectsNow, settingsReport, knobLabel } = await import('../src/lib/visuals/effects.ts');
   // Rotate (Kaleidoscope's third), Pulse (EYEDO's first), Echo (Hydra's first); Ripple on the loop.
   const how = { fx1: 3, fx1Amount: 1, fx2: 1, fx2Amount: 0.8, fx3: 1, fx3Amount: 0.5, fxLoop: 3, fxLoopAmount: 0.6, fx1K1: 0.5, fx1K2: 0.2, fx2K1: 0.5, fx2K2: 0.5, fx3K1: 0.9, fx3K2: 0.5, fxLoopK1: 0.5, fxLoopK2: 0.5 };
-  assert.deepEqual(effectsNow(how, 1, 0), effectsNow(how, 1, 0, null, undefined, false, undefined), 'none: as set');
+  assert.deepEqual(effectsNow(how, 1, 0), effectsNow(how, 1, 0, null, undefined, undefined), 'none: as set');
   const routed = { amounts: [0.5, 1, 0, 0.25], knobs: [0.3, 0, -1, 0, 0.4, 0, 0, 0] };
-  const fx = effectsNow(how, 1, 0, null, undefined, false, routed);
+  const fx = effectsNow(how, 1, 0, null, undefined, routed);
   assert.deepEqual(fx.amounts.map((a) => +a.toFixed(6)), [0.5, 0.8, 0]);
   assert.ok(Math.abs(fx.loopAmount - 0.15) < 1e-12);
   assert.deepEqual(fx.knobs.map((k) => k.map((v) => +v.toFixed(6))), [[0.8, 0.2], [0, 0.5], [1, 0.5]], 'swung, then kept within 0..1');
   // The reports (the governor's, the precheck's) are the routed ones: Rotate's speed swung up, at its level.
-  assert.ok(Math.abs(settingsReport(how, 1, undefined, false, routed).motion! - (0.628318 * 0.8 * 0.5 + 0.0)) < 1e-9);
+  assert.ok(Math.abs(settingsReport(how, 1, undefined, routed).motion! - (0.628318 * 0.8 * 0.5 + 0.0)) < 1e-9);
   // The columns' labels: the chosen sub-effect's controls; none chosen, or no such control: none.
   assert.equal(knobLabel('kaleidoscope', 3, 0), 'Speed');
   assert.equal(knobLabel('eyedo', 1, 1), 'Decay');

@@ -79,7 +79,7 @@ export function stepEngineV1(
     st.got.whole[a] *= v;
     for (const own of st.got.band) own[a] *= v;
   }
-  const clock = stepClock(st.clock, m.bps, m.playing, s.speed, L.pace, opts.still, dt);
+  const clock = stepClock(st.clock, m.bps, m.playing, s.speed, L.pace, dt);
   const trackWalk = (a: number) => track[T.track] * env.out * matrix.track[T.track * NA + a];
   return stepChain(
     st.chain,

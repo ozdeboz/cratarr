@@ -33,13 +33,13 @@ function before(d: AspectsNow, c: ChainContext) {
     floor: d.floor,
     fire: c.fire,
     fluid: d.fluid,
-    tunnel: c.still ? 0 : TUNNEL_MOST * d.tunnel * governor.levers.pace,
-    effects: effectsNow(c.how, d.effects, c.position, c.beat, governor.levers, c.still, d.routed),
+    tunnel: TUNNEL_MOST * d.tunnel * governor.levers.pace,
+    effects: effectsNow(c.how, d.effects, c.position, c.beat, governor.levers, d.routed),
     facets: { amount: d.facets, hex: Math.round(c.how.lattice) === 1 },
-    dive: c.still ? 0 : DIVE_MOST * d.dive * governor.levers.pace,
+    dive: DIVE_MOST * d.dive * governor.levers.pace,
     forces: c.forces,
     flow: c.flow,
-    dt: c.dt * c.speed * governor.levers.pace * (c.still ? 0.25 : 1),
+    dt: c.dt * c.speed * governor.levers.pace,
     warp: d.warp,
   };
 }
@@ -65,11 +65,10 @@ const aspects = (k: number) =>
   }) as unknown as AspectsNow;
 
 const contexts = (): ChainContext[] =>
-  [false, true].flatMap((still) =>
+  [false].flatMap(() =>
     [null, 0.02, 0.4].map((coverage, i) => ({
       how: { ...DEFAULTS, fx1: 3, fx1Amount: 1, fx2: 1, fx2Amount: 0.8, fx3: 1, fx3Amount: 0.8, fxLoop: 2, fxLoopAmount: 0.5, lattice: i % 2 },
       levers: { swing: 1, pace: 0.7 + 0.1 * i, evolution: 1, hue: 1, size: 1, gap: 1 },
-      still,
       ceiling: 0.9,
       coverage,
       fire: 0.3 * i,
@@ -91,6 +90,6 @@ test("the nodes' values are the look Visuals gave the renderer before, exactly",
 });
 
 test('a look split by node and put together again is the same look', () => {
-  const look = shownOf(chainNow(aspects(1), contexts()[4]));
+  const look = shownOf(chainNow(aspects(1), contexts()[1]));
   assert.deepStrictEqual(shownOf(chainOfShown(look)), look);
 });

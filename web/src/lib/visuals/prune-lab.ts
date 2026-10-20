@@ -109,7 +109,7 @@ async function run(s: VisualSettings, patch: PatchV2, w: Window, warm: number, d
     clock = now;
     const m = musicOf(t.signals, t.beats, at, true, { state: music, at: now, lighting: s.lighting, key: 'lab' });
     const read = signalsFor(normal, m, now);
-    const e = stepEngine(st, patch, ENGINE_TYPES, m, read, s, dt, { still: false, now, fluidFull: FLUID_FULL, levers: FREE });
+    const e = stepEngine(st, patch, ENGINE_TYPES, m, read, s, dt, { now, fluidFull: FLUID_FULL, levers: FREE });
     const d = e.aspects;
     // A converted patch always has the Cratarr chain.
     if (!d) throw new Error('no Cratarr chain in the patch');
@@ -159,7 +159,6 @@ async function run(s: VisualSettings, patch: PatchV2, w: Window, warm: number, d
     const nodes = chainNow(d, {
       how: s,
       levers: FREE,
-      still: false,
       ceiling: s.brightness,
       coverage: cam.coverage,
       fire,
@@ -278,7 +277,7 @@ export async function pruneCables(v2: PatchV2, input: Input, report: (p: string)
   const first = await (async () => {
     const t = await trackOf(windows[0].track);
     const m = musicOf(t.signals, t.beats, windows[0].from, true, { state: newMusicState(), at: windows[0].from * 1000, lighting: s.lighting, key: 'lab' });
-    const d = stepEngine(newEngine(), f, ENGINE_TYPES, m, signalsFor(newNormalState(), m, windows[0].from * 1000), s, dt, { still: false, now: windows[0].from * 1000, fluidFull: FLUID_FULL, levers: FREE }).aspects;
+    const d = stepEngine(newEngine(), f, ENGINE_TYPES, m, signalsFor(newNormalState(), m, windows[0].from * 1000), s, dt, { now: windows[0].from * 1000, fluidFull: FLUID_FULL, levers: FREE }).aspects;
     if (!d) throw new Error('no Cratarr chain in the patch');
     const seen = measure(evolved(baseFlame(s).flame, d.parts, s.purity, s.spread));
     return seen ? { center: seen.center, size: seen.size, coverage: seen.coverage } : { center: [0, 0] as [number, number], size: 1, coverage: 0.33 };
