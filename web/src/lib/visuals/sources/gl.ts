@@ -1,7 +1,8 @@
 // What the sources share on the GPU: a program, a mesh of triangles rebuilt each frame (no instancing, no vertex
 // textures: plain attributes, as safe as it gets on the Malis), and the target made ready.
 
-export function program(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {
+/** `feedback`: the varyings a transform feedback captures (interleaved). */
+export function program(gl: WebGL2RenderingContext, vs: string, fs: string, feedback?: string[]): WebGLProgram {
   const shader = (type: number, src: string) => {
     const s = gl.createShader(type)!;
     gl.shaderSource(s, src);
@@ -13,6 +14,7 @@ export function program(gl: WebGL2RenderingContext, vs: string, fs: string): Web
   const [v, f] = [shader(gl.VERTEX_SHADER, vs), shader(gl.FRAGMENT_SHADER, fs)];
   gl.attachShader(p, v);
   gl.attachShader(p, f);
+  if (feedback) gl.transformFeedbackVaryings(p, feedback, gl.INTERLEAVED_ATTRIBS);
   gl.linkProgram(p);
   gl.deleteShader(v);
   gl.deleteShader(f);

@@ -243,7 +243,7 @@ const SIDECHAIN: readonly { kind: string; meter: Budgeted; into: readonly [strin
 function sidechained(modules: Module[], cables: Wire[], wild: number, limits: Partial<Record<Budgeted, number>>): { modules: Module[]; cables: Wire[]; macro?: Macro } {
   const one = (id: string, from: Wire['from'], to: Wire['to'], value = 1): Wire => ({ id, from, to, value, mode: 'swing', depth: null });
   const out = { modules: [...modules, { id: 'meter', type: 'meter', knobs: {} }], cables: [...cables] };
-  if (!out.modules.some((m) => m.type === 'screen')) out.modules.push({ id: 'screen', type: 'screen', knobs: {} });
+  // The Screen is the picture wiring's (claude-632's `screen`); its guard cabled from here.
   out.cables.push(one('guard', { module: 'screen', port: 'guard' }, { module: 'accent', port: 'accent:gain' }));
   const wildFactor = 2 ** (2 * (wild - 0.5));
   // Wild, a macro on the five thresholds (the owner): along the threshold's exponential taper from half to twice
@@ -307,6 +307,8 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
     engine.get(module)!.knobs[knob] = (s as unknown as Record<string, number>)[setting];
     if (frame) delete frame.knobs[setting];
   }
+  // The walks are Randoms now (§7e item 5): the frame's walk columns go.
+  if (frame) for (const k of ['lookWalk', 'behaviourWalk']) delete frame.knobs[k];
   // Show as a device (0057 §6): its modules in the order that draws today's picture, each with the knob it took; its
   // knobs exposed under their old names, so the routes into `show.<knob>` keep their address. Its Size is the Flame's
   // own zoom.
@@ -341,7 +343,8 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
   };
   const extraIds = new Set((s.extra?.cables ?? []).map((c) => c.id));
   const cables: Wire[] = [];
-  // A column's scale goes into its cables; its knob then scales nothing (1, until the engine drops SCALED).
+  // A column's scale goes into its cables; its knob is then the column's resting value, the cables adding to it
+  // (VCV's rule; 0, as today rests).
   const scaleOf = (to: Cable['to']) => {
     const key = SCALE_OF.get(`${to.module}.${to.knob}`);
     return key ? ((s as unknown as Record<string, number>)[key] ?? 1) : 1;
@@ -350,10 +353,10 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
     const [mid, kid] = key.split('.');
     // Show's are inside its device (below); its size is the Flame's zoom.
     const m = mid === 'show' ? undefined : modules.find((x) => x.id === mid);
-    if (m) m.knobs[kid] = 1;
+    if (m) m.knobs[kid] = 0;
   }
   const showAsDevice = modules.find((x) => x.id === 'show') as Device | undefined;
-  for (const part of showAsDevice?.patch.modules ?? []) for (const k of Object.keys(part.knobs)) if (SCALE_OF.has(`show.${k}`)) part.knobs[k] = 1;
+  for (const part of showAsDevice?.patch.modules ?? []) for (const k of Object.keys(part.knobs)) if (SCALE_OF.has(`show.${k}`)) part.knobs[k] = 0;
   for (const c of p.cables) {
     const to = target(c.to);
     const value = scaled(c.value, scaleOf(c.to));
@@ -382,6 +385,7 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
   const adding = opts.addOnly === false ? { modules: all, cables } : cablesAdd(all, cables);
   const added = opts.sidechain === false ? adding : sidechained(adding.modules, adding.cables, s.wild, opts.limits ?? {});
   const wiring = pictureWiring(p);
-  const macros: Macro[] = [...p.macros, ...('macro' in added && added.macro ? [added.macro as Macro] : [])];
+  const wildMacro = (added as { macro?: Macro }).macro;
+  const macros: Macro[] = wildMacro ? [...p.macros, wildMacro] : p.macros;
   return { v: 2, modules: [...added.modules, ...wiring.modules], cables: [...toWire(added.modules, added.cables), ...wiring.cables], macros, pins: p.pins };
 }
