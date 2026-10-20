@@ -49,6 +49,7 @@
   import type { PatchV2, PortType } from './ports';
   import type { LiveFaces } from './faces.svelte';
   import { CATEGORY_LABEL } from './rack';
+  import { Thumbs, type Thumbnailer } from './face/face';
   import {
     applyV2,
     CABLE_OPACITIES,
@@ -91,6 +92,7 @@
     onopenknob,
     onpick,
     live,
+    thumbnail,
     openAtStart = [],
     sheetHeight = 0,
     layout = 'elk',
@@ -116,6 +118,9 @@
     onopenknob?: (module: string[], knob: string) => void;
     onpick?: (request: PickRequest, at: XY) => void;
     live?: LiveFaces;
+    /** Draws a module's output into a thumbnail's canvas (the renderer's `thumbnail(moduleId, canvas)`): one a live
+     *  frame, in turn, only while the graph shows (live frames come only then). */
+    thumbnail?: Thumbnailer;
     /** Nodes (devices) open from the start. */
     openAtStart?: string[];
     /** How much of the graph's bottom an open sheet covers (px): the fitted view keeps clear of it. */
@@ -258,6 +263,12 @@
   /** A node's sockets, as a key: what its cables' ends need to find. */
   const socketsOf = (d: NodeData) =>
     d.kind !== 'module' ? d.kind : [d.in, d.out, ...d.knobs.map((k) => `${k.id}${k.next ? '>' : ''}${k.gain ? '+' : ''}`), '|', ...d.ports.map((p) => p.id), '|', ...d.outs.map((o) => o.handle)].join(',');
+
+  // The picture modules' thumbnails: one drawn each live frame, in turn.
+  const thumbs = new Thumbs();
+  $effect(() => {
+    if (live?.frame) untrack(() => thumbs.next(thumbnail));
+  });
 
   // The cables' opacity (VCV Rack's cable opacity), this device's.
   const OPACITY_KEY = 'cratarr-graph-cable-opacity';
@@ -484,6 +495,8 @@
     },
     rerouting: () => reroute,
     live: () => live?.frame ?? null,
+    livePath: (id) => path(id).join('/'),
+    thumbs: () => (thumbnail ? thumbs : null),
     portrait: () => portrait,
     routeCables: () => routeCables,
   });
@@ -861,6 +874,12 @@
     --wire-points: #e98fc8;
     /* A flow field's: lime, apart from the trigger's cyan and the sound's green. */
     --wire-flow: #c2d94c;
+    /* The five categories' colours (rack.ts), on each node's header edge. */
+    --cat-sources: #e8a15a;
+    --cat-effects: #6fb7ff;
+    --cat-mixers: #7ad0a6;
+    --cat-modulators: var(--patch-mod);
+    --cat-io: color-mix(in srgb, var(--text) 55%, transparent);
     --patch-bg: color-mix(in srgb, var(--bg) 92%, var(--text));
     width: 100%;
     height: 100%;

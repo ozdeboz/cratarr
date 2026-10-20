@@ -159,7 +159,21 @@ const knob = (id: string, label: string, min: number, max: number, def: number, 
 const out = (id: string, label: string, type: PortType = 'value', channels?: number): Port => ({ id, label, type, ...(channels ? { channels } : {}) });
 const label = (id: string) => id.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
 
-type Declared = ModuleType & { ports: Ports };
+/** A part of a module's face (claude-632's face/, the standard panel every node draws): what it shows live past its
+ *  knobs. `of`: the output (or else the knob) it reads, `out` by default; `threshold`: a knob drawn as a line across
+ *  it; a meter's `peak` held, its `max` (1 by default), `reduction` drawn as gain taken away (1: none), `channels` a bar
+ *  each; a light on an output sits beside that output's name. `adsr` and `lfo`: their own shapes. */
+export type FacePart = {
+  kind: 'meter' | 'scope' | 'light' | 'thumb' | 'number' | 'adsr' | 'lfo';
+  of?: string;
+  threshold?: string;
+  peak?: boolean;
+  max?: number;
+  reduction?: boolean;
+  channels?: number;
+  label?: string;
+};
+type Declared = ModuleType & { ports: Ports; face?: FacePart[] };
 
 /** Today's hidden behaviours as modules (0057 §3). Their knobs are what the old settings held; their ports normalled
  *  to where the behaviour reaches today. claude-5f's engine steps them; the views draw them as any other. */
@@ -596,6 +610,17 @@ export const FEEDBACK = declared('feedback', 'Feedback', 'module', [], [{ ...PIC
 export const SCREEN = declared('screen', 'Screen', 'finish', [], [PICTURE_IN], [out('guard', 'Flash guard')]);
 
 export const GRAPH_MODULES: readonly Declared[] = [MIX, FEEDBACK, SCREEN];
+
+// ---- Faces: what each module's node shows live (claude-632's face/; a module without one: face/face.ts's defaults) --
+ENVELOPE.face = [{ kind: 'meter', of: 'level', peak: true }];
+COMPRESSOR.face = [{ kind: 'meter', of: 'reduction', reduction: true }];
+DUCKER.face = [{ kind: 'meter', of: 'reduction', reduction: true }];
+MIX.face = Array.from({ length: MIX_INPUTS }, (_, i): FacePart => ({ kind: 'meter', of: `amount${i + 1}`, label: `${i + 1}` }));
+VCA.face = [{ kind: 'meter', of: 'gain', max: 2 }];
+MERGE.face = [{ kind: 'meter', of: 'in', channels: 6 }, { kind: 'meter', of: 'out' }];
+ADSR.face = [{ kind: 'adsr' }];
+CLOCK.face = (['beat', 'bar', 'phrase'] as const).map((of): FacePart => ({ kind: 'light', of }));
+MUSIC.face = MUSIC.ports.out.filter((o) => o.type === 'trigger').map((o): FacePart => ({ kind: 'light', of: o.id }));
 
 /** Whether a picture cycle passes through a Feedback, as every one must (§4): the cables' picture and light graph, by
  *  module (the flame's own loop is light). */
