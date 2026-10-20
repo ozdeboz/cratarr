@@ -17,8 +17,8 @@ import { settingsReport } from './effects';
 import { fluidGains } from './engine/fluid-gains';
 import { newEngine, stepEngine, type EngineFrame } from './engine/graph';
 import { LivePatch } from './engine/live-patch';
-import { randomize, randomizeCables, scopeNamed, slotDraws, SLOT_DRAW, type Randomized } from './engine/randomize';
-import { effectAt, placeOf, slotModules, type Slot } from './engine/effect-slots';
+import { randomize, randomizeCables, scopeNamed, type Randomized } from './engine/randomize';
+import type { Slot } from './engine/effect-slots';
 import { settingsOfPatch } from './engine/settings-view';
 import { holding, leversOf, STANDING, type Levers } from './engine/sidechain';
 import { between, coloured, evolved, flameOf, measuring, partsAt, PRESET_KEYS, randomFrom, seedOf, type ColourMode, type Flame, type Preset } from './flame';
@@ -46,7 +46,7 @@ const MIN_POINTS = 1 << 14;
 const TRIES = 8;
 const SHAPING = PRESET_KEYS.filter((k) => k !== 'spread' && k !== 'purity');
 const BY_DEGREES = new Set<string>(['detail', 'twist', 'warp', 'hue', 'lightness', 'vividness']);
-/** The effects' moments (an engine's choice: another effect, a module swapped in, 0057 §3), by the slot each is. */
+/** The effects' moments (an engine's choice: another effect, which is another module now, 0057 §3), by slot. */
 const SLOT_MOMENTS: Partial<Record<string, Slot>> = { fx1: 'fx1', fx2: 'fx2', fx3: 'fx3', fxLoop: 'loop-effect' };
 const modeOf = (family: number): ColourMode => (family >= 5 ? 'fire' : family >= 4 ? 'cover' : 'rainbow');
 
@@ -82,17 +82,7 @@ function applyKnobs(p: PatchV2, values: Randomized) {
   }
 }
 
-// claude-632's placeEffect (effect-modules.ts: a slot's effect module swapped in, added in its line or taken out) once
-// it lands; until then a slot's draw changes nothing.
-const placeEffect = (p: PatchV2, _slot: Slot, _effect: number, _knobs: { amount: number; k1?: number; k2?: number }): PatchV2 => p;
 
-/** A roll's values onto a patch: the slots' draws as their effects' modules, then the knobs. */
-function applied(p: PatchV2, values: Randomized): PatchV2 {
-  let q = p;
-  for (const [slot, d] of slotDraws(values)) q = placeEffect(q, slot, d.effect, { amount: d.amount, k1: d.k1, k2: d.k2 });
-  applyKnobs(q, values);
-  return q;
-}
 
 /** A setting's knob in the patch (SETTING_KNOB, as toV2 placed it), beside the Flame: its flattened module id and knob. */
 function settingAt(flat: PatchV2, setting: string): [string, string] | null {
@@ -249,9 +239,8 @@ export class VisualsLoop {
         toValues[id] = Object.fromEntries(eased.map((k) => [k, knobs[k]]));
       }
       const f = (p: PatchV2) => {
-        const q = applied(p, values);
-        for (const c of q.cables) if (c.id in cables) c.value = cables[c.id];
-        return q;
+        applyKnobs(p, values);
+        for (const c of p.cables) if (c.id in cables) c.value = cables[c.id];
       };
       if (edit) host.store.change(f, edit);
       else host.store.perform(f);
@@ -282,7 +271,8 @@ export class VisualsLoop {
       for (let t = 0; t < TRIES; t++) {
         const tryValues: Randomized = t === 0 ? values : knobsScope ? yield* randomize(patch, host.types, { seed: seed + t, scope: knobsScope }) : {};
         const tryCables = t === 0 ? cables : withCables ? randomizeCables(patch, host.types, { seed: seed + t }) : {};
-        const candidate = applied(structuredClone(patch), tryValues);
+        const candidate = structuredClone(patch);
+        applyKnobs(candidate, tryValues);
         for (const c of candidate.cables) if (c.id in tryCables) c.value = tryCables[c.id];
         const checked: Checked = yield* precheckingPatch(candidate, how, signals, beatsOf(source, id) ?? null, check.position, limits);
         if (checked.ok) return { values: tryValues, cables: tryCables };
@@ -483,19 +473,10 @@ export class VisualsLoop {
       // The moments: the chain's steps moved on (the same on every device for the track and beat), a performance.
       const at = `${m.key}|${m.beat ? m.beat.index : Math.floor(m.position * 2)}`;
       const moved: Randomized = {};
-      const effects = slotModules(flat.modules);
       for (const a of MOMENT_ASPECTS) {
         if (!d.moments[a]) continue;
-        // Another effect: its slot's module swapped for the next one's, its Amount kept, its controls at the middle.
-        const slot = SLOT_MOMENTS[a];
-        if (slot) {
-          const fx = effects.get(slot);
-          if (!fx || patch.pins.includes(`module:${fx.id}`)) continue;
-          const was = placeOf(slot, fx.type);
-          const next = momentOf(a, was, randomFrom(seedOf(`${a}|${at}`)));
-          if (next !== was) moved[SLOT_DRAW + slot] = { effect: effectAt(slot, next), amount: fx.knobs.amount ?? 1, k1: 0.5, k2: 0.5 };
-          continue;
-        }
+        // Another effect would be another module (0057 §3): held, the rack as it is, until the owner says.
+        if (SLOT_MOMENTS[a]) continue;
         const place = settingAt(flat, a);
         if (!place || patch.pins.includes(`${place[0]}.${place[1]}`)) continue;
         const was = lookOf(a);

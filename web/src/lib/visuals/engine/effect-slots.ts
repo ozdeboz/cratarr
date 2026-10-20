@@ -3,11 +3,11 @@
 // modules a patch holds. An effect is in one engine's list, so its type gives its picture slot; the loop's is
 // `loop-<name>` (toV2's id).
 
-import { effectKnobIds, effectOfType, effectType } from '../effect-modules';
+import { effectKnobIds, effectOfType, effectType, type Slot } from '../effect-modules';
 import { ENGINE_EFFECTS, LOOP_EFFECTS, type Effect, type Engine } from '../effects';
 import type { Module } from '../patch';
 
-export type Slot = 'fx1' | 'fx2' | 'fx3' | 'loop-effect';
+export type { Slot };
 export const SLOT_IDS: readonly Slot[] = ['fx1', 'fx2', 'fx3', 'loop-effect'];
 const SLOT_OF: Record<Engine, Slot> = { kaleidoscope: 'fx1', eyedo: 'fx2', hydra: 'fx3' };
 /** Each slot's settings (settings.svelte.ts): its effect, Amount and two controls. */

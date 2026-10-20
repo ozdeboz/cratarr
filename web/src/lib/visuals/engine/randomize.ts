@@ -8,9 +8,8 @@
 // `randomize: false`, VCV's randomizeEnabled); and modules that draw their knobs together do so themselves (VCV's
 // onRandomize). Here that is the Cratarr device's draw, one over the flame, the effects, the loop effect and the
 // facets (flame.ts drawing: the flame's form surveyed until it draws something), so a track's seed gives the values it
-// gave before 0057. The effects are modules (0057 §3): where a slot's module is the effect drawn, the draw is its
-// knobs; where it is another or there is none, the draw is the slot's (`slot:<slot>`), a module to swap in or add
-// (effect-modules.ts placeEffect); a slot drawn at none or nothing of it, its module's Amount to 0. Each other module draws from its own stream of the seed, so one module more or less changes no
+// gave before 0057. The effects are modules (0057 §3), and Randomize keeps the rack as it is (the owner): each effect
+// module keeps its effect, the draw drawn around it, its Amount and controls drawn; a slot with no module, nothing. Each other module draws from its own stream of the seed, so one module more or less changes no
 // other's draw.
 //
 // Pinned (0057 §4d), left as it is and drawn around: a knob (`<module>.<knob>`), a polyphonic knob's channel
@@ -22,9 +21,7 @@ import { SETTING_KNOB, type Knob, type Module, type ModuleType } from '../patch'
 import { isDevice, type CableV2, type PatchV2 } from '../ports';
 import type { Curve, RouteValue } from '../curves';
 import { categoryOf, deviceCategory, portsFrom } from '../rack';
-import { effectOfType, effectType } from '../effect-modules';
-import { effectOf } from '../effects';
-import { effectAt, ownKnob, placeOf, slotKnobOf, slotModules, slotOf, SLOT_IDS, SLOT_SETTINGS, type Slot } from './effect-slots';
+import { ownKnob, placeOf, slotKnobOf, slotModules, slotOf, SLOT_IDS, SLOT_SETTINGS, type Slot } from './effect-slots';
 
 /** Which knobs Randomize reaches: a module's knob (a polyphonic one's channels together). */
 export type Scope = (module: Module, knob: Knob) => boolean;
@@ -38,19 +35,11 @@ export type RandomizeOptions = {
   reach?: number;
 };
 
-/** The new values: each module's knobs by id (a device's modules under `<device>/<module>`, as flatten names them); a
- *  slot's effect drawn where its module is not that effect, under `slot:<slot>` (SlotDraw's numbers). */
+/** The new values: each module's knobs by id (a device's modules under `<device>/<module>`, as flatten names them). */
 export type Randomized = Record<string, Record<string, number>>;
 
-/** A slot's draw where a module must be swapped in or added: the effect (effects.ts id), its Amount and controls. */
-export type SlotDraw = { effect: number; amount: number; k1: number; k2: number };
-export const SLOT_DRAW = 'slot:';
-/** The slots' draws among a roll's values. */
-export const slotDraws = (values: Randomized): [Slot, SlotDraw][] =>
-  Object.entries(values).flatMap(([id, v]) => (id.startsWith(SLOT_DRAW) ? [[id.slice(SLOT_DRAW.length) as Slot, v as SlotDraw]] : []));
-
 /** The slots' settings, each its slot and which of it. */
-const SLOT_KEY = new Map(SLOT_IDS.flatMap((slot) => (Object.entries(SLOT_SETTINGS[slot]) as [keyof SlotDraw, string][]).map(([which, key]) => [key, { slot, which }] as const)));
+const SLOT_KEY = new Map(SLOT_IDS.flatMap((slot) => (Object.entries(SLOT_SETTINGS[slot]) as [keyof (typeof SLOT_SETTINGS)[Slot], string][]).map(([which, key]) => [key, { slot, which }] as const)));
 /** The Cratarr device's draw: each key flame.ts's drawing gives (PRESET_KEYS), the knob it is in the chain (the slots'
  *  apart: their modules are the effects'). */
 const CHAIN_DRAW = PRESET_KEYS.flatMap((key) => (SETTING_KNOB[key] && !SLOT_KEY.has(key) ? [{ key, module: SETTING_KNOB[key][0], knob: SETTING_KNOB[key][1] }] : []));
@@ -129,39 +118,25 @@ function* into(
       const m = byId.get(l.module)!;
       if (isPinned(m, l.knob)) fixed[l.key as keyof Preset] = finite(m.knobs[l.knob], knobOf(m, l.knob).default);
     }
-    // A slot's module pinned whole keeps its effect; a knob of it pinned, that knob.
+    // Each effect module keeps its effect (the rack as it is); a knob of it pinned, that knob.
     for (const key of SLOT_DRAWN) {
       const { slot, which } = SLOT_KEY.get(key)!;
       const m = effects.get(slot);
       if (!m) continue;
       const knob = which === 'effect' ? null : which === 'amount' ? 'amount' : ownKnob(m.type, which);
-      if (which === 'effect' ? whole(m) : knob && isPinned(m, knob)) fixed[key as keyof Preset] = which === 'effect' ? placeOf(slot, m.type) : finite(m.knobs[knob!], knobOf(m, knob!).default);
+      if (which === 'effect') fixed[key as keyof Preset] = placeOf(slot, m.type);
+      else if (knob && isPinned(m, knob)) fixed[key as keyof Preset] = finite(m.knobs[knob], knobOf(m, knob).default);
     }
     const drawn = yield* drawing(opts.seed, fixed as Partial<Preset>);
     for (const l of chain) set(byId.get(l.module)!, l.knob, drawn.preset[l.key as keyof Preset] as number);
-    const draw = (slot: Slot, which: keyof SlotDraw) => finite(drawn.preset[SLOT_SETTINGS[slot][which] as keyof Preset], 0);
-    for (const slot of SLOT_IDS) {
-      const m = effects.get(slot);
-      const effect = effectAt(slot, draw(slot, 'effect'));
-      const amount = effect ? draw(slot, 'amount') : 0;
-      const k1 = draw(slot, 'k1');
-      const k2 = draw(slot, 'k2');
-      // Its module the effect drawn (or drawn at nothing: faded out): its knobs.
-      if (m && (!(amount > 0) || effectType(effectOf(effect)!) === m.type)) {
-        set(m, 'amount', amount);
-        if (amount > 0)
-          for (const [k, v] of [['k1', k1], ['k2', k2]] as const) {
-            const own = ownKnob(m.type, k);
-            if (own) set(m, own, v);
-          }
-        continue;
+    // Each effect module's Amount and controls, as the draw has its slot's.
+    for (const [slot, m] of effects) {
+      const names = SLOT_SETTINGS[slot];
+      set(m, 'amount', finite(drawn.preset[names.amount as keyof Preset], 0));
+      for (const k of ['k1', 'k2'] as const) {
+        const own = ownKnob(m.type, k);
+        if (own) set(m, own, finite(drawn.preset[names[k] as keyof Preset], 0.5));
       }
-      if (!(amount > 0)) continue;
-      // Another effect, or one where there is none: the slot's draw, as the effect's module would be reached.
-      const type = effectType(effectOf(effect)!);
-      const as: Module = { id: m?.id ?? type, type, knobs: {} };
-      if ((m && whole(m)) || !scope(as, knobOf(as, 'amount')) || !effectOfType(type)) continue;
-      out[SLOT_DRAW + slot] = { effect, amount, k1, k2 };
     }
   }
 
