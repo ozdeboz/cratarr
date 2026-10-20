@@ -7,7 +7,21 @@
 // - `fill(t, u)`: a point inside the shape for t, u in 0..1, evenly: equal shares of t and u cover equal areas. Lens
 //   takes t from a point's angle and u from its distance (`lensAt`), as the Cratarr lens always has.
 //
-// The distance functions for boxes, triangles and the drop are after Inigo Quilez's 2D distance functions (MIT).
+// The distance functions for boxes, triangles and the drop are Inigo Quilez's 2D distance functions
+// (iquilezles.org/articles/distfunctions2d), written in TypeScript, under his MIT licence:
+//
+//   Copyright © Inigo Quilez
+//
+//   Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+//   documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
+//   rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+//   permit persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright
+//   notice and this permission notice shall be included in all copies or substantial portions of the Software.
+//
+//   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+//   WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS
+//   OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+//   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 import { TAU, morphEdge, sidesOf } from './sources/geometry';
 import { WARPS, warpOf } from './warps';
