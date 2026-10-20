@@ -11,9 +11,8 @@
 // - every two seconds both buffers are copied over through a pass that clears anything not a number or infinite: a
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
 import type { ChainNow } from './chain-params';
-import { composeActive, Compositor } from './compose';
 import type { FrameInfo, Module, PatchExtra } from './patch';
-import { compile, composeOf, effectRuns, fused, plan, STAGES, stagesOf, type Compiled, type Stage, type TypeOf } from './picture-graph';
+import { compile, composeOf, effectRuns, plan, STAGES, stagesOf, type Compiled, type Stage, type TypeOf } from './picture-graph';
 import { MIX_MODES, type PatchV2 } from './ports';
 import { flatten } from './v2';
 import { Walker } from './nodes/walker';
@@ -94,9 +93,6 @@ export type Extras = { extra: PatchExtra; knobsOf: (m: Module) => Record<string,
 
 export class FlameRenderer {
   private gl: WebGL2RenderingContext;
-  /** The compose step (compose.ts): the layers past the flame and the picture's own loop, drawn between the show and
-   *  the effects when there is anything of them; none where this device cannot. */
-  private compositor: Compositor | null = null;
   /** The patch's picture side as drawn (picture-graph.ts): the stages it needs, in this version each fused as before;
    *  every one until a patch is given. Why any of it is not drawn. */
   private stages = new Set<Stage>(STAGES);
@@ -105,16 +101,11 @@ export class FlameRenderer {
   /** The slots whose Echo is fed back the line's own finished picture (Feedback → Echo → Mix). */
   private fxLooped = new Set<number>();
   private compiled: Compiled | null = null;
-  /** The compose step as the graph's own walk (nodes/walker.ts), where the patch wires more than the converted chain
-   *  (a device, a Glow…) or `generic` asks: its modules, the module whose picture it starts from (Show's), the one it
-   *  gives on; each module's knobs as the patch has them. */
+  /** The compose step, the graph's own walk (nodes/walker.ts): its modules, the module whose picture it starts from
+   *  (Show's), the one it gives on; each module's knobs as the patch has them. */
   private walker: Walker | null = null;
-  generic = false;
-  private wired = false;
   private composed: { ids: Set<string>; from: string; to: string } | null = null;
   private knobsIn = new Map<string, Record<string, number>>();
-  /** Whether the graph has the picture's own loop (loop-feedback → … → loop-mix). */
-  private looped = true;
   /** Whether the lazy rules cut the flame last frame. */
   private cut = false;
   errors: string[] = [];
@@ -173,11 +164,6 @@ export class FlameRenderer {
     this.fin = new Finish(gl, this.now);
     this.screen = new Screen(gl);
     this.meter = new Meter(gl);
-    try {
-      this.compositor = new Compositor(gl);
-    } catch (e) {
-      console.warn('Visuals: no layers past the flame on this device', e);
-    }
   }
 
   /** The patch to draw (a v2 patch, its picture side wired: v2.ts, picture-wiring.ts), on a change of its structure. */
@@ -185,7 +171,6 @@ export class FlameRenderer {
     const c = compile(p, typeOf);
     const stages = stagesOf(c);
     this.compiled = stages ? c : null;
-    this.looped = !stages || c.order.some((n) => n.id === 'loop-mix');
     this.errors = stages ? c.errors : [...c.errors, 'This version draws the picture in its own order only.'];
     this.stages = new Set(stages ?? STAGES);
     const fx = c.order.filter((n) => /^fx\d$/.test(n.id)).map((n) => Number(n.id.slice(2)) - 1);
@@ -193,7 +178,7 @@ export class FlameRenderer {
     this.fxLooped = new Set(stages ? c.order.filter((n) => /^fx\d$/.test(n.id) && n.inputs.some((f) => f.from.module === `${n.id}-feedback`)).map((n) => Number(n.id.slice(2)) - 1) : []);
     this.knobsIn = new Map(flatten(p).modules.map((m) => [m.id, m.knobs]));
     this.composed = stages ? composeOf(c) : null;
-    this.wired = !!this.composed && c.order.some((n) => this.composed!.ids.has(n.id) && !fused(n));
+    this.walker?.prune(this.composed?.ids ?? new Set());
   }
 
   /** A compose module's knobs this frame: the extras' as moved (the layers' Mix from their blends, the flame's share
@@ -202,7 +187,8 @@ export class FlameRenderer {
     if (extras) {
       const x = extras.extra;
       if (id === 'layers') {
-        const k: Record<string, number> = { amount1: extras.flame };
+        // The flame's share of the picture (its morph may run past 1 or below 0 for a frame).
+        const k: Record<string, number> = { amount1: Math.min(1, Math.max(0, extras.flame)) };
         x.layers.forEach((l, i) => {
           k[`mode${i + 2}`] = MIX_MODES.indexOf(l.blend.mode);
           k[`amount${i + 2}`] = l.blend.amount;
@@ -216,9 +202,10 @@ export class FlameRenderer {
   }
 
 
-  /** Lets go of what layers no longer in the extras held. */
-  prune(extra: PatchExtra) {
-    this.compositor?.prune(extra);
+  /** Lets go of what modules no longer in the patch held (the extras changed: `_extra`, for the frozen compositor's
+   *  recordings). */
+  prune(_extra?: PatchExtra) {
+    this.walker?.prune(this.composed?.ids ?? new Set());
   }
 
   get width(): number {
@@ -287,7 +274,7 @@ export class FlameRenderer {
     // The lazy rules (picture-graph.ts plan): the flame's layer at nothing, and not coming back, cuts the flame and all
     // that feeds only it (decision 0057, its 5th: one coming back keeps gathering its light). The rest is lazy within
     // its pass: an effect, a layer, the loop at nothing.
-    const drawn = !this.compiled || !extras || !this.compositor || plan(this.compiled, {
+    const drawn = !this.compiled || !extras || plan(this.compiled, {
       knobs: (id): Record<string, number> => (id === 'layers' ? { mode1: 0, amount1: extras.flame } : {}),
       target: (id, knob) => (id === 'layers' && knob === 'amount1' ? (extras.flameTo ?? 1) : 1),
     }).live.some((n) => n.type === 'flame');
@@ -313,21 +300,17 @@ export class FlameRenderer {
       return p ? [{ p, ids }] : [];
     }) : [];
     const knobsAt = (id: string) => this.knobsAt(id, extras);
-    const walks = this.stages.has('compose') && this.compiled && this.composed && (this.generic || this.wired);
+    const walks = this.stages.has('compose') && this.compiled && this.composed;
     if (walks) this.walker ??= new Walker(gl);
     const walking = walks ? this.walker!.planned(this.compiled!, this.composed!.ids, this.composed!.from, this.composed!.to, knobsAt) : null;
-    const compose = !walks && this.stages.has('compose') && extras && this.compositor && composeActive(extras.extra, extras.knobsOf, extras.flame) ? this.compositor : null;
-    const composing = !!walking || !!compose;
-    const into = chain.length || composing ? this.fin.targets(light.width, light.height) : null;
+    const into = chain.length || walking ? this.fin.targets(light.width, light.height) : null;
     if (drawn) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, into ? into.fbo[2] : null);
       if (into) viewWidth = light.width, viewHeight = light.height;
       this.show.draw(light, this.points, now.show, passes, fluid, this.carry.warpShown, viewWidth, viewHeight);
     }
     const info = extras?.frame ?? { dt: since, time: at / 1000, beat: null, signals: () => 0, waveform: null };
-    const picture = into && walking
-      ? this.walker!.run(walking, into.tex[2], into.w, into.h, knobsAt, info)
-      : into && compose ? compose.run(into.tex[2], into.w, into.h, extras!.extra, extras!.knobsOf, extras!.frame, extras!.flame, this.looped) : into ? into.tex[2] : null;
+    const picture = into && walking ? this.walker!.run(walking, into.tex[2], into.w, into.h, knobsAt, info) : into ? into.tex[2] : null;
     if (chain.length && into && picture) {
       // Each run from the last one's picture; the first into the picture's own targets, as before.
       let shown = picture;
@@ -374,7 +357,6 @@ export class FlameRenderer {
   }
 
   dispose() {
-    this.compositor?.dispose();
     this.walker?.dispose();
     for (const n of [this.carry, this.screen, this.meter, this.points, this.light, this.show, this.fin]) n.dispose();
     this.gl.getExtension('WEBGL_lose_context')?.loseContext();
