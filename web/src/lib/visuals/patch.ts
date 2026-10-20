@@ -23,6 +23,10 @@ export type Knob = {
   busy?: Busy;
   /** A polyphonic knob (0057 §4b): one value a channel, kept as `<id>.<channel>` among its module's knobs. */
   channels?: number;
+  /** How its value follows its position (0057): 'exp' an exponential taper, as a frequency or time knob has (equal
+   *  steps of position multiply the value). A macro moves a knob along its taper, so a macro on an exponential knob
+   *  multiplies. */
+  taper?: 'exp';
   /** false: Randomize leaves it (VCV's randomizeEnabled), for a knob that is a choice of how, not a value. */
   randomize?: false;
   /** A time (seconds): its gain input stretches it (its value ÷ the gain), as a time CV does (0057 §7e). */
