@@ -284,6 +284,21 @@ test('unmaking picked devices: one change, each as its menu’s Unmake', () => {
   assert.deepEqual(new Set(p.modules.map((m) => m.id)), new Set(sample().modules.map((m) => m.id)));
 });
 
+test('the select bar’s actions fit the selection', () => {
+  const { barActions } = await_graph;
+  const mod1 = { help: true };
+  assert.deepEqual(barActions([], 0), []);
+  assert.deepEqual(barActions([mod1], 0), ['pin', 'delete', 'open', 'help']);
+  assert.deepEqual(barActions([{ device: true }], 0), ['pin', 'delete', 'unmake', 'open']);
+  assert.deepEqual(barActions([], 1), ['pin', 'delete', 'reroute']);
+  assert.deepEqual(barActions([], 2), ['pin', 'delete']);
+  assert.deepEqual(barActions([mod1, {}], 0), ['pin', 'delete', 'make']);
+  assert.deepEqual(barActions([mod1, { scope: 'dev' }], 0), ['pin', 'delete'], 'not at one level: no device of them');
+  assert.deepEqual(barActions([mod1, {}], 1), ['pin', 'delete'], 'cables picked too: no device');
+  assert.deepEqual(barActions([{ screen: true }], 0), ['pin', 'open'], 'the Screen not deleted');
+  assert.deepEqual(barActions([{}], 0), ['pin', 'delete', 'open'], 'no help, no Help');
+});
+
 test('cables sag as VCV Rack’s do: through the midpoint lowered by (1 − tension)(150 + length)', () => {
   assert.deepEqual(slumpOf({ x: 0, y: 0 }, { x: 100, y: 0 }, 1), { x: 50, y: 0 });
   assert.deepEqual(slumpOf({ x: 0, y: 0 }, { x: 100, y: 0 }, 0.5), { x: 50, y: 125 });

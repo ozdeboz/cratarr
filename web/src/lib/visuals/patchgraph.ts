@@ -1090,6 +1090,24 @@ export function deleteEdits(at: readonly string[], modules: readonly string[], c
   ];
 }
 
+/** What the select bar offers for a selection (the owner: a long press on a module, a device or a cable is select
+ *  mode): Delete (anything but the Screen), Pin, Make device (two or more modules at one level, no cables), Unmake
+ *  (devices), Reroute (one cable alone), Open (one module or device alone), Help (one module alone, with help). */
+export type BarAction = 'delete' | 'pin' | 'make' | 'unmake' | 'reroute' | 'open' | 'help';
+export function barActions(modules: readonly { device?: boolean; screen?: boolean; help?: boolean; scope?: string }[], cables: number): BarAction[] {
+  const out: BarAction[] = [];
+  const n = modules.length + cables;
+  if (!n) return out;
+  out.push('pin');
+  if (cables || modules.some((m) => !m.screen)) out.push('delete');
+  if (!cables && modules.length > 1 && new Set(modules.map((m) => m.scope ?? '')).size === 1) out.push('make');
+  if (modules.some((m) => m.device)) out.push('unmake');
+  if (cables === 1 && !modules.length) out.push('reroute');
+  if (!cables && modules.length === 1) out.push('open');
+  if (!cables && modules.length === 1 && !modules[0].device && modules[0].help) out.push('help');
+  return out;
+}
+
 /** Devices picked, unmade as one change (each as its menu's Unmake): node ids from the level `at` shows. */
 export const unmakeEdits = (at: readonly string[], devices: readonly string[]): V2Edit[] =>
   devices.map((id) => {
