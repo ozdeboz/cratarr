@@ -11,7 +11,8 @@ import { flatten } from '../v2';
  *  targets, its pins. */
 function structureOf(p: PatchV2): string {
   return JSON.stringify([
-    p.modules.map((m) => [m.id, m.type]),
+    // A Music signal module's reading and hold are its row's (music-signals.ts: read as the hub's, once a structure).
+    p.modules.map((m) => (m.type.startsWith('music-') ? [m.id, m.type, m.knobs] : [m.id, m.type])),
     p.cables.map((c) => [c.id, c.from, c.to, c.depth ?? null]),
     p.macros.map((x) => [x.id, x.targets.map((t) => [t.module, t.knob])]),
     p.pins,

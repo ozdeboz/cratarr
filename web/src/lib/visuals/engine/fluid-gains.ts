@@ -8,6 +8,8 @@
 import { heightOf, shapeOf, type Shape } from '../evaluate';
 import type { PatchV2 } from '../ports';
 import { BAND_SIGNALS } from '../routes';
+import { followsOf } from './follow';
+import { musicView } from './music-signals';
 
 export type FluidAspect = 'stir' | 'flow' | 'swirl';
 export type FluidGain = (signal: string, band: number | null, aspect: FluidAspect, x: number) => number;
@@ -18,7 +20,7 @@ const gains = new WeakMap<PatchV2, Map<string, Shape[]>>();
 /** The patch's fluid gains (a flattened patch's; worked out once a patch object). */
 export function fluidGains(p: PatchV2): FluidGain {
   let index = gains.get(p);
-  if (!index) gains.set(p, (index = indexOf(p)));
+  if (!index) gains.set(p, (index = indexOf(musicView(p))));
   const by = index;
   return (signal, band, aspect, x) => {
     let sum = 0;
@@ -51,7 +53,12 @@ function indexOf(p: PatchV2): Map<string, Shape[]> {
     const aspect = into.get(c.to.module);
     return aspect && c.to.port === 'in' ? [{ c, aspect, channel: c.to.channel ?? c.from.channel }] : [];
   });
-  for (const { c, aspect, channel: given } of pushes) {
+  // Through the Loudness Follow's VCAs to the signal behind each (its curve, a curved cable's, on the cable in).
+  const throughVca = followsOf(p);
+  for (const push of pushes) {
+    const via = throughVca.get(push.c.from.module);
+    const c = via ? { ...push.c, from: via.from, value: typeof push.c.value === 'number' && push.c.value === 1 ? via.value : push.c.value } : push.c;
+    const { aspect, channel: given } = push;
     const type = typeOf.get(c.from.module) ?? c.from.module;
     const sh = shapeOf(c.value);
     const followed = type === 'envelope' ? follows.get(c.from.module) : undefined;

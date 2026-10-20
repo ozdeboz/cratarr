@@ -737,7 +737,7 @@ export type Routed = { amounts: readonly number[]; knobs: readonly number[] };
  *  let through (`level`), its own routes' level (`routed`) and what the sidechaining lets through (`levers`), none for
  *  one that `moves` under reduced motion (`still`); each one's knobs as routed (the GLSL's, the clocks' and the
  *  reports' alike, so the sidechaining sees what is drawn); `t` the track's own time (s); the beat. */
-export const effectsNow = (how: EffectSettings, level: number, t: number, beat: Beat | null = null, levers: Levers = FREE, still = false, routed?: Routed) => {
+export const effectsNow = (how: EffectSettings, level: number, t: number, beat: Beat | null = null, levers: Levers = FREE, routed?: Routed) => {
   const unit = (v: number) => Math.max(0, Math.min(1, v));
   const swung = (v: number, i: number) => unit(v + (routed?.knobs[i] ?? 0));
   const levelOf = (k: number) => unit(routed?.amounts[k] ?? 1);
@@ -751,14 +751,13 @@ export const effectsNow = (how: EffectSettings, level: number, t: number, beat: 
   const loop = loopEffect(how.fxLoop);
   const loopKnobs = [swung(how.fxLoopK1, 6), swung(how.fxLoopK2, 7)] as Knobs;
   const set = [how.fx1Amount, how.fx2Amount, how.fx3Amount].map((a, k) => a * level * levelOf(k));
-  const on = (id: number, k: Knobs) => (still && moves(id, k) ? 0 : 1);
   const loopSet = how.fxLoopAmount * level * levelOf(3);
   return {
     ids,
-    amounts: set.map((a, k) => a * heldBack(ids[k], a, knobs[k], levers) * on(ids[k], knobs[k])),
+    amounts: set.map((a, k) => a * heldBack(ids[k], a, knobs[k], levers)),
     knobs,
     loop,
-    loopAmount: loopSet * heldBack(loop, loopSet, loopKnobs, levers) * on(loop, loopKnobs),
+    loopAmount: loopSet * heldBack(loop, loopSet, loopKnobs, levers),
     loopKnobs,
     t,
     beat: beatOf(beat),
@@ -775,8 +774,8 @@ export const beatOf = (b: Beat | null): [number, number, number, number] =>
 
 /** What the look's effects add to the meters a second, the picture's and the loop's together: the same for the visuals'
  *  meters and the precheck's, so the sidechaining and the dice hold an effect alike. */
-export function settingsReport(how: EffectSettings, level: number, levers: Levers = FREE, still = false, routed?: Routed): Report {
-  const fx = effectsNow(how, level, 0, null, levers, still, routed);
+export function settingsReport(how: EffectSettings, level: number, levers: Levers = FREE, routed?: Routed): Report {
+  const fx = effectsNow(how, level, 0, null, levers, routed);
   const out: Report = { ...reportOf(fx.ids, fx.amounts, 'picture', fx.knobs) };
   for (const [k, v] of Object.entries(reportOf([fx.loop], [fx.loopAmount], 'loop', [fx.loopKnobs])) as [keyof Report, number][]) out[k] = (out[k] ?? 0) + v;
   return out;

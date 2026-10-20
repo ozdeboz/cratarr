@@ -72,9 +72,9 @@ export function stepChain(
   s: VisualSettings,
   x: ChainInputs,
   dt: number,
-  opts: { still: boolean; now: number; fluidFull: number; levers?: Levers },
+  opts: { now: number; fluidFull: number; levers?: Levers },
 ): AspectsNow {
-  const { still, now } = opts;
+  const { now } = opts;
   const L = opts.levers ?? OPEN;
   const got = x.given;
   const W = got.whole;
@@ -88,7 +88,7 @@ export function stepChain(
   for (let i = 0; i < PARTS; i++) {
     const k = Math.floor((i * BANDS) / PARTS);
     const own = got.band[k];
-    const c = still ? 1 : s.continuity[k];
+    const c = s.continuity[k];
     const wants = [W[A.shape] + own[A.shape], (W[A.hue] + own[A.hue]) * L.hue, W[A.spread] + own[A.spread]];
     const rate = x.clock * 2 * (W[A.rotation] + own[A.rotation]);
     st.rates[i] = rate;
@@ -117,15 +117,15 @@ export function stepChain(
     parts.push({
       turn: st.turned[i],
       size: 0.94 + 0.12 * grown,
-      morph: (still ? 0.15 : 0.35) * grown,
+      morph: 0.35 * grown,
       hue,
       spread: 2 ** clamp(spread, -2, 2),
       weight: 2 ** (1.5 * st.presence[i]),
     });
-    hits.push(clamp(accented(clamp(W[A.lights] + own[A.lights], -1, 3) * (still ? 0.5 : 1), st.courses.lights[i]), -1, 3));
+    hits.push(clamp(accented(clamp(W[A.lights] + own[A.lights], -1, 3), st.courses.lights[i]), -1, 3));
   }
   const nexts = st.nextsNow;
-  for (const a of MOMENT_ASPECTS) nexts[a] = !still && !!x.fired?.[a];
+  for (const a of MOMENT_ASPECTS) nexts[a] = !!x.fired?.[a];
   const walkOf = (a: number, track: number) => (W[a] - track) / L.evolution;
   const fluid = opts.fluidFull * levelOf(got, s.fluid, A.fluid);
   const haze = hazeOf(clamp(s.haze * got.level[A.haze], -1, 1));

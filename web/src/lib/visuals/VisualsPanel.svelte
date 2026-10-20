@@ -181,10 +181,25 @@
     endSelect();
   }
   function deletePicked() {
-    const by = new Map<string, string[]>();
-    for (const x of pickedPins()) by.set(x.scope.join('/'), [...(by.get(x.scope.join('/')) ?? []), x.id]);
-    for (const [sc, ids] of by) edit({ kind: 'remove', scope: pathOf(sc), cables: ids });
+    if (selecting === 'modules') for (const x of pickedPins()) edit({ kind: 'removeModule', scope: x.scope, id: x.id });
+    else {
+      const by = new Map<string, string[]>();
+      for (const x of pickedPins()) by.set(x.scope.join('/'), [...(by.get(x.scope.join('/')) ?? []), x.id]);
+      for (const [sc, ids] of by) edit({ kind: 'remove', scope: pathOf(sc), cables: ids });
+    }
     endSelect();
+  }
+  /** The picked modules made one device (at the top: the panel picks there), its macros chosen later in it. */
+  function makePicked() {
+    edit({ kind: 'make', scope: [], modules: pickedPins().map((x) => x.id), macros: [] });
+    endSelect();
+  }
+  /** One picked: its own view (a module) or its end moved (a cable). */
+  function openPicked() {
+    const [x] = pickedPins();
+    const page = selecting === 'modules' ? `m|${[...x.scope, x.id].join('/')}` : `move|to|${x.scope.join('/')}|${x.id}`;
+    endSelect();
+    go(page);
   }
   const allCables = $derived(patch.cables.length);
 </script>
@@ -326,7 +341,8 @@
           <button class="go danger" onclick={() => (edit({ kind: 'removeModule', scope, id: m.id }), back())}><span class="name">Remove</span></button>
         </div>
       {:else}
-        {@const face = faceOf(t, portsOf(m))}
+        <!-- The live parts of its face; its picture's thumbnail is the graph's (the panel has none to draw it with). -->
+        {@const face = faceOf(t, portsOf(m)).filter((p) => p.kind !== 'thumb')}
         {#if face.length}
           <div class="rows face"><Face parts={face} {live} path={at.join('/')} knobs={m.knobs} width={300} /></div>
         {/if}
@@ -484,7 +500,9 @@
       <span>{picked.length} picked</span>
       <button disabled={!picked.length} onclick={() => pinPicked(true)}>Pin</button>
       <button disabled={!picked.length} onclick={() => pinPicked(false)}>Unpin</button>
-      {#if selecting === 'cables'}<button class="danger" disabled={!picked.length} onclick={deletePicked}>Delete</button>{/if}
+      <button class="danger" disabled={!picked.length} onclick={deletePicked}>Delete</button>
+      {#if selecting === 'modules'}<button disabled={picked.length < 2} onclick={makePicked}>Make device</button>{/if}
+      {#if picked.length === 1}<button onclick={openPicked}>{selecting === 'modules' ? 'Open' : 'Reroute'}</button>{/if}
       <button onclick={endSelect}>Done</button>
     </div>
   {/if}

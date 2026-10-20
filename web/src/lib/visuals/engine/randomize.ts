@@ -21,6 +21,7 @@ import { SETTING_KNOB, type Knob, type Module, type ModuleType } from '../patch'
 import { isDevice, type CableV2, type PatchV2 } from '../ports';
 import type { Curve, RouteValue } from '../curves';
 import { categoryOf, deviceCategory, portsFrom } from '../rack';
+import { followsOf } from './follow';
 import { ownKnob, placeOf, slotKnobOf, slotModules, slotOf, SLOT_IDS, SLOT_SETTINGS, type Slot } from './effect-slots';
 
 /** Which knobs Randomize reaches: a module's knob (a polyphonic one's channels together). */
@@ -177,11 +178,16 @@ export function randomizeCables(p: PatchV2, types: Record<string, ModuleType>, o
   const pinned = new Set(p.pins);
   const typeOf = new Map(p.modules.map((m) => [m.id, m.type]));
   const out: Record<string, RouteValue> = {};
-  for (const c of p.cables) {
-    const from = typeOf.get(c.from.module) ?? c.from.module;
-    const to = typeOf.get(c.to.module);
-    if (pinned.has(`cable:${c.id}`) || PLUMBING.has(from) || !to || PLUMBING.has(to)) continue;
-    if (!types[to]?.knobs.some((k) => k.id === c.to.port.replace(/\.\d+$/, ''))) continue;
+  // A cable through the Loudness Follow is the cable from the signal behind it (its curve, a curved one's, on the
+  // cable in: that one rolled).
+  const follows = followsOf(p);
+  for (const into of p.cables) {
+    const via = follows.get(into.from.module);
+    const c = via && typeof into.value === 'number' && into.value === 1 && typeof via.value !== 'number' ? via : into;
+    const from = typeOf.get((via ?? into).from.module) ?? (via ?? into).from.module;
+    const to = typeOf.get(into.to.module);
+    if (pinned.has(`cable:${into.id}`) || PLUMBING.has(from) || !to || PLUMBING.has(to)) continue;
+    if (!types[to]?.knobs.some((k) => k.id === into.to.port.replace(/\.\d+$/, ''))) continue;
     const now = typeof c.value === 'number' ? c.value : c.value.h;
     const drawn = randomFrom(seedOf(`${opts.seed}/cable/${c.id}`))() * 2 - 1;
     const amount = now + (drawn - now) * reach;

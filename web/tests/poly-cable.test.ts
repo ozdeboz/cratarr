@@ -47,7 +47,7 @@ const over = (convert: (p: PatchV2) => PatchV2): Engine => {
     step: (m, s, dt, opts) => {
       if (from !== s) {
         from = s;
-        p = convert(flatten(toV2(s)));
+        p = convert(flatten(toV2(s, { follow: false })));
       }
       return stepEngine(st, p!, {}, m, () => 0, s, dt, opts).aspects;
     },
@@ -68,7 +68,7 @@ all.routes = {
 };
 
 test('six band copies merged into one cable: the same picture, frame by frame, on every recorded track', () => {
-  const { merges } = merged(flatten(toV2(all)));
+  const { merges } = merged(flatten(toV2(all, { follow: false })));
   assert.ok(merges >= 3, `${merges} merges`);
   for (const id of TRACKS) {
     const t = track(id);

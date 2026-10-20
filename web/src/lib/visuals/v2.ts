@@ -29,6 +29,7 @@ import { slotKnobOf, slotOf } from './engine/effect-slots';
 import { ASPECT_KNOB, cratarrPatch, modulesOf, type Cable, type Macro, type Module, type Patch } from './patch';
 import { isDevice, READINGS, SHOW_PARTS, type CableV2, type Device, type PatchV2, type PortRef } from './ports';
 import { extraType } from './registry';
+import { modulatorOf } from './modulators/modulators';
 import { makeDevice } from './device-make';
 import { EFFECTS } from './effects';
 import { effectType } from './effect-modules';
@@ -299,7 +300,41 @@ function sidechained(modules: Module[], cables: Wire[], wild: number, limits: Pa
     });
     out.cables.push(one(`${m.id}-held`, at, { module: m.id, port: 'amount:gain' }));
   }
-  return { ...out, macro };
+  return { ...inSeries(out), macro };
+}
+
+/** A gain input with several cables (a column's own VCAs and a sidechain's hold): its cables multiplied through VCAs
+ *  in series (in × cv at gain 0), as a gain's cables would otherwise add. */
+function inSeries(p: { modules: Module[]; cables: Wire[] }): { modules: Module[]; cables: Wire[] } {
+  const into = new Map<string, Wire[]>();
+  for (const c of p.cables) if (c.to.port.endsWith(':gain')) (into.get(`${c.to.module}|${c.to.port}`) ?? into.set(`${c.to.module}|${c.to.port}`, []).get(`${c.to.module}|${c.to.port}`)!).push(c);
+  const modules = [...p.modules];
+  const moved = new Map<Wire, Wire>();
+  const added: Wire[] = [];
+  for (const [key, cs] of into) {
+    if (cs.length < 2) continue;
+    const [module, port] = key.split('|');
+    const base = `${module}-${port.slice(0, -':gain'.length)}-times`;
+    let at: Wire['from'] | null = null;
+    cs.forEach((c, i) => {
+      if (i === cs.length - 1) {
+        moved.set(c, { ...c, to: { module: at ? `${base}-${i}` : module, port: at ? 'cv' : port } });
+        if (at) added.push({ id: `${base}-${i}-out`, from: { module: `${base}-${i}`, port: 'out' }, to: { module, port }, value: 1, mode: 'swing', depth: null });
+        return;
+      }
+      const id = `${base}-${i + 1}`;
+      if (i === 0) {
+        modules.push({ id, type: 'vca', knobs: { gain: 0 } });
+        moved.set(c, { ...c, to: { module: id, port: 'in' } });
+      } else {
+        modules.push({ id, type: 'vca', knobs: { gain: 0 } });
+        moved.set(c, { ...c, to: { module: `${base}-${i}`, port: 'cv' } });
+        added.push({ id: `${base}-${i}-out`, from: { module: `${base}-${i}`, port: 'out' }, to: { module: id, port: 'in' }, value: 1, mode: 'swing', depth: null });
+      }
+      at = { module: id, port: 'out' };
+    });
+  }
+  return { modules, cables: [...p.cables.map((c) => moved.get(c) ?? c), ...added] };
 }
 
 /** The cables as wires (0057 §7e item 10): how each signal is read goes to its Music row (`reference.<signal>`: 'absolute'
@@ -474,14 +509,14 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
   rackMacros.push({ id: 'effects', on: 'rack', label: 'Effects', value: Math.min(1, Math.max(0, s.effects)), targets: fxModules.map((fx) => ({ module: fx.id, knob: 'amount', from: 0, to: fx.knobs.amount ?? 1 })) });
   const all = [...engine.values(), ...newtrack, ...[...adsrs.values()].map((a) => a.module), ...effects.modules, ...pause, ...dice];
   const adding = opts.addOnly === false ? { modules: all, cables: effects.cables } : cablesAdd(all, effects.cables);
-  const added = opts.sidechain === false ? adding : sidechained(adding.modules, adding.cables, s.wild, opts.limits ?? {}, opts.holds);
+  const added = opts.sidechain === false ? adding : sidechained(adding.modules, adding.cables, s.wild, opts.limits ?? {}, opts.holds !== false);
   const wiring = pictureWiring(p);
   const wildMacro = (added as { macro?: Macro }).macro;
   const macros: Macro[] = [...effects.macros, ...rackMacros, ...(wildMacro ? [wildMacro] : [])];
   const wired = toWire(added.modules, added.cables);
   const rack: PatchV2 = { v: 2, modules: [...wired.modules, ...wiring.modules], cables: [...wired.cables, ...wiring.cables], macros, pins: effects.pins };
-  // The loudness's VCAs in sight (`follow`): off until the engine reads a cable through one as it read the normal.
-  const follows = opts.follow ? followed(rack) : rack;
+  // The loudness's VCAs in sight (`follow`, on unless asked not to: the engine has no normal).
+  const follows = opts.follow !== false ? followed(rack) : rack;
   return opts.devices === false ? follows : packed(follows);
 }
 
@@ -509,7 +544,10 @@ function followed(p: PatchV2): PatchV2 {
   };
   for (const c of p.cables) {
     // A picture's cable (picture-wiring.ts) is no value scaled.
-    if (c.depth !== undefined || c.id.startsWith('picture:')) {
+    // Nor is an ADSR's gate (its strikes are Music's) or a modulator's input: the normal never scaled them.
+    const toType = p.modules.find((m) => m.id === c.to.module)?.type ?? '';
+    const mod = modulatorOf(toType);
+    if (c.depth !== undefined || c.id.startsWith('picture:') || (c.to.port === 'gate' && toType === 'adsr') || (mod && [...(mod.inputs ?? []), ...(mod.triggers ?? [])].includes(c.to.port))) {
       cables.push(c);
       continue;
     }
