@@ -108,6 +108,9 @@ function keepPace(p: Pace) {
   }
 }
 
+/** What a roll reaches: a scope of RANDOMIZE_SCOPES, or modules by id (a module's own Randomize). */
+export type Roll = (typeof RANDOMIZE_SCOPES)[number] | { module: string[] };
+
 /** What the loop is given. */
 export type LoopHost = {
   canvas: HTMLCanvasElement;
@@ -132,13 +135,19 @@ export class VisualsLoop {
   #raf = 0;
   #stop: (() => void) | null = null;
   #pictureWanted: ((picture: string | null) => void) | null = null;
-  #rollWanted: (typeof RANDOMIZE_SCOPES)[number] | null = null;
+  #rollWanted: { scope: Roll; seed: number | null; edit: string } | null = null;
 
   constructor(private host: LoopHost) {}
 
-  /** A roll of the dice (the panel's): over `scope`, checked against the track, an edit (one undo step). */
-  roll(scope: (typeof RANDOMIZE_SCOPES)[number] = 'everything') {
-    this.#rollWanted = scope;
+  /** A roll of the dice (the panel's): over `scope` (everything, a category, the cables; or these modules: a module's
+   *  own Randomize), a fresh seed, checked against the track, an edit (one undo step). */
+  roll(scope: Roll = 'everything') {
+    this.#rollWanted = { scope, seed: null, edit: 'dice' };
+  }
+
+  /** The playing track's own look again (its seed, everything not pinned), as a new track rolls it; an edit. */
+  resetToSeed() {
+    this.#rollWanted = { scope: 'everything', seed: -1, edit: 'reset' };
   }
 
   /** The middle of the picture at 16:9, 160 x 90, as a JPEG (a snapshot's thumbnail), from the next frame drawn. */
@@ -213,7 +222,7 @@ export class VisualsLoop {
       if (k >= 1) easing = null;
     };
     /** Values into the store as the visuals play them (a performance) or as an edit (the dice), eased in. */
-    const apply = (values: Randomized, cables: Record<string, PatchV2['cables'][number]['value']>, ms: number, edit: boolean, now: number) => {
+    const apply = (values: Randomized, cables: Record<string, PatchV2['cables'][number]['value']>, ms: number, edit: string | null, now: number) => {
       const flat = live.update(host.store.patch);
       const fromValues: Randomized = {};
       const toValues: Randomized = {};
@@ -230,7 +239,7 @@ export class VisualsLoop {
         applyKnobs(p, values);
         for (const c of p.cables) if (c.id in cables) c.value = cables[c.id];
       };
-      if (edit) host.store.change(f, 'dice');
+      if (edit) host.store.change(f, edit);
       else host.store.perform(f);
       if (ms > 0) easing = { from: fromValues, to: toValues, start: now, ms };
     };
@@ -238,12 +247,15 @@ export class VisualsLoop {
     // A roll being worked out, over frames (the flame's survey yields): a new track's (the patch's Dice: a performance)
     // or the dice's (tried against the track, an edit).
     let rolling: Generator<void, { values: Randomized; cables: Record<string, PatchV2['cables'][number]['value']> }> | null = null;
-    let rollingAs: { edit: boolean; ms: number } = { edit: false, ms: BLEND_MS };
-    const rollOf = function* (seed: number, scope: (typeof RANDOMIZE_SCOPES)[number], check: { key: string; position: number } | null) {
+    let rollingAs: { edit: string | null; ms: number } = { edit: null, ms: BLEND_MS };
+    const rollOf = function* (seed: number, roll: Roll, check: { key: string; position: number } | null) {
       const patch = host.store.patch;
-      const knobsScope = scopeNamed(scope, host.types);
+      const scope = typeof roll === 'string' ? roll : null;
+      const ids = typeof roll === 'string' ? null : new Set(roll.module);
+      const knobsScope = scope ? scopeNamed(scope, host.types) : (m: { id: string }) => ids!.has(m.id);
+      const withCables = scope === 'everything' || scope === 'cables';
       const values: Randomized = knobsScope ? yield* randomize(patch, host.types, { seed, scope: knobsScope }) : {};
-      const cables = scope === 'everything' || scope === 'cables' ? randomizeCables(patch, host.types, { seed }) : {};
+      const cables = withCables ? randomizeCables(patch, host.types, { seed }) : {};
       if (!check) return { values, cables };
       // The dice: this seed and the next ones, each checked against the track (its sidechains taken out), the first
       // within the limits taken, else the least over them.
@@ -255,7 +267,7 @@ export class VisualsLoop {
       let best: { values: Randomized; cables: typeof cables; by: number } | null = null;
       for (let t = 0; t < TRIES; t++) {
         const tryValues: Randomized = t === 0 ? values : knobsScope ? yield* randomize(patch, host.types, { seed: seed + t, scope: knobsScope }) : {};
-        const tryCables = t === 0 ? cables : scope === 'everything' || scope === 'cables' ? randomizeCables(patch, host.types, { seed: seed + t }) : {};
+        const tryCables = t === 0 ? cables : withCables ? randomizeCables(patch, host.types, { seed: seed + t }) : {};
         const candidate = structuredClone(patch);
         applyKnobs(candidate, tryValues);
         for (const c of candidate.cables) if (c.id in tryCables) c.value = tryCables[c.id];
@@ -345,10 +357,14 @@ export class VisualsLoop {
       key = m.key;
       // The dice the owner tapped: a roll over its scope, checked against the track, as an edit.
       if (this.#rollWanted && !rolling) {
-        rolling = rollOf(Math.floor(Math.random() * 0x100000000), this.#rollWanted, m.key ? { key: m.key, position: m.position } : null);
-        rollingAs = { edit: true, ms: ANOTHER_MS };
-        lookCame = 'dice';
+        const want = this.#rollWanted;
         this.#rollWanted = null;
+        // Reset to seed: the track's own, unchecked (a new track's look is not checked either); the dice: a fresh one.
+        const reset = want.seed === -1;
+        const seed = reset ? seedOf(m.key ?? 'cratarr') : Math.floor(Math.random() * 0x100000000);
+        rolling = rollOf(seed, want.scope, reset || !m.key ? null : { key: m.key, position: m.position });
+        rollingAs = { edit: want.edit, ms: reset ? BLEND_MS : ANOTHER_MS };
+        lookCame = reset ? 'track' : 'dice';
       }
       if (rolling) {
         const until = performance.now() + 4;
@@ -407,7 +423,11 @@ export class VisualsLoop {
       };
       const stepped = stepEngine(engine, flat, host.types, m, read, how, dt, { still, now, fluidFull: FLUID_FULL, meters: meterValues, flamePoints: partsWhere });
       const levers = leversOf(stepped.outputs);
-      if (!stepped.aspects) return;
+      // A patch with no Cratarr chain (a blank slate): nothing drawn, the screen black.
+      if (!stepped.aspects) {
+        (renderer as FlameRenderer & { blank?: () => void }).blank?.();
+        return;
+      }
       const d = stepped.aspects;
 
       // A new track's look, as the patch's Dice roll it: worked out over the next frames, a performance.
@@ -415,7 +435,7 @@ export class VisualsLoop {
         if (rolling) break;
         rolling = rollOf(r.seed, r.scope, null);
         // The first look shows at once; each next one blends in over a new track's time.
-        rollingAs = { edit: false, ms: looked ? BLEND_MS : 0 };
+        rollingAs = { edit: null, ms: looked ? BLEND_MS : 0 };
         looked = true;
         lookCame = 'track';
       }
@@ -444,7 +464,7 @@ export class VisualsLoop {
         (moved[r.module] ??= {})[r.knob] = v + 1 > knob.max ? knob.min : v + 1;
       }
       if (Object.keys(moved).length) {
-        apply(moved, {}, 0, false, now);
+        apply(moved, {}, 0, null, now);
         nextBlend = ANOTHER_MS;
         lookCame = 'moment';
       }
