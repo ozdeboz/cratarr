@@ -212,7 +212,8 @@ export function openView(b: Rect, view: Size, pad: Pad, zoom = FULL_ZOOM, first?
 export function firstModule(nodes: { position: XY; parentId?: string; data: NodeData }[], _portrait = false): XY | undefined {
   const top = nodes.filter((n) => !n.parentId && (n.data.kind === 'module' || n.data.kind === 'box'));
   if (!top.length) return undefined;
-  const givers = top.filter((n) => n.data.kind === 'module' && n.data.cables && !n.data.cables.in && n.data.cables.out > 0);
+  // (Not a music module of one signal: a small one beside what it feeds, not where the rack starts.)
+  const givers = top.filter((n) => n.data.kind === 'module' && !n.data.music && n.data.cables && !n.data.cables.in && n.data.cables.out > 0);
   if (givers.length) return givers.reduce((a, b) => ((b.data as ModuleData).cables!.out > (a.data as ModuleData).cables!.out ? b : a)).position;
   const corner = { x: Math.min(...top.map((n) => n.position.x)), y: Math.min(...top.map((n) => n.position.y)) };
   const far = (p: XY) => Math.hypot(p.x - corner.x, p.y - corner.y);
