@@ -19,7 +19,8 @@
 // Mixes) is claude-632's (step 3): `pictureWiring`, none until theirs lands.
 
 import type { RouteValue } from './curves';
-import { COLUMN_SCALES, isRoute } from './routes';
+import { ASPECTS, COLUMN_SCALES, isRoute, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, type Aspect } from './routes';
+import { shapeOf } from './evaluate';
 import { ASPECT_KNOB, cratarrPatch, modulesOf, type Cable, type Module, type Patch } from './patch';
 import { isDevice, SHOW_PARTS, type CableV2, type Device, type PatchV2, type PortRef } from './ports';
 import type { VisualSettings } from './settings.svelte';
@@ -77,6 +78,8 @@ function showDevice(show: Module): Device {
     inputs: [
       { as: 'light', label: 'Light', module: SHOW_PARTS[0].type, port: 'picture' },
       ...SHOW_PARTS.map(({ knob, type, label }) => ({ as: knob, label, module: type, port: knob })),
+      // Its level knobs' gains (0057 §7e item 1), for the VCAs cables now go through.
+      ...SHOW_PARTS.filter(({ knob }) => LEVEL_KNOBS.has(`show.${knob}`)).map(({ knob, type, label }) => ({ as: `${knob}:gain`, label: `${label}: gain`, module: type, port: `${knob}:gain` })),
     ],
     outputs: [{ as: 'picture', label: 'Picture', module: SHOW_PARTS[SHOW_PARTS.length - 1].type, port: 'picture' }],
     macros: [],
@@ -142,8 +145,73 @@ const SCALE_OF = new Map(
   (Object.entries(COLUMN_SCALES) as [string, string][]).filter(([a]) => a !== 'stir' && a !== 'flow' && a !== 'swirl').map(([a, key]) => [ASPECT_KNOB[a as keyof typeof ASPECT_KNOB].join('.'), key]),
 );
 
-/** Today's settings (with their extras) as a v2 patch. */
-export function toV2(s: VisualSettings): PatchV2 {
+/** Each column knob's aspect (today's chain), by `module.knob`. */
+const ASPECT_AT = new Map((Object.entries(ASPECT_KNOB) as [Aspect, [string, string]][]).map(([a, [m, k]]) => [`${m}.${k}`, a]));
+const LEVEL_KNOBS = new Set([...ASPECT_AT].filter(([, a]) => LEVEL_ASPECTS.includes(a)).map(([k]) => k));
+
+/** Cables only add (0057 §7e items 1, 3, 4; claude-5f's shapes, proved frame by frame over the recorded tracks):
+ *  - a level column's cables each into a VCA's cv (its peak taken off, by the Loudness's out or its own depth), the
+ *    VCAs in series, the bands' first and through a Merge (geometric mean), the last into the knob's gain;
+ *  - a moment column's cables into a Merge (largest), then a Beat gate, then the step's next;
+ *  - a band's cables into another column (not a part's: the parts keep their channels) through a Merge (mean). */
+function cablesAdd(modules: Module[], cables: CableV2[]): { modules: Module[]; cables: CableV2[] } {
+  const out: CableV2[] = [];
+  const added: Module[] = [];
+  const byColumn = new Map<string, CableV2[]>();
+  for (const c of cables) {
+    const key = `${c.to.module}.${c.to.port}`;
+    const aspect = ASPECT_AT.get(key);
+    const level = !!aspect && LEVEL_ASPECTS.includes(aspect);
+    const moment = !!aspect && (MOMENT_ASPECTS as readonly string[]).includes(aspect);
+    const merged = !!aspect && !level && !moment && !PART_ASPECTS.includes(aspect) && c.from.channel !== undefined;
+    if (level || moment || merged) (byColumn.get(key) ?? byColumn.set(key, []).get(key)!).push(c);
+    else out.push(c);
+  }
+  for (const [key, cs] of byColumn) {
+    const [module, knob] = key.split('.');
+    const col = `${module}-${knob}`;
+    const aspect = ASPECT_AT.get(key)!;
+    const one = (from: string, to: CableV2['to'], id: string): CableV2 => ({ id, from: { module: from, port: 'out' }, to, value: 1, mode: 'swing', depth: null });
+    if (LEVEL_ASPECTS.includes(aspect)) {
+      let prev: string | null = null;
+      let i = 0;
+      const vca = (c: CableV2) => {
+        const id = `vca-${col}-${i++}`;
+        const peak = shapeOf(c.value).peak;
+        const ch = c.from.channel !== undefined ? { channel: c.from.channel } : {};
+        added.push({ id, type: 'vca', knobs: { gain: c.depth === null ? 1 - peak : 1 } });
+        if (prev) out.push(one(prev, { module: id, port: 'in' }, `${id}-in`));
+        out.push({ ...c, mode: 'swing', to: { module: id, port: 'cv', ...ch } });
+        if (c.depth !== null) out.push({ id: `${id}-peak`, from: c.depth ?? { module: 'envelope', port: 'out' }, to: { module: id, port: 'cv', ...ch }, value: -peak, mode: 'swing', depth: null });
+        prev = id;
+      };
+      const bands = cs.filter((c) => c.from.channel !== undefined);
+      for (const c of bands) vca(c);
+      if (bands.length) {
+        added.push({ id: `merge-${col}`, type: 'merge', knobs: { mode: 3 } });
+        out.push(one(prev!, { module: `merge-${col}`, port: 'in' }, `merge-${col}-in`));
+        prev = `merge-${col}`;
+      }
+      for (const c of cs.filter((c) => c.from.channel === undefined)) vca(c);
+      out.push(one(prev!, { module, port: `${knob}:gain` }, `${col}-gain`));
+    } else if ((MOMENT_ASPECTS as readonly string[]).includes(aspect)) {
+      added.push({ id: `merge-${col}`, type: 'merge', knobs: { mode: 2 } });
+      for (const c of cs) out.push({ ...c, to: { module: `merge-${col}`, port: 'in', ...(c.from.channel !== undefined ? { channel: c.from.channel } : {}) } });
+      added.push({ id: `gate-${col}`, type: 'gate', knobs: { above: 0.5, hysteresis: 1 / 3, lift: 0, recover: 0, release: 0, gap: 2, amount: 1 } });
+      out.push(one(`merge-${col}`, { module: `gate-${col}`, port: 'in' }, `gate-${col}-in`));
+      out.push(one(`gate-${col}`, { module, port: `${knob}:next` }, `${col}-next`));
+    } else {
+      added.push({ id: `mean-${col}`, type: 'merge', knobs: { mode: 1 } });
+      for (const c of cs) out.push({ ...c, to: { module: `mean-${col}`, port: 'in', channel: c.from.channel } });
+      out.push(one(`mean-${col}`, { module, port: knob }, `mean-${col}-out`));
+    }
+  }
+  return { modules: [...modules, ...added], cables: out };
+}
+
+/** Today's settings (with their extras) as a v2 patch. `addOnly` (default): cables only add (0057 §7e); false gives the
+ *  patch before that step, for the proof. */
+export function toV2(s: VisualSettings, opts: { addOnly?: boolean } = {}): PatchV2 {
   const p = cratarrPatch(s);
   // Drift is Random now (its smooth end: Shape 0), as VCV, Vital and Bitwig name it (the owner).
   const modules: Module[] = [...modulesOf(p).values()].map((m) => (m.type === 'drift' ? { ...m, type: 'random', knobs: { ...m.knobs, shape: 0 } } : { ...m, knobs: { ...m.knobs } }));
@@ -217,7 +285,8 @@ export function toV2(s: VisualSettings): PatchV2 {
     } else cables.push({ id: c.id, from: viaAdsr(extraFrom(c)), to, value, mode: c.mode });
   }
   for (const a of adsrs.values()) cables.push(a.gate);
+  const all = [...engine.values(), ...[...adsrs.values()].map((a) => a.module), ...modules];
+  const added = opts.addOnly === false ? { modules: all, cables } : cablesAdd(all, cables);
   const wiring = pictureWiring(p);
-  cables.push(...wiring.cables);
-  return { v: 2, modules: [...engine.values(), ...[...adsrs.values()].map((a) => a.module), ...modules, ...wiring.modules], cables, macros: p.macros, pins: p.pins };
+  return { v: 2, modules: [...added.modules, ...wiring.modules], cables: [...added.cables, ...wiring.cables], macros: p.macros, pins: p.pins };
 }

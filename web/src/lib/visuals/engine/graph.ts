@@ -19,6 +19,8 @@ import { A, ASPECTS, B, BAND_SIGNALS, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECT
 import { BANDS, type VisualSettings } from '../settings.svelte';
 import { newChain, stepChain, type ChainState } from './chain';
 import { newDucker, stepDucker, type DuckerState } from './compressor';
+import { newClockTriggers, stepClockTriggers, type ClockTriggerState, type ClockTriggers } from './clock';
+import { gridOf, type Grid, type GridPoint } from './grid';
 import { FLASH_GUARD } from './sidechain';
 import type { MeterValues } from '../meters';
 import { NO_STRIKE, adsrOf, newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from './modules';
@@ -89,6 +91,10 @@ export type EngineState = {
   triggers: Record<string, number>;
   /** Each Ducker's state, and the Screen's flash guard's. */
   duckers: Record<string, DuckerState>;
+  /** The Clock's beat, bar and phrase triggers (clock.ts). */
+  clockTriggers: ClockTriggerState;
+  /** Each Grid's points and channels, and the knobs they were laid out for (laid out again only when those change). */
+  grids: Record<string, { key: string; grid: Grid }>;
 };
 
 export function newEngine(): EngineState {
@@ -111,6 +117,8 @@ export function newEngine(): EngineState {
     poly: {},
     triggers: {},
     duckers: {},
+    clockTriggers: newClockTriggers(),
+    grids: {},
   };
 }
 
@@ -125,6 +133,8 @@ export type EngineFrame = {
   macros: Record<string, number>;
   /** The steps past the chain whose cables ask for a moment (morph.ts takes it at the module's neutral). */
   moments: MomentRequest[];
+  /** Each Grid's points (its `points` output, for Instance: claude-632's compositor). */
+  points: Record<string, GridPoint[]>;
 };
 
 export type EngineOptions = {
@@ -163,6 +173,19 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   const index = m.beat?.index ?? null;
   const onBeat = index !== null && st.beat !== undefined && index !== st.beat ? 1 : 0;
   st.beat = index;
+  // The Clock's triggers (its beat, bar and phrase, each by its ratio), where the patch has a Clock.
+  const clockModule = p.modules.find((x) => x.type === 'clock');
+  const ticks: ClockTriggers = clockModule ? stepClockTriggers(st.clockTriggers, m, clockModule.knobs, step) : { beat: 0, bar: 0, phrase: 0 };
+  if (clockModule) for (const k of ['beat', 'bar', 'phrase'] as const) outputs[`${clockModule.id}.${k}`] = ticks[k];
+  // Each Grid laid out by its knobs as set (seeded by its id: the same every frame and on every device).
+  const points: Record<string, GridPoint[]> = {};
+  for (const x of p.modules) {
+    if (x.type !== 'grid') continue;
+    const key = JSON.stringify(x.knobs);
+    if (st.grids[x.id]?.key !== key) st.grids[x.id] = { key, grid: gridOf(x.knobs, seedOf(x.id)) };
+    points[x.id] = st.grids[x.id].grid.points;
+  }
+  for (const id of Object.keys(st.grids)) if (!(id in points)) delete st.grids[id];
 
   // The modulators running: one each, anew where its type changed, none for those gone.
   const modulatorType = (type: string): ModulatorType | null => {
@@ -210,7 +233,9 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     }
     if (type === 'track') return pulse;
     if (type === 'envelope') return f.port === 'out' ? env.out : env.level;
-    if (type === 'clock') return outputs['clock.rate'] ?? st.clock.rate;
+    if (type === 'clock') return f.port === 'beat' || f.port === 'bar' || f.port === 'phrase' ? ticks[f.port] : (outputs['clock.rate'] ?? st.clock.rate);
+    // A Grid's channel: each point's index, distance, angle, row or column (0..1).
+    if (type === 'grid') return finite(st.grids[f.module]?.grid.channels[f.channel ?? 0]?.[f.port as 'index']);
     if (st.modulators[f.module]) {
       const v = f.module in outputs ? outputs[f.module] : finite(st.values[f.module]);
       return clamp(modulatorType(st.modulators[f.module].type)?.range === 'bipolar' ? (v + 1) / 2 : v, 0, 1);
@@ -386,6 +411,12 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     const t = modulatorType(x.type)!;
     const k = knobsOf(x, t);
     for (const port of t.inputs ?? []) k[port] = portSum(x.id, port);
+    // Its trigger inputs, only where plugged in (an unplugged clock is none, not 0); a reset normalled to the Clock's bar.
+    for (const port of t.triggers ?? []) {
+      if (into.has(`${x.id}|${port}`)) k[port] = portSum(x.id, port);
+      else if (port === 'reset' && clockModule) k[port] = ticks.bar;
+      else delete k[port];
+    }
     knobs[x.id] = k;
     outputs[x.id] = st.modulators[x.id].run.step(step, read, k);
   }
@@ -484,7 +515,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     if (t.knobs.some((knob) => COLUMN.has(`${x.id}|${knob.id}`))) continue;
     knobs[x.id] = knobsOf(x, t);
   }
-  return { aspects, knobs, outputs, macros, moments };
+  return { aspects, knobs, outputs, macros, moments, points };
 
   /** A module's knobs as its macros and cables move them. */
   function knobsOf(x: Module, t: ModuleType): Record<string, number> {

@@ -4,6 +4,7 @@
 // modulator's `inputs` are value inputs, a picture module takes and gives a picture, a modulator gives a value. The
 // modules that hold today's hidden behaviours are declared here, so every one of them shows.
 import type { RouteValue } from './curves';
+import { CLOCK_TRIGGER_KNOBS } from './engine/clock';
 import { BUSY, type Knob, type Macro, type Module, type ModuleType, type Place } from './patch';
 import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 
@@ -60,9 +61,10 @@ export function polyKnobs(t: ModuleType): ModuleType {
 }
 
 const knobPortOf = (k: Knob): Port => ({ ...knobPort(k), ...(k.channels ? { channels: k.channels } : {}) });
-/** A level knob's gain (0057 §7e item 1): its value times this (0..1), normalled to 1; a VCA's out cabled in, as a
- *  module's CV-controlled level. */
-const gainPortOf = (k: Knob): Port[] => (k.kind === 'level' ? [{ id: `${k.id}:gain`, label: `${k.label}: gain`, type: 'value', ...(k.channels ? { channels: k.channels } : {}) }] : []);
+/** A knob's gain (0057 §7e), normalled to 1: a level's value times it (a module's CV-controlled level); a swing's
+ *  modulation (its cables' sum) times it (Bitwig's modulation amount); a time's value divided by it (a time CV). A VCA's
+ *  or a Ducker's out is cabled in. Steps have none. */
+const gainPortOf = (k: Knob): Port[] => (k.kind === 'step' ? [] : [{ id: `${k.id}:gain`, label: `${k.label}: gain`, type: 'value', ...(k.channels ? { channels: k.channels } : {}) }]);
 /** A step knob's trigger (0057 §7e): it moves on to its next step at its module's neutral, as a Gate fires it. */
 const nextPortOf = (k: Knob): Port[] => (k.kind === 'step' && k.randomize !== false ? [{ id: `${k.id}:next`, label: `${k.label}: next`, type: 'trigger' }] : []);
 
@@ -161,7 +163,7 @@ export const CLOCK = declared(
   'clock',
   'Clock',
   'modulator',
-  [knob('speed', 'Speed', 0, 2, 1, 'level', 0), knob('beats', 'Beats a turn', 4, 128, 32)],
+  [knob('speed', 'Speed', 0, 2, 1, 'level', 0), knob('beats', 'Beats a turn', 4, 128, 32), ...CLOCK_TRIGGER_KNOBS],
   [{ id: 'tempo', label: 'Tempo', type: 'value', normal: { module: 'music', port: 'tempo' } }],
   [out('phase', 'Turn'), out('rate', 'Rate'), out('beat', 'Beat', 'trigger'), out('bar', 'Bar', 'trigger'), out('phrase', 'Phrase', 'trigger')],
 );
@@ -291,7 +293,8 @@ export const LATTICES = ['square', 'hexagonal', 'triangular', 'rings', 'spiral']
 /** The most points a Grid gives (its channels). */
 export const MOST_POINTS = 64;
 
-/** Grid (0057 §4c; TouchDesigner's Grid SOP): points on a lattice, and each point's values as channels. */
+/** Grid (0057 §4c; TouchDesigner's Grid SOP): points on a lattice, and each point's values as channels. Its frame is
+ *  centred, y up, the screen's short side −1..1 (as Fold and Instance read it). */
 export const GRID = declared(
   'grid',
   'Grid',
@@ -348,7 +351,55 @@ export const FILTER_BANK = declared(
   [out('bands', 'Bands', 'audio', 6), out('level', 'Level', 'value', 6)],
 );
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
+/** The kind of busyness each knob makes (0057 §7e, claude-5f's sidechain): the Ducker of that kind holds it back. */
+export const BUSY_OF: Readonly<Record<string, (typeof BUSY)[number]>> = {
+  'clock.speed': 'motion',
+  'flame.hue': 'colour',
+  'flame.zoom': 'zoom',
+  'flame.evolution': 'shape',
+  'gate.gap': 'looks',
+};
+
+/** Ducker (0057 §7e; the broadcast sidechain, claude-5f's): its input lowered by up to Depth (dB) while its key stands
+ *  over the threshold (attack, hold, release; let go under Hysteresis × the threshold). For counts (flashes a second,
+ *  looks a minute), which a ratio compressor in a closed loop cannot settle. Its input unplugged is 1. */
+export const DUCKER = declared(
+  'ducker',
+  'Ducker',
+  'modulator',
+  [
+    knob('threshold', 'Threshold', 0, 10, 1),
+    knob('depth', 'Depth (dB)', 0, 40, 12),
+    knob('attack', 'Attack', 0, 5, 1),
+    knob('hold', 'Hold', 0, 10, 0),
+    knob('release', 'Release', 0, 20, 3),
+    knob('hysteresis', 'Hysteresis', 0, 1, 0.8),
+  ].map((k) => ({ ...k, randomize: false as const })),
+  [
+    { id: 'key', label: 'Sidechain', type: 'value' },
+    { id: 'in', label: 'Input', type: 'value' },
+  ],
+  [VALUE_OUT],
+);
+
+/** The picture modules of 0057 §5 and §6b (claude-632's ids): `picture` in and out; `by` a second picture. */
+const BY: Port = { id: 'by', label: 'By', type: 'picture' };
+export const GLOW = declared('glow', 'Glow', 'module', [knob('glow', 'Glow', 0, 1, 0.4, 'level')], [PICTURE_IN], [PICTURE_OUT]);
+export const TINT = declared('tint', 'Tint', 'module', [knob('tint', 'Tint', 0, 1, 0.7, 'level')], [PICTURE_IN, BY], [PICTURE_OUT]);
+export const MASK = declared('mask', 'Mask', 'module', [knob('amount', 'Amount', 0, 1, 1, 'level'), knob('invert', 'Invert', 0, 1, 0, 'step')], [PICTURE_IN, BY], [PICTURE_OUT]);
+export const DISPLACE = declared(
+  'displace',
+  'Displace',
+  'module',
+  [knob('amount', 'Amount', 0, 1, 0.3, 'level'), knob('scale', 'Scale', 0, 1, 0.5), knob('mode', 'Mode', 0, 1, 0, 'step')],
+  [PICTURE_IN, BY],
+  [PICTURE_OUT],
+);
+/** Threshold: a luma key, only the picture's bright parts (for Bloom). */
+export const THRESHOLD = declared('threshold', 'Threshold', 'module', [knob('threshold', 'Threshold', 0, 1, 0.6, 'level'), knob('softness', 'Softness', 0, 1, 0.1)], [PICTURE_IN], [PICTURE_OUT]);
+export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD];
+
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 

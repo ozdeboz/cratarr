@@ -341,6 +341,24 @@ set of components, modules of which some are inserted as devices, but they are i
 - In the model a device is a module of type `device` whose `patch` is a v2 patch of its own, plus its exposed ports and
   macros. The engine and the compositor flatten it before running, so it costs nothing.
 
+### 6b. The devices we offer
+
+The owner asked which sets of modules are common and powerful enough to offer as devices, and agreed to nine, from
+the preset study and other modular tools, plus one new standard module, **Threshold** (a luma key: only a picture's
+bright parts). Each sits in the module picker, opens to show its modules, and has a few macros:
+
+| Device | Inside | Macros |
+|---|---|---|
+| Feedback Tunnel | Feedback → Warp → Keep → Mix (lighten) | Zoom, Turn, Trail |
+| Kick | Music's bass hits → Beat gate (above typical) → ADSR | Sensitivity, Punch, Decay |
+| Breather | Loudness → Slow follower | Smoothness, Depth |
+| Wanderer | Random (smooth), clocked to the bars | Speed, Range |
+| Bloom | Blur → Threshold → Mix (add) | Threshold, Size, Strength |
+| Scope | Music's sound → Waves → Glow → Tint | Height, Glow, Colour |
+| Grid Particles | Grid → Instance → Shapes, distance into size | Count, Spacing, Pulse |
+| Echo Trails | Feedback → Echo → Mix (lighten) | Length, Drift |
+| Fractal Spiral | Feedback → Fold (kaleidoscope) → Warp → Keep | Folds, Turn, Depth |
+
 ### 7. One store
 
 - The patch is the truth: kept, shared and saved in snapshots as a v2 patch.
@@ -401,6 +419,13 @@ what a modular system does:
    routes do) changes in one visible step to "against this track's typical", as new cables read them.
 9. **Accent, not Flash.** The course-and-swing filter is renamed Accent, so "flash" means only the Screen's flash
    guard.
+
+10. **A cable is amount, depth and channel** (the owner: "yes, amount, depth, channel. and most definitely amount as
+    a curve"). Its amount is a curve (the plain amount the straight one); its depth what scales it (normalled to the
+    Envelope); its channel one band of a polyphonic source. Everything else leaves the wire: its mode (item 1), its
+    walk (item 5), its speed (Music gives a slow output beside each signal, `<signal>:slow`, or a Slow follower does
+    it), and its reading (a reference a Music row, item 8: how a signal is read is settled at its source, not per
+    wire).
 
 Kept on purpose, documented: reduced motion (the system's accessibility setting, as the flash guard is safety), and
 each module's own inner maths (the flame's parts and light ranges).
