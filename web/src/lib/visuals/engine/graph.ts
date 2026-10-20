@@ -270,6 +270,15 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     return finite(st.values[r.module]);
   };
   const walkOf = (c: CableV2) => (shapeOf(c.value).walks ? finite(opts.walk?.[c.id], 1) : 1);
+  /** A cable into a knob as the knob takes it: a polyphonic one (from a band's signal, an ADSR's or a VCA's channels,
+   *  with no channel of its own: VCV's polyphonic cable) as one a channel, each its band's; any other as it is. */
+  const perChannel = (cables: readonly CableV2[]): CableV2[] =>
+    cables.flatMap((c) => {
+      if (c.from.channel !== undefined) return [c];
+      const type = typeOf.get(c.from.module) ?? c.from.module;
+      const poly = (type === 'music' && BAND_PORTS.has(c.from.port)) || type === 'adsr' || type === 'vca';
+      return poly ? Array.from({ length: CHANNELS }, (_, ch) => ({ ...c, from: { ...c.from, channel: ch } })) : [c];
+    });
   // The Screen's flash guard (WCAG 2.3.1; claude-632's limiter on the output, step 3): fixed, keyed by the flashes the
   // last frame made, a tenth at most held back; no knob in it.
   const guard =
@@ -436,7 +445,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   for (const [key, cables] of into) {
     const a = COLUMN.get(key);
     if (a === undefined) continue;
-    for (const c of cables) {
+    for (const c of perChannel(cables)) {
       const x = xOf(c);
       if (x === null) continue;
       const band = c.from.channel ?? null;
@@ -540,7 +549,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     let level = 1;
     let bandSwing = 0;
     let bandLevel = 1;
-    for (const c of cables) {
+    for (const c of perChannel(cables)) {
       const x = xOf(c);
       if (x === null) continue;
       const sh = shapeOf(c.value);
