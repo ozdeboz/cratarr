@@ -105,7 +105,18 @@ export function portsOf(t: ModuleType & { ports?: Ports }): Ports {
   // track's every part. Into any one-channel knob, six channels are the bands' mean (a Merge, in the conversion).
   // The flame gives where its parts are too (0057 §4h: where the Fluid's pushes land, unless cabled otherwise).
   if (t.type === 'flame')
-    return { in: [LIGHT('light', 'Last light'), ...knobs.map((p) => (FLAME_PARTS.has(p.id) ? { ...p, channels: 6 } : p))], out: [LIGHT('light', 'Light'), { id: 'points', label: 'Points', type: 'points' }] };
+    return {
+      in: [LIGHT('light', 'Last light'), ...knobs.map((p) => (FLAME_PARTS.has(p.id) ? { ...p, channels: 6 } : p))],
+      out: [
+        LIGHT('light', 'Light'),
+        { id: 'points', label: 'Points', type: 'points' },
+        // Where it is and how much it covers (0057 audit row 8: the framing and exposure on cables, a Camera's).
+        out('x', 'Centre across'),
+        out('y', 'Centre up'),
+        out('size', 'Size'),
+        out('coverage', 'Coverage'),
+      ],
+    };
   // Fluid (0057 §4h, the owner): light, a picture or points through its flow, the same type out; its pushes at the
   // points into `at` (the flame's parts unless cabled); its flow out, for Show's read-back, Stream and Displace.
   if (t.type === 'fluid' || t.type === 'fluid-loop')
@@ -171,6 +182,8 @@ export const MUSIC: Declared = {
       out('audio', 'Sound', 'audio'),
       // 1 while the music plays, 0 paused (0057 §7e: the pause's dimming, cabled in sight).
       out('playing', 'Playing'),
+      // The playing track's cover, as a picture (0057 audit row 14: its colours into a Tint's `by`, not fetched out of sight).
+      out('cover', 'Cover', 'picture'),
       // A trigger as a track starts (the visuals opening on one too), and the track's seed (0..1, the same for the same
       // track): Track folded into Music (0057 §7f).
       out('newtrack', 'New track', 'trigger'),
@@ -471,7 +484,24 @@ export const LENS = declared(
   [{ id: 'out', label: 'Out', type: 'points', polymorphic: LENS_TYPES }],
 );
 
-export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD, LENS];
+/** Camera (0057 audit row 8, the owner: "visible modules"): the picture or light framed, moved to centre on (x, y) and
+ *  scaled to `size`, following them by its Follow and Slew (cabled from the Flame's centre and size by default). */
+const CAMERA_TYPES: readonly PortType[] = ['light', 'picture'];
+export const CAMERA = declared(
+  'camera',
+  'Camera',
+  'module',
+  [knob('follow', 'Follow', 0, 1, 1, 'level'), knob('slew', 'Slew', 0, 4, 0.8), knob('margin', 'Margin', 0, 1, 0.15)],
+  [
+    { id: 'in', label: 'In', type: 'light', polymorphic: CAMERA_TYPES },
+    { id: 'x', label: 'Centre across', type: 'value', normal: { module: 'flame', port: 'x' } },
+    { id: 'y', label: 'Centre up', type: 'value', normal: { module: 'flame', port: 'y' } },
+    { id: 'size', label: 'Size', type: 'value', normal: { module: 'flame', port: 'size' } },
+  ],
+  [{ id: 'out', label: 'Out', type: 'light', polymorphic: CAMERA_TYPES }],
+);
+
+export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD, LENS, CAMERA];
 
 /** The Randomize scopes (0057 §4d), in the dice's menu's order. */
 export const RANDOMIZE_SCOPES = ['everything', 'sources', 'effects', 'mixers', 'modulators', 'cables'] as const;

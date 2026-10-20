@@ -57,6 +57,7 @@ export const moduleHelp: Record<string, string> = {
   mask: 'The picture let through only where another is bright.',
   displace: 'The picture pushed about by another.',
   threshold: 'Only the picture’s bright parts, the rest black: a luma key.',
+  camera: 'Frames the picture: centred on a point, scaled to a size, following them slowly.',
   lens: 'Points, light or a picture through a lens: a warp (Spherical, Swirl …) or a shape (Heart, Cratarr, Star …).',
   adsr: 'An ADSR envelope on each gate or trigger, one a channel.',
   sequencer: 'A step sequencer: up to sixteen values, one a clock step.',
@@ -125,7 +126,7 @@ const SHAPE_RING = {
 
 /** A port's or knob's own line, where its label does not say it all and help.ts has none. */
 export const portHelp: Record<string, Record<string, string>> = {
-  flame: { light: 'Its light: in, as it was last frame; out, as drawn now, before Tone map.', points: 'Where its parts are: where the Fluid pushes, unless cabled otherwise.' },
+  flame: { light: 'Its light: in, as it was last frame; out, as drawn now, before Tone map.', points: 'Where its parts are: where the Fluid pushes, unless cabled otherwise.', x: 'Its centre, across.', y: 'Its centre, up.', size: 'How big it is drawn.', coverage: 'How much of the screen it covers: for exposure.' },
   shapes: {
     ...SHAPE_RING,
     sides: 'Corners a shape; between whole numbers it morphs, near a circle at many.',
@@ -262,6 +263,15 @@ export const portHelp: Record<string, Record<string, string>> = {
   mask: { amount: 'How strongly it masks.', invert: 'Let through where the other is dark instead.', by: 'The picture that decides where.' },
   displace: { amount: 'How far it pushes.', scale: 'How fine the pushing is.', mode: 'By the other’s brightness, or by its red and green.', by: 'The picture that pushes.' },
   threshold: { threshold: 'The brightness under which it goes black.', softness: 'How soft the edge is.' },
+  camera: {
+    in: 'Light or a picture to frame; out the same.',
+    x: 'Where to centre, across: the Flame’s centre unless cabled.',
+    y: 'Where to centre, up: the Flame’s centre unless cabled.',
+    size: 'How much to fill the view with: the Flame’s size unless cabled.',
+    follow: 'How much it follows: none at 0.',
+    slew: 'How slowly it follows (seconds).',
+    margin: 'Room left round what it frames.',
+  },
   lens: {
     in: 'Points, light or a picture to send through the lens; out the same.',
     kind: 'Which lens: a warp of the whole, or a shape the points are sent into.',
@@ -363,6 +373,7 @@ export const portHelp: Record<string, Record<string, string>> = {
   music: {
     audio: 'The sound itself, its recent samples.',
     playing: '1 while the music plays, 0 while it is paused.',
+    cover: 'The playing track’s cover, as a picture: into a Tint for its colours.',
     newtrack: 'A trigger as a track starts, and as the visuals open on one.',
     seed: 'A number of the playing track’s own, the same each time it plays.',
     hits: 'A trigger on each hit in a band, such as a drum or a plucked note, its strength with it.',
