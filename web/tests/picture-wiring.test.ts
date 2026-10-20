@@ -63,3 +63,23 @@ test('the effects run as one pass, but a run ends at an Echo that shows', async 
   assert.deepEqual(effectRuns([2, 1, 0], ids, [1, 1, 1]), [[0, 0, 9], [10, 16, 0]]);
   assert.deepEqual(effectRuns([2, 1, 0], ids, [1, 1, 0]), [[10, 16, 9]], 'an Echo at nothing ends none');
 });
+
+test('an Echo with shapes after it is a visible loop: Feedback → Echo → Mix (Lighten) beside the picture, one pass', async () => {
+  const { effectRuns } = await import('../src/lib/visuals/picture-graph.ts');
+  // Rotate, Pulse, Echo (the effects recording's).
+  const v = toV2({ ...settings(), fx1: 3, fx1Amount: 1, fx2: 1, fx2Amount: 0.8, fx3: 1, fx3Amount: 0.8 });
+  const c = compile(v, types);
+  assert.deepEqual(c.errors, []);
+  const ids = c.order.map((n) => n.id);
+  assert.deepEqual(ids.slice(ids.indexOf('layers')), ['layers', 'fx3-mix', 'fx2', 'fx1', 'fx3-feedback', 'screen']);
+  assert.ok(ids.indexOf('fx3') < ids.indexOf('fx3-mix'));
+  const by = (id: string) => c.order.find((n) => n.id === id)!;
+  assert.deepEqual(by('fx3').inputs.map((f) => f.from.module), ['fx3-feedback']);
+  assert.deepEqual(by('fx3-mix').inputs.map((f) => [f.port, f.from.module]), [['in1', 'layers'], ['in2', 'fx3']]);
+  assert.deepEqual(by('fx3-feedback').inputs.map((f) => f.from.module), ['fx1']);
+  assert.deepEqual(stagesOf(c), [...STAGES]);
+  assert.deepEqual(effectRuns([2, 1, 0], [10, 16, 9], [1, 0.8, 0.8], new Set([2])), [[10, 16, 9]], 'the loop in the one pass');
+  // Without shapes an Echo stays a plain module.
+  const plain = compile(toV2({ ...settings(), fx3: 1, fx3Amount: 0.8 }), types);
+  assert.ok(!plain.order.some((n) => n.id === 'fx3-feedback'));
+});
