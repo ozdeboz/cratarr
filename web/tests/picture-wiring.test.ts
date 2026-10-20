@@ -127,3 +127,12 @@ test('the walk draws the picture’s own loop as one pass: its Feedback, its War
   // Not lightened: drawn module by module.
   assert.equal(loopsOf(c.order.filter((n) => ids.has(n.id)), (id) => (id === 'loop-mix' ? { ...knobs(id), mode2: 0 } : knobs(id))).size, 0);
 });
+
+test('every preset is drawn whole: no errors, its stages; Start from scratch has no Screen', async () => {
+  const { PRESETS } = await import('../src/lib/visuals/presets.ts');
+  for (const p of PRESETS) {
+    const c = compile(p.patch(), types);
+    if (p.id === 'scratch') assert.deepEqual(c.errors, ['Nothing reaches a Screen: there is none.']);
+    else assert.ok(!c.errors.length && stagesOf(c), `${p.id}: ${c.errors.join(' · ')}`);
+  }
+});
