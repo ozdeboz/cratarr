@@ -200,20 +200,15 @@ export function openView(b: Rect, view: Size, pad: Pad, zoom = FULL_ZOOM, first?
   return { x: axis(b.x, b.width, w, pad.left, first?.x ?? b.x), y: axis(b.y, b.height, h, pad.top, first?.y ?? b.y), zoom };
 }
 
-/** The module the signals start at: the leftmost (portrait: the topmost) module or frame, the higher (the further left)
- *  of those level with it. */
-export function firstModule(nodes: { position: XY; parentId?: string; data: NodeData }[], portrait = false): XY | undefined {
+/** The module the signals start at: the one nearest the top left corner of the modules and frames (so a tall node at
+ *  the far left, low down, does not take the view from the one at the top), the higher of two as near. */
+export function firstModule(nodes: { position: XY; parentId?: string; data: NodeData }[], _portrait = false): XY | undefined {
   const top = nodes.filter((n) => !n.parentId && (n.data.kind === 'module' || n.data.kind === 'box'));
-  const key = (p: XY) => (portrait ? [p.y, p.x] : [p.x, p.y]);
-  let best: XY | undefined;
-  for (const n of top) {
-    const [a, b] = key(n.position);
-    if (!best) best = n.position;
-    else {
-      const [c, d] = key(best);
-      if (a < c - 0.5 || (Math.abs(a - c) <= 0.5 && b < d)) best = n.position;
-    }
-  }
+  if (!top.length) return undefined;
+  const corner = { x: Math.min(...top.map((n) => n.position.x)), y: Math.min(...top.map((n) => n.position.y)) };
+  const far = (p: XY) => Math.hypot(p.x - corner.x, p.y - corner.y);
+  let best = top[0].position;
+  for (const n of top) if (far(n.position) < far(best) - 0.5 || (Math.abs(far(n.position) - far(best)) <= 0.5 && n.position.y < best.y)) best = n.position;
   return best;
 }
 

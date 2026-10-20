@@ -891,7 +891,7 @@ test('ELK: a device opened here has room round its modules, and modules room bet
   assert.ok(Number(e.layoutOptions!['elk.spacing.nodeNode']) >= 48 && Number(e.layoutOptions!['elk.layered.spacing.nodeNodeBetweenLayers']) >= 96);
 });
 
-test('too big for the view, the graph opens at its first module (the leftmost; the topmost in portrait)', () => {
+test('too big for the view, the graph opens at its first module (the one nearest the top left corner)', () => {
   const { openView, firstModule } = await_graph;
   const pad = { top: 56, right: 16, bottom: 60, left: 16 };
   const nodes = [
@@ -900,8 +900,9 @@ test('too big for the view, the graph opens at its first module (the leftmost; t
     { position: { x: 900, y: 600 }, data: { kind: 'module' } },
     { position: { x: 380, y: 500 }, data: { kind: 'module' } },
   ] as never[];
-  assert.deepEqual(firstModule(nodes), { x: 380, y: 500 });
+  assert.deepEqual(firstModule(nodes), { x: 400, y: 30 }, 'not the leftmost far down');
   assert.deepEqual(firstModule(nodes, true), { x: 400, y: 30 });
+  assert.deepEqual(firstModule([{ position: { x: 0, y: 40 }, data: { kind: 'module' } }, { position: { x: 300, y: 0 }, data: { kind: 'module' } }] as never[]), { x: 0, y: 40 });
   const v = openView({ x: 0, y: 0, width: 3000, height: 3000 }, { width: 390, height: 500 }, pad, 1, firstModule(nodes, true));
   assert.deepEqual(v, { x: 16 - 400, y: 56 - 30, zoom: 1 });
 });
