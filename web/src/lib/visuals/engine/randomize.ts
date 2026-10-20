@@ -17,7 +17,8 @@
 
 import { drawing, PRESET_KEYS, randomFrom, seedOf, type Preset } from '../flame';
 import { SETTING_KNOB, type Knob, type Module, type ModuleType } from '../patch';
-import { isDevice, type PatchV2 } from '../ports';
+import { isDevice, type CableV2, type PatchV2 } from '../ports';
+import type { Curve, RouteValue } from '../curves';
 import { categoryOf, deviceCategory, portsFrom } from '../rack';
 
 /** Which knobs Randomize reaches: a module's knob (a polyphonic one's channels together). */
@@ -134,4 +135,37 @@ function* into(
       }
     }
   }
+}
+
+/** The modules whose cables are a patch's plumbing (what a conversion wires: VCAs, Merges, Gates, Shapers, the
+ *  sidechains), not amounts to roll. */
+const PLUMBING = new Set(['vca', 'merge', 'gate', 'shaper', 'ducker', 'meter', 'screen', 'dice']);
+
+/** The Cables roll (0057 §4d, Randomize's Cables scope): new amounts for a patch's existing cables, none added or taken
+ *  away, what is pinned (`cable:<id>`) kept. It reaches a cable that runs into a knob (not a module's input port) from
+ *  anything but the plumbing: the amounts a patch is played with. Each amount drawn uniformly over −1..1 from the
+ *  cable's own stream of the seed (one cable more or less changes no other's), as far as `reach` takes it from where it
+ *  is; a curve keeps its shape, scaled to the new height. */
+export function randomizeCables(p: PatchV2, types: Record<string, ModuleType>, opts: { seed: number; reach?: number }): Record<string, RouteValue> {
+  const reach = clamp(finite(opts.reach, 1), 0, 1);
+  const pinned = new Set(p.pins);
+  const typeOf = new Map(p.modules.map((m) => [m.id, m.type]));
+  const out: Record<string, RouteValue> = {};
+  for (const c of p.cables) {
+    const from = typeOf.get(c.from.module) ?? c.from.module;
+    const to = typeOf.get(c.to.module);
+    if (pinned.has(`cable:${c.id}`) || PLUMBING.has(from) || !to || PLUMBING.has(to)) continue;
+    if (!types[to]?.knobs.some((k) => k.id === c.to.port.replace(/\.\d+$/, ''))) continue;
+    const now = typeof c.value === 'number' ? c.value : c.value.h;
+    const drawn = randomFrom(seedOf(`${opts.seed}/cable/${c.id}`))() * 2 - 1;
+    const amount = now + (drawn - now) * reach;
+    out[c.id] = typeof c.value === 'number' ? amount : scaled(c.value, now, amount);
+  }
+  return out;
+}
+
+/** A curve at another height, its shape kept (its handles' heights in proportion). */
+function scaled(c: Curve, from: number, to: number): Curve {
+  const k = from !== 0 ? to / from : 0;
+  return from !== 0 ? { ...c, h1: [c.h1[0], c.h1[1] * k], h2: [c.h2[0], c.h2[1] * k], h: to } : { h1: [1 / 3, to / 3], h2: [2 / 3, (2 * to) / 3], h: to, ...(c.walks ? { walks: true } : {}) };
 }
