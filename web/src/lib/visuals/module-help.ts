@@ -7,7 +7,7 @@
 import { HELP } from './help';
 import { RENAMED } from './modulators/modulators';
 import { SETTING_KNOB } from './patch';
-import { SHOW_PARTS } from './ports';
+import { SHOW_PARTS, TRIGGER_SIGNALS } from './ports';
 import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 
 /** What a module does to the picture or the values, a line each, by its type. */
@@ -246,6 +246,7 @@ export const portHelp: Record<string, Record<string, string>> = {
     sustain: 'Sustain: the level held while the gate stays open.',
     release: 'Release: the time to fall to 0 once the gate closes (seconds).',
     retrigger: 'A trigger while one rings starts from the higher of the two (0) or from where it is (1).',
+    reference: 'How it reads a strike’s strength: against this track’s typical, lately’s, or as it is.',
     amount: 'The peak’s height.',
     out: 'One envelope a channel.',
   },
@@ -302,7 +303,13 @@ export const portHelp: Record<string, Record<string, string>> = {
     amount: AMOUNT_OUT,
   },
   counter: { length: 'Steps to a full count: at 4, beats into it count a bar.', amount: AMOUNT_OUT },
-  music: { audio: 'The sound itself, its recent samples.', playing: '1 while the music plays, 0 while it is paused.', hold: 'How long each band’s envelope takes to fall (seconds).' },
+  music: {
+    audio: 'The sound itself, its recent samples.',
+    playing: '1 while the music plays, 0 while it is paused.',
+    hold: 'How long each band’s envelope takes to fall (seconds).',
+    ...Object.fromEntries([...TRACK_SIGNALS, ...BAND_SIGNALS].map((s) => [`reference.${s}`, 'How this row is read: against this track’s typical, lately’s, or as it is.'])),
+    ...Object.fromEntries([...TRACK_SIGNALS, ...BAND_SIGNALS].filter((s) => !TRIGGER_SIGNALS.has(s)).map((s) => [`${s}:slow`, 'This row, followed slowly.'])),
+  },
   filterbank: {
     audio: 'The sound to split: Music’s unless unplugged.',
     ...numbered(5, (i) => `split${i}`, (i) => `Where band ${i} ends and band ${i + 1} begins (Hz).`),
