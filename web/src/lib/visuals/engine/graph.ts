@@ -176,6 +176,9 @@ export type EngineOptions = {
   /** The Flame's parts where they are on the screen (0..1, y up; null: a part not drawn), as the page measures them: it
    *  holds the drawn flame and its framing. The Flame's `points` output (0057, the modular Fluid). */
   flamePoints?: readonly (Point | null)[];
+  /** Where the Flame is and how much it covers (its x, y, size, coverage outputs: the Transform's units, a square
+   *  space whose short side is −1..1, its centre 0), as the loop last measured it. */
+  flameFrame?: { x: number; y: number; size: number; coverage: number } | null;
 };
 
 /** A point on the screen, 0..1 each way. */
@@ -576,6 +579,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     // A VCA's or a Merge's output, as it is (a Merge's one channel whichever is asked); a Ducker's too.
     if (PROCESSORS.has(type)) return channelsOf(f.module)[channelled(type, f.module) ? (f.channel ?? 0) : 0];
     if (type === 'meter') return opts.meters ? finite(METER_OF[f.port]?.(opts.meters)) : 0;
+    if (type === 'flame' && (f.port === 'x' || f.port === 'y' || f.port === 'size' || f.port === 'coverage')) return finite(opts.flameFrame?.[f.port]);
     if (type === 'screen' && f.port === 'guard') return guard;
     if (type === 'adsr') {
       const gate = gateOf.get(f.module);

@@ -267,6 +267,8 @@ export class VisualsLoop {
 
     // The fluid's pushes: where the Flame's parts are on the screen, measured four times a second while it flows.
     let partsWhere: ([number, number] | null)[] = [];
+    // Where the Flame is (its outputs), as last measured.
+    let flameFrame: { x: number; y: number; size: number; coverage: number } | null = null;
     let partsMeasured = 0;
     let passes = Math.min(ceilingOf(how.quality, devicePixels()).steps, pace?.passes ?? Infinity);
     let last = performance.now();
@@ -324,6 +326,8 @@ export class VisualsLoop {
       // The patch: as the engine runs it, its values eased where a roll moves them; as settings for the picture's side.
       const patch = host.store.patch;
       const flat = live.update(patch);
+      const flatTypes = new Map(flat.modules.map((x) => [x.id, x.type]));
+      const flameId = flat.modules.find((x) => x.type === 'flame')?.id;
       ease(flat, now);
       if (patch !== storeSeen || easing) {
         storeSeen = patch;
@@ -425,7 +429,7 @@ export class VisualsLoop {
         renderer!.resize(bw, bh);
         return [w, h, resized, top];
       };
-      const stepped = stepEngine(engine, flat, host.types, m, read, how, dt, { now, fluidFull: FLUID_FULL, meters: meterValues, flamePoints: partsWhere });
+      const stepped = stepEngine(engine, flat, host.types, m, read, how, dt, { now, fluidFull: FLUID_FULL, meters: meterValues, flamePoints: partsWhere, flameFrame });
       // The sidechains act only through their cables (toV2's holds, in sight); what they hold back is read off the
       // Duckers' outputs for the page's mark, nothing else.
       const sidechains = leversOf(stepped.outputs);
@@ -496,7 +500,15 @@ export class VisualsLoop {
           }
         }
       }
-      renderer.setFlame(frame ? { ...drawnFlame, center: frame.center, size: frame.size } : drawnFlame);
+      // Auto-centring, unless a Transform takes the Flame's light (it frames it then, in sight: 0057 audit row 8).
+      const transformed = flat.cables.some((c) => c.from.module === flameId && c.from.port === 'light' && flatTypes.get(c.to.module) === 'transform');
+      const cam = frame && !transformed ? { ...drawnFlame, center: frame.center, size: frame.size } : drawnFlame;
+      renderer.setFlame(cam);
+      // Where the Flame is on the screen and how much it covers (its outputs, the Transform's units), as measured.
+      if (frame) {
+        const k = d.scale / cam.size;
+        flameFrame = { x: (frame.center[0] - cam.center[0]) * k, y: (frame.center[1] - cam.center[1]) * k, size: frame.size * k, coverage: frame.coverage };
+      }
 
       const [w, h, resized, top] = sized();
 
