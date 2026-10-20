@@ -107,7 +107,7 @@ try {
         console.log(
           `${ok ? '✓' : '✗'} ${name} at ${precision} (${r.precision.join('/')}): ${a} vs ${b}, ${r.frames} frames: max ${r.max}/255` +
             (r.max ? ` (frame ${r.worstFrame}, ${r.framesDiffering} frames differ)` : '') +
-            `, mean ${r.mean.toFixed(4)}, PSNR ${psnr}; lit ${r.lit.toFixed(1)}; tiles ${r.tiles.matched} matched, max ${r.tiles.max.toFixed(4)}; digests ${r.digests.join(' ')}; ${r.seconds.toFixed(0)} s`,
+            `, mean ${r.mean.toFixed(4)}, PSNR ${psnr}; lit ${r.lit.toFixed(1)}; tiles ${r.tiles.matched} matched, max ${r.tiles.max.toFixed(4)}; meters max ${r.meters?.toFixed(6) ?? '-'}; digests ${r.digests.join(' ')}; ${r.seconds.toFixed(0)} s`,
         );
       }
   }

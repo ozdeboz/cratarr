@@ -100,7 +100,7 @@ export const CHAINS: readonly Chain[] = [
       layers: [
         {
           id: 'pulse-shapes',
-          source: mod('shapes', 'pulse-shapes-source', { count: 6, sides: 6, radius: 0.16, spread: 0.55, fill: 0.35, thickness: 0.008, opacity: 0.7, tint: 0.9, glow: 0.7, orbit: 0.02 }),
+          source: mod('shapes', 'pulse-shapes-source', { count: 6, sides: 6, radius: 0.16, spread: 0.55, fill: 0.35, thickness: 0.008, opacity: 0.7, orbit: 0.02 }),
           modules: [],
           loop: [],
           blend: { mode: 'screen', amount: 0.8 },
@@ -173,7 +173,7 @@ export const CHAINS: readonly Chain[] = [
     routes: {},
     extra: {
       ...emptyExtra(),
-      layers: [{ id: 'scope', source: mod('waves', 'scope-source', { width: 0.01, opacity: 0.9, tint: 0.85, glow: 0.7 }), modules: [], loop: [], blend: { mode: 'screen', amount: 1 } }],
+      layers: [{ id: 'scope', source: mod('waves', 'scope-source', { width: 0.01, opacity: 0.9 }), modules: [], loop: [], blend: { mode: 'screen', amount: 1 } }],
       loop: [mod('warp', 'scope-warp', { zoom: 0.05 }), mod('keep', 'scope-keep', { amount: 0.7, trails: 0.5 })],
       modulators: [mod('fast', 'body'), mod('random', 'wander', { rate: 0.05, amount: 1 })],
       cables: [
@@ -214,7 +214,7 @@ export const CHAINS: readonly Chain[] = [
     extra: {
       ...emptyExtra(),
       // A ring of the sound in the flame's colours, drawn into the spiral and carried in by it.
-      layers: [{ id: 'fractal-ring', source: mod('waves', 'fractal-ring-source', { circle: 1, radius: 0.3, width: 0.006, opacity: 0.8, tint: 0.95, glow: 0.6 }), modules: [], loop: [], blend: { mode: 'screen', amount: 0.7 } }],
+      layers: [{ id: 'fractal-ring', source: mod('waves', 'fractal-ring-source', { circle: 1, radius: 0.3, width: 0.006, opacity: 0.8 }), modules: [], loop: [], blend: { mode: 'screen', amount: 0.7 } }],
       loop: [mod('warp', 'fractal-warp', { zoom: 0.1, turn: 0.1 }), mod('keep', 'fractal-keep', { amount: 0.7, trails: 0.6 })],
       modulators: [mod('gate', 'kick', { above: 1, lift: 0.3, release: 0.3, amount: 1 }), mod('random', 'wander', { rate: 0.05, amount: 1 })],
       cables: [
@@ -269,7 +269,7 @@ export const EXAMPLES: readonly Chain[] = [
     routes: {},
     extra: {
       ...emptyExtra(),
-      layers: [{ id: 'window', source: mod('shapes', 'window-source', { count: 3, sides: 6, radius: 0.3, spread: 0.5, fill: 1, glow: 0.5, tint: 0, spin: 0.03 }), modules: [], loop: [], blend: { mode: 'window', amount: 0.85 } }],
+      layers: [{ id: 'window', source: mod('shapes', 'window-source', { count: 3, sides: 6, radius: 0.3, spread: 0.5, fill: 1, spin: 0.03 }), modules: [], loop: [], blend: { mode: 'window', amount: 0.85 } }],
     },
     settings: { ...QUIET },
   },

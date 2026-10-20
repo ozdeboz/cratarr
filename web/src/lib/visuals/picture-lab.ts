@@ -10,7 +10,7 @@
 import { EXAMPLES } from './chains';
 import { ENGINE_EFFECTS, ENGINES } from './effects';
 import { randomFrom } from './flame';
-import type { Tiles } from './meters';
+import { Meters, type FrameStats, type MeterValues, type Tiles } from './meters';
 import type { FrameInfo, Module, PatchExtra } from './patch';
 import { emptyExtra } from './patch';
 import { flameOf, lookOf, signalKey, type RecordedCompose, type RecordedFrame, type Recording, type RecordRequest } from './recorder';
@@ -26,6 +26,8 @@ type Driver = {
   draw(f: RecordedFrame, all: Recording): void;
   measure(w: number, h: number, t: number): void;
   tiles(): Tiles[];
+  /** The frame's numbers into its meters (the Meter node, or meters.ts's over the frozen one's tiles): their values. */
+  meter(stats: Omit<FrameStats, 'tiles'>): MeterValues;
   dispose(): void;
 };
 type Made = Pick<FlameRenderer, 'setPoints' | 'setFlame' | 'resize' | 'pointCount' | 'measure' | 'tiles' | 'dispose' | 'context' | 'precision'>;
@@ -41,7 +43,7 @@ function prepare(r: Made, canvas: HTMLCanvasElement, f: RecordedFrame) {
   r.resize(f.bw, f.bh);
 }
 
-const driver = (r: Made, draw: Driver['draw']): Driver => ({
+const driver = (r: Made, draw: Driver['draw'], meter: Driver['meter']): Driver => ({
   context: r.context,
   get precision() {
     return r.precision;
@@ -52,16 +54,17 @@ const driver = (r: Made, draw: Driver['draw']): Driver => ({
   draw,
   measure: (w, h, t) => r.measure(w, h, t),
   tiles: () => r.tiles(),
+  meter,
   dispose: () => r.dispose(),
 });
 
-/** The pipelines a replay can run: today's renderer (`current`: the patch's picture side as a graph, the nodes'
- *  values, its own compose step) and the frozen copies every step is compared with (`legacy`: render-legacy.ts and
- *  compose-legacy.ts, the look as one, the compose step as a hook). */
-const PIPELINES: Record<string, (canvas: HTMLCanvasElement, points: number, options: RendererOptions) => Promise<Driver>> = {
-  current: async (canvas, points, options) => {
+/** Today's renderer; `generic`: its compose step always the graph's own walk (nodes/walker.ts), not the fused one. */
+const today =
+  (generic: boolean) =>
+  async (canvas: HTMLCanvasElement, points: number, options: RendererOptions): Promise<Driver> => {
     const [{ FlameRenderer }, { v2Types }, { toV2 }, { cratarrTypes }, { DEFAULTS, RANGES }] = await Promise.all([import('./render'), import('./picture-graph'), import('./v2'), import('./patch'), import('./settings.svelte')]);
     const r = new FlameRenderer(canvas, points, 'high-performance', options);
+    r.generic = generic;
     const types = v2Types(cratarrTypes(RANGES, DEFAULTS));
     let patched = '';
     return driver(r, (f, all) => {
@@ -78,12 +81,30 @@ const PIPELINES: Record<string, (canvas: HTMLCanvasElement, points: number, opti
       if (f.pruned) r.prune(f.pruned);
       const c = f.compose;
       r.frame(f.passes, chainOfShown(lookOf(f.look)), f.w, f.h, c ? { extra: c.extra, knobsOf: (m) => c.knobs[m.id] ?? m.knobs, frame: frameOf(c), flame: c.flame, flameTo: c.flameTo } : null);
+    }, (stats) => {
+      r.meterAdd(stats);
+      return r.meterValues;
     });
-  },
+  };
+
+/** The pipelines a replay can run: today's renderer (`current`: the patch's picture side as a graph, the nodes'
+ *  values, its own compose step; `generic`: that step the graph's own walk) and the frozen copies every step is
+ *  compared with (`legacy`: render-legacy.ts and compose-legacy.ts, the look as one, the compose step as a hook). */
+const PIPELINES: Record<string, (canvas: HTMLCanvasElement, points: number, options: RendererOptions) => Promise<Driver>> = {
+  current: today(false),
+  generic: today(true),
   legacy: async (canvas, points, options) => {
     const [{ FlameRenderer }, { Compositor }] = await Promise.all([import('./render-legacy'), import('./compose-legacy')]);
     const r = new FlameRenderer(canvas, points, 'high-performance', options);
     const compositor = new Compositor(r.context);
+    const meters = new Meters();
+    const unread: Tiles[] = [];
+    const tiles = r.tiles.bind(r);
+    r.tiles = () => {
+      const got = tiles();
+      unread.push(...got);
+      return got;
+    };
     return driver(r, (f) => {
       prepare(r, canvas, f);
       if (f.pruned) compositor.prune(f.pruned);
@@ -91,6 +112,9 @@ const PIPELINES: Record<string, (canvas: HTMLCanvasElement, points: number, opti
       const knobsOf = (m: Module) => c?.knobs[m.id] ?? m.knobs;
       r.compose = c ? { active: true, run: (picture, width, height) => compositor.run(picture, width, height, c.extra, knobsOf, frameOf(c), c.flame) } : null;
       r.frame(f.passes, lookOf(f.look), f.w, f.h);
+    }, (stats) => {
+      meters.add({ ...stats, tiles: unread.splice(0) });
+      return meters.now();
     });
   },
 };
@@ -281,6 +305,7 @@ async function replay(name: string, a: string, b: string, bits: 0 | 8 | 16 | 32,
   let squares = 0;
   let count = 0;
   let lit = 0;
+  let metersWorst = 0;
   const started = performance.now();
   for (let i = 0; i < rec.frames.length; i++) {
     const f = rec.frames[i];
@@ -299,6 +324,10 @@ async function replay(name: string, a: string, b: string, bits: 0 | 8 | 16 | 32,
       s.digest = h >>> 0;
       r.measure(f.w, f.h, f.at / 1000);
     }
+    // The frame's own numbers (stand-ins, the same for both): the meters' values compared, as the levers follow them.
+    const stats = { t: f.at / 1000, turnRates: [0.4, -0.2, 0.1, 0, 0.3, -0.5], shape: [0.5, 0.6, 0.4, 0.5, 0.7, 0.3], hue: [0, 0.1, 0.2, 0.3, 0.4, 0.5], spread: [1, 1, 1, 1, 1, 1], scale: f.look.scale, saturation: f.look.saturation, look: null, symmetry: false };
+    const [ma, mb] = sides.map((s) => s.renderer.meter(stats));
+    for (const k of Object.keys(ma) as (keyof MeterValues)[]) if (typeof ma[k] === 'number') metersWorst = Math.max(metersWorst, Math.abs((ma[k] as number) - (mb[k] as number)));
     const [p, q] = sides.map((s) => s.pixels);
     let most = 0;
     for (let k = 0; k < p.length; k++) {
@@ -345,6 +374,8 @@ async function replay(name: string, a: string, b: string, bits: 0 | 8 | 16 | 32,
     first: perFrame.slice(0, 12),
     digests: sides.map((s) => s.digest.toString(16).padStart(8, '0')),
     tiles: { a: sides[0].tiles.length, b: sides[1].tiles.length, matched: tilesMatched, max: tilesWorst },
+    /** The meters' largest difference over the frames (each value in its own units). */
+    meters: metersWorst,
     gpu: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : '?',
     seconds: (performance.now() - started) / 1000,
   };

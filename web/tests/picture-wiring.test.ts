@@ -36,7 +36,7 @@ test('layers and the picture’s own loop: mixed in their order, the loop’s Fe
   const ids = c.order.map((n) => n.id);
   const at = (id: string) => ids.indexOf(id);
   assert.ok(at('shapes-kaleido') < at('layers') && at('window-source') < at('layers'));
-  assert.ok(at('example-keep') < at('loop-mix') && at('loop-mix') < at('loop-feedback') && at('loop-feedback') < at('screen'));
+  assert.ok(at('example-keep') < at('loop-mix') && at('loop-mix') < at('loop-feedback') && at('loop-mix') < at('screen'));
   assert.deepEqual(c.order.find((n) => n.id === 'layers')!.inputs.map((f) => f.from.module), ['show/saturate', 'shapes-kaleido', 'window-source']);
   const mix = v.modules.find((m) => m.id === 'layers')!;
   assert.deepEqual([mix.knobs.mode1, mix.knobs.mode2, mix.knobs.mode3], [0, 1, 4], 'add, screen, window');
@@ -71,7 +71,8 @@ test('an Echo with shapes after it is a visible loop: Feedback → Echo → Mix 
   const c = compile(v, types);
   assert.deepEqual(c.errors, []);
   const ids = c.order.map((n) => n.id);
-  assert.deepEqual(ids.slice(ids.indexOf('layers')), ['layers', 'fx3-mix', 'fx2', 'fx1', 'fx3-feedback', 'screen']);
+  assert.deepEqual(ids.slice(ids.indexOf('layers')).filter((id) => id !== 'fx3-feedback'), ['layers', 'fx3-mix', 'fx2', 'fx1', 'screen']);
+  assert.ok(ids.indexOf('fx3-feedback') > ids.indexOf('fx1'), 'after its input and its reader');
   assert.ok(ids.indexOf('fx3') < ids.indexOf('fx3-mix'));
   const by = (id: string) => c.order.find((n) => n.id === id)!;
   assert.deepEqual(by('fx3').inputs.map((f) => f.from.module), ['fx3-feedback']);
@@ -94,4 +95,23 @@ test('lazy: the flame’s layer at nothing cuts the flame and its own loop, unle
   for (const id of ['flame', 'trails', 'fluid', 'show/tonemap', 'light-feedback']) assert.ok(!cut.includes(id), id);
   assert.ok(cut.includes('screen'));
   assert.ok(live(0, 1).includes('flame'), 'coming back: still gathering');
+});
+
+test('the compose step: its modules, from Show’s picture to what goes on; fused where it is the converted chain’s', async () => {
+  const { composeOf, fused } = await import('../src/lib/visuals/picture-graph.ts');
+  const c = compile(toV2(settings(layered())), types);
+  const cs = composeOf(c)!;
+  assert.equal(cs.from, 'show/saturate');
+  assert.equal(cs.to, 'loop-mix');
+  for (const id of ['shapes-source', 'shapes-kaleido', 'window-source', 'layers', 'example-warp', 'example-keep', 'loop-mix', 'loop-feedback']) assert.ok(cs.ids.has(id), id);
+  assert.ok(!cs.ids.has('fx1') && !cs.ids.has('show/saturate'));
+  assert.ok(c.order.filter((n) => cs.ids.has(n.id)).every(fused), 'the converted chain is drawn fused');
+  // A Glow on a layer: the walk draws it.
+  const v = toV2(settings(layered()));
+  const glowed = { ...v, modules: [...v.modules, { id: 'glow-1', type: 'glow', knobs: { glow: 0.5 } }], cables: v.cables.map((x) => (x.from.module === 'window-source' ? { ...x, from: { module: 'glow-1', port: 'picture' } } : x)).concat({ id: 'g', from: { module: 'window-source', port: 'picture' }, to: { module: 'glow-1', port: 'picture' }, value: 1, mode: 'swing' }) };
+  const g = compile(glowed, types);
+  assert.deepEqual(g.errors, []);
+  const gs = composeOf(g)!;
+  assert.ok(gs.ids.has('glow-1'));
+  assert.ok(!g.order.filter((n) => gs.ids.has(n.id)).every(fused));
 });

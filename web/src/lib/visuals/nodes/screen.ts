@@ -1,7 +1,5 @@
-// The screen (decision 0057 step 3): a finished picture copied onto it, scaled up, and the flash meter reading what
-// was shown (flashmeter.ts).
-import { FlashMeter } from '../flashmeter';
-import type { Tiles } from '../meters';
+// The screen (decision 0057 step 3): a finished picture copied onto it, scaled up. What it shows is measured by the
+// Meter (meter.ts).
 import { program } from '../sources/gl';
 import { FULL, uniforms } from './shared';
 
@@ -17,9 +15,6 @@ export class Screen {
   private gl: WebGL2RenderingContext;
   private copying: WebGLProgram;
   private empty: WebGLVertexArrayObject;
-  // The flash meter (flashmeter.ts), made the first time the screen is measured; out where it cannot be made.
-  private meter: FlashMeter | null = null;
-  private meterOut = false;
   private u: (p: WebGLProgram, name: string) => WebGLUniformLocation | null;
 
   constructor(gl: WebGL2RenderingContext) {
@@ -45,36 +40,7 @@ export class Screen {
     gl.bindVertexArray(null);
   }
 
-  /** The screen just shown (`viewWidth` x `viewHeight`) read into tiles for the flash meter (meters.ts), as of `t`
-   *  seconds; read back two or more frames later with `tiles`. None where this device cannot (it is then never tried
-   *  again). */
-  measure(viewWidth: number, viewHeight: number, t: number) {
-    if (this.meterOut) return;
-    try {
-      this.meter ??= new FlashMeter(this.gl);
-      this.meter.capture(viewWidth, viewHeight, t);
-    } catch (e) {
-      console.warn('Visuals: no flash meter on this device', e);
-      this.meter?.dispose();
-      this.meter = null;
-      this.meterOut = true;
-    }
-  }
-
-  /** The screen's readings the GPU has finished, the oldest first. Once a frame, before `frame` or anything else draws
-   *  (flashmeter.ts). */
-  tiles(): Tiles[] {
-    return this.meter?.poll() ?? [];
-  }
-
-  /** The flash meter's readings let go unread, its ring full. */
-  get meterDropped(): number {
-    return this.meter?.dropped ?? 0;
-  }
-
   dispose() {
-    this.meter?.dispose();
-    this.meter = null;
     this.gl.deleteVertexArray(this.empty);
     this.gl.deleteProgram(this.copying);
   }
