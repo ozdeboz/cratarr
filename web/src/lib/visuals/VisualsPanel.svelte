@@ -6,6 +6,7 @@
   // modules in it. A port's page: the cables into it and "+ Add". A cable's page: its ends (each tapped to move it),
   // its channel, what scales it, its curve, its pin, Delete. Every change goes to the store as one edit (patch-edits.ts).
   import Icon from '../Icon.svelte';
+  import { longpress } from '../longpress';
   import { held } from './held.svelte';
   import CurveEditor from './CurveEditor.svelte';
   import KnobCables from './KnobCables.svelte';
@@ -148,6 +149,37 @@
   }
 
   const groups = $derived(byCategory(patch, types));
+
+  // ---- Several picked at once (the owner: modules, devices and cables, not knobs): pinned or unpinned together, the
+  // cables deleted together. A long press on a row (or Select) starts it; Done ends it, as does leaving the view.
+  let selecting = $state<'modules' | 'cables' | null>(null);
+  let picked = $state<string[]>([]);
+  const togglePick = (key: string) => (picked = picked.includes(key) ? picked.filter((k) => k !== key) : [...picked, key]);
+  function startSelect(kind: 'modules' | 'cables', first?: string) {
+    selecting = kind;
+    picked = first ? [first] : [];
+  }
+  const endSelect = () => ((selecting = null), (picked = []));
+  $effect(() => {
+    void here;
+    endSelect();
+  });
+  /** Each picked one's level and pin (`module:<id>`, `cable:<id>`); a key is `<scope>|<id>`. */
+  const pickedPins = () =>
+    picked.map((k) => {
+      const [sc, id] = k.split('|');
+      return { scope: pathOf(sc), id, pin: `${selecting === 'cables' ? 'cable' : 'module'}:${id}` };
+    });
+  function pinPicked(on: boolean) {
+    for (const x of pickedPins()) edit({ kind: 'pinOne', scope: x.scope, pin: x.pin, on });
+    endSelect();
+  }
+  function deletePicked() {
+    const by = new Map<string, string[]>();
+    for (const x of pickedPins()) by.set(x.scope.join('/'), [...(by.get(x.scope.join('/')) ?? []), x.id]);
+    for (const [sc, ids] of by) edit({ kind: 'remove', scope: pathOf(sc), cables: ids });
+    endSelect();
+  }
   const allCables = $derived(patch.cables.length);
 </script>
 
@@ -211,10 +243,23 @@
             ><Icon name="pin" size={16} /></button
           >
         </div>
-        {#each groups[cat] as m (m.id)}{@render goRow(nameOf(m, patch), '', `m|${m.id}`)}{/each}
-        <button class="go add" onclick={() => go(`add||${cat}`)}><span class="name">+ Add</span></button>
+        {#each groups[cat] as m (m.id)}
+          {#if selecting === 'modules'}
+            <button class="go pick" class:on={picked.includes(`|${m.id}`)} aria-pressed={picked.includes(`|${m.id}`)} onclick={() => togglePick(`|${m.id}`)}
+              ><span class="name">{nameOf(m, patch)}</span>{#if pinned(patch, `module:${m.id}`)}<Icon name="pin" size={14} />{/if}</button
+            >
+          {:else}
+            <button class="go" use:longpress={() => startSelect('modules', `|${m.id}`)} onclick={() => go(`m|${m.id}`)}
+              ><span class="name">{nameOf(m, patch)}</span>{#if pinned(patch, `module:${m.id}`)}<Icon name="pin" size={14} />{/if}<Icon name="chevronRight" size={18} /></button
+            >
+          {/if}
+        {/each}
+        {#if !selecting}<button class="go add" onclick={() => go(`add||${cat}`)}><span class="name">+ Add</span></button>{/if}
       </div>
     {/each}
+    {#if !selecting}
+      <div class="rows"><button class="go" onclick={() => startSelect('modules')}><span class="name">Select modules and devices</span></button></div>
+    {/if}
     <div class="rows">
       {@render goRow('Cables', `${allCables} in all`, 'cables')}
       {@render goRow('This device', 'Quality, frame rate, brightness', 'device')}
@@ -263,7 +308,10 @@
           </div>
         {/if}
         <div class="rows">
-          <h3>In it</h3>
+          <div class="head">
+            <h3>In it</h3>
+            {@render pinButton(level, scope, `module:${m.id}`, nameOf(m, level))}
+          </div>
           {#each d.patch.modules as inner (inner.id)}{@render goRow(nameOf(inner, d.patch), '', `m|${[...at, inner.id].join('/')}`)}{/each}
         </div>
         <div class="rows">
@@ -304,13 +352,24 @@
     {@const found = moduleAt(at)}
     {#if found}
       {@const { scope, level, m } = found}
-      <KnobCables
-        cables={cablesInto(level, m.id, port)}
-        label={(c: CableV2) => endName(level, c.from, 'out')}
-        onopen={(id) => go(`c|${scope.join('/')}|${id}`)}
-        onlongpress={(id) => go(`c|${scope.join('/')}|${id}`)}
-        onadd={() => go(`from|${scope.join('/')}|${m.id}|${port}`)}
-      />
+      {#if selecting === 'cables'}
+        <div class="rows">
+          {#each cablesInto(level, m.id, port) as c (c.id)}
+            {@const key = `${scope.join('/')}|${c.id}`}
+            <button class="go pick" class:on={picked.includes(key)} aria-pressed={picked.includes(key)} onclick={() => togglePick(key)}
+              ><span class="name">{endName(level, c.from, 'out')}</span>{#if pinned(level, `cable:${c.id}`)}<Icon name="pin" size={14} />{/if}</button
+            >
+          {/each}
+        </div>
+      {:else}
+        <KnobCables
+          cables={cablesInto(level, m.id, port)}
+          label={(c: CableV2) => endName(level, c.from, 'out')}
+          onopen={(id) => go(`c|${scope.join('/')}|${id}`)}
+          onlongpress={(id) => startSelect('cables', `${scope.join('/')}|${id}`)}
+          onadd={() => go(`from|${scope.join('/')}|${m.id}|${port}`)}
+        />
+      {/if}
     {/if}
   {:else if parts(here)[0] === 'from'}
     {@const [, sc, module, port] = parts(here)}
@@ -410,9 +469,61 @@
       </div>
     {/if}
   {/if}
+  {#if selecting}
+    <div class="selectbar" role="toolbar" aria-label="Picked">
+      <span>{picked.length} picked</span>
+      <button disabled={!picked.length} onclick={() => pinPicked(true)}>Pin</button>
+      <button disabled={!picked.length} onclick={() => pinPicked(false)}>Unpin</button>
+      {#if selecting === 'cables'}<button class="danger" disabled={!picked.length} onclick={deletePicked}>Delete</button>{/if}
+      <button onclick={endSelect}>Done</button>
+    </div>
+  {/if}
 </div>
 
 <style>
+  .go.pick {
+    padding-left: 10px;
+  }
+
+  .go.pick.on {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+
+  .selectbar {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    padding: 8px 4px;
+    background: rgb(20 20 24 / 0.96);
+    border-top: 1px solid rgb(255 255 255 / 0.12);
+  }
+
+  .selectbar span {
+    flex: 1;
+    font-size: 0.85rem;
+    color: rgb(255 255 255 / 0.7);
+  }
+
+  .selectbar button {
+    height: 32px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 16px;
+    background: rgb(255 255 255 / 0.1);
+    color: #fff;
+    font: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+
+  .selectbar button:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
   .vpanel {
     display: grid;
     gap: 0;
