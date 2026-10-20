@@ -109,7 +109,7 @@ type Behind = { in: Map<string, PortRef[]>; out: Map<string, PortRef[]> };
 /** `p` flattened, and where its devices' exposed ports lead, through nested ones (claude-632's fix). */
 function opened(p: PatchV2): { patch: PatchV2; behind: Behind } {
   const modules: Module[] = [];
-  const cables: Wire[] = [];
+  const cables: CableV2[] = [];
   const behind: Behind = { in: new Map(), out: new Map() };
   for (const m of p.modules) {
     if (!isDevice(m)) {

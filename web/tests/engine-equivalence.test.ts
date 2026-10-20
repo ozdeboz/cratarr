@@ -119,12 +119,13 @@ test("the extras (modulators, macros, a layer's knobs) as evaluate.ts moved them
     { id: 'osc', type: 'lfo', knobs: { ...defaultsOf(MODULATORS.lfo), rate: 0.5 } },
   ];
   const cables: Cable[] = [
-    { id: 'c1', from: { signal: 'level', band: 1 }, to: { module: 'fol', knob: 'in' }, value: 1, mode: 'swing' },
+    // A row no route reads (a row's reading is the routes' where they read it: 0057 §7e).
+    { id: 'c1', from: { signal: 'flux', band: 1 }, to: { module: 'fol', knob: 'in' }, value: 1, mode: 'swing' },
     { id: 'c2', from: { modulator: 'fol' }, to: { module: 'shapes-1', knob: 'radius' }, value: 0.5, mode: 'swing' },
     { id: 'c3', from: { modulator: 'osc' }, to: { module: 'shapes-1', knob: 'opacity' }, value: 0.8, mode: 'level' },
     { id: 'c4', from: { signal: 'hits', band: 0 }, to: { module: 'shapes-1', knob: 'sides' }, value: 1, mode: 'swing' },
     { id: 'c6', from: { signal: 'hits', band: 0 }, to: { module: 'kal', knob: 'effect' }, value: 1, mode: 'swing' },
-    { id: 'c5', from: { signal: 'beat', reference: 'lately' }, to: { module: 'shapes-1', knob: 'thickness' }, value: 0.4, mode: 'swing' },
+    { id: 'c5', from: { signal: 'centroid', reference: 'lately' }, to: { module: 'shapes-1', knob: 'thickness' }, value: 0.4, mode: 'swing' },
   ];
   const macros = [{ id: 'mac', on: 'shapes-1', label: 'M', value: 0.3, targets: [{ module: 'shapes-1', knob: 'count', from: 2, to: 8 }] }];
   const flame = { id: 'flame', type: 'flame', knobs: {} };
@@ -143,30 +144,10 @@ test("the extras (modulators, macros, a layer's knobs) as evaluate.ts moved them
     macros,
     pins: [],
   } as unknown as Patch;
-  // The hits through an ADSR at Linger, its gate reading them against the track's typical (an extra cable's default),
-  // as toV2 has them.
-  const adsr = { id: 'adsr-track', type: 'adsr', knobs: { retrigger: 0, amount: 1, ...Object.fromEntries(settings.lighting.flatMap((r: number, b: number) => [[`attack.${b}`, 0.04], [`decay.${b}`, 0], [`sustain.${b}`, 0], [`release.${b}`, r]])) } };
-  const v2: PatchV2 = {
-    v: 2,
-    modules: [...['music', 'track', 'envelope', 'clock'].map((id) => ({ id, type: id, knobs: {} })), adsr, ...modulators, shapes, kal],
-    cables: [
-      ...cables.map((c) => ({
-        id: c.id,
-        from:
-          'modulator' in c.from
-            ? { module: c.from.modulator, port: 'out' }
-            : c.from.signal === 'hits'
-              ? { module: 'adsr-track', port: 'out', channel: c.from.band }
-              : { module: 'music', port: c.from.signal, channel: c.from.band, reference: c.from.reference, speed: c.from.speed },
-        to: { module: c.to.module, port: c.to.knob },
-        value: c.value,
-        mode: c.mode,
-      })),
-      { id: 'adsr-track-gate', from: { module: 'music', port: 'hits', reference: 'track' }, to: { module: 'adsr-track', port: 'gate' }, value: 1, mode: 'swing' },
-    ],
-    macros,
-    pins: [],
-  };
+  // The same extras as today's settings carry them, converted by toV2 (its ADSR for the hits, the rows' readings, a VCA
+  // into the opacity's gain for the level cable) and opened up.
+  const withExtras = { ...settings, extra: { layers: [v1.layers[1]], loop: [], modulators, cables, macros } } as typeof settings;
+  const v2: PatchV2 = flatten(toV2(withExtras));
   const t = track(TRACKS[0]);
   const st = newEngine();
   const ev = newEvalState();
@@ -175,6 +156,8 @@ test("the extras (modulators, macros, a layer's knobs) as evaluate.ts moved them
   const dt = 1 / 30;
   let worst = 0;
   let moments = 0;
+  const theirFrames: number[] = [];
+  const myFrames: number[] = [];
   for (let k = 0; k < 600; k++) {
     const at = 20 + k * dt;
     const m = musicOf(t.signals, t.beats, at, true, { state: music, at: at * 1000, lighting: settings.lighting });
@@ -193,9 +176,14 @@ test("the extras (modulators, macros, a layer's knobs) as evaluate.ts moved them
     for (const [knob, v] of Object.entries(theirs.knobs.kal)) assert.ok(Math.abs(v - mine.knobs.kal[knob]) <= 1e-6, `frame ${k}: kal.${knob}`);
     for (const id of ['fol', 'osc']) assert.ok(Math.abs(theirs.outputs[id] - mine.outputs[id]) <= 1e-9, `frame ${k}: ${id}`);
     assert.ok(Math.abs(theirs.macros.mac - mine.macros.mac) <= 1e-9);
-    assert.deepEqual(theirs.moments, mine.moments);
     assert.ok(mine.moments.every((x) => x.module === 'kal' && x.knob === 'effect'));
+    if (theirs.moments.length) theirFrames.push(k);
+    if (mine.moments.length) myFrames.push(k);
     moments += mine.moments.length;
   }
+  // The Gate's gap is "more than two seconds" (the chain's moments' rule); evaluate.ts's was "two or more", so a moment
+  // exactly two seconds after the last comes a frame later (0057 §7e item 3).
+  assert.equal(myFrames.length, theirFrames.length);
+  theirFrames.forEach((f, i) => assert.ok(myFrames[i] === f || myFrames[i] === f + 1, `moment ${i}: frame ${myFrames[i]} against ${f}`));
   assert.ok(moments > 0 && moments < 600 / 30 / 2 + 1, `the hits asked ${moments} moments, two seconds apart at most`);
 });
