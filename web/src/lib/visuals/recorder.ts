@@ -78,7 +78,7 @@ export function recordPictures(renderer: FlameRenderer) {
   };
   const frame = renderer.frame.bind(renderer);
   renderer.frame = (passes, now, w, h, inputs = null) => {
-    if (want.done || !flame) return frame(passes, now, w, h, inputs);
+    if (want.done || !flame || !now) return frame(passes, now, w, h, inputs);
     // The page's extras (v1) as the lab replays them; a store's inputs go on unrecorded.
     const extras = inputs && 'extra' in inputs ? inputs : null;
     const pending: RecordedFrame = { at: performance.now(), passes, look: plain(shownOf(now)), flame: plain(flame), w, h, bw: renderer.width, bh: renderer.height, points: renderer.pointCount, compose: null, ...(pruned && extras ? { pruned: plain(extras.extra) } : {}) };

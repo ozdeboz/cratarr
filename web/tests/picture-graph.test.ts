@@ -276,3 +276,13 @@ test('devices are opened before compiling (v2.ts flatten), nested ones too', () 
   assert.deepEqual(c.errors, []);
   assert.deepEqual(ids(c.order), ['s', 'd/e/k', 'd/k2', 'screen']);
 });
+
+test('a patch without the flame: its compose step starts from nothing (no Show), and gives on what reaches the Screen', async () => {
+  const { composeOf } = await import('../src/lib/visuals/picture-graph.ts');
+  const c = compile(patch([['s', 'shapes'], ['k', 'kaleid'], ['screen', 'screen']], [cable('s', 'k'), cable('k', 'screen')]), typeOf);
+  const cs = composeOf(c)!;
+  assert.equal(cs.from, null);
+  assert.equal(cs.to, 'k');
+  assert.deepEqual([...cs.ids].sort(), ['k', 's']);
+  assert.equal(composeOf(compile(patch([['screen', 'screen']], []), typeOf)), null, 'nothing reaches the Screen');
+});
