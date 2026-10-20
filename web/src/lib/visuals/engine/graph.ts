@@ -199,9 +199,17 @@ type Plan = {
   columnCables: { a: number; cables: CableV2[] }[] | null;
   /** The modulators' ids; each Music row's reading, and the knob value it was read at. */
   live: Set<string>;
-  readings: Map<string, { at: unknown; reading: Reading }>;
+  readings: Map<string, { at: unknown; knob: string; reading: Reading }>;
   processorIds: string[];
   outKeys: string[];
+  /** Worked out at the first frame (they need the chain's place): the columns' gain inputs and triggers, the columns'
+   *  resting values, the cables from the Track into the walks, the modules with a column among their knobs. */
+  columnInputs: { a: number; module: string; knob: string; gain: boolean }[] | null;
+  columnOffsets: { a: number; rel: string; knob: string }[] | null;
+  trackCables: Partial<Record<Aspect, CableV2[]>>;
+  withColumns: Map<string, boolean>;
+  /** Each module's knobs' macro targets, by module then knob. */
+  targetsOf: Map<string, Map<string, { macro: Macro; from: number; to: number }[]>>;
   /** The VCAs whose channels differ (something polyphonic reaches them); the rest are worked out once, a channel. */
   polyphonic: Set<string>;
 };
@@ -345,6 +353,19 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
     readings: new Map(),
     processorIds: p.modules.filter((x) => PROCESSORS.has(x.type)).map((x) => x.id),
     outKeys: p.modules.filter((x) => PROCESSORS.has(x.type)).map((x) => `${x.id}.out`),
+    columnInputs: null,
+    columnOffsets: null,
+    trackCables: {},
+    withColumns: new Map(),
+    targetsOf: (() => {
+      const out = new Map<string, Map<string, { macro: Macro; from: number; to: number }[]>>();
+      for (const macro of p.macros)
+        for (const t of macro.targets) {
+          const knobs = out.get(t.module) ?? out.set(t.module, new Map()).get(t.module)!;
+          (knobs.get(t.knob) ?? knobs.set(t.knob, []).get(t.knob)!).push({ macro, from: t.from, to: t.to });
+        }
+      return out;
+    })(),
   };
   plans.set(p, plan);
   return plan;
@@ -395,9 +416,10 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   const musicModule = ofType('music');
   const readingOf = (port: string): Reading => {
     const kept = plan.readings.get(port);
-    if (kept && kept.at === musicModule?.knobs[`reference.${kept.reading.signal}`]) return kept.reading;
+    if (kept && kept.at === musicModule?.knobs[kept.knob]) return kept.reading;
     const reading = readingNow(port);
-    plan.readings.set(port, { at: musicModule?.knobs[`reference.${reading.signal}`], reading });
+    const knob = `reference.${reading.signal}`;
+    plan.readings.set(port, { at: musicModule?.knobs[knob], knob, reading });
     return reading;
   };
   const readingNow = (port: string): Reading => {
@@ -740,13 +762,19 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   }
   // A level column's gain input (its VCAs), a moment column's trigger (its Gate): 0057 §7e.
   const firedNow: Partial<Record<Aspect, boolean>> = {};
-  for (const key of into.keys()) {
-    const gain = key.endsWith(GAIN);
-    if (!gain && !key.endsWith(NEXT)) continue;
-    const base = key.slice(0, -(gain ? GAIN : NEXT).length);
-    const a = colAt(base);
-    if (a === undefined) continue;
-    const [module, knob] = base.split('|');
+  if (!plan.columnInputs) {
+    plan.columnInputs = [];
+    for (const key of into.keys()) {
+      const gain = key.endsWith(GAIN);
+      if (!gain && !key.endsWith(NEXT)) continue;
+      const base = key.slice(0, -(gain ? GAIN : NEXT).length);
+      const a = colAt(base);
+      if (a === undefined) continue;
+      const [module, knob] = base.split('|');
+      plan.columnInputs.push({ a, module, knob, gain });
+    }
+  }
+  for (const { a, module, knob, gain } of plan.columnInputs) {
     if (gain && IS_LEVEL[a]) got.level[a] *= gainOf(module, knob);
     // A swing column's gain scales its modulation (Bitwig's modulation scaling): its cables, a part's own among them.
     if (gain && !IS_LEVEL[a] && !IS_MOMENT[a]) {
@@ -758,12 +786,16 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   }
 
   // Each swing column's knob, its resting value (0057 §7e, VCV's rule: the knob the offset, the cables adding to it).
-  for (const offset of COLUMN_OFFSETS) {
-    const [type, knob] = offset.split('.');
-    const rel = type === 'flame' || type === 'trails' ? type : `show/${type}`;
-    const a = colAt(`${at}${rel}|${knob}`);
-    if (a !== undefined) got.whole[a] += knobOf(inChain(rel), knob, 0);
+  if (!plan.columnOffsets) {
+    plan.columnOffsets = [];
+    for (const offset of COLUMN_OFFSETS) {
+      const [type, knob] = offset.split('.');
+      const rel = type === 'flame' || type === 'trails' ? type : `show/${type}`;
+      const a = colAt(`${at}${rel}|${knob}`);
+      if (a !== undefined) plan.columnOffsets.push({ a, rel, knob });
+    }
   }
+  for (const { a, rel, knob } of plan.columnOffsets) got.whole[a] += knobOf(inChain(rel), knob, 0);
 
   // The chain's own modules, each as its gain inputs hold it (the sidechains' Duckers, 0057 §7e): the Clock's speed
   // (its pace), the Accent's accent (the flash guard: its swing, and its courses slower), the Flame's evolving times
@@ -782,7 +814,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   outputs['clock.rate'] = clock;
   const trackInto = (a: Aspect) => {
     let sum = 0;
-    for (const c of columnOf(a).flatMap((key) => into.get(at + key) ?? [])) if ((typeOf.get(c.from.module) ?? c.from.module) === 'track') sum += depthOf(c) * heightOf(shapeOf(c.value), pulse) * walkOf(c);
+    for (const c of (plan.trackCables[a] ??= columnOf(a).flatMap((key) => into.get(at + key) ?? []))) if ((typeOf.get(c.from.module) ?? c.from.module) === 'track') sum += depthOf(c) * heightOf(shapeOf(c.value), pulse) * walkOf(c);
     return sum;
   };
   const aspects = !flameModule
@@ -801,7 +833,9 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     if (knobs[x.id] || live.has(x.id)) continue;
     const t = types[x.type];
     if (!t) continue;
-    if (t.knobs.some((knob) => colAt(`${x.id}|${knob.id}`) !== undefined)) continue;
+    let column = plan.withColumns.get(x.id);
+    if (column === undefined) plan.withColumns.set(x.id, (column = t.knobs.some((knob) => colAt(`${x.id}|${knob.id}`) !== undefined)));
+    if (column) continue;
     knobs[x.id] = knobsOf(x, t);
   }
   return { aspects, knobs, outputs, macros, moments, points };
@@ -809,7 +843,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   /** A module's knobs as its macros and cables move them. */
   /** A knob's base as its macros set it, along its taper (an exponential knob's geometrically: 0057's Wild). */
   function macroed(module: string, knob: Knob | undefined, base: number): number {
-    for (const g of targets.get(`${module}|${knob?.id}`) ?? []) {
+    for (const g of (knob && plan.targetsOf.get(module)?.get(knob.id)) || []) {
       const at = macroOf(g.macro);
       base = knob?.taper === 'exp' && g.from > 0 && g.to > 0 ? g.from * (g.to / g.from) ** at : g.from + (g.to - g.from) * at;
     }
