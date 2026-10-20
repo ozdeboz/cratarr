@@ -55,3 +55,16 @@ test('the stages: attack ahead of a strike known ahead, at once heard live; deca
   assert.ok(near(adsrOf(strike(0.05, 1, { until: 0.03, velocity: 0.3 }), k), Math.exp(-0.25)));
   assert.ok(near(adsrOf(strike(0.05, 0.2, { until: 0, velocity: 0.9 }), k), 0.9));
 });
+
+test('retrigger 1, a synth’s: a strike’s attack from the level the ringing was at as it began, on to its velocity, no jump', () => {
+  const k = { attack: 0.04, decay: 0, sustain: 0, release: 0.2, retrigger: 1 };
+  // The last struck 0.1 s ago at 1. The next's attack beginning now (it lands in 0.04 s): the ringing now.
+  assert.ok(near(adsrOf(strike(0.1, 1, { until: 0.04, velocity: 0.5 }), k), Math.exp(-0.1 / 0.2)), 'starts where the ring is');
+  // It lands in 0.02 s at 0.5: its attack began 0.02 s ago, at the ringing then, and is half way up.
+  const began = Math.exp(-0.08 / 0.2);
+  assert.ok(near(adsrOf(strike(0.1, 1, { until: 0.02, velocity: 0.5 }), k), began + (0.5 - began) * 0.5));
+  assert.ok(near(adsrOf(strike(0.1, 1, { until: 0, velocity: 0.5 }), k), 0.5), 'lands on its velocity');
+  assert.ok(near(adsrOf(strike(0, 0.5), k), 0.5), 'and goes on from there');
+  // Today's (0): never under what rings.
+  assert.ok(near(adsrOf(strike(0.1, 1, { until: 0.02, velocity: 0.5 }), { ...k, retrigger: 0 }), Math.exp(-0.1 / 0.2)));
+});

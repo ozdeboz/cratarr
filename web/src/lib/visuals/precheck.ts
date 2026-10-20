@@ -1,12 +1,15 @@
 // A recipe's precheck (decision 0046, amended): before the dice show a complete randomisation, it is run against the
 // playing track's own signals for half a minute (from where it plays), through the visuals' own mapping (aspects.ts,
-// the music as musicOf gives it), and measured (meters.ts); one that would go over the governor's limits is refused,
+// the music as musicOf gives it), and measured (meters.ts); one that would go over the sidechaining's limits is refused,
 // and the dice draw another. No picture is drawn: the flashes are judged from the brightness the whole picture would
 // pulse with (the glow, and the parts' lights), one tile for the screen, as the runtime's limit judges a quarter of it.
 //
 // Done in slices (`prechecking`), so a slow tablet keeps its frames: a step is a few hundredths of a millisecond.
 
-import { newAspects, stepAspects, wavesMotion, zoomsMotion, type AspectsNow } from './aspects';
+import { wavesMotion, zoomsMotion, type AspectsNow } from './aspects';
+import { newEngine, stepEngine } from './engine/graph';
+import { newNormalState, signalsFor } from './normal';
+import { flatten, toV2 } from './v2';
 import type { Beats } from './beats';
 import { BUDGETED, budgetOf } from './budget';
 import { settingsReport, type Report } from './effects';
@@ -26,7 +29,7 @@ import { DEFAULT_LIMITS, type Limits } from './budget';
 export type Checked = {
   ok: boolean;
   /** Each meter's most and mean over the run (after its first seconds, while the meters settle): the budgeted ones on
-   *  the governor's scale (budget.ts), the flashes as counted. */
+   *  the sidechaining's scale (budget.ts), the flashes as counted. */
   worst: Partial<MeterValues>;
   mean: Partial<MeterValues>;
   /** The meters over their limits, by name. */
@@ -46,7 +49,7 @@ const SLICE = 30;
  *  rate), kept by the look: fitting the part to dive into takes a few milliseconds on a PC, several times that on a
  *  tablet, and a roll's eight recipes share their base's look. */
 const diveTurns = new Map<string, number>();
-function diveTurnPerRate(settings: VisualSettings): number {
+export function diveTurnPerRate(settings: VisualSettings): number {
   const look = PRESET_KEYS.map((k) => settings[k]).join('|');
   let turn = diveTurns.get(look);
   if (turn === undefined) {
@@ -99,7 +102,11 @@ export function* prechecking(
   const settings = settingsOf(recipe, base, scope);
   // The dive's turn, as the visuals count it (the renderer's, beside each part's own); none where it cannot dive.
   const divePerRate = settings.dive > 0 ? diveTurnPerRate(settings) : 0;
-  const aspects = newAspects();
+  // The one engine over the recipe's patch, without its sidechains: the check asks what the recipe does on its own, as
+  // today's ran without the old sidechaining; the patch's sidechains hold back whatever passes (decision 0057).
+  const patch = flatten(toV2(settings, { sidechain: false }));
+  const engine = newEngine();
+  const normal = newNormalState();
   const state = newMusicState();
   const meters = new Meters();
   const worst: Record<string, number> = {};
@@ -111,10 +118,11 @@ export function* prechecking(
     if (k > 0 && k % SLICE === 0) yield;
     const t = from + k * dt;
     const m = musicOf(signals, beats, t, true, { state, at: t * 1000, lighting: settings.lighting });
-    const a = stepAspects(aspects, m, settings, dt, { still: false, now: t * 1000, fluidFull: FLUID_FULL });
+    const a = stepEngine(engine, patch, {}, m, signalsFor(normal, m, t * 1000), settings, dt, { still: false, now: t * 1000, fluidFull: FLUID_FULL }).aspects;
+    if (!a) break;
     measure(meters, a, k * dt, settings, divePerRate);
     if (k * dt < SETTLE_S) continue;
-    // The budgeted meters over their budget at the music's activity now (Wild at its middle), as the governor holds
+    // The budgeted meters over their budget at the music's activity now (Wild at its middle), as the sidechaining holds
     // them; so a limit means the same here as there, loud passage or quiet.
     const budget = budgetOf(1, 0.5, a.lit);
     const now = meters.now();

@@ -7,7 +7,7 @@
 // Changed live from the visuals' panel and kept on this device (a phone and a tablet want different ones); a browser
 // that keeps nothing (a private window) starts from the defaults each time.
 
-import { FORMS, LENSES, PRESET_KEYS, type Preset } from './flame';
+import { FORMS, LENS_DEPTH, LENS_SIDES, LENSES, PRESET_KEYS, type Preset } from './flame';
 import { ENGINE_EFFECTS, LOOP_EFFECTS } from './effects';
 import { defaultRoutes, isRoute, keyNow, SCALE_KEYS, type RouteValue } from './routes';
 import { curveFrom, valueOf } from './curves';
@@ -43,7 +43,7 @@ export type VisualSettings = Preset & {
   flash: number;
   /** Motion: the turning and its steps (0..2). */
   speed: number;
-  /** Calm ↔ Wild (0..1): how much busier than its budgets the governor lets the show be (governor.ts), half as much to
+  /** Calm ↔ Wild (0..1): how much busier than its budgets the sidechaining lets the show be (engine/sidechain.ts), half as much to
    *  twice as much; as the standing limits at its middle. */
   wild: number;
   /** The most brightness shown, after everything (0.1..1). */
@@ -66,7 +66,7 @@ export type VisualSettings = Preset & {
   /** How much of the flame layer shows (0..1, 70): the flame is a layer like the others, and at 0 it is gone, as it
    *  is after Start from scratch (the owner: "nothing at all"). The flame layer's blend amount in the patch. */
   flameLayer: number;
-  /** A double tap's roll stands (1): the group governs at Wild's most, up to twice the limits, till the next roll, an
+  /** A double tap's roll stands (1): the group is held back at Wild's most, up to twice the limits, till the next roll, an
    *  undo, Reset or a recall (65; the owner: "sync the group properly"). Not a slider: the dice set it. */
   loose: number;
   dive: number;
@@ -168,6 +168,8 @@ export const DEFAULTS: VisualSettings = {
   fxLoopK2: 0.5,
   facets: 0,
   lattice: 0,
+  lensSides: LENS_SIDES,
+  lensDepth: LENS_DEPTH,
   pins: [],
   // A kick rings longer than a hat.
   lighting: [0.2, 0.18, 0.15, 0.13, 0.1, 0.08],
@@ -238,6 +240,8 @@ export const RANGES: Record<Ranged, [number, number]> = {
   fxLoopK2: [0, 1],
   facets: [0, 1],
   lattice: [0, 1],
+  lensSides: [3, 48],
+  lensDepth: [0, 1],
   effects: [0, 1],
   flameLayer: [0, 1],
   loose: [0, 1],

@@ -1320,19 +1320,6 @@ export const putGroupVisuals = (group: string, body: { base: number; settings: R
     body: JSON.stringify(body),
   });
 
-/** What the visuals' governor learned from the owner's thumbs (learning.ts): each limit's value, the step its next
- *  change takes and which way it last went, as of `at` (ms); per user. `version` 0: nothing learned yet. */
-export type VisualsLimits = { version: number; limits: Record<string, { value: number; step: number; dir: -1 | 0 | 1 }>; at: number };
-export const getVisualsLimits = () => quietly<VisualsLimits>('/api/visuals/limits');
-/** What was learned, over the version `base` (0 where there is none yet; another a 409: load and apply it again). */
-export const putVisualsLimits = (body: { base: number; limits: VisualsLimits['limits']; at: number }) =>
-  quietly<{ version: number }>('/api/visuals/limits', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-/** What was learned, forgotten: the limits where they started. */
-export const forgetVisualsLimits = () => quietly<void>('/api/visuals/limits', { method: 'DELETE' });
-/** A thumb, with what the visuals did over the 20 seconds before it and what it changed, for the periodic fit. */
-export const postVisualsThumb = (body: Record<string, unknown>) =>
-  quietly<void>('/api/visuals/thumbs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-
 /** A saved look of the visuals: the settings that shape the picture, named (after the track it was saved on). */
 export type VisualsSnapshot = {
   id: string;

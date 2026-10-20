@@ -79,7 +79,8 @@ export function shapeLayout(k: Record<string, number>, clocks: ShapeClocks, acro
     const alpha = k.opacity * Math.min(1, count - i);
     if (alpha <= 0) continue;
     const at = clocks.orbit + TAU * i * step;
-    const [r, g, b] = hsv(k.hue + k.hueSpread * i * step, k.saturation, 1);
+    // White where the shapes have no colour of their own (Irregular shapes: a Tint's after them).
+    const [r, g, b] = k.hue === undefined ? [1, 1, 1] : hsv(k.hue + k.hueSpread * i * step, k.saturation, 1);
     const o = n * SHAPE_FLOATS;
     out[o] = k.x * across + k.spread * Math.cos(at);
     out[o + 1] = k.y * up + k.spread * Math.sin(at);

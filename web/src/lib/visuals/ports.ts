@@ -11,13 +11,19 @@ import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 /** `light`: the flame's accumulated light (its RGBA and its bands' shares) before Show turns it into a picture; the
  *  flame's own loop works on it (claude-632, step 3). Only Show converts light into a picture. */
 /** `audio`: the sound itself, its recent samples (Music gives it; the Waves source draws it). */
-/** `points`: a set of positions with values per point (a Grid's; for Instance). */
-export type PortType = 'picture' | 'light' | 'audio' | 'points' | 'value' | 'trigger';
+/** `points`: a set of positions with values per point (a Grid's; for Instance). `flow`: a velocity field, where the
+ *  picture moves and how fast (a Fluid's: 0057 §4h). */
+export type PortType = 'picture' | 'light' | 'audio' | 'points' | 'value' | 'trigger' | 'flow';
 
 /** A port: its id on its module, its name, its type; `channels`: a band's six at once (VCV's polyphonic cable; a
  *  cable may take one of them); `normal`: what it is wired to unless a cable is plugged in (Eurorack's normalled
  *  connection: shown faint, broken by a cable). */
-export type Port = { id: string; label: string; type: PortType; channels?: number; normal?: PortRef; polymorphic?: boolean };
+export type Port = { id: string; label: string; type: PortType; channels?: number; normal?: PortRef; polymorphic?: Polymorphic };
+
+/** A polymorphic port takes any of its types, its output following its input (as VCV's modules take any voltage):
+ *  `true` is light or picture; a list names them (Fluid's: light, picture or points). */
+export type Polymorphic = boolean | readonly PortType[];
+const PICTURES: readonly PortType[] = ['light', 'picture'];
 
 /** One end of a cable: a module's port, a channel of it where it has several. */
 export type PortRef = { module: string; port: string; channel?: number };
@@ -27,10 +33,13 @@ export type Ports = { in: Port[]; out: Port[] };
 /** The signals that are events: a beat, a band's hits. Into a value port they come as a pulse. */
 export const TRIGGER_SIGNALS: ReadonlySet<string> = new Set(['beat', 'downbeat', 'section', 'hits', 'percussiveHits']);
 
-/** Whether a cable may go from a port of `from` type into one of `to` type: the same, or a trigger into a value; a
- *  polymorphic port (`light` or `picture`, its output following its input, as VCV's modules take any voltage) either. */
-export const fits = (from: PortType, to: PortType, polymorphic = false) =>
-  from === to || (from === 'trigger' && to === 'value') || (polymorphic && (from === 'light' || from === 'picture') && (to === 'light' || to === 'picture'));
+/** Whether a cable may go from a port of `from` type into one of `to` type: the same, or a trigger into a value; into
+ *  or out of a polymorphic port, any two of its types. */
+export const fits = (from: PortType, to: PortType, polymorphic: Polymorphic = false) => {
+  if (from === to || (from === 'trigger' && to === 'value')) return true;
+  const types = polymorphic === true ? PICTURES : polymorphic || [];
+  return types.includes(from) && types.includes(to);
+};
 
 const knobPort = (k: Knob): Port => ({ id: k.id, label: k.label, type: 'value' });
 const PICTURE_IN: Port = { id: 'picture', label: 'Picture', type: 'picture' };
@@ -92,12 +101,34 @@ export function portsOf(t: ModuleType & { ports?: Ports }): Ports {
   // light; Trails, Fluid, Tunnel, the Loop effect and Dive carry light on.
   // The flame's part columns take six channels, one a part (0057 §4b): a band's cable reaches its part; a whole
   // track's every part. Into any one-channel knob, six channels are the bands' mean (a Merge, in the conversion).
-  if (t.type === 'flame') return { in: [LIGHT('light', 'Last light'), ...knobs.map((p) => (FLAME_PARTS.has(p.id) ? { ...p, channels: 6 } : p))], out: [LIGHT('light', 'Light')] };
+  // The flame gives where its parts are too (0057 §4h: where the Fluid's pushes land, unless cabled otherwise).
+  if (t.type === 'flame')
+    return { in: [LIGHT('light', 'Last light'), ...knobs.map((p) => (FLAME_PARTS.has(p.id) ? { ...p, channels: 6 } : p))], out: [LIGHT('light', 'Light'), { id: 'points', label: 'Points', type: 'points' }] };
+  // Fluid (0057 §4h, the owner): light, a picture or points through its flow, the same type out; its pushes at the
+  // points into `at` (the flame's parts unless cabled); its flow out, for Show's read-back, Stream and Displace.
+  if (t.type === 'fluid' || t.type === 'fluid-loop')
+    return {
+      in: [{ ...LIGHT('light', 'In'), polymorphic: FLUID_TYPES }, { id: 'at', label: 'Pushes at', type: 'points', normal: { module: 'flame', port: 'points' } }, ...knobs],
+      out: [{ ...LIGHT('light', 'Out'), polymorphic: FLUID_TYPES }, FLOW_OUT],
+    };
+  // The Loop effect's Stream reads a flow (the fluid's unless cabled).
+  if (t.type === 'loop-effect') return { in: [LIGHT('light', 'Light'), FLOW_IN, ...knobs], out: [LIGHT('light', 'Light')] };
   if (LIGHT_CARRIERS.has(t.type)) return { in: [LIGHT('light', 'Light'), ...knobs], out: [LIGHT('light', 'Light')] };
-  return { in: [...(TAKES_PICTURE.has(t.place) ? [PICTURE_IN] : []), ...knobs], out: [PICTURE_OUT] };
+  // Hydra's Stream too.
+  if (t.type === 'hydra-engine') return { in: [PICTURE_IN, FLOW_IN, ...knobs], out: [PICTURE_OUT] };
+  return { in: [...(TAKES_PICTURE.has(t.place) ? [PICTURE_IN] : []), ...knobs], out: [PICTURE_OUT, ...(POINTS_OUT[t.type] ?? [])] };
 }
 
+/** The sources whose geometry is an output too (0057 §4g): Regular shapes' corners, for Instance (a corner fractal:
+ *  corners → Instance → Feedback). */
+const POINTS_OUT: Record<string, Port[]> = { shapes: [{ id: 'corners', label: 'Corners', type: 'points' }] };
+
 const LIGHT = (id: string, label: string): Port => ({ id, label, type: 'light' });
+const FLUID_TYPES: readonly PortType[] = ['light', 'picture', 'points'];
+// Its flow field (`field`: the Fluid's Flow is a knob, how much its cables make it flow).
+const FLOW_OUT: Port = { id: 'field', label: 'Flow field', type: 'flow' };
+/** A flow field input, normalled to the Fluid's (the flame's own loop's). */
+const FLOW_IN: Port = { id: 'field', label: 'Flow field', type: 'flow', normal: { module: 'fluid', port: 'field' } };
 /** The flame's part columns: polyphonic inputs, a part a channel. */
 export const FLAME_PARTS: ReadonlySet<string> = new Set(['shape', 'rotation', 'lights', 'hue', 'spread', 'presence']);
 /** The flame's own loop, on its light (Dive last: a pass-through whose rate the points' camera reads). */
@@ -137,6 +168,10 @@ export const MUSIC: Declared = {
       out('audio', 'Sound', 'audio'),
       // 1 while the music plays, 0 paused (0057 §7e: the pause's dimming, cabled in sight).
       out('playing', 'Playing'),
+      // A trigger as a track starts (the visuals opening on one too), and the track's seed (0..1, the same for the same
+      // track): Track folded into Music (0057 §7f).
+      out('newtrack', 'New track', 'trigger'),
+      out('seed', 'Track seed'),
       ...TRACK_SIGNALS.map((s) => out(s, label(s), TRIGGER_SIGNALS.has(s) ? 'trigger' : 'value')),
       ...BAND_SIGNALS.map((s) => out(s, label(s), TRIGGER_SIGNALS.has(s) ? 'trigger' : 'value', 6)),
       // Each value signal's slow form (the speed a cable no longer says).
@@ -299,7 +334,9 @@ export function showPartTypes(show: ModuleType): Declared[] {
     // through its gain.
     const knobs = [...(k ? [k] : []), ...(type === 'tonemap' ? [knob('level', 'Level', 0, 1, 1, 'level')] : [])];
     const input: Port = type === 'tonemap' ? { id: 'light', label: 'Light', type: 'light' } : polymorphic ? { ...PICTURE_IN, polymorphic } : PICTURE_IN;
-    return declared(type, name, 'module', knobs, [input], [polymorphic ? { ...PICTURE_OUT, polymorphic } : PICTURE_OUT]);
+    // Bend reads the picture along the Fluid's flow (0057 §4h: today's hidden read-back), the fluid's unless cabled.
+    const inputs = type === 'bend' ? [input, FLOW_IN] : [input];
+    return declared(type, name, 'module', knobs, inputs, [polymorphic ? { ...PICTURE_OUT, polymorphic } : PICTURE_OUT]);
   });
 }
 
@@ -423,7 +460,45 @@ export const DISPLACE = declared(
 export const THRESHOLD = declared('threshold', 'Threshold', 'module', [knob('threshold', 'Threshold', 0, 1, 0.6, 'level'), knob('softness', 'Softness', 0, 1, 0.1)], [PICTURE_IN], [PICTURE_OUT]);
 export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD];
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
+/** The Randomize scopes (0057 §4d), in the dice's menu's order. */
+export const RANDOMIZE_SCOPES = ['everything', 'sources', 'effects', 'mixers', 'modulators', 'cables'] as const;
+
+/** Dice (0057 §7f, the owner: "same randomize"; named Dice beside Random, the value generator): the panel's dice as a
+ *  module. A trigger randomizes every knob in its
+ *  scope that is not pinned, as the dice do (the flame's settings rolled together and checked), from its seed: the same
+ *  seed, the same values. Music's New track and Track seed into it are a track's look (the Track Look device). */
+export const DICE = declared(
+  'dice',
+  'Dice',
+  'modulator',
+  [{ ...knob('scope', 'Scope', 0, RANDOMIZE_SCOPES.length - 1, 0, 'step'), randomize: false }],
+  [
+    { id: 'trigger', label: 'Trigger', type: 'trigger' },
+    { id: 'seed', label: 'Seed', type: 'value' },
+  ],
+  // A trigger as it randomizes (to morph or flash with it).
+  [out('done', 'Randomized', 'trigger')],
+);
+
+/** Shaper (0057 §7f, the owner: curved cables kept exact): a value through a curve, as a cable's own curve shapes it
+ *  (curves.ts: the end's height and two handles). A curved cable from Music reads it before the loudness's VCA. A shape
+ *  is a choice, not a value: none of its knobs are randomized. */
+export const SHAPER = declared(
+  'shaper',
+  'Shaper',
+  'modulator',
+  [
+    { ...knob('h', 'Height', -2, 2, 1), randomize: false },
+    { ...knob('h1x', 'Handle 1 across', 0, 1, 1 / 3), randomize: false },
+    { ...knob('h1y', 'Handle 1 height', -2, 2, 1 / 3), randomize: false },
+    { ...knob('h2x', 'Handle 2 across', 0, 1, 2 / 3), randomize: false },
+    { ...knob('h2y', 'Handle 2 height', -2, 2, 2 / 3), randomize: false },
+  ],
+  [{ id: 'in', label: 'In', type: 'value', channels: 6 }],
+  [{ ...VALUE_OUT, channels: 6 }],
+);
+
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, TRACK, ENVELOPE, DICE, SHAPER, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 
@@ -446,7 +521,9 @@ export const READINGS = ['track', 'lately', 'absolute'] as const;
 export type PatchV2 = { v: 2; modules: Module[]; cables: CableV2[]; macros: Macro[]; pins: string[] };
 
 /** The blends a Mix input takes (0056's, as a step knob per input). */
-export const MIX_MODES = ['add', 'screen', 'over', 'multiply', 'window', 'lighten'] as const;
+// Appended only: a saved Mix keeps its modes by their place (Subtract, 0057 §4: a picture less another, its high-pass
+// a picture less its blur).
+export const MIX_MODES = ['add', 'screen', 'over', 'multiply', 'window', 'lighten', 'subtract'] as const;
 /** How many pictures a Mix takes. */
 export const MIX_INPUTS = 4;
 

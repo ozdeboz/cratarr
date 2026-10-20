@@ -1,7 +1,8 @@
 // The flame's points (decision 0046; 0057 step 3, the Flame's own node): the chaos game in a vertex shader, one step
 // a pass, each point's state carried by transform feedback and drawn into the light (light.ts) where it lands; the
 // flame as uniforms; the dive's camera on them (zoom.ts).
-import { MARK, colourOf, PARTS, type Flame } from '../flame';
+import { LENS_SHAPE_VARIATIONS, MARK, colourOf, PARTS, type Flame } from '../flame';
+import { FILL_ANGLES, LENS_SHAPES, fillTexture, type Irregular } from '../shape-set';
 import { diveCamera, diveFit, diveTarget, type DiveFit } from '../zoom';
 import { program } from '../sources/gl';
 import type { PointsParams } from '../chain-params';
@@ -34,6 +35,89 @@ vec2 mark(vec2 p, float r) {
   float far = inSlice ? markSlice(u) : markRings(u);
   return far * vec2(cos(to), sin(to));
 }`;
+// The Lens's shapes (0057 §4g; shape-set.ts `lensInto`): t from a point's angle and u from its distance, as the mark's.
+// Polygon and Star by their sides and depth (shape-set.ts regularFill); the symbols by their fill tables (`fillTexture`:
+// a row of the area through each wedge, two of its rings), read with texelFetch. No float arrays (the Mali's miscompile).
+const TABLE_SHAPES = LENS_SHAPES.slice(2) as unknown as Irregular[];
+const TABLE_FIRST = LENS_SHAPE_VARIATIONS[TABLE_SHAPES[0] as keyof typeof LENS_SHAPE_VARIATIONS];
+/** The texture unit the fill tables are read from (one the light's passes do not use). */
+const TABLE_UNIT = 7;
+const LENS_GLSL = `vec2 lensTu(vec2 p, float r) {
+  float u = r / (1.0 + r);
+  return vec2((atan(p.y, p.x) + PI) / (2.0 * PI), u * u);
+}
+vec3 starSide(float n, float depth) {
+  float h = PI / n;
+  float rho = cos(h) * (1.0 - 0.95 * depth);
+  vec2 nn = normalize(vec2(rho * sin(h), 1.0 - rho * cos(h)));
+  return vec3(nn, nn.x);
+}
+float starAngle(float t, float n, float depth) {
+  vec3 sd = starSide(n, depth);
+  float h = PI / n;
+  float a = atan(sd.y, sd.x);
+  float ta = tan(a);
+  float whole = tan(h - a) + ta;
+  float x = clamp(t, 0.0, 1.0) * 2.0 * n;
+  float k = min(2.0 * n - 1.0, floor(x));
+  float tau = x - k;
+  float at = floor(k * 0.5) * 2.0 * h;
+  bool even = mod(k, 2.0) < 0.5;
+  float psi = a + atan((even ? tau : 1.0 - tau) * whole - ta);
+  return even ? at + psi : at + 2.0 * h - psi;
+}
+vec2 starReach(float th, float n, float depth) {
+  vec3 sd = starSide(n, depth);
+  float s = 2.0 * PI / n;
+  float p = mod(th, s);
+  p = p > 0.5 * s ? s - p : p;
+  return vec2(sd.z, cos(p) * sd.x + sin(p) * sd.y);
+}
+vec2 regularFill(vec2 tu, float sides, float depth) {
+  float n = max(3.0, sides);
+  float n0 = floor(n);
+  float f = n - n0;
+  float th = mix(starAngle(tu.x, n0, depth), starAngle(tu.x, n0 + 1.0, depth), f);
+  vec2 cd = mix(starReach(th, n0, depth), starReach(th, n0 + 1.0, depth), f);
+  return (cd.x / cd.y) * sqrt(clamp(tu.y, 0.0, 1.0)) * vec2(cos(th), sin(th));
+}
+void ringStep(inout float left, inout float far, inout bool found, vec2 ring) {
+  float area = ring.y * ring.y - ring.x * ring.x;
+  if (found || area <= 0.0) return;
+  if (left < area) {
+    far = sqrt(ring.x * ring.x + left);
+    found = true;
+    return;
+  }
+  left -= area;
+  far = ring.y;
+}
+vec2 tableFill(int k, vec2 tu) {
+  int row = 3 * k;
+  int lo = 0;
+  int hi = ${FILL_ANGLES - 1};
+  for (int i = 0; i < 12; i++) {
+    if (lo >= hi) break;
+    int mid = (lo + hi) / 2;
+    if (texelFetch(uLensTable, ivec2(mid, row), 0).r <= tu.x) lo = mid + 1; else hi = mid;
+  }
+  float before = lo > 0 ? texelFetch(uLensTable, ivec2(lo - 1, row), 0).r : 0.0;
+  float here = texelFetch(uLensTable, ivec2(lo, row), 0).r;
+  float across = here > before ? (tu.x - before) / (here - before) : 0.5;
+  float th = -PI + (float(lo) + across) * (2.0 * PI / ${FILL_ANGLES}.0);
+  vec4 r01 = texelFetch(uLensTable, ivec2(lo, row + 1), 0);
+  vec4 r23 = texelFetch(uLensTable, ivec2(lo, row + 2), 0);
+  float total = max(0.0, r01.y * r01.y - r01.x * r01.x) + max(0.0, r01.w * r01.w - r01.z * r01.z) + max(0.0, r23.y * r23.y - r23.x * r23.x) + max(0.0, r23.w * r23.w - r23.z * r23.z);
+  float left = clamp(tu.y, 0.0, 1.0) * total;
+  float far = 0.0;
+  bool found = false;
+  ringStep(left, far, found, r01.xy);
+  ringStep(left, far, found, r01.zw);
+  ringStep(left, far, found, r23.xy);
+  ringStep(left, far, found, r23.zw);
+  return far * vec2(cos(th), sin(th));
+}`;
+
 /** Passes a point added to the running ones settles for, unseen, before it is drawn (flam3's fuse). */
 const SETTLE = 30;
 
@@ -63,6 +147,10 @@ uniform vec3 uFinalAbc;
 uniform vec3 uFinalDef;
 uniform ivec4 uFinalVarId[2];
 uniform vec4 uFinalVarW[2];
+// The Lens's Polygon and Star (their sides and depth), and its symbols' fill tables.
+uniform float uLensSides;
+uniform float uLensDepth;
+uniform highp sampler2D uLensTable;
 uniform vec4 uCamera;
 uniform vec2 uTurn;
 // The dive (zoom.ts): its part, how far into the loop (0..1: also the share of points drawn as that part's copy), and
@@ -180,6 +268,7 @@ vec2 variation(int v, vec2 p, float r2, float r, float th, vec3 abc, vec3 def, i
 // The final transform's warps only (flame.ts's FINALS): a second copy of the whole switch above for every point cost
 // the Intel a third more of its time a step.
 ${MARK_GLSL}
+${LENS_GLSL}
 vec2 warp(int v, vec2 p, float r2, float r, float th) {
   switch (v) {
     case 1: return sin(p);
@@ -195,7 +284,9 @@ vec2 warp(int v, vec2 p, float r2, float r, float th) {
     case 27: return (2.0 / (r + 1.0)) * p;
     case 28: return (4.0 / (r2 + 4.0)) * p;
     case 99: return mark(p, r);
-    default: return p;
+    case ${LENS_SHAPE_VARIATIONS.polygon}: return regularFill(lensTu(p, r), uLensSides, 0.0);
+    case ${LENS_SHAPE_VARIATIONS.star}: return regularFill(lensTu(p, r), uLensSides, uLensDepth);
+    default: return v >= ${TABLE_FIRST} ? tableFill(v - ${TABLE_FIRST}, lensTu(p, r)) : p;
   }
 }
 
@@ -330,6 +421,8 @@ export class FlamePoints {
   diveTurnRate = 0;
   private random: () => number;
   private now: () => number;
+  /** The Lens's symbols' fill tables (null till a lens needs them). */
+  private table: WebGLTexture | null = null;
   private u: (p: WebGLProgram, name: string) => WebGLUniformLocation | null;
 
   /** `points` at first, placed and seeded by `random`; `now` the clock (ms). */
@@ -339,6 +432,9 @@ export class FlamePoints {
     this.now = now;
     this.u = uniforms(gl);
     this.iterate = program(gl, ITERATE, PLOT, ['vState', 'vSeed']);
+    // Its tables' sampler on a unit of its own from the first (left on unit 0 it could name the light drawn into).
+    gl.useProgram(this.iterate);
+    gl.uniform1i(this.u(this.iterate, 'uLensTable'), TABLE_UNIT);
     this.feedback = gl.createTransformFeedback()!;
     this.seed(points);
   }
@@ -500,6 +596,10 @@ export class FlamePoints {
       fw[1] = final.variations.get(0) ?? 0;
       gl.uniform4iv(this.u(this.iterate, 'uFinalVarId'), fid);
       gl.uniform4fv(this.u(this.iterate, 'uFinalVarW'), fw);
+      // The Lens's shapes: Polygon's and Star's sides and depth; the symbols' tables, made the first time one is drawn.
+      gl.uniform1f(this.u(this.iterate, 'uLensSides'), final.shape?.sides ?? 5);
+      gl.uniform1f(this.u(this.iterate, 'uLensDepth'), final.shape?.depth ?? 0.5);
+      if (strongest[0] >= TABLE_FIRST && !this.table) this.table = this.makeTable();
     }
     // The bands' transforms are the first six (flame.ts): each one's colour, a point in the colour plane.
     const parts = Array.from({ length: PARTS }, (_, b) => xs[b] ?? { color: b / PARTS, colorReach: 1 });
@@ -513,6 +613,20 @@ export class FlamePoints {
     parts.forEach((x, b) => this.bandRgb.set(colourOf(lights[b], flame.colours.chroma * (x.colorReach ?? 1), x.color), b * 3));
   }
 
+  /** The Lens's symbols' fill tables (shape-set.ts `fillTexture`), on their own unit. */
+  private makeTable(): WebGLTexture {
+    const gl = this.gl;
+    const t = gl.createTexture()!;
+    gl.activeTexture(gl.TEXTURE0 + TABLE_UNIT);
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, FILL_ANGLES, TABLE_SHAPES.length * 3, 0, gl.RGBA, gl.FLOAT, fillTexture(TABLE_SHAPES));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.activeTexture(gl.TEXTURE0);
+    return t;
+  }
+
   /** This frame's steps into the light in use (bound, blending on): `passes` steps of every point, each drawn where
    *  it lands, after the unseen ones of the points still settling. */
   draw(light: Light, look: PointsParams, passes: number, since: number) {
@@ -523,6 +637,11 @@ export class FlamePoints {
     gl.uniform4f(this.u(this.iterate, 'uCamera'), flame.center[0], flame.center[1], look.scale / flame.size, light.width / light.height);
     gl.uniform2f(this.u(this.iterate, 'uTurn'), Math.cos(look.turn), Math.sin(look.turn));
     this.diveStep(look.dive, since);
+    if (this.table) {
+      gl.activeTexture(gl.TEXTURE0 + TABLE_UNIT);
+      gl.bindTexture(gl.TEXTURE_2D, this.table);
+      gl.activeTexture(gl.TEXTURE0);
+    }
     gl.blendFunc(gl.ONE, gl.ONE);
     gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, this.feedback);
     const unseen = this.fuse;
@@ -563,6 +682,11 @@ export class FlamePoints {
     gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
     gl.bindVertexArray(null);
     gl.disable(gl.BLEND);
+    if (this.table) {
+      gl.activeTexture(gl.TEXTURE0 + TABLE_UNIT);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      gl.activeTexture(gl.TEXTURE0);
+    }
   }
 
   /** The dive's camera for this frame at `rate` (the points' program in use). Its part is chosen as a loop starts (and
@@ -611,5 +735,6 @@ export class FlamePoints {
     for (const v of this.vaos) gl.deleteVertexArray(v);
     gl.deleteTransformFeedback(this.feedback);
     gl.deleteProgram(this.iterate);
+    if (this.table) gl.deleteTexture(this.table);
   }
 }

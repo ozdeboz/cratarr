@@ -129,3 +129,63 @@ test('pinned whole: a module (module:<id>), a category (category:<name>), a poly
   const after: PatchV2 = { ...p, modules: p.modules.map((m) => (rolled[m.id] ? { ...m, knobs: { ...m.knobs, ...rolled[m.id] } } : m)) };
   assert.deepEqual(run(randomize(after, types, { seed })), all);
 });
+
+test("Dice: rolls as its trigger rises, seeded by its seed input (Music's: the track's own), its scope from its knob", async () => {
+  const { newEngine, stepEngine } = await import('../src/lib/visuals/engine/graph.ts');
+  const { musicOf, newMusicState } = await import('../src/lib/visuals/music-core.ts');
+  const { TRACKS, track } = await import('./harness/aspects-record.ts');
+  const { FLUID_FULL } = await import('../src/lib/visuals/settings.svelte.ts');
+  const t = track(TRACKS[0]);
+  const st = newEngine();
+  const music = newMusicState();
+  const p: PatchV2 = {
+    v: 2,
+    modules: [{ id: 'music', type: 'music', knobs: {} }, { id: 'look', type: 'dice', knobs: { scope: 0 } }],
+    cables: [
+      { id: 'a', from: { module: 'music', port: 'newtrack' }, to: { module: 'look', port: 'trigger' }, value: 1, depth: null },
+      { id: 'b', from: { module: 'music', port: 'seed' }, to: { module: 'look', port: 'seed' }, value: 1, depth: null },
+    ],
+    macros: [],
+    pins: [],
+  } as PatchV2;
+  const rolls: { k: number; seed: number; scope: string; done: number }[] = [];
+  for (let k = 0; k < 90; k++) {
+    const at = 20 + k / 30;
+    const key = k < 40 ? 'subsonic/tr-10329' : 'subsonic/tr-8934';
+    const m = { ...musicOf(t.signals, t.beats, at, true, { state: music, at: at * 1000, lighting: DEFAULTS.lighting }), key };
+    const f = stepEngine(st, p, {}, m, () => 0, DEFAULTS, 1 / 30, { still: false, now: at * 1000, fluidFull: FLUID_FULL });
+    for (const r of f.dice) rolls.push({ k, seed: r.seed, scope: r.scope, done: f.outputs['look.done'] });
+  }
+  assert.deepEqual(rolls, [
+    { k: 0, seed: seedOf('subsonic/tr-10329'), scope: 'everything', done: 1 },
+    { k: 40, seed: seedOf('subsonic/tr-8934'), scope: 'everything', done: 1 },
+  ]);
+});
+
+test('the Cables roll: new amounts for the cables into knobs, none of the plumbing, pins kept, the same again, a curve its shape', async () => {
+  const { randomizeCables } = await import('../src/lib/visuals/engine/randomize.ts');
+  const { flatten } = await import('../src/lib/visuals/v2.ts');
+  const p = flatten(toV2(structuredClone(DEFAULTS)));
+  const typeOf = new Map(p.modules.map((m) => [m.id, m.type]));
+  const rolled = randomizeCables(p, types, { seed: 4242 });
+  const ids = Object.keys(rolled);
+  assert.ok(ids.length > 20, `${ids.length} cables rolled`);
+  const PLUMBING = ['vca', 'merge', 'gate', 'shaper', 'ducker', 'meter', 'screen', 'dice'];
+  for (const id of ids) {
+    const c = p.cables.find((x) => x.id === id)!;
+    assert.ok(!PLUMBING.includes(typeOf.get(c.from.module)!) && !PLUMBING.includes(typeOf.get(c.to.module)!), `${id} is no plumbing`);
+    const v = rolled[id];
+    const h = typeof v === 'number' ? v : v.h;
+    assert.ok(h >= -1 && h <= 1, `${id}: ${h}`);
+    if (typeof c.value !== 'number' && typeof v !== 'number' && c.value.h !== 0) assert.ok(Math.abs(v.h1[1] / v.h - c.value.h1[1] / c.value.h) < 1e-9, `${id} keeps its shape`);
+  }
+  assert.deepEqual(randomizeCables(p, types, { seed: 4242 }), rolled);
+  const pinned = randomizeCables({ ...p, pins: [`cable:${ids[0]}`] }, types, { seed: 4242 });
+  assert.equal(pinned[ids[0]], undefined);
+  assert.equal(pinned[ids[1]], rolled[ids[1]]);
+  const none = randomizeCables(p, types, { seed: 4242, reach: 0 });
+  for (const id of Object.keys(none)) {
+    const c = p.cables.find((x) => x.id === id)!;
+    assert.equal(typeof none[id] === 'number' ? none[id] : (none[id] as { h: number }).h, typeof c.value === 'number' ? c.value : c.value.h);
+  }
+});

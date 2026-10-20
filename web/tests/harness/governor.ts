@@ -12,9 +12,9 @@
 // and by how busy the music is (a quiet passage gets less). While the rating page runs a trial they are off; the
 // flashes' rule stays on. Pure: the loop steps it with the meters now.
 
-import { BUDGETED, budgetOf, type Budgeted } from './budget';
-import type { MeterValues } from './meters';
-import { DEFAULT_LIMITS } from './budget';
+import { BUDGETED, budgetOf, type Budgeted } from '../../src/lib/visuals/budget.ts';
+import type { MeterValues } from '../../src/lib/visuals/meters.ts';
+import { DEFAULT_LIMITS } from '../../src/lib/visuals/budget.ts';
 
 export { BUDGETED, budgetOf, type Budgeted };
 

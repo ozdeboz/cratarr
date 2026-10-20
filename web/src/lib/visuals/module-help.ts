@@ -14,7 +14,9 @@ import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 export const moduleHelp: Record<string, string> = {
   // Sources.
   flame: 'The fractal flame: six parts, one for each band of the sound, drawn as light.',
-  shapes: 'Polygons on a ring, outlined or filled, each spinning as the ring turns.',
+  shapes: 'Polygons and stars on a ring, outlined or filled, each spinning as the ring turns; their sides and depth morph.',
+  irregular: 'A heart, the Cratarr mark, an arrow or another shape on a ring, outlined or filled, in white light.',
+  noise: 'Clouds of noise over the whole picture, in white light; at its finest scale, moving, film grain.',
   waves: 'The sound’s waveform drawn as a line, a circle or spokes (without live sound, the bands’ levels).',
 
   // Effects.
@@ -58,6 +60,8 @@ export const moduleHelp: Record<string, string> = {
   threshold: 'Only the picture’s bright parts, the rest black: a luma key.',
   adsr: 'An ADSR envelope on each gate or trigger, one a channel.',
   sequencer: 'A step sequencer: up to sixteen values, one a clock step.',
+  shaper: 'A value through a curve, as a curved cable shapes it.',
+  dice: 'The panel’s dice as a module: a trigger randomizes every knob in its scope that is not pinned, from its seed.',
   looper: 'Records a value over a number of bars and loops it in time with the Clock.',
   grid: 'Points on a lattice, with each point’s values as channels.',
   lfo: 'A low-frequency oscillator, sine to triangle; in time with a clock when one is plugged in.',
@@ -103,27 +107,46 @@ const SUFFIX: Record<string, string> = {
 
 const numbered = (n: number, id: (i: number) => string, line: (i: number) => string) => Object.fromEntries(Array.from({ length: n }, (_, i) => [id(i + 1), line(i + 1)]));
 
+/** Where both shape sources lay their shapes and how they stroke them (sources/shapes.ts). */
+const SHAPE_RING = {
+  count: 'How many shapes on the ring; none at 0.',
+  radius: 'How big each shape is.',
+  thickness: 'How wide the outline is.',
+  fill: 'From an outline (0) to filled (1).',
+  spread: 'How far out the ring is drawn.',
+  x: ACROSS,
+  y: UP,
+  orbit: 'How fast the shapes travel round the ring; below 0 the other way.',
+  rotation: 'Turns every shape.',
+  spin: SPIN,
+  twist: 'Turns each shape a little more than the one before.',
+  taper: 'Each shape smaller (above 0) or larger (below 0) than the one before.',
+  additive: 'From covering what is under it (0) to adding its light to it (1).',
+};
+
 /** A port's or knob's own line, where its label does not say it all and help.ts has none. */
 export const portHelp: Record<string, Record<string, string>> = {
-  flame: { light: 'Its light: in, as it was last frame; out, as drawn now, before Tone map.' },
+  flame: { light: 'Its light: in, as it was last frame; out, as drawn now, before Tone map.', points: 'Where its parts are: where the Fluid pushes, unless cabled otherwise.' },
   shapes: {
-    count: 'How many shapes on the ring; none at 0.',
+    ...SHAPE_RING,
     sides: 'Corners a shape; between whole numbers it morphs, near a circle at many.',
-    radius: 'How big each shape is.',
-    thickness: 'How wide the outline is.',
-    fill: 'From an outline (0) to filled (1).',
-    spread: 'How far out the ring is drawn.',
-    x: ACROSS,
-    y: UP,
-    orbit: 'How fast the shapes travel round the ring; below 0 the other way.',
-    rotation: 'Turns every shape.',
-    spin: SPIN,
-    twist: 'Turns each shape a little more than the one before.',
-    taper: 'Each shape smaller (above 0) or larger (below 0) than the one before.',
+    depth: 'From the polygon (0) to a star whose points go deeper.',
+    corners: 'Each shape’s corners as points, for Instance: a smaller copy at each makes a corner fractal.',
     hue: HUE,
     hueSpread: 'How far the colour moves round the wheel from shape to shape.',
     saturation: SATURATION,
     additive: 'From covering what is under it (0) to adding its light to it (1).',
+  },
+  noise: {
+    amount: 'How bright it is; none at 0.',
+    scale: 'From the finest, a speck a pixel or two (grain), to clouds the size of the picture.',
+    detail: 'Layers of finer noise over it, 1 to 6; between whole numbers the last fades in.',
+    speed: 'How fast it changes, by its own size: at the finest scale a new pattern every frame.',
+    contrast: 'From soft greys (0) through as it is (50%) to hard black and white.',
+  },
+  irregular: {
+    ...SHAPE_RING,
+    shape: 'Which shape of the set: Heart, Cratarr, Ring, Cross, Arrow, Crescent, Drop, Polar or Handkerchief.',
   },
   waves: {
     audio: 'The sound to draw: Music’s unless unplugged.',
@@ -150,14 +173,17 @@ export const portHelp: Record<string, Record<string, string>> = {
     flow: 'How much of what its cables give makes the fluid flow.',
     swirl: 'How much of what its cables give sets the fluid whirling.',
     facets: 'How much the fluid breaks into facets: the most it reaches; cables into its gain take it lower.',
+    at: 'Where its pushes land: the flame’s parts unless cabled (a Grid’s points, an edge’s).',
+    field: 'Its flow field, where it moves things and how fast: into Show’s Bend, Stream or a Displace.',
   },
   tunnel: { light: LIGHT, tunnel: 'How fast the picture streams outward for ever: the most it reaches; cables into its gain take it lower.' },
   dive: { light: LIGHT, dive: 'How fast the view dives into the flame for ever: the most it reaches; cables into its gain take it lower.' },
   trails: { light: LIGHT },
-  'loop-effect': { light: LIGHT, amount: 'How strongly the loop’s effect acts: the most it reaches; cables into its gain take it lower.' },
+  bend: { field: 'The flow it reads the picture along, as the fluid moves it: the Fluid’s unless cabled.' },
+  'loop-effect': { light: LIGHT, field: 'The flow Stream reads the picture along: the Fluid’s unless cabled.', amount: 'How strongly the loop’s effect acts: the most it reaches; cables into its gain take it lower.' },
   'kaleidoscope-engine': { amount: 'How strongly its effect shows: the most it reaches; cables into its gain take it lower.' },
   'eyedo-engine': { amount: 'How strongly its effect shows: the most it reaches; cables into its gain take it lower.' },
-  'hydra-engine': { amount: 'How strongly its effect shows: the most it reaches; cables into its gain take it lower.' },
+  'hydra-engine': { field: 'The flow Stream reads the picture along: the Fluid’s unless cabled.', amount: 'How strongly its effect shows: the most it reaches; cables into its gain take it lower.' },
   blur: { smoothing: 'How wide sparse areas blur, up to twelve pixels: the most it reaches; cables into its gain take it lower.' },
   curve: { haze: 'Lifts the faint mist into view (up) or sinks it to black (down): the most either way; cables into its gain take it toward 0.' },
   fold: {
@@ -183,6 +209,9 @@ export const portHelp: Record<string, Record<string, string>> = {
     trails: 'How long the trails last: a tenth of a second at 0, six seconds at 1.',
   },
   'fluid-loop': {
+    light: 'Light, a picture or points, carried along its flow; out the same.',
+    at: 'Where its pushes land: the flame’s parts unless cabled (a Grid’s points, an edge’s).',
+    field: 'Its flow field, where it moves things and how fast: into Show’s Bend, Stream or a Displace.',
     amount: 'How far the picture moves with the flow: not at all at 0.',
     stir: 'How hard the music pushes the flow.',
     flow: 'How long the flow’s motion lasts.',
@@ -190,7 +219,7 @@ export const portHelp: Record<string, Record<string, string>> = {
   },
   mix: {
     in1: 'The bottom picture; the others go over it in order.',
-    ...numbered(4, (i) => `mode${i}`, (i) => `How picture ${i} blends: add, screen, over, multiply, window or lighten.`),
+    ...numbered(4, (i) => `mode${i}`, (i) => `How picture ${i} blends: add, screen, over, multiply, window, lighten or subtract.`),
     ...numbered(4, (i) => `amount${i}`, (i) => `How much of picture ${i} shows.`),
   },
   feedback: { picture: 'In: the picture to hold back a frame; out: that picture as it was last frame.' },
@@ -257,6 +286,21 @@ export const portHelp: Record<string, Record<string, string>> = {
     amount: 'The peak’s height.',
     out: 'One envelope a channel.',
   },
+  shaper: {
+    in: 'The value to shape, a channel a band.',
+    h: 'The curve’s height at its end.',
+    h1x: 'The first handle, across.',
+    h1y: 'The first handle’s height.',
+    h2x: 'The second handle, across.',
+    h2y: 'The second handle’s height.',
+    out: 'The curve’s height at the value, a channel a band.',
+  },
+  dice: {
+    trigger: 'Randomizes on each trigger.',
+    seed: 'Where its randomness starts: the same seed, the same values (a track’s seed, the same look).',
+    scope: 'Which knobs it reaches: everything, or the sources, effects, mixers, modulators or cables alone.',
+    done: 'A trigger as it randomizes.',
+  },
   sequencer: {
     clock: 'Moves on a step; the Clock’s beat unless unplugged.',
     reset: 'Back to the first step; on the Clock’s bar unless unplugged.',
@@ -313,6 +357,8 @@ export const portHelp: Record<string, Record<string, string>> = {
   music: {
     audio: 'The sound itself, its recent samples.',
     playing: '1 while the music plays, 0 while it is paused.',
+    newtrack: 'A trigger as a track starts, and as the visuals open on one.',
+    seed: 'A number of the playing track’s own, the same each time it plays.',
     hits: 'A trigger on each hit in a band, such as a drum or a plucked note, its strength with it.',
     percussiveHits: 'A trigger on each drum hit in a band, held notes left out, its strength with it.',
     hold: 'How long each band’s envelope takes to fall (seconds).',
@@ -343,6 +389,7 @@ export const portHelp: Record<string, Record<string, string>> = {
 const PLAIN_ANYWHERE: ReadonlySet<string> = new Set(['picture', 'in', 'out']);
 export const PLAIN: Record<string, readonly string[]> = {
   shapes: ['opacity'],
+  irregular: ['opacity'],
   waves: ['opacity'],
   clock: ['beat', 'bar', 'phrase'],
   grid: ['row', 'column'],

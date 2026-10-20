@@ -11,9 +11,12 @@
 //   (the turning's pace to a quarter, the hues' and the size's swing to a fifth; the evolving four times slower, the
 //   looks six times further apart), coming in over about a second and a half, let back once under four fifths.
 
-import { BUDGETED, budgetOf, type Budgeted } from '../budget';
+import { BUDGETED, budgetOf, DEFAULT_LIMITS, type Budgeted } from '../budget';
 import type { MeterValues } from '../meters';
 import { newDucker, stepDucker, type DuckerKnobs, type DuckerState } from './compressor';
+
+/** The standing limits of each kind of busyness (budget.ts's): the Duckers' thresholds start from them. */
+export const STANDING: Readonly<Record<Budgeted, number>> = Object.fromEntries(BUDGETED.map((k) => [k, DEFAULT_LIMITS[k]])) as Record<Budgeted, number>;
 
 /** The flash guard's ducker: fixed. */
 export const FLASH_GUARD: Readonly<DuckerKnobs> = { threshold: 2.5, depth: 20, attack: 0, hold: 8, release: 3, hysteresis: 1 };

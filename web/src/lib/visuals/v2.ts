@@ -83,6 +83,8 @@ function showDevice(show: Module): Device {
     patch: { v: 2, modules: parts, cables: SHOW_PARTS.slice(1).map((_, i) => wire(i)), macros: [], pins: [] },
     inputs: [
       { as: 'light', label: 'Light', module: SHOW_PARTS[0].type, port: 'picture' },
+      // The flow Bend reads the picture along (0057 §4h: the fluid's read-back), normalled to the Fluid's.
+      { as: 'field', label: 'Flow field', module: 'bend', port: 'field' },
       ...SHOW_PARTS.map(({ knob, type, label }) => ({ as: knob, label, module: type, port: knob })),
       // Tone map's Level and its gain (0057 §7e item 6: the pause's dimming).
       { as: 'level', label: 'Level', module: 'tonemap', port: 'level' },

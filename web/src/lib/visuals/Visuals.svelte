@@ -48,19 +48,15 @@
   import { ASPECT_KNOB, emptyExtra, SETTING_KNOB } from './patch';
   import CurveEditor from './CurveEditor.svelte';
   import { densityOf, newHistory, remember } from './history';
-  import { budgetOf, BUDGETED, LEVERS, STANDING, type Budgeted, type Levers } from './governor';
-  import { holding, leversOf } from './engine/sidechain';
-  import { fresh, limitsOf, type Learned } from './learning';
-  import { getVisualsLimits } from '../api';
+  import { budgetOf, BUDGETED, type Budgeted } from './budget';
+  import { holding, leversOf, STANDING, type Levers } from './engine/sidechain';
   import { toast } from '../toast.svelte';
   import type { MeterValues } from './meters';
-  import type { TrialLoop } from './trial.svelte';
   import { beatsOf } from './beats';
   import { DEFAULT_LIMITS, prechecking, type Checked } from './precheck';
   import { recipeFor, settingsOf, STIRRING, type Recipe, type Scope } from './recipe';
   import { signalsOf } from './signals';
   import type { FrameStats } from './meters';
-  import { trial } from './trial.svelte';
   import { appInfo, inApp } from '../app.svelte';
   import { coverPalette, type PaletteColour } from './palette';
   import { setVisualsSide, visuals } from './shown.svelte';
@@ -237,37 +233,21 @@
     showChrome();
   }
 
-  // What the meters last measured (four times a second in the loop): the patch's sidechains' key (its Meter, 0057 §7e;
-  // the governor is gone). The limits as the thumbs had learned them (learning.ts), for the dice's check until it runs on
-  // the one engine.
+  // What the meters last measured (four times a second in the loop): the patch's sidechains' key (its Meter, 0057 §7e).
+  // The dice's check holds a recipe to the standing limits (nothing learned: the owner dropped
+  // taste and learning, 0057).
   let meterValues: MeterValues | undefined;
-  let learned = $state<Learned>(fresh(STANDING));
-  let learnedVersion = 0;
-  const limitsNow = $derived(limitsOf(learned));
-  const status = (e: unknown) => (e && typeof e === 'object' && 'status' in e ? (e as { status?: number }).status : undefined);
-  async function loadLearned() {
-    try {
-      const got = await getVisualsLimits();
-      learnedVersion = got.version;
-      learned = { ...fresh(STANDING), ...got.limits } as Learned;
-    } catch (e) {
-      // None learned yet (or not to be had now): where they start.
-      if (status(e) === 404) {
-        learnedVersion = 0;
-        learned = fresh(STANDING);
-      }
-    }
-  }
+  const limitsNow = STANDING;
 
   // The dice: everything at random, a look and how it behaves (a recipe: recipe.ts), both to the group. Each try draws
   // its look first (65: a look brings its effects, which count against the limits) and runs the recipe with it against
   // the playing track from where it is (precheck.ts), a slice a frame: the first within the limits
-  // (the governor's, as Calm ↔ Wild has them; three flashes a second whatever it says) is taken, after eight the one
-  // over them by least; where the track's signals are not known yet the first, the governor holding it as it plays.
+  // (the standing ones, as Calm ↔ Wild has them; three flashes a second whatever it says) is taken, after eight the one
+  // over them by least; where the track's signals are not known yet the first, the sidechains holding it as it plays.
   // The undo puts back the look and behaviour from before (until the next roll).
   //
   // A double tap rolls how it moves only (the owner, 64.1: "double tap becomes this randomize"; `MOVEMENT` in
-  // recipe.ts), its look and the rest as they are; and it may go "twice the limits": checked, and governed while it
+  // recipe.ts), its look and the rest as they are; and it may go "twice the limits": checked, and held back while it
   // stands, as at Wild's most (the shared `loose`: every device of the group alike), till the next roll, an undo (back to
   // what stood before), Reset or a recall on any of them.
   // Three flashes a second over a quarter of the screen stay the rule. A single tap waits out the double's window (a
@@ -495,9 +475,9 @@
     return other(RANGES[a][0], RANGES[a][1]);
   }
   type Row = { key: One; label: string; step: number; text: (v: number) => string };
-  // The settings the governor holds back now (governor.ts), marked by their label: Flash's swing, Speed's pace, and on
+  // The settings the sidechains hold back now (sidechain.ts), marked by their label: Flash's swing, Speed's pace, and on
   // Wild whatever it holds back (the evolving, the hues, the size, the moments too).
-  let governed = $state<Partial<Record<One, boolean>>>({});
+  let heldBack = $state<Partial<Record<One, boolean>>>({});
   // Each behaviour slider's value in effect now (its walk's share of what is set, and for the four levels what their
   // routes let through of that), marked under the slider where it differs.
   let live = $state<Partial<Record<string, number>>>({});
@@ -514,7 +494,7 @@
     return n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)}M` : `${Math.round(n / 1024)}k`;
   };
   // The panel's groups (the owner, 2026-10-18: "We should get a header for the behavior section"): first the limits
-  // (what the device can afford, how bright, how lively the governor lets it be), then how the visuals behave with the
+  // (what the device can afford, how bright, how lively the sidechains let it be), then how the visuals behave with the
   // music, then the look.
   const COMPUTE: Row[] = [
     { key: 'quality', label: 'Quality', step: 0.05, text: percent },
@@ -796,6 +776,11 @@
   // A knob of any module, the extras' or today's chain's (claude-5f's chain-cables.ts moves those by the extras' cables).
   const anyKnob = (mid: string, kid: string): Knob | undefined =>
     GRAPH_TYPES[extraModule(mid)?.type ?? modulesOf(patchNow).get(mid)?.type ?? '']?.knobs.find((k) => k.id === kid);
+  // A six-band knob tapped whole (the graph's `flame.lighting`): its bands' own knobs, else none.
+  const bandKnobs = (mk: string): string[] | null => {
+    const [mid, kid] = splitKnob(mk);
+    return !anyKnob(mid, kid) && anyKnob(mid, `${kid}.0`) ? Array.from({ length: BANDS }, (_, b) => `${mk}.${b}`) : null;
+  };
   // `module.knob` (a band's knob has its own dot: `flame.lighting.2`).
   const splitKnob = (mk: string): [string, string] => [mk.slice(0, mk.indexOf('.')), mk.slice(mk.indexOf('.') + 1)];
   const cableable = (mk: string) => {
@@ -1327,7 +1312,6 @@
     document.addEventListener('fullscreenchange', fullscreenChanged);
     // The sync group this device plays in, if any: its visuals followed, this one's changes sent to it.
     const stopGroup = followGroup();
-    void loadLearned();
 
     // Where this device's pace settled last time (points, steps, resolution's share; and a level it could not hold
     // lately, not tried again until then): the visuals open there, not at the settings' most, and do not hunt for it
@@ -1417,16 +1401,8 @@
     let engineWalk: Record<string, number> = {};
     // How the music stirs the fluid (stirring.ts).
     const stirring = newStirring();
-    // What the visuals do, measured (meters.ts), and when the rating page last had them.
-    // The trial the meters and the governor last measured: each new one (the rating page's A, then B) starts them anew,
-    // so one segment's flashes and motion are not counted, nor held back, in the next.
-    let trialSeen: VisualSettings | null = null;
+    // When the meters were last read (four times a second).
     let meteredAt = 0;
-    // The hits seen since the rating page last had the loop's numbers (each band's last one, and how many came).
-    const hitsSeen = Array<number>(BANDS).fill(-1);
-    let hitsCounted = 0;
-    // Which device this is, for the rating page: the app's own player, else the browser's platform.
-    const device = () => (inApp && appInfo.player) || (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform || navigator.platform || 'browser';
     // The look's walk (drift.ts): when it last walked, and the time since. A track's own look goes into the settings
     // as far as the Track row's route into Drift says: at -100 % all of it (as before Drift), at -50 % half way, at 0
     // none, above 0 away from it. After the panel's Reset (`whole`), all of it.
@@ -1437,9 +1413,6 @@
     // What the patch's cables make of today's settings that are no column (chain-cables.ts), as last worked out: the
     // look's as the flame is made, Purity as drawn, the bands' times and the behaviour as the aspects take them.
     let cabled: Cabled = { settings: {}, bands: {} };
-    // The settings cables moved when the flame was last made: one let go of (a trial starting, a cable taken out) returns
-    // to its setting, not a change from outside.
-    let cabledBefore = new Set<string>();
     const lookOf = (k: string) => ((cabled.settings as Record<string, number | undefined>)[k] ?? s[k as keyof VisualSettings]) as number;
     // The walking routes' factors (`Matrix.walks` order) and the matrix they are for (a route changed: none till the
     // next step).
@@ -1447,11 +1420,6 @@
     let routeWalkFor: typeof matrix | null = null;
     let drifted = 0;
     let driftDt = 0;
-    // For the rating page: the look's settings Drift's walk and the Symmetry moments moved since the last frame (how it
-    // behaves), so a change of the look from anywhere else is told apart (counted, and while it blends in, settling).
-    const behaviourMoved = new Set<string>();
-    let looksOutside = 0;
-    let blendOutside = false;
     const trackLook = (drawn: Drawn, blend: number, whole: boolean) => {
       nextBlend = blend;
       lookCame = 'track';
@@ -1459,7 +1427,7 @@
         loadPreset(drawn.preset);
         return;
       }
-      const how = trial.settings ?? s;
+      const how = s;
       const out = stepDrift(drifting, {
         amount: 0,
         trackEvent: endOf(how.routes[routeKey('track', null, 'look')] ?? 0),
@@ -1545,8 +1513,8 @@
       // The Meter's readings, first in a frame (flashmeter.ts).
       renderer.tiles();
 
-      // How it behaves: as the settings say, or as the rating page's trial does (the look stays the settings').
-      const how = trial.settings ?? s;
+      // How it behaves: as the settings say.
+      const how = s;
       // The sound's waveform only while a Waves layer draws it (listening costs a tablet much of a frame).
       const m = musicNow(now, cabled.bands.lighting ?? how.lighting, s.extra.layers.some((l) => l.source.type === 'waves' && l.blend.amount > 0));
       if (m.key !== key || resets !== resetsSeen) {
@@ -1646,31 +1614,25 @@
         if (changed.length) base = flameOf(Object.fromEntries(PRESET_KEYS.map((k) => [k, lookOf(k)])) as Preset, false);
         const coverCame = !changed.length && madeColours.startsWith('cover/') && colours.startsWith('cover/') && from;
         const blend = nextBlend ?? (changed.every((k) => BY_DEGREES.has(k)) && colours === madeColours ? 0 : coverCame ? null : ANOTHER_MS);
-        // A cable's move is the patch's own, not from outside.
-        const outside = colours !== madeColours || changed.some((k) => !behaviourMoved.has(k) && !(k in cabled.settings) && !cabledBefore.has(k));
-        if (outside) looksOutside++;
         if (blend && shown) {
           from = shown;
           blendStart = now;
           blendMs = blend;
-          blendOutside = outside;
         }
         made = Object.fromEntries(SHAPING.map((k) => [k, lookOf(k)]));
-        cabledBefore = new Set(Object.keys(cabled.settings));
         madeColours = colours;
         to = coloured(base!, mode, covered);
         if (!from) shown = to;
       }
       // A preset that changed nothing (all of it pinned) leaves nothing to blend.
       nextBlend = null;
-      behaviourMoved.clear();
       // What is drawn, as the music and the patch give it (the engine). Reduced motion: a quarter of the turning, all
       // of it steady, half the beats' and hits' share, no moments.
       const still = reducedMotion();
-      // How it behaves now: as set, each walking slider at its walk's share of it (not with the rating page's trial).
-      const walked = trial.settings ? how : ({ ...how, ...Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, how[k] * (walkFactor[k] ?? 1)])) } as VisualSettings);
+      // How it behaves now: as set, each walking slider at its walk's share of it.
+      const walked = { ...how, ...Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, how[k] * (walkFactor[k] ?? 1)])) } as VisualSettings;
       // And as the patch's cables into today's settings move it (last frame's: read once the engine has the signals).
-      const behaving = trial.settings ? how : ({ ...walked, ...cabled.settings, ...cabled.bands } as VisualSettings);
+      const behaving = { ...walked, ...cabled.settings, ...cabled.bands } as VisualSettings;
       // The signals, read once a frame (normal.ts), with the Track pulse the engine makes (it reads none before making
       // it: the Track pulse goes into Music's own track, which the next frame makes anew).
       let signals: ((ref: SignalRef) => number) | null = null;
@@ -1697,13 +1659,8 @@
       // made, the behaviour's for the next frame; from the signals and the modulators as last stepped.
       const envelope = stepped.outputs['envelope.out'] ?? 0;
       const src = { signals: cableSignals(read, still), outputs: evalState.values, modulators: s.extra?.modulators ?? [], types: GRAPH_TYPES };
-      cabled = trial.settings ? { settings: {}, bands: {} } : cabledSettings(walked as unknown as Record<string, unknown>, extraCables, src, envelope, GRAPH_TYPES, cableWalk, BANDS);
+      cabled = cabledSettings(walked as unknown as Record<string, unknown>, extraCables, src, envelope, GRAPH_TYPES, cableWalk, BANDS);
       const { turn, hits, parts, track } = d;
-      if (m.playing && m.hits)
-        m.hits.forEach((h, b) => {
-          if (h.index > hitsSeen[b] && hitsSeen[b] >= 0 && h.index - hitsSeen[b] <= 3) hitsCounted += h.index - hitsSeen[b];
-          hitsSeen[b] = h.index;
-        });
       if (panel && now - metered > 100) {
         metered = now;
         meters = { track: Array.from(track), bands: d.bands.map((v) => Array.from(v)), lit: d.lit };
@@ -1717,7 +1674,6 @@
         if (!still) {
           const bar = Math.floor((m.beat ? m.beat.index : m.position * 2) / 4);
           const walked = stepDrift(drifting, { amount: d.look, trackEvent: 0, dt: driftDt, seed: seedOf(m.key ?? 'cratarr'), bar, pins: s.pins, own: current ?? (lookNow() as Preset), now: lookNow() as Preset });
-          for (const k of Object.keys(walked)) behaviourMoved.add(k);
           Object.assign(s, walked);
         }
         // The behaviour's: its Track row once a track, its walk (none with reduced motion), under the set values; the
@@ -1745,7 +1701,7 @@
       }
       // The moments (routes.ts `MOMENT_ASPECTS`): each moves its own setting to another value, a pinned one staying as
       // it is. Seeded from the track and the beat it comes on (else the half second), so every device playing it
-      // together makes the same choice. A moment is a new look: the meters count it (looks a minute), as the governor's
+      // together makes the same choice. A moment is a new look: the meters count it (looks a minute), as the sidechains'
       // gap between moments holds it (65.1: it was never counted).
       const at = `${m.key}|${m.beat ? m.beat.index : Math.floor(m.position * 2)}`;
       let momentCame = false;
@@ -1754,7 +1710,6 @@
         const next = momentOf(a, s[a], randomFrom(seedOf(`${a}|${at}`)));
         if (next === s[a]) continue;
         s[a] = next;
-        behaviourMoved.add(a);
         // Another of an engine's effects: its controls back to their middle, as when one is chosen by hand.
         const knobs = ENGINE_KNOBS[a as keyof typeof ENGINE_KNOBS];
         for (const k of knobs ?? []) if (!s.pins.includes(k)) s[k] = 0.5;
@@ -1920,16 +1875,11 @@
         extras,
       );
       // What this frame did, measured (meters.ts): the screen read into tiles (back two or more frames later), the parts'
-      // motion and change, a new look and why. The meters' values for the rating page four times a second.
-      if (trial.settings !== trialSeen) {
-        trialSeen = trial.settings;
-        renderer.meterReset();
-        meterValues = undefined;
-      }
+      // motion and change, a new look and why. The meters' values four times a second, for the sidechains.
       renderer.measure(w, h, now / 1000);
       const stats: Omit<FrameStats, 'tiles'> = {
         t: now / 1000,
-        // What the effects add (as the governor lets them), the waves' motion where nothing flows, and the zooms'
+        // What the effects add (as the sidechains let them), the waves' motion where nothing flows, and the zooms'
         // streaming out at the rates the renderer is given (aspects.ts).
         extra: (() => {
           const fx = settingsReport(how, d.effects, levers, still, d.routed);
@@ -1952,9 +1902,7 @@
       if (now - meteredAt >= 250) {
         const values = renderer.meterValues;
         meterValues = values;
-        const since = Math.max(0.05, (now - meteredAt) / 1000);
         meteredAt = now;
-        trial.meters = values;
         if (panel) {
           live = {
             ...Object.fromEntries(BEHAVIOUR_PINS.map((k) => [k, behaving[k] * (k in d.levels ? d.levels[k as keyof typeof d.levels] : 1)])),
@@ -1967,23 +1915,8 @@
             ? densityOf(heard, isBandSignal(cell.signal) ? { signal: B[cell.signal as keyof typeof B], band: pick } : { track: T[cell.signal as keyof typeof T] })
             : null;
         }
-        trial.loop = {
-          intensity: m.intensity,
-          bps: m.bps,
-          hitsPerSecond: hitsCounted / since,
-          activity: d.lit,
-          swing: levers.swing,
-          looks: looksOutside,
-          settling: !!from && blendOutside,
-          view: [canvas.clientWidth, canvas.clientHeight],
-          points: renderer.pointCount,
-          steps: passes,
-          fps,
-          device: device(),
-        };
-        hitsCounted = 0;
         const marks = { flash: holding(levers, 'swing'), speed: holding(levers, 'pace'), wild: (['swing', 'pace', 'evolution', 'hue', 'size', 'gap'] as const).some((k) => holding(levers, k)) };
-        if (marks.flash !== !!governed.flash || marks.speed !== !!governed.speed || marks.wild !== !!governed.wild) governed = marks;
+        if (marks.flash !== !!heldBack.flash || marks.speed !== !!heldBack.speed || marks.wild !== !!heldBack.wild) heldBack = marks;
       }
       // A picture for a snapshot, while this frame is still in the canvas.
       if (pictureWanted) {
@@ -2083,7 +2016,7 @@
 {#snippet settingRow(row: Row | undefined)}
   {#if row}
     <label class="row pinnable">
-      <span use:held={row.key}>{row.label}{#if governed[row.key]}<span class="governed" aria-label="Held back" use:held={'held'}></span>{/if}</span>
+      <span use:held={row.key}>{row.label}{#if heldBack[row.key]}<span class="held-back" aria-label="Held back" use:held={'held'}></span>{/if}</span>
       <span class="slider">
         <input type="range" min={RANGES[row.key][0]} max={RANGES[row.key][1]} step={row.step} value={valueOf(row.key)} oninput={(e) => set(row.key, Number(e.currentTarget.value))} />
         {#if liveAt(row.key) !== null}<i class="live" style:left="calc(8px + {liveAt(row.key)} * (100% - 16px))"></i>{/if}
@@ -2318,7 +2251,18 @@
             </div>
           {:else if here.startsWith('moves:')}
             {@const mk = here.slice('moves:'.length)}
-            <KnobCables cables={cablesInto(mk)} label={(c) => sourceLabel(c.from, s.extra.modulators, GRAPH_TYPES)} onopen={(id) => go(`cable:${id}`)} onlongpress={(id) => (menuCable = id)} onadd={() => go(`cableadd:${mk}`)} />
+            {@const bands = bandKnobs(mk)}
+            {#if bands}
+              <!-- A six-band knob: each band's cables, a group each. -->
+              {#each bands as bk, b (bk)}
+                <div class="rows">
+                  <h3>{BAND_ROWS[b]}</h3>
+                  <KnobCables cables={cablesInto(bk)} label={(c) => sourceLabel(c.from, s.extra.modulators, GRAPH_TYPES)} onopen={(id) => go(`cable:${id}`)} onlongpress={(id) => (menuCable = id)} onadd={() => go(`cableadd:${bk}`)} />
+                </div>
+              {/each}
+            {:else}
+              <KnobCables cables={cablesInto(mk)} label={(c) => sourceLabel(c.from, s.extra.modulators, GRAPH_TYPES)} onopen={(id) => go(`cable:${id}`)} onlongpress={(id) => (menuCable = id)} onadd={() => go(`cableadd:${mk}`)} />
+            {/if}
           {:else if here.startsWith('cable:')}
             {@const id = here.slice('cable:'.length)}
             {@const c = cableOf({ routes: s.routes, extra: s.extra }, id)}
@@ -2898,7 +2842,7 @@
     text-shadow: 0 1px 6px rgb(0 0 0 / 0.6);
   }
 
-  .governed {
+  .held-back {
     display: inline-block;
     width: 6px;
     height: 6px;

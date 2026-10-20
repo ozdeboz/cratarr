@@ -1,22 +1,31 @@
-// The governor's budgets (decision 0048): the meters that have one, and what a limit allows as the Calm ↔ Wild setting
-// and the music have it. The one scale the governor, the dice's precheck, the ratings and the thumbs all judge on: a
+// The sidechaining's budgets (decision 0048): the meters that have one, and what a limit allows as the Calm ↔ Wild setting
+// and the music have it. The one scale the sidechaining, the dice's precheck, the ratings and the thumbs all judge on: a
 // meter over its budget at Wild's middle (`budgetOf(1, 0.5, activity)`) is how far it is from a limit, whatever the
-// music was doing. Apart from governor.ts so the precheck (whose limits the governor stands on) can take it too.
+// music was doing. Apart from engine/sidechain.ts so the precheck (whose limits the sidechaining stands on) can take it too.
 
-import { USUAL_MOST } from './learning';
 
 /** The meters with a budget. */
 export const BUDGETED = ['motion', 'shapeChurn', 'colourChurn', 'zoomPumping', 'looksPerMinute'] as const;
 export type Budgeted = (typeof BUDGETED)[number];
 
+/** The most the defaults do (the same runs' most, the flame's own: the looks without effects, as the limits take it),
+ *  the other end of their usual range; new looks a minute: the limit. */
+export const USUAL_MOST: Readonly<Record<Budgeted, number>> = {
+  motion: 0.466,
+  shapeChurn: 0.638,
+  colourChurn: 0.354,
+  zoomPumping: 0.351,
+  looksPerMinute: 4,
+};
+
 /** A budget as the Calm ↔ Wild setting (0..1: half as much to twice, as much at its middle) and the music (its
  *  activity now, 0..1: half as much when quiet, one and a half times when loud) have it. */
 export const budgetOf = (limit: number, wild: number, activity: number) => limit * 2 ** (2 * (wild - 0.5)) * (0.5 + Math.min(1, Math.max(0, activity)));
 
-/** The limits a recipe is held to (the governor's, at the Calm ↔ Wild setting). */
+/** The limits a recipe is held to (the sidechaining's, at the Calm ↔ Wild setting). */
 export type Limits = Partial<Record<'flash' | 'motion' | 'shapeChurn' | 'colourChurn' | 'zoomPumping' | 'looksPerMinute', number>>;
 
-/** Until the owner's ratings fit them (fit.ts), on the governor's scale: a little above (a quarter more, up to the next
+/** Until the owner's ratings fit them (fit.ts), on the sidechaining's scale: a little above (a quarter more, up to the next
  *  0.05) the most the flame itself did as Standard over 11 varied tracks, at a quarter and three fifths of each, three
  *  track looks a track (65, 2026-10-18, 506 runs: motion's most 0.47, shape's 0.64 (64: 0.42, before the meters saw
  *  Presence move the points between the parts), colour's 0.35, pumping's 0.35; flashes 3), so today's behaviour always
@@ -37,9 +46,9 @@ export const DEFAULT_LIMITS: Required<Limits> = {
 };
 
 /** The room a drawn look's effects have (65): what the limits leave above the most the flame itself does
- *  (learning.ts `USUAL_MOST`), at the quietest passage's budget (Wild's middle, no activity: `budgetOf`'s least), raw a
+ *  (`USUAL_MOST`), at the quietest passage's budget (Wild's middle, no activity: `budgetOf`'s least), raw a
  *  second as the effects report it (effects.ts). A look drawn for a track, by Another look or the dice is held to it
- *  (flame.ts), so it never needs the governor; effects chosen by hand are not. */
+ *  (flame.ts), so it never needs the sidechaining; effects chosen by hand are not. */
 export const DRAWN_ROOM: Readonly<Record<'motion' | 'shapeChurn' | 'colourChurn' | 'zoomPumping', number>> = {
   motion: (DEFAULT_LIMITS.motion - USUAL_MOST.motion) * budgetOf(1, 0.5, 0),
   shapeChurn: (DEFAULT_LIMITS.shapeChurn - USUAL_MOST.shapeChurn) * budgetOf(1, 0.5, 0),

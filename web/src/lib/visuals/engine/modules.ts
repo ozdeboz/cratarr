@@ -73,26 +73,34 @@ export type Strike = { since: number; velocity: number; next: { until: number; v
 export const NO_STRIKE: Strike = { since: Infinity, velocity: 0, next: null };
 
 /** An ADSR's knobs for one channel (s; `sustain` a share of the velocity). */
-export type AdsrKnobs = { attack: number; decay: number; sustain: number; release: number };
+export type AdsrKnobs = { attack: number; decay: number; sustain: number; release: number; retrigger?: number };
 
 const smooth = (x: number) => (x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x));
 
 /** ADSR (decision 0057; what Linger did out of sight): a channel's level now, from its strikes. Each strike rises over
  *  the attack (smoothly, ending on the strike where it is known ahead; heard live, it is on at once), falls over the
  *  decay to `sustain` of its velocity (no decay: none), then rings down from there over the release (a time constant,
- *  gone after five). A strike to come rising while the last still rings: the more of the two (a retrigger never dips
- *  under what is ringing until the new strike lands). The triggers are strikes, gates of no length: what a held gate
+ *  gone after five). A strike to come while the last still rings (`retrigger`): 0, the more of the two (it never dips
+ *  under what is ringing until the new strike lands: today's lights); 1, as a synth's envelope does, its attack from the
+ *  level the ringing was at when the attack began. The triggers are strikes, gates of no length: what a held gate
  *  sustains comes with the gates. */
 export function adsrOf(s: Strike, k: AdsrKnobs): number {
-  let on = 0;
-  if (s.since >= 0 && s.since !== Infinity) {
-    const decay = Math.max(0, k.decay);
-    const after = decay > 0 ? Math.max(0, s.since - decay) : s.since;
-    const from = decay > 0 ? 1 - (1 - clamp01(k.sustain)) * Math.min(1, s.since / decay) : 1;
-    const release = Math.max(1e-6, k.release);
-    on = after > release * 5 ? 0 : s.velocity * from * (decay > 0 && s.since < decay ? 1 : Math.exp(-after / release));
-  }
+  const decay = Math.max(0, k.decay);
+  const release = Math.max(1e-6, k.release);
+  /** The last strike's level `since` seconds after it. */
+  const ring = (since: number) => {
+    if (!(since >= 0) || since === Infinity) return 0;
+    const after = decay > 0 ? Math.max(0, since - decay) : since;
+    const from = decay > 0 ? 1 - (1 - clamp01(k.sustain)) * Math.min(1, since / decay) : 1;
+    return after > release * 5 ? 0 : s.velocity * from * (decay > 0 && since < decay ? 1 : Math.exp(-after / release));
+  };
+  const on = ring(s.since);
   if (!s.next || !(k.attack > 0)) return on;
-  return Math.max(on, s.next.velocity * smooth(1 - s.next.until / k.attack));
+  const rise = smooth(1 - s.next.until / k.attack);
+  if ((k.retrigger ?? 0) >= 0.5) {
+    const start = ring(s.since - (k.attack - s.next.until));
+    return start + (s.next.velocity - start) * rise;
+  }
+  return Math.max(on, s.next.velocity * rise);
 }
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));

@@ -83,19 +83,19 @@ export const HELP: Record<string, string> = {
   fx1:
     'Kaleidoscope: one of its effects at a time over the whole picture: Kaleid (mirrored slices round the middle), Repeat (tiles), Rotate, Scroll, Pixelate or Magnify; None for none. The three engines run in their order, Kaleidoscope, EYEDO, Hydra; a track’s look may bring one or two, and one you choose is pinned.',
   fx1Amount:
-    'How strongly the Kaleidoscope’s effect shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, its routes, and the governor when it holds the picture back take it lower.',
+    'How strongly the Kaleidoscope’s effect shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, its routes, and the sidechaining when it holds the picture back take it lower.',
   fx2:
     'EYEDO: one of its effects at a time, after EYESY’s: Pulse, Burst and Halo fire on the beat; Rings and Interference ring on. None for none. The three engines run in their order, Kaleidoscope, EYEDO, Hydra; a track’s look may bring one or two, and one you choose is pinned.',
   fx2Amount:
-    'How strongly EYEDO’s effect shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, its routes, and the governor when it holds the picture back take it lower.',
+    'How strongly EYEDO’s effect shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, its routes, and the sidechaining when it holds the picture back take it lower.',
   fx3:
     'Hydra: one of its effects at a time, after Hydra’s: Echo (the last picture fed back in), Ripple, Stream (drawn along the fluid’s flow), Colorama, Hue, Saturate or Posterize; None for none. The three engines run in their order, Kaleidoscope, EYEDO, Hydra; a track’s look may bring one or two, and one you choose is pinned.',
   fx3Amount:
-    'How strongly Hydra’s effect shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, its routes, and the governor when it holds the picture back take it lower.',
+    'How strongly Hydra’s effect shows. At 0 not at all; at 100% fully. The Effects setting in Behaviour, its routes, and the sidechaining when it holds the picture back take it lower.',
   fxLoop:
     'Loop: an effect inside the flame’s trails rather than over the picture. It acts each frame on the light as it is carried on, so it builds up into new shapes: Kaleid, Pixelate, Ripple, Stream, Rotate, Scroll or Rings; None for none.',
   fxLoopAmount:
-    'How strongly the Loop effect acts. At 0 not at all; at 100% fully. The Effects setting in Behaviour, its routes, and the governor when it holds the picture back take it lower.',
+    'How strongly the Loop effect acts. At 0 not at all; at 100% fully. The Effects setting in Behaviour, its routes, and the sidechaining when it holds the picture back take it lower.',
   fx1K1:
     'One of the chosen effect’s own controls: its label says what it sets. At 50% the effect is as it was made.',
   fx1K2:
@@ -112,7 +112,9 @@ export const HELP: Record<string, string> = {
     'One of the Loop effect’s own controls: its label says what it sets. At 50% the effect is as it was made.',
   fxLoopK2:
     'One of the Loop effect’s own controls: its label says what it sets. At 50% the effect is as it was made.',
-  final: 'A lens over the whole picture, such as a sphere, a bubble or a swirl, each bending the flame as a whole. Off shows the flame without one.',
+  final: 'A lens over the whole picture, such as a sphere, a bubble or a swirl, each bending the flame as a whole, or a shape it gathers the flame into, such as a star or a ring. Off shows the flame without one.',
+  lensSides: 'The corners of the Polygon and Star lenses; between whole numbers it morphs.',
+  lensDepth: 'How deep the Star lens’s points go; at 0 it is the polygon.',
   pin: 'You moved this setting, so it keeps your value when the next track starts, and Another look and the dice leave it alone. Tap the pin to let each track set it again.',
   snapshots:
     'Snapshots: the visuals saved with every setting and a small picture. Tap one to bring it back: every setting returns as it was saved, and its Look settings are pinned, so the next track keeps that look. Hold one to rename or delete it. They are kept on the server, so every device sees them.',
@@ -204,17 +206,17 @@ export const HELP: Record<string, string> = {
   'aspect:facets':
     'As the row rises, Facets comes up to what its slider sets; below 0, the row takes it down. Never above the slider.',
   'aspect:mirror':
-    'Each time the row rises past half way, Mirror turns the other way (on or off), unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+    'Each time the row rises past half way, Mirror turns the other way (on or off), unless you have pinned it. Each such moment is a new look: they come at most every two seconds, further apart when the picture is busy.',
   'aspect:final':
-    'Each time the row rises past half way, the Lens moves to another lens, or to none, unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+    'Each time the row rises past half way, the Lens moves to another lens, or to none, unless you have pinned it. Each such moment is a new look: they come at most every two seconds, further apart when the picture is busy.',
   'aspect:form':
-    'Each time the row rises past half way, the flame takes another Form, unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+    'Each time the row rises past half way, the flame takes another Form, unless you have pinned it. Each such moment is a new look: they come at most every two seconds, further apart when the picture is busy.',
   'aspect:family':
-    'Each time the row rises past half way, the Colours move to another of the look’s four (Spectrum, Arc, Two tones, Three); Cover and Fire, chosen by hand, stay, unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+    'Each time the row rises past half way, the Colours move to another of the look’s four (Spectrum, Arc, Two tones, Three); Cover and Fire, chosen by hand, stay, unless you have pinned it. Each such moment is a new look: they come at most every two seconds, further apart when the picture is busy.',
   'aspect:lattice':
-    'Each time the row rises past half way, the Facets’ cells turn from square to hex or back, unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+    'Each time the row rises past half way, the Facets’ cells turn from square to hex or back, unless you have pinned it. Each such moment is a new look: they come at most every two seconds, further apart when the picture is busy.',
   'aspect:fx1':
-    'Each time the row rises past half way, the Kaleidoscope moves to another of its effects, its controls back to their middle; where it is set to None it stays off (its Amount’s routes bring it in), unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+    'Each time the row rises past half way, the Kaleidoscope moves to another of its effects, its controls back to their middle; where it is set to None it stays off (its Amount’s routes bring it in), unless you have pinned it. Each such moment is a new look: they come at most every two seconds, further apart when the picture is busy.',
   'aspect:fx1Amount':
     'As the row rises, the Kaleidoscope’s Amount comes up to what its slider sets; below 0, the row takes it down instead. Never above the slider.',
   'aspect:fx1K1':
@@ -222,7 +224,7 @@ export const HELP: Record<string, string> = {
   'aspect:fx1K2':
     'As the row rises, the Kaleidoscope’s second control (named above for the chosen effect) moves up from where its slider sets it, across its whole range at a route’s full amount; below 0, down. With no such control (—), the row does nothing until an effect has one.',
   'aspect:fx2':
-    'Each time the row rises past half way, EYEDO moves to another of its effects, its controls back to their middle; where it is set to None it stays off (its Amount’s routes bring it in), unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+    'Each time the row rises past half way, EYEDO moves to another of its effects, its controls back to their middle; where it is set to None it stays off (its Amount’s routes bring it in), unless you have pinned it. Each such moment is a new look: they come at most every two seconds, further apart when the picture is busy.',
   'aspect:fx2Amount':
     'As the row rises, the EYEDO’s Amount comes up to what its slider sets; below 0, the row takes it down instead. Never above the slider.',
   'aspect:fx2K1':
@@ -230,7 +232,7 @@ export const HELP: Record<string, string> = {
   'aspect:fx2K2':
     'As the row rises, the EYEDO’s second control (named above for the chosen effect) moves up from where its slider sets it, across its whole range at a route’s full amount; below 0, down. With no such control (—), the row does nothing until an effect has one.',
   'aspect:fx3':
-    'Each time the row rises past half way, the Hydra moves to another of its effects, its controls back to their middle; where it is set to None it stays off (its Amount’s routes bring it in), unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+    'Each time the row rises past half way, the Hydra moves to another of its effects, its controls back to their middle; where it is set to None it stays off (its Amount’s routes bring it in), unless you have pinned it. Each such moment is a new look: they come at most every two seconds, further apart when the picture is busy.',
   'aspect:fx3Amount':
     'As the row rises, the Hydra’s Amount comes up to what its slider sets; below 0, the row takes it down instead. Never above the slider.',
   'aspect:fx3K1':
@@ -238,7 +240,7 @@ export const HELP: Record<string, string> = {
   'aspect:fx3K2':
     'As the row rises, the Hydra’s second control (named above for the chosen effect) moves up from where its slider sets it, across its whole range at a route’s full amount; below 0, down. With no such control (—), the row does nothing until an effect has one.',
   'aspect:fxLoop':
-    'Each time the row rises past half way, the Loop moves to another of its effects, its controls back to their middle; where it is set to None it stays off (its Amount’s routes bring it in), unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+    'Each time the row rises past half way, the Loop moves to another of its effects, its controls back to their middle; where it is set to None it stays off (its Amount’s routes bring it in), unless you have pinned it. Each such moment is a new look: they come at most every two seconds, further apart when the picture is busy.',
   'aspect:fxLoopAmount':
     'As the row rises, the Loop’s Amount comes up to what its slider sets; below 0, the row takes it down instead. Never above the slider.',
   'aspect:fxLoopK1':
@@ -250,7 +252,7 @@ export const HELP: Record<string, string> = {
   'aspect:behaviour':
     'As the row rises, the behaviour walks: the Behaviour settings, and the routes set to walk with it, move a little below what you set, in a direction that changes every bar, never above it and never far below. Below 0 they come back up to what you set. Pinned ones stay where they are.',
   'aspect:symmetry':
-    'Each time the row rises past half way, the Symmetry setting moves to another of its eight, unless you have pinned it. Each such moment is a new look: the governor keeps them a few seconds apart, more when the picture is busy.',
+    'Each time the row rises past half way, the Symmetry setting moves to another of its eight, unless you have pinned it. Each such moment is a new look: they come at most every two seconds, further apart when the picture is busy.',
 
   // Route rows: what is measured in the music. The whole track's:
   'signal:loudness': 'How loud the music sounds right now, as you hear it.',

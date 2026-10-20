@@ -14,7 +14,7 @@ import type { Levers } from './sidechain';
 import { modulatorOf, type ModulatorType } from '../modulators/modulators';
 import type { Music } from '../music-core';
 import { ASPECT_KNOB, type Knob, type Macro, type Module, type ModuleType, type Modulator, type SignalRef } from '../patch';
-import { COLUMN_OFFSETS, ENGINE_MODULES, READINGS, SHOW_PARTS, type CableV2, type PatchV2, type PortRef } from '../ports';
+import { COLUMN_OFFSETS, ENGINE_MODULES, RANDOMIZE_SCOPES, READINGS, SHOW_PARTS, type CableV2, type PatchV2, type PortRef } from '../ports';
 import { A, ASPECTS, B, BAND_SIGNALS, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, type Aspect, type Given } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
 import { newChain, stepChain, type ChainState } from './chain';
@@ -148,7 +148,13 @@ export type EngineFrame = {
   moments: MomentRequest[];
   /** Each Grid's points (its `points` output, for Instance: claude-632's compositor). */
   points: Record<string, GridPoint[]>;
+  /** The Dice whose trigger rose this frame (0057 §7f): each one's seed and scope, for the page to randomize the patch
+   *  with (randomize.ts: over frames, as one undoable change through the store). */
+  dice: DiceRoll[];
 };
+
+/** A Dice's roll: which, the seed its seed input gives (Music's `seed`: the track's own), its scope. */
+export type DiceRoll = { module: string; seed: number; scope: (typeof RANDOMIZE_SCOPES)[number] };
 
 export type EngineOptions = {
   still: boolean;
@@ -191,6 +197,9 @@ type Plan = {
   grids: Module[];
   /** Each port's cables as a knob takes them (a polyphonic one as one a channel), the same objects each frame. */
   expanded: WeakMap<readonly CableV2[], CableV2[]>;
+  dice: Module[];
+  /** Each Shaper's curve as a shape, and the knobs it was made from. */
+  shapers: Map<string, { key: string; shape: Shape }>;
   /** Each key's (`module|port`) chain column, where it is one. */
   columns: Map<string, number | undefined>;
   /** Each module's ports' cables reaching each channel (a channel-less one from a band's signal as that channel's). */
@@ -224,7 +233,9 @@ type Plan = {
   polyphonic: Set<string>;
 };
 const plans = new WeakMap<PatchV2, Plan>();
-const PROCESSORS = new Set(['vca', 'merge', 'ducker']);
+const PROCESSORS = new Set(['vca', 'merge', 'ducker', 'shaper']);
+/** The processors whose output has channels of their own (a Merge's and a Ducker's are one). */
+const CHANNELLED = new Set(['vca', 'shaper']);
 
 /** An ADSR's channel's knobs' names, and what a call reads its strike with (made once, not a call). */
 const ATTACK_AT = Array.from({ length: 64 }, (_, ch) => `attack.${ch}`);
@@ -236,7 +247,7 @@ const EVOLUTION_AT = Array.from({ length: 64 }, (_, k) => `evolution.${k}`);
 const NO_CABLES: CableV2[] = [];
 const STRUCK_NEXT = { until: 0, velocity: 0 };
 const STRUCK: { since: number; velocity: number; next: { until: number; velocity: number } | null } = { since: Infinity, velocity: 0, next: null };
-const ADSR_KNOBS = { attack: 0, decay: 0, sustain: 0, release: 0.15 };
+const ADSR_KNOBS = { attack: 0, decay: 0, sustain: 0, release: 0.15, retrigger: 0 };
 /** No channels yet (a VCA, Merge or Ducker not yet worked out), and a scratch for working one out. */
 const NO_CHANNELS = new Float64Array(64);
 const SCRATCH = new Float64Array(6);
@@ -286,7 +297,7 @@ function polyphonicOf(p: PatchV2, typeOf: Map<string, string>, into: Map<string,
         if (c.from.channel !== undefined) return false;
         const type = typeOf.get(c.from.module) ?? c.from.module;
         const port = c.from.port.endsWith(SLOW) ? c.from.port.slice(0, -SLOW.length) : c.from.port;
-        return (type === 'music' && BAND_PORTS.has(port)) || type === 'adsr' || (type === 'vca' && out.has(c.from.module));
+        return (type === 'music' && BAND_PORTS.has(port)) || type === 'adsr' || type === 'shaper' || (type === 'vca' && out.has(c.from.module));
       });
       if (poly) {
         out.add(x.id);
@@ -355,6 +366,8 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
     targets,
     modulesNow: new Set(p.modules.map((x) => x.id)),
     grids: p.modules.filter((x) => x.type === 'grid'),
+    dice: p.modules.filter((x) => x.type === 'dice'),
+    shapers: new Map(),
     expanded: new WeakMap(),
     columns: new Map(),
     polyphonic: polyphonicOf(p, typeOf, into),
@@ -468,7 +481,11 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   raw.set(m.track);
   raw[T.loudness] = env.level;
   if (opts.still) for (const t of [T.beat, T.downbeat, T.section]) raw[t] *= 0.5;
+  // A new track (0057 §7f, Music's `newtrack`: a trigger the frame it starts, the visuals opening on one too) and its
+  // seed (Music's `seed`: the same for the same track, 0..1, as flame.ts seedOf has it).
+  const newTrack = m.key !== st.track.key ? 1 : 0;
   const pulse = stepTrack(st.track, m.key, opts.now, m.bps);
+  const trackSeed = seedOf(m.key ?? 'cratarr') / 4294967296;
   raw[T.track] = pulse;
   const bands = m.bands ?? st.standIn;
   outputs['envelope.level'] = env.level;
@@ -513,7 +530,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     const f = c.from;
     const type = known ?? typeOf.get(f.module) ?? f.module;
     // A VCA's or a Merge's output, as it is (a Merge's one channel whichever is asked); a Ducker's too.
-    if (type === 'vca' || type === 'merge' || type === 'ducker') return channelsOf(f.module)[type === 'vca' ? (f.channel ?? 0) : 0];
+    if (PROCESSORS.has(type)) return channelsOf(f.module)[CHANNELLED.has(type) ? (f.channel ?? 0) : 0];
     if (type === 'meter') return opts.meters ? finite(METER_OF[f.port]?.(opts.meters)) : 0;
     if (type === 'screen' && f.port === 'guard') return guard;
     if (type === 'adsr') {
@@ -525,6 +542,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     }
     if (type === 'music') {
       if (f.port === 'playing') return m.playing ? 1 : 0;
+      if (f.port === 'newtrack') return newTrack;
+      if (f.port === 'seed') return trackSeed;
       const r = readingOf(f.port);
       if (r.reference === 'absolute') {
         const t = T[r.signal as keyof typeof T];
@@ -567,6 +586,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     ADSR_KNOBS.decay = finite(k[DECAY_AT[ch]]);
     ADSR_KNOBS.sustain = finite(k[SUSTAIN_AT[ch]]);
     ADSR_KNOBS.release = finite(k[RELEASE_AT[ch]], 0.15);
+    ADSR_KNOBS.retrigger = finite(k.retrigger, 0);
     return adsrOf(STRUCK, ADSR_KNOBS) * finite(k.amount, 1);
   }
   /** What scales a cable: its depth's value (null: nothing, 1; undefined: the Envelope's, normalled). */
@@ -597,7 +617,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     cables.flatMap((c) => {
       if (c.from.channel !== undefined) return [c];
       const type = typeOf.get(c.from.module) ?? c.from.module;
-      const poly = (type === 'music' && BAND_PORTS.has(readingOf(c.from.port).signal)) || type === 'adsr' || type === 'vca';
+      const poly = (type === 'music' && BAND_PORTS.has(readingOf(c.from.port).signal)) || type === 'adsr' || CHANNELLED.has(type);
       return poly ? Array.from({ length: CHANNELS }, (_, ch) => ({ ...c, from: { ...c.from, channel: ch } })) : [c];
     });
   // The Screen's flash guard (WCAG 2.3.1; claude-632's limiter on the output, step 3): fixed, keyed by the flashes the
@@ -615,8 +635,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     const { c, type } = entry;
     if (entry.v !== c.value) [entry.v, entry.shape] = [c.value, shapeOf(c.value)];
     const sh = entry.shape;
-    if (type === 'vca' || type === 'merge' || type === 'ducker') {
-      const v = channelsOf(c.from.module)[type === 'vca' ? (c.from.channel ?? ch) : 0];
+    if (PROCESSORS.has(type)) {
+      const v = channelsOf(c.from.module)[CHANNELLED.has(type) ? (c.from.channel ?? ch) : 0];
       return (sh.table ? heightOf(sh, clamp(v, 0, 1)) : sh.end * v) * depthOf(c) * (sh.walks ? walkOf(c) : 1);
     }
     const x = xOf(c, type);
@@ -648,6 +668,22 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
       };
       const input = plugged(x.id, 'in', 0) ? takes(x.id, 'in', 0) : 1;
       out.fill(stepDucker((st.duckers[x.id] ??= newDucker()), input, takes(x.id, 'key', 0), knobs, step).out);
+      (st.poly[x.id] ??= new Float64Array(CHANNELS)).set(out);
+      return;
+    }
+    if (x.type === 'shaper') {
+      // A Shaper (0057 §7f): each channel the curve's height at what its input takes, as a cable's curve (curves.ts);
+      // its curve made again only when its knobs change.
+      const k = x.knobs;
+      const key = `${k.h}|${k.h1x}|${k.h1y}|${k.h2x}|${k.h2y}`;
+      let kept = plan.shapers.get(x.id);
+      if (kept?.key !== key) {
+        const h = finite(k.h, 1);
+        const curve = { h1: [finite(k.h1x, 1 / 3), finite(k.h1y, h / 3)] as [number, number], h2: [finite(k.h2x, 2 / 3), finite(k.h2y, (2 * h) / 3)] as [number, number], h };
+        plan.shapers.set(x.id, (kept = { key, shape: shapeOf(curve) }));
+      }
+      const into = plan.ports.get(x.id)?.get('in');
+      for (let ch = 0; ch < CHANNELS; ch++) out[ch] = heightOf(kept.shape, sumOf(into, ch));
       (st.poly[x.id] ??= new Float64Array(CHANNELS)).set(out);
       return;
     }
@@ -731,7 +767,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
       continue;
     }
     const x = next.module!;
-    if (x.type === 'vca' || x.type === 'merge' || x.type === 'ducker') {
+    if (PROCESSORS.has(x.type)) {
       process(x);
       continue;
     }
@@ -875,7 +911,21 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
     }
   }
   for (const { x, t } of plan.others) if (!knobs[x.id]) knobs[x.id] = knobsOf(x, t);
-  return { aspects, knobs, outputs, macros, moments, points };
+  // Each Dice: a roll as its trigger rises past a half (its `done` a trigger the same frame), seeded by its seed input
+  // (0..1 back to the 32 bits it came from; none plugged: the frame's time), over its scope.
+  const dice: DiceRoll[] = [];
+  for (const x of plan.dice) {
+    const v = sumOf(plan.ports.get(x.id)?.get('trigger'), 0);
+    const key = `${x.id}|trigger`;
+    const rose = v > 0.5 && finite(st.triggers[key], 0) <= 0.5;
+    st.triggers[key] = v;
+    outputs[`${x.id}.done`] = rose ? 1 : 0;
+    if (!rose) continue;
+    const seeded = plan.ports.get(x.id)?.get('seed');
+    const seed = seeded && seeded[0].length ? Math.floor(clamp(sumOf(seeded, 0), 0, 1 - 2 ** -33) * 4294967296) : Math.floor(opts.now) >>> 0;
+    dice.push({ module: x.id, seed, scope: RANDOMIZE_SCOPES[clamp(Math.round(finite(x.knobs.scope, 0)), 0, RANDOMIZE_SCOPES.length - 1)] });
+  }
+  return { aspects, knobs, outputs, macros, moments, points, dice };
 
   /** A module's knobs as its macros and cables move them. */
   /** A knob's base as its macros set it, along its taper (an exponential knob's geometrically: 0057's Wild). */

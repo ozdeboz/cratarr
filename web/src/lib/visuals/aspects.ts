@@ -5,7 +5,7 @@
 import { PARTS, type Part } from './flame';
 import { WAVE_BEND } from './fluid';
 import { DIVE_MOST, TUNNEL_MOST } from './zoom';
-import type { Levers } from './governor';
+import type { Levers } from './engine/sidechain';
 import type { Music } from './music.svelte';
 import { A, AMOUNT_ASPECTS, ASPECTS, B, BAND_SIGNALS, COLUMN_SCALES, compile, give, given, KNOB_ASPECTS, MOMENT_ASPECTS, T, TRACK_SIGNALS, type Given, type Matrix, type RouteValue } from './routes';
 import { BANDS, type VisualSettings } from './settings.svelte';
