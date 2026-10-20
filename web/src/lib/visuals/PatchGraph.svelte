@@ -31,6 +31,8 @@
   import '@xyflow/svelte/dist/base.css';
   import MenuEntry from '../MenuEntry.svelte';
   import MenuSheet from '../MenuSheet.svelte';
+  import SelectBar from '../SelectBar.svelte';
+  import Icon from '../Icon.svelte';
   import CableMenu from './CableMenu.svelte';
   import PatchNode from './PatchNode.svelte';
   import PatchCable from './PatchCable.svelte';
@@ -196,19 +198,34 @@
   type Menu = { kind: 'cable'; id: string; at: XY } | { kind: 'node'; id: string } | { kind: 'add'; to: AddTo } | { kind: 'make'; ids: string[] } | { kind: 'help'; id: string; port: string };
   // The knobs chosen as a device's macros while it is being made (`<node>|<knob>`).
   let picks = $state<string[]>([]);
-  // Selecting (a module's long press, Select): taps add or take away modules, for Make device; a finger's way to what
-  // Shift and a drag do.
+  // Selecting (a module's or a cable's long press, Select): taps add or take away modules, devices and cables, and the
+  // select bar pins, unpins, makes a device of them or deletes them at once; a finger's way to what a Shift- or
+  // Ctrl-click does on a desktop.
   let selecting = $state(false);
   let sel = $state<string[]>([]);
+  let selCables = $state<string[]>([]);
   function togglePick(id: string) {
     const d = nodes.find((n) => n.id === id)?.data as NodeData | undefined;
     if (d?.kind !== 'module') return;
     sel = sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id];
   }
+  function toggleCable(id: string) {
+    if (edges.find((e) => e.id === id)?.deletable === false) return;
+    selCables = selCables.includes(id) ? selCables.filter((x) => x !== id) : [...selCables, id];
+  }
+  function endSelect() {
+    selecting = false;
+    sel = [];
+    selCables = [];
+    nodes = nodes.map((n) => (n.selected ? { ...n, selected: false } : n));
+    edges = edges.map((e) => (e.selected ? { ...e, selected: false } : e));
+  }
   $effect(() => {
     const on = selecting ? new Set(sel) : null;
+    const lit = selecting ? new Set(selCables) : null;
     untrack(() => {
       if (on) nodes = nodes.map((n) => (!!n.selected === on.has(n.id) ? n : { ...n, selected: on.has(n.id) }));
+      if (lit) edges = edges.map((e) => (!!e.selected === lit.has(e.id) ? e : { ...e, selected: lit.has(e.id) }));
     });
   });
   let menu = $state<Menu | null>(null);
@@ -237,6 +254,10 @@
     });
     onchange(next, key ?? undefined);
   }
+
+  /** A node's sockets, as a key: what its cables' ends need to find. */
+  const socketsOf = (d: NodeData) =>
+    d.kind !== 'module' ? d.kind : [d.in, d.out, ...d.knobs.map((k) => `${k.id}${k.next ? '>' : ''}${k.gain ? '+' : ''}`), '|', ...d.ports.map((p) => p.id), '|', ...d.outs.map((o) => o.handle)].join(',');
 
   // The cables' opacity (VCV Rack's cable opacity), this device's.
   const OPACITY_KEY = 'cratarr-graph-cable-opacity';
@@ -334,11 +355,13 @@
     if (farNow) g.edges = farEdges(g.edges, g.nodes);
     g.edges = g.edges.map((e) => ({ ...e, zIndex: EDGE_Z }));
     untrack(() => {
-      // What Svelte Flow knows of each node (its size, selection, a drag under way) carries over.
+      // What Svelte Flow knows of each node (its size, selection, a drag under way) carries over; its size not where its
+      // sockets changed (another patch's knobs shown), so it is measured again before a cable looks for a new socket.
       const before = new Map(nodes.map((n) => [n.id, n]));
       nodes = g.nodes.map((n) => {
         const b = before.get(n.id);
-        return { ...n, measured: b?.measured, selected: b?.selected, ...(b?.dragging ? { position: b.position, dragging: true } : {}) } as Node;
+        const same = b && socketsOf(b.data as NodeData) === socketsOf(n.data);
+        return { ...n, measured: same ? b.measured : undefined, selected: b?.selected, ...(b?.dragging ? { position: b.position, dragging: true } : {}) } as Node;
       });
       const chosen = new Set(edges.filter((e) => e.selected).map((e) => e.id));
       edges = dress(
@@ -422,7 +445,12 @@
     },
     enter,
     fine(f) {
-      if (!f && fine) fineEnded = performance.now();
+      // Let go: the lens stays, settled, with the knob's pin, until a tap elsewhere.
+      if (!f && fine) {
+        fineEnded = performance.now();
+        settled = fine;
+      }
+      if (f) settled = null;
       fine = f;
     },
     help(id, port) {
@@ -471,11 +499,41 @@
     if (d?.kind !== 'module' || !d.knobs.some((k) => knobHandle(k.id) === h.id)) return;
     onpick({ from: 'knob', module: path(h.nodeId), knob: h.id.slice(2) }, { x: Math.round(state.to.x), y: Math.round(state.to.y) });
   }
-  // Modules selected at one level: what "Make device" makes a device of.
+  // What is selected: modules and devices, cables (the select mode's, or a desktop's Shift- or Ctrl-clicks); the
+  // modules at one level are what "Make device" makes a device of.
+  const picked = $derived(nodes.filter((n) => n.selected && (n.data as NodeData).kind === 'module').map((n) => n.id));
+  const pickedCables = $derived(edges.filter((e) => e.selected && e.deletable !== false).map((e) => e.id));
   const chosen = $derived.by(() => {
-    const ids = nodes.filter((n) => n.selected && (n.data as NodeData).kind === 'module').map((n) => n.id);
-    const scopes = new Set(ids.map((id) => id.split('/').slice(0, -1).join('/')));
-    return scopes.size === 1 ? ids : [];
+    const scopes = new Set(picked.map((id) => id.split('/').slice(0, -1).join('/')));
+    return scopes.size === 1 ? picked : [];
+  });
+  // The select bar: in select mode, or two or more picked by a desktop's clicks.
+  const barShown = $derived(selecting || picked.length + pickedCables.length > 1);
+  const pinOf = (id: string, kind: 'module' | 'cable') => {
+    const parts = id.split('/');
+    return { scope: [...at, ...parts.slice(0, -1)], pin: `${kind}:${parts[parts.length - 1]}` };
+  };
+  /** Every one picked pinned (or let go), in one change. */
+  function pinPicked(on: boolean) {
+    edit([...picked.map((id) => pinOf(id, 'module')), ...pickedCables.map((id) => pinOf(id, 'cable'))].map((x) => ({ kind: 'pinOne' as const, ...x, on })));
+  }
+  const allPinned = $derived(
+    picked.length + pickedCables.length > 0 &&
+      picked.every((id) => (dataOf(id) as { pinned?: boolean } | undefined)?.pinned) &&
+      pickedCables.every((id) => (edges.find((e) => e.id === id)?.data as CableData | undefined)?.pinned),
+  );
+  function deletePicked() {
+    unplug({ nodes: [], edges: edges.filter((e) => pickedCables.includes(e.id)) });
+    endSelect();
+  }
+  // A knob's lens after its fine adjust, settled (its pin): until a tap elsewhere or Escape.
+  let settled = $state.raw<Fine | null>(null);
+  const settledPin = $derived.by(() => {
+    if (!settled) return null;
+    const d = dataOf(settled.node);
+    if (d?.kind !== 'module' || d.device) return null;
+    const parts = settled.node.split('/');
+    return { scope: [...at, ...parts.slice(0, -1)], pin: `${parts[parts.length - 1]}.${settled.knob}`, on: !!d.knobs.find((k) => k.id === settled!.knob)?.pinned };
   });
   function make(ids: string[]) {
     const scope = ids[0].split('/').slice(0, -1);
@@ -486,8 +544,7 @@
     edit([{ kind: 'make', scope: [...at, ...scope], modules: ids.map((id) => id.split('/').pop()!), macros }]);
     menu = null;
     picks = [];
-    selecting = false;
-    sel = [];
+    endSelect();
   }
   const knobsOfNode = (id: string) => {
     const d = dataOf(id);
@@ -563,7 +620,17 @@
   const addTitle = (to: AddTo) => `Add · ${CATEGORY_LABEL[to.category]}`;
 </script>
 
-<svelte:window onkeydown={(e) => e.key === 'Escape' && reroute && !menu && (reroute = null)} />
+<svelte:window
+  onkeydown={(e) => {
+    if (e.key !== 'Escape' || menu) return;
+    if (reroute) reroute = null;
+    else if (settled) settled = null;
+    else if (selecting) endSelect();
+  }}
+  onpointerdown={(e) => {
+    if (settled && !(e.target as Element | null)?.closest?.('.lens')) settled = null;
+  }}
+/>
 
 <div class="patch-graph" style:--graph-w="{width}px" class:small={zoom < 1} class:far={zoom < FAR} class:narrow={width < 600} style:--cable-alpha={drawnOpacity(opacity)} style:--z={zoom} bind:clientWidth={width} bind:clientHeight={height}>
   <SvelteFlow
@@ -595,14 +662,20 @@
     onnodepointerleave={() => (hovered = null)}
     onedgepointerenter={({ edge }) => (hoveredCable = edge.id)}
     onedgepointerleave={() => (hoveredCable = null)}
-    onedgeclick={({ edge }) => edge.type === 'cable' && !selecting && openIt(edge.id)}
+    multiSelectionKey={['Shift', 'Control', 'Meta']}
+    onedgeclick={({ edge, event }) => {
+      if (selecting) return toggleCable(edge.id);
+      // A Shift- or Ctrl-click only picks it (Svelte Flow's multi-selection); a plain one opens it.
+      if (event.shiftKey || event.ctrlKey || event.metaKey) return;
+      if (edge.type === 'cable') openIt(edge.id);
+    }}
     onnodeclick={({ node }) => selecting && togglePick(node.id)}
     onpaneclick={() => (reroute = null)}
   >
     <PatchFit layout={fitKey} active={!touched} {pad} view={{ width, height }} {portrait} onzoom={(z) => (zoom = z)} />
     <!-- The map: bottom right over the chips; on a narrow screen a button (Map) opens it top right, over the view only
          while wanted. -->
-    {#if width >= 600 || mapOpen}
+    {#if (width >= 600 && !barShown) || mapOpen}
     <MiniMap
       position={width < 600 ? 'top-right' : 'bottom-right'}
       pannable
@@ -614,23 +687,16 @@
       style={`${width < 600 ? 'margin: calc(12px + env(safe-area-inset-top)) 12px 0 0' : `margin: 0 16px calc(${Math.round(sheetHeight)}px + 64px + env(safe-area-inset-bottom)) 0`}; border: 1px solid var(--border); border-radius: 10px; overflow: hidden`}
     />
     {/if}
-    <Panel position="bottom-left" class="chips-panel">
-      <div class="bottom">
-        {#if selecting}
-          <div class="selbar" role="toolbar" aria-label="Selecting">
-            <span>{sel.length}</span>
-            <button class="opacity make" disabled={chosen.length < 2} onclick={() => (menu = { kind: 'make', ids: chosen })}>Make device</button>
-            <button class="opacity" onclick={() => ((selecting = false), (sel = []))}>Cancel</button>
-          </div>
-        {:else}
-          {#if chosen.length > 1}<button class="opacity make" onclick={() => (menu = { kind: 'make', ids: chosen })}>Make device</button>{/if}
+    {#if !barShown}
+      <Panel position="bottom-left" class="chips-panel">
+        <div class="bottom">
           <PatchChips {parts} {padding} onjump={() => (touched = true)} />
-        {/if}
-        {#if onarrange && Object.keys(kept).length}<button class="opacity" onclick={onarrange}>Arrange</button>{/if}
-        {#if width < 600}<button class="opacity" class:on={mapOpen} aria-pressed={mapOpen} onclick={() => (mapOpen = !mapOpen)}>Map</button>{/if}
-        <button class="opacity" aria-label="Cable opacity" title="Cable opacity" onclick={cycleOpacity}>{Math.round(opacity * 100)}%</button>
-      </div>
-    </Panel>
+          {#if onarrange && Object.keys(kept).length}<button class="opacity" onclick={onarrange}>Arrange</button>{/if}
+          {#if width < 600}<button class="opacity" class:on={mapOpen} aria-pressed={mapOpen} onclick={() => (mapOpen = !mapOpen)}>Map</button>{/if}
+          <button class="opacity" aria-label="Cable opacity" title="Cable opacity" onclick={cycleOpacity}>{Math.round(opacity * 100)}%</button>
+        </div>
+      </Panel>
+    {/if}
     {#if at.length}
       <Panel position="top-left" style={TOP}>
         <nav class="crumbs" aria-label="Devices">
@@ -651,15 +717,36 @@
       </div>
     </Panel>
   </SvelteFlow>
+  {#if barShown}
+    <!-- The app's select bar (lib/SelectBar): how many, and what to do with them at once. -->
+    {@const n = picked.length + pickedCables.length}
+    <SelectBar label="Selected" count="{n}/{nodes.filter((x) => (x.data as NodeData).kind === 'module').length + edges.filter((e) => e.deletable !== false).length}" onclose={endSelect}>
+      <button aria-label={allPinned ? 'Unpin' : 'Pin'} title={allPinned ? 'Unpin' : 'Pin'} disabled={!n} onclick={() => pinPicked(!allPinned)}><Icon name={allPinned ? 'pinOff' : 'pin'} size={24} /></button>
+      <button aria-label="Make device" title="Make device" disabled={chosen.length < 2 || pickedCables.length > 0} onclick={() => (menu = { kind: 'make', ids: chosen })}><Icon name="intoBox" size={24} /></button>
+      <button aria-label="Delete cables" title="Delete" disabled={!pickedCables.length || picked.length > 0} onclick={deletePicked}><Icon name="trash" size={24} /></button>
+    </SelectBar>
+  {/if}
 </div>
 
-{#if fine}<KnobLens {fine} help={fineHelp} />{/if}
+{#if fine}<KnobLens {fine} help={fineHelp} />{:else if settled}<KnobLens
+    fine={settled}
+    help={null}
+    pinned={settledPin?.on}
+    onpin={settledPin ? () => edit([{ kind: 'pinOne', scope: settledPin!.scope, pin: settledPin!.pin, on: !settledPin!.on }]) : undefined}
+  />{/if}
 
 {#if menu?.kind === 'cable'}
   {@const id = menu.id}
   {@const where = menu.at}
   <CableMenu
     title={cableName(id)}
+    pinned={!!(edges.find((e) => e.id === id)?.data as CableData | undefined)?.pinned}
+    onpin={(on) => edit([{ kind: 'pinOne', ...pinOf(id, 'cable'), on }])}
+    onselect={() => {
+      selecting = true;
+      sel = [];
+      selCables = [id];
+    }}
     onremove={() => removeCable(id)}
     onreroute={() => {
       openCable = null;
@@ -676,11 +763,21 @@
     <div role="menu">
       {#if d?.kind === 'module'}
         <MenuEntry
+          icon="listChecks"
           label="Select"
           onclick={() => {
             menu = null;
             selecting = true;
             sel = [id];
+            selCables = [];
+          }}
+        />
+        <MenuEntry
+          icon={d.pinned ? 'pinOff' : 'pin'}
+          label={d.pinned ? 'Unpin' : 'Pin'}
+          onclick={() => {
+            menu = null;
+            edit([{ kind: 'pinOne', ...pinOf(id, 'module'), on: !d.pinned }]);
           }}
         />
       {/if}
@@ -753,6 +850,8 @@
 
 <style>
   .patch-graph {
+    position: relative;
+    --mini-h: calc(var(--sheet-h, 0px));
     --patch-mod: #b48cff;
     /* Each wire type's colour (the value's is the modulation purple). */
     --wire-value: var(--patch-mod);
@@ -947,17 +1046,6 @@
     flex: 1 1 auto;
     min-width: 0;
   }
-  .selbar {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    color: var(--muted);
-    font-size: 13px;
-  }
-  .make:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
   /* On a narrow screen the legend gives way. */
   .narrow .legend {
     display: none;
@@ -975,10 +1063,6 @@
   .opacity.on {
     color: var(--text);
     border-color: color-mix(in srgb, var(--text) 35%, var(--border));
-  }
-  .make {
-    color: var(--text);
-    white-space: nowrap;
   }
   .patch-graph :global(.map-node) {
     fill: color-mix(in srgb, var(--text) 30%, var(--surface));

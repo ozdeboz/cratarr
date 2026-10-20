@@ -31,6 +31,8 @@ export type KnobView = {
   kind: Knob['kind'];
   at: number;
   ring: [number, number] | null;
+  /** Pinned (0057: `<module>.<knob>` in its level's pins): Randomize and a new track leave it. */
+  pinned?: boolean;
   /** A polyphonic knob drawn as one (0057 §4b: a band's six): each channel's knob id, value and place in the range; the
    *  knob's own `value` and `at` their mean. */
   channels?: { id: string; value: number; at: number }[];
@@ -79,6 +81,8 @@ export type ModuleData = {
   v2: { ports: Ports; pin: string | null; pout: string | null; mod: string | null };
   /** A device (0057 §6): opened in place (drawn as a frame round its modules instead). */
   device?: { open: boolean };
+  /** Pinned whole (`module:<id>`, a module or a device). */
+  pinned?: boolean;
 };
 /** A typed input port on a node (not a knob): cabled, or else normalled where its type says so. */
 export type PortView = { id: string; label: string; type: PortType; channels?: number; cabled: boolean; normal?: PortRef; polymorphic?: Polymorphic };
@@ -127,7 +131,7 @@ export type GraphEdge = {
   data?: CableData;
 };
 /** A modulation cable's (or a normal's) data: its amount, its wire's type, a bundle's channels. */
-export type CableData = { amount: string; wire: PortType; channels?: number; lit?: boolean; muted?: true; normal?: true; step?: boolean; route?: XY[] };
+export type CableData = { amount: string; wire: PortType; channels?: number; lit?: boolean; muted?: true; normal?: true; step?: boolean; route?: XY[]; pinned?: boolean };
 
 /** A knob's (or a port's) handle on its module's node. */
 export const knobHandle = (knob: string) => `k:${knob}`;
@@ -200,20 +204,17 @@ export function openView(b: Rect, view: Size, pad: Pad, zoom = FULL_ZOOM, first?
   return { x: axis(b.x, b.width, w, pad.left, first?.x ?? b.x), y: axis(b.y, b.height, h, pad.top, first?.y ?? b.y), zoom };
 }
 
-/** The module the signals start at: the leftmost (portrait: the topmost) module or frame, the higher (the further left)
- *  of those level with it. */
-export function firstModule(nodes: { position: XY; parentId?: string; data: NodeData }[], portrait = false): XY | undefined {
+/** The module the signals start at: the one that only gives (cables out, none in) and gives the most (Music); where
+ *  none does, the one nearest the top left corner of the modules and frames, the higher of two as near. */
+export function firstModule(nodes: { position: XY; parentId?: string; data: NodeData }[], _portrait = false): XY | undefined {
   const top = nodes.filter((n) => !n.parentId && (n.data.kind === 'module' || n.data.kind === 'box'));
-  const key = (p: XY) => (portrait ? [p.y, p.x] : [p.x, p.y]);
-  let best: XY | undefined;
-  for (const n of top) {
-    const [a, b] = key(n.position);
-    if (!best) best = n.position;
-    else {
-      const [c, d] = key(best);
-      if (a < c - 0.5 || (Math.abs(a - c) <= 0.5 && b < d)) best = n.position;
-    }
-  }
+  if (!top.length) return undefined;
+  const givers = top.filter((n) => n.data.kind === 'module' && n.data.cables && !n.data.cables.in && n.data.cables.out > 0);
+  if (givers.length) return givers.reduce((a, b) => ((b.data as ModuleData).cables!.out > (a.data as ModuleData).cables!.out ? b : a)).position;
+  const corner = { x: Math.min(...top.map((n) => n.position.x)), y: Math.min(...top.map((n) => n.position.y)) };
+  const far = (p: XY) => Math.hypot(p.x - corner.x, p.y - corner.y);
+  let best = top[0].position;
+  for (const n of top) if (far(n.position) < far(best) - 0.5 || (Math.abs(far(n.position) - far(best)) <= 0.5 && n.position.y < best.y)) best = n.position;
   return best;
 }
 
@@ -674,7 +675,10 @@ export function handleAt(d: ModuleData, dir: 'in' | 'out', port: string): string
   if (dir === 'out') return d.v2?.pout === port || d.v2?.mod === port || d.outs.some((o) => o.id === port) ? handleOf(d, 'out', port) : null;
   if (d.v2?.pin === port || d.ports.some((x) => x.id === port) || d.knobs.some((k) => k.id === port || (k.next && nextPort(k.id) === port) || (k.gain && gainPort(k.id) === port))) return handleOf(d, 'in', port);
   const poly = d.knobs.find((k) => k.channels?.some((c) => c.id === port));
-  return poly ? knobHandle(poly.id) : null;
+  if (poly) return knobHandle(poly.id);
+  // One channel of a knob whose input takes several (the flame's parts, `spread.3`): the knob's own socket.
+  const whole = /^(.+)\.\d+$/.exec(port)?.[1];
+  return whole && d.knobs.some((k) => k.id === whole && !k.channels) ? knobHandle(whole) : null;
 }
 
 /** The port a handle of a v2 node is. */
@@ -761,8 +765,10 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
       .filter((p) => !known.has(p) && !known.has(p.replace(/\.\d+$/, '')) && !known.has(p.replace(/:(next|gain)$/, '')))
       .map((p): Port => ({ id: p, label: p.charAt(0).toUpperCase() + p.slice(1), type: 'value' }));
     const ports = stray.length ? { ...declared, in: [...declared.in, ...stray] } : declared;
-    const cabled = (port: string) => into.has(`${m.id}.${port}`);
-    const cablesInto = (port: string) => into.get(`${m.id}.${port}`) ?? [];
+    // A knob's cables, one channel's of it too (`spread.3` into the flame's Spread, whose input takes six).
+    const channelsOf = (port: string) => [...into.entries()].filter(([k]) => k.startsWith(`${m.id}.${port}.`) && /^\d+$/.test(k.slice(m.id.length + port.length + 2))).flatMap(([, cs]) => cs);
+    const cablesInto = (port: string) => [...(into.get(`${m.id}.${port}`) ?? []), ...channelsOf(port)];
+    const cabled = (port: string) => cablesInto(port).length > 0;
     const pinPort = ports.in.find((x) => PICTURE_TYPES.has(x.type));
     const poutPort = ports.out.find((x) => PICTURE_TYPES.has(x.type));
     const values = ports.out.filter((x) => !PICTURE_TYPES.has(x.type));
@@ -792,7 +798,7 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
       place = t.place;
       knobIds = new Set([...t.knobs, ...polyKnobs(t).knobs].map((k) => k.id));
       const shown = knobViews({ ...m, id }, t, { open, room: modulator ? 0 : SHOWN, cabled, cablesInto });
-      knobs = shown.knobs;
+      knobs = shown.knobs.map((k) => (level.pins.includes(`${m.id}.${k.id}`) ? { ...k, pinned: true } : k));
       hidden = shown.hidden;
     }
     const kind = isDevice(m) ? undefined : FACES[m.type];
@@ -819,6 +825,7 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
       modulator,
       v2: { ports, pin: pinPort?.id ?? null, pout: poutPort?.id ?? null, mod: modulator ? (values[0]?.id ?? null) : null },
       ...(isDevice(m) ? { device: { open: false } } : {}),
+      ...(level.pins.includes(`module:${m.id}`) ? { pinned: true } : {}),
     };
     data.set(id, d);
     return d;
@@ -905,7 +912,7 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
       }
       return { node: id, port: r.port };
     };
-    const edge = (id: string, from: { node: string; port: string }, to: { node: string; port: string }, c: Pick<CableV2, 'value'> | null, channel?: number) => {
+    const edge = (id: string, from: { node: string; port: string }, to: { node: string; port: string }, c: Pick<CableV2, 'id' | 'value'> | null, channel?: number) => {
       const a = data.get(from.node);
       const b = data.get(to.node);
       const sourceHandle = a && handleAt(a, 'out', from.port);
@@ -914,7 +921,7 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
       const out = a.v2.ports.out.find((x) => x.id === from.port);
       const wire = out?.type ?? 'value';
       const channels = channel === undefined ? out?.channels : undefined;
-      const cd: CableData = { amount: c ? amountLabel(c.value) : '', wire, ...(channels ? { channels } : {}), ...(c ? {} : { normal: true as const }) };
+      const cd: CableData = { amount: c ? amountLabel(c.value) : '', wire, ...(channels ? { channels } : {}), ...(c ? {} : { normal: true as const }), ...(c && p.pins.includes(`cable:${c.id}`) ? { pinned: true } : {}) };
       edges.push(wired({ id, source: from.node, target: to.node, sourceHandle, targetHandle, type: 'cable', class: '', deletable: !!c, selectable: !!c, data: cd }, wire));
     };
     for (const c of p.cables) {
@@ -951,6 +958,7 @@ export type V2Edit =
   | { kind: 'remove'; scope: string[]; cables: string[] }
   | { kind: 'reroute'; scope: string[]; id: string; end: 'from' | 'to'; to: PortRef }
   | { kind: 'removeModules'; scope: string[]; modules: string[] }
+  | { kind: 'pinOne'; scope: string[]; pin: string; on: boolean }
   | { kind: 'pin'; scope: string[]; category: Category; on: boolean }
   | { kind: 'add'; scope: string[]; type: string }
   | { kind: 'make'; scope: string[]; modules: string[]; macros: MacroPick[]; label?: string }
@@ -1011,6 +1019,12 @@ export function applyV2(p: PatchV2, e: V2Edit, types?: Record<string, ModuleType
     // The one end moved (the panel's Reroute too: patch-edits.ts); the other, and the cable's amount, as they were.
     const c = inside.cables.find((x) => x.id === e.id);
     if (c) c[e.end] = { ...e.to };
+    return p;
+  }
+  if (e.kind === 'pinOne') {
+    // A knob (`<module>.<knob>`), a module or a device (`module:<id>`), a cable (`cable:<id>`): the panel's too.
+    inside.pins = inside.pins.filter((x) => x !== e.pin);
+    if (e.on) inside.pins.push(e.pin);
     return p;
   }
   if (e.kind === 'removeModules') {

@@ -9,6 +9,7 @@
   import { getContext } from 'svelte';
   import { BaseEdge, EdgeLabel, EdgeReconnectAnchor, useSvelteFlow, type EdgeProps } from '@xyflow/svelte';
   import { longpress } from '../longpress';
+  import Icon from '../Icon.svelte';
   import { cableLabel, GRAPH, nearestEnd, routePath, saggingPath, toJack, WIRES, type CableData, type GraphActions } from './patchgraph';
 
   let { id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, selected, style }: EdgeProps = $props();
@@ -53,9 +54,9 @@
   onpointerdown={(e) => (pressed = { x: e.clientX, y: e.clientY })}
   use:longpress={() => graph.cableMenu(id, pressed)}
 />
-{#if label && !reconnecting}
+{#if (label || d.pinned) && !reconnecting}
   <EdgeLabel x={mid.x} y={mid.y} class="cable-label nodrag nopan" onclick={() => graph.openCable(id)}>
-    <span class:selected class="w-{d.wire}">{label}</span>
+    <span class:selected class="w-{d.wire}">{#if d.pinned}<i class="pinned" title="Pinned"><Icon name="pin" size={11} /></i>{/if}{label}</span>
   </EdgeLabel>
 {/if}
 {#if end}
@@ -116,6 +117,13 @@
   }
   span.selected {
     color: var(--text);
+  }
+  .pinned {
+    display: inline-block;
+    margin-right: 2px;
+    color: var(--accent);
+    line-height: 0;
+    vertical-align: -1px;
   }
   .grip {
     display: block;
