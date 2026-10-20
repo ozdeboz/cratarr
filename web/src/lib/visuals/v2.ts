@@ -30,6 +30,8 @@ import { ASPECT_KNOB, cratarrPatch, modulesOf, type Cable, type Macro, type Modu
 import { isDevice, READINGS, SHOW_PARTS, type CableV2, type Device, type PatchV2, type PortRef } from './ports';
 import { extraType } from './registry';
 import { makeDevice } from './device-make';
+import { EFFECTS } from './effects';
+import { effectType } from './effect-modules';
 
 /** A cable as the conversion carries it until the end: how it reads its signal, its speed and its mode still on it; they
  *  leave the wire at the end (`toWire`). */
@@ -256,7 +258,7 @@ const SIDECHAIN: readonly { kind: string; meter: Budgeted; into: readonly [strin
   // The moments' Gates (null): their gaps stretched.
   { kind: 'looks', meter: 'looksPerMinute', into: null },
 ];
-function sidechained(modules: Module[], cables: Wire[], wild: number, limits: Partial<Record<Budgeted, number>>): { modules: Module[]; cables: Wire[]; macro?: Macro } {
+function sidechained(modules: Module[], cables: Wire[], wild: number, limits: Partial<Record<Budgeted, number>>, holds = false): { modules: Module[]; cables: Wire[]; macro?: Macro } {
   const one = (id: string, from: Wire['from'], to: Wire['to'], value = 1): Wire => ({ id, from, to, value, mode: 'swing', depth: null });
   const out = { modules: [...modules, { id: 'meter', type: 'meter', knobs: {} }], cables: [...cables] };
   // The Screen is the picture wiring's (claude-632's `screen`); its guard cabled from here.
@@ -274,8 +276,28 @@ function sidechained(modules: Module[], cables: Wire[], wild: number, limits: Pa
     out.modules.push({ id: `${id}-activity`, type: 'vca', knobs: { gain: 1 / 3 } });
     out.cables.push(one(`${id}-loudness`, { module: 'envelope', port: 'level' }, { module: `${id}-activity`, port: 'cv' }, 2 / 3));
     out.cables.push(one(`${id}-activity-out`, { module: `${id}-activity`, port: 'out' }, { module: id, port: 'threshold:gain' }));
-    const targets = into ? [into] : modules.filter((m) => m.type === 'gate' && m.id.startsWith('gate-')).map((m) => [m.id, 'gap'] as const);
+    const targets: (readonly [string, string])[] = into ? [into] : modules.filter((m) => m.type === 'gate' && m.id.startsWith('gate-')).map((m) => [m.id, 'gap'] as const);
+    // The motion's also slows the zooms (the levers' pace, on cables now: 0057 audit row 2).
+    if (holds && kind === 'motion') targets.push(...(['tunnel', 'dive'] as const).filter((m) => modules.some((x) => x.id === m)).map((m) => [m, m] as const));
     for (const [module, knob] of targets) out.cables.push(one(`${id}-${module}`, { module: id, port: 'out' }, { module, port: `${knob}:gain` }));
+  }
+  // Each effect held back by the flash guard and by the Duckers of what it adds (its report: motion, shape churn, colour
+  // churn, zoom pumping), as the levers did out of sight: their product into its Amount's gain, through VCAs (a gain's
+  // cables add, a VCA multiplies: in × cv at gain 0).
+  const KIND: Record<string, string> = { motion: 'motion', shapeChurn: 'shape', colourChurn: 'colour', zoomPumping: 'zoom' };
+  for (const m of holds ? modules : []) {
+    const e = EFFECTS.find((x) => effectType(x) === m.type);
+    if (!e) continue;
+    const r = e.report(1, Object.fromEntries(e.knobs.map((_, i) => [`k${i + 1}`, 0.5])) as never) as Record<string, number>;
+    const factors: Wire['from'][] = [{ module: 'screen', port: 'guard' }, ...Object.keys(KIND).filter((k) => r[k]).map((k) => ({ module: `duck-${KIND[k]}`, port: 'out' }))];
+    let at = factors[0];
+    factors.slice(1).forEach((f, i) => {
+      const vca = `${m.id}-held-${i + 1}`;
+      out.modules.push({ id: vca, type: 'vca', knobs: { gain: 0 } });
+      out.cables.push(one(`${vca}-in`, at, { module: vca, port: 'in' }), one(`${vca}-cv`, f, { module: vca, port: 'cv' }));
+      at = { module: vca, port: 'out' };
+    });
+    out.cables.push(one(`${m.id}-held`, at, { module: m.id, port: 'amount:gain' }));
   }
   return { ...out, macro };
 }
@@ -324,7 +346,7 @@ function toWire(given: Module[], all: Wire[]): { modules: Module[]; cables: Cabl
  *  - `addOnly` (default true): cables only add (0057 §7e); false gives the patch before that step, for the proof.
  *  - `sidechain` (default true): the sidechain in sight; false leaves it out, for the proof.
  *  - `limits`: the limits as learned (the app's `limitsNow`), frozen into the Duckers; else the defaults. */
-export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: boolean; limits?: Partial<Record<Budgeted, number>>; devices?: boolean; follow?: boolean } = {}): PatchV2 {
+export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: boolean; limits?: Partial<Record<Budgeted, number>>; devices?: boolean; follow?: boolean; holds?: boolean } = {}): PatchV2 {
   const p = cratarrPatch(s);
   // Drift is Random now (its smooth end: Shape 0), as VCV, Vital and Bitwig name it (the owner).
   const modules: Module[] = [...modulesOf(p).values()].map((m) => (m.type === 'drift' ? { ...m, type: 'random', knobs: { ...m.knobs, shape: 0 } } : { ...m, knobs: { ...m.knobs } }));
@@ -452,7 +474,7 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
   rackMacros.push({ id: 'effects', on: 'rack', label: 'Effects', value: Math.min(1, Math.max(0, s.effects)), targets: fxModules.map((fx) => ({ module: fx.id, knob: 'amount', from: 0, to: fx.knobs.amount ?? 1 })) });
   const all = [...engine.values(), ...newtrack, ...[...adsrs.values()].map((a) => a.module), ...effects.modules, ...pause, ...dice];
   const adding = opts.addOnly === false ? { modules: all, cables: effects.cables } : cablesAdd(all, effects.cables);
-  const added = opts.sidechain === false ? adding : sidechained(adding.modules, adding.cables, s.wild, opts.limits ?? {});
+  const added = opts.sidechain === false ? adding : sidechained(adding.modules, adding.cables, s.wild, opts.limits ?? {}, opts.holds);
   const wiring = pictureWiring(p);
   const wildMacro = (added as { macro?: Macro }).macro;
   const macros: Macro[] = [...effects.macros, ...rackMacros, ...(wildMacro ? [wildMacro] : [])];
