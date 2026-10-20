@@ -669,7 +669,10 @@ export function handleAt(d: ModuleData, dir: 'in' | 'out', port: string): string
   if (dir === 'out') return d.v2?.pout === port || d.v2?.mod === port || d.outs.some((o) => o.id === port) ? handleOf(d, 'out', port) : null;
   if (d.v2?.pin === port || d.ports.some((x) => x.id === port) || d.knobs.some((k) => k.id === port || (k.next && nextPort(k.id) === port) || (k.gain && gainPort(k.id) === port))) return handleOf(d, 'in', port);
   const poly = d.knobs.find((k) => k.channels?.some((c) => c.id === port));
-  return poly ? knobHandle(poly.id) : null;
+  if (poly) return knobHandle(poly.id);
+  // One channel of a knob whose input takes several (the flame's parts, `spread.3`): the knob's own socket.
+  const whole = /^(.+)\.\d+$/.exec(port)?.[1];
+  return whole && d.knobs.some((k) => k.id === whole && !k.channels) ? knobHandle(whole) : null;
 }
 
 /** The port a handle of a v2 node is. */
@@ -756,8 +759,10 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
       .filter((p) => !known.has(p) && !known.has(p.replace(/\.\d+$/, '')) && !known.has(p.replace(/:(next|gain)$/, '')))
       .map((p): Port => ({ id: p, label: p.charAt(0).toUpperCase() + p.slice(1), type: 'value' }));
     const ports = stray.length ? { ...declared, in: [...declared.in, ...stray] } : declared;
-    const cabled = (port: string) => into.has(`${m.id}.${port}`);
-    const cablesInto = (port: string) => into.get(`${m.id}.${port}`) ?? [];
+    // A knob's cables, one channel's of it too (`spread.3` into the flame's Spread, whose input takes six).
+    const channelsOf = (port: string) => [...into.entries()].filter(([k]) => k.startsWith(`${m.id}.${port}.`) && /^\d+$/.test(k.slice(m.id.length + port.length + 2))).flatMap(([, cs]) => cs);
+    const cablesInto = (port: string) => [...(into.get(`${m.id}.${port}`) ?? []), ...channelsOf(port)];
+    const cabled = (port: string) => cablesInto(port).length > 0;
     const pinPort = ports.in.find((x) => PICTURE_TYPES.has(x.type));
     const poutPort = ports.out.find((x) => PICTURE_TYPES.has(x.type));
     const values = ports.out.filter((x) => !PICTURE_TYPES.has(x.type));

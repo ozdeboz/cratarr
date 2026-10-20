@@ -238,6 +238,10 @@
     onchange(next, key ?? undefined);
   }
 
+  /** A node's sockets, as a key: what its cables' ends need to find. */
+  const socketsOf = (d: NodeData) =>
+    d.kind !== 'module' ? d.kind : [d.in, d.out, ...d.knobs.map((k) => `${k.id}${k.next ? '>' : ''}${k.gain ? '+' : ''}`), '|', ...d.ports.map((p) => p.id), '|', ...d.outs.map((o) => o.handle)].join(',');
+
   // The cables' opacity (VCV Rack's cable opacity), this device's.
   const OPACITY_KEY = 'cratarr-graph-cable-opacity';
   let opacity = $state<number>(
@@ -334,11 +338,13 @@
     if (farNow) g.edges = farEdges(g.edges, g.nodes);
     g.edges = g.edges.map((e) => ({ ...e, zIndex: EDGE_Z }));
     untrack(() => {
-      // What Svelte Flow knows of each node (its size, selection, a drag under way) carries over.
+      // What Svelte Flow knows of each node (its size, selection, a drag under way) carries over; its size not where its
+      // sockets changed (another patch's knobs shown), so it is measured again before a cable looks for a new socket.
       const before = new Map(nodes.map((n) => [n.id, n]));
       nodes = g.nodes.map((n) => {
         const b = before.get(n.id);
-        return { ...n, measured: b?.measured, selected: b?.selected, ...(b?.dragging ? { position: b.position, dragging: true } : {}) } as Node;
+        const same = b && socketsOf(b.data as NodeData) === socketsOf(n.data);
+        return { ...n, measured: same ? b.measured : undefined, selected: b?.selected, ...(b?.dragging ? { position: b.position, dragging: true } : {}) } as Node;
       });
       const chosen = new Set(edges.filter((e) => e.selected).map((e) => e.id));
       edges = dress(

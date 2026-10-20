@@ -5,6 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 (globalThis as Record<string, unknown>).$state = <T>(v: T) => v;
+// The picture side of toV2 (its layers, loops and finish as cables), as the app has it.
+await import('../src/lib/visuals/picture-wiring.ts');
 const { DEFAULTS, RANGES } = await import('../src/lib/visuals/settings.svelte.ts');
 const { cratarrTypes } = await import('../src/lib/visuals/patch.ts');
 const { MODULATORS } = await import('../src/lib/visuals/modulators/modulators.ts');
@@ -398,6 +400,18 @@ test('points: a chain line (dash, dot); a Grid is an ordinary node with its jack
   const c = (to: string, port: string) => connectionV2({ source: 'grid', sourceHandle: 'mod', target: to, targetHandle: handleOf(dataOf(g, to), 'in', port) }, g.nodes, p, [], t);
   assert.equal(c('waves', 'hue'), null, 'points into a value: no');
   assert.ok(c('inst', 'points'));
+});
+
+test('a knob whose input takes six (the flame’s Spread): a cable into it, one from a band, one into a channel, all onto its socket', () => {
+  const p: PatchV2 = {
+    ...sample([cab('music.downbeat', 'flame.spread', 0.2, undefined, 'd'), cab('music.percussive', 'flame.spread', 0.1, 2, 'b'), cab('music.percussive', 'flame.spread.3', 0.1, 3, 'one')]),
+    modules: [mod('music', 'music'), mod('flame', 'flame')],
+  };
+  const g = graphOfV2({ patch: p, types: labTypes });
+  assert.deepEqual(['d', 'b', 'one'].map((id) => edgeOf(g.edges, id)?.targetHandle), ['k:spread', 'k:spread', 'k:spread']);
+  const spread = dataOf(g, 'flame').knobs.find((k) => k.id === 'spread')!;
+  assert.ok(spread.ring, 'shown, ringed by its cables');
+  assert.ok(!dataOf(g, 'flame').ports.some((x) => x.id.startsWith('spread')), 'no port row of its own');
 });
 
 test("a band's knobs are one polyphonic knob, its six as ticks, opened out to six; turned as one they keep apart", () => {
@@ -800,7 +814,7 @@ const ELKBundled = (await import('elkjs/lib/elk.bundled.js')).default;
 const elkNow = new ELKBundled();
 const sizeBy = (n: { id: string; data: unknown }) => sizeOfTest(n.data as never);
 
-test('ELK’s graph: ports by the cables’ sockets, inputs west and outputs east (north and south in portrait), the categories as partitions, a device opened here a compound node', () => {
+test('ELK’s graph: ports by the cables’ sockets, inputs west and outputs east (in portrait too), the categories as partitions, a device opened here a compound node', () => {
   const g = graphOfV2({ patch: v2patch(), types: v2types, open: new Set(['show']) });
   const e = elkMod.toElk(g.nodes, g.edges, sizeBy as never);
   assert.equal(e.layoutOptions!['elk.algorithm'], 'layered');
@@ -819,7 +833,7 @@ test('ELK’s graph: ports by the cables’ sockets, inputs west and outputs eas
   assert.ok(!e.children!.some((n) => n.id.startsWith('@lane')), 'lane headers are not ELK’s');
   const p = elkMod.toElk(g.nodes, g.edges, sizeBy as never, { portrait: true });
   assert.equal(p.layoutOptions!['elk.direction'], 'DOWN');
-  assert.equal(side(p.children!.find((n) => n.id === 'flame')!, 'out'), 'SOUTH');
+  assert.equal(side(p.children!.find((n) => n.id === 'flame')!, 'out'), 'EAST', 'the jacks’ sides, in portrait too');
   // What ELK depends on: not a knob's value.
   const turned = v2patch();
   applyV2(turned, { kind: 'knob', module: ['flame'], knob: 'hue', value: 0.9 });
