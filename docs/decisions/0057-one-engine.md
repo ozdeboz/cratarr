@@ -160,7 +160,7 @@ does with signals, as modular synths and video synthesizers group them (LZX, Tou
 
 | Category | Does | Ours |
 |---|---|---|
-| **Sources** | make a picture | Flame, Shapes, Waves; later Plasma, Gradient, Cells, Cover |
+| **Sources** | make a picture | Flame, Regular shapes, Irregular shapes, Waves, Noise; later Gradient, Cells, Cover |
 | **Effects** | a picture in, a picture out | Fold, Bend, Blur, Tone map, Curve, Saturate, Warp, Keep, Glow, Tint, Displace, the flame's own loop |
 | **Mixers** | several pictures into one | Mix, Mask, Feedback |
 | **Modulators** | the signals that move knobs | LFO, Random, ADSR, Clock, Compressor, Grid; later Sequencer, Looper |
@@ -195,7 +195,13 @@ The owner: "freely routable". The picture side is a free graph, as the value sid
 
 - **Full screen** (the owner: MilkDrop "has full screen graphics. Everything is still a shape drawn on blackness"). Three
   things make MilkDrop fill the screen, and each gets a module:
-  - **Full-screen sources:** Plasma (noise), Gradient, Cells, the Cover.
+  - **Full-screen sources:** Noise, in this version (the owner, 2026-10-20: noise and grain "together with filter can
+    be used to great effect"); Gradient, Cells and the Cover later.
+    - **Noise:** monochrome (colour a Tint's, §4g), its scale, detail (octaves) and speed. At its finest scale, new each
+      frame, it is grain: no Grain module.
+    - **Filters on pictures:** Blur is the low-pass (noise into clouds); the high-pass is a picture less its blur, by
+      Mix's new **Subtract** mode (edges, grit). Nothing invented: LZX's noise, Hydra's `noise()`, TouchDesigner's
+      Noise TOP.
   - **A Warp field:** every point moving its own way (swirl, ripple, push toward a point), driven by values or by a
     picture through Displace. Not one move for the whole picture.
   - **Feedback that fills:** a high Keep with an outward zoom, so trails reach the edges and the screen never goes
