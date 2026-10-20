@@ -214,28 +214,27 @@ test('pins at their levels: a knob (`<module>.<knob>`), a module or device (`mod
   assert.deepEqual(p.pins, ['module:lfo', 'k1.turn']);
 });
 
-test('music per signal: which signal a module gives (either shape), a new one, the hub split, each beside what it feeds', async () => {
+test('music per signal: which signal a module gives, a new one, the hub split, each beside what it feeds', async () => {
   const ms = await import('../src/lib/visuals/music-signals.ts');
-  assert.equal(ms.signalOf({ type: 'music-beat', knobs: {} })?.id, 'beat');
-  assert.equal(ms.signalOf({ type: 'music-signal', knobs: { signal: ms.MUSIC_SIGNALS.findIndex((x) => x.id === 'hits') } })?.id, 'hits');
-  assert.equal(ms.signalOf({ type: 'music-signal', knobs: { signal: ms.MUSIC_SIGNALS.findIndex((x) => x.id === 'hits') } })?.channels, 6);
-  assert.equal(ms.signalOf({ type: 'music', knobs: {} }), null, 'the hub gives them all');
-  assert.equal(ms.signalOf({ type: 'lfo', knobs: {} }), null);
-  assert.deepEqual(ms.musicModuleFor('beat', {}), { type: 'music-beat', knobs: {} });
-  assert.deepEqual(ms.musicModuleFor('hits', { 'music-signal': { type: 'music-signal', label: '', place: 'modulator', knobs: [] } }).type, 'music-signal');
+  assert.equal(ms.signalOf({ type: 'music-beat' })?.id, 'beat');
+  assert.equal(ms.signalOf({ type: 'music-hits' })?.channels, 6);
+  assert.equal(ms.signalOf({ type: 'music' }), null, 'the hub gives them all');
+  assert.equal(ms.signalOf({ type: 'lfo' }), null);
+  assert.deepEqual(ms.musicModuleFor('beat'), { type: 'music-beat', knobs: {} });
   const t = labTypes;
+  assert.ok(t['music-beat'] && t['music-level'], 'a5’s types');
   const p = sample();
   const split = ms.splitMusic(p);
   assert.ok(!split.modules.some((m) => m.type === 'music'), 'no cable left from the hub: it goes');
-  assert.deepEqual(split.cables.find((c) => c.id === 'c2')!.from, { module: 'level-fol', port: 'level', channel: 0 });
-  assert.ok(split.modules.some((m) => m.id === 'level-fol' && m.type === 'music-level'));
+  assert.deepEqual(split.cables.find((c) => c.id === 'c2')!.from, { module: 'level-fol', port: 'out', channel: 0 });
   const g = graphOfV2({ patch: split, types: t });
   assert.equal(dataOf(g, 'level-fol').music, 'level');
   assert.equal(dataOf(g, 'level-fol').category, dataOf(g, 'fol').category, 'its category the one it feeds');
-  assert.equal(edgeOf(g.edges, 'c2')?.data?.wire, 'value');
-  assert.ok(!typesOf('modulators', t).some((x) => x.type.startsWith('music-')), 'not a type each in Add');
-  // A module added with its id and knobs (the drag's music module), then cabled, in one change.
-  const next = applyV2(applyV2(structuredClone(p), { kind: 'add', scope: [], type: 'music-beat', id: 'beat-1', knobs: {} }, t), { kind: 'connect', scope: [], from: { module: 'beat-1', port: 'beat' }, to: { module: 'k1', port: 'amount' } }, t);
+  assert.equal(edgeOf(g.edges, 'c2')?.data?.channels, undefined, 'one band');
+  assert.equal(edgeOf(g.edges, 'c2')?.sourceHandle, 'mod');
+  assert.ok(!typesOf('io', t).some((x) => x.type.startsWith('music-')) && !typesOf('modulators', t).some((x) => x.type.startsWith('music-')), 'not a type each in Add');
+  // A module added with its id (the drag's music module), then cabled, in one change.
+  const next = applyV2(applyV2(structuredClone(p), { kind: 'add', scope: [], type: 'music-beat', id: 'beat-1', knobs: {} }, t), { kind: 'connect', scope: [], from: { module: 'beat-1', port: 'out' }, to: { module: 'k1', port: 'amount' } }, t);
   assert.ok(next.modules.some((m) => m.id === 'beat-1') && next.cables.some((c) => c.from.module === 'beat-1' && c.to.port === 'amount'));
 });
 

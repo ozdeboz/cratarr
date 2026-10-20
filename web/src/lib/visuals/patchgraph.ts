@@ -1082,7 +1082,7 @@ export function freeModuleId(p: PatchV2, base: string): string {
 export const typesOf = (cat: Category, types: Record<string, ModuleType>): ModuleType[] =>
   Object.values(types)
     // Music's signals are its own entry (Music ▸), not a type each.
-    .filter((t) => categoryOf(t) === cat && t.place !== 'frame' && t.type !== 'music' && t.type !== 'screen' && !signalOf({ type: t.type, knobs: {} }))
+    .filter((t) => categoryOf(t) === cat && t.place !== 'frame' && t.type !== 'music' && t.type !== 'screen' && !signalOf({ type: t.type }))
     .sort((a, b) => labelOf(a).localeCompare(labelOf(b)));
 
 /** What a connection drawn in the v2 graph makes, where it may: both ends at one level (the scope: the devices both

@@ -50,7 +50,7 @@
   import type { LiveFaces } from './faces.svelte';
   import { CATEGORY_LABEL } from './rack';
   import { Thumbs, type Thumbnailer } from './face/face';
-  import { MUSIC_SIGNALS, musicModuleFor } from './music-signals';
+  import { MUSIC_SIGNALS, musicModuleFor, SIGNAL_OUT } from './music-signals';
   import { fits } from './ports';
   import {
     applyV2,
@@ -536,11 +536,11 @@
     const scope = [...at, ...parts.slice(0, -1)];
     const inside = patchAt(patch, scope);
     if (!inside) return;
-    const made = musicModuleFor(signal, types);
+    const made = musicModuleFor(signal);
     const id = freeModuleId(inside, signal.replace(/[^\w-]/g, '_'));
     edit([
       { kind: 'add', scope, type: made.type, id, knobs: made.knobs },
-      { kind: 'connect', scope, from: { module: id, port: signal }, to: { module: parts[parts.length - 1], port } },
+      { kind: 'connect', scope, from: { module: id, port: SIGNAL_OUT }, to: { module: parts[parts.length - 1], port } },
     ]);
     const n = nodes.find((x) => x.id === node);
     if (n) {
@@ -912,7 +912,7 @@
           label={sg.label}
           onclick={() => {
             menu = null;
-            const made = musicModuleFor(sg.id, types);
+            const made = musicModuleFor(sg.id);
             const inside = patchAt(patch, [...at, ...scope]);
             if (inside) edit([{ kind: 'add', scope: [...at, ...scope], type: made.type, id: freeModuleId(inside, sg.id.replace(/[^\w-]/g, '_')), knobs: made.knobs }]);
           }}
