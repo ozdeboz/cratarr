@@ -3,11 +3,20 @@
 // meter over its budget at Wild's middle (`budgetOf(1, 0.5, activity)`) is how far it is from a limit, whatever the
 // music was doing. Apart from engine/sidechain.ts so the precheck (whose limits the sidechaining stands on) can take it too.
 
-import { USUAL_MOST } from './learning';
 
 /** The meters with a budget. */
 export const BUDGETED = ['motion', 'shapeChurn', 'colourChurn', 'zoomPumping', 'looksPerMinute'] as const;
 export type Budgeted = (typeof BUDGETED)[number];
+
+/** The most the defaults do (the same runs' most, the flame's own: the looks without effects, as the limits take it),
+ *  the other end of their usual range; new looks a minute: the limit. */
+export const USUAL_MOST: Readonly<Record<Budgeted, number>> = {
+  motion: 0.466,
+  shapeChurn: 0.638,
+  colourChurn: 0.354,
+  zoomPumping: 0.351,
+  looksPerMinute: 4,
+};
 
 /** A budget as the Calm ↔ Wild setting (0..1: half as much to twice, as much at its middle) and the music (its
  *  activity now, 0..1: half as much when quiet, one and a half times when loud) have it. */
@@ -37,7 +46,7 @@ export const DEFAULT_LIMITS: Required<Limits> = {
 };
 
 /** The room a drawn look's effects have (65): what the limits leave above the most the flame itself does
- *  (learning.ts `USUAL_MOST`), at the quietest passage's budget (Wild's middle, no activity: `budgetOf`'s least), raw a
+ *  (`USUAL_MOST`), at the quietest passage's budget (Wild's middle, no activity: `budgetOf`'s least), raw a
  *  second as the effects report it (effects.ts). A look drawn for a track, by Another look or the dice is held to it
  *  (flame.ts), so it never needs the sidechaining; effects chosen by hand are not. */
 export const DRAWN_ROOM: Readonly<Record<'motion' | 'shapeChurn' | 'colourChurn' | 'zoomPumping', number>> = {
