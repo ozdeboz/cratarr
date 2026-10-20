@@ -66,6 +66,7 @@ const { graphOfV2, applyV2, connectionV2, rerouteV2, handleOf, WIRES, MUTED_DASH
 const { WAVES, soundOf } = await import('../src/lib/visuals/sources/waves.ts');
 const { withInputs } = await import('../src/lib/visuals/compose.ts');
 const faces = await import('../src/lib/visuals/faces.ts');
+const face = await import('../src/lib/visuals/face/face.ts');
 const lab = await import('../src/lib/visuals/graph-lab.ts');
 type GraphEdge = import('../src/lib/visuals/patchgraph.ts').GraphEdge;
 const edgeOf = (edges: GraphEdge[], id: string) => edges.find((e) => e.id === id);
@@ -513,7 +514,7 @@ test('v2: Show is one device node, its exposed light in, picture out and knobs; 
       assert.ok(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y, 'the control lane does not overlap');
     }
 });
-const { sizeOf: sizeOfTest } = await import('../src/lib/visuals/patchgraph.ts');
+const { sizeOf: sizeOfTest, faceHeight: faceHeightOf } = await import('../src/lib/visuals/patchgraph.ts');
 
 test('v2: a device opened in place is a frame round its modules and cables; a cable into it goes to the module behind', () => {
   const g = graphOfV2({ patch: v2patch(), types: v2types, open: new Set(['show']) });
@@ -609,16 +610,8 @@ test('v2 connections: at one level, by type, not twice, a picture cycle only thr
   assert.deepEqual(connectionV2({ source: 'bend', sourceHandle: 'out', target: 'saturate', targetHandle: 'in' }, entered.nodes, patchAt(p, ['show'])!, ['show'], v2types)?.scope, ['show']);
 });
 
-test('faces: a Random’s recent output, a line while smooth, steps once stepped; an ADSR lane its channel’s knobs', () => {
-  let seen: number[] = [];
-  for (const v of [0, 0.5, -0.5]) seen = faces.randomStep(seen, v, 0.5);
-  assert.deepEqual(seen, [0, 1, -1]);
-  assert.equal(faces.randomStep(Array(faces.RANDOM_SAMPLES).fill(0), 1).length, faces.RANDOM_SAMPLES);
-  assert.ok(faces.randomPath(seen, 0, 100, 20).includes('L') && !faces.randomPath(seen, 0, 100, 20).includes('H'));
-  assert.ok(faces.randomPath(seen, 1, 100, 20).includes('H') && faces.randomPath(seen, 1, 100, 20).includes('V'));
-  assert.equal(faces.randomPath([], 0, 100, 20), '');
+test('faces: an ADSR lane its channel’s knobs', () => {
   assert.deepEqual(faces.laneKnobs({ 'release.2': 0.9, release: 0.3, attack: 0.1 }, 2), { attack: 0.1, decay: 0, sustain: 0, release: 0.9, amount: 1 });
-  assert.equal(faces.FACES.random, 'random');
 });
 
 test('v2: a cable into a port its module does not declare, on a port row of its own (none hidden); one into a band of a polyphonic knob, onto it', () => {
@@ -670,17 +663,99 @@ test("a step knob's next is a trigger beside it: a trigger cabled into it, a val
   assert.ok(from('beat', 'k:turn'));
 });
 
-test('faces: a VCA its gain as a bar; a Merge its channels as ticks into one bar; Flash is named Accent', () => {
-  assert.equal(faces.vcaGain({ 'v.gain': 1 }, 'v', { gain: 2 }), 0.5);
-  assert.equal(faces.vcaGain(null, 'v', { gain: 2 }), 1);
-  assert.equal(faces.vcaGain({}, 'v', {}), 0);
-  const m = faces.mergeOf({ 'm.in.0': 0.5, 'm.in.3': 2, m: 0.4 }, 'm');
-  assert.deepEqual(m.ins, [0.5, null, null, 1, null, null]);
-  assert.equal(m.out, 0.4);
-  assert.deepEqual(faces.mergeOf(null, 'm').ins, Array(6).fill(null));
-  assert.equal(faces.FACES.vca, 'vca');
-  assert.equal(faces.FACES.merge, 'merge');
+test('the standard face (face/face.ts): declared, else by type, else a picture module’s thumbnail; the area’s height', () => {
+  const ff = face;
+  const t = labTypes;
+  const ports = (type: string) => portsOfModule(t)({ id: type, type, knobs: {} });
+  const of = (type: string) => ff.faceOf(t[type], ports(type));
+  assert.deepEqual(of('envelope'), [{ kind: 'meter', of: 'level', peak: true }]);
+  assert.deepEqual(of('compressor'), [{ kind: 'meter', of: 'reduction', reduction: true }]);
+  assert.deepEqual(of('ducker'), [{ kind: 'meter', of: 'reduction', reduction: true }]);
+  assert.deepEqual(of('mix').map((p) => p.of), ['amount1', 'amount2', 'amount3', 'amount4']);
+  assert.deepEqual(of('vca'), [{ kind: 'meter', of: 'gain', max: 2 }]);
+  assert.deepEqual(of('gate'), [{ kind: 'scope', of: 'in', threshold: 'above' }, { kind: 'light', of: 'out' }]);
+  assert.deepEqual(of('adsr'), [{ kind: 'adsr' }]);
+  assert.deepEqual(of('lfo'), [{ kind: 'lfo' }]);
+  assert.deepEqual(of('random'), [{ kind: 'scope', of: 'out' }]);
+  assert.deepEqual(of('clock').map((p) => [p.kind, p.of]), [['light', 'beat'], ['light', 'bar'], ['light', 'phrase']]);
+  assert.ok(of('music').length >= 4 && of('music').every((p) => p.kind === 'light'), 'Music: its triggers lit');
+  assert.deepEqual(of('glow'), [{ kind: 'thumb', of: 'picture' }], 'a picture module: its thumbnail');
+  assert.deepEqual(of('flame'), [{ kind: 'thumb', of: 'light' }], 'the flame’s light');
+  assert.deepEqual(of('sequencer'), [], 'none');
+  // Lights on outputs sit beside them, not in the area; the area's height by its parts.
+  assert.deepEqual(ff.areaParts(of('gate'), ['out']), [{ kind: 'scope', of: 'in', threshold: 'above' }]);
+  assert.equal(ff.faceHeight([]), 0);
+  assert.equal(ff.faceHeight([{ kind: 'meter' }, { kind: 'scope' }]), 10 + 6 + 30);
+  assert.equal(ff.faceHeight([{ kind: 'adsr' }], 6), 6 * ff.LANE_H);
+  // On the node: the Clock's lights beside its outputs, no area; a VCA's meter in it.
+  const g = graphOfV2({ patch: { ...sample([]), modules: [mod('clock', 'clock'), mod('vca', 'vca'), mod('glow', 'glow')] }, types: t });
+  assert.equal(dataOf(g, 'clock').face?.parts.length, 3);
+  assert.equal(faceHeightOf(dataOf(g, 'clock').face, dataOf(g, 'clock').outs.map((o) => o.id)), 0);
+  assert.ok(faceHeightOf(dataOf(g, 'vca').face) > 0);
+  assert.equal(dataOf(g, 'glow').face?.parts[0].kind, 'thumb');
   assert.equal(labelOf({ type: 'flash', label: 'Flash' }), 'Accent');
+});
+
+test('face values: an output by the module’s path (its devices), else by its id after the last “/”; a channel; else its knob', () => {
+  const ff = face;
+  const out = { 'calm/duck-motion.reduction': 0.6, 'lfo.out': 0.25, 'adsr.out.2': 0.9, 'hits.out.0': 0.2, 'hits.out.4': 0.7, seq: 0.3 };
+  assert.equal(ff.liveValue(out, 'calm/duck-motion', 'reduction'), 0.6);
+  assert.equal(ff.liveValue(out, 'duck-motion', 'reduction'), 0.6, 'entered: found by its id');
+  assert.equal(ff.liveValue(out, 'other/lfo'), 0.25, 'a path the engine does not use: by its id');
+  assert.equal(ff.liveValue(out, 'adsr', 'out', 2), 0.9);
+  assert.equal(ff.liveValue(out, 'seq'), 0.3, 'a module’s own out');
+  assert.equal(ff.liveValue(out, 'none'), null);
+  assert.equal(ff.liveValue(null, 'lfo'), null);
+  assert.equal(ff.partValue(out, 'hits', { kind: 'light' }, {}), 0.7, 'several channels: the largest');
+  assert.equal(ff.partValue(out, 'vca', { kind: 'meter', of: 'gain', max: 2 }, { gain: 1.5 }), 1.5, 'no output: its knob');
+  assert.equal(ff.partValue({}, 'vca', { kind: 'meter', of: 'other' }, {}), null);
+});
+
+test('face blocks: a meter’s fill and its peak held then falling; a scope’s two seconds; a light’s pulse; a number', () => {
+  const ff = face;
+  assert.equal(ff.meterFill(0.5), 0.5);
+  assert.equal(ff.meterFill(3, 2), 1);
+  assert.equal(ff.meterFill(0.8, 1, true), 0.19999999999999996, 'a reduction: what is taken away');
+  assert.equal(ff.meterFill(null), 0);
+  let p = ff.peakStep(null, 0.8, 0);
+  p = ff.peakStep(p, 0.2, 0.5);
+  assert.equal(p.value, 0.8, 'held');
+  p = ff.peakStep(p, 0.2, ff.PEAK_HOLD + 0.4);
+  assert.ok(Math.abs(p.value - (0.8 - 0.4 * ff.PEAK_FALL)) < 1e-9, 'then falling');
+  assert.equal(ff.peakStep(p, 0.95, 5).value, 0.95, 'a higher one at once');
+  assert.equal(ff.peakStep({ value: 0.3, at: 0 }, 0.25, 10).value, 0.25, 'fallen to the level: the level');
+  let seen: { t: number; v: number }[] = [];
+  for (let i = 0; i <= 90; i++) seen = ff.scopePush(seen, Math.sin(i / 5), i / 30);
+  assert.ok(seen[0].t > 3 - ff.SCOPE_SECONDS - 1e-9 && seen.length <= 61, 'two seconds kept');
+  assert.equal(ff.scopePush(seen, null, 3.1).length, seen.length - 3, 'nothing new: only the old let go');
+  assert.deepEqual(ff.scopeRange([{ t: 0, v: 0.5 }]), [0, 1]);
+  assert.deepEqual(ff.scopeRange([{ t: 0, v: -0.3 }, { t: 1, v: 0.2 }]), [-1, 1], 'bipolar');
+  assert.deepEqual(ff.scopeRange([{ t: 0, v: 0.5 }], 2), [0, 2.5], 'room for its threshold');
+  const path = ff.scopePath([{ t: 1, v: 0 }, { t: 2, v: 1 }], 100, 20, [0, 1]);
+  assert.equal(path, 'M50,19 L100,1');
+  assert.equal(ff.scopePath([], 100, 20, [0, 1]), '');
+  assert.equal(ff.scopeStroke(30), 2, 'NexusUI’s stroke');
+  assert.ok(ff.pulsed(0, 1) && ff.pulsed(null, 0.6) && !ff.pulsed(0.7, 1) && !ff.pulsed(0.2, 0.3) && !ff.pulsed(0, null));
+  assert.equal(ff.numberText(0.256), '0.26');
+  assert.equal(ff.numberText(-12.34), '−12.3');
+  assert.equal(ff.numberText(240.4), '240');
+  assert.equal(ff.numberText(null), '–');
+});
+
+test('thumbnails: one drawn a frame, in turn, only those shown, only with a renderer to draw them', () => {
+  const ff = face;
+  const thumbs = new ff.Thumbs();
+  const canvas = {} as HTMLCanvasElement;
+  const drawn: string[] = [];
+  const draw = (m: string) => (drawn.push(m), true);
+  const goA = thumbs.add('a', canvas);
+  thumbs.add('show/b', canvas);
+  assert.equal(thumbs.next(undefined), null, 'no renderer: none');
+  for (let i = 0; i < 4; i++) thumbs.next(draw);
+  assert.deepEqual(drawn, ['a', 'show/b', 'a', 'show/b']);
+  goA();
+  assert.equal(thumbs.size, 1);
+  assert.equal(thumbs.next(draw), 'show/b');
 });
 
 test('Make device: the modules in, their own cables with them, the crossing ones led to its ports, macros chosen; undone', () => {

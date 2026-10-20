@@ -4,8 +4,7 @@
 // - ADSR: its shape from its knobs, the stage it is in lit, a dot where its output is on that shape; a lane a channel.
 // - LFO: its wave from its knobs, a dot at its phase (worked out from its output and which way it is going).
 // - Clock: Beat, Bar and Phrase blink, from the frame's beat (bars of 4, phrases of 8 bars) until the Clock gives them.
-// - Random: its recent output as a wandering line, in steps (sample and hold) as its Shape goes stepped.
-// - VCA: its gain now, a bar. Merge: its channels in as ticks, the one they make as a bar.
+// (The other faces, and these drawn, are face/'s: the standard panel every module has.)
 // Pure; the caller keeps each face's memory from sample to sample.
 
 import type { FrameInfo } from './patch';
@@ -19,9 +18,6 @@ export type LiveFrame = {
   outputs: Readonly<Record<string, number>>;
 };
 
-export type FaceKind = 'adsr' | 'lfo' | 'clock' | 'random' | 'vca' | 'merge';
-/** Which module types have a face. */
-export const FACES: Readonly<Record<string, FaceKind>> = { adsr: 'adsr', lfo: 'lfo', clock: 'clock', random: 'random', vca: 'vca', merge: 'merge' };
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -194,47 +190,4 @@ export function clockLights(beat: FrameInfo['beat']): { beat: number; bar: numbe
   const on = Math.exp(-Math.max(0, beat.since) / BLINK);
   const bar = beat.index % BAR_BEATS === 0 ? on : 0;
   return { beat: on, bar, phrase: beat.index % (BAR_BEATS * PHRASE_BARS) === 0 ? on : 0 };
-}
-
-// ---- Random ----------------------------------------------------------------------------------------------------------
-
-/** How many samples of its output a Random's face keeps. */
-export const RANDOM_SAMPLES = 48;
-
-/** Its recent outputs, the newest last (−1..1, Amount taken out). */
-export function randomStep(seen: readonly number[], out: number | null, amount = 1): number[] {
-  const v = out === null || !(amount > 0) ? 0 : Math.min(1, Math.max(-1, out / amount));
-  return [...seen.slice(-(RANDOM_SAMPLES - 1)), v];
-}
-
-/** The line across `w` × `h`: straight from sample to sample while Shape is smooth (under a half), in steps (across,
- *  then up or down) once it is stepped. */
-export function randomPath(seen: readonly number[], shape: number, w: number, h: number): string {
-  if (!seen.length) return '';
-  const mid = h / 2;
-  const x = (i: number) => f1((i / (RANDOM_SAMPLES - 1)) * w);
-  const y = (v: number) => f1(mid - v * mid * 0.85);
-  const at = RANDOM_SAMPLES - seen.length;
-  let d = `M${x(at)},${y(seen[0])}`;
-  for (let i = 1; i < seen.length; i++) d += shape >= 0.5 ? ` H${x(at + i)} V${y(seen[i])}` : ` L${x(at + i)},${y(seen[i])}`;
-  return d;
-}
-
-// ---- VCA, Merge --------------------------------------------------------------------------------------------------------
-
-/** A VCA's gain now as a share of its most (its Gain knob runs to 2): its `gain` output where the engine gives one,
- *  else its Gain knob as set. */
-export function vcaGain(outputs: Readonly<Record<string, number>> | null, module: string, knobs: Readonly<Record<string, number>>, most = 2): number {
-  const v = (outputs && outputOf(outputs, module, 'gain')) ?? knobs.gain ?? 0;
-  return Math.min(1, Math.max(0, v / most));
-}
-
-/** A Merge's channels in (each 0..1; the engine's `module.in.<n>`, else none) and the one they make (its out). */
-export function mergeOf(outputs: Readonly<Record<string, number>> | null, module: string, channels = 6): { ins: (number | null)[]; out: number } {
-  const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
-  const ins = Array.from({ length: channels }, (_, c) => {
-    const v = outputs?.[`${module}.in.${c}`];
-    return typeof v === 'number' && Number.isFinite(v) ? clamp01(v) : null;
-  });
-  return { ins, out: clamp01((outputs && outputOf(outputs, module)) ?? 0) };
 }

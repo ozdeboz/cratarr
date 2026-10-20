@@ -13,7 +13,7 @@ import type { Cable, Knob, Module, ModuleType, Place, SignalRef } from './patch'
 import { ENGINES } from './effects';
 import { cyclesClosed, FEEDBACK, fits, isDevice, polyKnobs, portsOf, type CableV2, type Device, type ExposedPort, type PatchV2, type Polymorphic, type Port, type PortRef, type PortType, type Ports } from './ports';
 import { byCategory, CATEGORIES, CATEGORY_LABEL, categoryOf, type Category } from './rack';
-import { FACES, type FaceKind } from './faces';
+import { areaParts, faceHeight as partsHeight, faceOf, type FacePart, type Thumbs } from './face/face';
 import { freeCableId, newCable, type Cables } from './cable-actions';
 import { makeDevice, unmakeDevice, type MacroPick } from './device-make';
 
@@ -62,7 +62,7 @@ export type ModuleData = {
   /** Its outputs past its picture's, each a labelled jack down its right edge (a modulator's first is the `mod` handle). */
   outs: OutView[];
   /** A control source's live face (faces.ts): its knobs as set, its lanes (an ADSR fed six channels: six). */
-  face: { kind: FaceKind; knobs: Record<string, number>; lanes: number } | null;
+  face: { parts: FacePart[]; knobs: Record<string, number>; lanes: number } | null;
   /** Where the picture comes in and goes out (none: no picture), and the types its picture ports carry. */
   in: Side | null;
   out: Side | null;
@@ -289,16 +289,9 @@ export function ringOf(at: number, cables: (Pick<Cable, 'value'> & { mode?: Cabl
   return [clamp01(at * (1 - clamp01(share)) + down), clamp01(at + up)];
 }
 
-/** A face's drawing box: across a modulator's node; an ADSR's lane each channel; the Clock's lights are its jacks. */
-export const FACE_W = 130;
-/** Output jacks a row. */
-export const JACKS_ACROSS = 6;
-export const LANE_H = 11;
-export function faceHeight(f: ModuleData['face']): number {
-  if (!f || f.kind === 'clock') return 0;
-  if (f.kind === 'random') return 26;
-  if (f.kind === 'vca' || f.kind === 'merge') return 18;
-  return f.kind === 'adsr' && f.lanes > 1 ? f.lanes * LANE_H : 26;
+/** A node's face area's height (face/face.ts): its parts not drawn beside an output. */
+export function faceHeight(f: ModuleData['face'], outs: readonly string[] = []): number {
+  return f ? partsHeight(areaParts(f.parts, outs), f.lanes) : 0;
 }
 
 /** A step knob's trigger port (ports.ts: `<knob>:next`), and whether a port id is one. */
@@ -458,7 +451,7 @@ export function sizeOf(d: NodeData): Size {
   const io = Math.max(d.ports.length + (d.in ? 1 : 0), d.outs.length + (d.out ? 1 : 0));
   return {
     width: Math.max(d.modulator ? 150 : 140, 20 + Math.min(shown, KNOBS_ACROSS) * KNOB_W),
-    height: 38 + rows * 60 + (io ? io * 20 + 6 : 0) + (faceHeight(d.face) ? faceHeight(d.face) + 8 : 0),
+    height: 38 + rows * 60 + (io ? io * 20 + 6 : 0) + (faceHeight(d.face, d.outs.map((o) => o.id)) ? faceHeight(d.face, d.outs.map((o) => o.id)) + 8 : 0),
   };
 }
 
@@ -801,7 +794,7 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
       knobs = shown.knobs.map((k) => (level.pins.includes(`${m.id}.${k.id}`) ? { ...k, pinned: true } : k));
       hidden = shown.hidden;
     }
-    const kind = isDevice(m) ? undefined : FACES[m.type];
+    const parts = isDevice(m) ? [] : faceOf(types[m.type], declared);
     const gate = into.get(`${m.id}.gate`) ?? [];
     const lanes = Math.max(1, ...gate.map((c) => (c.from.channel === undefined ? (portsFor(level.modules.find((x) => x.id === c.from.module) ?? m)?.out.find((o) => o.id === c.from.port)?.channels ?? 1) : 1)));
     const d: ModuleData = {
@@ -817,7 +810,7 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
         .map((x) => ({ id: x.id, label: x.label, type: x.type, ...(x.channels ? { channels: x.channels } : {}), cabled: cabled(x.id), ...(x.normal ? { normal: x.normal } : {}), ...(x.polymorphic ? { polymorphic: x.polymorphic } : {}) })),
       gives: modulator && values[0] ? { type: values[0].type, ...(values[0].channels ? { channels: values[0].channels } : {}) } : null,
       outs: values.map((o, i) => ({ id: o.id, label: o.label, type: o.type, handle: modulator && i === 0 ? MOD_OUT : outHandle(o.id) })),
-      face: kind ? { kind, knobs: faceKnobs(m, types[m.type] ?? { type: m.type, label: m.type, place, knobs: [] }), lanes: kind === 'adsr' ? lanes : 1 } : null,
+      face: parts.length ? { parts, knobs: faceKnobs(m, types[m.type] ?? { type: m.type, label: m.type, place, knobs: [] }), lanes: parts.some((x) => x.kind === 'adsr') ? lanes : 1 } : null,
       in: pinPort ? 'left' : null,
       out: poutPort ? 'right' : null,
       ...(pinPort ? { pinType: pinPort.type } : {}),
@@ -1164,6 +1157,10 @@ export type GraphActions = {
   rerouting(): { id: string; at: XY } | null;
   /** The live faces' frame (faces.ts), where the parent feeds one. */
   live(): import('./faces').LiveFrame | null;
+  /** A node's module's path from the top (its devices, `/`): what its live values are found by. */
+  livePath(id: string): string;
+  /** The graph's thumbnails (face/face.ts Thumbs), where the parent draws them. */
+  thumbs(): Thumbs | null;
   /** Whether the graph is laid out for a screen taller than wide (the far sockets then at top and bottom). */
   portrait(): boolean;
   /** Whether a modulation cable follows its ELK route (else it sags as VCV Rack's do). */
