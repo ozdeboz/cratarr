@@ -111,6 +111,8 @@ async function run(s: VisualSettings, patch: PatchV2, w: Window, warm: number, d
     const read = signalsFor(normal, m, now);
     const e = stepEngine(st, patch, ENGINE_TYPES, m, read, s, dt, { still: false, now, fluidFull: FLUID_FULL, levers: FREE });
     const d = e.aspects;
+    // A converted patch always has the Cratarr chain.
+    if (!d) throw new Error('no Cratarr chain in the patch');
     const compared = k >= Math.round(warm * FPS);
     if (compared) numbers.push(numbersOf(d));
     if (!renderer || !draw) continue;

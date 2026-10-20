@@ -49,7 +49,7 @@ export function groupsOf(f: PatchV2): Group[] {
       continue;
     }
     const { channel: _, ...from } = c.from;
-    const key = JSON.stringify([from, c.to, c.value, c.mode, c.depth ?? 'normal']);
+    const key = JSON.stringify([from, c.to, c.value, c.depth ?? 'normal']);
     (bands.get(key) ?? bands.set(key, []).get(key)!).push(c);
   }
   for (const list of bands.values()) {
