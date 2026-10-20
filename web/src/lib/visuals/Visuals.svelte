@@ -597,7 +597,8 @@
   .panel-handle {
     position: absolute;
     left: 50%;
-    bottom: max(12px, env(safe-area-inset-bottom));
+    /* Above the graph's own chips along its bottom edge. */
+    bottom: calc(max(12px, env(safe-area-inset-bottom)) + 52px);
     transform: translateX(-50%);
     height: 36px;
     padding: 0 18px;

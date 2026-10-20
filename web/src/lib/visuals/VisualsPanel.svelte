@@ -341,7 +341,8 @@
           <button class="go danger" onclick={() => (edit({ kind: 'removeModule', scope, id: m.id }), back())}><span class="name">Remove</span></button>
         </div>
       {:else}
-        {@const face = faceOf(t, portsOf(m))}
+        <!-- The live parts of its face; its picture's thumbnail is the graph's (the panel has none to draw it with). -->
+        {@const face = faceOf(t, portsOf(m)).filter((p) => p.kind !== 'thumb')}
         {#if face.length}
           <div class="rows face"><Face parts={face} {live} path={at.join('/')} knobs={m.knobs} width={300} /></div>
         {/if}
