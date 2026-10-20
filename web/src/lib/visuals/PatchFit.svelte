@@ -5,9 +5,9 @@
   // the canvas (the top panels, the chips, an open sheet). Reports the zoom as it changes (the overview below it).
   // Once the fonts are in, every node's handles are measured again.
   import { useNodes, useSvelteFlow, useUpdateNodeInternals, useViewport } from '@xyflow/svelte';
-  import { openView, type Pad, type Size } from './patchgraph';
+  import { firstModule, openView, type NodeData, type Pad, type Size } from './patchgraph';
 
-  let { layout, active, pad, view, onzoom }: { layout: string; active: boolean; pad: Pad; view: Size; onzoom?: (zoom: number) => void } = $props();
+  let { layout, active, pad, view, portrait = false, onzoom }: { layout: string; active: boolean; pad: Pad; view: Size; portrait?: boolean; onzoom?: (zoom: number) => void } = $props();
   const flow = useSvelteFlow();
   const viewport = useViewport();
   const all = useNodes();
@@ -18,7 +18,7 @@
     if (!active || view.width <= 0 || view.height <= 0) return;
     const frame = requestAnimationFrame(() => {
       const top = all.current.filter((n) => !n.parentId);
-      if (top.length) void flow.setViewport(openView(flow.getNodesBounds(top), view, pad));
+      if (top.length) void flow.setViewport(openView(flow.getNodesBounds(top), view, pad, undefined, firstModule(top as unknown as { position: { x: number; y: number }; data: NodeData }[], portrait)));
     });
     return () => cancelAnimationFrame(frame);
   });

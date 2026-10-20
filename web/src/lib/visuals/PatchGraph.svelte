@@ -607,16 +607,17 @@
     onnodeclick={({ node }) => selecting && togglePick(node.id)}
     onpaneclick={() => (reroute = null)}
   >
-    <PatchFit layout={fitKey} active={!touched} {pad} view={{ width, height }} onzoom={(z) => (zoom = z)} />
+    <PatchFit layout={fitKey} active={!touched} {pad} view={{ width, height }} {portrait} onzoom={(z) => (zoom = z)} />
+    <!-- The map: bottom right over the chips; on a narrow screen top right, where the legend gives way. -->
     <MiniMap
-      position="bottom-right"
+      position={width < 600 ? 'top-right' : 'bottom-right'}
       pannable
       zoomable
       width={coarse ? 112 : 168}
       height={coarse ? 84 : 112}
       nodeClass={mapClass}
       ariaLabel="Overview"
-      style={`margin: 0 16px calc(${Math.round(sheetHeight)}px + 64px + env(safe-area-inset-bottom)) 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden`}
+      style={`${width < 600 ? 'margin: calc(12px + env(safe-area-inset-top)) 12px 0 0' : `margin: 0 16px calc(${Math.round(sheetHeight)}px + 64px + env(safe-area-inset-bottom)) 0`}; border: 1px solid var(--border); border-radius: 10px; overflow: hidden`}
     />
     <Panel position="bottom-left" class="chips-panel">
       <div class="bottom">

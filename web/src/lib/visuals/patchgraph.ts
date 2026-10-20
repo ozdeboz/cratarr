@@ -209,11 +209,29 @@ export type Rect = { x: number; y: number; width: number; height: number };
 /** Where the graph opens (VCV Rack's way): at FULL_ZOOM, modules whole. Along each axis the patch is centred where it
  *  fits in the view (inside its padding), else its start (left, top) is at the view's start: a patch bigger than the
  *  screen is panned to, not shrunk. Svelte Flow's viewport: the flow's origin on screen and the zoom. */
-export function openView(b: Rect, view: Size, pad: Pad, zoom = FULL_ZOOM): { x: number; y: number; zoom: number } {
+export function openView(b: Rect, view: Size, pad: Pad, zoom = FULL_ZOOM, first?: XY): { x: number; y: number; zoom: number } {
   const w = view.width - pad.left - pad.right;
   const h = view.height - pad.top - pad.bottom;
-  const axis = (start: number, extent: number, room: number, lead: number) => (extent * zoom <= room ? lead + (room - extent * zoom) / 2 - start * zoom : lead - start * zoom);
-  return { x: axis(b.x, b.width, w, pad.left), y: axis(b.y, b.height, h, pad.top), zoom };
+  // Where the patch does not fit, it starts at its first module (`first`: where the signals start), else its corner.
+  const axis = (start: number, extent: number, room: number, lead: number, from: number) => (extent * zoom <= room ? lead + (room - extent * zoom) / 2 - start * zoom : lead - from * zoom);
+  return { x: axis(b.x, b.width, w, pad.left, first?.x ?? b.x), y: axis(b.y, b.height, h, pad.top, first?.y ?? b.y), zoom };
+}
+
+/** The module the signals start at: the leftmost (portrait: the topmost) module or frame, the higher (the further left)
+ *  of those level with it. */
+export function firstModule(nodes: { position: XY; parentId?: string; data: NodeData }[], portrait = false): XY | undefined {
+  const top = nodes.filter((n) => !n.parentId && (n.data.kind === 'module' || n.data.kind === 'box' || n.data.kind === 'signal'));
+  const key = (p: XY) => (portrait ? [p.y, p.x] : [p.x, p.y]);
+  let best: XY | undefined;
+  for (const n of top) {
+    const [a, b] = key(n.position);
+    if (!best) best = n.position;
+    else {
+      const [c, d] = key(best);
+      if (a < c - 0.5 || (Math.abs(a - c) <= 0.5 && b < d)) best = n.position;
+    }
+  }
+  return best;
 }
 
 /** Cables over the nodes (as VCV Rack draws them): every edge's z-index. */
@@ -519,7 +537,7 @@ export function sizeOf(d: NodeData): Size {
   const rows = Math.ceil(shown / KNOBS_ACROSS);
   return {
     width: Math.max(d.modulator ? 150 : 140, 20 + Math.min(shown, KNOBS_ACROSS) * KNOB_W),
-    height: 38 + rows * 50 + d.ports.length * 20 + Math.ceil(d.outs.length / JACKS_ACROSS) * 30 + (faceHeight(d.face) ? faceHeight(d.face) + 8 : 0),
+    height: 38 + rows * 60 + d.ports.length * 20 + Math.ceil(d.outs.length / JACKS_ACROSS) * 30 + (faceHeight(d.face) ? faceHeight(d.face) + 8 : 0),
   };
 }
 

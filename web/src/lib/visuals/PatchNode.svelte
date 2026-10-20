@@ -31,9 +31,8 @@
   const polyOf = (k: KnobView) => (k.channels ? k.id : /^(.+)\.\d+$/.exec(k.id)?.[1]);
   const pair = (k: KnobView) => `${id}.${polyOf(k)}`;
 
-  // A knob's jack: under its dial's middle; on touch under the dial, clear of it (a finger turns the dial).
-  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
-  const knobJack = coarse ? 'top: auto; bottom: -6px' : 'top: 17.5px; bottom: auto';
+  // A knob's jack: under its label (as a module's panel has it), clear of the dial and the name.
+  const knobJack = 'top: auto; bottom: -8px';
 
   // The far form's sockets: what comes in on the side the node takes in, what goes out on the other (portrait: top and
   // bottom), every cable led there far out (patchgraph.ts farEdges).
@@ -130,7 +129,7 @@
     {#if data.outs.length}
       <div class="outs">
         {#each data.outs as o (o.id)}
-          <div class="jack">
+          <div class="outjack">
             <i class="light t-{o.type}" style:--lit={lights?.[o.id] ?? 0}></i><span class="jl">{o.label}</span>
             <Handle type="source" id={o.handle} position={Position.Top} isConnectable={o.connectable || o.handle === MOD_OUT} class="jack out t-{o.type}" />
           </div>
@@ -286,7 +285,9 @@
     display: flex;
     flex-wrap: wrap;
     max-width: calc(6 * 44px);
-    gap: 6px 0;
+    /* Room under each knob for its jack, clear of the row below. */
+    gap: 16px 0;
+    padding-bottom: 8px;
     margin-top: 8px;
     align-items: flex-start;
   }
@@ -374,7 +375,7 @@
     max-width: calc(6 * 44px);
     margin-top: 10px;
   }
-  .jack {
+  .outjack {
     position: relative;
     display: grid;
     justify-items: center;
