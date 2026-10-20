@@ -87,9 +87,33 @@ export type Shown = {
 
 export type RendererOptions = { random?: () => number; now?: () => number };
 
-/** The compose step's inputs this frame (compose.ts: the layers past the flame and the picture's own loop): the
- *  extras as drawn, each module's knobs, the frame, the flame layer's share and where its morph is going. */
+/** What the picture past the flame takes each frame, beside the patch (setPatch): each module's knobs as the engine and
+ *  the morph give them now (`knobs`, by the module's id; none: the patch's own), where a knob's morph is going
+ *  (`target`; none: where it is), and the frame (the sources' time, beat, signals and sound). */
+export type PictureInputs = { knobs: (id: string) => Record<string, number> | undefined; target?: (id: string, knob: string) => number; frame: FrameInfo };
+
+/** The page's extras of today (a v1 PatchExtra): its layers past the flame and the picture's own loop as drawn, each
+ *  module's knobs, the frame, the flame layer's share and where its morph is going. */
 export type Extras = { extra: PatchExtra; knobsOf: (m: Module) => Record<string, number>; frame: FrameInfo; flame: number; flameTo?: number };
+
+/** The page's extras as picture inputs: the layers' Mix from their blends after the flame's share, each extra's
+ *  knobs as moved. */
+export function inputsOfExtras(x: Extras): PictureInputs {
+  const modules = new Map([...x.extra.layers.flatMap((l) => [l.source, ...l.modules]), ...x.extra.loop].map((m) => [m.id, m]));
+  const knobs = (id: string): Record<string, number> | undefined => {
+    if (id === 'layers') {
+      const k: Record<string, number> = { amount1: x.flame };
+      x.extra.layers.forEach((l, i) => {
+        k[`mode${i + 2}`] = MIX_MODES.indexOf(l.blend.mode);
+        k[`amount${i + 2}`] = l.blend.amount;
+      });
+      return k;
+    }
+    const m = modules.get(id);
+    return m && x.knobsOf(m);
+  };
+  return { knobs, target: (id, knob) => (id === 'layers' && knob === 'amount1' ? (x.flameTo ?? 1) : (knobs(id)?.[knob] ?? 0)), frame: x.frame };
+}
 
 export class FlameRenderer {
   private gl: WebGL2RenderingContext;
@@ -181,29 +205,8 @@ export class FlameRenderer {
     this.walker?.prune(this.composed?.ids ?? new Set());
   }
 
-  /** A compose module's knobs this frame: the extras' as moved (the layers' Mix from their blends, the flame's share
-   *  first), else the patch's. */
-  private knobsAt(id: string, extras: Extras | null): Record<string, number> {
-    if (extras) {
-      const x = extras.extra;
-      if (id === 'layers') {
-        // The flame's share of the picture (its morph may run past 1 or below 0 for a frame).
-        const k: Record<string, number> = { amount1: Math.min(1, Math.max(0, extras.flame)) };
-        x.layers.forEach((l, i) => {
-          k[`mode${i + 2}`] = MIX_MODES.indexOf(l.blend.mode);
-          k[`amount${i + 2}`] = l.blend.amount;
-        });
-        return k;
-      }
-      const m = [...x.layers.flatMap((l) => [l.source, ...l.modules]), ...x.loop].find((m) => m.id === id);
-      if (m) return extras.knobsOf(m);
-    }
-    return this.knobsIn.get(id) ?? {};
-  }
-
-
-  /** Lets go of what modules no longer in the patch held (the extras changed: `_extra`, for the frozen compositor's
-   *  recordings). */
+  /** Lets go of what modules no longer in the patch held. setPatch does it too; the page of today calls this as its
+   *  extras change (`_extra`: for the lab's recordings). */
   prune(_extra?: PatchExtra) {
     this.walker?.prune(this.composed?.ids ?? new Set());
   }
@@ -255,7 +258,9 @@ export class FlameRenderer {
 
   /** One frame: the old picture fades by `now.carry.keep`, `passes` more steps of every point fall into it, and it
    *  shows. */
-  frame(passes: number, now: ChainNow, viewWidth: number, viewHeight: number, extras: Extras | null = null) {
+  frame(passes: number, now: ChainNow, viewWidth: number, viewHeight: number, inputs: PictureInputs | Extras | null = null) {
+    const given = inputs && 'extra' in inputs ? inputsOfExtras(inputs) : inputs;
+    const knobsAt = (id: string) => given?.knobs(id) ?? this.knobsIn.get(id) ?? {};
     const [screenWidth, screenHeight] = [viewWidth, viewHeight];
     const gl = this.gl;
     const light = this.light;
@@ -274,10 +279,7 @@ export class FlameRenderer {
     // The lazy rules (picture-graph.ts plan): the flame's layer at nothing, and not coming back, cuts the flame and all
     // that feeds only it (decision 0057, its 5th: one coming back keeps gathering its light). The rest is lazy within
     // its pass: an effect, a layer, the loop at nothing.
-    const drawn = !this.compiled || !extras || plan(this.compiled, {
-      knobs: (id): Record<string, number> => (id === 'layers' ? { mode1: 0, amount1: extras.flame } : {}),
-      target: (id, knob) => (id === 'layers' && knob === 'amount1' ? (extras.flameTo ?? 1) : 1),
-    }).live.some((n) => n.type === 'flame');
+    const drawn = !this.compiled || !given || plan(this.compiled, { knobs: knobsAt, target: given.target }).live.some((n) => n.type === 'flame');
     let fluid: Fluid | null = null;
     if (drawn && this.cut) light.clear();
     this.cut = !drawn;
@@ -299,7 +301,6 @@ export class FlameRenderer {
       const p = this.fin.chainFor({ ...fx, ids }, this.clocks);
       return p ? [{ p, ids }] : [];
     }) : [];
-    const knobsAt = (id: string) => this.knobsAt(id, extras);
     const walks = this.stages.has('compose') && this.compiled && this.composed;
     if (walks) this.walker ??= new Walker(gl);
     const walking = walks ? this.walker!.planned(this.compiled!, this.composed!.ids, this.composed!.from, this.composed!.to, knobsAt) : null;
@@ -309,7 +310,7 @@ export class FlameRenderer {
       if (into) viewWidth = light.width, viewHeight = light.height;
       this.show.draw(light, this.points, now.show, passes, fluid, this.carry.warpShown, viewWidth, viewHeight);
     }
-    const info = extras?.frame ?? { dt: since, time: at / 1000, beat: null, signals: () => 0, waveform: null };
+    const info = given?.frame ?? { dt: since, time: at / 1000, beat: null, signals: () => 0, waveform: null };
     const picture = into && walking ? this.walker!.run(walking, into.tex[2], into.w, into.h, knobsAt, info) : into ? into.tex[2] : null;
     if (chain.length && into && picture) {
       // Each run from the last one's picture; the first into the picture's own targets, as before.
