@@ -196,6 +196,23 @@ test('modules removed: their cables, the depths read from them, their pins; a de
   assert.deepEqual(out.cables.map((c) => c.id), ['x2']);
 });
 
+test('pins at their levels: a knob (`<module>.<knob>`), a module or device (`module:<id>`), a cable (`cable:<id>`), drawn so', () => {
+  let p = sample();
+  for (const pin of ['k1.turn', 'module:lfo', 'cable:c1']) p = applyV2(structuredClone(p), { kind: 'pinOne', scope: [], pin, on: true }, types);
+  assert.deepEqual(p.pins, ['k1.turn', 'module:lfo', 'cable:c1']);
+  const g = graphOfV2({ patch: p, types });
+  assert.equal(dataOf(g, 'k1').knobs.find((k) => k.id === 'turn')?.pinned, true);
+  assert.equal(dataOf(g, 'k1').knobs.find((k) => k.id === 'amount')?.pinned, undefined);
+  assert.equal(dataOf(g, 'lfo').pinned, true);
+  assert.equal(dataOf(g, 'k1').pinned, undefined);
+  assert.equal(edgeOf(g.edges, 'c1')?.data?.pinned, true);
+  assert.equal(edgeOf(g.edges, 'c3')?.data?.pinned, undefined);
+  // Let go, and not twice when pinned twice.
+  p = applyV2(structuredClone(p), { kind: 'pinOne', scope: [], pin: 'k1.turn', on: true }, types);
+  p = applyV2(structuredClone(p), { kind: 'pinOne', scope: [], pin: 'cable:c1', on: false }, types);
+  assert.deepEqual(p.pins, ['module:lfo', 'k1.turn']);
+});
+
 test('cables sag as VCV Rack’s do: through the midpoint lowered by (1 − tension)(150 + length)', () => {
   assert.deepEqual(slumpOf({ x: 0, y: 0 }, { x: 100, y: 0 }, 1), { x: 50, y: 0 });
   assert.deepEqual(slumpOf({ x: 0, y: 0 }, { x: 100, y: 0 }, 0.5), { x: 50, y: 125 });

@@ -31,6 +31,8 @@ export type KnobView = {
   kind: Knob['kind'];
   at: number;
   ring: [number, number] | null;
+  /** Pinned (0057: `<module>.<knob>` in its level's pins): Randomize and a new track leave it. */
+  pinned?: boolean;
   /** A polyphonic knob drawn as one (0057 §4b: a band's six): each channel's knob id, value and place in the range; the
    *  knob's own `value` and `at` their mean. */
   channels?: { id: string; value: number; at: number }[];
@@ -79,6 +81,8 @@ export type ModuleData = {
   v2: { ports: Ports; pin: string | null; pout: string | null; mod: string | null };
   /** A device (0057 §6): opened in place (drawn as a frame round its modules instead). */
   device?: { open: boolean };
+  /** Pinned whole (`module:<id>`, a module or a device). */
+  pinned?: boolean;
 };
 /** A typed input port on a node (not a knob): cabled, or else normalled where its type says so. */
 export type PortView = { id: string; label: string; type: PortType; channels?: number; cabled: boolean; normal?: PortRef; polymorphic?: Polymorphic };
@@ -127,7 +131,7 @@ export type GraphEdge = {
   data?: CableData;
 };
 /** A modulation cable's (or a normal's) data: its amount, its wire's type, a bundle's channels. */
-export type CableData = { amount: string; wire: PortType; channels?: number; lit?: boolean; muted?: true; normal?: true; step?: boolean; route?: XY[] };
+export type CableData = { amount: string; wire: PortType; channels?: number; lit?: boolean; muted?: true; normal?: true; step?: boolean; route?: XY[]; pinned?: boolean };
 
 /** A knob's (or a port's) handle on its module's node. */
 export const knobHandle = (knob: string) => `k:${knob}`;
@@ -792,7 +796,7 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
       place = t.place;
       knobIds = new Set([...t.knobs, ...polyKnobs(t).knobs].map((k) => k.id));
       const shown = knobViews({ ...m, id }, t, { open, room: modulator ? 0 : SHOWN, cabled, cablesInto });
-      knobs = shown.knobs;
+      knobs = shown.knobs.map((k) => (level.pins.includes(`${m.id}.${k.id}`) ? { ...k, pinned: true } : k));
       hidden = shown.hidden;
     }
     const kind = isDevice(m) ? undefined : FACES[m.type];
@@ -819,6 +823,7 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
       modulator,
       v2: { ports, pin: pinPort?.id ?? null, pout: poutPort?.id ?? null, mod: modulator ? (values[0]?.id ?? null) : null },
       ...(isDevice(m) ? { device: { open: false } } : {}),
+      ...(level.pins.includes(`module:${m.id}`) ? { pinned: true } : {}),
     };
     data.set(id, d);
     return d;
@@ -905,7 +910,7 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
       }
       return { node: id, port: r.port };
     };
-    const edge = (id: string, from: { node: string; port: string }, to: { node: string; port: string }, c: Pick<CableV2, 'value'> | null, channel?: number) => {
+    const edge = (id: string, from: { node: string; port: string }, to: { node: string; port: string }, c: Pick<CableV2, 'id' | 'value'> | null, channel?: number) => {
       const a = data.get(from.node);
       const b = data.get(to.node);
       const sourceHandle = a && handleAt(a, 'out', from.port);
@@ -914,7 +919,7 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
       const out = a.v2.ports.out.find((x) => x.id === from.port);
       const wire = out?.type ?? 'value';
       const channels = channel === undefined ? out?.channels : undefined;
-      const cd: CableData = { amount: c ? amountLabel(c.value) : '', wire, ...(channels ? { channels } : {}), ...(c ? {} : { normal: true as const }) };
+      const cd: CableData = { amount: c ? amountLabel(c.value) : '', wire, ...(channels ? { channels } : {}), ...(c ? {} : { normal: true as const }), ...(c && p.pins.includes(`cable:${c.id}`) ? { pinned: true } : {}) };
       edges.push(wired({ id, source: from.node, target: to.node, sourceHandle, targetHandle, type: 'cable', class: '', deletable: !!c, selectable: !!c, data: cd }, wire));
     };
     for (const c of p.cables) {
@@ -951,6 +956,7 @@ export type V2Edit =
   | { kind: 'remove'; scope: string[]; cables: string[] }
   | { kind: 'reroute'; scope: string[]; id: string; end: 'from' | 'to'; to: PortRef }
   | { kind: 'removeModules'; scope: string[]; modules: string[] }
+  | { kind: 'pinOne'; scope: string[]; pin: string; on: boolean }
   | { kind: 'pin'; scope: string[]; category: Category; on: boolean }
   | { kind: 'add'; scope: string[]; type: string }
   | { kind: 'make'; scope: string[]; modules: string[]; macros: MacroPick[]; label?: string }
@@ -1011,6 +1017,12 @@ export function applyV2(p: PatchV2, e: V2Edit, types?: Record<string, ModuleType
     // The one end moved (the panel's Reroute too: patch-edits.ts); the other, and the cable's amount, as they were.
     const c = inside.cables.find((x) => x.id === e.id);
     if (c) c[e.end] = { ...e.to };
+    return p;
+  }
+  if (e.kind === 'pinOne') {
+    // A knob (`<module>.<knob>`), a module or a device (`module:<id>`), a cable (`cable:<id>`): the panel's too.
+    inside.pins = inside.pins.filter((x) => x !== e.pin);
+    if (e.on) inside.pins.push(e.pin);
     return p;
   }
   if (e.kind === 'removeModules') {

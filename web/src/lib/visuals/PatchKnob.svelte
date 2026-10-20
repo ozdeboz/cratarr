@@ -131,6 +131,8 @@
       <line x1={c + (r - 4.5) * Math.cos(a)} y1={c + (r - 4.5) * Math.sin(a)} x2={c + (r - 0.5) * Math.cos(a)} y2={c + (r - 0.5) * Math.sin(a)} class="tick" />
     {/each}
     <circle cx={c} cy={c} r={r - 6} class="cap" />
+    <!-- Pinned: a pin's head in the ring's gap at the bottom (0057: a pin mark on the knob's ring). -->
+    {#if knob.pinned}<circle cx={c} cy={c + r - 1} r="2.6" class="pinmark"><title>Pinned</title></circle>{/if}
   </svg>
   <span>{drag ? shown : knob.label}</span>
 </div>
@@ -156,6 +158,9 @@
   path {
     fill: none;
     stroke-linecap: round;
+  }
+  .pinmark {
+    fill: var(--accent);
   }
   .track {
     stroke: color-mix(in srgb, var(--text) 16%, transparent);
