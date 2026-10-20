@@ -97,6 +97,9 @@ export type EngineState = {
   triggers: Record<string, number>;
   /** Each Ducker's state, and the Screen's flash guard's. */
   duckers: Record<string, DuckerState>;
+  /** The frame's outputs, one object while the patch is the same (its keys the same each frame), and the plan it is for. */
+  outputs: Record<string, number>;
+  outputsFor: unknown;
   /** The Clock's beat, bar and phrase triggers (clock.ts). */
   clockTriggers: ClockTriggerState;
   /** Each Grid's points and channels, and the knobs they were laid out for (laid out again only when those change). */
@@ -123,6 +126,8 @@ export function newEngine(): EngineState {
     poly: {},
     triggers: {},
     duckers: {},
+    outputs: {},
+    outputsFor: null,
     clockTriggers: newClockTriggers(),
     grids: {},
   };
@@ -134,7 +139,8 @@ export type EngineFrame = {
   aspects: AspectsNow | null;
   /** Every module's knobs as their cables move them (the chain's: its settings, its columns given in `aspects`). */
   knobs: Record<string, Record<string, number>>;
-  /** Every value output this frame, by `module.port`. */
+  /** Every value output this frame, by `module.port`: the same object each frame while the patch is the same (copy what
+   *  is to be kept). */
   outputs: Record<string, number>;
   /** Each macro's value this frame. */
   macros: Record<string, number>;
@@ -226,7 +232,7 @@ const STRUCK: { since: number; velocity: number; next: { until: number; velocity
 const ADSR_KNOBS = { attack: 0, decay: 0, sustain: 0, release: 0.15 };
 /** No channels yet (a VCA, Merge or Ducker not yet worked out), and a scratch for working one out. */
 const NO_CHANNELS = new Float64Array(64);
-const SCRATCH = new Float64Array(64);
+const SCRATCH = new Float64Array(6);
 
 /** How a Music row is read: its signal, its reading, slow or not. */
 type Reading = { signal: string; reference?: (typeof READINGS)[number]; speed?: 'slow' };
@@ -378,7 +384,12 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   const step = Number.isFinite(dt) ? Math.max(0, dt) : 0;
   const plan = planOf(p, types);
   const { typeOf, moduleOf, into, macroIds, targets } = plan;
-  const outputs: Record<string, number> = {};
+  if (st.outputsFor !== plan) {
+    st.outputs = {};
+    st.outputsFor = plan;
+  }
+  // Each key is written again every frame; one read before its module this frame is last frame's (a cycle's rule).
+  const outputs = st.outputs;
   // The Cratarr chain (0057 §3; the owner: a device, "Cratarr"), where the patch has it: found by its Flame, its other
   // modules beside it (the Flame's path: the top level, or inside the device as flatten names them). None: a blank
   // slate, nothing drawn.
@@ -443,7 +454,10 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
   const pulse = stepTrack(st.track, m.key, opts.now, m.bps);
   raw[T.track] = pulse;
   const bands = m.bands ?? st.standIn;
-  Object.assign(outputs, { 'envelope.level': env.level, 'envelope.out': env.out, 'envelope.glow': env.glow, 'track.pulse': pulse });
+  outputs['envelope.level'] = env.level;
+  outputs['envelope.out'] = env.out;
+  outputs['envelope.glow'] = env.glow;
+  outputs['track.pulse'] = pulse;
   const index = m.beat?.index ?? null;
   const onBeat = index !== null && st.beat !== undefined && index !== st.beat ? 1 : 0;
   st.beat = index;
@@ -615,8 +629,8 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
         hysteresis: finite(k.hysteresis, 1),
       };
       const input = plugged(x.id, 'in', 0) ? takes(x.id, 'in', 0) : 1;
-      out.fill(stepDucker((st.duckers[x.id] ??= newDucker()), input, takes(x.id, 'key', 0), knobs, step).out, 0, CHANNELS);
-      (st.poly[x.id] ??= new Float64Array(CHANNELS)).set(out.subarray(0, CHANNELS));
+      out.fill(stepDucker((st.duckers[x.id] ??= newDucker()), input, takes(x.id, 'key', 0), knobs, step).out);
+      (st.poly[x.id] ??= new Float64Array(CHANNELS)).set(out);
       return;
     }
     if (x.type === 'vca') {
@@ -626,7 +640,7 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
       const into = ports?.get('in');
       const cv = ports?.get('cv');
       for (let ch = 0; ch < channels; ch++) out[ch] = (into && into[ch].length ? sumOf(into, ch) : 1) * clamp(gain + sumOf(cv, ch), 0, 2);
-      if (channels === 1) out.fill(out[0], 1, CHANNELS);
+      if (channels === 1) out.fill(out[0], 1);
     } else {
       const into = plan.ports.get(x.id)?.get('in');
       const mode = MERGE_MODES[clamp(Math.round(finite(x.knobs.mode, 1)), 0, MERGE_MODES.length - 1)];
@@ -639,9 +653,9 @@ export function stepEngine(st: EngineState, p: PatchV2, types: Record<string, Mo
       }
       if (mode === 'mean') one /= CHANNELS;
       else if (mode === 'geometric') one = one ** (1 / CHANNELS);
-      out.fill(one, 0, CHANNELS);
+      out.fill(one);
     }
-    (st.poly[x.id] ??= new Float64Array(CHANNELS)).set(out.subarray(0, CHANNELS));
+    (st.poly[x.id] ??= new Float64Array(CHANNELS)).set(out);
   }
   /** A level knob's gain input (normalled to 1), 0..1. */
   const gainOf = (module: string, knob: string) => {
