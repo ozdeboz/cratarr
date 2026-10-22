@@ -47,6 +47,13 @@ const CHAIN_DRAW = PRESET_KEYS.flatMap((key) => (SETTING_KNOB[key] && !SLOT_KEY.
 const CHAIN_DRAWN = new Set(CHAIN_DRAW.map((l) => `${l.module}.${l.knob}`));
 const SLOT_DRAWN = PRESET_KEYS.filter((key) => SLOT_KEY.has(key));
 
+/** The modules a Spatial roll reaches whole, and the Flame's knobs it reaches. */
+const SPATIAL = new Set(['grid', 'field', 'fold', 'instance', 'transform', 'push']);
+const FLAME_SPATIAL = new Set(['zoom', 'rotation', 'symmetry', 'mirror', 'fit']);
+
+/** The knobs a Lightness roll reaches, by their ids or labels. */
+const LIGHT = /lightness|bright|exposure|glow|gamma/i;
+
 /** The knobs a Colours roll reaches, by their ids or labels. */
 const COLOUR = /hue|sat|tint|colou?r|palette/i;
 
@@ -61,7 +68,12 @@ export function scopeNamed(name: string, types: Record<string, ModuleType>): Sco
   // Response: how the rack answers the music, not how it looks: what lies between the music and the picture (the
   // followers, ADSRs, VCAs, Shapers, the Clock and the Accent; the cables' amounts with them, visuals-loop rollOf).
   if (name === 'response') return (m) => RESPONSE.has(m.type);
+  // Spatial: where things are and how space is laid out (the owner: so a rack without a Grid still rolls): the Grid, the
+  // Field, the folds and copies, the Streamlines' shape (not their colours), the Flame's framing and symmetry.
+  if (name === 'spatial') return (m, k) => SPATIAL.has(m.type) || (m.type === 'streamlines' && !COLOUR.test(k.id)) || (m.type === 'flame' && FLAME_SPATIAL.has(k.id));
   // Colours: every knob that sets a colour (a hue, its spread, a saturation, a tint, the Flame's palette), nothing else.
+  // Lightness: every knob that sets how light the picture is (a lightness, a brightness, the exposure, a glow, a gamma).
+  if (name === 'lightness') return (_m, k) => LIGHT.test(k.id) || LIGHT.test(k.label ?? '');
   if (name === 'colours') return (_m, k) => COLOUR.test(k.id) || COLOUR.test(k.label ?? '');
   const ports = portsFrom(types);
   return (m) => {

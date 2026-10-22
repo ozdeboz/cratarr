@@ -319,7 +319,7 @@ export const portHelp: Record<string, Record<string, string>> = {
   dice: {
     trigger: 'Randomizes on each trigger.',
     seed: 'Where its randomness starts: the same seed, the same values (a track’s seed, the same look).',
-    scope: 'What it rolls: everything, one category, the cables, the response, the macros or the colours.',
+    scope: 'What it rolls: everything, one category, the cables, the response, the macros, the colours, space or lightness.',
     done: 'A trigger as it randomizes.',
     reach: 'How far each knob moves toward its roll: all the way at 100 %, not at all at 0.',
   },
