@@ -219,6 +219,16 @@ test("each chain module's own knobs and node values (step 5, the one engine) are
         near(f.params['show/curve']?.floor, d.floor, 'floor');
         near(f.params['show/blur']?.smoothing, d.smoothing, 'smoothing');
         near(f.params['show/bend']?.waves, d.given[A.waves], 'waves');
+        // The light loop's and the camera's (5c).
+        if (mod('trails')) near(f.params.trails?.keep, d.keep, 'keep');
+        if (mod('fluid')) {
+          near(f.params.fluid?.fluid, d.fluid, 'fluid');
+          near(f.params.fluid?.warp, d.warp, 'warp');
+          near(f.params.fluid?.facets, d.facets, 'facets');
+        }
+        if (mod('tunnel')) near(f.params.tunnel?.tunnel, d.tunnel, 'tunnel');
+        if (mod('dive')) near(f.params.dive?.dive, d.dive, 'dive');
+        near(f.params.flame?.scale, d.scale, 'scale');
         checked++;
         return f.aspects;
       },

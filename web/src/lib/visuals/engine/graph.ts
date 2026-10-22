@@ -190,7 +190,25 @@ export type EngineFrame = {
 };
 
 /** A chain module's node values (EngineFrame.params), by its type. */
-export type NodeParams = { flash?: number; saturation?: number; gamma?: number; floor?: number; smoothing?: number; waves?: number };
+export type NodeParams = {
+  flash?: number;
+  saturation?: number;
+  gamma?: number;
+  floor?: number;
+  smoothing?: number;
+  waves?: number;
+  /** Trails: the share of the light kept a frame. */
+  keep?: number;
+  /** Fluid: its share (of the fluid at its 100 %), the warp it gives, its facets. */
+  fluid?: number;
+  warp?: number;
+  facets?: number;
+  /** Tunnel's and Dive's levels. */
+  tunnel?: number;
+  dive?: number;
+  /** The Flame's size (its Zoom, its Accent course its own). */
+  scale?: number;
+};
 
 /** A Dice's roll: which, the seed its seed input gives (Music's `seed`: the track's own), its scope. */
 /** A Dice's roll: its seed, its scope, and how far from where each knob is (`reach` 0..1: 1, anywhere in its range). */
@@ -1084,7 +1102,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   // Accent's courses its own.
   const params: Record<string, NodeParams> = {};
   const follow = courseStep(step, held.swing);
-  const accented = (id: string, knob: string, v: number) => stepAccent((st.accents[`${id}|${knob}`] ??= newAccent()), v, follow, chainSettings.flash, held.swing);
+  const accented = (id: string, knob: string, v: number, by = 1) => stepAccent((st.accents[`${id}|${knob}`] ??= newAccent()), v, follow, chainSettings.flash, held.swing, by);
   for (const { own } of plan.owns) {
     const k = knobs[own.id];
     const x = moduleOf.get(own.id);
@@ -1093,6 +1111,13 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     else if (own.type === 'curve') params[own.id] = hazeOf(k.haze);
     else if (own.type === 'blur') params[own.id] = { smoothing: 12 * k.smoothing ** 2 };
     else if (own.type === 'bend') params[own.id] = { waves: k.waves };
+    else if (own.type === 'trails') params[own.id] = { keep: clamp(1 - 0.07 * 2 ** (-1.5 * k.trails), 0.5, 0.985) };
+    else if (own.type === 'fluid') {
+      const fluid = opts.fluidFull * k.fluid;
+      params[own.id] = { fluid, warp: 0.12 * fluid, facets: k.facets };
+    } else if (own.type === 'tunnel') params[own.id] = { tunnel: k.tunnel };
+    else if (own.type === 'dive') params[own.id] = { dive: k.dive };
+    else if (own.type === 'flame') params[own.id] = { scale: clamp(accented(own.id, 'zoom', 0.5 + 0.5 * k.zoom, held.size), 0.25, 1.4) };
   }
   for (const id of Object.keys(st.accents)) if (!moduleOf.has(id.slice(0, id.lastIndexOf('|')))) delete st.accents[id];
 
