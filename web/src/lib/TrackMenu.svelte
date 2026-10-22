@@ -29,7 +29,9 @@
   import MarkLoader from './MarkLoader.svelte';
   import { goToArtist as showArtist, mainArtist } from './albums.svelte';
   import { player, refresh } from './live.svelte';
+  import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
+  import MenuGroup from './MenuGroup.svelte';
   import PlaylistToggles from './PlaylistToggles.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { shownCover, favorite, pending, playing, toggleFavorite } from './remote.svelte';
@@ -136,6 +138,11 @@
     if (!t) return;
     const words = [t.artist, t.name].filter(Boolean).join(' ');
     window.open(`https://duckduckgo.com/?q=${encodeURIComponent(words)}`, '_blank', 'noopener');
+    onclose();
+  }  function geniusSearch() {
+    if (!t) return;
+    const words = [t.artist, t.name].filter(Boolean).join(' ');
+    window.open(`https://genius.com/search?q=${encodeURIComponent(words)}`, '_blank', 'noopener');
     onclose();
   }
 
@@ -325,53 +332,61 @@
     {step}
   >
     {#if step === 'menu'}
-      <div role="menu">
-        {#if albumId && !(fromPanel && panel.viewed === albumSubject(t!.source, albumId))}
-          <MenuEntry icon="squareArrowOutUpRight" label="View album" onclick={viewAlbum} />
-        {/if}
-        {#if artistName && !(fromPanel && viewedArtist?.source === t?.source && viewedArtist?.name === artistName)}
-          <MenuEntry icon="user" label="Go to {artistName}" onclick={goToArtist} />
-        {/if}
-        {#each genres.filter((g) => !(fromPanel && g === viewedGenre)) as g (g)}
-          <MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />
-        {/each}
-        {#if heartKnown}
-          <MenuEntry icon="heart" label={heartOn ? 'Remove from favourites' : 'Add to favourites'} disabled={busy} onclick={heart} />
-        {/if}
-        {#if addable}
-          <MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />
-        {/if}
-        {#if inApp && t && !onDevice}
-          {@const one = t}
-          <MenuEntry
-            icon="arrowDownToLine"
-            label="Download"
-            onclick={() => {
-              download([one]);
-              onclose();
-            }}
-          />
-        {/if}
-        {#if !onDevice}
-          <MenuEntry icon="share" label="Share" onclick={shareIt} />
-          <MenuEntry icon="info" label="Details" onclick={showDetails} />
-        {/if}
-        <MenuEntry icon="search" label="Web search" onclick={webSearch} />
-        {#if movesHere && !forPlaying}
-          <MenuEntry icon="trash" label="Remove from queue" danger onclick={removeFromQueue} />
-        {/if}
-        {#each outs as o (o.label)}
-          <MenuEntry
-            icon={o.icon}
-            label={o.label}
-            danger
-            onclick={() => {
-              onclose();
-              o.run();
-            }}
-          />
-        {/each}
-      </div>
+      <!-- The shared groups, in their order (decision 0058): Go to, Feel, Collect, Take away, Know, Remove last. -->
+      <MenuCards>
+        <MenuGroup>
+          {#if albumId && !(fromPanel && panel.viewed === albumSubject(t!.source, albumId))}
+            <MenuEntry icon="squareArrowOutUpRight" label="Go to album" onclick={viewAlbum} />
+          {/if}
+          {#if artistName && !(fromPanel && viewedArtist?.source === t?.source && viewedArtist?.name === artistName)}
+            <MenuEntry icon="user" label="Go to {artistName}" onclick={goToArtist} />
+          {/if}
+          {#each genres.filter((g) => !(fromPanel && g === viewedGenre)) as g (g)}
+            <MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />
+          {/each}
+        </MenuGroup>
+        <MenuGroup>
+          {#if heartKnown}<MenuEntry icon="heart" label="Favourite" switched={heartOn} disabled={busy} onclick={heart} />{/if}
+        </MenuGroup>
+        <MenuGroup>
+          {#if addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
+        </MenuGroup>
+        <MenuGroup>
+          {#if inApp && t && !onDevice}
+            {@const one = t}
+            <MenuEntry
+              icon="arrowDownToLine"
+              label="Download"
+              onclick={() => {
+                download([one]);
+                onclose();
+              }}
+            />
+          {/if}
+          {#if !onDevice}<MenuEntry icon="share" label="Share" onclick={shareIt} />{/if}
+        </MenuGroup>
+        <MenuGroup>
+          {#if !onDevice}<MenuEntry icon="info" label="Info" onclick={showDetails} />{/if}
+          <MenuEntry icon="search" label="Web search" onclick={webSearch} />
+          <MenuEntry icon="search" label="Genius search" onclick={geniusSearch} />
+        </MenuGroup>
+        <MenuGroup>
+          {#if movesHere && !forPlaying}
+            <MenuEntry icon="trash" label="Remove from queue" danger onclick={removeFromQueue} />
+          {/if}
+          {#each outs as o (o.label)}
+            <MenuEntry
+              icon={o.icon}
+              label={o.label}
+              danger
+              onclick={() => {
+                onclose();
+                o.run();
+              }}
+            />
+          {/each}
+        </MenuGroup>
+      </MenuCards>
     {:else if step === 'lists'}
       <PlaylistToggles title="Add to / remove from playlists" {playlists} ticked={(p) => p.member}>
         {#snippet entry(p)}<MenuEntry label={p.name} checked={p.member} disabled={busy} onclick={() => toggle(p.id, p.member)} />{/snippet}

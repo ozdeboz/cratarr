@@ -15,7 +15,9 @@
   import { me } from './me.svelte';
   import { startRadio } from './localPlayer.svelte';
   import { isKept, setKept } from './kept.svelte';
+  import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
+  import MenuGroup from './MenuGroup.svelte';
   import { isLocal, startPlaylists } from './output.svelte';
   import { openTab, viewSelection, panel, type Tab } from './panel.svelte';
   import { followCreate, followDelete, followRename, renameEverywhere } from './follow.svelte';
@@ -249,86 +251,100 @@
   step={mode}
 >
   {#if mode === 'menu'}
-    <div role="menu">
-      {#if !shown}
-        <MenuEntry icon="squareArrowOutUpRight" label="View" onclick={() => viewTab('tracks')} />
-      {/if}
-      <MenuEntry
-        icon="heart"
-        label={allFav ? 'Remove from favourites' : 'Add to favourites'}
-        onclick={() => {
-          setPlaylistFavorites([...ids], !allFav);
-          onclose();
-        }}
-      />
-      <MenuEntry icon="pin" label={allPinned ? 'Unpin' : 'Pin to top'} onclick={pin} />
-      {#if ondownload}
+    <!-- The shared groups, in their order (decision 0058). -->
+    <MenuCards>
+      <MenuGroup>
+        {#if !shown}<MenuEntry icon="squareArrowOutUpRight" label="View" onclick={() => viewTab('tracks')} />{/if}
+      </MenuGroup>
+      <MenuGroup>
         <MenuEntry
-          icon="arrowDownToLine"
-          label="Download"
+          icon="heart"
+          label="Favourite"
+          switched={allFav}
           onclick={() => {
+            setPlaylistFavorites([...ids], !allFav);
             onclose();
-            ondownload();
           }}
         />
-      {/if}
-      {#if one && keepFrom}
-        {@const from = keepFrom}
-        {@const p = one}
-        {@const on = isKept('playlist', from, p.id)}
-        <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('playlist', from, p.id, !on, p.name)} />
-      {/if}
-      {#if one}
-        <!-- Titled by its name; linked by its id (another user's shared one is "owner/name"). -->
-        {@const pid = one.id}
-        {@const name = one.name}
-        <MenuEntry
-          icon="share"
-          label="Share"
-          onclick={() => {
-            onclose();
-            share(name, name, linkTo('playlists', pid));
-          }}
-        />
-      {/if}
-      {#if one && one.mine === false}
-        {@const id = one.id}
-        <MenuEntry icon="copyCheck" label="Copy to my playlists" busy={working} disabled={working} onclick={() => copy(id)} />
-      {/if}
-      <!-- Sharing needs the permission to share; one shared before can always be unshared. -->
-      {#if one && one.mine !== false && one.shared !== undefined && (me.permissions.share || one.shared)}
-        {@const p = one}
-        <MenuEntry icon="users" label="Shared with other users" switched={!!p.shared} onclick={() => setShared(p.id, !p.shared)} />
-      {/if}
-      <!-- The panel's other views of them (back returns to their tracks). -->
-      <MenuEntry icon="info" label="Info" onclick={() => viewTab('info')} />
-      <MenuEntry icon="download" label="Export…" onclick={() => viewTab('export')} />
-      {#if !others}
-        <MenuEntry icon="repairs" label="Repair…" onclick={() => viewTab('repair')} />
-        {#if me.admin}<MenuEntry icon="link" label="Sync…" onclick={() => viewTab('sync')} />{/if}
-      {/if}
-      {#if one && !others}
-        <MenuEntry
-          icon="mic"
-          label="Spoken as…"
-          onclick={() => {
-            spokenField = (one.spoken ?? []).join(', ');
-            mode = 'spoken';
-          }}
-        />
-        <MenuEntry
-          icon="pencil"
-          label="Rename"
-          onclick={() => {
-            nameField = one.id;
-            mode = 'rename';
-          }}
-        />
-      {/if}
-      {#if !others}
-        <MenuEntry icon="trash" label={one ? 'Delete playlist' : `Delete ${ids.length} playlists`} danger onclick={() => (mode = 'delete')} />
-      {/if}
-    </div>
+      </MenuGroup>
+      <MenuGroup>
+        <MenuEntry icon="pin" label={allPinned ? 'Unpin' : 'Pin to top'} onclick={pin} />
+        {#if one && one.mine === false}
+          {@const id = one.id}
+          <MenuEntry icon="copyCheck" label="Copy to my playlists" busy={working} disabled={working} onclick={() => copy(id)} />
+        {/if}
+      </MenuGroup>
+      <MenuGroup>
+        {#if ondownload}
+          <MenuEntry
+            icon="arrowDownToLine"
+            label="Download"
+            onclick={() => {
+              onclose();
+              ondownload();
+            }}
+          />
+        {/if}
+        {#if one && keepFrom}
+          {@const from = keepFrom}
+          {@const p = one}
+          {@const on = isKept('playlist', from, p.id)}
+          <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('playlist', from, p.id, !on, p.name)} />
+        {/if}
+        <MenuEntry icon="download" label="Export…" onclick={() => viewTab('export')} />
+        {#if one}
+          <!-- Titled by its name; linked by its id (another user's shared one is "owner/name"). -->
+          {@const pid = one.id}
+          {@const name = one.name}
+          <MenuEntry
+            icon="share"
+            label="Share"
+            onclick={() => {
+              onclose();
+              share(name, name, linkTo('playlists', pid));
+            }}
+          />
+        {/if}
+        <!-- Sharing needs the permission to share; one shared before can always be unshared. -->
+        {#if one && one.mine !== false && one.shared !== undefined && (me.permissions.share || one.shared)}
+          {@const p = one}
+          <MenuEntry icon="users" label="Shared with other users" switched={!!p.shared} onclick={() => setShared(p.id, !p.shared)} />
+        {/if}
+      </MenuGroup>
+      <MenuGroup>
+        <!-- The panel's other views of them (back returns to their tracks). -->
+        <MenuEntry icon="info" label="Info" onclick={() => viewTab('info')} />
+      </MenuGroup>
+      <MenuGroup>
+        {#if one && !others}
+          <MenuEntry
+            icon="pencil"
+            label="Rename"
+            onclick={() => {
+              nameField = one.id;
+              mode = 'rename';
+            }}
+          />
+          <MenuEntry
+            icon="mic"
+            label="Spoken as…"
+            onclick={() => {
+              spokenField = (one.spoken ?? []).join(', ');
+              mode = 'spoken';
+            }}
+          />
+        {/if}
+        {#if !others}
+          <MenuEntry icon="repairs" label="Repair…" onclick={() => viewTab('repair')} />
+          {#if me.admin}<MenuEntry icon="link" label="Sync…" onclick={() => viewTab('sync')} />{/if}
+        {/if}
+      </MenuGroup>
+      <MenuGroup>
+        {#if !others}
+          <MenuEntry icon="trash" label={one ? 'Delete playlist' : `Delete ${ids.length} playlists`} danger onclick={() => (mode = 'delete')} />
+        {/if}
+      </MenuGroup>
+    </MenuCards>
   {:else if mode === 'rename' && one}
     <form
       class="form"

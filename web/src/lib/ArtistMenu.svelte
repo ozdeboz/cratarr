@@ -98,6 +98,11 @@
     onclose();
     share(name, name, linkTo('library', artistSubject(source, name)));
   }
+  // Know (decision 0058): a web search on their name, as an album's.
+  function webSearch() {
+    onclose();
+    window.open(`https://duckduckgo.com/?q=${encodeURIComponent(name)}`, '_blank', 'noopener');
+  }
 
   // Their picture on this device (lib/localCovers, as an album's cover): one chosen here, or none (their newest
   // album's cover again).
@@ -135,9 +140,15 @@
   {step}
 >
   {#if step === 'menu'}
+    <!-- The shared groups, in their order (decision 0058). -->
     <MenuCards>
       <MenuGroup>
+        {#if favorite !== undefined}<MenuEntry icon="heart" label="Favourite" switched={favorite} onclick={ontogglefavorite} />{/if}
+      </MenuGroup>
+      <MenuGroup>
         {#if toList.addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
+      </MenuGroup>
+      <MenuGroup>
         {#if inApp && tracks.length && kept.length < tracks.length}
           <MenuEntry
             icon="arrowDownToLine"
@@ -153,22 +164,28 @@
           {@const on = isKept('artist', source, name)}
           <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('artist', source, name, !on, name)} />
         {/if}
+        <MenuEntry icon="share" label="Share" onclick={shareIt} />
+      </MenuGroup>
+      <MenuGroup>
+        <MenuEntry icon="search" label="Web search" onclick={webSearch} />
+      </MenuGroup>
+      <MenuGroup>
+        <MenuEntry icon="image" label="Change picture on this device" onclick={() => picker?.click()} />
+        {#if ownPicture}<MenuEntry icon="imageOff" label="Use their album cover" onclick={dropPicture} />{/if}
+      </MenuGroup>
+      <MenuGroup>
         {#if kept.length}
           {@const keptIds = kept.map((t) => t.download.id)}
           <MenuEntry
             icon="trash"
             label="Remove from this device"
+            danger
             onclick={() => {
               onclose();
               removeDownloads(keptIds);
             }}
           />
         {/if}
-        <MenuEntry icon="share" label="Share" onclick={shareIt} />
-      </MenuGroup>
-      <MenuGroup>
-        <MenuEntry icon="image" label="Change picture on this device" onclick={() => picker?.click()} />
-        {#if ownPicture}<MenuEntry icon="imageOff" label="Use their album cover" onclick={dropPicture} />{/if}
       </MenuGroup>
       <input class="picker" type="file" accept="image/*" bind:this={picker} onchange={chosen} />
     </MenuCards>

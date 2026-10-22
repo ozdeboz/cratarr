@@ -1754,9 +1754,9 @@
       attach={fromAction(swipe, () => ({ enabled: !selecting, right: ok ? () => playNext(r, src) : null, left: out }))}
       attachMain={fromAction(longpress, () => () => {
         if (!ok || onDevice) return;
-        if (i === null) trackMenu = { track: asTrack(r, src), start: 'menu', outs: menuOuts(out, name) };
-        else if (selecting) selectSheet = true;
-        else startSelect(i);
+        // In select mode it asks what to tick; else the track's menu (decision 0058: Select is the header's).
+        if (selecting && i !== null) selectSheet = true;
+        else trackMenu = { track: asTrack(r, src), start: 'menu', outs: menuOuts(out, name) };
       })}
     >
       {#snippet lead()}{@render cover(r, src, here)}{/snippet}

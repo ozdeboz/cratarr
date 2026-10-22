@@ -121,7 +121,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   year, format, bitrate; otherwise how many tracks and the length), an album's artist as a chip, the genres. Over the
   tracks **their order** (the subject's own, or by title, artist, album, length; a playlist's also by album artist, year,
   track number, play count, last played and when an entry was added, for entries added since 2026-10-16; a tap chooses, the arrow turns it
-  round), how many, and **select mode** (a long-press on a track, or the icon: circles to tick, and a bar floating over
+  round), how many, and **select mode** (the icon, decision 0058; a long-press opens the track's menu: circles to tick, and a bar floating over
   the list's end plays, puts next, queues or favours the ticked tracks, and in the app downloads them). An album's rows have no cover: the number,
   the playing one's dots instead; every track's row ends in ⋮ (its menu). **An album ends** as Symfonium's (decided
   2026-10-16): More from the artist (their other albums on that server, newest first, in a row that scrolls sideways;
@@ -147,6 +147,10 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   (`lib/TopPill.svelte`, `pageView.usePageAction`): the name editable where it shows ("New playlist", "New crate" until
   typed), the caret in it at once, Cancel and Save (once it has a name) in the action bar's place. A new playlist is
   made by its Save (`?view=playlist-new`); a new crate is the builder, saved with its Save.
+- **What a menu holds and how it opens** (decision 0058): in the music lists a long-press, a right-click or ⋮ opens
+  the object's menu (Select is the list header's); the entries come in fixed groups (Go to, Feel, Collect, Take away,
+  Know, Change, Remove last) with the same names everywhere. The visuals' menus follow this; the rack's long-press
+  selects.
 - **A menu's head and actions** (`lib/MenuSheet.svelte`, decided 2026-10-16, as Symfonium's): a small cover (64 px),
   the title large beside it and what it is under that in one muted line, on the sheet itself (no card); a track's,
   an album's heart at the end. The large actions are icons only (their words on a long-press, as every icon
@@ -210,7 +214,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   tap on the label views the playlist (decision 0023). **Select** (decision 0025, in the toolbar) makes a tap on the
   label tick the playlist instead (the panel shows the ticked ones beside the page; on a phone View N, an icon);
   the circle keeps adding or removing the playing track; with playlists ticked, a ⋮ at the pill's end (where
-  + New playlist is otherwise) is the playlist menu for them (a long-press ticks a playlist, as select mode's; for
+  + New playlist is otherwise) is the playlist menu for them (a long-press opens a playlist's own menu, decision 0058; for
   several without Spoken as…, Rename and Share). A ticked playlist has the border of the one viewed in the
   panel: one state, one look. A favourite playlist has a small red heart (Finamp's list mark)
   above the problems' dot, in the dot's place, so the chip gets no wider. The playlist viewed in the panel has a border

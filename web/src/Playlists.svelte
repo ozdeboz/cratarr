@@ -45,7 +45,7 @@
 
   // The open menu (a sheet, decision 0021): a playlist's (lib/PlaylistMenu), the "New playlist" one, or the ticked
   // playlists' (Select's ⋮, decision 0025).
-  type Menu = { kind: 'selection' };
+  type Menu = { kind: 'selection' } | { kind: 'one'; id: string };
   let menu = $state<Menu | null>(null);
 
   const np = $derived(playing());
@@ -202,10 +202,9 @@
             label={select.on ? `${select.picked.includes(p.id) ? 'Untick' : 'Tick'} ${p.name}` : `View ${p.name}`}
             onclick={() => (select.on ? tick(p.id) : viewPlaylist(p.id))}
             attach={fromAction(longpress, () => () => {
-              // In Select it asks what to tick (lib/SelectSheet).
+              // In Select it asks what to tick (lib/SelectSheet); else the playlist's menu (decision 0058).
               if (select.on) return void (selectSheet = true);
-              startSelect();
-              if (!select.picked.includes(p.id)) tick(p.id);
+              menu = { kind: 'one', id: p.id };
             })}
           >
             {#snippet action()}
@@ -245,8 +244,12 @@
 </main>
 
 {#if menu?.kind === 'selection'}
-  <!-- The menu of what is ticked (a long-press ticks). -->
+  <!-- The menu of what is ticked. -->
   <PlaylistMenu playlists={select.picked.flatMap((id) => shownPlaylists().filter((x) => x.id === id))} onclose={() => (menu = null)} />
+{:else if menu?.kind === 'one'}
+  <!-- A playlist's own menu (its long-press). -->
+  {@const id = menu.id}
+  <PlaylistMenu playlists={shownPlaylists().filter((x) => x.id === id)} onclose={() => (menu = null)} />
 {/if}
 
 {#if selectSheet}

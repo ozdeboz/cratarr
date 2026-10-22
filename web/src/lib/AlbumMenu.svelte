@@ -485,17 +485,21 @@
         {#each artistNames as name (name)}<MenuEntry icon="user" label="Go to {name}" onclick={() => goToArtist(name)} />{/each}
         {#each genres as g (g)}<MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />{/each}
       </MenuGroup>
-      {#if rating !== null}
-        {@const r = rating}
-        <MenuGroup>
+      <!-- Feel: the favourite and the rating. -->
+      <MenuGroup>
+        <MenuEntry icon="heart" label="Favourite" switched={fav} onclick={toggleFavourite} />
+        {#if rating !== null}
+          {@const r = rating}
           <div class="entry rating">
             <span>Rating</span>
             <RatingStars value={r} onrate={(n) => rateAlbum(source, a.id, n)} />
           </div>
-        </MenuGroup>
-      {/if}
+        {/if}
+      </MenuGroup>
       <MenuGroup>
         {#if addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
+      </MenuGroup>
+      <MenuGroup>
         {#if inApp && tracks?.length && kept.length < tracks.length}
           {@const list = tracks}
           <MenuEntry
@@ -512,41 +516,45 @@
           {@const on = isKept('album', source, a.id)}
           <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('album', source, a.id, !on, a.title)} />
         {/if}
+        <MenuEntry icon="share" label="Share" onclick={shareIt} />
+      </MenuGroup>
+      <MenuGroup>
+        <MenuEntry icon="search" label="Web search" onclick={() => search('https://duckduckgo.com/?q=')} />
+        <MenuEntry icon="search" label="Genius search" onclick={() => search('https://genius.com/search?q=')} />
+      </MenuGroup>
+      <!-- Change: its cover on this device, its resume point, and (its administrators', decision 0051) the library's. -->
+      <MenuGroup>
+        <MenuEntry icon="image" label="Change cover on this device" onclick={() => picker?.click()} />
+        <MenuEntry icon={ownCover ? 'imageOff' : 'reset'} label={ownCover ? "Use the server's cover" : 'Read the cover again'} onclick={serverCover} />
+        {#if resumeAt}<MenuEntry icon="resume" label="Remove resume point" onclick={forgetResume} />{/if}
+      </MenuGroup>
+      {#if me.admin && offer && (offer.job !== null || offer.targets.length || offer.replaceable)}
+        {@const o = offer}
+        <MenuGroup label="Library">
+          {#if o.job !== null}
+            {@const job = o.job}
+            <MenuEntry icon="close" label="Cancel conversion" onclick={() => cancel(job)} />
+          {:else}
+            {#each o.targets as t (t.id)}<MenuEntry icon="intoBox" label={`Move to ${t.name}`} onclick={() => askMove(t)} />{/each}
+            {#if o.replaceable}<MenuEntry icon="swap" label={`Replace in ${music}`} onclick={askReplace} />{/if}
+          {/if}
+        </MenuGroup>
+      {/if}
+      <!-- Remove, last. -->
+      <MenuGroup>
         {#if kept.length}
           {@const ids = kept.map((t) => t.download.id)}
           <MenuEntry
             icon="trash"
             label="Remove from this device"
+            danger
             onclick={() => {
               onclose();
               removeDownloads(ids);
             }}
           />
         {/if}
-        <MenuEntry icon="share" label="Share" onclick={shareIt} />
-      </MenuGroup>
-      <!-- Changes to the library are its administrators' (decision 0051). -->
-      {#if me.admin && offer && (offer.job !== null || offer.targets.length || offer.replaceable || offer.deletable)}
-        {@const o = offer}
-        <MenuGroup label="Library">
-          {#if o.job !== null}
-            {@const job = o.job}
-            <MenuEntry icon="close" label="Cancel conversion" danger onclick={() => cancel(job)} />
-          {:else}
-            {#each o.targets as t (t.id)}<MenuEntry icon="intoBox" label={`Move to ${t.name}`} onclick={() => askMove(t)} />{/each}
-            {#if o.replaceable}<MenuEntry icon="swap" label={`Replace in ${music}`} onclick={askReplace} />{/if}
-            {#if o.deletable}<MenuEntry icon="trash" label="Delete album" danger onclick={() => (ask = 'delete')} />{/if}
-          {/if}
-        </MenuGroup>
-      {/if}
-      <MenuGroup>
-        <MenuEntry icon="image" label="Change cover on this device" onclick={() => picker?.click()} />
-        <MenuEntry icon={ownCover ? 'imageOff' : 'reset'} label={ownCover ? "Use the server's cover" : 'Read the cover again'} onclick={serverCover} />
-      </MenuGroup>
-      <MenuGroup>
-        {#if resumeAt}<MenuEntry icon="resume" label="Remove resume point" onclick={forgetResume} />{/if}
-        <MenuEntry icon="search" label="Web search" onclick={() => search('https://duckduckgo.com/?q=')} />
-        <MenuEntry icon="search" label="Genius search" onclick={() => search('https://genius.com/search?q=')} />
+        {#if me.admin && offer && offer.job === null && offer.deletable}<MenuEntry icon="trash" label="Delete album" danger onclick={() => (ask = 'delete')} />{/if}
       </MenuGroup>
       <input class="picker" type="file" accept="image/*" bind:this={picker} onchange={chosen} />
     </MenuCards>

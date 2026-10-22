@@ -299,7 +299,9 @@
     addEventListener('keydown', esc);
     return () => removeEventListener('keydown', esc);
   });
-  const longPress = (s: ShelfSource, a: ListedAlbum) => fromAction(longpress, () => () => (selecting ? (selectSheet = true) : startSelect(s, a)));
+  // A long-press opens the album's menu (decision 0058: the menu in the lists; Select is the header's); in select mode it
+  // asks what to tick.
+  const longPress = (s: ShelfSource, a: ListedAlbum) => fromAction(longpress, () => (rect: DOMRect) => (selecting ? (selectSheet = true) : openMenu(s, a, rect)));
 
   const listOf = () => ticked.map((x) => ({ source: x.s.id, a: x.a }));
   async function playTicked(mode: 'play' | 'next' | 'last') {
