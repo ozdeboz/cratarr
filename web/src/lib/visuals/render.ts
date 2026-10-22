@@ -30,6 +30,7 @@ import { Screen } from './nodes/screen';
 import { Thumbs } from './nodes/thumbs';
 import { chain, IDENTITY, transformOf } from './transform';
 import { Show } from './nodes/show';
+import type { NodeParams } from './engine/graph';
 import { none } from './nodes/shared';
 
 /** Show's look with only `parts` of Show's drawn in its pass (by type), the rest at their neutral: no bend, no
@@ -42,6 +43,18 @@ function showWith(look: ShowParams, parts: ReadonlySet<string>): ShowParams {
     ...(parts.has('blur') ? {} : { smoothing: 0 }),
     ...(parts.has('curve') ? {} : { gamma: 3, floor: 0 }),
     ...(parts.has('saturate') ? {} : { saturation: 1 }),
+  };
+}
+
+/** Show's look with each part's own values (its module's: the engine's `params`, step 5) where it has them. */
+function ownShow(look: ShowParams, of: (type: string) => NodeParams | undefined): ShowParams {
+  const [tone, sat, curve, blur] = [of('tonemap'), of('saturate'), of('curve'), of('blur')];
+  return {
+    ...look,
+    ...(tone?.flash !== undefined ? { flash: tone.flash } : {}),
+    ...(sat?.saturation !== undefined ? { saturation: sat.saturation } : {}),
+    ...(curve?.gamma !== undefined ? { gamma: curve.gamma, floor: curve.floor ?? 0 } : {}),
+    ...(blur?.smoothing !== undefined ? { smoothing: blur.smoothing } : {}),
   };
 }
 
@@ -121,6 +134,8 @@ export type PictureInputs = {
   points?: (moduleId: string) => readonly { x: number; y: number }[] | undefined;
   /** The playing track's cover, loaded (the Music module's picture; none: none yet, or no cover). */
   cover?: () => TexImageSource | null;
+  /** What each chain module's node draws with this frame, from its own knobs (the engine's `params`, step 5). */
+  params?: (id: string) => NodeParams | undefined;
 };
 
 /** The page's extras of today (a v1 PatchExtra): its layers past the flame and the picture's own loop as drawn, each
@@ -172,6 +187,8 @@ export class FlameRenderer {
   private showOut: string | null = null;
   /** The types of Show's parts drawn in its pass (the rest neutral there). */
   private showParts = new Set<string>();
+  /** Show's parts' modules by type (whose values it draws with). */
+  private showIds = new Map<string, string>();
   /** The observed Show part's picture (Show's pass drawn again as far as it), at the buffer's size. */
   private peek: { tex: WebGLTexture; fbo: WebGLFramebuffer; w: number; h: number } | null = null;
   /** The Music modules, whether one's cover reaches the Screen, and the cover as a texture (made again as it changes). */
@@ -252,6 +269,7 @@ export class FlameRenderer {
     this.lightTransforms = stages ? c.order.filter((n) => n.type === 'transform' && stageOf(n) === 'points').map((n) => n.id) : [];
     this.showOut = stages ? (c.order.filter((n) => stageOf(n) === 'show').at(-1)?.id ?? null) : null;
     this.showParts = new Set(stages ? c.order.filter((n) => stageOf(n) === 'show').map((n) => n.type) : SHOW_PARTS.map((p) => p.type));
+    this.showIds = new Map(stages ? c.order.filter((n) => stageOf(n) === 'show').map((n) => [n.type, n.id]) : []);
     this.musicIds = new Set(flat.modules.filter((m) => m.type === 'music').map((m) => m.id));
     this.coverDrawn = !!stages && c.order.some((n) => n.type === 'music');
     this.walker?.prune(this.composed?.ids ?? new Set());
@@ -320,6 +338,7 @@ export class FlameRenderer {
   frame(passes: number, now: ChainNow | null, viewWidth: number, viewHeight: number, inputs: PictureInputs | Extras | null = null) {
     const given = inputs && 'extra' in inputs ? inputsOfExtras(inputs) : inputs;
     const knobsAt = (id: string) => given?.knobs(id) ?? this.knobsIn.get(id) ?? {};
+    const shown = now ? ownShow(now.show, (type) => (this.showIds.has(type) ? given?.params?.(this.showIds.get(type)!) : undefined)) : null;
     const [screenWidth, screenHeight] = [viewWidth, viewHeight];
     const gl = this.gl;
     const light = this.light;
@@ -385,7 +404,7 @@ export class FlameRenderer {
     if (drawn) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, into ? into.fbo : null);
       if (into) viewWidth = light.width, viewHeight = light.height;
-      this.show.draw(light, this.points, showWith(now!.show, this.showParts), passes, fluid, this.showParts.has('bend') ? this.carry.warpShown : 0, viewWidth, viewHeight);
+      this.show.draw(light, this.points, showWith(shown!, this.showParts), passes, fluid, this.showParts.has('bend') ? this.carry.warpShown : 0, viewWidth, viewHeight);
     }
     const info = given?.frame ?? { dt: since, time: at / 1000, beat: null, signals: () => 0, waveform: null };
     // Without the flame drawn, the compose step starts from nothing where Show's picture would be.
@@ -399,7 +418,7 @@ export class FlameRenderer {
     if (seeing) {
       const n = this.compiled?.order.find((x) => x.id === seeing);
       const parts = n ? partsUpTo(this.showParts, n.type) : null;
-      const part = drawn && n && parts && stageOf(n) === 'show' && n.id !== this.showOut ? this.peekShow(showWith(now!.show, parts), passes, fluid, parts.has('bend')) : null;
+      const part = drawn && n && parts && stageOf(n) === 'show' && n.id !== this.showOut ? this.peekShow(showWith(shown!, parts), passes, fluid, parts.has('bend')) : null;
       this.look(seeing, this.seenOf(seeing, source, walking ? this.walker!.seen : null, drawn ? into : null, part, cover));
       this.walker?.unpin();
     }

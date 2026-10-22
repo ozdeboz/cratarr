@@ -456,6 +456,7 @@ export class VisualsLoop {
         knobs: (id) => stepped.knobs[id],
         target: (id, knob) => easing?.to[id]?.[knob] ?? stepped.knobs[id]?.[knob] ?? flat.modules.find((x) => x.id === id)?.knobs[knob] ?? 0,
         frame: { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null },
+        params: (id) => stepped.params[id],
         points: (id) => stepped.points[id],
         cover: () => (coverPicture?.key === m.key ? coverPicture.image : null),
       };
@@ -563,7 +564,9 @@ export class VisualsLoop {
       }
       const fluidAt = Object.entries(stepped.pointsAt)[0]?.[1];
       const beatNow = m.playing ? m.beat : null;
-      const wavesNow = d.given[A.waves] * levers.pace;
+      // The Show's Bend's own waves (step 5).
+      const bendId = flat.modules.find((x) => x.type === 'bend')?.id;
+      const wavesNow = (bendId ? (stepped.params[bendId]?.waves ?? d.given[A.waves]) : d.given[A.waves]) * levers.pace;
       const gains = fluidGains(flat);
       const stirred = stir(stirring, {
         t: now / 1000,

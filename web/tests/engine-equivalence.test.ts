@@ -188,7 +188,7 @@ test("the extras (modulators, macros, a layer's knobs) as evaluate.ts moved them
   assert.ok(moments > 0 && moments < 600 / 30 / 2 + 1, `the hits asked ${moments} moments, two seconds apart at most`);
 });
 
-test("each chain module's own knobs (step 5, the one engine) are the chain's columns: the same, by module", async () => {
+test("each chain module's own knobs and node values (step 5, the one engine) are the chain's: the same, by module", async () => {
   const { A } = await import('../src/lib/visuals/routes.ts');
   const { BANDS } = await import('../src/lib/visuals/settings.svelte.ts');
   const swing: [keyof typeof A, string, string][] = [['brightness', 'show/tonemap', 'glow'], ['size', 'flame', 'zoom'], ['saturation', 'show/saturate', 'saturation'], ['trails', 'trails', 'trails'], ['waves', 'show/bend', 'waves'], ['stir', 'fluid', 'stir'], ['flow', 'fluid', 'flow'], ['swirl', 'fluid', 'swirl']];
@@ -210,6 +210,15 @@ test("each chain module's own knobs (step 5, the one engine) are the chain's col
         for (const [a, id, knob] of swing) if (mod(id)) assert.ok(Math.abs(f.knobs[id][knob] - g.whole[A[a]]) < 1e-9, `${a}: ${f.knobs[id][knob]} vs ${g.whole[A[a]]}`);
         for (const [a, knob] of parts) for (let b = 0; b < BANDS; b++) assert.ok(Math.abs(f.knobs.flame[`${knob}.${b}`] - (g.whole[A[a]] + g.band[b][A[a]])) < 1e-9, `${a}.${b}`);
         for (const [a, id, knob, lo] of levels) if (mod(id)) assert.ok(Math.abs(f.knobs[id][knob] - clamp(mod(id)!.knobs[knob] * g.level[A[a]], lo, 1)) < 1e-9, `${a}`);
+        // The Show's parts' own node values (5b): what the chain gave.
+        const d = f.aspects!;
+        const near = (a: number | undefined, b: number, what: string) => assert.ok(a !== undefined && Math.abs(a - b) < 1e-9, `${what}: ${a} vs ${b}`);
+        near(f.params['show/tonemap']?.flash, d.flash, 'flash');
+        near(f.params['show/saturate']?.saturation, d.saturation, 'saturation');
+        near(f.params['show/curve']?.gamma, d.gamma, 'gamma');
+        near(f.params['show/curve']?.floor, d.floor, 'floor');
+        near(f.params['show/blur']?.smoothing, d.smoothing, 'smoothing');
+        near(f.params['show/bend']?.waves, d.given[A.waves], 'waves');
         checked++;
         return f.aspects;
       },

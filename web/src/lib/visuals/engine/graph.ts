@@ -8,6 +8,7 @@
 // What aspects.ts and evaluate.ts did between them, in one place and all of it wired.
 
 import type { AspectsNow } from '../aspects';
+import { hazeOf } from '../aspects';
 import { heightOf, shapeOf, type Shape } from '../evaluate';
 import { seedOf } from '../flame';
 import type { Levers } from './sidechain';
@@ -25,7 +26,7 @@ import { FLASH_GUARD } from './sidechain';
 import type { MeterValues } from '../meters';
 import { slotKnobOf, slotOf } from './effect-slots';
 import { musicView } from './music-signals';
-import { NO_STRIKE, adsrOf, newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from './modules';
+import { NO_STRIKE, adsrOf, courseStep, newAccent, stepAccent, type AccentState, newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from './modules';
 
 const NA = ASPECTS.length;
 const IS_LEVEL = ASPECTS.map((a) => LEVEL_ASPECTS.includes(a));
@@ -103,6 +104,8 @@ export type EngineState = {
   signals: Float32Array;
   standIn: Float32Array[];
   got: Given;
+  /** Each chain module's Accent courses (`<module>|<knob>`): its swings followed slower, the accent on what is left. */
+  accents: Record<string, AccentState>;
   modulators: Record<string, { type: string; run: Modulator }>;
   /** Each modulator's last output (a cycle reads it). */
   values: Record<string, number>;
@@ -138,6 +141,7 @@ export function newEngine(): EngineState {
       return v;
     }),
     got: given(BANDS),
+    accents: {},
     modulators: {},
     values: {},
     macros: {},
@@ -164,6 +168,9 @@ export type EngineFrame = {
   aspects: AspectsNow | null;
   /** Every module's knobs as their cables move them (the chain's: its settings, its columns given in `aspects`). */
   knobs: Record<string, Record<string, number>>;
+  /** What each chain module's node draws with this frame (step 5, the one engine), from its own knobs: a Show part's
+   *  (Tone map's flash, Saturate's saturation, Curve's gamma and floor, Blur's smoothing, Bend's waves). */
+  params: Record<string, NodeParams>;
   /** Every value output this frame, by `module.port`: the same object each frame while the patch is the same (copy what
    *  is to be kept). */
   outputs: Record<string, number>;
@@ -181,6 +188,9 @@ export type EngineFrame = {
    *  with (randomize.ts: over frames, as one undoable change through the store). */
   dice: DiceRoll[];
 };
+
+/** A chain module's node values (EngineFrame.params), by its type. */
+export type NodeParams = { flash?: number; saturation?: number; gamma?: number; floor?: number; smoothing?: number; waves?: number };
 
 /** A Dice's roll: which, the seed its seed input gives (Music's `seed`: the track's own), its scope. */
 /** A Dice's roll: its seed, its scope, and how far from where each knob is (`reach` 0..1: 1, anywhere in its range). */
@@ -1070,6 +1080,22 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
         { ...opts, levers: held },
       );
 
+  // Each chain module's node values from its own knobs (step 5): what aspects.ts made of the chain's columns, its
+  // Accent's courses its own.
+  const params: Record<string, NodeParams> = {};
+  const follow = courseStep(step, held.swing);
+  const accented = (id: string, knob: string, v: number) => stepAccent((st.accents[`${id}|${knob}`] ??= newAccent()), v, follow, chainSettings.flash, held.swing);
+  for (const { own } of plan.owns) {
+    const k = knobs[own.id];
+    const x = moduleOf.get(own.id);
+    if (own.type === 'tonemap') params[own.id] = { flash: (x ? finite(x.knobs.level, 1) * gainOf(own.id, 'level') : env.glow) * clamp(accented(own.id, 'glow', 1 + 0.5 * k.glow), 0.15, 3) };
+    else if (own.type === 'saturate') params[own.id] = { saturation: clamp(accented(own.id, 'saturation', 0.35 + 0.65 * k.saturation), 0, 1.25) };
+    else if (own.type === 'curve') params[own.id] = hazeOf(k.haze);
+    else if (own.type === 'blur') params[own.id] = { smoothing: 12 * k.smoothing ** 2 };
+    else if (own.type === 'bend') params[own.id] = { waves: k.waves };
+  }
+  for (const id of Object.keys(st.accents)) if (!moduleOf.has(id.slice(0, id.lastIndexOf('|')))) delete st.accents[id];
+
   // Every other module's knobs, as the evaluator moves a knob.
   if (!plan.others) {
     plan.others = [];
@@ -1108,7 +1134,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     const got = cabled ? pointsOf(cabled.from) : flameModule ? (opts.flamePoints ?? null) : null;
     if (got) pointsAt[`${x.id}.at`] = got;
   }
-  return { aspects, knobs, outputs, macros, nexts, points, pointsAt, dice };
+  return { aspects, knobs, params, outputs, macros, nexts, points, pointsAt, dice };
 
   /** A module's knobs as its macros and cables move them. */
   /** A knob's base as its macros set it, along its taper (an exponential knob's geometrically: 0057's Wild). */
