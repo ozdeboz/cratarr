@@ -228,7 +228,8 @@ export class VisualsLoop {
         applyKnobs(p, values);
         for (const c of p.cables) if (c.id in cables) c.value = cables[c.id];
       };
-      if (edit) host.store.change(f, edit);
+      // A roll (the dice's, a reset) is one undo step of its own: never merged with the one before, however soon after.
+      if (edit) host.store.change(f, null);
       else host.store.perform(f);
       if (ms > 0) easing = { from: fromValues, to: toValues, start: now, ms };
     };
@@ -332,7 +333,7 @@ export class VisualsLoop {
       const flatTypes = new Map(flat.modules.map((x) => [x.id, x.type]));
       const flameId = flat.modules.find((x) => x.type === 'flame')?.id;
       // The Flame's parts as seeds where its Points are cabled into Streamlines (measured then as for the Fluid's pushes).
-      const flameSeeding = !!flameId && flat.cables.some((c) => c.from.module === flameId && c.from.port === 'points' && flatTypes.get(c.to.module) === 'streamlines');
+      const flameSeeding = !!flameId && flat.cables.some((c) => c.from.module === flameId && c.from.port === 'points' && (flatTypes.get(c.to.module) === 'streamlines' || (flatTypes.get(c.to.module) === 'grid' && c.to.port === 'at')));
       const flameSeeds = () => {
         const aspect = renderer ? renderer.width / Math.max(1, renderer.height) : 16 / 9;
         return partsWhere.filter((q): q is [number, number] => !!q).map(([px, py]) => (aspect > 1 ? { x: (2 * px - 1) * aspect, y: 2 * py - 1 } : { x: 2 * px - 1, y: (2 * py - 1) / aspect }));
@@ -451,7 +452,7 @@ export class VisualsLoop {
         renderer!.resize(bw, bh);
         return [w, h, resized, top];
       };
-      const stepped = stepEngine(engine, flat, host.types, m, read, how, dt, { now, fluidFull: FLUID_FULL, meters: meterValues, flamePoints: partsWhere, flameFrame });
+      const stepped = stepEngine(engine, flat, host.types, m, read, how, dt, { now, fluidFull: FLUID_FULL, meters: meterValues, flamePoints: partsWhere, flameFrame, aspect: renderer ? renderer.width / Math.max(1, renderer.height) : undefined });
       // The sidechains act only through their cables (toV2's holds, in sight); what they hold back is read off the
       // Duckers' outputs for the page's mark, nothing else.
       const sidechains = leversOf(stepped.outputs);
