@@ -6,17 +6,24 @@ export type Point = { x: number; y: number };
 /** The most points an Instance or a Fold reads (a Grid's most). */
 export const MOST = 64;
 
-/** The cell each point has: the distance to its nearest neighbour (the closest pair's, so no two cells overlap);
- *  a lone point the whole short side. */
+/** The cell each point has: the median of the points' distances to their nearest neighbours (a lattice's spacing; points
+ *  a flow carries keep their size as two of them meet, their cells overlapping where they do); a lone point the whole
+ *  short side. */
 export function spacingOf(points: readonly Point[]): number {
   const n = Math.min(points.length, MOST);
-  let best = Infinity;
-  for (let i = 0; i < n; i++)
-    for (let j = i + 1; j < n; j++) {
+  const nearest: number[] = [];
+  for (let i = 0; i < n; i++) {
+    let best = Infinity;
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
       const d = Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y);
       if (d > 1e-6 && d < best) best = d;
     }
-  return Math.min(2, best);
+    if (Number.isFinite(best)) nearest.push(best);
+  }
+  if (!nearest.length) return 2;
+  nearest.sort((a, b) => a - b);
+  return Math.min(2, nearest[nearest.length >> 1]);
 }
 
 /** Up to `MOST` points as x, y pairs (into `out`, made once), and how many. */

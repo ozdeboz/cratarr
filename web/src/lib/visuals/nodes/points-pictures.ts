@@ -8,7 +8,7 @@ import { MOST, packed, spacingOf, type Point } from '../points-pictures';
 import { FIELD_GLSL } from '../field';
 import { program } from '../sources/gl';
 import { toScreen } from '../transform';
-import type { ModuleNode } from './modules';
+import type { FlowField, ModuleNode } from './modules';
 import { none } from './shared';
 
 const QUAD = `#version 300 es
@@ -200,6 +200,35 @@ export function createFold(gl: WebGL2RenderingContext): ModuleNode {
   );
 }
 
+// A flow as the shaders read it (`flowAt`, in the frame's units a second, centred, the short side -1..1): a Field's sum
+// (uFormula 1) or the Fluid's velocity texture.
+const FLOW_AT = `uniform sampler2D uVelocity;
+uniform vec2 uUvPerCell;
+uniform int uFormula;
+uniform float uScale;
+uniform float uPhase;
+uniform vec2 uK;
+${FIELD_GLSL}
+vec2 flowAt(vec2 p) {
+  if (uFormula == 1) return fieldAt(p, uScale, uPhase);
+  vec2 cells = textureLod(uVelocity, p * uK * 0.5 + 0.5, 0.0).xy;
+  return cells * uUvPerCell * 2.0 / uK;
+}`;
+
+/** The flow's uniforms for a program with FLOW_AT, its texture on unit `unit`. */
+function setFlow(gl: WebGL2RenderingContext, p: WebGLProgram, field: FlowField, unit: number, width: number, height: number) {
+  const u = (name: string) => gl.getUniformLocation(p, name);
+  const formula = 'scale' in field;
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D, formula ? none(gl) : field.tex);
+  gl.uniform1i(u('uVelocity'), unit);
+  gl.uniform2f(u('uUvPerCell'), ...(formula ? ([1, 1] as [number, number]) : field.uvPerCell));
+  gl.uniform1i(u('uFormula'), formula ? 1 : 0);
+  gl.uniform1f(u('uScale'), formula ? field.scale : 1);
+  gl.uniform1f(u('uPhase'), formula ? field.phase : 0);
+  gl.uniform2f(u('uK'), ...toScreen(width / height));
+}
+
 // Streamlines (the owner's evolving flow field: a field, curves traced through it from seed points, drawn anew each
 // frame; not a feedback warp): each seed a ribbon of STEPS steps, its vertices walked along the flow's direction from
 // the seed in the vertex shader (Euler, the step its Length over STEPS), widened by Thickness across the way it goes,
@@ -209,13 +238,8 @@ const LINES = `#version 300 es
 precision highp float;
 precision highp int;
 layout(location = 0) in vec2 aSeed;
-uniform sampler2D uVelocity;
-uniform vec2 uUvPerCell;
-uniform int uFormula;
-uniform float uScale;
-uniform float uPhase;
+${FLOW_AT}
 uniform float uSat;
-uniform vec2 uK;
 uniform float uStep;
 uniform float uHalf;
 uniform float uCalm;
@@ -223,12 +247,6 @@ uniform float uHue;
 uniform float uSpread;
 uniform float uLines;
 out vec4 vColour;
-${FIELD_GLSL}
-vec2 flowAt(vec2 p) {
-  if (uFormula == 1) return fieldAt(p, uScale, uPhase);
-  vec2 cells = textureLod(uVelocity, p * uK * 0.5 + 0.5, 0.0).xy;
-  return cells * uUvPerCell * 2.0 / uK;
-}
 vec3 hsv(float h) { return clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0); }
 void main() {
   int s = gl_VertexID >> 1;
@@ -288,16 +306,8 @@ export function createStreamlines(gl: WebGL2RenderingContext): ModuleNode {
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, n * 2);
       gl.bindBuffer(gl.ARRAY_BUFFER, null);
       const u = (name: string) => gl.getUniformLocation(p, name);
-      const formula = 'scale' in field;
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, formula ? none(gl) : field.tex);
-      gl.uniform1i(u('uVelocity'), 0);
-      gl.uniform2f(u('uUvPerCell'), ...(formula ? ([1, 1] as [number, number]) : field.uvPerCell));
-      gl.uniform1i(u('uFormula'), formula ? 1 : 0);
-      gl.uniform1f(u('uScale'), formula ? field.scale : 1);
-      gl.uniform1f(u('uPhase'), formula ? field.phase : 0);
+      setFlow(gl, p, field, 0, width, height);
       gl.uniform1f(u('uSat'), knobs.saturation ?? 0);
-      gl.uniform2f(u('uK'), ...toScreen(width / height));
       gl.uniform1f(u('uStep'), (knobs.length ?? 0.6) / STEPS);
       gl.uniform1f(u('uHalf'), (knobs.thickness ?? 0.006) / 2);
       gl.uniform1f(u('uCalm'), knobs.calm ?? 0.05);
@@ -320,5 +330,46 @@ export function createStreamlines(gl: WebGL2RenderingContext): ModuleNode {
   };
 }
 
+const PUSH = `#version 300 es
+precision highp float;
+precision highp int;
+in vec2 vUv;
+uniform sampler2D uIn;
+uniform float uAmount;
+${FLOW_AT}
+out vec4 o;
+void main() {
+  // Read from where the flow brought this pixel from: a few steps back along it.
+  vec2 p = (vUv * 2.0 - 1.0) / uK;
+  for (int i = 0; i < 8; i++) p -= flowAt(p) * uAmount / 8.0;
+  o = textureLod(uIn, p * uK * 0.5 + 0.5, 0.0);
+}`;
+
+/** Push: its picture pushed along the flow (a Field's, else the Fluid's), as far as Amount. */
+export function createPush(gl: WebGL2RenderingContext): ModuleNode {
+  const p = program(gl, FULL_UV, PUSH);
+  const vao = gl.createVertexArray()!;
+  return {
+    draw: (gl, inputs, out, width, height, knobs) => {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, out);
+      gl.viewport(0, 0, width, height);
+      gl.disable(gl.BLEND);
+      gl.useProgram(p);
+      setFlow(gl, p, inputs.field ?? { scale: 1, phase: 0 }, 1, width, height);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, inputs.picture ?? none(gl));
+      gl.uniform1i(gl.getUniformLocation(p, 'uIn'), 0);
+      gl.uniform1f(gl.getUniformLocation(p, 'uAmount'), inputs.field ? (knobs.amount ?? 0.3) : 0);
+      gl.bindVertexArray(vao);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.bindVertexArray(null);
+    },
+    dispose: () => {
+      gl.deleteProgram(p);
+      gl.deleteVertexArray(vao);
+    },
+  };
+}
+
 /** The module types drawn here. */
-export const POINTS_NODES: Readonly<Record<string, (gl: WebGL2RenderingContext) => ModuleNode>> = { instance: createInstance, fold: createFold, streamlines: createStreamlines };
+export const POINTS_NODES: Readonly<Record<string, (gl: WebGL2RenderingContext) => ModuleNode>> = { instance: createInstance, fold: createFold, streamlines: createStreamlines, push: createPush };

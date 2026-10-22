@@ -390,8 +390,11 @@ export const GRID = declared(
     knob('spacing', 'Spacing', 0.02, 1, 0.25),
     knob('rotation', 'Rotation', 0, 1, 0),
     knob('jitter', 'Jitter', 0, 1, 0, 'level'),
+    knob('drift', 'Drift', 0, 2, 0.4, 'level'),
+    knob('return', 'Return', 0, 3, 0.6, 'level'),
   ],
-  [],
+  // A flow cabled in (a Field's) carries its points along it, at Drift, each pulled back to its place at Return.
+  [{ id: 'field', label: 'Flow field', type: 'flow' }],
   [
     out('points', 'Points', 'points'),
     out('index', 'Index', 'value', MOST_POINTS),
@@ -533,7 +536,11 @@ export const STREAMLINES = declared(
   [PICTURE_OUT],
 );
 
-export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD, LENS, TRANSFORM, STREAMLINES];
+/** Push: a picture pushed along a flow (a Field's, else the Fluid's): each pixel read from a few steps back along it, as
+ *  far as Amount, so what it shows smears and swirls the way the flow goes. */
+export const PUSH = declared('push', 'Push', 'module', [knob('amount', 'Amount', 0, 1, 0.3, 'level')], [PICTURE_IN, FLOW_IN], [PICTURE_OUT]);
+
+export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD, LENS, TRANSFORM, STREAMLINES, PUSH];
 
 /** The Randomize scopes (0057 §4d), in the dice's menu's order. */
 export const RANDOMIZE_SCOPES = ['everything', 'sources', 'effects', 'mixers', 'modulators', 'cables'] as const;

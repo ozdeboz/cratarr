@@ -301,7 +301,7 @@ export class FlameRenderer {
     const typeOfId = new Map(flat.modules.map((m) => [m.id, m.type]));
     this.pointsFrom = new Map(flat.cables.filter((c) => (c.to.port === 'points' && typeOfId.get(c.to.module) === 'instance') || (c.to.port === 'grid' && typeOfId.get(c.to.module) === 'fold') || (c.to.port === 'seeds' && typeOfId.get(c.to.module) === 'streamlines')).map((c) => [c.to.module, c.from.module]));
     // What gives each Streamlines its flow: a Field cabled into it (else the Fluid's, the normal).
-    this.fieldFrom = new Map(flat.cables.filter((c) => c.to.port === 'field' && typeOfId.get(c.to.module) === 'streamlines' && typeOfId.get(c.from.module) === 'field').map((c) => [c.to.module, c.from.module]));
+    this.fieldFrom = new Map(flat.cables.filter((c) => c.to.port === 'field' && (typeOfId.get(c.to.module) === 'streamlines' || typeOfId.get(c.to.module) === 'push') && typeOfId.get(c.from.module) === 'field').map((c) => [c.to.module, c.from.module]));
     this.composed = stages ? composeOf(c) : null;
     this.lightTransforms = stages ? c.order.filter((n) => n.type === 'transform' && stageOf(n) === 'points').map((n) => n.id) : [];
     this.showOut = stages ? (c.order.filter((n) => stageOf(n) === 'show').at(-1)?.id ?? null) : null;

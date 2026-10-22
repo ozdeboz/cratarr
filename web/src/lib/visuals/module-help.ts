@@ -67,6 +67,7 @@ export const moduleHelp: Record<string, string> = {
   grid: 'Points on a lattice, with each point’s values as channels.',
   field: 'A flow that swirls and changes by itself: for Streamlines to trace.',
   streamlines: 'Lines traced through a flow from seed points, drawn anew every frame.',
+  push: 'Pushes a picture along a flow, so it smears and swirls the way the flow goes.',
   lfo: 'A low-frequency oscillator, sine to triangle; in time with a clock when one is plugged in.',
   random: 'Random values at a rate, from smooth glides to stepped jumps.',
   hold: 'Sample and hold: takes its input at a rate and holds it.',
@@ -338,6 +339,10 @@ export const portHelp: Record<string, Record<string, string>> = {
     speed: 'How fast it changes.',
     field: 'The flow, for Streamlines.',
   },
+  push: {
+    amount: 'How far the picture is pushed along the flow.',
+    field: 'The flow: a Field’s; without one, the Fluid’s.',
+  },
   streamlines: {
     seeds: 'Where the lines start: a Grid’s points; without one, an even scatter.',
     field: 'The flow they follow: a Field’s; without one, the Fluid’s.',
@@ -356,6 +361,9 @@ export const portHelp: Record<string, Record<string, string>> = {
     spacing: 'How far apart the points are.',
     rotation: 'Turns the whole grid.',
     jitter: 'Moves each point off its place at random.',
+    drift: 'How fast a flow cabled in carries the points along.',
+    return: 'How strongly each point is pulled back to its place.',
+    field: 'A flow (a Field’s) that carries the points along.',
     points: 'The points, for Fold or Instance.',
     index: 'Each point’s number, from 0 to 1.',
     distance: 'Each point’s distance from the centre.',

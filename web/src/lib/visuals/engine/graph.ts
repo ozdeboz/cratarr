@@ -26,6 +26,7 @@ import { FLASH_GUARD } from './sidechain';
 import type { MeterValues } from '../meters';
 import { ownKnob, slotModules, slotOf, SLOT_IDS, type Slot } from './effect-slots';
 import { musicView } from './music-signals';
+import { flowAt } from '../field';
 import { effectKnobIds, effectOfType } from '../effect-modules';
 import { engineOf } from '../engine-module';
 import { NO_STRIKE, adsrOf, courseStep, newAccent, stepAccent, type AccentState, newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from './modules';
@@ -141,7 +142,7 @@ export type EngineState = {
   /** The Clock's beat, bar and phrase triggers (clock.ts). */
   clockTriggers: ClockTriggerState;
   /** Each Grid's points and channels, and the knobs they were laid out for (laid out again only when those change). */
-  grids: Record<string, { key: string; grid: Grid }>;
+  grids: Record<string, { key: string; grid: Grid; offsets?: [number, number][] }>;
 };
 
 export function newEngine(): EngineState {
@@ -597,7 +598,28 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   for (const x of plan.grids) {
     const key = JSON.stringify(x.knobs);
     if (st.grids[x.id]?.key !== key) st.grids[x.id] = { key, grid: gridOf(x.knobs, seedOf(x.id)) };
-    points[x.id] = st.grids[x.id].grid.points;
+    const g = st.grids[x.id];
+    points[x.id] = g.grid.points;
+    // A Field cabled into its Flow field: each point carried along the flow at Drift, pulled back to its place at Return
+    // (the Field's time as last frame left it).
+    const from = plan.intoOf.get(x.id)?.get('field')?.[0]?.from.module;
+    const field = from ? moduleOf.get(from) : undefined;
+    if (field?.type !== 'field') {
+      g.offsets = undefined;
+      continue;
+    }
+    const scale = finite(field.knobs.scale, 1.2);
+    const phase = finite(st.fieldPhases[field.id], 0);
+    const drift = finite(x.knobs.drift, 0.4);
+    const back = finite(x.knobs.return, 0.6);
+    const offsets = (g.offsets ??= g.grid.points.map((): [number, number] => [0, 0]));
+    points[x.id] = g.grid.points.map((q, i) => {
+      const o = (offsets[i] ??= [0, 0]);
+      const [u, v] = flowAt(q.x + o[0], q.y + o[1], scale, phase);
+      o[0] += (u * drift - o[0] * back) * step;
+      o[1] += (v * drift - o[1] * back) * step;
+      return { x: q.x + o[0], y: q.y + o[1] };
+    });
   }
   for (const id of Object.keys(st.grids)) if (!(id in points)) delete st.grids[id];
 
