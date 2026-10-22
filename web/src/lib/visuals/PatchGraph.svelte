@@ -40,7 +40,7 @@
   import ElkApi from 'elkjs/lib/elk-api.js';
   import elkWorker from 'elkjs/lib/elk-worker.min.js?url';
   import type { ElkNode } from 'elkjs/lib/elk-api';
-  import { fromElk, layoutKey, toElk } from './elk-layout';
+  import { anchored, fromElk, layoutKey, toElk } from './elk-layout';
   import PatchConnection from './PatchConnection.svelte';
   import PatchFit from './PatchFit.svelte';
   import PatchChips from './PatchChips.svelte';
@@ -281,18 +281,34 @@
   });
 
 
-  // ELK in a web worker (elk-layout.ts), made when first wanted; its last layout by the graph's shape.
+  // ELK in a web worker (elk-layout.ts), made when first wanted; its last layout by the graph's shape. A change to the
+  // shape is laid from the last layout (elk-layout's `before`), so the graph takes it in without being made again (the
+  // owner, 71.1: "an optimal layout that accounts for changes while not radically changing itself"); laid afresh when
+  // most of what is shown is new (another level, another patch), the other way round, or by Arrange.
   let elk: InstanceType<typeof ElkApi> | null = null;
-  let elkDone = $state.raw<{ key: string; laid: ElkNode } | null>(null);
+  let elkDone = $state.raw<{ key: string; laid: ElkNode; portrait: boolean } | null>(null);
   let elkAsked: string | null = null;
-  function askElk(key: string, graph: ElkNode) {
+  let afresh = $state(false);
+  let carried = $state(false);
+  function lastPlaces(laid: ElkNode): Map<string, XY> {
+    const at = new Map<string, XY>();
+    const walk = (n: ElkNode) => {
+      for (const c of n.children ?? []) {
+        if (c.x !== undefined && c.y !== undefined) at.set(c.id, { x: c.x, y: c.y });
+        walk(c);
+      }
+    };
+    walk(laid);
+    return at;
+  }
+  function askElk(key: string, graph: ElkNode, before?: (id: string) => XY | undefined) {
     if (elkAsked === key) return;
     elkAsked = key;
     elk ??= new ElkApi({ workerUrl: elkWorker });
     elk
       .layout(graph)
       .then((laid) => {
-        if (elkAsked === key) elkDone = { key, laid: laid as ElkNode };
+        if (elkAsked === key) elkDone = { key, laid: before ? anchored(laid as ElkNode, before) : (laid as ElkNode), portrait };
       })
       .catch((e) => console.warn('Visuals: the graph could not be laid out', e));
   }
@@ -350,7 +366,19 @@
       const sz = (n: Node | (typeof g.nodes)[number]) => sizes[n.id] ?? sizeOf((n as (typeof g.nodes)[number]).data);
       const key = layoutKey(g.nodes, g.edges, sz, { portrait });
       if (elkDone?.key === key) Object.assign(g, fromElk(elkDone.laid, g.nodes, g.edges, (id) => !!placed[id], sz));
-      else untrack(() => askElk(key, toElk(g.nodes, g.edges, sz, { portrait })));
+      else {
+        const last = elkDone && elkDone.portrait === portrait && !afresh ? lastPlaces(elkDone.laid) : null;
+        const shown = g.nodes.filter((n) => n.data.kind !== 'lane');
+        const carry = !!last && shown.filter((n) => last.has(n.id)).length * 2 > shown.length;
+        // Until ELK is back: the last layout's places for what it had (its routes drawn again from them).
+        if (carry) Object.assign(g, fromElk(elkDone!.laid, g.nodes, g.edges, (id) => !!placed[id], sz, false));
+        untrack(() => {
+          const before = carry ? (id: string) => last!.get(id) : undefined;
+          askElk(key, toElk(g.nodes, g.edges, sz, { portrait, before }), before);
+          afresh = false;
+          carried = carry;
+        });
+      }
     }
     // Every cable over the nodes (EDGE_Z), on its own ports' jacks at every zoom (the owner, 71.1: VCV's way).
     g.edges = g.edges.map((e) => ({ ...e, zIndex: EDGE_Z }));
@@ -809,7 +837,7 @@
       <Panel position="bottom-left" class="chips-panel">
         <div class="bottom">
           <PatchChips {parts} {padding} onjump={() => (touched = true)} />
-          {#if onarrange && Object.keys(kept).length}<button class="chipbtn" onclick={onarrange}>Arrange</button>{/if}
+          {#if Object.keys(kept).length || carried}<button class="chipbtn" onclick={() => ((afresh = true), onarrange?.())}>Arrange</button>{/if}
         </div>
       </Panel>
     {/if}

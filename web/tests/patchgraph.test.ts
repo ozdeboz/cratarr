@@ -1171,3 +1171,45 @@ test('fine adjust: full speed within 40 px up, half to 80, a quarter to 160, an 
   assert.equal(fineText(level, 0.123456), '0.123');
   assert.equal(fineText({ min: 20, max: 16000, kind: 'swing' }, 251.7), '252');
 });
+
+test('a change laid from the last layout: nothing reordered, little moved, the new module beside what it moves (Arrange: afresh)', async () => {
+  const p = v2patch();
+  const g1 = graphOfV2({ patch: p, types: v2types });
+  const raw = (await elkNow.layout(elkMod.toElk(g1.nodes, g1.edges, sizeBy as never))) as import('elkjs/lib/elk-api').ElkNode;
+  const was = new Map((raw.children ?? []).map((c) => [c.id, { x: c.x!, y: c.y! }]));
+  // An LFO added, into the flame's first knob.
+  const p2 = structuredClone(p);
+  p2.modules.push({ id: 'lfo-new', type: 'lfo', knobs: {} });
+  p2.cables.push({ id: 'c-new', from: { module: 'lfo-new', port: 'out' }, to: { module: 'flame', port: v2types.flame.knobs[0].id }, value: 0.5, mode: 'swing' });
+  const g2 = graphOfV2({ patch: p2, types: v2types });
+  const lay = async (o: { before?: (id: string) => { x: number; y: number } | undefined }) => {
+    let l = (await elkNow.layout(elkMod.toElk(g2.nodes, g2.edges, sizeBy as never, o))) as import('elkjs/lib/elk-api').ElkNode;
+    if (o.before) l = elkMod.anchored(l, o.before);
+    return new Map((l.children ?? []).map((c) => [c.id, { x: c.x!, y: c.y!, w: c.width!, h: c.height! }]));
+  };
+  const measure = (now: Map<string, { x: number; y: number }>) => {
+    const ids = [...was.keys()].filter((id) => now.has(id));
+    const shift = ids.reduce((s, id) => s + Math.hypot(now.get(id)!.x - was.get(id)!.x, now.get(id)!.y - was.get(id)!.y), 0) / ids.length;
+    let flips = 0;
+    for (const a of ids) for (const b of ids) {
+      if (a >= b) continue;
+      const [o1, o2, q1, q2] = [was.get(a)!, was.get(b)!, now.get(a)!, now.get(b)!];
+      if (Math.abs(o1.x - o2.x) < 5 && Math.sign(o1.y - o2.y) !== Math.sign(q1.y - q2.y)) flips++;
+      if (Math.abs(o1.x - o2.x) > 5 && Math.abs(o1.y - o2.y) > 5 && Math.sign(o1.x - o2.x) !== Math.sign(q1.x - q2.x)) flips++;
+    }
+    return { shift, flips };
+  };
+  const afresh = measure(await lay({}));
+  const kept = await lay({ before: (id: string) => was.get(id) });
+  const carried = measure(kept);
+  assert.ok(afresh.flips > 0 || afresh.shift > 300, `afresh reorders (the bug's measure): ${JSON.stringify(afresh)}`);
+  assert.equal(carried.flips, 0, 'nothing reordered');
+  assert.ok(carried.shift < 60, `little moved: ${carried.shift}`);
+  const boxes = [...kept].map(([id, b]) => ({ id, ...b }));
+  for (const a of boxes) for (const b of boxes)
+    if (a.id < b.id) assert.ok(!(a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h), `${a.id} over ${b.id}`);
+  assert.ok(kept.get('lfo-new')!.x < kept.get('flame')!.x, 'the new LFO before the flame it moves');
+  const opts = elkMod.toElk(g2.nodes, g2.edges, sizeBy as never, { before: (id: string) => was.get(id) }).layoutOptions!;
+  assert.equal(opts['elk.layered.layering.strategy'], 'INTERACTIVE');
+  assert.equal(elkMod.toElk(g2.nodes, g2.edges, sizeBy as never).layoutOptions!['elk.layered.layering.strategy'], undefined, 'afresh: ELK’s own');
+});

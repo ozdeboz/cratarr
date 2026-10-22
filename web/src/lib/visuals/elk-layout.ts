@@ -15,7 +15,10 @@ import type { ELK, ElkExtendedEdge, ElkNode, ElkPort } from 'elkjs/lib/elk-api';
 import type { Category } from './rack';
 import { MOD_OUT, withRoom, type GraphEdge, type GraphNode, type NodeData, type Size, type XY } from './patchgraph';
 
-export type ElkOptions = { portrait?: boolean };
+/** `before`: where the last layout put each node (relative to its frame). Given, ELK keeps to it (its interactive
+ *  layering and crossing minimisation, which read the nodes' places): the layout takes in a change without being made
+ *  again, a node new to it put by its cables' other ends. */
+export type ElkOptions = { portrait?: boolean; before?: (id: string) => XY | undefined };
 
 /** A port's ELK id: its node's and its handle's. */
 const portId = (node: string, handle: string) => `${node}::${handle}`;
@@ -64,6 +67,7 @@ export function toElk(nodes: GraphNode[], edges: GraphEdge[], size: (n: GraphNod
     const children = laid.filter((c) => c.parentId === n.id).map(elkNode);
     return {
       id: n.id,
+      ...placedBefore(n),
       ...(children.length ? {} : s),
       ports,
       ...(children.length ? { children } : {}),
@@ -74,6 +78,41 @@ export function toElk(nodes: GraphNode[], edges: GraphEdge[], size: (n: GraphNod
       },
     };
   };
+  // Where the last layout had each node; a new one beside what it is cabled to (after what feeds it, else before what it
+  // feeds), on the flow's axis.
+  const before = o.before;
+  const along = o.portrait ? 'y' : 'x';
+  const long = o.portrait ? 'height' : 'width';
+  const gap = 96;
+  const sized = (id: string) => {
+    const n = laid.find((x) => x.id === id);
+    return n ? (n.width && n.height ? { width: n.width, height: n.height } : size(n)) : { width: 0, height: 0 };
+  };
+  const hinted = (n: GraphNode): XY | undefined => {
+    const had = before?.(n.id);
+    if (had) return had;
+    const ends = (mine: 'source' | 'target', other: 'source' | 'target') =>
+      drawn.filter((e) => e[mine] === n.id && before?.(e[other])).map((e) => ({ at: before!(e[other])!, id: e[other] }));
+    const from = ends('target', 'source');
+    const to = ends('source', 'target');
+    // Cabled to nothing laid yet: at the start of the flow, past everything across it.
+    if (!from.length && !to.length) {
+      const had = laid.map((x) => ({ at: before?.(x.id), id: x.id })).filter((x): x is { at: XY; id: string } => !!x.at);
+      if (!had.length) return undefined;
+      const cross = along === 'x' ? 'y' : 'x';
+      const start = Math.min(...had.map((x) => x.at[along]));
+      const past = Math.max(...had.map((x) => x.at[cross] + sized(x.id)[along === 'x' ? 'height' : 'width'])) + gap;
+      return along === 'x' ? { x: start, y: past } : { x: past, y: start };
+    }
+    // Between what feeds it and what it feeds where there is room, else just before what it feeds (a modulator beside
+    // what it moves), else just after what feeds it.
+    const after = from.length ? Math.max(...from.map((f) => f.at[along] + sized(f.id)[long])) + gap : -Infinity;
+    const until = to.length ? Math.min(...to.map((t) => t.at[along])) - gap - sized(n.id)[long] : Infinity;
+    const at = after <= until ? (Number.isFinite(after) && Number.isFinite(until) ? (after + until) / 2 : Number.isFinite(after) ? after : until) : until;
+    const across = (to[0] ?? from[0]).at[along === 'x' ? 'y' : 'x'];
+    return along === 'x' ? { x: at, y: across } : { x: across, y: at };
+  };
+  const placedBefore = (n: GraphNode): Partial<XY> => (before ? (hinted(n) ?? {}) : {});
   const elkEdges: ElkExtendedEdge[] = drawn.map((e) => ({ id: e.id, sources: [portId(e.source, e.sourceHandle ?? MOD_OUT)], targets: [portId(e.target, e.targetHandle ?? 'in')] }));
   return {
     id: '@root',
@@ -84,7 +123,14 @@ export function toElk(nodes: GraphNode[], edges: GraphEdge[], size: (n: GraphNod
       'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
       // Back edges (a Feedback's last frame, a loop's way back) routed round, not through.
       'elk.layered.feedbackEdges': 'true',
-      'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+      ...(before
+        ? {
+            'elk.layered.layering.strategy': 'INTERACTIVE',
+            'elk.layered.crossingMinimization.strategy': 'INTERACTIVE',
+            'elk.layered.cycleBreaking.strategy': 'INTERACTIVE',
+            'elk.layered.nodePlacement.strategy': 'INTERACTIVE',
+          }
+        : { 'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP' }),
       // Room between modules shown whole (their real sizes, whatever the zoom), and for the cables between.
       'elk.spacing.nodeNode': '48',
       'elk.layered.spacing.nodeNodeBetweenLayers': '96',
@@ -101,8 +147,9 @@ export function toElk(nodes: GraphNode[], edges: GraphEdge[], size: (n: GraphNod
 }
 
 /** ELK's layout as the graph's: each node's place (relative to its frame, as Svelte Flow has it) but where the viewer
- *  put it (`kept`), a frame's size, each wire's bends (`data.route`, the flow's coordinates). */
-export function fromElk(laid: ElkNode, nodes: GraphNode[], edges: GraphEdge[], kept: (id: string) => boolean, size?: (n: GraphNode) => Size): { nodes: GraphNode[]; edges: GraphEdge[] } {
+ *  put it (`kept`), a frame's size, each wire's bends (`data.route`, the flow's coordinates; not `withRoutes`: none, as
+ *  while a layout of a changed graph is on its way). */
+export function fromElk(laid: ElkNode, nodes: GraphNode[], edges: GraphEdge[], kept: (id: string) => boolean, size?: (n: GraphNode) => Size, withRoutes = true): { nodes: GraphNode[]; edges: GraphEdge[] } {
   const at = new Map<string, ElkNode>();
   const walk = (n: ElkNode) => {
     at.set(n.id, n);
@@ -129,7 +176,7 @@ export function fromElk(laid: ElkNode, nodes: GraphNode[], edges: GraphEdge[], k
   const moved = new Set(nodes.filter((n) => kept(n.id)).map((n) => n.id));
   const routed = edges.map((e) => {
     const r = routes.get(e.id);
-    if (!r || moved.has(e.source) || moved.has(e.target)) return e;
+    if (!withRoutes || !r || moved.has(e.source) || moved.has(e.target)) return e;
     return { ...e, data: { ...(e.data ?? { amount: '', wire: 'picture' as const }), route: r } };
   });
   const out = laneHeads(placed);
@@ -154,6 +201,39 @@ export function laneHeads(nodes: GraphNode[]): GraphNode[] {
     const b = box.get(d.category);
     return b ? { ...n, position: { x: b.x, y: b.y - 34 } } : n;
   });
+}
+
+/** A layout laid from `before` (toElk's), moved back by what its nodes moved as one (their median), so the graph on the
+ *  screen stays where it was but for what the change itself moved. In place; the routes with it. */
+export function anchored(laid: ElkNode, before: (id: string) => XY | undefined): ElkNode {
+  const dx: number[] = [];
+  const dy: number[] = [];
+  for (const c of laid.children ?? []) {
+    const b = before(c.id);
+    if (b && c.x !== undefined && c.y !== undefined) {
+      dx.push(c.x - b.x);
+      dy.push(c.y - b.y);
+    }
+  }
+  if (!dx.length) return laid;
+  const median = (v: number[]) => v.sort((a, b) => a - b)[v.length >> 1];
+  const [x, y] = [median(dx), median(dy)];
+  for (const c of laid.children ?? []) {
+    if (c.x !== undefined) c.x -= x;
+    if (c.y !== undefined) c.y -= y;
+  }
+  const back = (q: { x: number; y: number }) => ((q.x -= x), (q.y -= y));
+  const routes = (n: ElkNode) => {
+    for (const e of n.edges ?? [])
+      for (const sec of e.sections ?? []) {
+        back(sec.startPoint);
+        back(sec.endPoint);
+        sec.bendPoints?.forEach(back);
+      }
+    n.children?.forEach(routes);
+  };
+  routes(laid);
+  return laid;
 }
 
 /** What a layout depends on (not a knob's value): the nodes, their sizes and frames, the cables' ends. ELK runs again only
