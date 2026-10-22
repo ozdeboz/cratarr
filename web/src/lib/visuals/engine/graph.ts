@@ -15,7 +15,7 @@ import { modulatorOf, type ModulatorType } from '../modulators/modulators';
 import type { Music } from '../music-core';
 import { ASPECT_KNOB, type Knob, type Macro, type Module, type ModuleType, type Modulator, type SignalRef } from '../patch';
 import { COLUMN_OFFSETS, ENGINE_MODULES, RANDOMIZE_SCOPES, READINGS, SHOW_PARTS, type CableV2, type PatchV2, type PortRef } from '../ports';
-import { A, ASPECTS, B, BAND_SIGNALS, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, type Aspect, type Given } from '../routes';
+import { A, ASPECTS, B, BAND_SIGNALS, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, given as columnsFor, type Aspect, type Given } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
 import { newChain, stepChain, type ChainState } from './chain';
 import { newDucker, stepDucker, type DuckerState } from './compressor';
@@ -43,6 +43,26 @@ for (const [a, [m, k]] of Object.entries(ASPECT_KNOB) as [Aspect, [string, strin
 }
 /** The chain's column a knob is (`module|knob`, flattened), by its place in ASPECTS. */
 export const columnAt = (key: string): number | undefined => COLUMN.get(key);
+/** The column a chain module's knob is by its module's type (`type|knob`), whichever module and wherever it sits: the
+ *  one engine's (step 5), each module its own. The effects' slots are not types (effect-slots.ts). */
+const TYPE_COLUMN = new Map<string, number>();
+for (const [a, [m, k]] of Object.entries(ASPECT_KNOB) as [Aspect, [string, string]][]) {
+  if (/^fx\d$/.test(m) || m === 'loop-effect') continue;
+  if (m !== 'show') TYPE_COLUMN.set(`${m}|${k}`, A[a]);
+  else if (k === 'size') TYPE_COLUMN.set('flame|zoom', A[a]);
+  else {
+    const part = SHOW_PARTS.find((x) => x.knob === k);
+    if (part) TYPE_COLUMN.set(`${part.type}|${k}`, A[a]);
+  }
+}
+/** Each chain type's knobs that are columns. */
+const TYPE_KNOBS = new Map<string, string[]>();
+for (const key of TYPE_COLUMN.keys()) {
+  const [type, knob] = key.split('|');
+  (TYPE_KNOBS.get(type) ?? TYPE_KNOBS.set(type, []).get(type)!).push(knob);
+}
+/** A chain module's own columns: what its cables give each of its aspects (as `Given`), kept per module. */
+type Own = { id: string; type: string; got: Given };
 /** The column a chain aspect's cables go into, flattened. */
 const COLUMNS_OF = new Map<number, string[]>();
 for (const [key, i] of COLUMN) (COLUMNS_OF.get(i) ?? COLUMNS_OF.set(i, []).get(i)!).push(key);
@@ -241,6 +261,8 @@ type Plan = {
    *  resting values, the cables from the Track into the walks, the modules with a column among their knobs. */
   columnInputs: { a: number; module: string; knob: string; gain: boolean }[] | null;
   columnOffsets: { a: number; rel: string; knob: string }[] | null;
+  /** Each chain module's own columns (step 5): its cables per column, its band columns, its gains, its offsets. */
+  owns: { own: Own; cables: { a: number; cables: CableV2[] }[]; bands: number[]; gains: { a: number; knob: string }[]; offsets: { a: number; knob: string }[] }[] | null;
   trackCables: Partial<Record<Aspect, CableV2[]>>;
   /** Each module's ports' cables, by module then port; the modules past the chain whose knobs the engine moves
    *  (worked out at the first frame). */
@@ -416,6 +438,7 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
     outKeys: p.modules.filter((x) => PROCESSORS.has(x.type)).map((x) => `${x.id}.out`),
     columnInputs: null,
     columnOffsets: null,
+    owns: null,
     intoOf: (() => {
       const out = new Map<string, Map<string, CableV2[]>>();
       for (const c of p.cables) {
@@ -945,6 +968,74 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   }
   for (const { a, rel, knob } of plan.columnOffsets) got.whole[a] += knobOf(inChain(rel), knob, 0);
 
+  // Each chain module's own columns (step 5, the one engine): what its cables give it by the same rules, kept by the
+  // module (any Flame, Tone map, Fluid…, wherever it sits, however many), and its knobs as its node reads them.
+  if (!plan.owns) {
+    plan.owns = [];
+    const byId = new Map<string, NonNullable<typeof plan.owns>[number]>();
+    for (const x of p.modules) {
+      const columned = TYPE_KNOBS.get(x.type);
+      if (!columned) continue;
+      const offsets = columned.filter((k) => COLUMN_OFFSETS.has(`${x.type}.${k}`)).map((k) => ({ a: TYPE_COLUMN.get(`${x.type}|${k}`)!, knob: k }));
+      const e = { own: { id: x.id, type: x.type, got: columnsFor(BANDS) }, cables: [], bands: [], gains: [], offsets };
+      byId.set(x.id, e);
+      plan.owns.push(e);
+    }
+    for (const [key, cables] of into) {
+      const bar = key.indexOf('|');
+      const e = byId.get(key.slice(0, bar));
+      if (!e) continue;
+      const port = key.slice(bar + 1);
+      if (port.endsWith(NEXT)) continue;
+      const gain = port.endsWith(GAIN);
+      const knob = gain ? port.slice(0, -GAIN.length) : port;
+      const a = TYPE_COLUMN.get(`${e.own.type}|${knob}`);
+      if (a === undefined) continue;
+      if (gain) e.gains.push({ a, knob });
+      else {
+        e.cables.push({ a, cables });
+        if (!IS_LEVEL[a] && !IS_PART[a] && perChannel(cables).some((c) => c.from.channel !== undefined) && !e.bands.includes(a)) e.bands.push(a);
+      }
+    }
+  }
+  for (const { own, cables, bands: bandCols, gains, offsets } of plan.owns) {
+    const g = own.got;
+    g.whole.fill(0);
+    g.level.fill(1);
+    for (const b of g.band) b.fill(0);
+    for (const { a, cables: list } of cables)
+      for (const c of perChannel(list)) {
+        const x = xOf(c);
+        if (x === null) continue;
+        const band = c.from.channel ?? null;
+        if (band !== null && !(band >= 0 && band < n)) continue;
+        const y = heightOf(shapeFor(c), x) * depthOf(c) * walkOf(c);
+        if (IS_LEVEL[a]) g.level[a] += y / (band === null ? 1 : n);
+        else if (band === null) g.whole[a] += y;
+        else g.band[band][a] += y;
+      }
+    for (const a of bandCols) {
+      let sum = 0;
+      let most = -Infinity;
+      for (let b = 0; b < n; b++) {
+        sum += g.band[b][a];
+        most = Math.max(most, g.band[b][a]);
+      }
+      g.whole[a] += IS_MOMENT[a] ? most : sum / n;
+    }
+    for (const { a, knob } of gains) {
+      const k = gainOf(own.id, knob);
+      if (IS_LEVEL[a]) g.level[a] *= k;
+      else if (!IS_MOMENT[a]) {
+        g.whole[a] *= k;
+        for (const b of g.band) b[a] *= k;
+      }
+    }
+    const x = moduleOf.get(own.id);
+    for (const { a, knob } of offsets) g.whole[a] += knobOf(x, knob, 0);
+    knobs[own.id] = ownKnobs(own, x);
+  }
+
   // The chain's own modules, each as its gain inputs hold it (the sidechains' Duckers, 0057 §7e): the Clock's speed
   // (its pace), the Accent's accent (the flash guard: its swing, and its courses slower), the Flame's evolving times
   // (a time's gain stretches it). Levers given (today's sidechaining, until the patch has its Duckers) act with them.
@@ -1031,6 +1122,26 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   /** An engine module's knob's base: as set, its macros' (the Ducker's threshold under Wild). */
   function baseOf(x: Module, id: string, or: number) {
     return macroed(x.id, (types[x.type] ?? ENGINE_TYPES[x.type])?.knobs.find((k) => k.id === id) ?? ({ id } as Knob), finite(x.knobs[id], or));
+  }
+
+  /** A chain module's knobs as its node reads them (step 5), from its own columns: a swing its column (a part's per band
+   *  too, `<knob>.<band>`), a level its setting times its column's level, within its range (Haze −1..1); its other knobs
+   *  as set (the Flame's continuity and evolution per band). */
+  function ownKnobs(own: Own, x: Module | undefined): Record<string, number> {
+    const k: Record<string, number> = { ...x?.knobs };
+    const declared = (types[own.type] ?? ENGINE_TYPES[own.type])?.knobs;
+    const g = own.got;
+    for (const id of TYPE_KNOBS.get(own.type) ?? []) {
+      const a = TYPE_COLUMN.get(`${own.type}|${id}`)!;
+      if (IS_MOMENT[a]) continue;
+      if (IS_LEVEL[a]) {
+        k[id] = clamp(finite(x?.knobs[id], declared?.find((d) => d.id === id)?.default ?? 0) * g.level[a], a === A.haze ? -1 : 0, 1);
+        continue;
+      }
+      k[id] = g.whole[a];
+      if (IS_PART[a]) for (let b = 0; b < g.band.length; b++) k[`${id}.${b}`] = g.whole[a] + g.band[b][a];
+    }
+    return k;
   }
 
   function knobsOf(x: Module, t: ModuleType): Record<string, number> {

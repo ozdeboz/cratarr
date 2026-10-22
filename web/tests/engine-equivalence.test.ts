@@ -187,3 +187,37 @@ test("the extras (modulators, macros, a layer's knobs) as evaluate.ts moved them
   theirFrames.forEach((f, i) => assert.ok(myFrames[i] === f || myFrames[i] === f + 1, `moment ${i}: frame ${myFrames[i]} against ${f}`));
   assert.ok(moments > 0 && moments < 600 / 30 / 2 + 1, `the hits asked ${moments} moments, two seconds apart at most`);
 });
+
+test("each chain module's own knobs (step 5, the one engine) are the chain's columns: the same, by module", async () => {
+  const { A } = await import('../src/lib/visuals/routes.ts');
+  const { BANDS } = await import('../src/lib/visuals/settings.svelte.ts');
+  const swing: [keyof typeof A, string, string][] = [['brightness', 'show/tonemap', 'glow'], ['size', 'flame', 'zoom'], ['saturation', 'show/saturate', 'saturation'], ['trails', 'trails', 'trails'], ['waves', 'show/bend', 'waves'], ['stir', 'fluid', 'stir'], ['flow', 'fluid', 'flow'], ['swirl', 'fluid', 'swirl']];
+  const parts: [keyof typeof A, string][] = [['shape', 'shape'], ['rotation', 'rotation'], ['lights', 'lights'], ['hue', 'hue'], ['spread', 'spread'], ['presence', 'presence']];
+  const levels: [keyof typeof A, string, string, number][] = [['smoothing', 'show/blur', 'smoothing', 0], ['haze', 'show/curve', 'haze', -1], ['fluid', 'fluid', 'fluid', 0], ['tunnel', 'tunnel', 'tunnel', 0], ['dive', 'dive', 'dive', 0], ['facets', 'fluid', 'facets', 0]];
+  const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+  let checked = 0;
+  const checking = (): Engine => {
+    const st = newEngine();
+    let p: PatchV2 | null = null;
+    let from: unknown = null;
+    return {
+      name: 'engine, checked',
+      step: (m, s, dt, opts) => {
+        if (from !== s) [from, p] = [s, flatten(toV2(s))];
+        const f = stepEngine(st, p!, {}, m, () => 0, s, dt, opts);
+        const g = st.got;
+        const mod = (id: string) => p!.modules.find((x) => x.id === id);
+        for (const [a, id, knob] of swing) if (mod(id)) assert.ok(Math.abs(f.knobs[id][knob] - g.whole[A[a]]) < 1e-9, `${a}: ${f.knobs[id][knob]} vs ${g.whole[A[a]]}`);
+        for (const [a, knob] of parts) for (let b = 0; b < BANDS; b++) assert.ok(Math.abs(f.knobs.flame[`${knob}.${b}`] - (g.whole[A[a]] + g.band[b][A[a]])) < 1e-9, `${a}.${b}`);
+        for (const [a, id, knob, lo] of levels) if (mod(id)) assert.ok(Math.abs(f.knobs[id][knob] - clamp(mod(id)!.knobs[knob] * g.level[A[a]], lo, 1)) < 1e-9, `${a}`);
+        checked++;
+        return f.aspects;
+      },
+    };
+  };
+  const { CHAINS, chainRoutes } = await import('../src/lib/visuals/chains.ts');
+  const scaled = { ...settings, shape: 1.4, rotation: 0.6, lights: 1.3, glow: 0.7, size: 0.55, saturation: 1.2, trails: 0.8, presence: 1.5, waves: 0.65, fluid: 0.6, tunnel: 0.4, dive: 0.3, haze: -0.4 } as typeof settings;
+  const variants = [settings, scaled, ...CHAINS.filter((c) => !c.extra.cables.length && !c.extra.modulators.length).map((c) => ({ ...settings, ...(c.settings ?? {}), routes: chainRoutes(c) }) as typeof settings)];
+  for (const id of [TRACKS[0], TRACKS[3]]) for (const s of variants) record(checking(), track(id), s, 30, 5);
+  assert.ok(checked >= 600, `${checked} frames`);
+});
