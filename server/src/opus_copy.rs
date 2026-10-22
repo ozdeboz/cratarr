@@ -20,7 +20,7 @@ use lofty::tag::Accessor;
 
 use crate::convert;
 
-/// The copies' bit rate: transparent for most music to most ears, about a sixth of a CD FLAC.
+/// The app's copies' bit rate: transparent for most music to most ears, about a sixth of a CD FLAC.
 pub const BITRATE: i32 = 160_000;
 /// Opus always runs at 48 kHz.
 const RATE: u32 = 48_000;
@@ -32,9 +32,17 @@ const MAX_PACKET: usize = 4000;
 const PAGE_PACKETS: usize = 50;
 const VENDOR: &str = concat!("Cratarr ", env!("CARGO_PKG_VERSION"), " (libopus)");
 
+/// At most this many copies or conversions are made at once (the app's downloads, an export's): each keeps a core busy.
+pub static COPIES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
 /// Writes `input` to `out` as Ogg Opus, with its ReplayGain (track and album gain in dB, decision 0035) as Opus's
 /// R128 gain tags when known. `false` (nothing written) when it is not a lossless file.
 pub fn copy(input: &Path, out: impl Write, gains: (Option<f64>, Option<f64>)) -> Result<bool> {
+    copy_at(input, out, gains, BITRATE)
+}
+
+/// [`copy`] at another bit rate (bits a second): an export's (decision 0058).
+pub fn copy_at(input: &Path, out: impl Write, gains: (Option<f64>, Option<f64>), bitrate: i32) -> Result<bool> {
     let Some(mut source) = convert::Source::open(input)? else { return Ok(false) };
     let format = source.format.clone();
     // Opus's simple channel mapping holds one or two; a surround file keeps its front pair.
@@ -42,7 +50,7 @@ pub fn copy(input: &Path, out: impl Write, gains: (Option<f64>, Option<f64>)) ->
     if channels == 0 {
         bail!("{} has no audio channels", input.display());
     }
-    let mut encoder = Encoder::new(channels)?;
+    let mut encoder = Encoder::new(channels, bitrate)?;
     let pre_skip = encoder.lookahead()?;
     let mut ogg = Ogg::new(out, serial(input));
     ogg.page(&[&opus_head(channels, pre_skip, format.sample_rate)], 0, BOS)?;
@@ -189,7 +197,7 @@ fn cover_comment(input: &Path) -> Option<String> {
     Some(format!("METADATA_BLOCK_PICTURE={}", base64::engine::general_purpose::STANDARD.encode(block)))
 }
 
-/// libopus's encoder, for music at [`BITRATE`].
+/// libopus's encoder, for music at a bit rate.
 struct Encoder {
     raw: *mut opusic_sys::OpusEncoder,
     channels: usize,
@@ -197,7 +205,7 @@ struct Encoder {
 }
 
 impl Encoder {
-    fn new(channels: usize) -> Result<Self> {
+    fn new(channels: usize, bitrate: i32) -> Result<Self> {
         let mut error = 0;
         // SAFETY: plain constructor; the result is checked before use and freed in `drop`.
         let raw = unsafe { opusic_sys::opus_encoder_create(RATE as i32, channels as i32, opusic_sys::OPUS_APPLICATION_AUDIO, &mut error) };
@@ -205,7 +213,7 @@ impl Encoder {
             bail!("the Opus encoder did not start (error {error})");
         }
         let me = Self { raw, channels, out: vec![0; MAX_PACKET] };
-        me.set(opusic_sys::OPUS_SET_BITRATE_REQUEST, BITRATE)?;
+        me.set(opusic_sys::OPUS_SET_BITRATE_REQUEST, bitrate)?;
         me.set(opusic_sys::OPUS_SET_SIGNAL_REQUEST, opusic_sys::OPUS_SIGNAL_MUSIC)?;
         me.set(opusic_sys::OPUS_SET_COMPLEXITY_REQUEST, 10)?;
         Ok(me)
@@ -338,11 +346,11 @@ fn crc32(data: &[u8]) -> u32 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A 16-bit stereo WAV of a 440 Hz sine, `secs` long.
-    fn wav(path: &Path, rate: u32, secs: f64) {
+    pub(crate) fn wav(path: &Path, rate: u32, secs: f64) {
         let n = (f64::from(rate) * secs) as u32;
         let data_len = n * 4;
         let mut b = Vec::new();

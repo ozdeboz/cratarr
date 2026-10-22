@@ -303,6 +303,19 @@ fn safe_within(safe: Vec<Repair>, within: Option<&[String]>) -> Vec<Repair> {
     }
 }
 
+/// What an export needs of a file (its names, its format for the estimates) from the catalogue's row of it.
+fn export_facts(row: crate::catalogue::FileRow, format: Option<String>, kbps: Option<u32>) -> crate::export::Facts {
+    crate::export::Facts {
+        artist: row.artist,
+        title: row.title,
+        album: row.album,
+        album_artist: row.album_artist,
+        format,
+        kbps,
+        duration_ms: row.duration_ms.filter(|d| *d > 0).map(|d| d as u64),
+    }
+}
+
 #[cfg(test)]
 mod card_tests {
     use super::*;
@@ -1327,7 +1340,8 @@ impl PlaylistService {
     }
 
     /// An export's plan (decision 0007): the playlists' lines as files in the Music folder, each file once, with its
-    /// size and the tags its name in one folder needs. Read from the disk and the catalogue; no request to the server.
+    /// size, the tags its name needs and its format for the estimates. Read from the disk and the catalogue; no request
+    /// to the server.
     pub async fn export_plan(&self, names: &[String]) -> Result<crate::export::Plan, ToggleError> {
         let music = self.lib.music().ok_or(ToggleError::NoMusicFolder)?;
         let mut lists = Vec::new();
@@ -1338,12 +1352,57 @@ impl PlaylistService {
         let c = self.lib.catalogue();
         let plan = tokio::task::spawn_blocking(move || {
             crate::export::plan(std::path::Path::new(&music), lists, |rels| {
-                Ok(c.line_rows("", rels)?.into_iter().map(|f| (f.artist, f.title)).collect())
+                let rows = c.line_rows("", rels)?;
+                Ok(rels
+                    .iter()
+                    .zip(rows)
+                    .map(|(rel, row)| {
+                        let (format, kbps) = c.place_of_line(rel).map(|(f, r)| c.format_of(f, &r)).unwrap_or_default();
+                        export_facts(row, format, kbps)
+                    })
+                    .collect())
             })
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))??;
         Ok(plan)
+    }
+
+    /// An export's plan for a list of tracks by their servers' ids (decision 0058: an album, a crate, a selection, a
+    /// queue): each track's file wherever the catalogue has it (the Music folder or another library's), with what it
+    /// knows of it. A track it cannot place is left out, named in the report by its server and id.
+    pub async fn export_tracks(&self, name: &str, tracks: Vec<(String, String)>) -> Result<crate::export::Plan, ToggleError> {
+        let c = self.lib.catalogue();
+        let name = name.to_string();
+        let plan = tokio::task::spawn_blocking(move || -> anyhow::Result<crate::export::Plan> {
+            let folders = c.folders();
+            let places: Vec<Option<(i64, String)>> = tracks.iter().map(|(s, id)| c.track_of_source(s, id).and_then(|t| c.file_of(t))).collect();
+            let rows = c.place_rows(&places)?;
+            let found = tracks
+                .iter()
+                .zip(places)
+                .zip(rows)
+                .map(|(((source, id), place), row)| {
+                    let (folder, rel) = place.ok_or_else(|| format!("{source} {id}"))?;
+                    let path = folders.get(folder as usize).ok_or_else(|| rel.clone())?.join(&rel);
+                    let (format, kbps) = c.format_of(folder, &rel);
+                    Ok((path, rel, export_facts(row, format, kbps)))
+                })
+                .collect();
+            Ok(crate::export::plan_files(&name, found))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))??;
+        Ok(plan)
+    }
+
+    /// Where an export makes its converted files before sending them: the data folder's `export`, else the system's
+    /// temporary folder.
+    pub fn export_work(&self) -> std::path::PathBuf {
+        match self.lib.data_dir() {
+            Some(d) => std::path::Path::new(d).join("export"),
+            None => std::env::temp_dir().join("cratarr-export"),
+        }
     }
 
     /// The server (`want`, else the first connected) and its id.

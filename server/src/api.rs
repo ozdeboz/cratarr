@@ -62,7 +62,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/playlists/{id}/tracks", get(playlist_tracks))
         .route("/api/playlists/{id}/rows", get(playlist_rows))
         .route("/api/export/preview", post(export_preview))
-        .route("/api/export", get(export_download))
+        .route("/api/export", get(export_download).post(export_prepare))
+        .route("/api/export/{token}", get(export_token))
         .route("/api/playlists/favorites", get(playlist_favorites))
         .route("/api/crates", get(crates).post(crate_create))
         .route("/api/crates/axes", get(crate_axes))
@@ -1085,12 +1086,151 @@ impl ExportRequest {
         if self.playlists.is_empty() {
             return Err(ToggleError::Refused("Choose at least one playlist.".into()).into());
         }
-        let combine = match self.combine.as_deref().map(str::trim) {
-            Some("") => return Err(ToggleError::BadName.into()),
-            c => c.map(str::to_string),
-        };
-        Ok(crate::export::Options { tracks: self.tracks, flat: self.tracks && self.flat, combine })
+        let arrange = if self.tracks && self.flat { crate::export::Arrange::Flat } else { crate::export::Arrange::Library };
+        Ok(crate::export::Options { tracks: self.tracks, arrange, combine: combined(self.combine.as_deref())?, ..Default::default() })
     }
+}
+
+/// The combined playlist's name, trimmed; an empty one is no name.
+fn combined(c: Option<&str>) -> Result<Option<String>, ApiError> {
+    match c.map(str::trim) {
+        Some("") => Err(ToggleError::BadName.into()),
+        c => Ok(c.map(str::to_string)),
+    }
+}
+
+/// An export (decision 0058, one step for every object): what (playlists by name, or a list of tracks by their
+/// servers' ids with a name), its format and its layout. For playlists, with their tracks or only the playlist files,
+/// and as they are or combined into one; for tracks, with a playlist file of them or not.
+#[derive(Deserialize, Clone)]
+struct Export {
+    what: ExportWhat,
+    #[serde(default)]
+    format: ExportFormat,
+    /// Opus's, kb/s: 96, 128, 160 (the default) or 256.
+    #[serde(default)]
+    bitrate: Option<u32>,
+    #[serde(default)]
+    layout: ExportLayout,
+    #[serde(default = "yes")]
+    tracks: bool,
+    #[serde(default)]
+    combine: Option<String>,
+    #[serde(default)]
+    m3u: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[derive(Deserialize, Clone)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum ExportWhat {
+    Playlists { names: Vec<String> },
+    Tracks { name: String, tracks: Vec<ExportTrack> },
+}
+
+#[derive(Deserialize, Clone)]
+struct ExportTrack {
+    source: String,
+    id: String,
+}
+
+#[derive(Deserialize, Clone, Copy, Default)]
+#[serde(rename_all = "kebab-case")]
+enum ExportFormat {
+    #[default]
+    Original,
+    FlacCd,
+    Opus,
+}
+
+#[derive(Deserialize, Clone, Copy, Default)]
+#[serde(rename_all = "lowercase")]
+enum ExportLayout {
+    Flat,
+    #[default]
+    Folders,
+}
+
+impl Export {
+    fn options(&self) -> Result<crate::export::Options, ApiError> {
+        use crate::export::{Arrange, Format, OPUS_RATES, Options};
+        let format = match self.format {
+            ExportFormat::Original => Format::Original,
+            ExportFormat::FlacCd => Format::FlacCd,
+            ExportFormat::Opus => match self.bitrate.unwrap_or(160) {
+                kbps if OPUS_RATES.contains(&kbps) => Format::Opus(kbps),
+                _ => return Err(ToggleError::Refused("Choose 96, 128, 160 or 256 kb/s.".into()).into()),
+            },
+        };
+        let arrange = match self.layout {
+            ExportLayout::Flat => Arrange::Flat,
+            ExportLayout::Folders => Arrange::Folders,
+        };
+        Ok(match &self.what {
+            ExportWhat::Playlists { names } => {
+                if names.is_empty() {
+                    return Err(ToggleError::Refused("Choose at least one playlist.".into()).into());
+                }
+                Options { tracks: self.tracks, arrange, combine: combined(self.combine.as_deref())?, format, lists: true }
+            }
+            ExportWhat::Tracks { tracks, .. } => {
+                if tracks.is_empty() {
+                    return Err(ToggleError::Refused("There are no tracks to export.".into()).into());
+                }
+                Options { tracks: true, arrange, combine: None, format, lists: self.m3u }
+            }
+        })
+    }
+
+    async fn plan(&self, app: &App) -> Result<crate::export::Plan, ApiError> {
+        Ok(match &self.what {
+            ExportWhat::Playlists { names } => app.playlists.export_plan(names).await?,
+            ExportWhat::Tracks { name, tracks } => {
+                let name = if name.trim().is_empty() { "Tracks" } else { name.trim() };
+                app.playlists.export_tracks(name, tracks.iter().map(|t| (t.source.clone(), t.id.clone())).collect()).await?
+            }
+        })
+    }
+}
+
+/// The preview's body: an export of decision 0058, or the Export tab's playlists (decision 0007).
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum PreviewOf {
+    Export(Export),
+    Playlists(ExportRequest),
+}
+
+/// The exports prepared for a download, by token.
+static EXPORTS: std::sync::LazyLock<std::sync::Mutex<crate::export::Tokens<Export>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(crate::export::Tokens::new()));
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// An export made ready for its download (decision 0058): checked, then kept for a few minutes under a token; the
+/// download is `GET /api/export/{token}`, a plain link, so the browser shows its progress.
+async fn export_prepare(State(app): State<Arc<App>>, Json(e): Json<Export>) -> Result<Json<serde_json::Value>, ApiError> {
+    let o = e.options()?;
+    let plan = e.plan(&app).await?;
+    let name = crate::export::download_name(&plan, &o);
+    let token = crate::export::new_token();
+    EXPORTS.lock().unwrap_or_else(|p| p.into_inner()).put(token.clone(), unix_now(), e);
+    Ok(Json(json!({ "token": token, "name": name })))
+}
+
+/// A prepared export's download; 404 once its token has expired.
+async fn export_token(State(app): State<Arc<App>>, Path(token): Path<String>) -> Result<Response, ApiError> {
+    let Some(e) = EXPORTS.lock().unwrap_or_else(|p| p.into_inner()).get(&token, unix_now()) else {
+        return Ok(refused(StatusCode::NOT_FOUND, "That export has expired. Start it again."));
+    };
+    let o = e.options()?;
+    let plan = e.plan(&app).await?;
+    Ok(export_response(&app, plan, o))
 }
 
 /// `application/x-www-form-urlencoded` value: `+` is a space, `%XX` a byte (UTF-8 as a whole).
@@ -1117,18 +1257,33 @@ fn form_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// An export's size before starting: its tracks, the missing ones left out, and with tracks its bytes.
-async fn export_preview(State(app): State<Arc<App>>, Json(r): Json<ExportRequest>) -> Result<Json<crate::export::Preview>, ApiError> {
-    let o = r.options()?;
-    let plan = app.playlists.export_plan(&r.playlists).await?;
+/// An export's size before starting: its tracks, the missing ones left out, and with tracks its bytes (about, for a
+/// format that converts: `estimate`).
+async fn export_preview(State(app): State<Arc<App>>, Json(body): Json<PreviewOf>) -> Result<Json<crate::export::Preview>, ApiError> {
+    let (plan, o) = match body {
+        PreviewOf::Export(e) => {
+            let o = e.options()?;
+            (e.plan(&app).await?, o)
+        }
+        PreviewOf::Playlists(r) => {
+            let o = r.options()?;
+            (app.playlists.export_plan(&r.playlists).await?, o)
+        }
+    };
     Ok(Json(crate::export::preview(&plan, &o)))
 }
 
-/// The export itself, as a download: one playlist without tracks as its `.m3u`, anything else as one streamed `.zip`.
+/// The Export tab's download (decision 0007), its playlists and options in the address.
 async fn export_download(State(app): State<Arc<App>>, axum::extract::RawQuery(q): axum::extract::RawQuery) -> Result<Response, ApiError> {
     let r = ExportRequest::from_query(q.as_deref().unwrap_or(""));
     let o = r.options()?;
     let plan = app.playlists.export_plan(&r.playlists).await?;
+    Ok(export_response(&app, plan, o))
+}
+
+/// The export itself, as a download: one playlist without tracks as its `.m3u`, anything else as one streamed `.zip`
+/// (its length told when every file goes as it is).
+fn export_response(app: &App, plan: crate::export::Plan, o: crate::export::Options) -> Response {
     let name = crate::export::download_name(&plan, &o);
     let mut headers = HeaderMap::new();
     if let Ok(v) = HeaderValue::from_str(&attachment(&name)) {
@@ -1137,14 +1292,14 @@ async fn export_download(State(app): State<Arc<App>>, axum::extract::RawQuery(q)
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     if !crate::export::is_zip(&plan, &o) {
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/x-mpegurl"));
-        return Ok((headers, crate::export::single_m3u(&plan, &o)).into_response());
+        return (headers, crate::export::single_m3u(&plan, &o)).into_response();
     }
-    let layout = crate::export::layout(&plan, &o);
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let (len, rx) = crate::export::stream(plan, layout, now);
+    let (len, rx) = crate::export::stream(plan, o, app.playlists.export_work(), unix_now());
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/zip"));
-    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
-    Ok((headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response())
+    if let Some(len) = len {
+        headers.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+    }
+    (headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response()
 }
 
 /// `Content-Disposition` for a download: an ASCII name for old clients and the UTF-8 one (RFC 6266).
@@ -1551,9 +1706,6 @@ async fn file(State(app): State<Arc<App>>, Path((source, id)): Path<(String, Str
     crate::serve::files::serve_file(&path, &headers, false).await
 }
 
-/// At most this many copies are made at once: each keeps a core busy.
-static COPIES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
-
 /// A lossless file as Ogg Opus, made as it is sent (no length, no ranges: downloads take it whole). `None` for a file
 /// that is not lossless.
 async fn opus_copy(path: std::path::PathBuf, gain: Option<crate::serve::api::ReplayGain>) -> Option<Response> {
@@ -1563,7 +1715,7 @@ async fn opus_copy(path: std::path::PathBuf, gain: Option<crate::serve::api::Rep
     if !lossless {
         return None;
     }
-    let permit = COPIES.acquire().await.ok()?;
+    let permit = crate::opus_copy::COPIES.acquire().await.ok()?;
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(4);
     tokio::task::spawn_blocking(move || {
         let failed = tx.clone();
@@ -2246,7 +2398,7 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExportRequest, attachment, form_decode};
+    use super::{ExportRequest, PreviewOf, attachment, form_decode};
 
     #[tokio::test]
     async fn every_answer_carries_its_request_id() {
@@ -2277,9 +2429,29 @@ mod tests {
         assert_eq!(r.combine.as_deref(), Some("Chill + Jazz"));
         assert_eq!(form_decode("100%"), "100%", "a lone % stays");
         let o = ExportRequest::from_query("playlist=A&flat=1").options().ok().unwrap();
-        assert!(!o.flat, "one folder only applies with tracks");
+        assert_eq!(o.arrange, crate::export::Arrange::Library, "one folder only applies with tracks");
         assert!(ExportRequest::from_query("tracks=1").options().is_err(), "no playlist");
         assert!(ExportRequest::from_query("playlist=A&combine=+").options().is_err(), "a blank combined name");
+    }
+
+    #[test]
+    fn an_export_names_what_its_format_and_its_layout() {
+        use crate::export::{Arrange, Format};
+        let parse = |s: &str| match serde_json::from_str::<PreviewOf>(s).unwrap() {
+            PreviewOf::Export(e) => e.options(),
+            PreviewOf::Playlists(_) => panic!("read as the Export tab's"),
+        };
+        let o = parse(r#"{"what":{"kind":"tracks","name":"Alb","tracks":[{"source":"cratarr","id":"tr-1"}]},"format":"opus","bitrate":128,"layout":"flat","m3u":true}"#).ok().unwrap();
+        assert!(o.tracks && o.lists && o.combine.is_none());
+        assert_eq!((o.format, o.arrange), (Format::Opus(128), Arrange::Flat));
+        let o = parse(r#"{"what":{"kind":"playlists","names":["A","B"]},"format":"flac-cd","tracks":false,"combine":"A + B"}"#).ok().unwrap();
+        assert!(!o.tracks && o.lists);
+        assert_eq!((o.format, o.arrange, o.combine.as_deref()), (Format::FlacCd, Arrange::Folders, Some("A + B")));
+        let o = parse(r#"{"what":{"kind":"tracks","name":"Q","tracks":[{"source":"s","id":"1"}]}}"#).ok().unwrap();
+        assert_eq!((o.format, o.lists), (Format::Original, false), "as they are, no playlist file unless asked");
+        assert!(parse(r#"{"what":{"kind":"tracks","name":"Q","tracks":[{"source":"s","id":"1"}]},"format":"opus","bitrate":64}"#).is_err(), "a bit rate not offered");
+        assert!(parse(r#"{"what":{"kind":"tracks","name":"Q","tracks":[]}}"#).is_err(), "no tracks");
+        assert!(matches!(serde_json::from_str::<PreviewOf>(r#"{"playlists":["A"],"tracks":true}"#).unwrap(), PreviewOf::Playlists(_)), "the Export tab's body still");
     }
 
     #[test]

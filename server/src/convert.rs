@@ -575,7 +575,7 @@ fn _tool_paths() -> Option<(PathBuf, PathBuf, Option<PathBuf>)> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use lofty::picture::{MimeType, Picture, PictureType};
     use std::f64::consts::PI;
@@ -589,7 +589,7 @@ mod tests {
     }
 
     /// A sine of `freq` Hz at `amp` full scale, `secs` long, on every channel (the right one a quarter turn later).
-    fn sine(rate: u32, freq: f64, amp: f64, secs: f64, channels: usize) -> Vec<Vec<f64>> {
+    pub(crate) fn sine(rate: u32, freq: f64, amp: f64, secs: f64, channels: usize) -> Vec<Vec<f64>> {
         let n = (f64::from(rate) * secs) as usize;
         (0..channels)
             .map(|c| (0..n).map(|i| amp * (2.0 * PI * freq * i as f64 / f64::from(rate) + c as f64 * PI / 2.0).sin()).collect())
@@ -616,7 +616,7 @@ mod tests {
     }
 
     /// Write a 24-bit PCM WAV.
-    fn write_wav24(path: &Path, rate: u32, planes: &[Vec<f64>]) {
+    pub(crate) fn write_wav24(path: &Path, rate: u32, planes: &[Vec<f64>]) {
         let ch = planes.len() as u16;
         let n = planes[0].len() as u32;
         let data_len = n * u32::from(ch) * 3;
