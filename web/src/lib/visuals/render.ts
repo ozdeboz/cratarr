@@ -142,11 +142,12 @@ export class FlameRenderer {
   private pointsFrom = new Map<string, string>();
   /** The Transforms on the flame's light (the points' camera's view), in order. */
   private lightTransforms: string[] = [];
-  /** The pictures this frame has of its own, by module (flattened ids), at the buffer's size: for the graph's
-   *  thumbnails. */
-  private pictures = new Map<string, WebGLTexture>();
-  private picturesAt: [number, number] = [0, 0];
+  /** The module observed (the graph's preview; TouchDesigner's "cook what's observed"): its picture kept for one small
+   *  read-back each time a thumbnail asks for it (when last, whether one is wanted), or why it has none this frame.
+   *  Nothing observed costs nothing. The last of Show's parts: the one whose picture Show's pass gives. */
+  private observed: { id: string; asked: number; wanted: boolean; why: string | null } | null = null;
   private thumbs: Thumbs | null = null;
+  private showOut: string | null = null;
   errors: string[] = [];
   /** The context, for what draws beside the flame (the compositor). */
   get context(): WebGL2RenderingContext {
@@ -219,8 +220,8 @@ export class FlameRenderer {
     this.pointsFrom = new Map(flat.cables.filter((c) => (c.to.port === 'points' && typeOfId.get(c.to.module) === 'instance') || (c.to.port === 'grid' && typeOfId.get(c.to.module) === 'fold')).map((c) => [c.to.module, c.from.module]));
     this.composed = stages ? composeOf(c) : null;
     this.lightTransforms = stages ? c.order.filter((n) => n.type === 'transform' && stageOf(n) === 'points').map((n) => n.id) : [];
+    this.showOut = stages ? (c.order.filter((n) => stageOf(n) === 'show').at(-1)?.id ?? null) : null;
     this.walker?.prune(this.composed?.ids ?? new Set());
-    this.pictures = new Map();
   }
 
   /** Lets go of what modules no longer in the patch held. setPatch does it too; the page of today calls this as its
@@ -285,6 +286,8 @@ export class FlameRenderer {
     const light = this.light;
     const flamed = !!now && !!this.points.flame && !!light.acc && !!light.accFbo;
     if (now && !flamed) return;
+    const seeing = this.seeing();
+    if (seeing) this.thumbs?.poll();
     const at = this.now();
     const since = this.shownAt ? Math.min(0.25, (at - this.shownAt) / 1000) : 0;
     this.shownAt = at;
@@ -331,9 +334,14 @@ export class FlameRenderer {
     const walks = this.stages.has('compose') && this.compiled && this.composed;
     if (walks) this.walker ??= new Walker(gl, this.fin, this.now);
     const walking = walks ? this.walker!.planned(this.compiled!, this.composed!.ids, this.composed!.from, this.composed!.to, knobsAt, fxOf) : null;
-    if (!drawn && !walking) return this.blank(screenWidth, screenHeight);
+    if (!drawn && !walking) {
+      if (seeing) this.observed!.why = 'Nothing reaches the Screen.';
+      return this.blank(screenWidth, screenHeight);
+    }
     this.blanked = false;
-    const into = walking ? this.fin.targets(light.width, light.height) : null;
+    // Observed, Show's picture is drawn into a target even where nothing walks on from it (then copied to the screen).
+    const source = seeing && walks ? this.walker!.source(seeing) : seeing;
+    const into = walking || (drawn && !!source && source === this.showOut) ? this.fin.targets(light.width, light.height) : null;
     if (drawn) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, into ? into.fbo : null);
       if (into) viewWidth = light.width, viewHeight = light.height;
@@ -343,21 +351,64 @@ export class FlameRenderer {
     // Without the flame drawn, the compose step starts from nothing where Show's picture would be.
     const effects = { t: fx?.t ?? info.time, beat: fx?.beat, frames: this.fxFrames, fluid: this.carry.fluid };
     const pointsOf = (id: string) => (this.pointsFrom.has(id) ? (given?.points?.(this.pointsFrom.get(id)!) ?? null) : null);
-    const picture = into && walking ? this.walker!.run(walking, drawn ? into.tex : null, into.w, into.h, knobsAt, info, effects, pointsOf) : null;
+    const picture = into && walking ? this.walker!.run(walking, drawn ? into.tex : null, into.w, into.h, knobsAt, info, effects, pointsOf, seeing) : null;
     if (picture) this.screen.toScreen(picture, screenWidth, screenHeight);
+    else if (into) this.screen.toScreen(into.tex, screenWidth, screenHeight);
     else this.fin.idle();
-    this.pictures = picture ? new Map([...this.walker!.shown, [this.compiled!.screen!, picture]]) : new Map();
-    if (into) this.picturesAt = [into.w, into.h];
+    if (seeing) {
+      this.look(seeing, this.seenOf(seeing, source, walking ? this.walker!.seen : null, drawn ? into : null));
+      this.walker?.unpin();
+    }
   }
 
-  /** `moduleId`'s picture this frame (a flattened id: `show/saturate`) onto `canvas`, a sixteenth of the buffer's
-   *  sides, where the frame drew it anyway; false where it has none of its own (fused into a pass, on the light, or
-   *  nothing drawn). One small pass and one small read: the graph asks for one a frame. */
-  thumbnail(moduleId: string, canvas: HTMLCanvasElement): boolean {
-    const picture = this.pictures.get(moduleId);
-    if (!picture) return false;
+  /** The module observed from now on (a flattened id: `show/saturate`; null: none). `thumbnail` observes too. */
+  observe(moduleId: string | null) {
+    this.observed = moduleId ? { id: moduleId, asked: performance.now(), wanted: true, why: null } : null;
+  }
+
+  /** `moduleId`'s picture onto `canvas`, a sixteenth of the buffer's sides, as last read back (two or more frames
+   *  late, never stalling); it is observed from now on, for a second after the last ask. Null where it shows (or soon
+   *  will); else why it has none: on the light, fused into a pass, reaching no Screen. */
+  thumbnail(moduleId: string, canvas: HTMLCanvasElement): string | null {
+    const o = this.observed;
+    if (o?.id === moduleId) Object.assign(o, { asked: performance.now(), wanted: true });
+    else this.observe(moduleId);
+    if (this.thumbs?.put(moduleId, canvas)) return null;
+    return this.observed!.why;
+  }
+
+  /** The module observed now (none a second after the last ask). */
+  private seeing(): string | null {
+    if (this.observed && performance.now() - this.observed.asked > 1000) this.observed = null;
+    return this.observed?.id ?? null;
+  }
+
+  /** What observed module `id` shows this frame (`source`: the module whose picture it passes on; `walked`: what the
+   *  walk says of it; `shown`: Show's target, where Show drew into one). */
+  private seenOf(id: string, source: string | null, walked: { tex: WebGLTexture } | { why: string } | null, shown: { tex: WebGLTexture } | null): { tex: WebGLTexture } | { why: string } {
+    if (!this.compiled) return { why: this.errors.at(-1) ?? 'Not drawn.' };
+    const n = this.compiled.order.find((x) => x.id === id);
+    if (!n) return { why: 'Its picture reaches no Screen.' };
+    const stage = stageOf(n);
+    if (stage === 'carry' || stage === 'points' || (n.type === 'feedback' && n.inputs[0]?.type === 'light')) return { why: 'Light: no preview yet.' };
+    if (source === this.showOut) return shown ? { tex: shown.tex } : { why: 'Not drawn this frame.' };
+    if (stage === 'show') return { why: 'Fused into Show’s pass.' };
+    return walked ?? { why: 'Not drawn this frame.' };
+  }
+
+  /** The observed module's picture read back small where a thumbnail wants one (one reading in flight at a time). */
+  private look(id: string, s: { tex: WebGLTexture } | { why: string }) {
+    const o = this.observed!;
+    if ('why' in s) {
+      o.why = s.why;
+      this.thumbs?.forget();
+      return;
+    }
+    o.why = null;
     this.thumbs ??= new Thumbs(this.gl);
-    return this.thumbs.draw(picture, this.picturesAt[0], this.picturesAt[1], canvas);
+    if (!o.wanted || !this.thumbs.idle) return;
+    this.thumbs.capture(id, s.tex, this.light.width, this.light.height);
+    o.wanted = false;
   }
 
   /** The screen black, and what the picture kept from frame to frame let go of: the flame's light, the loops' and the
@@ -375,7 +426,6 @@ export class FlameRenderer {
     this.cut = true;
     this.walker?.forget();
     this.fin.freeFx();
-    this.pictures = new Map();
   }
 
   /** The Meter on what the screen just showed (`viewWidth` x `viewHeight`, as of `t` seconds: nodes/meter.ts):

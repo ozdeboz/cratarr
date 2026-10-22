@@ -174,15 +174,16 @@ export function numberText(v: number | null): string {
 
 // ---- Thumbnails: a picture module's output, small, one a frame in turn --------------------------------------------
 
-/** What draws a module's output into a canvas (the renderer's `thumbnail(moduleId, canvas)`: its output texture at
- *  1/16 size, only one that exists anyway). False where it has none now. */
-export type Thumbnailer = (module: string, canvas: HTMLCanvasElement) => boolean;
-/** The thumbnails a graph shows: each registers its canvas while drawn; one is drawn a frame, in turn. */
+/** What draws a module's output into a canvas (the renderer's `thumbnail(moduleId, canvas)`: the module observed, its
+ *  picture at 1/16 size, read back a little late). Null where it shows (or soon will); else why it has none. */
+export type Thumbnailer = (module: string, canvas: HTMLCanvasElement) => string | null;
+/** The thumbnails a graph shows: each registers its canvas while drawn (and hears why it has no picture, where it has
+ *  none); one is drawn a frame, in turn. */
 export class Thumbs {
-  private list: { module: string; canvas: HTMLCanvasElement }[] = [];
+  private list: { module: string; canvas: HTMLCanvasElement; why?: (why: string | null) => void }[] = [];
   private turn = 0;
-  add(module: string, canvas: HTMLCanvasElement): () => void {
-    const it = { module, canvas };
+  add(module: string, canvas: HTMLCanvasElement, why?: (why: string | null) => void): () => void {
+    const it = { module, canvas, why };
     this.list.push(it);
     return () => (this.list = this.list.filter((x) => x !== it));
   }
@@ -193,7 +194,8 @@ export class Thumbs {
   next(draw: Thumbnailer | undefined): string | null {
     if (!draw || !this.list.length) return null;
     const it = this.list[this.turn++ % this.list.length];
-    draw(it.module, it.canvas);
+    const why = draw(it.module, it.canvas);
+    it.why?.(why);
     return it.module;
   }
 }

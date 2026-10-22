@@ -411,15 +411,17 @@ export type WalkIO<T> = {
 };
 
 /** What a walk keeps from one frame to the next: each Feedback's picture (`pooled`: the pool's, given back when the
- *  next replaces it). A resize clears it, with the pool. */
-export type WalkState<T> = { held: Map<string, { t: T; pooled: boolean }> };
-export const newWalkState = <T>(): WalkState<T> => ({ held: new Map() });
+ *  next replaces it). A resize clears it, with the pool. `pinned`: the observed module's target, kept out of the pool
+ *  past its last reader for the caller to read (and give back) after the walk. */
+export type WalkState<T> = { held: Map<string, { t: T; pooled: boolean }>; pinned?: T | null };
+export const newWalkState = <T>(): WalkState<T> => ({ held: new Map(), pinned: null });
 
 /** Draws `p` in order, with targets from `pool`, each given back as its last reader has drawn. A Feedback gives what
  *  it held from the start of the frame; at its place it adopts its input's target, copying only one not the pool's
  *  (another's own), and keeping the light's own buffers as they are. `given`: pictures drawn outside the walk, by
- *  module. Gives every module's picture. */
-export function walk<T>(p: Plan, pool: Pool<T>, io: WalkIO<T>, state: WalkState<T>, given: ReadonlyMap<string, T> = new Map()): Map<string, T | null> {
+ *  module. `pin`: the observed module, whose target is not given back but left in `state.pinned`. Gives every
+ *  module's picture. */
+export function walk<T>(p: Plan, pool: Pool<T>, io: WalkIO<T>, state: WalkState<T>, given: ReadonlyMap<string, T> = new Map(), pin: string | null = null): Map<string, T | null> {
   const value = new Map<string, T | null>(given);
   const pooled = new Set<T>();
   const left = new Map<string, number>();
@@ -427,16 +429,19 @@ export function walk<T>(p: Plan, pool: Pool<T>, io: WalkIO<T>, state: WalkState<
     const m = key.slice(0, key.lastIndexOf('.'));
     left.set(m, (left.get(m) ?? 0) + n);
   }
+  state.pinned = null;
   for (const n of p.live) if (n.type === 'feedback') value.set(n.id, state.held.get(n.id)?.t ?? null);
+  const back = (module: string, t: T) => {
+    pooled.delete(t);
+    if (module === pin) state.pinned = t;
+    else pool.give(t);
+  };
   // One of `module`'s readers has drawn: its target back to the pool after the last.
   const read = (module: string) => {
     const n = (left.get(module) ?? 0) - 1;
     left.set(module, n);
     const t = value.get(module);
-    if (n <= 0 && t && pooled.has(t)) {
-      pooled.delete(t);
-      pool.give(t);
-    }
+    if (n <= 0 && t && pooled.has(t)) back(module, t);
   };
   for (const n of p.live) {
     const reads = [...(p.reads.get(n.id) ?? new Map<string, PortRef>())];
@@ -468,10 +473,7 @@ export function walk<T>(p: Plan, pool: Pool<T>, io: WalkIO<T>, state: WalkState<
     if (out) pooled.add(out);
     for (const [, from] of reads) read(from.module);
     // Read by nothing: back at once.
-    if (out && !(left.get(n.id) ?? 0)) {
-      pooled.delete(out);
-      pool.give(out);
-    }
+    if (out && !(left.get(n.id) ?? 0)) back(n.id, out);
   }
   return value;
 }

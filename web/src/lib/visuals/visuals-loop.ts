@@ -133,10 +133,10 @@ export class VisualsLoop {
     return new Promise((done) => (this.#pictureWanted = done));
   }
 
-  /** A module's own picture this frame drawn small into `canvas` (the graph's live thumbnails, render.ts); false where
-   *  it has none of its own, or before the loop runs. */
-  thumbnail(module: string, canvas: HTMLCanvasElement): boolean {
-    return this.#renderer?.thumbnail(module, canvas) ?? false;
+  /** The observed module's picture drawn small into `canvas` (the graph's preview, render.ts): null where it shows,
+   *  else why it has none. */
+  thumbnail(module: string, canvas: HTMLCanvasElement): string | null {
+    return this.#renderer ? this.#renderer.thumbnail(module, canvas) : 'Not running.';
   }
 
   stop() {

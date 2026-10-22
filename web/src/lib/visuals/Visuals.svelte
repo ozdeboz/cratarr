@@ -442,7 +442,7 @@
             onopenknob={(module, knob) => graphPage(`in|${module.join('/')}|${knob}`)}
             onpick={(r) => graphPage(`from|${r.module.slice(0, -1).join('/')}|${r.module[r.module.length - 1]}|${r.knob}`)}
             live={liveFaces}
-            thumbnail={(m, c) => loop?.thumbnail(m, c) ?? false}
+            thumbnail={(m, c) => (loop ? loop.thumbnail(m, c) : 'Not running.')}
             previewShown={sheet && sheetOpen && panel}
             {helpFor}
           />

@@ -1,6 +1,7 @@
-// A picture as a thumbnail on a 2D canvas (the graph's, decision 0057): reduced twice by a quarter of each side, each
-// pixel the brightest of the 4×4 it covers per channel (a thin bright line, Waves' or a Shape's outline, stays; an
-// average would lose it), upright; read back into one reused buffer, put on the canvas. Two small passes, one read.
+// The observed module's picture as a thumbnail on a 2D canvas (the graph's preview, decision 0057): reduced twice by a
+// quarter of each side, each pixel the brightest of the 4×4 it covers per channel (a thin bright line, Waves' or a
+// Shape's outline, stays; an average would lose it), upright; read back two or more frames later through a pixel
+// buffer and a fence (flashmeter.ts's way), so a preview never stalls a frame. One reading in flight at a time.
 import { program } from '../sources/gl';
 import { quarter, thumbSize } from '../thumbnails';
 import { FULL } from './shared';
@@ -23,6 +24,9 @@ void main() {
   o = uFlip == 1 ? vec4(clamp(m.rgb, 0.0, 1.0), 1.0) : m;
 }`;
 
+/** A reading is read this many frames (polls) after its capture at the soonest. */
+const AGE = 2;
+
 type Small = { tex: WebGLTexture; fbo: WebGLFramebuffer; w: number; h: number };
 
 export class Thumbs {
@@ -32,29 +36,33 @@ export class Thumbs {
   /** The quarter step's target and the thumbnail's, each made again only when its size changes. */
   private mid: Small | null = null;
   private at: Small | null = null;
-  private pixels: ImageData | null = null;
-  private bytes: Uint8Array | null = null;
+  private buffer: WebGLBuffer | null = null;
+  /** The reading in flight: whose, its fence, the frame it was captured in, its size. */
+  private pending: { key: string; sync: WebGLSync; frame: number; w: number; h: number } | null = null;
+  private frame = 0;
+  /** The last reading read: whose, its pixels. */
+  private ready: { key: string; image: ImageData } | null = null;
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl;
   }
 
-  /** `picture` (of `width` x `height`) onto `canvas`, at about a sixteenth of its sides (the canvas sized so). */
-  draw(picture: WebGLTexture, width: number, height: number, canvas: HTMLCanvasElement): boolean {
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return false;
+  /** Whether a capture would be taken now (none while one is in flight). */
+  get idle(): boolean {
+    return !this.pending;
+  }
+
+  /** `picture` (of `width` x `height`, `key`'s) reduced to about a sixteenth of its sides and its read-back started. */
+  capture(key: string, picture: WebGLTexture, width: number, height: number) {
+    if (this.pending) return;
     const gl = this.gl;
     const [mw, mh] = quarter(width, height);
     const [w, h] = thumbSize(width, height);
     this.reduce ??= program(gl, FULL, REDUCE);
     this.empty ??= gl.createVertexArray()!;
+    this.buffer ??= gl.createBuffer()!;
     this.mid = this.small(this.mid, mw, mh);
-    const fresh = !this.at || this.at.w !== w || this.at.h !== h;
     this.at = this.small(this.at, w, h);
-    if (fresh) {
-      this.pixels = new ImageData(w, h);
-      this.bytes = new Uint8Array(this.pixels.data.buffer);
-    }
     gl.disable(gl.BLEND);
     gl.useProgram(this.reduce);
     gl.bindVertexArray(this.empty);
@@ -63,10 +71,42 @@ export class Thumbs {
     this.step(picture, [width, height], this.mid, 0);
     this.step(this.mid.tex, [mw, mh], this.at, 1);
     gl.bindVertexArray(null);
-    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, this.bytes);
-    if (canvas.width !== w || canvas.height !== h) [canvas.width, canvas.height] = [w, h];
-    ctx.putImageData(this.pixels!, 0, 0);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.buffer);
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, w * h * 4, gl.STREAM_READ);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, 0);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    this.pending = { key, sync: gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)!, frame: this.frame, w, h };
+    gl.flush();
+  }
+
+  /** The reading in flight read, where the GPU has finished it. Once a frame, before anything draws. */
+  poll() {
+    const gl = this.gl;
+    this.frame++;
+    const p = this.pending;
+    if (!p || this.frame - p.frame < AGE || gl.getSyncParameter(p.sync, gl.SYNC_STATUS) !== gl.SIGNALED) return;
+    const image = this.ready?.image.width === p.w && this.ready.image.height === p.h ? this.ready.image : new ImageData(p.w, p.h);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.buffer);
+    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, new Uint8Array(image.data.buffer));
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    gl.deleteSync(p.sync);
+    this.pending = null;
+    this.ready = { key: p.key, image };
+  }
+
+  /** `key`'s last reading onto `canvas` (sized to it): false where there is none. */
+  put(key: string, canvas: HTMLCanvasElement): boolean {
+    const r = this.ready;
+    const ctx = r?.key === key ? canvas.getContext('2d') : null;
+    if (!r || !ctx) return false;
+    if (canvas.width !== r.image.width || canvas.height !== r.image.height) [canvas.width, canvas.height] = [r.image.width, r.image.height];
+    ctx.putImageData(r.image, 0, 0);
     return true;
+  }
+
+  /** Lets go of the last reading (what it showed is gone). */
+  forget() {
+    this.ready = null;
   }
 
   private step(from: WebGLTexture, size: [number, number], to: Small, flip: number) {
@@ -107,6 +147,9 @@ export class Thumbs {
     this.free(this.mid);
     this.free(this.at);
     this.mid = this.at = null;
+    if (this.pending) this.gl.deleteSync(this.pending.sync);
+    this.pending = null;
+    if (this.buffer) this.gl.deleteBuffer(this.buffer);
     if (this.reduce) this.gl.deleteProgram(this.reduce);
     if (this.empty) this.gl.deleteVertexArray(this.empty);
   }

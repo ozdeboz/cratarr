@@ -876,12 +876,14 @@ test('thumbnails: one drawn a frame, in turn, only those shown, only with a rend
   const thumbs = new ff.Thumbs();
   const canvas = {} as HTMLCanvasElement;
   const drawn: string[] = [];
-  const draw = (m: string) => (drawn.push(m), true);
+  const draw = (m: string) => (drawn.push(m), m === 'a' ? null : 'Fused.');
+  const heard: (string | null)[] = [];
   const goA = thumbs.add('a', canvas);
-  thumbs.add('show/b', canvas);
+  thumbs.add('show/b', canvas, (w) => heard.push(w));
   assert.equal(thumbs.next(undefined), null, 'no renderer: none');
   for (let i = 0; i < 4; i++) thumbs.next(draw);
   assert.deepEqual(drawn, ['a', 'show/b', 'a', 'show/b']);
+  assert.deepEqual(heard, ['Fused.', 'Fused.'], 'why it has none, heard by its own');
   goA();
   assert.equal(thumbs.size, 1);
   assert.equal(thumbs.next(draw), 'show/b');

@@ -18,7 +18,6 @@ import type { PortRef } from '../ports';
 import { createSource, SOURCE_TYPES } from '../sources/index';
 import { program } from '../sources/gl';
 import { createNode, nodeOf, PICTURE_NODES, type ModuleNode } from './modules';
-import { outputsOf } from '../thumbnails';
 import { transformIdle } from '../transform';
 import type { Point } from '../points-pictures';
 import { POINTS_NODES } from './points-pictures';
@@ -85,8 +84,12 @@ export class Walker {
   private fxPrograms = new Map<string, WebGLProgram | null>();
   private clocks = new Map<string, EffectClocks>();
   private trails = new Map<string, Target>();
-  /** Each module's picture of its own as the last walk left it (for a thumbnail: thumbnails.ts). */
-  shown = new Map<string, WebGLTexture>();
+  /** What the observed module shows this frame (`run`'s `observe`): its picture, or why it has none. */
+  seen: { tex: WebGLTexture } | { why: string } | null = null;
+  /** The last plan's modules at rest (each what it passes on), the effects fused into a run's pass, its Feedbacks. */
+  private aliases = new Map<string, PortRef>();
+  private inRuns = new Set<string>();
+  private feedbacks = new Set<string>();
 
   constructor(gl: WebGL2RenderingContext, fin: Finish, now: () => number) {
     this.gl = gl;
@@ -129,11 +132,22 @@ void main() { o = texture(uIn, vUv); }`);
     const port = c.order.flatMap((n) => (ids.has(n.id) ? [] : n.inputs)).find((f) => f.from.module === to)?.from.port ?? 'picture';
     let out = { module: to, port };
     for (let i = 0; p.alias.has(out.module) && i < sub.order.length; i++) out = p.alias.get(out.module)!;
+    this.aliases = p.alias;
+    this.inRuns = new Set([...runs].flatMap(([id, r]) => r.fx.filter((f) => f !== id)));
+    this.feedbacks = new Set(order.filter((n) => n.type === 'feedback').map((n) => n.id));
     return out.module === from ? null : { p, from, out, loops, runs, fx };
   }
 
-  /** The walk drawn from `picture` (`from`'s; null: nothing, black): the texture the effects or the screen read next. */
-  run(w: Walk, given: WebGLTexture | null, width: number, height: number, knobs: (id: string) => Record<string, number>, frame: FrameInfo, effects: FxFrame, points: (id: string) => readonly Point[] | null = () => null): WebGLTexture {
+  /** The module whose picture `id`'s is this frame, as the last plan has it: itself, or what it passes on at rest. */
+  source(id: string): string {
+    let at = id;
+    for (let i = 0; this.aliases.has(at) && i <= this.aliases.size; i++) at = this.aliases.get(at)!.module;
+    return at;
+  }
+
+  /** The walk drawn from `picture` (`from`'s; null: nothing, black): the texture the effects or the screen read next.
+   *  `observe`: the module observed, its target pinned till `unpin` (after its read). */
+  run(w: Walk, given: WebGLTexture | null, width: number, height: number, knobs: (id: string) => Record<string, number>, frame: FrameInfo, effects: FxFrame, points: (id: string) => readonly Point[] | null = () => null, observe: string | null = null): WebGLTexture {
     this.sized(width, height);
     if (this.given && ![...this.state.held.values()].some((h) => h.t === this.given)) this.pool.give(this.given);
     this.given = null;
@@ -145,7 +159,6 @@ void main() { o = texture(uIn, vUv); }`);
     // What the walk gives on is read after it: one reader more, so it is not given back within.
     p.readers.set(outKey(out), (p.readers.get(outKey(out)) ?? 0) + 1);
     const outside: Target = { tex: picture, fbo: null as unknown as WebGLFramebuffer };
-    const draws: [string, Target][] = from && given ? [[from, outside]] : [];
     const io = {
       spec: (n: PictureNode) => (fused.has(n.id) ? null : runs.get(n.id)?.own ? ('own' as const) : this.spec),
       draw: (n: PictureNode, inputs: Map<string, Target | null>, t: Target | null) => {
@@ -156,17 +169,32 @@ void main() { o = texture(uIn, vUv); }`);
         if (r) own = this.fxPass(n.id, r, w.fx, inputs.get('picture')?.tex ?? picture, inputs.get('trails')?.tex ?? null, t, effects);
         else if (l) this.loopPass(l, inputs.get('in2')?.tex ?? picture, t!, knobs, frame);
         else this.draw(n, inputs, t!, knobs(n.id), frame, points(n.id));
-        if (own ?? t) draws.push([n.id, (own ?? t)!]);
         return own;
       },
       copy: (a: Target, b: Target) => this.copied(a, b),
     };
-    const values = walk(p, this.pool, io, this.state, new Map(from ? [[from, outside]] : []));
-    this.shown = new Map([...outputsOf(draws, p.alias)].map(([id, t]) => [id, t.tex]));
+    const at = observe ? this.source(observe) : null;
+    const values = walk(p, this.pool, io, this.state, new Map(from ? [[from, outside]] : []), at && !fused.has(at) ? at : null);
+    this.seen = at ? this.seenOf(at, values, fused) : null;
     const got = values.get(out.module) ?? null;
     if (!got || got === outside) return picture;
     this.given = got;
     return got.tex;
+  }
+
+  /** What module `at` shows after the walk: its picture (pinned, or kept anyway), or why it has none. */
+  private seenOf(at: string, values: Map<string, Target | null>, fused: ReadonlySet<string>): { tex: WebGLTexture } | { why: string } {
+    if (fused.has(at)) return { why: 'Fused into its loop’s pass.' };
+    if (this.inRuns.has(at)) return { why: 'Fused into an effects pass.' };
+    if (this.feedbacks.has(at)) return { why: 'Feedback: no preview yet.' };
+    const t = values.get(at);
+    return t ? { tex: t.tex } : { why: 'Not drawn this frame.' };
+  }
+
+  /** The observed module's target back to the pool, once read. */
+  unpin() {
+    if (this.state.pinned) this.pool.give(this.state.pinned);
+    this.state.pinned = null;
   }
 
   private draw(n: PictureNode, inputs: Map<string, Target | null>, out: Target, k: Record<string, number>, frame: FrameInfo, points: readonly Point[] | null) {
@@ -174,7 +202,13 @@ void main() { o = texture(uIn, vUv); }`);
     const { w, h } = this.spec;
     if (n.type === 'mix') return this.mix(inputs, out, k);
     const node = this.node(n.id, n.type);
-    if (!node) return;
+    // One that cannot be drawn here gives nothing, not what its target held last.
+    if (!node) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, out.fbo);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      return;
+    }
     node.draw(gl, { picture: (inputs.get('picture') ?? inputs.get('in'))?.tex ?? null, by: inputs.get('by')?.tex ?? null }, out.fbo, w, h, k, withInputs(n.type, frame), points);
   }
 
@@ -327,13 +361,14 @@ void main() { o = texture(uIn, vUv); }`);
 
   /** Lets go of every Feedback's last picture (the loops start from nothing). */
   forget() {
+    this.unpin();
     for (const h of this.state.held.values()) if (h.pooled) this.pool.give(h.t);
     for (const t of this.trails.values()) this.pool.give(t);
     this.trails.clear();
     this.clocks.clear();
     if (this.given) this.pool.give(this.given);
     this.state = newWalkState();
-    this.shown.clear();
+    this.seen = null;
     this.given = null;
   }
 
@@ -349,7 +384,7 @@ void main() { o = texture(uIn, vUv); }`);
     if (this.black) this.free(this.black);
     this.black = null;
     this.state = newWalkState();
-    this.shown.clear();
+    this.seen = null;
     this.trails.clear();
     this.given = null;
     this.spec = { ...this.spec, w: width, h: height };

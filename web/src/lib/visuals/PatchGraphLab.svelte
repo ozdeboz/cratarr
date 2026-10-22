@@ -66,9 +66,9 @@
   }
 
   // The thumbnails stood in for (the renderer draws them in the app): a wash of each module's own hue, moving.
-  function standInThumb(module: string, canvas: HTMLCanvasElement): boolean {
+  function standInThumb(module: string, canvas: HTMLCanvasElement): string | null {
     const g = canvas.getContext('2d');
-    if (!g) return false;
+    if (!g) return 'No canvas.';
     const hue = [...module].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 360, 7);
     const t = performance.now() / 1000;
     const grad = g.createLinearGradient(0, 0, canvas.width, canvas.height);
@@ -77,7 +77,7 @@
     grad.addColorStop(1, `hsl(${(hue + 80) % 360} 70% 12%)`);
     g.fillStyle = grad;
     g.fillRect(0, 0, canvas.width, canvas.height);
-    return true;
+    return null;
   }
 
   // The live faces: the beat at 120 a minute, the LFO stepped as the engine steps it, the ADSRs stood in for (a gate on
