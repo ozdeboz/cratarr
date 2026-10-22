@@ -3,7 +3,8 @@
   // drawn by claude-5f's loop (visuals-loop.ts: the one engine, the compositor), changed by the panel
   // (VisualsPanel.svelte) and the graph (claude-632's PatchGraph) alike, every change one undo step. Over everything,
   // on black: a tap shows the track, the controls and the dice for a few seconds; two or more on a side seek; a swipe
-  // down, Esc or Back closes. The dice: a tap rolls everything not pinned, a long press picks what (DiceMenu). Reset:
+  // down, Esc or Back closes. The dice: a tap opens a row of its scopes (Everything, Sources…), each a roll of what is not pinned; the row stays, and
+  // holds the controls up, till the dice is tapped again. A long press rolls everything. Reset:
   // the track's own look again, or everything (ResetMenu). Snapshots: saved patches on the server, every device's.
   import { onMount } from 'svelte';
   import { fade } from 'svelte/transition';
@@ -23,7 +24,6 @@
   import Help from './Help.svelte';
   import SnapshotsSheet from './SnapshotsSheet.svelte';
   import VisualsPanel from './VisualsPanel.svelte';
-  import DiceMenu from './DiceMenu.svelte';
   import ResetMenu from './ResetMenu.svelte';
   import PatchGraph from './PatchGraph.svelte';
   import { LiveFaces } from './faces.svelte';
@@ -31,7 +31,7 @@
   import { applyPanel, type PanelEdit } from './patch-edits';
   import { cratarrTypes } from './patch';
   import { v2Types } from './picture-graph';
-  import type { RANDOMIZE_SCOPES } from './ports';
+  import { RANDOMIZE_SCOPES } from './ports';
   import type { Category } from './rack';
   import { DEFAULTS, RANGES, visualSettings } from './settings.svelte';
   import { patchOfSnapshot, snapshotOfPatch } from './snapshot-v2';
@@ -60,7 +60,7 @@
   function showChrome() {
     chrome = true;
     clearTimeout(hideTimer);
-    if (!panel) hideTimer = setTimeout(() => (chrome = false), 3000);
+    if (!panel && !diceRow) hideTimer = setTimeout(() => (chrome = false), 3000);
   }
 
   // Closing: by the button, Esc or a swipe down this step of the history goes back too; Back has done that already.
@@ -112,6 +112,8 @@
   }
   function toggleChrome() {
     taps = null;
+    // The dice's row open holds the controls up.
+    if (diceRow) return showChrome();
     if (chrome) {
       chrome = false;
       panel = false;
@@ -184,7 +186,9 @@
     // In / Out (Music, the Screen, the Meter) is no scope of the dice: nothing of it to roll.
     else if (what.category !== 'io') roll(what.category);
   }
-  let diceMenu = $state(false);
+  // The dice's row of scopes: open till the dice is tapped again.
+  let diceRow = $state(false);
+  const DICE_LABEL: Record<(typeof RANDOMIZE_SCOPES)[number], string> = { everything: 'Everything', sources: 'Sources', effects: 'Effects', mixers: 'Mixers', modulators: 'Modulators', cables: 'Cables' };
   let resetMenu = $state(false);
 
   // ---- Snapshots: saved patches on the server ---------------------------------------------------------------------
@@ -365,16 +369,14 @@
         >
         <button
           class="round"
+          class:on={diceRow}
           aria-label="Randomize"
+          aria-expanded={diceRow}
           use:held={'randomise'}
-          use:longpress={() => (diceMenu = true)}
-          oncontextmenu={(e) => {
-            e.preventDefault();
-            diceMenu = true;
-          }}
+          use:longpress={() => (roll('everything'), showChrome())}
           onpointerdown={(e) => e.stopPropagation()}
           onpointerup={(e) => e.stopPropagation()}
-          onclick={() => roll()}><Icon name="dice" size={24} /></button
+          onclick={() => ((diceRow = !diceRow), showChrome())}><Icon name="dice" size={24} /></button
         >
         {#if visualsPatch.canUndo}
           <button
@@ -420,6 +422,13 @@
           >
         {/if}
       </div>
+      {#if diceRow}
+        <div class="dice-row" role="toolbar" aria-label="Randomize" transition:fade={{ duration: 120 }}>
+          {#each RANDOMIZE_SCOPES as scope (scope)}
+            <button onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => (roll(scope), showChrome())}>{DICE_LABEL[scope]}</button>
+          {/each}
+        </div>
+      {/if}
       {#if graphShown}
         <div
           class="graph"
@@ -499,9 +508,6 @@
   {#if sought}
     <div class="sought" class:back={sought.side < 0} aria-live="polite">{sought.side > 0 ? '+' : '−'}{sought.secs} s</div>
   {/if}
-  {#if diceMenu}
-    <DiceMenu onroll={(scope) => roll(scope)} onclose={() => (diceMenu = false)} />
-  {/if}
   {#if resetMenu}
     <ResetMenu onseed={() => loop?.resetToSeed()} oneverything={resetEverything} onclose={() => (resetMenu = false)} />
   {/if}
@@ -573,6 +579,33 @@
   }
 
   .close,
+  /* The dice's scopes: a row under the corner's buttons, each a roll, the row open till the dice is tapped again. */
+  .dice-row {
+    position: absolute;
+    top: calc(max(12px, env(safe-area-inset-top)) + 56px);
+    right: max(12px, env(safe-area-inset-right));
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+    max-width: calc(100% - 24px);
+    pointer-events: auto;
+  }
+  .dice-row button {
+    height: 36px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 18px;
+    background: rgb(0 0 0 / 0.55);
+    color: #fff;
+    font: inherit;
+    font-size: 0.9rem;
+    cursor: pointer;
+  }
+  .dice-row button:active {
+    background: rgb(255 255 255 / 0.22);
+  }
+
   .round {
     width: 48px;
     height: 48px;
