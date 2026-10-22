@@ -45,6 +45,8 @@
   let canvas: HTMLCanvasElement;
   let chrome = $state(true);
   let unsupported = $state(false);
+  // Why some of the patch is not drawn (the renderer's errors), shown while the chrome is.
+  let drawErrors = $state<string[]>([]);
   let panel = $state(false);
   let fps = $state(0);
   const np = $derived(playing());
@@ -312,6 +314,7 @@
         if (graphShown || panelShown) liveFaces.offer(performance.now(), () => ({ time: performance.now() / 1000, beat: null, outputs: { ...frame.outputs }, points: frame.points }));
       },
       onUnsupported: () => (unsupported = true),
+      onErrors: (errors) => (drawErrors = errors),
     });
     loop.start();
 
@@ -347,6 +350,9 @@
   <canvas bind:this={canvas}></canvas>
   {#if unsupported}
     <p class="note">This device cannot draw the visuals.</p>
+  {/if}
+  {#if chrome && drawErrors.length}
+    <p class="refused" role="status">{drawErrors[0]}{drawErrors.length > 1 ? ` (+${drawErrors.length - 1})` : ''}</p>
   {/if}
   {#if chrome}
     <div class="chrome" transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
@@ -537,6 +543,17 @@
     display: block;
     width: 100%;
     height: 100%;
+  }
+
+  .refused {
+    position: absolute;
+    inset: max(12px, env(safe-area-inset-top)) 72px auto 72px;
+    z-index: 2;
+    margin: 0;
+    color: #f3c46b;
+    text-align: center;
+    font-size: 0.85rem;
+    pointer-events: none;
   }
 
   .note {

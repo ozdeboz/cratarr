@@ -45,9 +45,49 @@ test('layers and the picture’s own loop: mixed in their order, the loop’s Fe
   assert.deepEqual(stagesOf(c), STAGES.filter((x) => x !== 'effects'), 'no effect: no effects');
 });
 
-test('passes out of the order this version draws them in are refused', () => {
+test('a module’s pass is by what it takes, not where it stands; one reading a later pass is refused, named', async () => {
+  const { stageRefusal } = await import('../src/lib/visuals/picture-graph.ts');
   const c = compile(toV2(settings()), types);
-  assert.equal(stagesOf({ ...c, order: [...c.order].reverse() }), null);
+  assert.deepEqual(stagesOf({ ...c, order: [...c.order].reverse() }), STAGES.filter((x) => x !== 'effects'));
+  const pic = (from: string) => ({ port: 'light', type: 'light' as const, from: { module: from, port: 'picture' } });
+  const bad = { order: [{ id: 's', type: 'shapes', inputs: [] }, { id: 'trails', type: 'trails', inputs: [pic('s')] }], screen: null, errors: [] };
+  assert.equal(stagesOf(bad), null);
+  assert.match(stageRefusal(bad) ?? '', /^trails takes s/);
+});
+
+test('Show’s own parts are what take the light and those fused straight after Tone map; elsewhere they are modules', async () => {
+  const { stageOf } = await import('../src/lib/visuals/picture-graph.ts');
+  const { DEVICES } = await import('../src/lib/visuals/devices.ts');
+  const c = compile(toV2(settings()), types);
+  const stage = (cc: typeof c, id: string) => stageOf(cc.order.find((n) => n.id === id)!);
+  assert.deepEqual(['show/bend', 'show/blur', 'show/tonemap', 'show/curve', 'show/saturate'].map((id) => stage(c, id)), ['show', 'show', 'show', 'show', 'show']);
+  // After the layers (between them and the Screen): each a module of the compose step.
+  const after = (m: { id: string; type: string; knobs: Record<string, number> }, input = 'picture', out = 'picture') => {
+    const v = toV2(settings());
+    v.modules.push(m as never);
+    const cab = v.cables.find((x) => x.from.module === 'layers' && x.from.port === 'picture')!;
+    const to = cab.to;
+    cab.to = { module: m.id, port: input };
+    v.cables.push({ id: `x-${m.id}`, from: { module: m.id, port: out }, to, value: 1 } as never);
+    return compile(v, types);
+  };
+  for (const type of ['blur', 'bend', 'curve', 'saturate']) {
+    const cc = after({ id: `x-${type}`, type, knobs: {} });
+    assert.deepEqual(cc.errors, [], type);
+    assert.ok(stagesOf(cc), type);
+    assert.equal(stage(cc, `x-${type}`), 'compose', type);
+  }
+  const bloom = after(JSON.parse(JSON.stringify(DEVICES.find((d) => d.id === 'bloom')!)));
+  assert.deepEqual(bloom.errors, []);
+  assert.ok(stagesOf(bloom), 'Bloom after the layers');
+  // The cover into a Tint: Music a picture source like any other.
+  const v = toV2(settings());
+  v.modules.push(JSON.parse(JSON.stringify(DEVICES.find((d) => d.id === 'scope')!)));
+  v.cables.push({ id: 'x1', from: { module: 'scope', port: 'picture' }, to: { module: 'layers', port: 'in2' }, value: 1 } as never, { id: 'x2', from: { module: 'music', port: 'cover' }, to: { module: 'scope', port: 'colours' }, value: 1 } as never);
+  const cover = compile(v, types);
+  assert.deepEqual(cover.errors, []);
+  assert.ok(stagesOf(cover), 'cover → Tint');
+  assert.equal(stage(cover, 'music'), 'compose');
 });
 
 test("the effects in a line drawing today's one pass: colours and echoes in slot order, then the shapes reversed", async () => {

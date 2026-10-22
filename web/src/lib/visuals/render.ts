@@ -12,7 +12,7 @@
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
 import type { ChainNow, ShowParams } from './chain-params';
 import type { FrameInfo, Module, PatchExtra } from './patch';
-import { compile, composeOf, plan, STAGES, stageOf, stagesOf, type Compiled, type PictureNode, type Stage, type TypeOf } from './picture-graph';
+import { compile, composeOf, plan, STAGES, stageOf, stageRefusal, stagesOf, type Compiled, type PictureNode, type Stage, type TypeOf } from './picture-graph';
 import { fxOfModule, slotOf, type Fx } from './nodes/effect-runs';
 import { MIX_MODES, SHOW_PARTS, type PatchV2 } from './ports';
 import { flatten } from './v2';
@@ -32,13 +32,21 @@ import { chain, IDENTITY, transformOf } from './transform';
 import { Show } from './nodes/show';
 import { none } from './nodes/shared';
 
-/** Show's pass as far as its part `type` (a fusion barrier at the observed part): the parts after it at their
- *  neutral (no smoothing; Haze at 0, its gamma 3: aspects.ts hazeOf; all of its colour). */
-function showUpTo(look: ShowParams, type: string): ShowParams {
-  const at = SHOW_PARTS.findIndex((p) => p.type === type);
-  const after = (t: string) => SHOW_PARTS.findIndex((p) => p.type === t) > at;
-  return { ...look, ...(after('blur') ? { smoothing: 0 } : {}), ...(after('curve') ? { gamma: 3, floor: 0 } : {}), ...(after('saturate') ? { saturation: 1 } : {}) };
+/** Show's look with only `parts` of Show's drawn in its pass (by type), the rest at their neutral: no bend, no
+ *  smoothing, Haze at 0 (its gamma 3: aspects.ts hazeOf), all of its colour. A part elsewhere (Blur after the layers)
+ *  is a module of its own. */
+function showWith(look: ShowParams, parts: ReadonlySet<string>): ShowParams {
+  return {
+    ...look,
+    ...(parts.has('bend') ? {} : { flow: { ...look.flow, wave: undefined } }),
+    ...(parts.has('blur') ? {} : { smoothing: 0 }),
+    ...(parts.has('curve') ? {} : { gamma: 3, floor: 0 }),
+    ...(parts.has('saturate') ? {} : { saturation: 1 }),
+  };
 }
+
+/** Of `parts`, those as far as `type` in Show's order (a fusion barrier at the observed part). */
+const partsUpTo = (parts: ReadonlySet<string>, type: string) => new Set([...parts].filter((t) => SHOW_PARTS.findIndex((p) => p.type === t) <= SHOW_PARTS.findIndex((p) => p.type === type)));
 
 /** The size the cover is drawn at as a picture (16:9, the middle of a square cover). */
 const COVER: [number, number] = [320, 180];
@@ -162,6 +170,8 @@ export class FlameRenderer {
   private observed: { id: string; asked: number; wanted: boolean; why: string | null } | null = null;
   private thumbs: Thumbs | null = null;
   private showOut: string | null = null;
+  /** The types of Show's parts drawn in its pass (the rest neutral there). */
+  private showParts = new Set<string>();
   /** The observed Show part's picture (Show's pass drawn again as far as it), at the buffer's size. */
   private peek: { tex: WebGLTexture; fbo: WebGLFramebuffer; w: number; h: number } | null = null;
   /** The Music modules, whether one's cover reaches the Screen, and the cover as a texture (made again as it changes). */
@@ -231,7 +241,7 @@ export class FlameRenderer {
     const c = compile(p, typeOf);
     const stages = stagesOf(c);
     this.compiled = stages ? c : null;
-    this.errors = stages ? c.errors : [...c.errors, 'This version draws the picture in its own order only.'];
+    this.errors = stages ? c.errors : [...c.errors, stageRefusal(c) ?? 'Not drawn in its order.'];
     this.stages = new Set(stages ?? STAGES);
     const flat = flatten(p);
     this.knobsIn = new Map(flat.modules.map((m) => [m.id, m.knobs]));
@@ -241,6 +251,7 @@ export class FlameRenderer {
     this.composed = stages ? composeOf(c) : null;
     this.lightTransforms = stages ? c.order.filter((n) => n.type === 'transform' && stageOf(n) === 'points').map((n) => n.id) : [];
     this.showOut = stages ? (c.order.filter((n) => stageOf(n) === 'show').at(-1)?.id ?? null) : null;
+    this.showParts = new Set(stages ? c.order.filter((n) => stageOf(n) === 'show').map((n) => n.type) : SHOW_PARTS.map((p) => p.type));
     this.musicIds = new Set(flat.modules.filter((m) => m.type === 'music').map((m) => m.id));
     this.coverDrawn = !!stages && c.order.some((n) => n.type === 'music');
     this.walker?.prune(this.composed?.ids ?? new Set());
@@ -374,7 +385,7 @@ export class FlameRenderer {
     if (drawn) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, into ? into.fbo : null);
       if (into) viewWidth = light.width, viewHeight = light.height;
-      this.show.draw(light, this.points, now!.show, passes, fluid, this.carry.warpShown, viewWidth, viewHeight);
+      this.show.draw(light, this.points, showWith(now!.show, this.showParts), passes, fluid, this.showParts.has('bend') ? this.carry.warpShown : 0, viewWidth, viewHeight);
     }
     const info = given?.frame ?? { dt: since, time: at / 1000, beat: null, signals: () => 0, waveform: null };
     // Without the flame drawn, the compose step starts from nothing where Show's picture would be.
@@ -387,14 +398,15 @@ export class FlameRenderer {
     else this.fin.idle();
     if (seeing) {
       const n = this.compiled?.order.find((x) => x.id === seeing);
-      const part = drawn && n && stageOf(n) === 'show' && n.id !== this.showOut ? this.peekShow(showUpTo(now!.show, n.type), passes, fluid) : null;
+      const parts = n ? partsUpTo(this.showParts, n.type) : null;
+      const part = drawn && n && parts && stageOf(n) === 'show' && n.id !== this.showOut ? this.peekShow(showWith(now!.show, parts), passes, fluid, parts.has('bend')) : null;
       this.look(seeing, this.seenOf(seeing, source, walking ? this.walker!.seen : null, drawn ? into : null, part, cover));
       this.walker?.unpin();
     }
   }
 
   /** Show's pass drawn again into the peek target with `look` (as far as the observed part): its picture. */
-  private peekShow(look: ShowParams, passes: number, fluid: Fluid | null): WebGLTexture {
+  private peekShow(look: ShowParams, passes: number, fluid: Fluid | null, bent: boolean): WebGLTexture {
     const gl = this.gl;
     const [w, h] = [this.light.width, this.light.height];
     if (this.peek && (this.peek.w !== w || this.peek.h !== h)) this.freePeek();
@@ -410,7 +422,7 @@ export class FlameRenderer {
       this.peek = { tex, fbo, w, h };
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.peek.fbo);
-    this.show.draw(this.light, this.points, look, passes, fluid, this.carry.warpShown, w, h);
+    this.show.draw(this.light, this.points, look, passes, fluid, bent ? this.carry.warpShown : 0, w, h);
     return this.peek.tex;
   }
 

@@ -106,6 +106,8 @@ export type LoopHost = {
   onFrame?: (frame: EngineFrame, levers: Levers) => void;
   /** The GPU cannot draw (none, or it took the context away). */
   onUnsupported?: () => void;
+  /** Why some of the patch is not drawn (each a sentence; none: all of it), as a patch's structure changes. */
+  onErrors?: (errors: string[]) => void;
 };
 
 export class VisualsLoop {
@@ -339,8 +341,10 @@ export class VisualsLoop {
         try {
           renderer.setPatch(patch, host.pictureTypes);
           if (renderer.errors.length) console.warn(`Visuals: ${renderer.errors.join(' · ')}`);
+          host.onErrors?.(renderer.errors);
         } catch (e) {
           console.warn('Visuals: the patch could not be drawn as a graph', e);
+          host.onErrors?.(['The patch could not be drawn.']);
         }
       }
 
