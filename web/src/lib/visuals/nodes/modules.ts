@@ -14,8 +14,12 @@ import { none } from './shared';
 
 /** A module's pass: its picture inputs by port (`picture`, `by`), drawn into `out` at `width` × `height`; the points
  *  cabled into it (Instance's, Fold's grid: points-pictures.ts), where it reads them. */
+/** A flow field as a node reads it: the Fluid's (its velocity texture, cells a second, and texture units per cell) or a
+ *  Field's (field.ts: its scale and time run on). */
+export type FlowField = { tex: WebGLTexture; uvPerCell: [number, number] } | { scale: number; phase: number };
+
 export type ModuleNode = {
-  draw(gl: WebGL2RenderingContext, inputs: { picture: WebGLTexture | null; by?: WebGLTexture | null }, out: WebGLFramebuffer, width: number, height: number, knobs: Record<string, number>, frame: FrameInfo, points?: readonly { x: number; y: number }[] | null): void;
+  draw(gl: WebGL2RenderingContext, inputs: { picture: WebGLTexture | null; by?: WebGLTexture | null; field?: FlowField | null }, out: WebGLFramebuffer, width: number, height: number, knobs: Record<string, number>, frame: FrameInfo, points?: readonly { x: number; y: number }[] | null): void;
   dispose(gl: WebGL2RenderingContext): void;
 };
 

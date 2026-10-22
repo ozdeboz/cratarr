@@ -514,7 +514,26 @@ export const TRANSFORM = declared(
   [{ id: 'out', label: 'Out', type: 'light', polymorphic: TRANSFORM_TYPES }],
 );
 
-export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD, LENS, TRANSFORM];
+/** Streamlines (the owner's evolving flow field): curves through a flow field from seed points (a Grid's; else an even
+ *  scatter), drawn anew every frame: a field, traced, not a feedback warp. */
+export const STREAMLINES = declared(
+  'streamlines',
+  'Streamlines',
+  'module',
+  [
+    knob('length', 'Length', 0.05, 2, 0.6),
+    knob('thickness', 'Thickness', 0.001, 0.05, 0.006),
+    knob('calm', 'Calm', 0.001, 0.5, 0.05),
+    knob('brightness', 'Brightness', 0, 3, 1, 'level'),
+    knob('hue', 'Hue', 0, 1, 0.55),
+    knob('hueSpread', 'Hue spread', 0, 1, 0.3),
+    knob('saturation', 'Saturation', 0, 1, 0, 'level'),
+  ],
+  [{ id: 'seeds', label: 'Seeds', type: 'points' }, FLOW_IN],
+  [PICTURE_OUT],
+);
+
+export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD, LENS, TRANSFORM, STREAMLINES];
 
 /** The Randomize scopes (0057 §4d), in the dice's menu's order. */
 export const RANDOMIZE_SCOPES = ['everything', 'sources', 'effects', 'mixers', 'modulators', 'cables'] as const;
@@ -577,7 +596,11 @@ export const MUSIC_SIGNAL_MODULES: readonly Declared[] = MUSIC.ports.out.map((o)
 );
 export const musicSignalOf = (type: string): string | null => (type.startsWith('music-') ? type.slice('music-'.length) : null);
 
-export const ENGINE_MODULES: readonly Declared[] = [MUSIC, ENVELOPE, DICE, SHAPER, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FOLD, INSTANCE, FILTER_BANK];
+/** Field (the owner's evolving flow field, field.ts): a flow that swirls and changes smoothly by itself, no Flame or
+ *  Fluid needed; Scale its swirls' size (the short side is 2), Speed how fast it changes. */
+export const FIELD = declared('field', 'Field', 'modulator', [knob('scale', 'Scale', 0.1, 4, 1.2), knob('speed', 'Speed', 0, 2, 0.25, 'level')], [], [{ id: 'field', label: 'Flow field', type: 'flow' }]);
+
+export const ENGINE_MODULES: readonly Declared[] = [MUSIC, ENVELOPE, DICE, SHAPER, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FIELD, FOLD, INSTANCE, FILTER_BANK];
 
 // ---- The v2 patch (0057 §4, §7): only modules and cables; layers, loops and the finish are views of the wiring ------
 

@@ -22,6 +22,7 @@ import { createNode, nodeOf, PICTURE_NODES, type ModuleNode } from './modules';
 import { transformIdle } from '../transform';
 import type { Point } from '../points-pictures';
 import { POINTS_NODES } from './points-pictures';
+import type { FlowField } from './modules';
 
 type Target = { tex: WebGLTexture; fbo: WebGLFramebuffer };
 /** A loop drawn as one pass, by its Mix: its Feedback, the Warps and Keeps between them, the Mix's input the new
@@ -100,6 +101,8 @@ export class Walker {
   private aliases = new Map<string, PortRef>();
   private inRuns = new Set<string>();
   private feedbacks = new Set<string>();
+  private fluidField: FlowField | null = null;
+  private fields: (id: string) => FlowField | null = () => null;
 
   constructor(gl: WebGL2RenderingContext, fin: Finish, now: () => number) {
     this.gl = gl;
@@ -158,7 +161,10 @@ void main() { o = texture(uIn, vUv); }`);
   /** The walk drawn from `picture` (`from`'s; null: nothing, black): the texture the effects or the screen read next.
    *  `observe`: the module observed, its target pinned till `unpin` (after its read). `sources`: pictures drawn
    *  outside the walk by their modules (the Music's cover). */
-  run(w: Walk, given: WebGLTexture | null, width: number, height: number, knobs: (id: string) => Record<string, number>, frame: FrameInfo, effects: FxFrame, points: (id: string) => readonly Point[] | null = () => null, observe: string | null = null, sources: ReadonlyMap<string, WebGLTexture> = new Map()): WebGLTexture {
+  run(w: Walk, given: WebGLTexture | null, width: number, height: number, knobs: (id: string) => Record<string, number>, frame: FrameInfo, effects: FxFrame, points: (id: string) => readonly Point[] | null = () => null, observe: string | null = null, sources: ReadonlyMap<string, WebGLTexture> = new Map(), fields: (id: string) => FlowField | null = () => null): WebGLTexture {
+    // The flow field this frame for the modules that read one (Streamlines): a Field's cabled in, else the Fluid's.
+    this.fluidField = effects.fluid ? { tex: effects.fluid.velocity, uvPerCell: effects.fluid.uvPerCell } : null;
+    this.fields = fields;
     this.sized(width, height);
     if (this.given && ![...this.state.held.values()].some((h) => h.t === this.given)) this.pool.give(this.given);
     this.given = null;
@@ -224,7 +230,7 @@ void main() { o = texture(uIn, vUv); }`);
       gl.clear(gl.COLOR_BUFFER_BIT);
       return;
     }
-    node.draw(gl, { picture: (inputs.get('picture') ?? inputs.get('in'))?.tex ?? null, by: inputs.get('by')?.tex ?? null }, out.fbo, w, h, k, withInputs(n.type, frame), points);
+    node.draw(gl, { picture: (inputs.get('picture') ?? inputs.get('in'))?.tex ?? null, by: inputs.get('by')?.tex ?? null, field: this.fields(n.id) ?? this.fluidField }, out.fbo, w, h, k, withInputs(n.type, frame), points);
   }
 
   /** A run of effects in one pass (Finish's), from `input`, its Echo trailing `trails` (its visible Feedback's; none:

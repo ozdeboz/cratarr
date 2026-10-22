@@ -120,6 +120,8 @@ export type EngineState = {
   accents: Record<string, AccentState>;
   /** Each Flame's own state (its node's, step 5), by module. */
   flames: Record<string, FlameState>;
+  /** Each Field's time run on. */
+  fieldPhases: Record<string, number>;
   modulators: Record<string, { type: string; run: Modulator }>;
   /** Each modulator's last output (a cycle reads it). */
   values: Record<string, number>;
@@ -155,6 +157,7 @@ export function newEngine(): EngineState {
     }),
     accents: {},
     flames: {},
+    fieldPhases: {},
     modulators: {},
     values: {},
     macros: {},
@@ -192,6 +195,9 @@ export type EngineFrame = {
   /** The steps past the chain whose cables ask for a moment (morph.ts takes it at the module's neutral). */
   /** The steps whose Next a trigger fired this frame (0057 §7e): each to move on to its next step. */
   nexts: NextRequest[];
+  /** Each Field's flow now (field.ts): its scale and how far its time has run (Speed integrated, so a turned knob
+   *  never jumps it). */
+  fields: Record<string, { scale: number; phase: number }>;
   /** Each Grid's points (its `points` output, for Instance: claude-632's compositor). */
   points: Record<string, GridPoint[]>;
   /** What reaches each points input (`module.port`: a Fluid's `at`, where it pushes): what is cabled into it (a Flame's
@@ -1043,6 +1049,15 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     }
   }
   for (const { x, t } of plan.others) if (!knobs[x.id]) knobs[x.id] = knobsOf(x, t);
+  // Each Field: its time run on at its Speed.
+  const fields: Record<string, { scale: number; phase: number }> = {};
+  for (const x of p.modules) {
+    if (x.type !== 'field') continue;
+    const k = knobs[x.id] ?? x.knobs;
+    const phase = (st.fieldPhases[x.id] = finite(st.fieldPhases[x.id], 0) + finite(k.speed, 0.25) * step);
+    fields[x.id] = { scale: finite(k.scale, 1.2), phase };
+  }
+  for (const id of Object.keys(st.fieldPhases)) if (!(id in fields)) delete st.fieldPhases[id];
   // Each Dice: a roll as its trigger rises past a half (its `done` a trigger the same frame), seeded by its seed input
   // (0..1 back to the 32 bits it came from; none plugged: the frame's time), over its scope.
   const dice: DiceRoll[] = [];
@@ -1070,7 +1085,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     const got = cabled ? pointsOf(cabled.from) : flameModule ? (opts.flamePoints ?? null) : null;
     if (got) pointsAt[`${x.id}.at`] = got;
   }
-  return { aspects, knobs, params, outputs, macros, nexts, points, pointsAt, dice };
+  return { aspects, knobs, params, outputs, macros, nexts, fields, points, pointsAt, dice };
 
   /** A module's knobs as its macros and cables move them. */
   /** A knob's base as its macros set it, along its taper (an exponential knob's geometrically: 0057's Wild). */

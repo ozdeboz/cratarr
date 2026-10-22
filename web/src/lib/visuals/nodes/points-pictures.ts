@@ -5,6 +5,7 @@
 // or with a grid about each pixel's nearest point (a Voronoi mosaic). Mali rules: level-0 reads, no arrays (the
 // points in a texture, read one by one).
 import { MOST, packed, spacingOf, type Point } from '../points-pictures';
+import { FIELD_GLSL } from '../field';
 import { program } from '../sources/gl';
 import { toScreen } from '../transform';
 import type { ModuleNode } from './modules';
@@ -199,5 +200,125 @@ export function createFold(gl: WebGL2RenderingContext): ModuleNode {
   );
 }
 
+// Streamlines (the owner's evolving flow field: a field, curves traced through it from seed points, drawn anew each
+// frame; not a feedback warp): each seed a ribbon of STEPS steps, its vertices walked along the flow's direction from
+// the seed in the vertex shader (Euler, the step its Length over STEPS), widened by Thickness across the way it goes,
+// tapered at both ends, faded where the flow is calm; added together onto black.
+const STEPS = 48;
+const LINES = `#version 300 es
+precision highp float;
+precision highp int;
+layout(location = 0) in vec2 aSeed;
+uniform sampler2D uVelocity;
+uniform vec2 uUvPerCell;
+uniform int uFormula;
+uniform float uScale;
+uniform float uPhase;
+uniform float uSat;
+uniform vec2 uK;
+uniform float uStep;
+uniform float uHalf;
+uniform float uCalm;
+uniform float uHue;
+uniform float uSpread;
+uniform float uLines;
+out vec4 vColour;
+${FIELD_GLSL}
+vec2 flowAt(vec2 p) {
+  if (uFormula == 1) return fieldAt(p, uScale, uPhase);
+  vec2 cells = textureLod(uVelocity, p * uK * 0.5 + 0.5, 0.0).xy;
+  return cells * uUvPerCell * 2.0 / uK;
+}
+vec3 hsv(float h) { return clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0); }
+void main() {
+  int s = gl_VertexID >> 1;
+  float side = (gl_VertexID & 1) == 0 ? -1.0 : 1.0;
+  vec2 p = aSeed;
+  vec2 v = flowAt(p);
+  for (int j = 0; j < ${STEPS}; j++) {
+    if (j >= s) break;
+    float speed = length(v);
+    if (speed < 1e-4) break;
+    p += v / speed * uStep;
+    v = flowAt(p);
+  }
+  float speed = length(v);
+  vec2 t = speed > 1e-4 ? v / speed : vec2(1.0, 0.0);
+  vec2 at = p + vec2(-t.y, t.x) * side * uHalf;
+  gl_Position = vec4(at * uK, 0.0, 1.0);
+  float along = float(s) / float(${STEPS - 1});
+  float a = sin(3.14159265 * along) * smoothstep(0.0, uCalm, speed);
+  vColour = vec4(mix(vec3(1.0), hsv(fract(uHue + uSpread * float(gl_InstanceID) / max(1.0, uLines))), uSat) * a, 1.0);
+}`;
+const LINE = `#version 300 es
+precision highp float;
+in vec4 vColour;
+uniform float uBright;
+out vec4 o;
+void main() { o = vec4(vColour.rgb * uBright, 1.0); }`;
+
+/** The seeds where none are cabled: an even 8 x 8 over the short side's square. */
+const SCATTER: readonly Point[] = Array.from({ length: 64 }, (_, i) => ({ x: ((i % 8) + 0.5) / 4 - 1, y: (Math.floor(i / 8) + 0.5) / 4 - 1 }));
+
+/** Streamlines: curves through the flow field from its seeds (a Grid's; else an even scatter), drawn anew each frame. */
+export function createStreamlines(gl: WebGL2RenderingContext): ModuleNode {
+  const p = program(gl, LINES, LINE);
+  const data = new Float32Array(MOST * 2);
+  const buffer = gl.createBuffer()!;
+  const vao = gl.createVertexArray()!;
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  gl.bufferData(gl.ARRAY_BUFFER, data.byteLength, gl.DYNAMIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.vertexAttribDivisor(0, 1);
+  gl.bindVertexArray(null);
+  gl.bindBuffer(gl.ARRAY_BUFFER, null);
+  return {
+    draw: (gl, inputs, out, width, height, knobs, _frame, points) => {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, out);
+      gl.viewport(0, 0, width, height);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      const field = inputs.field;
+      const n = packed(points && points.length ? points : SCATTER, data);
+      if (!field || !n) return;
+      gl.useProgram(p);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, n * 2);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+      const u = (name: string) => gl.getUniformLocation(p, name);
+      const formula = 'scale' in field;
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, formula ? none(gl) : field.tex);
+      gl.uniform1i(u('uVelocity'), 0);
+      gl.uniform2f(u('uUvPerCell'), ...(formula ? ([1, 1] as [number, number]) : field.uvPerCell));
+      gl.uniform1i(u('uFormula'), formula ? 1 : 0);
+      gl.uniform1f(u('uScale'), formula ? field.scale : 1);
+      gl.uniform1f(u('uPhase'), formula ? field.phase : 0);
+      gl.uniform1f(u('uSat'), knobs.saturation ?? 0);
+      gl.uniform2f(u('uK'), ...toScreen(width / height));
+      gl.uniform1f(u('uStep'), (knobs.length ?? 0.6) / STEPS);
+      gl.uniform1f(u('uHalf'), (knobs.thickness ?? 0.006) / 2);
+      gl.uniform1f(u('uCalm'), knobs.calm ?? 0.05);
+      gl.uniform1f(u('uHue'), knobs.hue ?? 0.55);
+      gl.uniform1f(u('uSpread'), knobs.hueSpread ?? 0.3);
+      gl.uniform1f(u('uLines'), n);
+      gl.uniform1f(u('uBright'), knobs.brightness ?? 1);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE);
+      gl.bindVertexArray(vao);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, STEPS * 2, n);
+      gl.bindVertexArray(null);
+      gl.disable(gl.BLEND);
+    },
+    dispose: () => {
+      gl.deleteProgram(p);
+      gl.deleteBuffer(buffer);
+      gl.deleteVertexArray(vao);
+    },
+  };
+}
+
 /** The module types drawn here. */
-export const POINTS_NODES: Readonly<Record<string, (gl: WebGL2RenderingContext) => ModuleNode>> = { instance: createInstance, fold: createFold };
+export const POINTS_NODES: Readonly<Record<string, (gl: WebGL2RenderingContext) => ModuleNode>> = { instance: createInstance, fold: createFold, streamlines: createStreamlines };

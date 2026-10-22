@@ -162,6 +162,8 @@ export type PictureInputs = {
   points?: (moduleId: string) => readonly { x: number; y: number }[] | undefined;
   /** The playing track's cover, loaded (the Music module's picture; none: none yet, or no cover). */
   cover?: () => TexImageSource | null;
+  /** Each Field's flow now (the engine's `fields`), by module. */
+  fields?: (id: string) => { scale: number; phase: number } | undefined;
   /** What each chain module's node draws with this frame, from its own knobs (the engine's `params`, step 5). */
   params?: (id: string) => NodeParams | undefined;
 };
@@ -205,6 +207,7 @@ export class FlameRenderer {
   private blanked = false;
   /** Each Instance's and Fold's points by the module that gives them. */
   private pointsFrom = new Map<string, string>();
+  private fieldFrom = new Map<string, string>();
   /** The Transforms on the flame's light (the points' camera's view), in order. */
   private lightTransforms: string[] = [];
   /** The module observed (the graph's preview; TouchDesigner's "cook what's observed"): its picture kept for one small
@@ -296,7 +299,9 @@ export class FlameRenderer {
     this.knobsIn = new Map(flat.modules.map((m) => [m.id, m.knobs]));
     // What gives each Instance its points and each Fold its grid.
     const typeOfId = new Map(flat.modules.map((m) => [m.id, m.type]));
-    this.pointsFrom = new Map(flat.cables.filter((c) => (c.to.port === 'points' && typeOfId.get(c.to.module) === 'instance') || (c.to.port === 'grid' && typeOfId.get(c.to.module) === 'fold')).map((c) => [c.to.module, c.from.module]));
+    this.pointsFrom = new Map(flat.cables.filter((c) => (c.to.port === 'points' && typeOfId.get(c.to.module) === 'instance') || (c.to.port === 'grid' && typeOfId.get(c.to.module) === 'fold') || (c.to.port === 'seeds' && typeOfId.get(c.to.module) === 'streamlines')).map((c) => [c.to.module, c.from.module]));
+    // What gives each Streamlines its flow: a Field cabled into it (else the Fluid's, the normal).
+    this.fieldFrom = new Map(flat.cables.filter((c) => c.to.port === 'field' && typeOfId.get(c.to.module) === 'streamlines' && typeOfId.get(c.from.module) === 'field').map((c) => [c.to.module, c.from.module]));
     this.composed = stages ? composeOf(c) : null;
     this.lightTransforms = stages ? c.order.filter((n) => n.type === 'transform' && stageOf(n) === 'points').map((n) => n.id) : [];
     this.showOut = stages ? (c.order.filter((n) => stageOf(n) === 'show').at(-1)?.id ?? null) : null;
@@ -457,7 +462,8 @@ export class FlameRenderer {
     const effects = { t: fx?.t ?? info.time, beat: fx?.beat, frames: this.fxFrames, fluid: this.carry.fluid };
     const pointsOf = (id: string) => (this.pointsFrom.has(id) ? (given?.points?.(this.pointsFrom.get(id)!) ?? null) : null);
     const covers = new Map([...this.musicIds].map((id) => [id, cover ?? none(gl)]));
-    const picture = into && walking ? this.walker!.run(walking, drawn ? into.tex : null, into.w, into.h, knobsAt, info, effects, pointsOf, seeing, covers) : null;
+    const fieldsOf = (id: string) => (this.fieldFrom.has(id) ? (given?.fields?.(this.fieldFrom.get(id)!) ?? null) : null);
+    const picture = into && walking ? this.walker!.run(walking, drawn ? into.tex : null, into.w, into.h, knobsAt, info, effects, pointsOf, seeing, covers, fieldsOf) : null;
     if (picture) this.screen.toScreen(picture, screenWidth, screenHeight);
     else if (into) this.screen.toScreen(into.tex, screenWidth, screenHeight);
     else this.fin.idle();

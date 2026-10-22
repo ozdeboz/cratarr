@@ -457,6 +457,7 @@ export class VisualsLoop {
         target: (id, knob) => easing?.to[id]?.[knob] ?? stepped.knobs[id]?.[knob] ?? flat.modules.find((x) => x.id === id)?.knobs[knob] ?? 0,
         frame: { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null },
         params: (id) => stepped.params[id],
+        fields: (id) => stepped.fields[id],
         points: (id) => stepped.points[id],
         cover: () => (coverPicture?.key === m.key ? coverPicture.image : null),
       };
