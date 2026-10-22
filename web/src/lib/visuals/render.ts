@@ -381,6 +381,10 @@ export class FlameRenderer {
     const flamed = !!now && !!this.points.flame && !!light.acc && !!light.accFbo;
     if (now && !flamed) return;
     const seeing = this.seeing();
+    // Where in the light's loop an observed light module's picture is (none: not a light module).
+    const seenNode = seeing ? this.compiled?.order.find((x) => x.id === seeing) : undefined;
+    const lightPhase = !seenNode ? null : seenNode.type === 'feedback' && seenNode.inputs[0]?.type === 'light' ? 'held' : stageOf(seenNode) === 'carry' ? 'carried' : stageOf(seenNode) === 'points' ? 'lit' : null;
+    let lightPeek: WebGLTexture | null = null;
     if (seeing) this.thumbs?.poll();
     const at = this.now();
     const since = this.shownAt ? Math.min(0.25, (at - this.shownAt) / 1000) : 0;
@@ -407,10 +411,15 @@ export class FlameRenderer {
       gl.enable(gl.BLEND);
       // Fade what is there; with the Fluid setting, carry it along the flow as it fades, into the other set of
       // buffers (as the scrub copies), and draw on there.
+      // An observed light module's picture (step 6): the light tone mapped where it is in the loop, a carry's as it
+      // carries it on, the Flame's (and a Transform on its light) as its points land; the Feedback's what it holds for
+      // the next frame, the light as the points land (tone mapping it before the carries reads it unlike Show does).
       fluid = this.carry.draw(light, now!.carry, since, loop);
+      if (lightPhase === 'carried') lightPeek = this.peekLight(shown!, passes, fluid);
       // The light's Transforms, in the patch's order: where the points land, after the camera frames the flame.
       this.points.view = this.lightTransforms.reduce((t, id) => chain(t, transformOf(knobsAt(id), light.width / light.height)), IDENTITY);
       this.points.draw(light, now!.points, passes, since);
+      if (lightPhase === 'lit' || lightPhase === 'held') lightPeek = this.peekLight(shown!, passes, fluid);
     }
 
     // Show it. The points held at a time: each frame's, kept 1/(1 − keep) frames; their mean per pixel sets k2. Where the
@@ -448,7 +457,7 @@ export class FlameRenderer {
       const n = this.compiled?.order.find((x) => x.id === seeing);
       const parts = n ? partsUpTo(this.showParts, n.type) : null;
       const part = drawn && n && parts && stageOf(n) === 'show' && n.id !== this.showOut ? this.peekShow(showWith(shown!, parts), passes, fluid, parts.has('bend')) : null;
-      this.look(seeing, this.seenOf(seeing, source, walking ? this.walker!.seen : null, drawn ? into : null, part, cover));
+      this.look(seeing, this.seenOf(seeing, source, walking ? this.walker!.seen : null, drawn ? into : null, part, cover, lightPeek));
       this.walker?.unpin();
     }
   }
@@ -472,6 +481,17 @@ export class FlameRenderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.peek.fbo);
     this.show.draw(this.light, this.points, look, passes, fluid, bent ? this.carry.warpShown : 0, w, h);
     return this.peek.tex;
+  }
+
+  /** The light as it is now, tone mapped alone (Show's other parts at their neutral), into the peek target; the light's
+   *  own drawing state given back after (its buffers bound, blending on), as the loop goes on drawing into it. */
+  private peekLight(look: ShowParams, passes: number, fluid: Fluid | null): WebGLTexture {
+    const gl = this.gl;
+    const tex = this.peekShow(showWith(look, new Set(['tonemap'])), passes, fluid, false);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.light.accFbo);
+    gl.viewport(0, 0, this.light.width, this.light.height);
+    gl.enable(gl.BLEND);
+    return tex;
   }
 
   private freePeek() {
@@ -531,13 +551,13 @@ export class FlameRenderer {
   /** What observed module `id` shows this frame (`source`: the module whose picture it passes on; `walked`: what the
    *  walk says of it; `shown`: Show's target, where Show drew into one; `part`: Show drawn as far as an observed part;
    *  `cover`: the Music's). */
-  private seenOf(id: string, source: string | null, walked: { tex: WebGLTexture } | { why: string } | null, shown: { tex: WebGLTexture } | null, part: WebGLTexture | null, cover: WebGLTexture | null): { tex: WebGLTexture; size?: [number, number] } | { why: string } {
+  private seenOf(id: string, source: string | null, walked: { tex: WebGLTexture } | { why: string } | null, shown: { tex: WebGLTexture } | null, part: WebGLTexture | null, cover: WebGLTexture | null, lit: WebGLTexture | null = null): { tex: WebGLTexture; size?: [number, number] } | { why: string } {
     if (this.musicIds.has(id)) return cover ? { tex: cover, size: COVER } : { why: 'No cover.' };
     if (!this.compiled) return { why: this.errors.at(-1) ?? 'Not drawn.' };
     const n = this.compiled.order.find((x) => x.id === id);
     if (!n) return { why: 'Its picture reaches no Screen.' };
     const stage = stageOf(n);
-    if (stage === 'carry' || stage === 'points' || (n.type === 'feedback' && n.inputs[0]?.type === 'light')) return { why: 'Light: no preview yet.' };
+    if (stage === 'carry' || stage === 'points' || (n.type === 'feedback' && n.inputs[0]?.type === 'light')) return lit ? { tex: lit } : { why: 'Not drawn this frame.' };
     if (source === this.showOut) return shown ? { tex: shown.tex } : { why: 'Not drawn this frame.' };
     if (stage === 'show') return part ? { tex: part } : { why: 'Not drawn this frame.' };
     return walked ?? { why: 'Not drawn this frame.' };
