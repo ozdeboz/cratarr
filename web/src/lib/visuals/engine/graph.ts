@@ -610,8 +610,13 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     }
     const scale = finite(field.knobs.scale, 1.2);
     const phase = finite(st.fieldPhases[field.id], 0);
-    const drift = finite(x.knobs.drift, 0.4);
-    const back = finite(x.knobs.return, 0.6);
+    // Drift and Return as their cables move them (a slow loudness on Drift: the grid sways further when it is loud).
+    const gridKnob = (id: string, or: number) => {
+      const k = (types.grid ?? ENGINE_TYPES.grid).knobs.find((q) => q.id === id);
+      return k ? moved(x.id, k, finite(x.knobs[id], k.default), plan.intoOf.get(x.id)?.get(id) ?? NO_CABLES) : finite(x.knobs[id], or);
+    };
+    const drift = gridKnob('drift', 0.4);
+    const back = gridKnob('return', 0.6);
     const offsets = (g.offsets ??= g.grid.points.map((): [number, number] => [0, 0]));
     points[x.id] = g.grid.points.map((q, i) => {
       const o = (offsets[i] ??= [0, 0]);
