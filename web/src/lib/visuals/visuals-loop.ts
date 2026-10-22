@@ -475,6 +475,8 @@ export class VisualsLoop {
         return;
       }
       const d = stepped.aspects;
+      // The Flame's own (step 5): its parts, turn, rates and lights, its module's; the chain's where it has none.
+      const fl = (flameId ? stepped.params[flameId]?.flame : undefined) ?? d;
 
       // A new track's look, as the patch's Dice roll it: worked out over the next frames, a performance.
       for (const r of stepped.dice) {
@@ -505,7 +507,7 @@ export class VisualsLoop {
       const k = from ? Math.min(1, (now - blendStart) / blendMs) : 1;
       shown = from && k < 1 ? between(from, to, k * k * (3 - 2 * k)) : to;
       if (k >= 1) from = null;
-      const drawnFlame = evolved(shown, d.parts, lookOf('purity'), how.spread);
+      const drawnFlame = evolved(shown, fl.parts, lookOf('purity'), how.spread);
       if (!measure && now - measured > 500) {
         measured = now;
         measure = frame ? measuring(drawnFlame) : measuring(drawnFlame, 6000, 6000);
@@ -545,8 +547,8 @@ export class VisualsLoop {
         partsMeasured = now;
         const cam = frame ?? drawnFlame;
         const aspect = w / h;
-        const cos = Math.cos(d.turn);
-        const sin = Math.sin(d.turn);
+        const cos = Math.cos(fl.turn);
+        const sin = Math.sin(fl.turn);
         // In place: the engine took this list as the Flame's points.
         partsWhere.length = 0;
         for (const p of partsAt(drawnFlame)) {
@@ -573,8 +575,8 @@ export class VisualsLoop {
         dt,
         amount: fluidNow,
         parts: (fluidAt ?? partsWhere) as ([number, number] | null)[],
-        turns: d.rates,
-        lights: d.hits,
+        turns: fl.rates,
+        lights: fl.hits,
         level: d.bands.map((v) => v[B.level]),
         continuity: how.continuity,
         hits: m.playing && m.hits ? m.hits.map((hh) => (hh.index < 0 ? null : { index: hh.index, strength: hh.weight, nextIn: hh.nextIn })) : [],
@@ -605,11 +607,11 @@ export class VisualsLoop {
           const zooms = zoomsMotion(d.tunnel * levers.pace, d.dive * levers.pace);
           return { ...fx, motion: (fx.motion ?? 0) + wavesMotion(wavesNow, d.fluid) + zooms };
         })(),
-        turnRates: renderer.diveTurnRate ? d.rates.map((rr) => rr + renderer!.diveTurnRate) : d.rates,
-        shape: d.shape,
-        weights: d.parts.map((p) => p.weight ?? 1),
-        hue: d.parts.map((p) => p.hue),
-        spread: d.parts.map((p) => p.spread ?? 1),
+        turnRates: renderer.diveTurnRate ? fl.rates.map((rr) => rr + renderer!.diveTurnRate) : fl.rates,
+        shape: fl.shape,
+        weights: fl.parts.map((p) => p.weight ?? 1),
+        hue: fl.parts.map((p) => p.hue),
+        spread: fl.parts.map((p) => p.spread ?? 1),
         scale: d.scale,
         saturation: d.saturation,
         look: lookCame,

@@ -229,6 +229,13 @@ test("each chain module's own knobs and node values (step 5, the one engine) are
         if (mod('tunnel')) near(f.params.tunnel?.tunnel, d.tunnel, 'tunnel');
         if (mod('dive')) near(f.params.dive?.dive, d.dive, 'dive');
         near(f.params.flame?.scale, d.scale, 'scale');
+        // The Flame's own state (5d): its parts, turn, rates, shapes, lights.
+        const own = f.params.flame!.flame!;
+        near(own.turn, d.turn, 'turn');
+        own.rates.forEach((v, i) => near(v, d.rates[i], `rate ${i}`));
+        own.shape.forEach((v, i) => near(v, d.shape[i], `shape ${i}`));
+        own.hits.forEach((v, i) => near(v, d.hits[i], `lights ${i}`));
+        own.parts.forEach((q, i) => (['turn', 'size', 'morph', 'hue', 'spread', 'weight'] as const).forEach((key) => near(q[key], d.parts[i][key], `part ${i} ${key}`)));
         checked++;
         return f.aspects;
       },

@@ -18,7 +18,7 @@ import { ASPECT_KNOB, type Knob, type Macro, type Module, type ModuleType, type 
 import { COLUMN_OFFSETS, ENGINE_MODULES, RANDOMIZE_SCOPES, READINGS, SHOW_PARTS, type CableV2, type PatchV2, type PortRef } from '../ports';
 import { A, ASPECTS, B, BAND_SIGNALS, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, given as columnsFor, type Aspect, type Given } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
-import { newChain, stepChain, type ChainState } from './chain';
+import { newChain, newFlame, stepChain, stepFlame, type ChainState, type FlameNow, type FlameState } from './chain';
 import { newDucker, stepDucker, type DuckerState } from './compressor';
 import { newClockTriggers, stepClockTriggers, type ClockTriggerState, type ClockTriggers } from './clock';
 import { gridOf, type Grid, type GridPoint } from './grid';
@@ -106,6 +106,8 @@ export type EngineState = {
   got: Given;
   /** Each chain module's Accent courses (`<module>|<knob>`): its swings followed slower, the accent on what is left. */
   accents: Record<string, AccentState>;
+  /** Each Flame's own state (its node's, step 5), by module. */
+  flames: Record<string, FlameState>;
   modulators: Record<string, { type: string; run: Modulator }>;
   /** Each modulator's last output (a cycle reads it). */
   values: Record<string, number>;
@@ -142,6 +144,7 @@ export function newEngine(): EngineState {
     }),
     got: given(BANDS),
     accents: {},
+    flames: {},
     modulators: {},
     values: {},
     macros: {},
@@ -208,6 +211,8 @@ export type NodeParams = {
   dive?: number;
   /** The Flame's size (its Zoom, its Accent course its own). */
   scale?: number;
+  /** The Flame's parts, turn and lights (its own state, stepFlame). */
+  flame?: FlameNow;
 };
 
 /** A Dice's roll: which, the seed its seed input gives (Music's `seed`: the track's own), its scope. */
@@ -1117,9 +1122,15 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
       params[own.id] = { fluid, warp: 0.12 * fluid, facets: k.facets };
     } else if (own.type === 'tunnel') params[own.id] = { tunnel: k.tunnel };
     else if (own.type === 'dive') params[own.id] = { dive: k.dive };
-    else if (own.type === 'flame') params[own.id] = { scale: clamp(accented(own.id, 'zoom', 0.5 + 0.5 * k.zoom, held.size), 0.25, 1.4) };
+    else if (own.type === 'flame') {
+      const continuity = Array.from({ length: BANDS }, (_, b) => knobOf(x, CONTINUITY_AT[b], s.continuity[b]));
+      const evolution = Array.from({ length: BANDS }, (_, b) => knobOf(x, EVOLUTION_AT[b], s.evolution[b]));
+      const flame = stepFlame((st.flames[own.id] ??= newFlame()), m, (knob, band) => (band === null ? k[knob] : k[`${knob}.${band}`]), { clock, continuity, evolution, accent: chainSettings.flash }, step, held);
+      params[own.id] = { scale: clamp(accented(own.id, 'zoom', 0.5 + 0.5 * k.zoom, held.size), 0.25, 1.4), flame };
+    }
   }
   for (const id of Object.keys(st.accents)) if (!moduleOf.has(id.slice(0, id.lastIndexOf('|')))) delete st.accents[id];
+  for (const id of Object.keys(st.flames)) if (!moduleOf.has(id)) delete st.flames[id];
 
   // Every other module's knobs, as the evaluator moves a knob.
   if (!plan.others) {

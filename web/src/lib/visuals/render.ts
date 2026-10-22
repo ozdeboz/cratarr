@@ -72,6 +72,7 @@ function ownLoop(now: ChainNow, of: (type: string) => NodeParams | undefined): C
     points: {
       ...now.points,
       ...(flame?.scale !== undefined ? { scale: flame.scale } : {}),
+      ...(flame?.flame ? { turn: flame.flame.turn } : {}),
       ...(dive?.dive !== undefined ? { dive: DIVE_MOST * dive.dive } : {}),
     },
     carry: {
@@ -80,7 +81,7 @@ function ownLoop(now: ChainNow, of: (type: string) => NodeParams | undefined): C
       ...(fluid?.fluid !== undefined ? { fluid: fluid.fluid, warp: fluid.warp ?? 0, facets: { hex: now.carry.facets?.hex ?? false, amount: fluid.facets ?? 0 } } : {}),
       ...(tunnel?.tunnel !== undefined ? { tunnel: TUNNEL_MOST * tunnel.tunnel } : {}),
     },
-    show: { ...now.show, keep },
+    show: { ...now.show, keep, ...(flame?.flame ? { hits: flame.flame.hits } : {}) },
   };
 }
 
