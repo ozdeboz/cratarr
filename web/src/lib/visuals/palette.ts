@@ -186,16 +186,29 @@ export function coverPalette(url: string, n = 6): Promise<Palette | null> {
   return p;
 }
 
-/** The image at `url` drawn `SIZE` pixels a side: its pixels, or null where it does not load. */
-async function drawn(url: string): Promise<Uint8ClampedArray | null> {
+/** The covers loaded lately, by address (the Music module's picture, beside their colours). */
+const images = new Map<string, Promise<HTMLImageElement | null>>();
+
+/** The cover at `url` as an image, decoded: null where it does not load. The last few are kept. */
+export function coverImage(url: string): Promise<HTMLImageElement | null> {
+  const had = images.get(url);
+  if (had) return had;
   const image = new Image();
   image.decoding = 'async';
   image.src = url;
-  try {
-    await image.decode();
-  } catch {
-    return null;
-  }
+  const p = image.decode().then(
+    () => image,
+    () => null,
+  );
+  images.set(url, p);
+  if (images.size > 4) images.delete(images.keys().next().value!);
+  return p;
+}
+
+/** The image at `url` drawn `SIZE` pixels a side: its pixels, or null where it does not load. */
+async function drawn(url: string): Promise<Uint8ClampedArray | null> {
+  const image = await coverImage(url);
+  if (!image) return null;
   const canvas = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(SIZE, SIZE) : Object.assign(document.createElement('canvas'), { width: SIZE, height: SIZE });
   const g = canvas.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
   if (!g) return null;

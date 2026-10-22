@@ -138,6 +138,9 @@ test('the walk draws the picture’s own loop as one pass: its Feedback, its War
   assert.deepEqual([...loops.entries()], [['loop-mix', { feedback: 'loop-feedback', chain: [{ id: 'example-warp', type: 'warp' }, { id: 'example-keep', type: 'keep' }] }]]);
   // Not lightened: drawn module by module.
   assert.equal(loopsOf(c.order.filter((n) => ids.has(n.id)), (id) => (id === 'loop-mix' ? { ...knobs(id), mode2: 0 } : knobs(id))).size, 0);
+  // One of its Warps or Keeps observed: a barrier, drawn module by module while it is.
+  assert.equal(loopsOf(c.order.filter((n) => ids.has(n.id)), knobs, 'example-keep').size, 0);
+  assert.equal(loopsOf(c.order.filter((n) => ids.has(n.id)), knobs, 'loop-mix').size, 1);
 });
 
 test('every chain and example converted is drawn whole: no errors, its stages', async () => {

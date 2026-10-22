@@ -32,8 +32,8 @@ export function fxOfModule(type: string, knobs: Record<string, number>): Fx | nu
 export const slotOf = (e: Effect) => ENGINES.findIndex((x) => x.key === e.engine);
 
 /** The effects' runs of `order` (`fx`: each module's effect, null for none), and the order with each run one module
- *  (type `fx-run`). */
-export function effectRuns(order: PictureNode[], fx: (n: PictureNode) => Fx | null): { runs: Map<string, Run>; order: PictureNode[] } {
+ *  (type `fx-run`). `barrier`: the module observed, which ends a run (its picture its own). */
+export function effectRuns(order: PictureNode[], fx: (n: PictureNode) => Fx | null, barrier: string | null = null): { runs: Map<string, Run>; order: PictureNode[] } {
   const byId = new Map(order.map((n) => [n.id, n]));
   const isFx = new Set(order.filter((n) => fx(n)).map((n) => n.id));
   const readers = new Map<string, number>();
@@ -58,7 +58,7 @@ export function effectRuns(order: PictureNode[], fx: (n: PictureNode) => Fx | nu
     if (!isStep(n)) continue;
     const from = main(n)!.from.module;
     const before = groupOf.get(from);
-    const goesOn = before && before[before.length - 1] === from && before.length < MOST_PICTURE && readers.get(from) === 1 && !(kind(from) === 'echo' && (fx(byId.get(from)!)?.amount ?? 0) > 0);
+    const goesOn = before && before[before.length - 1] === from && from !== barrier && before.length < MOST_PICTURE && readers.get(from) === 1 && !(kind(from) === 'echo' && (fx(byId.get(from)!)?.amount ?? 0) > 0);
     const group = goesOn ? before : (groups.push([]), groups[groups.length - 1]);
     group.push(n.id);
     groupOf.set(n.id, group);

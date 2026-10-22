@@ -62,3 +62,9 @@ test("an engine's module is its effect, its knobs k1 and k2; an effect's module 
   assert.deepEqual(fxOfModule(typeOf(PULSE), { amount: 1, [n1]: 0.9 })?.k[0], 0.9);
   assert.equal(fxOfModule('glow', {}), null);
 });
+
+test('the module observed is a barrier: its run ends at it, so its picture is its own', () => {
+  const { nodes, fx } = line([['a', ROTATE, 1], ['b', PULSE, 1], ['c', ROTATE, 1]]);
+  assert.deepEqual([...effectRuns(nodes, fx, 'b').runs.values()].map((r) => r.fx), [['a', 'b'], ['c']]);
+  assert.deepEqual([...effectRuns(nodes, fx, null).runs.values()].map((r) => r.fx), [['a', 'b', 'c']]);
+});

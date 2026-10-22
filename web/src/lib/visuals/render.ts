@@ -10,11 +10,11 @@
 //   (decision 0046, amended), so a band's transient lights its own colour where it lies;
 // - every two seconds both buffers are copied over through a pass that clears anything not a number or infinite: a
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
-import type { ChainNow } from './chain-params';
+import type { ChainNow, ShowParams } from './chain-params';
 import type { FrameInfo, Module, PatchExtra } from './patch';
 import { compile, composeOf, plan, STAGES, stageOf, stagesOf, type Compiled, type PictureNode, type Stage, type TypeOf } from './picture-graph';
 import { fxOfModule, slotOf, type Fx } from './nodes/effect-runs';
-import { MIX_MODES, type PatchV2 } from './ports';
+import { MIX_MODES, SHOW_PARTS, type PatchV2 } from './ports';
 import { flatten } from './v2';
 import { Walker } from './nodes/walker';
 import type { Flame } from './flame';
@@ -30,6 +30,18 @@ import { Screen } from './nodes/screen';
 import { Thumbs } from './nodes/thumbs';
 import { chain, IDENTITY, transformOf } from './transform';
 import { Show } from './nodes/show';
+import { none } from './nodes/shared';
+
+/** Show's pass as far as its part `type` (a fusion barrier at the observed part): the parts after it at their
+ *  neutral (no smoothing; Haze at 0, its gamma 3: aspects.ts hazeOf; all of its colour). */
+function showUpTo(look: ShowParams, type: string): ShowParams {
+  const at = SHOW_PARTS.findIndex((p) => p.type === type);
+  const after = (t: string) => SHOW_PARTS.findIndex((p) => p.type === t) > at;
+  return { ...look, ...(after('blur') ? { smoothing: 0 } : {}), ...(after('curve') ? { gamma: 3, floor: 0 } : {}), ...(after('saturate') ? { saturation: 1 } : {}) };
+}
+
+/** The size the cover is drawn at as a picture (16:9, the middle of a square cover). */
+const COVER: [number, number] = [320, 180];
 
 /** Everything the nodes read in a frame, as one (the frozen renderer's look; chain-params.ts groups it by node). */
 export type Shown = {
@@ -99,6 +111,8 @@ export type PictureInputs = {
   frame: FrameInfo;
   /** The points a module gives this frame (a Grid's: the engine's `points`, by its id), for Instance and Fold. */
   points?: (moduleId: string) => readonly { x: number; y: number }[] | undefined;
+  /** The playing track's cover, loaded (the Music module's picture; none: none yet, or no cover). */
+  cover?: () => TexImageSource | null;
 };
 
 /** The page's extras of today (a v1 PatchExtra): its layers past the flame and the picture's own loop as drawn, each
@@ -148,6 +162,12 @@ export class FlameRenderer {
   private observed: { id: string; asked: number; wanted: boolean; why: string | null } | null = null;
   private thumbs: Thumbs | null = null;
   private showOut: string | null = null;
+  /** The observed Show part's picture (Show's pass drawn again as far as it), at the buffer's size. */
+  private peek: { tex: WebGLTexture; fbo: WebGLFramebuffer; w: number; h: number } | null = null;
+  /** The Music modules, whether one's cover reaches the Screen, and the cover as a texture (made again as it changes). */
+  private musicIds = new Set<string>();
+  private coverDrawn = false;
+  private cover: { image: TexImageSource; tex: WebGLTexture } | null = null;
   errors: string[] = [];
   /** The context, for what draws beside the flame (the compositor). */
   get context(): WebGL2RenderingContext {
@@ -221,6 +241,8 @@ export class FlameRenderer {
     this.composed = stages ? composeOf(c) : null;
     this.lightTransforms = stages ? c.order.filter((n) => n.type === 'transform' && stageOf(n) === 'points').map((n) => n.id) : [];
     this.showOut = stages ? (c.order.filter((n) => stageOf(n) === 'show').at(-1)?.id ?? null) : null;
+    this.musicIds = new Set(flat.modules.filter((m) => m.type === 'music').map((m) => m.id));
+    this.coverDrawn = !!stages && c.order.some((n) => n.type === 'music');
     this.walker?.prune(this.composed?.ids ?? new Set());
   }
 
@@ -228,6 +250,12 @@ export class FlameRenderer {
    *  extras change (`_extra`: for the lab's recordings). */
   prune(_extra?: PatchExtra) {
     this.walker?.prune(this.composed?.ids ?? new Set());
+  }
+
+  /** Whether the playing track's cover is wanted as a picture (a Music module's reaches the Screen, or is observed):
+   *  the page loads it then (`PictureInputs.cover`). */
+  get wantsCover(): boolean {
+    return this.coverDrawn || (!!this.observed && this.musicIds.has(this.observed.id));
   }
 
   get width(): number {
@@ -333,7 +361,8 @@ export class FlameRenderer {
     };
     const walks = this.stages.has('compose') && this.compiled && this.composed;
     if (walks) this.walker ??= new Walker(gl, this.fin, this.now);
-    const walking = walks ? this.walker!.planned(this.compiled!, this.composed!.ids, this.composed!.from, this.composed!.to, knobsAt, fxOf) : null;
+    const walking = walks ? this.walker!.planned(this.compiled!, this.composed!.ids, this.composed!.from, this.composed!.to, knobsAt, fxOf, seeing) : null;
+    const cover = this.wantsCover ? this.coverOf(given?.cover?.() ?? null) : null;
     if (!drawn && !walking) {
       if (seeing) this.observed!.why = 'Nothing reaches the Screen.';
       return this.blank(screenWidth, screenHeight);
@@ -351,14 +380,70 @@ export class FlameRenderer {
     // Without the flame drawn, the compose step starts from nothing where Show's picture would be.
     const effects = { t: fx?.t ?? info.time, beat: fx?.beat, frames: this.fxFrames, fluid: this.carry.fluid };
     const pointsOf = (id: string) => (this.pointsFrom.has(id) ? (given?.points?.(this.pointsFrom.get(id)!) ?? null) : null);
-    const picture = into && walking ? this.walker!.run(walking, drawn ? into.tex : null, into.w, into.h, knobsAt, info, effects, pointsOf, seeing) : null;
+    const covers = new Map([...this.musicIds].map((id) => [id, cover ?? none(gl)]));
+    const picture = into && walking ? this.walker!.run(walking, drawn ? into.tex : null, into.w, into.h, knobsAt, info, effects, pointsOf, seeing, covers) : null;
     if (picture) this.screen.toScreen(picture, screenWidth, screenHeight);
     else if (into) this.screen.toScreen(into.tex, screenWidth, screenHeight);
     else this.fin.idle();
     if (seeing) {
-      this.look(seeing, this.seenOf(seeing, source, walking ? this.walker!.seen : null, drawn ? into : null));
+      const n = this.compiled?.order.find((x) => x.id === seeing);
+      const part = drawn && n && stageOf(n) === 'show' && n.id !== this.showOut ? this.peekShow(showUpTo(now!.show, n.type), passes, fluid) : null;
+      this.look(seeing, this.seenOf(seeing, source, walking ? this.walker!.seen : null, drawn ? into : null, part, cover));
       this.walker?.unpin();
     }
+  }
+
+  /** Show's pass drawn again into the peek target with `look` (as far as the observed part): its picture. */
+  private peekShow(look: ShowParams, passes: number, fluid: Fluid | null): WebGLTexture {
+    const gl = this.gl;
+    const [w, h] = [this.light.width, this.light.height];
+    if (this.peek && (this.peek.w !== w || this.peek.h !== h)) this.freePeek();
+    if (!this.peek) {
+      const tex = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      const fbo = gl.createFramebuffer()!;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      this.peek = { tex, fbo, w, h };
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.peek.fbo);
+    this.show.draw(this.light, this.points, look, passes, fluid, this.carry.warpShown, w, h);
+    return this.peek.tex;
+  }
+
+  private freePeek() {
+    if (!this.peek) return;
+    this.gl.deleteTexture(this.peek.tex);
+    this.gl.deleteFramebuffer(this.peek.fbo);
+    this.peek = null;
+  }
+
+  /** The cover as a texture, the middle of it at 16:9 (made once a cover); null for none. */
+  private coverOf(image: TexImageSource | null): WebGLTexture | null {
+    if (!image) return null;
+    if (this.cover?.image === image) return this.cover.tex;
+    const gl = this.gl;
+    const c = document.createElement('canvas');
+    [c.width, c.height] = COVER;
+    const g = c.getContext('2d');
+    if (!g) return null;
+    const { width: iw, height: ih } = 'naturalWidth' in image ? { width: image.naturalWidth, height: image.naturalHeight } : (image as { width: number; height: number });
+    const r = Math.min(iw / COVER[0], ih / COVER[1]);
+    g.drawImage(image as CanvasImageSource, (iw - COVER[0] * r) / 2, (ih - COVER[1] * r) / 2, COVER[0] * r, COVER[1] * r, 0, 0, COVER[0], COVER[1]);
+    const tex = this.cover?.tex ?? gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, c);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.cover = { image, tex };
+    return tex;
   }
 
   /** The module observed from now on (a flattened id: `show/saturate`; null: none). `thumbnail` observes too. */
@@ -384,20 +469,22 @@ export class FlameRenderer {
   }
 
   /** What observed module `id` shows this frame (`source`: the module whose picture it passes on; `walked`: what the
-   *  walk says of it; `shown`: Show's target, where Show drew into one). */
-  private seenOf(id: string, source: string | null, walked: { tex: WebGLTexture } | { why: string } | null, shown: { tex: WebGLTexture } | null): { tex: WebGLTexture } | { why: string } {
+   *  walk says of it; `shown`: Show's target, where Show drew into one; `part`: Show drawn as far as an observed part;
+   *  `cover`: the Music's). */
+  private seenOf(id: string, source: string | null, walked: { tex: WebGLTexture } | { why: string } | null, shown: { tex: WebGLTexture } | null, part: WebGLTexture | null, cover: WebGLTexture | null): { tex: WebGLTexture; size?: [number, number] } | { why: string } {
+    if (this.musicIds.has(id)) return cover ? { tex: cover, size: COVER } : { why: 'No cover.' };
     if (!this.compiled) return { why: this.errors.at(-1) ?? 'Not drawn.' };
     const n = this.compiled.order.find((x) => x.id === id);
     if (!n) return { why: 'Its picture reaches no Screen.' };
     const stage = stageOf(n);
     if (stage === 'carry' || stage === 'points' || (n.type === 'feedback' && n.inputs[0]?.type === 'light')) return { why: 'Light: no preview yet.' };
     if (source === this.showOut) return shown ? { tex: shown.tex } : { why: 'Not drawn this frame.' };
-    if (stage === 'show') return { why: 'Fused into Show’s pass.' };
+    if (stage === 'show') return part ? { tex: part } : { why: 'Not drawn this frame.' };
     return walked ?? { why: 'Not drawn this frame.' };
   }
 
   /** The observed module's picture read back small where a thumbnail wants one (one reading in flight at a time). */
-  private look(id: string, s: { tex: WebGLTexture } | { why: string }) {
+  private look(id: string, s: { tex: WebGLTexture; size?: [number, number] } | { why: string }) {
     const o = this.observed!;
     if ('why' in s) {
       o.why = s.why;
@@ -407,7 +494,8 @@ export class FlameRenderer {
     o.why = null;
     this.thumbs ??= new Thumbs(this.gl);
     if (!o.wanted || !this.thumbs.idle) return;
-    this.thumbs.capture(id, s.tex, this.light.width, this.light.height);
+    const [w, h] = s.size ?? [this.light.width, this.light.height];
+    this.thumbs.capture(id, s.tex, w, h);
     o.wanted = false;
   }
 
@@ -467,6 +555,8 @@ export class FlameRenderer {
   dispose() {
     this.walker?.dispose();
     this.thumbs?.dispose();
+    this.freePeek();
+    if (this.cover) this.gl.deleteTexture(this.cover.tex);
     for (const n of [this.carry, this.screen, this.meter, this.points, this.light, this.show, this.fin]) n.dispose();
     this.gl.getExtension('WEBGL_lose_context')?.loseContext();
   }

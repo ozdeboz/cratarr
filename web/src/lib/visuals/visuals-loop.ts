@@ -23,7 +23,7 @@ import { between, coloured, evolved, flameOf, measuring, partsAt, PRESET_KEYS, s
 import type { FrameStats, MeterValues } from './meters';
 import { musicNow, stopMusic } from './music.svelte';
 import { newNormalState, signalsFor } from './normal';
-import { coverPalette, type PaletteColour } from './palette';
+import { coverImage, coverPalette, type PaletteColour } from './palette';
 import type { ModuleType, SignalRef } from './patch';
 import { isDevice, RANDOMIZE_SCOPES, type PatchV2 } from './ports';
 import { precheckingPatch, type Checked } from './precheck';
@@ -186,6 +186,7 @@ export class VisualsLoop {
     let made: Record<string, number> | null = null;
     let madeColours = '';
     let cover: { key: string; colours: PaletteColour[] | null } | null = null;
+    let coverPicture: { key: string; image: HTMLImageElement | null } | null = null;
     let fire = 0;
     let key: string | null | undefined;
     let looked = false;
@@ -381,6 +382,17 @@ export class VisualsLoop {
         );
       }
       const covered = mode === 'cover' && cover?.key === m.key ? cover.colours : null;
+      // The cover as a picture, where the Music's reaches the Screen or is observed.
+      if (renderer.wantsCover && playingNow && m.key && coverPicture?.key !== m.key) {
+        const want = m.key;
+        coverPicture = { key: want, image: null };
+        coverImage(coverUrl(playingNow)).then(
+          (image) => {
+            if (coverPicture?.key === want) coverPicture = { key: want, image };
+          },
+          () => {},
+        );
+      }
       fire += ((mode === 'fire' ? 1 : 0) - fire) * Math.min(1, dt / 1.5);
       const lookOf = (k: string) => (how as unknown as Record<string, number>)[k];
       const colours = `${mode}/${covered ? m.key : ''}`;
@@ -441,6 +453,7 @@ export class VisualsLoop {
         target: (id, knob) => easing?.to[id]?.[knob] ?? stepped.knobs[id]?.[knob] ?? flat.modules.find((x) => x.id === id)?.knobs[knob] ?? 0,
         frame: { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null },
         points: (id) => stepped.points[id],
+        cover: () => (coverPicture?.key === m.key ? coverPicture.image : null),
       };
       // A patch with no Cratarr device (a blank slate): no flame, whatever else reaches the Screen drawn from black
       // (the renderer blanks it when nothing does).

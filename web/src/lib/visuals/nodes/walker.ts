@@ -43,8 +43,9 @@ const SOURCES = new Set(SOURCE_TYPES.map((t) => t.type));
 const LIGHTEN = MIX_MODES.indexOf('lighten');
 
 /** The loops of `order` drawn as one pass: a Mix whose first input comes from its own Feedback through Warps and Keeps
- *  only (each read by nothing else), its second kept where the brighter. */
-export function loopsOf(order: PictureNode[], knobs: (id: string) => Record<string, number>): Map<string, Loop> {
+ *  only (each read by nothing else), its second kept where the brighter. Not one with `barrier` (the module observed)
+ *  among its Warps and Keeps: that one is drawn module by module. */
+export function loopsOf(order: PictureNode[], knobs: (id: string) => Record<string, number>, barrier: string | null = null): Map<string, Loop> {
   const byId = new Map(order.map((n) => [n.id, n]));
   const readers = new Map<string, number>();
   for (const n of order) for (const f of n.inputs) readers.set(f.from.module, (readers.get(f.from.module) ?? 0) + 1);
@@ -57,7 +58,7 @@ export function loopsOf(order: PictureNode[], knobs: (id: string) => Record<stri
       chain.unshift({ id: at.id, type: at.type });
       at = byId.get(at.inputs[0].from.module);
     }
-    if (at?.type === 'feedback' && at.inputs[0]?.from.module === m.id && chain.length) loops.set(m.id, { feedback: at.id, chain });
+    if (at?.type === 'feedback' && at.inputs[0]?.from.module === m.id && chain.length && !chain.some((x) => x.id === barrier)) loops.set(m.id, { feedback: at.id, chain });
   }
   return loops;
 }
@@ -112,17 +113,17 @@ void main() { o = texture(uIn, vUv); }`);
 
   /** This frame's walk of `c`'s modules `ids` (the compose step's), from what module `from` drew (Show's) to what
    *  module `to` gives, under the lazy rules (`knobs`: each module's this frame); null where it draws nothing (all of
-   *  it at rest: Show's picture goes on as it is). */
-  planned(c: Compiled, ids: ReadonlySet<string>, from: string | null, to: string, knobs: (id: string) => Record<string, number>, fxOf: (n: PictureNode) => Fx | null): Walk | null {
+   *  it at rest: Show's picture goes on as it is). `observe`: the module observed, a barrier to fusing a pass across. */
+  planned(c: Compiled, ids: ReadonlySet<string>, from: string | null, to: string, knobs: (id: string) => Record<string, number>, fxOf: (n: PictureNode) => Fx | null, observe: string | null = null): Walk | null {
     const all = c.order.filter((n) => ids.has(n.id));
     const fx = new Map(all.flatMap((n) => {
       const f = fxOf(n);
       return f ? [[n.id, f] as const] : [];
     }));
     // Each line of effects one module (effect-runs.ts), at rest where each of its effects is.
-    const { runs, order } = effectRuns(all, (n) => fx.get(n.id) ?? null);
+    const { runs, order } = effectRuns(all, (n) => fx.get(n.id) ?? null, observe);
     const sub: Compiled = { order, screen: to, errors: [] };
-    const loops = loopsOf(sub.order, knobs);
+    const loops = loopsOf(sub.order, knobs, observe);
     // A loop none of whose Keeps keeps anything is gone: its Mix is the other picture.
     const kept = (l: Loop) => l.chain.some((x) => x.type === 'keep' && (knobs(x.id).amount ?? 0) > 0);
     const types = new Map(order.map((n) => [n.id, n.type]));
@@ -146,8 +147,9 @@ void main() { o = texture(uIn, vUv); }`);
   }
 
   /** The walk drawn from `picture` (`from`'s; null: nothing, black): the texture the effects or the screen read next.
-   *  `observe`: the module observed, its target pinned till `unpin` (after its read). */
-  run(w: Walk, given: WebGLTexture | null, width: number, height: number, knobs: (id: string) => Record<string, number>, frame: FrameInfo, effects: FxFrame, points: (id: string) => readonly Point[] | null = () => null, observe: string | null = null): WebGLTexture {
+   *  `observe`: the module observed, its target pinned till `unpin` (after its read). `sources`: pictures drawn
+   *  outside the walk by their modules (the Music's cover). */
+  run(w: Walk, given: WebGLTexture | null, width: number, height: number, knobs: (id: string) => Record<string, number>, frame: FrameInfo, effects: FxFrame, points: (id: string) => readonly Point[] | null = () => null, observe: string | null = null, sources: ReadonlyMap<string, WebGLTexture> = new Map()): WebGLTexture {
     this.sized(width, height);
     if (this.given && ![...this.state.held.values()].some((h) => h.t === this.given)) this.pool.give(this.given);
     this.given = null;
@@ -159,10 +161,12 @@ void main() { o = texture(uIn, vUv); }`);
     // What the walk gives on is read after it: one reader more, so it is not given back within.
     p.readers.set(outKey(out), (p.readers.get(outKey(out)) ?? 0) + 1);
     const outside: Target = { tex: picture, fbo: null as unknown as WebGLFramebuffer };
+    const drawn = new Map([...sources].map(([id, tex]) => [id, { tex, fbo: null as unknown as WebGLFramebuffer }]));
     const io = {
-      spec: (n: PictureNode) => (fused.has(n.id) ? null : runs.get(n.id)?.own ? ('own' as const) : this.spec),
+      spec: (n: PictureNode) => (fused.has(n.id) ? null : runs.get(n.id)?.own || drawn.has(n.id) ? ('own' as const) : this.spec),
       draw: (n: PictureNode, inputs: Map<string, Target | null>, t: Target | null) => {
         if (fused.has(n.id)) return;
+        if (drawn.has(n.id)) return drawn.get(n.id);
         const r = runs.get(n.id);
         const l = loops.get(n.id);
         let own: Target | void = undefined;
@@ -186,7 +190,11 @@ void main() { o = texture(uIn, vUv); }`);
   private seenOf(at: string, values: Map<string, Target | null>, fused: ReadonlySet<string>): { tex: WebGLTexture } | { why: string } {
     if (fused.has(at)) return { why: 'Fused into its loop’s pass.' };
     if (this.inRuns.has(at)) return { why: 'Fused into an effects pass.' };
-    if (this.feedbacks.has(at)) return { why: 'Feedback: no preview yet.' };
+    // A Feedback's picture as it holds it for the next frame (out of the pool till then).
+    if (this.feedbacks.has(at)) {
+      const h = this.state.held.get(at);
+      return h ? { tex: h.t.tex } : { why: 'Not drawn this frame.' };
+    }
     const t = values.get(at);
     return t ? { tex: t.tex } : { why: 'Not drawn this frame.' };
   }
