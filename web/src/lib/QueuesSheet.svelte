@@ -1,16 +1,20 @@
 <script lang="ts">
   // The queues (decision 0033, amended: Symfonium's queue switcher; the owner, 2026-10-19: "build it as decided"): every
   // play's queue kept whole, newest first, the one that plays on top and tinted; each with its name, how many tracks and
-  // when it was left. A tap takes it up where it was left (playing if it played); a long-press or its ⋮ is its menu:
-  // Rename, and Delete but not the one that plays. Whose queues these are lib/queueHistory decides (this browser's own,
+  // when it was left. A tap takes it up where it was left (playing if it played); a long-press or its ⋮ is its menu, in
+  // the shared groups (decision 0058): Play from here as its large action, Save as playlist (the one that plays),
+  // Rename, and Delete (not the one that plays) last. Whose queues these are lib/queueHistory decides (this browser's own,
   // the player it drives, or the app's). Reached from the queue's head (lib/QueueSheet). No notice on success; an error
   // in one line. After when, where it was heard (amended 2026-10-19): Play On's icon and the outputs' own names (the
   // car's Bluetooth), else the players'.
   import type { QueueItem } from './api';
   import Icon, { type IconName } from './Icon.svelte';
   import { longpress } from './longpress';
+  import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
+  import MenuGroup from './MenuGroup.svelte';
   import MenuSheet from './MenuSheet.svelte';
+  import QueuePlaylistSheet from './QueuePlaylistSheet.svelte';
   import { deleteQueue, loadQueues, queues, queuesPlayer, queuesVersion, renameQueue, switchQueue } from './queueHistory.svelte';
   import Row from './Row.svelte';
   import { when } from './settings/when';
@@ -35,6 +39,8 @@
   // A queue's menu (a step of this sheet), and its new name (a sheet of its own, from the top: the keyboard).
   let menuFor = $state<QueueItem | null>(null);
   let renaming = $state<QueueItem | null>(null);
+  /** Save as playlist: the queue that plays, as a new playlist (lib/QueuePlaylistSheet). */
+  let saving = $state(false);
   let name = $state('');
   let busy = $state(false);
 
@@ -64,27 +70,48 @@
   const pressing = (q: QueueItem) => (el: HTMLElement) => longpress(el, () => (menuFor = q))?.destroy;
 </script>
 
-{#if !renaming}
+{#if saving}
+  <QueuePlaylistSheet onclose={() => (saving = false)} />
+{:else if !renaming}
   <MenuSheet
     label="Queues"
     icon="list"
     title={menuFor ? menuFor.name : 'Queues'}
     step={menuFor ? 'menu' : 'list'}
     onback={menuFor ? () => (menuFor = null) : null}
+    actions={menuFor && !menuFor.playing ? [{ icon: 'play', label: 'Play from here', disabled: busy, onclick: () => menuFor && take(menuFor) }] : []}
     {onclose}
   >
     {#if menuFor}
       {@const q = menuFor}
-      <MenuEntry
-        icon="pencil"
-        label="Rename"
-        onclick={() => {
-          name = q.name;
-          renaming = q;
-          menuFor = null;
-        }}
-      />
-      {#if !q.playing}<MenuEntry icon="trash" label="Delete" danger onclick={() => remove(q)} />{/if}
+      <MenuCards>
+        <MenuGroup>
+          {#if q.playing}
+            <MenuEntry
+              icon="intoBox"
+              label="Save as playlist"
+              onclick={() => {
+                menuFor = null;
+                saving = true;
+              }}
+            />
+          {/if}
+        </MenuGroup>
+        <MenuGroup>
+          <MenuEntry
+            icon="pencil"
+            label="Rename"
+            onclick={() => {
+              name = q.name;
+              renaming = q;
+              menuFor = null;
+            }}
+          />
+        </MenuGroup>
+        <MenuGroup>
+          {#if !q.playing}<MenuEntry icon="trash" label="Delete" danger onclick={() => remove(q)} />{/if}
+        </MenuGroup>
+      </MenuCards>
     {:else}
       {#if queues.error}<p class="error" role="alert">{queues.error}</p>{/if}
       <ol class="queues" aria-busy={busy}>
