@@ -440,6 +440,7 @@ export class VisualsLoop {
         knobs: (id) => stepped.knobs[id],
         target: (id, knob) => easing?.to[id]?.[knob] ?? stepped.knobs[id]?.[knob] ?? flat.modules.find((x) => x.id === id)?.knobs[knob] ?? 0,
         frame: { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null },
+        points: (id) => stepped.points[id],
       };
       // A patch with no Cratarr device (a blank slate): no flame, whatever else reaches the Screen drawn from black
       // (the renderer blanks it when nothing does).
