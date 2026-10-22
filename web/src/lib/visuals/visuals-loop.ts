@@ -210,7 +210,8 @@ export class VisualsLoop {
       }
       if (k >= 1) easing = null;
     };
-    /** Values into the store as the visuals play them (a performance) or as an edit (the dice), eased in. */
+    /** Values into the store as the visuals play them (a performance) or as an edit (the dice, a new track's look), eased
+     *  in. */
     const apply = (values: Randomized, cables: Record<string, PatchV2['cables'][number]['value']>, ms: number, edit: string | null, now: number, macros: Record<string, number> = {}) => {
       const flat = live.update(host.store.patch);
       const fromValues: Randomized = {};
@@ -495,12 +496,13 @@ export class VisualsLoop {
       // The Flame's own (step 5): its parts, turn, rates and lights, its module's; the chain's where it has none.
       const fl = (flameId ? stepped.params[flameId]?.flame : undefined) ?? d;
 
-      // A new track's look, as the patch's Dice roll it: worked out over the next frames, a performance.
+      // A new track's look, as the patch's Dice roll it: worked out over the next frames. Each one after the first is an
+      // undo step of its own (the owner: the track may change what is on, Undo brings back the look before it).
       for (const r of stepped.dice) {
         if (rolling) break;
         rolling = rollOf(r.seed, r.scope, null, r.reach);
         // The first look shows at once; each next one blends in over a new track's time.
-        rollingAs = { edit: null, ms: looked ? BLEND_MS : 0 };
+        rollingAs = { edit: looked ? 'track' : null, ms: looked ? BLEND_MS : 0 };
         looked = true;
         lookCame = 'track';
       }
