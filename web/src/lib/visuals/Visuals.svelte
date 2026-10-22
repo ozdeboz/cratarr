@@ -380,11 +380,12 @@
         ><Icon name="close" size={26} /></button
       >
       <div class="corner">
-        <button class="round" class:on={panel} aria-label="Panel" aria-expanded={panel} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={togglePanel}
-          ><Icon name="sliders" size={24} /></button
-        >
+        <!-- Rack then Panel, as the graph is at the left and the panel at the right (the owner). -->
         <button class="round" class:on={graph} aria-label="Rack" aria-expanded={graph} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={toggleGraph}
           ><Icon name="rack" size={24} /></button
+        >
+        <button class="round" class:on={panel} aria-label="Panel" aria-expanded={panel} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={togglePanel}
+          ><Icon name="sliders" size={24} /></button
         >
         <button
           class="round"

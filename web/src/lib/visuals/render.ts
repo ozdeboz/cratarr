@@ -476,7 +476,12 @@ export class FlameRenderer {
       // The light's Transforms, in the patch's order: where the points land, after the camera frames the flame.
       this.points.view = this.lightTransforms.reduce((t, id) => chain(t, transformOf(knobsAt(id), light.width / light.height)), IDENTITY);
       this.points.draw(light, now!.points, passes, since);
-      if (lightPhase === 'lit' || lightPhase === 'held') lightPeek = this.peekLight(shown!, passes, fluid);
+      // After the points, the light is drawn: blending off again as they left it (left on, Show's pass added the picture
+      // onto the last frame's until it was white: the owner's preview bug, 73).
+      if (lightPhase === 'lit' || lightPhase === 'held') {
+        lightPeek = this.peekLight(shown!, passes, fluid);
+        gl.disable(gl.BLEND);
+      }
     }
 
     // Show it. The points held at a time: each frame's, kept 1/(1 − keep) frames; their mean per pixel sets k2. Where the
