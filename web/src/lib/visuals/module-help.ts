@@ -194,6 +194,8 @@ export const portHelp: Record<string, Record<string, string>> = {
     mode: 'Mosaic, kaleidoscope, mirror, pixelate or cells.',
     zoom: 'Cells: how much nearer each cell shows its own part of the picture.',
     edge: 'With a grid: how wide the dark seams between the cells are.',
+    window2: 'With a grid: another picture, shown in some of the cells.',
+    window3: 'With a grid: a third picture, shown in some of the cells.',
     count: 'How many times it repeats.',
     turn: 'Turns the fold; below 0 the other way.',
     amount: AMOUNT_EFFECT,
@@ -339,6 +341,7 @@ export const portHelp: Record<string, Record<string, string>> = {
   field: {
     scale: 'How big its swirls are.',
     speed: 'How fast it changes.',
+    waves: 'Each swirl size’s strength, biggest first; a band’s cable gives each its band.',
     field: 'The flow, for Streamlines.',
   },
   push: {

@@ -230,7 +230,7 @@ void main() { o = texture(uIn, vUv); }`);
       gl.clear(gl.COLOR_BUFFER_BIT);
       return;
     }
-    node.draw(gl, { picture: (inputs.get('picture') ?? inputs.get('in'))?.tex ?? null, by: inputs.get('by')?.tex ?? null, field: this.fields(n.id) ?? this.fluidField }, out.fbo, w, h, k, withInputs(n.type, frame), points);
+    node.draw(gl, { picture: (inputs.get('picture') ?? inputs.get('in'))?.tex ?? null, by: inputs.get('by')?.tex ?? null, field: this.fields(n.id) ?? this.fluidField, windows: [inputs.get('window2')?.tex ?? null, inputs.get('window3')?.tex ?? null] }, out.fbo, w, h, k, withInputs(n.type, frame), points);
   }
 
   /** A run of effects in one pass (Finish's), from `input`, its Echo trailing `trails` (its visible Feedback's; none:

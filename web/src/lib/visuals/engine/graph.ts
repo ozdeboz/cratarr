@@ -15,7 +15,7 @@ import type { Levers } from './sidechain';
 import { modulatorOf, type ModulatorType } from '../modulators/modulators';
 import type { Music } from '../music-core';
 import { ASPECT_KNOB, type Knob, type Macro, type Module, type ModuleType, type Modulator, type SignalRef } from '../patch';
-import { COLUMN_OFFSETS, ENGINE_MODULES, RANDOMIZE_SCOPES, READINGS, SHOW_PARTS, type CableV2, type PatchV2, type PortRef } from '../ports';
+import { COLUMN_OFFSETS, ENGINE_MODULES, MOST_POINTS, RANDOMIZE_SCOPES, READINGS, SHOW_PARTS, type CableV2, type PatchV2, type PortRef } from '../ports';
 import { A, AMOUNT_ASPECTS, ASPECTS, B, BAND_SIGNALS, KNOB_ASPECTS, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, given as columnsFor, type Aspect, type Given } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
 import { newFlame, stepFlame, type FlameNow, type FlameState } from './chain';
@@ -26,7 +26,7 @@ import { FLASH_GUARD } from './sidechain';
 import type { MeterValues } from '../meters';
 import { ownKnob, slotModules, slotOf, SLOT_IDS, type Slot } from './effect-slots';
 import { musicView } from './music-signals';
-import { flowAt } from '../field';
+import { flowAt, WAVES } from '../field';
 import { effectKnobIds, effectOfType } from '../effect-modules';
 import { engineOf } from '../engine-module';
 import { NO_STRIKE, adsrOf, courseStep, newAccent, stepAccent, type AccentState, newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from './modules';
@@ -252,6 +252,8 @@ export type EngineOptions = {
   /** Where the Flame is and how much it covers (its x, y, size, coverage outputs: the Transform's units, a square
    *  space whose short side is −1..1, its centre 0), as the loop last measured it. */
   flameFrame?: { x: number; y: number; size: number; coverage: number } | null;
+  /** The picture's width over its height (where a Flame's parts are, in a Grid's frame). */
+  aspect?: number;
 };
 
 /** A point on the screen, 0..1 each way. */
@@ -330,6 +332,8 @@ const RELEASE_AT = Array.from({ length: 64 }, (_, ch) => `release.${ch}`);
 const CONTINUITY_AT = Array.from({ length: 64 }, (_, k) => `continuity.${k}`);
 const EVOLUTION_AT = Array.from({ length: 64 }, (_, k) => `evolution.${k}`);
 const NO_CABLES: CableV2[] = [];
+/** Each Field's Waves cables, a wave's (its channel's) each, by the cables into it. */
+const WAVE_CABLES = new WeakMap<readonly CableV2[], CableV2[][]>();
 const STRUCK_NEXT = { until: 0, velocity: 0 };
 const STRUCK: { since: number; velocity: number; next: { until: number; velocity: number } | null } = { since: Infinity, velocity: 0, next: null };
 const ADSR_KNOBS = { attack: 0, decay: 0, sustain: 0, release: 0.15, retrigger: 0 };
@@ -599,6 +603,12 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     const key = JSON.stringify(x.knobs);
     if (st.grids[x.id]?.key !== key) st.grids[x.id] = { key, grid: gridOf(x.knobs, seedOf(x.id)) };
     points[x.id] = st.grids[x.id].grid.points;
+    // Points cabled into At (a Flame's parts, where they are on the screen): the lattice shared out, a part laid round each.
+    const at = gridAt(plan.intoOf.get(x.id)?.get('at')?.[0]?.from);
+    if (at?.length) {
+      const local = gridOf({ ...x.knobs, count: Math.max(1, Math.round(points[x.id].length / at.length)) }, seedOf(x.id)).points;
+      points[x.id] = at.flatMap((s) => local.map((q) => ({ x: s.x + q.x, y: s.y + q.y }))).slice(0, MOST_POINTS);
+    }
   }
   for (const id of Object.keys(st.grids)) if (!(id in points)) delete st.grids[id];
 
@@ -1051,12 +1061,21 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   }
   for (const { x, t } of plan.others) if (!knobs[x.id]) knobs[x.id] = knobsOf(x, t);
   // Each Field: its time run on at its Speed.
-  const fields: Record<string, { scale: number; phase: number }> = {};
+  const fields: Record<string, { scale: number; phase: number; waves: number[] }> = {};
   for (const x of p.modules) {
     if (x.type !== 'field') continue;
     const k = knobs[x.id] ?? x.knobs;
     const phase = (st.fieldPhases[x.id] = finite(st.fieldPhases[x.id], 0) + finite(k.speed, 0.25) * step);
-    fields[x.id] = { scale: finite(k.scale, 1.2), phase };
+    // Its Waves, a channel each: a band's cable each its band's, any other every wave's.
+    const wk = types.field?.knobs.find((q) => q.id === 'waves');
+    const into = plan.intoOf.get(x.id)?.get('waves') ?? NO_CABLES;
+    let byWave = WAVE_CABLES.get(into);
+    if (!byWave) WAVE_CABLES.set(into, (byWave = WAVES.map((_, ch) => perChannel(into).filter((c) => c.from.channel === undefined || c.from.channel === ch))));
+    const waves = WAVES.map((_, ch) => {
+      const base = finite(x.knobs[`waves.${ch}`], finite(x.knobs.waves, 1));
+      return wk ? moved(x.id, { ...wk, id: `waves.${ch}` }, base, byWave[ch]) : base;
+    });
+    fields[x.id] = { scale: finite(k.scale, 1.2), phase, waves };
   }
   for (const id of Object.keys(st.fieldPhases)) if (!(id in fields)) delete st.fieldPhases[id];
   // Each Grid a Field is cabled into: its points carried along the flow at Drift, pulled back to its place at Return
@@ -1075,10 +1094,11 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     };
     const drift = gridKnob('drift', 0.4);
     const back = gridKnob('return', 0.6);
-    const offsets = (g.offsets ??= g.grid.points.map((): [number, number] => [0, 0]));
-    points[x.id] = g.grid.points.map((q, i) => {
+    const homes = points[x.id] ?? g.grid.points;
+    const offsets = (g.offsets ??= homes.map((): [number, number] => [0, 0]));
+    points[x.id] = homes.map((q, i) => {
       const o = (offsets[i] ??= [0, 0]);
-      const [u, v] = flowAt(q.x + o[0], q.y + o[1], flow.scale, flow.phase);
+      const [u, v] = flowAt(q.x + o[0], q.y + o[1], flow.scale, flow.phase, flow.waves);
       o[0] += (u * drift - o[0] * back) * step;
       o[1] += (v * drift - o[1] * back) * step;
       return { x: q.x + o[0], y: q.y + o[1] };
@@ -1125,6 +1145,14 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   /** An engine module's knob's base: as set, its macros' (the Ducker's threshold under Wild). */
   function baseOf(x: Module, id: string, or: number) {
     return macroed(x.id, (types[x.type] ?? ENGINE_TYPES[x.type])?.knobs.find((k) => k.id === id) ?? ({ id } as Knob), finite(x.knobs[id], or));
+  }
+
+  /** What a Grid's At takes: a Flame's parts where they are on the screen, in the Grid's frame (centred, the short side
+   *  -1..1); none for anything else. */
+  function gridAt(from: PortRef | undefined): GridPoint[] | null {
+    if (!from || typeOf.get(from.module) !== 'flame' || from.port !== 'points' || !opts.flamePoints) return null;
+    const a = finite(opts.aspect, 16 / 9);
+    return opts.flamePoints.filter((q): q is Point => !!q).map(([px, py]) => (a > 1 ? { x: (2 * px - 1) * a, y: 2 * py - 1 } : { x: 2 * px - 1, y: (2 * py - 1) / a }));
   }
 
   /** A module's step knobs its type declares, past its columns' moments. */

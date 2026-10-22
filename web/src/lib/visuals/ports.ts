@@ -424,7 +424,8 @@ export const FOLD = declared(
     knob('zoom', 'Zoom', 0.25, 4, 1.5),
     knob('edge', 'Edge', 0, 0.05, 0, 'level'),
   ],
-  [PICTURE_IN, { id: 'grid', label: 'Grid', type: 'points' }],
+  // Windows 2 and 3: with a grid, each cell shows one of the pictures cabled in (stained glass onto separate layers).
+  [PICTURE_IN, { id: 'grid', label: 'Grid', type: 'points' }, { id: 'window2', label: 'Window 2', type: 'picture' }, { id: 'window3', label: 'Window 3', type: 'picture' }],
   [PICTURE_OUT],
 );
 
@@ -618,7 +619,15 @@ export const musicSignalOf = (type: string): string | null => (type.startsWith('
 
 /** Field (the owner's evolving flow field, field.ts): a flow that swirls and changes smoothly by itself, no Flame or
  *  Fluid needed; Scale its swirls' size (the short side is 2), Speed how fast it changes. */
-export const FIELD = declared('field', 'Field', 'modulator', [knob('scale', 'Scale', 0.1, 4, 1.2), knob('speed', 'Speed', 0, 2, 0.25, 'level')], [], [{ id: 'field', label: 'Flow field', type: 'flow' }]);
+export const FIELD = declared(
+  'field',
+  'Field',
+  'modulator',
+  // Waves: each wave's strength, the biggest swirls first (a band's cable: the bass the biggest, the treble the finest).
+  [knob('scale', 'Scale', 0.1, 4, 1.2), knob('speed', 'Speed', 0, 2, 0.25, 'level'), { ...knob('waves', 'Waves', 0, 2, 1, 'level'), channels: 6 }],
+  [],
+  [{ id: 'field', label: 'Flow field', type: 'flow' }],
+);
 
 export const ENGINE_MODULES: readonly Declared[] = [MUSIC, ENVELOPE, DICE, SHAPER, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FIELD, FOLD, INSTANCE, FILTER_BANK];
 

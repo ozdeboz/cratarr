@@ -2,7 +2,7 @@
 // Instance: its picture drawn once at each point, one instanced draw of quads (each a cell of the points' spacing, the
 // picture's middle at that size), kept where the brighter (MAX) into a cleared target, by its amount. Fold: the
 // picture folded by a symmetry (FOLDS: Hydra's repeat, kaleid and pixelate's maths, and a mirror), about its middle,
-// or with a grid about each pixel's nearest point (a Voronoi mosaic). Mali rules: level-0 reads, no arrays (the
+// or with a grid about each pixel's nearest point (a Voronoi mosaic), each cell one of its windows' pictures. Mali rules: level-0 reads, no arrays (the
 // points in a texture, read one by one).
 import { MOST, packed, spacingOf, type Point } from '../points-pictures';
 import { FIELD_GLSL } from '../field';
@@ -42,6 +42,9 @@ const FOLD = `#version 300 es
 precision highp float;
 in vec2 vUv;
 uniform sampler2D uIn;
+uniform sampler2D uIn2;
+uniform sampler2D uIn3;
+uniform int uWindows;
 uniform highp sampler2D uPoints;
 uniform int uCount;
 uniform int uMode;
@@ -55,9 +58,13 @@ out vec4 o;
 // Itself within -1..1, mirrored back into it beyond (fx_repeat's).
 float fold1(float x) { return 1.0 - abs(mod(x + 1.0, 4.0) - 2.0); }
 vec2 turned(vec2 v, float a) { float c = cos(a), s = sin(a); return vec2(c * v.x - s * v.y, s * v.x + c * v.y); }
+int window = 0;
 vec4 at(vec2 sq) {
   vec2 uv = sq * uK * 0.5 + 0.5;
-  return textureLod(uIn, 1.0 - abs(1.0 - mod(uv, 2.0)), 0.0);
+  uv = 1.0 - abs(1.0 - mod(uv, 2.0));
+  if (window == 1) return textureLod(uIn2, uv, 0.0);
+  if (window == 2) return textureLod(uIn3, uv, 0.0);
+  return textureLod(uIn, uv, 0.0);
 }
 void main() {
   vec2 p = (vUv * 2.0 - 1.0) / uK;
@@ -65,15 +72,18 @@ void main() {
   vec2 c = vec2(0.0);
   float d = 1e9;
   float d2 = 1e9;
+  int ci = 0;
   for (int i = 0; i < ${MOST}; i++) {
     if (i >= uCount) break;
     vec2 q = texelFetch(uPoints, ivec2(i, 0), 0).xy;
     vec2 e = p - q;
     float dd = dot(e, e);
-    if (dd < d) { d2 = d; d = dd; c = q; }
+    if (dd < d) { d2 = d; d = dd; c = q; ci = i; }
     else if (dd < d2) d2 = dd;
   }
   bool grid = uCount > 0;
+  // Each cell's window: one of the pictures cabled in, as its point's number falls (the same cell, the same window).
+  if (grid && uWindows > 1) window = int(floor(fract(sin(float(ci) * 12.9898 + 4.1) * 43758.5453) * float(uWindows)));
   vec2 q = turned(p - c, -uTurn);
   vec2 f = q;
   vec2 base = c;
@@ -107,11 +117,11 @@ void main() {
   if (grid && uEdge > 0.0) o.rgb *= smoothstep(0.0, uEdge, 0.5 * (sqrt(d2) - sqrt(d)));
 }`;
 
-type Draw = (gl: WebGL2RenderingContext, picture: WebGLTexture | null, out: WebGLFramebuffer, width: number, height: number, knobs: Record<string, number>, points: readonly Point[] | null) => void;
+type Draw = (gl: WebGL2RenderingContext, picture: WebGLTexture | null, out: WebGLFramebuffer, width: number, height: number, knobs: Record<string, number>, points: readonly Point[] | null, windows: readonly (WebGLTexture | null)[]) => void;
 
 function node(gl: WebGL2RenderingContext, draw: Draw, dispose: () => void): ModuleNode {
   return {
-    draw: (gl, inputs, out, width, height, knobs, _frame, points) => draw(gl, inputs.picture, out, width, height, knobs, points ?? null),
+    draw: (gl, inputs, out, width, height, knobs, _frame, points) => draw(gl, inputs.picture, out, width, height, knobs, points ?? null, inputs.windows ?? []),
     dispose,
   };
 }
@@ -179,7 +189,7 @@ export function createFold(gl: WebGL2RenderingContext): ModuleNode {
   const vao = gl.createVertexArray()!;
   return node(
     gl,
-    (gl, picture, out, width, height, knobs, points) => {
+    (gl, picture, out, width, height, knobs, points, windows) => {
       const n = packed(points, data);
       gl.bindFramebuffer(gl.FRAMEBUFFER, out);
       gl.viewport(0, 0, width, height);
@@ -192,6 +202,20 @@ export function createFold(gl: WebGL2RenderingContext): ModuleNode {
       gl.bindTexture(gl.TEXTURE_2D, picture ?? none(gl));
       const u = (name: string) => gl.getUniformLocation(p, name);
       gl.uniform1i(u('uIn'), 0);
+      // The windows cabled in, in order: the first picture, then each further one there is.
+      const more = windows.filter((w): w is WebGLTexture => !!w);
+      more.forEach((w, i) => {
+        gl.activeTexture(gl.TEXTURE2 + i);
+        gl.bindTexture(gl.TEXTURE_2D, w);
+      });
+      for (let i = more.length; i < 2; i++) {
+        gl.activeTexture(gl.TEXTURE2 + i);
+        gl.bindTexture(gl.TEXTURE_2D, none(gl));
+      }
+      gl.activeTexture(gl.TEXTURE0);
+      gl.uniform1i(u('uIn2'), 2);
+      gl.uniform1i(u('uIn3'), 3);
+      gl.uniform1i(u('uWindows'), 1 + more.length);
       gl.uniform1i(u('uPoints'), 1);
       gl.uniform1i(u('uCount'), n);
       gl.uniform1i(u('uMode'), Math.round(knobs.mode ?? 1));
@@ -220,13 +244,17 @@ uniform vec2 uUvPerCell;
 uniform int uFormula;
 uniform float uScale;
 uniform float uPhase;
+uniform vec3 uWavesA;
+uniform vec3 uWavesB;
 uniform vec2 uK;
 ${FIELD_GLSL}
 vec2 flowAt(vec2 p) {
-  if (uFormula == 1) return fieldAt(p, uScale, uPhase);
+  if (uFormula == 1) return fieldAt(p, uScale, uPhase, uWavesA, uWavesB);
   vec2 cells = textureLod(uVelocity, p * uK * 0.5 + 0.5, 0.0).xy;
   return cells * uUvPerCell * 2.0 / uK;
 }`;
+
+const ONE_WAVES = [1, 1, 1, 1, 1, 1];
 
 /** The flow's uniforms for a program with FLOW_AT, its texture on unit `unit`. */
 function setFlow(gl: WebGL2RenderingContext, p: WebGLProgram, field: FlowField, unit: number, width: number, height: number) {
@@ -239,6 +267,9 @@ function setFlow(gl: WebGL2RenderingContext, p: WebGLProgram, field: FlowField, 
   gl.uniform1i(u('uFormula'), formula ? 1 : 0);
   gl.uniform1f(u('uScale'), formula ? field.scale : 1);
   gl.uniform1f(u('uPhase'), formula ? field.phase : 0);
+  const w = (formula && field.waves) || ONE_WAVES;
+  gl.uniform3f(u('uWavesA'), w[0], w[1], w[2]);
+  gl.uniform3f(u('uWavesB'), w[3], w[4], w[5]);
   gl.uniform2f(u('uK'), ...toScreen(width / height));
 }
 
