@@ -66,7 +66,7 @@ export function scopeNamed(name: string, types: Record<string, ModuleType>): Sco
   if (name === 'everything') return EVERYTHING;
   if (name === 'cables' || name === 'macros') return null;
   // Response: how the rack answers the music, not how it looks: what lies between the music and the picture (the
-  // followers, ADSRs, VCAs, Shapers, the Clock and the Accent; the cables' amounts with them, visuals-loop rollOf).
+  // followers, ADSRs, Shapers, the Clock and the Accent; the cables' amounts with them, visuals-loop rollOf).
   if (name === 'response') return (m) => RESPONSE.has(m.type);
   // Spatial: where things are and how space is laid out (the owner: so a rack without a Grid still rolls): the Grid, the
   // Field, the folds and copies, the Streamlines' shape (not their colours), the Flame's framing and symmetry.
@@ -177,7 +177,7 @@ function* into(
       for (const id of ids) {
         // Drawn whether or not it is set, so what one knob is reached by changes no other's draw.
         const u = rnd();
-        if (knob.randomize === false || claimed.has(`${m.id}.${id}`)) continue;
+        if (knob.randomize === false || claimed.has(`${m.id}.${id}`) || KEPT_KNOB(m.type, id)) continue;
         const now = finite(m.knobs[id], knob.default);
         const target = knob.kind === 'step' ? Math.min(knob.max, Math.floor(knob.min + u * (knob.max - knob.min + 1))) : knob.min + u * (knob.max - knob.min);
         const v = reach >= 1 ? target : now + (target - now) * reach;
@@ -186,6 +186,12 @@ function* into(
     }
   }
 }
+
+/** What a roll keeps as it is (the owner: no more dark rolls): the plumbing's knobs (a VCA's Gain at 0 shuts its
+ *  signal off, a Gate's or Ducker's threshold holds everything back) and a Mix's blend modes (Multiply, Window and
+ *  Subtract over a dark layer blacken the picture). Its amounts still roll. */
+const KEPT_TYPES = new Set(['vca', 'merge', 'gate', 'ducker', 'meter', 'screen', 'dice']);
+const KEPT_KNOB = (type: string, id: string) => KEPT_TYPES.has(type) || (type === 'mix' && /^mode\d+$/.test(id));
 
 /** The modules whose cables are a patch's plumbing (what a conversion wires: VCAs, Merges, Gates, Shapers, the
  *  sidechains), not amounts to roll. */
