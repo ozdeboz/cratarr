@@ -89,11 +89,11 @@ export function pictureWiring(p: Patch): { modules: Module[]; cables: CableV2[] 
     cables.push(cable(kept, ['loop-mix', 'in1']), cable(at, ['loop-mix', 'in2']), cable(['loop-mix', 'picture'], ['loop-feedback', 'picture']));
     at = ['loop-mix', 'picture'];
   }
-  // An Echo with shapes after it (the owner): a visible loop, the line's finished picture fed back, moved and dimmed
-  // by the Echo, kept where it is the brighter (a Mix's Lighten) with the picture before it, then the shapes turn the
-  // two together (the trails spiral as they always did).
+  // An Echo (the owner): a visible loop, the line's finished picture fed back, moved and dimmed by the Echo, kept where
+  // it is the brighter (a Mix's Lighten) with the picture before it, then any shapes turn the two together (the trails
+  // spiral as they always did). No Echo keeps a hidden trail of its own.
   const line = effectsInOrder(p.finish.flatMap((m) => (SLOTS.has(m.id) ? (effectModuleOf(m) ?? []) : [m])));
-  const looped = line.some((m) => kindOf(m) === 'shape') ? line.filter((m) => kindOf(m) === 'echo') : [];
+  const looped = line.filter((m) => kindOf(m) === 'echo');
   for (const m of line) {
     if (looped.includes(m)) {
       const mix = `${m.id}-mix`;

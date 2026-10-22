@@ -98,7 +98,7 @@ test("the effects in a line drawing today's one pass: colours and echoes in slot
   assert.deepEqual(effectsInOrder([fx('fx1', 'kaleidoscope-engine', 1), fx('fx3', 'hydra-engine', 7)]).map((m) => m.id), ['fx3', 'fx1']);
 });
 
-test('an Echo with shapes after it is a visible loop: Feedback → Echo → Mix (Lighten) beside the picture, one pass', async () => {
+test('an Echo is a visible loop: Feedback → Echo → Mix (Lighten) beside the picture, one pass with any shapes after it', async () => {
   const { effectRuns, fxOfModule } = await import('../src/lib/visuals/nodes/effect-runs.ts');
   // Rotate, Pulse, Echo (the effects recording's): each its effect's module.
   const v = toV2({ ...settings(), fx1: 3, fx1Amount: 1, fx2: 1, fx2Amount: 0.8, fx3: 1, fx3Amount: 0.8 });
@@ -116,11 +116,16 @@ test('an Echo with shapes after it is a visible loop: Feedback → Echo → Mix 
   // The walk draws the line as one pass, its Echo trailing the Feedback.
   const knobs = (id: string) => v.modules.find((m) => m.id === id)?.knobs ?? {};
   const { runs, order } = effectRuns(c.order, (n) => fxOfModule(n.type, knobs(n.id)));
-  assert.deepEqual([...runs], [['fx-rotate', { fx: ['fx-echo', 'fx-pulse', 'fx-rotate'], trails: 'fx-echo-feedback', own: false }]]);
+  assert.deepEqual([...runs], [['fx-rotate', { fx: ['fx-echo', 'fx-pulse', 'fx-rotate'], trails: 'fx-echo-feedback' }]]);
   assert.deepEqual(order.find((n) => n.id === 'fx-rotate')!.inputs.map((f) => [f.port, f.from.module]), [['picture', 'layers'], ['trails', 'fx-echo-feedback']]);
-  // Without shapes an Echo stays a plain module.
-  const plain = compile(toV2({ ...settings(), fx3: 1, fx3Amount: 0.8 }), types);
-  assert.ok(!plain.order.some((n) => n.id === 'fx-echo-feedback') && plain.order.some((n) => n.id === 'fx-echo'));
+  // Without shapes an Echo is in its visible loop too (no hidden trail): one pass, trailing its Feedback.
+  const alone = toV2({ ...settings(), fx3: 1, fx3Amount: 0.8 });
+  const plain = compile(alone, types);
+  assert.ok(plain.order.some((n) => n.id === 'fx-echo-feedback') && plain.order.some((n) => n.id === 'fx-echo'));
+  const aloneKnobs = (id: string) => alone.modules.find((m) => m.id === id)?.knobs ?? {};
+  assert.deepEqual([...effectRuns(plain.order, (n) => fxOfModule(n.type, aloneKnobs(n.id))).runs], [['fx-echo-mix', { fx: ['fx-echo'], trails: 'fx-echo-feedback' }]]);
+  // The Echo observed: its own pass, the Mix drawn as a Mix.
+  assert.deepEqual([...effectRuns(plain.order, (n) => fxOfModule(n.type, aloneKnobs(n.id)), 'fx-echo').runs], [['fx-echo', { fx: ['fx-echo'], trails: null }]]);
 });
 
 test('a slot becomes its effect’s module: its knobs by their own names, its cables with it; none on no effect or at 0', () => {
@@ -175,12 +180,33 @@ test('the walk draws the picture’s own loop as one pass: its Feedback, its War
   const ids = composeOf(c)!.ids;
   const knobs = (id: string) => v.modules.find((m) => m.id === id)?.knobs ?? {};
   const loops = loopsOf(c.order.filter((n) => ids.has(n.id)), knobs);
-  assert.deepEqual([...loops.entries()], [['loop-mix', { feedback: 'loop-feedback', chain: [{ id: 'example-warp', type: 'warp' }, { id: 'example-keep', type: 'keep' }] }]]);
+  assert.deepEqual([...loops.entries()], [['loop-mix', { feedback: 'loop-feedback', chain: [{ id: 'example-warp', type: 'warp' }, { id: 'example-keep', type: 'keep' }], now: 'in2' }]]);
   // Not lightened: drawn module by module.
   assert.equal(loopsOf(c.order.filter((n) => ids.has(n.id)), (id) => (id === 'loop-mix' ? { ...knobs(id), mode2: 0 } : knobs(id))).size, 0);
   // One of its Warps or Keeps observed: a barrier, drawn module by module while it is.
   assert.equal(loopsOf(c.order.filter((n) => ids.has(n.id)), knobs, 'example-keep').size, 0);
   assert.equal(loopsOf(c.order.filter((n) => ids.has(n.id)), knobs, 'loop-mix').size, 1);
+});
+
+test('a device’s loop (its Feedback on the Mix’s second input) is one pass too, while both inputs are at full', async () => {
+  const { composeOf } = await import('../src/lib/visuals/picture-graph.ts');
+  const { loopsOf } = await import('../src/lib/visuals/nodes/walker.ts');
+  const { DEVICES } = await import('../src/lib/visuals/devices.ts');
+  const { flatten } = await import('../src/lib/visuals/v2.ts');
+  const v = toV2(settings());
+  v.modules.push(JSON.parse(JSON.stringify(DEVICES.find((d) => d.id === 'feedback-tunnel')!)));
+  const cab = v.cables.find((x) => x.from.module === 'layers' && x.from.port === 'picture')!;
+  const to = cab.to;
+  cab.to = { module: 'feedback-tunnel', port: 'picture' };
+  v.cables.push({ id: 'x-ft', from: { module: 'feedback-tunnel', port: 'picture' }, to, value: 1 } as never);
+  const c = compile(v, types);
+  assert.deepEqual(c.errors, []);
+  const ids = composeOf(c)!.ids;
+  const flat = flatten(v);
+  const knobs = (id: string) => flat.modules.find((m) => m.id === id)?.knobs ?? {};
+  const order = c.order.filter((n) => ids.has(n.id));
+  assert.deepEqual([...loopsOf(order, knobs).values()], [{ feedback: 'feedback-tunnel/feedback', chain: [{ id: 'feedback-tunnel/warp', type: 'warp' }, { id: 'feedback-tunnel/keep', type: 'keep' }], now: 'in1' }]);
+  assert.equal(loopsOf(order, (id) => (id === 'feedback-tunnel/mix' ? { ...knobs(id), amount1: 0.5 } : knobs(id))).size, 0, 'the first at less than full: module by module');
 });
 
 test('every chain and example converted is drawn whole: no errors, its stages', async () => {

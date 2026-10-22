@@ -3,7 +3,8 @@
 // Threshold, Blur and Bend on pictures, Warp, Keep, Mix (in one pass), Feedback. Drawn in the graph's order under the
 // lazy rules (picture-graph.ts plan), each into a target of the pool given back once its last reader has drawn, a
 // Feedback adopting its input's target (walk). A loop of Feedback → Warps and Keeps → a Mix keeping the brighter with
-// another picture is drawn as one pass (compose.ts LOOP: MilkDrop's feedback); a line of effects too (effect-runs.ts).
+// another picture (on either of its inputs) is drawn as one pass (compose.ts LOOP: MilkDrop's feedback); a line of
+// effects too (effect-runs.ts), an Echo trailing its visible Feedback.
 import { LOOP, MODULE_MAKERS, mixShader, withInputs } from '../compose';
 import { EffectClocks, pictureShader } from '../effects';
 import type { Fluid } from '../fluid';
@@ -23,8 +24,9 @@ import type { Point } from '../points-pictures';
 import { POINTS_NODES } from './points-pictures';
 
 type Target = { tex: WebGLTexture; fbo: WebGLFramebuffer };
-/** A loop drawn as one pass, by its Mix: its Feedback, and the Warps and Keeps between them. */
-type Loop = { feedback: string; chain: { id: string; type: string }[] };
+/** A loop drawn as one pass, by its Mix: its Feedback, the Warps and Keeps between them, the Mix's input the new
+ *  picture comes in at (the other is the loop's). */
+type Loop = { feedback: string; chain: { id: string; type: string }[]; now: 'in1' | 'in2' };
 /** A frame's walk: its plan, the module it starts from, the output it gives on, the loops drawn as one pass. */
 export type Walk = { p: Plan; from: string | null; out: PortRef; loops: Map<string, Loop>; runs: Map<string, Run>; fx: Map<string, Fx> };
 /** What the effects' passes take beside their knobs: the track's time and beat, this frame's length in sixtieths of a
@@ -42,23 +44,31 @@ void main() {
 const SOURCES = new Set(SOURCE_TYPES.map((t) => t.type));
 const LIGHTEN = MIX_MODES.indexOf('lighten');
 
-/** The loops of `order` drawn as one pass: a Mix whose first input comes from its own Feedback through Warps and Keeps
- *  only (each read by nothing else), its second kept where the brighter. Not one with `barrier` (the module observed)
- *  among its Warps and Keeps: that one is drawn module by module. */
+/** The loops of `order` drawn as one pass: a Mix one of whose inputs comes from its own Feedback through Warps and
+ *  Keeps only (each read by nothing else), the other kept where the brighter: the loop on its first input (today's
+ *  conversion), or on its second at full over the first at full (a device's). Not one with `barrier` (the module
+ *  observed) among its Warps and Keeps: that one is drawn module by module. */
 export function loopsOf(order: PictureNode[], knobs: (id: string) => Record<string, number>, barrier: string | null = null): Map<string, Loop> {
   const byId = new Map(order.map((n) => [n.id, n]));
   const readers = new Map<string, number>();
   for (const n of order) for (const f of n.inputs) readers.set(f.from.module, (readers.get(f.from.module) ?? 0) + 1);
   const loops = new Map<string, Loop>();
   for (const m of order) {
-    if (m.type !== 'mix' || m.inputs.length !== 2 || !m.inputs.some((f) => f.port === 'in2') || Math.round(knobs(m.id).mode2 ?? 1) !== LIGHTEN) continue;
-    const chain: Loop['chain'] = [];
-    let at = byId.get(m.inputs.find((f) => f.port === 'in1')?.from.module ?? '');
-    while (at && (at.type === 'warp' || at.type === 'keep') && readers.get(at.id) === 1 && at.inputs.length === 1) {
-      chain.unshift({ id: at.id, type: at.type });
-      at = byId.get(at.inputs[0].from.module);
+    const k = knobs(m.id);
+    if (m.type !== 'mix' || m.inputs.length !== 2 || !m.inputs.some((f) => f.port === 'in2') || Math.round(k.mode2 ?? 1) !== LIGHTEN) continue;
+    for (const [port, now] of [['in1', 'in2'], ['in2', 'in1']] as const) {
+      if (port === 'in2' && ((k.amount1 ?? 1) < 1 || (k.amount2 ?? 1) < 1)) continue;
+      const chain: Loop['chain'] = [];
+      let at = byId.get(m.inputs.find((f) => f.port === port)?.from.module ?? '');
+      while (at && (at.type === 'warp' || at.type === 'keep') && readers.get(at.id) === 1 && at.inputs.length === 1) {
+        chain.unshift({ id: at.id, type: at.type });
+        at = byId.get(at.inputs[0].from.module);
+      }
+      if (at?.type === 'feedback' && at.inputs[0]?.from.module === m.id && chain.length && !chain.some((x) => x.id === barrier)) {
+        loops.set(m.id, { feedback: at.id, chain, now });
+        break;
+      }
     }
-    if (at?.type === 'feedback' && at.inputs[0]?.from.module === m.id && chain.length && !chain.some((x) => x.id === barrier)) loops.set(m.id, { feedback: at.id, chain });
   }
   return loops;
 }
@@ -79,12 +89,11 @@ export class Walker {
   private time = 0;
   /** What the last walk gave on (read after it): back to the pool at the next. */
   private given: Target | null = null;
-  /** The effects' passes (Finish's), their programs by effects, each run's clocks, and a run's own Echo's trail. */
+  /** The effects' passes (Finish's), their programs by effects, each run's clocks. */
   private fin: Finish;
   private now: () => number;
   private fxPrograms = new Map<string, WebGLProgram | null>();
   private clocks = new Map<string, EffectClocks>();
-  private trails = new Map<string, Target>();
   /** What the observed module shows this frame (`run`'s `observe`): its picture, or why it has none. */
   seen: { tex: WebGLTexture } | { why: string } | null = null;
   /** The last plan's modules at rest (each what it passes on), the effects fused into a run's pass, its Feedbacks. */
@@ -128,7 +137,7 @@ void main() { o = texture(uIn, vUv); }`);
     const kept = (l: Loop) => l.chain.some((x) => x.type === 'keep' && (knobs(x.id).amount ?? 0) > 0);
     const types = new Map(order.map((n) => [n.id, n.type]));
     const idle = (id: string) => (runs.has(id) ? runIdle(runs.get(id)!.fx.map((f) => fx.get(f)!)) : types.get(id) === 'transform' && transformIdle(knobs(id)));
-    const p = plan(sub, { knobs: (id) => (loops.has(id) && !kept(loops.get(id)!) ? { ...knobs(id), amount1: 0 } : knobs(id)), idle });
+    const p = plan(sub, { knobs: (id) => (loops.has(id) && !kept(loops.get(id)!) ? { ...knobs(id), [loops.get(id)!.now === 'in2' ? 'amount1' : 'amount2']: 0 } : knobs(id)), idle });
     // What it gives on, by the port the Screen (or what follows) reads it at (a Transform's is `out`).
     const port = c.order.flatMap((n) => (ids.has(n.id) ? [] : n.inputs)).find((f) => f.from.module === to)?.from.port ?? 'picture';
     let out = { module: to, port };
@@ -163,17 +172,15 @@ void main() { o = texture(uIn, vUv); }`);
     const outside: Target = { tex: picture, fbo: null as unknown as WebGLFramebuffer };
     const drawn = new Map([...sources].map(([id, tex]) => [id, { tex, fbo: null as unknown as WebGLFramebuffer }]));
     const io = {
-      spec: (n: PictureNode) => (fused.has(n.id) ? null : runs.get(n.id)?.own || drawn.has(n.id) ? ('own' as const) : this.spec),
+      spec: (n: PictureNode) => (fused.has(n.id) ? null : drawn.has(n.id) ? ('own' as const) : this.spec),
       draw: (n: PictureNode, inputs: Map<string, Target | null>, t: Target | null) => {
         if (fused.has(n.id)) return;
         if (drawn.has(n.id)) return drawn.get(n.id);
         const r = runs.get(n.id);
         const l = loops.get(n.id);
-        let own: Target | void = undefined;
-        if (r) own = this.fxPass(n.id, r, w.fx, inputs.get('picture')?.tex ?? picture, inputs.get('trails')?.tex ?? null, t, effects);
-        else if (l) this.loopPass(l, inputs.get('in2')?.tex ?? picture, t!, knobs, frame);
+        if (r) this.fxPass(n.id, r, w.fx, inputs.get('picture')?.tex ?? picture, inputs.get('trails')?.tex ?? null, t!, effects);
+        else if (l) this.loopPass(l, inputs.get(l.now)?.tex ?? picture, t!, knobs, frame);
         else this.draw(n, inputs, t!, knobs(n.id), frame, points(n.id));
-        return own;
       },
       copy: (a: Target, b: Target) => this.copied(a, b),
     };
@@ -220,9 +227,9 @@ void main() { o = texture(uIn, vUv); }`);
     node.draw(gl, { picture: (inputs.get('picture') ?? inputs.get('in'))?.tex ?? null, by: inputs.get('by')?.tex ?? null }, out.fbo, w, h, k, withInputs(n.type, frame), points);
   }
 
-  /** A run of effects in one pass (Finish's), from `input`, its Echo trailing `trails` (a Feedback's) or its own last
-   *  picture (then drawn into its own target, kept for the next frame); into `out`. */
-  private fxPass(id: string, r: Run, fx: Map<string, Fx>, input: WebGLTexture, trails: WebGLTexture | null, out: Target | null, f: FxFrame): Target | void {
+  /** A run of effects in one pass (Finish's), from `input`, its Echo trailing `trails` (its visible Feedback's; none:
+   *  nothing); into `out`. */
+  private fxPass(id: string, r: Run, fx: Map<string, Fx>, input: WebGLTexture, trails: WebGLTexture | null, out: Target, f: FxFrame) {
     const pass = passOf(r.fx.map((m) => fx.get(m)!));
     const key = pass.ids.join(',');
     if (!this.fxPrograms.has(key)) {
@@ -241,16 +248,9 @@ void main() { o = texture(uIn, vUv); }`);
     if (!clocks) this.clocks.set(id, (clocks = new EffectClocks()));
     const effects = { ...pass, loop: 0, loopAmount: 0, t: f.t, beat: f.beat };
     clocks.run(effects);
-    const own = r.own ? this.pool.take(this.spec) : null;
-    const to = own ?? out!;
-    const last = r.own ? this.trails.get(id) : undefined;
-    const prev = trails ?? last?.tex ?? this.black!.tex;
-    if (p) this.fin.finish(p, effects, { tex: [prev, to.tex], fbo: [to.fbo, to.fbo], w: this.spec.w, h: this.spec.h, cur: 0, last: 0 }, input, clocks, f.frames, f.fluid);
-    else this.copied({ tex: input, fbo: null as unknown as WebGLFramebuffer }, to);
-    if (!own) return;
-    if (last) this.pool.give(last);
-    this.trails.set(id, own);
-    return own;
+    const prev = trails ?? this.black!.tex;
+    if (p) this.fin.finish(p, effects, { tex: [prev, out.tex], fbo: [out.fbo, out.fbo], w: this.spec.w, h: this.spec.h, cur: 0, last: 0 }, input, clocks, f.frames, f.fluid);
+    else this.copied({ tex: input, fbo: null as unknown as WebGLFramebuffer }, out);
   }
 
   /** A loop in one pass: its last picture (its Feedback's) read where its Warps (summed) move it from, kept by its
@@ -371,8 +371,6 @@ void main() { o = texture(uIn, vUv); }`);
   forget() {
     this.unpin();
     for (const h of this.state.held.values()) if (h.pooled) this.pool.give(h.t);
-    for (const t of this.trails.values()) this.pool.give(t);
-    this.trails.clear();
     this.clocks.clear();
     if (this.given) this.pool.give(this.given);
     this.state = newWalkState();
@@ -393,7 +391,6 @@ void main() { o = texture(uIn, vUv); }`);
     this.black = null;
     this.state = newWalkState();
     this.seen = null;
-    this.trails.clear();
     this.given = null;
     this.spec = { ...this.spec, w: width, h: height };
   }

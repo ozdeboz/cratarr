@@ -27,26 +27,27 @@ const ROTATE = engineEffect('kaleidoscope', 3);
 const PULSE = engineEffect('eyedo', 1);
 const ECHO = engineEffect('hydra', 1);
 
-test('added, one by one, the effects are wired as toV2 wires them: in their order, Echo in its loop once shapes follow', () => {
+test('added, one by one, the effects are wired as toV2 wires them: in their order, Echo in its visible loop', () => {
   let p = v2();
   p = placeEffect(p, 'fx3', ECHO, { amount: 0.8 });
-  assert.deepEqual(drawn(p), drawn(v2({ fx3: 1, fx3Amount: 0.8 })), 'an Echo alone: a plain module');
-  assert.ok(!p.modules.some((m) => m.id.endsWith('-feedback') && m.id.startsWith('fx-')));
-  p = placeEffect(p, 'fx1', ROTATE, { amount: 1 });
-  assert.deepEqual(drawn(p), drawn(v2({ fx1: 3, fx1Amount: 1, fx3: 1, fx3Amount: 0.8 })), 'a shape after it: its loop');
+  assert.deepEqual(drawn(p), drawn(v2({ fx3: 1, fx3Amount: 0.8 })), 'an Echo alone: in its loop too');
   assert.ok(p.modules.some((m) => m.id === `${effectType(EFFECTS.find((e) => e.id === ECHO)!)}-feedback`));
+  p = placeEffect(p, 'fx1', ROTATE, { amount: 1 });
+  assert.deepEqual(drawn(p), drawn(v2({ fx1: 3, fx1Amount: 1, fx3: 1, fx3Amount: 0.8 })), 'a shape after it: the loop round it');
   p = placeEffect(p, 'fx2', PULSE, { amount: 0.8 });
   assert.deepEqual(drawn(p), drawn(v2({ fx1: 3, fx1Amount: 1, fx2: 1, fx2Amount: 0.8, fx3: 1, fx3Amount: 0.8 })));
 });
 
-test('taken out (none, or at nothing), the line closes; an Echo with no shapes after it leaves its loop', () => {
+test('taken out (none, or at nothing), the line closes; an Echo keeps its loop, which goes with it', () => {
   const all = v2({ fx1: 3, fx1Amount: 1, fx2: 1, fx2Amount: 0.8, fx3: 1, fx3Amount: 0.8 });
   const noPulse = placeEffect(all, 'fx2', 0, { amount: 0 });
   assert.deepEqual(drawn(noPulse), drawn(v2({ fx1: 3, fx1Amount: 1, fx3: 1, fx3Amount: 0.8 })));
   const echoOnly = placeEffect(noPulse, 'fx1', ROTATE, { amount: 0 });
   assert.deepEqual(drawn(echoOnly), drawn(v2({ fx3: 1, fx3Amount: 0.8 })));
-  assert.ok(!echoOnly.modules.some((m) => /-(mix|feedback)$/.test(m.id) && m.id.startsWith('fx-')), 'the loop gone');
-  assert.deepEqual(drawn(placeEffect(echoOnly, 'fx3', 0, { amount: 1 })), drawn(v2()));
+  assert.ok(echoOnly.modules.some((m) => /-feedback$/.test(m.id) && m.id.startsWith('fx-')), 'the loop kept');
+  const none = placeEffect(echoOnly, 'fx3', 0, { amount: 1 });
+  assert.deepEqual(drawn(none), drawn(v2()));
+  assert.ok(!none.modules.some((m) => /-(mix|feedback)$/.test(m.id) && m.id.startsWith('fx-')), 'the loop gone with it');
   assert.deepEqual(drawn(placeEffect(v2(), 'fx1', 0, { amount: 0 })), drawn(v2()), 'nothing to take out');
 });
 

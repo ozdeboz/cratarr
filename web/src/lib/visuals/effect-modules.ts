@@ -126,7 +126,7 @@ const kind = (m: Module) => effectOfType(m.type)?.kind;
  *  swapped for the effect's (the cables into its knobs, its pins and the macros' targets carried to the knob at the
  *  same place, Amount as it is; dropped where the new effect has no such knob), added into its line, or (effect 0,
  *  amount 0) taken out and the line closed. The line is rewired as toV2 wires it (picture-wiring.ts): its effects in
- *  their order, an Echo with shapes after it in its visible Feedback and Mix loop. An effect the slot does not take
+ *  their order, an Echo in its visible Feedback and Mix loop. An effect the slot does not take
  *  leaves `p` as it is. Pure: a new patch. */
 export function placeEffect(p: PatchV2, slot: Slot, effect: number, knobs: { amount: number; k1?: number; k2?: number }): PatchV2 {
   const q = structuredClone(p);
@@ -210,7 +210,7 @@ function onLine(q: PatchV2, slot: Slot, next: Module | null, moved: (c: CableV2)
   const own = (c: CableV2) => ends.includes(c) || (line.has(c.to.module) && ['picture', 'in1', 'in2'].includes(c.to.port)) || (line.has(c.from.module) && /-(mix|feedback)$/.test(c.from.module));
   q.cables = q.cables.filter((c) => !own(c)).flatMap(moved);
   const ordered = [...slots.filter((m) => kind(m) !== 'shape'), ...slots.filter((m) => kind(m) === 'shape').reverse()];
-  const looped = ordered.some((m) => kind(m) === 'shape') ? ordered.filter((m) => kind(m) === 'echo') : [];
+  const looped = ordered.filter((m) => kind(m) === 'echo');
   const made: Module[] = [];
   const cables: CableV2[] = [];
   let end = start;
