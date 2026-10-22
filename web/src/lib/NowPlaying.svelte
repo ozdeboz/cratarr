@@ -440,8 +440,8 @@
           <div class="sub">
             {#if np.artist}<button class="artist" disabled={!by} onclick={() => by && goToArtist(np.source, by)}
                 ><span>{np.artist}</span>{#if byFavorite}<i class="liked" role="img" aria-label="Favourite"><Icon name="heart" size={14} /></i>{/if}</button
-              >{/if}{#if np.artist && np.album}{' · '}{/if}{#if np.album && np.album_id}<button class="album-name" onclick={toAlbum}>{np.album}</button
-              >{:else}{np.album ?? ''}{/if}
+              >{/if}{#if np.artist && np.album}<span class="dot">·</span>{/if}{#if np.album && np.album_id}<button class="album-name" onclick={toAlbum}>{np.album}</button
+              >{:else if np.album}<span class="album-name">{np.album}</span>{/if}
           </div>
         {:else}
           <div class="title idle">Nothing is playing</div>
@@ -878,18 +878,37 @@
     font-weight: 500;
   }
 
+  /* The artist chip, a dot and the album, on one line that shares out its room: each is cut short at its own end (the
+     album a button, which a line's own ellipsis would have replaced whole: "…" on the Salon tablet, 2026-10-23). */
   .sub {
-    margin-top: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 0;
     overflow: hidden;
+    margin-top: 6px;
     color: var(--muted);
     font-size: 1.05rem;
-    text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .sub .dot {
+    flex: none;
+  }
+
+  .sub .album-name {
+    flex: 0 1 auto;
+    min-width: 3em;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* The artist: a chip in the line (as the panel's artist chip), the album after it as text. */
   .sub .artist {
     display: inline-flex;
+    flex: 0 1 auto;
+    min-width: 0;
     align-items: center;
     gap: 6px;
     max-width: 100%;
