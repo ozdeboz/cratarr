@@ -188,13 +188,9 @@ test("the extras (modulators, macros, a layer's knobs) as evaluate.ts moved them
   assert.ok(moments > 0 && moments < 600 / 30 / 2 + 1, `the hits asked ${moments} moments, two seconds apart at most`);
 });
 
-test("each chain module's own knobs and node values (step 5, the one engine) are the chain's: the same, by module", async () => {
+test("each chain module's own node values (step 5, the one engine) are today's, by module: Show's parts, the light loop, the camera, the Flame, the effects", async () => {
   const { A } = await import('../src/lib/visuals/routes.ts');
   const { BANDS } = await import('../src/lib/visuals/settings.svelte.ts');
-  const swing: [keyof typeof A, string, string][] = [['brightness', 'show/tonemap', 'glow'], ['size', 'flame', 'zoom'], ['saturation', 'show/saturate', 'saturation'], ['trails', 'trails', 'trails'], ['waves', 'show/bend', 'waves'], ['stir', 'fluid', 'stir'], ['flow', 'fluid', 'flow'], ['swirl', 'fluid', 'swirl']];
-  const parts: [keyof typeof A, string][] = [['shape', 'shape'], ['rotation', 'rotation'], ['lights', 'lights'], ['hue', 'hue'], ['spread', 'spread'], ['presence', 'presence']];
-  const levels: [keyof typeof A, string, string, number][] = [['smoothing', 'show/blur', 'smoothing', 0], ['haze', 'show/curve', 'haze', -1], ['fluid', 'fluid', 'fluid', 0], ['tunnel', 'tunnel', 'tunnel', 0], ['dive', 'dive', 'dive', 0], ['facets', 'fluid', 'facets', 0]];
-  const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
   let checked = 0;
   let effected = 0;
   const { slotModules } = await import('../src/lib/visuals/engine/effect-slots.ts');
@@ -203,6 +199,7 @@ test("each chain module's own knobs and node values (step 5, the one engine) are
   const { fxOfModule } = await import('../src/lib/visuals/nodes/effect-runs.ts');
   const checking = (): Engine => {
     const st = newEngine();
+    const ref = todays();
     let p: PatchV2 | null = null;
     let from: unknown = null;
     return {
@@ -210,14 +207,10 @@ test("each chain module's own knobs and node values (step 5, the one engine) are
       step: (m, s, dt, opts) => {
         if (from !== s) [from, p] = [s, flatten(toV2(s))];
         const f = stepEngine(st, p!, {}, m, () => 0, s, dt, opts);
-        const g = st.got;
         const mod = (id: string) => p!.modules.find((x) => x.id === id);
-        for (const [a, id, knob] of swing) if (mod(id)) assert.ok(Math.abs(f.knobs[id][knob] - g.whole[A[a]]) < 1e-9, `${a}: ${f.knobs[id][knob]} vs ${g.whole[A[a]]}`);
-        for (const [a, knob] of parts) for (let b = 0; b < BANDS; b++) assert.ok(Math.abs(f.knobs.flame[`${knob}.${b}`] - (g.whole[A[a]] + g.band[b][A[a]])) < 1e-9, `${a}.${b}`);
-        for (const [a, id, knob, lo] of levels) if (mod(id)) assert.ok(Math.abs(f.knobs[id][knob] - clamp(mod(id)!.knobs[knob] * g.level[A[a]], lo, 1)) < 1e-9, `${a}`);
-        // The Show's parts' own node values (5b): what the chain gave.
-        const d = f.aspects!;
-        const near = (a: number | undefined, b: number, what: string, within = 1e-9) => assert.ok(a !== undefined && Math.abs(a - b) < within, `${what}: ${a} vs ${b}`);
+        // Each module's own node values against today's (aspects.ts, stepped in lockstep).
+        const d = ref.step(m, s, dt, opts)!;
+        const near = (a: number | undefined, b: number, what: string, within = 1e-6) => assert.ok(a !== undefined && Math.abs(a - b) < within, `${what}: ${a} vs ${b}`);
         near(f.params['show/tonemap']?.flash, d.flash, 'flash');
         near(f.params['show/saturate']?.saturation, d.saturation, 'saturation');
         near(f.params['show/curve']?.gamma, d.gamma, 'gamma');

@@ -16,15 +16,15 @@ import { modulatorOf, type ModulatorType } from '../modulators/modulators';
 import type { Music } from '../music-core';
 import { ASPECT_KNOB, type Knob, type Macro, type Module, type ModuleType, type Modulator, type SignalRef } from '../patch';
 import { COLUMN_OFFSETS, ENGINE_MODULES, RANDOMIZE_SCOPES, READINGS, SHOW_PARTS, type CableV2, type PatchV2, type PortRef } from '../ports';
-import { A, ASPECTS, B, BAND_SIGNALS, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, given as columnsFor, type Aspect, type Given } from '../routes';
+import { A, AMOUNT_ASPECTS, ASPECTS, B, BAND_SIGNALS, KNOB_ASPECTS, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, given as columnsFor, type Aspect, type Given } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
-import { newChain, newFlame, stepChain, stepFlame, type ChainState, type FlameNow, type FlameState } from './chain';
+import { newFlame, stepFlame, type FlameNow, type FlameState } from './chain';
 import { newDucker, stepDucker, type DuckerState } from './compressor';
 import { newClockTriggers, stepClockTriggers, type ClockTriggerState, type ClockTriggers } from './clock';
 import { gridOf, type Grid, type GridPoint } from './grid';
 import { FLASH_GUARD } from './sidechain';
 import type { MeterValues } from '../meters';
-import { slotKnobOf, slotOf } from './effect-slots';
+import { ownKnob, slotModules, slotOf, SLOT_IDS, type Slot } from './effect-slots';
 import { musicView } from './music-signals';
 import { effectKnobIds, effectOfType } from '../effect-modules';
 import { engineOf } from '../engine-module';
@@ -58,6 +58,8 @@ for (const [a, [m, k]] of Object.entries(ASPECT_KNOB) as [Aspect, [string, strin
     if (part) TYPE_COLUMN.set(`${part.type}|${k}`, A[a]);
   }
 }
+/** Each effect slot's moment (its effect stepping on). */
+const SLOT_MOMENT: Record<Slot, Aspect> = { fx1: 'fx1', fx2: 'fx2', fx3: 'fx3', 'loop-effect': 'fxLoop' };
 /** Each chain type's knobs that are columns. */
 const TYPE_KNOBS = new Map<string, string[]>();
 for (const key of TYPE_COLUMN.keys()) {
@@ -111,11 +113,9 @@ export type EngineState = {
   envelope: EnvelopeState;
   clock: ClockState;
   track: TrackState;
-  chain: ChainState;
   /** The track's signals as the cables read them raw (the loudness the Envelope's level, the Track pulse in them). */
   signals: Float32Array;
   standIn: Float32Array[];
-  got: Given;
   /** Each chain module's Accent courses (`<module>|<knob>`): its swings followed slower, the accent on what is left. */
   accents: Record<string, AccentState>;
   /** Each Flame's own state (its node's, step 5), by module. */
@@ -147,14 +147,12 @@ export function newEngine(): EngineState {
     envelope: newEnvelope(),
     clock: newClock(),
     track: newTrack(),
-    chain: newChain(),
     signals: new Float32Array(TRACK_SIGNALS.length),
     standIn: Array.from({ length: BANDS }, () => {
       const v = new Float32Array(BAND_SIGNALS.length);
       v[B.level] = 0.5;
       return v;
     }),
-    got: given(BANDS),
     accents: {},
     flames: {},
     modulators: {},
@@ -284,8 +282,6 @@ type Plan = {
   fluids: Module[];
   /** Each Shaper's curve as a shape, and the knobs it was made from. */
   shapers: Map<string, { key: string; shape: Shape }>;
-  /** Each key's (`module|port`) chain column, where it is one. */
-  columns: Map<string, number | undefined>;
   /** Each module's ports' cables reaching each channel (a channel-less one from a band's signal as that channel's). */
   ports: Map<string, Map<string, Entry[][]>>;
   /** Each module's knobs' gain inputs and next triggers, by the knob. */
@@ -293,19 +289,11 @@ type Plan = {
   nexts: Map<string, Map<string, Entry[][]>>;
   /** Each cable's shape, as its value was when last asked. */
   shapes: WeakMap<CableV2, { v: CableV2['value']; shape: Shape }>;
-  /** The chain's columns and the cables into each, as a knob takes them, each with its source's type and its shape
-   *  (worked out at the first frame); the columns a band's cable reaches. */
-  columnCables: { a: number; cables: { c: CableV2; type: string; v: CableV2['value']; shape: Shape }[] }[] | null;
-  bandColumns: number[];
   /** The modulators' ids; each Music row's reading, and the knob value it was read at. */
   live: Set<string>;
   readings: Map<string, { at: unknown; knob: string; reading: Reading }>;
   processorIds: string[];
   outKeys: string[];
-  /** Worked out at the first frame (they need the chain's place): the columns' gain inputs and triggers, the columns'
-   *  resting values, the cables from the Track into the walks, the modules with a column among their knobs. */
-  columnInputs: { a: number; module: string; knob: string; gain: boolean }[] | null;
-  columnOffsets: { a: number; rel: string; knob: string }[] | null;
   /** Each chain module's own columns (step 5): its cables per column, its band columns, its gains, its offsets. */
   owns: { own: Own; cables: { a: number; cables: CableV2[] }[]; bands: number[]; gains: { a: number; knob: string }[]; offsets: { a: number; knob: string }[] }[] | null;
   trackCables: Partial<Record<Aspect, CableV2[]>>;
@@ -469,20 +457,15 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
     fluids: p.modules.filter((x) => x.type === 'fluid'),
     shapers: new Map(),
     expanded: new WeakMap(),
-    columns: new Map(),
     polyphonic: polyphonicOf(p, typeOf, into),
     ports: byPort(into, typeOf, ''),
     gains: byPort(into, typeOf, GAIN),
     nexts: byPort(into, typeOf, NEXT),
     shapes: new WeakMap(),
-    columnCables: null,
-    bandColumns: [],
     live: new Set(running.map((x) => x.id)),
     readings: new Map(),
     processorIds: p.modules.filter((x) => PROCESSORS.has(x.type)).map((x) => x.id),
     outKeys: p.modules.filter((x) => PROCESSORS.has(x.type)).map((x) => `${x.id}.out`),
-    columnInputs: null,
-    columnOffsets: null,
     owns: null,
     intoOf: (() => {
       const out = new Map<string, Map<string, CableV2[]>>();
@@ -532,22 +515,6 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   const ofType = (type: string) => plan.first.get(type);
   const inChain = (rel: string) => moduleOf.get(at + rel);
   const knobOf = (x: Module | undefined, knob: string, or: number) => finite(x?.knobs[knob], or);
-  /** A key (`module|knob`, flattened) as the chain's column it is. */
-  const colAt = (key: string) => {
-    if (plan.columns.has(key)) return plan.columns.get(key);
-    const a = key.startsWith(at) ? COLUMN.get(key.slice(at.length)) : effectColumn(key);
-    plan.columns.set(key, a);
-    return a;
-  };
-  /** An effect module's knob (0057 §3, wherever it sits) as its slot's column: `fx-rotate|amount` Effect 1's Amount. */
-  function effectColumn(key: string): number | undefined {
-    const bar = key.indexOf('|');
-    const id = key.slice(0, bar);
-    const type = typeOf.get(id);
-    const slot = type ? slotOf(id, type) : null;
-    const knob = slot && slotKnobOf(type!, key.slice(bar + 1));
-    return slot && knob ? COLUMN.get(`${slot}|${knob}`) : undefined;
-  }
   /** The chain's settings from its modules' knobs (the patch is the truth, 0057 Phase B); a knob a patch has no module
    *  for, as the settings had it. */
   // Intensity, Flash and Speed are the rack's macros on these knobs (0057: the Whole frame gone): as last frame left them.
@@ -929,89 +896,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   outputs['screen.guard'] = guard;
   for (const id of Object.keys(macros)) st.macros[id] = macros[id];
 
-  // The chain's columns: what their cables give, by the routes' rules.
-  const got = st.got;
-  got.whole.fill(0);
-  got.level.fill(1);
-  for (const own of got.band) own.fill(0);
-  const n = got.band.length;
-  if (!plan.columnCables) {
-    plan.columnCables = [];
-    for (const [key, cables] of into) {
-      const a = colAt(key);
-      if (a === undefined) continue;
-      plan.columnCables.push({ a, cables: perChannel(cables).map((c) => ({ c, type: typeOf.get(c.from.module) ?? c.from.module, v: c.value, shape: shapeOf(c.value) })) });
-      if (!IS_LEVEL[a] && !IS_PART[a] && perChannel(cables).some((c) => c.from.channel !== undefined) && !plan.bandColumns.includes(a)) plan.bandColumns.push(a);
-    }
-  }
-  for (const { a, cables } of plan.columnCables) {
-    for (const entry of cables) {
-      const c = entry.c;
-      const x = xOf(c, entry.type);
-      if (x === null) continue;
-      const band = c.from.channel ?? null;
-      if (band !== null && !(band >= 0 && band < n)) continue;
-      if (entry.v !== c.value) [entry.v, entry.shape] = [c.value, shapeOf(c.value)];
-      const sh = entry.shape;
-      const y = heightOf(sh, x);
-      const w = walkOf(c);
-      const e = depthOf(c);
-      // Cables only add (0057 §7e): into a level column, to its share of its setting (1: as set), a band's as the
-      // bands' mean; what multiplies it comes in at its gain input.
-      if (IS_LEVEL[a]) got.level[a] += (e * y * w) / (band === null ? 1 : n);
-      else if (band === null) got.whole[a] += e * y * w;
-      else got.band[band][a] += e * y * w;
-    }
-  }
-  // The bands' mean (a moment's: their largest) into the whole, for the columns a band's cable reaches (the rest have none).
-  for (const a of plan.bandColumns) {
-    let sum = 0;
-    let most = -Infinity;
-    for (let b = 0; b < n; b++) {
-      sum += got.band[b][a];
-      most = Math.max(most, got.band[b][a]);
-    }
-    got.whole[a] += IS_MOMENT[a] ? most : sum / n;
-  }
-  // A level column's gain input (its VCAs), a moment column's trigger (its Gate): 0057 §7e.
-  const firedNow: Partial<Record<Aspect, boolean>> = {};
-  if (!plan.columnInputs) {
-    plan.columnInputs = [];
-    for (const key of into.keys()) {
-      const gain = key.endsWith(GAIN);
-      if (!gain && !key.endsWith(NEXT)) continue;
-      const base = key.slice(0, -(gain ? GAIN : NEXT).length);
-      const a = colAt(base);
-      if (a === undefined) continue;
-      const [module, knob] = base.split('|');
-      plan.columnInputs.push({ a, module, knob, gain });
-    }
-  }
-  for (const { a, module, knob, gain } of plan.columnInputs) {
-    if (gain && IS_LEVEL[a]) got.level[a] *= gainOf(module, knob);
-    // A swing column's gain scales its modulation (Bitwig's modulation scaling): its cables, a part's own among them.
-    if (gain && !IS_LEVEL[a] && !IS_MOMENT[a]) {
-      const g = gainOf(module, knob);
-      got.whole[a] *= g;
-      for (const own of got.band) own[a] *= g;
-    }
-    if (!gain && IS_MOMENT[a] && fired(module, knob)) {
-      firedNow[ASPECTS[a]] = true;
-      nexts.push({ module, knob });
-    }
-  }
-
-  // Each swing column's knob, its resting value (0057 §7e, VCV's rule: the knob the offset, the cables adding to it).
-  if (!plan.columnOffsets) {
-    plan.columnOffsets = [];
-    for (const offset of COLUMN_OFFSETS) {
-      const [type, knob] = offset.split('.');
-      const rel = type === 'flame' || type === 'trails' ? type : `show/${type}`;
-      const a = colAt(`${at}${rel}|${knob}`);
-      if (a !== undefined) plan.columnOffsets.push({ a, rel, knob });
-    }
-  }
-  for (const { a, rel, knob } of plan.columnOffsets) got.whole[a] += knobOf(inChain(rel), knob, 0);
+  const n = BANDS;
 
   // Each chain module's own columns (step 5, the one engine): what its cables give it by the same rules, kept by the
   // module (any Flame, Tone map, Fluid…, wherever it sits, however many), and its knobs as its node reads them.
@@ -1107,17 +992,6 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     for (const c of (plan.trackCables[a] ??= columnOf(a).flatMap((key) => into.get(at + key) ?? []))) if (trackAdsr(c.from.module, typeOf, into)) sum += depthOf(c) * heightOf(shapeOf(c.value), finite(xOf(c))) * walkOf(c);
     return sum;
   };
-  const aspects = !flameModule
-    ? null
-    : stepChain(
-        st.chain,
-        m,
-        chainSettings,
-        { given: got, track: raw, bands, lit: env.level, envelope: env.out, glow, clock, trackWalk: { look: trackInto('look'), behaviour: trackInto('behaviour') }, fired: firedNow },
-        step,
-        { ...opts, levers: held },
-      );
-
   // Each chain module's node values from its own knobs (step 5): what aspects.ts made of the chain's columns, its
   // Accent's courses its own.
   const params: Record<string, NodeParams> = {};
@@ -1144,8 +1018,12 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
       params[own.id] = { scale: clamp(accented(own.id, 'zoom', 0.5 + 0.5 * k.zoom, held.size), 0.25, 1.4), flame };
     }
   }
-  for (const id of Object.keys(st.accents)) if (!moduleOf.has(id.slice(0, id.lastIndexOf('|')))) delete st.accents[id];
+  for (const id of Object.keys(st.accents)) if (!moduleOf.has(id.slice(0, id.indexOf('|')))) delete st.accents[id];
   for (const id of Object.keys(st.flames)) if (!moduleOf.has(id)) delete st.flames[id];
+
+  // The frame's summary as the meters, the precheck and the labs read it (aspects.ts's AspectsNow): the Cratarr device's
+  // modules' own values, each column what its module's is; none without a Flame. A view of the modules, not an engine.
+  const aspects = flameModule ? summaryOf() : null;
 
   // Every other module's knobs, as the evaluator moves a knob.
   if (!plan.others) {
@@ -1153,7 +1031,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     for (const x of p.modules) {
       const t = types[x.type];
       if (!t || live.has(x.id) || PROCESSORS.has(x.type)) continue;
-      if (t.knobs.some((knob) => colAt(`${x.id}|${knob.id}`) !== undefined)) continue;
+      if (plan.owns!.some((e) => e.own.id === x.id)) continue;
       plan.others.push({ x, t });
     }
   }
@@ -1201,6 +1079,85 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     return macroed(x.id, (types[x.type] ?? ENGINE_TYPES[x.type])?.knobs.find((k) => k.id === id) ?? ({ id } as Knob), finite(x.knobs[id], or));
   }
 
+  /** A module's step knobs its type declares, past its columns' moments. */
+  function stepsOf(own: Own): Knob[] {
+    return ((types[own.type] ?? ENGINE_TYPES[own.type])?.knobs ?? []).filter((k) => k.kind === 'step' && !own.columns.has(k.id));
+  }
+
+  /** The frame's summary (AspectsNow) from the Cratarr device's modules' own columns and values. */
+  function summaryOf(): AspectsNow {
+    const ownOf = new Map(plan.owns!.map((e) => [e.own.id, e.own]));
+    const W = new Float32Array(NA);
+    const level = new Float32Array(NA).fill(1);
+    // Each column its module's: the device's (beside its Flame), the effects' slots' (their routes only: no setting).
+    for (const [key, a] of COLUMN) {
+      const bar = key.indexOf('|');
+      const own = ownOf.get(at + key.slice(0, bar));
+      if (!own) continue;
+      W[a] = own.got.whole[a];
+      level[a] = own.got.level[a];
+    }
+    const slots = slotModules(p.modules);
+    SLOT_IDS.forEach((slot, i) => {
+      const x = slots.get(slot);
+      const own = x && ownOf.get(x.id);
+      if (!own || !x) return;
+      level[A[AMOUNT_ASPECTS[i]]] = own.got.level[A.fx1Amount];
+      for (const [j, k] of (['k1', 'k2'] as const).entries()) {
+        const name = ownKnob(x.type, k);
+        if (name) W[A[KNOB_ASPECTS[i * 2 + j]]] = own.got.whole[j ? A.fx1K2 : A.fx1K1] - baseOf(x, name, 0.5);
+      }
+    });
+    const of = (type: string, rel: string) => (moduleOf.get(at + rel)?.type === type ? params[at + rel] : undefined);
+    const flame = params[flameModule!.id]!;
+    const tone = of('tonemap', 'show/tonemap');
+    const sat = of('saturate', 'show/saturate');
+    const curve = of('curve', 'show/curve');
+    const blur = of('blur', 'show/blur');
+    const fluidOwn = of('fluid', 'fluid');
+    const fluid = fluidOwn?.fluid ?? opts.fluidFull * clamp(s.fluid, 0, 1);
+    const haze = curve?.gamma !== undefined ? { gamma: curve.gamma, floor: curve.floor ?? 0 } : hazeOf(clamp(s.haze, -1, 1));
+    const moments = Object.fromEntries(MOMENT_ASPECTS.map((a) => [a, false])) as Record<(typeof MOMENT_ASPECTS)[number], boolean>;
+    for (const r of nexts) {
+      const own = ownOf.get(r.module);
+      if (!own) continue;
+      const slot = slotOf(r.module, own.type);
+      const a = own.columns.get(r.knob) ?? (slot && r.knob === 'effect' ? A[SLOT_MOMENT[slot]] : undefined);
+      if (a !== undefined && IS_MOMENT[a] && (r.module.startsWith(at) || slot)) moments[ASPECTS[a] as (typeof MOMENT_ASPECTS)[number]] = true;
+    }
+    const walk = (a: Aspect) => (W[A[a]] - trackInto(a)) / held.evolution;
+    return {
+      given: W,
+      track: raw,
+      bands,
+      lit: env.level,
+      glow,
+      turn: flame.flame!.turn,
+      rates: flame.flame!.rates,
+      shape: flame.flame!.shape,
+      parts: flame.flame!.parts,
+      hits: flame.flame!.hits,
+      scale: flame.scale!,
+      keep: of('trails', 'trails')?.keep ?? clamp(1 - 0.07, 0.5, 0.985),
+      gamma: haze.gamma,
+      flash: tone?.flash ?? glow * clamp(accented(`${flameModule!.id}|chain`, 'glow', 1), 0.15, 3),
+      saturation: sat?.saturation ?? clamp(accented(`${flameModule!.id}|chain`, 'saturation', 0.35), 0, 1.25),
+      smoothing: blur?.smoothing ?? 12 * clamp(s.smoothing, 0, 1) ** 2,
+      floor: haze.floor,
+      levels: { fluid: level[A.fluid], smoothing: level[A.smoothing], haze: level[A.haze], tunnel: level[A.tunnel], dive: level[A.dive] },
+      fluid,
+      warp: fluidOwn?.warp ?? 0.12 * fluid,
+      tunnel: of('tunnel', 'tunnel')?.tunnel ?? clamp(s.tunnel, 0, 1),
+      effects: clamp(knobOf(inChain('frame'), 'effects', inChain('frame') ? s.effects : 1) * level[A.effects], 0, 1),
+      facets: fluidOwn?.facets ?? clamp(s.facets, 0, 1),
+      dive: of('dive', 'dive')?.dive ?? clamp(s.dive, 0, 1),
+      look: walk('look'),
+      behaviour: walk('behaviour'),
+      nexts: moments,
+      routed: { amounts: AMOUNT_ASPECTS.map((a) => level[A[a]]), knobs: KNOB_ASPECTS.map((a) => clamp(W[A[a]], -1, 1)) },
+    };
+  }
+
   /** A chain module's knobs as its node reads them (step 5), from its own columns: a swing its column (a part's per band
    *  too, `<knob>.<band>`), a level its setting times its column's level, within its range (Haze −1..1); its other knobs
    *  as set (the Flame's continuity and evolution per band). */
@@ -1209,7 +1166,11 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     const declared = (types[own.type] ?? ENGINE_TYPES[own.type])?.knobs;
     const g = own.got;
     for (const [id, a] of own.columns) {
-      if (IS_MOMENT[a]) continue;
+      // A moment (a Flame's family, form…) moves on as its Next fires.
+      if (IS_MOMENT[a]) {
+        if (fired(own.id, id)) nexts.push({ module: own.id, knob: id });
+        continue;
+      }
       if (IS_LEVEL[a]) {
         const base = own.effect && x ? baseOf(x, id, 0) : finite(x?.knobs[id], declared?.find((d) => d.id === id)?.default ?? 0);
         k[id] = clamp(base * g.level[a], a === A.haze ? -1 : 0, 1);
@@ -1218,9 +1179,8 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
       k[id] = own.effect ? clamp(g.whole[a], 0, 1) : g.whole[a];
       if (IS_PART[a]) for (let b = 0; b < g.band.length; b++) k[`${id}.${b}`] = g.whole[a] + g.band[b][a];
     }
-    // Its steps (a Flame's family, an engine's effect…) move on as their Next fires, as any module's do; the chain's own
-    // there (its columns' triggers) until the chain goes.
-    for (const knob of declared ?? []) if (knob.kind === 'step' && x && colAt(`${own.id}|${knob.id}`) === undefined) k[knob.id] = moved(own.id, knob, finite(x.knobs[knob.id], knob.default), NO_CABLES);
+    // Its steps (a Flame's family, an engine's effect…) move on as their Next fires, as any module's do.
+    for (const knob of stepsOf(own)) if (x) k[knob.id] = moved(own.id, knob, finite(x.knobs[knob.id], knob.default), NO_CABLES);
     return k;
   }
 
