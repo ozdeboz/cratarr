@@ -209,6 +209,9 @@ export const portHelp: Record<string, Record<string, string>> = {
     align: 'How far each copy turns the way the flow goes.',
     stretch: 'How much longer each copy is drawn as the flow goes faster.',
     field: 'The flow that turns and stretches the copies: the Fluid’s unless a Field is cabled.',
+    along: 'A picture whose outlines the flow runs along: the flame, a Shape, the cover.',
+    follow: 'How strongly the flow runs along Along’s outlines; below 0 the other way round.',
+    reach: 'How far from Along’s edges the flow is felt (its picture blurred that far).',
   },
   shape: {
     kind: 'Circle, polygon, star, ring or line.',
@@ -365,10 +368,16 @@ export const portHelp: Record<string, Record<string, string>> = {
     field: 'The flow, for Streamlines.',
   },
   push: {
+    along: 'A picture whose outlines the flow runs along: the flame, a Shape, the cover.',
+    follow: 'How strongly the flow runs along Along’s outlines; below 0 the other way round.',
+    reach: 'How far from Along’s edges the flow is felt (its picture blurred that far).',
     amount: 'How far the picture is pushed along the flow.',
     field: 'The flow: a Field’s; without one, the Fluid’s.',
   },
   streamlines: {
+    along: 'A picture whose outlines the flow runs along: the flame, a Shape, the cover.',
+    follow: 'How strongly the flow runs along Along’s outlines; below 0 the other way round.',
+    reach: 'How far from Along’s edges the flow is felt (its picture blurred that far).',
     seeds: 'Where the lines start: a Grid’s points; without one, an even scatter.',
     field: 'The flow they follow: a Field’s; without one, the Fluid’s.',
     length: 'How long each line is.',

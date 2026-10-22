@@ -20,7 +20,7 @@ import { none } from './shared';
 export type FlowField = { tex: WebGLTexture; uvPerCell: [number, number] } | { scale: number; phase: number; waves?: readonly number[] };
 
 export type ModuleNode = {
-  draw(gl: WebGL2RenderingContext, inputs: { picture: WebGLTexture | null; by?: WebGLTexture | null; field?: FlowField | null; windows?: readonly (WebGLTexture | null)[] }, out: WebGLFramebuffer, width: number, height: number, knobs: Record<string, number>, frame: FrameInfo, points?: readonly { x: number; y: number }[] | null): void;
+  draw(gl: WebGL2RenderingContext, inputs: { picture: WebGLTexture | null; by?: WebGLTexture | null; field?: FlowField | null; windows?: readonly (WebGLTexture | null)[]; along?: WebGLTexture | null }, out: WebGLFramebuffer, width: number, height: number, knobs: Record<string, number>, frame: FrameInfo, points?: readonly { x: number; y: number }[] | null): void;
   dispose(gl: WebGL2RenderingContext): void;
 };
 

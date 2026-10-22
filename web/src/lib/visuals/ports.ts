@@ -429,14 +429,18 @@ export const FOLD = declared(
   [PICTURE_OUT],
 );
 
+/** Along (the owner: flows pushed along shapes): a picture whose outlines a flow runs along (its brightness's swirl,
+ *  blurred to Reach), as strongly as Follow; for Streamlines, Push and Instance. */
+const ALONG_IN: Port = { id: 'along', label: 'Along', type: 'picture' };
+
 /** Instance (0057 §4c; TouchDesigner's and cables.gl's instancing): its source drawn at each point. */
 export const INSTANCE = declared(
   'instance',
   'Instance',
   'module',
   // Align, Stretch (the owner: shapes over flow grids): each copy turned with the flow at its point, drawn longer as fast.
-  [knob('amount', 'Amount', 0, 1, 1, 'level'), knob('align', 'Align', 0, 1, 0, 'level'), knob('stretch', 'Stretch', 0, 2, 0, 'level')],
-  [{ id: 'points', label: 'Points', type: 'points' }, PICTURE_IN, FLOW_IN],
+  [knob('amount', 'Amount', 0, 1, 1, 'level'), knob('align', 'Align', 0, 1, 0, 'level'), knob('stretch', 'Stretch', 0, 2, 0, 'level'), knob('follow', 'Follow', -2, 2, 0), knob('reach', 'Reach', 0, 6, 3)],
+  [{ id: 'points', label: 'Points', type: 'points' }, PICTURE_IN, FLOW_IN, ALONG_IN],
   [PICTURE_OUT],
 );
 
@@ -567,14 +571,15 @@ export const STREAMLINES = declared(
     knob('saturation', 'Saturation', 0, 1, 0, 'level'),
     knob('perSeed', 'Per seed', 1, 16, 1),
     knob('ring', 'Ring', 0, 0.5, 0.08),
+    knob('follow', 'Follow', -2, 2, 0), knob('reach', 'Reach', 0, 6, 3),
   ],
-  [{ id: 'seeds', label: 'Seeds', type: 'points' }, FLOW_IN],
+  [{ id: 'seeds', label: 'Seeds', type: 'points' }, FLOW_IN, ALONG_IN],
   [PICTURE_OUT],
 );
 
 /** Push: a picture pushed along a flow (a Field's, else the Fluid's): each pixel read from a few steps back along it, as
  *  far as Amount, so what it shows smears and swirls the way the flow goes. */
-export const PUSH = declared('push', 'Push', 'module', [knob('amount', 'Amount', 0, 1, 0.3, 'level')], [PICTURE_IN, FLOW_IN], [PICTURE_OUT]);
+export const PUSH = declared('push', 'Push', 'module', [knob('amount', 'Amount', 0, 1, 0.3, 'level'), knob('follow', 'Follow', -2, 2, 0), knob('reach', 'Reach', 0, 6, 3)], [PICTURE_IN, FLOW_IN, ALONG_IN], [PICTURE_OUT]);
 
 export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD, LENS, TRANSFORM, STREAMLINES, PUSH, SHAPE];
 

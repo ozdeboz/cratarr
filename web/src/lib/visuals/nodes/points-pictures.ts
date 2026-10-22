@@ -155,8 +155,11 @@ export function createInstance(gl: WebGL2RenderingContext): ModuleNode {
       gl.useProgram(p);
       const align = knobs.align ?? 0;
       const stretch = knobs.stretch ?? 0;
-      const flowing = !!inputs.field && (align > 0 || stretch > 0);
-      if (flowing) setFlow(gl, p, inputs.field!, 1, width, height);
+      const following = !!inputs.along && !!knobs.follow;
+      const flowing = (!!inputs.field || following) && (align > 0 || stretch > 0);
+      if (flowing) setFlow(gl, p, inputs.field ?? STILL, 1, width, height);
+      const alongDone = flowing ? setAlong(gl, p, inputs.along, knobs, 2, width, height) : () => {};
+      if (!flowing) gl.uniform1f(gl.getUniformLocation(p, 'uFollow'), 0);
       gl.uniform1i(gl.getUniformLocation(p, 'uFlowing'), flowing ? 1 : 0);
       gl.uniform1f(gl.getUniformLocation(p, 'uAlign'), align);
       gl.uniform1f(gl.getUniformLocation(p, 'uStretch'), stretch);
@@ -176,6 +179,7 @@ export function createInstance(gl: WebGL2RenderingContext): ModuleNode {
       gl.bindVertexArray(null);
       gl.blendEquation(gl.FUNC_ADD);
       gl.disable(gl.BLEND);
+      alongDone();
     },
     dispose: () => {
       gl.deleteProgram(p);
@@ -256,14 +260,56 @@ uniform float uPhase;
 uniform vec3 uWavesA;
 uniform vec3 uWavesB;
 uniform vec2 uK;
+// Along a picture's outlines (the owner: flows pushed along shapes): the swirl of its brightness, blurred to Reach (a
+// level of its mipmaps), as strong as Follow; free of divergence as the Field's waves are (a stream function's curl).
+uniform sampler2D uAlong;
+uniform float uFollow;
+uniform float uReach;
+uniform vec2 uAlongTexel;
 ${FIELD_GLSL}
+float brightAt(vec2 p) { return dot(textureLod(uAlong, p * uK * 0.5 + 0.5, uReach).rgb, vec3(0.299, 0.587, 0.114)); }
 vec2 flowAt(vec2 p) {
-  if (uFormula == 1) return fieldAt(p, uScale, uPhase, uWavesA, uWavesB);
-  vec2 cells = textureLod(uVelocity, p * uK * 0.5 + 0.5, 0.0).xy;
-  return cells * uUvPerCell * 2.0 / uK;
+  vec2 v;
+  if (uFormula == 1) v = fieldAt(p, uScale, uPhase, uWavesA, uWavesB);
+  else v = textureLod(uVelocity, p * uK * 0.5 + 0.5, 0.0).xy * uUvPerCell * 2.0 / uK;
+  if (uFollow != 0.0) {
+    // A step of the blurred level's texel, in the frame's units.
+    vec2 h = exp2(uReach) * uAlongTexel * 2.0 / uK;
+    float dx = brightAt(p + vec2(h.x, 0.0)) - brightAt(p - vec2(h.x, 0.0));
+    float dy = brightAt(p + vec2(0.0, h.y)) - brightAt(p - vec2(0.0, h.y));
+    v += vec2(dy, -dx) * uFollow;
+  }
+  return v;
 }`;
 
 const ONE_WAVES = [1, 1, 1, 1, 1, 1];
+/** No flow of its own (a module flowing only along a picture): the Field's sum with every wave at nothing. */
+export const STILL: FlowField = { scale: 1, phase: 0, waves: [0, 0, 0, 0, 0, 0] };
+
+/** Along a picture's outlines: its texture (its mipmaps made now, read from Reach's level; the picture at the frame's
+ *  size) on `unit`, Follow and Reach set; none, Follow at 0. What it gives back puts the texture's own filter back. */
+function setAlong(gl: WebGL2RenderingContext, p: WebGLProgram, along: WebGLTexture | null | undefined, knobs: Record<string, number>, unit: number, width: number, height: number): () => void {
+  const u = (name: string) => gl.getUniformLocation(p, name);
+  const follow = along ? (knobs.follow ?? 0) : 0;
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(gl.TEXTURE_2D, follow ? along! : none(gl));
+  if (follow) {
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  }
+  gl.uniform1i(u('uAlong'), unit);
+  gl.uniform1f(u('uFollow'), follow);
+  gl.uniform1f(u('uReach'), knobs.reach ?? 3);
+  gl.uniform2f(u('uAlongTexel'), 1 / Math.max(1, width), 1 / Math.max(1, height));
+  gl.activeTexture(gl.TEXTURE0);
+  return () => {
+    if (!follow) return;
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, along!);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.activeTexture(gl.TEXTURE0);
+  };
+}
 
 // Instance's quads: each a cell of the points' spacing about its point, the picture's middle at that size in it; with a
 // flow, turned the way it goes there (as far as Align takes it) and drawn longer along it as fast as it goes (Stretch).
@@ -458,13 +504,16 @@ export function createStreamlines(gl: WebGL2RenderingContext): ModuleNode {
       const ring = knobs.ring ?? 0.08;
       const seeds = per === 1 ? given : given.flatMap((q) => Array.from({ length: per }, (_, i) => ({ x: q.x + ring * Math.cos((2 * Math.PI * i) / per), y: q.y + ring * Math.sin((2 * Math.PI * i) / per) })));
       const n = packed(seeds, data, MOST_LINES);
-      if (!field || !n) return;
+      const following = !!inputs.along && !!knobs.follow;
+      const flow = field ?? (following ? STILL : null);
+      if (!flow || !n) return;
       gl.useProgram(p);
       gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, n * 2);
       gl.bindBuffer(gl.ARRAY_BUFFER, null);
       const u = (name: string) => gl.getUniformLocation(p, name);
-      setFlow(gl, p, field, 0, width, height);
+      setFlow(gl, p, flow, 0, width, height);
+      const alongDone = setAlong(gl, p, inputs.along, knobs, 1, width, height);
       gl.uniform1f(u('uSat'), knobs.saturation ?? 0);
       gl.uniform1f(u('uStep'), (knobs.length ?? 0.6) / STEPS);
       gl.uniform1f(u('uHalf'), (knobs.thickness ?? 0.006) / 2);
@@ -479,6 +528,7 @@ export function createStreamlines(gl: WebGL2RenderingContext): ModuleNode {
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, STEPS * 2, n);
       gl.bindVertexArray(null);
       gl.disable(gl.BLEND);
+      alongDone();
     },
     dispose: () => {
       gl.deleteProgram(p);
@@ -513,14 +563,17 @@ export function createPush(gl: WebGL2RenderingContext): ModuleNode {
       gl.viewport(0, 0, width, height);
       gl.disable(gl.BLEND);
       gl.useProgram(p);
-      setFlow(gl, p, inputs.field ?? { scale: 1, phase: 0 }, 1, width, height);
+      const following = !!inputs.along && !!knobs.follow;
+      setFlow(gl, p, inputs.field ?? (following ? STILL : { scale: 1, phase: 0 }), 1, width, height);
+      const alongDone = setAlong(gl, p, inputs.along, knobs, 2, width, height);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, inputs.picture ?? none(gl));
       gl.uniform1i(gl.getUniformLocation(p, 'uIn'), 0);
-      gl.uniform1f(gl.getUniformLocation(p, 'uAmount'), inputs.field ? (knobs.amount ?? 0.3) : 0);
+      gl.uniform1f(gl.getUniformLocation(p, 'uAmount'), inputs.field || following ? (knobs.amount ?? 0.3) : 0);
       gl.bindVertexArray(vao);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.bindVertexArray(null);
+      alongDone();
     },
     dispose: () => {
       gl.deleteProgram(p);
