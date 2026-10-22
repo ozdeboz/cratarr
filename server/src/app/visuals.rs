@@ -21,7 +21,9 @@ use serde_json::{Map, Value};
 use tokio::sync::broadcast;
 
 /// The most a group's settings may hold, as JSON (bytes); a snapshot's too.
-pub const MOST_BYTES: usize = 64 * 1024;
+/// 256 KB: a rack converted from an older snapshot (every route a cable) reaches 85 KB, and racks grow as the
+/// one engine's modules come in; a group's settings go to its pages whole, which the house network carries easily.
+pub const MOST_BYTES: usize = 256 * 1024;
 /// The longest writer id.
 pub const MOST_WRITER: usize = 64;
 
