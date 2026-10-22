@@ -113,6 +113,7 @@
     live,
     thumbnail,
     previewShown = false,
+    tapOpens = false,
     openAtStart = [],
     sheetHeight = 0,
     layout = 'elk',
@@ -143,6 +144,8 @@
     thumbnail?: Thumbnailer;
     /** The page shows the picked module's preview itself (its sheet's top): the graph's popover then gives way. */
     previewShown?: boolean;
+    /** A tap on a module opens it as its title does (the graph alone: step 8, the owner), not only shows its preview. */
+    tapOpens?: boolean;
     /** Nodes (devices) open from the start. */
     openAtStart?: string[];
     /** How much of the graph's bottom an open sheet covers (px): the fitted view keeps clear of it. */
@@ -478,6 +481,16 @@
   }
   const enter = (id: string) => (at = path(id));
 
+  function openNode(id: string) {
+    // In select mode a tap anywhere on a node (its name, far out its whole one line) toggles it: Svelte Flow's node
+    // click does, once.
+    if (selecting) return;
+    const d = dataOf(id);
+    // A device's title (or its frame): into it; a module's, its page.
+    if (d?.kind === 'box' || (d?.kind === 'module' && d.device)) enter(id);
+    else if (d?.kind === 'module') onopen?.(path(id));
+  }
+
   setContext<GraphActions>(GRAPH, {
     knob: (module, knob, value) => edit([{ kind: 'knob', module: path(module), knob, value }]),
     knobs: (module, poly, values) =>
@@ -485,15 +498,7 @@
         values.map((v) => ({ kind: 'knob', module: path(module), knob: v.id, value: v.value })),
         `knob:${path(module).join('/')}.${poly}`,
       ),
-    open(id) {
-      // In select mode a tap anywhere on a node (its name, far out its whole one line) toggles it: Svelte Flow's node
-      // click does, once.
-      if (selecting) return;
-      const d = dataOf(id);
-      // A device's title (or its frame): into it; a module's, its page.
-      if (d?.kind === 'box' || (d?.kind === 'module' && d.device)) enter(id);
-      else if (d?.kind === 'module') onopen?.(path(id));
-    },
+    open: openNode,
     enter,
     fine(f) {
       // Let go: the lens stays, settled, with the knob's pin, until a tap elsewhere.
@@ -846,7 +851,12 @@
       if (event.shiftKey || event.ctrlKey || event.metaKey) return;
       if (edge.type === 'cable') openIt(edge.id);
     }}
-    onnodeclick={({ node }) => (selecting ? togglePick(node.id) : (tapped = node.id))}
+    onnodeclick={({ node, event }) => {
+      if (selecting) return togglePick(node.id);
+      tapped = node.id;
+      // The graph alone: a tap on a module's body opens it too (its knobs, jacks and buttons keep their own taps).
+      if (tapOpens && !(event.target as Element | null)?.closest?.('.nodrag, button, input, .svelte-flow__handle')) openNode(node.id);
+    }}
     onpaneclick={() => {
       reroute = null;
       tapped = null;

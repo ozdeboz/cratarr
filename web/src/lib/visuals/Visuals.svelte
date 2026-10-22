@@ -60,7 +60,7 @@
   function showChrome() {
     chrome = true;
     clearTimeout(hideTimer);
-    if (!panel && !diceRow) hideTimer = setTimeout(() => (chrome = false), 3000);
+    if (!panel && !graph && !diceRow) hideTimer = setTimeout(() => (chrome = false), 3000);
   }
 
   // Closing: by the button, Esc or a swipe down this step of the history goes back too; Back has done that already.
@@ -116,34 +116,55 @@
     if (diceRow) return showChrome();
     if (chrome) {
       chrome = false;
-      panel = false;
+      closeAll();
     } else showChrome();
   }
-  // The rack open is a step of the history (the owner, 71.1: "so long as the rack view is open, the close button should
-  // close the rack"): the close button, Esc and Back close it first (its sheet before it, on a phone), the visuals after.
-  function openRack() {
-    panel = true;
-    void loadLibrary();
-    history.pushState({ ...history.state, visuals: true, rack: true }, '');
-    if (sheet) {
-      panelPath = [];
-      sheetOpen = true;
+  // Panel and Rack (step 8, the owner): two toggles, both always in the corner, the panel and the graph each opened on
+  // its own (the panel alone over the picture, the graph alone, or both). What is open is one step of the history: the
+  // close button, Esc and Back close the last opened first, the visuals after (the owner, 71.1).
+  let graph = $state(false);
+  let opened: ('panel' | 'graph')[] = [];
+  function opening(what: 'panel' | 'graph') {
+    if (!opened.length && !history.state?.rack) history.pushState({ ...history.state, visuals: true, rack: true }, '');
+    opened = [...opened.filter((x) => x !== what), what];
+  }
+  function shut(what: 'panel' | 'graph') {
+    opened = opened.filter((x) => x !== what);
+    if (what === 'panel') {
+      panel = false;
       sheetDy = 0;
+    } else graph = false;
+  }
+  function closing(what: 'panel' | 'graph') {
+    shut(what);
+    if (!opened.length && history.state?.rack) history.back();
+    showChrome();
+  }
+  function closeAll() {
+    const was = opened.length;
+    for (const x of [...opened]) shut(x);
+    if (was && history.state?.rack) history.back();
+  }
+  function openPanel(top = false) {
+    if (top) panelPath = [];
+    if (!panel) {
+      panel = true;
+      sheetDy = 0;
+      void loadLibrary();
+      opening('panel');
     }
     showChrome();
   }
-  function closeRack() {
-    if (!panel) return;
-    const steps = (history.state?.rack ? 1 : 0) + (history.state?.sheet ? 1 : 0);
-    panel = false;
-    sheetOpen = false;
-    sheetDy = 0;
-    if (steps) history.go(-steps);
+  function openGraph() {
+    graph = true;
+    void loadLibrary();
+    opening('graph');
     showChrome();
   }
-  const togglePanel = () => (panel ? closeRack() : openRack());
-  /** The close button and Esc: the rack first, then the visuals. */
-  const closeOne = () => (panel ? closeRack() : close());
+  const togglePanel = () => (panel ? closing('panel') : openPanel(true));
+  const toggleGraph = () => (graph ? closing('graph') : openGraph());
+  /** The close button and Esc: the last opened first, then the visuals. */
+  const closeOne = () => (opened.length ? closing(opened[opened.length - 1]) : close());
 
   // ---- The patch's changes ----------------------------------------------------------------------------------------
   // The preset the patch was last set to (its name in the panel), until something is changed.
@@ -215,22 +236,9 @@
   // graph untouched underneath. Its handle brings it back at its top view.
   let wide = $state(typeof innerWidth === 'number' ? innerWidth >= 1100 : false);
   const sheet = $derived(!wide || docked);
-  const graphShown = $derived(panel);
-  let sheetOpen = $state(true);
+  const graphShown = $derived(graph);
   let sheetDy = $state(0);
-  function openSheet(top = false) {
-    if (top) panelPath = [];
-    if (sheet && !sheetOpen) history.pushState({ ...history.state, visuals: true, sheet: true }, '');
-    sheetOpen = true;
-    sheetDy = 0;
-  }
-  function closeSheet() {
-    if (!sheetOpen) return;
-    sheetOpen = false;
-    sheetDy = 0;
-    if (history.state?.sheet) history.back();
-  }
-  const panelShown = $derived(panel && (!sheet || sheetOpen));
+  const panelShown = $derived(panel);
   let graphLevel = $state<string[]>([]);
   let panelPath = $state<string[]>([]);
   const liveFaces = new LiveFaces();
@@ -252,10 +260,10 @@
       /* this visit only */
     }
   }
+  // A module, cable or knob tapped on the graph: the panel opened on it.
   const graphPage = (page: string) => {
     panelPath = [page];
-    openSheet();
-    showChrome();
+    openPanel();
   };
 
   // ---- Full screen, beside the page -------------------------------------------------------------------------------
@@ -282,15 +290,11 @@
     showChrome();
     if (!history.state?.visuals) history.pushState({ ...history.state, visuals: true }, '');
     const popped = () => {
-      // Back closes one thing at a time: the panel's sheet, then the rack, then the visuals.
+      // Back closes one thing at a time: the last opened of the panel and the graph, the other after, then the visuals.
       const st = history.state ?? {};
-      if (sheetOpen && sheet && !st.sheet) {
-        sheetOpen = false;
-        sheetDy = 0;
-      }
-      if (panel && !st.rack) {
-        panel = false;
-        sheetOpen = false;
+      if (opened.length && !st.rack) {
+        shut(opened[opened.length - 1]);
+        if (opened.length) history.pushState({ ...history.state, visuals: true, rack: true }, '');
       }
       if (!closed && !st.visuals) {
         closed = true;
@@ -369,12 +373,15 @@
   {/if}
   {#if chrome}
     <div class="chrome" transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
-      <button class="close" aria-label={panel ? 'Close the rack' : 'Close the visuals'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={closeOne}
+      <button class="close" aria-label={panel || graph ? 'Close the rack' : 'Close the visuals'} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={closeOne}
         ><Icon name="close" size={26} /></button
       >
       <div class="corner">
-        <button class="round" class:on={panel} aria-label="Rack" aria-expanded={panel} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={togglePanel}
+        <button class="round" class:on={panel} aria-label="Panel" aria-expanded={panel} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={togglePanel}
           ><Icon name="sliders" size={24} /></button
+        >
+        <button class="round" class:on={graph} aria-label="Rack" aria-expanded={graph} onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={toggleGraph}
+          ><Icon name="rack" size={24} /></button
         >
         <button
           class="round"
@@ -454,13 +461,13 @@
       {#if graphShown}
         <div
           class="graph"
-          class:whole={sheet}
+          class:whole={sheet || !panel}
           role="group"
           aria-label="Rack"
           onpointerdown={(e) => {
             e.stopPropagation();
             // A tap on the graph closes the sheet over it (a module tapped opens it again, on its view).
-            if (sheet && sheetOpen) closeSheet();
+            if (sheet && panel) closing('panel');
           }}
           onpointerup={(e) => e.stopPropagation()}
         >
@@ -480,13 +487,11 @@
             onpick={(r) => graphPage(`from|${r.module.slice(0, -1).join('/')}|${r.module[r.module.length - 1]}|${r.knob}`)}
             live={liveFaces}
             thumbnail={(m, c) => (loop ? loop.thumbnail(m, c) : 'Not running.')}
-            previewShown={sheet && sheetOpen && panel}
+            previewShown={sheet && panel}
+            tapOpens={!panel}
             {helpFor}
           />
         </div>
-      {/if}
-      {#if panel && sheet && !sheetOpen}
-        <button class="panel-handle" onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => openSheet(true)}>Panel</button>
       {/if}
       {#if panelShown}
         <div
@@ -495,10 +500,11 @@
           role="group"
           aria-label="Panel"
           style:transform={sheet && sheetDy ? `translateY(${sheetDy}px)` : undefined}
-          use:sheetDrag={{ onclose: closeSheet, ondrag: (d) => (sheetDy = d), enabled: sheet }}
+          use:sheetDrag={{ onclose: () => closing('panel'), ondrag: (d) => (sheetDy = d), enabled: sheet }}
           onpointerdown={(e) => e.stopPropagation()}
           onpointerup={(e) => e.stopPropagation()}
         >
+          <button class="panel-close" aria-label="Close the panel" onclick={() => closing('panel')}><Icon name="close" size={20} /></button>
           <VisualsPanel patch={visualsPatch.patch} types={TYPES} onedit={panelEdit} presets={libraryList} preset={presetNow} onpreset={choosePreset} onrandomize={randomizeFrom} live={liveFaces.frame} bind:path={panelPath} />
           {#if !panelPath.length}
             <div class="foot">
@@ -508,7 +514,7 @@
           {/if}
         </div>
       {/if}
-      {#if np && !panel}
+      {#if np && !panel && !graph}
         <div class="track">
           <strong>{np.name}</strong>
           {#if np.artist}<span>{np.artist}</span>{/if}
@@ -723,20 +729,21 @@
     box-shadow: 0 -8px 24px rgb(0 0 0 / 0.4);
   }
 
-  .panel-handle {
-    position: absolute;
-    left: 50%;
-    /* Above the graph's own chips along its bottom edge. */
-    bottom: calc(max(12px, env(safe-area-inset-bottom)) + 52px);
-    transform: translateX(-50%);
+  /* The panel's own close button: at its top right, staying there as it scrolls. */
+  .panel-close {
+    position: sticky;
+    top: 0;
+    float: right;
+    z-index: 1;
+    width: 36px;
     height: 36px;
-    padding: 0 18px;
+    margin: 0 -8px 0 8px;
+    display: grid;
+    place-items: center;
     border: 0;
     border-radius: 18px;
     background: rgb(20 20 24 / 0.92);
     color: #fff;
-    font: inherit;
-    pointer-events: auto;
     cursor: pointer;
   }
 
