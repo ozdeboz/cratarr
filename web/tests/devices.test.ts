@@ -15,10 +15,10 @@ const chainTypeOf = v2Types(cratarrTypes(RANGES, DEFAULTS));
 const extra = new Map(PICTURE_MODULES.map((t) => [t.type, t]));
 const typeOf = (t: string) => chainTypeOf(t) ?? extra.get(t);
 
-test('the nine devices', () => {
+test('the devices', () => {
   assert.deepEqual(
     DEVICES.map((d) => d.label),
-    ['Feedback Tunnel', 'Kick', 'Breather', 'Wanderer', 'Bloom', 'Scope', 'Grid Particles', 'Echo Trails', 'Fractal Spiral', 'Camera'],
+    ['Feedback Tunnel', 'Kick', 'Breather', 'Wanderer', 'Bloom', 'Scope', 'Grid Particles', 'Echo Trails', 'Fractal Spiral'],
   );
 });
 

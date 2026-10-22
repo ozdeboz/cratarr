@@ -528,9 +528,19 @@ export class VisualsLoop {
           }
         }
       }
-      // Auto-centring, unless a Transform takes the Flame's light (it frames it then, in sight: 0057 audit row 8).
-      const transformed = flat.cables.some((c) => c.from.module === flameId && c.from.port === 'light' && flatTypes.get(c.to.module) === 'transform');
-      const cam = frame && !transformed ? { ...drawnFlame, center: frame.center, size: frame.size } : drawnFlame;
+      // The Flame framed as far as its Fit (step 7): centred and sized to the view as its points fall, at 1; where they
+      // fall, at 0. A patch from before the knob: framed unless a Transform took the Flame's light (it framed it then).
+      const fitSet = flat.modules.find((x) => x.id === flameId)?.knobs.fit;
+      const transformed = fitSet === undefined && flat.cables.some((c) => c.from.module === flameId && c.from.port === 'light' && flatTypes.get(c.to.module) === 'transform');
+      const fitting = transformed ? 0 : Math.min(1, Math.max(0, stepped.knobs[flameId!]?.fit ?? fitSet ?? 1));
+      const cam =
+        frame && fitting > 0
+          ? {
+              ...drawnFlame,
+              center: [drawnFlame.center[0] + (frame.center[0] - drawnFlame.center[0]) * fitting, drawnFlame.center[1] + (frame.center[1] - drawnFlame.center[1]) * fitting] as [number, number],
+              size: Math.exp(Math.log(drawnFlame.size) + (Math.log(frame.size) - Math.log(drawnFlame.size)) * fitting),
+            }
+          : drawnFlame;
       renderer.setFlame(cam);
       // Where the Flame is on the screen and how much it covers (its outputs, the Transform's units), as measured.
       if (frame) {
@@ -594,7 +604,7 @@ export class VisualsLoop {
 
       renderer.frame(
         passes,
-        chainNow(d, { how, levers, ceiling: device.brightness, coverage: frame ? frame.coverage : null, fire, position: m.position, beat: beatNow, forces: stirred.forces, flow: stirred.flow, dt, speed: how.speed }),
+        chainNow(d, { how, levers, ceiling: device.brightness, coverage: null, fire, position: m.position, beat: beatNow, forces: stirred.forces, flow: stirred.flow, dt, speed: how.speed }),
         w,
         h,
         inputs,

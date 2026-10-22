@@ -287,6 +287,9 @@ export function cratarrTypes(ranges: Record<string, [number, number]>, defaults:
   for (const key of BAND_KNOBS)
     for (let b = 0; b < BANDS; b++)
       add('flame', { ...knob(`${key}.${b}`, `${BAND_LABEL[key]} ${b + 1}`, ranges[key], defaults[key][b], 'swing', defaults[key][b]), ...(key === 'evolution' ? { time: true } : {}) });
+  // Fit (step 7): how far the Flame frames itself, centred and sized to the view as its points fall (1, as it always
+  // did; 0, where they fall). Not the dice's: a roll would lose the flame off the screen.
+  add('flame', { ...knob('fit', 'Fit', [0, 1], 1, 'level', 0), randomize: false });
   const type = (id: string, label: string, place: Place): ModuleType => ({ type: id, label, place, knobs: byModule.get(id) ?? [] });
   return [
     type('frame', 'Whole frame', 'frame'),

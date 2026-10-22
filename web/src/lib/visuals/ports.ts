@@ -353,7 +353,10 @@ export function showPartTypes(show: ModuleType): Declared[] {
     const k = show.knobs.find((x) => x.id === id);
     // Tone map's Level (0057 §7e item 6): the whole picture's brightness as a fader, 1 as set; the pause dims it
     // through its gain.
-    const knobs = [...(k ? [k] : []), ...(type === 'tonemap' ? [knob('level', 'Level', 0, 1, 1, 'level')] : [])];
+    // Its Auto exposure (step 7): the light shown as bright however much of the view the Flame covers (1, as it always
+    // was; 0, as it falls). Not the dice's: a roll would darken the picture.
+    const tonemap = [knob('level', 'Level', 0, 1, 1, 'level'), { ...knob('exposure', 'Auto exposure', 0, 1, 1, 'level'), randomize: false as const }];
+    const knobs = [...(k ? [k] : []), ...(type === 'tonemap' ? tonemap : [])];
     const input: Port = type === 'tonemap' ? { id: 'light', label: 'Light', type: 'light' } : polymorphic ? { ...PICTURE_IN, polymorphic } : PICTURE_IN;
     // Bend reads the picture along the Fluid's flow (0057 §4h: today's hidden read-back), the fluid's unless cabled.
     const inputs = type === 'bend' ? [input, FLOW_IN] : [input];

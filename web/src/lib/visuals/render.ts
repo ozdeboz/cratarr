@@ -56,6 +56,7 @@ function ownShow(look: ShowParams, of: (type: string) => NodeParams | undefined)
   return {
     ...look,
     ...(tone?.flash !== undefined ? { flash: tone.flash } : {}),
+    ...(tone?.exposure !== undefined ? { exposure: tone.exposure } : {}),
     ...(sat?.saturation !== undefined ? { saturation: sat.saturation } : {}),
     ...(curve?.gamma !== undefined ? { gamma: curve.gamma, floor: curve.floor ?? 0 } : {}),
     ...(blur?.smoothing !== undefined ? { smoothing: blur.smoothing } : {}),

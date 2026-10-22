@@ -210,6 +210,8 @@ export type NodeParams = {
   floor?: number;
   smoothing?: number;
   waves?: number;
+  /** Tone map's exposure (its Auto exposure). */
+  exposure?: number;
   /** Trails: the share of the light kept a frame. */
   keep?: number;
   /** Fluid: its share (of the fluid at its 100 %), the warp it gives, its facets. */
@@ -1000,7 +1002,12 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   for (const { own } of plan.owns) {
     const k = knobs[own.id];
     const x = moduleOf.get(own.id);
-    if (own.type === 'tonemap') params[own.id] = { flash: (x ? finite(x.knobs.level, 1) * gainOf(own.id, 'level') : env.glow) * clamp(accented(own.id, 'glow', 1 + 0.5 * k.glow), 0.15, 3) };
+    if (own.type === 'tonemap') {
+      // Its Auto exposure: as bright however much of the view the Flame covers (against a third of it), as far as the knob.
+      const coverage = opts.flameFrame?.coverage;
+      const auto = coverage === undefined ? 1 : clamp(0.33 / Math.max(0.05, coverage), 0.4, 1.5);
+      params[own.id] = { flash: (x ? finite(x.knobs.level, 1) * gainOf(own.id, 'level') : env.glow) * clamp(accented(own.id, 'glow', 1 + 0.5 * k.glow), 0.15, 3), exposure: 1 + (auto - 1) * finite(k.exposure, 1) };
+    }
     else if (own.type === 'saturate') params[own.id] = { saturation: clamp(accented(own.id, 'saturation', 0.35 + 0.65 * k.saturation), 0, 1.25) };
     else if (own.type === 'curve') params[own.id] = hazeOf(k.haze);
     else if (own.type === 'blur') params[own.id] = { smoothing: 12 * k.smoothing ** 2 };
@@ -1179,8 +1186,11 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
       k[id] = own.effect ? clamp(g.whole[a], 0, 1) : g.whole[a];
       if (IS_PART[a]) for (let b = 0; b < g.band.length; b++) k[`${id}.${b}`] = g.whole[a] + g.band[b][a];
     }
-    // Its steps (a Flame's family, an engine's effect…) move on as their Next fires, as any module's do.
+    // Its steps (a Flame's family, an engine's effect…) move on as their Next fires, as any module's do; its other
+    // knobs (a Flame's Fit, Tone map's Level and Auto exposure) as any module's are, by their macros and cables.
     for (const knob of stepsOf(own)) if (x) k[knob.id] = moved(own.id, knob, finite(x.knobs[knob.id], knob.default), NO_CABLES);
+    for (const knob of declared ?? [])
+      if (x && knob.kind !== 'step' && !own.columns.has(knob.id) && !/\.\d+$/.test(knob.id)) k[knob.id] = moved(own.id, knob, macroed(own.id, knob, finite(x.knobs[knob.id], knob.default)), plan.intoOf.get(own.id)?.get(knob.id) ?? NO_CABLES);
     return k;
   }
 

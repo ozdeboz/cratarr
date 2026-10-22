@@ -126,7 +126,7 @@ const SHAPE_RING = {
 
 /** A port's or knob's own line, where its label does not say it all and help.ts has none. */
 export const portHelp: Record<string, Record<string, string>> = {
-  flame: { light: 'Its light: in, as it was last frame; out, as drawn now, before Tone map.', points: 'Where its parts are: where the Fluid pushes, unless cabled otherwise.', x: 'Its centre, across.', y: 'Its centre, up.', size: 'How big it is drawn.', coverage: 'How much of the screen it covers: for exposure.' },
+  flame: { light: 'Its light: in, as it was last frame; out, as drawn now, before Tone map.', points: 'Where its parts are: where the Fluid pushes, unless cabled otherwise.', x: 'Its centre, across.', y: 'Its centre, up.', size: 'How big it is drawn.', coverage: 'How much of the screen it covers: for exposure.', fit: 'How far it frames itself: centred and sized to the screen at 1, where its points fall at 0.' },
   shapes: {
     ...SHAPE_RING,
     sides: 'Corners a shape; between whole numbers it morphs, near a circle at many.',
@@ -165,7 +165,7 @@ export const portHelp: Record<string, Record<string, string>> = {
     hueSpread: 'How far the colour moves round the wheel along the line.',
     saturation: SATURATION,
   },
-  tonemap: { light: LIGHT, level: 'The whole picture’s brightness, as a fader: 1 as set; the pause dims it through its gain.' },
+  tonemap: { light: LIGHT, level: 'The whole picture’s brightness, as a fader: 1 as set; the pause dims it through its gain.', exposure: 'Keeps the picture as bright however much of the screen the flame covers: at 1 fully, at 0 not at all.' },
   fluid: {
     light: LIGHT,
     fluid: 'How much the picture flows like smoke: the most it reaches; cables into its gain take it lower.',
