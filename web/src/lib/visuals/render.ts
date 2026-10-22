@@ -13,13 +13,13 @@
 import type { ChainNow, ShowParams } from './chain-params';
 import type { FrameInfo, Module, PatchExtra } from './patch';
 import { compile, composeOf, plan, STAGES, stageOf, stageRefusal, stagesOf, type Compiled, type PictureNode, type Stage, type TypeOf } from './picture-graph';
-import { fxOfModule, slotOf, type Fx } from './nodes/effect-runs';
+import { fxOfModule, type Fx } from './nodes/effect-runs';
 import { MIX_MODES, SHOW_PARTS, type PatchV2 } from './ports';
 import { flatten } from './v2';
 import { Walker } from './nodes/walker';
 import type { Flame } from './flame';
 import type { Fluid, Flow, Force, Loop } from './fluid';
-import { EffectClocks, effectOf } from './effects';
+import { EffectClocks } from './effects';
 import type { FrameStats, MeterValues, Tiles } from './meters';
 import { Carry } from './nodes/carry';
 import { Finish } from './nodes/finish';
@@ -415,16 +415,9 @@ export class FlameRenderer {
 
     // Show it. The points held at a time: each frame's, kept 1/(1 − keep) frames; their mean per pixel sets k2. Where the
     // compose step walks on from it, into the picture at the buffer's size.
-    // Each effect's module as the inputs give its knobs; one the inputs do not give (today's chain's slots) as the
-    // nodes' values have it, in the slot its effect is drawn in.
+    // Each effect as its module's knobs are (the engine's: its own columns, step 5).
     const fx = now?.effects;
-    const fxOf = (n: PictureNode): Fx | null => {
-      const k = given?.knobs(n.id);
-      const f = fxOfModule(n.type, k ?? this.knobsIn.get(n.id) ?? {});
-      const e = f && effectOf(f.id);
-      const slot = e ? slotOf(e) : -1;
-      return f && !k && fx && slot >= 0 && fx.ids[slot] === f.id ? { id: f.id, amount: fx.amounts[slot] ?? 0, k: fx.knobs?.[slot] ?? f.k } : f;
-    };
+    const fxOf = (n: PictureNode): Fx | null => fxOfModule(n.type, given?.knobs(n.id) ?? this.knobsIn.get(n.id) ?? {});
     const walks = this.stages.has('compose') && this.compiled && this.composed;
     if (walks) this.walker ??= new Walker(gl, this.fin, this.now);
     const walking = walks ? this.walker!.planned(this.compiled!, this.composed!.ids, this.composed!.from, this.composed!.to, knobsAt, fxOf, seeing) : null;

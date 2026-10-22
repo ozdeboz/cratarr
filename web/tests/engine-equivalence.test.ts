@@ -196,6 +196,11 @@ test("each chain module's own knobs and node values (step 5, the one engine) are
   const levels: [keyof typeof A, string, string, number][] = [['smoothing', 'show/blur', 'smoothing', 0], ['haze', 'show/curve', 'haze', -1], ['fluid', 'fluid', 'fluid', 0], ['tunnel', 'tunnel', 'tunnel', 0], ['dive', 'dive', 'dive', 0], ['facets', 'fluid', 'facets', 0]];
   const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
   let checked = 0;
+  let effected = 0;
+  const { slotModules } = await import('../src/lib/visuals/engine/effect-slots.ts');
+  const { settingsOfPatch } = await import('../src/lib/visuals/engine/settings-view.ts');
+  const { effectsNow } = await import('../src/lib/visuals/effects.ts');
+  const { fxOfModule } = await import('../src/lib/visuals/nodes/effect-runs.ts');
   const checking = (): Engine => {
     const st = newEngine();
     let p: PatchV2 | null = null;
@@ -212,7 +217,7 @@ test("each chain module's own knobs and node values (step 5, the one engine) are
         for (const [a, id, knob, lo] of levels) if (mod(id)) assert.ok(Math.abs(f.knobs[id][knob] - clamp(mod(id)!.knobs[knob] * g.level[A[a]], lo, 1)) < 1e-9, `${a}`);
         // The Show's parts' own node values (5b): what the chain gave.
         const d = f.aspects!;
-        const near = (a: number | undefined, b: number, what: string) => assert.ok(a !== undefined && Math.abs(a - b) < 1e-9, `${what}: ${a} vs ${b}`);
+        const near = (a: number | undefined, b: number, what: string, within = 1e-9) => assert.ok(a !== undefined && Math.abs(a - b) < within, `${what}: ${a} vs ${b}`);
         near(f.params['show/tonemap']?.flash, d.flash, 'flash');
         near(f.params['show/saturate']?.saturation, d.saturation, 'saturation');
         near(f.params['show/curve']?.gamma, d.gamma, 'gamma');
@@ -236,6 +241,17 @@ test("each chain module's own knobs and node values (step 5, the one engine) are
         own.shape.forEach((v, i) => near(v, d.shape[i], `shape ${i}`));
         own.hits.forEach((v, i) => near(v, d.hits[i], `lights ${i}`));
         own.parts.forEach((q, i) => (['turn', 'size', 'morph', 'hue', 'spread', 'weight'] as const).forEach((key) => near(q[key], d.parts[i][key], `part ${i} ${key}`)));
+        // Each effect module's own (5e): what its slot was given (effectsNow over the patch as settings).
+        for (const [slot, m] of slotModules(p!.modules)) {
+          if (slot === 'loop-effect') continue;
+          const i = ['fx1', 'fx2', 'fx3'].indexOf(slot);
+          const old = effectsNow(settingsOfPatch(p!, s) as never, d.effects, 0, null, undefined, d.routed);
+          const own = fxOfModule(m.type, f.knobs[m.id]);
+          near(own?.amount, old.amounts[i], `${slot} amount`, 1e-6); // its columns are 32-bit floats
+          near(own?.k[0], old.knobs[i][0], `${slot} k1`, 1e-6); // its columns are 32-bit floats
+          near(own?.k[1], old.knobs[i][1], `${slot} k2`, 1e-6); // its columns are 32-bit floats
+          effected++;
+        }
         checked++;
         return f.aspects;
       },
@@ -243,7 +259,9 @@ test("each chain module's own knobs and node values (step 5, the one engine) are
   };
   const { CHAINS, chainRoutes } = await import('../src/lib/visuals/chains.ts');
   const scaled = { ...settings, shape: 1.4, rotation: 0.6, lights: 1.3, glow: 0.7, size: 0.55, saturation: 1.2, trails: 0.8, presence: 1.5, waves: 0.65, fluid: 0.6, tunnel: 0.4, dive: 0.3, haze: -0.4 } as typeof settings;
-  const variants = [settings, scaled, ...CHAINS.filter((c) => !c.extra.cables.length && !c.extra.modulators.length).map((c) => ({ ...settings, ...(c.settings ?? {}), routes: chainRoutes(c) }) as typeof settings)];
+  const effected_ = { ...settings, fx1: 2, fx1Amount: 0.7, fx1K1: 0.3, fx1K2: 0.8, fx2: 1, fx2Amount: 0.5, fx2K1: 0.6, fx2K2: 0.2, fx3: 3, fx3Amount: 0.4 } as typeof settings;
+  const variants = [settings, scaled, effected_, ...CHAINS.filter((c) => !c.extra.cables.length && !c.extra.modulators.length).map((c) => ({ ...settings, ...(c.settings ?? {}), routes: chainRoutes(c) }) as typeof settings)];
   for (const id of [TRACKS[0], TRACKS[3]]) for (const s of variants) record(checking(), track(id), s, 30, 5);
   assert.ok(checked >= 600, `${checked} frames`);
+  assert.ok(effected >= 300, `${effected} effect frames`);
 });
