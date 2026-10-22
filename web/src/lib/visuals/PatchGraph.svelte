@@ -1,3 +1,14 @@
+<script lang="ts" module>
+  import type { ElkNode as LaidNode } from 'elkjs/lib/elk-api';
+  /** ELK's layouts this page made, by the graph's shape: the rack opened again is laid at once. The last few. */
+  const laidBefore = new Map<string, { laid: LaidNode; portrait: boolean }>();
+  function keepLaid(key: string, laid: { laid: LaidNode; portrait: boolean }) {
+    laidBefore.delete(key);
+    laidBefore.set(key, laid);
+    if (laidBefore.size > 24) laidBefore.delete(laidBefore.keys().next().value!);
+  }
+</script>
+
 <script lang="ts">
   // The graph builder (decisions 0056 step 3, 0057 §6, §7): the v2 patch drawn with Svelte Flow, its modules by their
   // categories' lanes (ELK's layout), its cables between typed ports (patchgraph.ts WIRES): pictures and light solid,
@@ -289,6 +300,8 @@
   let elkDone = $state.raw<{ key: string; laid: ElkNode; portrait: boolean } | null>(null);
   let elkAsked: string | null = null;
   let afresh = $state(false);
+  /** ELK failed: the graph's own layout shown rather than nothing. */
+  let elkFailed = $state(false);
   let carried = $state(false);
   function lastPlaces(laid: ElkNode): Map<string, XY> {
     const at = new Map<string, XY>();
@@ -308,9 +321,14 @@
     elk
       .layout(graph)
       .then((laid) => {
-        if (elkAsked === key) elkDone = { key, laid: before ? anchored(laid as ElkNode, before) : (laid as ElkNode), portrait };
+        if (elkAsked !== key) return;
+        elkDone = { key, laid: before ? anchored(laid as ElkNode, before) : (laid as ElkNode), portrait };
+        keepLaid(key, elkDone);
       })
-      .catch((e) => console.warn('Visuals: the graph could not be laid out', e));
+      .catch((e) => {
+        console.warn('Visuals: the graph could not be laid out', e);
+        elkFailed = true;
+      });
   }
   $effect(() => () => elk?.terminateWorker());
   // Into another level: the view fits it again.
@@ -365,7 +383,10 @@
     if (layout === 'elk') {
       const sz = (n: Node | (typeof g.nodes)[number]) => sizes[n.id] ?? sizeOf((n as (typeof g.nodes)[number]).data);
       const key = layoutKey(g.nodes, g.edges, sz, { portrait });
-      if (elkDone?.key === key) Object.assign(g, fromElk(elkDone.laid, g.nodes, g.edges, (id) => !!placed[id], sz));
+      // Laid before (the rack opened again): at once.
+      const kept = elkDone?.key === key ? elkDone : laidBefore.get(key);
+      if (kept && elkDone?.key !== key) untrack(() => (elkDone = { key, ...kept }));
+      if (kept) Object.assign(g, fromElk(kept.laid, g.nodes, g.edges, (id) => !!placed[id], sz));
       else {
         const last = elkDone && elkDone.portrait === portrait && !afresh ? lastPlaces(elkDone.laid) : null;
         const shown = g.nodes.filter((n) => n.data.kind !== 'lane');
@@ -788,7 +809,7 @@
   }}
 />
 
-<div class="patch-graph" style:--cable-alpha={drawnOpacity(opacity)} style:--graph-w="{width}px" class:small={zoom < 1} class:far={zoom < FAR} class:narrow={width < 600} style:--z={zoom} bind:clientWidth={width} bind:clientHeight={height}>
+<div class="patch-graph" class:unlaid={layout === 'elk' && !elkDone && !elkFailed} style:--cable-alpha={drawnOpacity(opacity)} style:--graph-w="{width}px" class:small={zoom < 1} class:far={zoom < FAR} class:narrow={width < 600} style:--z={zoom} bind:clientWidth={width} bind:clientHeight={height}>
   <SvelteFlow
     bind:nodes
     bind:edges
@@ -981,6 +1002,10 @@
 {/if}
 
 <style>
+  /* Nothing shown before ELK's first layout of the patch (no makeshift one to jump from). */
+  .patch-graph.unlaid :global(.svelte-flow__viewport) {
+    visibility: hidden;
+  }
   .patch-graph {
     position: relative;
     --mini-h: calc(var(--sheet-h, 0px));
