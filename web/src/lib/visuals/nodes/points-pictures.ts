@@ -48,6 +48,8 @@ uniform int uMode;
 uniform float uN;
 uniform float uTurn;
 uniform float uAmount;
+uniform float uZoom;
+uniform float uEdge;
 uniform vec2 uK;
 out vec4 o;
 // Itself within -1..1, mirrored back into it beyond (fx_repeat's).
@@ -59,14 +61,17 @@ vec4 at(vec2 sq) {
 }
 void main() {
   vec2 p = (vUv * 2.0 - 1.0) / uK;
-  // The fold's centre: the middle, or the nearest of the grid's points.
+  // The fold's centre: the middle, or the nearest of the grid's points (and how near the next, for the seams).
   vec2 c = vec2(0.0);
   float d = 1e9;
+  float d2 = 1e9;
   for (int i = 0; i < ${MOST}; i++) {
     if (i >= uCount) break;
     vec2 q = texelFetch(uPoints, ivec2(i, 0), 0).xy;
     vec2 e = p - q;
-    if (dot(e, e) < d) { d = dot(e, e); c = q; }
+    float dd = dot(e, e);
+    if (dd < d) { d2 = d; d = dd; c = q; }
+    else if (dd < d2) d2 = dd;
   }
   bool grid = uCount > 0;
   vec2 q = turned(p - c, -uTurn);
@@ -88,12 +93,18 @@ void main() {
   } else if (uMode == 2) {
     // Mirror: the one half over the other, across the line Turn sets.
     f = vec2(q.x, abs(q.y));
-  } else {
+  } else if (uMode == 3) {
     // Pixelate: Count cells across the short side (pixelate's); with a grid, each cell its point's colour.
     float cells = max(1.0, uN) * 0.5;
     f = grid ? vec2(0.0) : (floor(q * cells) + 0.5) / cells;
+  } else {
+    // Cells: each cell its own part of the picture, about its point, Zoom times nearer (stained glass, a compound eye);
+    // without a grid, the whole picture so.
+    f = q / max(0.05, uZoom);
   }
   o = mix(at(p), at(base + turned(f, uTurn)), uAmount);
+  // Dark seams between a grid's cells, Edge wide: where the nearest point and the next are about as near.
+  if (grid && uEdge > 0.0) o.rgb *= smoothstep(0.0, uEdge, 0.5 * (sqrt(d2) - sqrt(d)));
 }`;
 
 type Draw = (gl: WebGL2RenderingContext, picture: WebGLTexture | null, out: WebGLFramebuffer, width: number, height: number, knobs: Record<string, number>, points: readonly Point[] | null) => void;
@@ -187,6 +198,8 @@ export function createFold(gl: WebGL2RenderingContext): ModuleNode {
       gl.uniform1f(u('uN'), knobs.count ?? 6);
       gl.uniform1f(u('uTurn'), 2 * Math.PI * (knobs.turn ?? 0));
       gl.uniform1f(u('uAmount'), knobs.amount ?? 1);
+      gl.uniform1f(u('uZoom'), knobs.zoom ?? 1.5);
+      gl.uniform1f(u('uEdge'), knobs.edge ?? 0);
       gl.uniform2f(u('uK'), ...toScreen(width / height));
       gl.bindVertexArray(vao);
       gl.drawArrays(gl.TRIANGLES, 0, 3);

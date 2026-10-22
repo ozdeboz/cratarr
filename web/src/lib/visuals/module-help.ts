@@ -191,7 +191,9 @@ export const portHelp: Record<string, Record<string, string>> = {
   curve: { haze: 'Lifts the faint mist into view (up) or sinks it to black (down): the most either way; cables into its gain take it toward 0.' },
   fold: {
     grid: 'A Grid’s points set the symmetry; without one, its own centre and Count.',
-    mode: 'Mosaic, kaleidoscope, mirror or pixelate.',
+    mode: 'Mosaic, kaleidoscope, mirror, pixelate or cells.',
+    zoom: 'Cells: how much nearer each cell shows its own part of the picture.',
+    edge: 'With a grid: how wide the dark seams between the cells are.',
     count: 'How many times it repeats.',
     turn: 'Turns the fold; below 0 the other way.',
     amount: AMOUNT_EFFECT,

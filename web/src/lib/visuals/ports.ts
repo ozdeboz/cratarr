@@ -406,14 +406,23 @@ export const GRID = declared(
 );
 
 /** The symmetries a Fold applies (0057 §4c): Hydra's three first, the wallpaper groups beyond. */
-export const FOLDS = ['mosaic', 'kaleidoscope', 'mirror', 'pixelate'] as const;
+export const FOLDS = ['mosaic', 'kaleidoscope', 'mirror', 'pixelate', 'cells'] as const;
 
 /** Fold (0057 §4c): a picture folded by a grid's symmetry; with no grid plugged in, its own centre and count. */
 export const FOLD = declared(
   'fold',
   'Fold',
   'module',
-  [knob('mode', 'Mode', 0, FOLDS.length - 1, 1, 'step'), knob('count', 'Count', 1, 24, 6), knob('turn', 'Turn', -1, 1, 0), knob('amount', 'Amount', 0, 1, 1, 'level')],
+  [
+    knob('mode', 'Mode', 0, FOLDS.length - 1, 1, 'step'),
+    knob('count', 'Count', 1, 24, 6),
+    knob('turn', 'Turn', -1, 1, 0),
+    knob('amount', 'Amount', 0, 1, 1, 'level'),
+    // With a grid: Cells' closeness (each cell its own part of the picture, this many times nearer), and dark seams
+    // between the cells this wide.
+    knob('zoom', 'Zoom', 0.25, 4, 1.5),
+    knob('edge', 'Edge', 0, 0.05, 0, 'level'),
+  ],
   [PICTURE_IN, { id: 'grid', label: 'Grid', type: 'points' }],
   [PICTURE_OUT],
 );
