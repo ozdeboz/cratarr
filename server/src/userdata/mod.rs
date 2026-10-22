@@ -195,6 +195,9 @@ pub struct Snapshot {
     pub created: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub picture: Option<String>,
+    /// Another account's (the owner's library, the owner: "available to all users"): recalled, never changed here.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
 }
 
 /// One of the owner's thumbs on the visuals as they were (decision 0048): up or down, and what the page sent with it
@@ -293,6 +296,8 @@ fn snapshot_of(r: &rusqlite::Row) -> rusqlite::Result<Snapshot> {
         settings: serde_json::from_str(&settings).unwrap_or(serde_json::Value::Null),
         created: r.get(3)?,
         picture: r.get(4)?,
+        // Only where the query asks for it (`snapshots`): whether the row is another account's.
+        shared: r.get::<_, bool>(5).unwrap_or(false),
     })
 }
 
@@ -676,11 +681,15 @@ impl UserData {
         Ok(())
     }
 
-    /// A user's snapshots of the visuals, the newest first.
-    pub fn snapshots(&self, user: &str) -> Result<Vec<Snapshot>> {
+    /// A user's snapshots of the visuals and, another's, those of `library` (the owner's: every account's presets),
+    /// marked shared; the user's own first, each the newest first.
+    pub fn snapshots(&self, user: &str, library: Option<&str>) -> Result<Vec<Snapshot>> {
         let db = self.db();
-        let mut st = db.prepare_cached(&format!("SELECT {SNAPSHOT_COLUMNS} FROM visual_snapshot WHERE user = ?1 ORDER BY created DESC, rowid DESC"))?;
-        let rows = st.query_map([user], snapshot_of)?;
+        let library = library.filter(|l| *l != user).unwrap_or(user);
+        let mut st = db.prepare_cached(&format!(
+            "SELECT {SNAPSHOT_COLUMNS}, user <> ?1 FROM visual_snapshot WHERE user = ?1 OR user = ?2 ORDER BY user <> ?1, created DESC, rowid DESC"
+        ))?;
+        let rows = st.query_map(params![user, library], snapshot_of)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -694,7 +703,7 @@ impl UserData {
             "INSERT INTO visual_snapshot (user, id, name, settings, created, picture) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![user, id, name, settings.to_string(), created, picture],
         )?;
-        Ok(Snapshot { id, name: name.to_string(), settings: settings.clone(), created, picture: picture.map(str::to_string) })
+        Ok(Snapshot { id, name: name.to_string(), settings: settings.clone(), created, picture: picture.map(str::to_string), shared: false })
     }
 
     /// A snapshot renamed, given another picture, or saved over with other settings (whichever are given; its time kept);
@@ -1294,7 +1303,7 @@ mod tests {
         let b = u.add_snapshot("me", "Puds", &serde_json::json!({ "v": 1 }), None).unwrap();
         u.add_snapshot("you", "Theirs", &settings, None).unwrap();
         assert_ne!(a.id, b.id);
-        let mine = u.snapshots("me").unwrap();
+        let mine = u.snapshots("me", None).unwrap();
         assert_eq!(mine.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Puds", "Oyster Cove"], "the newest first, only mine");
         assert_eq!(mine[1].settings, settings, "kept as sent");
         assert_eq!(mine[1].picture.as_deref(), Some("data:image/jpeg;base64,AAAA"));
@@ -1312,7 +1321,20 @@ mod tests {
         assert_eq!(saved.picture.as_deref(), Some("data:image/png;base64,DDDD"));
         assert!(u.change_snapshot("you", &b.id, None, None, Some(&over)).unwrap().is_none(), "another user's is not theirs to save over");
         assert!(u.delete_snapshot("me", &a.id).unwrap());
-        assert_eq!(u.snapshots("me").unwrap().len(), 1);
+        assert_eq!(u.snapshots("me", None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_owners_snapshots_are_every_accounts_library() {
+        let u = UserData::open(None).unwrap();
+        u.add_snapshot("owner", "Preset", &serde_json::json!({ "v": 4 }), None).unwrap();
+        u.add_snapshot("guest", "Own", &serde_json::json!({ "v": 4 }), None).unwrap();
+        let guest = u.snapshots("guest", Some("owner")).unwrap();
+        assert_eq!(guest.iter().map(|s| (s.name.as_str(), s.shared)).collect::<Vec<_>>(), [("Own", false), ("Preset", true)], "its own first, then the owner's, marked shared");
+        let owner = u.snapshots("owner", Some("owner")).unwrap();
+        assert_eq!(owner.iter().map(|s| (s.name.as_str(), s.shared)).collect::<Vec<_>>(), [("Preset", false)], "the owner's own, not shared to itself");
+        assert!(u.change_snapshot("guest", &guest[1].id, Some("Mine now"), None, None).unwrap().is_none(), "the owner's stays the owner's");
+        assert!(!serde_json::to_string(&owner[0]).unwrap().contains("shared"), "only a shared one says so");
     }
 
     #[test]
@@ -1329,7 +1351,7 @@ mod tests {
             .unwrap();
         }
         let u = UserData::open(Some(&file)).unwrap();
-        let mine = u.snapshots("me").unwrap();
+        let mine = u.snapshots("me", None).unwrap();
         assert_eq!((mine[0].name.as_str(), mine[0].picture.as_deref()), ("Kartlav", None));
         assert!(u.change_snapshot("me", "a1", None, Some("data:image/jpeg;base64,CC"), None).unwrap().unwrap().picture.is_some());
         drop(u);

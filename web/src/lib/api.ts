@@ -1329,6 +1329,8 @@ export type VisualsSnapshot = {
   created: number;
   /** A small picture of the look (a JPEG data URL); none for the first ones saved. */
   picture?: string | null;
+  /** The owner's, shown to another account: recalled, not renamed, saved over or deleted. */
+  shared?: boolean;
 };
 export const getVisualsSnapshots = () => quietly<VisualsSnapshot[]>('/api/visuals/snapshots');
 export const saveVisualsSnapshot = (name: string, settings: Record<string, unknown>, picture: string | null = null) =>

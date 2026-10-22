@@ -442,7 +442,8 @@ async fn visual_snapshots() -> Response {
         Ok(k) => k,
         Err(r) => return r,
     };
-    match served.userdata.snapshots(&me) {
+    // The owner's snapshots are every account's library (the owner, 2026-10-22); each account's own beside them.
+    match served.userdata.snapshots(&me, served.users.owner().as_deref()) {
         Ok(all) => Json(all).into_response(),
         Err(e) => failed(e),
     }

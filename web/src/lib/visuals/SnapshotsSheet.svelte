@@ -146,7 +146,7 @@
           </span>
         </div>
       {:else}
-        <button class="tile" use:longPress={() => edit(snap)} onclick={() => recall(snap)}>
+        <button class="tile" use:longPress={() => (snap.shared ? undefined : edit(snap))} onclick={() => recall(snap)}>
           <span class="pic"><Cover src={snap.picture} /></span>
           <span class="name">{snap.name}</span>
         </button>
