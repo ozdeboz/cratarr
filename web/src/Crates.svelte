@@ -7,6 +7,7 @@
   import { CRATE_ORDERS, howMany, usePageAction } from './lib/pageView.svelte';
   import { crates, CRATE, EDIT_CRATE, loadCrates, startCrate } from './lib/crates.svelte';
   import CrateCard from './lib/CrateCard.svelte';
+  import CrateMenu from './lib/CrateMenu.svelte';
   import { shownPlaylists } from './lib/output.svelte';
   import { viewPlaylist, panel } from './lib/panel.svelte';
   import Notice from './lib/Notice.svelte';
@@ -28,6 +29,8 @@
     if (prefs.crateOrder === 'name') list.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
     return prefs.crateDown ? list.reverse() : list;
   });
+  // A crate's menu (its card's long-press or right-click, decision 0058).
+  let menuFor = $state<string | null>(null);
 </script>
 
 <main>
@@ -40,12 +43,16 @@
     <ul class="grid">
       {#each sorted as c (c.id)}
         <li>
-          <CrateCard crate={c} active={panel.viewed === CRATE + c.id || panel.viewed === EDIT_CRATE + c.id} onclick={() => viewPlaylist(CRATE + c.id)} />
+          <CrateCard crate={c} active={panel.viewed === CRATE + c.id || panel.viewed === EDIT_CRATE + c.id} onclick={() => viewPlaylist(CRATE + c.id)} onmenu={() => (menuFor = c.id)} />
         </li>
       {/each}
     </ul>
   {/if}
 </main>
+
+{#if menuFor}
+  <CrateMenu id={menuFor} onclose={() => (menuFor = null)} />
+{/if}
 
 
 <style>

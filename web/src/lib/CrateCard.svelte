@@ -6,16 +6,17 @@
   // setting as the small disc beside it, as on its toggle (decision 0024, amended 2026-10-19). A tap views it;
   // its picture shuffles it (the owner, 2026-10-19: "a play button on the crates, which automatically plays it with
   // shuffle"): wherever a cover plays, its icon is in the cover's lower right corner (decided 2026-10-16), here
-  // Shuffle's, which is what it does.
+  // Shuffle's, which is what it does. A long-press or a right-click on the rest opens its menu (decision 0058).
   import type { Crate } from './api';
   import Cover, { mosaicOf } from './Cover.svelte';
   import { crateArt, FAVOURITE_ALBUMS, FAVOURITES, favouriteAlbumsOf, favouritesOf, shuffleCrate } from './crates.svelte';
   import { toast } from './toast.svelte';
+  import { longpress } from './longpress';
   import Icon from './Icon.svelte';
   import { plural } from './insights.svelte';
   import { clockText } from './remote.svelte';
 
-  let { crate: c, active, onclick }: { crate: Crate; active: boolean; onclick: () => void } = $props();
+  let { crate: c, active, onclick, onmenu }: { crate: Crate; active: boolean; onclick: () => void; onmenu?: () => void } = $props();
 
   const art = $derived(mosaicOf(crateArt(c.id)));
   const fav = $derived(FAVOURITES[favouritesOf(c.id)]);
@@ -46,7 +47,7 @@
     {#each art as src, i (i)}<Cover {src} />{:else}<Cover src={null} />{/each}
     <span class="corner" aria-hidden="true"><Icon name="shuffle" size={14} /></span>
   </button>
-  <button class="view" {onclick} aria-label="View {c.name}">
+  <button class="view" {onclick} aria-label="View {c.name}" use:longpress={() => onmenu?.()}>
   <span class="text">
     <span class="name">{c.name}</span>
     <span class="line">

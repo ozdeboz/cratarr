@@ -73,8 +73,9 @@ Names are the same everywhere: Info (not Details), View for the object itself, G
 | G | – | Cover, the library's | Picture | Rename, Spoken as, Repair, Sync | Edit, Picture | – | Rename |
 | H | Remove from queue / this playlist / this crate | Remove from this device, Delete album | Remove from this device | Delete playlist | Delete crate (one's own) | – | Delete |
 
-A crate's page header keeps only what shows the crate (its favourites filters); Keep, Edit and Make playlist move
-into its menu, and its card's picture no longer shuffles on a tap (Shuffle is in the menu).
+A crate's page header keeps only what shows the crate (its favourites filters) and its ⋮; Keep, Edit and Make playlist
+move into its menu. Its card's picture still shuffles it (the owner, 2026-10-19: "a play button on the crates"), as a
+cover plays an album; its menu has Shuffle too.
 
 ### Export, one step for every object
 

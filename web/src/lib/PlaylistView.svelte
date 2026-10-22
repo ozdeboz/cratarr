@@ -85,6 +85,7 @@
   import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
+  import CrateMenu from './CrateMenu.svelte';
   import { addedOn, artistPictureId, goToArtist, library, mainArtist, readLibrary } from './albums.svelte';
   import AlbumAbout from './AlbumAbout.svelte';
   import AlbumMore from './AlbumMore.svelte';
@@ -662,6 +663,8 @@
   });
 
   let menuOpen = $state(false);
+  /** The crate's menu (its header's ⋮, decision 0058). */
+  let crateMenuOpen = $state(false);
   /** The menu opens at its entries, or at Delete's confirmation (the edit bar's trash). */
   let menuStart = $state<'menu' | 'delete'>('menu');
   /** `outs`: its list's Remove from (one's own playlist) or Exclude from (a crate: the track, its album). */
@@ -1244,7 +1247,7 @@
   // Esc closes it (when no sheet of its own is open; in edit mode Cancel is the way out).
   $effect(() => {
     const esc = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || menuOpen || trackMenu || editing || crateEditing || making || sortOpen || albumMenuOpen || artistMenuOpen) return;
+      if (e.key !== 'Escape' || menuOpen || crateMenuOpen || trackMenu || editing || crateEditing || making || sortOpen || albumMenuOpen || artistMenuOpen) return;
       if (selecting) selecting = null;
       else if (other) backToTracks();
       else closePlaylist();
@@ -1388,14 +1391,8 @@
         {/each}
         <span class="grow"></span>
         {#if crate}
-          {#if inApp && source}
-            <!-- Kept on this device (decision 0038): the device follows the crate as its rules change what it holds. -->
-            {@const c = crate}
-            {@const keepOn = isKept('crate', source, c)}
-            <button class="icon" class:on={keepOn} aria-pressed={keepOn} aria-label="Keep on this device" title="Keep on this device" onclick={() => setKept('crate', source, c, !keepOn, title)}
-              ><Icon name="download" size={22} /></button
-            >
-          {/if}
+          <!-- What shows the crate stays here (its favourites filters); what is done with it is its menu's (decision
+               0058: Keep on this device, Edit, Save as playlist, Start a crate from a genre). -->
           {#if favState}
             <button class="icon" class:fav={favState.filled} aria-label={`Showing: ${favState.label}. Tap for the next`} title={favState.label} onclick={() => crate && cycleFavourites(crate)}
               ><Icon name={favState.icon} size={24} /></button
@@ -1406,19 +1403,7 @@
               ><Icon name={albState.icon} size={24} /></button
             >
           {/if}
-          {#if !isPermanentCrate}<button class="icon" aria-label={`Change ${title}`} onclick={() => viewPlaylist(EDIT_CRATE + crate)}><Icon name="pencil" size={22} /></button>{/if}
-          {@const genre = genreOf(crate)}
-          {#if genre !== null}
-            <!-- A genre (the owner): a crate of one's own starts from it, its one condition in place, to narrow further. -->
-            <button
-              class="icon"
-              aria-label="Start a crate"
-              title="Start a crate"
-              onclick={() => startCrate(genre, [{ axis: 'genre', not: false, value: { kind: 'any_of', values: [genre] } }])}><Icon name="crates" size={22} /></button
-            >
-          {:else}
-            <button class="icon" aria-label="Make playlist" title="Make playlist" disabled={!rows?.length} onclick={() => (making = { name: '', saving: false })}><Icon name="intoBox" size={22} /></button>
-          {/if}
+          <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (crateMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
         {:else if onDevice}
           <!-- The device's own music (local mode, decision 0052): no heart, no Cratarr menu. -->
         {:else if artist}
@@ -1841,6 +1826,9 @@
 {#if selectSheet}
   <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />
 {/if}
+{#if crateMenuOpen && crate}
+  <CrateMenu id={crate} onclose={() => (crateMenuOpen = false)} onsave={() => (making = { name: '', saving: false })} />
+{/if}
 {#if trackMenu}
   <TrackMenu track={trackMenu.track} start={trackMenu.start} outs={trackMenu.outs} onclose={() => (trackMenu = null)} />
 {/if}
@@ -1944,11 +1932,6 @@
   /* Finamp's playlist heart: filled when it is a favourite; the pin filled when pinned. */
   .icon.fav :global(svg) {
     fill: currentColor;
-  }
-
-  /* An action that is on (a crate kept on this device): in the accent. */
-  .actbar .icon.on {
-    color: var(--accent);
   }
 
   /* The narrowest panel: the bar's icons a little closer, so ✕, the pencil, the pin, the heart, the menu and the
