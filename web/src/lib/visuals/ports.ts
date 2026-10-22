@@ -555,8 +555,8 @@ export const PUSH = declared('push', 'Push', 'module', [knob('amount', 'Amount',
 export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD, LENS, TRANSFORM, STREAMLINES, PUSH];
 
 /** The Randomize scopes (0057 §4d), in the dice's menu's order. */
-// Response last: a Dice keeps its scope as its place here.
-export const RANDOMIZE_SCOPES = ['everything', 'sources', 'effects', 'mixers', 'modulators', 'cables', 'response'] as const;
+// New ones last: a Dice keeps its scope as its place here.
+export const RANDOMIZE_SCOPES = ['everything', 'sources', 'effects', 'mixers', 'modulators', 'cables', 'response', 'macros'] as const;
 
 /** Dice (0057 §7f, the owner: "same randomize"; named Dice beside Random, the value generator): the panel's dice as a
  *  module. A trigger randomizes every knob in its

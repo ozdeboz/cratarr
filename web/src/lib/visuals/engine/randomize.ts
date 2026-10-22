@@ -54,7 +54,7 @@ const RESPONSE: ReadonlySet<string> = new Set(['envelope', 'adsr', 'vca', 'shape
  *  cables' amounts are another roll (null here). */
 export function scopeNamed(name: string, types: Record<string, ModuleType>): Scope | null {
   if (name === 'everything') return EVERYTHING;
-  if (name === 'cables') return null;
+  if (name === 'cables' || name === 'macros') return null;
   // Response: how the rack answers the music, not how it looks: what lies between the music and the picture (the
   // followers, ADSRs, VCAs, Shapers, the Clock and the Accent; the cables' amounts with them, visuals-loop rollOf).
   if (name === 'response') return (m) => RESPONSE.has(m.type);
@@ -206,4 +206,19 @@ export function randomizeCables(p: PatchV2, types: Record<string, ModuleType>, o
 function scaled(c: Curve, from: number, to: number): Curve {
   const k = from !== 0 ? to / from : 0;
   return from !== 0 ? { ...c, h1: [c.h1[0], c.h1[1] * k], h2: [c.h2[0], c.h2[1] * k], h: to } : { h1: [1 / 3, to / 3], h2: [2 / 3, (2 * to) / 3], h: to, ...(c.walks ? { walks: true } : {}) };
+}
+
+/** The Macros roll (the owner: the dice within a rack's chosen ranges): each of the rack's macros a new value, drawn over
+ *  0..1 from its own stream of the seed, as far as `reach` takes it from where it is; what is pinned (`macro:<id>`) kept. */
+export function randomizeMacros(p: PatchV2, opts: { seed: number; reach?: number }): Record<string, number> {
+  const reach = clamp(finite(opts.reach, 1), 0, 1);
+  const pinned = new Set(p.pins);
+  const out: Record<string, number> = {};
+  for (const x of p.macros) {
+    if (pinned.has(`macro:${x.id}`)) continue;
+    const now = clamp(finite(x.value, 0.5), 0, 1);
+    const drawn = randomFrom(seedOf(`${opts.seed}/macro/${x.id}`))();
+    out[x.id] = now + (drawn - now) * reach;
+  }
+  return out;
 }
