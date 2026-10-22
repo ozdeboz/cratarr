@@ -322,10 +322,13 @@ void main() { o = vec4(vColour.rgb * uBright, 1.0); }`;
 /** The seeds where none are cabled: an even 8 x 8 over the short side's square. */
 const SCATTER: readonly Point[] = Array.from({ length: 64 }, (_, i) => ({ x: ((i % 8) + 0.5) / 4 - 1, y: (Math.floor(i / 8) + 0.5) / 4 - 1 }));
 
+/** The most lines Streamlines draws: a full Grid's seeds, each its Per seed's most (instanced, so no texture's limit). */
+const MOST_LINES = MOST * 16;
+
 /** Streamlines: curves through the flow field from its seeds (a Grid's; else an even scatter), drawn anew each frame. */
 export function createStreamlines(gl: WebGL2RenderingContext): ModuleNode {
   const p = program(gl, LINES, LINE);
-  const data = new Float32Array(MOST * 2);
+  const data = new Float32Array(MOST_LINES * 2);
   const buffer = gl.createBuffer()!;
   const vao = gl.createVertexArray()!;
   gl.bindVertexArray(vao);
@@ -348,7 +351,7 @@ export function createStreamlines(gl: WebGL2RenderingContext): ModuleNode {
       const per = Math.max(1, Math.round(knobs.perSeed ?? 1));
       const ring = knobs.ring ?? 0.08;
       const seeds = per === 1 ? given : given.flatMap((q) => Array.from({ length: per }, (_, i) => ({ x: q.x + ring * Math.cos((2 * Math.PI * i) / per), y: q.y + ring * Math.sin((2 * Math.PI * i) / per) })));
-      const n = packed(seeds, data);
+      const n = packed(seeds, data, MOST_LINES);
       if (!field || !n) return;
       gl.useProgram(p);
       gl.bindBuffer(gl.ARRAY_BUFFER, buffer);

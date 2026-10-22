@@ -27,8 +27,8 @@ export function spacingOf(points: readonly Point[]): number {
 }
 
 /** Up to `MOST` points as x, y pairs (into `out`, made once), and how many. */
-export function packed(points: readonly Point[] | null | undefined, out: Float32Array): number {
-  const n = Math.min(points?.length ?? 0, MOST, out.length >> 1);
+export function packed(points: readonly Point[] | null | undefined, out: Float32Array, most = MOST): number {
+  const n = Math.min(points?.length ?? 0, most, out.length >> 1);
   for (let i = 0; i < n; i++) {
     out[i * 2] = points![i].x;
     out[i * 2 + 1] = points![i].y;
