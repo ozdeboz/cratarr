@@ -579,33 +579,6 @@
   }
 
   .close,
-  /* The dice's scopes: a row under the corner's buttons, each a roll, the row open till the dice is tapped again. */
-  .dice-row {
-    position: absolute;
-    top: calc(max(12px, env(safe-area-inset-top)) + 56px);
-    right: max(12px, env(safe-area-inset-right));
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 6px;
-    max-width: calc(100% - 24px);
-    pointer-events: auto;
-  }
-  .dice-row button {
-    height: 36px;
-    padding: 0 14px;
-    border: 0;
-    border-radius: 18px;
-    background: rgb(0 0 0 / 0.55);
-    color: #fff;
-    font: inherit;
-    font-size: 0.9rem;
-    cursor: pointer;
-  }
-  .dice-row button:active {
-    background: rgb(255 255 255 / 0.22);
-  }
-
   .round {
     width: 48px;
     height: 48px;
@@ -631,6 +604,33 @@
     right: max(12px, env(safe-area-inset-right));
     display: flex;
     gap: 4px;
+  }
+
+  /* The dice's scopes: one row lower than the corner's buttons, alike (as tall, as round, as spaced), each a roll; the
+     row open till the dice is tapped again. */
+  .dice-row {
+    position: absolute;
+    top: calc(max(12px, env(safe-area-inset-top)) + 52px);
+    right: max(12px, env(safe-area-inset-right));
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 4px;
+    max-width: calc(100% - 24px);
+  }
+  .dice-row button {
+    height: 48px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 24px;
+    background: transparent;
+    color: #fff;
+    font: inherit;
+    pointer-events: auto;
+    cursor: pointer;
+  }
+  .dice-row button:active {
+    background: rgb(255 255 255 / 0.18);
   }
 
   .round.on {
