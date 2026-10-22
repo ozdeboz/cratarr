@@ -572,6 +572,7 @@ export const STREAMLINES = declared(
     knob('perSeed', 'Per seed', 1, 16, 1),
     knob('ring', 'Ring', 0, 0.5, 0.08),
     knob('follow', 'Follow', -2, 2, 0), knob('reach', 'Reach', 0, 6, 3),
+    knob('clusters', 'Clusters', 0, 1, 0, 'level'),
   ],
   [{ id: 'seeds', label: 'Seeds', type: 'points' }, FLOW_IN, ALONG_IN],
   [PICTURE_OUT],
@@ -652,7 +653,15 @@ export const FIELD = declared(
   'Field',
   'modulator',
   // Waves: each wave's strength, the biggest swirls first (a band's cable: the bass the biggest, the treble the finest).
-  [knob('scale', 'Scale', 0.1, 4, 1.2), knob('speed', 'Speed', 0, 2, 0.25, 'level'), { ...knob('waves', 'Waves', 0, 2, 1, 'level'), channels: 6 }],
+  // Range, Roughness, Variety (the owner: big curves for large vortexes, small for small ones): field.ts.
+  [
+    knob('scale', 'Scale', 0.1, 4, 1.2),
+    knob('speed', 'Speed', 0, 2, 0.25, 'level'),
+    { ...knob('waves', 'Waves', 0, 2, 1, 'level'), channels: 6 },
+    knob('range', 'Range', 1, 8, 2.3),
+    knob('roughness', 'Roughness', 0, 2, 1),
+    knob('variety', 'Variety', 0, 1, 0, 'level'),
+  ],
   [],
   [{ id: 'field', label: 'Flow field', type: 'flow' }],
 );

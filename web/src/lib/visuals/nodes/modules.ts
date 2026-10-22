@@ -5,6 +5,7 @@
 // Show's own pass), and Warp and Keep on their own, Transform on a picture (transform.ts).
 // Glow's, Tint's and Mask's maths are the Mix's (compose.ts), so a module drawn there or here gives the same. Taps one
 // by one, no arrays, level-0 reads where the read is moved (the Mali rules).
+import type { FieldShape } from '../field';
 import type { FrameInfo, PictureModule } from '../patch';
 import { done, program } from '../sources/gl';
 import { WAVE_BEND } from '../fluid';
@@ -17,7 +18,7 @@ import { none } from './shared';
  *  cabled into it (Instance's, Fold's grid: points-pictures.ts), where it reads them. */
 /** A flow field as a node reads it: the Fluid's (its velocity texture, cells a second, and texture units per cell) or a
  *  Field's (field.ts: its scale and time run on). */
-export type FlowField = { tex: WebGLTexture; uvPerCell: [number, number] } | { scale: number; phase: number; waves?: readonly number[] };
+export type FlowField = { tex: WebGLTexture; uvPerCell: [number, number] } | { scale: number; phase: number; waves?: readonly number[]; shape?: FieldShape };
 
 export type ModuleNode = {
   draw(gl: WebGL2RenderingContext, inputs: { picture: WebGLTexture | null; by?: WebGLTexture | null; field?: FlowField | null; windows?: readonly (WebGLTexture | null)[]; along?: WebGLTexture | null }, out: WebGLFramebuffer, width: number, height: number, knobs: Record<string, number>, frame: FrameInfo, points?: readonly { x: number; y: number }[] | null): void;

@@ -26,7 +26,7 @@ import { FLASH_GUARD } from './sidechain';
 import type { MeterValues } from '../meters';
 import { ownKnob, slotModules, slotOf, SLOT_IDS, type Slot } from './effect-slots';
 import { musicView } from './music-signals';
-import { flowAt, WAVES } from '../field';
+import { flowAt, PLAIN, WAVES, type FieldShape } from '../field';
 import { effectKnobIds, effectOfType } from '../effect-modules';
 import { engineOf } from '../engine-module';
 import { NO_STRIKE, adsrOf, courseStep, newAccent, stepAccent, type AccentState, newClock, newEnvelope, newTrack, stepClock, stepEnvelope, stepTrack, type ClockState, type EnvelopeState, type TrackState } from './modules';
@@ -1063,7 +1063,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   }
   for (const { x, t } of plan.others) if (!knobs[x.id]) knobs[x.id] = knobsOf(x, t);
   // Each Field: its time run on at its Speed.
-  const fields: Record<string, { scale: number; phase: number; waves: number[] }> = {};
+  const fields: Record<string, { scale: number; phase: number; waves: number[]; shape: FieldShape }> = {};
   for (const x of p.modules) {
     if (x.type !== 'field') continue;
     const k = knobs[x.id] ?? x.knobs;
@@ -1077,7 +1077,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
       const base = finite(x.knobs[`waves.${ch}`], finite(x.knobs.waves, 1));
       return wk ? moved(x.id, { ...wk, id: `waves.${ch}` }, base, byWave[ch]) : base;
     });
-    fields[x.id] = { scale: finite(k.scale, 1.2), phase, waves };
+    fields[x.id] = { scale: finite(k.scale, 1.2), phase, waves, shape: { range: finite(k.range, PLAIN.range), roughness: finite(k.roughness, PLAIN.roughness), variety: finite(k.variety, PLAIN.variety) } };
   }
   for (const id of Object.keys(st.fieldPhases)) if (!(id in fields)) delete st.fieldPhases[id];
   // Each Grid a Field is cabled into: its points carried along the flow at Drift, pulled back to its place at Return
@@ -1087,7 +1087,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     const from = plan.intoOf.get(x.id)?.get('field')?.[0]?.from.module;
     const field = from ? fields[from] : undefined;
     // A Field's flow, or the Fluid's as the renderer read it back.
-    const flow = field ? (px: number, py: number) => flowAt(px, py, field.scale, field.phase, field.waves) : from && typeOf.get(from) === 'fluid' ? opts.fluidFlow : undefined;
+    const flow = field ? (px: number, py: number) => flowAt(px, py, field.scale, field.phase, field.waves, field.shape) : from && typeOf.get(from) === 'fluid' ? opts.fluidFlow : undefined;
     if (!g || !flow) {
       if (g) g.offsets = undefined;
       continue;

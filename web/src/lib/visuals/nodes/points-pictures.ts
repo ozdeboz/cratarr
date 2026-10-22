@@ -5,7 +5,7 @@
 // or with a grid about each pixel's nearest point (a Voronoi mosaic), each cell one of its windows' pictures. Mali rules: level-0 reads, no arrays (the
 // points in a texture, read one by one).
 import { MOST, packed, spacingOf, type Point } from '../points-pictures';
-import { FIELD_GLSL } from '../field';
+import { FIELD_GLSL, PLAIN, strengthsOf } from '../field';
 import { program } from '../sources/gl';
 import { toScreen } from '../transform';
 import type { FlowField, ModuleNode } from './modules';
@@ -259,6 +259,7 @@ uniform float uScale;
 uniform float uPhase;
 uniform vec3 uWavesA;
 uniform vec3 uWavesB;
+uniform vec2 uShape;
 uniform vec2 uK;
 // Along a picture's outlines (the owner: flows pushed along shapes): the swirl of its brightness, blurred to Reach (a
 // level of its mipmaps), as strong as Follow; free of divergence as the Field's waves are (a stream function's curl).
@@ -270,7 +271,7 @@ ${FIELD_GLSL}
 float brightAt(vec2 p) { return dot(textureLod(uAlong, p * uK * 0.5 + 0.5, uReach).rgb, vec3(0.299, 0.587, 0.114)); }
 vec2 flowAt(vec2 p) {
   vec2 v;
-  if (uFormula == 1) v = fieldAt(p, uScale, uPhase, uWavesA, uWavesB);
+  if (uFormula == 1) v = fieldAt(p, uScale, uPhase, uWavesA, uWavesB, uShape);
   else v = textureLod(uVelocity, p * uK * 0.5 + 0.5, 0.0).xy * uUvPerCell * 2.0 / uK;
   if (uFollow != 0.0) {
     // A step of the blurred level's texel, in the frame's units.
@@ -419,7 +420,8 @@ function setFlow(gl: WebGL2RenderingContext, p: WebGLProgram, field: FlowField, 
   gl.uniform1i(u('uFormula'), formula ? 1 : 0);
   gl.uniform1f(u('uScale'), formula ? field.scale : 1);
   gl.uniform1f(u('uPhase'), formula ? field.phase : 0);
-  const w = (formula && field.waves) || ONE_WAVES;
+  const w = formula ? strengthsOf(field.waves, field.shape ?? PLAIN) : ONE_WAVES;
+  gl.uniform2f(u('uShape'), ...((formula ? [(field.shape ?? PLAIN).range, (field.shape ?? PLAIN).variety] : [PLAIN.range, 0]) as [number, number]));
   gl.uniform3f(u('uWavesA'), w[0], w[1], w[2]);
   gl.uniform3f(u('uWavesB'), w[3], w[4], w[5]);
   gl.uniform2f(u('uK'), ...toScreen(width / height));
@@ -442,6 +444,10 @@ uniform float uCalm;
 uniform float uHue;
 uniform float uSpread;
 uniform float uLines;
+// Clusters: the lines kept where a slow giant mask (field.ts's Variety's) is high, faded where it is low, each line's own
+// threshold (its number's hash) so the edge of a clump is ragged, not a line.
+uniform float uClusters;
+uniform float uTime;
 out vec4 vColour;
 vec3 hsv(float h) { return clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0); }
 void main() {
@@ -462,6 +468,11 @@ void main() {
   gl_Position = vec4(at * uK, 0.0, 1.0);
   float along = float(s) / float(${STEPS - 1});
   float a = sin(3.14159265 * along) * smoothstep(0.0, uCalm, speed);
+  if (uClusters > 0.0) {
+    float m = 0.5 + 0.5 * sin(2.1 * aSeed.x + 0.05 * uTime) * sin(1.7 * aSeed.y + 1.3 - 0.04 * uTime);
+    float h = fract(sin(float(gl_InstanceID) * 12.9898 + 78.233) * 43758.5453);
+    a *= mix(1.0, smoothstep(h - 0.15, h + 0.15, m), uClusters);
+  }
   vColour = vec4(mix(vec3(1.0), hsv(fract(uHue + uSpread * float(gl_InstanceID) / max(1.0, uLines))), uSat) * a, 1.0);
 }`;
 const LINE = `#version 300 es
@@ -492,7 +503,7 @@ export function createStreamlines(gl: WebGL2RenderingContext): ModuleNode {
   gl.bindVertexArray(null);
   gl.bindBuffer(gl.ARRAY_BUFFER, null);
   return {
-    draw: (gl, inputs, out, width, height, knobs, _frame, points) => {
+    draw: (gl, inputs, out, width, height, knobs, frame, points) => {
       gl.bindFramebuffer(gl.FRAMEBUFFER, out);
       gl.viewport(0, 0, width, height);
       gl.clearColor(0, 0, 0, 0);
@@ -522,6 +533,8 @@ export function createStreamlines(gl: WebGL2RenderingContext): ModuleNode {
       gl.uniform1f(u('uSpread'), knobs.hueSpread ?? 0.3);
       gl.uniform1f(u('uLines'), n);
       gl.uniform1f(u('uBright'), knobs.brightness ?? 1);
+      gl.uniform1f(u('uClusters'), knobs.clusters ?? 0);
+      gl.uniform1f(u('uTime'), frame.time);
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE);
       gl.bindVertexArray(vao);

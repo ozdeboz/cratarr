@@ -10,6 +10,7 @@
 //   (decision 0046, amended), so a band's transient lights its own colour where it lies;
 // - every two seconds both buffers are copied over through a pass that clears anything not a number or infinite: a
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
+import type { FieldShape } from './field';
 import type { ChainNow, ShowParams } from './chain-params';
 import type { FrameInfo, Module, PatchExtra } from './patch';
 import { compile, composeOf, plan, STAGES, stageOf, stageRefusal, stagesOf, type Compiled, type PictureNode, type Stage, type TypeOf } from './picture-graph';
@@ -163,7 +164,7 @@ export type PictureInputs = {
   /** The playing track's cover, loaded (the Music module's picture; none: none yet, or no cover). */
   cover?: () => TexImageSource | null;
   /** Each Field's flow now (the engine's `fields`), by module. */
-  fields?: (id: string) => { scale: number; phase: number; waves?: readonly number[] } | undefined;
+  fields?: (id: string) => { scale: number; phase: number; waves?: readonly number[]; shape?: FieldShape } | undefined;
   /** What each chain module's node draws with this frame, from its own knobs (the engine's `params`, step 5). */
   params?: (id: string) => NodeParams | undefined;
 };

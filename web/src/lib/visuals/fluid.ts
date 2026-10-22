@@ -19,7 +19,7 @@
 // textures bound to the first units: the renderer sets its own again after. `advect` uses the last `step`'s time, so
 // a frame is `push`, `step`, then `advect`.
 
-import { FIELD_GLSL, GIANT_SCALE } from './field';
+import { FIELD_GLSL, GIANT_SCALE, PLAIN, strengthsOf, type FieldShape } from './field';
 import { toScreen } from './transform';
 
 /** A push on the fluid: where (texture coordinates of the buffer, 0..1 from its bottom left), which way and how fast
@@ -32,7 +32,7 @@ export type Force = { x: number; y: number; dx: number; dy: number; radius: numb
  *  their cycle (radians). */
 /** `field`: a Field stirring it (the owner: the Field's bands shape the swirls, the fluid gives them inertia): its flow
  *  pushes the fluid everywhere, `amount` how hard (a cable's). */
-export type Flow = { energy: number; swirl: number; wave?: Wave; field?: { scale: number; phase: number; waves?: readonly number[]; amount: number } };
+export type Flow = { energy: number; swirl: number; wave?: Wave; field?: { scale: number; phase: number; waves?: readonly number[]; shape?: FieldShape; amount: number } };
 /** The slow giant waves: how high and where in their roll (`angle` no longer counts: the Field's sum has every way). */
 export type Wave = { amount: number; angle: number; phase: number };
 
@@ -96,6 +96,7 @@ uniform float uFieldScale;
 uniform float uFieldPhase;
 uniform vec3 uFieldA;
 uniform vec3 uFieldB;
+uniform vec2 uFieldShape;
 uniform vec2 uK;
 out vec4 o;
 ${FIELD_GLSL}
@@ -122,7 +123,7 @@ void main() {
   float push = uField + uWave;
   if (push != 0.0) {
     vec2 p = (vUv * 2.0 - 1.0) / uK;
-    v += fieldAt(p, uFieldScale, uFieldPhase, uFieldA, uFieldB) * uK * 0.5 * uGrid * push * uDt;
+    v += fieldAt(p, uFieldScale, uFieldPhase, uFieldA, uFieldB, uFieldShape) * uK * 0.5 * uGrid * push * uDt;
   }
   for (int i = 0; i < ${MOST_FORCES}; i++) {
     if (i >= uCount) break;
@@ -373,7 +374,9 @@ export class Fluid {
       gl.uniform1f(u('uDt'), dt);
       const w = flow.wave;
       const f = flow.field;
-      const fw = f?.waves ?? [1, 1, 1, 1, 1, 1];
+      const shape = f?.shape ?? PLAIN;
+      const fw = strengthsOf(f?.waves, shape);
+      gl.uniform2f(u('uFieldShape'), shape.range, shape.variety);
       gl.uniform1f(u('uWave'), w ? WAVE_PUSH * w.amount : 0);
       gl.uniform1f(u('uField'), f ? FIELD_STIR * Math.max(0, f.amount) : 0);
       gl.uniform1f(u('uFieldScale'), f?.scale ?? GIANT_SCALE);

@@ -365,6 +365,9 @@ export const portHelp: Record<string, Record<string, string>> = {
     scale: 'How big its swirls are.',
     speed: 'How fast it changes.',
     waves: 'Each swirl size’s strength, biggest first; a band’s cable gives each its band.',
+    range: 'How far apart the biggest and the smallest swirls are.',
+    roughness: 'How strong the small swirls are against the big ones.',
+    variety: 'How much the small swirls come and go across the picture.',
     field: 'The flow, for Streamlines.',
   },
   push: {
@@ -375,6 +378,7 @@ export const portHelp: Record<string, Record<string, string>> = {
     field: 'The flow: a Field’s; without one, the Fluid’s.',
   },
   streamlines: {
+    clusters: 'How much the lines gather in clumps, with gaps between.',
     along: 'A picture whose outlines the flow runs along: the flame, a Shape, the cover.',
     follow: 'How strongly the flow runs along Along’s outlines; below 0 the other way round.',
     reach: 'How far from Along’s edges the flow is felt (its picture blurred that far).',
