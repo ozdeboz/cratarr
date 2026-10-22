@@ -6,9 +6,12 @@ import { program } from '../sources/gl';
 import { quarter, thumbSize } from '../thumbnails';
 import { FULL } from './shared';
 
-// Taps one by one (no arrays: the Mali rules), level 0; `uFlip` turns it upright on the last step.
+// Taps one by one (no arrays: the Mali rules), level 0; `uFlip` turns it upright on the last step. Ints highp: a
+// fragment shader's are mediump by default, 16 bits on Mali, and `q * uFrom` (215 x 862 at the tablet's size) wraps, the
+// preview a few repeated pieces of the picture.
 const REDUCE = `#version 300 es
 precision highp float;
+precision highp int;
 uniform sampler2D uIn;
 uniform ivec2 uFrom;
 uniform ivec2 uTo;
