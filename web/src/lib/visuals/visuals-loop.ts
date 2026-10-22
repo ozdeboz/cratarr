@@ -16,7 +16,7 @@ import { settingsReport } from './effects';
 import { fluidGains } from './engine/fluid-gains';
 import { newEngine, stepEngine, type EngineFrame } from './engine/graph';
 import { LivePatch } from './engine/live-patch';
-import { randomize, randomizeCables, randomizeMacros, scopeNamed, type Randomized } from './engine/randomize';
+import { randomize, randomizeCables, randomizeMacros, scopeNamed, type Randomized, type Scope } from './engine/randomize';
 import { settingsOfPatch } from './engine/settings-view';
 import { FREE, holding, leversOf, STANDING, type Levers } from './engine/sidechain';
 import { between, coloured, evolved, flameOf, measuring, partsAt, PRESET_KEYS, seedOf, type ColourMode, type Flame, type Preset } from './flame';
@@ -243,12 +243,16 @@ export class VisualsLoop {
       const patch = host.store.patch;
       const scope = typeof roll === 'string' ? roll : null;
       const ids = typeof roll === 'string' ? null : new Set(roll.module);
-      const knobsScope = scope ? scopeNamed(scope, host.types) : (m: { id: string }) => ids!.has(m.id);
-      const withCables = scope === 'everything' || scope === 'cables' || scope === 'response';
+      // The scopes pinned (`scope:<name>`, the dice's column): kept by every roll, whatever its scope.
+      const held = patch.pins.filter((x) => x.startsWith('scope:')).map((x) => x.slice('scope:'.length));
+      const heldScopes = held.map((x) => scopeNamed(x, host.types)).filter((x): x is Scope => !!x);
+      const asked: Scope | null = scope ? scopeNamed(scope, host.types) : (m) => ids!.has(m.id);
+      const knobsScope: Scope | null = asked && heldScopes.length ? (m, k) => asked(m, k) && !heldScopes.some((h) => h(m, k)) : asked;
+      const withCables = (scope === 'everything' || scope === 'cables' || scope === 'response') && !held.includes('cables') && !held.includes('response');
       const values: Randomized = knobsScope ? yield* randomize(patch, host.types, { seed, scope: knobsScope, reach }) : {};
       const cables = withCables ? randomizeCables(patch, host.types, { seed, reach }) : {};
       // Macros: the rack's own ranges, so no check against the track.
-      if (scope === 'macros') return { values, cables, macros: randomizeMacros(patch, { seed, reach }) };
+      if (scope === 'macros') return { values, cables, macros: held.includes('macros') ? {} : randomizeMacros(patch, { seed, reach }) };
       if (!check) return { values, cables };
       // The dice: this seed and the next ones, each checked against the track (its sidechains taken out), the first
       // within the limits taken, else the least over them.

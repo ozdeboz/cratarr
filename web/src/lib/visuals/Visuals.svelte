@@ -188,6 +188,15 @@
   }
   // The dice's row of scopes: open till the dice is tapped again.
   let diceRow = $state(false);
+  // A scope pinned: every roll keeps what it reaches (Everything's included).
+  const scopePinned = (s: Scope) => visualsPatch.patch.pins.includes(`scope:${s}`);
+  function pinScope(s: Scope) {
+    const id = `scope:${s}`;
+    visualsPatch.change((p) => {
+      p.pins = p.pins.includes(id) ? p.pins.filter((x) => x !== id) : [...p.pins, id];
+    }, null);
+    showChrome();
+  }
   const DICE_LABEL: Record<(typeof RANDOMIZE_SCOPES)[number], string> = { everything: 'Everything', sources: 'Sources', effects: 'Effects', mixers: 'Mixers', modulators: 'Modulators', cables: 'Cables', response: 'Response', macros: 'Macros', colours: 'Colours', spatial: 'Spatial', lightness: 'Lightness' };
   let resetMenu = $state(false);
 
@@ -425,7 +434,20 @@
       {#if diceRow}
         <div class="dice-row" role="toolbar" aria-label="Randomize" transition:fade={{ duration: 120 }}>
           {#each RANDOMIZE_SCOPES as scope (scope)}
-            <button onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => (roll(scope), showChrome())}>{DICE_LABEL[scope]}</button>
+            <div class="scope" class:held={scope !== 'everything' && scopePinned(scope)}>
+              <button onpointerdown={(e) => e.stopPropagation()} onpointerup={(e) => e.stopPropagation()} onclick={() => (roll(scope), showChrome())}>{DICE_LABEL[scope]}</button>
+              {#if scope !== 'everything'}
+                <button
+                  class="pin"
+                  class:on={scopePinned(scope)}
+                  aria-label={`Pin ${DICE_LABEL[scope]}`}
+                  aria-pressed={scopePinned(scope)}
+                  onpointerdown={(e) => e.stopPropagation()}
+                  onpointerup={(e) => e.stopPropagation()}
+                  onclick={() => pinScope(scope)}><Icon name="pin" size={16} /></button
+                >
+              {/if}
+            </div>
           {/each}
         </div>
       {/if}
@@ -632,6 +654,25 @@
   }
   .dice-row button:active {
     background: rgb(255 255 255 / 0.18);
+  }
+  /* Each scope with its pin beside it: a pinned scope is kept by every roll (its name dimmed, its pin lit). */
+  .dice-row .scope {
+    display: flex;
+    align-items: center;
+  }
+  .dice-row .pin {
+    width: 48px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    opacity: 0.45;
+  }
+  .dice-row .pin.on {
+    opacity: 1;
+    background: rgb(255 255 255 / 0.18);
+  }
+  .dice-row .held > button:first-child {
+    opacity: 0.5;
   }
 
   .round.on {
