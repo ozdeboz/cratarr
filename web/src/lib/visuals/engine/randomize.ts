@@ -47,11 +47,17 @@ const CHAIN_DRAW = PRESET_KEYS.flatMap((key) => (SETTING_KNOB[key] && !SLOT_KEY.
 const CHAIN_DRAWN = new Set(CHAIN_DRAW.map((l) => `${l.module}.${l.knob}`));
 const SLOT_DRAWN = PRESET_KEYS.filter((key) => SLOT_KEY.has(key));
 
+/** The modules a Response roll reaches: how much and how fast the music moves things. */
+const RESPONSE: ReadonlySet<string> = new Set(['envelope', 'adsr', 'vca', 'shaper', 'clock', 'accent']);
+
 /** A Dice's scope (ports.ts RANDOMIZE_SCOPES) as Randomize's: everything, or a category's modules (rack.ts); the
  *  cables' amounts are another roll (null here). */
 export function scopeNamed(name: string, types: Record<string, ModuleType>): Scope | null {
   if (name === 'everything') return EVERYTHING;
   if (name === 'cables') return null;
+  // Response: how the rack answers the music, not how it looks: what lies between the music and the picture (the
+  // followers, ADSRs, VCAs, Shapers, the Clock and the Accent; the cables' amounts with them, visuals-loop rollOf).
+  if (name === 'response') return (m) => RESPONSE.has(m.type);
   const ports = portsFrom(types);
   return (m) => {
     if (isDevice(m)) {

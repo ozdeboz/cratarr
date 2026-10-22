@@ -393,8 +393,9 @@ export const GRID = declared(
     knob('drift', 'Drift', 0, 2, 0.4, 'level'),
     knob('return', 'Return', 0, 3, 0.6, 'level'),
   ],
-  // A flow cabled in (a Field's) carries its points along it, at Drift, each pulled back to its place at Return.
-  [{ id: 'field', label: 'Flow field', type: 'flow' }],
+  // A flow cabled in (a Field's) carries its points along it, at Drift, each pulled back to its place at Return; points
+  // cabled into At (a Flame's parts) each get a share of the lattice laid round them.
+  [{ id: 'field', label: 'Flow field', type: 'flow' }, { id: 'at', label: 'At', type: 'points' }],
   [
     out('points', 'Points', 'points'),
     out('index', 'Index', 'value', MOST_POINTS),
@@ -554,7 +555,8 @@ export const PUSH = declared('push', 'Push', 'module', [knob('amount', 'Amount',
 export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD, LENS, TRANSFORM, STREAMLINES, PUSH];
 
 /** The Randomize scopes (0057 §4d), in the dice's menu's order. */
-export const RANDOMIZE_SCOPES = ['everything', 'sources', 'effects', 'mixers', 'modulators', 'cables'] as const;
+// Response last: a Dice keeps its scope as its place here.
+export const RANDOMIZE_SCOPES = ['everything', 'sources', 'effects', 'mixers', 'modulators', 'cables', 'response'] as const;
 
 /** Dice (0057 §7f, the owner: "same randomize"; named Dice beside Random, the value generator): the panel's dice as a
  *  module. A trigger randomizes every knob in its

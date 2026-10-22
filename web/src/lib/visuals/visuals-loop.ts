@@ -243,7 +243,7 @@ export class VisualsLoop {
       const scope = typeof roll === 'string' ? roll : null;
       const ids = typeof roll === 'string' ? null : new Set(roll.module);
       const knobsScope = scope ? scopeNamed(scope, host.types) : (m: { id: string }) => ids!.has(m.id);
-      const withCables = scope === 'everything' || scope === 'cables';
+      const withCables = scope === 'everything' || scope === 'cables' || scope === 'response';
       const values: Randomized = knobsScope ? yield* randomize(patch, host.types, { seed, scope: knobsScope, reach }) : {};
       const cables = withCables ? randomizeCables(patch, host.types, { seed, reach }) : {};
       if (!check) return { values, cables };

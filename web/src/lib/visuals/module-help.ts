@@ -317,7 +317,7 @@ export const portHelp: Record<string, Record<string, string>> = {
   dice: {
     trigger: 'Randomizes on each trigger.',
     seed: 'Where its randomness starts: the same seed, the same values (a track’s seed, the same look).',
-    scope: 'Which knobs it reaches: everything, or the sources, effects, mixers, modulators or cables alone.',
+    scope: 'What it rolls: everything, one category, the cables, or the response to the music.',
     done: 'A trigger as it randomizes.',
     reach: 'How far each knob moves toward its roll: all the way at 100 %, not at all at 0.',
   },
@@ -368,6 +368,7 @@ export const portHelp: Record<string, Record<string, string>> = {
     drift: 'How fast a flow cabled in carries the points along.',
     return: 'How strongly each point is pulled back to its place.',
     field: 'A flow (a Field’s) that carries the points along.',
+    at: 'Points (a Flame’s parts) to lay the grid round: each gets a share of it.',
     points: 'The points, for Fold or Instance.',
     index: 'Each point’s number, from 0 to 1.',
     distance: 'Each point’s distance from the centre.',

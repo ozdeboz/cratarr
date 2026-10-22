@@ -188,7 +188,7 @@
   }
   // The dice's row of scopes: open till the dice is tapped again.
   let diceRow = $state(false);
-  const DICE_LABEL: Record<(typeof RANDOMIZE_SCOPES)[number], string> = { everything: 'Everything', sources: 'Sources', effects: 'Effects', mixers: 'Mixers', modulators: 'Modulators', cables: 'Cables' };
+  const DICE_LABEL: Record<(typeof RANDOMIZE_SCOPES)[number], string> = { everything: 'Everything', sources: 'Sources', effects: 'Effects', mixers: 'Mixers', modulators: 'Modulators', cables: 'Cables', response: 'Response' };
   let resetMenu = $state(false);
 
   // ---- Snapshots: saved patches on the server ---------------------------------------------------------------------
