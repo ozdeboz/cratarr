@@ -58,6 +58,7 @@
     cycleFavouriteAlbums,
     cycleFavourites,
     EDIT_CRATE,
+    GENRE,
     FAVOURITE_ALBUMS,
     FAVOURITES,
     favouriteAlbumsOf,
@@ -86,6 +87,7 @@
   import Icon, { type IconName } from './Icon.svelte';
   import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
   import CrateMenu from './CrateMenu.svelte';
+  import SubjectMenu from './SubjectMenu.svelte';
   import { addedOn, artistPictureId, goToArtist, library, mainArtist, readLibrary } from './albums.svelte';
   import AlbumAbout from './AlbumAbout.svelte';
   import AlbumMore from './AlbumMore.svelte';
@@ -665,6 +667,8 @@
   let menuOpen = $state(false);
   /** The crate's menu (its header's ⋮, decision 0058). */
   let crateMenuOpen = $state(false);
+  /** A badge's menu (decision 0058: a genre badge, a related playlist: what its tap opens, by its subject). */
+  let badgeMenu = $state<string | null>(null);
   /** The menu opens at its entries, or at Delete's confirmation (the edit bar's trash). */
   let menuStart = $state<'menu' | 'delete'>('menu');
   /** `outs`: its list's Remove from (one's own playlist) or Exclude from (a crate: the track, its album). */
@@ -1499,7 +1503,7 @@
             >
           {/if}
           <!-- A genre opens in the panel (its own crate). -->
-          {#if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<button onclick={() => viewGenre(g)}>{g}</button>{/each}</p>{/if}
+          {#if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<button onclick={() => viewGenre(g)} use:longpress={() => (badgeMenu = CRATE + GENRE + g)}>{g}</button>{/each}</p>{/if}
           {#if p?.dead || chosenDead}<p class="details dead missing">{p?.dead || chosenDead} missing</p>{/if}
           <!-- A crate's exclusions (decision 0024, amended 2026-10-19): a tap shows them, to put back. -->
           {#if leftOut}<button class="details left-out" onclick={() => (leftOutOpen = true)}><Icon name="crateOut" size={14} /><span>{leftOut.toLocaleString()} excluded</span></button>{/if}
@@ -1701,6 +1705,7 @@
                 sub={c.shares}
                 label={`View ${c.name}`}
                 onclick={() => viewPlaylist(c.name)}
+                attach={fromAction(longpress, () => () => (badgeMenu = c.name))}
               />
             </li>
           {/each}
@@ -1825,6 +1830,9 @@
 {/if}
 {#if selectSheet}
   <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />
+{/if}
+{#if badgeMenu}
+  <SubjectMenu subject={badgeMenu} onclose={() => (badgeMenu = null)} />
 {/if}
 {#if crateMenuOpen && crate}
   <CrateMenu id={crate} onclose={() => (crateMenuOpen = false)} onsave={() => (making = { name: '', saving: false })} />

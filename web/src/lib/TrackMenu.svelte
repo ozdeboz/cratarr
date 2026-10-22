@@ -29,6 +29,7 @@
   import MarkLoader from './MarkLoader.svelte';
   import { goToArtist as showArtist, mainArtist } from './albums.svelte';
   import { player, refresh } from './live.svelte';
+  import { excludeGlobally } from './exclusions.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
@@ -139,7 +140,14 @@
     const words = [t.artist, t.name].filter(Boolean).join(' ');
     window.open(`https://duckduckgo.com/?q=${encodeURIComponent(words)}`, '_blank', 'noopener');
     onclose();
-  }  function geniusSearch() {
+  }  // Feel (decision 0058): Exclude everywhere, as the heart's long-press has it (decision 0024, amended).
+  function excludeEverywhere() {
+    const one = t;
+    if (!one) return;
+    onclose();
+    excludeGlobally(one.source, [one.id]).catch((e) => toast.fail(e, "It wasn't excluded"));
+  }
+  function geniusSearch() {
     if (!t) return;
     const words = [t.artist, t.name].filter(Boolean).join(' ');
     window.open(`https://genius.com/search?q=${encodeURIComponent(words)}`, '_blank', 'noopener');
@@ -347,6 +355,7 @@
         </MenuGroup>
         <MenuGroup>
           {#if heartKnown}<MenuEntry icon="heart" label="Favourite" switched={heartOn} disabled={busy} onclick={heart} />{/if}
+          {#if t && !onDevice}<MenuEntry icon="ban" label="Exclude everywhere" danger onclick={excludeEverywhere} />{/if}
         </MenuGroup>
         <MenuGroup>
           {#if addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}

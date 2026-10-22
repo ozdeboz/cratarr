@@ -61,7 +61,7 @@
   import { viewGenre } from './crates.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
   import { player } from './live.svelte';
-  import type { LocalTrack } from './localPlayer.svelte';
+  import { startRadio, type LocalTrack } from './localPlayer.svelte';
   import { isKept, setKept } from './kept.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -69,7 +69,7 @@
   import PlaylistsStep from './PlaylistsStep.svelte';
   import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
-  import { playPlaylistFrom } from './output.svelte';
+  import { isLocal, playPlaylistFrom } from './output.svelte';
   import { albumGone, albumSubject, panel, viewPlaylist } from './panel.svelte';
   import { coverKey, localCovers, refreshCover, removeLocalCover, setLocalCover } from './localCovers.svelte';
   import { linkTo, share } from './share';
@@ -207,6 +207,8 @@
       { icon: 'playNext', label: 'Play next', onclick: () => run(() => playAlbums(listed(), 'next'), 'Plays next.') },
       { icon: 'listAdd', label: 'Add to queue', onclick: () => run(() => playAlbums(listed(), 'last'), 'Added to the queue.') },
     );
+    // Start radio (decision 0058, as a playlist's): tracks like the album's, from the whole library; on this device.
+    if (isLocal() && t?.length) list.push({ icon: 'radio', label: 'Start radio', onclick: () => run(() => startRadio(t.map((x) => x.id), a.title)) });
     return list;
   });
 

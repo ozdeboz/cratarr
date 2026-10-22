@@ -33,6 +33,10 @@ should not do it the other way around").
 - **In the music lists** (tracks, albums, artists, playlists, crates, genres, queues): a long-press, a right-click or
   ⋮ opens the object's menu. Selecting starts from the Select button in the list's header; in select mode a tap ticks
   and a long-press asks what to tick (All, None, Others).
+- **A badge, chip or link that opens an object** (an album's artist chip, a genre chip, the player's "plays from"
+  chip, a track's album or artist) opens that object's menu on a long-press or a right-click (the owner, 2026-10-23:
+  "Whenever a badge single click leads to opening an object, then a long press on that badge should lead to opening
+  its context menu").
 - **In the visuals' rack** a long-press selects (the owner's choice, kept as the rack's own exception). Its menus (a
   cable's, the selection bar's actions, a snapshot's, a port's help) take the music app's shape below.
 

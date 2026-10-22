@@ -25,6 +25,7 @@
   import SwipeBehind from './SwipeBehind.svelte';
   import { sheetDrag } from './sheetDrag';
   import QueuePlaylistSheet from './QueuePlaylistSheet.svelte';
+  import SubjectMenu from './SubjectMenu.svelte';
   import QueuesSheet from './QueuesSheet.svelte';
   import { Reorder } from './reorder.svelte';
   import TrackMenu, { type MenuTrack, type QueuePlace } from './TrackMenu.svelte';
@@ -80,6 +81,8 @@
     const c = queueCrate(from);
     return c ? CRATE + c : null;
   });
+  /** The plays-from chip's menu (decision 0058: a badge that opens an object opens its menu on a long-press). */
+  let fromMenu = $state<string | null>(null);
   function openFrom() {
     const v = fromView;
     if (!v) return;
@@ -303,7 +306,7 @@
 
       <div class="sec qsec">
         <div class="from">
-          {#if from && fromView}<button class="chip" onclick={openFrom}><Icon name={fromView.startsWith('album:') ? 'albums' : fromView.startsWith(CRATE) ? 'crates' : 'playlists'} size={18} /><span>{from}</span></button>
+          {#if from && fromView}<button class="chip" onclick={openFrom} use:longpress={() => (fromMenu = fromView)}><Icon name={fromView.startsWith('album:') ? 'albums' : fromView.startsWith(CRATE) ? 'crates' : 'playlists'} size={18} /><span>{from}</span></button>
           {:else if from}<span class="light">Playing from&nbsp;</span><strong>{from}</strong>
           {:else if !here && np.player}<span class="light">Playing on&nbsp;</span><strong>{np.player}</strong>
           {:else}<strong>Queue</strong>{/if}
@@ -381,6 +384,9 @@
 {/if}
 {#if saving}
   <QueuePlaylistSheet onclose={() => (saving = false)} />
+{/if}
+{#if fromMenu}
+  <SubjectMenu subject={fromMenu} onclose={() => (fromMenu = null)} />
 {/if}
 {#if heartMenu && np}
   <HeartSheet track={np} cover={src} favourite={{ on: favorite(), disabled: pending() || np.favorite === null, flip: toggleFavorite }} onclose={() => (heartMenu = false)} />

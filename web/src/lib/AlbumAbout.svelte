@@ -4,7 +4,9 @@
   // from: the server and its library. What is not known is left out; Last played says Never when it never was. Its
   // rating (decided 2026-10-16) as five stars, the same as its menu's: a tap rates, where its server keeps ratings.
   import { albumRatings, loadAlbumRating, rateAlbum } from './albums.svelte';
-  import { viewGenre } from './crates.svelte';
+  import { CRATE, GENRE, viewGenre } from './crates.svelte';
+  import { longpress } from './longpress';
+  import SubjectMenu from './SubjectMenu.svelte';
   import RatingStars from './RatingStars.svelte';
   import Icon from './Icon.svelte';
   import SectionHead from './SectionHead.svelte';
@@ -39,6 +41,8 @@
     const d = new Date(secs * 1000);
     return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
   };
+  // A badge's menu (decision 0058: a chip that opens an object opens its menu on a long-press).
+  let menuOf = $state<string | null>(null);
 </script>
 
 <section aria-label="About">
@@ -47,7 +51,7 @@
   {#if genres.length}
     <h3>Genres</h3>
     <p class="chips">
-      {#each genres as g (g)}<button class="chip" onclick={() => viewGenre(g)}>{g}</button>{/each}
+      {#each genres as g (g)}<button class="chip" onclick={() => viewGenre(g)} use:longpress={() => (menuOf = CRATE + GENRE + g)}>{g}</button>{/each}
     </p>
   {/if}
   {#if year}
@@ -75,6 +79,8 @@
   </p>
   </div>
 </section>
+
+{#if menuOf}<SubjectMenu subject={menuOf} onclose={() => (menuOf = null)} />{/if}
 
 <style>
   section {
