@@ -163,7 +163,7 @@ export type PictureInputs = {
   /** The playing track's cover, loaded (the Music module's picture; none: none yet, or no cover). */
   cover?: () => TexImageSource | null;
   /** Each Field's flow now (the engine's `fields`), by module. */
-  fields?: (id: string) => { scale: number; phase: number } | undefined;
+  fields?: (id: string) => { scale: number; phase: number; waves?: readonly number[] } | undefined;
   /** What each chain module's node draws with this frame, from its own knobs (the engine's `params`, step 5). */
   params?: (id: string) => NodeParams | undefined;
 };
@@ -208,6 +208,8 @@ export class FlameRenderer {
   /** Each Instance's and Fold's points by the module that gives them. */
   private pointsFrom = new Map<string, string>();
   private fieldFrom = new Map<string, string>();
+  /** The Field stirring the Fluid, and how hard (its cable's amount), if one is cabled into it. */
+  private fluidStir: { field: string; amount: number } | null = null;
   /** The Transforms on the flame's light (the points' camera's view), in order. */
   private lightTransforms: string[] = [];
   /** The module observed (the graph's preview; TouchDesigner's "cook what's observed"): its picture kept for one small
@@ -302,6 +304,8 @@ export class FlameRenderer {
     this.pointsFrom = new Map(flat.cables.filter((c) => (c.to.port === 'points' && typeOfId.get(c.to.module) === 'instance') || (c.to.port === 'grid' && typeOfId.get(c.to.module) === 'fold') || (c.to.port === 'seeds' && typeOfId.get(c.to.module) === 'streamlines')).map((c) => [c.to.module, c.from.module]));
     // What gives each Streamlines its flow: a Field cabled into it (else the Fluid's, the normal).
     this.fieldFrom = new Map(flat.cables.filter((c) => c.to.port === 'field' && (typeOfId.get(c.to.module) === 'streamlines' || typeOfId.get(c.to.module) === 'push') && typeOfId.get(c.from.module) === 'field').map((c) => [c.to.module, c.from.module]));
+    const stir = flat.cables.find((c) => c.to.port === 'stirBy' && typeOfId.get(c.to.module) === 'fluid' && typeOfId.get(c.from.module) === 'field');
+    this.fluidStir = stir ? { field: stir.from.module, amount: typeof stir.value === 'number' ? stir.value : 1 } : null;
     this.composed = stages ? composeOf(c) : null;
     this.lightTransforms = stages ? c.order.filter((n) => n.type === 'transform' && stageOf(n) === 'points').map((n) => n.id) : [];
     this.showOut = stages ? (c.order.filter((n) => stageOf(n) === 'show').at(-1)?.id ?? null) : null;
@@ -427,7 +431,9 @@ export class FlameRenderer {
       // An observed light module's picture (step 6): the light tone mapped where it is in the loop, a carry's as it
       // carries it on, the Flame's (and a Transform on its light) as its points land; the Feedback's what it holds for
       // the next frame, the light as the points land (tone mapping it before the carries reads it unlike Show does).
-      fluid = this.carry.draw(light, now!.carry, since, loop);
+      const stirring = this.fluidStir ? given?.fields?.(this.fluidStir.field) : undefined;
+      const carry = stirring ? { ...now!.carry, flow: { ...now!.carry.flow, field: { ...stirring, amount: this.fluidStir!.amount } } } : now!.carry;
+      fluid = this.carry.draw(light, carry, since, loop);
       if (lightPhase === 'carried') lightPeek = this.peekLight(shown!, passes, fluid);
       // The light's Transforms, in the patch's order: where the points land, after the camera frames the flame.
       this.points.view = this.lightTransforms.reduce((t, id) => chain(t, transformOf(knobsAt(id), light.width / light.height)), IDENTITY);

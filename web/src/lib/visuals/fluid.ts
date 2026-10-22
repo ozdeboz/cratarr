@@ -19,6 +19,9 @@
 // textures bound to the first units: the renderer sets its own again after. `advect` uses the last `step`'s time, so
 // a frame is `push`, `step`, then `advect`.
 
+import { FIELD_GLSL } from './field';
+import { toScreen } from './transform';
+
 /** A push on the fluid: where (texture coordinates of the buffer, 0..1 from its bottom left), which way and how fast
  *  (texture coordinates per second, at strength 1), how far it reaches (in heights of the buffer) and how hard. */
 export type Force = { x: number; y: number; dx: number; dy: number; radius: number; strength: number };
@@ -27,7 +30,9 @@ export type Force = { x: number; y: number; dx: number; dy: number; radius: numb
  *  one flows on), `swirl` 0.. (how strongly its small whirls are kept). */
 /** `wave`: the slow giant waves (65): how high (the Waves column's routes), which way they roll (radians) and where in
  *  their cycle (radians). */
-export type Flow = { energy: number; swirl: number; wave?: Wave };
+/** `field`: a Field stirring it (the owner: the Field's bands shape the swirls, the fluid gives them inertia): its flow
+ *  pushes the fluid everywhere, `amount` how hard (a cable's). */
+export type Flow = { energy: number; swirl: number; wave?: Wave; field?: { scale: number; phase: number; waves?: readonly number[]; amount: number } };
 export type Wave = { amount: number; angle: number; phase: number };
 
 /** The waves: wavelengths across the screen's height (2π each), how hard they push at their fullest (screen heights a
@@ -47,6 +52,8 @@ const ITERATIONS = 6;
 const FASTEST = 400;
 /** What is left of the last step's pressure (a warm start for the iteration). */
 const PRESSURE_KEPT = 0.8;
+/** How hard a Field stirs at amount 1: its flow's speed reached in about a second, before the fluid's own losses. */
+const FIELD_STIR = 1;
 /** Vorticity confinement at swirl 1 (Dobryakov's WebGL fluid uses 30 at this scale). */
 const SWIRL = 30;
 
@@ -84,7 +91,14 @@ uniform float uSwirl;
 uniform float uDt;
 uniform vec4 uWave;
 uniform float uWaveK;
+uniform float uField;
+uniform float uFieldScale;
+uniform float uFieldPhase;
+uniform vec3 uFieldA;
+uniform vec3 uFieldB;
+uniform vec2 uK;
 out vec4 o;
+${FIELD_GLSL}
 float curlAt(vec2 uv) {
   float l = texture(uVelocity, uv - vec2(uTexel.x, 0.0)).y;
   float r = texture(uVelocity, uv + vec2(uTexel.x, 0.0)).y;
@@ -108,6 +122,12 @@ void main() {
     vec2 n = uWave.yz;
     vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);
     v += vec2(-n.y / uAspect, n.x) * uWave.x * sin(uWaveK * dot(p, n) - uWave.w) * uGrid.y * uDt;
+  }
+  // A Field stirring it: its flow (the frame's units a second, centred, the short side -1..1) as a push everywhere, in
+  // cells a second each second (free of divergence already: the pressure hardly has to touch it).
+  if (uField > 0.0) {
+    vec2 p = (vUv * 2.0 - 1.0) / uK;
+    v += fieldAt(p, uFieldScale, uFieldPhase, uFieldA, uFieldB) * uK * 0.5 * uGrid * uField * uDt;
   }
   for (int i = 0; i < ${MOST_FORCES}; i++) {
     if (i >= uCount) break;
@@ -348,6 +368,14 @@ export class Fluid {
       const w = flow.wave;
       gl.uniform4f(u('uWave'), w ? WAVE_PUSH * w.amount : 0, w ? Math.cos(w.angle) : 1, w ? Math.sin(w.angle) : 0, w ? w.phase : 0);
       gl.uniform1f(u('uWaveK'), WAVE_K);
+      const f = flow.field;
+      const fw = f?.waves ?? [1, 1, 1, 1, 1, 1];
+      gl.uniform1f(u('uField'), f ? FIELD_STIR * Math.max(0, f.amount) : 0);
+      gl.uniform1f(u('uFieldScale'), f?.scale ?? 1);
+      gl.uniform1f(u('uFieldPhase'), f?.phase ?? 0);
+      gl.uniform3f(u('uFieldA'), fw[0], fw[1], fw[2]);
+      gl.uniform3f(u('uFieldB'), fw[3], fw[4], fw[5]);
+      gl.uniform2f(u('uK'), ...toScreen(this.width / this.height));
     });
     v.reverse();
 

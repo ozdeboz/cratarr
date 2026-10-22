@@ -173,6 +173,7 @@ export const portHelp: Record<string, Record<string, string>> = {
     light: LIGHT,
     fluid: 'How much the picture flows like smoke: the most it reaches; cables into its gain take it lower.',
     stir: 'How much of what its cables give pushes the fluid.',
+    stirBy: 'A Field stirring it everywhere; the cable’s amount sets how hard.',
     flow: 'How much of what its cables give makes the fluid flow.',
     swirl: 'How much of what its cables give sets the fluid whirling.',
     facets: 'How much the fluid breaks into facets: the most it reaches; cables into its gain take it lower.',

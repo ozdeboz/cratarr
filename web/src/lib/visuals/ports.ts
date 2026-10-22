@@ -121,7 +121,7 @@ export function portsOf(t: ModuleType & { ports?: Ports }): Ports {
   // points into `at` (the flame's parts unless cabled); its flow out, for Show's read-back, Stream and Displace.
   if (t.type === 'fluid' || t.type === 'fluid-loop')
     return {
-      in: [{ ...LIGHT('light', 'In'), polymorphic: FLUID_TYPES }, { id: 'at', label: 'Pushes at', type: 'points', normal: { module: 'flame', port: 'points' } }, ...knobs],
+      in: [{ ...LIGHT('light', 'In'), polymorphic: FLUID_TYPES }, { id: 'at', label: 'Pushes at', type: 'points', normal: { module: 'flame', port: 'points' } }, ...(t.type === 'fluid' ? [{ id: 'stirBy', label: 'Stirred by', type: 'flow' } as Port] : []), ...knobs],
       out: [{ ...LIGHT('light', 'Out'), polymorphic: FLUID_TYPES }, FLOW_OUT],
     };
   // The Loop effect's Stream reads a flow (the fluid's unless cabled).
