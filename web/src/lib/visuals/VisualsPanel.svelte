@@ -5,13 +5,18 @@
   // its knobs (a slider, its pin, what moves it), its other inputs, Randomize, Remove; a device's: its macros and the
   // modules in it. A port's page: the cables into it and "+ Add". A cable's page: its ends (each tapped to move it),
   // its channel, what scales it, its curve, its pin, Delete. Every change goes to the store as one edit (patch-edits.ts).
+  // Step 9 (the owner, the standard module page): where it is (crumbs, each a tap, the graph at its level); its picture
+  // while the graph is hidden; its knobs; its inputs (← what comes in); its outputs (→ where it goes: a tap follows the
+  // cable to its module, "+ Add" cables it somewhere new); Randomize, Remove.
   import Icon from '../Icon.svelte';
   import { longpress } from '../longpress';
   import { held } from './held.svelte';
   import CurveEditor from './CurveEditor.svelte';
   import KnobCables from './KnobCables.svelte';
   import Face from './face/Face.svelte';
-  import { faceOf } from './face/face';
+  import { faceOf, previewOf, Thumbs, type Thumbnailer } from './face/face';
+  import Preview from './face/Preview.svelte';
+  import { untrack } from 'svelte';
   import type { LiveFrame } from './faces';
   import { curveOf, valueOf as kept, type Curve } from './curves';
   import { panelKey, type PanelEdit } from './patch-edits';
@@ -33,6 +38,9 @@
     onrandomize,
     live = null,
     path = $bindable([]),
+    thumbnail,
+    previewShown = false,
+    onlevel,
   }: {
     patch: PatchV2;
     types: Record<string, V2Type>;
@@ -48,6 +56,12 @@
     live?: LiveFrame | null;
     /** The pages open, the latest last (a page's name: see `go`'s callers). */
     path?: string[];
+    /** Draws a module's picture into a canvas (the renderer's thumbnail), for its page's preview. */
+    thumbnail?: Thumbnailer;
+    /** The graph hidden: a module's page shows its picture itself. */
+    previewShown?: boolean;
+    /** The level the page is at (a module's device, or a device's inside), for the graph to follow. */
+    onlevel?: (scope: string[]) => void;
   } = $props();
 
   const BAND_ROWS = ['Sub', 'Bass', 'Low mid', 'Mid', 'Upper mid', 'Air'];
@@ -86,6 +100,56 @@
     return `${nameOf(m, level)} · ${portName(m, r.port, dir)}${band}`;
   }
   const cablesInto = (level: PatchV2, module: string, port: string) => level.cables.filter((c) => c.to.module === module && c.to.port === port);
+  const cablesFrom = (level: PatchV2, module: string, port: string) => level.cables.filter((c) => c.from.module === module && c.from.port === port);
+  /** A port's cables in a row's line: the first two ends' names, and how many more. */
+  function endsLine(level: PatchV2, ends: PortRef[], dir: 'in' | 'out', arrow: string): string {
+    const names = ends.slice(0, 2).map((r) => endName(level, r, dir));
+    return `${arrow} ${names.join(', ')}${ends.length > 2 ? ` +${ends.length - 2}` : ''}`;
+  }
+
+  // ---- Where a page is: Rack › each device › its module › its port (each crumb a tap there) ------------------------
+  /** The module path a page is about, and its own last crumb (a port's, a cable's) if any. */
+  function placeOf(page: string): { at: string[]; last: string | null } | null {
+    const [kind, a, b] = parts(page);
+    if (kind === 'm') return { at: pathOf(a), last: null };
+    if (kind === 'in' || kind === 'out') {
+      const at = pathOf(a);
+      const f = moduleAt(at);
+      return { at, last: f ? portName(f.m, b, kind) : b };
+    }
+    if (kind === 'from' || kind === 'to') return { at: [...pathOf(a), b], last: kind === 'from' ? 'From' : 'To' };
+    return null;
+  }
+  const crumbs = $derived.by((): { label: string; page: string | null }[] => {
+    const place = placeOf(here);
+    if (!place) return [{ label: 'Rack', page: null }, ...path.map((p) => ({ label: pageLabel(p), page: p }))];
+    const out: { label: string; page: string | null }[] = [{ label: 'Rack', page: null }];
+    for (let i = 1; i <= place.at.length; i++) {
+      const f = moduleAt(place.at.slice(0, i));
+      if (f) out.push({ label: nameOf(f.m, f.level), page: `m|${place.at.slice(0, i).join('/')}` });
+    }
+    if (place.last) out.push({ label: place.last, page: here });
+    return out;
+  });
+  /** A crumb tapped: that place's page, the way back from it as its crumbs go. */
+  function goCrumb(page: string | null) {
+    if (page === here) return;
+    path = page ? [page] : [];
+  }
+  // The graph follows the page: at a module's level (a device's page: inside it).
+  $effect(() => {
+    const place = placeOf(here);
+    if (!place || !onlevel) return;
+    const f = moduleAt(place.at);
+    const scope = f && isDevice(f.m) && parts(here)[0] === 'm' ? place.at : place.at.slice(0, -1);
+    untrack(() => onlevel(scope));
+  });
+
+  // ---- A module's picture on its page while the graph is hidden (one live frame, one thumbnail) --------------------
+  const thumbs = new Thumbs();
+  $effect(() => {
+    if (live && previewShown) untrack(() => thumbs.next(thumbnail));
+  });
   const pinned = (level: PatchV2, pin: string) => level.pins.includes(pin);
 
   const percent = (v: number) => `${Math.round(v * 100)}%`;
@@ -148,6 +212,11 @@
     }
     if (kind === 'c') return 'Cable';
     if (kind === 'from') return 'From';
+    if (kind === 'out') {
+      const at = moduleAt(pathOf(a));
+      return at ? portName(at.m, b, 'out') : b;
+    }
+    if (kind === 'to') return 'To';
     if (kind === 'move') return a === 'from' ? 'From' : 'To';
     if (kind === 'depth') return 'Scaled by';
     if (kind === 'add') return `Add to ${CATEGORY_LABEL[c as Category] ?? ''}`;
@@ -214,6 +283,29 @@
   >
 {/snippet}
 
+{#snippet portRows(at: string[], level: PatchV2, m: Module, t: V2Type | undefined)}
+{@const inputs = ownInputs(m, t)}
+{#if inputs.length}
+  <div class="rows">
+    <h3>Inputs</h3>
+    {#each inputs as p (p.id)}
+      {@const into = cablesInto(level, m.id, p.id)}
+      {@render goRow(p.label, into.length ? endsLine(level, into.map((c) => c.from), 'out', '←') : p.normal ? 'As normalled' : 'Nothing', `in|${at.join('/')}|${p.id}`)}
+    {/each}
+  </div>
+{/if}
+{@const outputs = portsOf(m)?.out ?? []}
+{#if outputs.length}
+  <div class="rows">
+    <h3>Outputs</h3>
+    {#each outputs as p (p.id)}
+      {@const from = cablesFrom(level, m.id, p.id)}
+      {@render goRow(p.label, from.length ? endsLine(level, from.map((c) => c.to), 'in', '→') : 'Nothing', `out|${at.join('/')}|${p.id}`)}
+    {/each}
+  </div>
+{/if}
+{/snippet}
+
 {#snippet knobRow(at: string[], level: PatchV2, m: Module, k: V2Type['knobs'][number])}
   {@const v = m.knobs[k.id] ?? k.default}
   {@const n = cablesInto(level, m.id, k.id).length}
@@ -234,7 +326,9 @@
   {#if path.length}
     <div class="crumbs">
       <button class="back" aria-label="Back" onclick={() => back()}><Icon name="back" size={20} /></button>
-      <span class="trail">{#each path as page, i (i)}{#if i}<span class="sep">›</span>{/if}<span class:here={i === path.length - 1}>{pageLabel(page)}</span>{/each}</span>
+      <span class="trail"
+        >{#each crumbs as c, i (i)}{#if i}<span class="sep">›</span>{/if}<button class="crumb" class:here={i === crumbs.length - 1} onclick={() => goCrumb(c.page)}>{c.label}</button>{/each}</span
+      >
     </div>
   {/if}
 
@@ -335,13 +429,18 @@
           </div>
           {#each d.patch.modules as inner (inner.id)}{@render goRow(nameOf(inner, d.patch), '', `m|${[...at, inner.id].join('/')}`)}{/each}
         </div>
+        {@render portRows(at, level, m, t)}
         <div class="rows">
           <button class="go" onclick={() => onrandomize({ module: at })}><span class="name">Randomize</span></button>
           <button class="go" onclick={() => (edit({ kind: 'unmake', scope, device: m.id }), back())}><span class="name">Unmake device</span></button>
           <button class="go danger" onclick={() => (edit({ kind: 'removeModule', scope, id: m.id }), back())}><span class="name">Remove</span></button>
         </div>
       {:else}
-        <!-- The live parts of its face; its picture's thumbnail is the graph's (the panel has none to draw it with). -->
+        <!-- Its picture while the graph is hidden (the graph shows it otherwise); the live parts of its face. -->
+        {@const kind = previewOf(portsOf(m))}
+        {#if previewShown && kind}
+          {#key at.join('/')}<div class="rows preview"><Preview module={at.join('/')} label={nameOf(m, level)} {kind} {live} thumbs={thumbnail ? thumbs : null} /></div>{/key}
+        {/if}
         {@const face = faceOf(t, portsOf(m)).filter((p) => p.kind !== 'thumb')}
         {#if face.length}
           <div class="rows face"><Face parts={face} {live} path={at.join('/')} knobs={m.knobs} width={300} /></div>
@@ -356,16 +455,7 @@
             {#each knobs as k (k.id)}{@render knobRow(at, level, m, k)}{/each}
           </div>
         {/if}
-        {@const inputs = ownInputs(m, t)}
-        {#if inputs.length}
-          <div class="rows">
-            <h3>Inputs</h3>
-            {#each inputs as p (p.id)}
-              {@const n = cablesInto(level, m.id, p.id).length}
-              {@render goRow(p.label, n ? `${n} ${n === 1 ? 'cable' : 'cables'}` : p.normal ? 'As normalled' : 'Nothing', `in|${at.join('/')}|${p.id}`)}
-            {/each}
-          </div>
-        {/if}
+        {@render portRows(at, level, m, t)}
         <div class="rows">
           <button class="go" onclick={() => onrandomize({ module: at })}><span class="name">Randomize</span></button>
           {#if m.type !== 'screen'}<button class="go danger" onclick={() => (edit({ kind: 'removeModule', scope, id: m.id }), back())}><span class="name">Remove</span></button>{/if}
@@ -396,6 +486,35 @@
           onadd={() => go(`from|${scope.join('/')}|${m.id}|${port}`)}
         />
       {/if}
+    {/if}
+  {:else if parts(here)[0] === 'out'}
+    <!-- An output's cables: a tap follows one to its module; its amount opens the cable; "+ Add" cables it anew. -->
+    {@const [, a, port] = parts(here)}
+    {@const at = pathOf(a)}
+    {@const found = moduleAt(at)}
+    {#if found}
+      {@const { scope, level, m } = found}
+      <div class="rows">
+        {#each cablesFrom(level, m.id, port) as c (c.id)}
+          <div class="follow">
+            <button class="go" onclick={() => go(`m|${[...scope, c.to.module].join('/')}`)}><span class="name">→ {endName(level, c.to, 'in')}</span><Icon name="chevronRight" size={18} /></button>
+            <button class="cable" aria-label="Its cable" onclick={() => go(`c|${scope.join('/')}|${c.id}`)}><Icon name="sliders" size={16} /></button>
+          </div>
+        {/each}
+        <button class="go add" onclick={() => go(`to|${scope.join('/')}|${m.id}|${port}`)}><span class="name">+ Add</span></button>
+      </div>
+    {/if}
+  {:else if parts(here)[0] === 'to'}
+    {@const [, sc, module, port] = parts(here)}
+    {@const scope = pathOf(sc)}
+    {@const level = levelAt(scope)}
+    {@const have = level ? outPort(level, { module, port }) : undefined}
+    {#if level && have}
+      <div class="rows">
+        {#each candidates(level, have, 'in').filter((x) => x.ref.module !== module) as x (`${x.ref.module}.${x.ref.port}`)}
+          <button class="go" onclick={() => (edit({ kind: 'connect', scope, from: { module, port }, to: x.ref }), back())}><span class="name">{x.label}</span></button>
+        {/each}
+      </div>
     {/if}
   {:else if parts(here)[0] === 'from'}
     {@const [, sc, module, port] = parts(here)}
@@ -567,6 +686,38 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+  }
+
+  .crumb {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+  .follow {
+    display: flex;
+    align-items: center;
+  }
+  .follow .go {
+    flex: 1;
+    min-width: 0;
+  }
+  .follow .cable {
+    width: 40px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 20px;
+    background: none;
+    color: rgb(255 255 255 / 0.7);
+    cursor: pointer;
+  }
+  .preview {
+    display: grid;
+    justify-items: center;
   }
 
   .crumbs {

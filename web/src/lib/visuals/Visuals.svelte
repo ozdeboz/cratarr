@@ -155,7 +155,10 @@
     }
     showChrome();
   }
+  // The level the panel's page is at: the graph opens there.
+  let panelLevel: string[] = [];
   function openGraph() {
+    if (panel) graphLevel = panelLevel;
     graph = true;
     void loadLibrary();
     opening('graph');
@@ -505,7 +508,23 @@
           onpointerup={(e) => e.stopPropagation()}
         >
           <button class="panel-close" aria-label="Close the panel" onclick={() => closing('panel')}><Icon name="close" size={20} /></button>
-          <VisualsPanel patch={visualsPatch.patch} types={TYPES} onedit={panelEdit} presets={libraryList} preset={presetNow} onpreset={choosePreset} onrandomize={randomizeFrom} live={liveFaces.frame} bind:path={panelPath} />
+          <VisualsPanel
+            patch={visualsPatch.patch}
+            types={TYPES}
+            onedit={panelEdit}
+            presets={libraryList}
+            preset={presetNow}
+            onpreset={choosePreset}
+            onrandomize={randomizeFrom}
+            live={liveFaces.frame}
+            bind:path={panelPath}
+            thumbnail={(m, c) => (loop ? loop.thumbnail(m, c) : 'Not running.')}
+            previewShown={!graph}
+            onlevel={(scope) => {
+              panelLevel = scope;
+              if (graph && scope.join('/') !== graphLevel.join('/')) graphLevel = scope;
+            }}
+          />
           {#if !panelPath.length}
             <div class="foot">
               <span class="fps">{fps} fps</span>
