@@ -1,7 +1,7 @@
 // The permanent crates and their sizes (decision 0024), for the Crates page and the crate viewed in the panel. Asked for
 // when looked at, and again when the playlists change (sorting a track into one shrinks Unlisted).
-import { albumCoverUrl, crateImageUrl, crateRows, getCrates, leaveOutOfCrate, type Excluding, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites, type PlaylistRow } from './api';
-import { dropFromQueue, local, type LocalTrack } from './localPlayer.svelte';
+import { albumCoverUrl, crateImageUrl, crateRows, deleteCrate, getCrates, queueTracks, leaveOutOfCrate, type Excluding, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites, type PlaylistRow } from './api';
+import { dropFromQueue, enqueue, local, startRadio, type LocalTrack } from './localPlayer.svelte';
 import { isLocal, playPlaylistFrom, shownPlaylists } from './output.svelte';
 import { prefs } from './prefs.svelte';
 import { viewPlaylist } from './panel.svelte';
@@ -201,8 +201,15 @@ export function startCrate(name: string, conditions: Condition[] = []) {
 // A crate shuffled from its card (the owner, 2026-10-19: "a play button on the crates, which automatically plays it with
 // shuffle"): its tracks as both its toggles let them through, from anywhere in it, in a random order, as a new queue.
 // A crate comes 500 tracks at a time, so a big one is sampled: up to three stretches of 500 from anywhere in it.
-const STRETCH = 500;
-const STRETCHES = 3;
+// Shuffle (its card's picture, its panel, its menu): SHUFFLED tracks from the whole crate, however big (the owner,
+// 2026-10-23: Unlisted's 10,000 and more played the same few each time, the panel's first page; a queue holds 500 at
+// most). A crate that small
+// whole; else STRETCHES short stretches at random places across all of it (a few requests, each a page the server
+// serves at once), shuffled together.
+const PAGE_MOST = 500;
+const SHUFFLED = 500;
+const STRETCHES = 25;
+const STRETCH = 20;
 const shuffled = <T>(list: T[]) => {
   const a = [...list];
   for (let i = a.length - 1; i > 0; i--) {
@@ -211,20 +218,58 @@ const shuffled = <T>(list: T[]) => {
   }
   return a;
 };
+const asTracks = (source: string, rows: PlaylistRow[]): LocalTrack[] =>
+  rows
+    .filter((r) => r.id && !r.missing)
+    .map((r) => ({ source, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: r.album_id ?? null, duration_secs: r.duration_secs }));
+/** Rows `from`..`from + n` of the crate as its favourites settings have it, in pages the server serves. */
+async function crateSpan(id: string, from: number, n: number) {
+  const pages = await Promise.all(
+    Array.from({ length: Math.ceil(n / PAGE_MOST) }, (_, i) => crateRows(id, from + i * PAGE_MOST, Math.min(PAGE_MOST, n - i * PAGE_MOST), prefs.source || undefined, favouritesOf(id), favouriteAlbumsOf(id))),
+  );
+  return { source: pages[0]?.source ?? '', total: pages[0]?.total ?? 0, rows: pages.flatMap((p) => p.rows) };
+}
 export async function shuffleCrate(id: string, name: string) {
-  const source = prefs.source || undefined;
-  const fav = favouritesOf(id);
-  const alb = favouriteAlbumsOf(id);
-  const first = await crateRows(id, 0, STRETCH, source, fav, alb);
-  const all = Math.ceil(first.total / STRETCH);
-  const picks = all <= STRETCHES ? [...Array(all).keys()] : shuffled([...Array(all).keys()]).slice(0, STRETCHES);
-  const pages = await Promise.all(picks.map((p) => (p === 0 ? first : crateRows(id, p * STRETCH, STRETCH, source, fav, alb))));
-  const tracks: LocalTrack[] = pages
-    .flatMap((p) => p.rows)
-    .filter((r: PlaylistRow) => r.id && !r.missing)
-    .map((r: PlaylistRow) => ({ source: first.source, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: r.album_id ?? null, duration_secs: r.duration_secs }));
+  const head = await crateSpan(id, 0, 1);
+  const total = head.total;
+  let rows: PlaylistRow[];
+  if (total <= SHUFFLED * 1.5) rows = (await crateSpan(id, 0, total)).rows;
+  else {
+    const slots = Math.floor(total / STRETCH);
+    const picks = shuffled([...Array(slots).keys()]).slice(0, STRETCHES);
+    rows = (await Promise.all(picks.map((k) => crateSpan(id, k * STRETCH, STRETCH)))).flatMap((p) => p.rows);
+  }
+  const tracks = shuffled(asTracks(head.source, rows)).slice(0, SHUFFLED);
   if (!tracks.length) throw new Error('Nothing in this crate to play');
-  await playPlaylistFrom(name, first.source, shuffled(tracks), 0);
+  await playPlaylistFrom(name, head.source, tracks, 0);
+}
+
+// A crate's menu's actions (decision 0058: lib/CrateMenu), from wherever it is opened: its tracks as its favourites
+// settings have it (up to MOST, as its panel's Make playlist and radio take), played, put next, queued or radio's seed.
+export async function playCrate(id: string, name: string, mode: 'play' | 'next' | 'last') {
+  const got = await crateSpan(id, 0, mode === 'play' ? SHUFFLED : PAGE_MOST);
+  const { source } = got;
+  const tracks = asTracks(source, got.rows);
+  if (!tracks.length) throw new Error('Nothing in this crate to play');
+  if (mode === 'play') return playPlaylistFrom(name, source, tracks, 0);
+  if (isLocal()) return enqueue(tracks, mode);
+  await queueTracks(
+    tracks.map((t) => t.id),
+    mode,
+    source,
+  );
+}
+/** Start radio: tracks like the crate's from the whole library (up to 300 of its tracks as the seed, decision 0036). */
+export async function crateRadio(id: string, name: string) {
+  const ids = (await crateRows(id, 0, PAGE_MOST, 'cratarr')).rows.flatMap((r) => (r.id ? [r.id] : []));
+  await startRadio(ids.length > 300 ? shuffled(ids).slice(0, 300) : ids, name);
+}
+/** One's own crate deleted, Undo bringing it back. */
+export async function deleteOwnCrate(id: string) {
+  const name = crateName(id);
+  const { undo } = await deleteCrate(id);
+  withUndo(`Deleted ${name}.`, [undo], { after: () => void loadCrates() });
+  await loadCrates();
 }
 
 /** An Exclude in the heart's sheet (lib/HeartSheet). */

@@ -52,6 +52,9 @@
     crateName,
     crateOf,
     crates,
+    crateRadio as crateRadioOf,
+    playCrate,
+    shuffleCrate,
     cycleFavouriteAlbums,
     cycleFavourites,
     EDIT_CRATE,
@@ -844,16 +847,17 @@
     navigator.vibrate?.(8);
     try {
       if (inside) return await startRadio([], title, c);
-      const ids = (await crateRows(c, 0, 1000, 'cratarr')).rows.flatMap((r) => (r.id ? [r.id] : []));
-      await startRadio(ids.length > 300 ? [...ids].sort(() => Math.random() - 0.5).slice(0, 300) : ids, title);
+      await crateRadioOf(c, title);
     } catch (e) {
       toast.fail(e, "The radio didn't start");
     }
   }
 
-  /** A crate's or an album's actions (a sorted playlist's too) work on the tracks it has shown, in the order shown (a
-   *  crate's pages so far). */
+  /** An album's actions (a sorted playlist's too) work on the tracks it has shown, in the order shown; a crate's on the
+   *  whole crate, not the pages shown so far (crates.svelte.ts: its shuffle from all of it; 500 at most). */
   async function actOnRows(mode: PlayMode) {
+    const c = crate;
+    if (c && !crateEditing) return mode === 'shuffle' ? shuffleCrate(c, title) : playCrate(c, title, mode);
     const tracks = tracksOf(shownPlayable);
     if (mode === 'play' || mode === 'shuffle') {
       const order = mode === 'shuffle' ? [...tracks].sort(() => Math.random() - 0.5) : tracks;
