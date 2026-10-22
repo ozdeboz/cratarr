@@ -1,28 +1,18 @@
-// Export's options (decision 0007, the panel's Export tab, decision 0025): kept in this browser, so they stay as they
-// were set while the selection changes, across pages and a reload.
+// Export's choices (decisions 0007 and 0058: the panel's Export tab, every menu's Export… step): kept in this browser,
+// so they stay as they were set while the selection changes, across pages and a reload.
+import { keptExport, type ExportOptions } from './exportChoices';
 
-type Options = {
-  tracks: boolean;
-  flat: boolean;
-  combine: boolean;
-  /** The combined playlist's name; it follows the selection until typed in (`named`). */
-  name: string;
-  named: boolean;
-};
 const KEY = 'cratarr-export';
-const blank = (): Options => ({ tracks: false, flat: false, combine: false, name: '', named: false });
 
-function kept(): Options {
+function kept(): ExportOptions {
   try {
-    const k = JSON.parse(localStorage.getItem(KEY) ?? 'null');
-    if (k && typeof k === 'object') return { ...blank(), ...k };
+    return keptExport(JSON.parse(localStorage.getItem(KEY) ?? 'null'));
   } catch {
-    /* nothing kept */
+    return keptExport(null);
   }
-  return blank();
 }
 
-export const exporting = $state<Options>(kept());
+export const exporting = $state<ExportOptions>(kept());
 $effect.root(() => {
   $effect(() => {
     const s = JSON.stringify(exporting);

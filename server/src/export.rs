@@ -1,51 +1,100 @@
-//! Export (decision 0007; the panel's Export tab, decision 0025): playlists, optionally with their tracks, as one
-//! download. `plan` resolves the playlists' lines to files in the Music folder (each file once, with its size and the
-//! tags a flat name needs; missing ones kept apart for the report), `layout` decides the names inside the bundle and
-//! the playlists' lines, and `stream` writes the ZIP as it goes (stored, sizes and CRCs in data descriptors, ZIP64
-//! where a size or an offset needs it), so memory does not depend on the export's size. Its exact length is known
-//! before the first byte, so the browser shows real progress.
+//! Export (decision 0007; the panel's Export tab, decision 0025; one step for every object, decision 0058): playlists,
+//! or any list of tracks (an album, a crate, a selection, a queue), as one download: the files as they are, hi-res
+//! ones at CD quality (decision 0013's converter) or lossless ones as Opus (decision 0033's copies), in one folder or
+//! in Artist/Album folders, with their playlist files or not. `plan` resolves the playlists' lines to files in the
+//! Music folder and `plan_files` takes tracks already found (each file once, with its size and what the catalogue
+//! knows of it; missing ones kept apart for the report), `layout` decides the names inside the bundle and the
+//! playlists' lines, and `stream` writes the ZIP as it goes (stored, sizes and CRCs in data descriptors, ZIP64 where a
+//! size or an offset needs it), one file at a time, so memory does not depend on the export's size. With every file as
+//! it is, its exact length is known before the first byte, so the browser shows real progress; a converted file's size
+//! is known only once it is made, so then the length is not told.
 
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::Result;
 use serde::Serialize;
 
-/// A file in the export: its path relative to the Music folder, its size, and its first artist and title tags.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Track {
-    pub rel: String,
-    pub size: u64,
+/// What the catalogue knows of a file: its first artist, title, album and album artist tags, and its format ("FLAC",
+/// "MP3", …), bit rate (kb/s) and length (ms) as read.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Facts {
     pub artist: Option<String>,
     pub title: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub format: Option<String>,
+    pub kbps: Option<u32>,
+    pub duration_ms: Option<u64>,
+}
+
+/// A file in the export: where it is read, its path in its library (the library's layout and the report name it so),
+/// its size, and what the catalogue knows of it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Track {
+    pub path: PathBuf,
+    pub rel: String,
+    pub size: u64,
+    pub facts: Facts,
 }
 
 /// The playlists (by name, each its lines as indexes into `tracks`), every file once, and the lines whose file is
 /// missing (playlist, line), which are left out.
 #[derive(Debug, Clone, Default)]
 pub struct Plan {
-    pub root: PathBuf,
     pub lists: Vec<(String, Vec<usize>)>,
     pub tracks: Vec<Track>,
     pub missing: Vec<(String, String)>,
 }
 
-#[derive(Debug, Clone, Default)]
+/// Where the tracks go inside the bundle: their paths in the library, one folder (`Artist - Title.ext`), or a folder
+/// per album artist and one per album in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Arrange {
+    #[default]
+    Library,
+    Flat,
+    Folders,
+}
+
+/// The files as they are; hi-res lossless files at CD quality (16-bit FLAC at 44.1 kHz); or lossless files as Opus at
+/// this many kb/s. Lossy files always go as they are: a second lossy pass only loses more.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Format {
+    #[default]
+    Original,
+    FlacCd,
+    Opus(u32),
+}
+
+/// The Opus bit rates offered (kb/s).
+pub const OPUS_RATES: [u32; 4] = [96, 128, 160, 256];
+
+#[derive(Debug, Clone)]
 pub struct Options {
     /// Bundle the tracks.
     pub tracks: bool,
-    /// The tracks in one folder as `Artist - Title.ext`, instead of the library's folders.
-    pub flat: bool,
+    pub arrange: Arrange,
     /// One playlist of this name instead of each (every track once, at its first place).
     pub combine: Option<String>,
+    pub format: Format,
+    /// Write the playlist files (`.m3u`); a list of tracks may go without one.
+    pub lists: bool,
 }
 
-/// What the export will hold, before starting.
+impl Default for Options {
+    fn default() -> Self {
+        Self { tracks: false, arrange: Arrange::Library, combine: None, format: Format::Original, lists: true }
+    }
+}
+
+/// What the export will hold, before starting. `bytes` only with tracks; `estimate` when it is about (a converted
+/// file's size is known only once it is made).
 #[derive(Debug, Serialize, PartialEq)]
 pub struct Preview {
     pub tracks: usize,
     pub missing: usize,
-    /// Only with tracks.
     pub bytes: Option<u64>,
+    pub estimate: bool,
 }
 
 /// Lines whose path stays inside the folder (no `..`, not absolute).
@@ -54,8 +103,8 @@ fn inside(rel: &str) -> bool {
     !rel.is_empty() && !p.is_absolute() && p.components().all(|c| matches!(c, Component::Normal(_)))
 }
 
-/// Resolves the playlists' lines (relative to `music`) to files. `tags` gives each file's (artist, title).
-pub fn plan(music: &Path, lists: Vec<(String, Vec<String>)>, tags: impl FnOnce(&[String]) -> Result<Vec<(Option<String>, Option<String>)>>) -> Result<Plan> {
+/// Resolves the playlists' lines (relative to `music`) to files. `facts` gives what the catalogue knows of each file.
+pub fn plan(music: &Path, lists: Vec<(String, Vec<String>)>, facts: impl FnOnce(&[String]) -> Result<Vec<Facts>>) -> Result<Plan> {
     let mut index = std::collections::HashMap::<String, usize>::new();
     let mut rels: Vec<(String, u64)> = Vec::new();
     let mut missing = Vec::new();
@@ -80,15 +129,40 @@ pub fn plan(music: &Path, lists: Vec<(String, Vec<String>)>, tags: impl FnOnce(&
         out.push((name, at));
     }
     let names: Vec<String> = rels.iter().map(|(r, _)| r.clone()).collect();
-    let mut facts = tags(&names)?.into_iter();
+    let mut known = facts(&names)?.into_iter();
     let tracks = rels
         .into_iter()
-        .map(|(rel, size)| {
-            let (artist, title) = facts.next().unwrap_or_default();
-            Track { rel, size, artist, title }
-        })
+        .map(|(rel, size)| Track { path: music.join(&rel), rel, size, facts: known.next().unwrap_or_default() })
         .collect();
-    Ok(Plan { root: music.to_path_buf(), lists: out, tracks, missing })
+    Ok(Plan { lists: out, tracks, missing })
+}
+
+/// One list of tracks already found (an album, a crate, a selection, a queue): each its file (where it is read, its
+/// path in its library, what is known of it), or for one not found what names it in the report. A file named twice
+/// is bundled once; one gone since it was found is missing too.
+pub fn plan_files(name: &str, found: Vec<std::result::Result<(PathBuf, String, Facts), String>>) -> Plan {
+    let mut index = std::collections::HashMap::<PathBuf, usize>::new();
+    let (mut tracks, mut at, mut missing) = (Vec::new(), Vec::new(), Vec::new());
+    for f in found {
+        match f {
+            Ok((path, rel, facts)) => {
+                if let Some(&i) = index.get(&path) {
+                    at.push(i);
+                    continue;
+                }
+                match std::fs::metadata(&path).ok().filter(|m| m.is_file()) {
+                    Some(m) => {
+                        index.insert(path.clone(), tracks.len());
+                        at.push(tracks.len());
+                        tracks.push(Track { path, rel, size: m.len(), facts });
+                    }
+                    None => missing.push((name.to_string(), rel)),
+                }
+            }
+            Err(label) => missing.push((name.to_string(), label)),
+        }
+    }
+    Plan { lists: vec![(name.to_string(), at)], tracks, missing }
 }
 
 /// The playlists as written: combined into one (each track once, at its first place), or as they are.
@@ -109,6 +183,77 @@ fn used(lists: &[(String, Vec<usize>)]) -> Vec<usize> {
     lists.iter().flat_map(|(_, at)| at.iter().copied()).filter(|i| seen.insert(*i)).collect()
 }
 
+/// What a file is, for the format chosen: lossless (and whether above CD format), or anything else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Lossless { hires: bool },
+    Other,
+}
+
+/// What happens to one file: it goes as it is, or is converted to CD-quality FLAC, or to Opus at this many kb/s.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Treatment {
+    AsIs,
+    CdFlac,
+    Opus(u32),
+}
+
+/// Per file: CD quality converts only hi-res lossless files; Opus every lossless one; anything else goes as it is.
+pub fn treatment(format: Format, kind: Kind) -> Treatment {
+    match (format, kind) {
+        (Format::FlacCd, Kind::Lossless { hires: true }) => Treatment::CdFlac,
+        (Format::Opus(kbps), Kind::Lossless { .. }) => Treatment::Opus(kbps),
+        _ => Treatment::AsIs,
+    }
+}
+
+/// What a file is, from its headers, by the converter's own test (FLAC, WAV, AIFF, ALAC). Blocking.
+pub fn kind_of(path: &Path) -> Kind {
+    match crate::convert::Source::open(path) {
+        Ok(Some(s)) => Kind::Lossless { hires: crate::convert::is_hires(s.format.sample_rate, s.format.bits_per_sample) },
+        _ => Kind::Other,
+    }
+}
+
+/// CD audio's own rate, kb/s (44.1 kHz × 16 bit × 2): a CD-format FLAC is never above it.
+const CD_KBPS: f64 = 1411.2;
+
+/// What a file is, by the catalogue's facts alone, for the preview (no file is opened): FLAC, WAV and AIFF are
+/// lossless, and so is an MP4 at 500 kb/s or more (ALAC; AAC stays far below); a lossless file above CD audio's rate
+/// is above CD format. A hi-res file that compresses below it counts as CD format here.
+pub fn kind_guessed(f: &Facts) -> Kind {
+    let kbps = f.kbps.unwrap_or(0);
+    let lossless = match f.format.as_deref() {
+        Some("FLAC" | "WAV" | "AIFF") => true,
+        Some("MP4") => kbps >= 500,
+        _ => false,
+    };
+    if lossless { Kind::Lossless { hires: f64::from(kbps) > CD_KBPS } } else { Kind::Other }
+}
+
+/// About how large a file goes out, and whether that is a guess: as it is, its size; at CD quality a hi-res file as
+/// many kb/s as `cd_kbps` (the export's own CD-format lossless files', else CD audio's rate), never more than it was;
+/// as Opus a lossless file its bit rate for its length (its cover inside not counted).
+pub fn size_out(t: &Track, format: Format, cd_kbps: f64) -> (u64, bool) {
+    let Some(ms) = t.facts.duration_ms.filter(|_| format != Format::Original) else { return (t.size, false) };
+    match treatment(format, kind_guessed(&t.facts)) {
+        Treatment::AsIs => (t.size, false),
+        Treatment::CdFlac => (((cd_kbps * ms as f64 / 8.0) as u64).min(t.size), true),
+        Treatment::Opus(kbps) => (u64::from(kbps) * ms / 8, true),
+    }
+}
+
+/// The CD-format lossless files' rate among these tracks (kb/s, by their total size over their total length), else CD
+/// audio's own.
+fn cd_kbps(tracks: &[&Track]) -> f64 {
+    let (bytes, ms) = tracks
+        .iter()
+        .filter(|t| kind_guessed(&t.facts) == Kind::Lossless { hires: false })
+        .filter_map(|t| Some((t.size, t.facts.duration_ms.filter(|d| *d > 0)?)))
+        .fold((0u64, 0u64), |(b, m), (size, d)| (b + size, m + d));
+    if ms == 0 { CD_KBPS } else { (bytes as f64 * 8.0 / ms as f64).min(CD_KBPS) }
+}
+
 pub fn preview(plan: &Plan, o: &Options) -> Preview {
     let written = lists(plan, o);
     let used = used(&written);
@@ -117,7 +262,15 @@ pub fn preview(plan: &Plan, o: &Options) -> Preview {
     } else {
         plan.missing.len()
     };
-    Preview { tracks: used.len(), missing, bytes: o.tracks.then(|| used.iter().map(|&i| plan.tracks[i].size).sum()) }
+    let tracks: Vec<&Track> = used.iter().map(|&i| &plan.tracks[i]).collect();
+    let rate = cd_kbps(&tracks);
+    let sizes: Vec<(u64, bool)> = tracks.iter().map(|t| size_out(t, o.format, rate)).collect();
+    Preview {
+        tracks: used.len(),
+        missing,
+        bytes: o.tracks.then(|| sizes.iter().map(|(b, _)| b).sum()),
+        estimate: o.tracks && sizes.iter().any(|(_, e)| *e),
+    }
 }
 
 /// A name that is safe as one file name on any system: no separators or reserved characters, no control characters,
@@ -134,13 +287,72 @@ fn unique(name: String, taken: &mut std::collections::HashSet<String>) -> String
         return name;
     }
     let (stem, ext) = match name.rfind('.') {
-        Some(i) if i > 0 => (&name[..i], &name[i..]),
+        Some(i) if i > 0 && !name[i..].contains('/') => (&name[..i], &name[i..]),
         _ => (name.as_str(), ""),
     };
     (2..)
         .map(|n| format!("{stem} ({n}){ext}"))
         .find(|c| taken.insert(c.to_lowercase()))
         .expect("an unused name")
+}
+
+/// A file's extension as it is (`flac`), or none.
+fn extension(rel: &str) -> &str {
+    Path::new(rel).extension().and_then(|e| e.to_str()).unwrap_or("")
+}
+
+/// The extension a file goes out with.
+fn extension_out<'a>(t: &'a Track, how: Treatment) -> &'a str {
+    match how {
+        Treatment::AsIs => extension(&t.rel),
+        Treatment::CdFlac => "flac",
+        Treatment::Opus(_) => "opus",
+    }
+}
+
+/// Each track's name inside the bundle, one at a time (a name taken stays taken).
+struct Namer {
+    arrange: Arrange,
+    taken: std::collections::HashSet<String>,
+}
+
+impl Namer {
+    fn new(arrange: Arrange) -> Self {
+        Self { arrange, taken: std::collections::HashSet::new() }
+    }
+
+    /// Its path in the library; `Artist - Title` in one folder; or `Album artist/Album/` and its file's own name. With
+    /// the extension it goes out with.
+    fn name(&mut self, t: &Track, ext: &str) -> String {
+        let dot = if ext.is_empty() { String::new() } else { format!(".{ext}") };
+        let stem = Path::new(&t.rel).file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled");
+        let name = match self.arrange {
+            Arrange::Library => {
+                let dir = t.rel.rfind('/').map(|i| &t.rel[..=i]).unwrap_or("");
+                format!("{dir}{stem}{dot}")
+            }
+            Arrange::Flat => {
+                let named = match (&t.facts.artist, &t.facts.title) {
+                    (Some(a), Some(ti)) => format!("{a} - {ti}"),
+                    (None, Some(ti)) => ti.clone(),
+                    _ => stem.to_string(),
+                };
+                format!("{}{dot}", safe_name(&named))
+            }
+            Arrange::Folders => {
+                let artist = t.facts.album_artist.as_ref().or(t.facts.artist.as_ref()).map(|a| safe_name(a)).unwrap_or_else(|| "Unknown artist".into());
+                // Without an album tag, the folder it is in.
+                let album = t.facts.album.as_deref().map(safe_name).or_else(|| {
+                    Path::new(&t.rel).parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()).map(safe_name)
+                });
+                match album {
+                    Some(album) => format!("{artist}/{album}/{}{dot}", safe_name(stem)),
+                    None => format!("{artist}/{}{dot}", safe_name(stem)),
+                }
+            }
+        };
+        unique(name, &mut self.taken)
+    }
 }
 
 /// What goes in the bundle: the tracks (name inside, track), the playlist files (name, contents) and the report of
@@ -152,53 +364,66 @@ pub struct Layout {
     pub report: Option<String>,
 }
 
+/// The bundle with every file as it is.
 pub fn layout(plan: &Plan, o: &Options) -> Layout {
     let written = lists(plan, o);
-    let mut taken = std::collections::HashSet::new();
-    // Each track's name inside the bundle (and so its line): its path in the library, or Artist - Title in one folder.
-    let mut inside = std::collections::HashMap::new();
+    let mut namer = Namer::new(o.arrange);
     let mut files = Vec::new();
+    let mut inside = std::collections::HashMap::new();
     for i in used(&written) {
         let t = &plan.tracks[i];
-        let name = if o.tracks && o.flat {
-            let ext = Path::new(&t.rel).extension().and_then(|e| e.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
-            let stem = match (&t.artist, &t.title) {
-                (Some(a), Some(ti)) => format!("{a} - {ti}"),
-                (None, Some(ti)) => ti.clone(),
-                _ => Path::new(&t.rel).file_stem().and_then(|s| s.to_str()).unwrap_or("Untitled").to_string(),
-            };
-            unique(format!("{}{ext}", safe_name(&stem)), &mut taken)
-        } else {
-            t.rel.clone()
-        };
+        // Without tracks the lines are the files' paths in the library.
+        let name = if o.tracks { namer.name(t, extension(&t.rel)) } else { t.rel.clone() };
         if o.tracks {
             files.push((name.clone(), i));
         }
         inside.insert(i, name);
     }
+    Layout { files, lists: list_files(&written, &inside, o), report: report(plan, o, &[]) }
+}
+
+/// The playlist files, each line the name of its track inside the bundle (`inside`).
+fn list_files(written: &[(String, Vec<usize>)], inside: &std::collections::HashMap<usize, String>, o: &Options) -> Vec<(String, String)> {
+    if !o.lists {
+        return Vec::new();
+    }
     let mut list_names = std::collections::HashSet::new();
-    let lists = written
+    written
         .iter()
         .map(|(name, at)| {
             let body: String = at.iter().map(|i| format!("{}\r\n", inside[i])).collect();
             (unique(format!("{}.m3u", safe_name(name)), &mut list_names), body)
         })
-        .collect();
-    let report = (o.tracks && !plan.missing.is_empty()).then(|| {
-        let mut r = String::from("These tracks were left out: their files are missing from the music folder.\r\n\r\n");
+        .collect()
+}
+
+/// The report: the tracks left out, and those that went as they are because they could not be converted (`kept`:
+/// path in the library, why).
+fn report(plan: &Plan, o: &Options, kept: &[(String, String)]) -> Option<String> {
+    let mut r = String::new();
+    if o.tracks && !plan.missing.is_empty() {
+        r.push_str("These tracks were left out: their files are missing from the music folder.\r\n\r\n");
         for (p, line) in &plan.missing {
             r.push_str(&format!("{p}: {line}\r\n"));
         }
-        r
-    });
-    Layout { files, lists, report }
+    }
+    if !kept.is_empty() {
+        if !r.is_empty() {
+            r.push_str("\r\n");
+        }
+        r.push_str("These tracks are as they were: they could not be converted.\r\n\r\n");
+        for (rel, why) in kept {
+            r.push_str(&format!("{rel}: {why}\r\n"));
+        }
+    }
+    (!r.is_empty()).then_some(r)
 }
 
 pub const REPORT: &str = "Missing tracks.txt";
 
 /// One playlist without tracks downloads as its `.m3u`; anything else as one `.zip`.
 pub fn is_zip(plan: &Plan, o: &Options) -> bool {
-    o.tracks || lists(plan, o).len() > 1
+    o.tracks || !o.lists || lists(plan, o).len() > 1
 }
 
 /// The download's file name.
@@ -411,111 +636,227 @@ pub fn dos_time(unix: u64) -> (u16, u16) {
     (time, date)
 }
 
-/// Each entry in order: its name and the bytes it will have (the playlists' and the report's at hand).
-enum Part {
-    File(String, usize),
-    Text(String, Vec<u8>),
-}
-
-fn parts(plan: &Plan, layout: Layout) -> Vec<Part> {
-    let mut parts: Vec<Part> = layout.lists.into_iter().map(|(n, body)| Part::Text(n, body.into_bytes())).collect();
-    if let Some(r) = layout.report {
-        parts.push(Part::Text(REPORT.into(), r.into_bytes()));
-    }
-    parts.extend(layout.files.into_iter().map(|(n, i)| Part::File(n, i)));
-    let _ = plan;
-    parts
-}
-
-/// The ZIP's exact length, before writing it.
-fn length(plan: &Plan, parts: &[Part]) -> u64 {
+/// The ZIP's exact length with every file as it is, before writing it: its tracks, then its playlists and report.
+fn length(plan: &Plan, layout: &Layout) -> u64 {
     let mut z = Zip::new(0, 0);
     let mut n = 0u64;
-    for p in parts {
-        let (name, size) = match p {
-            Part::File(name, i) => (name, plan.tracks[*i].size),
-            Part::Text(name, b) => (name, b.len() as u64),
-        };
+    let mut add = |name: &str, size: u64| {
         let (h, e) = z.begin(name, size);
         n += h.len() as u64 + size;
         n += z.finish(e, 0, size).len() as u64;
+    };
+    for (name, i) in &layout.files {
+        add(name, plan.tracks[*i].size);
+    }
+    for (name, body) in &layout.lists {
+        add(name, body.len() as u64);
+    }
+    if let Some(r) = &layout.report {
+        add(REPORT, r.len() as u64);
     }
     n + z.end().len() as u64
 }
 
 pub type Chunk = std::result::Result<axum::body::Bytes, std::io::Error>;
 
-/// Writes the ZIP into a channel as it goes (one file's chunk at a time); returns its exact length and the receiving
-/// end. A track is read for exactly the size measured in the plan: a file that changed meanwhile ends the download with
-/// an error rather than a broken bundle. A closed channel (the download was cancelled) stops the reading.
-pub fn stream(plan: Plan, layout: Layout, now_unix: u64) -> (u64, tokio::sync::mpsc::Receiver<Chunk>) {
-    let parts = parts(&plan, layout);
-    let len = length(&plan, &parts);
+/// A converted file in the work folder, removed once it has been sent (or the export stopped).
+struct Made(PathBuf);
+
+impl Drop for Made {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Converts one track into the work folder, one conversion at a time per core the copies may take
+/// (`opus_copy::COPIES`). `None` when there was nothing to convert after all.
+fn convert(t: &Track, how: Treatment, work: &Path, rt: &tokio::runtime::Handle) -> Result<Option<Made>> {
+    use anyhow::Context;
+    if how == Treatment::AsIs {
+        return Ok(None);
+    }
+    let _permit = rt.block_on(crate::opus_copy::COPIES.acquire()).context("the copies' permits are closed")?;
+    std::fs::create_dir_all(work).with_context(|| format!("creating {}", work.display()))?;
+    let mut id = [0u8; 8];
+    getrandom::fill(&mut id).map_err(|e| anyhow::anyhow!("random: {e}"))?;
+    let id: String = id.iter().map(|b| format!("{b:02x}")).collect();
+    let made = Made(work.join(format!("export-{id}.{}", extension_out(t, how))));
+    match how {
+        Treatment::AsIs => {}
+        Treatment::CdFlac => {
+            crate::convert::to_cd_flac_told(&t.path, &made.0, |_| {})?;
+        }
+        Treatment::Opus(kbps) => {
+            let file = std::fs::File::create(&made.0).with_context(|| format!("creating {}", made.0.display()))?;
+            let mut out = std::io::BufWriter::new(file);
+            if !crate::opus_copy::copy_at(&t.path, &mut out, (None, None), kbps as i32 * 1000)? {
+                return Ok(None);
+            }
+            std::io::Write::flush(&mut out)?;
+        }
+    }
+    Ok(Some(made))
+}
+
+/// Files the work folder still holds from an export that stopped half-way (Cratarr was stopped): older than an hour,
+/// so never one being made.
+fn sweep(work: &Path) {
+    let Ok(dir) = std::fs::read_dir(work) else { return };
+    let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    for e in dir.flatten() {
+        let old = e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t < hour_ago);
+        if old && e.file_name().to_string_lossy().starts_with("export-") {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// Writes the ZIP into a channel as it goes (one file's chunk at a time): the tracks, each converted first when the
+/// format asks (into `work`, then sent), then the playlists, whose lines name the tracks as they went in, and the
+/// report. Returns its exact length when every file goes as it is, and the receiving end. A track that goes as it is
+/// is read for exactly the size measured in the plan: a file that changed meanwhile ends the download with an error
+/// rather than a broken bundle. One that could not be converted goes as it is, and the report says so. A closed
+/// channel (the download was cancelled) stops it.
+pub fn stream(plan: Plan, o: Options, work: PathBuf, now_unix: u64) -> (Option<u64>, tokio::sync::mpsc::Receiver<Chunk>) {
+    let len = (o.format == Format::Original || !o.tracks).then(|| length(&plan, &layout(&plan, &o)));
     let (tx, rx) = tokio::sync::mpsc::channel::<Chunk>(4);
-    tokio::spawn(async move {
-        use tokio::io::AsyncReadExt;
+    let rt = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        let send = |b: Vec<u8>| tx.blocking_send(Ok(axum::body::Bytes::from(b))).is_ok();
+        let fail = |e: std::io::Error| {
+            let _ = tx.blocking_send(Err(e));
+        };
         let (time, date) = dos_time(now_unix);
         let mut z = Zip::new(time, date);
-        let send = |b: Vec<u8>| {
-            let tx = tx.clone();
-            async move { tx.send(Ok(axum::body::Bytes::from(b))).await.is_ok() }
-        };
-        for p in parts {
-            match p {
-                Part::Text(name, body) => {
-                    if !send(z.whole(&name, &body)).await {
-                        return;
-                    }
+        let written = lists(&plan, &o);
+        let mut namer = Namer::new(o.arrange);
+        let mut inside = std::collections::HashMap::new();
+        let mut kept = Vec::new();
+        if o.format != Format::Original {
+            sweep(&work);
+        }
+        for i in used(&written) {
+            let t = &plan.tracks[i];
+            if !o.tracks {
+                inside.insert(i, t.rel.clone());
+                continue;
+            }
+            let how = if o.format == Format::Original { Treatment::AsIs } else { treatment(o.format, kind_of(&t.path)) };
+            let made = match convert(t, how, &work, &rt) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!("Export: converting {}: {e:#}", t.path.display());
+                    kept.push((t.rel.clone(), format!("{e:#}")));
+                    None
                 }
-                Part::File(name, i) => {
-                    let t = &plan.tracks[i];
-                    let (h, e) = z.begin(&name, t.size);
-                    if !send(h).await {
-                        return;
-                    }
-                    let mut file = match tokio::fs::File::open(plan.root.join(&t.rel)).await {
-                        Ok(f) => f,
-                        Err(err) => {
-                            let _ = tx.send(Err(err)).await;
-                            return;
-                        }
-                    };
-                    let (mut crc, mut left) = (0u32, t.size);
-                    let mut buf = vec![0u8; 256 * 1024];
-                    while left > 0 {
-                        let want = left.min(buf.len() as u64) as usize;
-                        match file.read(&mut buf[..want]).await {
-                            Ok(0) => {
-                                let _ = tx.send(Err(std::io::Error::other(format!("{} changed during the export", t.rel)))).await;
-                                return;
-                            }
-                            Ok(n) => {
-                                crc = crc32(crc, &buf[..n]);
-                                left -= n as u64;
-                                if !send(buf[..n].to_vec()).await {
-                                    return;
-                                }
-                            }
-                            Err(err) => {
-                                let _ = tx.send(Err(err)).await;
-                                return;
-                            }
-                        }
-                    }
-                    if !send(z.finish(e, crc, t.size)).await {
-                        return;
-                    }
-                }
+            };
+            let (path, size, ext) = match &made {
+                Some(m) => match std::fs::metadata(&m.0) {
+                    Ok(meta) => (m.0.clone(), meta.len(), extension_out(t, how)),
+                    Err(e) => return fail(e),
+                },
+                None => (t.path.clone(), t.size, extension(&t.rel)),
+            };
+            let name = namer.name(t, ext);
+            if !entry(&mut z, &name, &path, size, &t.rel, &send, &fail) {
+                return;
+            }
+            drop(made);
+            inside.insert(i, name);
+        }
+        for (name, body) in list_files(&written, &inside, &o) {
+            if !send(z.whole(&name, body.as_bytes())) {
+                return;
             }
         }
-        let _ = send(z.end()).await;
+        if let Some(r) = report(&plan, &o, &kept)
+            && !send(z.whole(REPORT, r.as_bytes()))
+        {
+            return;
+        }
+        let _ = send(z.end());
     });
     (len, rx)
+}
+
+/// One file's entry: its header, exactly `size` bytes of it, its descriptor. False when the download stopped or failed.
+fn entry(z: &mut Zip, name: &str, path: &Path, size: u64, rel: &str, send: &impl Fn(Vec<u8>) -> bool, fail: &impl Fn(std::io::Error)) -> bool {
+    use std::io::Read;
+    let (h, e) = z.begin(name, size);
+    if !send(h) {
+        return false;
+    }
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(err) => {
+            fail(err);
+            return false;
+        }
+    };
+    let (mut crc, mut left) = (0u32, size);
+    let mut buf = vec![0u8; 256 * 1024];
+    while left > 0 {
+        let want = left.min(buf.len() as u64) as usize;
+        match file.read(&mut buf[..want]) {
+            Ok(0) => {
+                fail(std::io::Error::other(format!("{rel} changed during the export")));
+                return false;
+            }
+            Ok(n) => {
+                crc = crc32(crc, &buf[..n]);
+                left -= n as u64;
+                if !send(buf[..n].to_vec()) {
+                    return false;
+                }
+            }
+            Err(err) => {
+                fail(err);
+                return false;
+            }
+        }
+    }
+    send(z.finish(e, crc, size))
 }
 
 /// The single `.m3u` of a playlist exported without tracks.
 pub fn single_m3u(plan: &Plan, o: &Options) -> Vec<u8> {
     layout(plan, o).lists.into_iter().next().map(|(_, b)| b.into_bytes()).unwrap_or_default()
+}
+
+/// Exports prepared for a download (decision 0058: a list of tracks is too long for an address): each by a random
+/// token, for `LIFE` seconds from when it was made, at most `MOST` at once (the oldest go first).
+pub struct Tokens<T> {
+    held: std::collections::HashMap<String, (u64, T)>,
+}
+
+impl<T: Clone> Tokens<T> {
+    pub const LIFE: u64 = 600;
+    pub const MOST: usize = 64;
+
+    pub fn new() -> Self {
+        Self { held: std::collections::HashMap::new() }
+    }
+
+    pub fn put(&mut self, token: String, now: u64, v: T) {
+        self.held.retain(|_, (made, _)| now < *made + Self::LIFE);
+        while self.held.len() >= Self::MOST {
+            let Some(oldest) = self.held.iter().min_by_key(|(_, (made, _))| *made).map(|(k, _)| k.clone()) else { break };
+            self.held.remove(&oldest);
+        }
+        self.held.insert(token, (now, v));
+    }
+
+    /// The export of this token while it lasts (a download may be asked for again, as a browser does on a retry).
+    pub fn get(&self, token: &str, now: u64) -> Option<T> {
+        self.held.get(token).filter(|(made, _)| now < *made + Self::LIFE).map(|(_, v)| v.clone())
+    }
+}
+
+/// A new token: 16 random bytes, as hex.
+pub fn new_token() -> String {
+    let mut b = [0u8; 16];
+    getrandom::fill(&mut b).expect("the operating system's random source");
+    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 #[cfg(test)]
@@ -532,7 +873,9 @@ mod tests {
         pub struct Dir(pub std::path::PathBuf);
         impl Dir {
             pub fn new() -> Self {
-                let p = std::env::temp_dir().join(format!("cratarr-export-{}-{}", std::process::id(), rand()));
+                static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let p = std::env::temp_dir().join(format!("cratarr-export-{}-{}-{n}", std::process::id(), rand()));
                 std::fs::create_dir_all(&p).unwrap();
                 Dir(p)
             }
@@ -556,13 +899,17 @@ mod tests {
         v.iter().map(|s| s.to_string()).collect()
     }
 
-    fn tags(rels: &[String]) -> Result<Vec<(Option<String>, Option<String>)>> {
+    fn named(artist: &str, title: &str) -> Facts {
+        Facts { artist: Some(artist.into()), title: Some(title.into()), ..Facts::default() }
+    }
+
+    fn facts(rels: &[String]) -> Result<Vec<Facts>> {
         Ok(rels
             .iter()
             .map(|r| match r.as_str() {
-                "A - Alb/01 One.flac" => (Some("A".into()), Some("One".into())),
-                "B - Alb/01 One.mp3" => (Some("A".into()), Some("One".into())),
-                _ => (None, None),
+                "A - Alb/01 One.flac" => named("A", "One"),
+                "B - Alb/01 One.mp3" => named("A", "One"),
+                _ => Facts::default(),
             })
             .collect())
     }
@@ -578,19 +925,60 @@ mod tests {
                 ("Chill".into(), lines(&["A - Alb/01 One.flac", "Gone/x.mp3", "A - Alb/02 Two.flac"])),
                 ("Jazz/Soul".into(), lines(&["A - Alb/02 Two.flac", "B - Alb/01 One.mp3", "../outside.mp3"])),
             ],
-            tags,
+            facts,
         )
         .unwrap();
         (d, plan)
     }
 
+    /// The whole download, and the length told before it.
+    fn download(plan: Plan, o: Options, work: PathBuf) -> (Option<u64>, Vec<u8>) {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let (len, mut rx) = stream(plan, o, work, 1_791_000_000);
+            let mut all = Vec::new();
+            while let Some(c) = rx.recv().await {
+                all.extend_from_slice(&c.unwrap());
+            }
+            (len, all)
+        })
+    }
+
+    fn names(zip: &mut zip::ZipArchive<std::io::Cursor<Vec<u8>>>) -> Vec<String> {
+        (0..zip.len()).map(|i| zip.by_index(i).unwrap().name().to_string()).collect()
+    }
+
+    fn text(zip: &mut zip::ZipArchive<std::io::Cursor<Vec<u8>>>, name: &str) -> String {
+        let mut s = String::new();
+        zip.by_name(name).unwrap().read_to_string(&mut s).unwrap();
+        s
+    }
+
     #[test]
     fn a_plan_has_each_file_once_and_keeps_missing_or_outside_lines_apart() {
-        let (_d, p) = sample();
+        let (d, p) = sample();
         assert_eq!(p.tracks.iter().map(|t| t.rel.as_str()).collect::<Vec<_>>(), ["A - Alb/01 One.flac", "A - Alb/02 Two.flac", "B - Alb/01 One.mp3"]);
         assert_eq!(p.lists, vec![("Chill".to_string(), vec![0, 1]), ("Jazz/Soul".to_string(), vec![1, 2])]);
         assert_eq!(p.missing, vec![("Chill".into(), "Gone/x.mp3".into()), ("Jazz/Soul".into(), "../outside.mp3".into())]);
         assert_eq!(p.tracks[0].size, 8);
+        assert_eq!(p.tracks[0].path, d.0.join("A - Alb/01 One.flac"));
+    }
+
+    #[test]
+    fn a_list_of_tracks_has_each_file_once_and_keeps_those_not_found_apart() {
+        let d = music();
+        d.put("Alb/1.flac", b"1");
+        d.put("Alb/2.mp3", b"22");
+        let at = |rel: &str| Ok((d.0.join(rel), rel.to_string(), Facts::default()));
+        let p = plan_files("Queue", vec![at("Alb/1.flac"), Err("cratarr tr-9".into()), at("Alb/2.mp3"), at("Alb/1.flac"), at("Alb/gone.flac")]);
+        assert_eq!(p.tracks.iter().map(|t| (t.rel.as_str(), t.size)).collect::<Vec<_>>(), [("Alb/1.flac", 1), ("Alb/2.mp3", 2)]);
+        assert_eq!(p.lists, vec![("Queue".to_string(), vec![0, 1, 0])]);
+        assert_eq!(p.missing, vec![("Queue".into(), "cratarr tr-9".into()), ("Queue".into(), "Alb/gone.flac".into())]);
+        let o = Options { tracks: true, lists: false, ..Options::default() };
+        assert!(is_zip(&p, &o), "tracks without a playlist file: a zip all the same");
+        assert_eq!(download_name(&p, &o), "Queue.zip");
+        assert!(layout(&p, &o).lists.is_empty());
+        assert_eq!(preview(&p, &o), Preview { tracks: 2, missing: 2, bytes: Some(3), estimate: false });
     }
 
     #[test]
@@ -615,48 +1003,170 @@ mod tests {
         let l = layout(&p, &o);
         assert_eq!(l.lists, vec![("Both.m3u".into(), "A - Alb/01 One.flac\r\nA - Alb/02 Two.flac\r\nB - Alb/01 One.mp3\r\n".into())]);
         assert_eq!(download_name(&p, &o), "Both.m3u");
-        assert_eq!(preview(&p, &o), Preview { tracks: 3, missing: 2, bytes: None });
+        assert_eq!(preview(&p, &o), Preview { tracks: 3, missing: 2, bytes: None, estimate: false });
     }
 
     #[test]
     fn in_one_folder_tracks_are_named_artist_title_and_a_clash_gets_a_number() {
         let (_d, p) = sample();
-        let o = Options { tracks: true, flat: true, combine: None };
+        let o = Options { tracks: true, arrange: Arrange::Flat, ..Default::default() };
         let l = layout(&p, &o);
         assert_eq!(l.files.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["A - One.flac", "02 Two.flac", "A - One.mp3"]);
-        let o = Options { tracks: true, flat: true, combine: None };
         let d = music();
         d.put("x/1.mp3", b"1");
         d.put("y/1.mp3", b"2");
-        let same = plan(&d.0, vec![("p".into(), lines(&["x/1.mp3", "y/1.mp3"]))], |r| Ok(r.iter().map(|_| (Some("A".into()), Some("T".into()))).collect())).unwrap();
+        let same = plan(&d.0, vec![("p".into(), lines(&["x/1.mp3", "y/1.mp3"]))], |r| Ok(r.iter().map(|_| named("A", "T")).collect())).unwrap();
         let names: Vec<_> = layout(&same, &o).files.into_iter().map(|(n, _)| n).collect();
         assert_eq!(names, ["A - T.mp3", "A - T (2).mp3"]);
         assert_eq!(layout(&same, &o).lists[0].1, "A - T.mp3\r\nA - T (2).mp3\r\n", "the lines name the bundled files");
     }
 
     #[test]
-    fn the_zip_holds_the_playlists_the_report_and_the_tracks_and_its_length_is_known_before() {
+    fn in_artist_and_album_folders_the_album_artist_comes_first_and_the_files_keep_their_names() {
+        let t = |rel: &str, f: Facts| Track { path: PathBuf::from(rel), rel: rel.into(), size: 1, facts: f };
+        let tracks = vec![
+            t("A - Alb (1999)/01 A - One.flac", Facts { album_artist: Some("Various".into()), artist: Some("A".into()), album: Some("Alb: Live".into()), ..Facts::default() }),
+            t("B/02 B - Two.mp3", Facts { artist: Some("B".into()), ..Facts::default() }),
+            t("03 Three.mp3", Facts::default()),
+            t("Other/01 A - One.flac", Facts { album_artist: Some("various".into()), album: Some("alb: live".into()), ..Facts::default() }),
+        ];
+        let p = Plan { lists: vec![("L".into(), vec![0, 1, 2, 3])], tracks, missing: vec![] };
+        let o = Options { tracks: true, arrange: Arrange::Folders, ..Default::default() };
+        let l = layout(&p, &o);
+        assert_eq!(
+            l.files.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            ["Various/Alb_ Live/01 A - One.flac", "B/B/02 B - Two.mp3", "Unknown artist/03 Three.mp3", "various/alb_ live/01 A - One (2).flac"],
+            "no album tag: the folder it is in; no folder either: under the artist; a clash (ignoring case) gets a number"
+        );
+        assert_eq!(l.lists[0].1.lines().next(), Some("Various/Alb_ Live/01 A - One.flac"));
+    }
+
+    #[test]
+    fn each_format_says_per_file_what_happens() {
+        let hires = Kind::Lossless { hires: true };
+        let cd = Kind::Lossless { hires: false };
+        for k in [hires, cd, Kind::Other] {
+            assert_eq!(treatment(Format::Original, k), Treatment::AsIs, "{k:?}");
+        }
+        assert_eq!(treatment(Format::FlacCd, hires), Treatment::CdFlac);
+        assert_eq!(treatment(Format::FlacCd, cd), Treatment::AsIs, "CD format already");
+        assert_eq!(treatment(Format::FlacCd, Kind::Other), Treatment::AsIs, "lossy: as it is");
+        assert_eq!(treatment(Format::Opus(128), hires), Treatment::Opus(128));
+        assert_eq!(treatment(Format::Opus(128), cd), Treatment::Opus(128));
+        assert_eq!(treatment(Format::Opus(128), Kind::Other), Treatment::AsIs, "never a second lossy pass");
+        let f = |format: &str, kbps: u32| Facts { format: Some(format.into()), kbps: Some(kbps), ..Facts::default() };
+        assert_eq!(kind_guessed(&f("FLAC", 2800)), hires);
+        assert_eq!(kind_guessed(&f("FLAC", 900)), cd);
+        assert_eq!(kind_guessed(&f("WAV", 1411)), cd);
+        assert_eq!(kind_guessed(&f("MP4", 700)), cd, "ALAC");
+        assert_eq!(kind_guessed(&f("MP4", 256)), Kind::Other, "AAC");
+        assert_eq!(kind_guessed(&f("MP3", 320)), Kind::Other);
+        assert_eq!(kind_guessed(&Facts::default()), Kind::Other);
+    }
+
+    #[test]
+    fn a_converted_formats_size_is_an_estimate_from_the_catalogues_facts() {
+        let t = |format: &str, kbps: u32, size: u64| Track {
+            path: PathBuf::from("x"),
+            rel: "x".into(),
+            size,
+            facts: Facts { format: Some(format.into()), kbps: Some(kbps), duration_ms: Some(60_000), ..Facts::default() },
+        };
+        let (hi, cd, mp3) = (t("FLAC", 2800, 21_000_000), t("FLAC", 900, 6_750_000), t("MP3", 320, 2_400_000));
+        assert_eq!(size_out(&hi, Format::Original, 900.0), (21_000_000, false));
+        assert_eq!(size_out(&hi, Format::Opus(160), 900.0), (1_200_000, true), "160 kb/s for a minute");
+        assert_eq!(size_out(&mp3, Format::Opus(160), 900.0), (2_400_000, false), "lossy: as it is");
+        assert_eq!(size_out(&hi, Format::FlacCd, 900.0), (6_750_000, true), "at the CD-format files' rate");
+        assert_eq!(size_out(&cd, Format::FlacCd, 900.0), (6_750_000, false));
+        assert_eq!(size_out(&t("FLAC", 2800, 1000), Format::FlacCd, 900.0), (1000, true), "never larger than it was");
+        assert_eq!(cd_kbps(&[&hi, &cd, &mp3]), 900.0, "the CD-format lossless files' own rate");
+        assert_eq!(cd_kbps(&[&hi, &mp3]), CD_KBPS, "none: CD audio's");
+        let p = Plan { lists: vec![("L".into(), vec![0, 1, 2])], tracks: vec![hi, cd, mp3], missing: vec![] };
+        let o = |format| Options { tracks: true, format, ..Options::default() };
+        assert_eq!(preview(&p, &o(Format::FlacCd)), Preview { tracks: 3, missing: 0, bytes: Some(15_900_000), estimate: true });
+        assert_eq!(preview(&p, &o(Format::Original)).estimate, false);
+    }
+
+    #[test]
+    fn the_zip_holds_the_tracks_the_playlists_and_the_report_and_its_length_is_known_before() {
         let (_d, p) = sample();
-        let o = Options { tracks: true, flat: false, combine: None };
+        let o = Options { tracks: true, ..Default::default() };
         let l = layout(&p, &o);
         assert!(l.report.as_deref().unwrap().contains("Chill: Gone/x.mp3"));
-        assert_eq!(preview(&p, &o), Preview { tracks: 3, missing: 2, bytes: Some(19) });
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let (len, bytes) = rt.block_on(async {
-            let (len, mut rx) = stream(p, l, 1_791_000_000);
-            let mut all = Vec::new();
-            while let Some(c) = rx.recv().await {
-                all.extend_from_slice(&c.unwrap());
-            }
-            (len, all)
-        });
-        assert_eq!(len, bytes.len() as u64, "the announced length is the length sent");
+        assert_eq!(preview(&p, &o), Preview { tracks: 3, missing: 2, bytes: Some(19), estimate: false });
+        let work = music();
+        let (len, bytes) = download(p, o, work.0.clone());
+        assert_eq!(len, Some(bytes.len() as u64), "the announced length is the length sent");
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-        let names: Vec<String> = (0..zip.len()).map(|i| zip.by_index(i).unwrap().name().to_string()).collect();
-        assert_eq!(names, ["Chill.m3u", "Jazz_Soul.m3u", "Missing tracks.txt", "A - Alb/01 One.flac", "A - Alb/02 Two.flac", "B - Alb/01 One.mp3"]);
-        let mut s = String::new();
-        zip.by_name("B - Alb/01 One.mp3").unwrap().read_to_string(&mut s).unwrap();
-        assert_eq!(s, "one-mp3!", "the data is read back with its CRC checked");
+        assert_eq!(names(&mut zip), ["A - Alb/01 One.flac", "A - Alb/02 Two.flac", "B - Alb/01 One.mp3", "Chill.m3u", "Jazz_Soul.m3u", "Missing tracks.txt"]);
+        assert_eq!(text(&mut zip, "B - Alb/01 One.mp3"), "one-mp3!", "the data is read back with its CRC checked");
+    }
+
+    #[test]
+    fn as_opus_a_lossless_file_becomes_a_copy_a_lossy_one_stays_and_the_lines_name_what_went_in() {
+        let d = music();
+        std::fs::create_dir_all(d.0.join("Alb")).unwrap();
+        crate::opus_copy::tests::wav(&d.0.join("Alb/01 One.wav"), 44_100, 0.5);
+        d.put("Alb/02 Two.mp3", b"not really an mp3");
+        let found = ["Alb/01 One.wav", "Alb/02 Two.mp3"].iter().map(|r| Ok((d.0.join(r), r.to_string(), Facts { album: Some("Alb".into()), artist: Some("A".into()), ..Facts::default() }))).collect();
+        let p = plan_files("Mix", found);
+        let o = Options { tracks: true, arrange: Arrange::Folders, format: Format::Opus(96), ..Options::default() };
+        let work = music();
+        let (len, bytes) = download(p, o, work.0.clone());
+        assert_eq!(len, None, "a copy's size is known only once it is made");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(names(&mut zip), ["A/Alb/01 One.opus", "A/Alb/02 Two.mp3", "Mix.m3u"]);
+        assert_eq!(text(&mut zip, "Mix.m3u"), "A/Alb/01 One.opus\r\nA/Alb/02 Two.mp3\r\n");
+        let mut ogg = Vec::new();
+        zip.by_name("A/Alb/01 One.opus").unwrap().read_to_end(&mut ogg).unwrap();
+        assert_eq!(&ogg[..4], b"OggS");
+        assert!(ogg.len() < 20_000, "about 96 kb/s for half a second: {} bytes", ogg.len());
+        assert_eq!(std::fs::read_dir(&work.0).unwrap().count(), 0, "the copy is gone from the work folder once sent");
+    }
+
+    #[test]
+    fn at_cd_quality_a_hires_file_becomes_cd_flac_and_a_cd_one_stays() {
+        let d = music();
+        std::fs::create_dir_all(d.0.join("Alb")).unwrap();
+        crate::convert::tests::write_wav24(&d.0.join("Alb/01 Hi.wav"), 96_000, &crate::convert::tests::sine(96_000, 440.0, 0.5, 0.3, 2));
+        crate::opus_copy::tests::wav(&d.0.join("Alb/02 Cd.wav"), 44_100, 0.3);
+        let cd_size = std::fs::metadata(d.0.join("Alb/02 Cd.wav")).unwrap().len();
+        let found = ["Alb/01 Hi.wav", "Alb/02 Cd.wav"].iter().map(|r| Ok((d.0.join(r), r.to_string(), Facts::default()))).collect();
+        let p = plan_files("Hi", found);
+        let o = Options { tracks: true, format: Format::FlacCd, lists: false, ..Options::default() };
+        let work = music();
+        let (_, bytes) = download(p, o, work.0.clone());
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(names(&mut zip), ["Alb/01 Hi.flac", "Alb/02 Cd.wav"], "no playlist file asked for");
+        let mut flac = Vec::new();
+        zip.by_name("Alb/01 Hi.flac").unwrap().read_to_end(&mut flac).unwrap();
+        assert_eq!(&flac[..4], b"fLaC");
+        // STREAMINFO: 20 bits of sample rate, then 3 of channels - 1, 5 of bits - 1.
+        let info = &flac[8..];
+        let rate = (u32::from(info[10]) << 12) | (u32::from(info[11]) << 4) | (u32::from(info[12]) >> 4);
+        let bits = (((info[12] & 1) << 4) | (info[13] >> 4)) + 1;
+        assert_eq!((rate, bits), (44_100, 16));
+        assert_eq!(zip.by_name("Alb/02 Cd.wav").unwrap().size(), cd_size, "as it is");
+    }
+
+    #[test]
+    fn a_token_lasts_its_life_and_the_oldest_go_when_there_are_too_many() {
+        let mut t = Tokens::<u32>::new();
+        t.put("a".into(), 1000, 1);
+        assert_eq!(t.get("a", 1000), Some(1));
+        assert_eq!(t.get("a", 1000 + Tokens::<u32>::LIFE - 1), Some(1), "asked for again while it lasts");
+        assert_eq!(t.get("a", 1000 + Tokens::<u32>::LIFE), None, "expired");
+        assert_eq!(t.get("b", 1000), None);
+        for i in 0..Tokens::<u32>::MOST as u64 + 1 {
+            t.put(format!("t{i}"), 2000 + i, i as u32);
+        }
+        assert_eq!(t.held.len(), Tokens::<u32>::MOST);
+        assert_eq!(t.get("t0", 2100), None, "the oldest went");
+        assert_eq!(t.get("t1", 2100), Some(1));
+        assert!(!t.held.contains_key("a"), "an expired one is dropped");
+        let token = new_token();
+        assert_eq!(token.len(), 32);
+        assert_ne!(token, new_token());
     }
 
     #[test]

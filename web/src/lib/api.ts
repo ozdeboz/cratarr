@@ -519,10 +519,37 @@ export const createPlaylist = (name: string) => post<{ playlist: string } & Undo
 /** What to export (decision 0007): playlists by name, with their tracks or not, the tracks in one folder or the
  *  library's, and the playlists as they are or combined into one of this name. */
 export type ExportChoice = { playlists: string[]; tracks: boolean; flat: boolean; combine: string | null };
-/** What an export will hold, before starting: `bytes` only with tracks; missing tracks are left out. */
-export type ExportPreview = { tracks: number; missing: number; bytes: number | null };
-export const exportPreview = (c: ExportChoice) =>
+/** What Export… exports (decision 0058, lib/ExportStep): playlists by id, or a list of tracks with a name (an album, a
+ *  crate, a selection, a queue). */
+export type ExportWhat =
+  | { kind: 'playlists'; names: string[] }
+  | { kind: 'tracks'; name: string; tracks: { source: string; id: string }[] };
+/** The files as they are; hi-res ones at CD quality (16-bit FLAC, 44.1 kHz); lossless ones as Opus (lossy ones always
+ *  stay as they are). */
+export type ExportFormat = 'original' | 'flac-cd' | 'opus';
+/** One folder, or Artist/Album folders. */
+export type ExportLayout = 'flat' | 'folders';
+/** An export (decision 0058): what, its format (Opus at `bitrate` kb/s: 96, 128, 160, 256) and layout; playlists with
+ *  their tracks or only the playlist files (`tracks`), as they are or combined into one of this name; tracks with a
+ *  playlist file of them or not (`m3u`). */
+export type ExportRequest = {
+  what: ExportWhat;
+  format: ExportFormat;
+  bitrate: number;
+  layout: ExportLayout;
+  tracks: boolean;
+  combine: string | null;
+  m3u: boolean;
+};
+/** What an export will hold, before starting: `bytes` only with tracks, `estimate` when converted files make it a
+ *  guess; missing tracks are left out. */
+export type ExportPreview = { tracks: number; missing: number; bytes: number | null; estimate: boolean };
+export const exportPreview = (c: ExportChoice | ExportRequest) =>
   quietly<ExportPreview>('/api/export/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(c) });
+/** Readies an export on the server for a few minutes; its download is then a plain link (`exportDownloadUrl`). */
+export const prepareExport = (r: ExportRequest) =>
+  request<{ token: string; name: string }>('/api/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(r) });
+export const exportDownloadUrl = (token: string) => `/api/export/${encodeURIComponent(token)}`;
 /** The download itself: a link, so the browser shows its progress and can cancel it. */
 export function exportUrl(c: ExportChoice): string {
   const q = new URLSearchParams();

@@ -880,6 +880,25 @@ impl Catalogue {
         self.rows_at(source, &places)
     }
 
+    /// What the catalogue knows of each of these files (folder, rel), in order; `None` leaves the facts empty. Blocking.
+    pub fn place_rows(&self, places: &[Option<(i64, String)>]) -> Result<Vec<FileRow>> {
+        self.rows_at("", places)
+    }
+
+    /// A file's format ("FLAC", "MP3", …) and bit rate (kb/s) as read, when known: an export's estimates (decision
+    /// 0058). Blocking.
+    pub fn format_of(&self, folder: i64, rel: &str) -> (Option<String>, Option<u32>) {
+        self.db()
+            .query_row(&format!("SELECT format, bitrate FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"), params![folder, rel], |r| {
+                Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<i64>>(1)?))
+            })
+            .optional()
+            .ok()
+            .flatten()
+            .map(|(f, k)| (f, k.filter(|k| *k > 0).map(|k| k as u32)))
+            .unwrap_or((None, None))
+    }
+
     /// What the catalogue knows of each of these files of a folder, in order. Blocking.
     #[cfg(test)]
     pub fn file_rows(&self, source: &str, folder: i64, rels: &[String]) -> Result<Vec<FileRow>> {
