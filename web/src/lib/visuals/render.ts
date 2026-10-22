@@ -216,6 +216,8 @@ export class FlameRenderer {
   private showParts = new Set<string>();
   /** Show's parts' modules by type (whose values it draws with). */
   private showIds = new Map<string, string>();
+  /** The effect module on the light in its loop (its carry pass draws it), where there is one. */
+  private loopEffect: { id: string; type: string } | null = null;
   /** The light loop's modules and the Flame by type (whose values the loop and the camera take). */
   private loopIds = new Map<string, string>();
   /** The observed Show part's picture (Show's pass drawn again as far as it), at the buffer's size. */
@@ -299,7 +301,9 @@ export class FlameRenderer {
     this.showOut = stages ? (c.order.filter((n) => stageOf(n) === 'show').at(-1)?.id ?? null) : null;
     this.showParts = new Set(stages ? c.order.filter((n) => stageOf(n) === 'show').map((n) => n.type) : SHOW_PARTS.map((p) => p.type));
     this.showIds = new Map(stages ? c.order.filter((n) => stageOf(n) === 'show').map((n) => [n.type, n.id]) : []);
-    // The light loop's modules and the Flame, by type (the first of each: the one light loop until step 6).
+    const onLight = stages ? c.order.find((n) => stageOf(n) === 'carry' && fxOfModule(n.type, {})) : undefined;
+    this.loopEffect = onLight ? { id: onLight.id, type: onLight.type } : null;
+    // The light loop's modules and the Flame, by type (the first of each: the one light loop).
     this.loopIds = new Map();
     for (const m of flat.modules) if (LOOP_TYPES.has(m.type) && !this.loopIds.has(m.type)) this.loopIds.set(m.type, m.id);
     this.musicIds = new Set(flat.modules.filter((m) => m.type === 'music').map((m) => m.id));
@@ -389,8 +393,11 @@ export class FlameRenderer {
     const at = this.now();
     const since = this.shownAt ? Math.min(0.25, (at - this.shownAt) / 1000) : 0;
     this.shownAt = at;
-    // The loop slot's effect, where there is one.
-    const fxl = now?.effects;
+    // The light loop's effect: the effect module on the light in its loop, as its knobs are (none without one; the
+    // chain's loop slot where the patch is not compiled, the labs' recorded looks).
+    const onLight = this.loopEffect ? fxOfModule(this.loopEffect.type, knobsAt(this.loopEffect.id)) : null;
+    const chainFx = now?.effects;
+    const fxl = chainFx && this.compiled ? { ...chainFx, ids: [0, 0, 0], amounts: [0, 0, 0], loop: onLight?.id ?? 0, loopAmount: onLight?.amount ?? 0, loopKnobs: onLight?.k ?? ([0.5, 0.5] as [number, number]) } : chainFx;
     this.fxFrames = Math.min(4, since * 60);
     if (fxl) this.clocks.run(fxl);
     const loop =

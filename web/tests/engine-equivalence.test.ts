@@ -193,6 +193,7 @@ test("each chain module's own node values (step 5, the one engine) are today's, 
   const { BANDS } = await import('../src/lib/visuals/settings.svelte.ts');
   let checked = 0;
   let effected = 0;
+  let looped = 0;
   const { slotModules } = await import('../src/lib/visuals/engine/effect-slots.ts');
   const { settingsOfPatch } = await import('../src/lib/visuals/engine/settings-view.ts');
   const { effectsNow } = await import('../src/lib/visuals/effects.ts');
@@ -236,10 +237,18 @@ test("each chain module's own node values (step 5, the one engine) are today's, 
         own.parts.forEach((q, i) => (['turn', 'size', 'morph', 'hue', 'spread', 'weight'] as const).forEach((key) => near(q[key], d.parts[i][key], `part ${i} ${key}`)));
         // Each effect module's own (5e): what its slot was given (effectsNow over the patch as settings).
         for (const [slot, m] of slotModules(p!.modules)) {
-          if (slot === 'loop-effect') continue;
-          const i = ['fx1', 'fx2', 'fx3'].indexOf(slot);
           const old = effectsNow(settingsOfPatch(p!, s) as never, d.effects, 0, null, undefined, d.routed);
           const own = fxOfModule(m.type, f.knobs[m.id]);
+          if (slot === 'loop-effect') {
+            // The light loop's effect (6b): what the renderer's carry pass draws, from its module.
+            assert.equal(own?.id, old.loop, 'loop effect');
+            near(own?.amount, old.loopAmount, 'loop amount', 1e-6);
+            near(own?.k[0], old.loopKnobs[0], 'loop k1', 1e-6);
+            near(own?.k[1], old.loopKnobs[1], 'loop k2', 1e-6);
+            looped++;
+            continue;
+          }
+          const i = ['fx1', 'fx2', 'fx3'].indexOf(slot);
           near(own?.amount, old.amounts[i], `${slot} amount`, 1e-6); // its columns are 32-bit floats
           near(own?.k[0], old.knobs[i][0], `${slot} k1`, 1e-6); // its columns are 32-bit floats
           near(own?.k[1], old.knobs[i][1], `${slot} k2`, 1e-6); // its columns are 32-bit floats
@@ -252,9 +261,10 @@ test("each chain module's own node values (step 5, the one engine) are today's, 
   };
   const { CHAINS, chainRoutes } = await import('../src/lib/visuals/chains.ts');
   const scaled = { ...settings, shape: 1.4, rotation: 0.6, lights: 1.3, glow: 0.7, size: 0.55, saturation: 1.2, trails: 0.8, presence: 1.5, waves: 0.65, fluid: 0.6, tunnel: 0.4, dive: 0.3, haze: -0.4 } as typeof settings;
-  const effected_ = { ...settings, fx1: 2, fx1Amount: 0.7, fx1K1: 0.3, fx1K2: 0.8, fx2: 1, fx2Amount: 0.5, fx2K1: 0.6, fx2K2: 0.2, fx3: 3, fx3Amount: 0.4 } as typeof settings;
+  const effected_ = { ...settings, fx1: 2, fx1Amount: 0.7, fx1K1: 0.3, fx1K2: 0.8, fx2: 1, fx2Amount: 0.5, fx2K1: 0.6, fx2K2: 0.2, fx3: 3, fx3Amount: 0.4, fxLoop: 2, fxLoopAmount: 0.6, fxLoopK1: 0.7, fxLoopK2: 0.25 } as typeof settings;
   const variants = [settings, scaled, effected_, ...CHAINS.filter((c) => !c.extra.cables.length && !c.extra.modulators.length).map((c) => ({ ...settings, ...(c.settings ?? {}), routes: chainRoutes(c) }) as typeof settings)];
   for (const id of [TRACKS[0], TRACKS[3]]) for (const s of variants) record(checking(), track(id), s, 30, 5);
   assert.ok(checked >= 600, `${checked} frames`);
   assert.ok(effected >= 300, `${effected} effect frames`);
+  assert.ok(looped >= 100, `${looped} loop effect frames`);
 });

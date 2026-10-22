@@ -303,3 +303,18 @@ test('a patch without the flame: its compose step starts from nothing (no Show),
   assert.deepEqual([...cs.ids].sort(), ['k', 's']);
   assert.equal(composeOf(compile(patch([['screen', 'screen']], []), typeOf)), null, 'nothing reaches the Screen');
 });
+
+test('the light loop’s effect is the effect module on the light, in the carry stage (6b: found by its wiring, not its id)', async () => {
+  (globalThis as Record<string, unknown>).$state ??= <T>(v: T) => v;
+  await import('../src/lib/visuals/picture-wiring.ts');
+  const { DEFAULTS, RANGES } = await import('../src/lib/visuals/settings.svelte.ts');
+  const { cratarrTypes } = await import('../src/lib/visuals/patch.ts');
+  const { toV2, flatten } = await import('../src/lib/visuals/v2.ts');
+  const { v2Types, stageOf } = await import('../src/lib/visuals/picture-graph.ts');
+  const { fxOfModule } = await import('../src/lib/visuals/nodes/effect-runs.ts');
+  const p = flatten(toV2({ ...DEFAULTS, fxLoop: 2, fxLoopAmount: 0.6 }));
+  const c = compile(p, v2Types(cratarrTypes(RANGES, DEFAULTS)));
+  const onLight = c.order.filter((n) => stageOf(n) === 'carry' && fxOfModule(n.type, {}));
+  assert.equal(onLight.length, 1, JSON.stringify(c.order.map((n) => `${n.id}:${stageOf(n)}`)));
+  assert.ok(onLight[0].inputs.some((f) => f.type === 'light'));
+});
