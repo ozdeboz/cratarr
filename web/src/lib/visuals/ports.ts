@@ -434,8 +434,31 @@ export const INSTANCE = declared(
   'instance',
   'Instance',
   'module',
-  [knob('amount', 'Amount', 0, 1, 1, 'level')],
-  [{ id: 'points', label: 'Points', type: 'points' }, PICTURE_IN],
+  // Align, Stretch (the owner: shapes over flow grids): each copy turned with the flow at its point, drawn longer as fast.
+  [knob('amount', 'Amount', 0, 1, 1, 'level'), knob('align', 'Align', 0, 1, 0, 'level'), knob('stretch', 'Stretch', 0, 2, 0, 'level')],
+  [{ id: 'points', label: 'Points', type: 'points' }, PICTURE_IN, FLOW_IN],
+  [PICTURE_OUT],
+);
+
+/** Shape (the owner: shapes over flow grids): one shape about the frame's middle, a picture of its own (for Instance,
+ *  a Fold's windows, Mask and the rest). */
+export const SHAPES = ['circle', 'polygon', 'star', 'ring', 'line'] as const;
+export const SHAPE = declared(
+  'shape',
+  'Shape',
+  'module',
+  [
+    knob('kind', 'Shape', 0, SHAPES.length - 1, 1, 'step'),
+    knob('sides', 'Sides', 3, 12, 6, 'step'),
+    knob('size', 'Size', 0.01, 1, 0.1),
+    knob('turn', 'Turn', -1, 1, 0),
+    knob('width', 'Width', 0.01, 0.5, 0.15),
+    knob('softness', 'Softness', 0, 1, 0.05),
+    knob('hue', 'Hue', 0, 1, 0.55),
+    knob('saturation', 'Saturation', 0, 1, 0.4, 'level'),
+    knob('brightness', 'Brightness', 0, 3, 1, 'level'),
+  ],
+  [],
   [PICTURE_OUT],
 );
 
@@ -553,7 +576,7 @@ export const STREAMLINES = declared(
  *  far as Amount, so what it shows smears and swirls the way the flow goes. */
 export const PUSH = declared('push', 'Push', 'module', [knob('amount', 'Amount', 0, 1, 0.3, 'level')], [PICTURE_IN, FLOW_IN], [PICTURE_OUT]);
 
-export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD, LENS, TRANSFORM, STREAMLINES, PUSH];
+export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD, LENS, TRANSFORM, STREAMLINES, PUSH, SHAPE];
 
 /** The Randomize scopes (0057 §4d), in the dice's menu's order. */
 // New ones last: a Dice keeps its scope as its place here.

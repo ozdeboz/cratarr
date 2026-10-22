@@ -126,9 +126,10 @@ function node(gl: WebGL2RenderingContext, draw: Draw, dispose: () => void): Modu
   };
 }
 
-/** Instance: its picture at each point. */
+/** Instance: its picture at each point, each copy turned with the flow there (Align) and drawn longer as it goes faster
+ *  (Stretch): a Field cabled in, else the Fluid's. */
 export function createInstance(gl: WebGL2RenderingContext): ModuleNode {
-  const p = program(gl, QUAD, TILE);
+  const p = program(gl, INSTANCE_QUAD, TILE);
   const data = new Float32Array(MOST * 2);
   const buffer = gl.createBuffer()!;
   const vao = gl.createVertexArray()!;
@@ -140,9 +141,10 @@ export function createInstance(gl: WebGL2RenderingContext): ModuleNode {
   gl.vertexAttribDivisor(0, 1);
   gl.bindVertexArray(null);
   gl.bindBuffer(gl.ARRAY_BUFFER, null);
-  return node(
-    gl,
-    (gl, picture, out, width, height, knobs, points) => {
+  return {
+    draw: (gl, inputs, out, width, height, knobs, _frame, given) => {
+      const picture = inputs.picture;
+      const points = given ?? null;
       gl.bindFramebuffer(gl.FRAMEBUFFER, out);
       gl.viewport(0, 0, width, height);
       gl.clearColor(0, 0, 0, 0);
@@ -151,6 +153,13 @@ export function createInstance(gl: WebGL2RenderingContext): ModuleNode {
       const amount = knobs.amount ?? 1;
       if (!n || !(amount > 0) || !picture) return;
       gl.useProgram(p);
+      const align = knobs.align ?? 0;
+      const stretch = knobs.stretch ?? 0;
+      const flowing = !!inputs.field && (align > 0 || stretch > 0);
+      if (flowing) setFlow(gl, p, inputs.field!, 1, width, height);
+      gl.uniform1i(gl.getUniformLocation(p, 'uFlowing'), flowing ? 1 : 0);
+      gl.uniform1f(gl.getUniformLocation(p, 'uAlign'), align);
+      gl.uniform1f(gl.getUniformLocation(p, 'uStretch'), stretch);
       gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, data, 0, n * 2);
       gl.bindBuffer(gl.ARRAY_BUFFER, null);
@@ -168,12 +177,12 @@ export function createInstance(gl: WebGL2RenderingContext): ModuleNode {
       gl.blendEquation(gl.FUNC_ADD);
       gl.disable(gl.BLEND);
     },
-    () => {
+    dispose: () => {
       gl.deleteProgram(p);
       gl.deleteBuffer(buffer);
       gl.deleteVertexArray(vao);
     },
-  );
+  };
 }
 
 /** Fold: its picture folded by its mode, about the middle or each point of its grid. */
@@ -255,6 +264,103 @@ vec2 flowAt(vec2 p) {
 }`;
 
 const ONE_WAVES = [1, 1, 1, 1, 1, 1];
+
+// Instance's quads: each a cell of the points' spacing about its point, the picture's middle at that size in it; with a
+// flow, turned the way it goes there (as far as Align takes it) and drawn longer along it as fast as it goes (Stretch).
+const INSTANCE_QUAD = `#version 300 es
+precision highp float;
+layout(location = 0) in vec2 aAt;
+uniform float uHalf;
+uniform float uAlign;
+uniform float uStretch;
+uniform int uFlowing;
+${FLOW_AT}
+out vec2 vUv;
+void main() {
+  vec2 c = vec2(float(gl_VertexID & 1), float((gl_VertexID >> 1) & 1)) * 2.0 - 1.0;
+  vUv = c * uHalf * uK * 0.5 + 0.5;
+  vec2 q = c * uHalf;
+  if (uFlowing == 1) {
+    vec2 v = flowAt(aAt);
+    float sp = length(v);
+    q.x *= 1.0 + uStretch * sp;
+    float a = sp > 0.00001 ? uAlign * atan(v.y, v.x) : 0.0;
+    q = vec2(cos(a) * q.x - sin(a) * q.y, sin(a) * q.x + cos(a) * q.y);
+  }
+  gl_Position = vec4((aAt + q) * uK, 0.0, 1.0);
+}`;
+
+// Shape (the owner: shapes over flow grids): one shape about the frame's middle by its signed distance (a circle, a
+// polygon of Sides, a star of Sides points, a ring, a line), Size its radius in the frame's units (the short side -1..1),
+// turned by Turn, Width a ring's or line's thickness and a star's depth (of Size), its edge Softness soft; in a colour.
+const SHAPE = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform vec2 uK;
+uniform int uKind;
+uniform float uSides;
+uniform float uSize;
+uniform float uTurn;
+uniform float uWidth;
+uniform float uSoft;
+uniform vec3 uColour;
+out vec4 o;
+const float PI = 3.14159265;
+void main() {
+  vec2 p = (vUv * 2.0 - 1.0) / uK;
+  float c = cos(uTurn), s = sin(uTurn);
+  p = vec2(c * p.x + s * p.y, -s * p.x + c * p.y);
+  float n = max(3.0, floor(uSides + 0.5));
+  float r = uSize;
+  float an = PI / n;
+  float b = mod(atan(p.y, p.x) + an, 2.0 * an) - an;
+  float d;
+  if (uKind == 0) d = length(p) - r;
+  else if (uKind == 1) d = length(p) * cos(b) - r * cos(an);
+  else if (uKind == 2) d = length(p) - r * mix(clamp(1.0 - uWidth * 3.0, 0.15, 0.95), 1.0, 1.0 - abs(b) / an);
+  else if (uKind == 3) d = abs(length(p) - r) - uWidth * r;
+  else d = length(p - vec2(clamp(p.x, -r, r), 0.0)) - uWidth * r;
+  float edge = max(fwidth(d), uSoft * r);
+  float a = 1.0 - smoothstep(-edge, edge, d);
+  o = vec4(uColour * a, a);
+}`;
+
+/** A hue, its saturation and a brightness as RGB (the shaders' hsv: white at saturation 0). */
+const colourOf = (hue: number, sat: number, bright: number): [number, number, number] =>
+  [0, 4, 2].map((o) => {
+    const c = Math.min(1, Math.max(0, Math.abs((((hue * 6 + o) % 6) + 6) % 6 - 3) - 1));
+    return (1 + (c - 1) * sat) * bright;
+  }) as [number, number, number];
+
+/** Shape: one shape, a picture of its own. */
+export function createShape(gl: WebGL2RenderingContext): ModuleNode {
+  const p = program(gl, FULL_UV, SHAPE);
+  const vao = gl.createVertexArray()!;
+  return {
+    draw: (gl, _inputs, out, width, height, knobs) => {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, out);
+      gl.viewport(0, 0, width, height);
+      gl.disable(gl.BLEND);
+      gl.useProgram(p);
+      const u = (name: string) => gl.getUniformLocation(p, name);
+      gl.uniform2f(u('uK'), ...toScreen(width / height));
+      gl.uniform1i(u('uKind'), Math.round(knobs.kind ?? 1));
+      gl.uniform1f(u('uSides'), knobs.sides ?? 6);
+      gl.uniform1f(u('uSize'), knobs.size ?? 0.1);
+      gl.uniform1f(u('uTurn'), Math.PI * (knobs.turn ?? 0));
+      gl.uniform1f(u('uWidth'), knobs.width ?? 0.15);
+      gl.uniform1f(u('uSoft'), knobs.softness ?? 0.05);
+      gl.uniform3f(u('uColour'), ...colourOf(knobs.hue ?? 0.55, knobs.saturation ?? 0.4, knobs.brightness ?? 1));
+      gl.bindVertexArray(vao);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.bindVertexArray(null);
+    },
+    dispose: () => {
+      gl.deleteProgram(p);
+      gl.deleteVertexArray(vao);
+    },
+  };
+}
 
 /** The flow's uniforms for a program with FLOW_AT, its texture on unit `unit`. */
 function setFlow(gl: WebGL2RenderingContext, p: WebGLProgram, field: FlowField, unit: number, width: number, height: number) {
@@ -424,4 +530,4 @@ export function createPush(gl: WebGL2RenderingContext): ModuleNode {
 }
 
 /** The module types drawn here. */
-export const POINTS_NODES: Readonly<Record<string, (gl: WebGL2RenderingContext) => ModuleNode>> = { instance: createInstance, fold: createFold, streamlines: createStreamlines, push: createPush };
+export const POINTS_NODES: Readonly<Record<string, (gl: WebGL2RenderingContext) => ModuleNode>> = { instance: createInstance, fold: createFold, streamlines: createStreamlines, push: createPush, shape: createShape };
