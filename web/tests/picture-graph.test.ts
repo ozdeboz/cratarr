@@ -200,6 +200,23 @@ test('the pool: a line of modules needs two targets; one read twice is kept till
   assert.equal(f.pool.size, 3, "a's kept while k1 and k2 draw");
 });
 
+test('the observed module’s target is pinned: out of the pool until the caller has read it, then given back', () => {
+  const line = compile(patch([['a', 'shapes'], ['k1', 'kaleid'], ['k2', 'kaleid'], ['k3', 'kaleid'], ['screen', 'screen']], [cable('a', 'k1'), cable('k1', 'k2'), cable('k2', 'k3'), cable('k3', 'screen')]), typeOf);
+  const h = harness();
+  const state = newWalkState<T>();
+  const p = plan(line, { knobs: knobs() });
+  walk(p, h.pool, h.io(), state, new Map(), 'k1');
+  assert.equal(state.pinned?.holds, 'k1', "k1's picture, not drawn over by k3");
+  assert.equal(h.pool.size, 3, 'one target more while pinned');
+  h.pool.give(state.pinned!);
+  walk(p, h.pool, h.io(), state);
+  assert.equal(state.pinned, null, 'nothing pinned: nothing kept');
+  assert.equal(h.pool.size, 3, 'no target leaks');
+  // The walk's last picture is read after it anyway: not the caller's to give back.
+  walk(p, h.pool, h.io(), state, new Map(), 'screen');
+  assert.equal(state.pinned, null);
+});
+
 test('a Feedback adopts its input’s target (no copy), gives back the last; copies one that is not the pool’s', () => {
   const loop = compile(
     patch(

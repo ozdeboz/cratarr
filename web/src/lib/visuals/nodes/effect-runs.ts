@@ -1,8 +1,9 @@
 // The effects in the compose step's walk (decision 0057 §3): each effect a module (an `fx-<name>`, or an engine on one of
 // its effects), and a line of them, each read only by the next, drawn as one pass (effects.ts pictureShader: up to
-// three). An Echo whose trail is a Feedback's (Feedback → Echo → a Mix keeping the brighter beside the picture) is drawn
-// in that pass, the Feedback read as its trail. Pure: the walk is rewritten so that each run is one module (at its
-// last step's place, reading the run's picture and its Echo's trail) before the lazy rules and the pool see it.
+// three). An Echo trails its visible Feedback (Feedback → Echo → a Mix keeping the brighter beside the picture), drawn
+// in that pass, the Feedback read as its trail; one with none trails nothing (no hidden trail of its own). Pure: the
+// walk is rewritten so that each run is one module (at its last step's place, reading the run's picture and its Echo's
+// trail) before the lazy rules and the pool see it.
 import { effectOf, ENGINES, engineEffect, MOST_PICTURE, type Effect, type Knobs } from '../effects';
 import { effectKnobIds, effectOfType } from '../effect-modules';
 import { engineOf } from '../engine-module';
@@ -12,8 +13,8 @@ import type { PictureNode } from '../picture-graph';
 export type Fx = { id: number; amount: number; k: Knobs };
 
 /** A run drawn as one pass, by its last step's id: its effects' modules in the line's order, the Feedback its Echo
- *  trails (the run's `trails` input), whether an Echo keeps its own trail instead. */
-export type Run = { fx: string[]; trails: string | null; own: boolean };
+ *  trails (the run's `trails` input). */
+export type Run = { fx: string[]; trails: string | null };
 
 const HALF: Knobs = [0.5, 0.5];
 
@@ -32,8 +33,8 @@ export function fxOfModule(type: string, knobs: Record<string, number>): Fx | nu
 export const slotOf = (e: Effect) => ENGINES.findIndex((x) => x.key === e.engine);
 
 /** The effects' runs of `order` (`fx`: each module's effect, null for none), and the order with each run one module
- *  (type `fx-run`). */
-export function effectRuns(order: PictureNode[], fx: (n: PictureNode) => Fx | null): { runs: Map<string, Run>; order: PictureNode[] } {
+ *  (type `fx-run`). `barrier`: the module observed, which ends a run (its picture its own). */
+export function effectRuns(order: PictureNode[], fx: (n: PictureNode) => Fx | null, barrier: string | null = null): { runs: Map<string, Run>; order: PictureNode[] } {
   const byId = new Map(order.map((n) => [n.id, n]));
   const isFx = new Set(order.filter((n) => fx(n)).map((n) => n.id));
   const readers = new Map<string, number>();
@@ -45,20 +46,20 @@ export function effectRuns(order: PictureNode[], fx: (n: PictureNode) => Fx | nu
     if (m.type !== 'mix' || m.inputs.length !== 2 || !m.inputs.some((f) => f.port === 'in1')) continue;
     const e = byId.get(m.inputs.find((f) => f.port === 'in2')?.from.module ?? '');
     const fb = e && e.inputs.length === 1 ? byId.get(e.inputs[0].from.module) : undefined;
-    if (e && fb?.type === 'feedback' && isFx.has(e.id) && kind(e.id) === 'echo') echoAt.set(m.id, { echo: e.id, feedback: fb.id });
+    // Not the Echo observed (a barrier): its own pass, then the Mix.
+    if (e && fb?.type === 'feedback' && isFx.has(e.id) && kind(e.id) === 'echo' && e.id !== barrier) echoAt.set(m.id, { echo: e.id, feedback: fb.id });
   }
   const looped = new Set([...echoAt.values()].map((x) => x.echo));
   const main = (n: PictureNode) => n.inputs.find((f) => f.port === (echoAt.has(n.id) ? 'in1' : 'picture'));
   const isStep = (n: PictureNode) => echoAt.has(n.id) || (isFx.has(n.id) && !looped.has(n.id) && n.inputs.length === 1 && !!main(n));
-  // The lines: a step goes on from the one before where that one is read by it alone, up to three a pass; an Echo
-  // keeping its own trail ends one (what comes after it is not in its trail), unless it is at nothing.
+  // The lines: a step goes on from the one before where that one is read by it alone, up to three a pass.
   const groups: string[][] = [];
   const groupOf = new Map<string, string[]>();
   for (const n of order) {
     if (!isStep(n)) continue;
     const from = main(n)!.from.module;
     const before = groupOf.get(from);
-    const goesOn = before && before[before.length - 1] === from && before.length < MOST_PICTURE && readers.get(from) === 1 && !(kind(from) === 'echo' && (fx(byId.get(from)!)?.amount ?? 0) > 0);
+    const goesOn = before && before[before.length - 1] === from && from !== barrier && before.length < MOST_PICTURE && readers.get(from) === 1;
     const group = goesOn ? before : (groups.push([]), groups[groups.length - 1]);
     group.push(n.id);
     groupOf.set(n.id, group);
@@ -67,7 +68,7 @@ export function effectRuns(order: PictureNode[], fx: (n: PictureNode) => Fx | nu
   const steps = new Map<string, string[]>();
   const add = (group: string[], trails: string | null) => {
     const ids = group.map((s) => echoAt.get(s)?.echo ?? s);
-    runs.set(group[group.length - 1], { fx: ids, trails, own: !trails && ids.some((s) => kind(s) === 'echo') });
+    runs.set(group[group.length - 1], { fx: ids, trails });
     steps.set(group[group.length - 1], group);
   };
   for (const group of groups) {

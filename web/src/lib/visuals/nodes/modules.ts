@@ -1,8 +1,8 @@
 // The picture modules a patch wires freely (decision 0057 §4, §5, §6b), each one pass from its picture (and `by`, a
 // second picture, where it takes one) into a target: Glow (its own light spread round it), Tint (its colours the
 // hue of `by` round it), Mask (dimmed where `by` is not: 70.1's window), Displace (read where `by` pushes it),
-// Threshold (only its bright parts: Bloom's), Blur and Bend on a picture (on the light they are Show's own pass), and
-// Warp and Keep on their own, Transform on a picture (transform.ts).
+// Threshold (only its bright parts: Bloom's), Blur, Bend, Curve and Saturate on a picture (on the light they are
+// Show's own pass), and Warp and Keep on their own, Transform on a picture (transform.ts).
 // Glow's, Tint's and Mask's maths are the Mix's (compose.ts), so a module drawn there or here gives the same. Taps one
 // by one, no arrays, level-0 reads where the read is moved (the Mali rules).
 import type { FrameInfo, PictureModule } from '../patch';
@@ -12,9 +12,10 @@ import { keptPerSecond } from '../loopmods';
 import { inverse, toScreen, transformOf } from '../transform';
 import { none } from './shared';
 
-/** A module's pass: its picture inputs by port (`picture`, `by`), drawn into `out` at `width` × `height`. */
+/** A module's pass: its picture inputs by port (`picture`, `by`), drawn into `out` at `width` × `height`; the points
+ *  cabled into it (Instance's, Fold's grid: points-pictures.ts), where it reads them. */
 export type ModuleNode = {
-  draw(gl: WebGL2RenderingContext, inputs: { picture: WebGLTexture | null; by?: WebGLTexture | null }, out: WebGLFramebuffer, width: number, height: number, knobs: Record<string, number>, frame: FrameInfo): void;
+  draw(gl: WebGL2RenderingContext, inputs: { picture: WebGLTexture | null; by?: WebGLTexture | null }, out: WebGLFramebuffer, width: number, height: number, knobs: Record<string, number>, frame: FrameInfo, points?: readonly { x: number; y: number }[] | null): void;
   dispose(gl: WebGL2RenderingContext): void;
 };
 
@@ -153,6 +154,31 @@ void main() {
   o = textureLod(uIn, uv, 0.0);
 }`,
     uniforms: (k, frame) => ({ uWave: [WAVE_BEND * (k.waves ?? 0), 1, 0, frame.time], uWaveK: WAVE_K }),
+  },
+  // Curve on a picture (Show's Haze as a module of its own): Show's gamma is 3 × 2^haze, so on a picture already shown
+  // at 3 the rest of it, 2^haze; below 0 a floor too, the faintest (by brightness) black.
+  curve: {
+    glsl: `uniform float uGamma;
+uniform float uFloor;
+void main() {
+  vec4 b = texture(uIn, vUv);
+  vec3 c = pow(max(b.rgb, 0.0), vec3(1.0 / uGamma));
+  if (uFloor > 0.0) c *= smoothstep(0.5 * uFloor, 2.0 * uFloor, luma(c));
+  o = vec4(c, b.a);
+}`,
+    uniforms: (k) => {
+      const h = Math.min(1, Math.max(-1, k.haze ?? 0));
+      return { uGamma: 2 ** h, uFloor: h < 0 ? 0.15 * -h : 0 };
+    },
+  },
+  // Saturate on a picture: towards its grey of the same brightness (Show's weights), or past its colour; at 0 as it is.
+  saturate: {
+    glsl: `uniform float uSaturation;
+void main() {
+  vec4 b = texture(uIn, vUv);
+  o = vec4(mix(vec3(dot(b.rgb, vec3(0.299, 0.587, 0.114))), b.rgb, uSaturation), b.a);
+}`,
+    uniforms: (k) => ({ uSaturation: Math.max(0, 1 + (k.saturation ?? 0)) }),
   },
   // Warp and Keep on their own (the picture's own loop as modules: compose.ts draws the usual loop in one pass): the
   // picture read where the Warp moves it from about the middle (a second's worth at full: half again larger or

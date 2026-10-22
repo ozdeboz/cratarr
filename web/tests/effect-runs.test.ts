@@ -1,5 +1,5 @@
 // The effects in the walk (nodes/effect-runs.ts, decision 0057 §3): a line of effect modules drawn as one pass, up to
-// three; an Echo trailing its Feedback, or its own last picture; the pass's effects in today's order: npm test.
+// three; an Echo trailing its visible Feedback (none: nothing); the pass's effects in today's order: npm test.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -22,18 +22,16 @@ const line = (fx: [string, number, number][]) => {
   return { nodes, fx: (n: Node) => fxOfModule(n.type, knobs.get(n.id) ?? {}) };
 };
 
-test('a line of effects is one pass at its last, from its first one’s picture; an Echo keeps its own trail', () => {
+test('a line of effects is one pass at its last, from its first one’s picture; an Echo with no Feedback trails nothing', () => {
   const { nodes, fx } = line([['a', ROTATE, 1], ['b', PULSE, 1], ['c', ECHO, 1]]);
   const { runs, order } = effectRuns(nodes, fx);
-  assert.deepEqual([...runs], [['c', { fx: ['a', 'b', 'c'], trails: null, own: true }]]);
+  assert.deepEqual([...runs], [['c', { fx: ['a', 'b', 'c'], trails: null }]]);
   assert.deepEqual(order.map((n) => [n.id, n.type, n.inputs.map((f) => f.from.module)]), [['layers', 'mix', []], ['c', 'fx-run', ['layers']], ['screen', 'screen', ['c']]]);
 });
 
-test('an Echo keeping its own trail ends a run, unless it is at nothing; a run holds three at most', () => {
+test('no Echo keeps a hidden trail, so none ends a run; a run holds three at most', () => {
   const ends = line([['c', ECHO, 1], ['b', PULSE, 1], ['a', ROTATE, 1]]);
-  assert.deepEqual([...effectRuns(ends.nodes, ends.fx).runs.values()].map((r) => r.fx), [['c'], ['b', 'a']]);
-  const none = line([['c', ECHO, 0], ['b', PULSE, 1], ['a', ROTATE, 1]]);
-  assert.deepEqual([...effectRuns(none.nodes, none.fx).runs.values()].map((r) => r.fx), [['c', 'b', 'a']]);
+  assert.deepEqual([...effectRuns(ends.nodes, ends.fx).runs.values()].map((r) => r.fx), [['c', 'b', 'a']]);
   const four = line([['a', ROTATE, 1], ['b', PULSE, 1], ['c', ECHO, 1], ['d', ROTATE, 1]]);
   assert.deepEqual([...effectRuns(four.nodes, four.fx).runs.values()].map((r) => r.fx), [['a', 'b', 'c'], ['d']]);
 });
@@ -61,4 +59,10 @@ test("an engine's module is its effect, its knobs k1 and k2; an effect's module 
   const [n1] = e.knobs.map((k) => k.label.toLowerCase());
   assert.deepEqual(fxOfModule(typeOf(PULSE), { amount: 1, [n1]: 0.9 })?.k[0], 0.9);
   assert.equal(fxOfModule('glow', {}), null);
+});
+
+test('the module observed is a barrier: its run ends at it, so its picture is its own', () => {
+  const { nodes, fx } = line([['a', ROTATE, 1], ['b', PULSE, 1], ['c', ROTATE, 1]]);
+  assert.deepEqual([...effectRuns(nodes, fx, 'b').runs.values()].map((r) => r.fx), [['a', 'b'], ['c']]);
+  assert.deepEqual([...effectRuns(nodes, fx, null).runs.values()].map((r) => r.fx), [['a', 'b', 'c']]);
 });

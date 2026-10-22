@@ -28,8 +28,9 @@ const isPictureType = (t: PortType | undefined): t is PictureType => t === 'pict
 /** One picture input of a module: its port and type, and the output feeding it. */
 export type Feed = { port: string; type: PictureType; from: PortRef };
 
-/** A module of the picture graph: its picture inputs in the order its type declares them. */
-export type PictureNode = { id: string; type: string; inputs: Feed[] };
+/** A module of the picture graph: its picture inputs in the order its type declares them; `shown`: a part of Show's
+ *  on a picture fused into Show's pass (compile). */
+export type PictureNode = { id: string; type: string; inputs: Feed[]; shown?: true };
 
 export type Compiled = {
   /** What reaches the Screen, in the order it is drawn. */
@@ -47,38 +48,49 @@ export function v2Types(chain: readonly ModuleType[]): TypeOf {
   return (t) => all.get(t);
 }
 
-/** The passes this version draws a picture graph with, in their order: the flame's own loop on its light, its points,
- *  Show's device, the compose step (the layers, the effects, the picture's own loop), the screen; each fused into
- *  one as today's renderer draws it. */
+/** The passes a picture graph is drawn with, in their order: the flame's own loop on its light, its points, Show's
+ *  pass (what takes the light, and the parts on a picture fused into it), the compose step (every other picture
+ *  module), the screen. A module's pass is by what it takes, not where it stands: `stagesOf`. */
 export const STAGES = ['carry', 'points', 'show', 'compose', 'screen'] as const;
 export type Stage = (typeof STAGES)[number];
 const SHOWN = new Set(SHOW_PARTS.map((p) => p.type));
 
-/** The pass a module is drawn in (none for a Feedback: it keeps a picture, it draws none). */
+/** The pass a module is drawn in, by what it takes (none for a Feedback: it keeps a picture, it draws none). Show's
+ *  are what take the light (Bend and Blur on it, Tone map) and the parts on a picture fused after them (`shown`);
+ *  Bend, Blur, Curve and Saturate on any other picture are modules like the rest. */
 export function stageOf(n: PictureNode): Stage | null {
   if (n.type === 'feedback') return null;
-  if (LIGHT_CARRIERS.has(n.type) || (effectOfType(n.type) && n.inputs.some((f) => f.type === 'light'))) return 'carry';
+  const light = n.inputs.some((f) => f.type === 'light');
+  if (LIGHT_CARRIERS.has(n.type) || (effectOfType(n.type) && light)) return 'carry';
   // A Transform on the light is the points' camera's view (transform.ts): drawn as they land.
   if (LIGHT_ROLES.points.has(n.type) || (n.type === 'transform' && n.inputs[0]?.type === 'light')) return 'points';
-  if (SHOWN.has(n.type)) return 'show';
+  if (n.shown || (SHOWN.has(n.type) && (light || LIGHT_ROLES.tonemap.has(n.type)))) return 'show';
   if (n.type === 'screen') return 'screen';
   return 'compose';
 }
 
-/** The stages a compiled graph needs, or null where its modules are not in their order (not drawn in this version). */
-export function stagesOf(c: Compiled): Stage[] | null {
-  const stage = stageOf;
-  const out: Stage[] = [];
-  let at = 0;
+/** Why a compiled graph cannot be drawn in its passes (a module reading one drawn in a later pass: a picture into
+ *  the light), or null. */
+export function stageRefusal(c: Compiled): string | null {
+  const byId = new Map(c.order.map((n) => [n.id, n]));
   for (const n of c.order) {
-    const s = stage(n);
+    const s = stageOf(n);
     if (!s) continue;
-    const i = STAGES.indexOf(s);
-    if (i < at) return null;
-    at = i;
-    if (out.at(-1) !== s) out.push(s);
+    for (const f of n.inputs) {
+      const from = byId.get(f.from.module);
+      const fs = from && stageOf(from);
+      if (fs && STAGES.indexOf(fs) > STAGES.indexOf(s)) return `${n.id} takes ${from.id}'s picture, drawn after it: not drawn.`;
+    }
   }
-  return out;
+  return null;
+}
+
+/** The stages a compiled graph needs, in their order, or null where one of its modules reads another drawn in a later
+ *  pass (`stageRefusal`). */
+export function stagesOf(c: Compiled): Stage[] | null {
+  if (stageRefusal(c)) return null;
+  const used = new Set(c.order.map(stageOf));
+  return STAGES.filter((s) => used.has(s));
 }
 
 /** An output's key: `module.port`. */
@@ -195,7 +207,26 @@ export function compile(patch: PatchV2, typeOf: TypeOf): Compiled {
   // What is left out is left out of what reads it too.
   const out = new Set([...reached.keys()].filter((id) => !placed.has(id) || light.refused.has(id)));
   order = order.filter((n) => !out.has(n.id)).map((n) => ({ ...n, inputs: n.inputs.filter((f) => !out.has(f.from.module)) }));
-  return { order, screen, errors };
+  return { order: showFused(order), screen, errors };
+}
+
+/** `order` with Show's parts on a picture that follow straight on from Tone map in Show's own order (Curve, then
+ *  Saturate), each read by the next alone, marked `shown`: drawn in Show's pass, as one. */
+function showFused(order: PictureNode[]): PictureNode[] {
+  const place = (t: string) => SHOW_PARTS.findIndex((p) => p.type === t);
+  const readers = (id: string) => order.filter((n) => n.inputs.some((f) => f.from.module === id));
+  const fused = new Set<string>();
+  for (const t of order.filter((n) => LIGHT_ROLES.tonemap.has(n.type))) {
+    let at = t;
+    for (;;) {
+      const r = readers(at.id);
+      const next = r.length === 1 && r[0].inputs.length === 1 && SHOWN.has(r[0].type) ? r[0] : null;
+      if (!next || place(next.type) <= place(at.type)) break;
+      fused.add(next.id);
+      at = next;
+    }
+  }
+  return fused.size ? order.map((n) => (fused.has(n.id) ? { ...n, shown: true as const } : n)) : order;
 }
 
 /** Whether `to` is reached from `from` along `after` (not through `cut`). */
@@ -411,15 +442,17 @@ export type WalkIO<T> = {
 };
 
 /** What a walk keeps from one frame to the next: each Feedback's picture (`pooled`: the pool's, given back when the
- *  next replaces it). A resize clears it, with the pool. */
-export type WalkState<T> = { held: Map<string, { t: T; pooled: boolean }> };
-export const newWalkState = <T>(): WalkState<T> => ({ held: new Map() });
+ *  next replaces it). A resize clears it, with the pool. `pinned`: the observed module's target, kept out of the pool
+ *  past its last reader for the caller to read (and give back) after the walk. */
+export type WalkState<T> = { held: Map<string, { t: T; pooled: boolean }>; pinned?: T | null };
+export const newWalkState = <T>(): WalkState<T> => ({ held: new Map(), pinned: null });
 
 /** Draws `p` in order, with targets from `pool`, each given back as its last reader has drawn. A Feedback gives what
  *  it held from the start of the frame; at its place it adopts its input's target, copying only one not the pool's
  *  (another's own), and keeping the light's own buffers as they are. `given`: pictures drawn outside the walk, by
- *  module. Gives every module's picture. */
-export function walk<T>(p: Plan, pool: Pool<T>, io: WalkIO<T>, state: WalkState<T>, given: ReadonlyMap<string, T> = new Map()): Map<string, T | null> {
+ *  module. `pin`: the observed module, whose target is not given back but left in `state.pinned`. Gives every
+ *  module's picture. */
+export function walk<T>(p: Plan, pool: Pool<T>, io: WalkIO<T>, state: WalkState<T>, given: ReadonlyMap<string, T> = new Map(), pin: string | null = null): Map<string, T | null> {
   const value = new Map<string, T | null>(given);
   const pooled = new Set<T>();
   const left = new Map<string, number>();
@@ -427,16 +460,19 @@ export function walk<T>(p: Plan, pool: Pool<T>, io: WalkIO<T>, state: WalkState<
     const m = key.slice(0, key.lastIndexOf('.'));
     left.set(m, (left.get(m) ?? 0) + n);
   }
+  state.pinned = null;
   for (const n of p.live) if (n.type === 'feedback') value.set(n.id, state.held.get(n.id)?.t ?? null);
+  const back = (module: string, t: T) => {
+    pooled.delete(t);
+    if (module === pin) state.pinned = t;
+    else pool.give(t);
+  };
   // One of `module`'s readers has drawn: its target back to the pool after the last.
   const read = (module: string) => {
     const n = (left.get(module) ?? 0) - 1;
     left.set(module, n);
     const t = value.get(module);
-    if (n <= 0 && t && pooled.has(t)) {
-      pooled.delete(t);
-      pool.give(t);
-    }
+    if (n <= 0 && t && pooled.has(t)) back(module, t);
   };
   for (const n of p.live) {
     const reads = [...(p.reads.get(n.id) ?? new Map<string, PortRef>())];
@@ -468,10 +504,7 @@ export function walk<T>(p: Plan, pool: Pool<T>, io: WalkIO<T>, state: WalkState<
     if (out) pooled.add(out);
     for (const [, from] of reads) read(from.module);
     // Read by nothing: back at once.
-    if (out && !(left.get(n.id) ?? 0)) {
-      pooled.delete(out);
-      pool.give(out);
-    }
+    if (out && !(left.get(n.id) ?? 0)) back(n.id, out);
   }
   return value;
 }

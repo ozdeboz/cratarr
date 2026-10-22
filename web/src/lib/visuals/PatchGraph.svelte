@@ -864,7 +864,9 @@
       </div>
       <!-- Top right, under the legend (clear of the safe area); never with the page's own preview. -->
       {#if preview && !previewShown}
-        <div class="previewbox"><Preview module={preview.path} label={preview.label} kind={preview.kind} live={live?.frame ?? null} thumbs={thumbnail ? thumbs : null} /></div>
+        {#key preview.path}
+          <div class="previewbox"><Preview module={preview.path} label={preview.label} kind={preview.kind} live={live?.frame ?? null} thumbs={thumbnail ? thumbs : null} /></div>
+        {/key}
       {/if}
     </Panel>
   </SvelteFlow>

@@ -23,7 +23,7 @@ import { between, coloured, evolved, flameOf, measuring, partsAt, PRESET_KEYS, s
 import type { FrameStats, MeterValues } from './meters';
 import { musicNow, stopMusic } from './music.svelte';
 import { newNormalState, signalsFor } from './normal';
-import { coverPalette, type PaletteColour } from './palette';
+import { coverImage, coverPalette, type PaletteColour } from './palette';
 import type { ModuleType, SignalRef } from './patch';
 import { isDevice, RANDOMIZE_SCOPES, type PatchV2 } from './ports';
 import { precheckingPatch, type Checked } from './precheck';
@@ -106,6 +106,8 @@ export type LoopHost = {
   onFrame?: (frame: EngineFrame, levers: Levers) => void;
   /** The GPU cannot draw (none, or it took the context away). */
   onUnsupported?: () => void;
+  /** Why some of the patch is not drawn (each a sentence; none: all of it), as a patch's structure changes. */
+  onErrors?: (errors: string[]) => void;
 };
 
 export class VisualsLoop {
@@ -133,10 +135,10 @@ export class VisualsLoop {
     return new Promise((done) => (this.#pictureWanted = done));
   }
 
-  /** A module's own picture this frame drawn small into `canvas` (the graph's live thumbnails, render.ts); false where
-   *  it has none of its own, or before the loop runs. */
-  thumbnail(module: string, canvas: HTMLCanvasElement): boolean {
-    return this.#renderer?.thumbnail(module, canvas) ?? false;
+  /** The observed module's picture drawn small into `canvas` (the graph's preview, render.ts): null where it shows,
+   *  else why it has none. */
+  thumbnail(module: string, canvas: HTMLCanvasElement): string | null {
+    return this.#renderer ? this.#renderer.thumbnail(module, canvas) : 'Not running.';
   }
 
   stop() {
@@ -186,6 +188,7 @@ export class VisualsLoop {
     let made: Record<string, number> | null = null;
     let madeColours = '';
     let cover: { key: string; colours: PaletteColour[] | null } | null = null;
+    let coverPicture: { key: string; image: HTMLImageElement | null } | null = null;
     let fire = 0;
     let key: string | null | undefined;
     let looked = false;
@@ -338,8 +341,10 @@ export class VisualsLoop {
         try {
           renderer.setPatch(patch, host.pictureTypes);
           if (renderer.errors.length) console.warn(`Visuals: ${renderer.errors.join(' · ')}`);
+          host.onErrors?.(renderer.errors);
         } catch (e) {
           console.warn('Visuals: the patch could not be drawn as a graph', e);
+          host.onErrors?.(['The patch could not be drawn.']);
         }
       }
 
@@ -381,6 +386,17 @@ export class VisualsLoop {
         );
       }
       const covered = mode === 'cover' && cover?.key === m.key ? cover.colours : null;
+      // The cover as a picture, where the Music's reaches the Screen or is observed.
+      if (renderer.wantsCover && playingNow && m.key && coverPicture?.key !== m.key) {
+        const want = m.key;
+        coverPicture = { key: want, image: null };
+        coverImage(coverUrl(playingNow)).then(
+          (image) => {
+            if (coverPicture?.key === want) coverPicture = { key: want, image };
+          },
+          () => {},
+        );
+      }
       fire += ((mode === 'fire' ? 1 : 0) - fire) * Math.min(1, dt / 1.5);
       const lookOf = (k: string) => (how as unknown as Record<string, number>)[k];
       const colours = `${mode}/${covered ? m.key : ''}`;
@@ -440,6 +456,8 @@ export class VisualsLoop {
         knobs: (id) => stepped.knobs[id],
         target: (id, knob) => easing?.to[id]?.[knob] ?? stepped.knobs[id]?.[knob] ?? flat.modules.find((x) => x.id === id)?.knobs[knob] ?? 0,
         frame: { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null },
+        points: (id) => stepped.points[id],
+        cover: () => (coverPicture?.key === m.key ? coverPicture.image : null),
       };
       // A snapshot's thumbnail (picture()), from the frame just drawn.
       const pictureTaken = () => {

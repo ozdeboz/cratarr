@@ -10,11 +10,11 @@
 //   (decision 0046, amended), so a band's transient lights its own colour where it lies;
 // - every two seconds both buffers are copied over through a pass that clears anything not a number or infinite: a
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
-import type { ChainNow } from './chain-params';
+import type { ChainNow, ShowParams } from './chain-params';
 import type { FrameInfo, Module, PatchExtra } from './patch';
-import { compile, composeOf, plan, STAGES, stageOf, stagesOf, type Compiled, type PictureNode, type Stage, type TypeOf } from './picture-graph';
+import { compile, composeOf, plan, STAGES, stageOf, stageRefusal, stagesOf, type Compiled, type PictureNode, type Stage, type TypeOf } from './picture-graph';
 import { fxOfModule, slotOf, type Fx } from './nodes/effect-runs';
-import { MIX_MODES, type PatchV2 } from './ports';
+import { MIX_MODES, SHOW_PARTS, type PatchV2 } from './ports';
 import { flatten } from './v2';
 import { Walker } from './nodes/walker';
 import type { Flame } from './flame';
@@ -30,6 +30,26 @@ import { Screen } from './nodes/screen';
 import { Thumbs } from './nodes/thumbs';
 import { chain, IDENTITY, transformOf } from './transform';
 import { Show } from './nodes/show';
+import { none } from './nodes/shared';
+
+/** Show's look with only `parts` of Show's drawn in its pass (by type), the rest at their neutral: no bend, no
+ *  smoothing, Haze at 0 (its gamma 3: aspects.ts hazeOf), all of its colour. A part elsewhere (Blur after the layers)
+ *  is a module of its own. */
+function showWith(look: ShowParams, parts: ReadonlySet<string>): ShowParams {
+  return {
+    ...look,
+    ...(parts.has('bend') ? {} : { flow: { ...look.flow, wave: undefined } }),
+    ...(parts.has('blur') ? {} : { smoothing: 0 }),
+    ...(parts.has('curve') ? {} : { gamma: 3, floor: 0 }),
+    ...(parts.has('saturate') ? {} : { saturation: 1 }),
+  };
+}
+
+/** Of `parts`, those as far as `type` in Show's order (a fusion barrier at the observed part). */
+const partsUpTo = (parts: ReadonlySet<string>, type: string) => new Set([...parts].filter((t) => SHOW_PARTS.findIndex((p) => p.type === t) <= SHOW_PARTS.findIndex((p) => p.type === type)));
+
+/** The size the cover is drawn at as a picture (16:9, the middle of a square cover). */
+const COVER: [number, number] = [320, 180];
 
 /** Everything the nodes read in a frame, as one (the frozen renderer's look; chain-params.ts groups it by node). */
 export type Shown = {
@@ -93,7 +113,15 @@ export type RendererOptions = { random?: () => number; now?: () => number };
 /** What the picture past the flame takes each frame, beside the patch (setPatch): each module's knobs as the engine and
  *  the morph give them now (`knobs`, by the module's id; none: the patch's own), where a knob's morph is going
  *  (`target`; none: where it is), and the frame (the sources' time, beat, signals and sound). */
-export type PictureInputs = { knobs: (id: string) => Record<string, number> | undefined; target?: (id: string, knob: string) => number; frame: FrameInfo };
+export type PictureInputs = {
+  knobs: (id: string) => Record<string, number> | undefined;
+  target?: (id: string, knob: string) => number;
+  frame: FrameInfo;
+  /** The points a module gives this frame (a Grid's: the engine's `points`, by its id), for Instance and Fold. */
+  points?: (moduleId: string) => readonly { x: number; y: number }[] | undefined;
+  /** The playing track's cover, loaded (the Music module's picture; none: none yet, or no cover). */
+  cover?: () => TexImageSource | null;
+};
 
 /** The page's extras of today (a v1 PatchExtra): its layers past the flame and the picture's own loop as drawn, each
  *  module's knobs, the frame, the flame layer's share and where its morph is going. */
@@ -132,13 +160,24 @@ export class FlameRenderer {
   /** Whether the lazy rules cut the flame last frame; whether the last frame was blank. */
   private cut = false;
   private blanked = false;
+  /** Each Instance's and Fold's points by the module that gives them. */
+  private pointsFrom = new Map<string, string>();
   /** The Transforms on the flame's light (the points' camera's view), in order. */
   private lightTransforms: string[] = [];
-  /** The pictures this frame has of its own, by module (flattened ids), at the buffer's size: for the graph's
-   *  thumbnails. */
-  private pictures = new Map<string, WebGLTexture>();
-  private picturesAt: [number, number] = [0, 0];
+  /** The module observed (the graph's preview; TouchDesigner's "cook what's observed"): its picture kept for one small
+   *  read-back each time a thumbnail asks for it (when last, whether one is wanted), or why it has none this frame.
+   *  Nothing observed costs nothing. The last of Show's parts: the one whose picture Show's pass gives. */
+  private observed: { id: string; asked: number; wanted: boolean; why: string | null } | null = null;
   private thumbs: Thumbs | null = null;
+  private showOut: string | null = null;
+  /** The types of Show's parts drawn in its pass (the rest neutral there). */
+  private showParts = new Set<string>();
+  /** The observed Show part's picture (Show's pass drawn again as far as it), at the buffer's size. */
+  private peek: { tex: WebGLTexture; fbo: WebGLFramebuffer; w: number; h: number } | null = null;
+  /** The Music modules, whether one's cover reaches the Screen, and the cover as a texture (made again as it changes). */
+  private musicIds = new Set<string>();
+  private coverDrawn = false;
+  private cover: { image: TexImageSource; tex: WebGLTexture } | null = null;
   errors: string[] = [];
   /** The context, for what draws beside the flame (the compositor). */
   get context(): WebGL2RenderingContext {
@@ -202,19 +241,32 @@ export class FlameRenderer {
     const c = compile(p, typeOf);
     const stages = stagesOf(c);
     this.compiled = stages ? c : null;
-    this.errors = stages ? c.errors : [...c.errors, 'This version draws the picture in its own order only.'];
+    this.errors = stages ? c.errors : [...c.errors, stageRefusal(c) ?? 'Not drawn in its order.'];
     this.stages = new Set(stages ?? STAGES);
-    this.knobsIn = new Map(flatten(p).modules.map((m) => [m.id, m.knobs]));
+    const flat = flatten(p);
+    this.knobsIn = new Map(flat.modules.map((m) => [m.id, m.knobs]));
+    // What gives each Instance its points and each Fold its grid.
+    const typeOfId = new Map(flat.modules.map((m) => [m.id, m.type]));
+    this.pointsFrom = new Map(flat.cables.filter((c) => (c.to.port === 'points' && typeOfId.get(c.to.module) === 'instance') || (c.to.port === 'grid' && typeOfId.get(c.to.module) === 'fold')).map((c) => [c.to.module, c.from.module]));
     this.composed = stages ? composeOf(c) : null;
     this.lightTransforms = stages ? c.order.filter((n) => n.type === 'transform' && stageOf(n) === 'points').map((n) => n.id) : [];
+    this.showOut = stages ? (c.order.filter((n) => stageOf(n) === 'show').at(-1)?.id ?? null) : null;
+    this.showParts = new Set(stages ? c.order.filter((n) => stageOf(n) === 'show').map((n) => n.type) : SHOW_PARTS.map((p) => p.type));
+    this.musicIds = new Set(flat.modules.filter((m) => m.type === 'music').map((m) => m.id));
+    this.coverDrawn = !!stages && c.order.some((n) => n.type === 'music');
     this.walker?.prune(this.composed?.ids ?? new Set());
-    this.pictures = new Map();
   }
 
   /** Lets go of what modules no longer in the patch held. setPatch does it too; the page of today calls this as its
    *  extras change (`_extra`: for the lab's recordings). */
   prune(_extra?: PatchExtra) {
     this.walker?.prune(this.composed?.ids ?? new Set());
+  }
+
+  /** Whether the playing track's cover is wanted as a picture (a Music module's reaches the Screen, or is observed):
+   *  the page loads it then (`PictureInputs.cover`). */
+  get wantsCover(): boolean {
+    return this.coverDrawn || (!!this.observed && this.musicIds.has(this.observed.id));
   }
 
   get width(): number {
@@ -273,6 +325,8 @@ export class FlameRenderer {
     const light = this.light;
     const flamed = !!now && !!this.points.flame && !!light.acc && !!light.accFbo;
     if (now && !flamed) return;
+    const seeing = this.seeing();
+    if (seeing) this.thumbs?.poll();
     const at = this.now();
     const since = this.shownAt ? Math.min(0.25, (at - this.shownAt) / 1000) : 0;
     this.shownAt = at;
@@ -318,33 +372,143 @@ export class FlameRenderer {
     };
     const walks = this.stages.has('compose') && this.compiled && this.composed;
     if (walks) this.walker ??= new Walker(gl, this.fin, this.now);
-    const walking = walks ? this.walker!.planned(this.compiled!, this.composed!.ids, this.composed!.from, this.composed!.to, knobsAt, fxOf) : null;
-    if (!drawn && !walking) return this.blank(screenWidth, screenHeight);
+    const walking = walks ? this.walker!.planned(this.compiled!, this.composed!.ids, this.composed!.from, this.composed!.to, knobsAt, fxOf, seeing) : null;
+    const cover = this.wantsCover ? this.coverOf(given?.cover?.() ?? null) : null;
+    if (!drawn && !walking) {
+      if (seeing) this.observed!.why = 'Nothing reaches the Screen.';
+      return this.blank(screenWidth, screenHeight);
+    }
     this.blanked = false;
-    const into = walking ? this.fin.targets(light.width, light.height) : null;
+    // Observed, Show's picture is drawn into a target even where nothing walks on from it (then copied to the screen).
+    const source = seeing && walks ? this.walker!.source(seeing) : seeing;
+    const into = walking || (drawn && !!source && source === this.showOut) ? this.fin.targets(light.width, light.height) : null;
     if (drawn) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, into ? into.fbo : null);
       if (into) viewWidth = light.width, viewHeight = light.height;
-      this.show.draw(light, this.points, now!.show, passes, fluid, this.carry.warpShown, viewWidth, viewHeight);
+      this.show.draw(light, this.points, showWith(now!.show, this.showParts), passes, fluid, this.showParts.has('bend') ? this.carry.warpShown : 0, viewWidth, viewHeight);
     }
     const info = given?.frame ?? { dt: since, time: at / 1000, beat: null, signals: () => 0, waveform: null };
     // Without the flame drawn, the compose step starts from nothing where Show's picture would be.
     const effects = { t: fx?.t ?? info.time, beat: fx?.beat, frames: this.fxFrames, fluid: this.carry.fluid };
-    const picture = into && walking ? this.walker!.run(walking, drawn ? into.tex : null, into.w, into.h, knobsAt, info, effects) : null;
+    const pointsOf = (id: string) => (this.pointsFrom.has(id) ? (given?.points?.(this.pointsFrom.get(id)!) ?? null) : null);
+    const covers = new Map([...this.musicIds].map((id) => [id, cover ?? none(gl)]));
+    const picture = into && walking ? this.walker!.run(walking, drawn ? into.tex : null, into.w, into.h, knobsAt, info, effects, pointsOf, seeing, covers) : null;
     if (picture) this.screen.toScreen(picture, screenWidth, screenHeight);
+    else if (into) this.screen.toScreen(into.tex, screenWidth, screenHeight);
     else this.fin.idle();
-    this.pictures = picture ? new Map([...this.walker!.shown, [this.compiled!.screen!, picture]]) : new Map();
-    if (into) this.picturesAt = [into.w, into.h];
+    if (seeing) {
+      const n = this.compiled?.order.find((x) => x.id === seeing);
+      const parts = n ? partsUpTo(this.showParts, n.type) : null;
+      const part = drawn && n && parts && stageOf(n) === 'show' && n.id !== this.showOut ? this.peekShow(showWith(now!.show, parts), passes, fluid, parts.has('bend')) : null;
+      this.look(seeing, this.seenOf(seeing, source, walking ? this.walker!.seen : null, drawn ? into : null, part, cover));
+      this.walker?.unpin();
+    }
   }
 
-  /** `moduleId`'s picture this frame (a flattened id: `show/saturate`) onto `canvas`, a sixteenth of the buffer's
-   *  sides, where the frame drew it anyway; false where it has none of its own (fused into a pass, on the light, or
-   *  nothing drawn). One small pass and one small read: the graph asks for one a frame. */
-  thumbnail(moduleId: string, canvas: HTMLCanvasElement): boolean {
-    const picture = this.pictures.get(moduleId);
-    if (!picture) return false;
+  /** Show's pass drawn again into the peek target with `look` (as far as the observed part): its picture. */
+  private peekShow(look: ShowParams, passes: number, fluid: Fluid | null, bent: boolean): WebGLTexture {
+    const gl = this.gl;
+    const [w, h] = [this.light.width, this.light.height];
+    if (this.peek && (this.peek.w !== w || this.peek.h !== h)) this.freePeek();
+    if (!this.peek) {
+      const tex = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      const fbo = gl.createFramebuffer()!;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      this.peek = { tex, fbo, w, h };
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.peek.fbo);
+    this.show.draw(this.light, this.points, look, passes, fluid, bent ? this.carry.warpShown : 0, w, h);
+    return this.peek.tex;
+  }
+
+  private freePeek() {
+    if (!this.peek) return;
+    this.gl.deleteTexture(this.peek.tex);
+    this.gl.deleteFramebuffer(this.peek.fbo);
+    this.peek = null;
+  }
+
+  /** The cover as a texture, the middle of it at 16:9 (made once a cover); null for none. */
+  private coverOf(image: TexImageSource | null): WebGLTexture | null {
+    if (!image) return null;
+    if (this.cover?.image === image) return this.cover.tex;
+    const gl = this.gl;
+    const c = document.createElement('canvas');
+    [c.width, c.height] = COVER;
+    const g = c.getContext('2d');
+    if (!g) return null;
+    const { width: iw, height: ih } = 'naturalWidth' in image ? { width: image.naturalWidth, height: image.naturalHeight } : (image as { width: number; height: number });
+    const r = Math.min(iw / COVER[0], ih / COVER[1]);
+    g.drawImage(image as CanvasImageSource, (iw - COVER[0] * r) / 2, (ih - COVER[1] * r) / 2, COVER[0] * r, COVER[1] * r, 0, 0, COVER[0], COVER[1]);
+    const tex = this.cover?.tex ?? gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, c);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.cover = { image, tex };
+    return tex;
+  }
+
+  /** The module observed from now on (a flattened id: `show/saturate`; null: none). `thumbnail` observes too. */
+  observe(moduleId: string | null) {
+    this.observed = moduleId ? { id: moduleId, asked: performance.now(), wanted: true, why: null } : null;
+  }
+
+  /** `moduleId`'s picture onto `canvas`, a sixteenth of the buffer's sides, as last read back (two or more frames
+   *  late, never stalling); it is observed from now on, for a second after the last ask. Null where it shows (or soon
+   *  will); else why it has none: on the light, fused into a pass, reaching no Screen. */
+  thumbnail(moduleId: string, canvas: HTMLCanvasElement): string | null {
+    const o = this.observed;
+    if (o?.id === moduleId) Object.assign(o, { asked: performance.now(), wanted: true });
+    else this.observe(moduleId);
+    if (this.thumbs?.put(moduleId, canvas)) return null;
+    return this.observed!.why;
+  }
+
+  /** The module observed now (none a second after the last ask). */
+  private seeing(): string | null {
+    if (this.observed && performance.now() - this.observed.asked > 1000) this.observed = null;
+    return this.observed?.id ?? null;
+  }
+
+  /** What observed module `id` shows this frame (`source`: the module whose picture it passes on; `walked`: what the
+   *  walk says of it; `shown`: Show's target, where Show drew into one; `part`: Show drawn as far as an observed part;
+   *  `cover`: the Music's). */
+  private seenOf(id: string, source: string | null, walked: { tex: WebGLTexture } | { why: string } | null, shown: { tex: WebGLTexture } | null, part: WebGLTexture | null, cover: WebGLTexture | null): { tex: WebGLTexture; size?: [number, number] } | { why: string } {
+    if (this.musicIds.has(id)) return cover ? { tex: cover, size: COVER } : { why: 'No cover.' };
+    if (!this.compiled) return { why: this.errors.at(-1) ?? 'Not drawn.' };
+    const n = this.compiled.order.find((x) => x.id === id);
+    if (!n) return { why: 'Its picture reaches no Screen.' };
+    const stage = stageOf(n);
+    if (stage === 'carry' || stage === 'points' || (n.type === 'feedback' && n.inputs[0]?.type === 'light')) return { why: 'Light: no preview yet.' };
+    if (source === this.showOut) return shown ? { tex: shown.tex } : { why: 'Not drawn this frame.' };
+    if (stage === 'show') return part ? { tex: part } : { why: 'Not drawn this frame.' };
+    return walked ?? { why: 'Not drawn this frame.' };
+  }
+
+  /** The observed module's picture read back small where a thumbnail wants one (one reading in flight at a time). */
+  private look(id: string, s: { tex: WebGLTexture; size?: [number, number] } | { why: string }) {
+    const o = this.observed!;
+    if ('why' in s) {
+      o.why = s.why;
+      this.thumbs?.forget();
+      return;
+    }
+    o.why = null;
     this.thumbs ??= new Thumbs(this.gl);
-    return this.thumbs.draw(picture, this.picturesAt[0], this.picturesAt[1], canvas);
+    if (!o.wanted || !this.thumbs.idle) return;
+    const [w, h] = s.size ?? [this.light.width, this.light.height];
+    this.thumbs.capture(id, s.tex, w, h);
+    o.wanted = false;
   }
 
   /** The screen black, and what the picture kept from frame to frame let go of: the flame's light, the loops' and the
@@ -362,7 +526,6 @@ export class FlameRenderer {
     this.cut = true;
     this.walker?.forget();
     this.fin.freeFx();
-    this.pictures = new Map();
   }
 
   /** The Meter on what the screen just showed (`viewWidth` x `viewHeight`, as of `t` seconds: nodes/meter.ts):
@@ -404,6 +567,8 @@ export class FlameRenderer {
   dispose() {
     this.walker?.dispose();
     this.thumbs?.dispose();
+    this.freePeek();
+    if (this.cover) this.gl.deleteTexture(this.cover.tex);
     for (const n of [this.carry, this.screen, this.meter, this.points, this.light, this.show, this.fin]) n.dispose();
     this.gl.getExtension('WEBGL_lose_context')?.loseContext();
   }
