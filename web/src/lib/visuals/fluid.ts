@@ -19,7 +19,7 @@
 // textures bound to the first units: the renderer sets its own again after. `advect` uses the last `step`'s time, so
 // a frame is `push`, `step`, then `advect`.
 
-import { FIELD_GLSL } from './field';
+import { FIELD_GLSL, GIANT_SCALE } from './field';
 import { toScreen } from './transform';
 
 /** A push on the fluid: where (texture coordinates of the buffer, 0..1 from its bottom left), which way and how fast
@@ -33,13 +33,14 @@ export type Force = { x: number; y: number; dx: number; dy: number; radius: numb
 /** `field`: a Field stirring it (the owner: the Field's bands shape the swirls, the fluid gives them inertia): its flow
  *  pushes the fluid everywhere, `amount` how hard (a cable's). */
 export type Flow = { energy: number; swirl: number; wave?: Wave; field?: { scale: number; phase: number; waves?: readonly number[]; amount: number } };
+/** The slow giant waves: how high and where in their roll (`angle` no longer counts: the Field's sum has every way). */
 export type Wave = { amount: number; angle: number; phase: number };
 
-/** The waves: wavelengths across the screen's height (2π each), how hard they push at their fullest (screen heights a
- *  second, each second), and how far the picture is bent by them where nothing flows (of the screen's height). */
-export const WAVE_K = 2 * Math.PI * 0.8;
-export const WAVE_PUSH = 0.35;
-export const WAVE_BEND = 0.025;
+/** The giant waves (field.ts GIANT_SCALE, the Field's sum): how hard they push at amount 1 (as the sine before them, about
+ *  a third of the screen's height a second, each second), and how far they bend the picture where nothing flows (its
+ *  flow's seconds: about a fortieth of the screen at their fullest). */
+export const WAVE_PUSH = 1.4;
+export const WAVE_BEND = 0.1;
 
 /** The light the renderer keeps: its colour and density, and its two band-share buffers. */
 export type Light = { acc: WebGLTexture; bandsA: WebGLTexture; bandsB: WebGLTexture };
@@ -89,8 +90,7 @@ uniform vec4 uAt[${MOST_FORCES}];
 uniform vec2 uWay[${MOST_FORCES}];
 uniform float uSwirl;
 uniform float uDt;
-uniform vec4 uWave;
-uniform float uWaveK;
+uniform float uWave;
 uniform float uField;
 uniform float uFieldScale;
 uniform float uFieldPhase;
@@ -116,18 +116,13 @@ void main() {
   vec2 f = 0.5 * vec2(abs(t) - abs(b), abs(r) - abs(l));
   f /= length(f) + 0.0001;
   v += f * uSwirl * c * vec2(1.0, -1.0) * uDt;
-  // The waves: a push across their way, as their crest passes (sideways to the way it rolls, so it neither presses
-  // the flow together nor pulls it apart: the pressure leaves it).
-  if (uWave.x != 0.0) {
-    vec2 n = uWave.yz;
-    vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);
-    v += vec2(-n.y / uAspect, n.x) * uWave.x * sin(uWaveK * dot(p, n) - uWave.w) * uGrid.y * uDt;
-  }
-  // A Field stirring it: its flow (the frame's units a second, centred, the short side -1..1) as a push everywhere, in
-  // cells a second each second (free of divergence already: the pressure hardly has to touch it).
-  if (uField > 0.0) {
+  // A Field stirring it, and the slow giant waves (one source: the Field cabled in, else the Field's own sum at the
+  // giants' scale): its flow (the frame's units a second, centred, the short side -1..1) as a push everywhere, in cells
+  // a second each second (free of divergence already: the pressure hardly has to touch it).
+  float push = uField + uWave;
+  if (push != 0.0) {
     vec2 p = (vUv * 2.0 - 1.0) / uK;
-    v += fieldAt(p, uFieldScale, uFieldPhase, uFieldA, uFieldB) * uK * 0.5 * uGrid * uField * uDt;
+    v += fieldAt(p, uFieldScale, uFieldPhase, uFieldA, uFieldB) * uK * 0.5 * uGrid * push * uDt;
   }
   for (int i = 0; i < ${MOST_FORCES}; i++) {
     if (i >= uCount) break;
@@ -311,6 +306,17 @@ export class Fluid {
     return this.velocity2![0].texture;
   }
 
+  /** The velocity read back into `out` (RGBA floats a cell, rows from the bottom, `width` x `height` of them): a
+   *  synchronous read, for what needs the flow on the CPU (a Grid drifting on it). Leaves its framebuffer bound. */
+  read(out: Float32Array): boolean {
+    const t = this.velocity2?.[0];
+    if (!t || out.length < this.width * this.height * 4) return false;
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo);
+    gl.readPixels(0, 0, this.width, this.height, gl.RGBA, gl.FLOAT, out);
+    return true;
+  }
+
   /** Texture coordinates of the buffer per cell of the grid (x, y). */
   get uvPerCell(): [number, number] {
     return [1 / this.width, 1 / this.height];
@@ -366,13 +372,12 @@ export class Fluid {
       gl.uniform1f(u('uSwirl'), SWIRL * Math.max(0, flow.swirl));
       gl.uniform1f(u('uDt'), dt);
       const w = flow.wave;
-      gl.uniform4f(u('uWave'), w ? WAVE_PUSH * w.amount : 0, w ? Math.cos(w.angle) : 1, w ? Math.sin(w.angle) : 0, w ? w.phase : 0);
-      gl.uniform1f(u('uWaveK'), WAVE_K);
       const f = flow.field;
       const fw = f?.waves ?? [1, 1, 1, 1, 1, 1];
+      gl.uniform1f(u('uWave'), w ? WAVE_PUSH * w.amount : 0);
       gl.uniform1f(u('uField'), f ? FIELD_STIR * Math.max(0, f.amount) : 0);
-      gl.uniform1f(u('uFieldScale'), f?.scale ?? 1);
-      gl.uniform1f(u('uFieldPhase'), f?.phase ?? 0);
+      gl.uniform1f(u('uFieldScale'), f?.scale ?? GIANT_SCALE);
+      gl.uniform1f(u('uFieldPhase'), f?.phase ?? w?.phase ?? 0);
       gl.uniform3f(u('uFieldA'), fw[0], fw[1], fw[2]);
       gl.uniform3f(u('uFieldB'), fw[3], fw[4], fw[5]);
       gl.uniform2f(u('uK'), ...toScreen(this.width / this.height));

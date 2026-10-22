@@ -15,7 +15,11 @@
 // - every two seconds both buffers are copied over through a pass that clears anything not a number or infinite: a
 //   fade only multiplies, so one such value, once in, would stay a black speck for good.
 import { MARK, colourOf, PARTS, type Flame } from './flame';
-import { FLOW_IN_LIGHT, Fluid, gridFor, WAVE_BEND, WAVE_K, type Flow, type Force, type Loop } from './fluid';
+import { FLOW_IN_LIGHT, Fluid, gridFor, type Flow, type Force, type Loop } from './fluid';
+
+/** The legacy renderer's own sine waves (the one engine's are the Field's sum, fluid.ts). */
+const WAVE_K = 2 * Math.PI * 0.8;
+const WAVE_BEND = 0.025;
 import { diveCamera, diveFit, diveTarget, type DiveFit } from './zoom';
 import { EffectClocks, loopFunction, MOST_PICTURE, pictureShader } from './effects';
 import { FlashMeter } from './flashmeter';

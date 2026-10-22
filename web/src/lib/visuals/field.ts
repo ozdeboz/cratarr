@@ -44,3 +44,12 @@ ${WAVES.map(([dir, length, pace, offset], i) => {
 }).join('\n')}
   return f / ${WAVES.length.toFixed(1)} * 2.0;
 }`;
+
+/** The slow giant waves (the Fluid's push, Show's and Bend's bend where nothing flows): the Field's own sum at this
+ *  scale, every wave whole (the owner: one source of waves), rolling on at their phase. */
+export const GIANT_SCALE = 2.5;
+
+/** In GLSL, after FIELD_GLSL: `kOf(aspect)` (transform.ts's toScreen) and `giantAt(uv, k, phase)`, the giant waves'
+ *  flow at `uv` in texture coordinates a second. */
+export const GIANT_GLSL = `vec2 kOf(float aspect) { return aspect > 1.0 ? vec2(1.0 / aspect, 1.0) : vec2(1.0, aspect); }
+vec2 giantAt(vec2 uv, vec2 k, float phase) { return fieldAt((uv * 2.0 - 1.0) / k, ${GIANT_SCALE.toFixed(1)}, phase, vec3(1.0), vec3(1.0)) * k * 0.5; }`;

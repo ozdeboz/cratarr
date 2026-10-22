@@ -254,6 +254,8 @@ export type EngineOptions = {
   flameFrame?: { x: number; y: number; size: number; coverage: number } | null;
   /** The picture's width over its height (where a Flame's parts are, in a Grid's frame). */
   aspect?: number;
+  /** The Fluid's flow where a Grid drifting on it is (the frame's units a second), as the renderer last read it back. */
+  fluidFlow?: (x: number, y: number) => [number, number];
 };
 
 /** A point on the screen, 0..1 each way. */
@@ -1083,7 +1085,9 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   for (const x of plan.grids) {
     const g = st.grids[x.id];
     const from = plan.intoOf.get(x.id)?.get('field')?.[0]?.from.module;
-    const flow = from ? fields[from] : undefined;
+    const field = from ? fields[from] : undefined;
+    // A Field's flow, or the Fluid's as the renderer read it back.
+    const flow = field ? (px: number, py: number) => flowAt(px, py, field.scale, field.phase, field.waves) : from && typeOf.get(from) === 'fluid' ? opts.fluidFlow : undefined;
     if (!g || !flow) {
       if (g) g.offsets = undefined;
       continue;
@@ -1098,7 +1102,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     const offsets = (g.offsets ??= homes.map((): [number, number] => [0, 0]));
     points[x.id] = homes.map((q, i) => {
       const o = (offsets[i] ??= [0, 0]);
-      const [u, v] = flowAt(q.x + o[0], q.y + o[1], flow.scale, flow.phase, flow.waves);
+      const [u, v] = flow(q.x + o[0], q.y + o[1]);
       o[0] += (u * drift - o[0] * back) * step;
       o[1] += (v * drift - o[1] * back) * step;
       return { x: q.x + o[0], y: q.y + o[1] };

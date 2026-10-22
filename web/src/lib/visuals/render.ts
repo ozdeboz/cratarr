@@ -28,7 +28,7 @@ import { Meter } from './nodes/meter';
 import { FlamePoints } from './nodes/points';
 import { Screen } from './nodes/screen';
 import { Thumbs } from './nodes/thumbs';
-import { chain, IDENTITY, transformOf } from './transform';
+import { chain, IDENTITY, toScreen, transformOf } from './transform';
 import { Show } from './nodes/show';
 import type { NodeParams } from './engine/graph';
 import { DIVE_MOST, TUNNEL_MOST } from './zoom';
@@ -210,6 +210,11 @@ export class FlameRenderer {
   private fieldFrom = new Map<string, string>();
   /** The Field stirring the Fluid, and how hard (its cable's amount), if one is cabled into it. */
   private fluidStir: { field: string; amount: number } | null = null;
+  /** Whether a Grid drifts on the Fluid's flow (its Flow field cabled from the Fluid), and the flow last read back for
+   *  it (every few frames: a read waits for the GPU). */
+  private gridOnFluid = false;
+  private fluidRead: { w: number; h: number; data: Float32Array } | null = null;
+  private fluidReads = 0;
   /** The Transforms on the flame's light (the points' camera's view), in order. */
   private lightTransforms: string[] = [];
   /** The module observed (the graph's preview; TouchDesigner's "cook what's observed"): its picture kept for one small
@@ -306,6 +311,8 @@ export class FlameRenderer {
     this.fieldFrom = new Map(flat.cables.filter((c) => c.to.port === 'field' && (typeOfId.get(c.to.module) === 'streamlines' || typeOfId.get(c.to.module) === 'push') && typeOfId.get(c.from.module) === 'field').map((c) => [c.to.module, c.from.module]));
     const stir = flat.cables.find((c) => c.to.port === 'stirBy' && typeOfId.get(c.to.module) === 'fluid' && typeOfId.get(c.from.module) === 'field');
     this.fluidStir = stir ? { field: stir.from.module, amount: typeof stir.value === 'number' ? stir.value : 1 } : null;
+    this.gridOnFluid = flat.cables.some((c) => c.to.port === 'field' && typeOfId.get(c.to.module) === 'grid' && typeOfId.get(c.from.module) === 'fluid');
+    if (!this.gridOnFluid) this.fluidRead = null;
     this.composed = stages ? composeOf(c) : null;
     this.lightTransforms = stages ? c.order.filter((n) => n.type === 'transform' && stageOf(n) === 'points').map((n) => n.id) : [];
     this.showOut = stages ? (c.order.filter((n) => stageOf(n) === 'show').at(-1)?.id ?? null) : null;
@@ -367,6 +374,36 @@ export class FlameRenderer {
   }
 
   /** The drawing size in pixels (the buffer the points fall into; the screen scales it). */
+  /** The Fluid's flow read back for a Grid drifting on it, every third frame (the framebuffer bound before kept). */
+  private readFluid(fluid: Fluid | null) {
+    if (!fluid) {
+      this.fluidRead = null;
+      return;
+    }
+    if (this.fluidReads++ % 3 && this.fluidRead) return;
+    const gl = this.gl;
+    const n = fluid.width * fluid.height * 4;
+    const r = this.fluidRead && this.fluidRead.data.length === n ? this.fluidRead : { w: fluid.width, h: fluid.height, data: new Float32Array(n) };
+    const bound = gl.getParameter(gl.FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+    if (fluid.read(r.data)) this.fluidRead = { ...r, w: fluid.width, h: fluid.height };
+    gl.bindFramebuffer(gl.FRAMEBUFFER, bound);
+  }
+
+  /** The Fluid's flow where a Grid reads it (the frame's units: centred, the short side −1..1; a second), from the last
+   *  read; undefined without one. */
+  fluidFlow(): ((x: number, y: number) => [number, number]) | undefined {
+    const r = this.fluidRead;
+    if (!r) return undefined;
+    const [kx, ky] = toScreen(this.width / Math.max(1, this.height));
+    return (x, y) => {
+      const cx = Math.min(r.w - 1, Math.max(0, Math.floor((x * kx * 0.5 + 0.5) * r.w)));
+      const cy = Math.min(r.h - 1, Math.max(0, Math.floor((y * ky * 0.5 + 0.5) * r.h)));
+      const i = (cy * r.w + cx) * 4;
+      // Cells a second, to texture coordinates a second, to the frame's units a second.
+      return [((r.data[i] / r.w) * 2) / kx, ((r.data[i + 1] / r.h) * 2) / ky];
+    };
+  }
+
   resize(width: number, height: number) {
     if (width === this.light.width && height === this.light.height) return;
     this.carry.resize(width, height);
@@ -434,6 +471,7 @@ export class FlameRenderer {
       const stirring = this.fluidStir ? given?.fields?.(this.fluidStir.field) : undefined;
       const carry = stirring ? { ...now!.carry, flow: { ...now!.carry.flow, field: { ...stirring, amount: this.fluidStir!.amount } } } : now!.carry;
       fluid = this.carry.draw(light, carry, since, loop);
+      if (this.gridOnFluid) this.readFluid(fluid);
       if (lightPhase === 'carried') lightPeek = this.peekLight(shown!, passes, fluid);
       // The light's Transforms, in the patch's order: where the points land, after the camera frames the flame.
       this.points.view = this.lightTransforms.reduce((t, id) => chain(t, transformOf(knobsAt(id), light.width / light.height)), IDENTITY);

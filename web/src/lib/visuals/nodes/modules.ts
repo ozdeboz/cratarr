@@ -7,7 +7,8 @@
 // by one, no arrays, level-0 reads where the read is moved (the Mali rules).
 import type { FrameInfo, PictureModule } from '../patch';
 import { done, program } from '../sources/gl';
-import { WAVE_BEND, WAVE_K } from '../fluid';
+import { WAVE_BEND } from '../fluid';
+import { FIELD_GLSL, GIANT_GLSL } from '../field';
 import { keptPerSecond } from '../loopmods';
 import { inverse, toScreen, transformOf } from '../transform';
 import { none } from './shared';
@@ -145,19 +146,15 @@ void main() {
   // Bend on a picture: the slow giant waves (fluid.ts) bending it across their way as their crest passes, rolling on
   // with the frame's time.
   bend: {
-    glsl: `uniform vec4 uWave;
-uniform float uWaveK;
+    glsl: `uniform vec2 uWave;
+${FIELD_GLSL}
+${GIANT_GLSL}
 void main() {
   vec2 uv = vUv;
-  if (uWave.x != 0.0) {
-    float aspect = uAspect.y / uAspect.x;
-    vec2 n = uWave.yz;
-    vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
-    uv += vec2(-n.y / aspect, n.x) * uWave.x * sin(uWaveK * dot(p, n) - uWave.w);
-  }
+  if (uWave.x != 0.0) uv += giantAt(uv, kOf(uAspect.y / uAspect.x), uWave.y) * uWave.x;
   o = textureLod(uIn, uv, 0.0);
 }`,
-    uniforms: (k, frame) => ({ uWave: [WAVE_BEND * (k.waves ?? 0), 1, 0, frame.time], uWaveK: WAVE_K }),
+    uniforms: (k, frame) => ({ uWave: [WAVE_BEND * (k.waves ?? 0), frame.time] }),
   },
   // Curve on a picture (Show's Haze as a module of its own): Show's gamma is 3 × 2^haze, so on a picture already shown
   // at 3 the rest of it, 2^haze; below 0 a floor too, the faintest (by brightness) black.

@@ -2,7 +2,8 @@
 // paper's log-density display of the light, read where the waves bend it or along the fluid's flow, smoothed where
 // few points fell, its gamma and floor, the bands' lights and glow, the fire, the colour and the ceiling.
 import { PARTS } from '../flame';
-import { WAVE_BEND, WAVE_K, type Fluid } from '../fluid';
+import { WAVE_BEND, type Fluid } from '../fluid';
+import { FIELD_GLSL, GIANT_GLSL } from '../field';
 import { program } from '../sources/gl';
 import type { ShowParams } from '../chain-params';
 import type { Light } from './light';
@@ -37,12 +38,13 @@ uniform float uFire;
 // cell's size in texture coordinates.
 uniform sampler2D uVelocity;
 uniform float uWarp;
-// The waves where nothing flows (fluid.ts): the picture bent across their way as their crest passes.
-uniform vec4 uWave;
-uniform float uWaveK;
+// The giant waves where nothing flows (fluid.ts, field.ts): the picture read back along their flow, at their phase.
+uniform vec2 uWave;
 uniform vec2 uUvPerCell;
 out vec4 o;
 ${BAD}
+${FIELD_GLSL}
+${GIANT_GLSL}
 // A sample of the buffer, none of it anything but a number (whatever a driver did to it before the scrub came by).
 vec4 at(vec2 uv, float lod) { return clean(textureLod(uAcc, uv, lod)); }
 vec4 raw(vec2 uv, float lod) { return textureLod(uAcc, uv, lod); }
@@ -52,12 +54,7 @@ void main() {
   // A beat's swell: the picture drawn a little larger about its middle.
   vec2 uv = 0.5 + (gl_FragCoord.xy / uView - 0.5) / uZoom;
   if (uWarp > 0.0) uv -= uWarp * textureLod(uVelocity, uv, 0.0).xy * uUvPerCell;
-  if (uWave.x != 0.0) {
-    float aspect = uView.x / uView.y;
-    vec2 n = uWave.yz;
-    vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
-    uv += vec2(-n.y / aspect, n.x) * uWave.x * sin(uWaveK * dot(p, n) - uWave.w);
-  }
+  if (uWave.x != 0.0) uv += giantAt(uv, kOf(uView.x / uView.y), uWave.y) * uWave.x;
   vec2 px = 1.0 / vec2(textureSize(uAcc, 0));
   vec4 a = at(uv, 0.0);
   // The pixel's points by band: shares of one.
@@ -176,8 +173,7 @@ export class Show {
     gl.uniform1f(this.u(this.show, 'uWarp'), warp);
     // Where the fluid flows it carries the waves itself; else the picture is bent by them.
     const wave = fluid ? undefined : look.flow?.wave;
-    gl.uniform4f(this.u(this.show, 'uWave'), wave ? WAVE_BEND * wave.amount : 0, wave ? Math.cos(wave.angle) : 1, wave ? Math.sin(wave.angle) : 0, wave ? wave.phase : 0);
-    gl.uniform1f(this.u(this.show, 'uWaveK'), WAVE_K);
+    gl.uniform2f(this.u(this.show, 'uWave'), wave ? WAVE_BEND * wave.amount : 0, wave ? wave.phase : 0);
     // The flow's unit is sampled with or without one: a black pixel there without.
     gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, fluid && warp ? fluid.velocity : none(gl));

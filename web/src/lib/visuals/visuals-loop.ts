@@ -459,7 +459,7 @@ export class VisualsLoop {
         renderer!.resize(bw, bh);
         return [w, h, resized, top];
       };
-      const stepped = stepEngine(engine, flat, host.types, m, read, how, dt, { now, fluidFull: FLUID_FULL, meters: meterValues, flamePoints: partsWhere, flameFrame, aspect: renderer ? renderer.width / Math.max(1, renderer.height) : undefined });
+      const stepped = stepEngine(engine, flat, host.types, m, read, how, dt, { now, fluidFull: FLUID_FULL, meters: meterValues, flamePoints: partsWhere, flameFrame, aspect: renderer ? renderer.width / Math.max(1, renderer.height) : undefined, fluidFlow: renderer?.fluidFlow() });
       // The sidechains act only through their cables (toV2's holds, in sight); what they hold back is read off the
       // Duckers' outputs for the page's mark, nothing else.
       const sidechains = leversOf(stepped.outputs);
