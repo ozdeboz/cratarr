@@ -188,7 +188,7 @@
   }
   // The dice's row of scopes: open till the dice is tapped again.
   let diceRow = $state(false);
-  const DICE_LABEL: Record<(typeof RANDOMIZE_SCOPES)[number], string> = { everything: 'Everything', sources: 'Sources', effects: 'Effects', mixers: 'Mixers', modulators: 'Modulators', cables: 'Cables', response: 'Response', macros: 'Macros' };
+  const DICE_LABEL: Record<(typeof RANDOMIZE_SCOPES)[number], string> = { everything: 'Everything', sources: 'Sources', effects: 'Effects', mixers: 'Mixers', modulators: 'Modulators', cables: 'Cables', response: 'Response', macros: 'Macros', colours: 'Colours' };
   let resetMenu = $state(false);
 
   // ---- Snapshots: saved patches on the server ---------------------------------------------------------------------
@@ -606,17 +606,18 @@
     gap: 4px;
   }
 
-  /* The dice's scopes: one row lower than the corner's buttons, alike (as tall, as round, as spaced), each a roll; the
-     row open till the dice is tapped again. */
+  /* The dice's scopes: a column at the right under the corner's buttons, alike (as tall, as round, as spaced), each a
+     roll; open till the dice is tapped again. */
   .dice-row {
     position: absolute;
     top: calc(max(12px, env(safe-area-inset-top)) + 52px);
     right: max(12px, env(safe-area-inset-right));
     display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
+    flex-direction: column;
+    align-items: flex-end;
     gap: 4px;
-    max-width: calc(100% - 24px);
+    max-height: calc(100% - 140px);
+    overflow-y: auto;
   }
   .dice-row button {
     height: 48px;

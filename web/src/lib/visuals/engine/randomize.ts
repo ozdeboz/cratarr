@@ -47,6 +47,9 @@ const CHAIN_DRAW = PRESET_KEYS.flatMap((key) => (SETTING_KNOB[key] && !SLOT_KEY.
 const CHAIN_DRAWN = new Set(CHAIN_DRAW.map((l) => `${l.module}.${l.knob}`));
 const SLOT_DRAWN = PRESET_KEYS.filter((key) => SLOT_KEY.has(key));
 
+/** The knobs a Colours roll reaches, by their ids or labels. */
+const COLOUR = /hue|sat|tint|colou?r|palette/i;
+
 /** The modules a Response roll reaches: how much and how fast the music moves things. */
 const RESPONSE: ReadonlySet<string> = new Set(['envelope', 'adsr', 'vca', 'shaper', 'clock', 'accent']);
 
@@ -58,6 +61,8 @@ export function scopeNamed(name: string, types: Record<string, ModuleType>): Sco
   // Response: how the rack answers the music, not how it looks: what lies between the music and the picture (the
   // followers, ADSRs, VCAs, Shapers, the Clock and the Accent; the cables' amounts with them, visuals-loop rollOf).
   if (name === 'response') return (m) => RESPONSE.has(m.type);
+  // Colours: every knob that sets a colour (a hue, its spread, a saturation, a tint, the Flame's palette), nothing else.
+  if (name === 'colours') return (_m, k) => COLOUR.test(k.id) || COLOUR.test(k.label ?? '');
   const ports = portsFrom(types);
   return (m) => {
     if (isDevice(m)) {
