@@ -441,11 +441,18 @@ export class VisualsLoop {
         target: (id, knob) => easing?.to[id]?.[knob] ?? stepped.knobs[id]?.[knob] ?? flat.modules.find((x) => x.id === id)?.knobs[knob] ?? 0,
         frame: { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null },
       };
+      // A snapshot's thumbnail (picture()), from the frame just drawn.
+      const pictureTaken = () => {
+        const done = this.#pictureWanted;
+        this.#pictureWanted = null;
+        if (done) done(pictureOf(canvas));
+      };
       // A patch with no Cratarr device (a blank slate): no flame, whatever else reaches the Screen drawn from black
       // (the renderer blanks it when nothing does).
       if (!stepped.aspects) {
         const [w, h] = sized();
         renderer.frame(passes, null, w, h, inputs);
+        pictureTaken();
         return;
       }
       const d = stepped.aspects;
@@ -602,11 +609,7 @@ export class VisualsLoop {
         reported = now;
         host.onFrame?.(stepped, sidechains);
       }
-      if (this.#pictureWanted) {
-        const done = this.#pictureWanted;
-        this.#pictureWanted = null;
-        done(pictureOf(canvas));
-      }
+      pictureTaken();
 
       // The device's pace (Visuals.svelte's): under what Quality allows, holding the FPS setting rather than settling
       // under it; a step down a second at most while frames come late, a step back up after `wait` calm seconds.
