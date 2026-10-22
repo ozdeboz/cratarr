@@ -353,6 +353,8 @@ export const portHelp: Record<string, Record<string, string>> = {
     hue: 'Their colour, as far as Saturation lets it show.',
     hueSpread: 'How far the colour changes from line to line.',
     saturation: 'At 0 white lines; at 1 fully coloured.',
+    perSeed: 'How many lines start round each seed.',
+    ring: 'How far round each seed they start.',
     picture: 'The lines.',
   },
   grid: {

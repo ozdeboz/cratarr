@@ -598,33 +598,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   for (const x of plan.grids) {
     const key = JSON.stringify(x.knobs);
     if (st.grids[x.id]?.key !== key) st.grids[x.id] = { key, grid: gridOf(x.knobs, seedOf(x.id)) };
-    const g = st.grids[x.id];
-    points[x.id] = g.grid.points;
-    // A Field cabled into its Flow field: each point carried along the flow at Drift, pulled back to its place at Return
-    // (the Field's time as last frame left it).
-    const from = plan.intoOf.get(x.id)?.get('field')?.[0]?.from.module;
-    const field = from ? moduleOf.get(from) : undefined;
-    if (field?.type !== 'field') {
-      g.offsets = undefined;
-      continue;
-    }
-    const scale = finite(field.knobs.scale, 1.2);
-    const phase = finite(st.fieldPhases[field.id], 0);
-    // Drift and Return as their cables move them (a slow loudness on Drift: the grid sways further when it is loud).
-    const gridKnob = (id: string, or: number) => {
-      const k = (types.grid ?? ENGINE_TYPES.grid).knobs.find((q) => q.id === id);
-      return k ? moved(x.id, k, finite(x.knobs[id], k.default), plan.intoOf.get(x.id)?.get(id) ?? NO_CABLES) : finite(x.knobs[id], or);
-    };
-    const drift = gridKnob('drift', 0.4);
-    const back = gridKnob('return', 0.6);
-    const offsets = (g.offsets ??= g.grid.points.map((): [number, number] => [0, 0]));
-    points[x.id] = g.grid.points.map((q, i) => {
-      const o = (offsets[i] ??= [0, 0]);
-      const [u, v] = flowAt(q.x + o[0], q.y + o[1], scale, phase);
-      o[0] += (u * drift - o[0] * back) * step;
-      o[1] += (v * drift - o[1] * back) * step;
-      return { x: q.x + o[0], y: q.y + o[1] };
-    });
+    points[x.id] = st.grids[x.id].grid.points;
   }
   for (const id of Object.keys(st.grids)) if (!(id in points)) delete st.grids[id];
 
@@ -1085,6 +1059,31 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     fields[x.id] = { scale: finite(k.scale, 1.2), phase };
   }
   for (const id of Object.keys(st.fieldPhases)) if (!(id in fields)) delete st.fieldPhases[id];
+  // Each Grid a Field is cabled into: its points carried along the flow at Drift, pulled back to its place at Return
+  // (both as their cables move them), once the Field's time is run on.
+  for (const x of plan.grids) {
+    const g = st.grids[x.id];
+    const from = plan.intoOf.get(x.id)?.get('field')?.[0]?.from.module;
+    const flow = from ? fields[from] : undefined;
+    if (!g || !flow) {
+      if (g) g.offsets = undefined;
+      continue;
+    }
+    const gridKnob = (id: string, or: number) => {
+      const k = (types.grid ?? ENGINE_TYPES.grid).knobs.find((q) => q.id === id);
+      return k ? moved(x.id, k, finite(x.knobs[id], k.default), plan.intoOf.get(x.id)?.get(id) ?? NO_CABLES) : finite(x.knobs[id], or);
+    };
+    const drift = gridKnob('drift', 0.4);
+    const back = gridKnob('return', 0.6);
+    const offsets = (g.offsets ??= g.grid.points.map((): [number, number] => [0, 0]));
+    points[x.id] = g.grid.points.map((q, i) => {
+      const o = (offsets[i] ??= [0, 0]);
+      const [u, v] = flowAt(q.x + o[0], q.y + o[1], flow.scale, flow.phase);
+      o[0] += (u * drift - o[0] * back) * step;
+      o[1] += (v * drift - o[1] * back) * step;
+      return { x: q.x + o[0], y: q.y + o[1] };
+    });
+  }
   // Each Dice: a roll as its trigger rises past a half (its `done` a trigger the same frame), seeded by its seed input
   // (0..1 back to the 32 bits it came from; none plugged: the frame's time), over its scope.
   const dice: DiceRoll[] = [];

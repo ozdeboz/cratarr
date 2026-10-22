@@ -299,7 +299,12 @@ export function createStreamlines(gl: WebGL2RenderingContext): ModuleNode {
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       const field = inputs.field;
-      const n = packed(points && points.length ? points : SCATTER, data);
+      // Per seed, that many lines on a ring round it (a few seeds, as a Flame's six parts, made many).
+      const given = points && points.length ? points : SCATTER;
+      const per = Math.max(1, Math.round(knobs.perSeed ?? 1));
+      const ring = knobs.ring ?? 0.08;
+      const seeds = per === 1 ? given : given.flatMap((q) => Array.from({ length: per }, (_, i) => ({ x: q.x + ring * Math.cos((2 * Math.PI * i) / per), y: q.y + ring * Math.sin((2 * Math.PI * i) / per) })));
+      const n = packed(seeds, data);
       if (!field || !n) return;
       gl.useProgram(p);
       gl.bindBuffer(gl.ARRAY_BUFFER, buffer);

@@ -531,6 +531,8 @@ export const STREAMLINES = declared(
     knob('hue', 'Hue', 0, 1, 0.55),
     knob('hueSpread', 'Hue spread', 0, 1, 0.3),
     knob('saturation', 'Saturation', 0, 1, 0, 'level'),
+    knob('perSeed', 'Per seed', 1, 16, 1),
+    knob('ring', 'Ring', 0, 0.5, 0.08),
   ],
   [{ id: 'seeds', label: 'Seeds', type: 'points' }, FLOW_IN],
   [PICTURE_OUT],

@@ -331,6 +331,12 @@ export class VisualsLoop {
       const flat = live.update(patch);
       const flatTypes = new Map(flat.modules.map((x) => [x.id, x.type]));
       const flameId = flat.modules.find((x) => x.type === 'flame')?.id;
+      // The Flame's parts as seeds where its Points are cabled into Streamlines (measured then as for the Fluid's pushes).
+      const flameSeeding = !!flameId && flat.cables.some((c) => c.from.module === flameId && c.from.port === 'points' && flatTypes.get(c.to.module) === 'streamlines');
+      const flameSeeds = () => {
+        const aspect = renderer ? renderer.width / Math.max(1, renderer.height) : 16 / 9;
+        return partsWhere.filter((q): q is [number, number] => !!q).map(([px, py]) => (aspect > 1 ? { x: (2 * px - 1) * aspect, y: 2 * py - 1 } : { x: 2 * px - 1, y: (2 * py - 1) / aspect }));
+      };
       ease(flat, now);
       if (patch !== storeSeen || easing) {
         storeSeen = patch;
@@ -458,7 +464,9 @@ export class VisualsLoop {
         frame: { dt, time: now / 1000, beat: m.beat, signals: read, waveform: m.wave ?? null },
         params: (id) => stepped.params[id],
         fields: (id) => stepped.fields[id],
-        points: (id) => stepped.points[id],
+        // A Grid's points, or the Flame's parts where they are on the screen (in the Grid's frame: centred, the short side
+        // -1..1), for Streamlines' seeds.
+        points: (id) => stepped.points[id] ?? (id === flameId ? flameSeeds() : undefined),
         cover: () => (coverPicture?.key === m.key ? coverPicture.image : null),
       };
       // A snapshot's thumbnail (picture()), from the frame just drawn.
@@ -554,7 +562,7 @@ export class VisualsLoop {
       // The fluid, stirred: its pushes at what reaches its `at` (the Flame's parts by default), each worth what the
       // patch's cables into Stir, Flow and Swirl give it.
       const fluidNow = d.fluid;
-      if (fluidNow > 0 && now - partsMeasured > 250) {
+      if ((fluidNow > 0 || flameSeeding) && now - partsMeasured > 250) {
         partsMeasured = now;
         const cam = frame ?? drawnFlame;
         const aspect = w / h;
