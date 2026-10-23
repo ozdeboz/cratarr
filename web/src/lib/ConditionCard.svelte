@@ -8,9 +8,11 @@
 
 <script lang="ts">
   // One condition of a crate or a filter, as a card (decision 0061, the owner's option C): folded, one line with its
-  // name and what it is set to, Any or All where the list's items hold tracks, a switch that mutes it without removing
-  // it (dimmed), and the chevron; unfolded, its whole control: values as chips with their counts, a range (Tempo with
-  // its spread, lib/TempoRange), Not (a pill: on, it and the chosen values turn red), and Remove. The crate editor and the Filter sheet draw the same cards
+  // name and what it is set to, a switch that mutes it without removing it (dimmed), and the chevron; unfolded, its
+  // whole control: values as chips with their counts, a range (Tempo with its spread, lib/TempoRange), Not (a pill:
+  // on, it and the chosen values turn red), Remove, and last, where the list's items hold tracks, a sentence of its
+  // own saying what the condition is tested on: "Matching any | all tracks in each album" (the owner, 2026-10-23: next
+  // to the switch, Any and All read as being about the chosen values). The crate editor and the Filter sheet draw the same cards
   // (lib/ConditionList).
   import { slide } from 'svelte/transition';
   import Icon from './Icon.svelte';
@@ -21,15 +23,16 @@
   let {
     condition = $bindable(),
     axis,
-    quantified = false,
+    items = null,
     open = $bindable(false),
     bpms = null,
     onremove,
   }: {
     condition: FilterCondition;
     axis: ListAxis | undefined;
-    /** The list's items hold tracks (albums, artists, playlists): Any or All of them. */
-    quantified?: boolean;
+    /** What the list's items are when they hold tracks ("album", "playlist"): the condition holds for any or all of
+     *  each one's tracks. */
+    items?: string | null;
     open?: boolean;
     /** The list's tempos, for the Tempo condition's spread; absent: its range as two numbers. */
     bpms?: readonly (number | null | undefined)[] | null;
@@ -39,8 +42,8 @@
   const on = $derived(condition.enabled !== false);
   const label = $derived(axis?.label ?? condition.axis);
   const QUANTIFIERS = [
-    { value: 'any' as const, label: 'Any' },
-    { value: 'all' as const, label: 'All' },
+    { value: 'any' as const, label: 'any' },
+    { value: 'all' as const, label: 'all' },
   ];
   const quantifier = $derived(condition.quantifier ?? 'any');
 
@@ -54,7 +57,9 @@
       const n = (x: number) => String(Math.round(x));
       s = v.min !== null && v.max !== null ? `${n(v.min)}–${n(v.max)}` : v.min !== null ? `${n(v.min)} on` : v.max !== null ? `up to ${n(v.max)}` : 'any';
     }
-    return condition.not ? `not ${s}` : s;
+    s = condition.not ? `not ${s}` : s;
+    // All is not the default: said folded too.
+    return items && quantifier === 'all' ? `${s}, all tracks` : s;
   });
 
   // A values axis can have many (genres): a search, and the chosen ones first, then the most common.
@@ -88,17 +93,6 @@
       <span class="label">{label}</span>
       <span class="sum" class:not={condition.not}>· {summary}</span>
     </button>
-    {#if quantified}
-      {#if open}
-        <span class="seg" role="radiogroup" aria-label="Any or all of its tracks">
-          {#each QUANTIFIERS as q (q.value)}
-            <button role="radio" aria-checked={quantifier === q.value} onclick={() => (condition.quantifier = q.value === 'any' ? undefined : q.value)}>{q.label}</button>
-          {/each}
-        </span>
-      {:else}
-        <span class="tag" title={quantifier === 'all' ? 'All of its tracks' : 'Any of its tracks'}>{quantifier === 'all' ? 'ALL' : 'ANY'}</span>
-      {/if}
-    {/if}
     <Switch hideLabel label="Apply {label}" checked={on} onchange={(v) => (condition.enabled = v ? undefined : false)} />
     <button class="chev" aria-label={open ? 'Fold' : 'Unfold'} onclick={() => (open = !open)}><Icon name={open ? 'chevronUp' : 'chevronDown'} size={20} /></button>
   </div>
@@ -129,6 +123,17 @@
         <button class="notpill" aria-pressed={condition.not} onclick={() => (condition.not = !condition.not)}>Not</button>
         <button class="remove" onclick={onremove}>Remove</button>
       </div>
+      {#if items}
+        <p class="tested">
+          Matching
+          <span class="seg" role="radiogroup" aria-label="Any or all tracks">
+            {#each QUANTIFIERS as q (q.value)}
+              <button role="radio" aria-checked={quantifier === q.value} onclick={() => (condition.quantifier = q.value === 'any' ? undefined : q.value)}>{q.label}</button>
+            {/each}
+          </span>
+          tracks in each {items}
+        </p>
+      {/if}
     </div>
   {/if}
 </li>
@@ -187,17 +192,20 @@
     color: var(--danger, #c33);
   }
 
-  .tag {
-    padding: 1px 6px;
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--accent) 16%, transparent);
-    color: var(--accent);
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
+
+  /* What the condition is tested on, a sentence under the card's controls; any or all inside it. */
+  .tested {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    padding-top: 10px;
+    border-top: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
+    color: var(--muted);
+    font-size: 14px;
   }
 
-  /* Any or All, small beside the switch (the folded card's tag is the same size). */
   .seg {
     display: inline-flex;
     overflow: hidden;
@@ -206,13 +214,11 @@
   }
 
   .seg button {
-    padding: 3px 9px;
+    padding: 3px 10px;
     border: 0;
     background: none;
     color: var(--muted);
     font: inherit;
-    font-size: 12px;
-    font-weight: 600;
     cursor: pointer;
   }
 

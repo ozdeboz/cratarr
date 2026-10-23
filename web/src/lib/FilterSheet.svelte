@@ -49,7 +49,7 @@
   // panel's track lists; Any or All where the items hold tracks (decision 0061). Crates have none (decision 0060).
   const CONDITIONED = ['library', 'playlists', 'playlist', 'crate', 'album', 'artist'];
   const conditioned = $derived(CONDITIONED.includes(list));
-  const quantified = $derived(list === 'library' || list === 'playlists');
+  const items = $derived(list === 'library' ? 'album' : list === 'playlists' ? 'playlist' : null);
   const switches = $derived((SWITCHES[list] ?? []).filter((w) => !w.incoming || hasIncoming));
   const filter = $derived(filterOf(list));
   // The axes and their values with their counts in the list in view, the most common first (decision 0061: over all
@@ -135,7 +135,7 @@
     {#if counted && filtersOn(list)}<p class="count">{counted.shown.toLocaleString()} of {counted.total.toLocaleString()}</p>{/if}
     {#if conditioned}
       <div>
-        <ConditionList bind:conditions={() => filter.conditions, (c) => setConditions(list, c)} {axes} {quantified} bpms={tempos} />
+        <ConditionList bind:conditions={() => filter.conditions, (c) => setConditions(list, c)} {axes} {items} bpms={tempos} />
       </div>
     {/if}
     {#if switches.length}

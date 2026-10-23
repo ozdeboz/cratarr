@@ -28,9 +28,11 @@ one.
 - **Remembered like sort** (0060): per kind of list.
 - **How it looks** (the owner, 2026-10-23, of four mockups: "No, we keep the list clean. So C seems to be the most
   logical and clean way"): a card per condition, in the Filter sheet and in a crate's editor alike. Folded, a card is
-  one line: its name and what it is set to, Any or All (where the items hold tracks), a switch that mutes it without
-  removing it (dimmed), and a chevron; unfolded, its whole control (values as chips with their counts, a range, Tempo's
-  spread), Not and Remove. "+ Condition" adds one. Under the cards the kind's own switches, then Clear and Save as crate;
+  one line: its name and what it is set to, a switch that mutes it without removing it (dimmed), and a chevron;
+  unfolded, its whole control (values as chips with their counts, a range, Tempo's spread), Not (a pill, red when on)
+  and Remove, and last, where the items hold tracks, its own line: "Matching any | all tracks in each album" (the owner:
+  beside the switch, Any and All read as being about the chosen values). Folded, All is said in the summary ("…, all
+  tracks"). "+ Condition" adds one. Under the cards the kind's own switches, then Clear and Save as crate;
   the sheet says how many the filter lets through ("312 of 2,861"). The list itself stays clean: only the funnel shows
   how many filters are on.
 - **Save as crate** turns the filter in view into a crate; a crate's conditions can be applied as a filter to any list.

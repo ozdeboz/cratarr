@@ -10,12 +10,13 @@
   let {
     conditions = $bindable(),
     axes,
-    quantified = false,
+    items = null,
     bpms = null,
   }: {
     conditions: FilterCondition[];
     axes: ListAxis[];
-    quantified?: boolean;
+    /** What the list's items are when they hold tracks: any or all of each one's tracks (lib/ConditionCard). */
+    items?: string | null;
     bpms?: readonly (number | null | undefined)[] | null;
   } = $props();
 
@@ -39,7 +40,7 @@
     <ConditionCard
       bind:condition={conditions[i]}
       axis={axes.find((a) => a.key === conditions[i].axis)}
-      {quantified}
+      {items}
       {bpms}
       bind:open={() => opened === i, (o) => (opened = o ? i : null)}
       onremove={() => remove(i)}
