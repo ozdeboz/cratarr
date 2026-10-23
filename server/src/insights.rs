@@ -121,19 +121,21 @@ pub struct SharedTrack {
 
 /// Everything on the Insights page. `rows`: the Music folder's tracks, which the playlists are counted against;
 /// `shown`: the tracks of the libraries switched on, which Collection's figures count (the owner, 2026-10-23: "one
-/// toggle per library"). `playlists`: (name, entry lines, missing tracks), as the playlist store has them.
+/// toggle per library"), its playlists' among them: how many of those tracks and albums are in one, and which of them
+/// are in the most (Incoming's are in none: a playlist's lines are the Music folder's). `playlists`: (name, entry lines, missing tracks), as the playlist store has them.
 pub fn build(rows: &[TrackRow], shown: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<String>, usize)]) -> Insights {
     let library = library_stats(shown, rules);
-    let music_albums: HashSet<&str> = rows.iter().map(|r| album_dir(&r.rel)).collect();
 
     let borrowed: Vec<(&str, &[String], usize)> = playlists.iter().map(|(n, l, d)| (n.as_str(), l.as_slice(), *d)).collect();
     let stats = playlist_stats(&borrowed);
     let in_any: HashSet<&str> = playlists.iter().flat_map(|(_, l, _)| l.iter().map(String::as_str)).collect();
     let by_rel: HashMap<&str, &TrackRow> = rows.iter().map(|r| (r.rel.as_str(), r)).collect();
-    let albums_with: HashSet<&str> = rows.iter().filter(|r| in_any.contains(r.rel.as_str())).map(|r| album_dir(&r.rel)).collect();
+    let shown_rels: HashSet<&str> = shown.iter().map(|r| r.rel.as_str()).collect();
+    let albums_with: HashSet<&str> = shown.iter().filter(|r| in_any.contains(r.rel.as_str())).map(|r| album_dir(&r.rel)).collect();
     let most_shared = stats
         .most_shared
         .iter()
+        .filter(|(rel, _)| shown_rels.contains(rel.as_str()))
         .map(|(rel, n)| {
             let row = by_rel.get(rel.as_str());
             let title = row.and_then(|r| r.tag("title").next()).map(str::to_string).unwrap_or_else(|| file_name(rel));
@@ -146,8 +148,8 @@ pub fn build(rows: &[TrackRow], shown: &[TrackRow], rules: &Rules, playlists: &[
         distinct_tracks: stats.distinct_tracks,
         in_one_playlist: stats.in_one_playlist,
         missing: stats.missing,
-        library_tracks_in_playlists: rows.iter().filter(|r| in_any.contains(r.rel.as_str())).count(),
-        albums_without_playlist: music_albums.len().saturating_sub(albums_with.len()),
+        library_tracks_in_playlists: shown.iter().filter(|r| in_any.contains(r.rel.as_str())).count(),
+        albums_without_playlist: library.albums - albums_with.len(),
         most_shared,
     };
 
@@ -434,6 +436,12 @@ mod tests {
         assert_eq!((p.library_tracks_in_playlists, p.albums_without_playlist), (3, 1), "only the untagged album is in none");
         assert!(p.most_shared.contains(&SharedTrack { title: "Kiara".into(), artist: Some("Bonobo; Andreya Triana".into()), playlists: 2 }));
         assert_eq!(p.most_shared.len(), 3, "the two AIR tracks and Kiara are each in two playlists");
+        // Music switched off, another folder's tracks only (prefixed, as the service reads them): none in a playlist,
+        // the playlists themselves and how close they are as before.
+        let other: Vec<TrackRow> = library().into_iter().map(|mut r| (r.rel = format!("1:{}", r.rel), r).1).collect();
+        let o = build(&library(), &other, &Rules::default(), &playlists);
+        assert_eq!((o.playlists.library_tracks_in_playlists, o.playlists.albums_without_playlist, o.playlists.most_shared.len()), (0, o.library.albums, 0));
+        assert_eq!((o.playlists.playlists, o.proximity.links.len()), (3, i.proximity.links.len()));
         let x = &i.proximity;
         assert_eq!(x.playlists.iter().map(|p| p.tracks).collect::<Vec<_>>(), vec![3, 3, 1]);
         let chill_evening = x.links.iter().find(|l| (l.a, l.b) == (0, 1)).expect("Chill and Evening are close");
