@@ -840,6 +840,21 @@
     margin-right: auto;
   }
 
+  /* On a big screen (the owner, 2026-10-24: "two rows"): they wrap, centred, instead of scrolling. */
+  @media (min-width: 900px) {
+    .facts {
+      flex-wrap: wrap;
+      justify-content: center;
+      row-gap: 6px;
+      overflow: visible;
+    }
+
+    .facts > :first-child,
+    .facts > :last-child {
+      margin: 0;
+    }
+  }
+
   .facts .info {
     flex: none;
     display: grid;
