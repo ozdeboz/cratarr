@@ -478,7 +478,7 @@
       </div>
       {#if np}
         <i class="sp b"></i>
-        <div class="area">
+        <div class="area" class:bare={!(prefs.playerRow && np.source !== 'device')}>
           <!-- The row under the title (the owner, 2026-10-19): the info button (the cover's overview, as a circle on the
                cover) and the facts the user picked in Settings → Display, in short; with none picked, Add leads there.
                Hidden in Settings; none for the device's own music (local mode: nothing known of it). -->
@@ -727,21 +727,12 @@
     margin-inline: auto;
   }
 
-  /* Finamp's Spacers: equal in portrait, 4 / 4 / 10 / 4 in landscape; a small minimum keeps the groups apart. */
+  /* Spacers: equal (Finamp's were 4 / 4 / 10 / 4 in landscape; the owner, 2026-10-24: too much between the controls
+     and the bottom row, relative to the rest); a small minimum keeps the groups apart. */
   .sp {
     display: block;
     flex: 1 1 0;
     min-height: 12px;
-  }
-
-  header.landscape .sp.a,
-  header.landscape .sp.b,
-  header.landscape .sp.d {
-    flex-grow: 4;
-  }
-
-  header.landscape .sp.c {
-    flex-grow: 10;
   }
 
   .track,
@@ -754,6 +745,12 @@
     display: flex;
     flex-direction: column;
     gap: 20px;
+  }
+
+  /* Without the extra details (the owner, 2026-10-24: off, nothing shifts between tracks, so its own spacing): the
+     waveform a little further from the title, as far as the controls are from it. */
+  .area.bare {
+    gap: 32px;
   }
 
   .corner {
