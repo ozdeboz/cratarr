@@ -60,6 +60,16 @@ pub struct LikeStep {
 /// seeds its songs.
 async fn like_crate(id: &str, item: &str, count: usize) -> Result<CrateDef, ToggleError> {
     let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    if item == crates::WEEK {
+        let me = asking_user().ok_or_else(|| ToggleError::Refused("Sounds like your week is an account's own: sign in.".into()))?;
+        let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64) - crates::WEEK_SECS;
+        let played = tokio::task::spawn_blocking(move || served.userdata.used(&me, crate::userdata::Kind::Song))
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))??;
+        let mut week: Vec<String> = played.into_iter().filter(|(_, a)| a.play_date.is_some_and(|d| d >= since)).map(|(song, _)| song).collect();
+        week.sort();
+        return Ok(crates::week_crate(id, week, count));
+    }
     let item = item.to_string();
     let found = tokio::task::spawn_blocking(move || -> Result<Option<(String, Vec<String>)>> {
         if crate::serve::ids::track_of(&item).is_some() {
@@ -118,8 +128,12 @@ impl CrateLibrary {
         crates::resolved(conditions, &self.files, &among)
     }
 
+    /// The crate's lines, newest first; a Sounds like crate's closest first (`crates::closest_first`).
     pub(super) fn select(&self, conditions: &[crates::Condition]) -> Vec<String> {
-        crates::select(self.files(), &self.resolved(conditions), &self.world()).into_iter().map(str::to_string).collect()
+        let resolved = self.resolved(conditions);
+        let mut lines: Vec<String> = crates::select(self.files(), &resolved, &self.world()).into_iter().map(str::to_string).collect();
+        crates::closest_first(&mut lines, &resolved);
+        lines
     }
 }
 

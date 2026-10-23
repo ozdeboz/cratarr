@@ -396,7 +396,7 @@ export type CrateValue =
   | { kind: 'any_of'; values: string[] }
   | { kind: 'range'; min: number | null; max: number | null }
   // Sounds like its seeds (song ids): the `count` tracks that sound most like them.
-  | { kind: 'like'; of: string[]; count: number };
+  | { kind: 'like'; of: string[]; count: number; fresh?: boolean };
 export type Quantifier = 'any' | 'all';
 export type Condition = { axis: string; not: boolean; value: CrateValue; enabled?: boolean; quantifier?: Quantifier };
 export type CrateDef = { id: string; name: string; conditions: Condition[] };

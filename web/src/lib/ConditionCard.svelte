@@ -55,6 +55,8 @@
   const tested = $derived(!!items && !!axis?.varies);
   /** Sounds like's curve, for its seeds (lib/LikeCurve). */
   let curve = $state<number[] | null>(null);
+  /** The count under a finger dragging the curve: the summary follows it before the release sets it. */
+  let dragged = $state<number | null>(null);
   $effect(() => {
     const v = condition.value;
     if (v.kind !== 'like' || !open) return;
@@ -76,7 +78,7 @@
     const v = condition.value;
     let s = '';
     if (v.kind === 'yes') s = 'yes';
-    else if (v.kind === 'like') s = `the closest ${v.count}`;
+    else if (v.kind === 'like') s = `the closest ${dragged ?? v.count}`;
     else if (v.kind === 'any_of') s = v.values.length === 0 ? (axis?.kind === 'membership' ? 'any playlist' : 'none chosen') : v.values.length <= 2 ? v.values.join(', ') : `${v.values.slice(0, 2).join(', ')} +${v.values.length - 2}`;
     else {
       const n = (x: number) => String(Math.round(x));
@@ -135,7 +137,7 @@
       {:else if condition.value.kind === 'like'}
         {@const l = condition.value}
         <!-- How many: the curve of how alike the closest are, cut where the crate ends. -->
-        {#if curve?.length}<div class="near"><LikeCurve {curve} count={l.count} onchange={(n) => (condition.value = { ...l, count: n })} /></div>{/if}
+        {#if curve?.length}<div class="near"><LikeCurve {curve} count={l.count} onpreview={(n) => (dragged = n)} onchange={(n) => (condition.value = { ...l, count: n })} /></div>{/if}
       {:else if axis && condition.value.kind === 'range'}
         {@const r = condition.value}
         {#if axis.bins?.length && axis.min !== null && axis.max !== null && axis.max > axis.min}

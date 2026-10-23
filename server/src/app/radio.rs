@@ -207,11 +207,21 @@ impl NextRequest {
     }
 }
 
-/// The listener's own "Similar by" (their settings' `similar_by`: signal names, the first counting most), when they
-/// set one; names not known are left out.
+/// The listener's own "Similar by" ([similar_by_of] the account asking).
 fn similar_by_of_listener() -> Option<Vec<Signal>> {
+    similar_by_of(&crate::serve::instance()?.current_user()?)
+}
+
+/// An account's own "Similar by" (its settings' `similar_by`: signal names, the first counting most), when it set one;
+/// names not known are left out. A player Cratarr drives (Play On, with nobody asking) takes its account's.
+pub fn similar_by_of(user: &str) -> Option<Vec<Signal>> {
     let served = crate::serve::instance()?;
-    let (_, settings) = served.userdata.settings_of(&served.current_user()?).ok()?;
+    let (_, settings) = served.userdata.settings_of(user).ok()?;
+    similar_by_in(&settings)
+}
+
+/// "Similar by" as an account's settings hold it; none set, or none known: none.
+fn similar_by_in(settings: &serde_json::Value) -> Option<Vec<Signal>> {
     let names = settings.get("similar_by")?.as_array()?.clone();
     Some(names.into_iter().filter_map(|n| serde_json::from_value(n).ok()).collect()).filter(|v: &Vec<Signal>| !v.is_empty())
 }
@@ -884,6 +894,14 @@ async fn ready() -> Result<(Arc<Index>, HashMap<String, i64>), ToggleError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn similar_by_is_the_account_s_setting_with_names_not_known_left_out() {
+        let set = serde_json::json!({ "similar_by": ["genre", "nonsense", "artists"] });
+        assert_eq!(similar_by_in(&set), Some(vec![Signal::Genres, Signal::Artists]));
+        assert_eq!(similar_by_in(&serde_json::json!({ "similar_by": ["nonsense"] })), None);
+        assert_eq!(similar_by_in(&serde_json::json!({})), None);
+    }
 
     fn song(id: &str, album: u32, artist: u32, genre: u32, year: u32, playlists: &[u32]) -> Song {
         Song {

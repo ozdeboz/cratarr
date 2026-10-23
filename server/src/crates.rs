@@ -76,10 +76,17 @@ pub enum Value {
     },
     /// Sounds like its seeds (song ids; an album's are its songs'): the `count` tracks that sound most like them
     /// (the owner, 2026-10-23: how many, not how alike; one setting means one size for every seed).
-    Like { of: Vec<String>, count: usize },
-    /// A `Like` worked out (`resolved`): the lines of those tracks. Never kept.
+    /// `fresh`: its seeds themselves left out (Sounds like your week: what was played is not offered again).
+    Like {
+        of: Vec<String>,
+        count: usize,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        fresh: bool,
+    },
+    /// A `Like` worked out (`resolved`): the lines of those tracks, and the same closest first (`closest_first`).
+    /// Never kept.
     #[serde(skip)]
-    Within { lines: Arc<HashSet<String>> },
+    Within { lines: Arc<HashSet<String>>, ranked: Arc<Vec<String>> },
 }
 
 /// A crate: its id never changes; its name is unique among crates.
@@ -107,6 +114,17 @@ pub fn genre_crate(id: &str) -> Option<CrateDef> {
 /// albums and tracks can now become seeds for crates"): made when asked for (`like:<id>`), never saved. The caller
 /// names it and turns an album into its songs (`like_crate`).
 pub const LIKE: &str = "like:";
+/// The seed of "Sounds like your week" (`like:week[@<count>]`): the songs the asking account played in the last 7
+/// days, the closest not among them (a5 for the owner, 2026-10-23; for 75's Home).
+pub const WEEK: &str = "week";
+/// How far back "your week" reaches (s).
+pub const WEEK_SECS: i64 = 7 * 24 * 3600;
+
+/// "Sounds like your week": seeded with `played` (song ids), which it leaves out.
+pub fn week_crate(id: &str, played: Vec<String>, count: usize) -> CrateDef {
+    let like = Condition::new("like", false, Value::Like { of: played, count, fresh: true });
+    CrateDef { id: id.to_string(), name: "Sounds like your week".into(), conditions: vec![like] }
+}
 /// How many tracks it holds until its curve says otherwise, and the fewest and most it can.
 pub const LIKE_COUNT: usize = 200;
 pub const LIKE_FEWEST: usize = 10;
@@ -123,7 +141,7 @@ pub fn like_of(id: &str) -> Option<(&str, usize)> {
 }
 
 pub fn like_crate(id: &str, name: &str, songs: Vec<String>, count: usize) -> CrateDef {
-    let like = Condition::new("like", false, Value::Like { of: songs, count });
+    let like = Condition::new("like", false, Value::Like { of: songs, count, fresh: false });
     CrateDef { id: id.to_string(), name: name.to_string(), conditions: vec![like] }
 }
 
@@ -618,7 +636,7 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
         ("style", Value::AnyOf { values }) => values.iter().any(|v| f.styles.iter().any(|s| s.eq_ignore_ascii_case(v))),
         ("energy", Value::Range { min, max }) => within(f.energy, min, max),
         ("danceability", Value::Range { min, max }) => within(f.danceability, min, max),
-        ("like", Value::Within { lines }) => lines.contains(&f.rel),
+        ("like", Value::Within { lines, .. }) => lines.contains(&f.rel),
         _ => false,
     }
 }
@@ -679,9 +697,15 @@ pub fn resolved(conditions: &[Condition], all: &[Facts], among: &[&Facts]) -> Ve
     conditions
         .iter()
         .map(|c| match &c.value {
-            Value::Like { of, count } => {
-                let lines = closest(of, all, among).into_iter().take(*count).map(|(f, _)| f.rel.clone()).collect();
-                Condition { value: Value::Within { lines: Arc::new(lines) }, ..c.clone() }
+            Value::Like { of, count, fresh } => {
+                let seeds: HashSet<i64> = if *fresh { of.iter().filter_map(|id| crate::serve::ids::track_of(id)).collect() } else { HashSet::new() };
+                let ranked: Vec<String> = closest(of, all, among)
+                    .into_iter()
+                    .filter(|(f, _)| !f.track.is_some_and(|t| seeds.contains(&t)))
+                    .take(*count)
+                    .map(|(f, _)| f.rel.clone())
+                    .collect();
+                Condition { value: Value::Within { lines: Arc::new(ranked.iter().cloned().collect()), ranked: Arc::new(ranked) }, ..c.clone() }
             }
             _ => c.clone(),
         })
@@ -703,6 +727,18 @@ pub fn closest<'a>(of: &[String], all: &[Facts], among: &[&'a Facts]) -> Vec<(&'
     scored.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.rel.cmp(&b.0.rel)));
     scored.truncate(LIKE_MOST);
     scored.into_iter().map(|(f, cos)| (f, crate::similarity::sound_alike(cos) * 100.0)).collect()
+}
+
+/// A Sounds like crate's own order, closest first (a5 for the owner, 2026-10-23; it was newest first, as every crate's):
+/// `lines` (selected) in the order of its first Sounds like that is on, as `resolved` ranked it. Others as they were.
+pub fn closest_first(lines: &mut [String], resolved: &[Condition]) {
+    let ranked = resolved.iter().find_map(|c| match &c.value {
+        Value::Within { ranked, .. } if c.enabled && !c.not => Some(ranked),
+        _ => None,
+    });
+    let Some(ranked) = ranked else { return };
+    let rank: HashMap<&str, usize> = ranked.iter().enumerate().map(|(i, l)| (l.as_str(), i)).collect();
+    lines.sort_by_key(|l| rank.get(l.as_str()).copied().unwrap_or(usize::MAX));
 }
 
 /// A crate's files, in the order given (newest first): those all its conditions that are on hold for.
@@ -1052,12 +1088,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_sounds_like_crate_is_closest_first_as_made() {
+        let ranked: Vec<String> = ["b", "c", "a"].map(String::from).to_vec();
+        let like = Condition::new("like", false, Value::Within { lines: Arc::new(ranked.iter().cloned().collect()), ranked: Arc::new(ranked) });
+        let mut lines: Vec<String> = ["a", "b", "c"].map(String::from).to_vec();
+        closest_first(&mut lines, std::slice::from_ref(&like));
+        assert_eq!(lines, ["b", "c", "a"]);
+        // Without one (or with it muted): newest first, as given.
+        let mut lines: Vec<String> = ["a", "b", "c"].map(String::from).to_vec();
+        closest_first(&mut lines, &[Condition { enabled: false, ..like }]);
+        assert_eq!(lines, ["a", "b", "c"]);
+    }
+
+    #[test]
     fn a_genre_is_a_crate_of_its_one_condition() {
         let c = genre_crate("genre:Trip Hop").unwrap();
         assert_eq!(c.name, "Trip Hop");
         assert_eq!(c.conditions, vec![Condition::new("genre", false, Value::AnyOf { values: vec!["Trip Hop".into()] })]);
         assert!(genre_crate("genre: ").is_none());
         assert!(genre_crate("unlisted").is_none());
+    }
+
+    #[test]
+    fn your_week_sounds_like_what_was_played_but_offers_none_of_it_again() {
+        let heard = |rel: &str, track: i64, v: [f32; 2]| Facts { rel: rel.into(), track: Some(track), sound: Some(Arc::from(v.as_slice())), ..Facts::default() };
+        let files = vec![heard("played.flac", 1, [1.0, 0.0]), heard("near.flac", 2, [0.999, 0.045]), heard("far.flac", 3, [0.0, 1.0])];
+        let week = week_crate("like:week@10", vec!["tr-1".into()], 10);
+        assert_eq!(week.name, "Sounds like your week");
+        let membership = HashMap::new();
+        let w = World { membership: &membership, favourites: None, favourite_albums: None };
+        let every: Vec<&Facts> = files.iter().collect();
+        let mut lines: Vec<String> = select(&files, &resolved(&week.conditions, &files, &every), &w).into_iter().map(String::from).collect();
+        closest_first(&mut lines, &resolved(&week.conditions, &files, &every));
+        assert_eq!(lines, ["near.flac", "far.flac"], "closest first, the played one left out");
+        assert_eq!(like_of("like:week@10"), Some((WEEK, 10)));
     }
 
     #[test]

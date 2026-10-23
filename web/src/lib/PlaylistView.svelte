@@ -395,7 +395,24 @@
       const own = localCovers[coverKey(artist.source, artistPictureId(artist.name))];
       return own ? [own] : covers;
     }
-    return crate && !seeded(crate) ? crateArt(crate) : covers;
+    if (crate && seeded(crate)) return rowCovers;
+    return crate ? crateArt(crate) : covers;
+  });
+  /** A Sounds like or genre crate's covers: its first rows' first four albums, as a mosaic (it has no picture of its
+   *  own, and showed Cratarr's mark). */
+  const rowCovers = $derived.by(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const r of rows ?? []) {
+      if (!r.id || r.missing) continue;
+      const key = r.album_id ?? `${r.album ?? ''}
+${r.album_artist ?? r.artist ?? ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(coverUrl({ source, id: r.id, album_id: r.album_id }));
+      if (out.length === 4) break;
+    }
+    return out.length >= 4 ? out : out.slice(0, 1);
   });
   // As drawn: covers that fail to load leave a mosaic (lib/Cover).
   const coversShown = $derived(mosaicOf(covers));

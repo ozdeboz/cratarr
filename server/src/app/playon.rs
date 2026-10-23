@@ -891,6 +891,13 @@ fn first_owner() -> Option<String> {
     crate::serve::instance().and_then(|s| s.users.owner())
 }
 
+impl PlayOn {
+    /// The account player `name` is of (one from before accounts: the first administrator's).
+    fn account_of(&self, name: &str) -> Option<String> {
+        self.entries().get(name).and_then(|e| e.owner.clone()).or_else(first_owner)
+    }
+}
+
 /// Whether `e` is `user`'s (`first`: the first administrator's name).
 fn belongs_to(e: &Entry, user: &str, first: Option<&str>) -> bool {
     e.owner.as_deref().or(first) == Some(user)
@@ -1967,7 +1974,8 @@ impl PlayOn {
             albums,
             by: RadioBy::default(),
             skip_favourites,
-            similar_by: None,
+            // Its account's "Similar by": a start from Home Assistant or another of Cratarr's own has no listener.
+            similar_by: self.account_of(name).and_then(|u| super::radio::similar_by_of(&u)),
         };
         let first = super::radio::next(ask).await?;
         if first.is_empty() {
