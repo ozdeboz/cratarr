@@ -23,6 +23,7 @@
   import { likeCurve } from './api';
   import { hiddenLibraries } from './listFilter.svelte';
   import TempoRange from './TempoRange.svelte';
+  import { WORD_AXES, wordShown } from './facts';
 
   let {
     condition = $bindable(),
@@ -61,8 +62,9 @@
     const v = condition.value;
     if (v.kind !== 'like' || !open) return;
     const of = v.of.join(',');
+    const fresh = !!v.fresh;
     let gone = false;
-    likeCurve(of.split(','), undefined, hiddenLibraries()).then(
+    likeCurve(of.split(','), undefined, hiddenLibraries(), fresh).then(
       (c) => !gone && (curve = c.alike),
       () => !gone && (curve = null),
     );
@@ -73,13 +75,16 @@
   /** The scale's ends as the profile names them (lib/ListProfile). */
   const ENDS: Record<string, [string, string]> = { energy: ['calm', 'intense'], danceability: ['still', 'danceable'] };
 
+  /** A value as shown: AudioMuse's words capitalised. */
+  const shown = (v: string) => (axis && WORD_AXES.includes(axis.key) ? wordShown(v) : v);
+
   /** What it is set to, in a few words ("Downtempo, Trip Hop", "80–105", "2015 on", "yes"). */
   const summary = $derived.by(() => {
     const v = condition.value;
     let s = '';
     if (v.kind === 'yes') s = 'yes';
     else if (v.kind === 'like') s = `the closest ${dragged ?? v.count}`;
-    else if (v.kind === 'any_of') s = v.values.length === 0 ? (axis?.kind === 'membership' ? 'any playlist' : 'none chosen') : v.values.length <= 2 ? v.values.join(', ') : `${v.values.slice(0, 2).join(', ')} +${v.values.length - 2}`;
+    else if (v.kind === 'any_of') s = v.values.length === 0 ? (axis?.kind === 'membership' ? 'any playlist' : 'none chosen') : v.values.length <= 2 ? v.values.map(shown).join(', ') : `${v.values.slice(0, 2).map(shown).join(', ')} +${v.values.length - 2}`;
     else {
       const n = (x: number) => String(Math.round(x));
       s = v.min !== null && v.max !== null ? `${n(v.min)}–${n(v.max)}` : v.min !== null ? `${n(v.min)} on` : v.max !== null ? `up to ${n(v.max)}` : 'any';
@@ -131,7 +136,7 @@
         {/if}
         <div class="chips">
           {#each chips as c (c.v)}
-            <button class="chip" class:not={condition.not} aria-pressed={c.on} onclick={() => toggle(c.v)}>{c.v}{#if c.n !== null}<span class="n">{c.n.toLocaleString()}</span>{/if}</button>
+            <button class="chip" class:not={condition.not} aria-pressed={c.on} onclick={() => toggle(c.v)}>{shown(c.v)}{#if c.n !== null}<span class="n">{c.n.toLocaleString()}</span>{/if}</button>
           {/each}
         </div>
       {:else if condition.value.kind === 'like'}

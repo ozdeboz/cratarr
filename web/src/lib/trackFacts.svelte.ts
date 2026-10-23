@@ -23,7 +23,7 @@ export type Felt = {
 export type Details = TrackFile & Felt;
 
 export { FACTS, type FactId } from './facts';
-import type { FactId } from './facts';
+import { wordShown, type FactId } from './facts';
 export type Fact = { full: string; short: string; meter?: number };
 
 /** Each track's details as last read (null: none to read); read once a track is asked about. */
@@ -74,9 +74,9 @@ const totalOf = (v: string | null, total: string | null) => Number(v?.split('/')
 export function factsOf(f: Details | null, info: TrackInfo | null): Partial<Record<FactId, Fact>> {
   const out: Partial<Record<FactId, Fact>> = {};
   if (f?.genres.length) out.genre = { full: f.genres.slice(0, 4).join(' · '), short: cut(f.genres[0]) };
-  const style = f?.style?.slice(0, 3).map((m) => m.name);
+  const style = f?.style?.slice(0, 3).map((m) => wordShown(m.name));
   if (style?.length) out.style = { full: style.join(' · '), short: cut(style[0]) };
-  const moods = f?.mood?.slice(0, 3).map((m) => m.name[0].toUpperCase() + m.name.slice(1));
+  const moods = f?.mood?.slice(0, 3).map((m) => wordShown(m.name));
   if (moods?.length) out.mood = { full: moods.join(' · '), short: moods[0] };
   const r = released(tagOf(f, 'originaldate', 'releasedate', 'date'));
   if (r) out.released = { full: r[1], short: r[0] };

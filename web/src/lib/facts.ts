@@ -25,3 +25,10 @@ export const FACTS = [
   { id: 'explicit', label: 'Explicit' },
 ] as const;
 export type FactId = (typeof FACTS)[number]['id'];
+
+/** AudioMuse's style and mood words as shown (the owner, 2026-10-23): capitalised as the genres are. They are kept as
+ *  AudioMuse names them, lowercase, which the filters and crates match. */
+const WORDS: Record<string, string> = { rnb: 'RnB' };
+export const wordShown = (w: string) => WORDS[w] ?? (w ? w[0].toUpperCase() + w.slice(1) : w);
+/** The values axes whose values are AudioMuse's words. */
+export const WORD_AXES: readonly string[] = ['style', 'mood'];

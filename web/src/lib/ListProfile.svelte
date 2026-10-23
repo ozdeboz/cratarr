@@ -1,17 +1,17 @@
 <script lang="ts">
-  // A list's profile on top of it (the owner, 2026-10-23; the server's crates::Profile): its telling styles and artists,
-  // each number as one bar (lib/DensityBar) on the same scale for every list, and its moods against the library's.
+  // A list's profile on top of it (the owner, 2026-10-23; the server's crates::Profile): its telling styles, each
+  // number as one bar (lib/DensityBar) on the same scale for every list, and its moods against the library's.
   // Folded or open for every list at once (prefs.profileOpen), by a pill on a divider after its rows (the owner's
-  // choice, 2026-10-23); folded, it keeps the rows above the fold line set in Settings (Display › AudioMuse), and rows
+  // choice, 2026-10-23); folded, it keeps the rows above the fold line set in Settings (Display › Profile), and rows
   // switched off there never show. A row with nothing to say is left out by the server (a number
-  // all its tracks share) or here (no styles, no artists).
+  // all its tracks share) or here (no styles). Its artists are a line under the list's genres (lib/PlaylistView).
   import type { ListProfileData } from './api';
   import DensityBar from './DensityBar.svelte';
+  import { wordShown } from './facts';
   import Icon from './Icon.svelte';
   import { PROFILE_ROWS, prefs, type ProfileRow } from './prefs.svelte';
 
-  /** `ownArtist`: an album's or an artist's own list, whose artists the header already names. */
-  let { data, ownArtist = false }: { data: ListProfileData; ownArtist?: boolean } = $props();
+  let { data }: { data: ListProfileData } = $props();
 
   const ENDS: Record<string, [string, string]> = { tempo: ['60', '180 BPM'], energy: ['calm', 'intense'], danceability: ['still', 'danceable'] };
 
@@ -19,7 +19,6 @@
   const rows = $derived(
     prefs.profileRows.flatMap((id) => PROFILE_ROWS.filter((r) => r.id === id)).filter((r) => {
       if (r.id === 'style') return data.styles.length > 0;
-      if (r.id === 'artists') return !ownArtist && data.artists.length > 0;
       if (r.id === 'mood') return data.moods.length > 0;
       return data.numbers.some((n) => n.key === r.id);
     }),
@@ -39,19 +38,17 @@
     <!-- A line between the header and the rows, whenever a row shows. -->
     {#if shown.length}<div class="rule"></div>{/if}
     {#each shown as r (r.id)}
-      <div class="row" class:words={r.id === 'style' || r.id === 'artists'} class:mood={r.id === 'mood'}>
+      <div class="row" class:words={r.id === 'style'} class:mood={r.id === 'mood'}>
         <span class="label">{r.label}</span>
         {#if r.id === 'style'}
-          <div class="chips">{#each data.styles as s (s)}<span>{s}</span>{/each}</div>
-        {:else if r.id === 'artists'}
-          <div class="artists">{data.artists.join(' · ')}</div>
+          <div class="chips">{#each data.styles as s (s)}<span>{wordShown(s)}</span>{/each}</div>
         {:else if r.id === 'mood'}
           <!-- Each mood above or below the library's middle. -->
           <div class="moods">
             {#each data.moods as m (m.name)}
               <div class="m">
                 <div class="col"><b class:up={m.lift >= 0} style:height="{Math.abs(m.lift) * 50}%"></b></div>
-                <small>{m.name}</small>
+                <small>{wordShown(m.name)}</small>
               </div>
             {/each}
           </div>
@@ -156,11 +153,6 @@
     border-radius: 99px;
     color: var(--muted);
     font-size: 13.5px;
-  }
-
-  .artists {
-    padding-top: 3px;
-    font-size: 14px;
   }
 
   .one {
