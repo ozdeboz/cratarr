@@ -319,8 +319,9 @@ class MainActivity : AppCompatActivity() {
         openSettings = false
     }
 
-    /** A message from the page: `hello`, `player` (its player's calls), `device` and `device-set` (this device's
-     *  settings), `page-prefs` (its own settings), `network-test`, `battery`, `address`, `open` (a link outside). */
+    /** A message from the page: `hello`, `player` (its player's calls), `drive` (the player its screen drives), `device`
+     *  and `device-set` (this device's settings), `page-prefs` (its own settings), `network-test`, `battery`,
+     *  `address`, `open` (a link outside). */
     private fun onPageMessage(data: String, reply: JavaScriptReplyProxy) {
         val message = try {
             JSONObject(data)
@@ -339,6 +340,15 @@ class MainActivity : AppCompatActivity() {
                 followSession()
             }
             "player" -> player?.handle(message) ?: waiting.add(message)
+            // The one of Cratarr's players the screen drives (null: this device's own): Android's media controls show
+            // that one meanwhile (RemotePlayer); the service started for it while the app is in front.
+            "drive" -> {
+                val driven = message.optString("player").takeIf { message.has("player") && !message.isNull("player") && it.isNotEmpty() }
+                if (Prefs(this).driven != driven) {
+                    Prefs(this).driven = driven
+                    if (driven != null) PlayerService.ready(this)
+                }
+            }
             "device" -> reply.postMessage(appMessage())
             // The visuals' sound as it is heard (decision 0046, amended 2026-10-19), on or off.
             "live" -> {

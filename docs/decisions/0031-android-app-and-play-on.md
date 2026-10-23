@@ -178,3 +178,22 @@ update of the app left it out too, until someone opened it.
   10 minutes. A pause, a stop or another play lets it go.
 - Covers (the notification's, the lock screen's, a car's) are read through the app's own requests, with its session:
   away from home the proxy refused Media3's own.
+
+## Amended (2026-10-23): Android's media controls follow the screen
+
+The phone's page drove the Salon tablet while Android's own media controls (the notification, the lock screen, the
+output chip) said "This phone" with a paused track of its own (the owner: "It would be awesome if we could see here …
+that something is being played on the tablet instead"). As decision 0033's "one screen, one place": while the page
+plays on another of Cratarr's players, the app's media session shows that one.
+
+- **The page says which** (`{"type": "drive", "player": name | null}`, `lib/playOn`), as it opens and as its output
+  changes, before it asks the app's player for its state again. The app keeps it (`Prefs.driven`) and starts its
+  service for it.
+- **The session's player is swapped** (`MediaSession.setPlayer`): while driving, a `RemotePlayer` (Media3's
+  `SimpleBasePlayer`) mirrors that player from Cratarr's live channel of its players (`/api/events/players`): the
+  track, its cover, playing or paused, the position counted on from the report on Cratarr's clock. Play, pause, next,
+  previous, seek and the volume keys become Play On commands. Its playback is remote (`PLAYBACK_TYPE_REMOTE`, volume 0
+  to 100). Driving none again, the app's own player is the session's again.
+- **Step 2, not yet:** the chip names the device only through a routing session (SystemUI's `MediaDeviceManager`:
+  without one it shows "Other device"), which needs the app to offer Cratarr's players as routes
+  (`MediaRoute2ProviderService`), as Cast does.

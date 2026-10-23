@@ -85,6 +85,14 @@ class Prefs(context: Context) {
         }
 
     /** Kept awake and listening while idle too: for a device that is always on its charger. */
+    /** The one of Cratarr's players this device's screen drives (the page's output), by name; null: its own. The app's
+     *  media controls show that one meanwhile (RemotePlayer). The page says it as it opens and as it changes. */
+    var driven: String?
+        get() = p.getString(DRIVEN, null)?.takeIf { it.isNotEmpty() }
+        set(value) {
+            p.edit().putString(DRIVEN, value.orEmpty()).apply()
+        }
+
     var stayReady: Boolean
         get() = p.getBoolean(STAY_READY, false)
         set(value) {
@@ -343,6 +351,7 @@ class Prefs(context: Context) {
         const val PAGE_PREFS = "page_prefs"
         const val PLAYER_NAME = "player_name"
         const val STAY_READY = "stay_ready"
+        const val DRIVEN = "driven"
         const val DOWNLOAD_QUALITY = "download_quality"
         const val DOWNLOAD_MOBILE = "download_mobile"
         const val SYNC_BUDGET_GB = "sync_budget_gb"

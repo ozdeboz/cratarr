@@ -57,6 +57,10 @@ class PlayerService : MediaSessionService() {
     private lateinit var player: ExoPlayer
     /** Sync play (decision 0037): this device in a group. */
     private lateinit var sync: SyncPlay
+    /** The app's own player as the session shows it (its previous and shuffle the app's way). */
+    private lateinit var sessionPlayer: Player
+    /** The player the screen drives, as the session shows it meanwhile (the owner, 2026-10-23). */
+    private lateinit var remote: RemotePlayer
 
     /** The server's address or the player's name changed: Play On connects again with them. A sleep timer set: kept. */
     private val prefsChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -74,6 +78,7 @@ class PlayerService : MediaSessionService() {
         // Another server or name: Cratarr says the group again once connected.
         if ((key == Prefs.SERVER_URL || key == Prefs.LOCAL_URL || key == Prefs.PLAYER_NAME) && sync.leader != null) sync.group(null, null, 0, sync.bufferMs, "")
         if (key == Prefs.LEVELLING) link?.levellingChanged()
+        if (key == Prefs.DRIVEN) showDriven()
         if (key == Prefs.OUTPUT_CHOICE || key == Prefs.OUTPUT_ORDERED || key == Prefs.OUTPUT_KNOWN) applyOutput()
         if (key == Prefs.SLEEP) {
             keepSleep()
@@ -124,7 +129,7 @@ class PlayerService : MediaSessionService() {
         // headset's or the system's shuffle shuffles what is to come once, and the player never plays shuffled, so it
         // says it is not. Cratarr's queue is shuffled by Cratarr (Play On's `shuffle`, which sends the new order back);
         // local mode's here, the playing track staying where it is.
-        val sessionPlayer = object : ForwardingPlayer(player) {
+        sessionPlayer = object : ForwardingPlayer(player) {
             override fun seekToPrevious() {
                 if (!Repeat.previous(this@PlayerService, player)) super.seekToPrevious()
             }
@@ -153,6 +158,7 @@ class PlayerService : MediaSessionService() {
                 ),
             )
             .build()
+        remote = RemotePlayer(this, prefs)
         // Local mode (decision 0052) as it was: its queue again, paused; without Android's permission or a folder turned
         // on any more, Cratarr's.
         if (prefs.mode == Prefs.MODE_DEVICE) {
@@ -163,6 +169,9 @@ class PlayerService : MediaSessionService() {
         applyOutput()
         Reach.watch(this)
         Prefs.shared(this).registerOnSharedPreferenceChangeListener(prefsChanged)
+        // The player the screen drives (the page says it as it opens and as it changes; started for it, the service
+        // shows it at once).
+        showDriven()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
@@ -173,7 +182,7 @@ class PlayerService : MediaSessionService() {
             Ready.ensure(this, "app opened")
             link?.playHeld()
             // Not ready, nothing queued: nothing keeps it.
-            if (!prefs.stayReady && session?.player?.mediaItemCount == 0) stopSelf()
+            if (!prefs.stayReady && player.mediaItemCount == 0 && prefs.driven == null) stopSelf()
             return START_STICKY
         }
         return super.onStartCommand(intent, flags, startId)
@@ -192,6 +201,19 @@ class PlayerService : MediaSessionService() {
         }
         notifications.cancel(GROUP_NOTIFICATION)
         super.onUpdateNotification(session, startInForegroundRequired || (prefs.stayReady && session.player.mediaItemCount > 0))
+    }
+
+    /**
+     * The screen drives another of Cratarr's players, or none again: Android's media controls (the notification, the lock
+     * screen, the output chip, the volume keys) show and control that one, or this device's own player again (the
+     * owner, 2026-10-23: "This phone" and a paused track showed while the phone drove the Salon tablet).
+     */
+    private fun showDriven() {
+        val name = prefs.driven
+        remote.follow(name)
+        val s = session ?: return
+        val want: Player = if (name != null) remote else sessionPlayer
+        if (s.player !== want) s.player = want
     }
 
     /** Following a group began or ended. */
@@ -314,8 +336,7 @@ class PlayerService : MediaSessionService() {
     override fun onTaskRemoved(rootIntent: Intent?) {
         LinkLog.add(this, "info", "playon", "app swiped away")
         // The app swiped away: music that plays goes on, and so does a player that stays ready; otherwise it goes.
-        val player = session?.player
-        if (!prefs.stayReady && (player == null || !player.playWhenReady || player.mediaItemCount == 0)) stopSelf()
+        if (!prefs.stayReady && prefs.driven == null && (!player.playWhenReady || player.mediaItemCount == 0)) stopSelf()
     }
 
     /**
@@ -428,10 +449,9 @@ class PlayerService : MediaSessionService() {
         sync.release()
         link?.stop()
         link = null
-        session?.run {
-            player.release()
-            release()
-        }
+        session?.release()
+        player.release()
+        remote.release()
         session = null
         super.onDestroy()
     }

@@ -36,7 +36,18 @@ export const selfName = () => (inApp ? appInfo.player : playOn.self);
 const shownName = () => drivenName() ?? followedLeader();
 /** What the local player was last told to drive. */
 let driving: string | null = null;
+/** What the app was last told its screen drives. */
+let told: string | null | undefined;
+/** In the app, the player chosen (null: its own) to the app, so Android's media controls show that one meanwhile (the
+ *  owner, 2026-10-23). Before the app's player is asked for its state again (`hello`): it answers for its own then. */
+function tellApp() {
+  const d = drivenName();
+  if (!inApp || d === told) return;
+  told = d;
+  toApp({ type: 'drive', player: d });
+}
 function driveShown() {
+  tellApp();
   const name = shownName();
   if (name === driving) return;
   const was = driving;
@@ -148,6 +159,7 @@ function take(players: PlayOnPlayer[]) {
 
 /** Plays on player `name` from now on (or here again: `null`), as the output says. */
 export function follow(name: string | null) {
+  tellApp();
   driving = name;
   drive(name);
   shownVersion = -1;
