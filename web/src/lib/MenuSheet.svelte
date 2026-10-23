@@ -26,6 +26,7 @@
     title,
     chips = [],
     heart = null,
+    end = null,
     actions = [],
     onback = null,
     step = 'menu',
@@ -44,6 +45,8 @@
     title: string;
     chips?: string[];
     heart?: { on: boolean; disabled?: boolean; toggle: () => void } | null;
+    /** An action at the title's end where there is no heart (the Filter sheet's Save as crate). */
+    end?: SheetAction | null;
     actions?: SheetAction[];
     /** In a step: back to the entries (Esc too). */
     onback?: (() => void) | null;
@@ -177,6 +180,8 @@
       <button class="heart" class:on={heart.on} disabled={heart.disabled} aria-label={heart.on ? 'Favourite' : 'Not a favourite'} aria-pressed={heart.on} onclick={heart.toggle}
         ><Icon name="heart" size={24} /></button
       >
+    {:else if end}
+      <button class="heart" aria-label={end.label} title={end.label} disabled={end.disabled} onclick={end.onclick}><Icon name={end.icon} size={24} /></button>
     {/if}
   </div>
 
@@ -369,6 +374,11 @@
     border-radius: 50%;
     color: var(--text);
     cursor: pointer;
+  }
+
+  .heart:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 
   .heart.on :global(svg) {

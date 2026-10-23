@@ -2,7 +2,7 @@
   // The filter, after Symfonium's source filter (opened from the funnel in a floating pill, lib/TopPill): first the
   // list's own filter, remembered per kind of list (decisions 0060 and 0061): how many it lets through, its conditions
   // as cards (lib/ConditionList: a crate's, unsaved; any or all of each item's tracks where the items hold them), and
-  // the kind's own switches. Then, last, the one filter that holds everywhere: a card per server this browser can
+  // the kind's own switches; at the title's end, Save as crate (the owner, 2026-10-23). Then, last, the one filter that holds everywhere: a card per server this browser can
   // follow, with its kind and its libraries. On the followed server's card the libraries are switches on the Library
   // and on Crates (decision 0034; a crate fills from every library switched on, the owner, 2026-10-23), every used
   // one, remembered as the server is; the last one on stays on, so the page never filters down to nothing; elsewhere a
@@ -19,6 +19,7 @@
   import type { ListAxis } from './ConditionCard.svelte';
   import { filterOf, filtersOn, hiddenLibraries, inView, setConditions, setSwitch, switchOn } from './listFilter.svelte';
   import { SWITCHES } from './pageView.svelte';
+  import { startCrate } from './crates.svelte';
   import { filterList, getCrateAxes, getLibraries, getSettings, getStatus, type LibrariesView, type LibraryUse } from './api';
   import { me } from './me.svelte';
   import Icon from './Icon.svelte';
@@ -51,6 +52,12 @@
   const items = $derived(list === 'library' ? 'album' : list === 'playlists' ? 'playlist' : null);
   const switches = $derived((SWITCHES[list] ?? []).filter((w) => !w.incoming || hasIncoming));
   const filter = $derived(filterOf(list));
+  /** Save as crate (the header's crate with a plus): the conditions that apply, a new crate in the panel's editor. */
+  function saveAsCrate() {
+    const conditions = filter.conditions.filter((c) => c.enabled !== false).map(({ axis, not, value }) => ({ axis, not, value }));
+    onclose();
+    startCrate('', conditions);
+  }
   // The axes and their values with their counts in the list in view, the most common first (decision 0061: over all
   // its items, so everything there is to choose from shows); a server from before it: the whole library's, uncounted.
   let axes = $state<ListAxis[]>([]);
@@ -121,7 +128,13 @@
   let excludedOpen = $state(false);
 </script>
 
-<MenuSheet label="Filter" icon="funnel" title="Filter" {onclose}>
+<MenuSheet
+  label="Filter"
+  icon="funnel"
+  title="Filter"
+  end={conditioned ? { icon: 'cratePlus', label: 'Save as crate', disabled: !filter.conditions.some((c) => c.enabled !== false), onclick: saveAsCrate } : null}
+  {onclose}
+>
   <div class="cards">
     {#if counted && filtersOn(list)}<p class="count">{counted.shown.toLocaleString()} of {counted.total.toLocaleString()}</p>{/if}
     {#if conditioned}

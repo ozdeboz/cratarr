@@ -66,6 +66,8 @@
     speakers: '<rect x="2" y="4" width="9" height="16" rx="2"/><circle cx="6.5" cy="14" r="2.5"/><path d="M6.5 8h.01"/><rect x="13" y="4" width="9" height="16" rx="2"/><circle cx="17.5" cy="14" r="2.5"/><path d="M17.5 8h.01"/>',
     squareArrowOutUpRight: '<path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6"/><path d="m21 3-9 9"/><path d="M15 3h6v6"/>',
     crates: '<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
+    /** A new crate (the Filter sheet's Save as crate): the crate with a plus where its handle is. */
+    cratePlus: '<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M9.5 14h5"/><path d="M12 11.5v5"/>',
     // A device's audio outputs (the Play On sheet's This device, decision 0033 amended 2026-10-19), Lucide's.
     bluetooth: '<path d="m7 7 10 10-5 5V2l5 5L7 17"/>',
     headphones: '<path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3"/>',
