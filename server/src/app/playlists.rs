@@ -2453,7 +2453,7 @@ impl PlaylistService {
     }
 
     /// The asking account's taste and what it avoids (app::taste; Insights › Listening › Profile): from its favourites,
-    /// its own playlists, its plays, its exclusions and its skips (the log's), over every library.
+    /// its own playlists, its plays and skips (the log's, none while it slept), its exclusions, over every library.
     pub async fn taste(&self) -> Result<super::taste::TasteView, ToggleError> {
         let user = asking_user().ok_or_else(|| ToggleError::Refused("A taste is an account's own: sign in.".into()))?;
         let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
@@ -2465,7 +2465,15 @@ impl PlaylistService {
             let ud = &serve.userdata;
             let favourites = ud.starred(&user, crate::userdata::Kind::Song)?.iter().filter_map(|s| place(s)).collect();
             let playlists = lib.membership().iter().filter_map(|(line, lists)| Some((alike.place_of_line(line)?, lists.len()))).collect();
-            let plays = ud.song_plays(&user)?.iter().filter_map(|(s, (n, _))| Some((place(s)?, *n))).collect();
+            // Plays from the log (the counts have no times), finished or counted, none while they slept (the owner,
+            // 2026-10-23: "if Home Assistant says I was asleep, exclude it").
+            let mut played: HashMap<usize, u32> = HashMap::new();
+            for l in ud.heard_awake_since(&user, 0)?.into_iter().filter(|l| l.counted || l.ended == crate::userdata::Ended::Finished) {
+                if let Some(i) = place(&l.song) {
+                    *played.entry(i).or_default() += 1;
+                }
+            }
+            let plays = played.into_iter().collect();
             let excluded = excluded.iter().filter_map(|line| alike.place_of_line(line)).collect();
             let mut skips: HashMap<usize, u32> = HashMap::new();
             for l in ud.heard_since(&user, 0)?.into_iter().filter(|l| l.ended == crate::userdata::Ended::Skipped && !l.counted) {
