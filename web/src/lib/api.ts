@@ -1201,7 +1201,8 @@ export type HealthFinding = {
   /** What it is about, one by one: an album (server, id) or a playlist opens where it is. */
   items?: HealthItem[];
 };
-export type HealthItem = { title: string; line?: string; album?: [string, string]; playlist?: string };
+/** One thing a finding is about: an album (its server and id), a playlist, the files it names (at most 30). */
+export type HealthItem = { title: string; line?: string; album?: [string, string]; playlist?: string; files?: string[] };
 /** Every domain's findings, worst first, the most recent first among equals; when each domain was checked. */
 export const getHealthReport = () => request<{ findings: HealthFinding[]; checked: Record<string, number> }>('/api/health/report');
 

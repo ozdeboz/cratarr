@@ -10,6 +10,8 @@
   import { albumCoverUrl, type HealthItem } from './api';
   import { openFinding } from './health';
   import { health, problems } from './healthReport.svelte';
+  import HealthEvents from './HealthEvents.svelte';
+  import HealthIncoming from './HealthIncoming.svelte';
   import HealthMissing from './HealthMissing.svelte';
   import { albumSubject, backFromStep, closePlaylist, HEALTH, healthItemOf, openStep, openTab, panel, viewOver } from './panel.svelte';
 
@@ -21,6 +23,15 @@
   // The third level (the owner, 2026-10-23): an item's own page, a step deeper in the panel, back to the problem.
   const at = $derived(healthItemOf(panel.viewed));
   const item = $derived(p && at !== null ? (p.items[at] ?? null) : null);
+  /** An Incoming album waiting (or not converted): compared with Music, its menu at hand (lib/HealthIncoming). */
+  const incoming = $derived(problem.startsWith('incoming:'));
+  /** The log events behind an item grouped from them (health.rs `grouped`): their area, event and grouping field. */
+  const EVENTS: Record<string, { area: string; what: string; by: string }> = {
+    'server:slow': { area: 'server', what: 'slow response', by: 'path' },
+    'server:runaway': { area: 'server', what: 'client requests too often', by: 'client' },
+    'sign-in:refused': { area: 'signin', what: 'request refused', by: 'path' },
+    'sign-in:throttled': { area: 'signin', what: 'sign-in throttled', by: 'client' },
+  };
   /** Where an item's page sends on: its album, its playlist. */
   const onward = (x: HealthItem) =>
     x.album ? { label: 'Open the album', go: () => viewOver(albumSubject(x.album![0], x.album![1])) } : x.playlist ? { label: 'Open the playlist', go: () => openTab([x.playlist!], 'tracks') } : null;
@@ -42,9 +53,15 @@
     {#if item}
       <!-- An item's own page: what it is, and what can be done with it here. -->
       {@const on = onward(item)}
-      {#if item.album}<span class="big"><Cover src={albumCoverUrl(item.album[0], item.album[1])} /></span>{/if}
+      {#if item.album && !incoming}<span class="big"><Cover src={albumCoverUrl(item.album[0], item.album[1])} /></span>{/if}
       {#if item.line}<p class="what">{item.line}</p>{/if}
       {#if item.playlist}<HealthMissing playlist={item.playlist} />{/if}
+      {#if incoming && item.album}<HealthIncoming source={item.album[0]} album={item.album[1]} ongone={() => backFromStep(HEALTH + problem)} />{/if}
+      {#if EVENTS[problem]}<HealthEvents {...EVENTS[problem]} value={item.title} />{/if}
+      {#if item.files?.length}
+        <!-- A folder's files not heard yet, by name. -->
+        <ul class="files">{#each item.files as f (f)}<li>{f}</li>{/each}</ul>
+      {/if}
       {#if on}<button class="act" onclick={on.go}>{on.label}<Icon name="chevronRight" size={18} /></button>{/if}
     {:else if !p}
       {#if health.loaded}<p class="muted">This is no longer a problem.</p>{/if}
@@ -213,6 +230,18 @@
     font-weight: 650;
   }
 
+
+  .files {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .files li {
+    padding: 8px 0;
+    border-top: 1px solid var(--border);
+    overflow-wrap: anywhere;
+  }
 
   .items {
     margin: 0;
