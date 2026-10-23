@@ -158,6 +158,23 @@ pub struct Logged {
     pub context: Option<String>,
 }
 
+/// The week before a user's log began, from the songs' last plays (the owner, 2026-10-23, for 74.3.1: the log began
+/// with 74.3, the week before it was only in `annotation`). One row per song last played in the seven days before the
+/// user's first row a player told: finished, counted (it was, in `annotation` already: nothing is counted again),
+/// context `backfill:annotation`, its own event so running it again adds nothing. Only the last play of each song is
+/// known. Run as the file opens.
+const WEEK_BEFORE_THE_LOG: &str = "
+INSERT INTO plays (user, song, pid, at, heard_secs, length_secs, ended, counted, player, output, context, event)
+  SELECT a.user, a.item, a.pid, a.play_date, NULL, NULL, 'finished', 1, NULL, NULL, 'backfill:annotation',
+         'backfill:annotation:' || a.user || ':' || a.item || ':' || a.play_date
+  FROM annotation a
+  JOIN (SELECT user, min(at) AS first FROM plays
+        WHERE coalesce(context, '') <> 'listenbrainz' AND coalesce(context, '') NOT LIKE 'backfill:%' GROUP BY user) f
+    ON f.user = a.user
+  WHERE a.kind = 'song' AND a.play_date >= f.first - 604800 AND a.play_date < f.first
+  ON CONFLICT DO NOTHING;
+";
+
 /// What an annotation is about.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Kind {
@@ -405,6 +422,7 @@ impl UserData {
         conn.execute_batch(ALBUM_HEARTS).context("moving the panel's album hearts to the albums' stars")?;
         move_old_play_queues(&conn).context("moving the saved play queues to their apps")?;
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
+        conn.execute_batch(WEEK_BEFORE_THE_LOG).context("writing the week before the log from the last plays")?;
         Ok(Self { db: Mutex::new(conn) })
     }
 
@@ -573,9 +591,19 @@ impl UserData {
     }
 
     /// When a user's log starts being told as it happens: their first row's time that a player told (an import from
-    /// elsewhere, `listenbrainz`, leaves gaps); none before they heard anything since it exists.
+    /// elsewhere, `listenbrainz`, and the week written from the last plays, `backfill:…`, leave gaps); none before they
+    /// heard anything since it exists.
     pub fn heard_from(&self, user: &str) -> Result<Option<i64>> {
-        Ok(self.db().query_row("SELECT min(at) FROM plays WHERE user = ?1 AND coalesce(context, '') <> 'listenbrainz'", [user], |r| r.get(0))?)
+        Ok(self.db().query_row(
+            "SELECT min(at) FROM plays WHERE user = ?1 AND coalesce(context, '') <> 'listenbrainz' AND coalesce(context, '') NOT LIKE 'backfill:%'",
+            [user],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Writes the week before the log from the last plays (`WEEK_BEFORE_THE_LOG`); as the file opens. Safe to repeat.
+    pub fn backfill_week(&self) -> Result<()> {
+        Ok(self.db().execute_batch(WEEK_BEFORE_THE_LOG)?)
     }
 
     /// Sets an item's whole annotation for a user (a song taking over another's data, decision 0013). Safe to repeat.
@@ -1231,6 +1259,27 @@ mod tests {
         u.record("me", ("tr-1", "pid1"), "al-1", &[], &imported).unwrap();
         assert_eq!(u.heard_from("me").unwrap(), Some(100), "an import's older rows are no live history");
         assert!(u.heard_since("me", 150).unwrap().len() == 1 && u.heard_since("you", 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_week_before_the_log_is_written_once_from_the_last_plays_and_counted_nothing_again() {
+        let u = UserData::open(None).unwrap();
+        let day = 86_400;
+        let first = 30 * day;
+        // Last plays: one in the week before the log, one before that, one after the log began (told by a player too).
+        u.count_play("me", ("tr-1", "pid1"), "al-1", &[], first - 2 * day).unwrap();
+        u.count_play("me", ("tr-2", "pid2"), "al-1", &[], first - 9 * day).unwrap();
+        u.db().execute("DELETE FROM plays", []).unwrap();
+        let told = Heard { event: Some("e1".into()), ..Heard::counted(first) };
+        u.record("me", ("tr-3", "pid3"), "al-1", &[], &told).unwrap();
+        u.backfill_week().unwrap();
+        u.backfill_week().unwrap();
+        let log = u.heard_since("me", 0).unwrap();
+        assert_eq!(log.iter().map(|l| (l.song.as_str(), l.at, l.context.as_deref())).collect::<Vec<_>>(), [("tr-1", first - 2 * day, Some("backfill:annotation")), ("tr-3", first, None)], "once, only the week before");
+        assert!(log[0].counted && log[0].ended == Ended::Finished);
+        assert_eq!(u.heard_from("me").unwrap(), Some(first), "the log as told still begins with the player's row");
+        let s = u.play_stats("me", &["tr-1".to_string()]).unwrap();
+        assert_eq!(s.get("tr-1"), Some(&(1, Some(first - 2 * day))), "counted nothing again");
     }
 
     #[test]
