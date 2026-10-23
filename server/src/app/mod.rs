@@ -34,6 +34,7 @@ mod plays;
 mod queue;
 pub mod history;
 pub mod radio;
+pub mod similar;
 pub mod tempo;
 mod settings;
 mod shelf;

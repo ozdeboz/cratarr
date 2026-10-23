@@ -768,6 +768,12 @@ export const editPlaylist = (id: string, expected: string[], entries: string[]) 
     body: JSON.stringify({ expected, entries }),
   });
 
+/** Lists like a list, of its kind (the one similarity): the closest first, each with how alike (0 to 100). */
+export type Alike = { id: string; alike: number };
+export const similarAlbums = (source: string, album: string) =>
+  quietly<Alike[]>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/similar`);
+export const similarPlaylists = (id: string) => quietly<Alike[]>(`/api/playlists/${encodeURIComponent(id)}/similar`);
+export const similarCrates = (id: string) => quietly<Alike[]>(`/api/crates/${encodeURIComponent(id)}/similar`);
 export const playlistCovers = (id: string) =>
   quietly<{ source: string; album_id: string }[]>(`/api/playlists/${encodeURIComponent(id)}/covers`);
 export const renamePlaylist = (id: string, to: string) =>

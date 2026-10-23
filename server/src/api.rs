@@ -74,6 +74,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/filter", post(filter_list))
         .route("/api/crates/{id}", get(crate_get).put(crate_update).delete(crate_delete))
         .route("/api/crates/{id}/rows", get(crate_rows))
+        .route("/api/crates/{id}/similar", get(similar_crates))
         .route("/api/crates/{id}/tempo", get(crate_tempo))
         .route("/api/like-curve", get(like_curve))
         .route("/api/tempo", post(tempo_of).put(adjust_tempo))
@@ -2460,6 +2461,12 @@ async fn similar_albums(Path((source, album)): Path<(String, String)>) -> Result
         return Ok(Json(json!([])));
     }
     let found = crate::app::radio::similar_albums(&album, SIMILAR_LISTS).await?;
+    Ok(Json(json!(found.into_iter().map(|(id, alike)| json!({ "id": id, "alike": alike })).collect::<Vec<_>>())))
+}
+
+/// Crates like a crate, among the account's own: `[{id, alike}]`, the closest first.
+async fn similar_crates(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
+    let found = crate::app::similar::crates_like(&app.playlists, &id, SIMILAR_LISTS).await?;
     Ok(Json(json!(found.into_iter().map(|(id, alike)| json!({ "id": id, "alike": alike })).collect::<Vec<_>>())))
 }
 
