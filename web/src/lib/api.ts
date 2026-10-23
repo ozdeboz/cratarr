@@ -1193,7 +1193,10 @@ export type HealthFinding = {
   level: 'needs_you' | 'warning' | 'info';
   since: number;
   open?: { page: string; switch?: string };
+  /** What it is about, one by one: an album (server, id) or a playlist opens where it is. */
+  items?: HealthItem[];
 };
+export type HealthItem = { title: string; line?: string; album?: [string, string]; playlist?: string };
 /** Every domain's findings, worst first, the most recent first among equals; when each domain was checked. */
 export const getHealthReport = () => request<{ findings: HealthFinding[]; checked: Record<string, number> }>('/api/health/report');
 
@@ -1377,6 +1380,9 @@ export const getHomeArtists = (source?: string, without?: string[]) =>
   quietly<{ artists: ExploredArtist[] }>(`/api/home/artists?${new URLSearchParams({ ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);
 export const artistPhotoUrl = (id: string) => `/api/artists/${encodeURIComponent(id)}/photo`;
 /** About an artist (their page): TheAudioDB's description and whether the store has a photo; nulls when unknown. */
+/** Tracks of Cratarr's own library matching words, each with its playlist line (Health's missing tracks). */
+export type FoundTrack = { id: string; title: string; artist: string; album: string; album_id: string; line: string };
+export const findTracks = (q: string) => request<FoundTrack[]>(`/api/library/find?q=${encodeURIComponent(q)}`);
 export const getArtistAbout = (name: string) => quietly<{ id: string | null; bio: string | null; photo: boolean }>(`/api/artists/about?name=${encodeURIComponent(name)}`);
 export const getDigging = (source?: string, without?: string[]) =>
   quietly<Digging>(`/api/home/digging?${new URLSearchParams({ ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);

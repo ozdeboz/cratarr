@@ -50,6 +50,8 @@
     queueTracks,
     setTrackFavorite,
     setAlbumFavorite,
+    getArtistAbout,
+    artistPhotoUrl,
     type ListedAlbum,
     type PlaylistRow,
   } from './api';
@@ -393,6 +395,21 @@
     );
   });
 
+  // An artist's photo, where the server's artist store has one (TheAudioDB's): the header shows it rather than an album
+  // cover (the owner, 2026-10-23); a picture chosen on this device still comes first.
+  let artistPhoto = $state<string | null>(null);
+  $effect(() => {
+    const ar = artist;
+    artistPhoto = null;
+    if (!ar || ar.source !== 'cratarr' || ar.tracks) return;
+    let gone = false;
+    getArtistAbout(ar.name).then(
+      (a) => !gone && a.photo && a.id && (artistPhoto = artistPhotoUrl(a.id)),
+      () => {},
+    );
+    return () => (gone = true);
+  });
+
   // The cover's place: a crate's picture (its own, else its albums' covers; in edit mode as Save will leave it).
   const heroArt = $derived.by(() => {
     if (crateEditing) {
@@ -401,7 +418,7 @@
     }
     if (artist) {
       const own = localCovers[coverKey(artist.source, artistPictureId(artist.name))];
-      return own ? [own] : covers;
+      return own ? [own] : artistPhoto ? [artistPhoto] : covers;
     }
     if (crate && seeded(crate)) return rowCovers;
     return crate ? crateArt(crate) : covers;
@@ -1710,7 +1727,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         <!-- A ranked crate's fit (the owner, 2026-10-23): what it learned not to suggest; a tap corrects it. -->
         {#if crate && like && !multi}<AvoidLine {crate} name={suggestsFor?.name ?? title} round={saved} onchange={() => saved++} />{/if}
         {#if (profile || (like && curve?.alike.length)) && !multi}
-          <div class="head-spread">
+          <div class="head-spread" class:artist-head={!!artist && !artist.tracks}>
             {#if like && curve?.alike.length}<LikeCurve curve={curve.alike} count={like.count} onpreview={(n) => (preview = n)} onchange={(n) => viewLike(like.item, n)} />{/if}
             {#if previewProfile ?? profile}<ListProfile data={(previewProfile ?? profile)!} />{/if}
           </div>
@@ -1824,7 +1841,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
         appearsOn={artistHead.appears_on}
         top={topRows.length ? topList : undefined}
         ontracks={() => viewOver(artistSubject(artist.source, artist.name, true))}
+        profile={(previewProfile ?? profile) ? artistProfile : undefined}
       />
+      {#snippet artistProfile()}<ListProfile data={(previewProfile ?? profile)!} fixed />{/snippet}
       {#snippet topList()}
         <ol class="rows">{#each topRows as r (r.id)}{@render trackRow(r, source, title, topRows, null, false)}{/each}</ol>
       {/snippet}
@@ -2462,7 +2481,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /* A wide panel (one over the page, or dragged wide): the spread at the header's right, its top level with the name's,
      so the header is no taller than what it says; it narrows with the panel (its widest: lib/Spread). */
   @container (min-width: 640px) {
-    .meta:has(.head-spread) {
+    /* An artist's profile goes beside their albums there (lib/ArtistBody), not in the header. */
+    .head-spread.artist-head {
+      display: none;
+    }
+
+    .meta:has(.head-spread:not(.artist-head)) {
       grid-template-columns: minmax(0, 1fr) clamp(280px, 45cqi, 480px);
       align-items: start;
       column-gap: 32px;

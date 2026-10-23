@@ -70,6 +70,8 @@ export type Prefs = {
   navFolded: boolean;
   /** The part of the settings last open: Settings opens on it beside its list on a roomy window ('' = the first). */
   settingsPart: string;
+  /** The Health problem last open beside its list. */
+  healthPart: string;
   /** Each kind of list's columns in the owner's order (decision 0042, lib/columns), by id. */
   columns: Partial<Record<string, string[]>>;
   /** Where music plays (decisions 0019, 0022, 0031): on a server's player (`remote`), in this browser or app (`local`),
@@ -166,6 +168,7 @@ export const DEFAULTS: Prefs = {
   sidebar: true,
   navFolded: false,
   settingsPart: '',
+  healthPart: '',
   columns: {},
   // This browser (it falls back to a player where a browser cannot play): Cratarr's own source has no server-side
   // player, which a page's first play went to, and failed (2026-10-16).
@@ -234,6 +237,7 @@ function read(): Prefs {
       if (typeof saved.sidebar === 'boolean') p.sidebar = saved.sidebar;
       if (typeof saved.navFolded === 'boolean') p.navFolded = saved.navFolded;
       if (typeof saved.settingsPart === 'string') p.settingsPart = saved.settingsPart;
+      if (typeof saved.healthPart === 'string') p.healthPart = saved.healthPart;
       if (saved.columns && typeof saved.columns === 'object')
         for (const [k, v] of Object.entries(saved.columns))
           if (Array.isArray(v)) p.columns[k] = v.filter((x: unknown): x is string => typeof x === 'string');

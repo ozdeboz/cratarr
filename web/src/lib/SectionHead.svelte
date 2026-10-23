@@ -1,12 +1,18 @@
 <script lang="ts">
   // A section's heading in a panel's page (as Symfonium's: More from, About, Albums, Top tracks): large and plain, with
-  // a › at the end when the heading opens all of it (`onmore`, the whole heading is the button then).
+  // a › at the end when the heading opens all of it (`onmore`, the whole heading is the button then); or a play button
+  // at its end (`onplay`: Home's sections that play as a whole, the owner 2026-10-23).
   import Icon from './Icon.svelte';
 
-  let { title, onmore }: { title: string; onmore?: () => void } = $props();
+  let { title, onmore, onplay, busy = false }: { title: string; onmore?: () => void; onplay?: () => void; busy?: boolean } = $props();
 </script>
 
-{#if onmore}
+{#if onplay}
+  <div class="head">
+    <h2>{title}</h2>
+    <button class="play" aria-label={`Play ${title}`} title="Play" disabled={busy} onclick={onplay}><Icon name="play" size={20} /></button>
+  </div>
+{:else if onmore}
   <button class="head" onclick={onmore}>
     <h2>{title}</h2>
     <span class="more"><Icon name="chevronRight" /></span>
@@ -48,5 +54,24 @@
   .more {
     display: flex;
     color: var(--accent);
+  }
+
+  .play {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--accent-text);
+    cursor: pointer;
+  }
+
+  .play:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
 </style>

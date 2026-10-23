@@ -12,6 +12,8 @@
   import Insights from './Insights.svelte';
   import Downloads from './Downloads.svelte';
   import SettingsPanel from './lib/SettingsPanel.svelte';
+  import HealthPanel from './lib/HealthPanel.svelte';
+  import { health, problems } from './lib/healthReport.svelte';
   import { SECTIONS, type SettingsSection } from './lib/settingsSections.svelte';
   import { askDownloads, downloads, inApp } from './lib/app.svelte';
   import { reach } from './lib/reach.svelte';
@@ -44,7 +46,7 @@
   import ProgressBar from './lib/ProgressBar.svelte';
   import { untrack } from 'svelte';
   import { inSidebar, live, panelShowsPlayer, player } from './lib/live.svelte';
-  import { closePlaylist, INSIGHTS as INSIGHTS_VIEW, keepViewed, panel, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace, viewPlaylist } from './lib/panel.svelte';
+  import { closePlaylist, HEALTH as HEALTH_VIEW, healthOf, INSIGHTS as INSIGHTS_VIEW, keepViewed, panel, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace, viewPlaylist } from './lib/panel.svelte';
   import PlaylistView from './lib/PlaylistView.svelte';
   import { poll } from './lib/live.svelte';
   import { known, remember } from './lib/sources.svelte';
@@ -109,6 +111,14 @@
     addEventListener('pointerdown', away, true);
     return () => removeEventListener('pointerdown', away, true);
   });
+  /** A tap on the link of the page that shows: no step in the history (a back button for nothing, the owner 2026-10-23),
+   *  only the page back at its top. */
+  function samePage(e: MouseEvent, id: string) {
+    if (id !== page) return;
+    e.preventDefault();
+    pageEl?.scrollTo({ top: 0, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
   function stripTap(e: MouseEvent) {
     if (prefs.navFolded && !peek && !(e.target as Element).closest('a, button')) peek = true;
   }
@@ -157,11 +167,15 @@
   // Settings on a roomy window is its list beside a part (the owner, 2026-10-19: "just force the panel open on the
   // settings page"): the panel is always beside it there, showing a part.
   const settingsSplit = $derived(page === 'settings' && player.roomy);
+  // Health as Settings (the owner, 2026-10-23): its problems' list beside one problem, the panel always beside it on a
+  // roomy window.
+  const healthSplit = $derived(page === 'health' && me.admin && player.roomy);
+  const healthShown = $derived(healthOf(panel.viewed));
   // Insights' own panel (lib/InsightsPanel), when it shows: on a roomy window always beside the page, at a fixed width
   // (the owner, 2026-10-23: never full screen), whatever the place chosen for the others.
   const insightsShown = $derived(panel.viewed === INSIGHTS_VIEW && !panel.playerTop);
   const insightsSplit = $derived(insightsShown && player.roomy);
-  const sidebar = $derived(settingsSplit || insightsSplit || inSidebar());
+  const sidebar = $derived(settingsSplit || healthSplit || insightsSplit || inSidebar());
   // On Insights the panel beside the page is one fixed width whatever it shows (its own, a playlist or crate opened from
   // it, the player), as Settings' is (the owner, 2026-10-23): no grip.
   const insightsFixed = $derived(page === 'insights' && sidebar);
@@ -219,6 +233,16 @@
   $effect(() => {
     if (settingsShown) prefs.settingsPart = settingsShown;
   });
+  // Beside Health's list a problem is always open: the one last open while it lasts, else the first (the worst).
+  $effect(() => {
+    if (!healthSplit || healthShown || !health.loaded || fromHash() !== 'health') return;
+    const keys = problems().map((x) => x.key);
+    const part = keys.includes(prefs.healthPart) ? prefs.healthPart : keys[0];
+    if (part) untrack(() => viewInPlace(HEALTH_VIEW + part));
+  });
+  $effect(() => {
+    if (healthShown) prefs.healthPart = healthShown;
+  });
   const pagePill = $derived(PLAYABLE.includes(page));
   // An icon button's label on a long-press or right-click, everywhere (lib/labels).
   $effect(installLabels);
@@ -228,7 +252,7 @@
     pageView.query = '';
   });
   // The page's device button gives way to the panel's (the owner, 2026-10-16): a list beside the page has its own.
-  const panelDevice = $derived(sidebar && panel.viewed !== null && !panelShowsPlayer() && !settingsShown && !insightsShown);
+  const panelDevice = $derived(sidebar && panel.viewed !== null && !panelShowsPlayer() && !settingsShown && !healthShown && !insightsShown);
   const pillDevice = $derived(!playing() && !(sidebar && panelShowsPlayer()) && !panelDevice);
   // Each step of this visit carries its place (`nav` in its history state): back shows from the second step on, never on
   // the one the app opened with.
@@ -290,7 +314,7 @@
   // Beside Settings' list the part takes all but the list's column (no grip there: the list's width is its own).
   const SETTINGS_LIST = 400;
   const INSIGHTS_PANEL = 360;
-  const sideWidth = $derived(settingsSplit ? Math.max(PLAYER_MIN, area.w - SETTINGS_LIST) : insightsFixed ? INSIGHTS_PANEL : playerWidth);
+  const sideWidth = $derived(settingsSplit || healthSplit ? Math.max(PLAYER_MIN, area.w - SETTINGS_LIST) : insightsFixed ? INSIGHTS_PANEL : playerWidth);
   let contentEl = $state<HTMLElement>();
   // The page's side and the panel's: sheets opened in either stand over it (lib/SheetArea.svelte).
   let pageEl = $state<HTMLElement>();
@@ -454,7 +478,7 @@
 
       <nav aria-label="Pages">
         {#each MAIN as p (p.id)}
-          <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={() => (peek = false)}
+          <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}
             ><Icon name={p.icon} /><span class="label">{p.label}</span>{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a
           >
         {/each}
@@ -462,7 +486,7 @@
 
       <div class="foot">
         {#each APART as p (p.id)}
-          <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={() => (peek = false)}><Icon name={p.icon} /><span class="label">{p.label}</span></a>
+          <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}><Icon name={p.icon} /><span class="label">{p.label}</span></a>
         {/each}
         {#if status}<div class="version">Cratarr {status.version}</div>{/if}
       </div>
@@ -507,7 +531,7 @@
     {/if}
     </SheetArea>
     </div>
-    {#if settingsSplit || insightsFixed}
+    {#if settingsSplit || healthSplit || insightsFixed}
       <div class="grip line" aria-hidden="true"></div>
     {:else if sidebar}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
@@ -526,9 +550,9 @@
     {/if}
     {#if sidebar}
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
-      <aside class="player-side" class:whole={settingsSplit || insightsFixed} aria-label={panelShowsPlayer() ? 'Player' : settingsShown ? 'Settings' : insightsShown ? 'Insights' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
+      <aside class="player-side" class:whole={settingsSplit || healthSplit || insightsFixed} aria-label={panelShowsPlayer() ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
         <SheetArea area={() => sideEl}>
-          {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if panelShowsPlayer()}<NowPlaying place="side" />{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else if insightsShown}<InsightsPanel />{:else}<PlaylistView />{/if}
+          {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if panelShowsPlayer()}<NowPlaying place="side" />{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else if healthShown}<HealthPanel problem={healthShown} beside={healthSplit} />{:else if insightsShown}<InsightsPanel />{:else}<PlaylistView />{/if}
         </SheetArea>
       </aside>
     {/if}
@@ -536,7 +560,7 @@
 
   {#if playlistLayer}
     <div class="playlist-layer" role="dialog" aria-label="Playlist" style:--mini-h={`${miniSpace}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
-      {#if settingsShown}<SettingsPanel section={settingsShown} />{:else if insightsShown}<InsightsPanel />{:else}<PlaylistView />{/if}
+      {#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel />{:else}<PlaylistView />{/if}
     </div>
   {/if}
   {#if mini}
@@ -586,7 +610,7 @@
     <button class="scrim" aria-label="Close menu" onclick={() => (moreOpen = false)}></button>
     <div class="sheet" id="more-sheet" role="dialog" aria-label="More pages" onclickcapture={collapse}>
       {#each overflow as p (p.id)}
-        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
+        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => samePage(e, p.id)}><Icon name={p.icon} />{p.label}{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
       {/each}
     </div>
   {/if}
@@ -603,7 +627,7 @@
     {#if switchable()}<div class="slim"><ModeSwitcher slim {connection} /></div>{/if}
     <div class="tabs">
     {#each bar as p (p.id)}
-      <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined}
+      <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => samePage(e, p.id)}
         ><span class="icon"><Icon name={p.icon} />{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{p.label}</span></a
       >
     {/each}

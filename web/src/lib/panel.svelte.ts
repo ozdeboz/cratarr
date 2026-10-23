@@ -55,8 +55,13 @@ export function settingsThing(viewed: string | null): string | null {
 /** A thing's own page in a part of the settings (a server, a library, a Kodi, a user): a step of its own, which Back
  *  (or the page's back button, backFromThing) returns from. */
 export function openThing(part: string, thing: string) {
+  openStep(`${SETTINGS}${part}/${encodeURIComponent(thing)}`);
+}
+/** A page one step deeper in the panel (a part's thing, a problem's item): a step of its own, which back returns from
+ *  (backFromStep). */
+export function openStep(subject: string) {
   panel.playerTop = false;
-  history.pushState({ panel: depth() + 1, thing: true }, '', address([`${SETTINGS}${part}/${encodeURIComponent(thing)}`], 'tracks'));
+  history.pushState({ panel: depth() + 1, thing: true }, '', address([subject], 'tracks'));
   read();
 }
 /** Back from a thing's page to its part: the step it was opened as, or else the part in its place (opened by its
@@ -64,14 +69,28 @@ export function openThing(part: string, thing: string) {
  *  finding the thing gone). */
 let goingBack = false;
 export function backFromThing(part: string) {
+  backFromStep(`${SETTINGS}${part}`);
+}
+/** Back from a step deeper to `subject`: the step it was opened as, or else `subject` in its place. */
+export function backFromStep(subject: string) {
   if (goingBack) return;
   if (history.state?.thing) {
     goingBack = true;
     addEventListener('popstate', () => (goingBack = false), { once: true });
     return history.back();
   }
-  replace(address([`${SETTINGS}${part}`], 'tracks'));
+  replace(address([subject], 'tracks'));
   read();
+}
+
+/** A problem of Health (`health:<its key>`), opened from the Health page's cards (lib/HealthPanel), as Settings' parts. */
+export const HEALTH = 'health:';
+export const healthOf = (viewed: string | null) => (viewed?.startsWith(HEALTH) ? viewed.slice(HEALTH.length).split('/')[0] : null);
+/** The item of the problem whose own page shows (`health:<problem>/<item>`, the third level), if one does. */
+export function healthItemOf(viewed: string | null): number | null {
+  if (!viewed?.startsWith(HEALTH)) return null;
+  const at = viewed.indexOf('/', HEALTH.length);
+  return at < 0 ? null : Number(viewed.slice(at + 1));
 }
 
 /** Insights' own panel (lib/InsightsPanel): how its open tab is viewed. */
@@ -79,7 +98,7 @@ export const INSIGHTS = 'insights';
 
 export const isSingleSubject = (viewed: string | null) =>
   !!viewed &&
-  (viewed === INSIGHTS || viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed === NEW_PLAYLIST || viewed.startsWith(SETTINGS) || viewed.startsWith(ALBUM) || artistOf(viewed) !== null);
+  (viewed === INSIGHTS || viewed.startsWith(HEALTH) || viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed === NEW_PLAYLIST || viewed.startsWith(SETTINGS) || viewed.startsWith(ALBUM) || artistOf(viewed) !== null);
 
 export const panel = $state({
   /** What is viewed: the (first) playlist's id, a crate's or an album's key; null when the panel shows the player only. */
@@ -231,5 +250,5 @@ export function albumGone(source: string, id: string) {
  *  Insights': they stay there. */
 export const keepViewed = (href: string) => {
   const q = location.hash.split('?')[1];
-  return panel.viewed && q && !panel.viewed.startsWith(SETTINGS) && panel.viewed !== INSIGHTS ? `${href}?${q}` : href;
+  return panel.viewed && q && !panel.viewed.startsWith(SETTINGS) && !panel.viewed.startsWith(HEALTH) && panel.viewed !== INSIGHTS ? `${href}?${q}` : href;
 };

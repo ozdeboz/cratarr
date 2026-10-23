@@ -2,10 +2,12 @@
   // Home's Artists to explore (the owner, 2026-10-23, look C; C4 on a phone): artists of the libraries switched on in a
   // new random order, the first open: a card washed in its photo's colour (else its biggest album's), its name, its
   // description (TheAudioDB's, kept by the server's artist store), its biggest albums; the others as one row of chips,
-  // a tap opening that one instead. The name opens the artist; an album opens the album.
+  // a tap opening that one instead. The name opens the artist; the description their page on its About, unfolded; the
+  // fanned albums their page on its Albums; an album (the wide grid) opens the album.
   import { onMount } from 'svelte';
   import { albumCoverUrl, artistPhotoUrl, getHomeArtists, type ExploredArtist } from './api';
   import { hiddenLibraries } from './listFilter.svelte';
+  import { pageAsked } from './artistAbout.svelte';
   import { albumSubject, artistSubject, viewOver } from './panel.svelte';
   import { prefs } from './prefs.svelte';
   import SectionHead from './SectionHead.svelte';
@@ -19,6 +21,12 @@
     );
   });
   const a = $derived(artists[open]);
+  /** The artist's page, at its About (unfolded) or its Albums. */
+  function openAt(name: string, section: 'about' | 'albums') {
+    pageAsked.name = name;
+    pageAsked.section = section;
+    viewOver(artistSubject('cratarr', name));
+  }
   const picture = (x: ExploredArtist) => (x.photo ? artistPhotoUrl(x.id) : albumCoverUrl('cratarr', x.albums[0]));
 </script>
 
@@ -34,11 +42,16 @@
             <span><b>{a.name}</b><small>{a.albums.length === 1 ? '1 album' : `${a.albums.length} albums`}</small></span>
           </button>
           <!-- On a phone a fanned stack beside the name (C4); wider, a 2×2 grid beside the text (C). -->
-          <div class="fan" aria-hidden="true">
+          <button class="fan" aria-label={`Albums by ${a.name}`} onclick={() => openAt(a.name, 'albums')}>
             {#each a.albums.slice(0, 3).reverse() as id (id)}<img src={albumCoverUrl('cratarr', id)} alt="" />{/each}
-          </div>
+          </button>
         </div>
-        {#if a.bio}<p class="bio">{a.bio}</p>{/if}
+        {#if a.bio}
+          <button
+            class="bio"
+            onclick={() => openAt(a.name, 'about')}>{a.bio}</button
+          >
+        {/if}
         <ul class="grid">
           {#each a.albums as id (id)}
             <li><button onclick={() => viewOver(albumSubject('cratarr', id))} aria-label="Open album"><img src={albumCoverUrl('cratarr', id)} alt="" /></button></li>
@@ -145,6 +158,10 @@
   .fan {
     position: relative;
     height: 104px;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
   }
 
   .fan img {
@@ -175,6 +192,12 @@
   .bio {
     display: -webkit-box;
     margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
     overflow: hidden;
     color: rgb(255 255 255 / 0.86);
     font-size: 0.94rem;

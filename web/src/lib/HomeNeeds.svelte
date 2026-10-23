@@ -1,11 +1,11 @@
 <script lang="ts">
   // Home's Needs you (decision 0063): what matters most of the health report, the most critical first and the most
   // recent among equals (the owner: "needs you shows the most important, the most critical, the most recent"), a few,
-  // each opening where it is dealt with; its heading's arrow the Health page, where all of it is. What needs the owner
+  // each opening Health on it, in its panel (the owner, 2026-10-23); its heading's arrow the Health page, where all of it is. What needs the owner
   // and what is wrong; of what is worth knowing only AudioMuse's progress (the owner's tile). Nothing: it does not show.
   // An administrator's only: the report is theirs.
   import { getHealthReport, type HealthFinding } from './api';
-  import { iconOf, openFinding } from './health';
+  import { iconOf, openInHealth } from './health';
   import Icon from './Icon.svelte';
   import { me } from './me.svelte';
   import SectionHead from './SectionHead.svelte';
@@ -36,7 +36,7 @@
     <div class="needs">
       {#each rows as f (f.key)}
         {#if f.open}
-          <button class="row" class:urgent={f.level === 'needs_you'} onclick={() => openFinding(f)}
+          <button class="row" class:urgent={f.level === 'needs_you'} onclick={() => openInHealth(f)}
             ><Icon name={iconOf(f)} size={22} /><span>{f.title}</span><Icon name="chevronRight" size={20} /></button
           >
         {:else}

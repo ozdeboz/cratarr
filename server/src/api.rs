@@ -145,6 +145,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/home/artists", get(home_artists))
         .route("/api/artists/{id}/photo", get(artist_photo))
         .route("/api/artists/about", get(artist_about))
+        .route("/api/library/find", get(library_find))
         .route("/api/home/heard", post(home_heard))
         .route("/api/history/sleep", post(sleep))
         .route("/api/home/weather", post(home_weather))
@@ -2632,6 +2633,36 @@ async fn home_artists(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) 
         })
         .collect();
     Ok(Json(json!({ "artists": artists, "credit": "TheAudioDB" })))
+}
+
+#[derive(Deserialize)]
+struct FindQuery {
+    q: String,
+}
+
+/// Tracks of Cratarr's own library matching words (Health's missing tracks, to point a playlist's line at one: the
+/// owner, 2026-10-23): each with its playlist line. At most 20, the library's search's order.
+async fn library_find(State(app): State<Arc<App>>, Query(q): Query<FindQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+    let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let (lib, cat, query) = (served.library.clone(), app.library.catalogue(), q.q.clone());
+    let found = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<serde_json::Value>> {
+        let (_, _, songs) = lib.search(query.trim(), (0, 0), (0, 0), (20, 0), None)?;
+        let ids: Vec<String> = songs.iter().map(|s| s.id.clone()).collect();
+        let places = lib.song_places(&ids)?;
+        Ok(songs
+            .into_iter()
+            .filter_map(|s| {
+                let (folder, rel) = places.get(&s.id)?;
+                let line = cat.line_of(*folder, rel)?;
+                Some(json!({ "id": s.id, "title": s.title, "artist": s.artist, "album": s.album, "album_id": s.album_id, "line": line }))
+            })
+            .collect())
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r)
+    .map_err(ToggleError::from)?;
+    Ok(Json(json!(found)))
 }
 
 #[derive(Deserialize)]

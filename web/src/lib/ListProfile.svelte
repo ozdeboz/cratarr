@@ -11,7 +11,8 @@
   import Icon from './Icon.svelte';
   import { PROFILE_ROWS, prefs, type ProfileRow } from './prefs.svelte';
 
-  let { data }: { data: ListProfileData } = $props();
+  // `fixed`: beside an artist's albums on a wide panel (the owner, 2026-10-23): all of it, nothing to fold.
+  let { data, fixed = false }: { data: ListProfileData; fixed?: boolean } = $props();
 
   const ENDS: Record<string, [string, string]> = { tempo: ['60', '180 BPM'], energy: ['calm', 'intense'], danceability: ['still', 'danceable'] };
 
@@ -25,9 +26,9 @@
   );
   /** The rows above the fold line (by the user's order, whatever this list has of them). */
   const kept = $derived(rows.filter((r) => prefs.profileRows.indexOf(r.id) < prefs.profileFoldAt));
-  const shown = $derived(prefs.profileOpen ? rows : kept);
+  const shown = $derived(fixed || prefs.profileOpen ? rows : kept);
   /** Folding changes something: some row is below the line. */
-  const folds = $derived(kept.length < rows.length);
+  const folds = $derived(!fixed && kept.length < rows.length);
   const number = (id: ProfileRow) => data.numbers.find((n) => n.key === id)!;
   /** One value as the row says it: a year, a tempo in BPM, energy and danceability as AudioMuse's 0 to 100. */
   const oneValue = (n: ListProfileData['numbers'][number]) => (n.key === 'tempo' ? `${Math.round(n.one!)} BPM` : String(Math.round(n.one!)));
@@ -61,7 +62,7 @@
         {/if}
       </div>
     {/each}
-    {#if prefs.profileOpen && data.heard < data.tracks}<p class="heard">{data.heard.toLocaleString()} of {data.tracks.toLocaleString()} heard by AudioMuse</p>{/if}
+    {#if (fixed || prefs.profileOpen) && data.heard < data.tracks}<p class="heard">{data.heard.toLocaleString()} of {data.tracks.toLocaleString()} heard by AudioMuse</p>{/if}
     {#if folds}
       <div class="fold" class:alone={!shown.length}>
         <button class="pill" aria-expanded={prefs.profileOpen} onclick={() => (prefs.profileOpen = !prefs.profileOpen)}

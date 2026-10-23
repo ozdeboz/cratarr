@@ -585,6 +585,19 @@ impl Library {
         Ok(rows)
     }
 
+    /// Each of these songs' catalogue folder and place in it (its file), those the library has.
+    pub fn song_places(&self, ids: &[String]) -> Result<std::collections::HashMap<String, (i64, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT folder, rel FROM songs WHERE id = ?1")?;
+        let mut out = std::collections::HashMap::new();
+        for id in ids {
+            if let Some(p) = st.query_row([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))).optional()? {
+                out.insert(id.clone(), p);
+            }
+        }
+        Ok(out)
+    }
+
     /// An artist by name, as the library writes it (any case): their id and MusicBrainz id.
     pub fn artist_by_name(&self, name: &str) -> Result<Option<(String, Option<String>)>> {
         let db = self.db();

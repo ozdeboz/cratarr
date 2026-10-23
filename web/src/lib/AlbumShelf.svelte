@@ -383,8 +383,10 @@
       <p class="empty">{s.label} can't list albums.</p>
     {:else if s.error && s.albums.length === 0}
       <p class="error" role="alert">{s.error}</p>
-    {:else if s.albums.length === 0}
-      <p class="empty">{empty}</p>
+    {:else if albums.length === 0}
+      <!-- None shown: none at all, or the search or the libraries switched off leave none (it said "0 albums" over
+           empty column headings, the owner 2026-10-23). -->
+      <p class="empty">{s.albums.length ? 'None in the libraries switched on match.' : empty}</p>
     {:else}
       <ListHead
         fields={ALBUM_ORDERS}
