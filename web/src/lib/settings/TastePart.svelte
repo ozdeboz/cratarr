@@ -25,7 +25,8 @@
   const leaving = $derived((crates.list ?? []).filter((c) => (c.left_out ?? 0) > 0).sort((a, b) => (b.left_out ?? 0) - (a.left_out ?? 0)));
   const crateAt = $derived(thing?.startsWith(CRATE) ? thing.slice(CRATE.length) : null);
   const known = $derived(crates.list !== null || crates.error !== null);
-  nameThing(() => (thing === EVERYWHERE ? 'Excluded everywhere' : crateAt ? crateName(crateAt) : null));
+  // Titled as what the list is (the owner, 2026-10-23): Taste › Exclusions: Unlisted.
+  nameThing(() => (thing === EVERYWHERE ? 'Exclusions: Everywhere' : crateAt ? `Exclusions: ${crateName(crateAt)}` : null));
   // A page whose list is all put back, or a thing there is no page for: back to the part.
   const done = () => backFromThing('taste');
   $effect(() => {
