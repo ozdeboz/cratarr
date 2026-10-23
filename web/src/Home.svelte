@@ -1,7 +1,8 @@
 <script lang="ts">
   // Home (the owner, 2026-10-23: the leftmost tab): the quick look. New in your library (the newest albums, a swipe
   // row; All opens the Library by date added), Sounds like your week (the week's crate: what sounds like the last seven
-  // days' plays, none of them), Jump back in (the albums and playlists played last), and Needs you (claude-632's,
+  // days' plays, none of them), Jump back in (the albums and playlists played last, and the queues left last), and
+  // Needs you (claude-632's,
   // lib/HomeNeeds). A tile with nothing to show is left out.
   import { onMount } from 'svelte';
   import { coverUrl, crateRows, getCrate, playlistStats, type PlaylistRow } from './lib/api';
@@ -12,12 +13,13 @@
   import HomeNeeds from './lib/HomeNeeds.svelte';
   import { LIKE, viewGenre, viewLike } from './lib/crates.svelte';
   import { DEVICE } from './lib/deviceMusic.svelte';
-  import Icon from './lib/Icon.svelte';
+  import Icon, { type IconName } from './lib/Icon.svelte';
   import { hiddenLibraries } from './lib/listFilter.svelte';
   import { shownPlaylists } from './lib/output.svelte';
   import { albumSubject, viewOver, viewPlaylist } from './lib/panel.svelte';
   import { playCollection } from './lib/play.svelte';
   import { prefs } from './lib/prefs.svelte';
+  import { loadQueues, queues, queuesVersion, switchQueue } from './lib/queueHistory.svelte';
   import SectionHead from './lib/SectionHead.svelte';
   import { toast } from './lib/toast.svelte';
 
@@ -91,7 +93,17 @@
       () => {},
     );
   });
-  type Back = { kind: 'album'; at: number; source: string; id: string; title: string; by: string | null } | { kind: 'playlist'; at: number; id: string; title: string };
+  // The queues this device's player keeps (lib/queueHistory), read again when it says they changed.
+  $effect(() => {
+    void queuesVersion();
+    void loadQueues();
+  });
+  /** A queue's icon by where it came from, as the queue switcher has it (lib/QueuesSheet). */
+  const FROM: Record<string, IconName> = { playlist: 'playlists', album: 'albums', favourites: 'heart', library: 'library', tracks: 'music', player: 'speaker' };
+  type Back =
+    | { kind: 'album'; at: number; source: string; id: string; title: string; by: string | null }
+    | { kind: 'playlist'; at: number; id: string; title: string }
+    | { kind: 'queue'; at: number; id: string; title: string; tracks: number; from: string | null };
   const back = $derived.by((): Back[] => {
     const albums: Back[] = sources
       .flatMap((s) => s.albums.map((a) => ({ kind: 'album' as const, at: albumUses[s.id]?.[a.id]?.played ?? 0, source: s.id, id: a.id, title: a.title, by: a.artist })))
@@ -102,11 +114,19 @@
       .flatMap((p) => (lastPlayed[p.id] ? [{ kind: 'playlist' as const, at: lastPlayed[p.id], id: p.id, title: p.name }] : []))
       .sort((x, y) => y.at - x.at)
       .slice(0, 2);
-    return [...albums, ...lists];
+    // The queues left last; not the one that plays.
+    const left: Back[] = queues.list
+      .filter((q) => !q.playing)
+      .sort((x, y) => y.updated - x.updated)
+      .slice(0, 2)
+      .map((q) => ({ kind: 'queue', at: q.updated, id: q.id, title: q.name, tracks: q.tracks, from: q.from }));
+    return [...albums, ...lists, ...left];
   });
   function open(b: Back) {
     if (b.kind === 'album') viewOver(albumSubject(b.source, b.id));
-    else viewPlaylist(b.id);
+    else if (b.kind === 'playlist') viewPlaylist(b.id);
+    // Taken up where it was left (playing if it played).
+    else void switchQueue(b.id);
   }
 </script>
 
@@ -155,11 +175,11 @@
               {#if b.kind === 'album'}
                 <span class="cover"><Cover src={albumCoverUrl(b.source, b.id)} /></span>
               {:else}
-                <span class="cover icon"><Icon name="playlists" size={26} /></span>
+                <span class="cover icon"><Icon name={b.kind === 'queue' ? (FROM[b.from ?? ''] ?? 'music') : 'playlists'} size={26} /></span>
               {/if}
               <span class="text">
                 <span class="title">{b.title}</span>
-                <span class="sub">{b.kind === 'album' ? ['Album', b.by].filter(Boolean).join(' · ') : 'Playlist'}</span>
+                <span class="sub">{b.kind === 'album' ? ['Album', b.by].filter(Boolean).join(' · ') : b.kind === 'queue' ? `Queue · ${b.tracks} ${b.tracks === 1 ? 'track' : 'tracks'}` : 'Playlist'}</span>
               </span>
             </button>
           </li>
