@@ -12,13 +12,51 @@ use serde::{Deserialize, Serialize};
 /// The stored format's version (decision 0024: groups, OR across axes, may come later).
 pub const VERSION: u32 = 1;
 
-/// One condition: an axis, the value(s) it is tested against, and whether it is negated.
+/// One condition: an axis, the value(s) it is tested against, and whether it is negated. A filter's (decision 0061)
+/// can be muted (`enabled` false: ignored, kept to switch back on) and, on items that hold tracks, says of how many of
+/// them it must hold (`quantifier`). Saved crates without either are on, of any track.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Condition {
     pub axis: String,
     #[serde(default)]
     pub not: bool,
     pub value: Value,
+    #[serde(default = "on", skip_serializing_if = "is_on")]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Quantifier::is_any")]
+    pub quantifier: Quantifier,
+}
+
+impl Condition {
+    /// A condition that is on, of any track.
+    pub fn new(axis: impl Into<String>, not: bool, value: Value) -> Self {
+        Self { axis: axis.into(), not, value, enabled: true, quantifier: Quantifier::Any }
+    }
+}
+
+fn on() -> bool {
+    true
+}
+
+fn is_on(b: &bool) -> bool {
+    *b
+}
+
+/// Of how many of an item's tracks a condition must hold (decision 0061: an album, an artist, a playlist).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Quantifier {
+    /// At least one of them.
+    #[default]
+    Any,
+    /// Every one of them that has a value on the axis (see `item_holds`).
+    All,
+}
+
+impl Quantifier {
+    fn is_any(&self) -> bool {
+        *self == Quantifier::Any
+    }
 }
 
 /// What an axis is tested against: holds (a yes/no axis), any of these values (values, membership: none = any), or a
@@ -54,14 +92,14 @@ pub fn genre_crate(id: &str) -> Option<CrateDef> {
     if name.is_empty() {
         return None;
     }
-    let genre = Condition { axis: "genre".into(), not: false, value: Value::AnyOf { values: vec![name.to_string()] } };
+    let genre = Condition::new("genre", false, Value::AnyOf { values: vec![name.to_string()] });
     Some(CrateDef { id: id.to_string(), name: name.to_string(), conditions: vec![genre] })
 }
 
 /// The permanent crates, in the same model (decision 0024). Favourites and Unlisted favourites went (amended
 /// 2026-10-14): any crate shows only its favourites, or none of them, with the panel's favourites toggle.
 pub fn permanent() -> Vec<CrateDef> {
-    let unlisted = Condition { axis: "playlist".into(), not: true, value: Value::AnyOf { values: Vec::new() } };
+    let unlisted = Condition::new("playlist", true, Value::AnyOf { values: Vec::new() });
     vec![CrateDef { id: "unlisted".into(), name: "Unlisted".into(), conditions: vec![unlisted] }]
 }
 
@@ -93,7 +131,7 @@ impl Favourites {
     fn on(self, axis: &str, conditions: &[Condition]) -> Vec<Condition> {
         let mut all = conditions.to_vec();
         if self != Favourites::All {
-            all.push(Condition { axis: axis.into(), not: self == Favourites::None, value: Value::Yes });
+            all.push(Condition::new(axis, self == Favourites::None, Value::Yes));
         }
         all
     }
@@ -131,9 +169,13 @@ pub struct AxisView {
     pub label: &'static str,
     pub kind: Kind,
     pub values: Vec<String>,
+    /// How many items have each of `values` (a list in view's, decision 0061; a track list's items are its tracks);
+    /// empty where not counted (the builder's playlists).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub counts: Vec<usize>,
     pub min: Option<f64>,
     pub max: Option<f64>,
-    /// How many of Music's files have a value on this axis (BPM is only where the files say it).
+    /// How many of the files (a list's items) have a value on this axis (BPM is only where the files say it).
     pub known: usize,
 }
 
@@ -165,11 +207,16 @@ pub fn tempo_bands(bpms: impl IntoIterator<Item = Option<f64>>) -> TempoBands {
     out
 }
 
-/// What the axes test about one Music file.
+/// What the axes test about one file of the libraries.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Facts {
-    /// The playlist line (relative to Music).
+    /// The playlist line: relative to Music, climbing out of it for a file in an Incoming folder
+    /// ("../lidarr-music/X/01.flac"), so a Music file's line never is an Incoming one's.
     pub rel: String,
+    /// The catalogue folder it is in: 0 is Music, 1 on the Incoming ones (what a library switched off leaves out).
+    pub folder: i64,
+    /// When the catalogue first saw its track (epoch seconds; a moved file keeps it): when it came into the library.
+    pub born: Option<i64>,
     pub genres: Vec<String>,
     pub year: Option<f64>,
     pub bpm: Option<f64>,
@@ -204,15 +251,22 @@ const AXES: [(&str, &str, Kind); 10] = [
     ("style", "Style", Kind::Values),
 ];
 
-/// Names as the library has them, the most common first (a genre's or a style's, in any case).
-fn by_count<'a>(names: impl Iterator<Item = &'a String>) -> Vec<String> {
+/// Names as the items have them, the most common first (a genre's or a style's, in any case), each with how many items
+/// have it among their tracks.
+fn by_count<'a>(items: &[&[&'a Facts]], names: fn(&'a Facts) -> &'a [String]) -> Vec<(String, usize)> {
     let mut seen: HashMap<String, (String, usize)> = HashMap::new();
-    for n in names {
-        seen.entry(n.to_lowercase()).or_insert_with(|| (n.clone(), 0)).1 += 1;
+    for tracks in items {
+        let mut here = HashSet::new();
+        for n in tracks.iter().flat_map(|f| names(f)) {
+            let key = n.to_lowercase();
+            if here.insert(key.clone()) {
+                seen.entry(key).or_insert_with(|| (n.clone(), 0)).1 += 1;
+            }
+        }
     }
     let mut all: Vec<(String, usize)> = seen.into_values().collect();
     all.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
-    all.into_iter().map(|(n, _)| n).collect()
+    all
 }
 
 pub fn is_axis(key: &str) -> bool {
@@ -221,36 +275,52 @@ pub fn is_axis(key: &str) -> bool {
 
 /// The axes with their domains in this library: genres, moods and styles most common first, the years', BPMs',
 /// energies' and danceabilities' span.
-pub fn axes(files: &[Facts], playlists: &[String]) -> Vec<AxisView> {
-    let genres = by_count(files.iter().flat_map(|f| &f.genres));
-    let moods = by_count(files.iter().flat_map(|f| &f.moods));
-    let styles = by_count(files.iter().flat_map(|f| &f.styles));
+pub fn axes<'a>(files: impl IntoIterator<Item = &'a Facts>, playlists: &[String]) -> Vec<AxisView> {
+    let one: Vec<[&Facts; 1]> = files.into_iter().map(|f| [f]).collect();
+    let items: Vec<&[&Facts]> = one.iter().map(|f| f.as_slice()).collect();
+    list_axes(&items, playlists, None)
+}
+
+/// The axes over a list in view (decision 0061, the Filter sheet), its items each a group of tracks (a list of tracks:
+/// one each): genres, moods and styles most common first with how many items have each among their tracks, the
+/// ranges' span over the tracks, and how many items have a value on each axis. `membership` counts the playlists'
+/// items too.
+pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&HashMap<String, Vec<String>>>) -> Vec<AxisView> {
+    let counted = |names: fn(&Facts) -> &[String]| -> (Vec<String>, Vec<usize>) { by_count(items, names).into_iter().unzip() };
+    let tracks = || items.iter().flat_map(|t| t.iter().copied());
     let span = |get: fn(&Facts) -> Option<f64>| {
-        let vals: Vec<f64> = files.iter().filter_map(get).collect();
+        let vals: Vec<f64> = tracks().filter_map(get).collect();
         let min = vals.iter().copied().fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.min(v))));
         let max = vals.iter().copied().fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v))));
-        (min, max, vals.len())
+        (min, max, items.iter().filter(|t| t.iter().any(|f| get(f).is_some())).count())
     };
+    let known = |has: fn(&Facts) -> bool| items.iter().filter(|t| t.iter().any(|f| has(f))).count();
     AXES.iter()
         .map(|&(key, label, kind)| {
-            let mut a = AxisView { key, label, kind, values: Vec::new(), min: None, max: None, known: files.len() };
+            let mut a = AxisView { key, label, kind, values: Vec::new(), counts: Vec::new(), min: None, max: None, known: items.len() };
             match key {
-                "playlist" => a.values = playlists.to_vec(),
+                "playlist" => {
+                    a.values = playlists.to_vec();
+                    if let Some(m) = membership {
+                        let holds = |t: &[&Facts], p: &String| t.iter().any(|f| m.get(&f.rel).is_some_and(|l| l.contains(p)));
+                        a.counts = playlists.iter().map(|p| items.iter().filter(|t| holds(t, p)).count()).collect();
+                    }
+                }
                 "genre" => {
-                    a.values = genres.clone();
-                    a.known = files.iter().filter(|f| !f.genres.is_empty()).count();
+                    (a.values, a.counts) = counted(|f| &f.genres);
+                    a.known = known(|f| !f.genres.is_empty());
                 }
                 "year" => (a.min, a.max, a.known) = span(|f| f.year),
                 "bpm" => (a.min, a.max, a.known) = span(|f| f.bpm),
                 "mood" => {
-                    a.values = moods.clone();
-                    a.known = files.iter().filter(|f| f.danceability.is_some()).count();
+                    (a.values, a.counts) = counted(|f| &f.moods);
+                    a.known = known(|f| f.danceability.is_some());
                 }
                 "energy" => (a.min, a.max, a.known) = span(|f| f.energy),
                 "danceability" => (a.min, a.max, a.known) = span(|f| f.danceability),
                 "style" => {
-                    a.values = styles.clone();
-                    a.known = files.iter().filter(|f| !f.styles.is_empty()).count();
+                    (a.values, a.counts) = counted(|f| &f.styles);
+                    a.known = known(|f| !f.styles.is_empty());
                 }
                 _ => {}
             }
@@ -262,10 +332,15 @@ pub fn axes(files: &[Facts], playlists: &[String]) -> Vec<AxisView> {
 /// Whether a condition holds for a file. A condition on an unknown axis, or with a value its axis does not take, never
 /// holds (negated: always), so a crate from a newer version is shown narrower rather than wider.
 fn holds(c: &Condition, f: &Facts, w: &World) -> bool {
+    matches(c, f, w) != c.not
+}
+
+/// Whether a file matches a condition, its negation aside.
+fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
     let within = |v: Option<f64>, min: &Option<f64>, max: &Option<f64>| {
         v.is_some_and(|v| min.is_none_or(|m| v >= m) && max.is_none_or(|m| v <= m))
     };
-    let yes = match (c.axis.as_str(), &c.value) {
+    match (c.axis.as_str(), &c.value) {
         ("favourite", Value::Yes) => w.favourites.is_some_and(|s| s.contains(&f.rel)),
         ("favourite_album", Value::Yes) => w.favourite_albums.is_some_and(|s| s.contains(&f.rel)),
         (LEFT_OUT, Value::AnyOf { values }) => values.iter().any(|v| *v == f.rel),
@@ -282,18 +357,65 @@ fn holds(c: &Condition, f: &Facts, w: &World) -> bool {
         ("energy", Value::Range { min, max }) => within(f.energy, min, max),
         ("danceability", Value::Range { min, max }) => within(f.danceability, min, max),
         _ => false,
-    };
-    yes != c.not
+    }
 }
 
-/// A crate's files, in the order given (newest first).
-pub fn select<'a>(files: &'a [Facts], conditions: &[Condition], w: &World) -> Vec<&'a str> {
-    files.iter().filter(|f| conditions.iter().all(|c| holds(c, f, w))).map(|f| f.rel.as_str()).collect()
+/// Whether a file has a value on a condition's axis: what All counts (decision 0061). A yes/no axis has one where it
+/// is known (the favourites read), membership always; genres, styles where the tags or AudioMuse give some; moods
+/// where CLAP heard the file; a range where there is a number.
+fn has_value(c: &Condition, f: &Facts, w: &World) -> bool {
+    match c.axis.as_str() {
+        "favourite" => w.favourites.is_some(),
+        "favourite_album" => w.favourite_albums.is_some(),
+        "playlist" | LEFT_OUT => true,
+        "genre" => !f.genres.is_empty(),
+        "year" => f.year.is_some(),
+        "bpm" => f.bpm.is_some(),
+        "mood" => f.danceability.is_some(),
+        "style" => !f.styles.is_empty(),
+        "energy" => f.energy.is_some(),
+        "danceability" => f.danceability.is_some(),
+        _ => false,
+    }
+}
+
+/// Whether an item that holds tracks (an album, an artist, a playlist) passes one condition (decision 0061).
+/// - Any: at least one of its tracks holds it, as a crate tests a track (negation included).
+/// - All: every one of its tracks that has a value on the axis matches; a track without one (not analysed yet, no
+///   genre tag) does not count. Not negated, at least one track must have a value: an album none of whose tracks is
+///   analysed is not "all high energy". Negated, none of the tracks with a value matches, which an item with none
+///   passes, as a single track without a value passes a negated condition.
+///
+/// A track alone is an item of one: Any and All say the same of it.
+fn item_holds(c: &Condition, tracks: &[&Facts], w: &World) -> bool {
+    match c.quantifier {
+        Quantifier::Any => tracks.iter().any(|f| holds(c, f, w)),
+        Quantifier::All => {
+            let mut valued = tracks.iter().filter(|f| has_value(c, f, w)).peekable();
+            if c.not {
+                valued.all(|f| !matches(c, f, w))
+            } else {
+                valued.peek().is_some() && valued.all(|f| matches(c, f, w))
+            }
+        }
+    }
+}
+
+/// Whether an item passes the conditions (decision 0061): every one that is on (a muted one is ignored), each with
+/// its quantifier over the item's tracks. No condition on: every item passes.
+pub fn passes(tracks: &[&Facts], conditions: &[Condition], w: &World) -> bool {
+    conditions.iter().filter(|c| c.enabled).all(|c| item_holds(c, tracks, w))
+}
+
+/// A crate's files, in the order given (newest first): those all its conditions that are on hold for.
+pub fn select<'a>(files: impl IntoIterator<Item = &'a Facts>, conditions: &[Condition], w: &World) -> Vec<&'a str> {
+    let on: Vec<&Condition> = conditions.iter().filter(|c| c.enabled).collect();
+    files.into_iter().filter(|f| on.iter().all(|c| holds(c, f, w))).map(|f| f.rel.as_str()).collect()
 }
 
 /// Whether working the conditions out needs the media server's favourites.
 pub fn needs_favourites(conditions: &[Condition]) -> bool {
-    conditions.iter().any(|c| c.axis == "favourite")
+    conditions.iter().any(|c| c.enabled && c.axis == "favourite")
 }
 
 /// A crate's conditions with its tracks left out by hand (decision 0024, amended 2026-10-19: a crate's left-out list,
@@ -302,7 +424,7 @@ pub fn needs_favourites(conditions: &[Condition]) -> bool {
 pub fn leaving_out(lines: &[String], conditions: &[Condition]) -> Vec<Condition> {
     let mut all = conditions.to_vec();
     if !lines.is_empty() {
-        all.push(Condition { axis: LEFT_OUT.into(), not: true, value: Value::AnyOf { values: lines.to_vec() } });
+        all.push(Condition::new(LEFT_OUT, true, Value::AnyOf { values: lines.to_vec() }));
     }
     all
 }
@@ -333,7 +455,7 @@ impl LeftOut {
 
 /// Whether working the conditions out needs the favourite albums (the Library's hearts).
 pub fn needs_favourite_albums(conditions: &[Condition]) -> bool {
-    conditions.iter().any(|c| c.axis == "favourite_album")
+    conditions.iter().any(|c| c.enabled && c.axis == "favourite_album")
 }
 
 // --- Freshness of the media server's favourites (decision 0024, issue 5) ---
@@ -635,7 +757,7 @@ mod tests {
     fn a_genre_is_a_crate_of_its_one_condition() {
         let c = genre_crate("genre:Trip Hop").unwrap();
         assert_eq!(c.name, "Trip Hop");
-        assert_eq!(c.conditions, vec![Condition { axis: "genre".into(), not: false, value: Value::AnyOf { values: vec!["Trip Hop".into()] } }]);
+        assert_eq!(c.conditions, vec![Condition::new("genre", false, Value::AnyOf { values: vec!["Trip Hop".into()] })]);
         assert!(genre_crate("genre: ").is_none());
         assert!(genre_crate("unlisted").is_none());
     }
@@ -708,7 +830,7 @@ mod tests {
         ];
         let (membership, favourites) = (HashMap::new(), HashSet::new());
         let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None };
-        let c = |axis: &str, value: Value| Condition { axis: axis.into(), not: false, value };
+        let c = |axis: &str, value: Value| Condition::new(axis, false, value);
         assert_eq!(select(&files, &[c("mood", Value::AnyOf { values: vec!["Happy".into()] })], &w), vec!["a"]);
         assert_eq!(select(&files, &[c("energy", Value::Range { min: Some(50.0), max: None })], &w), vec!["a"]);
         assert_eq!(select(&files, &[c("danceability", Value::Range { min: None, max: Some(50.0) })], &w), vec!["b"]);
@@ -736,7 +858,7 @@ mod tests {
     fn conditions_combine_with_and_take_several_values_or_a_range_and_can_be_negated() {
         let (files, membership, favourites) = library();
         let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None };
-        let c = |axis: &str, not: bool, value: Value| Condition { axis: axis.into(), not, value };
+        let c = |axis: &str, not: bool, value: Value| Condition::new(axis, not, value);
         let rock_or_jazz = c("genre", false, Value::AnyOf { values: vec!["ROCK".into(), "jazz".into()] });
         assert_eq!(select(&files, &[rock_or_jazz.clone()], &w), vec!["a", "b", "c"], "any of, case ignored");
         let nineties = c("year", false, Value::Range { min: Some(1990.0), max: Some(1999.0) });
@@ -747,6 +869,94 @@ mod tests {
         assert_eq!(select(&files, &[fast], &w), vec!["a", "d"], "an open end; files without a BPM never match");
         let future = c("mood", false, Value::Yes);
         assert!(select(&files, &[future], &w).is_empty(), "an unknown axis narrows, never widens");
+    }
+
+    #[test]
+    fn saved_conditions_load_on_of_any_track_and_save_as_they_were() {
+        let saved = r#"{"axis":"genre","not":false,"value":{"kind":"any_of","values":["Dub"]}}"#;
+        let c: Condition = serde_json::from_str(saved).unwrap();
+        assert_eq!((c.enabled, c.quantifier), (true, Quantifier::Any));
+        assert_eq!(serde_json::to_string(&c).unwrap(), saved, "crates.json unchanged");
+        let muted: Condition = serde_json::from_str(r#"{"axis":"bpm","value":{"kind":"range","min":120,"max":null},"enabled":false,"quantifier":"all"}"#).unwrap();
+        assert_eq!((muted.enabled, muted.quantifier), (false, Quantifier::All));
+    }
+
+    /// Albums of a list in view: "x" all rock and analysed; "y" one rock, one jazz, one without a genre or energy;
+    /// "z" no genre and no energy at all.
+    fn albums() -> Vec<Vec<Facts>> {
+        let t = |rel: &str, genre: Option<&str>, energy: Option<f64>| Facts {
+            rel: rel.into(),
+            genres: genre.map(|g| vec![g.to_string()]).unwrap_or_default(),
+            energy,
+            ..Facts::default()
+        };
+        vec![
+            vec![t("x1", Some("Rock"), Some(80.0)), t("x2", Some("rock"), Some(70.0))],
+            vec![t("y1", Some("Rock"), Some(90.0)), t("y2", Some("Jazz"), Some(20.0)), t("y3", None, None)],
+            vec![t("z1", None, None), t("z2", None, None)],
+        ]
+    }
+
+    fn passing(items: &[Vec<Facts>], conditions: &[Condition]) -> Vec<usize> {
+        let (membership, favourites) = (HashMap::new(), HashSet::new());
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None };
+        items
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| passes(&t.iter().collect::<Vec<_>>(), conditions, &w))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    #[test]
+    fn any_is_one_of_an_items_tracks_and_all_every_one_with_a_value() {
+        let items = albums();
+        let rock = |q: Quantifier, not: bool| Condition { quantifier: q, ..Condition::new("genre", not, Value::AnyOf { values: vec!["rock".into()] }) };
+        assert_eq!(passing(&items, &[rock(Quantifier::Any, false)]), [0, 1], "one rock track is enough");
+        assert_eq!(passing(&items, &[rock(Quantifier::All, false)]), [0], "y's jazz track counts, its untagged one not; z has no value at all");
+        // Negated: Any, a track that is not rock (an untagged one is not); All, no track with a value is rock.
+        assert_eq!(passing(&items, &[rock(Quantifier::Any, true)]), [1, 2]);
+        assert_eq!(passing(&items, &[rock(Quantifier::All, true)]), [2], "z: none of its tracks has a genre, so none is rock");
+        let high = |q: Quantifier| Condition { quantifier: q, ..Condition::new("energy", false, Value::Range { min: Some(60.0), max: None }) };
+        assert_eq!(passing(&items, &[high(Quantifier::All)]), [0]);
+        // All conditions hold, each with its own quantifier.
+        assert_eq!(passing(&items, &[rock(Quantifier::Any, false), high(Quantifier::Any)]), [0, 1]);
+        assert_eq!(passing(&items, &[rock(Quantifier::Any, false), high(Quantifier::All)]), [0]);
+        // A track alone: Any and All say the same.
+        let one: Vec<Vec<Facts>> = items.iter().flatten().map(|f| vec![f.clone()]).collect();
+        for not in [false, true] {
+            assert_eq!(passing(&one, &[rock(Quantifier::Any, not)]), passing(&one, &[rock(Quantifier::All, not)]));
+        }
+    }
+
+    #[test]
+    fn a_muted_condition_is_ignored() {
+        let items = albums();
+        let jazz = Condition::new("genre", false, Value::AnyOf { values: vec!["jazz".into()] });
+        assert_eq!(passing(&items, &[jazz.clone()]), [1]);
+        let muted = Condition { enabled: false, ..jazz };
+        assert_eq!(passing(&items, &[muted.clone()]), [0, 1, 2], "nothing on: everything passes");
+        let files: Vec<Facts> = items.into_iter().flatten().collect();
+        let (membership, favourites) = (HashMap::new(), HashSet::new());
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: None };
+        assert_eq!(select(&files, &[muted], &w).len(), files.len(), "in a crate too");
+        let fav = Condition { enabled: false, ..Condition::new("favourite", false, Value::Yes) };
+        assert!(!needs_favourites(&[fav]), "a muted favourite needs no favourites");
+    }
+
+    #[test]
+    fn a_lists_axes_count_its_items() {
+        let items = albums();
+        let refs: Vec<Vec<&Facts>> = items.iter().map(|t| t.iter().collect()).collect();
+        let slices: Vec<&[&Facts]> = refs.iter().map(Vec::as_slice).collect();
+        let membership = HashMap::from([("x1".to_string(), vec!["Road".to_string()]), ("y2".to_string(), vec!["Road".to_string()])]);
+        let ax = list_axes(&slices, &["Road".into(), "Chill".into()], Some(&membership));
+        let get = |k: &str| ax.iter().find(|a| a.key == k).unwrap();
+        assert_eq!((get("genre").values.clone(), get("genre").counts.clone()), (vec!["Rock".to_string(), "Jazz".to_string()], vec![2, 1]), "albums, not tracks: x's two rock tracks count once");
+        assert_eq!(get("genre").known, 2, "z has none");
+        assert_eq!((get("energy").min, get("energy").max, get("energy").known), (Some(20.0), Some(90.0), 2));
+        assert_eq!(get("playlist").counts, vec![2, 0]);
+        assert!(axes(&items[0], &["Road".into()]).iter().find(|a| a.key == "playlist").unwrap().counts.is_empty(), "the builder's: not counted");
     }
 
     #[test]
@@ -773,7 +983,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("cratarr-crates-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let store = CrateStore::new(dir.to_str());
-        let rock = vec![Condition { axis: "genre".into(), not: false, value: Value::AnyOf { values: vec!["rock".into()] } }];
+        let rock = vec![Condition::new("genre", false, Value::AnyOf { values: vec!["rock".into()] })];
         let id = store.save(None, "Rock", rock.clone()).await.unwrap();
         assert!(store.save(None, "rock", rock.clone()).await.is_err(), "names are unique, case ignored");
         assert!(store.save(None, "Unlisted", rock.clone()).await.is_err(), "a permanent crate's name");

@@ -327,8 +327,20 @@ export type Collection =
 /** play: in its order (from a track, or its first 500) · shuffle: 500 from all of it, mixed · next: after the playing
  *  track · last: at the end of the queue. */
 export type PlayHow = 'play' | 'shuffle' | 'next' | 'last';
-/** A crate with its two toggles as the page shows them (a tap may be on its way); else as saved. */
-export type Picking = Collection | { kind: 'crate'; id: string; favourites?: CrateFavourites; favourite_albums?: CrateFavourites };
+/** A crate with its two toggles as the page shows them (a tap may be on its way); else as saved. `without`: the
+ *  libraries switched off (CrateLook). */
+export type Picking =
+  | Collection
+  | {
+      kind: 'crate';
+      id: string;
+      favourites?: CrateFavourites;
+      favourite_albums?: CrateFavourites;
+      without?: string[];
+      filter?: Condition[];
+      order?: CrateOrder;
+      down?: boolean;
+    };
 /** The tracks chosen, in queue order (`n`: each one's place in the collection, for shuffle off), the one that plays
  *  first, how many it has that can be played, and the player that took them when the server queued them. */
 export type Picked = {
@@ -373,9 +385,12 @@ export type CrateStats = {
   covers: { source: string; album_id: string }[];
 };
 
-/** One condition of a crate: an axis, what it is tested against, negated or not. */
+/** One condition of a crate: an axis, what it is tested against, negated or not. A filter's (decision 0061) can be
+ *  muted (`enabled` false: ignored) and, on items that hold tracks (albums, playlists), hold for `any` of their tracks
+ *  (the default) or `all` of those that have a value on the axis. Left out: on, any. */
 export type CrateValue = { kind: 'yes' } | { kind: 'any_of'; values: string[] } | { kind: 'range'; min: number | null; max: number | null };
-export type Condition = { axis: string; not: boolean; value: CrateValue };
+export type Quantifier = 'any' | 'all';
+export type Condition = { axis: string; not: boolean; value: CrateValue; enabled?: boolean; quantifier?: Quantifier };
 export type CrateDef = { id: string; name: string; conditions: Condition[] };
 /** An axis the builder draws a control for, with its domain in this library. */
 export type Axis = {
@@ -383,11 +398,32 @@ export type Axis = {
   label: string;
   kind: 'yes_no' | 'values' | 'membership' | 'range';
   values: string[];
+  /** How many items of the list have each of `values` (the Filter sheet's, filterList); absent in the builder's. */
+  counts?: number[];
   min: number | null;
   max: number | null;
   known: number;
 };
-export const getCrateAxes = (source?: string) => quietly<Axis[]>(`/api/crates/axes${follow(source)}`);
+/** The libraries a crate leaves out (decision 0024, amended 2026-10-23: a crate draws from every library switched
+ *  on): `source/library` keys, as the page's library switches keep them (prefs.hiddenLibraries). None, or left out:
+ *  every library. */
+/** `filter`: the filter on a crate (decision 0061), conditions besides its own (its rows, tempo spread, Play).
+ *  `order`, `down`: the order its list shows (decision 0060), applied on the server before the rows are paged (and
+ *  by Play); a value a row does not have comes first, last turned round; equals keep the crate's own order. */
+export type CrateLook = { without?: string[]; filter?: Condition[]; order?: CrateOrder; down?: boolean };
+/** A crate's list's orders: its own (newest first), or by a field. */
+export type CrateOrder = 'own' | 'title' | 'artist' | 'albumArtist' | 'album' | 'year' | 'track' | 'length' | 'tempo' | 'plays' | 'lastPlayed' | 'added';
+/** `?source=…&without=…&filter=…&order=…&down=true` (each key once; the filter as JSON). */
+function crateQuery(q: URLSearchParams, source?: string, look: CrateLook = {}) {
+  if (source) q.set('source', source);
+  for (const k of look.without ?? []) q.append('without', k);
+  if (look.filter?.length) q.set('filter', JSON.stringify(look.filter));
+  if (look.order && look.order !== 'own') q.set('order', look.order);
+  if (look.down) q.set('down', 'true');
+  const t = q.toString();
+  return t ? `?${t}` : '';
+}
+export const getCrateAxes = (source?: string, without?: string[]) => quietly<Axis[]>(`/api/crates/axes${crateQuery(new URLSearchParams(), source, { without })}`);
 export const getCrate = (id: string) => quietly<CrateDef>(`/api/crates/${encodeURIComponent(id)}`);
 /** Every change answers with its undo token (`undo`, decision 0026), for `withUndo`. */
 type Undo = { undo: string | null };
@@ -400,16 +436,46 @@ export const updateCrate = (id: string, name: string, conditions: Condition[]) =
   });
 export const deleteCrate = (id: string) => request<{ deleted: string } & Undo>(`/api/crates/${encodeURIComponent(id)}`, { method: 'DELETE' });
 /** The builder's live preview: how many tracks unsaved conditions select, and the first of them. */
-export const previewCrate = (conditions: Condition[], limit: number, source?: string) => {
+export const previewCrate = (conditions: Condition[], limit: number, source?: string, look: Omit<CrateLook, 'filter'> = {}) => {
   const q = new URLSearchParams({ limit: String(limit) });
   if (source) q.set('source', source);
+  if (look.order && look.order !== 'own') q.set('order', look.order);
+  if (look.down) q.set('down', 'true');
   return quietly<{ source: string; total: number; rows: PlaylistRow[] }>(`/api/crates/preview?${q}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ conditions }),
+    body: JSON.stringify({ conditions, ...(look.without?.length ? { without: look.without } : {}) }),
   });
 };
-export const getCrates = (source?: string) => quietly<Crate[]>(`/api/crates${follow(source)}`);
+/** The list in view a filter is on (decision 0061): the Library's albums (on `source`), the playlists, a playlist's,
+ *  a crate's, an album's or an artist's tracks. */
+export type FilterList =
+  | { kind: 'library' }
+  | { kind: 'playlists' }
+  | { kind: 'playlist'; id: string }
+  | { kind: 'crate'; id: string; favourites?: CrateFavourites; favourite_albums?: CrateFavourites }
+  | { kind: 'album'; source: string; id: string }
+  | { kind: 'artist'; source: string; name: string };
+/** What passes: `keys` of the items that do (an album's id, a playlist's id, a track row's `entry`; empty for a crate,
+ *  whose rows come filtered: CrateLook.filter), how many of how many, and the list's axes (values with `counts`, most
+ *  common first; ranges' span) and tempo spread, over all its items. */
+export type Filtered = {
+  source: string;
+  items: 'albums' | 'playlists' | 'tracks';
+  keys: string[];
+  passed: number;
+  total: number;
+  axes: Axis[];
+  tempo: TempoBands;
+};
+/** A filter on the list in view: `without`, the libraries switched off (the Library's albums and a crate's tracks). */
+export const filterList = (list: FilterList, conditions: Condition[], source?: string, without?: string[]) =>
+  quietly<Filtered>(`/api/filter${follow(source)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ list, conditions, ...(without?.length ? { without } : {}) }),
+  });
+export const getCrates = (source?: string, without?: string[]) => quietly<Crate[]>(`/api/crates${crateQuery(new URLSearchParams(), source, { without })}`);
 /** A page of a crate's rows (newest first) and the crate's size. */
 /** A crate's own picture (kept as JPEG within 800 px); `round` reads it again after a change. */
 export const crateImageUrl = (id: string, round = 0) => `/api/crates/${encodeURIComponent(id)}/image${round ? `?v=${round}` : ''}`;
@@ -421,30 +487,41 @@ export const removeCrateImage = (id: string) => request<void>(`/api/crates/${enc
 export type CrateFavourites = 'all' | 'only' | 'none';
 /** `favourites`, `favouriteAlbums`: the toggles' settings as the page shows them (a tap may be on its way); the saved
  *  ones without. */
-export const crateRows = (id: string, offset: number, limit: number, source?: string, favourites?: CrateFavourites, favouriteAlbums?: CrateFavourites) => {
+export const crateRows = (
+  id: string,
+  offset: number,
+  limit: number,
+  source?: string,
+  favourites?: CrateFavourites,
+  favouriteAlbums?: CrateFavourites,
+  look: CrateLook = {},
+) => {
   const q = new URLSearchParams({ offset: String(offset), limit: String(limit) });
   if (favourites) q.set('favourites', favourites);
   if (favouriteAlbums) q.set('favourite_albums', favouriteAlbums);
-  if (source) q.set('source', source);
   // `limit`: the most rows the page could hold (the server serves 500 at most a page); a page with fewer is the last.
-  return quietly<{ source: string; total: number; limit?: number; rows: PlaylistRow[]; genres: string[] }>(`/api/crates/${encodeURIComponent(id)}/rows?${q}`);
+  return quietly<{ source: string; total: number; limit?: number; rows: PlaylistRow[]; genres: string[] }>(
+    `/api/crates/${encodeURIComponent(id)}/rows${crateQuery(q, source, look)}`,
+  );
 };
 /** A crate's tempo spread (decision 0041): its tracks' 5-BPM bands, 60 to 180, counted on the server. */
 export type TempoBands = { bands: number[]; with_tempo: number; total: number };
-export const crateTempo = (id: string, source?: string, favourites?: CrateFavourites, favouriteAlbums?: CrateFavourites) => {
+export const crateTempo = (id: string, source?: string, favourites?: CrateFavourites, favouriteAlbums?: CrateFavourites, look: CrateLook = {}) => {
   const q = new URLSearchParams();
   if (favourites) q.set('favourites', favourites);
   if (favouriteAlbums) q.set('favourite_albums', favouriteAlbums);
-  if (source) q.set('source', source);
-  return quietly<TempoBands>(`/api/crates/${encodeURIComponent(id)}/tempo?${q}`);
+  return quietly<TempoBands>(`/api/crates/${encodeURIComponent(id)}/tempo${crateQuery(q, source, look)}`);
 };
 /** A playlist's facts for the Playlists page's table (decision 0042): its length, top genres, how much the owner never
  *  played (null: no owner account) and when they last played any of it, and when its file last changed (epoch s). */
 export type PlaylistStats = { seconds: number; genres: string[]; unplayed: number | null; last_played: number | null; changed: number };
 export const playlistStats = () => quietly<Record<string, PlaylistStats>>('/api/playlists/stats');
 /** Make playlist: the crate's tracks now, as its favourites toggle is set, as a new ordinary playlist (a snapshot). */
-export const crateToPlaylist = (id: string, name: string, source?: string) =>
-  post<{ playlist: string; added: number } & Undo>(`/api/crates/${encodeURIComponent(id)}/playlist${follow(source)}`, { name });
+export const crateToPlaylist = (id: string, name: string, source?: string, without?: string[]) =>
+  post<{ playlist: string; added: number } & Undo>(`/api/crates/${encodeURIComponent(id)}/playlist${follow(source)}`, {
+    name,
+    ...(without?.length ? { without } : {}),
+  });
 /** A crate's favourites toggle, kept on the server for every device. */
 export const setCrateFavourites = (id: string, favourites: CrateFavourites) =>
   request<{ crate: string; favourites: CrateFavourites }>(`/api/crates/${encodeURIComponent(id)}/favourites`, {
@@ -553,6 +630,18 @@ export type ExportChoice = { playlists: string[]; tracks: boolean; flat: boolean
 export type ExportWhat =
   | { kind: 'playlists'; names: string[] }
   | { kind: 'tracks'; name: string; tracks: { source: string; id: string }[] };
+/** A crate, all of it, as the page shows it (its toggles, else as saved; the libraries switched off): the server takes
+ *  it as an ExportWhat (`what` of an export, its preview or prepareExport); not in the union yet, as lib/exportChoices
+ *  reads `tracks` of every what that is not playlists. */
+export type ExportCrate = {
+  kind: 'crate';
+  id: string;
+  source?: string;
+  favourites?: CrateFavourites;
+  favourite_albums?: CrateFavourites;
+  without?: string[];
+  filter?: Condition[];
+};
 /** The files as they are; hi-res ones at CD quality (16-bit FLAC, 44.1 kHz); lossless ones as Opus (lossy ones always
  *  stay as they are). */
 export type ExportFormat = 'original' | 'flac-cd' | 'opus';
@@ -611,7 +700,7 @@ export type PlaylistRow = {
   /** the user's plays of the track and when it was last played (epoch seconds), */
   play_count?: number;
   last_played?: number;
-  /** and when the entry came (none for one held before Cratarr kept that). */
+  /** and when the entry came (none for one held before Cratarr kept that; a crate's row: when its track came into the library). */
   added?: number;
   /** Its album's id, where the rows are of several albums (an artist's). */
   album_id?: string;

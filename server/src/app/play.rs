@@ -27,13 +27,23 @@ use crate::source::{self, PlayHow};
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Collection {
     /// A crate, a genre's too (`genre:<name>`); its toggles as the page shows them (a tap may be on its way), else as
-    /// saved.
+    /// saved; from the libraries not in `without` (the page's switched off, `source/library`), else from every one.
     Crate {
         id: String,
         #[serde(default)]
         favourites: Option<Favourites>,
         #[serde(default)]
         favourite_albums: Option<Favourites>,
+        #[serde(default)]
+        without: Vec<String>,
+        /// The filter on it (decision 0061): conditions, unsaved, besides its own.
+        #[serde(default)]
+        filter: Vec<crate::crates::Condition>,
+        /// The order its list shows (decision 0060), so Play plays as it is shown.
+        #[serde(default)]
+        order: super::CrateOrder,
+        #[serde(default)]
+        down: bool,
     },
     Playlist {
         id: String,
@@ -264,12 +274,20 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner
     let cat = app.library.catalogue();
     match what {
         Collection::Favourites | Collection::Library => own_candidates(app, what, owner).await,
-        Collection::Crate { id, favourites, favourite_albums } => {
+        Collection::Crate { id, favourites, favourite_albums, without, filter, order, down } => {
             let name = app.playlists.crate_def(id).await?.name;
-            let shown = app.playlists.crate_shown(id, *favourites, *favourite_albums).await?;
-            let (source, lines) = app.playlists.crate_lines_of(&shown, want).await?;
+            let look = super::CrateLook {
+                favourites: *favourites,
+                favourite_albums: *favourite_albums,
+                without: without.clone(),
+                filter: filter.clone(),
+                order: *order,
+                down: *down,
+            };
+            let shown = app.playlists.crate_shown(id, &look).await?;
+            let (source, lines) = app.playlists.crate_lines_in_order(&shown, want, &look).await?;
             let sid = source.clone();
-            // A crate's lines are Music's files as the catalogue has them: there is no missing one to leave out.
+            // A crate's lines are the libraries' files as the catalogue has them: there is no missing one to leave out.
             let (ids, lines): (Vec<String>, Vec<String>) = blocking(move || {
                 let found = cat.line_track_ids(&sid, &lines)?;
                 Ok(lines.into_iter().zip(found).filter_map(|(l, id)| Some((id?, l))).unzip())
@@ -289,7 +307,7 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner
                 Ok(entries
                     .into_iter()
                     .zip(found)
-                    .filter(|(l, _)| music.as_deref().is_some_and(|d| crate::playlists::entry_exists(d, l)))
+                    .filter(|(l, _)| super::playlists::line_exists(&cat, music.as_deref(), l))
                     .filter_map(|(l, id)| Some((id?, l)))
                     .unzip())
             })
@@ -487,8 +505,13 @@ mod tests {
             "what": { "kind": "crate", "id": "unlisted", "favourites": "only" }, "how": "shuffle", "on": "server"
         }))
         .unwrap();
-        assert_eq!(r.what, Collection::Crate { id: "unlisted".into(), favourites: Some(Favourites::Only), favourite_albums: None });
+        assert_eq!(r.what, Collection::Crate { id: "unlisted".into(), favourites: Some(Favourites::Only), favourite_albums: None, without: Vec::new(), filter: Vec::new(), order: Default::default(), down: false });
         assert_eq!((r.how, r.on), (How::Shuffle, Some(On::Server)));
+        let w: Request = serde_json::from_value(serde_json::json!({
+            "what": { "kind": "crate", "id": "unlisted", "without": ["cratarr//media/Incoming"] }, "how": "play"
+        }))
+        .unwrap();
+        assert_eq!(w.what, Collection::Crate { id: "unlisted".into(), favourites: None, favourite_albums: None, without: vec!["cratarr//media/Incoming".into()], filter: Vec::new(), order: Default::default(), down: false });
         let r: Request = serde_json::from_value(serde_json::json!({
             "what": { "kind": "tracks", "source": "cratarr", "ids": ["tr-1", "tr-2"] }, "how": "next", "on": { "player": "Lenovo Tab" }
         }))

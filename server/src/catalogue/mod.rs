@@ -337,8 +337,8 @@ pub struct Catalogue {
     progress: Mutex<Progress>,
     /// Asks the background loop for a pass now (settings changed, a playlist was edited…).
     poke: tokio::sync::Notify,
-    /// The crates' facts of a folder, as of the database's change count (see `crate_facts`).
-    facts: Mutex<Option<(i64, u64, Arc<Vec<crate::crates::Facts>>)>>,
+    /// The crates' facts, as of the database's change count and the folders in use (see `crate_facts`).
+    facts: Mutex<Option<(u64, Vec<PathBuf>, Arc<Vec<crate::crates::Facts>>)>>,
     /// The database file, for readers with their own connection (`reader`); `None` in memory.
     file: Option<PathBuf>,
 }
@@ -741,62 +741,71 @@ impl Catalogue {
             .collect()
     }
 
-    /// The files present in a folder, newest first (when the catalogue first saw the track; a moved file keeps its time),
-    /// for the crates (decision 0024). Blocking.
-    pub fn files_newest_first(&self, folder: i64) -> Result<Vec<String>> {
+    /// The files present in every folder in use, newest first (when the catalogue first saw the track; a moved file
+    /// keeps its time), each with its folder and that time: what the crates are worked out on (decision 0024).
+    /// Blocking.
+    pub fn files_newest_first(&self) -> Result<Vec<(i64, String, Option<i64>)>> {
         let db = self.db();
         let mut st = db.prepare(&format!(
-            "SELECT rel FROM files LEFT JOIN tracks ON tracks.id = files.track WHERE folder = ?1 AND {PRESENT} ORDER BY tracks.born DESC, rel"
+            "SELECT folder, rel, tracks.born FROM files LEFT JOIN tracks ON tracks.id = files.track WHERE {PRESENT}
+             ORDER BY tracks.born DESC, folder, rel"
         ))?;
-        let rels = st.query_map(params![folder], |r| r.get::<_, String>(0))?;
-        Ok(rels.collect::<rusqlite::Result<_>>()?)
+        let files = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<i64>>(2)?)))?;
+        Ok(files.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// The files present in a folder, newest first, with what the crates' axes test (decision 0024): genres, year,
-    /// BPM. Kept until the catalogue changes: reading them means reading every file's tags. Blocking.
-    pub fn crate_facts(&self, folder: i64) -> Result<Arc<Vec<crate::crates::Facts>>> {
-        let changes = self.db().total_changes();
+    /// The files present in every folder in use (the Music folder and the Incoming ones, decision 0024 amended
+    /// 2026-10-23: a crate draws from every library switched on), newest first, each as its playlist line (`line_of`)
+    /// with its folder and what the crates' axes test: genres, year, BPM, AudioMuse's. Kept until the catalogue or its
+    /// folders change: reading them means reading every file's tags. Blocking.
+    pub fn crate_facts(&self) -> Result<Arc<Vec<crate::crates::Facts>>> {
+        let (changes, folders) = (self.db().total_changes(), self.folders());
         let mut kept = self.facts.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some((f, c, facts)) = kept.as_ref()
-            && *f == folder
+        if let Some((c, f, facts)) = kept.as_ref()
             && *c == changes
+            && *f == folders
         {
             return Ok(facts.clone());
         }
-        let facts = Arc::new(self.read_crate_facts(folder)?);
-        *kept = Some((folder, changes, facts.clone()));
+        let facts = Arc::new(self.read_crate_facts(&folders)?);
+        *kept = Some((changes, folders, facts.clone()));
         Ok(facts)
     }
 
-    fn read_crate_facts(&self, folder: i64) -> Result<Vec<crate::crates::Facts>> {
-        let rels = self.files_newest_first(folder)?;
+    fn read_crate_facts(&self, folders: &[PathBuf]) -> Result<Vec<crate::crates::Facts>> {
+        let files = self.files_newest_first()?;
         let db = self.db();
-        let mut st = db.prepare("SELECT rel, name, value FROM tags WHERE folder = ?1 AND name IN ('genre', 'date', 'originaldate', 'bpm') ORDER BY rel, n")?;
-        let mut by: HashMap<String, Vec<(String, String)>> = HashMap::new();
-        for row in st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
-            let (rel, name, value) = row?;
-            by.entry(rel).or_default().push((name, value));
+        type Place = (i64, String);
+        let mut st = db.prepare(
+            "SELECT folder, rel, name, value FROM tags WHERE folder >= 0 AND name IN ('genre', 'date', 'originaldate', 'bpm') ORDER BY folder, rel, n",
+        )?;
+        let mut by: HashMap<Place, Vec<(String, String)>> = HashMap::new();
+        for row in st.query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, String>(2)?, r.get::<_, String>(3)?)))? {
+            let (place, name, value) = row?;
+            by.entry(place).or_default().push((name, value));
         }
         // The tempo where the file has no BPM tag: its analysis' when sure enough (decision 0035), while the file is as
         // it was then. The tag comes first.
         let mut st = db.prepare(
-            "SELECT a.rel, a.bpm FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
-             WHERE a.folder = ?1 AND a.bpm IS NOT NULL AND a.size = f.size AND a.mtime = f.mtime
+            "SELECT a.folder, a.rel, a.bpm FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel
+             WHERE a.folder >= 0 AND a.bpm IS NOT NULL AND a.size = f.size AND a.mtime = f.mtime
                AND (a.complete IS NULL OR a.complete != 0)",
         )?;
-        let analysed: HashMap<String, f64> =
-            st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        let analysed: HashMap<Place, f64> =
+            st.query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, f64>(2)?)))?.collect::<rusqlite::Result<_>>()?;
         // AudioMuse's (decision 0054), where it heard the file: energy, style tags, CLAP's moods.
         type Muse = (Option<f64>, Option<String>, Option<String>);
-        let mut st = db.prepare(&format!(
-            "SELECT f.rel, a.energy, a.style, a.moods FROM audiomuse a JOIN files f ON f.track = a.track WHERE f.folder = ?1 AND {PRESENT_F}"
-        ))?;
-        let mut muse: HashMap<String, Muse> =
-            st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?))))?.collect::<rusqlite::Result<_>>()?;
-        Ok(rels
+        let mut st = db.prepare(&format!("SELECT f.folder, f.rel, a.energy, a.style, a.moods FROM audiomuse a JOIN files f ON f.track = a.track WHERE {PRESENT_F}"))?;
+        let mut muse: HashMap<Place, Muse> = st
+            .query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), (r.get(2)?, r.get(3)?, r.get(4)?))))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(files
             .into_iter()
-            .map(|rel| {
-                let tags = by.remove(&rel).unwrap_or_default();
+            .filter_map(|(folder, rel, born)| {
+                let place = (folder, rel);
+                // A file no line can name (in a folder there is no way to from Music) is in no crate.
+                let line = line_in(folders, place.0, &place.1)?;
+                let tags = by.remove(&place).unwrap_or_default();
                 let first: BTreeMap<&str, &str> =
                     tags.iter().rev().map(|(n, v)| (n.as_str(), v.as_str())).collect::<BTreeMap<_, _>>();
                 let mut genres: Vec<String> = Vec::new();
@@ -806,38 +815,57 @@ impl Catalogue {
                     }
                 }
                 let (mut energy, mut danceability, mut moods, mut styles) = (None, None, Vec::new(), Vec::new());
-                if let Some((e, style, clap)) = muse.remove(&rel) {
+                if let Some((e, style, clap)) = muse.remove(&place) {
                     let (m, d) = crate::app::audiomuse::moods_and_danceability(&AudioMuseRow { moods: clap, ..AudioMuseRow::default() });
                     energy = e.map(|e| (e * 100.0).round());
                     danceability = d.map(|d| (d * 100.0).round());
                     moods = m.into_iter().map(|(n, _)| n).collect();
                     styles = crate::app::audiomuse::weighted(style.as_deref()).into_iter().take(crate::app::audiomuse::STYLES).map(|(n, _)| n).collect();
                 }
-                crate::crates::Facts {
+                Some(crate::crates::Facts {
                     year: crate::crates::year_of(&first),
-                    bpm: first.get("bpm").and_then(|b| crate::crates::bpm_of(b)).or_else(|| analysed.get(&rel).map(|b| b.round())),
+                    bpm: first.get("bpm").and_then(|b| crate::crates::bpm_of(b)).or_else(|| analysed.get(&place).map(|b| b.round())),
                     genres,
-                    rel,
+                    rel: line,
+                    folder: place.0,
+                    born,
                     energy,
                     danceability,
                     moods,
                     styles,
-                }
+                })
             })
             .collect())
     }
 
-    /// The files of a folder that these server track ids are; ids not known there are left out. Blocking.
-    pub fn rels_of(&self, source: &str, folder: i64, ids: &[String]) -> Result<std::collections::HashSet<String>> {
+    /// The playlist lines of the files these server track ids are, in any folder in use (`line_of`); ids not known are
+    /// left out. Blocking.
+    pub fn lines_of(&self, source: &str, ids: &[String]) -> Result<std::collections::HashSet<String>> {
+        let folders = self.folders();
         let db = self.db();
-        let mut st = db.prepare_cached("SELECT rel FROM source_ids WHERE source = ?1 AND track_id = ?2 AND folder = ?3")?;
+        let mut st = db.prepare_cached("SELECT folder, rel FROM source_ids WHERE source = ?1 AND track_id = ?2 AND folder >= 0")?;
         let mut out = std::collections::HashSet::new();
         for id in ids {
-            if let Some(rel) = st.query_row(params![source, id, folder], |r| r.get::<_, String>(0)).optional()? {
-                out.insert(rel);
+            for place in st.query_map(params![source, id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))? {
+                let (folder, rel) = place?;
+                out.extend(line_in(&folders, folder, &rel));
             }
         }
         Ok(out)
+    }
+
+    /// A file's playlist line (`place_of_line` the other way round): its path relative to the Music folder (folder 0);
+    /// one in another folder climbs out of it ("../lidarr-music/X/01.flac", an Incoming track). `None` for a folder
+    /// not in use, or one there is no way to from the Music folder.
+    pub fn line_of(&self, folder: i64, rel: &str) -> Option<String> {
+        line_in(&self.folders(), folder, rel)
+    }
+
+    /// The file a playlist line names, on the disk (`place_of_line`): Music's, or another folder's for a line that
+    /// climbs out of it.
+    pub fn path_of_line(&self, line: &str) -> Option<PathBuf> {
+        let (folder, rel) = self.place_of_line(line)?;
+        Some(self.folders().get(usize::try_from(folder).ok()?)?.join(rel))
     }
 
     /// Where a playlist line points: (folder, rel). Lines are relative to the Music folder (folder 0); a line for a file
@@ -1785,6 +1813,14 @@ impl Catalogue {
     }
 }
 
+/// A file's playlist line among these folders (see `Catalogue::line_of`).
+fn line_in(folders: &[PathBuf], folder: i64, rel: &str) -> Option<String> {
+    if folder == 0 {
+        return Some(rel.to_string());
+    }
+    crate::playlists::relative_to(folders.first()?, &folders.get(usize::try_from(folder).ok()?)?.join(rel))
+}
+
 /// Where a server's paths lie in each folder: the prefix to strip, per folder id. Found from the catalogue's own
 /// files (the same idea as `placement::find_root`, without touching the disk).
 #[derive(Default)]
@@ -2354,7 +2390,7 @@ mod tests {
         assert_eq!(cat.analysis_of(folder, &one).unwrap().complete, None);
         assert_eq!(cat.analysis_counts().unwrap(), (1, 2));
         // The crates' BPM range finds it by its analysis (the file has no BPM tag).
-        assert_eq!(cat.crate_facts(folder).unwrap().iter().find(|f| f.rel == one).unwrap().bpm, Some(120.0));
+        assert_eq!(cat.crate_facts().unwrap().iter().find(|f| f.rel == one).unwrap().bpm, Some(120.0));
         assert!(cat.album_gains(folder).unwrap().is_empty(), "the album waits for its last track");
         let two = cat.unanalysed(10).unwrap().remove(0);
         assert!(two.1.ends_with("Two.flac"));
@@ -2364,7 +2400,7 @@ mod tests {
         // An analysis of only part of its track: no BPM from it, and its album waits as for a track without one.
         let partial = crate::analysis::Analysis { complete: Some(false), ..an_analysis(-5.0, 480) };
         cat.store_analysis(two.0, &two.1, two.3, two.4, &partial).unwrap();
-        assert_eq!(cat.crate_facts(folder).unwrap().iter().find(|f| f.rel == two.1).unwrap().bpm, None);
+        assert_eq!(cat.crate_facts().unwrap().iter().find(|f| f.rel == two.1).unwrap().bpm, None);
         assert!(cat.album_gains(folder).unwrap().is_empty(), "a partial track holds its album back");
         cat.store_analysis(two.0, &two.1, two.3, two.4, &an_analysis(-5.0, 480)).unwrap();
         assert!(cat.album_gains(folder).unwrap().contains_key("A - B (2020)"));
@@ -2628,6 +2664,32 @@ mod tests {
         let lines = ["../lidarr-music/X/New/01.flac".to_string(), "../elsewhere/01.flac".to_string()];
         assert_eq!(cat.line_track_ids("jf", &lines).unwrap(), vec![Some("i1".to_string()), None]);
         assert_eq!(cat.line_rows("jf", &lines).unwrap()[0].track_id.as_deref(), Some("i1"));
+        // And the other way round: a file's line, its file on the disk, a server id's line.
+        assert_eq!(cat.line_of(1, "X/New/01.flac").as_deref(), Some(lines[0].as_str()));
+        assert_eq!(cat.line_of(0, "A/01.mp3").as_deref(), Some("A/01.mp3"));
+        assert_eq!(cat.line_of(7, "A/01.mp3"), None, "no such folder");
+        assert_eq!(cat.path_of_line(&lines[0]), Some(inc.join("X/New/01.flac")));
+        assert_eq!(cat.lines_of("jf", &["i1".to_string()]).unwrap(), [lines[0].clone()].into_iter().collect());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn crate_facts_hold_every_folder_in_use_each_file_as_its_line() {
+        let root = music();
+        let (m, inc) = (root.join("Music"), root.join("lidarr-music"));
+        std::fs::create_dir_all(m.join("A")).unwrap();
+        std::fs::create_dir_all(inc.join("X/New")).unwrap();
+        std::fs::write(m.join("A/01.mp3"), "a").unwrap();
+        std::fs::write(inc.join("X/New/01.flac"), "x").unwrap();
+        let cat = Catalogue::open(None, vec![m.clone(), inc.clone()]).unwrap();
+        cat.walk_all();
+        let facts = cat.crate_facts().unwrap();
+        let mut lines: Vec<(i64, &str)> = facts.iter().map(|f| (f.folder, f.rel.as_str())).collect();
+        lines.sort();
+        assert_eq!(lines, [(0, "A/01.mp3"), (1, "../lidarr-music/X/New/01.flac")], "Incoming's climb out of Music");
+        // Out of use, a folder's files leave the crates.
+        cat.set_folders(vec![m.clone()]).unwrap();
+        assert_eq!(cat.crate_facts().unwrap().iter().map(|f| f.rel.as_str()).collect::<Vec<_>>(), ["A/01.mp3"]);
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -2648,11 +2710,11 @@ mod tests {
         let d = music();
         let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
         cat.walk_all();
-        let first = cat.crate_facts(0).unwrap();
+        let first = cat.crate_facts().unwrap();
         assert!(!first.is_empty());
-        assert!(Arc::ptr_eq(&first, &cat.crate_facts(0).unwrap()), "nothing changed: the same facts");
+        assert!(Arc::ptr_eq(&first, &cat.crate_facts().unwrap()), "nothing changed: the same facts");
         cat.record_links("jellyfin", "lib", &[("t1".into(), 0, first[0].rel.clone())], 100).unwrap();
-        assert!(!Arc::ptr_eq(&first, &cat.crate_facts(0).unwrap()), "a change: read again");
+        assert!(!Arc::ptr_eq(&first, &cat.crate_facts().unwrap()), "a change: read again");
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -2741,9 +2803,9 @@ mod tests {
         db.execute("UPDATE files SET track = (SELECT id FROM tracks WHERE born = 100) WHERE rel = ?1", params![one]).unwrap();
         db.execute("UPDATE files SET track = (SELECT id FROM tracks WHERE born = 200) WHERE rel = ?1", params![two]).unwrap();
         drop(db);
-        assert_eq!(cat.files_newest_first(0).unwrap(), vec![two.clone(), one.clone()]);
+        assert_eq!(cat.files_newest_first().unwrap(), vec![(0, two.clone(), Some(200)), (0, one.clone(), Some(100))]);
         cat.record_links("jellyfin", "lib", &[("t1".into(), 0, one.clone())], 100).unwrap();
-        let found = cat.rels_of("jellyfin", 0, &["t1".into(), "unknown".into()]).unwrap();
+        let found = cat.lines_of("jellyfin", &["t1".into(), "unknown".into()]).unwrap();
         assert_eq!(found, [one].into_iter().collect(), "unknown ids are left out");
         std::fs::remove_dir_all(&d).ok();
     }

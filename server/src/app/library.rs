@@ -75,6 +75,21 @@ pub(super) fn derive_folders(live: &[Arc<Active>], last_music: Option<&str>) -> 
     Folders { music, incoming }
 }
 
+/// The folders a server's libraries switched off leave out (decision 0024, amended 2026-10-23: a crate draws from
+/// every library switched on). `without`: `source/library` keys, as the page's library switches keep them; only this
+/// server's count. A folder is left out when every library of the server in use that keeps files there (as
+/// `derive_folders` finds them) is switched off; a folder none of them keeps stays.
+pub(super) fn folders_switched_off(a: &Active, without: &[String]) -> Vec<String> {
+    let off = |library: &str| without.iter().any(|k| k.strip_prefix(a.cfg.id.as_str()).and_then(|r| r.strip_prefix('/')) == Some(library));
+    let used = a.cfg.libraries.music.iter().chain(&a.cfg.libraries.incoming);
+    let (mut on, mut out) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
+    for l in used.filter_map(|id| a.placement.libraries.iter().find(|l| &l.id == id)) {
+        let side = if off(&l.id) { &mut out } else { &mut on };
+        side.extend(l.folders.iter().cloned());
+    }
+    out.into_iter().filter(|f| !on.contains(f)).collect()
+}
+
 /// A configured source and, when it is enabled and its settings work, the connection and where its music lies.
 pub(super) struct Active {
     pub(super) cfg: SourceConfig,
@@ -444,5 +459,35 @@ impl Library {
         if let Err(e) = self.switch_to(next).await {
             tracing::warn!("cannot follow the music folders: {e:#}");
         }
+    }
+}
+
+#[cfg(test)]
+mod switched_off_tests {
+    use super::*;
+
+    #[test]
+    fn a_library_switched_off_leaves_out_the_folders_only_it_keeps() {
+        let placed = |id: &str, folders: &[&str]| placement::PlacedLibrary {
+            id: id.into(),
+            name: id.into(),
+            folders: folders.iter().map(|f| f.to_string()).collect(),
+            paths: Vec::new(),
+            read_only: false,
+        };
+        let mut cfg = SourceConfig { id: "jf".into(), kind: "jellyfin".into(), enabled: true, libraries: Default::default(), values: Default::default() };
+        cfg.libraries.music = vec!["m".into()];
+        cfg.libraries.incoming = vec!["in".into(), "both".into()];
+        let placement = Placement {
+            roots: Vec::new(),
+            libraries: vec![placed("m", &["/music"]), placed("in", &["/incoming"]), placed("both", &["/incoming", "/new"]), placed("unused", &["/films"])],
+        };
+        let a = Active { cfg, source: None, placement, error: None };
+        let off = |keys: &[&str]| folders_switched_off(&a, &keys.iter().map(|k| k.to_string()).collect::<Vec<_>>());
+        assert!(off(&[]).is_empty(), "nothing switched off: every library");
+        assert_eq!(off(&["jf/m"]), ["/music"]);
+        assert_eq!(off(&["jf/in"]), Vec::<String>::new(), "another library on keeps /incoming");
+        assert_eq!(off(&["jf/in", "jf/both"]), ["/incoming", "/new"]);
+        assert!(off(&["other/m", "jf/unused", "jfx/m"]).is_empty(), "another server's, an unused library's: nothing");
     }
 }

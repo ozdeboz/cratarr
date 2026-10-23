@@ -100,7 +100,7 @@ async fn rows_of(app: &App, item: &Item) -> Result<(String, Vec<PlaylistRow>), S
     match item.kind {
         Kind::Album => app.playing.album_view(&item.source, &item.id).await.map(|v| (v.source, v.rows)).map_err(|e| e.to_string()),
         Kind::Playlist => app.playlists.rows(&item.id, source).await.map_err(|e| e.to_string()),
-        Kind::Crate => app.playlists.crate_rows(&item.id, source, 0, usize::MAX, None, None).await.map(|p| (p.source, p.rows)).map_err(|e| e.to_string()),
+        Kind::Crate => app.playlists.crate_rows(&item.id, source, 0, usize::MAX, &super::CrateLook::default()).await.map(|p| (p.source, p.rows)).map_err(|e| e.to_string()),
         Kind::Artist => app.playing.artist_view(&item.source, &item.id).await.map(|v| (v.source, v.rows)).map_err(|e| e.to_string()),
     }
 }

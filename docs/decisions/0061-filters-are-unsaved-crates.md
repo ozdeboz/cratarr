@@ -46,3 +46,19 @@ one.
 - One filter state per kind of list in the remembered settings, beside its sort.
 - The Filter sheet becomes the builder's conditions above each kind's own switches; the crate editor draws the same
   cards.
+
+## Built (2026-10-23): the engine's semantics
+
+- **A condition** carries `enabled` (default on; a muted one is ignored, kept to switch back on) and `quantifier`
+  (`any`, the default, or `all`). Saved crates without them load unchanged and are saved as they were.
+- **Any:** at least one of the item's tracks holds the condition, as a crate tests a track (negation included).
+- **All:** every one of its tracks that has a value on the axis matches; a track without one (not analysed, no genre
+  tag) does not count. Not negated, at least one track must have a value: an album none of whose tracks is analysed is
+  not "all high energy". Negated, it is "none of the tracks with a value matches", which an item without values passes,
+  as a single track without a value passes a negated condition. A track alone is an item of one: Any and All agree.
+- Every condition that is on must hold (AND), each with its own quantifier; none on, everything passes.
+- **One endpoint**, `POST /api/filter {list, conditions, without}`: the list (the Library's albums, the playlists, a
+  playlist's, a crate's, an album's or an artist's tracks) answers the keys of the items that pass, `passed` of
+  `total`, and its axes over all its items (values with counts, most common first; the ranges' span; the tempo
+  spread). A crate's rows are paged, so the filter on a crate also travels with its rows, tempo, Play and export
+  (`filter`), and its keys are not sent.
