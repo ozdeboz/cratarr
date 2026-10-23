@@ -115,6 +115,8 @@
     (moment?.albums ?? []).flatMap((id) => sources.find((s) => s.id === 'cratarr')?.albums.find((x) => x.id === id) ?? []),
   );
   let momentFront = $state(0);
+  /** Room under the moment's covers for their shadow (CoverFlow's foot). */
+  const SHADOW = 40;
   /** The sky's photo (public/skies, hand-picked from Unsplash): sunny and hot are day skies, clear a night's; the others
    *  by day or after sunset. */
   const skyPhoto = $derived.by(() => {
@@ -235,7 +237,7 @@
         <CoverFlow
           covers={momentAlbums.map((a) => albumCoverUrl('cratarr', a.id))}
           top={0}
-          foot={0}
+          foot={SHADOW}
           onopen={(i) => viewOver(albumSubject('cratarr', momentAlbums[i].id))}
           onfront={(i) => (momentFront = i)}
         />
@@ -397,9 +399,11 @@
     font-weight: 400;
   }
 
+  /* Room under the covers for their shadow (it fades over 30 px): at the flow's very foot, its clip cut the shadow off
+     in a hard line (the owner, 2026-10-23). The caption comes up as much. */
   .sky-flow {
     position: relative;
-    height: clamp(200px, 30vw, 290px);
+    height: calc(clamp(200px, 30vw, 290px) + 40px);
     margin-top: 16px;
   }
 
@@ -408,8 +412,10 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
+    position: relative;
+    z-index: 1;
     max-width: 640px;
-    margin: 16px auto 0;
+    margin: -24px auto 0;
     padding: 0 16px;
   }
 
