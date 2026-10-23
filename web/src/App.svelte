@@ -887,7 +887,7 @@
 
   .bar a[aria-current='page'],
   .bar button.active {
-    color: var(--accent);
+    color: var(--accent-ink);
     font-weight: 600;
   }
 

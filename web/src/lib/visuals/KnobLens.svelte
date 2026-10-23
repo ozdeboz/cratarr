@@ -81,7 +81,7 @@
     cursor: pointer;
   }
   .pin.on {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
   .head {
     display: flex;

@@ -2374,7 +2374,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     padding: 0;
     border: 0;
     background: none;
-    color: var(--accent);
+    color: var(--accent-ink);
     cursor: pointer;
   }
 
@@ -2517,7 +2517,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   }
 
   .tool.add {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .left-out {

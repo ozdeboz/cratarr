@@ -147,7 +147,7 @@
   .note {
     flex: none;
     display: grid;
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .chev {

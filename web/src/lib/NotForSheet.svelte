@@ -181,7 +181,7 @@
     padding: 8px 10px;
     border: 0;
     background: none;
-    color: var(--accent);
+    color: var(--accent-ink);
     font: inherit;
     font-size: 0.9rem;
     cursor: pointer;

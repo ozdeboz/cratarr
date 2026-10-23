@@ -294,7 +294,7 @@
   }
 
   .device.elsewhere {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .fav.on :global(svg) {

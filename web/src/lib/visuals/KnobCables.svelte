@@ -120,6 +120,6 @@
   }
 
   .add .name {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 </style>

@@ -27,6 +27,8 @@
   --accent-text: #06281a;
   --warn: #c1811c;
   --danger: #c03e34;
+  /* The green reads as text on the dark page (5.3 : 1) but not on the light one (3.2 : 1): its ink differs in light only. */
+  --accent-ink: var(--accent);
   --warn-ink: color-mix(in srgb, var(--warn) 70%, var(--text));
   --danger-ink: color-mix(in srgb, var(--danger) 75%, var(--text));
   /* A missing cover's tile (lib/Cover's stand-in): a step lighter than the page. */
@@ -48,6 +50,7 @@
     --text: #1a1d24;
     --muted: #5d6573;
     --tile: #e7eaef;
+    --accent-ink: color-mix(in srgb, var(--accent) 70%, var(--text));
     color-scheme: light;
   }
 }
@@ -59,6 +62,7 @@
   --text: #1a1d24;
   --muted: #5d6573;
   --tile: #e7eaef;
+  --accent-ink: color-mix(in srgb, var(--accent) 70%, var(--text));
   color-scheme: light;
 }
 

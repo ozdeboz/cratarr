@@ -248,6 +248,6 @@
 
   .verdict.upgrade .badge {
     border-color: var(--accent);
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 </style>

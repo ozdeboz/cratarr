@@ -280,7 +280,7 @@
 
   .seg button[aria-checked='true'] {
     background: color-mix(in srgb, var(--accent) 18%, transparent);
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .chev {

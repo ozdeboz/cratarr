@@ -77,7 +77,7 @@
     border: 1px dashed var(--border);
     border-radius: 14px;
     background: none;
-    color: var(--accent);
+    color: var(--accent-ink);
     font: inherit;
     cursor: pointer;
   }

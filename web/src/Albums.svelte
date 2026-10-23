@@ -144,7 +144,7 @@
 
   .badge {
     margin: 0 0 8px;
-    color: var(--accent);
+    color: var(--accent-ink);
     font-size: 0.8rem;
     font-weight: 600;
   }

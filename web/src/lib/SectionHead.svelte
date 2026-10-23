@@ -53,7 +53,7 @@
 
   .more {
     display: flex;
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .play {

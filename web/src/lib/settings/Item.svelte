@@ -214,7 +214,7 @@
 
   .lead.plus {
     width: 18px;
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .dot {
@@ -261,7 +261,7 @@
   }
 
   .add .name {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .danger .name {

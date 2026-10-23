@@ -198,7 +198,7 @@
 
   .heart {
     display: flex;
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .heart.filled :global(svg) {

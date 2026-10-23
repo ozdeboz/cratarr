@@ -122,7 +122,7 @@
   }
 
   .item.add {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .band {

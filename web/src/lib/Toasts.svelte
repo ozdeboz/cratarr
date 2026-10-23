@@ -143,7 +143,7 @@
   }
 
   .act {
-    color: var(--accent);
+    color: var(--accent-ink);
     font-weight: 600;
   }
 

@@ -121,7 +121,7 @@
   .pinned {
     display: inline-block;
     margin-right: 2px;
-    color: var(--accent);
+    color: var(--accent-ink);
     line-height: 0;
     vertical-align: -1px;
   }

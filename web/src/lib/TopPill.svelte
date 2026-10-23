@@ -166,7 +166,7 @@
 
   /* A search or a filter that applies. */
   button.lit {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   /* How many filters are on: a small count on the funnel's corner, the list itself left clean (decision 0061). */

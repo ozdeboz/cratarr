@@ -13,7 +13,7 @@
   .meter {
     display: block;
     margin-top: 3px;
-    color: var(--accent);
+    color: var(--accent-ink);
     font-size: 0.8rem;
   }
 

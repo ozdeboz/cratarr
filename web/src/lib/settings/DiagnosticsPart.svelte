@@ -270,7 +270,7 @@
   }
 
   .filter.on {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .filters {

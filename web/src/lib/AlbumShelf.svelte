@@ -696,7 +696,7 @@
   }
 
   .tick.on {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .tick.on :global(svg) {
@@ -766,7 +766,7 @@
     height: 20px;
     border-radius: 50%;
     background: rgb(0 0 0 / 0.55);
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .fav :global(svg) {
@@ -808,7 +808,7 @@
   }
 
   .now {
-    color: var(--accent);
+    color: var(--accent-ink);
     font-weight: 600;
   }
 

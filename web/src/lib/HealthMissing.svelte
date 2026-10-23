@@ -135,7 +135,7 @@
     align-items: center;
     gap: 6px;
     margin: 0;
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .search {

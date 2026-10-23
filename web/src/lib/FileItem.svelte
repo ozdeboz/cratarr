@@ -37,6 +37,6 @@
 
 <style>
   .arrow {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 </style>
