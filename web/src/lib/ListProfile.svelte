@@ -38,30 +38,32 @@
   <section class="profile">
     <!-- A line between the header and the rows, whenever a row shows. -->
     {#if shown.length}<div class="rule"></div>{/if}
-    {#each shown as r (r.id)}
-      <div class="row" class:words={r.id === 'style'} class:mood={r.id === 'mood'}>
-        <span class="label">{r.label}</span>
-        {#if r.id === 'style'}
-          <div class="chips">{#each data.styles as s (s)}<span>{wordShown(s)}</span>{/each}</div>
-        {:else if r.id === 'mood'}
-          <!-- Each mood above or below the library's middle. -->
-          <div class="moods">
-            {#each data.moods as m (m.name)}
-              <div class="m">
-                <div class="col"><b class:up={m.lift >= 0} style:height="{Math.abs(m.lift) * 50}%"></b></div>
-                <small>{wordShown(m.name)}</small>
-              </div>
-            {/each}
-          </div>
-        {:else if number(r.id).one !== undefined}
-          <!-- Every track has this one value (an album's year): the value, no graph. -->
-          <span class="one">{oneValue(number(r.id))}</span>
-        {:else}
-          {@const n = number(r.id)}
-          <DensityBar bins={n.bins} lo={n.lo} hi={n.hi} mid={n.mid} ends={ENDS[n.key] ?? [String(Math.round(n.lo)), String(Math.round(n.hi))]} />
-        {/if}
-      </div>
-    {/each}
+    <div class="rows">
+      {#each shown as r (r.id)}
+        <div class="row" class:words={r.id === 'style'} class:mood={r.id === 'mood'}>
+          <span class="label">{r.label}</span>
+          {#if r.id === 'style'}
+            <div class="chips">{#each data.styles as s (s)}<span>{wordShown(s)}</span>{/each}</div>
+          {:else if r.id === 'mood'}
+            <!-- Each mood above or below the library's middle. -->
+            <div class="moods">
+              {#each data.moods as m (m.name)}
+                <div class="m">
+                  <div class="col"><b class:up={m.lift >= 0} style:height="{Math.abs(m.lift) * 50}%"></b></div>
+                  <small>{wordShown(m.name)}</small>
+                </div>
+              {/each}
+            </div>
+          {:else if number(r.id).one !== undefined}
+            <!-- Every track has this one value (an album's year): the value, no graph. -->
+            <span class="one">{oneValue(number(r.id))}</span>
+          {:else}
+            {@const n = number(r.id)}
+            <DensityBar bins={n.bins} lo={n.lo} hi={n.hi} mid={n.mid} ends={ENDS[n.key] ?? [String(Math.round(n.lo)), String(Math.round(n.hi))]} />
+          {/if}
+        </div>
+      {/each}
+    </div>
     {#if (fixed || prefs.profileOpen) && data.heard < data.tracks}<p class="heard">{data.heard.toLocaleString()} of {data.tracks.toLocaleString()} heard by AudioMuse</p>{/if}
     {#if folds}
       <div class="fold" class:alone={!shown.length}>
@@ -75,7 +77,22 @@
 
 <style>
   .profile {
+    container-type: inline-size;
     width: 100%;
+  }
+
+  /* Wide (the header's room beside the name, the owner 2026-10-23: "quite some space to expand into"): the rows in two
+     columns, styles across both, so it is no taller than it need be. */
+  @container (min-width: 760px) {
+    .rows {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      column-gap: 40px;
+    }
+
+    .row.words {
+      grid-column: 1 / -1;
+    }
   }
 
   .rule {

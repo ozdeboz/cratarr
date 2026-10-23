@@ -2518,7 +2518,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     }
 
     .meta:has(.head-spread:not(.artist-head)) {
-      grid-template-columns: minmax(0, 1fr) clamp(280px, 45cqi, 480px);
+      grid-template-columns: clamp(220px, 28cqi, 400px) minmax(280px, 1fr);
       align-items: start;
       column-gap: 32px;
     }
