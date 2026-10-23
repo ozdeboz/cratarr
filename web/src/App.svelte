@@ -552,7 +552,7 @@
     >
   {/if}
   {#if pageRow}
-    <div class="page-row" class:beside={sidebar} class:insights={page === 'insights'} class:open={page === 'insights' && panel.viewed !== null} style:--player-w="{sideWidth}px">
+    <div class="page-row" class:beside={sidebar} class:insights={page === 'insights'} class:open={page === 'insights' && insightsShown} style:--player-w="{sideWidth}px">
       {#if navAt > 0}
         <span class="navpill"><button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button></span>
       {:else}
@@ -561,8 +561,9 @@
       {#if pagePill}<SheetArea area={() => pageEl}><TopPill {page} view={hasView(page)} device={pillDevice} filter={!page.startsWith('local-')} /></SheetArea>{/if}
       {#if page === 'insights'}
         <InsightsTabs />
-        <!-- Its panel's button while no panel is open (the panel closes itself, top left). -->
-        {#if panel.viewed === null && insightsControls().length}<span class="navpill"><button aria-label="View" title="View" onclick={() => viewPlaylist(INSIGHTS_VIEW)}><Icon name="sliders" size={22} /></button></span>{/if}
+        <!-- Its panel's button while its own panel is not open, whatever else is (a playlist, the player: the owner,
+             2026-10-23); the panel closes itself, top left. -->
+        {#if !insightsShown && insightsControls().length}<span class="navpill"><button aria-label="View" title="View" onclick={() => viewPlaylist(INSIGHTS_VIEW)}><Icon name="sliders" size={22} /></button></span>{/if}
       {/if}
       {#if page === 'settings'}
         <span class="navpill"><button aria-label="About" title="About" onclick={() => (aboutOpen = true)}><Icon name="info" size={22} /></button></span>
