@@ -1,11 +1,11 @@
 <script lang="ts">
-  // An artist's page under their name (decided 2026-10-16, as Symfonium's): About (the owner, 2026-10-23: their photo
-  // and TheAudioDB's description, from the server's artist store; a tap opens all of it), their albums, the albums they
+  // An artist's page under their name (decided 2026-10-16, as Symfonium's): About (the owner, 2026-10-23: TheAudioDB's
+  // description, from the server's artist store; a tap opens all of it; their photo is the page's header, not here too), their albums, the albums they
   // appear on (others', credited on a track), both newest first as covers, and their most played tracks (the panel's
   // rows, `top`), whose › shows all their tracks.
   import type { Snippet } from 'svelte';
   import { tick } from 'svelte';
-  import { artistPhotoUrl, getArtistAbout, type ListedAlbum } from './api';
+  import { getArtistAbout, type ListedAlbum } from './api';
   import { pageAsked } from './artistAbout.svelte';
   import AlbumCard from './AlbumCard.svelte';
   import SectionHead from './SectionHead.svelte';
@@ -62,11 +62,10 @@
   </ul>
 {/snippet}
 
-{#if about && (about.bio || about.photo)}
+{#if about?.bio}
   <section aria-label="About" bind:this={aboutEl}>
     <SectionHead title="About" />
     <div class="about">
-      {#if about.photo && about.id}<img class="face" src={artistPhotoUrl(about.id)} alt="" />{/if}
       {#if about.bio}
         <button class="bio" class:whole onclick={() => (whole = !whole)} aria-expanded={whole}>{about.bio}</button>
       {/if}
@@ -130,14 +129,6 @@
     gap: 14px;
     align-items: flex-start;
     padding: 4px 16px 0;
-  }
-
-  .face {
-    flex: none;
-    width: 72px;
-    height: 72px;
-    border-radius: 50%;
-    object-fit: cover;
   }
 
   /* Four lines; a tap shows all of it (its paragraphs as written). */
