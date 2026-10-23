@@ -44,6 +44,16 @@ or style; weighted by how often and, where asked, older listening counting less;
 feature's window is filled, it says so or falls back as it does today (Sounds like your week: the last plays within
 seven days).
 
+### Amended 2026-10-23: the history before the log, from ListenBrainz
+
+The owner chose to fill the log with Jellyfin's history (in claude-632's session, for Insights' Listening tab).
+Jellyfin kept none; its ListenBrainz plugin sent every listen to ListenBrainz (user `ozdeboz`: 6,383 listens,
+2026-03-07 to 2026-08-27). Settings › Import › From ListenBrainz reads a user's listens from ListenBrainz's public
+API into the signed-in account's log (`app::listenbrainz`): matched by MusicBrainz recording, else artist and title,
+else album and title (6,375 of the 6,383 matched); `finished`, **not counted** (those plays reached the counts by the
+Jellyfin import), context `listenbrainz`, the listen's time and recording as its event, so a second import adds
+nothing. "Starting empty" stands for the time ListenBrainz did not record.
+
 ## Consequences
 
 - Sounds like your week can weigh its seed by how often each track was heard this week, older days less, and leave

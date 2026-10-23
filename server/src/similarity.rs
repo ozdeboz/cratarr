@@ -200,9 +200,19 @@ impl Profile {
         let mut members = set.to_vec();
         members.sort_unstable();
         members.dedup();
-        let mut p = Profile { n: members.len(), ..Profile::default() };
+        let once = members.clone();
+        Self::of_counted(lib, &once, track)
+    }
+
+    /// As `of`, each place counting as often as it is in `set` (a weighted seed: Sounds like your week's tracks by how
+    /// often and how lately they were heard).
+    pub fn of_counted<'a>(lib: &Library, set: &[usize], track: impl Fn(usize) -> &'a Track) -> Self {
+        let mut members = set.to_vec();
+        members.sort_unstable();
+        members.dedup();
+        let mut p = Profile { n: set.len(), ..Profile::default() };
         let mut values: [Vec<f64>; NUMBERS] = Default::default();
-        for &i in &members {
+        for &i in set {
             let t = track(i);
             for (k, words) in t.words().into_iter().enumerate() {
                 for w in unique(words) {
@@ -219,7 +229,7 @@ impl Profile {
                 p.numbers[k] = Some(Spread { middle: quantile(&v, 0.5), spread: (quantile(&v, 0.75) - quantile(&v, 0.25)) / 2.0 });
             }
         }
-        let heard: Vec<&[f32]> = members.iter().filter_map(|&i| lib.sound(i)).collect();
+        let heard: Vec<&[f32]> = set.iter().filter_map(|&i| lib.sound(i)).collect();
         p.sound = mean_sound(&heard);
         p.members = members;
         p.weigh(lib);
@@ -338,6 +348,11 @@ impl Signals {
     }
 
     /// All of them, by the weights: the weighed mean of the signals known, 0 when none is.
+    /// Whether anything at all is known of how alike the two are.
+    pub fn known(&self) -> bool {
+        self.0.iter().any(Option::is_some)
+    }
+
     pub fn score(&self, w: &Weights) -> f64 {
         let (mut sum, mut of) = (0.0, 0.0);
         for (x, w) in self.0.iter().zip(w.0) {

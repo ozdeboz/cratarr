@@ -68,13 +68,16 @@ without a device. The owner (2026-10-19): "for later, if ever".
 
 ## One similarity for playlists and crates
 
-Radio, Autoplay and "more like this" each find similar music their own way from a playlist, a crate or a track
+Radio, Autoplay and "more like this" each found similar music their own way from a playlist, a crate or a track
 (0036's profile: shared playlists, artists, genres, tags, era and AudioMuse's sound, 0054). The owner (2026-10-23): "we
 should consolidate playlist and crate similarity into a unified module or path later on. We'll handle this after all
 AudioMuse analysis is done."
 
-- Waits for: AudioMuse's analysis of the whole library (with CLAP) to finish, so the sound signal is there for every
-  track before the weights are settled.
+- Done in 74.x (2026-10-23): one path, `similarity` (signals, rarity, middle and spread, the listener's Similar by),
+  for the radio, Sounds like (a track's, an album's, your week's), and the similar albums, playlists and crates at a
+  list's foot; the radio and the crates read a track from the same facts (`crates::Facts::like`).
+- Left, and it waits for AudioMuse's analysis of the whole library (with CLAP): weighing the signals (all equal now,
+  or the listener's order), CLAP text search, steering the radio by mood and energy, the closeness graph last.
 - Seen so far: a crate's Start radio seeds from 300 of its tracks (drawn by the server since 73.2) and leaves the seed
   out; a broad crate (Unlisted, 16,000 tracks) makes a blurry profile. Play as radio (only the crate's tracks) is a
   different path again.

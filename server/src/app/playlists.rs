@@ -103,9 +103,23 @@ pub(super) struct CrateLibrary {
     favourites: Option<HashSet<String>>,
     /// The lines of the viewer's favourite albums (decision 0024, amended 2026-10-19), when asked for.
     favourite_albums: Option<HashSet<String>>,
+    /// The library as the one similarity sees it, made when a Sounds like first asks (`crates::Alike`).
+    alike: std::sync::OnceLock<crates::Alike>,
+    /// What makes music alike to the viewer: their Similar by (the radio's), else all signals alike.
+    by: crate::similarity::Weights,
 }
 
 impl CrateLibrary {
+    /// The library as the one similarity sees it (`crates::Alike`): every file, any library, with its playlists.
+    pub(super) fn alike(&self) -> &crates::Alike {
+        self.alike.get_or_init(|| crates::Alike::of(&self.files, &self.membership))
+    }
+
+    /// The viewer's Similar by.
+    pub(super) fn by(&self) -> &crate::similarity::Weights {
+        &self.by
+    }
+
     /// Whether these conditions can be worked out: what they need of the favourites is known.
     fn knows(&self, conditions: &[crates::Condition]) -> bool {
         (!crates::needs_favourites(conditions) || self.favourites.is_some())
@@ -135,7 +149,7 @@ impl CrateLibrary {
         // The closest among what the crate may show: its libraries switched on, its other conditions held.
         let w = self.world();
         let among: Vec<&crates::Facts> = self.files().filter(|f| crates::holds_besides_like(conditions, f, &w)).collect();
-        crates::resolved(conditions, &self.files, &among)
+        crates::resolved(conditions, self.alike(), &among, &self.by)
     }
 
     /// The crate's lines, newest first; a Sounds like crate's closest first (`crates::closest_first`).
@@ -2117,7 +2131,7 @@ impl PlaylistService {
         let (of, weights, lib) = (of.to_vec(), weights.to_vec(), Arc::new(lib));
         tokio::task::spawn_blocking(move || {
             let among: Vec<&crates::Facts> = lib.files().filter(|f| !excluded.contains(&f.rel)).collect();
-            let mut closest = crates::closest_weighted(&of, &weights, &lib.files, &among);
+            let mut closest = crates::closest_weighted(&of, &weights, lib.alike(), &among, lib.by());
             // Fresh: the seeds left out, as the crate leaves them (crates::resolved).
             if fresh {
                 let seeds: HashSet<i64> = of.iter().filter_map(|id| crate::serve::ids::track_of(id)).collect();
@@ -2203,7 +2217,8 @@ impl PlaylistService {
                 membership.entry(line).or_default().push(name.clone());
             }
         }
-        Ok(CrateLibrary { source: sid, files, switched_off, membership, favourites, favourite_albums })
+        let by = asking_user().and_then(|u| super::radio::similar_by_of(&u)).map_or(crate::similarity::Weights::EQUAL, |o| crate::similarity::Weights::ranked(&o));
+        Ok(CrateLibrary { source: sid, files, switched_off, membership, favourites, favourite_albums, alike: Default::default(), by })
     }
 
     /// The favourite tracks' lines, from the media server. What was heard last is answered at once, with Cratarr's own
@@ -2636,6 +2651,8 @@ mod library_tests {
             membership,
             favourites: None,
             favourite_albums: None,
+            alike: Default::default(),
+            by: crate::similarity::Weights::EQUAL,
         }
     }
 

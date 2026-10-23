@@ -768,6 +768,12 @@ export const editPlaylist = (id: string, expected: string[], entries: string[]) 
     body: JSON.stringify({ expected, entries }),
   });
 
+/** Lists like a list, of its kind (the one similarity): the closest first, each with how alike (0 to 100). */
+export type Alike = { id: string; alike: number };
+export const similarAlbums = (source: string, album: string) =>
+  quietly<Alike[]>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/similar`);
+export const similarPlaylists = (id: string) => quietly<Alike[]>(`/api/playlists/${encodeURIComponent(id)}/similar`);
+export const similarCrates = (id: string) => quietly<Alike[]>(`/api/crates/${encodeURIComponent(id)}/similar`);
 export const playlistCovers = (id: string) =>
   quietly<{ source: string; album_id: string }[]>(`/api/playlists/${encodeURIComponent(id)}/covers`);
 export const renamePlaylist = (id: string, to: string) =>
@@ -1342,6 +1348,9 @@ export type HeardEvent = {
   player: string | null;
   context: string | null;
 };
+/** A ListenBrainz user's listens into the asking account's history (decision 0064, amended): how many there were,
+ *  matched to the library, and new. */
+export const importListenBrainz = (user: string) => post<{ listens: number; matched: number; added: number }>('/api/history/listenbrainz', { user });
 /** Tells the server tracks heard; answers with the ids it has (now or before). */
 export const reportPlays = (events: HeardEvent[]) => post<{ done: string[] }>('/api/plays', { events });
 export const trackPlayed = (source: string, id: string) => quietly<{ counted: boolean }>(`${trackPath(source, id)}/played`, { method: 'POST' });

@@ -572,9 +572,10 @@ impl UserData {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// When a user's log starts: their first row's time; none before they heard anything since it exists.
+    /// When a user's log starts being told as it happens: their first row's time that a player told (an import from
+    /// elsewhere, `listenbrainz`, leaves gaps); none before they heard anything since it exists.
     pub fn heard_from(&self, user: &str) -> Result<Option<i64>> {
-        Ok(self.db().query_row("SELECT min(at) FROM plays WHERE user = ?1", [user], |r| r.get(0))?)
+        Ok(self.db().query_row("SELECT min(at) FROM plays WHERE user = ?1 AND coalesce(context, '') <> 'listenbrainz'", [user], |r| r.get(0))?)
     }
 
     /// Sets an item's whole annotation for a user (a song taking over another's data, decision 0013). Safe to repeat.
@@ -1226,6 +1227,9 @@ mod tests {
         assert!(!s.contains_key("tr-1"), "a skip is no play");
         assert_eq!(s.get("tr-2"), Some(&(1, Some(200))));
         assert_eq!(u.heard_from("me").unwrap(), Some(100));
+        let imported = Heard { counts: false, context: Some("listenbrainz".into()), event: Some("lb".into()), ..Heard::counted(10) };
+        u.record("me", ("tr-1", "pid1"), "al-1", &[], &imported).unwrap();
+        assert_eq!(u.heard_from("me").unwrap(), Some(100), "an import's older rows are no live history");
         assert!(u.heard_since("me", 150).unwrap().len() == 1 && u.heard_since("you", 0).unwrap().is_empty());
     }
 

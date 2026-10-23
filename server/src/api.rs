@@ -75,6 +75,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/filter", post(filter_list))
         .route("/api/crates/{id}", get(crate_get).put(crate_update).delete(crate_delete))
         .route("/api/crates/{id}/rows", get(crate_rows))
+        .route("/api/crates/{id}/similar", get(similar_crates))
         .route("/api/crates/{id}/tempo", get(crate_tempo))
         .route("/api/like-curve", get(like_curve))
         .route("/api/tempo", post(tempo_of).put(adjust_tempo))
@@ -137,7 +138,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/diagnostics/download", get(diagnostics_download))
             .route("/api/diagnostics/levels", get(diagnostics_levels).put(set_diagnostics_levels))
             .route("/api/players/settings", get(play_on_settings).put(save_play_on_settings))
-            .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
+            .route("/api/history/listenbrainz", post(import_listenbrainz))
+        .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
             .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
             .route("/api/sync/targets", get(sync_targets))
             .route("/api/albums/{source}/{album}/move", get(move_preview).post(move_album))
@@ -2447,6 +2449,24 @@ async fn queue_playlist(
     Ok((StatusCode::CREATED, Json(made)))
 }
 
+#[derive(Deserialize)]
+struct ListenBrainzImport {
+    /// The ListenBrainz user whose listens are the asking account's.
+    user: String,
+}
+
+/// The asking account's listening history from ListenBrainz into its log (decision 0064, amended): how many listens
+/// there were, matched to the library, and new to the log.
+async fn import_listenbrainz(Json(b): Json<ListenBrainzImport>) -> Result<Json<crate::app::listenbrainz::Imported>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
+    let user = b.user.trim();
+    if user.is_empty() {
+        return Err(ToggleError::Refused("Say whose ListenBrainz listens.".into()).into());
+    }
+    Ok(Json(crate::app::listenbrainz::import(&serve, &account, user).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
 /// How many similar lists a list shows at its foot.
 const SIMILAR_LISTS: usize = 12;
 
@@ -2456,6 +2476,12 @@ async fn similar_albums(Path((source, album)): Path<(String, String)>) -> Result
         return Ok(Json(json!([])));
     }
     let found = crate::app::radio::similar_albums(&album, SIMILAR_LISTS).await?;
+    Ok(Json(json!(found.into_iter().map(|(id, alike)| json!({ "id": id, "alike": alike })).collect::<Vec<_>>())))
+}
+
+/// Crates like a crate, among the account's own: `[{id, alike}]`, the closest first.
+async fn similar_crates(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
+    let found = crate::app::similar::crates_like(&app.playlists, &id, SIMILAR_LISTS).await?;
     Ok(Json(json!(found.into_iter().map(|(id, alike)| json!({ "id": id, "alike": alike })).collect::<Vec<_>>())))
 }
 

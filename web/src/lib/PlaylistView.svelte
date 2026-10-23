@@ -99,6 +99,8 @@
   import { addedOn, artistPictureId, goToArtist, library, mainArtist, readLibrary } from './albums.svelte';
   import AlbumAbout from './AlbumAbout.svelte';
   import AlbumMore from './AlbumMore.svelte';
+  import SimilarAlbums from './SimilarAlbums.svelte';
+  import SimilarLists from './SimilarLists.svelte';
   import ListHead from './ListHead.svelte';
   import { insights, plural } from './insights.svelte';
   import { refresh } from './live.svelte';
@@ -1760,10 +1762,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
         {#each shown as x (x.i)}{#if album}{@render albumRow(x.r, x.i, shownRows)}{:else}{@render trackRow(x.r, source, title, shownRows, x.i)}{/if}{/each}
       </ol>
       {#if crate && rows.length < total}<div class="loading" bind:this={more}><MarkLoader size={40} /></div>{/if}
+      <!-- Each list's own kind of similar ones at its foot (the owner, 2026-10-23); a crate's once all its rows are in. -->
+      {#if p && !multi}<SimilarLists kind="playlist" id={p.id} />{/if}
+      {#if crate && !seeded(crate) && !crateEditing && rows.length >= total}<SimilarLists kind="crate" id={crate} />{/if}
       {#if album && albumHead && !onDevice}
-        <!-- As Symfonium's album: the artist's other albums, then About. -->
+        <!-- As Symfonium's album: the artist's other albums, the similar ones, then About. -->
         {@const by = listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)}
         {#if by}<AlbumMore source={album.source} album={album.id} artist={by} />{/if}
+        <SimilarAlbums source={album.source} album={album.id} />
         <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} />
       {/if}
     {:else}

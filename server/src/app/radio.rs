@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 
 use super::ToggleError;
 use super::playon::QueueTrack;
-use crate::catalogue::AudioMuseRow;
 use crate::similarity::{Library, MOODS, Profile, Signal, Track, Weights, unique};
 
 /// The lane of Radio's inserts (`QueueTrack::lane`): right after the own track they are like (and its hand-added run).
@@ -287,6 +286,7 @@ impl Index {
 
     /// With what AudioMuse heard of each song (decision 0054), by its id: its numbers and style tags into the song's
     /// facts, its "sounds like" vector into the library.
+    #[cfg(test)]
     pub(crate) fn with_heard(mut self, heard: impl Fn(&str) -> Option<Heard>) -> Self {
         let mut styles = Names::default();
         let mut sounds = Vec::with_capacity(self.songs.len());
@@ -295,6 +295,37 @@ impl Index {
             (s.like.energy, s.like.danceability, s.like.moods) = (h.energy, h.danceability, h.moods);
             s.like.styles = h.styles.iter().map(|x| styles.of(x)).collect();
             sounds.push(h.sound);
+        }
+        self.like = Arc::new(Library::new(self.songs.iter().map(|s| &s.like), sounds));
+        self
+    }
+
+    /// With the catalogue's facts of each song (`crates::Facts::like`: the one reading of a track the crates use too):
+    /// its genres, AudioMuse's styles, energy, danceability and moods, its year and tempo, and its sound into the
+    /// library. Its artists, playlists and album tags stay the index's own. A song the catalogue has no facts of keeps
+    /// its year and tempo and loses its genres (their numbers are the facts' now).
+    pub(crate) fn with_facts(mut self, facts: &[crate::crates::Facts]) -> Self {
+        let by_track: HashMap<i64, &crate::crates::Facts> = facts.iter().filter_map(|f| Some((f.track?, f))).collect();
+        let mut names: [HashMap<String, u32>; 4] = Default::default();
+        let mut intern = |kind: usize, name: &str| {
+            let key = name.trim().to_lowercase();
+            let next = names[kind].len() as u32;
+            *names[kind].entry(key).or_insert(next)
+        };
+        let mut sounds = Vec::with_capacity(self.songs.len());
+        for s in &mut self.songs {
+            let f = crate::serve::ids::track_of(&s.id).and_then(|t| by_track.get(&t).copied());
+            match f {
+                Some(f) => {
+                    let mut t = f.like(&mut intern);
+                    t.playlists = std::mem::take(&mut s.like.playlists);
+                    t.artists = std::mem::take(&mut s.like.artists);
+                    t.tags = std::mem::take(&mut s.like.tags);
+                    s.like = t;
+                }
+                None => s.like.genres.clear(),
+            }
+            sounds.push(f.and_then(|f| f.sound.as_deref().map(<[f32]>::to_vec)));
         }
         self.like = Arc::new(Library::new(self.songs.iter().map(|s| &s.like), sounds));
         self
@@ -367,21 +398,6 @@ pub(crate) struct Heard {
     pub sound: Option<Vec<f32>>,
 }
 
-impl Heard {
-    fn of(row: &AudioMuseRow) -> Self {
-        let clap = crate::app::audiomuse::weighted(row.moods.as_deref());
-        let score = |name: &str| clap.iter().find(|(n, _)| n == name).map(|(_, x)| *x as f32);
-        // All 0 until CLAP has heard the track: not heard, not unmoved.
-        let heard = clap.iter().any(|(_, x)| *x > 0.0);
-        Heard {
-            energy: row.energy.map(|e| e as f32),
-            danceability: score("danceable").filter(|_| heard),
-            moods: heard.then(|| MOODS.map(|m| score(m).unwrap_or(0.0))),
-            styles: crate::app::audiomuse::weighted(row.style.as_deref()).into_iter().take(crate::app::audiomuse::STYLES).map(|(n, _)| n).collect(),
-            sound: row.embedding.as_ref().map(|b| b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()),
-        }
-    }
-}
 
 /// The radio's choice for one request: songs of the index, in the order they should play. `recent`: songs played
 /// within seven days, with when (epoch seconds). `within`: the crate's songs when it plays inside one.
@@ -682,10 +698,10 @@ async fn index(served: &Arc<crate::serve::Serve>, dir: &Path) -> Result<Arc<Inde
                 }
             }
         }
-        // Everyone's: the listener's favourites are marked for each choice. With what AudioMuse heard of each song.
-        let heard = cat.audiomuse_all();
-        read_index(&dir.join("library.sqlite"), &dir.join("userdata.sqlite"), None, &member)
-            .map(|i| i.with_heard(|id| crate::serve::ids::track_of(id).and_then(|t| heard.get(&t)).map(Heard::of)))
+        // Everyone's: the listener's favourites are marked for each choice. Each song's facts as the crates read them
+        // (one reading of a track, `Index::with_facts`).
+        let facts = cat.crate_facts()?;
+        read_index(&dir.join("library.sqlite"), &dir.join("userdata.sqlite"), None, &member).map(|i| i.with_facts(&facts))
     })
     .await
     .map_err(|e| anyhow::anyhow!("{e}"))??;
