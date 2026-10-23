@@ -705,8 +705,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /** The list's profile (the owner, 2026-10-23: lib/ListProfile), worked out on the server over all its tracks, as
    *  the Filter sheet's list is (lib/listFilter inView); asked again after an edit. Not a selection's. */
   let profile = $state<ListProfileData | null>(null);
-  /** The profile shown: the preview's or the list's, while music profiles are on (Settings › Display › Content). */
-  const shownProfile = $derived(prefs.profile ? (previewProfile ?? profile) : null);
   /** While the profile (or a Sounds like crate's curve) is on its way: the header holds its place rather than showing
    *  the tempo spread that would make way for it (the owner, 2026-10-23: no flash of what is not going to stay). */
   let profileComing = $state(false);
@@ -761,6 +759,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     for (const p of curve.profiles) if (p.count <= preview && (!best || p.count > best.count)) best = p;
     return best?.profile ?? null;
   });
+  /** The profile shown: the preview's or the list's, while music profiles are on (Settings › Display › Content). */
+  const shownProfile = $derived(prefs.profile ? (previewProfile ?? profile) : null);
   /** The seed the curve is of: moving the cut (another crate of the same seed) keeps it shown until the new one comes. */
   let curveOf = '';
   $effect(() => {
