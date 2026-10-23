@@ -93,6 +93,30 @@ async fn like_crate(id: &str, item: &str, count: usize) -> Result<CrateDef, Togg
     Ok(crates::like_crate(id, &format!("Sounds like {name}"), songs, count))
 }
 
+/// What a user did with each line (the crates' Play count, Last played and Rating): the songs' plays and last plays,
+/// and their albums' stars, by the files' lines. Blocking.
+fn uses_of(user: &str, files: &[crates::Facts]) -> anyhow::Result<HashMap<String, crates::Use>> {
+    let Some(serve) = crate::serve::instance() else { return Ok(HashMap::new()) };
+    let line_of: HashMap<i64, &str> = files.iter().filter_map(|f| Some((f.track?, f.rel.as_str()))).collect();
+    let line = |song: &str| crate::serve::ids::track_of(song).and_then(|t| line_of.get(&t).copied());
+    let mut out: HashMap<String, crates::Use> = HashMap::new();
+    for (song, (plays, last)) in serve.userdata.song_plays(user)? {
+        if let Some(l) = line(&song) {
+            let u = out.entry(l.to_string()).or_default();
+            (u.plays, u.last) = (plays, last);
+        }
+    }
+    let rated: HashMap<String, u8> = serve.userdata.used(user, crate::userdata::Kind::Album)?.into_iter().filter(|(_, a)| a.rating > 0).map(|(id, a)| (id, a.rating)).collect();
+    if !rated.is_empty() {
+        for (song, album) in serve.library.song_albums()? {
+            if let (Some(&r), Some(l)) = (rated.get(&album), line(&song)) {
+                out.entry(l.to_string()).or_default().rating = Some(r);
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// How many each of Home's looks back shows; and after how many days unplayed an album is half as far from the listening
 /// as one never played (Grave digging).
 const DIG: usize = 12;
@@ -135,6 +159,9 @@ pub(super) struct CrateLibrary {
     favourite_albums: Option<HashSet<String>>,
     /// The library as the one similarity sees it, made when a Sounds like first asks (`crates::Alike`).
     alike: std::sync::OnceLock<crates::Alike>,
+    /// What the viewer did with each line (plays, last played, rating: the crates' listener conditions); `None` when
+    /// no one asks (Home Assistant, voice).
+    uses: Option<HashMap<String, crates::Use>>,
     /// What makes music alike to the viewer: their Similar by (the radio's), else all signals alike.
     by: crate::similarity::Weights,
 }
@@ -168,12 +195,23 @@ impl CrateLibrary {
 
     /// What the axes test about the library as a whole.
     pub(super) fn world(&self) -> crates::World<'_> {
-        crates::World { membership: &self.membership, favourites: self.favourites.as_ref(), favourite_albums: self.favourite_albums.as_ref() }
+        crates::World {
+            membership: &self.membership,
+            favourites: self.favourites.as_ref(),
+            favourite_albums: self.favourite_albums.as_ref(),
+            uses: self.uses.as_ref(),
+            now: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64),
+        }
     }
 
     /// Which of one's own playlists hold each line.
     pub(super) fn membership(&self) -> &HashMap<String, Vec<String>> {
         &self.membership
+    }
+
+    /// What the viewer did with each line, when known.
+    pub(super) fn uses(&self) -> Option<&HashMap<String, crates::Use>> {
+        self.uses.as_ref()
     }
 
     /// The conditions with their Sounds like worked out (`crates::resolved`), once for all the files.
@@ -2222,7 +2260,9 @@ impl PlaylistService {
     /// The axes and their domains in the libraries not in `without`, for the builder (decision 0024, issue 4).
     pub async fn crate_axes(&self, want: Option<&str>, without: &[String]) -> Result<Vec<crates::AxisView>, ToggleError> {
         let lib = self.crate_library(want, false, false, without).await?;
-        Ok(crates::axes(lib.files(), &self.own_playlist_names().await?))
+        let one: Vec<[&crates::Facts; 1]> = lib.files().map(|f| [f]).collect();
+        let items: Vec<&[&crates::Facts]> = one.iter().map(|f| f.as_slice()).collect();
+        Ok(crates::list_axes(&items, &self.own_playlist_names().await?, None, lib.uses()))
     }
 
     /// One's own playlists' names: the membership axis' values.
@@ -2253,7 +2293,14 @@ impl PlaylistService {
             }
         }
         let by = asking_user().and_then(|u| super::radio::similar_by_of(&u)).map_or(crate::similarity::Weights::EQUAL, |o| crate::similarity::Weights::ranked(&o));
-        Ok(CrateLibrary { source: sid, files, switched_off, membership, favourites, favourite_albums, alike: Default::default(), by })
+        let uses = match asking_user() {
+            Some(user) => {
+                let files = files.clone();
+                tokio::task::spawn_blocking(move || uses_of(&user, &files)).await.map_err(|e| anyhow::anyhow!("{e}"))?.ok()
+            }
+            None => None,
+        };
+        Ok(CrateLibrary { source: sid, files, switched_off, membership, favourites, favourite_albums, alike: Default::default(), uses, by })
     }
 
     /// The favourite tracks' lines, from the media server. What was heard last is answered at once, with Cratarr's own
@@ -2818,6 +2865,7 @@ mod library_tests {
             favourites: None,
             favourite_albums: None,
             alike: Default::default(),
+            uses: None,
             by: crate::similarity::Weights::EQUAL,
         }
     }

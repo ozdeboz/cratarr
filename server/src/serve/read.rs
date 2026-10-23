@@ -466,6 +466,14 @@ impl Library {
     }
 
     /// The album of each of these songs, by song id; a song not in the library is left out.
+    /// Every song's album, in one go: (song, album).
+    pub fn song_albums(&self) -> Result<Vec<(String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT id, album_id FROM songs")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn albums_of(&self, songs: &[String]) -> Result<HashMap<String, String>> {
         let db = self.db();
         let mut st = db.prepare_cached("SELECT album_id FROM songs WHERE id = ?1")?;
