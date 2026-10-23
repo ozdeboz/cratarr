@@ -314,6 +314,30 @@ impl PlayingService {
         Ok(())
     }
 
+    /// A track a player heard (decision 0064): a row in the account's log, and the play counted when it counts. Cratarr's
+    /// own library's (a track of a server no longer on, by the file the catalogue links it to); another server's
+    /// counts there as before, unlogged.
+    pub async fn hear(&self, e: &super::plays::PlayEvent) -> Result<(), ToggleError> {
+        let own = if e.source == crate::source::cratarr::KIND.id {
+            Some(e.track.clone())
+        } else {
+            let (cat, src, item) = (self.lib.catalogue(), e.source.clone(), e.track.clone());
+            let gone = self.find(&e.source, &e.track).await.is_err();
+            if gone { tokio::task::spawn_blocking(move || cat.track_of_source(&src, &item)).await.ok().flatten().map(crate::serve::ids::song) } else { None }
+        };
+        let Some(song) = own else {
+            // Another server's track: only a play that counts reaches it.
+            return if e.counts.unwrap_or(true) { self.count_play_at(&e.source, &e.track, Some(e.at / 1000)).await } else { Ok(()) };
+        };
+        let s = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+        let user = s.current_user().ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
+        crate::serve::queues::record(&s, &user, &song, &e.heard()).await.map_err(|f| ToggleError::CannotPlay(format!("{f:#}")))?;
+        if e.counts.unwrap_or(true) {
+            *self.info.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        }
+        Ok(())
+    }
+
     /// Ask every connected source what it plays, all at once, and pick: the requested source, or (`None` / unknown)
     /// the one whose track started most recently.
     async fn playing(&self, want: Option<&str>) -> Result<(Option<(Arc<Active>, Playing)>, Vec<SourceTab>)> {

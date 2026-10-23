@@ -843,6 +843,61 @@ pub async fn similar_songs(item: &str, count: usize) -> Result<Vec<String>, Togg
     Ok(choose(&index, &req, &recent, None, &mut Rng::new()).into_iter().map(|i| index.songs[i].id.clone()).collect())
 }
 
+/// Lists like a list, of its own kind (the owner, 2026-10-23: "any list that has a profile at the top gets a
+/// similarity set at the bottom"): each candidate's profile against the seed's (`similarity::Profile::to_profile`), by
+/// the listener's "Similar by" (else all signals alike), the closest first, as 0 to 100. Candidates with none of their
+/// songs in the library are left out.
+fn closest_lists(index: &Index, seed: &[usize], candidates: Vec<(String, Vec<usize>)>, weights: &Weights, count: usize) -> Vec<(String, f64)> {
+    if seed.is_empty() {
+        return Vec::new();
+    }
+    let p = index.profile(seed);
+    let mut out: Vec<(String, f64)> = candidates
+        .into_iter()
+        .filter(|(_, set)| !set.is_empty())
+        .map(|(id, set)| {
+            let alike = p.to_profile(&index.like, &index.profile(&set)).score(weights);
+            (id, (alike * 1000.0).round() / 10.0)
+        })
+        .collect();
+    out.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    out.truncate(count);
+    out
+}
+
+fn listener_weights() -> Weights {
+    similar_by_of_listener().map(|o| Weights::ranked(&o)).unwrap_or(Weights::EQUAL)
+}
+
+/// Albums like an album (its OpenSubsonic id), the closest first, with how alike (0 to 100).
+pub async fn similar_albums(album: &str, count: usize) -> Result<Vec<(String, f64)>, ToggleError> {
+    let (index, _) = ready().await?;
+    let (album, weights) = (album.to_string(), listener_weights());
+    tokio::task::spawn_blocking(move || {
+        let seed: Vec<usize> = (0..index.songs.len()).filter(|&i| index.songs[i].album_id == album).collect();
+        let own = seed.first().map(|&i| index.songs[i].album_n);
+        let candidates =
+            index.albums.iter().filter(|(a, _)| Some(**a) != own).map(|(_, songs)| (index.songs[songs[0]].album_id.clone(), songs.clone())).collect();
+        closest_lists(&index, &seed, candidates, &weights, count)
+    })
+    .await
+    .map_err(|e| ToggleError::from(anyhow::anyhow!("{e}")))
+}
+
+/// Lists like a list of songs (their OpenSubsonic ids), among `candidates` (an id and its songs' ids), the closest first,
+/// with how alike (0 to 100): a playlist's similar playlists.
+pub async fn similar_lists(seed: Vec<String>, candidates: Vec<(String, Vec<String>)>, count: usize) -> Result<Vec<(String, f64)>, ToggleError> {
+    let (index, _) = ready().await?;
+    let weights = listener_weights();
+    tokio::task::spawn_blocking(move || {
+        let seed = index.find(&seed);
+        let candidates = candidates.into_iter().map(|(id, songs)| (id, index.find(&songs))).collect();
+        closest_lists(&index, &seed, candidates, &weights, count)
+    })
+    .await
+    .map_err(|e| ToggleError::from(anyhow::anyhow!("{e}")))
+}
+
 /// Artists like an artist: the artists of the songs Similar finds for it, the most frequent first.
 pub async fn similar_artists(artist: &str, count: usize) -> Result<Vec<String>, ToggleError> {
     let (index, recent) = ready().await?;
@@ -923,6 +978,19 @@ mod tests {
             s.push(song(&format!("x{n}"), 3 + n, 9, 9, 2020, &[]));
         }
         Index::new(s)
+    }
+
+    #[test]
+    fn a_list_s_closest_lists_its_kin_first_itself_left_out() {
+        let index = library();
+        let albums = |n: u32| (format!("al-{n}"), index.albums[&n].clone());
+        let seed = index.albums[&1].clone();
+        let candidates = vec![albums(3), albums(2), albums(4)];
+        let found = closest_lists(&index, &seed, candidates, &Weights::EQUAL, 2);
+        assert_eq!(found.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["al-2", "al-3"], "the kin first, then the count");
+        assert!(found[0].1 > found[1].1 && found[0].1 <= 100.0);
+        assert!(closest_lists(&index, &[], vec![albums(2)], &Weights::EQUAL, 2).is_empty(), "no seed in the library, none");
+        assert!(closest_lists(&index, &seed, vec![("empty".into(), Vec::new())], &Weights::EQUAL, 2).is_empty(), "nothing of it in the library");
     }
 
     fn ids(index: &Index, picked: &[usize]) -> Vec<String> {

@@ -33,6 +33,7 @@ mod playlists;
 mod playon;
 mod plays;
 mod queue;
+pub mod history;
 pub mod radio;
 pub mod tempo;
 mod settings;

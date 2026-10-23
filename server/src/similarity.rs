@@ -381,11 +381,16 @@ impl Weights {
 
 /// How several sounds sound together: their mean, of unit length; none when none was heard.
 pub fn mean_sound(heard: &[&[f32]]) -> Option<Vec<f32>> {
-    let dims = heard.first()?.len();
+    mean_sound_weighted(&heard.iter().map(|v| (*v, 1.0)).collect::<Vec<_>>())
+}
+
+/// As `mean_sound`, each sound counting by its weight (Sounds like your week: how often and how lately it was heard).
+pub fn mean_sound_weighted(heard: &[(&[f32], f32)]) -> Option<Vec<f32>> {
+    let dims = heard.first()?.0.len();
     let mut mean = vec![0.0f32; dims];
-    for v in heard.iter().filter(|v| v.len() == dims) {
+    for (v, w) in heard.iter().filter(|(v, w)| v.len() == dims && *w > 0.0) {
         for (m, x) in mean.iter_mut().zip(v.iter()) {
-            *m += x;
+            *m += w * x;
         }
     }
     let len = mean.iter().map(|x| x * x).sum::<f32>().sqrt();

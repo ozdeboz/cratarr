@@ -174,9 +174,14 @@ async fn song_duration_ms(serve: &Arc<Serve>, song: &str) -> Result<Option<u64>,
 
 /// A play of a song, counted as `scrobble` counts it.
 pub async fn count_play(serve: &Arc<Serve>, user: &str, song: &str, at: i64) -> Result<(), Failed> {
+    Ok(record(serve, user, song, &crate::userdata::Heard::counted(at)).await?)
+}
+
+/// A song heard (decision 0064): logged, and counted on it, its album and artists when it counts.
+pub async fn record(serve: &Arc<Serve>, user: &str, song: &str, heard: &crate::userdata::Heard) -> anyhow::Result<()> {
     let (lib, id) = (serve.library.clone(), song.to_string());
-    if let Some((pid, album, artists)) = blocking(move || lib.play_targets(&id)).await? {
-        serve.userdata.count_play(user, (song, &pid), &album, &artists, at)?;
+    if let Some((pid, album, artists)) = tokio::task::spawn_blocking(move || lib.play_targets(&id)).await?? {
+        serve.userdata.record(user, (song, &pid), &album, &artists, heard)?;
     }
     Ok(())
 }

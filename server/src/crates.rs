@@ -77,11 +77,15 @@ pub enum Value {
     /// Sounds like its seeds (song ids; an album's are its songs'): the `count` tracks that sound most like them
     /// (the owner, 2026-10-23: how many, not how alike; one setting means one size for every seed).
     /// `fresh`: its seeds themselves left out (Sounds like your week: what was played is not offered again).
+    /// `weights`: how much each seed counts, by `of`'s order (Sounds like your week: how often and how lately it was
+    /// heard, decision 0064); none, all alike.
     Like {
         of: Vec<String>,
         count: usize,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         fresh: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        weights: Vec<f32>,
     },
     /// A `Like` worked out (`resolved`): the lines of those tracks, and the same closest first (`closest_first`).
     /// Never kept.
@@ -120,9 +124,11 @@ pub const WEEK: &str = "week";
 /// How far back "your week" reaches (s).
 pub const WEEK_SECS: i64 = 7 * 24 * 3600;
 
-/// "Sounds like your week": seeded with `played` (song ids), which it leaves out.
-pub fn week_crate(id: &str, played: Vec<String>, count: usize) -> CrateDef {
-    let like = Condition::new("like", false, Value::Like { of: played, count, fresh: true });
+/// "Sounds like your week": seeded with `played` (song ids, each with how much it counts: none, all alike), which it
+/// leaves out.
+pub fn week_crate(id: &str, played: Vec<(String, f32)>, count: usize) -> CrateDef {
+    let (of, weights) = played.into_iter().unzip();
+    let like = Condition::new("like", false, Value::Like { of, count, fresh: true, weights });
     CrateDef { id: id.to_string(), name: "Sounds like your week".into(), conditions: vec![like] }
 }
 /// How many tracks it holds until its curve says otherwise, and the fewest and most it can.
@@ -141,7 +147,7 @@ pub fn like_of(id: &str) -> Option<(&str, usize)> {
 }
 
 pub fn like_crate(id: &str, name: &str, songs: Vec<String>, count: usize) -> CrateDef {
-    let like = Condition::new("like", false, Value::Like { of: songs, count, fresh: false });
+    let like = Condition::new("like", false, Value::Like { of: songs, count, fresh: false, weights: Vec::new() });
     CrateDef { id: id.to_string(), name: name.to_string(), conditions: vec![like] }
 }
 
@@ -697,9 +703,9 @@ pub fn resolved(conditions: &[Condition], all: &[Facts], among: &[&Facts]) -> Ve
     conditions
         .iter()
         .map(|c| match &c.value {
-            Value::Like { of, count, fresh } => {
+            Value::Like { of, count, fresh, weights } => {
                 let seeds: HashSet<i64> = if *fresh { of.iter().filter_map(|id| crate::serve::ids::track_of(id)).collect() } else { HashSet::new() };
-                let ranked: Vec<String> = closest(of, all, among)
+                let ranked: Vec<String> = closest_weighted(of, weights, all, among)
                     .into_iter()
                     .filter(|(f, _)| !f.track.is_some_and(|t| seeds.contains(&t)))
                     .take(*count)
@@ -715,10 +721,17 @@ pub fn resolved(conditions: &[Condition], all: &[Facts], among: &[&Facts]) -> Ve
 /// The files among `among` that sound most like the seeds (song ids, their sounds found in `all`), closest first, at
 /// most `LIKE_MOST`, each with how alike (0 to 100: 0 two random tracks, 100 the same sound); none when none of the
 /// seeds was heard.
-pub fn closest<'a>(of: &[String], all: &[Facts], among: &[&'a Facts]) -> Vec<(&'a Facts, f64)> {
-    let seeds: HashSet<i64> = of.iter().filter_map(|id| crate::serve::ids::track_of(id)).collect();
-    let heard: Vec<&[f32]> = all.iter().filter(|f| f.track.is_some_and(|t| seeds.contains(&t))).filter_map(|f| f.sound.as_deref()).collect();
-    let Some(seed) = crate::similarity::mean_sound(&heard) else { return Vec::new() };
+/// Each seed counts by its weight (`weights`, by `of`'s order; missing ones 1).
+pub fn closest_weighted<'a>(of: &[String], weights: &[f32], all: &[Facts], among: &[&'a Facts]) -> Vec<(&'a Facts, f64)> {
+    let mut seeds: HashMap<i64, f32> = HashMap::new();
+    for (k, id) in of.iter().enumerate() {
+        if let Some(t) = crate::serve::ids::track_of(id) {
+            *seeds.entry(t).or_default() += weights.get(k).copied().unwrap_or(1.0);
+        }
+    }
+    let heard: Vec<(&[f32], f32)> =
+        all.iter().filter_map(|f| Some((f.sound.as_deref()?, *f.track.and_then(|t| seeds.get(&t))?))).collect();
+    let Some(seed) = crate::similarity::mean_sound_weighted(&heard) else { return Vec::new() };
     let mut scored: Vec<(&Facts, f32)> = among
         .iter()
         .copied()
@@ -1113,7 +1126,7 @@ mod tests {
     fn your_week_sounds_like_what_was_played_but_offers_none_of_it_again() {
         let heard = |rel: &str, track: i64, v: [f32; 2]| Facts { rel: rel.into(), track: Some(track), sound: Some(Arc::from(v.as_slice())), ..Facts::default() };
         let files = vec![heard("played.flac", 1, [1.0, 0.0]), heard("near.flac", 2, [0.999, 0.045]), heard("far.flac", 3, [0.0, 1.0])];
-        let week = week_crate("like:week@10", vec!["tr-1".into()], 10);
+        let week = week_crate("like:week@10", vec![("tr-1".into(), 1.0)], 10);
         assert_eq!(week.name, "Sounds like your week");
         let membership = HashMap::new();
         let w = World { membership: &membership, favourites: None, favourite_albums: None };

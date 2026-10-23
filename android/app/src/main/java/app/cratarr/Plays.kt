@@ -3,6 +3,8 @@
  * counts each once. A play is a track played 90% through, as the page counts (decision 0022), once each time it plays;
  * it keeps the time it was played. Told at once when Cratarr can be reached, else kept (30 days at most) and told when
  * the connection is back: plays made offline, or behind a locked screen, count too.
+ * Since decision 0064 every track heard is told, not only those that count: a track left before it counts is told when
+ * it is left (skipped for another, stopped when nothing follows), with how much of it was heard.
  */
 package app.cratarr
 
@@ -23,17 +25,27 @@ object Plays {
 
     private val sender = Executors.newSingleThreadExecutor()
 
-    /** One play of a track (as the page describes it), now. */
+    /**
+     * A track heard (as the page describes it), started at `atMs`: how it ended (`finished`, `skipped`, `stopped`),
+     * whether it counts as a play, how much of it was heard and how long it is (ms; 0 when not known).
+     */
     @Synchronized
-    fun played(context: Context, track: JSONObject) {
+    fun heard(context: Context, track: JSONObject, atMs: Long, ended: String, counts: Boolean, heardMs: Long, lengthMs: Long) {
         val source = track.optString("source")
         val id = track.optString("id")
         if (source.isEmpty() || id.isEmpty()) return
+        val prefs = Prefs(context)
         val play = JSONObject()
             .put("id", UUID.randomUUID().toString())
             .put("source", source)
             .put("track", id)
-            .put("at", System.currentTimeMillis())
+            .put("at", atMs)
+            .put("ended", ended)
+            .put("counts", counts)
+            .put("heard_secs", heardMs / 1000.0)
+            .put("player", prefs.playerName)
+        if (lengthMs > 0) play.put("length_secs", lengthMs / 1000.0)
+        prefs.queueId.takeIf { it.isNotEmpty() }?.let { play.put("context", "queue:$it") }
         save(context, load(context).apply { add(play) })
         tell(context)
     }

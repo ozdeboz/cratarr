@@ -61,6 +61,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/queue/playlist", post(queue_playlist))
         .route("/api/play", post(play_collection))
         .route("/api/playlists/{id}/covers", get(playlist_covers))
+        .route("/api/playlists/{id}/similar", get(similar_playlists))
         .route("/api/playlists/{id}/tracks", get(playlist_tracks))
         .route("/api/playlists/{id}/rows", get(playlist_rows))
         .route("/api/export/preview", post(export_preview))
@@ -108,6 +109,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/albums/{source}/{album}", get(album_view))
         .route("/api/kept", post(kept_ask))
         .route("/api/albums/{source}/{album}/cover", get(album_cover))
+        .route("/api/albums/{source}/{album}/similar", get(similar_albums))
         .route("/api/albums/{source}/{album}/play", post(play_album))
         .route("/api/albums/{source}/{album}/favorite", post(album_favorite))
         .route("/api/albums/{source}/{album}/rating", get(album_rating).post(set_album_rating))
@@ -1415,13 +1417,16 @@ struct LikeCurveQuery {
     /// The seeds themselves left out, as a `fresh` Sounds like leaves them (Sounds like your week).
     #[serde(default)]
     fresh: bool,
+    /// How much each seed counts, by `of`'s order, comma-separated (Sounds like your week); none, all alike.
+    weights: Option<String>,
 }
 
 /// How alike the tracks that sound most like some seeds are, closest first (the Sounds like curve).
 async fn like_curve(State(app): State<Arc<App>>, Query(q): Query<LikeCurveQuery>) -> Result<Json<crate::app::LikeCurve>, ApiError> {
     let of: Vec<String> = q.of.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
-    Ok(Json(app.playlists.like_curve(&of, q.source.as_deref(), &without, q.fresh).await?))
+    let weights: Vec<f32> = q.weights.as_deref().unwrap_or("").split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    Ok(Json(app.playlists.like_curve(&of, &weights, q.source.as_deref(), &without, q.fresh).await?))
 }
 
 #[derive(serde::Deserialize)]
@@ -2439,6 +2444,24 @@ async fn queue_playlist(
 ) -> Result<(StatusCode, Json<crate::app::FromQueue>), ApiError> {
     let made = app.playing.playlist_from_queue(f.source.as_deref(), &q.name, q.ids, q.repeats).await?;
     Ok((StatusCode::CREATED, Json(made)))
+}
+
+/// How many similar lists a list shows at its foot.
+const SIMILAR_LISTS: usize = 12;
+
+/// Albums like an album, of Cratarr's own library (the one similarity): `[{id, alike}]`, the closest first.
+async fn similar_albums(Path((source, album)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+    if source != "cratarr" {
+        return Ok(Json(json!([])));
+    }
+    let found = crate::app::radio::similar_albums(&album, SIMILAR_LISTS).await?;
+    Ok(Json(json!(found.into_iter().map(|(id, alike)| json!({ "id": id, "alike": alike })).collect::<Vec<_>>())))
+}
+
+/// Playlists like a playlist, among those the account sees: `[{id, alike}]`, the closest first.
+async fn similar_playlists(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
+    let found = app.playlists.similar_playlists(&id, SIMILAR_LISTS).await?;
+    Ok(Json(json!(found.into_iter().map(|(id, alike)| json!({ "id": id, "alike": alike })).collect::<Vec<_>>())))
 }
 
 async fn playlist_covers(

@@ -50,7 +50,7 @@
     Promise.all([crateRows(WEEK, 0, 40, prefs.source || undefined, undefined, undefined, { without: hiddenLibraries() }), getCrate(WEEK)]).then(
       ([r, d]) => {
         const like = d.conditions.find((c) => c.value.kind === 'like')?.value;
-        week = { name: d.name, source: r.source, total: r.total, rows: r.rows, genres: r.genres.slice(0, 4), played: like?.kind === 'like' ? like.of.length : 0 };
+        week = { name: d.name, source: r.source, total: r.total, rows: r.rows, genres: r.genres.slice(0, 4), played: like?.kind === 'like' ? like.of.filter((_, i) => (like.weights?.[i] ?? 1) > 0).length : 0 };
       },
       () => (week = null),
     );

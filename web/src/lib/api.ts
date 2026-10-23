@@ -396,7 +396,7 @@ export type CrateValue =
   | { kind: 'any_of'; values: string[] }
   | { kind: 'range'; min: number | null; max: number | null }
   // Sounds like its seeds (song ids): the `count` tracks that sound most like them.
-  | { kind: 'like'; of: string[]; count: number; fresh?: boolean };
+  | { kind: 'like'; of: string[]; count: number; fresh?: boolean; weights?: number[] };
 export type Quantifier = 'any' | 'all';
 export type Condition = { axis: string; not: boolean; value: CrateValue; enabled?: boolean; quantifier?: Quantifier };
 export type CrateDef = { id: string; name: string; conditions: Condition[] };
@@ -535,9 +535,15 @@ export type TempoBands = { bands: number[]; with_tempo: number; total: number };
 /** How alike the tracks that sound most like these seeds are, closest first, 0 to 100 (lib/LikeCurve), and the profile
  *  of the closest `count` at every step its handle can stop at (the profile follows a drag). */
 export type LikeCurveData = { alike: number[]; profiles: { count: number; profile: ListProfileData }[] };
-export const likeCurve = (of: string[], source?: string, without?: string[], fresh = false) =>
+export const likeCurve = (of: string[], source?: string, without?: string[], fresh = false, weights?: number[]) =>
   quietly<LikeCurveData>(
-    `/api/like-curve?${new URLSearchParams({ of: of.join(','), ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}), ...(fresh ? { fresh: 'true' } : {}) })}`,
+    `/api/like-curve?${new URLSearchParams({
+      of: of.join(','),
+      ...(source ? { source } : {}),
+      ...(without?.length ? { without: without.join(',') } : {}),
+      ...(fresh ? { fresh: 'true' } : {}),
+      ...(weights?.length ? { weights: weights.map((w) => +w.toFixed(3)).join(',') } : {}),
+    })}`,
   );
 export const crateTempo = (id: string, source?: string, favourites?: CrateFavourites, favouriteAlbums?: CrateFavourites, look: CrateLook = {}) => {
   const q = new URLSearchParams();
@@ -1323,6 +1329,21 @@ export const setPlaylistFavorite = (id: string, on: boolean, source?: string) =>
 };
 
 /** The local player played most of the track: one play counts in the media server (decision 0022). */
+/** A track heard (decision 0064), as a player tells it: `id` its own, so a report sent again is one; `at` epoch ms. */
+export type HeardEvent = {
+  id: string;
+  source: string;
+  track: string;
+  at: number;
+  ended: 'finished' | 'skipped' | 'stopped';
+  counts: boolean;
+  heard_secs: number;
+  length_secs: number | null;
+  player: string | null;
+  context: string | null;
+};
+/** Tells the server tracks heard; answers with the ids it has (now or before). */
+export const reportPlays = (events: HeardEvent[]) => post<{ done: string[] }>('/api/plays', { events });
 export const trackPlayed = (source: string, id: string) => quietly<{ counted: boolean }>(`${trackPath(source, id)}/played`, { method: 'POST' });
 /** An album as its view in the panel shows it: its tracks in play order, as a playlist's rows (decision 0023). */
 /** `id`: the album's, another than asked for when it moved (Keep, Replace) and the server followed it. */

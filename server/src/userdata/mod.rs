@@ -75,6 +75,13 @@ CREATE TABLE IF NOT EXISTS visual_limits (
   user TEXT PRIMARY KEY, version INTEGER NOT NULL, limits TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS playlist_shared (playlist TEXT PRIMARY KEY, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS user_settings (user TEXT PRIMARY KEY, version INTEGER NOT NULL, settings TEXT NOT NULL, at INTEGER NOT NULL);
+-- Every track heard (decision 0064): only added to, kept forever. `event`: the player's own id for it, so a report sent
+-- again is one row.
+CREATE TABLE IF NOT EXISTS plays (
+  user TEXT NOT NULL, song TEXT NOT NULL, pid TEXT, at INTEGER NOT NULL, heard_secs REAL, length_secs REAL,
+  ended TEXT NOT NULL, counted INTEGER NOT NULL, player TEXT, output TEXT, context TEXT, event TEXT);
+CREATE INDEX IF NOT EXISTS plays_by_user ON plays (user, at);
+CREATE UNIQUE INDEX IF NOT EXISTS plays_by_event ON plays (event) WHERE event IS NOT NULL;
 ";
 
 /// Until 2026-10-16 the album panel's heart starred the album's id as a song's, where no Subsonic app looked; it is the
@@ -85,6 +92,71 @@ INSERT INTO annotation (user, item, kind, starred, starred_at)
   ON CONFLICT (user, item, kind) DO UPDATE SET starred = 1, starred_at = coalesce(annotation.starred_at, excluded.starred_at);
 DELETE FROM annotation WHERE kind = 'song' AND item LIKE 'al-%';
 ";
+
+/// How a heard track ended (decision 0064).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Ended {
+    /// Played to its end (or as a Subsonic app counts it: all it tells).
+    Finished,
+    /// Left for another track.
+    Skipped,
+    /// Playing stopped on it.
+    Stopped,
+}
+
+impl Ended {
+    fn as_str(self) -> &'static str {
+        match self {
+            Ended::Finished => "finished",
+            Ended::Skipped => "skipped",
+            Ended::Stopped => "stopped",
+        }
+    }
+
+    fn of(s: &str) -> Self {
+        match s {
+            "skipped" => Ended::Skipped,
+            "stopped" => Ended::Stopped,
+            _ => Ended::Finished,
+        }
+    }
+}
+
+/// A track heard, as a player tells it (decision 0064): when it started (epoch seconds), how much of it was heard and
+/// how long it is, how it ended, whether it counts as a play (0022: the player says), where it sounded and what
+/// started it, and the player's own id for the report.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Heard {
+    pub at: i64,
+    pub heard_secs: Option<f64>,
+    pub length_secs: Option<f64>,
+    pub ended: Ended,
+    pub counts: bool,
+    pub player: Option<String>,
+    pub output: Option<String>,
+    pub context: Option<String>,
+    pub event: Option<String>,
+}
+
+impl Heard {
+    /// A counted play and nothing more known (a Subsonic app's scrobble, a player from before 0064).
+    pub fn counted(at: i64) -> Self {
+        Heard { at, heard_secs: None, length_secs: None, ended: Ended::Finished, counts: true, player: None, output: None, context: None, event: None }
+    }
+}
+
+/// A row of the log, as the history reads it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Logged {
+    pub song: String,
+    pub at: i64,
+    pub heard_secs: Option<f64>,
+    pub length_secs: Option<f64>,
+    pub ended: Ended,
+    pub counted: bool,
+    pub context: Option<String>,
+}
 
 /// What an annotation is about.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -445,9 +517,25 @@ impl UserData {
     /// One play of a song, counted on the song, its album and its artists in one go, as Navidrome's play tracker does.
     /// `at`: when it was played, epoch seconds.
     pub fn count_play(&self, user: &str, song: (&str, &str), album: &str, artists: &[String], at: i64) -> Result<()> {
+        self.record(user, song, album, artists, &Heard::counted(at)).map(|_| ())
+    }
+
+    /// A track heard (decision 0064): a row in the log and, when it counts as a play (0022), the play counted on the
+    /// song, its album and its artists, together. A report with an `event` already in the log changes nothing; false
+    /// then.
+    pub fn record(&self, user: &str, song: (&str, &str), album: &str, artists: &[String], h: &Heard) -> Result<bool> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        {
+        let added = tx.execute(
+            "INSERT INTO plays (user, song, pid, at, heard_secs, length_secs, ended, counted, player, output, context, event)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) ON CONFLICT DO NOTHING",
+            params![user, song.0, song.1, h.at, h.heard_secs, h.length_secs, h.ended.as_str(), h.counts, h.player, h.output, h.context, h.event],
+        )?;
+        if added == 0 {
+            return Ok(false);
+        }
+        if h.counts {
+            let at = h.at;
             let mut st = tx.prepare_cached(
                 "INSERT INTO annotation (user, item, kind, pid, play_count, play_date) VALUES (?1, ?2, ?3, ?4, 1, ?5)
                  ON CONFLICT (user, item, kind) DO UPDATE SET play_count = annotation.play_count + 1,
@@ -461,7 +549,32 @@ impl UserData {
             }
         }
         tx.commit()?;
-        Ok(())
+        Ok(true)
+    }
+
+    /// What a user heard from `since` on (epoch seconds), oldest first (decision 0064).
+    pub fn heard_since(&self, user: &str, since: i64) -> Result<Vec<Logged>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT song, at, heard_secs, length_secs, ended, counted, context FROM plays WHERE user = ?1 AND at >= ?2 ORDER BY at",
+        )?;
+        let rows = st.query_map(params![user, since], |r| {
+            Ok(Logged {
+                song: r.get(0)?,
+                at: r.get(1)?,
+                heard_secs: r.get(2)?,
+                length_secs: r.get(3)?,
+                ended: Ended::of(&r.get::<_, String>(4)?),
+                counted: r.get(5)?,
+                context: r.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// When a user's log starts: their first row's time; none before they heard anything since it exists.
+    pub fn heard_from(&self, user: &str) -> Result<Option<i64>> {
+        Ok(self.db().query_row("SELECT min(at) FROM plays WHERE user = ?1", [user], |r| r.get(0))?)
     }
 
     /// Sets an item's whole annotation for a user (a song taking over another's data, decision 0013). Safe to repeat.
@@ -1096,6 +1209,24 @@ mod tests {
         let s = u.play_stats("me", &["tr-1".to_string(), "tr-2".to_string()]).unwrap();
         assert_eq!(s.get("tr-1"), Some(&(2, Some(200))));
         assert!(!s.contains_key("tr-2"), "never played");
+    }
+
+    #[test]
+    fn every_track_heard_is_logged_once_and_only_a_counted_one_counts() {
+        let u = UserData::open(None).unwrap();
+        assert_eq!(u.heard_from("me").unwrap(), None, "the log starts empty");
+        let skip = Heard { ended: Ended::Skipped, counts: false, heard_secs: Some(12.0), length_secs: Some(240.0), event: Some("e1".into()), ..Heard::counted(100) };
+        assert!(u.record("me", ("tr-1", "pid1"), "al-1", &[], &skip).unwrap());
+        assert!(!u.record("me", ("tr-1", "pid1"), "al-1", &[], &skip).unwrap(), "the same report again: one row");
+        u.count_play("me", ("tr-2", "pid2"), "al-1", &[], 200).unwrap();
+        let log = u.heard_since("me", 0).unwrap();
+        assert_eq!(log.iter().map(|l| (l.song.as_str(), l.ended, l.counted)).collect::<Vec<_>>(), [("tr-1", Ended::Skipped, false), ("tr-2", Ended::Finished, true)]);
+        assert_eq!(log[0].heard_secs, Some(12.0));
+        let s = u.play_stats("me", &["tr-1".to_string(), "tr-2".to_string()]).unwrap();
+        assert!(!s.contains_key("tr-1"), "a skip is no play");
+        assert_eq!(s.get("tr-2"), Some(&(1, Some(200))));
+        assert_eq!(u.heard_from("me").unwrap(), Some(100));
+        assert!(u.heard_since("me", 150).unwrap().len() == 1 && u.heard_since("you", 0).unwrap().is_empty());
     }
 
     #[test]
