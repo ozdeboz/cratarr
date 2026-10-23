@@ -2537,19 +2537,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
     }
   }
 
-  .head-spread .details {
-    margin-top: 4px;
-  }
-
-  /* The tempo spread at the head of Info (decision 0041). */
-  .about .tempo {
-    padding: 8px 8px 4px;
-  }
-
-  .about .tempo .note {
-    margin: 6px 0 0;
-  }
-
   .note {
     margin: 4px 8px;
     color: var(--muted);

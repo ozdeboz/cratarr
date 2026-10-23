@@ -9,8 +9,9 @@
   import MoreMusicSheet, { moreMusicParts } from '../MoreMusicSheet.svelte';
   import { crateName, crates, loadCrates } from '../crates.svelte';
   import ExcludedList from '../ExcludedList.svelte';
+  import ExcludedSheet from '../ExcludedSheet.svelte';
   import { excluded, loadExcluded } from '../exclusions.svelte';
-  import { backFromThing, openThing } from '../panel.svelte';
+  import { backFromThing } from '../panel.svelte';
   import NotForSheet from '../NotForSheet.svelte';
   import PageLoading from '../PageLoading.svelte';
   import { nameThing } from '../settingsSections.svelte';
@@ -33,6 +34,9 @@
     );
   loadFits();
   let moreMusic = $state(false);
+  /** The exclusions open in a sheet (the owner, 2026-10-24: not another page): everywhere's (`EVERYWHERE`) or a
+   *  crate's id. */
+  let excludedOf = $state<string | null>(null);
   /** The crate whose Not for sheet is open. */
   let notFor = $state<FitSummary | null>(null);
   /** A fit's line: what it avoids, and its own rules. */
@@ -70,9 +74,9 @@
     <Item name="More music" value={moreMusicParts().map((p) => p.text).join(' · ') || 'Off'} onclick={() => (moreMusic = true)} />
   </Group>
   <Group title="Exclusions" more="Everywhere: out of every crate, and never picked by Radio, Autoplay or a shuffle of the library or the favourites; it still plays when you choose it. A crate's: left out of that crate only.">
-    <Item name="Everywhere" value={excluded.n === null ? null : count(excluded.n)} onclick={excluded.n ? () => openThing('taste', EVERYWHERE) : null} />
+    <Item name="Everywhere" value={excluded.n === null ? null : count(excluded.n)} onclick={excluded.n ? () => (excludedOf = EVERYWHERE) : null} />
     {#each leaving as c (c.id)}
-      <Item name={c.name} value={count(c.left_out ?? 0)} onclick={() => openThing('taste', CRATE + c.id)} />
+      <Item name={c.name} value={count(c.left_out ?? 0)} onclick={() => (excludedOf = c.id)} />
     {/each}
   </Group>
   {#if fits?.length}
@@ -82,6 +86,13 @@
       {/each}
     </Group>
   {/if}
+{/if}
+{#if excludedOf}
+  <ExcludedSheet
+    crate={excludedOf === EVERYWHERE ? null : excludedOf}
+    onchange={() => (excludedOf === EVERYWHERE ? loadExcluded() : loadCrates())}
+    onclose={() => (excludedOf = null)}
+  />
 {/if}
 {#if moreMusic}
   <MoreMusicSheet onclose={() => (moreMusic = false)} />
