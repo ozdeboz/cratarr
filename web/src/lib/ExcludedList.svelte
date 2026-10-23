@@ -10,6 +10,7 @@
   import PageLoading from './PageLoading.svelte';
   import { prefs } from './prefs.svelte';
   import Row from './Row.svelte';
+  import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import { toast } from './toast.svelte';
   import TrackCover from './TrackCover.svelte';
   import { withUndo } from './undo.svelte';
@@ -21,6 +22,8 @@
   let list = $state<{ source: string; rows: PlaylistRow[]; albums: ExcludedAlbum[] } | null>(null);
   let error = $state<string | null>(null);
   let busy = $state(false);
+  /** Put all back, asked once more (the owner, 2026-10-23). */
+  let confirming = $state(false);
 
   async function load() {
     try {
@@ -66,7 +69,17 @@
   <PageLoading />
 {:else}
   {@const l = list}
-  {#if l.rows.length + l.albums.length > 1}<MenuEntry icon="undo" label="Put all back" disabled={busy} onclick={() => putBack(all(l))} />{/if}
+  {#if l.rows.length + l.albums.length > 1}<MenuEntry icon="undo" label="Put all back" disabled={busy} onclick={() => (confirming = true)} />{/if}
+  {#if confirming}
+    <ConfirmSheet
+      title="Put all back"
+      text={`All ${(l.rows.length + l.albums.length).toLocaleString()} go back ${crate ? `in ${crateName(crate)}` : 'into every crate and automatic pick'}.`}
+      label="Put all back"
+      icon="undo"
+      onconfirm={() => putBack(all(l))}
+      onclose={() => (confirming = false)}
+    />
+  {/if}
   <ol class="rows" aria-busy={busy}>
     {#each l.albums as a (a.id)}
       <li>

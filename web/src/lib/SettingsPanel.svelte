@@ -40,7 +40,8 @@
   let { section, beside = false }: { section: SettingsSection; beside?: boolean } = $props();
   const thing = $derived(settingsThing(panel.viewed));
   // The part's name, as its row on the Settings page has it; on a thing's page the thing's.
-  const title = $derived(thing ? (thingTitle.text ?? '') : (SECTIONS.find((x) => x.id === section)?.title ?? 'Settings'));
+  const partTitle = $derived(SECTIONS.find((x) => x.id === section)?.title ?? 'Settings');
+  const title = $derived(thing ? (thingTitle.text ?? '') : partTitle);
 
   // Inside the Android app: its settings as they are now (Android's background permission may have changed meanwhile).
   if (inApp) {
@@ -82,7 +83,8 @@
     {:else if !beside}
       <span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>
     {/if}
-    <h2 class="title">{title}</h2>
+    <!-- A thing's page: its part › its name, the breadcrumb Health's and Insights' panels have (the owner, 2026-10-23). -->
+    <h2 class="title">{#if thing}<span class="up">{partTitle}</span><span class="sep" aria-hidden="true">›</span>{/if}{title}</h2>
     <span class="end">
       <!-- Diagnostics' file for a bug report, in the bar as Finamp's logs have their export. -->
       {#if section === 'diagnostics'}<span class="navpill"><a href="/api/diagnostics/download" download aria-label="Download" title="Download"><Icon name="download" size={22} /></a></span>{/if}
@@ -172,6 +174,16 @@
     font-weight: 600;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* The breadcrumb's part and its ›, as Health's panel has them. */
+  .bar .up,
+  .bar .sep {
+    color: var(--muted);
+  }
+
+  .bar .sep {
+    margin: 0 8px;
   }
 
   .end {
