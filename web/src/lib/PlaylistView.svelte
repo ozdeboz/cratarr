@@ -26,12 +26,10 @@
     setArtistFavorite,
     coverUrl,
     crateRows,
-    crateTempo,
     filterList,
     likeCurve,
     type LikeCurveData,
     type ListProfileData,
-    type TempoBands,
     type CrateLook,
     crateToPlaylist,
     createCrate,
@@ -128,7 +126,7 @@
   import Row from './Row.svelte';
   import TrackCover from './TrackCover.svelte';
   import Section from './Section.svelte';
-  import Spread, { bandsOf, layerColor } from './Spread.svelte';
+  import { layerColor } from './Spread.svelte';
   import ListProfile from './ListProfile.svelte';
   import LikeCurve from './LikeCurve.svelte';
   import type { Cell } from './Row.svelte';
@@ -690,13 +688,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const listTempos = $derived(
     multi ? Object.values(sections).flatMap((s) => ('rows' in s ? s.rows.map((r) => r.bpm) : [])) : (rows?.map((r) => r.bpm) ?? null),
   );
-  /** A playlist's tempos for its Info: the viewed rows where they are loaded, else its own section's, which Info asks
-   *  for (the Tracks tab's rows are not loaded behind another tab). */
-  function temposOf(pid: string): (number | null | undefined)[] | null {
-    if (!multi && pid === id && rows) return rows.map((r) => r.bpm);
-    const s = sections[pid];
-    return s && 'rows' in s ? s.rows.map((r) => r.bpm) : null;
-  }
   $effect(() => {
     if (tab !== 'info' && !multi) return;
     // Info's spread, and a selection's stacked one in the header (decision 0041).
@@ -795,53 +786,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
     return () => {
       gone = true;
     };
-  });
-  /** A crate's tempo spread, counted on the server (a genre holds thousands of tracks; its rows come a page at a time). */
-  let crateBands = $state<TempoBands | null>(null);
-  $effect(() => {
-    const c = crate;
-    void saved;
-    void undos.n;
-    crateBands = null;
-    if (!c || crateEditing) return;
-    const fav = untrack(() => (crates.list ? favouritesOf(c) : undefined));
-    const alb = untrack(() => (crates.list ? favouriteAlbumsOf(c) : undefined));
-    crateTempo(c, prefs.source || undefined, fav, alb, { without: crateLook.without, filter: crateLook.filter }).then(
-      (t) => {
-        if (crate === c) crateBands = t;
-      },
-      () => {
-        /* no spread without it */
-      },
-    );
-  });
-  /** The header's tempo spread (decision 0041): a playlist's, a crate's or an artist's, or a selection's stacked, one
-   *  series per playlist in its section's colour. Not an album's: its few tracks make no spread. */
-  const headTempo = $derived.by((): { series: number[][]; withTempo: number; total: number } | null => {
-    if (crateEditing || creating || album) return null;
-    // A playlist not known yet (just reloaded): its profile is still to be asked for, so not the spread first.
-    if (!plain && !multi && !p) return null;
-    let series: number[][];
-    let total: number;
-    if (multi) {
-      const loaded = ids.map((pid) => sections[pid]);
-      // Missing tracks are not counted: the header's counts leave them out too.
-      const rowsOf = loaded.flatMap((x) => (x && 'rows' in x ? [x.rows.filter((r) => !r.missing)] : []));
-      if (rowsOf.length < ids.length) return null;
-      series = rowsOf.map((r) => bandsOf(r.map((x) => x.bpm)));
-      total = rowsOf.reduce((n, r) => n + r.length, 0);
-    } else if (crate) {
-      if (!crateBands) return null;
-      series = [crateBands.bands];
-      total = crateBands.total;
-    } else {
-      if (!rows) return null;
-      const present = rows.filter((r) => !r.missing);
-      series = [bandsOf(present.map((r) => r.bpm))];
-      total = present.length;
-    }
-    const withTempo = series.flat().reduce((a, b) => a + b, 0);
-    return withTempo ? { series, withTempo, total } : null;
   });
   let folded = $state<Record<string, boolean>>({});
   // A playlist left out of the selection drops its section; the others keep theirs.
@@ -1828,11 +1772,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
           </div>
         {:else if (prefs.profile && profileComing) || curveComing}
           <div class="head-spread waiting" class:artist-head={!!artist && !artist.tracks} aria-hidden="true"></div>
-        {:else if prefs.profile && headTempo}
-          <div class="head-spread">
-            <Spread series={headTempo.series} />
-            <p class="details">{headTempo.withTempo.toLocaleString()} of {plural(headTempo.total, 'track')} have a tempo</p>
-          </div>
         {/if}
       </header>
     {/if}
@@ -2000,15 +1939,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   {@const i = insights.indexOf(pid)}
   {@const pt = i >= 0 ? insights.shown!.playlists[i] : null}
   {@const near = insights.closest(i)}
-  {@const tempos = temposOf(pid)}
   <div class="about" aria-label={`About ${pid}`}>
-    <!-- Its tempo spread (decision 0041): only shown, never a filter. -->
-    {#if tempos?.some(Boolean)}
-      <div class="tempo">
-        <Spread series={[bandsOf(tempos)]} />
-        <p class="note">{tempos.filter(Boolean).length} of {plural(tempos.length, 'track')} have a tempo</p>
-      </div>
-    {/if}
     {#if !pt}
       {#if insights.shown}<p class="note">Nothing is known about it yet.</p>{:else}<div class="loading"><MarkLoader size={40} /></div>{/if}
     {:else}
