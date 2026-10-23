@@ -58,6 +58,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/queue/add", post(queue_add))
         .route("/api/queue/jump", post(queue_jump))
         .route("/api/queue/playlist", post(queue_playlist))
+        .route("/api/play", post(play_collection))
         .route("/api/playlists/{id}/covers", get(playlist_covers))
         .route("/api/playlists/{id}/tracks", get(playlist_tracks))
         .route("/api/playlists/{id}/rows", get(playlist_rows))
@@ -1162,7 +1163,7 @@ async fn crates(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Result<
     Ok(Json(app.playlists.crates(f.source.as_deref()).await?))
 }
 
-/// A page of a crate's rows: `offset` and `limit` (at most 500, default 200).
+/// A page of a crate's rows: `offset` and `limit` (at most 500, default 200; the page says the limit it kept).
 #[derive(Deserialize)]
 struct Page {
     source: Option<String>,
@@ -2114,6 +2115,16 @@ struct QueueJump {
 
 async fn queue_jump(State(app): State<Arc<App>>, Query(f): Query<Follow>, Json(q): Json<QueueJump>) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(json!({ "player": app.playing.queue_jump(f.source.as_deref(), &q.id).await? })))
+}
+
+/// Plays a crate, a playlist, an album, an artist or tracks: the server picks at most 500 of them (app/play.rs), answers
+/// with them, and queues them itself when asked (`on`).
+async fn play_collection(
+    State(app): State<Arc<App>>,
+    Query(f): Query<Follow>,
+    Json(r): Json<crate::app::play::Request>,
+) -> Result<Json<crate::app::play::Played>, ApiError> {
+    Ok(Json(crate::app::play::play(&app, f.source.as_deref(), r).await?))
 }
 
 /// `ids`: the tracks (the local player's queue, on `source`); without, what the server's player plays and what comes next.

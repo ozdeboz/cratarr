@@ -26,6 +26,7 @@ pub mod kept;
 mod kodi;
 mod library;
 mod playing;
+pub mod play;
 mod playlists;
 mod playon;
 mod plays;
