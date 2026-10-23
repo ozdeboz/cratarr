@@ -91,12 +91,9 @@ const KINDS: [(Signal, &str, &str); 4] =
 const NUMBERS: [(Signal, &str, &str); 4] =
     [(Signal::Era, "Era", "value"), (Signal::Tempo, "Tempo", "value"), (Signal::Energy, "Energy", "share"), (Signal::Danceability, "Danceability", "share")];
 
-/// The sources one can switch off (the owner, 2026-10-23: a switch for each on the page).
-pub const SOURCES: [&str; 5] = ["favourites", "playlists", "plays", "skipped", "excluded"];
-
-/// The taste and what is avoided, from `sources`, over `alike`; a source in `off` adds nothing (its count stays, what
-/// it would add).
-pub fn taste(alike: &Alike, sources: &Sources, off: &[&str]) -> TasteView {
+/// The taste and what is avoided as two profiles of the one similarity (`taste` shows them; Home's Grave digging
+/// compares albums with the taste).
+pub fn profiles(alike: &Alike, sources: &Sources, off: &[&str]) -> (Profile, Profile) {
     let on = |name: &str| !off.contains(&name);
     let mut liked: Vec<(usize, f64)> = Vec::new();
     if on("favourites") {
@@ -116,7 +113,16 @@ pub fn taste(alike: &Alike, sources: &Sources, off: &[&str]) -> TasteView {
     if on("skipped") {
         avoided.extend(sources.skipped.iter().map(|&(i, n)| (i, n.min(SKIPS_MOST) as f64)));
     }
-    let (taste, avoid) = (alike.profile(&liked), alike.profile(&avoided));
+    (alike.profile(&liked), alike.profile(&avoided))
+}
+
+/// The sources one can switch off (the owner, 2026-10-23: a switch for each on the page).
+pub const SOURCES: [&str; 5] = ["favourites", "playlists", "plays", "skipped", "excluded"];
+
+/// The taste and what is avoided, from `sources`, over `alike`; a source in `off` adds nothing (its count stays, what
+/// it would add).
+pub fn taste(alike: &Alike, sources: &Sources, off: &[&str]) -> TasteView {
+    let (taste, avoid) = profiles(alike, sources, off);
     let library = Library::of(alike);
     let count = |set: &[usize]| set.iter().collect::<std::collections::HashSet<_>>().len();
     let taste_sources = HashMap::from([

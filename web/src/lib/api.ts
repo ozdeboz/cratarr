@@ -1348,6 +1348,14 @@ export type HeardEvent = {
   player: string | null;
   context: string | null;
 };
+/** Home's looks back (the owner, 2026-10-23): Blast from the past, the favourite tracks unplayed longest; Grave digging,
+ *  the albums most like the taste and furthest from the listening (`last_played` null: never). Times epoch seconds. */
+export type Digging = {
+  past: { id: string; name: string; artist: string; album: string; album_id: string; last_played: number }[];
+  graves: { id: string; last_played: number | null }[];
+};
+export const getDigging = (source?: string, without?: string[]) =>
+  quietly<Digging>(`/api/home/digging?${new URLSearchParams({ ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);
 /** A ListenBrainz user's listens into the asking account's history (decision 0064, amended): how many there were,
  *  matched to the library, and new. */
 export const importListenBrainz = (user: string) => post<{ listens: number; matched: number; added: number }>('/api/history/listenbrainz', { user });

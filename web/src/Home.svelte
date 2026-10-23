@@ -1,11 +1,11 @@
 <script lang="ts">
   // Home (the owner, 2026-10-23: the leftmost tab): the quick look. New in your library (the newest albums, a swipe
   // row; All opens the Library by date added), Sounds like your week (the week's crate: what sounds like the last seven
-  // days' plays, none of them), Jump back in (the albums and playlists played last, and the queues left last), and
-  // Needs you (claude-632's,
-  // lib/HomeNeeds). A tile with nothing to show is left out.
+  // days' plays, none of them), Jump back in (the albums and playlists played last, and the queues left last), Blast
+  // from the past (the favourite tracks unplayed longest) and Grave digging (the albums most like the taste and furthest
+  // from the listening), and Needs you (claude-632's, lib/HomeNeeds). A tile with nothing to show is left out.
   import { onMount } from 'svelte';
-  import { coverUrl, crateRows, getCrate, playlistStats, type PlaylistRow } from './lib/api';
+  import { coverUrl, crateRows, getCrate, getDigging, playlistStats, type Digging, type PlaylistRow } from './lib/api';
   import AlbumCard from './lib/AlbumCard.svelte';
   import { addedOn, albumUses, library, loadAlbumUses, readLibrary } from './lib/albums.svelte';
   import { albumCoverUrl } from './lib/api';
@@ -126,6 +126,43 @@
     const left = queues.list.filter((q) => !q.playing).map((q): Back => ({ kind: 'queue', at: q.updated, id: q.id, title: q.name, tracks: q.tracks, from: q.from }));
     return [...latest(albums), ...latest(lists), ...latest(left)].sort((x, y) => y.at - x.at);
   });
+  // Blast from the past and Grave digging (the server's), of the libraries switched on.
+  let dug = $state<Digging | null>(null);
+  onMount(() => {
+    getDigging(prefs.source || undefined, hiddenLibraries()).then(
+      (d) => (dug = d),
+      () => (dug = null),
+    );
+  });
+  const relative = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+  /** How long ago (epoch seconds), in the largest unit that fits. */
+  function ago(t: number) {
+    const days = Math.max(0, Math.round((Date.now() / 1000 - t) / 86_400));
+    if (days < 14) return relative.format(-days, 'day');
+    if (days < 60) return relative.format(-Math.round(days / 7), 'week');
+    if (days < 730) return relative.format(-Math.round(days / 30), 'month');
+    return relative.format(-Math.round(days / 365), 'year');
+  }
+  /** Grave digging's albums, as the Library lists them. */
+  const graves = $derived(
+    (dug?.graves ?? []).flatMap((g) => {
+      const a = sources.find((s) => s.id === 'cratarr')?.albums.find((x) => x.id === g.id);
+      return a ? [{ a, last: g.last_played }] : [];
+    }),
+  );
+  /** Plays Blast from the past (`from`: from that track). */
+  async function playPast(how: 'play' | 'shuffle', from?: string) {
+    if (!dug?.past.length) return;
+    starting = true;
+    try {
+      await playCollection({ kind: 'tracks', source: 'cratarr', ids: dug.past.map((t) => t.id) }, how, 'Blast from the past', from);
+    } catch (e) {
+      toast.fail(e, 'Could not start playing');
+    } finally {
+      starting = false;
+    }
+  }
+
   function open(b: Back) {
     if (b.kind === 'album') viewOver(albumSubject(b.source, b.id));
     else if (b.kind === 'playlist') viewPlaylist(b.id);
@@ -187,6 +224,40 @@
               </span>
             </button>
           </li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
+
+  {#if dug?.past.length}
+    <section aria-label="Blast from the past">
+      <SectionHead title="Blast from the past" />
+      <ul class="back">
+        {#each dug.past as t (t.id)}
+          <li>
+            <button disabled={starting} onclick={() => playPast('play', t.id)}>
+              <span class="cover"><Cover src={albumCoverUrl('cratarr', t.album_id)} /></span>
+              <span class="text">
+                <span class="title">{t.name}</span>
+                <span class="sub">{t.artist} · {ago(t.last_played)}</span>
+              </span>
+            </button>
+          </li>
+        {/each}
+      </ul>
+      <div class="acts pad">
+        <button class="main" disabled={starting} onclick={() => playPast('play')}><Icon name="play" size={18} />Play</button>
+        <button disabled={starting} onclick={() => playPast('shuffle')}><Icon name="shuffle" size={18} />Shuffle</button>
+      </div>
+    </section>
+  {/if}
+
+  {#if graves.length}
+    <section aria-label="Grave digging">
+      <SectionHead title="Grave digging" />
+      <ul class="shelf">
+        {#each graves as g (g.a.id)}
+          <li><AlbumCard source="cratarr" album={g.a} lines={[g.a.artist ?? '', g.last === null ? 'never played' : `played ${ago(g.last)}`]} /></li>
         {/each}
       </ul>
     </section>
@@ -296,6 +367,10 @@
     color: var(--text);
     font: inherit;
     cursor: pointer;
+  }
+
+  .acts.pad {
+    margin: 12px 16px 0;
   }
 
   .acts button.main {
