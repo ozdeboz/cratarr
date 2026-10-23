@@ -169,7 +169,7 @@
   {@render bars('Artists', l.top_artists)}
   {:else}
   <section>
-    <h2>In playlists</h2>
+    <h2>Tracks</h2>
     <div class="tiles">
       {#each playlistTiles as t (t.label)}
         <div class="tile"><b>{t.value}</b><span>{t.label}</span></div>
