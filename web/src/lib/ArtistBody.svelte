@@ -17,7 +17,8 @@
     appearsOn,
     top,
     ontracks,
-  }: { source: string; name: string; albums: ListedAlbum[]; appearsOn: ListedAlbum[]; top?: Snippet; ontracks: () => void } = $props();
+    profile,
+  }: { source: string; name: string; albums: ListedAlbum[]; appearsOn: ListedAlbum[]; top?: Snippet; ontracks: () => void; profile?: Snippet } = $props();
 
   // About: Cratarr's own library only (the store knows its artists).
   let about = $state<{ id: string | null; bio: string | null; photo: boolean } | null>(null);
@@ -73,12 +74,17 @@
     {#if about.bio}<small class="credit">TheAudioDB</small>{/if}
   </section>
 {/if}
-{#if albums.length}
-  <section aria-label="Albums" bind:this={albumsEl}>
-    <SectionHead title="Albums" />
-    {@render grid(albums)}
-  </section>
-{/if}
+<!-- On a wide panel the albums and the artist's profile side by side, the profile all open (the owner, 2026-10-23); on
+     a narrow one the profile stays in the header, to fold. -->
+<div class="beside" class:with-profile={!!profile}>
+  {#if albums.length}
+    <section aria-label="Albums" bind:this={albumsEl}>
+      <SectionHead title="Albums" />
+      {@render grid(albums)}
+    </section>
+  {/if}
+  {#if profile}<aside class="profile" aria-label="Profile">{@render profile()}</aside>{/if}
+</div>
 {#if appearsOn.length}
   <section aria-label="Appears on">
     <SectionHead title="Appears on" />
@@ -98,6 +104,25 @@
 <style>
   section {
     margin-top: 16px;
+  }
+
+  .beside > .profile {
+    display: none;
+  }
+
+  @container (min-width: 640px) {
+    .beside.with-profile {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) clamp(280px, 45cqi, 480px);
+      align-items: start;
+      column-gap: 24px;
+    }
+
+    .beside > .profile {
+      display: block;
+      margin-top: 16px;
+      padding-right: 16px;
+    }
   }
 
   .about {

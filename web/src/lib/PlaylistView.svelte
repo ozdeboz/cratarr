@@ -1681,7 +1681,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {#if leftOut}<button class="details left-out" onclick={() => (leftOutOpen = true)}><Icon name="crateOut" size={14} /><span>{leftOut.toLocaleString()} excluded</span></button>{/if}
         </div>
         {#if (profile || (like && curve?.alike.length)) && !multi}
-          <div class="head-spread">
+          <div class="head-spread" class:artist-head={!!artist && !artist.tracks}>
             {#if like && curve?.alike.length}<LikeCurve curve={curve.alike} count={like.count} onpreview={(n) => (preview = n)} onchange={(n) => viewLike(like.item, n)} />{/if}
             {#if previewProfile ?? profile}<ListProfile data={(previewProfile ?? profile)!} />{/if}
           </div>
@@ -1795,7 +1795,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
         appearsOn={artistHead.appears_on}
         top={topRows.length ? topList : undefined}
         ontracks={() => viewOver(artistSubject(artist.source, artist.name, true))}
+        profile={(previewProfile ?? profile) ? artistProfile : undefined}
       />
+      {#snippet artistProfile()}<ListProfile data={(previewProfile ?? profile)!} fixed />{/snippet}
       {#snippet topList()}
         <ol class="rows">{#each topRows as r (r.id)}{@render trackRow(r, source, title, topRows, null, false)}{/each}</ol>
       {/snippet}
@@ -2423,7 +2425,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /* A wide panel (one over the page, or dragged wide): the spread at the header's right, its top level with the name's,
      so the header is no taller than what it says; it narrows with the panel (its widest: lib/Spread). */
   @container (min-width: 640px) {
-    .meta:has(.head-spread) {
+    /* An artist's profile goes beside their albums there (lib/ArtistBody), not in the header. */
+    .head-spread.artist-head {
+      display: none;
+    }
+
+    .meta:has(.head-spread:not(.artist-head)) {
       grid-template-columns: minmax(0, 1fr) clamp(280px, 45cqi, 480px);
       align-items: start;
       column-gap: 32px;
