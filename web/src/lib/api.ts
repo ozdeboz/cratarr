@@ -1369,6 +1369,15 @@ export const artistPhotoUrl = (id: string) => `/api/artists/${encodeURIComponent
 export const getArtistAbout = (name: string) => quietly<{ id: string | null; bio: string | null; photo: boolean }>(`/api/artists/about?name=${encodeURIComponent(name)}`);
 export const getDigging = (source?: string, without?: string[]) =>
   quietly<Digging>(`/api/home/digging?${new URLSearchParams({ ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);
+/** Home's moment (the owner, 2026-10-23): named after the weather Home Assistant tells and the time of day ("Music for a Rainy
+ *  Evening"), a few albums near it (Cratarr's ids); its radio plays inside the crate `like:now`. */
+/** `sky`: the canvas Home paints (sunny, clear, fewclouds, cloudy, foggy, rainy, stormy, snowy, windy, hot, plain); `dark`
+ *  after sunset. */
+export type Moment = { name: string; sky: string; dark: boolean; albums: string[] };
+export const getMoment = (source?: string, without?: string[]) =>
+  quietly<Moment>(
+    `/api/home/moment?${new URLSearchParams({ ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}), tz: String(-new Date().getTimezoneOffset() * 60) })}`,
+  );
 /** A ListenBrainz user's listens into the asking account's history (decision 0064, amended): how many there were,
  *  matched to the library, and new. */
 export const importListenBrainz = (user: string) => post<{ listens: number; matched: number; added: number }>('/api/history/listenbrainz', { user });

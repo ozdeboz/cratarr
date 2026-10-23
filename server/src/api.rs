@@ -146,6 +146,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/artists/about", get(artist_about))
         .route("/api/home/heard", post(home_heard))
         .route("/api/history/sleep", post(sleep))
+        .route("/api/home/weather", post(home_weather))
+        .route("/api/home/moment", get(home_moment))
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
             .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
             .route("/api/sync/targets", get(sync_targets))
@@ -2502,6 +2504,28 @@ async fn sleep(Json(b): Json<Sleep>) -> Result<Json<serde_json::Value>, ApiError
     .map_err(|e| ToggleError::from(anyhow::anyhow!("{e}")))?
     .map_err(ToggleError::from)?;
     Ok(Json(json!({ "added": added })))
+}
+
+/// The weather as Home Assistant tells it (the cratarr-ha integration, on each change): Home's moment.
+async fn home_weather(Json(w): Json<crate::app::moment::Weather>) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in to tell the weather.".into()))?;
+    crate::app::moment::tell(w, crate::app::moment::now_secs());
+    Ok(Json(json!({})))
+}
+
+#[derive(Deserialize)]
+struct MomentQuery {
+    source: Option<String>,
+    without: Option<String>,
+    /// The page's clock: seconds east of UTC.
+    tz: Option<i64>,
+}
+
+/// Home's moment: its name and a few albums near it, of the libraries switched on; its radio plays `like:now`.
+async fn home_moment(State(app): State<Arc<App>>, Query(q): Query<MomentQuery>) -> Result<Json<crate::app::MomentView>, ApiError> {
+    let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
+    Ok(Json(app.playlists.moment(q.source.as_deref(), &without, q.tz).await?))
 }
 
 /// The asking account's taste and what it avoids (Insights › Listening › Profile).

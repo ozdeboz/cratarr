@@ -80,6 +80,10 @@ async fn like_crate(id: &str, item: &str, count: usize) -> Result<CrateDef, Togg
         .map_err(|e| anyhow::anyhow!("{e}"))??;
         return Ok(crates::week_crate(id, week, count));
     }
+    if item == crates::NOW {
+        let m = super::moment::now();
+        return Ok(crates::moment_crate(id, &m.name, m.target, count));
+    }
     let item = item.to_string();
     let found = tokio::task::spawn_blocking(move || -> Result<Option<(String, Vec<String>)>> {
         if crate::serve::ids::track_of(&item).is_some() {
@@ -124,6 +128,25 @@ const HEARD_SHARE: f64 = 0.05;
 /// as one never played (Grave digging).
 const DIG: usize = 12;
 const UNPLAYED_HALF_DAYS: f64 = 180.0;
+
+/// How many albums Home's moment shows, drawn from how many of the nearest; how many of an album's tracks must be
+/// measured (and at least half of them); how long one played is left out (days).
+const MOMENT_ALBUMS: usize = 10;
+const MOMENT_POOL: usize = 30;
+const MOMENT_TRACKS: u32 = 3;
+const MOMENT_RESTED_DAYS: i64 = 14;
+
+/// Home's moment (`PlaylistService::moment`): its name, its albums (Cratarr's own ids), and the weather it was made of.
+#[derive(Debug, serde::Serialize)]
+pub struct MomentView {
+    pub name: String,
+    /// The sky Home paints behind it, and whether after sunset (`moment::Moment`).
+    pub sky: &'static str,
+    pub dark: bool,
+    pub albums: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weather: Option<super::moment::Weather>,
+}
 
 /// Home's looks back (`PlaylistService::digging`).
 #[derive(Debug, serde::Serialize)]
@@ -219,7 +242,7 @@ impl CrateLibrary {
 
     /// The conditions with their Sounds like worked out (`crates::resolved`), once for all the files.
     pub(super) fn resolved(&self, conditions: &[crates::Condition]) -> Vec<crates::Condition> {
-        if !conditions.iter().any(|c| matches!(c.value, crates::Value::Like { .. })) {
+        if !conditions.iter().any(|c| c.value.ranks()) {
             return conditions.to_vec();
         }
         // The closest among what the crate may show: its libraries switched on, its other conditions held.
@@ -2721,7 +2744,65 @@ impl PlaylistService {
         .map_err(|e| anyhow::anyhow!("{e}"))?
     }
 
-    /// Playlists like a playlist (one's own or a shared one; the owner, 2026-10-23: same kind under each list), among
+        /// Home's moment (the owner, 2026-10-23; `moment::moment`): its name, and a few albums near it of the libraries
+    /// switched on (their heard tracks, on average), one per artist, those played lately left out; a new draw of the
+    /// nearest each day and each moment. `tz`: the page's clock (seconds east of UTC).
+    pub async fn moment(&self, want: Option<&str>, without: &[String], tz: Option<i64>) -> Result<MomentView, ToggleError> {
+        let user = asking_user().ok_or_else(|| ToggleError::Refused("Home's moment is an account's own: sign in.".into()))?;
+        let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+        if let Some(tz) = tz {
+            super::moment::page_tz(tz);
+        }
+        let m = super::moment::now();
+        let lib = self.crate_library(want, false, false, without).await?;
+        tokio::task::spawn_blocking(move || -> Result<MomentView, ToggleError> {
+            let alike = lib.alike();
+            let scales = crates::Scales::of(&lib.files().collect::<Vec<_>>());
+            let off = |song: &str| {
+                let i = crate::serve::ids::track_of(song).and_then(|t| alike.place_of_track(t)).filter(|&i| lib.on(i))?;
+                scales.off(&lib.files[i], &m.target)
+            };
+            // Per album: how many of its tracks were measured, how far they are in all, and how many it has.
+            let mut by_album: HashMap<String, (u32, f64, u32)> = HashMap::new();
+            for (song, album) in serve.library.albums_of(&serve.library.all_song_ids()?)? {
+                let a = by_album.entry(album).or_default();
+                a.2 += 1;
+                if let Some(o) = off(&song) {
+                    a.0 += 1;
+                    a.1 += o;
+                }
+            }
+            let now = super::moment::now_secs();
+            let rested = now - MOMENT_RESTED_DAYS * 86_400;
+            let last: HashMap<String, i64> = serve.userdata.used(&user, crate::userdata::Kind::Album)?.into_iter().filter_map(|(id, a)| Some((id, a.play_date?))).collect();
+            let mut near: Vec<(String, f64)> = by_album
+                .into_iter()
+                .filter(|(id, (n, _, all))| *n >= MOMENT_TRACKS && *n * 2 >= *all && last.get(id).is_none_or(|&t| t < rested))
+                .map(|(id, (n, sum, _))| (id, sum / f64::from(n)))
+                .collect();
+            near.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+            near.truncate(MOMENT_POOL * 4);
+            let artist_of: HashMap<String, String> =
+                serve.library.albums_by_id(&near.iter().map(|a| a.0.clone()).collect::<Vec<_>>())?.into_iter().map(|a| (a.id, a.artist_id)).collect();
+            let mut artists = HashSet::new();
+            let mut pool: Vec<(String, f64)> = near.into_iter().filter(|(id, _)| artist_of.get(id).is_none_or(|a| artists.insert(a.clone()))).take(MOMENT_POOL).collect();
+            // A draw of the pool that holds through the day and the moment, then nearest first.
+            let draw = |id: &str| {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                (id, now.div_euclid(86_400), &m.name).hash(&mut h);
+                h.finish()
+            };
+            pool.sort_by_key(|a| draw(&a.0));
+            pool.truncate(MOMENT_ALBUMS);
+            pool.sort_by(|a, b| a.1.total_cmp(&b.1));
+            Ok(MomentView { name: m.name, sky: m.sky, dark: m.dark, albums: pool.into_iter().map(|a| a.0).collect(), weather: super::moment::told(now) })
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    }
+
+/// Playlists like a playlist (one's own or a shared one; the owner, 2026-10-23: same kind under each list), among
     /// those the asking account sees, the closest first, with how alike (0 to 100): radio::similar_lists.
     pub async fn similar_playlists(&self, id: &str, count: usize) -> Result<Vec<(String, f64)>, ToggleError> {
         let Some(serve) = crate::serve::instance() else { return Ok(Vec::new()) };
