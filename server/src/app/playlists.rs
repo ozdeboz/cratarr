@@ -136,6 +136,22 @@ const MOMENT_POOL: usize = 30;
 const MOMENT_TRACKS: u32 = 3;
 const MOMENT_RESTED_DAYS: i64 = 14;
 
+/// A ranked crate's fit as its Not for sheet shows it (`PlaylistService::crate_fit`).
+#[derive(Debug, serde::Serialize)]
+pub struct FitView {
+    pub learned: Vec<FitTrait>,
+    pub rules: Vec<crates::Condition>,
+    pub turned_down: usize,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct FitTrait {
+    #[serde(rename = "trait")]
+    pub r#trait: crates::Trait,
+    pub key: String,
+    pub dismissed: bool,
+}
+
 /// Home's moment (`PlaylistService::moment`): its name, its albums (Cratarr's own ids), and the weather it was made of.
 #[derive(Debug, serde::Serialize)]
 pub struct MomentView {
@@ -248,7 +264,7 @@ impl CrateLibrary {
         // The closest among what the crate may show: its libraries switched on, its other conditions held.
         let w = self.world();
         let among: Vec<&crates::Facts> = self.files().filter(|f| crates::holds_besides_like(conditions, f, &w)).collect();
-        crates::resolved(conditions, self.alike(), &among, &self.by)
+        crates::resolved_in(conditions, self.alike(), &among, &self.by, &self.membership)
     }
 
     /// The crate's lines, newest first; a Sounds like crate's closest first (`crates::closest_first`).
@@ -1948,9 +1964,79 @@ impl PlaylistService {
             return Ok(c);
         }
         if let Some((item, count)) = crates::like_of(id) {
-            return like_crate(id, item, count).await;
+            let mut def = match item.strip_prefix(crates::LIST) {
+                Some(list) => self.playlist_like(id, list, count).await?,
+                None => like_crate(id, item, count).await?,
+            };
+            let (fit, avoid, _) = self.fit_of(item).await?;
+            for c in &mut def.conditions {
+                if let crates::Value::Like { avoid: a, .. } = &mut c.value {
+                    *a = avoid.clone();
+                }
+            }
+            def.conditions.extend(fit.rules);
+            return Ok(def);
         }
         self.own_crates()?.list().await?.into_iter().find(|c| c.id == id).ok_or(ToggleError::UnknownPlaylist)
+    }
+
+    /// A playlist's suggestions (`crates::playlist_crate`): its tracks the seeds, named after it.
+    async fn playlist_like(&self, id: &str, list: &str, count: usize) -> Result<CrateDef, ToggleError> {
+        let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+        let lines = self.entries(list).await?;
+        let songs = tokio::task::spawn_blocking(move || {
+            let cat = serve.catalogue();
+            lines.iter().filter_map(|l| crate::serve::playlists::song_of_line(cat, l)).collect::<Vec<_>>()
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let name = list.rsplit('/').next().unwrap_or(list);
+        Ok(crates::playlist_crate(id, name, songs, count))
+    }
+
+    /// A ranked crate's fit (the owner, 2026-10-23: playlist fit models, for every ranked crate), by its item (`like:`'s,
+    /// without a count): its rules and dismissals as kept, what it should not be like (the traits learned from what was
+    /// turned down for it, its left-out tracks and albums', those dismissed left out), and every trait learned with how
+    /// many were turned down.
+    async fn fit_of(&self, item: &str) -> Result<(crates::Fit, crates::Avoid, (Vec<crates::Trait>, usize)), ToggleError> {
+        let base = format!("{}{item}", crates::LIKE);
+        let store = self.own_crates()?;
+        let fit = store.fit(&base).await?;
+        let left = store.left_out(&base).await?;
+        if left.is_empty() {
+            return Ok((fit, crates::Avoid::default(), (Vec::new(), 0)));
+        }
+        let album_tracks = album_lines(self.lib.catalogue(), left.albums.iter().cloned().collect()).await;
+        let down: HashSet<String> = left.lines.into_iter().chain(album_tracks.into_values().flatten()).collect();
+        let lib = self.crate_library(None, false, false, &[]).await?;
+        let traits = tokio::task::spawn_blocking(move || {
+            let all: Vec<&crates::Facts> = lib.files.iter().collect();
+            let turned: Vec<&crates::Facts> = all.iter().copied().filter(|f| down.contains(&f.rel)).collect();
+            (crates::learned(&turned, &all), turned.len())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let kept: Vec<crates::Trait> = traits.0.iter().filter(|t| !fit.dismissed.contains(&t.key())).cloned().collect();
+        let avoid = crates::Avoid::of(kept, traits.1);
+        Ok((fit, avoid, traits))
+    }
+
+    /// A ranked crate's fit as its Not for sheet shows it: every trait learned (whether dismissed), its rules, how many
+    /// were turned down.
+    pub async fn crate_fit(&self, id: &str) -> Result<FitView, ToggleError> {
+        let (item, _) = crates::like_of(id).ok_or_else(|| ToggleError::Refused("Only a Sounds like crate learns what does not fit.".into()))?;
+        let (fit, _, (learned, turned_down)) = self.fit_of(item).await?;
+        let learned = learned.into_iter().map(|t| FitTrait { dismissed: fit.dismissed.contains(&t.key()), key: t.key(), r#trait: t }).collect();
+        Ok(FitView { learned, rules: fit.rules, turned_down })
+    }
+
+    /// Its rules and dismissals, as the sheet leaves them.
+    pub async fn set_crate_fit(&self, id: &str, fit: crates::Fit) -> Result<(), ToggleError> {
+        let (item, _) = crates::like_of(id).ok_or_else(|| ToggleError::Refused("Only a Sounds like crate learns what does not fit.".into()))?;
+        if let Some(c) = fit.rules.iter().find(|c| !crates::is_axis(&c.axis)) {
+            return Err(ToggleError::Refused(format!("Unknown axis: {}.", c.axis)));
+        }
+        Ok(self.own_crates()?.set_fit(&format!("{}{item}", crates::LIKE), fit).await?)
     }
 
     /// The lines these conditions select from the libraries not in `without`, newest first, and the server they are for.
@@ -2897,6 +2983,19 @@ impl PlaylistService {
             store.rename(from, to).await?;
         }
         self.tell_sources(store, vec![(from.to_string(), PlaylistChange::Deleted), (to.to_string(), PlaylistChange::Created)]);
+        // Its suggestions keep what was turned down for it (`crates::playlist_crate`'s left-out list).
+        let crates = self.own_crates()?;
+        let (old, new) = (format!("{}{}{from}", crates::LIKE, crates::LIST), format!("{}{}{to}", crates::LIKE, crates::LIST));
+        let left = crates.left_out(&old).await?;
+        if !left.is_empty() {
+            crates.set_left_out(&new, left).await?;
+            crates.set_left_out(&old, crates::LeftOut::default()).await?;
+        }
+        let fit = crates.fit(&old).await?;
+        if !fit.is_empty() {
+            crates.set_fit(&new, fit).await?;
+            crates.set_fit(&old, crates::Fit::default()).await?;
+        }
         // Subsonic clients keep a playlist's id (`pl-` and its name) across a rename (decision 0030); it stays shared.
         if let Some(serve) = crate::serve::instance() {
             serve.playlist_renamed(&store.key(from), &store.key(to));

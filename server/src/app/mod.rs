@@ -59,7 +59,7 @@ pub use incoming::{AlbumFate, DeleteResult, IncomingService, IncomingView, JobVi
 pub use insights::InsightsService;
 pub use library::{Library, SourceTab};
 pub use playing::{AlbumRef, AlbumView, ArtistView, FromQueue, PlayingService, StateView, TrackStateView};
-pub use playlists::{ByName, CrateLook, CrateOrder, CrateView, Digging, LikeCurve, MomentView, PlayResult, PlaylistService, PlaylistStats};
+pub use playlists::{ByName, CrateLook, CrateOrder, CrateView, Digging, FitView, LikeCurve, MomentView, PlayResult, PlaylistService, PlaylistStats};
 pub use playon::{Command as PlayOnCommand, PlayOn, PlayOnSettings, PlayOnSettingsView, QueueTrack, Report as PlayerReport, whose as whose_players};
 pub use plays::{PlayEvent, Plays};
 pub use sync::TargetChoice;

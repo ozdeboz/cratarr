@@ -84,6 +84,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/crates/{id}/favourites", put(crate_favourites))
         .route("/api/crates/{id}/favourite-albums", put(crate_favourite_albums))
         .route("/api/crates/{id}/left-out", get(crate_left_out).post(crate_leave_out).delete(crate_put_back))
+        .route("/api/crates/{id}/fit", get(crate_fit).put(set_crate_fit))
         .route("/api/excluded", get(excluded).post(exclude).delete(include_again))
         .route(
             "/api/crates/{id}/image",
@@ -1584,6 +1585,16 @@ struct LeftOutRequest {
 
 /// Takes tracks or whole albums out of a crate by hand (decision 0024, amended 2026-10-19): they stay out over its
 /// conditions and toggles, an album's tracks now and later.
+/// A ranked crate's fit (its Not for sheet): the traits learned from what was turned down for it, its rules.
+async fn crate_fit(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<crate::app::FitView>, ApiError> {
+    Ok(Json(app.playlists.crate_fit(&id).await?))
+}
+
+async fn set_crate_fit(State(app): State<Arc<App>>, Path(id): Path<String>, Json(fit): Json<crate::crates::Fit>) -> Result<Json<serde_json::Value>, ApiError> {
+    app.playlists.set_crate_fit(&id, fit).await?;
+    Ok(Json(json!({})))
+}
+
 async fn crate_leave_out(State(app): State<Arc<App>>, Path(id): Path<String>, Json(req): Json<LeftOutRequest>) -> Result<Json<serde_json::Value>, ApiError> {
     let (n, undo) = app.playlists.crate_leave_out(&id, req.source.as_deref(), &req.ids, &req.albums, true).await?;
     Ok(Json(json!({ "left_out": n, "undo": undo })))

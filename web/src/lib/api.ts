@@ -578,6 +578,20 @@ export const setCrateFavouriteAlbums = (id: string, favourite_albums: CrateFavou
 /** What is excluded (decision 0024, amended 2026-10-19): tracks (`ids`) and, from a crate, whole albums (`albums`,
  *  their tracks now and later). */
 export type Excluding = { ids?: string[]; albums?: string[] };
+/** What a ranked crate learned not to suggest from what was turned down for it (the owner, 2026-10-23: playlist fit
+ *  models): AudioMuse styles, artists, CLAP's moods, a tempo band, an energy band (0 to 100). */
+export type Trait = { kind: 'style' | 'artist' | 'mood'; name: string } | { kind: 'tempo' | 'energy'; lo: number; hi: number };
+export function traitLabel(t: Trait): string {
+  if ('name' in t) return t.kind === 'mood' ? t.name.charAt(0).toUpperCase() + t.name.slice(1) : t.name;
+  if (t.kind === 'tempo') return `${Math.round(t.lo)}–${Math.round(t.hi)} BPM`;
+  return t.hi >= 100 ? 'Energetic' : 'Calm';
+}
+/** Its fit, as its Not for sheet shows it: every trait learned (whether dismissed), one's own rules (strict), and how
+ *  many were turned down. */
+export type CrateFit = { learned: { trait: Trait; key: string; dismissed: boolean }[]; rules: Condition[]; turned_down: number };
+export const getCrateFit = (id: string) => quietly<CrateFit>(`/api/crates/${encodeURIComponent(id)}/fit`);
+export const setCrateFit = (id: string, fit: { rules: Condition[]; dismissed: string[] }) =>
+  request<void>(`/api/crates/${encodeURIComponent(id)}/fit`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fit) });
 /** A crate's exclusions: it leaves them out whatever its conditions and toggles say. Out and back in again are
  *  journaled (Undo); ids the library does not know are passed over. */
 export const leaveOutOfCrate = (id: string, source: string, what: Excluding) =>

@@ -38,6 +38,9 @@
     createPlaylist,
     deleteCrate,
     getCrate,
+    crateLeftOut,
+    appendTracks,
+    leaveOutOfCrate,
     updateCrate,
     editPlaylist,
     albumCoverUrl,
@@ -102,6 +105,8 @@
   import SimilarAlbums from './SimilarAlbums.svelte';
   import CoverFlow from './CoverFlow.svelte';
   import SimilarLists from './SimilarLists.svelte';
+  import SuggestedTracks from './SuggestedTracks.svelte';
+  import AvoidLine from './AvoidLine.svelte';
   import ListHead from './ListHead.svelte';
   import { insights, plural } from './insights.svelte';
   import { refresh } from './live.svelte';
@@ -1099,7 +1104,46 @@ ${r.album_artist ?? r.artist ?? ''}`;
     return () => outOfPlaylist(list, r);
   }
   /** How many tracks and albums the crate viewed excludes, and their sheet. */
-  const leftOut = $derived(crate && !crateEditing ? (crates.list?.find((x) => x.id === crate)?.left_out ?? 0) : 0);
+  // A playlist's suggestions crate (lib/SuggestedTracks) is not among one's crates: its count of what was turned down
+  // for the playlist is read on its own.
+  let suggestionsLeftOut = $state(0);
+  $effect(() => {
+    const c = crate;
+    void saved;
+    suggestionsLeftOut = 0;
+    if (!c || !likeParts(c)?.item.startsWith('list:')) return;
+    crateLeftOut(c).then(
+      (r) => {
+        if (c === crate) suggestionsLeftOut = r.rows.length + (r.albums?.length ?? 0);
+      },
+      () => {},
+    );
+  });
+  /** The playlist whose suggestions this crate is (`like:list:<id>`, lib/SuggestedTracks): its rows add to it or are
+   *  turned down for it. */
+  const suggestsFor = $derived.by(() => {
+    const item = crate ? likeParts(crate)?.item : null;
+    if (!item?.startsWith('list:')) return null;
+    const id = item.slice('list:'.length);
+    return shownPlaylists().find((x) => x.id === id && x.mine !== false) ?? null;
+  });
+  async function suggestion(r: PlaylistRow, src: string, add: boolean) {
+    const s = suggestsFor;
+    if (!s || !crate) return;
+    try {
+      if (add) {
+        const done = await appendTracks(s.id, src, [r.id!]);
+        withUndo(`Added to ${s.name}.`, [done.undo], { after: () => saved++ });
+      } else {
+        const done = await leaveOutOfCrate(crate, src, { ids: [r.id!] });
+        withUndo(`Not suggested for ${s.name} again.`, [done.undo], { after: () => saved++ });
+      }
+      saved++;
+    } catch (e) {
+      toast.fail(e, add ? "The track wasn't added" : "The suggestion wasn't turned down");
+    }
+  }
+  const leftOut = $derived(crate && !crateEditing ? (crates.list?.find((x) => x.id === crate)?.left_out ?? suggestionsLeftOut) : 0);
   let leftOutOpen = $state(false);
   /** A row's menu: Remove from one's own playlist, as its swipe left does. A crate's Excludes are its heart's (one
    *  thing in one place, as the full player's: the owner, "Heart sheet only"). */
@@ -1663,6 +1707,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
           <!-- A crate's exclusions (decision 0024, amended 2026-10-19): a tap shows them, to put back. -->
           {#if leftOut}<button class="details left-out" onclick={() => (leftOutOpen = true)}><Icon name="crateOut" size={14} /><span>{leftOut.toLocaleString()} excluded</span></button>{/if}
         </div>
+        <!-- A ranked crate's fit (the owner, 2026-10-23): what it learned not to suggest; a tap corrects it. -->
+        {#if crate && like && !multi}<AvoidLine {crate} name={suggestsFor?.name ?? title} round={saved} onchange={() => saved++} />{/if}
         {#if (profile || (like && curve?.alike.length)) && !multi}
           <div class="head-spread">
             {#if like && curve?.alike.length}<LikeCurve curve={curve.alike} count={like.count} onpreview={(n) => (preview = n)} onchange={(n) => viewLike(like.item, n)} />{/if}
@@ -1800,6 +1846,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
       </ol>
       {#if crate && rows.length < total}<div class="loading" bind:this={more}><MarkLoader size={40} /></div>{/if}
       <!-- Each list's own kind of similar ones at its foot (the owner, 2026-10-23); a crate's once all its rows are in. -->
+      <!-- One's own playlist: tracks to add to it (lib/SuggestedTracks; the owner, 2026-10-23). -->
+      {#if p && !multi && p.mine !== false}<SuggestedTracks id={p.id} name={p.name} count={p.count} />{/if}
       {#if p && !multi}<SimilarLists kind="playlist" id={p.id} />{/if}
       {#if crate && !seeded(crate) && !crateEditing && rows.length >= total}<SimilarLists kind="crate" id={crate} />{/if}
       {#if album && albumHead && !onDevice}
@@ -1924,7 +1972,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
 {#snippet endSpace()}<span class="end-space" class:ticking={!!selecting}></span>{/snippet}
 
 {#snippet rowEnd(r: PlaylistRow, src: string, i: number | null, out: (() => 'away') | null = null, list = '')}
-  {#if selecting && i !== null}
+  {#if suggestsFor && !selecting && r.id}
+    <!-- A playlist's suggestions (lib/SuggestedTracks): turned down, or added to it. -->
+    <button class="tool" aria-label="Not for {suggestsFor.name}" onclick={() => suggestion(r, src, false)}><Icon name="close" size={20} /></button>
+    <button class="tool add" aria-label="Add to {suggestsFor.name}" onclick={() => suggestion(r, src, true)}><Icon name="plus" size={22} /></button>
+  {:else if selecting && i !== null}
     <button class="tool tick" class:on={selecting.has(i)} role="checkbox" aria-checked={selecting.has(i)} aria-label={`Select ${r.name ?? r.file}`} onclick={() => tick(i)}
       ><Icon name={selecting.has(i) ? 'circleCheck' : 'circle'} size={24} /></button
     >
@@ -2347,6 +2399,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
   .dead {
     color: var(--danger, #c33);
+  }
+
+  .tool.add {
+    color: var(--accent);
   }
 
   .left-out {

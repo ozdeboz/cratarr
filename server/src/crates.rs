@@ -88,6 +88,14 @@ pub enum Value {
         fresh: bool,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         weights: Vec<f32>,
+        /// Leaning towards tracks in no playlist yet (a playlist's suggestions take in forgotten music), mildly: each
+        /// moves ahead of at most `LEAN_UNLISTED` closer ones that are in a playlist.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        unlisted: bool,
+        /// What it should not be like: the traits learned from what was turned down for it, those dismissed left out
+        /// (its fit model's other side, `closest_fit`).
+        #[serde(default, skip_serializing_if = "Avoid::is_empty")]
+        avoid: Avoid,
     },
     /// Close to a moment (Home's weather and time of day, `app::moment`): the `count` tracks nearest its energy and
     /// moods (`Scales::off`). Made when asked for, never kept.
@@ -136,7 +144,7 @@ pub const WEEK_SECS: i64 = 7 * 24 * 3600;
 /// leaves out.
 pub fn week_crate(id: &str, played: Vec<(String, f32)>, count: usize) -> CrateDef {
     let (of, weights) = played.into_iter().unzip();
-    let like = Condition::new("like", false, Value::Like { of, count, fresh: true, weights });
+    let like = Condition::new("like", false, Value::Like { of, count, fresh: true, weights, unlisted: false, avoid: Avoid::default() });
     CrateDef { id: id.to_string(), name: "Sounds like your week".into(), conditions: vec![like] }
 }
 /// Home's moment (`like:now[@<count>]`, `app::moment`): the tracks nearest what the weather and the time of day ask,
@@ -164,8 +172,173 @@ pub fn like_of(id: &str) -> Option<(&str, usize)> {
 }
 
 pub fn like_crate(id: &str, name: &str, songs: Vec<String>, count: usize) -> CrateDef {
-    let like = Condition::new("like", false, Value::Like { of: songs, count, fresh: false, weights: Vec::new() });
+    let like = Condition::new("like", false, Value::Like { of: songs, count, fresh: false, weights: Vec::new(), unlisted: false, avoid: Avoid::default() });
     CrateDef { id: id.to_string(), name: name.to_string(), conditions: vec![like] }
+}
+
+/// A playlist's suggestions (`like:list:<playlist id>`; the owner, 2026-10-23: tracks to add to it, "secretly each
+/// playlist would get a crate"): what sounds like its tracks, its own left out, leaning towards tracks in no playlist
+/// yet; its fit (`Fit`) as every ranked crate's.
+pub const LIST: &str = "list:";
+
+pub fn playlist_crate(id: &str, name: &str, songs: Vec<String>, count: usize) -> CrateDef {
+    let like = Condition::new("like", false, Value::Like { of: songs, count, fresh: true, weights: Vec::new(), unlisted: true, avoid: Avoid::default() });
+    CrateDef { id: id.to_string(), name: format!("Sounds like {name}"), conditions: vec![like] }
+}
+
+/// How many closer tracks in a playlist one in none may pass (`Value::Like`'s `unlisted`), and how many beyond its
+/// count a Sounds like weighs for that.
+const LEAN_UNLISTED: usize = 3;
+const LEAN_POOL: usize = 50;
+
+/// A trait of what a ranked crate should not be like (its fit model's other side; the owner, 2026-10-23: learned from
+/// what was turned down for it, shown, and each one can be dismissed: "that's not why").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Trait {
+    /// An AudioMuse style.
+    Style { name: String },
+    Artist { name: String },
+    /// One of CLAP's moods standing out.
+    Mood { name: String },
+    /// A tempo band (BPM).
+    Tempo { lo: f64, hi: f64 },
+    /// An energy band (AudioMuse's, 0 to 100): calm or lively against the library.
+    Energy { lo: f64, hi: f64 },
+}
+
+impl Trait {
+    /// What it is dismissed by: one of each band, a name of the others.
+    pub fn key(&self) -> String {
+        match self {
+            Trait::Style { name } => format!("style:{}", name.to_lowercase()),
+            Trait::Artist { name } => format!("artist:{}", name.to_lowercase()),
+            Trait::Mood { name } => format!("mood:{}", name.to_lowercase()),
+            Trait::Tempo { .. } => "tempo".into(),
+            Trait::Energy { .. } => "energy".into(),
+        }
+    }
+
+    /// Whether a file has it.
+    pub fn holds(&self, f: &Facts) -> bool {
+        let named = |names: &[String], name: &str| names.iter().any(|n| n.eq_ignore_ascii_case(name));
+        match self {
+            Trait::Style { name } => named(&f.styles, name),
+            Trait::Artist { name } => named(&f.artists, name),
+            Trait::Mood { name } => named(&f.moods, name),
+            Trait::Tempo { lo, hi } => f.bpm.is_some_and(|b| (*lo..=*hi).contains(&b)),
+            Trait::Energy { lo, hi } => f.energy.is_some_and(|e| (*lo..=*hi).contains(&e)),
+        }
+    }
+}
+
+/// What a ranked crate should not be like, and how much that counts against its own pull.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Avoid {
+    pub traits: Vec<Trait>,
+    pub weight: f64,
+}
+
+/// How much what was turned down counts against a crate's own pull at most, and after how many turned down half that
+/// (one or two are mostly noise, a handful shape it).
+const AVOID_MOST: f64 = 0.75;
+const AVOID_HALF: f64 = 3.0;
+
+impl Avoid {
+    /// `traits` (those not dismissed), learned from `turned_down` tracks.
+    pub fn of(traits: Vec<Trait>, turned_down: usize) -> Self {
+        let n = turned_down as f64;
+        Avoid { weight: if traits.is_empty() { 0.0 } else { AVOID_MOST * n / (n + AVOID_HALF) }, traits }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.traits.is_empty()
+    }
+
+    /// What a file loses of its closeness: the share of the traits it has, weighed.
+    pub fn against(&self, f: &Facts) -> f64 {
+        if self.traits.is_empty() {
+            return 0.0;
+        }
+        self.weight * self.traits.iter().filter(|t| t.holds(f)).count() as f64 / self.traits.len() as f64
+    }
+}
+
+/// The fewest turned down to learn from; how many styles, artists and moods at most; how narrow a tempo band (BPM) and
+/// how far from the library's middle an energy (its scale's share) to count.
+const LEARN_FROM: usize = 2;
+const LEARN_NAMES: usize = 3;
+const TEMPO_SPAN: f64 = 16.0;
+const ENERGY_OFF: f64 = 0.25;
+
+/// What the tracks turned down for a crate share, against the library: their telling styles, an artist on two or more,
+/// a mood standing out on half of them, a narrow tempo band, an energy far from the library's middle.
+pub fn learned(down: &[&Facts], library: &[&Facts]) -> Vec<Trait> {
+    if down.len() < LEARN_FROM {
+        return Vec::new();
+    }
+    let scales = Scales::of(library);
+    let mut out: Vec<Trait> =
+        telling(down, &scales.styles, scales.tracks, |f| &f.styles).into_iter().take(LEARN_NAMES).map(|name| Trait::Style { name }).collect();
+    let by_count = |names: fn(&Facts) -> &[String], least: usize| {
+        let mut c: Vec<(usize, String)> = name_counts(down, names).into_values().filter(|(n, _)| *n >= least).collect();
+        c.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        c.into_iter().take(LEARN_NAMES).map(|(_, name)| name).collect::<Vec<_>>()
+    };
+    out.extend(by_count(|f| &f.artists, 2).into_iter().map(|name| Trait::Artist { name }));
+    out.extend(by_count(|f| &f.moods, LEARN_FROM.max(down.len().div_ceil(2))).into_iter().map(|name| Trait::Mood { name }));
+    let bpms = sorted(down.iter().filter_map(|f| f.bpm));
+    if bpms.len() >= 3 {
+        let (lo, hi) = (crate::similarity::quantile(&bpms, 0.25), crate::similarity::quantile(&bpms, 0.75));
+        if hi - lo <= TEMPO_SPAN {
+            out.push(Trait::Tempo { lo: lo.floor(), hi: hi.ceil() });
+        }
+    }
+    let energies = sorted(down.iter().filter_map(|f| f.energy));
+    if energies.len() >= LEARN_FROM {
+        let (lo, hi) = scales.numbers[1];
+        let middle = (crate::similarity::quantile(&energies, 0.5) - lo) / (hi - lo).max(f64::EPSILON);
+        if middle >= 0.5 + ENERGY_OFF {
+            out.push(Trait::Energy { lo: crate::similarity::quantile(&energies, 0.25).floor(), hi: 100.0 });
+        } else if middle <= 0.5 - ENERGY_OFF {
+            out.push(Trait::Energy { lo: 0.0, hi: crate::similarity::quantile(&energies, 0.75).ceil() });
+        }
+    }
+    out
+}
+
+/// A ranked crate's fit kept beside it (the owner, 2026-10-23): its strict rules (conditions it holds besides its
+/// own), and the learned traits dismissed (`Trait::key`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Fit {
+    #[serde(default)]
+    pub rules: Vec<Condition>,
+    #[serde(default)]
+    pub dismissed: Vec<String>,
+}
+
+impl Fit {
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty() && self.dismissed.is_empty()
+    }
+}
+
+/// `ranked` with each line in no playlist moved ahead of at most `LEAN_UNLISTED` listed ones just before it, the
+/// unlisted keeping their order among themselves.
+fn lean_unlisted(ranked: &mut Vec<String>, listed: impl Fn(&str) -> bool) {
+    let mut out: Vec<String> = Vec::with_capacity(ranked.len());
+    for line in ranked.drain(..) {
+        let mut at = out.len();
+        if !listed(&line) {
+            let mut passed = 0;
+            while at > 0 && passed < LEAN_UNLISTED && listed(&out[at - 1]) {
+                at -= 1;
+                passed += 1;
+            }
+        }
+        out.insert(at, line);
+    }
+    *ranked = out;
 }
 
 /// The permanent crates, in the same model (decision 0024). Favourites and Unlisted favourites went (amended
@@ -897,17 +1070,26 @@ pub fn passes(tracks: &[&Facts], conditions: &[Condition], w: &World) -> bool {
 /// tracks where the curve was cut at 20), its seeds found in `alike`'s files (they may be anywhere, a library switched
 /// off, left out), by the one similarity (`closest_weighted`). Seeds none of which is known: never holds.
 pub fn resolved(conditions: &[Condition], alike: &Alike, among: &[&Facts], by: &Weights) -> Vec<Condition> {
+    resolved_in(conditions, alike, among, by, &HashMap::new())
+}
+
+/// `resolved`, with the playlists holding each line (`membership`) for a Sounds like that leans towards tracks in none.
+pub fn resolved_in(conditions: &[Condition], alike: &Alike, among: &[&Facts], by: &Weights, membership: &HashMap<String, Vec<String>>) -> Vec<Condition> {
     conditions
         .iter()
         .map(|c| match &c.value {
-            Value::Like { of, count, fresh, weights } => {
+            Value::Like { of, count, fresh, weights, unlisted, avoid } => {
                 let seeds: HashSet<i64> = if *fresh { of.iter().filter_map(|id| crate::serve::ids::track_of(id)).collect() } else { HashSet::new() };
-                let ranked: Vec<String> = closest_weighted(of, weights, alike, among, by)
+                let mut ranked: Vec<String> = closest_fit(of, weights, avoid, alike, among, by)
                     .into_iter()
                     .filter(|(f, _)| !f.track.is_some_and(|t| seeds.contains(&t)))
-                    .take(*count)
+                    .take(if *unlisted { count + LEAN_POOL } else { *count })
                     .map(|(f, _)| f.rel.clone())
                     .collect();
+                if *unlisted {
+                    lean_unlisted(&mut ranked, |l| membership.get(l).is_some_and(|m| !m.is_empty()));
+                    ranked.truncate(*count);
+                }
                 Condition { value: Value::Within { lines: Arc::new(ranked.iter().cloned().collect()), ranked: Arc::new(ranked) }, ..c.clone() }
             }
             Value::Moment { target, count } => {
@@ -1011,6 +1193,12 @@ impl Alike {
 /// weight (`weights`, by `of`'s order; missing ones 1; none: left out of the seed). Files nothing is known of in common
 /// with the seeds are left out; none when no seed is known.
 pub fn closest_weighted<'a>(of: &[String], weights: &[f32], alike: &Alike, among: &[&'a Facts], by: &Weights) -> Vec<(&'a Facts, f64)> {
+    closest_fit(of, weights, &Avoid::default(), alike, among, by)
+}
+
+/// `closest_weighted` as a fit model (the owner, 2026-10-23: "playlist fit models"): each candidate's closeness to the
+/// seeds less the share of what it should not be like that it is (`avoid`), as much as there was turned down.
+pub fn closest_fit<'a>(of: &[String], weights: &[f32], avoid: &Avoid, alike: &Alike, among: &[&'a Facts], by: &Weights) -> Vec<(&'a Facts, f64)> {
     let mut seed: Vec<usize> = Vec::new();
     for (k, id) in of.iter().enumerate() {
         let Some(&i) = crate::serve::ids::track_of(id).and_then(|t| alike.of_track.get(&t)) else { continue };
@@ -1036,7 +1224,7 @@ pub fn closest_weighted<'a>(of: &[String], weights: &[f32], alike: &Alike, among
             .filter_map(|(k, f)| {
                 let &i = alike.place.get(&f.rel)?;
                 let signals = profile.to_track(&alike.lib, i, &alike.tracks[i]);
-                signals.known().then(|| (k, signals.score(by)))
+                signals.known().then(|| (k, signals.score(by) - avoid.against(f)))
             })
             .collect();
         scored.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| among[a.0].rel.cmp(&among[b.0].rel)));
@@ -1257,6 +1445,9 @@ struct Stored {
     /// The tracks excluded from every automatic pick (decision 0024, amended 2026-10-19: global exclusions): their lines.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     excluded: Vec<String>,
+    /// Each ranked crate's fit (its rules and the learned traits dismissed), by its id without a count.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    fits: BTreeMap<String, Fit>,
 }
 
 /// One's own crates (decision 0024, issue 2): one file in Cratarr's data folder, the version before each change kept
@@ -1348,6 +1539,21 @@ impl CrateStore {
             } else {
                 kept.insert(id.to_string(), list);
             }
+        }
+        self.write_stored(s).await
+    }
+
+    /// A ranked crate's fit (none until set).
+    pub async fn fit(&self, id: &str) -> Result<Fit> {
+        Ok(self.stored().await?.fits.get(id).cloned().unwrap_or_default())
+    }
+
+    pub async fn set_fit(&self, id: &str, fit: Fit) -> Result<()> {
+        let mut s = self.stored().await?;
+        if fit.is_empty() {
+            s.fits.remove(id);
+        } else {
+            s.fits.insert(id.to_string(), fit);
         }
         self.write_stored(s).await
     }
@@ -1600,6 +1806,50 @@ mod tests {
         closest_first(&mut lines, &resolved(&week.conditions, &Alike::of(&files, &HashMap::new()), &every, &Weights::EQUAL));
         assert_eq!(lines, ["near.flac", "far.flac"], "closest first, the played one left out");
         assert_eq!(like_of("like:week@10"), Some((WEEK, 10)));
+    }
+
+    #[test]
+    fn what_was_turned_down_teaches_traits_that_sink_what_has_them() {
+        let heard = |rel: &str, track: i64, v: [f32; 2], artist: &str, bpm: f64| Facts {
+            rel: rel.into(),
+            track: Some(track),
+            sound: Some(Arc::from(v.as_slice())),
+            artists: vec![artist.into()],
+            bpm: Some(bpm),
+            ..Facts::default()
+        };
+        let files = vec![
+            heard("seed.flac", 1, [1.0, 0.0], "Ana", 90.0),
+            heard("a-by-the-turned-down.flac", 2, [0.99, 0.14], "Bo", 124.0),
+            heard("b-other.flac", 3, [0.99, -0.14], "Cy", 56.0),
+            heard("down-1.flac", 4, [0.0, 1.0], "Bo", 122.0),
+            heard("down-2.flac", 5, [0.0, 1.0], "Bo", 126.0),
+            heard("down-3.flac", 6, [0.0, 1.0], "Di", 125.0),
+        ];
+        let every: Vec<&Facts> = files.iter().collect();
+        let down: Vec<&Facts> = files[3..].iter().collect();
+        let traits = learned(&down, &every);
+        assert!(traits.contains(&Trait::Artist { name: "Bo".into() }), "an artist on two of them: {traits:?}");
+        assert!(traits.iter().any(|t| matches!(t, Trait::Tempo { lo, hi } if *lo <= 124.0 && *hi >= 124.0)), "a narrow tempo band: {traits:?}");
+        assert!(learned(&down[..1], &every).is_empty(), "one turned down teaches nothing");
+        let alike = Alike::of(&files, &HashMap::new());
+        let among: Vec<&Facts> = files[1..3].iter().collect();
+        let order = |avoid: &Avoid| closest_fit(&["tr-1".into()], &[], avoid, &alike, &among, &Weights::EQUAL).into_iter().map(|(f, _)| f.rel.clone()).collect::<Vec<_>>();
+        assert_eq!(order(&Avoid::default()), ["a-by-the-turned-down.flac", "b-other.flac"], "alike, by name");
+        assert_eq!(order(&Avoid::of(traits.clone(), 3)), ["b-other.flac", "a-by-the-turned-down.flac"], "what has their traits sinks");
+        let kept: Vec<Trait> = traits.into_iter().filter(|t| t.key() != "artist:bo" && t.key() != "tempo").collect();
+        assert_eq!(order(&Avoid::of(kept, 3)), ["a-by-the-turned-down.flac", "b-other.flac"], "dismissed, they no longer count");
+    }
+
+    #[test]
+    fn a_playlists_suggestions_lean_towards_tracks_in_no_playlist() {
+        let mut ranked: Vec<String> = ["a", "b", "c", "d", "u1", "e", "u2"].map(String::from).to_vec();
+        lean_unlisted(&mut ranked, |l| !l.starts_with('u'));
+        assert_eq!(ranked, ["a", "u1", "b", "u2", "c", "d", "e"], "each unlisted passes at most three listed");
+        let list = playlist_crate("like:list:Chill", "Chill", vec!["tr-1".into()], 10);
+        assert_eq!(list.name, "Sounds like Chill");
+        assert!(matches!(&list.conditions[0].value, Value::Like { fresh: true, unlisted: true, .. }), "its own left out, leaning");
+        assert_eq!(like_of("like:list:Chill"), Some(("list:Chill", LIKE_COUNT)));
     }
 
     #[test]
