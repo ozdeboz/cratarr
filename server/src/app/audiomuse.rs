@@ -16,8 +16,6 @@ use crate::catalogue::{AudioMuseRow, Catalogue};
 
 /// The file the PC's task writes, in Cratarr's data folder.
 pub const FILE: &str = "audiomuse/audiomuse.jsonl";
-/// A mood that stands out (AudioMuse's own purity threshold).
-pub const MOOD_MIN: f64 = 0.3;
 /// How many style tags a track shows (and a crate's Style tests).
 pub const STYLES: usize = 5;
 /// The catalogue's note of the file last taken in (its size and time).
@@ -116,17 +114,20 @@ pub fn weighted(text: Option<&str>) -> Vec<(String, f64)> {
     out
 }
 
-/// Where each of CLAP's moods (`similarity::MOODS`' order) stands out: the library's top quarter of that mood's
-/// scores, over the files CLAP heard (`moods`: their `other_features`). A mood no file was heard on: never.
-pub fn mood_thresholds<'a>(moods: impl Iterator<Item = Option<&'a str>>) -> [f64; 5] {
+/// CLAP's score of each mood (`similarity::MOODS`' order); none until CLAP heard the track (all 0).
+pub fn mood_scores(moods: Option<&str>) -> Option<[f32; 5]> {
+    let scores = weighted(moods);
+    scores.iter().any(|(_, x)| *x > 0.0).then(|| crate::similarity::MOODS.map(|m| scores.iter().find(|(n, _)| n == m).map_or(0.0, |(_, x)| *x as f32)))
+}
+
+/// Where each of CLAP's moods stands out (the owner, 2026-10-23): the library's top quarter of that mood's scores,
+/// over the tracks CLAP heard. CLAP scores every mood between about 0.5 and 0.65, so a fixed bar (AudioMuse's 0.3)
+/// gave every heard track all five. A mood no track was heard on: never.
+pub fn stand_out(heard: impl Iterator<Item = [f32; 5]>) -> [f64; 5] {
     let mut each: [Vec<f64>; 5] = Default::default();
-    for text in moods {
-        let scores = weighted(text);
-        if !scores.iter().any(|(_, x)| *x > 0.0) {
-            continue;
-        }
-        for (k, m) in crate::similarity::MOODS.iter().enumerate() {
-            each[k].extend(scores.iter().find(|(n, _)| n == m).map(|(_, x)| *x));
+    for scores in heard {
+        for (v, x) in each.iter_mut().zip(scores) {
+            v.push(x as f64);
         }
     }
     each.map(|mut v| {
@@ -135,19 +136,24 @@ pub fn mood_thresholds<'a>(moods: impl Iterator<Item = Option<&'a str>>) -> [f64
     })
 }
 
-/// CLAP's moods, and its danceability: none while every score is 0 (CLAP has not heard the track yet).
-pub fn moods_and_danceability(row: &AudioMuseRow) -> (Vec<(String, f64)>, Option<f64>) {
+/// The moods a track has: those it scores in the library's top quarter of (`stand_out`).
+pub fn moods_of(scores: Option<[f32; 5]>, stand_out: &[f64; 5]) -> Vec<(&'static str, f64)> {
+    let Some(scores) = scores else { return Vec::new() };
+    crate::similarity::MOODS.into_iter().zip(scores).zip(stand_out).filter(|((_, x), t)| *x > 0.0 && *x as f64 >= **t).map(|((m, x), _)| (m, (x as f64 * 100.0).round() / 100.0)).collect()
+}
+
+/// CLAP's danceability: none while every score is 0 (CLAP has not heard the track yet).
+pub fn danceability(row: &AudioMuseRow) -> Option<f64> {
     let all = weighted(row.moods.as_deref());
     if all.iter().all(|(_, s)| *s <= 0.0) {
-        return (Vec::new(), None);
+        return None;
     }
-    let dance = all.iter().find(|(n, _)| n == "danceable").map(|(_, s)| *s);
-    (all.into_iter().filter(|(n, s)| n != "danceable" && *s >= MOOD_MIN).collect(), dance)
+    all.iter().find(|(n, _)| n == "danceable").map(|(_, s)| *s)
 }
 
 /// A track's AudioMuse facts, for its details: `energy` 0..1, `key` ("D minor"), `style` (its top tags), `mood`
-/// (those that stand out), `danceability` 0..1; each null where AudioMuse has none.
-pub fn details(row: Option<&AudioMuseRow>) -> Value {
+/// (those that stand out against the library: `stand_out`), `danceability` 0..1; each null where AudioMuse has none.
+pub fn details(row: Option<&AudioMuseRow>, stand_out: &[f64; 5]) -> Value {
     let Some(row) = row else {
         return json!({ "energy": null, "key": null, "style": null, "mood": null, "danceability": null });
     };
@@ -157,13 +163,13 @@ pub fn details(row: Option<&AudioMuseRow>) -> Value {
         }
         Value::Array(v.into_iter().map(|(name, score)| json!({ "name": name, "score": score })).collect())
     };
-    let (mood, danceability) = moods_and_danceability(row);
+    let mood = moods_of(mood_scores(row.moods.as_deref()), stand_out).into_iter().map(|(m, x)| (m.to_string(), x)).collect();
     json!({
         "energy": row.energy,
         "key": row.key,
         "style": named(weighted(row.style.as_deref()).into_iter().take(STYLES).collect()),
         "mood": named(mood),
-        "danceability": danceability,
+        "danceability": danceability(row),
     })
 }
 
@@ -174,25 +180,26 @@ mod tests {
     #[test]
     fn a_mood_stands_out_in_the_librarys_top_quarter() {
         let heard = ["happy:0.50,sad:0.60", "happy:0.55,sad:0.61", "happy:0.60,sad:0.62", "happy:0.65,sad:0.63", "happy:0.00,sad:0.00"];
-        let t = mood_thresholds(heard.iter().map(|s| Some(*s)));
-        assert!((t[0] - 0.6125).abs() < 1e-9, "happy: the top quarter of 0.50..0.65, the unheard one left out: {}", t[0]);
-        assert!((t[1] - 0.6225).abs() < 1e-9, "sad: {}", t[1]);
-        assert_eq!(t[2], f64::INFINITY, "relaxed: never scored, never stands out");
+        let t = stand_out(heard.iter().filter_map(|s| mood_scores(Some(s))));
+        assert!((t[0] - 0.6125).abs() < 1e-6, "happy: the top quarter of 0.50..0.65, the unheard one left out: {}", t[0]);
+        assert!((t[1] - 0.6225).abs() < 1e-6, "sad: {}", t[1]);
+        assert!((t[2] - 0.0).abs() < 1e-9, "relaxed: every heard track scored it 0: {}", t[2]);
     }
 
     #[test]
     fn scores_read_as_written_and_moods_wait_for_clap() {
         assert_eq!(weighted(Some("electronic:0.608, chillout:0.7,bad,x:nan")), vec![("chillout".to_string(), 0.7), ("electronic".to_string(), 0.608)]);
         let row = |moods: &str| AudioMuseRow { track: 1, energy: Some(0.7), key: Some("D minor".into()), style: None, moods: Some(moods.into()), embedding: None };
-        assert_eq!(moods_and_danceability(&row("danceable:0.00,happy:0.00,sad:0.00")), (Vec::new(), None), "CLAP not run yet");
-        let (moods, dance) = moods_and_danceability(&row("danceable:0.71,happy:0.40,sad:0.10,relaxed:0.31"));
-        assert_eq!(dance, Some(0.71));
-        assert_eq!(moods, vec![("happy".to_string(), 0.40), ("relaxed".to_string(), 0.31)], "those that stand out, danceable apart");
-        let d = details(Some(&row("danceable:0.71,happy:0.40")));
+        assert_eq!(danceability(&row("danceable:0.00,happy:0.00,sad:0.00")), None, "CLAP not run yet");
+        assert_eq!(mood_scores(Some("danceable:0.00,happy:0.00")), None);
+        assert_eq!(danceability(&row("danceable:0.71,happy:0.40,sad:0.10,relaxed:0.31")), Some(0.71));
+        // Happy stands out above 0.35, sad above 0.5: this track is happy, not sad.
+        let bars = [0.35, 0.5, 0.5, 0.5, 0.5];
+        let d = details(Some(&row("danceable:0.71,happy:0.40,sad:0.45")), &bars);
         assert_eq!(d["key"], "D minor");
         assert_eq!(d["style"], Value::Null);
-        assert_eq!(d["mood"][0]["name"], "happy");
-        assert_eq!(details(None)["energy"], Value::Null);
+        assert_eq!(d["mood"].as_array().map(|m| m.iter().map(|x| x["name"].clone()).collect::<Vec<_>>()), Some(vec![json!("happy")]));
+        assert_eq!(details(None, &bars)["energy"], Value::Null);
     }
 
     #[test]

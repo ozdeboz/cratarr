@@ -883,7 +883,9 @@ async fn track_details(State(app): State<Arc<App>>, Path((source, id)): Path<(St
             .as_ref()
             .and_then(|(s, u)| s.userdata.get(u, crate::userdata::Kind::Song, std::slice::from_ref(&song)).ok())
             .and_then(|mut m| m.remove(&song));
-        let mut muse = crate::app::audiomuse::details(cat.audiomuse_of(track).as_ref());
+        // Its moods: those it stands out on against the library's (the crates' facts, kept).
+        let stand_out = crate::app::audiomuse::stand_out(cat.crate_facts().ok().into_iter().flat_map(|f| f.iter().filter_map(|x| x.clap_moods).collect::<Vec<_>>()));
+        let mut muse = crate::app::audiomuse::details(cat.audiomuse_of(track).as_ref(), &stand_out);
         let muse = muse.as_object_mut().map(std::mem::take).unwrap_or_default();
         let mut details = json!({
             "path": rel,
