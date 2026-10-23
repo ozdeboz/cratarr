@@ -42,6 +42,20 @@ pub struct CratePage {
     pub genres: Vec<String>,
 }
 
+/// A Sounds like curve (lib/LikeCurve): how alike the closest are, closest first, and the profile at every step its
+/// handle can stop at.
+#[derive(Debug, serde::Serialize)]
+pub struct LikeCurve {
+    pub alike: Vec<f64>,
+    pub profiles: Vec<LikeStep>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct LikeStep {
+    pub count: usize,
+    pub profile: crates::Profile,
+}
+
 /// What sounds like a track or an album (`like:<item>[@<count>]`, `crates::like_crate`): named after it, an album's
 /// seeds its songs.
 async fn like_crate(id: &str, item: &str, count: usize) -> Result<CrateDef, ToggleError> {
@@ -2046,12 +2060,23 @@ impl PlaylistService {
     /// How alike the tracks that sound most like these seeds (song ids) are, closest first, 0 to 100, at most
     /// `crates::LIKE_MOST` of them: the Sounds like curve (lib/LikeCurve), cut where the crate ends.
     /// Over what a seed crate may show, as its tracks are picked (`CrateLibrary::resolved`): the libraries not in
-    /// `without`, less the tracks excluded everywhere.
-    pub async fn like_curve(&self, of: &[String], want: Option<&str>, without: &[String]) -> Result<Vec<f64>, ToggleError> {
+    /// `without`, less the tracks excluded everywhere. With the profile at every step its handle can stop at
+    /// (`crates::profiles_along`), so the profile follows a drag (the owner, 2026-10-23).
+    pub async fn like_curve(&self, of: &[String], want: Option<&str>, without: &[String]) -> Result<LikeCurve, ToggleError> {
         let lib = self.crate_library(want, false, false, without).await?;
         let excluded: HashSet<String> = self.own_crates()?.excluded().await?.into_iter().collect();
-        let among: Vec<&crates::Facts> = lib.files().filter(|f| !excluded.contains(&f.rel)).collect();
-        Ok(crates::closest(of, &lib.files, &among).into_iter().map(|(_, a)| (a * 10.0).round() / 10.0).collect())
+        let (of, lib) = (of.to_vec(), Arc::new(lib));
+        tokio::task::spawn_blocking(move || {
+            let among: Vec<&crates::Facts> = lib.files().filter(|f| !excluded.contains(&f.rel)).collect();
+            let closest = crates::closest(&of, &lib.files, &among);
+            let alike = closest.iter().map(|(_, a)| (a * 10.0).round() / 10.0).collect();
+            let tracks: Vec<&crates::Facts> = closest.iter().map(|(f, _)| *f).collect();
+            let scales = crates::Scales::of(&lib.files().collect::<Vec<_>>());
+            let profiles = crates::profiles_along(&tracks, &scales).into_iter().map(|(count, profile)| LikeStep { count, profile }).collect();
+            LikeCurve { alike, profiles }
+        })
+        .await
+        .map_err(|e| ToggleError::from(anyhow::anyhow!("{e}")))
     }
 
     /// The axes and their domains in the libraries not in `without`, for the builder (decision 0024, issue 4).

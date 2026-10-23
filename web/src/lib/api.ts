@@ -529,9 +529,11 @@ export const crateRows = (
 };
 /** A crate's tempo spread (decision 0041): its tracks' 5-BPM bands, 60 to 180, counted on the server. */
 export type TempoBands = { bands: number[]; with_tempo: number; total: number };
-/** How alike the tracks that sound most like these seeds are, closest first, 0 to 100 (lib/LikeCurve). */
+/** How alike the tracks that sound most like these seeds are, closest first, 0 to 100 (lib/LikeCurve), and the profile
+ *  of the closest `count` at every step its handle can stop at (the profile follows a drag). */
+export type LikeCurveData = { alike: number[]; profiles: { count: number; profile: ListProfileData }[] };
 export const likeCurve = (of: string[], source?: string, without?: string[]) =>
-  quietly<number[]>(`/api/like-curve?${new URLSearchParams({ of: of.join(','), ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);
+  quietly<LikeCurveData>(`/api/like-curve?${new URLSearchParams({ of: of.join(','), ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);
 export const crateTempo = (id: string, source?: string, favourites?: CrateFavourites, favouriteAlbums?: CrateFavourites, look: CrateLook = {}) => {
   const q = new URLSearchParams();
   if (favourites) q.set('favourites', favourites);

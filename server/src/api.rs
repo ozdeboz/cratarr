@@ -1393,7 +1393,7 @@ struct LikeCurveQuery {
 }
 
 /// How alike the tracks that sound most like some seeds are, closest first (the Sounds like curve).
-async fn like_curve(State(app): State<Arc<App>>, Query(q): Query<LikeCurveQuery>) -> Result<Json<Vec<f64>>, ApiError> {
+async fn like_curve(State(app): State<Arc<App>>, Query(q): Query<LikeCurveQuery>) -> Result<Json<crate::app::LikeCurve>, ApiError> {
     let of: Vec<String> = q.of.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
     Ok(Json(app.playlists.like_curve(&of, q.source.as_deref(), &without).await?))

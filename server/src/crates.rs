@@ -304,69 +304,115 @@ const TELLING: usize = 4;
 
 /// The profile of `list` (its tracks' facts) against `library` (every file's).
 pub fn profile(list: &[&Facts], library: &[&Facts]) -> Profile {
+    profile_in(list, &Scales::of(library))
+}
+
+/// What a profile measures a list against, worked out once for the library: each number's scale, each mood's middle
+/// and half its spread, and how many tracks have each style tag and artist (their rarity).
+pub struct Scales {
+    numbers: [(f64, f64); 4],
+    moods: [(f64, f64); 5],
+    styles: HashMap<String, usize>,
+    artists: HashMap<String, usize>,
+    tracks: usize,
+}
+
+/// The numbers a profile has, in its order, and where each is in a file's facts.
+const PROFILE_NUMBERS: [(&str, fn(&Facts) -> Option<f64>); 4] =
+    [("tempo", |f| f.bpm), ("energy", |f| f.energy), ("danceability", |f| f.danceability), ("year", |f| f.year)];
+
+fn sorted(vals: impl IntoIterator<Item = f64>) -> Vec<f64> {
+    let mut v: Vec<f64> = vals.into_iter().filter(|x| x.is_finite()).collect();
+    v.sort_by(f64::total_cmp);
+    v
+}
+
+/// How many of `fs` have each name (lowercased), each once per file.
+fn name_counts(fs: &[&Facts], names: fn(&Facts) -> &[String]) -> HashMap<String, (usize, String)> {
+    let mut c: HashMap<String, (usize, String)> = HashMap::new();
+    for f in fs {
+        for name in names(f).iter().collect::<std::collections::BTreeSet<_>>() {
+            c.entry(name.to_lowercase()).or_insert((0, name.clone())).0 += 1;
+        }
+    }
+    c
+}
+
+impl Scales {
+    pub fn of(library: &[&Facts]) -> Self {
+        let numbers = PROFILE_NUMBERS.map(|(key, get)| match key {
+            "tempo" => (TEMPO_LO, TEMPO_LO + TEMPO_BAND * TEMPO_BANDS as f64),
+            // The library's oldest to newest (the owner: its 1950s albums were lost at the 5th percentile, 1993), a
+            // year before 1900 being a broken tag ("1").
+            "year" => {
+                let all = sorted(library.iter().filter_map(|f| f.year).filter(|y| *y >= 1900.0));
+                (all.first().copied().unwrap_or(1900.0), all.last().copied().unwrap_or(2100.0))
+            }
+            _ => {
+                let all = sorted(library.iter().filter_map(|f| get(f)));
+                (crate::similarity::quantile(&all, 0.05), crate::similarity::quantile(&all, 0.95))
+            }
+        });
+        let moods = std::array::from_fn(|k| {
+            let all = sorted(library.iter().filter_map(|f| f.clap_moods.map(|m| m[k] as f64)));
+            let half = (crate::similarity::quantile(&all, 0.95) - crate::similarity::quantile(&all, 0.05)) / 2.0;
+            (crate::similarity::quantile(&all, 0.5), half.max(f64::EPSILON))
+        });
+        let counts = |names| name_counts(library, names).into_iter().map(|(k, (c, _))| (k, c)).collect();
+        Scales { numbers, moods, styles: counts(|f| &f.styles), artists: counts(|f| &f.artists), tracks: library.len() }
+    }
+}
+
+/// The profile of `list` against the library's `scales`.
+pub fn profile_in(list: &[&Facts], scales: &Scales) -> Profile {
     let n = list.len();
     let mut out = Profile { tracks: n, heard: list.iter().filter(|f| f.clap_moods.is_some()).count(), ..Profile::default() };
-    out.styles = telling(list, library, |f| &f.styles);
-    out.artists = telling(list, library, |f| &f.artists);
-    let sorted = |vals: Vec<f64>| {
-        let mut v: Vec<f64> = vals.into_iter().filter(|x| x.is_finite()).collect();
-        v.sort_by(f64::total_cmp);
-        v
-    };
-    let numbers: [(&str, fn(&Facts) -> Option<f64>); 4] =
-        [("tempo", |f| f.bpm), ("energy", |f| f.energy), ("danceability", |f| f.danceability), ("year", |f| f.year)];
-    for (key, get) in numbers {
-        let mine = sorted(list.iter().filter_map(|f| get(f)).collect());
+    out.styles = telling(list, &scales.styles, scales.tracks, |f| &f.styles);
+    out.artists = telling(list, &scales.artists, scales.tracks, |f| &f.artists);
+    for ((key, get), (lo, hi)) in PROFILE_NUMBERS.into_iter().zip(scales.numbers) {
+        let mine = sorted(list.iter().filter_map(|f| get(f)));
         let Some(&first) = mine.first() else { continue };
         if mine.last() == Some(&first) {
             out.numbers.push(NumberRow { key, lo: first, hi: first, bins: Vec::new(), q1: first, mid: first, q3: first, one: Some(first) });
             continue;
         }
-        let (lo, hi) = if key == "tempo" {
-            (TEMPO_LO, TEMPO_LO + TEMPO_BAND * TEMPO_BANDS as f64)
-        } else if key == "year" {
-            // The library's oldest to newest (the owner: its 1950s albums were lost at the 5th percentile, 1993), a
-            // year before 1900 being a broken tag ("1").
-            let all = sorted(library.iter().filter_map(|f| f.year).filter(|y| *y >= 1900.0).collect());
-            (all.first().copied().unwrap_or(1900.0), all.last().copied().unwrap_or(2100.0))
-        } else {
-            let all = sorted(library.iter().filter_map(|f| get(f)).collect());
-            (crate::similarity::quantile(&all, 0.05), crate::similarity::quantile(&all, 0.95))
-        };
         let q = |p| crate::similarity::quantile(&mine, p);
         out.numbers.push(NumberRow { key, lo, hi, bins: density(mine.iter().copied(), lo, hi), q1: q(0.25), mid: q(0.5), q3: q(0.75), one: None });
     }
     if out.heard > 0 {
         for (k, name) in crate::similarity::MOODS.into_iter().enumerate() {
-            let of = |fs: &[&Facts]| sorted(fs.iter().filter_map(|f| f.clap_moods.map(|m| m[k] as f64)).collect());
-            let (mine, all) = (of(list), of(library));
-            let half = (crate::similarity::quantile(&all, 0.95) - crate::similarity::quantile(&all, 0.05)) / 2.0;
-            let lift = (crate::similarity::quantile(&mine, 0.5) - crate::similarity::quantile(&all, 0.5)) / half.max(f64::EPSILON);
+            let mine = sorted(list.iter().filter_map(|f| f.clap_moods.map(|m| m[k] as f64)));
+            let (middle, half) = scales.moods[k];
+            let lift = (crate::similarity::quantile(&mine, 0.5) - middle) / half;
             out.moods.push(MoodLift { name, lift: lift.clamp(-1.0, 1.0) });
         }
     }
     out
 }
 
-/// The names most telling of a list: on many of its tracks and few of the library's (tf-idf, as one similarity
-/// weighs words), on at least two of its tracks or a twentieth of them (one odd tag does not lead an album).
-fn telling(list: &[&Facts], library: &[&Facts], names: fn(&Facts) -> &[String]) -> Vec<String> {
-    let count = |fs: &[&Facts]| {
-        let mut c: HashMap<String, (usize, String)> = HashMap::new();
-        for f in fs {
-            for name in names(f).iter().collect::<std::collections::BTreeSet<_>>() {
-                c.entry(name.to_lowercase()).or_insert((0, name.clone())).0 += 1;
-            }
-        }
-        c
-    };
-    let (mine, all) = (count(list), count(library));
+/// Where a Sounds like crate's handle can stop (as lib/LikeCurve tidies it): every 5 up to 100, every 10 up to 400,
+/// every 50 after, from `LIKE_FEWEST` to `most`.
+pub fn like_steps(most: usize) -> Vec<usize> {
+    (LIKE_FEWEST..=most.min(LIKE_MOST)).filter(|n| if *n < 100 { n % 5 == 0 } else if *n < 400 { n % 10 == 0 } else { n % 50 == 0 }).collect()
+}
+
+/// The profile of each of the first `n` of `closest` at every step a handle can stop at (the owner, 2026-10-23: the
+/// profile follows the drag), against the library's `scales`, worked out at once so a drag asks nothing more.
+pub fn profiles_along(closest: &[&Facts], scales: &Scales) -> Vec<(usize, Profile)> {
+    like_steps(closest.len()).into_iter().map(|n| (n, profile_in(&closest[..n], scales))).collect()
+}
+
+/// The names most telling of a list: on many of its tracks and few of the library's (`library`: how many of its
+/// `total` tracks have each, lowercased; tf-idf, as one similarity weighs words), on at least two of its tracks or a
+/// twentieth of them (one odd tag does not lead an album).
+fn telling(list: &[&Facts], library: &HashMap<String, usize>, total: usize, names: fn(&Facts) -> &[String]) -> Vec<String> {
+    let mine = name_counts(list, names);
     let least = if list.len() < 2 { 1 } else { 2.max(list.len().div_ceil(20)) };
-    let total = library.len().max(1) as f64;
+    let total = total.max(1) as f64;
     let mut weighed: Vec<(f64, String)> = mine
         .into_iter()
         .filter(|(_, (c, _))| *c >= least)
-        .map(|(k, (c, name))| (c as f64 / list.len() as f64 * (total / all.get(&k).map_or(1, |x| x.0).max(1) as f64).ln(), name))
+        .map(|(k, (c, name))| (c as f64 / list.len() as f64 * (total / library.get(&k).copied().unwrap_or(1).max(1) as f64).ln(), name))
         .filter(|(w, _)| *w > 0.0)
         .collect();
     weighed.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
@@ -1034,6 +1080,10 @@ mod tests {
         let shown: Vec<&Facts> = files.iter().filter(|f| f.rel != "seed.flac").collect();
         assert_eq!(select(&files, &resolved(&like.conditions, &files, &shown), &w), ["near.flac", "far.flac"]);
         assert_eq!(like_of("like:tr-1@2"), Some(("tr-1", LIKE_FEWEST)));
+        let steps = like_steps(1000);
+        assert_eq!((steps[0], steps[1], steps.iter().rev().nth(1).copied(), steps.last().copied()), (10, 15, Some(950), Some(1000)));
+        assert!(steps.contains(&95) && steps.contains(&100) && steps.contains(&390) && steps.contains(&400) && !steps.contains(&405));
+        assert_eq!(like_steps(23), [10, 15, 20], "no further than there are tracks");
         assert_eq!(like_of("like:al-x"), Some(("al-x", LIKE_COUNT)));
         assert_eq!(like_of("like:al-x@5000"), Some(("al-x", LIKE_MOST)));
         // Unworked out, or seeds never heard: nothing.

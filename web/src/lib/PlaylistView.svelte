@@ -29,6 +29,7 @@
     crateTempo,
     filterList,
     likeCurve,
+    type LikeCurveData,
     type ListProfileData,
     type TempoBands,
     type CrateLook,
@@ -619,7 +620,16 @@
   /** A Sounds like crate (`like:<item>@<count>`): its seed and how many, and its curve (lib/LikeCurve), read from its
    *  condition's seeds; moving the cut opens the crate of that many in its place. */
   const like = $derived(likeParts(crate));
-  let curve = $state<number[] | null>(null);
+  let curve = $state<LikeCurveData | null>(null);
+  /** Where the curve's handle is while dragged: the count and the profile follow it (the owner, 2026-10-23), from the
+   *  profiles sent with the curve, so a drag asks nothing of the server; the tracks follow on release. */
+  let preview = $state<number | null>(null);
+  const previewProfile = $derived.by(() => {
+    if (preview === null || !curve) return null;
+    let best: LikeCurveData['profiles'][number] | null = null;
+    for (const p of curve.profiles) if (p.count <= preview && (!best || p.count > best.count)) best = p;
+    return best?.profile ?? null;
+  });
   $effect(() => {
     const c = crate;
     curve = null;
@@ -774,6 +784,7 @@
   // and bitrate; a playlist or a crate: how many tracks, and the length), and the genres.
   const details = $derived.by(() => {
     if (crateEditing) return crateTotal === null ? '' : plural(crateTotal, 'track');
+    if (crate && preview !== null) return plural(preview, 'track');
     if (crate) return rows ? plural(total, 'track') : '';
     if (multi) return plural(chosenCount, 'track');
     if (!rows) return '';
@@ -1592,10 +1603,10 @@
           <!-- A crate's exclusions (decision 0024, amended 2026-10-19): a tap shows them, to put back. -->
           {#if leftOut}<button class="details left-out" onclick={() => (leftOutOpen = true)}><Icon name="crateOut" size={14} /><span>{leftOut.toLocaleString()} excluded</span></button>{/if}
         </div>
-        {#if (profile || (like && curve?.length)) && !multi}
+        {#if (profile || (like && curve?.alike.length)) && !multi}
           <div class="head-spread">
-            {#if like && curve?.length}<LikeCurve {curve} count={like.count} onchange={(n) => viewLike(like.item, n)} />{/if}
-            {#if profile}<ListProfile data={profile} ownArtist={!!album || !!artist} />{/if}
+            {#if like && curve?.alike.length}<LikeCurve curve={curve.alike} count={like.count} onpreview={(n) => (preview = n)} onchange={(n) => viewLike(like.item, n)} />{/if}
+            {#if previewProfile ?? profile}<ListProfile data={(previewProfile ?? profile)!} ownArtist={!!album || !!artist} />{/if}
           </div>
         {:else if headTempo}
           <div class="head-spread">

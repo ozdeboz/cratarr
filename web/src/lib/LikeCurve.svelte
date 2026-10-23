@@ -8,12 +8,15 @@
     count,
     fewest = 10,
     onchange,
+    onpreview,
   }: {
     /** How alike the closest tracks are, closest first (the server's /api/like-curve). */
     curve: readonly number[];
     count: number;
     fewest?: number;
     onchange: (count: number) => void;
+    /** Where the handle is while it is dragged (null: let go), so what depends on it can follow. */
+    onpreview?: (count: number | null) => void;
   } = $props();
 
   const W = 300;
@@ -44,14 +47,19 @@
   function down(e: PointerEvent) {
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
     drag = rankOf(e);
+    onpreview?.(drag);
   }
   function move(e: PointerEvent) {
-    if (drag !== null) drag = rankOf(e);
+    if (drag === null) return;
+    const n = rankOf(e);
+    if (n !== drag) onpreview?.(n);
+    drag = n;
   }
   function up() {
     if (drag === null) return;
     const n = drag;
     drag = null;
+    onpreview?.(null);
     if (n !== count) onchange(n);
   }
   function key(e: KeyboardEvent) {

@@ -61,7 +61,7 @@
     const of = v.of.join(',');
     let gone = false;
     likeCurve(of.split(','), undefined, hiddenLibraries()).then(
-      (c) => !gone && (curve = c),
+      (c) => !gone && (curve = c.alike),
       () => !gone && (curve = null),
     );
     return () => {
