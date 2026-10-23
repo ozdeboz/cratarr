@@ -44,6 +44,9 @@ pub struct ByName {
 pub struct CratePage {
     pub source: String,
     pub total: usize,
+    /// The most rows this page could hold (the limit asked for, within what the server serves a page): a page with
+    /// fewer is the crate's last.
+    pub limit: usize,
     pub rows: Vec<PlaylistRow>,
     pub genres: Vec<String>,
 }
@@ -1296,7 +1299,7 @@ impl PlaylistService {
     }
 
     /// Rows for these lines (a playlist's, or a page of a crate's), with what the catalogue knows of their files.
-    async fn rows_of(&self, entries: Vec<String>, source: &str) -> Result<Vec<PlaylistRow>, ToggleError> {
+    pub(super) async fn rows_of(&self, entries: Vec<String>, source: &str) -> Result<Vec<PlaylistRow>, ToggleError> {
         let (c, sid, music) = (self.lib.catalogue(), source.to_string(), self.lib.music());
         let rows = tokio::task::spawn_blocking(move || -> Result<Vec<PlaylistRow>> {
             let facts = c.line_rows(&sid, &entries)?;
@@ -1406,7 +1409,7 @@ impl PlaylistService {
     }
 
     /// The server (`want`, else the first connected) and its id.
-    fn source_of(&self, want: Option<&str>) -> Result<(String, Arc<dyn source::Source>), ToggleError> {
+    pub(super) fn source_of(&self, want: Option<&str>) -> Result<(String, Arc<dyn source::Source>), ToggleError> {
         let sources = self.lib.connected();
         want.and_then(|w| sources.iter().find(|(a, _)| a.cfg.id == w))
             .or_else(|| sources.first())
@@ -1553,7 +1556,7 @@ impl PlaylistService {
     }
 
     /// The lines these conditions select, newest first, and the server they are for.
-    async fn crate_lines_of(&self, conditions: &[crates::Condition], want: Option<&str>) -> Result<(String, Vec<String>), ToggleError> {
+    pub(super) async fn crate_lines_of(&self, conditions: &[crates::Condition], want: Option<&str>) -> Result<(String, Vec<String>), ToggleError> {
         let (lib, lines) = self.crate_selection(conditions, want).await?;
         Ok((lib.source, lines))
     }
@@ -1587,7 +1590,7 @@ impl PlaylistService {
     }
 
     /// A crate's conditions as its toggles show it: as given, else as saved.
-    async fn crate_shown(&self, id: &str, fav: Option<crates::Favourites>, albums: Option<crates::Favourites>) -> Result<Vec<crates::Condition>, ToggleError> {
+    pub(super) async fn crate_shown(&self, id: &str, fav: Option<crates::Favourites>, albums: Option<crates::Favourites>) -> Result<Vec<crates::Condition>, ToggleError> {
         let def = self.crate_def(id).await?;
         let fav = match fav {
             Some(f) => f,
@@ -1740,7 +1743,7 @@ impl PlaylistService {
         let total = lines.len();
         let page: Vec<String> = lines.into_iter().skip(offset).take(limit).collect();
         let rows = self.rows_of(page, &source).await?;
-        Ok(CratePage { source, total, rows, genres })
+        Ok(CratePage { source, total, limit, rows, genres })
     }
 
     /// Make playlist: the crate's tracks now, as a new, ordinary playlist (a snapshot; decision 0024).

@@ -131,8 +131,8 @@ The owner: "a play button on the crates, which automatically plays it with shuff
   2026-10-16): its icon sits in the picture's lower right corner. Here it is Shuffle's icon, since that is what it
   does.
 - **Both toggles apply.** The tracks are the ones the crate's two toggles let through, as it shows them.
-- **A big crate is sampled.** A crate comes 500 tracks at a time, so the queue takes up to three stretches of 500 from
-  anywhere in it, shuffled together. A crate of up to 1,500 tracks plays whole.
+- ~~**A big crate is sampled.** A crate comes 500 tracks at a time, so the queue takes up to three stretches of 500 from
+  anywhere in it, shuffled together. A crate of up to 1,500 tracks plays whole.~~ Replaced below (2026-10-23).
 
 ## Amendment (2026-10-19): exclusions, a crate's and Cratarr's
 
@@ -184,3 +184,17 @@ The word in the page is **Exclude**; the server's names stay `left_out` for a cr
   - Never picked by Radio, Autoplay, Similar songs, the shuffles of the library and of the favourites, or Subsonic's
     random songs.
   - Still played when chosen by hand: an album, a playlist, a search, tracks named one by one, a queue taken up.
+
+## Amendment (2026-10-23): what plays is the server's choice
+
+The owner found that Unlisted, with more than 10,000 tracks, played the same few each time from its panel: the panel
+played the rows it had loaded (its first page). Then: "we should limit to maximum 500 tracks in our queue."
+
+- **One operation plays any collection**, a crate (both toggles), a genre, a playlist, an album, an artist or tracks
+  named one by one: `POST /api/play` (server/src/app/play.rs), from every surface and for every player. The server
+  picks the tracks; the page's own player queues what it answers, and on the server's player (or one of Cratarr's by
+  name) the server queues them itself.
+- **At most 500 tracks a queue** (one constant on the server). Play takes the collection's order: its first 500, or
+  from a given track on (those before it fill up the 500 near the end). Shuffle draws 500 evenly from all of it, then
+  mixes them; a crate of 500 or fewer plays whole. A Jellyfin player (Finamp) gets the 100 it holds.
+- A crate's rows say the page size they kept (`limit`), so no caller takes 500 for the 1,000 it asked.

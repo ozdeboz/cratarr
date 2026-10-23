@@ -315,6 +315,34 @@ export const queueTrack = (id: string, mode: 'next' | 'last', source?: string) =
 export const queueTracks = (ids: string[], mode: 'next' | 'last', source?: string) =>
   post<{ player: string }>(`/api/queue/add${follow(source)}`, { ids, mode });
 
+// What plays is the server's choice (server/src/app/play.rs): any collection, played, shuffled, put next or queued, at
+// most 500 of its tracks, picked from all of it (the owner, 2026-10-23: a big crate's Shuffle played the same few, its
+// panel's first page). lib/play.svelte.ts plays them where the output is.
+export type Collection =
+  | { kind: 'crate'; id: string } // genres are crates: id 'genre:<name>'
+  | { kind: 'playlist'; id: string }
+  | { kind: 'album'; source: string; id: string }
+  | { kind: 'artist'; source: string; name: string }
+  | { kind: 'tracks'; source: string; ids: string[] };
+/** play: in its order (from a track, or its first 500) · shuffle: 500 from all of it, mixed · next: after the playing
+ *  track · last: at the end of the queue. */
+export type PlayHow = 'play' | 'shuffle' | 'next' | 'last';
+/** A crate with its two toggles as the page shows them (a tap may be on its way); else as saved. */
+export type Picking = Collection | { kind: 'crate'; id: string; favourites?: CrateFavourites; favourite_albums?: CrateFavourites };
+/** The tracks chosen, in queue order (`n`: each one's place in the collection, for shuffle off), the one that plays
+ *  first, how many it has that can be played, and the player that took them when the server queued them. */
+export type Picked = {
+  source: string;
+  tracks: (QueueTrack & { n?: number; duration_secs?: number | null })[];
+  index: number;
+  total: number;
+  player?: string;
+};
+/** The server picks what plays of `what`; with `on` it also queues them: on the server's player (`server`), or on one
+ *  of Cratarr's players by name. `from`: the track (its id) to play first. */
+export const pickCollection = (what: Picking, how: PlayHow, opts: { from?: string; on?: 'server' | { player: string }; source?: string } = {}) =>
+  post<Picked>(`/api/play${follow(opts.source)}`, { what, how, ...(opts.from ? { from: opts.from } : {}), ...(opts.on ? { on: opts.on } : {}) });
+
 /** A crate (decision 0024): a permanent one or one's own; `count` null when not known (the server's favourites could
  *  not be read). */
 /** `favourites`: its toggle's setting; `counts`: its size with each setting (null: the favourites are not known). */
@@ -398,7 +426,8 @@ export const crateRows = (id: string, offset: number, limit: number, source?: st
   if (favourites) q.set('favourites', favourites);
   if (favouriteAlbums) q.set('favourite_albums', favouriteAlbums);
   if (source) q.set('source', source);
-  return quietly<{ source: string; total: number; rows: PlaylistRow[]; genres: string[] }>(`/api/crates/${encodeURIComponent(id)}/rows?${q}`);
+  // `limit`: the most rows the page could hold (the server serves 500 at most a page); a page with fewer is the last.
+  return quietly<{ source: string; total: number; limit?: number; rows: PlaylistRow[]; genres: string[] }>(`/api/crates/${encodeURIComponent(id)}/rows?${q}`);
 };
 /** A crate's tempo spread (decision 0041): its tracks' 5-BPM bands, 60 to 180, counted on the server. */
 export type TempoBands = { bands: number[]; with_tempo: number; total: number };

@@ -1,8 +1,9 @@
 // The permanent crates and their sizes (decision 0024), for the Crates page and the crate viewed in the panel. Asked for
 // when looked at, and again when the playlists change (sorting a track into one shrinks Unlisted).
-import { albumCoverUrl, crateImageUrl, crateRows, deleteCrate, getCrates, queueTracks, leaveOutOfCrate, type Excluding, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites, type PlaylistRow } from './api';
-import { dropFromQueue, enqueue, local, startRadio, type LocalTrack } from './localPlayer.svelte';
-import { isLocal, playPlaylistFrom, shownPlaylists } from './output.svelte';
+import { albumCoverUrl, crateImageUrl, deleteCrate, getCrates, leaveOutOfCrate, type Excluding, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites } from './api';
+import { dropFromQueue, local, startRadio } from './localPlayer.svelte';
+import { isLocal, shownPlaylists } from './output.svelte';
+import { pickOf, playCollection } from './play.svelte';
 import { prefs } from './prefs.svelte';
 import { viewPlaylist } from './panel.svelte';
 import { toast } from './toast.svelte';
@@ -198,71 +199,20 @@ export function startCrate(name: string, conditions: Condition[] = []) {
   viewPlaylist(NEW_CRATE);
 }
 
-// A crate shuffled from its card (the owner, 2026-10-19: "a play button on the crates, which automatically plays it with
-// shuffle"): its tracks as both its toggles let them through, from anywhere in it, in a random order, as a new queue.
-// A crate comes 500 tracks at a time, so a big one is sampled: up to three stretches of 500 from anywhere in it.
-// Shuffle (its card's picture, its panel, its menu): SHUFFLED tracks from the whole crate, however big (the owner,
-// 2026-10-23: Unlisted's 10,000 and more played the same few each time, the panel's first page; a queue holds 500 at
-// most). A crate that small
-// whole; else STRETCHES short stretches at random places across all of it (a few requests, each a page the server
-// serves at once), shuffled together.
-const PAGE_MOST = 500;
-const SHUFFLED = 500;
-const STRETCHES = 25;
-const STRETCH = 20;
-const shuffled = <T>(list: T[]) => {
-  const a = [...list];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-};
-const asTracks = (source: string, rows: PlaylistRow[]): LocalTrack[] =>
-  rows
-    .filter((r) => r.id && !r.missing)
-    .map((r) => ({ source, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: r.album_id ?? null, duration_secs: r.duration_secs }));
-/** Rows `from`..`from + n` of the crate as its favourites settings have it, in pages the server serves. */
-async function crateSpan(id: string, from: number, n: number) {
-  const pages = await Promise.all(
-    Array.from({ length: Math.ceil(n / PAGE_MOST) }, (_, i) => crateRows(id, from + i * PAGE_MOST, Math.min(PAGE_MOST, n - i * PAGE_MOST), prefs.source || undefined, favouritesOf(id), favouriteAlbumsOf(id))),
-  );
-  return { source: pages[0]?.source ?? '', total: pages[0]?.total ?? 0, rows: pages.flatMap((p) => p.rows) };
-}
-export async function shuffleCrate(id: string, name: string) {
-  const head = await crateSpan(id, 0, 1);
-  const total = head.total;
-  let rows: PlaylistRow[];
-  if (total <= SHUFFLED * 1.5) rows = (await crateSpan(id, 0, total)).rows;
-  else {
-    const slots = Math.floor(total / STRETCH);
-    const picks = shuffled([...Array(slots).keys()]).slice(0, STRETCHES);
-    rows = (await Promise.all(picks.map((k) => crateSpan(id, k * STRETCH, STRETCH)))).flatMap((p) => p.rows);
-  }
-  const tracks = shuffled(asTracks(head.source, rows)).slice(0, SHUFFLED);
-  if (!tracks.length) throw new Error('Nothing in this crate to play');
-  await playPlaylistFrom(name, head.source, tracks, 0);
-}
-
-// A crate's menu's actions (decision 0058: lib/CrateMenu), from wherever it is opened: its tracks as its favourites
-// settings have it (up to MOST, as its panel's Make playlist and radio take), played, put next, queued or radio's seed.
-export async function playCrate(id: string, name: string, mode: 'play' | 'next' | 'last') {
-  const got = await crateSpan(id, 0, mode === 'play' ? SHUFFLED : PAGE_MOST);
-  const { source } = got;
-  const tracks = asTracks(source, got.rows);
-  if (!tracks.length) throw new Error('Nothing in this crate to play');
-  if (mode === 'play') return playPlaylistFrom(name, source, tracks, 0);
-  if (isLocal()) return enqueue(tracks, mode);
-  await queueTracks(
-    tracks.map((t) => t.id),
-    mode,
-    source,
-  );
-}
-/** Start radio: tracks like the crate's from the whole library (up to 300 of its tracks as the seed, decision 0036). */
+// A crate's Play and Shuffle, Play next and Add to queue (its card's picture, its panel, its menu: decision 0058's
+// lib/CrateMenu): the server picks the tracks from the whole crate as its two toggles let them through (lib/play.svelte.ts;
+// the owner, 2026-10-23: Unlisted's 10,000 and more played the same few each time, the panel's first page; a queue holds
+// 500 at most). Shuffle: 500 drawn from all of it, mixed (all of it when it is that small); Play: its first 500.
+export const shuffleCrate = (id: string, name: string) => playCollection({ kind: 'crate', id }, 'shuffle', name);
+export const playCrate = (id: string, name: string, mode: 'play' | 'next' | 'last') => playCollection({ kind: 'crate', id }, mode, name);
+/** Start radio: tracks like the crate's from the whole library, seeded with up to 300 of its tracks drawn from all of
+ *  it (decision 0036). */
 export async function crateRadio(id: string, name: string) {
-  const ids = (await crateRows(id, 0, PAGE_MOST, 'cratarr')).rows.flatMap((r) => (r.id ? [r.id] : []));
-  await startRadio(ids.length > 300 ? shuffled(ids).slice(0, 300) : ids, name);
+  const { tracks } = await pickOf({ kind: 'crate', id }, 'shuffle', 'cratarr');
+  await startRadio(
+    tracks.slice(0, 300).map((t) => t.id),
+    name,
+  );
 }
 /** One's own crate deleted, Undo bringing it back. */
 export async function deleteOwnCrate(id: string) {
