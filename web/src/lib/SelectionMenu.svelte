@@ -2,7 +2,7 @@
   // The menu of what is ticked (decision 0058: a selection is an object, its menu the same as one's; the select bars'
   // ⋮ at their far right): several tracks, or several albums' tracks. Play, Shuffle, Play next and Add to queue as the
   // large actions (the server's choice of them, 500 at most: lib/play); then Add to playlist; Download (in the app),
-  // Export….
+  // Export…; Adjust BPM (administrators: lib/TempoStep).
   import MenuSheet from './MenuSheet.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuGroup from './MenuGroup.svelte';
@@ -10,6 +10,8 @@
   import ExportStep from './ExportStep.svelte';
   import PlaylistsStep from './PlaylistsStep.svelte';
   import { download, inApp } from './app.svelte';
+  import { me } from './me.svelte';
+  import TempoStep from './TempoStep.svelte';
   import type { LocalTrack } from './localPlayer.svelte';
   import { playCollection } from './play.svelte';
   import { plural } from './insights.svelte';
@@ -31,6 +33,7 @@
   });
   let step = $state<ToPlaylistStep>('menu');
   let exporting = $state(false);
+  let tempo = $state(false);
   let working = $state(false);
 
   async function play(how: 'play' | 'shuffle' | 'next' | 'last') {
@@ -53,7 +56,7 @@
   {onclose}
   {title}
   chips={[plural(tracks.length, 'track')]}
-  actions={exporting || step !== 'menu'
+  actions={exporting || tempo || step !== 'menu'
     ? []
     : [
         { icon: 'play', label: 'Play', disabled: working || !ids.length, onclick: () => play('play') },
@@ -61,11 +64,13 @@
         { icon: 'playNext', label: 'Play next', disabled: working || !ids.length, onclick: () => play('next') },
         { icon: 'listAdd', label: 'Add to queue', disabled: working || !ids.length, onclick: () => play('last') },
       ]}
-  onback={exporting ? () => (exporting = false) : step === 'menu' ? null : () => (step = step === 'again' ? 'lists' : 'menu')}
-  step={exporting ? 'export' : step}
+  onback={exporting ? () => (exporting = false) : tempo ? () => (tempo = false) : step === 'menu' ? null : () => (step = step === 'again' ? 'lists' : 'menu')}
+  step={exporting ? 'export' : tempo ? 'tempo' : step}
 >
   {#if exporting}
     <ExportStep what={{ kind: 'tracks', name: title, tracks: tracks.map((t) => ({ source: t.source, id: t.id })) }} {onclose} />
+  {:else if tempo}
+    <TempoStep {source} tracks={tracks.map((t) => ({ id: t.id, name: t.name }))} />
   {:else if step === 'menu'}
     <!-- The shared groups, in their order (decision 0058). -->
     <MenuCards>
@@ -85,6 +90,11 @@
         {/if}
         <MenuEntry icon="download" label="Export…" onclick={() => (exporting = true)} />
       </MenuGroup>
+      {#if me.admin && source !== 'device'}
+        <MenuGroup>
+          <MenuEntry icon="gauge" label="Adjust BPM" onclick={() => (tempo = true)} />
+        </MenuGroup>
+      {/if}
     </MenuCards>
   {:else}
     <PlaylistsStep to={toList} bind:step {onclose} />

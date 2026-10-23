@@ -3,7 +3,7 @@
 //! value as stored: nothing is split or merged here (see `normalise`). Cover art is not read.
 
 /// Bumped when reading improves, so files that failed before are tried again (see `Catalogue::open`).
-pub const READER_VERSION: u32 = 4;
+pub const READER_VERSION: u32 = 5;
 
 /// What is wrong with a file that could still be read (a file that cannot be read at all is an error instead).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,7 +68,7 @@ fn normalised(key: ItemKey) -> Option<&'static str> {
         ItemKey::Composer => "composer",
         ItemKey::Label => "label",
         ItemKey::CatalogNumber => "catalognumber",
-        ItemKey::Bpm => "bpm",
+        ItemKey::Bpm | ItemKey::IntegerBpm => "bpm",
         ItemKey::ReplayGainTrackGain => "replaygain_track_gain",
         ItemKey::ReplayGainTrackPeak => "replaygain_track_peak",
         ItemKey::ReplayGainAlbumGain => "replaygain_album_gain",

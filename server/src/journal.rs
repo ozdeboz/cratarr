@@ -124,6 +124,8 @@ pub enum Change {
     LeftOut { crate_id: String, before: crate::crates::LeftOut, after: crate::crates::LeftOut },
     /// The tracks excluded from every automatic pick (decision 0024, amended 2026-10-19): their lines before and after.
     Excluded { before: Vec<String>, after: Vec<String> },
+    /// Tracks' tempo adjusted (Adjust BPM, 2026-10-23): each one's BPM tag before and after.
+    Tempo { tracks: Vec<crate::app::tempo::TempoChange> },
 }
 
 /// One playlist's file before a change, and the fingerprint of the file the change left.

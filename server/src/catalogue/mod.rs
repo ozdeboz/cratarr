@@ -383,6 +383,8 @@ impl Catalogue {
         // A better reader may read what an older one could not.
         if cat.meta("reader").as_deref() != Some(&tags::READER_VERSION.to_string()) {
             cat.db().execute("UPDATE files SET state = ?1 WHERE state = ?2", params![PENDING, FAILED])?;
+            // Reader 5 names ID3v2's TBPM and MP4's tmpo "bpm" as it already named Vorbis's BPM: the tags read before.
+            cat.db().execute("UPDATE tags SET name = 'bpm' WHERE raw IN ('TBPM', 'tmpo') AND name IS NULL", [])?;
             cat.set_meta("reader", &tags::READER_VERSION.to_string());
         }
         // Track ids are this catalogue's own: one made afresh numbers them anew, and what holds ids from the old one
@@ -1476,6 +1478,23 @@ impl Catalogue {
     // `analysis::VERSION`, waits to be analysed again (`unanalysed`). It follows its file through moves, a parked
     // folder and the trash, as the tags do.
 
+    /// A file Cratarr rewrote itself (its tags; crate::retag), its audio untouched: its analysis and beats are carried
+    /// over to it (they are tied to the file's size and time) and its tags read again on the next pass, started now.
+    /// Blocking.
+    pub fn retagged(&self, folder: i64, rel: &str, before: (u64, i64), after: (u64, i64)) -> Result<()> {
+        let db = self.db();
+        for table in ["analysis", "beat_this"] {
+            db.execute(
+                &format!("UPDATE {table} SET size = ?3, mtime = ?4 WHERE folder = ?1 AND rel = ?2 AND size = ?5 AND mtime = ?6"),
+                params![folder, rel, after.0 as i64, after.1, before.0 as i64, before.1],
+            )?;
+        }
+        db.execute("UPDATE files SET size = ?3, mtime = ?4, state = 0 WHERE folder = ?1 AND rel = ?2", params![folder, rel, after.0 as i64, after.1])?;
+        drop(db);
+        self.poke();
+        Ok(())
+    }
+
     /// Keeps a file's analysis (the pass, or an import): replaces what it had. Blocking.
     pub fn store_analysis(&self, folder: i64, rel: &str, size: u64, mtime: i64, a: &crate::analysis::Analysis) -> Result<()> {
         store_analysis(&self.db(), folder, rel, size, mtime, a, now_secs())
@@ -2425,6 +2444,28 @@ mod tests {
         // It follows its file.
         cat.move_files(folder, "A - B (2020)", folder, "A - B (2020) moved").unwrap();
         assert!(cat.analysis_of(folder, &two.1.replace("A - B (2020)", "A - B (2020) moved")).is_some());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_file_cratarr_retagged_keeps_its_analysis_and_is_read_again() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        let (folder, one, path, size, mtime) = cat.unanalysed(10).unwrap().into_iter().find(|t| t.1.ends_with("One.mp3")).unwrap();
+        cat.store_analysis(folder, &one, size, mtime, &an_analysis(-3.0, 500)).unwrap();
+        std::fs::write(&path, b"its tags written again, its audio as it was").unwrap();
+        let m = std::fs::metadata(&path).unwrap();
+        let after = (m.len(), m.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64);
+        cat.retagged(folder, &one, (size, mtime), after).unwrap();
+        assert_eq!(cat.analysis_of(folder, &one).unwrap().bpm, Some(120.0), "carried over");
+        let state: i64 = cat.db().query_row("SELECT state FROM files WHERE folder = ?1 AND rel = ?2", params![folder, one], |r| r.get(0)).unwrap();
+        assert_eq!(state, PENDING, "its tags are read again");
+        cat.walk_all();
+        read_as_audio(&cat);
+        assert!(cat.analysis_of(folder, &one).is_some(), "the walk finds it as it is");
+        assert!(cat.unanalysed(10).unwrap().iter().all(|t| t.1 != one), "not analysed again");
         std::fs::remove_dir_all(&d).ok();
     }
 

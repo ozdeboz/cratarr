@@ -10,7 +10,7 @@
   // its cover) or any other's (a long-press on a row). A sheet as Finamp's track menu: the track on the card (with the
   // heart), Play next, Add to queue and Start radio as the large actions, then in the album menu's order: View album,
   // Go to its artist and genres, the favourite, Add to playlist (the playlists as toggle cards, a tap adds or removes),
-  // Download, Share, Details, Web search.
+  // Download, Share, Details, Adjust BPM (administrators: lib/TempoStep), Web search.
   // From a queue row (`queue`) it is about that place in the queue: Play now and Play next (moving it there on this
   // device; again, as a copy, on the server's player, which takes no reorder) as the large actions, and Remove from
   // queue last (this device, as the row's swipe).
@@ -46,6 +46,8 @@
   import { linkTo, share } from './share';
   import { crateOf, genreOf, viewGenre, viewLike } from './crates.svelte';
   import { download, inApp } from './app.svelte';
+  import { me } from './me.svelte';
+  import TempoStep from './TempoStep.svelte';
 
   let {
     onclose,
@@ -113,7 +115,7 @@
 
   // The step it opens on; later steps are the sheet's own.
   // svelte-ignore state_referenced_locally
-  let step = $state<'menu' | 'lists' | 'details' | 'export'>(start);
+  let step = $state<'menu' | 'lists' | 'details' | 'export' | 'tempo'>(start);
 
   // Go to artist: the artist's panel (lib/albums goToArtist). A "feat." credit is left out: the albums are under the
   // main artist.
@@ -389,6 +391,7 @@
         </MenuGroup>
         <MenuGroup>
           {#if !onDevice}<MenuEntry icon="info" label="Info" onclick={showDetails} />{/if}
+          {#if me.admin && !onDevice}<MenuEntry icon="gauge" label="Adjust BPM" onclick={() => (step = 'tempo')} />{/if}
           <MenuEntry icon="search" label="Web search" onclick={webSearch} />
           <MenuEntry icon="search" label="Genius search" onclick={geniusSearch} />
         </MenuGroup>
@@ -411,6 +414,8 @@
       </MenuCards>
     {:else if step === 'export'}
       <ExportStep what={{ kind: 'tracks', name: t.name, tracks: [{ source: t.source, id: t.id }] }} {onclose} />
+    {:else if step === 'tempo'}
+      <TempoStep source={t.source} tracks={[{ id: t.id, name: t.name }]} />
     {:else if step === 'lists'}
       <PlaylistToggles title="Add to / remove from playlists" {playlists} ticked={(p) => p.member}>
         {#snippet entry(p)}<MenuEntry label={p.name} checked={p.member} disabled={busy} onclick={() => toggle(p.id, p.member)} />{/snippet}

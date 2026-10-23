@@ -33,6 +33,7 @@ mod playon;
 mod plays;
 mod queue;
 pub mod radio;
+pub mod tempo;
 mod settings;
 mod shelf;
 mod sync;

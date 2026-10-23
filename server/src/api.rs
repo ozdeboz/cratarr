@@ -75,6 +75,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/crates/{id}/rows", get(crate_rows))
         .route("/api/crates/{id}/tempo", get(crate_tempo))
         .route("/api/like-curve", get(like_curve))
+        .route("/api/tempo", post(tempo_of).put(adjust_tempo))
         .route("/api/playlists/stats", get(playlist_stats))
         .route("/api/crates/{id}/playlist", post(crate_playlist))
         .route("/api/crates/{id}/favourites", put(crate_favourites))
@@ -1417,6 +1418,27 @@ async fn like_curve(State(app): State<Arc<App>>, Query(q): Query<LikeCurveQuery>
     let of: Vec<String> = q.of.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
     Ok(Json(app.playlists.like_curve(&of, q.source.as_deref(), &without).await?))
+}
+
+#[derive(serde::Deserialize)]
+struct TempoBody {
+    source: String,
+    ids: Vec<String>,
+    /// Absent when only asking.
+    #[serde(default)]
+    adjust: Option<crate::app::tempo::Adjust>,
+}
+
+/// Tracks' tempo for Adjust BPM: each one's BPM now and Cratarr's measure.
+async fn tempo_of(State(app): State<Arc<App>>, Json(b): Json<TempoBody>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!({ "tracks": app.playlists.tempo_of(&b.source, &b.ids).await? })))
+}
+
+/// Adjust BPM: halve, double or reset the tracks' tempo (administrators; written into the files).
+async fn adjust_tempo(State(app): State<Arc<App>>, Json(b): Json<TempoBody>) -> Result<Json<serde_json::Value>, ApiError> {
+    let how = b.adjust.ok_or_else(|| ApiError::from(ToggleError::Refused("Say how: half, double or reset.".into())))?;
+    let (tracks, undo) = app.playlists.adjust_tempo(&b.source, &b.ids, how).await?;
+    Ok(Json(json!({ "tracks": tracks, "undo": undo })))
 }
 
 /// Every playlist's facts for the Playlists page's table (decision 0042), by id.

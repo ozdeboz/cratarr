@@ -1246,6 +1246,31 @@ impl PlaylistService {
                 crates.set_excluded(before.clone()).await?;
                 Ok(Change::Excluded { before: after, after: before })
             }
+            Change::Tempo { tracks } => {
+                // Each track's BPM tag as the change left it, else "it changed since"; then the tags before.
+                if !crate::serve::access::administering() {
+                    return Err(ToggleError::Forbidden("Adjusting a track's BPM is for administrators.".into()));
+                }
+                let cat = self.lib.catalogue();
+                let back = tokio::task::spawn_blocking(move || -> Result<Vec<super::tempo::TempoChange>, ToggleError> {
+                    for t in &tracks {
+                        let (_, _, path) = super::tempo::place(&cat, &t.source, &t.id).ok_or_else(changed)?;
+                        let now = crate::retag::bpm(&path).and_then(|v| v.trim().parse::<f64>().ok()).map(|b| b.round() as u32);
+                        if now != t.after {
+                            return Err(changed());
+                        }
+                    }
+                    let mut redo = Vec::new();
+                    for t in tracks {
+                        super::tempo::write(&cat, &t.source, &t.id, t.before)?;
+                        redo.push(super::tempo::TempoChange { before: t.after, after: t.before, ..t });
+                    }
+                    Ok(redo)
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))??;
+                Ok(Change::Tempo { tracks: back })
+            }
         }
     }
 
@@ -2091,6 +2116,43 @@ impl PlaylistService {
         })
         .await
         .map_err(|e| ToggleError::from(anyhow::anyhow!("{e}")))
+    }
+
+    /// Tracks' tempo as Adjust BPM shows it (app::tempo): each one's BPM now and Cratarr's measure.
+    pub async fn tempo_of(&self, source: &str, ids: &[String]) -> Result<Vec<super::tempo::TrackTempo>, ToggleError> {
+        let (cat, source, ids) = (self.lib.catalogue(), source.to_string(), ids.to_vec());
+        Ok(tokio::task::spawn_blocking(move || ids.iter().filter_map(|id| super::tempo::tempo_of(&cat, &source, id)).collect())
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?)
+    }
+
+    /// Adjust BPM (app::tempo): an administrator's, the library's for everyone. Writes each track's new BPM into its
+    /// file and keeps the change for its undo; tracks with nothing to go from are left as they are. Returns the tracks'
+    /// tempo after it, and the undo's token.
+    pub async fn adjust_tempo(&self, source: &str, ids: &[String], how: super::tempo::Adjust) -> Result<(Vec<super::tempo::TrackTempo>, Option<String>), ToggleError> {
+        if !crate::serve::access::administering() {
+            return Err(ToggleError::Forbidden("Adjusting a track's BPM is for administrators.".into()));
+        }
+        let (cat, src, list) = (self.lib.catalogue(), source.to_string(), ids.to_vec());
+        let changes = tokio::task::spawn_blocking(move || -> Result<Vec<super::tempo::TempoChange>, ToggleError> {
+            let mut changes = Vec::new();
+            for id in &list {
+                let Some(now) = super::tempo::tempo_of(&cat, &src, id) else { continue };
+                let Some(to) = super::tempo::adjusted(&now, how) else { continue };
+                let (_, _, path) = super::tempo::place(&cat, &src, id).ok_or_else(|| ToggleError::Refused("A track's file is not known.".into()))?;
+                let before = crate::retag::bpm(&path).and_then(|v| v.trim().parse::<f64>().ok()).map(|b| b.round() as u32);
+                if before == Some(to) {
+                    continue;
+                }
+                super::tempo::write(&cat, &src, id, Some(to)).map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+                changes.push(super::tempo::TempoChange { source: src.clone(), id: id.clone(), before, after: Some(to) });
+            }
+            Ok(changes)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))??;
+        let undo = if changes.is_empty() { None } else { self.keep(Change::Tempo { tracks: changes }) };
+        Ok((self.tempo_of(source, ids).await?, undo))
     }
 
     /// The axes and their domains in the libraries not in `without`, for the builder (decision 0024, issue 4).
