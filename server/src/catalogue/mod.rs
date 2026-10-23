@@ -794,10 +794,11 @@ impl Catalogue {
         let analysed: HashMap<Place, f64> =
             st.query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, f64>(2)?)))?.collect::<rusqlite::Result<_>>()?;
         // AudioMuse's (decision 0054), where it heard the file: energy, style tags, CLAP's moods.
-        type Muse = (Option<f64>, Option<String>, Option<String>);
-        let mut st = db.prepare(&format!("SELECT f.folder, f.rel, a.energy, a.style, a.moods FROM audiomuse a JOIN files f ON f.track = a.track WHERE {PRESENT_F}"))?;
+        type Muse = (Option<f64>, Option<String>, Option<String>, i64, Option<Vec<u8>>);
+        let mut st =
+            db.prepare(&format!("SELECT f.folder, f.rel, a.energy, a.style, a.moods, a.track, a.embedding FROM audiomuse a JOIN files f ON f.track = a.track WHERE {PRESENT_F}"))?;
         let mut muse: HashMap<Place, Muse> = st
-            .query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), (r.get(2)?, r.get(3)?, r.get(4)?))))?
+            .query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), (r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))))?
             .collect::<rusqlite::Result<_>>()?;
         Ok(files
             .into_iter()
@@ -814,8 +815,12 @@ impl Catalogue {
                         genres.push(v.clone());
                     }
                 }
-                let (mut energy, mut danceability, mut moods, mut styles) = (None, None, Vec::new(), Vec::new());
-                if let Some((e, style, clap)) = muse.remove(&place) {
+                let (mut energy, mut danceability, mut moods, mut styles, mut track, mut sound) = (None, None, Vec::new(), Vec::new(), None, None);
+                if let Some((e, style, clap, t, embedding)) = muse.remove(&place) {
+                    track = Some(t);
+                    // Its "sounds like" (decision 0054), of unit length: what a Sounds like condition compares.
+                    let v: Vec<f32> = embedding.unwrap_or_default().chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+                    sound = crate::similarity::mean_sound(&[&v]).map(std::sync::Arc::from);
                     let (m, d) = crate::app::audiomuse::moods_and_danceability(&AudioMuseRow { moods: clap, ..AudioMuseRow::default() });
                     energy = e.map(|e| (e * 100.0).round());
                     danceability = d.map(|d| (d * 100.0).round());
@@ -833,6 +838,8 @@ impl Catalogue {
                     danceability,
                     moods,
                     styles,
+                    track,
+                    sound,
                 })
             })
             .collect())
@@ -1485,20 +1492,12 @@ impl Catalogue {
             .flatten()
     }
 
-    /// Every track's AudioMuse "sounds like" vector, of unit length (decision 0054), for the radio. Blocking.
-    pub fn audiomuse_vectors(&self) -> HashMap<i64, Vec<f32>> {
+    /// Every track AudioMuse heard (decision 0054), by its track, for similarity (the radio's index). Blocking.
+    pub fn audiomuse_all(&self) -> HashMap<i64, AudioMuseRow> {
         let db = self.db();
-        let Ok(mut st) = db.prepare("SELECT track, embedding FROM audiomuse WHERE embedding IS NOT NULL") else { return HashMap::new() };
-        let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)));
-        let mut out = HashMap::new();
-        for (track, bytes) in rows.into_iter().flatten().flatten() {
-            let v: Vec<f32> = bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
-            let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-            if n > 0.0 && n.is_finite() {
-                out.insert(track, v.into_iter().map(|x| x / n).collect());
-            }
-        }
-        out
+        let Ok(mut st) = db.prepare("SELECT track, energy, key, style, moods, embedding FROM audiomuse") else { return HashMap::new() };
+        let rows = st.query_map([], audiomuse_row);
+        rows.into_iter().flatten().flatten().map(|r| (r.track, r)).collect()
     }
 
     /// Several at once, in one transaction (an import's batch). Blocking.

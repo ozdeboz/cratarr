@@ -10,9 +10,9 @@
   import MenuCards from './MenuCards.svelte';
   import MenuGroup from './MenuGroup.svelte';
   import MenuEntry from './MenuEntry.svelte';
-  import { crateRows } from './api';
+  import { crateRows, getCrate } from './api';
   import { inApp } from './app.svelte';
-  import { CRATE, EDIT_CRATE, crateArt, crateName, crateRadio, crates, deleteOwnCrate, genreOf, playCrate, shuffleCrate, startCrate } from './crates.svelte';
+  import { CRATE, EDIT_CRATE, crateArt, crateName, crateRadio, crates, deleteOwnCrate, genreOf, likeOf, playCrate, seeded, shuffleCrate, startCrate } from './crates.svelte';
   import { isKept, setKept } from './kept.svelte';
   import { panel, viewPlaylist } from './panel.svelte';
   import { work } from './panelWork.svelte';
@@ -26,8 +26,9 @@
   const name = $derived(crateName(id));
   const genre = $derived(genreOf(id));
   const crate = $derived(crates.list?.find((c) => c.id === id) ?? null);
-  /** One's own (a permanent crate, and a genre, are the library's). */
-  const own = $derived(!!crate && !crate.permanent && genre === null);
+  const like = $derived(likeOf(id));
+  /** One's own (a permanent crate, a genre and what sounds like a track or an album are the library's). */
+  const own = $derived(!!crate && !crate.permanent && !seeded(id));
   const viewed = $derived(panel.viewed === CRATE + id);
   const tracks = $derived(crate?.stats?.tracks ?? null);
 
@@ -76,6 +77,14 @@
     onclose();
     startCrate(g, [{ axis: 'genre', not: false, value: { kind: 'any_of', values: [g] } }]);
   }
+  /** Sounds like's own crate: its seeds and how alike, as the server made them. */
+  function fromLike() {
+    const [c, n] = [id, name];
+    onclose();
+    getCrate(c)
+      .then((d) => startCrate(n, d.conditions))
+      .catch((e) => toast.fail(e, "The crate couldn't be started"));
+  }
   function edit() {
     const c = id;
     onclose();
@@ -108,6 +117,8 @@
     <MenuGroup>
       {#if genre !== null}
         <MenuEntry icon="crates" label="Start a crate from it" onclick={fromGenre} />
+      {:else if like !== null}
+        <MenuEntry icon="crates" label="Start a crate from it" onclick={fromLike} />
       {:else}
         <MenuEntry icon="intoBox" label="Save as playlist" onclick={saveAsPlaylist} />
       {/if}

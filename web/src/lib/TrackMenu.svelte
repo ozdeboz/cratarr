@@ -44,7 +44,7 @@
   import { toast } from './toast.svelte';
   import { albumSubject, artistOf, panel, viewOver } from './panel.svelte';
   import { linkTo, share } from './share';
-  import { crateOf, genreOf, viewGenre } from './crates.svelte';
+  import { crateOf, genreOf, viewGenre, viewLike } from './crates.svelte';
   import { download, inApp } from './app.svelte';
 
   let {
@@ -186,6 +186,12 @@
     // From the full-screen player: it closes, or it would cover the genre.
     player.full = false;
     viewGenre(name);
+  }
+  /** Sounds like it: a crate seeded with the track (Cratarr's own, which AudioMuse hears). */
+  function goToLike() {
+    onclose();
+    player.full = false;
+    viewLike(t!.id);
   }
   const plays = $derived(forPlaying ? (np?.info?.play_count ?? null) : (other?.info?.play_count ?? null));
   const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
@@ -355,6 +361,7 @@
           {#each genres.filter((g) => !(fromPanel && g === viewedGenre)) as g (g)}
             <MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />
           {/each}
+          {#if t?.source === 'cratarr'}<MenuEntry icon="crates" label="Sounds like this" onclick={goToLike} />{/if}
         </MenuGroup>
         <MenuGroup>
           {#if heartKnown}<MenuEntry icon="heart" label="Favourite" switched={heartOn} disabled={busy} onclick={heart} />{/if}

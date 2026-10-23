@@ -388,7 +388,12 @@ export type CrateStats = {
 /** One condition of a crate: an axis, what it is tested against, negated or not. A filter's (decision 0061) can be
  *  muted (`enabled` false: ignored) and, on items that hold tracks (albums, playlists), hold for `any` of their tracks
  *  (the default) or `all` of those that have a value on the axis. Left out: on, any. */
-export type CrateValue = { kind: 'yes' } | { kind: 'any_of'; values: string[] } | { kind: 'range'; min: number | null; max: number | null };
+export type CrateValue =
+  | { kind: 'yes' }
+  | { kind: 'any_of'; values: string[] }
+  | { kind: 'range'; min: number | null; max: number | null }
+  // Sounds like its seeds (song ids), at least `min` alike (0 two random tracks, 100 two of one album).
+  | { kind: 'like'; of: string[]; min: number };
 export type Quantifier = 'any' | 'all';
 export type Condition = { axis: string; not: boolean; value: CrateValue; enabled?: boolean; quantifier?: Quantifier };
 export type CrateDef = { id: string; name: string; conditions: Condition[] };
@@ -396,7 +401,7 @@ export type CrateDef = { id: string; name: string; conditions: Condition[] };
 export type Axis = {
   key: string;
   label: string;
-  kind: 'yes_no' | 'values' | 'membership' | 'range';
+  kind: 'yes_no' | 'values' | 'membership' | 'range' | 'like';
   values: string[];
   /** How many items of the list have each of `values` (the Filter sheet's, filterList); absent in the builder's. */
   counts?: number[];

@@ -35,6 +35,7 @@ mod ports;
 mod playlists;
 mod serve;
 mod settings;
+mod similarity;
 mod snapcast;
 mod source;
 mod stream;

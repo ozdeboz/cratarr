@@ -124,7 +124,8 @@ pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Fi
         }
     };
     let w = lib.world();
-    let keys: Vec<String> = grouped.iter().filter(|(_, t)| crates::passes(t, &r.conditions, &w)).map(|(k, _)| k.clone()).collect();
+    let conditions = lib.resolved(&r.conditions);
+    let keys: Vec<String> = grouped.iter().filter(|(_, t)| crates::passes(t, &conditions, &w)).map(|(k, _)| k.clone()).collect();
     let passed = keys.len();
     let tracks: Vec<&[&Facts]> = grouped.iter().map(|(_, t)| t.as_slice()).collect();
     let axes = crates::list_axes(&tracks, &app.playlists.own_playlist_names().await?, Some(lib.membership()));

@@ -58,7 +58,7 @@
   import { albumOfDownload, albumPlay, albumRatings, goToArtist as showArtist, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum } from './albums.svelte';
   import RatingStars from './RatingStars.svelte';
   import { download, downloads, inApp, removeDownloads } from './app.svelte';
-  import { viewGenre } from './crates.svelte';
+  import { viewGenre, viewLike } from './crates.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
   import { player } from './live.svelte';
   import { startRadio, type LocalTrack } from './localPlayer.svelte';
@@ -494,6 +494,16 @@
         {/if}
         {#each artistNames as name (name)}<MenuEntry icon="user" label="Go to {name}" onclick={() => goToArtist(name)} />{/each}
         {#each genres as g (g)}<MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />{/each}
+        <!-- Sounds like it: a crate seeded with the album's songs (Cratarr's own, which AudioMuse hears). -->
+        {#if source === 'cratarr'}<MenuEntry
+            icon="crates"
+            label="Sounds like this"
+            onclick={() => {
+              onclose();
+              player.full = false;
+              viewLike(a.id);
+            }}
+          />{/if}
       </MenuGroup>
       <!-- Feel: the favourite and the rating. -->
       <MenuGroup>

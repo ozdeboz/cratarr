@@ -30,6 +30,7 @@
   import SettingRow from './SettingRow.svelte';
   import Switch from './Switch.svelte';
   import MenuSheet from './MenuSheet.svelte';
+  import SimilarBy from './SimilarBy.svelte';
   import { RADIO_BYS, RADIO_MAX, setAutoplay, setRadio, setSkipFavourites } from './localPlayer.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
@@ -52,6 +53,7 @@
   <div class="parts">
     <Card title="Radio" note="after each of your tracks" label="Radio">
       <ChoiceList label="Radio" options={RADIO} value={radioNow} onchange={(v) => (v === 'off' ? setRadio(false) : setRadio(true, { by: v }))} />
+      {#if radioNow === 'track'}<SimilarBy />{/if}
       <div class="count" class:off={!local.radio}>
         <SettingRow label="After each track">
           <input
@@ -73,6 +75,7 @@
     </Card>
     <Card title="Autoplay" note="when the queue ends" label="Autoplay">
       <ChoiceList label="Autoplay" options={AUTOPLAY} value={now} onchange={(v) => setAutoplay(v)} />
+      {#if now === 'similar'}<SimilarBy />{/if}
     </Card>
     <div class="toggles">
       <!-- For both, and the first of the three (the owner): hearted tracks are left out of what Radio and Autoplay pick. -->

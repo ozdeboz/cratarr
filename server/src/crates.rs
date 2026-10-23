@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -73,6 +74,12 @@ pub enum Value {
         min: Option<f64>,
         max: Option<f64>,
     },
+    /// Sounds like its seeds (song ids; an album's are its songs'), at least `min` alike (0 to 100, similarity's
+    /// "sounds like": 0 two random tracks, 100 two of one album).
+    Like { of: Vec<String>, min: f64 },
+    /// A `Like` worked out (`resolved`): the sound its seeds make together. Never kept.
+    #[serde(skip)]
+    Near { sound: Arc<[f32]>, min: f64 },
 }
 
 /// A crate: its id never changes; its name is unique among crates.
@@ -94,6 +101,18 @@ pub fn genre_crate(id: &str) -> Option<CrateDef> {
     }
     let genre = Condition::new("genre", false, Value::AnyOf { values: vec![name.to_string()] });
     Some(CrateDef { id: id.to_string(), name: name.to_string(), conditions: vec![genre] })
+}
+
+/// A track or an album, viewed in the panel as a crate of what sounds like it (the owner, 2026-10-23: "just like genre,
+/// albums and tracks can now become seeds for crates"): made when asked for (`like:<id>`), never saved. The caller
+/// names it and turns an album into its songs (`like_crate`).
+pub const LIKE: &str = "like:";
+/// How alike its tracks are to the seed, until the crate's card says otherwise: as alike as one artist's albums.
+pub const LIKE_MIN: f64 = 65.0;
+
+pub fn like_crate(id: &str, name: &str, songs: Vec<String>) -> CrateDef {
+    let like = Condition::new("like", false, Value::Like { of: songs, min: LIKE_MIN });
+    CrateDef { id: id.to_string(), name: name.to_string(), conditions: vec![like] }
 }
 
 /// The permanent crates, in the same model (decision 0024). Favourites and Unlisted favourites went (amended
@@ -160,6 +179,8 @@ pub enum Kind {
     Membership,
     /// Between two numbers (year, BPM).
     Range,
+    /// Like its seeds, a track's or an album's, by how much (sounds like).
+    Like,
 }
 
 /// An axis as the builder sees it: its kind and its domain (the values there are, or the numbers' span).
@@ -226,6 +247,9 @@ pub struct Facts {
     pub danceability: Option<f64>,
     pub moods: Vec<String>,
     pub styles: Vec<String>,
+    /// Its track in the catalogue, and AudioMuse's "sounds like" vector of it (unit length; none where not heard).
+    pub track: Option<i64>,
+    pub sound: Option<Arc<[f32]>>,
 }
 
 /// What the axes test about the library as a whole: which playlists hold a line, which lines are favourites.
@@ -237,7 +261,7 @@ pub struct World<'a> {
     pub favourite_albums: Option<&'a HashSet<String>>,
 }
 
-const AXES: [(&str, &str, Kind); 10] = [
+const AXES: [(&str, &str, Kind); 11] = [
     ("favourite", "Favourite", Kind::YesNo),
     ("favourite_album", "Favourite album", Kind::YesNo),
     ("playlist", "In playlist", Kind::Membership),
@@ -249,6 +273,8 @@ const AXES: [(&str, &str, Kind); 10] = [
     ("energy", "Energy", Kind::Range),
     ("danceability", "Danceability", Kind::Range),
     ("style", "Style", Kind::Values),
+    // One similarity's sound (the owner, 2026-10-23); seeded from a track or an album, not added by hand.
+    ("like", "Sounds like", Kind::Like),
 ];
 
 /// Names as the items have them, the most common first (a genre's or a style's, in any case), each with how many items
@@ -322,6 +348,7 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                     (a.values, a.counts) = counted(|f| &f.styles);
                     a.known = known(|f| !f.styles.is_empty());
                 }
+                "like" => a.known = known(|f| f.sound.is_some()),
                 _ => {}
             }
             a
@@ -356,6 +383,7 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
         ("style", Value::AnyOf { values }) => values.iter().any(|v| f.styles.iter().any(|s| s.eq_ignore_ascii_case(v))),
         ("energy", Value::Range { min, max }) => within(f.energy, min, max),
         ("danceability", Value::Range { min, max }) => within(f.danceability, min, max),
+        ("like", Value::Near { sound, min }) => f.sound.as_ref().is_some_and(|s| crate::similarity::sounds_alike(sound, s) * 100.0 >= *min),
         _ => false,
     }
 }
@@ -375,6 +403,7 @@ fn has_value(c: &Condition, f: &Facts, w: &World) -> bool {
         "style" => !f.styles.is_empty(),
         "energy" => f.energy.is_some(),
         "danceability" => f.danceability.is_some(),
+        "like" => f.sound.is_some(),
         _ => false,
     }
 }
@@ -405,6 +434,26 @@ fn item_holds(c: &Condition, tracks: &[&Facts], w: &World) -> bool {
 /// its quantifier over the item's tracks. No condition on: every item passes.
 pub fn passes(tracks: &[&Facts], conditions: &[Condition], w: &World) -> bool {
     conditions.iter().filter(|c| c.enabled).all(|c| item_holds(c, tracks, w))
+}
+
+/// The conditions with each Sounds like worked out once, not for every file: the sound its seeds make together, from
+/// `all` (every file, its seeds may be in a library switched off). Seeds none of which was heard: never holds.
+pub fn resolved(conditions: &[Condition], all: &[Facts]) -> Vec<Condition> {
+    conditions
+        .iter()
+        .map(|c| match &c.value {
+            Value::Like { of, min } => {
+                let seeds: HashSet<i64> = of.iter().filter_map(|id| crate::serve::ids::track_of(id)).collect();
+                let heard: Vec<&[f32]> = all.iter().filter(|f| f.track.is_some_and(|t| seeds.contains(&t))).filter_map(|f| f.sound.as_deref()).collect();
+                let value = match crate::similarity::mean_sound(&heard) {
+                    Some(sound) => Value::Near { sound: sound.into(), min: *min },
+                    None => Value::AnyOf { values: Vec::new() },
+                };
+                Condition { value, ..c.clone() }
+            }
+            _ => c.clone(),
+        })
+        .collect()
 }
 
 /// A crate's files, in the order given (newest first): those all its conditions that are on hold for.
@@ -760,6 +809,25 @@ mod tests {
         assert_eq!(c.conditions, vec![Condition::new("genre", false, Value::AnyOf { values: vec!["Trip Hop".into()] })]);
         assert!(genre_crate("genre: ").is_none());
         assert!(genre_crate("unlisted").is_none());
+    }
+
+    #[test]
+    fn sounds_like_holds_for_what_sounds_like_the_seeds() {
+        let heard = |rel: &str, track: i64, v: [f32; 2]| Facts { rel: rel.into(), track: Some(track), sound: Some(Arc::from(v.as_slice())), ..Facts::default() };
+        let files = vec![
+            heard("seed.flac", 1, [1.0, 0.0]),
+            heard("near.flac", 2, [0.999, 0.045]),
+            heard("far.flac", 3, [0.0, 1.0]),
+            Facts { rel: "unheard.flac".into(), ..Facts::default() },
+        ];
+        let like = like_crate("like:tr-1", "Seed", vec!["tr-1".into()]);
+        let membership = HashMap::new();
+        let w = World { membership: &membership, favourites: None, favourite_albums: None };
+        assert_eq!(select(&files, &resolved(&like.conditions, &files), &w), ["seed.flac", "near.flac"]);
+        // Unworked out, or seeds never heard: nothing.
+        assert!(select(&files, &like.conditions, &w).is_empty());
+        let unheard = like_crate("like:tr-9", "Unheard", vec!["tr-9".into()]);
+        assert!(select(&files, &resolved(&unheard.conditions, &files), &w).is_empty());
     }
 
     fn f(rel: &str, genres: &[&str], year: Option<f64>, bpm: Option<f64>) -> Facts {

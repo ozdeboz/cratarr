@@ -1967,6 +1967,7 @@ impl PlayOn {
             albums,
             by: RadioBy::default(),
             skip_favourites,
+            similar_by: None,
         };
         let first = super::radio::next(ask).await?;
         if first.is_empty() {

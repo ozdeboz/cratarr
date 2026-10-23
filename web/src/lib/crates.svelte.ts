@@ -1,6 +1,6 @@
 // The permanent crates and their sizes (decision 0024), for the Crates page and the crate viewed in the panel. Asked for
 // when looked at, and again when the playlists change (sorting a track into one shrinks Unlisted).
-import { albumCoverUrl, crateImageUrl, deleteCrate, getCrates, leaveOutOfCrate, type Excluding, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites } from './api';
+import { albumCoverUrl, crateImageUrl, deleteCrate, getCrate, getCrates, leaveOutOfCrate, type Excluding, removeCrateImage, setCrateFavouriteAlbums, setCrateFavourites, setCrateImage, type Condition, type Crate, type CrateFavourites } from './api';
 import { dropFromQueue, local, startRadio } from './localPlayer.svelte';
 import { isLocal, shownPlaylists } from './output.svelte';
 import { pickOf, playCollection } from './play.svelte';
@@ -160,7 +160,7 @@ export function forgetDraft(id: string | null) {
     /* nothing kept */
   }
 }
-export const crateName = (id: string) => crates.list?.find((c) => c.id === id)?.name ?? genreOf(id) ?? id;
+export const crateName = (id: string) => crates.list?.find((c) => c.id === id)?.name ?? genreOf(id) ?? likeNames[id] ?? id;
 
 // A crate's picture (decided 2026-10-16): its own, else its albums' covers (four as a mosaic, else the first), on its
 // card and over it in the panel. Its own is read again after a change (a new address).
@@ -187,6 +187,20 @@ export async function setCrateArt(id: string, file: Blob | null) {
 export const GENRE = 'genre:';
 export const genreOf = (crate: string | null) => (crate?.startsWith(GENRE) ? crate.slice(GENRE.length) : null);
 export const viewGenre = (name: string) => viewPlaylist(CRATE + GENRE + name);
+
+/** A track or an album in the panel as a crate of what sounds like it (the owner, 2026-10-23: "just like genre"),
+ *  made by the server when asked for (`crate:like:<id>`), never saved; reached from the track's or the album's menu. */
+export const LIKE = 'like:';
+export const likeOf = (crate: string | null) => (crate?.startsWith(LIKE) ? crate.slice(LIKE.length) : null);
+/** Their names, as the server gives them ("Sounds like …"), by crate id. */
+const likeNames = $state<Record<string, string>>({});
+export function viewLike(id: string) {
+  const crate = LIKE + id;
+  viewPlaylist(CRATE + crate);
+  if (!likeNames[crate]) getCrate(crate).then((d) => (likeNames[crate] = d.name)).catch(() => {});
+}
+/** A crate the server makes from a seed (a genre, a track, an album): the library's, never one's own. */
+export const seeded = (crate: string | null) => genreOf(crate) !== null || likeOf(crate) !== null;
 
 /** A new crate, named in the name sheet (as a new playlist is): the builder opens on a fresh draft of that name, saved
  *  only with its Save (a crate without conditions would hold the whole library). `conditions`: what it starts from (a

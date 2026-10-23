@@ -65,8 +65,8 @@
     leaveOut,
     favouritesSaved,
     forgetDraft,
-    genreOf,
     keepDraft,
+    seeded,
     keptDraft,
     loadCrates,
     setCrateArt,
@@ -386,7 +386,7 @@
       const own = localCovers[coverKey(artist.source, artistPictureId(artist.name))];
       return own ? [own] : covers;
     }
-    return crate && genreOf(crate) === null ? crateArt(crate) : covers;
+    return crate && !seeded(crate) ? crateArt(crate) : covers;
   });
   // As drawn: covers that fail to load leave a mosaic (lib/Cover).
   const coversShown = $derived(mosaicOf(covers));
@@ -710,9 +710,9 @@
     return list;
   });
   // A genre shows all its tracks: no favourites toggles.
-  const favState = $derived(crate && genreOf(crate) === null ? FAVOURITES[favouritesOf(crate)] : null);
+  const favState = $derived(crate && !seeded(crate) ? FAVOURITES[favouritesOf(crate)] : null);
   // Beside it, its favourite albums toggle (decision 0024, amended 2026-10-19).
-  const albState = $derived(crate && genreOf(crate) === null ? FAVOURITE_ALBUMS[favouriteAlbumsOf(crate)] : null);
+  const albState = $derived(crate && !seeded(crate) ? FAVOURITE_ALBUMS[favouriteAlbumsOf(crate)] : null);
   const closeLabel = $derived(
     crate ? 'Close the crate' : album ? 'Close the album' : artist ? 'Close the artist' : multi ? 'Close the playlists' : 'Close the playlist',
   );
