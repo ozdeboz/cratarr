@@ -18,7 +18,8 @@
 
   // The last answer (kept for the panel too), read again here.
   const s = $derived<Settings | null>(settingsRead.s);
-  let lastImport = $state<ImportJob | null>(null);
+  /** undefined until read: no "Not yet" before the answer. */
+  let lastImport = $state<ImportJob | null | undefined>(undefined);
   let signIn = $state<boolean | null>(null);
   let keyCount = $state<number | null>(null);
   let users = $state<number | null>(null);
@@ -81,6 +82,7 @@
       case 'players': {
         // Counted, as Users: their names do not fit a line.
         const n = playOn.players.length;
+        if (!playOn.known) return '';
         return n === 0 ? 'None yet' : n === 1 ? '1 player' : `${n} players`;
       }
       case 'account':
@@ -93,6 +95,7 @@
           .filter(Boolean)
           .join(' · ');
       case 'import':
+        if (lastImport === undefined) return '';
         return lastImport?.finished ? `Last ${new Date(lastImport.finished * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : 'Not yet';
       case 'network':
         return appInfo.inUse ? appInfo.inUse.replace(/^\w+:\/\//, '') : '';

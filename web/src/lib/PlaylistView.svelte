@@ -719,8 +719,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
       profileOf = '';
       return;
     }
-    // An edit asks again with the old profile still shown; another list starts empty and waits.
-    const key = JSON.stringify([at.list, at.source]);
+    // An edit asks again with the old profile still shown; another list starts empty and waits. A Sounds like crate's
+    // cut moved is the same list (its seed): the profile stays until the new one comes, not the empty place between.
+    const seed = likeParts(at.list.kind === 'crate' ? at.list.id : null);
+    const key = seed ? `like:${seed.item}` : JSON.stringify([at.list, at.source]);
     if (key !== profileOf) {
       profileOf = key;
       profile = null;
@@ -756,12 +758,19 @@ ${r.album_artist ?? r.artist ?? ''}`;
     for (const p of curve.profiles) if (p.count <= preview && (!best || p.count > best.count)) best = p;
     return best?.profile ?? null;
   });
+  /** The seed the curve is of: moving the cut (another crate of the same seed) keeps it shown until the new one comes. */
+  let curveOf = '';
   $effect(() => {
     const c = crate;
-    curve = null;
+    const seed = like?.item ?? '';
+    if (seed !== curveOf) {
+      curveOf = seed;
+      curve = null;
+    }
     curveComing = false;
     if (!c || !like) return;
-    curveComing = true;
+    // Read untracked: its own answer must not ask again.
+    if (!untrack(() => curve)) curveComing = true;
     let gone = false;
     getCrate(c)
       .then((d) => {

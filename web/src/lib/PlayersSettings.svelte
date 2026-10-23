@@ -67,7 +67,7 @@
     {#each players as p (p.name)}
       <Item lead={p.online ? 'on' : 'off'} name={p.name} line={p.online ? null : 'Offline'} value={`${delay(p.name)} ms`} onclick={() => (adjusting = p.name)} />
     {:else}
-      <Item name="No players yet" />
+      {#if playOn.known}<Item name="No players yet" />{/if}
     {/each}
   </Group>
 {/if}

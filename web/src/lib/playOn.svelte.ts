@@ -10,8 +10,9 @@ import { on } from './events.svelte';
 import { drive, emptyHere, reportedBy, type LocalTrack } from './localPlayer.svelte';
 import { prefs } from './prefs.svelte';
 
-/** `self`: the name this page is a player under, in a browser (lib/playOnTarget); null in the app or before. */
-export const playOn = $state({ players: [] as PlayOnPlayer[], self: null as string | null });
+/** `self`: the name this page is a player under, in a browser (lib/playOnTarget); null in the app or before. `known`:
+ *  the players have been read once (until then no "None yet"). */
+export const playOn = $state({ players: [] as PlayOnPlayer[], self: null as string | null, known: false });
 
 /** The player chosen as the output, by name; null when the output is not one of Cratarr's players. */
 export const drivenName = () => (prefs.output.startsWith('player:') ? prefs.output.slice('player:'.length) : null);
@@ -116,6 +117,7 @@ let shownVersion = -1;
 
 function take(players: PlayOnPlayer[]) {
   playOn.players = players;
+  playOn.known = true;
   driveShown();
   const name = shownName();
   const p = name ? players.find((x) => x.name === name) : undefined;

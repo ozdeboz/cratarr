@@ -124,7 +124,7 @@
             </Row>
           </li>
         {:else}
-          <li class="none">No queues yet</li>
+          {#if queues.known}<li class="none">No queues yet</li>{/if}
         {/each}
       </ol>
     {/if}

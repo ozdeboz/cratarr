@@ -254,7 +254,7 @@
     moment: momentIn && (!moment || !!library.view),
     newest: heard !== null,
     week: weekIn,
-    back: lastPlayedIn && !!library.view && sources.every((s) => albumUsesKnown(s.id)),
+    back: lastPlayedIn && queues.known && !!library.view && sources.every((s) => albumUsesKnown(s.id)),
     past: dugIn,
     graves: dugIn && !!library.view,
     explore: exploreIn,

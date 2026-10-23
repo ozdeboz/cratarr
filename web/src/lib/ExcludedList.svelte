@@ -1,7 +1,7 @@
 <script lang="ts">
   // What is excluded (decision 0024, amended 2026-10-19), as a list to put back: a crate's tracks and whole albums, or
   // Cratarr's global ones (`crate` null). Each can be put back, or all at once, with Undo as excluding has. No notice
-  // besides; an error in one line. In a sheet (lib/ExcludedSheet) and on Settings › Musical taste (lib/settings/TastePart).
+  // besides; an error in one line. In a sheet (lib/ExcludedSheet) and on Settings › Taste (lib/settings/TastePart).
   import { albumCoverUrl, coverUrl, crateLeftOut, excludedRows, includeTracks, putBackInCrate, type ExcludedAlbum, type Excluding, type PlaylistRow } from './api';
   import { crateName, loadCrates } from './crates.svelte';
   import { loadExcluded } from './exclusions.svelte';

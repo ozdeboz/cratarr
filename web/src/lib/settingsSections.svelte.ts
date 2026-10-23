@@ -30,7 +30,7 @@ export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app
   { id: 'account', title: 'Account', icon: 'user' },
   { id: 'display', title: 'Display', icon: 'swatch' },
   // What one has said one does not want (the owner, 2026-10-23): every exclusion, managed in one place.
-  { id: 'taste', title: 'Musical taste', icon: 'sliders' },
+  { id: 'taste', title: 'Taste', icon: 'music' },
   { id: 'connections', title: 'Connections', icon: 'server', admin: true },
   { id: 'libraries', title: 'Libraries', icon: 'library', admin: true },
   { id: 'players', title: 'Players', icon: 'speakers', admin: true },

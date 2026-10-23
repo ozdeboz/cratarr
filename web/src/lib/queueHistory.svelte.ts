@@ -7,8 +7,9 @@ import { appInfo, inApp } from './app.svelte';
 import { deleteLocal, keptHere, localQueues, local, renameLocal, switchLocal } from './localPlayer.svelte';
 import { drivenName, playOn } from './playOn.svelte';
 
-/** The list as last read; `error`: why it could not be read or changed, in plain words. */
-export const queues = $state({ list: [] as QueueItem[], error: null as string | null });
+/** The list as last read; `error`: why it could not be read or changed, in plain words; `known`: read once (until then
+ *  no "No queues yet"). */
+export const queues = $state({ list: [] as QueueItem[], error: null as string | null, known: false });
 
 /** The player whose queues these are: the one driven from here, else the app's own; null: this browser's own. */
 function player(): string | null {
@@ -30,6 +31,7 @@ export async function loadQueues() {
   if (name === null) {
     queues.list = localQueues();
     queues.error = null;
+    queues.known = true;
     return;
   }
   try {
@@ -38,6 +40,7 @@ export async function loadQueues() {
   } catch (e) {
     queues.error = e instanceof Error ? e.message : String(e);
   }
+  queues.known = true;
 }
 
 async function command(c: Record<string, unknown>, here: () => void) {

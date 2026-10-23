@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Musical taste (the owner, 2026-10-23: "all the exclusions can be managed" here, and later the weights once AudioMuse
+  // Taste (the owner, 2026-10-23: "all the exclusions can be managed" here, and later the weights once AudioMuse
   // has heard everything): what one has said one does not want, in one place. Excluded everywhere (decision 0024,
   // amended: out of every crate and every automatic pick), then each crate that leaves tracks out by hand; each opens
   // its own page here (`thing`: `everywhere`, or `crate:<id>`) with the list to put back (lib/ExcludedList).
