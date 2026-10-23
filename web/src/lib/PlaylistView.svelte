@@ -1737,9 +1737,10 @@
      orders the list by it where the list has an order of its own to change (`sorts`). -->
 {#snippet columnHead(sorts = true)}
   <div class="column-head">
-    <Row size="large" as="div" head title="Title" count="Length" cells={sorts ? headCells : cols.map((c) => ({ ...c, text: c.label }))}>
+    <!-- Its end as wide as its rows' (rowEnd: the heart and the menu, the tick while selecting, nothing for the
+         device's own music), so the columns share out the same room and line up (the owner, 2026-10-23). -->
+    <Row size="large" as="div" head title="Title" count="Length" cells={sorts ? headCells : cols.map((c) => ({ ...c, text: c.label }))} action={onDevice ? undefined : endSpace}>
       {#snippet lead()}<span class="cover-space"></span>{/snippet}
-      {#snippet action()}<span></span>{/snippet}
     </Row>
   </div>
 {/snippet}
@@ -1778,6 +1779,8 @@
 
 <!-- A track's row ends in its heart (as the queue's rows: a tap its playlists, a long press its sheet, lib/HeartSheet;
      not for the device's own music) and ⋮ (its menu, Symfonium's), or in select mode in its tick. -->
+{#snippet endSpace()}<span class="end-space" class:ticking={!!selecting}></span>{/snippet}
+
 {#snippet rowEnd(r: PlaylistRow, src: string, i: number | null, out: (() => 'away') | null = null, list = '')}
   {#if selecting && i !== null}
     <button class="tool tick" class:on={selecting.has(i)} role="checkbox" aria-checked={selecting.has(i)} aria-label={`Select ${r.name ?? r.file}`} onclick={() => tick(i)}
@@ -2231,6 +2234,16 @@
   .cover-space {
     display: block;
     width: 60px;
+  }
+
+  /* The head's end: a row's heart (36 px), the gap (6 px) and its menu (40 px); while selecting, the tick (40 px). */
+  .end-space {
+    display: block;
+    width: 82px;
+  }
+
+  .end-space.ticking {
+    width: 40px;
   }
 
   /* The tempo spread in the header, under the genres (decision 0041); what is missing stays under it. */

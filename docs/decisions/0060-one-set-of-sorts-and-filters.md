@@ -51,17 +51,17 @@ does not keep them).
 | Album | Favourites only · Not played yet · 4 stars and up · Upgrades waiting (Cratarr's library) · ★Lossless only |
 | Track | ★Favourites only · ★Not played yet · Hide missing · Tempo range |
 | Playlist | Favourites only · ★Mine only (not shared by others) |
-| Crate | — (a crate's own Favourites and Favourite albums settings stay its settings, in its menu's Change, since they decide what it holds and plays) |
+| Crate | — (a crate's own Favourites and Favourite albums settings stay its settings, visible in its header: the owner, 2026-10-23) |
 
 ### What is remembered
 
 Every list remembers its order, direction and filters, per kind of list: the Library, Downloads, Playlists, Crates, the
-device's pages, and in the panel one each for a playlist, a crate, an album and an artist (open: one setting per kind,
-or per list).
+device's pages, and in the panel one each for a playlist, a crate, an album and an artist (per kind of list, not per
+list: the owner, 2026-10-23).
 
 ## Consequences
 
 - One field table and one filter table in code (`lib/pageView.svelte.ts`), read by the list bars, the Filter sheet,
   the table columns (0042) and the View sheet; no page keeps its own list of fields.
 - The panel's sort and filters move from component state into remembered settings.
-- A crate's header loses its two favourites switches (they move into its menu's Change).
+- A crate's header keeps its two favourites switches.
