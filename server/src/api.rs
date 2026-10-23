@@ -37,6 +37,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/players/{name}/command", post(player_command))
         .route("/api/players/{name}/state", axum::routing::put(player_state))
         .route("/api/players/{name}/sample", post(player_sample))
+        .route("/api/players/{name}/heard", post(player_heard))
         .route("/api/players/{name}/delay", axum::routing::put(player_delay))
         .route("/api/groups/{leader}/listen.wav", get(group_listen))
         .route("/api/time", get(time_now))
@@ -1667,6 +1668,12 @@ async fn time_now() -> Json<serde_json::Value> {
 /// A player's answer to a measurement (sync play, step 1).
 async fn player_sample(State(app): State<Arc<App>>, Path(name): Path<String>, Json(s): Json<crate::app::together::Sample>) -> Result<StatusCode, ApiError> {
     app.play_on.sample(&name, s)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// What a page following a group plays (sync play in a browser): kept in step from it.
+async fn player_heard(State(app): State<Arc<App>>, Path(name): Path<String>, Json(h): Json<crate::app::PlayerHeard>) -> Result<StatusCode, ApiError> {
+    app.play_on.heard(&name, h)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

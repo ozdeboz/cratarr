@@ -2,14 +2,16 @@
 // 2026-10-16): while a page in a browser is open, it is one of Cratarr's players, under this browser's name (Settings →
 // This browser), as the app is: Cratarr's commands play on its own player (localPlayer's playOnCommand) and it reports
 // what plays, on every change and every few seconds. While its screen drives another player it plays nothing itself;
-// music sent to it turns the screen here, and the other plays on (amended 2026-10-23). Closed, it is gone from the
-// list (offline). A browser lets sound start only after the page was touched once: a play before that shows
+// music sent to it turns the screen here, and the other plays on (amended 2026-10-23). In a group it follows, as a Kodi
+// does (lib/groupListen): its own music stops, the group's sound plays, and its screen shows the group's. Closed, it is
+// gone from the list (offline). A browser lets sound start only after the page was touched once: a play before that shows
 // "Tap to play". Behind a locked screen a paused page is frozen after a minute or so, and shows offline until it is
 // looked at again; playing, it stays. No sync play in a browser: it joins no group.
 import { getPlayers } from './api';
 import { me } from './me.svelte';
 import { inApp } from './app.svelte';
-import { canPlayHere, local, pageVolume, playOnCommand } from './localPlayer.svelte';
+import { canPlayHere, local, pageVolume, playOnCommand, stop } from './localPlayer.svelte';
+import { followGroup, leaveGroup, listening } from './groupListen.svelte';
 import { playOn, drivenName, hereAgain } from './playOn.svelte';
 import { prefs } from './prefs.svelte';
 import { asksSignIn, refused, refusedFor, toSignIn } from './reach.svelte';
@@ -158,7 +160,8 @@ let reportTimer: ReturnType<typeof setTimeout> | undefined;
 async function report(withQueue = false) {
   // Not while the proxy refuses this page (lib/reach): each would be one more knock on a ban.
   if (!name || !target.connected || refusedFor() > 0) return;
-  const idle = elsewhere();
+  // Following a group, it keeps no queue of its own: what it plays is the group's sound.
+  const idle = elsewhere() || listening.leader !== null;
   // Tracks this page added itself get an entry, as the app gives them.
   if (!idle) for (const t of local.queue) if (!t.entry) t.entry = uuid();
   const own = idle ? [] : local.queue;
@@ -181,7 +184,7 @@ async function report(withQueue = false) {
     autoplay: a ? { mode: a.mode, albums: a.albums, restart: a.restart, seed: a.seed, within: a.within } : null,
     position_ms: idle ? 0 : Math.round(local.position * 1000),
     duration_ms: !idle && local.duration ? Math.round(local.duration * 1000) : null,
-    playing: !idle && local.index >= 0 && !local.paused,
+    playing: listening.leader !== null ? listening.playing : !idle && local.index >= 0 && !local.paused,
     volume: pageVolume.level,
     ducked: pageVolume.ducked,
     link: {
@@ -261,6 +264,18 @@ function connect() {
       return;
     }
     if (typeof m.version === 'number') version = m.version;
+    // Sync play: in a group led by another, its sound here and its screen on the group (its own music stops); alone
+    // again, quiet.
+    if (m.command === 'group') {
+      const leader = typeof m.leader === 'string' && m.leader !== player ? m.leader : null;
+      if (!leader) leaveGroup();
+      else {
+        if (elsewhere()) hereAgain();
+        else stop();
+        followGroup(leader, player).then((sounds) => (target.tapToPlay = !sounds));
+      }
+      return reportSoon(true);
+    }
     // Its screen drives another player: music sent here turns it here (the other plays on); the rest is for a player
     // that plays nothing.
     if (elsewhere()) {
@@ -315,6 +330,7 @@ function connect() {
 }
 
 function disconnect() {
+  leaveGroup();
   source?.close();
   source = null;
   target.connected = false;
@@ -341,7 +357,7 @@ if (typeof window !== 'undefined' && !inApp) {
     });
     // Every change reported at once.
     $effect(() => {
-      void [local.index, local.paused, local.queue, local.repeat, local.radio, local.autoplay, local.skipFavourites, pageVolume.level, pageVolume.ducked, sleep(), prefs.output];
+      void [local.index, local.paused, local.queue, local.repeat, local.radio, local.autoplay, local.skipFavourites, pageVolume.level, pageVolume.ducked, sleep(), prefs.output, listening.playing];
       if (target.connected) reportSoon();
     });
     // Sound has started: no need to ask for the tap any more.

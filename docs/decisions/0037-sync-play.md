@@ -200,3 +200,20 @@ afford (Points, Steps, Resolution, FPS) and how bright its screen should be stay
   the group's whole settings each time (a page that missed one is right again with the next) and the page that wrote
   it (`writer`, the page's own id: it skips its own echo). A channel that fell behind gets every group's as it is now.
 - **Joining** a group adopts its visuals (an empty group takes the joiner's); leaving keeps what was showing.
+
+## Amended (2026-10-23): a page in a browser follows
+
+The owner wanted the ThinkBook's page in the Salon tablet's group. A page now follows a group the way a Kodi does,
+and never leads one: its sound cannot be sent on.
+
+- **Its sound:** on a `group` command naming another leader, its own music stops and it plays the group's sound as one
+  long WAV (`/api/groups/{leader}/listen.wav?player=`), sent a buffer after its stamps, less its speaker delay
+  (`lib/groupListen`). Lost, it opens it again after 2 s. A browser that wants a tap first shows Tap to play.
+- **In step:** every 2 s the page says what it plays there and when, on Cratarr's time from a clock exchange with
+  `/api/time` (`POST /api/players/{name}/heard {time_ms, at_ms}`). Cratarr reads it as it reads a Kodi's time: the
+  middle of five readings, out of line by more than 20 ms, skipped or padded, at most every 4 s
+  (`snapcast::listen::Listener::heard`, now shared by both).
+- **Its screen:** shows the group's, as an app following does; its own player reports no queue, playing while the
+  group's sound plays. Its row in the Play On sheet has the group's + and tick, like any follower's.
+- The caution above still holds: a page's output delay is less predictable than the app's, and a sleeping screen may
+  pause it. The speaker delay setting is there for the first.

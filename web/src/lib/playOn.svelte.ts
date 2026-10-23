@@ -19,14 +19,18 @@ export const drivenName = () => (prefs.output.startsWith('player:') ? prefs.outp
 export const choosable = () =>
   playOn.players.filter((p) => p.online && !(inApp && p.name === appInfo.player) && !(!inApp && p.name === (playOn.self ?? prefs.browserName)));
 
-/** In the app, while this device follows a group (decision 0037): the group's leader. The device plays no queue of its
- *  own then, so the page shows the leader's and its controls act there (the owner, 2026-10-16: the follower showed no
- *  player at all). Null otherwise. */
+/** While this device follows a group (decision 0037; a page in a browser too, amended 2026-10-23): the group's leader.
+ *  The device plays no queue of its own then, so the page shows the leader's and its controls act there (the owner,
+ *  2026-10-16: the follower showed no player at all). Null otherwise. */
 export const followedLeader = () => {
-  if (!inApp || prefs.output !== 'local' || !appInfo.player) return null;
-  const group = playOn.players.find((p) => p.name === appInfo.player)?.group;
-  return group && group !== appInfo.player ? group : null;
+  const me = selfName();
+  if (prefs.output !== 'local' || !me) return null;
+  const group = playOn.players.find((p) => p.name === me)?.group;
+  return group && group !== me ? group : null;
 };
+
+/** This device's own player: the app's, or this page's in a browser. */
+export const selfName = () => (inApp ? appInfo.player : playOn.self);
 
 /** The player whose reports the page shows and drives: the one chosen, else the leader this device follows. */
 const shownName = () => drivenName() ?? followedLeader();
@@ -63,8 +67,9 @@ function watchOwn(players: PlayOnPlayer[]) {
   ownPlayed = now;
 }
 
-/** The one of Cratarr's players the page plays on: the one chosen, or the app this page runs in playing here. */
-export const head = () => drivenName() ?? (inApp && prefs.output === 'local' ? appInfo.player : null);
+/** The one of Cratarr's players the page plays on: the one chosen, or this device's own (the app's, or this page's)
+ *  playing here. */
+export const head = () => drivenName() ?? (prefs.output === 'local' ? selfName() : null);
 
 /** The players of `name`'s group (decision 0037), its leader first; none while it plays alone. */
 export function groupOf(name: string | null): string[] {
@@ -76,7 +81,7 @@ export function groupOf(name: string | null): string[] {
 
 /** Where the music plays, as the device button says it: a group by its players ("Salon tablet + Phone"). */
 export function outputName(): string {
-  const shown = (n: string) => (inApp && n === appInfo.player ? 'This device' : n);
+  const shown = (n: string) => (n === selfName() ? 'This device' : n);
   const g = groupOf(head());
   return g.length > 1 ? g.map(shown).join(' + ') : (drivenName() ?? 'This device');
 }

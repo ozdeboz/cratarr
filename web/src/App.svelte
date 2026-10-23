@@ -21,6 +21,7 @@
   import AboutSheet from './lib/AboutSheet.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { target } from './lib/playOnTarget.svelte';
+  import { listening, resumeGroup } from './lib/groupListen.svelte';
   import { startWith, togglePlay } from './lib/localPlayer.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
   import SheetArea from './lib/SheetArea.svelte';
@@ -528,7 +529,8 @@
       class="tap-to-play"
       onclick={() => {
         target.tapToPlay = false;
-        togglePlay();
+        if (listening.leader) resumeGroup();
+        else togglePlay();
       }}><Icon name="play" size={20} />Tap to play</button
     >
   {/if}

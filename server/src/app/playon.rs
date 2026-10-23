@@ -274,6 +274,15 @@ fn yes() -> bool {
     true
 }
 
+/// What a page following a group says it plays (`PlayOn::heard`).
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct Heard {
+    /// Its time in the group's sound (ms).
+    pub time_ms: f64,
+    /// When (Cratarr's time, epoch ms).
+    pub at_ms: f64,
+}
+
 /// What can be asked of a player.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
@@ -1178,6 +1187,21 @@ impl PlayOn {
         valid_name(name)?;
         self.reached(name)?;
         self.samples.answer(name, s);
+        Ok(())
+    }
+
+    /// What a page in a browser following a group plays (sync play): its time in the group's sound, at `at_ms` of
+    /// Cratarr's time (epoch ms, from its clock exchange); put back in step when out of line, as a Kodi is.
+    pub fn heard(&self, name: &str, h: Heard) -> Result<(), ToggleError> {
+        valid_name(name)?;
+        self.reached(name)?;
+        let Some(snap) = crate::snapcast::Snapcast::instance() else { return Ok(()) };
+        let Some(listener) = snap.listener(name) else { return Ok(()) };
+        // Cratarr's time then, on Snapcast's clock: as long ago as it was then.
+        let ago = ((super::together::now_ms() - h.at_ms) * 1000.0) as i64;
+        if let Some((ms, late)) = listener.heard(h.time_ms, snap.now() - ago.max(0), snap.buffer_ms()) {
+            tracing::info!(target: "syncplay", player = name, ms, late, "put back in step");
+        }
         Ok(())
     }
 
@@ -2166,13 +2190,10 @@ impl PlayOn {
                 if !e.online() {
                     return Err(ToggleError::Refused(format!("{n} is not connected.")));
                 }
-                // A page in a browser has no sync play: it plays on its own.
-                if e.kind == PlayerKind::Browser {
-                    return Err(ToggleError::Refused(format!("{n} plays in a browser, which cannot play in a group.")));
-                }
             }
             let leader = entries.get(to).and_then(|e| e.leader.clone()).unwrap_or_else(|| to.to_string());
-            // A Kodi follows, never leads (the owner): its sound cannot be sent on.
+            // A Kodi or a page in a browser follows, never leads (the owner): its sound cannot be sent on. It listens
+            // to the group's sound as one stream (`snapcast::listen`).
             if entries.get(&leader).is_some_and(|e| e.kind != PlayerKind::App) {
                 return Err(ToggleError::Refused(format!("{leader} cannot lead a group: play on another player and add {leader} to it.")));
             }
@@ -2710,7 +2731,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_browser_is_a_player_while_open_and_never_in_a_group() {
+    async fn a_browser_is_a_player_while_open_and_follows_a_group_but_never_leads_one() {
         let p = play_on().await;
         let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
         p.serve_sync_play(1704, 1000, None);
@@ -2721,8 +2742,12 @@ mod tests {
         p.command("Chrome on Android", Command::play(vec![t("tr-1"), t("tr-2")], 1, 0)).await.unwrap();
         assert!(said(&mut page).contains(&"play".to_string()));
         p.report("Chrome on Android", Report { index: 1, playing: true, ..Report::default() }).unwrap();
-        // No sync play in a browser: it joins no group, and none joins it.
-        assert!(matches!(p.command("Chrome on Android", Command::Join { to: "tablet".into() }).await, Err(ToggleError::Refused(_))));
+        // A page follows a group as a Kodi does (its sound as one stream), and none follows it.
+        said(&mut page);
+        p.command("Chrome on Android", Command::Join { to: "tablet".into() }).await.unwrap();
+        assert_eq!(group_of(&mut page), vec![Some("tablet".to_string())]);
+        p.command("Chrome on Android", Command::Leave).await.unwrap();
+        assert_eq!(group_of(&mut page), vec![None]);
         assert!(matches!(p.command("tablet", Command::Join { to: "Chrome on Android".into() }).await, Err(ToggleError::Refused(_))));
         // The page reloaded: it comes back without a queue and gets Cratarr's back.
         drop(page);

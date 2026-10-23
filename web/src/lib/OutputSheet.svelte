@@ -28,7 +28,7 @@
   import MenuSheet from './MenuSheet.svelte';
   import { canPlayHere } from './localPlayer.svelte';
   import { hasMusic, joinTo, moveTo } from './output.svelte';
-  import { choosable, drivenName, endGroup, groupOf, head, outputName, playOn, toggleGroup } from './playOn.svelte';
+  import { choosable, drivenName, endGroup, groupOf, head, outputName, playOn, selfName, toggleGroup } from './playOn.svelte';
   import { prefs } from './prefs.svelte';
   import { shownCover } from './remote.svelte';
   import { toast } from './toast.svelte';
@@ -47,9 +47,8 @@
   // Holding groups: offered while one of Cratarr's players is played on (in the app, this device is one).
   // A group's leader is one of the app's players: a Kodi follows, never leads.
   const kindOf = (n: string | null) => playOn.players.find((p) => p.name === n)?.kind ?? 'app';
-  // A page in a browser has no sync play: it is never in a group.
-  const groupable = (name: string | null) =>
-    name !== null && head() !== null && name !== head() && kindOf(group[0] ?? head()) === 'app' && kindOf(name) !== 'browser';
+  // A page in a browser follows, as a Kodi does (lib/groupListen).
+  const groupable = (name: string | null) => name !== null && head() !== null && name !== head() && kindOf(group[0] ?? head()) === 'app';
   // The chosen player stays listed while it is away (offline), so what is chosen shows.
   const players = $derived.by(() => {
     const list = choosable().map((p) => p.name);
@@ -60,7 +59,7 @@
   // A player that plays already, while music plays here too: whether to take it over.
   let asking = $state<PlayOnPlayer | null>(null);
 
-  const me = $derived(inApp ? appInfo.player : null);
+  const me = $derived(selfName());
   const sounding = $derived(inApp && appInfo.outputs.length > 0 && (here || (me !== null && group.includes(me))));
   const following = $derived(me !== null && group.length > 1 && group.includes(me) && group[0] !== me);
   /** Where it sounds: the output chosen, else the one Android chose, as the app reports it. */

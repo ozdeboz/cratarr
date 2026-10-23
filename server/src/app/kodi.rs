@@ -56,9 +56,6 @@ const POLL_PLAYING: Duration = Duration::from_secs(1);
 const POLL_IDLE: Duration = Duration::from_secs(4);
 /// Out of reach this many reads in a row: offline.
 const MISSES: u32 = 3;
-/// Following a group: out of line by more than this (µs), the next skip or pad is asked for, at most this often.
-const OUT_OF_LINE_US: i64 = 20_000;
-const CORRECT_EVERY: Duration = Duration::from_secs(4);
 /// A play waits for Kodi's playlist to hold its first track and this many after it; the rest is added this many at a
 /// time (a single Playlist.Add of 472 took a Pi 3 longer than the usual 6 s), each allowed this long.
 const AHEAD: usize = 3;
@@ -173,9 +170,6 @@ struct Driver {
     following: Option<String>,
     /// When it last opened its group's sound (opened again when Kodi stopped it).
     opened: Option<std::time::Instant>,
-    /// How far out of line it was at its last reads (µs, + late), and when it was last put back.
-    lags: Vec<i64>,
-    corrected: Option<std::time::Instant>,
 }
 
 impl Driver {
@@ -195,8 +189,6 @@ impl Driver {
             now: Now { index: -1, ..Now::default() },
             following: None,
             opened: None,
-            lags: Vec::new(),
-            corrected: None,
         }
     }
 
@@ -218,8 +210,6 @@ impl Driver {
         self.held = 0;
         self.queue_changed = true;
         self.following = Some(leader.to_string());
-        self.lags.clear();
-        self.corrected = None;
         self.open_group().await
     }
 
@@ -241,22 +231,10 @@ impl Driver {
         if p.get("speed").and_then(Value::as_f64).unwrap_or(0.0) <= 0.0 {
             return;
         }
-        // What Kodi plays at the read's middle, against what the others play then: a buffer after its stamp.
-        let Some(heard) = p.get("time").map(ms_of).and_then(|ms| listener.stamp_at(ms as f64)) else { return };
-        let lag = (before + after) / 2 - i64::from(snap.buffer_ms()) * 1000 - heard;
-        self.lags.push(lag);
-        if self.lags.len() < 5 || self.corrected.is_some_and(|c| c.elapsed() < CORRECT_EVERY) {
-            return;
-        }
-        let mut sorted = self.lags.clone();
-        sorted.sort_unstable();
-        let middle = sorted[sorted.len() / 2];
-        self.lags.clear();
-        if middle.abs() > OUT_OF_LINE_US {
-            let (ms, late) = (middle.abs() / 1000, middle > 0);
+        // What Kodi plays at the read's middle.
+        let Some(ms) = p.get("time").map(ms_of) else { return };
+        if let Some((ms, late)) = listener.heard(ms as f64, (before + after) / 2, snap.buffer_ms()) {
             tracing::info!(target: "syncplay", player = self.name.as_str(), ms, late, "put back in step");
-            listener.adjust(middle);
-            self.corrected = Some(std::time::Instant::now());
         }
     }
     fn place_of(&self, entry: Option<&str>, place: Option<usize>) -> Option<usize> {

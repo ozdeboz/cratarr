@@ -1,4 +1,5 @@
-//! Sync play for a player without Snapcast's player (a Kodi, `app::kodi`): the group's sound as one long WAV over HTTP.
+//! Sync play for a player without Snapcast's player (a Kodi, `app::kodi`; a page in a browser): the group's sound as one
+//! long WAV over HTTP.
 //!
 //! - Each chunk is sent a buffer after its stamp, less the player's own delay (its speaker delay setting), so the
 //!   player's own buffering brings it to its sound when the others play it.
@@ -8,14 +9,19 @@
 //!   repeats samples.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use tokio::sync::{broadcast, mpsc};
 
 use super::proto::{self, Format};
 use super::{Out, Snapcast};
+
+/// Out of line by more than this (µs), a player is put back in step.
+const OUT_OF_LINE_US: i64 = 20_000;
+/// At most one correction this often: the next readings see the last one's effect.
+const CORRECT_EVERY: Duration = Duration::from_secs(4);
 
 /// One player listening.
 #[derive(Default)]
@@ -25,6 +31,8 @@ pub struct Listener {
     origin: AtomicI64,
     /// Asked of what is sent next: skip (+) or pad with silence (−) this much (µs).
     adjust: AtomicI64,
+    /// How late it played at its last readings (µs), and when it was last put back in step.
+    lags: Mutex<(Vec<i64>, Option<Instant>)>,
 }
 
 impl Listener {
@@ -37,6 +45,29 @@ impl Listener {
     /// Skip (+) or pad (−) `us` of what is sent next.
     pub fn adjust(&self, us: i64) {
         self.adjust.fetch_add(us, Ordering::Relaxed);
+    }
+
+    /// What the player played at its time `at_ms` in the stream, at the moment `when` (µs, Snapcast's clock), against
+    /// what the others play then (a buffer after its stamp): the middle of five such readings, when out of line, put
+    /// right with a skip or a pad. `Some((ms, late))` when it was.
+    pub fn heard(&self, at_ms: f64, when: i64, buffer_ms: u32) -> Option<(i64, bool)> {
+        let lag = when - i64::from(buffer_ms) * 1000 - self.stamp_at(at_ms)?;
+        let mut held = self.lags.lock().unwrap_or_else(|p| p.into_inner());
+        let (lags, corrected) = &mut *held;
+        lags.push(lag);
+        if lags.len() < 5 || corrected.is_some_and(|c| c.elapsed() < CORRECT_EVERY) {
+            return None;
+        }
+        lags.sort_unstable();
+        let middle = lags[lags.len() / 2];
+        lags.clear();
+        if middle.abs() <= OUT_OF_LINE_US {
+            return None;
+        }
+        *corrected = Some(Instant::now());
+        drop(held);
+        self.adjust(middle);
+        Some((middle.abs() / 1000, middle > 0))
     }
 }
 
