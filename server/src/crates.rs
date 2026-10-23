@@ -745,6 +745,8 @@ pub fn resolved(conditions: &[Condition], alike: &Alike, among: &[&Facts], by: &
 pub struct Alike {
     lib: Library,
     tracks: Vec<Track>,
+    /// The names by their numbers, per kind (0 playlists, 1 artists, 2 genres, 3 styles), as first spelled.
+    names: [Vec<String>; 4],
     /// Each file's place, by its line.
     place: HashMap<String, usize>,
     /// Each file's place, by its track in the catalogue.
@@ -754,11 +756,15 @@ pub struct Alike {
 impl Alike {
     /// From the files and the playlists holding each line.
     pub fn of(all: &[Facts], membership: &HashMap<String, Vec<String>>) -> Self {
-        let mut names: [HashMap<String, u32>; 4] = Default::default();
+        let mut numbers: [HashMap<String, u32>; 4] = Default::default();
+        let mut names: [Vec<String>; 4] = Default::default();
         let mut intern = |kind: usize, name: &str| {
             let key = name.trim().to_lowercase();
-            let next = names[kind].len() as u32;
-            *names[kind].entry(key).or_insert(next)
+            let next = numbers[kind].len() as u32;
+            *numbers[kind].entry(key).or_insert_with(|| {
+                names[kind].push(name.trim().to_string());
+                next
+            })
         };
         let mut tracks = Vec::with_capacity(all.len());
         let mut sounds = Vec::with_capacity(all.len());
@@ -772,7 +778,45 @@ impl Alike {
         let lib = Library::new(&tracks, sounds);
         let place = all.iter().enumerate().map(|(i, f)| (f.rel.clone(), i)).collect();
         let of_track = all.iter().enumerate().filter_map(|(i, f)| Some((f.track?, i))).collect();
-        Alike { lib, tracks, place, of_track }
+        Alike { lib, tracks, names, place, of_track }
+    }
+
+    /// The profile of places, each weighing its weight (`similarity::Profile::of_weighted`).
+    pub fn profile(&self, set: &[(usize, f64)]) -> crate::similarity::Profile {
+        crate::similarity::Profile::of_weighted(&self.lib, set, |i| &self.tracks[i])
+    }
+
+    /// A word's name: its kind (`Signal::Playlists`, `Artists`, `Genres`, `Styles`) and number.
+    pub fn name(&self, kind: crate::similarity::Signal, id: u32) -> Option<&str> {
+        use crate::similarity::Signal;
+        let k = match kind {
+            Signal::Playlists => 0,
+            Signal::Artists => 1,
+            Signal::Genres => 2,
+            Signal::Styles => 3,
+            _ => return None,
+        };
+        self.names[k].get(id as usize).map(String::as_str)
+    }
+
+    /// A file's place, by its line.
+    pub fn place_of_line(&self, line: &str) -> Option<usize> {
+        self.place.get(line).copied()
+    }
+
+    /// A file's place, by its track in the catalogue.
+    pub fn place_of_track(&self, track: i64) -> Option<usize> {
+        self.of_track.get(&track).copied()
+    }
+
+    /// Whether AudioMuse heard the file at a place.
+    pub fn heard(&self, i: usize) -> bool {
+        self.lib.sound(i).is_some()
+    }
+
+    /// Every file as the one similarity sees it, by place.
+    pub fn tracks(&self) -> &[Track] {
+        &self.tracks
     }
 }
 

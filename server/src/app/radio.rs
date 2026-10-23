@@ -544,7 +544,7 @@ fn by_mode(index: &Index, req: &NextRequest, pool: &[usize], seed: &[usize], out
 /// The playing track's artists and the seed's three most common.
 fn wanted_artists(index: &Index, seed: &[usize], last: Option<usize>) -> HashSet<u32> {
     let mut wanted: HashSet<u32> = last.map(|i| index.songs[i].like.artists.clone()).unwrap_or_default().into_iter().collect();
-    let mut common: Vec<(u32, u32)> = index.profile(seed).artists().iter().map(|(&a, &n)| (a, n)).collect();
+    let mut common: Vec<(u32, u32)> = index.profile(seed).artists().iter().map(|(&a, &n)| (a, n.round() as u32)).collect();
     common.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     wanted.extend(common.into_iter().take(3).map(|(a, _)| a));
     wanted

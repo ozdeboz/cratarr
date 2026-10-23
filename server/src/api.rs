@@ -138,6 +138,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/diagnostics/levels", get(diagnostics_levels).put(set_diagnostics_levels))
             .route("/api/players/settings", get(play_on_settings).put(save_play_on_settings))
             .route("/api/history/listenbrainz", post(import_listenbrainz))
+        .route("/api/history/profile", get(taste_profile))
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
             .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
             .route("/api/sync/targets", get(sync_targets))
@@ -2469,6 +2470,11 @@ async fn import_listenbrainz(Json(b): Json<ListenBrainzImport>) -> Result<Json<c
         return Err(ToggleError::Refused("Say whose ListenBrainz listens.".into()).into());
     }
     Ok(Json(crate::app::listenbrainz::import(&serve, &account, user).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+/// The asking account's taste and what it avoids (Insights › Listening › Profile).
+async fn taste_profile(State(app): State<Arc<App>>) -> Result<Json<crate::app::taste::TasteView>, ApiError> {
+    Ok(Json(app.playlists.taste().await?))
 }
 
 /// How many similar lists a list shows at its foot.

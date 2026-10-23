@@ -2452,6 +2452,34 @@ impl PlaylistService {
         Ok(out)
     }
 
+    /// The asking account's taste and what it avoids (app::taste; Insights › Listening › Profile): from its favourites,
+    /// its own playlists, its plays, its exclusions and its skips (the log's), over every library.
+    pub async fn taste(&self) -> Result<super::taste::TasteView, ToggleError> {
+        let user = asking_user().ok_or_else(|| ToggleError::Refused("A taste is an account's own: sign in.".into()))?;
+        let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+        let lib = self.crate_library(None, false, false, &[]).await?;
+        let excluded = self.own_crates()?.excluded().await?;
+        tokio::task::spawn_blocking(move || -> Result<super::taste::TasteView, ToggleError> {
+            let alike = lib.alike();
+            let place = |song: &str| crate::serve::ids::track_of(song).and_then(|t| alike.place_of_track(t));
+            let ud = &serve.userdata;
+            let favourites = ud.starred(&user, crate::userdata::Kind::Song)?.iter().filter_map(|s| place(s)).collect();
+            let playlists = lib.membership().iter().filter_map(|(line, lists)| Some((alike.place_of_line(line)?, lists.len()))).collect();
+            let plays = ud.song_plays(&user)?.iter().filter_map(|(s, (n, _))| Some((place(s)?, *n))).collect();
+            let excluded = excluded.iter().filter_map(|line| alike.place_of_line(line)).collect();
+            let mut skips: HashMap<usize, u32> = HashMap::new();
+            for l in ud.heard_since(&user, 0)?.into_iter().filter(|l| l.ended == crate::userdata::Ended::Skipped && !l.counted) {
+                if let Some(i) = place(&l.song) {
+                    *skips.entry(i).or_default() += 1;
+                }
+            }
+            let sources = super::taste::Sources { favourites, playlists, plays, excluded, skipped: skips.into_iter().collect() };
+            Ok(super::taste::taste(alike, &sources))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    }
+
     /// Playlists like a playlist (one's own or a shared one; the owner, 2026-10-23: same kind under each list), among
     /// those the asking account sees, the closest first, with how alike (0 to 100): radio::similar_lists.
     pub async fn similar_playlists(&self, id: &str, count: usize) -> Result<Vec<(String, f64)>, ToggleError> {
