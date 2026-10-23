@@ -19,7 +19,7 @@ stormy-night     Raychel Sanner       https://unsplash.com/photos/1cJXplTxrmI
 snowy-day        Chandler Cruttenden  https://unsplash.com/photos/w8hWTFpGtpY
 snowy-night      Dillon Kydd          https://unsplash.com/photos/ffIIyc3EN58
 windy-day        Khamkéo              https://unsplash.com/photos/WtwSsqwYlA0
-windy-night      Anik Roy             https://unsplash.com/photos/pCqlNiQep8A
+windy-night      Lena Tolmacheva      https://unsplash.com/photos/bNeo5CMDOJc
 hot-day          Luis Graterol        https://unsplash.com/photos/uAROvYw9WDs
 plain-day        Chris Linnett        https://unsplash.com/photos/hatFT0_uiEQ
 plain-night      Mahdi Soheili        https://unsplash.com/photos/Ojo0zSaCphU
