@@ -1,6 +1,6 @@
 <script lang="ts">
   // A problem in the panel (the owner, 2026-10-23): one layout for every problem, filled from its data
-  // (lib/healthReport's Problem), never laid out per problem: its domain › what it is; how it stands (needs you, a
+  // (lib/healthReport's Problem), never laid out per problem: its domain › what it is; how it stands (critical, a
   // warning, to know) and since when; what it means; how much, as a meter where there is a whole; the things it is about,
   // one by one (the owner: "more deeper information": the albums waiting, the playlists and their missing tracks, the
   // folders not heard, the slow pages, the files), each opening where it is; and where to deal with it all. Beside the
@@ -16,7 +16,7 @@
   let { problem, beside = false }: { problem: string; beside?: boolean } = $props();
   const p = $derived(problems().find((x) => x.key === problem) ?? null);
   const f = $derived(p?.finding ?? null);
-  const LEVEL = { needs_you: 'Needs you', warning: 'Warning', info: 'To know' } as const;
+  const LEVEL = { critical: 'Critical', warning: 'Warning', info: 'To know' } as const;
   const WHERE: Record<string, string> = { library: 'Open the Library', playlists: 'Open Playlists', settings: 'Open Settings', health: 'Open Health' };
   // The third level (the owner, 2026-10-23): an item's own page, a step deeper in the panel, back to the problem.
   const at = $derived(healthItemOf(panel.viewed));
@@ -52,7 +52,7 @@
       <!-- How it stands. -->
       <p class="state" class:urgent={p.urgent}>
         <Icon name={p.icon} size={20} />
-        <span>{f ? LEVEL[f.level] : p.urgent ? 'Needs you' : 'Warning'}{#if f?.since}<span class="muted"> · since {since(f.since)}</span>{/if}</span>
+        <span>{f ? LEVEL[f.level] : p.urgent ? 'Critical' : 'Warning'}{#if f?.since}<span class="muted"> · since {since(f.since)}</span>{/if}</span>
       </p>
       <!-- What it means. -->
       {#if f?.detail || p.hint}<p class="what">{f?.detail ?? p.hint}</p>{/if}

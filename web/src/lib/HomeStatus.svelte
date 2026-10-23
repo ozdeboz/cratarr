@@ -1,6 +1,7 @@
 <script lang="ts">
-  // Home's Needs you (decision 0063): what matters most of the health report, the most critical first and the most
-  // recent among equals (the owner: "needs you shows the most important, the most critical, the most recent"), a few,
+  // Home's System status (decision 0063; named so by the owner, 2026-10-23): what matters most of the health report,
+  // the most critical first and the most recent among equals (the owner: "the most important, the most critical, the
+  // most recent"), a few,
   // each opening Health on it, in its panel (the owner, 2026-10-23); its heading's arrow the Health page, where all of it is. What needs the owner
   // and what is wrong; of what is worth knowing only AudioMuse's progress (the owner's tile). Nothing: it does not show.
   // An administrator's only: the report is theirs.
@@ -30,17 +31,17 @@
 </script>
 
 {#if me.admin && rows.length}
-  <section aria-label="Needs you">
+  <section aria-label="System status">
     <!-- Its arrow: the Health page, where all of it is (decision 0063). -->
-    <SectionHead title="Needs you" onmore={() => (location.hash = '#/health')} />
+    <SectionHead title="System status" onmore={() => (location.hash = '#/health')} />
     <div class="needs">
       {#each rows as f (f.key)}
         {#if f.open}
-          <button class="row" class:urgent={f.level === 'needs_you'} onclick={() => openInHealth(f)}
+          <button class="row" class:urgent={f.level === 'critical'} onclick={() => openInHealth(f)}
             ><Icon name={iconOf(f)} size={22} /><span>{f.title}</span><Icon name="chevronRight" size={20} /></button
           >
         {:else}
-          <div class="row" class:urgent={f.level === 'needs_you'}>
+          <div class="row" class:urgent={f.level === 'critical'}>
             <Icon name={iconOf(f)} size={22} /><span
               >{f.title}{#if f.of}<i class="bar" style:--share={f.count / f.of} aria-hidden="true"></i>{/if}</span
             >

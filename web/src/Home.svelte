@@ -4,7 +4,7 @@
   // than 5% of their length, a swipe row; All opens the Library by date added), Sounds like your week (the week's crate: what sounds like the last seven
   // days' plays, none of them), Jump back in (the albums and playlists played last, and the queues left last), Blast
   // from the past (the favourite tracks unplayed longest) and Grave digging (the albums most like the taste and furthest
-  // from the listening), and Needs you (claude-632's, lib/HomeNeeds). A tile with nothing to show is left out.
+  // from the listening), and System status (claude-632's, lib/HomeStatus). A tile with nothing to show is left out.
   import { onMount } from 'svelte';
   import { coverUrl, crateRows, getCrate, getDigging, getMoment, heardAlbums, playlistStats, type Digging, type Moment, type PlaylistRow } from './lib/api';
   import AlbumCard from './lib/AlbumCard.svelte';
@@ -13,7 +13,7 @@
   import Cover from './lib/Cover.svelte';
   import CoverFlow from './lib/CoverFlow.svelte';
   import ArtistsToExplore from './lib/ArtistsToExplore.svelte';
-  import HomeNeeds from './lib/HomeNeeds.svelte';
+  import HomeStatus from './lib/HomeStatus.svelte';
   import { LIKE, viewGenre, viewLike } from './lib/crates.svelte';
   import { DEVICE } from './lib/deviceMusic.svelte';
   import { startRadio } from './lib/localPlayer.svelte';
@@ -339,8 +339,8 @@
   <!-- Artists to explore (lib/ArtistsToExplore; the owner, 2026-10-23). -->
   <ArtistsToExplore />
 
-  <!-- Needs you (lib/HomeNeeds): an administrator's, shown only when something waits. -->
-  <HomeNeeds />
+  <!-- System status (lib/HomeStatus): an administrator's, shown only when something waits. -->
+  <HomeStatus />
 </div>
 
 <style>
@@ -368,6 +368,13 @@
       linear-gradient(to bottom, rgb(0 0 0 / calc(var(--veil) - 0.1)), rgb(0 0 0 / var(--veil)) calc(100% - 60px), var(--bg)),
       var(--photo) center 20% / cover no-repeat,
       linear-gradient(to bottom, var(--top), var(--foot));
+  }
+
+  /* Under the page's row (back and the rest, floating over the page's top: App's .under-row), the sky goes on up behind
+     it to the page's top, its heading where it was (the owner, 2026-10-23). */
+  :global(.page.under-row) .moment {
+    margin-top: -76px;
+    padding-top: 80px;
   }
 
   .moment[data-sky='sunny'] { --sky-top: #9a6424; --sky-foot: #3d2a16; }

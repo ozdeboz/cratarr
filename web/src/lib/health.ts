@@ -1,5 +1,5 @@
 // The health report's findings on the page (decision 0063): where each opens, and the words for its domain. Read by the
-// Health page (all of it) and Home's Needs you (the most critical and the most recent).
+// Health page (all of it) and Home's System status (the most critical and the most recent).
 import type { HealthFinding } from './api';
 import type { IconName } from './Icon.svelte';
 import { setSwitch } from './listFilter.svelte';
@@ -26,7 +26,7 @@ export function openFinding(f: HealthFinding) {
   if (to && location.hash !== to) location.hash = to;
 }
 
-/** Health with this finding open in its panel (Home's Needs you, the owner 2026-10-23); a files' finding is its kind's
+/** Health with this finding open in its panel (Home's System status, the owner 2026-10-23); a files' finding is its kind's
  *  problem there (lib/healthReport's `files-<kind>`). */
 export function openInHealth(f: HealthFinding) {
   const key = f.domain === 'files' ? `files-${f.key.split(':')[1]}` : f.key;
