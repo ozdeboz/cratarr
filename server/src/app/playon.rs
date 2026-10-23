@@ -926,6 +926,17 @@ fn claim<'a>(entries: &'a mut HashMap<String, Entry>, name: &str, whose: Option<
     Ok(e)
 }
 
+/// How long a player still named as a browser names itself stays known once offline (`PlayOn::expire_generic`).
+const GENERIC_IDLE: Duration = Duration::from_secs(3600);
+
+/// Whether a name is one a browser gives itself (lib/playOnTarget's `defaultBrowserName`, "Chrome on Android", with
+/// `freeName`'s number when taken: "Chrome on Android 2"): no one chose it.
+fn generic_name(name: &str) -> bool {
+    let base = name.rsplit_once(' ').filter(|(_, n)| n.parse::<u32>().is_ok()).map_or(name, |(b, _)| b);
+    let (browser, os) = base.split_once(" on ").map_or((base, None), |(b, o)| (b, Some(o)));
+    ["Edge", "Firefox", "Chrome", "Safari", "Browser"].contains(&browser) && os.is_none_or(|o| ["Android", "iOS", "Windows", "Mac", "Linux"].contains(&o))
+}
+
 /// A player as seen: a player of a group that does not lead it shows what the group plays, with its own name, reach
 /// and volume (decision 0037).
 fn view_in(entries: &HashMap<String, Entry>, name: &str, with_queue: bool) -> Option<PlayerView> {
@@ -1351,6 +1362,7 @@ impl PlayOn {
 
     /// `user`'s players (`None`: every one).
     pub fn list_for(&self, user: Option<&str>) -> Vec<PlayerView> {
+        self.expire_generic();
         let first = first_owner();
         let entries = self.entries();
         let mut out: Vec<PlayerView> = entries
@@ -2380,6 +2392,42 @@ impl PlayOn {
         self.entries().get(name).and_then(|e| e.owner.clone()).or_else(first_owner)
     }
 
+    /// Forgets the players still named as a browser names itself (`generic_name`) that have been offline for
+    /// `GENERIC_IDLE` (the owner, 2026-10-24: "a rather short expiration time after becoming idle", under the hood too):
+    /// their queue, delay and group mark with them, as `forget` does. A Kodi, or a player given a name, stays.
+    fn expire_generic(&self) {
+        let now = SystemTime::now();
+        let gone: Vec<String> = {
+            let mut entries = self.entries();
+            let gone: Vec<String> = entries
+                .iter()
+                .filter(|(n, e)| {
+                    !e.online()
+                        && e.kind != PlayerKind::Kodi
+                        && generic_name(n)
+                        && now.duration_since(e.offline_since.unwrap_or(e.seen)).is_ok_and(|idle| idle >= GENERIC_IDLE)
+                })
+                .map(|(n, _)| n.clone())
+                .collect();
+            for n in &gone {
+                entries.remove(n);
+            }
+            gone
+        };
+        if gone.is_empty() {
+            return;
+        }
+        {
+            let mut settings = self.settings.lock().unwrap_or_else(|p| p.into_inner());
+            for n in &gone {
+                settings.delays.remove(n);
+                settings.grouped.remove(n);
+            }
+        }
+        tracing::info!(target: "playon", players = ?gone, "generically named players forgotten, offline too long");
+        self.changed();
+    }
+
     /// Players that have now been in a group, kept in `players.json` (when there is one) the first time.
     async fn mark_grouped(&self, names: &[&str]) {
         let saved = {
@@ -3127,6 +3175,22 @@ mod tests {
         let back = told(&mut tablet);
         let play = back.iter().find(|m| m["command"] == "play").expect("its queue given back once connected");
         assert_eq!((play["index"].as_u64(), play["tracks"].as_array().map(Vec::len)), (Some(2), Some(3)));
+    }
+
+    #[tokio::test]
+    async fn a_generically_named_player_is_forgotten_an_hour_after_it_went_offline() {
+        assert!(generic_name("Chrome on Android") && generic_name("Edge on Windows 2") && generic_name("Safari"));
+        assert!(!generic_name("Salon tablet") && !generic_name("Chrome on the shelf") && !generic_name("Chromecast"));
+        let p = play_on().await;
+        let (_a, _b) = (p.connect("Chrome on Android").unwrap(), p.connect("Salon tablet").unwrap());
+        for (name, ago) in [("Chrome on Android", 3601), ("Salon tablet", 7200)] {
+            let mut entries = p.entries();
+            let e = entries.get_mut(name).unwrap();
+            e.connection = None;
+            e.offline_since = SystemTime::now().checked_sub(Duration::from_secs(ago));
+        }
+        let names: Vec<String> = p.list_for(None).into_iter().map(|v| v.name).collect();
+        assert_eq!(names, ["Salon tablet"], "the default name went, the chosen one stays");
     }
 
     #[tokio::test]
