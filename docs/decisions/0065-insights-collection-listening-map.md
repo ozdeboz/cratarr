@@ -36,7 +36,10 @@ markup. All remembered.
 - a compilation's "Various Artists" is no artist: not counted, not a bar (it dwarfed every real one's, the owner);
 - shares as meters, never pies: lossless albums, albums below 320 kbps, tracks in a playlist;
 - decades as columns, each opening its ten years (the title a breadcrumb back);
-- Overview: the headline figures, quality and decades; genres and artists only on their own views (the owner,
+- Overview: the headline figures; Incoming (albums waiting, how long the oldest has); Growth (albums added per month,
+  the last two years, from what Cratarr knows of their arrival: an album with none is not counted, nothing filled in);
+  Heard (tracks played at least once, albums never played, favourites: the account's plays and stars); quality and
+  decades; genres and artists only on their own views (the owner,
   2026-10-23: the overview should not duplicate them), as bars of their tracks or of those in a playlist (the panel's
   Count: two scales and two rankings, so one at a time, the unit said over the bars);
 - the playlists' figures as tiles, and the tracks in the most playlists as a list.

@@ -52,11 +52,19 @@ impl InsightsService {
             Some((a, _)) if !without.is_empty() => super::library::folders_switched_off(a, without).into_iter().map(std::path::PathBuf::from).collect(),
             _ => Vec::new(),
         };
-        let shown: Vec<i64> = catalogue.folders().iter().enumerate().filter(|(_, f)| !off.contains(f)).map(|(i, _)| i as i64).collect();
+        let folders = catalogue.folders();
+        let shown: Vec<i64> = folders.iter().enumerate().filter(|(_, f)| !off.contains(f)).map(|(i, _)| i as i64).collect();
+        let incoming_paths = self.lib.folders().incoming;
+        let incoming: std::collections::HashSet<i64> =
+            folders.iter().enumerate().filter(|(_, f)| incoming_paths.iter().any(|p| std::path::Path::new(p) == f.as_path())).map(|(i, _)| i as i64).collect();
+        // The overview's figures from Cratarr's own library and the asking account's plays and stars, where it is open.
+        let served = crate::serve::instance();
+        // Whose plays: the request's account, read here (the blocking task below is not the request's).
+        let user = served.as_ref().and_then(|s| s.current_user());
         let report = tokio::task::spawn_blocking(move || -> Result<Insights> {
             let rows = catalogue.track_rows(0)?;
             let mut shown_rows = Vec::new();
-            for folder in shown {
+            for &folder in &shown {
                 if folder == 0 {
                     shown_rows.extend(rows.iter().cloned());
                     continue;
@@ -67,7 +75,17 @@ impl InsightsService {
                     r
                 }));
             }
-            Ok(crate::insights::build(&rows, &shown_rows, &rules, &playlists))
+            let mut report = crate::insights::build(&rows, &shown_rows, &rules, &playlists);
+            if let Some(served) = served {
+                let (played, starred) = match &user {
+                    Some(u) => (served.userdata.played(u)?, served.userdata.starred(u, crate::userdata::Kind::Song)?.into_iter().collect()),
+                    None => Default::default(),
+                };
+                let (albums, songs) = served.library.album_arrivals()?;
+                // Months in UTC: an album that came in the night's first hour may fall in the month before.
+                report.overview = Some(crate::insights::overview(&albums, &songs, &shown.iter().copied().collect(), &incoming, &played, &starred, epoch_now(), 0));
+            }
+            Ok(report)
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))??;

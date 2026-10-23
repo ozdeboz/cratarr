@@ -28,6 +28,8 @@ pub struct Insights {
     pub library: LibraryStats,
     pub playlists: PlaylistInsights,
     pub proximity: Proximity,
+    /// None where Cratarr's own library is not open.
+    pub overview: Option<Overview>,
 }
 
 /// The playlists as points, and the pairs that are close in at least one way.
@@ -90,6 +92,87 @@ pub struct LibraryStats {
     /// Tracks per album artist (else the artist every track of the album shares), and how many of them are in a
     /// playlist; most first.
     pub top_artists: Vec<Layered>,
+}
+
+/// Collection's overview beyond the files (the owner, 2026-10-23): what waits in Incoming, how the libraries switched
+/// on grew, and how much of them the asking account has heard. From Cratarr's own library and the account's plays and
+/// stars.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct Overview {
+    /// Albums in an Incoming folder, and when the one there longest came (epoch s).
+    pub incoming_albums: usize,
+    pub incoming_since: Option<i64>,
+    /// Albums of the libraries switched on that came in each of the last `GROWTH_MONTHS` months ("2026-10"), oldest
+    /// first, empty months too. An album with no known arrival is not counted (nothing is made up).
+    pub added: Vec<Count>,
+    /// Tracks of the libraries switched on, those played at least once, albums none of whose tracks were, and the
+    /// tracks starred.
+    pub tracks: usize,
+    pub tracks_heard: usize,
+    pub albums: usize,
+    pub albums_never: usize,
+    pub favourites: usize,
+}
+
+/// How far back Growth reaches.
+pub const GROWTH_MONTHS: i64 = 24;
+
+/// The overview from the library's albums (id, folder, arrival) and songs (id, album), the folders switched on, the
+/// Incoming folders, and the account's played and starred songs; `now` and `tz` (seconds east of UTC) for the months.
+#[allow(clippy::too_many_arguments)]
+pub fn overview(
+    albums: &[(String, i64, Option<i64>)],
+    songs: &[(String, String)],
+    shown: &HashSet<i64>,
+    incoming: &HashSet<i64>,
+    played: &HashSet<String>,
+    starred: &HashSet<String>,
+    now: i64,
+    tz: i64,
+) -> Overview {
+    let mut out = Overview::default();
+    let inc: Vec<Option<i64>> = albums.iter().filter(|(_, f, _)| incoming.contains(f)).map(|(_, _, c)| *c).collect();
+    out.incoming_albums = inc.len();
+    out.incoming_since = inc.into_iter().flatten().min();
+    // Months as (year * 12 + month0), local time.
+    let month_of = |t: i64| {
+        let (y, m, _) = civil_of((t + tz).div_euclid(86_400));
+        y * 12 + i64::from(m) - 1
+    };
+    let this = month_of(now);
+    let mut added: BTreeMap<i64, usize> = ((this - GROWTH_MONTHS + 1)..=this).map(|m| (m, 0)).collect();
+    let shown_albums: HashSet<&str> = albums.iter().filter(|(_, f, _)| shown.contains(f)).map(|(id, _, _)| id.as_str()).collect();
+    for (_, _, created) in albums.iter().filter(|(id, _, _)| shown_albums.contains(id.as_str())) {
+        if let Some(n) = created.and_then(|c| added.get_mut(&month_of(c))) {
+            *n += 1;
+        }
+    }
+    out.added = added.into_iter().map(|(m, n)| Count { name: format!("{}-{:02}", m.div_euclid(12), m.rem_euclid(12) + 1), n }).collect();
+    let mut heard_albums: HashSet<&str> = HashSet::new();
+    for (id, album) in songs.iter().filter(|(_, a)| shown_albums.contains(a.as_str())) {
+        out.tracks += 1;
+        if played.contains(id) {
+            out.tracks_heard += 1;
+            heard_albums.insert(album);
+        }
+        out.favourites += usize::from(starred.contains(id));
+    }
+    out.albums = shown_albums.len();
+    out.albums_never = out.albums - heard_albums.len();
+    out
+}
+
+/// The civil date (year, month 1–12, day) of a day since 1970-01-01 (Howard Hinnant's algorithm).
+fn civil_of(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 
 /// A genre's or an artist's tracks, and those of them in a playlist: Collection's bars in two layers (the owner,
@@ -167,7 +250,7 @@ pub fn build(rows: &[TrackRow], shown: &[TrackRow], rules: &Rules, playlists: &[
         most_shared,
     };
 
-    Insights { library, playlists: playlists_view, proximity: proximity(rows, rules, playlists) }
+    Insights { library, playlists: playlists_view, proximity: proximity(rows, rules, playlists), overview: None }
 }
 
 /// How close every two playlists are, by tracks, genre and artists.
@@ -449,6 +532,26 @@ mod tests {
         // Bonobo has no album artist tag: the artist every track shares counts, not the guest.
         assert_eq!(s.top_artists, vec![l("AIR", 2, 1), l("Bonobo", 2, 0)]);
         assert_eq!(s.artists, 2);
+    }
+
+    #[test]
+    fn the_overview_counts_incoming_growth_and_what_was_heard() {
+        let day = 86_400;
+        let now = 1_792_800_000; // 2026-10-23
+        let albums = vec![
+            ("a1".to_string(), 0, Some(now - 10 * day)),
+            ("a2".to_string(), 0, Some(now - 400 * day)),
+            ("a3".to_string(), 0, None),
+            ("i1".to_string(), 1, Some(now - 41 * day)),
+            ("i2".to_string(), 1, Some(now - 3 * day)),
+        ];
+        let songs: Vec<(String, String)> = [("s1", "a1"), ("s2", "a1"), ("s3", "a2"), ("s4", "a3"), ("s5", "i1")].iter().map(|(s, a)| (s.to_string(), a.to_string())).collect();
+        let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<HashSet<String>>();
+        let o = overview(&albums, &songs, &HashSet::from([0]), &HashSet::from([1]), &set(&["s1", "s5"]), &set(&["s3"]), now, 0);
+        assert_eq!((o.incoming_albums, o.incoming_since), (2, Some(now - 41 * day)));
+        assert_eq!(o.added.len(), 24);
+        assert_eq!((o.added[23].name.as_str(), o.added[23].n, o.added.iter().map(|c| c.n).sum::<usize>()), ("2026-10", 1, 2), "a3 has no arrival");
+        assert_eq!((o.tracks, o.tracks_heard, o.albums, o.albums_never, o.favourites), (4, 1, 3, 2, 1), "Incoming switched off: s5 not counted");
     }
 
     #[test]

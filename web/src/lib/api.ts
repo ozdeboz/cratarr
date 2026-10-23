@@ -1481,7 +1481,20 @@ export const cancelJob = (id: number) => request<null>(`/api/incoming/jobs/${id}
 
 /** A name with a count: "Downtempo", 120 albums. */
 export type Count = { name: string; n: number };
-/** A genre's or an artist's tracks (`n`) and those of them in a playlist (`listed`): Collection's two layers. */
+/** Collection's overview beyond the files: Incoming, growth, and what the account heard (decision 0065). */
+export type InsightsOverview = {
+  incoming_albums: number;
+  /** When the album in Incoming longest came (epoch s). */
+  incoming_since: number | null;
+  /** Albums added per month ("2026-10"), the last 24, oldest first. */
+  added: Count[];
+  tracks: number;
+  tracks_heard: number;
+  albums: number;
+  albums_never: number;
+  favourites: number;
+};
+/** A genre's or an artist's tracks (`n`) and those of them in a playlist (`listed`). */
 export type Layered = { name: string; n: number; listed: number };
 
 /** A top artist, album or track of a period (Insights' Listening, decision 0065). */
@@ -1535,6 +1548,8 @@ export type Insights = {
     most_shared: { title: string; artist: string | null; playlists: number }[];
   };
   proximity: Proximity;
+  /** Null where Cratarr's own library is not open. */
+  overview: InsightsOverview | null;
 };
 
 /** Playlists as points and how close each two are, by three signals (0..1 each). */

@@ -564,6 +564,18 @@ impl Library {
     }
 
     /// Counts, for the log and tests: (songs, albums, artists).
+    /// Every album's id, catalogue folder and when it came (`created`), and every song's id and album: Insights'
+    /// overview.
+    #[allow(clippy::type_complexity)]
+    pub fn album_arrivals(&self) -> Result<(Vec<(String, i64, Option<i64>)>, Vec<(String, String)>)> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, folder, created FROM albums")?;
+        let albums = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        let mut st = db.prepare("SELECT id, album_id FROM songs")?;
+        let songs = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        Ok((albums, songs))
+    }
+
     pub fn counts(&self) -> Result<(u64, u64, u64)> {
         let db = self.db();
         let n = |t: &str| -> Result<u64> { Ok(db.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get::<_, i64>(0))? as u64) };

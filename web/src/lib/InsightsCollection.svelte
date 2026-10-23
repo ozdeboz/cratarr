@@ -46,6 +46,10 @@
     return Array.from({ length: 10 }, (_, i) => ({ name: String(from + i), n: l.years.find((y) => y.name === String(from + i))?.n ?? 0 }));
   });
   const tallest = $derived(widest(columns));
+  // The overview beyond the files (the owner's exploration, 2026-10-23): Incoming, growth, what was heard.
+  const o = $derived(data.overview);
+  const waited = $derived(o?.incoming_since ? Math.max(0, Math.floor((Date.now() / 1000 - o.incoming_since) / 86_400)) : null);
+  const mostAdded = $derived(Math.max(1, ...(o?.added ?? []).map((m) => m.n)));
 </script>
 
 {#snippet meter(label: string, of: string, s: number)}
@@ -93,6 +97,39 @@
       {/each}
     </div>
   </section>
+
+  {#if o}
+    {#if o.incoming_albums}
+      <section aria-label="Incoming">
+        <div class="tiles">
+          <a class="tile go" href="#/library"><b>{num(o.incoming_albums)}</b><span>{o.incoming_albums === 1 ? 'album' : 'albums'} in Incoming ›</span></a>
+          {#if waited !== null}<div class="tile"><b>{plural(waited, 'day')}</b><span>the oldest has waited</span></div>{/if}
+        </div>
+      </section>
+    {/if}
+
+    <section>
+      <div class="head"><h2>Growth</h2><span class="unit">albums added per month</span></div>
+      <div class="columns months" role="list">
+        {#each o.added as m, i (m.name)}
+          <div class="column" role="listitem" title={`${m.name}: ${plural(m.n, 'album')}`}>
+            <span class="v"></span>
+            <span class="col"><i style:height={`${(100 * m.n) / mostAdded}%`}></i></span>
+            <span class="x">{i % 6 === 0 ? new Date(`${m.name}-01`).toLocaleDateString(undefined, { month: 'short', year: '2-digit' }) : ''}</span>
+          </div>
+        {/each}
+      </div>
+    </section>
+
+    <section>
+      <h2>Heard</h2>
+      <div class="meters">
+        {@render meter('Heard at least once', `${num(o.tracks_heard)} of ${plural(o.tracks, 'track')}`, share(o.tracks_heard, o.tracks))}
+        {@render meter('Albums never played', `${num(o.albums_never)} of ${plural(o.albums, 'album')}`, share(o.albums_never, o.albums))}
+      </div>
+      <p class="formats">{plural(o.favourites, 'favourite')}</p>
+    </section>
+  {/if}
 
   <section>
     <h2>Quality</h2>
@@ -331,6 +368,29 @@
     bottom: -20px;
     color: var(--muted);
     font-size: 0.75rem;
+  }
+
+  /* Months: thin columns close together, a label every six. */
+  .columns.months {
+    gap: 3px;
+    height: 120px;
+  }
+
+  .columns.months .col i {
+    border-radius: 2px 2px 0 0;
+  }
+
+  .columns.months .x {
+    white-space: nowrap;
+  }
+
+  a.tile.go {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  a.tile.go:hover {
+    background: color-mix(in srgb, var(--text) 10%, transparent);
   }
 
   .columns + :global(*) {
