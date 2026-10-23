@@ -109,6 +109,14 @@
     addEventListener('pointerdown', away, true);
     return () => removeEventListener('pointerdown', away, true);
   });
+  /** A tap on the link of the page that shows: no step in the history (a back button for nothing, the owner 2026-10-23),
+   *  only the page back at its top. */
+  function samePage(e: MouseEvent, id: string) {
+    if (id !== page) return;
+    e.preventDefault();
+    pageEl?.scrollTo({ top: 0, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
   function stripTap(e: MouseEvent) {
     if (prefs.navFolded && !peek && !(e.target as Element).closest('a, button')) peek = true;
   }
@@ -454,7 +462,7 @@
 
       <nav aria-label="Pages">
         {#each MAIN as p (p.id)}
-          <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={() => (peek = false)}
+          <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}
             ><Icon name={p.icon} /><span class="label">{p.label}</span>{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a
           >
         {/each}
@@ -462,7 +470,7 @@
 
       <div class="foot">
         {#each APART as p (p.id)}
-          <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={() => (peek = false)}><Icon name={p.icon} /><span class="label">{p.label}</span></a>
+          <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}><Icon name={p.icon} /><span class="label">{p.label}</span></a>
         {/each}
         {#if status}<div class="version">Cratarr {status.version}</div>{/if}
       </div>
@@ -586,7 +594,7 @@
     <button class="scrim" aria-label="Close menu" onclick={() => (moreOpen = false)}></button>
     <div class="sheet" id="more-sheet" role="dialog" aria-label="More pages" onclickcapture={collapse}>
       {#each overflow as p (p.id)}
-        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined}><Icon name={p.icon} />{p.label}{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
+        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => samePage(e, p.id)}><Icon name={p.icon} />{p.label}{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
       {/each}
     </div>
   {/if}
@@ -603,7 +611,7 @@
     {#if switchable()}<div class="slim"><ModeSwitcher slim {connection} /></div>{/if}
     <div class="tabs">
     {#each bar as p (p.id)}
-      <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined}
+      <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => samePage(e, p.id)}
         ><span class="icon"><Icon name={p.icon} />{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{p.label}</span></a
       >
     {/each}
