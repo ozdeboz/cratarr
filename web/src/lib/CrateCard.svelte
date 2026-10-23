@@ -133,9 +133,16 @@
     box-shadow: 0 1px 4px rgb(0 0 0 / 0.4);
   }
 
-  /* Viewed in the panel: a border only, as a playlist's chip. */
-  .active {
+  /* Viewed in the panel: a border only, as a playlist's chip; on the card's edge over everything in it, the covers and
+     the played meter too (the owner, 2026-10-24: it ran under them). */
+  .active::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    border-radius: inherit;
     box-shadow: inset 0 0 0 2px var(--accent);
+    pointer-events: none;
   }
 
   .art {
