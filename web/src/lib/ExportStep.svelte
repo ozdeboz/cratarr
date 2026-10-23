@@ -9,7 +9,7 @@
   import Card from './Card.svelte';
   import ChoiceList from './ChoiceList.svelte';
   import { exporting } from './export.svelte';
-  import { BITRATES, exportLine, exportReady, exportRequest, FORMATS, LAYOUTS, several, suggestedName, withTracks } from './exportChoices';
+  import { BITRATES, exportLine, exportReady, exportRequest, FORMATS, several, suggestedName, withTracks } from './exportChoices';
   import Icon from './Icon.svelte';
   import { shownPlaylists } from './output.svelte';
   import Seg from './Seg.svelte';
@@ -120,7 +120,8 @@
         />
       </SettingRow>
     {/if}
-    <SettingRow card label="Layout"><Seg label="Layout" options={LAYOUTS} bind:value={exporting.layout} /></SettingRow>
+    <!-- The layout as a switch (the owner): on, Artist and album folders; off, one folder. -->
+    <Switch card label="Preserve directory layout" checked={exporting.layout === 'folders'} onchange={(on) => (exporting.layout = on ? 'folders' : 'flat')} />
   {/if}
 
   <button class="go" disabled={!ready || starting} aria-busy={starting} onclick={start}><Icon name="download" size={20} /><span>Export</span></button>
