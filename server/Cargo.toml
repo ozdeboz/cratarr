@@ -5,8 +5,13 @@ edition = "2024"
 description = "Cratarr core: Jellyfin playlist index and API"
 license = "AGPL-3.0-or-later"
 
+# The rules for what plays and in what order (rules/), shared with players that play on their own.
+[workspace]
+members = [".", "rules"]
+
 [dependencies]
 anyhow = "1"
+cratarr-rules = { path = "rules" }
 axum = "0.8"
 # Hi-res to CD conversion (decision 0013). Exact pins, minimal features: lossless decoders only.
 flacenc = { version = "=0.5.1", default-features = false }

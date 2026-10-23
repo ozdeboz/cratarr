@@ -412,6 +412,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cratarr-rules"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cratarr-server"
 version = "0.7.6"
 dependencies = [
@@ -419,6 +427,7 @@ dependencies = [
  "argon2",
  "axum",
  "base64 0.22.1",
+ "cratarr-rules",
  "ebur128",
  "flacenc",
  "getrandom 0.3.4",
