@@ -7,6 +7,7 @@
   import Icon, { type IconName } from './Icon.svelte';
   import { setSwitch } from './listFilter.svelte';
   import { me } from './me.svelte';
+  import SectionHead from './SectionHead.svelte';
 
   let waiting = $state({ upgrades: 0, duplicates: 0 });
   let heard = $state<{ heard: number; tracks: number } | null>(null);
@@ -49,30 +50,29 @@
 </script>
 
 {#if me.admin && rows.length}
-  <section class="needs" aria-label="Needs you">
-    <h2>Needs you</h2>
-    {#each rows as r (r.text)}
-      {#if r.open}
-        <button class="row" onclick={r.open}><Icon name={r.icon} size={22} /><span>{r.text}</span><Icon name="chevronRight" size={20} /></button>
-      {:else}
-        <div class="row">
-          <Icon name={r.icon} size={22} /><span>{r.text}<i class="bar" style:--share={share} aria-hidden="true"></i></span>
-        </div>
-      {/if}
-    {/each}
+  <section aria-label="Needs you">
+    <!-- Its arrow: the Health page, where all of it is (decision 0063). -->
+    <SectionHead title="Needs you" onmore={() => (location.hash = '#/health')} />
+    <div class="needs">
+      {#each rows as r (r.text)}
+        {#if r.open}
+          <button class="row" onclick={r.open}><Icon name={r.icon} size={22} /><span>{r.text}</span><Icon name="chevronRight" size={20} /></button>
+        {:else}
+          <div class="row">
+            <Icon name={r.icon} size={22} /><span>{r.text}<i class="bar" style:--share={share} aria-hidden="true"></i></span>
+          </div>
+        {/if}
+      {/each}
+    </div>
   </section>
 {/if}
 
 <style>
+  /* As Home's other lists: 16 px in, 8 px apart. */
   .needs {
     display: grid;
-    gap: 2px;
-  }
-
-  h2 {
-    margin: 0 0 6px;
-    font-size: 18px;
-    font-weight: 600;
+    gap: 8px;
+    margin: 4px 16px 0;
   }
 
   .row {
