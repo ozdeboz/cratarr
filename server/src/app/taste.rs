@@ -91,16 +91,31 @@ const KINDS: [(Signal, &str, &str); 4] =
 const NUMBERS: [(Signal, &str, &str); 4] =
     [(Signal::Era, "Era", "value"), (Signal::Tempo, "Tempo", "value"), (Signal::Energy, "Energy", "share"), (Signal::Danceability, "Danceability", "share")];
 
-/// The taste and what is avoided, from `sources`, over `alike`.
-pub fn taste(alike: &Alike, sources: &Sources) -> TasteView {
+/// The sources one can switch off (the owner, 2026-10-23: a switch for each on the page).
+pub const SOURCES: [&str; 5] = ["favourites", "playlists", "plays", "skipped", "excluded"];
+
+/// The taste and what is avoided, from `sources`, over `alike`; a source in `off` adds nothing (its count stays, what
+/// it would add).
+pub fn taste(alike: &Alike, sources: &Sources, off: &[&str]) -> TasteView {
+    let on = |name: &str| !off.contains(&name);
     let mut liked: Vec<(usize, f64)> = Vec::new();
-    liked.extend(sources.favourites.iter().map(|&i| (i, FAVOURITE)));
-    liked.extend(sources.playlists.iter().map(|&(i, n)| (i, PLAYLIST * n.min(PLAYLISTS_MOST) as f64)));
-    // Plays count less and less: a track played a hundred times is no hundred favourites.
-    liked.extend(sources.plays.iter().map(|&(i, n)| (i, (1.0 + n as f64).ln())));
+    if on("favourites") {
+        liked.extend(sources.favourites.iter().map(|&i| (i, FAVOURITE)));
+    }
+    if on("playlists") {
+        liked.extend(sources.playlists.iter().map(|&(i, n)| (i, PLAYLIST * n.min(PLAYLISTS_MOST) as f64)));
+    }
+    if on("plays") {
+        // Plays count less and less: a track played a hundred times is no hundred favourites.
+        liked.extend(sources.plays.iter().map(|&(i, n)| (i, (1.0 + n as f64).ln())));
+    }
     let mut avoided: Vec<(usize, f64)> = Vec::new();
-    avoided.extend(sources.excluded.iter().map(|&i| (i, EXCLUDED)));
-    avoided.extend(sources.skipped.iter().map(|&(i, n)| (i, n.min(SKIPS_MOST) as f64)));
+    if on("excluded") {
+        avoided.extend(sources.excluded.iter().map(|&i| (i, EXCLUDED)));
+    }
+    if on("skipped") {
+        avoided.extend(sources.skipped.iter().map(|&(i, n)| (i, n.min(SKIPS_MOST) as f64)));
+    }
     let (taste, avoid) = (alike.profile(&liked), alike.profile(&avoided));
     let library = Library::of(alike);
     let count = |set: &[usize]| set.iter().collect::<std::collections::HashSet<_>>().len();
@@ -216,7 +231,7 @@ mod tests {
             skipped: vec![(at("c.flac"), 2)],
             ..Sources::default()
         };
-        let t = taste(&alike, &sources);
+        let t = taste(&alike, &sources, &[]);
         assert_eq!((t.taste.tracks, t.avoid.tracks), (3, 2));
         assert_eq!((t.taste.sources["favourites"], t.taste.sources["plays"], t.avoid.sources["excluded"], t.avoid.sources["skipped"]), (1, 2, 1, 1));
         let genres = &t.taste.words.iter().find(|k| k.kind == "genre").unwrap().top;
@@ -226,5 +241,9 @@ mod tests {
         let era = t.taste.numbers.iter().find(|n| n.name == "Era").unwrap();
         assert!(era.mid < 1970.0 && era.lo < 1961.0 && era.hi > 1990.0, "the taste's era among the library's range: {era:?}");
         assert_eq!(t.taste.heard, 0, "AudioMuse heard none");
+        // Sources switched off add nothing; their counts stay.
+        let t = taste(&alike, &sources, &["plays", "skipped", "excluded"]);
+        assert_eq!((t.taste.tracks, t.avoid.tracks, t.taste.sources["plays"], t.avoid.sources["excluded"]), (1, 0, 2, 1));
+        assert!(t.avoid.words.is_empty() && t.avoid.numbers.is_empty());
     }
 }

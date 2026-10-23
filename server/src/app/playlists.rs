@@ -2461,7 +2461,9 @@ impl PlaylistService {
     /// its own playlists, its plays and skips (the log's, none while it slept), its exclusions; only tracks of the
     /// libraries switched on (`without`: those off, Insights' switches), over the whole library's rarity. `period`
     /// (Insights' one) narrows the plays and skips; favourites, playlists and exclusions have no time.
-    pub async fn taste(&self, want: Option<&str>, without: &[String], period: super::history::Period) -> Result<super::taste::TasteView, ToggleError> {
+    /// `off`: sources switched off (`taste::SOURCES`).
+    pub async fn taste(&self, want: Option<&str>, without: &[String], period: super::history::Period, off: &[String]) -> Result<super::taste::TasteView, ToggleError> {
+        let off: Vec<&'static str> = super::taste::SOURCES.into_iter().filter(|s| off.iter().any(|o| o == s)).collect();
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
         let since = period.since(now).unwrap_or(0);
         let user = asking_user().ok_or_else(|| ToggleError::Refused("A taste is an account's own: sign in.".into()))?;
@@ -2492,7 +2494,7 @@ impl PlaylistService {
                 }
             }
             let sources = super::taste::Sources { favourites, playlists, plays, excluded, skipped: skips.into_iter().collect() };
-            Ok(super::taste::taste(alike, &sources))
+            Ok(super::taste::taste(alike, &sources, &off))
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?
