@@ -28,6 +28,7 @@
   let {
     condition = $bindable(),
     axis,
+    known = true,
     items = null,
     open = $bindable(false),
     bpms = null,
@@ -35,6 +36,9 @@
   }: {
     condition: FilterCondition;
     axis: ListAxis | undefined;
+    /** The axes have been read: until then no name and no summary, not the raw key ("bpm") and "none chosen" before
+     *  "Tempo · 80–105 BPM" (the owner, 2026-10-24). */
+    known?: boolean;
     /** What the list's items are when they hold tracks ("album", "playlist"): the condition holds for any or all of
      *  each one's tracks. */
     items?: string | null;
@@ -45,7 +49,7 @@
   } = $props();
 
   const on = $derived(condition.enabled !== false);
-  const label = $derived(axis?.label ?? condition.axis);
+  const label = $derived(axis?.label ?? (known ? condition.axis : ''));
   const QUANTIFIERS = [
     { value: 'any' as const, label: 'any' },
     { value: 'all' as const, label: 'all' },
@@ -128,7 +132,7 @@
   <div class="line">
     <button class="name" aria-expanded={open} onclick={() => (open = !open)}>
       <span class="label">{label}</span>
-      <span class="sum" class:not={condition.not}>· {summary}</span>
+      {#if known}<span class="sum" class:not={condition.not}>· {summary}</span>{/if}
     </button>
     <Switch hideLabel label="Apply {label}" checked={on} onchange={(v) => (condition.enabled = v ? undefined : false)} />
     <button class="chev" aria-label={open ? 'Fold' : 'Unfold'} onclick={() => (open = !open)}><Icon name={open ? 'chevronUp' : 'chevronDown'} size={20} /></button>

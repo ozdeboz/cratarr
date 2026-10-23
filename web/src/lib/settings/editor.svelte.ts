@@ -86,12 +86,13 @@ class SettingsEditor {
   namingError = $state<string | null>(null);
   #namingTimer: ReturnType<typeof setTimeout> | undefined;
 
-  // Subsonic apps' accounts (decision 0030): acted on at once, not through the Save bar.
-  sub = $state({ accounts: null as string[] | null, user: '', current: '', password: '', busy: false });
+  // Subsonic apps' accounts (decision 0030): acted on at once, not through the Save bar. `known`: asked once (the
+  // accounts null after it: they could not be read), so Import says nothing until then (the owner, 2026-10-24).
+  sub = $state({ accounts: null as string[] | null, known: false, user: '', current: '', password: '', busy: false });
 
   // Importing plays and favourites from a server into an account: the choices per server, and the import running now
-  // or the last one (one at a time), followed while it runs.
-  imp = $state({ sources: [] as ImportSource[], accounts: [] as string[], choice: {} as Record<string, ImportChoice>, job: null as ImportJob | null });
+  // or the last one (one at a time), followed while it runs. `known`: the servers asked once (until then no "No server").
+  imp = $state({ sources: [] as ImportSource[], accounts: [] as string[], choice: {} as Record<string, ImportChoice>, job: null as ImportJob | null, known: false });
   importing = $derived(!!this.imp.job && this.imp.job.finished === null);
 
   // Lidarr as the page edits it; the saved key is never sent here.
@@ -134,7 +135,8 @@ class SettingsEditor {
       .catch((e) => (this.loadError = e instanceof ApiError ? e.message : 'Unexpected error'));
     getSubsonicAccounts()
       .then((a) => (this.sub.accounts = a.accounts))
-      .catch(() => (this.sub.accounts = null));
+      .catch(() => (this.sub.accounts = null))
+      .finally(() => (this.sub.known = true));
     this.loadImports();
   };
 
@@ -237,6 +239,7 @@ class SettingsEditor {
     } catch {
       /* no servers to import from: the part says so */
     }
+    this.imp.known = true;
   };
 
   runImport = async (source: string, preview: boolean) => {

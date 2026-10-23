@@ -35,7 +35,7 @@
   import { canPreview, endPreview, preview, startPreview } from './preview.svelte';
   import { hold } from './hold';
   import { albumSubject, viewPlaylist } from './panel.svelte';
-  import { CRATE, queueCrate } from './crates.svelte';
+  import { CRATE, crates, loadCrates, queueCrate } from './crates.svelte';
   import HeartSheet from './HeartSheet.svelte';
   import { player } from './live.svelte';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './motion';
@@ -82,6 +82,13 @@
     const c = queueCrate(from);
     return c ? CRATE + c : null;
   });
+  /** A crate's chip needs the crates, which nothing else may have read: read here, and until then the line says
+   *  nothing rather than "Playing from" as words that turn into a chip (the owner, 2026-10-24). */
+  let cratesComing = $state(false);
+  if (isLocal() && local.from && crates.list === null) {
+    cratesComing = true;
+    void loadCrates().finally(() => (cratesComing = false));
+  }
   /** The plays-from chip's menu (decision 0058: a badge that opens an object opens its menu on a long-press). */
   let fromMenu = $state<string | null>(null);
   function openFrom() {
@@ -309,6 +316,7 @@
       <div class="sec qsec">
         <div class="from">
           {#if from && fromView}<button class="chip" onclick={openFrom} use:longpress={() => (fromMenu = fromView)}><Icon name={fromView.startsWith('album:') ? 'albums' : fromView.startsWith(CRATE) ? 'crates' : 'playlists'} size={18} /><span>{from}</span></button>
+          {:else if from && cratesComing}<!-- the crates on their way -->
           {:else if from}<span class="light">Playing from&nbsp;</span><strong>{from}</strong>
           {:else if !here && np.player}<span class="light">Playing on&nbsp;</span><strong>{np.player}</strong>
           {:else}<strong>Queue</strong>{/if}

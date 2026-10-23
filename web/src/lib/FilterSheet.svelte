@@ -60,7 +60,7 @@
   }
   // The axes and their values with their counts in the list in view, the most common first (decision 0061: over all
   // its items, so everything there is to choose from shows); a server from before it: the whole library's, uncounted.
-  let axes = $state<ListAxis[]>([]);
+  let axes = $state<ListAxis[] | null>(null);
   $effect(() => {
     if (!conditioned) return;
     const at = inView[list];
@@ -68,7 +68,10 @@
     const whole = () => getCrateAxes(prefs.source || undefined, hiddenLibraries());
     (at ? filterList(at.list, [], at.source, without).then((f) => f.axes, whole) : whole()).then(
       (a) => (axes = a),
-      (e) => toast.fail(e, "The filter's conditions couldn't be loaded"),
+      (e) => {
+        axes ??= [];
+        toast.fail(e, "The filter's conditions couldn't be loaded");
+      },
     );
   });
 
@@ -82,14 +85,24 @@
   });
 
   // Each server's own name and its libraries, as Settings → Libraries reads them. The cards show without them until
-  // they come: the list of servers alone is enough to choose one.
+  // they come: the list of servers alone is enough to choose one, but unnamed (not its kind first, then its own name
+  // over the kind: the owner, 2026-10-24). `settingsKnown`: read, or could not be (then the kind is the name).
   // (An administrator reads them from the server's settings; anyone else from the libraries, decision 0051.)
   let settings = $state<LibrariesView | null>(null);
+  let settingsKnown = $state(false);
   $effect(() => {
     let gone = false;
     (me.admin ? getSettings() : getLibraries()).then(
-      (s) => !gone && (settings = s),
-      (e) => !gone && toast.fail(e, "The servers' libraries couldn't be loaded"),
+      (s) => {
+        if (gone) return;
+        settings = s;
+        settingsKnown = true;
+      },
+      (e) => {
+        if (gone) return;
+        settingsKnown = true;
+        toast.fail(e, "The servers' libraries couldn't be loaded");
+      },
     );
     return () => (gone = true);
   });
@@ -111,7 +124,8 @@
         name: l.name,
         use: (view!.libraries.music.includes(l.id) ? 'music' : view!.libraries.incoming.includes(l.id) ? 'incoming' : 'unused') as LibraryUse,
       }));
-      return { id: s.id, name: own ?? (twin ? `${s.label} (${s.id})` : s.label), kind: own ? s.label : null, playing: s.playing, libraries };
+      const name = own ?? (twin ? `${s.label} (${s.id})` : s.label);
+      return { id: s.id, name: settingsKnown ? name : '', said: name, kind: own ? s.label : null, playing: s.playing, libraries };
     }),
   );
 
@@ -161,7 +175,7 @@
         <button
           class="pick"
           aria-pressed={on}
-          aria-label={[c.name, c.kind, c.playing ? 'playing' : null].filter(Boolean).join(', ')}
+          aria-label={[c.said, c.kind, c.playing ? 'playing' : null].filter(Boolean).join(', ')}
           onclick={() => follow(c.id)}
         >
           <Icon name="server" size={24} />

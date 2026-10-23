@@ -57,7 +57,11 @@
     }} onclose={() => (naming = false)} />
 {/if}
 
-{#if !ed.sub.accounts?.length}
+{#if !ed.sub.known || !ed.imp.known}
+  <!-- Not read yet: nothing rather than "Create an account" or "No server" first (the owner, 2026-10-24). -->
+{:else if !ed.sub.accounts}
+  <Group title="Import" more={MORE}><Item lead="bad" name="Could not read the accounts" /></Group>
+{:else if !ed.sub.accounts.length}
   <Group title="Import" more={MORE}><Item name="Create an account under Authentication first" /></Group>
 {:else}
   {#each ed.imp.sources as src (src.id)}

@@ -118,7 +118,7 @@
   import { download, inApp } from './app.svelte';
   import { isKept, setKept } from './kept.svelte';
   import { longpress } from './longpress';
-  import { isLocal, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
+  import { isLocal, playlistsKnown, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
   import { albumMoved, albumOf, artistOf, artistSubject, backToTracks, closePlaylist, NEW_PLAYLIST, panelDepth, viewOver, viewPlaylist, panel, TABS } from './panel.svelte';
   import ArtistBody from './ArtistBody.svelte';
   import ArtistMenu from './ArtistMenu.svelte';
@@ -932,7 +932,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (crateEditing) return crateTotal === null ? '' : plural(crateTotal, 'track');
     if (crate && preview !== null) return plural(preview, 'track');
     if (crate) return rows ? plural(total, 'track') : '';
-    if (multi) return plural(chosenCount, 'track');
+    if (multi) return playlistsKnown() ? plural(chosenCount, 'track') : '';
     if (!rows) return '';
     if (artist) {
       const albums = artist.tracks ? null : plural(artistHead?.albums.length ?? 0, 'album');
@@ -1857,7 +1857,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {#each ids as sid, k (sid)}
         {@const s = sections[sid]}
         {@const count = shownPlaylists().find((x) => x.id === sid)?.count ?? 0}
-        <Section title={sid} dot={layerColor(k, ids.length)} count={plural(count, 'track')} bind:open={() => !folded[sid], (v) => (folded[sid] = !v)} attach={fromAction(seen, () => sid)}>
+        <Section title={sid} dot={layerColor(k, ids.length)} count={playlistsKnown() ? plural(count, 'track') : ''} bind:open={() => !folded[sid], (v) => (folded[sid] = !v)} attach={fromAction(seen, () => sid)}>
           {#if s && 'error' in s}
             <p class="error" role="alert">{s.error}</p>
           {:else if !s}

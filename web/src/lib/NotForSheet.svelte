@@ -18,7 +18,7 @@
 
   let fit = $state<CrateFit | null>(null);
   let rules = $state<FilterCondition[]>([]);
-  let axes = $state<Axis[]>([]);
+  let axes = $state<Axis[] | null>(null);
   let down = $state<{ source: string; rows: PlaylistRow[] } | null>(null);
   let busy = $state(false);
   /** The rules as last kept. */
@@ -42,7 +42,7 @@
   $effect(() => {
     getCrateAxes(prefs.source || undefined).then(
       (a) => (axes = a),
-      () => {},
+      () => (axes ??= []),
     );
   });
 

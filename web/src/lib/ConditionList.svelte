@@ -14,7 +14,8 @@
     bpms = null,
   }: {
     conditions: FilterCondition[];
-    axes: ListAxis[];
+    /** null: not read yet (the cards then show no name rather than the axis's key first). */
+    axes: ListAxis[] | null;
     /** What the list's items are when they hold tracks: any or all of each one's tracks (lib/ConditionCard). */
     items?: string | null;
     bpms?: readonly (number | null | undefined)[] | null;
@@ -39,7 +40,8 @@
   {#each conditions as _, i (i)}
     <ConditionCard
       bind:condition={conditions[i]}
-      axis={axes.find((a) => a.key === conditions[i].axis)}
+      axis={axes?.find((a) => a.key === conditions[i].axis)}
+      known={axes !== null}
       {items}
       {bpms}
       bind:open={() => opened === i, (o) => (opened = o ? i : null)}
@@ -50,11 +52,11 @@
 {#if adding}
   <div class="axes" role="group" aria-label="Add a condition on">
     <!-- Sounds like is seeded from a track or an album (its menu), not added here. -->
-    {#each axes.filter((a) => a.kind !== 'like') as a (a.key)}<button class="axis" onclick={() => add(a)}>{a.label}</button>{/each}
+    {#each (axes ?? []).filter((a) => a.kind !== 'like') as a (a.key)}<button class="axis" onclick={() => add(a)}>{a.label}</button>{/each}
     <button class="axis" aria-label="Close" onclick={() => (adding = false)}><Icon name="close" size={16} /></button>
   </div>
 {:else}
-  <button class="add" onclick={() => (adding = true)} disabled={!axes.length}><Icon name="plus" size={18} /><span>Condition</span></button>
+  <button class="add" onclick={() => (adding = true)} disabled={!axes?.length}><Icon name="plus" size={18} /><span>Condition</span></button>
 {/if}
 
 <style>
