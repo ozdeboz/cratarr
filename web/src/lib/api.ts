@@ -619,6 +619,19 @@ export const getRepairs = () => request<Repairs>('/api/repairs');
 const post = <T>(path: string, body: unknown) =>
   request<T>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
+/** Adjust BPM (an administrator's, the library's for everyone): a track's BPM now (its tag, else Cratarr's measure)
+ *  and Cratarr's measure. */
+export type TrackTempo = { id: string; bpm: number | null; measured: number | null };
+export type TempoAdjust = 'half' | 'double' | 'reset';
+export const getTempo = (source: string, ids: string[]) => post<{ tracks: TrackTempo[] }>('/api/tempo', { source, ids });
+/** Halves, doubles or resets the tracks' BPM, written into their files; tracks with nothing to go from stay. */
+export const adjustTempo = (source: string, ids: string[], adjust: TempoAdjust) =>
+  request<{ tracks: TrackTempo[]; undo: string | null }>('/api/tempo', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source, ids, adjust }),
+  });
+
 /** The radio's next tracks (decision 0036), already in the radio's lane: like `seed` (the radio's seed, or the queue's
  *  own album or playlist), none of `exclude` (the queue), after `last` (the playing track). */
 export const radioNext = (ask: {

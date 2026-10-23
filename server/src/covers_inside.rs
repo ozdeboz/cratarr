@@ -101,156 +101,27 @@ fn write_new(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Kind {
-    Flac,
-    Mp3,
-}
-
-/// The picture inside one track, its front cover: through a copy whose audio must be the original's, byte for byte.
+/// The picture inside one track, its front cover: through a copy whose audio must be the original's, byte for byte
+/// (crate::retag).
 fn embed(track: &Path, data: &[u8], mime: &str) -> Result<()> {
-    use lofty::config::{ParseOptions, WriteOptions};
     use lofty::picture::{MimeType, Picture, PictureType};
-    use lofty::prelude::*;
-    use lofty::tag::Tag;
-    let kind = match track.extension().and_then(|x| x.to_str()).map(str::to_ascii_lowercase).as_deref() {
-        Some("flac") => Kind::Flac,
-        Some("mp3") => Kind::Mp3,
-        _ => bail!("only FLAC and MP3 get a picture inside"),
-    };
-    let original = std::fs::read(track).with_context(|| format!("reading {}", track.display()))?;
-    let before = audio_of(&original, kind).context("its audio could not be found")?;
-    // The copy keeps the track's extension: the tag reader knows a file's format by it.
-    let stem = track.file_stem().and_then(|n| n.to_str()).unwrap_or("track");
-    let ext = track.extension().and_then(|x| x.to_str()).unwrap_or("");
-    let copy = track.with_file_name(format!(".{stem}.cratarr-cover.{ext}"));
-    std::fs::write(&copy, &original)?;
-    let checked = (|| -> Result<()> {
-        let mut file = lofty::probe::Probe::open(&copy)?.options(ParseOptions::new().read_properties(false)).read()?;
-        if file.primary_tag_mut().is_none() {
-            let kind = file.primary_tag_type();
-            file.insert_tag(Tag::new(kind));
-        }
-        let tag = file.primary_tag_mut().context("no tag to hold the picture")?;
-        tag.push_picture(Picture::unchecked(data.to_vec()).pic_type(PictureType::CoverFront).mime_type(MimeType::from_str(mime)).build());
-        file.save_to_path(&copy, WriteOptions::default())?;
-        let after = std::fs::read(&copy)?;
-        if audio_of(&after, kind).context("its audio could not be found after writing")? != before {
-            bail!("writing the picture would have changed the audio");
-        }
-        if crate::serve::art::embedded(&copy).is_none() {
-            bail!("the picture could not be read back");
-        }
-        Ok(())
-    })();
-    if let Err(e) = checked {
-        std::fs::remove_file(&copy).ok();
-        return Err(e);
-    }
-    std::fs::set_permissions(&copy, std::fs::metadata(track)?.permissions())?;
-    std::fs::rename(&copy, track)?;
-    Ok(())
-}
-
-/// A file's audio, without its tags: FLAC's frames after its metadata blocks; MP3's frames between a leading ID3v2
-/// tag and trailing APEv2 and ID3v1 tags.
-fn audio_of(b: &[u8], kind: Kind) -> Option<&[u8]> {
-    match kind {
-        Kind::Flac => {
-            if b.get(..4)? != b"fLaC" {
-                return None;
+    crate::retag::rewrite(
+        track,
+        |tag| tag.push_picture(Picture::unchecked(data.to_vec()).pic_type(PictureType::CoverFront).mime_type(MimeType::from_str(mime)).build()),
+        |copy| {
+            if crate::serve::art::embedded(copy).is_none() {
+                bail!("the picture could not be read back");
             }
-            let mut at = 4;
-            loop {
-                let head = b.get(at..at + 4)?;
-                let len = u32::from_be_bytes([0, head[1], head[2], head[3]]) as usize;
-                at += 4 + len;
-                if head[0] & 0x80 != 0 {
-                    return b.get(at..);
-                }
-            }
-        }
-        Kind::Mp3 => {
-            let mut start = 0;
-            if b.get(..3)? == b"ID3" {
-                let h = b.get(..10)?;
-                let size = h[6..10].iter().fold(0usize, |s, &x| (s << 7) | (x & 0x7f) as usize);
-                start = 10 + size + if h[5] & 0x10 != 0 { 10 } else { 0 };
-            }
-            let mut end = b.len();
-            if end >= 128 && &b[end - 128..end - 125] == b"TAG" {
-                end -= 128;
-            }
-            if end >= 32 && &b[end - 32..end - 24] == b"APETAGEX" {
-                let size = u32::from_le_bytes(b[end - 20..end - 16].try_into().ok()?) as usize;
-                let header = if b[end - 9] & 0x80 != 0 { 32 } else { 0 };
-                end = end.checked_sub(size + header)?;
-            }
-            b.get(start..end)
-        }
-    }
+            Ok(())
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("cratarr-covers-{name}-{}", std::process::id()));
-        std::fs::remove_dir_all(&d).ok();
-        std::fs::create_dir_all(&d).unwrap();
-        d
-    }
-
-    /// A second of a tone as a 16-bit stereo WAV.
-    fn wav(path: &Path) {
-        let rate = 44_100u32;
-        let n = rate as usize;
-        let mut data = Vec::with_capacity(n * 4);
-        for i in 0..n {
-            let s = ((i as f64 * 440.0 * std::f64::consts::TAU / rate as f64).sin() * 8000.0) as i16;
-            data.extend_from_slice(&s.to_le_bytes());
-            data.extend_from_slice(&s.to_le_bytes());
-        }
-        let mut b = Vec::new();
-        b.extend_from_slice(b"RIFF");
-        b.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
-        b.extend_from_slice(b"WAVEfmt ");
-        b.extend_from_slice(&16u32.to_le_bytes());
-        b.extend_from_slice(&1u16.to_le_bytes());
-        b.extend_from_slice(&2u16.to_le_bytes());
-        b.extend_from_slice(&rate.to_le_bytes());
-        b.extend_from_slice(&(rate * 4).to_le_bytes());
-        b.extend_from_slice(&4u16.to_le_bytes());
-        b.extend_from_slice(&16u16.to_le_bytes());
-        b.extend_from_slice(b"data");
-        b.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        b.extend_from_slice(&data);
-        std::fs::write(path, b).unwrap();
-    }
-
-    fn flac(dir: &Path, name: &str) -> PathBuf {
-        let w = dir.join(format!("{name}.wav"));
-        wav(&w);
-        let f = dir.join(format!("{name}.flac"));
-        crate::convert::to_cd_flac(&w, &f).unwrap();
-        std::fs::remove_file(&w).unwrap();
-        f
-    }
-
-    /// Twenty MPEG-1 Layer III frames (128 kb/s, 44.1 kHz, silence), with an ID3v1 tag at the end.
-    fn mp3(path: &Path) {
-        let mut b = Vec::new();
-        for _ in 0..20 {
-            b.extend_from_slice(&[0xFF, 0xFB, 0x90, 0x00]);
-            b.extend(std::iter::repeat_n(0u8, 417 - 4));
-        }
-        let mut v1 = vec![0u8; 128];
-        v1[..3].copy_from_slice(b"TAG");
-        v1[3..8].copy_from_slice(b"Title");
-        b.extend_from_slice(&v1);
-        std::fs::write(path, b).unwrap();
-    }
+    use crate::retag::fixtures::*;
+    use crate::retag::{Kind, audio_of};
 
     fn jpeg(path: &Path) -> Vec<u8> {
         let img = image::RgbImage::from_fn(64, 64, |x, y| image::Rgb([x as u8 * 4, y as u8 * 4, 128]));
