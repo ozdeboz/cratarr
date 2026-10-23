@@ -329,7 +329,9 @@ export type Collection =
 export type PlayHow = 'play' | 'shuffle' | 'next' | 'last';
 /** A crate with its two toggles as the page shows them (a tap may be on its way); else as saved. `without`: the
  *  libraries switched off (CrateLook). */
-export type Picking = Collection | { kind: 'crate'; id: string; favourites?: CrateFavourites; favourite_albums?: CrateFavourites; without?: string[] };
+export type Picking =
+  | Collection
+  | { kind: 'crate'; id: string; favourites?: CrateFavourites; favourite_albums?: CrateFavourites; without?: string[]; filter?: Condition[] };
 /** The tracks chosen, in queue order (`n`: each one's place in the collection, for shuffle off), the one that plays
  *  first, how many it has that can be played, and the player that took them when the server queued them. */
 export type Picked = {
@@ -374,9 +376,12 @@ export type CrateStats = {
   covers: { source: string; album_id: string }[];
 };
 
-/** One condition of a crate: an axis, what it is tested against, negated or not. */
+/** One condition of a crate: an axis, what it is tested against, negated or not. A filter's (decision 0061) can be
+ *  muted (`enabled` false: ignored) and, on items that hold tracks (albums, playlists), hold for `any` of their tracks
+ *  (the default) or `all` of those that have a value on the axis. Left out: on, any. */
 export type CrateValue = { kind: 'yes' } | { kind: 'any_of'; values: string[] } | { kind: 'range'; min: number | null; max: number | null };
-export type Condition = { axis: string; not: boolean; value: CrateValue };
+export type Quantifier = 'any' | 'all';
+export type Condition = { axis: string; not: boolean; value: CrateValue; enabled?: boolean; quantifier?: Quantifier };
 export type CrateDef = { id: string; name: string; conditions: Condition[] };
 /** An axis the builder draws a control for, with its domain in this library. */
 export type Axis = {
@@ -384,6 +389,8 @@ export type Axis = {
   label: string;
   kind: 'yes_no' | 'values' | 'membership' | 'range';
   values: string[];
+  /** How many items of the list have each of `values` (the Filter sheet's, filterList); absent in the builder's. */
+  counts?: number[];
   min: number | null;
   max: number | null;
   known: number;
@@ -391,11 +398,13 @@ export type Axis = {
 /** The libraries a crate leaves out (decision 0024, amended 2026-10-23: a crate draws from every library switched
  *  on): `source/library` keys, as the page's library switches keep them (prefs.hiddenLibraries). None, or left out:
  *  every library. */
-export type CrateLook = { without?: string[] };
-/** `?source=…&without=…` (each key once). */
+/** `filter`: the filter on a crate (decision 0061), conditions besides its own (its rows, tempo spread, Play). */
+export type CrateLook = { without?: string[]; filter?: Condition[] };
+/** `?source=…&without=…&filter=…` (each key once; the filter as JSON). */
 function crateQuery(q: URLSearchParams, source?: string, look: CrateLook = {}) {
   if (source) q.set('source', source);
   for (const k of look.without ?? []) q.append('without', k);
+  if (look.filter?.length) q.set('filter', JSON.stringify(look.filter));
   const t = q.toString();
   return t ? `?${t}` : '';
 }
@@ -421,6 +430,34 @@ export const previewCrate = (conditions: Condition[], limit: number, source?: st
     body: JSON.stringify({ conditions, ...(look.without?.length ? { without: look.without } : {}) }),
   });
 };
+/** The list in view a filter is on (decision 0061): the Library's albums (on `source`), the playlists, a playlist's,
+ *  a crate's, an album's or an artist's tracks. */
+export type FilterList =
+  | { kind: 'library' }
+  | { kind: 'playlists' }
+  | { kind: 'playlist'; id: string }
+  | { kind: 'crate'; id: string; favourites?: CrateFavourites; favourite_albums?: CrateFavourites }
+  | { kind: 'album'; source: string; id: string }
+  | { kind: 'artist'; source: string; name: string };
+/** What passes: `keys` of the items that do (an album's id, a playlist's id, a track row's `entry`; empty for a crate,
+ *  whose rows come filtered: CrateLook.filter), how many of how many, and the list's axes (values with `counts`, most
+ *  common first; ranges' span) and tempo spread, over all its items. */
+export type Filtered = {
+  source: string;
+  items: 'albums' | 'playlists' | 'tracks';
+  keys: string[];
+  passed: number;
+  total: number;
+  axes: Axis[];
+  tempo: TempoBands;
+};
+/** A filter on the list in view: `without`, the libraries switched off (the Library's albums and a crate's tracks). */
+export const filterList = (list: FilterList, conditions: Condition[], source?: string, without?: string[]) =>
+  quietly<Filtered>(`/api/filter${follow(source)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ list, conditions, ...(without?.length ? { without } : {}) }),
+  });
 export const getCrates = (source?: string, without?: string[]) => quietly<Crate[]>(`/api/crates${crateQuery(new URLSearchParams(), source, { without })}`);
 /** A page of a crate's rows (newest first) and the crate's size. */
 /** A crate's own picture (kept as JPEG within 800 px); `round` reads it again after a change. */
@@ -579,7 +616,15 @@ export type ExportWhat =
 /** A crate, all of it, as the page shows it (its toggles, else as saved; the libraries switched off): the server takes
  *  it as an ExportWhat (`what` of an export, its preview or prepareExport); not in the union yet, as lib/exportChoices
  *  reads `tracks` of every what that is not playlists. */
-export type ExportCrate = { kind: 'crate'; id: string; source?: string; favourites?: CrateFavourites; favourite_albums?: CrateFavourites; without?: string[] };
+export type ExportCrate = {
+  kind: 'crate';
+  id: string;
+  source?: string;
+  favourites?: CrateFavourites;
+  favourite_albums?: CrateFavourites;
+  without?: string[];
+  filter?: Condition[];
+};
 /** The files as they are; hi-res ones at CD quality (16-bit FLAC, 44.1 kHz); lossless ones as Opus (lossy ones always
  *  stay as they are). */
 export type ExportFormat = 'original' | 'flac-cd' | 'opus';

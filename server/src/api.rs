@@ -69,6 +69,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/crates", get(crates).post(crate_create))
         .route("/api/crates/axes", get(crate_axes))
         .route("/api/crates/preview", post(crate_preview))
+        .route("/api/filter", post(filter_list))
         .route("/api/crates/{id}", get(crate_get).put(crate_update).delete(crate_delete))
         .route("/api/crates/{id}/rows", get(crate_rows))
         .route("/api/crates/{id}/tempo", get(crate_tempo))
@@ -1141,6 +1142,8 @@ enum ExportWhat {
         favourite_albums: Option<crate::crates::Favourites>,
         #[serde(default)]
         without: Vec<String>,
+        #[serde(default)]
+        filter: Vec<crate::crates::Condition>,
     },
 }
 
@@ -1206,8 +1209,8 @@ impl Export {
                 let name = if name.trim().is_empty() { "Tracks" } else { name.trim() };
                 app.playlists.export_tracks(name, tracks.iter().map(|t| (t.source.clone(), t.id.clone())).collect()).await?
             }
-            ExportWhat::Crate { id, source, favourites, favourite_albums, without } => {
-                let look = crate::app::CrateLook { favourites: *favourites, favourite_albums: *favourite_albums, without: without.clone() };
+            ExportWhat::Crate { id, source, favourites, favourite_albums, without, filter } => {
+                let look = crate::app::CrateLook { favourites: *favourites, favourite_albums: *favourite_albums, without: without.clone(), filter: filter.clone() };
                 app.playlists.export_crate(id, source.as_deref(), &look).await?
             }
         })
@@ -1343,7 +1346,8 @@ async fn crates(State(app): State<Arc<App>>, Query(f): Query<Follow>, RawQuery(q
 }
 
 /// A page of a crate's rows: `offset` and `limit` (at most 500, default 200; the page says the limit it kept); its
-/// libraries switched off come as `without` (`without_of`).
+/// libraries switched off come as `without` (`without_of`), the filter on it (decision 0061) as `filter`, its
+/// conditions as JSON.
 #[derive(Deserialize)]
 struct Page {
     source: Option<String>,
@@ -1354,18 +1358,24 @@ struct Page {
     favourites: Option<crate::crates::Favourites>,
     /// The favourite albums toggle's, likewise (decision 0024, amended 2026-10-19).
     favourite_albums: Option<crate::crates::Favourites>,
+    filter: Option<String>,
 }
 
 impl Page {
-    /// How the page looks at the crate: its toggles, and the libraries switched off (the raw query's `without`).
-    fn look(&self, query: Option<&str>) -> crate::app::CrateLook {
-        crate::app::CrateLook { favourites: self.favourites, favourite_albums: self.favourite_albums, without: without_of(query) }
+    /// How the page looks at the crate: its toggles, the libraries switched off (the raw query's `without`) and the
+    /// filter on it.
+    fn look(&self, query: Option<&str>) -> Result<crate::app::CrateLook, ApiError> {
+        let filter = match self.filter.as_deref().filter(|f| !f.trim().is_empty()) {
+            Some(f) => serde_json::from_str(f).map_err(|e| ToggleError::Refused(format!("That filter cannot be read: {e}.")))?,
+            None => Vec::new(),
+        };
+        Ok(crate::app::CrateLook { favourites: self.favourites, favourite_albums: self.favourite_albums, without: without_of(query), filter })
     }
 }
 
 async fn crate_rows(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Query<Page>, RawQuery(raw): RawQuery) -> Result<Response, ApiError> {
     let limit = q.limit.unwrap_or(200).clamp(1, 500);
-    Ok(Json(app.playlists.crate_rows(&id, q.source.as_deref(), q.offset, limit, &q.look(raw.as_deref())).await?).into_response())
+    Ok(Json(app.playlists.crate_rows(&id, q.source.as_deref(), q.offset, limit, &q.look(raw.as_deref())?).await?).into_response())
 }
 
 /// A crate's tempo spread (decision 0041): its tracks' 5-BPM bands, counted on the server.
@@ -1375,7 +1385,7 @@ async fn crate_tempo(
     Query(q): Query<Page>,
     RawQuery(raw): RawQuery,
 ) -> Result<Json<crate::crates::TempoBands>, ApiError> {
-    Ok(Json(app.playlists.crate_tempo(&id, q.source.as_deref(), &q.look(raw.as_deref())).await?))
+    Ok(Json(app.playlists.crate_tempo(&id, q.source.as_deref(), &q.look(raw.as_deref())?).await?))
 }
 
 /// Every playlist's facts for the Playlists page's table (decision 0042), by id.
@@ -1451,6 +1461,16 @@ struct Preview {
 async fn crate_preview(State(app): State<Arc<App>>, Query(q): Query<Page>, Json(p): Json<Preview>) -> Result<Response, ApiError> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     Ok(Json(app.playlists.crate_page(&p.conditions, q.source.as_deref(), q.offset, limit, &p.without).await?).into_response())
+}
+
+/// The Filter sheet (decision 0061): which of the list in view's items pass these conditions, how many of how many,
+/// and the list's axes with their values and counts.
+async fn filter_list(
+    State(app): State<Arc<App>>,
+    Query(f): Query<Follow>,
+    Json(r): Json<crate::app::filter::Request>,
+) -> Result<Json<crate::app::filter::Filtered>, ApiError> {
+    Ok(Json(crate::app::filter::filter(&app, f.source.as_deref(), r).await?))
 }
 
 /// Make playlist: the crate's tracks now, as the panel shows them (its favourites toggle), from the libraries not in

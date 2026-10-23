@@ -19,6 +19,7 @@ pub mod analysis_import;
 mod collection;
 mod error;
 mod events;
+pub mod filter;
 mod follow;
 mod incoming;
 mod insights;

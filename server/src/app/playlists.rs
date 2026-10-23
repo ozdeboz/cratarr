@@ -42,8 +42,8 @@ pub struct CratePage {
     pub genres: Vec<String>,
 }
 
-struct CrateLibrary {
-    source: String,
+pub(super) struct CrateLibrary {
+    pub(super) source: String,
     /// Every library's files (`Catalogue::crate_facts`); `files()` leaves out those switched off.
     files: Arc<Vec<crates::Facts>>,
     /// The catalogue folders of the libraries switched off (decision 0024, amended 2026-10-23).
@@ -62,20 +62,30 @@ impl CrateLibrary {
     }
 
     /// The files of the libraries switched on, newest first.
-    fn files(&self) -> impl Iterator<Item = &crates::Facts> {
+    pub(super) fn files(&self) -> impl Iterator<Item = &crates::Facts> {
         self.files.iter().filter(|f| !self.switched_off.contains(&f.folder))
     }
 
-    fn select(&self, conditions: &[crates::Condition]) -> Vec<String> {
-        let w = crates::World { membership: &self.membership, favourites: self.favourites.as_ref(), favourite_albums: self.favourite_albums.as_ref() };
-        crates::select(self.files(), conditions, &w).into_iter().map(str::to_string).collect()
+    /// What the axes test about the library as a whole.
+    pub(super) fn world(&self) -> crates::World<'_> {
+        crates::World { membership: &self.membership, favourites: self.favourites.as_ref(), favourite_albums: self.favourite_albums.as_ref() }
+    }
+
+    /// Which of one's own playlists hold each line.
+    pub(super) fn membership(&self) -> &HashMap<String, Vec<String>> {
+        &self.membership
+    }
+
+    pub(super) fn select(&self, conditions: &[crates::Condition]) -> Vec<String> {
+        crates::select(self.files(), conditions, &self.world()).into_iter().map(str::to_string).collect()
     }
 }
 
 /// How a crate is looked at, besides its definition: its two toggles as the page shows them (a tap may be on its way;
-/// `None`: as saved), and the libraries switched off on the page (`source/library` keys; decision 0024, amended
-/// 2026-10-23: a crate draws from every library switched on). The default is the crate as saved, from every library:
-/// what Home Assistant, voice and Play On get.
+/// `None`: as saved), the libraries switched off on the page (`source/library` keys; decision 0024, amended
+/// 2026-10-23: a crate draws from every library switched on), and the filter on it (decision 0061: conditions,
+/// unsaved, on the list in view). The default is the crate as saved, from every library, unfiltered: what Home
+/// Assistant, voice and Play On get.
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
 pub struct CrateLook {
     #[serde(default)]
@@ -84,6 +94,8 @@ pub struct CrateLook {
     pub favourite_albums: Option<crates::Favourites>,
     #[serde(default)]
     pub without: Vec<String>,
+    #[serde(default)]
+    pub filter: Vec<crates::Condition>,
 }
 
 /// A crate as the Crates page lists it (decision 0024); `count` is `None` when not known (the server's favourites could
@@ -489,7 +501,7 @@ mod undo_tests {
     #[tokio::test]
     async fn crates_and_spoken_names_are_put_back() {
         let (d, s) = service().await;
-        let cond = |v: &str| crates::Condition { axis: "genre".into(), not: false, value: crates::Value::AnyOf { values: vec![v.into()] } };
+        let cond = |v: &str| crates::Condition::new("genre", false, crates::Value::AnyOf { values: vec![v.into()] });
         let (id, made) = s.crate_save(None, "Jazz", vec![cond("Jazz")]).await.unwrap();
         let (_, changed) = s.crate_save(Some(&id), "Jazzy", vec![cond("Bebop")]).await.unwrap();
         s.undo(&changed.unwrap()).await.unwrap();
@@ -1594,6 +1606,14 @@ impl PlaylistService {
 
     /// The library a crate is worked out from, and its lines.
     async fn crate_selection(&self, conditions: &[crates::Condition], want: Option<&str>, without: &[String]) -> Result<(CrateLibrary, Vec<String>), ToggleError> {
+        let lib = self.crate_library_for(conditions, want, without).await?;
+        let lines = lib.select(conditions);
+        Ok((lib, lines))
+    }
+
+    /// The library these conditions are worked out on, with what they need of the favourites (refused when those
+    /// cannot be read): a crate's, a filter's (decision 0061).
+    pub(super) async fn crate_library_for(&self, conditions: &[crates::Condition], want: Option<&str>, without: &[String]) -> Result<CrateLibrary, ToggleError> {
         let lib = self.crate_library(want, crates::needs_favourites(conditions), crates::needs_favourite_albums(conditions), without).await?;
         if crates::needs_favourites(conditions) && lib.favourites.is_none() {
             return Err(ToggleError::CannotPlay("The server's favourites could not be read.".into()));
@@ -1601,8 +1621,7 @@ impl PlaylistService {
         if crates::needs_favourite_albums(conditions) && lib.favourite_albums.is_none() {
             return Err(ToggleError::CannotPlay("The favourite albums could not be read.".into()));
         }
-        let lines = lib.select(conditions);
-        Ok((lib, lines))
+        Ok(lib)
     }
 
     /// A page of a crate's rows (it can hold thousands): from `offset`, at most `limit`, with the crate's size, as it is
@@ -1612,7 +1631,8 @@ impl PlaylistService {
         self.crate_page(&shown, want, offset, limit, &look.without).await
     }
 
-    /// A crate's conditions as its toggles show it: as given, else as saved.
+    /// A crate's conditions as its toggles show it (as given, else as saved), with its left-out tracks and the filter on
+    /// it.
     pub(super) async fn crate_shown(&self, id: &str, look: &CrateLook) -> Result<Vec<crates::Condition>, ToggleError> {
         let def = self.crate_def(id).await?;
         let fav = match look.favourites {
@@ -1626,7 +1646,9 @@ impl PlaylistService {
         let left = self.own_crates()?.left_out(id).await?;
         let album_tracks = album_lines(self.lib.catalogue(), left.albums.iter().cloned().collect()).await;
         let excluded = self.own_crates()?.excluded().await?;
-        Ok(crates::leaving_out(&left_lines(&left, &album_tracks, &excluded), &crates::shown(&def.conditions, fav, albums)))
+        let mut shown = crates::leaving_out(&left_lines(&left, &album_tracks, &excluded), &crates::shown(&def.conditions, fav, albums));
+        shown.extend(look.filter.iter().cloned());
+        Ok(shown)
     }
 
     /// Tracks taken out of a crate by hand, or put back (`out` false), by their ids on a server, and whole albums by
@@ -1812,8 +1834,12 @@ impl PlaylistService {
     /// The axes and their domains in the libraries not in `without`, for the builder (decision 0024, issue 4).
     pub async fn crate_axes(&self, want: Option<&str>, without: &[String]) -> Result<Vec<crates::AxisView>, ToggleError> {
         let lib = self.crate_library(want, false, false, without).await?;
-        let playlists: Vec<String> = self.own_store()?.snapshot().await?.into_iter().map(|(name, _, _)| name).collect();
-        Ok(crates::axes(lib.files(), &playlists))
+        Ok(crates::axes(lib.files(), &self.own_playlist_names().await?))
+    }
+
+    /// One's own playlists' names: the membership axis' values.
+    pub(super) async fn own_playlist_names(&self) -> Result<Vec<String>, ToggleError> {
+        Ok(self.own_store()?.snapshot().await?.into_iter().map(|(name, _, _)| name).collect())
     }
 
     /// What a crate is worked out on: every library's files newest first with their facts, less the folders of those in
@@ -2256,7 +2282,7 @@ mod library_tests {
         assert_eq!(library(&[1]).select(unlisted), ["A/1.flac", "B/1.flac"], "Incoming switched off");
         assert_eq!(library(&[0]).select(unlisted), ["../in/X/2.flac"], "Music switched off");
         // A crate of Music's tracks only is the same whether Incoming is on or not.
-        let rock = [crates::Condition { axis: "genre".into(), not: false, value: crates::Value::AnyOf { values: vec!["rock".into()] } }];
+        let rock = [crates::Condition::new("genre", false, crates::Value::AnyOf { values: vec!["rock".into()] })];
         assert_eq!(library(&[]).select(&rock), library(&[1]).select(&rock));
         assert_eq!(crates::axes(library(&[1]).files(), &[]).iter().find(|a| a.key == "genre").unwrap().values, ["Dub", "Rock"], "the axes of what is on");
     }
