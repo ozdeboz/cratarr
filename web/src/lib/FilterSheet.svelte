@@ -9,11 +9,6 @@
   // chip only shows the library's use. A tap on a server's card follows it; a tap on the followed one goes back to no choice, which is
   // Cratarr's own source where the server has it (lib/sources). The libraries are only shown, with their use: Cratarr
   // has no per-library visibility, and a use is set only in Settings (decision 0009).
-  // On the Library, under its switches, "Excluded (N)": Cratarr's global exclusions while there are any (decision 0024,
-  // amended 2026-10-19; moved here from the top of the page, the owner: "It takes up a lot of real estate"), opening
-  // their own sheet (lib/ExcludedSheet) over this one.
-  import ExcludedSheet from './ExcludedSheet.svelte';
-  import { excluded } from './exclusions.svelte';
   import Switch from './Switch.svelte';
   import ConditionList from './ConditionList.svelte';
   import type { ListAxis } from './ConditionCard.svelte';
@@ -139,7 +134,6 @@
     prefs.source = prefs.source === id ? noChoice() : id;
   }
 
-  let excludedOpen = $state(false);
 </script>
 
 <MenuSheet
@@ -162,11 +156,6 @@
           <Switch card label={w.label} checked={switchOn(list, w.key)} onchange={(on) => setSwitch(list, w.key, on)} />
         {/each}
       </div>
-    {/if}
-    {#if page === 'library' && excluded.n}
-      <button class="opens" onclick={() => (excludedOpen = true)}
-        ><span>Excluded ({excluded.n.toLocaleString()})</span><Icon name="chevronRight" size={22} /></button
-      >
     {/if}
 
     {#each cards as c (c.id)}
@@ -209,9 +198,6 @@
   </div>
 </MenuSheet>
 
-{#if excludedOpen}
-  <ExcludedSheet onclose={() => (excludedOpen = false)} />
-{/if}
 
 <style>
   /* Symfonium's sheet: rounded cards on the sheet, a little apart. */
@@ -228,44 +214,6 @@
   .toggles {
     display: grid;
     gap: 3px;
-  }
-
-  /* A row that opens a sheet of its own (the global exclusions): a card as a switch's, the chevron where its switch
-     would be. */
-  .opens {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    width: 100%;
-    min-height: 64px;
-    padding: 8px 16px 8px 20px;
-    border: 0;
-    border-radius: 20px;
-    background: var(--card);
-    color: var(--text);
-    font: inherit;
-    font-size: 16px;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .opens span {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .opens:hover {
-    background: var(--card-hover);
-  }
-
-  .opens :global(svg) {
-    flex: none;
-    color: var(--muted);
-  }
-
-  .opens:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
   }
 
   .count {

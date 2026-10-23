@@ -4,8 +4,6 @@
   // facts show with it: its library as a dot in that library's colour (none for Music, and only while more than one
   // shows), an Incoming album's conversion, or how it relates to Music (an upgrade, a duplicate). Its menu
   // (lib/LibrarySheet) moves it into another library, replaces the album in Music it upgrades, or deletes it.
-  // Cratarr's global exclusions (decision 0024, amended 2026-10-19) are counted here, for the filter sheet's
-  // "Excluded (N)" (lib/FilterSheet; the owner moved them off the page: "It takes up a lot of real estate").
   import { ApiError, type AlbumsSource, type ListedAlbum, type ShelfSource } from './lib/api';
   import AlbumShelf from './lib/AlbumShelf.svelte';
   import Meter from './lib/Meter.svelte';
@@ -22,11 +20,6 @@
   import { libraryShown } from './lib/sources.svelte';
   import { untrack } from 'svelte';
   import { me } from './lib/me.svelte';
-  import { loadExcluded } from './lib/exclusions.svelte';
-
-  $effect(() => {
-    loadExcluded();
-  });
 
   let error = $state<string | null>(null);
   const sources = $derived<AlbumsSource[] | null>(library.view?.sources ?? null);
