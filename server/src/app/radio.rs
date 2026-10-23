@@ -809,12 +809,13 @@ fn read_index(library: &Path, userdata: &Path, owner: Option<&str>, member: &Has
             r.get::<_, Option<String>>(6)?,
             r.get::<_, Option<String>>(7)?,
             r.get::<_, Option<i64>>(8)?,
-            r.get::<_, Option<String>>(9)?,
-            r.get::<_, Option<i64>>(10)?,
+            // The BPM, then the album artist, as the query names them.
+            r.get::<_, Option<i64>>(9)?,
+            r.get::<_, Option<String>>(10)?,
         ))
     })?;
     for r in rows {
-        let (id, title, artist, album, album_id, year, genre, album_genres, duration_ms, album_artist, bpm) = r?;
+        let (id, title, artist, album, album_id, year, genre, album_genres, duration_ms, bpm, album_artist) = r?;
         let mut a: Vec<u32> = artists_of.get(&id).map(|v| v.iter().map(|x| artists.of(x)).collect()).unwrap_or_default();
         a.extend(album_artist.as_deref().map(|x| artists.of(x)));
         let mut g: Vec<u32> = genre.as_deref().filter(|x| !x.is_empty()).map(|x| genres.of(x)).into_iter().collect();
