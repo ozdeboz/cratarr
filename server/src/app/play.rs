@@ -3,13 +3,16 @@
 //! the screen pressed had loaded (Unlisted's 10,000 tracks and more played the same few, its panel's first page).
 //!
 //! - **What:** a crate (its rules, its two toggles as the page shows them; a genre is the crate `genre:<name>`), a
-//!   playlist, an album, an artist, or tracks named one by one (a selection, a queue).
+//!   playlist, an album, an artist, tracks named one by one (a selection, a queue), the favourites, or the library.
 //! - **How:** Play (the collection's order, its first [`QUEUE_MOST`], or from a given track on), Shuffle
 //!   ([`QUEUE_MOST`] drawn evenly from all of it, then mixed; all of it when it is that small), Play next and Add to
 //!   queue (in order, as Play takes them).
 //! - **Where:** the answer always carries the tracks (the page's own player queues them itself); asked, the server
 //!   also queues them on the server's player (as `/api/queue/add` and a playlist's Play reach it) or on one of
 //!   Cratarr's players by name (Play On, decision 0031).
+//!
+//! The picking itself is the rules' (cratarr-rules, decision 0059), and [`choose`] is the one way to it: Play On's play
+//! and add by name, a playlist's Play and the voice assistant's play by name go through it too.
 
 use std::sync::Arc;
 
@@ -18,9 +21,6 @@ use serde::{Deserialize, Serialize};
 use super::{App, QueueTrack, ToggleError};
 use crate::crates::Favourites;
 use crate::source::{self, PlayHow};
-
-/// The most tracks one play puts in a queue (the owner, 2026-10-23).
-pub const QUEUE_MOST: usize = 500;
 
 /// What is played.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -50,16 +50,14 @@ pub enum Collection {
         source: String,
         ids: Vec<String>,
     },
+    /// The favourite tracks of the one who asks (of a player's owner, through Play On), less what they excluded from
+    /// automatic picks (decision 0024, amended 2026-10-19).
+    Favourites,
+    /// Cratarr's own library, all of it, less what is excluded as for the favourites.
+    Library,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum How {
-    Play,
-    Shuffle,
-    Next,
-    Last,
-}
+pub use cratarr_rules::{How, QUEUE_MOST, Rng};
 
 /// Where the server queues them itself: the server's player (the one that plays, or the one followed), or one of
 /// Cratarr's players by its name.
@@ -83,10 +81,13 @@ pub struct Request {
     /// The queue's name on a player of Cratarr's; else the collection's.
     #[serde(default)]
     pub name: Option<String>,
+    /// At most this many (never more than [`QUEUE_MOST`]); left out: [`QUEUE_MOST`].
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 
-/// The tracks chosen, in queue order, as players hold them (`n`: each one's place in the collection, so turning shuffle
-/// off puts them in its order), the one that plays first, how many the collection has that can be played, and the
+/// The tracks chosen, in queue order, as players hold them (`n`: each one's place in the collection, the order repeat
+/// all's rounds follow), the one that plays first, how many the collection has that can be played, and the
 /// player that took them when the server queued them.
 #[derive(Debug, Serialize)]
 pub struct Played {
@@ -98,71 +99,14 @@ pub struct Played {
     pub player: Option<String>,
 }
 
-/// A small generator (xorshift), seeded from the operating system: an even draw needs no better.
-pub struct Rng(u64);
-
-impl Rng {
-    pub fn new() -> Self {
-        let mut b = [0u8; 8];
-        let seed = match getrandom::fill(&mut b) {
-            Ok(()) => u64::from_le_bytes(b),
-            Err(_) => std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1),
-        };
-        Self(seed | 1)
-    }
-
-    #[cfg(test)]
-    fn seeded(n: u64) -> Self {
-        Self(n | 1)
-    }
-
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-
-    /// From 0 up to (not including) `n`.
-    fn below(&mut self, n: usize) -> usize {
-        (self.next() % n.max(1) as u64) as usize
-    }
-}
-
-/// `k` of `pool`, each as likely as any other, in a random order (the first `k` steps of Fisher–Yates).
-fn draw(mut pool: Vec<usize>, k: usize, rng: &mut Rng) -> Vec<usize> {
-    let k = k.min(pool.len());
-    for i in 0..k {
-        let j = i + rng.below(pool.len() - i);
-        pool.swap(i, j);
-    }
-    pool.truncate(k);
-    pool
-}
-
-/// Which of a collection's `n` playable tracks go in the queue (their places in it), in queue order, and the place in
-/// the queue that plays first. `at`: the track asked to play first.
-///
-/// - Play, Play next, Add to queue: `most` in the collection's order. From `at` on; when fewer than `most` follow it,
-///   those before it fill up the queue, so a collection that small is queued whole from that track.
-/// - Shuffle: `most` drawn evenly from all `n`, in a random order; `at` first, when given.
-pub fn pick(n: usize, how: How, at: Option<usize>, most: usize, rng: &mut Rng) -> (Vec<usize>, usize) {
-    let at = at.filter(|&a| a < n);
-    let most = most.max(1);
-    match how {
-        How::Shuffle => match at {
-            Some(a) => {
-                let rest = draw((0..n).filter(|&i| i != a).collect(), most - 1, rng);
-                (std::iter::once(a).chain(rest).collect(), 0)
-            }
-            None => (draw((0..n).collect(), most, rng), 0),
-        },
-        How::Play | How::Next | How::Last => {
-            let a = at.unwrap_or(0);
-            let start = a.min(n.saturating_sub(most));
-            ((start..n.min(start + most)).collect(), a - start)
-        }
-    }
+/// A generator for one play, seeded from the operating system (the rules take a seed: cratarr-rules).
+pub fn rng() -> Rng {
+    let mut b = [0u8; 8];
+    let seed = match getrandom::fill(&mut b) {
+        Ok(()) => u64::from_le_bytes(b),
+        Err(_) => std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1),
+    };
+    Rng::seeded(seed)
 }
 
 /// A collection's playable tracks, in its order: the server their ids are on, and each one's id and, for lines of a
@@ -173,38 +117,153 @@ struct Candidates {
     lines: Option<Vec<String>>,
     /// Tracks that come with their names (an album's, an artist's).
     named: Option<Vec<QueueTrack>>,
+    /// Songs of Cratarr's own library, named from it (the favourites, the library).
+    own: bool,
     /// The collection's own name, for a queue on a player of Cratarr's.
     name: Option<String>,
+    /// A playlist's lines that cannot be played (no file, or not known to the server yet).
+    unknown: usize,
 }
 
-/// Plays a collection (see the module's notes). `want`: the server to use (the page's), else the first connected.
-pub async fn play(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Played, ToggleError> {
-    let c = candidates(app, want, &r.what).await?;
+impl Candidates {
+    fn of(source: String, ids: Vec<String>, name: Option<String>) -> Self {
+        Self { source, ids, lines: None, named: None, own: false, name, unknown: 0 }
+    }
+}
+
+/// Where a play starts: from a track (its id), or from a place in the collection (Play On's `index`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Start {
+    Track(String),
+    Place(usize),
+}
+
+/// What a play chose (see [`choose`]): the tracks in queue order (`n`: each one's place in the collection), the one
+/// that plays first, how many the collection has that can be played and how many of its lines cannot, and its name.
+#[derive(Debug)]
+pub struct Chosen {
+    pub source: String,
+    pub tracks: Vec<QueueTrack>,
+    pub index: usize,
+    pub total: usize,
+    pub unknown: usize,
+    pub name: Option<String>,
+}
+
+/// The one way tracks are chosen for a play, whoever asks (the page, Play On's `play` and `add` by name, a playlist's
+/// Play, a voice assistant's play by name): the collection's playable tracks, then the rules' pick (cratarr-rules), at
+/// most `most` (at most [`QUEUE_MOST`]). `want`: the server to use, else the first connected; `owner`: whose favourites
+/// and exclusions.
+pub async fn choose(
+    app: &Arc<App>,
+    want: Option<&str>,
+    what: &Collection,
+    how: How,
+    start: Option<Start>,
+    most: usize,
+    owner: Option<&str>,
+) -> Result<Chosen, ToggleError> {
+    let c = candidates(app, want, what, owner).await?;
     let total = c.ids.len();
     if total == 0 {
         return Err(ToggleError::CannotPlay("Nothing in it can be played.".into()));
     }
-    let at = r.from.as_deref().and_then(|f| c.ids.iter().position(|id| id == f));
-    let (chosen, index) = pick(total, r.how, at, QUEUE_MOST, &mut Rng::new());
-    let (tracks, index) = tracks_of(app, &c, &chosen, index).await?;
+    let at = match start {
+        Some(Start::Track(f)) => c.ids.iter().position(|id| *id == f),
+        Some(Start::Place(p)) => Some(p),
+        None => None,
+    };
+    let picked = cratarr_rules::pick(total, how, at, most.clamp(1, QUEUE_MOST), &mut rng());
+    let (tracks, index) = tracks_of(app, &c, &picked.chosen, picked.index).await?;
     if tracks.is_empty() {
         return Err(ToggleError::CannotPlay("Nothing in it can be played.".into()));
     }
+    Ok(Chosen { source: c.source, tracks, index, total, unknown: c.unknown, name: c.name })
+}
+
+/// Plays a collection (see the module's notes). `want`: the server to use (the page's), else the first connected.
+pub async fn play(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Played, ToggleError> {
+    let owner = crate::serve::instance().and_then(|s| s.current_user());
+    let most = r.limit.unwrap_or(QUEUE_MOST);
+    let c = choose(app, want, &r.what, r.how, r.from.map(Start::Track), most, owner.as_deref()).await?;
     let player = match r.on {
         None => None,
-        Some(On::Server) => Some(on_server(app, &c.source, &tracks, index, r.how).await?),
+        Some(On::Server) => Some(on_server(app, &c.source, &c.tracks, c.index, r.how).await?.0),
         Some(On::Player(name)) => {
             let queue_name = r.name.or(c.name);
-            on_player(app, &name, tracks.clone(), index, r.how, queue_name).await?;
+            on_player(app, &name, c.tracks.clone(), c.index, r.how, queue_name).await?;
             Some(name)
         }
     };
-    Ok(Played { source: c.source, tracks, index, total, player })
+    Ok(Played { source: c.source, tracks: c.tracks, index: c.index, total: c.total, player })
 }
 
-async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection) -> Result<Candidates, ToggleError> {
+/// A playlist played on the server's player (`POST /api/playlists/{id}/play`), through [`choose`] as every play.
+pub async fn play_playlist(app: &Arc<App>, id: &str, how: How, want: Option<&str>) -> Result<super::PlayResult, ToggleError> {
+    let c = match choose(app, want, &Collection::Playlist { id: id.to_string() }, how, None, QUEUE_MOST, None).await {
+        Ok(c) => c,
+        // Usually the catalogue is still matching files to the server (a first fill takes minutes): say so.
+        Err(ToggleError::CannotPlay(_)) => return Err(ToggleError::CannotPlay(app.playlists.why_none(want).await?)),
+        Err(e) => return Err(e),
+    };
+    let (player, sent) = on_server(app, &c.source, &c.tracks, c.index, how).await?;
+    Ok(super::PlayResult { player, sent, total: c.total, unknown: c.unknown })
+}
+
+/// The playlist meant by what was said, as its tracks' ids on a server (decision 0015; `GET /api/playlists/by-name`):
+/// the voice assistant plays them itself. At most `limit` (1 to [`super::playlists::PLAY_MAX`]: a Jellyfin player holds
+/// no more), through [`choose`].
+pub async fn by_name(app: &Arc<App>, said: &str, shuffled: bool, limit: usize, want: Option<&str>) -> Result<super::ByName, ToggleError> {
+    let Some(id) = app.playlists.spoken(said).await? else { return Ok(super::ByName { playlist: None, tracks: Vec::new() }) };
+    let how = if shuffled { How::Shuffle } else { How::Play };
+    let most = limit.clamp(1, super::playlists::PLAY_MAX);
+    let tracks = match choose(app, want, &Collection::Playlist { id: id.clone() }, how, None, most, None).await {
+        Ok(c) => c.tracks.into_iter().map(|t| t.id).collect(),
+        Err(ToggleError::CannotPlay(_)) => Vec::new(),
+        Err(e) => return Err(e),
+    };
+    Ok(super::ByName { playlist: Some(id), tracks })
+}
+
+/// A song of Cratarr's own library as players hold it.
+pub(super) fn own_track(s: crate::serve::api::Song) -> QueueTrack {
+    let named = |s: String| Some(s).filter(|s| !s.is_empty());
+    QueueTrack {
+        source: source::cratarr::KIND.id.to_string(),
+        id: s.id,
+        name: s.title,
+        artist: named(s.artist),
+        album: named(s.album),
+        album_id: named(s.album_id),
+        duration_secs: Some(s.duration as f64).filter(|d| *d > 0.0),
+        ..QueueTrack::default()
+    }
+}
+
+/// The favourites of `owner`, or all of Cratarr's own library, less what `owner` excluded from automatic picks.
+async fn own_candidates(app: &Arc<App>, what: &Collection, owner: Option<&str>) -> Result<Candidates, ToggleError> {
+    let Some(served) = crate::serve::instance() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
+    let excluded = app.playlists.excluded_songs_of(owner).await?;
+    let favourites = matches!(what, Collection::Favourites);
+    let owner = owner.map(str::to_string);
+    let mut ids = blocking(move || {
+        if favourites {
+            let owner = owner.ok_or_else(|| anyhow::anyhow!("there is no account yet: make one in Settings"))?;
+            served.userdata.starred(&owner, crate::userdata::Kind::Song)
+        } else {
+            served.library.all_song_ids()
+        }
+    })
+    .await?;
+    ids.retain(|id| !excluded.contains(id));
+    let name = Some(if favourites { "Favourites" } else { "Library" }.to_string());
+    Ok(Candidates { own: true, ..Candidates::of(source::cratarr::KIND.id.to_string(), ids, name) })
+}
+
+async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection, owner: Option<&str>) -> Result<Candidates, ToggleError> {
     let cat = app.library.catalogue();
     match what {
+        Collection::Favourites | Collection::Library => own_candidates(app, what, owner).await,
         Collection::Crate { id, favourites, favourite_albums } => {
             let name = app.playlists.crate_def(id).await?.name;
             let shown = app.playlists.crate_shown(id, *favourites, *favourite_albums).await?;
@@ -216,13 +275,14 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection) -> Re
                 Ok(lines.into_iter().zip(found).filter_map(|(l, id)| Some((id?, l))).unzip())
             })
             .await?;
-            Ok(Candidates { source, ids, lines: Some(lines), named: None, name: Some(name) })
+            Ok(Candidates { lines: Some(lines), ..Candidates::of(source, ids, Some(name)) })
         }
         Collection::Playlist { id } => {
             let r = app.playlists.reach(id)?;
             let entries = r.store.entries(&r.name).await?;
             let (source, _) = app.playlists.source_of(want)?;
             let (sid, music) = (source.clone(), app.library.music().map(std::path::PathBuf::from));
+            let count = entries.len();
             // As its view plays it: the lines whose file is there and known to the server.
             let (ids, lines): (Vec<String>, Vec<String>) = blocking(move || {
                 let found = cat.line_track_ids(&sid, &entries)?;
@@ -234,7 +294,7 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection) -> Re
                     .unzip())
             })
             .await?;
-            Ok(Candidates { source, ids, lines: Some(lines), named: None, name: Some(id.clone()) })
+            Ok(Candidates { lines: Some(lines), unknown: count - ids.len(), ..Candidates::of(source, ids, Some(id.clone())) })
         }
         Collection::Album { source, id } => {
             let v = album_view(app, source, id).await?;
@@ -256,7 +316,8 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection) -> Re
                     })
                 })
                 .collect();
-            Ok(Candidates { source: v.source, ids: named.iter().map(|t| t.id.clone()).collect(), lines: None, named: Some(named), name: Some(v.title) })
+            let ids = named.iter().map(|t| t.id.clone()).collect();
+            Ok(Candidates { named: Some(named), ..Candidates::of(v.source, ids, Some(v.title)) })
         }
         Collection::Artist { source, name } => {
             let v = app.playing.artist_view(source, name).await?;
@@ -277,11 +338,12 @@ async fn candidates(app: &Arc<App>, want: Option<&str>, what: &Collection) -> Re
                     })
                 })
                 .collect();
-            Ok(Candidates { source: v.source, ids: named.iter().map(|t| t.id.clone()).collect(), lines: None, named: Some(named), name: Some(v.name) })
+            let ids = named.iter().map(|t| t.id.clone()).collect();
+            Ok(Candidates { named: Some(named), ..Candidates::of(v.source, ids, Some(v.name)) })
         }
         Collection::Tracks { source, ids } => {
             let ids: Vec<String> = ids.iter().filter(|i| !i.is_empty()).cloned().collect();
-            Ok(Candidates { source: source.clone(), ids, lines: None, named: None, name: None })
+            Ok(Candidates::of(source.clone(), ids, None))
         }
     }
 }
@@ -308,6 +370,12 @@ async fn tracks_of(app: &Arc<App>, c: &Candidates, chosen: &[usize], index: usiz
     };
     let found: Vec<Option<QueueTrack>> = if let Some(named) = &c.named {
         chosen.iter().map(|&i| Some(numbered(named[i].clone(), i))).collect()
+    } else if c.own {
+        let Some(served) = crate::serve::instance() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
+        let ids: Vec<String> = chosen.iter().map(|&i| c.ids[i].clone()).collect();
+        let mut songs: std::collections::HashMap<String, crate::serve::api::Song> =
+            blocking(move || served.library.songs_by_id(&ids)).await?.into_iter().map(|s| (s.id.clone(), s)).collect();
+        chosen.iter().map(|&i| songs.remove(&c.ids[i]).map(|s| numbered(own_track(s), i))).collect()
     } else if let Some(lines) = &c.lines {
         let rows = app.playlists.rows_of(chosen.iter().map(|&i| lines[i].clone()).collect(), &c.source).await?;
         rows.into_iter()
@@ -361,8 +429,8 @@ async fn tracks_of(app: &Arc<App>, c: &Candidates, chosen: &[usize], index: usiz
 
 /// Queues them on the server's player: Play and Shuffle replace what it plays (from the first to play), Play next and
 /// Add to queue go to the player that plays. A Jellyfin player (Finamp) holds fewer than a queue here: it gets what it
-/// holds.
-async fn on_server(app: &Arc<App>, source_id: &str, tracks: &[QueueTrack], index: usize, how: How) -> Result<String, ToggleError> {
+/// holds. Answers with the player's label and how many it was sent.
+async fn on_server(app: &Arc<App>, source_id: &str, tracks: &[QueueTrack], index: usize, how: How) -> Result<(String, usize), ToggleError> {
     let (active, s) = app
         .library
         .connected()
@@ -372,11 +440,12 @@ async fn on_server(app: &Arc<App>, source_id: &str, tracks: &[QueueTrack], index
     let most = if active.cfg.kind == source::jellyfin::KIND.id { super::playlists::PLAY_MAX } else { QUEUE_MOST };
     let from = if matches!(how, How::Play | How::Shuffle) { index } else { 0 };
     let ids: Vec<String> = tracks[from..].iter().take(most).map(|t| t.id.clone()).collect();
-    match how {
-        How::Play | How::Shuffle => s.play_tracks(&ids, PlayHow::Now).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}"))),
-        How::Next => app.playing.queue_add(Some(source_id), &ids, PlayHow::Next).await,
-        How::Last => app.playing.queue_add(Some(source_id), &ids, PlayHow::Last).await,
-    }
+    let label = match how {
+        How::Play | How::Shuffle => s.play_tracks(&ids, PlayHow::Now).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))?,
+        How::Next => app.playing.queue_add(Some(source_id), &ids, PlayHow::Next).await?,
+        How::Last => app.playing.queue_add(Some(source_id), &ids, PlayHow::Last).await?,
+    };
+    Ok((label, ids.len()))
 }
 
 /// Queues them on one of Cratarr's players (Play On): a new queue under the collection's name, or added by hand.
@@ -411,82 +480,6 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Sen
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn distinct(v: &[usize]) -> bool {
-        let mut s = v.to_vec();
-        s.sort_unstable();
-        s.windows(2).all(|w| w[0] != w[1])
-    }
-
-    #[test]
-    fn a_shuffle_draws_evenly_from_the_whole_of_a_big_collection() {
-        // Unlisted's size: every part of it is as likely as the first page.
-        let (n, rounds) = (10_000, 400);
-        let mut rng = Rng::seeded(7);
-        let mut tenths = [0usize; 10];
-        let mut first_page = 0;
-        for _ in 0..rounds {
-            let (chosen, index) = pick(n, How::Shuffle, None, QUEUE_MOST, &mut rng);
-            assert_eq!((chosen.len(), index), (QUEUE_MOST, 0));
-            assert!(distinct(&chosen) && chosen.iter().all(|&i| i < n));
-            for &i in &chosen {
-                tenths[i * 10 / n] += 1;
-                first_page += usize::from(i < 200);
-            }
-        }
-        // 200,000 picks: 20,000 a tenth; 4,000 on the first page (2 %). Within a few percent.
-        let each = rounds * QUEUE_MOST / 10;
-        assert!(tenths.iter().all(|&t| t.abs_diff(each) < each / 20), "{tenths:?}");
-        let page = rounds * QUEUE_MOST * 200 / n;
-        assert!(first_page.abs_diff(page) < page / 10, "{first_page} of {page}");
-    }
-
-    #[test]
-    fn a_shuffle_is_mixed_not_in_the_collections_order() {
-        let (chosen, _) = pick(10_000, How::Shuffle, None, QUEUE_MOST, &mut Rng::seeded(3));
-        let rising = chosen.windows(2).filter(|w| w[0] < w[1]).count();
-        assert!((150..350).contains(&rising), "{rising} of 499 rising");
-    }
-
-    #[test]
-    fn a_small_collection_shuffles_whole() {
-        let (mut chosen, index) = pick(300, How::Shuffle, None, QUEUE_MOST, &mut Rng::seeded(1));
-        assert_eq!(index, 0);
-        chosen.sort_unstable();
-        assert_eq!(chosen, (0..300).collect::<Vec<_>>());
-        assert_eq!(pick(0, How::Shuffle, None, QUEUE_MOST, &mut Rng::seeded(1)).0, Vec::<usize>::new());
-    }
-
-    #[test]
-    fn a_shuffle_from_a_track_plays_it_first_and_draws_the_rest() {
-        let (chosen, index) = pick(10_000, How::Shuffle, Some(9_876), QUEUE_MOST, &mut Rng::seeded(5));
-        assert_eq!((chosen.len(), chosen[0], index), (QUEUE_MOST, 9_876, 0));
-        assert!(distinct(&chosen));
-        let (chosen, _) = pick(3, How::Shuffle, Some(1), QUEUE_MOST, &mut Rng::seeded(5));
-        assert_eq!((chosen.len(), chosen[0]), (3, 1));
-    }
-
-    #[test]
-    fn play_takes_the_first_ones_in_order_at_most_the_cap() {
-        let mut rng = Rng::seeded(1);
-        assert_eq!(pick(10_000, How::Play, None, QUEUE_MOST, &mut rng), ((0..500).collect(), 0));
-        assert_eq!(pick(42, How::Play, None, QUEUE_MOST, &mut rng), ((0..42).collect(), 0));
-        assert_eq!(pick(10_000, How::Next, None, QUEUE_MOST, &mut rng), ((0..500).collect(), 0));
-        assert_eq!(pick(10_000, How::Last, None, QUEUE_MOST, &mut rng).0.len(), QUEUE_MOST);
-    }
-
-    #[test]
-    fn play_from_a_track_queues_from_it_and_fills_up_with_those_before() {
-        let mut rng = Rng::seeded(1);
-        // Far from the end: from it on.
-        assert_eq!(pick(1_000, How::Play, Some(300), QUEUE_MOST, &mut rng), ((300..800).collect(), 0));
-        // Near the end: those before it fill up the queue, and it plays first.
-        assert_eq!(pick(1_000, How::Play, Some(900), QUEUE_MOST, &mut rng), ((500..1_000).collect(), 400));
-        // A small collection: whole, from that track.
-        assert_eq!(pick(50, How::Play, Some(20), QUEUE_MOST, &mut rng), ((0..50).collect(), 20));
-        // A track not in it: from the start.
-        assert_eq!(pick(50, How::Play, Some(99), QUEUE_MOST, &mut rng), ((0..50).collect(), 0));
-    }
 
     #[test]
     fn the_request_names_each_kind_of_collection() {

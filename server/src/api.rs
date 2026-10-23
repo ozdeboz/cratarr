@@ -1588,9 +1588,13 @@ async fn player(State(app): State<Arc<App>>, Path(name): Path<String>) -> Result
     }
 }
 
-async fn player_command(State(app): State<Arc<App>>, Path(name): Path<String>, Json(c): Json<crate::app::PlayOnCommand>) -> Result<StatusCode, ApiError> {
-    app.play_on.command(&name, c).await?;
-    Ok(StatusCode::NO_CONTENT)
+/// A command to one of Cratarr's players: 204, or for a shuffle or a clear that changed what was to come, its Undo to
+/// send back as it is (`{"undo": {"command": "restore", "tracks": [...]}}`).
+async fn player_command(State(app): State<Arc<App>>, Path(name): Path<String>, Json(c): Json<crate::app::PlayOnCommand>) -> Result<Response, ApiError> {
+    Ok(match app.play_on.answer(&name, c).await? {
+        Some(undo) => Json(json!({ "undo": undo })).into_response(),
+        None => StatusCode::NO_CONTENT.into_response(),
+    })
 }
 
 async fn player_state(State(app): State<Arc<App>>, Path(name): Path<String>, Json(r): Json<crate::app::PlayerReport>) -> Result<StatusCode, ApiError> {
@@ -2028,7 +2032,7 @@ struct ByNameQuery {
 /// The playlist meant by a spoken name, as its tracks' server ids (decision 0015). `playlist` is null when nothing
 /// fits; that is an answer, not an error.
 async fn playlist_by_name(State(app): State<Arc<App>>, Query(q): Query<ByNameQuery>) -> Result<Json<crate::app::ByName>, ApiError> {
-    Ok(Json(app.playlists.by_name(&q.name, q.shuffle, q.limit.unwrap_or(50), q.source.as_deref()).await?))
+    Ok(Json(crate::app::play::by_name(&app, &q.name, q.shuffle, q.limit.unwrap_or(50), q.source.as_deref()).await?))
 }
 
 #[derive(Deserialize)]
@@ -2219,7 +2223,7 @@ async fn catalogue_problems(State(app): State<Arc<App>>) -> Result<Json<Vec<crat
 
 #[derive(Deserialize)]
 struct PlayBody {
-    mode: crate::app::PlayMode,
+    mode: crate::app::play::How,
 }
 
 async fn transport(
@@ -2356,7 +2360,7 @@ async fn play_playlist(
     Query(f): Query<Follow>,
     Json(b): Json<PlayBody>,
 ) -> Result<Json<crate::app::PlayResult>, ApiError> {
-    Ok(Json(app.playlists.play(&id, b.mode, f.source.as_deref()).await?))
+    Ok(Json(crate::app::play::play_playlist(&app, &id, b.mode, f.source.as_deref()).await?))
 }
 
 #[derive(Deserialize)]

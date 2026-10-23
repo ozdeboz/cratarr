@@ -196,6 +196,14 @@ impl Library {
         Ok(albums)
     }
 
+    /// Every song's id, in the library's own order (a play of all of it, app::play).
+    pub fn all_song_ids(&self) -> Result<Vec<String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT id FROM songs ORDER BY n")?;
+        let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Songs by id, in the order given; unknown ids are left out.
     pub fn songs_by_id(&self, ids: &[String]) -> Result<Vec<Song>> {
         let db = self.db();

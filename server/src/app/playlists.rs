@@ -20,15 +20,6 @@ use crate::sync_state::Kind;
 /// The most tracks one play sends: Finamp holds at most 100 in its queue (seen 2026-10-12; user: "we go by 100").
 pub const PLAY_MAX: usize = 100;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PlayMode {
-    Play,
-    Shuffle,
-    Next,
-    Last,
-}
-
 /// A playlist found by a spoken name, as its tracks on a server (decision 0015): the caller plays them itself.
 #[derive(Debug, Serialize)]
 pub struct ByName {
@@ -264,23 +255,12 @@ pub struct PlaylistRow {
 pub struct PlayResult {
     /// "Finamp on Lenovo Tab".
     pub player: String,
-    /// Tracks sent (at most PLAY_MAX).
+    /// Tracks sent (at most 500; to a Jellyfin player, PLAY_MAX).
     pub sent: usize,
     /// Playable tracks in the playlist.
     pub total: usize,
     /// Lines whose track is missing or not known to the server yet; left out.
     pub unknown: usize,
-}
-
-/// Shuffle in place (Fisher–Yates) with a small generator seeded from the clock; good enough for a playlist.
-fn shuffle<T>(items: &mut [T]) {
-    let mut x = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
-    for i in (1..items.len()).rev() {
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        items.swap(i, (x % (i as u64 + 1)) as usize);
-    }
 }
 
 /// Whether `entries` only reorders or leaves out lines of `expected` (each line at most as often as it was there).
@@ -1155,20 +1135,12 @@ impl PlaylistService {
         }
     }
 
-    /// The playlist meant by what was said, as its tracks on a server (decision 0015): Cratarr is the playlist server;
-    /// a voice assistant asks it and plays the tracks itself. `limit` at most PLAY_MAX.
-    pub async fn by_name(&self, said: &str, shuffled: bool, limit: usize, want: Option<&str>) -> Result<ByName, ToggleError> {
+    /// The playlist meant by what was said (decision 0015), by its name or one it is spoken as; none when nothing fits.
+    /// Its tracks are chosen as for any play (app::play::by_name).
+    pub async fn spoken(&self, said: &str) -> Result<Option<String>, ToggleError> {
         let list = self.view(None).await?;
         let named: Vec<crate::voice::Named> = list.iter().map(|p| crate::voice::Named { name: &p.id, spoken: &p.spoken }).collect();
-        let Some(id) = crate::voice::find(crate::voice::spoken_name(said), &named).map(str::to_string) else {
-            return Ok(ByName { playlist: None, tracks: Vec::new() });
-        };
-        let (_, _, mut tracks, _) = self.server_ids(&id, want).await?;
-        if shuffled {
-            shuffle(&mut tracks);
-        }
-        tracks.truncate(limit.clamp(1, PLAY_MAX));
-        Ok(ByName { playlist: Some(id), tracks })
+        Ok(crate::voice::find(crate::voice::spoken_name(said), &named).map(str::to_string))
     }
 
     /// Set the other names a playlist is spoken as. Blank ones are dropped. Returns the undo token (none when nothing
@@ -1219,37 +1191,26 @@ impl PlaylistService {
         Ok(())
     }
 
-    /// Play a playlist on the server's player: its tracks in file order (or shuffled), looked up in the catalogue,
-    /// at most PLAY_MAX of them. `want` = the server to use (default: the first connected one).
-    pub async fn play(&self, id: &str, mode: PlayMode, want: Option<&str>) -> Result<PlayResult, ToggleError> {
-        let (active, source, mut ids, unknown) = self.server_ids(id, want).await?;
-        let total = ids.len();
-        if total == 0 {
-            // Usually the catalogue is still matching files to the server (a first fill takes minutes): say so.
-            let c = self.lib.catalogue();
-            let status = tokio::task::spawn_blocking(move || c.status()).await.ok().and_then(Result::ok);
-            let why = match status {
-                Some(st) if st.linked.get(&active.cfg.id).copied().unwrap_or(0) < st.files => format!(
-                    "Cratarr is still matching your music with {} ({} of {} tracks); try again in a few minutes",
-                    label_of(&active.cfg),
-                    st.linked.get(&active.cfg.id).copied().unwrap_or(0),
-                    st.files
-                ),
-                _ => format!("none of this playlist's tracks are on {}", label_of(&active.cfg)),
-            };
-            return Err(ToggleError::CannotPlay(why));
-        }
-        if mode == PlayMode::Shuffle {
-            shuffle(&mut ids);
-        }
-        ids.truncate(PLAY_MAX);
-        let how = match mode {
-            PlayMode::Play | PlayMode::Shuffle => source::PlayHow::Now,
-            PlayMode::Next => source::PlayHow::Next,
-            PlayMode::Last => source::PlayHow::Last,
-        };
-        let player = source.play_tracks(&ids, how).await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))?;
-        Ok(PlayResult { player, sent: ids.len(), total, unknown })
+    /// Why none of a playlist's tracks can be played on the server: usually the catalogue is still matching files to
+    /// it (a first fill takes minutes).
+    pub async fn why_none(&self, want: Option<&str>) -> Result<String, ToggleError> {
+        let sources = self.lib.connected();
+        let (active, _) = want
+            .and_then(|w| sources.iter().find(|(a, _)| a.cfg.id == w))
+            .or_else(|| sources.first())
+            .cloned()
+            .ok_or_else(|| ToggleError::CannotPlay("no server is connected".into()))?;
+        let c = self.lib.catalogue();
+        let status = tokio::task::spawn_blocking(move || c.status()).await.ok().and_then(Result::ok);
+        Ok(match status {
+            Some(st) if st.linked.get(&active.cfg.id).copied().unwrap_or(0) < st.files => format!(
+                "Cratarr is still matching your music with {} ({} of {} tracks); try again in a few minutes",
+                label_of(&active.cfg),
+                st.linked.get(&active.cfg.id).copied().unwrap_or(0),
+                st.files
+            ),
+            _ => format!("none of this playlist's tracks are on {}", label_of(&active.cfg)),
+        })
     }
 
     /// A playlist's tracks for the local player (decision 0022): the server they are known on, their ids in file order,

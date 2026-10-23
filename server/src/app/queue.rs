@@ -8,8 +8,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use cratarr_rules::{ByHand, Lane};
+
 use super::ToggleError;
-use super::playon::{Command, QueueTrack, shuffled};
+use super::playon::{Command, QueueTrack};
 use super::radio::{Autoplay, AutoplayMode, LANE_AUTOPLAY, LANE_RADIO, RADIO_COUNT, RADIO_MAX, RadioBy, from_old};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -143,18 +145,9 @@ fn with_entries(tracks: Vec<QueueTrack>) -> Vec<QueueTrack> {
 /// The lane of tracks added by hand (`QueueTrack::lane`).
 const LANE_NEXT: &str = "next";
 
-/// The place in the album or playlist the queue has reached: the last track up to the playing one that has one.
-fn reached(played: &[QueueTrack]) -> Option<u32> {
-    played.iter().rev().find_map(|t| t.n)
-}
-
-/// Back in the album's or playlist's own order, from `from` on; those from before it last, so nothing is lost. Tracks
-/// without a place keep theirs, at the end.
-fn in_order(rest: Vec<QueueTrack>, from: Option<u32>) -> Vec<QueueTrack> {
-    let (mut placed, unplaced): (Vec<QueueTrack>, Vec<QueueTrack>) = rest.into_iter().partition(|t| t.n.is_some());
-    placed.sort_by_key(|t| t.n);
-    let (after, before): (Vec<QueueTrack>, Vec<QueueTrack>) = placed.into_iter().partition(|t| from.is_none_or(|f| t.n > Some(f)));
-    after.into_iter().chain(before).chain(unplaced).collect()
+/// Each track's lane, as the rules take them (cratarr-rules).
+fn lanes(tracks: &[QueueTrack]) -> Vec<Lane> {
+    tracks.iter().map(|t| Lane::of(t.lane.as_deref())).collect()
 }
 
 fn missing() -> ToggleError {
@@ -189,7 +182,8 @@ impl Queue {
     /// The tracks added by hand still to come: the run of them right after the playing one, `current` (0033's lanes).
     fn added_ahead(&self, current: Option<usize>) -> Vec<QueueTrack> {
         let Some(c) = current else { return Vec::new() };
-        self.tracks.iter().skip(c + 1).take_while(|t| t.lane.as_deref() == Some(LANE_NEXT)).cloned().collect()
+        let n = cratarr_rules::added_ahead(&lanes(&self.tracks), current);
+        self.tracks.iter().skip(c + 1).take(n).cloned().collect()
     }
 
     /// A lane's tracks still to come, out (Radio or Autoplay going off, repeat all coming on): `true` when there were any.
@@ -308,10 +302,10 @@ impl Queue {
                 let mut tracks = with_entries(tracks);
                 let end = self.tracks.len();
                 // Added by hand: right after the playing track (`next`, the newest first), or after those added before
-                // (`last`), ahead of the album or playlist either way.
+                // (`last`), ahead of the album or playlist either way (the rules' own, cratarr-rules).
                 let by_hand = match how.as_deref() {
-                    Some("next") => Some(current.map_or(end, |c| c + 1)),
-                    Some("last") => Some(current.map_or(end, |c| c + 1 + self.added_ahead(Some(c)).len())),
+                    Some("next") => Some(cratarr_rules::add_place(&lanes(&self.tracks), current, ByHand::Next)),
+                    Some("last") => Some(cratarr_rules::add_place(&lanes(&self.tracks), current, ByHand::Last)),
                     _ => None,
                 };
                 if by_hand.is_some() {
@@ -352,29 +346,34 @@ impl Queue {
                 self.tracks.extend(tracks.iter().cloned());
                 Command::Upcoming { tracks, shuffled }
             }
-            // Shuffle on or off (0033's second order): what comes of the album or playlist mixed, or back in its own order
-            // from the playing track on; what was added by hand stays ahead. Told as the new upcoming tracks.
+            // Shuffle, once (the owner, 2026-10-23: a queue always has an order): the rules' one-time shuffle
+            // (cratarr-rules); what was added by hand, Radio's inserts and Autoplay's tail stay where they are. Off has no
+            // state to turn off: the order stays. Told as the upcoming tracks, never shuffled (a player from before keeps a
+            // switch of its own for repeat all's rounds: it goes off).
             Command::Shuffle { on } => {
                 let c = current.filter(|c| *c < self.tracks.len()).ok_or_else(|| ToggleError::Refused("Nothing plays.".into()))?;
-                let ahead = self.added_ahead(Some(c));
-                // Only the queue's own tracks are mixed (decision 0036, amended): Radio's inserts for the playing track
-                // stay right after it (and its hand-added run), Autoplay's tail stays last, each in its order.
-                let after = &self.tracks[c + 1 + ahead.len()..];
-                let run = after.iter().take_while(|t| t.lane.as_deref() == Some(LANE_RADIO)).count();
-                let inserts = after[..run].to_vec();
-                let mut rest: Vec<QueueTrack> = after[run..].iter().filter(|t| t.lane.is_none()).cloned().collect();
-                let others: Vec<QueueTrack> =
-                    after[run..].iter().filter(|t| t.lane.is_some() && t.lane.as_deref() != Some(LANE_AUTOPLAY)).cloned().collect();
-                let tail: Vec<QueueTrack> = after[run..].iter().filter(|t| t.lane.as_deref() == Some(LANE_AUTOPLAY)).cloned().collect();
-                if on {
-                    shuffled(&mut rest);
-                } else {
-                    rest = in_order(rest, reached(&self.tracks[..=c]));
+                if on && let Some(order) = cratarr_rules::shuffle_order(&lanes(&self.tracks), Some(c), &mut super::play::rng()) {
+                    let upcoming = cratarr_rules::take(&self.tracks, &order);
+                    self.tracks.truncate(c + 1);
+                    self.tracks.extend(upcoming);
                 }
-                let upcoming: Vec<QueueTrack> = ahead.into_iter().chain(inserts).chain(rest).chain(others).chain(tail).collect();
-                self.tracks.truncate(c + 1);
-                self.tracks.extend(upcoming.iter().cloned());
-                Command::Upcoming { tracks: upcoming, shuffled: Some(on) }
+                Command::Upcoming { tracks: self.tracks[c + 1..].to_vec(), shuffled: Some(false) }
+            }
+            // Everything after the playing track, out (the playing track plays on); all of it when nothing plays.
+            Command::Clear => {
+                self.tracks.truncate(cratarr_rules::upcoming_start(current, self.tracks.len()));
+                Command::Upcoming { tracks: Vec::new(), shuffled: None }
+            }
+            // Undo of a shuffle or a clear (cratarr-rules): what was to come, less what played since, in place of what is
+            // to come now.
+            Command::Restore { tracks } => {
+                let start = cratarr_rules::upcoming_start(current, self.tracks.len());
+                let entries: Vec<&str> = self.tracks.iter().map(|t| t.entry.as_str()).collect();
+                let before: Vec<&str> = tracks.iter().map(|t| t.entry.as_str()).collect();
+                let back = with_entries(cratarr_rules::take(&tracks, &cratarr_rules::restore_order(&entries, current, &before)));
+                self.tracks.truncate(start);
+                self.tracks.extend(back.iter().cloned());
+                Command::Upcoming { tracks: back, shuffled: Some(false) }
             }
             Command::Remove { index, entry } => {
                 let i = self.place(entry.as_deref(), index)?;
@@ -601,30 +600,53 @@ mod tests {
     }
 
     #[test]
-    fn shuffle_mixes_what_comes_of_the_album_and_off_brings_its_order_back() {
+    fn a_shuffle_is_once_and_its_undo_puts_the_order_before_back() {
         let tracks: Vec<QueueTrack> = (0..12u32).map(|i| QueueTrack { n: Some(i), ..track(&format!("t{i}")) }).collect();
         let mut q = Queue::default();
         q.edit(Command::play(tracks, 0, 0)).unwrap();
         // Playing t0, one added by hand ahead.
         q.edit_at(Command::Add { from: Default::default(), tracks: vec![track("x")], at: None, after: None, how: Some("next".into()) }, Some(0)).unwrap();
+        let before = q.tracks[1..].to_vec();
         let Command::Upcoming { tracks: told, shuffled } = q.edit_at(Command::Shuffle { on: true }, Some(0)).unwrap() else { panic!() };
-        assert_eq!(shuffled, Some(true), "the player is told, for repeat all's next rounds");
+        assert_eq!(shuffled, Some(false), "no shuffle state: a player from before turns its own off");
+        assert_eq!(told, q.tracks[1..], "told the upcoming tracks as they are now");
         assert_eq!(told.len(), 12, "every track still there");
         assert_eq!(told[0].id, "x", "what was added by hand stays ahead");
         let mut ns: Vec<u32> = told[1..].iter().filter_map(|t| t.n).collect();
         assert_ne!(ns, (1..12).collect::<Vec<_>>(), "11 tracks in their own order after a shuffle: one chance in 40 million");
         ns.sort();
         assert_eq!(ns, (1..12).collect::<Vec<_>>());
-        // On to the fourth track of the shuffled order; shuffle off: the album goes on from that track's place.
-        let at = 4;
-        let here = q.tracks[at].n.unwrap();
-        let Command::Upcoming { tracks: told, .. } = q.edit_at(Command::Shuffle { on: false }, Some(at)).unwrap() else { panic!() };
-        let order: Vec<u32> = told.iter().filter_map(|t| t.n).collect();
-        let mut want: Vec<u32> = q.tracks[at + 1..].iter().filter_map(|t| t.n).collect();
-        want.sort();
-        let (after, before): (Vec<u32>, Vec<u32>) = want.into_iter().partition(|n| *n > here);
-        assert_eq!(order, [after, before].concat(), "from the playing track's place on, the earlier ones last");
+        // Off has nothing to turn off: the order stays.
+        let now = q.tracks.clone();
+        q.edit_at(Command::Shuffle { on: false }, Some(0)).unwrap();
+        assert_eq!(q.tracks, now);
+        // On to the third; Undo: the order before, less the two played since, after the playing one.
+        let played: Vec<String> = q.tracks[1..=2].iter().map(|t| t.entry.clone()).collect();
+        let Command::Upcoming { tracks: told, .. } = q.edit_at(Command::Restore { tracks: before.clone() }, Some(2)).unwrap() else { panic!() };
+        let want: Vec<QueueTrack> = before.into_iter().filter(|t| !played.contains(&t.entry)).collect();
+        assert_eq!(told, want);
+        assert_eq!(q.tracks[3..], want[..], "in the order before, by the same entries");
         assert!(q.edit_at(Command::Shuffle { on: true }, None).is_err(), "nothing plays");
+        // `shuffle` alone is once, as `on: true`.
+        assert_eq!(serde_json::from_str::<Command>(r#"{"command":"shuffle"}"#).unwrap(), Command::Shuffle { on: true });
+    }
+
+    #[test]
+    fn a_clear_takes_what_is_to_come_out_and_its_undo_puts_it_back() {
+        let mut q = played(&["a", "b", "c", "d"]);
+        let before = q.tracks[2..].to_vec();
+        let version = q.version;
+        let Command::Upcoming { tracks: told, .. } = q.edit_at(Command::Clear, Some(1)).unwrap() else { panic!() };
+        assert!(told.is_empty());
+        assert_eq!((ids(&q), q.version), ("a b".into(), version + 1), "the playing track plays on");
+        // Autoplay brought one meanwhile; Undo puts back what was cleared in its place.
+        q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("p", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(1)).unwrap();
+        q.edit_at(Command::Restore { tracks: before }, Some(1)).unwrap();
+        assert_eq!(ids(&q), "a b c d");
+        // Nothing plays: all of it.
+        q.edit_at(Command::Clear, None).unwrap();
+        assert_eq!(ids(&q), "");
+        assert_eq!(serde_json::from_str::<Command>(r#"{"command":"clear"}"#).unwrap(), Command::Clear);
     }
 
     fn in_lane(id: &str, lane: &str) -> QueueTrack {
@@ -751,11 +773,12 @@ mod tests {
         q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("x", "next")], at: None, after: None, how: Some("next".into()) }, Some(0)).unwrap();
         q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("r1", LANE_RADIO), in_lane("r2", LANE_RADIO)], at: Some(2), after: None, how: None }, Some(0)).unwrap();
         q.edit_at(Command::Add { from: Default::default(), tracks: vec![in_lane("p1", LANE_AUTOPLAY), in_lane("p2", LANE_AUTOPLAY)], at: None, after: None, how: None }, Some(0)).unwrap();
-        for on in [true, false] {
-            let Command::Upcoming { tracks: told, .. } = q.edit_at(Command::Shuffle { on }, Some(0)).unwrap() else { panic!() };
+        // Shuffled once, then again: each time only the own tracks move.
+        for round in 1..=2 {
+            let Command::Upcoming { tracks: told, .. } = q.edit_at(Command::Shuffle { on: true }, Some(0)).unwrap() else { panic!() };
             let order: Vec<&str> = told.iter().map(|t| t.id.as_str()).collect();
-            assert_eq!(&order[..3], ["x", "r1", "r2"], "hand-added, then the inserts, in place (shuffle {on})");
-            assert_eq!(&order[order.len() - 2..], ["p1", "p2"], "Autoplay's tail last (shuffle {on})");
+            assert_eq!(&order[..3], ["x", "r1", "r2"], "hand-added, then the inserts, in place (shuffle {round})");
+            assert_eq!(&order[order.len() - 2..], ["p1", "p2"], "Autoplay's tail last (shuffle {round})");
         }
         // "Start radio": Autoplay's first tracks played, its seed set first or after; either way the seed stays.
         q.edit(Command::play(vec![in_lane("f1", LANE_AUTOPLAY)], 0, 0)).unwrap();
