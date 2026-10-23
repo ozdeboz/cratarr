@@ -10,26 +10,43 @@
   import { albumCoverUrl, type HealthItem } from './api';
   import { openFinding } from './health';
   import { health, problems } from './healthReport.svelte';
-  import { albumSubject, closePlaylist, openTab, viewOver } from './panel.svelte';
+  import HealthMissing from './HealthMissing.svelte';
+  import { albumSubject, backFromStep, closePlaylist, HEALTH, healthItemOf, openStep, openTab, panel, viewOver } from './panel.svelte';
 
   let { problem, beside = false }: { problem: string; beside?: boolean } = $props();
   const p = $derived(problems().find((x) => x.key === problem) ?? null);
   const f = $derived(p?.finding ?? null);
   const LEVEL = { needs_you: 'Needs you', warning: 'Warning', info: 'To know' } as const;
   const WHERE: Record<string, string> = { library: 'Open the Library', playlists: 'Open Playlists', settings: 'Open Settings', health: 'Open Health' };
-  /** Where an item opens: its album, its playlist's Repair tab; none for the rest. */
-  const opener = (x: HealthItem) =>
-    x.album ? () => viewOver(albumSubject(x.album![0], x.album![1])) : x.playlist ? () => openTab([x.playlist!], 'repair') : null;
+  // The third level (the owner, 2026-10-23): an item's own page, a step deeper in the panel, back to the problem.
+  const at = $derived(healthItemOf(panel.viewed));
+  const item = $derived(p && at !== null ? (p.items[at] ?? null) : null);
+  /** Where an item's page sends on: its album, its playlist. */
+  const onward = (x: HealthItem) =>
+    x.album ? { label: 'Open the album', go: () => viewOver(albumSubject(x.album![0], x.album![1])) } : x.playlist ? { label: 'Open the playlist', go: () => openTab([x.playlist!], 'tracks') } : null;
   const since = (t: number) => new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 </script>
 
 <div class="view">
   <div class="bar" class:beside>
-    {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
-    <h2 class="title">{#if p}<span class="up">{p.domain}</span><span class="sep" aria-hidden="true">›</span>{p.title}{:else}Health{/if}</h2>
+    {#if item}
+      <span class="navpill"><button aria-label="Back" title="Back" onclick={() => backFromStep(HEALTH + problem)}><Icon name="back" size={22} /></button></span>
+    {:else if !beside}
+      <span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>
+    {/if}
+    <h2 class="title">
+      {#if item}<span class="up">{p?.title}</span><span class="sep" aria-hidden="true">›</span>{item.title}{:else if p}<span class="up">{p.domain}</span><span class="sep" aria-hidden="true">›</span>{p.title}{:else}Health{/if}
+    </h2>
   </div>
   <div class="scroll">
-    {#if !p}
+    {#if item}
+      <!-- An item's own page: what it is, and what can be done with it here. -->
+      {@const on = onward(item)}
+      {#if item.album}<span class="big"><Cover src={albumCoverUrl(item.album[0], item.album[1])} /></span>{/if}
+      {#if item.line}<p class="what">{item.line}</p>{/if}
+      {#if item.playlist}<HealthMissing playlist={item.playlist} />{/if}
+      {#if on}<button class="act" onclick={on.go}>{on.label}<Icon name="chevronRight" size={18} /></button>{/if}
+    {:else if !p}
       {#if health.loaded}<p class="muted">This is no longer a problem.</p>{/if}
     {:else}
       <!-- How it stands. -->
@@ -52,13 +69,12 @@
       {#if p.items.length}
         <ul class="items">
           {#each p.items as x, i (i)}
-            {@const go = opener(x)}
             <li>
-              <svelte:element this={go ? 'button' : 'div'} class="item" role={go ? undefined : 'listitem'} onclick={go ?? undefined}>
+              <button class="item" onclick={() => openStep(`${HEALTH}${problem}/${i}`)}>
                 {#if x.album}<span class="cover"><Cover src={albumCoverUrl(x.album[0], x.album[1])} /></span>{/if}
                 <span class="words"><b>{x.title}</b>{#if x.line}<small>{x.line}</small>{/if}</span>
-                {#if go}<Icon name="chevronRight" size={18} />{/if}
-              </svelte:element>
+                <Icon name="chevronRight" size={18} />
+              </button>
             </li>
           {/each}
         </ul>
@@ -197,12 +213,6 @@
     font-weight: 650;
   }
 
-  h3 {
-    margin: 0;
-    color: var(--muted);
-    font-size: 13px;
-    font-weight: 600;
-  }
 
   .items {
     margin: 0;
@@ -233,6 +243,14 @@
   .item > :global(svg) {
     flex: none;
     color: var(--muted);
+  }
+
+  .big {
+    display: block;
+    width: min(240px, 60%);
+    aspect-ratio: 1;
+    overflow: hidden;
+    border-radius: 12px;
   }
 
   .cover {
