@@ -1810,9 +1810,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {/if}
           <!-- A genre opens in the panel (its own crate). -->
           {#if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<button onclick={() => viewGenre(g)} use:longpress={() => (badgeMenu = CRATE + GENRE + g)}>{g}</button>{/each}</p>{/if}
-          <!-- A playlist's or a crate's telling artists (its profile's), each opening the artist; not an album's or an
-               artist's own, whose header names them. -->
-          {#if shownArtists.length}<p class="genres">{#each shownArtists as a (a)}<button onclick={() => goToArtist(source || 'cratarr', a)}>{a}</button>{/each}</p>{/if}
+          <!-- A playlist's or a crate's telling artists (its profile's), each opening the artist, headed "Typical artists";
+               not an album's or an artist's own, whose header names them. -->
+          {#if shownArtists.length}<p class="genres"><span class="row-head">Typical artists</span>{#each shownArtists as a (a)}<button onclick={() => goToArtist(source || 'cratarr', a)}>{a}</button>{/each}</p>{/if}
           {#if p?.dead || chosenDead}<p class="details dead missing">{p?.dead || chosenDead} missing</p>{/if}
           <!-- A crate's exclusions (decision 0024, amended 2026-10-19): a tap shows them, to put back. -->
           {#if leftOut}<button class="details left-out" onclick={() => (leftOutOpen = true)}><Icon name="crateOut" size={14} /><span>{leftOut.toLocaleString()} excluded</span></button>{/if}
@@ -2916,8 +2916,16 @@ ${r.album_artist ?? r.artist ?? ''}`;
   p.genres {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 4px;
     margin: 0;
+  }
+
+  /* The artists row's heading (the owner, 2026-10-24: "typical artists"), so it reads apart from the genres. */
+  .row-head {
+    margin-right: 4px;
+    color: var(--muted);
+    font-size: 12px;
   }
 
   /* An album's rows (Symfonium's): no cover, the number in front, a little lower than a playlist's. */
