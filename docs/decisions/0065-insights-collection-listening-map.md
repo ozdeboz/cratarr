@@ -44,7 +44,14 @@ markup. All remembered.
   Count: two scales and two rankings, so one at a time, the unit said over the bars);
 - the playlists' figures as tiles, and the tracks in the most playlists as a list.
 
-**Listening** (the log, 0064): a period (Week, Month, Year);
+**Listening** has two sections in the pill's second row (the owner, 2026-10-23): History and Profile.
+
+**Profile** is the listener's taste as Cratarr reads it, from the one similarity (a5's `GET /api/history/profile`):
+what built it (favourites, tracks in playlists, played; skipped and excluded apart), then per genre, artist, style
+and playlist what there is more of (netted) and less of; the sound's numbers as where the taste sits on the library's
+own range, less of under it; the moods compared with the library (a bar either way from its middle).
+
+**History** (the log, 0064): a period (Week, Month, Year);
 
 - **listening time:** columns per day (a week, a month) or per week (a year), the total as the headline;
 - **taste over time:** further back than the period, as last.fm shows it (the owner): the past 12 weeks (a week

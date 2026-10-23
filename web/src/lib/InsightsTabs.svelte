@@ -1,7 +1,7 @@
 <script lang="ts">
   // Insights' tabs (decision 0065): Collection, Listening, Map, as a pill group in the page's overlay row beside the
   // back button (where other pages have their pill, lib/TopPill), in the same glass; the chosen one filled. A tab's own
-  // sections are a row attached below, the pill growing to hold it (the owner, 2026-10-23): Collection's. How a tab is
+  // sections are a row attached below, the pill growing to hold it (the owner, 2026-10-23): Collection's, Listening's. How a tab is
   // viewed (a period, a filter) is not here but in Insights' panel (lib/InsightsPanel). All remembered.
   import { prefs } from './prefs.svelte';
 
@@ -9,6 +9,10 @@
     { id: 'collection', label: 'Collection' },
     { id: 'listening', label: 'Listening' },
     { id: 'map', label: 'Map' },
+  ] as const;
+  const LISTENING = [
+    { id: 'history', label: 'History' },
+    { id: 'profile', label: 'Profile' },
   ] as const;
   const VIEWS = [
     { id: 'overview', label: 'Overview' },
@@ -28,6 +32,12 @@
     <div class="row second">
       {#each VIEWS as v (v.id)}
         <button aria-pressed={prefs.insightsCollection === v.id} onclick={() => (prefs.insightsCollection = v.id)}>{v.label}</button>
+      {/each}
+    </div>
+  {:else if prefs.insightsTab === 'listening'}
+    <div class="row second">
+      {#each LISTENING as v (v.id)}
+        <button aria-pressed={prefs.listeningView === v.id} onclick={() => (prefs.listeningView = v.id)}>{v.label}</button>
       {/each}
     </div>
   {/if}

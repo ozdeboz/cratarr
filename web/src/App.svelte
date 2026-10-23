@@ -30,6 +30,7 @@
   import TopPill from './lib/TopPill.svelte';
   import InsightsTabs from './lib/InsightsTabs.svelte';
   import InsightsPanel from './lib/InsightsPanel.svelte';
+  import { insightsControls } from './lib/insightsControls.svelte';
   import Mark from './lib/Mark.svelte';
   import LabelTip from './lib/LabelTip.svelte';
   import { installLabels } from './lib/labels.svelte';
@@ -558,7 +559,7 @@
       {#if page === 'insights'}
         <InsightsTabs />
         <!-- Its panel's button while no panel is open (the panel closes itself, top left). -->
-        {#if panel.viewed === null}<span class="navpill"><button aria-label="View" title="View" onclick={() => viewPlaylist(INSIGHTS_VIEW)}><Icon name="sliders" size={22} /></button></span>{/if}
+        {#if panel.viewed === null && insightsControls().length}<span class="navpill"><button aria-label="View" title="View" onclick={() => viewPlaylist(INSIGHTS_VIEW)}><Icon name="sliders" size={22} /></button></span>{/if}
       {/if}
       {#if page === 'settings'}
         <span class="navpill"><button aria-label="About" title="About" onclick={() => (aboutOpen = true)}><Icon name="info" size={22} /></button></span>

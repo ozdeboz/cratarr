@@ -63,7 +63,11 @@ const PERIODS = [
   { value: 'month', label: 'Month' },
   { value: 'year', label: 'Year' },
 ];
-const listening = (): ControlGroup[] => [
+// Profile has nothing to choose yet: no panel button there.
+const listening = (): ControlGroup[] =>
+  prefs.listeningView === 'profile'
+    ? []
+    : [
   {
     title: null,
     controls: [{ kind: 'choice', name: 'Period', options: PERIODS, get: () => prefs.listeningPeriod, set: (v) => (prefs.listeningPeriod = v as typeof prefs.listeningPeriod) }],

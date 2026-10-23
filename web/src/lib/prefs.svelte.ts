@@ -50,6 +50,8 @@ export type Prefs = {
   /** What Genres' and Artists' bars count: all the tracks, or those in a playlist (Insights' panel). */
   insightsCount: 'tracks' | 'listed';
   listeningPeriod: 'week' | 'month' | 'year';
+  /** Listening's own sections (its second row): what was heard, or the taste it makes. */
+  listeningView: 'history' | 'profile';
   signals: { tracks: boolean; genre: boolean; artists: boolean };
   /** The player's width when it shows beside the page (decision 0018). */
   playerWidth: number;
@@ -147,6 +149,7 @@ export const DEFAULTS: Prefs = {
   insightsCollection: 'overview',
   insightsCount: 'tracks',
   listeningPeriod: 'week',
+  listeningView: 'history',
   signals: { tracks: true, genre: true, artists: true },
   playerWidth: 400,
   sidebar: true,
@@ -240,6 +243,7 @@ function read(): Prefs {
       if (['overview', 'genres', 'artists', 'playlists'].includes(saved.insightsCollection)) p.insightsCollection = saved.insightsCollection;
       if (saved.insightsCount === 'tracks' || saved.insightsCount === 'listed') p.insightsCount = saved.insightsCount;
       if (['week', 'month', 'year'].includes(saved.listeningPeriod)) p.listeningPeriod = saved.listeningPeriod;
+      if (saved.listeningView === 'history' || saved.listeningView === 'profile') p.listeningView = saved.listeningView;
       if (saved.signals && typeof saved.signals === 'object') {
         for (const k of ['tracks', 'genre', 'artists'] as const) {
           if (typeof saved.signals[k] === 'boolean') p.signals[k] = saved.signals[k];

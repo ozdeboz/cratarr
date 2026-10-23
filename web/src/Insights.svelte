@@ -12,6 +12,7 @@
   import ProximityGraph from './lib/ProximityGraph.svelte';
   import InsightsCollection from './lib/InsightsCollection.svelte';
   import InsightsListening from './lib/InsightsListening.svelte';
+  import InsightsProfile from './lib/InsightsProfile.svelte';
 
   // The data and what is derived from it live in a store shared with the playlist view's Related (decision 0023).
   $effect(() => insights.load());
@@ -70,10 +71,10 @@
 
 </script>
 
-<main class:wide={prefs.insightsTab === 'map'} class:rowed={prefs.insightsTab === 'collection'}>
+<main class:wide={prefs.insightsTab === 'map'} class:rowed={prefs.insightsTab !== 'map'}>
   <!-- The tabs are in the overlay row (lib/InsightsTabs, decision 0065). -->
   {#if prefs.insightsTab === 'listening'}
-    <InsightsListening />
+    {#if prefs.listeningView === 'profile'}<InsightsProfile />{:else}<InsightsListening />{/if}
   {:else if error}
     <p class="error" role="alert">{error}</p>
   {:else if !data}

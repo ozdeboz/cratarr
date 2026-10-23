@@ -1519,6 +1519,25 @@ export type Listening = {
 export const getListening = (period: Listening['period']) =>
   request<Listening>(`/api/history/listening?period=${period}&tz=${-new Date().getTimezoneOffset() * 60}`);
 
+/** The listener's taste and what they avoid, from the one similarity (app/taste.rs, a5): Listening's Profile. */
+export type ProfileWord = { name: string; w: number };
+/** `lo` and `hi`: the library's own range (its 2nd and 98th percentiles), the axis. */
+export type ProfileNumber = { name: string; unit: 'value' | 'share'; mid: number; spread: number; lo: number; hi: number };
+/** `lift`: how far above the library's middle, in the library's spreads (what makes a mood stand out). */
+export type ProfileMood = { name: string; mid: number; lift: number };
+export type ProfileSide = {
+  /** Tracks each source added: favourites, playlists, plays (taste); excluded, skipped (avoid). */
+  sources: Record<string, number>;
+  tracks: number;
+  /** Of them, those AudioMuse has heard. */
+  heard: number;
+  words: { kind: string; title: string; top: ProfileWord[] }[];
+  numbers: ProfileNumber[];
+  moods: ProfileMood[];
+};
+export type TasteProfile = { taste: ProfileSide; avoid: ProfileSide };
+export const getTasteProfile = () => request<TasteProfile>('/api/history/profile');
+
 export type Insights = {
   library: {
     tracks: number;
