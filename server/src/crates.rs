@@ -133,7 +133,7 @@ pub struct AxisView {
     pub values: Vec<String>,
     pub min: Option<f64>,
     pub max: Option<f64>,
-    /// How many of Music's files have a value on this axis (BPM is only where the files say it).
+    /// How many of the files have a value on this axis (BPM is only where the files say it).
     pub known: usize,
 }
 
@@ -165,11 +165,14 @@ pub fn tempo_bands(bpms: impl IntoIterator<Item = Option<f64>>) -> TempoBands {
     out
 }
 
-/// What the axes test about one Music file.
+/// What the axes test about one file of the libraries.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Facts {
-    /// The playlist line (relative to Music).
+    /// The playlist line: relative to Music, climbing out of it for a file in an Incoming folder
+    /// ("../lidarr-music/X/01.flac"), so a Music file's line never is an Incoming one's.
     pub rel: String,
+    /// The catalogue folder it is in: 0 is Music, 1 on the Incoming ones (what a library switched off leaves out).
+    pub folder: i64,
     pub genres: Vec<String>,
     pub year: Option<f64>,
     pub bpm: Option<f64>,
@@ -221,12 +224,13 @@ pub fn is_axis(key: &str) -> bool {
 
 /// The axes with their domains in this library: genres, moods and styles most common first, the years', BPMs',
 /// energies' and danceabilities' span.
-pub fn axes(files: &[Facts], playlists: &[String]) -> Vec<AxisView> {
+pub fn axes<'a>(files: impl IntoIterator<Item = &'a Facts>, playlists: &[String]) -> Vec<AxisView> {
+    let files: Vec<&Facts> = files.into_iter().collect();
     let genres = by_count(files.iter().flat_map(|f| &f.genres));
     let moods = by_count(files.iter().flat_map(|f| &f.moods));
     let styles = by_count(files.iter().flat_map(|f| &f.styles));
     let span = |get: fn(&Facts) -> Option<f64>| {
-        let vals: Vec<f64> = files.iter().filter_map(get).collect();
+        let vals: Vec<f64> = files.iter().copied().filter_map(get).collect();
         let min = vals.iter().copied().fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.min(v))));
         let max = vals.iter().copied().fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v))));
         (min, max, vals.len())
@@ -287,8 +291,8 @@ fn holds(c: &Condition, f: &Facts, w: &World) -> bool {
 }
 
 /// A crate's files, in the order given (newest first).
-pub fn select<'a>(files: &'a [Facts], conditions: &[Condition], w: &World) -> Vec<&'a str> {
-    files.iter().filter(|f| conditions.iter().all(|c| holds(c, f, w))).map(|f| f.rel.as_str()).collect()
+pub fn select<'a>(files: impl IntoIterator<Item = &'a Facts>, conditions: &[Condition], w: &World) -> Vec<&'a str> {
+    files.into_iter().filter(|f| conditions.iter().all(|c| holds(c, f, w))).map(|f| f.rel.as_str()).collect()
 }
 
 /// Whether working the conditions out needs the media server's favourites.

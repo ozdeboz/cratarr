@@ -44,7 +44,10 @@ pub struct CratePage {
 
 struct CrateLibrary {
     source: String,
+    /// Every library's files (`Catalogue::crate_facts`); `files()` leaves out those switched off.
     files: Arc<Vec<crates::Facts>>,
+    /// The catalogue folders of the libraries switched off (decision 0024, amended 2026-10-23).
+    switched_off: HashSet<i64>,
     membership: HashMap<String, Vec<String>>,
     favourites: Option<HashSet<String>>,
     /// The lines of the viewer's favourite albums (decision 0024, amended 2026-10-19), when asked for.
@@ -58,10 +61,29 @@ impl CrateLibrary {
             && (!crates::needs_favourite_albums(conditions) || self.favourite_albums.is_some())
     }
 
+    /// The files of the libraries switched on, newest first.
+    fn files(&self) -> impl Iterator<Item = &crates::Facts> {
+        self.files.iter().filter(|f| !self.switched_off.contains(&f.folder))
+    }
+
     fn select(&self, conditions: &[crates::Condition]) -> Vec<String> {
         let w = crates::World { membership: &self.membership, favourites: self.favourites.as_ref(), favourite_albums: self.favourite_albums.as_ref() };
-        crates::select(&self.files, conditions, &w).into_iter().map(str::to_string).collect()
+        crates::select(self.files(), conditions, &w).into_iter().map(str::to_string).collect()
     }
+}
+
+/// How a crate is looked at, besides its definition: its two toggles as the page shows them (a tap may be on its way;
+/// `None`: as saved), and the libraries switched off on the page (`source/library` keys; decision 0024, amended
+/// 2026-10-23: a crate draws from every library switched on). The default is the crate as saved, from every library:
+/// what Home Assistant, voice and Play On get.
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
+pub struct CrateLook {
+    #[serde(default)]
+    pub favourites: Option<crates::Favourites>,
+    #[serde(default)]
+    pub favourite_albums: Option<crates::Favourites>,
+    #[serde(default)]
+    pub without: Vec<String>,
 }
 
 /// A crate as the Crates page lists it (decision 0024); `count` is `None` when not known (the server's favourites could
@@ -539,7 +561,7 @@ fn asking_user() -> Option<String> {
 /// The lines whose album has the asking account's heart on (decision 0024, amended 2026-10-19): the Library's album
 /// favourites, the viewer's own whoever's crate it is, and Cratarr's own library telling each line's album, whatever
 /// server the crate is shown for. `None` when they cannot be read (no library, no account).
-async fn favourite_album_lines() -> Option<HashSet<String>> {
+async fn favourite_album_lines(cat: Arc<crate::catalogue::Catalogue>) -> Option<HashSet<String>> {
     let serve = crate::serve::instance()?;
     let me = serve.current_user()?;
     tokio::task::spawn_blocking(move || {
@@ -547,8 +569,8 @@ async fn favourite_album_lines() -> Option<HashSet<String>> {
         if albums.is_empty() {
             return Some(HashSet::new());
         }
-        let songs = serve.library.songs_by_rel(0).ok()?;
-        Some(songs.into_iter().filter(|(_, s)| albums.contains(&s.album)).map(|(rel, _)| rel).collect())
+        let songs = songs_by_line(&serve, &cat);
+        Some(songs.into_iter().filter(|(_, s)| albums.contains(&s.album)).map(|(line, _)| line).collect())
     })
     .await
     .ok()
@@ -557,22 +579,45 @@ async fn favourite_album_lines() -> Option<HashSet<String>> {
 
 /// The lines of albums' tracks as the library has them now, by album: a crate's albums left out by hand (decision 0024,
 /// amended 2026-10-19), a rule, so a track the album gets later is out too.
-async fn album_lines(albums: HashSet<String>) -> HashMap<String, Vec<String>> {
+async fn album_lines(cat: Arc<crate::catalogue::Catalogue>, albums: HashSet<String>) -> HashMap<String, Vec<String>> {
     if albums.is_empty() {
         return HashMap::new();
     }
     let Some(serve) = crate::serve::instance() else { return HashMap::new() };
     tokio::task::spawn_blocking(move || {
         let mut lines: HashMap<String, Vec<String>> = HashMap::new();
-        for (rel, s) in serve.library.songs_by_rel(0).unwrap_or_default() {
+        for (line, s) in songs_by_line(&serve, &cat) {
             if albums.contains(&s.album) {
-                lines.entry(s.album).or_default().push(rel);
+                lines.entry(s.album).or_default().push(line);
             }
         }
         lines
     })
     .await
     .unwrap_or_default()
+}
+
+/// Cratarr's own library's songs by their playlist lines, in every folder in use: Music's and the Incoming ones' (a
+/// crate draws from both; an Incoming song's line climbs out of Music, `Catalogue::line_of`). Blocking.
+fn songs_by_line(serve: &crate::serve::Serve, cat: &crate::catalogue::Catalogue) -> HashMap<String, crate::serve::library::RelSong> {
+    let mut out = HashMap::new();
+    for folder in 0..cat.folders().len() as i64 {
+        for (rel, song) in serve.library.songs_by_rel(folder).unwrap_or_default() {
+            if let Some(line) = cat.line_of(folder, &rel) {
+                out.insert(line, song);
+            }
+        }
+    }
+    out
+}
+
+/// Whether a playlist line's file is there: in Music, or, for a line that climbs out of it, in the Incoming folder it
+/// names (`Catalogue::path_of_line`). Blocking.
+pub(super) fn line_exists(cat: &crate::catalogue::Catalogue, music: Option<&std::path::Path>, line: &str) -> bool {
+    if line.starts_with("../") {
+        return cat.path_of_line(line).is_some_and(|p| p.is_file());
+    }
+    music.is_some_and(|d| crate::playlists::entry_exists(d, line))
 }
 
 /// A crate's lines to leave out: its own tracks left out, its albums' tracks now, and the tracks excluded everywhere.
@@ -747,7 +792,7 @@ impl FavouritesKept {
         let lines = match from.favorite_tracks().await {
             Ok(ids) => {
                 let s = source.to_string();
-                match tokio::task::spawn_blocking(move || c.rels_of(&s, 0, &ids)).await {
+                match tokio::task::spawn_blocking(move || c.lines_of(&s, &ids)).await {
                     Ok(Ok(lines)) => Some(Arc::new(lines)),
                     Ok(Err(e)) => {
                         tracing::warn!("favourites for the crates: {e:#}");
@@ -792,7 +837,7 @@ impl FavouritesKept {
         let lines = tokio::task::spawn_blocking(move || {
             let mut lines = (*lines).clone();
             for (track, on) in changes {
-                let of = c.rels_of(&s, 0, std::slice::from_ref(&track))?;
+                let of = c.lines_of(&s, std::slice::from_ref(&track))?;
                 if on {
                     lines.extend(of);
                 } else {
@@ -1279,7 +1324,7 @@ impl PlaylistService {
                 .zip(facts)
                 .map(|(entry, f)| PlaylistRow {
                     album_id: f.track_id.as_ref().and_then(|t| albums.get(t).cloned()),
-                    missing: !dir.as_deref().is_some_and(|d| crate::playlists::entry_exists(d, &entry)),
+                    missing: !line_exists(&c, dir.as_deref(), &entry),
                     file: entry.rsplit('/').next().unwrap_or(&entry).to_string(),
                     entry,
                     id: f.track_id,
@@ -1336,18 +1381,42 @@ impl PlaylistService {
     /// queue): each track's file wherever the catalogue has it (the Music folder or another library's), with what it
     /// knows of it. A track it cannot place is left out, named in the report by its server and id.
     pub async fn export_tracks(&self, name: &str, tracks: Vec<(String, String)>) -> Result<crate::export::Plan, ToggleError> {
+        self.export_places(name, move |c: &crate::catalogue::Catalogue| {
+            tracks.iter().map(|(s, id)| (format!("{s} {id}"), c.track_of_source(s, id).and_then(|t| c.file_of(t)))).collect()
+        })
+        .await
+    }
+
+    /// An export's plan for a crate (decision 0058) as it is looked at (its toggles, the libraries switched off): its
+    /// tracks now, each file wherever it is (Music, or an Incoming folder).
+    pub async fn export_crate(&self, id: &str, want: Option<&str>, look: &CrateLook) -> Result<crate::export::Plan, ToggleError> {
+        let name = self.crate_def(id).await?.name;
+        let shown = self.crate_shown(id, look).await?;
+        let (_, lines) = self.crate_lines_of(&shown, want, &look.without).await?;
+        if lines.is_empty() {
+            return Err(ToggleError::Refused("That crate is empty.".into()));
+        }
+        self.export_places(&name, move |c: &crate::catalogue::Catalogue| lines.into_iter().map(|l| (l.clone(), c.place_of_line(&l))).collect()).await
+    }
+
+    /// An export's plan for files (folder, rel), each with the label the report names it by when it cannot be placed.
+    async fn export_places(
+        &self,
+        name: &str,
+        places: impl FnOnce(&crate::catalogue::Catalogue) -> Vec<(String, Option<(i64, String)>)> + Send + 'static,
+    ) -> Result<crate::export::Plan, ToggleError> {
         let c = self.lib.catalogue();
         let name = name.to_string();
         let plan = tokio::task::spawn_blocking(move || -> anyhow::Result<crate::export::Plan> {
             let folders = c.folders();
-            let places: Vec<Option<(i64, String)>> = tracks.iter().map(|(s, id)| c.track_of_source(s, id).and_then(|t| c.file_of(t))).collect();
+            let (labels, places): (Vec<String>, Vec<Option<(i64, String)>>) = places(&*c).into_iter().unzip();
             let rows = c.place_rows(&places)?;
-            let found = tracks
-                .iter()
+            let found = labels
+                .into_iter()
                 .zip(places)
                 .zip(rows)
-                .map(|(((source, id), place), row)| {
-                    let (folder, rel) = place.ok_or_else(|| format!("{source} {id}"))?;
+                .map(|((label, place), row)| {
+                    let (folder, rel) = place.ok_or(label)?;
                     let path = folders.get(folder as usize).ok_or_else(|| rel.clone())?.join(&rel);
                     let (format, kbps) = c.format_of(folder, &rel);
                     Ok((path, rel, export_facts(row, format, kbps)))
@@ -1378,15 +1447,16 @@ impl PlaylistService {
             .ok_or_else(|| ToggleError::Refused("No server is connected.".into()))
     }
 
-    /// Every crate (the permanent ones first, then one's own) with how many tracks it holds now (decision 0024).
-    pub async fn crates(&self, want: Option<&str>) -> Result<Vec<CrateView>, ToggleError> {
+    /// Every crate (the permanent ones first, then one's own) with how many tracks it holds now (decision 0024), from
+    /// the libraries not in `without` (`source/library` keys: those switched off on the page).
+    pub async fn crates(&self, want: Option<&str>, without: &[String]) -> Result<Vec<CrateView>, ToggleError> {
         let own = self.own_crates()?.list().await?;
         let all: Vec<(bool, CrateDef)> = crates::permanent().into_iter().map(|c| (true, c)).chain(own.into_iter().map(|c| (false, c))).collect();
         let set = self.own_crates()?.all_favourites().await?;
         let albums_set = self.own_crates()?.all_favourite_albums().await?;
         let albums_of = |id: &str| albums_set.get(id).copied().unwrap_or(crates::Favourites::All);
         let left_set = self.own_crates()?.all_left_out().await?;
-        let album_tracks = album_lines(left_set.values().flat_map(|l| l.albums.iter().cloned()).collect()).await;
+        let album_tracks = album_lines(self.lib.catalogue(), left_set.values().flat_map(|l| l.albums.iter().cloned()).collect()).await;
         // Out of every crate too (decision 0024, amended 2026-10-19): the tracks excluded everywhere.
         let excluded = self.own_crates()?.excluded().await?;
         let none = crates::LeftOut::default();
@@ -1398,14 +1468,14 @@ impl PlaylistService {
             crates::needs_favourites(&c.conditions) || set.get(&c.id).copied().unwrap_or(crates::Favourites::None) != crates::Favourites::All
         });
         let needed_albums = all.iter().any(|(_, c)| crates::needs_favourite_albums(&c.conditions) || albums_of(&c.id) != crates::Favourites::All);
-        let lib = self.crate_library(want, needed, needed_albums).await?;
+        let lib = self.crate_library(want, needed, needed_albums, without).await?;
         let count = |conditions: Vec<crates::Condition>| lib.knows(&conditions).then(|| lib.select(&conditions).len());
-        // The cards' facts: the songs of the Music folder, and what the account asking has played.
+        // The cards' facts: the songs of every folder by their lines, and what the account asking has played.
         let songs_played = match crate::serve::instance() {
             Some(serve) => {
-                let me = serve.current_user();
+                let (me, c) = (serve.current_user(), self.lib.catalogue());
                 tokio::task::spawn_blocking(move || {
-                let songs = serve.library.songs_by_rel(0).unwrap_or_default();
+                let songs = songs_by_line(&serve, &c);
                 let played = me.and_then(|me| serve.userdata.played(&me).ok());
                 (songs, played)
                 })
@@ -1516,15 +1586,15 @@ impl PlaylistService {
         self.own_crates()?.list().await?.into_iter().find(|c| c.id == id).ok_or(ToggleError::UnknownPlaylist)
     }
 
-    /// The lines these conditions select, newest first, and the server they are for.
-    pub(super) async fn crate_lines_of(&self, conditions: &[crates::Condition], want: Option<&str>) -> Result<(String, Vec<String>), ToggleError> {
-        let (lib, lines) = self.crate_selection(conditions, want).await?;
+    /// The lines these conditions select from the libraries not in `without`, newest first, and the server they are for.
+    pub(super) async fn crate_lines_of(&self, conditions: &[crates::Condition], want: Option<&str>, without: &[String]) -> Result<(String, Vec<String>), ToggleError> {
+        let (lib, lines) = self.crate_selection(conditions, want, without).await?;
         Ok((lib.source, lines))
     }
 
     /// The library a crate is worked out from, and its lines.
-    async fn crate_selection(&self, conditions: &[crates::Condition], want: Option<&str>) -> Result<(CrateLibrary, Vec<String>), ToggleError> {
-        let lib = self.crate_library(want, crates::needs_favourites(conditions), crates::needs_favourite_albums(conditions)).await?;
+    async fn crate_selection(&self, conditions: &[crates::Condition], want: Option<&str>, without: &[String]) -> Result<(CrateLibrary, Vec<String>), ToggleError> {
+        let lib = self.crate_library(want, crates::needs_favourites(conditions), crates::needs_favourite_albums(conditions), without).await?;
         if crates::needs_favourites(conditions) && lib.favourites.is_none() {
             return Err(ToggleError::CannotPlay("The server's favourites could not be read.".into()));
         }
@@ -1535,34 +1605,26 @@ impl PlaylistService {
         Ok((lib, lines))
     }
 
-    /// A page of a crate's rows (it can hold thousands): from `offset`, at most `limit`, with the crate's size, as its
-    /// two toggles are set (`fav` and `albums`, else as saved).
-    pub async fn crate_rows(
-        &self,
-        id: &str,
-        want: Option<&str>,
-        offset: usize,
-        limit: usize,
-        fav: Option<crates::Favourites>,
-        albums: Option<crates::Favourites>,
-    ) -> Result<CratePage, ToggleError> {
-        let shown = self.crate_shown(id, fav, albums).await?;
-        self.crate_page(&shown, want, offset, limit).await
+    /// A page of a crate's rows (it can hold thousands): from `offset`, at most `limit`, with the crate's size, as it is
+    /// looked at (its toggles, the libraries switched off).
+    pub async fn crate_rows(&self, id: &str, want: Option<&str>, offset: usize, limit: usize, look: &CrateLook) -> Result<CratePage, ToggleError> {
+        let shown = self.crate_shown(id, look).await?;
+        self.crate_page(&shown, want, offset, limit, &look.without).await
     }
 
     /// A crate's conditions as its toggles show it: as given, else as saved.
-    pub(super) async fn crate_shown(&self, id: &str, fav: Option<crates::Favourites>, albums: Option<crates::Favourites>) -> Result<Vec<crates::Condition>, ToggleError> {
+    pub(super) async fn crate_shown(&self, id: &str, look: &CrateLook) -> Result<Vec<crates::Condition>, ToggleError> {
         let def = self.crate_def(id).await?;
-        let fav = match fav {
+        let fav = match look.favourites {
             Some(f) => f,
             None => self.crate_favourites(id).await?,
         };
-        let albums = match albums {
+        let albums = match look.favourite_albums {
             Some(a) => a,
             None => self.own_crates()?.favourite_albums(id).await?,
         };
         let left = self.own_crates()?.left_out(id).await?;
-        let album_tracks = album_lines(left.albums.iter().cloned().collect()).await;
+        let album_tracks = album_lines(self.lib.catalogue(), left.albums.iter().cloned().collect()).await;
         let excluded = self.own_crates()?.excluded().await?;
         Ok(crates::leaving_out(&left_lines(&left, &album_tracks, &excluded), &crates::shown(&def.conditions, fav, albums)))
     }
@@ -1604,14 +1666,14 @@ impl PlaylistService {
         Ok((sid, rows, albums))
     }
 
-    /// Tracks' lines (relative to Music) by their ids on a server.
+    /// Tracks' lines (Music's, or an Incoming track's climbing out of it) by their ids on a server.
     async fn lines_of(&self, want: Option<&str>, ids: &[String]) -> Result<HashSet<String>, ToggleError> {
         if ids.is_empty() {
             return Ok(HashSet::new());
         }
         let (sid, _) = self.source_of(want)?;
         let (c, ids) = (self.lib.catalogue(), ids.to_vec());
-        Ok(tokio::task::spawn_blocking(move || c.rels_of(&sid, 0, &ids)).await.map_err(|e| anyhow::anyhow!("{e}"))??)
+        Ok(tokio::task::spawn_blocking(move || c.lines_of(&sid, &ids)).await.map_err(|e| anyhow::anyhow!("{e}"))??)
     }
 
     /// Tracks excluded from every automatic pick, or put back (`out` false), by their ids on a server (decision 0024,
@@ -1653,19 +1715,13 @@ impl PlaylistService {
             .map_err(|e| anyhow::anyhow!("{e}"))?)
     }
 
-    /// A crate's tempo spread (decision 0041), its tracks chosen as its rows are (the favourites toggle `fav`, else as
-    /// saved): counted here, so a genre of thousands of tracks does not send them all to be counted.
-    pub async fn crate_tempo(
-        &self,
-        id: &str,
-        want: Option<&str>,
-        fav: Option<crates::Favourites>,
-        albums: Option<crates::Favourites>,
-    ) -> Result<crates::TempoBands, ToggleError> {
-        let shown = self.crate_shown(id, fav, albums).await?;
-        let (lib, lines) = self.crate_selection(&shown, want).await?;
+    /// A crate's tempo spread (decision 0041), its tracks chosen as its rows are (as it is looked at): counted here, so
+    /// a genre of thousands of tracks does not send them all to be counted.
+    pub async fn crate_tempo(&self, id: &str, want: Option<&str>, look: &CrateLook) -> Result<crates::TempoBands, ToggleError> {
+        let shown = self.crate_shown(id, look).await?;
+        let (lib, lines) = self.crate_selection(&shown, want, &look.without).await?;
         let chosen: HashSet<&str> = lines.iter().map(String::as_str).collect();
-        Ok(crates::tempo_bands(lib.files.iter().filter(|f| chosen.contains(f.rel.as_str())).map(|f| f.bpm)))
+        Ok(crates::tempo_bands(lib.files().filter(|f| chosen.contains(f.rel.as_str())).map(|f| f.bpm)))
     }
 
     /// A crate's favourites toggle as set; a genre not set shows all its tracks (a crate not set shows no favourites).
@@ -1690,13 +1746,14 @@ impl PlaylistService {
         Ok(self.own_crates()?.set_favourite_albums(id, albums).await?)
     }
 
-    /// The builder's live preview: an unsaved crate's size and first rows (decision 0024, issue 6).
-    pub async fn crate_page(&self, conditions: &[crates::Condition], want: Option<&str>, offset: usize, limit: usize) -> Result<CratePage, ToggleError> {
-        let (lib, lines) = self.crate_selection(conditions, want).await?;
+    /// The builder's live preview: an unsaved crate's size and first rows (decision 0024, issue 6), from the libraries
+    /// not in `without`.
+    pub async fn crate_page(&self, conditions: &[crates::Condition], want: Option<&str>, offset: usize, limit: usize, without: &[String]) -> Result<CratePage, ToggleError> {
+        let (lib, lines) = self.crate_selection(conditions, want, without).await?;
         // On the first page only: the panel shows them on top.
         let genres = if offset == 0 {
             let chosen: HashSet<&str> = lines.iter().map(String::as_str).collect();
-            crates::top_genres(lib.files.iter().filter(|f| chosen.contains(f.rel.as_str())).map(|f| f.genres.as_slice()), super::playing::GENRES_SHOWN)
+            crates::top_genres(lib.files().filter(|f| chosen.contains(f.rel.as_str())).map(|f| f.genres.as_slice()), super::playing::GENRES_SHOWN)
         } else {
             Vec::new()
         };
@@ -1708,10 +1765,11 @@ impl PlaylistService {
     }
 
     /// Make playlist: the crate's tracks now, as a new, ordinary playlist (a snapshot; decision 0024).
-    /// The crate as its favourites toggle is set. Returns how many tracks it got, and the undo token.
-    pub async fn crate_to_playlist(&self, id: &str, want: Option<&str>, name: &str) -> Result<(usize, Option<String>), ToggleError> {
-        let shown = self.crate_shown(id, None, None).await?;
-        let (_, lines) = self.crate_lines_of(&shown, want).await?;
+    /// The crate as its toggles are saved, from the libraries not in `without`. Returns how many tracks it got, and the
+    /// undo token.
+    pub async fn crate_to_playlist(&self, id: &str, want: Option<&str>, name: &str, without: &[String]) -> Result<(usize, Option<String>), ToggleError> {
+        let shown = self.crate_shown(id, &CrateLook::default()).await?;
+        let (_, lines) = self.crate_lines_of(&shown, want, without).await?;
         if lines.is_empty() {
             return Err(ToggleError::Refused("That crate is empty.".into()));
         }
@@ -1751,29 +1809,36 @@ impl PlaylistService {
         Ok(self.keep(Change::Crate { before, after: None }))
     }
 
-    /// The axes and their domains in this library, for the builder (decision 0024, issue 4).
-    pub async fn crate_axes(&self, want: Option<&str>) -> Result<Vec<crates::AxisView>, ToggleError> {
-        let lib = self.crate_library(want, false, false).await?;
+    /// The axes and their domains in the libraries not in `without`, for the builder (decision 0024, issue 4).
+    pub async fn crate_axes(&self, want: Option<&str>, without: &[String]) -> Result<Vec<crates::AxisView>, ToggleError> {
+        let lib = self.crate_library(want, false, false, without).await?;
         let playlists: Vec<String> = self.own_store()?.snapshot().await?.into_iter().map(|(name, _, _)| name).collect();
-        Ok(crates::axes(&lib.files, &playlists))
+        Ok(crates::axes(lib.files(), &playlists))
     }
 
-    /// What a crate is worked out on: Music's files newest first with their facts, which playlists hold each line, and
-    /// (when needed) the favourites, kept for a minute (decision 0024, issue 5).
-    async fn crate_library(&self, want: Option<&str>, favourites: bool, albums: bool) -> Result<CrateLibrary, ToggleError> {
+    /// What a crate is worked out on: every library's files newest first with their facts, less the folders of those in
+    /// `without` (decision 0024, amended 2026-10-23), which playlists hold each line, and (when needed) the favourites,
+    /// kept for a minute (decision 0024, issue 5).
+    async fn crate_library(&self, want: Option<&str>, favourites: bool, albums: bool, without: &[String]) -> Result<CrateLibrary, ToggleError> {
         let (sid, source) = self.source_of(want)?;
         // First, so a request waiting for them holds nothing large meanwhile.
         let favourites = if favourites { self.favourite_lines(&sid, &source).await } else { None };
-        let favourite_albums = if albums { favourite_album_lines().await } else { None };
+        let favourite_albums = if albums { favourite_album_lines(self.lib.catalogue()).await } else { None };
         let c = self.lib.catalogue();
-        let files = tokio::task::spawn_blocking(move || c.crate_facts(0)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
+        let folders = c.folders();
+        let off: Vec<std::path::PathBuf> = match self.lib.connected().into_iter().find(|(a, _)| a.cfg.id == sid) {
+            Some((a, _)) if !without.is_empty() => super::library::folders_switched_off(&a, without).into_iter().map(std::path::PathBuf::from).collect(),
+            _ => Vec::new(),
+        };
+        let switched_off = folders.iter().enumerate().filter(|(_, f)| off.contains(f)).map(|(i, _)| i as i64).collect();
+        let files = tokio::task::spawn_blocking(move || c.crate_facts()).await.map_err(|e| anyhow::anyhow!("{e}"))??;
         let mut membership: HashMap<String, Vec<String>> = HashMap::new();
         for (name, lines, _) in self.own_store()?.snapshot().await? {
             for line in lines {
                 membership.entry(line).or_default().push(name.clone());
             }
         }
-        Ok(CrateLibrary { source: sid, files, membership, favourites, favourite_albums })
+        Ok(CrateLibrary { source: sid, files, switched_off, membership, favourites, favourite_albums })
     }
 
     /// The favourite tracks' lines, from the media server. What was heard last is answered at once, with Cratarr's own
@@ -2162,5 +2227,53 @@ mod left_out_tests {
         let before = vec!["b".to_string(), "a".to_string()];
         assert_eq!(edited(&before, ["d".to_string(), "a".to_string(), "c".to_string()], true), ["b", "a", "c", "d"], "a stays where it was");
         assert_eq!(edited(&before, ["b".to_string(), "z".to_string()], false), ["a"]);
+    }
+}
+
+#[cfg(test)]
+mod library_tests {
+    use super::*;
+
+    /// Music's files (folder 0) and an Incoming folder's (1), newest first; "../in/X/1.flac" is in a playlist.
+    fn library(switched_off: &[i64]) -> CrateLibrary {
+        let f = |line: &str, folder: i64, genre: &str| crates::Facts { rel: line.into(), folder, genres: vec![genre.into()], ..Default::default() };
+        let files = vec![f("../in/X/1.flac", 1, "Dub"), f("A/1.flac", 0, "Dub"), f("../in/X/2.flac", 1, "Jazz"), f("B/1.flac", 0, "Rock")];
+        let membership = HashMap::from([("../in/X/1.flac".to_string(), vec!["Road".to_string()])]);
+        CrateLibrary {
+            source: "cratarr".into(),
+            files: Arc::new(files),
+            switched_off: switched_off.iter().copied().collect(),
+            membership,
+            favourites: None,
+            favourite_albums: None,
+        }
+    }
+
+    #[test]
+    fn a_crate_draws_from_every_library_switched_on() {
+        let unlisted = &crates::permanent()[0].conditions;
+        assert_eq!(library(&[]).select(unlisted), ["A/1.flac", "../in/X/2.flac", "B/1.flac"], "Incoming's tracks too, newest first");
+        assert_eq!(library(&[1]).select(unlisted), ["A/1.flac", "B/1.flac"], "Incoming switched off");
+        assert_eq!(library(&[0]).select(unlisted), ["../in/X/2.flac"], "Music switched off");
+        // A crate of Music's tracks only is the same whether Incoming is on or not.
+        let rock = [crates::Condition { axis: "genre".into(), not: false, value: crates::Value::AnyOf { values: vec!["rock".into()] } }];
+        assert_eq!(library(&[]).select(&rock), library(&[1]).select(&rock));
+        assert_eq!(crates::axes(library(&[1]).files(), &[]).iter().find(|a| a.key == "genre").unwrap().values, ["Dub", "Rock"], "the axes of what is on");
+    }
+
+    #[test]
+    fn an_incoming_line_is_there_when_its_file_is() {
+        let root = std::env::temp_dir().join(format!("cratarr-lines-{}", std::process::id()));
+        let (m, inc) = (root.join("Music"), root.join("in"));
+        std::fs::create_dir_all(m.join("A")).unwrap();
+        std::fs::create_dir_all(inc.join("X")).unwrap();
+        std::fs::write(m.join("A/1.flac"), "a").unwrap();
+        std::fs::write(inc.join("X/1.flac"), "x").unwrap();
+        let cat = crate::catalogue::Catalogue::open(None, vec![m.clone(), inc.clone()]).unwrap();
+        assert!(line_exists(&cat, Some(m.as_path()), "A/1.flac"));
+        assert!(line_exists(&cat, Some(m.as_path()), "../in/X/1.flac"), "an Incoming track's line");
+        assert!(!line_exists(&cat, Some(m.as_path()), "../in/X/2.flac"));
+        assert!(!line_exists(&cat, Some(m.as_path()), "../elsewhere/X/1.flac"), "in no folder of the catalogue");
+        std::fs::remove_dir_all(&root).ok();
     }
 }

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, Query, RawQuery, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
@@ -1130,6 +1130,18 @@ fn yes() -> bool {
 enum ExportWhat {
     Playlists { names: Vec<String> },
     Tracks { name: String, tracks: Vec<ExportTrack> },
+    /// A crate, all of it, as the page shows it: its toggles (else as saved), the libraries switched off (`without`).
+    Crate {
+        id: String,
+        #[serde(default)]
+        source: Option<String>,
+        #[serde(default)]
+        favourites: Option<crate::crates::Favourites>,
+        #[serde(default)]
+        favourite_albums: Option<crate::crates::Favourites>,
+        #[serde(default)]
+        without: Vec<String>,
+    },
 }
 
 #[derive(Deserialize, Clone)]
@@ -1183,6 +1195,7 @@ impl Export {
                 }
                 Options { tracks: true, arrange, combine: None, format, lists: self.m3u }
             }
+            ExportWhat::Crate { .. } => Options { tracks: true, arrange, combine: None, format, lists: self.m3u },
         })
     }
 
@@ -1192,6 +1205,10 @@ impl Export {
             ExportWhat::Tracks { name, tracks } => {
                 let name = if name.trim().is_empty() { "Tracks" } else { name.trim() };
                 app.playlists.export_tracks(name, tracks.iter().map(|t| (t.source.clone(), t.id.clone())).collect()).await?
+            }
+            ExportWhat::Crate { id, source, favourites, favourite_albums, without } => {
+                let look = crate::app::CrateLook { favourites: *favourites, favourite_albums: *favourite_albums, without: without.clone() };
+                app.playlists.export_crate(id, source.as_deref(), &look).await?
             }
         })
     }
@@ -1313,12 +1330,20 @@ fn attachment(name: &str) -> String {
     format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{utf8}")
 }
 
-/// The permanent crates and their sizes (decision 0024).
-async fn crates(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Result<Json<Vec<crate::app::CrateView>>, ApiError> {
-    Ok(Json(app.playlists.crates(f.source.as_deref()).await?))
+/// The libraries a crate leaves out (decision 0024, amended 2026-10-23: a crate draws from every library switched on):
+/// `without=<source>/<library>`, once for each, as the page's library switches keep them. None: every library.
+fn without_of(query: Option<&str>) -> Vec<String> {
+    let pairs = query.unwrap_or("").split('&').filter_map(|p| p.split_once('='));
+    pairs.filter(|(k, _)| form_decode(k) == "without").map(|(_, v)| form_decode(v)).filter(|v| !v.is_empty()).collect()
 }
 
-/// A page of a crate's rows: `offset` and `limit` (at most 500, default 200; the page says the limit it kept).
+/// The permanent crates and their sizes (decision 0024), from the libraries switched on (`without`).
+async fn crates(State(app): State<Arc<App>>, Query(f): Query<Follow>, RawQuery(q): RawQuery) -> Result<Json<Vec<crate::app::CrateView>>, ApiError> {
+    Ok(Json(app.playlists.crates(f.source.as_deref(), &without_of(q.as_deref())).await?))
+}
+
+/// A page of a crate's rows: `offset` and `limit` (at most 500, default 200; the page says the limit it kept); its
+/// libraries switched off come as `without` (`without_of`).
 #[derive(Deserialize)]
 struct Page {
     source: Option<String>,
@@ -1331,14 +1356,26 @@ struct Page {
     favourite_albums: Option<crate::crates::Favourites>,
 }
 
-async fn crate_rows(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Query<Page>) -> Result<Response, ApiError> {
+impl Page {
+    /// How the page looks at the crate: its toggles, and the libraries switched off (the raw query's `without`).
+    fn look(&self, query: Option<&str>) -> crate::app::CrateLook {
+        crate::app::CrateLook { favourites: self.favourites, favourite_albums: self.favourite_albums, without: without_of(query) }
+    }
+}
+
+async fn crate_rows(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Query<Page>, RawQuery(raw): RawQuery) -> Result<Response, ApiError> {
     let limit = q.limit.unwrap_or(200).clamp(1, 500);
-    Ok(Json(app.playlists.crate_rows(&id, q.source.as_deref(), q.offset, limit, q.favourites, q.favourite_albums).await?).into_response())
+    Ok(Json(app.playlists.crate_rows(&id, q.source.as_deref(), q.offset, limit, &q.look(raw.as_deref())).await?).into_response())
 }
 
 /// A crate's tempo spread (decision 0041): its tracks' 5-BPM bands, counted on the server.
-async fn crate_tempo(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Query<Page>) -> Result<Json<crate::crates::TempoBands>, ApiError> {
-    Ok(Json(app.playlists.crate_tempo(&id, q.source.as_deref(), q.favourites, q.favourite_albums).await?))
+async fn crate_tempo(
+    State(app): State<Arc<App>>,
+    Path(id): Path<String>,
+    Query(q): Query<Page>,
+    RawQuery(raw): RawQuery,
+) -> Result<Json<crate::crates::TempoBands>, ApiError> {
+    Ok(Json(app.playlists.crate_tempo(&id, q.source.as_deref(), &q.look(raw.as_deref())).await?))
 }
 
 /// Every playlist's facts for the Playlists page's table (decision 0042), by id.
@@ -1398,26 +1435,31 @@ async fn crate_image_remove(State(app): State<Arc<App>>, Path(id): Path<String>)
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// The axes the builder draws its controls from, with their domains in this library.
-async fn crate_axes(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Result<Json<Vec<crate::crates::AxisView>>, ApiError> {
-    Ok(Json(app.playlists.crate_axes(f.source.as_deref()).await?))
+/// The axes the builder draws its controls from, with their domains in the libraries switched on (`without`).
+async fn crate_axes(State(app): State<Arc<App>>, Query(f): Query<Follow>, RawQuery(q): RawQuery) -> Result<Json<Vec<crate::crates::AxisView>>, ApiError> {
+    Ok(Json(app.playlists.crate_axes(f.source.as_deref(), &without_of(q.as_deref())).await?))
 }
 
-/// The builder's live preview: an unsaved crate's size and first rows.
+/// The builder's live preview: an unsaved crate's size and first rows, from the libraries not in `without`.
 #[derive(Deserialize)]
 struct Preview {
     conditions: Vec<crate::crates::Condition>,
+    #[serde(default)]
+    without: Vec<String>,
 }
 
 async fn crate_preview(State(app): State<Arc<App>>, Query(q): Query<Page>, Json(p): Json<Preview>) -> Result<Response, ApiError> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    Ok(Json(app.playlists.crate_page(&p.conditions, q.source.as_deref(), q.offset, limit).await?).into_response())
+    Ok(Json(app.playlists.crate_page(&p.conditions, q.source.as_deref(), q.offset, limit, &p.without).await?).into_response())
 }
 
-/// Make playlist: the crate's tracks now, as the panel shows them (its favourites toggle).
+/// Make playlist: the crate's tracks now, as the panel shows them (its favourites toggle), from the libraries not in
+/// `without`.
 #[derive(Deserialize)]
 struct CratePlaylistRequest {
     name: String,
+    #[serde(default)]
+    without: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -1511,7 +1553,7 @@ async fn crate_playlist(
     Query(f): Query<Follow>,
     Json(req): Json<CratePlaylistRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let (added, undo) = app.playlists.crate_to_playlist(&id, f.source.as_deref(), &req.name).await?;
+    let (added, undo) = app.playlists.crate_to_playlist(&id, f.source.as_deref(), &req.name, &req.without).await?;
     Ok((StatusCode::CREATED, Json(json!({ "playlist": req.name, "added": added, "undo": undo }))))
 }
 

@@ -27,11 +27,7 @@ pub fn song_of_line(cat: &Catalogue, line: &str) -> Option<String> {
 pub fn line_of_song(cat: &Catalogue, song: &str) -> Option<String> {
     let track: i64 = song.strip_prefix(ids::SONG)?.parse().ok()?;
     let (folder, rel) = cat.file_of(track)?;
-    if folder == 0 {
-        return Some(rel);
-    }
-    let folders = cat.folders();
-    crate::playlists::relative_to(folders.first()?, &folders.get(folder as usize)?.join(rel))
+    cat.line_of(folder, &rel)
 }
 
 /// The lines of a playlist after removing the shown songs at `remove` (positions among the shown songs) and adding
