@@ -8,7 +8,7 @@
   import { onMount } from 'svelte';
   import { coverUrl, crateRows, getCrate, getDigging, getMoment, heardAlbums, playlistStats, type Digging, type Moment, type PlaylistRow } from './lib/api';
   import AlbumCard from './lib/AlbumCard.svelte';
-  import { addedOn, albumUses, library, loadAlbumUses, readLibrary } from './lib/albums.svelte';
+  import { addedOn, albumUses, albumUsesKnown, library, loadAlbumUses, readLibrary } from './lib/albums.svelte';
   import { albumCoverUrl } from './lib/api';
   import Cover from './lib/Cover.svelte';
   import CoverFlow from './lib/CoverFlow.svelte';
@@ -25,6 +25,7 @@
   import { prefs } from './lib/prefs.svelte';
   import { loadQueues, queues, queuesVersion, switchQueue } from './lib/queueHistory.svelte';
   import SectionHead from './lib/SectionHead.svelte';
+  import PageLoading from './lib/PageLoading.svelte';
   import { toast } from './lib/toast.svelte';
 
   const NEWEST = 12;
@@ -45,16 +46,26 @@
       .slice(0, CANDIDATES),
   );
   let heard = $state<Set<string> | null>(null);
+  let heardOf: string | null = null;
+  // Asked again whenever the candidates change (the library read after Home showed): until the answer, none show
+  // rather than albums already heard that then drop out (the owner, 2026-10-23).
   $effect(() => {
     const ids = candidates.filter((c) => c.source === 'cratarr').map((c) => c.a.id);
+    // The same albums (the library read again): what was heard stands.
+    const asked = ids.join(',');
+    if (asked === heardOf) return;
+    heardOf = asked;
+    heard = null;
     if (!ids.length) {
-      heard = new Set();
+      if (library.view) heard = new Set();
       return;
     }
+    let gone = false;
     heardAlbums(ids).then(
-      (r) => (heard = new Set(r.heard)),
-      () => (heard = new Set()),
+      (r) => !gone && (heard = new Set(r.heard)),
+      () => !gone && (heard = new Set()),
     );
+    return () => (gone = true);
   });
   const newest = $derived(heard ? candidates.filter((c) => !(c.source === 'cratarr' && heard!.has(c.a.id))).slice(0, NEWEST) : []);
   function allNewest() {
@@ -65,13 +76,15 @@
 
   // Sounds like your week: its first rows (for the covers), its size, its genres, and how many tracks were played.
   let week = $state<{ name: string; source: string; total: number; rows: PlaylistRow[]; genres: string[]; played: number } | null>(null);
+  let weekIn = $state(false);
   onMount(() => {
     Promise.all([crateRows(WEEK, 0, 40, prefs.source || undefined, undefined, undefined, { without: hiddenLibraries() }), getCrate(WEEK)]).then(
       ([r, d]) => {
         const like = d.conditions.find((c) => c.value.kind === 'like')?.value;
         week = { name: d.name, source: r.source, total: r.total, rows: r.rows, genres: r.genres.slice(0, 4), played: like?.kind === 'like' ? like.of.filter((_, i) => (like.weights?.[i] ?? 1) > 0).length : 0 };
+        weekIn = true;
       },
-      () => (week = null),
+      () => ((week = null), (weekIn = true)),
     );
   });
   /** Its first four albums, as a seeded crate's mosaic (lib/PlaylistView). */
@@ -105,10 +118,11 @@
   // painted for the sky, the front one named; its radio plays only what is near it, the moment read again on each
   // refill (it follows the weather).
   let moment = $state<Moment | null>(null);
+  let momentIn = $state(false);
   onMount(() => {
     getMoment(prefs.source || undefined, hiddenLibraries()).then(
-      (m) => (moment = m),
-      () => (moment = null),
+      (m) => ((moment = m), (momentIn = true)),
+      () => ((moment = null), (momentIn = true)),
     );
   });
   const momentAlbums = $derived(
@@ -143,10 +157,11 @@
     for (const s of sources) if (!albumUses[s.id]) void loadAlbumUses(s.id);
   });
   let lastPlayed = $state<Record<string, number>>({});
+  let lastPlayedIn = $state(false);
   onMount(() => {
     playlistStats().then(
-      (st) => (lastPlayed = Object.fromEntries(Object.entries(st).flatMap(([id, s]) => (s.last_played ? [[id, s.last_played]] : [])))),
-      () => {},
+      (st) => ((lastPlayed = Object.fromEntries(Object.entries(st).flatMap(([id, s]) => (s.last_played ? [[id, s.last_played]] : [])))), (lastPlayedIn = true)),
+      () => (lastPlayedIn = true),
     );
   });
   // The queues this device's player keeps (lib/queueHistory), read again when it says they changed.
@@ -184,10 +199,11 @@
   });
   // Blast from the past and Grave digging (the server's), of the libraries switched on.
   let dug = $state<Digging | null>(null);
+  let dugIn = $state(false);
   onMount(() => {
     getDigging(prefs.source || undefined, hiddenLibraries()).then(
-      (d) => (dug = d),
-      () => (dug = null),
+      (d) => ((dug = d), (dugIn = true)),
+      () => ((dug = null), (dugIn = true)),
     );
   });
   // Blast from the past: each album once (the owner, 2026-10-23), by its track unplayed longest; Play plays them all.
@@ -221,6 +237,33 @@
     }
   }
 
+  // Progressive loading (the owner, 2026-10-23: "the first component should show first and the second, instead of
+  // scattered"): a section shows once its answer is in and every one above it has shown (or come back empty), top to
+  // bottom; one slow answer holds those under it no longer than PATIENCE, then each shows as it comes.
+  let exploreIn = $state(false);
+  let statusIn = $state(false);
+  const PATIENCE = 4000;
+  let patient = $state(true);
+  onMount(() => {
+    const t = setTimeout(() => (patient = false), PATIENCE);
+    return () => clearTimeout(t);
+  });
+  const ORDER = ['moment', 'newest', 'week', 'back', 'past', 'graves', 'explore', 'status'] as const;
+  type Part = (typeof ORDER)[number];
+  const settled = $derived<Record<Part, boolean>>({
+    moment: momentIn && (!moment || !!library.view),
+    newest: heard !== null,
+    week: weekIn,
+    back: lastPlayedIn && queues.known && !!library.view && sources.every((s) => albumUsesKnown(s.id)),
+    past: dugIn,
+    graves: dugIn && !!library.view,
+    explore: exploreIn,
+    status: statusIn,
+  });
+  const turn = (part: Part) => settled[part] && (!patient || ORDER.slice(0, ORDER.indexOf(part)).every((x) => settled[x]));
+  /** Nothing shown yet and something still to come: the page's loader, not a blank page. */
+  const loading = $derived(!ORDER.some(turn) && !ORDER.every((x) => settled[x]));
+
   function open(b: Back) {
     if (b.kind === 'album') viewOver(albumSubject(b.source, b.id));
     else if (b.kind === 'playlist') viewPlaylist(b.id);
@@ -230,7 +273,8 @@
 </script>
 
 <div class="home">
-  {#if moment && momentAlbums.length}
+  {#if loading}<PageLoading />{/if}
+  {#if turn('moment') && moment && momentAlbums.length}
     <section class="moment" data-sky={moment.sky} class:dark={moment.dark} style:--photo={skyPhoto ? `url(${skyPhoto})` : 'none'} aria-label={moment.name}>
       <h2>{moment.name}</h2>
       <div class="sky-flow">
@@ -254,7 +298,7 @@
     </section>
   {/if}
 
-  {#if newest.length}
+  {#if turn('newest') && newest.length}
     <section aria-label="New for you">
       <SectionHead title="New for you" onmore={allNewest} />
       <ul class="shelf">
@@ -265,7 +309,7 @@
     </section>
   {/if}
 
-  {#if week && week.total > 0}
+  {#if turn('week') && week && week.total > 0}
     <section aria-label="Sounds like your week">
       <SectionHead title="Sounds like your week" onplay={() => playWeek('play')} busy={starting} />
       <div class="week">
@@ -283,7 +327,7 @@
     </section>
   {/if}
 
-  {#if back.length}
+  {#if turn('back') && back.length}
     <section aria-label="Jump back in">
       <SectionHead title="Jump back in" />
       <ul class="back">
@@ -306,7 +350,7 @@
     </section>
   {/if}
 
-  {#if dug?.past.length}
+  {#if turn('past') && dug?.past.length}
     <section aria-label="Blast from the past">
       <SectionHead title="Blast from the past" onplay={() => playPast('play')} busy={starting} />
       <ul class="back">
@@ -325,7 +369,7 @@
     </section>
   {/if}
 
-  {#if graves.length}
+  {#if turn('graves') && graves.length}
     <section aria-label="Grave digging">
       <SectionHead title="Grave digging" />
       <ul class="shelf">
@@ -337,13 +381,22 @@
   {/if}
 
   <!-- Artists to explore (lib/ArtistsToExplore; the owner, 2026-10-23). -->
-  <ArtistsToExplore />
+  <div class="turn" class:held={!turn('explore')}><ArtistsToExplore onsettled={() => (exploreIn = true)} /></div>
 
   <!-- System status (lib/HomeStatus): an administrator's, shown only when something waits. -->
-  <HomeStatus />
+  <div class="turn" class:held={!turn('status')}><HomeStatus onsettled={() => (statusIn = true)} /></div>
 </div>
 
 <style>
+  /* A part that loads itself (it asks on mounting): there from the start, shown in its turn. */
+  .turn {
+    display: contents;
+  }
+
+  .turn.held {
+    display: none;
+  }
+
   .home {
     display: flex;
     flex-direction: column;
@@ -521,6 +574,9 @@
   .mosaic span {
     display: block;
     aspect-ratio: 1;
+    /* Square whatever the image's shape: without it a portrait cover stretched its box, and its card (the owner,
+       2026-10-24). */
+    overflow: hidden;
   }
 
   .about {

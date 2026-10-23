@@ -18,7 +18,18 @@
     top,
     ontracks,
     profile,
-  }: { source: string; name: string; albums: ListedAlbum[]; appearsOn: ListedAlbum[]; top?: Snippet; ontracks: () => void; profile?: Snippet } = $props();
+    profileComing = false,
+  }: {
+    source: string;
+    name: string;
+    albums: ListedAlbum[];
+    appearsOn: ListedAlbum[];
+    top?: Snippet;
+    ontracks: () => void;
+    profile?: Snippet;
+    /** The profile is on its way: its column is kept from the start, so the albums do not narrow when it comes. */
+    profileComing?: boolean;
+  } = $props();
 
   // About: Cratarr's own library only (the store knows its artists).
   let about = $state<{ id: string | null; bio: string | null; photo: boolean } | null>(null);
@@ -75,14 +86,14 @@
 {/if}
 <!-- On a wide panel the albums and the artist's profile side by side, the profile all open (the owner, 2026-10-23); on
      a narrow one the profile stays in the header, to fold. -->
-<div class="beside" class:with-profile={!!profile}>
+<div class="beside" class:with-profile={!!profile || profileComing}>
   {#if albums.length}
     <section aria-label="Albums" bind:this={albumsEl}>
       <SectionHead title="Albums" />
       {@render grid(albums)}
     </section>
   {/if}
-  {#if profile}<aside class="profile" aria-label="Profile">{@render profile()}</aside>{/if}
+  {#if profile}<aside class="profile" aria-label="Profile">{@render profile()}</aside>{:else if profileComing}<aside class="profile" aria-hidden="true"></aside>{/if}
 </div>
 {#if appearsOn.length}
   <section aria-label="Appears on">

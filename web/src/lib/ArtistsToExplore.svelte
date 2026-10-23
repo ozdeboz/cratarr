@@ -12,12 +12,15 @@
   import { prefs } from './prefs.svelte';
   import SectionHead from './SectionHead.svelte';
 
+  /** `onsettled`: once its artists are in (or refused), so Home can show it in its turn. */
+  let { onsettled }: { onsettled?: () => void } = $props();
+
   let artists = $state<ExploredArtist[]>([]);
   let open = $state(0);
   onMount(() => {
     getHomeArtists(prefs.source || undefined, hiddenLibraries()).then(
-      (d) => (artists = d.artists),
-      () => (artists = []),
+      (d) => ((artists = d.artists), onsettled?.()),
+      () => ((artists = []), onsettled?.()),
     );
   });
   const a = $derived(artists[open]);

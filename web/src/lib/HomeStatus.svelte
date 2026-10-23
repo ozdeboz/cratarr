@@ -14,14 +14,24 @@
   /** At most this many rows. */
   const MOST = 4;
 
+  /** `onsettled`: once its answer is in (or there is none to ask for), so Home can show it in its turn. */
+  let { onsettled }: { onsettled?: () => void } = $props();
+
   let findings = $state<HealthFinding[]>([]);
 
   $effect(() => {
-    if (!me.admin) return;
+    if (!me.admin) {
+      if (me.known) onsettled?.();
+      return;
+    }
     let gone = false;
     getHealthReport().then(
-      (r) => !gone && (findings = r.findings),
-      () => {},
+      (r) => {
+        if (gone) return;
+        findings = r.findings;
+        onsettled?.();
+      },
+      () => !gone && onsettled?.(),
     );
     return () => (gone = true);
   });

@@ -4,6 +4,7 @@
   import Settings from './Settings.svelte';
   import Library from './Library.svelte';
   import Home from './Home.svelte';
+  import PageLoading from './lib/PageLoading.svelte';
   import LocalAlbums from './LocalAlbums.svelte';
   import LocalArtists from './LocalArtists.svelte';
   import LocalTracks from './LocalTracks.svelte';
@@ -508,6 +509,9 @@
       <Settings />
     {:else if page === 'health' && me.admin}
       <Health />
+    {:else if page === 'health' && !me.known}
+      <!-- Whether they may see it is not known yet: not another page first. -->
+      <PageLoading />
     {:else if page === 'downloads' && inApp}
       <Downloads />
     {:else if page === 'library'}
