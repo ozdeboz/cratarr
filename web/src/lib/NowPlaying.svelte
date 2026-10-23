@@ -727,6 +727,22 @@
     margin-inline: auto;
   }
 
+  /* Landscape: the title, the extra details, the waveform, the controls and the bottom row spread evenly over the box
+     (as tall as the cover), at least 12 px apart (the owner, 2026-10-24: the details too close to the waveform, it too
+     close to the controls, they too far from the bottom row). Portrait keeps its spacers. */
+  header.landscape .controls {
+    justify-content: space-evenly;
+    gap: 12px;
+  }
+
+  header.landscape .controls > .sp {
+    display: none;
+  }
+
+  header.landscape .area {
+    display: contents;
+  }
+
   /* Spacers: equal (Finamp's were 4 / 4 / 10 / 4 in landscape; the owner, 2026-10-24: too much between the controls
      and the bottom row, relative to the rest); a small minimum keeps the groups apart. */
   .sp {
