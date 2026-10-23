@@ -89,6 +89,7 @@
   import CrateMenu from './CrateMenu.svelte';
   import SubjectMenu from './SubjectMenu.svelte';
   import SelectionMenu from './SelectionMenu.svelte';
+  import { pickOf, playCollection } from './play.svelte';
   import { addedOn, artistPictureId, goToArtist, library, mainArtist, readLibrary } from './albums.svelte';
   import AlbumAbout from './AlbumAbout.svelte';
   import AlbumMore from './AlbumMore.svelte';
@@ -826,9 +827,11 @@
    *  ending and never in the same order; Cratarr reads the crate itself on each refill. */
   async function artistRadio() {
     navigator.vibrate?.(8);
-    const ids = playable.map((r) => r.id!);
+    const a = artist;
     try {
-      await startRadio(ids.length > 300 ? [...ids].sort(() => Math.random() - 0.5).slice(0, 300) : ids, title);
+      // The seed: 300 of all their tracks, the server's fair draw (decision 0059), not the rows shown.
+      const ids = a ? (await pickOf({ kind: 'artist', source: a.source, name: a.name }, 'shuffle', 'cratarr')).tracks.slice(0, 300).map((t) => t.id) : playable.map((r) => r.id!);
+      await startRadio(ids, title);
     } catch (e) {
       toast.fail(e, "The radio didn't start");
     }
@@ -869,6 +872,12 @@
   async function actOnRows(mode: PlayMode) {
     const c = crate;
     if (c && !crateEditing) return mode === 'shuffle' ? shuffleCrate(c, title) : playCrate(c, title, mode);
+    // The server's library (decision 0059): an album or an artist whole, in its order; a sorted view what shows.
+    if (!onDevice) {
+      if (album && !sorted) return playCollection({ kind: 'album', source: album.source, id: album.id }, mode, title);
+      if (artist && !sorted) return playCollection({ kind: 'artist', source: artist.source, name: artist.name }, mode, title);
+      return playCollection({ kind: 'tracks', source, ids: shownPlayable.map((r) => r.id!) }, mode, title);
+    }
     const tracks = tracksOf(shownPlayable);
     if (mode === 'play' || mode === 'shuffle') {
       const order = mode === 'shuffle' ? [...tracks].sort(() => Math.random() - 0.5) : tracks;
@@ -917,7 +926,16 @@
     navigator.vibrate?.(8);
     const ok = list.filter((x) => x.id && !x.missing);
     try {
-      await playPlaylistFrom(name, src, tracksOf(ok, src), ok.indexOf(r));
+      // The device's own music: its rules here (decision 0059). The server's library: the server's choice from the
+      // tapped track (500 at most): the whole crate, album, artist or playlist in its order; a sorted view or several
+      // lists, what shows, in the order it shows (a queue's order is what is seen).
+      if (onDevice) return await playPlaylistFrom(name, src, tracksOf(ok, src), ok.indexOf(r));
+      const c = crate;
+      if (c && !crateEditing && !sorted) return await playCollection({ kind: 'crate', id: c }, 'play', name, r.id);
+      if (album && !sorted) return await playCollection({ kind: 'album', source: album.source, id: album.id }, 'play', name, r.id);
+      if (artist && !sorted) return await playCollection({ kind: 'artist', source: artist.source, name: artist.name }, 'play', name, r.id);
+      if (p && !multi && !sorted) return await playCollection({ kind: 'playlist', id: p.id }, 'play', name, r.id);
+      await playCollection({ kind: 'tracks', source: src, ids: ok.map((x) => x.id!) }, 'play', name, r.id);
     } catch (e) {
       toast.fail(e, 'Could not start playing');
     }

@@ -64,6 +64,8 @@
   import { startRadio, type LocalTrack } from './localPlayer.svelte';
   import { isKept, setKept } from './kept.svelte';
   import ExportStep from './ExportStep.svelte';
+  import { playCollection } from './play.svelte';
+  import { DEVICE } from './deviceMusic.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
@@ -203,10 +205,11 @@
         icon: 'shuffle',
         label: 'Shuffle',
         disabled: !t?.length,
-        onclick: () => run(() => playPlaylistFrom(a.title, source, [...t!].sort(() => Math.random() - 0.5), 0)),
+        // The server's library through the server's choice (decision 0059); the device's own as before.
+        onclick: () => run(() => (source === DEVICE ? playPlaylistFrom(a.title, source, [...t!].sort(() => Math.random() - 0.5), 0) : playCollection({ kind: 'album', source, id: a.id }, 'shuffle', a.title))),
       },
-      { icon: 'playNext', label: 'Play next', onclick: () => run(() => playAlbums(listed(), 'next'), 'Plays next.') },
-      { icon: 'listAdd', label: 'Add to queue', onclick: () => run(() => playAlbums(listed(), 'last'), 'Added to the queue.') },
+      { icon: 'playNext', label: 'Play next', onclick: () => run(() => (source === DEVICE ? playAlbums(listed(), 'next') : playCollection({ kind: 'album', source, id: a.id }, 'next', a.title)), 'Plays next.') },
+      { icon: 'listAdd', label: 'Add to queue', onclick: () => run(() => (source === DEVICE ? playAlbums(listed(), 'last') : playCollection({ kind: 'album', source, id: a.id }, 'last', a.title)), 'Added to the queue.') },
     );
     // Start radio (decision 0058, as a playlist's): tracks like the album's, from the whole library; on this device.
     if (isLocal() && t?.length) list.push({ icon: 'radio', label: 'Start radio', onclick: () => run(() => startRadio(t.map((x) => x.id), a.title)) });

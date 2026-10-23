@@ -16,6 +16,8 @@
   import SelectBar from './SelectBar.svelte';
   import { toast } from './toast.svelte';
   import SelectionMenu from './SelectionMenu.svelte';
+  import { playCollection } from './play.svelte';
+  import { DEVICE } from './deviceMusic.svelte';
   import type { LocalTrack } from './localPlayer.svelte';
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
@@ -312,7 +314,13 @@
     navigator.vibrate?.(8);
     selecting = null;
     try {
-      await playAlbums(list, mode);
+      // One album: the server's choice of it (decision 0059); several: their tracks, album after album, through the
+      // same path (the device's own albums as before).
+      if (list.length === 1 && list[0].source !== DEVICE) await playCollection({ kind: 'album', source: list[0].source, id: list[0].a.id }, mode, list[0].a.title);
+      else if (list.every((x) => x.source !== DEVICE)) {
+        const tracks = await tracksOfAlbums(list);
+        await playCollection({ kind: 'tracks', source: list[0].source, ids: tracks.map((t) => t.id) }, mode, `${list.length} albums`);
+      } else await playAlbums(list, mode);
     } catch (e) {
       toast.fail(e, 'Could not start playing');
     }
