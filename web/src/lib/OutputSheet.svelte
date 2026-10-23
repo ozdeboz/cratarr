@@ -56,6 +56,14 @@
     return d && !list.includes(d) ? [...list, d] : list;
   });
 
+  // What another player plays (the owner, 2026-10-23: "Each other player's row should show what it's playing. But not
+  // the cover"): its track and artist, playing or paused; nothing while it holds none.
+  function playing(name: string): { text: string; playing: boolean } | null {
+    const p = playOn.players.find((x) => x.name === name);
+    if (!p?.online || !p.title) return null;
+    return { text: p.artist ? `${p.title} · ${p.artist}` : p.title, playing: p.playing };
+  }
+
   // A player that plays already, while music plays here too: whether to take it over.
   let asking = $state<PlayOnPlayer | null>(null);
 
@@ -202,9 +210,12 @@
         {/if}
       {/if}
       {#each players as name (name)}
+        {@const now = playing(name)}
         <div use:hold={{ start: () => held(name), end: () => {}, enabled: groupable(name), ms: HOLD_MS }}>
           <MenuEntry
             label={name}
+            sub={now?.text ?? null}
+            subIcon={now ? (now.playing ? 'play' : 'pause') : null}
             checked={drivenName() === name || group.includes(name)}
             badge={group.length > 1 && group[0] === name ? 'crown' : null}
             badgeLabel="Leads the group"

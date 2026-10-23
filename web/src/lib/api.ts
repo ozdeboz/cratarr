@@ -173,6 +173,9 @@ export type PlayOnPlayer = {
   /** Last heard from, epoch seconds. */
   seen: number;
   playing: boolean;
+  /** The playing track's name and artist, as the server's view of it says (none while it holds no track). */
+  title?: string | null;
+  artist?: string | null;
   index: number;
   position_ms: number;
   duration_ms: number | null;

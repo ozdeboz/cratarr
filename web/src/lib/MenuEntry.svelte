@@ -6,7 +6,8 @@
   // a small icon after a toggle's label (a group's leader: a crown), `badgeLabel` saying what it means. `onmark`: the
   // toggle's mark (+ or the tick) is a button of its own, `markLabel` saying what it does; the label keeps `onclick`.
   // `plus: false`: no + while off (a choice that adds nothing), the tick only when on.
-  // `switched`: an entry that turns something on or off (Keep on this device), its switch at the end.
+  // `switched`: an entry that turns something on or off (Keep on this device), its switch at the end. `sub`: a toggle's
+  // second line, smaller, after `subIcon` (another player's track and whether it plays, in Play On; no cover).
   import Icon, { type IconName } from './Icon.svelte';
   import SwitchTrack from './SwitchTrack.svelte';
 
@@ -24,6 +25,8 @@
     markLabel = '',
     switched = null,
     plus = true,
+    sub = null,
+    subIcon = null,
   }: {
     icon?: IconName | null;
     label: string;
@@ -38,8 +41,20 @@
     markLabel?: string;
     switched?: boolean | null;
     plus?: boolean;
+    sub?: string | null;
+    subIcon?: IconName | null;
   } = $props();
 </script>
+
+{#snippet name()}
+  <span class:badged={badge !== null}
+    >{#if badge}<em>{label}</em><b title={badgeLabel} aria-label={badgeLabel}><Icon name={badge} size={18} /></b>{:else}{label}{/if}</span
+  >
+{/snippet}
+{#snippet text()}
+  {#if sub}<span class="two">{@render name()}<small>{#if subIcon}<Icon name={subIcon} size={12} />{/if}<span>{sub}</span></small></span
+    >{:else}{@render name()}{/if}
+{/snippet}
 
 {#if switched !== null}
   <button class="entry" role="menuitemcheckbox" aria-checked={switched} {disabled} {onclick}>
@@ -52,18 +67,14 @@
 {:else if onmark}
   <div class="toggle split" class:on={checked}>
     <button class="name" role="menuitemradio" aria-checked={checked} disabled={disabled || busy} {onclick}>
-      <span class:badged={badge !== null}
-        >{#if badge}<em>{label}</em><b title={badgeLabel} aria-label={badgeLabel}><Icon name={badge} size={18} /></b>{:else}{label}{/if}</span
-      >
+      {@render text()}
     </button><i aria-hidden="true"></i><button class="mark" aria-label={markLabel} title={markLabel} disabled={disabled || busy} onclick={onmark}
       ><Icon name={checked ? 'check' : 'plus'} size={22} /></button
     >
   </div>
 {:else}
   <button class="toggle" class:on={checked} role="menuitemcheckbox" aria-checked={checked} disabled={disabled || busy} aria-busy={busy} {onclick}>
-    <span class:badged={badge !== null}
-      >{#if badge}<em>{label}</em><b title={badgeLabel} aria-label={badgeLabel}><Icon name={badge} size={18} /></b>{:else}{label}{/if}</span
-    >{#if checked || plus}<i aria-hidden="true"></i><Icon name={checked ? 'check' : 'plus'} size={22} />{/if}
+    {@render text()}{#if checked || plus}<i aria-hidden="true"></i><Icon name={checked ? 'check' : 'plus'} size={22} />{/if}
   </button>
 {/if}
 
@@ -168,6 +179,30 @@
     flex: none;
     justify-content: center;
     width: 48px;
+  }
+
+  /* A second line under the name: smaller, muted, its own ellipsis. */
+  .toggle span.two {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .toggle span.two > span {
+    flex: none;
+  }
+
+  .toggle span.two small {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .toggle span.two small :global(svg) {
+    flex: none;
   }
 
   .toggle span.badged {
