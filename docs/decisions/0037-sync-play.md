@@ -226,3 +226,24 @@ and never leads one: its sound cannot be sent on.
   group's sound plays. Its row in the Play On sheet has the group's + and tick, like any follower's.
 - The caution above still holds: a page's output delay is less predictable than the app's, and a sleeping screen may
   pause it. The speaker delay setting is there for the first.
+
+## Amended (2026-10-23): how far the followers drift, measured before correcting
+
+The owner heard a follower fall out of step and asked how others catch up. What the Kodi's stream and the page do now
+(a skip or pad of the whole difference beyond 20 ms; a jump beyond 5 ms) lets the error grow first. Read in their
+sources, the proven ones correct early and gently:
+
+- **Snapcast** (snapclient, `client/stream.cpp`, the apps' own): from 0.1 ms off it drops or repeats single frames
+  (copied, not interpolated), at most 0.05% (one frame in 2,000), reached at 1 ms off; a jump only when the median
+  over its last readings passes 2 ms (500 readings), 5 ms (100) or 50 ms (20), or 500 ms at once.
+- **shairport-sync** (AirPlay): lets 2 ms of drift be, resyncs beyond 50 ms; simply adding or taking out frames is
+  "Not recommended": it resamples with SoX where the processor allows.
+- **Jellyfin's SyncPlay**: a playback rate of 1 + difference/1 s, off by default (above).
+
+A rate of 0.5%, first thought of here, is 8.6 cents: against another speaker in the room it beats at about 2 Hz on
+an A. A time-stretch that keeps the pitch smears transients and is not in Web Audio. So the correction will be
+Snapcast's kind, at most 0.05%, resampled where it can be.
+
+First, measured: once a minute the Kodi's stream (`syncplay` "drift", from its readings) and a page ("group sound
+drift" in its log, from each piece laid end to end against its stamp) write down how late they played (median,
+least, most, readings) and how often they were put back in step.

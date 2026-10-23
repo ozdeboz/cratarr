@@ -33,7 +33,24 @@ pub struct Listener {
     adjust: AtomicI64,
     /// How late it played at its last readings (µs), and when it was last put back in step.
     lags: Mutex<(Vec<i64>, Option<Instant>)>,
+    /// This minute's readings (µs late) and corrections, and when the minute began: how much it drifts, written down
+    /// once a minute ([Drift]) before choosing how to correct it (the owner, 2026-10-23).
+    minute: Mutex<(Vec<i64>, u32, Option<Instant>)>,
 }
+
+/// A minute of a player's readings: how late it played (ms; − early), the middle, the least and the most, how many
+/// readings, and how many times it was put back in step.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Drift {
+    pub median_ms: f64,
+    pub min_ms: f64,
+    pub max_ms: f64,
+    pub readings: usize,
+    pub corrections: u32,
+}
+
+/// The minute after which a minute's readings are written down.
+const DRIFT_EVERY: Duration = Duration::from_secs(60);
 
 impl Listener {
     /// The stamp (µs) of what the player plays at its time `at_ms` in the stream; `None` before anything was sent.
@@ -52,6 +69,30 @@ impl Listener {
     /// right with a skip or a pad. `Some((ms, late))` when it was.
     pub fn heard(&self, at_ms: f64, when: i64, buffer_ms: u32) -> Option<(i64, bool)> {
         let lag = when - i64::from(buffer_ms) * 1000 - self.stamp_at(at_ms)?;
+        self.minute.lock().unwrap_or_else(|p| p.into_inner()).0.push(lag);
+        let put = self.correct(lag);
+        if put.is_some() {
+            self.minute.lock().unwrap_or_else(|p| p.into_inner()).1 += 1;
+        }
+        put
+    }
+
+    /// The minute's readings, once a minute has passed since the first: then a new minute begins.
+    pub fn drift(&self) -> Option<Drift> {
+        let mut m = self.minute.lock().unwrap_or_else(|p| p.into_inner());
+        let began = *m.2.get_or_insert_with(Instant::now);
+        if began.elapsed() < DRIFT_EVERY || m.0.is_empty() {
+            return None;
+        }
+        let mut lags = std::mem::take(&mut m.0);
+        let corrections = std::mem::take(&mut m.1);
+        m.2 = Some(Instant::now());
+        lags.sort_unstable();
+        let ms = |us: i64| (us as f64 / 100.0).round() / 10.0;
+        Some(Drift { median_ms: ms(lags[lags.len() / 2]), min_ms: ms(lags[0]), max_ms: ms(lags[lags.len() - 1]), readings: lags.len(), corrections })
+    }
+
+    fn correct(&self, lag: i64) -> Option<(i64, bool)> {
         let mut held = self.lags.lock().unwrap_or_else(|p| p.into_inner());
         let (lags, corrected) = &mut *held;
         lags.push(lag);
@@ -364,6 +405,20 @@ mod tests {
             assert_eq!(l.heard(0.0, 6_010_000, 1000), None);
         }
         assert_eq!(l.adjust.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn a_minute_of_readings_is_written_down_as_its_middle_least_and_most() {
+        let l = Listener::default();
+        l.origin.store(5_000_000, Ordering::Relaxed);
+        assert_eq!(l.drift(), None, "a minute begins");
+        for when in [6_001_000, 6_003_500, 6_002_000] {
+            l.heard(0.0, when, 1000);
+        }
+        assert_eq!(l.drift(), None, "not a minute yet");
+        l.minute.lock().unwrap().2 = Instant::now().checked_sub(Duration::from_secs(61));
+        assert_eq!(l.drift(), Some(Drift { median_ms: 2.0, min_ms: 1.0, max_ms: 3.5, readings: 3, corrections: 0 }));
+        assert_eq!(l.drift(), None, "a new minute");
     }
 
     #[test]

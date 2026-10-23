@@ -236,6 +236,9 @@ impl Driver {
         if let Some((ms, late)) = listener.heard(ms as f64, (before + after) / 2, snap.buffer_ms()) {
             tracing::info!(target: "syncplay", player = self.name.as_str(), ms, late, "put back in step");
         }
+        if let Some(d) = listener.drift() {
+            tracing::info!(target: "syncplay", player = self.name.as_str(), median_ms = d.median_ms, min_ms = d.min_ms, max_ms = d.max_ms, readings = d.readings, corrections = d.corrections, "drift");
+        }
     }
     fn place_of(&self, entry: Option<&str>, place: Option<usize>) -> Option<usize> {
         entry.and_then(|e| self.queue.iter().position(|t| t.entry == e)).or(place).filter(|p| *p < self.queue.len())

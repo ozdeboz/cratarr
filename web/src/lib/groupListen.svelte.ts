@@ -40,6 +40,11 @@ let next = 0;
 let laid: { at: number; src: AudioBufferSourceNode }[] = [];
 let lastPieceAt = 0;
 const tally = { late: 0, gaps: 0, gapMs: 0, resyncs: 0, pieces: 0 };
+/** This minute's drift: how late each piece laid end to end is against its stamp (ms; − early), and the resyncs. Written
+ *  down once a minute ("group sound drift") to learn how far a page drifts before choosing how to correct it (the
+ *  owner, 2026-10-23: Snapcast corrects from 0.1 ms at most 0.05%; this jumps beyond 5 ms). */
+const minute = { lags: [] as number[], resyncs: 0 };
+const DRIFT_MS = 60_000;
 
 async function measureClock() {
   let best = Infinity;
@@ -103,11 +108,16 @@ function lay(f: Format, stampUs: number, pcm: Uint8Array) {
   let at = audioTimeAt(stampUs / 1000 + f.bufferMs - f.delayMs - offset);
   if (next) {
     const off = at - next;
-    if (Math.abs(off) <= JOIN_S) at = next;
-    else if (off > 0) {
+    if (Math.abs(off) <= JOIN_S) {
+      minute.lags.push((next - at) * 1000);
+      at = next;
+    } else if (off > 0) {
       tally.gaps++;
       tally.gapMs += off * 1000;
-    } else tally.resyncs++;
+    } else {
+      tally.resyncs++;
+      minute.resyncs++;
+    }
   }
   const now = c.currentTime;
   if (at + b.duration <= now + 0.01) {
@@ -207,6 +217,16 @@ function check() {
   listening.suspended = ctx?.state === 'suspended';
   listening.playing = ctx?.state === 'running' && performance.now() - lastPieceAt < 1500;
 }
+function writeDrift() {
+  const l = minute.lags.sort((a, b) => a - b);
+  if (l.length) {
+    const ms = (v: number) => Math.round(v * 10) / 10;
+    log('info', 'group sound drift', { median_ms: ms(l[l.length >> 1]), min_ms: ms(l[0]), max_ms: ms(l[l.length - 1]), readings: l.length, resyncs: minute.resyncs });
+  }
+  minute.lags = [];
+  minute.resyncs = 0;
+}
+
 function writeTally() {
   if (tally.late || tally.gaps || tally.resyncs)
     log('warn', 'group sound uneven', { pieces: tally.pieces, late: tally.late, gaps: tally.gaps, gap_ms: Math.round(tally.gapMs), resyncs: tally.resyncs });
@@ -231,6 +251,7 @@ export async function followGroup(leader: string, name: string, to: Log): Promis
   tallyTimer = setInterval(() => {
     check();
     if (++ticks % (TALLY_MS / 1000) === 0) writeTally();
+    if (ticks % (DRIFT_MS / 1000) === 0) writeDrift();
   }, 1000);
   open();
   if (ctx.state !== 'running') await ctx.resume().catch(() => {});
@@ -249,6 +270,7 @@ export async function resumeGroup() {
 export function leaveGroup() {
   if (listening.leader) {
     writeTally();
+    writeDrift();
     log('info', 'group sound closed', { leader: listening.leader });
   }
   listening.leader = null;
