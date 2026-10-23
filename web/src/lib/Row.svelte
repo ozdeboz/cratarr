@@ -380,6 +380,16 @@
     box-shadow: inset 0 0 0 2px var(--accent);
   }
 
+  /* The keyboard's ring is the row's, as the viewed one's (the owner, 2026-10-23: the same size), not the browser's
+     round the tap target only; in the text colour, so the two read apart. */
+  .main:focus-visible {
+    outline: none;
+  }
+
+  .row:has(> .main:focus-visible) {
+    box-shadow: inset 0 0 0 2px var(--text);
+  }
+
   .tinted .n {
     font-size: 0.8rem;
   }
@@ -438,8 +448,9 @@
     gap: 10px;
   }
 
+  /* A cover in front keeps a gutter from the row's edge, inside the border of a viewed row (the owner, 2026-10-23). */
   .large.led {
-    padding: 2px 4px 2px 0;
+    padding: 2px 4px 2px 6px;
   }
 
   /* The action's buttons are as tall as the row (a track's heart). */
