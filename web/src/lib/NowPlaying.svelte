@@ -822,14 +822,23 @@
   }
 
   /* The row under the title: the info button, then the chosen facts as small read-only pills (as the info chips were),
-     scrolling sideways when they do not fit. */
+     scrolling sideways when they do not fit. Centred by its ends' auto margins, not justify-content: centred, a row
+     that overflows spills left too, out of the scroll's reach (the owner, 2026-10-24: all of them on, some could not be
+     reached). */
   .facts {
     display: flex;
     align-items: center;
-    justify-content: center;
     gap: 6px;
     overflow-x: auto;
     scrollbar-width: none;
+  }
+
+  .facts > :first-child {
+    margin-left: auto;
+  }
+
+  .facts > :last-child {
+    margin-right: auto;
   }
 
   .facts .info {
