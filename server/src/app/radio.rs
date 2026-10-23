@@ -1010,6 +1010,34 @@ mod tests {
         assert!(closest_lists(&index, &seed, vec![("empty".into(), Vec::new())], &Weights::EQUAL, 2).is_empty(), "nothing of it in the library");
     }
 
+    /// The library's file read as the radio reads it, a song with a whole-number BPM and an album artist among them (75:
+    /// the two read in each other's places, and every library with a BPM failed to read).
+    #[test]
+    fn the_library_is_read_with_its_bpm_and_album_artist_in_their_places() {
+        let dir = std::env::temp_dir().join(format!("cratarr-radio-read-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let lib = Connection::open(dir.join("library.sqlite")).unwrap();
+        lib.execute_batch(
+            "CREATE TABLE songs (id TEXT, title TEXT, artist TEXT, album TEXT, album_id TEXT, year INTEGER, genre TEXT,
+               duration_ms INTEGER, bpm INTEGER, disc_no INTEGER, track_no INTEGER, rel TEXT);
+             CREATE TABLE albums (id TEXT, genres TEXT, compilation INTEGER, artist TEXT, artist_id TEXT);
+             CREATE TABLE song_artists (song_id TEXT, artist_id TEXT, position INTEGER);
+             INSERT INTO songs VALUES ('tr-1', 'One', 'Ana', 'First', 'al-1', 1999, 'Jazz', 200000, 128, 1, 1, 'a/1.flac');
+             INSERT INTO songs VALUES ('tr-2', 'Two', 'Ana', 'First', 'al-1', 1999, 'Jazz', 180000, NULL, 1, 2, 'a/2.flac');
+             INSERT INTO albums VALUES ('al-1', '', 0, 'Ana', 'ar-ana');
+             INSERT INTO song_artists VALUES ('tr-1', 'ar-ana', 0);",
+        )
+        .unwrap();
+        Connection::open(dir.join("userdata.sqlite")).unwrap().execute_batch("CREATE TABLE album_tags (album TEXT, tag TEXT);").unwrap();
+        drop(lib);
+        let index = read_index(&dir.join("library.sqlite"), &dir.join("userdata.sqlite"), None, &HashMap::new()).unwrap();
+        let bpms: Vec<Option<f32>> = index.songs.iter().map(|s| s.like.bpm).collect();
+        assert_eq!(bpms, [Some(128.0), None]);
+        assert_eq!(index.artist_ids, ["ar-ana"], "the album artist read as an artist");
+        assert!(!index.songs[1].like.artists.is_empty(), "a song without its own artists has its album's");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     fn ids(index: &Index, picked: &[usize]) -> Vec<String> {
         picked.iter().map(|&i| index.songs[i].id.clone()).collect()
     }
