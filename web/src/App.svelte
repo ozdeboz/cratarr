@@ -552,7 +552,7 @@
     >
   {/if}
   {#if pageRow}
-    <div class="page-row" class:beside={sidebar} class:insights={page === 'insights'} class:open={page === 'insights' && insightsShown} style:--player-w="{sideWidth}px">
+    <div class="page-row" class:beside={sidebar} class:insights={page === 'insights'} style:--player-w="{sideWidth}px">
       {#if navAt > 0}
         <span class="navpill"><button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button></span>
       {:else}
@@ -698,15 +698,18 @@
     right: calc(var(--player-w) + 10px + 12px);
   }
 
-  /* Insights: its tabs centred between back and its panel's button; with a panel open, at the row's end (the owner,
-     2026-10-23). Back's and the button's columns are as wide either way. */
+  /* Insights: its tabs just after back, whether a panel is open or not, so nothing moves when one opens or closes
+     (the owner, 2026-10-23); its panel's button at the row's end. Each keeps its own size (back round). */
   .page-row.insights {
-    display: grid;
-    grid-template-columns: 52px minmax(0, 460px) 52px;
+    justify-content: flex-start;
   }
 
-  .page-row.insights.open {
-    grid-template-columns: 52px minmax(0, 460px);
+  .page-row.insights > :global(.pill) {
+    flex: 0 1 460px;
+  }
+
+  .page-row.insights > :global(:last-child:not(.pill)) {
+    margin-left: auto;
   }
 
   .page.under-row {
