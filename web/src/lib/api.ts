@@ -1473,6 +1473,28 @@ export const cancelJob = (id: number) => request<null>(`/api/incoming/jobs/${id}
 /** A name with a count: "Downtempo", 120 albums. */
 export type Count = { name: string; n: number };
 
+/** A top artist, album or track of a period (Insights' Listening, decision 0065). */
+export type ListeningTop = { id: string; name: string; by?: string; plays: number; secs: number };
+/** The asking account's listening over a week, a month or a year (from the play log, decision 0064). */
+export type Listening = {
+  period: 'week' | 'month' | 'year';
+  from: number;
+  /** Where the log begins (epoch s); null while it is empty. */
+  log_from: number | null;
+  total_secs: number;
+  plays: number;
+  /** Per day (a week, a month) or per week (a year): its start (epoch s) and the seconds heard. */
+  time: { start: number; secs: number }[];
+  /** Taste over time, further back than the period: per week, month or year (`starts`, oldest first), each top
+   *  genre's share of the time listened then (0 to 1); `shares[i][j]`: step i, genre j. */
+  taste: { step: 'week' | 'month' | 'year'; starts: number[]; genres: string[]; shares: number[][] };
+  artists: ListeningTop[];
+  albums: ListeningTop[];
+  tracks: ListeningTop[];
+};
+export const getListening = (period: Listening['period']) =>
+  request<Listening>(`/api/history/listening?period=${period}&tz=${-new Date().getTimezoneOffset() * 60}`);
+
 export type Insights = {
   library: {
     tracks: number;

@@ -331,7 +331,8 @@ pub fn library_stats(rows: &[TrackRow], rules: &Rules) -> LibraryStats {
             *genres.entry(g.clone()).or_default() += 1;
         }
         let names = if a.album_artists.is_empty() { a.common_artists.clone().unwrap_or_default() } else { a.album_artists.clone() };
-        for n in names {
+        // A compilation's "Various Artists" is no artist: as one, it dwarfed every real one's bar (the owner, 2026-10-23).
+        for n in names.into_iter().filter(|n| !crate::crates::various(n)) {
             *artists.entry(n).or_default() += 1;
         }
     }
@@ -399,6 +400,15 @@ mod tests {
         assert_eq!(s.decades, vec![Count { name: "1990s".into(), n: 1 }, Count { name: "2010s".into(), n: 1 }], "original date wins");
         assert_eq!(s.genres, vec![Count { name: "Downtempo".into(), n: 2 }, Count { name: "Electronic".into(), n: 1 }]);
         // Bonobo has no album artist tag: the artist every track shares counts, not the guest.
+        assert_eq!(s.top_artists, vec![Count { name: "AIR".into(), n: 1 }, Count { name: "Bonobo".into(), n: 1 }]);
+        assert_eq!(s.artists, 2);
+    }
+
+    #[test]
+    fn a_compilation_s_various_artists_is_no_artist() {
+        let mut lib = library();
+        lib.push(row("VA - Mix (2001)/01 a.mp3", "MP3", 320, &[("albumartist", "Various Artists"), ("artist", "AIR"), ("title", "a")]));
+        let s = library_stats(&lib, &Rules::default());
         assert_eq!(s.top_artists, vec![Count { name: "AIR".into(), n: 1 }, Count { name: "Bonobo".into(), n: 1 }]);
         assert_eq!(s.artists, 2);
     }

@@ -28,6 +28,7 @@
   import SheetArea from './lib/SheetArea.svelte';
   import MiniPlayer from './lib/MiniPlayer.svelte';
   import TopPill from './lib/TopPill.svelte';
+  import InsightsTabs from './lib/InsightsTabs.svelte';
   import Mark from './lib/Mark.svelte';
   import LabelTip from './lib/LabelTip.svelte';
   import { installLabels } from './lib/labels.svelte';
@@ -240,7 +241,7 @@
     };
   });
   // On a phone the row always has something on its left (back, or the mark); beside the page only back or the pill.
-  const pageRow = $derived(!playlistLayer && !overlay && (phone || navAt > 0 || pagePill || page === 'settings'));
+  const pageRow = $derived(!playlistLayer && !overlay && (phone || navAt > 0 || pagePill || page === 'settings' || page === 'insights'));
   // The settings page's info button (the owner, 2026-10-16): About in a sheet.
   let aboutOpen = $state(false);
   $effect(() => {
@@ -548,6 +549,7 @@
         <span></span>
       {/if}
       {#if pagePill}<SheetArea area={() => pageEl}><TopPill {page} view={hasView(page)} device={pillDevice} filter={!page.startsWith('local-')} /></SheetArea>{/if}
+      {#if page === 'insights'}<InsightsTabs />{/if}
       {#if page === 'settings'}
         <span class="navpill"><button aria-label="About" title="About" onclick={() => (aboutOpen = true)}><Icon name="info" size={22} /></button></span>
       {/if}

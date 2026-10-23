@@ -54,6 +54,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/track/{source}/{id}/favorite", post(track_favorite))
         .route("/api/track/{source}/{id}/played", post(track_played))
         .route("/api/plays", post(plays))
+        .route("/api/history/listening", get(history_listening))
         .route("/api/favorites/{source}", post(favorites))
         .route("/api/favorites/{source}/albums", get(favorite_albums))
         .route("/api/queue/add", post(queue_add))
@@ -2484,6 +2485,44 @@ struct PlayEvents {
 }
 
 /// Plays a player tells, late too (decision 0033, step 4): each counted once; the answer names those it may forget.
+#[derive(Deserialize)]
+struct ListeningQuery {
+    period: Option<crate::app::history::Period>,
+    /// The page's time zone: seconds east of UTC (its days begin at its midnight).
+    #[serde(default)]
+    tz: i64,
+}
+
+/// Insights' Listening (decision 0065): the asking account's listening over a week, a month or a year.
+async fn history_listening(Query(q): Query<ListeningQuery>) -> Result<Json<crate::app::history::Listening>, ApiError> {
+    use crate::app::history::{self, Period, SongFacts};
+    let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let user = served.current_user().or_else(|| served.users.owner()).ok_or_else(|| ToggleError::Refused("Nobody is signed in.".into()))?;
+    let period = q.period.unwrap_or(Period::Week);
+    let tz = q.tz.clamp(-14 * 3600, 14 * 3600);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    // Back far enough for its taste over time (further than the period), whatever the time zone.
+    let since = period.reaches_back(now);
+    let listening = tokio::task::spawn_blocking(move || -> anyhow::Result<history::Listening> {
+        let (rows, log_from) = history::heard(&served.userdata, &user, since)?;
+        let mut ids: Vec<String> = rows.iter().map(|r| r.song.clone()).collect();
+        ids.sort();
+        ids.dedup();
+        let facts = served
+            .library
+            .songs_by_id(&ids)?
+            .into_iter()
+            .map(|s| (s.id.clone(), SongFacts { title: s.title, artist: s.artist, album: s.album, album_id: s.album_id, genre: s.genre }))
+            .collect();
+        Ok(history::listening(&rows, &facts, period, now, tz, log_from))
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r)
+    .map_err(ToggleError::from)?;
+    Ok(Json(listening))
+}
+
 async fn plays(State(app): State<Arc<App>>, Json(p): Json<PlayEvents>) -> Json<serde_json::Value> {
     Json(json!({ "done": app.plays.take(&app.playing, p.events).await }))
 }

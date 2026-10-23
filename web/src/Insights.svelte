@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import { type Count, type Signal } from './lib/api';
+  import { type Signal } from './lib/api';
   import { insights, plural } from './lib/insights.svelte';
   import { live } from './lib/live.svelte';
   import Icon from './lib/Icon.svelte';
@@ -10,6 +10,8 @@
   import { prefs } from './lib/prefs.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import ProximityGraph from './lib/ProximityGraph.svelte';
+  import InsightsCollection from './lib/InsightsCollection.svelte';
+  import InsightsListening from './lib/InsightsListening.svelte';
 
   // The data and what is derived from it live in a store shared with the playlist view's Related (decision 0023).
   $effect(() => insights.load());
@@ -58,125 +60,36 @@
     return top.length ? top.join(', ') : 'No genre tags';
   }
 
-  const TABS = [
-    { id: 'statistics', label: 'Statistics' },
-    { id: 'related', label: 'Related' },
-  ] as const;
   const SIGNALS: { id: Signal; label: string }[] = [
     { id: 'tracks', label: 'Shared tracks' },
     { id: 'genre', label: 'Genre' },
     { id: 'artists', label: 'Artists' },
   ];
   const anyOn = $derived(SIGNALS.some((s) => prefs.signals[s.id]));
-  /** A signal is off: the filter applies (the folded filter button says so). */
-  const filtering = $derived(SIGNALS.some((s) => !prefs.signals[s.id]));
 
-  const num = (n: number) => n.toLocaleString();
-  const hours = (ms: number) => plural(Math.round(ms / 3_600_000), 'hour');
-  const size = (bytes: number) => (bytes >= 1e12 ? `${(bytes / 1e12).toFixed(1)} TB` : `${Math.round(bytes / 1e9)} GB`);
-  const pct = (part: number, whole: number) => (whole ? `${Math.round((100 * part) / whole)}%` : '0%');
-  const widest = (rows: Count[]) => Math.max(1, ...rows.map((r) => r.n));
 
 </script>
 
-<main class:wide={prefs.insightsTab === 'related'}>
-  <!-- As the Playlists page: the views always, and on Related its filter section (what brings playlists together),
-       which the filter button shows or hides; remembered by the browser. -->
-  <div class="toolbar">
-    <div class="row">
-      <div class="seg" role="group" aria-label="View">
-        {#each TABS as t (t.id)}
-          <button aria-pressed={prefs.insightsTab === t.id} onclick={() => (prefs.insightsTab = t.id)}>{t.label}</button>
-        {/each}
-      </div>
-      {#if prefs.insightsTab === 'related'}
-        <button
-          class="toggle"
-          class:active={!prefs.relatedFilterOpen && filtering}
-          aria-expanded={prefs.relatedFilterOpen}
-          aria-controls="related-filter"
-          aria-label={prefs.relatedFilterOpen ? 'Hide the filter' : 'Show the filter'}
-          onclick={() => (prefs.relatedFilterOpen = !prefs.relatedFilterOpen)}><Icon name="share" size={22} /></button
-        >
-      {/if}
-    </div>
-    {#if prefs.insightsTab === 'related' && prefs.relatedFilterOpen}
-      <div class="row switches" id="related-filter" role="group" aria-label="What brings playlists together">
-        {#each SIGNALS as s (s.id)}
-          <button class="chip" aria-pressed={prefs.signals[s.id]} onclick={() => (prefs.signals[s.id] = !prefs.signals[s.id])}>
-            {s.label}
-          </button>
-        {/each}
-      </div>
-    {/if}
-  </div>
-
-  {#if error}
+<main class:wide={prefs.insightsTab === 'map'}>
+  <!-- The tabs are in the overlay row (lib/InsightsTabs, decision 0065). -->
+  {#if prefs.insightsTab === 'listening'}
+    <InsightsListening />
+  {:else if error}
     <p class="error" role="alert">{error}</p>
   {:else if !data}
     <PageLoading />
-  {:else if prefs.insightsTab === 'statistics'}
-    {@const l = data.library}
-    {@const p = data.playlists}
-    <section>
-      <h2>Music</h2>
-      <p class="figures">
-        <span>{plural(l.tracks, 'track')}</span>
-        <span>{plural(l.albums, 'album')}</span>
-        <span>{plural(l.artists, 'artist')}</span>
-        <span>{hours(l.duration_ms)}</span>
-        <span>{size(l.bytes)}</span>
-      </p>
-      <p class="figures">
-        <span>{plural(l.lossless_albums, 'lossless album')}</span>
-        <span>{plural(l.below_320_albums, 'album')} below 320 kbps</span>
-        {#each l.formats as f (f.name)}<span>{num(f.n)} {f.name}</span>{/each}
-      </p>
-    </section>
-
-    <section>
-      <h2>Playlists</h2>
-      <p class="figures">
-        <span>{plural(p.playlists, 'playlist')}</span>
-        <span>{pct(p.library_tracks_in_playlists, l.tracks)} of your tracks are in a playlist</span>
-        <span>{plural(p.albums_without_playlist, 'album')} in no playlist</span>
-        <span>{plural(p.in_one_playlist, 'track')} in only one</span>
-        {#if p.missing}<span>{plural(p.missing, 'missing track')}</span>{/if}
-      </p>
-      {#if p.most_shared.length}
-        <h3>In the most playlists</h3>
-        <ol class="plain">
-          {#each p.most_shared as t, i (i)}
-            <li><span>{t.title}{#if t.artist}<span class="muted"> · {t.artist}</span>{/if}</span><span class="n">in {t.playlists}</span></li>
-          {/each}
-        </ol>
-      {/if}
-    </section>
-
-    {#snippet bars(title: string, rows: Count[], unit: string)}
-      {#if rows.length}
-        <section>
-          <h2>{title}</h2>
-          <ul class="bars">
-            {#each rows as r (r.name)}
-              <li>
-                <span class="label">{r.name}</span>
-                <span class="bar"><i style:width={`${(100 * r.n) / widest(rows)}%`}></i></span>
-                <span class="n">{plural(r.n, unit)}</span>
-              </li>
-            {/each}
-          </ul>
-        </section>
-      {/if}
-    {/snippet}
-    {@render bars('Genres', l.genres, 'album')}
-    {@render bars('Decades', l.decades, 'album')}
-    {@render bars('Artists', l.top_artists, 'album')}
+  {:else if prefs.insightsTab === 'collection'}
+    <InsightsCollection {data} />
   {:else if !shown || shown.playlists.length < 2}
     <p class="empty">Related playlists need at least two playlists.</p>
   {:else if !anyOn}
     <p class="empty">Turn on at least one of shared tracks, genre or artists.</p>
   {:else}
+    <div class="switches" role="group" aria-label="What brings playlists together">
+      {#each SIGNALS as sg (sg.id)}
+        <button class="chip" aria-pressed={prefs.signals[sg.id]} onclick={() => (prefs.signals[sg.id] = !prefs.signals[sg.id])}>{sg.label}</button>
+      {/each}
+    </div>
     <div class="stage">
       <div class="box">
         {#key insights.removed.join('/')}
@@ -344,43 +257,6 @@
     border-radius: 50%;
   }
 
-  .toolbar {
-    display: grid;
-    gap: 10px;
-    margin-bottom: 8px;
-  }
-
-  .toolbar .row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    align-items: center;
-  }
-
-  /* The filter button: as the Playlists page's. */
-  .toggle {
-    display: grid;
-    place-items: center;
-    width: 44px;
-    min-height: 44px;
-    padding: 0;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-  }
-
-  /* Folded away while a filter applies: the button says so. */
-  .toggle.active {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
-  .seg {
-    display: flex;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    overflow: hidden;
-  }
-
   button {
     min-height: 40px;
     padding: 0 14px;
@@ -391,14 +267,12 @@
     cursor: pointer;
   }
 
-  .seg button[aria-pressed='true'] {
-    background: var(--accent);
-    color: var(--accent-text);
-    font-weight: 600;
-  }
-
-  .toolbar .row.switches {
+  /* The Map's filter: what brings playlists together, at its top. */
+  .switches {
+    display: flex;
+    flex-wrap: wrap;
     gap: 6px;
+    margin-bottom: 10px;
   }
 
   .chip {
@@ -412,25 +286,6 @@
     border-color: var(--accent);
     color: var(--text);
     background: color-mix(in srgb, var(--accent) 18%, var(--surface));
-  }
-
-  h2 {
-    margin: 24px 0 8px;
-    font-size: 1rem;
-  }
-
-  h3 {
-    margin: 14px 0 6px;
-    font-size: 0.9rem;
-    color: var(--muted);
-  }
-
-  .figures {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px 18px;
-    margin: 0 0 6px;
-    font-variant-numeric: tabular-nums;
   }
 
   .muted,
@@ -452,62 +307,4 @@
     color: var(--danger);
   }
 
-  .n {
-    color: var(--muted);
-    font-weight: 400;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  .plain {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .plain li {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 12px;
-    padding: 6px 0;
-    border-bottom: 1px solid var(--border);
-    overflow-wrap: anywhere;
-  }
-
-  .bars {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    display: grid;
-    gap: 6px;
-  }
-
-  .bars li {
-    display: grid;
-    grid-template-columns: minmax(90px, 30%) 1fr auto;
-    align-items: center;
-    gap: 10px;
-    font-size: 0.9rem;
-  }
-
-  .bars .label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .bar {
-    height: 10px;
-    background: color-mix(in srgb, var(--text) 6%, transparent);
-    border-radius: 5px;
-    overflow: hidden;
-  }
-
-  .bar i {
-    display: block;
-    height: 100%;
-    background: var(--accent);
-    border-radius: 5px;
-  }
 </style>

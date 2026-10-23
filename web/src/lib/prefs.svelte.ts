@@ -43,7 +43,8 @@ export type Prefs = {
   /** Libraries switched off in the filter (`source/library`): remembered, as the server is (decided 2026-10-16). */
   hiddenLibraries: string[];
   /** Insights: the open tab, and which signals bring playlists together in Related. */
-  insightsTab: 'statistics' | 'related';
+  /** Insights' tab (decision 0065). */
+  insightsTab: 'collection' | 'listening' | 'map';
   signals: { tracks: boolean; genre: boolean; artists: boolean };
   /** The player's width when it shows beside the page (decision 0018). */
   playerWidth: number;
@@ -137,7 +138,7 @@ export const DEFAULTS: Prefs = {
   relativeDates: false,
   source: '',
   hiddenLibraries: [],
-  insightsTab: 'statistics',
+  insightsTab: 'collection',
   signals: { tracks: true, genre: true, artists: true },
   playerWidth: 400,
   sidebar: true,
@@ -225,7 +226,9 @@ function read(): Prefs {
         for (const [k, v] of Object.entries(saved.filters) as [string, ListFilter][])
           if (Array.isArray(v?.conditions) && Array.isArray(v.on))
             p.filters[k] = { conditions: v.conditions.filter((c) => typeof c?.axis === 'string' && c.value), on: v.on.filter((x) => typeof x === 'string') };
-      if (saved.insightsTab === 'statistics' || saved.insightsTab === 'related') p.insightsTab = saved.insightsTab;
+      // The tabs' names before decision 0065: Statistics is Collection, Related is Map.
+      const tab = saved.insightsTab === 'statistics' ? 'collection' : saved.insightsTab === 'related' ? 'map' : saved.insightsTab;
+      if (tab === 'collection' || tab === 'listening' || tab === 'map') p.insightsTab = tab;
       if (saved.signals && typeof saved.signals === 'object') {
         for (const k of ['tracks', 'genre', 'artists'] as const) {
           if (typeof saved.signals[k] === 'boolean') p.signals[k] = saved.signals[k];
