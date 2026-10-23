@@ -325,6 +325,7 @@ pub fn build(rows: &[TrackRow], shown: &[TrackRow], on: &[TrackRow], rules: &Rul
         in_one_playlist: stats.in_one_playlist,
         missing: stats.missing,
         library_tracks_in_playlists: shown.iter().filter(|r| in_any.contains(r.rel.as_str())).count(),
+        library_tracks_in_crates: 0,
         albums_without_playlist: library.albums - albums_with.len(),
         most_shared,
     };
