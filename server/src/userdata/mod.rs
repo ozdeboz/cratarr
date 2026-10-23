@@ -82,6 +82,9 @@ CREATE TABLE IF NOT EXISTS plays (
   ended TEXT NOT NULL, counted INTEGER NOT NULL, player TEXT, output TEXT, context TEXT, event TEXT);
 CREATE INDEX IF NOT EXISTS plays_by_user ON plays (user, at);
 CREATE UNIQUE INDEX IF NOT EXISTS plays_by_event ON plays (event) WHERE event IS NOT NULL;
+-- When a user slept, as Home Assistant says (its house mode Sleeping; the owner, 2026-10-23): what played then is no
+-- listening of theirs (their taste, their week). `to_at` none while asleep.
+CREATE TABLE IF NOT EXISTS asleep (user TEXT NOT NULL, from_at INTEGER NOT NULL, to_at INTEGER, PRIMARY KEY (user, from_at)) WITHOUT ROWID;
 ";
 
 /// Until 2026-10-16 the album panel's heart starred the album's id as a song's, where no Subsonic app looked; it is the
@@ -174,6 +177,19 @@ INSERT INTO plays (user, song, pid, at, heard_secs, length_secs, ended, counted,
   WHERE a.kind = 'song' AND a.play_date >= f.first - 604800 AND a.play_date < f.first
   ON CONFLICT DO NOTHING;
 ";
+
+/// A row of the log as read.
+fn logged(r: &rusqlite::Row) -> rusqlite::Result<Logged> {
+    Ok(Logged {
+        song: r.get(0)?,
+        at: r.get(1)?,
+        heard_secs: r.get(2)?,
+        length_secs: r.get(3)?,
+        ended: Ended::of(&r.get::<_, String>(4)?),
+        counted: r.get(5)?,
+        context: r.get(6)?,
+    })
+}
 
 /// What an annotation is about.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -576,18 +592,49 @@ impl UserData {
         let mut st = db.prepare_cached(
             "SELECT song, at, heard_secs, length_secs, ended, counted, context FROM plays WHERE user = ?1 AND at >= ?2 ORDER BY at",
         )?;
-        let rows = st.query_map(params![user, since], |r| {
-            Ok(Logged {
-                song: r.get(0)?,
-                at: r.get(1)?,
-                heard_secs: r.get(2)?,
-                length_secs: r.get(3)?,
-                ended: Ended::of(&r.get::<_, String>(4)?),
-                counted: r.get(5)?,
-                context: r.get(6)?,
-            })
-        })?;
+        let rows = st.query_map(params![user, since], logged)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// As `heard_since`, without what played while the user slept (`asleep`): their own listening, for their taste and
+    /// their week.
+    pub fn heard_awake_since(&self, user: &str, since: i64) -> Result<Vec<Logged>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT song, at, heard_secs, length_secs, ended, counted, context FROM plays p WHERE user = ?1 AND at >= ?2
+               AND NOT EXISTS (SELECT 1 FROM asleep s WHERE s.user = p.user AND p.at >= s.from_at AND p.at < coalesce(s.to_at, 9223372036854775807))
+             ORDER BY at",
+        )?;
+        let rows = st.query_map(params![user, since], logged)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The user fell asleep at `at` (Home Assistant's house mode went to Sleeping); nothing when already asleep.
+    pub fn fell_asleep(&self, user: &str, at: i64) -> Result<()> {
+        let db = self.db();
+        let open: bool = db.query_row("SELECT EXISTS (SELECT 1 FROM asleep WHERE user = ?1 AND to_at IS NULL)", [user], |r| r.get(0))?;
+        if !open {
+            db.execute("INSERT OR IGNORE INTO asleep (user, from_at, to_at) VALUES (?1, ?2, NULL)", params![user, at])?;
+        }
+        Ok(())
+    }
+
+    /// The user woke at `at` (the house mode left Sleeping): the sleep that is open ends.
+    pub fn woke(&self, user: &str, at: i64) -> Result<()> {
+        self.db().execute("UPDATE asleep SET to_at = max(from_at, ?2) WHERE user = ?1 AND to_at IS NULL", params![user, at])?;
+        Ok(())
+    }
+
+    /// Sleeps known from before (Home Assistant's history): each from and to; one already known (by its start) stays.
+    pub fn add_sleeps(&self, user: &str, sleeps: &[(i64, i64)]) -> Result<usize> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let mut added = 0;
+        for &(from, to) in sleeps.iter().filter(|(f, t)| t > f) {
+            added += tx.execute("INSERT OR IGNORE INTO asleep (user, from_at, to_at) VALUES (?1, ?2, ?3)", params![user, from, to])?;
+        }
+        tx.commit()?;
+        Ok(added)
     }
 
     /// When a user's log starts being told as it happens: their first row's time that a player told (an import from
@@ -1259,6 +1306,23 @@ mod tests {
         u.record("me", ("tr-1", "pid1"), "al-1", &[], &imported).unwrap();
         assert_eq!(u.heard_from("me").unwrap(), Some(100), "an import's older rows are no live history");
         assert!(u.heard_since("me", 150).unwrap().len() == 1 && u.heard_since("you", 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn what_played_while_asleep_is_no_listening_of_ones_own() {
+        let u = UserData::open(None).unwrap();
+        for (song, at) in [("tr-1", 100), ("tr-2", 200), ("tr-3", 300), ("tr-4", 400)] {
+            u.record("me", (song, "p"), "al-1", &[], &Heard { event: Some(song.into()), ..Heard::counted(at) }).unwrap();
+        }
+        u.add_sleeps("me", &[(150, 250)]).unwrap();
+        u.fell_asleep("me", 350).unwrap();
+        u.fell_asleep("me", 360).unwrap();
+        let awake = |since| u.heard_awake_since("me", since).unwrap().into_iter().map(|l| l.song).collect::<Vec<_>>();
+        assert_eq!(awake(0), ["tr-1", "tr-3"], "200 slept through; 400 while still asleep");
+        u.woke("me", 390).unwrap();
+        assert_eq!(awake(0), ["tr-1", "tr-3", "tr-4"], "woken before 400");
+        assert_eq!(u.heard_since("me", 0).unwrap().len(), 4, "the history keeps every play");
+        assert_eq!(u.add_sleeps("me", &[(150, 250), (500, 400)]).unwrap(), 0, "known, and backwards: none");
     }
 
     #[test]

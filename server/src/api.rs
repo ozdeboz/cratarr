@@ -140,6 +140,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/players/settings", get(play_on_settings).put(save_play_on_settings))
             .route("/api/history/listenbrainz", post(import_listenbrainz))
         .route("/api/history/profile", get(taste_profile))
+        .route("/api/history/sleep", post(sleep))
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
             .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
             .route("/api/sync/targets", get(sync_targets))
@@ -2466,6 +2467,36 @@ async fn import_listenbrainz(Json(b): Json<ListenBrainzImport>) -> Result<Json<c
         return Err(ToggleError::Refused("Say whose ListenBrainz listens.".into()).into());
     }
     Ok(Json(crate::app::listenbrainz::import(&serve, &account, user).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+#[derive(Deserialize)]
+struct Sleep {
+    /// Home Assistant's house mode went to Sleeping (true) or left it (false), at `at` (epoch s; now when left out).
+    asleep: Option<bool>,
+    at: Option<i64>,
+    /// Or sleeps known from before, each from and to (epoch s): Home Assistant's history.
+    #[serde(default)]
+    sleeps: Vec<(i64, i64)>,
+}
+
+/// When the asking account slept, as Home Assistant says: what played then is left out of its taste and its week.
+async fn sleep(Json(b): Json<Sleep>) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let user = serve.current_user().ok_or_else(|| ToggleError::Refused("Sleep is an account's own: sign in.".into()))?;
+    let at = b.at.unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64));
+    let ud = serve.userdata.clone();
+    let added = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+        match b.asleep {
+            Some(true) => ud.fell_asleep(&user, at)?,
+            Some(false) => ud.woke(&user, at)?,
+            None => {}
+        }
+        ud.add_sleeps(&user, &b.sleeps)
+    })
+    .await
+    .map_err(|e| ToggleError::from(anyhow::anyhow!("{e}")))?
+    .map_err(ToggleError::from)?;
+    Ok(Json(json!({ "added": added })))
 }
 
 /// The asking account's taste and what it avoids (Insights › Listening › Profile).
