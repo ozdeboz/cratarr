@@ -371,15 +371,39 @@ class PlayerService : MediaSessionService() {
             Downloads.keepAhead(this@PlayerService, items, player.currentMediaItemIndex)
         }
 
-        /** The playing track has been counted, this time it plays. */
-        private var counted = false
+        /**
+         * The track being heard (decision 0064): which (as the page describes it), since when, how far it got (ms), how
+         * long it is, and whether it was told as counted, this time it plays. The device's own music is not told
+         * (decision 0052).
+         */
+        private inner class Hearing(val track: JSONObject, val atMs: Long) {
+            var heardMs = 0L
+            var lengthMs = 0L
+            var counted = false
+        }
+        private var hearing: Hearing? = null
+
+        /** Tells the track left, unless it was told as counted or heard for less than a second. */
+        private fun leave(ended: String) {
+            val h = hearing ?: return
+            hearing = null
+            if (!h.counted && h.heardMs >= 1_000) Plays.heard(this@PlayerService, h.track, h.atMs, ended, false, h.heardMs, h.lengthMs)
+        }
+
         private val count = object : Runnable {
             override fun run() {
+                if (hearing == null) {
+                    hearing = player.currentMediaItem?.takeUnless(DeviceMusic::owns)?.let(::trackOf)?.let { Hearing(it, System.currentTimeMillis()) }
+                }
+                val h = hearing
                 val d = player.duration
-                if (!counted && d > 0 && player.currentPosition >= d * Plays.PLAYED_AT) {
-                    counted = true
-                    // The device's own music is not counted (decision 0052).
-                    player.currentMediaItem?.takeUnless(DeviceMusic::owns)?.let(::trackOf)?.let { Plays.played(this@PlayerService, it) }
+                if (h != null) {
+                    h.heardMs = maxOf(h.heardMs, player.currentPosition)
+                    if (d > 0) h.lengthMs = d
+                    if (!h.counted && d > 0 && player.currentPosition >= d * Plays.PLAYED_AT) {
+                        h.counted = true
+                        Plays.heard(this@PlayerService, h.track, h.atMs, "finished", true, h.heardMs, h.lengthMs)
+                    }
                 }
                 if (player.isPlaying) main.postDelayed(this, COUNT_EVERY_MS)
             }
@@ -406,8 +430,17 @@ class PlayerService : MediaSessionService() {
                 main.removeCallbacks(saveDevice)
                 main.postDelayed(saveDevice, 1_000)
             }
-            // Each time a track is reached it can count again (a repeat, a jump back).
-            if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) counted = false
+            // Each time a track is reached it can count again (a repeat, a jump back); the one left is told.
+            if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) {
+                leave("skipped")
+                if (player.isPlaying) {
+                    main.removeCallbacks(count)
+                    main.post(count)
+                }
+            }
+            // Nothing queued any more, or the end of the queue: the track left is told as stopped.
+            if (events.contains(Player.EVENT_TIMELINE_CHANGED) && player.mediaItemCount == 0) leave("stopped")
+            if (events.contains(Player.EVENT_PLAYBACK_STATE_CHANGED) && player.playbackState == Player.STATE_ENDED) leave("stopped")
             if (events.contains(Player.EVENT_IS_PLAYING_CHANGED)) {
                 // Sounding here means controls here (decision 0062), whatever started it.
                 if (player.isPlaying && prefs.target != Prefs.TARGET_SELF) pointAt(Prefs.TARGET_SELF, "its own player started")
