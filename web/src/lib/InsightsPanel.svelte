@@ -12,13 +12,16 @@
   import { prefs } from './prefs.svelte';
 
   const TITLES = { collection: 'Collection', listening: 'Listening', map: 'Map' } as const;
+  const SUBS: Record<string, string> = { overview: 'Overview', genres: 'Genres', artists: 'Artists', tracks: 'Tracks', history: 'History', profile: 'Profile' };
+  // Where the panel's controls apply, as one breadcrumb (the owner, 2026-10-23): the tab, then its section.
+  const sub = $derived(prefs.insightsTab === 'collection' ? SUBS[prefs.insightsCollection] : prefs.insightsTab === 'listening' ? SUBS[prefs.listeningView] : null);
   const groups = $derived(insightsControls());
 </script>
 
 <div class="view">
   <div class="bar">
     <span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>
-    <h2 class="title">{TITLES[prefs.insightsTab]}</h2>
+    <h2 class="title">{#if sub}<span class="up">{TITLES[prefs.insightsTab]}</span><span class="sep" aria-hidden="true">›</span>{sub}{:else}{TITLES[prefs.insightsTab]}{/if}</h2>
   </div>
   <div class="scroll">
     {#each groups as g, i (i)}
@@ -63,6 +66,15 @@
     font-weight: 600;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .up {
+    color: var(--muted);
+  }
+
+  .sep {
+    margin: 0 8px;
+    color: var(--muted);
   }
 
   .scroll {
