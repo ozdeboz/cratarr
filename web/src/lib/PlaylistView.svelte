@@ -100,6 +100,7 @@
   import AlbumAbout from './AlbumAbout.svelte';
   import AlbumMore from './AlbumMore.svelte';
   import SimilarAlbums from './SimilarAlbums.svelte';
+  import CoverFlow from './CoverFlow.svelte';
   import SimilarLists from './SimilarLists.svelte';
   import ListHead from './ListHead.svelte';
   import { insights, plural } from './insights.svelte';
@@ -143,7 +144,7 @@
   import { me } from './me.svelte';
   import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
   import MarkLoader from './MarkLoader.svelte';
-  import Cover, { mosaicOf } from './Cover.svelte';
+  import Cover, { coverBroke, coverBroken, mosaicOf } from './Cover.svelte';
   import PageLoading from './PageLoading.svelte';
   import type { PlayMode } from './api';
 
@@ -416,6 +417,37 @@ ${r.album_artist ?? r.artist ?? ''}`;
     }
     return out.length >= 4 ? out : out.slice(0, 1);
   });
+  /** A crate's albums to flip through in its header (lib/CoverFlow; the owner, 2026-10-23): its rows' albums as loaded,
+   *  each once. */
+  const flowCovers = $derived.by(() => {
+    if (!crate || crateEditing) return [];
+    // One cover an album (the owner, 2026-10-23: duplicates consolidated): by its name and album artist in any case (the
+    // same album in Music and in Incoming, or without its id), and no cover twice.
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const r of rows ?? []) {
+      if (!r.id || r.missing) continue;
+      const named = r.album ? `${r.album}\n${r.album_artist ?? r.artist ?? ''}`.toLowerCase() : null;
+      const url = coverUrl({ source, id: r.id, album_id: r.album_id });
+      const keys = [named, r.album_id, url].filter((k): k is string => !!k);
+      if (keys.some((k) => seen.has(k))) continue;
+      for (const k of keys) seen.add(k);
+      out.push(url);
+      if (out.length === 60) break;
+    }
+    return out;
+  });
+  // Each fetched ahead: an album without art answers 404 and is left out (the owner, 2026-10-23: no empty covers here).
+  $effect(() => {
+    for (const url of flowCovers) {
+      if (coverBroken(url)) continue;
+      const probe = new Image();
+      probe.onerror = () => coverBroke(url);
+      probe.src = url;
+    }
+  });
+  const flowShown = $derived(flowCovers.filter((url) => !coverBroken(url)));
+  const flowing = $derived(flowShown.length >= 3);
   // As drawn: covers that fail to load leave a mosaic (lib/Cover).
   const coversShown = $derived(mosaicOf(covers));
   const heroShown = $derived(mosaicOf(heroArt));
@@ -1427,8 +1459,13 @@ ${r.album_artist ?? r.artist ?? ''}`;
       </div>
       </header>
     {:else if !other}
-      <div class="hero" class:mosaic={heroShown.length === 4} class:bare={!heroShown.length}>
-        {#each heroShown as c, i (i)}<Cover src={c} lazy={false} />{:else}{#if !crateEditing}<Cover src={null} />{/if}{/each}
+      <div class="hero" class:mosaic={heroShown.length === 4 && !flowing} class:bare={!heroShown.length && !flowing} class:flowing>
+        {#if flowing}
+          <!-- A crate's albums as a coverflow on a light canvas (the owner, 2026-10-23); a drag or a tap moves through them. -->
+          <CoverFlow covers={flowShown} />
+        {:else}
+          {#each heroShown as c, i (i)}<Cover src={c} lazy={false} />{:else}{#if !crateEditing}<Cover src={null} />{/if}{/each}
+        {/if}
         {#if crateEditing}
           <!-- The crate's own picture, set or removed with Save. -->
           <span class="art-tools">
@@ -2531,6 +2568,16 @@ ${r.album_artist ?? r.artist ?? ''}`;
     max-height: 60vh;
     overflow: hidden;
     background: var(--bg);
+  }
+
+  /* A crate's coverflow: a light canvas, a slight gradient down it, the whole header; the fade only under the action bar,
+     so the front cover can use the height (lib/CoverFlow keeps it above). */
+  .hero.flowing {
+    background: linear-gradient(to bottom, color-mix(in srgb, var(--text) 24%, var(--surface)), color-mix(in srgb, var(--text) 11%, var(--surface)));
+  }
+
+  .hero.flowing::after {
+    height: 72px;
   }
 
   .hero.mosaic {

@@ -26,12 +26,16 @@ export const ALBUM_WIDTHS: Record<AlbumLayout, readonly number[]> = {
   rows: [240, 280, 340, 420, 520, 680],
   grid: [110, 140, 170, 210, 260, 340],
   table: [],
+  // Flow sizes itself from the room it has (lib/CoverFlow).
+  flow: [],
 };
 
 export const ALBUM_LAYOUTS = [
   { value: 'rows' as const, label: 'Rows', icon: 'list' as const },
   { value: 'grid' as const, label: 'Covers', icon: 'layoutGrid' as const },
   { value: 'table' as const, label: 'Table', icon: 'table' as const },
+  // Digging through the albums (the owner, 2026-10-23): a coverflow, lib/CoverFlow.
+  { value: 'flow' as const, label: 'Flow', icon: 'albums' as const },
 ];
 
 // Each order ascending as named (A–Z, oldest first, fewest first); a list's arrow turns it round. Plays, Last played
