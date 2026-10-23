@@ -150,6 +150,8 @@
       () => (dug = null),
     );
   });
+  // Blast from the past: each album once (the owner, 2026-10-23), by its track unplayed longest; Play plays them all.
+  const pastAlbums = $derived(dug ? dug.past.filter((t, i, all) => all.findIndex((x) => x.album_id === t.album_id) === i) : []);
   const relative = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
   /** How long ago (epoch seconds), in the largest unit that fits. */
   function ago(t: number) {
@@ -201,7 +203,7 @@
 
   {#if week && week.total > 0}
     <section aria-label="Sounds like your week">
-      <SectionHead title="Sounds like your week" />
+      <SectionHead title="Sounds like your week" onplay={() => playWeek('play')} busy={starting} />
       <div class="week">
         {#if weekCovers.length >= 4}
           <button class="mosaic" onclick={() => viewLike('week')} aria-label="Open {week.name}">
@@ -212,11 +214,6 @@
           <h3>{week.total.toLocaleString()} tracks you didn't play this week</h3>
           {#if week.played}<p>like the {week.played.toLocaleString()} tracks you played in the last 7 days</p>{/if}
           {#if week.genres.length}<p class="genres">{#each week.genres as g (g)}<button onclick={() => viewGenre(g)}>{g}</button>{/each}</p>{/if}
-          <div class="acts">
-            <button class="main" disabled={starting} onclick={() => playWeek('play')}><Icon name="play" size={18} />Play</button>
-            <button disabled={starting} onclick={() => playWeek('shuffle')}><Icon name="shuffle" size={18} />Shuffle</button>
-            <button onclick={() => viewLike('week')}>Open</button>
-          </div>
         </div>
       </div>
     </section>
@@ -247,9 +244,9 @@
 
   {#if dug?.past.length}
     <section aria-label="Blast from the past">
-      <SectionHead title="Blast from the past" />
+      <SectionHead title="Blast from the past" onplay={() => playPast('play')} busy={starting} />
       <ul class="back">
-        {#each dug.past as t (t.id)}
+        {#each pastAlbums as t (t.id)}
           <li>
             <button disabled={starting} onclick={() => playPast('play', t.id)}>
               <span class="cover"><Cover src={albumCoverUrl('cratarr', t.album_id)} /></span>
@@ -261,10 +258,6 @@
           </li>
         {/each}
       </ul>
-      <div class="acts pad">
-        <button class="main" disabled={starting} onclick={() => playPast('play')}><Icon name="play" size={18} />Play</button>
-        <button disabled={starting} onclick={() => playPast('shuffle')}><Icon name="shuffle" size={18} />Shuffle</button>
-      </div>
     </section>
   {/if}
 
@@ -366,39 +359,6 @@
     font: inherit;
     font-size: 0.85rem;
     cursor: pointer;
-  }
-
-  .acts {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 14px;
-  }
-
-  .acts button {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 16px;
-    border: 0;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--text) 10%, transparent);
-    color: var(--text);
-    font: inherit;
-    cursor: pointer;
-  }
-
-  .acts.pad {
-    margin: 12px 16px 0;
-  }
-
-  .acts button.main {
-    background: var(--accent);
-    color: var(--on-accent, #000);
-  }
-
-  .acts button:disabled {
-    opacity: 0.6;
   }
 
   .back {
