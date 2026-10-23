@@ -1,8 +1,8 @@
 <script lang="ts">
   // Insights' tabs (decision 0065): Collection, Listening, Map, as a pill group in the page's overlay row beside the
-  // back button (where other pages have their pill, lib/TopPill), in the same glass; the chosen one filled. The chosen
-  // tab's own row is attached below it, the pill growing to hold it (the owner, 2026-10-23: "the floating tab bar should
-  // extend to get an extra row attached below"): Collection's views, Listening's period, Map's filter. All remembered.
+  // back button (where other pages have their pill, lib/TopPill), in the same glass; the chosen one filled. A tab's own
+  // sections are a row attached below, the pill growing to hold it (the owner, 2026-10-23): Collection's. How a tab is
+  // viewed (a period, a filter) is not here but in Insights' panel (lib/InsightsPanel). All remembered.
   import { prefs } from './prefs.svelte';
 
   const TABS = [
@@ -16,16 +16,6 @@
     { id: 'artists', label: 'Artists' },
     { id: 'playlists', label: 'Playlists' },
   ] as const;
-  const PERIODS = [
-    { id: 'week', label: 'Week' },
-    { id: 'month', label: 'Month' },
-    { id: 'year', label: 'Year' },
-  ] as const;
-  const SIGNALS = [
-    { id: 'tracks', label: 'Shared tracks' },
-    { id: 'genre', label: 'Genre' },
-    { id: 'artists', label: 'Artists' },
-  ] as const;
 </script>
 
 <div class="pill">
@@ -34,31 +24,20 @@
       <button role="tab" aria-selected={prefs.insightsTab === t.id} onclick={() => (prefs.insightsTab = t.id)}>{t.label}</button>
     {/each}
   </div>
-  <div class="row second">
-    {#if prefs.insightsTab === 'collection'}
+  {#if prefs.insightsTab === 'collection'}
+    <div class="row second">
       {#each VIEWS as v (v.id)}
         <button aria-pressed={prefs.insightsCollection === v.id} onclick={() => (prefs.insightsCollection = v.id)}>{v.label}</button>
       {/each}
-    {:else if prefs.insightsTab === 'listening'}
-      {#each PERIODS as p (p.id)}
-        <button aria-pressed={prefs.listeningPeriod === p.id} onclick={() => (prefs.listeningPeriod = p.id)}>{p.label}</button>
-      {/each}
-    {:else}
-      <!-- What brings playlists together: any of them, on or off. -->
-      {#each SIGNALS as s (s.id)}
-        <button aria-pressed={prefs.signals[s.id]} onclick={() => (prefs.signals[s.id] = !prefs.signals[s.id])}>{s.label}</button>
-      {/each}
-    {/if}
-  </div>
+    </div>
+  {/if}
 </div>
 
 <style>
   .pill {
     display: grid;
-    flex: 0 1 460px;
     gap: 2px;
     min-width: 0;
-    margin-left: auto;
     padding: 2px;
     border-radius: 26px;
     background: var(--float-bg);

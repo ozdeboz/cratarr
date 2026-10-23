@@ -1,6 +1,7 @@
 // The insights data and what is derived from it (decision 0023): fetched once, read by the Insights page (statistics,
 // the graph) and by the playlist view's Related section (a playlist's genres, focus and closest playlists).
 import { ApiError, getInsights, type Insights, type Proximity } from './api';
+import { hiddenLibraries } from './listFilter.svelte';
 import { prefs } from './prefs.svelte';
 import { focusRanks, key, rankers, weigh } from './proximity';
 
@@ -25,18 +26,24 @@ class InsightsStore {
   /** How close each two playlists are under the signals turned on (as the graph scores them). */
   weights = $derived(this.shown && this.rank ? weigh(this.shown, this.rank, prefs.signals) : new Map<string, number>());
 
-  #asked = false;
-  /** Fetches the data once (again after a failure). */
+  #asked: string | null = null;
+  /** Fetches the data once for the libraries switched on (again after a failure, and when a switch changes: Collection
+   *  counts those only); what was shown stays until the new data comes. */
   load() {
-    if (this.#asked) return;
-    this.#asked = true;
-    getInsights().then(
+    const source = prefs.source || undefined;
+    const without = hiddenLibraries();
+    const asked = JSON.stringify([source, without]);
+    if (this.#asked === asked) return;
+    this.#asked = asked;
+    getInsights(source, without).then(
       (d) => {
+        if (this.#asked !== asked) return;
         this.data = d;
         this.error = null;
       },
       (e) => {
-        this.#asked = false;
+        if (this.#asked !== asked) return;
+        this.#asked = null;
         this.error = e instanceof ApiError ? e.message : 'Unexpected error';
       },
     );

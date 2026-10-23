@@ -1542,7 +1542,8 @@ export type Proximity = {
 
 export type Signal = 'tracks' | 'genre' | 'artists';
 
-export const getInsights = () => request<Insights>('/api/insights');
+/** Collection's figures from the libraries switched on (`without`) of the server followed (decision 0065). */
+export const getInsights = (source?: string, without?: string[]) => request<Insights>(`/api/insights${crateQuery(new URLSearchParams(), source, { without })}`);
 
 /** A sync group's visuals (decision 0046, amended): the settings that shape the picture, and the version the server
  *  gave them. None yet: a 404. */

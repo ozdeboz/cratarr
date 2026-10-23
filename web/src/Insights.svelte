@@ -70,7 +70,7 @@
 
 </script>
 
-<main class:wide={prefs.insightsTab === 'map'}>
+<main class:wide={prefs.insightsTab === 'map'} class:rowed={prefs.insightsTab === 'collection'}>
   <!-- The tabs are in the overlay row (lib/InsightsTabs, decision 0065). -->
   {#if prefs.insightsTab === 'listening'}
     <InsightsListening />
@@ -157,10 +157,14 @@
 {/if}
 
 <style>
-  /* Under the tabs' pill and its second row (lib/InsightsTabs). */
+  /* Under the tabs' pill, and its second row where it has one (lib/InsightsTabs). */
   main {
     max-width: 900px;
-    padding: 58px clamp(12px, 2vw, 32px) 48px;
+    padding: 12px clamp(12px, 2vw, 32px) 48px;
+  }
+
+  main.rowed {
+    padding-top: 58px;
   }
 
   /* Related: room for the panel beside the graph on wide screens. */

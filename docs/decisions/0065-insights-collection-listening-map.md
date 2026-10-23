@@ -19,9 +19,16 @@ listening, and from 0064 there is a log of every track heard.
 you heard: new), Map (how your playlists relate: today's Related). The tab last open is remembered.
 
 **The tabs sit in the overlay row,** a pill group beside the back button where other pages have their pill (lib/TopPill),
-in the same glass; the chosen one filled, never touching the back button. The chosen tab's own choices are a second row
-attached below, inside the pill, which grows to hold it (the owner, 2026-10-23): Collection's views (Overview, Genres,
-Artists, Playlists), Listening's period, Map's filters. All remembered.
+in the same glass; the chosen one filled, never touching the back button. A tab's own sections are a second row attached
+below, inside the pill, which grows to hold it (the owner, 2026-10-23): Collection's (Overview, Genres, Artists,
+Playlists). Centred while no panel is open; at the row's end beside one.
+
+**Insights' own panel** (the owner, 2026-10-23) holds how the open tab is viewed, never the pill: Collection's libraries
+(a switch each, the page's library switches as on Library and Crates; its figures count those switched on), Listening's
+period, the Map's filters. Opened by a button at the row's end, closed by the panel's ✕ (top left). Beside the page at
+a fixed width on a roomy window, never over it there; over the page on a phone. Each tab's controls are data of a few
+kinds (lib/insightsControls), which the panel draws one way, as the settings' rows: a tab adds a control there, never
+markup. All remembered.
 
 **Collection** (the figures as charts, after the dataviz method: the form by the data's job, one hue where one series):
 
@@ -42,9 +49,10 @@ Artists, Playlists), Listening's period, Map's filters. All remembered.
 Until the log reaches back, each shows what there is; nothing is made up. The log is filled from ListenBrainz, which
 Jellyfin's ListenBrainz plugin scrobbled to (Jellyfin keeps no history of its own; 0064 amended by a5).
 
-**Map** is the graph as it is, its filters in the pill.
+**Map** is the graph as it is, its filters in the panel.
 
 **Collection's views:** Overview (the tiles, the meters, the decades, the first genres and artists), Genres and
 Artists (all of them), Playlists.
 
 **Read once:** `GET /api/history/listening?period=week|month|year` (app/history.rs, the log's only reader).
+`GET /api/insights?source=&without=<source>/<library>` (Collection from the libraries switched on).

@@ -74,9 +74,12 @@ export function backFromThing(part: string) {
   read();
 }
 
+/** Insights' own panel (lib/InsightsPanel): how its open tab is viewed. */
+export const INSIGHTS = 'insights';
+
 export const isSingleSubject = (viewed: string | null) =>
   !!viewed &&
-  (viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed === NEW_PLAYLIST || viewed.startsWith(SETTINGS) || viewed.startsWith(ALBUM) || artistOf(viewed) !== null);
+  (viewed === INSIGHTS || viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed === NEW_PLAYLIST || viewed.startsWith(SETTINGS) || viewed.startsWith(ALBUM) || artistOf(viewed) !== null);
 
 export const panel = $state({
   /** What is viewed: the (first) playlist's id, a crate's or an album's key; null when the panel shows the player only. */
@@ -224,8 +227,9 @@ export function albumGone(source: string, id: string) {
   if (panel.viewed === albumSubject(source, id)) closePlaylist();
 }
 
-/** A page's link that keeps what is viewed viewed. A part of the settings is the Settings page's own: it stays there. */
+/** A page's link that keeps what is viewed viewed. A part of the settings is the Settings page's own, Insights' panel
+ *  Insights': they stay there. */
 export const keepViewed = (href: string) => {
   const q = location.hash.split('?')[1];
-  return panel.viewed && q && !panel.viewed.startsWith(SETTINGS) ? `${href}?${q}` : href;
+  return panel.viewed && q && !panel.viewed.startsWith(SETTINGS) && panel.viewed !== INSIGHTS ? `${href}?${q}` : href;
 };

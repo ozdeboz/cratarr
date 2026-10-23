@@ -2576,8 +2576,9 @@ async fn preview_lidarr(
     Ok(Json(app.settings.preview_lidarr(b).await?))
 }
 
-async fn insights(State(app): State<Arc<App>>) -> Result<Json<crate::insights::Insights>, ApiError> {
-    Ok(Json(app.insights.get().await.map(|r| (*r).clone()).map_err(ToggleError::from)?))
+/// Insights (decision 0065): Collection's figures from the libraries switched on (`without`), of the server followed.
+async fn insights(State(app): State<Arc<App>>, Query(f): Query<Follow>, RawQuery(q): RawQuery) -> Result<Json<crate::insights::Insights>, ApiError> {
+    Ok(Json(app.insights.get(f.source.as_deref(), &without_of(q.as_deref())).await.map(|r| (*r).clone()).map_err(ToggleError::from)?))
 }
 
 async fn preview(State(app): State<Arc<App>>, Json(b): Json<PreviewBody>) -> Result<Json<SourceView>, ApiError> {

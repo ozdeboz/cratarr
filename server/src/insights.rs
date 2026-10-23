@@ -119,9 +119,12 @@ pub struct SharedTrack {
     pub playlists: usize,
 }
 
-/// Everything on the Insights page. `playlists`: (name, entry lines, missing tracks), as the playlist store has them.
-pub fn build(rows: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<String>, usize)]) -> Insights {
-    let library = library_stats(rows, rules);
+/// Everything on the Insights page. `rows`: the Music folder's tracks, which the playlists are counted against;
+/// `shown`: the tracks of the libraries switched on, which Collection's figures count (the owner, 2026-10-23: "one
+/// toggle per library"). `playlists`: (name, entry lines, missing tracks), as the playlist store has them.
+pub fn build(rows: &[TrackRow], shown: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<String>, usize)]) -> Insights {
+    let library = library_stats(shown, rules);
+    let music_albums: HashSet<&str> = rows.iter().map(|r| album_dir(&r.rel)).collect();
 
     let borrowed: Vec<(&str, &[String], usize)> = playlists.iter().map(|(n, l, d)| (n.as_str(), l.as_slice(), *d)).collect();
     let stats = playlist_stats(&borrowed);
@@ -144,7 +147,7 @@ pub fn build(rows: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<String>
         in_one_playlist: stats.in_one_playlist,
         missing: stats.missing,
         library_tracks_in_playlists: rows.iter().filter(|r| in_any.contains(r.rel.as_str())).count(),
-        albums_without_playlist: library.albums - albums_with.len(),
+        albums_without_playlist: music_albums.len().saturating_sub(albums_with.len()),
         most_shared,
     };
 
@@ -425,7 +428,7 @@ mod tests {
             ("Evening".to_string(), lines(&[air1, air2, "Gone/01.mp3"]), 1),
             ("Party".to_string(), lines(&[kiara]), 0),
         ];
-        let i = build(&library(), &Rules::default(), &playlists);
+        let i = build(&library(), &library(), &Rules::default(), &playlists);
         let p = &i.playlists;
         assert_eq!((p.playlists, p.distinct_tracks, p.missing), (3, 4, 1));
         assert_eq!((p.library_tracks_in_playlists, p.albums_without_playlist), (3, 1), "only the untagged album is in none");

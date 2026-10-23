@@ -29,6 +29,7 @@
   import MiniPlayer from './lib/MiniPlayer.svelte';
   import TopPill from './lib/TopPill.svelte';
   import InsightsTabs from './lib/InsightsTabs.svelte';
+  import InsightsPanel from './lib/InsightsPanel.svelte';
   import Mark from './lib/Mark.svelte';
   import LabelTip from './lib/LabelTip.svelte';
   import { installLabels } from './lib/labels.svelte';
@@ -42,7 +43,7 @@
   import ProgressBar from './lib/ProgressBar.svelte';
   import { untrack } from 'svelte';
   import { inSidebar, live, panelShowsPlayer, player } from './lib/live.svelte';
-  import { closePlaylist, keepViewed, panel, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace } from './lib/panel.svelte';
+  import { closePlaylist, INSIGHTS as INSIGHTS_VIEW, keepViewed, panel, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace, viewPlaylist } from './lib/panel.svelte';
   import PlaylistView from './lib/PlaylistView.svelte';
   import { poll } from './lib/live.svelte';
   import { known, remember } from './lib/sources.svelte';
@@ -155,7 +156,11 @@
   // Settings on a roomy window is its list beside a part (the owner, 2026-10-19: "just force the panel open on the
   // settings page"): the panel is always beside it there, showing a part.
   const settingsSplit = $derived(page === 'settings' && player.roomy);
-  const sidebar = $derived(settingsSplit || inSidebar());
+  // Insights' own panel (lib/InsightsPanel), when it shows: on a roomy window always beside the page, at a fixed width
+  // (the owner, 2026-10-23: never full screen), whatever the place chosen for the others.
+  const insightsShown = $derived(panel.viewed === INSIGHTS_VIEW && !panel.playerTop);
+  const insightsSplit = $derived(insightsShown && player.roomy);
+  const sidebar = $derived(settingsSplit || insightsSplit || inSidebar());
   // The visuals beside the page: in the panel where the player goes, while it is there (a narrow window: over the page).
   const visualsBeside = $derived(visuals.open && visuals.side && sidebar);
   const overlay = $derived(player.full && !sidebar);
@@ -219,7 +224,7 @@
     pageView.query = '';
   });
   // The page's device button gives way to the panel's (the owner, 2026-10-16): a list beside the page has its own.
-  const panelDevice = $derived(sidebar && panel.viewed !== null && !panelShowsPlayer() && !settingsShown);
+  const panelDevice = $derived(sidebar && panel.viewed !== null && !panelShowsPlayer() && !settingsShown && !insightsShown);
   const pillDevice = $derived(!playing() && !(sidebar && panelShowsPlayer()) && !panelDevice);
   // Each step of this visit carries its place (`nav` in its history state): back shows from the second step on, never on
   // the one the app opened with.
@@ -278,7 +283,8 @@
   const playerWidth = $derived(fitWidth(dragged ?? prefs.playerWidth));
   // Beside Settings' list the part takes all but the list's column (no grip there: the list's width is its own).
   const SETTINGS_LIST = 400;
-  const sideWidth = $derived(settingsSplit ? Math.max(PLAYER_MIN, area.w - SETTINGS_LIST) : playerWidth);
+  const INSIGHTS_PANEL = 360;
+  const sideWidth = $derived(settingsSplit ? Math.max(PLAYER_MIN, area.w - SETTINGS_LIST) : insightsSplit ? INSIGHTS_PANEL : playerWidth);
   let contentEl = $state<HTMLElement>();
   // The page's side and the panel's: sheets opened in either stand over it (lib/SheetArea.svelte).
   let pageEl = $state<HTMLElement>();
@@ -495,7 +501,7 @@
     {/if}
     </SheetArea>
     </div>
-    {#if settingsSplit}
+    {#if settingsSplit || insightsSplit}
       <div class="grip line" aria-hidden="true"></div>
     {:else if sidebar}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
@@ -514,9 +520,9 @@
     {/if}
     {#if sidebar}
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
-      <aside class="player-side" class:whole={settingsSplit} aria-label={panelShowsPlayer() ? 'Player' : settingsShown ? 'Settings' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
+      <aside class="player-side" class:whole={settingsSplit || insightsSplit} aria-label={panelShowsPlayer() ? 'Player' : settingsShown ? 'Settings' : insightsShown ? 'Insights' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
         <SheetArea area={() => sideEl}>
-          {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if panelShowsPlayer()}<NowPlaying place="side" />{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else}<PlaylistView />{/if}
+          {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if panelShowsPlayer()}<NowPlaying place="side" />{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else if insightsShown}<InsightsPanel />{:else}<PlaylistView />{/if}
         </SheetArea>
       </aside>
     {/if}
@@ -524,7 +530,7 @@
 
   {#if playlistLayer}
     <div class="playlist-layer" role="dialog" aria-label="Playlist" style:--mini-h={`${miniSpace}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
-      {#if settingsShown}<SettingsPanel section={settingsShown} />{:else}<PlaylistView />{/if}
+      {#if settingsShown}<SettingsPanel section={settingsShown} />{:else if insightsShown}<InsightsPanel />{:else}<PlaylistView />{/if}
     </div>
   {/if}
   {#if mini}
@@ -542,14 +548,18 @@
     >
   {/if}
   {#if pageRow}
-    <div class="page-row" class:beside={sidebar} style:--player-w="{sideWidth}px">
+    <div class="page-row" class:beside={sidebar} class:insights={page === 'insights'} class:open={page === 'insights' && panel.viewed !== null} style:--player-w="{sideWidth}px">
       {#if navAt > 0}
         <span class="navpill"><button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button></span>
       {:else}
         <span></span>
       {/if}
       {#if pagePill}<SheetArea area={() => pageEl}><TopPill {page} view={hasView(page)} device={pillDevice} filter={!page.startsWith('local-')} /></SheetArea>{/if}
-      {#if page === 'insights'}<InsightsTabs />{/if}
+      {#if page === 'insights'}
+        <InsightsTabs />
+        <!-- Its panel's button while no panel is open (the panel closes itself, top left). -->
+        {#if panel.viewed === null}<span class="navpill"><button aria-label="View" title="View" onclick={() => viewPlaylist(INSIGHTS_VIEW)}><Icon name="sliders" size={22} /></button></span>{/if}
+      {/if}
       {#if page === 'settings'}
         <span class="navpill"><button aria-label="About" title="About" onclick={() => (aboutOpen = true)}><Icon name="info" size={22} /></button></span>
       {/if}
@@ -681,6 +691,17 @@
 
   .page-row.beside {
     right: calc(var(--player-w) + 10px + 12px);
+  }
+
+  /* Insights: its tabs centred between back and its panel's button; with a panel open, at the row's end (the owner,
+     2026-10-23). Back's and the button's columns are as wide either way. */
+  .page-row.insights {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 460px) 52px;
+  }
+
+  .page-row.insights.open {
+    grid-template-columns: 52px minmax(0, 460px);
   }
 
   .page.under-row {
