@@ -14,10 +14,10 @@ use crate::catalogue::{Rules, TrackRow};
 use crate::incoming::{Quality, quality_of};
 use crate::playlists::playlist_stats;
 
-/// Genres and artists shown, most albums first.
-// Insights shows a few on its overview and all of them on their own views (decision 0065).
-const TOP_GENRES: usize = 200;
-const TOP_ARTISTS: usize = 200;
+/// Genres and artists: every one, so that each way the page ranks them (by tracks, by those in a playlist, A–Z) is
+/// the top of the whole set, not of another ranking's top (the owner, 2026-10-23).
+const TOP_GENRES: usize = usize::MAX;
+const TOP_ARTISTS: usize = usize::MAX;
 /// A pair is sent when one of its signals reaches this; the page decides what to draw.
 const MIN_SIGNAL: f64 = 0.05;
 /// Genres named per playlist and per pair.
@@ -112,20 +112,40 @@ pub struct Overview {
     pub albums: usize,
     pub albums_never: usize,
     pub favourites: usize,
+    /// Tracks by how often they were played (the account's play counts): "0", "1", "2–4", "5–9", "10–19", "20+"; and
+    /// the most played (song id and plays; the service names them), most first (Tracks, beside the playlists'; the
+    /// owner, 2026-10-23).
+    pub plays: Vec<Count>,
+    pub most_played: Vec<PlayedTrack>,
 }
+
+/// A track played often: what it is, and how often.
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct PlayedTrack {
+    #[serde(skip)]
+    pub id: String,
+    pub title: String,
+    pub artist: Option<String>,
+    pub plays: u32,
+}
+
+/// The play counts' columns: each the least plays it holds and its name.
+const PLAY_BUCKETS: [(u32, &str); 6] = [(0, "0"), (1, "1"), (2, "2–4"), (5, "5–9"), (10, "10–19"), (20, "20+")];
+/// At most this many in Most played.
+const MOST_PLAYED: usize = 10;
 
 /// How far back Growth reaches.
 pub const GROWTH_MONTHS: i64 = 24;
 
 /// The overview from the library's albums (id, folder, arrival) and songs (id, album), the folders switched on, the
-/// Incoming folders, and the account's played and starred songs; `now` and `tz` (seconds east of UTC) for the months.
+/// Incoming folders, and the account's play counts and starred songs; `now` and `tz` (seconds east of UTC) for the months.
 #[allow(clippy::too_many_arguments)]
 pub fn overview(
     albums: &[(String, i64, Option<i64>)],
     songs: &[(String, String, i64, String)],
     shown: &HashSet<i64>,
     incoming: &HashSet<i64>,
-    played: &HashSet<String>,
+    plays: &HashMap<String, u32>,
     starred: &HashSet<String>,
     since: Option<i64>,
     now: i64,
@@ -156,14 +176,22 @@ pub fn overview(
         .map(|(id, _, _)| id.as_str())
         .collect();
     let mut heard_albums: HashSet<&str> = HashSet::new();
+    let mut buckets = [0usize; PLAY_BUCKETS.len()];
+    let mut most: Vec<(&str, u32)> = Vec::new();
     for (id, album, _, _) in songs.iter().filter(|(_, a, _, _)| period_albums.contains(a.as_str())) {
         out.tracks += 1;
-        if played.contains(id) {
+        let n = plays.get(id).copied().unwrap_or(0);
+        if n > 0 {
             out.tracks_heard += 1;
             heard_albums.insert(album);
+            most.push((id, n));
         }
+        buckets[PLAY_BUCKETS.iter().rposition(|(least, _)| n >= *least).unwrap_or(0)] += 1;
         out.favourites += usize::from(starred.contains(id));
     }
+    out.plays = PLAY_BUCKETS.iter().zip(buckets).map(|((_, name), n)| Count { name: (*name).to_string(), n }).collect();
+    most.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    out.most_played = most.into_iter().take(MOST_PLAYED).map(|(id, plays)| PlayedTrack { id: id.to_string(), plays, ..PlayedTrack::default() }).collect();
     out.albums = period_albums.len();
     out.albums_never = out.albums - heard_albums.len();
     out
@@ -565,13 +593,16 @@ mod tests {
         let songs: Vec<(String, String, i64, String)> =
             [("s1", "a1"), ("s2", "a1"), ("s3", "a2"), ("s4", "a3"), ("s5", "i1")].iter().map(|(s, a)| (s.to_string(), a.to_string(), 0, format!("{a}/{s}"))).collect();
         let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<HashSet<String>>();
-        let o = overview(&albums, &songs, &HashSet::from([0]), &HashSet::from([1]), &set(&["s1", "s5"]), &set(&["s3"]), None, now, 0);
+        let plays: HashMap<String, u32> = [("s1".to_string(), 3), ("s5".to_string(), 1)].into();
+        let o = overview(&albums, &songs, &HashSet::from([0]), &HashSet::from([1]), &plays, &set(&["s3"]), None, now, 0);
         assert_eq!((o.incoming_albums, o.incoming_since), (2, Some(now - 41 * day)));
         assert_eq!(o.added.len(), 24);
         assert_eq!((o.added[23].name.as_str(), o.added[23].n, o.added.iter().map(|c| c.n).sum::<usize>()), ("2026-10", 1, 2), "a3 has no arrival");
         assert_eq!((o.tracks, o.tracks_heard, o.albums, o.albums_never, o.favourites), (4, 1, 3, 2, 1), "Incoming switched off: s5 not counted");
         // The past month: only a1 came then (a3's arrival is not known); Growth stays its two years.
-        let m = overview(&albums, &songs, &HashSet::from([0]), &HashSet::from([1]), &set(&["s1", "s5"]), &set(&["s3"]), Some(now - 30 * day), now, 0);
+        assert_eq!(o.plays.iter().map(|c| c.n).collect::<Vec<_>>(), [3, 0, 1, 0, 0, 0], "s2, s3, s4 never; s1 three times");
+        assert_eq!(o.most_played.iter().map(|t| (t.id.as_str(), t.plays)).collect::<Vec<_>>(), [("s1", 3)]);
+        let m = overview(&albums, &songs, &HashSet::from([0]), &HashSet::from([1]), &plays, &set(&["s3"]), Some(now - 30 * day), now, 0);
         assert_eq!((m.tracks, m.tracks_heard, m.albums, m.albums_never, m.added.iter().map(|c| c.n).sum::<usize>()), (2, 1, 1, 0, 2));
     }
 

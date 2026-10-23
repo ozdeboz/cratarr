@@ -39,6 +39,10 @@ markup. All remembered.
 
 - the headline figures as a row of stat tiles: tracks, albums, artists, hours, size;
 - a compilation's "Various Artists" is no artist: not counted, not a bar (it dwarfed every real one's, the owner);
+- Tracks (the owner, 2026-10-23): in a playlist or plays, one at a time (the panel's Count, as Genres and Artists
+  count): a meter, the top list (in the most playlists, most played: each the server's ranking of the whole set), and
+  for plays the tracks by how often (0, 1, 2–4, 5–9, 10–19, 20+); no tiles (playlists and missing tracks are Overview's);
+- Genres and Artists: every one sent, so each order (tracks, in a playlist, A–Z) is the top of the whole set;
 - shares as meters, never pies: lossless albums, albums below 320 kbps, tracks in a playlist;
 - decades as columns, each opening its ten years (the title a breadcrumb back);
 - Overview: the headline figures; Incoming (albums waiting, how long the oldest has); Growth (albums added per month,

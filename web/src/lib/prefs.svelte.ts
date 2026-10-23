@@ -51,6 +51,8 @@ export type Prefs = {
   insightsCount: 'tracks' | 'listed';
   /** How Collection's long lists are sorted (Genres, Artists, Playlists' most shared): the most first, or A–Z. */
   insightsSort: 'most' | 'az';
+  /** What Collection's Tracks counts: tracks in a playlist, or plays. */
+  tracksCount: 'listed' | 'plays';
   /** Insights' period, one for all of it (the owner, 2026-10-23): the past week, month or year, or all. Listening
    *  over it; Collection the albums that came in it; not the map. */
   insightsPeriod: 'week' | 'month' | 'year' | 'all';
@@ -155,6 +157,7 @@ export const DEFAULTS: Prefs = {
   insightsCollection: 'overview',
   insightsCount: 'tracks',
   insightsSort: 'most',
+  tracksCount: 'listed',
   insightsPeriod: 'all',
   listeningView: 'history',
   profileSources: { favourites: true, playlists: true, plays: true, skipped: true, excluded: true },
@@ -253,6 +256,7 @@ function read(): Prefs {
       else if (['overview', 'genres', 'artists', 'tracks'].includes(saved.insightsCollection)) p.insightsCollection = saved.insightsCollection;
       if (saved.insightsCount === 'tracks' || saved.insightsCount === 'listed') p.insightsCount = saved.insightsCount;
       if (saved.insightsSort === 'most' || saved.insightsSort === 'az') p.insightsSort = saved.insightsSort;
+      if (saved.tracksCount === 'listed' || saved.tracksCount === 'plays') p.tracksCount = saved.tracksCount;
       if (['week', 'month', 'year', 'all'].includes(saved.insightsPeriod)) p.insightsPeriod = saved.insightsPeriod;
       if (saved.listeningView === 'history' || saved.listeningView === 'profile') p.listeningView = saved.listeningView;
       if (saved.profileSources && typeof saved.profileSources === 'object')

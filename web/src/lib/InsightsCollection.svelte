@@ -22,20 +22,20 @@
     { value: num(l.tracks), label: 'tracks' },
     { value: num(l.albums), label: 'albums' },
     { value: num(l.artists), label: 'artists' },
+    { value: num(p.playlists), label: 'playlists' },
     { value: num(Math.round(l.duration_ms / 3_600_000)), label: 'hours' },
     { value: size(l.bytes), label: 'on disk' },
+    // From Tracks' old tiles, what is worth a look (the owner, 2026-10-23): tracks a playlist names but no file has.
+    ...(p.missing ? [{ value: num(p.missing), label: 'missing from playlists' }] : []),
   ]);
   const formats = $derived([...l.formats].sort((a, b) => b.n - a.n));
   const meters = $derived([
     { label: 'Lossless', of: `${num(l.lossless_albums)} of ${plural(l.albums, 'album')}`, share: share(l.lossless_albums, l.albums) },
     { label: 'Below 320 kbps', of: `${num(l.below_320_albums)} of ${plural(l.albums, 'album')}`, share: share(l.below_320_albums, l.albums) },
   ]);
-  const playlistTiles = $derived([
-    { value: num(p.playlists), label: 'playlists' },
-    { value: num(p.albums_without_playlist), label: 'albums in none' },
-    { value: num(p.in_one_playlist), label: 'tracks in only one' },
-    ...(p.missing ? [{ value: num(p.missing), label: 'missing tracks' }] : []),
-  ]);
+  /** At most this many bars on Genres and Artists. */
+  const SHOWN = 200;
+  const mostPlays = $derived(Math.max(1, ...(data.overview?.plays ?? []).map((c) => c.n)));
   const inPlaylists = $derived(share(p.library_tracks_in_playlists, l.tracks));
   // Decades, each a button that opens its ten years (the owner, 2026-10-23: "zoom in on a decade"); the title then a
   // breadcrumb back. Not remembered: the page opens on the decades.
@@ -66,8 +66,9 @@
      scales, two rankings, so one at a time), the unit said over the bars. -->
 {#snippet bars(title: string, all: Layered[])}
   {@const listed = prefs.insightsCount === 'listed'}
+  <!-- Every one comes (the server ranks none away): each order is the top of the whole set; the first SHOWN of it. -->
   {@const counted = listed ? all.filter((r) => r.listed > 0).sort((x, y) => y.listed - x.listed || x.name.localeCompare(y.name)) : all}
-  {@const rows = prefs.insightsSort === 'az' ? [...counted].sort((x, y) => x.name.localeCompare(y.name)) : counted}
+  {@const rows = (prefs.insightsSort === 'az' ? [...counted].sort((x, y) => x.name.localeCompare(y.name)) : counted).slice(0, SHOWN)}
   {@const value = (r: Layered) => (listed ? r.listed : r.n)}
   {@const most = Math.max(1, ...rows.map(value))}
   {#if rows.length}
@@ -168,23 +169,46 @@
   {:else if prefs.insightsCollection === 'artists'}
   {@render bars('Artists', l.top_artists)}
   {:else}
+  <!-- Tracks (the owner, 2026-10-23): in playlists or played, one at a time as Genres and Artists count (the panel's
+       Count): a meter, then the tracks most in each (the panel's sort); the plays also as columns by how often. -->
+  {#if prefs.tracksCount === 'listed' || !data.overview}
   <section>
-    <h2>Tracks</h2>
-    <div class="tiles">
-      {#each playlistTiles as t (t.label)}
-        <div class="tile"><b>{t.value}</b><span>{t.label}</span></div>
-      {/each}
-    </div>
+    <h2>In playlists</h2>
     <div class="meters">{@render meter('Tracks in a playlist', `${num(p.library_tracks_in_playlists)} of ${plural(l.tracks, 'track')}`, inPlaylists)}</div>
     {#if p.most_shared.length}
       <h3>In the most playlists</h3>
       <ol class="shared">
-        {#each prefs.insightsSort === 'az' ? [...p.most_shared].sort((x, y) => x.title.localeCompare(y.title)) : p.most_shared as t, i (i)}
+        {#each p.most_shared as t, i (i)}
           <li><span class="t">{t.title}{#if t.artist}<span class="muted"> · {t.artist}</span>{/if}</span><span class="n">in {t.playlists}</span></li>
         {/each}
       </ol>
     {/if}
   </section>
+  {:else}
+    {@const o = data.overview}
+    <section>
+      <h2>Plays</h2>
+      <div class="meters">{@render meter('Played at least once', `${num(o.tracks_heard)} of ${plural(o.tracks, 'track')}`, share(o.tracks_heard, o.tracks))}</div>
+      <h3>Tracks by plays</h3>
+      <div class="columns" role="list">
+        {#each o.plays as c (c.name)}
+          <div class="column" role="listitem" title={`${plural(c.n, 'track')} played ${c.name === '1' ? 'once' : `${c.name} times`}`}>
+            <span class="v">{num(c.n)}</span>
+            <span class="col"><i style:height={`${(100 * c.n) / mostPlays}%`}></i></span>
+            <span class="x">{c.name}×</span>
+          </div>
+        {/each}
+      </div>
+      {#if o.most_played.length}
+        <h3>Most played</h3>
+        <ol class="shared">
+          {#each o.most_played as t, i (i)}
+            <li><span class="t">{t.title}{#if t.artist}<span class="muted"> · {t.artist}</span>{/if}</span><span class="n">{t.plays}×</span></li>
+          {/each}
+        </ol>
+      {/if}
+    </section>
+  {/if}
   {/if}
 </div>
 
@@ -241,9 +265,6 @@
     margin-top: 4px;
   }
 
-  .tiles + .meters {
-    margin-top: 14px;
-  }
 
   .meter-head {
     display: flex;

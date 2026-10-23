@@ -1493,6 +1493,9 @@ export type InsightsOverview = {
   albums: number;
   albums_never: number;
   favourites: number;
+  /** Tracks by how often played ("0", "1", "2–4", …, "20+"), and the most played. */
+  plays: Count[];
+  most_played: { title: string; artist: string | null; plays: number }[];
 };
 /** A genre's or an artist's tracks (`n`) and those of them in a playlist (`listed`). */
 export type Layered = { name: string; n: number; listed: number };

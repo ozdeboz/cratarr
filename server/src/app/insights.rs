@@ -116,12 +116,27 @@ impl InsightsService {
             }
             let mut report = crate::insights::build(&rows, &shown_rows, &on_rows, &rules, &playlists);
             if let (Some(served), Some((albums, songs))) = (served, &arrivals) {
-                let (played, starred) = match &user {
-                    Some(u) => (served.userdata.played(u)?, served.userdata.starred(u, crate::userdata::Kind::Song)?.into_iter().collect()),
+                let (plays, starred): (std::collections::HashMap<String, u32>, std::collections::HashSet<String>) = match &user {
+                    Some(u) => (
+                        served.userdata.song_plays(u)?.into_iter().map(|(id, (n, _))| (id, n)).collect(),
+                        served.userdata.starred(u, crate::userdata::Kind::Song)?.into_iter().collect(),
+                    ),
                     None => Default::default(),
                 };
                 // Months in UTC: an album that came in the night's first hour may fall in the month before.
-                report.overview = Some(crate::insights::overview(albums, songs, &shown.iter().copied().collect(), &incoming, &played, &starred, since, epoch_now(), 0));
+                let mut overview = crate::insights::overview(albums, songs, &shown.iter().copied().collect(), &incoming, &plays, &starred, since, epoch_now(), 0);
+                // Most played by name, as the library has them.
+                let ids: Vec<String> = overview.most_played.iter().map(|t| t.id.clone()).collect();
+                let named: std::collections::HashMap<String, (String, String)> =
+                    served.library.songs_by_id(&ids)?.into_iter().map(|s| (s.id, (s.title, s.artist))).collect();
+                for t in &mut overview.most_played {
+                    if let Some((title, artist)) = named.get(&t.id) {
+                        t.title = title.clone();
+                        t.artist = Some(artist.clone()).filter(|a| !a.is_empty());
+                    }
+                }
+                overview.most_played.retain(|t| !t.title.is_empty());
+                report.overview = Some(overview);
             }
             Ok(report)
         })

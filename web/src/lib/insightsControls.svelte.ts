@@ -2,7 +2,8 @@
 // panel"): each tab says what it offers, as groups of controls of a few kinds, and the panel (lib/InsightsPanel) draws
 // every kind one way, as the settings' rows (lib/settings/Group, Item). A tab adds a control here, never markup there.
 // Every tab: the period (not the map) and the libraries, one switch each (Insights' own, the same everywhere; the last
-// one on stays on). Collection's Genres and Artists: what the bars count, and a sort (Tracks' too). Profile: what it is built from. Map: what
+// one on stays on). Collection's Genres, Artists and Tracks: what they count (each its own ranking of the whole set, the server's for Tracks'
+// top lists); Genres and Artists a sort. Profile: what it is built from. Map: what
 // brings playlists together.
 import { getLibraries, type LibrariesView } from './api';
 import { prefs } from './prefs.svelte';
@@ -56,17 +57,22 @@ function libraryGroup(): ControlGroup[] {
   ];
 }
 
+const TRACK_COUNTS = [
+  { value: 'listed', label: 'In a playlist' },
+  { value: 'plays', label: 'Plays' },
+];
 const SORTS = [
   { value: 'most', label: 'Most first' },
   { value: 'az', label: 'A–Z' },
 ];
 const sort: Control = { kind: 'choice', name: 'Sort', options: SORTS, get: () => prefs.insightsSort, set: (v) => (prefs.insightsSort = v as typeof prefs.insightsSort) };
-// The long lists get a sort (the owner, 2026-10-23); History's and Profile's are rankings, where it would mean nothing.
+// The long lists get a sort (the owner, 2026-10-23); Tracks', History's and Profile's are top lists, where it would mean
+// nothing.
 const collection = (): ControlGroup[] =>
   prefs.insightsCollection === 'genres' || prefs.insightsCollection === 'artists'
     ? [{ title: null, controls: [{ kind: 'choice', name: 'Count', options: COUNTS, get: () => prefs.insightsCount, set: (v) => (prefs.insightsCount = v as typeof prefs.insightsCount) }, sort] }]
     : prefs.insightsCollection === 'tracks'
-      ? [{ title: null, controls: [sort] }]
+      ? [{ title: null, controls: [{ kind: 'choice', name: 'Count', options: TRACK_COUNTS, get: () => prefs.tracksCount, set: (v) => (prefs.tracksCount = v as typeof prefs.tracksCount) }] }]
       : [];
 
 const PERIODS = [
