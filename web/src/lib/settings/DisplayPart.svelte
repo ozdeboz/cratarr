@@ -8,6 +8,7 @@
   import { setLevelling } from '../localPlayer.svelte';
   import { PROFILE_ROWS, prefs, type ProfileRow, type Theme } from '../prefs.svelte';
   import ChoiceSheet from './ChoiceSheet.svelte';
+  import OrderList from './OrderList.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
   import PlayerRowList from './PlayerRowList.svelte';
@@ -21,7 +22,6 @@
 
   const KEEP: { value: ProfileRow | ''; label: string }[] = [{ value: '', label: 'Nothing' }, ...PROFILE_ROWS.map((r) => ({ value: r.id, label: r.label }))];
   let choosingKeep = $state(false);
-  const showRow = (id: ProfileRow, on: boolean) => (prefs.profileHidden = on ? prefs.profileHidden.filter((x) => x !== id) : [...prefs.profileHidden, id]);
 
   const setLevel = (on: boolean) => (inApp ? setDevice({ levelling: on }) : setLevelling(on));
   offerReset(
@@ -33,7 +33,7 @@
       prefs.playerFacts = [];
       prefs.profileOpen = true;
       prefs.profileKeep = '';
-      prefs.profileHidden = [];
+      prefs.profileRows = PROFILE_ROWS.map((r) => r.id);
       setLevel(true);
     },
   );
@@ -60,9 +60,7 @@
 <Group title="AudioMuse">
   <Item name="Profiles on lists" line="Fold one to fold them all" toggle={{ checked: prefs.profileOpen, onchange: (on) => (prefs.profileOpen = on) }} />
   <Item name="Folded, show" value={KEEP.find((k) => k.value === prefs.profileKeep)?.label ?? 'Nothing'} onclick={() => (choosingKeep = true)} />
-  {#each PROFILE_ROWS as r (r.id)}
-    <Item name={r.label} toggle={{ checked: !prefs.profileHidden.includes(r.id), onchange: (on) => showRow(r.id, on) }} />
-  {/each}
+  <OrderList items={PROFILE_ROWS} on={prefs.profileRows} label="The profile's rows" onchange={(v) => (prefs.profileRows = v)} />
 </Group>
 {#if choosingKeep}
   <ChoiceSheet title="Folded, show" options={KEEP} value={prefs.profileKeep} onchange={(v) => (prefs.profileKeep = v)} onclose={() => (choosingKeep = false)} />

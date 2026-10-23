@@ -1563,7 +1563,7 @@
           {#if leftOut}<button class="details left-out" onclick={() => (leftOutOpen = true)}><Icon name="crateOut" size={14} /><span>{leftOut.toLocaleString()} excluded</span></button>{/if}
         </div>
         {#if profile && !multi}
-          <div class="head-spread"><ListProfile data={profile} /></div>
+          <div class="head-spread"><ListProfile data={profile} ownArtist={!!album || !!artist} /></div>
         {:else if headTempo}
           <div class="head-spread">
             <Spread series={headTempo.series} />

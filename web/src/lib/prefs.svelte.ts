@@ -24,10 +24,10 @@ export type Prefs = {
   playerRow: boolean;
   playerFacts: FactId[];
   /** A list's profile on top of it (the owner, 2026-10-23): open or folded, for every list at once; when folded, the
-   *  one row it keeps (none: ''); and the rows switched off in Settings (Display › AudioMuse). */
+   *  one row it keeps (none: ''); and its rows switched on, in the user's order (Settings › Display › AudioMuse). */
   profileOpen: boolean;
   profileKeep: ProfileRow | '';
-  profileHidden: ProfileRow[];
+  profileRows: ProfileRow[];
   /** Levelling (decision 0035): this browser's player plays every track about as loud as the next. */
   /** This browser's name as a Play On player, while a page plays here (lib/playOnTarget); '' until it has one. */
   browserName: string;
@@ -127,7 +127,7 @@ export const DEFAULTS: Prefs = {
   playerFacts: [],
   profileOpen: true,
   profileKeep: '',
-  profileHidden: [],
+  profileRows: PROFILE_ROWS.map((r) => r.id),
   levelling: true,
   browserName: '',
   relativeDates: false,
@@ -191,7 +191,7 @@ function read(): Prefs {
       if (Array.isArray(saved.playerFacts)) p.playerFacts = saved.playerFacts.filter((x: unknown): x is FactId => FACTS.some((f) => f.id === x));
       if (typeof saved.profileOpen === 'boolean') p.profileOpen = saved.profileOpen;
       if (PROFILE_ROWS.some((r) => r.id === saved.profileKeep)) p.profileKeep = saved.profileKeep;
-      if (Array.isArray(saved.profileHidden)) p.profileHidden = saved.profileHidden.filter((x: unknown): x is ProfileRow => PROFILE_ROWS.some((r) => r.id === x));
+      if (Array.isArray(saved.profileRows)) p.profileRows = saved.profileRows.filter((x: unknown): x is ProfileRow => PROFILE_ROWS.some((r) => r.id === x));
       if (typeof saved.levelling === 'boolean') p.levelling = saved.levelling;
       if (typeof saved.browserName === 'string') p.browserName = saved.browserName;
       if (typeof saved.relativeDates === 'boolean') p.relativeDates = saved.relativeDates;

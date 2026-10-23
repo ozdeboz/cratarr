@@ -9,16 +9,16 @@
   import Icon from './Icon.svelte';
   import { PROFILE_ROWS, prefs, type ProfileRow } from './prefs.svelte';
 
-  let { data }: { data: ListProfileData } = $props();
+  /** `ownArtist`: an album's or an artist's own list, whose artists the header already names. */
+  let { data, ownArtist = false }: { data: ListProfileData; ownArtist?: boolean } = $props();
 
   const ENDS: Record<string, [string, string]> = { tempo: ['60', '180 BPM'], energy: ['calm', 'intense'], danceability: ['still', 'danceable'] };
 
-  /** The rows it has, in their order, less those switched off. */
+  /** The rows switched on, in the user's order, that it has something for. */
   const rows = $derived(
-    PROFILE_ROWS.filter((r) => {
-      if (prefs.profileHidden.includes(r.id)) return false;
+    prefs.profileRows.flatMap((id) => PROFILE_ROWS.filter((r) => r.id === id)).filter((r) => {
       if (r.id === 'style') return data.styles.length > 0;
-      if (r.id === 'artists') return data.artists.length > 0;
+      if (r.id === 'artists') return !ownArtist && data.artists.length > 0;
       if (r.id === 'mood') return data.moods.length > 0;
       return data.numbers.some((n) => n.key === r.id);
     }),
