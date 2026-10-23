@@ -700,6 +700,15 @@ export function drive(name: string | null) {
   reported = { positionMs: 0, at: performance.now() };
 }
 
+/** Here again after driving another player, which plays on: what `local` held was that player's, so it is let go
+ *  (no command to it, nothing kept in this browser's list). */
+export function emptyHere() {
+  local.queue = [];
+  local.index = -1;
+  local.position = 0;
+  local.paused = true;
+}
+
 /** The last report: the position then (ms), and when it came; the position in between is counted on here. */
 let reported = { positionMs: 0, at: 0 };
 const sameQueue = (a: LocalTrack[], b: LocalTrack[]) =>

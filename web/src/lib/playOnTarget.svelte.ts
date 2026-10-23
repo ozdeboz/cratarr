@@ -1,15 +1,16 @@
 // Play On to this page (decision 0033: a page is a Play On target only while it is open; 0031 amended, the owner
-// 2026-10-16): while a page in a browser plays here (its output is this browser), it is one of Cratarr's players,
-// under this browser's name (Settings → This device), as the app is: Cratarr's commands play on its own player
-// (localPlayer's playOnCommand) and it reports what plays, on every change and every few seconds. Closed, it is gone
-// from the list (offline). A browser lets sound start only after the page was touched once: a play before that shows
+// 2026-10-16): while a page in a browser is open, it is one of Cratarr's players, under this browser's name (Settings →
+// This browser), as the app is: Cratarr's commands play on its own player (localPlayer's playOnCommand) and it reports
+// what plays, on every change and every few seconds. While its screen drives another player it plays nothing itself;
+// music sent to it turns the screen here, and the other plays on (amended 2026-10-23). Closed, it is gone from the
+// list (offline). A browser lets sound start only after the page was touched once: a play before that shows
 // "Tap to play". Behind a locked screen a paused page is frozen after a minute or so, and shows offline until it is
 // looked at again; playing, it stays. No sync play in a browser: it joins no group.
 import { getPlayers } from './api';
 import { me } from './me.svelte';
 import { inApp } from './app.svelte';
 import { canPlayHere, local, pageVolume, playOnCommand } from './localPlayer.svelte';
-import { playOn, drivenName } from './playOn.svelte';
+import { playOn, drivenName, hereAgain } from './playOn.svelte';
 import { prefs } from './prefs.svelte';
 import { asksSignIn, refused, refusedFor, toSignIn } from './reach.svelte';
 import { setOwnSleep, sleep } from './sleep.svelte';
@@ -59,11 +60,36 @@ function ownName(n: string): string {
   return me.name && !n.endsWith(` (${me.name})`) ? `${n} (${me.name})` : freeName(n, [{ name: n }]);
 }
 
+/** This tab's own name while another tab of this browser holds the browser's ("ThinkBook 2"), for as long as the tab
+ *  is open and the browser's name stays what it was (`base`); kept in the tab only, so tabs never number each other's
+ *  names. */
+type TabName = { base: string; name: string };
+const TAB_KEY = 'cratarr-tab-name';
+const tabName = $state<{ value: TabName | null }>({
+  value: (() => {
+    try {
+      const kept = JSON.parse(sessionStorage.getItem(TAB_KEY) ?? 'null');
+      return kept && typeof kept.base === 'string' && typeof kept.name === 'string' ? kept : null;
+    } catch {
+      return null;
+    }
+  })(),
+});
+function setTabName(name: string) {
+  const t = { base: prefs.browserName, name };
+  try {
+    sessionStorage.setItem(TAB_KEY, JSON.stringify(t));
+  } catch {
+    /* kept while the page is loaded */
+  }
+  tabName.value = t;
+}
+
 /** A name no other player has (a second Chrome on Android is "Chrome on Android 2"), kept from then on. */
 function nameToUse(): string {
-  if (prefs.browserName) return prefs.browserName;
-  prefs.browserName = freeName(defaultBrowserName(), playOn.players);
-  return prefs.browserName;
+  if (!prefs.browserName) prefs.browserName = freeName(defaultBrowserName(), playOn.players);
+  const t = tabName.value;
+  return t && t.base === prefs.browserName ? t.name : prefs.browserName;
 }
 
 /** An entry id (decision 0033) for a track this page added itself; `crypto.randomUUID` needs a secure page. */
@@ -132,15 +158,18 @@ let reportTimer: ReturnType<typeof setTimeout> | undefined;
 async function report(withQueue = false) {
   // Not while the proxy refuses this page (lib/reach): each would be one more knock on a ban.
   if (!name || !target.connected || refusedFor() > 0) return;
+  const idle = elsewhere();
   // Tracks this page added itself get an entry, as the app gives them.
-  for (const t of local.queue) if (!t.entry) t.entry = uuid();
-  const key = local.queue.map((t) => t.entry).join(',');
+  if (!idle) for (const t of local.queue) if (!t.entry) t.entry = uuid();
+  const own = idle ? [] : local.queue;
+  const key = idle ? 'elsewhere' : own.map((t) => t.entry).join(',');
   const queue = withQueue || key !== sentQueue;
-  const t = local.index >= 0 ? local.queue[local.index] : undefined;
+  const index = idle ? -1 : local.index;
+  const t = index >= 0 ? own[index] : undefined;
   const s = sleep();
   const a = local.autoplay;
   const body = {
-    index: local.index,
+    index,
     ...(t?.entry ? { entry: t.entry } : {}),
     ...(version !== undefined ? { version } : {}),
     repeat: local.repeat,
@@ -150,9 +179,9 @@ async function report(withQueue = false) {
     radio_count: local.radioCount,
     skip_favourites: local.skipFavourites,
     autoplay: a ? { mode: a.mode, albums: a.albums, restart: a.restart, seed: a.seed, within: a.within } : null,
-    position_ms: Math.round(local.position * 1000),
-    duration_ms: local.duration ? Math.round(local.duration * 1000) : null,
-    playing: local.index >= 0 && !local.paused,
+    position_ms: idle ? 0 : Math.round(local.position * 1000),
+    duration_ms: !idle && local.duration ? Math.round(local.duration * 1000) : null,
+    playing: !idle && local.index >= 0 && !local.paused,
     volume: pageVolume.level,
     ducked: pageVolume.ducked,
     link: {
@@ -164,7 +193,7 @@ async function report(withQueue = false) {
     },
     ...(queue
       ? {
-          queue: local.queue.map((q) => ({
+          queue: own.map((q) => ({
             entry: q.entry,
             source: q.source,
             id: q.id,
@@ -209,6 +238,7 @@ function reportSoon(withQueue = false) {
 function connect() {
   disconnect();
   name = nameToUse();
+  playOn.self = name;
   const es = new EventSource(`/api/players/${encodeURIComponent(name)}/connect?kind=browser&page=${PAGE}`);
   source = es;
   const player = name;
@@ -231,6 +261,12 @@ function connect() {
       return;
     }
     if (typeof m.version === 'number') version = m.version;
+    // Its screen drives another player: music sent here turns it here (the other plays on); the rest is for a player
+    // that plays nothing.
+    if (elsewhere()) {
+      if (m.command !== 'play' && m.command !== 'add') return reportSoon();
+      hereAgain();
+    }
     if (m.command === 'sleep') {
       const atMs = typeof m.at_ms === 'number' ? m.at_ms : null;
       setOwnSleep(atMs === null && m.end_of_track !== true ? null : { atMs, endOfTrack: m.end_of_track === true });
@@ -263,12 +299,14 @@ function connect() {
         retryTimer = setTimeout(() => want() && connect(), wait);
         retry = Math.min(retry * 2, 60_000);
       };
-      // Its name held by another page (another tab, another browser) or the app: the next free one ("… 2"), at once.
-      // Held by another user's player (several users, decision 0051; another user's players are not listed, so the
-      // refusal is asked for its reason): one's own name added ("Chrome on Android (anna)"), at once.
+      // Its name held by another page (another tab, another browser) or the app: this tab takes the next free one
+      // after the browser's ("… 2"), at once, for itself only. Held by another user's player (several users, decision
+      // 0051; another user's players are not listed, so the refusal is asked for its reason): one's own name added
+      // ("Chrome on Android (anna)"), at once.
       getPlayers().then(async (list) => {
         const players = list?.players ?? [];
-        if (source === es && name && players.some((p) => p.name === name && p.online)) prefs.browserName = freeName(name, players);
+        if (source === es && name && players.some((p) => p.name === name && p.online))
+          setTabName(freeName(prefs.browserName, players.filter((p) => p.online)));
         else if (source === es && name && (await anotherUsers(name))) prefs.browserName = ownName(name);
         else later();
       }, later);
@@ -284,15 +322,18 @@ function disconnect() {
   clearTimeout(retryTimer);
 }
 
-/** A page that plays here, in a browser (in the app the app is the player; driving another player, it is a remote). */
-const want = () => !inApp && canPlayHere && prefs.output === 'local' && drivenName() === null;
+/** A page in a browser that can play (in the app the app is the player): a player while it is open, whatever its
+ *  screen drives. */
+const want = () => !inApp && canPlayHere;
+/** Its screen drives another player: its own plays nothing meanwhile (`local` holds the other's). */
+const elsewhere = () => drivenName() !== null || prefs.output !== 'local';
 
 if (typeof window !== 'undefined' && !inApp) {
   $effect.root(() => {
     // Connected while it plays here, under its name (a new name: again under that one).
     $effect(() => {
       const on = want();
-      const n = prefs.browserName;
+      const n = nameToUse();
       if (!on) return disconnect();
       // Connected under this name already (the first connect saves the name it chose).
       if (source && n === name) return;
@@ -300,7 +341,7 @@ if (typeof window !== 'undefined' && !inApp) {
     });
     // Every change reported at once.
     $effect(() => {
-      void [local.index, local.paused, local.queue, local.repeat, local.radio, local.autoplay, local.skipFavourites, pageVolume.level, pageVolume.ducked, sleep()];
+      void [local.index, local.paused, local.queue, local.repeat, local.radio, local.autoplay, local.skipFavourites, pageVolume.level, pageVolume.ducked, sleep(), prefs.output];
       if (target.connected) reportSoon();
     });
     // Sound has started: no need to ask for the tap any more.

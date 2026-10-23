@@ -6,17 +6,18 @@
 import { getPlayer, getPlayers, playerCommand, type PlayOnPlayer } from './api';
 import { appInfo, inApp, toApp } from './app.svelte';
 import { on } from './events.svelte';
-import { drive, reportedBy, type LocalTrack } from './localPlayer.svelte';
+import { drive, emptyHere, reportedBy, type LocalTrack } from './localPlayer.svelte';
 import { prefs } from './prefs.svelte';
 
-export const playOn = $state({ players: [] as PlayOnPlayer[] });
+/** `self`: the name this page is a player under, in a browser (lib/playOnTarget); null in the app or before. */
+export const playOn = $state({ players: [] as PlayOnPlayer[], self: null as string | null });
 
 /** The player chosen as the output, by name; null when the output is not one of Cratarr's players. */
 export const drivenName = () => (prefs.output.startsWith('player:') ? prefs.output.slice('player:'.length) : null);
 
 /** The players that can be chosen: connected now, and not the app this page runs in (that one is "This device"). */
 export const choosable = () =>
-  playOn.players.filter((p) => p.online && !(inApp && p.name === appInfo.player) && !(!inApp && !!prefs.browserName && p.name === prefs.browserName));
+  playOn.players.filter((p) => p.online && !(inApp && p.name === appInfo.player) && !(!inApp && p.name === (playOn.self ?? prefs.browserName)));
 
 /** In the app, while this device follows a group (decision 0037): the group's leader. The device plays no queue of its
  *  own then, so the page shows the leader's and its controls act there (the owner, 2026-10-16: the follower showed no
@@ -40,6 +41,26 @@ function driveShown() {
   drive(name);
   // Out of the group again: the app's own player says what it holds now.
   if (!name && was && inApp) toApp({ type: 'hello' });
+}
+
+/** Music started on this device's own player while its screen drove another (Play On from elsewhere; decision 0033
+ *  amended 2026-10-23): the screen turns here, and the other plays on, no longer driven from here. */
+export function hereAgain() {
+  if (prefs.output === 'local') return;
+  prefs.output = 'local';
+  driveShown();
+  if (!inApp) emptyHere();
+}
+
+/** Whether the app's own player played at its last report: one that starts while the screen drives another turns the
+ *  screen here (`hereAgain`). */
+let ownPlayed: boolean | null = null;
+function watchOwn(players: PlayOnPlayer[]) {
+  if (!inApp || !appInfo.player) return;
+  const own = players.find((p) => p.name === appInfo.player);
+  const now = !!own?.online && own.playing;
+  if (now && ownPlayed === false) hereAgain();
+  ownPlayed = now;
 }
 
 /** The one of Cratarr's players the page plays on: the one chosen, or the app this page runs in playing here. */
@@ -79,6 +100,7 @@ let shownVersion = -1;
 
 function take(players: PlayOnPlayer[]) {
   playOn.players = players;
+  watchOwn(players);
   driveShown();
   const name = shownName();
   const p = name ? players.find((x) => x.name === name) : undefined;

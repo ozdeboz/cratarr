@@ -298,3 +298,22 @@ order before back (decision 0059 holds the rule). For the queues Cratarr holds (
 - A player's view says `shuffled: false` always (kept for Home Assistant's shuffle switch): Home Assistant's
   `shuffle_set(true)` sends `shuffle {on: true}`, gets the one-time shuffle, and sees shuffle off again.
 - Supersedes "Shuffle is a second order over the same entries" above, and rule 2 of the repeat amendment.
+
+## Amendment (2026-10-23): one screen, one place
+
+A device with Cratarr open is a Play On target under its name, whatever its screen drives. Before, a page that drove
+another player hid from the list (its ThinkBook page drove the Salon tablet, so ThinkBook never showed up), while the
+app stayed listed and could start playing behind a screen that showed and controlled another player. The owner, asked
+whether that is how it should be: "Duh."
+
+- **A screen points at one place.** Music that starts on a device's own player (Play On from elsewhere, or its own
+  lock screen, car or headset) turns its screen here; the player it drove plays on, no longer driven from it. As
+  Spotify Connect does.
+- **A page** is a player while it is open and can play. While its screen drives another it plays nothing itself and
+  reports so; a `play` or an `add` sent to it turns it here first, and anything else is for a player that plays
+  nothing (`lib/playOnTarget`). **The app** turns its screen here as its own player starts playing, from Cratarr's
+  reports of it (`lib/playOn` `hereAgain`).
+- **Tabs keep their names apart without renaming the browser.** A second tab finds the browser's name held by the first
+  and takes the next free one ("ThinkBook 2") for itself only (the tab's session storage), numbered after the
+  browser's name, never after its own. Before, it saved the new name for the whole browser, so the first tab then
+  moved too, and each round added a number: 41 players, "Edge on Windows 3 2 2 2 …".
