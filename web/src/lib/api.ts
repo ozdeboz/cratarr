@@ -1494,8 +1494,10 @@ export type InsightsOverview = {
   incoming_albums: number;
   /** When the album in Incoming longest came (epoch s). */
   incoming_since: number | null;
-  /** Albums added per month ("2026-10"), the last 24, oldest first. */
+  /** Albums added per step of the period, oldest first: days ("2026-10-23"), weeks (their Mondays), months
+   *  ("2026-10"), years ("2026"). */
   added: Count[];
+  added_step: 'day' | 'week' | 'month' | 'year';
   tracks: number;
   tracks_heard: number;
   albums: number;
@@ -1522,7 +1524,7 @@ export type Listening = {
   time: { start: number; secs: number }[];
   /** Taste over time, further back than the period: per week, month or year (`starts`, oldest first), each top
    *  genre's share of the time listened then (0 to 1); `shares[i][j]`: step i, genre j. */
-  taste: { step: 'week' | 'month' | 'year'; starts: number[]; genres: string[]; shares: number[][] };
+  taste: { step: 'day' | 'week' | 'month' | 'year'; starts: number[]; genres: string[]; shares: number[][] };
   artists: ListeningTop[];
   albums: ListeningTop[];
   tracks: ListeningTop[];
@@ -1584,6 +1586,8 @@ export type Insights = {
     in_one_playlist: number;
     missing: number;
     library_tracks_in_playlists: number;
+    /** Of the same, in one of the account's own crates (not Unlisted). */
+    library_tracks_in_crates: number;
     albums_without_playlist: number;
     most_shared: { title: string; artist: string | null; playlists: number }[];
   };

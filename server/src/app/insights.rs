@@ -22,6 +22,8 @@ type Key = (Option<String>, Option<String>, Vec<String>, Period);
 
 pub struct InsightsService {
     lib: Arc<Library>,
+    /// For the tracks in a crate.
+    playlists: Arc<super::playlists::PlaylistService>,
     /// The last reports: when, and for what.
     kept: Mutex<Vec<(i64, Key, Arc<Insights>)>>,
 }
@@ -42,8 +44,8 @@ impl InsightsService {
         Some(self.lib.catalogue().folders().iter().enumerate().filter(|(_, f)| !off.contains(f)).map(|(i, _)| i as i64).collect())
     }
 
-    pub(super) fn new(lib: Arc<Library>) -> Self {
-        Self { lib, kept: Mutex::new(Vec::new()) }
+    pub(super) fn new(lib: Arc<Library>, playlists: Arc<super::playlists::PlaylistService>) -> Self {
+        Self { lib, playlists, kept: Mutex::new(Vec::new()) }
     }
 
     /// The report, Collection's figures from the libraries not in `without` (`source/library` keys) of the server
@@ -80,6 +82,8 @@ impl InsightsService {
         // Whose plays: the request's account, read here (the blocking task below is not the request's).
         let user = served.as_ref().and_then(|s| s.current_user());
         let since = period.since(epoch_now());
+        // The account's own crates' tracks (Listed); none where they cannot be worked out.
+        let crated = self.playlists.crated_lines(want, without).await.unwrap_or_default();
         let report = tokio::task::spawn_blocking(move || -> Result<Insights> {
             // When each file's album came (Cratarr's own library), for the period.
             let arrivals = match &served {
@@ -100,10 +104,15 @@ impl InsightsService {
             };
             let rows = catalogue.track_rows(0)?;
             let (mut on_rows, mut shown_rows) = (Vec::new(), Vec::new());
+            let mut in_crates = 0;
             for &folder in &shown {
                 let folder_rows = if folder == 0 { rows.clone() } else { catalogue.track_rows(folder)? };
                 for mut r in folder_rows {
                     let keep = in_period(folder, &r.rel);
+                    // A crate names a track by its playlist line (an Incoming one's climbs out of Music).
+                    if keep && !crated.is_empty() && catalogue.line_of(folder, &r.rel).is_some_and(|l| crated.contains(&l)) {
+                        in_crates += 1;
+                    }
                     // Another folder's albums are its own, whatever their path inside it.
                     if folder != 0 {
                         r.rel = format!("{folder}:{}", r.rel);
@@ -115,6 +124,7 @@ impl InsightsService {
                 }
             }
             let mut report = crate::insights::build(&rows, &shown_rows, &on_rows, &rules, &playlists);
+            report.playlists.library_tracks_in_crates = in_crates;
             if let (Some(served), Some((albums, songs))) = (served, &arrivals) {
                 let (plays, starred): (std::collections::HashMap<String, u32>, std::collections::HashSet<String>) = match &user {
                     Some(u) => (
@@ -124,7 +134,15 @@ impl InsightsService {
                     None => Default::default(),
                 };
                 // Months in UTC: an album that came in the night's first hour may fall in the month before.
-                let mut overview = crate::insights::overview(albums, songs, &shown.iter().copied().collect(), &incoming, &plays, &starred, since, epoch_now(), 0);
+                // Growth's steps within the period, as taste over time's.
+                use crate::insights::Step;
+                let growth = match period {
+                    Period::Week => (Step::Day, Some(7)),
+                    Period::Month => (Step::Week, Some(5)),
+                    Period::Year => (Step::Month, Some(12)),
+                    Period::All => (Step::Year, None),
+                };
+                let mut overview = crate::insights::overview(albums, songs, &shown.iter().copied().collect(), &incoming, &plays, &starred, since, growth, epoch_now(), 0);
                 // Most played by name, as the library has them.
                 let ids: Vec<String> = overview.most_played.iter().map(|t| t.id.clone()).collect();
                 let named: std::collections::HashMap<String, (String, String)> =

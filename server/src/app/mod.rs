@@ -145,7 +145,7 @@ impl App {
             cfg.data_dir.as_deref(),
             origin,
         );
-        let insights = InsightsService::new(library.clone());
+        let insights = InsightsService::new(library.clone(), playlists.clone());
         let play_on = PlayOn::new(library.clone(), playlists.clone(), cfg.data_dir.as_deref());
         let plays = Plays::new(cfg.data_dir.as_deref());
         // Cratarr's own library (0032) built anew (a first start, a new layout): what was read from it while it was

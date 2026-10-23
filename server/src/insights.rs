@@ -102,9 +102,13 @@ pub struct Overview {
     /// Albums in an Incoming folder, and when the one there longest came (epoch s).
     pub incoming_albums: usize,
     pub incoming_since: Option<i64>,
-    /// Albums of the libraries switched on that came in each of the last `GROWTH_MONTHS` months ("2026-10"), oldest
-    /// first, empty months too. An album with no known arrival is not counted (nothing is made up).
+    /// Albums of the libraries switched on that came in each step of the period (the owner, 2026-10-23: bound by it):
+    /// a week's days ("2026-10-23"), a month's weeks (their Mondays), a year's months ("2026-10"), all's years
+    /// ("2026", since the first that came); oldest first, empty steps too. An album with no known arrival is not
+    /// counted (nothing is made up).
     pub added: Vec<Count>,
+    /// "day", "week", "month" or "year".
+    pub added_step: &'static str,
     /// Tracks of the libraries switched on, those played at least once, albums none of whose tracks were, and the
     /// tracks starred.
     pub tracks: usize,
@@ -134,8 +138,14 @@ const PLAY_BUCKETS: [(u32, &str); 6] = [(0, "0"), (1, "1"), (2, "2–4"), (5, "5
 /// At most this many in Most played.
 const MOST_PLAYED: usize = 10;
 
-/// How far back Growth reaches.
-pub const GROWTH_MONTHS: i64 = 24;
+/// Growth's steps: of a day, a week, a month or a year; how many (None: years since the first album came).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Step {
+    Day,
+    Week,
+    Month,
+    Year,
+}
 
 /// The overview from the library's albums (id, folder, arrival) and songs (id, album), the folders switched on, the
 /// Incoming folders, and the account's play counts and starred songs; `now` and `tz` (seconds east of UTC) for the months.
@@ -148,6 +158,7 @@ pub fn overview(
     plays: &HashMap<String, u32>,
     starred: &HashSet<String>,
     since: Option<i64>,
+    growth: (Step, Option<i64>),
     now: i64,
     tz: i64,
 ) -> Overview {
@@ -155,21 +166,52 @@ pub fn overview(
     let inc: Vec<Option<i64>> = albums.iter().filter(|(_, f, _)| incoming.contains(f)).map(|(_, _, c)| *c).collect();
     out.incoming_albums = inc.len();
     out.incoming_since = inc.into_iter().flatten().min();
-    // Months as (year * 12 + month0), local time.
-    let month_of = |t: i64| {
-        let (y, m, _) = civil_of((t + tz).div_euclid(86_400));
-        y * 12 + i64::from(m) - 1
+    // Each step as a number, local time: days since 1970, Mondays (as days), year * 12 + month0, years.
+    let (step, count) = growth;
+    let key = |t: i64| {
+        let day = (t + tz).div_euclid(86_400);
+        let (y, m, _) = civil_of(day);
+        match step {
+            Step::Day => day,
+            Step::Week => day - (day + 3).rem_euclid(7),
+            Step::Month => y * 12 + i64::from(m) - 1,
+            Step::Year => y,
+        }
     };
-    let this = month_of(now);
-    let mut added: BTreeMap<i64, usize> = ((this - GROWTH_MONTHS + 1)..=this).map(|m| (m, 0)).collect();
+    let back = |k: i64, n: i64| if step == Step::Week { k - 7 * n } else { k - n };
     let shown_albums: HashSet<&str> = albums.iter().filter(|(_, f, _)| shown.contains(f)).map(|(id, _, _)| id.as_str()).collect();
-    // Growth is always its two years; Heard the albums of the period (`since`: those that came then).
+    let this = key(now);
+    let first = match count {
+        Some(n) => back(this, n - 1),
+        None => albums.iter().filter(|(id, _, _)| shown_albums.contains(id.as_str())).filter_map(|(_, _, c)| c.map(key)).min().unwrap_or(this).min(this),
+    };
+    let mut added: BTreeMap<i64, usize> = BTreeMap::new();
+    let mut k = this;
+    while k >= first {
+        added.insert(k, 0);
+        k = back(k, 1);
+    }
+    // Growth and Heard both of the period (`since`: the albums that came then).
     for (_, _, created) in albums.iter().filter(|(id, _, _)| shown_albums.contains(id.as_str())) {
-        if let Some(n) = created.and_then(|c| added.get_mut(&month_of(c))) {
+        if let Some(n) = created.and_then(|c| added.get_mut(&key(c))) {
             *n += 1;
         }
     }
-    out.added = added.into_iter().map(|(m, n)| Count { name: format!("{}-{:02}", m.div_euclid(12), m.rem_euclid(12) + 1), n }).collect();
+    let name = |k: i64| match step {
+        Step::Day | Step::Week => {
+            let (y, m, d) = civil_of(k);
+            format!("{y}-{m:02}-{d:02}")
+        }
+        Step::Month => format!("{}-{:02}", k.div_euclid(12), k.rem_euclid(12) + 1),
+        Step::Year => k.to_string(),
+    };
+    out.added = added.into_iter().map(|(k, n)| Count { name: name(k), n }).collect();
+    out.added_step = match step {
+        Step::Day => "day",
+        Step::Week => "week",
+        Step::Month => "month",
+        Step::Year => "year",
+    };
     let period_albums: HashSet<&str> = albums
         .iter()
         .filter(|(id, _, c)| shown_albums.contains(id.as_str()) && since.is_none_or(|s| c.is_some_and(|c| c >= s)))
@@ -238,6 +280,8 @@ pub struct PlaylistInsights {
     pub missing: usize,
     /// Music tracks in at least one playlist.
     pub library_tracks_in_playlists: usize,
+    /// The same tracks' in one of the account's own crates (not Unlisted); set by the service, which asks the crates.
+    pub library_tracks_in_crates: usize,
     /// Albums with no track in any playlist.
     pub albums_without_playlist: usize,
     /// The tracks in the most playlists.
@@ -594,16 +638,22 @@ mod tests {
             [("s1", "a1"), ("s2", "a1"), ("s3", "a2"), ("s4", "a3"), ("s5", "i1")].iter().map(|(s, a)| (s.to_string(), a.to_string(), 0, format!("{a}/{s}"))).collect();
         let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<HashSet<String>>();
         let plays: HashMap<String, u32> = [("s1".to_string(), 3), ("s5".to_string(), 1)].into();
-        let o = overview(&albums, &songs, &HashSet::from([0]), &HashSet::from([1]), &plays, &set(&["s3"]), None, now, 0);
+        let o = overview(&albums, &songs, &HashSet::from([0]), &HashSet::from([1]), &plays, &set(&["s3"]), None, (Step::Month, Some(24)), now, 0);
         assert_eq!((o.incoming_albums, o.incoming_since), (2, Some(now - 41 * day)));
         assert_eq!(o.added.len(), 24);
         assert_eq!((o.added[23].name.as_str(), o.added[23].n, o.added.iter().map(|c| c.n).sum::<usize>()), ("2026-10", 1, 2), "a3 has no arrival");
+        // All: years since the first album came (a2, 2025).
+        let all = overview(&albums, &songs, &HashSet::from([0]), &HashSet::from([1]), &plays, &set(&["s3"]), None, (Step::Year, None), now, 0);
+        assert_eq!(all.added, vec![Count { name: "2025".into(), n: 1 }, Count { name: "2026".into(), n: 1 }]);
+        // A week: its days, a1 not among them (ten days back).
+        let week = overview(&albums, &songs, &HashSet::from([0]), &HashSet::from([1]), &plays, &set(&["s3"]), Some(now - 7 * day), (Step::Day, Some(7)), now, 0);
+        assert_eq!((week.added.len(), week.added.iter().map(|c| c.n).sum::<usize>(), week.added_step), (7, 0, "day"));
         assert_eq!((o.tracks, o.tracks_heard, o.albums, o.albums_never, o.favourites), (4, 1, 3, 2, 1), "Incoming switched off: s5 not counted");
         // The past month: only a1 came then (a3's arrival is not known); Growth stays its two years.
         assert_eq!(o.plays.iter().map(|c| c.n).collect::<Vec<_>>(), [3, 0, 1, 0, 0, 0], "s2, s3, s4 never; s1 three times");
         assert_eq!(o.most_played.iter().map(|t| (t.id.as_str(), t.plays)).collect::<Vec<_>>(), [("s1", 3)]);
-        let m = overview(&albums, &songs, &HashSet::from([0]), &HashSet::from([1]), &plays, &set(&["s3"]), Some(now - 30 * day), now, 0);
-        assert_eq!((m.tracks, m.tracks_heard, m.albums, m.albums_never, m.added.iter().map(|c| c.n).sum::<usize>()), (2, 1, 1, 0, 2));
+        let m = overview(&albums, &songs, &HashSet::from([0]), &HashSet::from([1]), &plays, &set(&["s3"]), Some(now - 30 * day), (Step::Week, Some(5)), now, 0);
+        assert_eq!((m.tracks, m.tracks_heard, m.albums, m.albums_never, m.added.iter().map(|c| c.n).sum::<usize>()), (2, 1, 1, 0, 1));
     }
 
     #[test]

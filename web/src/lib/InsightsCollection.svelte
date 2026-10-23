@@ -56,7 +56,15 @@
     return Array.from({ length: 10 }, (_, i) => ({ name: String(from + i), n: l.years.find((y) => y.name === String(from + i))?.n ?? 0 }));
   });
   const tallest = $derived(widest(columns));
-  // Growth's columns, against the most added in a month.
+  // Growth's columns (within the period, its steps), against the most added in one; a label where it fits.
+  function growthLabel(name: string, i: number) {
+    const at = new Date(name.length === 4 ? `${name}-01-01T00:00` : name.length === 7 ? `${name}-01T00:00` : `${name}T00:00`);
+    const step = o?.added_step;
+    if (step === 'year') return name;
+    if (step === 'month') return i % 3 === 0 ? at.toLocaleDateString(undefined, { month: 'short' }) : '';
+    if (step === 'week') return at.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    return at.toLocaleDateString(undefined, { weekday: 'narrow' });
+  }
   const mostAdded = $derived(Math.max(1, ...(o?.added ?? []).map((m) => m.n)));
 </script>
 
@@ -111,13 +119,13 @@
   {#if o}
 
     <section>
-      <div class="head"><h2>Growth</h2><span class="unit">albums added per month</span></div>
+      <div class="head"><h2>Growth</h2><span class="unit">albums added per {o.added_step}</span></div>
       <div class="columns months" role="list">
         {#each o.added as m, i (m.name)}
           <div class="column" role="listitem" title={`${m.name}: ${plural(m.n, 'album')}`}>
             <span class="v"></span>
             <span class="col"><i style:height={`${(100 * m.n) / mostAdded}%`}></i></span>
-            <span class="x">{i % 6 === 0 ? new Date(`${m.name}-01`).toLocaleDateString(undefined, { month: 'short', year: '2-digit' }) : ''}</span>
+            <span class="x">{growthLabel(m.name, i)}</span>
           </div>
         {/each}
       </div>
@@ -132,6 +140,16 @@
       <p class="formats">{plural(o.favourites, 'favourite')}</p>
     </section>
   {/if}
+
+  <!-- Listed (the owner, 2026-10-23): how much of it a list holds, a playlist or one of your crates (Unlisted is about
+       the rest, so not one of them). -->
+  <section>
+    <h2>Listed</h2>
+    <div class="meters">
+      {@render meter('Tracks in a playlist', `${num(p.library_tracks_in_playlists)} of ${plural(l.tracks, 'track')}`, inPlaylists)}
+      {@render meter('Tracks in a crate', `${num(p.library_tracks_in_crates ?? 0)} of ${plural(l.tracks, 'track')}`, share(p.library_tracks_in_crates ?? 0, l.tracks))}
+    </div>
+  </section>
 
   <section>
     <h2>Quality</h2>
@@ -170,11 +188,11 @@
   {@render bars('Artists', l.top_artists)}
   {:else}
   <!-- Tracks (the owner, 2026-10-23): in playlists or played, one at a time as Genres and Artists count (the panel's
-       Count): a meter, then the tracks most in each (the panel's sort); the plays also as columns by how often. -->
+       Count): the tracks most in each; the plays also as columns by how often. Their shares are Overview's (Listed,
+       Heard). -->
   {#if prefs.tracksCount === 'listed' || !data.overview}
   <section>
     <h2>In playlists</h2>
-    <div class="meters">{@render meter('Tracks in a playlist', `${num(p.library_tracks_in_playlists)} of ${plural(l.tracks, 'track')}`, inPlaylists)}</div>
     {#if p.most_shared.length}
       <h3>In the most playlists</h3>
       <ol class="shared">
@@ -188,7 +206,6 @@
     {@const o = data.overview}
     <section>
       <h2>Plays</h2>
-      <div class="meters">{@render meter('Played at least once', `${num(o.tracks_heard)} of ${plural(o.tracks, 'track')}`, share(o.tracks_heard, o.tracks))}</div>
       <h3>Tracks by plays</h3>
       <div class="columns" role="list">
         {#each o.plays as c (c.name)}

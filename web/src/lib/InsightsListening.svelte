@@ -59,13 +59,20 @@
   const x = (i: number) => (data && data.taste.starts.length > 1 ? (i * W) / (data.taste.starts.length - 1) : W / 2);
   const y = (s: number) => H - (s / peak) * H;
   const stepName = (st: number) =>
-    data?.taste.step === 'year' ? day(st, { year: 'numeric' }) : data?.taste.step === 'month' ? day(st, { month: 'long', year: 'numeric' }) : `Week of ${day(st, { day: 'numeric', month: 'short' })}`;
-  /** Under the axis: every year, every other month, every third week. */
+    data?.taste.step === 'year'
+      ? day(st, { year: 'numeric' })
+      : data?.taste.step === 'month'
+        ? day(st, { month: 'long', year: 'numeric' })
+        : data?.taste.step === 'day'
+          ? day(st, { weekday: 'long', day: 'numeric', month: 'short' })
+          : `Week of ${day(st, { day: 'numeric', month: 'short' })}`;
+  /** Under the axis: every year, every other month, every week, every day's letter. */
   function stepLabel(i: number, st: number) {
     const step = data?.taste.step;
     if (step === 'year') return day(st, { year: 'numeric' });
     if (step === 'month') return i % 2 === 0 ? day(st, { month: 'short' }) : '';
-    return i % 3 === 0 ? day(st, { day: 'numeric', month: 'short' }) : '';
+    if (step === 'day') return day(st, { weekday: 'narrow' });
+    return day(st, { day: 'numeric', month: 'short' });
   }
   /** A genre's share over the steps that had listening. */
   function average(j: number) {

@@ -1719,6 +1719,36 @@ impl PlaylistService {
 
     /// Every crate (the permanent ones first, then one's own) with how many tracks it holds now (decision 0024), from
     /// the libraries not in `without` (`source/library` keys: those switched off on the page).
+    /// Every track in one of the account's own crates (not Unlisted: the one that is about what no playlist has), as
+    /// each shows it (its favourites settings, what it leaves out), from the libraries not in `without`: Insights'
+    /// Listed (the owner, 2026-10-23).
+    pub async fn crated_lines(&self, want: Option<&str>, without: &[String]) -> Result<HashSet<String>, ToggleError> {
+        let own = self.own_crates()?.list().await?;
+        if own.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let set = self.own_crates()?.all_favourites().await?;
+        let albums_set = self.own_crates()?.all_favourite_albums().await?;
+        let left_set = self.own_crates()?.all_left_out().await?;
+        let album_tracks = album_lines(self.lib.catalogue(), left_set.values().flat_map(|l| l.albums.iter().cloned()).collect()).await;
+        let excluded = self.own_crates()?.excluded().await?;
+        let none = crates::LeftOut::default();
+        let favourites_of = |id: &str| set.get(id).copied().unwrap_or(crates::Favourites::None);
+        let albums_of = |id: &str| albums_set.get(id).copied().unwrap_or(crates::Favourites::All);
+        let needed = own.iter().any(|c| crates::needs_favourites(&c.conditions) || favourites_of(&c.id) != crates::Favourites::All);
+        let needed_albums = own.iter().any(|c| crates::needs_favourite_albums(&c.conditions) || albums_of(&c.id) != crates::Favourites::All);
+        let lib = self.crate_library(want, needed, needed_albums, without).await?;
+        let mut lines = HashSet::new();
+        for c in &own {
+            let gone = left_lines(left_set.get(&c.id).unwrap_or(&none), &album_tracks, &excluded);
+            let shown = crates::leaving_out(&gone, &crates::shown(&c.conditions, favourites_of(&c.id), albums_of(&c.id)));
+            if lib.knows(&shown) {
+                lines.extend(lib.select(&shown));
+            }
+        }
+        Ok(lines)
+    }
+
     pub async fn crates(&self, want: Option<&str>, without: &[String]) -> Result<Vec<CrateView>, ToggleError> {
         let own = self.own_crates()?.list().await?;
         let all: Vec<(bool, CrateDef)> = crates::permanent().into_iter().map(|c| (true, c)).chain(own.into_iter().map(|c| (false, c))).collect();

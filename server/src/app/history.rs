@@ -138,21 +138,23 @@ pub struct Taste {
 }
 
 impl Period {
-    /// How far back taste over time reaches (steps, and the step).
-    fn taste(self) -> (i64, &'static str) {
+    /// Taste over time's steps within the period (the owner, 2026-10-23: bound by it, as everything else): a week's
+    /// days, a month's weeks, a year's months, all's years since the log began (`first`, a local day).
+    fn taste(self, today: i64, first: Option<i64>) -> (i64, &'static str) {
         match self {
-            Period::Week => (12, "week"),
-            Period::Month => (12, "month"),
-            Period::Year | Period::All => (5, "year"),
+            Period::Week => (7, "day"),
+            Period::Month => (5, "week"),
+            Period::Year => (12, "month"),
+            Period::All => (first.map_or(1, |f| (civil(today).0 - civil(f).0 + 1).clamp(1, 10)), "year"),
         }
     }
 
     /// The earliest moment this period's figures may need (epoch s), whatever the time zone: its taste's first step.
     pub fn reaches_back(self, now: i64) -> i64 {
         now - match self {
-            Period::Week => 12 * 7 + 7,
-            Period::Month => 12 * 31 + 31,
-            Period::Year => 5 * 366 + 366,
+            Period::Week => 7 + 1,
+            Period::Month => 5 * 7 + 7,
+            Period::Year => 12 * 31 + 31,
             Period::All => ALL_WEEKS * 7 + 7,
         } * DAY
     }
@@ -182,15 +184,17 @@ fn days_of(y: i64, m: u32, d: u32) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-/// Taste over time from the log's rows, the steps of `period`'s taste up to `today` (a local day).
-fn taste(rows: &[Logged], facts: &std::collections::HashMap<String, SongFacts>, period: Period, today: i64, tz: i64) -> Taste {
+/// Taste over time from the log's rows, the steps of `period`'s taste up to `today` (a local day); `first`: the log's
+/// first day.
+fn taste(rows: &[Logged], facts: &std::collections::HashMap<String, SongFacts>, period: Period, today: i64, tz: i64, first: Option<i64>) -> Taste {
     use std::collections::HashMap;
-    let (count, step) = period.taste();
-    // Each step's first day, oldest first: Mondays, the 1st of a month, the 1st of January.
+    let (count, step) = period.taste(today, first);
+    // Each step's first day, oldest first: days, Mondays, the 1st of a month, the 1st of January.
     let (y, m, _) = civil(today);
     let firsts: Vec<i64> = (0..count)
         .rev()
         .map(|back| match step {
+            "day" => today - back,
             "week" => today - (today + 3).rem_euclid(7) - 7 * back,
             "month" => {
                 let months = y * 12 + i64::from(m) - 1 - back;
@@ -285,7 +289,7 @@ pub fn listening(rows: &[Logged], facts: &std::collections::HashMap<String, Song
         v.truncate(TOP);
         v
     };
-    let taste = taste(rows, facts, period, today, tz);
+    let taste = taste(rows, facts, period, today, tz, log_from.map(|f| (f + tz).div_euclid(DAY)));
     Listening { period, from, log_from, total_secs: total, plays, time, taste, artists: top(artists), albums: top(albums), tracks: top(tracks) }
 }
 
@@ -329,11 +333,12 @@ mod tests {
         assert_eq!(l.total_secs, 330.0, "eight days back is outside the week");
         assert_eq!(l.plays, 2, "the skip is not a listen");
         assert_eq!(l.artists.iter().map(|t| (t.name.as_str(), t.plays)).collect::<Vec<_>>(), [("Ann", 2)], "only skipped: not a top artist");
-        // Taste: the past twelve weeks; this week House 300 s, Jazz 30 s; last week Jazz alone.
-        assert_eq!((l.taste.step, l.taste.starts.len()), ("week", 12));
-        assert_eq!(l.taste.genres, ["Jazz", "House"], "Jazz longest over all twelve");
-        assert_eq!(l.taste.shares[11], [30.0 / 330.0, 300.0 / 330.0]);
-        assert_eq!(l.taste.shares[10], [1.0, 0.0]);
+        // Taste, within the week: its days; today House alone, yesterday House 100 s and Jazz 30 s; eight days back
+        // is not in it.
+        assert_eq!((l.taste.step, l.taste.starts.len()), ("day", 7));
+        assert_eq!(l.taste.genres, ["House", "Jazz"]);
+        assert_eq!(l.taste.shares[6], [1.0, 0.0]);
+        assert_eq!(l.taste.shares[5], [100.0 / 130.0, 30.0 / 130.0]);
         // A year: weeks from Mondays, this week last.
         let y = listening(&rows, &facts, Period::Year, now, 0, None);
         assert_eq!(y.time.len(), 52);
@@ -348,10 +353,13 @@ mod tests {
         assert_eq!(days_of(2026, 10, 23) - days_of(2026, 10, 1), 22);
         let today = days_of(2026, 1, 15);
         let empty = std::collections::HashMap::new();
-        let months = taste(&[], &empty, Period::Month, today, 0);
+        // A month's weeks (Thursday the 15th: Monday the 12th last), a year's months, all's years since the log began.
+        let weeks = taste(&[], &empty, Period::Month, today, 0, None);
+        assert_eq!((weeks.step, weeks.starts.len(), weeks.starts[4], weeks.starts[0]), ("week", 5, days_of(2026, 1, 12) * DAY, days_of(2025, 12, 15) * DAY));
+        let months = taste(&[], &empty, Period::Year, today, 0, None);
         assert_eq!((months.starts[0], months.starts[11]), (days_of(2025, 2, 1) * DAY, days_of(2026, 1, 1) * DAY), "twelve months, across the year's turn");
-        let years = taste(&[], &empty, Period::Year, today, 0);
-        assert_eq!((years.starts.len(), years.starts[0]), (5, days_of(2022, 1, 1) * DAY));
+        let years = taste(&[], &empty, Period::All, today, 0, Some(days_of(2023, 6, 1)));
+        assert_eq!((years.starts.len(), years.starts[0]), (4, days_of(2023, 1, 1) * DAY));
     }
 
     #[test]

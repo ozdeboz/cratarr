@@ -40,15 +40,15 @@ markup. All remembered.
 - the headline figures as a row of stat tiles: tracks, albums, artists, hours, size;
 - a compilation's "Various Artists" is no artist: not counted, not a bar (it dwarfed every real one's, the owner);
 - Tracks (the owner, 2026-10-23): in a playlist or plays, one at a time (the panel's Count, as Genres and Artists
-  count): a meter, the top list (in the most playlists, most played: each the server's ranking of the whole set), and
+  count): the top list (in the most playlists, most played: each the server's ranking of the whole set), and
   for plays the tracks by how often (0, 1, 2–4, 5–9, 10–19, 20+); no tiles (playlists and missing tracks are Overview's);
 - Genres and Artists: every one sent, so each order (tracks, in a playlist, A–Z) is the top of the whole set;
 - shares as meters, never pies: lossless albums, albums below 320 kbps, tracks in a playlist;
 - decades as columns, each opening its ten years (the title a breadcrumb back);
-- Overview: the headline figures; Incoming (albums waiting, how long the oldest has); Growth (albums added per month,
-  the last two years, from what Cratarr knows of their arrival: an album with none is not counted, nothing filled in);
-  Heard (tracks played at least once, albums never played, favourites: the account's plays and stars); quality and
-  decades; genres and artists only on their own views (the owner,
+- Overview: the headline figures; Incoming (albums waiting, how long the oldest has); Growth (albums added per step of the
+  period: a week's days, a month's weeks, a year's months, all's years; from what Cratarr knows of their arrival: an album with none is not counted, nothing filled in);
+  Heard (tracks played at least once, albums never played, favourites: the account's plays and stars); Listed (tracks
+  in a playlist, tracks in one of the account's own crates, not Unlisted); quality and decades; genres and artists only on their own views (the owner,
   2026-10-23: the overview should not duplicate them), as bars of their tracks or of those in a playlist (the panel's
   Count: two scales and two rankings, so one at a time, the unit said over the bars);
 - the playlists' figures as tiles, and the tracks in the most playlists as a list.
@@ -63,8 +63,8 @@ own range, less of under it; the moods compared with the library (a bar either w
 **History** (the log, 0064): a period (Week, Month, Year);
 
 - **listening time:** columns per day (a week, a month) or per week (a year), the total as the headline;
-- **taste over time:** further back than the period, as last.fm shows it (the owner): the past 12 weeks (a week
-  chosen), 12 months (a month) or 5 years (a year); one line per genre, its share of the time listened then, the five
+- **taste over time:** within the period, as everything (the owner, 2026-10-23; at first it reached further back,
+  last.fm's way): a week's days, a month's weeks, a year's months, all's years since the log began; one line per genre, its share of the time listened then, the five
   heard longest (the fixed categorical order, checked for both themes; a legend with each one's average share);
 - **the top artists, albums and tracks** of the period, with how often.
 
