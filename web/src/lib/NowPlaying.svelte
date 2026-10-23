@@ -20,7 +20,8 @@
   import WaveLens from './WaveLens.svelte';
   import { loadWaveform, waveformOf } from './waveforms.svelte';
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
-  import { local, setRepeat, setShuffle } from './localPlayer.svelte';
+  import { local, restoreUpcoming, setRepeat, shuffleUpcoming } from './localPlayer.svelte';
+  import QueueMenu from './QueueMenu.svelte';
   import { playingCrateOuts } from './crates.svelte';
   import { localMode } from './deviceMusic.svelte';
   import HeartSheet from './HeartSheet.svelte';
@@ -145,6 +146,12 @@
   // More music's sheet (Radio and Autoplay), from the radio button.
   let moreOpen = $state(false);
   let queueOpen = $state(false);
+  /** The queue's menu (a long-press on the Queue button, lib/QueueMenu). */
+  let queueMenuOpen = $state(false);
+  function shuffleOnce() {
+    const before = shuffleUpcoming();
+    if (before) toast.show({ text: 'Shuffled.', tone: 'done', act: { label: 'Undo', run: () => restoreUpcoming(before) } });
+  }
   let outputOpen = $state(false);
   let sleepOpen = $state(false);
   const openMenu = (e: Event, start: 'menu' | 'lists' = 'menu') => {
@@ -507,12 +514,10 @@
             </div>
           {/if}
           <div class="transport" role="group" aria-label="Player controls">
-            <!-- Finamp's shuffle, left of previous; only where the page holds the queue (here, the app, a Cratarr
-                 player). -->
+            <!-- Shuffle, left of previous, where the page holds the queue (here, the app, a Cratarr player): once, no state
+                 (the owner, 2026-10-23: a queue always has an order); Undo puts the order before back. -->
             {#if isLocal()}
-              <button class="shuffle" class:on={local.shuffled} aria-label="Shuffle" aria-pressed={local.shuffled} onclick={() => setShuffle(!local.shuffled)}
-                ><Icon name="shuffle" size={22} /></button
-              >
+              <button class="shuffle" aria-label="Shuffle the rest of the queue" onclick={shuffleOnce}><Icon name="shuffle" size={22} /></button>
             {/if}
             <button aria-label="Previous track" onclick={() => send('previous')}><Icon name="previous" size={24} /></button>
             <button class="main" aria-label={paused() ? 'Play' : 'Pause'} onclick={() => send('play-pause')}
@@ -574,7 +579,7 @@
                 >{/if}</button
             >
           {/if}
-          <button class="act labelled queue" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)}
+          <button class="act labelled queue" aria-label="Queue" aria-expanded={queueOpen} onclick={() => (queueOpen = true)} use:longpress={() => (queueMenuOpen = true)}
             ><Icon name="playlists" size={24} /><small>{queuePlace}</small></button
           >
         </div>
@@ -583,6 +588,9 @@
     </div>
   </header>
 
+  {#if queueMenuOpen}
+    <QueueMenu onclose={() => (queueMenuOpen = false)} />
+  {/if}
   {#if queueOpen && np}
     <QueueSheet src={src} onclose={() => (queueOpen = false)} />
   {/if}

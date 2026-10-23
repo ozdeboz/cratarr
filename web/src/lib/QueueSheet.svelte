@@ -26,6 +26,7 @@
   import { sheetDrag } from './sheetDrag';
   import QueuePlaylistSheet from './QueuePlaylistSheet.svelte';
   import SubjectMenu from './SubjectMenu.svelte';
+  import QueueMenu from './QueueMenu.svelte';
   import QueuesSheet from './QueuesSheet.svelte';
   import { Reorder } from './reorder.svelte';
   import TrackMenu, { type MenuTrack, type QueuePlace } from './TrackMenu.svelte';
@@ -107,6 +108,8 @@
 
 
   // Clear: what comes next goes; the toast's Undo puts it back.
+  /** The queue's menu (lib/QueueMenu). */
+  let queueMenu = $state(false);
   function clear() {
     heavy();
     const removed = clearUpcoming();
@@ -247,10 +250,9 @@
         {:else}
           <span class="title">Queue</span>
           <span class="tools">
+            <!-- Search and the queue's menu (decision 0058: Shuffle, Save as playlist, Export…, Queues…, Clear). -->
             <button aria-label="Search the queue" onclick={() => (searching = true)}><Icon name="search" size={22} /></button>
-            <button aria-label="Queues" title="Queues" onclick={() => (switching = true)}><Icon name="list" size={22} /></button>
-            <button aria-label="New playlist from the queue" title="New playlist from the queue" onclick={() => (saving = true)}><Icon name="intoBox" size={22} /></button>
-            {#if here}<button aria-label="Clear the queue" disabled={!np.upcoming.length} onclick={clear}><Icon name="clearQueue" size={22} /></button>{/if}
+            <button aria-label="Menu of the queue" title="Menu" onclick={() => (queueMenu = true)}><Icon name="moreVert" size={22} /></button>
           </span>
         {/if}
       </div>
@@ -384,6 +386,9 @@
 {/if}
 {#if saving}
   <QueuePlaylistSheet onclose={() => (saving = false)} />
+{/if}
+{#if queueMenu}
+  <QueueMenu onclose={() => (queueMenu = false)} />
 {/if}
 {#if fromMenu}
   <SubjectMenu subject={fromMenu} onclose={() => (fromMenu = null)} />

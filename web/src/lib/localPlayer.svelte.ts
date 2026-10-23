@@ -878,6 +878,27 @@ export function setShuffle(on: boolean) {
   replaceUpcoming([...ahead, ...after.slice(0, run), ...(on ? shuffledCopy(own) : inOrder(own, reached(local.queue, local.index))), ...others, ...tail]);
 }
 
+/** Shuffle, once (the owner, 2026-10-23: a queue always has an order; shuffle is an action, not a state): what comes of
+ *  the queue's own tracks mixed, the playing track kept; what was added by hand stays ahead, Radio's inserts right after
+ *  the playing track and Autoplay's tail last, as setShuffle does. Returns the order before, for its Undo
+ *  (`restoreUpcoming`); null with nothing to mix. */
+export function shuffleUpcoming(): LocalTrack[] | null {
+  if (local.index < 0) return null;
+  const before = local.queue.slice(local.index + 1);
+  const ahead = addedAhead(local.queue, local.index);
+  const after = before.slice(ahead.length);
+  let run = 0;
+  while (run < after.length && after[run].lane === 'radio') run++;
+  const rest = after.slice(run);
+  const own = rest.filter((t) => !t.lane);
+  if (own.length < 2) return null;
+  const others = rest.filter((t) => t.lane && t.lane !== 'autoplay');
+  const tail = rest.filter((t) => t.lane === 'autoplay');
+  local.shuffled = false;
+  replaceUpcoming([...ahead, ...after.slice(0, run), ...shuffledCopy(own), ...others, ...tail]);
+  return before;
+}
+
 /** Repeat off, one or all: the player that plays applies it (here, the app, or Cratarr's player). Repeat all turns
  *  Autoplay off: both say what comes when the queue ends (decision 0036, amended). Radio lives with both. */
 export function setRepeat(mode: Repeat) {
