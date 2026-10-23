@@ -1,7 +1,7 @@
 <script lang="ts">
   import ListHead from './lib/ListHead.svelte';
   import { PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, playlistBy, usePageAction } from './lib/pageView.svelte';
-  import { switchOn } from './lib/listFilter.svelte';
+  import { passing, switchOn } from './lib/listFilter.svelte';
   import type { Playlist, PlayMode } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
   import { live, queueTap } from './lib/live.svelte';
@@ -49,6 +49,8 @@
   let menu = $state<Menu | null>(null);
 
   const np = $derived(playing());
+  // Its conditions (decision 0061): the server says which playlists pass, any or all of their tracks.
+  const pass = passing(() => 'playlists', () => ({ list: { kind: 'playlists' }, source: prefs.source || undefined }));
   const items = $derived.by(() => {
     const q = pageView.query.trim().toLowerCase();
     let list = shownPlaylists().map((p) => {
@@ -58,6 +60,8 @@
     if (q) list = list.filter((p) => p.name.toLowerCase().includes(q));
     if (switchOn('playlists', 'favourites')) list = list.filter((p) => isPlaylistFavorite(p.id));
     if (switchOn('playlists', 'mine')) list = list.filter((p) => p.mine !== false);
+    const keys = pass.keys;
+    if (keys) list = list.filter((p) => keys.has(p.id));
     // Pinned ones first, in the order pinned; the rest in the list's order (its header, or View), either way round.
     const pin = (id: string) => {
       const i = prefs.pinned.indexOf(id);

@@ -18,7 +18,7 @@
   import { on, stream } from './lib/events.svelte';
   import { isFavorite, loadAlbumFavorites } from './lib/favourites.svelte';
   import { isLossless, pageView } from './lib/pageView.svelte';
-  import { switchOn } from './lib/listFilter.svelte';
+  import { passing, switchOn } from './lib/listFilter.svelte';
   import { untrack } from 'svelte';
   import { me } from './lib/me.svelte';
   import { loadExcluded } from './lib/exclusions.svelte';
@@ -140,8 +140,11 @@
     for (const s of untrack(() => sources ?? []))
       loadAlbumFavorites(s.id).then((ok) => ok || toast.show({ text: `${s.label} can't list favourite albums`, tone: 'error' }));
   });
+  // Its conditions (decision 0061): the server says which albums pass, any or all of their tracks.
+  const pass = passing(() => 'library', () => ({ list: { kind: 'library' }, source: prefs.source || undefined }));
   const shown = $derived.by<ShelfSource[] | null>(() => {
-    if (!sources || !(fav || up || unplayed || top || lossless)) return sources;
+    const keys = pass.keys;
+    if (!sources || !(fav || up || unplayed || top || lossless || keys)) return sources;
     const keep = (s: ShelfSource, a: ListedAlbum) => {
       const u = useOf(s.id, a.id);
       return (
@@ -149,7 +152,8 @@
         (!up || verdictOf(s, a)?.kind === 'upgrade') &&
         (!unplayed || (u.plays === 0 && !u.played)) &&
         (!top || u.rating >= 4) &&
-        (!lossless || isLossless(a.format))
+        (!lossless || isLossless(a.format)) &&
+        (!keys || keys.has(a.id))
       );
     };
     return sources.map((s) => ({ ...s, albums: s.albums.filter((a) => keep(s, a)) }));

@@ -28,6 +28,7 @@
     crateRows,
     crateTempo,
     type TempoBands,
+    type CrateLook,
     crateToPlaylist,
     createCrate,
     createPlaylist,
@@ -53,8 +54,6 @@
     crateOf,
     crates,
     crateRadio as crateRadioOf,
-    playCrate,
-    shuffleCrate,
     cycleFavouriteAlbums,
     cycleFavourites,
     EDIT_CRATE,
@@ -121,8 +120,8 @@
   import TopPill from './TopPill.svelte';
   import SelectBar from './SelectBar.svelte';
   import { work } from './panelWork.svelte';
-  import { prefs, type FilterCondition, type ListSort, type PanelKind } from './prefs.svelte';
-  import { activeConditions, switchOn } from './listFilter.svelte';
+  import { prefs, type ListSort, type PanelKind } from './prefs.svelte';
+  import { conditionsFor, filtersOn, hiddenLibraries, passing, switchOn } from './listFilter.svelte';
   import { trackOrders, type TrackOrder } from './pageView.svelte';
   import { clockText, paused, playing } from './remote.svelte';
   import { on } from './events.svelte';
@@ -298,7 +297,8 @@
     const shownFav = () => (c && crates.list ? favouritesOf(c) : undefined);
     const fav = shownFav();
     const alb = c && crates.list ? favouriteAlbumsOf(c) : undefined;
-    const key = `${want}\n${fav}\n${alb}`;
+    const look = c ? untrack(() => crateLook) : {};
+    const key = `${want}\n${fav}\n${alb}\n${c ? lookKey : ''}`;
     if (key !== shownFor) {
       rows = null;
       error = null;
@@ -308,7 +308,7 @@
     }
     // A crate keeps the pages it has (at least the first) when it is asked for again.
     const asked = c
-      ? crateRows(c, 0, Math.max(PAGE, untrack(() => rows?.length ?? 0)), prefs.source || undefined, fav, alb)
+      ? crateRows(c, 0, Math.max(PAGE, untrack(() => rows?.length ?? 0)), prefs.source || undefined, fav, alb, look)
       : a
         ? (a.source === DEVICE ? Promise.resolve(deviceAlbumView(a.id)) : albumView(a.source, a.id)).then((r) => {
             if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
@@ -452,23 +452,28 @@
     set: setSort,
     columns: { kind: 'tracks' as const, shown: cols.map((c) => c.id), offered: sortFields.map((f) => f.value) },
   });
-  // The list's filter, remembered per kind of list (decisions 0060 and 0061): its switches, and its conditions on what
-  // its rows know (tempo, year, favourite) here; a condition on what only the server knows (genre, mood, …) is the
-  // server's.
+  // The list's filter, remembered per kind of list (decisions 0060 and 0061): its switches here; its conditions the
+  // server's (any of what it knows of a track: genre, mood, tempo, …), which says which rows pass. A crate's rows come
+  // filtered and ordered by the server, as they are paged, from the libraries switched on.
   const filterOn = (key: string) => switchOn(kind, key);
-  const conditions = $derived(activeConditions(kind));
-  function rowHolds(c: FilterCondition, r: PlaylistRow): boolean {
-    const v = c.value;
-    const range = (x: number | null | undefined) =>
-      v.kind === 'range' && x != null && (v.min === null || x >= v.min) && (v.max === null || x <= v.max);
-    const yes = c.axis === 'bpm' ? range(r.bpm) : c.axis === 'year' ? range(r.year) : c.axis === 'favourite' ? !!r.id && isFavorite(source, r.id) : true;
-    return yes !== c.not;
-  }
+  const crateLook = $derived<CrateLook>({ without: hiddenLibraries(), filter: conditionsFor('crate'), order: sortKey, down: sortDown });
+  const lookKey = $derived(JSON.stringify(crateLook));
+  const pass = passing(() => kind, () =>
+    crate
+      ? { list: { kind: 'crate', id: crate }, source: prefs.source || undefined }
+      : album && album.source !== DEVICE
+        ? { list: { kind: 'album', source: album.source, id: album.id } }
+        : artist && artist.source !== DEVICE
+          ? { list: { kind: 'artist', source: artist.source, name: artist.name } }
+          : p && !multi
+            ? { list: { kind: 'playlist', id: p.id }, source: prefs.source || undefined }
+            : null,
+  );
   const keeps = (r: PlaylistRow) =>
     (!filterOn('missing') || (!!r.id && !r.missing)) &&
     (!filterOn('favourites') || (!!r.id && isFavorite(source, r.id))) &&
     (!filterOn('unplayed') || !r.play_count) &&
-    conditions.every((c) => rowHolds(c, r));
+    (!pass.keys || pass.keys.has(r.entry));
   const ordered = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
   /** The rows as the list shows them, each with its place in the subject (`i`). */
   const shown = $derived.by(() => {
@@ -488,7 +493,9 @@
     const byNumber = (x: number | null, y: number | null) => (x === y ? 0 : x === null ? -1 : y === null ? 1 : x - y);
     // Turned round, equals keep the subject's order (an artist's most played: as their Top tracks show them).
     const way = sortDown ? -1 : 1;
-    if (sortKey === 'own') {
+    if (crate) {
+      // As the server ordered them.
+    } else if (sortKey === 'own') {
       if (sortDown) list.reverse();
     } else if (['length', 'tempo', 'year', 'track', 'plays', 'lastPlayed', 'added'].includes(sortKey)) list.sort((a, b) => way * byNumber(num(a.r), num(b.r)));
     else list.sort((a, b) => way * ordered(text(a.r), text(b.r)));
@@ -497,6 +504,8 @@
   const shownRows = $derived(shown ? shown.map((x) => x.r) : []);
   const shownPlayable = $derived(shownRows.filter((r) => r.id && !r.missing));
   const sorted = $derived(sortKey !== 'own' || sortDown);
+  /** What shows is not the subject as it is: ordered otherwise, or filtered; it plays as it shows. */
+  const reshaped = $derived(sorted || filtersOn(kind) > 0);
 
   // Select mode (Symfonium's): a long-press on a track or the header's icon starts it, a tap ticks a track, and a bar
   // over the list acts on the ticked ones. A tick is a row (its place), so a track that is there twice is ticked once.
@@ -589,7 +598,7 @@
     if (!c || crateEditing) return;
     const fav = untrack(() => (crates.list ? favouritesOf(c) : undefined));
     const alb = untrack(() => (crates.list ? favouriteAlbumsOf(c) : undefined));
-    crateTempo(c, prefs.source || undefined, fav, alb).then(
+    crateTempo(c, prefs.source || undefined, fav, alb, { without: crateLook.without, filter: crateLook.filter }).then(
       (t) => {
         if (crate === c) crateBands = t;
       },
@@ -796,7 +805,7 @@
       if (!e.isIntersecting || loadingMore || !rows || rows.length >= total) return;
       loadingMore = true;
       try {
-        const r = await crateRows(c, rows.length, PAGE, prefs.source || undefined, favouritesOf(c), favouriteAlbumsOf(c));
+        const r = await crateRows(c, rows.length, PAGE, prefs.source || undefined, favouritesOf(c), favouriteAlbumsOf(c), crateLook);
         if (crate === c && rows) {
           rows = [...rows, ...r.rows];
           loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
@@ -871,11 +880,11 @@
    *  whole crate, not the pages shown so far (crates.svelte.ts: its shuffle from all of it; 500 at most). */
   async function actOnRows(mode: PlayMode) {
     const c = crate;
-    if (c && !crateEditing) return mode === 'shuffle' ? shuffleCrate(c, title) : playCrate(c, title, mode);
+    if (c && !crateEditing) return playCollection({ kind: 'crate', id: c }, mode, title, undefined, crateLook);
     // The server's library (decision 0059): an album or an artist whole, in its order; a sorted view what shows.
     if (!onDevice) {
-      if (album && !sorted) return playCollection({ kind: 'album', source: album.source, id: album.id }, mode, title);
-      if (artist && !sorted) return playCollection({ kind: 'artist', source: artist.source, name: artist.name }, mode, title);
+      if (album && !reshaped) return playCollection({ kind: 'album', source: album.source, id: album.id }, mode, title);
+      if (artist && !reshaped) return playCollection({ kind: 'artist', source: artist.source, name: artist.name }, mode, title);
       return playCollection({ kind: 'tracks', source, ids: shownPlayable.map((r) => r.id!) }, mode, title);
     }
     const tracks = tracksOf(shownPlayable);
@@ -931,10 +940,10 @@
       // lists, what shows, in the order it shows (a queue's order is what is seen).
       if (onDevice) return await playPlaylistFrom(name, src, tracksOf(ok, src), ok.indexOf(r));
       const c = crate;
-      if (c && !crateEditing && !sorted) return await playCollection({ kind: 'crate', id: c }, 'play', name, r.id);
-      if (album && !sorted) return await playCollection({ kind: 'album', source: album.source, id: album.id }, 'play', name, r.id);
-      if (artist && !sorted) return await playCollection({ kind: 'artist', source: artist.source, name: artist.name }, 'play', name, r.id);
-      if (p && !multi && !sorted) return await playCollection({ kind: 'playlist', id: p.id }, 'play', name, r.id);
+      if (c && !crateEditing) return await playCollection({ kind: 'crate', id: c }, 'play', name, r.id, crateLook);
+      if (album && !reshaped) return await playCollection({ kind: 'album', source: album.source, id: album.id }, 'play', name, r.id);
+      if (artist && !reshaped) return await playCollection({ kind: 'artist', source: artist.source, name: artist.name }, 'play', name, r.id);
+      if (p && !multi && !reshaped) return await playCollection({ kind: 'playlist', id: p.id }, 'play', name, r.id);
       await playCollection({ kind: 'tracks', source: src, ids: ok.map((x) => x.id!) }, 'play', name, r.id);
     } catch (e) {
       toast.fail(e, 'Could not start playing');

@@ -4,6 +4,7 @@ import { albumCoverUrl, crateImageUrl, deleteCrate, getCrates, leaveOutOfCrate, 
 import { dropFromQueue, local, startRadio } from './localPlayer.svelte';
 import { isLocal, shownPlaylists } from './output.svelte';
 import { pickOf, playCollection } from './play.svelte';
+import { hiddenLibraries } from './listFilter.svelte';
 import { prefs } from './prefs.svelte';
 import { viewPlaylist } from './panel.svelte';
 import { toast } from './toast.svelte';
@@ -13,7 +14,7 @@ export const crates = $state<{ list: Crate[] | null; error: string | null }>({ l
 
 export async function loadCrates() {
   try {
-    const list = await getCrates(prefs.source || undefined);
+    const list = await getCrates(prefs.source || undefined, hiddenLibraries());
     // A tap still on its way to the server keeps showing.
     crates.list = list.map((c) => ({
       ...c,

@@ -17,10 +17,10 @@
   import Switch from './Switch.svelte';
   import ConditionList from './ConditionList.svelte';
   import type { ListAxis } from './ConditionCard.svelte';
-  import { clearFilter, filterOf, filtersOn, setConditions, setSwitch, switchOn } from './listFilter.svelte';
+  import { clearFilter, filterOf, filtersOn, hiddenLibraries, inView, setConditions, setSwitch, switchOn } from './listFilter.svelte';
   import { SWITCHES } from './pageView.svelte';
   import { startCrate } from './crates.svelte';
-  import { getCrateAxes, getLibraries, getSettings, getStatus, type LibrariesView, type LibraryUse } from './api';
+  import { filterList, getCrateAxes, getLibraries, getSettings, getStatus, type LibrariesView, type LibraryUse } from './api';
   import { me } from './me.svelte';
   import Icon from './Icon.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -52,11 +52,15 @@
   const quantified = $derived(list === 'library' || list === 'playlists');
   const switches = $derived((SWITCHES[list] ?? []).filter((w) => !w.incoming || hasIncoming));
   const filter = $derived(filterOf(list));
-  // The axes and their values, the whole library's (the most common first).
+  // The axes and their values with their counts in the list in view, the most common first (decision 0061: over all
+  // its items, so everything there is to choose from shows); a server from before it: the whole library's, uncounted.
   let axes = $state<ListAxis[]>([]);
   $effect(() => {
     if (!conditioned) return;
-    getCrateAxes(prefs.source || undefined).then(
+    const at = inView[list];
+    const without = at && (at.list.kind === 'library' || at.list.kind === 'crate') ? hiddenLibraries() : undefined;
+    const whole = () => getCrateAxes(prefs.source || undefined, hiddenLibraries());
+    (at ? filterList(at.list, [], at.source, without).then((f) => f.axes, whole) : whole()).then(
       (a) => (axes = a),
       (e) => toast.fail(e, "The filter's conditions couldn't be loaded"),
     );

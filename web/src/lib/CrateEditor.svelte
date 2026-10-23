@@ -7,6 +7,7 @@
   // (after 300 ms); its size goes to the panel (`total`), which shows it under the name.
   import { coverUrl, getCrateAxes, previewCrate, type Axis, type PlaylistRow } from './api';
   import ConditionList from './ConditionList.svelte';
+  import { hiddenLibraries } from './listFilter.svelte';
   import { prefs, type FilterCondition } from './prefs.svelte';
   import { toast } from './toast.svelte';
   import Row from './Row.svelte';
@@ -30,7 +31,7 @@
     const k = key;
     const asked = JSON.parse(k) as FilterCondition[];
     const t = setTimeout(() => {
-      previewCrate(asked.filter((c) => c.enabled !== false), 50, prefs.source || undefined).then(
+      previewCrate(asked, 50, prefs.source || undefined, { without: hiddenLibraries() }).then(
         (p) => {
           if (k !== key) return;
           preview = p;

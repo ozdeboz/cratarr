@@ -5,6 +5,7 @@
   // owner) (its tracks as its favourites settings have them),
   // then the shared groups: View; Save as playlist (a genre: Start a crate from it); Keep on this device and Share;
   // Edit (one's own); Delete (one's own, last).
+  import { hiddenLibraries } from './listFilter.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuGroup from './MenuGroup.svelte';
@@ -35,7 +36,7 @@
   $effect(() => {
     const c = id;
     if (!c) return;
-    crateRows(c, 0, 1, prefs.source || undefined)
+    crateRows(c, 0, 1, prefs.source || undefined, undefined, undefined, { without: hiddenLibraries() })
       .then((r) => (source = r.source))
       .catch(() => {});
   });

@@ -15,7 +15,8 @@
   import PageLoading from './lib/PageLoading.svelte';
 
   // Asked for when the page shows, and again when the playlists change (sorting a track shrinks Unlisted).
-  const listsKey = $derived(shownPlaylists().map((p) => p.count).join(','));
+  // And when a library is switched on or off: a crate fills from every library switched on.
+  const listsKey = $derived(`${shownPlaylists().map((p) => p.count).join(',')}|${prefs.hiddenLibraries.join(',')}`);
   $effect(() => {
     void listsKey;
     loadCrates();
