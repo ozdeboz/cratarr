@@ -117,6 +117,9 @@ fn uses_of(user: &str, files: &[crates::Facts]) -> anyhow::Result<HashMap<String
     Ok(out)
 }
 
+/// How much of an album's length heard makes it no longer new to a listener (the owner, 2026-10-23: "5%").
+const HEARD_SHARE: f64 = 0.05;
+
 /// How many each of Home's looks back shows; and after how many days unplayed an album is half as far from the listening
 /// as one never played (Grave digging).
 const DIG: usize = 12;
@@ -2572,6 +2575,29 @@ impl PlaylistService {
             }
             let sources = super::taste::Sources { favourites, playlists, plays, excluded, skipped: skips.into_iter().collect() };
             Ok(super::taste::taste(alike, &sources, &off))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    }
+
+    /// Of these albums (Cratarr's own), those the asking account has heard a good part of (`HEARD_SHARE` of their length,
+    /// by their tracks' plays times their lengths): Home's New for you leaves them out (the owner, 2026-10-23).
+    pub async fn heard_albums(&self, ids: Vec<String>) -> Result<Vec<String>, ToggleError> {
+        let user = asking_user().ok_or_else(|| ToggleError::Refused("What was heard is an account's own: sign in.".into()))?;
+        let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+        tokio::task::spawn_blocking(move || -> Result<Vec<String>, ToggleError> {
+            let plays = serve.userdata.song_plays(&user)?;
+            let mut heard = Vec::new();
+            for id in ids {
+                let Some(album) = serve.library.album(&id)? else { continue };
+                let songs = album.song.unwrap_or_default();
+                let length: u64 = songs.iter().map(|s| s.duration).sum();
+                let played: u64 = songs.iter().map(|s| u64::from(plays.get(&s.id).map_or(0, |p| p.0)) * s.duration).sum();
+                if length > 0 && played as f64 >= HEARD_SHARE * length as f64 {
+                    heard.push(id);
+                }
+            }
+            Ok(heard)
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?

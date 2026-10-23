@@ -141,6 +141,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/history/listenbrainz", post(import_listenbrainz))
         .route("/api/history/profile", get(taste_profile))
         .route("/api/home/digging", get(home_digging))
+        .route("/api/home/heard", post(home_heard))
         .route("/api/history/sleep", post(sleep))
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
             .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
@@ -2510,6 +2511,16 @@ struct TasteQuery {
     period: Option<crate::app::history::Period>,
     /// Sources switched off, comma-separated: favourites, playlists, plays, skipped, excluded (absent: all on).
     off: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct HeardAlbums {
+    ids: Vec<String>,
+}
+
+/// Of these albums, those the asking account heard 5% or more of (Home's New for you leaves them out).
+async fn home_heard(State(app): State<Arc<App>>, Json(b): Json<HeardAlbums>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!({ "heard": app.playlists.heard_albums(b.ids).await? })))
 }
 
 /// Home's Blast from the past (favourite tracks unplayed longest) and Grave digging (the albums most like the taste,

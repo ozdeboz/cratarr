@@ -1,11 +1,11 @@
 <script lang="ts">
-  // Home (the owner, 2026-10-23: the leftmost tab): the quick look. New in your library (the newest albums, a swipe
-  // row; All opens the Library by date added), Sounds like your week (the week's crate: what sounds like the last seven
+  // Home (the owner, 2026-10-23: the leftmost tab): the quick look. New for you (the newest albums not heard yet: less
+  // than 5% of their length, a swipe row; All opens the Library by date added), Sounds like your week (the week's crate: what sounds like the last seven
   // days' plays, none of them), Jump back in (the albums and playlists played last, and the queues left last), Blast
   // from the past (the favourite tracks unplayed longest) and Grave digging (the albums most like the taste and furthest
   // from the listening), and Needs you (claude-632's, lib/HomeNeeds). A tile with nothing to show is left out.
   import { onMount } from 'svelte';
-  import { coverUrl, crateRows, getCrate, getDigging, playlistStats, type Digging, type PlaylistRow } from './lib/api';
+  import { coverUrl, crateRows, getCrate, getDigging, heardAlbums, playlistStats, type Digging, type PlaylistRow } from './lib/api';
   import AlbumCard from './lib/AlbumCard.svelte';
   import { addedOn, albumUses, library, loadAlbumUses, readLibrary } from './lib/albums.svelte';
   import { albumCoverUrl } from './lib/api';
@@ -31,13 +31,28 @@
   });
   const sources = $derived((library.view?.sources ?? []).filter((s) => s.id !== DEVICE));
 
-  // New in your library: every used library's newest albums.
-  const newest = $derived(
+  // New for you (the owner, 2026-10-23): every used library's newest albums, those heard 5% or more of left out (asked
+  // of the server for the newest few dozen).
+  const CANDIDATES = 60;
+  const candidates = $derived(
     sources
       .flatMap((s) => s.albums.filter((a) => a.added !== null).map((a) => ({ source: s.id, a })))
       .sort((x, y) => y.a.added! - x.a.added!)
-      .slice(0, NEWEST),
+      .slice(0, CANDIDATES),
   );
+  let heard = $state<Set<string> | null>(null);
+  $effect(() => {
+    const ids = candidates.filter((c) => c.source === 'cratarr').map((c) => c.a.id);
+    if (!ids.length) {
+      heard = new Set();
+      return;
+    }
+    heardAlbums(ids).then(
+      (r) => (heard = new Set(r.heard)),
+      () => (heard = new Set()),
+    );
+  });
+  const newest = $derived(heard ? candidates.filter((c) => !(c.source === 'cratarr' && heard!.has(c.a.id))).slice(0, NEWEST) : []);
   function allNewest() {
     prefs.libraryOrder = 'added';
     prefs.libraryDown = true;
@@ -173,8 +188,8 @@
 
 <div class="home">
   {#if newest.length}
-    <section aria-label="New in your library">
-      <SectionHead title="New in your library" onmore={allNewest} />
+    <section aria-label="New for you">
+      <SectionHead title="New for you" onmore={allNewest} />
       <ul class="shelf">
         {#each newest as n (n.source + n.a.id)}
           <li><AlbumCard source={n.source} album={n.a} lines={[n.a.artist ?? '', `added ${addedOn(n.a.added!)}`]} /></li>
