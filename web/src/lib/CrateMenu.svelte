@@ -102,7 +102,7 @@
   {onclose}
   images={crateArt(id)}
   title={name}
-  chips={[genre !== null ? 'Genre' : 'Crate', ...(tracks !== null ? [plural(tracks, 'track')] : [])]}
+  chips={[genre !== null ? 'Genre' : like !== null ? 'Sounds like' : 'Crate', ...(tracks !== null ? [plural(tracks, 'track')] : [])]}
   actions={[
     { icon: 'play', label: 'Play', disabled: working, onclick: () => run(() => playCrate(id, name, 'play'), null, 'Could not start playing') },
     { icon: 'shuffle', label: 'Shuffle', disabled: working, onclick: () => run(() => shuffleCrate(id, name), null, 'Could not start playing') },

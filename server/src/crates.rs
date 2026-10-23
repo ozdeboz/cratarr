@@ -263,8 +263,8 @@ pub fn tempo_bands(bpms: impl IntoIterator<Item = Option<f64>>) -> TempoBands {
 /// A list's profile (the owner, 2026-10-23): what its tracks are like, shown on top of it. Its most telling style tags
 /// and artists (common in the list, rare in the library, on at least a few of its tracks), each number's density with
 /// its middle half and middle on one scale for every list (the library's own, tempo today's 60 to 180 BPM), and how
-/// far each of CLAP's moods sits above or below the library's. A number all its tracks share is no row (an album's
-/// year): one value is no spread.
+/// far each of CLAP's moods sits above or below the library's. A number all its tracks share (an album's year) is
+/// that one value, no spread (`one`; the owner, 2026-10-23: shown as the value, not as a graph).
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Profile {
     pub tracks: usize,
@@ -287,6 +287,9 @@ pub struct NumberRow {
     pub q1: f64,
     pub mid: f64,
     pub q3: f64,
+    /// Every track has this one value: the row is the value, no density.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub one: Option<f64>,
 }
 
 /// One of CLAP's moods: the list's middle against the library's, -1 (far below) to 1 (far above).
@@ -314,17 +317,24 @@ pub fn profile(list: &[&Facts], library: &[&Facts]) -> Profile {
         [("tempo", |f| f.bpm), ("energy", |f| f.energy), ("danceability", |f| f.danceability), ("year", |f| f.year)];
     for (key, get) in numbers {
         let mine = sorted(list.iter().filter_map(|f| get(f)).collect());
-        if mine.first() == mine.last() {
+        let Some(&first) = mine.first() else { continue };
+        if mine.last() == Some(&first) {
+            out.numbers.push(NumberRow { key, lo: first, hi: first, bins: Vec::new(), q1: first, mid: first, q3: first, one: Some(first) });
             continue;
         }
         let (lo, hi) = if key == "tempo" {
             (TEMPO_LO, TEMPO_LO + TEMPO_BAND * TEMPO_BANDS as f64)
+        } else if key == "year" {
+            // The library's oldest to newest (the owner: its 1950s albums were lost at the 5th percentile, 1993), a
+            // year before 1900 being a broken tag ("1").
+            let all = sorted(library.iter().filter_map(|f| f.year).filter(|y| *y >= 1900.0).collect());
+            (all.first().copied().unwrap_or(1900.0), all.last().copied().unwrap_or(2100.0))
         } else {
             let all = sorted(library.iter().filter_map(|f| get(f)).collect());
             (crate::similarity::quantile(&all, 0.05), crate::similarity::quantile(&all, 0.95))
         };
         let q = |p| crate::similarity::quantile(&mine, p);
-        out.numbers.push(NumberRow { key, lo, hi, bins: density(mine.iter().copied(), lo, hi), q1: q(0.25), mid: q(0.5), q3: q(0.75) });
+        out.numbers.push(NumberRow { key, lo, hi, bins: density(mine.iter().copied(), lo, hi), q1: q(0.25), mid: q(0.5), q3: q(0.75), one: None });
     }
     if out.heard > 0 {
         for (k, name) in crate::similarity::MOODS.into_iter().enumerate() {
@@ -1033,7 +1043,7 @@ mod tests {
         let (list, all): (Vec<&Facts>, Vec<&Facts>) = (album.iter().collect(), library.iter().collect());
         let p = profile(&list, &all);
         assert_eq!(p.styles, ["jungle"], "the rare one; electronic is everywhere, one track's odd tag not enough");
-        assert_eq!(p.numbers.iter().map(|r| r.key).collect::<Vec<_>>(), ["tempo"], "the year is one value: no row");
+        assert_eq!(p.numbers.iter().map(|r| (r.key, r.one)).collect::<Vec<_>>(), [("tempo", None), ("year", Some(2003.0))], "the year is one value");
         assert_eq!(p.numbers[0].mid, 170.0);
     }
 

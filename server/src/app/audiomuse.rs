@@ -106,7 +106,9 @@ pub fn weighted(text: Option<&str>) -> Vec<(String, f64)> {
         .split(',')
         .filter_map(|p| {
             let (name, score) = p.trim().rsplit_once(':')?;
-            Some((name.trim().to_string(), score.trim().parse::<f64>().ok()?))
+            // Lowercase, as most of its tags are: four come capitalised from its model's tag list ("Hip-Hop",
+            // "House", "Mellow", "Progressive rock").
+            Some((name.trim().to_lowercase(), score.trim().parse::<f64>().ok()?))
         })
         .filter(|(n, s)| !n.is_empty() && s.is_finite())
         .collect();

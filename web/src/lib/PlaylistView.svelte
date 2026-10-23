@@ -70,6 +70,7 @@
     forgetDraft,
     keepDraft,
     likeParts,
+    nameLike,
     seeded,
     viewLike,
     keptDraft,
@@ -626,6 +627,7 @@
     let gone = false;
     getCrate(c)
       .then((d) => {
+        nameLike(c, d.name);
         const v = d.conditions.find((x) => x.value.kind === 'like')?.value;
         return v && v.kind === 'like' ? likeCurve(v.of, prefs.source || undefined) : null;
       })
@@ -2315,7 +2317,7 @@
   .head-spread {
     align-self: stretch;
     width: 100%;
-    margin: 12px 0 2px;
+    margin: 6px 0 2px;
   }
 
   .meta-main {

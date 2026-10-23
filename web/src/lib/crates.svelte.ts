@@ -204,6 +204,8 @@ export function likeParts(crate: string | null): { item: string; count: number }
 }
 /** Their names, as the server gives them ("Sounds like …"), by crate id. */
 const likeNames = $state<Record<string, string>>({});
+/** A Sounds like crate's name as the server gave it (its view reads the crate). */
+export const nameLike = (crate: string, name: string) => (likeNames[crate] = name);
 export function viewLike(id: string, count = LIKE_COUNT) {
   const crate = LIKE + id + (count === LIKE_COUNT ? '' : `@${count}`);
   viewPlaylist(CRATE + crate);

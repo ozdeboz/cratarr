@@ -480,14 +480,15 @@ export type Filtered = {
   profile?: ListProfileData | null;
 };
 /** What a list's tracks are like (the server's crates::Profile): telling style tags and artists, each number's density
- *  on one scale with its middle half and middle (a number all share is left out), and CLAP's moods against the
+ *  on one scale with its middle half and middle (a number all share: that value), and CLAP's moods against the
  *  library's (-1 to 1). */
 export type ListProfileData = {
   tracks: number;
   heard: number;
   styles: string[];
   artists: string[];
-  numbers: { key: 'tempo' | 'energy' | 'danceability' | 'year'; lo: number; hi: number; bins: number[]; q1: number; mid: number; q3: number }[];
+  /** `one`: every track has this value (an album's year): shown as the value, no graph. */
+  numbers: { key: 'tempo' | 'energy' | 'danceability' | 'year'; lo: number; hi: number; bins: number[]; q1: number; mid: number; q3: number; one?: number }[];
   moods: { name: string; lift: number }[];
 };
 /** A filter on the list in view: `without`, the libraries switched off (the Library's albums and a crate's tracks). */
