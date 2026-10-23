@@ -37,6 +37,7 @@ pub mod history;
 pub mod listenbrainz;
 pub mod radio;
 pub mod similar;
+pub mod taste;
 pub mod tempo;
 mod settings;
 mod shelf;

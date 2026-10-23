@@ -181,11 +181,13 @@ struct Spread {
 /// What a set of tracks is like.
 #[derive(Debug, Clone, Default)]
 pub struct Profile {
+    /// How many tracks it holds, and how much they weigh together (as many, each weighing one).
     n: usize,
+    mass: f64,
     /// Its tracks' places, in order.
     members: Vec<usize>,
-    /// Per kind of word, how many of its tracks have each word.
-    counts: [HashMap<u32, u32>; WORDS.len()],
+    /// Per kind of word, how much of its tracks (by weight) have each word.
+    counts: [HashMap<u32, f64>; WORDS.len()],
     /// Per kind of word, its tf-idf weights (the share of its tracks having the word times its rarity) and their length.
     weights: [HashMap<u32, f64>; WORDS.len()],
     norms: [f64; WORDS.len()],
@@ -200,40 +202,80 @@ impl Profile {
         let mut members = set.to_vec();
         members.sort_unstable();
         members.dedup();
-        let once = members.clone();
-        Self::of_counted(lib, &once, track)
+        Self::of_weighted(lib, &members.into_iter().map(|i| (i, 1.0)).collect::<Vec<_>>(), track)
     }
 
     /// As `of`, each place counting as often as it is in `set` (a weighted seed: Sounds like your week's tracks by how
     /// often and how lately they were heard).
     pub fn of_counted<'a>(lib: &Library, set: &[usize], track: impl Fn(usize) -> &'a Track) -> Self {
-        let mut members = set.to_vec();
+        Self::of_weighted(lib, &set.iter().map(|&i| (i, 1.0)).collect::<Vec<_>>(), track)
+    }
+
+    /// As `of`, each place weighing what it is given (a taste: a favourite more than a track heard once); places
+    /// weighing nothing are left out, a place given twice weighs both together.
+    pub fn of_weighted<'a>(lib: &Library, set: &[(usize, f64)], track: impl Fn(usize) -> &'a Track) -> Self {
+        let mut weight: HashMap<usize, f64> = HashMap::new();
+        for &(i, w) in set.iter().filter(|(_, w)| w.is_finite() && *w > 0.0) {
+            *weight.entry(i).or_default() += w;
+        }
+        let mut members: Vec<usize> = weight.keys().copied().collect();
         members.sort_unstable();
-        members.dedup();
-        let mut p = Profile { n: set.len(), ..Profile::default() };
-        let mut values: [Vec<f64>; NUMBERS] = Default::default();
-        for &i in set {
-            let t = track(i);
+        let mut p = Profile { n: members.len(), mass: weight.values().sum(), ..Profile::default() };
+        let mut values: [Vec<(f64, f64)>; NUMBERS] = Default::default();
+        for &i in &members {
+            let (t, w) = (track(i), weight[&i]);
             for (k, words) in t.words().into_iter().enumerate() {
-                for w in unique(words) {
-                    *p.counts[k].entry(w).or_default() += 1;
+                for x in unique(words) {
+                    *p.counts[k].entry(x).or_default() += w;
                 }
             }
             for (k, x) in t.numbers().into_iter().enumerate() {
-                values[k].extend(x.filter(|x| x.is_finite()).map(f64::from));
+                values[k].extend(x.filter(|x| x.is_finite()).map(|x| (f64::from(x), w)));
             }
         }
         for (k, mut v) in values.into_iter().enumerate() {
-            v.sort_by(f64::total_cmp);
+            v.sort_by(|a, b| a.0.total_cmp(&b.0));
             if !v.is_empty() {
-                p.numbers[k] = Some(Spread { middle: quantile(&v, 0.5), spread: (quantile(&v, 0.75) - quantile(&v, 0.25)) / 2.0 });
+                let q = |at| weighted_quantile(&v, at);
+                p.numbers[k] = Some(Spread { middle: q(0.5), spread: (q(0.75) - q(0.25)) / 2.0 });
             }
         }
-        let heard: Vec<&[f32]> = set.iter().filter_map(|&i| lib.sound(i)).collect();
-        p.sound = mean_sound(&heard);
+        let heard: Vec<(&[f32], f32)> = members.iter().filter_map(|&i| Some((lib.sound(i)?, weight[&i] as f32))).collect();
+        p.sound = mean_sound_weighted(&heard);
         p.members = members;
         p.weigh(lib);
         p
+    }
+
+    /// How many tracks it holds.
+    pub fn tracks(&self) -> usize {
+        self.n
+    }
+
+    /// Its tracks' places.
+    pub fn members(&self) -> &[usize] {
+        &self.members
+    }
+
+    /// Its words of a kind (`Signal::Playlists`, `Artists`, `Genres`, `Tags`, `Styles`), the most telling first: each
+    /// with its weight, the share of its tracks having it times its rarity in the library.
+    pub fn words(&self, kind: Signal) -> Vec<(u32, f64)> {
+        let Some(k) = WORDS.iter().position(|w| *w == kind) else { return Vec::new() };
+        let mut out: Vec<(u32, f64)> = self.weights[k].iter().map(|(&w, &x)| (w, x)).collect();
+        out.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+        out
+    }
+
+    /// A number's middle and spread (`Signal::Era`, `Tempo`, `Energy`, `Danceability`); none when none of its tracks
+    /// has it.
+    pub fn number(&self, s: Signal) -> Option<(f64, f64)> {
+        let k = NUMBER_SIGNALS.iter().position(|x| *x == s)?;
+        self.numbers[k].map(|n| (n.middle, n.spread))
+    }
+
+    /// CLAP's moods' middles and spreads, in `MOODS`' order; none where none of its tracks was heard.
+    pub fn moods(&self) -> [Option<(f64, f64)>; MOODS.len()] {
+        std::array::from_fn(|m| self.numbers[4 + m].map(|n| (n.middle, n.spread)))
     }
 
     /// The profile of a playlist: as `of`, without the playlist itself among its words (all its tracks are in it, so
@@ -246,7 +288,7 @@ impl Profile {
     }
 
     fn weigh(&mut self, lib: &Library) {
-        let n = self.n.max(1) as f64;
+        let n = if self.mass > 0.0 { self.mass } else { 1.0 };
         for k in 0..WORDS.len() {
             self.weights[k] =
                 self.counts[k].iter().map(|(&w, &c)| (w, c as f64 / n * lib.idf(k, w))).filter(|(_, x)| *x > 0.0).collect();
@@ -259,8 +301,8 @@ impl Profile {
         self.numbers[YEAR].map(|s| s.middle.round() as u32)
     }
 
-    /// How many of its tracks have each artist.
-    pub fn artists(&self) -> &HashMap<u32, u32> {
+    /// How much of its tracks (by weight) have each artist.
+    pub fn artists(&self) -> &HashMap<u32, f64> {
         &self.counts[1]
     }
 
@@ -443,6 +485,29 @@ fn sorted_shared(a: &[usize], b: &[usize]) -> usize {
 }
 
 /// The value at `q` (0..1) of sorted values, between neighbours; 0 for none.
+/// As `quantile`, each value weighing its weight (a value of weight 2 as two of it), sorted by value.
+fn weighted_quantile(sorted: &[(f64, f64)], q: f64) -> f64 {
+    let total: f64 = sorted.iter().map(|v| v.1).sum();
+    if sorted.is_empty() || total <= 0.0 {
+        return 0.0;
+    }
+    // The value at a position counted in weight, from 0: the one whose weight covers it.
+    let at_pos = |pos: f64| {
+        let mut before = 0.0;
+        for &(x, w) in sorted {
+            if pos < before + w {
+                return x;
+            }
+            before += w;
+        }
+        sorted[sorted.len() - 1].0
+    };
+    let at = (q * (total - 1.0)).max(0.0);
+    let (lo, hi) = (at.floor(), at.ceil());
+    let (a, b) = (at_pos(lo), at_pos(hi));
+    a + (b - a) * (at - lo)
+}
+
 pub fn quantile(sorted: &[f64], q: f64) -> f64 {
     match sorted.len() {
         0 => 0.0,

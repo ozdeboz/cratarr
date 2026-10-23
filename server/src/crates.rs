@@ -745,6 +745,8 @@ pub fn resolved(conditions: &[Condition], alike: &Alike, among: &[&Facts], by: &
 pub struct Alike {
     lib: Library,
     tracks: Vec<Track>,
+    /// The names by their numbers, per kind (0 playlists, 1 artists, 2 genres, 3 styles), as first spelled.
+    names: [Vec<String>; 4],
     /// Each file's place, by its line.
     place: HashMap<String, usize>,
     /// Each file's place, by its track in the catalogue.
@@ -754,11 +756,15 @@ pub struct Alike {
 impl Alike {
     /// From the files and the playlists holding each line.
     pub fn of(all: &[Facts], membership: &HashMap<String, Vec<String>>) -> Self {
-        let mut names: [HashMap<String, u32>; 4] = Default::default();
+        let mut numbers: [HashMap<String, u32>; 4] = Default::default();
+        let mut names: [Vec<String>; 4] = Default::default();
         let mut intern = |kind: usize, name: &str| {
             let key = name.trim().to_lowercase();
-            let next = names[kind].len() as u32;
-            *names[kind].entry(key).or_insert(next)
+            let next = numbers[kind].len() as u32;
+            *numbers[kind].entry(key).or_insert_with(|| {
+                names[kind].push(name.trim().to_string());
+                next
+            })
         };
         let mut tracks = Vec::with_capacity(all.len());
         let mut sounds = Vec::with_capacity(all.len());
@@ -772,7 +778,45 @@ impl Alike {
         let lib = Library::new(&tracks, sounds);
         let place = all.iter().enumerate().map(|(i, f)| (f.rel.clone(), i)).collect();
         let of_track = all.iter().enumerate().filter_map(|(i, f)| Some((f.track?, i))).collect();
-        Alike { lib, tracks, place, of_track }
+        Alike { lib, tracks, names, place, of_track }
+    }
+
+    /// The profile of places, each weighing its weight (`similarity::Profile::of_weighted`).
+    pub fn profile(&self, set: &[(usize, f64)]) -> crate::similarity::Profile {
+        crate::similarity::Profile::of_weighted(&self.lib, set, |i| &self.tracks[i])
+    }
+
+    /// A word's name: its kind (`Signal::Playlists`, `Artists`, `Genres`, `Styles`) and number.
+    pub fn name(&self, kind: crate::similarity::Signal, id: u32) -> Option<&str> {
+        use crate::similarity::Signal;
+        let k = match kind {
+            Signal::Playlists => 0,
+            Signal::Artists => 1,
+            Signal::Genres => 2,
+            Signal::Styles => 3,
+            _ => return None,
+        };
+        self.names[k].get(id as usize).map(String::as_str)
+    }
+
+    /// A file's place, by its line.
+    pub fn place_of_line(&self, line: &str) -> Option<usize> {
+        self.place.get(line).copied()
+    }
+
+    /// A file's place, by its track in the catalogue.
+    pub fn place_of_track(&self, track: i64) -> Option<usize> {
+        self.of_track.get(&track).copied()
+    }
+
+    /// Whether AudioMuse heard the file at a place.
+    pub fn heard(&self, i: usize) -> bool {
+        self.lib.sound(i).is_some()
+    }
+
+    /// Every file as the one similarity sees it, by place.
+    pub fn tracks(&self) -> &[Track] {
+        &self.tracks
     }
 }
 
@@ -792,19 +836,122 @@ pub fn closest_weighted<'a>(of: &[String], weights: &[f32], alike: &Alike, among
     if seed.is_empty() {
         return Vec::new();
     }
-    let profile = crate::similarity::Profile::of_counted(&alike.lib, &seed, |i| &alike.tracks[i]);
-    let mut scored: Vec<(&Facts, f64)> = among
-        .iter()
-        .copied()
-        .filter_map(|f| {
-            let &i = alike.place.get(&f.rel)?;
-            let signals = profile.to_track(&alike.lib, i, &alike.tracks[i]);
-            signals.known().then(|| (f, signals.score(by)))
+    // A varied seed is several sounds (the owner, 2026-10-23: a week's styles kept apart, not averaged into what lies
+    // between): each group its own profile, and the picks taken from the groups by their share of the seed, the
+    // closest of each first. One group: closest first, as one profile.
+    let groups = sound_groups(&seed, &alike.lib);
+    let mut best: HashMap<usize, (f64, f64)> = HashMap::new();
+    for group in &groups {
+        let share = group.len() as f64 / seed.len() as f64;
+        let profile = crate::similarity::Profile::of_counted(&alike.lib, group, |i| &alike.tracks[i]);
+        let mut scored: Vec<(usize, f64)> = among
+            .iter()
+            .enumerate()
+            .filter_map(|(k, f)| {
+                let &i = alike.place.get(&f.rel)?;
+                let signals = profile.to_track(&alike.lib, i, &alike.tracks[i]);
+                signals.known().then(|| (k, signals.score(by)))
+            })
+            .collect();
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| among[a.0].rel.cmp(&among[b.0].rel)));
+        for (rank, (k, x)) in scored.into_iter().enumerate() {
+            // Its turn among the picks: its place in the group's order, a large group's coming round more often.
+            let turn = (rank + 1) as f64 / share;
+            let e = best.entry(k).or_insert((f64::INFINITY, 0.0));
+            if turn < e.0 {
+                *e = (turn, x);
+            }
+        }
+    }
+    let mut picked: Vec<(usize, f64, f64)> = best.into_iter().map(|(k, (turn, x))| (k, turn, x)).collect();
+    picked.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| among[a.0].rel.cmp(&among[b.0].rel)));
+    picked.truncate(LIKE_MOST);
+    // How alike, as the curve draws it: the n-th pick at least this alike to its group (never rising down the list).
+    let mut floor = f64::INFINITY;
+    picked
+        .into_iter()
+        .map(|(k, _, x)| {
+            floor = floor.min(x);
+            (among[k], (floor * 1000.0).round() / 10.0)
         })
-        .collect();
-    scored.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.rel.cmp(&b.0.rel)));
-    scored.truncate(LIKE_MOST);
-    scored.into_iter().map(|(f, x)| (f, (x * 1000.0).round() / 10.0)).collect()
+        .collect()
+}
+
+/// A seed of fewer tracks AudioMuse heard than this is one sound (a track, an album).
+const GROUP_FROM: usize = 12;
+/// The most groups a seed's sounds fall into.
+const GROUPS: usize = 6;
+/// Groups whose middles sound at least this alike (cosine) are one: a week of one style stays one group.
+const SAME_GROUP: f32 = 0.85;
+
+/// The seed's places (a place as often as it counts) in groups by sound: spherical k-means over the heard ones, started
+/// from the heaviest and then the farthest, groups that sound alike joined. The places AudioMuse has not heard go with
+/// the largest group.
+fn sound_groups(seed: &[usize], lib: &Library) -> Vec<Vec<usize>> {
+    let mut weight: HashMap<usize, f32> = HashMap::new();
+    for &i in seed {
+        *weight.entry(i).or_default() += 1.0;
+    }
+    let mut heard: Vec<(usize, &[f32], f32)> = weight.iter().filter_map(|(&i, &w)| Some((i, lib.sound(i)?, w))).collect();
+    heard.sort_by_key(|h| h.0);
+    if heard.len() < GROUP_FROM {
+        return vec![seed.to_vec()];
+    }
+    let dims = heard[0].1.len();
+    let cos = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
+    let heaviest = (0..heard.len()).max_by(|&a, &b| heard[a].2.total_cmp(&heard[b].2).then(heard[b].0.cmp(&heard[a].0))).unwrap_or(0);
+    let mut centres: Vec<Vec<f32>> = vec![heard[heaviest].1.to_vec()];
+    while centres.len() < GROUPS {
+        let far = (0..heard.len())
+            .map(|k| (k, centres.iter().map(|c| cos(heard[k].1, c)).fold(f32::MIN, f32::max)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .filter(|(_, near)| *near < SAME_GROUP);
+        let Some((k, _)) = far else { break };
+        centres.push(heard[k].1.to_vec());
+    }
+    let mut of = vec![0usize; heard.len()];
+    for _ in 0..10 {
+        for (k, h) in heard.iter().enumerate() {
+            of[k] = (0..centres.len()).max_by(|&a, &b| cos(h.1, &centres[a]).total_cmp(&cos(h.1, &centres[b]))).unwrap_or(0);
+        }
+        let mut sums = vec![vec![0.0f32; dims]; centres.len()];
+        for (k, h) in heard.iter().enumerate() {
+            for (s, x) in sums[of[k]].iter_mut().zip(h.1) {
+                *s += h.2 * x;
+            }
+        }
+        for (c, s) in centres.iter_mut().zip(sums) {
+            let len = s.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if len > 0.0 {
+                *c = s.into_iter().map(|x| x / len).collect();
+            }
+        }
+        // Groups that came to sound alike are one.
+        if let Some((a, b)) = (0..centres.len()).flat_map(|a| (a + 1..centres.len()).map(move |b| (a, b))).find(|&(a, b)| cos(&centres[a], &centres[b]) >= SAME_GROUP) {
+            centres.remove(b);
+            for g in of.iter_mut() {
+                if *g == b {
+                    *g = a;
+                } else if *g > b {
+                    *g -= 1;
+                }
+            }
+        }
+    }
+    let mut groups: Vec<Vec<usize>> = vec![Vec::new(); centres.len()];
+    let group_of: HashMap<usize, usize> = heard.iter().zip(&of).map(|(h, &g)| (h.0, g)).collect();
+    let mut unheard = Vec::new();
+    for &i in seed {
+        match group_of.get(&i) {
+            Some(&g) => groups[g].push(i),
+            None => unheard.push(i),
+        }
+    }
+    groups.retain(|g| !g.is_empty());
+    if let Some(largest) = groups.iter_mut().max_by_key(|g| g.len()) {
+        largest.extend(unheard);
+    }
+    groups
 }
 
 /// A Sounds like crate's own order, closest first (a5 for the owner, 2026-10-23; it was newest first, as every crate's):
@@ -1185,6 +1332,24 @@ mod tests {
         assert_eq!(c.conditions, vec![Condition::new("genre", false, Value::AnyOf { values: vec!["Trip Hop".into()] })]);
         assert!(genre_crate("genre: ").is_none());
         assert!(genre_crate("unlisted").is_none());
+    }
+
+    #[test]
+    fn a_varied_seed_keeps_its_sounds_apart_and_does_not_pick_what_lies_between() {
+        let heard = |rel: &str, track: i64, v: [f32; 2]| Facts { rel: rel.into(), track: Some(track), sound: Some(Arc::from(v.as_slice())), ..Facts::default() };
+        // A week of two sounds: eight tracks of one, six of the other.
+        let mut files: Vec<Facts> = (1..=8).map(|t| heard(&format!("a{t}.flac"), t, [1.0, 0.0])).collect();
+        files.extend((9..=14).map(|t| heard(&format!("b{t}.flac"), t, [0.0, 1.0])));
+        files.extend([heard("near-a.flac", 20, [0.99, 0.141]), heard("near-b.flac", 21, [0.141, 0.99]), heard("between.flac", 22, [0.707, 0.707])]);
+        let alike = Alike::of(&files, &HashMap::new());
+        let among: Vec<&Facts> = files.iter().filter(|f| f.track.is_some_and(|t| t >= 20)).collect();
+        let of: Vec<String> = (1..=14).map(|t| format!("tr-{t}")).collect();
+        let found: Vec<&str> = closest_weighted(&of, &[], &alike, &among, &Weights::EQUAL).into_iter().map(|(f, _)| f.rel.as_str()).collect();
+        assert_eq!(found, ["near-a.flac", "near-b.flac", "between.flac"], "each sound's closest first, the larger's first; the middle last");
+        // One sound (an album's tracks): one group, closest first as before.
+        let one: Vec<String> = (1..=8).map(|t| format!("tr-{t}")).collect();
+        let found: Vec<&str> = closest_weighted(&one, &[], &alike, &among, &Weights::EQUAL).into_iter().map(|(f, _)| f.rel.as_str()).collect();
+        assert_eq!(found, ["near-a.flac", "between.flac", "near-b.flac"]);
     }
 
     #[test]
