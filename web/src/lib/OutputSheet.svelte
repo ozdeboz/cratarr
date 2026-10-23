@@ -5,7 +5,8 @@
   // take it over (the music moves there), or not (it plays on, and what played here pauses).
   // Sync play (decision 0037): while one of Cratarr's players is played on, another's + adds it to its group and its
   // tick takes it out (a long press on it too); the group's players show ticked, its leader crowned, and their volumes
-  // below. A tap on a name plays on that one player alone: the group ends.
+  // below. A tap on a name plays on that one player alone: the group ends. One that cannot join shows no + (the owner,
+  // 2026-10-23: a + that played there alone read as "add to the group"), only its tick when chosen.
   // This device's sound (decision 0033, amended 2026-10-19; the owner: "hardware audio device selection in case of local
   // playback, even in a group"): under This device while it plays, alone or in a group, the output it sounds on; a tap
   // lists the app's outputs, Automatic (Android's own choice) first. A choice holds until an output comes or goes.
@@ -188,6 +189,7 @@
             badgeLabel="Leads the group"
             onmark={groupable(me) ? () => me && held(me) : null}
             markLabel={me !== null && group.includes(me) ? 'Take out of the group' : 'Add to the group'}
+            plus={false}
             onclick={() => pick('local')}
           />
         </div>
@@ -209,13 +211,14 @@
             badgeLabel="Leads the group"
             onmark={groupable(name) ? () => held(name) : null}
             markLabel={group.includes(name) ? 'Take out of the group' : 'Add to the group'}
+            plus={false}
             onclick={() => pick(`player:${name}`)}
           />
         </div>
       {/each}
       <!-- The server's own player; not when what plays there is one of Cratarr's players listed above (the same one twice). -->
       {#if !playOn.players.some((p) => p.name === remoteName)}
-        <MenuEntry label={remoteName} checked={!here && drivenName() === null} onclick={() => pick('remote')} />
+        <MenuEntry label={remoteName} checked={!here && drivenName() === null} plus={false} onclick={() => pick('remote')} />
       {/if}
       {#if group.length > 1}<GroupVolume names={group} />{/if}
     {/if}

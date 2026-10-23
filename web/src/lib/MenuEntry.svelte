@@ -5,6 +5,7 @@
   // its action is under way (an album going into a playlist track by track), the spinner in place of its label. `badge`:
   // a small icon after a toggle's label (a group's leader: a crown), `badgeLabel` saying what it means. `onmark`: the
   // toggle's mark (+ or the tick) is a button of its own, `markLabel` saying what it does; the label keeps `onclick`.
+  // `plus: false`: no + while off (a choice that adds nothing), the tick only when on.
   // `switched`: an entry that turns something on or off (Keep on this device), its switch at the end.
   import Icon, { type IconName } from './Icon.svelte';
   import SwitchTrack from './SwitchTrack.svelte';
@@ -22,6 +23,7 @@
     onmark = null,
     markLabel = '',
     switched = null,
+    plus = true,
   }: {
     icon?: IconName | null;
     label: string;
@@ -35,6 +37,7 @@
     onmark?: (() => void) | null;
     markLabel?: string;
     switched?: boolean | null;
+    plus?: boolean;
   } = $props();
 </script>
 
@@ -60,7 +63,7 @@
   <button class="toggle" class:on={checked} role="menuitemcheckbox" aria-checked={checked} disabled={disabled || busy} aria-busy={busy} {onclick}>
     <span class:badged={badge !== null}
       >{#if badge}<em>{label}</em><b title={badgeLabel} aria-label={badgeLabel}><Icon name={badge} size={18} /></b>{:else}{label}{/if}</span
-    ><i aria-hidden="true"></i><Icon name={checked ? 'check' : 'plus'} size={22} />
+    >{#if checked || plus}<i aria-hidden="true"></i><Icon name={checked ? 'check' : 'plus'} size={22} />{/if}
   </button>
 {/if}
 
