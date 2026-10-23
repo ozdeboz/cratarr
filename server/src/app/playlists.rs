@@ -93,9 +93,10 @@ async fn like_crate(id: &str, item: &str, count: usize) -> Result<CrateDef, Togg
     Ok(crates::like_crate(id, &format!("Sounds like {name}"), songs, count))
 }
 
-/// How many each of Home's looks back shows; and of how many albums most like the taste Grave digging digs.
+/// How many each of Home's looks back shows; and after how many days unplayed an album is half as far from the listening
+/// as one never played (Grave digging).
 const DIG: usize = 12;
-const CLOSEST_ALBUMS: usize = 150;
+const UNPLAYED_HALF_DAYS: f64 = 180.0;
 
 /// Home's looks back (`PlaylistService::digging`).
 #[derive(Debug, serde::Serialize)]
@@ -115,11 +116,11 @@ pub struct DugTrack {
     pub last_played: i64,
 }
 
-/// An album (Cratarr's own) and when anything of it was last played (epoch s).
+/// An album (Cratarr's own) and when anything of it was last played (epoch s; none: never).
 #[derive(Debug, serde::Serialize)]
 pub struct DugAlbum {
     pub id: String,
-    pub last_played: i64,
+    pub last_played: Option<i64>,
 }
 
 pub(super) struct CrateLibrary {
@@ -2530,8 +2531,8 @@ impl PlaylistService {
     }
 
     /// Home's two looks back (the owner, 2026-10-23), of the libraries switched on: Blast from the past, the favourite
-    /// tracks unplayed longest; Grave digging, of the albums most like the taste (`taste::profiles`, every source), those
-    /// unplayed longest. Only what was played before: a track never played was never buried.
+    /// tracks unplayed longest (played before: a favourite never played was never buried); Grave digging, the albums
+    /// most like the taste (`taste::profiles`, every source) and furthest from the listening, never played furthest.
     pub async fn digging(&self, want: Option<&str>, without: &[String]) -> Result<Digging, ToggleError> {
         let user = asking_user().ok_or_else(|| ToggleError::Refused("Home's looks back are an account's own: sign in.".into()))?;
         let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
@@ -2576,22 +2577,41 @@ impl PlaylistService {
                 skipped: skips.into_iter().collect(),
             };
             let (taste, _) = super::taste::profiles(alike, &sources, &[]);
-            let mut albums: Vec<(String, i64, f64)> = Vec::new();
-            for (id, a) in ud.used(&user, crate::userdata::Kind::Album)? {
-                let Some(last) = a.play_date else { continue };
-                let Some(album) = serve.library.album(&id)? else { continue };
-                let set: Vec<(usize, f64)> = album.song.unwrap_or_default().iter().filter_map(|s| place(&s.id)).map(|i| (i, 1.0)).collect();
-                if set.is_empty() {
-                    continue;
-                }
-                if let Some(x) = alike.compare(&taste, &alike.profile(&set), lib.by()) {
-                    albums.push((id, last, x));
+            // Every album of the libraries switched on, its tracks' places; its last play, and how much its artist is
+            // played (of the most played artist's plays).
+            let songs = serve.library.all_song_ids()?;
+            let mut by_album: HashMap<String, Vec<(usize, f64)>> = HashMap::new();
+            for (song, album) in serve.library.albums_of(&songs)? {
+                if let Some(i) = place(&song) {
+                    by_album.entry(album).or_default().push((i, 1.0));
                 }
             }
-            albums.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
-            albums.truncate(CLOSEST_ALBUMS);
-            albums.sort_by_key(|a| a.1);
-            let graves = albums.into_iter().take(DIG).map(|(id, last, _)| DugAlbum { id, last_played: last }).collect();
+            let last: HashMap<String, i64> = ud.used(&user, crate::userdata::Kind::Album)?.into_iter().filter_map(|(id, a)| Some((id, a.play_date?))).collect();
+            let artist_plays: HashMap<String, u32> = ud.used(&user, crate::userdata::Kind::Artist)?.into_iter().map(|(id, a)| (id, a.play_count)).collect();
+            let most = artist_plays.values().copied().max().unwrap_or(0).max(1) as f64;
+            let ids: Vec<String> = by_album.keys().cloned().collect();
+            let artist_of: HashMap<String, String> = serve.library.albums_by_id(&ids)?.into_iter().map(|a| (a.id, a.artist_id)).collect();
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+            // How far an album is from the listening (the owner, 2026-10-23: weigh the unplayed, "the albums that are
+            // totally opposite our actual listening behaviour while matching our profile"): never played, 1; played,
+            // nearer the more lately (half at UNPLAYED_HALF_DAYS); an artist played much pulls it nearer, up to half.
+            let distance = |id: &str| {
+                let unplayed = match last.get(id) {
+                    None => 1.0,
+                    Some(&t) => {
+                        let days = ((now - t).max(0) as f64) / 86_400.0;
+                        days / (days + UNPLAYED_HALF_DAYS)
+                    }
+                };
+                let familiar = artist_of.get(id).and_then(|a| artist_plays.get(a)).map_or(0.0, |&n| n as f64 / most);
+                unplayed * (1.0 - 0.5 * familiar)
+            };
+            let mut albums: Vec<(String, f64)> = by_album
+                .iter()
+                .filter_map(|(id, set)| Some((id.clone(), alike.compare(&taste, &alike.profile(set), lib.by())? * distance(id))))
+                .collect();
+            albums.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            let graves = albums.into_iter().take(DIG).map(|(id, _)| DugAlbum { last_played: last.get(&id).copied(), id }).collect();
             Ok(Digging { past, graves })
         })
         .await
