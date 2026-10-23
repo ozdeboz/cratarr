@@ -140,7 +140,6 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/albums/{source}/{album}/move", get(move_preview).post(move_album))
             .route("/api/albums/{source}/{album}/delete", post(delete_album))
             .route("/api/albums/duplicates", get(album_duplicates))
-            .route("/api/audiomuse/progress", get(audiomuse_progress))
             .route("/api/incoming/delete/{source}/{album}", post(delete_incoming))
             .route("/api/incoming/keep/{source}/{album}", get(keep_preview).post(keep_incoming))
             .route("/api/incoming/replace/{source}/{album}", get(replace_preview).post(replace_incoming))
@@ -151,6 +150,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/settings/lidarr", post(preview_lidarr))
             .route("/api/settings/naming", get(naming))
             .route("/api/catalogue", get(catalogue_status))
+            .route("/api/health/report", get(health_report))
             .route("/api/folders", get(browse_folders))
             .route("/api/folders/status", get(folder_status))
             .route("/api/folders/suggested", get(suggested_folders))
@@ -2200,14 +2200,9 @@ async fn unlink_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Qu
 }
 
 
-/// How far AudioMuse has heard the library (Home's Needs you, 2026-10-23): the tracks with its sound, of all the
-/// library's tracks.
-async fn audiomuse_progress(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
-    let cat = app.library.catalogue();
-    let facts = tokio::task::spawn_blocking(move || cat.crate_facts()).await.map_err(anyhow::Error::from).and_then(|r| r).map_err(ToggleError::from)?;
-    let tracks = facts.iter().filter(|f| f.track.is_some()).count();
-    let heard = facts.iter().filter(|f| f.track.is_some() && f.sound.is_some()).count();
-    Ok(Json(json!({ "heard": heard, "tracks": tracks })))
+/// Every domain's findings (decision 0063): the Health page's, and Home's Needs you's most critical and most recent.
+async fn health_report(State(app): State<Arc<App>>) -> Json<crate::app::health::Report> {
+    Json(app.health_report().await)
 }
 
 async fn album_duplicates(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {

@@ -1155,8 +1155,21 @@ export type AlbumGroup = {
 };
 
 export const getAlbumDuplicates = () => request<{ groups: AlbumGroup[] }>('/api/albums/duplicates');
-/** How far AudioMuse has heard the library: the tracks with its sound, of all (Home's Needs you). */
-export const getAudioMuseProgress = () => request<{ heard: number; tracks: number }>('/api/audiomuse/progress');
+/** What a health check finds (decision 0063): its domain, a short title, how many (of how many, for a share), how much it
+ *  asks of the owner, when it was first found (epoch s), and where it is dealt with. */
+export type HealthFinding = {
+  domain: string;
+  key: string;
+  title: string;
+  detail?: string;
+  count: number;
+  of?: number;
+  level: 'needs_you' | 'warning' | 'info';
+  since: number;
+  open?: { page: string; switch?: string };
+};
+/** Every domain's findings, worst first, the most recent first among equals; when each domain was checked. */
+export const getHealthReport = () => request<{ findings: HealthFinding[]; checked: Record<string, number> }>('/api/health/report');
 
 /** An album in a server's library list (Incoming, Collection). */
 export type ListedAlbum = {

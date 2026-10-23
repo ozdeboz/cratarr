@@ -21,6 +21,7 @@ mod error;
 mod events;
 pub mod filter;
 mod follow;
+pub mod health;
 mod incoming;
 mod insights;
 pub mod kept;

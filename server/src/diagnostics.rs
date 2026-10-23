@@ -337,6 +337,17 @@ impl Diagnostics {
     }
 
     /// Rows, newest first.
+    /// How many times an event (`area`, `what`) happened since `since_ms` (epoch ms), the minute's repeats counted
+    /// (decision 0063: a domain's check reads its last hour here).
+    pub fn count_since(&self, area: &str, what: &str, since_ms: i64) -> Result<u64> {
+        let n: i64 = self.conn().query_row(
+            "SELECT coalesce(sum(count), 0) FROM events WHERE area = ?1 AND what = ?2 AND last >= ?3",
+            params![area, what, since_ms],
+            |r| r.get(0),
+        )?;
+        Ok(u64::try_from(n).unwrap_or(0))
+    }
+
     pub fn query(&self, q: &Query) -> Result<Vec<Row>> {
         let mut sql = String::from("SELECT id, at, last, count, level, area, place, what, fields, origin FROM events WHERE 1 = 1");
         let mut p: Vec<Box<dyn ToSql>> = Vec::new();

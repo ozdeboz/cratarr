@@ -1,52 +1,32 @@
 <script lang="ts">
-  // Home's Needs you (the owner, 2026-10-23): what waits on the owner, each a row that opens where it is dealt with:
-  // upgrades and duplicates waiting in an Incoming library (the Library, with its switch on), and how far AudioMuse
-  // has heard the library while it has not heard all of it. Nothing waiting: the tile does not show. An
-  // administrator's only: what waits is theirs to deal with.
-  import { getAlbums, getAudioMuseProgress } from './api';
-  import Icon, { type IconName } from './Icon.svelte';
-  import { setSwitch } from './listFilter.svelte';
+  // Home's Needs you (decision 0063): what matters most of the health report, the most critical first and the most
+  // recent among equals (the owner: "needs you shows the most important, the most critical, the most recent"), a few,
+  // each opening where it is dealt with; its heading's arrow the Health page, where all of it is. What needs the owner
+  // and what is wrong; of what is worth knowing only AudioMuse's progress (the owner's tile). Nothing: it does not show.
+  // An administrator's only: the report is theirs.
+  import { getHealthReport, type HealthFinding } from './api';
+  import { iconOf, openFinding } from './health';
+  import Icon from './Icon.svelte';
   import { me } from './me.svelte';
   import SectionHead from './SectionHead.svelte';
 
-  let waiting = $state({ upgrades: 0, duplicates: 0 });
-  let heard = $state<{ heard: number; tracks: number } | null>(null);
+  /** At most this many rows. */
+  const MOST = 4;
+
+  let findings = $state<HealthFinding[]>([]);
 
   $effect(() => {
     if (!me.admin) return;
     let gone = false;
-    getAlbums().then(
-      (v) => {
-        if (gone) return;
-        const all = v.sources.flatMap((s) => Object.values(s.verdicts));
-        waiting = { upgrades: all.filter((x) => x.kind === 'upgrade').length, duplicates: all.filter((x) => x.kind === 'duplicate').length };
-      },
-      () => {},
-    );
-    getAudioMuseProgress().then(
-      (p) => !gone && (heard = p),
+    getHealthReport().then(
+      (r) => !gone && (findings = r.findings),
       () => {},
     );
     return () => (gone = true);
   });
 
-  /** The Library with one of its switches on, the others as they were. */
-  function open(key: 'upgrades' | 'duplicates') {
-    setSwitch('library', key, true);
-    location.hash = '#/library';
-  }
-
-  const plural = (n: number, one: string, many: string) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
-  const rows = $derived.by(() => {
-    const out: { icon: IconName; text: string; open?: () => void }[] = [];
-    if (waiting.upgrades) out.push({ icon: 'arrowUp', text: plural(waiting.upgrades, 'upgrade waiting', 'upgrades waiting'), open: () => open('upgrades') });
-    if (waiting.duplicates)
-      out.push({ icon: 'copyCheck', text: plural(waiting.duplicates, 'duplicate waiting', 'duplicates waiting'), open: () => open('duplicates') });
-    if (heard && heard.tracks > 0 && heard.heard < heard.tracks)
-      out.push({ icon: 'music', text: `AudioMuse has heard ${heard.heard.toLocaleString()} of ${heard.tracks.toLocaleString()}` });
-    return out;
-  });
-  const share = $derived(heard && heard.tracks ? heard.heard / heard.tracks : 0);
+  // The report comes worst first, the most recent first among equals.
+  const rows = $derived(findings.filter((f) => f.level !== 'info' || f.of !== undefined).slice(0, MOST));
 </script>
 
 {#if me.admin && rows.length}
@@ -54,12 +34,16 @@
     <!-- Its arrow: the Health page, where all of it is (decision 0063). -->
     <SectionHead title="Needs you" onmore={() => (location.hash = '#/health')} />
     <div class="needs">
-      {#each rows as r (r.text)}
-        {#if r.open}
-          <button class="row" onclick={r.open}><Icon name={r.icon} size={22} /><span>{r.text}</span><Icon name="chevronRight" size={20} /></button>
+      {#each rows as f (f.key)}
+        {#if f.open}
+          <button class="row" class:urgent={f.level === 'needs_you'} onclick={() => openFinding(f)}
+            ><Icon name={iconOf(f)} size={22} /><span>{f.title}</span><Icon name="chevronRight" size={20} /></button
+          >
         {:else}
-          <div class="row">
-            <Icon name={r.icon} size={22} /><span>{r.text}<i class="bar" style:--share={share} aria-hidden="true"></i></span>
+          <div class="row" class:urgent={f.level === 'needs_you'}>
+            <Icon name={iconOf(f)} size={22} /><span
+              >{f.title}{#if f.of}<i class="bar" style:--share={f.count / f.of} aria-hidden="true"></i>{/if}</span
+            >
           </div>
         {/if}
       {/each}
@@ -99,6 +83,11 @@
     color: var(--art-accent, var(--accent));
   }
 
+  /* The owner has to act: its icon says so. */
+  .row.urgent :global(svg:first-child) {
+    color: var(--danger);
+  }
+
   .row :global(svg:last-child:not(:first-child)) {
     flex: none;
     color: var(--muted);
@@ -111,7 +100,7 @@
     gap: 6px;
   }
 
-  /* AudioMuse's share heard, as a thin line under its words. */
+  /* A share (AudioMuse's tracks heard), as a thin line under its words. */
   .bar {
     display: block;
     height: 3px;
