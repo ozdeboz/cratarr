@@ -89,7 +89,11 @@ function landscape(width: number, height: number, measure: Measure): Fit {
   const inner = { width: album.width - edge - Math.max(0, edge - 20), height: height - 2 * edge };
   const pad = MIN_PADDING / 100;
   const cover = Math.max(MIN_COVER, Math.floor(Math.min(inner.width * (1 - 2 * pad), inner.height * (1 - 2 * pad))));
-  return { landscape: true, level, cover, album, controls: { width: controlsWidth, height: Math.round(internalHeight(height, natural)) } };
+  // The controls as tall as the cover beside them (the owner, 2026-10-24: full screen in landscape they took less of the
+  // height than they could; Finamp keeps them to 1.4 times their own), their groups spread over it; never less than
+  // they need, never more than the height. Portrait keeps Finamp's (the owner: "perfect").
+  const tall = Math.min(height, Math.max(natural, cover));
+  return { landscape: true, level, cover, album, controls: { width: controlsWidth, height: Math.round(Math.max(internalHeight(height, natural), tall)) } };
 }
 
 /** Lays the player out in a box of `width` × `height`. On the web Finamp picks the orientation that gives the larger
