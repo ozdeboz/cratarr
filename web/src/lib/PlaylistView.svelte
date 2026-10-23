@@ -1828,7 +1828,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           </div>
         {:else if (prefs.profile && profileComing) || curveComing}
           <div class="head-spread waiting" class:artist-head={!!artist && !artist.tracks} aria-hidden="true"></div>
-        {:else if headTempo}
+        {:else if prefs.profile && headTempo}
           <div class="head-spread">
             <Spread series={headTempo.series} />
             <p class="details">{headTempo.withTempo.toLocaleString()} of {plural(headTempo.total, 'track')} have a tempo</p>
