@@ -404,6 +404,10 @@ async function appendTrack(index: number, from: number, gen: number) {
 /** Starts a fresh stream at queue track `index`, `from` seconds in. */
 async function fresh(index: number, from = 0, play = true) {
   if (!audio) return;
+  // A position at or past the track's end (a resume Cratarr reckoned on while the player was away; it once asked for
+  // 36 minutes into a track of 2:23, 2026-10-24) starts the track from the top: the stream cannot begin past its end.
+  const length = local.queue[index]?.duration_secs;
+  if (!(from >= 0) || (length && from >= length - 1)) from = 0;
   const gen = ++generation;
   fetching?.abort();
   appending = false;

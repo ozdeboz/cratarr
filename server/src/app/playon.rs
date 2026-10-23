@@ -764,11 +764,14 @@ impl Entry {
         self.connection.is_some() && self.heard.elapsed() < LEASE
     }
 
-    /// Where it is in its track now: as it last reported, moved on by the time since while it plays.
+    /// Where it is in its track now: as it last reported, moved on by the time since while it plays and is there. A
+    /// player gone away stays where it last said (2026-10-24: one left playing read 14.6 hours into a song, and a
+    /// browser taken up again was told to start 36 minutes into a track of 2:23).
     fn position_now(&self) -> u64 {
+        let on = self.online();
         if let Some((d, at)) = &self.device {
             let mut p = d.position_ms;
-            if d.playing {
+            if d.playing && on {
                 p += at.elapsed().as_millis() as u64;
                 if let Some(len) = d.duration_ms {
                     p = p.min(len);
@@ -778,7 +781,7 @@ impl Entry {
         }
         let r = &self.report;
         let mut position_ms = r.position_ms;
-        if r.playing {
+        if r.playing && on {
             position_ms += self.at.elapsed().as_millis() as u64;
             if let Some(d) = r.duration_ms {
                 position_ms = position_ms.min(d);
@@ -793,7 +796,7 @@ impl Entry {
         if let Some((d, at)) = &self.device {
             let t = d.device_track.clone().unwrap_or_default();
             let mut position_ms = d.position_ms;
-            if d.playing {
+            if d.playing && self.online() {
                 position_ms += at.elapsed().as_millis() as u64;
                 if let Some(len) = d.duration_ms {
                     position_ms = position_ms.min(len);
