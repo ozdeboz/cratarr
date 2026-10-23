@@ -403,7 +403,8 @@
       {/if}
       {#if prefs.albumLayout === 'flow'}
         <!-- Flow (the owner, 2026-10-23: digging through the albums): the list in its order as a coverflow, the front
-             album named under it; a tap on it views it, one beside it comes to the front. -->
+             album named under it; a tap on it views it (in select mode ticks it, a ticked one highlighted), one
+             beside it comes to the front. -->
         {@const front = albums[flowAt[s.id] ?? 0]}
         <div class="flow" style:transform="translateY({-flowSpare / 2}px)">
           <div class="stage" {@attach fill} style:height="{stageHeight}px">
@@ -411,7 +412,8 @@
               covers={albums.map((a) => albumCoverUrl(s.id, a.id))}
               top={12}
               foot={12}
-              onopen={(i) => view(s.id, albums[i])}
+              onopen={(i) => (selecting ? tick(s, albums[i]) : view(s.id, albums[i]))}
+              marked={selecting ? albums.map((a) => selecting!.has(keyOf(s, a))) : undefined}
               onfront={(i) => (flowAt[s.id] = i)}
               onspare={(px) => (flowSpare = px)}
             />

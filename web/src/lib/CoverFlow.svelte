@@ -15,8 +15,11 @@
     onopen,
     onfront,
     onspare,
+    marked,
   }: {
     covers: string[];
+    /** Which covers are highlighted, by their place (the ticked ones in select mode; the owner, 2026-10-23: a border). */
+    marked?: boolean[];
     /** Room kept free along the top (a header's buttons) and over the foot (the fade under its action bar). */
     top?: number;
     foot?: number;
@@ -81,10 +84,10 @@
   const items = $derived.by(() => {
     if (!n) return [];
     const base = Math.floor(pos);
-    const out: (Place & { key: number; src: string })[] = [];
+    const out: (Place & { key: number; src: string; marked: boolean })[] = [];
     for (let k = base - front.sides - 1; k <= base + front.sides + 2; k++) {
       const p = place(k - pos);
-      if (p.o > 0.01) out.push({ key: k, src: covers[wrap(k)], ...p });
+      if (p.o > 0.01) out.push({ key: k, src: covers[wrap(k)], marked: !!marked?.[wrap(k)], ...p });
     }
     return out;
   });
@@ -103,23 +106,38 @@
 
   // A drag sideways moves through them; let go, the nearest comes to the front. A tap: one on, or (`onopen`) the front
   // one opens and one beside it comes to the front.
-  let start: { x: number; pos: number; moved: boolean } | null = null;
+  // A gesture that goes up or down is the page's scroll, never a tap (the owner, 2026-10-23: "opening while scrolling
+  // really fucks me up"); the browser takes it over and cancels it here.
+  let start: { x: number; y: number; pos: number; moved: boolean; scroll: boolean } | null = null;
   let tapX = 0;
   function down(e: PointerEvent) {
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    start = { x: e.clientX, pos, moved: false };
+    start = { x: e.clientX, y: e.clientY, pos, moved: false, scroll: false };
     tapX = e.clientX - (e.currentTarget as HTMLElement).getBoundingClientRect().left;
   }
   function move(e: PointerEvent) {
-    if (!start) return;
-    const dx = e.clientX - start.x;
-    if (!start.moved && Math.abs(dx) < 6) return;
+    if (!start || start.scroll) return;
+    const dx = e.clientX - start.x,
+      dy = e.clientY - start.y;
+    if (!start.moved) {
+      if (Math.abs(dy) >= 6 && Math.abs(dy) > Math.abs(dx)) {
+        start.scroll = true;
+        return;
+      }
+      if (Math.abs(dx) < 6) return;
+    }
     start.moved = true;
     dragging = true;
     pos = start.pos - dx / (front.w * 0.42);
   }
+  function cancel() {
+    start = null;
+    dragging = false;
+    pos = Math.round(pos);
+  }
   function up() {
     if (!start) return;
+    if (start.scroll) return cancel();
     const tap = !start.moved;
     start = null;
     dragging = false;
@@ -156,12 +174,13 @@
   onpointerdown={down}
   onpointermove={move}
   onpointerup={up}
-  onpointercancel={up}
+  onpointercancel={cancel}
 >
   {#each items as c (c.key)}
     <span
       class="rec"
       class:still={dragging}
+      class:marked={c.marked}
       style:top="{front.top}px"
       style:left="{front.left}px"
       style:width="{c.w}px"
@@ -199,6 +218,11 @@
       top 0.45s cubic-bezier(0.2, 0.8, 0.2, 1),
       filter 0.45s,
       opacity 0.45s;
+  }
+
+  .rec.marked {
+    outline: 3px solid var(--accent);
+    outline-offset: 3px;
   }
 
   .rec.still {
