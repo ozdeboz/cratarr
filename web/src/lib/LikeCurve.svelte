@@ -99,6 +99,8 @@
     overflow: visible;
     touch-action: none;
     cursor: ew-resize;
+    /* A drag selects no text. */
+    user-select: none;
   }
 
   .curve:focus-visible {

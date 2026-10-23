@@ -499,9 +499,11 @@
             icon="crates"
             label="Sounds like this"
             onclick={() => {
+              // Read before closing: closing lets go of the album.
+              const id = a.id;
               onclose();
               player.full = false;
-              viewLike(a.id);
+              viewLike(id);
             }}
           />{/if}
       </MenuGroup>
