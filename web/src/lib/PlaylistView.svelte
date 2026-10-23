@@ -673,17 +673,38 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /** The list's profile (the owner, 2026-10-23: lib/ListProfile), worked out on the server over all its tracks, as
    *  the Filter sheet's list is (lib/listFilter inView); asked again after an edit. Not a selection's. */
   let profile = $state<ListProfileData | null>(null);
+  /** While the profile (or a Sounds like crate's curve) is on its way: the header holds its place rather than showing
+   *  the tempo spread that would make way for it (the owner, 2026-10-23: no flash of what is not going to stay). */
+  let profileComing = $state(false);
+  /** The list the profile is of. */
+  let profileOf = '';
   $effect(() => {
     const at = inView[kind];
     void saved;
     void undos.n;
-    profile = null;
-    if (!at || multi || crateEditing || creating) return;
+    if (!at || multi || crateEditing || creating) {
+      profile = null;
+      profileComing = false;
+      profileOf = '';
+      return;
+    }
+    // An edit asks again with the old profile still shown; another list starts empty and waits.
+    const key = JSON.stringify([at.list, at.source]);
+    if (key !== profileOf) {
+      profileOf = key;
+      profile = null;
+    }
+    if (untrack(() => profile) === null) profileComing = true;
     let gone = false;
     filterList(at.list, [], at.source, at.list.kind === 'crate' ? hiddenLibraries() : undefined).then(
-      (f) => !gone && (profile = f.profile ?? null),
+      (f) => {
+        if (gone) return;
+        profile = f.profile ?? null;
+        profileComing = false;
+      },
       () => {
         /* no profile without it */
+        if (!gone) profileComing = false;
       },
     );
     return () => {
@@ -694,6 +715,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
    *  condition's seeds; moving the cut opens the crate of that many in its place. */
   const like = $derived(likeParts(crate));
   let curve = $state<LikeCurveData | null>(null);
+  let curveComing = $state(false);
   /** Where the curve's handle is while dragged: the count and the profile follow it (the owner, 2026-10-23), from the
    *  profiles sent with the curve, so a drag asks nothing of the server; the tracks follow on release. */
   let preview = $state<number | null>(null);
@@ -706,7 +728,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
   $effect(() => {
     const c = crate;
     curve = null;
+    curveComing = false;
     if (!c || !like) return;
+    curveComing = true;
     let gone = false;
     getCrate(c)
       .then((d) => {
@@ -715,9 +739,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
         return v && v.kind === 'like' ? likeCurve(v.of, prefs.source || undefined, hiddenLibraries(), v.fresh, v.weights) : null;
       })
       .then(
-        (k) => !gone && (curve = k),
+        (k) => {
+          if (gone) return;
+          curve = k;
+          curveComing = false;
+        },
         () => {
           /* no curve without it */
+          if (!gone) curveComing = false;
         },
       );
     return () => {
@@ -1731,6 +1760,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
             {#if like && curve?.alike.length}<LikeCurve curve={curve.alike} count={like.count} onpreview={(n) => (preview = n)} onchange={(n) => viewLike(like.item, n)} />{/if}
             {#if previewProfile ?? profile}<ListProfile data={(previewProfile ?? profile)!} />{/if}
           </div>
+        {:else if profileComing || curveComing}
+          <div class="head-spread waiting" aria-hidden="true"></div>
         {:else if headTempo}
           <div class="head-spread">
             <Spread series={headTempo.series} />
