@@ -19,7 +19,7 @@
   import PageLoading from './lib/PageLoading.svelte';
   import PlaylistItem from './lib/PlaylistItem.svelte';
   import { NEW_PLAYLIST, viewPlaylist, panel } from './lib/panel.svelte';
-  import { isPlaylistFavorite, loadPlaylistFavorites, setPlaylistFavorites } from './lib/favourites.svelte';
+  import { isPlaylistFavorite, loadPlaylistFavorites, playlistFavoritesKnown, setPlaylistFavorites } from './lib/favourites.svelte';
   import { endSelect, pickWhich, viewPicked, select, showsPicked, startSelect, tick } from './lib/select.svelte';
   import SelectSheet from './lib/SelectSheet.svelte';
   import Row, { type Cell } from './lib/Row.svelte';
@@ -51,6 +51,8 @@
   const np = $derived(playing());
   // Its conditions (decision 0061): the server says which playlists pass, any or all of their tracks.
   const pass = passing(() => 'playlists', () => ({ list: { kind: 'playlists' }, source: prefs.source || undefined }));
+  /** What a filter goes by is not in yet: the page loads rather than show them all, or none (the owner, 2026-10-23). */
+  const waiting = $derived((switchOn('playlists', 'favourites') && !playlistFavoritesKnown()) || (pass.pending && !pass.keys));
   const items = $derived.by(() => {
     const q = pageView.query.trim().toLowerCase();
     let list = shownPlaylists().map((p) => {
@@ -78,6 +80,7 @@
 
   // How many the filter lets through, of how many (the Filter sheet's count).
   $effect(() => {
+    if (waiting) return;
     pageView.counted = { shown: items.length, total: shownPlaylists().length };
     return () => (pageView.counted = null);
   });
@@ -175,7 +178,7 @@
     <Notice text={error} />
   {/if}
 
-  {#if !view && !error}
+  {#if (!view || waiting) && !error}
     <PageLoading />
   {:else}
     <!-- The list's header (lib/ListHead): its order, how many, and Select (decision 0025: on, a chip's name ticks it; the

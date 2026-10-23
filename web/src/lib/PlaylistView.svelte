@@ -60,6 +60,7 @@
     CRATE,
     crateArt,
     crateName,
+    crateNameKnown,
     crateOf,
     crates,
     crateRadio as crateRadioOf,
@@ -196,7 +197,7 @@
       : creating
         ? 'New playlist'
         : crate
-          ? crateName(crate)
+          ? (crateNameKnown(crate) ?? '')
           : album
             ? (albumHead?.title ?? '')
             : artist
@@ -298,6 +299,8 @@
   let source = $state('');
   let error = $state<string | null>(null);
   let shownFor = '';
+  /** The rows' hearts are in: until then the Favourites switch shows the list loading, not empty. */
+  let rowFavsIn = $state(false);
   /** Bumped after a save: the rows are asked for again (a reorder changes no count), as after an undo or redo. */
   let saved = $state(0);
   $effect(() => {
@@ -312,6 +315,9 @@
     const c = crateOf(want);
     const a = albumOf(want);
     const ar = artistOf(want);
+    // A crate's rows wait for the crates (read on opening, above): asked before, they were asked again with its
+    // favourites setting, the list showing, then loading, then again (the owner, 2026-10-23).
+    if (c && !crates.list && !crates.error) return;
     // As the toggle shows it (the server's saved setting until the crates are known).
     const shownFav = () => (c && crates.list ? favouritesOf(c) : undefined);
     const fav = shownFav();
@@ -355,7 +361,8 @@
         source = r.source;
         total = r.total;
         listGenres = r.genres;
-        if (r.source !== DEVICE) loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
+        rowFavsIn = r.source === DEVICE;
+        if (r.source !== DEVICE) loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : []))).then(() => want === id && (rowFavsIn = true));
       },
       (e) => {
         if (want === id) error = e instanceof Error ? e.message : 'Unexpected error';
@@ -365,9 +372,12 @@
 
   // The covers: the playlist's first albums, four as a mosaic (decision 0021).
   let covers = $state<string[]>([]);
+  /** The covers asked for have come (or are not asked for): until then the hero holds its place (below). */
+  let coversKnown = $state(false);
   $effect(() => {
     const want = id;
     covers = [];
+    coversKnown = true;
     // An artist's comes with their albums (above).
     if (!want || crateOf(want) || builderOf(want) || want === NEW_PLAYLIST || artistOf(want)) return;
     const a = albumOf(want);
@@ -375,6 +385,7 @@
       covers = [albumCoverUrl(a.source, a.id)];
       return;
     }
+    coversKnown = false;
     if (multi) {
       // Several: the first cover of each of the first four, as a mosaic.
       const first = ids.slice(0, 4);
@@ -382,6 +393,7 @@
         if (want !== id) return;
         const urls = lists.flatMap((l) => (l[0] ? [albumCoverUrl(l[0].source, l[0].album_id)] : []));
         covers = urls.length >= 4 ? urls.slice(0, 4) : urls.slice(0, 1);
+        coversKnown = true;
       });
       return;
     }
@@ -390,22 +402,32 @@
         if (want !== id) return;
         const urls = list.map((c) => albumCoverUrl(c.source, c.album_id));
         covers = urls.length >= 4 ? urls.slice(0, 4) : urls.slice(0, 1);
+        coversKnown = true;
       },
-      () => {},
+      () => want === id && (coversKnown = true),
     );
   });
 
   // An artist's photo, where the server's artist store has one (TheAudioDB's): the header shows it rather than an album
   // cover (the owner, 2026-10-23); a picture chosen on this device still comes first.
   let artistPhoto = $state<string | null>(null);
+  /** Whether they have one is known: until then neither the photo nor an album's cover shows (no cover that the photo
+   *  then replaces). */
+  let artistPhotoKnown = $state(true);
   $effect(() => {
     const ar = artist;
     artistPhoto = null;
+    artistPhotoKnown = true;
     if (!ar || ar.source !== 'cratarr' || ar.tracks) return;
+    artistPhotoKnown = false;
     let gone = false;
     getArtistAbout(ar.name).then(
-      (a) => !gone && a.photo && a.id && (artistPhoto = artistPhotoUrl(a.id)),
-      () => {},
+      (a) => {
+        if (gone) return;
+        if (a.photo && a.id) artistPhoto = artistPhotoUrl(a.id);
+        artistPhotoKnown = true;
+      },
+      () => !gone && (artistPhotoKnown = true),
     );
     return () => (gone = true);
   });
@@ -470,6 +492,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
   });
   const flowShown = $derived(flowCovers.filter((url) => !coverBroken(url)));
   const flowing = $derived(flowShown.length >= 3);
+  /** The hero's art is not known yet (the owner, 2026-10-23: nothing shown that something else then replaces): it keeps
+   *  its full size, empty; a crate's on the coverflow's canvas, which most become. */
+  const heroPending = $derived.by(() => {
+    if (crateEditing) return false;
+    if (artist) return !artistPhotoKnown || rows === null;
+    if (crate) return rows === null || (!seeded(crate) && !crates.list);
+    return !coversKnown;
+  });
   // As drawn: covers that fail to load leave a mosaic (lib/Cover).
   const coversShown = $derived(mosaicOf(covers));
   const heroShown = $derived(mosaicOf(heroArt));
@@ -559,7 +589,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const ordered = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
   /** The rows as the list shows them, each with its place in the subject (`i`). */
   const shown = $derived.by(() => {
-    if (!rows) return null;
+    // What a filter goes by not in yet: loading, not the rows unfiltered or none (the owner, 2026-10-23).
+    if (!rows || (filterOn('favourites') && !rowFavsIn) || (pass.pending && !pass.keys)) return null;
     const list = rows.map((r, i) => ({ r, i })).filter((x) => keeps(x.r));
     const text = (r: PlaylistRow) =>
       sortKey === 'title' ? (r.name ?? r.file) : sortKey === 'artist' ? (r.artist ?? '') : sortKey === 'albumArtist' ? (r.album_artist ?? '') : (r.album ?? '');
@@ -776,6 +807,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
    *  series per playlist in its section's colour. Not an album's: its few tracks make no spread. */
   const headTempo = $derived.by((): { series: number[][]; withTempo: number; total: number } | null => {
     if (crateEditing || creating || album) return null;
+    // A playlist not known yet (just reloaded): its profile is still to be asked for, so not the spread first.
+    if (!plain && !multi && !p) return null;
     let series: number[][];
     let total: number;
     if (multi) {
@@ -875,7 +908,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     return list;
   });
   // A genre shows all its tracks: no favourites toggles.
-  const favState = $derived(crate && !seeded(crate) ? FAVOURITES[favouritesOf(crate)] : null);
+  // Not before the crates are known: it showed No favourites first.
+  const favState = $derived(crate && !seeded(crate) && crates.list ? FAVOURITES[favouritesOf(crate)] : null);
   // Beside it, its favourite albums toggle (decision 0024, amended 2026-10-19).
   const albState = $derived(crate && !seeded(crate) ? FAVOURITE_ALBUMS[favouriteAlbumsOf(crate)] : null);
   const closeLabel = $derived(
@@ -1528,7 +1562,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         {#if canGoBack}<button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button>{/if}
         <button aria-label={closeLabel} title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button>
       </span>
-      <span class="end">{#if !editing && !crateEditing}<TopPill view order={listOrder} device={!playing()} tempos={listTempos} {kind} counted={rows ? { shown: shown?.length ?? 0, total: rows.length } : null} />{/if}<PanelPlace /></span>
+      <span class="end">{#if !editing && !crateEditing}<TopPill view order={listOrder} device={!playing()} tempos={listTempos} {kind} counted={rows && shown ? { shown: shown.length, total: rows.length } : null} />{/if}<PanelPlace /></span>
     </div>
   {/if}
 
@@ -1549,8 +1583,15 @@ ${r.album_artist ?? r.artist ?? ''}`;
       </div>
       </header>
     {:else if !other}
-      <div class="hero" class:mosaic={heroShown.length === 4 && !flowing} class:bare={!heroShown.length && !flowing} class:flowing>
-        {#if flowing}
+      <div
+        class="hero"
+        class:mosaic={!heroPending && heroShown.length === 4 && !flowing}
+        class:bare={!heroPending && !heroShown.length && !flowing}
+        class:flowing={flowing || (heroPending && !!crate)}
+      >
+        {#if heroPending}
+          <!-- Its art on its way: the place kept, empty. -->
+        {:else if flowing}
           <!-- A crate's albums as a coverflow on a light canvas (the owner, 2026-10-23); a drag or a tap moves through them. -->
           <CoverFlow covers={flowShown} />
         {:else}
@@ -1761,7 +1802,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
             {#if previewProfile ?? profile}<ListProfile data={(previewProfile ?? profile)!} />{/if}
           </div>
         {:else if profileComing || curveComing}
-          <div class="head-spread waiting" aria-hidden="true"></div>
+          <div class="head-spread waiting" class:artist-head={!!artist && !artist.tracks} aria-hidden="true"></div>
         {:else if headTempo}
           <div class="head-spread">
             <Spread series={headTempo.series} />
@@ -1873,6 +1914,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         top={topRows.length ? topList : undefined}
         ontracks={() => viewOver(artistSubject(artist.source, artist.name, true))}
         profile={(previewProfile ?? profile) ? artistProfile : undefined}
+        {profileComing}
       />
       {#snippet artistProfile()}<ListProfile data={(previewProfile ?? profile)!} fixed />{/snippet}
       {#snippet topList()}

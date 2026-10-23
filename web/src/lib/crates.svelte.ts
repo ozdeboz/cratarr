@@ -160,7 +160,11 @@ export function forgetDraft(id: string | null) {
     /* nothing kept */
   }
 }
-export const crateName = (id: string) => crates.list?.find((c) => c.id === id)?.name ?? genreOf(id) ?? likeNames[id] ?? id;
+/** A crate's name, or null while it is not known yet (the crates not read, a Sounds like crate's name not asked):
+ *  a header shows nothing rather than its id first. */
+export const crateNameKnown = (id: string): string | null =>
+  crates.list?.find((c) => c.id === id)?.name ?? genreOf(id) ?? likeNames[id] ?? (crates.list && !likeOf(id) ? id : null);
+export const crateName = (id: string) => crateNameKnown(id) ?? id;
 
 // A crate's picture (decided 2026-10-16): its own, else its albums' covers (four as a mosaic, else the first), on its
 // card and over it in the panel. Its own is read again after a change (a new address).

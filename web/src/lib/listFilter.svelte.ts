@@ -43,9 +43,12 @@ export function conditionsFor(kind: string): Condition[] | undefined {
 export const inView = $state<Record<string, { list: FilterList; source?: string } | undefined>>({});
 
 /** The keys of a list's items (of the kind `kindOf` says) its conditions let through (lib/api filterList), asked again 300 ms after they change;
- *  null while there are none, or the server cannot tell (then nothing is left out). */
-export function passing(kindOf: () => string, get: () => { list: FilterList; source?: string } | null): { keys: Set<string> | null } {
-  const out = $state<{ keys: Set<string> | null }>({ keys: null });
+ *  null while there are none, or the server cannot tell (then nothing is left out). `pending`: conditions apply and
+ *  their answer is on its way; the last answer for the same list stays meanwhile, and before the first a list shows
+ *  as loading rather than unfiltered (the owner, 2026-10-23: nothing shown that something else then replaces). */
+export function passing(kindOf: () => string, get: () => { list: FilterList; source?: string } | null): { keys: Set<string> | null; pending: boolean } {
+  const out = $state<{ keys: Set<string> | null; pending: boolean }>({ keys: null, pending: false });
+  let of = '';
   $effect(() => {
     const kind = kindOf();
     const at = get();
@@ -55,13 +58,30 @@ export function passing(kindOf: () => string, get: () => { list: FilterList; sou
     // A crate's rows come filtered (CrateLook.filter): its answer has no keys.
     if (!at || !conditions || at.list.kind === 'crate') {
       out.keys = null;
+      out.pending = false;
+      of = '';
       return;
     }
+    // Another list: the last one's answer says nothing about it.
+    const list = JSON.stringify([kind, at]);
+    if (list !== of) {
+      of = list;
+      out.keys = null;
+    }
+    out.pending = true;
     let gone = false;
     const t = setTimeout(() => {
       filterList(at.list, conditions, at.source, without).then(
-        (f) => !gone && (out.keys = new Set(f.keys)),
-        () => !gone && (out.keys = null),
+        (f) => {
+          if (gone) return;
+          out.keys = new Set(f.keys);
+          out.pending = false;
+        },
+        () => {
+          if (gone) return;
+          out.keys = null;
+          out.pending = false;
+        },
       );
     }, 300);
     return () => {

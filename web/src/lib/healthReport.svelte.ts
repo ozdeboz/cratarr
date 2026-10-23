@@ -11,14 +11,22 @@ export const health = $state<{ findings: HealthFinding[]; loaded: boolean; probl
   error: null,
 });
 
+/** Loaded once both answers are in (the owner, 2026-10-23): never "All good." before the files' problems come. */
+let settled = { report: false, files: false };
+const settle = (which: keyof typeof settled) => {
+  settled[which] = true;
+  if (settled.report && settled.files) health.loaded = true;
+};
+
 export function loadHealth() {
+  settled = { report: false, files: false };
   getHealthReport().then(
-    (r) => ((health.findings = r.findings), (health.loaded = true)),
-    () => (health.loaded = true),
+    (r) => ((health.findings = r.findings), settle('report')),
+    () => settle('report'),
   );
   getFileProblems().then(
-    (p) => ((health.problems = p), (health.error = null)),
-    (e) => (health.error = e instanceof Error ? e.message : 'Unexpected error'),
+    (p) => ((health.problems = p), (health.error = null), settle('files')),
+    (e) => ((health.error = e instanceof Error ? e.message : 'Unexpected error'), settle('files')),
   );
 }
 
