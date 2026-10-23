@@ -127,6 +127,11 @@ function note(level: Line['level'], what: string, fields: Record<string, unknown
   if (lines.length > 500) lines.shift();
 }
 
+/** The last line Cratarr has had. */
+let logged = 0;
+/** Every so often while connected, the lines Cratarr has not had yet (what a group's sound did, as it happens). */
+const LOG_MS = 30_000;
+
 /** The lines Cratarr has not had yet, to it. */
 async function sendLog(player: string) {
   const base = `/api/players/${encodeURIComponent(player)}/log`;
@@ -135,7 +140,8 @@ async function sendLog(player: string) {
     if (!held.ok) return;
     const last = ((await held.json()) as { last?: number }).last ?? 0;
     const out = lines.filter((l) => l.seq > last);
-    if (out.length) await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ log: LOG, lines: out }) });
+    if (out.length && (await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ log: LOG, lines: out }) })).ok)
+      logged = out[out.length - 1].seq;
   } catch {
     /* sent with the next connection */
   }
@@ -272,7 +278,7 @@ function connect() {
       else {
         if (elsewhere()) hereAgain();
         else stop();
-        followGroup(leader, player).then((sounds) => (target.tapToPlay = !sounds));
+        followGroup(leader, player, note).then((sounds) => (target.tapToPlay = !sounds));
       }
       return reportSoon(true);
     }
@@ -366,4 +372,5 @@ if (typeof window !== 'undefined' && !inApp) {
     });
   });
   setInterval(() => target.connected && report(), HEARTBEAT_MS);
+  setInterval(() => target.connected && name && seq > logged && sendLog(name), LOG_MS);
 }

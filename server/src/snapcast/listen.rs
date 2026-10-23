@@ -1,5 +1,5 @@
-//! Sync play for a player without Snapcast's player (a Kodi, `app::kodi`; a page in a browser): the group's sound as one
-//! long WAV over HTTP.
+//! Sync play for a player without Snapcast's player: the group's sound as one long WAV over HTTP for a Kodi
+//! (`app::kodi`), as stamped records for a page in a browser (`Snapcast::frames`).
 //!
 //! - Each chunk is sent a buffer after its stamp, less the player's own delay (its speaker delay setting), so the
 //!   player's own buffering brings it to its sound when the others play it.
@@ -225,6 +225,92 @@ impl Snapcast {
     }
 }
 
+/// One record of a page's stream (`Snapcast::frames`): its kind, its stamp (Cratarr's time, epoch µs), its PCM.
+fn record(kind: u8, stamp_us: i64, audio: &[u8]) -> axum::body::Bytes {
+    let mut r = Vec::with_capacity(13 + audio.len());
+    r.push(kind);
+    r.extend_from_slice(&stamp_us.to_le_bytes());
+    r.extend_from_slice(&(audio.len() as u32).to_le_bytes());
+    r.extend_from_slice(audio);
+    r.into()
+}
+
+/// Cratarr's time now (epoch µs) less its steady clock's: a stamp on the one, on the other.
+fn to_epoch(snap: &Snapcast) -> i64 {
+    let epoch = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_micros() as i64).unwrap_or(0);
+    epoch - snap.now()
+}
+
+impl Snapcast {
+    /// The sound of `leader`'s group for a page in a browser (decision 0037, amended 2026-10-23): each chunk as it comes,
+    /// stamped on Cratarr's time (epoch µs), for the page to play at its moment on its own audio clock (a browser's
+    /// `<audio>` holds seconds before it plays, more than the group's buffer). No pacing, no skips, no pads. First its
+    /// format, 16 bytes: rate (u32), channels (u16), bits (u16), the group's buffer (ms, u32), the player's speaker delay
+    /// (ms, u32). Then records: kind (u8: 1 sound, 2 silence from its stamp on: a break), stamp (i64), length (u32), the
+    /// PCM. Little-endian.
+    pub fn frames(self: &Arc<Self>, leader: &str, name: &str, delay_ms: u32) -> mpsc::Receiver<Result<axum::body::Bytes, std::io::Error>> {
+        let (tx, rx) = mpsc::channel(64);
+        let (me, stream, name, leader) = (self.clone(), self.stream(leader), name.to_string(), leader.to_string());
+        tokio::spawn(async move {
+            let mut out = stream.out.subscribe();
+            let mut muted = stream.muted.subscribe();
+            let mut format = stream.state().codec.clone().and_then(|c| proto::read_codec_header(&c));
+            while format.is_none() {
+                match out.recv().await {
+                    Ok(Out::Codec(c)) => format = proto::read_codec_header(&c),
+                    Ok(Out::Chunk(_)) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => return,
+                }
+            }
+            let f = format.expect("waited for");
+            let mut head = Vec::with_capacity(16);
+            head.extend_from_slice(&f.rate.to_le_bytes());
+            head.extend_from_slice(&f.channels.to_le_bytes());
+            head.extend_from_slice(&f.bits.to_le_bytes());
+            head.extend_from_slice(&me.buffer_ms.to_le_bytes());
+            head.extend_from_slice(&delay_ms.to_le_bytes());
+            if tx.send(Ok(head.into())).await.is_err() {
+                return;
+            }
+            tracing::info!(target: "syncplay", player = name.as_str(), leader = leader.as_str(), "page listening");
+            let mut behind = 0u64;
+            let why = loop {
+                tokio::select! {
+                    o = out.recv() => match o {
+                        Ok(Out::Chunk(c)) => {
+                            let stamp = i64::from(i32::from_le_bytes(c[0..4].try_into().unwrap_or_default())) * 1_000_000
+                                + i64::from(i32::from_le_bytes(c[4..8].try_into().unwrap_or_default()));
+                            let Some(audio) = proto::read_wire_chunk(&c) else { continue };
+                            if tx.send(Ok(record(1, stamp + to_epoch(&me), audio))).await.is_err() {
+                                break "gone";
+                            }
+                        }
+                        Ok(Out::Codec(c)) if proto::read_codec_header(&c) != Some(f) => break "another format",
+                        Ok(Out::Codec(_)) => {}
+                        // The page reads too slowly: what it missed is lost to it (a gap it logs).
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            behind += n;
+                            tracing::warn!(target: "syncplay", player = name.as_str(), chunks = n, "page fell behind");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break "group ended",
+                    },
+                    r = muted.changed() => {
+                        if r.is_err() {
+                            break "group ended";
+                        }
+                        let now = *muted.borrow_and_update();
+                        if now && tx.send(Ok(record(2, me.now() + to_epoch(&me), &[]))).await.is_err() {
+                            break "gone";
+                        }
+                    }
+                }
+            };
+            tracing::info!(target: "syncplay", player = name.as_str(), leader = leader.as_str(), why, chunks_missed = behind, "page stopped listening");
+        });
+        rx
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,5 +344,34 @@ mod tests {
         l.origin.store(5_000_000, Ordering::Relaxed);
         assert_eq!(l.stamp_at(1_500.5), Some(6_500_500));
         assert_eq!(&wav_header(F)[0..4], b"RIFF");
+    }
+
+    #[test]
+    fn a_listener_is_put_back_in_step_from_the_middle_of_five_readings() {
+        let l = Listener::default();
+        l.origin.store(5_000_000, Ordering::Relaxed);
+        // Played at its time 0 ms when the others played stamp 5 s + 30 ms (a 1 s buffer): 30 ms late, four times; once
+        // a wild reading, which the middle leaves out.
+        for when in [6_030_000, 6_030_000, 9_000_000, 6_030_000] {
+            assert_eq!(l.heard(0.0, when, 1000), None);
+        }
+        assert_eq!(l.heard(0.0, 6_030_000, 1000), Some((30, true)));
+        assert_eq!(l.adjust.load(Ordering::Relaxed), 30_000, "a skip of 30 ms asked for");
+        // In line (10 ms): left as it is.
+        let l = Listener::default();
+        l.origin.store(5_000_000, Ordering::Relaxed);
+        for _ in 0..5 {
+            assert_eq!(l.heard(0.0, 6_010_000, 1000), None);
+        }
+        assert_eq!(l.adjust.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn a_page_s_record_is_its_kind_stamp_length_and_sound() {
+        let r = record(1, -2, &[7, 8, 9]);
+        assert_eq!(r[0], 1);
+        assert_eq!(i64::from_le_bytes(r[1..9].try_into().unwrap()), -2);
+        assert_eq!(u32::from_le_bytes(r[9..13].try_into().unwrap()), 3);
+        assert_eq!(&r[13..], &[7, 8, 9]);
     }
 }

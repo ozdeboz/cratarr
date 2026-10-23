@@ -37,9 +37,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/players/{name}/command", post(player_command))
         .route("/api/players/{name}/state", axum::routing::put(player_state))
         .route("/api/players/{name}/sample", post(player_sample))
-        .route("/api/players/{name}/heard", post(player_heard))
         .route("/api/players/{name}/delay", axum::routing::put(player_delay))
         .route("/api/groups/{leader}/listen.wav", get(group_listen))
+        .route("/api/groups/{leader}/listen.pcm", get(group_frames))
         .route("/api/time", get(time_now))
         .route("/api/sync/measure", get(sync_measure))
         .route("/api/radio/next", post(radio_next))
@@ -1671,12 +1671,6 @@ async fn player_sample(State(app): State<Arc<App>>, Path(name): Path<String>, Js
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// What a page following a group plays (sync play in a browser): kept in step from it.
-async fn player_heard(State(app): State<Arc<App>>, Path(name): Path<String>, Json(h): Json<crate::app::PlayerHeard>) -> Result<StatusCode, ApiError> {
-    app.play_on.heard(&name, h)?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
 #[derive(Deserialize)]
 struct Listening {
     player: String,
@@ -1690,6 +1684,20 @@ async fn group_listen(State(app): State<Arc<App>>, Path(leader): Path<String>, Q
     let delay = u32::from(app.play_on.delay_of(&q.player));
     let body = axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(snap.listen(&leader, &q.player, delay)));
     ([(header::CONTENT_TYPE, HeaderValue::from_static("audio/wav")), (header::CACHE_CONTROL, HeaderValue::from_static("no-store"))], body).into_response()
+}
+
+/// A group's sound as stamped records, for a page in a browser to play each at its moment (decision 0037, amended
+/// 2026-10-23; `Snapcast::frames`).
+async fn group_frames(State(app): State<Arc<App>>, Path(leader): Path<String>, Query(q): Query<Listening>) -> Response {
+    let Some(snap) = crate::snapcast::Snapcast::instance() else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "Sync play is not served here." }))).into_response();
+    };
+    if let Err(e) = app.play_on.reached(&q.player) {
+        return ApiError::from(e).into_response();
+    }
+    let delay = u32::from(app.play_on.delay_of(&q.player));
+    let body = axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(snap.frames(&leader, &q.player, delay)));
+    ([(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream")), (header::CACHE_CONTROL, HeaderValue::from_static("no-store"))], body).into_response()
 }
 
 #[derive(serde::Deserialize)]

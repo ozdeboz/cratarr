@@ -274,15 +274,6 @@ fn yes() -> bool {
     true
 }
 
-/// What a page following a group says it plays (`PlayOn::heard`).
-#[derive(Debug, Clone, Copy, Deserialize)]
-pub struct Heard {
-    /// Its time in the group's sound (ms).
-    pub time_ms: f64,
-    /// When (Cratarr's time, epoch ms).
-    pub at_ms: f64,
-}
-
 /// What can be asked of a player.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
@@ -1187,21 +1178,6 @@ impl PlayOn {
         valid_name(name)?;
         self.reached(name)?;
         self.samples.answer(name, s);
-        Ok(())
-    }
-
-    /// What a page in a browser following a group plays (sync play): its time in the group's sound, at `at_ms` of
-    /// Cratarr's time (epoch ms, from its clock exchange); put back in step when out of line, as a Kodi is.
-    pub fn heard(&self, name: &str, h: Heard) -> Result<(), ToggleError> {
-        valid_name(name)?;
-        self.reached(name)?;
-        let Some(snap) = crate::snapcast::Snapcast::instance() else { return Ok(()) };
-        let Some(listener) = snap.listener(name) else { return Ok(()) };
-        // Cratarr's time then, on Snapcast's clock: as long ago as it was then.
-        let ago = ((super::together::now_ms() - h.at_ms) * 1000.0) as i64;
-        if let Some((ms, late)) = listener.heard(h.time_ms, snap.now() - ago.max(0), snap.buffer_ms()) {
-            tracing::info!(target: "syncplay", player = name, ms, late, "put back in step");
-        }
         Ok(())
     }
 
@@ -2193,7 +2169,7 @@ impl PlayOn {
             }
             let leader = entries.get(to).and_then(|e| e.leader.clone()).unwrap_or_else(|| to.to_string());
             // A Kodi or a page in a browser follows, never leads (the owner): its sound cannot be sent on. It listens
-            // to the group's sound as one stream (`snapcast::listen`).
+            // to the group's sound over HTTP (`snapcast::listen`).
             if entries.get(&leader).is_some_and(|e| e.kind != PlayerKind::App) {
                 return Err(ToggleError::Refused(format!("{leader} cannot lead a group: play on another player and add {leader} to it.")));
             }

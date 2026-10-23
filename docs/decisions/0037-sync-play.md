@@ -206,13 +206,22 @@ afford (Points, Steps, Resolution, FPS) and how bright its screen should be stay
 The owner wanted the ThinkBook's page in the Salon tablet's group. A page now follows a group the way a Kodi does,
 and never leads one: its sound cannot be sent on.
 
-- **Its sound:** on a `group` command naming another leader, its own music stops and it plays the group's sound as one
-  long WAV (`/api/groups/{leader}/listen.wav?player=`), sent a buffer after its stamps, less its speaker delay
-  (`lib/groupListen`). Lost, it opens it again after 2 s. A browser that wants a tap first shows Tap to play.
-- **In step:** every 2 s the page says what it plays there and when, on Cratarr's time from a clock exchange with
-  `/api/time` (`POST /api/players/{name}/heard {time_ms, at_ms}`). Cratarr reads it as it reads a Kodi's time: the
-  middle of five readings, out of line by more than 20 ms, skipped or padded, at most every 4 s
-  (`snapcast::listen::Listener::heard`, now shared by both).
+- **Its sound:** on a `group` command naming another leader, its own music stops and it reads the group's sound as
+  stamped records (`/api/groups/{leader}/listen.pcm?player=`, `Snapcast::frames`: its format, then each chunk as it
+  comes with its stamp on Cratarr's time, and a break's silence). It plays each at its moment on the browser's audio
+  clock: the stamp, plus the group's buffer, less its speaker delay, on Cratarr's time from a clock exchange with
+  `/api/time`, at the moment sound leaves the speaker (`getOutputTimestamp`) (`lib/groupListen`). Pieces within 5 ms
+  of each other are laid end to end; further apart, the stamp's moment wins. Lost, it opens it again after 2 s; a
+  browser that wants a tap first shows Tap to play.
+- **Not the Kodi's WAV:** the first build played the Kodi's WAV in an `<audio>` element. Chrome held about 3 s before
+  playing, more than the group's 1 s, so it was always late; each skip to bring it back sent nothing for as long, the
+  page ran dry and rebuffered, late again: a dropout every 10 s (the owner heard them; the server's log showed "put back
+  in step … 3126 ms late" every 10 s). The keep-in-step reading stays the Kodi's
+  (`snapcast::listen::Listener::heard`).
+- **Its log:** what it heard unevenly goes to its player log, sent every 30 s while connected: the group's sound
+  opened (format, buffer, delay, the browser's latencies), its clock (offset, round trip), every 10 s a tally when
+  anything went unevenly (pieces too late to play, gaps and their length, resyncs), lost and reopened, held back for a
+  tap, closed. Cratarr's own log says when a page starts and stops listening (and why), and when it fell behind.
 - **Its screen:** shows the group's, as an app following does; its own player reports no queue, playing while the
   group's sound plays. Its row in the Play On sheet has the group's + and tick, like any follower's.
 - The caution above still holds: a page's output delay is less predictable than the app's, and a sleeping screen may
