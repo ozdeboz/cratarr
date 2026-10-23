@@ -2101,13 +2101,18 @@ impl PlaylistService {
     /// Over what a seed crate may show, as its tracks are picked (`CrateLibrary::resolved`): the libraries not in
     /// `without`, less the tracks excluded everywhere. With the profile at every step its handle can stop at
     /// (`crates::profiles_along`), so the profile follows a drag (the owner, 2026-10-23).
-    pub async fn like_curve(&self, of: &[String], want: Option<&str>, without: &[String]) -> Result<LikeCurve, ToggleError> {
+    pub async fn like_curve(&self, of: &[String], want: Option<&str>, without: &[String], fresh: bool) -> Result<LikeCurve, ToggleError> {
         let lib = self.crate_library(want, false, false, without).await?;
         let excluded: HashSet<String> = self.own_crates()?.excluded().await?.into_iter().collect();
         let (of, lib) = (of.to_vec(), Arc::new(lib));
         tokio::task::spawn_blocking(move || {
             let among: Vec<&crates::Facts> = lib.files().filter(|f| !excluded.contains(&f.rel)).collect();
-            let closest = crates::closest(&of, &lib.files, &among);
+            let mut closest = crates::closest(&of, &lib.files, &among);
+            // Fresh: the seeds left out, as the crate leaves them (crates::resolved).
+            if fresh {
+                let seeds: HashSet<i64> = of.iter().filter_map(|id| crate::serve::ids::track_of(id)).collect();
+                closest.retain(|(f, _)| !f.track.is_some_and(|t| seeds.contains(&t)));
+            }
             let alike = closest.iter().map(|(_, a)| (a * 10.0).round() / 10.0).collect();
             let tracks: Vec<&crates::Facts> = closest.iter().map(|(f, _)| *f).collect();
             let scales = crates::Scales::of(&lib.files().collect::<Vec<_>>());

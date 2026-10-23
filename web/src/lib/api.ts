@@ -535,8 +535,10 @@ export type TempoBands = { bands: number[]; with_tempo: number; total: number };
 /** How alike the tracks that sound most like these seeds are, closest first, 0 to 100 (lib/LikeCurve), and the profile
  *  of the closest `count` at every step its handle can stop at (the profile follows a drag). */
 export type LikeCurveData = { alike: number[]; profiles: { count: number; profile: ListProfileData }[] };
-export const likeCurve = (of: string[], source?: string, without?: string[]) =>
-  quietly<LikeCurveData>(`/api/like-curve?${new URLSearchParams({ of: of.join(','), ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);
+export const likeCurve = (of: string[], source?: string, without?: string[], fresh = false) =>
+  quietly<LikeCurveData>(
+    `/api/like-curve?${new URLSearchParams({ of: of.join(','), ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}), ...(fresh ? { fresh: 'true' } : {}) })}`,
+  );
 export const crateTempo = (id: string, source?: string, favourites?: CrateFavourites, favouriteAlbums?: CrateFavourites, look: CrateLook = {}) => {
   const q = new URLSearchParams();
   if (favourites) q.set('favourites', favourites);

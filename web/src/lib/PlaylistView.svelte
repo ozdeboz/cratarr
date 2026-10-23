@@ -656,7 +656,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       .then((d) => {
         nameLike(c, d.name);
         const v = d.conditions.find((x) => x.value.kind === 'like')?.value;
-        return v && v.kind === 'like' ? likeCurve(v.of, prefs.source || undefined, hiddenLibraries()) : null;
+        return v && v.kind === 'like' ? likeCurve(v.of, prefs.source || undefined, hiddenLibraries(), v.fresh) : null;
       })
       .then(
         (k) => !gone && (curve = k),
@@ -816,6 +816,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     return parts.filter((x) => x !== null && x !== undefined && x !== '').join(' • ');
   });
   // Not while a crate is changed: its genres are the editor's to choose.
+  const shownArtists = $derived(prefs.listArtists && !album && !artist && !multi ? ((previewProfile ?? profile)?.artists ?? []) : []);
   const shownGenres = $derived(multi || crateEditing ? [] : plain ? (listGenres ?? []) : (point?.genres ?? []));
 
   // As Symfonium's album screen: two floating pills over the cover (back and ✕; the filter and where it plays), and the
@@ -1616,6 +1617,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {/if}
           <!-- A genre opens in the panel (its own crate). -->
           {#if shownGenres.length}<p class="genres">{#each shownGenres as g (g)}<button onclick={() => viewGenre(g)} use:longpress={() => (badgeMenu = CRATE + GENRE + g)}>{g}</button>{/each}</p>{/if}
+          <!-- A playlist's or a crate's telling artists (its profile's), each opening the artist; not an album's or an
+               artist's own, whose header names them. -->
+          {#if shownArtists.length}<p class="genres">{#each shownArtists as a (a)}<button onclick={() => goToArtist(source || 'cratarr', a)}>{a}</button>{/each}</p>{/if}
           {#if p?.dead || chosenDead}<p class="details dead missing">{p?.dead || chosenDead} missing</p>{/if}
           <!-- A crate's exclusions (decision 0024, amended 2026-10-19): a tap shows them, to put back. -->
           {#if leftOut}<button class="details left-out" onclick={() => (leftOutOpen = true)}><Icon name="crateOut" size={14} /><span>{leftOut.toLocaleString()} excluded</span></button>{/if}
@@ -1623,7 +1627,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         {#if (profile || (like && curve?.alike.length)) && !multi}
           <div class="head-spread">
             {#if like && curve?.alike.length}<LikeCurve curve={curve.alike} count={like.count} onpreview={(n) => (preview = n)} onchange={(n) => viewLike(like.item, n)} />{/if}
-            {#if previewProfile ?? profile}<ListProfile data={(previewProfile ?? profile)!} ownArtist={!!album || !!artist} />{/if}
+            {#if previewProfile ?? profile}<ListProfile data={(previewProfile ?? profile)!} />{/if}
           </div>
         {:else if headTempo}
           <div class="head-spread">
