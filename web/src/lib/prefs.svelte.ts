@@ -54,6 +54,8 @@ export type Prefs = {
   insightsPeriod: 'week' | 'month' | 'year' | 'all';
   /** Listening's own sections (its second row): what was heard, or the taste it makes. */
   listeningView: 'history' | 'profile';
+  /** What Profile is built from (its panel): each source on or off. */
+  profileSources: { favourites: boolean; playlists: boolean; plays: boolean; skipped: boolean; excluded: boolean };
   signals: { tracks: boolean; genre: boolean; artists: boolean };
   /** The player's width when it shows beside the page (decision 0018). */
   playerWidth: number;
@@ -152,6 +154,7 @@ export const DEFAULTS: Prefs = {
   insightsCount: 'tracks',
   insightsPeriod: 'all',
   listeningView: 'history',
+  profileSources: { favourites: true, playlists: true, plays: true, skipped: true, excluded: true },
   signals: { tracks: true, genre: true, artists: true },
   playerWidth: 400,
   sidebar: true,
@@ -246,6 +249,8 @@ function read(): Prefs {
       if (saved.insightsCount === 'tracks' || saved.insightsCount === 'listed') p.insightsCount = saved.insightsCount;
       if (['week', 'month', 'year', 'all'].includes(saved.insightsPeriod)) p.insightsPeriod = saved.insightsPeriod;
       if (saved.listeningView === 'history' || saved.listeningView === 'profile') p.listeningView = saved.listeningView;
+      if (saved.profileSources && typeof saved.profileSources === 'object')
+        for (const k of Object.keys(p.profileSources) as (keyof typeof p.profileSources)[]) if (typeof saved.profileSources[k] === 'boolean') p.profileSources[k] = saved.profileSources[k];
       if (saved.signals && typeof saved.signals === 'object') {
         for (const k of ['tracks', 'genre', 'artists'] as const) {
           if (typeof saved.signals[k] === 'boolean') p.signals[k] = saved.signals[k];

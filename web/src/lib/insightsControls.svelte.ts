@@ -2,7 +2,8 @@
 // panel"): each tab says what it offers, as groups of controls of a few kinds, and the panel (lib/InsightsPanel) draws
 // every kind one way, as the settings' rows (lib/settings/Group, Item). A tab adds a control here, never markup there.
 // Every tab: the period (not the map) and the libraries, one switch each (Insights' own, the same everywhere; the last
-// one on stays on). Collection's Genres and Artists: what the bars count. Map: what brings playlists together.
+// one on stays on). Collection's Genres and Artists: what the bars count. Profile: what it is built from. Map: what
+// brings playlists together.
 import { getLibraries, type LibrariesView } from './api';
 import { prefs } from './prefs.svelte';
 import { known, libraryShown, showLibrary } from './sources.svelte';
@@ -72,6 +73,24 @@ const periodGroup = (): ControlGroup[] =>
     ? []
     : [{ title: null, controls: [{ kind: 'choice', name: 'Period', options: PERIODS, get: () => prefs.insightsPeriod, set: (v) => (prefs.insightsPeriod = v as typeof prefs.insightsPeriod) }] }];
 
+// Profile's sources (the owner, 2026-10-23: the one tab with an algorithm worth choosing the inputs of, beside the map).
+const SOURCES = [
+  { id: 'favourites', label: 'Favourites', line: 'More of' },
+  { id: 'playlists', label: 'Playlists', line: 'More of' },
+  { id: 'plays', label: 'Plays', line: 'More of' },
+  { id: 'skipped', label: 'Skips', line: 'Less of' },
+  { id: 'excluded', label: 'Exclusions', line: 'Less of' },
+] as const;
+const profile = (): ControlGroup[] =>
+  prefs.insightsTab === 'listening' && prefs.listeningView === 'profile'
+    ? [
+        {
+          title: 'Built from',
+          controls: SOURCES.map((s) => ({ kind: 'toggle', name: s.label, line: s.line, get: () => prefs.profileSources[s.id], set: (on: boolean) => (prefs.profileSources[s.id] = on) })),
+        },
+      ]
+    : [];
+
 const SIGNALS = [
   { id: 'tracks', label: 'Shared tracks' },
   { id: 'genre', label: 'Genre' },
@@ -87,6 +106,6 @@ const map = (): ControlGroup[] => [
 /** The period, the open tab's own controls, then the libraries. */
 export const insightsControls = (): ControlGroup[] => [
   ...periodGroup(),
-  ...(prefs.insightsTab === 'map' ? map() : prefs.insightsTab === 'collection' ? collection() : []),
+  ...(prefs.insightsTab === 'map' ? map() : prefs.insightsTab === 'collection' ? collection() : profile()),
   ...libraryGroup(),
 ];

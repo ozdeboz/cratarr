@@ -11,11 +11,12 @@
 
   let data = $state<TasteProfile | null>(null);
   let error = $state<string | null>(null);
-  // Of the libraries switched on and the period (Insights' own, every tab's).
+  // Of the libraries switched on and the period (Insights' own, every tab's), from the sources on (its panel).
   $effect(() => {
     const [source, without, period] = [prefs.source || undefined, hiddenLibraries(), prefs.insightsPeriod];
+    const off = Object.entries(prefs.profileSources).flatMap(([k, on]) => (on ? [] : [k]));
     let gone = false;
-    getTasteProfile(source, without, period).then(
+    getTasteProfile(source, without, period, off).then(
       (d) => !gone && ((data = d), (error = null)),
       (e) => !gone && (error = e instanceof ApiError ? e.message : 'Unexpected error'),
     );
