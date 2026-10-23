@@ -65,19 +65,16 @@
 {:else if !known}
   <PageLoading />
 {:else}
-  <Group title="More music" more="What plays besides what you chose, on this device's own player: Radio's tracks after each track, and Autoplay when the queue ends.">
+  <!-- Headed as what they are (the owner, 2026-10-24): Radio and Autoplay; Exclusions, everywhere and each crate's. -->
+  <Group title="Radio and Autoplay" more="What plays besides what you chose, on this device's own player: Radio's tracks after each track, and Autoplay when the queue ends.">
     <Item name="More music" value={moreMusicParts().map((p) => p.text).join(' · ') || 'Off'} onclick={() => (moreMusic = true)} />
   </Group>
-  <Group title="Everywhere" more="Out of every crate, and never picked by Radio, Autoplay or a shuffle of the library or the favourites. It still plays when you choose it.">
-    <Item name="Excluded everywhere" value={excluded.n === null ? null : count(excluded.n)} onclick={excluded.n ? () => openThing('taste', EVERYWHERE) : null} />
+  <Group title="Exclusions" more="Everywhere: out of every crate, and never picked by Radio, Autoplay or a shuffle of the library or the favourites; it still plays when you choose it. A crate's: left out of that crate only.">
+    <Item name="Everywhere" value={excluded.n === null ? null : count(excluded.n)} onclick={excluded.n ? () => openThing('taste', EVERYWHERE) : null} />
+    {#each leaving as c (c.id)}
+      <Item name={c.name} value={count(c.left_out ?? 0)} onclick={() => openThing('taste', CRATE + c.id)} />
+    {/each}
   </Group>
-  {#if leaving.length}
-    <Group title="Excluded from crates">
-      {#each leaving as c (c.id)}
-        <Item name={c.name} value={count(c.left_out ?? 0)} onclick={() => openThing('taste', CRATE + c.id)} />
-      {/each}
-    </Group>
-  {/if}
   {#if fits?.length}
     <Group title="Not for" more="What each ranked crate has learned not to suggest, from what was turned down for it, and the rules you wrote.">
       {#each fits as f (f.crate)}
