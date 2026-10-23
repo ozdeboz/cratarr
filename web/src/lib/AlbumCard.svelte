@@ -39,6 +39,9 @@
     display: block;
     width: 100%;
     aspect-ratio: 1;
+    /* Square whatever the image's shape: without it a portrait cover stretched its box, and its card (the owner,
+       2026-10-24). */
+    overflow: hidden;
     margin-bottom: 6px;
     border-radius: 8px;
   }

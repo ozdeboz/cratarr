@@ -574,6 +574,9 @@
   .mosaic span {
     display: block;
     aspect-ratio: 1;
+    /* Square whatever the image's shape: without it a portrait cover stretched its box, and its card (the owner,
+       2026-10-24). */
+    overflow: hidden;
   }
 
   .about {

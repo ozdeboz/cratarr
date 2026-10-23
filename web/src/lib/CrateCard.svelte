@@ -143,6 +143,9 @@
     display: grid;
     width: 120px;
     aspect-ratio: 1;
+    /* Square whatever the image's shape: without it a portrait cover stretched its box, and its card (the owner,
+       2026-10-24). */
+    overflow: hidden;
     align-self: start;
     background: color-mix(in srgb, var(--text) 8%, transparent);
   }
