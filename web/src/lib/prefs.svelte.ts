@@ -23,11 +23,12 @@ export type Prefs = {
    *  button, in the user's order (lib/trackFacts; none at first). */
   playerRow: boolean;
   playerFacts: FactId[];
-  /** A list's profile on top of it (the owner, 2026-10-23): open or folded, for every list at once; when folded, the
-   *  one row it keeps (none: ''); and its rows switched on, in the user's order (Settings › Display › AudioMuse). */
+  /** A list's profile on top of it (the owner, 2026-10-23): open or folded, for every list at once; its rows switched
+   *  on, in the user's order; and its fold line, how many of them stay when it is folded (0: none; Settings › Display ›
+   *  AudioMuse). */
   profileOpen: boolean;
-  profileKeep: ProfileRow | '';
   profileRows: ProfileRow[];
+  profileFoldAt: number;
   /** Levelling (decision 0035): this browser's player plays every track about as loud as the next. */
   /** This browser's name as a Play On player, while a page plays here (lib/playOnTarget); '' until it has one. */
   browserName: string;
@@ -126,7 +127,7 @@ export const DEFAULTS: Prefs = {
   playerRow: true,
   playerFacts: [],
   profileOpen: true,
-  profileKeep: '',
+  profileFoldAt: 0,
   profileRows: PROFILE_ROWS.map((r) => r.id),
   levelling: true,
   browserName: '',
@@ -190,8 +191,8 @@ function read(): Prefs {
       if (typeof saved.playerRow === 'boolean') p.playerRow = saved.playerRow;
       if (Array.isArray(saved.playerFacts)) p.playerFacts = saved.playerFacts.filter((x: unknown): x is FactId => FACTS.some((f) => f.id === x));
       if (typeof saved.profileOpen === 'boolean') p.profileOpen = saved.profileOpen;
-      if (PROFILE_ROWS.some((r) => r.id === saved.profileKeep)) p.profileKeep = saved.profileKeep;
       if (Array.isArray(saved.profileRows)) p.profileRows = saved.profileRows.filter((x: unknown): x is ProfileRow => PROFILE_ROWS.some((r) => r.id === x));
+      if (Number.isInteger(saved.profileFoldAt) && saved.profileFoldAt >= 0) p.profileFoldAt = Math.min(saved.profileFoldAt, p.profileRows.length);
       if (typeof saved.levelling === 'boolean') p.levelling = saved.levelling;
       if (typeof saved.browserName === 'string') p.browserName = saved.browserName;
       if (typeof saved.relativeDates === 'boolean') p.relativeDates = saved.relativeDates;

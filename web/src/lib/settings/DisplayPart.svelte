@@ -6,8 +6,7 @@
   import Seg from '../Seg.svelte';
   import { appInfo, inApp, setDevice } from '../app.svelte';
   import { setLevelling } from '../localPlayer.svelte';
-  import { PROFILE_ROWS, prefs, type ProfileRow, type Theme } from '../prefs.svelte';
-  import ChoiceSheet from './ChoiceSheet.svelte';
+  import { PROFILE_ROWS, prefs, type Theme } from '../prefs.svelte';
   import OrderList from './OrderList.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
@@ -20,8 +19,6 @@
     { value: 'dark', label: 'Dark' },
   ];
 
-  const KEEP: { value: ProfileRow | ''; label: string }[] = [{ value: '', label: 'Nothing' }, ...PROFILE_ROWS.map((r) => ({ value: r.id, label: r.label }))];
-  let choosingKeep = $state(false);
 
   const setLevel = (on: boolean) => (inApp ? setDevice({ levelling: on }) : setLevelling(on));
   offerReset(
@@ -32,7 +29,7 @@
       prefs.playerRow = true;
       prefs.playerFacts = [];
       prefs.profileOpen = true;
-      prefs.profileKeep = '';
+      prefs.profileFoldAt = 0;
       prefs.profileRows = PROFILE_ROWS.map((r) => r.id);
       setLevel(true);
     },
@@ -59,9 +56,12 @@
 
 <Group title="AudioMuse">
   <Item name="Profiles on lists" line="Fold one to fold them all" toggle={{ checked: prefs.profileOpen, onchange: (on) => (prefs.profileOpen = on) }} />
-  <Item name="Folded, show" value={KEEP.find((k) => k.value === prefs.profileKeep)?.label ?? 'Nothing'} onclick={() => (choosingKeep = true)} />
-  <OrderList items={PROFILE_ROWS} on={prefs.profileRows} label="The profile's rows" onchange={(v) => (prefs.profileRows = v)} />
+  <!-- The rows in their order, the fold line among them: above it stays when a profile is folded. -->
+  <OrderList
+    items={PROFILE_ROWS}
+    on={prefs.profileRows}
+    label="The profile's rows"
+    onchange={(v) => (prefs.profileRows = v)}
+    fold={{ at: Math.min(prefs.profileFoldAt, prefs.profileRows.length), onchange: (at) => (prefs.profileFoldAt = at) }}
+  />
 </Group>
-{#if choosingKeep}
-  <ChoiceSheet title="Folded, show" options={KEEP} value={prefs.profileKeep} onchange={(v) => (prefs.profileKeep = v)} onclose={() => (choosingKeep = false)} />
-{/if}

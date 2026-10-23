@@ -1,8 +1,9 @@
 <script lang="ts">
   // A list's profile on top of it (the owner, 2026-10-23; the server's crates::Profile): its telling styles and artists,
   // each number as one bar (lib/DensityBar) on the same scale for every list, and its moods against the library's.
-  // Folded or open for every list at once (prefs.profileOpen); folded, it keeps the row chosen in Settings (Display ›
-  // AudioMuse), and rows switched off there never show. A row with nothing to say is left out by the server (a number
+  // Folded or open for every list at once (prefs.profileOpen), by a pill on a divider after its rows (the owner's
+  // choice, 2026-10-23); folded, it keeps the rows above the fold line set in Settings (Display › AudioMuse), and rows
+  // switched off there never show. A row with nothing to say is left out by the server (a number
   // all its tracks share) or here (no styles, no artists).
   import type { ListProfileData } from './api';
   import DensityBar from './DensityBar.svelte';
@@ -23,15 +24,16 @@
       return data.numbers.some((n) => n.key === r.id);
     }),
   );
-  const shown = $derived(prefs.profileOpen ? rows : rows.filter((r) => r.id === prefs.profileKeep));
+  /** The rows above the fold line (by the user's order, whatever this list has of them). */
+  const kept = $derived(rows.filter((r) => prefs.profileRows.indexOf(r.id) < prefs.profileFoldAt));
+  const shown = $derived(prefs.profileOpen ? rows : kept);
+  /** Folding changes something: some row is below the line. */
+  const folds = $derived(kept.length < rows.length);
   const number = (id: ProfileRow) => data.numbers.find((n) => n.key === id)!;
 </script>
 
 {#if rows.length}
   <section class="profile">
-    <button class="head" aria-expanded={prefs.profileOpen} onclick={() => (prefs.profileOpen = !prefs.profileOpen)}>
-      <span>Profile</span><Icon name={prefs.profileOpen ? 'chevronUp' : 'chevronDown'} size={20} />
-    </button>
     {#each shown as r (r.id)}
       <div class="row" class:words={r.id === 'style' || r.id === 'artists'} class:mood={r.id === 'mood'}>
         <span class="label">{r.label}</span>
@@ -56,6 +58,13 @@
       </div>
     {/each}
     {#if prefs.profileOpen && data.heard < data.tracks}<p class="heard">{data.heard.toLocaleString()} of {data.tracks.toLocaleString()} heard by AudioMuse</p>{/if}
+    {#if folds}
+      <div class="fold">
+        <button class="pill" aria-expanded={prefs.profileOpen} onclick={() => (prefs.profileOpen = !prefs.profileOpen)}
+          ><Icon name={prefs.profileOpen ? 'chevronUp' : 'chevronDown'} size={16} /><span>{prefs.profileOpen ? 'Fold' : 'Profile'}</span></button
+        >
+      </div>
+    {/if}
   </section>
 {/if}
 
@@ -63,21 +72,38 @@
   .profile {
     width: 100%;
     margin-top: 10px;
+  }
+
+  /* The fold control: a pill on a divider after the rows (between the profile and the list). */
+  .fold {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    margin: 6px 0 0;
+  }
+
+  .fold::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    right: 0;
+    left: 0;
     border-top: 1px solid var(--border);
   }
 
-  .head {
-    display: flex;
+  .pill {
+    position: relative;
+    display: inline-flex;
     align-items: center;
-    justify-content: space-between;
-    width: 100%;
-    min-height: 40px;
-    padding: 0;
-    border: 0;
-    background: none;
+    gap: 4px;
+    min-height: 32px;
+    padding: 0 14px;
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    background: var(--surface);
     color: var(--muted);
     font: inherit;
-    font-size: 13.5px;
+    font-size: 13px;
     cursor: pointer;
   }
 
