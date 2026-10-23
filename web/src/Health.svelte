@@ -19,7 +19,7 @@
   {#if !health.loaded}
     <PageLoading />
   {:else if !list.length}
-    <p class="empty">Nothing needs you.</p>
+    <p class="empty">All good.</p>
   {:else}
     <ul class="cards">
       {#each list as p (p.key)}

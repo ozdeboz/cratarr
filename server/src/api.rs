@@ -2229,7 +2229,7 @@ async fn unlink_playlist(State(app): State<Arc<App>>, Path(id): Path<String>, Qu
 }
 
 
-/// Every domain's findings (decision 0063): the Health page's, and Home's Needs you's most critical and most recent.
+/// Every domain's findings (decision 0063): the Health page's, and Home's System status's most critical and most recent.
 async fn health_report(State(app): State<Arc<App>>) -> Json<crate::app::health::Report> {
     Json(app.health_report().await)
 }

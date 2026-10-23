@@ -1,5 +1,5 @@
 //! One health report (decision 0063): every domain's check says what it finds now, in one shape; the Health page
-//! shows it all, Home's Needs you the most critical and the most recent. A check that fails is a finding itself, never a
+//! shows it all, Home's System status the most critical and the most recent. A check that fails is a finding itself, never a
 //! missing report. When each finding was first found is kept while it stays, so "the most recent" means something.
 
 use std::collections::{BTreeMap, HashMap};
@@ -14,8 +14,8 @@ use super::App;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Level {
-    /// The owner has to act.
-    NeedsYou,
+    /// The owner has to act (critical; called "needs you" until the owner renamed it, 2026-10-23).
+    Critical,
     /// Something is wrong and may right itself.
     Warning,
     /// Worth knowing.
@@ -126,7 +126,7 @@ pub fn files(issues: &BTreeMap<String, u64>) -> Vec<Finding> {
             continue;
         }
         let (level, title) = match kind.as_str() {
-            "broken" => (Level::NeedsYou, n(count, "file can't be read", "files can't be read")),
+            "broken" => (Level::Critical, n(count, "file can't be read", "files can't be read")),
             "damaged_tag" => (Level::Warning, n(count, "file has a damaged tag", "files have a damaged tag")),
             "no_tags" => (Level::Warning, n(count, "file has no tags", "files have no tags")),
             "no_length" => (Level::Info, n(count, "file has no length", "files have no length")),
@@ -144,12 +144,12 @@ pub fn incoming(upgrades: u64, duplicates: u64, failed: u64) -> Vec<Finding> {
     let library = |switch| Some(Open { page: "library", switch: Some(switch) });
     let mut out = Vec::new();
     if upgrades > 0 {
-        let mut f = finding("incoming", "incoming:upgrades", Level::NeedsYou, upgrades, n(upgrades, "upgrade waiting", "upgrades waiting"));
+        let mut f = finding("incoming", "incoming:upgrades", Level::Critical, upgrades, n(upgrades, "upgrade waiting", "upgrades waiting"));
         f.open = library("upgrades");
         out.push(f);
     }
     if duplicates > 0 {
-        let mut f = finding("incoming", "incoming:duplicates", Level::NeedsYou, duplicates, n(duplicates, "duplicate waiting", "duplicates waiting"));
+        let mut f = finding("incoming", "incoming:duplicates", Level::Critical, duplicates, n(duplicates, "duplicate waiting", "duplicates waiting"));
         f.open = library("duplicates");
         out.push(f);
     }
@@ -294,7 +294,7 @@ impl App {
         let settings = || Some(Open { page: "settings", switch: None });
         let mut out = Vec::new();
         for s in view.sources.iter().filter(|s| s.enabled && !s.status.connected) {
-            let mut f = finding("servers", format!("servers:{}", s.id), Level::NeedsYou, 1, format!("{} can't be reached", s.label));
+            let mut f = finding("servers", format!("servers:{}", s.id), Level::Critical, 1, format!("{} can't be reached", s.label));
             f.detail = s.status.error.clone().or_else(|| s.error.clone());
             f.open = settings();
             out.push(f);
@@ -411,13 +411,13 @@ mod tests {
     #[test]
     fn findings_are_worst_first_then_newest_and_keep_their_first_sight() {
         let f = |key: &str, level| finding("files", key, level, 1, key);
-        let first = ordered(vec![f("a", Level::Info), f("b", Level::NeedsYou)], 100);
+        let first = ordered(vec![f("a", Level::Info), f("b", Level::Critical)], 100);
         assert_eq!(first.iter().map(|x| x.key.as_str()).collect::<Vec<_>>(), ["b", "a"]);
         // Found again later, with a new one of the same level: the older keeps its first sight, the newer comes first.
-        let again = ordered(vec![f("a", Level::Info), f("c", Level::Info), f("b", Level::NeedsYou)], 200);
+        let again = ordered(vec![f("a", Level::Info), f("c", Level::Info), f("b", Level::Critical)], 200);
         assert_eq!(again.iter().map(|x| (x.key.as_str(), x.since)).collect::<Vec<_>>(), [("b", 100), ("c", 200), ("a", 100)]);
         // Gone, then back: found anew.
-        ordered(vec![f("b", Level::NeedsYou)], 300);
+        ordered(vec![f("b", Level::Critical)], 300);
         let back = ordered(vec![f("a", Level::Info)], 400);
         assert_eq!(back[0].since, 400);
     }
@@ -426,7 +426,7 @@ mod tests {
     fn the_files_and_incoming_say_what_needs_the_owner() {
         let issues: BTreeMap<String, u64> = [("broken".to_string(), 2), ("no_length".to_string(), 1), ("no_tags".to_string(), 0)].into();
         let found = files(&issues);
-        assert_eq!(found.iter().map(|f| (f.title.as_str(), f.level)).collect::<Vec<_>>(), [("2 files can't be read", Level::NeedsYou), ("1 file has no length", Level::Info)]);
+        assert_eq!(found.iter().map(|f| (f.title.as_str(), f.level)).collect::<Vec<_>>(), [("2 files can't be read", Level::Critical), ("1 file has no length", Level::Info)]);
         let waiting = incoming(13, 0, 1);
         assert_eq!(waiting[0].title, "13 upgrades waiting");
         assert_eq!(waiting[0].open, Some(Open { page: "library", switch: Some("upgrades") }));

@@ -59,7 +59,7 @@ const fileItem = (p: FileProblem): HealthItem => {
 export function problems(): Problem[] {
   const out: Problem[] = health.findings
     .filter((f) => f.domain !== 'files')
-    .map((f) => ({ key: f.key, icon: iconOf(f), urgent: f.level === 'needs_you', domain: DOMAINS[f.domain]?.name ?? f.domain, title: f.title, line: f.detail ?? null, finding: f, items: f.items ?? [], hint: null }));
+    .map((f) => ({ key: f.key, icon: iconOf(f), urgent: f.level === 'critical', domain: DOMAINS[f.domain]?.name ?? f.domain, title: f.title, line: f.detail ?? null, finding: f, items: f.items ?? [], hint: null }));
   for (const k of FILE_KINDS) {
     const files = (health.problems ?? []).filter((p) => p.kind === k.kind);
     if (files.length)

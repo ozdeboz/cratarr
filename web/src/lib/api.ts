@@ -1190,7 +1190,7 @@ export type HealthFinding = {
   detail?: string;
   count: number;
   of?: number;
-  level: 'needs_you' | 'warning' | 'info';
+  level: 'critical' | 'warning' | 'info';
   since: number;
   open?: { page: string; switch?: string };
   /** What it is about, one by one: an album (server, id) or a playlist opens where it is. */
