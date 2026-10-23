@@ -4,7 +4,8 @@
   // the owner, 2026-10-24: the words were too strict), the one answer ringed; the words prefilled can be changed and
   // searched. A found track, tapped, is what the line points at from then on (the Repair tab's own fix, one line).
   import { untrack } from 'svelte';
-  import { albumCoverUrl, applyOne, findTracks, playlistRows, type FoundTrack } from './api';
+  import { albumCoverUrl, findTracks, playlistRows, relinkLine, type FoundTrack } from './api';
+  import { withUndo } from './undo.svelte';
   import Cover from './Cover.svelte';
   import Icon from './Icon.svelte';
   import { toast } from './toast.svelte';
@@ -49,7 +50,8 @@
   });
   async function fix(m: Missing, t: FoundTrack) {
     try {
-      await applyOne({ playlist, from: m.entry, to: t.line });
+      const { undo } = await relinkLine({ playlist, from: m.entry, to: t.line });
+      withUndo(`${t.title} is back in ${playlist}.`, [undo]);
       m.fixed = `${t.title} · ${t.artist}`;
       m.found = null;
     } catch (e) {

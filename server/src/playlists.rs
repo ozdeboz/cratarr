@@ -691,6 +691,23 @@ impl Store {
         if wanted.iter().any(|w| !is_offered(w)) {
             return Err(StoreError::NotOffered);
         }
+        self.write_repairs(wanted).await
+    }
+
+    /// One dead line pointed at another file (Health's missing tracks found again; the owner, 2026-10-24): applied as a
+    /// repair is, though no repair offered it (the caller found it by what the line says). A path is still never
+    /// trusted: `from` must be a line of the playlist whose file is gone, `to` a file there is, both inside Music.
+    pub async fn relink(&self, r: &Repair) -> Result<Vec<Edited>, StoreError> {
+        let (_, _, text) = self.load_for_edit(&r.playlist).await?;
+        let dead = m3u::contains(&text, &self.line(&r.from)) && !entry_exists(&self.base, &r.from);
+        if !dead || !entry_exists(&self.base, &r.to) {
+            return Err(StoreError::NotOffered);
+        }
+        self.write_repairs(std::slice::from_ref(r)).await
+    }
+
+    /// Repairs written: one backup and one write per playlist.
+    async fn write_repairs(&self, wanted: &[Repair]) -> Result<Vec<Edited>, StoreError> {
         let mut by_playlist: Vec<(String, Vec<&Repair>)> = Vec::new();
         for w in wanted {
             match by_playlist.iter_mut().find(|(p, _)| *p == w.playlist) {
@@ -1355,6 +1372,24 @@ Alb (2020)/01 A - One.mp3
         let bogus = Repair { playlist: "p".into(), from: "Alb (2020)/01 A - One.mp3".into(), to: "../../etc/passwd".into() };
         assert!(d.store().apply_repairs(&[bogus]).await.is_err());
         assert_eq!(d.read("p.m3u"), "Alb (2020)/01 A - One.mp3\n");
+    }
+
+    #[tokio::test]
+    async fn a_dead_line_is_relinked_to_a_file_found_for_it_and_nothing_else() {
+        let d = Dir::new();
+        d.touch("Comp (2005)/1-07 Aphex Twin - Tha.mp3");
+        d.touch("Alb (2020)/02 A - Here.mp3");
+        d.write("p.m3u", "Aphex Twin/SAW (1992)/02 Aphex Twin - Tha.mp3\nAlb (2020)/02 A - Here.mp3\n");
+        let s = d.store();
+        let to = |from: &str, to: &str| Repair { playlist: "p".into(), from: from.into(), to: to.into() };
+        assert!(s.relink(&to("Aphex Twin/SAW (1992)/02 Aphex Twin - Tha.mp3", "../../etc/passwd")).await.is_err(), "a path out of Music");
+        assert!(s.relink(&to("Aphex Twin/SAW (1992)/02 Aphex Twin - Tha.mp3", "Comp (2005)/gone.mp3")).await.is_err(), "a file that is not there");
+        assert!(s.relink(&to("Alb (2020)/02 A - Here.mp3", "Comp (2005)/1-07 Aphex Twin - Tha.mp3")).await.is_err(), "a line that is not dead");
+        assert!(s.relink(&to("Not/in the playlist.mp3", "Comp (2005)/1-07 Aphex Twin - Tha.mp3")).await.is_err(), "a line it does not hold");
+        assert_eq!(d.read("p.m3u"), "Aphex Twin/SAW (1992)/02 Aphex Twin - Tha.mp3\nAlb (2020)/02 A - Here.mp3\n", "nothing changed by those");
+        let changed = s.relink(&to("Aphex Twin/SAW (1992)/02 Aphex Twin - Tha.mp3", "Comp (2005)/1-07 Aphex Twin - Tha.mp3")).await.unwrap();
+        assert_eq!(changed.len(), 1);
+        assert_eq!(d.read("p.m3u"), "Comp (2005)/1-07 Aphex Twin - Tha.mp3\nAlb (2020)/02 A - Here.mp3\n");
     }
 
     #[tokio::test]

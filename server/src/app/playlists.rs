@@ -2608,6 +2608,16 @@ impl PlaylistService {
         Ok((changed, self.keep_texts(edits)))
     }
 
+    /// A missing line pointed at a track found for it (Health's missing tracks; `Store::relink` checks both): the
+    /// playlists that changed and the undo token, as a repair's.
+    pub async fn relink(&self, one: Repair) -> Result<(Vec<String>, Option<String>), ToggleError> {
+        let store = self.own_store()?;
+        let edits = store.relink(&one).await?;
+        let changed: Vec<String> = edits.iter().map(|e| e.id.clone()).collect();
+        self.tell_sources(&store, changed.iter().map(|n| (n.clone(), PlaylistChange::Edited)).collect());
+        Ok((changed, self.keep_texts(edits)))
+    }
+
     /// Album folders that look like the same release twice, each group compared. Read-only. Track details come
     /// from the first source that knows the folder.
     pub async fn album_duplicates(&self) -> Result<Vec<crate::albums::AlbumGroup>> {
