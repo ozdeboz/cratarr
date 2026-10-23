@@ -182,7 +182,10 @@
   const insightsFixed = $derived(page === 'insights' && sidebar);
   // The visuals beside the page: in the panel where the player goes, while it is there (a narrow window: over the page).
   const visualsBeside = $derived(visuals.open && visuals.side && sidebar);
-  const overlay = $derived(player.full && !sidebar);
+  // Over the page unless the player is beside it: a split page (Settings, Health, Insights) has the panel, not the
+  // player, so with the player not wanted beside, the mini-player's tap opens it over the page there too (the owner,
+  // 2026-10-24: in Settings › Display it would not open).
+  const overlay = $derived(player.full && !inSidebar());
   // The mini-player stands in for the player wherever the panel does not show it (decision 0023); with nothing to play
   // it is the small button for where music plays.
   const mini = $derived(!(sidebar && panelShowsPlayer()));
