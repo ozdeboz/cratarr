@@ -4,7 +4,12 @@
   // browser: its name as a Play On player (lib/playOnTarget), this browser's only.
   // Local music (decision 0052, local mode): Android's permission while it is not given, then the folders Android found
   // music in, each with its track count and a switch; local mode reads only those on, and with one on the switcher shows.
+  // How it plays (the owner, 2026-10-24: a play affair, kept with the device): where its music plays (the device
+  // sheet, lib/OutputSheet), and levelling (decision 0035: in the app its own player's, here this browser's).
   import { allowBackground, appInfo, inApp, setDevice } from '../app.svelte';
+  import { setLevelling } from '../localPlayer.svelte';
+  import OutputSheet from '../OutputSheet.svelte';
+  import { outputName } from '../playOn.svelte';
   import { allowDeviceMusic, askFolders, device, setFolder } from '../deviceMusic.svelte';
   import { plural } from '../insights.svelte';
   import { prefs } from '../prefs.svelte';
@@ -23,6 +28,8 @@
     if (inApp && appInfo.deviceMusic === 'granted') askFolders();
   });
   let naming = $state(false);
+  let where = $state(false);
+  const setLevel = (on: boolean) => (inApp ? setDevice({ levelling: on }) : setLevelling(on));
   const name = $derived(inApp ? (appInfo.player ?? '') : prefs.browserName || defaultBrowserName());
   function rename(v: string) {
     if (!v) return;
@@ -33,6 +40,13 @@
 
 <Group title={inApp ? 'This device' : 'This browser'}>
   <Item name="Player name" value={name} onclick={() => (naming = true)} />
+  <Item name="Where music plays" value={outputName()} onclick={() => (where = true)} />
+  <Item
+    name="Level the volume"
+    line="Every track about as loud as the next"
+    more={"Each track plays at about the same loudness, as Cratarr measured it (or as the file's ReplayGain tags say, until it has).\n\nAn album played through keeps its own dynamics; shuffle and radio are levelled track by track."}
+    toggle={{ checked: inApp ? appInfo.levelling : prefs.levelling, onchange: setLevel }}
+  />
   {#if inApp}
     <Item
       name="Stay ready"
@@ -72,6 +86,9 @@
   </Group>
 {/if}
 
+{#if where}
+  <OutputSheet onclose={() => (where = false)} />
+{/if}
 {#if naming}
   <ValueSheet title="Player name" value={name} placeholder={inApp ? '' : defaultBrowserName()} allowEmpty={false} onsave={rename} onclose={() => (naming = false)} />
 {/if}

@@ -4,8 +4,9 @@
   // amended: out of every crate and every automatic pick), then each crate that leaves tracks out by hand; each opens
   // its own page here (`thing`: `everywhere`, or `crate:<id>`) with the list to put back (lib/ExcludedList). Then each
   // ranked crate's Not for (a5's fit models, GET /api/crates/fits): what it avoids and its rules, in its sheet
-  // (lib/NotForSheet).
+  // (lib/NotForSheet). First (the owner, 2026-10-24): this device's own More music (radio and Autoplay), in its sheet.
   import { getCrateFits, traitLabel, type FitSummary } from '../api';
+  import MoreMusicSheet, { moreMusicParts } from '../MoreMusicSheet.svelte';
   import { crateName, crates, loadCrates } from '../crates.svelte';
   import ExcludedList from '../ExcludedList.svelte';
   import { excluded, loadExcluded } from '../exclusions.svelte';
@@ -31,6 +32,7 @@
       () => (fits = []),
     );
   loadFits();
+  let moreMusic = $state(false);
   /** The crate whose Not for sheet is open. */
   let notFor = $state<FitSummary | null>(null);
   /** A fit's line: what it avoids, and its own rules. */
@@ -63,6 +65,9 @@
 {:else if !known}
   <PageLoading />
 {:else}
+  <Group title="More music" more="What plays besides what you chose, on this device's own player: Radio's tracks after each track, and Autoplay when the queue ends.">
+    <Item name="More music" value={moreMusicParts().map((p) => p.text).join(' · ') || 'Off'} onclick={() => (moreMusic = true)} />
+  </Group>
   <Group title="Everywhere" more="Out of every crate, and never picked by Radio, Autoplay or a shuffle of the library or the favourites. It still plays when you choose it.">
     <Item name="Excluded everywhere" value={excluded.n === null ? null : count(excluded.n)} onclick={excluded.n ? () => openThing('taste', EVERYWHERE) : null} />
   </Group>
@@ -80,6 +85,9 @@
       {/each}
     </Group>
   {/if}
+{/if}
+{#if moreMusic}
+  <MoreMusicSheet onclose={() => (moreMusic = false)} />
 {/if}
 {#if notFor}
   <NotForSheet crate={notFor.crate} name={notFor.of} onchange={loadFits} onclose={() => (notFor = null)} />

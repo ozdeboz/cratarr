@@ -17,8 +17,6 @@ export type Prefs = {
   /** A menu's playlists' order (its header, LIST_ORDERS), either way round. */
   listOrder: PlaylistOrder;
   listDown: boolean;
-  /** Playlists the track is in come first. */
-  showProgress: boolean;
   /** The full player's row under the title (the owner, 2026-10-19): shown at all, and the facts it shows beside its info
    *  button, in the user's order (lib/trackFacts; none at first). */
   playerRow: boolean;
@@ -143,7 +141,6 @@ export const DEFAULTS: Prefs = {
   listZoom: LIST_WIDTHS.length - 1,
   listOrder: 'playing',
   listDown: false,
-  showProgress: true,
   playerRow: true,
   playerFacts: [],
   profileOpen: true,
@@ -216,7 +213,6 @@ function read(): Prefs {
       for (const k of ['libraryDown', 'downloadsDown', 'playlistDown', 'crateDown'] as const) {
         if (typeof saved[k] === 'boolean') p[k] = saved[k];
       }
-      if (typeof saved.showProgress === 'boolean') p.showProgress = saved.showProgress;
       if (typeof saved.playerRow === 'boolean') p.playerRow = saved.playerRow;
       if (Array.isArray(saved.playerFacts)) p.playerFacts = saved.playerFacts.filter((x: unknown): x is FactId => FACTS.some((f) => f.id === x));
       if (typeof saved.profileOpen === 'boolean') p.profileOpen = saved.profileOpen;
