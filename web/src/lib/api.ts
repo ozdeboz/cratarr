@@ -331,7 +331,16 @@ export type PlayHow = 'play' | 'shuffle' | 'next' | 'last';
  *  libraries switched off (CrateLook). */
 export type Picking =
   | Collection
-  | { kind: 'crate'; id: string; favourites?: CrateFavourites; favourite_albums?: CrateFavourites; without?: string[]; filter?: Condition[] };
+  | {
+      kind: 'crate';
+      id: string;
+      favourites?: CrateFavourites;
+      favourite_albums?: CrateFavourites;
+      without?: string[];
+      filter?: Condition[];
+      order?: CrateOrder;
+      down?: boolean;
+    };
 /** The tracks chosen, in queue order (`n`: each one's place in the collection, for shuffle off), the one that plays
  *  first, how many it has that can be played, and the player that took them when the server queued them. */
 export type Picked = {
@@ -398,13 +407,19 @@ export type Axis = {
 /** The libraries a crate leaves out (decision 0024, amended 2026-10-23: a crate draws from every library switched
  *  on): `source/library` keys, as the page's library switches keep them (prefs.hiddenLibraries). None, or left out:
  *  every library. */
-/** `filter`: the filter on a crate (decision 0061), conditions besides its own (its rows, tempo spread, Play). */
-export type CrateLook = { without?: string[]; filter?: Condition[] };
-/** `?source=…&without=…&filter=…` (each key once; the filter as JSON). */
+/** `filter`: the filter on a crate (decision 0061), conditions besides its own (its rows, tempo spread, Play).
+ *  `order`, `down`: the order its list shows (decision 0060), applied on the server before the rows are paged (and
+ *  by Play); a value a row does not have comes first, last turned round; equals keep the crate's own order. */
+export type CrateLook = { without?: string[]; filter?: Condition[]; order?: CrateOrder; down?: boolean };
+/** A crate's list's orders: its own (newest first), or by a field. */
+export type CrateOrder = 'own' | 'title' | 'artist' | 'albumArtist' | 'album' | 'year' | 'track' | 'length' | 'tempo' | 'plays' | 'lastPlayed' | 'added';
+/** `?source=…&without=…&filter=…&order=…&down=true` (each key once; the filter as JSON). */
 function crateQuery(q: URLSearchParams, source?: string, look: CrateLook = {}) {
   if (source) q.set('source', source);
   for (const k of look.without ?? []) q.append('without', k);
   if (look.filter?.length) q.set('filter', JSON.stringify(look.filter));
+  if (look.order && look.order !== 'own') q.set('order', look.order);
+  if (look.down) q.set('down', 'true');
   const t = q.toString();
   return t ? `?${t}` : '';
 }
@@ -421,9 +436,11 @@ export const updateCrate = (id: string, name: string, conditions: Condition[]) =
   });
 export const deleteCrate = (id: string) => request<{ deleted: string } & Undo>(`/api/crates/${encodeURIComponent(id)}`, { method: 'DELETE' });
 /** The builder's live preview: how many tracks unsaved conditions select, and the first of them. */
-export const previewCrate = (conditions: Condition[], limit: number, source?: string, look: CrateLook = {}) => {
+export const previewCrate = (conditions: Condition[], limit: number, source?: string, look: Omit<CrateLook, 'filter'> = {}) => {
   const q = new URLSearchParams({ limit: String(limit) });
   if (source) q.set('source', source);
+  if (look.order && look.order !== 'own') q.set('order', look.order);
+  if (look.down) q.set('down', 'true');
   return quietly<{ source: string; total: number; rows: PlaylistRow[] }>(`/api/crates/preview?${q}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -683,7 +700,7 @@ export type PlaylistRow = {
   /** the user's plays of the track and when it was last played (epoch seconds), */
   play_count?: number;
   last_played?: number;
-  /** and when the entry came (none for one held before Cratarr kept that). */
+  /** and when the entry came (none for one held before Cratarr kept that; a crate's row: when its track came into the library). */
   added?: number;
   /** Its album's id, where the rows are of several albums (an artist's). */
   album_id?: string;

@@ -742,13 +742,15 @@ impl Catalogue {
     }
 
     /// The files present in every folder in use, newest first (when the catalogue first saw the track; a moved file
-    /// keeps its time), each with its folder: what the crates are worked out on (decision 0024). Blocking.
-    pub fn files_newest_first(&self) -> Result<Vec<(i64, String)>> {
+    /// keeps its time), each with its folder and that time: what the crates are worked out on (decision 0024).
+    /// Blocking.
+    pub fn files_newest_first(&self) -> Result<Vec<(i64, String, Option<i64>)>> {
         let db = self.db();
         let mut st = db.prepare(&format!(
-            "SELECT folder, rel FROM files LEFT JOIN tracks ON tracks.id = files.track WHERE {PRESENT} ORDER BY tracks.born DESC, folder, rel"
+            "SELECT folder, rel, tracks.born FROM files LEFT JOIN tracks ON tracks.id = files.track WHERE {PRESENT}
+             ORDER BY tracks.born DESC, folder, rel"
         ))?;
-        let files = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+        let files = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<i64>>(2)?)))?;
         Ok(files.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -799,7 +801,8 @@ impl Catalogue {
             .collect::<rusqlite::Result<_>>()?;
         Ok(files
             .into_iter()
-            .filter_map(|place| {
+            .filter_map(|(folder, rel, born)| {
+                let place = (folder, rel);
                 // A file no line can name (in a folder there is no way to from Music) is in no crate.
                 let line = line_in(folders, place.0, &place.1)?;
                 let tags = by.remove(&place).unwrap_or_default();
@@ -825,6 +828,7 @@ impl Catalogue {
                     genres,
                     rel: line,
                     folder: place.0,
+                    born,
                     energy,
                     danceability,
                     moods,
@@ -2799,7 +2803,7 @@ mod tests {
         db.execute("UPDATE files SET track = (SELECT id FROM tracks WHERE born = 100) WHERE rel = ?1", params![one]).unwrap();
         db.execute("UPDATE files SET track = (SELECT id FROM tracks WHERE born = 200) WHERE rel = ?1", params![two]).unwrap();
         drop(db);
-        assert_eq!(cat.files_newest_first().unwrap(), vec![(0, two.clone()), (0, one.clone())]);
+        assert_eq!(cat.files_newest_first().unwrap(), vec![(0, two.clone(), Some(200)), (0, one.clone(), Some(100))]);
         cat.record_links("jellyfin", "lib", &[("t1".into(), 0, one.clone())], 100).unwrap();
         let found = cat.lines_of("jellyfin", &["t1".into(), "unknown".into()]).unwrap();
         assert_eq!(found, [one].into_iter().collect(), "unknown ids are left out");

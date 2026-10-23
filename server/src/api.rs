@@ -1210,7 +1210,13 @@ impl Export {
                 app.playlists.export_tracks(name, tracks.iter().map(|t| (t.source.clone(), t.id.clone())).collect()).await?
             }
             ExportWhat::Crate { id, source, favourites, favourite_albums, without, filter } => {
-                let look = crate::app::CrateLook { favourites: *favourites, favourite_albums: *favourite_albums, without: without.clone(), filter: filter.clone() };
+                let look = crate::app::CrateLook {
+                    favourites: *favourites,
+                    favourite_albums: *favourite_albums,
+                    without: without.clone(),
+                    filter: filter.clone(),
+                    ..Default::default()
+                };
                 app.playlists.export_crate(id, source.as_deref(), &look).await?
             }
         })
@@ -1359,6 +1365,12 @@ struct Page {
     /// The favourite albums toggle's, likewise (decision 0024, amended 2026-10-19).
     favourite_albums: Option<crate::crates::Favourites>,
     filter: Option<String>,
+    /// The order the list shows (decision 0060: own, title, artist, albumArtist, album, year, track, length, tempo,
+    /// plays, lastPlayed, added), `down` turned round; applied before the rows are paged.
+    #[serde(default)]
+    order: crate::app::CrateOrder,
+    #[serde(default)]
+    down: bool,
 }
 
 impl Page {
@@ -1369,7 +1381,14 @@ impl Page {
             Some(f) => serde_json::from_str(f).map_err(|e| ToggleError::Refused(format!("That filter cannot be read: {e}.")))?,
             None => Vec::new(),
         };
-        Ok(crate::app::CrateLook { favourites: self.favourites, favourite_albums: self.favourite_albums, without: without_of(query), filter })
+        Ok(crate::app::CrateLook {
+            favourites: self.favourites,
+            favourite_albums: self.favourite_albums,
+            without: without_of(query),
+            filter,
+            order: self.order,
+            down: self.down,
+        })
     }
 }
 
@@ -1460,7 +1479,8 @@ struct Preview {
 
 async fn crate_preview(State(app): State<Arc<App>>, Query(q): Query<Page>, Json(p): Json<Preview>) -> Result<Response, ApiError> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    Ok(Json(app.playlists.crate_page(&p.conditions, q.source.as_deref(), q.offset, limit, &p.without).await?).into_response())
+    let look = crate::app::CrateLook { without: p.without, order: q.order, down: q.down, ..Default::default() };
+    Ok(Json(app.playlists.crate_page(&p.conditions, q.source.as_deref(), q.offset, limit, &look).await?).into_response())
 }
 
 /// The Filter sheet (decision 0061): which of the list in view's items pass these conditions, how many of how many,

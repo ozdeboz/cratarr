@@ -96,7 +96,127 @@ pub struct CrateLook {
     pub without: Vec<String>,
     #[serde(default)]
     pub filter: Vec<crates::Condition>,
+    /// The order its list shows (decision 0060), applied before its rows are paged, and to what Play plays.
+    #[serde(default)]
+    pub order: CrateOrder,
+    #[serde(default)]
+    pub down: bool,
 }
+
+/// The orders a crate's list takes (decision 0060), as the page names them: its own (newest first) or by a field;
+/// `down` turns it round.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CrateOrder {
+    #[default]
+    Own,
+    Title,
+    Artist,
+    AlbumArtist,
+    Album,
+    Year,
+    Track,
+    Length,
+    Tempo,
+    Plays,
+    LastPlayed,
+    Added,
+}
+
+/// A name as the page compares names (`localeCompare` at base sensitivity, numeric): case and the common accents
+/// aside (`name_key`), each run of digits as its number.
+#[cfg(test)]
+fn natural(a: &str, b: &str) -> std::cmp::Ordering {
+    natural_keys(&name_key(a), &name_key(b))
+}
+
+/// A name in lower case, the common accents taken off: what `natural_keys` compares.
+fn name_key(s: &str) -> Vec<char> {
+    s.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'à'..='å' => 'a',
+            'ç' => 'c',
+            'è'..='ë' => 'e',
+            'ì'..='ï' => 'i',
+            'ñ' => 'n',
+            'ò'..='ö' | 'ø' => 'o',
+            'ù'..='ü' => 'u',
+            'ý' | 'ÿ' => 'y',
+            c => c,
+        })
+        .collect()
+}
+
+fn natural_keys(x: &[char], y: &[char]) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (mut i, mut j) = (0, 0);
+    while i < x.len() && j < y.len() {
+        if x[i].is_ascii_digit() && y[j].is_ascii_digit() {
+            let (si, sj) = (i, j);
+            while i < x.len() && x[i].is_ascii_digit() {
+                i += 1;
+            }
+            while j < y.len() && y[j].is_ascii_digit() {
+                j += 1;
+            }
+            let digits = |d: &[char]| -> String { d.iter().skip_while(|c| **c == '0').collect() };
+            let (n, m) = (digits(&x[si..i]), digits(&y[sj..j]));
+            match n.len().cmp(&m.len()).then_with(|| n.cmp(&m)) {
+                Ordering::Equal => continue,
+                o => return o,
+            }
+        }
+        match x[i].cmp(&y[j]) {
+            Ordering::Equal => {
+                i += 1;
+                j += 1;
+            }
+            o => return o,
+        }
+    }
+    (x.len() - i).cmp(&(y.len() - j))
+}
+
+/// Rows in an order of the page's list (decision 0060), as lib/PlaylistView orders a playlist's: names by `natural`;
+/// numbers with one a row does not have first (last, turned round); plays counting none as 0; equals keeping the
+/// crate's own order (the sort is stable). Its own order turned round is the rows reversed.
+fn sort_rows(rows: &mut Vec<PlaylistRow>, by: CrateOrder, down: bool) {
+    let way = |o: std::cmp::Ordering| if down { o.reverse() } else { o };
+    let text = |r: &PlaylistRow| -> String {
+        match by {
+            CrateOrder::Title => r.name.clone().unwrap_or_else(|| r.file.clone()),
+            CrateOrder::Artist => r.artist.clone().unwrap_or_default(),
+            CrateOrder::AlbumArtist => r.album_artist.clone().unwrap_or_default(),
+            _ => r.album.clone().unwrap_or_default(),
+        }
+    };
+    let number = |r: &PlaylistRow| -> Option<f64> {
+        match by {
+            CrateOrder::Length => r.duration_secs,
+            CrateOrder::Tempo => r.bpm.map(f64::from),
+            CrateOrder::Year => r.year.map(f64::from),
+            CrateOrder::Track => r.track.map(|t| f64::from(r.disc.unwrap_or(1)) * 10_000.0 + f64::from(t)),
+            CrateOrder::Plays => Some(f64::from(r.play_count.unwrap_or(0))),
+            CrateOrder::LastPlayed => r.last_played.map(|t| t as f64),
+            _ => r.added.map(|t| t as f64),
+        }
+    };
+    match by {
+        CrateOrder::Own if down => rows.reverse(),
+        CrateOrder::Own => {}
+        CrateOrder::Title | CrateOrder::Artist | CrateOrder::AlbumArtist | CrateOrder::Album => {
+            // Each name keyed once (thousands of rows), the rows then put in their keys' order.
+            let keys: Vec<Vec<char>> = rows.iter().map(|r| name_key(&text(r))).collect();
+            let mut order: Vec<usize> = (0..rows.len()).collect();
+            order.sort_by(|&a, &b| way(natural_keys(&keys[a], &keys[b])));
+            let mut taken: Vec<Option<PlaylistRow>> = rows.drain(..).map(Some).collect();
+            rows.extend(order.into_iter().filter_map(|i| taken[i].take()));
+        }
+        _ => rows.sort_by(|a, b| way(number(a).partial_cmp(&number(b)).unwrap_or(std::cmp::Ordering::Equal))),
+    }
+}
+
 
 /// A crate as the Crates page lists it (decision 0024); `count` is `None` when not known (the server's favourites could
 /// not be read).
@@ -275,7 +395,8 @@ pub struct PlaylistRow {
     pub play_count: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_played: Option<i64>,
-    /// and when the entry came into the playlist (none for one held before Cratarr kept that).
+    /// and when the entry came into the playlist (none for one held before Cratarr kept that; a crate's row: when its
+    /// track came into the library).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub added: Option<i64>,
     /// Its album's id where it is known: an artist's rows, and a playlist's or a crate's on Cratarr's own source.
@@ -563,7 +684,16 @@ pub struct PlaylistService {
     favourites: Arc<FavouritesKept>,
     /// The playlists' table's facts (see `playlist_stats`).
     stats: StatsKept,
+    /// The last crate put in an order other than its own (see `crate_in_order`).
+    sorted: SortedKept,
 }
+
+/// A crate's lines in an order (decision 0060), by what they were worked out from, and when: its pages are asked for
+/// one after the other, and each would otherwise read every row of it again.
+type SortedKept = std::sync::Mutex<Option<(String, std::time::Instant, Arc<Vec<String>>)>>;
+
+/// How long a sorted crate is kept: the plays it may be ordered by change as it plays.
+const SORTED_KEEP: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The account the running request is for, whose favourites the crates show.
 fn asking_user() -> Option<String> {
@@ -866,7 +996,7 @@ impl PlaylistService {
     pub(super) fn new(lib: Arc<Library>, sync: Arc<super::sync::SyncService>, journal: Arc<Journal>) -> Self {
         let crate_stores = CrateStores::new(lib.data_dir());
         let favourites = Arc::new(FavouritesKept::load(lib.data_dir().map(|d| std::path::PathBuf::from(d).join("favourites.json"))));
-        Self { lib, sync, crate_stores, journal, favourites, stats: StatsKept::default() }
+        Self { lib, sync, crate_stores, journal, favourites, stats: StatsKept::default(), sorted: SortedKept::default() }
     }
 
     /// Every playlist's facts for the Playlists page's table (decision 0042), by id. Worked out again only when a
@@ -1628,7 +1758,7 @@ impl PlaylistService {
     /// looked at (its toggles, the libraries switched off).
     pub async fn crate_rows(&self, id: &str, want: Option<&str>, offset: usize, limit: usize, look: &CrateLook) -> Result<CratePage, ToggleError> {
         let shown = self.crate_shown(id, look).await?;
-        self.crate_page(&shown, want, offset, limit, &look.without).await
+        self.crate_page(&shown, want, offset, limit, look).await
     }
 
     /// A crate's conditions as its toggles show it (as given, else as saved), with its left-out tracks and the filter on
@@ -1768,10 +1898,11 @@ impl PlaylistService {
         Ok(self.own_crates()?.set_favourite_albums(id, albums).await?)
     }
 
-    /// The builder's live preview: an unsaved crate's size and first rows (decision 0024, issue 6), from the libraries
-    /// not in `without`.
-    pub async fn crate_page(&self, conditions: &[crates::Condition], want: Option<&str>, offset: usize, limit: usize, without: &[String]) -> Result<CratePage, ToggleError> {
-        let (lib, lines) = self.crate_selection(conditions, want, without).await?;
+    /// A page of the rows these conditions select (a crate's, as `crate_shown` gives them; the builder's live preview,
+    /// decision 0024, issue 6), from the libraries not in `look.without`, in `look`'s order (its toggles and filter are
+    /// in the conditions already).
+    pub async fn crate_page(&self, conditions: &[crates::Condition], want: Option<&str>, offset: usize, limit: usize, look: &CrateLook) -> Result<CratePage, ToggleError> {
+        let (lib, lines) = self.crate_selection(conditions, want, &look.without).await?;
         // On the first page only: the panel shows them on top.
         let genres = if offset == 0 {
             let chosen: HashSet<&str> = lines.iter().map(String::as_str).collect();
@@ -1779,11 +1910,73 @@ impl PlaylistService {
         } else {
             Vec::new()
         };
-        let source = lib.source;
         let total = lines.len();
-        let page: Vec<String> = lines.into_iter().skip(offset).take(limit).collect();
-        let rows = self.rows_of(page, &source).await?;
-        Ok(CratePage { source, total, limit, rows, genres })
+        let lines = self.crate_in_order(&lib, lines, conditions, look).await?;
+        let page: Vec<String> = lines.iter().skip(offset).take(limit).cloned().collect();
+        let mut rows = self.rows_of(page, &lib.source).await?;
+        self.with_plays_and_added(&mut rows, &lib).await;
+        Ok(CratePage { source: lib.source, total, limit, rows, genres })
+    }
+
+    /// The lines these conditions select, in `look`'s order, and the server they are for: what Play plays as the list
+    /// shows it.
+    pub(super) async fn crate_lines_in_order(&self, conditions: &[crates::Condition], want: Option<&str>, look: &CrateLook) -> Result<(String, Vec<String>), ToggleError> {
+        let (lib, lines) = self.crate_selection(conditions, want, &look.without).await?;
+        let lines = self.crate_in_order(&lib, lines, conditions, look).await?;
+        Ok((lib.source.clone(), lines.to_vec()))
+    }
+
+    /// A crate's lines (in its own order) in `look`'s order. By a field, every row of it is read and sorted, and the
+    /// answer kept a little while for the next pages (`SORTED_KEEP`).
+    async fn crate_in_order(&self, lib: &CrateLibrary, mut lines: Vec<String>, conditions: &[crates::Condition], look: &CrateLook) -> Result<Arc<Vec<String>>, ToggleError> {
+        if look.order == CrateOrder::Own {
+            if look.down {
+                lines.reverse();
+            }
+            return Ok(Arc::new(lines));
+        }
+        // What the order was worked out from: the conditions, the server, the libraries, the order, who asks (their
+        // plays), and the library's facts as read (a new reading after any change).
+        let key = format!("{conditions:?}\n{}\n{:?}\n{:?} {}\n{:?}\n{:p}", lib.source, look.without, look.order, look.down, asking_user(), Arc::as_ptr(&lib.files));
+        if let Some((k, at, kept)) = self.sorted.lock().unwrap_or_else(|p| p.into_inner()).as_ref()
+            && *k == key
+            && at.elapsed() < SORTED_KEEP
+        {
+            return Ok(kept.clone());
+        }
+        let mut rows = self.rows_of(lines, &lib.source).await?;
+        self.with_plays_and_added(&mut rows, lib).await;
+        sort_rows(&mut rows, look.order, look.down);
+        let sorted = Arc::new(rows.into_iter().map(|r| r.entry).collect::<Vec<_>>());
+        *self.sorted.lock().unwrap_or_else(|p| p.into_inner()) = Some((key, std::time::Instant::now(), sorted.clone()));
+        Ok(sorted)
+    }
+
+    /// A crate's rows with what its list orders by besides the files' tags (decision 0060): the asking account's plays
+    /// of each track and when it last played it (Cratarr's own plays, by the line's song, whatever server the crate is
+    /// shown for), and when it came into the library (the catalogue's first sight of it).
+    async fn with_plays_and_added(&self, rows: &mut [PlaylistRow], lib: &CrateLibrary) {
+        let born: HashMap<&str, i64> = lib.files.iter().filter_map(|f| Some((f.rel.as_str(), f.born?))).collect();
+        for r in rows.iter_mut() {
+            r.added = born.get(r.entry.as_str()).copied();
+        }
+        let Some(serve) = crate::serve::instance() else { return };
+        let Some(me) = serve.current_user() else { return };
+        let (c, lines) = (self.lib.catalogue(), rows.iter().map(|r| r.entry.clone()).collect::<Vec<_>>());
+        let plays = tokio::task::spawn_blocking(move || {
+            let songs: Vec<Option<String>> = lines.iter().map(|l| crate::serve::playlists::song_of_line(&c, l)).collect();
+            let known: Vec<String> = songs.iter().flatten().cloned().collect();
+            let stats = serve.userdata.play_stats(&me, &known).unwrap_or_default();
+            songs.into_iter().map(|s| s.and_then(|s| stats.get(&s).copied())).collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
+        for (r, p) in rows.iter_mut().zip(plays) {
+            if let Some((count, last)) = p {
+                r.play_count = Some(count);
+                r.last_played = last;
+            }
+        }
     }
 
     /// Make playlist: the crate's tracks now, as a new, ordinary playlist (a snapshot; decision 0024).
@@ -2301,5 +2494,57 @@ mod library_tests {
         assert!(!line_exists(&cat, Some(m.as_path()), "../in/X/2.flac"));
         assert!(!line_exists(&cat, Some(m.as_path()), "../elsewhere/X/1.flac"), "in no folder of the catalogue");
         std::fs::remove_dir_all(&root).ok();
+    }
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+
+    fn row(entry: &str, name: Option<&str>, bpm: Option<u32>, plays: Option<u32>) -> PlaylistRow {
+        PlaylistRow { entry: entry.into(), file: format!("{entry}.flac"), name: name.map(str::to_string), bpm, play_count: plays, ..Default::default() }
+    }
+
+    fn entries(rows: &[PlaylistRow]) -> Vec<&str> {
+        rows.iter().map(|r| r.entry.as_str()).collect()
+    }
+
+    #[test]
+    fn a_crate_sorts_as_the_pages_list_does() {
+        let rows = || vec![row("a", Some("Track 10"), Some(120), Some(3)), row("b", Some("track 9"), None, None), row("c", None, Some(90), Some(3)), row("d", Some("Été"), Some(120), None)];
+        let sorted = |by, down| {
+            let mut r = rows();
+            sort_rows(&mut r, by, down);
+            entries(&r).iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(sorted(CrateOrder::Own, false), ["a", "b", "c", "d"]);
+        assert_eq!(sorted(CrateOrder::Own, true), ["d", "c", "b", "a"]);
+        // Names: case and accents aside, numbers as numbers; no title: the file's name ("c.flac").
+        assert_eq!(sorted(CrateOrder::Title, false), ["c", "d", "b", "a"]);
+        assert_eq!(sorted(CrateOrder::Title, true), ["a", "b", "d", "c"]);
+        // Numbers: none first; equals in the crate's own order, turned round too.
+        assert_eq!(sorted(CrateOrder::Tempo, false), ["b", "c", "a", "d"]);
+        assert_eq!(sorted(CrateOrder::Tempo, true), ["a", "d", "c", "b"]);
+        // Plays: none is 0.
+        assert_eq!(sorted(CrateOrder::Plays, true), ["a", "c", "b", "d"]);
+    }
+
+    #[test]
+    fn names_compare_as_the_page_compares_them() {
+        use std::cmp::Ordering::*;
+        assert_eq!(natural("Track 9", "track 10"), Less);
+        assert_eq!(natural("abc", "ABC"), Equal);
+        assert_eq!(natural("Émile", "emile"), Equal);
+        assert_eq!(natural("a02", "a2"), Equal);
+        assert_eq!(natural("ab", "abc"), Less);
+    }
+
+    #[test]
+    fn the_order_is_named_as_the_page_names_it() {
+        let look: CrateLook = serde_json::from_value(serde_json::json!({ "order": "albumArtist", "down": true })).unwrap();
+        assert_eq!((look.order, look.down), (CrateOrder::AlbumArtist, true));
+        let look: CrateLook = serde_json::from_value(serde_json::json!({ "order": "lastPlayed" })).unwrap();
+        assert_eq!((look.order, look.down), (CrateOrder::LastPlayed, false));
+        assert_eq!(CrateLook::default().order, CrateOrder::Own);
     }
 }

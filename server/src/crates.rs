@@ -215,6 +215,8 @@ pub struct Facts {
     pub rel: String,
     /// The catalogue folder it is in: 0 is Music, 1 on the Incoming ones (what a library switched off leaves out).
     pub folder: i64,
+    /// When the catalogue first saw its track (epoch seconds; a moved file keeps it): when it came into the library.
+    pub born: Option<i64>,
     pub genres: Vec<String>,
     pub year: Option<f64>,
     pub bpm: Option<f64>,
