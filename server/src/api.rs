@@ -131,6 +131,17 @@ pub fn router(app: Arc<App>) -> Router {
         // the server's settings showed every page, without the rest of them (decision 0051).
         .route("/api/about", get(about))
         .route("/api/libraries", get(libraries))
+        // The account's own, a key's too (Home Assistant tells the weather and the sleeps with one): Home's tiles and
+        // the taste profile, an artist's photo and story.
+        .route("/api/history/profile", get(taste_profile))
+        .route("/api/home/digging", get(home_digging))
+        .route("/api/home/artists", get(home_artists))
+        .route("/api/artists/{id}/photo", get(artist_photo))
+        .route("/api/artists/about", get(artist_about))
+        .route("/api/home/heard", post(home_heard))
+        .route("/api/history/sleep", post(sleep))
+        .route("/api/home/weather", post(home_weather))
+        .route("/api/home/moment", get(home_moment))
         // The administrators' (decision 0051): the server's settings, what comes in, the library's changes and its
         // health, the folders, the diagnostics.
         .merge(
@@ -140,16 +151,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/diagnostics/levels", get(diagnostics_levels).put(set_diagnostics_levels))
             .route("/api/players/settings", get(play_on_settings).put(save_play_on_settings))
             .route("/api/history/listenbrainz", post(import_listenbrainz))
-        .route("/api/history/profile", get(taste_profile))
-        .route("/api/home/digging", get(home_digging))
-        .route("/api/home/artists", get(home_artists))
-        .route("/api/artists/{id}/photo", get(artist_photo))
-        .route("/api/artists/about", get(artist_about))
         .route("/api/library/find", get(library_find))
-        .route("/api/home/heard", post(home_heard))
-        .route("/api/history/sleep", post(sleep))
-        .route("/api/home/weather", post(home_weather))
-        .route("/api/home/moment", get(home_moment))
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
             .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
             .route("/api/sync/targets", get(sync_targets))
