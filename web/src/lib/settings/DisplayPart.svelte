@@ -55,7 +55,6 @@
 </Group>
 
 <Group title="AudioMuse">
-  <Item name="Profiles on lists" line="Fold one to fold them all" toggle={{ checked: prefs.profileOpen, onchange: (on) => (prefs.profileOpen = on) }} />
   <!-- The rows in their order, the fold line among them: above it stays when a profile is folded. -->
   <OrderList
     items={PROFILE_ROWS}
