@@ -33,6 +33,7 @@
   let source = $state<string | null>(null);
   $effect(() => {
     const c = id;
+    if (!c) return;
     crateRows(c, 0, 1, prefs.source || undefined)
       .then((r) => (source = r.source))
       .catch(() => {});
@@ -52,16 +53,20 @@
       working = false;
     }
   }
+  // Each reads what it needs before closing: closing lets go of `id` (its opener's state), so a view after it read null.
   function view() {
+    const c = id;
     onclose();
-    viewPlaylist(CRATE + id);
+    viewPlaylist(CRATE + c);
   }
   // Save as playlist: its panel, asking for the new playlist's name (its Make playlist).
   function saveAsPlaylist() {
+    const c = id;
+    const save = onsave;
     onclose();
-    if (onsave) return onsave();
-    work.making = { for: CRATE + id, state: { name: '', saving: false } };
-    viewPlaylist(CRATE + id);
+    if (save) return save();
+    work.making = { for: CRATE + c, state: { name: '', saving: false } };
+    viewPlaylist(CRATE + c);
   }
   function fromGenre() {
     const g = genre;
@@ -70,12 +75,14 @@
     startCrate(g, [{ axis: 'genre', not: false, value: { kind: 'any_of', values: [g] } }]);
   }
   function edit() {
+    const c = id;
     onclose();
-    viewPlaylist(EDIT_CRATE + id);
+    viewPlaylist(EDIT_CRATE + c);
   }
   function shareIt() {
+    const [c, n] = [id, name];
     onclose();
-    share(name, name, linkTo('crates', CRATE + id));
+    share(n, n, linkTo('crates', CRATE + c));
   }
 </script>
 
