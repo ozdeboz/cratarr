@@ -355,7 +355,7 @@
   });
   // What is shown changes the controls' height (a long title, a progress bar or none). As one value: `np` is
   // new at every report, and laying out again at each would be many times a second.
-  const shown = $derived(JSON.stringify([np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.showProgress, prefs.playerRow, rowFacts.length]));
+  const shown = $derived(JSON.stringify([np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.playerRow, rowFacts.length]));
   $effect(() => {
     void shown;
     untrack(() => requestAnimationFrame(relayout));
@@ -470,7 +470,7 @@
               {#if !prefs.playerFacts.length}<button class="fact add" onclick={toRowSettings}><Icon name="plus" size={14} /><span>Add</span></button>{/if}
             </div>
           {/if}
-          {#if np.progress && prefs.showProgress}
+          {#if np.progress}
             <div
               class="progress"
               class:paused={np.progress.paused}

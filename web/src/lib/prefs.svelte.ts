@@ -17,8 +17,6 @@ export type Prefs = {
   /** A menu's playlists' order (its header, LIST_ORDERS), either way round. */
   listOrder: PlaylistOrder;
   listDown: boolean;
-  /** Playlists the track is in come first. */
-  showProgress: boolean;
   /** The full player's row under the title (the owner, 2026-10-19): shown at all, and the facts it shows beside its info
    *  button, in the user's order (lib/trackFacts; none at first). */
   playerRow: boolean;
@@ -29,9 +27,6 @@ export type Prefs = {
   profileOpen: boolean;
   profileRows: ProfileRow[];
   profileFoldAt: number;
-  /** A playlist's and a crate's telling artists, a line under its genres (the owner, 2026-10-23: out of the profile,
-   *  which keeps to what is heard and measured). */
-  listArtists: boolean;
   /** Levelling (decision 0035): this browser's player plays every track about as loud as the next. */
   /** This browser's name as a Play On player, while a page plays here (lib/playOnTarget); '' until it has one. */
   browserName: string;
@@ -143,12 +138,10 @@ export const DEFAULTS: Prefs = {
   listZoom: LIST_WIDTHS.length - 1,
   listOrder: 'playing',
   listDown: false,
-  showProgress: true,
   playerRow: true,
   playerFacts: [],
   profileOpen: true,
   profileFoldAt: 0,
-  listArtists: true,
   profileRows: PROFILE_ROWS.map((r) => r.id),
   levelling: true,
   browserName: '',
@@ -216,7 +209,6 @@ function read(): Prefs {
       for (const k of ['libraryDown', 'downloadsDown', 'playlistDown', 'crateDown'] as const) {
         if (typeof saved[k] === 'boolean') p[k] = saved[k];
       }
-      if (typeof saved.showProgress === 'boolean') p.showProgress = saved.showProgress;
       if (typeof saved.playerRow === 'boolean') p.playerRow = saved.playerRow;
       if (Array.isArray(saved.playerFacts)) p.playerFacts = saved.playerFacts.filter((x: unknown): x is FactId => FACTS.some((f) => f.id === x));
       if (typeof saved.profileOpen === 'boolean') p.profileOpen = saved.profileOpen;
@@ -226,9 +218,6 @@ function read(): Prefs {
         const gone = Array.isArray(saved.profileRows) ? saved.profileRows.slice(0, saved.profileFoldAt).filter((x: unknown) => !PROFILE_ROWS.some((r) => r.id === x)).length : 0;
         p.profileFoldAt = Math.min(saved.profileFoldAt - gone, p.profileRows.length);
       }
-      // Artists was a profile row: switched off there, the line stays off.
-      if (typeof saved.listArtists === 'boolean') p.listArtists = saved.listArtists;
-      else if (Array.isArray(saved.profileRows) && saved.profileRows.length && !saved.profileRows.includes('artists')) p.listArtists = false;
       if (typeof saved.levelling === 'boolean') p.levelling = saved.levelling;
       if (typeof saved.browserName === 'string') p.browserName = saved.browserName;
       if (typeof saved.relativeDates === 'boolean') p.relativeDates = saved.relativeDates;

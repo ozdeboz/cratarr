@@ -685,6 +685,9 @@ export const applySafe = (playlists?: string[]) =>
 
 /** Apply one offered repair (used for the ones that need a look). */
 export const applyOne = (r: Repair) => post<{ playlists: string[] } & Undo>('/api/repairs/apply', { kind: 'one', ...r });
+/** A missing line pointed at a track found for it (Health's missing tracks): no repair need offer it; the server
+ *  checks the line is dead in the playlist and the track is a file in Music. Journaled as a repair. */
+export const relinkLine = (r: Repair) => post<{ playlists: string[] } & Undo>('/api/repairs/relink', r);
 
 /** The one undo (decision 0026): an action's tokens, undone newest first; the redo's tokens come back (none for
  *  Incoming's, whose albums' titles come back instead). */

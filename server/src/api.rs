@@ -125,6 +125,7 @@ pub fn router(app: Arc<App>) -> Router {
         // owners). The undo: a playlist's or crate's for everyone, the library's for the administrators (`undo`).
         .route("/api/repairs", get(repairs))
         .route("/api/repairs/apply", post(apply_repairs))
+        .route("/api/repairs/relink", post(relink_line))
         .route("/api/undo", post(undo))
 
         // For everyone: the version and when it started (About), the servers and their libraries (the filter): what
@@ -2146,6 +2147,19 @@ async fn apply_repairs(State(app): State<Arc<App>>, Json(req): Json<ApplyRequest
         ApplyRequest::One { playlist, from, to } => (Some(Repair { playlist, from, to }), None),
     };
     let (changed, undo) = app.playlists.apply_repairs(only, within.as_deref()).await?;
+    Ok(Json(json!({ "playlists": changed, "undo": undo })))
+}
+
+#[derive(Deserialize)]
+struct RelinkRequest {
+    playlist: String,
+    from: String,
+    to: String,
+}
+
+/// A playlist's missing line pointed at a track Health found for it (its missing tracks; no repair offered it).
+async fn relink_line(State(app): State<Arc<App>>, Json(req): Json<RelinkRequest>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (changed, undo) = app.playlists.relink(Repair { playlist: req.playlist, from: req.from, to: req.to }).await?;
     Ok(Json(json!({ "playlists": changed, "undo": undo })))
 }
 

@@ -871,7 +871,7 @@
 
   .acts button.main {
     background: var(--accent);
-    color: var(--on-accent, #000);
+    color: var(--accent-text);
   }
 
   .acts button:disabled {
