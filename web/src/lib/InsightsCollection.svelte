@@ -66,7 +66,8 @@
      scales, two rankings, so one at a time), the unit said over the bars. -->
 {#snippet bars(title: string, all: Layered[])}
   {@const listed = prefs.insightsCount === 'listed'}
-  {@const rows = listed ? all.filter((r) => r.listed > 0).sort((x, y) => y.listed - x.listed || x.name.localeCompare(y.name)) : all}
+  {@const counted = listed ? all.filter((r) => r.listed > 0).sort((x, y) => y.listed - x.listed || x.name.localeCompare(y.name)) : all}
+  {@const rows = prefs.insightsSort === 'az' ? [...counted].sort((x, y) => x.name.localeCompare(y.name)) : counted}
   {@const value = (r: Layered) => (listed ? r.listed : r.n)}
   {@const most = Math.max(1, ...rows.map(value))}
   {#if rows.length}
@@ -178,7 +179,7 @@
     {#if p.most_shared.length}
       <h3>In the most playlists</h3>
       <ol class="shared">
-        {#each p.most_shared as t, i (i)}
+        {#each prefs.insightsSort === 'az' ? [...p.most_shared].sort((x, y) => x.title.localeCompare(y.title)) : p.most_shared as t, i (i)}
           <li><span class="t">{t.title}{#if t.artist}<span class="muted"> · {t.artist}</span>{/if}</span><span class="n">in {t.playlists}</span></li>
         {/each}
       </ol>
