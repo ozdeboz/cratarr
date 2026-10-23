@@ -743,6 +743,11 @@
     display: contents;
   }
 
+  /* A little more between the title and the artist and album under it (the owner, 2026-10-24). */
+  header.landscape .sub {
+    margin-top: 10px;
+  }
+
   /* Spacers: equal (Finamp's were 4 / 4 / 10 / 4 in landscape; the owner, 2026-10-24: too much between the controls
      and the bottom row, relative to the rest); a small minimum keeps the groups apart. */
   .sp {
