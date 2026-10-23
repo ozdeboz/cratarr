@@ -1,6 +1,6 @@
 [package]
 name = "cratarr-server"
-version = "0.7.6"
+version = "0.8.0"
 edition = "2024"
 description = "Cratarr core: Jellyfin playlist index and API"
 license = "AGPL-3.0-or-later"
@@ -69,12 +69,6 @@ lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
-
-# Preview builds for trying a change on the NAS: the release build without its slow whole-program optimisation.
-[profile.preview]
-inherits = "release"
-lto = false
-codegen-units = 16
 
 # Beat this! on the NAS (decision 0049, amended): tract's and the spectrogram's arithmetic at full speed; the rest stays
 # built for size (all of it at full speed made the image 69 MB instead of 19).

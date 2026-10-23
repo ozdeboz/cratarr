@@ -8,8 +8,6 @@ COPY web/ ./
 RUN pnpm build
 
 FROM rust:1-alpine AS server
-# release (the default) or preview (no whole-program optimisation: quicker, for trying a change).
-ARG PROFILE=release
 # cmake: libopus is built from its bundled source (the downloads' smaller copies, decision 0033).
 RUN apk add --no-cache musl-dev build-base cmake
 WORKDIR /app
@@ -17,7 +15,7 @@ COPY server/ server/
 COPY --from=web /app/web/dist web/dist
 WORKDIR /app/server
 # The crates and what was compiled before are kept between builds (BuildKit caches): only what changed is built again.
-RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     cargo build --profile "$PROFILE" --locked && cp "target/$PROFILE/cratarr-server" /cratarr-server
+RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     cargo build --release --locked && cp target/release/cratarr-server /cratarr-server
 
 FROM scratch
 COPY --from=server /cratarr-server /cratarr-server
