@@ -218,7 +218,8 @@
     color: var(--accent-text);
   }
 
-  /* How much of it was played, along its foot. */
+  /* How much of it was played, along its foot: in the red, not the green the card's ring is when it is open (the owner,
+     2026-10-24: the two clashed). */
   .explored {
     position: absolute;
     inset: auto 0 0;
@@ -229,6 +230,6 @@
   .explored span {
     display: block;
     height: 100%;
-    background: var(--accent);
+    background: var(--danger);
   }
 </style>

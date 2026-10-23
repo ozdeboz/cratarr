@@ -174,6 +174,6 @@
   }
 
   .note.failed {
-    color: var(--danger);
+    color: var(--danger-ink);
   }
 </style>

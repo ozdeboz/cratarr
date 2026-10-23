@@ -375,7 +375,7 @@
   }
 
   .check.bad {
-    color: var(--danger);
+    color: var(--danger-ink);
   }
 
   code.check {

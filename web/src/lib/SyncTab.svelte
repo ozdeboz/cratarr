@@ -94,7 +94,7 @@
   }
 
   .error {
-    color: var(--danger);
+    color: var(--danger-ink);
     white-space: normal;
   }
 </style>

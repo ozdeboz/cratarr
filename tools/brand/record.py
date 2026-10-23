@@ -25,7 +25,7 @@ SPINDLE = 3.0
 # (ring radii, ring width) per version; each keeps the gap at the edge smaller than the gap at the label
 VERSIONS = {"full": ([13.0, 17.0, 21.0], 1.2), "two": ([14.0, 19.5], 2.4), "one": ([16.5], 3.0)}
 
-GREEN, DARK = "#3DDC97", "#06281A"
+GREEN, DARK = "#12A36A", "#06281A"  # 0.8: the one accent for both themes (the owner, 2026-10-24)
 
 
 def pt(r, deg):
@@ -89,7 +89,7 @@ LAUNCHER = """<!-- Cratarr's mark: a record with three rings, a 60-degree slice 
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:fillColor="#3DDC97"
+        android:fillColor="{green}"
         android:pathData="{path}" />
 </vector>
 """
@@ -116,7 +116,7 @@ NOTIFICATION = """<!-- Cratarr's mark in notifications ({version}: {why}). The r
 
 def android(res):
     res = pathlib.Path(res)
-    (res / "drawable" / "ic_launcher_foreground.xml").write_text(LAUNCHER.format(path=path("full")))
+    (res / "drawable" / "ic_launcher_foreground.xml").write_text(LAUNCHER.format(path=path("full"), green=GREEN))
     scale = 10 / 24
     # 24 dp is 24 px on mdpi screens (the unqualified folder counts as mdpi), 36 on hdpi, 48 and more from xhdpi
     for folder, version, why in [("drawable", "one", "24 px, one ring"), ("drawable-hdpi", "two", "36 px, two rings"),

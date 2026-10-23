@@ -18,11 +18,11 @@
 
   .notice.warn {
     border-color: var(--warn);
-    color: var(--warn);
+    color: var(--warn-ink);
   }
 
   .notice.error {
     border-color: var(--danger);
-    color: var(--danger);
+    color: var(--danger-ink);
   }
 </style>

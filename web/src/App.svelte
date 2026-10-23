@@ -1068,7 +1068,7 @@
   }
 
   .conn.down {
-    color: var(--danger);
+    color: var(--danger-ink);
   }
 
   .conn.down i {

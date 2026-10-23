@@ -37,7 +37,7 @@
   }
 
   .danger {
-    color: var(--danger);
+    color: var(--danger-ink);
   }
 
   /* Held at the row's edge it was uncovered from; the strip clips it until there is room. */

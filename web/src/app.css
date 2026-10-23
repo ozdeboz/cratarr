@@ -2,7 +2,7 @@
 @property --art-accent {
   syntax: '<color>';
   inherits: true;
-  initial-value: #3ddc97;
+  initial-value: #12a36a;
 }
 
 /* The playing cover's colour for the whole page (App sets it on the root from lib/remote's art), for the floating
@@ -10,19 +10,25 @@
 @property --now-accent {
   syntax: '<color>';
   inherits: true;
-  initial-value: #3ddc97;
+  initial-value: #12a36a;
 }
 
+/* Cratarr's colours (0.8, the owner 2026-10-24: Coral & honey): the accent, the red (errors, critical, what removes)
+   and the amber (warnings) are one value each for both themes, every one at least 3 : 1 on both pages and their
+   cards. Labels on them: dark on the green and the amber, white on the red. Text in them (an error line, a warning)
+   takes their ink, the same hue mixed toward the theme's text until it reads at 4.5 : 1 or more. */
 :root {
   --bg: #0f1115;
   --surface: #181b22;
   --border: #2a2f3a;
   --text: #e8eaf0;
   --muted: #9097a5;
-  --accent: #3ddc97;
+  --accent: #12a36a;
   --accent-text: #06281a;
-  --warn: #f5b942;
-  --danger: #ff6b6b;
+  --warn: #c1811c;
+  --danger: #c03e34;
+  --warn-ink: color-mix(in srgb, var(--warn) 70%, var(--text));
+  --danger-ink: color-mix(in srgb, var(--danger) 75%, var(--text));
   /* A missing cover's tile (lib/Cover's stand-in): a step lighter than the page. */
   --tile: #20242c;
   /* The floating controls' surface (the pill, back, ✕, the mark, the select bars): the colour of the mini-player's
@@ -41,10 +47,6 @@
     --border: #d9dde5;
     --text: #1a1d24;
     --muted: #5d6573;
-    --accent: #12a36a;
-    --accent-text: #ffffff;
-    --warn: #a86a00;
-    --danger: #c62d2d;
     --tile: #e7eaef;
     color-scheme: light;
   }
@@ -56,10 +58,6 @@
   --border: #d9dde5;
   --text: #1a1d24;
   --muted: #5d6573;
-  --accent: #12a36a;
-  --accent-text: #ffffff;
-  --warn: #a86a00;
-  --danger: #c62d2d;
   --tile: #e7eaef;
   color-scheme: light;
 }

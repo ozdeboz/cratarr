@@ -142,7 +142,7 @@
   .error {
     margin: 0;
     padding: 0 24px 10px;
-    color: var(--danger);
+    color: var(--danger-ink);
     font-size: 14px;
   }
 </style>

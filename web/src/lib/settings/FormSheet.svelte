@@ -72,7 +72,7 @@
 
   .error {
     margin: 0;
-    color: var(--danger);
+    color: var(--danger-ink);
     font-size: 13px;
   }
 

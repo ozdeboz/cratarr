@@ -94,7 +94,7 @@
   }
 
   small.bad {
-    color: var(--danger);
+    color: var(--danger-ink);
   }
 
   .none {

@@ -178,7 +178,7 @@
   }
 
   .cell.warn {
-    color: var(--danger);
+    color: var(--danger-ink);
   }
 
   /* A head's names: those that order the list are buttons, the rest the same words plain. */

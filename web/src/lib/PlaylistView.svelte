@@ -2263,7 +2263,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   }
 
   .actbar .icon.destructive {
-    color: var(--danger, #c33);
+    color: var(--danger-ink);
   }
 
   /* Finamp's playlist heart: filled when it is a favourite; the pin filled when pinned. */
@@ -2513,7 +2513,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   }
 
   .dead {
-    color: var(--danger, #c33);
+    color: var(--danger-ink);
   }
 
   .tool.add {
@@ -2596,6 +2596,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
     .head-spread {
       margin: 4px 0 0;
+    }
+
+    /* Beside the name nothing is above the profile: no line over it (the owner, 2026-10-24). */
+    .head-spread :global(.profile > .rule) {
+      display: none;
     }
   }
 
@@ -3009,7 +3014,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   }
 
   .error {
-    color: var(--danger, #c33);
+    color: var(--danger-ink);
   }
 
   /* The loading sign, small, where more is coming (lib/MarkLoader.svelte). */

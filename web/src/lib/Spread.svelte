@@ -5,7 +5,7 @@
   export const BAND = 5;
   export const BANDS = (HI - LO) / BAND;
   /** Several series (playlists selected together) stack in these; past them the rest is one grey layer. */
-  export const PALETTE = ['#3ddc97', '#5aa9e6', '#f2b84b', '#e66a8f', '#a98be8'];
+  export const PALETTE = ['#12a36a', '#5aa9e6', '#f2b84b', '#e66a8f', '#a98be8'];
   export const REST = 'color-mix(in srgb, var(--text) 30%, transparent)';
   /** A series' colour where several stack: its own up to the palette's last but one, then the rest's grey. */
   export const layerColor = (i: number, n: number) => (n <= PALETTE.length || i < PALETTE.length - 1 ? PALETTE[i] : REST);

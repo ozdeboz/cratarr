@@ -137,7 +137,7 @@
 
   .failed {
     padding: 0 16px 12px;
-    color: var(--danger, var(--muted));
+    color: var(--danger-ink);
   }
 
   .loading {

@@ -265,7 +265,7 @@
   }
 
   .danger .name {
-    color: var(--danger);
+    color: var(--danger-ink);
   }
 
   small {
@@ -282,11 +282,11 @@
   }
 
   small.warn {
-    color: var(--warn);
+    color: var(--warn-ink);
   }
 
   small.bad {
-    color: var(--danger);
+    color: var(--danger-ink);
   }
 
   /* A row's own buttons: small and flat, the main one in the accent. */

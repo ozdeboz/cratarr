@@ -229,11 +229,11 @@
   }
 
   .entry.warn .msg {
-    color: var(--warn);
+    color: var(--warn-ink);
   }
 
   .entry.error .msg {
-    color: var(--danger);
+    color: var(--danger-ink);
   }
 
   .count,

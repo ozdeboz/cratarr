@@ -115,12 +115,12 @@
 
   .toast.warn {
     border-color: var(--warn);
-    color: var(--warn);
+    color: var(--warn-ink);
   }
 
   .toast.error {
     border-color: var(--danger);
-    color: var(--danger);
+    color: var(--danger-ink);
   }
 
   .text {

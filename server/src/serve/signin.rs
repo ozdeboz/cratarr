@@ -243,10 +243,11 @@ fn page_html(next: &str, user: &str, error: Option<&str>, nonce: &str) -> String
 <link rel="icon" href="/icons/favicon-32.png">
 <style nonce="{nonce}">
   :root {{ color-scheme: dark; --bg: #0f1115; --surface: #181b22; --border: #2a2f3a; --text: #e8eaf0; --muted: #9097a5;
-    --accent: #3ddc97; --accent-text: #06281a; --danger: #ff6b6b; }}
+    --accent: #12a36a; --accent-text: #06281a; --danger: #c03e34;
+    --danger-ink: color-mix(in srgb, var(--danger) 75%, var(--text)); }}
   @media (prefers-color-scheme: light) {{
     :root {{ color-scheme: light; --bg: #f5f6f8; --surface: #ffffff; --border: #d9dde5; --text: #1a1d24; --muted: #5d6573;
-      --accent: #12a36a; --accent-text: #ffffff; --danger: #c62d2d; }}
+      --danger-ink: color-mix(in srgb, var(--danger) 75%, var(--text)); }}
   }}
   * {{ box-sizing: border-box; }}
   body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--text);
@@ -264,7 +265,7 @@ fn page_html(next: &str, user: &str, error: Option<&str>, nonce: &str) -> String
   button {{ font: inherit; font-weight: 700; color: var(--accent-text); background: var(--accent); border: 0;
     border-radius: 999px; padding: 12px; cursor: pointer; margin-top: 4px; }}
   button:focus-visible {{ outline: 2px solid var(--text); outline-offset: 2px; }}
-  .error {{ margin: 0; color: var(--danger); }}
+  .error {{ margin: 0; color: var(--danger-ink); }}
 </style>
 </head>
 <body>

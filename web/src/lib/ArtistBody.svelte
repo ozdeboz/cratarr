@@ -133,6 +133,11 @@
       margin-top: 16px;
       padding-right: 16px;
     }
+
+    /* Beside the albums nothing is above it: no line over it (the owner, 2026-10-24). */
+    .beside > .profile :global(.profile > .rule) {
+      display: none;
+    }
   }
 
   .about {

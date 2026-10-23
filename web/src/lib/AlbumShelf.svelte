@@ -611,7 +611,7 @@
   .empty,
 
   .error {
-    color: var(--danger);
+    color: var(--danger-ink);
   }
 
   /* In columns, as the playlist chips are (lib/zoom.ts). */
@@ -813,7 +813,7 @@
   }
 
   .weak {
-    color: var(--danger);
+    color: var(--danger-ink);
   }
 
   .tag {

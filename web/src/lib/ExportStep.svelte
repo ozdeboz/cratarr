@@ -148,7 +148,7 @@
   }
 
   .error {
-    color: var(--danger, #c33);
+    color: var(--danger-ink);
   }
 
   input[type='text'] {

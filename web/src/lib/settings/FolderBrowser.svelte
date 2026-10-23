@@ -68,6 +68,6 @@
 
   .error {
     margin: 12px 20px;
-    color: var(--danger, #c33);
+    color: var(--danger-ink);
   }
 </style>

@@ -241,7 +241,7 @@
   }
 
   .sum.not {
-    color: var(--danger, #c33);
+    color: var(--danger-ink);
   }
 
 
@@ -378,7 +378,7 @@
   .notpill[aria-pressed='true'] {
     border-color: var(--danger);
     background: color-mix(in srgb, var(--danger) 12%, transparent);
-    color: var(--danger);
+    color: var(--danger-ink);
   }
 
   .chip.not[aria-pressed='true'] {
@@ -391,7 +391,7 @@
     border: 0;
     border-radius: 999px;
     background: none;
-    color: var(--danger, #c33);
+    color: var(--danger-ink);
     font: inherit;
     font-size: 14px;
     cursor: pointer;

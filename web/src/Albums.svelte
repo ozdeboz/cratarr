@@ -116,7 +116,7 @@
   }
 
   .error {
-    color: var(--danger, #c0392b);
+    color: var(--danger-ink);
   }
 
   .cols {

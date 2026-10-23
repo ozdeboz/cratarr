@@ -158,7 +158,7 @@
     border: 0;
     border-radius: 8px;
     background: none;
-    color: var(--danger, #ff6b6b);
+    color: var(--danger-ink);
     font: inherit;
     cursor: pointer;
   }
