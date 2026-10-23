@@ -1524,14 +1524,6 @@ impl Catalogue {
             .flatten()
     }
 
-    /// Every track AudioMuse heard (decision 0054), by its track, for similarity (the radio's index). Blocking.
-    pub fn audiomuse_all(&self) -> HashMap<i64, AudioMuseRow> {
-        let db = self.db();
-        let Ok(mut st) = db.prepare("SELECT track, energy, key, style, moods, embedding FROM audiomuse") else { return HashMap::new() };
-        let rows = st.query_map([], audiomuse_row);
-        rows.into_iter().flatten().flatten().map(|r| (r.track, r)).collect()
-    }
-
     /// Several at once, in one transaction (an import's batch). Blocking.
     pub fn store_analyses(&self, items: &[(i64, String, u64, i64, crate::analysis::Analysis)]) -> Result<()> {
         let mut db = self.db();
