@@ -186,11 +186,13 @@ const PLAYED_AT = 0.9;
 /** The queue place being heard (index and track), from when, how far it got, and whether it was told as counted. */
 type Hearing = { at: string; track: LocalTrack; started: number; heard: number; length: number | null; counted: boolean };
 let hearing: Hearing | null = null;
-/** Reports not yet taken (the server away): sent again with the next one. */
+/** Reports not yet taken (the server away): sent again with the next one; the latest 500 kept. */
 let unsent: HeardEvent[] = [];
+/** A report's own id; `crypto.randomUUID` needs a secure page (a LAN address is plain http). */
+const reportId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
 function tell(h: Hearing, ended: HeardEvent['ended'], counts: boolean) {
   unsent.push({
-    id: crypto.randomUUID(),
+    id: reportId(),
     source: h.track.source,
     track: h.track.id,
     at: h.started,
@@ -201,7 +203,7 @@ function tell(h: Hearing, ended: HeardEvent['ended'], counts: boolean) {
     player: prefs.browserName || null,
     context: keptHere.id ? `queue:${keptHere.id}` : null,
   });
-  const batch = unsent;
+  const batch = unsent.slice(-500);
   unsent = [];
   reportPlays(batch).then(
     (r) => unsent.push(...batch.filter((e) => !r.done.includes(e.id))),
