@@ -89,8 +89,14 @@ pub enum Value {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         weights: Vec<f32>,
     },
-    /// A `Like` worked out (`resolved`): the lines of those tracks, and the same closest first (`closest_first`).
-    /// Never kept.
+    /// Close to a moment (Home's weather and time of day, `app::moment`): the `count` tracks nearest its energy and
+    /// moods (`Scales::off`). Made when asked for, never kept.
+    Moment {
+        target: Target,
+        count: usize,
+    },
+    /// A `Like` or a `Moment` worked out (`resolved`): the lines of those tracks, and the same closest first
+    /// (`closest_first`). Never kept.
     #[serde(skip)]
     Within { lines: Arc<HashSet<String>>, ranked: Arc<Vec<String>> },
 }
@@ -133,6 +139,15 @@ pub fn week_crate(id: &str, played: Vec<(String, f32)>, count: usize) -> CrateDe
     let like = Condition::new("like", false, Value::Like { of, count, fresh: true, weights });
     CrateDef { id: id.to_string(), name: "Sounds like your week".into(), conditions: vec![like] }
 }
+/// Home's moment (`like:now[@<count>]`, `app::moment`): the tracks nearest what the weather and the time of day ask,
+/// named after the moment ("Music for a Rainy Evening"); Home's radio plays inside it.
+pub const NOW: &str = "now";
+
+pub fn moment_crate(id: &str, name: &str, target: Target, count: usize) -> CrateDef {
+    let near = Condition::new("like", false, Value::Moment { target, count });
+    CrateDef { id: id.to_string(), name: name.to_string(), conditions: vec![near] }
+}
+
 /// How many tracks it holds until its curve says otherwise, and the fewest and most it can.
 pub const LIKE_COUNT: usize = 200;
 pub const LIKE_FEWEST: usize = 10;
@@ -414,6 +429,50 @@ pub fn profile_in(list: &[&Facts], scales: &Scales) -> Profile {
         }
     }
     out
+}
+
+/// What a moment asks of the music (`app::moment`): its energy, where on the library's scale (its 5th to 95th
+/// percentile: 0 calm, 1 intense), and, when the weather is known, how happy, sad and relaxed against the library (a
+/// `MoodLift`'s scale: -1 far below its middle, 1 far above).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Target {
+    pub energy: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mood: Option<[f64; 3]>,
+}
+
+/// How much each part of a target counts: energy, then happy, sad and relaxed.
+const TARGET_WEIGHTS: [f64; 4] = [2.0, 1.0, 0.7, 0.5];
+/// What a track CLAP has not heard is further away, its moods unknown.
+const MOODS_UNHEARD: f64 = 0.1;
+
+impl Scales {
+    /// How far a file is from a target (0 on it); none without AudioMuse's energy.
+    pub fn off(&self, f: &Facts, t: &Target) -> Option<f64> {
+        let (lo, hi) = self.numbers[1];
+        let energy = ((f.energy? - lo) / (hi - lo).max(f64::EPSILON)).clamp(0.0, 1.0);
+        let mut off = TARGET_WEIGHTS[0] * (energy - t.energy).powi(2);
+        if let Some(mood) = t.mood {
+            match f.clap_moods {
+                Some(m) => {
+                    for (k, want) in mood.into_iter().enumerate() {
+                        let (middle, half) = self.moods[k];
+                        let lift = ((m[k] as f64 - middle) / half).clamp(-1.0, 1.0);
+                        off += TARGET_WEIGHTS[k + 1] * ((lift - want) / 2.0).powi(2);
+                    }
+                }
+                None => off += MOODS_UNHEARD,
+            }
+        }
+        Some(off)
+    }
+}
+
+/// The files AudioMuse heard, nearest a target first, each with how far.
+pub fn nearest<'a>(among: &[&'a Facts], scales: &Scales, t: &Target) -> Vec<(&'a Facts, f64)> {
+    let mut all: Vec<(&Facts, f64)> = among.iter().filter_map(|f| Some((*f, scales.off(f, t)?))).collect();
+    all.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.rel.cmp(&b.0.rel)));
+    all
 }
 
 /// Where a Sounds like crate's handle can stop (as lib/LikeCurve tidies it): every 5 up to 100, every 10 up to 400,
@@ -733,7 +792,14 @@ fn now_secs() -> i64 {
 /// Whether every condition that is on, but Sounds like, holds for a file: the files a Sounds like picks its closest
 /// among (`resolved`).
 pub fn holds_besides_like(conditions: &[Condition], f: &Facts, w: &World) -> bool {
-    conditions.iter().filter(|c| c.enabled && !matches!(c.value, Value::Like { .. })).all(|c| holds(c, f, w))
+    conditions.iter().filter(|c| c.enabled && !c.value.ranks()).all(|c| holds(c, f, w))
+}
+
+impl Value {
+    /// Whether it picks the closest among the files (`resolved`): a Sounds like, a moment.
+    pub fn ranks(&self) -> bool {
+        matches!(self, Value::Like { .. } | Value::Moment { .. })
+    }
 }
 
 /// Whether a condition holds for a file. A condition on an unknown axis, or with a value its axis does not take, never
@@ -842,6 +908,10 @@ pub fn resolved(conditions: &[Condition], alike: &Alike, among: &[&Facts], by: &
                     .take(*count)
                     .map(|(f, _)| f.rel.clone())
                     .collect();
+                Condition { value: Value::Within { lines: Arc::new(ranked.iter().cloned().collect()), ranked: Arc::new(ranked) }, ..c.clone() }
+            }
+            Value::Moment { target, count } => {
+                let ranked: Vec<String> = nearest(among, &Scales::of(among), target).into_iter().take(*count).map(|(f, _)| f.rel.clone()).collect();
                 Condition { value: Value::Within { lines: Arc::new(ranked.iter().cloned().collect()), ranked: Arc::new(ranked) }, ..c.clone() }
             }
             _ => c.clone(),
@@ -1530,6 +1600,37 @@ mod tests {
         closest_first(&mut lines, &resolved(&week.conditions, &Alike::of(&files, &HashMap::new()), &every, &Weights::EQUAL));
         assert_eq!(lines, ["near.flac", "far.flac"], "closest first, the played one left out");
         assert_eq!(like_of("like:week@10"), Some((WEEK, 10)));
+    }
+
+    #[test]
+    fn a_moment_holds_the_tracks_nearest_its_energy_and_moods() {
+        // Energy 0 to 100; CLAP's happy, sad, relaxed (aggressive, party unused).
+        let heard = |rel: &str, energy: f64, happy: f32, sad: f32| Facts {
+            rel: rel.into(),
+            energy: Some(energy),
+            clap_moods: Some([happy, sad, 0.3, 0.1, 0.1]),
+            ..Facts::default()
+        };
+        let mut files: Vec<Facts> = (0..10).map(|n| heard(&format!("mid{n}.flac"), 50.0, 0.4, 0.4)).collect();
+        files.extend([
+            heard("calm-sad.flac", 10.0, 0.1, 0.8),
+            heard("calm-happy.flac", 10.0, 0.8, 0.1),
+            heard("lively-happy.flac", 90.0, 0.8, 0.1),
+            Facts { rel: "unheard.flac".into(), ..Facts::default() },
+        ]);
+        let every: Vec<&Facts> = files.iter().collect();
+        let membership = HashMap::new();
+        let w = World { membership: &membership, favourites: None, favourite_albums: None, uses: None, now: 0 };
+        let pick = |target: Target| {
+            let c = moment_crate("like:now@1", "Now", target, 1);
+            select(&files, &resolved(&c.conditions, &Alike::of(&files, &HashMap::new()), &every, &Weights::EQUAL), &w)
+        };
+        assert_eq!(pick(Target { energy: 0.0, mood: Some([-0.8, 0.7, 0.6]) }), ["calm-sad.flac"], "a rainy night");
+        assert_eq!(pick(Target { energy: 0.0, mood: Some([0.8, -0.7, 0.0]) }), ["calm-happy.flac"], "a clear night");
+        assert_eq!(pick(Target { energy: 1.0, mood: Some([0.8, -0.7, 0.0]) }), ["lively-happy.flac"], "a sunny noon");
+        assert_eq!(pick(Target { energy: 1.0, mood: None }), ["lively-happy.flac"], "no weather: energy alone");
+        let c = moment_crate("like:now", "Now", Target { energy: 0.5, mood: None }, 100);
+        assert_eq!(select(&files, &resolved(&c.conditions, &Alike::of(&files, &HashMap::new()), &every, &Weights::EQUAL), &w).len(), 13, "never the unheard");
     }
 
     #[test]

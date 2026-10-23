@@ -1,19 +1,22 @@
 <script lang="ts">
-  // Home (the owner, 2026-10-23: the leftmost tab): the quick look. New for you (the newest albums not heard yet: less
+  // Home (the owner, 2026-10-23: the leftmost tab): the quick look. The moment (named after the weather and the time
+  // of day: a few albums near it and a radio inside it, the server's), New for you (the newest albums not heard yet: less
   // than 5% of their length, a swipe row; All opens the Library by date added), Sounds like your week (the week's crate: what sounds like the last seven
   // days' plays, none of them), Jump back in (the albums and playlists played last, and the queues left last), Blast
   // from the past (the favourite tracks unplayed longest) and Grave digging (the albums most like the taste and furthest
   // from the listening), and Needs you (claude-632's, lib/HomeNeeds). A tile with nothing to show is left out.
   import { onMount } from 'svelte';
-  import { coverUrl, crateRows, getCrate, getDigging, heardAlbums, playlistStats, type Digging, type PlaylistRow } from './lib/api';
+  import { coverUrl, crateRows, getCrate, getDigging, getMoment, heardAlbums, playlistStats, type Digging, type Moment, type PlaylistRow } from './lib/api';
   import AlbumCard from './lib/AlbumCard.svelte';
   import { addedOn, albumUses, library, loadAlbumUses, readLibrary } from './lib/albums.svelte';
   import { albumCoverUrl } from './lib/api';
   import Cover from './lib/Cover.svelte';
+  import CoverFlow from './lib/CoverFlow.svelte';
   import ArtistsToExplore from './lib/ArtistsToExplore.svelte';
   import HomeNeeds from './lib/HomeNeeds.svelte';
   import { LIKE, viewGenre, viewLike } from './lib/crates.svelte';
   import { DEVICE } from './lib/deviceMusic.svelte';
+  import { startRadio } from './lib/localPlayer.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { hiddenLibraries } from './lib/listFilter.svelte';
   import { shownPlaylists } from './lib/output.svelte';
@@ -93,6 +96,41 @@
       await playCollection({ kind: 'crate', id: WEEK }, how, week.name, undefined, { without: hiddenLibraries() });
     } catch (e) {
       toast.fail(e, 'Could not start playing');
+    } finally {
+      starting = false;
+    }
+  }
+
+  // The moment (the owner, 2026-10-23: its own style, not a shelf like those below): its albums as a Flow on a canvas
+  // painted for the sky, the front one named; its radio plays only what is near it, the moment read again on each
+  // refill (it follows the weather).
+  let moment = $state<Moment | null>(null);
+  onMount(() => {
+    getMoment(prefs.source || undefined, hiddenLibraries()).then(
+      (m) => (moment = m),
+      () => (moment = null),
+    );
+  });
+  const momentAlbums = $derived(
+    (moment?.albums ?? []).flatMap((id) => sources.find((s) => s.id === 'cratarr')?.albums.find((x) => x.id === id) ?? []),
+  );
+  let momentFront = $state(0);
+  /** The sky's photo (public/skies, hand-picked from Unsplash): sunny and hot are day skies, clear a night's; the others
+   *  by day or after sunset. */
+  const skyPhoto = $derived.by(() => {
+    if (!moment) return null;
+    const one: Record<string, string> = { sunny: 'sunny-day', hot: 'hot-day', clear: 'clear-night' };
+    return `skies/${one[moment.sky] ?? `${moment.sky}-${moment.dark ? 'night' : 'day'}`}.jpg`;
+  });
+  const frontAlbum = $derived(momentAlbums[Math.min(momentFront, momentAlbums.length - 1)]);
+  async function momentRadio() {
+    if (!moment) return;
+    navigator.vibrate?.(8);
+    starting = true;
+    try {
+      await startRadio([], moment.name, `${LIKE}now`);
+    } catch (e) {
+      toast.fail(e, "The radio didn't start");
     } finally {
       starting = false;
     }
@@ -188,6 +226,30 @@
 </script>
 
 <div class="home">
+  {#if moment && momentAlbums.length}
+    <section class="moment" data-sky={moment.sky} class:dark={moment.dark} style:--photo={skyPhoto ? `url(${skyPhoto})` : 'none'} aria-label={moment.name}>
+      <h2>{moment.name}</h2>
+      <div class="sky-flow">
+        <CoverFlow
+          covers={momentAlbums.map((a) => albumCoverUrl('cratarr', a.id))}
+          top={0}
+          foot={0}
+          onopen={(i) => viewOver(albumSubject('cratarr', momentAlbums[i].id))}
+          onfront={(i) => (momentFront = i)}
+        />
+      </div>
+      <div class="caption">
+        {#if frontAlbum}
+          <button class="name" onclick={() => viewOver(albumSubject('cratarr', frontAlbum.id))}>
+            <span class="title">{frontAlbum.title}</span>
+            <span class="by">{frontAlbum.artist ?? ''}</span>
+          </button>
+        {/if}
+        <button class="radio" disabled={starting} onclick={momentRadio}><Icon name="radioTower" size={18} />Radio</button>
+      </div>
+    </section>
+  {/if}
+
   {#if newest.length}
     <section aria-label="New for you">
       <SectionHead title="New for you" onmore={allNewest} />
@@ -292,6 +354,117 @@
     flex-direction: column;
     gap: 28px;
     padding: 16px 0 32px;
+  }
+
+  /* The moment: a canvas the width of the page from its top, the sky's photo under a dark veil, cropped towards its top
+     (the owner: air, not landscape), its colours while the photo loads or without one, fading into the page at its foot;
+     its words light on it in either theme. */
+  .moment {
+    --sky-top: #34465f;
+    --sky-foot: #1a2230;
+    --veil: 0.5;
+    --top: var(--sky-top);
+    --foot: var(--sky-foot);
+    position: relative;
+    margin-top: -16px;
+    padding: 20px 0 36px;
+    color: #eef0f4;
+    background:
+      linear-gradient(to bottom, rgb(0 0 0 / calc(var(--veil) - 0.1)), rgb(0 0 0 / var(--veil)) calc(100% - 60px), var(--bg)),
+      var(--photo) center 20% / cover no-repeat,
+      linear-gradient(to bottom, var(--top), var(--foot));
+  }
+
+  .moment[data-sky='sunny'] { --sky-top: #9a6424; --sky-foot: #3d2a16; }
+  .moment[data-sky='clear'] { --sky-top: #24305e; --sky-foot: #10152b; }
+  .moment[data-sky='fewclouds'] { --sky-top: #3f5c80; --sky-foot: #1d2a3b; }
+  .moment[data-sky='cloudy'] { --sky-top: #46505e; --sky-foot: #1f242c; }
+  .moment[data-sky='foggy'] { --sky-top: #565b63; --sky-foot: #26292e; }
+  .moment[data-sky='rainy'] { --sky-top: #3a4d68; --sky-foot: #1b2331; }
+  .moment[data-sky='stormy'] { --sky-top: #43375f; --sky-foot: #181426; }
+  .moment[data-sky='snowy'] { --sky-top: #5b6e86; --sky-foot: #25303d; }
+  .moment[data-sky='windy'] { --sky-top: #33545c; --sky-foot: #172528; }
+  .moment[data-sky='hot'] { --sky-top: #8a3a1a; --sky-foot: #33160c; }
+  .moment[data-sky='plain'] { --sky-top: #2e3644; --sky-foot: #171b22; }
+
+  /* After sunset the same sky, darker (a clear sky is a night's already; a hot night's photo is the day's, veiled more). */
+  .moment.dark:not([data-sky='clear']) {
+    --top: color-mix(in srgb, var(--sky-top) 70%, #05070d);
+    --foot: color-mix(in srgb, var(--sky-foot) 70%, #05070d);
+  }
+
+  .moment.dark[data-sky='hot'] {
+    --veil: 0.65;
+  }
+
+  .moment h2 {
+    margin: 0;
+    padding: 0 16px;
+    font-size: 23px;
+    font-weight: 400;
+  }
+
+  .sky-flow {
+    position: relative;
+    height: clamp(200px, 30vw, 290px);
+    margin-top: 16px;
+  }
+
+  .caption {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    max-width: 640px;
+    margin: 16px auto 0;
+    padding: 0 16px;
+  }
+
+  .caption .name {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+  }
+
+  .caption .title,
+  .caption .by {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .caption .title {
+    font-weight: 500;
+  }
+
+  .caption .by {
+    color: rgb(238 240 244 / 70%);
+    font-size: 0.9rem;
+  }
+
+  .caption .radio {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 18px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--on-accent, #000);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .caption .radio:disabled {
+    opacity: 0.6;
   }
 
   .shelf {
