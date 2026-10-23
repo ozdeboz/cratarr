@@ -10,7 +10,7 @@
   // One condition of a crate or a filter, as a card (decision 0061, the owner's option C): folded, one line with its
   // name and what it is set to, Any or All where the list's items hold tracks, a switch that mutes it without removing
   // it (dimmed), and the chevron; unfolded, its whole control: values as chips with their counts, a range (Tempo with
-  // its spread, lib/TempoRange), Not, and Remove. The crate editor and the Filter sheet draw the same cards
+  // its spread, lib/TempoRange), Not (a pill: on, it and the chosen values turn red), and Remove. The crate editor and the Filter sheet draw the same cards
   // (lib/ConditionList).
   import { slide } from 'svelte/transition';
   import Icon from './Icon.svelte';
@@ -110,7 +110,7 @@
         {/if}
         <div class="chips">
           {#each chips as c (c.v)}
-            <button class="chip" aria-pressed={c.on} onclick={() => toggle(c.v)}>{c.v}{#if c.n !== null}<span class="n">{c.n.toLocaleString()}</span>{/if}</button>
+            <button class="chip" class:not={condition.not} aria-pressed={c.on} onclick={() => toggle(c.v)}>{c.v}{#if c.n !== null}<span class="n">{c.n.toLocaleString()}</span>{/if}</button>
           {/each}
         </div>
       {:else if axis && condition.value.kind === 'range'}
@@ -126,7 +126,7 @@
         {/if}
       {/if}
       <div class="foot">
-        <label class="notbox"><input type="checkbox" checked={condition.not} onchange={(e) => (condition.not = e.currentTarget.checked)} /> Not</label>
+        <button class="notpill" aria-pressed={condition.not} onclick={() => (condition.not = !condition.not)}>Not</button>
         <button class="remove" onclick={onremove}>Remove</button>
       </div>
     </div>
@@ -236,6 +236,7 @@
 
   .body {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 10px;
     padding: 4px 6px 4px 0;
   }
@@ -299,13 +300,28 @@
     justify-content: space-between;
   }
 
-  .notbox {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
+  /* Not: a pill that turns red when on (the owner's choice, 2026-10-23), as the chosen chips and the summary do. */
+  .notpill {
+    padding: 5px 14px;
+    border: 1px solid color-mix(in srgb, var(--text) 28%, transparent);
+    border-radius: 999px;
+    background: none;
     color: var(--muted);
-    font-size: 14px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
     cursor: pointer;
+  }
+
+  .notpill[aria-pressed='true'] {
+    border-color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    color: var(--danger);
+  }
+
+  .chip.not[aria-pressed='true'] {
+    border-color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 18%, var(--bg));
   }
 
   .remove {

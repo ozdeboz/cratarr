@@ -203,6 +203,7 @@
     --card: color-mix(in srgb, var(--text) 8%, transparent);
     --card-hover: color-mix(in srgb, var(--text) 13%, transparent);
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 12px;
     padding: 4px 12px 8px;
   }

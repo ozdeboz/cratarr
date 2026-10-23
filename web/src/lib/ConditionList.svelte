@@ -56,8 +56,10 @@
 {/if}
 
 <style>
+  /* Cards as wide as the sheet, never as their contents (a long summary is cut short instead). */
   .list {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 6px;
     margin: 0;
     padding: 0;
