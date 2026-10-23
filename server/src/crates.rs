@@ -539,6 +539,12 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
         .collect()
 }
 
+/// Whether every condition that is on, but Sounds like, holds for a file: the files a Sounds like picks its closest
+/// among (`resolved`).
+pub fn holds_besides_like(conditions: &[Condition], f: &Facts, w: &World) -> bool {
+    conditions.iter().filter(|c| c.enabled && !matches!(c.value, Value::Like { .. })).all(|c| holds(c, f, w))
+}
+
 /// Whether a condition holds for a file. A condition on an unknown axis, or with a value its axis does not take, never
 /// holds (negated: always), so a crate from a newer version is shown narrower rather than wider.
 fn holds(c: &Condition, f: &Facts, w: &World) -> bool {
@@ -619,14 +625,16 @@ pub fn passes(tracks: &[&Facts], conditions: &[Condition], w: &World) -> bool {
     conditions.iter().filter(|c| c.enabled).all(|c| item_holds(c, tracks, w))
 }
 
-/// The conditions with each Sounds like worked out once, not for every file: its closest `count` among `all` (every
-/// file; its seeds may be in a library switched off). Seeds none of which was heard: never holds.
-pub fn resolved(conditions: &[Condition], all: &[Facts]) -> Vec<Condition> {
+/// The conditions with each Sounds like worked out once, not for every file: its closest `count` among `among` (the
+/// files the crate may show: its other conditions hold for them, so the cut and the count agree; the owner saw 3
+/// tracks where the curve was cut at 20), its seeds found in `all` (they may be anywhere, a library switched off, left
+/// out). Seeds none of which was heard: never holds.
+pub fn resolved(conditions: &[Condition], all: &[Facts], among: &[&Facts]) -> Vec<Condition> {
     conditions
         .iter()
         .map(|c| match &c.value {
             Value::Like { of, count } => {
-                let lines = closest(of, all).into_iter().take(*count).map(|(f, _)| f.rel.clone()).collect();
+                let lines = closest(of, all, among).into_iter().take(*count).map(|(f, _)| f.rel.clone()).collect();
                 Condition { value: Value::Within { lines: Arc::new(lines) }, ..c.clone() }
             }
             _ => c.clone(),
@@ -634,14 +642,16 @@ pub fn resolved(conditions: &[Condition], all: &[Facts]) -> Vec<Condition> {
         .collect()
 }
 
-/// The files that sound most like the seeds (song ids), closest first, at most `LIKE_MOST`, each with how alike (0 to
-/// 100: 0 two random tracks, 100 the same sound); none when none of the seeds was heard.
-pub fn closest<'a>(of: &[String], all: &'a [Facts]) -> Vec<(&'a Facts, f64)> {
+/// The files among `among` that sound most like the seeds (song ids, their sounds found in `all`), closest first, at
+/// most `LIKE_MOST`, each with how alike (0 to 100: 0 two random tracks, 100 the same sound); none when none of the
+/// seeds was heard.
+pub fn closest<'a>(of: &[String], all: &[Facts], among: &[&'a Facts]) -> Vec<(&'a Facts, f64)> {
     let seeds: HashSet<i64> = of.iter().filter_map(|id| crate::serve::ids::track_of(id)).collect();
     let heard: Vec<&[f32]> = all.iter().filter(|f| f.track.is_some_and(|t| seeds.contains(&t))).filter_map(|f| f.sound.as_deref()).collect();
     let Some(seed) = crate::similarity::mean_sound(&heard) else { return Vec::new() };
-    let mut scored: Vec<(&Facts, f32)> = all
+    let mut scored: Vec<(&Facts, f32)> = among
         .iter()
+        .copied()
         .filter_map(|f| f.sound.as_deref().filter(|s| s.len() == seed.len()).map(|s| (f, s.iter().zip(&seed).map(|(a, b)| a * b).sum::<f32>())))
         .collect();
     scored.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.rel.cmp(&b.0.rel)));
@@ -1016,16 +1026,20 @@ mod tests {
         let like = like_crate("like:tr-1@2", "Seed", vec!["tr-1".into()], 2);
         let membership = HashMap::new();
         let w = World { membership: &membership, favourites: None, favourite_albums: None };
-        assert_eq!(select(&files, &resolved(&like.conditions, &files), &w), ["seed.flac", "near.flac"], "the closest two");
+        let every: Vec<&Facts> = files.iter().collect();
+        assert_eq!(select(&files, &resolved(&like.conditions, &files, &every), &w), ["seed.flac", "near.flac"], "the closest two");
         let all = like_crate("like:tr-1", "Seed", vec!["tr-1".into()], 10);
-        assert_eq!(select(&files, &resolved(&all.conditions, &files), &w), ["seed.flac", "near.flac", "far.flac"], "every heard one");
+        assert_eq!(select(&files, &resolved(&all.conditions, &files, &every), &w), ["seed.flac", "near.flac", "far.flac"], "every heard one");
+        // The seed left out of what the crate may show: the closest two are then the next two, still two.
+        let shown: Vec<&Facts> = files.iter().filter(|f| f.rel != "seed.flac").collect();
+        assert_eq!(select(&files, &resolved(&like.conditions, &files, &shown), &w), ["near.flac", "far.flac"]);
         assert_eq!(like_of("like:tr-1@2"), Some(("tr-1", LIKE_FEWEST)));
         assert_eq!(like_of("like:al-x"), Some(("al-x", LIKE_COUNT)));
         assert_eq!(like_of("like:al-x@5000"), Some(("al-x", LIKE_MOST)));
         // Unworked out, or seeds never heard: nothing.
         assert!(select(&files, &like.conditions, &w).is_empty());
         let unheard = like_crate("like:tr-9", "Unheard", vec!["tr-9".into()], 10);
-        assert!(select(&files, &resolved(&unheard.conditions, &files), &w).is_empty());
+        assert!(select(&files, &resolved(&unheard.conditions, &files, &every), &w).is_empty());
     }
 
     #[test]

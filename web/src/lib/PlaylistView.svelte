@@ -629,7 +629,7 @@
       .then((d) => {
         nameLike(c, d.name);
         const v = d.conditions.find((x) => x.value.kind === 'like')?.value;
-        return v && v.kind === 'like' ? likeCurve(v.of, prefs.source || undefined) : null;
+        return v && v.kind === 'like' ? likeCurve(v.of, prefs.source || undefined, hiddenLibraries()) : null;
       })
       .then(
         (k) => !gone && (curve = k),

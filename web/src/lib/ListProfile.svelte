@@ -60,7 +60,7 @@
           <span class="one">{oneValue(number(r.id))}</span>
         {:else}
           {@const n = number(r.id)}
-          <DensityBar bins={n.bins} lo={n.lo} hi={n.hi} q1={n.q1} mid={n.mid} q3={n.q3} ends={ENDS[n.key] ?? [String(Math.round(n.lo)), String(Math.round(n.hi))]} />
+          <DensityBar bins={n.bins} lo={n.lo} hi={n.hi} mid={n.mid} ends={ENDS[n.key] ?? [String(Math.round(n.lo)), String(Math.round(n.hi))]} />
         {/if}
       </div>
     {/each}

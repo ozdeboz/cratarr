@@ -95,7 +95,13 @@ impl CrateLibrary {
 
     /// The conditions with their Sounds like worked out (`crates::resolved`), once for all the files.
     pub(super) fn resolved(&self, conditions: &[crates::Condition]) -> Vec<crates::Condition> {
-        crates::resolved(conditions, &self.files)
+        if !conditions.iter().any(|c| matches!(c.value, crates::Value::Like { .. })) {
+            return conditions.to_vec();
+        }
+        // The closest among what the crate may show: its libraries switched on, its other conditions held.
+        let w = self.world();
+        let among: Vec<&crates::Facts> = self.files().filter(|f| crates::holds_besides_like(conditions, f, &w)).collect();
+        crates::resolved(conditions, &self.files, &among)
     }
 
     pub(super) fn select(&self, conditions: &[crates::Condition]) -> Vec<String> {
@@ -2039,9 +2045,13 @@ impl PlaylistService {
 
     /// How alike the tracks that sound most like these seeds (song ids) are, closest first, 0 to 100, at most
     /// `crates::LIKE_MOST` of them: the Sounds like curve (lib/LikeCurve), cut where the crate ends.
-    pub async fn like_curve(&self, of: &[String], want: Option<&str>) -> Result<Vec<f64>, ToggleError> {
-        let lib = self.crate_library(want, false, false, &[]).await?;
-        Ok(crates::closest(of, &lib.files).into_iter().map(|(_, a)| (a * 10.0).round() / 10.0).collect())
+    /// Over what a seed crate may show, as its tracks are picked (`CrateLibrary::resolved`): the libraries not in
+    /// `without`, less the tracks excluded everywhere.
+    pub async fn like_curve(&self, of: &[String], want: Option<&str>, without: &[String]) -> Result<Vec<f64>, ToggleError> {
+        let lib = self.crate_library(want, false, false, without).await?;
+        let excluded: HashSet<String> = self.own_crates()?.excluded().await?.into_iter().collect();
+        let among: Vec<&crates::Facts> = lib.files().filter(|f| !excluded.contains(&f.rel)).collect();
+        Ok(crates::closest(of, &lib.files, &among).into_iter().map(|(_, a)| (a * 10.0).round() / 10.0).collect())
     }
 
     /// The axes and their domains in the libraries not in `without`, for the builder (decision 0024, issue 4).

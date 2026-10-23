@@ -20,7 +20,10 @@
   const H = 96;
   const most = $derived(Math.max(fewest, curve.length));
   const x = (rank: number) => (Math.log(rank) / Math.log(most)) * W;
-  const y = (alike: number) => H - (alike / 100) * H;
+  /** The scale's foot (the owner): the curve's lowest point never above the bottom quarter, at 0 only when it gets
+   *  there; the top is 100% (the seed). */
+  const floor = $derived(Math.max(0, (Math.min(...curve) - 25) / 0.75));
+  const y = (alike: number) => H - ((alike - floor) / (100 - floor || 1)) * H;
   const rankAt = (px: number) => Math.round(Math.exp((Math.min(W, Math.max(0, px)) / W) * Math.log(most)));
   const clampCount = (n: number) => Math.min(most, Math.max(fewest, n));
 
@@ -89,7 +92,7 @@
   <text x={x(100)} y={H + 14} text-anchor="middle">100</text>
   <text x={W} y={H + 14} text-anchor="end">{most.toLocaleString()}</text>
   <text x="-4" y="7" text-anchor="end">100%</text>
-  <text x="-4" y={H} text-anchor="end">0%</text>
+  <text x="-4" y={H} text-anchor="end">{Math.round(floor)}%</text>
 </svg>
 
 <style>

@@ -16,16 +16,16 @@
 </script>
 
 <script lang="ts">
-  // One number of a list's profile (lib/ListProfile): its density over the scale as the bar's colour, its middle half
-  // outlined and its middle a mark; the scale's ends under it. No values beside it: they read from the bar.
-  let { bins, lo, hi, q1, mid, q3, ends }: { bins: readonly number[]; lo: number; hi: number; q1: number; mid: number; q3: number; ends: [string, string] } = $props();
+  // One number of a list's profile (lib/ListProfile): its density over the scale as the bar's colour, its middle a
+  // mark; the scale's ends under it. No values beside it: they read from the bar. No outline of the middle half (the
+  // owner: with a few tracks it spans empty space; the density shows where they are).
+  let { bins, lo, hi, mid, ends }: { bins: readonly number[]; lo: number; hi: number; mid: number; ends: [string, string] } = $props();
 
   const at = (x: number) => Math.min(1, Math.max(0, (x - lo) / (hi - lo || 1))) * 100;
 </script>
 
 <div class="bar">
   <div class="track" style:background-image={densityGradient(bins)}>
-    <div class="half" style:left="{at(q1)}%" style:width="{Math.max(1, at(q3) - at(q1))}%"></div>
     <div class="mid" style:left="{at(mid)}%"></div>
   </div>
   <div class="ends"><span>{ends[0]}</span><span>{ends[1]}</span></div>
@@ -42,16 +42,6 @@
     height: 12px;
     border-radius: 6px;
     background-color: color-mix(in srgb, var(--text) 7%, transparent);
-  }
-
-  /* The middle half: an outline over the density, not a fill, so the density shows through. */
-  .half {
-    position: absolute;
-    top: -3px;
-    bottom: -3px;
-    margin: 0 -2px;
-    border: 1.5px solid color-mix(in srgb, var(--text) 55%, transparent);
-    border-radius: 7px;
   }
 
   .mid {

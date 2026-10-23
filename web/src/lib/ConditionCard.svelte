@@ -21,6 +21,7 @@
   import DensityRange from './DensityRange.svelte';
   import LikeCurve from './LikeCurve.svelte';
   import { likeCurve } from './api';
+  import { hiddenLibraries } from './listFilter.svelte';
   import TempoRange from './TempoRange.svelte';
 
   let {
@@ -59,7 +60,7 @@
     if (v.kind !== 'like' || !open) return;
     const of = v.of.join(',');
     let gone = false;
-    likeCurve(of.split(',')).then(
+    likeCurve(of.split(','), undefined, hiddenLibraries()).then(
       (c) => !gone && (curve = c),
       () => !gone && (curve = null),
     );

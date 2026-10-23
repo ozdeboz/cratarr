@@ -1388,12 +1388,15 @@ struct LikeCurveQuery {
     /// The seeds, song ids, comma-separated.
     of: String,
     source: Option<String>,
+    /// The libraries switched off (`source/library`, comma-separated), as a crate's tracks leave them out.
+    without: Option<String>,
 }
 
 /// How alike the tracks that sound most like some seeds are, closest first (the Sounds like curve).
 async fn like_curve(State(app): State<Arc<App>>, Query(q): Query<LikeCurveQuery>) -> Result<Json<Vec<f64>>, ApiError> {
     let of: Vec<String> = q.of.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
-    Ok(Json(app.playlists.like_curve(&of, q.source.as_deref()).await?))
+    let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
+    Ok(Json(app.playlists.like_curve(&of, q.source.as_deref(), &without).await?))
 }
 
 /// Every playlist's facts for the Playlists page's table (decision 0042), by id.
