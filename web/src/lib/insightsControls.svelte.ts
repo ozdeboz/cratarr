@@ -2,7 +2,7 @@
 // panel"): each tab says what it offers, as groups of controls of a few kinds, and the panel (lib/InsightsPanel) draws
 // every kind one way, as the settings' rows (lib/settings/Group, Item). A tab adds a control here, never markup there.
 // Collection: its libraries, one switch each (the page's library switches, as on Library and Crates; the last one on
-// stays on). Listening: the period. Map: what brings playlists together.
+// stays on); on Genres and Artists, what the bars count. Listening: the period. Map: what brings playlists together.
 import { getLibraries, type LibrariesView } from './api';
 import { prefs } from './prefs.svelte';
 import { known, libraryShown, showLibrary } from './sources.svelte';
@@ -25,6 +25,11 @@ function askLibraries() {
   );
 }
 
+const COUNTS = [
+  { value: 'tracks', label: 'Tracks' },
+  { value: 'listed', label: 'In a playlist' },
+];
+
 function collection(): ControlGroup[] {
   askLibraries();
   // The server the figures come from: the one followed, else the first (as the server picks it).
@@ -33,7 +38,12 @@ function collection(): ControlGroup[] {
   if (!sid || !view) return [];
   const used = view.server_libraries.filter((l) => view.libraries.music.includes(l.id) || view.libraries.incoming.includes(l.id));
   const on = used.filter((l) => libraryShown(sid, l.id)).length;
+  const counted: ControlGroup[] =
+    prefs.insightsCollection === 'genres' || prefs.insightsCollection === 'artists'
+      ? [{ title: null, controls: [{ kind: 'choice', name: 'Count', options: COUNTS, get: () => prefs.insightsCount, set: (v) => (prefs.insightsCount = v as typeof prefs.insightsCount) }] }]
+      : [];
   return [
+    ...counted,
     {
       title: 'Libraries',
       controls: used.map((l) => ({

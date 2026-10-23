@@ -1481,6 +1481,8 @@ export const cancelJob = (id: number) => request<null>(`/api/incoming/jobs/${id}
 
 /** A name with a count: "Downtempo", 120 albums. */
 export type Count = { name: string; n: number };
+/** A genre's or an artist's tracks (`n`) and those of them in a playlist (`listed`): Collection's two layers. */
+export type Layered = { name: string; n: number; listed: number };
 
 /** A top artist, album or track of a period (Insights' Listening, decision 0065). */
 export type ListeningTop = { id: string; name: string; by?: string; plays: number; secs: number };
@@ -1519,9 +1521,9 @@ export type Insights = {
     decades: Count[];
     /** Albums per year, oldest first ("1997"). */
     years: Count[];
-    /** Albums per genre / album artist, most first. */
-    genres: Count[];
-    top_artists: Count[];
+    /** Tracks per genre / album artist, and those in a playlist; most first. */
+    genres: Layered[];
+    top_artists: Layered[];
   };
   playlists: {
     playlists: number;

@@ -2,9 +2,9 @@
   // Insights' Collection (decision 0065): what you have, the figures as charts by what each says (the dataviz method):
   // the headline figures as stat tiles, shares as meters (never pies), decades as columns, genres and artists as bars,
   // one series each in the accent, labelled directly; the playlists' figures as tiles and the tracks in the most
-  // playlists as a list. Four views, chosen in the tabs' pill: Overview (the top few genres and artists), Genres and
+  // playlists as a list. Four views, chosen in the tabs' pill: Overview (the figures, quality and decades), Genres and
   // Artists (all of them), Playlists.
-  import type { Count, Insights } from './api';
+  import type { Count, Insights, Layered } from './api';
   import { plural } from './insights.svelte';
   import { prefs } from './prefs.svelte';
 
@@ -58,16 +58,25 @@
   </div>
 {/snippet}
 
-{#snippet bars(title: string, rows: Count[], unit: string)}
+<!-- A genre's or an artist's tracks, or those of them in a playlist (the panel's Count; the owner, 2026-10-23: two
+     scales, two rankings, so one at a time), the unit said over the bars. -->
+{#snippet bars(title: string, all: Layered[])}
+  {@const listed = prefs.insightsCount === 'listed'}
+  {@const rows = listed ? all.filter((r) => r.listed > 0).sort((x, y) => y.listed - x.listed || x.name.localeCompare(y.name)) : all}
+  {@const value = (r: Layered) => (listed ? r.listed : r.n)}
+  {@const most = Math.max(1, ...rows.map(value))}
   {#if rows.length}
     <section>
-      <h2>{title}</h2>
+      <div class="head">
+        <h2>{title}</h2>
+        <span class="unit">{listed ? 'tracks in a playlist' : 'tracks'}</span>
+      </div>
       <ul class="bars">
         {#each rows as r (r.name)}
-          <li title={`${r.name}: ${plural(r.n, unit)}`}>
+          <li title={`${r.name}: ${listed ? `${num(r.listed)} of ${plural(r.n, 'track')} in a playlist` : plural(r.n, 'track')}`}>
             <span class="label">{r.name}</span>
-            <span class="bar"><i style:width={`${(100 * r.n) / widest(rows)}%`}></i></span>
-            <span class="n">{num(r.n)}</span>
+            <span class="bar"><i style:width={`${(100 * value(r)) / most}%`}></i></span>
+            <span class="n">{num(value(r))}</span>
           </li>
         {/each}
       </ul>
@@ -116,12 +125,10 @@
     </section>
   {/if}
 
-  {@render bars('Genres', l.genres.slice(0, 8), 'album')}
-  {@render bars('Artists', l.top_artists.slice(0, 8), 'album')}
   {:else if prefs.insightsCollection === 'genres'}
-  {@render bars('Genres', l.genres, 'album')}
+  {@render bars('Genres', l.genres)}
   {:else if prefs.insightsCollection === 'artists'}
-  {@render bars('Artists', l.top_artists, 'album')}
+  {@render bars('Artists', l.top_artists)}
   {:else}
   <section>
     <h2>Playlists</h2>
@@ -359,6 +366,28 @@
   .bar {
     height: 10px;
   }
+
+  .head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 4px 16px;
+    margin-bottom: 12px;
+  }
+
+  .head h2 {
+    margin: 0;
+  }
+
+  .unit {
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+
+
+
+
 
   .bar i {
     display: block;

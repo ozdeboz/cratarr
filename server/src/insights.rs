@@ -85,10 +85,22 @@ pub struct LibraryStats {
     pub decades: Vec<Count>,
     /// Albums per year of their (original) release, oldest first: "1997" (a decade's columns, opened from its own).
     pub years: Vec<Count>,
-    /// Albums per genre, most first.
-    pub genres: Vec<Count>,
-    /// Albums per album artist, most first.
-    pub top_artists: Vec<Count>,
+    /// Tracks per genre (a track's own genres), and how many of them are in a playlist; most first.
+    pub genres: Vec<Layered>,
+    /// Tracks per album artist (else the artist every track of the album shares), and how many of them are in a
+    /// playlist; most first.
+    pub top_artists: Vec<Layered>,
+}
+
+/// A genre's or an artist's tracks, and those of them in a playlist: Collection's bars in two layers (the owner,
+/// 2026-10-23: "tracks and playlists").
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct Layered {
+    pub name: String,
+    /// Tracks.
+    pub n: usize,
+    /// Of them, in one of the playlists or more.
+    pub listed: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
@@ -126,11 +138,11 @@ pub struct SharedTrack {
 /// toggle per library"), its playlists' among them: how many of those tracks and albums are in one, and which of them
 /// are in the most (Incoming's are in none: a playlist's lines are the Music folder's). `playlists`: (name, entry lines, missing tracks), as the playlist store has them.
 pub fn build(rows: &[TrackRow], shown: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<String>, usize)]) -> Insights {
-    let library = library_stats(shown, rules);
+    let in_any: HashSet<&str> = playlists.iter().flat_map(|(_, l, _)| l.iter().map(String::as_str)).collect();
+    let library = library_stats(shown, rules, &in_any);
 
     let borrowed: Vec<(&str, &[String], usize)> = playlists.iter().map(|(n, l, d)| (n.as_str(), l.as_slice(), *d)).collect();
     let stats = playlist_stats(&borrowed);
-    let in_any: HashSet<&str> = playlists.iter().flat_map(|(_, l, _)| l.iter().map(String::as_str)).collect();
     let by_rel: HashMap<&str, &TrackRow> = rows.iter().map(|r| (r.rel.as_str(), r)).collect();
     let shown_rels: HashSet<&str> = shown.iter().map(|r| r.rel.as_str()).collect();
     let albums_with: HashSet<&str> = shown.iter().filter(|r| in_any.contains(r.rel.as_str())).map(|r| album_dir(&r.rel)).collect();
@@ -285,8 +297,8 @@ fn strongest(m: &HashMap<String, f64>, k: usize) -> Vec<String> {
     v.into_iter().take(k).map(|(s, _)| s.clone()).collect()
 }
 
-/// The library figures, counted per track and per album folder.
-pub fn library_stats(rows: &[TrackRow], rules: &Rules) -> LibraryStats {
+/// The library figures, counted per track and per album folder; `listed`: the tracks in a playlist (their lines).
+pub fn library_stats(rows: &[TrackRow], rules: &Rules, listed: &HashSet<&str>) -> LibraryStats {
     #[derive(Default)]
     struct Album<'a> {
         formats: Vec<&'a str>,
@@ -296,7 +308,11 @@ pub fn library_stats(rows: &[TrackRow], rules: &Rules) -> LibraryStats {
         album_artists: HashSet<String>,
         /// Artists every track has, for albums without an album artist tag.
         common_artists: Option<HashSet<String>>,
+        /// Its tracks, and those of them in a playlist.
+        tracks: usize,
+        listed: usize,
     }
+    let mut genre_tracks: HashMap<String, (usize, usize)> = HashMap::new();
     let mut albums: BTreeMap<&str, Album> = BTreeMap::new();
     let mut formats: HashMap<String, usize> = HashMap::new();
     let mut out = LibraryStats { tracks: rows.len(), ..LibraryStats::default() };
@@ -314,7 +330,16 @@ pub fn library_stats(rows: &[TrackRow], rules: &Rules) -> LibraryStats {
             a.year = Some(a.year.map_or(y, |m| m.min(y)));
         }
         let values = |field: &str| rules.values(field, &r.tag(field).map(str::to_string).collect::<Vec<_>>());
-        a.genres.extend(values("genre"));
+        let here = listed.contains(r.rel.as_str());
+        a.tracks += 1;
+        a.listed += usize::from(here);
+        let genres: HashSet<String> = values("genre").into_iter().collect();
+        for g in &genres {
+            let e = genre_tracks.entry(g.clone()).or_default();
+            e.0 += 1;
+            e.1 += usize::from(here);
+        }
+        a.genres.extend(genres);
         a.album_artists.extend(r.artists(rules, "albumartist"));
         let artists: HashSet<String> = r.artists(rules, "artist").into_iter().collect();
         a.common_artists = Some(match a.common_artists.take() {
@@ -325,8 +350,8 @@ pub fn library_stats(rows: &[TrackRow], rules: &Rules) -> LibraryStats {
     out.albums = albums.len();
     let mut decades: BTreeMap<u32, usize> = BTreeMap::new();
     let mut years: BTreeMap<u32, usize> = BTreeMap::new();
-    let mut genres: HashMap<String, usize> = HashMap::new();
     let mut artists: HashMap<String, usize> = HashMap::new();
+    let mut artist_tracks: HashMap<String, (usize, usize)> = HashMap::new();
     for a in albums.values() {
         match quality_of(a.formats.iter().copied(), a.min_kbps) {
             Quality::Lossless => out.lossless_albums += 1,
@@ -337,12 +362,12 @@ pub fn library_stats(rows: &[TrackRow], rules: &Rules) -> LibraryStats {
             *decades.entry(y / 10 * 10).or_default() += 1;
             *years.entry(y).or_default() += 1;
         }
-        for g in &a.genres {
-            *genres.entry(g.clone()).or_default() += 1;
-        }
         let names = if a.album_artists.is_empty() { a.common_artists.clone().unwrap_or_default() } else { a.album_artists.clone() };
         // A compilation's "Various Artists" is no artist: as one, it dwarfed every real one's bar (the owner, 2026-10-23).
         for n in names.into_iter().filter(|n| !crate::crates::various(n)) {
+            let e = artist_tracks.entry(n.clone()).or_default();
+            e.0 += a.tracks;
+            e.1 += a.listed;
             *artists.entry(n).or_default() += 1;
         }
     }
@@ -350,14 +375,21 @@ pub fn library_stats(rows: &[TrackRow], rules: &Rules) -> LibraryStats {
     out.formats = ranked(formats, usize::MAX);
     out.decades = decades.into_iter().map(|(d, n)| Count { name: format!("{d}s"), n }).collect();
     out.years = years.into_iter().map(|(y, n)| Count { name: y.to_string(), n }).collect();
-    out.genres = ranked(genres, TOP_GENRES);
-    out.top_artists = ranked(artists, TOP_ARTISTS);
+    out.genres = layered(genre_tracks, TOP_GENRES);
+    out.top_artists = layered(artist_tracks, TOP_ARTISTS);
     out
 }
 
 /// Most first, then by name; at most `top`.
 fn ranked(counts: HashMap<String, usize>, top: usize) -> Vec<Count> {
     let mut v: Vec<Count> = counts.into_iter().map(|(name, n)| Count { name, n }).collect();
+    v.sort_by(|a, b| b.n.cmp(&a.n).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    v.truncate(top);
+    v
+}
+
+fn layered(counts: HashMap<String, (usize, usize)>, top: usize) -> Vec<Layered> {
+    let mut v: Vec<Layered> = counts.into_iter().map(|(name, (n, listed))| Layered { name, n, listed }).collect();
     v.sort_by(|a, b| b.n.cmp(&a.n).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
     v.truncate(top);
     v
@@ -404,15 +436,18 @@ mod tests {
 
     #[test]
     fn library_figures_count_tracks_albums_and_split_tags() {
-        let s = library_stats(&library(), &Rules::default());
+        let air1 = "AIR - Moon Safari (1998)/01 Sexy Boy.flac";
+        let s = library_stats(&library(), &Rules::default(), &HashSet::from([air1]));
         assert_eq!((s.tracks, s.albums, s.duration_ms, s.bytes), (5, 3, 1_000_000, 5_000));
         assert_eq!(s.formats, vec![Count { name: "MP3".into(), n: 3 }, Count { name: "FLAC".into(), n: 2 }]);
         assert_eq!((s.lossless_albums, s.below_320_albums), (1, 1), "AIR lossless; Bonobo has a 192 kbps track");
         assert_eq!(s.decades, vec![Count { name: "1990s".into(), n: 1 }, Count { name: "2010s".into(), n: 1 }], "original date wins");
         assert_eq!(s.years.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["1998", "2010"], "each album once, by its year");
-        assert_eq!(s.genres, vec![Count { name: "Downtempo".into(), n: 2 }, Count { name: "Electronic".into(), n: 1 }]);
+        // Tracks, by their own genres; Sexy Boy (in a playlist) is both.
+        let l = |name: &str, n, listed| Layered { name: name.into(), n, listed };
+        assert_eq!(s.genres, vec![l("Downtempo", 3, 1), l("Electronic", 2, 1)]);
         // Bonobo has no album artist tag: the artist every track shares counts, not the guest.
-        assert_eq!(s.top_artists, vec![Count { name: "AIR".into(), n: 1 }, Count { name: "Bonobo".into(), n: 1 }]);
+        assert_eq!(s.top_artists, vec![l("AIR", 2, 1), l("Bonobo", 2, 0)]);
         assert_eq!(s.artists, 2);
     }
 
@@ -420,8 +455,8 @@ mod tests {
     fn a_compilation_s_various_artists_is_no_artist() {
         let mut lib = library();
         lib.push(row("VA - Mix (2001)/01 a.mp3", "MP3", 320, &[("albumartist", "Various Artists"), ("artist", "AIR"), ("title", "a")]));
-        let s = library_stats(&lib, &Rules::default());
-        assert_eq!(s.top_artists, vec![Count { name: "AIR".into(), n: 1 }, Count { name: "Bonobo".into(), n: 1 }]);
+        let s = library_stats(&lib, &Rules::default(), &HashSet::new());
+        assert_eq!(s.top_artists.iter().map(|a| (a.name.as_str(), a.n)).collect::<Vec<_>>(), [("AIR", 2), ("Bonobo", 2)]);
         assert_eq!(s.artists, 2);
     }
 
