@@ -38,6 +38,7 @@
     createPlaylist,
     deleteCrate,
     getCrate,
+    artistPicks,
     crateLeftOut,
     appendTracks,
     leaveOutOfCrate,
@@ -174,7 +175,7 @@
   });
   /** The viewed album (an Incoming one, or a track's), when an album is viewed. */
   const album = $derived(albumOf(panel.viewed));
-  /** The viewed artist (their page), or all their tracks (`tracks`: their Top tracks' ›), when an artist is viewed. */
+  /** The viewed artist (their page), or all their tracks (`tracks`: their Top recommendations' ›), when an artist is viewed. */
   const artist = $derived(artistOf(panel.viewed));
   /** A crate, an album or an artist: tracks without a playlist's file (no tabs, no editing, no statistics). */
   const plain = $derived(!!crate || !!album || !!artist || crateEditing || creating);
@@ -201,7 +202,7 @@
             ? (albumHead?.title ?? '')
             : artist
               ? artist.tracks
-                ? 'Top tracks'
+                ? 'All tracks'
                 : artist.name
               : multi
               ? `${ids.length} playlists`
@@ -481,7 +482,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
   // Symfonium's header over the tracks: their order (the subject's own, or by a field, either way round), how many, and
   // select mode. The list shows and plays in that order; an album's rows keep their track numbers. Every list of tracks
-  // offers all its rows know, remembered per kind of list (decision 0060); an artist's Top tracks start most played
+  // offers all its rows know, remembered per kind of list (decision 0060); an artist's All tracks start most played
   // first and are not remembered.
   const kind = $derived<PanelKind>(album ? 'album' : crate || crateEditing || creating ? 'crate' : artist ? 'artist' : 'playlist');
   const topTracks = $derived(!!artist?.tracks);
@@ -573,7 +574,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       : sortKey === 'lastPlayed' ? (r.last_played ?? null)
       : (r.added ?? null);
     const byNumber = (x: number | null, y: number | null) => (x === y ? 0 : x === null ? -1 : y === null ? 1 : x - y);
-    // Turned round, equals keep the subject's order (an artist's most played: as their Top tracks show them).
+    // Turned round, equals keep the subject's order (an artist's most played: as their All tracks show them).
     const way = sortDown ? -1 : 1;
     if (crate) {
       // As the server ordered them.
@@ -612,7 +613,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const ticked = $derived(selecting && shown ? shown.filter((x) => selecting!.has(x.i) && x.r.id && !x.r.missing).map((x) => x.r) : []);
   const tickedFav = $derived(ticked.length > 0 && ticked.every((r) => isFavorite(source, r.id!)));
   $effect(() => {
-    // Another subject: nothing ticked; an artist's Top tracks most played first again.
+    // Another subject: nothing ticked; an artist's All tracks most played first again.
     void id;
     topSort = { key: 'plays', down: true };
     selecting = null;
@@ -997,9 +998,22 @@ ${r.album_artist ?? r.artist ?? ''}`;
       toast.fail(e, "The favourite didn't change");
     }
   }
-  // Top tracks: the artist's five most played (equals in their albums' order); › shows them all.
+  // Top recommendations (the owner, 2026-10-23, in place of their most played): the artist's tracks that fit one's
+  // taste best, the server's; on another server, or until they come, none. › shows all their tracks.
+  let picks = $state<{ name: string; ids: string[] } | null>(null);
+  $effect(() => {
+    const a = artist;
+    picks = null;
+    if (!a || a.tracks || a.source !== 'cratarr') return;
+    artistPicks(a.name, hiddenLibraries()).then(
+      (r) => {
+        if (artist?.name === a.name) picks = { name: a.name, ids: r.ids };
+      },
+      () => {},
+    );
+  });
   const topRows = $derived(
-    artist && !artist.tracks && rows ? [...playable].sort((x, y) => (y.play_count ?? 0) - (x.play_count ?? 0)).slice(0, 5) : [],
+    artist && !artist.tracks && rows && picks?.name === artist.name ? picks.ids.flatMap((x) => playable.find((r) => r.id === x) ?? []) : [],
   );
 
   async function crateRadio(inside: boolean) {

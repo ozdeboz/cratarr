@@ -138,6 +138,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/home/artists", get(home_artists))
         .route("/api/artists/{id}/photo", get(artist_photo))
         .route("/api/artists/about", get(artist_about))
+        .route("/api/artists/picks", get(artist_picks))
         .route("/api/home/heard", post(home_heard))
         .route("/api/history/sleep", post(sleep))
         .route("/api/home/weather", post(home_weather))
@@ -2518,6 +2519,21 @@ async fn sleep(Json(b): Json<Sleep>) -> Result<Json<serde_json::Value>, ApiError
     .map_err(|e| ToggleError::from(anyhow::anyhow!("{e}")))?
     .map_err(ToggleError::from)?;
     Ok(Json(json!({ "added": added })))
+}
+
+#[derive(Deserialize)]
+struct PicksQuery {
+    name: String,
+    without: Option<String>,
+}
+
+/// How many Top recommendations an artist's page shows.
+const PICKS: usize = 5;
+
+/// An artist's Top recommendations: their tracks that fit the asking account's taste best (song ids, best first).
+async fn artist_picks(State(app): State<Arc<App>>, Query(q): Query<PicksQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+    let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
+    Ok(Json(json!({ "ids": app.playlists.artist_picks(&q.name, &without, PICKS).await? })))
 }
 
 /// The weather as Home Assistant tells it (the cratarr-ha integration, on each change): Home's moment.

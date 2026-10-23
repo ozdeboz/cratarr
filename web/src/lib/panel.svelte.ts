@@ -25,7 +25,7 @@ export function albumOf(viewed: string | null): { source: string; id: string } |
 }
 
 /** An artist in the address (`artist:<server>/<name>`, decided 2026-10-16), by name as the albums credit them; and all
- *  their tracks, most played first (`artist-tracks:`, their Top tracks' ›). */
+ *  their tracks, most played first (`artist-tracks:`, their Top recommendations' ›). */
 const ARTIST = 'artist:';
 const ARTIST_TRACKS = 'artist-tracks:';
 export const artistSubject = (source: string, name: string, tracks = false) => `${tracks ? ARTIST_TRACKS : ARTIST}${source}/${name}`;

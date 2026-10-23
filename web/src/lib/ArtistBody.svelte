@@ -91,8 +91,8 @@
   </section>
 {/if}
 {#if top}
-  <section aria-label="Top tracks">
-    <SectionHead title="Top tracks" onmore={ontracks} />
+  <section aria-label="Top recommendations">
+    <SectionHead title="Top recommendations" onmore={ontracks} />
     {@render top()}
   </section>
 {/if}

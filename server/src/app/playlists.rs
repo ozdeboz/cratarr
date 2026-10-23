@@ -129,6 +129,32 @@ const HEARD_SHARE: f64 = 0.05;
 const DIG: usize = 12;
 const UNPLAYED_HALF_DAYS: f64 = 180.0;
 
+/// An account's taste as Insights' Profile has it, every source (`taste::profiles`): its favourites, playlists, plays
+/// (awake) and skips, and what it excluded, on `lib`'s libraries switched on. Blocking.
+fn taste_in(lib: &CrateLibrary, ud: &crate::userdata::UserData, user: &str, excluded: &[String]) -> Result<crate::similarity::Profile, ToggleError> {
+    let alike = lib.alike();
+    let place = |song: &str| crate::serve::ids::track_of(song).and_then(|t| alike.place_of_track(t)).filter(|&i| lib.on(i));
+    let starred = ud.starred(user, crate::userdata::Kind::Song)?;
+    let mut skips: HashMap<usize, u32> = HashMap::new();
+    let mut played: HashMap<usize, u32> = HashMap::new();
+    for l in ud.heard_awake_since(user, 0)? {
+        let Some(i) = place(&l.song) else { continue };
+        if l.ended == crate::userdata::Ended::Skipped && !l.counted {
+            *skips.entry(i).or_default() += 1;
+        } else if l.counted || l.ended == crate::userdata::Ended::Finished {
+            *played.entry(i).or_default() += 1;
+        }
+    }
+    let sources = super::taste::Sources {
+        favourites: starred.iter().filter_map(|s| place(s)).collect(),
+        playlists: lib.membership().iter().filter_map(|(line, lists)| Some((alike.place_of_line(line).filter(|&i| lib.on(i))?, lists.len()))).collect(),
+        plays: played.into_iter().collect(),
+        excluded: excluded.iter().filter_map(|line| alike.place_of_line(line).filter(|&i| lib.on(i))).collect(),
+        skipped: skips.into_iter().collect(),
+    };
+    Ok(super::taste::profiles(alike, &sources, &[]).0)
+}
+
 /// How many albums Home's moment shows, drawn from how many of the nearest; how many of an album's tracks must be
 /// measured (and at least half of them); how long one played is left out (days).
 const MOMENT_ALBUMS: usize = 10;
@@ -2771,24 +2797,7 @@ impl PlaylistService {
                 .collect();
             // Grave digging: the taste as Insights' Profile has it, every source; the albums played before, each as one
             // profile against it; of the closest, the ones unplayed longest.
-            let mut skips: HashMap<usize, u32> = HashMap::new();
-            let mut played: HashMap<usize, u32> = HashMap::new();
-            for l in ud.heard_awake_since(&user, 0)? {
-                let Some(i) = place(&l.song) else { continue };
-                if l.ended == crate::userdata::Ended::Skipped && !l.counted {
-                    *skips.entry(i).or_default() += 1;
-                } else if l.counted || l.ended == crate::userdata::Ended::Finished {
-                    *played.entry(i).or_default() += 1;
-                }
-            }
-            let sources = super::taste::Sources {
-                favourites: starred.iter().filter_map(|s| place(s)).collect(),
-                playlists: lib.membership().iter().filter_map(|(line, lists)| Some((alike.place_of_line(line).filter(|&i| lib.on(i))?, lists.len()))).collect(),
-                plays: played.into_iter().collect(),
-                excluded: excluded.iter().filter_map(|line| alike.place_of_line(line).filter(|&i| lib.on(i))).collect(),
-                skipped: skips.into_iter().collect(),
-            };
-            let (taste, _) = super::taste::profiles(alike, &sources, &[]);
+            let taste = taste_in(&lib, ud, &user, &excluded)?;
             // Every album of the libraries switched on, its tracks' places; its last play, and how much its artist is
             // played (of the most played artist's plays).
             let songs = serve.library.all_song_ids()?;
@@ -2888,7 +2897,33 @@ impl PlaylistService {
         .map_err(|e| anyhow::anyhow!("{e}"))?
     }
 
-/// Playlists like a playlist (one's own or a shared one; the owner, 2026-10-23: same kind under each list), among
+    /// An artist's Top recommendations (the owner, 2026-10-23: "a list of tracks which follows taste", in place of
+    /// their most played): their tracks of the libraries switched on, those that fit the asking account's taste best
+    /// first (`taste_in`, as Grave digging's), at most `count`, as song ids.
+    pub async fn artist_picks(&self, name: &str, without: &[String], count: usize) -> Result<Vec<String>, ToggleError> {
+        let user = asking_user().ok_or_else(|| ToggleError::Refused("Recommendations are an account's own: sign in.".into()))?;
+        let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+        let lib = self.crate_library(None, false, false, without).await?;
+        let excluded = self.own_crates()?.excluded().await?;
+        let name = name.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Vec<String>, ToggleError> {
+            let taste = taste_in(&lib, &serve.userdata, &user, &excluded)?;
+            let alike = lib.alike();
+            let mut fit: Vec<(String, f64)> = lib
+                .files
+                .iter()
+                .enumerate()
+                .filter(|(i, f)| lib.on(*i) && f.artists.iter().any(|a| a.eq_ignore_ascii_case(&name)))
+                .filter_map(|(i, f)| Some((crate::serve::ids::song(f.track?), alike.compare(&taste, &alike.profile(&[(i, 1.0)]), lib.by())?)))
+                .collect();
+            fit.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            Ok(fit.into_iter().take(count).map(|(id, _)| id).collect())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    }
+
+    /// Playlists like a playlist (one's own or a shared one; the owner, 2026-10-23: same kind under each list), among
     /// those the asking account sees, the closest first, with how alike (0 to 100): radio::similar_lists.
     pub async fn similar_playlists(&self, id: &str, count: usize) -> Result<Vec<(String, f64)>, ToggleError> {
         let Some(serve) = crate::serve::instance() else { return Ok(Vec::new()) };
