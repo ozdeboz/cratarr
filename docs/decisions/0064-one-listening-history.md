@@ -54,6 +54,20 @@ else album and title (6,375 of the 6,383 matched); `finished`, **not counted** (
 Jellyfin import), context `listenbrainz`, the listen's time and recording as its event, so a second import adds
 nothing. "Starting empty" stands for the time ListenBrainz did not record.
 
+### Amended 2026-10-23: the week before the log, sleep, and the taste
+
+- **The week before the log** (the owner, for 74.3.1): the log began with 74.3. As the user data opens, each song last
+  played in the seven days before an account's first told row becomes one row (`backfill:annotation`; finished,
+  counted, nothing counted again; only each song's last play is known). Like the ListenBrainz rows, these rows do not
+  make the log reach back (`heard_from`).
+- **What played while the listener slept is not theirs** (the owner: "If Home Assistant says I was asleep, exclude
+  it"): the user data keeps when an account slept (`asleep`, told by `POST /api/history/sleep`); the taste and Sounds
+  like your week read the log without those plays (`heard_awake_since`), the history itself keeps every play. Home
+  Assistant's Sleeping periods are loaded once (the owner: "only a one-time thing"), not followed: its house mode rarely
+  holds Sleeping (66 minutes in all from 13 to 23 October), so this leaves out little until its sleep detection does.
+- **The taste** (Insights › Listening › Profile, `GET /api/history/profile`) reads its plays and skips from the log, so
+  a period (Insights' one) narrows them; favourites, playlists and exclusions have no time.
+
 ## Consequences
 
 - Sounds like your week can weigh its seed by how often each track was heard this week, older days less, and leave
