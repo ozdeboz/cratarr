@@ -487,6 +487,13 @@ class PlayOnLink(
         reports.execute { post("$base/sample", body) }
     }
 
+    /** Shuffle, once (decision 0059): Cratarr shuffles what is to come in this player's queue and sends it back. */
+    fun shuffleOnce() {
+        val base = base() ?: return
+        if (reports.isShutdown) return
+        reports.execute { post("$base/command", JSONObject().put("command", "shuffle").put("on", true).toString()) }
+    }
+
     private fun post(url: String, body: String): Boolean = try {
         val c = Net.open(service, url)
         c.requestMethod = "POST"

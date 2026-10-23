@@ -54,7 +54,8 @@ local mode runs in the page).
 - The page's own rules in TypeScript (`shuffleUpcoming` and the picking around local playback) are replaced by the
   crate's WebAssembly build once it is bound; until then they follow the vectors.
 - Home Assistant's and a car's "shuffle on" is the one-time shuffle; nothing reports a shuffle state. The Android app's
-  Media3 session still shuffles on its own and must send Play On's `shuffle` instead (an app change).
+  Media3 session shuffles once too (2026-10-23): a car's, a headset's or the system's shuffle sends Play On's `shuffle`
+  (local mode's queue is shuffled in the app), and the session never reports shuffle on.
 - A change to a rule is a change to the crate and its vectors, never to one player alone.
 - A WebAssembly build step joins the dev server and the page's image build; the server's build is unchanged (the crate
   lives inside `server/`).

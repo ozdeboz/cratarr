@@ -120,10 +120,21 @@ class PlayerService : MediaSessionService() {
         Sleep.clear(this)
         // Previous from the lock screen, the notification and the page goes through here too: under repeat all, the
         // first track's previous is the last one.
+        // Shuffle is once (decision 0059: a queue always has an order, shuffle is an action, not a state): a car's, a
+        // headset's or the system's shuffle shuffles what is to come once, and the player never plays shuffled, so it
+        // says it is not. Cratarr's queue is shuffled by Cratarr (Play On's `shuffle`, which sends the new order back);
+        // local mode's here, the playing track staying where it is.
         val sessionPlayer = object : ForwardingPlayer(player) {
             override fun seekToPrevious() {
                 if (!Repeat.previous(this@PlayerService, player)) super.seekToPrevious()
             }
+
+            override fun setShuffleModeEnabled(shuffleModeEnabled: Boolean) {
+                if (!shuffleModeEnabled) return
+                if (prefs.mode == Prefs.MODE_DEVICE) shuffleUpcoming(player) else link?.shuffleOnce()
+            }
+
+            override fun getShuffleModeEnabled() = false
         }
         val open = PendingIntent.getActivity(
             this,
@@ -465,6 +476,14 @@ class PlayerService : MediaSessionService() {
         return found.buildUpon()
             .setMediaMetadata(item.mediaMetadata.buildUpon().setArtworkUri(Uri.parse("$server/api/cover/${item.mediaId}")).build())
             .build()
+    }
+
+    /** Local mode's shuffle, once: what is to come after the playing track, mixed. */
+    private fun shuffleUpcoming(p: Player) {
+        val from = p.currentMediaItemIndex + 1
+        if (p.mediaItemCount - from < 2) return
+        val upcoming = (from until p.mediaItemCount).map(p::getMediaItemAt).shuffled()
+        p.replaceMediaItems(from, p.mediaItemCount, upcoming)
     }
 
     companion object {
