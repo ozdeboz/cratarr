@@ -2459,8 +2459,13 @@ impl PlaylistService {
 
     /// The asking account's taste and what it avoids (app::taste; Insights › Listening › Profile): from its favourites,
     /// its own playlists, its plays and skips (the log's, none while it slept), its exclusions; only tracks of the
-    /// libraries switched on (`without`: those off, Insights' switches), over the whole library's rarity.
-    pub async fn taste(&self, want: Option<&str>, without: &[String]) -> Result<super::taste::TasteView, ToggleError> {
+    /// libraries switched on (`without`: those off, Insights' switches), over the whole library's rarity. `period`
+    /// (Insights' one) narrows the plays and skips; favourites, playlists and exclusions have no time.
+    /// `off`: sources switched off (`taste::SOURCES`).
+    pub async fn taste(&self, want: Option<&str>, without: &[String], period: super::history::Period, off: &[String]) -> Result<super::taste::TasteView, ToggleError> {
+        let off: Vec<&'static str> = super::taste::SOURCES.into_iter().filter(|s| off.iter().any(|o| o == s)).collect();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+        let since = period.since(now).unwrap_or(0);
         let user = asking_user().ok_or_else(|| ToggleError::Refused("A taste is an account's own: sign in.".into()))?;
         let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
         let lib = self.crate_library(want, false, false, without).await?;
@@ -2474,7 +2479,8 @@ impl PlaylistService {
             // Plays from the log (the counts have no times), finished or counted, none while they slept (the owner,
             // 2026-10-23: "if Home Assistant says I was asleep, exclude it").
             let mut played: HashMap<usize, u32> = HashMap::new();
-            for l in ud.heard_awake_since(&user, 0)?.into_iter().filter(|l| l.counted || l.ended == crate::userdata::Ended::Finished) {
+            let heard = ud.heard_awake_since(&user, since)?;
+            for l in heard.iter().filter(|l| l.counted || l.ended == crate::userdata::Ended::Finished) {
                 if let Some(i) = place(&l.song) {
                     *played.entry(i).or_default() += 1;
                 }
@@ -2482,13 +2488,13 @@ impl PlaylistService {
             let plays = played.into_iter().collect();
             let excluded = excluded.iter().filter_map(|line| alike.place_of_line(line).filter(|&i| lib.on(i))).collect();
             let mut skips: HashMap<usize, u32> = HashMap::new();
-            for l in ud.heard_since(&user, 0)?.into_iter().filter(|l| l.ended == crate::userdata::Ended::Skipped && !l.counted) {
+            for l in heard.iter().filter(|l| l.ended == crate::userdata::Ended::Skipped && !l.counted) {
                 if let Some(i) = place(&l.song) {
                     *skips.entry(i).or_default() += 1;
                 }
             }
             let sources = super::taste::Sources { favourites, playlists, plays, excluded, skipped: skips.into_iter().collect() };
-            Ok(super::taste::taste(alike, &sources))
+            Ok(super::taste::taste(alike, &sources, &off))
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?

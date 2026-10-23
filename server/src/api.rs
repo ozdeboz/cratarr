@@ -2505,11 +2505,16 @@ struct TasteQuery {
     source: Option<String>,
     /// The libraries switched off (`source/library`, comma-separated): Insights' switches.
     without: Option<String>,
+    /// Insights' period (week, month, year, all; absent: all): the plays and skips within it.
+    period: Option<crate::app::history::Period>,
+    /// Sources switched off, comma-separated: favourites, playlists, plays, skipped, excluded (absent: all on).
+    off: Option<String>,
 }
 
 async fn taste_profile(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) -> Result<Json<crate::app::taste::TasteView>, ApiError> {
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
-    Ok(Json(app.playlists.taste(q.source.as_deref(), &without).await?))
+    let off: Vec<String> = q.off.as_deref().unwrap_or("").split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
+    Ok(Json(app.playlists.taste(q.source.as_deref(), &without, q.period.unwrap_or(crate::app::history::Period::All), &off).await?))
 }
 
 /// How many similar lists a list shows at its foot.
