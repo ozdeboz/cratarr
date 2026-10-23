@@ -85,13 +85,26 @@ class Prefs(context: Context) {
         }
 
     /** Kept awake and listening while idle too: for a device that is always on its charger. */
-    /** The one of Cratarr's players this device's screen drives (the page's output), by name; null: its own. The app's
-     *  media controls show that one meanwhile (RemotePlayer). The page says it as it opens and as it changes. */
-    var driven: String?
-        get() = p.getString(DRIVEN, null)?.takeIf { it.isNotEmpty() }
+    /** Where this device's controls point (decision 0062): [TARGET_SELF], `player:<name>` (one of Cratarr's players,
+     *  driven), or [TARGET_SERVER] (the media server's player). Changed only by the player service. */
+    var target: String
+        get() = p.getString(TARGET, null)?.takeIf { it == TARGET_SELF || it == TARGET_SERVER || (it.startsWith("player:") && it.length > 7) } ?: TARGET_SELF
         set(value) {
-            p.edit().putString(DRIVEN, value.orEmpty()).apply()
+            p.edit().putString(TARGET, value).apply()
         }
+
+    /** Whether a target was ever set here: an app from before decision 0062 takes the page's last choice once. */
+    val hasTarget: Boolean get() = p.contains(TARGET)
+
+    /** Why the target last changed, for the page. */
+    var targetWhy: String
+        get() = p.getString(TARGET_WHY, null).orEmpty()
+        set(value) {
+            p.edit().putString(TARGET_WHY, value).apply()
+        }
+
+    /** The player driven, by name; null when the target is not one of Cratarr's players. */
+    val driven: String? get() = target.takeIf { it.startsWith("player:") }?.removePrefix("player:")
 
     var stayReady: Boolean
         get() = p.getBoolean(STAY_READY, false)
@@ -351,7 +364,10 @@ class Prefs(context: Context) {
         const val PAGE_PREFS = "page_prefs"
         const val PLAYER_NAME = "player_name"
         const val STAY_READY = "stay_ready"
-        const val DRIVEN = "driven"
+        const val TARGET = "target"
+        const val TARGET_WHY = "target_why"
+        const val TARGET_SELF = "self"
+        const val TARGET_SERVER = "server"
         const val DOWNLOAD_QUALITY = "download_quality"
         const val DOWNLOAD_MOBILE = "download_mobile"
         const val SYNC_BUDGET_GB = "sync_budget_gb"

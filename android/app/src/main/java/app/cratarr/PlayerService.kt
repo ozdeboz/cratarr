@@ -78,7 +78,7 @@ class PlayerService : MediaSessionService() {
         // Another server or name: Cratarr says the group again once connected.
         if ((key == Prefs.SERVER_URL || key == Prefs.LOCAL_URL || key == Prefs.PLAYER_NAME) && sync.leader != null) sync.group(null, null, 0, sync.bufferMs, "")
         if (key == Prefs.LEVELLING) link?.levellingChanged()
-        if (key == Prefs.DRIVEN) showDriven()
+        if (key == Prefs.TARGET) showTarget()
         if (key == Prefs.OUTPUT_CHOICE || key == Prefs.OUTPUT_ORDERED || key == Prefs.OUTPUT_KNOWN) applyOutput()
         if (key == Prefs.SLEEP) {
             keepSleep()
@@ -169,9 +169,8 @@ class PlayerService : MediaSessionService() {
         applyOutput()
         Reach.watch(this)
         Prefs.shared(this).registerOnSharedPreferenceChangeListener(prefsChanged)
-        // The player the screen drives (the page says it as it opens and as it changes; started for it, the service
-        // shows it at once).
-        showDriven()
+        // Where the controls point, as kept.
+        showTarget()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
@@ -204,11 +203,32 @@ class PlayerService : MediaSessionService() {
     }
 
     /**
-     * The screen drives another of Cratarr's players, or none again: Android's media controls (the notification, the lock
-     * screen, the output chip, the volume keys) show and control that one, or this device's own player again (the
-     * owner, 2026-10-23: "This phone" and a paused track showed while the phone drove the Salon tablet).
+     * Where this device's controls point (decision 0062), changed here only: `self`, `player:<name>` or `server`. Asked by
+     * the page, or by the rule: *sounding here means controls here* (its own player started, whatever started it). To
+     * point away it pauses its own player first, if it still plays. The page hears every change (MainActivity).
      */
-    private fun showDriven() {
+    fun pointAt(to: String, why: String) {
+        val target = when {
+            to == Prefs.TARGET_SERVER -> Prefs.TARGET_SERVER
+            to.startsWith("player:") && to.length > 7 && to.removePrefix("player:") != prefs.playerName -> to
+            else -> Prefs.TARGET_SELF
+        }
+        if (target != Prefs.TARGET_SELF && player.isPlaying) {
+            LinkLog.add(this, "info", "playon", "own player paused", "why" to "pointing away", "to" to target)
+            player.pause()
+        }
+        if (prefs.target == target) return
+        LinkLog.add(this, "info", "playon", "target", "to" to target, "was" to prefs.target, "why" to why)
+        prefs.targetWhy = why
+        prefs.target = target
+    }
+
+    /**
+     * Android's media controls (the notification, the lock screen, the output chip, the volume keys) show and control
+     * where the target is: one of Cratarr's players through a [RemotePlayer], else this device's own player (the owner,
+     * 2026-10-23: "This phone" and a paused track showed while the phone drove the Salon tablet).
+     */
+    private fun showTarget() {
         val name = prefs.driven
         remote.follow(name)
         val s = session ?: return
@@ -389,6 +409,8 @@ class PlayerService : MediaSessionService() {
             // Each time a track is reached it can count again (a repeat, a jump back).
             if (events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)) counted = false
             if (events.contains(Player.EVENT_IS_PLAYING_CHANGED)) {
+                // Sounding here means controls here (decision 0062), whatever started it.
+                if (player.isPlaying && prefs.target != Prefs.TARGET_SELF) pointAt(Prefs.TARGET_SELF, "its own player started")
                 main.removeCallbacks(count)
                 if (player.isPlaying) main.post(count)
                 // A sleep timer that ran out while the music was paused only clears (its wait may not have come yet:
@@ -464,7 +486,10 @@ class PlayerService : MediaSessionService() {
             // Media3's own defaults for a controller of the app's (every player command), and the mode. Not built on
             // super's answer: that is a stand-in with no commands at all, which Media3 replaces only when it is returned
             // as it is (copied, the page's player could do nothing: 69, fixed in 69.1).
-            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon().add(SessionCommand(COMMAND_MODE, Bundle.EMPTY)).build()
+            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+                .add(SessionCommand(COMMAND_MODE, Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_TARGET, Bundle.EMPTY))
+                .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller).setAvailableSessionCommands(commands).build()
         }
 
@@ -474,8 +499,11 @@ class PlayerService : MediaSessionService() {
             customCommand: SessionCommand,
             args: Bundle,
         ): ListenableFuture<SessionResult> {
-            if (customCommand.customAction != COMMAND_MODE) return super.onCustomCommand(session, controller, customCommand, args)
-            switchMode(args.getString("mode").orEmpty(), "page")
+            when (customCommand.customAction) {
+                COMMAND_MODE -> switchMode(args.getString("mode").orEmpty(), "page")
+                COMMAND_TARGET -> pointAt(args.getString("to").orEmpty(), "the page asked")
+                else -> return super.onCustomCommand(session, controller, customCommand, args)
+            }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
         }
 
@@ -518,6 +546,8 @@ class PlayerService : MediaSessionService() {
         private const val ACTION_READY = "cratarr.READY"
         /** The page's mode switch (decision 0052): `mode`, cratarr or device. */
         const val COMMAND_MODE = "cratarr.MODE"
+        /** The page asks where the controls point (decision 0062): `to`, self, player:<name> or server. */
+        const val COMMAND_TARGET = "cratarr.TARGET"
 
         /** Started, and ready (or let go) as Stay ready says. Called while the app is in front, where both are allowed. */
         fun ready(context: Context) {

@@ -130,9 +130,13 @@ class MainActivity : AppCompatActivity() {
         super.onStop()
     }
 
-    /** The mode changed (here, or by a play from Cratarr): the page hears it. */
+    /** The mode changed (here, or by a play from Cratarr): the page hears it. Where the controls point changed (the
+     *  service, decision 0062): the page hears it and why. */
     private val modeChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == Prefs.MODE) runOnUiThread { page?.postMessage(appMessage()) }
+        if (key == Prefs.TARGET) runOnUiThread {
+            page?.postMessage(JSONObject().put("type", "target").put("target", prefs.target).put("why", prefs.targetWhy).toString())
+        }
     }
 
     private var fileCallback: ValueCallback<Array<Uri>>? = null
@@ -319,7 +323,7 @@ class MainActivity : AppCompatActivity() {
         openSettings = false
     }
 
-    /** A message from the page: `hello`, `player` (its player's calls), `drive` (the player its screen drives), `device`
+    /** A message from the page: `hello`, `player` (its player's calls), `target` (where the controls point), `device`
      *  and `device-set` (this device's settings), `page-prefs` (its own settings), `network-test`, `battery`,
      *  `address`, `open` (a link outside). */
     private fun onPageMessage(data: String, reply: JavaScriptReplyProxy) {
@@ -340,14 +344,11 @@ class MainActivity : AppCompatActivity() {
                 followSession()
             }
             "player" -> player?.handle(message) ?: waiting.add(message)
-            // The one of Cratarr's players the screen drives (null: this device's own): Android's media controls show
-            // that one meanwhile (RemotePlayer); the service started for it while the app is in front.
-            "drive" -> {
-                val driven = message.optString("player").takeIf { message.has("player") && !message.isNull("player") && it.isNotEmpty() }
-                if (Prefs(this).driven != driven) {
-                    Prefs(this).driven = driven
-                    if (driven != null) PlayerService.ready(this)
-                }
+            // Where this device's controls point (decision 0062): asked of the player service, which decides and
+            // tells the page (modeChanged). Started for it while the app is in front.
+            "target" -> {
+                PlayerService.ready(this)
+                player?.pointAt(message.optString("to")) ?: waiting.add(message)
             }
             "device" -> reply.postMessage(appMessage())
             // The visuals' sound as it is heard (decision 0046, amended 2026-10-19), on or off.
@@ -566,6 +567,9 @@ class MainActivity : AppCompatActivity() {
         .put("levelling", prefs.levelling)
         // Local mode (decision 0052): which music plays, and whether Android lets the app read the device's.
         .put("mode", prefs.mode)
+        // Where this device's controls point (decision 0062): the page shows that, and keeps no output of its own. None
+        // set yet (an app from before it): null, and the page says its last choice once.
+        .put("target", if (prefs.hasTarget) prefs.target else org.json.JSONObject.NULL)
         .put("deviceMusic", DeviceMusic.state(this))
         // Local mode is there (a folder on, Android's permission given): the switch shows.
         .put("local", DeviceMusic.on(this))

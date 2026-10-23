@@ -25,7 +25,7 @@ import { untrack } from 'svelte';
 import { live, refresh, untilNewTrack } from './live.svelte';
 import { canPlayHere, local, playQueue, enqueue, stop, togglePlay, type LocalTrack } from './localPlayer.svelte';
 import { inApp } from './app.svelte';
-import { drivenName, follow, outputName, playOn } from './playOn.svelte';
+import { drivenName, follow, outputName, playOn, pointAt } from './playOn.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 
@@ -43,7 +43,7 @@ if (typeof window !== 'undefined') {
       const name = live.view?.now_playing?.player;
       if (name && playOn.players.some((p) => p.name === name && p.online)) {
         untrack(() => {
-          prefs.output = `player:${name}`;
+          pointAt(`player:${name}`);
           follow(name);
         });
       }
@@ -325,7 +325,7 @@ export async function moveTo(output: typeof prefs.output) {
       /* it may have stopped already */
     }
   }
-  prefs.output = output;
+  pointAt(output);
   follow(output.startsWith('player:') ? output.slice('player:'.length) : null);
   if (!was) return;
   if (output === 'remote') {
@@ -355,7 +355,7 @@ export async function joinTo(output: typeof prefs.output) {
       }
     }
   }
-  prefs.output = output;
+  pointAt(output);
   follow(output.startsWith('player:') ? output.slice('player:'.length) : null);
 }
 

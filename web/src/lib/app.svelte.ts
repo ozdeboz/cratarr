@@ -12,6 +12,10 @@ const port = typeof window === 'undefined' ? null : ((window as unknown as { Cra
 export const inApp = !!port;
 
 /** What the app told about itself: its version, and this device's settings (the Settings page's "This device"). */
+/** Set by lib/playOn: tells an app with no target yet the page's last choice (decision 0062). */
+let seedTarget: (() => void) | null = null;
+export const onSeedTarget = (f: () => void) => (seedTarget = f);
+
 export const appInfo = $state({
   version: null as string | null,
   /** This player's name, as Home Assistant and the other players see it. */
@@ -49,6 +53,9 @@ export const appInfo = $state({
   /** Local mode (decision 0052): which mode plays, Cratarr's or the device's own music; `local`: a local folder is on
    *  and Android lets the app read them (the switcher shows); Android's permission for the device's music. */
   mode: 'cratarr' as 'cratarr' | 'device',
+  /** Where this device's controls point (decision 0062), as the app keeps it: `self`, `player:<name>` or `server`;
+   *  null from an app before it, where the page keeps its own. */
+  target: null as string | null,
   local: false,
   deviceMusic: 'unasked' as 'unasked' | 'denied' | 'granted',
 });
@@ -154,9 +161,14 @@ if (port) {
       appInfo.ordered = m.ordered === true;
       appInfo.known = Array.isArray(m.known) ? (m.known as AppOutput[]).filter((o) => typeof o?.id === 'string') : [];
       appInfo.mode = m.mode === 'device' ? 'device' : 'cratarr';
+      if (typeof m.target === 'string') appInfo.target = m.target;
+      // An app that keeps the target but has none yet: the page's last choice, once (decision 0062).
+      else if (m.target === null && appInfo.target === null) seedTarget?.();
       appInfo.local = m.local === true;
       appInfo.deviceMusic = m.deviceMusic === 'granted' || m.deviceMusic === 'denied' ? m.deviceMusic : 'unasked';
     }
+    // Where the controls point changed, in the app (decision 0062): the page shows it.
+    if (m.type === 'target' && typeof m.target === 'string') appInfo.target = m.target;
     if (m.type === 'network-test') {
       networkTest.local = typeof m.local === 'boolean' ? m.local : null;
       networkTest.public = typeof m.public === 'boolean' ? m.public : null;

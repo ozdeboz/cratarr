@@ -50,8 +50,17 @@ class PlayOnLink(
     @Volatile private var connection: HttpURLConnection? = null
     private var thread: Thread? = null
 
-    /** The volume as set (0 to 1), ducked or not; the player plays it times the duck, times the track's levelling. */
-    private var volume = 1f
+    /**
+     * Its volume is Android's media volume (the owner, 2026-10-23: a volume of its own, set by Play On and seen nowhere on
+     * the device, left the phone silent at full volume): Play On's `volume` sets it, and the reports say it, so the
+     * system's slider, the volume keys, Home Assistant and the page move one and the same. The player itself plays at
+     * the duck times the track's levelling only.
+     */
+    private val audio = service.getSystemService(android.media.AudioManager::class.java)
+    /** The media volume changed (the keys, the slider, Play On): reported. */
+    private val volumeSeen = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) = soon()
+    }
     private var ducked = false
     private var queueSent = false
     /** The queue's version in the last command from Cratarr: reports say it, so Cratarr knows what they have seen. */
@@ -95,7 +104,7 @@ class PlayOnLink(
             service.outputsChanged()
             soon()
         }
-        volume = player.volume
+        service.contentResolver.registerContentObserver(android.provider.Settings.System.CONTENT_URI, true, volumeSeen)
         player.addListener(this)
         thread = Thread(::listen, "cratarr-play-on").apply { isDaemon = true; start() }
         main.post(heartbeat)
@@ -142,6 +151,7 @@ class PlayOnLink(
         outputs?.stop()
         outputs = null
         clockThread?.interrupt()
+        service.contentResolver.unregisterContentObserver(volumeSeen)
         player.removeListener(this)
         main.removeCallbacks(heartbeat)
         connection?.disconnect()
@@ -445,10 +455,7 @@ class PlayOnLink(
             "autoplay" -> Autoplay.command(service, p, m)
             "skip_favourites" -> SkipFavourites.set(service, p, m.optBoolean("on"))
             "seek" -> p.seekTo(m.optLong("position_ms", p.currentPosition))
-            "volume" -> {
-                volume = m.optInt("level", 100).coerceIn(0, 100) / 100f
-                applyVolume()
-            }
+            "volume" -> setVolume(m.optInt("level", 100))
             "duck" -> {
                 ducked = true
                 applyVolume()
@@ -638,9 +645,24 @@ class PlayOnLink(
         }
     }
 
-    /** The volume as set, ducked, levelled (decision 0035): what the player plays at. */
+    /** Ducked or not, levelled (decision 0035): what the player plays at, under Android's media volume. */
     private fun applyVolume() {
-        player.volume = volume * (if (ducked) DUCKED else 1f) * Levelling.factor
+        player.volume = (if (ducked) DUCKED else 1f) * Levelling.factor
+    }
+
+    /** Android's media volume, 0 to 100. */
+    private fun volume(): Int {
+        val a = audio ?: return 100
+        val max = a.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        return (a.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) * 100 + max / 2) / max
+    }
+
+    /** Android's media volume set from 0 to 100 (its own steps, the nearest), as the keys would. */
+    private fun setVolume(level: Int) {
+        val a = audio ?: return
+        val max = a.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+        a.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, (level.coerceIn(0, 100) * max + 50) / 100, 0)
+        soon()
     }
 
     /** The levelling setting changed: the playing track levelled again (or not). */
@@ -693,7 +715,7 @@ class PlayOnLink(
             .put("position_ms", sync.heardPosition(p).coerceAtLeast(0))
             .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
             .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)
-            .put("volume", (volume * 100).toInt())
+            .put("volume", volume())
             .put("ducked", ducked)
             .put("held", heldBack ?: JSONObject.NULL)
             .put("output", Output.now(service) ?: JSONObject.NULL)
@@ -724,7 +746,7 @@ class PlayOnLink(
             .put("position_ms", p.currentPosition.coerceAtLeast(0))
             .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
             .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)
-            .put("volume", (volume * 100).toInt())
+            .put("volume", volume())
             .put("ducked", ducked)
             .put("held", heldBack ?: JSONObject.NULL)
             .put("output", Output.now(service) ?: JSONObject.NULL)

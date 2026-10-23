@@ -3,8 +3,9 @@
 // drives the local player (localPlayer.svelte.ts, `drive`): the queue, the now-playing view and the controls are the
 // same, the music plays there.
 
+import { untrack } from 'svelte';
 import { getPlayer, getPlayers, playerCommand, type PlayOnPlayer } from './api';
-import { appInfo, inApp, toApp } from './app.svelte';
+import { appInfo, inApp, onSeedTarget, toApp } from './app.svelte';
 import { on } from './events.svelte';
 import { drive, emptyHere, reportedBy, type LocalTrack } from './localPlayer.svelte';
 import { prefs } from './prefs.svelte';
@@ -36,18 +37,7 @@ export const selfName = () => (inApp ? appInfo.player : playOn.self);
 const shownName = () => drivenName() ?? followedLeader();
 /** What the local player was last told to drive. */
 let driving: string | null = null;
-/** What the app was last told its screen drives. */
-let told: string | null | undefined;
-/** In the app, the player chosen (null: its own) to the app, so Android's media controls show that one meanwhile (the
- *  owner, 2026-10-23). Before the app's player is asked for its state again (`hello`): it answers for its own then. */
-function tellApp() {
-  const d = drivenName();
-  if (!inApp || d === told) return;
-  told = d;
-  toApp({ type: 'drive', player: d });
-}
 function driveShown() {
-  tellApp();
   const name = shownName();
   if (name === driving) return;
   const was = driving;
@@ -58,24 +48,34 @@ function driveShown() {
   if (!name && was && inApp) toApp({ type: 'hello' });
 }
 
-/** Music started on this device's own player while its screen drove another (Play On from elsewhere; decision 0033
- *  amended 2026-10-23): the screen turns here, and the other plays on, no longer driven from here. */
+/** In a browser: music sent to this page while its screen drove another (Play On from elsewhere; decision 0033
+ *  amended 2026-10-23) turns the screen here, and the other plays on, no longer driven from here. In the app the app
+ *  does this itself (decision 0062: sounding here means controls here) and the page follows (`fromApp`). */
 export function hereAgain() {
-  if (prefs.output === 'local') return;
+  if (inApp || prefs.output === 'local') return;
   prefs.output = 'local';
   driveShown();
-  if (!inApp) emptyHere();
+  emptyHere();
 }
 
-/** Whether the app's own player played at its last report: one that starts while the screen drives another turns the
- *  screen here (`hereAgain`). */
-let ownPlayed: boolean | null = null;
-function watchOwn(players: PlayOnPlayer[]) {
-  if (!inApp || !appInfo.player) return;
-  const own = players.find((p) => p.name === appInfo.player);
-  const now = !!own?.online && own.playing;
-  if (now && ownPlayed === false) hereAgain();
-  ownPlayed = now;
+/** The page's output for an app's target (decision 0062), and back. */
+const outputOf = (target: string): typeof prefs.output => (target === 'server' ? 'remote' : target.startsWith('player:') ? (target as `player:${string}`) : 'local');
+export const targetOf = (output: typeof prefs.output) => (output === 'remote' ? 'server' : output.startsWith('player:') ? output : 'self');
+
+/** Points this device's controls at `output`: in the app it asks the app, which owns it (decision 0062) and answers
+ *  with what it decided (shown meanwhile); in a browser the page owns it. */
+export function pointAt(output: typeof prefs.output) {
+  prefs.output = output;
+  if (inApp && appInfo.target !== null) toApp({ type: 'target', to: targetOf(output) });
+}
+
+/** In the app, the app's target as the page's output: as it opens, and on every change (its own player started, a
+ *  restart), whatever the page last thought. */
+function fromApp(target: string) {
+  const out = outputOf(target);
+  if (prefs.output === out) return;
+  prefs.output = out;
+  follow(drivenName());
 }
 
 /** The one of Cratarr's players the page plays on: the one chosen, or this device's own (the app's, or this page's)
@@ -116,7 +116,6 @@ let shownVersion = -1;
 
 function take(players: PlayOnPlayer[]) {
   playOn.players = players;
-  watchOwn(players);
   driveShown();
   const name = shownName();
   const p = name ? players.find((x) => x.name === name) : undefined;
@@ -159,7 +158,6 @@ function take(players: PlayOnPlayer[]) {
 
 /** Plays on player `name` from now on (or here again: `null`), as the output says. */
 export function follow(name: string | null) {
-  tellApp();
   driving = name;
   drive(name);
   shownVersion = -1;
@@ -167,6 +165,18 @@ export function follow(name: string | null) {
 }
 
 if (typeof window !== 'undefined') {
+  if (inApp) {
+    onSeedTarget(() => {
+      appInfo.target = targetOf(prefs.output);
+      toApp({ type: 'target', to: appInfo.target });
+    });
+    $effect.root(() => {
+      $effect(() => {
+        const t = appInfo.target;
+        if (t !== null) untrack(() => fromApp(t));
+      });
+    });
+  }
   on<PlayOnPlayer[]>('players', take);
   getPlayers()
     .then((r) => take(r.players))

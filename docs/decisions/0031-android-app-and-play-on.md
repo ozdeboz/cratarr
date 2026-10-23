@@ -197,3 +197,14 @@ plays on another of Cratarr's players, the app's media session shows that one.
 - **Step 2, not yet:** the chip names the device only through a routing session (SystemUI's `MediaDeviceManager`:
   without one it shows "Other device"), which needs the app to offer Cratarr's players as routes
   (`MediaRoute2ProviderService`), as Cast does.
+
+## Amended (2026-10-23): one volume, Android's
+
+An app player had a volume of its own: Play On's `volume` set a factor on its player, kept in the app's memory, shown
+by nothing on the device; Android's slider and keys could not raise it. A test left the phone at 0 while everything
+said it played at full volume (the owner: "I'm afraid that we have a hidden volume somewhere"; the tablet played at 58
+of its own under Android's 15 of 15). Now Play On's `volume` sets Android's media volume (its own steps, the nearest),
+and the reports say Android's media volume, watched as it changes (the keys, the slider): the system slider, the keys,
+Home Assistant, a group's sliders and the media controls of a device that drives it move one and the same. The player
+plays at the duck times the track's levelling only (decision 0035). In a browser, which has no slider of its own for a
+page, the Play On sheet shows the page's volume under This device.

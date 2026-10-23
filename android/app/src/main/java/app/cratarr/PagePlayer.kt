@@ -27,6 +27,11 @@ import org.json.JSONObject
  */
 @OptIn(UnstableApi::class)
 class PagePlayer(private val context: Context, private val controller: MediaController, private val send: (String) -> Unit) : Player.Listener {
+    /** The page asks where this device's controls point (decision 0062); the service decides and the page hears it. */
+    fun pointAt(to: String) {
+        controller.sendCustomCommand(SessionCommand(PlayerService.COMMAND_TARGET, Bundle.EMPTY), Bundle().apply { putString("to", to) })
+    }
+
     /** Hold-to-preview (the queue's covers): a second player for the held track, while the music waits. */
     private var previewer: ExoPlayer? = null
     /** The music played when the preview began: it goes on after. */
@@ -52,6 +57,8 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
     }
 
     fun handle(m: JSONObject) {
+        // Where the controls point, asked before the player was connected (MainActivity's waiting messages).
+        if (m.optString("type") == "target") return pointAt(m.optString("to"))
         switching?.let {
             it.add(m)
             return

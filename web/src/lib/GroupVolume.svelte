@@ -1,10 +1,11 @@
 <script lang="ts">
   // Sync play's volumes (decision 0037, as Snapweb's and Music Assistant's): each grouped device's own, and the group's,
   // the devices' average. Moving the group's moves each device in proportion, from where they were when the finger went
-  // down: up toward 100, down toward 0. A device's volume stays its own (Play On's `volume`).
+  // down: up toward 100, down toward 0. A device's volume stays its own (Play On's `volume`): in the app Android's media
+  // volume, in a browser the page's. One device alone (a page in a browser, whose volume nothing else on the device
+  // shows): its row only.
   import { playerCommand } from './api';
-  import { appInfo, inApp } from './app.svelte';
-  import { playOn } from './playOn.svelte';
+  import { playOn, selfName } from './playOn.svelte';
 
   let { names }: { names: string[] } = $props();
 
@@ -14,7 +15,7 @@
   const reported = (n: string) => playOn.players.find((p) => p.name === n)?.volume ?? 100;
   const vol = (n: string) => held[n] ?? reported(n);
   const group = $derived(Math.round(names.reduce((a, n) => a + vol(n), 0) / Math.max(names.length, 1)));
-  const shown = (n: string) => (inApp && n === appInfo.player ? 'This device' : n);
+  const shown = (n: string) => (n === selfName() ? 'This device' : n);
 
   // At most a command per device every 150 ms while it moves; the last always goes.
   const busy = new Map<string, ReturnType<typeof setTimeout>>();
@@ -57,10 +58,12 @@
 </script>
 
 <div class="volumes">
-  <label class="row group">
-    <span>Group</span>
-    <input type="range" min="0" max="100" step="1" value={group} oninput={(e) => setGroup(Number(e.currentTarget.value))} onchange={done} />
-  </label>
+  {#if names.length > 1}
+    <label class="row group">
+      <span>Group</span>
+      <input type="range" min="0" max="100" step="1" value={group} oninput={(e) => setGroup(Number(e.currentTarget.value))} onchange={done} />
+    </label>
+  {/if}
   {#each names as n (n)}
     <label class="row">
       <span>{shown(n)}</span>

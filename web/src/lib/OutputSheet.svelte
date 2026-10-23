@@ -219,7 +219,8 @@
       {#if !playOn.players.some((p) => p.name === remoteName)}
         <MenuEntry label={remoteName} checked={!here && drivenName() === null} plus={false} onclick={() => pick('remote')} />
       {/if}
-      {#if group.length > 1}<GroupVolume names={group} />{/if}
+      {#if group.length > 1}<GroupVolume names={group} />
+      {:else if !inApp && here && playOn.self}<GroupVolume names={[playOn.self]} />{/if}
     {/if}
   </div>
 </MenuSheet>
