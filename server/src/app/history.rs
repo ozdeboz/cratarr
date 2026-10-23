@@ -248,7 +248,7 @@ pub fn listening(rows: &[Logged], facts: &std::collections::HashMap<String, Song
             plays += 1;
         }
         let f = facts.get(&r.song).cloned().unwrap_or_default();
-        let mut add = |map: &mut HashMap<String, Top>, id: &str, name: &str, by: Option<&str>| {
+        let add = |map: &mut HashMap<String, Top>, id: &str, name: &str, by: Option<&str>| {
             if id.is_empty() || name.is_empty() {
                 return;
             }
