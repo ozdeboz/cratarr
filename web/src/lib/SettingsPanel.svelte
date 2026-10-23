@@ -9,6 +9,7 @@
   // going from one to another. Authentication's account, Import, this device's settings and Display act at once. The
   // server's parts are its administrators' (decision 0051): for anyone else they show nothing, and the server's
   // settings are not asked for.
+  import { untrack } from 'svelte';
   import Icon from './Icon.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -45,8 +46,10 @@
     askDevice();
     askDownloads();
   }
+  // Loaded when an administrator opens it, depending on that only: the load reads the editor's state, which its answer
+  // changes, and tracked that asked again with every answer, without end (a runaway client, 2026-10-23).
   $effect(() => {
-    if (me.admin) ed.load();
+    if (me.admin) untrack(() => ed.load());
   });
   const allowed = $derived(!SECTIONS.find((x) => x.id === section)?.admin || me.admin);
 

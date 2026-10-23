@@ -432,6 +432,7 @@ dependencies = [
  "flacenc",
  "getrandom 0.3.4",
  "image",
+ "ipnet",
  "ldap3",
  "libc",
  "lofty",

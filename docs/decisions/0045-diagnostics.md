@@ -95,3 +95,29 @@ The page shows the log as it is, with no prose; errors are one short line (ui-co
 - The events from Play On and sync play (`app/playon.rs`, `snapcast/`), the request ids (`api.rs`),
   the routes, the Android app's file, its upload and its link in its reports (`android/`), the page player's part, and
   the Diagnostics page: claude-5f.
+
+## Amended (2026-10-23): runaway clients, slow answers, whose address
+
+Cratarr had no request-rate warning of its own, so a runaway client went unflagged (the owner: "This is a problem we
+can own"). The Settings page was one: its effect read the editor's state while it loaded, and each answer changed that
+state, so it asked again without end, and each `GET /api/settings` asked Jellyfin and Lidarr in turn. After reading
+Jellyfin's own (a slow-response line, at Debug only; KnownProxies; no rate limit at all), three additions:
+
+- **A runaway client** (`serve::rate`): every request counted per client by the minute. A client asking more than 600
+  times a minute, two minutes running, is a warning (area `server`, "client requests too often"): its address, how
+  often this minute and the last, what it asked most (the path's first three parts) and how often, its last connection
+  id. Two minutes, so a page loading a shelf's covers at once is not one. Nothing is refused: the proxy throttles.
+- **Slow answers** (`api::request_ids`): every answer says how long it took to start (`X-Response-Time-Ms`); over 1 s it
+  is a warning ("slow response": client, path's first three parts, status, ms). Not Debug, as Jellyfin's: unseen is
+  no warning.
+- **Whose address** (`serve::proxy`, as Jellyfin's KnownProxies): with `CRATARR_PROXIES` set (addresses or ranges), the
+  `X-Forwarded-*` headers of any other peer are taken off before anything reads them, so a client reaching the port
+  itself cannot name another address to slip the sign-in throttle or the count above; the first such request of each
+  peer is a warning. Unset, every peer is believed as before, and the first that forwards is written down (info) so it
+  can be named.
+- **The Settings page** loads once per administrator (`untrack`), and the servers' answers for it are kept 10 s for the
+  same settings and folders (`SettingsService::asked`), so a page that asks again does not each time reach Jellyfin.
+
+Not taken from Jellyfin: locking an account after failed sign-ins until an administrator opens it (anyone knowing a
+name could lock its owner out; Cratarr's throttle answers 429 with a wait), and uploaded client logs (the players'
+numbered logs already come in).

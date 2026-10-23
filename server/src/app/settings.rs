@@ -1,7 +1,7 @@
 //! Settings (decision 0011): the page's view of everything configurable, checking a draft, and saving: the servers go
 //! to the library, Lidarr and the trash days to Incoming.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -30,7 +30,7 @@ pub struct KindView {
     pub fields: Vec<Field>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SourceView {
     pub id: String,
     pub kind: String,
@@ -52,7 +52,7 @@ pub struct SourceView {
 }
 
 /// A used library's settings as they apply (decision 0034).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct EffectivePolicy {
     pub format: settings::Format,
     /// None for a Music library (the primary).
@@ -111,6 +111,18 @@ pub struct SettingsService {
     started: i64,
     /// The Music library's albums as naming sees them, and when they were read (epoch seconds).
     names: tokio::sync::Mutex<Option<(i64, Arc<Vec<crate::naming::Album>>)>>,
+    /// What each server and Lidarr said, by what was asked (their settings, the folders), for [ASKED_FOR] (decided
+    /// 2026-10-23: a page that asked for the settings over and over asked Jellyfin as often).
+    asked: std::sync::Mutex<HashMap<String, (std::time::Instant, Asked)>>,
+}
+
+/// How long a server's answers for the Settings page are used again.
+const ASKED_FOR: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[derive(Clone)]
+enum Asked {
+    Source(SourceView),
+    Lidarr(Option<LidarrView>),
 }
 
 impl SettingsService {
@@ -133,6 +145,7 @@ impl SettingsService {
             settings_path: data_dir.map(|d| PathBuf::from(d).join("settings.json")),
             started: epoch_now(),
             names: tokio::sync::Mutex::new(None),
+            asked: std::sync::Mutex::default(),
         }
     }
 
@@ -222,7 +235,29 @@ impl SettingsService {
 
     /// Status, choices and a fresh look at where its libraries lie. `source` is `None` when it could not be
     /// connected.
+    /// What was asked as `key` within [ASKED_FOR], else asked now and kept.
+    fn asked_before(&self, key: &str) -> Option<Asked> {
+        let mut asked = self.asked.lock().unwrap_or_else(|p| p.into_inner());
+        asked.retain(|_, (at, _)| at.elapsed() < ASKED_FOR);
+        asked.get(key).map(|(_, a)| a.clone())
+    }
+
+    fn keep_asked(&self, key: String, a: Asked) {
+        self.asked.lock().unwrap_or_else(|p| p.into_inner()).insert(key, (std::time::Instant::now(), a));
+    }
+
+    /// A server as the Settings page shows it: asked of it at most every [ASKED_FOR] for the same settings and folders.
     async fn view_of(&self, cfg: &SourceConfig, source: Option<&dyn Source>, error: Option<String>) -> SourceView {
+        let key = format!("source {} {:?} {:?} {}", serde_json::to_string(cfg).unwrap_or_default(), error, self.lib.place_folders(), source.is_some());
+        if let Some(Asked::Source(v)) = self.asked_before(&key) {
+            return v;
+        }
+        let v = self.ask_view_of(cfg, source, error).await;
+        self.keep_asked(key, Asked::Source(v.clone()));
+        v
+    }
+
+    async fn ask_view_of(&self, cfg: &SourceConfig, source: Option<&dyn Source>, error: Option<String>) -> SourceView {
         let (values, secrets_set) = settings::redact(cfg);
         let mut view = SourceView {
             id: cfg.id.clone(),
@@ -294,7 +329,15 @@ impl SettingsService {
         let tag_rules = self.lib.tag_rules();
         let music_folder = self.lib.music();
         let (lidarr_cfg, lidarr_client) = self.incoming.lidarr_state();
-        let lidarr = IncomingService::lidarr_view(lidarr_cfg.as_ref(), lidarr_client).await;
+        let key = format!("lidarr {:?} {}", lidarr_cfg.as_ref().map(|c| (&c.url, &c.api_key)), lidarr_client.is_some());
+        let lidarr = match self.asked_before(&key) {
+            Some(Asked::Lidarr(v)) => v,
+            _ => {
+                let v = IncomingService::lidarr_view(lidarr_cfg.as_ref(), lidarr_client).await;
+                self.keep_asked(key, Asked::Lidarr(v.clone()));
+                v
+            }
+        };
         Ok(SettingsView {
             sources,
             kinds: Self::kinds(),

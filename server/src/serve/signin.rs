@@ -115,7 +115,7 @@ fn over_https(headers: &HeaderMap) -> bool {
 }
 
 /// The client, as the nearest proxy saw it (the last `X-Forwarded-For`), else as Cratarr does.
-pub(super) fn client(headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
+pub(crate) fn client(headers: &HeaderMap, peer: Option<SocketAddr>) -> String {
     text(headers, "x-forwarded-for")
         .and_then(|f| f.rsplit(',').next())
         .map(|ip| ip.trim().to_string())

@@ -16,6 +16,8 @@ pub struct Config {
     /// The host the players reach that port on, when not the one they reach Cratarr on (a page behind a reverse proxy
     /// on a public name, the port open on the local network only): e.g. the server's LAN address.
     pub snapcast_host: Option<String>,
+    /// The proxies whose `X-Forwarded-*` headers are believed (`CRATARR_PROXIES`); `None`: every peer's (serve::proxy).
+    pub proxies: Option<Vec<ipnet::IpNet>>,
 }
 
 /// Variables that are no longer read: `placement.rs` finds paths on its own, and no Jellyfin user is involved.
@@ -33,6 +35,7 @@ impl Config {
                 None => Some("0.0.0.0:1704".into()),
             },
             snapcast_host: get("CRATARR_SNAPCAST_HOST"),
+            proxies: crate::serve::proxy::parse(get("CRATARR_PROXIES").as_deref()),
         })
     }
 }

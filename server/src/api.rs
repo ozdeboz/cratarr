@@ -158,23 +158,40 @@ pub fn router(app: Arc<App>) -> Router {
         .with_state(app)
 }
 
-/// Every answer carries its request's id (`X-Request-Id`), and the request runs in a `request` span with it and the
-/// app's connection id (`X-Cratarr-Connection`), so the events it logs carry both (decision 0045). Outermost: the
-/// sign-in layer's refusals have them too.
-pub async fn request_ids(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+/// An answer slower than this (ms, until its head: a stream's body is not counted) is written down.
+const SLOW_MS: u128 = 1000;
+
+/// Every answer carries its request's id (`X-Request-Id`) and how long it took to start (`X-Response-Time-Ms`), and the
+/// request runs in a `request` span with its id and the app's connection id (`X-Cratarr-Connection`), so the events it
+/// logs carry both (decision 0045). Outermost: the sign-in layer's refusals have them too. First a peer that is not a
+/// proxy named loses its forwarding headers (serve::proxy); then the client is counted (serve::rate); an answer slower
+/// than [SLOW_MS] is a warning in the log, with what was asked (the path's first three parts) and its status.
+pub async fn request_ids(mut req: axum::extract::Request, next: axum::middleware::Next) -> Response {
     use tracing::Instrument;
+    let peer = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0);
+    crate::serve::proxy::screen(req.headers_mut(), peer.map(|p| p.ip()));
     let (id, conn) = {
         let header = |name: &str| req.headers().get(name).and_then(|v| v.to_str().ok()).filter(|v| plain_id(v)).map(str::to_string);
         (header("x-request-id").unwrap_or_else(new_request_id), header("x-cratarr-connection"))
     };
+    let client = crate::serve::signin::client(req.headers(), peer);
+    crate::serve::rate::RATES.seen(&client, conn.as_deref(), req.uri().path());
+    let asked = crate::serve::rate::kind_of(req.uri().path());
     let span = tracing::info_span!("request", request = %id, conn = tracing::field::Empty);
     if let Some(c) = &conn {
         span.record("conn", c.as_str());
     }
-    let mut res = next.run(req).instrument(span).await;
+    let started = std::time::Instant::now();
+    let mut res = next.run(req).instrument(span.clone()).await;
+    let ms = started.elapsed().as_millis();
+    if ms > SLOW_MS {
+        let status = res.status().as_u16();
+        span.in_scope(|| tracing::warn!(target: "server", client, path = asked.as_str(), status, ms = ms as u64, "slow response"));
+    }
     if let Ok(v) = HeaderValue::from_str(&id) {
         res.headers_mut().insert("x-request-id", v);
     }
+    res.headers_mut().insert("x-response-time-ms", HeaderValue::from(ms as u64));
     res
 }
 

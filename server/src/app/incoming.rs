@@ -173,7 +173,7 @@ pub struct IncomingView {
 }
 
 /// Lidarr on the Settings page. The key is never sent.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct LidarrView {
     pub url: String,
     pub key_set: bool,

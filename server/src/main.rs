@@ -142,6 +142,7 @@ async fn main() -> Result<()> {
 
     let env = |k: &str| std::env::var(k).ok();
     let cfg = config::Config::from_lookup(env)?;
+    serve::proxy::set(cfg.proxies.clone());
     let kept_log = diagnostics::start_global(cfg.data_dir.as_deref().map(|d| std::path::Path::new(d).join("diagnostics.sqlite")).as_deref(), pending)
         .context("cannot start the diagnostics log")?;
     tracing::info!(target: "server", version = env!("CARGO_PKG_VERSION"), "started");
