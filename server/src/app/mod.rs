@@ -37,6 +37,7 @@ mod queue;
 pub mod history;
 pub mod listenbrainz;
 pub mod moment;
+pub mod refind;
 pub mod radio;
 pub mod similar;
 pub mod taste;

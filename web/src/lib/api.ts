@@ -1386,8 +1386,11 @@ export const getHomeArtists = (source?: string, without?: string[]) =>
 export const artistPhotoUrl = (id: string) => `/api/artists/${encodeURIComponent(id)}/photo`;
 /** About an artist (their page): TheAudioDB's description and whether the store has a photo; nulls when unknown. */
 /** Tracks of Cratarr's own library matching words, each with its playlist line (Health's missing tracks). */
-export type FoundTrack = { id: string; title: string; artist: string; album: string; album_id: string; line: string };
-export const findTracks = (q: string) => request<FoundTrack[]>(`/api/library/find?q=${encodeURIComponent(q)}`);
+/** `sure`: the one answer for a missing line (the same title at heart by the same artist, alone at the top). */
+export type FoundTrack = { id: string; title: string; artist: string; album: string; album_id: string; line: string; sure?: boolean };
+/** The library searched by words (`q`), or found again for a missing playlist line (`line`, lib/HealthMissing). */
+export const findTracks = (q: string, line?: string) =>
+  request<FoundTrack[]>(`/api/library/find?${new URLSearchParams(line ? { line } : { q })}`);
 export const getArtistAbout = (name: string) => quietly<{ id: string | null; bio: string | null; photo: boolean }>(`/api/artists/about?name=${encodeURIComponent(name)}`);
 export const getDigging = (source?: string, without?: string[]) =>
   quietly<Digging>(`/api/home/digging?${new URLSearchParams({ ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);

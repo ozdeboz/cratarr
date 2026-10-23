@@ -2661,16 +2661,52 @@ async fn home_artists(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) 
 
 #[derive(Deserialize)]
 struct FindQuery {
+    #[serde(default)]
     q: String,
+    /// A missing playlist line: found again by what it says (`app::refind`), not by words.
+    line: Option<String>,
 }
 
-/// Tracks of Cratarr's own library matching words (Health's missing tracks, to point a playlist's line at one: the
-/// owner, 2026-10-23): each with its playlist line. At most 20, the library's search's order.
+/// How many tracks a search of the library for a missing line weighs, and shows.
+const REFIND_WEIGH: usize = 60;
+const REFIND_SHOWN: usize = 10;
+
+/// Tracks of Cratarr's own library for a playlist's missing line (Health's missing tracks, to point the line at one:
+/// the owner, 2026-10-23), each with its playlist line. By the line (`line`; the owner, 2026-10-24: the words were too
+/// strict): the same title at heart by the same artist, wherever it lies now, the best first, `sure` on the one
+/// answer when there is one; else by words (`q`), at most 20, the library's search's order.
 async fn library_find(State(app): State<Arc<App>>, Query(q): Query<FindQuery>) -> Result<Json<serde_json::Value>, ApiError> {
     let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let (lib, cat, query) = (served.library.clone(), app.library.catalogue(), q.q.clone());
+    let (lib, cat, query, line) = (served.library.clone(), app.library.catalogue(), q.q.clone(), q.line.clone());
     let found = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<serde_json::Value>> {
-        let (_, _, songs) = lib.search(query.trim(), (0, 0), (0, 0), (20, 0), None)?;
+        let songs = match &line {
+            Some(line) => {
+                use crate::app::refind;
+                let said = refind::said(line);
+                let title = refind::core(&said.title);
+                // By artist and title, then by the title alone (a track now on a compilation, its artist credited
+                // otherwise there), each once.
+                let mut seen = std::collections::HashSet::new();
+                let mut scored = Vec::new();
+                for words in [format!("{} {title}", refind::normal(&said.artist)), title.clone()] {
+                    let (_, _, songs) = lib.search(words.trim(), (0, 0), (0, 0), (REFIND_WEIGH, 0), None)?;
+                    for s in songs {
+                        if seen.insert(s.id.clone())
+                            && let Some(points) = refind::score(&said, &s.title, &s.artist, &s.album)
+                        {
+                            scored.push((points, s));
+                        }
+                    }
+                }
+                scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.title.cmp(&b.1.title)));
+                scored.truncate(REFIND_SHOWN);
+                scored
+            }
+            None => lib.search(query.trim(), (0, 0), (0, 0), (20, 0), None)?.2.into_iter().map(|s| (0, s)).collect(),
+        };
+        // The one answer: the best, alone at its points, with the same title and artist.
+        let sure = line.is_some() && songs.first().is_some_and(|(p, _)| *p >= 7 && songs.get(1).is_none_or(|(q, _)| q < p));
+        let songs: Vec<_> = songs.into_iter().map(|(_, s)| s).collect();
         let ids: Vec<String> = songs.iter().map(|s| s.id.clone()).collect();
         let places = lib.song_places(&ids)?;
         Ok(songs
@@ -2679,6 +2715,11 @@ async fn library_find(State(app): State<Arc<App>>, Query(q): Query<FindQuery>) -
                 let (folder, rel) = places.get(&s.id)?;
                 let line = cat.line_of(*folder, rel)?;
                 Some(json!({ "id": s.id, "title": s.title, "artist": s.artist, "album": s.album, "album_id": s.album_id, "line": line }))
+            })
+            .enumerate()
+            .map(|(i, mut t)| {
+                t["sure"] = json!(sure && i == 0);
+                t
             })
             .collect())
     })
