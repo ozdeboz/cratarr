@@ -5,15 +5,21 @@
   // spread, less of under it), moods by how much more of them than in the library (a bar each way from the library's
   // middle).
   import { ApiError, getTasteProfile, type ProfileMood, type ProfileNumber, type ProfileWord, type TasteProfile } from './api';
+  import { hiddenLibraries } from './listFilter.svelte';
   import PageLoading from './PageLoading.svelte';
+  import { prefs } from './prefs.svelte';
 
   let data = $state<TasteProfile | null>(null);
   let error = $state<string | null>(null);
+  // Of the libraries switched on and the period (Insights' own, every tab's).
   $effect(() => {
-    getTasteProfile().then(
-      (d) => (data = d),
-      (e) => (error = e instanceof ApiError ? e.message : 'Unexpected error'),
+    const [source, without, period] = [prefs.source || undefined, hiddenLibraries(), prefs.insightsPeriod];
+    let gone = false;
+    getTasteProfile(source, without, period).then(
+      (d) => !gone && ((data = d), (error = null)),
+      (e) => !gone && (error = e instanceof ApiError ? e.message : 'Unexpected error'),
     );
+    return () => (gone = true);
   });
 
   const num = (n: number) => n.toLocaleString();

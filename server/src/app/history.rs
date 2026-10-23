@@ -39,23 +39,39 @@ pub fn since(userdata: &UserData, user: &str, since: i64, now: i64) -> Result<Op
     }
 }
 
-/// The periods Insights' Listening looks back over (decision 0065), and how it groups them: days for a week and a month,
-/// weeks for a year.
+/// The periods Insights looks back over (decision 0065; one for all of Insights, the owner 2026-10-23: the past week,
+/// month or year, or all), and how Listening groups them: days for a week and a month, weeks for a year and for all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Period {
     Week,
     Month,
     Year,
+    All,
 }
 
+/// How far back All reaches at most (weeks).
+const ALL_WEEKS: i64 = 5 * 52;
+
 impl Period {
-    /// How many buckets, and how long each (days).
-    fn buckets(self) -> (i64, i64) {
+    /// How many buckets, and how long each (days); All's weeks from the log's first (`log_from`, a local day) on.
+    fn buckets(self, today: i64, log_from: Option<i64>) -> (i64, i64) {
         match self {
             Period::Week => (7, 1),
             Period::Month => (30, 1),
             Period::Year => (52, 7),
+            Period::All => (log_from.map_or(1, |f| ((today - f).div_euclid(7) + 1).clamp(1, ALL_WEEKS)), 7),
+        }
+    }
+
+    /// Where the period begins (epoch s) for what counts it but Listening (Collection's albums added since): rolling,
+    /// the past 7, 30 or 365 days; None for all.
+    pub fn since(self, now: i64) -> Option<i64> {
+        match self {
+            Period::Week => Some(now - 7 * DAY),
+            Period::Month => Some(now - 30 * DAY),
+            Period::Year => Some(now - 365 * DAY),
+            Period::All => None,
         }
     }
 }
@@ -127,7 +143,7 @@ impl Period {
         match self {
             Period::Week => (12, "week"),
             Period::Month => (12, "month"),
-            Period::Year => (5, "year"),
+            Period::Year | Period::All => (5, "year"),
         }
     }
 
@@ -137,6 +153,7 @@ impl Period {
             Period::Week => 12 * 7 + 7,
             Period::Month => 12 * 31 + 31,
             Period::Year => 5 * 366 + 366,
+            Period::All => ALL_WEEKS * 7 + 7,
         } * DAY
     }
 }
@@ -223,8 +240,8 @@ const GENRES: usize = 5;
 /// at local midnight, `tz` seconds east of UTC; a year's weeks on Mondays.
 pub fn listening(rows: &[Logged], facts: &std::collections::HashMap<String, SongFacts>, period: Period, now: i64, tz: i64, log_from: Option<i64>) -> Listening {
     use std::collections::HashMap;
-    let (count, days) = period.buckets();
     let today = (now + tz).div_euclid(DAY);
+    let (count, days) = period.buckets(today, log_from.map(|f| (f + tz).div_euclid(DAY)));
     // The last bucket holds today (a year's: this week, from its Monday; 1970-01-01 was a Thursday).
     let last = if days == 7 { today - (today + 3).rem_euclid(7) } else { today };
     let first = last - (count - 1) * days;

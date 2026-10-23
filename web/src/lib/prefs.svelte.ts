@@ -49,7 +49,9 @@ export type Prefs = {
   insightsCollection: 'overview' | 'genres' | 'artists' | 'playlists';
   /** What Genres' and Artists' bars count: all the tracks, or those in a playlist (Insights' panel). */
   insightsCount: 'tracks' | 'listed';
-  listeningPeriod: 'week' | 'month' | 'year';
+  /** Insights' period, one for all of it (the owner, 2026-10-23): the past week, month or year, or all. Listening
+   *  over it; Collection the albums that came in it; not the map. */
+  insightsPeriod: 'week' | 'month' | 'year' | 'all';
   /** Listening's own sections (its second row): what was heard, or the taste it makes. */
   listeningView: 'history' | 'profile';
   signals: { tracks: boolean; genre: boolean; artists: boolean };
@@ -148,7 +150,7 @@ export const DEFAULTS: Prefs = {
   insightsTab: 'collection',
   insightsCollection: 'overview',
   insightsCount: 'tracks',
-  listeningPeriod: 'week',
+  insightsPeriod: 'all',
   listeningView: 'history',
   signals: { tracks: true, genre: true, artists: true },
   playerWidth: 400,
@@ -242,7 +244,7 @@ function read(): Prefs {
       if (tab === 'collection' || tab === 'listening' || tab === 'map') p.insightsTab = tab;
       if (['overview', 'genres', 'artists', 'playlists'].includes(saved.insightsCollection)) p.insightsCollection = saved.insightsCollection;
       if (saved.insightsCount === 'tracks' || saved.insightsCount === 'listed') p.insightsCount = saved.insightsCount;
-      if (['week', 'month', 'year'].includes(saved.listeningPeriod)) p.listeningPeriod = saved.listeningPeriod;
+      if (['week', 'month', 'year', 'all'].includes(saved.insightsPeriod)) p.insightsPeriod = saved.insightsPeriod;
       if (saved.listeningView === 'history' || saved.listeningView === 'profile') p.listeningView = saved.listeningView;
       if (saved.signals && typeof saved.signals === 'object') {
         for (const k of ['tracks', 'genre', 'artists'] as const) {

@@ -9,6 +9,7 @@ use anyhow::Result;
 use tokio::sync::Mutex;
 
 use super::library::{Library, epoch_now};
+use super::history::Period;
 use crate::insights::Insights;
 
 /// How long a built report is kept.
@@ -16,8 +17,8 @@ const KEEP_SECS: i64 = 300;
 /// How many reports are kept (each account, each set of libraries): switching a library off and on again is instant.
 const KEEP: usize = 4;
 
-/// Whose report, from which server's libraries, and without which of them.
-type Key = (Option<String>, Option<String>, Vec<String>);
+/// Whose report, from which server's libraries, without which of them, over which period.
+type Key = (Option<String>, Option<String>, Vec<String>, Period);
 
 pub struct InsightsService {
     lib: Arc<Library>,
@@ -26,16 +27,32 @@ pub struct InsightsService {
 }
 
 impl InsightsService {
+    /// The catalogue folders the libraries switched on keep (`without`, of the server `want`, else the first connected),
+    /// for every part of Insights; `None` when none is switched off.
+    pub fn folders_on(&self, want: Option<&str>, without: &[String]) -> Option<std::collections::HashSet<i64>> {
+        if without.is_empty() {
+            return None;
+        }
+        let connected = self.lib.connected();
+        let server = want.and_then(|w| connected.iter().find(|(a, _)| a.cfg.id == w)).or_else(|| connected.first());
+        let off: Vec<std::path::PathBuf> = match server {
+            Some((a, _)) => super::library::folders_switched_off(a, without).into_iter().map(std::path::PathBuf::from).collect(),
+            None => Vec::new(),
+        };
+        Some(self.lib.catalogue().folders().iter().enumerate().filter(|(_, f)| !off.contains(f)).map(|(i, _)| i as i64).collect())
+    }
+
     pub(super) fn new(lib: Arc<Library>) -> Self {
         Self { lib, kept: Mutex::new(Vec::new()) }
     }
 
     /// The report, Collection's figures from the libraries not in `without` (`source/library` keys) of the server
-    /// `want` (the one followed; else the first connected), as a crate draws from them.
-    pub async fn get(&self, want: Option<&str>, without: &[String]) -> Result<Arc<Insights>> {
+    /// `want` (the one followed; else the first connected), as a crate draws from them, and of the albums that came in
+    /// `period` (the map: whenever they came).
+    pub async fn get(&self, want: Option<&str>, without: &[String], period: Period) -> Result<Arc<Insights>> {
         let mut off_keys = without.to_vec();
         off_keys.sort();
-        let key: Key = (super::playlists::asking_account(), want.map(str::to_string), off_keys);
+        let key: Key = (super::playlists::asking_account(), want.map(str::to_string), off_keys, period);
         let mut kept = self.kept.lock().await;
         kept.retain(|(at, _, _)| epoch_now() - at < KEEP_SECS);
         if let Some((_, _, report)) = kept.iter().find(|(_, k, _)| *k == key) {
@@ -46,14 +63,15 @@ impl InsightsService {
             Err(_) => Vec::new(),
         };
         let (catalogue, rules) = (self.lib.catalogue(), self.lib.tag_rules());
-        let connected = self.lib.connected();
-        let server = want.and_then(|w| connected.iter().find(|(a, _)| a.cfg.id == w)).or_else(|| connected.first());
-        let off: Vec<std::path::PathBuf> = match server {
-            Some((a, _)) if !without.is_empty() => super::library::folders_switched_off(a, without).into_iter().map(std::path::PathBuf::from).collect(),
-            _ => Vec::new(),
-        };
         let folders = catalogue.folders();
-        let shown: Vec<i64> = folders.iter().enumerate().filter(|(_, f)| !off.contains(f)).map(|(i, _)| i as i64).collect();
+        let shown: Vec<i64> = match self.folders_on(want, without) {
+            Some(on) => {
+                let mut v: Vec<i64> = on.into_iter().collect();
+                v.sort();
+                v
+            }
+            None => (0..folders.len() as i64).collect(),
+        };
         let incoming_paths = self.lib.folders().incoming;
         let incoming: std::collections::HashSet<i64> =
             folders.iter().enumerate().filter(|(_, f)| incoming_paths.iter().any(|p| std::path::Path::new(p) == f.as_path())).map(|(i, _)| i as i64).collect();
@@ -61,29 +79,49 @@ impl InsightsService {
         let served = crate::serve::instance();
         // Whose plays: the request's account, read here (the blocking task below is not the request's).
         let user = served.as_ref().and_then(|s| s.current_user());
+        let since = period.since(epoch_now());
         let report = tokio::task::spawn_blocking(move || -> Result<Insights> {
-            let rows = catalogue.track_rows(0)?;
-            let mut shown_rows = Vec::new();
-            for &folder in &shown {
-                if folder == 0 {
-                    shown_rows.extend(rows.iter().cloned());
-                    continue;
+            // When each file's album came (Cratarr's own library), for the period.
+            let arrivals = match &served {
+                Some(s) => Some(s.library.album_arrivals()?),
+                None => None,
+            };
+            let came: std::collections::HashMap<(i64, &str), i64> = match &arrivals {
+                Some((albums, songs)) => {
+                    let at: std::collections::HashMap<&str, i64> = albums.iter().filter_map(|(id, _, c)| c.map(|c| (id.as_str(), c))).collect();
+                    songs.iter().filter_map(|(_, a, f, rel)| at.get(a.as_str()).map(|c| ((*f, rel.as_str()), *c))).collect()
                 }
-                // Another folder's albums are its own, whatever their path inside it.
-                shown_rows.extend(catalogue.track_rows(folder)?.into_iter().map(|mut r| {
-                    r.rel = format!("{folder}:{}", r.rel);
-                    r
-                }));
+                None => Default::default(),
+            };
+            // An album with no known arrival is not in a period (nothing is made up); no library open, no period.
+            let in_period = |folder: i64, rel: &str| match since {
+                Some(s) if arrivals.is_some() => came.get(&(folder, rel)).is_some_and(|c| *c >= s),
+                _ => true,
+            };
+            let rows = catalogue.track_rows(0)?;
+            let (mut on_rows, mut shown_rows) = (Vec::new(), Vec::new());
+            for &folder in &shown {
+                let folder_rows = if folder == 0 { rows.clone() } else { catalogue.track_rows(folder)? };
+                for mut r in folder_rows {
+                    let keep = in_period(folder, &r.rel);
+                    // Another folder's albums are its own, whatever their path inside it.
+                    if folder != 0 {
+                        r.rel = format!("{folder}:{}", r.rel);
+                    }
+                    if keep {
+                        shown_rows.push(r.clone());
+                    }
+                    on_rows.push(r);
+                }
             }
-            let mut report = crate::insights::build(&rows, &shown_rows, &rules, &playlists);
-            if let Some(served) = served {
+            let mut report = crate::insights::build(&rows, &shown_rows, &on_rows, &rules, &playlists);
+            if let (Some(served), Some((albums, songs))) = (served, &arrivals) {
                 let (played, starred) = match &user {
                     Some(u) => (served.userdata.played(u)?, served.userdata.starred(u, crate::userdata::Kind::Song)?.into_iter().collect()),
                     None => Default::default(),
                 };
-                let (albums, songs) = served.library.album_arrivals()?;
                 // Months in UTC: an album that came in the night's first hour may fall in the month before.
-                report.overview = Some(crate::insights::overview(&albums, &songs, &shown.iter().copied().collect(), &incoming, &played, &starred, epoch_now(), 0));
+                report.overview = Some(crate::insights::overview(albums, songs, &shown.iter().copied().collect(), &incoming, &played, &starred, since, epoch_now(), 0));
             }
             Ok(report)
         })

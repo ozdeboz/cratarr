@@ -1501,7 +1501,7 @@ export type Layered = { name: string; n: number; listed: number };
 export type ListeningTop = { id: string; name: string; by?: string; plays: number; secs: number };
 /** The asking account's listening over a week, a month or a year (from the play log, decision 0064). */
 export type Listening = {
-  period: 'week' | 'month' | 'year';
+  period: 'week' | 'month' | 'year' | 'all';
   from: number;
   /** Where the log begins (epoch s); null while it is empty. */
   log_from: number | null;
@@ -1516,8 +1516,11 @@ export type Listening = {
   albums: ListeningTop[];
   tracks: ListeningTop[];
 };
-export const getListening = (period: Listening['period']) =>
-  request<Listening>(`/api/history/listening?period=${period}&tz=${-new Date().getTimezoneOffset() * 60}`);
+/** Of the libraries switched on (`without`, of the server followed: Insights' switches). */
+export const getListening = (period: Listening['period'], source?: string, without?: string[]) => {
+  const q = new URLSearchParams({ period, tz: String(-new Date().getTimezoneOffset() * 60) });
+  return request<Listening>(`/api/history/listening${crateQuery(q, source, { without })}`);
+};
 
 /** The listener's taste and what they avoid, from the one similarity (app/taste.rs, a5): Listening's Profile. */
 export type ProfileWord = { name: string; w: number };
@@ -1536,7 +1539,13 @@ export type ProfileSide = {
   moods: ProfileMood[];
 };
 export type TasteProfile = { taste: ProfileSide; avoid: ProfileSide };
-export const getTasteProfile = () => request<TasteProfile>('/api/history/profile');
+/** `without` comma-separated, as like-curve takes it; the period narrows plays and skips. */
+export const getTasteProfile = (source?: string, without?: string[], period: Listening['period'] = 'all') => {
+  const q = new URLSearchParams({ period });
+  if (source) q.set('source', source);
+  if (without?.length) q.set('without', without.join(','));
+  return request<TasteProfile>(`/api/history/profile?${q}`);
+};
 
 export type Insights = {
   library: {
@@ -1590,7 +1599,8 @@ export type Proximity = {
 export type Signal = 'tracks' | 'genre' | 'artists';
 
 /** Collection's figures from the libraries switched on (`without`) of the server followed (decision 0065). */
-export const getInsights = (source?: string, without?: string[]) => request<Insights>(`/api/insights${crateQuery(new URLSearchParams(), source, { without })}`);
+export const getInsights = (source?: string, without?: string[], period: Listening['period'] = 'all') =>
+  request<Insights>(`/api/insights${crateQuery(new URLSearchParams({ period }), source, { without })}`);
 
 /** A sync group's visuals (decision 0046, amended): the settings that shape the picture, and the version the server
  *  gave them. None yet: a 404. */

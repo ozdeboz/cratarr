@@ -23,6 +23,11 @@ in the same glass; the chosen one filled, never touching the back button. A tab'
 below, inside the pill, which grows to hold it (the owner, 2026-10-23): Collection's (Overview, Genres, Artists,
 Playlists). Centred while no panel is open; at the row's end beside one.
 
+**Two choices are Insights' own, the same in every tab's panel** (the owner, 2026-10-23): the libraries (one switch
+each; Collection, History, Profile and the map count only what is in those switched on) and the period (the past week,
+month or year, or all: Listening over it, Collection the albums that came in it, Profile's plays and skips; not the
+map, which is how the playlists relate now).
+
 **Insights' own panel** (the owner, 2026-10-23) holds how the open tab is viewed, never the pill: Collection's libraries
 (a switch each, the page's library switches as on Library and Crates; its figures count those switched on), Listening's
 period, the Map's filters. Opened by a button at the row's end, closed by the panel's ✕ (top left). Beside the page at

@@ -564,16 +564,29 @@ impl Library {
     }
 
     /// Counts, for the log and tests: (songs, albums, artists).
-    /// Every album's id, catalogue folder and when it came (`created`), and every song's id and album: Insights'
-    /// overview.
+    /// Every album's id, catalogue folder and when it came (`created`), and every song's id, album, catalogue folder and
+    /// place in it: Insights' overview and its period.
     #[allow(clippy::type_complexity)]
-    pub fn album_arrivals(&self) -> Result<(Vec<(String, i64, Option<i64>)>, Vec<(String, String)>)> {
+    pub fn album_arrivals(&self) -> Result<(Vec<(String, i64, Option<i64>)>, Vec<(String, String, i64, String)>)> {
         let db = self.db();
         let mut st = db.prepare("SELECT id, folder, created FROM albums")?;
         let albums = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
-        let mut st = db.prepare("SELECT id, album_id FROM songs")?;
-        let songs = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        let mut st = db.prepare("SELECT id, album_id, folder, rel FROM songs")?;
+        let songs = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?;
         Ok((albums, songs))
+    }
+
+    /// Each of these songs' catalogue folder (those the library has).
+    pub fn song_folders(&self, ids: &[String]) -> Result<std::collections::HashMap<String, i64>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT folder FROM songs WHERE id = ?1")?;
+        let mut out = std::collections::HashMap::new();
+        for id in ids {
+            if let Ok(f) = st.query_row([id], |r| r.get::<_, i64>(0)) {
+                out.insert(id.clone(), f);
+            }
+        }
+        Ok(out)
     }
 
     pub fn counts(&self) -> Result<(u64, u64, u64)> {

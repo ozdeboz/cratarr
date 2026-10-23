@@ -122,11 +122,12 @@ pub const GROWTH_MONTHS: i64 = 24;
 #[allow(clippy::too_many_arguments)]
 pub fn overview(
     albums: &[(String, i64, Option<i64>)],
-    songs: &[(String, String)],
+    songs: &[(String, String, i64, String)],
     shown: &HashSet<i64>,
     incoming: &HashSet<i64>,
     played: &HashSet<String>,
     starred: &HashSet<String>,
+    since: Option<i64>,
     now: i64,
     tz: i64,
 ) -> Overview {
@@ -142,14 +143,20 @@ pub fn overview(
     let this = month_of(now);
     let mut added: BTreeMap<i64, usize> = ((this - GROWTH_MONTHS + 1)..=this).map(|m| (m, 0)).collect();
     let shown_albums: HashSet<&str> = albums.iter().filter(|(_, f, _)| shown.contains(f)).map(|(id, _, _)| id.as_str()).collect();
+    // Growth is always its two years; Heard the albums of the period (`since`: those that came then).
     for (_, _, created) in albums.iter().filter(|(id, _, _)| shown_albums.contains(id.as_str())) {
         if let Some(n) = created.and_then(|c| added.get_mut(&month_of(c))) {
             *n += 1;
         }
     }
     out.added = added.into_iter().map(|(m, n)| Count { name: format!("{}-{:02}", m.div_euclid(12), m.rem_euclid(12) + 1), n }).collect();
+    let period_albums: HashSet<&str> = albums
+        .iter()
+        .filter(|(id, _, c)| shown_albums.contains(id.as_str()) && since.is_none_or(|s| c.is_some_and(|c| c >= s)))
+        .map(|(id, _, _)| id.as_str())
+        .collect();
     let mut heard_albums: HashSet<&str> = HashSet::new();
-    for (id, album) in songs.iter().filter(|(_, a)| shown_albums.contains(a.as_str())) {
+    for (id, album, _, _) in songs.iter().filter(|(_, a, _, _)| period_albums.contains(a.as_str())) {
         out.tracks += 1;
         if played.contains(id) {
             out.tracks_heard += 1;
@@ -157,7 +164,7 @@ pub fn overview(
         }
         out.favourites += usize::from(starred.contains(id));
     }
-    out.albums = shown_albums.len();
+    out.albums = period_albums.len();
     out.albums_never = out.albums - heard_albums.len();
     out
 }
@@ -220,7 +227,7 @@ pub struct SharedTrack {
 /// `shown`: the tracks of the libraries switched on, which Collection's figures count (the owner, 2026-10-23: "one
 /// toggle per library"), its playlists' among them: how many of those tracks and albums are in one, and which of them
 /// are in the most (Incoming's are in none: a playlist's lines are the Music folder's). `playlists`: (name, entry lines, missing tracks), as the playlist store has them.
-pub fn build(rows: &[TrackRow], shown: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<String>, usize)]) -> Insights {
+pub fn build(rows: &[TrackRow], shown: &[TrackRow], on: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<String>, usize)]) -> Insights {
     let in_any: HashSet<&str> = playlists.iter().flat_map(|(_, l, _)| l.iter().map(String::as_str)).collect();
     let library = library_stats(shown, rules, &in_any);
 
@@ -250,7 +257,17 @@ pub fn build(rows: &[TrackRow], shown: &[TrackRow], rules: &Rules, playlists: &[
         most_shared,
     };
 
-    Insights { library, playlists: playlists_view, proximity: proximity(rows, rules, playlists), overview: None }
+    // The map by the libraries switched on too (the switches are all of Insights', the owner, 2026-10-23): each playlist
+    // by its tracks there (a missing track still counts, as before); a playlist with none there is not on it. Not by
+    // the period (`on`: the libraries' tracks, whenever they came).
+    let music_rels: HashSet<&str> = rows.iter().map(|r| r.rel.as_str()).collect();
+    let on_rels: HashSet<&str> = on.iter().map(|r| r.rel.as_str()).collect();
+    let mapped: Vec<(String, Vec<String>, usize)> = playlists
+        .iter()
+        .filter(|(_, l, _)| l.iter().any(|x| on_rels.contains(x.as_str())))
+        .map(|(n, l, d)| (n.clone(), l.iter().filter(|x| on_rels.contains(x.as_str()) || !music_rels.contains(x.as_str())).cloned().collect(), *d))
+        .collect();
+    Insights { library, playlists: playlists_view, proximity: proximity(rows, rules, &mapped), overview: None }
 }
 
 /// How close every two playlists are, by tracks, genre and artists.
@@ -545,13 +562,17 @@ mod tests {
             ("i1".to_string(), 1, Some(now - 41 * day)),
             ("i2".to_string(), 1, Some(now - 3 * day)),
         ];
-        let songs: Vec<(String, String)> = [("s1", "a1"), ("s2", "a1"), ("s3", "a2"), ("s4", "a3"), ("s5", "i1")].iter().map(|(s, a)| (s.to_string(), a.to_string())).collect();
+        let songs: Vec<(String, String, i64, String)> =
+            [("s1", "a1"), ("s2", "a1"), ("s3", "a2"), ("s4", "a3"), ("s5", "i1")].iter().map(|(s, a)| (s.to_string(), a.to_string(), 0, format!("{a}/{s}"))).collect();
         let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<HashSet<String>>();
-        let o = overview(&albums, &songs, &HashSet::from([0]), &HashSet::from([1]), &set(&["s1", "s5"]), &set(&["s3"]), now, 0);
+        let o = overview(&albums, &songs, &HashSet::from([0]), &HashSet::from([1]), &set(&["s1", "s5"]), &set(&["s3"]), None, now, 0);
         assert_eq!((o.incoming_albums, o.incoming_since), (2, Some(now - 41 * day)));
         assert_eq!(o.added.len(), 24);
         assert_eq!((o.added[23].name.as_str(), o.added[23].n, o.added.iter().map(|c| c.n).sum::<usize>()), ("2026-10", 1, 2), "a3 has no arrival");
         assert_eq!((o.tracks, o.tracks_heard, o.albums, o.albums_never, o.favourites), (4, 1, 3, 2, 1), "Incoming switched off: s5 not counted");
+        // The past month: only a1 came then (a3's arrival is not known); Growth stays its two years.
+        let m = overview(&albums, &songs, &HashSet::from([0]), &HashSet::from([1]), &set(&["s1", "s5"]), &set(&["s3"]), Some(now - 30 * day), now, 0);
+        assert_eq!((m.tracks, m.tracks_heard, m.albums, m.albums_never, m.added.iter().map(|c| c.n).sum::<usize>()), (2, 1, 1, 0, 2));
     }
 
     #[test]
@@ -574,7 +595,7 @@ mod tests {
             ("Evening".to_string(), lines(&[air1, air2, "Gone/01.mp3"]), 1),
             ("Party".to_string(), lines(&[kiara]), 0),
         ];
-        let i = build(&library(), &library(), &Rules::default(), &playlists);
+        let i = build(&library(), &library(), &library(), &Rules::default(), &playlists);
         let p = &i.playlists;
         assert_eq!((p.playlists, p.distinct_tracks, p.missing), (3, 4, 1));
         assert_eq!((p.library_tracks_in_playlists, p.albums_without_playlist), (3, 1), "only the untagged album is in none");
@@ -583,9 +604,9 @@ mod tests {
         // Music switched off, another folder's tracks only (prefixed, as the service reads them): none in a playlist,
         // the playlists themselves and how close they are as before.
         let other: Vec<TrackRow> = library().into_iter().map(|mut r| (r.rel = format!("1:{}", r.rel), r).1).collect();
-        let o = build(&library(), &other, &Rules::default(), &playlists);
+        let o = build(&library(), &other, &other, &Rules::default(), &playlists);
         assert_eq!((o.playlists.library_tracks_in_playlists, o.playlists.albums_without_playlist, o.playlists.most_shared.len()), (0, o.library.albums, 0));
-        assert_eq!((o.playlists.playlists, o.proximity.links.len()), (3, i.proximity.links.len()));
+        assert_eq!((o.playlists.playlists, o.proximity.playlists.len()), (3, 0), "the playlists are still counted; the map has none");
         let x = &i.proximity;
         assert_eq!(x.playlists.iter().map(|p| p.tracks).collect::<Vec<_>>(), vec![3, 3, 1]);
         let chill_evening = x.links.iter().find(|l| (l.a, l.b) == (0, 1)).expect("Chill and Evening are close");

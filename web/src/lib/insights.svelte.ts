@@ -32,10 +32,11 @@ class InsightsStore {
   load() {
     const source = prefs.source || undefined;
     const without = hiddenLibraries();
-    const asked = JSON.stringify([source, without]);
+    const period = prefs.insightsPeriod;
+    const asked = JSON.stringify([source, without, period]);
     if (this.#asked === asked) return;
     this.#asked = asked;
-    getInsights(source, without).then(
+    getInsights(source, without, period).then(
       (d) => {
         if (this.#asked !== asked) return;
         this.data = d;

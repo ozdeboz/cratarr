@@ -1,8 +1,8 @@
 // What Insights' panel holds (the owner, 2026-10-23: "a standardized way of implementing these controls in the insights
 // panel"): each tab says what it offers, as groups of controls of a few kinds, and the panel (lib/InsightsPanel) draws
 // every kind one way, as the settings' rows (lib/settings/Group, Item). A tab adds a control here, never markup there.
-// Collection: its libraries, one switch each (the page's library switches, as on Library and Crates; the last one on
-// stays on); on Genres and Artists, what the bars count. Listening: the period. Map: what brings playlists together.
+// Every tab: the period (not the map) and the libraries, one switch each (Insights' own, the same everywhere; the last
+// one on stays on). Collection's Genres and Artists: what the bars count. Map: what brings playlists together.
 import { getLibraries, type LibrariesView } from './api';
 import { prefs } from './prefs.svelte';
 import { known, libraryShown, showLibrary } from './sources.svelte';
@@ -30,7 +30,9 @@ const COUNTS = [
   { value: 'listed', label: 'In a playlist' },
 ];
 
-function collection(): ControlGroup[] {
+/** The libraries, one switch each: Insights' own, the same in every tab's panel (the owner, 2026-10-23: "the library
+ *  switches are like global for the insights"), and the page's library switches as on Library and Crates. */
+function libraryGroup(): ControlGroup[] {
   askLibraries();
   // The server the figures come from: the one followed, else the first (as the server picks it).
   const sid = prefs.source || known.list[0]?.id;
@@ -38,12 +40,7 @@ function collection(): ControlGroup[] {
   if (!sid || !view) return [];
   const used = view.server_libraries.filter((l) => view.libraries.music.includes(l.id) || view.libraries.incoming.includes(l.id));
   const on = used.filter((l) => libraryShown(sid, l.id)).length;
-  const counted: ControlGroup[] =
-    prefs.insightsCollection === 'genres' || prefs.insightsCollection === 'artists'
-      ? [{ title: null, controls: [{ kind: 'choice', name: 'Count', options: COUNTS, get: () => prefs.insightsCount, set: (v) => (prefs.insightsCount = v as typeof prefs.insightsCount) }] }]
-      : [];
   return [
-    ...counted,
     {
       title: 'Libraries',
       controls: used.map((l) => ({
@@ -58,21 +55,22 @@ function collection(): ControlGroup[] {
   ];
 }
 
+const collection = (): ControlGroup[] =>
+  prefs.insightsCollection === 'genres' || prefs.insightsCollection === 'artists'
+    ? [{ title: null, controls: [{ kind: 'choice', name: 'Count', options: COUNTS, get: () => prefs.insightsCount, set: (v) => (prefs.insightsCount = v as typeof prefs.insightsCount) }] }]
+    : [];
+
 const PERIODS = [
   { value: 'week', label: 'Week' },
   { value: 'month', label: 'Month' },
   { value: 'year', label: 'Year' },
+  { value: 'all', label: 'All' },
 ];
-// Profile has nothing to choose yet: no panel button there.
-const listening = (): ControlGroup[] =>
-  prefs.listeningView === 'profile'
+/** The period: Insights' own, the same everywhere but the map (which is how the playlists relate now). */
+const periodGroup = (): ControlGroup[] =>
+  prefs.insightsTab === 'map'
     ? []
-    : [
-  {
-    title: null,
-    controls: [{ kind: 'choice', name: 'Period', options: PERIODS, get: () => prefs.listeningPeriod, set: (v) => (prefs.listeningPeriod = v as typeof prefs.listeningPeriod) }],
-  },
-];
+    : [{ title: null, controls: [{ kind: 'choice', name: 'Period', options: PERIODS, get: () => prefs.insightsPeriod, set: (v) => (prefs.insightsPeriod = v as typeof prefs.insightsPeriod) }] }];
 
 const SIGNALS = [
   { id: 'tracks', label: 'Shared tracks' },
@@ -86,6 +84,9 @@ const map = (): ControlGroup[] => [
   },
 ];
 
-/** The open tab's controls. */
-export const insightsControls = (): ControlGroup[] =>
-  prefs.insightsTab === 'map' ? map() : prefs.insightsTab === 'listening' ? listening() : collection();
+/** The period, the open tab's own controls, then the libraries. */
+export const insightsControls = (): ControlGroup[] => [
+  ...periodGroup(),
+  ...(prefs.insightsTab === 'map' ? map() : prefs.insightsTab === 'collection' ? collection() : []),
+  ...libraryGroup(),
+];

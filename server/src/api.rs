@@ -2554,10 +2554,13 @@ struct ListeningQuery {
     /// The page's time zone: seconds east of UTC (its days begin at its midnight).
     #[serde(default)]
     tz: i64,
+    /// The server followed, for the libraries switched on (`without` in the raw query).
+    source: Option<String>,
 }
 
-/// Insights' Listening (decision 0065): the asking account's listening over a week, a month or a year.
-async fn history_listening(Query(q): Query<ListeningQuery>) -> Result<Json<crate::app::history::Listening>, ApiError> {
+/// Insights' Listening (decision 0065): the asking account's listening over a week, a month or a year, of the tracks in
+/// the libraries switched on (`without`, Insights' switches).
+async fn history_listening(State(app): State<Arc<App>>, Query(q): Query<ListeningQuery>, RawQuery(raw): RawQuery) -> Result<Json<crate::app::history::Listening>, ApiError> {
     use crate::app::history::{self, Period, SongFacts};
     let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     let user = served.current_user().or_else(|| served.users.owner()).ok_or_else(|| ToggleError::Refused("Nobody is signed in.".into()))?;
@@ -2566,8 +2569,16 @@ async fn history_listening(Query(q): Query<ListeningQuery>) -> Result<Json<crate
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
     // Back far enough for its taste over time (further than the period), whatever the time zone.
     let since = period.reaches_back(now);
+    let on = app.insights.folders_on(q.source.as_deref(), &without_of(raw.as_deref()));
     let listening = tokio::task::spawn_blocking(move || -> anyhow::Result<history::Listening> {
-        let (rows, log_from) = history::heard(&served.userdata, &user, since)?;
+        let (mut rows, log_from) = history::heard(&served.userdata, &user, since)?;
+        if let Some(on) = on {
+            let mut ids: Vec<String> = rows.iter().map(|r| r.song.clone()).collect();
+            ids.sort();
+            ids.dedup();
+            let folders = served.library.song_folders(&ids)?;
+            rows.retain(|r| folders.get(&r.song).is_some_and(|f| on.contains(f)));
+        }
         let mut ids: Vec<String> = rows.iter().map(|r| r.song.clone()).collect();
         ids.sort();
         ids.dedup();
@@ -2639,9 +2650,17 @@ async fn preview_lidarr(
     Ok(Json(app.settings.preview_lidarr(b).await?))
 }
 
-/// Insights (decision 0065): Collection's figures from the libraries switched on (`without`), of the server followed.
-async fn insights(State(app): State<Arc<App>>, Query(f): Query<Follow>, RawQuery(q): RawQuery) -> Result<Json<crate::insights::Insights>, ApiError> {
-    Ok(Json(app.insights.get(f.source.as_deref(), &without_of(q.as_deref())).await.map(|r| (*r).clone()).map_err(ToggleError::from)?))
+#[derive(Deserialize)]
+struct InsightsQuery {
+    source: Option<String>,
+    period: Option<crate::app::history::Period>,
+}
+
+/// Insights (decision 0065): Collection's figures from the libraries switched on (`without`), of the server followed,
+/// of the albums that came in the period (all when none is given).
+async fn insights(State(app): State<Arc<App>>, Query(f): Query<InsightsQuery>, RawQuery(q): RawQuery) -> Result<Json<crate::insights::Insights>, ApiError> {
+    let period = f.period.unwrap_or(crate::app::history::Period::All);
+    Ok(Json(app.insights.get(f.source.as_deref(), &without_of(q.as_deref()), period).await.map(|r| (*r).clone()).map_err(ToggleError::from)?))
 }
 
 async fn preview(State(app): State<Arc<App>>, Json(b): Json<PreviewBody>) -> Result<Json<SourceView>, ApiError> {

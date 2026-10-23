@@ -8,17 +8,19 @@
   import { albumCoverUrl, coverUrl, getListening, type Listening, type ListeningTop } from './api';
   import Cover from './Cover.svelte';
   import PageLoading from './PageLoading.svelte';
+  import { hiddenLibraries } from './listFilter.svelte';
   import { prefs } from './prefs.svelte';
 
   let data = $state<Listening | null>(null);
   let error = $state<string | null>(null);
 
   $effect(() => {
-    const p = prefs.listeningPeriod;
+    const p = prefs.insightsPeriod;
+    const [source, without] = [prefs.source || undefined, hiddenLibraries()];
     let gone = false;
     data = null;
     error = null;
-    getListening(p).then(
+    getListening(p, source, without).then(
       (d) => !gone && (data = d),
       (e) => !gone && (error = e instanceof Error ? e.message : 'Unexpected error'),
     );
@@ -41,9 +43,11 @@
     if (data.period === 'month') return i % 5 === 0 ? day(start, { day: 'numeric' }) : '';
     const d = new Date(start * 1000);
     const before = new Date((start - 7 * 86400) * 1000);
+    // All, over more than a year of weeks: the year where one begins.
+    if (data.time.length > 60) return i === 0 || d.getFullYear() !== before.getFullYear() ? day(start, { year: '2-digit' }) : '';
     return i === 0 || d.getMonth() !== before.getMonth() ? day(start, { month: 'narrow' }) : '';
   }
-  const when = (start: number) => (data?.period === 'year' ? `Week of ${day(start, { day: 'numeric', month: 'short' })}` : day(start, { weekday: 'short', day: 'numeric', month: 'short' }));
+  const when = (start: number) => (data?.period === 'year' || data?.period === 'all' ? `Week of ${day(start, { day: 'numeric', month: 'short' })}` : day(start, { weekday: 'short', day: 'numeric', month: 'short' }));
 
   const tallest = $derived(Math.max(1, ...(data?.time.map((t) => t.secs) ?? [])));
   // Taste over time: one line per genre (the owner: "the way last.fm does it"), its share of each step's listening.
@@ -96,14 +100,14 @@
   {:else if !data}
     <PageLoading />
   {:else if !heard}
-    <p class="empty">Nothing heard this {data.period}{#if logged}; kept since {logged}{/if}.</p>
+    <p class="empty">Nothing heard {data.period === 'all' ? 'yet' : `this ${data.period}`}{#if logged}; kept since {logged}{/if}.</p>
   {:else}
     <section aria-label="Listening time">
       <div class="tiles">
         <div class="tile"><b>{duration(data.total_secs)}</b><span>listened</span></div>
         <div class="tile"><b>{data.plays.toLocaleString()}</b><span>{data.plays === 1 ? 'track' : 'tracks'}</span></div>
       </div>
-      <div class="columns" role="list" aria-label="Time listened per {data.period === 'year' ? 'week' : 'day'}">
+      <div class="columns" role="list" aria-label="Time listened per {data.period === 'year' || data.period === 'all' ? 'week' : 'day'}">
         {#each data.time as t, i (t.start)}
           <div class="column" role="listitem" title={`${when(t.start)}: ${duration(t.secs)}`}>
             <span class="col"><i style:height={`${(100 * t.secs) / tallest}%`}></i></span>
