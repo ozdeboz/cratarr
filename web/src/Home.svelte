@@ -9,6 +9,7 @@
   import { addedOn, albumUses, library, loadAlbumUses, readLibrary } from './lib/albums.svelte';
   import { albumCoverUrl } from './lib/api';
   import Cover from './lib/Cover.svelte';
+  import HomeNeeds from './lib/HomeNeeds.svelte';
   import { LIKE, viewGenre, viewLike } from './lib/crates.svelte';
   import { DEVICE } from './lib/deviceMusic.svelte';
   import Icon from './lib/Icon.svelte';
@@ -167,7 +168,8 @@
     </section>
   {/if}
 
-  <!-- Needs you: claude-632's lib/HomeNeeds (hides itself when nothing needs you). -->
+  <!-- Needs you (lib/HomeNeeds): an administrator's, shown only when something waits. -->
+  <HomeNeeds />
 </div>
 
 <style>
