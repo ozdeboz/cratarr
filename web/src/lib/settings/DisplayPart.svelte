@@ -1,9 +1,10 @@
 <script lang="ts">
   // Display: this browser's own look; acts at once. Its Reset: the theme and the player's row back to their defaults
-  // (lib/settings/reset). Levelling went to This device (the owner, 2026-10-24: a play affair, not a display one). The player's row (the owner, 2026-10-19): shown or hidden, and the
-  // facts beside its info button (lib/settings/PlayerRowList). Profile (the owner, 2026-10-23): the lists' profiles
-  // (lib/ListProfile), open or folded for every list, the row a folded one keeps, and each row on or off; and the
-  // artists line under a playlist's or a crate's genres.
+  // (lib/settings/reset). Levelling went to This device (the owner, 2026-10-24: a play affair, not a display one). The
+  // player's row (the owner, 2026-10-19): shown or hidden, and the facts beside its info button
+  // (lib/settings/PlayerRowList). Profile (the owner, 2026-10-23): the lists' profiles (lib/ListProfile), open or folded
+  // for every list, the row a folded one keeps, and each row on or off. A list's Typical artists always show where it has
+  // them (the owner, 2026-10-24: no switch).
   import Seg from '../Seg.svelte';
   import { inApp } from '../app.svelte';
   import { PROFILE_ROWS, prefs, type Theme } from '../prefs.svelte';
@@ -52,5 +53,4 @@
     onchange={(v) => (prefs.profileRows = v)}
     fold={{ at: Math.min(prefs.profileFoldAt, prefs.profileRows.length), onchange: (at) => (prefs.profileFoldAt = at) }}
   />
-  <Item name="Artists" line="Under the genres of playlists and crates" toggle={{ checked: prefs.listArtists, onchange: (on) => (prefs.listArtists = on) }} />
 </Group>

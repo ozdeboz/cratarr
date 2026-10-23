@@ -945,7 +945,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     return parts.filter((x) => x !== null && x !== undefined && x !== '').join(' • ');
   });
   // Not while a crate is changed: its genres are the editor's to choose.
-  const shownArtists = $derived(prefs.listArtists && !album && !artist && !multi ? ((previewProfile ?? profile)?.artists ?? []) : []);
+  const shownArtists = $derived(!album && !artist && !multi ? ((previewProfile ?? profile)?.artists ?? []) : []);
   const shownGenres = $derived(multi || crateEditing ? [] : plain ? (listGenres ?? []) : (point?.genres ?? []));
 
   // As Symfonium's album screen: two floating pills over the cover (back and ✕; the filter and where it plays), and the
