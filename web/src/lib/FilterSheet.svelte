@@ -1,8 +1,8 @@
 <script lang="ts">
   // The filter, after Symfonium's source filter (opened from the funnel in a floating pill, lib/TopPill): first the
   // list's own filter, remembered per kind of list (decisions 0060 and 0061): how many it lets through, its conditions
-  // as cards (lib/ConditionList: a crate's, unsaved; Any or All where the items hold tracks), the kind's own switches,
-  // then Clear and Save as crate. Then, last, the one filter that holds everywhere: a card per server this browser can
+  // as cards (lib/ConditionList: a crate's, unsaved; any or all of each item's tracks where the items hold them), and
+  // the kind's own switches. Then, last, the one filter that holds everywhere: a card per server this browser can
   // follow, with its kind and its libraries. On the followed server's card the libraries are switches on the Library
   // and on Crates (decision 0034; a crate fills from every library switched on, the owner, 2026-10-23), every used
   // one, remembered as the server is; the last one on stays on, so the page never filters down to nothing; elsewhere a
@@ -17,9 +17,8 @@
   import Switch from './Switch.svelte';
   import ConditionList from './ConditionList.svelte';
   import type { ListAxis } from './ConditionCard.svelte';
-  import { clearFilter, filterOf, filtersOn, hiddenLibraries, inView, setConditions, setSwitch, switchOn } from './listFilter.svelte';
+  import { filterOf, filtersOn, hiddenLibraries, inView, setConditions, setSwitch, switchOn } from './listFilter.svelte';
   import { SWITCHES } from './pageView.svelte';
-  import { startCrate } from './crates.svelte';
   import { filterList, getCrateAxes, getLibraries, getSettings, getStatus, type LibrariesView, type LibraryUse } from './api';
   import { me } from './me.svelte';
   import Icon from './Icon.svelte';
@@ -65,14 +64,6 @@
       (e) => toast.fail(e, "The filter's conditions couldn't be loaded"),
     );
   });
-  /** Save as crate: the conditions that apply, a new crate in the panel's editor. */
-  function saveAsCrate() {
-    const conditions = filter.conditions
-      .filter((c) => c.enabled !== false)
-      .map(({ axis, not, value }) => ({ axis, not, value }));
-    onclose();
-    startCrate('', conditions);
-  }
 
   // The servers: the status call fills the list when no playlist poll has yet.
   $effect(() => {
@@ -143,12 +134,6 @@
         {#each switches as w (w.key)}
           <Switch card label={w.label} checked={switchOn(list, w.key)} onchange={(on) => setSwitch(list, w.key, on)} />
         {/each}
-      </div>
-    {/if}
-    {#if filtersOn(list) || filter.conditions.length}
-      <div class="buttons">
-        <button class="quiet" onclick={() => clearFilter(list)}>Clear</button>
-        {#if conditioned && filter.conditions.some((c) => c.enabled !== false)}<button class="strong" onclick={saveAsCrate}>Save as crate</button>{/if}
       </div>
     {/if}
     {#if page === 'library' && excluded.n}
@@ -261,41 +246,6 @@
     color: var(--muted);
     font-size: 14px;
   }
-
-  /* Clear beside Save as crate, Save as crate the stronger. */
-  .buttons {
-    display: flex;
-    gap: 10px;
-  }
-
-  .buttons button {
-    flex: 1;
-    min-height: 44px;
-    border: 0;
-    border-radius: 999px;
-    font: inherit;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .quiet {
-    background: var(--card);
-    color: var(--text);
-  }
-
-  .strong {
-    background: var(--accent);
-    color: var(--accent-text);
-  }
-
-
-
-
-
-
-
-
-
 
   /* A server's card: the followed one bordered in the accent (the row's "ticked" state) and checked. */
   .server {

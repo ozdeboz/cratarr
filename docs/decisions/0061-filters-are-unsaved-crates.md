@@ -32,10 +32,9 @@ one.
   unfolded, its whole control (values as chips with their counts, a range, Tempo's spread), Not (a pill, red when on)
   and Remove, and last, where the items hold tracks, its own line: "Matching any | all tracks in each album" (the owner:
   beside the switch, Any and All read as being about the chosen values). Folded, All is said in the summary ("…, all
-  tracks"). "+ Condition" adds one. Under the cards the kind's own switches, then Clear and Save as crate;
-  the sheet says how many the filter lets through ("312 of 2,861"). The list itself stays clean: only the funnel shows
+  tracks"). "+ Condition" adds one. Under the cards the kind's own switches (no Clear or Save as crate: the
+  owner, 2026-10-23, "two buttons I did not ask for"); the sheet says how many the filter lets through ("312 of 2,861"). The list itself stays clean: only the funnel shows
   how many filters are on.
-- **Save as crate** turns the filter in view into a crate; a crate's conditions can be applied as a filter to any list.
 - **Where it runs** (0059): the server's library on the server (it knows the genres and AudioMuse's values); the device's
   own music on the device, with the conditions it has facts for (genre, year, favourite), the others not offered there.
 - 0060's filter table becomes: these conditions for every kind, plus each kind's own switches (Upgrades waiting, Hide

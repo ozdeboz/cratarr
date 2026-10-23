@@ -28,11 +28,6 @@ export const activeConditions = (kind: string) => filterOf(kind).conditions.filt
 /** How many filters a kind of list has on (the funnel's count): its conditions that apply and its switches on. */
 export const filtersOn = (kind: string) => activeConditions(kind).length + filterOf(kind).on.length;
 
-/** Everything off again (the sheet's Clear). */
-export function clearFilter(kind: string) {
-  delete prefs.filters[kind];
-}
-
 /** The libraries switched off in the filter (`source/library`), for the server's crates (decision 0024, amended
  *  2026-10-23: a crate fills from every library switched on); none: undefined. */
 export const hiddenLibraries = () => (prefs.hiddenLibraries.length ? [...prefs.hiddenLibraries] : undefined);
