@@ -2427,6 +2427,31 @@ impl PlaylistService {
         Ok(out)
     }
 
+    /// Playlists like a playlist (one's own or a shared one; the owner, 2026-10-23: same kind under each list), among
+    /// those the asking account sees, the closest first, with how alike (0 to 100): radio::similar_lists.
+    pub async fn similar_playlists(&self, id: &str, count: usize) -> Result<Vec<(String, f64)>, ToggleError> {
+        let Some(serve) = crate::serve::instance() else { return Ok(Vec::new()) };
+        let lists = self.visible_lines().await?;
+        let id = id.to_string();
+        let (seed, candidates) = tokio::task::spawn_blocking(move || {
+            let cat = serve.catalogue();
+            let songs = |lines: &[String]| lines.iter().filter_map(|l| crate::serve::playlists::song_of_line(cat, l)).collect::<Vec<_>>();
+            let mut seed = Vec::new();
+            let mut candidates = Vec::new();
+            for (list, _, lines) in &lists {
+                if *list == id {
+                    seed = songs(lines);
+                } else {
+                    candidates.push((list.clone(), songs(lines)));
+                }
+            }
+            (seed, candidates)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        super::radio::similar_lists(seed, candidates, count).await
+    }
+
     /// One playlist's lines (one's own, or a shared one).
     pub async fn entries(&self, id: &str) -> Result<Vec<String>, ToggleError> {
         let r = self.reach(id)?;
