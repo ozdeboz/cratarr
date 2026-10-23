@@ -251,7 +251,11 @@ export async function startPlaylist(id: string, mode: PlayMode) {
 /** Several playlists (the selection's ⋮, decision 0025): their tracks one playlist after another, in the order given,
  *  each once, here or on the server's player. */
 export async function startPlaylists(ids: string[], mode: PlayMode) {
-  if (ids.length === 1) return startPlaylist(ids[0], mode);
+  // What plays is the server's choice (500 at most, a shuffle drawn from all of them; lib/play): one playlist by its
+  // id, several as their tracks, each once, in their order (the owner, 2026-10-23: a playlist's and a multi-select's
+  // Play and Shuffle too).
+  const { playCollection } = await import('./play.svelte');
+  if (ids.length === 1) return playCollection({ kind: 'playlist', id: ids[0] }, mode, ids[0]);
   let source = '';
   const seen = new Set<string>();
   const all: string[] = [];
@@ -261,16 +265,7 @@ export async function startPlaylists(ids: string[], mode: PlayMode) {
     for (const t of r.ids) if (!seen.has(t)) seen.add(t) && all.push(t);
   }
   if (!all.length) throw new Error('None of their tracks can be found.');
-  const order = mode === 'shuffle' ? [...all].sort(() => Math.random() - 0.5) : all;
-  if (isLocal()) {
-    const tracks: LocalTrack[] = all.map((id) => ({ source, id, name: '', artist: null, album: null, album_id: null }));
-    if (mode === 'next' || mode === 'last') enqueue(tracks, mode);
-    else playQueue(tracks, 0, null, 0, mode === 'shuffle');
-    return;
-  }
-  if (mode === 'next' || mode === 'last') await queueTracks(order, mode, source);
-  else await handover(order, 0, 0, source);
-  setTimeout(refresh, 700);
+  await playCollection({ kind: 'tracks', source, ids: all }, mode, ids.join(', '));
 }
 
 /** Plays a playlist from one of its tracks (a tap on a row of its view, decision 0023): these tracks from `index`, here

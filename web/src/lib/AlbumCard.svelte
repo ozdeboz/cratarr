@@ -1,14 +1,19 @@
 <script lang="ts">
   // An album in a panel's page (an album's More from, an artist's Albums and Appears on; as Symfonium's): its cover,
-  // title and year. A tap views it over the page (back returns).
+  // title and year. A tap views it over the page (back returns); a long-press or a right-click opens its menu (decision
+  // 0058).
   import { albumCoverUrl, type ListedAlbum } from './api';
+  import AlbumMenu from './AlbumMenu.svelte';
   import Cover from './Cover.svelte';
+  import { longpress } from './longpress';
   import { albumSubject, viewOver } from './panel.svelte';
 
-  let { source, album }: { source: string; album: Pick<ListedAlbum, 'id' | 'title' | 'year'> } = $props();
+  let { source, album }: { source: string; album: Pick<ListedAlbum, 'id' | 'title' | 'year'> & Partial<ListedAlbum> } = $props();
+  let menu = $state(false);
 </script>
 
-<button class="card" onclick={() => viewOver(albumSubject(source, album.id))} aria-label="View {album.title}">
+{#if menu}<AlbumMenu {source} album={{ ...album, artist: album.artist ?? null }} onclose={() => (menu = false)} />{/if}
+<button class="card" onclick={() => viewOver(albumSubject(source, album.id))} aria-label="View {album.title}" use:longpress={() => (menu = true)}>
   <span class="cover"><Cover src={albumCoverUrl(source, album.id)} /></span>
   <span class="title">{album.title}</span>
   {#if album.year}<span class="year">{album.year}</span>{/if}
