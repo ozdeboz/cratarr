@@ -705,6 +705,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /** The list's profile (the owner, 2026-10-23: lib/ListProfile), worked out on the server over all its tracks, as
    *  the Filter sheet's list is (lib/listFilter inView); asked again after an edit. Not a selection's. */
   let profile = $state<ListProfileData | null>(null);
+  /** The profile shown: the preview's or the list's, while music profiles are on (Settings › Display › Content). */
+  const shownProfile = $derived(prefs.profile ? (previewProfile ?? profile) : null);
   /** While the profile (or a Sounds like crate's curve) is on its way: the header holds its place rather than showing
    *  the tempo spread that would make way for it (the owner, 2026-10-23: no flash of what is not going to stay). */
   let profileComing = $state(false);
@@ -1819,12 +1821,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
         </div>
         <!-- A ranked crate's fit (the owner, 2026-10-23): what it learned not to suggest; a tap corrects it. -->
         {#if crate && like && !multi}<AvoidLine {crate} name={suggestsFor?.name ?? title} round={saved} onchange={() => saved++} />{/if}
-        {#if (profile || (like && curve?.alike.length)) && !multi}
+        {#if (shownProfile || (like && curve?.alike.length)) && !multi}
           <div class="head-spread" class:artist-head={!!artist && !artist.tracks}>
             {#if like && curve?.alike.length}<LikeCurve curve={curve.alike} count={like.count} onpreview={(n) => (preview = n)} onchange={(n) => viewLike(like.item, n)} />{/if}
-            {#if previewProfile ?? profile}<ListProfile data={(previewProfile ?? profile)!} />{/if}
+            {#if shownProfile}<ListProfile data={shownProfile} />{/if}
           </div>
-        {:else if profileComing || curveComing}
+        {:else if (prefs.profile && profileComing) || curveComing}
           <div class="head-spread waiting" class:artist-head={!!artist && !artist.tracks} aria-hidden="true"></div>
         {:else if headTempo}
           <div class="head-spread">
@@ -1936,10 +1938,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
         appearsOn={artistHead.appears_on}
         top={topRows.length ? topList : undefined}
         ontracks={() => viewOver(artistSubject(artist.source, artist.name, true))}
-        profile={(previewProfile ?? profile) ? artistProfile : undefined}
-        {profileComing}
+        profile={shownProfile ? artistProfile : undefined}
+        profileComing={prefs.profile && profileComing}
       />
-      {#snippet artistProfile()}<ListProfile data={(previewProfile ?? profile)!} fixed />{/snippet}
+      {#snippet artistProfile()}<ListProfile data={shownProfile!} fixed />{/snippet}
       {#snippet topList()}
         <ol class="rows">{#each topRows as r (r.id)}{@render trackRow(r, source, title, topRows, null, false)}{/each}</ol>
       {/snippet}

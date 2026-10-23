@@ -25,6 +25,9 @@ export type Prefs = {
    *  on, in the user's order; and its fold line, how many of them stay when it is folded (0: none; Settings › Display ›
    *  AudioMuse). */
   profileOpen: boolean;
+  /** Music profiles shown at all (the owner, 2026-10-24: Settings › Display › Content, as the player's extra details):
+   *  off, no list or artist shows one. */
+  profile: boolean;
   profileRows: ProfileRow[];
   profileFoldAt: number;
   /** Levelling (decision 0035): this browser's player plays every track about as loud as the next. */
@@ -141,6 +144,7 @@ export const DEFAULTS: Prefs = {
   playerRow: true,
   playerFacts: [],
   profileOpen: true,
+  profile: true,
   profileFoldAt: 0,
   profileRows: PROFILE_ROWS.map((r) => r.id),
   levelling: true,
@@ -212,6 +216,7 @@ function read(): Prefs {
       if (typeof saved.playerRow === 'boolean') p.playerRow = saved.playerRow;
       if (Array.isArray(saved.playerFacts)) p.playerFacts = saved.playerFacts.filter((x: unknown): x is FactId => FACTS.some((f) => f.id === x));
       if (typeof saved.profileOpen === 'boolean') p.profileOpen = saved.profileOpen;
+      if (typeof saved.profile === 'boolean') p.profile = saved.profile;
       if (Array.isArray(saved.profileRows)) p.profileRows = saved.profileRows.filter((x: unknown): x is ProfileRow => PROFILE_ROWS.some((r) => r.id === x));
       if (Number.isInteger(saved.profileFoldAt) && saved.profileFoldAt >= 0) {
         // Rows no longer in the profile (Artists, 2026-10-23) that were above the fold line no longer count there.
