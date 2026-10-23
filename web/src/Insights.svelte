@@ -85,11 +85,6 @@
   {:else if !anyOn}
     <p class="empty">Turn on at least one of shared tracks, genre or artists.</p>
   {:else}
-    <div class="switches" role="group" aria-label="What brings playlists together">
-      {#each SIGNALS as sg (sg.id)}
-        <button class="chip" aria-pressed={prefs.signals[sg.id]} onclick={() => (prefs.signals[sg.id] = !prefs.signals[sg.id])}>{sg.label}</button>
-      {/each}
-    </div>
     <div class="stage">
       <div class="box">
         {#key insights.removed.join('/')}
@@ -162,9 +157,10 @@
 {/if}
 
 <style>
+  /* Under the tabs' pill and its second row (lib/InsightsTabs). */
   main {
     max-width: 900px;
-    padding: 16px clamp(12px, 2vw, 32px) 48px;
+    padding: 58px clamp(12px, 2vw, 32px) 48px;
   }
 
   /* Related: room for the panel beside the graph on wide screens. */
@@ -265,27 +261,6 @@
     font: inherit;
     color: inherit;
     cursor: pointer;
-  }
-
-  /* The Map's filter: what brings playlists together, at its top. */
-  .switches {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-bottom: 10px;
-  }
-
-  .chip {
-    min-height: 36px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    color: var(--muted);
-  }
-
-  .chip[aria-pressed='true'] {
-    border-color: var(--accent);
-    color: var(--text);
-    background: color-mix(in srgb, var(--accent) 18%, var(--surface));
   }
 
   .muted,

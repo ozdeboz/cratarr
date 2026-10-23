@@ -668,6 +668,10 @@
     z-index: 20;
     display: flex;
     justify-content: space-between;
+    /* Back stays round when what is beside it grows a row (Insights' pill). */
+    align-items: flex-start;
+    /* Never touching: back and what is beside it (the owner, 2026-10-23). */
+    gap: 8px;
     pointer-events: none;
   }
 

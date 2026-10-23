@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Insights' Listening (decision 0065): the play log (0064) over a week, a month or a year: the time listened as the
+  // Insights' Listening (decision 0065): the play log (0064) over a week, a month or a year (chosen in the tabs' pill): the time listened as the
   // headline and as columns per day (per week for a year); taste over time as the period's top genres stacked per
   // column, the rest as Other (the dataviz method: at most six series, the categorical palette in its fixed order,
   // checked for both themes; a legend with each genre's time, as light mode's lighter hues need words beside them; a
@@ -8,18 +8,13 @@
   import { albumCoverUrl, coverUrl, getListening, type Listening, type ListeningTop } from './api';
   import Cover from './Cover.svelte';
   import PageLoading from './PageLoading.svelte';
+  import { prefs } from './prefs.svelte';
 
-  const PERIODS = [
-    { id: 'week', label: 'Week' },
-    { id: 'month', label: 'Month' },
-    { id: 'year', label: 'Year' },
-  ] as const;
-  let period = $state<Listening['period']>('week');
   let data = $state<Listening | null>(null);
   let error = $state<string | null>(null);
 
   $effect(() => {
-    const p = period;
+    const p = prefs.listeningPeriod;
     let gone = false;
     data = null;
     error = null;
@@ -96,12 +91,6 @@
 {/snippet}
 
 <div class="listening">
-  <div class="periods" role="group" aria-label="Period">
-    {#each PERIODS as p (p.id)}
-      <button aria-pressed={period === p.id} onclick={() => (period = p.id)}>{p.label}</button>
-    {/each}
-  </div>
-
   {#if error}
     <p class="error" role="alert">{error}</p>
   {:else if !data}
@@ -196,29 +185,6 @@
   h2 {
     margin: 0 0 12px;
     font-size: 1.1rem;
-  }
-
-  /* The period: one row of chips above the charts. */
-  .periods {
-    display: flex;
-    gap: 6px;
-  }
-
-  .periods button {
-    min-height: 36px;
-    padding: 0 16px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: none;
-    color: var(--muted);
-    font: inherit;
-    cursor: pointer;
-  }
-
-  .periods button[aria-pressed='true'] {
-    border-color: transparent;
-    background: color-mix(in srgb, var(--accent) 22%, transparent);
-    color: var(--text);
   }
 
   .tiles {

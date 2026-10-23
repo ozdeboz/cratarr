@@ -45,6 +45,9 @@ export type Prefs = {
   /** Insights: the open tab, and which signals bring playlists together in Related. */
   /** Insights' tab (decision 0065). */
   insightsTab: 'collection' | 'listening' | 'map';
+  /** Insights' tabs' own second rows (decision 0065): Collection's view, Listening's period. */
+  insightsCollection: 'overview' | 'genres' | 'artists' | 'playlists';
+  listeningPeriod: 'week' | 'month' | 'year';
   signals: { tracks: boolean; genre: boolean; artists: boolean };
   /** The player's width when it shows beside the page (decision 0018). */
   playerWidth: number;
@@ -139,6 +142,8 @@ export const DEFAULTS: Prefs = {
   source: '',
   hiddenLibraries: [],
   insightsTab: 'collection',
+  insightsCollection: 'overview',
+  listeningPeriod: 'week',
   signals: { tracks: true, genre: true, artists: true },
   playerWidth: 400,
   sidebar: true,
@@ -229,6 +234,8 @@ function read(): Prefs {
       // The tabs' names before decision 0065: Statistics is Collection, Related is Map.
       const tab = saved.insightsTab === 'statistics' ? 'collection' : saved.insightsTab === 'related' ? 'map' : saved.insightsTab;
       if (tab === 'collection' || tab === 'listening' || tab === 'map') p.insightsTab = tab;
+      if (['overview', 'genres', 'artists', 'playlists'].includes(saved.insightsCollection)) p.insightsCollection = saved.insightsCollection;
+      if (['week', 'month', 'year'].includes(saved.listeningPeriod)) p.listeningPeriod = saved.listeningPeriod;
       if (saved.signals && typeof saved.signals === 'object') {
         for (const k of ['tracks', 'genre', 'artists'] as const) {
           if (typeof saved.signals[k] === 'boolean') p.signals[k] = saved.signals[k];

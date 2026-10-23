@@ -2,9 +2,11 @@
   // Insights' Collection (decision 0065): what you have, the figures as charts by what each says (the dataviz method):
   // the headline figures as stat tiles, shares as meters (never pies), decades as columns, genres and artists as bars,
   // one series each in the accent, labelled directly; the playlists' figures as tiles and the tracks in the most
-  // playlists as a list.
+  // playlists as a list. Four views, chosen in the tabs' pill: Overview (the top few genres and artists), Genres and
+  // Artists (all of them), Playlists.
   import type { Count, Insights } from './api';
   import { plural } from './insights.svelte';
+  import { prefs } from './prefs.svelte';
 
   let { data }: { data: Insights } = $props();
 
@@ -66,6 +68,7 @@
 {/snippet}
 
 <div class="collection">
+  {#if prefs.insightsCollection === 'overview'}
   <section aria-label="Your music">
     <div class="tiles">
       {#each tiles as t (t.label)}
@@ -97,9 +100,13 @@
     </section>
   {/if}
 
+  {@render bars('Genres', l.genres.slice(0, 8), 'album')}
+  {@render bars('Artists', l.top_artists.slice(0, 8), 'album')}
+  {:else if prefs.insightsCollection === 'genres'}
   {@render bars('Genres', l.genres, 'album')}
+  {:else if prefs.insightsCollection === 'artists'}
   {@render bars('Artists', l.top_artists, 'album')}
-
+  {:else}
   <section>
     <h2>Playlists</h2>
     <div class="tiles">
@@ -117,6 +124,7 @@
       </ol>
     {/if}
   </section>
+  {/if}
 </div>
 
 <style>

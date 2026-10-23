@@ -15,8 +15,9 @@ use crate::incoming::{Quality, quality_of};
 use crate::playlists::playlist_stats;
 
 /// Genres and artists shown, most albums first.
-const TOP_GENRES: usize = 15;
-const TOP_ARTISTS: usize = 10;
+// Insights shows a few on its overview and all of them on their own views (decision 0065).
+const TOP_GENRES: usize = 200;
+const TOP_ARTISTS: usize = 200;
 /// A pair is sent when one of its signals reaches this; the page decides what to draw.
 const MIN_SIGNAL: f64 = 0.05;
 /// Genres named per playlist and per pair.
