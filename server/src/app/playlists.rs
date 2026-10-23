@@ -1519,26 +1519,14 @@ impl PlaylistService {
         Ok(plan)
     }
 
-    /// An export's plan for a list of tracks by their servers' ids (decision 0058: an album, a crate, a selection, a
-    /// queue): each track's file wherever the catalogue has it (the Music folder or another library's), with what it
+    /// An export's plan for a list of tracks by their servers' ids (decision 0058: an album, an artist's, a selection,
+    /// a queue): each track's file wherever the catalogue has it (the Music folder or another library's), with what it
     /// knows of it. A track it cannot place is left out, named in the report by its server and id.
     pub async fn export_tracks(&self, name: &str, tracks: Vec<(String, String)>) -> Result<crate::export::Plan, ToggleError> {
         self.export_places(name, move |c: &crate::catalogue::Catalogue| {
             tracks.iter().map(|(s, id)| (format!("{s} {id}"), c.track_of_source(s, id).and_then(|t| c.file_of(t)))).collect()
         })
         .await
-    }
-
-    /// An export's plan for a crate (decision 0058) as it is looked at (its toggles, the libraries switched off): its
-    /// tracks now, each file wherever it is (Music, or an Incoming folder).
-    pub async fn export_crate(&self, id: &str, want: Option<&str>, look: &CrateLook) -> Result<crate::export::Plan, ToggleError> {
-        let name = self.crate_def(id).await?.name;
-        let shown = self.crate_shown(id, look).await?;
-        let (_, lines) = self.crate_lines_of(&shown, want, &look.without).await?;
-        if lines.is_empty() {
-            return Err(ToggleError::Refused("That crate is empty.".into()));
-        }
-        self.export_places(&name, move |c: &crate::catalogue::Catalogue| lines.into_iter().map(|l| (l.clone(), c.place_of_line(&l))).collect()).await
     }
 
     /// An export's plan for files (folder, rel), each with the label the report names it by when it cannot be placed.

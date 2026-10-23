@@ -1,5 +1,5 @@
 //! Export (decision 0007; the panel's Export tab, decision 0025; one step for every object, decision 0058): playlists,
-//! or any list of tracks (an album, a crate, a selection, a queue), as one download: the files as they are, hi-res
+//! or any list of tracks (an album, an artist's, a selection, a queue), as one download: the files as they are, hi-res
 //! ones at CD quality (decision 0013's converter) or lossless ones as Opus (decision 0033's copies), in one folder or
 //! in Artist/Album folders, with their playlist files or not. `plan` resolves the playlists' lines to files in the
 //! Music folder and `plan_files` takes tracks already found (each file once, with its size and what the catalogue
@@ -137,7 +137,7 @@ pub fn plan(music: &Path, lists: Vec<(String, Vec<String>)>, facts: impl FnOnce(
     Ok(Plan { lists: out, tracks, missing })
 }
 
-/// One list of tracks already found (an album, a crate, a selection, a queue): each its file (where it is read, its
+/// One list of tracks already found (an album, an artist's, a selection, a queue): each its file (where it is read, its
 /// path in its library, what is known of it), or for one not found what names it in the report. A file named twice
 /// is bundled once; one gone since it was found is missing too.
 pub fn plan_files(name: &str, found: Vec<std::result::Result<(PathBuf, String, Facts), String>>) -> Plan {

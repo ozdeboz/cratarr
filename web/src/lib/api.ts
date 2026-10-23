@@ -625,23 +625,11 @@ export const createPlaylist = (name: string) => post<{ playlist: string } & Undo
 /** What to export (decision 0007): playlists by name, with their tracks or not, the tracks in one folder or the
  *  library's, and the playlists as they are or combined into one of this name. */
 export type ExportChoice = { playlists: string[]; tracks: boolean; flat: boolean; combine: string | null };
-/** What Export… exports (decision 0058, lib/ExportStep): playlists by id, or a list of tracks with a name (an album, a
- *  crate, a selection, a queue). */
+/** What Export… exports (decision 0058, lib/ExportStep): playlists by id, or a list of tracks with a name (an album,
+ *  an artist's, a selection, a queue); never a crate. */
 export type ExportWhat =
   | { kind: 'playlists'; names: string[] }
   | { kind: 'tracks'; name: string; tracks: { source: string; id: string }[] };
-/** A crate, all of it, as the page shows it (its toggles, else as saved; the libraries switched off): the server takes
- *  it as an ExportWhat (`what` of an export, its preview or prepareExport); not in the union yet, as lib/exportChoices
- *  reads `tracks` of every what that is not playlists. */
-export type ExportCrate = {
-  kind: 'crate';
-  id: string;
-  source?: string;
-  favourites?: CrateFavourites;
-  favourite_albums?: CrateFavourites;
-  without?: string[];
-  filter?: Condition[];
-};
 /** The files as they are; hi-res ones at CD quality (16-bit FLAC, 44.1 kHz); lossless ones as Opus (lossy ones always
  *  stay as they are). */
 export type ExportFormat = 'original' | 'flac-cd' | 'opus';

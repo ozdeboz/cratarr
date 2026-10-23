@@ -1131,20 +1131,6 @@ fn yes() -> bool {
 enum ExportWhat {
     Playlists { names: Vec<String> },
     Tracks { name: String, tracks: Vec<ExportTrack> },
-    /// A crate, all of it, as the page shows it: its toggles (else as saved), the libraries switched off (`without`).
-    Crate {
-        id: String,
-        #[serde(default)]
-        source: Option<String>,
-        #[serde(default)]
-        favourites: Option<crate::crates::Favourites>,
-        #[serde(default)]
-        favourite_albums: Option<crate::crates::Favourites>,
-        #[serde(default)]
-        without: Vec<String>,
-        #[serde(default)]
-        filter: Vec<crate::crates::Condition>,
-    },
 }
 
 #[derive(Deserialize, Clone)]
@@ -1198,7 +1184,6 @@ impl Export {
                 }
                 Options { tracks: true, arrange, combine: None, format, lists: self.m3u }
             }
-            ExportWhat::Crate { .. } => Options { tracks: true, arrange, combine: None, format, lists: self.m3u },
         })
     }
 
@@ -1208,16 +1193,6 @@ impl Export {
             ExportWhat::Tracks { name, tracks } => {
                 let name = if name.trim().is_empty() { "Tracks" } else { name.trim() };
                 app.playlists.export_tracks(name, tracks.iter().map(|t| (t.source.clone(), t.id.clone())).collect()).await?
-            }
-            ExportWhat::Crate { id, source, favourites, favourite_albums, without, filter } => {
-                let look = crate::app::CrateLook {
-                    favourites: *favourites,
-                    favourite_albums: *favourite_albums,
-                    without: without.clone(),
-                    filter: filter.clone(),
-                    ..Default::default()
-                };
-                app.playlists.export_crate(id, source.as_deref(), &look).await?
             }
         })
     }

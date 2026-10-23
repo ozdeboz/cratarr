@@ -76,7 +76,7 @@ Names are the same everywhere: Info (not Details), View for the object itself, G
 | B | Go to album, artist, genre | View, Go to artist, genre | View, Go to genre | View | View | View | – |
 | C | Favourite, Exclude here, everywhere | Favourite, Rating, Exclude | Favourite | Favourite | – | – | – |
 | D | Add to playlist | Add to playlist | Add to playlist | Pin to top | Save as playlist | Start a crate from it | Save as playlist |
-| E | Download, Export…, Share | Download, Keep, Export…, Share | Download, Keep, Export…, Share | Download, Keep, Export…, Share | Download, Keep, Export…, Share | Export… | Export… |
+| E | Download, Export…, Share | Download, Keep, Export…, Share | Download, Keep, Export…, Share | Download, Keep, Export…, Share | Download, Keep, Share | — | Export… |
 | F | Info, Web, Genius search | Info, Web, Genius search | Info, Web search | Info | Info | – | – |
 | G | – | Cover, the library's | Picture | Rename, Spoken as, Repair, Sync | Edit, Picture | – | Rename |
 | H | Remove from queue / this playlist / this crate | Remove from this device, Delete album | Remove from this device | Delete playlist | Delete crate (one's own) | – | Delete |
@@ -87,7 +87,9 @@ cover plays an album; its menu has Shuffle too.
 
 ### Export, one step for every object
 
-Export… opens one step (`lib/ExportStep.svelte`), the same from any object or selection:
+Export… opens one step (`lib/ExportStep.svelte`), the same from any object or selection that has it: playlists, albums,
+artists, tracks, a selection and the queue; never a crate or a genre (the owner, 2026-10-23: "We only should be able
+to export playlists … and albums and tracks, not crates"):
 
 - **What:** the object's tracks, with a line saying how many, about how large, and how many are missing (left out).
   For a list, with its playlist file (M3U) or not; for several playlists, as they are or combined into one.
@@ -105,4 +107,5 @@ One zip, streamed as it is made (0007's export, which now takes any tracks and a
   Tracks in a list: the same.
 - Every menu file orders its entries by the table; reviews check new entries against it.
 - The crate, genre and queue menus are new components on MenuSheet; the heart sheet becomes the Feel slice.
-- The export endpoint takes tracks (an album, a crate, a selection, a queue) and a format besides playlists.
+- The export endpoint takes tracks (an album, an artist's, a selection, a queue) and a format besides playlists; not a
+  crate.
