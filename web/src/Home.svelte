@@ -104,23 +104,27 @@
     | { kind: 'album'; at: number; source: string; id: string; title: string; by: string | null }
     | { kind: 'playlist'; at: number; id: string; title: string }
     | { kind: 'queue'; at: number; id: string; title: string; tracks: number; from: string | null };
+  /** Jump back in, by kind (the owner, 2026-10-23): how far back it looks (days) and how many it offers at most. */
+  const BACK: Record<Back['kind'], { days: number; most: number }> = {
+    album: { days: 14, most: 4 },
+    playlist: { days: 30, most: 3 },
+    queue: { days: 3, most: 2 },
+  };
+  /** All of them in one list, the latest first (the owner: purely chronological), each kind within its own cutoff and limit. */
   const back = $derived.by((): Back[] => {
-    const albums: Back[] = sources
-      .flatMap((s) => s.albums.map((a) => ({ kind: 'album' as const, at: albumUses[s.id]?.[a.id]?.played ?? 0, source: s.id, id: a.id, title: a.title, by: a.artist })))
-      .filter((a) => a.at > 0)
-      .sort((x, y) => y.at - x.at)
-      .slice(0, 4);
-    const lists: Back[] = shownPlaylists()
-      .flatMap((p) => (lastPlayed[p.id] ? [{ kind: 'playlist' as const, at: lastPlayed[p.id], id: p.id, title: p.name }] : []))
-      .sort((x, y) => y.at - x.at)
-      .slice(0, 2);
-    // The queues left last; not the one that plays.
-    const left: Back[] = queues.list
-      .filter((q) => !q.playing)
-      .sort((x, y) => y.updated - x.updated)
-      .slice(0, 2)
-      .map((q) => ({ kind: 'queue', at: q.updated, id: q.id, title: q.name, tracks: q.tracks, from: q.from }));
-    return [...albums, ...lists, ...left];
+    const now = Date.now() / 1000;
+    const recent = (b: Back) => b.at > now - BACK[b.kind].days * 86_400;
+    const latest = (list: Back[]) => list.filter(recent).sort((x, y) => y.at - x.at).slice(0, BACK[list[0]?.kind ?? 'album'].most);
+    const albums = sources.flatMap((s) =>
+      s.albums.flatMap((a): Back[] => {
+        const at = albumUses[s.id]?.[a.id]?.played;
+        return at ? [{ kind: 'album', at, source: s.id, id: a.id, title: a.title, by: a.artist }] : [];
+      }),
+    );
+    const lists = shownPlaylists().flatMap((p): Back[] => (lastPlayed[p.id] ? [{ kind: 'playlist', at: lastPlayed[p.id], id: p.id, title: p.name }] : []));
+    // The queues left; not the one that plays.
+    const left = queues.list.filter((q) => !q.playing).map((q): Back => ({ kind: 'queue', at: q.updated, id: q.id, title: q.name, tracks: q.tracks, from: q.from }));
+    return [...latest(albums), ...latest(lists), ...latest(left)].sort((x, y) => y.at - x.at);
   });
   function open(b: Back) {
     if (b.kind === 'album') viewOver(albumSubject(b.source, b.id));
