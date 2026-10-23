@@ -1,163 +1,126 @@
 <script lang="ts">
-  // Health (decision 0063, after 0025): every domain's findings from the health report, by domain, worst first, each
-  // opening where it is dealt with; the Files domain with the files themselves, by kind, as folded sections of file
-  // rows (lib/Section.svelte, lib/FileItem.svelte). The report is an administrator's; anyone else sees the files.
-  import { getFileProblems, getHealthReport, type FileProblem, type HealthFinding } from './lib/api';
-  import { DOMAINS, iconOf, openFinding } from './lib/health';
+  // Health (decision 0063, after 0025; laid out as Settings, the owner 2026-10-23): a row per domain, its icon (red when
+  // something needs the owner), its name, what it says now in a line, and ›. A tap opens the domain in the panel
+  // (lib/HealthPanel): its findings, Files' files by kind; beside the list on a roomy window, where one is always open
+  // (App: the one last open, else the first with something), its row tinted; over the list on a phone. The report is
+  // an administrator's; anyone else sees the files.
   import Icon from './lib/Icon.svelte';
-  import FileItem from './lib/FileItem.svelte';
+  import { DOMAINS } from './lib/health';
+  import { FILE_KINDS, health, loadHealth } from './lib/healthReport.svelte';
   import Notice from './lib/Notice.svelte';
-  import PageLoading from './lib/PageLoading.svelte';
-  import Section from './lib/Section.svelte';
+  import { HEALTH, healthOf, panel, viewPlaylist } from './lib/panel.svelte';
 
-  let problems = $state<FileProblem[] | null>(null);
-  let error = $state<string | null>(null);
-  let findings = $state<HealthFinding[]>([]);
-  $effect(() => {
-    getHealthReport().then(
-      (r) => (findings = r.findings),
-      () => {},
-    );
-  });
-  /** The domains with findings, in their order, each with its findings (the report's order: worst first). The files'
-   *  own sections show their kinds, so their findings are not listed again. */
-  const domains = $derived(
-    Object.keys(DOMAINS)
-      .map((d) => ({ id: d, ...DOMAINS[d], list: findings.filter((f) => f.domain === d) }))
-      .filter((d) => d.list.length && d.id !== 'files'),
-  );
-  $effect(() => {
-    getFileProblems().then(
-      (p) => (problems = p),
-      (e) => (error = e instanceof Error ? e.message : 'Unexpected error'),
-    );
-  });
+  $effect(loadHealth);
 
-  const KINDS: { kind: FileProblem['kind']; title: string; hint: string }[] = [
-    { kind: 'broken', title: "Files that can't be read", hint: 'Not readable as audio at all. Usually a damaged or incomplete file; replace it.' },
-    {
-      kind: 'damaged_tag',
-      title: 'Files with a damaged tag',
-      hint: 'One tag field is broken and was skipped; the music and the other tags are fine. Saving the tags again in a tag editor fixes it.',
-    },
-    { kind: 'no_tags', title: 'Files without tags', hint: 'No artist, title or other tags at all.' },
-    { kind: 'no_length', title: 'Files without a length', hint: "The audio's length could not be read." },
-  ];
-  const ofKind = (k: FileProblem['kind']) => (problems ?? []).filter((p) => p.kind === k);
+  /** What a domain says now, in a line, and whether it needs the owner. */
+  function state(id: string): { line: string; urgent: boolean } {
+    const list = health.findings.filter((f) => f.domain === id);
+    if (id === 'files') {
+      const n = (health.problems ?? []).filter((p) => FILE_KINDS.some((k) => k.kind === p.kind)).length;
+      if (health.problems === null) return { line: '', urgent: false };
+      return { line: n ? `${n} ${n === 1 ? 'file' : 'files'} to look at` : 'All good', urgent: list.some((f) => f.level === 'needs_you') };
+    }
+    if (!list.length) return { line: 'All good', urgent: false };
+    return { line: list.length === 1 ? list[0].title : `${list.length} things to look at`, urgent: list.some((f) => f.level === 'needs_you') };
+  }
 </script>
 
-{#snippet words(f: HealthFinding)}
-  <span><b>{f.title}</b>{#if f.detail}<small>{f.detail}</small>{/if}</span>
-{/snippet}
-
 <main>
-  {#if error}
-    <Notice text={error} />
-  {:else if !problems}
-    <PageLoading />
-  {:else if !problems.length && !domains.length}
-    <p class="empty">Nothing needs you.</p>
-  {:else}
-    {#each domains as d (d.id)}
-      <Section title={d.name}>
-        <ul class="findings">
-          {#each d.list as f (f.key)}
-            <li>
-              {#if f.open}
-                <button class="finding" class:urgent={f.level === 'needs_you'} onclick={() => openFinding(f)}>
-                  <Icon name={iconOf(f)} size={22} />{@render words(f)}<Icon name="chevronRight" size={20} />
-                </button>
-              {:else}
-                <div class="finding" class:urgent={f.level === 'needs_you'}><Icon name={iconOf(f)} size={22} />{@render words(f)}</div>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      </Section>
-    {/each}
-    {#each KINDS as k (k.kind)}
-      {@const list = ofKind(k.kind)}
-      {#if list.length > 0}
-        <Section title={k.title} count={`${list.length} ${list.length === 1 ? 'file' : 'files'}`} hint={k.hint} open={false}>
-          <ul class="rows">
-            {#each list as p (p.folder + p.rel)}
-              <li><FileItem path={p.rel} detail={p.detail ?? undefined} /></li>
-            {/each}
-          </ul>
-        </Section>
-      {/if}
-    {/each}
-  {/if}
+  {#if health.error}<Notice text={health.error} />{/if}
+  <section class="group" aria-label="Health">
+    <div class="list">
+      {#each Object.entries(DOMAINS) as [id, d] (id)}
+        {@const open = healthOf(panel.viewed) === id}
+        {@const st = state(id)}
+        <button class="row" class:open class:urgent={st.urgent} aria-pressed={open} onclick={() => viewPlaylist(HEALTH + id)}>
+          <Icon name={d.icon} size={24} />
+          <span class="text">
+            <span class="name">{d.name}</span>
+            {#if st.line}<small>{st.line}</small>{/if}
+          </span>
+          <span class="chev"><Icon name="chevronRight" size={20} /></span>
+        </button>
+      {/each}
+    </div>
+  </section>
 </main>
 
 <style>
+  /* As Settings' list (Settings.svelte): one column, its rows in one rounded block. */
   main {
-    max-width: 900px;
-    padding: 16px clamp(12px, 2vw, 32px) 48px;
+    padding: 16px clamp(12px, 2vw, 32px) 96px;
   }
 
-  .empty {
-    margin-top: 32px;
-    color: var(--muted);
-    font-size: 0.9rem;
+  .group {
+    max-width: 640px;
   }
 
-  .rows,
-  .findings {
-    margin: 0;
-    padding: 0;
-    list-style: none;
+  .list {
+    overflow: hidden;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--text) 6%, transparent);
   }
 
-  /* A finding: its domain's icon (red when the owner has to act), its words and their detail, where it opens. */
-  .finding {
+  .row {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 16px;
     width: 100%;
-    min-height: 52px;
-    padding: 6px 4px;
+    min-height: 64px;
+    padding: 10px 14px 10px 16px;
     border: 0;
+    border-radius: 0;
     background: none;
     color: var(--text);
     font: inherit;
     text-align: left;
-  }
-
-  button.finding {
     cursor: pointer;
   }
 
-  .finding :global(svg:first-child) {
-    flex: none;
-    color: var(--art-accent, var(--accent));
+  .row + .row {
+    border-top: 1px solid var(--border);
   }
 
-  .finding.urgent :global(svg:first-child) {
+  .row:hover,
+  .row:focus-visible {
+    background: color-mix(in srgb, var(--text) 5%, transparent);
+  }
+
+  .row.open {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+
+  .row > :global(svg) {
+    flex: none;
+    color: var(--accent);
+  }
+
+  .row.urgent > :global(svg) {
     color: var(--danger);
   }
 
-  .finding :global(svg:last-child:not(:first-child)) {
-    flex: none;
-    color: var(--muted);
-  }
-
-  .finding span {
-    flex: 1;
-    min-width: 0;
+  .text {
     display: grid;
+    flex: 1;
     gap: 2px;
+    min-width: 0;
   }
 
-  .finding b {
-    font-weight: 500;
+  .name {
+    font-size: 15px;
   }
 
-  .finding small {
+  .text small {
     overflow: hidden;
     color: var(--muted);
-    font-size: 0.85rem;
+    font-size: 13px;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .chev {
+    display: grid;
+    flex: none;
+    color: var(--muted);
   }
 </style>

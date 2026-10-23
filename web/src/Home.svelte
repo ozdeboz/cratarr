@@ -306,6 +306,15 @@
     scroll-snap-align: start;
   }
 
+  /* One line each on a shelf's cards: a shelf is as tall as its tallest card, and one long title anywhere in it, out of
+     sight too, left a gap under all of them (the owner, 2026-10-23). */
+  .shelf :global(.title),
+  .shelf :global(.year) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .week {
     margin: 4px 16px 0;
     overflow: hidden;
