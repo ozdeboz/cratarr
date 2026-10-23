@@ -280,3 +280,21 @@ keeps every output it has seen, there or not, in the owner's order (new ones at 
 `device-set {forget: id}` takes an output that is not there off the list. With the order on and nothing chosen, the
 player's preferred output is the first of the order that is there, picked again whenever one comes or goes; off, it is
 Android's own choice. A direct choice still wins until the outputs change, and following a group, none applies.
+
+## Amendment (2026-10-23): shuffle is once; clear and its Undo as commands
+
+The owner: a queue always has an order. There is no shuffle mode: shuffle is a one-time reorder, and Undo puts the
+order before back (decision 0059 holds the rule). For the queues Cratarr holds (Play On):
+
+- `shuffle` (`on` may be left out; `on: false` has no state to turn off and leaves the order) mixes the tracks after
+  the playing one once, as 0059 says. A player is told `upcoming` with `shuffled: false`, never a shuffle state.
+- `clear` takes the tracks after the playing one out (all of it when nothing plays).
+- Both answer `POST /api/players/{name}/command` with `200 {"undo": {"command": "restore", "tracks": [...]}}` when
+  they changed what was to come (else `204`, as every other command): sent back as it is, `restore` puts those tracks
+  (by entry) after the playing one, less those played since, in place of what is to come now. Playback is not in the
+  undo journal (0026), so this Undo is the order itself, not a token.
+- A play with `shuffle: true` is shuffled once too: the player is told `shuffle: false`. Repeat all's rounds follow the
+  album's or playlist's own order.
+- A player's view says `shuffled: false` always (kept for Home Assistant's shuffle switch): Home Assistant's
+  `shuffle_set(true)` sends `shuffle {on: true}`, gets the one-time shuffle, and sees shuffle off again.
+- Supersedes "Shuffle is a second order over the same entries" above, and rule 2 of the repeat amendment.

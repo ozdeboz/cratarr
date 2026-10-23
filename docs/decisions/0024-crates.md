@@ -198,3 +198,17 @@ played the rows it had loaded (its first page). Then: "we should limit to maximu
   from a given track on (those before it fill up the 500 near the end). Shuffle draws 500 evenly from all of it, then
   mixes them; a crate of 500 or fewer plays whole. A Jellyfin player (Finamp) gets the 100 it holds.
 - A crate's rows say the page size they kept (`limit`), so no caller takes 500 for the 1,000 it asked.
+
+## Amendment (2026-10-23, later): one way to choose, for every play
+
+Every play chooses its tracks through `app::play::choose` and the rules' `pick` (decision 0059), at most 500:
+
+- Play On's `play` and `add` with a playlist (by name, as before), the favourites or the library (`/api/players/{name}/
+  command`, Home Assistant's): before, a playlist and the favourites had no limit. The library is drawn at random, 100
+  unless `limit` says; `limit` caps the others too. An album of Cratarr's own plays in its order, at most 500, from
+  `index`; a shuffle is drawn from it.
+- A playlist's Play (`POST /api/playlists/{id}/play {mode}`): 500 on Cratarr's own player (was 100); a Jellyfin player
+  still gets the 100 it holds. `unknown` counts the lines without a playable track.
+- The voice assistant's play by name (`GET /api/playlists/by-name?name&shuffle&limit`): its limit stays (50 unless
+  asked, at most 100); a shuffle is drawn from the whole playlist.
+- `POST /api/play` also plays `{"kind": "favourites"}` and `{"kind": "library"}`, and takes `limit`.

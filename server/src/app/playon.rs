@@ -19,6 +19,7 @@ use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, mpsc};
 
+use super::play::{How, QUEUE_MOST};
 use super::queue::{PlayedOn, Queue, Repeat};
 use super::radio::{AutoMode, Autoplay, AutoplayMode, Mode as RadioMode, RadioBy, from_old};
 use super::{PlaylistService, ToggleError};
@@ -269,6 +270,10 @@ pub struct PlayFrom {
 /// How many tracks `play {library}` picks when not told.
 const LIBRARY_PICK: usize = 100;
 
+fn yes() -> bool {
+    true
+}
+
 /// What can be asked of a player.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
@@ -330,8 +335,21 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shuffled: Option<bool>,
     },
-    /// Shuffle on or off (decision 0033's second order); a player is told the new upcoming tracks.
-    Shuffle { on: bool },
+    /// Shuffle, once (the owner, 2026-10-23: a queue always has an order; shuffle is an action, not a state): the tracks
+    /// after the playing one mixed as the rules say (cratarr-rules: what was added by hand, Radio's inserts and
+    /// Autoplay's tail stay where they are). `on` false (Home Assistant's switch turned off, a page from before) has no
+    /// state to turn off: the order stays. A player is told the upcoming tracks, never a shuffle state. Answered with
+    /// its Undo (`restore`).
+    Shuffle {
+        #[serde(default = "yes")]
+        on: bool,
+    },
+    /// The tracks after the playing one, out; the playing track plays on. Answered with its Undo (`restore`). A player is
+    /// told the upcoming tracks (none).
+    Clear,
+    /// Undo of a shuffle or a clear: the tracks that were to come, back (less those played since), in place of what is
+    /// to come now (Autoplay's, meanwhile). A player is told the upcoming tracks.
+    Restore { tracks: Vec<QueueTrack> },
     /// Repeat off, one (the playing track) or all (the album or playlist), decision 0033 amended.
     Repeat { mode: Repeat },
     /// Radio on or off (decision 0036, amended): while on, the player inserts `count` tracks like each own track
@@ -500,7 +518,8 @@ pub struct PlayerView {
     pub queue_length: usize,
     /// Off, one or all (decision 0033, amended).
     pub repeat: Repeat,
-    /// What comes of the album or playlist plays out of its own order.
+    /// Always false: there is no shuffle state (the owner, 2026-10-23: shuffle is once, `shuffle`). Kept for Home
+    /// Assistant, whose shuffle switch reads it.
     pub shuffled: bool,
     /// Its sleep timer, while one is set.
     pub sleep: Option<Sleep>,
@@ -830,7 +849,7 @@ impl Entry {
             output: r.output.clone(),
             queue_length: self.queue.tracks.len(),
             repeat: self.queue.repeat,
-            shuffled: shuffled_order(&self.queue.tracks, index),
+            shuffled: false,
             sleep: r.sleep.filter(|s| s.at_ms.is_some() || s.end_of_track),
             radio: self.queue.radio,
             radio_by: self.queue.radio_by,
@@ -944,6 +963,8 @@ pub struct PlayOn {
     lan_base: Mutex<Option<String>>,
     /// Cratarr is stopping: the connections that end now end for that.
     stopping: AtomicBool,
+    /// The app, for what a play names (app::play: one way to choose for every play); set once it is made.
+    app: std::sync::OnceLock<std::sync::Weak<super::App>>,
 }
 
 /// A player's queue as saved, with where it was in it and whether it played.
@@ -1061,6 +1082,7 @@ impl PlayOn {
             kodis: Mutex::new(Vec::new()),
             lan_base: Mutex::new(None),
             stopping: AtomicBool::new(false),
+            app: std::sync::OnceLock::new(),
         });
         me.clone().tell_webhooks();
         me.clone().watch_leases();
@@ -1068,6 +1090,11 @@ impl PlayOn {
         me.start_kodis();
         let _ = INSTANCE.set(me.clone());
         me
+    }
+
+    /// The app it is part of, once made: what a play names is chosen through app::play.
+    pub fn set_app(&self, app: &Arc<super::App>) {
+        let _ = self.app.set(Arc::downgrade(app));
     }
 
     /// Cratarr's address on the local network, as players there reach it (a Kodi streams from it).
@@ -1614,6 +1641,12 @@ impl PlayOn {
 
     /// Asks player `name` to do something.
     pub async fn command(&self, name: &str, command: Command) -> Result<(), ToggleError> {
+        self.answer(name, command).await.map(drop)
+    }
+
+    /// As [`PlayOn::command`], answered with the command that undoes it: a `restore` for a shuffle or a clear that changed
+    /// what was to come (the order before, by entry), else none.
+    pub async fn answer(&self, name: &str, command: Command) -> Result<Option<Command>, ToggleError> {
         // One's own players only, and only with one's own (decision 0051).
         self.reached(name)?;
         if let Command::Join { to } | Command::Handover { to } = &command {
@@ -1638,19 +1671,19 @@ impl PlayOn {
             command
         };
         let command = match command {
-            Command::Join { to } => return self.join(name, &to).await,
-            Command::Leave => return self.leave(name).await,
+            Command::Join { to } => return self.join(name, &to).await.map(|()| None),
+            Command::Leave => return self.leave(name).await.map(|()| None),
             Command::Group { .. } => return Err(ToggleError::Refused("A group is made with join and leave.".into())),
             // Played on one player: the group ends (decision 0037).
             Command::Handover { to } => {
                 self.dissolve(name);
-                return self.handover(name, &to).await;
+                return self.handover(name, &to).await.map(|()| None);
             }
-            Command::Queue { played_on: Some(text), .. } => return self.switch_to_played_on(name, &text).await,
-            Command::Queue { id, .. } => return self.switch(name, &id).await,
-            Command::QueueRename { id, name: new } => return self.rename_queue(name, &id, &new),
-            Command::QueueDelete { id } => return self.delete_queue(name, &id),
-            Command::Play { from, tracks, .. } if from.radio => return self.start_radio(name, from, tracks).await,
+            Command::Queue { played_on: Some(text), .. } => return self.switch_to_played_on(name, &text).await.map(|()| None),
+            Command::Queue { id, .. } => return self.switch(name, &id).await.map(|()| None),
+            Command::QueueRename { id, name: new } => return self.rename_queue(name, &id, &new).map(|()| None),
+            Command::QueueDelete { id } => return self.delete_queue(name, &id).map(|()| None),
+            Command::Play { from, tracks, .. } if from.radio => return self.start_radio(name, from, tracks).await.map(|()| None),
             Command::Play { from, tracks, mut index, mut position_ms, shuffle, paused, queue_id, queue_name } => {
                 // A new queue (decision 0033, amended): what it was started from, kept with it; one taken up again (a
                 // handover, a switch) comes with its own id, and keeps what it had.
@@ -1663,24 +1696,28 @@ impl PlayOn {
                         _ => "tracks",
                     });
                 }
-                let picked = self.picked(name, &from).await?;
-                let Some(mut tracks) = picked.or(tracks) else {
-                    return Err(ToggleError::Refused("Play what? Give a playlist, an album, the favourites, the library or tracks.".into()));
+                // Chosen as every play is (app::play, cratarr-rules): at most 500 (or the limit asked), in order from the
+                // track at `index`, or a shuffle drawn from all of it (then from its first). Shuffled once: no state.
+                let how = if shuffle { How::Shuffle } else { How::Play };
+                let start = (!shuffle && index > 0).then_some(super::play::Start::Place(index));
+                let most = from.limit.unwrap_or(QUEUE_MOST);
+                let (tracks, at) = match self.picked(name, &from, how, start.clone()).await? {
+                    Some(picked) => picked,
+                    None => {
+                        let Some(tracks) = tracks else {
+                            return Err(ToggleError::Refused("Play what? Give a playlist, an album, the favourites, the library or tracks.".into()));
+                        };
+                        // A queue taken up again (a handover, a switch) comes as it was; tracks given are picked as any.
+                        if queue_id.is_some() { (numbered(tracks), index) } else { picked_from(tracks, how, start, most) }
+                    }
                 };
                 if tracks.is_empty() {
                     return Err(ToggleError::Refused("There is nothing there that can be played.".into()));
                 }
-                // The album's or playlist's own order kept on its tracks, for turning shuffle off later.
-                for (i, t) in tracks.iter_mut().enumerate().filter(|(_, t)| t.lane.is_none() && t.n.is_none()) {
-                    t.n = u32::try_from(i).ok();
-                }
                 if shuffle {
-                    shuffled(&mut tracks);
-                    (index, position_ms) = (0, 0);
+                    position_ms = 0;
                 }
-                if let Some(n) = from.limit {
-                    tracks.truncate(n.max(1));
-                }
+                index = at;
                 let tracks = self.named(tracks).await;
                 // Its name: as given, else the playlist's, else Cratarr's own (the album's title, say).
                 // Not a playlist or an album, and the player's sound goes to a Bluetooth device of its own name (a car's):
@@ -1695,12 +1732,13 @@ impl PlayOn {
                 });
                 let queue_id = Some(queue_id.unwrap_or_else(super::queue::new_entry));
                 let from = PlayFrom { whole: from.whole, ..PlayFrom::default() };
-                Command::Play { from, tracks: Some(tracks), index, position_ms, shuffle, paused, queue_id, queue_name: Some(queue_name) }
+                Command::Play { from, tracks: Some(tracks), index, position_ms, shuffle: false, paused, queue_id, queue_name: Some(queue_name) }
             }
             // By name too (a playlist, an album, the favourites), as `play` takes them: Home Assistant's "add this album".
-            Command::Add { from, tracks, at, after, how } => {
-                let picked = self.picked(name, &from).await?;
-                let tracks = picked.unwrap_or(tracks);
+            Command::Add { from, mut tracks, at, after, how } => {
+                let by = if how.as_deref() == Some("next") { How::Next } else { How::Last };
+                tracks.truncate(QUEUE_MOST);
+                let tracks = self.picked(name, &from, by, None).await?.map_or(tracks, |(t, _)| t);
                 if tracks.is_empty() {
                     return Err(ToggleError::Refused("Add what? Give tracks, a playlist, an album or the favourites.".into()));
                 }
@@ -1737,7 +1775,11 @@ impl PlayOn {
         let leaves = matches!(command, Command::Play { .. } | Command::Stop);
         let standing = if leaves { e.standing() } else { None };
         let mut queue = e.queue.clone();
-        let told = queue.edit_at(command, usize::try_from(e.index()).ok())?;
+        let current = usize::try_from(e.index()).ok();
+        let start = cratarr_rules::upcoming_start(current, queue.tracks.len());
+        // What was to come, for the Undo of a shuffle or a clear.
+        let before = matches!(command, Command::Shuffle { on: true } | Command::Clear).then(|| queue.tracks[start..].to_vec());
+        let told = queue.edit_at(command, current)?;
         Self::tell(e, name, &told, queue.version)?;
         let edited = queue != e.queue;
         if edited {
@@ -1759,12 +1801,13 @@ impl PlayOn {
                 e.kept_version += 1;
             }
         }
+        let undo = before.filter(|b| !b.is_empty() && queue.tracks.get(start..) != Some(&b[..])).map(|tracks| Command::Restore { tracks });
         e.queue = queue;
         drop(entries);
         if edited {
             self.changed();
         }
-        Ok(())
+        Ok(undo)
     }
 
     /// A command to a player as it is, its queue not edited here (a queue given back, a handover's stop).
@@ -1872,20 +1915,34 @@ impl PlayOn {
         }
     }
 
-    /// The tracks a play or an add names: a playlist's, an album's, the favourites, the library; None when it names
-    /// none (it brings its tracks).
-    async fn picked(&self, name: &str, from: &PlayFrom) -> Result<Option<Vec<QueueTrack>>, ToggleError> {
-        match &from.playlist {
-            Some(p) => Ok(Some(self.playlist_tracks(p).await?)),
-            None => own_tracks(from, self.owner_of(name)).await,
-        }
+    /// The tracks a play or an add names, and the one that plays first: a playlist's, the favourites or the library,
+    /// chosen as every play is (app::play: at most 500, or the limit asked; the library's always drawn at random, 100
+    /// unless told), or an album's, whole in its order. None when it names none (it brings its tracks).
+    async fn picked(&self, name: &str, from: &PlayFrom, how: How, start: Option<super::play::Start>) -> Result<Option<(Vec<QueueTrack>, usize)>, ToggleError> {
+        use super::play::Collection;
+        let (what, how, most) = match () {
+            _ if from.album.is_some() => return Ok(own_album(from).await?.map(|t| picked_from(t, how, start, from.limit.unwrap_or(QUEUE_MOST)))),
+            _ if from.playlist.is_some() => (Collection::Playlist { id: self.playlist_named(from.playlist.as_deref().unwrap_or_default()).await? }, how, from.limit),
+            _ if from.favourites => (Collection::Favourites, how, from.limit),
+            _ if from.library => (Collection::Library, How::Shuffle, Some(from.limit.unwrap_or(LIBRARY_PICK))),
+            _ => return Ok(None),
+        };
+        let Some(app) = self.app.get().and_then(std::sync::Weak::upgrade) else { return Err(ToggleError::Refused("Cratarr is starting.".into())) };
+        let start = if how == How::Shuffle { None } else { start };
+        let owner = self.owner_of(name);
+        let c = match super::play::choose(&app, None, &what, how, start, most.unwrap_or(QUEUE_MOST), owner.as_deref()).await {
+            Ok(c) => c,
+            Err(ToggleError::CannotPlay(_)) => return Ok(Some((Vec::new(), 0))),
+            Err(e) => return Err(e),
+        };
+        Ok(Some((c.tracks, c.index)))
     }
 
     /// Start radio (decision 0036, amended), as the page's "Start radio" does it: Autoplay on, seeded from what the play
     /// names (a playlist, an album, the favourites, tracks) or else from the track that plays, in the player's own
     /// Autoplay mode (Similar at first); its first tracks play as a queue named "Radio: …".
     async fn start_radio(&self, name: &str, from: PlayFrom, tracks: Option<Vec<QueueTrack>>) -> Result<(), ToggleError> {
-        let seeds = match self.picked(name, &from).await?.or(tracks) {
+        let seeds = match self.picked(name, &from, How::Play, None).await?.map(|(t, _)| t).or(tracks) {
             Some(t) => t,
             None => self.get(name).and_then(|v| v.track).into_iter().collect(),
         };
@@ -2239,38 +2296,19 @@ impl PlayOn {
         named.unwrap_or(sent)
     }
 
-    /// A playlist's playable tracks, as players hold them.
-    async fn playlist_tracks(&self, playlist: &str) -> Result<Vec<QueueTrack>, ToggleError> {
-        // By its name, regardless of capitals when no playlist has the very name ("Restaurant de Lift" for "Restaurant
-        // De Lift"), as the spoken names are found.
+    /// The playlist a name means: the very name, else the one that has it regardless of capitals ("Restaurant de Lift" for
+    /// "Restaurant De Lift"), as the spoken names are found.
+    async fn playlist_named(&self, playlist: &str) -> Result<String, ToggleError> {
         let list = self.playlists.view(None).await?;
-        let name = match list.iter().find(|p| p.id == playlist) {
-            Some(p) => p.id.clone(),
-            None => {
-                let want = playlist.to_lowercase();
-                let mut like = list.iter().filter(|p| p.id.to_lowercase() == want);
-                match (like.next(), like.next()) {
-                    (Some(p), None) => p.id.clone(),
-                    _ => playlist.to_string(),
-                }
-            }
-        };
-        let (source, rows) = self.playlists.rows(&name, None).await?;
-        Ok(rows
-            .into_iter()
-            .filter(|r| !r.missing)
-            .filter_map(|r| {
-                Some(QueueTrack {
-                    source: source.clone(),
-                    id: r.id?,
-                    name: r.name.unwrap_or_default(),
-                    artist: r.artist,
-                    album: r.album,
-                    duration_secs: r.duration_secs,
-                    ..QueueTrack::default()
-                })
-            })
-            .collect())
+        if list.iter().any(|p| p.id == playlist) {
+            return Ok(playlist.to_string());
+        }
+        let want = playlist.to_lowercase();
+        let mut like = list.iter().filter(|p| p.id.to_lowercase() == want);
+        Ok(match (like.next(), like.next()) {
+            (Some(p), None) => p.id.clone(),
+            _ => playlist.to_string(),
+        })
     }
 
     pub fn settings(&self) -> PlayOnSettings {
@@ -2467,17 +2505,9 @@ impl Drop for Commands {
     }
 }
 
-/// Whether what comes of the album or playlist after place `index` is out of its own order: more than the one turn
-/// back that starting partway in gives (as the page tells it, lib/localPlayer.svelte.ts).
 /// A command's name as players are told it (`play`, `stop`…), for the log.
 fn command_name(c: &Command) -> String {
     serde_json::to_value(c).ok().and_then(|v| v["command"].as_str().map(str::to_string)).unwrap_or_default()
-}
-
-fn shuffled_order(tracks: &[QueueTrack], index: i64) -> bool {
-    let from = usize::try_from(index + 1).unwrap_or(0);
-    let ns: Vec<u32> = tracks.iter().skip(from).filter(|t| t.lane.is_none()).filter_map(|t| t.n).collect();
-    ns.windows(2).filter(|w| w[1] < w[0]).count() > 1
 }
 
 /// A track as its source knows it, to tell whether two are the same track.
@@ -2492,65 +2522,37 @@ fn valid_name(name: &str) -> Result<(), ToggleError> {
     Ok(())
 }
 
-/// Tracks of Cratarr's own library (decision 0032) for `play`: an album in its order, the favourites of the player's
-/// `owner`, or tracks from the whole library at random. `None` when none of those is asked for. The favourites and the
-/// library leave out what the owner excluded from automatic picks (decision 0024, amended 2026-10-19); an album plays
-/// whole.
-async fn own_tracks(from: &PlayFrom, owner: Option<String>) -> Result<Option<Vec<QueueTrack>>, ToggleError> {
-    if from.album.is_none() && !from.favourites && !from.library {
-        return Ok(None);
-    }
-    let Some(served) = crate::serve::instance() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
-    let excluded = match (&from.album, served.playlists()) {
-        (None, Some(p)) => p.excluded_songs_of(owner.as_deref()).await?,
-        _ => std::collections::HashSet::new(),
+/// Tracks given (or an album's), picked by the rules every play follows (cratarr-rules): at most `most` (at most 500),
+/// in order from the one at `start`, or a shuffle of them; the one that plays first with them. Their own order is kept
+/// on them first (`n`).
+fn picked_from(tracks: Vec<QueueTrack>, how: How, start: Option<super::play::Start>, most: usize) -> (Vec<QueueTrack>, usize) {
+    let tracks = numbered(tracks);
+    let at = match start {
+        Some(super::play::Start::Place(p)) => Some(p),
+        _ => None,
     };
-    let from = from.clone();
+    let p = cratarr_rules::pick(tracks.len(), how, at, most.clamp(1, QUEUE_MOST), &mut super::play::rng());
+    (cratarr_rules::take(&tracks, &p.chosen), p.index)
+}
+
+/// The album's or playlist's own order kept on its tracks, where they came without (Repeat all's rounds follow it).
+fn numbered(mut tracks: Vec<QueueTrack>) -> Vec<QueueTrack> {
+    for (i, t) in tracks.iter_mut().enumerate().filter(|(_, t)| t.lane.is_none() && t.n.is_none()) {
+        t.n = u32::try_from(i).ok();
+    }
+    tracks
+}
+
+/// An album of Cratarr's own library (decision 0032) for `play` and `add`, in its order. `None` when none is asked for.
+async fn own_album(from: &PlayFrom) -> Result<Option<Vec<QueueTrack>>, ToggleError> {
+    let Some(album) = from.album.clone() else { return Ok(None) };
+    let Some(served) = crate::serve::instance() else { return Err(ToggleError::Refused("Cratarr's own library is not open.".into())) };
     let songs = tokio::task::spawn_blocking(move || -> Result<Vec<crate::serve::api::Song>> {
-        if let Some(album) = &from.album {
-            return Ok(served.library.album(album)?.and_then(|a| a.song).unwrap_or_default());
-        }
-        if from.favourites {
-            let owner = owner.context("there is no account yet: make one in Settings")?;
-            let mut ids = served.userdata.starred(&owner, crate::userdata::Kind::Song)?;
-            ids.retain(|id| !excluded.contains(id));
-            return served.library.songs_by_id(&ids);
-        }
-        let want = from.limit.unwrap_or(LIBRARY_PICK);
-        let mut songs = served.library.random_songs(want + excluded.len(), None, (None, None), None)?;
-        songs.retain(|s| !excluded.contains(&s.id));
-        songs.truncate(want);
-        Ok(songs)
+        Ok(served.library.album(&album)?.and_then(|a| a.song).unwrap_or_default())
     })
     .await
     .map_err(|e| anyhow::anyhow!("{e}"))??;
-    let named = |s: String| Some(s).filter(|s| !s.is_empty());
-    Ok(Some(
-        songs
-            .into_iter()
-            .map(|s| QueueTrack {
-                source: crate::source::cratarr::KIND.id.to_string(),
-                id: s.id,
-                name: s.title,
-                artist: named(s.artist),
-                album: named(s.album),
-                album_id: named(s.album_id),
-                duration_secs: Some(s.duration as f64).filter(|d| *d > 0.0),
-                ..QueueTrack::default()
-            })
-            .collect(),
-    ))
-}
-
-/// In place, in a random order (xorshift seeded from the clock: a shuffle needs no better).
-pub(super) fn shuffled<T>(items: &mut [T]) {
-    let mut x = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
-    for i in (1..items.len()).rev() {
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        items.swap(i, (x % (i as u64 + 1)) as usize);
-    }
+    Ok(Some(songs.into_iter().map(super::play::own_track).collect()))
 }
 
 /// Written whole (a temporary file, then renamed), readable by the owner only: webhook addresses can carry secrets.
@@ -2651,16 +2653,6 @@ mod tests {
         assert_eq!(v.track.map(|t| t.id).as_deref(), Some("tr-9"));
         assert_eq!(v.ids, TrackIds::default(), "never the last album's ids beside this track");
         assert_ne!(key(e.queue.tracks.first()), e.ids.0, "a new track to look up when the player reports");
-    }
-
-    #[test]
-    fn a_shuffle_keeps_every_track() {
-        let mut v: Vec<u32> = (0..50).collect();
-        shuffled(&mut v);
-        let mut s = v.clone();
-        s.sort();
-        assert_eq!(s, (0..50).collect::<Vec<_>>());
-        assert_ne!(v, s, "50 tracks in their own order after a shuffle: one chance in 50!");
     }
 
     /// Play On over an empty library, with no files kept.
@@ -2906,6 +2898,70 @@ mod tests {
         p.command("Chrome on Android", Command::play(vec![t("tr-1")], 0, 0)).await.unwrap();
         p.command("Chrome on Android", Command::play(vec![t("tr-2")], 0, 0)).await.unwrap();
         assert_eq!(p.get("Chrome on Android").unwrap().queues.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn tracks_given_are_picked_as_any_play() {
+        let t = |i: usize| QueueTrack { source: "cratarr".into(), id: format!("tr-{i}"), ..QueueTrack::default() };
+        let given: Vec<QueueTrack> = (0..600).map(t).collect();
+        // In order from the 551st: the last 500, it first to play; each keeps its place in what was given.
+        let (tracks, index) = picked_from(given.clone(), How::Play, Some(super::super::play::Start::Place(550)), QUEUE_MOST);
+        assert_eq!((tracks.len(), index, tracks[index].id.as_str()), (500, 450, "tr-550"));
+        assert_eq!(tracks.iter().map(|t| t.n).collect::<Vec<_>>(), (100..600u32).map(Some).collect::<Vec<_>>());
+        // A shuffle draws from all of them; a limit asked caps it.
+        let (tracks, index) = picked_from(given.clone(), How::Shuffle, None, 50);
+        assert_eq!((tracks.len(), index), (50, 0));
+        assert!(tracks.iter().any(|t| t.n > Some(500)), "drawn from all 600 (one chance in 10^10 of none past 500)");
+        // A small play: whole, as given.
+        let (tracks, index) = picked_from(given[..3].to_vec(), How::Play, Some(super::super::play::Start::Place(2)), QUEUE_MOST);
+        assert_eq!((tracks.len(), index), (3, 2));
+    }
+
+    #[tokio::test]
+    async fn a_shuffle_and_a_clear_are_once_and_answer_with_their_undo() {
+        let p = play_on().await;
+        let t = |i: usize| QueueTrack { source: "cratarr".into(), id: format!("tr-{i}"), name: format!("t{i}"), ..QueueTrack::default() };
+        let mut tablet = p.connect("tablet").unwrap();
+        // 600 given, Home Assistant's play with shuffle: 500 drawn, shuffled once, told with no shuffle state.
+        let play = Command::Play {
+            from: PlayFrom::default(),
+            tracks: Some((0..600).map(t).collect()),
+            index: 0,
+            position_ms: 0,
+            shuffle: true,
+            paused: false,
+            queue_id: None,
+            queue_name: None,
+        };
+        p.command("tablet", play).await.unwrap();
+        let sent = told(&mut tablet).pop().unwrap();
+        assert_eq!((sent["command"].as_str(), sent["tracks"].as_array().map(Vec::len), sent.get("shuffle")), (Some("play"), Some(500), None));
+        let v = p.get("tablet").unwrap();
+        p.report("tablet", Report { index: 0, version: Some(v.queue_version), playing: true, ..Report::default() }).unwrap();
+        let order = |p: &PlayOn| p.get("tablet").unwrap().queue.unwrap().iter().map(|t| t.entry.clone()).collect::<Vec<_>>();
+        let before = order(&p);
+
+        // Home Assistant's shuffle switch on: shuffled once; the view says off; the player is told the order, not a state.
+        let undo = p.answer("tablet", serde_json::from_str(r#"{"command":"shuffle","on":true}"#).unwrap()).await.unwrap();
+        let Some(Command::Restore { tracks }) = undo.clone() else { panic!("{undo:?}") };
+        assert_eq!(tracks.iter().map(|t| t.entry.clone()).collect::<Vec<_>>(), before[1..], "the order before, by entry");
+        assert_ne!(order(&p), before);
+        assert_eq!(order(&p)[0], before[0], "the playing track stays");
+        assert!(!p.get("tablet").unwrap().shuffled, "no shuffle state");
+        let sent = told(&mut tablet).pop().unwrap();
+        assert_eq!((sent["command"].as_str(), sent["shuffled"].as_bool()), (Some("upcoming"), Some(false)));
+        // Its Undo, sent back as it came: the order before.
+        assert_eq!(p.answer("tablet", undo.unwrap()).await.unwrap(), None);
+        assert_eq!(order(&p), before);
+
+        // Clear: the playing track plays on; Undo puts the rest back.
+        let undo = p.answer("tablet", Command::Clear).await.unwrap().unwrap();
+        assert_eq!(order(&p), before[..1]);
+        p.answer("tablet", undo).await.unwrap();
+        assert_eq!(order(&p), before);
+        // Nothing to clear: nothing to undo.
+        p.command("tablet", Command::play(vec![t(1)], 0, 0)).await.unwrap();
+        assert_eq!(p.answer("tablet", Command::Clear).await.unwrap(), None);
     }
 
     #[tokio::test]

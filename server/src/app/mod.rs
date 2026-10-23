@@ -50,7 +50,7 @@ pub use incoming::{AlbumFate, DeleteResult, IncomingService, IncomingView, JobVi
 pub use insights::InsightsService;
 pub use library::{Library, SourceTab};
 pub use playing::{AlbumRef, AlbumView, ArtistView, FromQueue, PlayingService, StateView, TrackStateView};
-pub use playlists::{ByName, CrateView, PlayMode, PlayResult, PlaylistService, PlaylistStats};
+pub use playlists::{ByName, CrateView, PlayResult, PlaylistService, PlaylistStats};
 pub use playon::{Command as PlayOnCommand, PlayOn, PlayOnSettings, PlayOnSettingsView, QueueTrack, Report as PlayerReport, whose as whose_players};
 pub use plays::{PlayEvent, Plays};
 pub use sync::TargetChoice;
@@ -169,7 +169,10 @@ impl App {
                 }
             });
         }
-        Ok(Arc::new(Self { library, sync, playing, playlists, incoming, collection, insights, settings, journal, events: Default::default(), play_on, plays, visuals }))
+        let app = Arc::new(Self { library, sync, playing, playlists, incoming, collection, insights, settings, journal, events: Default::default(), play_on, plays, visuals });
+        // What a Play On play names is chosen through app::play, as every play.
+        app.play_on.set_app(&app);
+        Ok(app)
     }
 
     /// For the navigation header.
