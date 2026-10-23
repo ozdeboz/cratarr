@@ -89,7 +89,22 @@
   /** Where the handle is held (seconds), and after release until the player is there. */
   let held = $state<number | null>(null);
   let heldTimer: ReturnType<typeof setTimeout> | undefined;
-  const pos = $derived(held ?? position());
+  // While held, where it plays stays marked, still moving (the owner, 2026-10-24: "something to aim for"); held within
+  // SNAP_PX of it, the handle snaps onto it, and let go there nothing is sought (cancelling the seek).
+  const SNAP_PX = 12;
+  let snapped = $state(false);
+  /** The seek bar's width (px) while held. */
+  let seekWidth = 0;
+  const pos = $derived(snapped ? position() : (held ?? position()));
+  /** Where it plays, 0..1, while the handle is held and elsewhere. */
+  const nowMark = $derived(held !== null && !snapped && dur ? position() / dur : null);
+  /** Held at `secs`: on the playing position (snapped) or not. */
+  function hold(secs: number) {
+    const near = !!dur && seekWidth > 0 && (Math.abs(secs - position()) / dur) * seekWidth <= SNAP_PX;
+    if (near && !snapped) navigator.vibrate?.(8);
+    snapped = near;
+    held = secs;
+  }
   const at = (e: PointerEvent, el: HTMLElement) => {
     const r = el.getBoundingClientRect();
     return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * (dur ?? 0);
@@ -102,7 +117,8 @@
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
     clearTimeout(heldTimer);
-    held = at(e, el);
+    seekWidth = el.getBoundingClientRect().width;
+    hold(at(e, el));
     const r = el.getBoundingClientRect();
     const room = head?.getBoundingClientRect() ?? r;
     const w = el.querySelector('.wave')?.getBoundingClientRect();
@@ -110,12 +126,18 @@
   }
   function seekMove(e: PointerEvent) {
     if (held === null || !(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return;
-    held = at(e, e.currentTarget as HTMLElement);
+    hold(at(e, e.currentTarget as HTMLElement));
   }
   function seekUp(e: PointerEvent) {
     const el = e.currentTarget as HTMLElement;
     lens = null;
     if (held === null || !el.hasPointerCapture(e.pointerId)) return;
+    // Let go on the playing position: nothing changes.
+    if (snapped) {
+      snapped = false;
+      held = null;
+      return;
+    }
     release(at(e, el));
   }
   /** Seek, and keep the handle there until the player has moved (no jump back to the old position). */
@@ -496,18 +518,19 @@
                 onpointerdown={seekDown}
                 onpointermove={seekMove}
                 onpointerup={seekUp}
-                onpointercancel={() => ((held = null), (lens = null))}
+                onpointercancel={() => ((held = null), (snapped = false), (lens = null))}
                 onkeydown={seekKey}
               >
                 {#if wave}
-                  <Waveform bins={wave} progress={dur ? pos / dur : 0} paused={np.progress.paused} />
+                  <Waveform bins={wave} progress={dur ? pos / dur : 0} paused={np.progress.paused} now={nowMark} />
                 {:else}
                   <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
                 {/if}
                 <!-- The plain bar's handle; over a waveform, while held, the lens instead (where it is going). -->
                 {#if canSeek && !wave}<span class="thumb" style:left="{dur ? (pos / dur) * 100 : 0}%"></span>{/if}
+                {#if !wave && nowMark !== null}<span class="now-mark" style:left="{nowMark * 100}%"></span>{/if}
                 {#if wave && lens && held !== null && dur}
-                  <WaveLens bins={wave} point={held / dur} {...lens} time={clockText(held)} paused={np.progress.paused} />
+                  <WaveLens bins={wave} point={pos / dur} now={nowMark} {...lens} time={clockText(pos)} paused={np.progress.paused} />
                 {/if}
               </div>
               <span class="t">{dur ? clockText(dur) : '–:––'}</span>
@@ -1000,6 +1023,18 @@
 
   .seek.held .thumb {
     transform: scale(1.3);
+  }
+
+  /* Where it plays while the handle is held elsewhere (on a plain bar; a waveform draws its own). */
+  .now-mark {
+    position: absolute;
+    top: 50%;
+    width: 2px;
+    height: 16px;
+    margin: -8px 0 0 -1px;
+    border-radius: 1px;
+    background: var(--text);
+    pointer-events: none;
   }
 
   .bar {

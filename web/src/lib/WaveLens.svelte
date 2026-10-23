@@ -5,7 +5,8 @@
   // tall, against the track's loudest), played in the accent left of the point, muted right; a white line inside marks
   // the point. Its centre keeps 10 px inside the player; a stem runs from the point up to it, a white line crosses the
   // waveform at the point, and the time where it will land sits above it in a small tag. Geometry as claude-5f's mock
-  // (lens-real.png, gen5.py): 130 px, its bottom edge 36 px above the waveform's middle.
+  // (lens-real.png, gen5.py): 130 px, its bottom edge 36 px above the waveform's middle. `now` (0..1): where it plays,
+  // a line in the lens's text colour when it is within it (the owner, 2026-10-24: something to aim for).
   import { bars } from './waveforms.svelte';
 
   let {
@@ -18,6 +19,7 @@
     max,
     time,
     paused = false,
+    now = null,
   }: {
     bins: Uint8Array;
     /** 0..1 along the waveform. */
@@ -31,6 +33,7 @@
     max: number;
     time: string;
     paused?: boolean;
+    now?: number | null;
   } = $props();
 
   const D = 130;
@@ -58,6 +61,7 @@
     {/each}
   </span>
   <span class="mark" style:left="{D / 2 + (x - c) * ZOOM - 1}px"></span>
+  {#if now !== null && Math.abs((now * width - c) * ZOOM) < D / 2 - 4}<span class="mark now" style:left="{D / 2 + (now * width - c) * ZOOM - 1}px"></span>{/if}
 </span>
 <span class="tag" style:left="{c}px" style:top="{top - 26}px">{time}</span>
 
@@ -123,6 +127,11 @@
     width: 2px;
     border-radius: 1px;
     background: rgb(255 255 255 / 0.9);
+  }
+
+  /* Where it plays: dashed, so it reads apart from where it will land. */
+  .mark.now {
+    background: repeating-linear-gradient(to bottom, rgb(255 255 255 / 0.75) 0 4px, transparent 4px 7px);
   }
 
   /* Where it will land, over the lens. */
