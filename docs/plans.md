@@ -65,3 +65,16 @@ without a device. The owner (2026-10-19): "for later, if ever".
     flac, oboe, ogg, opus, soxr, tremor, vorbis). Building arm64-v8a only would do for the tablet and the phone.
 - Catches: GPL-3.0, so the patch stays in the repo with the source offer; our own build to keep up with Snapcast (or the
   patch offered upstream); a test by ear on a device following a group.
+
+## One similarity for playlists and crates
+
+Radio, Autoplay and "more like this" each find similar music their own way from a playlist, a crate or a track
+(0036's profile: shared playlists, artists, genres, tags, era and AudioMuse's sound, 0054). The owner (2026-10-23): "we
+should consolidate playlist and crate similarity into a unified module or path later on. We'll handle this after all
+AudioMuse analysis is done."
+
+- Waits for: AudioMuse's analysis of the whole library (with CLAP) to finish, so the sound signal is there for every
+  track before the weights are settled.
+- Seen so far: a crate's Start radio seeds from 300 of its tracks (drawn by the server since 73.2) and leaves the seed
+  out; a broad crate (Unlisted, 16,000 tracks) makes a blurry profile. Play as radio (only the crate's tracks) is a
+  different path again.
