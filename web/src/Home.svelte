@@ -157,7 +157,7 @@
         {/if}
         <div class="about">
           <h3>{week.total.toLocaleString()} tracks you didn't play this week</h3>
-          {#if week.played}<p>from the {week.played.toLocaleString()} tracks you played in the last 7 days</p>{/if}
+          {#if week.played}<p>like the {week.played.toLocaleString()} tracks you played in the last 7 days</p>{/if}
           {#if week.genres.length}<p class="genres">{#each week.genres as g (g)}<button onclick={() => viewGenre(g)}>{g}</button>{/each}</p>{/if}
           <div class="acts">
             <button class="main" disabled={starting} onclick={() => playWeek('play')}><Icon name="play" size={18} />Play</button>
