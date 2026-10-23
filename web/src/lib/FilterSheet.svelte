@@ -1,10 +1,12 @@
 <script lang="ts">
-  // The filter, after Symfonium's source filter (opened from the funnel in a floating pill, lib/TopPill): first what
-  // the list it was opened on leaves out, for that list only (decided 2026-10-16: Playlists' Favourites only, the
-  // panel's Hide missing tracks; not remembered), then, last, the one filter that is remembered and holds everywhere: a
-  // card per server this browser can follow, with its kind and its libraries. On the followed server's card the
-  // libraries are switches on the Library (decision 0034), every used one, remembered as the server is; the last one on
-  // stays on, so the page never filters down to nothing; elsewhere a chip only shows the library's use. A tap on a server's card follows it; a tap on the followed one goes back to no choice, which is
+  // The filter, after Symfonium's source filter (opened from the funnel in a floating pill, lib/TopPill): first the
+  // list's own filter, remembered per kind of list (decisions 0060 and 0061): how many it lets through, its conditions
+  // as cards (lib/ConditionList: a crate's, unsaved; Any or All where the items hold tracks), the kind's own switches,
+  // then Clear and Save as crate. Then, last, the one filter that holds everywhere: a card per server this browser can
+  // follow, with its kind and its libraries. On the followed server's card the libraries are switches on the Library
+  // and on Crates (decision 0034; a crate fills from every library switched on, the owner, 2026-10-23), every used
+  // one, remembered as the server is; the last one on stays on, so the page never filters down to nothing; elsewhere a
+  // chip only shows the library's use. A tap on a server's card follows it; a tap on the followed one goes back to no choice, which is
   // Cratarr's own source where the server has it (lib/sources). The libraries are only shown, with their use: Cratarr
   // has no per-library visibility, and a use is set only in Settings (decision 0009).
   // On the Library, under its switches, "Excluded (N)": Cratarr's global exclusions while there are any (decision 0024,
@@ -13,24 +15,60 @@
   import ExcludedSheet from './ExcludedSheet.svelte';
   import { excluded } from './exclusions.svelte';
   import Switch from './Switch.svelte';
-  import TempoRange from './TempoRange.svelte';
-  import { pageView } from './pageView.svelte';
-  import { panel } from './panel.svelte';
-  import { getLibraries, getSettings, getStatus, type LibrariesView, type LibraryUse } from './api';
+  import ConditionList from './ConditionList.svelte';
+  import type { ListAxis } from './ConditionCard.svelte';
+  import { clearFilter, filterOf, filtersOn, setConditions, setSwitch, switchOn } from './listFilter.svelte';
+  import { SWITCHES } from './pageView.svelte';
+  import { startCrate } from './crates.svelte';
+  import { getCrateAxes, getLibraries, getSettings, getStatus, type LibrariesView, type LibraryUse } from './api';
   import { me } from './me.svelte';
   import Icon from './Icon.svelte';
   import MenuSheet from './MenuSheet.svelte';
-  import { prefs } from './prefs.svelte';
+  import { prefs, type PanelKind } from './prefs.svelte';
   import { known, libraryShown, noChoice, remember, showLibrary } from './sources.svelte';
   import { toast } from './toast.svelte';
 
-  // `page`: the page it was opened on, whose own filters it shows (Playlists: favourites only); null in the panel
-  // (Hide missing tracks, and the tempo range over the list's `tempos`, decision 0041).
+  // `page`: the page it was opened on, whose filter it shows; null in the panel, which says its `kind` of list (and
+  // gives its `tempos` for the Tempo condition's spread, decision 0041). `counted`: how many the filter lets through.
   let {
     page = null,
+    kind = null,
     tempos = null,
+    counted = null,
     onclose,
-  }: { page?: string | null; tempos?: readonly (number | null | undefined)[] | null; onclose: () => void } = $props();
+  }: {
+    page?: string | null;
+    kind?: PanelKind | null;
+    tempos?: readonly (number | null | undefined)[] | null;
+    counted?: { shown: number; total: number } | null;
+    onclose: () => void;
+  } = $props();
+
+  const list = $derived(page ?? kind ?? '');
+  // Conditions on the lists whose items the server knows the facts of: the Library's albums, Playlists, and the
+  // panel's track lists; Any or All where the items hold tracks (decision 0061). Crates have none (decision 0060).
+  const CONDITIONED = ['library', 'playlists', 'playlist', 'crate', 'album', 'artist'];
+  const conditioned = $derived(CONDITIONED.includes(list));
+  const quantified = $derived(list === 'library' || list === 'playlists');
+  const switches = $derived((SWITCHES[list] ?? []).filter((w) => !w.incoming || hasIncoming));
+  const filter = $derived(filterOf(list));
+  // The axes and their values, the whole library's (the most common first).
+  let axes = $state<ListAxis[]>([]);
+  $effect(() => {
+    if (!conditioned) return;
+    getCrateAxes(prefs.source || undefined).then(
+      (a) => (axes = a),
+      (e) => toast.fail(e, "The filter's conditions couldn't be loaded"),
+    );
+  });
+  /** Save as crate: the conditions that apply, a new crate in the panel's editor. */
+  function saveAsCrate() {
+    const conditions = filter.conditions
+      .filter((c) => c.enabled !== false)
+      .map(({ axis, not, value }) => ({ axis, not, value }));
+    onclose();
+    startCrate('', conditions);
+  }
 
   // The servers: the status call fills the list when no playlist poll has yet.
   $effect(() => {
@@ -75,8 +113,10 @@
     }),
   );
 
-  // On the Library (decision 0034) every used library's chip is a switch; elsewhere a chip only shows the use.
-  const switchable = (use: LibraryUse) => page === 'library' && use !== 'unused';
+  // On the Library (decision 0034) and on Crates every used library's chip is a switch; elsewhere a chip only shows the
+  // use.
+  const switchable = (use: LibraryUse) => (page === 'library' || page === 'crates') && use !== 'unused';
+  const hasIncoming = $derived(cards.some((c) => c.libraries.some((l) => l.use === 'incoming')));
   const followedId = $derived(known.list.some((s) => s.id === prefs.source) ? prefs.source : noChoice());
 
   function follow(id: string) {
@@ -88,27 +128,29 @@
 
 <MenuSheet label="Filter" icon="funnel" title="Filter" {onclose}>
   <div class="cards">
-    {#if page === 'playlists' || page === 'library'}
-      <div class="toggles">
-        <Switch card label="Favourites only" checked={pageView.favouritesOnly} onchange={(on) => (pageView.favouritesOnly = on)} />
-        {#if page === 'library'}
-          <Switch card label="Upgrades waiting" checked={pageView.upgradesOnly} onchange={(on) => (pageView.upgradesOnly = on)} />
-          <Switch card label="Not played yet" checked={pageView.unplayedOnly} onchange={(on) => (pageView.unplayedOnly = on)} />
-          <Switch card label="4 stars and up" checked={pageView.topRatedOnly} onchange={(on) => (pageView.topRatedOnly = on)} />
-        {/if}
+    {#if counted && filtersOn(list)}<p class="count">{counted.shown.toLocaleString()} of {counted.total.toLocaleString()}</p>{/if}
+    {#if conditioned}
+      <div>
+        <ConditionList bind:conditions={() => filter.conditions, (c) => setConditions(list, c)} {axes} {quantified} bpms={tempos} />
       </div>
-      {#if page === 'library' && excluded.n}
-        <button class="opens" onclick={() => (excludedOpen = true)}
-          ><span>Excluded ({excluded.n.toLocaleString()})</span><Icon name="chevronRight" size={22} /></button
-        >
-      {/if}
-    {:else if page === null}
+    {/if}
+    {#if switches.length}
       <div class="toggles">
-        <Switch card label="Hide missing tracks" checked={panel.hideMissing} onchange={(on) => (panel.hideMissing = on)} />
+        {#each switches as w (w.key)}
+          <Switch card label={w.label} checked={switchOn(list, w.key)} onchange={(on) => setSwitch(list, w.key, on)} />
+        {/each}
       </div>
-      {#if tempos?.some(Boolean)}
-        <div class="tempo-card"><TempoRange bpms={tempos} bind:value={panel.tempo} /></div>
-      {/if}
+    {/if}
+    {#if filtersOn(list) || filter.conditions.length}
+      <div class="buttons">
+        <button class="quiet" onclick={() => clearFilter(list)}>Clear</button>
+        {#if conditioned && filter.conditions.some((c) => c.enabled !== false)}<button class="strong" onclick={saveAsCrate}>Save as crate</button>{/if}
+      </div>
+    {/if}
+    {#if page === 'library' && excluded.n}
+      <button class="opens" onclick={() => (excludedOpen = true)}
+        ><span>Excluded ({excluded.n.toLocaleString()})</span><Icon name="chevronRight" size={22} /></button
+      >
     {/if}
 
     {#each cards as c (c.id)}
@@ -209,11 +251,36 @@
     outline-offset: 2px;
   }
 
-  /* The tempo selector, a card as the switches are. */
-  .tempo-card {
-    padding: 14px 16px 12px;
-    border-radius: 20px;
+  .count {
+    margin: 0 8px;
+    color: var(--muted);
+    font-size: 14px;
+  }
+
+  /* Clear beside Save as crate, Save as crate the stronger. */
+  .buttons {
+    display: flex;
+    gap: 10px;
+  }
+
+  .buttons button {
+    flex: 1;
+    min-height: 44px;
+    border: 0;
+    border-radius: 999px;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .quiet {
     background: var(--card);
+    color: var(--text);
+  }
+
+  .strong {
+    background: var(--accent);
+    color: var(--accent-text);
   }
 
 

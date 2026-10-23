@@ -1,7 +1,7 @@
 # 0060: One set of sorts and filters per kind of item
 
-- Status: proposed (the owner, 2026-10-23: "This is also entirely scattered and barely complete"; "Yes, please" to
-  writing it up); the tables await the owner's check
+- Status: accepted (the owner, 2026-10-23: "This is also entirely scattered and barely complete"; "Yes, please" to
+  writing it up; the tables: "Build as proposed")
 - Date: 2026-10-23
 - Builds on: 0058 (one menu system), 0025 (playlist views and orders), 0035 (tempo), 0042 (columns), 0024 (crates)
 

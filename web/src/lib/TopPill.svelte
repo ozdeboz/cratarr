@@ -9,8 +9,9 @@
   import FilterSheet from './FilterSheet.svelte';
   import Icon from './Icon.svelte';
   import OutputSheet from './OutputSheet.svelte';
+  import { filtersOn } from './listFilter.svelte';
   import { pageView, searchFor } from './pageView.svelte';
-  import { panel } from './panel.svelte';
+  import type { PanelKind } from './prefs.svelte';
   import ViewSheet, { type ListOrder } from './ViewSheet.svelte';
 
   let {
@@ -20,6 +21,8 @@
     order = null,
     tempos = null,
     filter = true,
+    kind = null,
+    counted = null,
   }: {
     /** The page it is on (its search, its own filters and View), or null in the panel. */
     page?: string | null;
@@ -31,6 +34,10 @@
     tempos?: readonly (number | null | undefined)[] | null;
     /** The filter's button; not on local mode's pages (decision 0052), which have only their search. */
     filter?: boolean;
+    /** In the panel: the kind of list it shows, whose filter is remembered (decision 0060). */
+    kind?: PanelKind | null;
+    /** In the panel: how many of its list the filter lets through, of how many. */
+    counted?: { shown: number; total: number } | null;
   } = $props();
   let filterOpen = $state(false);
   let viewOpen = $state(false);
@@ -48,11 +55,11 @@
     void page;
     searching = false;
   });
-  // A filter leaves something out of what shows: a library switched off (remembered, so it is said here), Playlists'
-  // Favourites only, the panel's Hide missing tracks and tempo range.
-  const filtering = $derived(
-    page ? pageView.narrowed || pageView.favouritesOnly || pageView.upgradesOnly || pageView.unplayedOnly || pageView.topRatedOnly : panel.hideMissing || panel.tempo !== null,
-  );
+  // A filter leaves something out of what shows: its conditions and switches, counted on the funnel (the list stays
+  // clean, decision 0061), or a library switched off (remembered, so it is said here by the funnel's light).
+  const list = $derived(page ?? kind ?? '');
+  const filters = $derived(list ? filtersOn(list) : 0);
+  const filtering = $derived(filters > 0 || (!!page && pageView.narrowed));
   function clear() {
     pageView.query = '';
     searching = false;
@@ -78,8 +85,10 @@
     {#if words}
       <button class:lit={pageView.query.trim() !== ''} aria-label={words} title={words} onclick={() => (searching = true)}><Icon name="search" size={22} /></button>
     {/if}
-    {#if filter}<button class:lit={filtering} aria-label="Filter" title="Filter" aria-haspopup="dialog" onclick={() => (filterOpen = true)}><Icon name="funnel" size={22} /></button>{/if}
-    {#if view && (page || order)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (viewOpen = true)}><Icon name="sliders" size={22} /></button>{/if}
+    {#if filter}<button class="funnel" class:lit={filtering} aria-label={filters ? `Filter, ${filters} on` : 'Filter'} title="Filter" aria-haspopup="dialog" onclick={() => (filterOpen = true)}
+        ><Icon name="funnel" size={22} />{#if filters}<span class="badge">{filters}</span>{/if}</button
+      >{/if}
+    {#if view && (page || order?.columns?.shown.length)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (viewOpen = true)}><Icon name="sliders" size={22} /></button>{/if}
     {#if device}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={22} /></button>{/if}
     {#if page && pageView.action}
       {@const a = pageView.action}
@@ -94,9 +103,9 @@
   </div>
 {/if}
 {#if filterOpen}
-  <FilterSheet {page} {tempos} onclose={() => (filterOpen = false)} />
+  <FilterSheet {page} {kind} {tempos} counted={page ? pageView.counted : counted} onclose={() => (filterOpen = false)} />
 {/if}
-{#if viewOpen && (page || order)}
+{#if viewOpen && (page || order?.columns?.shown.length)}
   <ViewSheet {page} {order} onclose={() => (viewOpen = false)} />
 {/if}
 {#if outputOpen}
@@ -158,6 +167,27 @@
   /* A search or a filter that applies. */
   button.lit {
     color: var(--accent);
+  }
+
+  /* How many filters are on: a small count on the funnel's corner, the list itself left clean (decision 0061). */
+  .funnel {
+    position: relative;
+  }
+
+  .badge {
+    position: absolute;
+    top: 2px;
+    right: 0;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
   }
 
   /* The search open: over the row (it is the row's, positioned), the whole of it on a phone, at most 520 px. */

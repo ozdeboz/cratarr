@@ -13,14 +13,13 @@
 </script>
 
 <script lang="ts">
-  // The page's View (lib/TopPill's view button, decided 2026-10-15): how its list shows. Its order and direction (the
-  // same as its list header's), then for playlists the size, for albums rows or covers and the size.
-  import Card from './Card.svelte';
-  import ChoiceList from './ChoiceList.svelte';
+  // The page's View (lib/TopPill's view button, decided 2026-10-15): how its list shows: for playlists chips or a table
+  // and the size, for albums rows, covers or a table and the size, a track list's columns. Not its order or direction,
+  // which only its list's header sets (decision 0060).
   import ColumnOrder from './ColumnOrder.svelte';
   import { COLUMNS, fit } from './columns.svelte';
   import MenuSheet from './MenuSheet.svelte';
-  import { ALBUM_LAYOUTS, ALBUM_ORDERS, ALBUM_WIDTHS, CRATE_ORDERS, DATES, DIRECTIONS, PLAYLIST_LAYOUTS, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, pageView } from './pageView.svelte';
+  import { ALBUM_LAYOUTS, ALBUM_WIDTHS, DATES, PLAYLIST_LAYOUTS, PLAYLIST_WIDTHS, pageView } from './pageView.svelte';
   import { prefs } from './prefs.svelte';
   import Seg from './Seg.svelte';
   import SettingRow from './SettingRow.svelte';
@@ -33,34 +32,15 @@
 <MenuSheet label="View" icon="sliders" title="View" {onclose}>
   <div class="parts">
     {#if order}
-      <!-- One under another (the list header's Order sheet's): a track list has too many to fit in a row. -->
-      {@const o = order}
-      <Card title="Order" label="Order">
-        <ChoiceList label="Order" options={o.fields} value={o.value} onchange={(v) => o.set(v, o.down)} />
-      </Card>
-      <SettingRow card label="Direction">
-        <Seg label="Direction" options={DIRECTIONS} bind:value={() => o.down, (d) => o.set(o.value, d)} />
-      </SettingRow>
-      {#if o.columns?.shown.length}<ColumnOrder {...o.columns} />{/if}
+      {#if order.columns?.shown.length}<ColumnOrder {...order.columns} />{/if}
     {:else if page === 'playlists'}
-      <SettingRow card label="Order"><Seg label="Order" options={PLAYLIST_ORDERS} bind:value={prefs.playlistOrder} /></SettingRow>
-      <SettingRow card label="Direction"><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.playlistDown} /></SettingRow>
       <SettingRow card label="Layout"><Seg label="Layout" options={PLAYLIST_LAYOUTS} bind:value={prefs.playlistLayout} /></SettingRow>
       {#if prefs.playlistLayout === 'table'}
         <ColumnOrder kind="playlists" shown={fit('playlists', pageView.width).map((c) => c.id)} offered={COLUMNS.playlists.map((c) => c.id)} />
       {:else}
         <SettingRow card label="Size"><SizeControl widths={PLAYLIST_WIDTHS} width={pageView.width} bind:value={prefs.zoom} /></SettingRow>
       {/if}
-    {:else if page === 'crates'}
-      <SettingRow card label="Order"><Seg label="Order" options={CRATE_ORDERS} bind:value={prefs.crateOrder} /></SettingRow>
-      <SettingRow card label="Direction"><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.crateDown} /></SettingRow>
-    {:else if page === 'downloads'}
-      <SettingRow card label="Order"><Seg label="Order" options={ALBUM_ORDERS} bind:value={prefs.downloadsOrder} /></SettingRow>
-      <SettingRow card label="Direction"><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.downloadsDown} /></SettingRow>
-      {@render albums()}
     {:else}
-      <SettingRow card label="Order"><Seg label="Order" options={ALBUM_ORDERS} bind:value={prefs.libraryOrder} /></SettingRow>
-      <SettingRow card label="Direction"><Seg label="Direction" options={DIRECTIONS} bind:value={prefs.libraryDown} /></SettingRow>
       {@render albums()}
     {/if}
   </div>

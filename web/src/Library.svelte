@@ -17,7 +17,8 @@
   import { jobs } from './lib/jobs.svelte';
   import { on, stream } from './lib/events.svelte';
   import { isFavorite, loadAlbumFavorites } from './lib/favourites.svelte';
-  import { pageView } from './lib/pageView.svelte';
+  import { isLossless, pageView } from './lib/pageView.svelte';
+  import { switchOn } from './lib/listFilter.svelte';
   import { untrack } from 'svelte';
   import { me } from './lib/me.svelte';
   import { loadExcluded } from './lib/exclusions.svelte';
@@ -121,38 +122,43 @@
   }
   const verdictOf = (shelf: ShelfSource, a: ListedAlbum) => sources?.find((x) => x.id === shelf.id)?.verdicts[a.id];
 
-  // The filter's own switches (Favourites only, Upgrades waiting, Not played yet, 4 stars and up): the list's, so off
-  // again when the page goes.
-  $effect(() => () => {
-    pageView.favouritesOnly = false;
-    pageView.upgradesOnly = false;
-    pageView.unplayedOnly = false;
-    pageView.topRatedOnly = false;
-  });
+  // The filter's own switches (Favourites only, Not played yet, 4 stars and up, Lossless only, Upgrades waiting),
+  // remembered as the Library's (decision 0060).
+  const fav = $derived(switchOn('library', 'favourites'));
+  const unplayed = $derived(switchOn('library', 'unplayed'));
+  const top = $derived(switchOn('library', 'topRated'));
+  const lossless = $derived(switchOn('library', 'lossless'));
+  const up = $derived(switchOn('library', 'upgrades'));
   // Not played yet and 4 stars and up read how you used the albums, again each time one is switched on.
   $effect(() => {
-    if (!pageView.unplayedOnly && !pageView.topRatedOnly) return;
+    if (!unplayed && !top) return;
     for (const s of untrack(() => sources ?? [])) loadAlbumUses(s.id);
   });
   // Favourites only asks each server again (an app may have changed a star meanwhile); one that cannot tell says so.
   $effect(() => {
-    if (!pageView.favouritesOnly) return;
+    if (!fav) return;
     for (const s of untrack(() => sources ?? []))
       loadAlbumFavorites(s.id).then((ok) => ok || toast.show({ text: `${s.label} can't list favourite albums`, tone: 'error' }));
   });
   const shown = $derived.by<ShelfSource[] | null>(() => {
-    const { favouritesOnly: fav, upgradesOnly: up, unplayedOnly: unplayed, topRatedOnly: top } = pageView;
-    if (!sources || !(fav || up || unplayed || top)) return sources;
+    if (!sources || !(fav || up || unplayed || top || lossless)) return sources;
     const keep = (s: ShelfSource, a: ListedAlbum) => {
       const u = useOf(s.id, a.id);
       return (
         (!fav || isFavorite(s.id, a.id)) &&
         (!up || verdictOf(s, a)?.kind === 'upgrade') &&
         (!unplayed || (u.plays === 0 && !u.played)) &&
-        (!top || u.rating >= 4)
+        (!top || u.rating >= 4) &&
+        (!lossless || isLossless(a.format))
       );
     };
     return sources.map((s) => ({ ...s, albums: s.albums.filter((a) => keep(s, a)) }));
+  });
+  // How many albums the filter lets through, of how many (the Filter sheet's count).
+  $effect(() => {
+    const count = (l: ShelfSource[] | null) => (l ?? []).reduce((n, s) => n + s.albums.length, 0);
+    pageView.counted = sources ? { shown: count(shown), total: count(sources) } : null;
+    return () => (pageView.counted = null);
   });
 </script>
 

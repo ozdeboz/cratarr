@@ -27,7 +27,7 @@
   import { playing as nowPlaying } from './remote.svelte';
   import Row from './Row.svelte';
   import ListHead from './ListHead.svelte';
-  import { ALBUM_ORDERS, ALBUM_WIDTHS, howMany, pageView, USE_ORDERS } from './pageView.svelte';
+  import { ALBUM_ORDERS, ALBUM_WIDTHS, howMany, isLossless, pageView, qualityOf, USE_ORDERS } from './pageView.svelte';
   import { libraryShown } from './sources.svelte';
   import Tile from './Tile.svelte';
   import type { Cell } from './Row.svelte';
@@ -181,6 +181,7 @@
       plays: (x, y) => use(x).plays - use(y).plays || (use(x).played ?? 0) - (use(y).played ?? 0),
       played: (x, y) => (use(x).played ?? 0) - (use(y).played ?? 0),
       rating: (x, y) => use(x).rating - use(y).rating || use(x).plays - use(y).plays,
+      quality: (x, y) => qualityOf(x) - qualityOf(y) || byArtist(x, y) || byTitle(x, y),
     };
   };
   const shown = $derived(
@@ -194,14 +195,6 @@
     if (!USE_ORDERS.includes(order)) return;
     for (const s of untrack(() => sources)) loadAlbumUses(s.id);
   });
-  // Plays, Last played and Rating start most first; the arrow still turns them round.
-  let orderWas = untrack(() => order);
-  $effect(() => {
-    const o = order;
-    if (o === orderWas) return;
-    orderWas = o;
-    if (USE_ORDERS.includes(o)) down = true;
-  });
 
   const view = (source: string, a: ListedAlbum) => viewPlaylist(albumSubject(source, a.id));
   // A tile shows its title and artist; the value the list is ordered by, when it is neither, is a pill over the cover's
@@ -209,6 +202,7 @@
   const axisOf = (s: ShelfSource, a: ListedAlbum) => {
     if (order === 'year') return a.year ? String(a.year) : null;
     if (order === 'added') return a.added ? addedOn(a.added) : null;
+    if (order === 'quality') return a.format ? [a.format, isLossless(a.format) ? null : a.bitrate_kbps].filter(Boolean).join(' ') : null;
     const u = useOf(s.id, a.id);
     if (order === 'plays') return u.plays ? (u.plays === 1 ? '1 play' : `${u.plays} plays`) : null;
     if (order === 'played') return u.played ? addedOn(u.played) : null;

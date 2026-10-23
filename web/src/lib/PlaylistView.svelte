@@ -110,7 +110,7 @@
   import Row from './Row.svelte';
   import TrackCover from './TrackCover.svelte';
   import Section from './Section.svelte';
-  import Spread, { bandsOf, layerColor, within } from './Spread.svelte';
+  import Spread, { bandsOf, layerColor } from './Spread.svelte';
   import type { Cell } from './Row.svelte';
   import { fit } from './columns.svelte';
   import { fromAction } from 'svelte/attachments';
@@ -121,7 +121,9 @@
   import TopPill from './TopPill.svelte';
   import SelectBar from './SelectBar.svelte';
   import { work } from './panelWork.svelte';
-  import { prefs } from './prefs.svelte';
+  import { prefs, type FilterCondition, type ListSort, type PanelKind } from './prefs.svelte';
+  import { activeConditions, switchOn } from './listFilter.svelte';
+  import { trackOrders, type TrackOrder } from './pageView.svelte';
   import { clockText, paused, playing } from './remote.svelte';
   import { on } from './events.svelte';
   import { swipe } from './swipe';
@@ -396,33 +398,24 @@
   const playable = $derived(rows ? rows.filter((r) => r.id && !r.missing) : []);
 
   // Symfonium's header over the tracks: their order (the subject's own, or by a field, either way round), how many, and
-  // select mode. The list shows and plays in that order; an album's rows keep their track numbers. A crate's order is
-  // of the pages it has shown.
-  type SortKey = 'own' | 'title' | 'artist' | 'album' | 'length' | 'tempo' | 'albumArtist' | 'year' | 'track' | 'plays' | 'lastPlayed' | 'added';
-  let sortKey = $state<SortKey>('own');
-  let sortDown = $state(false);
+  // select mode. The list shows and plays in that order; an album's rows keep their track numbers. Every list of tracks
+  // offers all its rows know, remembered per kind of list (decision 0060); an artist's Top tracks start most played
+  // first and are not remembered.
+  const kind = $derived<PanelKind>(album ? 'album' : crate || crateEditing || creating ? 'crate' : artist ? 'artist' : 'playlist');
+  const topTracks = $derived(!!artist?.tracks);
+  let topSort = $state<ListSort>({ key: 'plays', down: true });
+  const sortFields = $derived(trackOrders(kind));
+  const sort = $derived.by(() => {
+    const s = topTracks ? topSort : prefs.panelSorts[kind];
+    return s && sortFields.some((f) => f.value === s.key) ? s : { key: 'own', down: false };
+  });
+  const sortKey = $derived(sort.key as TrackOrder);
+  const sortDown = $derived(sort.down);
+  function setSort(key: string, down: boolean) {
+    if (topTracks) topSort = { key, down };
+    else prefs.panelSorts[kind] = { key, down };
+  }
   let sortOpen = $state(false);
-  const sortFields = $derived<{ value: SortKey; label: string }[]>([
-    { value: 'own', label: album ? 'Track number' : crate ? 'Newest first' : artist ? 'Newest album first' : 'Playlist order' },
-    { value: 'title', label: 'Title' },
-    { value: 'artist', label: 'Artist' },
-    ...(album ? [] : [{ value: 'album' as SortKey, label: 'Album' }]),
-    { value: 'length', label: 'Length' },
-    // Tempo (decision 0035): a crate's or a playlist's tracks slowest first (or fastest), as a set builds up. Not an
-    // album's, which plays in its own order.
-    ...(album ? [] : [{ value: 'tempo' as SortKey, label: 'Tempo' }]),
-    // A playlist's: what its files and the plays say, and when an entry came (decision 0025, amended 2026-10-16: Orders).
-    ...(plain && !artist
-      ? []
-      : ([
-          { value: 'albumArtist', label: 'Album artist' },
-          { value: 'year', label: 'Year' },
-          { value: 'track', label: 'Track number' },
-          { value: 'plays', label: 'Play count' },
-          { value: 'lastPlayed', label: 'Last played' },
-          { value: 'added', label: 'Added' },
-        ] as { value: SortKey; label: string }[])),
-  ]);
   // Columns where the list has room (decision 0042): as many as its own width allows, in the owner's order; not on an
   // album's numbered tracks.
   let listWidth = $state(0);
@@ -448,13 +441,7 @@
       ...c,
       text: c.label,
       on: sortKey === c.id,
-      onclick: () => {
-        if (sortKey === c.id) sortDown = !sortDown;
-        else {
-          sortKey = c.id as SortKey;
-          sortDown = ['plays', 'lastPlayed', 'added'].includes(c.id);
-        }
-      },
+      onclick: () => setSort(c.id, sortKey === c.id ? !sortDown : !!sortFields.find((f) => f.value === c.id)?.most),
     })),
   );
   // The same order in the pill's View (lib/ViewSheet).
@@ -462,17 +449,31 @@
     fields: sortFields,
     value: sortKey,
     down: sortDown,
-    set: (value: string, down: boolean) => {
-      sortKey = value as SortKey;
-      sortDown = down;
-    },
+    set: setSort,
     columns: { kind: 'tracks' as const, shown: cols.map((c) => c.id), offered: sortFields.map((f) => f.value) },
   });
+  // The list's filter, remembered per kind of list (decisions 0060 and 0061): its switches, and its conditions on what
+  // its rows know (tempo, year, favourite) here; a condition on what only the server knows (genre, mood, …) is the
+  // server's.
+  const filterOn = (key: string) => switchOn(kind, key);
+  const conditions = $derived(activeConditions(kind));
+  function rowHolds(c: FilterCondition, r: PlaylistRow): boolean {
+    const v = c.value;
+    const range = (x: number | null | undefined) =>
+      v.kind === 'range' && x != null && (v.min === null || x >= v.min) && (v.max === null || x <= v.max);
+    const yes = c.axis === 'bpm' ? range(r.bpm) : c.axis === 'year' ? range(r.year) : c.axis === 'favourite' ? !!r.id && isFavorite(source, r.id) : true;
+    return yes !== c.not;
+  }
+  const keeps = (r: PlaylistRow) =>
+    (!filterOn('missing') || (!!r.id && !r.missing)) &&
+    (!filterOn('favourites') || (!!r.id && isFavorite(source, r.id))) &&
+    (!filterOn('unplayed') || !r.play_count) &&
+    conditions.every((c) => rowHolds(c, r));
   const ordered = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
   /** The rows as the list shows them, each with its place in the subject (`i`). */
   const shown = $derived.by(() => {
     if (!rows) return null;
-    const list = rows.map((r, i) => ({ r, i })).filter((x) => (!panel.hideMissing || (x.r.id && !x.r.missing)) && within(x.r.bpm, panel.tempo));
+    const list = rows.map((r, i) => ({ r, i })).filter((x) => keeps(x.r));
     const text = (r: PlaylistRow) =>
       sortKey === 'title' ? (r.name ?? r.file) : sortKey === 'artist' ? (r.artist ?? '') : sortKey === 'albumArtist' ? (r.album_artist ?? '') : (r.album ?? '');
     // A number to order by; none (a value the file or the plays do not have) comes first, in the playlist's order.
@@ -520,10 +521,9 @@
   const ticked = $derived(selecting && shown ? shown.filter((x) => selecting!.has(x.i) && x.r.id && !x.r.missing).map((x) => x.r) : []);
   const tickedFav = $derived(ticked.length > 0 && ticked.every((r) => isFavorite(source, r.id!)));
   $effect(() => {
-    // Another subject: its own order (an artist's tracks: most played first), nothing ticked.
-    const top = !!artistOf(id)?.tracks;
-    sortKey = top ? 'plays' : 'own';
-    sortDown = top;
+    // Another subject: nothing ticked; an artist's Top tracks most played first again.
+    void id;
+    topSort = { key: 'plays', down: true };
     selecting = null;
   });
   async function actOnTicked(mode: 'play' | 'next' | 'last') {
@@ -1313,7 +1313,7 @@
         {#if canGoBack}<button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button>{/if}
         <button aria-label={closeLabel} title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button>
       </span>
-      <span class="end">{#if !editing && !crateEditing}<TopPill view order={listOrder} device={!playing()} tempos={listTempos} />{/if}<PanelPlace /></span>
+      <span class="end">{#if !editing && !crateEditing}<TopPill view order={listOrder} device={!playing()} tempos={listTempos} {kind} counted={rows ? { shown: shown?.length ?? 0, total: rows.length } : null} />{/if}<PanelPlace /></span>
     </div>
   {/if}
 
@@ -1570,7 +1570,7 @@
             <p class="empty">No tracks yet.</p>
           {:else}
             <ol class="rows" bind:clientWidth={listWidth}>
-              {#each s.rows as r, i (i)}{#if (!panel.hideMissing || (r.id && !r.missing)) && within(r.bpm, panel.tempo)}{@render trackRow(r, s.source, sid, s.rows)}{/if}{/each}
+              {#each s.rows as r, i (i)}{#if keeps(r)}{@render trackRow(r, s.source, sid, s.rows)}{/if}{/each}
             </ol>
           {/if}
         </Section>
@@ -1649,8 +1649,8 @@
     {:else if rows && shown}
       <ListHead
         fields={sortFields}
-        bind:value={sortKey}
-        bind:down={sortDown}
+        bind:value={() => sortKey, (v) => setSort(v, sortDown)}
+        bind:down={() => sortDown, (d) => setSort(sortKey, d)}
         bind:open={sortOpen}
         count={plural(crate ? total : shownPlayable.length, 'track')}
         selecting={!!selecting}

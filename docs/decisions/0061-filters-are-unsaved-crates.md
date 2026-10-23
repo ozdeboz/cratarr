@@ -25,8 +25,14 @@ one.
 - **Any or all, per condition, for items that hold tracks** (an album, an artist, a playlist): Any, at least one of its
   tracks matches; All, every one of its tracks that has a value for it matches (a track with none, not yet analysed,
   does not count against All). Any is the default; the switch shows only where the items hold tracks.
-- **Remembered like sort** (0060): per kind of list. The active conditions show as chips above the list, each removable,
-  with the count ("312 of 553 tracks"), so nothing filters out of sight.
+- **Remembered like sort** (0060): per kind of list.
+- **How it looks** (the owner, 2026-10-23, of four mockups: "No, we keep the list clean. So C seems to be the most
+  logical and clean way"): a card per condition, in the Filter sheet and in a crate's editor alike. Folded, a card is
+  one line: its name and what it is set to, Any or All (where the items hold tracks), a switch that mutes it without
+  removing it (dimmed), and a chevron; unfolded, its whole control (values as chips with their counts, a range, Tempo's
+  spread), Not and Remove. "+ Condition" adds one. Under the cards the kind's own switches, then Clear and Save as crate;
+  the sheet says how many the filter lets through ("312 of 2,861"). The list itself stays clean: only the funnel shows
+  how many filters are on.
 - **Save as crate** turns the filter in view into a crate; a crate's conditions can be applied as a filter to any list.
 - **Where it runs** (0059): the server's library on the server (it knows the genres and AudioMuse's values); the device's
   own music on the device, with the conditions it has facts for (genre, year, favourite), the others not offered there.
@@ -38,4 +44,5 @@ one.
 - The crates' condition engine takes a scope (a list's tracks, grouped by album, artist or playlist) and a quantifier per
   condition, besides the whole library.
 - One filter state per kind of list in the remembered settings, beside its sort.
-- The Filter sheet becomes the builder's conditions above each kind's own switches; the chips above every list.
+- The Filter sheet becomes the builder's conditions above each kind's own switches; the crate editor draws the same
+  cards.

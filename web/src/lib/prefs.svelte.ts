@@ -3,6 +3,7 @@
 
 import { inApp, toApp } from './app.svelte';
 import { LIST_WIDTHS } from './pageView.svelte';
+import type { Condition } from './api';
 import { FACTS, type FactId } from './facts';
 
 export type Theme = 'auto' | 'light' | 'dark';
@@ -71,13 +72,30 @@ export type Prefs = {
   playlistLayout: 'chips' | 'table';
   crateOrder: CrateOrder;
   crateDown: boolean;
+  /** The panel's track lists' order, per kind of list (decision 0060). */
+  panelSorts: Partial<Record<PanelKind, ListSort>>;
+  /** Every list's filter, per kind of list (a page's id, or a panel kind; decisions 0060 and 0061). */
+  filters: Partial<Record<string, ListFilter>>;
 };
 
 export type AlbumLayout = 'rows' | 'grid' | 'table';
-export type CollectionOrder = 'artist' | 'title' | 'year' | 'added' | 'plays' | 'played' | 'rating';
-const COLLECTION_ORDERS: readonly CollectionOrder[] = ['artist', 'title', 'year', 'added', 'plays', 'played', 'rating'];
-export type PlaylistOrder = 'name' | 'tracks' | 'playing';
-export type CrateOrder = 'own' | 'name';
+export type CollectionOrder = 'artist' | 'title' | 'year' | 'added' | 'plays' | 'played' | 'rating' | 'quality';
+const COLLECTION_ORDERS: readonly CollectionOrder[] = ['artist', 'title', 'year', 'added', 'plays', 'played', 'rating', 'quality'];
+export type PlaylistOrder = 'name' | 'tracks' | 'playing' | 'missing';
+const PLAYLIST_ORDERS: readonly PlaylistOrder[] = ['name', 'tracks', 'playing', 'missing'];
+export type CrateOrder = 'own' | 'name' | 'tracks' | 'length' | 'unplayed' | 'newWeek';
+const CRATE_ORDERS: readonly CrateOrder[] = ['own', 'name', 'tracks', 'length', 'unplayed', 'newWeek'];
+/** The panel's kinds of track list, each with its own remembered order and filter (decision 0060: per kind, not per
+ *  list). */
+export type PanelKind = 'playlist' | 'crate' | 'album' | 'artist';
+/** A list's remembered order: a field of its kind (lib/pageView's tables), and turned round. */
+export type ListSort = { key: string; down: boolean };
+/** A list's remembered filter (decision 0061): its conditions (a crate's, unsaved; each can be muted) and its own
+ *  switches that are on (lib/pageView's SWITCHES). */
+export type ListFilter = { conditions: FilterCondition[]; on: string[] };
+/** A filter's condition: a crate's, which can be muted (`enabled` false, kept but not applied), and over items that
+ *  hold tracks tested on any or all of them (decision 0061; absent: on, any). */
+export type FilterCondition = Condition & { enabled?: boolean; quantifier?: 'any' | 'all' };
 
 const KEY = 'cratarr-prefs';
 export const ZOOM_STEPS = 6;
@@ -120,10 +138,12 @@ export const DEFAULTS: Prefs = {
   playlistLayout: 'chips',
   crateOrder: 'own',
   crateDown: false,
+  panelSorts: {},
+  filters: {},
 };
 
 function read(): Prefs {
-  const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals }, pinned: [] as string[], hiddenLibraries: [] as string[] };
+  const p = { ...DEFAULTS, signals: { ...DEFAULTS.signals }, pinned: [] as string[], hiddenLibraries: [] as string[], panelSorts: {}, filters: {} } as Prefs;
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) ?? 'null');
     if (saved && typeof saved === 'object') {
@@ -136,13 +156,13 @@ function read(): Prefs {
       if (Number.isInteger(saved.albumZoom) && saved.albumZoom >= 0 && saved.albumZoom < ZOOM_STEPS) p.albumZoom = saved.albumZoom;
       if (COLLECTION_ORDERS.includes(saved.libraryOrder)) p.libraryOrder = saved.libraryOrder;
       if (COLLECTION_ORDERS.includes(saved.downloadsOrder)) p.downloadsOrder = saved.downloadsOrder;
-      if (['name', 'tracks', 'playing'].includes(saved.playlistOrder)) p.playlistOrder = saved.playlistOrder;
+      if (PLAYLIST_ORDERS.includes(saved.playlistOrder)) p.playlistOrder = saved.playlistOrder;
       if (saved.playlistLayout === 'chips' || saved.playlistLayout === 'table') p.playlistLayout = saved.playlistLayout;
-      if (['name', 'tracks', 'playing'].includes(saved.listOrder)) p.listOrder = saved.listOrder;
+      if (PLAYLIST_ORDERS.includes(saved.listOrder) && saved.listOrder !== 'missing') p.listOrder = saved.listOrder;
       if (typeof saved.listDown === 'boolean') p.listDown = saved.listDown;
       // Before the list header: "✓ first" was the playlists' only other order.
       else if (saved.membersFirst === true) p.playlistOrder = 'playing';
-      if (['own', 'name'].includes(saved.crateOrder)) p.crateOrder = saved.crateOrder;
+      if (CRATE_ORDERS.includes(saved.crateOrder)) p.crateOrder = saved.crateOrder;
       for (const k of ['libraryDown', 'downloadsDown', 'playlistDown', 'crateDown'] as const) {
         if (typeof saved[k] === 'boolean') p[k] = saved[k];
       }
@@ -164,6 +184,13 @@ function read(): Prefs {
         p.output = saved.output;
       if (Array.isArray(saved.pinned)) p.pinned = saved.pinned.filter((x: unknown): x is string => typeof x === 'string');
       if (Array.isArray(saved.hiddenLibraries)) p.hiddenLibraries = saved.hiddenLibraries.filter((x: unknown): x is string => typeof x === 'string');
+      if (saved.panelSorts && typeof saved.panelSorts === 'object')
+        for (const [k, v] of Object.entries(saved.panelSorts) as [PanelKind, ListSort][])
+          if (typeof v?.key === 'string' && typeof v.down === 'boolean') p.panelSorts[k] = { key: v.key, down: v.down };
+      if (saved.filters && typeof saved.filters === 'object')
+        for (const [k, v] of Object.entries(saved.filters) as [string, ListFilter][])
+          if (Array.isArray(v?.conditions) && Array.isArray(v.on))
+            p.filters[k] = { conditions: v.conditions.filter((c) => typeof c?.axis === 'string' && c.value), on: v.on.filter((x) => typeof x === 'string') };
       if (saved.insightsTab === 'statistics' || saved.insightsTab === 'related') p.insightsTab = saved.insightsTab;
       if (saved.signals && typeof saved.signals === 'object') {
         for (const k of ['tracks', 'genre', 'artists'] as const) {
@@ -185,7 +212,7 @@ export const prefs = $state<Prefs>(read());
 
 /** Back to the default look; the followed source and the pins are not display matters and stay. */
 export function resetPrefs() {
-  Object.assign(prefs, { ...DEFAULTS, signals: { ...DEFAULTS.signals }, source: prefs.source, hiddenLibraries: prefs.hiddenLibraries, pinned: prefs.pinned });
+  Object.assign(prefs, { ...DEFAULTS, signals: { ...DEFAULTS.signals }, source: prefs.source, hiddenLibraries: prefs.hiddenLibraries, pinned: prefs.pinned, panelSorts: {}, filters: {} });
 }
 
 /** Pin a playlist to the top of the Playlists page (after those pinned before it), or unpin it. */

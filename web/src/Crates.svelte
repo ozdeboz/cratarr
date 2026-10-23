@@ -2,7 +2,8 @@
   // Crates (decision 0024): the second step after Incoming. Dynamic cross-sections of the library (the permanent
   // Unlisted, and one's own), each a big card (lib/CrateCard, decided 2026-10-16) with its picture and what it holds;
   // a tap views it in the panel (decision 0023), where it plays and is sorted like a playlist, and can be saved as one.
-  import { prefs } from './lib/prefs.svelte';
+  import { prefs, type CrateOrder } from './lib/prefs.svelte';
+  import type { Crate } from './lib/api';
   import ListHead from './lib/ListHead.svelte';
   import { CRATE_ORDERS, howMany, usePageAction } from './lib/pageView.svelte';
   import { crates, CRATE, EDIT_CRATE, loadCrates, startCrate } from './lib/crates.svelte';
@@ -23,10 +24,20 @@
   // New crate: named in the same sheet as a new playlist, then built in the panel.
   // New crate: the panel's crate edit mode, empty, the caret in its name (as New playlist).
   usePageAction(() => ({ icon: 'plus', label: 'New crate', run: () => startCrate('') }));
-  // The list's order (its header, or View): as made, or by name; either way round.
+  // The list's order (its header): as made, by name, or by what its cards show (decision 0060); either way round. A
+  // crate whose card is not known yet (favourites not read) comes first, as made.
+  const byName = (a: Crate, b: Crate) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+  const stat: Partial<Record<CrateOrder, (c: Crate) => number | null | undefined>> = {
+    tracks: (c) => c.stats?.tracks,
+    length: (c) => c.stats?.seconds,
+    unplayed: (c) => c.stats?.unplayed,
+    newWeek: (c) => c.stats?.new_week,
+  };
   const sorted = $derived.by(() => {
     const list = [...(crates.list ?? [])];
-    if (prefs.crateOrder === 'name') list.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
+    const of = stat[prefs.crateOrder];
+    if (prefs.crateOrder === 'name') list.sort(byName);
+    else if (of) list.sort((a, b) => (of(a) ?? -1) - (of(b) ?? -1) || byName(a, b));
     return prefs.crateDown ? list.reverse() : list;
   });
   // A crate's menu (its card's long-press or right-click, decision 0058).

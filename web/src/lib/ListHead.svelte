@@ -1,7 +1,8 @@
 <script lang="ts" generics="K">
   // A list's header (Symfonium's, decided 2026-10-15): its order (a tap on it chooses the field in a sheet, the arrow
   // turns it round), how many, and the select icon when the list has a select mode. The panel's track lists and every
-  // page's list have it; a page's View (lib/ViewSheet) holds the same order and direction.
+  // page's list have it, and only it sets the order and direction (decision 0060). A field counted by use (Plays, Last
+  // played, …) starts most first when chosen.
   import Icon from './Icon.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -15,7 +16,8 @@
     onselect,
     open = $bindable(false),
   }: {
-    fields: readonly { value: K; label: string }[];
+    /** `most`: chosen, it starts most first (lib/pageView OrderField). */
+    fields: readonly { value: K; label: string; most?: true }[];
     value: K;
     /** Turned round: descending. */
     down?: boolean;
@@ -51,6 +53,7 @@
         icon={f.value === value ? 'circleCheck' : 'circle'}
         label={f.label}
         onclick={() => {
+          if (f.value !== value) down = !!f.most;
           value = f.value;
           open = false;
         }}

@@ -1,6 +1,7 @@
 <script lang="ts">
   import ListHead from './lib/ListHead.svelte';
   import { PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, playlistBy, usePageAction } from './lib/pageView.svelte';
+  import { switchOn } from './lib/listFilter.svelte';
   import type { Playlist, PlayMode } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
   import { live, queueTap } from './lib/live.svelte';
@@ -38,7 +39,6 @@
   $effect(() => {
     pageView.width = gridWidth;
   });
-  $effect(() => () => (pageView.favouritesOnly = false));
   // Taps flip the chip at once; the server's answer replaces this guess.
   let optimistic = $state<Record<string, boolean>>({});
   let busy = $state<Record<string, boolean>>({});
@@ -56,7 +56,8 @@
       return { ...p, member, count: p.count + (member === p.member ? 0 : member ? 1 : -1) };
     });
     if (q) list = list.filter((p) => p.name.toLowerCase().includes(q));
-    if (pageView.favouritesOnly) list = list.filter((p) => isPlaylistFavorite(p.id));
+    if (switchOn('playlists', 'favourites')) list = list.filter((p) => isPlaylistFavorite(p.id));
+    if (switchOn('playlists', 'mine')) list = list.filter((p) => p.mine !== false);
     // Pinned ones first, in the order pinned; the rest in the list's order (its header, or View), either way round.
     const pin = (id: string) => {
       const i = prefs.pinned.indexOf(id);
@@ -69,6 +70,12 @@
       if ((pa === Infinity) !== (pb === Infinity)) return pa === Infinity ? 1 : -1;
       return pa === Infinity ? turn * by(a, b) : pa - pb;
     });
+  });
+
+  // How many the filter lets through, of how many (the Filter sheet's count).
+  $effect(() => {
+    pageView.counted = { shown: items.length, total: shownPlaylists().length };
+    return () => (pageView.counted = null);
   });
 
   const memberCount = $derived(shownPlaylists().filter((p) => optimistic[p.id] ?? p.member).length);
