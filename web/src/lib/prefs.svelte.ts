@@ -23,6 +23,12 @@ export type Prefs = {
    *  button, in the user's order (lib/trackFacts; none at first). */
   playerRow: boolean;
   playerFacts: FactId[];
+  /** A list's profile on top of it (the owner, 2026-10-23): open or folded, for every list at once; its rows switched
+   *  on, in the user's order; and its fold line, how many of them stay when it is folded (0: none; Settings › Display ›
+   *  AudioMuse). */
+  profileOpen: boolean;
+  profileRows: ProfileRow[];
+  profileFoldAt: number;
   /** Levelling (decision 0035): this browser's player plays every track about as loud as the next. */
   /** This browser's name as a Play On player, while a page plays here (lib/playOnTarget); '' until it has one. */
   browserName: string;
@@ -97,6 +103,18 @@ export type ListFilter = { conditions: FilterCondition[]; on: string[] };
  *  hold tracks tested on any or all of them (decision 0061; absent: on, any). */
 export type FilterCondition = Condition & { enabled?: boolean; quantifier?: 'any' | 'all' };
 
+/** A list profile's rows (lib/ListProfile), in its order: the server's number keys and the word rows. */
+export type ProfileRow = 'style' | 'artists' | 'tempo' | 'energy' | 'danceability' | 'year' | 'mood';
+export const PROFILE_ROWS: { id: ProfileRow; label: string }[] = [
+  { id: 'style', label: 'Style' },
+  { id: 'artists', label: 'Artists' },
+  { id: 'tempo', label: 'Tempo' },
+  { id: 'energy', label: 'Energy' },
+  { id: 'danceability', label: 'Dance' },
+  { id: 'year', label: 'Era' },
+  { id: 'mood', label: 'Mood' },
+];
+
 const KEY = 'cratarr-prefs';
 export const ZOOM_STEPS = 6;
 export const DEFAULTS: Prefs = {
@@ -108,6 +126,9 @@ export const DEFAULTS: Prefs = {
   showProgress: true,
   playerRow: true,
   playerFacts: [],
+  profileOpen: true,
+  profileFoldAt: 0,
+  profileRows: PROFILE_ROWS.map((r) => r.id),
   levelling: true,
   browserName: '',
   relativeDates: false,
@@ -169,6 +190,9 @@ function read(): Prefs {
       if (typeof saved.showProgress === 'boolean') p.showProgress = saved.showProgress;
       if (typeof saved.playerRow === 'boolean') p.playerRow = saved.playerRow;
       if (Array.isArray(saved.playerFacts)) p.playerFacts = saved.playerFacts.filter((x: unknown): x is FactId => FACTS.some((f) => f.id === x));
+      if (typeof saved.profileOpen === 'boolean') p.profileOpen = saved.profileOpen;
+      if (Array.isArray(saved.profileRows)) p.profileRows = saved.profileRows.filter((x: unknown): x is ProfileRow => PROFILE_ROWS.some((r) => r.id === x));
+      if (Number.isInteger(saved.profileFoldAt) && saved.profileFoldAt >= 0) p.profileFoldAt = Math.min(saved.profileFoldAt, p.profileRows.length);
       if (typeof saved.levelling === 'boolean') p.levelling = saved.levelling;
       if (typeof saved.browserName === 'string') p.browserName = saved.browserName;
       if (typeof saved.relativeDates === 'boolean') p.relativeDates = saved.relativeDates;

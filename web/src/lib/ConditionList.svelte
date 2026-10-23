@@ -49,7 +49,8 @@
 </ol>
 {#if adding}
   <div class="axes" role="group" aria-label="Add a condition on">
-    {#each axes as a (a.key)}<button class="axis" onclick={() => add(a)}>{a.label}</button>{/each}
+    <!-- Sounds like is seeded from a track or an album (its menu), not added here. -->
+    {#each axes.filter((a) => a.kind !== 'like') as a (a.key)}<button class="axis" onclick={() => add(a)}>{a.label}</button>{/each}
     <button class="axis" aria-label="Close" onclick={() => (adding = false)}><Icon name="close" size={16} /></button>
   </div>
 {:else}

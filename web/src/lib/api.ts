@@ -388,7 +388,12 @@ export type CrateStats = {
 /** One condition of a crate: an axis, what it is tested against, negated or not. A filter's (decision 0061) can be
  *  muted (`enabled` false: ignored) and, on items that hold tracks (albums, playlists), hold for `any` of their tracks
  *  (the default) or `all` of those that have a value on the axis. Left out: on, any. */
-export type CrateValue = { kind: 'yes' } | { kind: 'any_of'; values: string[] } | { kind: 'range'; min: number | null; max: number | null };
+export type CrateValue =
+  | { kind: 'yes' }
+  | { kind: 'any_of'; values: string[] }
+  | { kind: 'range'; min: number | null; max: number | null }
+  // Sounds like its seeds (song ids), at least `min` alike (0 two random tracks, 100 two of one album).
+  | { kind: 'like'; of: string[]; min: number };
 export type Quantifier = 'any' | 'all';
 export type Condition = { axis: string; not: boolean; value: CrateValue; enabled?: boolean; quantifier?: Quantifier };
 export type CrateDef = { id: string; name: string; conditions: Condition[] };
@@ -396,13 +401,17 @@ export type CrateDef = { id: string; name: string; conditions: Condition[] };
 export type Axis = {
   key: string;
   label: string;
-  kind: 'yes_no' | 'values' | 'membership' | 'range';
+  kind: 'yes_no' | 'values' | 'membership' | 'range' | 'like';
   values: string[];
   /** How many items of the list have each of `values` (the Filter sheet's, filterList); absent in the builder's. */
   counts?: number[];
   min: number | null;
   max: number | null;
   known: number;
+  /** A range's density: how many tracks in each equal step from `min` to `max` (the sliders' bar). */
+  bins?: number[];
+  /** Whether an item's tracks differ on it, so any or all of them can mean different things (not an album's year). */
+  varies?: boolean;
 };
 /** The libraries a crate leaves out (decision 0024, amended 2026-10-23: a crate draws from every library switched
  *  on): `source/library` keys, as the page's library switches keep them (prefs.hiddenLibraries). None, or left out:
@@ -467,6 +476,19 @@ export type Filtered = {
   total: number;
   axes: Axis[];
   tempo: TempoBands;
+  /** A list of tracks' profile (lib/ListProfile); none for albums and playlists. */
+  profile?: ListProfileData | null;
+};
+/** What a list's tracks are like (the server's crates::Profile): telling style tags and artists, each number's density
+ *  on one scale with its middle half and middle (a number all share is left out), and CLAP's moods against the
+ *  library's (-1 to 1). */
+export type ListProfileData = {
+  tracks: number;
+  heard: number;
+  styles: string[];
+  artists: string[];
+  numbers: { key: 'tempo' | 'energy' | 'danceability' | 'year'; lo: number; hi: number; bins: number[]; q1: number; mid: number; q3: number }[];
+  moods: { name: string; lift: number }[];
 };
 /** A filter on the list in view: `without`, the libraries switched off (the Library's albums and a crate's tracks). */
 export const filterList = (list: FilterList, conditions: Condition[], source?: string, without?: string[]) =>

@@ -20,6 +20,8 @@ use serde::{Deserialize, Serialize};
 
 use super::ToggleError;
 use super::playon::QueueTrack;
+use crate::catalogue::AudioMuseRow;
+use crate::similarity::{Library, MOODS, Profile, Signal, Track, Weights, unique};
 
 /// The lane of Radio's inserts (`QueueTrack::lane`): right after the own track they are like (and its hand-added run).
 pub const LANE_RADIO: &str = "radio";
@@ -187,6 +189,31 @@ pub struct NextRequest {
     /// Leave the listener's favourites out: only music not hearted yet (the More music sheet's switch).
     #[serde(default)]
     pub skip_favourites: bool,
+    /// What makes music alike, the first counting most (`Weights::ranked`); left out, the listener's own order (their
+    /// settings' `similar_by`, the More music sheet's "Similar by"), else all equally.
+    #[serde(default)]
+    pub similar_by: Option<Vec<Signal>>,
+}
+
+impl NextRequest {
+    /// How much each signal counts for this request: its order, else all equally, the artist double for Radio's
+    /// inserts (mostly the same artist, as Symfonium's).
+    fn weights(&self) -> Weights {
+        match self.similar_by.as_deref() {
+            Some(order) if !order.is_empty() => Weights::ranked(order),
+            _ if self.mode == Mode::Radio => Weights::EQUAL.with(Signal::Artists, 2.0),
+            _ => Weights::EQUAL,
+        }
+    }
+}
+
+/// The listener's own "Similar by" (their settings' `similar_by`: signal names, the first counting most), when they
+/// set one; names not known are left out.
+fn similar_by_of_listener() -> Option<Vec<Signal>> {
+    let served = crate::serve::instance()?;
+    let (_, settings) = served.userdata.settings_of(&served.current_user()?).ok()?;
+    let names = settings.get("similar_by")?.as_array()?.clone();
+    Some(names.into_iter().filter_map(|n| serde_json::from_value(n).ok()).collect()).filter(|v: &Vec<Signal>| !v.is_empty())
 }
 
 const DEFAULT_COUNT: usize = 5;
@@ -212,15 +239,11 @@ pub(crate) struct Song {
     pub album_id: String,
     /// The album, interned.
     pub album_n: u32,
-    /// Its artists and its album artist, interned.
-    pub artists: Vec<u32>,
-    pub genres: Vec<u32>,
-    pub year: Option<u32>,
+    /// What makes it like others (`crate::similarity`): its playlists, artists and album artist, genres, album tags,
+    /// year, BPM and what AudioMuse heard.
+    pub like: Track,
     /// Its length in seconds, when the library knows it (the queue sheet shows it).
     pub duration_secs: Option<f64>,
-    pub playlists: Vec<u32>,
-    /// Its album's tags.
-    pub tags: Vec<u32>,
     /// Hearted by the listener (`ready`).
     pub favourite: bool,
     /// Excluded by the listener from every automatic pick (`ready`; decision 0024, amended 2026-10-19).
@@ -236,9 +259,9 @@ pub(crate) struct Index {
     albums: HashMap<u32, Vec<usize>>,
     /// The artists' ids (`ar-…`) by their number, for OpenSubsonic's similar artists.
     artist_ids: Vec<String>,
-    /// AudioMuse's "sounds like" vector of each song, of unit length, where it has one (decision 0054); shared, as the
-    /// index is copied for each listener.
-    sounds: Arc<Vec<Option<Box<[f32]>>>>,
+    /// The songs as similarity's library, by their places (their sounds too); shared, as the index is copied for each
+    /// listener.
+    like: Arc<Library>,
 }
 
 impl Index {
@@ -248,17 +271,33 @@ impl Index {
         for (i, s) in songs.iter().enumerate() {
             albums.entry(s.album_n).or_default().push(i);
         }
-        Self { songs, by_id, albums, artist_ids: Vec::new(), sounds: Arc::default() }
+        let like = Arc::new(Library::new(songs.iter().map(|s| &s.like), Vec::new()));
+        Self { songs, by_id, albums, artist_ids: Vec::new(), like }
     }
 
-    /// With each song's "sounds like" vector, by its id (unit length; none where AudioMuse has not heard it).
-    pub(crate) fn with_sounds<'a>(mut self, sound_of: impl Fn(&str) -> Option<&'a Vec<f32>>) -> Self {
-        self.sounds = Arc::new(self.songs.iter().map(|s| sound_of(&s.id).map(|v| v.clone().into_boxed_slice())).collect());
+    /// With what AudioMuse heard of each song (decision 0054), by its id: its numbers and style tags into the song's
+    /// facts, its "sounds like" vector into the library.
+    pub(crate) fn with_heard(mut self, heard: impl Fn(&str) -> Option<Heard>) -> Self {
+        let mut styles = Names::default();
+        let mut sounds = Vec::with_capacity(self.songs.len());
+        for s in &mut self.songs {
+            let h = heard(&s.id).unwrap_or_default();
+            (s.like.energy, s.like.danceability, s.like.moods) = (h.energy, h.danceability, h.moods);
+            s.like.styles = h.styles.iter().map(|x| styles.of(x)).collect();
+            sounds.push(h.sound);
+        }
+        self.like = Arc::new(Library::new(self.songs.iter().map(|s| &s.like), sounds));
         self
     }
 
-    fn sound(&self, i: usize) -> Option<&[f32]> {
-        self.sounds.get(i)?.as_deref()
+    /// What a set of songs is like.
+    fn profile(&self, set: &[usize]) -> Profile {
+        Profile::of(&self.like, set, |i| &self.songs[i].like)
+    }
+
+    /// How alike a song is to a set's profile, by the weights.
+    fn score(&self, profile: &Profile, i: usize, weights: &Weights) -> f64 {
+        profile.to_track(&self.like, i, &self.songs[i].like).score(weights)
     }
 
     /// The songs an OpenSubsonic id stands for: a song, an album's songs, or an artist's.
@@ -267,7 +306,7 @@ impl Index {
             return vec![i];
         }
         if let Some(a) = self.artist_ids.iter().position(|x| x == item) {
-            return (0..self.songs.len()).filter(|&i| self.songs[i].artists.contains(&(a as u32))).collect();
+            return (0..self.songs.len()).filter(|&i| self.songs[i].like.artists.contains(&(a as u32))).collect();
         }
         (0..self.songs.len()).filter(|&i| self.songs[i].album_id == item).collect()
     }
@@ -308,101 +347,30 @@ impl Rng {
     }
 }
 
-/// What the seed is like: how many of its songs have each playlist, artist, genre and tag, and its middle year.
-struct Profile {
-    n: f64,
-    playlists: HashMap<u32, u32>,
-    artists: HashMap<u32, u32>,
-    genres: HashMap<u32, u32>,
-    tags: HashMap<u32, u32>,
-    year: Option<u32>,
-    /// How much the artist counts against the other four signals: 1, or 2 for Radio's inserts (mostly the same artist,
-    /// as Symfonium's).
-    artist_weight: f64,
-    /// How the seed sounds (decision 0054): the mean of its songs' vectors, of unit length; none when none was heard.
-    sound: Option<Vec<f32>>,
+/// What AudioMuse heard of a song (decision 0054), as similarity takes it.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Heard {
+    pub energy: Option<f32>,
+    pub danceability: Option<f32>,
+    pub moods: Option<[f32; MOODS.len()]>,
+    pub styles: Vec<String>,
+    pub sound: Option<Vec<f32>>,
 }
 
-/// "Sounds like" on 0 to 1, from AudioMuse's cosine similarity: measured on the library's 8,909 vectors
-/// (2026-10-19), two random tracks are 0.62 alike at the median, two of one album 0.875 and at most about 0.92 (its
-/// 90th percentile 0.956), the same artist's other albums 0.82; so 0.62 is nothing alike and 0.92 as alike as an
-/// album's tracks.
-const SOUND_LO: f32 = 0.62;
-const SOUND_HI: f32 = 0.92;
-
-impl Profile {
-    fn of(index: &Index, seed: &[usize]) -> Self {
-        let mut p = Profile {
-            n: seed.len() as f64,
-            playlists: HashMap::new(),
-            artists: HashMap::new(),
-            genres: HashMap::new(),
-            tags: HashMap::new(),
-            year: None,
-            artist_weight: 1.0,
-            sound: None,
-        };
-        let heard: Vec<&[f32]> = seed.iter().filter_map(|&i| index.sound(i)).collect();
-        if let Some(first) = heard.first() {
-            let dims = first.len();
-            let mut mean = vec![0.0f32; dims];
-            for v in heard.iter().filter(|v| v.len() == dims) {
-                for (m, x) in mean.iter_mut().zip(v.iter()) {
-                    *m += x;
-                }
-            }
-            let n = mean.iter().map(|x| x * x).sum::<f32>().sqrt();
-            if n > 0.0 {
-                p.sound = Some(mean.into_iter().map(|x| x / n).collect());
-            }
-        }
-        let mut years = Vec::new();
-        for &i in seed {
-            let s = &index.songs[i];
-            for (map, items) in [(&mut p.playlists, &s.playlists), (&mut p.artists, &s.artists), (&mut p.genres, &s.genres), (&mut p.tags, &s.tags)] {
-                for x in unique(items) {
-                    *map.entry(x).or_default() += 1;
-                }
-            }
-            years.extend(s.year);
-        }
-        years.sort_unstable();
-        p.year = years.get(years.len() / 2).copied();
-        p
-    }
-
-    /// 0 to 1 on each of the five signals, weighed equally (the owner, 2026-10-16); the artist double for Radio. A sixth,
-    /// "sounds like" (decision 0054), where both the seed and the song were heard by AudioMuse, weighed as the others.
-    fn score(&self, index: &Index, i: usize) -> f64 {
-        if self.n == 0.0 {
-            return 0.0;
-        }
-        let s = &index.songs[i];
-        let most = |map: &HashMap<u32, u32>, items: &[u32]| items.iter().filter_map(|x| map.get(x)).copied().max().unwrap_or(0) as f64;
-        // A playlist holding the whole seed is the strongest sign; an artist, genre or tag shared by a quarter of it counts in full.
-        let playlists = (most(&self.playlists, &s.playlists) / self.n).min(1.0);
-        let quarter = |c: f64| (4.0 * c / self.n).min(1.0);
-        let artist = quarter(most(&self.artists, &s.artists));
-        let genre = quarter(most(&self.genres, &s.genres));
-        let tags = quarter(most(&self.tags, &s.tags));
-        let era = match (self.year, s.year) {
-            (Some(a), Some(b)) => (1.0 - (a as f64 - b as f64).abs() / 10.0).max(0.0),
-            _ => 0.0,
-        };
-        let five = playlists + self.artist_weight * artist + genre + era + tags;
-        match (&self.sound, index.sound(i)) {
-            (Some(p), Some(v)) if p.len() == v.len() => {
-                let cos: f32 = p.iter().zip(v).map(|(a, b)| a * b).sum();
-                let sound = ((cos - SOUND_LO) / (SOUND_HI - SOUND_LO)).clamp(0.0, 1.0) as f64;
-                (five + sound) / (5.0 + self.artist_weight)
-            }
-            _ => five / (4.0 + self.artist_weight),
+impl Heard {
+    fn of(row: &AudioMuseRow) -> Self {
+        let clap = crate::app::audiomuse::weighted(row.moods.as_deref());
+        let score = |name: &str| clap.iter().find(|(n, _)| n == name).map(|(_, x)| *x as f32);
+        // All 0 until CLAP has heard the track: not heard, not unmoved.
+        let heard = clap.iter().any(|(_, x)| *x > 0.0);
+        Heard {
+            energy: row.energy.map(|e| e as f32),
+            danceability: score("danceable").filter(|_| heard),
+            moods: heard.then(|| MOODS.map(|m| score(m).unwrap_or(0.0))),
+            styles: crate::app::audiomuse::weighted(row.style.as_deref()).into_iter().take(crate::app::audiomuse::STYLES).map(|(n, _)| n).collect(),
+            sound: row.embedding.as_ref().map(|b| b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()),
         }
     }
-}
-
-fn unique(items: &[u32]) -> impl Iterator<Item = u32> + '_ {
-    items.iter().enumerate().filter(move |(i, x)| !items[..*i].contains(x)).map(|(_, x)| *x)
 }
 
 /// The radio's choice for one request: songs of the index, in the order they should play. `recent`: songs played
@@ -461,17 +429,17 @@ pub(crate) fn choose(index: &Index, req: &NextRequest, recent: &HashMap<String, 
     if req.albums || req.mode == Mode::AlbumMix {
         let narrowed: Vec<usize> = match req.mode {
             Mode::Era => {
-                let center = last.and_then(|i| index.songs[i].year).or_else(|| Profile::of(index, &seed).year);
-                pool.iter().copied().filter(|&i| matches!((center, index.songs[i].year), (Some(c), Some(y)) if c.abs_diff(y) <= 5)).collect()
+                let center = last.and_then(|i| index.songs[i].like.year).or_else(|| index.profile(&seed).year());
+                pool.iter().copied().filter(|&i| matches!((center, index.songs[i].like.year), (Some(c), Some(y)) if c.abs_diff(y) <= 5)).collect()
             }
             Mode::Artist => {
                 let wanted = wanted_artists(index, &seed, last);
-                pool.iter().copied().filter(|&i| index.songs[i].artists.iter().any(|a| wanted.contains(a))).collect()
+                pool.iter().copied().filter(|&i| index.songs[i].like.artists.iter().any(|a| wanted.contains(a))).collect()
             }
             _ => Vec::new(),
         };
         let from = if narrowed.is_empty() { &pool } else { &narrowed };
-        return album_mix(index, from, &seed, &out, req.mode == Mode::Random, rng);
+        return album_mix(index, from, &seed, &out, req.mode == Mode::Random, &req.weights(), rng);
     }
     let picked = by_mode(index, req, &pool, &seed, &out, last, count, rng);
     // Era and Artist can run dry (no year, artists with nothing more here): Similar fills up the rest.
@@ -486,21 +454,19 @@ pub(crate) fn choose(index: &Index, req: &NextRequest, recent: &HashMap<String, 
 
 #[allow(clippy::too_many_arguments)]
 fn by_mode(index: &Index, req: &NextRequest, pool: &[usize], seed: &[usize], out: &HashSet<usize>, last: Option<usize>, count: usize, rng: &mut Rng) -> Vec<usize> {
-    let artists_of = |i: usize| index.songs[i].artists.clone();
+    let artists_of = |i: usize| index.songs[i].like.artists.clone();
     match req.mode {
         Mode::Similar | Mode::Continuous | Mode::Radio => {
             let base = if req.mode == Mode::Continuous { last.into_iter().collect() } else { seed.to_vec() };
             let base = if base.is_empty() { last.into_iter().collect() } else { base };
-            let mut profile = Profile::of(index, &base);
+            let profile = index.profile(&base);
             let radio = req.mode == Mode::Radio;
-            if radio {
-                profile.artist_weight = 2.0;
-            }
+            let weights = req.weights();
             let mut scored: Vec<(usize, f64)> = pool
                 .iter()
                 .map(|&i| {
                     let s = &index.songs[i];
-                    (i, profile.score(index, i) + if s.favourite { 0.05 } else { 0.0 } + rng.unit() * 0.1)
+                    (i, index.score(&profile, i, &weights) + if s.favourite { 0.05 } else { 0.0 } + rng.unit() * 0.1)
                 })
                 .collect();
             scored.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -513,12 +479,12 @@ fn by_mode(index: &Index, req: &NextRequest, pool: &[usize], seed: &[usize], out
             // Radio's inserts may keep to the artist (only the albums are spaced); otherwise never one artist twice in a row.
             pick_spaced(index, scored, count, last.map(artists_of), !radio, rng)
         }
-        Mode::AlbumMix => album_mix(index, pool, seed, out, false, rng),
+        Mode::AlbumMix => album_mix(index, pool, seed, out, false, &req.weights(), rng),
         Mode::Era => {
-            let center = last.and_then(|i| index.songs[i].year).or_else(|| Profile::of(index, seed).year);
+            let center = last.and_then(|i| index.songs[i].like.year).or_else(|| index.profile(seed).year());
             let near: Vec<(usize, f64)> = pool
                 .iter()
-                .filter(|&&i| match (center, index.songs[i].year) {
+                .filter(|&&i| match (center, index.songs[i].like.year) {
                     (Some(c), Some(y)) => c.abs_diff(y) <= 5,
                     _ => false,
                 })
@@ -529,7 +495,7 @@ fn by_mode(index: &Index, req: &NextRequest, pool: &[usize], seed: &[usize], out
         Mode::Artist => {
             let wanted = wanted_artists(index, seed, last);
             let theirs: Vec<(usize, f64)> =
-                pool.iter().filter(|&&i| index.songs[i].artists.iter().any(|a| wanted.contains(a))).map(|&i| (i, rng.unit())).collect();
+                pool.iter().filter(|&&i| index.songs[i].like.artists.iter().any(|a| wanted.contains(a))).map(|&i| (i, rng.unit())).collect();
             // Their artists on purpose, so only the albums are spaced.
             pick_spaced(index, theirs, count, None, false, rng)
         }
@@ -551,8 +517,8 @@ fn by_mode(index: &Index, req: &NextRequest, pool: &[usize], seed: &[usize], out
 
 /// The playing track's artists and the seed's three most common.
 fn wanted_artists(index: &Index, seed: &[usize], last: Option<usize>) -> HashSet<u32> {
-    let mut wanted: HashSet<u32> = last.map(|i| index.songs[i].artists.clone()).unwrap_or_default().into_iter().collect();
-    let mut common: Vec<(u32, u32)> = Profile::of(index, seed).artists.into_iter().collect();
+    let mut wanted: HashSet<u32> = last.map(|i| index.songs[i].like.artists.clone()).unwrap_or_default().into_iter().collect();
+    let mut common: Vec<(u32, u32)> = index.profile(seed).artists().iter().map(|(&a, &n)| (a, n)).collect();
     common.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     wanted.extend(common.into_iter().take(3).map(|(a, _)| a));
     wanted
@@ -578,7 +544,7 @@ fn pick_spaced(index: &Index, mut candidates: Vec<(usize, f64)>, count: usize, b
     while picked.len() < count && !candidates.is_empty() {
         let fits = |i: usize| {
             let s = &index.songs[i];
-            !albums.contains(&s.album_n) && (!vary_artist || !s.artists.iter().any(|a| prev.contains(a)))
+            !albums.contains(&s.album_n) && (!vary_artist || !s.like.artists.iter().any(|a| prev.contains(a)))
         };
         let pool: Vec<usize> = (0..candidates.len()).filter(|&k| fits(candidates[k].0)).collect();
         let pool = if pool.is_empty() { (0..candidates.len()).collect() } else { pool };
@@ -595,15 +561,15 @@ fn pick_spaced(index: &Index, mut candidates: Vec<(usize, f64)>, count: usize, b
         }
         let (i, _) = candidates.swap_remove(chosen);
         albums.insert(index.songs[i].album_n);
-        prev = index.songs[i].artists.clone();
+        prev = index.songs[i].like.artists.clone();
         picked.push(i);
     }
     picked
 }
 
 /// One whole album, the closest to the seed (`random`: any) of those with nothing in the queue and none of the seed's own.
-fn album_mix(index: &Index, pool: &[usize], seed: &[usize], out: &HashSet<usize>, random: bool, rng: &mut Rng) -> Vec<usize> {
-    let profile = Profile::of(index, seed);
+fn album_mix(index: &Index, pool: &[usize], seed: &[usize], out: &HashSet<usize>, random: bool, weights: &Weights, rng: &mut Rng) -> Vec<usize> {
+    let profile = index.profile(seed);
     let banned: HashSet<u32> = out.iter().map(|&i| index.songs[i].album_n).collect();
     let mut sums: HashMap<u32, (f64, u32)> = HashMap::new();
     for &i in pool {
@@ -612,7 +578,7 @@ fn album_mix(index: &Index, pool: &[usize], seed: &[usize], out: &HashSet<usize>
             continue;
         }
         let e = sums.entry(s.album_n).or_default();
-        e.0 += if random { rng.unit() } else { profile.score(index, i) };
+        e.0 += if random { rng.unit() } else { index.score(&profile, i, weights) };
         e.1 += 1;
     }
     // Albums of at least two tracks (Finamp's Album mix); singles only when there is nothing else.
@@ -637,8 +603,11 @@ struct Cache {
 static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
 
 /// The next radio tracks for a player (decision 0036).
-pub async fn next(req: NextRequest) -> Result<Vec<QueueTrack>, ToggleError> {
+pub async fn next(mut req: NextRequest) -> Result<Vec<QueueTrack>, ToggleError> {
     let (index, recent) = ready().await?;
+    if req.similar_by.is_none() {
+        req.similar_by = similar_by_of_listener();
+    }
     let within = match &req.within {
         Some(id) => Some(crate_songs(&index, id).await?),
         None => None,
@@ -703,10 +672,10 @@ async fn index(served: &Arc<crate::serve::Serve>, dir: &Path) -> Result<Arc<Inde
                 }
             }
         }
-        // Everyone's: the listener's favourites are marked for each choice. With how each song sounds (AudioMuse's).
-        let sounds = cat.audiomuse_vectors();
+        // Everyone's: the listener's favourites are marked for each choice. With what AudioMuse heard of each song.
+        let heard = cat.audiomuse_all();
         read_index(&dir.join("library.sqlite"), &dir.join("userdata.sqlite"), None, &member)
-            .map(|i| i.with_sounds(|id| crate::serve::ids::track_of(id).and_then(|t| sounds.get(&t))))
+            .map(|i| i.with_heard(|id| crate::serve::ids::track_of(id).and_then(|t| heard.get(&t)).map(Heard::of)))
     })
     .await
     .map_err(|e| anyhow::anyhow!("{e}"))??;
@@ -796,7 +765,7 @@ fn read_index(library: &Path, userdata: &Path, owner: Option<&str>, member: &Has
     let (mut albums, mut artists, mut genres, mut tags) = (Names::exact(), Names::exact(), Names::default(), Names::default());
     let mut st = lib.prepare(
         // A compilation's album artist ("Various Artists") is no artist: it would make every compilation alike.
-        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.year, s.genre, a.genres, s.duration_ms,
+        "SELECT s.id, s.title, s.artist, s.album, s.album_id, s.year, s.genre, a.genres, s.duration_ms, s.bpm,
                 CASE WHEN a.compilation = 1 OR lower(a.artist) IN ('various artists', 'various', 'va', 'verschiedene interpreten')
                      THEN NULL ELSE a.artist_id END
          FROM songs s LEFT JOIN albums a ON a.id = s.album_id
@@ -815,10 +784,11 @@ fn read_index(library: &Path, userdata: &Path, owner: Option<&str>, member: &Has
             r.get::<_, Option<String>>(7)?,
             r.get::<_, Option<i64>>(8)?,
             r.get::<_, Option<String>>(9)?,
+            r.get::<_, Option<i64>>(10)?,
         ))
     })?;
     for r in rows {
-        let (id, title, artist, album, album_id, year, genre, album_genres, duration_ms, album_artist) = r?;
+        let (id, title, artist, album, album_id, year, genre, album_genres, duration_ms, album_artist, bpm) = r?;
         let mut a: Vec<u32> = artists_of.get(&id).map(|v| v.iter().map(|x| artists.of(x)).collect()).unwrap_or_default();
         a.extend(album_artist.as_deref().map(|x| artists.of(x)));
         let mut g: Vec<u32> = genre.as_deref().filter(|x| !x.is_empty()).map(|x| genres.of(x)).into_iter().collect();
@@ -827,12 +797,16 @@ fn read_index(library: &Path, userdata: &Path, owner: Option<&str>, member: &Has
         songs.push(Song {
             favourite: starred.contains(&id),
             excluded: false,
-            playlists: member.get(&id).cloned().unwrap_or_default(),
             album_n: albums.of(&album_id),
-            artists: a,
-            genres: g,
-            tags: t,
-            year: year.and_then(|y| u32::try_from(y).ok()).filter(|y| *y > 0),
+            like: Track {
+                playlists: member.get(&id).cloned().unwrap_or_default(),
+                artists: a,
+                genres: g,
+                tags: t,
+                year: year.and_then(|y| u32::try_from(y).ok()).filter(|y| *y > 0),
+                bpm: bpm.filter(|b| *b > 0).map(|b| b as f32),
+                ..Track::default()
+            },
             duration_secs: duration_ms.filter(|d| *d > 0).map(|d| d as f64 / 1000.0),
             id,
             title,
@@ -855,7 +829,7 @@ pub async fn similar_songs(item: &str, count: usize) -> Result<Vec<String>, Togg
     if seed.is_empty() {
         return Ok(Vec::new());
     }
-    let req = NextRequest { mode: Mode::Similar, exclude: seed.clone(), seed, last: None, count: Some(count.min(MAX_COUNT)), within: None, albums: false, by: RadioBy::Track, skip_favourites: false };
+    let req = NextRequest { mode: Mode::Similar, exclude: seed.clone(), seed, last: None, count: Some(count.min(MAX_COUNT)), within: None, albums: false, by: RadioBy::Track, skip_favourites: false, similar_by: similar_by_of_listener() };
     Ok(choose(&index, &req, &recent, None, &mut Rng::new()).into_iter().map(|i| index.songs[i].id.clone()).collect())
 }
 
@@ -864,10 +838,10 @@ pub async fn similar_artists(artist: &str, count: usize) -> Result<Vec<String>, 
     let (index, recent) = ready().await?;
     let Some(own) = index.artist_ids.iter().position(|x| x == artist).map(|a| a as u32) else { return Ok(Vec::new()) };
     let seed: Vec<String> = index.of_item(artist).into_iter().map(|i| index.songs[i].id.clone()).collect();
-    let req = NextRequest { mode: Mode::Similar, exclude: seed.clone(), seed, last: None, count: Some(MAX_COUNT), within: None, albums: false, by: RadioBy::Track, skip_favourites: false };
+    let req = NextRequest { mode: Mode::Similar, exclude: seed.clone(), seed, last: None, count: Some(MAX_COUNT), within: None, albums: false, by: RadioBy::Track, skip_favourites: false, similar_by: similar_by_of_listener() };
     let mut tally: HashMap<u32, u32> = HashMap::new();
     for i in choose(&index, &req, &recent, None, &mut Rng::new()) {
-        for &a in unique(&index.songs[i].artists).collect::<Vec<_>>().iter().filter(|&&a| a != own) {
+        for &a in unique(&index.songs[i].like.artists).collect::<Vec<_>>().iter().filter(|&&a| a != own) {
             *tally.entry(a).or_default() += 1;
         }
     }
@@ -918,10 +892,7 @@ mod tests {
             album: format!("album {album}"),
             album_id: format!("al-{album}"),
             album_n: album,
-            artists: vec![artist],
-            genres: vec![genre],
-            year: Some(year),
-            playlists: playlists.to_vec(),
+            like: Track { artists: vec![artist], genres: vec![genre], year: Some(year), playlists: playlists.to_vec(), ..Track::default() },
             ..Song::default()
         }
     }
@@ -941,7 +912,7 @@ mod tests {
     }
 
     fn ask(mode: Mode) -> NextRequest {
-        NextRequest { mode, seed: vec!["s1".into(), "s2".into()], exclude: vec!["s1".into(), "s2".into()], last: Some("s2".into()), count: Some(2), within: None, albums: false, by: RadioBy::Track, skip_favourites: false }
+        NextRequest { mode, seed: vec!["s1".into(), "s2".into()], exclude: vec!["s1".into(), "s2".into()], last: Some("s2".into()), count: Some(2), within: None, albums: false, by: RadioBy::Track, skip_favourites: false, similar_by: None }
     }
 
     #[test]
@@ -990,7 +961,7 @@ mod tests {
         let index = Index::new((0..6).map(|n| song(&format!("s{n}"), 1, 1, 1, 1990, &[])).collect());
         let seed: Vec<String> = (0..6).map(|n| format!("s{n}")).collect();
         for n in 0..30 {
-            let req = NextRequest { mode: Mode::Reshuffle, seed: seed.clone(), exclude: seed.clone(), last: Some("s3".into()), count: None, within: None, albums: false, by: RadioBy::Track, skip_favourites: false };
+            let req = NextRequest { mode: Mode::Reshuffle, seed: seed.clone(), exclude: seed.clone(), last: Some("s3".into()), count: None, within: None, albums: false, by: RadioBy::Track, skip_favourites: false, similar_by: None };
             let picked = ids(&index, &choose(&index, &req, &HashMap::new(), None, &mut Rng::seeded(n)));
             assert_eq!(picked.len(), 6);
             assert_ne!(picked[0], "s3");
@@ -1003,10 +974,10 @@ mod tests {
         s.extend((0..10).map(|n| song(&format!("near{n}"), 10 + n, 2 + n, 1, 1986 + n, &[])));
         s.extend((0..10).map(|n| song(&format!("far{n}"), 30 + n, 2 + n, 1, 2010 + n, &[])));
         let index = Index::new(s);
-        let req = NextRequest { mode: Mode::Era, seed: vec![], exclude: vec!["now".into()], last: Some("now".into()), count: Some(5), within: None, albums: false, by: RadioBy::Track, skip_favourites: false };
+        let req = NextRequest { mode: Mode::Era, seed: vec![], exclude: vec!["now".into()], last: Some("now".into()), count: Some(5), within: None, albums: false, by: RadioBy::Track, skip_favourites: false, similar_by: None };
         let picked = choose(&index, &req, &HashMap::new(), None, &mut Rng::seeded(5));
         assert_eq!(picked.len(), 5);
-        assert!(picked.iter().all(|&i| index.songs[i].year.unwrap().abs_diff(1990) <= 5));
+        assert!(picked.iter().all(|&i| index.songs[i].like.year.unwrap().abs_diff(1990) <= 5));
     }
 
     #[test]
@@ -1023,13 +994,13 @@ mod tests {
         let index = library();
         // The crate: s1, s2 (the seed's own album: allowed inside a crate), k1 and three strangers.
         let crate_: Vec<usize> = ["s1", "s2", "k1", "x1", "x2", "x3"].iter().map(|id| index.by_id[*id]).collect();
-        let req = NextRequest { mode: Mode::Similar, seed: vec![], exclude: vec!["x1".into()], last: Some("x1".into()), count: Some(5), within: None, albums: false, by: RadioBy::Track, skip_favourites: false };
+        let req = NextRequest { mode: Mode::Similar, seed: vec![], exclude: vec!["x1".into()], last: Some("x1".into()), count: Some(5), within: None, albums: false, by: RadioBy::Track, skip_favourites: false, similar_by: None };
         let picked = ids(&index, &choose(&index, &req, &HashMap::new(), Some(&crate_), &mut Rng::seeded(4)));
         assert_eq!(picked.len(), 5, "{picked:?}");
         assert!(picked.iter().all(|p| ["s1", "s2", "k1", "x2", "x3"].contains(&p.as_str())), "only the crate's: {picked:?}");
         // All of it queued: a new round, the longest ago first, not the last few again.
         let queued: Vec<String> = ["s1", "s2", "k1", "x2", "x3", "x1"].iter().map(|s| s.to_string()).collect();
-        let req = NextRequest { mode: Mode::Random, seed: vec![], exclude: queued, last: Some("x1".into()), count: Some(2), within: None, albums: false, by: RadioBy::Track, skip_favourites: false };
+        let req = NextRequest { mode: Mode::Random, seed: vec![], exclude: queued, last: Some("x1".into()), count: Some(2), within: None, albums: false, by: RadioBy::Track, skip_favourites: false, similar_by: None };
         let picked = ids(&index, &choose(&index, &req, &HashMap::new(), Some(&crate_), &mut Rng::seeded(9)));
         assert_eq!(picked.len(), 2, "{picked:?}");
         assert!(picked.iter().all(|p| ["s1", "s2"].contains(&p.as_str())), "the round starts again from the oldest: {picked:?}");
@@ -1052,8 +1023,8 @@ mod tests {
             index.albums.len(),
             index.artist_ids.len(),
             index.songs.iter().filter(|s| s.favourite).count(),
-            index.songs.iter().filter(|s| !s.genres.is_empty()).count(),
-            index.songs.iter().filter(|s| s.year.is_some()).count(),
+            index.songs.iter().filter(|s| !s.like.genres.is_empty()).count(),
+            index.songs.iter().filter(|s| s.like.year.is_some()).count(),
             index.songs.iter().filter(|s| s.duration_secs.is_some()).count(),
             recent.len(),
             t.elapsed()
@@ -1061,7 +1032,7 @@ mod tests {
         let mut rng = Rng::seeded(42);
         let show = |i: usize| {
             let s = &index.songs[i];
-            format!("{} - {} [{}] {}", s.artist.as_deref().unwrap_or("?"), s.title, s.album, s.year.map(|y| y.to_string()).unwrap_or_default())
+            format!("{} - {} [{}] {}", s.artist.as_deref().unwrap_or("?"), s.title, s.album, s.like.year.map(|y| y.to_string()).unwrap_or_default())
         };
         let mut albums: Vec<&Vec<usize>> = index.albums.values().filter(|v| v.len() >= 6).collect();
         albums.sort_by_key(|v| index.songs[v[0]].album_id.clone());
@@ -1069,13 +1040,13 @@ mod tests {
             let seed: Vec<String> = album.iter().map(|&i| index.songs[i].id.clone()).collect();
             println!("\n== seed: {} ({} songs)", show(album[0]), album.len());
             let one = vec![seed[0].clone()];
-            let req = NextRequest { mode: Mode::Radio, seed: one.clone(), exclude: seed.clone(), last: Some(one[0].clone()), count: Some(5), within: None, albums: false, by: RadioBy::Track, skip_favourites: false };
+            let req = NextRequest { mode: Mode::Radio, seed: one.clone(), exclude: seed.clone(), last: Some(one[0].clone()), count: Some(5), within: None, albums: false, by: RadioBy::Track, skip_favourites: false, similar_by: None };
             println!("-- Radio's inserts after {}", show(album[0]));
             for i in choose(&index, &req, &recent, None, &mut rng) {
                 println!("   {}", show(i));
             }
             for mode in [Mode::Similar, Mode::Era, Mode::Artist, Mode::Random] {
-                let req = NextRequest { mode, seed: seed.clone(), exclude: seed.clone(), last: seed.last().cloned(), count: Some(5), within: None, albums: false, by: RadioBy::Track, skip_favourites: false };
+                let req = NextRequest { mode, seed: seed.clone(), exclude: seed.clone(), last: seed.last().cloned(), count: Some(5), within: None, albums: false, by: RadioBy::Track, skip_favourites: false, similar_by: None };
                 let t = Instant::now();
                 let picked = choose(&index, &req, &recent, None, &mut rng);
                 println!("-- {mode:?} ({:?})", t.elapsed());
@@ -1111,8 +1082,9 @@ mod tests {
             albums: false,
             by,
             skip_favourites: skip,
+            similar_by: None,
         };
-        let shares_artist = |a: usize, b: usize| index.songs[a].artists.iter().any(|x| index.songs[b].artists.contains(x));
+        let shares_artist = |a: usize, b: usize| index.songs[a].like.artists.iter().any(|x| index.songs[b].like.artists.contains(x));
         let mut rng = Rng::seeded(7);
         for by in [RadioBy::Track, RadioBy::Artist, RadioBy::Era] {
             for skip in [false, true] {
@@ -1131,7 +1103,7 @@ mod tests {
                         if !seen_albums.insert(index.songs[i].album_id.clone()) {
                             albums_twice += 1;
                         }
-                        if let (Some(a), Some(b)) = (index.songs[seed].year, index.songs[i].year) {
+                        if let (Some(a), Some(b)) = (index.songs[seed].like.year, index.songs[i].like.year) {
                             gaps += a.abs_diff(b);
                             dated += 1;
                         }
@@ -1153,7 +1125,7 @@ mod tests {
         }
         let show = |i: usize| {
             let s = &index.songs[i];
-            format!("{} - {} [{}] {}{}", s.artist.as_deref().unwrap_or("?"), s.title, s.album, s.year.map(|y| y.to_string()).unwrap_or_default(), if s.favourite { " ♥" } else { "" })
+            format!("{} - {} [{}] {}{}", s.artist.as_deref().unwrap_or("?"), s.title, s.album, s.like.year.map(|y| y.to_string()).unwrap_or_default(), if s.favourite { " ♥" } else { "" })
         };
         for &seed in seeds.iter().step_by(75) {
             println!("
@@ -1174,7 +1146,7 @@ mod tests {
         let mut s = vec![song("own", 1, 7, 1, 2000, &[]), song("a1", 2, 7, 1, 1980, &[]), song("a2", 3, 7, 1, 1975, &[]), song("a3", 4, 7, 1, 2020, &[])];
         s.extend((0..20).map(|n| song(&format!("g{n}"), 10 + n, 20 + n, 1, 2000, &[])));
         let index = Index::new(s);
-        let req = NextRequest { mode: Mode::Radio, seed: vec!["own".into()], exclude: vec!["own".into()], last: Some("own".into()), count: Some(3), within: None, albums: false, by: RadioBy::Track, skip_favourites: false };
+        let req = NextRequest { mode: Mode::Radio, seed: vec!["own".into()], exclude: vec!["own".into()], last: Some("own".into()), count: Some(3), within: None, albums: false, by: RadioBy::Track, skip_favourites: false, similar_by: None };
         let picked = ids(&index, &choose(&index, &req, &HashMap::new(), None, &mut Rng::seeded(11)));
         assert_eq!(picked.len(), 3);
         assert!(!picked.contains(&"own".to_string()));
@@ -1204,6 +1176,7 @@ mod tests {
             albums: false,
             by,
             skip_favourites: false,
+            similar_by: None,
         };
         let era = ids(&index, &choose(&index, &ask(RadioBy::Era), &HashMap::new(), None, &mut Rng::seeded(4)));
         assert!(era.len() == 3 && era.iter().all(|p| p.starts_with("near")), "{era:?}");
@@ -1231,6 +1204,7 @@ mod tests {
             albums: false,
             by: RadioBy::Track,
             skip_favourites,
+            similar_by: None,
         };
         let picked = ids(&index, &choose(&index, &ask(true), &HashMap::new(), None, &mut Rng::seeded(3)));
         assert!(picked.len() == 3 && picked.iter().all(|p| ["t5", "t6", "t7"].contains(&p.as_str())), "{picked:?}");
@@ -1246,12 +1220,14 @@ mod tests {
             ("far".to_string(), vec![0.0, 1.0]),
         ]
         .into();
-        let index = Index::new(s).with_sounds(|id| vectors.get(id));
-        let p = Profile::of(&index, &[0]);
-        let (near, far, unheard) = (p.score(&index, 1), p.score(&index, 2), p.score(&index, 3));
-        assert!((near - 1.0 / 6.0).abs() < 1e-9, "only the sound: {near}");
+        let index = Index::new(s).with_heard(|id| vectors.get(id).map(|v| Heard { sound: Some(v.clone()), ..Heard::default() }));
+        let p = index.profile(&[0]);
+        let score = |i| index.score(&p, i, &Weights::EQUAL);
+        let (near, far, unheard) = (score(1), score(2), score(3));
+        // Known: artist, genre and era (none shared), and the sound where both were heard.
+        assert!((near - 1.0 / 4.0).abs() < 1e-9, "only the sound: {near}");
         assert_eq!(far, 0.0, "not alike at all");
-        assert_eq!(unheard, 0.0, "the five signals alone, none shared");
+        assert_eq!(unheard, 0.0, "the other signals alone, none shared");
         assert!(near > far);
     }
 
@@ -1272,6 +1248,7 @@ mod tests {
             albums: false,
             by: RadioBy::Track,
             skip_favourites: false,
+            similar_by: None,
         };
         let picked = ids(&index, &choose(&index, &ask, &HashMap::new(), None, &mut Rng::seeded(3)));
         assert!(picked.len() == 3 && picked.iter().all(|p| ["t5", "t6", "t7"].contains(&p.as_str())), "{picked:?}");
@@ -1299,6 +1276,7 @@ mod tests {
             albums: true,
             by: RadioBy::Track,
             skip_favourites: false,
+            similar_by: None,
         };
         let picked = ids(&index, &choose(&index, &req, &HashMap::new(), None, &mut Rng::seeded(2)));
         assert_eq!(picked, ["e1", "e2"], "the album in the era, whole, though album 3 shares the artist and genre");

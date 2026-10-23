@@ -18,6 +18,7 @@
   import Icon from './Icon.svelte';
   import type { FilterCondition } from './prefs.svelte';
   import Switch from './Switch.svelte';
+  import DensityRange from './DensityRange.svelte';
   import TempoRange from './TempoRange.svelte';
 
   let {
@@ -46,12 +47,18 @@
     { value: 'all' as const, label: 'all' },
   ];
   const quantifier = $derived(condition.quantifier ?? 'any');
+  /** Any or all of an item's tracks only where they can differ on the axis (not an album's year: its tracks share
+   *  it, so both would pick the same albums). */
+  const tested = $derived(!!items && !!axis?.varies);
+  /** The scale's ends as the profile names them (lib/ListProfile). */
+  const ENDS: Record<string, [string, string]> = { energy: ['calm', 'intense'], danceability: ['still', 'danceable'] };
 
   /** What it is set to, in a few words ("Downtempo, Trip Hop", "80–105", "2015 on", "yes"). */
   const summary = $derived.by(() => {
     const v = condition.value;
     let s = '';
     if (v.kind === 'yes') s = 'yes';
+    else if (v.kind === 'like') s = `${v.of.length === 1 ? 'one track' : `${v.of.length} tracks`}, ${Math.round(v.min)}%`;
     else if (v.kind === 'any_of') s = v.values.length === 0 ? (axis?.kind === 'membership' ? 'any playlist' : 'none chosen') : v.values.length <= 2 ? v.values.join(', ') : `${v.values.slice(0, 2).join(', ')} +${v.values.length - 2}`;
     else {
       const n = (x: number) => String(Math.round(x));
@@ -59,7 +66,7 @@
     }
     s = condition.not ? `not ${s}` : s;
     // All is not the default: said folded too.
-    return items && quantifier === 'all' ? `${s}, all tracks` : s;
+    return tested && quantifier === 'all' ? `${s}, all tracks` : s;
   });
 
   // A values axis can have many (genres): a search, and the chosen ones first, then the most common.
@@ -107,9 +114,28 @@
             <button class="chip" class:not={condition.not} aria-pressed={c.on} onclick={() => toggle(c.v)}>{c.v}{#if c.n !== null}<span class="n">{c.n.toLocaleString()}</span>{/if}</button>
           {/each}
         </div>
+      {:else if condition.value.kind === 'like'}
+        {@const l = condition.value}
+        <!-- How alike: 0 two random tracks, 100 two of one album. -->
+        <label class="near">
+          <span>How alike</span>
+          <input type="range" min="0" max="100" step="5" value={l.min} oninput={(e) => (condition.value = { ...l, min: Number(e.currentTarget.value) })} />
+          <output>{Math.round(l.min)}%</output>
+        </label>
       {:else if axis && condition.value.kind === 'range'}
         {@const r = condition.value}
-        {#if axis.key === 'bpm' && bpms}
+        {#if axis.bins?.length && axis.min !== null && axis.max !== null && axis.max > axis.min}
+          <!-- The profile's bar as the slider: the density over the list's span, the chosen part lit. -->
+          <DensityRange
+            bins={axis.bins}
+            min={Math.floor(axis.min)}
+            max={Math.ceil(axis.max)}
+            value={{ min: r.min, max: r.max }}
+            {label}
+            ends={ENDS[axis.key] ?? [`${Math.floor(axis.min)}`, `${Math.ceil(axis.max)}${axis.key === 'bpm' ? ' BPM' : ''}`]}
+            onchange={(v) => (condition.value = { kind: 'range', ...v })}
+          />
+        {:else if axis.key === 'bpm' && bpms}
           <TempoRange {bpms} bind:value={() => tempoRange, (v) => (condition.value = { kind: 'range', min: v?.[0] ?? null, max: v?.[1] ?? null })} />
         {:else}
           <div class="range">
@@ -123,7 +149,7 @@
         <button class="notpill" aria-pressed={condition.not} onclick={() => (condition.not = !condition.not)}>Not</button>
         <button class="remove" onclick={onremove}>Remove</button>
       </div>
-      {#if items}
+      {#if tested}
         <p class="tested">
           Matching
           <span class="seg" role="radiogroup" aria-label="Any or all tracks">
@@ -192,6 +218,26 @@
     color: var(--danger, #c33);
   }
 
+
+  .near {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    font-size: 15px;
+  }
+
+  .near input {
+    flex: 1;
+    min-width: 0;
+    accent-color: var(--art-accent, var(--accent));
+  }
+
+  .near output {
+    width: 4ch;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
 
   /* What the condition is tested on, a sentence under the card's controls; any or all inside it. */
   .tested {

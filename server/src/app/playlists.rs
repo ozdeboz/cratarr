@@ -42,6 +42,22 @@ pub struct CratePage {
     pub genres: Vec<String>,
 }
 
+/// What sounds like a track or an album (`like:<id>`, `crates::like_crate`): named after it, an album's seeds its songs.
+async fn like_crate(id: &str, item: &str) -> Result<CrateDef, ToggleError> {
+    let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let item = item.to_string();
+    let found = tokio::task::spawn_blocking(move || -> Result<Option<(String, Vec<String>)>> {
+        if crate::serve::ids::track_of(&item).is_some() {
+            return Ok(served.library.songs_by_id(std::slice::from_ref(&item))?.pop().map(|s| (s.title, vec![s.id])));
+        }
+        Ok(served.library.album(&item)?.map(|a| (a.name, a.song.unwrap_or_default().into_iter().map(|s| s.id).collect())))
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("{e}"))??;
+    let (name, songs) = found.ok_or(ToggleError::UnknownPlaylist)?;
+    Ok(crates::like_crate(id, &format!("Sounds like {name}"), songs))
+}
+
 pub(super) struct CrateLibrary {
     pub(super) source: String,
     /// Every library's files (`Catalogue::crate_facts`); `files()` leaves out those switched off.
@@ -76,8 +92,13 @@ impl CrateLibrary {
         &self.membership
     }
 
+    /// The conditions with their Sounds like worked out (`crates::resolved`), once for all the files.
+    pub(super) fn resolved(&self, conditions: &[crates::Condition]) -> Vec<crates::Condition> {
+        crates::resolved(conditions, &self.files)
+    }
+
     pub(super) fn select(&self, conditions: &[crates::Condition]) -> Vec<String> {
-        crates::select(self.files(), conditions, &self.world()).into_iter().map(str::to_string).collect()
+        crates::select(self.files(), &self.resolved(conditions), &self.world()).into_iter().map(str::to_string).collect()
     }
 }
 
@@ -1701,7 +1722,7 @@ impl PlaylistService {
 
     /// A built-in crate is everyone's: its picture is the administrators' to change (decision 0051).
     fn may_picture(&self, id: &str) -> Result<(), ToggleError> {
-        let built_in = crates::permanent().iter().any(|c| c.id == id) || crates::genre_crate(id).is_some();
+        let built_in = crates::permanent().iter().any(|c| c.id == id) || crates::genre_crate(id).is_some() || id.starts_with(crates::LIKE);
         if built_in && !crate::serve::access::administering() {
             return Err(ToggleError::Forbidden("A built-in crate's picture is for administrators.".into()));
         }
@@ -1712,6 +1733,9 @@ impl PlaylistService {
     pub async fn crate_def(&self, id: &str) -> Result<CrateDef, ToggleError> {
         if let Some(c) = crates::permanent().into_iter().find(|c| c.id == id).or_else(|| crates::genre_crate(id)) {
             return Ok(c);
+        }
+        if let Some(item) = id.strip_prefix(crates::LIKE) {
+            return like_crate(id, item).await;
         }
         self.own_crates()?.list().await?.into_iter().find(|c| c.id == id).ok_or(ToggleError::UnknownPlaylist)
     }
@@ -1868,7 +1892,7 @@ impl PlaylistService {
     async fn crate_favourites(&self, id: &str) -> Result<crates::Favourites, ToggleError> {
         match self.own_crates()?.all_favourites().await?.get(id) {
             Some(f) => Ok(*f),
-            None if crates::genre_crate(id).is_some() => Ok(crates::Favourites::All),
+            None if crates::genre_crate(id).is_some() || id.starts_with(crates::LIKE) => Ok(crates::Favourites::All),
             None => Ok(self.own_crates()?.favourites(id).await?),
         }
     }
