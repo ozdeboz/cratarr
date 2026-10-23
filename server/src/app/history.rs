@@ -271,9 +271,14 @@ pub fn listening(rows: &[Logged], facts: &std::collections::HashMap<String, Song
     Listening { period, from, log_from, total_secs: total, plays, time, taste, artists: top(artists), albums: top(albums), tracks: top(tracks) }
 }
 
-/// The log since `from` and where it begins, for Listening (the log is read here only).
+/// The log since `from` and where it begins, for Listening (the log is read here only). An import counts as the log
+/// here: `heard_from` is where players began telling (imports left out), and history from ListenBrainz before it is
+/// still history heard (0064, amended).
 pub fn heard(userdata: &UserData, user: &str, from: i64) -> Result<(Vec<Logged>, Option<i64>)> {
-    Ok((userdata.heard_since(user, from)?, userdata.heard_from(user)?))
+    let rows = userdata.heard_since(user, from)?;
+    let first = rows.iter().map(|r| r.at).min();
+    let told = userdata.heard_from(user)?;
+    Ok((rows, first.into_iter().chain(told).min()))
 }
 
 #[cfg(test)]
