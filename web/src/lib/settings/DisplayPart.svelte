@@ -3,7 +3,8 @@
   // (lib/settings/reset). Levelling went to This device (the owner, 2026-10-24: a play affair, not a display one). The
   // player's row (the owner, 2026-10-19): shown or hidden, and the facts beside its info button
   // (lib/settings/PlayerRowList). Profile (the owner, 2026-10-23): the lists' profiles (lib/ListProfile), open or folded
-  // for every list, the row a folded one keeps, and each row on or off. A list's Typical artists always show where it has
+  // for every list, the row a folded one keeps, and each row on or off; under Content (the owner, 2026-10-24), switched
+  // off as a whole with Music profiles. A list's Typical artists always show where it has
   // them (the owner, 2026-10-24: no switch).
   import Seg from '../Seg.svelte';
   import { inApp } from '../app.svelte';
@@ -28,6 +29,7 @@
       prefs.playerRow = true;
       prefs.playerFacts = [];
       prefs.profileOpen = true;
+      prefs.profile = true;
       prefs.profileFoldAt = 0;
       prefs.profileRows = PROFILE_ROWS.map((r) => r.id);
     },
@@ -44,13 +46,14 @@
   {#if prefs.playerRow}<PlayerRowList />{/if}
 </Group>
 
-<Group title="Profile">
+<Group title="Content">
+  <Item name="Music profiles" toggle={{ checked: prefs.profile, onchange: (on) => (prefs.profile = on) }} />
   <!-- The rows in their order, the fold line among them: above it stays when a profile is folded. -->
-  <OrderList
+  {#if prefs.profile}<OrderList
     items={PROFILE_ROWS}
     on={prefs.profileRows}
     label="The profile's rows"
     onchange={(v) => (prefs.profileRows = v)}
     fold={{ at: Math.min(prefs.profileFoldAt, prefs.profileRows.length), onchange: (at) => (prefs.profileFoldAt = at) }}
-  />
+  />{/if}
 </Group>
