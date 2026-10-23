@@ -800,6 +800,9 @@ impl Catalogue {
         let mut muse: HashMap<Place, Muse> = st
             .query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), (r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))))?
             .collect::<rusqlite::Result<_>>()?;
+        // A mood a file has: one that stands out against the library's (the owner, 2026-10-23: CLAP scores every mood
+        // between about 0.5 and 0.65, so a fixed 0.3 gave every heard file all five, every mood pill the same count).
+        let stand_out = crate::app::audiomuse::mood_thresholds(muse.values().map(|m| m.2.as_deref()));
         Ok(files
             .into_iter()
             .filter_map(|(folder, rel, born)| {
@@ -832,10 +835,12 @@ impl Catalogue {
                     if scores.iter().any(|(_, x)| *x > 0.0) {
                         clap_moods = Some(crate::similarity::MOODS.map(|m| scores.iter().find(|(n, _)| n == m).map_or(0.0, |(_, x)| *x as f32)));
                     }
-                    let (m, d) = crate::app::audiomuse::moods_and_danceability(&AudioMuseRow { moods: clap, ..AudioMuseRow::default() });
+                    let (_, d) = crate::app::audiomuse::moods_and_danceability(&AudioMuseRow { moods: clap, ..AudioMuseRow::default() });
                     energy = e.map(|e| (e * 100.0).round());
                     danceability = d.map(|d| (d * 100.0).round());
-                    moods = m.into_iter().map(|(n, _)| n).collect();
+                    if let Some(s) = clap_moods {
+                        moods = crate::similarity::MOODS.iter().zip(s).zip(stand_out).filter(|((_, x), t)| *x as f64 >= *t).map(|((m, _), _)| m.to_string()).collect();
+                    }
                     styles = crate::app::audiomuse::weighted(style.as_deref()).into_iter().take(crate::app::audiomuse::STYLES).map(|(n, _)| n).collect();
                 }
                 Some(crate::crates::Facts {

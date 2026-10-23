@@ -116,6 +116,25 @@ pub fn weighted(text: Option<&str>) -> Vec<(String, f64)> {
     out
 }
 
+/// Where each of CLAP's moods (`similarity::MOODS`' order) stands out: the library's top quarter of that mood's
+/// scores, over the files CLAP heard (`moods`: their `other_features`). A mood no file was heard on: never.
+pub fn mood_thresholds<'a>(moods: impl Iterator<Item = Option<&'a str>>) -> [f64; 5] {
+    let mut each: [Vec<f64>; 5] = Default::default();
+    for text in moods {
+        let scores = weighted(text);
+        if !scores.iter().any(|(_, x)| *x > 0.0) {
+            continue;
+        }
+        for (k, m) in crate::similarity::MOODS.iter().enumerate() {
+            each[k].extend(scores.iter().find(|(n, _)| n == m).map(|(_, x)| *x));
+        }
+    }
+    each.map(|mut v| {
+        v.sort_by(f64::total_cmp);
+        if v.is_empty() { f64::INFINITY } else { crate::similarity::quantile(&v, 0.75) }
+    })
+}
+
 /// CLAP's moods, and its danceability: none while every score is 0 (CLAP has not heard the track yet).
 pub fn moods_and_danceability(row: &AudioMuseRow) -> (Vec<(String, f64)>, Option<f64>) {
     let all = weighted(row.moods.as_deref());
@@ -151,6 +170,15 @@ pub fn details(row: Option<&AudioMuseRow>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mood_stands_out_in_the_librarys_top_quarter() {
+        let heard = ["happy:0.50,sad:0.60", "happy:0.55,sad:0.61", "happy:0.60,sad:0.62", "happy:0.65,sad:0.63", "happy:0.00,sad:0.00"];
+        let t = mood_thresholds(heard.iter().map(|s| Some(*s)));
+        assert!((t[0] - 0.6125).abs() < 1e-9, "happy: the top quarter of 0.50..0.65, the unheard one left out: {}", t[0]);
+        assert!((t[1] - 0.6225).abs() < 1e-9, "sad: {}", t[1]);
+        assert_eq!(t[2], f64::INFINITY, "relaxed: never scored, never stands out");
+    }
 
     #[test]
     fn scores_read_as_written_and_moods_wait_for_clap() {

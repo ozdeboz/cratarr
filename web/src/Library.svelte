@@ -19,6 +19,7 @@
   import { isFavorite, loadAlbumFavorites } from './lib/favourites.svelte';
   import { isLossless, pageView } from './lib/pageView.svelte';
   import { passing, switchOn } from './lib/listFilter.svelte';
+  import { libraryShown } from './lib/sources.svelte';
   import { untrack } from 'svelte';
   import { me } from './lib/me.svelte';
   import { loadExcluded } from './lib/exclusions.svelte';
@@ -158,9 +159,10 @@
     };
     return sources.map((s) => ({ ...s, albums: s.albums.filter((a) => keep(s, a)) }));
   });
-  // How many albums the filter lets through, of how many (the Filter sheet's count).
+  // How many albums the filter lets through, of how many (the Filter sheet's count): of the libraries switched on, as
+  // the shelf shows them (it said 605 of 2,861 with Music switched off).
   $effect(() => {
-    const count = (l: ShelfSource[] | null) => (l ?? []).reduce((n, s) => n + s.albums.length, 0);
+    const count = (l: ShelfSource[] | null) => (l ?? []).reduce((n, s) => n + s.albums.filter((a) => !a.library || libraryShown(s.id, a.library)).length, 0);
     pageView.counted = sources ? { shown: count(shown), total: count(sources) } : null;
     return () => (pageView.counted = null);
   });
