@@ -89,6 +89,22 @@
     {#if failed}<span class="error">{failed}</span>{:else if preview}{exportLine(preview)}{/if}
   </p>
 
+  <!-- The format first (the owner: the first and most important), then the switches side by side. -->
+  {#if tracks}
+    <Card title="Format" label="Format">
+      <ChoiceList label="Format" options={FORMATS} value={exporting.format} onchange={(v) => (exporting.format = v)} />
+    </Card>
+    {#if exporting.format === 'opus'}
+      <SettingRow card label="Bit rate" hint="kb/s">
+        <Seg
+          label="Bit rate"
+          options={BITRATES.map((n) => ({ value: String(n), label: String(n), title: `${n} kb/s` }))}
+          bind:value={() => String(exporting.bitrate), (v) => (exporting.bitrate = Number(v))}
+        />
+      </SettingRow>
+    {/if}
+  {/if}
+
   {#if what.kind === 'playlists'}
     <Switch card label="Include tracks" checked={exporting.tracks} onchange={(on) => (exporting.tracks = on)} />
     {#if several(what)}
@@ -106,20 +122,7 @@
   {:else}
     <Switch card label="Include a playlist file" checked={exporting.m3u} onchange={(on) => (exporting.m3u = on)} />
   {/if}
-
   {#if tracks}
-    <Card title="Format" label="Format">
-      <ChoiceList label="Format" options={FORMATS} value={exporting.format} onchange={(v) => (exporting.format = v)} />
-    </Card>
-    {#if exporting.format === 'opus'}
-      <SettingRow card label="Bit rate" hint="kb/s">
-        <Seg
-          label="Bit rate"
-          options={BITRATES.map((n) => ({ value: String(n), label: String(n), title: `${n} kb/s` }))}
-          bind:value={() => String(exporting.bitrate), (v) => (exporting.bitrate = Number(v))}
-        />
-      </SettingRow>
-    {/if}
     <!-- The layout as a switch (the owner): on, Artist and album folders; off, one folder. -->
     <Switch card label="Preserve directory layout" checked={exporting.layout === 'folders'} onchange={(on) => (exporting.layout = on ? 'folders' : 'flat')} />
   {/if}

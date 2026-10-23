@@ -88,6 +88,7 @@
   import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
   import CrateMenu from './CrateMenu.svelte';
   import SubjectMenu from './SubjectMenu.svelte';
+  import SelectionMenu from './SelectionMenu.svelte';
   import { addedOn, artistPictureId, goToArtist, library, mainArtist, readLibrary } from './albums.svelte';
   import AlbumAbout from './AlbumAbout.svelte';
   import AlbumMore from './AlbumMore.svelte';
@@ -669,6 +670,8 @@
   let crateMenuOpen = $state(false);
   /** A badge's menu (decision 0058: a genre badge, a related playlist: what its tap opens, by its subject). */
   let badgeMenu = $state<string | null>(null);
+  /** The ticked tracks' menu (the select bar's ⋮, lib/SelectionMenu). */
+  let tickedMenu = $state<LocalTrack[] | null>(null);
   /** The menu opens at its entries, or at Delete's confirmation (the edit bar's trash). */
   let menuStart = $state<'menu' | 'delete'>('menu');
   /** `outs`: its list's Remove from (one's own playlist) or Exclude from (a crate: the track, its album). */
@@ -1658,18 +1661,10 @@
         <button class="icon" class:fav={tickedFav} aria-pressed={tickedFav} aria-label="Favourite" title="Favourite" disabled={!ticked.length} onclick={favouriteTicked}
           ><Icon name="heart" size={24} /></button
         >
-        {#if inApp}
-          <button
-            class="icon"
-            aria-label="Download"
-            title="Download"
-            disabled={!ticked.length}
-            onclick={() => {
-              download(tracksOf(ticked));
-              selecting = null;
-            }}><Icon name="arrowDownToLine" size={24} /></button
-          >
-        {/if}
+        <!-- The menu of what is ticked, at the far right (decision 0058: Add to playlist, Download, Export…). -->
+        <button class="icon" aria-label="Menu of the ticked tracks" title="More" disabled={!ticked.length} onclick={() => (tickedMenu = tracksOf(ticked))}
+          ><Icon name="moreVert" size={24} /></button
+        >
     </SelectBar>
   {/if}
 </section>
@@ -1830,6 +1825,9 @@
 {/if}
 {#if selectSheet}
   <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />
+{/if}
+{#if tickedMenu}
+  <SelectionMenu title={plural(tickedMenu.length, 'track')} tracks={tickedMenu} onclose={() => ((tickedMenu = null), (selecting = null))} />
 {/if}
 {#if badgeMenu}
   <SubjectMenu subject={badgeMenu} onclose={() => (badgeMenu = null)} />

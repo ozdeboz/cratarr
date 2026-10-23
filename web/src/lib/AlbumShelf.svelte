@@ -15,6 +15,8 @@
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
   import SelectBar from './SelectBar.svelte';
   import { toast } from './toast.svelte';
+  import SelectionMenu from './SelectionMenu.svelte';
+  import type { LocalTrack } from './localPlayer.svelte';
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
   import SelectSheet from './SelectSheet.svelte';
@@ -326,22 +328,24 @@
     for (const x of failed) setFavorite(x.s.id, x.a.id, !on);
     if (failed.length) toast.fail(null, "The favourites didn't all change");
   }
-  async function downloadTicked() {
-    const list = listOf();
-    selecting = null;
-    try {
-      download(await tracksOfAlbums(list));
-    } catch (e) {
-      toast.fail(e, "The albums couldn't be downloaded");
-    }
-  }
+
   /** The one ticked album's menu (a tile's menu is this way). */
-  function menuOfTicked(e: MouseEvent) {
+  // The select bar's ⋮ (decision 0058): one album, its own menu; several, the menu of their tracks (lib/SelectionMenu).
+  let several = $state<{ title: string; tracks: LocalTrack[] } | null>(null);
+  async function menuOfTicked(e: MouseEvent) {
     const x = ticked[0];
     if (!x) return;
     const anchor = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    selecting = null;
-    openMenu(x.s, x.a, anchor);
+    if (ticked.length === 1) {
+      selecting = null;
+      return openMenu(x.s, x.a, anchor);
+    }
+    const list = ticked.map((t) => ({ source: t.s.id, a: t.a }));
+    try {
+      several = { title: `${list.length} albums`, tracks: await tracksOfAlbums(list) };
+    } catch (err) {
+      toast.fail(err, "Their tracks couldn't be read");
+    }
   }
 </script>
 
@@ -469,7 +473,7 @@
     <SelectBar label="Selected albums" count="{ticked.length}/{all.length}" onclose={() => (selecting = null)} place="page">
       {#if actions}
         {@render actions(ticked, () => (selecting = null))}
-        <button aria-label="Menu of the ticked album" title="More" disabled={ticked.length !== 1} onclick={menuOfTicked}><Icon name="moreVert" size={24} /></button>
+        <button aria-label="Menu of the ticked albums" title="More" disabled={!ticked.length} onclick={menuOfTicked}><Icon name="moreVert" size={24} /></button>
       {:else}
       <button aria-label="Play" title="Play" disabled={!ticked.length} onclick={() => playTicked('play')}><Icon name="play" size={24} /></button>
       <button aria-label="Play next" title="Play next" disabled={!ticked.length} onclick={() => playTicked('next')}><Icon name="playNext" size={24} /></button>
@@ -477,10 +481,7 @@
       <button class:fav={tickedFav} aria-pressed={tickedFav} aria-label="Favourite" title="Favourite" disabled={!ticked.length} onclick={favouriteTicked}
         ><Icon name="heart" size={24} /></button
       >
-      {#if inApp}
-        <button aria-label="Download" title="Download" disabled={!ticked.length} onclick={downloadTicked}><Icon name="arrowDownToLine" size={24} /></button>
-      {/if}
-      <button aria-label="Menu of the ticked album" title="More" disabled={ticked.length !== 1} onclick={menuOfTicked}><Icon name="moreVert" size={24} /></button>
+      <button aria-label="Menu of the ticked albums" title="More" disabled={!ticked.length} onclick={menuOfTicked}><Icon name="moreVert" size={24} /></button>
       {/if}
     </SelectBar>
   {/if}
@@ -529,6 +530,10 @@
     onclick={() => playOf(s, a)}><Icon name="play" size={26} /></button
   >
 {/snippet}
+
+{#if several}
+  <SelectionMenu title={several.title} tracks={several.tracks} onclose={() => ((several = null), (selecting = null))} />
+{/if}
 
 {#if selectSheet}
   <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />
