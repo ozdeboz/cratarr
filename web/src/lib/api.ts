@@ -1517,6 +1517,8 @@ export type Insights = {
     below_320_albums: number;
     /** Albums per decade, oldest first ("1970s"). */
     decades: Count[];
+    /** Albums per year, oldest first ("1997"). */
+    years: Count[];
     /** Albums per genre / album artist, most first. */
     genres: Count[];
     top_artists: Count[];

@@ -37,7 +37,15 @@
     ...(p.missing ? [{ value: num(p.missing), label: 'missing tracks' }] : []),
   ]);
   const inPlaylists = $derived(share(p.library_tracks_in_playlists, l.tracks));
-  const tallest = $derived(widest(l.decades));
+  // Decades, each a button that opens its ten years (the owner, 2026-10-23: "zoom in on a decade"); the title then a
+  // breadcrumb back. Not remembered: the page opens on the decades.
+  let decade = $state<string | null>(null);
+  const columns = $derived.by((): Count[] => {
+    if (!decade) return l.decades;
+    const from = Number(decade.slice(0, 4));
+    return Array.from({ length: 10 }, (_, i) => ({ name: String(from + i), n: l.years.find((y) => y.name === String(from + i))?.n ?? 0 }));
+  });
+  const tallest = $derived(widest(columns));
 </script>
 
 {#snippet meter(label: string, of: string, s: number)}
@@ -87,13 +95,21 @@
 
   {#if l.decades.length}
     <section>
-      <h2>Decades</h2>
+      <h2>
+        {#if decade}
+          <nav class="crumbs" aria-label="Decades"><button onclick={() => (decade = null)}>Decades</button><span aria-hidden="true">›</span><span aria-current="page">{decade}</span></nav>
+        {:else}Decades{/if}
+      </h2>
       <div class="columns" role="list">
-        {#each l.decades as d (d.name)}
+        {#each columns as d (d.name)}
           <div class="column" role="listitem" title={`${d.name}: ${plural(d.n, 'album')}`}>
-            <span class="v">{num(d.n)}</span>
-            <span class="col"><i style:height={`${(100 * d.n) / tallest}%`}></i></span>
-            <span class="x">{d.name.replace(/^(\d\d)(\d\d)s$/, "'$2s")}</span>
+            <span class="v">{d.n ? num(d.n) : ''}</span>
+            {#if decade}
+              <span class="col"><i style:height={`${(100 * d.n) / tallest}%`}></i></span>
+            {:else}
+              <button class="col" aria-label={`${d.name}: ${plural(d.n, 'album')}`} onclick={() => (decade = d.name)}><i style:height={`${(100 * d.n) / tallest}%`}></i></button>
+            {/if}
+            <span class="x">{decade ? `'${d.name.slice(2)}` : d.name.replace(/^(\d\d)(\d\d)s$/, "'$2s")}</span>
           </div>
         {/each}
       </div>
@@ -256,6 +272,43 @@
     max-width: 34px;
     display: flex;
     align-items: flex-end;
+  }
+
+  /* A decade's column opens its years: the whole column's height is the target, not only its bar. */
+  button.col {
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+  }
+
+  button.col:hover i,
+  button.col:focus-visible i {
+    filter: brightness(1.15);
+  }
+
+  .crumbs {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .crumbs button {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .crumbs button:hover {
+    color: var(--text);
+  }
+
+  .crumbs > span[aria-hidden] {
+    color: var(--muted);
   }
 
   .col i {

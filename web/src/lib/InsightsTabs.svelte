@@ -81,9 +81,12 @@
     border-top: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
   }
 
+  /* Four to a row on a phone: less room around each word, so none is cut. */
   .second button {
     height: 36px;
+    padding: 0 2px;
     font-size: 14px;
+    letter-spacing: -0.01em;
   }
 
   .second button[aria-pressed='true'] {

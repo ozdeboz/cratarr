@@ -83,6 +83,8 @@ pub struct LibraryStats {
     pub below_320_albums: usize,
     /// Albums per decade of their (original) release, oldest first: "1970s".
     pub decades: Vec<Count>,
+    /// Albums per year of their (original) release, oldest first: "1997" (a decade's columns, opened from its own).
+    pub years: Vec<Count>,
     /// Albums per genre, most first.
     pub genres: Vec<Count>,
     /// Albums per album artist, most first.
@@ -322,6 +324,7 @@ pub fn library_stats(rows: &[TrackRow], rules: &Rules) -> LibraryStats {
     }
     out.albums = albums.len();
     let mut decades: BTreeMap<u32, usize> = BTreeMap::new();
+    let mut years: BTreeMap<u32, usize> = BTreeMap::new();
     let mut genres: HashMap<String, usize> = HashMap::new();
     let mut artists: HashMap<String, usize> = HashMap::new();
     for a in albums.values() {
@@ -332,6 +335,7 @@ pub fn library_stats(rows: &[TrackRow], rules: &Rules) -> LibraryStats {
         }
         if let Some(y) = a.year {
             *decades.entry(y / 10 * 10).or_default() += 1;
+            *years.entry(y).or_default() += 1;
         }
         for g in &a.genres {
             *genres.entry(g.clone()).or_default() += 1;
@@ -345,6 +349,7 @@ pub fn library_stats(rows: &[TrackRow], rules: &Rules) -> LibraryStats {
     out.artists = artists.len();
     out.formats = ranked(formats, usize::MAX);
     out.decades = decades.into_iter().map(|(d, n)| Count { name: format!("{d}s"), n }).collect();
+    out.years = years.into_iter().map(|(y, n)| Count { name: y.to_string(), n }).collect();
     out.genres = ranked(genres, TOP_GENRES);
     out.top_artists = ranked(artists, TOP_ARTISTS);
     out
@@ -404,6 +409,7 @@ mod tests {
         assert_eq!(s.formats, vec![Count { name: "MP3".into(), n: 3 }, Count { name: "FLAC".into(), n: 2 }]);
         assert_eq!((s.lossless_albums, s.below_320_albums), (1, 1), "AIR lossless; Bonobo has a 192 kbps track");
         assert_eq!(s.decades, vec![Count { name: "1990s".into(), n: 1 }, Count { name: "2010s".into(), n: 1 }], "original date wins");
+        assert_eq!(s.years.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["1998", "2010"], "each album once, by its year");
         assert_eq!(s.genres, vec![Count { name: "Downtempo".into(), n: 2 }, Count { name: "Electronic".into(), n: 1 }]);
         // Bonobo has no album artist tag: the artist every track shares counts, not the guest.
         assert_eq!(s.top_artists, vec![Count { name: "AIR".into(), n: 1 }, Count { name: "Bonobo".into(), n: 1 }]);
