@@ -63,8 +63,9 @@
     if (v.kind !== 'like' || !open) return;
     const of = v.of.join(',');
     const fresh = !!v.fresh;
+    const weights = v.weights;
     let gone = false;
-    likeCurve(of.split(','), undefined, hiddenLibraries(), fresh).then(
+    likeCurve(of.split(','), undefined, hiddenLibraries(), fresh, weights).then(
       (c) => !gone && (curve = c.alike),
       () => !gone && (curve = null),
     );

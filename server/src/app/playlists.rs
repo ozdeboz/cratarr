@@ -62,12 +62,22 @@ async fn like_crate(id: &str, item: &str, count: usize) -> Result<CrateDef, Togg
     let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     if item == crates::WEEK {
         let me = asking_user().ok_or_else(|| ToggleError::Refused("Sounds like your week is an account's own: sign in.".into()))?;
-        let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64) - crates::WEEK_SECS;
-        let played = tokio::task::spawn_blocking(move || served.userdata.used(&me, crate::userdata::Kind::Song))
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))??;
-        let mut week: Vec<String> = played.into_iter().filter(|(_, a)| a.play_date.is_some_and(|d| d >= since)).map(|(song, _)| song).collect();
-        week.sort();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+        let since = now - crates::WEEK_SECS;
+        // The history's week (decision 0064): how often and how lately each was heard; skipped ones left out too. Until
+        // the log reaches back a week: the songs last played within it, alike.
+        let week = tokio::task::spawn_blocking(move || -> Result<Vec<(String, f32)>> {
+            if let Some(heard) = super::history::since(&served.userdata, &me, since, now)? {
+                return Ok(heard);
+            }
+            let played = served.userdata.used(&me, crate::userdata::Kind::Song)?;
+            let mut week: Vec<(String, f32)> =
+                played.into_iter().filter(|(_, a)| a.play_date.is_some_and(|d| d >= since)).map(|(song, _)| (song, 1.0)).collect();
+            week.sort_by(|a, b| a.0.cmp(&b.0));
+            Ok(week)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))??;
         return Ok(crates::week_crate(id, week, count));
     }
     let item = item.to_string();
@@ -2101,13 +2111,13 @@ impl PlaylistService {
     /// Over what a seed crate may show, as its tracks are picked (`CrateLibrary::resolved`): the libraries not in
     /// `without`, less the tracks excluded everywhere. With the profile at every step its handle can stop at
     /// (`crates::profiles_along`), so the profile follows a drag (the owner, 2026-10-23).
-    pub async fn like_curve(&self, of: &[String], want: Option<&str>, without: &[String], fresh: bool) -> Result<LikeCurve, ToggleError> {
+    pub async fn like_curve(&self, of: &[String], weights: &[f32], want: Option<&str>, without: &[String], fresh: bool) -> Result<LikeCurve, ToggleError> {
         let lib = self.crate_library(want, false, false, without).await?;
         let excluded: HashSet<String> = self.own_crates()?.excluded().await?.into_iter().collect();
-        let (of, lib) = (of.to_vec(), Arc::new(lib));
+        let (of, weights, lib) = (of.to_vec(), weights.to_vec(), Arc::new(lib));
         tokio::task::spawn_blocking(move || {
             let among: Vec<&crates::Facts> = lib.files().filter(|f| !excluded.contains(&f.rel)).collect();
-            let mut closest = crates::closest(&of, &lib.files, &among);
+            let mut closest = crates::closest_weighted(&of, &weights, &lib.files, &among);
             // Fresh: the seeds left out, as the crate leaves them (crates::resolved).
             if fresh {
                 let seeds: HashSet<i64> = of.iter().filter_map(|id| crate::serve::ids::track_of(id)).collect();

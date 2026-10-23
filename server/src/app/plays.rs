@@ -1,6 +1,7 @@
 //! Plays told by players (decision 0033, step 4): each an event with an id of its own and the time it was played,
 //! sent when the player can (late, after a time offline) and again until it is answered, counted once however often
-//! it comes. The ids counted are kept a while (`plays-seen.json`), longer than a player keeps an untold play.
+//! it comes. Since decision 0064 a player tells every track heard, with how much of it and how it ended; a player from
+//! before tells only counted plays. The ids counted are kept a while (`plays-seen.json`), longer than a player keeps an untold play.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,6 +22,41 @@ pub struct PlayEvent {
     pub track: String,
     /// When it was played (epoch milliseconds).
     pub at: i64,
+    /// How it ended (decision 0064); absent from a player that tells only counted plays.
+    #[serde(default)]
+    pub ended: Option<crate::userdata::Ended>,
+    /// Whether it counts as a play (0022: the player's rule); absent, it does.
+    #[serde(default)]
+    pub counts: Option<bool>,
+    #[serde(default)]
+    pub heard_secs: Option<f64>,
+    #[serde(default)]
+    pub length_secs: Option<f64>,
+    /// Where it sounded: the player's name, and the output's own (the car's Bluetooth).
+    #[serde(default)]
+    pub player: Option<String>,
+    #[serde(default)]
+    pub output: Option<String>,
+    /// What started it: `album:<id>`, `playlist:<id>`, `crate:<id>`, `radio`, `queue:<id>`.
+    #[serde(default)]
+    pub context: Option<String>,
+}
+
+impl PlayEvent {
+    /// As the log keeps it (decision 0064).
+    pub fn heard(&self) -> crate::userdata::Heard {
+        crate::userdata::Heard {
+            at: self.at / 1000,
+            heard_secs: self.heard_secs,
+            length_secs: self.length_secs,
+            ended: self.ended.unwrap_or(crate::userdata::Ended::Finished),
+            counts: self.counts.unwrap_or(true),
+            player: self.player.clone(),
+            output: self.output.clone(),
+            context: self.context.clone(),
+            event: Some(self.id.clone()),
+        }
+    }
 }
 
 pub struct Plays {
@@ -40,7 +76,7 @@ impl Plays {
     /// Counts the plays not counted before. Returns the ids the player may forget: counted now, or before. A play
     /// that cannot be counted now (its server away) is left out, so the player sends it again later.
     pub async fn take(&self, playing: &PlayingService, events: Vec<PlayEvent>) -> Vec<String> {
-        self.take_with(events, |e| async move { playing.count_play_at(&e.source, &e.track, Some(e.at / 1000)).await.map_err(|e| e.to_string()) })
+        self.take_with(events, |e| async move { playing.hear(&e).await.map_err(|e| e.to_string()) })
             .await
     }
 
@@ -89,7 +125,19 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn play(id: &str, track: &str) -> PlayEvent {
-        PlayEvent { id: id.into(), source: "cratarr".into(), track: track.into(), at: 1_792_000_000_000 }
+        PlayEvent {
+            id: id.into(),
+            source: "cratarr".into(),
+            track: track.into(),
+            at: 1_792_000_000_000,
+            ended: None,
+            counts: None,
+            heard_secs: None,
+            length_secs: None,
+            player: None,
+            output: None,
+            context: None,
+        }
     }
 
     #[tokio::test]

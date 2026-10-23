@@ -13,9 +13,10 @@ import {
   setMember,
   setTrackMember,
   trackDetails,
-  trackPlayed,
+  reportPlays,
   trackState,
   transport,
+  type HeardEvent,
   type NowPlaying,
   type PlayMode,
   type Playlist,
@@ -23,7 +24,7 @@ import {
 } from './api';
 import { untrack } from 'svelte';
 import { live, refresh, untilNewTrack } from './live.svelte';
-import { canPlayHere, local, playQueue, enqueue, stop, togglePlay, type LocalTrack } from './localPlayer.svelte';
+import { canPlayHere, keptHere, local, playQueue, enqueue, stop, togglePlay, type LocalTrack } from './localPlayer.svelte';
 import { inApp } from './app.svelte';
 import { drivenName, follow, outputName, playOn, pointAt } from './playOn.svelte';
 import { prefs } from './prefs.svelte';
@@ -177,25 +178,58 @@ $effect.root(() => {
   });
 });
 
-// Plays count (decision 0022): once a track has played 90% through (Jellyfin's own "played" mark), once per time it
-// is reached in the queue; the server counts it for the account it plays as.
+// Every track heard is told (decision 0064). A play counts (decision 0022) once a track has played 90% through
+// (Jellyfin's own "played" mark), once per time it is reached in the queue: told then, as finished. A track left
+// before that is told when it is left: skipped for another track, stopped when the queue ends; one heard for less than
+// a second is not. The server keeps it for the account it plays as.
 const PLAYED_AT = 0.9;
-/** The queue place (index and track) counted; forgotten once the queue moves elsewhere, so coming back counts again. */
-let counted: string | null = null;
+/** The queue place being heard (index and track), from when, how far it got, and whether it was told as counted. */
+type Hearing = { at: string; track: LocalTrack; started: number; heard: number; length: number | null; counted: boolean };
+let hearing: Hearing | null = null;
+/** Reports not yet taken (the server away): sent again with the next one. */
+let unsent: HeardEvent[] = [];
+function tell(h: Hearing, ended: HeardEvent['ended'], counts: boolean) {
+  unsent.push({
+    id: crypto.randomUUID(),
+    source: h.track.source,
+    track: h.track.id,
+    at: h.started,
+    ended,
+    counts,
+    heard_secs: Math.round(h.heard),
+    length_secs: h.length === null ? null : Math.round(h.length),
+    player: prefs.browserName || null,
+    context: keptHere.id ? `queue:${keptHere.id}` : null,
+  });
+  const batch = unsent;
+  unsent = [];
+  reportPlays(batch).then(
+    (r) => unsent.push(...batch.filter((e) => !r.done.includes(e.id))),
+    () => unsent.push(...batch),
+  );
+}
 $effect.root(() => {
   $effect(() => {
     const t = local.queue[local.index];
     const at = `${local.index}/${t ? keyOf(t) : ''}`;
-    // Counted where it plays: here; a player of Cratarr's counts its own, and so does the app this page may run in
+    // Told where it plays: here; a player of Cratarr's tells its own, and so does the app this page may run in
     // (decision 0033: offline and behind a locked screen too).
-    if (!t || !playsHere() || inApp) return;
-    if (counted !== at) counted = null;
+    if (!playsHere() || inApp) {
+      hearing = null;
+      return;
+    }
+    if (hearing && hearing.at !== at) {
+      if (!hearing.counted && hearing.heard >= 1) tell(hearing, t ? 'skipped' : 'stopped', false);
+      hearing = null;
+    }
+    if (!t) return;
+    hearing ??= { at, track: t, started: Date.now(), heard: 0, length: null, counted: false };
+    hearing.heard = Math.max(hearing.heard, local.position);
+    hearing.length = local.duration ?? hearing.length;
     const d = local.duration;
-    if (counted === at || !d || local.position < d * PLAYED_AT) return;
-    counted = at;
-    trackPlayed(t.source, t.id).catch(() => {
-      /* not counted; playing goes on */
-    });
+    if (hearing.counted || !d || local.position < d * PLAYED_AT) return;
+    hearing.counted = true;
+    tell(hearing, 'finished', true);
   });
 });
 

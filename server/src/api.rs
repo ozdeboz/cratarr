@@ -1417,13 +1417,16 @@ struct LikeCurveQuery {
     /// The seeds themselves left out, as a `fresh` Sounds like leaves them (Sounds like your week).
     #[serde(default)]
     fresh: bool,
+    /// How much each seed counts, by `of`'s order, comma-separated (Sounds like your week); none, all alike.
+    weights: Option<String>,
 }
 
 /// How alike the tracks that sound most like some seeds are, closest first (the Sounds like curve).
 async fn like_curve(State(app): State<Arc<App>>, Query(q): Query<LikeCurveQuery>) -> Result<Json<crate::app::LikeCurve>, ApiError> {
     let of: Vec<String> = q.of.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
-    Ok(Json(app.playlists.like_curve(&of, q.source.as_deref(), &without, q.fresh).await?))
+    let weights: Vec<f32> = q.weights.as_deref().unwrap_or("").split(',').filter_map(|s| s.trim().parse().ok()).collect();
+    Ok(Json(app.playlists.like_curve(&of, &weights, q.source.as_deref(), &without, q.fresh).await?))
 }
 
 #[derive(serde::Deserialize)]
