@@ -4,7 +4,9 @@
   // appear on (others', credited on a track), both newest first as covers, and their most played tracks (the panel's
   // rows, `top`), whose › shows all their tracks.
   import type { Snippet } from 'svelte';
+  import { tick } from 'svelte';
   import { artistPhotoUrl, getArtistAbout, type ListedAlbum } from './api';
+  import { pageAsked } from './artistAbout.svelte';
   import AlbumCard from './AlbumCard.svelte';
   import SectionHead from './SectionHead.svelte';
 
@@ -25,8 +27,31 @@
     let gone = false;
     about = null;
     whole = false;
-    if (s === 'cratarr') getArtistAbout(n).then((a) => !gone && (about = a), () => {});
+    if (s === 'cratarr')
+      getArtistAbout(n).then(
+        async (a) => {
+          if (gone) return;
+          about = a;
+          // Asked for from Home's description: unfolded, and in view.
+          if (pageAsked.name === n && pageAsked.section === 'about') {
+            pageAsked.name = null;
+            whole = true;
+            await tick();
+            aboutEl?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+          }
+        },
+        () => {},
+      );
     return () => (gone = true);
+  });
+  let aboutEl = $state<HTMLElement>();
+  // Asked for from Home's fanned albums: Albums in view (once the page above it has its height).
+  let albumsEl = $state<HTMLElement>();
+  $effect(() => {
+    if (!albumsEl || pageAsked.name !== name || pageAsked.section !== 'albums') return;
+    pageAsked.name = null;
+    const el = albumsEl;
+    setTimeout(() => el.scrollIntoView({ block: 'start', behavior: 'smooth' }), 400);
   });
 </script>
 
@@ -37,7 +62,7 @@
 {/snippet}
 
 {#if about && (about.bio || about.photo)}
-  <section aria-label="About">
+  <section aria-label="About" bind:this={aboutEl}>
     <SectionHead title="About" />
     <div class="about">
       {#if about.photo && about.id}<img class="face" src={artistPhotoUrl(about.id)} alt="" />{/if}
@@ -49,7 +74,7 @@
   </section>
 {/if}
 {#if albums.length}
-  <section aria-label="Albums">
+  <section aria-label="Albums" bind:this={albumsEl}>
     <SectionHead title="Albums" />
     {@render grid(albums)}
   </section>
