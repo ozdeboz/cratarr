@@ -15,6 +15,7 @@
   import { me } from './me.svelte';
   import { startRadio } from './localPlayer.svelte';
   import { isKept, setKept } from './kept.svelte';
+  import ExportStep from './ExportStep.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
@@ -51,7 +52,7 @@
     keepFrom?: string | null;
   } = $props();
 
-  let mode = $state<'menu' | 'rename' | 'delete' | 'spoken'>(untrack(() => start));
+  let mode = $state<'menu' | 'rename' | 'delete' | 'spoken' | 'export'>(untrack(() => start));
   $effect(() => void loadPlaylistFavorites());
 
   /** The one playlist, when the menu is for one. */
@@ -291,7 +292,7 @@
           {@const on = isKept('playlist', from, p.id)}
           <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('playlist', from, p.id, !on, p.name)} />
         {/if}
-        <MenuEntry icon="download" label="Export…" onclick={() => viewTab('export')} />
+        <MenuEntry icon="download" label="Export…" onclick={() => (mode = 'export')} />
         {#if one}
           <!-- Titled by its name; linked by its id (another user's shared one is "owner/name"). -->
           {@const pid = one.id}
@@ -345,6 +346,8 @@
         {/if}
       </MenuGroup>
     </MenuCards>
+  {:else if mode === 'export'}
+    <ExportStep what={{ kind: 'playlists', names: [...ids] }} {onclose} />
   {:else if mode === 'rename' && one}
     <form
       class="form"

@@ -10,6 +10,7 @@
   import { coverKey, localCovers, removeLocalCover, setLocalCover } from './localCovers.svelte';
   import type { LocalTrack } from './localPlayer.svelte';
   import { isKept, setKept } from './kept.svelte';
+  import ExportStep from './ExportStep.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
@@ -52,7 +53,7 @@
 
   const ids = $derived(tracks.map((t) => t.id));
   const actions = $derived.by<SheetAction[]>(() => {
-    if (step !== 'menu') return [];
+    if (exporting || step !== 'menu') return [];
     const act = (mode: Act) => () => {
       onclose();
       onact(mode);
@@ -90,6 +91,8 @@
     if (ids[0]) toList.ask([ids[0]]);
   });
   let step = $state<ToPlaylistStep>('menu');
+  /** Export… (decision 0058): their tracks, in lib/ExportStep. */
+  let exporting = $state(false);
 
   /** Their tracks kept on this device (the app's downloads): Remove from this device. */
   const kept = $derived(inApp ? downloads.tracks.filter((t) => t.source === source && ids.includes(t.id)) : []);
@@ -134,12 +137,14 @@
   images={cover ? [cover] : []}
   title={name}
   chips={[albums === 1 ? '1 album' : `${albums} albums`]}
-  heart={step !== 'menu' || favorite === undefined ? null : { on: favorite, toggle: ontogglefavorite }}
+  heart={exporting || step !== 'menu' || favorite === undefined ? null : { on: favorite, toggle: ontogglefavorite }}
   {actions}
-  onback={step === 'menu' ? null : () => (step = step === 'again' ? 'lists' : 'menu')}
-  {step}
+  onback={exporting ? () => (exporting = false) : step === 'menu' ? null : () => (step = step === 'again' ? 'lists' : 'menu')}
+  step={exporting ? 'export' : step}
 >
-  {#if step === 'menu'}
+  {#if exporting}
+    <ExportStep what={{ kind: 'tracks', name, tracks: tracks.map((x) => ({ source: x.source, id: x.id })) }} {onclose} />
+  {:else if step === 'menu'}
     <!-- The shared groups, in their order (decision 0058). -->
     <MenuCards>
       <MenuGroup>
@@ -164,6 +169,7 @@
           {@const on = isKept('artist', source, name)}
           <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('artist', source, name, !on, name)} />
         {/if}
+        {#if tracks.length}<MenuEntry icon="download" label="Export…" onclick={() => (exporting = true)} />{/if}
         <MenuEntry icon="share" label="Share" onclick={shareIt} />
       </MenuGroup>
       <MenuGroup>

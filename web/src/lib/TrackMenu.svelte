@@ -30,6 +30,7 @@
   import { goToArtist as showArtist, mainArtist } from './albums.svelte';
   import { player, refresh } from './live.svelte';
   import { excludeGlobally } from './exclusions.svelte';
+  import ExportStep from './ExportStep.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
@@ -112,7 +113,7 @@
 
   // The step it opens on; later steps are the sheet's own.
   // svelte-ignore state_referenced_locally
-  let step = $state<'menu' | 'lists' | 'details'>(start);
+  let step = $state<'menu' | 'lists' | 'details' | 'export'>(start);
 
   // Go to artist: the artist's panel (lib/albums goToArtist). A "feat." credit is left out: the albums are under the
   // main artist.
@@ -312,7 +313,9 @@
     title={t.name}
     chips={[t.artist, t.album].filter((c): c is string => !!c)}
     heart={heartKnown ? { on: heartOn, disabled: busy, toggle: heart } : null}
-    actions={step === 'lists' && onplaylists
+    actions={step === 'export'
+      ? []
+      : step === 'lists' && onplaylists
       ? [
           {
             icon: 'playlists',
@@ -372,6 +375,7 @@
               }}
             />
           {/if}
+          {#if !onDevice}<MenuEntry icon="download" label="Export…" onclick={() => (step = 'export')} />{/if}
           {#if !onDevice}<MenuEntry icon="share" label="Share" onclick={shareIt} />{/if}
         </MenuGroup>
         <MenuGroup>
@@ -396,6 +400,8 @@
           {/each}
         </MenuGroup>
       </MenuCards>
+    {:else if step === 'export'}
+      <ExportStep what={{ kind: 'tracks', name: t.name, tracks: [{ source: t.source, id: t.id }] }} {onclose} />
     {:else if step === 'lists'}
       <PlaylistToggles title="Add to / remove from playlists" {playlists} ticked={(p) => p.member}>
         {#snippet entry(p)}<MenuEntry label={p.name} checked={p.member} disabled={busy} onclick={() => toggle(p.id, p.member)} />{/snippet}

@@ -63,6 +63,7 @@
   import { player } from './live.svelte';
   import { startRadio, type LocalTrack } from './localPlayer.svelte';
   import { isKept, setKept } from './kept.svelte';
+  import ExportStep from './ExportStep.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
@@ -189,7 +190,7 @@
   }
   const listed = () => [{ source, a: a as ListedAlbum }];
   const actions = $derived.by<SheetAction[]>(() => {
-    if (ask || step !== 'menu') return [];
+    if (ask || exporting || step !== 'menu') return [];
     const t = tracks;
     const at = resumeAt;
     const i = at && t ? t.findIndex((x) => x.id === at.track) : -1;
@@ -282,6 +283,8 @@
 
   // svelte-ignore state_referenced_locally
   let step = $state<ToPlaylistStep>(start);
+  /** Export… (decision 0058): its tracks, in lib/ExportStep. */
+  let exporting = $state(false);
   // Opened at the playlists for an album outside Music: there is nothing to add it to.
   $effect(() => {
     if (step === 'lists' && toList.first && !toList.first.addable) {
@@ -398,12 +401,14 @@
   images={[cover ?? albumCoverUrl(source, a.id)]}
   title={a.title}
   chips={[a.artist ?? 'Unknown artist']}
-  heart={ask || step !== 'menu' ? null : { on: fav, toggle: toggleFavourite }}
+  heart={ask || exporting || step !== 'menu' ? null : { on: fav, toggle: toggleFavourite }}
   {actions}
-  onback={ask ? () => (ask = false) : step === 'menu' ? null : () => (step = step === 'again' ? 'lists' : 'menu')}
-  step={ask || step}
+  onback={ask ? () => (ask = false) : exporting ? () => (exporting = false) : step === 'menu' ? null : () => (step = step === 'again' ? 'lists' : 'menu')}
+  step={ask || (exporting ? 'export' : step)}
 >
-  {#if ask === 'move'}
+  {#if exporting && tracks}
+    <ExportStep what={{ kind: 'tracks', name: a.title, tracks: tracks.map((x) => ({ source: x.source, id: x.id })) }} {onclose} />
+  {:else if ask === 'move'}
     <div class="form">
       {#if !keep}
         <p class="ask">Working out the names…</p>
@@ -518,6 +523,7 @@
           {@const on = isKept('album', source, a.id)}
           <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('album', source, a.id, !on, a.title)} />
         {/if}
+        {#if tracks?.length}<MenuEntry icon="download" label="Export…" onclick={() => (exporting = true)} />{/if}
         <MenuEntry icon="share" label="Share" onclick={shareIt} />
       </MenuGroup>
       <MenuGroup>
