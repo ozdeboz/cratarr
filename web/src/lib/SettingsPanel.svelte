@@ -29,6 +29,7 @@
   import ConnectionsPart from './settings/ConnectionsPart.svelte';
   import DevicePart from './settings/DevicePart.svelte';
   import DisplayPart from './settings/DisplayPart.svelte';
+  import TastePart from './settings/TastePart.svelte';
   import NetworkPart from './settings/NetworkPart.svelte';
   import SyncPart from './settings/SyncPart.svelte';
   import ImportPart from './settings/ImportPart.svelte';
@@ -104,6 +105,8 @@
       <DisplayPart />
     {:else if section === 'account'}
       <AccountPart />
+    {:else if section === 'taste'}
+      <TastePart {thing} />
     {:else if section === 'users'}
       <UsersPart {thing} />
     {:else if section === 'players'}

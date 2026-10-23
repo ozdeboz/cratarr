@@ -12,6 +12,8 @@
   import { playOn } from './lib/playOn.svelte';
   import { prefs } from './lib/prefs.svelte';
   import { kept } from './lib/kept.svelte';
+  import { crates, loadCrates } from './lib/crates.svelte';
+  import { excluded, loadExcluded } from './lib/exclusions.svelte';
   import { logDetail, SECTIONS, settingsRead, settingsSaved, type SettingsSection } from './lib/settingsSections.svelte';
 
   // The last answer (kept for the panel too), read again here.
@@ -20,6 +22,11 @@
   let signIn = $state<boolean | null>(null);
   let keyCount = $state<number | null>(null);
   let users = $state<number | null>(null);
+  // Musical taste's line: what is excluded, everywhere and from crates.
+  $effect(() => {
+    loadExcluded();
+    void loadCrates();
+  });
   // Read again after each save in the panel; the server's settings only for its administrators.
   $effect(() => {
     void settingsSaved.n;
@@ -93,6 +100,12 @@
         return [kept.known ? `${kept.items.length} kept` : null, appInfo.syncBudgetGb ? `${appInfo.syncBudgetGb} GB` : 'No limit'].filter(Boolean).join(' · ');
       case 'display':
         return THEME[prefs.theme];
+      case 'taste': {
+        const crate = (crates.list ?? []).filter((c) => (c.left_out ?? 0) > 0).length;
+        return [excluded.n ? `${excluded.n.toLocaleString()} excluded everywhere` : null, crate ? `${crate} ${crate === 1 ? 'crate' : 'crates'}` : null]
+          .filter(Boolean)
+          .join(' · ') || 'Nothing excluded';
+      }
       case 'diagnostics':
         return logDetail.on === null ? '' : logDetail.on ? 'More detail on' : 'More detail off';
     }

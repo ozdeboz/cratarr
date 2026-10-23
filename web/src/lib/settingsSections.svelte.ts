@@ -13,6 +13,7 @@ export type SettingsSection =
   | 'account'
   | 'import'
   | 'display'
+  | 'taste'
   | 'connections'
   | 'libraries'
   | 'players'
@@ -28,6 +29,8 @@ export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app
   // Who is signed in: their role, their password for OpenSubsonic apps, their devices and sign-ins.
   { id: 'account', title: 'Account', icon: 'user' },
   { id: 'display', title: 'Display', icon: 'swatch' },
+  // What one has said one does not want (the owner, 2026-10-23): every exclusion, managed in one place.
+  { id: 'taste', title: 'Musical taste', icon: 'sliders' },
   { id: 'connections', title: 'Connections', icon: 'server', admin: true },
   { id: 'libraries', title: 'Libraries', icon: 'library', admin: true },
   { id: 'players', title: 'Players', icon: 'speakers', admin: true },
