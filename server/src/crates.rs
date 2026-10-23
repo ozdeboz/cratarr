@@ -74,12 +74,12 @@ pub enum Value {
         min: Option<f64>,
         max: Option<f64>,
     },
-    /// Sounds like its seeds (song ids; an album's are its songs'), at least `min` alike (0 to 100, similarity's
-    /// "sounds like": 0 two random tracks, 100 two of one album).
-    Like { of: Vec<String>, min: f64 },
-    /// A `Like` worked out (`resolved`): the sound its seeds make together. Never kept.
+    /// Sounds like its seeds (song ids; an album's are its songs'): the `count` tracks that sound most like them
+    /// (the owner, 2026-10-23: how many, not how alike; one setting means one size for every seed).
+    Like { of: Vec<String>, count: usize },
+    /// A `Like` worked out (`resolved`): the lines of those tracks. Never kept.
     #[serde(skip)]
-    Near { sound: Arc<[f32]>, min: f64 },
+    Within { lines: Arc<HashSet<String>> },
 }
 
 /// A crate: its id never changes; its name is unique among crates.
@@ -107,11 +107,23 @@ pub fn genre_crate(id: &str) -> Option<CrateDef> {
 /// albums and tracks can now become seeds for crates"): made when asked for (`like:<id>`), never saved. The caller
 /// names it and turns an album into its songs (`like_crate`).
 pub const LIKE: &str = "like:";
-/// How alike its tracks are to the seed, until the crate's card says otherwise: as alike as one artist's albums.
-pub const LIKE_MIN: f64 = 65.0;
+/// How many tracks it holds until its curve says otherwise, and the fewest and most it can.
+pub const LIKE_COUNT: usize = 200;
+pub const LIKE_FEWEST: usize = 10;
+pub const LIKE_MOST: usize = 1000;
 
-pub fn like_crate(id: &str, name: &str, songs: Vec<String>) -> CrateDef {
-    let like = Condition::new("like", false, Value::Like { of: songs, min: LIKE_MIN });
+/// A seed crate's id: the item (a song's or an album's id), and how many it holds when not the default
+/// (`like:<item>@<count>`).
+pub fn like_of(id: &str) -> Option<(&str, usize)> {
+    let rest = id.strip_prefix(LIKE)?;
+    Some(match rest.rsplit_once('@') {
+        Some((item, n)) => (item, n.parse().map_or(LIKE_COUNT, |n: usize| n.clamp(LIKE_FEWEST, LIKE_MOST))),
+        None => (rest, LIKE_COUNT),
+    })
+}
+
+pub fn like_crate(id: &str, name: &str, songs: Vec<String>, count: usize) -> CrateDef {
+    let like = Condition::new("like", false, Value::Like { of: songs, count });
     CrateDef { id: id.to_string(), name: name.to_string(), conditions: vec![like] }
 }
 
@@ -251,8 +263,8 @@ pub fn tempo_bands(bpms: impl IntoIterator<Item = Option<f64>>) -> TempoBands {
 /// A list's profile (the owner, 2026-10-23): what its tracks are like, shown on top of it. Its most telling style tags
 /// and artists (common in the list, rare in the library, on at least a few of its tracks), each number's density with
 /// its middle half and middle on one scale for every list (the library's own, tempo today's 60 to 180 BPM), and how
-/// far each of CLAP's moods sits above or below the library's. A number all its tracks share is no row (an album's
-/// year): one value is no spread.
+/// far each of CLAP's moods sits above or below the library's. A number all its tracks share (an album's year) is
+/// that one value, no spread (`one`; the owner, 2026-10-23: shown as the value, not as a graph).
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Profile {
     pub tracks: usize,
@@ -275,6 +287,9 @@ pub struct NumberRow {
     pub q1: f64,
     pub mid: f64,
     pub q3: f64,
+    /// Every track has this one value: the row is the value, no density.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub one: Option<f64>,
 }
 
 /// One of CLAP's moods: the list's middle against the library's, -1 (far below) to 1 (far above).
@@ -289,62 +304,115 @@ const TELLING: usize = 4;
 
 /// The profile of `list` (its tracks' facts) against `library` (every file's).
 pub fn profile(list: &[&Facts], library: &[&Facts]) -> Profile {
+    profile_in(list, &Scales::of(library))
+}
+
+/// What a profile measures a list against, worked out once for the library: each number's scale, each mood's middle
+/// and half its spread, and how many tracks have each style tag and artist (their rarity).
+pub struct Scales {
+    numbers: [(f64, f64); 4],
+    moods: [(f64, f64); 5],
+    styles: HashMap<String, usize>,
+    artists: HashMap<String, usize>,
+    tracks: usize,
+}
+
+/// The numbers a profile has, in its order, and where each is in a file's facts.
+const PROFILE_NUMBERS: [(&str, fn(&Facts) -> Option<f64>); 4] =
+    [("tempo", |f| f.bpm), ("energy", |f| f.energy), ("danceability", |f| f.danceability), ("year", |f| f.year)];
+
+fn sorted(vals: impl IntoIterator<Item = f64>) -> Vec<f64> {
+    let mut v: Vec<f64> = vals.into_iter().filter(|x| x.is_finite()).collect();
+    v.sort_by(f64::total_cmp);
+    v
+}
+
+/// How many of `fs` have each name (lowercased), each once per file.
+fn name_counts(fs: &[&Facts], names: fn(&Facts) -> &[String]) -> HashMap<String, (usize, String)> {
+    let mut c: HashMap<String, (usize, String)> = HashMap::new();
+    for f in fs {
+        for name in names(f).iter().collect::<std::collections::BTreeSet<_>>() {
+            c.entry(name.to_lowercase()).or_insert((0, name.clone())).0 += 1;
+        }
+    }
+    c
+}
+
+impl Scales {
+    pub fn of(library: &[&Facts]) -> Self {
+        let numbers = PROFILE_NUMBERS.map(|(key, get)| match key {
+            "tempo" => (TEMPO_LO, TEMPO_LO + TEMPO_BAND * TEMPO_BANDS as f64),
+            // The library's oldest to newest (the owner: its 1950s albums were lost at the 5th percentile, 1993), a
+            // year before 1900 being a broken tag ("1").
+            "year" => {
+                let all = sorted(library.iter().filter_map(|f| f.year).filter(|y| *y >= 1900.0));
+                (all.first().copied().unwrap_or(1900.0), all.last().copied().unwrap_or(2100.0))
+            }
+            _ => {
+                let all = sorted(library.iter().filter_map(|f| get(f)));
+                (crate::similarity::quantile(&all, 0.05), crate::similarity::quantile(&all, 0.95))
+            }
+        });
+        let moods = std::array::from_fn(|k| {
+            let all = sorted(library.iter().filter_map(|f| f.clap_moods.map(|m| m[k] as f64)));
+            let half = (crate::similarity::quantile(&all, 0.95) - crate::similarity::quantile(&all, 0.05)) / 2.0;
+            (crate::similarity::quantile(&all, 0.5), half.max(f64::EPSILON))
+        });
+        let counts = |names| name_counts(library, names).into_iter().map(|(k, (c, _))| (k, c)).collect();
+        Scales { numbers, moods, styles: counts(|f| &f.styles), artists: counts(|f| &f.artists), tracks: library.len() }
+    }
+}
+
+/// The profile of `list` against the library's `scales`.
+pub fn profile_in(list: &[&Facts], scales: &Scales) -> Profile {
     let n = list.len();
     let mut out = Profile { tracks: n, heard: list.iter().filter(|f| f.clap_moods.is_some()).count(), ..Profile::default() };
-    out.styles = telling(list, library, |f| &f.styles);
-    out.artists = telling(list, library, |f| &f.artists);
-    let sorted = |vals: Vec<f64>| {
-        let mut v: Vec<f64> = vals.into_iter().filter(|x| x.is_finite()).collect();
-        v.sort_by(f64::total_cmp);
-        v
-    };
-    let numbers: [(&str, fn(&Facts) -> Option<f64>); 4] =
-        [("tempo", |f| f.bpm), ("energy", |f| f.energy), ("danceability", |f| f.danceability), ("year", |f| f.year)];
-    for (key, get) in numbers {
-        let mine = sorted(list.iter().filter_map(|f| get(f)).collect());
-        if mine.first() == mine.last() {
+    out.styles = telling(list, &scales.styles, scales.tracks, |f| &f.styles);
+    out.artists = telling(list, &scales.artists, scales.tracks, |f| &f.artists);
+    for ((key, get), (lo, hi)) in PROFILE_NUMBERS.into_iter().zip(scales.numbers) {
+        let mine = sorted(list.iter().filter_map(|f| get(f)));
+        let Some(&first) = mine.first() else { continue };
+        if mine.last() == Some(&first) {
+            out.numbers.push(NumberRow { key, lo: first, hi: first, bins: Vec::new(), q1: first, mid: first, q3: first, one: Some(first) });
             continue;
         }
-        let (lo, hi) = if key == "tempo" {
-            (TEMPO_LO, TEMPO_LO + TEMPO_BAND * TEMPO_BANDS as f64)
-        } else {
-            let all = sorted(library.iter().filter_map(|f| get(f)).collect());
-            (crate::similarity::quantile(&all, 0.05), crate::similarity::quantile(&all, 0.95))
-        };
         let q = |p| crate::similarity::quantile(&mine, p);
-        out.numbers.push(NumberRow { key, lo, hi, bins: density(mine.iter().copied(), lo, hi), q1: q(0.25), mid: q(0.5), q3: q(0.75) });
+        out.numbers.push(NumberRow { key, lo, hi, bins: density(mine.iter().copied(), lo, hi), q1: q(0.25), mid: q(0.5), q3: q(0.75), one: None });
     }
     if out.heard > 0 {
         for (k, name) in crate::similarity::MOODS.into_iter().enumerate() {
-            let of = |fs: &[&Facts]| sorted(fs.iter().filter_map(|f| f.clap_moods.map(|m| m[k] as f64)).collect());
-            let (mine, all) = (of(list), of(library));
-            let half = (crate::similarity::quantile(&all, 0.95) - crate::similarity::quantile(&all, 0.05)) / 2.0;
-            let lift = (crate::similarity::quantile(&mine, 0.5) - crate::similarity::quantile(&all, 0.5)) / half.max(f64::EPSILON);
+            let mine = sorted(list.iter().filter_map(|f| f.clap_moods.map(|m| m[k] as f64)));
+            let (middle, half) = scales.moods[k];
+            let lift = (crate::similarity::quantile(&mine, 0.5) - middle) / half;
             out.moods.push(MoodLift { name, lift: lift.clamp(-1.0, 1.0) });
         }
     }
     out
 }
 
-/// The names most telling of a list: on many of its tracks and few of the library's (tf-idf, as one similarity
-/// weighs words), on at least two of its tracks or a twentieth of them (one odd tag does not lead an album).
-fn telling(list: &[&Facts], library: &[&Facts], names: fn(&Facts) -> &[String]) -> Vec<String> {
-    let count = |fs: &[&Facts]| {
-        let mut c: HashMap<String, (usize, String)> = HashMap::new();
-        for f in fs {
-            for name in names(f).iter().collect::<std::collections::BTreeSet<_>>() {
-                c.entry(name.to_lowercase()).or_insert((0, name.clone())).0 += 1;
-            }
-        }
-        c
-    };
-    let (mine, all) = (count(list), count(library));
+/// Where a Sounds like crate's handle can stop (as lib/LikeCurve tidies it): every 5 up to 100, every 10 up to 400,
+/// every 50 after, from `LIKE_FEWEST` to `most`.
+pub fn like_steps(most: usize) -> Vec<usize> {
+    (LIKE_FEWEST..=most.min(LIKE_MOST)).filter(|n| if *n < 100 { n % 5 == 0 } else if *n < 400 { n % 10 == 0 } else { n % 50 == 0 }).collect()
+}
+
+/// The profile of each of the first `n` of `closest` at every step a handle can stop at (the owner, 2026-10-23: the
+/// profile follows the drag), against the library's `scales`, worked out at once so a drag asks nothing more.
+pub fn profiles_along(closest: &[&Facts], scales: &Scales) -> Vec<(usize, Profile)> {
+    like_steps(closest.len()).into_iter().map(|n| (n, profile_in(&closest[..n], scales))).collect()
+}
+
+/// The names most telling of a list: on many of its tracks and few of the library's (`library`: how many of its
+/// `total` tracks have each, lowercased; tf-idf, as one similarity weighs words), on at least two of its tracks or a
+/// twentieth of them (one odd tag does not lead an album).
+fn telling(list: &[&Facts], library: &HashMap<String, usize>, total: usize, names: fn(&Facts) -> &[String]) -> Vec<String> {
+    let mine = name_counts(list, names);
     let least = if list.len() < 2 { 1 } else { 2.max(list.len().div_ceil(20)) };
-    let total = library.len().max(1) as f64;
+    let total = total.max(1) as f64;
     let mut weighed: Vec<(f64, String)> = mine
         .into_iter()
         .filter(|(_, (c, _))| *c >= least)
-        .map(|(k, (c, name))| (c as f64 / list.len() as f64 * (total / all.get(&k).map_or(1, |x| x.0).max(1) as f64).ln(), name))
+        .map(|(k, (c, name))| (c as f64 / list.len() as f64 * (total / library.get(&k).copied().unwrap_or(1).max(1) as f64).ln(), name))
         .filter(|(w, _)| *w > 0.0)
         .collect();
     weighed.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
@@ -517,6 +585,12 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
         .collect()
 }
 
+/// Whether every condition that is on, but Sounds like, holds for a file: the files a Sounds like picks its closest
+/// among (`resolved`).
+pub fn holds_besides_like(conditions: &[Condition], f: &Facts, w: &World) -> bool {
+    conditions.iter().filter(|c| c.enabled && !matches!(c.value, Value::Like { .. })).all(|c| holds(c, f, w))
+}
+
 /// Whether a condition holds for a file. A condition on an unknown axis, or with a value its axis does not take, never
 /// holds (negated: always), so a crate from a newer version is shown narrower rather than wider.
 fn holds(c: &Condition, f: &Facts, w: &World) -> bool {
@@ -544,7 +618,7 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
         ("style", Value::AnyOf { values }) => values.iter().any(|v| f.styles.iter().any(|s| s.eq_ignore_ascii_case(v))),
         ("energy", Value::Range { min, max }) => within(f.energy, min, max),
         ("danceability", Value::Range { min, max }) => within(f.danceability, min, max),
-        ("like", Value::Near { sound, min }) => f.sound.as_ref().is_some_and(|s| crate::similarity::sounds_alike(sound, s) * 100.0 >= *min),
+        ("like", Value::Within { lines }) => lines.contains(&f.rel),
         _ => false,
     }
 }
@@ -597,24 +671,38 @@ pub fn passes(tracks: &[&Facts], conditions: &[Condition], w: &World) -> bool {
     conditions.iter().filter(|c| c.enabled).all(|c| item_holds(c, tracks, w))
 }
 
-/// The conditions with each Sounds like worked out once, not for every file: the sound its seeds make together, from
-/// `all` (every file, its seeds may be in a library switched off). Seeds none of which was heard: never holds.
-pub fn resolved(conditions: &[Condition], all: &[Facts]) -> Vec<Condition> {
+/// The conditions with each Sounds like worked out once, not for every file: its closest `count` among `among` (the
+/// files the crate may show: its other conditions hold for them, so the cut and the count agree; the owner saw 3
+/// tracks where the curve was cut at 20), its seeds found in `all` (they may be anywhere, a library switched off, left
+/// out). Seeds none of which was heard: never holds.
+pub fn resolved(conditions: &[Condition], all: &[Facts], among: &[&Facts]) -> Vec<Condition> {
     conditions
         .iter()
         .map(|c| match &c.value {
-            Value::Like { of, min } => {
-                let seeds: HashSet<i64> = of.iter().filter_map(|id| crate::serve::ids::track_of(id)).collect();
-                let heard: Vec<&[f32]> = all.iter().filter(|f| f.track.is_some_and(|t| seeds.contains(&t))).filter_map(|f| f.sound.as_deref()).collect();
-                let value = match crate::similarity::mean_sound(&heard) {
-                    Some(sound) => Value::Near { sound: sound.into(), min: *min },
-                    None => Value::AnyOf { values: Vec::new() },
-                };
-                Condition { value, ..c.clone() }
+            Value::Like { of, count } => {
+                let lines = closest(of, all, among).into_iter().take(*count).map(|(f, _)| f.rel.clone()).collect();
+                Condition { value: Value::Within { lines: Arc::new(lines) }, ..c.clone() }
             }
             _ => c.clone(),
         })
         .collect()
+}
+
+/// The files among `among` that sound most like the seeds (song ids, their sounds found in `all`), closest first, at
+/// most `LIKE_MOST`, each with how alike (0 to 100: 0 two random tracks, 100 the same sound); none when none of the
+/// seeds was heard.
+pub fn closest<'a>(of: &[String], all: &[Facts], among: &[&'a Facts]) -> Vec<(&'a Facts, f64)> {
+    let seeds: HashSet<i64> = of.iter().filter_map(|id| crate::serve::ids::track_of(id)).collect();
+    let heard: Vec<&[f32]> = all.iter().filter(|f| f.track.is_some_and(|t| seeds.contains(&t))).filter_map(|f| f.sound.as_deref()).collect();
+    let Some(seed) = crate::similarity::mean_sound(&heard) else { return Vec::new() };
+    let mut scored: Vec<(&Facts, f32)> = among
+        .iter()
+        .copied()
+        .filter_map(|f| f.sound.as_deref().filter(|s| s.len() == seed.len()).map(|s| (f, s.iter().zip(&seed).map(|(a, b)| a * b).sum::<f32>())))
+        .collect();
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.rel.cmp(&b.0.rel)));
+    scored.truncate(LIKE_MOST);
+    scored.into_iter().map(|(f, cos)| (f, crate::similarity::sound_alike(cos) * 100.0)).collect()
 }
 
 /// A crate's files, in the order given (newest first): those all its conditions that are on hold for.
@@ -981,14 +1069,27 @@ mod tests {
             heard("far.flac", 3, [0.0, 1.0]),
             Facts { rel: "unheard.flac".into(), ..Facts::default() },
         ];
-        let like = like_crate("like:tr-1", "Seed", vec!["tr-1".into()]);
+        let like = like_crate("like:tr-1@2", "Seed", vec!["tr-1".into()], 2);
         let membership = HashMap::new();
         let w = World { membership: &membership, favourites: None, favourite_albums: None };
-        assert_eq!(select(&files, &resolved(&like.conditions, &files), &w), ["seed.flac", "near.flac"]);
+        let every: Vec<&Facts> = files.iter().collect();
+        assert_eq!(select(&files, &resolved(&like.conditions, &files, &every), &w), ["seed.flac", "near.flac"], "the closest two");
+        let all = like_crate("like:tr-1", "Seed", vec!["tr-1".into()], 10);
+        assert_eq!(select(&files, &resolved(&all.conditions, &files, &every), &w), ["seed.flac", "near.flac", "far.flac"], "every heard one");
+        // The seed left out of what the crate may show: the closest two are then the next two, still two.
+        let shown: Vec<&Facts> = files.iter().filter(|f| f.rel != "seed.flac").collect();
+        assert_eq!(select(&files, &resolved(&like.conditions, &files, &shown), &w), ["near.flac", "far.flac"]);
+        assert_eq!(like_of("like:tr-1@2"), Some(("tr-1", LIKE_FEWEST)));
+        let steps = like_steps(1000);
+        assert_eq!((steps[0], steps[1], steps.iter().rev().nth(1).copied(), steps.last().copied()), (10, 15, Some(950), Some(1000)));
+        assert!(steps.contains(&95) && steps.contains(&100) && steps.contains(&390) && steps.contains(&400) && !steps.contains(&405));
+        assert_eq!(like_steps(23), [10, 15, 20], "no further than there are tracks");
+        assert_eq!(like_of("like:al-x"), Some(("al-x", LIKE_COUNT)));
+        assert_eq!(like_of("like:al-x@5000"), Some(("al-x", LIKE_MOST)));
         // Unworked out, or seeds never heard: nothing.
         assert!(select(&files, &like.conditions, &w).is_empty());
-        let unheard = like_crate("like:tr-9", "Unheard", vec!["tr-9".into()]);
-        assert!(select(&files, &resolved(&unheard.conditions, &files), &w).is_empty());
+        let unheard = like_crate("like:tr-9", "Unheard", vec!["tr-9".into()], 10);
+        assert!(select(&files, &resolved(&unheard.conditions, &files, &every), &w).is_empty());
     }
 
     #[test]
@@ -1006,7 +1107,7 @@ mod tests {
         let (list, all): (Vec<&Facts>, Vec<&Facts>) = (album.iter().collect(), library.iter().collect());
         let p = profile(&list, &all);
         assert_eq!(p.styles, ["jungle"], "the rare one; electronic is everywhere, one track's odd tag not enough");
-        assert_eq!(p.numbers.iter().map(|r| r.key).collect::<Vec<_>>(), ["tempo"], "the year is one value: no row");
+        assert_eq!(p.numbers.iter().map(|r| (r.key, r.one)).collect::<Vec<_>>(), [("tempo", None), ("year", Some(2003.0))], "the year is one value");
         assert_eq!(p.numbers[0].mid, 170.0);
     }
 

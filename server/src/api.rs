@@ -74,6 +74,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/crates/{id}", get(crate_get).put(crate_update).delete(crate_delete))
         .route("/api/crates/{id}/rows", get(crate_rows))
         .route("/api/crates/{id}/tempo", get(crate_tempo))
+        .route("/api/like-curve", get(like_curve))
         .route("/api/playlists/stats", get(playlist_stats))
         .route("/api/crates/{id}/playlist", post(crate_playlist))
         .route("/api/crates/{id}/favourites", put(crate_favourites))
@@ -900,7 +901,9 @@ async fn track_details(State(app): State<Arc<App>>, Path((source, id)): Path<(St
             .as_ref()
             .and_then(|(s, u)| s.userdata.get(u, crate::userdata::Kind::Song, std::slice::from_ref(&song)).ok())
             .and_then(|mut m| m.remove(&song));
-        let mut muse = crate::app::audiomuse::details(cat.audiomuse_of(track).as_ref());
+        // Its moods: those it stands out on against the library's (the crates' facts, kept).
+        let stand_out = crate::app::audiomuse::stand_out(cat.crate_facts().ok().into_iter().flat_map(|f| f.iter().filter_map(|x| x.clap_moods).collect::<Vec<_>>()));
+        let mut muse = crate::app::audiomuse::details(cat.audiomuse_of(track).as_ref(), &stand_out);
         let muse = muse.as_object_mut().map(std::mem::take).unwrap_or_default();
         let mut details = json!({
             "path": rel,
@@ -1398,6 +1401,22 @@ async fn crate_tempo(
     RawQuery(raw): RawQuery,
 ) -> Result<Json<crate::crates::TempoBands>, ApiError> {
     Ok(Json(app.playlists.crate_tempo(&id, q.source.as_deref(), &q.look(raw.as_deref())?).await?))
+}
+
+#[derive(serde::Deserialize)]
+struct LikeCurveQuery {
+    /// The seeds, song ids, comma-separated.
+    of: String,
+    source: Option<String>,
+    /// The libraries switched off (`source/library`, comma-separated), as a crate's tracks leave them out.
+    without: Option<String>,
+}
+
+/// How alike the tracks that sound most like some seeds are, closest first (the Sounds like curve).
+async fn like_curve(State(app): State<Arc<App>>, Query(q): Query<LikeCurveQuery>) -> Result<Json<crate::app::LikeCurve>, ApiError> {
+    let of: Vec<String> = q.of.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
+    let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
+    Ok(Json(app.playlists.like_curve(&of, q.source.as_deref(), &without).await?))
 }
 
 /// Every playlist's facts for the Playlists page's table (decision 0042), by id.

@@ -496,7 +496,7 @@
         {#each genres as g (g)}<MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />{/each}
         <!-- Sounds like it: a crate seeded with the album's songs (Cratarr's own, which AudioMuse hears). -->
         {#if source === 'cratarr'}<MenuEntry
-            icon="crates"
+            icon="music"
             label="Sounds like this"
             onclick={() => {
               // Read before closing: closing lets go of the album.

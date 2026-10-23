@@ -392,8 +392,8 @@ export type CrateValue =
   | { kind: 'yes' }
   | { kind: 'any_of'; values: string[] }
   | { kind: 'range'; min: number | null; max: number | null }
-  // Sounds like its seeds (song ids), at least `min` alike (0 two random tracks, 100 two of one album).
-  | { kind: 'like'; of: string[]; min: number };
+  // Sounds like its seeds (song ids): the `count` tracks that sound most like them.
+  | { kind: 'like'; of: string[]; count: number };
 export type Quantifier = 'any' | 'all';
 export type Condition = { axis: string; not: boolean; value: CrateValue; enabled?: boolean; quantifier?: Quantifier };
 export type CrateDef = { id: string; name: string; conditions: Condition[] };
@@ -480,14 +480,15 @@ export type Filtered = {
   profile?: ListProfileData | null;
 };
 /** What a list's tracks are like (the server's crates::Profile): telling style tags and artists, each number's density
- *  on one scale with its middle half and middle (a number all share is left out), and CLAP's moods against the
+ *  on one scale with its middle half and middle (a number all share: that value), and CLAP's moods against the
  *  library's (-1 to 1). */
 export type ListProfileData = {
   tracks: number;
   heard: number;
   styles: string[];
   artists: string[];
-  numbers: { key: 'tempo' | 'energy' | 'danceability' | 'year'; lo: number; hi: number; bins: number[]; q1: number; mid: number; q3: number }[];
+  /** `one`: every track has this value (an album's year): shown as the value, no graph. */
+  numbers: { key: 'tempo' | 'energy' | 'danceability' | 'year'; lo: number; hi: number; bins: number[]; q1: number; mid: number; q3: number; one?: number }[];
   moods: { name: string; lift: number }[];
 };
 /** A filter on the list in view: `without`, the libraries switched off (the Library's albums and a crate's tracks). */
@@ -528,6 +529,11 @@ export const crateRows = (
 };
 /** A crate's tempo spread (decision 0041): its tracks' 5-BPM bands, 60 to 180, counted on the server. */
 export type TempoBands = { bands: number[]; with_tempo: number; total: number };
+/** How alike the tracks that sound most like these seeds are, closest first, 0 to 100 (lib/LikeCurve), and the profile
+ *  of the closest `count` at every step its handle can stop at (the profile follows a drag). */
+export type LikeCurveData = { alike: number[]; profiles: { count: number; profile: ListProfileData }[] };
+export const likeCurve = (of: string[], source?: string, without?: string[]) =>
+  quietly<LikeCurveData>(`/api/like-curve?${new URLSearchParams({ of: of.join(','), ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);
 export const crateTempo = (id: string, source?: string, favourites?: CrateFavourites, favouriteAlbums?: CrateFavourites, look: CrateLook = {}) => {
   const q = new URLSearchParams();
   if (favourites) q.set('favourites', favourites);

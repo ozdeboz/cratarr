@@ -363,7 +363,7 @@
           {#each genres.filter((g) => !(fromPanel && g === viewedGenre)) as g (g)}
             <MenuEntry icon="music" label="Go to {g}" onclick={() => goToGenre(g)} />
           {/each}
-          {#if t?.source === 'cratarr'}<MenuEntry icon="crates" label="Sounds like this" onclick={goToLike} />{/if}
+          {#if t?.source === 'cratarr'}<MenuEntry icon="music" label="Sounds like this" onclick={goToLike} />{/if}
         </MenuGroup>
         <MenuGroup>
           {#if heartKnown}<MenuEntry icon="heart" label="Favourite" switched={heartOn} disabled={busy} onclick={heart} />{/if}

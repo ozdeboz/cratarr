@@ -30,10 +30,14 @@
   /** Folding changes something: some row is below the line. */
   const folds = $derived(kept.length < rows.length);
   const number = (id: ProfileRow) => data.numbers.find((n) => n.key === id)!;
+  /** One value as the row says it: a year, a tempo in BPM, energy and danceability as AudioMuse's 0 to 100. */
+  const oneValue = (n: ListProfileData['numbers'][number]) => (n.key === 'tempo' ? `${Math.round(n.one!)} BPM` : String(Math.round(n.one!)));
 </script>
 
 {#if rows.length}
   <section class="profile">
+    <!-- A line between the header and the rows, whenever a row shows. -->
+    {#if shown.length}<div class="rule"></div>{/if}
     {#each shown as r (r.id)}
       <div class="row" class:words={r.id === 'style' || r.id === 'artists'} class:mood={r.id === 'mood'}>
         <span class="label">{r.label}</span>
@@ -51,15 +55,18 @@
               </div>
             {/each}
           </div>
+        {:else if number(r.id).one !== undefined}
+          <!-- Every track has this one value (an album's year): the value, no graph. -->
+          <span class="one">{oneValue(number(r.id))}</span>
         {:else}
           {@const n = number(r.id)}
-          <DensityBar bins={n.bins} lo={n.lo} hi={n.hi} q1={n.q1} mid={n.mid} q3={n.q3} ends={ENDS[n.key] ?? [String(Math.round(n.lo)), String(Math.round(n.hi))]} />
+          <DensityBar bins={n.bins} lo={n.lo} hi={n.hi} mid={n.mid} ends={ENDS[n.key] ?? [String(Math.round(n.lo)), String(Math.round(n.hi))]} />
         {/if}
       </div>
     {/each}
     {#if prefs.profileOpen && data.heard < data.tracks}<p class="heard">{data.heard.toLocaleString()} of {data.tracks.toLocaleString()} heard by AudioMuse</p>{/if}
     {#if folds}
-      <div class="fold">
+      <div class="fold" class:alone={!shown.length}>
         <button class="pill" aria-expanded={prefs.profileOpen} onclick={() => (prefs.profileOpen = !prefs.profileOpen)}
           ><Icon name={prefs.profileOpen ? 'chevronUp' : 'chevronDown'} size={16} /><span>{prefs.profileOpen ? 'Fold' : 'Profile'}</span></button
         >
@@ -71,16 +78,22 @@
 <style>
   .profile {
     width: 100%;
-    margin-top: 10px;
   }
 
-  /* The fold control: a pill on a divider after the rows (between the profile and the list). */
+  .rule {
+    margin-bottom: 4px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* The fold control: a pill on a divider after the rows (between the profile and the list); half the room around
+     it that the header and the list would give it (the owner). */
   .fold {
     position: relative;
     display: flex;
     justify-content: center;
-    margin: 6px 0 0;
+    margin: 2px 0 -12px;
   }
+
 
   .fold::before {
     content: '';
@@ -148,6 +161,11 @@
   .artists {
     padding-top: 3px;
     font-size: 14px;
+  }
+
+  .one {
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
   }
 
   .moods {

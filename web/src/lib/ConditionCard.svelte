@@ -19,6 +19,9 @@
   import type { FilterCondition } from './prefs.svelte';
   import Switch from './Switch.svelte';
   import DensityRange from './DensityRange.svelte';
+  import LikeCurve from './LikeCurve.svelte';
+  import { likeCurve } from './api';
+  import { hiddenLibraries } from './listFilter.svelte';
   import TempoRange from './TempoRange.svelte';
 
   let {
@@ -50,6 +53,21 @@
   /** Any or all of an item's tracks only where they can differ on the axis (not an album's year: its tracks share
    *  it, so both would pick the same albums). */
   const tested = $derived(!!items && !!axis?.varies);
+  /** Sounds like's curve, for its seeds (lib/LikeCurve). */
+  let curve = $state<number[] | null>(null);
+  $effect(() => {
+    const v = condition.value;
+    if (v.kind !== 'like' || !open) return;
+    const of = v.of.join(',');
+    let gone = false;
+    likeCurve(of.split(','), undefined, hiddenLibraries()).then(
+      (c) => !gone && (curve = c.alike),
+      () => !gone && (curve = null),
+    );
+    return () => {
+      gone = true;
+    };
+  });
   /** The scale's ends as the profile names them (lib/ListProfile). */
   const ENDS: Record<string, [string, string]> = { energy: ['calm', 'intense'], danceability: ['still', 'danceable'] };
 
@@ -58,7 +76,7 @@
     const v = condition.value;
     let s = '';
     if (v.kind === 'yes') s = 'yes';
-    else if (v.kind === 'like') s = `${v.of.length === 1 ? 'one track' : `${v.of.length} tracks`}, ${Math.round(v.min)}%`;
+    else if (v.kind === 'like') s = `the closest ${v.count}`;
     else if (v.kind === 'any_of') s = v.values.length === 0 ? (axis?.kind === 'membership' ? 'any playlist' : 'none chosen') : v.values.length <= 2 ? v.values.join(', ') : `${v.values.slice(0, 2).join(', ')} +${v.values.length - 2}`;
     else {
       const n = (x: number) => String(Math.round(x));
@@ -116,12 +134,8 @@
         </div>
       {:else if condition.value.kind === 'like'}
         {@const l = condition.value}
-        <!-- How alike: 0 two random tracks, 100 two of one album. -->
-        <label class="near">
-          <span>How alike</span>
-          <input type="range" min="0" max="100" step="5" value={l.min} oninput={(e) => (condition.value = { ...l, min: Number(e.currentTarget.value) })} />
-          <output>{Math.round(l.min)}%</output>
-        </label>
+        <!-- How many: the curve of how alike the closest are, cut where the crate ends. -->
+        {#if curve?.length}<div class="near"><LikeCurve {curve} count={l.count} onchange={(n) => (condition.value = { ...l, count: n })} /></div>{/if}
       {:else if axis && condition.value.kind === 'range'}
         {@const r = condition.value}
         {#if axis.bins?.length && axis.min !== null && axis.max !== null && axis.max > axis.min}
@@ -220,23 +234,7 @@
 
 
   .near {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-height: 44px;
-    font-size: 15px;
-  }
-
-  .near input {
-    flex: 1;
-    min-width: 0;
-    accent-color: var(--art-accent, var(--accent));
-  }
-
-  .near output {
-    width: 4ch;
-    text-align: right;
-    font-variant-numeric: tabular-nums;
+    padding: 12px 18px 4px 22px;
   }
 
   /* What the condition is tested on, a sentence under the card's controls; any or all inside it. */

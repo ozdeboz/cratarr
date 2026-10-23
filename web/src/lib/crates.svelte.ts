@@ -192,10 +192,22 @@ export const viewGenre = (name: string) => viewPlaylist(CRATE + GENRE + name);
  *  made by the server when asked for (`crate:like:<id>`), never saved; reached from the track's or the album's menu. */
 export const LIKE = 'like:';
 export const likeOf = (crate: string | null) => (crate?.startsWith(LIKE) ? crate.slice(LIKE.length) : null);
+/** How many such a crate holds when its curve is not moved (the server's crates::LIKE_COUNT). */
+export const LIKE_COUNT = 200;
+/** A Sounds like crate's seed (a song's or an album's id) and how many it holds (`like:<item>@<count>`). */
+export function likeParts(crate: string | null): { item: string; count: number } | null {
+  const rest = likeOf(crate);
+  if (rest === null) return null;
+  const at = rest.lastIndexOf('@');
+  const n = at > 0 ? Number(rest.slice(at + 1)) : NaN;
+  return Number.isFinite(n) ? { item: rest.slice(0, at), count: n } : { item: rest, count: LIKE_COUNT };
+}
 /** Their names, as the server gives them ("Sounds like …"), by crate id. */
 const likeNames = $state<Record<string, string>>({});
-export function viewLike(id: string) {
-  const crate = LIKE + id;
+/** A Sounds like crate's name as the server gave it (its view reads the crate). */
+export const nameLike = (crate: string, name: string) => (likeNames[crate] = name);
+export function viewLike(id: string, count = LIKE_COUNT) {
+  const crate = LIKE + id + (count === LIKE_COUNT ? '' : `@${count}`);
   viewPlaylist(CRATE + crate);
   if (!likeNames[crate]) getCrate(crate).then((d) => (likeNames[crate] = d.name)).catch(() => {});
 }
