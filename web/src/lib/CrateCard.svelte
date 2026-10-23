@@ -239,4 +239,10 @@
     height: 100%;
     background: var(--danger);
   }
+
+  /* Open, the ring covers its foot's 2 px: the meter grows by as much, so as much of it shows (the owner, 2026-10-24);
+     it runs under the ring at both sides, so no gap there. */
+  .active .explored {
+    height: 5px;
+  }
 </style>
