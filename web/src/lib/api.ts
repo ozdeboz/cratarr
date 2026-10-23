@@ -1155,6 +1155,8 @@ export type AlbumGroup = {
 };
 
 export const getAlbumDuplicates = () => request<{ groups: AlbumGroup[] }>('/api/albums/duplicates');
+/** How far AudioMuse has heard the library: the tracks with its sound, of all (Home's Needs you). */
+export const getAudioMuseProgress = () => request<{ heard: number; tracks: number }>('/api/audiomuse/progress');
 
 /** An album in a server's library list (Incoming, Collection). */
 export type ListedAlbum = {

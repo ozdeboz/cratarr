@@ -123,13 +123,14 @@
   }
   const verdictOf = (shelf: ShelfSource, a: ListedAlbum) => sources?.find((x) => x.id === shelf.id)?.verdicts[a.id];
 
-  // The filter's own switches (Favourites only, Not played yet, 4 stars and up, Lossless only, Upgrades waiting),
-  // remembered as the Library's (decision 0060).
+  // The filter's own switches (Favourites only, Not played yet, 4 stars and up, Lossless only, Upgrades waiting,
+  // Duplicates waiting), remembered as the Library's (decision 0060).
   const fav = $derived(switchOn('library', 'favourites'));
   const unplayed = $derived(switchOn('library', 'unplayed'));
   const top = $derived(switchOn('library', 'topRated'));
   const lossless = $derived(switchOn('library', 'lossless'));
   const up = $derived(switchOn('library', 'upgrades'));
+  const dup = $derived(switchOn('library', 'duplicates'));
   // Not played yet and 4 stars and up read how you used the albums, again each time one is switched on.
   $effect(() => {
     if (!unplayed && !top) return;
@@ -145,12 +146,13 @@
   const pass = passing(() => 'library', () => ({ list: { kind: 'library' }, source: prefs.source || undefined }));
   const shown = $derived.by<ShelfSource[] | null>(() => {
     const keys = pass.keys;
-    if (!sources || !(fav || up || unplayed || top || lossless || keys)) return sources;
+    if (!sources || !(fav || up || dup || unplayed || top || lossless || keys)) return sources;
     const keep = (s: ShelfSource, a: ListedAlbum) => {
       const u = useOf(s.id, a.id);
       return (
         (!fav || isFavorite(s.id, a.id)) &&
         (!up || verdictOf(s, a)?.kind === 'upgrade') &&
+        (!dup || verdictOf(s, a)?.kind === 'duplicate') &&
         (!unplayed || (u.plays === 0 && !u.played)) &&
         (!top || u.rating >= 4) &&
         (!lossless || isLossless(a.format)) &&

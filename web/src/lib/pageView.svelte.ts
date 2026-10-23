@@ -127,6 +127,7 @@ export const SWITCHES: Record<string, ListSwitch[]> = {
     { key: 'topRated', label: '4 stars and up' },
     { key: 'lossless', label: 'Lossless only' },
     { key: 'upgrades', label: 'Upgrades waiting', incoming: true },
+    { key: 'duplicates', label: 'Duplicates waiting', incoming: true },
   ],
   playlists: [
     { key: 'favourites', label: 'Favourites only' },
