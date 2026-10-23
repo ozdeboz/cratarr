@@ -3,6 +3,7 @@
   import Health from './Health.svelte';
   import Settings from './Settings.svelte';
   import Library from './Library.svelte';
+  import Home from './Home.svelte';
   import LocalAlbums from './LocalAlbums.svelte';
   import LocalArtists from './LocalArtists.svelte';
   import LocalTracks from './LocalTracks.svelte';
@@ -54,6 +55,8 @@
   // Main pages in order; Insights, Health and Settings sit apart at the bottom of the sidebar, in that order (decision
   // 0025: Health beside Settings, Insights beside Health).
   const PLAYLISTS: Page = { id: 'playlists', href: '#/', label: 'Playlists', icon: 'playlists' };
+  // The quick look, the leftmost tab (the owner, 2026-10-23); where the app opens without an address.
+  const HOME: Page = { id: 'home', href: '#/home', label: 'Home', icon: 'home' };
   // Every used library's albums, Music and Incoming (decision 0034: one page; a dashboard will give the quick look).
   const LIBRARY: Page = { id: 'library', href: '#/library', label: 'Library', icon: 'library' };
   // Incoming's and Collection's addresses from before Library (decision 0034): they open Library.
@@ -83,7 +86,8 @@
       history.replaceState(history.state, '', LIBRARY.href + (rest ? `?${rest}` : ''));
       return LIBRARY.id;
     }
-    return [HEALTH, SETTINGS, LIBRARY, INSIGHTS, CRATES, DOWNLOADS, ...LOCAL].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
+    if (!h) return HOME.id;
+    return [HOME, HEALTH, SETTINGS, LIBRARY, INSIGHTS, CRATES, DOWNLOADS, ...LOCAL].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
   };
   let page = $state(fromHash());
   // Where the player shows (decision 0018): beside the page on a roomy window while something plays (`sidebar`);
@@ -324,7 +328,7 @@
     if (!inApp || openedAway || reach.answered || !reach.away) return;
     if (!downloads.known) return askDownloads();
     openedAway = true;
-    if (downloads.tracks.length && page === PLAYLISTS.id && !location.hash.replace(/^#\/?/, '')) {
+    if (downloads.tracks.length && (page === HOME.id || page === PLAYLISTS.id) && !location.hash.replace(/^#\/?/, '')) {
       history.replaceState(history.state, '', DOWNLOADS.href);
       page = DOWNLOADS.id;
     }
@@ -388,7 +392,7 @@
             : { ok: true, text: `Connected to ${status.server_name ?? 'Jellyfin'}` }
           : { ok: false, text: 'Jellyfin unreachable' },
   );
-  const MAIN: Page[] = $derived(localMode() ? LOCAL : [LIBRARY, CRATES, PLAYLISTS]);
+  const MAIN: Page[] = $derived(localMode() ? LOCAL : [HOME, LIBRARY, CRATES, PLAYLISTS]);
   // Apart, at the bottom of the sidebar: Insights beside Health, then Settings.
   // Health is the library's, so its administrators' (decision 0051). In Local mode, Settings only.
   const APART: Page[] = $derived(localMode() ? [SETTINGS] : [...(inApp ? [DOWNLOADS] : []), INSIGHTS, ...(me.admin ? [HEALTH] : []), SETTINGS]);
@@ -483,6 +487,8 @@
       <Insights />
     {:else if page === 'crates'}
       <Crates />
+    {:else if page === 'home'}
+      <Home />
     {:else}
       <Playlists />
     {/if}
