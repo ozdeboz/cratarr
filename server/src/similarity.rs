@@ -58,10 +58,11 @@ const YEAR: usize = 0;
 const NUMBER_SIGNALS: [Signal; 4] = [Signal::Era, Signal::Tempo, Signal::Energy, Signal::Danceability];
 
 /// "Sounds like" on 0 to 1, from AudioMuse's cosine similarity: measured on the library's 8,909 vectors (2026-10-19),
-/// two random tracks are 0.62 alike at the median, two of one album 0.875 and at most about 0.92 (its 90th percentile
-/// 0.956), the same artist's other albums 0.82; so 0.62 is nothing alike and 0.92 as alike as an album's tracks.
+/// two random tracks are 0.62 alike at the median: nothing alike. 1 is the same sound. (An album's tracks, 0.875 at
+/// the median, were the top once; on the whole library a crowded sound's 1,000 closest are all above that, so it said
+/// 100% of all of them: 2026-10-23.)
 const SOUND_LO: f32 = 0.62;
-const SOUND_HI: f32 = 0.92;
+const SOUND_HI: f32 = 1.0;
 
 /// One track as similarity sees it; its words as numbers, each kind its own.
 #[derive(Debug, Clone, Default)]
@@ -396,7 +397,11 @@ pub fn sounds_alike(a: &[f32], b: &[f32]) -> f64 {
     if a.len() != b.len() {
         return 0.0;
     }
-    let cos: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    sound_alike(a.iter().zip(b).map(|(x, y)| x * y).sum())
+}
+
+/// "Sounds like" on 0 to 1, of the cosine of two sounds.
+pub fn sound_alike(cos: f32) -> f64 {
     ((cos - SOUND_LO) / (SOUND_HI - SOUND_LO)).clamp(0.0, 1.0) as f64
 }
 

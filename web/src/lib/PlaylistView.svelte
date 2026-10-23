@@ -28,6 +28,7 @@
     crateRows,
     crateTempo,
     filterList,
+    likeCurve,
     type ListProfileData,
     type TempoBands,
     type CrateLook,
@@ -68,7 +69,9 @@
     favouritesSaved,
     forgetDraft,
     keepDraft,
+    likeParts,
     seeded,
+    viewLike,
     keptDraft,
     loadCrates,
     setCrateArt,
@@ -113,6 +116,7 @@
   import Section from './Section.svelte';
   import Spread, { bandsOf, layerColor } from './Spread.svelte';
   import ListProfile from './ListProfile.svelte';
+  import LikeCurve from './LikeCurve.svelte';
   import type { Cell } from './Row.svelte';
   import { fit } from './columns.svelte';
   import { fromAction } from 'svelte/attachments';
@@ -607,6 +611,30 @@
         /* no profile without it */
       },
     );
+    return () => {
+      gone = true;
+    };
+  });
+  /** A Sounds like crate (`like:<item>@<count>`): its seed and how many, and its curve (lib/LikeCurve), read from its
+   *  condition's seeds; moving the cut opens the crate of that many in its place. */
+  const like = $derived(likeParts(crate));
+  let curve = $state<number[] | null>(null);
+  $effect(() => {
+    const c = crate;
+    curve = null;
+    if (!c || !like) return;
+    let gone = false;
+    getCrate(c)
+      .then((d) => {
+        const v = d.conditions.find((x) => x.value.kind === 'like')?.value;
+        return v && v.kind === 'like' ? likeCurve(v.of, prefs.source || undefined) : null;
+      })
+      .then(
+        (k) => !gone && (curve = k),
+        () => {
+          /* no curve without it */
+        },
+      );
     return () => {
       gone = true;
     };
@@ -1562,8 +1590,11 @@
           <!-- A crate's exclusions (decision 0024, amended 2026-10-19): a tap shows them, to put back. -->
           {#if leftOut}<button class="details left-out" onclick={() => (leftOutOpen = true)}><Icon name="crateOut" size={14} /><span>{leftOut.toLocaleString()} excluded</span></button>{/if}
         </div>
-        {#if profile && !multi}
-          <div class="head-spread"><ListProfile data={profile} ownArtist={!!album || !!artist} /></div>
+        {#if (profile || (like && curve?.length)) && !multi}
+          <div class="head-spread">
+            {#if like && curve?.length}<LikeCurve {curve} count={like.count} onchange={(n) => viewLike(like.item, n)} />{/if}
+            {#if profile}<ListProfile data={profile} ownArtist={!!album || !!artist} />{/if}
+          </div>
         {:else if headTempo}
           <div class="head-spread">
             <Spread series={headTempo.series} />

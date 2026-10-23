@@ -42,8 +42,9 @@ pub struct CratePage {
     pub genres: Vec<String>,
 }
 
-/// What sounds like a track or an album (`like:<id>`, `crates::like_crate`): named after it, an album's seeds its songs.
-async fn like_crate(id: &str, item: &str) -> Result<CrateDef, ToggleError> {
+/// What sounds like a track or an album (`like:<item>[@<count>]`, `crates::like_crate`): named after it, an album's
+/// seeds its songs.
+async fn like_crate(id: &str, item: &str, count: usize) -> Result<CrateDef, ToggleError> {
     let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     let item = item.to_string();
     let found = tokio::task::spawn_blocking(move || -> Result<Option<(String, Vec<String>)>> {
@@ -55,7 +56,7 @@ async fn like_crate(id: &str, item: &str) -> Result<CrateDef, ToggleError> {
     .await
     .map_err(|e| anyhow::anyhow!("{e}"))??;
     let (name, songs) = found.ok_or(ToggleError::UnknownPlaylist)?;
-    Ok(crates::like_crate(id, &format!("Sounds like {name}"), songs))
+    Ok(crates::like_crate(id, &format!("Sounds like {name}"), songs, count))
 }
 
 pub(super) struct CrateLibrary {
@@ -1734,8 +1735,8 @@ impl PlaylistService {
         if let Some(c) = crates::permanent().into_iter().find(|c| c.id == id).or_else(|| crates::genre_crate(id)) {
             return Ok(c);
         }
-        if let Some(item) = id.strip_prefix(crates::LIKE) {
-            return like_crate(id, item).await;
+        if let Some((item, count)) = crates::like_of(id) {
+            return like_crate(id, item, count).await;
         }
         self.own_crates()?.list().await?.into_iter().find(|c| c.id == id).ok_or(ToggleError::UnknownPlaylist)
     }
@@ -2034,6 +2035,13 @@ impl PlaylistService {
             return Err(ToggleError::UnknownPlaylist);
         }
         Ok(self.keep(Change::Crate { before, after: None }))
+    }
+
+    /// How alike the tracks that sound most like these seeds (song ids) are, closest first, 0 to 100, at most
+    /// `crates::LIKE_MOST` of them: the Sounds like curve (lib/LikeCurve), cut where the crate ends.
+    pub async fn like_curve(&self, of: &[String], want: Option<&str>) -> Result<Vec<f64>, ToggleError> {
+        let lib = self.crate_library(want, false, false, &[]).await?;
+        Ok(crates::closest(of, &lib.files).into_iter().map(|(_, a)| (a * 10.0).round() / 10.0).collect())
     }
 
     /// The axes and their domains in the libraries not in `without`, for the builder (decision 0024, issue 4).

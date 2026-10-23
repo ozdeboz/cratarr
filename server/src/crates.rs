@@ -74,12 +74,12 @@ pub enum Value {
         min: Option<f64>,
         max: Option<f64>,
     },
-    /// Sounds like its seeds (song ids; an album's are its songs'), at least `min` alike (0 to 100, similarity's
-    /// "sounds like": 0 two random tracks, 100 two of one album).
-    Like { of: Vec<String>, min: f64 },
-    /// A `Like` worked out (`resolved`): the sound its seeds make together. Never kept.
+    /// Sounds like its seeds (song ids; an album's are its songs'): the `count` tracks that sound most like them
+    /// (the owner, 2026-10-23: how many, not how alike; one setting means one size for every seed).
+    Like { of: Vec<String>, count: usize },
+    /// A `Like` worked out (`resolved`): the lines of those tracks. Never kept.
     #[serde(skip)]
-    Near { sound: Arc<[f32]>, min: f64 },
+    Within { lines: Arc<HashSet<String>> },
 }
 
 /// A crate: its id never changes; its name is unique among crates.
@@ -107,11 +107,23 @@ pub fn genre_crate(id: &str) -> Option<CrateDef> {
 /// albums and tracks can now become seeds for crates"): made when asked for (`like:<id>`), never saved. The caller
 /// names it and turns an album into its songs (`like_crate`).
 pub const LIKE: &str = "like:";
-/// How alike its tracks are to the seed, until the crate's card says otherwise: as alike as one artist's albums.
-pub const LIKE_MIN: f64 = 65.0;
+/// How many tracks it holds until its curve says otherwise, and the fewest and most it can.
+pub const LIKE_COUNT: usize = 200;
+pub const LIKE_FEWEST: usize = 10;
+pub const LIKE_MOST: usize = 1000;
 
-pub fn like_crate(id: &str, name: &str, songs: Vec<String>) -> CrateDef {
-    let like = Condition::new("like", false, Value::Like { of: songs, min: LIKE_MIN });
+/// A seed crate's id: the item (a song's or an album's id), and how many it holds when not the default
+/// (`like:<item>@<count>`).
+pub fn like_of(id: &str) -> Option<(&str, usize)> {
+    let rest = id.strip_prefix(LIKE)?;
+    Some(match rest.rsplit_once('@') {
+        Some((item, n)) => (item, n.parse().map_or(LIKE_COUNT, |n: usize| n.clamp(LIKE_FEWEST, LIKE_MOST))),
+        None => (rest, LIKE_COUNT),
+    })
+}
+
+pub fn like_crate(id: &str, name: &str, songs: Vec<String>, count: usize) -> CrateDef {
+    let like = Condition::new("like", false, Value::Like { of: songs, count });
     CrateDef { id: id.to_string(), name: name.to_string(), conditions: vec![like] }
 }
 
@@ -544,7 +556,7 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
         ("style", Value::AnyOf { values }) => values.iter().any(|v| f.styles.iter().any(|s| s.eq_ignore_ascii_case(v))),
         ("energy", Value::Range { min, max }) => within(f.energy, min, max),
         ("danceability", Value::Range { min, max }) => within(f.danceability, min, max),
-        ("like", Value::Near { sound, min }) => f.sound.as_ref().is_some_and(|s| crate::similarity::sounds_alike(sound, s) * 100.0 >= *min),
+        ("like", Value::Within { lines }) => lines.contains(&f.rel),
         _ => false,
     }
 }
@@ -597,24 +609,34 @@ pub fn passes(tracks: &[&Facts], conditions: &[Condition], w: &World) -> bool {
     conditions.iter().filter(|c| c.enabled).all(|c| item_holds(c, tracks, w))
 }
 
-/// The conditions with each Sounds like worked out once, not for every file: the sound its seeds make together, from
-/// `all` (every file, its seeds may be in a library switched off). Seeds none of which was heard: never holds.
+/// The conditions with each Sounds like worked out once, not for every file: its closest `count` among `all` (every
+/// file; its seeds may be in a library switched off). Seeds none of which was heard: never holds.
 pub fn resolved(conditions: &[Condition], all: &[Facts]) -> Vec<Condition> {
     conditions
         .iter()
         .map(|c| match &c.value {
-            Value::Like { of, min } => {
-                let seeds: HashSet<i64> = of.iter().filter_map(|id| crate::serve::ids::track_of(id)).collect();
-                let heard: Vec<&[f32]> = all.iter().filter(|f| f.track.is_some_and(|t| seeds.contains(&t))).filter_map(|f| f.sound.as_deref()).collect();
-                let value = match crate::similarity::mean_sound(&heard) {
-                    Some(sound) => Value::Near { sound: sound.into(), min: *min },
-                    None => Value::AnyOf { values: Vec::new() },
-                };
-                Condition { value, ..c.clone() }
+            Value::Like { of, count } => {
+                let lines = closest(of, all).into_iter().take(*count).map(|(f, _)| f.rel.clone()).collect();
+                Condition { value: Value::Within { lines: Arc::new(lines) }, ..c.clone() }
             }
             _ => c.clone(),
         })
         .collect()
+}
+
+/// The files that sound most like the seeds (song ids), closest first, at most `LIKE_MOST`, each with how alike (0 to
+/// 100: 0 two random tracks, 100 the same sound); none when none of the seeds was heard.
+pub fn closest<'a>(of: &[String], all: &'a [Facts]) -> Vec<(&'a Facts, f64)> {
+    let seeds: HashSet<i64> = of.iter().filter_map(|id| crate::serve::ids::track_of(id)).collect();
+    let heard: Vec<&[f32]> = all.iter().filter(|f| f.track.is_some_and(|t| seeds.contains(&t))).filter_map(|f| f.sound.as_deref()).collect();
+    let Some(seed) = crate::similarity::mean_sound(&heard) else { return Vec::new() };
+    let mut scored: Vec<(&Facts, f32)> = all
+        .iter()
+        .filter_map(|f| f.sound.as_deref().filter(|s| s.len() == seed.len()).map(|s| (f, s.iter().zip(&seed).map(|(a, b)| a * b).sum::<f32>())))
+        .collect();
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.rel.cmp(&b.0.rel)));
+    scored.truncate(LIKE_MOST);
+    scored.into_iter().map(|(f, cos)| (f, crate::similarity::sound_alike(cos) * 100.0)).collect()
 }
 
 /// A crate's files, in the order given (newest first): those all its conditions that are on hold for.
@@ -981,13 +1003,18 @@ mod tests {
             heard("far.flac", 3, [0.0, 1.0]),
             Facts { rel: "unheard.flac".into(), ..Facts::default() },
         ];
-        let like = like_crate("like:tr-1", "Seed", vec!["tr-1".into()]);
+        let like = like_crate("like:tr-1@2", "Seed", vec!["tr-1".into()], 2);
         let membership = HashMap::new();
         let w = World { membership: &membership, favourites: None, favourite_albums: None };
-        assert_eq!(select(&files, &resolved(&like.conditions, &files), &w), ["seed.flac", "near.flac"]);
+        assert_eq!(select(&files, &resolved(&like.conditions, &files), &w), ["seed.flac", "near.flac"], "the closest two");
+        let all = like_crate("like:tr-1", "Seed", vec!["tr-1".into()], 10);
+        assert_eq!(select(&files, &resolved(&all.conditions, &files), &w), ["seed.flac", "near.flac", "far.flac"], "every heard one");
+        assert_eq!(like_of("like:tr-1@2"), Some(("tr-1", LIKE_FEWEST)));
+        assert_eq!(like_of("like:al-x"), Some(("al-x", LIKE_COUNT)));
+        assert_eq!(like_of("like:al-x@5000"), Some(("al-x", LIKE_MOST)));
         // Unworked out, or seeds never heard: nothing.
         assert!(select(&files, &like.conditions, &w).is_empty());
-        let unheard = like_crate("like:tr-9", "Unheard", vec!["tr-9".into()]);
+        let unheard = like_crate("like:tr-9", "Unheard", vec!["tr-9".into()], 10);
         assert!(select(&files, &resolved(&unheard.conditions, &files), &w).is_empty());
     }
 

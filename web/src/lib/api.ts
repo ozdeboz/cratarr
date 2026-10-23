@@ -392,8 +392,8 @@ export type CrateValue =
   | { kind: 'yes' }
   | { kind: 'any_of'; values: string[] }
   | { kind: 'range'; min: number | null; max: number | null }
-  // Sounds like its seeds (song ids), at least `min` alike (0 two random tracks, 100 two of one album).
-  | { kind: 'like'; of: string[]; min: number };
+  // Sounds like its seeds (song ids): the `count` tracks that sound most like them.
+  | { kind: 'like'; of: string[]; count: number };
 export type Quantifier = 'any' | 'all';
 export type Condition = { axis: string; not: boolean; value: CrateValue; enabled?: boolean; quantifier?: Quantifier };
 export type CrateDef = { id: string; name: string; conditions: Condition[] };
@@ -528,6 +528,9 @@ export const crateRows = (
 };
 /** A crate's tempo spread (decision 0041): its tracks' 5-BPM bands, 60 to 180, counted on the server. */
 export type TempoBands = { bands: number[]; with_tempo: number; total: number };
+/** How alike the tracks that sound most like these seeds are, closest first, 0 to 100 (lib/LikeCurve). */
+export const likeCurve = (of: string[], source?: string) =>
+  quietly<number[]>(`/api/like-curve?${new URLSearchParams({ of: of.join(','), ...(source ? { source } : {}) })}`);
 export const crateTempo = (id: string, source?: string, favourites?: CrateFavourites, favouriteAlbums?: CrateFavourites, look: CrateLook = {}) => {
   const q = new URLSearchParams();
   if (favourites) q.set('favourites', favourites);

@@ -1,0 +1,144 @@
+<script lang="ts">
+  // A Sounds like crate's curve (the owner, 2026-10-23): how alike its closest tracks are to the seed, closest first
+  // (0 two random tracks, 100 the same sound), on a log scale of their places so the closest get room; the crate ends
+  // at the cut, the tracks after it dimmed. The curve is the control: the handle sits on it and is dragged along it
+  // (or moved with the arrow keys); set on release.
+  let {
+    curve,
+    count,
+    fewest = 10,
+    onchange,
+  }: {
+    /** How alike the closest tracks are, closest first (the server's /api/like-curve). */
+    curve: readonly number[];
+    count: number;
+    fewest?: number;
+    onchange: (count: number) => void;
+  } = $props();
+
+  const W = 300;
+  const H = 96;
+  const most = $derived(Math.max(fewest, curve.length));
+  const x = (rank: number) => (Math.log(rank) / Math.log(most)) * W;
+  const y = (alike: number) => H - (alike / 100) * H;
+  const rankAt = (px: number) => Math.round(Math.exp((Math.min(W, Math.max(0, px)) / W) * Math.log(most)));
+  const clampCount = (n: number) => Math.min(most, Math.max(fewest, n));
+
+  let drag = $state<number | null>(null);
+  const at = $derived(clampCount(drag ?? count));
+  const points = $derived(curve.map((a, i) => `${x(i + 1).toFixed(1)},${y(a).toFixed(1)}`).join(' '));
+  const handle = $derived({ cx: x(at), cy: y(curve[at - 1] ?? 0) });
+  /** Round numbers while dragging: a handle at 213 reads as noise. */
+  const tidy = (n: number) => (n < 100 ? Math.round(n / 5) * 5 : n < 400 ? Math.round(n / 10) * 10 : Math.round(n / 50) * 50);
+
+  let svg = $state<SVGSVGElement>();
+  function rankOf(e: PointerEvent) {
+    const r = svg!.getBoundingClientRect();
+    // The drawing's own units: the view box is wider than W by its margins.
+    const px = ((e.clientX - r.left) / r.width) * (W + 24) - 12;
+    return clampCount(tidy(rankAt(px)));
+  }
+  function down(e: PointerEvent) {
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    drag = rankOf(e);
+  }
+  function move(e: PointerEvent) {
+    if (drag !== null) drag = rankOf(e);
+  }
+  function up() {
+    if (drag === null) return;
+    const n = drag;
+    drag = null;
+    if (n !== count) onchange(n);
+  }
+  function key(e: KeyboardEvent) {
+    const d = e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? -1 : e.key === 'ArrowRight' || e.key === 'ArrowUp' ? 1 : 0;
+    if (!d) return;
+    e.preventDefault();
+    const steps = [10, 20, 30, 50, 75, 100, 150, 200, 300, 400, 500, 750, 1000].filter((s) => s <= most);
+    const next = d > 0 ? steps.find((s) => s > count) : [...steps].reverse().find((s) => s < count);
+    if (next) onchange(next);
+  }
+</script>
+
+<svg
+  bind:this={svg}
+  class="curve"
+  viewBox="-12 -12 {W + 24} {H + 30}"
+  role="slider"
+  tabindex="0"
+  aria-label="How many tracks"
+  aria-valuemin={fewest}
+  aria-valuemax={most}
+  aria-valuenow={at}
+  onpointerdown={down}
+  onpointermove={move}
+  onpointerup={up}
+  onpointercancel={up}
+  onkeydown={key}
+>
+  <!-- Fewer than the fewest cannot be. -->
+  <rect x="0" y="0" width={x(fewest)} height={H} class="none" />
+  <polygon points="0,{H} {points} {x(curve.length)},{H}" class="area" />
+  <polyline {points} class="line" />
+  <rect x={handle.cx} y="-12" width={Math.max(0, W - handle.cx + 12)} height={H + 12} class="after" />
+  <line x1={handle.cx} x2={handle.cx} y1="0" y2={H} class="cut" />
+  <circle cx={handle.cx} cy={handle.cy} r="11" class="knob" />
+  <text x="0" y={H + 14}>1</text>
+  <text x={x(fewest)} y={H + 14} text-anchor="middle">{fewest}</text>
+  <text x={x(100)} y={H + 14} text-anchor="middle">100</text>
+  <text x={W} y={H + 14} text-anchor="end">{most.toLocaleString()}</text>
+  <text x="-4" y="7" text-anchor="end">100%</text>
+  <text x="-4" y={H} text-anchor="end">0%</text>
+</svg>
+
+<style>
+  .curve {
+    display: block;
+    width: 100%;
+    overflow: visible;
+    touch-action: none;
+    cursor: ew-resize;
+  }
+
+  .curve:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+    border-radius: 8px;
+  }
+
+  .none {
+    fill: color-mix(in srgb, var(--text) 4%, transparent);
+  }
+
+  .area {
+    fill: color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+
+  .line {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2;
+  }
+
+  /* After the cut: not in the crate. */
+  .after {
+    fill: var(--surface);
+    opacity: 0.62;
+  }
+
+  .cut {
+    stroke: var(--text);
+    stroke-width: 2;
+  }
+
+  .knob {
+    fill: var(--text);
+    stroke: rgb(0 0 0 / 0.35);
+  }
+
+  text {
+    fill: var(--muted);
+    font-size: 10px;
+  }
+</style>

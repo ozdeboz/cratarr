@@ -73,6 +73,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/crates/{id}", get(crate_get).put(crate_update).delete(crate_delete))
         .route("/api/crates/{id}/rows", get(crate_rows))
         .route("/api/crates/{id}/tempo", get(crate_tempo))
+        .route("/api/like-curve", get(like_curve))
         .route("/api/playlists/stats", get(playlist_stats))
         .route("/api/crates/{id}/playlist", post(crate_playlist))
         .route("/api/crates/{id}/favourites", put(crate_favourites))
@@ -1380,6 +1381,19 @@ async fn crate_tempo(
     RawQuery(raw): RawQuery,
 ) -> Result<Json<crate::crates::TempoBands>, ApiError> {
     Ok(Json(app.playlists.crate_tempo(&id, q.source.as_deref(), &q.look(raw.as_deref())?).await?))
+}
+
+#[derive(serde::Deserialize)]
+struct LikeCurveQuery {
+    /// The seeds, song ids, comma-separated.
+    of: String,
+    source: Option<String>,
+}
+
+/// How alike the tracks that sound most like some seeds are, closest first (the Sounds like curve).
+async fn like_curve(State(app): State<Arc<App>>, Query(q): Query<LikeCurveQuery>) -> Result<Json<Vec<f64>>, ApiError> {
+    let of: Vec<String> = q.of.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
+    Ok(Json(app.playlists.like_curve(&of, q.source.as_deref()).await?))
 }
 
 /// Every playlist's facts for the Playlists page's table (decision 0042), by id.
