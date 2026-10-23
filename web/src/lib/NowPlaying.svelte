@@ -840,12 +840,15 @@
     margin-right: auto;
   }
 
-  /* On a big screen (the owner, 2026-10-24: "two rows"): they wrap, centred, instead of scrolling. */
+  /* On a big screen (the owner, 2026-10-24: "two rows"): they wrap, centred, instead of scrolling, in a block two rows
+     tall whatever the track (no layout shift as tracks change): one row sits in its middle, two fill it. */
   @media (min-width: 900px) {
     .facts {
       flex-wrap: wrap;
       justify-content: center;
-      row-gap: 6px;
+      align-content: center;
+      row-gap: 8px;
+      min-height: 56px;
       overflow: visible;
     }
 
