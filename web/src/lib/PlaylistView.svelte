@@ -47,6 +47,8 @@
     queueTracks,
     setTrackFavorite,
     setAlbumFavorite,
+    getArtistAbout,
+    artistPhotoUrl,
     type ListedAlbum,
     type PlaylistRow,
   } from './api';
@@ -388,6 +390,21 @@
     );
   });
 
+  // An artist's photo, where the server's artist store has one (TheAudioDB's): the header shows it rather than an album
+  // cover (the owner, 2026-10-23); a picture chosen on this device still comes first.
+  let artistPhoto = $state<string | null>(null);
+  $effect(() => {
+    const ar = artist;
+    artistPhoto = null;
+    if (!ar || ar.source !== 'cratarr' || ar.tracks) return;
+    let gone = false;
+    getArtistAbout(ar.name).then(
+      (a) => !gone && a.photo && a.id && (artistPhoto = artistPhotoUrl(a.id)),
+      () => {},
+    );
+    return () => (gone = true);
+  });
+
   // The cover's place: a crate's picture (its own, else its albums' covers; in edit mode as Save will leave it).
   const heroArt = $derived.by(() => {
     if (crateEditing) {
@@ -396,7 +413,7 @@
     }
     if (artist) {
       const own = localCovers[coverKey(artist.source, artistPictureId(artist.name))];
-      return own ? [own] : covers;
+      return own ? [own] : artistPhoto ? [artistPhoto] : covers;
     }
     if (crate && seeded(crate)) return rowCovers;
     return crate ? crateArt(crate) : covers;
