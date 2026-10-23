@@ -82,16 +82,13 @@
   }
 
   /* Wide (the header's room beside the name, the owner 2026-10-23: "quite some space to expand into"): the rows in two
-     columns, styles across both, so it is no taller than it need be. */
+     columns, styles one of them as any row (the owner, 2026-10-24: across both it left the right of tempo empty; its
+     chips wrap when they need more), so it is no taller than it need be. */
   @container (min-width: 760px) {
     .rows {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       column-gap: 40px;
-    }
-
-    .row.words {
-      grid-column: 1 / -1;
     }
   }
 

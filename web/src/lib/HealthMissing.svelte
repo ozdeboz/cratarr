@@ -1,7 +1,8 @@
 <script lang="ts">
   // A playlist's missing tracks, Health's third level (the owner, 2026-10-23: "a search function"): each line whose file
-  // is gone, with a search of the library prefilled from what the line still says; a found track, tapped, is what the
-  // line points at from then on (the Repair tab's own fix, one line).
+  // is gone, found again by what the line still says (the same title at heart by the same artist, wherever it lies now;
+  // the owner, 2026-10-24: the words were too strict), the one answer ringed; the words prefilled can be changed and
+  // searched. A found track, tapped, is what the line points at from then on (the Repair tab's own fix, one line).
   import { untrack } from 'svelte';
   import { albumCoverUrl, applyOne, findTracks, playlistRows, type FoundTrack } from './api';
   import Cover from './Cover.svelte';
@@ -10,7 +11,8 @@
 
   let { playlist }: { playlist: string } = $props();
 
-  type Missing = { entry: string; query: string; found: FoundTrack[] | null; busy: boolean; fixed: string | null };
+  /** `typed`: the words were changed by hand (searched as words; until then the line is found again by what it says). */
+  type Missing = { entry: string; query: string; typed: boolean; found: FoundTrack[] | null; busy: boolean; fixed: string | null };
   let lines = $state<Missing[] | null>(null);
   /** What a line still says, as words to search by: its file's name without number or extension, and its folder's. */
   function words(entry: string): string {
@@ -23,7 +25,7 @@
     if (!m.query.trim()) return;
     m.busy = true;
     try {
-      m.found = await findTracks(m.query);
+      m.found = await findTracks(m.query, m.typed ? undefined : m.entry);
     } catch (e) {
       toast.fail(e, "The library couldn't be searched");
     } finally {
@@ -37,9 +39,9 @@
     playlistRows(id).then(
       (r) => {
         if (gone) return;
-        lines = r.rows.filter((x) => x.missing).map((x) => ({ entry: x.entry, query: words(x.entry), found: null, busy: false, fixed: null }));
-        // The first ones searched at once; the rest when asked.
-        untrack(() => lines!.slice(0, 5).forEach(search));
+        lines = r.rows.filter((x) => x.missing).map((x) => ({ entry: x.entry, query: words(x.entry), typed: false, found: null, busy: false, fixed: null }));
+        // Each found again at once, by what its line says.
+        untrack(() => lines!.forEach(search));
       },
       () => !gone && (lines = []),
     );
@@ -70,7 +72,7 @@
         {:else}
           <form class="search" onsubmit={(e) => (e.preventDefault(), search(m))}>
             <Icon name="search" size={18} />
-            <input bind:value={m.query} aria-label="Search the library" />
+            <input bind:value={m.query} oninput={() => (m.typed = true)} aria-label="Search the library" />
             <button type="submit" disabled={m.busy}>Search</button>
           </form>
           {#if m.found}
@@ -79,7 +81,7 @@
             {:else}
               <ul class="found">
                 {#each m.found as t (t.id)}
-                  <li>
+                  <li class:sure={t.sure}>
                     <button onclick={() => fix(m, t)}>
                       <span class="cover"><Cover src={albumCoverUrl('cratarr', t.album_id)} /></span>
                       <span class="words"><b>{t.title}</b><small>{t.artist} · {t.album}</small></span>
@@ -190,6 +192,11 @@
 
   .found button:hover {
     background: color-mix(in srgb, var(--text) 6%, transparent);
+  }
+
+  /* The one answer (the same title at heart by the same artist): ringed, a tap away. */
+  .found li.sure button {
+    box-shadow: inset 0 0 0 2px var(--accent);
   }
 
   .cover {
