@@ -143,6 +143,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/home/digging", get(home_digging))
         .route("/api/home/artists", get(home_artists))
         .route("/api/artists/{id}/photo", get(artist_photo))
+        .route("/api/artists/about", get(artist_about))
         .route("/api/home/heard", post(home_heard))
         .route("/api/history/sleep", post(sleep))
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
@@ -2596,6 +2597,27 @@ async fn home_artists(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) 
         })
         .collect();
     Ok(Json(json!({ "artists": artists, "credit": "TheAudioDB" })))
+}
+
+#[derive(Deserialize)]
+struct AboutQuery {
+    name: String,
+}
+
+/// About an artist, for their page (the owner, 2026-10-23): TheAudioDB's description and whether there is a photo
+/// (`/api/artists/{id}/photo`), read now when it never was. Nothing known: nulls.
+async fn artist_about(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) -> Json<serde_json::Value> {
+    let found = async {
+        let served = crate::serve::instance()?;
+        let store = app.artists.clone()?;
+        let lib = served.library.clone();
+        let name = q.name.clone();
+        let (id, mbid) = tokio::task::spawn_blocking(move || lib.artist_by_name(&name)).await.ok()?.ok()??;
+        let info = store.get_or_read(&q.name, mbid.as_deref()).await?;
+        Some(json!({ "id": id, "bio": info.bio, "photo": info.photo.is_some() }))
+    }
+    .await;
+    Json(found.unwrap_or_else(|| json!({ "id": null, "bio": null, "photo": false })))
 }
 
 /// An artist's photo, as the artist store kept it.

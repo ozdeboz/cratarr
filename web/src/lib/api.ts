@@ -1362,6 +1362,8 @@ export type ExploredArtist = { id: string; name: string; albums: string[]; bio: 
 export const getHomeArtists = (source?: string, without?: string[]) =>
   quietly<{ artists: ExploredArtist[] }>(`/api/home/artists?${new URLSearchParams({ ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);
 export const artistPhotoUrl = (id: string) => `/api/artists/${encodeURIComponent(id)}/photo`;
+/** About an artist (their page): TheAudioDB's description and whether the store has a photo; nulls when unknown. */
+export const getArtistAbout = (name: string) => quietly<{ id: string | null; bio: string | null; photo: boolean }>(`/api/artists/about?name=${encodeURIComponent(name)}`);
 export const getDigging = (source?: string, without?: string[]) =>
   quietly<Digging>(`/api/home/digging?${new URLSearchParams({ ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);
 /** A ListenBrainz user's listens into the asking account's history (decision 0064, amended): how many there were,

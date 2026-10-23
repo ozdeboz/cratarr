@@ -585,6 +585,13 @@ impl Library {
         Ok(rows)
     }
 
+    /// An artist by name, as the library writes it (any case): their id and MusicBrainz id.
+    pub fn artist_by_name(&self, name: &str) -> Result<Option<(String, Option<String>)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT id, mbid FROM artists WHERE name = ?1 COLLATE NOCASE ORDER BY album_count DESC LIMIT 1")?;
+        Ok(st.query_row([name], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
+    }
+
     /// Every album artist's albums: (artist id, name, MusicBrainz id, album id, its catalogue folder, its tracks).
     /// Home's Artists to explore.
     #[allow(clippy::type_complexity)]
