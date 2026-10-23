@@ -249,8 +249,10 @@
       removeEventListener('popstate', stamp);
     };
   });
-  // On a phone the row always has something on its left (back, or the mark); beside the page only back or the pill.
-  const pageRow = $derived(!playlistLayer && !overlay && (phone || navAt > 0 || pagePill || page === 'settings' || page === 'insights'));
+  // Back is always there (the owner, 2026-10-23): a step back in this visit, else Home; only Home itself, opened first,
+  // has none. On a phone the row always shows.
+  const backHome = $derived(navAt === 0 && page !== 'home');
+  const pageRow = $derived(!playlistLayer && !overlay && (phone || navAt > 0 || backHome || pagePill || page === 'settings' || page === 'insights'));
   // The settings page's info button (the owner, 2026-10-16): About in a sheet.
   let aboutOpen = $state(false);
   $effect(() => {
@@ -553,8 +555,8 @@
   {/if}
   {#if pageRow}
     <div class="page-row" class:beside={sidebar} class:insights={page === 'insights'} style:--player-w="{sideWidth}px">
-      {#if navAt > 0}
-        <span class="navpill"><button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button></span>
+      {#if navAt > 0 || backHome}
+        <span class="navpill"><button aria-label="Back" title="Back" onclick={() => (backHome ? (location.hash = keepViewed(HOME.href)) : history.back())}><Icon name="back" size={22} /></button></span>
       {:else}
         <span></span>
       {/if}
