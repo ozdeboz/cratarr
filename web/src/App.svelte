@@ -162,6 +162,9 @@
   const insightsShown = $derived(panel.viewed === INSIGHTS_VIEW && !panel.playerTop);
   const insightsSplit = $derived(insightsShown && player.roomy);
   const sidebar = $derived(settingsSplit || insightsSplit || inSidebar());
+  // On Insights the panel beside the page is one fixed width whatever it shows (its own, a playlist or crate opened from
+  // it, the player), as Settings' is (the owner, 2026-10-23): no grip.
+  const insightsFixed = $derived(page === 'insights' && sidebar);
   // The visuals beside the page: in the panel where the player goes, while it is there (a narrow window: over the page).
   const visualsBeside = $derived(visuals.open && visuals.side && sidebar);
   const overlay = $derived(player.full && !sidebar);
@@ -285,7 +288,7 @@
   // Beside Settings' list the part takes all but the list's column (no grip there: the list's width is its own).
   const SETTINGS_LIST = 400;
   const INSIGHTS_PANEL = 360;
-  const sideWidth = $derived(settingsSplit ? Math.max(PLAYER_MIN, area.w - SETTINGS_LIST) : insightsSplit ? INSIGHTS_PANEL : playerWidth);
+  const sideWidth = $derived(settingsSplit ? Math.max(PLAYER_MIN, area.w - SETTINGS_LIST) : insightsFixed ? INSIGHTS_PANEL : playerWidth);
   let contentEl = $state<HTMLElement>();
   // The page's side and the panel's: sheets opened in either stand over it (lib/SheetArea.svelte).
   let pageEl = $state<HTMLElement>();
@@ -502,7 +505,7 @@
     {/if}
     </SheetArea>
     </div>
-    {#if settingsSplit || insightsSplit}
+    {#if settingsSplit || insightsFixed}
       <div class="grip line" aria-hidden="true"></div>
     {:else if sidebar}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
@@ -521,7 +524,7 @@
     {/if}
     {#if sidebar}
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
-      <aside class="player-side" class:whole={settingsSplit || insightsSplit} aria-label={panelShowsPlayer() ? 'Player' : settingsShown ? 'Settings' : insightsShown ? 'Insights' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
+      <aside class="player-side" class:whole={settingsSplit || insightsFixed} aria-label={panelShowsPlayer() ? 'Player' : settingsShown ? 'Settings' : insightsShown ? 'Insights' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
         <SheetArea area={() => sideEl}>
           {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if panelShowsPlayer()}<NowPlaying place="side" />{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else if insightsShown}<InsightsPanel />{:else}<PlaylistView />{/if}
         </SheetArea>
