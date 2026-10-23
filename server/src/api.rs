@@ -2500,8 +2500,16 @@ async fn sleep(Json(b): Json<Sleep>) -> Result<Json<serde_json::Value>, ApiError
 }
 
 /// The asking account's taste and what it avoids (Insights › Listening › Profile).
-async fn taste_profile(State(app): State<Arc<App>>) -> Result<Json<crate::app::taste::TasteView>, ApiError> {
-    Ok(Json(app.playlists.taste().await?))
+#[derive(serde::Deserialize)]
+struct TasteQuery {
+    source: Option<String>,
+    /// The libraries switched off (`source/library`, comma-separated): Insights' switches.
+    without: Option<String>,
+}
+
+async fn taste_profile(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) -> Result<Json<crate::app::taste::TasteView>, ApiError> {
+    let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
+    Ok(Json(app.playlists.taste(q.source.as_deref(), &without).await?))
 }
 
 /// How many similar lists a list shows at its foot.
