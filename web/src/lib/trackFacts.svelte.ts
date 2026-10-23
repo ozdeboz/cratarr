@@ -1,5 +1,5 @@
 // What is known about a track (the owner, 2026-10-19), for the cover's overview (lib/CoverOverview: every fact, in
-// full) and the player's row beside its info button (the facts the user picks, Settings → Display → Player row, each
+// full) and the player's row beside its info button (the facts the user picks, Settings → Display → Player, Extra details, each
 // in its short form: "for long content options, we'd need short format versions"). Read from the track's file (its
 // details: the tags as the server names them, its tempo, genres, quality and when it came in) and what the player says
 // (its plays); mood, energy and danceability from AudioMuse's analysis once the server brings them in. Only what is

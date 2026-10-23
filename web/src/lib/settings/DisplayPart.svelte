@@ -22,7 +22,7 @@
 
 
   offerReset(
-    () => "Theme, the player's row and the profiles back to their defaults.",
+    () => "Theme, the player's extra details and the profiles back to their defaults.",
     () => {
       prefs.theme = 'auto';
       prefs.playerRow = true;
@@ -39,8 +39,8 @@
   <Item name="Theme"><Seg label="Theme" options={THEMES} bind:value={prefs.theme} /></Item>
 </Group>
 
-<Group title="Player row">
-  <Item name="Row under the title" line="The info button and the facts below" toggle={{ checked: prefs.playerRow, onchange: (on) => (prefs.playerRow = on) }} />
+<Group title="Player">
+  <Item name="Extra details" toggle={{ checked: prefs.playerRow, onchange: (on) => (prefs.playerRow = on) }} />
   {#if prefs.playerRow}<PlayerRowList />{/if}
 </Group>
 
