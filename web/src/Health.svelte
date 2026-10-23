@@ -1,101 +1,97 @@
 <script lang="ts">
-  // Health (decision 0063, after 0025; laid out as Settings, the owner 2026-10-23): a row per domain, its icon (red when
-  // something needs the owner), its name, what it says now in a line, and ›. A tap opens the domain in the panel
-  // (lib/HealthPanel): its findings, Files' files by kind; beside the list on a roomy window, where one is always open
-  // (App: the one last open, else the first with something), its row tinted; over the list on a phone. The report is
-  // an administrator's; anyone else sees the files.
+  // Health (decision 0063; laid out as Settings, the owner 2026-10-23: "one card per problem"): a card per problem,
+  // worst first: its domain's icon (red when it needs the owner), what it is, a line of detail, and ›. A tap opens the
+  // problem in the panel (lib/HealthPanel, one layout for every problem): beside the list on a roomy window, where one is
+  // always open (App: the one last open, else the first), its card tinted; over the list on a phone. The report is an
+  // administrator's; anyone else sees the files.
   import Icon from './lib/Icon.svelte';
-  import { DOMAINS } from './lib/health';
-  import { FILE_KINDS, health, loadHealth } from './lib/healthReport.svelte';
+  import { health, loadHealth, problems } from './lib/healthReport.svelte';
   import Notice from './lib/Notice.svelte';
+  import PageLoading from './lib/PageLoading.svelte';
   import { HEALTH, healthOf, panel, viewPlaylist } from './lib/panel.svelte';
 
   $effect(loadHealth);
-
-  /** What a domain says now, in a line, and whether it needs the owner. */
-  function state(id: string): { line: string; urgent: boolean } {
-    const list = health.findings.filter((f) => f.domain === id);
-    if (id === 'files') {
-      const n = (health.problems ?? []).filter((p) => FILE_KINDS.some((k) => k.kind === p.kind)).length;
-      if (health.problems === null) return { line: '', urgent: false };
-      return { line: n ? `${n} ${n === 1 ? 'file' : 'files'} to look at` : 'All good', urgent: list.some((f) => f.level === 'needs_you') };
-    }
-    if (!list.length) return { line: 'All good', urgent: false };
-    return { line: list.length === 1 ? list[0].title : `${list.length} things to look at`, urgent: list.some((f) => f.level === 'needs_you') };
-  }
+  const list = $derived(problems());
 </script>
 
 <main>
   {#if health.error}<Notice text={health.error} />{/if}
-  <section class="group" aria-label="Health">
-    <div class="list">
-      {#each Object.entries(DOMAINS) as [id, d] (id)}
-        {@const open = healthOf(panel.viewed) === id}
-        {@const st = state(id)}
-        <button class="row" class:open class:urgent={st.urgent} aria-pressed={open} onclick={() => viewPlaylist(HEALTH + id)}>
-          <Icon name={d.icon} size={24} />
-          <span class="text">
-            <span class="name">{d.name}</span>
-            {#if st.line}<small>{st.line}</small>{/if}
-          </span>
-          <span class="chev"><Icon name="chevronRight" size={20} /></span>
-        </button>
+  {#if !health.loaded}
+    <PageLoading />
+  {:else if !list.length}
+    <p class="empty">Nothing needs you.</p>
+  {:else}
+    <ul class="cards">
+      {#each list as p (p.key)}
+        {@const open = healthOf(panel.viewed) === p.key}
+        <li>
+          <button class="card" class:open class:urgent={p.urgent} aria-pressed={open} onclick={() => viewPlaylist(HEALTH + p.key)}>
+            <Icon name={p.icon} size={24} />
+            <span class="text">
+              <small class="domain">{p.domain}</small>
+              <span class="name">{p.title}</span>
+              {#if p.line}<small>{p.line}</small>{/if}
+            </span>
+            <span class="chev"><Icon name="chevronRight" size={20} /></span>
+          </button>
+        </li>
       {/each}
-    </div>
-  </section>
+    </ul>
+  {/if}
 </main>
 
 <style>
-  /* As Settings' list (Settings.svelte): one column, its rows in one rounded block. */
+  /* One column, as Settings' list: beside a problem it is the list's own column (App). */
   main {
     padding: 16px clamp(12px, 2vw, 32px) 96px;
   }
 
-  .group {
+  .empty {
+    margin-top: 32px;
+    color: var(--muted);
+  }
+
+  .cards {
+    display: grid;
+    gap: 8px;
     max-width: 640px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
   }
 
-  .list {
-    overflow: hidden;
-    border-radius: 14px;
-    background: color-mix(in srgb, var(--text) 6%, transparent);
-  }
-
-  .row {
+  .card {
     display: flex;
     align-items: center;
     gap: 16px;
     width: 100%;
     min-height: 64px;
-    padding: 10px 14px 10px 16px;
+    padding: 12px 14px 12px 16px;
     border: 0;
-    border-radius: 0;
-    background: none;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--text) 6%, transparent);
     color: var(--text);
     font: inherit;
     text-align: left;
     cursor: pointer;
   }
 
-  .row + .row {
-    border-top: 1px solid var(--border);
+  .card:hover,
+  .card:focus-visible {
+    background: color-mix(in srgb, var(--text) 10%, transparent);
   }
 
-  .row:hover,
-  .row:focus-visible {
-    background: color-mix(in srgb, var(--text) 5%, transparent);
-  }
-
-  .row.open {
+  /* The problem open beside the list. */
+  .card.open {
     background: color-mix(in srgb, var(--accent) 16%, transparent);
   }
 
-  .row > :global(svg) {
+  .card > :global(svg) {
     flex: none;
     color: var(--accent);
   }
 
-  .row.urgent > :global(svg) {
+  .card.urgent > :global(svg) {
     color: var(--danger);
   }
 
@@ -116,6 +112,10 @@
     font-size: 13px;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .text .domain {
+    font-size: 12px;
   }
 
   .chev {

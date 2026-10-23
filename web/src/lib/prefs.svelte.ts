@@ -70,7 +70,7 @@ export type Prefs = {
   navFolded: boolean;
   /** The part of the settings last open: Settings opens on it beside its list on a roomy window ('' = the first). */
   settingsPart: string;
-  /** The Health domain last open beside its list. */
+  /** The Health problem last open beside its list. */
   healthPart: string;
   /** Each kind of list's columns in the owner's order (decision 0042, lib/columns), by id. */
   columns: Partial<Record<string, string[]>>;

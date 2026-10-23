@@ -48,7 +48,29 @@ pub struct Finding {
     pub since: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub open: Option<Open>,
+    /// What it is about, one by one (the owner, 2026-10-23: "more deeper information"): the albums waiting, the
+    /// playlists and their missing tracks, the pages that answered slowly; each item opens where it is, when it is a
+    /// thing of its own.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<Item>,
 }
+
+/// One thing a finding is about.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct Item {
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
+    /// An album it opens: (server, album id); its cover shows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album: Option<(String, String)>,
+    /// A playlist it opens (on its Repair tab).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub playlist: Option<String>,
+}
+
+/// At most this many items a finding lists.
+const ITEMS: usize = 100;
 
 #[derive(Debug, Serialize)]
 pub struct Report {
@@ -67,7 +89,7 @@ static FIRST_SEEN: Mutex<Option<HashMap<String, i64>>> = Mutex::new(None);
 
 /// A finding as a check makes it; its time is set by the report.
 fn finding(domain: &'static str, key: impl Into<String>, level: Level, count: u64, title: impl Into<String>) -> Finding {
-    Finding { domain, key: key.into(), title: title.into(), detail: None, count, of: None, level, since: 0, open: None }
+    Finding { domain, key: key.into(), title: title.into(), detail: None, count, of: None, level, since: 0, open: None, items: Vec::new() }
 }
 
 fn n(count: u64, one: &str, many: &str) -> String {
@@ -176,7 +198,13 @@ impl App {
         }
         let title = format!("{} in {}", n(missing, "missing track", "missing tracks"), n(broken.len() as u64, "playlist", "playlists"));
         let mut f = finding("playlists", "playlists:missing", Level::Warning, missing, title);
-        f.detail = Some(broken.iter().take(5).map(|p| p.name.as_str()).collect::<Vec<_>>().join(", "));
+        let mut most: Vec<_> = broken.clone();
+        most.sort_by(|a, b| b.dead.cmp(&a.dead).then_with(|| a.name.cmp(&b.name)));
+        f.items = most
+            .iter()
+            .take(ITEMS)
+            .map(|p| Item { title: p.name.clone(), line: Some(n(p.dead as u64, "missing track", "missing tracks")), playlist: Some(p.name.clone()), ..Item::default() })
+            .collect();
         f.open = Some(Open { page: "playlists", switch: None });
         Ok(vec![f])
     }
@@ -192,8 +220,40 @@ impl App {
                 _ => {}
             }
         }
-        let failed = self.incoming.jobs().iter().filter(|j| serde_json::to_value(&j.state).ok().and_then(|v| v.as_str().map(|s| s == "failed")) == Some(true)).count() as u64;
-        Ok(incoming(upgrades, duplicates, failed))
+        let jobs: Vec<_> = self.incoming.jobs().into_iter().filter(|j| serde_json::to_value(&j.state).ok().and_then(|v| v.as_str().map(|s| s == "failed")) == Some(true)).collect();
+        let mut out = incoming(upgrades, duplicates, jobs.len() as u64);
+        // Each album waiting, with the Music album it upgrades or duplicates; each conversion failed, with why.
+        for f in &mut out {
+            let kind = match f.key.as_str() {
+                "incoming:upgrades" => "upgrade",
+                "incoming:duplicates" => "duplicate",
+                "incoming:failed" => {
+                    f.items = jobs
+                        .iter()
+                        .take(ITEMS)
+                        .map(|j| Item { title: j.title.clone(), line: j.why.clone(), album: Some((j.source.clone(), j.album_id.clone())), ..Item::default() })
+                        .collect();
+                    continue;
+                }
+                _ => continue,
+            };
+            for s in &view.sources {
+                for (id, v) in s.verdicts.iter().filter(|(_, v)| v.kind == kind) {
+                    let a = s.albums.iter().find(|a| &a.id == id);
+                    let title = a.map_or_else(|| id.clone(), |a| a.title.clone());
+                    let by = a.and_then(|a| a.artist.clone());
+                    let line = [by, Some(format!("{} {}", if kind == "upgrade" { "upgrades" } else { "duplicates" }, v.library)), Some(v.why.clone()).filter(|w| !w.is_empty())]
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .join(" · ");
+                    f.items.push(Item { title, line: Some(line), album: Some((s.id.clone(), id.clone())), ..Item::default() });
+                }
+            }
+            f.items.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+            f.items.truncate(ITEMS);
+        }
+        Ok(out)
     }
 
     /// How far AudioMuse has heard the library (decision 0054): while it has not heard all of it.
@@ -207,6 +267,24 @@ impl App {
         }
         let mut f = finding("analysis", "analysis:audiomuse", Level::Info, heard, format!("AudioMuse has heard {heard} of {tracks}"));
         f.of = Some(tracks);
+        // The album folders with the most tracks not heard yet.
+        let mut by: HashMap<&str, (u64, u64)> = HashMap::new();
+        for x in facts.iter().filter(|x| x.track.is_some()) {
+            let dir = x.rel.rsplit_once('/').map_or("", |(d, _)| d);
+            let e = by.entry(dir).or_default();
+            e.1 += 1;
+            if x.sound.is_none() {
+                e.0 += 1;
+            }
+        }
+        let mut left: Vec<_> = by.into_iter().filter(|(_, (not, _))| *not > 0).collect();
+        left.sort_by(|a, b| b.1.0.cmp(&a.1.0).then_with(|| a.0.cmp(b.0)));
+        f.detail = Some(format!("{} not heard yet, in {}", n(tracks - heard, "track", "tracks"), n(left.len() as u64, "folder", "folders")));
+        f.items = left
+            .into_iter()
+            .take(ITEMS)
+            .map(|(dir, (not, all))| Item { title: dir.rsplit('/').next().unwrap_or(dir).trim_start_matches("../").to_string(), line: Some(format!("{not} of {all} not heard · {dir}")), ..Item::default() })
+            .collect();
         Ok(vec![f])
     }
 
@@ -257,15 +335,52 @@ fn last_hour(area: &str, what: &str, at: i64) -> anyhow::Result<u64> {
     d.count_since(area, what, (at - 3600) * 1000)
 }
 
+/// The last hour's events of a kind, grouped by `by` (a field, as the log keeps it): per group how often, the largest
+/// `ms`, and the clients; the most first.
+fn grouped(area: &str, what: &str, by: &str, at: i64) -> anyhow::Result<Vec<Item>> {
+    let Some(d) = crate::diagnostics::get() else { return Ok(Vec::new()) };
+    let rows = d.query(&crate::diagnostics::Query { area: Some(area.into()), since: Some((at - 3600) * 1000), limit: Some(1000), ..Default::default() })?;
+    let mut groups: HashMap<String, (i64, u64, std::collections::BTreeSet<String>)> = HashMap::new();
+    for r in rows.iter().filter(|r| r.what == what) {
+        let key = r.fields.get(by).and_then(|v| v.as_str().map(str::to_string).or_else(|| Some(v.to_string()))).unwrap_or_else(|| "—".into());
+        let g = groups.entry(key).or_default();
+        g.0 += r.count;
+        g.1 = g.1.max(r.fields.get("ms").and_then(serde_json::Value::as_u64).unwrap_or(0));
+        if let Some(c) = r.fields.get("client").and_then(|v| v.as_str()) {
+            g.2.insert(c.to_string());
+        }
+    }
+    let mut list: Vec<_> = groups.into_iter().collect();
+    list.sort_by(|a, b| b.1.0.cmp(&a.1.0).then_with(|| a.0.cmp(&b.0)));
+    Ok(list
+        .into_iter()
+        .take(ITEMS)
+        .map(|(key, (count, ms, clients))| {
+            let mut line = vec![format!("{count}×")];
+            if ms > 0 {
+                line.push(format!("up to {ms} ms"));
+            }
+            if !clients.is_empty() {
+                line.push(format!("from {}", clients.into_iter().collect::<Vec<_>>().join(", ")));
+            }
+            Item { title: key, line: Some(line.join(" · ")), ..Item::default() }
+        })
+        .collect())
+}
+
 fn check_sign_in(at: i64) -> anyhow::Result<Vec<Finding>> {
     let refused = last_hour("signin", "request refused", at)?;
     let throttled = last_hour("signin", "sign-in throttled", at)?;
     let mut out = Vec::new();
     if refused > 0 {
-        out.push(finding("sign-in", "sign-in:refused", Level::Warning, refused, format!("{} in the last hour", n(refused, "request refused", "requests refused"))));
+        let mut f = finding("sign-in", "sign-in:refused", Level::Warning, refused, format!("{} in the last hour", n(refused, "request refused", "requests refused")));
+        f.items = grouped("signin", "request refused", "path", at)?;
+        out.push(f);
     }
     if throttled > 0 {
-        out.push(finding("sign-in", "sign-in:throttled", Level::Warning, throttled, format!("{} in the last hour", n(throttled, "sign-in throttled", "sign-ins throttled"))));
+        let mut f = finding("sign-in", "sign-in:throttled", Level::Warning, throttled, format!("{} in the last hour", n(throttled, "sign-in throttled", "sign-ins throttled")));
+        f.items = grouped("signin", "sign-in throttled", "client", at)?;
+        out.push(f);
     }
     Ok(out)
 }
@@ -276,10 +391,15 @@ fn check_server(at: i64) -> anyhow::Result<Vec<Finding>> {
     let runaway = last_hour("server", "client requests too often", at)?;
     let mut out = Vec::new();
     if slow > 0 {
-        out.push(finding("server", "server:slow", Level::Info, slow, format!("{} in the last hour", n(slow, "slow answer", "slow answers"))));
+        let mut f = finding("server", "server:slow", Level::Info, slow, format!("{} in the last hour", n(slow, "slow answer", "slow answers")));
+        f.detail = Some("Answers that took longer than a second, by page: how often, the slowest, and who asked.".into());
+        f.items = grouped("server", "slow response", "path", at)?;
+        out.push(f);
     }
     if runaway > 0 {
-        out.push(finding("server", "server:runaway", Level::Warning, runaway, format!("A client asked far too often in the last hour ({runaway}×)")));
+        let mut f = finding("server", "server:runaway", Level::Warning, runaway, format!("A client asked far too often in the last hour ({runaway}×)"));
+        f.items = grouped("server", "client requests too often", "client", at)?;
+        out.push(f);
     }
     Ok(out)
 }

@@ -13,8 +13,7 @@
   import Downloads from './Downloads.svelte';
   import SettingsPanel from './lib/SettingsPanel.svelte';
   import HealthPanel from './lib/HealthPanel.svelte';
-  import { DOMAINS } from './lib/health';
-  import { health } from './lib/healthReport.svelte';
+  import { health, problems } from './lib/healthReport.svelte';
   import { SECTIONS, type SettingsSection } from './lib/settingsSections.svelte';
   import { askDownloads, downloads, inApp } from './lib/app.svelte';
   import { reach } from './lib/reach.svelte';
@@ -168,9 +167,10 @@
   // Settings on a roomy window is its list beside a part (the owner, 2026-10-19: "just force the panel open on the
   // settings page"): the panel is always beside it there, showing a part.
   const settingsSplit = $derived(page === 'settings' && player.roomy);
-  // Health as Settings (the owner, 2026-10-23): its list beside a domain, the panel always beside it on a roomy window.
+  // Health as Settings (the owner, 2026-10-23): its problems' list beside one problem, the panel always beside it on a
+  // roomy window.
   const healthSplit = $derived(page === 'health' && me.admin && player.roomy);
-  const healthShown = $derived(healthOf(panel.viewed) && DOMAINS[healthOf(panel.viewed)!] ? healthOf(panel.viewed) : null);
+  const healthShown = $derived(healthOf(panel.viewed));
   // Insights' own panel (lib/InsightsPanel), when it shows: on a roomy window always beside the page, at a fixed width
   // (the owner, 2026-10-23: never full screen), whatever the place chosen for the others.
   const insightsShown = $derived(panel.viewed === INSIGHTS_VIEW && !panel.playerTop);
@@ -233,13 +233,12 @@
   $effect(() => {
     if (settingsShown) prefs.settingsPart = settingsShown;
   });
-  // Beside Health's list a domain is always open: the one last open, else the first with something to look at.
+  // Beside Health's list a problem is always open: the one last open while it lasts, else the first (the worst).
   $effect(() => {
     if (!healthSplit || healthShown || !health.loaded || fromHash() !== 'health') return;
-    const ids = Object.keys(DOMAINS);
-    const first = ids.find((d) => health.findings.some((f) => f.domain === d)) ?? ids[0];
-    const part = ids.includes(prefs.healthPart) ? prefs.healthPart : first;
-    untrack(() => viewInPlace(HEALTH_VIEW + part));
+    const keys = problems().map((x) => x.key);
+    const part = keys.includes(prefs.healthPart) ? prefs.healthPart : keys[0];
+    if (part) untrack(() => viewInPlace(HEALTH_VIEW + part));
   });
   $effect(() => {
     if (healthShown) prefs.healthPart = healthShown;
@@ -553,7 +552,7 @@
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
       <aside class="player-side" class:whole={settingsSplit || healthSplit || insightsFixed} aria-label={panelShowsPlayer() ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
         <SheetArea area={() => sideEl}>
-          {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if panelShowsPlayer()}<NowPlaying place="side" />{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else if healthShown}<HealthPanel domain={healthShown} beside={healthSplit} />{:else if insightsShown}<InsightsPanel />{:else}<PlaylistView />{/if}
+          {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if panelShowsPlayer()}<NowPlaying place="side" />{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else if healthShown}<HealthPanel problem={healthShown} beside={healthSplit} />{:else if insightsShown}<InsightsPanel />{:else}<PlaylistView />{/if}
         </SheetArea>
       </aside>
     {/if}
@@ -561,7 +560,7 @@
 
   {#if playlistLayer}
     <div class="playlist-layer" role="dialog" aria-label="Playlist" style:--mini-h={`${miniSpace}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
-      {#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel domain={healthShown} />{:else if insightsShown}<InsightsPanel />{:else}<PlaylistView />{/if}
+      {#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel />{:else}<PlaylistView />{/if}
     </div>
   {/if}
   {#if mini}

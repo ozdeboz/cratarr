@@ -74,7 +74,7 @@ export function backFromThing(part: string) {
   read();
 }
 
-/** A part of Health (`health:servers`), opened from the Health page's list (lib/HealthPanel), as Settings' parts. */
+/** A problem of Health (`health:<its key>`), opened from the Health page's cards (lib/HealthPanel), as Settings' parts. */
 export const HEALTH = 'health:';
 export const healthOf = (viewed: string | null) => (viewed?.startsWith(HEALTH) ? viewed.slice(HEALTH.length) : null);
 
