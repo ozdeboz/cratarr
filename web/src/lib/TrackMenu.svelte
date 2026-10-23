@@ -189,9 +189,11 @@
   }
   /** Sounds like it: a crate seeded with the track (Cratarr's own, which AudioMuse hears). */
   function goToLike() {
+    // Read before closing: closing lets go of the track.
+    const id = t!.id;
     onclose();
     player.full = false;
-    viewLike(t!.id);
+    viewLike(id);
   }
   const plays = $derived(forPlaying ? (np?.info?.play_count ?? null) : (other?.info?.play_count ?? null));
   const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
