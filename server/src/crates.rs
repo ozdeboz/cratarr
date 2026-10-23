@@ -198,6 +198,26 @@ pub struct AxisView {
     pub max: Option<f64>,
     /// How many of the files (a list's items) have a value on this axis (BPM is only where the files say it).
     pub known: usize,
+    /// A range's density (the owner, 2026-10-23: the profile's bars as the sliders): how many tracks fall in each of
+    /// `DENSITY_BINS` equal steps from `min` to `max`; empty for other kinds.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub bins: Vec<u32>,
+    /// Whether the tracks within one item differ on it, so "any" or "all of its tracks" can mean different things (an
+    /// album's tracks share its year and its heart: they cannot; a playlist's can). False where items are tracks.
+    pub varies: bool,
+}
+
+/// How many steps a range's density has.
+pub const DENSITY_BINS: usize = 24;
+
+/// How many of `vals` fall in each of `DENSITY_BINS` equal steps from `lo` to `hi` (those outside in the end ones).
+pub fn density(vals: impl IntoIterator<Item = f64>, lo: f64, hi: f64) -> Vec<u32> {
+    let mut bins = vec![0; DENSITY_BINS];
+    let width = (hi - lo).max(f64::EPSILON);
+    for v in vals.into_iter().filter(|v| v.is_finite()) {
+        bins[(((v - lo) / width) * DENSITY_BINS as f64).floor().clamp(0.0, (DENSITY_BINS - 1) as f64) as usize] += 1;
+    }
+    bins
 }
 
 /// The tempo spread (decision 0041): 5-BPM bands from 60 to 180 BPM, always the same scale; a tempo under 60 counts in
@@ -228,6 +248,109 @@ pub fn tempo_bands(bpms: impl IntoIterator<Item = Option<f64>>) -> TempoBands {
     out
 }
 
+/// A list's profile (the owner, 2026-10-23): what its tracks are like, shown on top of it. Its most telling style tags
+/// and artists (common in the list, rare in the library, on at least a few of its tracks), each number's density with
+/// its middle half and middle on one scale for every list (the library's own, tempo today's 60 to 180 BPM), and how
+/// far each of CLAP's moods sits above or below the library's. A number all its tracks share is no row (an album's
+/// year): one value is no spread.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct Profile {
+    pub tracks: usize,
+    /// How many CLAP heard (the moods, danceability).
+    pub heard: usize,
+    pub styles: Vec<String>,
+    pub artists: Vec<String>,
+    pub numbers: Vec<NumberRow>,
+    pub moods: Vec<MoodLift>,
+}
+
+/// One number of a profile: its scale (`lo` to `hi`), the density over it (`DENSITY_BINS`), its middle half and middle.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NumberRow {
+    /// "tempo", "energy", "danceability", "year".
+    pub key: &'static str,
+    pub lo: f64,
+    pub hi: f64,
+    pub bins: Vec<u32>,
+    pub q1: f64,
+    pub mid: f64,
+    pub q3: f64,
+}
+
+/// One of CLAP's moods: the list's middle against the library's, -1 (far below) to 1 (far above).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MoodLift {
+    pub name: &'static str,
+    pub lift: f64,
+}
+
+/// How many telling style tags and artists a profile names.
+const TELLING: usize = 4;
+
+/// The profile of `list` (its tracks' facts) against `library` (every file's).
+pub fn profile(list: &[&Facts], library: &[&Facts]) -> Profile {
+    let n = list.len();
+    let mut out = Profile { tracks: n, heard: list.iter().filter(|f| f.clap_moods.is_some()).count(), ..Profile::default() };
+    out.styles = telling(list, library, |f| &f.styles);
+    out.artists = telling(list, library, |f| &f.artists);
+    let sorted = |vals: Vec<f64>| {
+        let mut v: Vec<f64> = vals.into_iter().filter(|x| x.is_finite()).collect();
+        v.sort_by(f64::total_cmp);
+        v
+    };
+    let numbers: [(&str, fn(&Facts) -> Option<f64>); 4] =
+        [("tempo", |f| f.bpm), ("energy", |f| f.energy), ("danceability", |f| f.danceability), ("year", |f| f.year)];
+    for (key, get) in numbers {
+        let mine = sorted(list.iter().filter_map(|f| get(f)).collect());
+        if mine.first() == mine.last() {
+            continue;
+        }
+        let (lo, hi) = if key == "tempo" {
+            (TEMPO_LO, TEMPO_LO + TEMPO_BAND * TEMPO_BANDS as f64)
+        } else {
+            let all = sorted(library.iter().filter_map(|f| get(f)).collect());
+            (crate::similarity::quantile(&all, 0.05), crate::similarity::quantile(&all, 0.95))
+        };
+        let q = |p| crate::similarity::quantile(&mine, p);
+        out.numbers.push(NumberRow { key, lo, hi, bins: density(mine.iter().copied(), lo, hi), q1: q(0.25), mid: q(0.5), q3: q(0.75) });
+    }
+    if out.heard > 0 {
+        for (k, name) in crate::similarity::MOODS.into_iter().enumerate() {
+            let of = |fs: &[&Facts]| sorted(fs.iter().filter_map(|f| f.clap_moods.map(|m| m[k] as f64)).collect());
+            let (mine, all) = (of(list), of(library));
+            let half = (crate::similarity::quantile(&all, 0.95) - crate::similarity::quantile(&all, 0.05)) / 2.0;
+            let lift = (crate::similarity::quantile(&mine, 0.5) - crate::similarity::quantile(&all, 0.5)) / half.max(f64::EPSILON);
+            out.moods.push(MoodLift { name, lift: lift.clamp(-1.0, 1.0) });
+        }
+    }
+    out
+}
+
+/// The names most telling of a list: on many of its tracks and few of the library's (tf-idf, as one similarity
+/// weighs words), on at least two of its tracks or a twentieth of them (one odd tag does not lead an album).
+fn telling(list: &[&Facts], library: &[&Facts], names: fn(&Facts) -> &[String]) -> Vec<String> {
+    let count = |fs: &[&Facts]| {
+        let mut c: HashMap<String, (usize, String)> = HashMap::new();
+        for f in fs {
+            for name in names(f).iter().collect::<std::collections::BTreeSet<_>>() {
+                c.entry(name.to_lowercase()).or_insert((0, name.clone())).0 += 1;
+            }
+        }
+        c
+    };
+    let (mine, all) = (count(list), count(library));
+    let least = if list.len() < 2 { 1 } else { 2.max(list.len().div_ceil(20)) };
+    let total = library.len().max(1) as f64;
+    let mut weighed: Vec<(f64, String)> = mine
+        .into_iter()
+        .filter(|(_, (c, _))| *c >= least)
+        .map(|(k, (c, name))| (c as f64 / list.len() as f64 * (total / all.get(&k).map_or(1, |x| x.0).max(1) as f64).ln(), name))
+        .filter(|(w, _)| *w > 0.0)
+        .collect();
+    weighed.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    weighed.into_iter().take(TELLING).map(|(_, n)| n).collect()
+}
+
 /// What the axes test about one file of the libraries.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Facts {
@@ -250,6 +373,15 @@ pub struct Facts {
     /// Its track in the catalogue, and AudioMuse's "sounds like" vector of it (unit length; none where not heard).
     pub track: Option<i64>,
     pub sound: Option<Arc<[f32]>>,
+    /// Its artists and album artist (a compilation's left out), for a list's profile.
+    pub artists: Vec<String>,
+    /// CLAP's score of each mood, in `similarity::MOODS`' order; none until CLAP heard it.
+    pub clap_moods: Option<[f32; 5]>,
+}
+
+/// A compilation's album artist ("Various Artists"): no artist.
+pub fn various(name: &str) -> bool {
+    matches!(name.trim().to_lowercase().as_str(), "various artists" | "various" | "va" | "verschiedene interpreten")
 }
 
 /// What the axes test about the library as a whole: which playlists hold a line, which lines are favourites.
@@ -321,9 +453,29 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
         (min, max, items.iter().filter(|t| t.iter().any(|f| get(f).is_some())).count())
     };
     let known = |has: fn(&Facts) -> bool| items.iter().filter(|t| t.iter().any(|f| has(f))).count();
+    // Whether some item's tracks differ on an axis: by what each says on it.
+    let varies = |key: &str| {
+        let said = |f: &Facts| -> String {
+            match key {
+                "favourite" | "like" => f.rel.clone(),
+                // One album, one heart: its tracks are in one folder.
+                "favourite_album" => f.rel.rsplit_once('/').map_or("", |(d, _)| d).to_string(),
+                "playlist" => membership.and_then(|m| m.get(&f.rel)).map(|l| l.join("|")).unwrap_or_default(),
+                "genre" => f.genres.iter().map(|g| g.to_lowercase()).collect::<Vec<_>>().join("|"),
+                "mood" => f.moods.join("|"),
+                "style" => f.styles.join("|"),
+                "year" => format!("{:?}", f.year),
+                "bpm" => format!("{:?}", f.bpm),
+                "energy" => format!("{:?}", f.energy),
+                "danceability" => format!("{:?}", f.danceability),
+                _ => String::new(),
+            }
+        };
+        items.iter().any(|t| t.len() > 1 && t.iter().any(|f| said(f) != said(t[0])))
+    };
     AXES.iter()
         .map(|&(key, label, kind)| {
-            let mut a = AxisView { key, label, kind, values: Vec::new(), counts: Vec::new(), min: None, max: None, known: items.len() };
+            let mut a = AxisView { key, label, kind, values: Vec::new(), counts: Vec::new(), min: None, max: None, known: items.len(), bins: Vec::new(), varies: varies(key) };
             match key {
                 "playlist" => {
                     a.values = playlists.to_vec();
@@ -350,6 +502,15 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                 }
                 "like" => a.known = known(|f| f.sound.is_some()),
                 _ => {}
+            }
+            if let (Some(lo), Some(hi)) = (a.min, a.max) {
+                let get: fn(&Facts) -> Option<f64> = match key {
+                    "year" => |f| f.year,
+                    "bpm" => |f| f.bpm,
+                    "energy" => |f| f.energy,
+                    _ => |f| f.danceability,
+                };
+                a.bins = density(tracks().filter_map(get), lo, hi);
             }
             a
         })
@@ -828,6 +989,37 @@ mod tests {
         assert!(select(&files, &like.conditions, &w).is_empty());
         let unheard = like_crate("like:tr-9", "Unheard", vec!["tr-9".into()]);
         assert!(select(&files, &resolved(&unheard.conditions, &files), &w).is_empty());
+    }
+
+    #[test]
+    fn a_profile_names_what_tells_and_leaves_out_one_value() {
+        let t = |rel: &str, bpm: f64, styles: &[&str]| Facts {
+            rel: rel.into(),
+            year: Some(2003.0),
+            bpm: Some(bpm),
+            styles: styles.iter().map(|s| s.to_string()).collect(),
+            ..Facts::default()
+        };
+        let album = [t("A/1.flac", 170.0, &["jungle", "electronic"]), t("A/2.flac", 172.0, &["jungle", "electronic"]), t("A/3.flac", 120.0, &["odd", "electronic"])];
+        let mut library: Vec<Facts> = (0..40).map(|n| t(&format!("L/{n}.flac"), 100.0, &["electronic"])).collect();
+        library.extend(album.iter().cloned());
+        let (list, all): (Vec<&Facts>, Vec<&Facts>) = (album.iter().collect(), library.iter().collect());
+        let p = profile(&list, &all);
+        assert_eq!(p.styles, ["jungle"], "the rare one; electronic is everywhere, one track's odd tag not enough");
+        assert_eq!(p.numbers.iter().map(|r| r.key).collect::<Vec<_>>(), ["tempo"], "the year is one value: no row");
+        assert_eq!(p.numbers[0].mid, 170.0);
+    }
+
+    #[test]
+    fn any_or_all_is_offered_only_where_an_items_tracks_differ() {
+        let t = |rel: &str, year: f64, bpm: f64| Facts { rel: rel.into(), year: Some(year), bpm: Some(bpm), ..Facts::default() };
+        let album = [t("A/1.flac", 1998.0, 120.0), t("A/2.flac", 1998.0, 128.0)];
+        let items: Vec<Vec<&Facts>> = vec![album.iter().collect()];
+        let slices: Vec<&[&Facts]> = items.iter().map(Vec::as_slice).collect();
+        let axes = list_axes(&slices, &[], None);
+        let varies = |k: &str| axes.iter().find(|a| a.key == k).unwrap().varies;
+        assert!(!varies("year") && !varies("favourite_album"), "an album's tracks share its year and its heart");
+        assert!(varies("bpm") && varies("favourite"));
     }
 
     fn f(rel: &str, genres: &[&str], year: Option<f64>, bpm: Option<f64>) -> Facts {

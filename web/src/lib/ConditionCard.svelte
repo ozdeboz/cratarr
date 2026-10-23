@@ -18,6 +18,7 @@
   import Icon from './Icon.svelte';
   import type { FilterCondition } from './prefs.svelte';
   import Switch from './Switch.svelte';
+  import DensityRange from './DensityRange.svelte';
   import TempoRange from './TempoRange.svelte';
 
   let {
@@ -46,6 +47,11 @@
     { value: 'all' as const, label: 'all' },
   ];
   const quantifier = $derived(condition.quantifier ?? 'any');
+  /** Any or all of an item's tracks only where they can differ on the axis (not an album's year: its tracks share
+   *  it, so both would pick the same albums). */
+  const tested = $derived(!!items && !!axis?.varies);
+  /** The scale's ends as the profile names them (lib/ListProfile). */
+  const ENDS: Record<string, [string, string]> = { energy: ['calm', 'intense'], danceability: ['still', 'danceable'] };
 
   /** What it is set to, in a few words ("Downtempo, Trip Hop", "80–105", "2015 on", "yes"). */
   const summary = $derived.by(() => {
@@ -60,7 +66,7 @@
     }
     s = condition.not ? `not ${s}` : s;
     // All is not the default: said folded too.
-    return items && quantifier === 'all' ? `${s}, all tracks` : s;
+    return tested && quantifier === 'all' ? `${s}, all tracks` : s;
   });
 
   // A values axis can have many (genres): a search, and the chosen ones first, then the most common.
@@ -118,7 +124,18 @@
         </label>
       {:else if axis && condition.value.kind === 'range'}
         {@const r = condition.value}
-        {#if axis.key === 'bpm' && bpms}
+        {#if axis.bins?.length && axis.min !== null && axis.max !== null && axis.max > axis.min}
+          <!-- The profile's bar as the slider: the density over the list's span, the chosen part lit. -->
+          <DensityRange
+            bins={axis.bins}
+            min={Math.floor(axis.min)}
+            max={Math.ceil(axis.max)}
+            value={{ min: r.min, max: r.max }}
+            {label}
+            ends={ENDS[axis.key] ?? [`${Math.floor(axis.min)}`, `${Math.ceil(axis.max)}${axis.key === 'bpm' ? ' BPM' : ''}`]}
+            onchange={(v) => (condition.value = { kind: 'range', ...v })}
+          />
+        {:else if axis.key === 'bpm' && bpms}
           <TempoRange {bpms} bind:value={() => tempoRange, (v) => (condition.value = { kind: 'range', min: v?.[0] ?? null, max: v?.[1] ?? null })} />
         {:else}
           <div class="range">
@@ -132,7 +149,7 @@
         <button class="notpill" aria-pressed={condition.not} onclick={() => (condition.not = !condition.not)}>Not</button>
         <button class="remove" onclick={onremove}>Remove</button>
       </div>
-      {#if items}
+      {#if tested}
         <p class="tested">
           Matching
           <span class="seg" role="radiogroup" aria-label="Any or all tracks">

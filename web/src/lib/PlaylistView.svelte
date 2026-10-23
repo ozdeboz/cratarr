@@ -27,6 +27,8 @@
     coverUrl,
     crateRows,
     crateTempo,
+    filterList,
+    type ListProfileData,
     type TempoBands,
     type CrateLook,
     crateToPlaylist,
@@ -110,6 +112,7 @@
   import TrackCover from './TrackCover.svelte';
   import Section from './Section.svelte';
   import Spread, { bandsOf, layerColor } from './Spread.svelte';
+  import ListProfile from './ListProfile.svelte';
   import type { Cell } from './Row.svelte';
   import { fit } from './columns.svelte';
   import { fromAction } from 'svelte/attachments';
@@ -121,7 +124,7 @@
   import SelectBar from './SelectBar.svelte';
   import { work } from './panelWork.svelte';
   import { prefs, type ListSort, type PanelKind } from './prefs.svelte';
-  import { conditionsFor, filtersOn, hiddenLibraries, passing, switchOn } from './listFilter.svelte';
+  import { conditionsFor, filtersOn, hiddenLibraries, inView, passing, switchOn } from './listFilter.svelte';
   import { trackOrders, type TrackOrder } from './pageView.svelte';
   import { clockText, paused, playing } from './remote.svelte';
   import { on } from './events.svelte';
@@ -587,6 +590,26 @@
     if (tab !== 'info' && !multi) return;
     // Info's spread, and a selection's stacked one in the header (decision 0041).
     for (const pid of ids) untrack(() => loadSection(pid));
+  });
+  /** The list's profile (the owner, 2026-10-23: lib/ListProfile), worked out on the server over all its tracks, as
+   *  the Filter sheet's list is (lib/listFilter inView); asked again after an edit. Not a selection's. */
+  let profile = $state<ListProfileData | null>(null);
+  $effect(() => {
+    const at = inView[kind];
+    void saved;
+    void undos.n;
+    profile = null;
+    if (!at || multi || crateEditing || creating) return;
+    let gone = false;
+    filterList(at.list, [], at.source, at.list.kind === 'crate' ? hiddenLibraries() : undefined).then(
+      (f) => !gone && (profile = f.profile ?? null),
+      () => {
+        /* no profile without it */
+      },
+    );
+    return () => {
+      gone = true;
+    };
   });
   /** A crate's tempo spread, counted on the server (a genre holds thousands of tracks; its rows come a page at a time). */
   let crateBands = $state<TempoBands | null>(null);
@@ -1539,7 +1562,9 @@
           <!-- A crate's exclusions (decision 0024, amended 2026-10-19): a tap shows them, to put back. -->
           {#if leftOut}<button class="details left-out" onclick={() => (leftOutOpen = true)}><Icon name="crateOut" size={14} /><span>{leftOut.toLocaleString()} excluded</span></button>{/if}
         </div>
-        {#if headTempo}
+        {#if profile && !multi}
+          <div class="head-spread"><ListProfile data={profile} /></div>
+        {:else if headTempo}
           <div class="head-spread">
             <Spread series={headTempo.series} />
             <p class="details">{headTempo.withTempo.toLocaleString()} of {plural(headTempo.total, 'track')} have a tempo</p>

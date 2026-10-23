@@ -67,6 +67,8 @@ pub struct Filtered {
     pub total: usize,
     pub axes: Vec<crates::AxisView>,
     pub tempo: crates::TempoBands,
+    /// A list of tracks' profile (the owner, 2026-10-23), over all its tracks; none for albums and playlists.
+    pub profile: Option<crates::Profile>,
 }
 
 /// A line's facts; none for a line the catalogue has no file for (a missing one, or switched off).
@@ -130,9 +132,14 @@ pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Fi
     let tracks: Vec<&[&Facts]> = grouped.iter().map(|(_, t)| t.as_slice()).collect();
     let axes = crates::list_axes(&tracks, &app.playlists.own_playlist_names().await?, Some(lib.membership()));
     let tempo = crates::tempo_bands(tracks.iter().flat_map(|t| t.iter().map(|f| f.bpm)));
+    let profile = (items == Items::Tracks).then(|| {
+        let mine: Vec<&Facts> = tracks.iter().flat_map(|t| t.iter().copied()).filter(|f| !f.rel.is_empty()).collect();
+        let library: Vec<&Facts> = lib.files().collect();
+        crates::profile(&mine, &library)
+    });
     // A crate's rows are paged on the server: they come filtered there, so its thousands of lines are not sent here.
     let keys = if matches!(r.list, List::Crate { .. }) { Vec::new() } else { keys };
-    Ok(Filtered { source: lib.source.clone(), items, keys, passed, total: grouped.len(), axes, tempo })
+    Ok(Filtered { source: lib.source.clone(), items, keys, passed, total: grouped.len(), axes, tempo, profile })
 }
 
 /// An album's or an artist's rows by their `entry`, each with its file's line (the catalogue's link of the server's

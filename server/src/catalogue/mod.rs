@@ -777,7 +777,7 @@ impl Catalogue {
         let db = self.db();
         type Place = (i64, String);
         let mut st = db.prepare(
-            "SELECT folder, rel, name, value FROM tags WHERE folder >= 0 AND name IN ('genre', 'date', 'originaldate', 'bpm') ORDER BY folder, rel, n",
+            "SELECT folder, rel, name, value FROM tags WHERE folder >= 0 AND name IN ('genre', 'date', 'originaldate', 'bpm', 'artist', 'albumartist') ORDER BY folder, rel, n",
         )?;
         let mut by: HashMap<Place, Vec<(String, String)>> = HashMap::new();
         for row in st.query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, String>(2)?, r.get::<_, String>(3)?)))? {
@@ -809,18 +809,29 @@ impl Catalogue {
                 let tags = by.remove(&place).unwrap_or_default();
                 let first: BTreeMap<&str, &str> =
                     tags.iter().rev().map(|(n, v)| (n.as_str(), v.as_str())).collect::<BTreeMap<_, _>>();
-                let mut genres: Vec<String> = Vec::new();
+                let (mut genres, mut artists): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
                 for (n, v) in &tags {
-                    if n == "genre" && !genres.iter().any(|g| g.eq_ignore_ascii_case(v)) {
-                        genres.push(v.clone());
+                    let into = match n.as_str() {
+                        "genre" => &mut genres,
+                        // A compilation's album artist is no artist (as the radio has it).
+                        "artist" | "albumartist" if !crate::crates::various(v) => &mut artists,
+                        _ => continue,
+                    };
+                    if !into.iter().any(|g| g.eq_ignore_ascii_case(v)) {
+                        into.push(v.clone());
                     }
                 }
-                let (mut energy, mut danceability, mut moods, mut styles, mut track, mut sound) = (None, None, Vec::new(), Vec::new(), None, None);
+                let (mut energy, mut danceability, mut moods, mut styles, mut track, mut sound, mut clap_moods) = (None, None, Vec::new(), Vec::new(), None, None, None);
                 if let Some((e, style, clap, t, embedding)) = muse.remove(&place) {
                     track = Some(t);
                     // Its "sounds like" (decision 0054), of unit length: what a Sounds like condition compares.
                     let v: Vec<f32> = embedding.unwrap_or_default().chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
                     sound = crate::similarity::mean_sound(&[&v]).map(std::sync::Arc::from);
+                    // Every mood's score, for a list's profile; none until CLAP heard the file (all 0).
+                    let scores = crate::app::audiomuse::weighted(clap.as_deref());
+                    if scores.iter().any(|(_, x)| *x > 0.0) {
+                        clap_moods = Some(crate::similarity::MOODS.map(|m| scores.iter().find(|(n, _)| n == m).map_or(0.0, |(_, x)| *x as f32)));
+                    }
                     let (m, d) = crate::app::audiomuse::moods_and_danceability(&AudioMuseRow { moods: clap, ..AudioMuseRow::default() });
                     energy = e.map(|e| (e * 100.0).round());
                     danceability = d.map(|d| (d * 100.0).round());
@@ -840,6 +851,8 @@ impl Catalogue {
                     styles,
                     track,
                     sound,
+                    artists,
+                    clap_moods,
                 })
             })
             .collect())

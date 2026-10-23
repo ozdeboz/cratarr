@@ -48,23 +48,6 @@ pub enum Signal {
 
 const SIGNALS: usize = 12;
 
-impl Signal {
-    pub const ALL: [Signal; SIGNALS] = [
-        Signal::Tracks,
-        Signal::Playlists,
-        Signal::Artists,
-        Signal::Genres,
-        Signal::Tags,
-        Signal::Styles,
-        Signal::Sound,
-        Signal::Era,
-        Signal::Tempo,
-        Signal::Energy,
-        Signal::Danceability,
-        Signal::Mood,
-    ];
-}
-
 /// The kinds of words, in `Track::words`' order, and the signal each is.
 const WORDS: [Signal; 5] = [Signal::Playlists, Signal::Artists, Signal::Genres, Signal::Tags, Signal::Styles];
 /// CLAP's moods (its `other_features` but danceable), in `Track::moods`' order.
@@ -270,13 +253,6 @@ impl Profile {
         &self.counts[1]
     }
 
-    /// Its genres, the most telling first (tf-idf), with their weights.
-    pub fn genres(&self) -> Vec<(u32, f64)> {
-        let mut v: Vec<(u32, f64)> = self.weights[2].iter().map(|(&g, &x)| (g, x)).collect();
-        v.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-        v
-    }
-
     /// How alike a track (at place `i` in `lib`) is to this set.
     pub fn to_track(&self, lib: &Library, i: usize, t: &Track) -> Signals {
         let mut out = Signals::default();
@@ -442,7 +418,7 @@ fn sorted_shared(a: &[usize], b: &[usize]) -> usize {
 }
 
 /// The value at `q` (0..1) of sorted values, between neighbours; 0 for none.
-fn quantile(sorted: &[f64], q: f64) -> f64 {
+pub fn quantile(sorted: &[f64], q: f64) -> f64 {
     match sorted.len() {
         0 => 0.0,
         n => {
