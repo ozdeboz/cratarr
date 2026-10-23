@@ -204,6 +204,8 @@ export type PlayOnPlayer = {
   /** `app` (the Android app), `kodi` (a Kodi Cratarr drives: it follows a group, never leads one) or `browser` (a page
    *  that plays in a browser, a player while it is open: never in a group). */
   kind?: 'app' | 'kodi' | 'browser';
+  /** It has been in a group (only such players need a speaker delay). */
+  grouped?: boolean;
   /** Its link to Cratarr (decision 0045). */
   link?: PlayerLink;
   track: QueueTrack | null;

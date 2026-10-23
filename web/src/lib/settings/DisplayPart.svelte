@@ -47,7 +47,11 @@
 </Group>
 
 <Group title="Content">
-  <Item name="Music profiles" toggle={{ checked: prefs.profile, onchange: (on) => (prefs.profile = on) }} />
+  <Item
+    name="Music profiles"
+    more={"A playlist's, a crate's or an artist's music at a glance, at the top of its page: its tempo, energy and danceability, its era, its styles, and its moods against your whole library.\n\nMost of it comes from AudioMuse, which listens to every track in Cratarr's library: tracks it has not heard yet count only by their tags (Health shows how far it is).\n\nBelow, choose which rows a profile shows and in what order; the rows above the line stay when one is folded."}
+    toggle={{ checked: prefs.profile, onchange: (on) => (prefs.profile = on) }}
+  />
   <!-- The rows in their order, the fold line among them: above it stays when a profile is folded. -->
   {#if prefs.profile}<OrderList
     items={PROFILE_ROWS}

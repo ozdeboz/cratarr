@@ -549,6 +549,9 @@ pub struct PlayerView {
     pub group: Option<String>,
     /// Its speaker delay (ms), decision 0037.
     pub delay_ms: u16,
+    /// It has been in a group (`PlayOnSettings::grouped`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub grouped: bool,
     /// `app` (the Android app) or `kodi` (a Kodi Cratarr drives): what it can do (a Kodi joins no group).
     pub kind: &'static str,
     /// The whole queue, for one player asked for by name.
@@ -576,6 +579,10 @@ pub struct PlayOnSettings {
     /// earlier. Set with `PUT /api/players/{name}/delay`; kept when the webhooks are saved.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub delays: std::collections::BTreeMap<String, u16>,
+    /// The players that have ever been in a group (the owner, 2026-10-24: only they need a speaker delay, so only they
+    /// are listed for one); kept when the webhooks are saved, a player forgotten leaves it.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub grouped: std::collections::BTreeSet<String>,
     /// Kodis Cratarr plays on (their passwords are never shown: blank keeps the saved one).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub kodi: Vec<super::kodi::KodiConfig>,
@@ -868,6 +875,7 @@ impl Entry {
             current_entry_id: track.as_ref().map(|t| t.entry.clone()).filter(|e| !e.is_empty()),
             group: self.leader.clone(),
             delay_ms: 0,
+            grouped: false,
             kind: self.kind.name(),
             track,
             queue: with_queue.then(|| self.queue.tracks.clone()),
@@ -919,6 +927,17 @@ fn claim<'a>(entries: &'a mut HashMap<String, Entry>, name: &str, whose: Option<
         e.owner = whose.map(str::to_string);
     }
     Ok(e)
+}
+
+/// How long a player still named as a browser names itself stays known once offline (`PlayOn::expire_generic`).
+const GENERIC_IDLE: Duration = Duration::from_secs(3600);
+
+/// Whether a name is one a browser gives itself (lib/playOnTarget's `defaultBrowserName`, "Chrome on Android", with
+/// `freeName`'s number when taken: "Chrome on Android 2"): no one chose it.
+fn generic_name(name: &str) -> bool {
+    let base = name.rsplit_once(' ').filter(|(_, n)| n.parse::<u32>().is_ok()).map_or(name, |(b, _)| b);
+    let (browser, os) = base.split_once(" on ").map_or((base, None), |(b, o)| (b, Some(o)));
+    ["Edge", "Firefox", "Chrome", "Safari", "Browser"].contains(&browser) && os.is_none_or(|o| ["Android", "iOS", "Windows", "Mac", "Linux"].contains(&o))
 }
 
 /// A player as seen: a player of a group that does not lead it shows what the group plays, with its own name, reach
@@ -1346,6 +1365,7 @@ impl PlayOn {
 
     /// `user`'s players (`None`: every one).
     pub fn list_for(&self, user: Option<&str>) -> Vec<PlayerView> {
+        self.expire_generic();
         let first = first_owner();
         let entries = self.entries();
         let mut out: Vec<PlayerView> = entries
@@ -1354,9 +1374,10 @@ impl PlayOn {
             .filter_map(|(n, _)| view_in(&entries, n, false))
             .collect();
         drop(entries);
-        let delays = self.settings().delays;
+        let PlayOnSettings { delays, grouped, .. } = self.settings();
         for v in &mut out {
             v.delay_ms = delays.get(&v.name).copied().unwrap_or(0);
+            v.grouped = grouped.contains(&v.name);
         }
         out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         out
@@ -1390,7 +1411,11 @@ impl PlayOn {
         }
         entries.remove(name);
         drop(entries);
-        self.settings.lock().unwrap_or_else(|p| p.into_inner()).delays.remove(name);
+        {
+            let mut settings = self.settings.lock().unwrap_or_else(|p| p.into_inner());
+            settings.delays.remove(name);
+            settings.grouped.remove(name);
+        }
         tracing::info!(target: "playon", player = name, user, "forgotten");
         self.changed();
         Ok(true)
@@ -2207,6 +2232,7 @@ impl PlayOn {
             newly.is_some()
         };
         tracing::info!(target: "playon", player = name, leader = leader.as_str(), "joined a group");
+        self.mark_grouped(&[name, leader.as_str()]).await;
         if newly_leads {
             self.tell_group(&leader);
         }
@@ -2355,7 +2381,7 @@ impl PlayOn {
             let owner = was.and_then(|o| o.owner.clone()).or_else(whose);
             kodi.push(super::kodi::KodiConfig { name, url, user: k.user.trim().to_string(), password, stream_from, owner });
         }
-        let saved = PlayOnSettings { webhooks, delays: before.delays, kodi };
+        let saved = PlayOnSettings { webhooks, delays: before.delays, grouped: before.grouped, kodi };
         let body = serde_json::to_string_pretty(&saved).map_err(anyhow::Error::from)?;
         tokio::task::spawn_blocking(move || write_private(&file, &body)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
         *self.settings.lock().unwrap_or_else(|p| p.into_inner()) = saved;
@@ -2367,6 +2393,59 @@ impl PlayOn {
     /// The account a player is a device of (the first administrator for one from before accounts).
     pub fn owner_of(&self, name: &str) -> Option<String> {
         self.entries().get(name).and_then(|e| e.owner.clone()).or_else(first_owner)
+    }
+
+    /// Forgets the players still named as a browser names itself (`generic_name`) that have been offline for
+    /// `GENERIC_IDLE` (the owner, 2026-10-24: "a rather short expiration time after becoming idle", under the hood too):
+    /// their queue, delay and group mark with them, as `forget` does. A Kodi, or a player given a name, stays.
+    fn expire_generic(&self) {
+        let now = SystemTime::now();
+        let gone: Vec<String> = {
+            let mut entries = self.entries();
+            let gone: Vec<String> = entries
+                .iter()
+                .filter(|(n, e)| {
+                    !e.online()
+                        && e.kind != PlayerKind::Kodi
+                        && generic_name(n)
+                        && now.duration_since(e.offline_since.unwrap_or(e.seen)).is_ok_and(|idle| idle >= GENERIC_IDLE)
+                })
+                .map(|(n, _)| n.clone())
+                .collect();
+            for n in &gone {
+                entries.remove(n);
+            }
+            gone
+        };
+        if gone.is_empty() {
+            return;
+        }
+        {
+            let mut settings = self.settings.lock().unwrap_or_else(|p| p.into_inner());
+            for n in &gone {
+                settings.delays.remove(n);
+                settings.grouped.remove(n);
+            }
+        }
+        tracing::info!(target: "playon", players = ?gone, "generically named players forgotten, offline too long");
+        self.changed();
+    }
+
+    /// Players that have now been in a group, kept in `players.json` (when there is one) the first time.
+    async fn mark_grouped(&self, names: &[&str]) {
+        let saved = {
+            let mut settings = self.settings.lock().unwrap_or_else(|p| p.into_inner());
+            let mut new = false;
+            for n in names {
+                new |= settings.grouped.insert(n.to_string());
+            }
+            new.then(|| settings.clone())
+        };
+        let (Some(saved), Some(file)) = (saved, self.file.clone()) else { return };
+        let Ok(body) = serde_json::to_string_pretty(&saved) else { return };
+        if let Err(e) = tokio::task::spawn_blocking(move || write_private(&file, &body)).await.map_err(anyhow::Error::from).and_then(|r| r) {
+            tracing::warn!(target: "playon", "the grouped players were not kept: {e:#}");
+        }
     }
 
     /// A player's speaker delay (ms).
@@ -3102,6 +3181,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_generically_named_player_is_forgotten_an_hour_after_it_went_offline() {
+        assert!(generic_name("Chrome on Android") && generic_name("Edge on Windows 2") && generic_name("Safari"));
+        assert!(!generic_name("Salon tablet") && !generic_name("Chrome on the shelf") && !generic_name("Chromecast"));
+        let p = play_on().await;
+        let (_a, _b) = (p.connect("Chrome on Android").unwrap(), p.connect("Salon tablet").unwrap());
+        for (name, ago) in [("Chrome on Android", 3601), ("Salon tablet", 7200)] {
+            let mut entries = p.entries();
+            let e = entries.get_mut(name).unwrap();
+            e.connection = None;
+            e.offline_since = SystemTime::now().checked_sub(Duration::from_secs(ago));
+        }
+        let names: Vec<String> = p.list_for(None).into_iter().map(|v| v.name).collect();
+        assert_eq!(names, ["Salon tablet"], "the default name went, the chosen one stays");
+    }
+
+    #[tokio::test]
     async fn a_group_plays_as_one_and_goes_on_without_its_leader() {
         let p = play_on().await;
         let t = |id: &str| QueueTrack { source: "cratarr".into(), id: id.into(), name: id.into(), ..QueueTrack::default() };
@@ -3117,6 +3212,8 @@ mod tests {
         told(&mut tablet);
 
         p.command("phone", Command::Join { to: "tablet".into() }).await.unwrap();
+        let grouped = p.settings().grouped;
+        assert!(grouped.contains("phone") && grouped.contains("tablet") && !grouped.contains("kitchen"), "ever in a group: {grouped:?}");
         let to_tablet = told(&mut tablet);
         assert_eq!((to_tablet[0]["leader"].as_str(), to_tablet[0]["host"].as_str()), (Some("tablet"), Some("192.168.1.5")));
         assert_eq!(group_of(&mut phone), vec![Some("tablet".to_string())]);

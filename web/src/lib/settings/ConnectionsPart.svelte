@@ -194,7 +194,8 @@
 {:else}
   <Group title="Servers" more="Shared by everyone who uses Cratarr, not this device's own.">
     {#if s.origin === 'env'}<Item name="From the container's settings" line="Until you save here" />{/if}
-    {#each ed.drafts as d (d)}
+    <!-- Those switched off last (the owner, 2026-10-24), each side in its own order. -->
+    {#each [...ed.drafts.filter((d) => d.enabled), ...ed.drafts.filter((d) => !d.enabled)] as d (d)}
       {@const st = stateOf(d)}
       <Item lead={st.lead} name={label(d)} line={st.line} tone={st.lead === 'bad' ? 'bad' : null} onclick={() => openThing('connections', d.id)} />
     {:else}

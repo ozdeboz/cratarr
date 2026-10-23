@@ -4,7 +4,9 @@
   // moves, as Snapweb and Iris set Snapcast's per-client latency. 0 to 500 ms in steps of 5. What every player has is
   // said once (the group's heading), each player's value on its row; a tap opens its slider in a sheet (the settings'
   // North Star, 2026-10-19). Then the Kodis (lib/KodiSettings), each with its own page (`thing`).
-  import { setPlayerDelay } from './api';
+  import { removeMyDevice, setPlayerDelay } from './api';
+  import MenuEntry from './MenuEntry.svelte';
+  import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import Icon from './Icon.svelte';
   import KodiSettings from './KodiSettings.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -23,7 +25,11 @@
   const DELAY_MORE =
     "How late each player's speaker sounds. In a group, a player whose speaker sounds late (Bluetooth, a soundbar's processing) plays that much earlier, so the group sounds as one.\n\nStand between two speakers and move it until they sound together. A Kodi's counts its own buffering too, up to a second.";
 
-  const players = $derived([...playOn.players].sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())));
+  // Only players that have ever been in a group (the owner, 2026-10-24): a delay matters only there. One in a group now,
+  // or with a delay set already, shows too.
+  const players = $derived(
+    playOn.players.filter((p) => p.grouped || p.group || (p.delay_ms ?? 0) > 0).sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())),
+  );
 
   // While it moves, its value here; the player list takes over after.
   let held = $state<Record<string, number>>({});
@@ -60,6 +66,17 @@
 
   // The player whose delay is being set, in its sheet.
   let adjusting = $state<string | null>(null);
+  // A player removed from its sheet (the owner, 2026-10-24): one's own device forgotten, its queue with it; not while
+  // it is connected (the server says so).
+  let removing = $state<string | null>(null);
+  async function remove(name: string) {
+    try {
+      await removeMyDevice(name);
+      adjusting = null;
+    } catch (e) {
+      toast.fail(e, `${name} wasn't removed`);
+    }
+  }
 </script>
 
 {#if !thing}
@@ -83,7 +100,16 @@
       <button aria-label="More" title="More" disabled={ms >= maxOf(name)} onclick={() => set(name, ms + STEP)}><Icon name="plus" size={20} /></button>
       <output>{ms} ms</output>
     </div>
+    {@const it = players.find((p) => p.name === name)}
+    <!-- A Kodi is removed under Kodi, below. -->
+    {#if it && it.kind !== 'kodi'}
+      <MenuEntry icon="trash" label={it.online ? `Remove ${name} (close Cratarr there first)` : `Remove ${name}`} danger disabled={it.online} onclick={() => (removing = name)} />
+    {/if}
   </MenuSheet>
+{/if}
+{#if removing}
+  {@const name = removing}
+  <ConfirmSheet title={`Remove ${name}?`} label="Remove" onconfirm={() => remove(name)} onclose={() => (removing = null)} />
 {/if}
 
 <style>
