@@ -1,8 +1,8 @@
-# 0063: One health report, every domain's checks; the Health page shows it, Needs you its top
+# 0063: One health report, every domain's checks; the Health page shows it all, Needs you what matters most
 
 - Status: accepted (the owner, 2026-10-23: "do we have a proper error framework to automatically surface all of the
   different health indicators for the different domains in our central health page, or do we need deeper
-  architecture?"; "the health page is the first reader, and Needs you is only the top of the iceberg")
+  architecture?"; the Health page first; "needs you shows the most important, the most critical, the most recent")
 - Date: 2026-10-23
 - Builds on: 0025 (Health: the files the catalogue could not read; the playlists' repairs), 0045 (diagnostics),
   0034 (Incoming's upgrades and duplicates), 0054 (AudioMuse)
@@ -38,7 +38,8 @@ read its last hour there ("23 slow answers in the last hour"), so what comes and
 
 - **The Health page** is the first: every finding, by domain, worst first, each opening where it is dealt with; the
   files' sections as now, now one domain among the others.
-- **Home's Needs you** is its top: the `needs_you` findings only, a few, and a way to the Health page for the rest.
+- **Home's Needs you** shows what matters most: the most critical first (`needs_you`, then `warning`), the most
+  recent among equals, a few, and a way to the Health page for the rest.
 - **The playlists' Repair view** is where the playlists finding opens.
 - **Home Assistant** may read it (a sensor per level), as the house's other alerts go to `script.notify`.
 
