@@ -809,6 +809,12 @@ impl Alike {
         self.of_track.get(&track).copied()
     }
 
+    /// How alike two profiles are, by `by` (the listener's Similar by); none when nothing is known of it.
+    pub fn compare(&self, a: &crate::similarity::Profile, b: &crate::similarity::Profile, by: &Weights) -> Option<f64> {
+        let signals = a.to_profile(&self.lib, b);
+        signals.known().then(|| signals.score(by))
+    }
+
     /// Whether AudioMuse heard the file at a place.
     pub fn heard(&self, i: usize) -> bool {
         self.lib.sound(i).is_some()

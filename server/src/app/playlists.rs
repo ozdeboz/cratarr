@@ -93,6 +93,35 @@ async fn like_crate(id: &str, item: &str, count: usize) -> Result<CrateDef, Togg
     Ok(crates::like_crate(id, &format!("Sounds like {name}"), songs, count))
 }
 
+/// How many each of Home's looks back shows; and of how many albums most like the taste Grave digging digs.
+const DIG: usize = 12;
+const CLOSEST_ALBUMS: usize = 150;
+
+/// Home's looks back (`PlaylistService::digging`).
+#[derive(Debug, serde::Serialize)]
+pub struct Digging {
+    pub past: Vec<DugTrack>,
+    pub graves: Vec<DugAlbum>,
+}
+
+/// A favourite track and when it was last played (epoch s).
+#[derive(Debug, serde::Serialize)]
+pub struct DugTrack {
+    pub id: String,
+    pub name: String,
+    pub artist: String,
+    pub album: String,
+    pub album_id: String,
+    pub last_played: i64,
+}
+
+/// An album (Cratarr's own) and when anything of it was last played (epoch s).
+#[derive(Debug, serde::Serialize)]
+pub struct DugAlbum {
+    pub id: String,
+    pub last_played: i64,
+}
+
 pub(super) struct CrateLibrary {
     pub(super) source: String,
     /// Every library's files (`Catalogue::crate_facts`); `files()` leaves out those switched off.
@@ -2495,6 +2524,75 @@ impl PlaylistService {
             }
             let sources = super::taste::Sources { favourites, playlists, plays, excluded, skipped: skips.into_iter().collect() };
             Ok(super::taste::taste(alike, &sources, &off))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    }
+
+    /// Home's two looks back (the owner, 2026-10-23), of the libraries switched on: Blast from the past, the favourite
+    /// tracks unplayed longest; Grave digging, of the albums most like the taste (`taste::profiles`, every source), those
+    /// unplayed longest. Only what was played before: a track never played was never buried.
+    pub async fn digging(&self, want: Option<&str>, without: &[String]) -> Result<Digging, ToggleError> {
+        let user = asking_user().ok_or_else(|| ToggleError::Refused("Home's looks back are an account's own: sign in.".into()))?;
+        let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+        let lib = self.crate_library(want, false, false, without).await?;
+        let excluded = self.own_crates()?.excluded().await?;
+        tokio::task::spawn_blocking(move || -> Result<Digging, ToggleError> {
+            let alike = lib.alike();
+            let place = |song: &str| crate::serve::ids::track_of(song).and_then(|t| alike.place_of_track(t)).filter(|&i| lib.on(i));
+            let ud = &serve.userdata;
+            let plays = ud.song_plays(&user)?;
+            let starred = ud.starred(&user, crate::userdata::Kind::Song)?;
+            // Blast from the past: the favourites by their last play, the oldest first.
+            let mut past: Vec<(String, i64)> =
+                starred.iter().filter(|s| place(s).is_some()).filter_map(|s| Some((s.clone(), plays.get(s)?.1?))).collect();
+            past.sort_by_key(|p| p.1);
+            past.truncate(DIG);
+            let songs: HashMap<String, crate::serve::api::Song> = serve.library.songs_by_id(&past.iter().map(|p| p.0.clone()).collect::<Vec<_>>())?.into_iter().map(|s| (s.id.clone(), s)).collect();
+            let past = past
+                .into_iter()
+                .filter_map(|(id, last)| {
+                    let s = songs.get(&id)?;
+                    Some(DugTrack { id, name: s.title.clone(), artist: s.artist.clone(), album: s.album.clone(), album_id: s.album_id.clone(), last_played: last })
+                })
+                .collect();
+            // Grave digging: the taste as Insights' Profile has it, every source; the albums played before, each as one
+            // profile against it; of the closest, the ones unplayed longest.
+            let mut skips: HashMap<usize, u32> = HashMap::new();
+            let mut played: HashMap<usize, u32> = HashMap::new();
+            for l in ud.heard_awake_since(&user, 0)? {
+                let Some(i) = place(&l.song) else { continue };
+                if l.ended == crate::userdata::Ended::Skipped && !l.counted {
+                    *skips.entry(i).or_default() += 1;
+                } else if l.counted || l.ended == crate::userdata::Ended::Finished {
+                    *played.entry(i).or_default() += 1;
+                }
+            }
+            let sources = super::taste::Sources {
+                favourites: starred.iter().filter_map(|s| place(s)).collect(),
+                playlists: lib.membership().iter().filter_map(|(line, lists)| Some((alike.place_of_line(line).filter(|&i| lib.on(i))?, lists.len()))).collect(),
+                plays: played.into_iter().collect(),
+                excluded: excluded.iter().filter_map(|line| alike.place_of_line(line).filter(|&i| lib.on(i))).collect(),
+                skipped: skips.into_iter().collect(),
+            };
+            let (taste, _) = super::taste::profiles(alike, &sources, &[]);
+            let mut albums: Vec<(String, i64, f64)> = Vec::new();
+            for (id, a) in ud.used(&user, crate::userdata::Kind::Album)? {
+                let Some(last) = a.play_date else { continue };
+                let Some(album) = serve.library.album(&id)? else { continue };
+                let set: Vec<(usize, f64)> = album.song.unwrap_or_default().iter().filter_map(|s| place(&s.id)).map(|i| (i, 1.0)).collect();
+                if set.is_empty() {
+                    continue;
+                }
+                if let Some(x) = alike.compare(&taste, &alike.profile(&set), lib.by()) {
+                    albums.push((id, last, x));
+                }
+            }
+            albums.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+            albums.truncate(CLOSEST_ALBUMS);
+            albums.sort_by_key(|a| a.1);
+            let graves = albums.into_iter().take(DIG).map(|(id, last, _)| DugAlbum { id, last_played: last }).collect();
+            Ok(Digging { past, graves })
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?

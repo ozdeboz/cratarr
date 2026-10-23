@@ -140,6 +140,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/players/settings", get(play_on_settings).put(save_play_on_settings))
             .route("/api/history/listenbrainz", post(import_listenbrainz))
         .route("/api/history/profile", get(taste_profile))
+        .route("/api/home/digging", get(home_digging))
         .route("/api/history/sleep", post(sleep))
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
             .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
@@ -2509,6 +2510,13 @@ struct TasteQuery {
     period: Option<crate::app::history::Period>,
     /// Sources switched off, comma-separated: favourites, playlists, plays, skipped, excluded (absent: all on).
     off: Option<String>,
+}
+
+/// Home's Blast from the past (favourite tracks unplayed longest) and Grave digging (the albums most like the taste,
+/// unplayed longest), of the libraries switched on.
+async fn home_digging(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) -> Result<Json<crate::app::Digging>, ApiError> {
+    let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
+    Ok(Json(app.playlists.digging(q.source.as_deref(), &without).await?))
 }
 
 async fn taste_profile(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) -> Result<Json<crate::app::taste::TasteView>, ApiError> {
