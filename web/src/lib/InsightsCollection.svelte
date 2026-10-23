@@ -18,7 +18,11 @@
 
   const l = $derived(data.library);
   const p = $derived(data.playlists);
-  const tiles = $derived([
+  // The overview beyond the files (the owner's exploration, 2026-10-23): Incoming, growth, what was heard.
+  const o = $derived(data.overview);
+  const waited = $derived(o?.incoming_since ? Math.max(0, Math.floor((Date.now() / 1000 - o.incoming_since) / 86_400)) : null);
+  // One grid of tiles, no half-empty rows (the owner, 2026-10-23): the collection's, then what waits in Incoming.
+  const tiles = $derived<{ value: string; label: string; href?: string }[]>([
     { value: num(l.tracks), label: 'tracks' },
     { value: num(l.albums), label: 'albums' },
     { value: num(l.artists), label: 'artists' },
@@ -27,6 +31,12 @@
     { value: size(l.bytes), label: 'on disk' },
     // From Tracks' old tiles, what is worth a look (the owner, 2026-10-23): tracks a playlist names but no file has.
     ...(p.missing ? [{ value: num(p.missing), label: 'missing from playlists' }] : []),
+    ...(o?.incoming_albums
+      ? [
+          { value: num(o.incoming_albums), label: `${o.incoming_albums === 1 ? 'album' : 'albums'} in Incoming ›`, href: '#/library' },
+          ...(waited !== null ? [{ value: plural(waited, 'day'), label: 'the oldest has waited' }] : []),
+        ]
+      : []),
   ]);
   const formats = $derived([...l.formats].sort((a, b) => b.n - a.n));
   const meters = $derived([
@@ -46,9 +56,7 @@
     return Array.from({ length: 10 }, (_, i) => ({ name: String(from + i), n: l.years.find((y) => y.name === String(from + i))?.n ?? 0 }));
   });
   const tallest = $derived(widest(columns));
-  // The overview beyond the files (the owner's exploration, 2026-10-23): Incoming, growth, what was heard.
-  const o = $derived(data.overview);
-  const waited = $derived(o?.incoming_since ? Math.max(0, Math.floor((Date.now() / 1000 - o.incoming_since) / 86_400)) : null);
+  // Growth's columns, against the most added in a month.
   const mostAdded = $derived(Math.max(1, ...(o?.added ?? []).map((m) => m.n)));
 </script>
 
@@ -95,20 +103,12 @@
   <section aria-label="Your music">
     <div class="tiles">
       {#each tiles as t (t.label)}
-        <div class="tile"><b>{t.value}</b><span>{t.label}</span></div>
+        {#if t.href}<a class="tile go" href={t.href}><b>{t.value}</b><span>{t.label}</span></a>{:else}<div class="tile"><b>{t.value}</b><span>{t.label}</span></div>{/if}
       {/each}
     </div>
   </section>
 
   {#if o}
-    {#if o.incoming_albums}
-      <section aria-label="Incoming">
-        <div class="tiles">
-          <a class="tile go" href="#/library"><b>{num(o.incoming_albums)}</b><span>{o.incoming_albums === 1 ? 'album' : 'albums'} in Incoming ›</span></a>
-          {#if waited !== null}<div class="tile"><b>{plural(waited, 'day')}</b><span>the oldest has waited</span></div>{/if}
-        </div>
-      </section>
-    {/if}
 
     <section>
       <div class="head"><h2>Growth</h2><span class="unit">albums added per month</span></div>
