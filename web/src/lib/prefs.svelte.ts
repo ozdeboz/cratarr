@@ -46,7 +46,7 @@ export type Prefs = {
   /** Insights' tab (decision 0065). */
   insightsTab: 'collection' | 'listening' | 'map';
   /** Insights' tabs' own second rows (decision 0065): Collection's view, Listening's period. */
-  insightsCollection: 'overview' | 'genres' | 'artists' | 'playlists';
+  insightsCollection: 'overview' | 'genres' | 'artists' | 'tracks';
   /** What Genres' and Artists' bars count: all the tracks, or those in a playlist (Insights' panel). */
   insightsCount: 'tracks' | 'listed';
   /** How Collection's long lists are sorted (Genres, Artists, Playlists' most shared): the most first, or A–Z. */
@@ -248,7 +248,9 @@ function read(): Prefs {
       // The tabs' names before decision 0065: Statistics is Collection, Related is Map.
       const tab = saved.insightsTab === 'statistics' ? 'collection' : saved.insightsTab === 'related' ? 'map' : saved.insightsTab;
       if (tab === 'collection' || tab === 'listening' || tab === 'map') p.insightsTab = tab;
-      if (['overview', 'genres', 'artists', 'playlists'].includes(saved.insightsCollection)) p.insightsCollection = saved.insightsCollection;
+      // Playlists became Tracks (the owner, 2026-10-23: it is about tracks).
+      if (saved.insightsCollection === 'playlists') p.insightsCollection = 'tracks';
+      else if (['overview', 'genres', 'artists', 'tracks'].includes(saved.insightsCollection)) p.insightsCollection = saved.insightsCollection;
       if (saved.insightsCount === 'tracks' || saved.insightsCount === 'listed') p.insightsCount = saved.insightsCount;
       if (saved.insightsSort === 'most' || saved.insightsSort === 'az') p.insightsSort = saved.insightsSort;
       if (['week', 'month', 'year', 'all'].includes(saved.insightsPeriod)) p.insightsPeriod = saved.insightsPeriod;

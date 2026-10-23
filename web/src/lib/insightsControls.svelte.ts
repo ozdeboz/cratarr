@@ -2,7 +2,7 @@
 // panel"): each tab says what it offers, as groups of controls of a few kinds, and the panel (lib/InsightsPanel) draws
 // every kind one way, as the settings' rows (lib/settings/Group, Item). A tab adds a control here, never markup there.
 // Every tab: the period (not the map) and the libraries, one switch each (Insights' own, the same everywhere; the last
-// one on stays on). Collection's Genres and Artists: what the bars count, and a sort (Playlists' too). Profile: what it is built from. Map: what
+// one on stays on). Collection's Genres and Artists: what the bars count, and a sort (Tracks' too). Profile: what it is built from. Map: what
 // brings playlists together.
 import { getLibraries, type LibrariesView } from './api';
 import { prefs } from './prefs.svelte';
@@ -65,7 +65,7 @@ const sort: Control = { kind: 'choice', name: 'Sort', options: SORTS, get: () =>
 const collection = (): ControlGroup[] =>
   prefs.insightsCollection === 'genres' || prefs.insightsCollection === 'artists'
     ? [{ title: null, controls: [{ kind: 'choice', name: 'Count', options: COUNTS, get: () => prefs.insightsCount, set: (v) => (prefs.insightsCount = v as typeof prefs.insightsCount) }, sort] }]
-    : prefs.insightsCollection === 'playlists'
+    : prefs.insightsCollection === 'tracks'
       ? [{ title: null, controls: [sort] }]
       : [];
 

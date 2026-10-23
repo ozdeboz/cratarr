@@ -21,7 +21,7 @@ you heard: new), Map (how your playlists relate: today's Related). The tab last 
 **The tabs sit in the overlay row,** a pill group beside the back button where other pages have their pill (lib/TopPill),
 in the same glass; the chosen one filled, never touching the back button. A tab's own sections are a second row attached
 below, inside the pill, which grows to hold it (the owner, 2026-10-23): Collection's (Overview, Genres, Artists,
-Playlists). Centred while no panel is open; at the row's end beside one.
+Tracks: those in playlists, once Playlists). Centred while no panel is open; at the row's end beside one.
 
 **Two choices are Insights' own, the same in every tab's panel** (the owner, 2026-10-23): the libraries (one switch
 each; Collection, History, Profile and the map count only what is in those switched on) and the period (the past week,
@@ -70,7 +70,7 @@ Jellyfin's ListenBrainz plugin scrobbled to (Jellyfin keeps no history of its ow
 **Map** is the graph as it is, its filters in the panel.
 
 **Collection's views:** Overview (the tiles, the meters, the decades, the first genres and artists), Genres and
-Artists (all of them), Playlists.
+Artists (all of them), Tracks (those in playlists).
 
 **Read once:** `GET /api/history/listening?period=week|month|year` (app/history.rs, the log's only reader).
 `GET /api/insights?source=&without=<source>/<library>` (Collection from the libraries switched on).

@@ -18,7 +18,7 @@
     { id: 'overview', label: 'Overview' },
     { id: 'genres', label: 'Genres' },
     { id: 'artists', label: 'Artists' },
-    { id: 'playlists', label: 'Playlists' },
+    { id: 'tracks', label: 'Tracks' },
   ] as const;
 </script>
 

@@ -3,7 +3,7 @@
   // the headline figures as stat tiles, shares as meters (never pies), decades as columns, genres and artists as bars,
   // one series each in the accent, labelled directly; the playlists' figures as tiles and the tracks in the most
   // playlists as a list. Four views, chosen in the tabs' pill: Overview (the figures, quality and decades), Genres and
-  // Artists (all of them), Playlists.
+  // Artists (all of them), Tracks (those in playlists).
   import type { Count, Insights, Layered } from './api';
   import { plural } from './insights.svelte';
   import { prefs } from './prefs.svelte';
@@ -169,7 +169,7 @@
   {@render bars('Artists', l.top_artists)}
   {:else}
   <section>
-    <h2>Playlists</h2>
+    <h2>In playlists</h2>
     <div class="tiles">
       {#each playlistTiles as t (t.label)}
         <div class="tile"><b>{t.value}</b><span>{t.label}</span></div>
