@@ -1,0 +1,41 @@
+# 0061: A filter is an unsaved crate on the list in view, any or all of its tracks
+
+- Status: accepted (the owner, 2026-10-23: "We should be able to filter on genre, for example, and possibly many other
+  features. Currently, the only way to see a cross-section of genre is by creating a crate, and that's not very
+  efficient"; "We should make our filter engine allow for any or all. In the case of nested objects, such as albums
+  containing tracks"; "filter should be remembered like sort")
+- Date: 2026-10-23
+- Builds on: 0024 (crates: conditions on the library's axes), 0060 (sorts and filters per kind of item), 0059 (rules run
+  where the library is), 0054 (AudioMuse's mood, energy, danceability and style)
+
+## Context
+
+Filters were a few switches per page (Favourites only, Not played yet, …). Seeing a genre's cross-section of a list
+meant making a crate. Crates already hold the engine: conditions on ten axes (favourite, favourite album, in playlist,
+genre, year, BPM, mood, energy, danceability, style), each negatable, all of them holding, any of several values within
+one.
+
+## Decision
+
+- **A filter is a crate's conditions, unsaved, on the list in view** (the Library's albums, Playlists, Crates' tracks, a
+  playlist's, crate's, album's or artist's tracks, the device's own music). A crate is the same conditions, saved, on the
+  whole library. One engine, one builder: the Filter sheet draws the crate builder's controls (genre, mood and style as
+  chips, the most common in this list first, with their counts; year, BPM, energy and danceability as ranges; favourite;
+  in playlist). The panel's tempo range is the BPM condition.
+- **Any or all, per condition, for items that hold tracks** (an album, an artist, a playlist): Any, at least one of its
+  tracks matches; All, every one of its tracks that has a value for it matches (a track with none, not yet analysed,
+  does not count against All). Any is the default; the switch shows only where the items hold tracks.
+- **Remembered like sort** (0060): per kind of list. The active conditions show as chips above the list, each removable,
+  with the count ("312 of 553 tracks"), so nothing filters out of sight.
+- **Save as crate** turns the filter in view into a crate; a crate's conditions can be applied as a filter to any list.
+- **Where it runs** (0059): the server's library on the server (it knows the genres and AudioMuse's values); the device's
+  own music on the device, with the conditions it has facts for (genre, year, favourite), the others not offered there.
+- 0060's filter table becomes: these conditions for every kind, plus each kind's own switches (Upgrades waiting, Hide
+  missing, Mine only, Lossless only).
+
+## Consequences
+
+- The crates' condition engine takes a scope (a list's tracks, grouped by album, artist or playlist) and a quantifier per
+  condition, besides the whole library.
+- One filter state per kind of list in the remembered settings, beside its sort.
+- The Filter sheet becomes the builder's conditions above each kind's own switches; the chips above every list.
