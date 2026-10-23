@@ -12,6 +12,7 @@
 //! - `settings`: the Settings page.
 
 mod albums;
+pub mod artists;
 pub mod audiomuse;
 pub mod beat_this;
 pub mod analysis_pass;
@@ -97,6 +98,9 @@ pub struct App {
     pub incoming: Arc<IncomingService>,
     pub collection: Arc<CollectionService>,
     pub insights: InsightsService,
+    /// Artists' descriptions and photos from TheAudioDB, built slowly (Home's Artists to explore); none without a data
+    /// folder.
+    pub artists: Option<Arc<artists::ArtistInfo>>,
     pub settings: SettingsService,
     /// What happened to albums (decision 0011); the live channel tells the pages.
     pub journal: Arc<crate::journal::Journal>,
@@ -148,6 +152,10 @@ impl App {
         let insights = InsightsService::new(library.clone(), playlists.clone());
         let play_on = PlayOn::new(library.clone(), playlists.clone(), cfg.data_dir.as_deref());
         let plays = Plays::new(cfg.data_dir.as_deref());
+        let artists = artists::ArtistInfo::open(cfg.data_dir.as_deref());
+        if let Some(a) = &artists {
+            a.build_slowly();
+        }
         // Cratarr's own library (0032) built anew (a first start, a new layout): what was read from it while it was
         // empty is read again.
         if let Some(served) = crate::serve::instance() {
@@ -176,7 +184,7 @@ impl App {
                 }
             });
         }
-        let app = Arc::new(Self { library, sync, playing, playlists, incoming, collection, insights, settings, journal, events: Default::default(), play_on, plays, visuals });
+        let app = Arc::new(Self { library, sync, playing, playlists, incoming, collection, insights, artists, settings, journal, events: Default::default(), play_on, plays, visuals });
         // What a Play On play names is chosen through app::play, as every play.
         app.play_on.set_app(&app);
         Ok(app)

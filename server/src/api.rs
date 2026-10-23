@@ -141,6 +141,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/history/listenbrainz", post(import_listenbrainz))
         .route("/api/history/profile", get(taste_profile))
         .route("/api/home/digging", get(home_digging))
+        .route("/api/home/artists", get(home_artists))
+        .route("/api/artists/{id}/photo", get(artist_photo))
         .route("/api/home/heard", post(home_heard))
         .route("/api/history/sleep", post(sleep))
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
@@ -2528,6 +2530,89 @@ async fn home_heard(State(app): State<Arc<App>>, Json(b): Json<HeardAlbums>) -> 
 async fn home_digging(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) -> Result<Json<crate::app::Digging>, ApiError> {
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
     Ok(Json(app.playlists.digging(q.source.as_deref(), &without).await?))
+}
+
+/// How many artists Home's Artists to explore shows: the open one and the others.
+const EXPLORE: usize = 7;
+
+/// Home's Artists to explore (the owner, 2026-10-23): artists of the libraries switched on with two albums or more, in a
+/// new random order each time; the first one TheAudioDB knows open (its description and photo, read now when it never
+/// was), each with its four biggest albums.
+async fn home_artists(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+    let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
+    let on = app.insights.folders_on(q.source.as_deref(), &without);
+    let lib = served.library.clone();
+    let rows = tokio::task::spawn_blocking(move || lib.artist_albums()).await.map_err(anyhow::Error::from).and_then(|r| r).map_err(ToggleError::from)?;
+    // Per artist, their albums in the libraries switched on, the biggest first.
+    let mut by: std::collections::BTreeMap<String, (String, Option<String>, Vec<(i64, String)>)> = Default::default();
+    for (artist, name, mbid, album, folder, tracks) in rows {
+        if crate::crates::various(&name) || on.as_ref().is_some_and(|on| !on.contains(&folder)) {
+            continue;
+        }
+        by.entry(artist).or_insert_with(|| (name, mbid, Vec::new())).2.push((tracks, album));
+    }
+    let mut pool: Vec<(String, String, Option<String>, Vec<String>)> = by
+        .into_iter()
+        .filter(|(_, (_, _, albums))| albums.len() >= 2)
+        .map(|(id, (name, mbid, mut albums))| {
+            albums.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            (id, name, mbid, albums.into_iter().take(4).map(|(_, a)| a).collect())
+        })
+        .collect();
+    // A new order each time (a plain shuffle from the clock: nothing here needs to be unguessable).
+    let mut seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64) | 1;
+    for i in (1..pool.len()).rev() {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        pool.swap(i, (seed % (i as u64 + 1)) as usize);
+    }
+    pool.truncate(EXPLORE * 4);
+    let store = app.artists.clone();
+    let keys: Vec<String> = pool.iter().map(|(_, n, m, _)| crate::app::artists::key(n, m.as_deref())).collect();
+    let known = store.as_ref().map(|s| s.known(&keys)).unwrap_or_default();
+    // The open one: the first TheAudioDB knows, else the first (read now).
+    if let Some(i) = keys.iter().position(|k| known.contains(k)) {
+        pool.swap(0, i);
+    }
+    pool.truncate(EXPLORE);
+    let first_info = match (&store, pool.first()) {
+        (Some(s), Some((_, name, mbid, _))) => s.get_or_read(name, mbid.as_deref()).await,
+        _ => None,
+    };
+    let artists: Vec<serde_json::Value> = pool
+        .iter()
+        .enumerate()
+        .map(|(i, (id, name, mbid, albums))| {
+            let info = if i == 0 { first_info.clone() } else { store.as_ref().and_then(|s| s.get(&crate::app::artists::key(name, mbid.as_deref()))) };
+            json!({
+                "id": id,
+                "name": name,
+                "albums": albums,
+                "bio": info.as_ref().and_then(|i| i.bio.clone()),
+                "photo": info.as_ref().is_some_and(|i| i.photo.is_some()),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "artists": artists, "credit": "TheAudioDB" })))
+}
+
+/// An artist's photo, as the artist store kept it.
+async fn artist_photo(State(app): State<Arc<App>>, Path(id): Path<String>) -> Response {
+    let found = async {
+        let served = crate::serve::instance()?;
+        let store = app.artists.clone()?;
+        let lib = served.library.clone();
+        let artist = tokio::task::spawn_blocking(move || lib.artist(&id)).await.ok()?.ok()??;
+        let file = store.get(&crate::app::artists::key(&artist.name, artist.music_brainz_id.as_deref()))?.photo?;
+        tokio::fs::read(store.photo_path(&file)).await.ok()
+    }
+    .await;
+    match found {
+        Some(bytes) => ([(header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg")), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=86400"))], bytes).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "no photo" }))).into_response(),
+    }
 }
 
 async fn taste_profile(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) -> Result<Json<crate::app::taste::TasteView>, ApiError> {

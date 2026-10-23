@@ -10,6 +10,7 @@
   import { addedOn, albumUses, library, loadAlbumUses, readLibrary } from './lib/albums.svelte';
   import { albumCoverUrl } from './lib/api';
   import Cover from './lib/Cover.svelte';
+  import ArtistsToExplore from './lib/ArtistsToExplore.svelte';
   import HomeNeeds from './lib/HomeNeeds.svelte';
   import { LIKE, viewGenre, viewLike } from './lib/crates.svelte';
   import { DEVICE } from './lib/deviceMusic.svelte';
@@ -277,6 +278,9 @@
       </ul>
     </section>
   {/if}
+
+  <!-- Artists to explore (lib/ArtistsToExplore; the owner, 2026-10-23). -->
+  <ArtistsToExplore />
 
   <!-- Needs you (lib/HomeNeeds): an administrator's, shown only when something waits. -->
   <HomeNeeds />

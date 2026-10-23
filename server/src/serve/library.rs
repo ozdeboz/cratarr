@@ -576,6 +576,28 @@ impl Library {
         Ok((albums, songs))
     }
 
+    /// Every artist with an album, the most albums first, with their MusicBrainz id where known: the artist store's
+    /// builder works through them in this order.
+    pub fn artist_names(&self) -> Result<Vec<(String, Option<String>)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT name, mbid FROM artists WHERE album_count > 0 ORDER BY album_count DESC, order_name")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    /// Every album artist's albums: (artist id, name, MusicBrainz id, album id, its catalogue folder, its tracks).
+    /// Home's Artists to explore.
+    #[allow(clippy::type_complexity)]
+    pub fn artist_albums(&self) -> Result<Vec<(String, String, Option<String>, String, i64, i64)>> {
+        let db = self.db();
+        let mut st = db.prepare(
+            "SELECT ar.id, ar.name, ar.mbid, al.id, al.folder, al.song_count FROM album_artists aa
+             JOIN albums al ON al.id = aa.album_id JOIN artists ar ON ar.id = aa.artist_id",
+        )?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
     /// Each of these songs' catalogue folder (those the library has).
     pub fn song_folders(&self, ids: &[String]) -> Result<std::collections::HashMap<String, i64>> {
         let db = self.db();

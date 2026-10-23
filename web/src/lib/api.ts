@@ -1356,6 +1356,12 @@ export type Digging = {
 };
 /** Of these albums (Cratarr's), those the account heard 5% or more of: not new to it (Home's New for you). */
 export const heardAlbums = (ids: string[]) => post<{ heard: string[] }>('/api/home/heard', { ids });
+/** Home's Artists to explore: artists in a random order, the first open (its TheAudioDB description and photo, the
+ *  server's artist store), each with its biggest albums (Cratarr's ids). */
+export type ExploredArtist = { id: string; name: string; albums: string[]; bio: string | null; photo: boolean };
+export const getHomeArtists = (source?: string, without?: string[]) =>
+  quietly<{ artists: ExploredArtist[] }>(`/api/home/artists?${new URLSearchParams({ ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);
+export const artistPhotoUrl = (id: string) => `/api/artists/${encodeURIComponent(id)}/photo`;
 export const getDigging = (source?: string, without?: string[]) =>
   quietly<Digging>(`/api/home/digging?${new URLSearchParams({ ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);
 /** A ListenBrainz user's listens into the asking account's history (decision 0064, amended): how many there were,
