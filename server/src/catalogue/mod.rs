@@ -775,9 +775,25 @@ impl Catalogue {
     }
 
     fn read_crate_facts(&self, folders: &[PathBuf]) -> Result<Vec<crate::crates::Facts>> {
-        let files = self.files_newest_first()?;
         let db = self.db();
         type Place = (i64, String);
+        // Every file present, newest first, with its track (the one similarity finds a file by it, heard or not), its
+        // length and its format and bitrate (the crates' Length and Quality).
+        type File = (i64, String, Option<i64>, Option<i64>, Option<i64>, Option<String>, Option<i64>);
+        let mut st = db.prepare(&format!(
+            "SELECT folder, rel, tracks.born, files.track, files.duration_ms, files.format, files.bitrate
+             FROM files LEFT JOIN tracks ON tracks.id = files.track WHERE {PRESENT} ORDER BY tracks.born DESC, folder, rel"
+        ))?;
+        let files: Vec<File> = st
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        // The key its tags say (ID3v2 TKEY, Vorbis INITIALKEY or KEY).
+        let mut st = db.prepare("SELECT folder, rel, value FROM tags WHERE folder >= 0 AND raw IN ('TKEY', 'INITIALKEY', 'KEY') ORDER BY folder, rel, n")?;
+        let mut tag_keys: HashMap<Place, String> = HashMap::new();
+        for row in st.query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, String>(2)?)))? {
+            let (place, value) = row?;
+            tag_keys.entry(place).or_insert(value);
+        }
         let mut st = db.prepare(
             "SELECT folder, rel, name, value FROM tags WHERE folder >= 0 AND name IN ('genre', 'date', 'originaldate', 'bpm', 'artist', 'albumartist') ORDER BY folder, rel, n",
         )?;
@@ -796,18 +812,19 @@ impl Catalogue {
         let analysed: HashMap<Place, f64> =
             st.query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, f64>(2)?)))?.collect::<rusqlite::Result<_>>()?;
         // AudioMuse's (decision 0054), where it heard the file: energy, style tags, CLAP's moods.
-        type Muse = (Option<f64>, Option<String>, Option<String>, i64, Option<Vec<u8>>);
-        let mut st =
-            db.prepare(&format!("SELECT f.folder, f.rel, a.energy, a.style, a.moods, a.track, a.embedding FROM audiomuse a JOIN files f ON f.track = a.track WHERE {PRESENT_F}"))?;
+        type Muse = (Option<f64>, Option<String>, Option<String>, i64, Option<Vec<u8>>, Option<String>);
+        let mut st = db.prepare(&format!(
+            "SELECT f.folder, f.rel, a.energy, a.style, a.moods, a.track, a.embedding, a.key FROM audiomuse a JOIN files f ON f.track = a.track WHERE {PRESENT_F}"
+        ))?;
         let mut muse: HashMap<Place, Muse> = st
-            .query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), (r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))))?
+            .query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), (r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))))?
             .collect::<rusqlite::Result<_>>()?;
         // A mood a file has: one that stands out against the library's (the owner, 2026-10-23: CLAP scores every mood
         // between about 0.5 and 0.65, so a fixed 0.3 gave every heard file all five, every mood pill the same count).
         let stand_out = crate::app::audiomuse::stand_out(muse.values().filter_map(|m| crate::app::audiomuse::mood_scores(m.2.as_deref())));
         Ok(files
             .into_iter()
-            .filter_map(|(folder, rel, born)| {
+            .filter_map(|(folder, rel, born, file_track, duration_ms, format, bitrate)| {
                 let place = (folder, rel);
                 // A file no line can name (in a folder there is no way to from Music) is in no crate.
                 let line = line_in(folders, place.0, &place.1)?;
@@ -826,9 +843,11 @@ impl Catalogue {
                         into.push(v.clone());
                     }
                 }
-                let (mut energy, mut danceability, mut moods, mut styles, mut track, mut sound, mut clap_moods) = (None, None, Vec::new(), Vec::new(), None, None, None);
-                if let Some((e, style, clap, t, embedding)) = muse.remove(&place) {
+                let (mut energy, mut danceability, mut moods, mut styles, mut sound, mut clap_moods, mut muse_key) = (None, None, Vec::new(), Vec::new(), None, None, None);
+                let mut track = file_track;
+                if let Some((e, style, clap, t, embedding, k)) = muse.remove(&place) {
                     track = Some(t);
+                    muse_key = k;
                     // Its "sounds like" (decision 0054), of unit length: what a Sounds like condition compares.
                     let v: Vec<f32> = embedding.unwrap_or_default().chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
                     sound = crate::similarity::mean_sound(&[&v]).map(std::sync::Arc::from);
@@ -855,6 +874,10 @@ impl Catalogue {
                     sound,
                     artists,
                     clap_moods,
+                    length: duration_ms.filter(|d| *d > 0).map(|d| d as f64 / 1000.0),
+                    quality: crate::crates::quality_of(format.as_deref(), bitrate),
+                    // The key the tags say, else AudioMuse's; as one spelling ("D minor").
+                    key: tag_keys.remove(&place).and_then(|k| crate::crates::key_name(&k)).or_else(|| muse_key.and_then(|k| crate::crates::key_name(&k))),
                 })
             })
             .collect())

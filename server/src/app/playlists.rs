@@ -93,6 +93,33 @@ async fn like_crate(id: &str, item: &str, count: usize) -> Result<CrateDef, Togg
     Ok(crates::like_crate(id, &format!("Sounds like {name}"), songs, count))
 }
 
+/// What a user did with each line (the crates' Play count, Last played and Rating): the songs' plays and last plays,
+/// and their albums' stars, by the files' lines. Blocking.
+fn uses_of(user: &str, files: &[crates::Facts]) -> anyhow::Result<HashMap<String, crates::Use>> {
+    let Some(serve) = crate::serve::instance() else { return Ok(HashMap::new()) };
+    let line_of: HashMap<i64, &str> = files.iter().filter_map(|f| Some((f.track?, f.rel.as_str()))).collect();
+    let line = |song: &str| crate::serve::ids::track_of(song).and_then(|t| line_of.get(&t).copied());
+    let mut out: HashMap<String, crates::Use> = HashMap::new();
+    for (song, (plays, last)) in serve.userdata.song_plays(user)? {
+        if let Some(l) = line(&song) {
+            let u = out.entry(l.to_string()).or_default();
+            (u.plays, u.last) = (plays, last);
+        }
+    }
+    let rated: HashMap<String, u8> = serve.userdata.used(user, crate::userdata::Kind::Album)?.into_iter().filter(|(_, a)| a.rating > 0).map(|(id, a)| (id, a.rating)).collect();
+    if !rated.is_empty() {
+        for (song, album) in serve.library.song_albums()? {
+            if let (Some(&r), Some(l)) = (rated.get(&album), line(&song)) {
+                out.entry(l.to_string()).or_default().rating = Some(r);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// How much of an album's length heard makes it no longer new to a listener (the owner, 2026-10-23: "5%").
+const HEARD_SHARE: f64 = 0.05;
+
 /// How many each of Home's looks back shows; and after how many days unplayed an album is half as far from the listening
 /// as one never played (Grave digging).
 const DIG: usize = 12;
@@ -135,6 +162,9 @@ pub(super) struct CrateLibrary {
     favourite_albums: Option<HashSet<String>>,
     /// The library as the one similarity sees it, made when a Sounds like first asks (`crates::Alike`).
     alike: std::sync::OnceLock<crates::Alike>,
+    /// What the viewer did with each line (plays, last played, rating: the crates' listener conditions); `None` when
+    /// no one asks (Home Assistant, voice).
+    uses: Option<HashMap<String, crates::Use>>,
     /// What makes music alike to the viewer: their Similar by (the radio's), else all signals alike.
     by: crate::similarity::Weights,
 }
@@ -168,12 +198,23 @@ impl CrateLibrary {
 
     /// What the axes test about the library as a whole.
     pub(super) fn world(&self) -> crates::World<'_> {
-        crates::World { membership: &self.membership, favourites: self.favourites.as_ref(), favourite_albums: self.favourite_albums.as_ref() }
+        crates::World {
+            membership: &self.membership,
+            favourites: self.favourites.as_ref(),
+            favourite_albums: self.favourite_albums.as_ref(),
+            uses: self.uses.as_ref(),
+            now: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64),
+        }
     }
 
     /// Which of one's own playlists hold each line.
     pub(super) fn membership(&self) -> &HashMap<String, Vec<String>> {
         &self.membership
+    }
+
+    /// What the viewer did with each line, when known.
+    pub(super) fn uses(&self) -> Option<&HashMap<String, crates::Use>> {
+        self.uses.as_ref()
     }
 
     /// The conditions with their Sounds like worked out (`crates::resolved`), once for all the files.
@@ -2252,7 +2293,9 @@ impl PlaylistService {
     /// The axes and their domains in the libraries not in `without`, for the builder (decision 0024, issue 4).
     pub async fn crate_axes(&self, want: Option<&str>, without: &[String]) -> Result<Vec<crates::AxisView>, ToggleError> {
         let lib = self.crate_library(want, false, false, without).await?;
-        Ok(crates::axes(lib.files(), &self.own_playlist_names().await?))
+        let one: Vec<[&crates::Facts; 1]> = lib.files().map(|f| [f]).collect();
+        let items: Vec<&[&crates::Facts]> = one.iter().map(|f| f.as_slice()).collect();
+        Ok(crates::list_axes(&items, &self.own_playlist_names().await?, None, lib.uses()))
     }
 
     /// One's own playlists' names: the membership axis' values.
@@ -2283,7 +2326,14 @@ impl PlaylistService {
             }
         }
         let by = asking_user().and_then(|u| super::radio::similar_by_of(&u)).map_or(crate::similarity::Weights::EQUAL, |o| crate::similarity::Weights::ranked(&o));
-        Ok(CrateLibrary { source: sid, files, switched_off, membership, favourites, favourite_albums, alike: Default::default(), by })
+        let uses = match asking_user() {
+            Some(user) => {
+                let files = files.clone();
+                tokio::task::spawn_blocking(move || uses_of(&user, &files)).await.map_err(|e| anyhow::anyhow!("{e}"))?.ok()
+            }
+            None => None,
+        };
+        Ok(CrateLibrary { source: sid, files, switched_off, membership, favourites, favourite_albums, alike: Default::default(), uses, by })
     }
 
     /// The favourite tracks' lines, from the media server. What was heard last is answered at once, with Cratarr's own
@@ -2555,6 +2605,29 @@ impl PlaylistService {
             }
             let sources = super::taste::Sources { favourites, playlists, plays, excluded, skipped: skips.into_iter().collect() };
             Ok(super::taste::taste(alike, &sources, &off))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?
+    }
+
+    /// Of these albums (Cratarr's own), those the asking account has heard a good part of (`HEARD_SHARE` of their length,
+    /// by their tracks' plays times their lengths): Home's New for you leaves them out (the owner, 2026-10-23).
+    pub async fn heard_albums(&self, ids: Vec<String>) -> Result<Vec<String>, ToggleError> {
+        let user = asking_user().ok_or_else(|| ToggleError::Refused("What was heard is an account's own: sign in.".into()))?;
+        let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+        tokio::task::spawn_blocking(move || -> Result<Vec<String>, ToggleError> {
+            let plays = serve.userdata.song_plays(&user)?;
+            let mut heard = Vec::new();
+            for id in ids {
+                let Some(album) = serve.library.album(&id)? else { continue };
+                let songs = album.song.unwrap_or_default();
+                let length: u64 = songs.iter().map(|s| s.duration).sum();
+                let played: u64 = songs.iter().map(|s| u64::from(plays.get(&s.id).map_or(0, |p| p.0)) * s.duration).sum();
+                if length > 0 && played as f64 >= HEARD_SHARE * length as f64 {
+                    heard.push(id);
+                }
+            }
+            Ok(heard)
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?
@@ -2848,6 +2921,7 @@ mod library_tests {
             favourites: None,
             favourite_albums: None,
             alike: Default::default(),
+            uses: None,
             by: crate::similarity::Weights::EQUAL,
         }
     }

@@ -75,6 +75,9 @@
   });
   /** The scale's ends as the profile names them (lib/ListProfile). */
   const ENDS: Record<string, [string, string]> = { energy: ['calm', 'intense'], danceability: ['still', 'danceable'] };
+  /** A range's unit, said after its numbers: the listener's (plays, days ago, stars) and a track's length. */
+  const UNITS: Record<string, string> = { bpm: ' BPM', plays: ' plays', played: ' days ago', added: ' days ago', rating: ' ★', length: ' min' };
+  const unit = (key: string | undefined) => (key ? (UNITS[key] ?? '') : '');
 
   /** A value as shown: AudioMuse's words capitalised. */
   const shown = (v: string) => (axis && WORD_AXES.includes(axis.key) ? wordShown(v) : v);
@@ -88,7 +91,8 @@
     else if (v.kind === 'any_of') s = v.values.length === 0 ? (axis?.kind === 'membership' ? 'any playlist' : 'none chosen') : v.values.length <= 2 ? v.values.map(shown).join(', ') : `${v.values.slice(0, 2).map(shown).join(', ')} +${v.values.length - 2}`;
     else {
       const n = (x: number) => String(Math.round(x));
-      s = v.min !== null && v.max !== null ? `${n(v.min)}–${n(v.max)}` : v.min !== null ? `${n(v.min)} on` : v.max !== null ? `up to ${n(v.max)}` : 'any';
+      const u = unit(axis?.key);
+      s = v.min !== null && v.max !== null ? `${n(v.min)}–${n(v.max)}${u}` : v.min !== null ? `${n(v.min)}${u} on` : v.max !== null ? `up to ${n(v.max)}${u}` : 'any';
     }
     s = condition.not ? `not ${s}` : s;
     // All is not the default: said folded too.
@@ -154,7 +158,7 @@
             max={Math.ceil(axis.max)}
             value={{ min: r.min, max: r.max }}
             {label}
-            ends={ENDS[axis.key] ?? [`${Math.floor(axis.min)}`, `${Math.ceil(axis.max)}${axis.key === 'bpm' ? ' BPM' : ''}`]}
+            ends={ENDS[axis.key] ?? [`${Math.floor(axis.min)}`, `${Math.ceil(axis.max)}${unit(axis.key)}`]}
             onchange={(v) => (condition.value = { kind: 'range', ...v })}
           />
         {:else if axis.key === 'bpm' && bpms}

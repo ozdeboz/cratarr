@@ -130,7 +130,7 @@ pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Fi
     let keys: Vec<String> = grouped.iter().filter(|(_, t)| crates::passes(t, &conditions, &w)).map(|(k, _)| k.clone()).collect();
     let passed = keys.len();
     let tracks: Vec<&[&Facts]> = grouped.iter().map(|(_, t)| t.as_slice()).collect();
-    let axes = crates::list_axes(&tracks, &app.playlists.own_playlist_names().await?, Some(lib.membership()));
+    let axes = crates::list_axes(&tracks, &app.playlists.own_playlist_names().await?, Some(lib.membership()), lib.uses());
     let tempo = crates::tempo_bands(tracks.iter().flat_map(|t| t.iter().map(|f| f.bpm)));
     let profile = (items == Items::Tracks).then(|| {
         let mine: Vec<&Facts> = tracks.iter().flat_map(|t| t.iter().copied()).filter(|f| !f.rel.is_empty()).collect();
