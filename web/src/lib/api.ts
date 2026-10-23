@@ -1335,6 +1335,9 @@ export type HeardEvent = {
   player: string | null;
   context: string | null;
 };
+/** A ListenBrainz user's listens into the asking account's history (decision 0064, amended): how many there were,
+ *  matched to the library, and new. */
+export const importListenBrainz = (user: string) => post<{ listens: number; matched: number; added: number }>('/api/history/listenbrainz', { user });
 /** Tells the server tracks heard; answers with the ids it has (now or before). */
 export const reportPlays = (events: HeardEvent[]) => post<{ done: string[] }>('/api/plays', { events });
 export const trackPlayed = (source: string, id: string) => quietly<{ counted: boolean }>(`${trackPath(source, id)}/played`, { method: 'POST' });

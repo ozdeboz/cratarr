@@ -33,6 +33,7 @@ mod playon;
 mod plays;
 mod queue;
 pub mod history;
+pub mod listenbrainz;
 pub mod radio;
 pub mod similar;
 pub mod tempo;

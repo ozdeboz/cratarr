@@ -137,7 +137,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/diagnostics/download", get(diagnostics_download))
             .route("/api/diagnostics/levels", get(diagnostics_levels).put(set_diagnostics_levels))
             .route("/api/players/settings", get(play_on_settings).put(save_play_on_settings))
-            .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
+            .route("/api/history/listenbrainz", post(import_listenbrainz))
+        .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
             .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
             .route("/api/sync/targets", get(sync_targets))
             .route("/api/albums/{source}/{album}/move", get(move_preview).post(move_album))
@@ -2450,6 +2451,24 @@ async fn queue_playlist(
 ) -> Result<(StatusCode, Json<crate::app::FromQueue>), ApiError> {
     let made = app.playing.playlist_from_queue(f.source.as_deref(), &q.name, q.ids, q.repeats).await?;
     Ok((StatusCode::CREATED, Json(made)))
+}
+
+#[derive(Deserialize)]
+struct ListenBrainzImport {
+    /// The ListenBrainz user whose listens are the asking account's.
+    user: String,
+}
+
+/// The asking account's listening history from ListenBrainz into its log (decision 0064, amended): how many listens
+/// there were, matched to the library, and new to the log.
+async fn import_listenbrainz(Json(b): Json<ListenBrainzImport>) -> Result<Json<crate::app::listenbrainz::Imported>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
+    let user = b.user.trim();
+    if user.is_empty() {
+        return Err(ToggleError::Refused("Say whose ListenBrainz listens.".into()).into());
+    }
+    Ok(Json(crate::app::listenbrainz::import(&serve, &account, user).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
 /// How many similar lists a list shows at its foot.

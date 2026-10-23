@@ -1,8 +1,11 @@
 <script lang="ts">
   // Import: plays, favourites, ratings and added dates from a server into an account; acts at once, followed while
   // it runs. A group per server: from whom and into which account (each chosen in a sheet), what, and the run with its
-  // result (the settings' North Star, 2026-10-19).
+  // result (the settings' North Star, 2026-10-19). And the listening history from ListenBrainz (decision 0064, amended):
+  // every listen it kept, into the history of the account signed in.
+  import { importListenBrainz } from '../api';
   import ChoiceSheet from './ChoiceSheet.svelte';
+  import ValueSheet from './ValueSheet.svelte';
   import { ed, IMPORT_WHAT } from './editor.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
@@ -17,7 +20,42 @@
   });
 
   let choosing = $state<{ source: string; which: 'user' | 'account' } | null>(null);
+
+  // ListenBrainz: whose listens, and the run's result.
+  let lbUser = $state('');
+  let naming = $state(false);
+  let lb = $state<{ running: boolean; done: { listens: number; matched: number; added: number } | null; error: string | null }>({ running: false, done: null, error: null });
+  async function runListenBrainz() {
+    lb = { running: true, done: null, error: null };
+    try {
+      lb = { running: false, done: await importListenBrainz(lbUser), error: null };
+    } catch (e) {
+      lb = { running: false, done: null, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
 </script>
+
+<Group title="From ListenBrainz" more="Every listen ListenBrainz kept, into your listening history.">
+  <Item name="User" value={lbUser || 'Choose…'} onclick={() => (naming = true)} />
+  {#if lb.running}
+    <Item lead="off" name="Importing" />
+  {:else}
+    <Item
+      lead={lb.done ? 'on' : lb.error ? 'bad' : null}
+      name={lb.done ? 'Imported' : lb.error ? 'Not imported' : 'Not run yet'}
+      line={lb.done ? `${lb.done.matched.toLocaleString()} of ${lb.done.listens.toLocaleString()} listens found · ${lb.done.added.toLocaleString()} new` : lb.error}
+      tone={lb.error ? 'bad' : null}
+      wrap
+    >
+      <button class="primary" disabled={!lbUser.trim()} onclick={runListenBrainz}>Import</button>
+    </Item>
+  {/if}
+</Group>
+{#if naming}
+  <ValueSheet title="ListenBrainz user" value={lbUser} allowEmpty={false} onsave={(v) => {
+      lbUser = v.trim();
+    }} onclose={() => (naming = false)} />
+{/if}
 
 {#if !ed.sub.accounts?.length}
   <Group title="Import" more={MORE}><Item name="Create an account under Authentication first" /></Group>
