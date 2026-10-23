@@ -120,6 +120,11 @@ impl CrateLibrary {
         &self.by
     }
 
+    /// Whether the file at a place (`alike`'s, the files' order) is in a library switched on.
+    pub(super) fn on(&self, i: usize) -> bool {
+        self.files.get(i).is_some_and(|f| !self.switched_off.contains(&f.folder))
+    }
+
     /// Whether these conditions can be worked out: what they need of the favourites is known.
     fn knows(&self, conditions: &[crates::Condition]) -> bool {
         (!crates::needs_favourites(conditions) || self.favourites.is_some())
@@ -2453,18 +2458,19 @@ impl PlaylistService {
     }
 
     /// The asking account's taste and what it avoids (app::taste; Insights › Listening › Profile): from its favourites,
-    /// its own playlists, its plays and skips (the log's, none while it slept), its exclusions, over every library.
-    pub async fn taste(&self) -> Result<super::taste::TasteView, ToggleError> {
+    /// its own playlists, its plays and skips (the log's, none while it slept), its exclusions; only tracks of the
+    /// libraries switched on (`without`: those off, Insights' switches), over the whole library's rarity.
+    pub async fn taste(&self, want: Option<&str>, without: &[String]) -> Result<super::taste::TasteView, ToggleError> {
         let user = asking_user().ok_or_else(|| ToggleError::Refused("A taste is an account's own: sign in.".into()))?;
         let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-        let lib = self.crate_library(None, false, false, &[]).await?;
+        let lib = self.crate_library(want, false, false, without).await?;
         let excluded = self.own_crates()?.excluded().await?;
         tokio::task::spawn_blocking(move || -> Result<super::taste::TasteView, ToggleError> {
             let alike = lib.alike();
-            let place = |song: &str| crate::serve::ids::track_of(song).and_then(|t| alike.place_of_track(t));
+            let place = |song: &str| crate::serve::ids::track_of(song).and_then(|t| alike.place_of_track(t)).filter(|&i| lib.on(i));
             let ud = &serve.userdata;
             let favourites = ud.starred(&user, crate::userdata::Kind::Song)?.iter().filter_map(|s| place(s)).collect();
-            let playlists = lib.membership().iter().filter_map(|(line, lists)| Some((alike.place_of_line(line)?, lists.len()))).collect();
+            let playlists = lib.membership().iter().filter_map(|(line, lists)| Some((alike.place_of_line(line).filter(|&i| lib.on(i))?, lists.len()))).collect();
             // Plays from the log (the counts have no times), finished or counted, none while they slept (the owner,
             // 2026-10-23: "if Home Assistant says I was asleep, exclude it").
             let mut played: HashMap<usize, u32> = HashMap::new();
@@ -2474,7 +2480,7 @@ impl PlaylistService {
                 }
             }
             let plays = played.into_iter().collect();
-            let excluded = excluded.iter().filter_map(|line| alike.place_of_line(line)).collect();
+            let excluded = excluded.iter().filter_map(|line| alike.place_of_line(line).filter(|&i| lib.on(i))).collect();
             let mut skips: HashMap<usize, u32> = HashMap::new();
             for l in ud.heard_since(&user, 0)?.into_iter().filter(|l| l.ended == crate::userdata::Ended::Skipped && !l.counted) {
                 if let Some(i) = place(&l.song) {
@@ -2702,6 +2708,8 @@ mod library_tests {
         let rock = [crates::Condition::new("genre", false, crates::Value::AnyOf { values: vec!["rock".into()] })];
         assert_eq!(library(&[]).select(&rock), library(&[1]).select(&rock));
         assert_eq!(crates::axes(library(&[1]).files(), &[]).iter().find(|a| a.key == "genre").unwrap().values, ["Dub", "Rock"], "the axes of what is on");
+        let off = library(&[1]);
+        assert_eq!((0..4).map(|i| off.on(i)).collect::<Vec<_>>(), [false, true, false, true], "the taste's places: Incoming off");
     }
 
     #[test]
