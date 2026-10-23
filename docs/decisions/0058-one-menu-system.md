@@ -56,6 +56,10 @@ applies to it; a card with nothing in it is not shown.
 | G | Change | Rename · Edit · Spoken as… · Picture or cover · Repair… · Sync… · the library's own (Move, Replace, Cancel conversion) |
 | H | Remove | Remove from (queue, playlist, crate, this device) · Delete — red, always last |
 
+Play next and Add to queue are a track's, an album's and an artist's, not a playlist's, a crate's or a genre's (the
+owner, 2026-10-23: for those "this doesn't really make sense"). A queue's Shuffle is once (a queue always has an order;
+Undo puts the order before back): never an on/off state.
+
 Names are the same everywhere: Info (not Details), View for the object itself, Go to for another.
 
 - **A slice** is a menu opened from a part of an object: a heart's long-press shows Feel; a port's long-press shows
@@ -68,7 +72,7 @@ Names are the same everywhere: Info (not Details), View for the object itself, G
 
 | | Track | Album | Artist | Playlist | Crate | Genre | Queue |
 |---|---|---|---|---|---|---|---|
-| A | Play now, Play next, Add to queue, Start radio | Play, Resume, Shuffle, Play next, Add to queue, Start radio | the album's | the album's | the album's | the album's | Play from here |
+| A | Play now, Play next, Add to queue, Start radio | Play, Resume, Shuffle, Play next, Add to queue, Start radio | the album's | Play, Shuffle, Start radio | Play, Shuffle, Start radio | Play, Shuffle, Start radio | Shuffle (once) |
 | B | Go to album, artist, genre | View, Go to artist, genre | View, Go to genre | View | View | View | – |
 | C | Favourite, Exclude here, everywhere | Favourite, Rating, Exclude | Favourite | Favourite | – | – | – |
 | D | Add to playlist | Add to playlist | Add to playlist | Pin to top | Save as playlist | Start a crate from it | Save as playlist |

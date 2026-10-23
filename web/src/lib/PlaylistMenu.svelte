@@ -243,8 +243,6 @@
     ? [
         { icon: 'play', label: 'Play', onclick: () => play('play'), disabled: working },
         { icon: 'shuffle', label: 'Shuffle', onclick: () => play('shuffle'), disabled: working },
-        { icon: 'playNext', label: 'Play next', onclick: () => play('next'), disabled: working },
-        { icon: 'listAdd', label: 'Add to queue', onclick: () => play('last'), disabled: working },
         ...(isLocal() ? [{ icon: 'radio' as const, label: 'Start radio', onclick: radio, disabled: working }] : []),
       ]
     : []}

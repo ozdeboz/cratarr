@@ -228,8 +228,6 @@
     {@const viewLabel = ticked.length === 1 ? 'View 1 playlist' : `View ${ticked.length} playlists`}
     <SelectBar label="Selected playlists" count="{ticked.length}/{items.length}" onclose={endSelect} place="page">
       <button aria-label="Play" title="Play" disabled={!ticked.length} onclick={() => playTicked('play')}><Icon name="play" size={24} /></button>
-      <button aria-label="Play next" title="Play next" disabled={!ticked.length} onclick={() => playTicked('next')}><Icon name="playNext" size={24} /></button>
-      <button aria-label="Add to queue" title="Add to queue" disabled={!ticked.length} onclick={() => playTicked('last')}><Icon name="listAdd" size={24} /></button>
       <button class:fav={tickedFav} aria-pressed={tickedFav} aria-label="Favourite" title="Favourite" disabled={!ticked.length} onclick={favouriteTicked}
         ><Icon name="heart" size={24} /></button
       >

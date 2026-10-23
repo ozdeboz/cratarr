@@ -1,7 +1,8 @@
 <script lang="ts">
   // A crate's menu (decision 0058; a genre is a crate of one condition): a long-press on its card on the Crates page, a
-  // right-click there, or the ⋮ in its panel. The crate on the card (its picture or its albums' mosaic), Play, Shuffle,
-  // Play next, Add to queue and Start radio as the large actions (its tracks as its favourites settings have them),
+  // right-click there, or the ⋮ in its panel. The crate on the card (its picture or its albums' mosaic), Play, Shuffle
+  // and Start radio as the large actions (no Play next or Add to queue: a crate's or a playlist's make no sense, the
+  // owner) (its tracks as its favourites settings have them),
   // then the shared groups: View; Save as playlist (a genre: Start a crate from it); Keep on this device and Share;
   // Edit (one's own); Delete (one's own, last).
   import MenuSheet from './MenuSheet.svelte';
@@ -95,8 +96,6 @@
   actions={[
     { icon: 'play', label: 'Play', disabled: working, onclick: () => run(() => playCrate(id, name, 'play'), null, 'Could not start playing') },
     { icon: 'shuffle', label: 'Shuffle', disabled: working, onclick: () => run(() => shuffleCrate(id, name), null, 'Could not start playing') },
-    { icon: 'playNext', label: 'Play next', disabled: working, onclick: () => run(() => playCrate(id, name, 'next'), 'Plays next.', 'Could not queue it') },
-    { icon: 'listAdd', label: 'Add to queue', disabled: working, onclick: () => run(() => playCrate(id, name, 'last'), 'Added to the queue.', 'Could not queue it') },
     { icon: 'radio', label: 'Start radio', disabled: working, onclick: () => run(() => crateRadio(id, name), null, "The radio didn't start") },
   ]}
 >

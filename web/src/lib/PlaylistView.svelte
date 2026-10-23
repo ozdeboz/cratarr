@@ -688,7 +688,8 @@
     const list = [play('play', 'play', 'Play')];
     if (album && !onDevice) list.push({ key: 'resume', icon: 'resume', label: 'Resume', run: resumeAlbum, disabled: !resumeAt });
     list.push(play('shuffle', 'shuffle', 'Shuffle'));
-    if (!crate) list.push(play('next', 'playNext', 'Play next'), play('last', 'listAdd', 'Add to queue'));
+    // Play next and Add to queue: an album's and an artist's, not a playlist's or a crate's (the owner, 2026-10-23).
+    if (album || artist) list.push(play('next', 'playNext', 'Play next'), play('last', 'listAdd', 'Add to queue'));
     // An artist as the radio's input (decision 0036), as a crate is: their tracks, and like them from anywhere.
     if (artist && isLocal() && source === 'cratarr') list.push({ key: 'radio', icon: 'radio', label: 'Start radio', run: artistRadio, disabled: !canPlay });
     // A crate as the radio's input (decision 0036): like it, from anywhere; or only its tracks, endlessly.
