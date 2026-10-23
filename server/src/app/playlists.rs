@@ -170,6 +170,19 @@ pub struct FitView {
     pub turned_down: usize,
 }
 
+/// A ranked crate's fit in the list of them all (`PlaylistService::crate_fits`).
+#[derive(Debug, serde::Serialize)]
+pub struct FitSummary {
+    #[serde(rename = "crate")]
+    pub crate_id: String,
+    pub name: String,
+    /// What it sounds like ("Cobalt Hour", "your week"): its Not for sheet's title is "Not for" it.
+    pub of: String,
+    pub avoiding: Vec<crates::Trait>,
+    pub rules: Vec<crates::Condition>,
+    pub turned_down: usize,
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct FitTrait {
     #[serde(rename = "trait")]
@@ -2054,6 +2067,32 @@ impl PlaylistService {
         let (fit, _, (learned, turned_down)) = self.fit_of(item).await?;
         let learned = learned.into_iter().map(|t| FitTrait { dismissed: fit.dismissed.contains(&t.key()), key: t.key(), r#trait: t }).collect();
         Ok(FitView { learned, rules: fit.rules, turned_down })
+    }
+
+    /// Every ranked crate whose fit holds anything (what was turned down for it, rules, dismissals), the asking
+    /// account's, for Settings' Musical taste (claude-632's, 76): each with its name, what it avoids (the traits
+    /// learned, those dismissed left out), its rules and how many were turned down. A crate that no longer resolves (a
+    /// playlist gone) is left out.
+    pub async fn crate_fits(&self) -> Result<Vec<FitSummary>, ToggleError> {
+        let store = self.own_crates()?;
+        let mut ids: std::collections::BTreeSet<String> = store.all_fits().await?.into_keys().collect();
+        ids.extend(store.all_left_out().await?.into_iter().filter(|(id, l)| id.starts_with(crates::LIKE) && !l.is_empty()).map(|(id, _)| id));
+        let mut out = Vec::new();
+        for id in ids {
+            let Some((item, count)) = crates::like_of(&id) else { continue };
+            let name = match item.strip_prefix(crates::LIST) {
+                Some(list) if self.entries(list).await.is_ok() => format!("Sounds like {}", list.rsplit('/').next().unwrap_or(list)),
+                Some(_) => continue,
+                None => match like_crate(&id, item, count).await {
+                    Ok(def) => def.name,
+                    Err(_) => continue,
+                },
+            };
+            let (fit, avoid, (_, turned_down)) = self.fit_of(item).await?;
+            let of = name.strip_prefix("Sounds like ").unwrap_or(&name).to_string();
+            out.push(FitSummary { crate_id: id.clone(), name, of, avoiding: avoid.traits, rules: fit.rules, turned_down });
+        }
+        Ok(out)
     }
 
     /// Its rules and dismissals, as the sheet leaves them.

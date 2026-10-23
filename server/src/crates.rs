@@ -1548,6 +1548,11 @@ impl CrateStore {
         Ok(self.stored().await?.fits.get(id).cloned().unwrap_or_default())
     }
 
+    /// Every ranked crate's fit that holds anything, by its id.
+    pub async fn all_fits(&self) -> Result<BTreeMap<String, Fit>> {
+        Ok(self.stored().await?.fits)
+    }
+
     pub async fn set_fit(&self, id: &str, fit: Fit) -> Result<()> {
         let mut s = self.stored().await?;
         if fit.is_empty() {

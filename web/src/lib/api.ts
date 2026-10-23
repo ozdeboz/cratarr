@@ -590,6 +590,11 @@ export function traitLabel(t: Trait): string {
  *  many were turned down. */
 export type CrateFit = { learned: { trait: Trait; key: string; dismissed: boolean }[]; rules: Condition[]; turned_down: number };
 export const getCrateFit = (id: string) => quietly<CrateFit>(`/api/crates/${encodeURIComponent(id)}/fit`);
+/** Every ranked crate whose fit holds anything, the account's (Settings' Musical taste): its id and name (`of`: what
+ *  it sounds like, its Not for sheet's name, "Cobalt Hour"), what it
+ *  avoids (learned, not dismissed), its rules, how many were turned down. Each opens its Not for sheet. */
+export type FitSummary = { crate: string; name: string; of: string; avoiding: Trait[]; rules: Condition[]; turned_down: number };
+export const getCrateFits = () => quietly<FitSummary[]>('/api/crates/fits');
 export const setCrateFit = (id: string, fit: { rules: Condition[]; dismissed: string[] }) =>
   request<void>(`/api/crates/${encodeURIComponent(id)}/fit`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fit) });
 /** A crate's exclusions: it leaves them out whatever its conditions and toggles say. Out and back in again are

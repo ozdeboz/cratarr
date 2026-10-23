@@ -139,6 +139,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/artists/{id}/photo", get(artist_photo))
         .route("/api/artists/about", get(artist_about))
         .route("/api/artists/picks", get(artist_picks))
+        .route("/api/crates/fits", get(crate_fits))
         .route("/api/home/heard", post(home_heard))
         .route("/api/history/sleep", post(sleep))
         .route("/api/home/weather", post(home_weather))
@@ -1589,6 +1590,11 @@ struct LeftOutRequest {
 
 /// Takes tracks or whole albums out of a crate by hand (decision 0024, amended 2026-10-19): they stay out over its
 /// conditions and toggles, an album's tracks now and later.
+/// Every ranked crate whose fit holds anything, the account's (Settings' Musical taste).
+async fn crate_fits(State(app): State<Arc<App>>) -> Result<Json<Vec<crate::app::FitSummary>>, ApiError> {
+    Ok(Json(app.playlists.crate_fits().await?))
+}
+
 /// A ranked crate's fit (its Not for sheet): the traits learned from what was turned down for it, its rules.
 async fn crate_fit(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<crate::app::FitView>, ApiError> {
     Ok(Json(app.playlists.crate_fit(&id).await?))
