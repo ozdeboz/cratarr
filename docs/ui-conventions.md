@@ -477,8 +477,8 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   The waiting bar and the button's spinner above stay for answers that take seconds.
 - **A page's work in its pill** (the owner, 2026-10-24: as the search). The page's own button (Look again, Sync now)
   has a ring of the work's progress while it runs. A tap on it unfolds the pill leftwards into the one line and bar
-  (above), for four seconds, and folds it again (at once when the work ends); a tap while the work runs unfolds it again
-  rather than starting it twice. The page shows no line of its own at the top. The search unfolds the same way: its
+  (above), for four seconds, and folds it again (at once when the work ends); a tap while it shows folds it, and a tap
+  while the work runs folded unfolds it again, never starting the work twice. The page shows no line of its own at the top. The search unfolds the same way: its
   field right of the magnifier, inside the pill. Either keeps the pill as it is (its glass, its colours, the other
   buttons in place), and one unfolds at a time: the search button hides while the progress shows, the page's button
   while the search is open.

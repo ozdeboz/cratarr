@@ -83,6 +83,12 @@
   function act(a: NonNullable<typeof pageView.action>) {
     // A button that starts work it shows (`progress` given, null while idle); others only act.
     if (a.progress === undefined) return a.run();
+    // Its progress showing: the tap folds it (the owner, 2026-10-24).
+    if (showing) {
+      clearTimeout(fold);
+      showing = false;
+      return;
+    }
     if (a.progress === null) a.run();
     unfold();
   }
