@@ -77,28 +77,36 @@
     prefs.libraryDown = true;
     location.hash = '#/library';
   }
-  /** Plays New for you leading (the owner, 2026-10-24): all of its albums, one after the other in its order, from the
-   *  one in front (those before it stay before it in the queue). Its albums on the front one's server. */
-  async function playNewest() {
+  /** The section on top's Play (the owner, 2026-10-24): all of it, from the album in front (those before it stay before
+   *  it in the queue). Blast from the past: its tracks from the front album's; the others: their albums one after the
+   *  other in their order, on the front one's server. */
+  async function playFeatured() {
     const front = frontAlbum;
     if (!front) return;
-    const albums = newest.filter((n) => n.source === front.source);
+    if (lead === 'past') return playPast('play', dug?.past.find((t) => t.album_id === front.id)?.id);
+    const albums = heroAlbums.filter((a) => a.source === front.source);
     starting = true;
     try {
-      const views = await Promise.all(albums.map((n) => albumView(n.source, n.a.id).catch(() => null)));
+      const views = await Promise.all(albums.map((a) => albumView(a.source, a.id).catch(() => null)));
       const ids: string[] = [];
       let from: string | undefined;
       views.forEach((v, i) => {
         const own = v ? v.rows.flatMap((r) => (r.id && !r.missing ? [r.id] : [])) : [];
-        if (albums[i].a.id === front.id) from = own[0];
+        if (albums[i].id === front.id) from = own[0];
         ids.push(...own);
       });
-      if (ids.length) await playCollection({ kind: 'tracks', source: front.source, ids }, 'play', 'New for you', from);
+      if (ids.length) await playCollection({ kind: 'tracks', source: front.source, ids }, 'play', leadTitle, from);
     } catch (e) {
       toast.fail(e, 'Could not start playing');
     } finally {
       starting = false;
     }
+  }
+  /** The Library, its albums played longest ago first (Grave digging's ›). */
+  function allGraves() {
+    prefs.libraryOrder = 'played';
+    prefs.libraryDown = false;
+    location.hash = '#/library';
   }
 
   // Sounds like your week: its first rows (for the covers), its size, its genres, and how many tracks were played.
@@ -442,8 +450,8 @@
         {/if}
         {#if lead === 'moment'}
           <button class="radio" disabled={starting} onclick={momentRadio}><Icon name="radioTower" size={18} />Radio</button>
-        {:else if lead === 'past' || lead === 'newest'}
-          <button class="radio" disabled={starting} onclick={() => (lead === 'past' ? playPast('play') : playNewest())}><Icon name="play" size={18} />Play</button>
+        {:else}
+          <button class="radio" disabled={starting} onclick={playFeatured}><Icon name="play" size={18} />Play</button>
         {/if}
       </div>
     </section>
@@ -451,13 +459,11 @@
 {/snippet}
 
 {#snippet momentPart()}
-  <!-- The moment further down (not leading): a shelf as New for you's, its covers a little bigger, Radio at its heading
-       in place of the › (the owner, 2026-10-24). -->
+  <!-- The moment further down (not leading): a shelf as New for you's, its covers a little bigger, its › opening its
+       crate (the owner, 2026-10-24; its Radio is on top only). -->
   {#if turn('moment') && moment && momentAlbums.length}
     <section aria-label={moment.name}>
-      <SectionHead title={moment.name}>
-        {#snippet end()}<button class="radio" disabled={starting} onclick={momentRadio}><Icon name="radioTower" size={18} />Radio</button>{/snippet}
-      </SectionHead>
+      <SectionHead title={moment.name} onmore={() => viewLike('now')} />
       <ul class="shelf big">
         {#each momentAlbums as a (a.id)}
           <li><AlbumCard source="cratarr" album={a} lines={[a.artist ?? '', a.year ? String(a.year) : '']} /></li>
@@ -549,7 +555,7 @@
 {#snippet gravesPart()}
   {#if turn('graves') && graves.length}
     <section aria-label="Grave digging">
-      <SectionHead title="Grave digging" />
+      <SectionHead title="Grave digging" onmore={allGraves} />
       <ul class="shelf">
         {#each graves as g (g.a.id)}
           <li><AlbumCard source="cratarr" album={g.a} lines={[g.a.artist ?? '', g.last === null ? 'never played' : `played ${ago(g.last)}`]} /></li>
@@ -740,7 +746,7 @@
     font-size: 0.9rem;
   }
 
-  /* The moment's Radio (and a leading section's Play): one pill, in its caption or at its shelf's heading. */
+  /* The leading section's Radio (the moment) or Play, in its caption. */
   .radio {
     display: inline-flex;
     flex: none;
