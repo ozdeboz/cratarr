@@ -66,6 +66,8 @@ object Announcer {
     private const val HEARD_AFTER_MS = 250L
     /** Silence before a clip on a player that was idle, so a sleeping Bluetooth link wakes first. */
     private const val WAKE_MS = 400L
+    /** How long a clip waits for the Ready service to come to the foreground before it plays alone. */
+    private const val READY_WAIT_MS = 600L
     /** A mixed-in clip not out this long after its length (the music stopped under it) is given up. */
     private const val STUCK_AFTER_MS = 10_000L
 
@@ -158,8 +160,23 @@ object Announcer {
         next()
     }
 
-    /** The clip on a player of its own: nothing plays (or the music's format is one the mixer does not take). */
+    /**
+     * The clip on a player of its own: nothing plays (or the music's format is one the mixer does not take). From
+     * Android 15 on, an app not on the screen starts no sound unless one of its services is in the foreground (its
+     * request is ignored, Ready.kt): with music playing, the player's service is; else the Ready service is asked for a
+     * moment (as a start of the music asks), and an announcement Android still will not let sound is reported failed,
+     * with why, instead of done unheard.
+     */
     private fun playAlone(r: Request) {
+        if (r.musicPlaying() || Ready.foreground(r.context)) return soundAlone(r)
+        Ready.ensure(r.context, "announce", briefly = true)
+        main.postDelayed({
+            if (Ready.foreground(r.context)) soundAlone(r)
+            else finish(r, State(r.id, "failed", "Android lets the app make no sound from the background: turn on Stay ready"))
+        }, READY_WAIT_MS)
+    }
+
+    private fun soundAlone(r: Request) {
         val withMusic = r.musicPlaying()
         val p = alone ?: ExoPlayer.Builder(r.context)
             // No focus asked: a transient request would pause the music, or duck it by Android's own fixed step.
