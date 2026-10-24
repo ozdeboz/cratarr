@@ -93,6 +93,12 @@ CREATE TABLE IF NOT EXISTS scrobble_queue (
   id INTEGER PRIMARY KEY, user TEXT NOT NULL, target TEXT NOT NULL, song TEXT NOT NULL, at INTEGER NOT NULL,
   tries INTEGER NOT NULL DEFAULT 0, next INTEGER NOT NULL DEFAULT 0, why TEXT);
 CREATE INDEX IF NOT EXISTS scrobble_queue_due ON scrobble_queue (next, at);
+-- Discover (decision 0069): each account's suggestions as last looked up (JSON, app::discover::Found), and the albums
+-- it answered: `no` (Not interested: never again, and an artist twice so is left out) or `wanted` (asked of Lidarr).
+CREATE TABLE IF NOT EXISTS discover_found (user TEXT PRIMARY KEY, at INTEGER NOT NULL, found TEXT NOT NULL) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS discover_answer (
+  user TEXT NOT NULL, album TEXT NOT NULL, artist TEXT NOT NULL, answer TEXT NOT NULL, at INTEGER NOT NULL,
+  PRIMARY KEY (user, album)) WITHOUT ROWID;
 -- Sleep is no longer kept (the owner, 2026-10-24: not something that should be in Cratarr at all).
 DROP TABLE IF EXISTS asleep;
 ";
@@ -978,6 +984,35 @@ impl UserData {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Discover's suggestions for `user` as last looked up (JSON), and when (decision 0069).
+    pub fn discover_found(&self, user: &str) -> Result<Option<(i64, String)>> {
+        Ok(self.db().query_row("SELECT at, found FROM discover_found WHERE user = ?1", [user], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
+    }
+
+    pub fn set_discover_found(&self, user: &str, at: i64, found: &str) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO discover_found (user, at, found) VALUES (?1, ?2, ?3)", params![user, at, found])?;
+        Ok(())
+    }
+
+    /// An album of Discover answered: `no` or `wanted`, kept by its key and its artist's.
+    pub fn answer_discover(&self, user: &str, album: &str, artist: &str, answer: &str) -> Result<()> {
+        self.db().execute(
+            "INSERT OR REPLACE INTO discover_answer (user, album, artist, answer, at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![user, album, artist, answer, now()],
+        )?;
+        Ok(())
+    }
+
+    /// The albums `user` answered (their keys), and the artists twice said no to (theirs).
+    pub fn discover_answered(&self, user: &str) -> Result<(std::collections::HashSet<String>, std::collections::HashSet<String>)> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT album FROM discover_answer WHERE user = ?1")?;
+        let albums = st.query_map([user], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+        let mut st = db.prepare_cached("SELECT artist FROM discover_answer WHERE user = ?1 AND answer = 'no' GROUP BY artist HAVING count(*) >= 2")?;
+        let artists = st.query_map([user], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok((albums, artists))
+    }
+
     pub fn import_choice(&self, source: &str) -> Result<Option<String>> {
         Ok(self.db().query_row("SELECT choice FROM import_choices WHERE source = ?1", [source], |r| r.get(0)).optional()?)
     }
@@ -1677,6 +1712,23 @@ mod tests {
         assert_eq!((get(Kind::Album, "al-x").play_count, get(Kind::Artist, "ar-a").play_count), (1, 1));
         assert!(get(Kind::Song, "tr-1").starred_at.is_none());
         assert!(u.imported(KEY, Kind::Song, &["tr-1".into()]).unwrap().is_empty(), "forgotten: the next import starts afresh");
+    }
+
+    #[test]
+    fn discover_keeps_its_answers_and_leaves_out_an_artist_said_no_to_twice() {
+        let u = UserData::open(None).unwrap();
+        u.answer_discover("me", "rg-1", "bonobo", "no").unwrap();
+        u.answer_discover("me", "rg-2", "air", "wanted").unwrap();
+        let (albums, artists) = u.discover_answered("me").unwrap();
+        assert!(albums.contains("rg-1") && albums.contains("rg-2"));
+        assert!(artists.is_empty(), "one no is not the artist's");
+        u.answer_discover("me", "rg-3", "bonobo", "no").unwrap();
+        u.answer_discover("me", "rg-4", "air", "wanted").unwrap();
+        let (_, artists) = u.discover_answered("me").unwrap();
+        assert_eq!(artists.into_iter().collect::<Vec<_>>(), ["bonobo"], "wanted is no no");
+        assert!(u.discover_answered("you").unwrap().0.is_empty(), "each account its own");
+        u.set_discover_found("me", 5, "{}").unwrap();
+        assert_eq!(u.discover_found("me").unwrap(), Some((5, "{}".into())));
     }
 
     #[test]

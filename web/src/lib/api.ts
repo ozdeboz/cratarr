@@ -1466,6 +1466,31 @@ export type Task = {
 type Started = { task: Task };
 export const getTasks = () => quietly<{ tasks: Task[] }>('/api/tasks');
 
+/** An album Discover suggests (decision 0069): outside the library, with why (one reason a source). */
+export type DiscoverAlbum = {
+  key: string;
+  album: string;
+  artist: string;
+  artist_key: string;
+  year: number | null;
+  release_group: string | null;
+  cover: string | null;
+  links: { name: string; url: string }[];
+  new_artist: boolean;
+  why: string[];
+};
+/** Discover's page: the suggestions as last found (none before the first look), which services it asks, and whether
+ *  Want can fetch through Lidarr. */
+export type DiscoverView = {
+  found: { at: number; albums: DiscoverAlbum[]; notes: string[] } | null;
+  services: { listenbrainz: boolean; lastfm: boolean };
+  lidarr: boolean;
+};
+export const getDiscover = () => request<DiscoverView>('/api/discover');
+export const refreshDiscover = () => post<Started>('/api/discover/refresh', {});
+export const wantDiscover = (key: string) => post<{ said: string }>('/api/discover/want', { key });
+export const notDiscover = (key: string) => post<void>('/api/discover/no', { key });
+
 /** A ListenBrainz user's listens into the asking account's history (decisions 0064 and 0067), as a task. */
 export const importListenBrainz = (user: string) => post<Started>('/api/history/listenbrainz', { user });
 /** What importing them would bring, nothing written. */
