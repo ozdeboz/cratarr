@@ -346,13 +346,22 @@
   const pick = Math.random();
   /** The personal greeting (Settings › Home): a European day's wish on its day, else one of greet-by-time's greetings
    *  for the time of day (the night is the evening's), with their name when it is known. */
-  const greeting = $derived.by(() => {
+  const greetWords = $derived.by(() => {
     const now = new Date();
     const h = now.getHours();
     const day = DAYS[`${now.getMonth() + 1}-${now.getDate()}`];
     const list = h >= 5 && h < 12 ? greet.morningGreetings : h >= 12 && h < 18 ? greet.dayGreetings : greet.eveningGreetings;
-    const words = day ?? list[Math.floor(pick * list.length)];
-    return me.name ? `${words}, ${me.name}!` : `${words}!`;
+    return day ?? list[Math.floor(pick * list.length)];
+  });
+  const greeting = $derived(me.name ? `${greetWords}, ${me.name}!` : `${greetWords}!`);
+  /** A word worth repeating: not "a", "the", "for". */
+  const wordsOf = (s: string) => new Set(s.toLowerCase().match(/[a-z]+/g)?.filter((w) => w.length > 3) ?? []);
+  /** The moment's own name under the greeting, unless the two share a word ("Good evening" over "Music for a Rainy
+   *  Evening"): then "Best for now" (the owner, 2026-10-24). */
+  const momentUnder = $derived.by(() => {
+    const name = moment?.name ?? '';
+    const said = wordsOf(greetWords);
+    return [...wordsOf(name)].some((w) => said.has(w)) ? 'Best for now' : name;
   });
 
   // The first section leads Home as the flow on top, over the sky (the owner, 2026-10-24): only those made of albums
@@ -416,7 +425,7 @@
       {#if prefs.homeGreeting}
         <!-- The personal greeting (Settings › Home): the time of day and their name, then what plays here. -->
         <h2 class="greeting">{greeting}</h2>
-        <p class="for-now">{lead === 'moment' ? 'Best for now' : leadTitle}</p>
+        <p class="for-now">{lead === 'moment' ? momentUnder : leadTitle}</p>
       {:else}
         <h2>{leadTitle}</h2>
       {/if}
