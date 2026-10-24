@@ -183,8 +183,12 @@ export function usePageAction(get: () => PageAction | null) {
 export const searchFor = (page: string) =>
   page === 'playlists'
     ? 'Filter playlists'
-    : page === 'library' || page === 'downloads' || page === 'local-albums'
+    : page === 'library' || page === 'local-albums'
       ? 'Filter albums'
+      : page === 'downloads'
+        ? 'Filter downloads'
+        : page === 'settings'
+          ? 'Search settings'
       : page === 'local-artists'
         ? 'Filter artists'
         : page === 'local-tracks'
@@ -192,7 +196,7 @@ export const searchFor = (page: string) =>
           : null;
 
 /** The pages whose view settings the View sheet holds. */
-export const hasView = (page: string) => ['playlists', 'library', 'downloads'].includes(page);
+export const hasView = (page: string) => ['playlists', 'library'].includes(page);
 
 /** How many, in words. */
 export const howMany = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;

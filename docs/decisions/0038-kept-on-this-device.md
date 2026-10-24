@@ -74,5 +74,6 @@ the page itself says what is on the device and why.
 - **Synced**: each item with its picture, kind, count and size or state; its row fills while it syncs. Its own menu
   (in the panel) has the switch.
 - **Downloaded once**: the albums of the one-time copies (the app marks each download `manual` or not), filling as
-  they come.
+  they come. A track a synced item holds too shows under Synced only (the owner, the same day); it stays a one-time
+  copy, so it is back under Downloaded once when that item stops syncing.
 - The pill's button syncs now, ringed while anything syncs or waits.

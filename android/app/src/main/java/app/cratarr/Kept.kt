@@ -174,12 +174,13 @@ object Kept {
     }
 
     /**
-     * The downloads that are the owner's own Download once (held by `manual`), for the Downloads page's Downloaded once;
-     * one no kept item or Download holds is from before holders were kept, and so the owner's too.
+     * The downloads that are the owner's own Download once (held by `manual` alone), for the Downloads page's Downloaded
+     * once; one a synced item holds too shows under Synced only (the owner, 2026-10-24). One nothing holds is from
+     * before holders were kept, and so the owner's.
      */
     fun manualKeys(context: Context): (String) -> Boolean {
         val holders = loadHolders(context.applicationContext)
-        return { key -> holders[key]?.let { MANUAL in it || it.isEmpty() } ?: true }
+        return { key -> holders[key]?.let { it.isEmpty() || it == setOf(MANUAL) } ?: true }
     }
 
     /** WorkManager's every few hours, with the downloads' rules as its constraints. */

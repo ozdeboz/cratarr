@@ -16,6 +16,8 @@
   import { crates, loadCrates } from './lib/crates.svelte';
   import { excluded, loadExcluded } from './lib/exclusions.svelte';
   import { logDetail, SECTIONS, settingsRead, settingsSaved, type SettingsSection } from './lib/settingsSections.svelte';
+  import { pageView } from './lib/pageView.svelte';
+  import { loadSettingsWords, settingsMatches } from './lib/settingsSearch.svelte';
 
   // The last answer (kept for the panel too), read again here.
   const s = $derived<Settings | null>(settingsRead.s);
@@ -121,11 +123,26 @@
     }
   }
 
-  const shown = $derived(SECTIONS.filter((x) => (!x.app || inApp) && (!x.admin || me.admin)));
+  // The pill's search (lib/settingsSearch): the parts that hold what is searched, each saying where in its line.
+  const words = $derived(pageView.query.trim().toLowerCase().split(/\s+/).filter(Boolean));
+  $effect(() => {
+    if (words.length) void loadSettingsWords();
+  });
+  const found = (id: SettingsSection, title: string) => (words.length ? settingsMatches(id, title, words) : null);
+  const allowed = $derived(SECTIONS.filter((x) => (!x.app || inApp) && (!x.admin || me.admin)));
+  const shown = $derived(
+    words.length
+      ? allowed.filter((x) => {
+          const f = found(x.id, x.title)!;
+          return f.title || f.rows.length > 0;
+        })
+      : allowed,
+  );
   const groups = $derived([shown.filter((x) => !x.admin), shown.filter((x) => x.admin)]);
 </script>
 
 <main>
+  {#if words.length && !shown.length}<p class="none">No settings match.</p>{/if}
   {#each groups as group, g (g)}
     {#if group.length}
       <section class="group" aria-labelledby="settings-g{g}">
@@ -133,7 +150,8 @@
         <div class="list">
           {#each group as c (c.id)}
             {@const open = settingsOf(panel.viewed) === c.id}
-            {@const l = line(c.id)}
+            {@const f = found(c.id, c.title)}
+            {@const l = f?.rows.length ? f.rows.slice(0, 4).join(' · ') : line(c.id)}
             <button class="row" class:open aria-pressed={open} onclick={() => viewPlaylist(SETTINGS + c.id)}>
               <Icon name={c.icon} size={24} />
               <span class="text">
@@ -152,6 +170,12 @@
 <style>
   main {
     padding: 16px clamp(12px, 2vw, 32px) 96px;
+  }
+
+  .none {
+    margin: 8px 4px;
+    color: var(--muted);
+    font-size: 0.9rem;
   }
 
   /* One column, never wider than a phone held sideways: beside a part it is the list's own column (App). */
