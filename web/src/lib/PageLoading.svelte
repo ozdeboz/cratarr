@@ -68,6 +68,12 @@
     text-align: center;
   }
 
+  /* A progress bar under it (lib/Meter, at most 240 px) centred too, under the mark, not at the box's left (the owner,
+     2026-10-24: Discover's first look). */
+  .under :global(.track) {
+    margin-inline: auto;
+  }
+
   /* Measured: as high as the room left, the mark placed from the top. */
   .page-loading.fitted {
     align-items: start;
