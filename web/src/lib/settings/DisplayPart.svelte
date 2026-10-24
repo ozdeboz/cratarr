@@ -7,8 +7,10 @@
   // off as a whole with Music profiles. A list's Typical artists always show where it has
   // them (the owner, 2026-10-24: no switch).
   import Seg from '../Seg.svelte';
+  import BandSlider from '../BandSlider.svelte';
+  import { BAND_DIRECTIONS, BAND_ENDS, BAND_LOOKS, BANDS_MORE, COUNT_MORE, WINDOW_MORE } from '../bandWaves.svelte';
   import { inApp } from '../app.svelte';
-  import { PROFILE_ROWS, prefs, type Theme } from '../prefs.svelte';
+  import { BAND_COUNT, BAND_CYCLES, BAND_GAP, BAND_HEIGHT, BAND_PACE, BAND_WINDOW, PROFILE_ROWS, prefs, type Theme } from '../prefs.svelte';
   import OrderList from './OrderList.svelte';
   import OrderReset from './OrderReset.svelte';
   import Group from './Group.svelte';
@@ -16,12 +18,6 @@
   import PlayerRowList from './PlayerRowList.svelte';
   import { offerReset } from './reset.svelte';
 
-  const BAND_LOOKS: { value: typeof prefs.playerBands; label: string }[] = [
-    { value: 'off', label: 'Off' },
-    { value: 'aurora', label: 'Aurora' },
-    { value: 'sirius', label: 'Sirius' },
-    { value: 'hairlines', label: 'Hairlines' },
-  ];
   const THEMES: { value: Theme; label: string }[] = [
     { value: 'auto', label: 'System' },
     { value: 'light', label: 'Light' },
@@ -48,7 +44,7 @@
   <Item name="Theme"><Seg label="Theme" options={THEMES} bind:value={prefs.theme} /></Item>
 </Group>
 
-<Group title="Player">
+<Group title="Player details">
   {#snippet tail()}
     {#if prefs.playerRow}<OrderReset
         label="Extra details"
@@ -62,11 +58,29 @@
   {/snippet}
   <Item name="Extra details" toggle={{ checked: prefs.playerRow, onchange: (on) => (prefs.playerRow = on) }} />
   {#if prefs.playerRow}<PlayerRowList />{/if}
+</Group>
+
+<!-- The full-screen player's bands (lib/BandGlass): the look, and the two settings every look takes. -->
+<Group title="Player visualisation">
   <Item
     name="Bands"
-    more={"The track's low, mid and high, under the buttons when the full-screen player is landscape.\n\nAurora: the whole track as three fields of light. Sirius: three ribbons as loud as the music is now. Hairlines: the whole track as three fine lines."}
+    more={BANDS_MORE}
     ><Seg label="Bands" options={BAND_LOOKS} bind:value={prefs.playerBands} /></Item
   >
+  {#if prefs.playerBands !== 'off'}
+    <Item name="Bands" more={COUNT_MORE}><BandSlider label="Bands" range={BAND_COUNT} bind:value={prefs.playerBandsCount} ends={['3', '32']} whole /></Item>
+    <Item name="Speed"><BandSlider label="Speed" range={BAND_PACE} bind:value={prefs.playerBandsSpeed} ends={['Calm', 'Radical']} /></Item>
+    <Item
+      name="Window"
+      more={WINDOW_MORE}
+      ><BandSlider label="Window" range={BAND_WINDOW} bind:value={prefs.playerBandsWindow} ends={['Beat', 'Phrase']} unit="s" /></Item
+    >
+    <Item name="Cycles"><BandSlider label="Cycles" range={BAND_CYCLES} bind:value={prefs.playerBandsCycles} ends={['Few', 'Many']} /></Item>
+    <Item name="Height"><BandSlider label="Height" range={BAND_HEIGHT} bind:value={prefs.playerBandsHeight} ends={['Low', 'Tall']} /></Item>
+    <Item name="Gap"><BandSlider label="Gap" range={BAND_GAP} bind:value={prefs.playerBandsGap} ends={['None', 'Wide']} linear /></Item>
+    <Item name="Direction"><Seg label="Direction" options={BAND_DIRECTIONS} bind:value={prefs.playerBandsDirection} /></Item>
+    <Item name="Ends"><Seg label="Ends" options={BAND_ENDS} bind:value={prefs.playerBandsEnds} /></Item>
+  {/if}
 </Group>
 
 <Group title="Content">

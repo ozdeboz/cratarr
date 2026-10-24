@@ -12,6 +12,7 @@
   import QueueSheet from './QueueSheet.svelte';
   import OutputSheet from './OutputSheet.svelte';
   import SleepSheet from './SleepSheet.svelte';
+  import BandSheet from './BandSheet.svelte';
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs } from './prefs.svelte';
@@ -19,7 +20,7 @@
   import Waveform from './Waveform.svelte';
   import WaveLens from './WaveLens.svelte';
   import { loadWaveform, waveformOf } from './waveforms.svelte';
-  import { bandWaveOf, loadBandWave } from './bandWaves.svelte';
+  import { SILENT, loadSpectrum, spectrumOf } from './bandWaves.svelte';
   import BandGlass from './BandGlass.svelte';
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { local, restoreUpcoming, setRepeat, shuffleUpcoming } from './localPlayer.svelte';
@@ -88,26 +89,29 @@
     if (np) loadWaveform(np.source, np.id);
   });
   const wave = $derived(np ? waveformOf(np.source, np.id) : null);
-  // The three bands (lib/BandGlass), when chosen: read only then.
+  // The bands (lib/BandGlass), when chosen: the track's spectrum, read only then.
   $effect(() => {
-    if (np && prefs.playerBands !== 'off') loadBandWave(np.source, np.id);
+    if (np && dur && prefs.playerBands !== 'off') loadSpectrum(np.source, np.id, dur);
   });
-  const bandWave = $derived(np && prefs.playerBands !== 'off' ? bandWaveOf(np.source, np.id) : null);
+  const spectrum = $derived(np && prefs.playerBands !== 'off' ? spectrumOf(np.source, np.id) : null);
   /** Where the handle is held (seconds), and after release until the player is there. */
   let held = $state<number | null>(null);
   let heldTimer: ReturnType<typeof setTimeout> | undefined;
   // While held, where it plays stays marked, still moving (the owner, 2026-10-24: "something to aim for"); held within
-  // SNAP_PX of it, the handle snaps onto it, and let go there nothing is sought (cancelling the seek).
+  // SNAP_PX of it, the handle snaps onto it, and let go there nothing is sought (cancelling the seek). Only while the
+  // finger is near the bar (SNAP_AWAY_PX above or below it): dragged further off, it comes loose (the owner,
+  // 2026-10-24), so a seek just beside where it plays can still be made.
   const SNAP_PX = 12;
+  const SNAP_AWAY_PX = 40;
   let snapped = $state(false);
   /** The seek bar's width (px) while held. */
   let seekWidth = 0;
   const pos = $derived(snapped ? position() : (held ?? position()));
   /** Where it plays, 0..1, while the handle is held and elsewhere. */
   const nowMark = $derived(held !== null && !snapped && dur ? position() / dur : null);
-  /** Held at `secs`: on the playing position (snapped) or not. */
-  function hold(secs: number) {
-    const near = !!dur && seekWidth > 0 && (Math.abs(secs - position()) / dur) * seekWidth <= SNAP_PX;
+  /** Held at `secs`, `away` px above or below the bar: on the playing position (snapped) or not. */
+  function hold(secs: number, away = 0) {
+    const near = !!dur && seekWidth > 0 && away <= SNAP_AWAY_PX && (Math.abs(secs - position()) / dur) * seekWidth <= SNAP_PX;
     if (near && !snapped) navigator.vibrate?.(8);
     snapped = near;
     held = secs;
@@ -115,6 +119,11 @@
   const at = (e: PointerEvent, el: HTMLElement) => {
     const r = el.getBoundingClientRect();
     return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * (dur ?? 0);
+  };
+  /** How far (px) the pointer is above or below the bar; 0 on it. */
+  const awayFrom = (e: PointerEvent, el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    return Math.max(0, r.top - e.clientY, e.clientY - r.bottom);
   };
   // The waveform lens (the owner, 2026-10-19; lib/WaveLens): while the bar is held over a waveform, where it is, and
   // the room it has (the player's edges).
@@ -133,7 +142,8 @@
   }
   function seekMove(e: PointerEvent) {
     if (held === null || !(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return;
-    hold(at(e, e.currentTarget as HTMLElement));
+    const el = e.currentTarget as HTMLElement;
+    hold(at(e, el), awayFrom(e, el));
   }
   function seekUp(e: PointerEvent) {
     const el = e.currentTarget as HTMLElement;
@@ -183,6 +193,7 @@
   }
   let outputOpen = $state(false);
   let sleepOpen = $state(false);
+  let bandsOpen = $state(false);
   const openMenu = (e: Event, start: 'menu' | 'lists' = 'menu') => {
     menuStart = start;
     menuAt = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -384,7 +395,7 @@
   });
   // What is shown changes the controls' height (a long title, a progress bar or none). As one value: `np` is
   // new at every report, and laying out again at each would be many times a second.
-  const shown = $derived(JSON.stringify([np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.playerRow, rowFacts.length, !!bandWave]));
+  const shown = $derived(JSON.stringify([np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.playerRow, rowFacts.length, prefs.playerBands !== 'off']));
   $effect(() => {
     void shown;
     untrack(() => requestAnimationFrame(relayout));
@@ -617,11 +628,27 @@
         </div>
       {/if}
       <i class="sp d"></i>
-      <!-- The three bands at the foot, level with the cover's: landscape only, the first to give way. -->
-      {#if bandWave && np && prefs.playerBands !== 'off'}
-        <div class="bands">
-          <BandGlass bands={bandWave} progress={dur ? pos / dur : 0} paused={!!np.progress?.paused} look={prefs.playerBands} />
-        </div>
+      <!-- The three bands at the foot, level with the cover's: landscape only, the first to give way. Their room is kept
+           while a look is chosen, also while a track's bands load or where it has none, so a new track does not move the
+           rest (the owner, 2026-10-24); drawn as silence until then. A tap opens their settings (lib/BandSheet). -->
+      {#if np && prefs.playerBands !== 'off'}
+        <button class="bands" aria-label="Player visualisation" onclick={() => (bandsOpen = true)}>
+          <BandGlass
+            spectrum={spectrum ?? SILENT}
+            progress={dur ? pos / dur : 0}
+            duration={dur ?? 0}
+            paused={!!np.progress?.paused}
+            look={prefs.playerBands}
+            speed={prefs.playerBandsSpeed}
+            window={prefs.playerBandsWindow}
+            cycles={prefs.playerBandsCycles}
+            height={prefs.playerBandsHeight}
+            direction={prefs.playerBandsDirection}
+            ends={prefs.playerBandsEnds}
+            count={prefs.playerBandsCount}
+            gap={prefs.playerBandsGap}
+          />
+        </button>
       {/if}
     </div>
   </header>
@@ -651,6 +678,9 @@
 {/if}
 {#if sleepOpen}
   <SleepSheet onclose={() => (sleepOpen = false)} />
+{/if}
+{#if bandsOpen}
+  <BandSheet onclose={() => (bandsOpen = false)} />
 {/if}
 
 {#if moreOpen}
@@ -1271,8 +1301,16 @@
   /* What gives way, in this order. */
   /* The three bands: landscape's foot only, and the first thing to give way when the height runs short. */
   .bands {
+    display: block;
     width: 100%;
+    /* BandGlass's height, kept while it loads. */
+    min-height: 132px;
     flex: none;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    cursor: pointer;
   }
 
   header:not(.landscape) .bands,

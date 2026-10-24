@@ -126,7 +126,7 @@ const GENERATION: &str = "generation";
 const GONE_KEEP_SECS: i64 = 24 * 3600;
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 10] = [
+const ADDED_COLUMNS: [(&str, &str); 11] = [
     ("files", "issue TEXT"),
     ("files", "issue_detail TEXT"),
     // Decision 0011: the Cratarr track id, when the file was last seen missing, and the trash token while trashed.
@@ -144,6 +144,9 @@ const ADDED_COLUMNS: [(&str, &str); 10] = [
     ("analysis_shape", "beats_by INTEGER"),
     // The waveform in three bands (`analysis::band_wave::BandWave`; NULL: not worked out yet), 2026-10-24.
     ("analysis_shape", "band_wave BLOB"),
+    // The spectrum, 32 bands 20 times a second (`analysis::spectrum::Spectrum`; NULL: not worked out yet: only on a
+    // play), 2026-10-24.
+    ("analysis_shape", "spectrum BLOB"),
 ];
 
 /// File states.
@@ -1706,6 +1709,18 @@ impl Catalogue {
     /// Keeps a file's waveform in three bands beside its analysis (false: the file has no analysis as it is now).
     pub fn store_band_wave(&self, folder: i64, rel: &str, size: u64, mtime: i64, wave: &crate::analysis::band_wave::BandWave) -> Result<bool> {
         self.store_shape_blob(folder, rel, size, mtime, "band_wave", &wave.0)
+    }
+
+    /// A file's spectrum (`analysis::spectrum`): None without an analysis as the file is now; Some(None) not worked
+    /// out yet.
+    pub fn spectrum_of(&self, folder: i64, rel: &str) -> Option<Option<crate::analysis::spectrum::Spectrum>> {
+        self.shape_blob(folder, rel, "spectrum").map(|b| b.map(crate::analysis::spectrum::Spectrum))
+    }
+
+    /// Keeps a file's spectrum beside its analysis (false: the file has no analysis as it is now); or the mark of one
+    /// that could not be worked out (`spectrum::FAILED`).
+    pub fn store_spectrum(&self, folder: i64, rel: &str, size: u64, mtime: i64, spectrum: &crate::analysis::spectrum::Spectrum) -> Result<bool> {
+        self.store_shape_blob(folder, rel, size, mtime, "spectrum", &spectrum.0)
     }
 
     /// Marks a file its waveform in three bands could not be worked out of (`band_wave::FAILED`), as it is now.
