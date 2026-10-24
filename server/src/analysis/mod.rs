@@ -14,6 +14,7 @@
 //!   every signal the show can be steered by (`signals`).
 //! Blocking and single-threaded: the pass runs several at once.
 
+pub mod band_wave;
 pub mod batch;
 pub mod signals;
 
