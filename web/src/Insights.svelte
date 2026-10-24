@@ -1,290 +1,144 @@
 <script lang="ts">
-  import { untrack } from 'svelte';
-  import { type Signal } from './lib/api';
-  import { insights, plural } from './lib/insights.svelte';
-  import { live } from './lib/live.svelte';
+  // Insights (decision 0065; laid out as Settings and Health, the owner 2026-10-24): its views as rows in groups
+  // (Collection, Listening, Playlists), each its icon, its name, a number in a line, and ›. A tap opens the view in the
+  // panel (lib/InsightsPanel): beside the list on a roomy window, where one is always open (App: the one last open), its
+  // row tinted; over the list on a phone.
   import Icon from './lib/Icon.svelte';
-  import MenuSheet from './lib/MenuSheet.svelte';
-  import { viewPlaylist, panel } from './lib/panel.svelte';
-  import PlaylistMenu from './lib/PlaylistMenu.svelte';
-  import { prefs } from './lib/prefs.svelte';
-  import PageLoading from './lib/PageLoading.svelte';
-  import ProximityGraph from './lib/ProximityGraph.svelte';
-  import InsightsCollection from './lib/InsightsCollection.svelte';
-  import InsightsListening from './lib/InsightsListening.svelte';
-  import InsightsProfile from './lib/InsightsProfile.svelte';
+  import { insights } from './lib/insights.svelte';
+  import { INSIGHTS_GROUPS, INSIGHTS_VIEWS, type InsightsView } from './lib/insightsViews';
+  import { INSIGHTS, insightsOf, panel, viewPlaylist } from './lib/panel.svelte';
 
-  // The data and what is derived from it live in a store shared with the playlist view's Related (decision 0023).
   $effect(() => insights.load());
-  const data = $derived(insights.data);
-  const error = $derived(insights.error);
-  const shown = $derived(insights.shown);
+  const groups = INSIGHTS_GROUPS.map((g) => ({ title: g, views: INSIGHTS_VIEWS.filter((v) => v.group === g) }));
 
-  let selected = $state<number | null>(null);
-  // The playlist menu, opened by a long-press on a point; `name` is the playlist's id.
-  let menu = $state<{ name: string; anchor: DOMRect } | null>(null);
-
-  /** What the menu shows for a playlist: the live counts when the shell has them. */
-  const menuPlaylist = (name: string) => {
-    const known = live.view?.playlists.find((x) => x.id === name);
-    const point = data?.proximity.playlists.find((x) => x.name === name);
-    return known ?? { id: name, name, count: point?.tracks ?? 0, dead: 0 };
-  };
-
-  const me = $derived(shown && selected !== null ? (shown.playlists[selected] ?? null) : null);
-
-  // The viewed playlist and the graph's selection are one (decision 0023): viewing a playlist selects it here, and
-  // selecting another point while one is viewed shows that one in the panel instead.
-  $effect(() => {
-    const name = panel.viewed;
-    if (!shown || !name) return;
-    const i = insights.indexOf(name);
-    if (i >= 0 && untrack(() => selected) !== i) selected = i;
-  });
-  $effect(() => {
-    const i = selected;
-    if (i === null || !shown) return;
-    const name = shown.playlists[i]?.name;
-    const viewed = untrack(() => panel.viewed);
-    if (viewed && name && name !== viewed) viewPlaylist(name);
-  });
-
-  // The legend: a sheet from the graph's button (it explains the graph; it is not about a playlist).
-  let legendOpen = $state(false);
-  let groups = $state<{ colour: string; members: number[] }[]>([]);
-  /** A group's name: the genres most common among its playlists' top genres. */
-  function groupName(members: number[]) {
-    if (!shown) return '';
-    const count = new Map<string, number>();
-    for (const i of members) for (const g of shown.playlists[i]?.genres ?? []) count.set(g, (count.get(g) ?? 0) + 1);
-    const top = [...count].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 5).map(([g]) => g);
-    return top.length ? top.join(', ') : 'No genre tags';
+  const count = (n: number, one: string, many: string) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
+  /** A view's number, where the collection's answer has one. */
+  function line(view: InsightsView): string | null {
+    const d = insights.data;
+    if (!d) return null;
+    switch (view) {
+      case 'overview':
+        return `${count(d.library.tracks, 'track', 'tracks')} · ${count(d.library.albums, 'album', 'albums')}`;
+      case 'genres':
+        return count(d.library.genres.length, 'genre', 'genres');
+      case 'artists':
+        return count(d.library.artists, 'artist', 'artists');
+      case 'tracks':
+        return `${d.playlists.library_tracks_in_playlists.toLocaleString()} in a playlist`;
+      case 'map':
+        return count(d.playlists.playlists, 'playlist', 'playlists');
+      default:
+        return null;
+    }
   }
-
-  const SIGNALS: { id: Signal; label: string }[] = [
-    { id: 'tracks', label: 'Shared tracks' },
-    { id: 'genre', label: 'Genre' },
-    { id: 'artists', label: 'Artists' },
-  ];
-  const anyOn = $derived(SIGNALS.some((s) => prefs.signals[s.id]));
-
-
 </script>
 
-<main class:wide={prefs.insightsTab === 'map'} class:rowed={prefs.insightsTab !== 'map'}>
-  <!-- The tabs are in the overlay row (lib/InsightsTabs, decision 0065). -->
-  {#if prefs.insightsTab === 'listening'}
-    {#if prefs.listeningView === 'profile'}<InsightsProfile />{:else}<InsightsListening />{/if}
-  {:else if error}
-    <p class="error" role="alert">{error}</p>
-  {:else if !data}
-    <PageLoading />
-  {:else if prefs.insightsTab === 'collection'}
-    <InsightsCollection {data} />
-  {:else if !shown || shown.playlists.length < 2}
-    <p class="empty">Related playlists need at least two playlists.</p>
-  {:else if !anyOn}
-    <p class="empty">Turn on at least one of shared tracks, genre or artists.</p>
-  {:else}
-    <div class="stage">
-      <div class="box">
-        {#key insights.removed.join('/')}
-          <ProximityGraph
-            data={shown}
-            signals={prefs.signals}
-            bind:selected
-            bind:groups
-            onmenu={(i, anchor) => (menu = { name: shown.playlists[i].name, anchor })}
-          />
-        {/key}
-        {#if me && panel.viewed !== me.name}
-          <button class="corner" onclick={() => viewPlaylist(me.name)}><Icon name="squareArrowOutUpRight" size={18} /><span>View {me.name}</span></button>
-        {/if}
-        <!-- The legend explains the graph: always at hand, in the graph's corner. -->
-        <button class="corner legend-btn" onclick={() => (legendOpen = true)}><Icon name="info" size={18} /><span>Legend</span></button>
+<main>
+  {#each groups as group (group.title)}
+    <section class="group" aria-labelledby="insights-{group.title}">
+      <h2 id="insights-{group.title}">{group.title}</h2>
+      <div class="list">
+        {#each group.views as v (v.id)}
+          {@const open = insightsOf(panel.viewed) === v.id}
+          {@const l = line(v.id)}
+          <button class="row" class:open aria-pressed={open} onclick={() => viewPlaylist(INSIGHTS + v.id)}>
+            <Icon name={v.icon} size={24} />
+            <span class="text">
+              <span class="name">{v.label}</span>
+              {#if l}<small>{l}</small>{/if}
+            </span>
+            <span class="chev"><Icon name="chevronRight" size={20} /></span>
+          </button>
+        {/each}
       </div>
-    </div>
-    {#if !me}
-      <p class="hint">Tap a playlist to highlight its closest playlists. Pinch or scroll to zoom.</p>
-    {/if}
-  {/if}
+    </section>
+  {/each}
 </main>
 
-{#if menu}
-  <PlaylistMenu
-    playlists={[menuPlaylist(menu.name)]}
-    onclose={() => (menu = null)}
-    ondeleted={() => (selected = null)}
-  />
-{/if}
-
-{#if legendOpen}
-  <MenuSheet label="Legend" title="Legend" onclose={() => (legendOpen = false)}>
-    <div class="legend">
-      <h3>Lines</h3>
-      <ul class="key">
-        <li>
-          <svg width="44" height="14" aria-hidden="true"><line x1="2" y1="7" x2="42" y2="7" class="solid thick" /></svg>
-          <span>Close: each other's closest playlists, or one's own closest. Thicker and shorter is closer.</span>
-        </li>
-        <li>
-          <svg width="44" height="14" aria-hidden="true"><line x1="2" y1="7" x2="42" y2="7" class="solid" /></svg>
-          <span>Less close, but still among the closest.</span>
-        </li>
-        <li>
-          <svg width="44" height="14" aria-hidden="true"><line x1="2" y1="7" x2="42" y2="7" class="dashed" /></svg>
-          <span>Only there to connect everything: barely alike.</span>
-        </li>
-      </ul>
-      <h3>Points</h3>
-      <ul class="key">
-        <li>
-          <svg width="44" height="24" aria-hidden="true"><circle cx="10" cy="12" r="4" class="dot" /><circle cx="30" cy="12" r="10" class="dot" /></svg>
-          <span>A playlist; bigger has more tracks.</span>
-        </li>
-      </ul>
-      <h3>Colours</h3>
-      <p class="muted">Groups of playlists that are alike, named by their most common genres.</p>
-      <ul class="key">
-        {#each groups as g, gi (gi)}
-          <li>
-            <span class="swatch" style:background={g.colour}></span>
-            <span>{groupName(g.members)} <span class="muted">· {plural(g.members.length, 'playlist')}</span></span>
-          </li>
-        {/each}
-      </ul>
-    </div>
-  </MenuSheet>
-{/if}
-
 <style>
-  /* Under the tabs' pill, and its second row where it has one (lib/InsightsTabs). */
+  /* As Settings' list (Settings.svelte): one column, beside a view it is the list's own column (App). */
   main {
-    max-width: 900px;
-    padding: 12px clamp(12px, 2vw, 32px) 48px;
+    padding: 16px clamp(12px, 2vw, 32px) 96px;
   }
 
-  main.rowed {
-    padding-top: 58px;
+  .group {
+    max-width: 640px;
   }
 
-  /* Related: room for the panel beside the graph on wide screens. */
-  main.wide {
-    max-width: none;
+  .group + .group {
+    margin-top: 24px;
   }
 
-  /* The graph keeps its width (at most 900 px). The panel sits beside it when the stage has room for both
-     (900 + 16 + 360), else over the graph's right side; full width on a phone. */
-  .stage {
-    container-type: inline-size;
-  }
-
-  .box {
-    position: relative;
-    width: min(100%, 900px);
-  }
-
-  /* A button in the graph's corner: View (top), Legend (bottom). */
-  .corner {
-    position: absolute;
-    top: 10px;
-    right: 10px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    max-width: calc(100% - 20px);
-    min-height: 40px;
-    padding: 0 12px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 10px;
+  h2 {
+    margin: 0 4px 8px;
+    color: var(--muted);
+    font-size: 13px;
     font-weight: 600;
   }
-  .corner.legend-btn {
-    top: auto;
-    bottom: 10px;
+
+  .list {
+    overflow: hidden;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--text) 6%, transparent);
   }
 
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+    min-height: 64px;
+    padding: 10px 14px 10px 16px;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
 
-  .corner span {
+  .row + .row {
+    border-top: 1px solid var(--border);
+  }
+
+  .row:hover,
+  .row:focus-visible {
+    background: color-mix(in srgb, var(--text) 5%, transparent);
+  }
+
+  /* The view open beside the list. */
+  .row.open {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+
+  .row > :global(svg) {
+    flex: none;
+    color: var(--accent);
+  }
+
+  .text {
+    display: grid;
+    flex: 1;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .name {
+    font-size: 15px;
+  }
+
+  .text small {
     overflow: hidden;
+    color: var(--muted);
+    font-size: 13px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .legend {
-    padding: 0 16px 12px;
-  }
-
-  .key {
-    margin: 0 0 6px;
-    padding: 0;
-    list-style: none;
+  .chev {
     display: grid;
-    gap: 8px;
-    font-size: 0.9rem;
-  }
-
-  .key li {
-    display: grid;
-    grid-template-columns: 44px 1fr;
-    gap: 10px;
-    align-items: center;
-  }
-
-  .key line {
-    stroke: var(--muted);
-    stroke-linecap: round;
-    stroke-width: 1.2;
-  }
-
-  .key line.thick {
-    stroke-width: 3;
-  }
-
-  .key line.dashed {
-    stroke-width: 0.9;
-    stroke-dasharray: 4 4;
-  }
-
-  .key .dot {
-    fill: var(--muted);
-  }
-
-  .swatch {
-    justify-self: center;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-  }
-
-  button {
-    min-height: 40px;
-    padding: 0 14px;
-    background: var(--surface);
-    border: 0;
-    font: inherit;
-    color: inherit;
-    cursor: pointer;
-  }
-
-  .muted,
-  .hint,
-  .empty {
+    flex: none;
     color: var(--muted);
   }
-
-  .hint,
-  .empty {
-    font-size: 0.9rem;
-  }
-
-  .empty {
-    margin-top: 32px;
-  }
-
-  .error {
-    color: var(--danger-ink);
-  }
-
 </style>
