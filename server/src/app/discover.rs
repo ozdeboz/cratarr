@@ -132,12 +132,6 @@ pub struct Who {
     pub server_lastfm: Option<Auth>,
 }
 
-impl Who {
-    pub fn any(&self) -> bool {
-        self.listenbrainz.is_some() || self.lastfm.is_some()
-    }
-}
-
 /// An album a source named, before the library and the answers are looked at.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Candidate {
