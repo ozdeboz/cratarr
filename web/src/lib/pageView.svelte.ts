@@ -145,6 +145,7 @@ export const SWITCHES: Record<string, ListSwitch[]> = {
   discover: [
     { key: 'no-source:ListenBrainz', label: 'ListenBrainz', invert: true, section: 'Sources' },
     { key: 'no-source:Last.fm', label: 'Last.fm', invert: true, section: 'Sources' },
+    { key: 'no-source:MusicBrainz', label: 'MusicBrainz', invert: true, section: 'Sources' },
     { key: 'no-favourite-artists', label: 'Favourite artists', section: 'Leave out' },
     { key: 'no-library-artists', label: 'Artists you have', section: 'Leave out' },
   ],

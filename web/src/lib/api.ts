@@ -1184,6 +1184,11 @@ export type LidarrDraft = {
 };
 /** The saved Lidarr's quality and metadata profiles ([id, name]) and root folders: Want's choices on its page. */
 export const getLidarrOptions = () => quietly<{ quality: [number, string][]; metadata: [number, string][]; roots: string[] }>('/api/settings/lidarr/options');
+/** The server's own Last.fm key for Discover (artists like each account's own most played, decision 0069 amended): in
+ *  use, and saved here (else the container's LASTFM_API_KEY gives it). The key itself is never sent. */
+export const getLastfmServerKey = () => quietly<{ set: boolean; saved: boolean }>('/api/settings/lastfm');
+/** The server's own Last.fm key saved at once; an empty one takes it away. */
+export const setLastfmServerKey = (key: string) => putJson('/api/settings/lastfm', { key });
 
 /** Check a Lidarr as filled in; nothing is saved. Null for a blank address. */
 export const previewLidarr = (draft: LidarrDraft) => post<LidarrView | null>('/api/settings/lidarr', draft);

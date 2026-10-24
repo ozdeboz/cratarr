@@ -68,6 +68,12 @@ artists new to the library, and nothing for an artist the library has; 60 at mos
   outside the library, Not interested, the answers, one suggestion with all its reasons).
 - MusicBrainz's one request a second is the pace: the discographies are looked up a few artists a day, most played
   first, and kept, so the page fills over days and opens at once; the links (Bandcamp, YouTube) only for what shows.
+- As built (after 0.9, the owner's speed-up: the sources wait until 0.9 is out): 25 artists' discographies a look (one a
+  second), never read first, then those read longest ago, each kept 30 days for every account; albums and EPs released
+  by today with no secondary type, with MusicBrainz's genres; "Missing from Air's albums", named MusicBrainz. Fresh
+  releases: the last 30 days, albums and EPs only ("New from Air"). The server's key: Connections → Discover → "Last.fm
+  key for everyone", else `LASTFM_API_KEY`; the account's own Last.fm, where it has one, is asked instead. Every account
+  looks now, with services or without.
 
 ## Amendment, 2026-10-24: a card shows, its menu acts (0.9)
 

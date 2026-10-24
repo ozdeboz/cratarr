@@ -1,12 +1,13 @@
 <script lang="ts">
   // Discover (decision 0069; the owner, 2026-10-24: "suggestions outside of" the library, "a discover page next to
-  // playlists"): albums the library does not have, from the signed-in account's ListenBrainz and Last.fm, each with why
+  // playlists"): albums the library does not have, from its artists' discographies and the signed-in account's
+  // ListenBrainz and Last.fm (0.9.1: every account, a service or none), each with why
   // it is suggested, a cover, where to listen elsewhere, Want (a request, decision 0070: Lidarr fetches it into Incoming
   // once approved, where it is heard and kept or deleted; the card says how far it is) and Not interested (it never
   // comes back). Everything known of it is on its card (the owner, 2026-10-24: what it is, its genres, length and track
   // count, why, whether the artist is new, its listeners, its request); every action in its menu, opened by a tap. Looked up again once a day as a task, its progress in
-  // one line (ui-conventions, Progress); Refresh in the page's pill asks again now. Without a service connected, the
-  // page says what it needs.
+  // the pill (ui-conventions, A page's work in its pill); Look again there asks again now. Without a service connected,
+  // a line says what one would add.
   import { getDiscover, hideDiscover, notDiscover, previewBandcamp, refreshDiscover, wantDiscover, type AlbumRequest, type DiscoverAlbum, type DiscoverView } from './lib/api';
   import Cover from './lib/Cover.svelte';
   import { hoursMinutes } from './lib/duration';
@@ -89,8 +90,9 @@
     }
   }
   const connected = $derived(!!view && (view.services.listenbrainz || view.services.lastfm));
+  // Every account looks (the library's discographies need no service, 0.9.1).
   usePageAction(() =>
-    connected ? { icon: 'refresh', label: 'Look again', run: refresh, progress: looking ? (progress?.value ?? 0) : null, line: progress?.line ?? null } : null,
+    view ? { icon: 'refresh', label: 'Look again', run: refresh, progress: looking ? (progress?.value ?? 0) : null, line: progress?.line ?? null } : null,
   );
 
   // Answered here: gone from the list at once (the server keeps the answer).
@@ -215,12 +217,10 @@
     <Notice text={error} />
   {:else if !view}
     <PageLoading />
-  {:else if !connected}
-    <div class="empty">
-      <p>Discover suggests albums you don't have yet, from what you listen to. It needs ListenBrainz or Last.fm.</p>
-      <a class="button primary" href="#/settings?view=settings%3Aconnections">Connect a listening service</a>
-    </div>
   {:else}
+    {#if !connected}
+      <p class="note">ListenBrainz or Last.fm would add albums like what you play: <a href="#/settings?view=settings%3Aconnections">connect one</a>.</p>
+    {/if}
     {#if looking && !albums.length}
       <!-- The first look: the page's loader where it always is, how far it is under it (ui-conventions, Progress). -->
       <PageLoading>{@render how()}</PageLoading>
@@ -298,16 +298,8 @@
     font-size: 14px;
   }
 
-  .empty {
-    display: grid;
-    justify-items: start;
-    gap: 12px;
-    max-width: 520px;
-    margin: 24px 0;
-  }
-
-  .empty p {
-    margin: 0;
+  .note a {
+    color: var(--accent-ink);
   }
 
   /* One card across a phone, more as the page widens (as Crates). */
@@ -438,26 +430,5 @@
     background: color-mix(in srgb, var(--text) 8%, transparent);
     color: var(--text);
     text-decoration: none;
-  }
-
-  /* The way to connect a service, when none is. */
-  .button {
-    display: inline-flex;
-    align-items: center;
-    min-height: 34px;
-    padding: 0 14px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--bg);
-    color: var(--text);
-    font-size: 14px;
-    text-decoration: none;
-  }
-
-  .button.primary {
-    border-color: var(--accent);
-    background: var(--accent);
-    color: var(--accent-text);
-    font-weight: 600;
   }
 </style>

@@ -5,9 +5,13 @@
 //! - **ListenBrainz** (its user: the one the account scrobbles as): its recommendations for the user (recordings,
 //!   scored; marked experimental, 204 while none are made) and the newest Weekly Exploration made for them, each
 //!   recording named through ListenBrainz's metadata (its album's release group, album artist, year, cover).
-//! - **Last.fm** (the user it scrobbles as, else the one it imported from; asked as the import asks, `lastfm::Auth`):
-//!   the user's most played artists, the artists like them (`artist.getSimilar`), and of each such artist the library
-//!   has not got their best known album (`artist.getTopAlbums`).
+//! - **Last.fm** (the user it scrobbles as, else the one it imported from; asked as the import asks, `lastfm::Auth`;
+//!   without one, with the server's own key, `server_lastfm_key`): the account's most played artists in Cratarr and on
+//!   Last.fm, the artists like them (`artist.getSimilar`), and of each such artist the library has not got their best
+//!   known album (`artist.getTopAlbums`).
+//! - **The library's artists' discographies** (0.9, no service needed): each artist's albums and EPs on MusicBrainz the
+//!   library has none of, the account's most played first (`from_discographies`, read a few artists a look and kept).
+//! - **ListenBrainz's fresh releases** for its user: new albums and EPs by artists they listen to (`from_fresh`).
 //!
 //! An album the library has (Music or Incoming) is left out: by its MusicBrainz release group where both know it, else
 //! by its name and artist through the import's matcher. So is one the account answered (Not interested, or wanted), and
@@ -47,6 +51,19 @@ const NEW_ARTISTS: usize = 30;
 const META_BATCH: usize = 25;
 /// A card's genres, at most (0069 amended: "two or three").
 const GENRES: usize = 3;
+/// The discographies (0069 amended, 0.9): MusicBrainz is asked for this many artists a look (one request a second),
+/// and an artist's is read again after this long.
+const DISCOGRAPHIES_PER_LOOK: usize = 25;
+const DISCOGRAPHY_FRESH_SECS: i64 = 30 * 86_400;
+/// MusicBrainz's "Various Artists": no discography of its own.
+const VARIOUS_ARTISTS: &str = "89ad4ac3-39f7-470e-963a-56509c546377";
+/// Of the account's own most played artists (Cratarr's plays), how many seed Last.fm's artists like them.
+const OWN_SEEDS: usize = 25;
+/// ListenBrainz's fresh releases: of the last this many days.
+const FRESH_DAYS: &str = "30";
+/// Where the server's own Last.fm key is kept (an import choice), and what gives it until one is saved.
+pub const SERVER_LASTFM: &str = "lastfm:server";
+const SERVER_LASTFM_ENV: &str = "LASTFM_API_KEY";
 
 /// An album suggested.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -106,17 +123,13 @@ pub struct Found {
     pub notes: Vec<String>,
 }
 
-/// Whose services: the ListenBrainz user, the Last.fm user and how to ask Last.fm.
+/// Whose services: the ListenBrainz user, the Last.fm user and how to ask Last.fm; and the server's own Last.fm key,
+/// asked for the artists like the account's own when it has no Last.fm.
 #[derive(Debug, Clone, Default)]
 pub struct Who {
     pub listenbrainz: Option<String>,
     pub lastfm: Option<(String, Auth)>,
-}
-
-impl Who {
-    pub fn any(&self) -> bool {
-        self.listenbrainz.is_some() || self.lastfm.is_some()
-    }
+    pub server_lastfm: Option<Auth>,
 }
 
 /// An album a source named, before the library and the answers are looked at.
@@ -128,6 +141,9 @@ pub struct Candidate {
     pub release_group: Option<String>,
     pub cover: Option<String>,
     pub lastfm_url: Option<String>,
+    /// What it is and its genres, where its source says (MusicBrainz's discographies, the fresh releases).
+    pub kind: Option<String>,
+    pub genres: Vec<String>,
     /// Which source, for the extra rank of more than one.
     pub source: &'static str,
     pub why: String,
@@ -347,12 +363,20 @@ fn number(v: &serde_json::Value) -> f64 {
     v.as_f64().or_else(|| v.as_str()?.parse().ok()).unwrap_or(0.0)
 }
 
-/// The best known album of each artist like the user's most played that the library has none of.
-async fn from_lastfm(user: &str, auth: &Auth, artists_had: &HashSet<String>, progress: &Progress) -> Result<Vec<Candidate>> {
+/// The best known album of each artist like the account's most played that the library has none of: its most played
+/// in Cratarr (`own`, the most first; 0069 amended, 0.9) and, where it has a Last.fm `user`, there.
+async fn from_lastfm(user: Option<&str>, auth: &Auth, own: &[String], artists_had: &HashSet<String>, progress: &Progress) -> Result<Vec<Candidate>> {
     let http = http()?;
     progress("Asking Last.fm", 0, None);
-    let top = fm(&http, auth, "user.gettopartists", &[("user", user), ("period", "6month"), ("limit", TOP_ARTISTS)]).await?;
-    let top: Vec<String> = top["topartists"]["artist"].as_array().into_iter().flatten().filter_map(|a| a["name"].as_str().map(str::to_string)).collect();
+    let mut top: Vec<String> = own.iter().take(OWN_SEEDS).cloned().collect();
+    if let Some(user) = user {
+        let theirs = fm(&http, auth, "user.gettopartists", &[("user", user), ("period", "6month"), ("limit", TOP_ARTISTS)]).await?;
+        for name in theirs["topartists"]["artist"].as_array().into_iter().flatten().filter_map(|a| a["name"].as_str()) {
+            if !top.iter().any(|t| loose(t) == loose(name)) {
+                top.push(name.to_string());
+            }
+        }
+    }
     // Each artist like them: how alike in all, and which of the user's it is like (the most alike first).
     let mut like: HashMap<String, (String, f64, Vec<(f64, String)>)> = HashMap::new();
     for (i, t) in top.iter().enumerate() {
@@ -403,6 +427,183 @@ async fn from_lastfm(user: &str, auth: &Auth, artists_had: &HashSet<String>, pro
         });
     }
     Ok(out)
+}
+
+// ---- MusicBrainz's discographies
+
+/// An album of an artist's as MusicBrainz lists their release groups (kept, `UserData::discography`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Group {
+    id: String,
+    title: String,
+    kind: Option<String>,
+    year: Option<i32>,
+    #[serde(default)]
+    genres: Vec<String>,
+}
+
+/// An artist the library has, with how much the account plays them.
+#[derive(Debug, Clone)]
+struct OwnArtist {
+    name: String,
+    mbid: Option<String>,
+    plays: u32,
+}
+
+/// Today as MusicBrainz writes dates (UTC).
+fn today() -> String {
+    let (y, m, d) = super::history::civil(super::moment::now_secs().div_euclid(86_400));
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// An artist's albums and EPs on MusicBrainz that are out (first released by `today`; MusicBrainz's dates may be only
+/// a year, which sorts before any day of it) and their own (no secondary type: no compilation, live album, remix,
+/// soundtrack…), each with its genres (MusicBrainz's own, the most given first, `GENRES` at most).
+async fn mb_discography(http: &reqwest::Client, artist: &str, today: &str) -> Result<Vec<Group>> {
+    #[derive(Deserialize)]
+    struct Genre {
+        name: String,
+        #[serde(default)]
+        count: i64,
+    }
+    #[derive(Deserialize)]
+    struct Rg {
+        id: String,
+        title: String,
+        #[serde(rename = "primary-type")]
+        primary: Option<String>,
+        #[serde(rename = "secondary-types", default)]
+        secondary: Vec<String>,
+        #[serde(rename = "first-release-date", default)]
+        first: String,
+        #[serde(default)]
+        genres: Vec<Genre>,
+    }
+    #[derive(Deserialize)]
+    struct Browse {
+        #[serde(rename = "release-groups", default)]
+        groups: Vec<Rg>,
+    }
+    let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/release-group")?;
+    url.query_pairs_mut().append_pair("artist", artist).append_pair("type", "album|ep").append_pair("inc", "genres").append_pair("fmt", "json").append_pair("limit", "100");
+    let b: Browse = http.get(url).send().await?.error_for_status()?.json().await?;
+    Ok(b.groups
+        .into_iter()
+        .filter(|g| g.secondary.is_empty() && !g.first.is_empty() && g.first.as_str() <= today)
+        .map(|g| {
+            let mut genres = g.genres;
+            genres.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.name.cmp(&b.name)));
+            Group {
+                year: g.first.get(..4).and_then(|y| y.parse().ok()),
+                kind: g.primary,
+                genres: genres.into_iter().take(GENRES).map(|x| x.name).collect(),
+                id: g.id,
+                title: g.title,
+            }
+        })
+        .collect())
+}
+
+/// Gaps in the library's artists' discographies (0069 amended, 0.9: "first"): each artist's albums and EPs, as
+/// MusicBrainz lists them, ranked by how much the account plays the artist (`artists`, the most played first); the
+/// library's own are left out later, as every source's are. MusicBrainz is asked for `DISCOGRAPHIES_PER_LOOK` artists a
+/// look, those never read first (the most played first), then those read longest ago; the rest are kept from before,
+/// so the list fills over a few days.
+async fn from_discographies(serve: &Arc<crate::serve::Serve>, http: &reqwest::Client, artists: &[OwnArtist], progress: &Progress) -> Result<Vec<Candidate>> {
+    let ids: Vec<String> = artists.iter().filter_map(|a| a.mbid.clone()).collect();
+    let ud = serve.userdata.clone();
+    let mut kept: HashMap<String, (i64, Vec<Group>)> = tokio::task::spawn_blocking(move || -> Result<_> {
+        let mut out = HashMap::new();
+        for id in ids {
+            if let Some((at, json)) = ud.discography(&id)? {
+                out.insert(id, (at, serde_json::from_str(&json).unwrap_or_default()));
+            }
+        }
+        Ok(out)
+    })
+    .await??;
+    let now = super::moment::now_secs();
+    let mut due: Vec<&OwnArtist> =
+        artists.iter().filter(|a| a.mbid.as_ref().is_some_and(|m| kept.get(m).is_none_or(|k| now - k.0 > DISCOGRAPHY_FRESH_SECS))).collect();
+    // Never read before read long ago; the sort keeps the most played first among equals.
+    due.sort_by_key(|a| a.mbid.as_ref().and_then(|m| kept.get(m)).map_or(i64::MIN, |k| k.0));
+    due.truncate(DISCOGRAPHIES_PER_LOOK);
+    let today = today();
+    for (i, a) in due.iter().enumerate() {
+        progress("Reading your artists' albums", i as u64, Some(due.len() as u64));
+        let Some(id) = a.mbid.clone() else { continue };
+        match mb_discography(http, &id, &today).await {
+            Ok(groups) => {
+                let (ud, json, key) = (serve.userdata.clone(), serde_json::to_string(&groups)?, id.clone());
+                tokio::task::spawn_blocking(move || ud.set_discography(&key, now, &json)).await??;
+                kept.insert(id, (now, groups));
+            }
+            Err(e) => tracing::info!("discover: {}'s albums could not be read from MusicBrainz: {e:#}", a.name),
+        }
+        tokio::time::sleep(MB_PAUSE).await;
+    }
+    let most = artists.iter().map(|a| a.plays).max().unwrap_or(0).max(1) as f64;
+    let mut out = Vec::new();
+    for a in artists {
+        let Some((_, groups)) = a.mbid.as_ref().and_then(|m| kept.get(m)) else { continue };
+        // Played: from 0.4 to 0.9 by how much; never played, below every played artist's.
+        let score = if a.plays > 0 { 0.4 + 0.5 * f64::from(a.plays) / most } else { 0.2 };
+        for g in groups {
+            out.push(Candidate {
+                album: g.title.clone(),
+                artist: a.name.clone(),
+                year: g.year,
+                release_group: Some(g.id.clone()),
+                cover: Some(format!("https://coverartarchive.org/release-group/{}/front-250", g.id)),
+                kind: g.kind.clone(),
+                genres: g.genres.clone(),
+                source: "discography",
+                why: format!("Missing from {}'s albums", a.name),
+                score,
+                ..Candidate::default()
+            });
+        }
+    }
+    Ok(out)
+}
+
+// ---- ListenBrainz's fresh releases
+
+/// ListenBrainz's fresh releases for `user` (0069 amended, 0.9): new albums and EPs (no singles, no compilations or
+/// remixes) by artists they listen to, of the last `FRESH_DAYS` days.
+async fn from_fresh(http: &reqwest::Client, user: &str) -> Result<Vec<Candidate>> {
+    let body: serde_json::Value = http
+        .get(format!("{LB_API}/user/{user}/fresh_releases"))
+        .query(&[("days", FRESH_DAYS), ("past", "true"), ("future", "false")])
+        .send()
+        .await
+        .context("ListenBrainz did not answer")?
+        .error_for_status()?
+        .json()
+        .await
+        .context("ListenBrainz's fresh releases could not be read")?;
+    Ok(body["payload"]["releases"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| matches!(r["release_group_primary_type"].as_str(), Some("Album" | "EP")) && r["release_group_secondary_type"].as_str().is_none_or(str::is_empty))
+        .filter_map(|r| {
+            let rg = r["release_group_mbid"].as_str().filter(|g| !g.is_empty())?.to_string();
+            let artist = r["artist_credit_name"].as_str()?.to_string();
+            Some(Candidate {
+                album: r["release_name"].as_str()?.to_string(),
+                year: r["release_date"].as_str().and_then(|d| d.get(..4)?.parse().ok()),
+                cover: Some(format!("https://coverartarchive.org/release-group/{rg}/front-250")),
+                kind: r["release_group_primary_type"].as_str().map(str::to_string),
+                source: "fresh",
+                why: format!("New from {artist}"),
+                score: 0.8,
+                release_group: Some(rg),
+                artist,
+                ..Candidate::default()
+            })
+        })
+        .collect())
 }
 
 // ---- The library, the answers, and one list
@@ -479,8 +680,8 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
                     why: Vec::new(),
                     sources: Vec::new(),
                     bandcamp: None,
-                    kind: None,
-                    genres: Vec::new(),
+                    kind: c.kind.clone(),
+                    genres: c.genres.clone(),
                     length_secs: None,
                     track_count: None,
                     listeners: None,
@@ -493,7 +694,11 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
         if !s.why.contains(&c.why) {
             s.why.push(c.why.clone());
         }
-        let named = if c.source == "lastfm" { "Last.fm" } else { "ListenBrainz" };
+        let named = match c.source {
+            "lastfm" => "Last.fm",
+            "discography" => "MusicBrainz",
+            _ => "ListenBrainz",
+        };
         if !s.sources.iter().any(|x| x == named) {
             s.sources.push(named.to_string());
         }
@@ -504,6 +709,12 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
         }
         if s.cover.is_none() {
             s.cover = c.cover.clone();
+        }
+        if s.kind.is_none() {
+            s.kind = c.kind.clone();
+        }
+        if s.genres.is_empty() {
+            s.genres = c.genres.clone();
         }
         // A second source counts extra; more of one source's recordings on the album, a little.
         s.score += if sources.insert(c.source) { c.score + if sources.len() > 1 { 1.0 } else { 0.0 } } else { c.score * 0.25 };
@@ -693,16 +904,34 @@ const MB_PAUSE: Duration = Duration::from_millis(1100);
 pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::Catalogue>, account: &str, who: &Who, progress: &Progress) -> Result<Found> {
     let dir = serve.data_dir.clone().context("Discover needs Cratarr's data folder")?;
     progress("Reading your library", 0, None);
-    let (lib, d) = (serve.library.clone(), dir.clone());
-    let have = tokio::task::spawn_blocking(move || -> Result<Have> {
-        let artists = lib.artist_albums()?.into_iter().map(|r| r.1).collect::<Vec<_>>();
-        let mut have = have(&d, &cat, artists)?;
+    let (lib, d, ud, a) = (serve.library.clone(), dir.clone(), serve.userdata.clone(), account.to_string());
+    let (have, artists) = tokio::task::spawn_blocking(move || -> Result<(Have, Vec<OwnArtist>)> {
+        let rows = lib.artist_albums()?;
+        // The library's artists, the account's most played first (its own plays, 0064).
+        let plays: HashMap<String, u32> = ud.used(&a, crate::userdata::Kind::Artist)?.into_iter().map(|(id, x)| (id, x.play_count)).collect();
+        let mut by_id: HashMap<&str, OwnArtist> = HashMap::new();
+        for (id, name, mbid, _, _, _) in &rows {
+            by_id.entry(id.as_str()).or_insert_with(|| OwnArtist {
+                name: name.clone(),
+                mbid: mbid.clone().filter(|m| !m.is_empty() && m != VARIOUS_ARTISTS),
+                plays: plays.get(id).copied().unwrap_or(0),
+            });
+        }
+        let mut artists: Vec<OwnArtist> = by_id.into_values().collect();
+        artists.sort_by(|x, y| y.plays.cmp(&x.plays).then_with(|| x.name.cmp(&y.name)));
+        let mut have = have(&d, &cat, rows.iter().map(|r| r.1.clone()))?;
         have.known = have.artists.iter().cloned().chain(lib.track_artist_names()?.iter().map(|a| loose(a))).collect();
-        Ok(have)
+        Ok((have, artists))
     })
     .await??;
+    let http = http()?;
     let mut candidates = Vec::new();
     let mut notes = Vec::new();
+    // The library's artists' discographies first: they need no service (0069 amended, 0.9).
+    match from_discographies(serve, &http, &artists, progress).await {
+        Ok(c) => candidates.extend(c),
+        Err(e) => notes.push(format!("MusicBrainz could not be asked for your artists' albums: {e:#}")),
+    }
     if let Some(user) = &who.listenbrainz {
         match from_listenbrainz(user, progress).await {
             Ok((c, n)) => {
@@ -711,15 +940,23 @@ pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::C
             }
             Err(e) => notes.push(format!("ListenBrainz could not be asked: {e:#}")),
         }
-    }
-    if let Some((user, auth)) = &who.lastfm {
-        match from_lastfm(user, auth, &have.artists, progress).await {
+        match from_fresh(&http, user).await {
             Ok(c) => candidates.extend(c),
-            Err(e) => notes.push(format!("Last.fm could not be asked: {e:#}")),
+            Err(e) => notes.push(format!("ListenBrainz's new releases could not be read: {e:#}")),
+        }
+    }
+    // Last.fm with the account's own, else the server's key: the artists like the account's most played.
+    let fm_auth = who.lastfm.as_ref().map(|l| l.1.clone()).or_else(|| who.server_lastfm.clone());
+    if let Some(auth) = &fm_auth {
+        let own: Vec<String> = artists.iter().filter(|a| a.plays > 0).map(|a| a.name.clone()).collect();
+        if who.lastfm.is_some() || !own.is_empty() {
+            match from_lastfm(who.lastfm.as_ref().map(|l| l.0.as_str()), auth, &own, &have.artists, progress).await {
+                Ok(c) => candidates.extend(c),
+                Err(e) => notes.push(format!("Last.fm could not be asked: {e:#}")),
+            }
         }
     }
     // Albums named without their MusicBrainz id (Last.fm's mostly): looked up there.
-    let http = http()?;
     let unknown = candidates.iter().filter(|c| c.release_group.is_none()).count() as u64;
     let mut n = 0;
     for c in candidates.iter_mut().filter(|c| c.release_group.is_none()) {
@@ -740,12 +977,17 @@ pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::C
     let mut albums = one_list(candidates, &|c: &Candidate| have.has(c), &have.known, &answered, &no_artists);
     // What each is and its genres, from ListenBrainz in a few calls, so the cards show them from the first.
     progress("Reading what each album is", 0, None);
-    let groups: Vec<String> = albums.iter().filter_map(|s| s.release_group.clone()).collect();
+    let groups: Vec<String> = albums.iter().filter(|s| s.kind.is_none() || s.genres.is_empty()).filter_map(|s| s.release_group.clone()).collect();
     match lb_group_facts(&http, &groups).await {
         Ok(facts) => {
             for s in albums.iter_mut() {
                 if let Some((kind, genres)) = s.release_group.as_ref().and_then(|g| facts.get(g)) {
-                    (s.kind, s.genres) = (kind.clone(), genres.clone());
+                    if s.kind.is_none() {
+                        s.kind = kind.clone();
+                    }
+                    if s.genres.is_empty() {
+                        s.genres = genres.clone();
+                    }
                 }
             }
         }
@@ -779,7 +1021,7 @@ pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::C
         }
         s.links.extend(listen_links(&mb.urls, &s.artist, &s.album));
         // How many listen to it, where the account asks Last.fm (its tracks too, where MusicBrainz had none).
-        if let Some((_, auth)) = &who.lastfm
+        if let Some(auth) = &fm_auth
             && let Ok(info) = fm(&http, auth, "album.getinfo", &[("artist", &s.artist), ("album", &s.album), ("autocorrect", "1")]).await
         {
             let info = &info["album"];
@@ -843,7 +1085,20 @@ pub fn who(serve: &crate::serve::Serve, account: &str) -> Result<Who> {
         (Some(user), Some(auth)) => Some((user, auth)),
         _ => kept.as_ref().and_then(|k| Some((kept_user.clone()?, Auth { key: k["key"].as_str()?.to_string(), signed: None }))),
     };
-    Ok(Who { listenbrainz, lastfm })
+    let server_lastfm = server_lastfm_key(ud)?.map(|key| Auth { key, signed: None });
+    Ok(Who { listenbrainz, lastfm, server_lastfm })
+}
+
+/// The server's own Last.fm key (0069 amended, 0.9: "one key for the whole server", so every account gets the artists
+/// like its own most played, a Last.fm account or not): the one saved under Connections, else `LASTFM_API_KEY`.
+pub fn server_lastfm_key(ud: &crate::userdata::UserData) -> Result<Option<String>> {
+    let saved = ud.import_choice(SERVER_LASTFM)?.filter(|k| !k.trim().is_empty());
+    Ok(saved.or_else(|| std::env::var(SERVER_LASTFM_ENV).ok().filter(|k| !k.trim().is_empty())))
+}
+
+/// A Last.fm API key as Last.fm gives them: 32 hexadecimal digits.
+pub fn lastfm_key_ok(key: &str) -> bool {
+    key.len() == 32 && key.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Lidarr, where it is connected and switched on: Want fetches through it.
@@ -969,6 +1224,34 @@ mod tests {
             &HashSet::from([loose("Twice")]),
         );
         assert_eq!(list.iter().map(|s| s.album.as_str()).collect::<Vec<_>>(), ["Kept"]);
+    }
+
+    #[test]
+    fn a_source_that_knows_what_an_album_is_says_so_and_is_named() {
+        let mut fresh = c("New One", "Air", Some("rg-new"), "fresh", "New from Air", 0.8);
+        (fresh.kind, fresh.genres) = (Some("EP".into()), vec!["electronic".into()]);
+        let gap = Candidate { kind: Some("Album".into()), ..c("Talkie Walkie", "Air", Some("rg-tw"), "discography", "Missing from Air's albums", 0.9) };
+        let list = one_list(vec![fresh, gap, c("New One", "Air", Some("rg-new"), "listenbrainz", "Recommended by ListenBrainz", 0.5)], &|_: &Candidate| false, &HashSet::new(), &HashSet::new(), &HashSet::new());
+        let new_one = list.iter().find(|s| s.album == "New One").unwrap();
+        assert_eq!((new_one.kind.as_deref(), new_one.genres.as_slice()), (Some("EP"), &["electronic".to_string()][..]));
+        assert_eq!(new_one.sources, ["ListenBrainz"], "fresh releases are ListenBrainz's");
+        let tw = list.iter().find(|s| s.album == "Talkie Walkie").unwrap();
+        assert_eq!(tw.sources, ["MusicBrainz"], "a discography is MusicBrainz's");
+        assert_eq!(tw.why, ["Missing from Air's albums"]);
+    }
+
+    #[test]
+    fn a_last_fm_key_is_32_hexadecimal_digits() {
+        assert!(lastfm_key_ok("0123456789abcdef0123456789ABCDEF"));
+        assert!(!lastfm_key_ok("0123456789abcdef"));
+        assert!(!lastfm_key_ok("0123456789abcdef0123456789abcdeg"));
+    }
+
+    #[test]
+    fn today_is_a_date_musicbrainz_compares() {
+        let t = today();
+        assert_eq!(t.len(), 10);
+        assert!("2001" < t.as_str() && "2001-05" < t.as_str(), "a year-only date sorts before any day after it");
     }
 
     #[test]
