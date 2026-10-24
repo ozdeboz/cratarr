@@ -5,11 +5,12 @@
 import { type BandLookName, type BandTune, prefs } from './prefs.svelte';
 
 /** Each look as it starts: the owner's own tuning on the tablet (2026-10-24, 15:55–16:01), measured from the sliders'
- *  knobs in the screenshots (each slider's own step, then its value). */
+ *  knobs in the screenshots (each slider's own step, then its value); Hairlines' Window and Cycles as the tablet kept
+ *  them at 19:31 (the owner, for 0.8.9). */
 export const TUNE_DEFAULTS: Record<BandLookName, BandTune> = {
   aurora: { speed: 6.24, window: 4.017, cycles: 0.25, height: 1.443, count: 3, gap: 0, direction: 'left', taper: 0, fade: 0 },
   sirius: { speed: 0.231, window: 1.002, cycles: 1.693, height: 2.5, count: 4, gap: 0, direction: 'right', taper: 0.84, fade: 0 },
-  hairlines: { speed: 1.623, window: 11.516, cycles: 0.624, height: 0.61, count: 12, gap: 1, direction: 'left', taper: 1, fade: 1 },
+  hairlines: { speed: 1.623, window: 0.25, cycles: 4, height: 0.61, count: 12, gap: 1, direction: 'left', taper: 1, fade: 1 },
   meter: { speed: 10.4, window: 0.25, cycles: 1, height: 1.179, count: 32, gap: 0, direction: 'left', taper: 0, fade: 0 },
 };
 
