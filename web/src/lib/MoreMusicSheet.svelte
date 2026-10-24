@@ -24,7 +24,9 @@
   // Radio, between: tracks like each of the queue's own tracks (similar to it, its artist or its era), so many after
   // it. Autoplay, at the end: what plays when the queue runs out, then its switches (whole albums while albums were
   // playing; a playlist starting again instead), each saying what it does while it is on. Each a choice of one, as View's order (a round mark); the sheet stays
-  // open while it is set. From the queue's floating pill and the player's radio button.
+  // open while it is set. What depends on a choice shows only while that is on, beside it (the owner, 2026-10-24): how
+  // many after each track in Radio's card, Autoplay's switches in its card, Ignore favourites while either plays. From
+  // the queue's floating pill and the player's radio button.
   import Card from './Card.svelte';
   import ChoiceList from './ChoiceList.svelte';
   import SettingRow from './SettingRow.svelte';
@@ -54,7 +56,7 @@
     <Card title="Radio" note="after each of your tracks" label="Radio">
       <ChoiceList label="Radio" options={RADIO} value={radioNow} onchange={(v) => (v === 'off' ? setRadio(false) : setRadio(true, { by: v }))} />
       {#if radioNow === 'track'}<SimilarBy />{/if}
-      <div class="count" class:off={!local.radio}>
+      {#if local.radio}<div class="count">
         <SettingRow label="After each track">
           <input
             type="range"
@@ -71,14 +73,32 @@
           />
           <output>{dragging ?? local.radioCount}</output>
         </SettingRow>
-      </div>
+      </div>{/if}
     </Card>
     <Card title="Autoplay" note="when the queue ends" label="Autoplay">
       <ChoiceList label="Autoplay" options={AUTOPLAY} value={now} onchange={(v) => setAutoplay(v)} />
       {#if now === 'similar'}<SimilarBy />{/if}
+      {#if now !== 'stop'}
+        <div class="switches">
+          <Switch
+            label="Queue albums"
+            hint="While albums play, whole albums instead of single tracks."
+            hintWhenOn
+            checked={albums}
+            onchange={(on) => setAutoplay(now, { albums: on })}
+          />
+          <Switch
+            label="Restart playlists"
+            hint="A playlist that ends starts again (shuffled if it played shuffled)."
+            hintWhenOn
+            checked={restart}
+            onchange={(on) => setAutoplay(now, { restart: on })}
+          />
+        </div>
+      {/if}
     </Card>
-    <div class="toggles">
-      <!-- For both, and the first of the three (the owner): hearted tracks are left out of what Radio and Autoplay pick. -->
+    {#if local.radio || now !== 'stop'}
+      <!-- For both (the owner): hearted tracks are left out of what Radio and Autoplay pick. -->
       <Switch
         card
         label="Ignore favourites"
@@ -87,25 +107,7 @@
         checked={local.skipFavourites}
         onchange={setSkipFavourites}
       />
-      <Switch
-        card
-        label="Queue albums"
-        hint="While albums play, whole albums instead of single tracks."
-        hintWhenOn
-        checked={albums}
-        disabled={now === 'stop'}
-        onchange={(on) => setAutoplay(now, { albums: on })}
-      />
-      <Switch
-        card
-        label="Restart playlists"
-        hint="A playlist that ends starts again (shuffled if it played shuffled)."
-        hintWhenOn
-        checked={restart}
-        disabled={now === 'stop'}
-        onchange={(on) => setAutoplay(now, { restart: on })}
-      />
-    </div>
+    {/if}
   </div>
 </MenuSheet>
 
@@ -118,14 +120,16 @@
     padding: 4px 16px 16px;
   }
 
-  /* How many after each track, at Radio's foot: a slider, its number after it; dimmed while Radio is off. */
+  /* How many after each track, at Radio's foot (while Radio is on): a slider, its number after it. */
   .count {
     margin-top: 4px;
     border-top: 1px solid var(--border);
   }
 
-  .count.off {
-    opacity: 0.55;
+  /* Autoplay's switches, at its card's foot (while it plays). */
+  .switches {
+    margin-top: 4px;
+    border-top: 1px solid var(--border);
   }
 
   .count input {
@@ -141,8 +145,4 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .toggles {
-    display: grid;
-    gap: 3px;
-  }
 </style>
