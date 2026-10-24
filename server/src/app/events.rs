@@ -1,5 +1,5 @@
 //! The page's live channel (server-sent events): what plays and which playlists hold it, the conversion queue, Cratarr's
-//! own players (Play On), and a note when an album action changed a list. Pages open one stream; each connection is sent only what changed for it.
+//! own players (Play On), a note when an album action changed a list, and the account's favourites as they change. Pages open one stream; each connection is sent only what changed for it.
 //!
 //! What plays is noticed by watching the servers' players: about once a second, and only while some page listens.
 //! A server that cannot say cheaply what its players do (`Source::players`) is asked for the whole state every two
@@ -81,6 +81,8 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
     let mut collected = app.collection.subscribe();
     let mut players = app.play_on.subscribe();
     let mut tasks = super::tasks::tasks().subscribe();
+    // The account's favourites as they change, by any way (userdata `Starred`), where Cratarr's own library is open.
+    let mut starred = crate::serve::instance().map(|s| s.userdata.subscribe_starred());
     let app = app.clone();
     tokio::spawn(crate::serve::who::carried(async move {
         // Whose tasks this page is told of (`app::tasks`): the account it is signed in as.
@@ -162,6 +164,29 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
                 r = players.recv() => match r {
                     Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => send_players().await,
                     Err(broadcast::error::RecvError::Closed) => false,
+                },
+                r = async {
+                    match starred.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => match r {
+                    // Each of the account's hearts at once, then the state (the player's heart) without waiting.
+                    Ok(s) if account.as_deref() == Some(s.user.as_str()) => {
+                        let mut ok = true;
+                        for source in app.library.own_sources() {
+                            let told = serde_json::json!({ "source": source, "kind": s.kind, "items": s.items, "on": s.on });
+                            if let Some(m) = Message::of("favourite", &told) {
+                                ok = ok && out.send(m).await.is_ok();
+                            }
+                        }
+                        ok && send_state(&mut sent).await
+                    }
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => true,
+                    Err(broadcast::error::RecvError::Closed) => {
+                        starred = None;
+                        true
+                    }
                 },
                 () = out.closed() => false,
             };

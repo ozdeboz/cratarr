@@ -307,6 +307,11 @@ impl Library {
         self.connected().into_iter().map(|(a, s)| (a.cfg.id.clone(), s)).collect()
     }
 
+    /// The ids of Cratarr's own libraries (sources of its own kind): where its favourites are.
+    pub fn own_sources(&self) -> Vec<String> {
+        self.live().iter().filter(|a| a.cfg.kind == crate::source::cratarr::KIND.id).map(|a| a.cfg.id.clone()).collect()
+    }
+
     /// Cratarr's own chosen folders (decision 0044), as saved.
     pub fn chosen_folders(&self) -> Vec<String> {
         self.live()
