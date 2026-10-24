@@ -595,9 +595,13 @@
       {:else}
         <span></span>
       {/if}
-      {#if pagePill}<SheetArea area={() => pageEl}><TopPill {page} view={hasView(page)} device={pillDevice} filter={!page.startsWith('local-')} /></SheetArea>{/if}
+      {#if pagePill}<SheetArea area={() => pageEl}><TopPill {page} view={hasView(page)} device={pillDevice} filter={!page.startsWith('local-') && page !== 'downloads'} /></SheetArea>{/if}
       {#if page === 'settings'}
-        <span class="navpill"><button aria-label="About" title="About" onclick={() => (aboutOpen = true)}><Icon name="info" size={22} /></button></span>
+        <!-- Its search left of the info button (the owner, 2026-10-24); the field, when open, covers both. -->
+        <span class="tools">
+          <SheetArea area={() => pageEl}><TopPill {page} filter={false} device={false} /></SheetArea>
+          <span class="navpill"><button aria-label="About" title="About" onclick={() => (aboutOpen = true)}><Icon name="info" size={22} /></button></span>
+        </span>
       {/if}
     </div>
   {/if}
@@ -723,6 +727,11 @@
 
   .page-row > :global(*) {
     pointer-events: auto;
+  }
+
+  .tools {
+    display: flex;
+    gap: 8px;
   }
 
   .page-row.beside {

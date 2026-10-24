@@ -5,7 +5,8 @@
   // Synced: each item that follows its playlist, crate, album or artist (Sync to this device), its row filling as it
   // syncs. Downloaded once: the albums of the one-time copies, filling as they come. A tap opens the item in the panel:
   // beside the list on a roomy window, where one is always open (the first, until another is), its row tinted; over the
-  // list on a phone. The pill's button syncs now.
+  // list on a phone. The pill: its search narrows Synced and Downloaded once (no filter or View, the owner: not
+  // applicable), and its button syncs now.
   import { albumCoverUrl, crateImageUrl } from './lib/api';
   import Cover from './lib/Cover.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
@@ -16,7 +17,7 @@
   import { askKept, kept, keptBusy, syncKept, type KeptItem } from './lib/kept.svelte';
   import { player } from './lib/live.svelte';
   import { albumSubject, artistSubject, panel, SETTINGS, viewInPlace, viewPlaylist } from './lib/panel.svelte';
-  import { usePageAction } from './lib/pageView.svelte';
+  import { pageView, usePageAction } from './lib/pageView.svelte';
 
   askDownloads();
   askKept();
@@ -40,6 +41,13 @@
     if (own.length) download(own);
   }
 
+  // The pill's search: an item or an album whose name (or artist) holds every word.
+  const words = $derived(pageView.query.trim().toLowerCase().split(/\s+/).filter(Boolean));
+  const matches = (...texts: (string | null | undefined)[]) => {
+    const hay = texts.filter(Boolean).join(' ').toLowerCase();
+    return words.every((w) => hay.includes(w));
+  };
+
   // --- Synced ---
   const KINDS = { album: 'Album', playlist: 'Playlist', crate: 'Crate', artist: 'Artist' } as const;
   function keptLine(i: KeptItem): string {
@@ -59,6 +67,7 @@
   };
   // Its picture: an album's cover, a crate's image; a playlist's and an artist's (kept by name) the record mark.
   const keptPicture = (i: KeptItem) => (i.kind === 'album' ? albumCoverUrl(i.source, i.id) : i.kind === 'crate' ? crateImageUrl(i.id) : null);
+  const synced = $derived(kept.items.filter((i) => matches(i.name, KINDS[i.kind])));
   const keptSubject = (i: KeptItem) =>
     i.kind === 'album' ? albumSubject(i.source, i.id) : i.kind === 'artist' ? artistSubject(i.source, i.id) : i.kind === 'crate' ? `crate:${i.id}` : i.id;
 
@@ -76,6 +85,7 @@
     }
     return [...by.values()].reverse();
   });
+  const shownOnce = $derived(once.filter((g) => matches(titleOf(g), listedOf(g)?.artist ?? g.tracks[0].artist)));
   const listedOf = (g: Album) => library.view?.sources.find((s) => s.id === g.source)?.albums.find((a) => a.id === g.id) ?? null;
   const titleOf = (g: Album) => listedOf(g)?.title ?? g.tracks[0].album ?? '';
   function albumLine(g: Album): { text: string; fill: number | null; bad: boolean } {
@@ -151,22 +161,22 @@
       </div>
     </section>
 
-    {#if kept.items.length}
+    {#if synced.length}
       <section class="group" aria-labelledby="downloads-synced">
         <h2 id="downloads-synced">Synced</h2>
         <div class="list">
-          {#each kept.items as i (i.key)}
+          {#each synced as i (i.key)}
             {@render row(keptSubject(i), i.name, keptLine(i), { src: keptPicture(i) }, keptFill(i), i.state === 'error' || i.failed > 0)}
           {/each}
         </div>
       </section>
     {/if}
 
-    {#if once.length}
+    {#if shownOnce.length}
       <section class="group" aria-labelledby="downloads-once">
         <h2 id="downloads-once">Downloaded once</h2>
         <div class="list">
-          {#each once as g (`${g.source}/${g.id}`)}
+          {#each shownOnce as g (`${g.source}/${g.id}`)}
             {@const l = albumLine(g)}
             {@render row(albumSubject(g.source, g.id), titleOf(g), l.text, { src: albumCoverUrl(g.source, g.id) }, l.fill, l.bad)}
           {/each}
