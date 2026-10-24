@@ -29,6 +29,10 @@ export type Prefs = {
    *  off, no list or artist shows one. */
   profile: boolean;
   profileRows: ProfileRow[];
+  /** Home's sections switched on, in the user's order (Settings › Home; the owner, 2026-10-24). */
+  homeParts: HomePart[];
+  /** Home's header greets by name ("Good evening, Oskar", then "Best for now") in place of the moment's own name. */
+  homeGreeting: boolean;
   profileFoldAt: number;
   /** Levelling (decision 0035): this browser's player plays every track about as loud as the next. */
   /** This browser's name as a Play On player, while a page plays here (lib/playOnTarget); '' until it has one. */
@@ -123,6 +127,18 @@ export type ListFilter = { conditions: FilterCondition[]; on: string[] };
 export type FilterCondition = Condition & { enabled?: boolean; quantifier?: 'any' | 'all' };
 
 /** A list profile's rows (lib/ListProfile), in its order: the server's number keys and the word rows. */
+/** Home's sections (Home.svelte), in their first order. */
+export type HomePart = 'moment' | 'newest' | 'week' | 'back' | 'past' | 'graves' | 'explore' | 'status';
+export const HOME_PARTS: { id: HomePart; label: string }[] = [
+  { id: 'moment', label: 'Music for the moment' },
+  { id: 'newest', label: 'New for you' },
+  { id: 'week', label: 'Sounds like your week' },
+  { id: 'back', label: 'Jump back in' },
+  { id: 'past', label: 'Blast from the past' },
+  { id: 'graves', label: 'Grave digging' },
+  { id: 'explore', label: 'Artists to explore' },
+  { id: 'status', label: 'System status' },
+];
 export type ProfileRow = 'style' | 'tempo' | 'energy' | 'danceability' | 'year' | 'mood';
 export const PROFILE_ROWS: { id: ProfileRow; label: string }[] = [
   { id: 'style', label: 'Style' },
@@ -147,6 +163,8 @@ export const DEFAULTS: Prefs = {
   profile: true,
   profileFoldAt: 0,
   profileRows: PROFILE_ROWS.map((r) => r.id),
+  homeParts: HOME_PARTS.map((r) => r.id),
+  homeGreeting: false,
   levelling: true,
   browserName: '',
   relativeDates: false,
@@ -217,7 +235,9 @@ function read(): Prefs {
       if (Array.isArray(saved.playerFacts)) p.playerFacts = saved.playerFacts.filter((x: unknown): x is FactId => FACTS.some((f) => f.id === x));
       if (typeof saved.profileOpen === 'boolean') p.profileOpen = saved.profileOpen;
       if (typeof saved.profile === 'boolean') p.profile = saved.profile;
+      if (typeof saved.homeGreeting === 'boolean') p.homeGreeting = saved.homeGreeting;
       if (Array.isArray(saved.profileRows)) p.profileRows = saved.profileRows.filter((x: unknown): x is ProfileRow => PROFILE_ROWS.some((r) => r.id === x));
+      if (Array.isArray(saved.homeParts)) p.homeParts = saved.homeParts.filter((x: unknown): x is HomePart => HOME_PARTS.some((r) => r.id === x));
       if (Number.isInteger(saved.profileFoldAt) && saved.profileFoldAt >= 0) {
         // Rows no longer in the profile (Artists, 2026-10-23) that were above the fold line no longer count there.
         const gone = Array.isArray(saved.profileRows) ? saved.profileRows.slice(0, saved.profileFoldAt).filter((x: unknown) => !PROFILE_ROWS.some((r) => r.id === x)).length : 0;

@@ -5,7 +5,7 @@
   // days' plays, none of them), Jump back in (the albums and playlists played last, and the queues left last), Blast
   // from the past (the favourite tracks unplayed longest) and Grave digging (the albums most like the taste and furthest
   // from the listening), and System status (claude-632's, lib/HomeStatus). A tile with nothing to show is left out.
-  import { onMount } from 'svelte';
+  import { onMount, type Snippet } from 'svelte';
   import { coverUrl, crateRows, getCrate, getDigging, getMoment, heardAlbums, playlistStats, type Digging, type Moment, type PlaylistRow } from './lib/api';
   import AlbumCard from './lib/AlbumCard.svelte';
   import { addedOn, albumUses, albumUsesKnown, library, loadAlbumUses, readLibrary } from './lib/albums.svelte';
@@ -22,7 +22,9 @@
   import { shownPlaylists } from './lib/output.svelte';
   import { albumSubject, viewOver, viewPlaylist } from './lib/panel.svelte';
   import { playCollection } from './lib/play.svelte';
-  import { prefs } from './lib/prefs.svelte';
+  import { prefs, type HomePart } from './lib/prefs.svelte';
+  import { HOME_HEADER, localCovers } from './lib/localCovers.svelte';
+  import { me } from './lib/me.svelte';
   import { loadQueues, queues, queuesVersion, switchQueue } from './lib/queueHistory.svelte';
   import SectionHead from './lib/SectionHead.svelte';
   import PageLoading from './lib/PageLoading.svelte';
@@ -134,6 +136,8 @@
   /** The sky's photo (public/skies, hand-picked from Unsplash): sunny and hot are day skies, clear a night's; the others
    *  by day or after sunset. */
   const skyPhoto = $derived.by(() => {
+    // A picture of the user's own, chosen on this device (Settings › Home), in place of the weather's.
+    if (localCovers[HOME_HEADER]) return localCovers[HOME_HEADER];
     if (!moment) return null;
     const one: Record<string, string> = { sunny: 'sunny-day', hot: 'hot-day', clear: 'clear-night' };
     return `skies/${one[moment.sky] ?? `${moment.sky}-${moment.dark ? 'night' : 'day'}`}.jpg`;
@@ -248,8 +252,9 @@
     const t = setTimeout(() => (patient = false), PATIENCE);
     return () => clearTimeout(t);
   });
-  const ORDER = ['moment', 'newest', 'week', 'back', 'past', 'graves', 'explore', 'status'] as const;
-  type Part = (typeof ORDER)[number];
+  type Part = HomePart;
+  /** Its sections switched on, in the user's order (Settings › Home). */
+  const order = $derived(prefs.homeParts);
   const settled = $derived<Record<Part, boolean>>({
     moment: momentIn && (!moment || !!library.view),
     newest: heard !== null,
@@ -260,9 +265,27 @@
     explore: exploreIn,
     status: statusIn,
   });
-  const turn = (part: Part) => settled[part] && (!patient || ORDER.slice(0, ORDER.indexOf(part)).every((x) => settled[x]));
+  const turn = (part: Part) => settled[part] && (!patient || order.slice(0, order.indexOf(part)).every((x) => settled[x]));
   /** Nothing shown yet and something still to come: the page's loader, not a blank page. */
-  const loading = $derived(!ORDER.some(turn) && !ORDER.every((x) => settled[x]));
+  const loading = $derived(!order.some(turn) && !order.every((x) => settled[x]));
+
+  /** Good morning, afternoon or evening, by this device's clock (from 5, 12 and 18 o'clock). */
+  function greeting() {
+    const h = new Date().getHours();
+    return h >= 5 && h < 12 ? 'Good morning' : h >= 12 && h < 18 ? 'Good afternoon' : 'Good evening';
+  }
+
+  /** Each section, drawn where the user's order puts it. */
+  const PARTS: Record<Part, Snippet> = {
+    moment: momentPart,
+    newest: newestPart,
+    week: weekPart,
+    back: backPart,
+    past: pastPart,
+    graves: gravesPart,
+    explore: explorePart,
+    status: statusPart,
+  };
 
   function open(b: Back) {
     if (b.kind === 'album') viewOver(albumSubject(b.source, b.id));
@@ -274,9 +297,20 @@
 
 <div class="home">
   {#if loading}<PageLoading />{/if}
+  <!-- Its sections in the user's order, those switched on (Settings › Home; the owner, 2026-10-24). -->
+  {#each order as part (part)}{@render PARTS[part]()}{/each}
+</div>
+
+{#snippet momentPart()}
   {#if turn('moment') && moment && momentAlbums.length}
-    <section class="moment" data-sky={moment.sky} class:dark={moment.dark} style:--photo={skyPhoto ? `url(${skyPhoto})` : 'none'} aria-label={moment.name}>
-      <h2>{moment.name}</h2>
+    <section class="moment" class:top={order[0] === 'moment'} data-sky={moment.sky} class:dark={moment.dark} style:--photo={skyPhoto ? `url(${skyPhoto})` : 'none'} aria-label={moment.name}>
+      {#if prefs.homeGreeting}
+        <!-- The personal greeting (Settings › Home): the time of day and their name, then what plays here. -->
+        <h2>{greeting()}{me.name ? `, ${me.name}` : ''}</h2>
+        <p class="for-now">Best for now</p>
+      {:else}
+        <h2>{moment.name}</h2>
+      {/if}
       <div class="sky-flow">
         <CoverFlow
           covers={momentAlbums.map((a) => albumCoverUrl('cratarr', a.id))}
@@ -297,7 +331,9 @@
       </div>
     </section>
   {/if}
+{/snippet}
 
+{#snippet newestPart()}
   {#if turn('newest') && newest.length}
     <section aria-label="New for you">
       <SectionHead title="New for you" onmore={allNewest} />
@@ -308,7 +344,9 @@
       </ul>
     </section>
   {/if}
+{/snippet}
 
+{#snippet weekPart()}
   {#if turn('week') && week && week.total > 0}
     <section aria-label="Sounds like your week">
       <SectionHead title="Sounds like your week" onplay={() => playWeek('play')} busy={starting} />
@@ -326,7 +364,9 @@
       </div>
     </section>
   {/if}
+{/snippet}
 
+{#snippet backPart()}
   {#if turn('back') && back.length}
     <section aria-label="Jump back in">
       <SectionHead title="Jump back in" />
@@ -349,7 +389,9 @@
       </ul>
     </section>
   {/if}
+{/snippet}
 
+{#snippet pastPart()}
   {#if turn('past') && dug?.past.length}
     <section aria-label="Blast from the past">
       <SectionHead title="Blast from the past" onplay={() => playPast('play')} busy={starting} />
@@ -368,7 +410,9 @@
       </ul>
     </section>
   {/if}
+{/snippet}
 
+{#snippet gravesPart()}
   {#if turn('graves') && graves.length}
     <section aria-label="Grave digging">
       <SectionHead title="Grave digging" />
@@ -379,13 +423,17 @@
       </ul>
     </section>
   {/if}
+{/snippet}
 
+{#snippet explorePart()}
   <!-- Artists to explore (lib/ArtistsToExplore; the owner, 2026-10-23). -->
   <div class="turn" class:held={!turn('explore')}><ArtistsToExplore onsettled={() => (exploreIn = true)} /></div>
+{/snippet}
 
+{#snippet statusPart()}
   <!-- System status (lib/HomeStatus): an administrator's, shown only when something waits. -->
   <div class="turn" class:held={!turn('status')}><HomeStatus onsettled={() => (statusIn = true)} /></div>
-</div>
+{/snippet}
 
 <style>
   /* A part that loads itself (it asks on mounting): there from the start, shown in its turn. */
@@ -424,8 +472,8 @@
   }
 
   /* Under the page's row (back and the rest, floating over the page's top: App's .under-row), the sky goes on up behind
-     it to the page's top, its heading where it was (the owner, 2026-10-23). */
-  :global(.page.under-row) .moment {
+     it to the page's top, its heading where it was (the owner, 2026-10-23); only when it is Home's first section. */
+  :global(.page.under-row) .moment.top {
     margin-top: -76px;
     padding-top: 80px;
   }
@@ -457,6 +505,14 @@
     padding: 0 16px;
     font-size: 23px;
     font-weight: 400;
+  }
+
+  /* Under the personal greeting: what the section is, a line in the heading's own colour, quieter. */
+  .moment .for-now {
+    margin: 2px 0 0;
+    padding: 0 16px;
+    font-size: 15px;
+    opacity: 0.75;
   }
 
   /* Room under the covers for their shadow (it fades over 30 px): at the flow's very foot, its clip cut the shadow off

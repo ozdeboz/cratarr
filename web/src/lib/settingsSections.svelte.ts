@@ -14,6 +14,7 @@ export type SettingsSection =
   | 'import'
   | 'display'
   | 'taste'
+  | 'home'
   | 'connections'
   | 'libraries'
   | 'players'
@@ -31,6 +32,8 @@ export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app
   { id: 'display', title: 'Display', icon: 'swatch' },
   // What one has said one does not want (the owner, 2026-10-23): every exclusion, managed in one place.
   { id: 'taste', title: 'Taste', icon: 'music' },
+  // Home's sections, their order, and its header (the owner, 2026-10-24).
+  { id: 'home', title: 'Home', icon: 'home' },
   { id: 'connections', title: 'Connections', icon: 'server', admin: true },
   { id: 'libraries', title: 'Libraries', icon: 'library', admin: true },
   { id: 'players', title: 'Players', icon: 'speakers', admin: true },
