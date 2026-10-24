@@ -248,6 +248,7 @@ pub fn router(serve: Arc<Serve>) -> Router {
         .route("/api/auth/required", get(required).put(set_required))
         .route("/api/auth/keys", get(keys).post(new_key))
         .route("/api/auth/keys/{id}", delete(revoke_key))
+        .route("/api/connections/home-assistant", get(home_assistant))
         .layer(axum::middleware::from_fn(admin))
         .with_state(serve)
 }
@@ -306,6 +307,22 @@ async fn keys(State(serve): State<Arc<Serve>>) -> Response {
     }
 }
 
+/// Connections' Home Assistant (the owner, 2026-10-24: its key there, not in Authentication; no other client needs
+/// one): its keys, a key made before keys had a purpose among them (their last use is when it last called), and the
+/// weather it last told.
+async fn home_assistant(State(serve): State<Arc<Serve>>) -> Response {
+    match serve.sessions.keys() {
+        Ok(keys) => {
+            let keys: Vec<_> = keys.into_iter().filter(|k| k.purpose.as_deref().is_none_or(|p| p == HOME_ASSISTANT)).collect();
+            axum::Json(json!({ "keys": keys, "weather": crate::app::moment::last_told() })).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(json!({ "error": format!("{e:#}") }))).into_response(),
+    }
+}
+
+/// The purpose of Home Assistant's keys.
+const HOME_ASSISTANT: &str = "home_assistant";
+
 #[derive(serde::Deserialize)]
 struct NewKey {
     name: String,
@@ -316,6 +333,9 @@ struct NewKey {
     /// `read` or `control` (the default).
     #[serde(default)]
     scope: Option<String>,
+    /// What uses it: `home_assistant`; none for any other.
+    #[serde(default)]
+    purpose: Option<String>,
 }
 
 /// A new API key: shown in this answer once, never again.
@@ -333,7 +353,8 @@ async fn new_key(State(serve): State<Arc<Serve>>, headers: HeaderMap, axum::Json
             return (StatusCode::BAD_REQUEST, axum::Json(json!({ "error": "No such user." }))).into_response();
         }
     }
-    match serve.sessions.new_key(name, owner.as_deref(), k.scope.as_deref().unwrap_or("control"), now()) {
+    let purpose = k.purpose.as_deref().filter(|p| *p == HOME_ASSISTANT);
+    match serve.sessions.new_key(name, owner.as_deref(), k.scope.as_deref().unwrap_or("control"), purpose, now()) {
         Ok((key, made)) => {
             tracing::info!(target: "signin", name = %made.name, "API key made");
             let mut r = axum::Json(json!({ "key": key, "id": made.id, "name": made.name })).into_response();
@@ -368,7 +389,7 @@ fn mint_to_file(data_dir: &std::path::Path, name: &str, out: &std::path::Path) -
     use anyhow::Context;
     use std::io::Write;
     let sessions = Sessions::open(Some(&data_dir.join("sessions.sqlite")))?;
-    let (key, _) = sessions.new_key(name, None, "control", now())?;
+    let (key, _) = sessions.new_key(name, None, "control", (name == "Home Assistant").then_some(HOME_ASSISTANT), now())?;
     if let Some(dir) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).with_context(|| format!("cannot make {}", dir.display()))?;
         #[cfg(unix)]
@@ -517,10 +538,10 @@ mod tests {
         assert_eq!((body["name"].as_str(), body["admin"].as_bool()), (Some("ann"), Some(false)));
 
         let keyed = |key: &str, method: &str, uri: &str| HttpRequest::builder().method(method).uri(uri).header("authorization", format!("Bearer {key}")).body(Body::empty()).unwrap();
-        let (reads, _) = s.sessions.new_key("Dashboard", Some("me"), "read", now()).unwrap();
+        let (reads, _) = s.sessions.new_key("Dashboard", Some("me"), "read", None, now()).unwrap();
         assert_eq!(status(&s, keyed(&reads, "GET", "/api/library")).await.0, StatusCode::OK);
         assert_eq!(status(&s, keyed(&reads, "POST", "/api/library")).await.0, StatusCode::FORBIDDEN, "it only reads");
-        let (controls, _) = s.sessions.new_key("Home Assistant", Some("me"), "control", now()).unwrap();
+        let (controls, _) = s.sessions.new_key("Home Assistant", Some("me"), "control", Some(HOME_ASSISTANT), now()).unwrap();
         assert_eq!(status(&s, keyed(&controls, "GET", "/api/auth/keys")).await.0, StatusCode::FORBIDDEN, "an administrator's key is no administrator");
         // One who left the directory's group is no one.
         s.users.deactivate("ann").unwrap();
@@ -532,7 +553,7 @@ mod tests {
         let s = served(false);
         assert_eq!(status(&s, get_("/api/library")).await.0, StatusCode::OK);
         // A key sent while it is off still shows as used: the check before switching on.
-        let (key, made) = s.sessions.new_key("Home Assistant", None, "control", now()).unwrap();
+        let (key, made) = s.sessions.new_key("Home Assistant", None, "control", Some(HOME_ASSISTANT), now()).unwrap();
         let keyed = HttpRequest::get("/api/library").header("authorization", format!("Bearer {key}")).body(Body::empty()).unwrap();
         assert_eq!(status(&s, keyed).await.0, StatusCode::OK);
         assert!(s.sessions.keys().unwrap().iter().find(|k| k.id == made.id).unwrap().last_used.is_some());
@@ -561,7 +582,7 @@ mod tests {
         let with_session = HttpRequest::get("/api/library").header("cookie", format!("{COOKIE}={token}")).body(Body::empty()).unwrap();
         assert_eq!(status(&s, with_session).await.0, StatusCode::OK);
 
-        let (key, made) = s.sessions.new_key("Home Assistant", None, "control", now()).unwrap();
+        let (key, made) = s.sessions.new_key("Home Assistant", None, "control", Some(HOME_ASSISTANT), now()).unwrap();
         let with_key = |k: &str| HttpRequest::get("/api/library").header("authorization", format!("Bearer {k}")).body(Body::empty()).unwrap();
         assert_eq!(status(&s, with_key(&key)).await.0, StatusCode::OK);
         assert_eq!(status(&s, with_key("cratarr_0000")).await.0, StatusCode::UNAUTHORIZED);
@@ -598,7 +619,7 @@ mod tests {
             HttpRequest::post("/api/auth/keys")
                 .header("content-type", "application/json")
                 .header("cookie", format!("{COOKIE}={token}"))
-                .body(Body::from(format!(r#"{{"name":"Home Assistant","password":"{pw}"}}"#)))
+                .body(Body::from(format!(r#"{{"name":"Home Assistant","password":"{pw}","purpose":"home_assistant"}}"#)))
                 .unwrap()
         };
         assert_eq!(status(&s, mint("wrong")).await.0, StatusCode::FORBIDDEN);
@@ -610,6 +631,12 @@ mod tests {
         let listed = app(&s).oneshot(HttpRequest::get("/api/auth/keys").header("cookie", format!("{COOKIE}={token}")).body(Body::empty()).unwrap()).await.unwrap();
         let text = String::from_utf8(axum::body::to_bytes(listed.into_body(), 1 << 16).await.unwrap().to_vec()).unwrap();
         assert!(text.contains("Home Assistant") && !text.contains(key), "listed without the key");
+        let ha = app(&s)
+            .oneshot(HttpRequest::get("/api/connections/home-assistant").header("cookie", format!("{COOKIE}={token}")).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let ha: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(ha.into_body(), 1 << 16).await.unwrap()).unwrap();
+        assert_eq!(ha["keys"][0]["purpose"], "home_assistant", "shown with its connection");
     }
 
     #[test]

@@ -1,5 +1,6 @@
 <script lang="ts">
-  // Connections: the servers Cratarr works with, and Lidarr; saved with the Save bar. Each is a row (its state in a
+  // Connections: the servers Cratarr works with, Lidarr, and Home Assistant (the owner, 2026-10-24: its own section,
+  // its key with it; it acts at once, lib/settings/HomeAssistantPart); the rest saved with the Save bar. Each is a row (its state in a
   // line); its settings are on its own page behind it (`thing`: a server's id, or `lidarr`): its fields as rows, a value
   // typed or chosen in a sheet, its connection checked there, and Remove last (the settings' North Star, 2026-10-19).
   import type { Field } from '../api';
@@ -9,6 +10,7 @@
   import ConfirmSheet from './ConfirmSheet.svelte';
   import { ed, str, type Draft } from './editor.svelte';
   import Group from './Group.svelte';
+  import HomeAssistantPart from './HomeAssistantPart.svelte';
   import Item from './Item.svelte';
   import ValueSheet from './ValueSheet.svelte';
 
@@ -17,15 +19,16 @@
   // Shown only once the settings are read (lib/SettingsPanel).
   const s = $derived(ed.s!);
   const LIDARR = 'lidarr';
+  const HOME_ASSISTANT = 'home-assistant';
   const LIDARR_MORE = "With Lidarr's address and API key, Delete in Incoming also stops Lidarr fetching that album again.";
 
   // Its id only beside another server of its kind.
   const label = (d: Draft) => `${ed.kindOf(d)?.label ?? d.kind}${ed.drafts.filter((x) => x.kind === d.kind).length > 1 ? ` (${d.id})` : ''}`;
-  const draft = $derived(thing && thing !== LIDARR ? (ed.drafts.find((d) => d.id === thing) ?? null) : null);
-  nameThing(() => (thing === LIDARR ? 'Lidarr' : draft ? label(draft) : null));
+  const draft = $derived(thing && thing !== LIDARR && thing !== HOME_ASSISTANT ? (ed.drafts.find((d) => d.id === thing) ?? null) : null);
+  nameThing(() => (thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : draft ? label(draft) : null));
   // A server removed (or never there): back to the list.
   $effect(() => {
-    if (thing && thing !== LIDARR && !draft) backFromThing('connections');
+    if (thing && thing !== LIDARR && thing !== HOME_ASSISTANT && !draft) backFromThing('connections');
   });
 
   /** A server's state in a line: off, connected (to what), or what is wrong. */
@@ -154,6 +157,8 @@
       onclose={() => (removing = null)}
     />
   {/if}
+{:else if thing === HOME_ASSISTANT}
+  <HomeAssistantPart page />
 {:else if thing === LIDARR}
   <Group title="Connection">
     <Item
@@ -216,6 +221,7 @@
       {/if}
     </Group>
   {/if}
+  <HomeAssistantPart />
   {#if addingKind}
     <ChoiceSheet title="Add server" options={s.kinds.map((k) => ({ value: k.id, label: k.label }))} value={''} onchange={add} onclose={() => (addingKind = false)} />
   {/if}

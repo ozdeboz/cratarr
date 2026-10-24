@@ -1014,14 +1014,18 @@ export const signOutDevice = (id: string) => request<void>(`/api/auth/sessions/$
 export const getSignInRequired = () => quietly<{ required: boolean }>('/api/auth/required');
 export const setSignInRequired = (on: boolean, password: string) =>
   request<{ required: boolean }>('/api/auth/required', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on, password }) });
-/** An API key (decision 0043), for what cannot sign in on a page (Home Assistant, scripts): never the key itself. Since
- *  decision 0051 it acts for its owner, and only reads (`read`) or also plays and changes (`control`). */
+/** An API key (decision 0043), for what cannot sign in on a page (Home Assistant): never the key itself. Since
+ *  decision 0051 it acts for its owner, and only reads (`read`) or also plays and changes (`control`); kept with what
+ *  uses it (`purpose`, the owner, 2026-10-24: under Connections, not Authentication). */
 export type KeyScope = 'read' | 'control';
-export type ApiKey = { id: string; name: string; created: number; last_used: number | null; owner?: string; scope?: KeyScope };
-export const getApiKeys = () => quietly<{ keys: ApiKey[] }>('/api/auth/keys');
+export type ApiKey = { id: string; name: string; created: number; last_used: number | null; owner?: string; scope?: KeyScope; purpose?: 'home_assistant' | null };
 /** A new key: `key` is shown in this answer only, never again. */
-export const newApiKey = (name: string, password: string, owner?: string, scope?: KeyScope) =>
-  post<{ key: string; id: string; name: string }>('/api/auth/keys', { name, password, owner, scope });
+export const newApiKey = (name: string, password: string, owner?: string, scope?: KeyScope, purpose?: 'home_assistant') =>
+  post<{ key: string; id: string; name: string }>('/api/auth/keys', { name, password, owner, scope, purpose });
+/** The weather Home Assistant last told (its weather entity's `condition`, °C, `at` epoch s). */
+export type Weather = { condition?: string | null; cloud?: number | null; temperature?: number | null; at: number };
+/** Connections' Home Assistant: its keys (their last use is when it last called) and the weather it last told. */
+export const getHomeAssistant = () => quietly<{ keys: ApiKey[]; weather: Weather | null }>('/api/connections/home-assistant');
 
 /** What a user may do beyond listening (decision 0051), in Cratarr and in OpenSubsonic apps alike: keep tracks to play
  *  offline, make playlists, share them with the other users, make public share links. */

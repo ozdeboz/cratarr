@@ -92,3 +92,11 @@ It holds the API keys (their hashes), the signed links' secret and whether the r
 (0039 left it out of the backups on purpose). Without it a restore would come back with the requirement reset to off
 for an install from before and every key unknown, so the backups dump it with the other databases from now on; it holds
 hashes only.
+
+## Amendment (2026-10-24): keys live with what uses them
+
+The owner: API keys belong in the panel of what uses them, not in Authentication. The only client that needs one is
+Home Assistant, so Settings → Connections has a Home Assistant section: when it last called (its key's last use), the
+weather it last told, and its key, made (with the password again, shown once), and revoked there. Each key carries a
+purpose (`home_assistant`); the key named "Home Assistant" from before took that purpose when the column came. There is
+no list of other clients. Authentication keeps the sign-in requirement and the directory.
