@@ -6,9 +6,9 @@ import { LIST_WIDTHS } from './pageView.svelte';
 import type { Condition } from './api';
 import { FACTS, type FactId } from './facts';
 
-/** The bands' Speed (lib/BandSlider): Calm to Radical, times each look's own pace (Radical: four times the first
- *  Lively, the owner, 2026-10-24). */
-export const BAND_PACE = { min: 0.7, max: 10.4 };
+/** The bands' Speed (lib/BandSlider): Ultra slow to Radical, times each look's own pace (Radical: four times the first
+ *  Lively, Ultra slow a seventh of the first Calm; the owner, 2026-10-24). */
+export const BAND_PACE = { min: 0.1, max: 10.4 };
 /** The bands' Window (lib/BandSlider): the seconds of music around now their levels are of (the owner, 2026-10-24: a
  *  wider range than the first 1 to 8). */
 export const BAND_WINDOW = { min: 0.25, max: 30 };
@@ -19,6 +19,77 @@ export const BAND_HEIGHT = { min: 0.4, max: 2.5 };
 export const BAND_COUNT = { min: 3, max: 32 };
 /** How far apart the bands are drawn: 0 all on one line; 1 spread over the height (the meter: its bars apart). */
 export const BAND_GAP = { min: 0, max: 1 };
+/** Taper and Fade: none to full. */
+export const BAND_ENDS_RANGE = { min: 0, max: 1 };
+/** The looks the bands are drawn in (lib/BandGlass). */
+export type BandLookName = 'aurora' | 'sirius' | 'hairlines' | 'meter';
+export const BAND_LOOK_NAMES: BandLookName[] = ['aurora', 'sirius', 'hairlines', 'meter'];
+/** A look's settings (each look its own: lib/bandTune). */
+export type BandTune = {
+  /** How fast it moves, times each look's own pace. */
+  speed: number;
+  /** Seconds of music: the waves' width, now in the middle; what the meter takes in up to now. */
+  window: number;
+  /** Times each band's cycles a second. */
+  cycles: number;
+  /** Times how tall loudness draws. */
+  height: number;
+  /** How many bands it is drawn in. */
+  count: number;
+  /** How far apart the bands are drawn (the meter: its bars). */
+  gap: number;
+  /** Which way the music flows (the meter: which side the bass is on). */
+  direction: 'left' | 'right';
+  /** How much the ends taper (the meter: its bars towards their tops), and fade, eased. */
+  taper: number;
+  fade: number;
+};
+/** Each number setting's range, for the sliders and for reading saved ones. */
+export const TUNE_RANGES: Record<Exclude<keyof BandTune, 'direction'>, { min: number; max: number }> = {
+  speed: BAND_PACE,
+  window: BAND_WINDOW,
+  cycles: BAND_CYCLES,
+  height: BAND_HEIGHT,
+  count: BAND_COUNT,
+  gap: BAND_GAP,
+  taper: BAND_ENDS_RANGE,
+  fade: BAND_ENDS_RANGE,
+};
+
+/** The saved overrides, each checked; the settings from before there was one each (one set for every look) become the
+ *  overrides of the look then chosen. */
+function savedTunes(saved: Record<string, unknown>): Prefs['playerBandsTunes'] {
+  const check = (raw: unknown): Partial<BandTune> => {
+    const out: Partial<BandTune> = {};
+    if (!raw || typeof raw !== 'object') return out;
+    const r = raw as Record<string, unknown>;
+    for (const [k, range] of Object.entries(TUNE_RANGES) as [Exclude<keyof BandTune, 'direction'>, { min: number; max: number }][]) {
+      const v = r[k];
+      if (typeof v === 'number' && v >= range.min && v <= range.max) out[k] = v;
+    }
+    if (r.direction === 'left' || r.direction === 'right') out.direction = r.direction;
+    return out;
+  };
+  const tunes: Prefs['playerBandsTunes'] = {};
+  const kept = saved.playerBandsTunes as Record<string, unknown> | undefined;
+  if (kept && typeof kept === 'object') for (const look of BAND_LOOK_NAMES) if (kept[look]) tunes[look] = check(kept[look]);
+  const look = saved.playerBands as BandLookName;
+  if (!kept && BAND_LOOK_NAMES.includes(look)) {
+    const old = check({
+      speed: saved.playerBandsSpeed,
+      window: saved.playerBandsWindow,
+      cycles: saved.playerBandsCycles,
+      height: saved.playerBandsHeight,
+      count: saved.playerBandsCount,
+      gap: saved.playerBandsGap,
+      direction: saved.playerBandsDirection,
+      taper: saved.playerBandsTaper,
+      fade: saved.playerBandsFade,
+    });
+    if (Object.keys(old).length) tunes[look] = old;
+  }
+  return tunes;
+}
 
 export type Theme = 'auto' | 'light' | 'dark';
 
@@ -34,21 +105,14 @@ export type Prefs = {
   /** The full player's row under the title (the owner, 2026-10-19): shown at all, and the facts it shows beside its info
    *  button, in the user's order (lib/trackFacts; none at first). */
   playerRow: boolean;
-  /** The full-screen player's three bands, landscape (lib/BandGlass): off, or how they are drawn. */
-  playerBands: 'off' | 'aurora' | 'sirius' | 'hairlines' | 'meter';
-  /** The bands' two settings, for every look (the owner, 2026-10-24): how fast they move (times their own pace, within
-   *  BAND_PACE), and how many seconds of music around now their levels are of (within BAND_WINDOW; short: every beat,
-   *  long: the phrase). Sliders, lib/BandSlider. */
-  playerBandsSpeed: number;
-  playerBandsWindow: number;
-  playerBandsCycles: number;
-  playerBandsCount: number;
-  playerBandsGap: number;
-  playerBandsHeight: number;
-  /** Which way the bands' music flows: to the left (what comes enters on the right) or to the right. */
-  playerBandsDirection: 'left' | 'right';
-  /** How the bands end at both sides: tapering to nothing, or full height fading out. */
-  playerBandsEnds: 'taper' | 'fade';
+  /** The full-screen player's bands, landscape (lib/BandGlass): off, or how they are drawn. */
+  playerBands: 'off' | BandLookName;
+  /** Each look's settings as the user changed them from its defaults (lib/bandTune: TUNE_DEFAULTS), the rest its own
+   *  (the owner, 2026-10-24: a default for each look, overrides remembered per look, a reset each). */
+  playerBandsTunes: Partial<Record<BandLookName, Partial<BandTune>>>;
+  /** How this device draws them (the owner, 2026-10-24: the finest on devices that can, the fastest where they cannot):
+   *  SVG, its true blur and blending, or a canvas, one bitmap a frame (59 against 35 frames a second on the tablet). */
+  playerBandsEngine: 'svg' | 'canvas';
   playerFacts: FactId[];
   /** A list's profile on top of it (the owner, 2026-10-23): open or folded, for every list at once; its rows switched
    *  on, in the user's order; and its fold line, how many of them stay when it is folded (0: none; Settings › Display ›
@@ -202,14 +266,8 @@ export const DEFAULTS: Prefs = {
   listDown: false,
   playerRow: true,
   playerBands: 'off',
-  playerBandsSpeed: 1.6,
-  playerBandsWindow: 3,
-  playerBandsCycles: 1,
-  playerBandsCount: 3,
-  playerBandsGap: 0,
-  playerBandsHeight: 1,
-  playerBandsDirection: 'left',
-  playerBandsEnds: 'taper',
+  playerBandsTunes: {},
+  playerBandsEngine: 'canvas',
   playerFacts: [],
   profileOpen: true,
   profile: true,
@@ -286,15 +344,8 @@ function read(): Prefs {
       }
       if (typeof saved.playerRow === 'boolean') p.playerRow = saved.playerRow;
       if (['off', 'aurora', 'sirius', 'hairlines', 'meter'].includes(saved.playerBands)) p.playerBands = saved.playerBands;
-      if (typeof saved.playerBandsSpeed === 'number' && saved.playerBandsSpeed >= BAND_PACE.min && saved.playerBandsSpeed <= BAND_PACE.max)
-        p.playerBandsSpeed = saved.playerBandsSpeed;
-      if (typeof saved.playerBandsWindow === 'number' && saved.playerBandsWindow >= BAND_WINDOW.min && saved.playerBandsWindow <= BAND_WINDOW.max)
-        p.playerBandsWindow = saved.playerBandsWindow;
-      if (['left', 'right'].includes(saved.playerBandsDirection)) p.playerBandsDirection = saved.playerBandsDirection;
-      if (['taper', 'fade'].includes(saved.playerBandsEnds)) p.playerBandsEnds = saved.playerBandsEnds;
-      for (const [k, r] of [['playerBandsCycles', BAND_CYCLES], ['playerBandsHeight', BAND_HEIGHT], ['playerBandsCount', BAND_COUNT], ['playerBandsGap', BAND_GAP]] as const) {
-        if (typeof saved[k] === 'number' && saved[k] >= r.min && saved[k] <= r.max) p[k] = saved[k];
-      }
+      p.playerBandsTunes = savedTunes(saved);
+      if (saved.playerBandsEngine === 'svg' || saved.playerBandsEngine === 'canvas') p.playerBandsEngine = saved.playerBandsEngine;
       if (Array.isArray(saved.playerFacts)) p.playerFacts = saved.playerFacts.filter((x: unknown): x is FactId => FACTS.some((f) => f.id === x));
       if (typeof saved.profileOpen === 'boolean') p.profileOpen = saved.profileOpen;
       if (typeof saved.profile === 'boolean') p.profile = saved.profile;

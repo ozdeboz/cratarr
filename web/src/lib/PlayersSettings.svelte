@@ -4,6 +4,7 @@
   // moves, as Snapweb and Iris set Snapcast's per-client latency. 0 to 500 ms in steps of 5. What every player has is
   // said once (the group's heading), each player's value on its row; a tap opens its slider in a sheet (the settings'
   // North Star, 2026-10-19). Then the Kodis (lib/KodiSettings), each with its own page (`thing`).
+  import { panSafe } from './panSafe';
   import { removeMyDevice, setPlayerDelay } from './api';
   import MenuEntry from './MenuEntry.svelte';
   import ConfirmSheet from './settings/ConfirmSheet.svelte';
@@ -96,7 +97,7 @@
   <MenuSheet label="Speaker delay" title={name} chips={['Speaker delay']} onclose={() => (adjusting = null)}>
     <div class="delay">
       <button aria-label="Less" title="Less" disabled={ms <= 0} onclick={() => set(name, ms - STEP)}><Icon name="minus" size={20} /></button>
-      <input type="range" min="0" max={maxOf(name)} step={STEP} value={ms} aria-label="Speaker delay of {name}" oninput={(e) => set(name, Number(e.currentTarget.value))} />
+      <input type="range" use:panSafe min="0" max={maxOf(name)} step={STEP} value={ms} aria-label="Speaker delay of {name}" oninput={(e) => set(name, Number(e.currentTarget.value))} />
       <button aria-label="More" title="More" disabled={ms >= maxOf(name)} onclick={() => set(name, ms + STEP)}><Icon name="plus" size={20} /></button>
       <output>{ms} ms</output>
     </div>

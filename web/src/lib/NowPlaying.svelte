@@ -21,6 +21,7 @@
   import WaveLens from './WaveLens.svelte';
   import { loadWaveform, waveformOf } from './waveforms.svelte';
   import { SILENT, loadSpectrum, spectrumOf } from './bandWaves.svelte';
+  import { tuneOf } from './bandTune.svelte';
   import BandGlass from './BandGlass.svelte';
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { local, restoreUpcoming, setRepeat, shuffleUpcoming } from './localPlayer.svelte';
@@ -94,6 +95,8 @@
     if (np && dur && prefs.playerBands !== 'off') loadSpectrum(np.source, np.id, dur);
   });
   const spectrum = $derived(np && prefs.playerBands !== 'off' ? spectrumOf(np.source, np.id) : null);
+  /** The chosen look's settings (lib/bandTune: its own defaults, the user's changes over them). */
+  const tune = $derived(tuneOf(prefs.playerBands === 'off' ? 'sirius' : prefs.playerBands));
   /** Where the handle is held (seconds), and after release until the player is there. */
   let held = $state<number | null>(null);
   let heldTimer: ReturnType<typeof setTimeout> | undefined;
@@ -266,10 +269,16 @@
   let head = $state<HTMLElement>();
   let swiped = false;
   let overview = $state(false);
-  // The row's facts, short, in the user's order; those not known for this track are left out (lib/trackFacts).
+  // The row's facts, short, in the user's order; those not known for this track are left out (lib/trackFacts). Worked
+  // out again only when the track or what is known of it changes: the playing track is told again with each move of
+  // its position, and the dates in it cost a frame's worth each time (2026-10-24, profiled on the tablet).
+  const factsKey = $derived(np && np.source !== 'device' ? `${np.source}/${np.id}/${JSON.stringify(np.info ?? null)}` : '');
   const rowFacts = $derived.by(() => {
-    if (!np || !prefs.playerRow || !prefs.playerFacts.length || np.source === 'device') return [];
-    const known = factsOf(detailsOf(np.source, np.id), np.info ?? null);
+    const key = factsKey;
+    if (!key || !prefs.playerRow || !prefs.playerFacts.length) return [];
+    const now = untrack(() => np);
+    if (!now) return [];
+    const known = factsOf(detailsOf(now.source, now.id), now.info ?? null);
     return prefs.playerFacts.flatMap((id) => (known[id] ? [{ id, short: known[id].short }] : []));
   });
   /** The row's Add: Settings → Display, where the row's facts are chosen; the player over the page gives way. */
@@ -640,14 +649,16 @@
             duration={dur ?? 0}
             paused={!!np.progress?.paused}
             look={prefs.playerBands}
-            speed={prefs.playerBandsSpeed}
-            window={prefs.playerBandsWindow}
-            cycles={prefs.playerBandsCycles}
-            height={prefs.playerBandsHeight}
-            direction={prefs.playerBandsDirection}
-            ends={prefs.playerBandsEnds}
-            count={prefs.playerBandsCount}
-            gap={prefs.playerBandsGap}
+            speed={tune.speed}
+            window={tune.window}
+            cycles={tune.cycles}
+            height={tune.height}
+            direction={tune.direction}
+            tapering={tune.taper}
+            fading={tune.fade}
+            count={tune.count}
+            gap={tune.gap}
+            engine={prefs.playerBandsEngine}
           />
         </button>
       {/if}

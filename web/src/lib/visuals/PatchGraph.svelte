@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import { panSafe } from '../panSafe';
   import type { ElkNode as LaidNode } from 'elkjs/lib/elk-api';
   /** ELK's layouts this page made, by the graph's shape: the rack opened again is laid at once. The last few. */
   const laidBefore = new Map<string, { laid: LaidNode; portrait: boolean }>();
@@ -935,7 +936,7 @@
   <MenuSheet label="Graph view" title="Graph view" onclose={() => (menu = null)} over>
     <label class="viewopt">
       <span>Cable opacity</span>
-      <input type="range" min={CABLE_OPACITY_MIN * 100} max="100" step="5" value={Math.round(opacity * 100)} oninput={(e) => setOpacity(Number((e.currentTarget as HTMLInputElement).value) / 100)} />
+      <input type="range" use:panSafe min={CABLE_OPACITY_MIN * 100} max="100" step="5" value={Math.round(opacity * 100)} oninput={(e) => setOpacity(Number((e.currentTarget as HTMLInputElement).value) / 100)} />
       <span class="val">{Math.round(opacity * 100)}%</span>
     </label>
   </MenuSheet>
