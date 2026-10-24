@@ -158,6 +158,6 @@ is the 0.5 contour, by marching squares, of a Gaussian field weighted by the gen
 playlists with a share of 0.25 or more counting). The owner: "Yes, it looks fine." Not built, and no decision written
 yet. Recorded late: the mock-up was accepted but never written down here, so no session had a trace of it.
 
-Open before building: where a playlist's genres come from (its tracks' tags, MusicBrainz genres, AudioMuse's styles);
-whether the territories are a switch on the Map or always shown; how many genres are drawn at once (the mock-up drew
-six, each its own colour, from the palette's categorical order).
+Decided (the owner, 2026-10-24): a playlist's genres come from its tracks' genre tags (counted per playlist; not
+MusicBrainz's genres, not AudioMuse's styles); the territories are a switch on the Map, off until turned on; the top
+six genres are drawn, each its own colour (the palette's categorical order), the rest no territory.
