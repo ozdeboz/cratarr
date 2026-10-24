@@ -61,9 +61,11 @@ pub fn context(from: &str) -> String {
 
 /// Imports a file into `account` (decision 0067, step 4), or previews it: its listens into the history, or its
 /// playlist made of the tracks found (named as the file names it, made free among the account's own).
-pub async fn import(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, account: &str, name: &str, bytes: &[u8], preview: bool) -> Result<Brought> {
+pub async fn import(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, account: &str, name: &str, bytes: &[u8], preview: bool, progress: &super::lastfm::Progress) -> Result<Brought> {
     let dir = serve.data_dir.clone().context("an import needs Cratarr's data folder")?;
+    progress("Reading the file", 0, None);
     let read = read(name, bytes)?;
+    progress("Matching", 0, None);
     let (s, account2) = (serve.clone(), account.to_string());
     let songs = tokio::task::spawn_blocking(move || Matcher::read(&Path::new(&dir).join("library.sqlite"))).await??;
     match read {

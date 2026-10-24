@@ -75,8 +75,8 @@ struct Info {
     recording_mbid: Option<String>,
 }
 
-/// Every listen of a ListenBrainz user, newest first, a page at a time.
-async fn fetch(user: &str) -> Result<Vec<Listen>> {
+/// Every listen of a ListenBrainz user, newest first, a page at a time; `progress` says how many so far.
+async fn fetch(user: &str, progress: &super::lastfm::Progress) -> Result<Vec<Listen>> {
     let http = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
     let mut out = Vec::new();
     let mut before: Option<i64> = None;
@@ -103,6 +103,7 @@ async fn fetch(user: &str) -> Result<Vec<Listen>> {
                 player: info.media_player.filter(|x| !x.is_empty()),
             });
         }
+        progress("Reading listens", out.len() as u64, None);
         // The next page: listens before the oldest so far (two at one second are rare; one may be missed then).
         match out.last() {
             Some(last) if n == PAGE => before = Some(last.at),
@@ -131,9 +132,10 @@ fn event(l: &Listen) -> String {
 const CONTEXT: &str = "listenbrainz";
 
 /// What importing a ListenBrainz user's listens into `account`'s history would bring (decision 0067): nothing written.
-pub async fn preview(serve: &Arc<crate::serve::Serve>, account: &str, user: &str) -> Result<Tally> {
+pub async fn preview(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, progress: &super::lastfm::Progress) -> Result<Tally> {
     let dir = serve.data_dir.clone().context("the history needs Cratarr's data folder")?;
-    let listens = fetch(user).await?;
+    let listens = fetch(user, progress).await?;
+    progress("Matching", 0, None);
     let (serve, account) = (serve.clone(), account.to_string());
     tokio::task::spawn_blocking(move || -> Result<Tally> {
         let songs = Matcher::read(&Path::new(&dir).join("library.sqlite"))?;
@@ -157,9 +159,10 @@ pub fn undo(serve: &crate::serve::Serve, account: &str) -> Result<usize> {
 
 /// Imports a ListenBrainz user's listens into `account`'s history (decisions 0064 and 0067): what it brought. Blocking
 /// parts run apart.
-pub async fn import(serve: &Arc<crate::serve::Serve>, account: &str, user: &str) -> Result<Tally> {
+pub async fn import(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, progress: &super::lastfm::Progress) -> Result<Tally> {
     let dir = serve.data_dir.clone().context("the history needs Cratarr's data folder")?;
-    let listens = fetch(user).await?;
+    let listens = fetch(user, progress).await?;
+    progress("Matching", 0, None);
     let (serve, account) = (serve.clone(), account.to_string());
     tokio::task::spawn_blocking(move || -> Result<Tally> {
         let songs = Matcher::read(&Path::new(&dir).join("library.sqlite"))?;

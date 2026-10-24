@@ -462,6 +462,13 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   after 300 ms, so quick answers show nothing. Background polling and actions shown at once (the player, playlist
   taps, the favourite) never show it (`quietly` in `api.ts`). The button that was tapped shows a spinner in place of
   its label (`aria-busy` with `disabled`) until the answer. No full-page spinners.
+- **Progress** (the owner, 2026-10-24: one way, not one per page). Work that can count shows one line, "Verb · n of
+  N" ("Reading scrobbles · 12,400 of 79,000", "Converting 3 of 12"), with the thin bar under it (`lib/Meter.svelte`;
+  a settings row takes it as `progress`). Nothing to count: the line alone ("Matching"), no bar and no percentage. A
+  button the work was started from may fill as it goes, with the same words (a download, the menu's Download). Work
+  on the server longer than a page should wait for is a task (`app::tasks`, `lib/tasks.svelte.ts`): it starts at once,
+  goes on when the page is left, says how far it is on the live channel, and its result waits on its page for an hour.
+  The waiting bar and the button's spinner above stay for answers that take seconds.
 - **Destructive actions** ask in place, naming what goes ("Delete Chill?"); nothing destructive happens on one tap.
 - **Loading:** "Loading…" in the content area; never an empty page. **Empty:** say why and what to do ("Nothing
   incoming." / "No Music library is set. Choose one in Settings → Libraries.").

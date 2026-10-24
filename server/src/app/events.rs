@@ -80,8 +80,18 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
     let mut arrived = app.incoming.subscribe_incoming();
     let mut collected = app.collection.subscribe();
     let mut players = app.play_on.subscribe();
+    let mut tasks = super::tasks::tasks().subscribe();
     let app = app.clone();
     tokio::spawn(crate::serve::who::carried(async move {
+        // Whose tasks this page is told of (`app::tasks`): the account it is signed in as.
+        let account = crate::serve::instance().and_then(|s| s.current_user());
+        for t in account.as_deref().map(|a| super::tasks::tasks().of(a)).unwrap_or_default() {
+            if let Some(m) = Message::of("task", &t)
+                && out.send(m).await.is_err()
+            {
+                return;
+            }
+        }
         let mut sent = String::new();
         let send_state = async |sent: &mut String| -> bool {
             match app.playing.state(follow.as_deref()).await {
@@ -141,6 +151,14 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
                 r = undone.recv(), if open[1] => changed(&out, r, &mut open[1], &["incoming", "playlists"]).await,
                 r = arrived.recv(), if open[2] => changed(&out, r, &mut open[2], &["incoming"]).await,
                 r = collected.recv(), if open[3] => changed(&out, r, &mut open[3], &["collection"]).await,
+                r = tasks.recv() => match r {
+                    Ok(t) if account.as_deref() == Some(t.account.as_str()) => match Message::of("task", &t) {
+                        Some(m) => out.send(m).await.is_ok(),
+                        None => true,
+                    },
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => true,
+                    Err(broadcast::error::RecvError::Closed) => false,
+                },
                 r = players.recv() => match r {
                     Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => send_players().await,
                     Err(broadcast::error::RecvError::Closed) => false,

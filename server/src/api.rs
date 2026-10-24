@@ -154,6 +154,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/diagnostics/download", get(diagnostics_download))
             .route("/api/diagnostics/levels", get(diagnostics_levels).put(set_diagnostics_levels))
             .route("/api/players/settings", get(play_on_settings).put(save_play_on_settings))
+            .route("/api/tasks", get(own_tasks))
             .route("/api/history/listenbrainz", post(import_listenbrainz).delete(undo_listenbrainz))
             .route("/api/history/listenbrainz/preview", post(preview_listenbrainz))
             .route("/api/history/lastfm", get(lastfm_kept).post(import_lastfm).delete(undo_lastfm))
@@ -2629,14 +2630,41 @@ fn listenbrainz_who(b: &ListenBrainzImport) -> Result<(Arc<crate::serve::Serve>,
     Ok((serve, account, user.to_string()))
 }
 
-async fn import_listenbrainz(Json(b): Json<ListenBrainzImport>) -> Result<Json<crate::app::import::Tally>, ApiError> {
-    let (serve, account, user) = listenbrainz_who(&b)?;
-    Ok(Json(crate::app::listenbrainz::import(&serve, &account, &user).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+/// The asking account's tasks (`app::tasks`): running, or ended within the hour, with their results.
+async fn own_tasks() -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: tasks are an account's own.".into()))?;
+    Ok(Json(json!({ "tasks": crate::app::tasks::tasks().of(&account) })))
 }
 
-async fn preview_listenbrainz(Json(b): Json<ListenBrainzImport>) -> Result<Json<crate::app::import::Tally>, ApiError> {
+/// Long work begun as a task: 202 with the task, which the page follows (`app::tasks`).
+fn started(task: Result<crate::app::tasks::Task, String>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let task = task.map_err(ToggleError::Refused)?;
+    Ok((StatusCode::ACCEPTED, Json(json!({ "task": task }))))
+}
+
+fn progress_of(h: Arc<crate::app::tasks::Handle>) -> impl Fn(&str, u64, Option<u64>) + Send + Sync {
+    move |name, done, total| h.step(name, done, total)
+}
+
+async fn import_listenbrainz(Json(b): Json<ListenBrainzImport>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    bring_listenbrainz(b, false)
+}
+
+async fn preview_listenbrainz(Json(b): Json<ListenBrainzImport>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    bring_listenbrainz(b, true)
+}
+
+fn bring_listenbrainz(b: ListenBrainzImport, preview: bool) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let (serve, account, user) = listenbrainz_who(&b)?;
-    Ok(Json(crate::app::listenbrainz::preview(&serve, &account, &user).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+    started(crate::app::tasks::spawn("import:listenbrainz", &account.clone(), preview, move |h| async move {
+        let progress = progress_of(h);
+        if preview {
+            crate::app::listenbrainz::preview(&serve, &account, &user, &progress).await
+        } else {
+            crate::app::listenbrainz::import(&serve, &account, &user, &progress).await
+        }
+    }))
 }
 
 /// The asking account and Cratarr's own library, for scrobbling (decision 0068).
@@ -2771,8 +2799,9 @@ fn lastfm_choice(account: &str) -> String {
     format!("lastfm:{account}")
 }
 
-/// Whose import, whose scrobbles and with which key: the one given (kept for next time), else the one kept.
-async fn lastfm_who(b: LastFmImport) -> Result<(Arc<crate::serve::Serve>, String, String, String), ApiError> {
+/// Whose import, whose scrobbles and how Cratarr asks: with the account's own Last.fm sign-in (Connections) where it
+/// has one, which also reads a private history; else with the key given (kept for next time), else the one kept.
+async fn lastfm_who(b: LastFmImport) -> Result<(Arc<crate::serve::Serve>, String, String, crate::app::lastfm::Auth), ApiError> {
     let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
     let user = b.user.trim().to_string();
@@ -2792,8 +2821,22 @@ async fn lastfm_who(b: LastFmImport) -> Result<(Arc<crate::serve::Serve>, String
     .await
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    let key = key.ok_or_else(|| ToggleError::Refused("Last.fm needs an API key: make one at last.fm/api/account/create.".into()))?;
-    Ok((serve, account, b.user.trim().to_string(), key))
+    let (ud, a) = (serve.userdata.clone(), account.clone());
+    let signed = tokio::task::spawn_blocking(move || ud.scrobble_secret(&a, crate::app::scrobble::LASTFM))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten()
+        .and_then(|s| serde_json::from_str::<crate::app::scrobble::Secret>(&s).ok())
+        .and_then(|s| Some((s.api_key?, s.session?, s.api_secret?)));
+    let auth = match (signed, key) {
+        (Some((key, session, secret)), _) => crate::app::lastfm::Auth { key, signed: Some((session, secret)) },
+        (None, Some(key)) => crate::app::lastfm::Auth { key, signed: None },
+        (None, None) => {
+            return Err(ToggleError::Refused("Last.fm needs an API key: make one at last.fm/api/account/create, or connect Last.fm under Connections.".into()).into());
+        }
+    };
+    Ok((serve, account, b.user.trim().to_string(), auth))
 }
 
 /// The Last.fm user an account imported last, and whether a key is kept (never the key).
@@ -2810,14 +2853,19 @@ async fn lastfm_kept() -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(json!({ "user": kept.as_ref().map(|k| k.user.clone()), "key": kept.is_some() })))
 }
 
-async fn import_lastfm(Json(b): Json<LastFmImport>) -> Result<Json<crate::app::lastfm::Imported>, ApiError> {
-    let (serve, account, user, key) = lastfm_who(b).await?;
-    Ok(Json(crate::app::lastfm::import(&serve, &account, &user, &key).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+async fn import_lastfm(Json(b): Json<LastFmImport>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    bring_lastfm(b, false).await
 }
 
-async fn preview_lastfm(Json(b): Json<LastFmImport>) -> Result<Json<crate::app::lastfm::Imported>, ApiError> {
-    let (serve, account, user, key) = lastfm_who(b).await?;
-    Ok(Json(crate::app::lastfm::preview(&serve, &account, &user, &key).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+async fn preview_lastfm(Json(b): Json<LastFmImport>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    bring_lastfm(b, true).await
+}
+
+async fn bring_lastfm(b: LastFmImport, preview: bool) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let (serve, account, user, auth) = lastfm_who(b).await?;
+    started(crate::app::tasks::spawn("import:lastfm", &account.clone(), preview, move |h| async move {
+        crate::app::lastfm::bring(&serve, &account, &user, &auth, preview, &progress_of(h)).await
+    }))
 }
 
 /// Everything imported from Last.fm out of the account again: its scrobbles, the stars its loved tracks set.
@@ -2842,10 +2890,12 @@ struct FileImport {
 
 /// A file into the asking account (decision 0067, step 4): its listens into the history, or a playlist of it; the file
 /// is the body, kept nowhere.
-async fn import_file(State(app): State<Arc<App>>, Query(q): Query<FileImport>, body: axum::body::Bytes) -> Result<Json<crate::app::import_files::Brought>, ApiError> {
+async fn import_file(State(app): State<Arc<App>>, Query(q): Query<FileImport>, body: axum::body::Bytes) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: an import is an account's own.".into()))?;
-    Ok(Json(crate::app::import_files::import(&app, &serve, &account, &q.name, &body, q.preview).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+    started(crate::app::tasks::spawn("import:file", &account.clone(), q.preview, move |h| async move {
+        crate::app::import_files::import(&app, &serve, &account, &q.name, &body, q.preview, &progress_of(h)).await
+    }))
 }
 
 #[derive(Deserialize)]
