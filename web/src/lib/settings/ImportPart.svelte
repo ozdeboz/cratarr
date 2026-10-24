@@ -6,7 +6,22 @@
   // account signed in. Add import: a Subsonic server (Navidrome, gonic, Airsonic, …) by its address and login, found in
   // the library by name; its password is asked for each run and kept nowhere. Acts at once; a server's import is
   // followed while it runs.
-  import { importListenBrainz, previewListenBrainz, undoImport, undoListenBrainz, type ImportTally } from '../api';
+  import {
+    getLastFm,
+    importFile,
+    importLastFm,
+    importListenBrainz,
+    previewLastFm,
+    previewListenBrainz,
+    undoFileImport,
+    undoImport,
+    undoLastFm,
+    undoListenBrainz,
+    undo as undoTokens,
+    type FileBrought,
+    type ImportTally,
+    type LastFmImported,
+  } from '../api';
   import { backFromThing, openThing } from '../panel.svelte';
   import { nameThing } from '../settingsSections.svelte';
   import ChoiceSheet from './ChoiceSheet.svelte';
@@ -21,6 +36,13 @@
   let { thing = null }: { thing?: string | null } = $props();
 
   const LISTENBRAINZ = 'listenbrainz';
+  const LASTFM = 'lastfm';
+  const FILES = 'files';
+  const FILES_MORE =
+    "A listening history exported elsewhere goes into your history: ListenBrainz's export (its .zip), Spotify's (the JSON files of your extended streaming history, or of your account data; plays under 30 seconds left out) or Last.fm's as export tools write it (CSV: artist, album, track, date). A playlist becomes a new playlist of the tracks found: .m3u, .m3u8, .xspf, or Exportify's CSV of a Spotify playlist.\n\nPreview first; nothing of the file is kept.";
+  const FROM_NAMES = { listenbrainz: 'ListenBrainz', spotify: 'Spotify', lastfm: 'Last.fm' } as const;
+  const FM_MORE =
+    "Your Last.fm scrobbles into your listening history (for your taste and your week, not the play counts), and your loved tracks as favourites. A scrobble already in your history from elsewhere is not added twice; run again, it brings only what is new.\n\nLast.fm asks every app for an API key: make one at last.fm/api/account/create (any name will do) and give it here once.";
   const SERVER = 'server:';
   const SERVER_MORE = 'Plays, favourites, ratings and added dates from a server, into an account. Run again, it brings only what changed.';
   const LB_MORE =
@@ -28,7 +50,7 @@
 
   const serverId = $derived(thing?.startsWith(SERVER) ? thing.slice(SERVER.length) : null);
   const server = $derived(serverId ? (ed.imp.sources.find((s) => s.id === serverId) ?? null) : null);
-  nameThing(() => (thing === LISTENBRAINZ ? 'ListenBrainz' : serverId ? ed.serverName(serverId) : null));
+  nameThing(() => (thing === LISTENBRAINZ ? 'ListenBrainz' : thing === LASTFM ? 'Last.fm' : thing === FILES ? 'Files' : serverId ? ed.serverName(serverId) : null));
   // A server gone (or never there): back to the list.
   $effect(() => {
     if (serverId && ed.imp.known && !server) backFromThing('import');
@@ -114,6 +136,105 @@
     }
   }
 
+  // Last.fm: whose scrobbles and the API key (kept on the server once given; never shown again).
+  let fmUser = $state('');
+  let fmKeyKept = $state(false);
+  let fmKey = $state('');
+  let fmNaming = $state<'user' | 'key' | null>(null);
+  let fmUndoing = $state(false);
+  type FmRun = { busy: 'preview' | 'import' | 'undo' | null; done: LastFmImported | null; previewed: boolean; undone: string | null; error: string | null };
+  let fm = $state<FmRun>({ busy: null, done: null, previewed: false, undone: null, error: null });
+  getLastFm().then(
+    (k) => {
+      fmUser ||= k.user ?? '';
+      fmKeyKept = k.key;
+    },
+    () => {},
+  );
+  async function runFm(what: 'preview' | 'import') {
+    fm = { busy: what, done: null, previewed: false, undone: null, error: null };
+    try {
+      const key = fmKey.trim() || undefined;
+      const done = what === 'preview' ? await previewLastFm(fmUser, key) : await importLastFm(fmUser, key);
+      if (key) {
+        fmKeyKept = true;
+        fmKey = '';
+      }
+      fm = { busy: null, done, previewed: what === 'preview', undone: null, error: null };
+    } catch (e) {
+      fm = { busy: null, done: null, previewed: false, undone: null, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  async function undoFm() {
+    fm = { ...fm, busy: 'undo', error: null };
+    try {
+      const u = await undoLastFm(fmUser);
+      fm = { busy: null, done: null, previewed: false, undone: `${n(u.scrobbles)} scrobbles and ${n(u.unstarred)} favourites taken back`, error: null };
+    } catch (e) {
+      fm = { ...fm, busy: null, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+  const fmLine = $derived(
+    fm.busy
+      ? null
+      : fm.error
+        ? fm.error
+        : fm.done
+          ? `Scrobbles: ${tallyLine(fm.done.scrobbles, fm.previewed)} · Loved: ${n(fm.done.loved.found)} of ${n(fm.done.loved.items)} found`
+          : fm.undone,
+  );
+  const fmReady = $derived(!!fmUser.trim() && (!!fmKey.trim() || fmKeyKept));
+
+  // Files: chosen here, read by the server one at a time, kept nowhere. Each its result; a playlist made can be undone,
+  // a history's listens are taken back by their kind.
+  let picker = $state<HTMLInputElement>();
+  let files = $state<File[]>([]);
+  type FileRun = { file: string; done: FileBrought | null; error: string | null };
+  let fileRuns = $state<FileRun[]>([]);
+  let filesBusy = $state<'preview' | 'import' | null>(null);
+  let filesPreviewed = $state(false);
+  let undoingFrom = $state<string | null>(null);
+  let filesUndone = $state<string | null>(null);
+  async function runFiles(what: 'preview' | 'import') {
+    filesBusy = what;
+    filesUndone = null;
+    fileRuns = [];
+    for (const f of files) {
+      try {
+        fileRuns = [...fileRuns, { file: f.name, done: await importFile(f, what === 'preview'), error: null }];
+      } catch (e) {
+        fileRuns = [...fileRuns, { file: f.name, done: null, error: e instanceof Error ? e.message : String(e) }];
+      }
+    }
+    filesPreviewed = what === 'preview';
+    filesBusy = null;
+  }
+  const fileLine = (r: FileRun) => {
+    if (r.error || !r.done) return r.error ?? '';
+    const d = r.done;
+    return d.kind === 'history'
+      ? `${FROM_NAMES[d.from]} history · ${tallyLine(d.tally, filesPreviewed)}`
+      : `Playlist ${filesPreviewed ? 'would be' : ''} "${d.name}" · ${n(d.tally.found)} of ${n(d.tally.items)} tracks found`;
+  };
+  async function undoPlaylist(r: FileRun) {
+    if (r.done?.kind !== 'playlist' || !r.done.undo) return;
+    try {
+      await undoTokens([r.done.undo]);
+      fileRuns = fileRuns.map((x) => (x === r ? { ...x, done: null, error: null } : x));
+      filesUndone = `Playlist "${r.done.name}" taken back`;
+    } catch (e) {
+      filesUndone = e instanceof Error ? e.message : String(e);
+    }
+  }
+  async function undoFrom(from: string) {
+    try {
+      const u = await undoFileImport(from);
+      filesUndone = `${n(u.removed)} listens from ${FROM_NAMES[from as keyof typeof FROM_NAMES] ?? from} files taken back`;
+    } catch (e) {
+      filesUndone = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   // A server's import: its state in a line.
   function serverLine(id: string): { lead: string | null; line: string } {
     const job = ed.imp.job?.source === id ? ed.imp.job : null;
@@ -164,6 +285,128 @@
       label="Undo"
       onconfirm={undoLb}
       onclose={() => (undoing = false)}
+    />
+  {/if}
+{:else if thing === LASTFM}
+  <Group title="From" more={FM_MORE}>
+    <Item name="Last.fm user" value={fmUser || 'Choose…'} onclick={() => (fmNaming = 'user')} />
+    <Item
+      name="API key"
+      line={fmKey ? 'Given' : fmKeyKept ? 'Kept' : 'Needed once: last.fm/api/account/create'}
+      tone={fmKey || fmKeyKept ? null : 'warn'}
+      onclick={() => (fmNaming = 'key')}
+    />
+  </Group>
+  <Group>
+    <Item
+      lead={fm.busy ? 'off' : fm.error ? 'bad' : fm.done && !fm.previewed ? 'on' : null}
+      name={fm.busy === 'preview'
+        ? 'Previewing'
+        : fm.busy === 'import'
+          ? 'Importing'
+          : fm.busy === 'undo'
+            ? 'Taking back'
+            : fm.error
+              ? 'Not imported'
+              : fm.previewed
+                ? 'Previewed'
+                : fm.done
+                  ? 'Imported'
+                  : fm.undone
+                    ? 'Undone'
+                    : 'Not run yet'}
+      line={fmLine}
+      tone={fm.error ? 'bad' : null}
+      wrap
+    >
+      <button disabled={!!fm.busy || !fmReady} onclick={() => runFm('preview')}>Preview</button>
+      <button class="primary" disabled={!!fm.busy || !fmReady} onclick={() => runFm('import')}>Import</button>
+    </Item>
+  </Group>
+  {#if fm.done?.scrobbles.missing.length}
+    {@const t = fm.done.scrobbles}
+    <Group title={`Not in your library (${n(t.missing_tracks)})`}>
+      {#each t.missing as m (`${m.artist}|${m.title}`)}
+        <Item name={m.title} line={`${m.artist} · ${n(m.count)} ${m.count === 1 ? 'scrobble' : 'scrobbles'}`} />
+      {/each}
+      {#if t.missing_tracks > t.missing.length}<Item name={`And ${n(t.missing_tracks - t.missing.length)} more`} />{/if}
+    </Group>
+  {/if}
+  <Group>
+    <Item name="Undo the import" kind="danger" disabled={!fmUser.trim()} onclick={() => (fmUndoing = true)} />
+  </Group>
+  {#if fmNaming}
+    {@const which = fmNaming}
+    <ValueSheet
+      title={which === 'user' ? 'Last.fm user' : 'API key'}
+      value={which === 'user' ? fmUser : ''}
+      help={which === 'key' ? 'Made at last.fm/api/account/create; kept by Cratarr for your next imports.' : null}
+      allowEmpty={false}
+      onsave={(v) => {
+        if (which === 'user') fmUser = v.trim();
+        else fmKey = v.trim();
+      }}
+      onclose={() => (fmNaming = null)}
+    />
+  {/if}
+  {#if fmUndoing}
+    <ConfirmSheet
+      title="Undo the Last.fm import?"
+      text="Every scrobble imported from Last.fm leaves your history, and the favourites its loved tracks set go where you haven't changed them since."
+      label="Undo"
+      onconfirm={undoFm}
+      onclose={() => (fmUndoing = false)}
+    />
+  {/if}
+{:else if thing === FILES}
+  <Group title="Files" more={FILES_MORE}>
+    <Item
+      name={files.length ? files.map((f) => f.name).join(', ') : 'Choose files…'}
+      line={files.length ? `${files.length} ${files.length === 1 ? 'file' : 'files'}` : null}
+      wrap
+      onclick={() => picker?.click()}
+    />
+    <Item lead={filesBusy ? 'off' : null} name={filesBusy === 'preview' ? 'Previewing' : filesBusy === 'import' ? 'Importing' : filesPreviewed ? 'Previewed' : fileRuns.length ? 'Imported' : 'Not run yet'}>
+      <button disabled={!!filesBusy || !files.length} onclick={() => runFiles('preview')}>Preview</button>
+      <button class="primary" disabled={!!filesBusy || !files.length} onclick={() => runFiles('import')}>Import</button>
+    </Item>
+  </Group>
+  <input class="picker" type="file" multiple accept=".zip,.json,.jsonl,.csv,.m3u,.m3u8,.xspf" bind:this={picker} onchange={(e) => (files = [...(e.currentTarget.files ?? [])])} />
+  {#if fileRuns.length}
+    <Group title="Results">
+      {#each fileRuns as r (r.file)}
+        <Item lead={r.error ? 'bad' : 'on'} name={r.file} line={fileLine(r)} tone={r.error ? 'bad' : null} wrap>
+          {#if !filesPreviewed && r.done?.kind === 'playlist' && r.done.undo}
+            {@const run = r}
+            <button onclick={() => undoPlaylist(run)}>Undo</button>
+          {/if}
+        </Item>
+      {/each}
+    </Group>
+    {#each fileRuns.filter((r) => r.done?.tally.missing.length) as r (r.file)}
+      {@const t = r.done!.tally}
+      <Group title={`Not in your library: ${r.file} (${n(t.missing_tracks)})`}>
+        {#each t.missing.slice(0, 20) as m (`${m.artist}|${m.title}`)}
+          <Item name={m.title} line={`${m.artist} · ${n(m.count)}`} />
+        {/each}
+        {#if t.missing_tracks > 20}<Item name={`And ${n(t.missing_tracks - 20)} more`} />{/if}
+      </Group>
+    {/each}
+  {/if}
+  <Group title="Undo">
+    {#if filesUndone}<Item name={filesUndone} wrap />{/if}
+    {#each Object.entries(FROM_NAMES) as [from, label] (from)}
+      <Item name={`Take back the ${label} listens imported from files`} kind="danger" onclick={() => (undoingFrom = from)} />
+    {/each}
+  </Group>
+  {#if undoingFrom}
+    {@const from = undoingFrom}
+    <ConfirmSheet
+      title={`Undo the ${FROM_NAMES[from as keyof typeof FROM_NAMES]} file imports?`}
+      text="Every listen imported from such files leaves your history. Your play counts stay as they are."
+      label="Undo"
+      onconfirm={() => undoFrom(from)}
+      onclose={() => (undoingFrom = null)}
     />
   {/if}
 {:else if server}
@@ -253,6 +496,14 @@
       tone={lb.error ? 'bad' : null}
       onclick={() => openThing('import', LISTENBRAINZ)}
     />
+    <Item
+      lead={fm.done && !fm.previewed ? 'on' : fm.error ? 'bad' : null}
+      name="From Last.fm"
+      line={fmLine ?? 'Scrobbles into your history, loved tracks as favourites'}
+      tone={fm.error ? 'bad' : null}
+      onclick={() => openThing('import', LASTFM)}
+    />
+    <Item name="From files" line="A history export, or a playlist" onclick={() => openThing('import', FILES)} />
     <Item name="Add import" kind="add" onclick={() => (adding = true)} />
   </Group>
   {#if adding}
@@ -285,3 +536,9 @@
     />
   {/if}
 {/if}
+
+<style>
+  .picker {
+    display: none;
+  }
+</style>

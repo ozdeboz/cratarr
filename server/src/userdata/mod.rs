@@ -171,7 +171,7 @@ INSERT INTO plays (user, song, pid, at, heard_secs, length_secs, ended, counted,
          'backfill:annotation:' || a.user || ':' || a.item || ':' || a.play_date
   FROM annotation a
   JOIN (SELECT user, min(at) AS first FROM plays
-        WHERE coalesce(context, '') <> 'listenbrainz' AND coalesce(context, '') NOT LIKE 'backfill:%' GROUP BY user) f
+        WHERE coalesce(context, '') NOT IN ('listenbrainz', 'lastfm') AND coalesce(context, '') NOT LIKE 'backfill:%' AND coalesce(context, '') NOT LIKE 'file:%' GROUP BY user) f
     ON f.user = a.user
   WHERE a.kind = 'song' AND a.play_date >= f.first - 604800 AND a.play_date < f.first
   ON CONFLICT DO NOTHING;
@@ -620,11 +620,11 @@ impl UserData {
     }
 
     /// When a user's log starts being told as it happens: their first row's time that a player told (an import from
-    /// elsewhere, `listenbrainz`, and the week written from the last plays, `backfill:…`, leave gaps); none before they
+    /// elsewhere, `listenbrainz` and `lastfm`, and the week written from the last plays, `backfill:…`, leave gaps); none before they
     /// heard anything since it exists.
     pub fn heard_from(&self, user: &str) -> Result<Option<i64>> {
         Ok(self.db().query_row(
-            "SELECT min(at) FROM plays WHERE user = ?1 AND coalesce(context, '') <> 'listenbrainz' AND coalesce(context, '') NOT LIKE 'backfill:%'",
+            "SELECT min(at) FROM plays WHERE user = ?1 AND coalesce(context, '') NOT IN ('listenbrainz', 'lastfm') AND coalesce(context, '') NOT LIKE 'backfill:%' AND coalesce(context, '') NOT LIKE 'file:%'",
             [user],
             |r| r.get(0),
         )?)

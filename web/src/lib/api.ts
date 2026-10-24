@@ -1434,6 +1434,23 @@ export type ImportTally = { items: number; found: number; new: number; missing: 
 export const importListenBrainz = (user: string) => post<ImportTally>('/api/history/listenbrainz', { user });
 /** What importing them would bring, nothing written. */
 export const previewListenBrainz = (user: string) => post<ImportTally>('/api/history/listenbrainz/preview', { user });
+/** Last.fm into the asking account (decision 0067): its scrobbles into the history, its loved tracks as favourites;
+ *  `key` the API key made at Last.fm, else the one kept from last time. */
+export type LastFmImported = { scrobbles: ImportTally; loved: ImportTally };
+export const getLastFm = () => quietly<{ user: string | null; key: boolean }>('/api/history/lastfm');
+export const importLastFm = (user: string, key?: string) => post<LastFmImported>('/api/history/lastfm', { user, key });
+export const previewLastFm = (user: string, key?: string) => post<LastFmImported>('/api/history/lastfm/preview', { user, key });
+export const undoLastFm = (user: string) =>
+  request<{ scrobbles: number; unstarred: number }>('/api/history/lastfm', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user }) });
+/** What a file brought or would bring (decision 0067, step 4): listens into the history (`from` the kind of export), or
+ *  a playlist made of the tracks found (its name, and its undo token once made). */
+export type FileBrought =
+  | { kind: 'history'; from: 'listenbrainz' | 'spotify' | 'lastfm'; tally: ImportTally }
+  | { kind: 'playlist'; name: string; tally: ImportTally; undo: string | null };
+export const importFile = (file: File, preview: boolean) =>
+  request<FileBrought>(`/api/import/file?${new URLSearchParams({ name: file.name, preview: String(preview) })}`, { method: 'POST', body: file });
+/** The listens imported from files of one kind out of the asking account's history again: how many. */
+export const undoFileImport = (from: string) => request<{ removed: number }>(`/api/import/file?${new URLSearchParams({ from })}`, { method: 'DELETE' });
 /** Every listen imported from ListenBrainz out of the asking account's history again: how many. */
 export const undoListenBrainz = () => request<{ removed: number }>('/api/history/listenbrainz', { method: 'DELETE' });
 /** Tells the server tracks heard; answers with the ids it has (now or before). */
