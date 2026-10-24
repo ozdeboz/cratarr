@@ -6,7 +6,8 @@
   // tooltip on every column); and the period's top artists, albums and tracks. The log starts empty (filled from
   // ListenBrainz where that kept the history): what is not there yet is not made up.
   import { albumCoverUrl, coverUrl, getListening, type Listening, type ListeningTop } from './api';
-  import Cover from './Cover.svelte';
+  import ReleaseRow from './ReleaseRow.svelte';
+  import Group from './settings/Group.svelte';
   import { hoursMinutes } from './duration';
   import PageLoading from './PageLoading.svelte';
   import { hiddenLibraries } from './listFilter.svelte';
@@ -86,16 +87,26 @@
   {#if list.length}
     <section>
       <h2>{title}</h2>
-      <ol class="top">
-        {#each list as t, i (t.id)}
-          <li class:plain={kind === 'artist'}>
-            <span class="rank">{i + 1}</span>
-            {#if kind !== 'artist'}<span class="cover"><Cover src={kind === 'album' ? albumCoverUrl('cratarr', t.id) : coverUrl({ source: 'cratarr', id: t.id })} /></span>{/if}
-            <span class="what"><b>{t.name}</b>{#if t.by}<small>{t.by}</small>{/if}</span>
-            <span class="n">{t.plays}×</span>
-          </li>
-        {/each}
-      </ol>
+      {#if kind === 'artist'}
+        <ol class="top">
+          {#each list as t, i (t.id)}
+            <li class="plain">
+              <span class="rank">{i + 1}</span>
+              <span class="what"><b>{t.name}</b>{#if t.by}<small>{t.by}</small>{/if}</span>
+              <span class="n">{t.plays}×</span>
+            </li>
+          {/each}
+        </ol>
+      {:else}
+        <!-- Albums and tracks: release rows, as in every one of these panels (lib/ReleaseRow). -->
+        <Group>
+          {#each list as t, i (t.id)}
+            <ReleaseRow rank={i + 1} cover={kind === 'album' ? albumCoverUrl('cratarr', t.id) : coverUrl({ source: 'cratarr', id: t.id })} title={t.name} line={t.by ?? null}
+              ><span class="n">{t.plays}×</span></ReleaseRow
+            >
+          {/each}
+        </Group>
+      {/if}
     </section>
   {/if}
 {/snippet}
@@ -416,14 +427,6 @@
     color: var(--muted);
     font-variant-numeric: tabular-nums;
     text-align: right;
-  }
-
-  .cover {
-    flex: none;
-    width: 44px;
-    height: 44px;
-    border-radius: 6px;
-    overflow: hidden;
   }
 
   .what {

@@ -3,7 +3,8 @@
   // Insights, Health and Settings (the owner, 2026-10-24: "a unified way of presenting release rows"), in a group of
   // rows (lib/settings/Group, which draws the block and the lines between): its cover, its title, one line under it
   // (`tone`: bad or warn), filled behind as far as work on it has come (`fill`, 0 to 1), and at its end either › (a tap
-  // acts: `onclick`) or a control of its own (`children`: a tick in a select mode). `open`: the one shown beside.
+  // acts: `onclick`) or something of its own (`children`: a tick in a select mode, a count). `open`: the one shown
+  // beside. `rank`: its place in a top list, before its cover.
   import type { Snippet } from 'svelte';
   import Cover from './Cover.svelte';
   import Icon from './Icon.svelte';
@@ -11,6 +12,7 @@
   let {
     cover,
     title,
+    rank = null,
     line = null,
     tone = null,
     fill = null,
@@ -20,6 +22,7 @@
   }: {
     cover: string | null;
     title: string;
+    rank?: number | null;
     line?: string | null;
     tone?: 'bad' | 'warn' | null;
     fill?: number | null;
@@ -30,6 +33,7 @@
 </script>
 
 {#snippet body()}
+  {#if rank !== null}<span class="rank">{rank}</span>{/if}
   <span class="pic"><Cover src={cover} /></span>
   <span class="text">
     <span class="title">{title}</span>
@@ -89,6 +93,14 @@
   /* The one shown beside. */
   .release.open {
     background: color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+
+  .rank {
+    flex: none;
+    width: 1.4rem;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
   }
 
   .pic {

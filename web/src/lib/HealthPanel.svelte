@@ -13,6 +13,9 @@
   import HealthEvents from './HealthEvents.svelte';
   import HealthIncoming from './HealthIncoming.svelte';
   import HealthMissing from './HealthMissing.svelte';
+  import ReleaseRow from './ReleaseRow.svelte';
+  import Group from './settings/Group.svelte';
+  import Item from './settings/Item.svelte';
   import { albumSubject, backFromStep, closePlaylist, HEALTH, healthItemOf, openStep, openTab, panel, viewOver } from './panel.svelte';
 
   let { problem, beside = false }: { problem: string; beside?: boolean } = $props();
@@ -84,17 +87,16 @@
       {/if}
       <!-- The things it is about, one by one. -->
       {#if p.items.length}
-        <ul class="items">
+        <!-- An album a release row, as in every one of these panels (lib/ReleaseRow); anything else a settings row. -->
+        <Group>
           {#each p.items as x, i (i)}
-            <li>
-              <button class="item" onclick={() => openStep(`${HEALTH}${problem}/${i}`)}>
-                {#if x.album}<span class="cover"><Cover src={albumCoverUrl(x.album[0], x.album[1])} /></span>{/if}
-                <span class="words"><b>{x.title}</b>{#if x.line}<small>{x.line}</small>{/if}</span>
-                <Icon name="chevronRight" size={18} />
-              </button>
-            </li>
+            {#if x.album}
+              <ReleaseRow cover={albumCoverUrl(x.album[0], x.album[1])} title={x.title} line={x.line ?? null} onclick={() => openStep(`${HEALTH}${problem}/${i}`)} />
+            {:else}
+              <Item name={x.title} line={x.line ?? null} onclick={() => openStep(`${HEALTH}${problem}/${i}`)} />
+            {/if}
           {/each}
-        </ul>
+        </Group>
       {/if}
       <!-- The way to deal with it. -->
       {#if f?.open}
@@ -243,73 +245,12 @@
     overflow-wrap: anywhere;
   }
 
-  .items {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  /* An item: its cover where it is an album, its words, › where it opens. */
-  .item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    width: 100%;
-    min-height: 52px;
-    padding: 6px 0;
-    border: 0;
-    border-top: 1px solid var(--border);
-    background: none;
-    color: var(--text);
-    font: inherit;
-    text-align: left;
-  }
-
-  button.item {
-    cursor: pointer;
-  }
-
-  .item > :global(svg) {
-    flex: none;
-    color: var(--muted);
-  }
-
   .big {
     display: block;
     width: min(240px, 60%);
     aspect-ratio: 1;
     overflow: hidden;
     border-radius: 12px;
-  }
-
-  .cover {
-    flex: none;
-    width: 44px;
-    height: 44px;
-    overflow: hidden;
-    border-radius: 6px;
-  }
-
-  .words {
-    display: grid;
-    flex: 1;
-    gap: 2px;
-    min-width: 0;
-  }
-
-  .words b {
-    overflow: hidden;
-    font-weight: 500;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .words small {
-    overflow: hidden;
-    color: var(--muted);
-    font-size: 0.85rem;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .act {
