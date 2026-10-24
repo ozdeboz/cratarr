@@ -8,6 +8,8 @@
   // top right of the screen that plays.
   import FilterSheet from './FilterSheet.svelte';
   import Icon from './Icon.svelte';
+  import Meter from './Meter.svelte';
+  import { slide } from 'svelte/transition';
   import OutputSheet from './OutputSheet.svelte';
   import { filtersOn } from './listFilter.svelte';
   import { pageView, searchFor } from './pageView.svelte';
@@ -64,35 +66,81 @@
     pageView.query = '';
     searching = false;
   }
+
+  // The page's work, as the search (the owner, 2026-10-24): a tap on its button unfolds the pill into its progress, the
+  // one bar and what it is at, which folds again after a moment, and at once when the work ends; a tap while it runs
+  // unfolds it again rather than starting it twice. Only the pill shows it (no line at the page's top); folded, the
+  // button's ring does.
+  const SHOWN_MS = 4000;
+  let showing = $state(false);
+  let ran = false;
+  let fold = 0;
+  function unfold() {
+    showing = true;
+    clearTimeout(fold);
+    fold = window.setTimeout(() => (showing = false), SHOWN_MS);
+  }
+  function act(a: NonNullable<typeof pageView.action>) {
+    // A button that starts work it shows (`progress` given, null while idle); others only act.
+    if (a.progress === undefined) return a.run();
+    if (a.progress === null) a.run();
+    unfold();
+  }
+  $effect(() => {
+    const p = pageView.action?.progress;
+    if (p != null) ran = true;
+    else if (ran) {
+      ran = false;
+      showing = false;
+    }
+  });
+  $effect(() => {
+    void page;
+    showing = false;
+  });
+  $effect(() => () => clearTimeout(fold));
 </script>
 
-{#if searching && words}
-  <div class="pill wide" role="search">
-    <span class="lead" aria-hidden="true"><Icon name="search" size={20} /></span>
-    <input
-      bind:this={field}
-      type="search"
-      placeholder={words}
-      aria-label={words}
-      bind:value={pageView.query}
-      onkeydown={(e) => e.key === 'Escape' && (searching = false)}
-      onblur={() => pageView.query.trim() === '' && (searching = false)}
-    />
-    <button aria-label="Clear the search" title="Clear" onmousedown={(e) => e.preventDefault()} onclick={clear}><Icon name="close" size={20} /></button>
-  </div>
-{:else}
   <div class="pill" role="toolbar" aria-label="The page's tools">
-    {#if words}
-      <button class:lit={pageView.query.trim() !== ''} aria-label={words} title={words} onclick={() => (searching = true)}><Icon name="search" size={22} /></button>
+    {#if showing && page && pageView.action && !searching}
+      {@const a = pageView.action}
+      <!-- The page's work unfolded: only its bar and what it is at, the pill grown leftwards, its buttons where they
+           are, its glass as it is (the owner, 2026-10-24). -->
+      <span class="work" role="status" aria-live="polite" transition:slide={{ axis: 'x', duration: 200 }}
+        ><Meter label={a.line ?? a.label} value={a.progress ?? 0} /></span
+      >
+    {/if}
+    <!-- One unfolds at a time, the other's button out of the way: the search hides while the work's progress shows, the
+         page's button while the search is open (the owner, 2026-10-24). -->
+    {#if words && !(showing && page && pageView.action)}
+      <button class:lit={!searching && pageView.query.trim() !== ''} aria-label={words} title={words} onclick={() => (searching ? field?.focus() : (searching = true))}
+        ><Icon name="search" size={22} /></button
+      >
+      {#if searching}
+        <!-- The search open: its field right of the magnifier, the pill grown leftwards, the other buttons where they
+             are, its glass as it is (the owner, 2026-10-24). -->
+        <span class="field" role="search" transition:slide={{ axis: 'x', duration: 200 }}>
+          <input
+            bind:this={field}
+            type="search"
+            placeholder={words}
+            aria-label={words}
+            bind:value={pageView.query}
+            onkeydown={(e) => e.key === 'Escape' && (searching = false)}
+            onblur={() => pageView.query.trim() === '' && (searching = false)}
+          />
+          <button aria-label="Clear the search" title="Clear" onmousedown={(e) => e.preventDefault()} onclick={clear}><Icon name="close" size={20} /></button>
+        </span>
+      {/if}
     {/if}
     {#if filter}<button class="funnel" class:lit={filtering} aria-label={filters ? `Filter, ${filters} on` : 'Filter'} title="Filter" aria-haspopup="dialog" onclick={() => (filterOpen = true)}
         ><Icon name="funnel" size={22} />{#if filters}<span class="badge">{filters}</span>{/if}</button
       >{/if}
     {#if view && (page || order?.columns?.shown.length)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (viewOpen = true)}><Icon name="sliders" size={22} /></button>{/if}
     {#if device}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={22} /></button>{/if}
-    {#if page && pageView.action}
+    {#if page && pageView.action && !searching}
       {@const a = pageView.action}
-      <button class="action" aria-label={a.label} title={a.label} onclick={a.run}
+      <button class="action" aria-label={a.label} title={a.label} onclick={() => act(a)}
         ><Icon name={a.icon} size={22} />{#if a.progress != null}<svg class="ring" viewBox="0 0 36 36" aria-hidden="true"
             ><circle class="bg" cx="18" cy="18" r="16" /><circle cx="18" cy="18" r="16" pathLength="100" stroke-dasharray="{Math.round(
                 Math.min(1, Math.max(0, a.progress)) * 100,
@@ -101,7 +149,6 @@
       >
     {/if}
   </div>
-{/if}
 {#if filterOpen}
   <FilterSheet {page} {kind} {tempos} counted={page ? pageView.counted : counted} onclose={() => (filterOpen = false)} />
 {/if}
@@ -137,8 +184,11 @@
     cursor: pointer;
   }
 
-  button:hover {
-    background: color-mix(in srgb, var(--text) 8%, transparent);
+  /* Only where a pointer hovers: on a touchscreen a tapped button would stay shaded. */
+  @media (hover: hover) {
+    button:hover {
+      background: color-mix(in srgb, var(--text) 8%, transparent);
+    }
   }
 
   /* The page's own button with work going on: a ring of its progress around the icon. */
@@ -190,25 +240,16 @@
     text-align: center;
   }
 
-  /* The search open: over the row (it is the row's, positioned), the whole of it on a phone, at most 520 px. */
-  .pill.wide {
-    position: absolute;
-    top: 0;
-    right: 0;
-    width: min(100%, 520px);
-    box-sizing: border-box;
+  /* The search open: its field and ✕ inside the pill, right of the magnifier, as wide as a phone's row allows. */
+  .field {
+    display: flex;
     align-items: center;
-    background: var(--surface);
+    width: min(320px, calc(100vw - 220px));
+    min-width: 140px;
+    overflow: hidden;
   }
 
-  .lead {
-    display: grid;
-    place-items: center;
-    width: 40px;
-    color: var(--muted);
-  }
-
-  .wide input {
+  .field input {
     flex: 1;
     min-width: 0;
     height: 44px;
@@ -221,8 +262,30 @@
     outline: none;
   }
 
+  /* The page's work unfolded, left of the buttons: its bar and what it is at, in the pill's own text colour. */
+  .work {
+    display: flex;
+    align-items: center;
+    width: min(220px, 40vw);
+    padding: 0 10px 0 16px;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .work :global(.meter) {
+    width: 100%;
+    margin-top: 0;
+    overflow: hidden;
+    color: inherit;
+    text-overflow: ellipsis;
+  }
+
+  .work :global(.track) {
+    max-width: none;
+  }
+
   /* One ✕: ours (it also folds the field), not the browser's. */
-  .wide input::-webkit-search-cancel-button {
+  .field input::-webkit-search-cancel-button {
     display: none;
   }
 </style>

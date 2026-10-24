@@ -475,6 +475,13 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   on the server longer than a page should wait for is a task (`app::tasks`, `lib/tasks.svelte.ts`): it starts at once,
   goes on when the page is left, says how far it is on the live channel, and its result waits on its page for an hour.
   The waiting bar and the button's spinner above stay for answers that take seconds.
+- **A page's work in its pill** (the owner, 2026-10-24: as the search). The page's own button (Look again, Sync now)
+  has a ring of the work's progress while it runs. A tap on it unfolds the pill leftwards into the one line and bar
+  (above), for four seconds, and folds it again (at once when the work ends); a tap while the work runs unfolds it again
+  rather than starting it twice. The page shows no line of its own at the top. The search unfolds the same way: its
+  field right of the magnifier, inside the pill. Either keeps the pill as it is (its glass, its colours, the other
+  buttons in place), and one unfolds at a time: the search button hides while the progress shows, the page's button
+  while the search is open.
 - **Destructive actions** ask in place, naming what goes ("Delete Chill?"); nothing destructive happens on one tap.
 - **Loading:** "Loading…" in the content area; never an empty page. **Empty:** say why and what to do ("Nothing
   incoming." / "No Music library is set. Choose one in Settings → Libraries.").

@@ -111,7 +111,8 @@
     if (!inApp || !kept.items.length) return null;
     const want = kept.items.reduce((n, i) => n + i.total - i.over_budget, 0);
     const done = kept.items.reduce((n, i) => n + i.done, 0);
-    return { icon: 'refresh', label: 'Sync now', run: syncKept, progress: keptBusy() ? (want ? done / want : 0) : null };
+    const busy = keptBusy();
+    return { icon: 'refresh', label: 'Sync now', run: syncKept, progress: busy ? (want ? done / want : 0) : null, line: busy ? `Syncing · ${done} of ${want}` : null };
   });
 </script>
 

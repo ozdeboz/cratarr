@@ -78,7 +78,9 @@
     }
   }
   const connected = $derived(!!view && (view.services.listenbrainz || view.services.lastfm));
-  usePageAction(() => (connected ? { icon: 'refresh', label: 'Look again', run: refresh, progress: looking ? (progress?.value ?? 0) : null } : null));
+  usePageAction(() =>
+    connected ? { icon: 'refresh', label: 'Look again', run: refresh, progress: looking ? (progress?.value ?? 0) : null, line: progress?.line ?? null } : null,
+  );
 
   // Answered here: gone from the list at once (the server keeps the answer).
   let gone = $state<string[]>([]);
@@ -202,7 +204,6 @@
       <!-- The first look: the page's loader where it always is, how far it is under it (ui-conventions, Progress). -->
       <PageLoading>{@render how()}</PageLoading>
     {:else}
-      {#if progress}<div class="looking">{@render how()}</div>{/if}
       {#each view.found?.notes ?? [] as note (note)}<p class="note">{note}</p>{/each}
     {/if}
     {#if !albums.length}
@@ -268,10 +269,6 @@
     position: relative;
     padding: 14px clamp(12px, 2vw, 32px) 48px;
     container-type: inline-size;
-  }
-
-  .looking {
-    margin: 0 0 12px;
   }
 
   .note {
