@@ -4,7 +4,7 @@
   // line); its settings are on its own page behind it (`thing`: a server's id, or `lidarr`): its fields as rows, a value
   // typed or chosen in a sheet, its connection checked there, and Remove last (the settings' North Star, 2026-10-19).
   import type { Field } from '../api';
-  import { getLidarrOptions } from '../api';
+  import { getLastfmServerKey, getLidarrOptions, setLastfmServerKey } from '../api';
   import { backFromThing, openThing } from '../panel.svelte';
   import { nameThing } from '../settingsSections.svelte';
   import ChoiceSheet from './ChoiceSheet.svelte';
@@ -29,6 +29,17 @@
   const WANT_MORE =
     "What Discover's Want adds an album to Lidarr with: its quality and metadata profiles, and the root folder it lands in (Incoming's). As your artists: the ones the artists Lidarr has already use.";
   const AS_ARTISTS = 'As your artists';
+  // The server's own Last.fm key (Discover, decision 0069 amended, 0.9): everyone gets the artists like their own most
+  // played, a Last.fm account or not. Saved at once, not with the Save bar.
+  const LASTFM_MORE =
+    "Discover asks Last.fm for artists like each person's most played. With a key here, everyone gets them, with a Last.fm account or without.";
+  let fmKey = $state<{ set: boolean; saved: boolean } | null>(null);
+  const loadFmKey = () =>
+    getLastfmServerKey().then(
+      (k) => (fmKey = k),
+      () => (fmKey = null),
+    );
+  loadFmKey();
   // Lidarr's own profiles and root folders, read when its page opens.
   let lidOptions = $state<{ quality: [number, string][]; metadata: [number, string][]; roots: string[] } | null>(null);
   $effect(() => {
@@ -270,6 +281,23 @@
       {/if}
     </Group>
   {/if}
+  <Group title="Discover" more={LASTFM_MORE}>
+    <Item
+      name="Last.fm key for everyone"
+      value={fmKey?.saved ? 'Set' : fmKey?.set ? "From the container's settings" : 'None'}
+      onclick={() =>
+        (typing = {
+          title: 'Last.fm API key',
+          type: 'password',
+          value: '',
+          help: 'Made at last.fm/api. Empty takes the key away.',
+          save: async (v) => {
+            await setLastfmServerKey(v);
+            await loadFmKey();
+          },
+        })}
+    />
+  </Group>
   <HomeAssistantPart />
   <ListeningPart />
   {#if addingKind}

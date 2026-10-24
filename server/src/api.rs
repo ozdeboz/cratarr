@@ -198,6 +198,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/settings/preview", post(preview))
             .route("/api/settings/lidarr", post(preview_lidarr))
             .route("/api/settings/lidarr/options", get(lidarr_options))
+            .route("/api/settings/lastfm", get(get_lastfm_key).put(put_lastfm_key))
             .route("/api/settings/naming", get(naming))
             .route("/api/catalogue", get(catalogue_status))
             .route("/api/health/report", get(health_report))
@@ -2772,7 +2773,8 @@ async fn discover(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>
     let services = json!({ "listenbrainz": who.listenbrainz.is_some(), "lastfm": who.lastfm.is_some() });
     let stale = found.as_ref().is_none_or(|f| crate::app::moment::now_secs() - f.at > crate::app::discover::FRESH_SECS);
     let running = crate::app::tasks::tasks().of(&account).iter().any(|t| t.kind == crate::app::discover::KIND && t.finished.is_none());
-    if stale && !running && who.any() {
+    // Every account looks: the library's discographies need no service (0069 amended, 0.9).
+    if stale && !running {
         let _ = crate::app::discover::start(&app, serve.clone(), &account, who);
     }
     // Each card's request, if it was asked for, with its album's state (decision 0070).
@@ -2801,9 +2803,6 @@ async fn discover_refresh(State(app): State<Arc<App>>) -> Result<(StatusCode, Js
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    if !who.any() {
-        return Err(ToggleError::Refused("Connect ListenBrainz or Last.fm under Connections first.".into()).into());
-    }
     started(crate::app::discover::start(&app, serve, &account, who))
 }
 
@@ -3684,6 +3683,41 @@ async fn play_playlist(
 #[derive(Deserialize)]
 struct PreviewBody {
     source: SourceConfig,
+}
+
+#[derive(Deserialize)]
+struct LastfmKey {
+    key: String,
+}
+
+/// The server's own Last.fm key (Discover's artists like each account's own most played, decision 0069 amended):
+/// whether one is in use, and whether it was saved here (else `LASTFM_API_KEY` gives it). The key is never sent.
+async fn get_lastfm_key() -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let ud = serve.userdata.clone();
+    let (saved, used) = tokio::task::spawn_blocking(move || -> anyhow::Result<(bool, bool)> {
+        let saved = ud.import_choice(crate::app::discover::SERVER_LASTFM)?.is_some_and(|k| !k.trim().is_empty());
+        Ok((saved, crate::app::discover::server_lastfm_key(&ud)?.is_some()))
+    })
+    .await
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "set": used, "saved": saved })))
+}
+
+/// The server's own Last.fm key saved; an empty one takes it away.
+async fn put_lastfm_key(Json(b): Json<LastfmKey>) -> Result<Json<serde_json::Value>, ApiError> {
+    let key = b.key.trim().to_string();
+    if !key.is_empty() && !crate::app::discover::lastfm_key_ok(&key) {
+        return Err(ToggleError::Refused("A Last.fm API key is 32 letters and digits.".into()).into());
+    }
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let ud = serve.userdata.clone();
+    tokio::task::spawn_blocking(move || ud.set_import_choice(crate::app::discover::SERVER_LASTFM, &key))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    get_lastfm_key().await
 }
 
 /// Lidarr's quality and metadata profiles and root folders (its page's choices for Want), of the saved Lidarr.

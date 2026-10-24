@@ -107,6 +107,9 @@ CREATE TABLE IF NOT EXISTS request (
   release_group TEXT, album TEXT NOT NULL, artist TEXT NOT NULL, year INTEGER, cover TEXT,
   at INTEGER NOT NULL, status TEXT NOT NULL, reason TEXT, decided_by TEXT, decided_at INTEGER, fetched TEXT);
 CREATE INDEX IF NOT EXISTS request_status ON request (status, at);
+-- Discover's discographies (decision 0069 amended, 0.9): an artist's albums and EPs as MusicBrainz lists them (JSON),
+-- by the artist's MusicBrainz id, and when they were read; the same for every account.
+CREATE TABLE IF NOT EXISTS discography (artist TEXT PRIMARY KEY, at INTEGER NOT NULL, groups TEXT NOT NULL) WITHOUT ROWID;
 -- Sleep is no longer kept (the owner, 2026-10-24: not something that should be in Cratarr at all).
 DROP TABLE IF EXISTS asleep;
 ";
@@ -990,6 +993,16 @@ impl UserData {
         let mut st = db.prepare_cached("SELECT source, choice FROM import_choices WHERE substr(source, 1, length(?1)) = ?1 ORDER BY source")?;
         let rows = st.query_map([prefix], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// An artist's discography as Discover keeps it (JSON), and when it was read (decision 0069 amended).
+    pub fn discography(&self, artist: &str) -> Result<Option<(i64, String)>> {
+        Ok(self.db().query_row("SELECT at, groups FROM discography WHERE artist = ?1", [artist], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
+    }
+
+    pub fn set_discography(&self, artist: &str, at: i64, groups: &str) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO discography (artist, at, groups) VALUES (?1, ?2, ?3)", params![artist, at, groups])?;
+        Ok(())
     }
 
     /// Discover's suggestions for `user` as last looked up (JSON), and when (decision 0069).
