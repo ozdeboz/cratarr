@@ -1,5 +1,10 @@
+<script module lang="ts">
+  /** Whether About shows (App renders it): opened from Settings' pill, its own button there. */
+  export const about = $state({ open: false });
+</script>
+
 <script lang="ts">
-  // About Cratarr (the owner, 2026-10-16): a sheet from the info button at the settings page's top right, in place of an
+  // About Cratarr (the owner, 2026-10-16): a sheet from the info button in the settings page's pill, in place of an
   // About card among the settings. To everyone (the owner, 2026-10-24): the version, since when it runs, the app's
   // version in the app, the licence and the source (the AGPL offers it to whoever uses Cratarr, 0029), and thanks to
   // what it builds on (README's Credits) and to the photographers of Home's skies (public/skies/CREDITS.txt). Settings

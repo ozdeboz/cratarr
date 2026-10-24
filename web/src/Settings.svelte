@@ -3,7 +3,7 @@
   // (Personal) and, for the server's administrators only, the server's (decision 0051). A part is a row: its icon, its
   // name, what it is set to now in a line, and ›. A tap opens the part in the panel (lib/SettingsPanel): beside the list
   // on a roomy window, where a part is always open (App: the one last open), its row tinted; over the list on a phone,
-  // as a playlist opens. About is a sheet from the info button at the page's top right (App, lib/AboutSheet).
+  // as a playlist opens. About is a sheet from the info button, the pill's own (App, lib/AboutSheet).
   import { getHomeAssistant, getImport, getLogLevels, getSettings, getSignInRequired, getUsers, type ImportJob, type Settings } from './lib/api';
   import { me } from './lib/me.svelte';
   import { appInfo, downloads, inApp } from './lib/app.svelte';
@@ -16,7 +16,8 @@
   import { crates, loadCrates } from './lib/crates.svelte';
   import { excluded, loadExcluded } from './lib/exclusions.svelte';
   import { logDetail, SECTIONS, settingsRead, settingsSaved, type SettingsSection } from './lib/settingsSections.svelte';
-  import { pageView } from './lib/pageView.svelte';
+  import { pageView, usePageAction } from './lib/pageView.svelte';
+  import { about } from './lib/AboutSheet.svelte';
   import { loadSettingsWords, settingsMatches } from './lib/settingsSearch.svelte';
 
   // The last answer (kept for the panel too), read again here.
@@ -122,6 +123,9 @@
         return logDetail.on === null ? '' : logDetail.on ? 'More detail on' : 'More detail off';
     }
   }
+
+  // The pill's own button: About.
+  usePageAction(() => ({ icon: 'info', label: 'About', run: () => (about.open = true) }));
 
   // The pill's search (lib/settingsSearch): the parts that hold what is searched, each saying where in its line.
   const words = $derived(pageView.query.trim().toLowerCase().split(/\s+/).filter(Boolean));

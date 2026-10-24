@@ -23,7 +23,7 @@
   import Visuals from './lib/visuals/Visuals.svelte';
   import { visuals } from './lib/visuals/shown.svelte';
   import Crates from './Crates.svelte';
-  import AboutSheet from './lib/AboutSheet.svelte';
+  import AboutSheet, { about } from './lib/AboutSheet.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { target } from './lib/playOnTarget.svelte';
   import { listening, resumeGroup } from './lib/groupListen.svelte';
@@ -286,8 +286,6 @@
   // has none. On a phone the row always shows.
   const backHome = $derived(navAt === 0 && page !== 'home');
   const pageRow = $derived(!playlistLayer && !overlay && (phone || navAt > 0 || backHome || pagePill || page === 'settings' || page === 'insights'));
-  // The settings page's info button (the owner, 2026-10-16): About in a sheet.
-  let aboutOpen = $state(false);
   $effect(() => {
     const root = document.documentElement.style;
     root.setProperty('--top-h', phone ? `${topBar}px` : '0px');
@@ -595,14 +593,10 @@
       {:else}
         <span></span>
       {/if}
-      {#if pagePill}<SheetArea area={() => pageEl}><TopPill {page} view={hasView(page)} device={pillDevice} filter={!page.startsWith('local-') && page !== 'downloads'} /></SheetArea>{/if}
-      {#if page === 'settings'}
-        <!-- Its search left of the info button (the owner, 2026-10-24); the field, when open, covers both. -->
-        <span class="tools">
-          <SheetArea area={() => pageEl}><TopPill {page} filter={false} device={false} /></SheetArea>
-          <span class="navpill"><button aria-label="About" title="About" onclick={() => (aboutOpen = true)}><Icon name="info" size={22} /></button></span>
-        </span>
-      {/if}
+      <!-- Settings' pill: its search and About, its own button (the owner, 2026-10-24: one pill as on every page). -->
+      {#if pagePill || page === 'settings'}<SheetArea area={() => pageEl}
+          ><TopPill {page} view={hasView(page)} device={pagePill && pillDevice} filter={pagePill && !page.startsWith('local-') && page !== 'downloads'} /></SheetArea
+        >{/if}
     </div>
   {/if}
   {#if overlay}
@@ -613,7 +607,7 @@
     </div>
   {/if}
 
-  {#if aboutOpen}<AboutSheet onclose={() => (aboutOpen = false)} />{/if}
+  {#if about.open}<AboutSheet onclose={() => (about.open = false)} />{/if}
 
   {#if moreOpen}
     <button class="scrim" aria-label="Close menu" onclick={() => (moreOpen = false)}></button>
@@ -727,11 +721,6 @@
 
   .page-row > :global(*) {
     pointer-events: auto;
-  }
-
-  .tools {
-    display: flex;
-    gap: 8px;
   }
 
   .page-row.beside {
