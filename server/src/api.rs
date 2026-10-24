@@ -2784,12 +2784,21 @@ async fn discover(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>
         .map(|(k, v)| (k, json!(v)))
         .collect();
     let may = crate::app::requests::rights(&serve);
+    // The cards by one of the account's favourite artists (its starred artists, by name as the library keys them), for
+    // the filter's "Leave out favourite artists" (the owner, 2026-10-24).
+    let starred: std::collections::HashSet<String> =
+        serve.userdata.starred(&account, crate::userdata::Kind::Artist).map_err(|e| ToggleError::Refused(format!("{e:#}")))?.into_iter().collect();
+    let favourite_artists: Vec<&str> = found
+        .as_ref()
+        .map(|f| f.albums.iter().filter(|s| starred.contains(&crate::serve::ids::artist(&s.artist))).map(|s| s.key.as_str()).collect())
+        .unwrap_or_default();
     Ok(Json(json!({
         "found": found,
         "services": services,
         "lidarr": crate::app::discover::lidarr(&app).is_some(),
         "requests": asked,
         "may_request": may.request,
+        "favourite_artists": favourite_artists,
     })))
 }
 

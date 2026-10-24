@@ -153,12 +153,13 @@
     {#if switches.length}
       <div class="toggles">
         {#each switches as w (w.key)}
-          <Switch card label={w.label} checked={switchOn(list, w.key)} onchange={(on) => setSwitch(list, w.key, on)} />
+          <Switch card label={w.label} checked={switchOn(list, w.key) !== !!w.invert} onchange={(on) => setSwitch(list, w.key, on !== !!w.invert)} />
         {/each}
       </div>
     {/if}
 
-    {#each cards as c (c.id)}
+    <!-- The servers and libraries hold for the lists of music; Discover's suggestions are from none of them. -->
+    {#each list === 'discover' ? [] : cards as c (c.id)}
       {@const on = prefs.source === c.id}
       <div class="server" class:on>
         <button

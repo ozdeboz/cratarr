@@ -642,7 +642,7 @@
       <!-- Settings' pill: its search and About, its own button (the owner, 2026-10-24: one pill as on every page);
            Discover's: its search and Look again (the owner, 2026-10-24). -->
       {#if pagePill || page === 'settings' || page === 'discover'}<SheetArea area={() => pageEl}
-          ><TopPill {page} view={hasView(page)} device={pagePill && pillDevice} filter={pagePill && !page.startsWith('local-') && page !== 'downloads'} /></SheetArea
+          ><TopPill {page} view={hasView(page)} device={pagePill && pillDevice} filter={(pagePill && !page.startsWith('local-') && page !== 'downloads') || page === 'discover'} /></SheetArea
         >{/if}
     </div>
   {/if}

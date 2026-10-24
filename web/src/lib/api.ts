@@ -1530,6 +1530,8 @@ export type DiscoverView = {
   requests?: Record<string, AlbumRequest>;
   /** The account may ask for albums. */
   may_request?: boolean;
+  /** The cards (their keys) by one of the account's favourite artists. */
+  favourite_artists?: string[];
 };
 export const getDiscover = () => request<DiscoverView>('/api/discover');
 export const refreshDiscover = () => post<Started>('/api/discover/refresh', {});

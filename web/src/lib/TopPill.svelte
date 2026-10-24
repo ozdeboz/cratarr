@@ -148,7 +148,7 @@
         </span>
       {/if}
     {/if}
-    {#if filter}<button class="funnel" class:lit={filtering} aria-label={filters ? `Filter, ${filters} on` : 'Filter'} title="Filter" aria-haspopup="dialog" onclick={() => (filterOpen = true)}
+    {#if filter && !searching && !(showing && page && pageView.action)}<button class="funnel" class:lit={filtering} aria-label={filters ? `Filter, ${filters} on` : 'Filter'} title="Filter" aria-haspopup="dialog" onclick={() => (filterOpen = true)} transition:slide={UNFOLD}
         ><Icon name="funnel" size={22} />{#if filters}<span class="badge">{filters}</span>{/if}</button
       >{/if}
     {#if view && (page || order?.columns?.shown.length)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (viewOpen = true)}><Icon name="sliders" size={22} /></button>{/if}

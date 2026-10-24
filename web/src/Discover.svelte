@@ -19,6 +19,7 @@
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { matchesSearch, pageView, usePageAction } from './lib/pageView.svelte';
+  import { switchOn } from './lib/listFilter.svelte';
   import { progressOf, tasks } from './lib/tasks.svelte';
   import { me } from './lib/me.svelte';
   import { playQueue } from './lib/localPlayer.svelte';
@@ -85,13 +86,23 @@
   // Answered here: gone from the list at once (the server keeps the answer).
   let gone = $state<string[]>([]);
   let asking = $state<string | null>(null);
-  // The pill's search (as every page's): what a card says, every word of it somewhere.
+  // The filter (the pill's funnel, the owner 2026-10-24): a source left out leaves out what only it suggested; the
+  // favourite artists' albums and those of artists the library has, when asked. Then the pill's search (as every
+  // page's): what a card says, every word of it somewhere.
+  const favourites = $derived(new Set(view?.favourite_artists ?? []));
+  const passes = (a: DiscoverAlbum) =>
+    !(a.sources?.length && a.sources.every((s) => switchOn('discover', `no-source:${s}`))) &&
+    !(switchOn('discover', 'no-favourite-artists') && favourites.has(a.key)) &&
+    !(switchOn('discover', 'no-library-artists') && !a.new_artist);
+  const kept = $derived((view?.found?.albums ?? []).filter((a) => !gone.includes(a.key)));
   const albums = $derived(
-    (view?.found?.albums ?? []).filter(
-      (a) => !gone.includes(a.key) && matchesSearch(a.album, a.artist, a.kind, a.year?.toString(), ...(a.genres ?? []), ...a.why, ...(a.sources ?? [])),
-    ),
+    kept.filter((a) => passes(a) && matchesSearch(a.album, a.artist, a.kind, a.year?.toString(), ...(a.genres ?? []), ...a.why, ...(a.sources ?? []))),
   );
-  const searched = $derived(pageView.query.trim() !== '');
+  // How many the filter lets through, of how many (the Filter sheet's count).
+  $effect(() => {
+    pageView.counted = view?.found ? { shown: kept.filter(passes).length, total: kept.length } : null;
+    return () => (pageView.counted = null);
+  });
   async function want(a: DiscoverAlbum) {
     asking = a.key;
     try {
@@ -207,7 +218,7 @@
       {#each view.found?.notes ?? [] as note (note)}<p class="note">{note}</p>{/each}
     {/if}
     {#if !albums.length}
-      {#if !looking}<p class="note">{searched ? 'None of them match.' : view.found ? 'Nothing new to suggest right now.' : 'Looking for albums you might like…'}</p>{/if}
+      {#if !looking}<p class="note">{kept.length ? 'None of them match.' : view.found ? 'Nothing new to suggest right now.' : 'Looking for albums you might like…'}</p>{/if}
     {:else}
       {#if me.admin && !view.lidarr}
         <p class="note">Want needs Lidarr: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>
