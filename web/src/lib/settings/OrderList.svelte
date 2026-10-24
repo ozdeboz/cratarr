@@ -13,6 +13,7 @@
     label: name,
     onchange,
     fold = null,
+    lead = null,
   }: {
     /** All of them, in the order offered. */
     items: readonly { id: T; label: string }[];
@@ -23,6 +24,9 @@
     onchange: (on: T[]) => void;
     /** The fold line: how many of those on are above it. */
     fold?: { at: number; onchange: (at: number) => void } | null;
+    /** A first place only some may take (Home's top: the flow; the owner, 2026-10-24): marked by a line under it, named
+     *  `label`; one that may not is never dragged above the line, and the first stays unless the next may take it. */
+    lead?: { may: (id: T) => boolean; label: string } | null;
   } = $props();
 
   /** Those on, the fold line among them (null). */
@@ -48,17 +52,26 @@
       onchange(v.filter((e): e is T => e !== null));
       if (fold) fold.onchange(v.indexOf(null));
     },
+    (from) => {
+      const last = entries.length - 1;
+      if (!lead) return [0, last];
+      const id = entries[from];
+      if (from === 0) return entries[1] !== undefined && entries[1] !== null && lead.may(entries[1]) ? [0, last] : [0, 0];
+      return id !== null && lead.may(id) ? [0, last] : [1, last];
+    },
   );
 </script>
 
 <ol class="facts" class:dragging={!!reorder.drag} bind:this={list} aria-label={name}>
   {#each entries as id, i (id ?? '|')}
-    <li class:lifted={reorder.drag?.from === i} class:line={id === null} style:transform={reorder.drag ? `translateY(${reorder.offset(i)}px)` : null}>
+    <li class:lifted={reorder.drag?.from === i} class:line={id === null} class:lead={!!lead && i === 0} style:transform={reorder.drag ? `translateY(${reorder.offset(i)}px)` : null}>
       {#if id === null}
         <!-- The fold line, as the profile draws it (lib/ListProfile): above it stays, below it folds. -->
         <span class="row fold"><span class="pill"><Icon name="chevronUp" size={14} />Fold</span></span>
       {:else}
-        <button class="row" role="switch" aria-checked="true" onclick={() => flip(id)}><span>{label(id)}</span><SwitchTrack on={true} /></button>
+        <button class="row" role="switch" aria-checked="true" onclick={() => flip(id)}
+          ><span>{label(id)}{#if lead && i === 0}<small class="lead-label">{lead.label}</small>{/if}</span><SwitchTrack on={true} /></button
+        >
       {/if}
       <button
         class="grip"
@@ -91,6 +104,20 @@
     display: flex;
     align-items: center;
     background: var(--surface);
+  }
+
+  /* The first place, for those that may take it: a line under it, its name beside the first's. */
+  .facts li.lead {
+    border-bottom: 2px solid var(--accent);
+  }
+
+  .lead-label {
+    margin-left: 8px;
+    color: var(--accent-ink);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
   }
 
   .facts.dragging li {

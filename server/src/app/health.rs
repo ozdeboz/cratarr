@@ -146,24 +146,19 @@ pub fn files(issues: &BTreeMap<String, u64>) -> Vec<Finding> {
     out
 }
 
-/// Incoming's albums as they stand to Music (decision 0034), and the conversions that failed.
+/// Incoming's albums as they stand to Music (decision 0034), and the conversions that failed. Dealt with on their items'
+/// own pages (the comparison, the album's menu), not the Library, whose own filter could hide them (the owner,
+/// 2026-10-24): no `open`.
 pub fn incoming(upgrades: u64, duplicates: u64, failed: u64) -> Vec<Finding> {
-    let library = |switch| Some(Open { page: "library", switch: Some(switch) });
     let mut out = Vec::new();
     if upgrades > 0 {
-        let mut f = finding("incoming", "incoming:upgrades", Level::Critical, upgrades, n(upgrades, "upgrade waiting", "upgrades waiting"));
-        f.open = library("upgrades");
-        out.push(f);
+        out.push(finding("incoming", "incoming:upgrades", Level::Critical, upgrades, n(upgrades, "upgrade waiting", "upgrades waiting")));
     }
     if duplicates > 0 {
-        let mut f = finding("incoming", "incoming:duplicates", Level::Critical, duplicates, n(duplicates, "duplicate waiting", "duplicates waiting"));
-        f.open = library("duplicates");
-        out.push(f);
+        out.push(finding("incoming", "incoming:duplicates", Level::Critical, duplicates, n(duplicates, "duplicate waiting", "duplicates waiting")));
     }
     if failed > 0 {
-        let mut f = finding("incoming", "incoming:failed", Level::Warning, failed, n(failed, "conversion failed", "conversions failed"));
-        f.open = Some(Open { page: "library", switch: None });
-        out.push(f);
+        out.push(finding("incoming", "incoming:failed", Level::Warning, failed, n(failed, "conversion failed", "conversions failed")));
     }
     out
 }
@@ -451,7 +446,7 @@ mod tests {
         assert_eq!(found.iter().map(|f| (f.title.as_str(), f.level)).collect::<Vec<_>>(), [("2 files can't be read", Level::Critical), ("1 file has no length", Level::Info)]);
         let waiting = incoming(13, 0, 1);
         assert_eq!(waiting[0].title, "13 upgrades waiting");
-        assert_eq!(waiting[0].open, Some(Open { page: "library", switch: Some("upgrades") }));
+        assert_eq!(waiting[0].open, None);
         assert_eq!(waiting[1].title, "1 conversion failed");
         assert!(incoming(0, 0, 0).is_empty());
     }

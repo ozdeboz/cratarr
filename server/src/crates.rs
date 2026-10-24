@@ -133,6 +133,21 @@ pub fn genre_crate(id: &str) -> Option<CrateDef> {
 /// A track or an album, viewed in the panel as a crate of what sounds like it (the owner, 2026-10-23: "just like genre,
 /// albums and tracks can now become seeds for crates"): made when asked for (`like:<id>`), never saved. The caller
 /// names it and turns an album into its songs (`like_crate`).
+/// Home's shelves as crates (the owner, 2026-10-24: New for you's and Grave digging's › open them, not the Library,
+/// whose own filter could hide them): made when asked for, never saved; their tracks the albums the shelf shows, album
+/// by album in its order, of every library (what Home showed, whatever is switched off).
+pub const HOME_NEW: &str = "home:new";
+pub const HOME_GRAVES: &str = "home:graves";
+pub const fn home_crate(id: &str) -> bool {
+    matches!(id.as_bytes(), b"home:new" | b"home:graves")
+}
+
+/// A crate of exactly these lines, in this order (a Home shelf's).
+pub fn lines_crate(id: &str, name: &str, lines: Vec<String>) -> CrateDef {
+    let within = Condition::new("like", false, Value::Within { lines: Arc::new(lines.iter().cloned().collect()), ranked: Arc::new(lines) });
+    CrateDef { id: id.to_string(), name: name.to_string(), conditions: vec![within] }
+}
+
 pub const LIKE: &str = "like:";
 /// The seed of "Sounds like your week" (`like:week[@<count>]`): the songs the asking account played in the last 7
 /// days, the closest not among them (a5 for the owner, 2026-10-23; for 75's Home).
@@ -1728,6 +1743,11 @@ mod tests {
         assert_eq!(c.name, "Trip Hop");
         assert_eq!(c.conditions, vec![Condition::new("genre", false, Value::AnyOf { values: vec!["Trip Hop".into()] })]);
         assert!(genre_crate("genre: ").is_none());
+        // Home's shelves: exactly their lines, in their order (the owner, 2026-10-24).
+        assert!(home_crate("home:new") && home_crate("home:graves") && !home_crate("home:") && !home_crate("like:week"));
+        let shelf = lines_crate(HOME_NEW, "New for you", vec!["b/1.flac".into(), "a/1.flac".into()]);
+        assert_eq!(shelf.name, "New for you");
+        assert!(matches!(&shelf.conditions[0].value, Value::Within { ranked, .. } if **ranked == ["b/1.flac", "a/1.flac"]));
         assert!(genre_crate("unlisted").is_none());
     }
 

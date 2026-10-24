@@ -127,6 +127,9 @@ const HEARD_SHARE: f64 = 0.05;
 /// How many each of Home's looks back shows; and after how many days unplayed an album is half as far from the listening
 /// as one never played (Grave digging).
 const DIG: usize = 12;
+/// New for you as a crate (`home_crate`): the newest albums it looks at, and how many it keeps, as Home's shelf.
+const HOME_NEW_LOOK: usize = 60;
+const HOME_NEW_ALBUMS: usize = 12;
 const UNPLAYED_HALF_DAYS: f64 = 180.0;
 
 /// An account's taste as Insights' Profile has it, every source (`taste::profiles`): its favourites, playlists, plays
@@ -1990,7 +1993,7 @@ impl PlaylistService {
 
     /// A built-in crate is everyone's: its picture is the administrators' to change (decision 0051).
     fn may_picture(&self, id: &str) -> Result<(), ToggleError> {
-        let built_in = crates::permanent().iter().any(|c| c.id == id) || crates::genre_crate(id).is_some() || id.starts_with(crates::LIKE);
+        let built_in = crates::permanent().iter().any(|c| c.id == id) || crates::genre_crate(id).is_some() || id.starts_with(crates::LIKE) || crates::home_crate(id);
         if built_in && !crate::serve::access::administering() {
             return Err(ToggleError::Forbidden("A built-in crate's picture is for administrators.".into()));
         }
@@ -2001,6 +2004,9 @@ impl PlaylistService {
     pub async fn crate_def(&self, id: &str) -> Result<CrateDef, ToggleError> {
         if let Some(c) = crates::permanent().into_iter().find(|c| c.id == id).or_else(|| crates::genre_crate(id)) {
             return Ok(c);
+        }
+        if crates::home_crate(id) {
+            return self.home_crate(id).await;
         }
         if let Some((item, count)) = crates::like_of(id) {
             let mut def = match item.strip_prefix(crates::LIST) {
@@ -2017,6 +2023,39 @@ impl PlaylistService {
             return Ok(def);
         }
         self.own_crates()?.list().await?.into_iter().find(|c| c.id == id).ok_or(ToggleError::UnknownPlaylist)
+    }
+
+    /// Home's shelf as a crate (`crates::HOME_NEW`, `HOME_GRAVES`): New for you, Cratarr's newest albums the asking account
+    /// has not heard much of yet (as Home leaves them out, `heard_albums`); Grave digging, `digging`'s albums. Their
+    /// tracks album by album, in the shelf's order.
+    async fn home_crate(&self, id: &str) -> Result<CrateDef, ToggleError> {
+        let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+        let (name, albums) = if id == crates::HOME_NEW {
+            let s = serve.clone();
+            let newest: Vec<String> = tokio::task::spawn_blocking(move || s.library.album_list(&crate::serve::read::AlbumOrder::Newest, HOME_NEW_LOOK, 0, None))
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))??
+                .into_iter()
+                .map(|a| a.id)
+                .collect();
+            // Without an account to ask about (sign-in off), none heard, as Home has it.
+            let heard: HashSet<String> = self.heard_albums(newest.clone()).await.unwrap_or_default().into_iter().collect();
+            ("New for you", newest.into_iter().filter(|a| !heard.contains(a)).take(HOME_NEW_ALBUMS).collect::<Vec<_>>())
+        } else {
+            ("Grave digging", self.digging(None, &[]).await?.graves.into_iter().map(|g| g.id).collect())
+        };
+        let lines = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+            let cat = serve.catalogue();
+            let mut lines = Vec::new();
+            for id in &albums {
+                let Some(album) = serve.library.album(id)? else { continue };
+                lines.extend(album.song.unwrap_or_default().iter().filter_map(|s| crate::serve::playlists::line_of_song(cat, &s.id)));
+            }
+            Ok(lines)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))??;
+        Ok(crates::lines_crate(id, name, lines))
     }
 
     /// A playlist's suggestions (`crates::playlist_crate`): its tracks the seeds, named after it.
@@ -2266,7 +2305,7 @@ impl PlaylistService {
     async fn crate_favourites(&self, id: &str) -> Result<crates::Favourites, ToggleError> {
         match self.own_crates()?.all_favourites().await?.get(id) {
             Some(f) => Ok(*f),
-            None if crates::genre_crate(id).is_some() || id.starts_with(crates::LIKE) => Ok(crates::Favourites::All),
+            None if crates::genre_crate(id).is_some() || id.starts_with(crates::LIKE) || crates::home_crate(id) => Ok(crates::Favourites::All),
             None => Ok(self.own_crates()?.favourites(id).await?),
         }
     }

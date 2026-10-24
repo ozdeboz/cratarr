@@ -60,6 +60,7 @@
     crateArt,
     crateName,
     crateNameKnown,
+    homeCrate,
     crateOf,
     crates,
     crateRadio as crateRadioOf,
@@ -567,7 +568,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   // server's (any of what it knows of a track: genre, mood, tempo, …), which says which rows pass. A crate's rows come
   // filtered and ordered by the server, as they are paged, from the libraries switched on.
   const filterOn = (key: string) => switchOn(kind, key);
-  const crateLook = $derived<CrateLook>({ without: hiddenLibraries(), filter: conditionsFor('crate'), order: sortKey, down: sortDown });
+  // A Home shelf's crate shows what Home showed, of every library, whatever is switched off (the owner, 2026-10-24).
+  const crateLook = $derived<CrateLook>({ without: homeCrate(crate) ? undefined : hiddenLibraries(), filter: conditionsFor('crate'), order: sortKey, down: sortDown });
   const lookKey = $derived(JSON.stringify(crateLook));
   const pass = passing(() => kind, () =>
     crate
@@ -721,7 +723,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     }
     if (untrack(() => profile) === null) profileComing = true;
     let gone = false;
-    filterList(at.list, [], at.source, at.list.kind === 'crate' ? hiddenLibraries() : undefined).then(
+    filterList(at.list, [], at.source, at.list.kind === 'crate' && !homeCrate(at.list.id) ? hiddenLibraries() : undefined).then(
       (f) => {
         if (gone) return;
         profile = f.profile ?? null;

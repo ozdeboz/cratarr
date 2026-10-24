@@ -48,7 +48,7 @@
 </script>
 
 <Group title="Sections" more="The first is the flow at the top, so it is one made of albums: Music for the moment, New for you, Blast from the past, Grave digging or Favourite albums.">
-  <OrderList items={HOME_PARTS} on={prefs.homeParts} label="Home's sections" onchange={setParts} />
+  <OrderList items={HOME_PARTS} on={prefs.homeParts} label="Home's sections" onchange={setParts} lead={{ may: (id) => FLOW_PARTS.includes(id), label: 'On top' }} />
 </Group>
 
 <Group title="Header">

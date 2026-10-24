@@ -162,7 +162,11 @@ export function forgetDraft(id: string | null) {
 }
 /** A crate's name, or null while it is not known yet (the crates not read, a Sounds like crate's name not asked):
  *  a header shows nothing rather than its id first. */
+/** Home's shelves as crates (the server's `home:new`, `home:graves`; the owner, 2026-10-24): their › open them. */
+export const HOME_CRATES: Record<string, string> = { 'home:new': 'New for you', 'home:graves': 'Grave digging' };
+export const homeCrate = (id: string | null) => !!id && id in HOME_CRATES;
 export const crateNameKnown = (id: string): string | null =>
+  HOME_CRATES[id] ??
   crates.list?.find((c) => c.id === id)?.name ?? genreOf(id) ?? likeNames[id] ?? (crates.list && !likeOf(id) ? id : null);
 export const crateName = (id: string) => crateNameKnown(id) ?? id;
 
@@ -216,7 +220,7 @@ export function viewLike(id: string, count = LIKE_COUNT) {
   if (!likeNames[crate]) getCrate(crate).then((d) => (likeNames[crate] = d.name)).catch(() => {});
 }
 /** A crate the server makes from a seed (a genre, a track, an album): the library's, never one's own. */
-export const seeded = (crate: string | null) => genreOf(crate) !== null || likeOf(crate) !== null;
+export const seeded = (crate: string | null) => genreOf(crate) !== null || likeOf(crate) !== null || homeCrate(crate);
 
 /** A new crate, named in the name sheet (as a new playlist is): the builder opens on a fresh draft of that name, saved
  *  only with its Save (a crate without conditions would hold the whole library). `conditions`: what it starts from (a

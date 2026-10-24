@@ -33,7 +33,8 @@
     ...(p.missing ? [{ value: num(p.missing), label: 'missing from playlists' }] : []),
     ...(o?.incoming_albums
       ? [
-          { value: num(o.incoming_albums), label: `${o.incoming_albums === 1 ? 'album' : 'albums'} in Incoming ›`, href: '#/library' },
+          // A number only (the owner, 2026-10-24): the Library's own filter could hide them there.
+          { value: num(o.incoming_albums), label: `${o.incoming_albums === 1 ? 'album' : 'albums'} in Incoming` },
           ...(waited !== null ? [{ value: plural(waited, 'day'), label: 'the oldest has waited' }] : []),
         ]
       : []),

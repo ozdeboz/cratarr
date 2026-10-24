@@ -1002,6 +1002,11 @@
       left: calc(var(--nav-w) + 12px);
     }
 
+    /* Tap to play in the middle of the page's area, not the window's (the owner, 2026-10-24). */
+    .tap-to-play {
+      left: calc(var(--nav-w) + (100% - var(--nav-w)) / 2);
+    }
+
     /* A playlist over the page covers the navigation too: the mini-player floats over it with the same space on both
        sides, never pushed to one side by a navigation it is not beside (the owner, 2026-10-17). */
     .mini-dock.over {

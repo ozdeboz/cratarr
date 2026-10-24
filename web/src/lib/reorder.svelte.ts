@@ -10,12 +10,21 @@ export class Reorder {
   #list: () => HTMLElement | undefined;
   #count: () => number;
   #onmove: (from: number, to: number) => void;
+  #range: ((from: number) => [number, number]) | undefined;
 
-  /** `list`: the scrolling list; `count`: how many rows it has; `onmove`: a row was dropped elsewhere. */
-  constructor(list: () => HTMLElement | undefined, count: () => number, onmove: (from: number, to: number) => void) {
+  /** `list`: the scrolling list; `count`: how many rows it has; `onmove`: a row was dropped elsewhere; `range`: where
+   *  the row at `from` may go (first and last place), the whole list without it. The row stops at its range's edge
+   *  while dragged, never past it to be put back on release (the owner, 2026-10-24: Home's top slot). */
+  constructor(
+    list: () => HTMLElement | undefined,
+    count: () => number,
+    onmove: (from: number, to: number) => void,
+    range?: (from: number) => [number, number],
+  ) {
     this.#list = list;
     this.#count = count;
     this.#onmove = onmove;
+    this.#range = range;
   }
 
   /** The handle of row `i` was pressed. */
@@ -32,8 +41,12 @@ export class Reorder {
   #to(y: number) {
     const list = this.#list();
     if (!this.drag || !list) return;
-    const dy = y - this.#start.y + (list.scrollTop - this.#start.scroll);
-    const to = Math.min(this.#count() - 1, Math.max(0, this.drag.from + Math.round(dy / this.#start.rowH)));
+    const from = this.drag.from;
+    const [lo, hi] = this.#range?.(from) ?? [0, this.#count() - 1];
+    const rowH = this.#start.rowH;
+    // The row itself goes no further than its range either.
+    const dy = Math.min((hi - from) * rowH, Math.max((lo - from) * rowH, y - this.#start.y + (list.scrollTop - this.#start.scroll)));
+    const to = Math.min(hi, Math.max(lo, from + Math.round(dy / rowH)));
     this.drag = { ...this.drag, dy, to };
   }
 

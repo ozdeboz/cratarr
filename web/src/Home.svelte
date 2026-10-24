@@ -14,7 +14,7 @@
   import CoverFlow from './lib/CoverFlow.svelte';
   import ArtistsToExplore from './lib/ArtistsToExplore.svelte';
   import HomeStatus from './lib/HomeStatus.svelte';
-  import { LIKE, viewGenre, viewLike } from './lib/crates.svelte';
+  import { CRATE, LIKE, viewGenre, viewLike } from './lib/crates.svelte';
   import { DEVICE } from './lib/deviceMusic.svelte';
   import { startRadio } from './lib/localPlayer.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
@@ -71,12 +71,6 @@
     return () => (gone = true);
   });
   const newest = $derived(heard ? candidates.filter((c) => !(c.source === 'cratarr' && heard!.has(c.a.id))).slice(0, NEWEST) : []);
-  /** The Library's newest albums (New for you's ›). */
-  function allNewest() {
-    prefs.libraryOrder = 'added';
-    prefs.libraryDown = true;
-    location.hash = '#/library';
-  }
   /** The section on top's Play (the owner, 2026-10-24): all of it, from the album in front (those before it stay before
    *  it in the queue). Blast from the past: its tracks from the front album's; the others: their albums one after the
    *  other in their order, on the front one's server. */
@@ -101,12 +95,6 @@
     } finally {
       starting = false;
     }
-  }
-  /** The Library, its albums played longest ago first (Grave digging's ›). */
-  function allGraves() {
-    prefs.libraryOrder = 'played';
-    prefs.libraryDown = false;
-    location.hash = '#/library';
   }
 
   // Sounds like your week: its first rows (for the covers), its size, its genres, and how many tracks were played.
@@ -476,7 +464,7 @@
 {#snippet newestPart()}
   {#if turn('newest') && newest.length}
     <section aria-label="New for you">
-      <SectionHead title="New for you" onmore={allNewest} />
+      <SectionHead title="New for you" onmore={() => viewPlaylist(CRATE + 'home:new')} />
       <ul class="shelf">
         {#each newest as n (n.source + n.a.id)}
           <li><AlbumCard source={n.source} album={n.a} lines={[n.a.artist ?? '', `added ${addedOn(n.a.added!)}`]} /></li>
@@ -555,7 +543,7 @@
 {#snippet gravesPart()}
   {#if turn('graves') && graves.length}
     <section aria-label="Grave digging">
-      <SectionHead title="Grave digging" onmore={allGraves} />
+      <SectionHead title="Grave digging" onmore={() => viewPlaylist(CRATE + 'home:graves')} />
       <ul class="shelf">
         {#each graves as g (g.a.id)}
           <li><AlbumCard source="cratarr" album={g.a} lines={[g.a.artist ?? '', g.last === null ? 'never played' : `played ${ago(g.last)}`]} /></li>
