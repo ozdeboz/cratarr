@@ -10,6 +10,7 @@
   import { inApp } from '../app.svelte';
   import { PROFILE_ROWS, prefs, type Theme } from '../prefs.svelte';
   import OrderList from './OrderList.svelte';
+  import OrderReset from './OrderReset.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
   import PlayerRowList from './PlayerRowList.svelte';
@@ -42,11 +43,34 @@
 </Group>
 
 <Group title="Player">
+  {#snippet tail()}
+    {#if prefs.playerRow}<OrderReset
+        label="Extra details"
+        isDefault={!prefs.playerFacts.length}
+        reset={() => {
+          const was = prefs.playerFacts;
+          prefs.playerFacts = [];
+          return () => (prefs.playerFacts = was);
+        }}
+      />{/if}
+  {/snippet}
   <Item name="Extra details" toggle={{ checked: prefs.playerRow, onchange: (on) => (prefs.playerRow = on) }} />
   {#if prefs.playerRow}<PlayerRowList />{/if}
 </Group>
 
 <Group title="Content">
+  {#snippet tail()}
+    {#if prefs.profile}<OrderReset
+        label="Profile rows"
+        isDefault={prefs.profileRows.join() === PROFILE_ROWS.map((r) => r.id).join() && prefs.profileFoldAt === 0}
+        reset={() => {
+          const was = { rows: prefs.profileRows, at: prefs.profileFoldAt };
+          prefs.profileRows = PROFILE_ROWS.map((r) => r.id);
+          prefs.profileFoldAt = 0;
+          return () => ((prefs.profileRows = was.rows), (prefs.profileFoldAt = was.at));
+        }}
+      />{/if}
+  {/snippet}
   <Item
     name="Music profiles"
     more={"A playlist's, a crate's or an artist's music at a glance, at the top of its page: its tempo, energy and danceability, its era, its styles, and its moods against your whole library.\n\nMost of it comes from AudioMuse, which listens to every track in Cratarr's library: tracks it has not heard yet count only by their tags (Health shows how far it is).\n\nBelow, choose which rows a profile shows and in what order; the rows above the line stay when one is folded."}

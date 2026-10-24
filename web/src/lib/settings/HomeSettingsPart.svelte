@@ -2,6 +2,7 @@
   // Home (the owner, 2026-10-24): its sections in the user's order, each switched on or off (lib/settings/OrderList,
   // as the player's details and the profile's rows); and its header: a personal greeting in place of the moment's name,
   // and a picture of one's own in place of the weather's sky, kept on this device (lib/localCovers). Acts at once.
+  import OrderReset from './OrderReset.svelte';
   import { HOME_HEADER, HOME_HEADER_PX, localCovers, removeLocalPicture, setLocalPicture } from '../localCovers.svelte';
   import { FLOW_PARTS, HOME_PARTS, homeDefault, prefs, type HomePart } from '../prefs.svelte';
   import { toast } from '../toast.svelte';
@@ -48,6 +49,17 @@
 </script>
 
 <Group title="Sections" more="The first is the flow at the top, so it is one made of albums: Music for the moment, New for you, Blast from the past, Grave digging or Favourite albums.">
+  {#snippet tail()}
+    <OrderReset
+      label="Sections"
+      isDefault={prefs.homeParts.join() === homeDefault().join()}
+      reset={() => {
+        const was = prefs.homeParts;
+        prefs.homeParts = homeDefault();
+        return () => (prefs.homeParts = was);
+      }}
+    />
+  {/snippet}
   <OrderList items={HOME_PARTS} on={prefs.homeParts} label="Home's sections" onchange={setParts} lead={{ may: (id) => FLOW_PARTS.includes(id), label: 'Can be featured on top' }} />
 </Group>
 

@@ -293,11 +293,16 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
       - Players;
       - Users (every account, decision 0051, amended 2026-10-19: Cratarr's own, added here with "+ Add user", and a
         directory's, read-only; each with its own page);
-      - Authentication (decided 2026-10-16, not "Subsonic": the sign-in requirement, the API keys, the directory);
+      - Authentication (decided 2026-10-16, not "Subsonic": the sign-in requirement and the directory; API keys are
+        with what uses them, Home Assistant's under Connections, 2026-10-24);
       - Import (plays, favourites, ratings and added dates from a server);
       - Diagnostics.
-  - **About** (version, port, file locations) is not a part: it is a sheet opened from the info button at the page's
-    top right, in the floating row (lib/AboutSheet).
+  - **About** (version, running since, the app's version, licence and source, thanks) is not a part: it is a sheet
+    opened from the info button, the own button of the page's floating pill, after its search (lib/AboutSheet; the
+    search, lib/settingsSearch, finds the parts holding a row by its name; 2026-10-24).
+  - **A group with an order** (Home's Sections, Display's Player and Content) has a reset at the right of its heading
+    (lib/settings/OrderReset, the owner 2026-10-24): the order back to its default, Undo in the toast; dimmed while it
+    is the default.
   - **One editor.** Each part is its own file (lib/settings/*Part) over one editor (lib/settings/editor), so what is
     changed in one part shows the Save bar in all of them and survives going from one to another.
   - **Saving.** What a part edits is saved with the Save bar at its foot. A part opens on the settings last read
