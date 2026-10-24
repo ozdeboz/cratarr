@@ -150,3 +150,13 @@ them, from 0035's grid until then.
   grid ran on (on ten library tracks: 0 to 3 gaps of 1 to 3 s in grooves, 19 in an ambient track, 42 in a Chopin
   nocturne). The page counts an interval over twice the beats' typical one round it as a gap: the beat ends after
   1.5 typical intervals and the tempo keeps the typical one, so the turning goes on through it (a5, `beats.ts`).
+
+## Amendment (2026-10-24): the PC hears new music too
+
+Measured on 2026-10-24: hearing one file takes the server about 650 MB at its peak (663 MB for 6 minutes, 737 MB for
+60), whatever else runs. On the NAS, where Cratarr may use 768 MB and uses 170 to 250 MB anyway, that alone goes over;
+it was among the causes of eighteen restarts in a day. The owner chose: **the PC only, off on the NAS**. The server
+hears beats only with `CRATARR_BEAT_THIS=on` (for a server with the memory for it); otherwise new music waits in
+`<data>/beats/wanted.jsonl` for the PC's next run, as the library did, and plays meanwhile with the analysis' grid.
+Every file decode on the server now also takes one turn at a time (`app::analysis_pass`, `HEAVY`), held by the work
+itself rather than by the request that asked.

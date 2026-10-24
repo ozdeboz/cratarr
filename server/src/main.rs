@@ -22,6 +22,7 @@ mod trash;
 mod userdata;
 mod jellyfin;
 mod m3u;
+mod memwatch;
 mod mounts;
 mod moves;
 mod naming;
@@ -221,7 +222,8 @@ async fn main() -> Result<()> {
     tokio::spawn(catalogue::run(app.library.catalogue(), move || linker.library.connected_sources()));
 
     // Decision 0035: the NAS keeps the analysis up to date (after the ThinkBook's first pass, or all of it).
-    app::analysis_pass::run(app.library.catalogue(), app::analysis_pass::Mode::from_env(env("CRATARR_ANALYSIS").as_deref()));
+    memwatch::start();
+    app::analysis_pass::run(app.library.catalogue(), app::analysis_pass::Mode::from_env(env("CRATARR_ANALYSIS").as_deref()), app::analysis_pass::hears_beats(env("CRATARR_BEAT_THIS").as_deref()));
     // The visuals' signals for the next tracks in each queue, before they play (decision 0046, amended).
     app::analysis_pass::look_ahead(app.library.catalogue(), app.play_on.clone());
 

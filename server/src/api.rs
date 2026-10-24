@@ -216,7 +216,9 @@ pub async fn request_ids(mut req: axum::extract::Request, next: axum::middleware
         span.record("conn", c.as_str());
     }
     let started = std::time::Instant::now();
+    let seen = crate::memwatch::request(asked.as_str());
     let mut res = next.run(req).instrument(span.clone()).await;
+    drop(seen);
     let ms = started.elapsed().as_millis();
     if ms > SLOW_MS {
         let status = res.status().as_u16();

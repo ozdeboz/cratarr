@@ -309,6 +309,27 @@ mod tests {
         Track { recording, artist, title, album, length_secs: length }
     }
 
+    /// The process' peak memory so far (Linux), in MB.
+    fn peak_mb() -> f64 {
+        let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+        let kb: f64 = status.lines().find(|l| l.starts_with("VmHWM:")).and_then(|l| l.split_whitespace().nth(1)).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        kb / 1024.0
+    }
+
+    /// What an import's matching costs in memory, on a real library (`CRATARR_LIBRARY`: a copy of `library.sqlite`) and
+    /// 80,000 listens: `cargo test --release -- --ignored matcher_memory --nocapture`.
+    #[test]
+    #[ignore]
+    fn matcher_memory() {
+        let Ok(library) = std::env::var("CRATARR_LIBRARY") else { return };
+        let before = peak_mb();
+        let songs = Matcher::read(Path::new(&library)).unwrap();
+        let read = peak_mb();
+        let names: Vec<(String, String, String)> = (0..80_000).map(|i| (format!("Artist {}", i % 3000), format!("Title {i}"), format!("Album {}", i % 9000))).collect();
+        let found = names.iter().filter(|(a, t, al)| songs.find(&track(t, a, Some(al), None, None)).is_some()).count();
+        println!("peak before {before:.0} MB, after reading the library {read:.0} MB, after 80k lookups {:.0} MB ({found} found)", peak_mb());
+    }
+
     #[test]
     fn a_track_is_found_by_recording_then_artist_then_album_and_its_length_picks_among_namesakes() {
         let mut m = Matcher::default();

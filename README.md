@@ -60,9 +60,9 @@ it your server's address.
   play, artists to explore.
 - **Radio** after each track and **Autoplay** when the queue ends, chosen from your own library
   ([0036](docs/decisions/0036-radio.md)).
-- With [AudioMuse-AI](https://github.com/NeptuneHub/AudioMuse-AI)'s analysis (optional, run separately), mood,
-  energy, danceability and style for every track, and similarity that knows how things sound
-  ([0054](docs/decisions/0054-audiomuse-import.md)).
+- With [AudioMuse-AI](https://github.com/NeptuneHub/AudioMuse-AI)'s analysis (optional, separate software; see
+  [Optional analysis](#optional-analysis)), mood, energy, danceability and style for every track, and similarity that
+  knows how things sound ([0054](docs/decisions/0054-audiomuse-import.md)).
 - **Insights**: your collection, your listening, and a map of your playlists
   ([0064](docs/decisions/0064-one-listening-history.md), [0065](docs/decisions/0065-insights-collection-listening-map.md)).
 
@@ -108,6 +108,18 @@ services:
 - **The data folder** holds `settings.json` (secrets: readable by its owner only) and SQLite databases.
   `library.sqlite` is rebuilt when it is missing; the others are worth backing up.
 
+### Optional analysis
+
+Cratarr analyses every track itself: loudness, tempo, waveform, and what the visuals move to. Two outside projects add
+more. Neither is part of Cratarr or needed to run it. Each runs as its own software, usually on a stronger computer,
+and its results are handed to Cratarr as files in the data folder. What they add is missing without them; everything
+else works as usual.
+
+| | Adds | Without it | How it runs |
+|---|---|---|---|
+| [AudioMuse-AI](https://github.com/NeptuneHub/AudioMuse-AI) | Mood, energy, danceability, style and key per track; similarity by sound for radio, crates and Home | Those filters and sections are empty; radio and similarity go by tags, tempo and listening | AudioMuse-AI analyses the library on its own; `tools/audiomuse_export.py` writes its results to `<data>/audiomuse/` ([0054](docs/decisions/0054-audiomuse-import.md)) |
+| [Beat This!](https://github.com/CPJKU/beat_this) | Beats and downbeats as the model hears them, for the visuals | The visuals keep the beat grid of Cratarr's own analysis | `tools/beat_this_pass.py` hears the files Cratarr lists in `<data>/beats/wanted.jsonl` and returns them to `<data>/beats/in/`; on a server with memory to spare (about 650 MB while it hears), `CRATARR_BEAT_THIS=on` lets Cratarr hear new music itself ([0049](docs/decisions/0049-pulse.md)) |
+
 ### Configuration
 
 Almost everything is set in Settings. The environment covers what has to be known before the page opens:
@@ -118,6 +130,7 @@ Almost everything is set in Settings. The environment covers what has to be know
 | `CRATARR_DATA_DIR` | `/data` in the image | Settings and databases. Without it nothing is kept between starts. |
 | `CRATARR_SNAPCAST_BIND` | `0.0.0.0:1704` | The port for playing in step; empty turns it off. |
 | `CRATARR_SNAPCAST_HOST` | none | The local address players reach that port on (and a Kodi box reaches Cratarr on), when it is not the one they open Cratarr's pages at. |
+| `CRATARR_BEAT_THIS` | off | `on`: the server hears new music's beats with the Beat this! model itself (about 650 MB while it runs). Off, they come from `tools/beat_this_pass.py` on another computer. |
 | `CRATARR_PLAYLIST_DIR` | none | The playlists' folder until a music folder is chosen in Settings. |
 | `CRATARR_SUBSONIC_USER`, `CRATARR_SUBSONIC_PASSWORD` | none | An account made (or its password set) at every start. |
 | `JELLYFIN_URL`, `JELLYFIN_API_KEY`, `CRATARR_PLAYER_CLIENT` | none | A Jellyfin source on the first start, until one is saved in Settings. |

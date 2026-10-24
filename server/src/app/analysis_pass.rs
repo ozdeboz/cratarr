@@ -4,8 +4,16 @@
 //! took: about a quarter of one core, so Cratarr answers as fast as ever meanwhile.
 //!
 //! When it has nothing to analyse, it hears new music's beats with Beat this! (decision 0049, amended; `beat_this`), a
-//! file at a time, resting as long again; and with no beats left to hear either, it works out the waveform in three
-//! bands (`analysis::band_wave`) of a file that has none yet, a file at a time, resting as long again.
+//! file at a time, resting as long again, where `CRATARR_BEAT_THIS=on` asks for it: the model takes about 650 MB while
+//! it hears, more than the NAS's 768 MB leaves beside the rest, so by default the PC hears new music as it heard the
+//! library (`beat_this::write_wanted` lists it; the owner, 2026-10-24). With no beats left to hear either, it works out
+//! the waveform in three bands (`analysis::band_wave`) of a file that has none yet, a file at a time, resting as long
+//! again.
+//!
+//! One file is decoded at a time, whoever asked (`HEAVY`): the pass, a page's visuals, a play's waveform, the look ahead.
+//! The turn is held by the work itself, so a page that stops waiting (a skip, a timeout) cannot let a second decode in
+//! beside one still running: one decode for the visuals takes about half a gigabyte for a moment, and two at once, or
+//! one beside an import, went over the NAS's 768 MB (eighteen restarts, 2026-10-23/24).
 //!
 //! `CRATARR_ANALYSIS`: `keep` (the default: waits until most of the library has an analysis, as after the ThinkBook's
 //! import, then keeps up), `all` (does the first pass itself, when no ThinkBook is at hand), `off`.
@@ -45,8 +53,13 @@ impl Mode {
     }
 }
 
+/// Whether this server hears new music's beats itself (`CRATARR_BEAT_THIS`: `on`; off by default, see the top).
+pub fn hears_beats(v: Option<&str>) -> bool {
+    v.is_some_and(|v| matches!(v.trim().to_lowercase().as_str(), "on" | "1" | "true" | "yes"))
+}
+
 /// Runs the pass in the background for as long as Cratarr runs.
-pub fn run(cat: Arc<Catalogue>, mode: Mode) {
+pub fn run(cat: Arc<Catalogue>, mode: Mode, hear_beats: bool) {
     if mode == Mode::Off {
         tracing::info!("analysis: the NAS's pass is off (CRATARR_ANALYSIS=off)");
         return;
@@ -75,15 +88,19 @@ pub fn run(cat: Arc<Catalogue>, mode: Mode) {
             let batch = tokio::task::spawn_blocking(move || c.unanalysed(50)).await.ok().and_then(|r| r.ok()).unwrap_or_default();
             let batch: Vec<_> = batch.into_iter().filter(|(f, r, _, s, m)| !failed.contains(&(*f, r.clone(), *s, *m))).collect();
             if batch.is_empty() {
-                // Nothing to analyse: new music's beats, one file, then a look again.
+                // Nothing to analyse: new music's beats, one file, then a look again (where this server hears them).
                 let (c, limit) = (cat.clone(), 1 + unheard.len());
-                let next = tokio::task::spawn_blocking(move || crate::app::beat_this::new_music(&c, limit))
-                    .await
-                    .ok()
-                    .and_then(|r| r.ok())
-                    .unwrap_or_default()
-                    .into_iter()
-                    .find(|(f, r, _, s, m)| !unheard.contains(&(*f, r.clone(), *s, *m)));
+                let next = if !hear_beats {
+                    None
+                } else {
+                    tokio::task::spawn_blocking(move || crate::app::beat_this::new_music(&c, limit))
+                        .await
+                        .ok()
+                        .and_then(|r| r.ok())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .find(|(f, r, _, s, m)| !unheard.contains(&(*f, r.clone(), *s, *m)))
+                };
                 let Some((folder, rel, path, size, mtime)) = next else {
                     // No beats to hear either: one file's waveform in three bands, else a rest.
                     let (c, limit) = (cat.clone(), 1 + unbanded.len());
@@ -98,11 +115,13 @@ pub fn run(cat: Arc<Catalogue>, mode: Mode) {
                         tokio::time::sleep(IDLE).await;
                         continue;
                     };
+                    let turn = HEAVY.acquire().await.expect("the turn is never closed");
                     let started = Instant::now();
                     let c = cat.clone();
                     let r = rel.clone();
                     let done = tokio::task::spawn_blocking(move || {
-                        let _one = BAND_WAVES.lock().unwrap_or_else(|e| e.into_inner());
+                        let _turn = turn;
+                        let _job = crate::memwatch::job(format!("band wave: {r}"));
                         let w = crate::analysis::band_wave::work_out(&path)?;
                         c.store_band_wave(folder, &r, size, mtime, &w)
                     })
@@ -124,10 +143,17 @@ pub fn run(cat: Arc<Catalogue>, mode: Mode) {
                     tokio::time::sleep(started.elapsed() * REST).await;
                     continue;
                 };
+                let turn = HEAVY.acquire().await.expect("the turn is never closed");
                 let started = Instant::now();
                 let c = cat.clone();
                 let r = rel.clone();
-                match tokio::task::spawn_blocking(move || crate::app::beat_this::hear_and_keep(&c, folder, &r, &path, size, mtime)).await {
+                match tokio::task::spawn_blocking(move || {
+                    let _turn = turn;
+                    let _job = crate::memwatch::job(format!("Beat this!: {r}"));
+                    crate::app::beat_this::hear_and_keep(&c, folder, &r, &path, size, mtime)
+                })
+                .await
+                {
                     Ok(Ok(n)) => tracing::info!("beats: {rel}: {n} heard in {:.1} s", started.elapsed().as_secs_f64()),
                     Ok(Err(e)) => {
                         tracing::warn!("beats: {rel}: {e:#}");
@@ -142,10 +168,13 @@ pub fn run(cat: Arc<Catalogue>, mode: Mode) {
                 continue;
             }
             for (folder, rel, path, size, mtime) in batch {
+                let turn = HEAVY.acquire().await.expect("the turn is never closed");
                 let started = Instant::now();
                 let c = cat.clone();
                 let r = rel.clone();
                 let done = tokio::task::spawn_blocking(move || {
+                    let _turn = turn;
+                    let _job = crate::memwatch::job(format!("analysis: {r}"));
                     let genres = c.genres_of_file(folder, &r);
                     let a = crate::analysis::analyse(&path, &genres)?;
                     c.store_analysis(folder, &r, size, mtime, &a)
@@ -168,9 +197,8 @@ pub fn run(cat: Arc<Catalogue>, mode: Mode) {
     });
 }
 
-/// One waveform in three bands worked out at a time, whether a play asked for it or the pass: a play's waits for the
-/// pass's file to finish (a second or two).
-static BAND_WAVES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// The one decode at a time (see the top). A turn moves into the blocking work and ends with it.
+static HEAVY: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 
 /// A file's waveform in three bands (`analysis::band_wave`): as kept, or worked out now and kept, the first time a
 /// track plays. `None`: the file cannot be decoded, or it took too long (`DECODE`; it is still kept when it comes).
@@ -180,8 +208,10 @@ pub async fn band_wave(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<
     if let Some(Some(w)) = kept.filter(|k| k.as_ref().is_some_and(BandWave::current)) {
         return Some(w);
     }
+    let turn = tokio::time::timeout(TURN, HEAVY.acquire()).await.ok()?.ok()?;
     let work = tokio::task::spawn_blocking(move || -> anyhow::Result<BandWave> {
-        let _one = BAND_WAVES.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = turn;
+        let _job = crate::memwatch::job(format!("band wave when asked for: {rel}"));
         // Kept while this one waited.
         if let Some(Some(w)) = cat.band_wave_of(folder, &rel).filter(|k| k.as_ref().is_some_and(BandWave::current)) {
             return Ok(w);
@@ -209,8 +239,6 @@ pub async fn band_wave(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<
     }
 }
 
-/// What the visuals ask for (decision 0046) worked out when first asked: one decode at a time, beside the pass.
-static ON_DEMAND: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 /// The files decoded for the visuals, one entry a decode: the tests count their own files' (a count of all would count
 /// another test's too, run beside them).
 #[cfg(test)]
@@ -254,9 +282,13 @@ async fn visual(cat: Arc<Catalogue>, folder: i64, rel: String, with_signals: boo
     if enough(&k) {
         return Some((k.0.unwrap_or_default(), k.1.unwrap_or_default()));
     }
-    // The permit is held here, not by the decode: a decode past its deadline goes on alone and lets the next one in.
-    let _turn = tokio::time::timeout(TURN, ON_DEMAND.acquire()).await.ok()?.ok()?;
-    let work = tokio::task::spawn_blocking(move || work_out(&cat, folder, &rel, with_signals));
+    // The turn goes with the decode: one past its deadline, or whose page stopped waiting, still holds it until done.
+    let turn = tokio::time::timeout(TURN, HEAVY.acquire()).await.ok()?.ok()?;
+    let work = tokio::task::spawn_blocking(move || {
+        let _turn = turn;
+        let _job = crate::memwatch::job(format!("visuals when asked for: {rel}"));
+        work_out(&cat, folder, &rel, with_signals)
+    });
     match tokio::time::timeout(DECODE, work).await {
         Ok(Ok(Ok(got))) => Some(got),
         Ok(Ok(Err(e))) => {
@@ -365,9 +397,15 @@ async fn ahead(cat: Arc<Catalogue>, folder: i64, rel: String) {
     if beats.is_some() && signals.is_some() {
         return;
     }
-    let Ok(_turn) = ON_DEMAND.try_acquire() else { return };
+    let Ok(turn) = HEAVY.try_acquire() else { return };
     let r = rel.clone();
-    match tokio::task::spawn_blocking(move || work_out(&cat, folder, &rel, true)).await {
+    match tokio::task::spawn_blocking(move || {
+        let _turn = turn;
+        let _job = crate::memwatch::job(format!("visuals ahead: {rel}"));
+        work_out(&cat, folder, &rel, true)
+    })
+    .await
+    {
         Ok(Ok(_)) => {}
         Ok(Err(e)) => tracing::warn!("analysis: {r}'s signals ahead of its turn: {e:#}"),
         Err(e) => tracing::warn!("analysis: {r}'s signals ahead of its turn: {e}"),
@@ -417,6 +455,29 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    #[tokio::test]
+    async fn a_decode_keeps_its_turn_when_the_page_stops_waiting() {
+        // As `visual` takes it, on a gate of the test's own.
+        static GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+        let asked = tokio::spawn(async {
+            let turn = GATE.acquire().await.unwrap();
+            tokio::task::spawn_blocking(move || {
+                let _turn = turn;
+                std::thread::sleep(Duration::from_millis(400));
+            })
+            .await
+        });
+        while GATE.available_permits() == 1 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        // The page stops waiting: the decode goes on, and nothing else gets in beside it.
+        asked.abort();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(GATE.try_acquire().is_err(), "a second decode got in beside the first");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(GATE.try_acquire().is_ok(), "the turn ends with the decode");
+    }
+
     #[test]
     fn the_next_tracks_of_each_queue_are_looked_ahead_to_once() {
         let t = |id: &str| ("cratarr".to_string(), id.to_string());
@@ -428,6 +489,13 @@ mod tests {
             (1, vec![t("x"), t("y")]),
         ];
         assert_eq!(upcoming(&queues), vec![t("b"), t("c"), t("e")]);
+    }
+
+    #[test]
+    fn the_server_hears_beats_only_when_asked_to() {
+        assert!(!hears_beats(None));
+        assert!(!hears_beats(Some("off")));
+        assert!(hears_beats(Some(" On ")));
     }
 
     #[test]

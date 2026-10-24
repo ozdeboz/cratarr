@@ -81,3 +81,18 @@ AudioMuse analysis is done."
 - Seen so far: a crate's Start radio seeds from 300 of its tracks (drawn by the server since 73.2) and leaves the seed
   out; a broad crate (Unlisted, 16,000 tracks) makes a blurry profile. Play as radio (only the crate's tracks) is a
   different path again.
+
+## AudioMuse-AI inside Cratarr, for bigger servers
+
+AudioMuse-AI's analysis (0054) comes from separate software: its own containers and Postgres on a stronger computer,
+its results handed over as a file. The owner (2026-10-24): having Beat This! and AudioMuse "opt in integrated would be
+nice though for people running bigger servers". Beat This! has that now (`CRATARR_BEAT_THIS=on`, 0049's amendment of
+2026-10-24). AudioMuse-AI is a larger step.
+
+- What it would take: its models (MusiCNN for style and the sounds-like vector, CLAP for moods) run by the server
+  itself, through tract or an ONNX runtime as Beat This! is, a file at a time behind the analysis' single turn, and
+  only when asked for (an environment setting, off by default).
+- Why it waits: CLAP alone needs far more memory and time per track than the NAS can give (a 768 MB server already
+  could not hold Beat This!'s 650 MB); the models' licences and sizes have to be checked; the separate route works.
+- The catch: the results must match the separate route's, so a library analysed one way and new music the other way
+  stay comparable.
