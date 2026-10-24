@@ -21,15 +21,18 @@
   const s = $derived(ed.s!);
   const LIDARR = 'lidarr';
   const HOME_ASSISTANT = 'home-assistant';
+  // The listening services' own pages (lib/settings/ListeningPart).
+  const LISTENING: Record<string, string> = { listenbrainz: 'ListenBrainz', lastfm: 'Last.fm' };
+  const own = (t: string) => t === LIDARR || t === HOME_ASSISTANT || t in LISTENING;
   const LIDARR_MORE = "With Lidarr's address and API key, Delete in Incoming also stops Lidarr fetching that album again.";
 
   // Its id only beside another server of its kind.
   const label = (d: Draft) => `${ed.kindOf(d)?.label ?? d.kind}${ed.drafts.filter((x) => x.kind === d.kind).length > 1 ? ` (${d.id})` : ''}`;
-  const draft = $derived(thing && thing !== LIDARR && thing !== HOME_ASSISTANT ? (ed.drafts.find((d) => d.id === thing) ?? null) : null);
-  nameThing(() => (thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : draft ? label(draft) : null));
+  const draft = $derived(thing && !own(thing) ? (ed.drafts.find((d) => d.id === thing) ?? null) : null);
+  nameThing(() => (thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : thing && thing in LISTENING ? LISTENING[thing] : draft ? label(draft) : null));
   // A server removed (or never there): back to the list.
   $effect(() => {
-    if (thing && thing !== LIDARR && thing !== HOME_ASSISTANT && !draft) backFromThing('connections');
+    if (thing && !own(thing) && !draft) backFromThing('connections');
   });
 
   /** A server's state in a line: off, connected (to what), or what is wrong. */
@@ -160,6 +163,8 @@
   {/if}
 {:else if thing === HOME_ASSISTANT}
   <HomeAssistantPart page />
+{:else if thing && thing in LISTENING}
+  <ListeningPart {thing} />
 {:else if thing === LIDARR}
   <Group title="Connection">
     <Item

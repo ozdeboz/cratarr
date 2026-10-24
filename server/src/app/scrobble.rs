@@ -87,6 +87,40 @@ pub fn signature(params: &BTreeMap<&str, String>, secret: &str) -> String {
     Md5::digest(s.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// A sign-in at Last.fm under way: whose account it is for, and whether it began in the Android app (then the way back
+/// is the app's own link, `cratarr://connected/lastfm`). Found by a one-time code in the address Last.fm comes back to,
+/// so the way back needs no sign-in to Cratarr: it may end in a browser that has none (the app opens Last.fm there).
+#[derive(Debug, Clone)]
+pub struct Pending {
+    pub account: String,
+    pub app: bool,
+}
+
+/// How long a sign-in at Last.fm may take.
+const PENDING_FOR: Duration = Duration::from_secs(600);
+
+fn pending_list() -> &'static std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Pending)>> {
+    static PENDING: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Pending)>>> = std::sync::OnceLock::new();
+    PENDING.get_or_init(Default::default)
+}
+
+/// A new sign-in's one-time code.
+pub fn pending(p: Pending) -> String {
+    let mut b = [0u8; 16];
+    getrandom::fill(&mut b).expect("the operating system's random source");
+    let code: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    let mut list = pending_list().lock().unwrap_or_else(|e| e.into_inner());
+    list.retain(|_, (at, _)| at.elapsed() < PENDING_FOR);
+    list.insert(code.clone(), (std::time::Instant::now(), p));
+    code
+}
+
+/// The sign-in a code was made for, once (and only within its ten minutes).
+pub fn take_pending(code: &str) -> Option<Pending> {
+    let mut list = pending_list().lock().unwrap_or_else(|e| e.into_inner());
+    list.remove(code).filter(|(at, _)| at.elapsed() < PENDING_FOR).map(|(_, p)| p)
+}
+
 /// Where to send the browser to sign in to Last.fm, coming back to `callback`.
 pub fn lastfm_sign_in(api_key: &str, callback: &str) -> Result<String> {
     let mut url = reqwest::Url::parse("https://www.last.fm/api/auth/")?;
@@ -382,6 +416,15 @@ mod tests {
         p.insert("format", "json".into());
         let want: String = Md5::digest(b"api_keykmethodauth.getSessiontokents").iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(signature(&p, "s"), want, "format left out");
+    }
+
+    #[test]
+    fn a_sign_ins_code_is_good_once() {
+        let code = pending(Pending { account: "me".into(), app: true });
+        assert_eq!(code.len(), 32);
+        assert!(take_pending(&code).is_some_and(|p| p.account == "me" && p.app));
+        assert!(take_pending(&code).is_none(), "used");
+        assert!(take_pending("not a code").is_none());
     }
 
     #[test]

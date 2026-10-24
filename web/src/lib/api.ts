@@ -1473,7 +1473,8 @@ export const getScrobbles = () => quietly<{ targets: ScrobbleTarget[] }>('/api/s
 /** ListenBrainz connected with the user token from its settings page (checked there first). */
 export const scrobbleListenBrainz = (token: string) => post<{ name: string }>('/api/scrobble/listenbrainz', { token });
 /** Last.fm's API key and shared secret kept; the answer is Last.fm's sign-in page, which comes back to `callback`. */
-export const scrobbleLastFm = (api_key: string, api_secret: string, callback: string) => post<{ url: string }>('/api/scrobble/lastfm', { api_key, api_secret, callback });
+export const scrobbleLastFm = (api_key: string, api_secret: string, callback: string, app: boolean) =>
+  post<{ url: string }>('/api/scrobble/lastfm', { api_key, api_secret, callback, app });
 export const forgetScrobble = (target: string) => request<void>(`/api/scrobble/${encodeURIComponent(target)}`, { method: 'DELETE' });
 /** Every listen imported from ListenBrainz out of the asking account's history again: how many. */
 export const undoListenBrainz = () => request<{ removed: number }>('/api/history/listenbrainz', { method: 'DELETE' });

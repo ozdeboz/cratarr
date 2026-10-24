@@ -124,7 +124,7 @@
       <DiagnosticsPart />
     {:else if section === 'connections' && !me.admin}
       <!-- Anyone's own: their listening services (decision 0068). -->
-      <ListeningPart />
+      <ListeningPart {thing} own />
     {:else if !ed.s}
       {#if !ed.loadError}<PageLoading />{/if}
     {:else if section === 'connections'}

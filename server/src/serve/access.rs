@@ -33,7 +33,7 @@ fn text<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 }
 
 /// What anyone may load: the sign-in page (and signing out), the web app's manifest, service worker and icons, the
-/// health check, the proxy's check, and the OpenSubsonic API. Plain paths only: none that a server could read as
+/// health check, the proxy's check, the OpenSubsonic API, and Last.fm's way back from a sign-in. Plain paths only: none that a server could read as
 /// another one (`..`, encoded dots or slashes, doubled slashes).
 pub fn public(uri: &str) -> bool {
     let path = path_of(uri);
@@ -42,6 +42,8 @@ pub fn public(uri: &str) -> bool {
     plain
         && (matches!(path, "/signin" | "/signout" | "/manifest.webmanifest" | "/sw.js" | "/api/health" | "/api/auth/check")
             || path.starts_with("/icons/")
+            // Last.fm's way back from a sign-in, found by its one-time code (`app::scrobble::pending`).
+            || path.starts_with("/api/scrobble/lastfm/callback/")
             || path.starts_with("/rest/"))
 }
 

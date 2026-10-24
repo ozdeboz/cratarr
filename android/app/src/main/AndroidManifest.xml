@@ -37,6 +37,15 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Cratarr's own link, cratarr://connected/<service>: the way back from a sign-in in the browser (Last.fm's,
+                 decision 0068). Not a verified link: those name the server's address when the app is built, and every
+                 install has its own. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="cratarr" android:host="connected" />
+            </intent-filter>
         </activity>
 
         <service
