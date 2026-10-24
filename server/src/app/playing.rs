@@ -528,6 +528,12 @@ impl PlayingService {
         Ok(stars.min(5))
     }
 
+    /// The favourite tracks of a connected server (their ids): Home's Favourite tracks.
+    pub async fn favorite_tracks(&self, source_id: &str) -> Result<Vec<String>, ToggleError> {
+        let (_, s) = self.source(source_id)?;
+        s.favorite_tracks().await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+    }
+
     /// The favourite albums of a connected server (their ids): the Library's Favourites only, the album panel's heart.
     pub async fn favorite_albums(&self, source_id: &str) -> Result<Vec<String>, ToggleError> {
         let (_, s) = self.source(source_id)?;

@@ -6,7 +6,7 @@
   // from the past (the favourite tracks unplayed longest) and Grave digging (the albums most like the taste and furthest
   // from the listening), and System status (claude-632's, lib/HomeStatus). A tile with nothing to show is left out.
   import { onMount, type Snippet } from 'svelte';
-  import { coverUrl, crateRows, getCrate, getDigging, getMoment, heardAlbums, playlistStats, type Digging, type Moment, type PlaylistRow } from './lib/api';
+  import { coverUrl, crateRows, getCrate, getDigging, getMoment, getFavoriteAlbums, getFavoriteTracks, heardAlbums, playlistStats, type Digging, type Moment, type PlaylistRow } from './lib/api';
   import AlbumCard from './lib/AlbumCard.svelte';
   import { addedOn, albumUses, albumUsesKnown, library, loadAlbumUses, readLibrary } from './lib/albums.svelte';
   import { albumCoverUrl } from './lib/api';
@@ -25,6 +25,7 @@
   import { prefs, type HomePart } from './lib/prefs.svelte';
   import { HOME_HEADER, localCovers } from './lib/localCovers.svelte';
   import { me } from './lib/me.svelte';
+  import greet from 'greet-by-time';
   import { loadQueues, queues, queuesVersion, switchQueue } from './lib/queueHistory.svelte';
   import SectionHead from './lib/SectionHead.svelte';
   import PageLoading from './lib/PageLoading.svelte';
@@ -241,6 +242,41 @@
     }
   }
 
+  // Favourite albums and Favourite tracks (the owner, 2026-10-24: the standard ones, off until switched on): Cratarr's
+  // own, asked for only when switched on.
+  let favAlbumIds = $state<string[] | null>(null);
+  let favRows = $state<PlaylistRow[] | null>(null);
+  $effect(() => {
+    if (!order.includes('favAlbums') || favAlbumIds) return;
+    getFavoriteAlbums('cratarr').then(
+      (ids) => (favAlbumIds = ids),
+      () => (favAlbumIds = []),
+    );
+  });
+  $effect(() => {
+    if (!order.includes('favTracks') || favRows) return;
+    getFavoriteTracks().then(
+      (r) => (favRows = r.rows.filter((x) => x.id && !x.missing)),
+      () => (favRows = []),
+    );
+  });
+  const favAlbums = $derived.by(() => {
+    const own = sources.find((s) => s.id === 'cratarr')?.albums ?? [];
+    return (favAlbumIds ?? []).flatMap((id) => own.find((a) => a.id === id) ?? []);
+  });
+  /** Plays the favourite tracks (`from`: from that one). */
+  async function playFavourites(from?: string) {
+    if (!favRows?.length) return;
+    starting = true;
+    try {
+      await playCollection({ kind: 'tracks', source: 'cratarr', ids: favRows.map((t) => t.id!) }, 'play', 'Favourite tracks', from);
+    } catch (e) {
+      toast.fail(e, 'Could not start playing');
+    } finally {
+      starting = false;
+    }
+  }
+
   // Progressive loading (the owner, 2026-10-23: "the first component should show first and the second, instead of
   // scattered"): a section shows once its answer is in and every one above it has shown (or come back empty), top to
   // bottom; one slow answer holds those under it no longer than PATIENCE, then each shows as it comes.
@@ -264,16 +300,40 @@
     graves: dugIn && !!library.view,
     explore: exploreIn,
     status: statusIn,
+    favAlbums: favAlbumIds !== null && !!library.view,
+    favTracks: favRows !== null,
   });
   const turn = (part: Part) => settled[part] && (!patient || order.slice(0, order.indexOf(part)).every((x) => settled[x]));
   /** Nothing shown yet and something still to come: the page's loader, not a blank page. */
   const loading = $derived(!order.some(turn) && !order.every((x) => settled[x]));
 
-  /** Good morning, afternoon or evening, by this device's clock (from 5, 12 and 18 o'clock). */
-  function greeting() {
-    const h = new Date().getHours();
-    return h >= 5 && h < 12 ? 'Good morning' : h >= 12 && h < 18 ? 'Good afternoon' : 'Good evening';
-  }
+  /** The European days a greeting wishes (make-a-wish's dates without the American ones, the owner 2026-10-24), by
+   *  `month-day`. */
+  const DAYS: Record<string, string> = {
+    '1-1': 'Happy New Year',
+    '2-14': "Happy Valentine's Day",
+    '3-8': "Happy International Women's Day",
+    '4-22': 'Happy Earth Day',
+    '5-1': 'Happy Labour Day',
+    '6-21': 'Happy World Music Day',
+    '8-19': 'Happy World Photography Day',
+    '9-21': 'Happy International Day of Peace',
+    '10-31': 'Happy Halloween',
+    '12-25': 'Merry Christmas',
+    '12-31': "Happy New Year's Eve",
+  };
+  /** One pick per visit: the greeting stays while the page shows. */
+  const pick = Math.random();
+  /** The personal greeting (Settings › Home): a European day's wish on its day, else one of greet-by-time's greetings
+   *  for the time of day (the night is the evening's), with their name when it is known. */
+  const greeting = $derived.by(() => {
+    const now = new Date();
+    const h = now.getHours();
+    const day = DAYS[`${now.getMonth() + 1}-${now.getDate()}`];
+    const list = h >= 5 && h < 12 ? greet.morningGreetings : h >= 12 && h < 18 ? greet.dayGreetings : greet.eveningGreetings;
+    const words = day ?? list[Math.floor(pick * list.length)];
+    return me.name ? `${words}, ${me.name}!` : `${words}!`;
+  });
 
   /** Each section, drawn where the user's order puts it. */
   const PARTS: Record<Part, Snippet> = {
@@ -285,6 +345,8 @@
     graves: gravesPart,
     explore: explorePart,
     status: statusPart,
+    favAlbums: favAlbumsPart,
+    favTracks: favTracksPart,
   };
 
   function open(b: Back) {
@@ -306,7 +368,7 @@
     <section class="moment" class:top={order[0] === 'moment'} data-sky={moment.sky} class:dark={moment.dark} style:--photo={skyPhoto ? `url(${skyPhoto})` : 'none'} aria-label={moment.name}>
       {#if prefs.homeGreeting}
         <!-- The personal greeting (Settings › Home): the time of day and their name, then what plays here. -->
-        <h2>{greeting()}{me.name ? `, ${me.name}` : ''}</h2>
+        <h2>{greeting}</h2>
         <p class="for-now">Best for now</p>
       {:else}
         <h2>{moment.name}</h2>
@@ -433,6 +495,40 @@
 {#snippet statusPart()}
   <!-- System status (lib/HomeStatus): an administrator's, shown only when something waits. -->
   <div class="turn" class:held={!turn('status')}><HomeStatus onsettled={() => (statusIn = true)} /></div>
+{/snippet}
+
+{#snippet favAlbumsPart()}
+  {#if turn('favAlbums') && favAlbums.length}
+    <section aria-label="Favourite albums">
+      <SectionHead title="Favourite albums" />
+      <ul class="shelf">
+        {#each favAlbums as a (a.id)}
+          <li><AlbumCard source="cratarr" album={a} lines={[a.artist ?? '', a.year ? String(a.year) : '']} /></li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
+{/snippet}
+
+{#snippet favTracksPart()}
+  {#if turn('favTracks') && favRows?.length}
+    <section aria-label="Favourite tracks">
+      <SectionHead title="Favourite tracks" onplay={() => playFavourites()} busy={starting} />
+      <ul class="back">
+        {#each favRows.slice(0, 12) as t (t.id)}
+          <li>
+            <button disabled={starting} onclick={() => playFavourites(t.id!)}>
+              <span class="cover"><Cover src={coverUrl({ source: 'cratarr', id: t.id!, album_id: t.album_id })} /></span>
+              <span class="text">
+                <span class="title">{t.name ?? t.file}</span>
+                <span class="sub">{[t.artist, t.album].filter(Boolean).join(' · ')}</span>
+              </span>
+            </button>
+          </li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
 {/snippet}
 
 <style>

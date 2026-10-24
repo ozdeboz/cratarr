@@ -3,7 +3,7 @@
   // as the player's details and the profile's rows); and its header: a personal greeting in place of the moment's name,
   // and a picture of one's own in place of the weather's sky, kept on this device (lib/localCovers). Acts at once.
   import { HOME_HEADER, HOME_HEADER_PX, localCovers, removeLocalPicture, setLocalPicture } from '../localCovers.svelte';
-  import { HOME_PARTS, prefs } from '../prefs.svelte';
+  import { HOME_PARTS, homeDefault, prefs } from '../prefs.svelte';
   import { toast } from '../toast.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
@@ -11,9 +11,9 @@
   import { offerReset } from './reset.svelte';
 
   offerReset(
-    () => 'All sections on, in their first order; the moment named by its music and its sky the weather’s.',
+    () => 'The sections as they came, in their first order; the moment named by its music and its sky the weather’s.',
     () => {
-      prefs.homeParts = HOME_PARTS.map((p) => p.id);
+      prefs.homeParts = homeDefault();
       prefs.homeGreeting = false;
       void removeLocalPicture(HOME_HEADER);
     },

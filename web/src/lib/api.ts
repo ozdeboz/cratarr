@@ -1352,6 +1352,8 @@ export const getFavorites = (source: string, ids: string[]) =>
 
 /** The favourite albums of a server (their ids): the Library's Favourites only and the albums' hearts. */
 export const getFavoriteAlbums = (source: string) => quietly<string[]>(`/api/favorites/${encodeURIComponent(source)}/albums`);
+/** Cratarr's own favourite tracks as rows (Home's Favourite tracks), at most 100. */
+export const getFavoriteTracks = () => quietly<{ source: string; rows: PlaylistRow[] }>('/api/favorites/cratarr/tracks');
 
 /** Which playlists (by name) are favourites, as Finamp's playlist hearts (decision 0023). */
 export const getPlaylistFavorites = (source?: string) => quietly<Record<string, boolean>>(`/api/playlists/favorites${follow(source)}`);
