@@ -15,6 +15,7 @@
     onopen,
     onfront,
     onspare,
+    onmenu,
     marked,
   }: {
     covers: string[];
@@ -27,6 +28,9 @@
     onopen?: (i: number) => void;
     /** The front cover changed: its place. */
     onfront?: (i: number) => void;
+    /** A long-press or a right-click: the front cover's menu, by its place (the owner, 2026-10-24: in every flow, as
+     *  everywhere, decision 0058). */
+    onmenu?: (i: number, rect: DOMRect) => void;
     /** The height the covers leave unused (they sit at the foot): what holds them can centre them with what follows. */
     onspare?: (px: number) => void;
   } = $props();
@@ -108,12 +112,29 @@
   // one opens and one beside it comes to the front.
   // A gesture that goes up or down is the page's scroll, never a tap (the owner, 2026-10-23: "opening while scrolling
   // really fucks me up"); the browser takes it over and cancels it here.
-  let start: { x: number; y: number; pos: number; moved: boolean; scroll: boolean } | null = null;
+  // A press held still (lib/longpress's time) or a right-click is the front cover's menu, and then no tap.
+  let start: { x: number; y: number; pos: number; moved: boolean; scroll: boolean; menu: boolean } | null = null;
   let tapX = 0;
+  let hold: ReturnType<typeof setTimeout> | undefined;
+  let root = $state<HTMLElement>();
+  const HOLD_MS = 500;
+  function menuNow() {
+    if (!onmenu || !n || (start && (start.moved || start.scroll || start.menu))) return;
+    if (start) start.menu = true;
+    dragging = false;
+    onmenu(at, root?.getBoundingClientRect() ?? new DOMRect());
+  }
   function down(e: PointerEvent) {
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    start = { x: e.clientX, y: e.clientY, pos, moved: false, scroll: false };
+    start = { x: e.clientX, y: e.clientY, pos, moved: false, scroll: false, menu: false };
     tapX = e.clientX - (e.currentTarget as HTMLElement).getBoundingClientRect().left;
+    clearTimeout(hold);
+    if (onmenu && e.button === 0) hold = setTimeout(menuNow, HOLD_MS);
+  }
+  function context(e: MouseEvent) {
+    if (!onmenu) return;
+    e.preventDefault();
+    menuNow();
   }
   function move(e: PointerEvent) {
     if (!start || start.scroll) return;
@@ -122,22 +143,31 @@
     if (!start.moved) {
       if (Math.abs(dy) >= 6 && Math.abs(dy) > Math.abs(dx)) {
         start.scroll = true;
+        clearTimeout(hold);
         return;
       }
       if (Math.abs(dx) < 6) return;
     }
+    clearTimeout(hold);
+    if (start.menu) return;
     start.moved = true;
     dragging = true;
     pos = start.pos - dx / (front.w * 0.42);
   }
   function cancel() {
+    clearTimeout(hold);
     start = null;
     dragging = false;
     pos = Math.round(pos);
   }
   function up() {
+    clearTimeout(hold);
     if (!start) return;
     if (start.scroll) return cancel();
+    if (start.menu) {
+      start = null;
+      return;
+    }
     const tap = !start.moved;
     start = null;
     dragging = false;
@@ -164,6 +194,7 @@
 
 <div
   class="flow"
+  bind:this={root}
   bind:clientWidth={size}
   bind:clientHeight={height}
   style:perspective="{620 * front.u}px"
@@ -172,6 +203,7 @@
   tabindex="0"
   onkeydown={key}
   onpointerdown={down}
+  oncontextmenu={context}
   onpointermove={move}
   onpointerup={up}
   onpointercancel={cancel}

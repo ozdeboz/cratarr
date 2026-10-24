@@ -6,9 +6,30 @@
   // from the past (the favourite tracks unplayed longest) and Grave digging (the albums most like the taste and furthest
   // from the listening), and System status (claude-632's, lib/HomeStatus). A tile with nothing to show is left out.
   import { onMount, type Snippet } from 'svelte';
-  import { albumView, coverUrl, crateRows, getCrate, getDigging, getMoment, getFavoriteAlbums, getFavoriteTracks, heardAlbums, playlistStats, type Digging, type Moment, type PlaylistRow } from './lib/api';
+  import {
+    albumView,
+    coverUrl,
+    getDigging,
+    getFavoriteAlbums,
+    getFavoriteTracks,
+    getHomeBack,
+    getHomeNew,
+    getHomeWeek,
+    getMoment,
+    type Digging,
+    type HomeBack,
+    type HomeWeek,
+    type ListedAlbum,
+    type Moment,
+    type PlaylistRow,
+  } from './lib/api';
+  import AlbumMenu from './lib/AlbumMenu.svelte';
+  import { longpress } from './lib/longpress';
+  import PlaylistMenu from './lib/PlaylistMenu.svelte';
+  import QueuesSheet from './lib/QueuesSheet.svelte';
+  import TrackMenu, { type MenuTrack } from './lib/TrackMenu.svelte';
   import AlbumCard from './lib/AlbumCard.svelte';
-  import { addedOn, albumUses, albumUsesKnown, library, loadAlbumUses, readLibrary } from './lib/albums.svelte';
+  import { addedOn, library, readLibrary } from './lib/albums.svelte';
   import { albumCoverUrl } from './lib/api';
   import Cover from './lib/Cover.svelte';
   import CoverFlow from './lib/CoverFlow.svelte';
@@ -26,12 +47,11 @@
   import { HOME_HEADER, localCovers } from './lib/localCovers.svelte';
   import { me } from './lib/me.svelte';
   import greet from 'greet-by-time';
-  import { loadQueues, queues, queuesVersion, switchQueue } from './lib/queueHistory.svelte';
+  import { queuesPlayer, queuesVersion, switchQueue } from './lib/queueHistory.svelte';
   import SectionHead from './lib/SectionHead.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { toast } from './lib/toast.svelte';
 
-  const NEWEST = 12;
   const WEEK = `${LIKE}week`;
 
   onMount(() => {
@@ -39,38 +59,16 @@
   });
   const sources = $derived((library.view?.sources ?? []).filter((s) => s.id !== DEVICE));
 
-  // New for you (the owner, 2026-10-23): every used library's newest albums, those heard 5% or more of left out (asked
-  // of the server for the newest few dozen).
-  const CANDIDATES = 60;
-  const candidates = $derived(
-    sources
-      .flatMap((s) => s.albums.filter((a) => a.added !== null).map((a) => ({ source: s.id, a })))
-      .sort((x, y) => y.a.added! - x.a.added!)
-      .slice(0, CANDIDATES),
-  );
-  let heard = $state<Set<string> | null>(null);
-  let heardOf: string | null = null;
-  // Asked again whenever the candidates change (the library read after Home showed): until the answer, none show
-  // rather than albums already heard that then drop out (the owner, 2026-10-23).
-  $effect(() => {
-    const ids = candidates.filter((c) => c.source === 'cratarr').map((c) => c.a.id);
-    // The same albums (the library read again): what was heard stands.
-    const asked = ids.join(',');
-    if (asked === heardOf) return;
-    heardOf = asked;
-    heard = null;
-    if (!ids.length) {
-      if (library.view) heard = new Set();
-      return;
-    }
-    let gone = false;
-    heardAlbums(ids).then(
-      (r) => !gone && (heard = new Set(r.heard)),
-      () => !gone && (heard = new Set()),
+  // New for you (the owner, 2026-10-23): the server's (app::home): every used library's newest albums, those heard 5% or
+  // more of and those without a cover left out.
+  let newest = $state<{ source: string; a: ListedAlbum }[]>([]);
+  let newestIn = $state(false);
+  onMount(() => {
+    getHomeNew().then(
+      (r) => ((newest = r.albums.map(({ source, ...a }) => ({ source, a }))), (newestIn = true)),
+      () => (newestIn = true),
     );
-    return () => (gone = true);
   });
-  const newest = $derived(heard ? candidates.filter((c) => !(c.source === 'cratarr' && heard!.has(c.a.id))).slice(0, NEWEST) : []);
   /** The section on top's Play (the owner, 2026-10-24): all of it, from the album in front (those before it stay before
    *  it in the queue). Blast from the past: its tracks from the front album's; the others: their albums one after the
    *  other in their order, on the front one's server. */
@@ -97,33 +95,18 @@
     }
   }
 
-  // Sounds like your week: its first rows (for the covers), its size, its genres, and how many tracks were played.
-  let week = $state<{ name: string; source: string; total: number; rows: PlaylistRow[]; genres: string[]; played: number } | null>(null);
+  // Sounds like your week: the server's (app::home): its size, its genres, how many tracks were played, and its first
+  // albums with a cover for the mosaic.
+  let week = $state<HomeWeek | null>(null);
   let weekIn = $state(false);
   onMount(() => {
-    Promise.all([crateRows(WEEK, 0, 40, prefs.source || undefined, undefined, undefined, { without: hiddenLibraries() }), getCrate(WEEK)]).then(
-      ([r, d]) => {
-        const like = d.conditions.find((c) => c.value.kind === 'like')?.value;
-        week = { name: d.name, source: r.source, total: r.total, rows: r.rows, genres: r.genres.slice(0, 4), played: like?.kind === 'like' ? like.of.filter((_, i) => (like.weights?.[i] ?? 1) > 0).length : 0 };
-        weekIn = true;
-      },
+    getHomeWeek(prefs.source || undefined, hiddenLibraries()).then(
+      (r) => ((week = r.week), (weekIn = true)),
       () => ((week = null), (weekIn = true)),
     );
   });
   /** Its first four albums, as a seeded crate's mosaic (lib/PlaylistView). */
-  const weekCovers = $derived.by(() => {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const r of week?.rows ?? []) {
-      if (!r.id || r.missing) continue;
-      const key = r.album_id ?? `${r.album ?? ''}\n${r.album_artist ?? r.artist ?? ''}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(coverUrl({ source: week!.source, id: r.id, album_id: r.album_id }));
-      if (out.length === 4) break;
-    }
-    return out;
-  });
+  const weekCovers = $derived((week?.covers ?? []).map((c) => coverUrl({ source: week!.source, id: c.track, album_id: c.album_id })));
   let starting = $state(false);
   async function playWeek(how: 'play' | 'shuffle') {
     if (!week) return;
@@ -178,51 +161,19 @@
     }
   }
 
-  // Jump back in: the albums played last (each server's plays) and the playlists played last.
-  $effect(() => {
-    for (const s of sources) if (!albumUses[s.id]) void loadAlbumUses(s.id);
-  });
-  let lastPlayed = $state<Record<string, number>>({});
-  let lastPlayedIn = $state(false);
-  onMount(() => {
-    playlistStats().then(
-      (st) => ((lastPlayed = Object.fromEntries(Object.entries(st).flatMap(([id, s]) => (s.last_played ? [[id, s.last_played]] : [])))), (lastPlayedIn = true)),
-      () => (lastPlayedIn = true),
-    );
-  });
-  // The queues this device's player keeps (lib/queueHistory), read again when it says they changed.
+  // Jump back in: the server's (app::home): the albums and playlists played last and this player's queues left, a queue
+  // that is an album's tracks shown as that album; asked again when the queues change.
+  let back = $state<HomeBack[]>([]);
+  let backIn = $state(false);
   $effect(() => {
     void queuesVersion();
-    void loadQueues();
+    getHomeBack(queuesPlayer()).then(
+      (r) => ((back = r.items), (backIn = true)),
+      () => (backIn = true),
+    );
   });
   /** A queue's icon by where it came from, as the queue switcher has it (lib/QueuesSheet). */
   const FROM: Record<string, IconName> = { playlist: 'playlists', album: 'albums', favourites: 'heart', library: 'library', tracks: 'music', player: 'speaker' };
-  type Back =
-    | { kind: 'album'; at: number; source: string; id: string; title: string; by: string | null }
-    | { kind: 'playlist'; at: number; id: string; title: string }
-    | { kind: 'queue'; at: number; id: string; title: string; tracks: number; from: string | null };
-  /** Jump back in, by kind (the owner, 2026-10-23): how far back it looks (days) and how many it offers at most. */
-  const BACK: Record<Back['kind'], { days: number; most: number }> = {
-    album: { days: 14, most: 4 },
-    playlist: { days: 30, most: 3 },
-    queue: { days: 3, most: 2 },
-  };
-  /** All of them in one list, the latest first (the owner: purely chronological), each kind within its own cutoff and limit. */
-  const back = $derived.by((): Back[] => {
-    const now = Date.now() / 1000;
-    const recent = (b: Back) => b.at > now - BACK[b.kind].days * 86_400;
-    const latest = (list: Back[]) => list.filter(recent).sort((x, y) => y.at - x.at).slice(0, BACK[list[0]?.kind ?? 'album'].most);
-    const albums = sources.flatMap((s) =>
-      s.albums.flatMap((a): Back[] => {
-        const at = albumUses[s.id]?.[a.id]?.played;
-        return at ? [{ kind: 'album', at, source: s.id, id: a.id, title: a.title, by: a.artist }] : [];
-      }),
-    );
-    const lists = shownPlaylists().flatMap((p): Back[] => (lastPlayed[p.id] ? [{ kind: 'playlist', at: lastPlayed[p.id], id: p.id, title: p.name }] : []));
-    // The queues left; not the one that plays.
-    const left = queues.list.filter((q) => !q.playing).map((q): Back => ({ kind: 'queue', at: q.updated, id: q.id, title: q.name, tracks: q.tracks, from: q.from }));
-    return [...latest(albums), ...latest(lists), ...latest(left)].sort((x, y) => y.at - x.at);
-  });
   // Blast from the past and Grave digging (the server's), of the libraries switched on.
   let dug = $state<Digging | null>(null);
   let dugIn = $state(false);
@@ -314,9 +265,9 @@
   const order = $derived(prefs.homeParts);
   const settled = $derived<Record<Part, boolean>>({
     moment: momentIn && (!moment || !!library.view),
-    newest: heard !== null,
+    newest: newestIn,
     week: weekIn,
-    back: lastPlayedIn && queues.known && !!library.view && sources.every((s) => albumUsesKnown(s.id)),
+    back: backIn,
     past: dugIn,
     graves: dugIn && !!library.view,
     explore: exploreIn,
@@ -406,13 +357,34 @@
     favTracks: favTracksPart,
   };
 
-  function open(b: Back) {
+  // A long-press or a right-click opens an item's own menu, as everywhere (decision 0058; the owner, 2026-10-24: on
+  // Home it did nothing): an album's, a track's, a playlist's, the queues'.
+  let albumMenu = $state<{ source: string; id: string; title: string; artist: string | null } | null>(null);
+  let trackMenu = $state<MenuTrack | null>(null);
+  let playlistMenu = $state<string | null>(null);
+  let queuesOpen = $state(false);
+  function menuFor(b: HomeBack) {
+    if (b.kind === 'album') albumMenu = { source: b.source, id: b.id, title: b.title, artist: b.by };
+    else if (b.kind === 'playlist') playlistMenu = b.id;
+    else queuesOpen = true;
+  }
+  const playlistOfMenu = $derived(playlistMenu ? (shownPlaylists().find((p) => p.id === playlistMenu) ?? null) : null);
+
+  function open(b: HomeBack) {
     if (b.kind === 'album') viewOver(albumSubject(b.source, b.id));
     else if (b.kind === 'playlist') viewPlaylist(b.id);
     // Taken up where it was left (playing if it played).
     else void switchQueue(b.id);
   }
 </script>
+
+{#if albumMenu}
+  {@const m = albumMenu}
+  <AlbumMenu source={m.source} album={{ id: m.id, title: m.title, artist: m.artist }} onclose={() => (albumMenu = null)} />
+{/if}
+{#if trackMenu}<TrackMenu track={trackMenu} onclose={() => (trackMenu = null)} />{/if}
+{#if playlistOfMenu}<PlaylistMenu playlists={[playlistOfMenu]} onclose={() => (playlistMenu = null)} />{/if}
+{#if queuesOpen}<QueuesSheet onclose={() => (queuesOpen = false)} />{/if}
 
 <div class="home">
   {#if loading}<PageLoading />{/if}
@@ -437,11 +409,16 @@
           foot={SHADOW}
           onopen={(i) => viewOver(albumSubject(heroAlbums[i].source, heroAlbums[i].id))}
           onfront={(i) => (momentFront = i)}
+          onmenu={(i) => (albumMenu = { ...heroAlbums[i] })}
         />
       </div>
       <div class="caption">
         {#if frontAlbum}
-          <button class="name" onclick={() => viewOver(albumSubject(frontAlbum.source, frontAlbum.id))}>
+          <button
+            class="name"
+            onclick={() => viewOver(albumSubject(frontAlbum.source, frontAlbum.id))}
+            use:longpress={() => (albumMenu = { ...frontAlbum })}
+          >
             <span class="title">{frontAlbum.title}</span>
             <span class="by">{frontAlbum.artist ?? ''}</span>
           </button>
@@ -511,7 +488,7 @@
       <ul class="back">
         {#each back as b (b.kind + b.id)}
           <li>
-            <button onclick={() => open(b)}>
+            <button onclick={() => open(b)} use:longpress={() => menuFor(b)}>
               {#if b.kind === 'album'}
                 <span class="cover"><Cover src={albumCoverUrl(b.source, b.id)} /></span>
               {:else}
@@ -536,7 +513,11 @@
       <ul class="back">
         {#each pastAlbums as t (t.id)}
           <li>
-            <button disabled={starting} onclick={() => playPast('play', t.id)}>
+            <button
+              disabled={starting}
+              onclick={() => playPast('play', t.id)}
+              use:longpress={() => (trackMenu = { source: 'cratarr', id: t.id, name: t.name, artist: t.artist, album: t.album, album_id: t.album_id })}
+            >
               <span class="cover"><Cover src={albumCoverUrl('cratarr', t.album_id)} /></span>
               <span class="text">
                 <span class="title">{t.name}</span>

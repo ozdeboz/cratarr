@@ -1400,6 +1400,25 @@ export type Digging = {
 };
 /** Of these albums (Cratarr's), those the account heard 5% or more of: not new to it (Home's New for you). */
 export const heardAlbums = (ids: string[]) => post<{ heard: string[] }>('/api/home/heard', { ids });
+/** Home's sections the server puts together (app::home, the owner 2026-10-24): New for you, Jump back in (the asking
+ *  player's queues among it), Sounds like your week. */
+export const getHomeNew = () => quietly<{ albums: (ListedAlbum & { source: string })[] }>('/api/home/new');
+export type HomeBack =
+  | { kind: 'album'; at: number; source: string; id: string; title: string; by: string | null }
+  | { kind: 'playlist'; at: number; id: string; title: string }
+  | { kind: 'queue'; at: number; id: string; title: string; tracks: number; from: string | null };
+export const getHomeBack = (player: string | null) =>
+  quietly<{ items: HomeBack[] }>(`/api/home/back${player ? `?${new URLSearchParams({ player })}` : ''}`);
+export type HomeWeek = {
+  name: string;
+  source: string;
+  total: number;
+  genres: string[];
+  played: number;
+  covers: { track: string; album_id: string | null }[];
+};
+export const getHomeWeek = (source: string | undefined, without: string[]) =>
+  quietly<{ week: HomeWeek | null }>(`/api/home/week?${new URLSearchParams({ ...(source ? { source } : {}), without: without.join(',') })}`);
 /** Home's Artists to explore: artists in a random order, the first open (its TheAudioDB description and photo, the
  *  server's artist store), each with its biggest albums (Cratarr's ids). */
 export type ExploredArtist = { id: string; name: string; albums: string[]; bio: string | null; photo: boolean };

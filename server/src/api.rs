@@ -147,6 +147,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/home/heard", post(home_heard))
         .route("/api/home/weather", post(home_weather))
         .route("/api/home/moment", get(home_moment))
+        .route("/api/home/new", get(home_new))
+        .route("/api/home/back", get(home_back))
+        .route("/api/home/week", get(home_week))
         // Each account's own: its tasks, and its listening services (decision 0068: anyone's, not the administrators'
         // only). Last.fm's way back carries its sign-in's code and needs no sign-in (`serve::access::public`).
         .route("/api/tasks", get(own_tasks))
@@ -3039,6 +3042,28 @@ struct TasteQuery {
 #[derive(Deserialize)]
 struct HeardAlbums {
     ids: Vec<String>,
+}
+
+/// Home's New for you (`app::home`).
+async fn home_new(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!({ "albums": app.home_new().await? })))
+}
+
+#[derive(Deserialize)]
+struct HomeBack {
+    /// The asking page's player: its queues left.
+    player: Option<String>,
+}
+
+/// Home's Jump back in (`app::home`).
+async fn home_back(State(app): State<Arc<App>>, Query(q): Query<HomeBack>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!({ "items": app.home_back(q.player.as_deref()).await? })))
+}
+
+/// Home's Sounds like your week (`app::home`), of the libraries switched on.
+async fn home_week(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+    let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
+    Ok(Json(json!({ "week": app.home_week(q.source.as_deref(), without).await? })))
 }
 
 /// Of these albums, those the asking account heard 5% or more of (Home's New for you leaves them out).

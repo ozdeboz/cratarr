@@ -191,7 +191,11 @@
   const overlay = $derived(player.full && !inSidebar());
   // The mini-player stands in for the player wherever the panel does not show it (decision 0023); with nothing to play
   // it is the small button for where music plays.
-  const mini = $derived(!(sidebar && panelShowsPlayer()));
+  // The player in the panel: where nothing is viewed there, or brought over what is. On a page that keeps the panel
+  // beside its list (Settings, Health, Insights, Downloads) only when brought, never in the moment between the page
+  // showing and its part filling the panel (the owner, 2026-10-24: it flashed into the panel and back at each change).
+  const playerInPanel = $derived(sidebar && (split ? panel.playerTop : panelShowsPlayer()));
+  const mini = $derived(!playerInPanel);
   // A viewed playlist without room beside the page: a layer of its own, under the mini-player and the player.
   const playlistLayer = $derived(!sidebar && panel.viewed !== null);
   $effect(() => {
@@ -269,8 +273,8 @@
     pageView.query = '';
   });
   // The page's device button gives way to the panel's (the owner, 2026-10-16): a list beside the page has its own.
-  const panelDevice = $derived(sidebar && panel.viewed !== null && !panelShowsPlayer() && !settingsShown && !healthShown && !insightsShown);
-  const pillDevice = $derived(!playing() && !(sidebar && panelShowsPlayer()) && !panelDevice);
+  const panelDevice = $derived(sidebar && panel.viewed !== null && !playerInPanel && !settingsShown && !healthShown && !insightsShown);
+  const pillDevice = $derived(!playing() && !playerInPanel && !panelDevice);
   // Each step of this visit carries its place (`nav` in its history state): back shows from the second step on, never on
   // the one the app opened with.
   let navAt = $state(0);
@@ -567,9 +571,9 @@
     {/if}
     {#if sidebar}
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
-      <aside class="player-side" class:whole={split} aria-label={panelShowsPlayer() ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
+      <aside class="player-side" class:whole={split} aria-label={playerInPanel ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
         <SheetArea area={() => sideEl}>
-          {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if panelShowsPlayer()}<NowPlaying place="side" />{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else if healthShown}<HealthPanel problem={healthShown} beside={healthSplit} />{:else if insightsShown}<InsightsPanel view={insightsShown} beside={insightsSplit} />{:else}<PlaylistView />{/if}
+          {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if playerInPanel}<NowPlaying place="side" />{:else if split && panel.viewed === null}<!-- Its part comes in a moment. -->{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else if healthShown}<HealthPanel problem={healthShown} beside={healthSplit} />{:else if insightsShown}<InsightsPanel view={insightsShown} beside={insightsSplit} />{:else}<PlaylistView />{/if}
         </SheetArea>
       </aside>
     {/if}

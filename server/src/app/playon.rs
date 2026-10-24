@@ -1426,6 +1426,25 @@ impl PlayOn {
     }
 
     /// One player, with its queue.
+    /// `name`'s queues left behind, newest first, each with its tracks (source, id): Home's Jump back in, which shows
+    /// one that is an album's tracks as that album (the owner, 2026-10-24).
+    pub fn left_queues(&self, name: &str) -> Vec<(QueueItem, Vec<(String, String)>)> {
+        if self.reached(name).is_err() {
+            return Vec::new();
+        }
+        let entries = self.entries();
+        let Some(e) = entries.get(name) else { return Vec::new() };
+        e.queues()
+            .into_iter()
+            .filter(|q| !q.playing)
+            .filter_map(|q| {
+                let k = e.kept.iter().find(|k| k.queue.id == q.id)?;
+                let tracks = k.queue.tracks.iter().map(|t| (t.source.clone(), t.id.clone())).collect();
+                Some((q, tracks))
+            })
+            .collect()
+    }
+
     pub fn get(&self, name: &str) -> Option<PlayerView> {
         self.reached(name).ok()?;
         let v = view_in(&self.entries(), name, true);

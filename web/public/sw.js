@@ -1,15 +1,49 @@
-// Cratarr service worker: makes the app installable and lets the shell open without the server. Everything under
+// Cratarr service worker: makes the app installable and lets the whole app open without the server: every file the
+// build made (its `precache.json`, vite.config.ts) is kept when it installs, and again after a new build, once the server
+// answers (the owner, 2026-10-24: the entire app downloaded, so offline works; before, only what had been opened was). Everything under
 // /api/ is live data and always goes to the network, except the Library's album list: it changes
 // slowly and are large, so the last copy is shown at once while a fresh one is fetched (stale-while-revalidate). The shell is network-first (a new build shows up at once);
 // Vite's fingerprinted assets and the icons never change, so they are cache-first. The covers of the albums downloaded
 // in the app are kept apart, as the page lists them (lib/coversAway.svelte.ts), so they show away from home, where only
 // downloads play (decision 0033, step 4).
-const CACHE = 'cratarr-v3';
+const CACHE = 'cratarr-v4';
 const COVERS = 'cratarr-covers';
 const ALBUM_COVER = /^\/api\/albums\/[^/]+\/[^/]+\/cover$/;
 
+/** Keeps every file of the build that is not kept yet, and lets go of those of earlier builds. */
+async function keepTheApp() {
+  const r = await fetch('/precache.json', { cache: 'no-store' });
+  if (!r.ok) return;
+  const files = await r.json();
+  if (!Array.isArray(files)) return;
+  const c = await caches.open(CACHE);
+  const want = new Set(files);
+  for (const k of await c.keys()) {
+    const path = new URL(k.url).pathname;
+    if (path.startsWith('/assets/') && !want.has(path)) await c.delete(k);
+  }
+  for (const path of files) {
+    if (await c.match(path)) continue;
+    const got = await fetch(path);
+    if (got.ok) await c.put(path, got);
+  }
+}
+/** At most this often after the shell loaded: a new build's files are fetched once the server answers. */
+const KEEP_EVERY_MS = 10 * 60 * 1000;
+let keptAt = 0;
+const keepNow = () => {
+  if (Date.now() - keptAt < KEEP_EVERY_MS) return Promise.resolve();
+  keptAt = Date.now();
+  return keepTheApp().catch(() => (keptAt = 0));
+};
+
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(['/', '/manifest.webmanifest'])));
+  event.waitUntil(
+    caches
+      .open(CACHE)
+      .then((c) => c.addAll(['/', '/manifest.webmanifest']))
+      .then(() => keepNow()),
+  );
   self.skipWaiting();
 });
 
@@ -102,6 +136,8 @@ self.addEventListener('fetch', (event) => {
       fetch(req)
         .then((r) => {
           if (r.type === 'opaqueredirect') return r;
+          // The server answers: what a new build brought is kept too.
+          if (r.ok) event.waitUntil(keepNow());
           if (r.ok) return url.pathname === '/' ? put('/', r) : r;
           return caches.match('/').then((hit) => hit || r);
         })

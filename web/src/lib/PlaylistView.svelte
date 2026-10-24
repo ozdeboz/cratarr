@@ -468,7 +468,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     // One cover an album (the owner, 2026-10-23: duplicates consolidated): by its name and album artist in any case (the
     // same album in Music and in Incoming, or without its id), and no cover twice.
     const seen = new Set<string>();
-    const out: string[] = [];
+    const out: { url: string; album: { id: string; title: string; artist: string | null } | null }[] = [];
     for (const r of rows ?? []) {
       if (!r.id || r.missing) continue;
       const named = r.album ? `${r.album}\n${r.album_artist ?? r.artist ?? ''}`.toLowerCase() : null;
@@ -476,21 +476,25 @@ ${r.album_artist ?? r.artist ?? ''}`;
       const keys = [named, r.album_id, url].filter((k): k is string => !!k);
       if (keys.some((k) => seen.has(k))) continue;
       for (const k of keys) seen.add(k);
-      out.push(url);
+      // Its album, for the long-press's menu (the owner, 2026-10-24).
+      out.push({ url, album: r.album_id ? { id: r.album_id, title: r.album ?? '', artist: r.album_artist ?? r.artist ?? null } : null });
       if (out.length === 60) break;
     }
     return out;
   });
   // Each fetched ahead: an album without art answers 404 and is left out (the owner, 2026-10-23: no empty covers here).
   $effect(() => {
-    for (const url of flowCovers) {
+    for (const { url } of flowCovers) {
       if (coverBroken(url)) continue;
       const probe = new Image();
       probe.onerror = () => coverBroke(url);
       probe.src = url;
     }
   });
-  const flowShown = $derived(flowCovers.filter((url) => !coverBroken(url)));
+  const flowItems = $derived(flowCovers.filter((c) => !coverBroken(c.url)));
+  const flowShown = $derived(flowItems.map((c) => c.url));
+  /** A flow cover's album, its menu open (a long-press or a right-click on it). */
+  let flowMenu = $state<{ id: string; title: string; artist: string | null } | null>(null);
   const flowing = $derived(flowShown.length >= 3);
   /** The hero's art is not known yet (the owner, 2026-10-23: nothing shown that something else then replaces): it keeps
    *  its full size, empty; a crate's on the coverflow's canvas, which most become. */
@@ -1573,7 +1577,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           <!-- Its art on its way: the place kept, empty. -->
         {:else if flowing}
           <!-- A crate's albums as a coverflow on a light canvas (the owner, 2026-10-23); a drag or a tap moves through them. -->
-          <CoverFlow covers={flowShown} />
+          <CoverFlow covers={flowShown} onmenu={(i) => (flowMenu = flowItems[i]?.album ?? null)} />
         {:else}
           {#each heroShown as c, i (i)}<Cover src={c} lazy={false} />{:else}{#if !crateEditing}<Cover src={null} />{/if}{/each}
         {/if}
@@ -2129,6 +2133,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
     onradio={isLocal() && artist.source === 'cratarr' ? artistRadio : undefined}
     onclose={() => (artistMenuOpen = false)}
   />
+{/if}
+{#if flowMenu}
+  {@const m = flowMenu}
+  <AlbumMenu {source} album={m} onclose={() => (flowMenu = null)} />
 {/if}
 {#if albumMenuOpen && album}
   <AlbumMenu

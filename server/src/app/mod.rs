@@ -35,6 +35,7 @@ mod playon;
 mod plays;
 mod queue;
 pub mod history;
+pub mod home;
 pub mod import;
 pub mod import_files;
 pub mod lastfm;

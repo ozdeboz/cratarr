@@ -78,7 +78,9 @@
     padding: 0 14px;
     border: 0;
     border-radius: 12px;
-    background: color-mix(in srgb, var(--art-accent, var(--accent)) 10%, transparent);
+    /* Grey, as Home's other rows (Jump back in, Blast from the past): the colour is the icon's alone (the owner,
+       2026-10-24: the green fill broke the grey). */
+    background: color-mix(in srgb, var(--text) 6%, transparent);
     color: var(--text);
     font: inherit;
     font-size: 16px;

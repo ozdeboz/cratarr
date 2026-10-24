@@ -96,3 +96,18 @@ nice though for people running bigger servers". Beat This! has that now (`CRATAR
   could not hold Beat This!'s 650 MB); the models' licences and sizes have to be checked; the separate route works.
 - The catch: the results must match the separate route's, so a library analysed one way and new music the other way
   stay comparable.
+
+## Home offline, and Home in local mode
+
+Home's sections are the server's (the owner, 2026-10-24: chosen there under one set of rules, no album without a cover,
+no artist without a biography). Two cases are left without one, and the owner accepts the experience differing where
+the limits are real, as long as it degrades gracefully:
+
+- **Offline, with a server:** the app keeps the last Home it was given and shows it without a connection, what is not
+  on the device marked and not playable. One implementation, the server's; the device only remembers.
+- **Local mode (0052):** a different library, the phone's own, which the server never sees, so nothing it said
+  applies. A smaller Home of its own, worked out on the device from what the device knows: the newest by date added,
+  what was played here, favourites. The moment, Grave digging, Sounds like your week and Artists to explore need the
+  analysis, the listening history or biographies, which only the server has: left out. In Settings › Home they show
+  unavailable there, not switched off (the owner, 2026-10-24): greyed, "Needs your server", not to be switched on in
+  local mode, and the account's own choice for them kept, so with the server again Home is as it was chosen.

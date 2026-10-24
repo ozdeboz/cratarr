@@ -418,6 +418,7 @@
               marked={selecting ? albums.map((a) => selecting!.has(keyOf(s, a))) : undefined}
               onfront={(i) => (flowAt[s.id] = i)}
               onspare={(px) => (flowSpare = px)}
+              onmenu={(i, rect) => (selecting ? (selectSheet = true) : openMenu(s, albums[i], rect))}
             />
           </div>
           {#if front}

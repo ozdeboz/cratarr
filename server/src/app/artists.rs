@@ -81,13 +81,6 @@ impl ArtistInfo {
             .flatten()
     }
 
-    /// Of these keys, those with a description or a photo.
-    pub fn known(&self, keys: &[String]) -> std::collections::HashSet<String> {
-        let db = self.db();
-        let Ok(mut st) = db.prepare_cached("SELECT 1 FROM artist_info WHERE key = ?1 AND (bio IS NOT NULL OR photo IS NOT NULL)") else { return Default::default() };
-        keys.iter().filter(|k| st.exists([k.as_str()]).unwrap_or(false)).cloned().collect()
-    }
-
     /// The photo's path on disk.
     pub fn photo_path(&self, file: &str) -> PathBuf {
         self.photos.join(file)
@@ -222,7 +215,6 @@ mod tests {
         s.db().execute("INSERT INTO artist_info (key, name, read_at) VALUES ('name:y', 'Y', ?1)", [now - 40 * 86_400]).unwrap();
         assert!(!s.due("mbid:x", now));
         assert!(s.due("name:y", now), "nothing found forty days ago: due");
-        assert_eq!(s.known(&["mbid:x".into(), "name:y".into()]), ["mbid:x".to_string()].into());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
