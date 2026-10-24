@@ -113,7 +113,7 @@
   import { insights, plural } from './insights.svelte';
   import { refresh } from './live.svelte';
   import { enqueue, startRadio, type LocalTrack } from './localPlayer.svelte';
-  import { download, inApp } from './app.svelte';
+  import { inApp } from './app.svelte';
   import { isKept, setKept } from './kept.svelte';
   import { longpress } from './longpress';
   import { isLocal, playlistsKnown, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
@@ -2077,7 +2077,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
 {#if menuOpen && selected.length}
   <PlaylistMenu
     playlists={selected}
-    ondownload={inApp && selected.length === 1 && playable.length ? () => download(tracksOf(playable)) : null}
+    downloadable={inApp && selected.length === 1 && playable.length ? tracksOf(playable) : null}
     keepFrom={inApp && selected.length === 1 && source ? source : null}
     start={menuStart}
     ondeleted={() => (editing = null)}

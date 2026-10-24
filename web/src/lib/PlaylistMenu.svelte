@@ -17,6 +17,8 @@
   import { isKept, setKept } from './kept.svelte';
   import ExportStep from './ExportStep.svelte';
   import MenuCards from './MenuCards.svelte';
+  import type { Downloadable } from './app.svelte';
+  import DownloadEntry from './DownloadEntry.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
   import { isLocal, startPlaylists } from './output.svelte';
@@ -35,7 +37,7 @@
     onclose,
     onrenamed,
     ondeleted,
-    ondownload = null,
+    downloadable = null,
     keepFrom = null,
     start = 'menu',
   }: {
@@ -47,7 +49,8 @@
     onrenamed?: (from: string, to: string) => void;
     ondeleted?: (id: string) => void;
     /** Its tracks onto the phone (the app's Downloads); given only in the app, for one playlist whose rows are known. */
-    ondownload?: (() => void) | null;
+    /** Its tracks, for Download once (one playlist, in the app). */
+    downloadable?: Downloadable[] | null;
     /** The server its tracks are kept from (Keep on this device, decision 0038): given in the app, for one playlist. */
     keepFrom?: string | null;
   } = $props();
@@ -274,23 +277,14 @@
         {/if}
       </MenuGroup>
       <MenuGroup>
-        {#if ondownload}
-          <MenuEntry
-            icon="arrowDownToLine"
-            label="Download"
-            onclick={() => {
-              onclose();
-              ondownload();
-            }}
-          />
-        {/if}
+        {#if downloadable}<DownloadEntry tracks={downloadable} />{/if}
         {#if one && keepFrom}
           {@const from = keepFrom}
           {@const p = one}
           {@const on = isKept('playlist', from, p.id)}
-          <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('playlist', from, p.id, !on, p.name)} />
+          <MenuEntry icon="download" label="Sync to this device" switched={on} onclick={() => setKept('playlist', from, p.id, !on, p.name)} />
         {/if}
-        <MenuEntry icon="download" label="Export…" onclick={() => (mode = 'export')} />
+        <MenuEntry icon="export" label="Export…" onclick={() => (mode = 'export')} />
         {#if one}
           <!-- Titled by its name; linked by its id (another user's shared one is "owner/name"). -->
           {@const pid = one.id}

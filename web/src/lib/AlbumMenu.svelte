@@ -57,7 +57,7 @@
   } from './api';
   import { albumOfDownload, albumPlay, albumRatings, goToArtist as showArtist, loadAlbumRating, mainArtist, playAlbums, playListedAlbum, rateAlbum } from './albums.svelte';
   import RatingStars from './RatingStars.svelte';
-  import { download, downloads, inApp, removeDownloads } from './app.svelte';
+  import { downloads, inApp, removeDownloads } from './app.svelte';
   import { viewGenre, viewLike } from './crates.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
   import { player } from './live.svelte';
@@ -67,6 +67,7 @@
   import { playCollection } from './play.svelte';
   import { DEVICE } from './deviceMusic.svelte';
   import MenuCards from './MenuCards.svelte';
+  import DownloadEntry from './DownloadEntry.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
   import PlaylistsStep from './PlaylistsStep.svelte';
@@ -522,23 +523,13 @@
         {#if addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
       </MenuGroup>
       <MenuGroup>
-        {#if inApp && tracks?.length && kept.length < tracks.length}
-          {@const list = tracks}
-          <MenuEntry
-            icon="arrowDownToLine"
-            label="Download"
-            onclick={() => {
-              onclose();
-              download(list);
-            }}
-          />
-        {/if}
+        {#if tracks?.length}<DownloadEntry {tracks} />{/if}
         {#if inApp}
-          <!-- Kept on this device (decision 0038): stays in step offline; Download above is a one-time copy. -->
+          <!-- Kept on this device (decision 0038): stays in step offline; Download once above is a one-time copy. -->
           {@const on = isKept('album', source, a.id)}
-          <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('album', source, a.id, !on, a.title)} />
+          <MenuEntry icon="download" label="Sync to this device" switched={on} onclick={() => setKept('album', source, a.id, !on, a.title)} />
         {/if}
-        {#if tracks?.length}<MenuEntry icon="download" label="Export…" onclick={() => (exporting = true)} />{/if}
+        {#if tracks?.length}<MenuEntry icon="export" label="Export…" onclick={() => (exporting = true)} />{/if}
         <MenuEntry icon="share" label="Share" onclick={shareIt} />
       </MenuGroup>
       <MenuGroup>

@@ -168,9 +168,12 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **An artist's menu** (`lib/ArtistMenu.svelte`, the artist panel's ⋮, decided 2026-10-16) as the album's: the artist
   with their heart, the large actions (Start radio among them, as on a track's and a playlist's), Add to playlist (all
   their tracks), Download, Share, and their picture on this device. No Instant mix (the owner) and no rating.
-- **Keep on this device** (decision 0038, in the app): a switch entry (`MenuEntry`'s `switched`: the entry with a
-  switch at its end) in the album's, the artist's and the panel playlist's menu, beside Download (a one-time copy);
-  on a crate or a genre, an icon in its action bar, in the accent while kept.
+- **Sync to this device** (decision 0038, in the app; named Keep on this device until the owner, 2026-10-24): a switch
+  entry (`MenuEntry`'s `switched`: the entry with a switch at its end) in the album's, the artist's and the panel
+  playlist's menu, beside **Download once** (a one-time copy, `lib/DownloadEntry`: the menu stays open and the row
+  fills as the tracks come in, "Downloading 3 of 12"; Retry for failed tracks, the rest when some are there); on a
+  crate or a genre, an icon in its action bar, in the accent while kept. **Export** (files out of Cratarr) has its
+  own icon, an arrow out of a door (Lucide's log-out), not the download arrows.
 - **Add to playlist** (a track's, an album's, an artist's menu; `lib/PlaylistToggles`): the playlists as toggle cards
   with the size buttons beside the heading (decided 2026-10-16): two bare icons, dimmed when they would change
   nothing; one column by default, two when smaller, never three on a phone (three only on a wider sheet; a name wraps

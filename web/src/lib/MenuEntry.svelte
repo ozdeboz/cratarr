@@ -8,6 +8,7 @@
   // `plus: false`: no + while off (a choice that adds nothing), the tick only when on.
   // `switched`: an entry that turns something on or off (Keep on this device), its switch at the end. `sub`: a toggle's
   // second line, smaller, after `subIcon` (another player's track and whether it plays, in Play On; no cover).
+  // `progress` (0 to 1): the row fills behind its label as its work goes (Download once, lib/DownloadEntry).
   import Icon, { type IconName } from './Icon.svelte';
   import SwitchTrack from './SwitchTrack.svelte';
 
@@ -27,6 +28,7 @@
     plus = true,
     sub = null,
     subIcon = null,
+    progress = null,
   }: {
     icon?: IconName | null;
     label: string;
@@ -43,6 +45,7 @@
     plus?: boolean;
     sub?: string | null;
     subIcon?: IconName | null;
+    progress?: number | null;
   } = $props();
 </script>
 
@@ -61,7 +64,16 @@
     {#if icon}<Icon name={icon} size={24} />{/if}<span>{label}</span><SwitchTrack on={switched} />
   </button>
 {:else if checked === null}
-  <button class="entry" class:danger role="menuitem" disabled={disabled || busy} aria-busy={busy} {onclick}>
+  <button
+    class="entry"
+    class:danger
+    class:filling={progress !== null}
+    style:--fill={progress === null ? null : `${Math.min(1, Math.max(0, progress)) * 100}%`}
+    role="menuitem"
+    disabled={disabled || busy}
+    aria-busy={busy || progress !== null}
+    {onclick}
+  >
     {#if icon}<Icon name={icon} size={24} />{/if}<span>{label}</span>
   </button>
 {:else if onmark}
@@ -112,6 +124,16 @@
 
   .entry:disabled :global(svg) {
     opacity: 0.5;
+  }
+
+  /* Filled as far as its work has gone. */
+  .entry.filling {
+    background: linear-gradient(
+      to right,
+      color-mix(in srgb, var(--art-accent, var(--accent)) 22%, transparent) var(--fill),
+      transparent var(--fill)
+    );
+    cursor: default;
   }
 
   .entry.danger,

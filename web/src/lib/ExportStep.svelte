@@ -127,7 +127,7 @@
     <Switch card label="Preserve directory layout" checked={exporting.layout === 'folders'} onchange={(on) => (exporting.layout = on ? 'folders' : 'flat')} />
   {/if}
 
-  <button class="go" disabled={!ready || starting} aria-busy={starting} onclick={start}><Icon name="download" size={20} /><span>Export</span></button>
+  <button class="go" disabled={!ready || starting} aria-busy={starting} onclick={start}><Icon name="export" size={20} /><span>Export</span></button>
 </div>
 
 <style>
