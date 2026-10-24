@@ -155,7 +155,8 @@
   /** Room under the moment's covers for their shadow (CoverFlow's foot). */
   const SHADOW = 40;
   /** The sky's photo (public/skies, hand-picked from Unsplash): sunny and hot are day skies, clear a night's; the others
-   *  by day or after sunset. */
+   *  by day or after sunset. Made whole against the page where it is set: a var() resolves a relative url() against the
+ *  stylesheet that uses it, assets/ in a build (the tablet asked for assets/skies/…, 404). */
   const skyPhoto = $derived.by(() => {
     // A picture of the user's own, chosen on this device (Settings › Home), in place of the weather's.
     if (localCovers[HOME_HEADER]) return localCovers[HOME_HEADER];
@@ -421,7 +422,7 @@
 
 {#snippet heroPart()}
   {#if turn(lead) && heroAlbums.length}
-    <section class="moment top" data-sky={moment?.sky ?? 'plain'} class:dark={moment?.dark ?? false} style:--photo={skyPhoto ? `url(${skyPhoto})` : 'none'} aria-label={leadTitle}>
+    <section class="moment top" data-sky={moment?.sky ?? 'plain'} class:dark={moment?.dark ?? false} style:--photo={skyPhoto ? `url("${new URL(skyPhoto, document.baseURI)}")` : 'none'} aria-label={leadTitle}>
       {#if prefs.homeGreeting}
         <!-- The personal greeting (Settings › Home): the time of day and their name, then what plays here. -->
         <h2 class="greeting">{greeting}</h2>
