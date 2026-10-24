@@ -20,6 +20,8 @@ export type Prefs = {
   /** The full player's row under the title (the owner, 2026-10-19): shown at all, and the facts it shows beside its info
    *  button, in the user's order (lib/trackFacts; none at first). */
   playerRow: boolean;
+  /** The full-screen player's three bands, landscape (lib/BandGlass): off, or how they are drawn. */
+  playerBands: 'off' | 'aurora' | 'sirius' | 'hairlines';
   playerFacts: FactId[];
   /** A list's profile on top of it (the owner, 2026-10-23): open or folded, for every list at once; its rows switched
    *  on, in the user's order; and its fold line, how many of them stay when it is folded (0: none; Settings › Display ›
@@ -172,6 +174,7 @@ export const DEFAULTS: Prefs = {
   listOrder: 'playing',
   listDown: false,
   playerRow: true,
+  playerBands: 'off',
   playerFacts: [],
   profileOpen: true,
   profile: true,
@@ -247,6 +250,7 @@ function read(): Prefs {
         if (typeof saved[k] === 'boolean') p[k] = saved[k];
       }
       if (typeof saved.playerRow === 'boolean') p.playerRow = saved.playerRow;
+      if (['off', 'aurora', 'sirius', 'hairlines'].includes(saved.playerBands)) p.playerBands = saved.playerBands;
       if (Array.isArray(saved.playerFacts)) p.playerFacts = saved.playerFacts.filter((x: unknown): x is FactId => FACTS.some((f) => f.id === x));
       if (typeof saved.profileOpen === 'boolean') p.profileOpen = saved.profileOpen;
       if (typeof saved.profile === 'boolean') p.profile = saved.profile;

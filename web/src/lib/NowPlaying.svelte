@@ -19,6 +19,8 @@
   import Waveform from './Waveform.svelte';
   import WaveLens from './WaveLens.svelte';
   import { loadWaveform, waveformOf } from './waveforms.svelte';
+  import { bandWaveOf, loadBandWave } from './bandWaves.svelte';
+  import BandGlass from './BandGlass.svelte';
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { local, restoreUpcoming, setRepeat, shuffleUpcoming } from './localPlayer.svelte';
   import QueueMenu from './QueueMenu.svelte';
@@ -86,6 +88,11 @@
     if (np) loadWaveform(np.source, np.id);
   });
   const wave = $derived(np ? waveformOf(np.source, np.id) : null);
+  // The three bands (lib/BandGlass), when chosen: read only then.
+  $effect(() => {
+    if (np && prefs.playerBands !== 'off') loadBandWave(np.source, np.id);
+  });
+  const bandWave = $derived(np && prefs.playerBands !== 'off' ? bandWaveOf(np.source, np.id) : null);
   /** Where the handle is held (seconds), and after release until the player is there. */
   let held = $state<number | null>(null);
   let heldTimer: ReturnType<typeof setTimeout> | undefined;
@@ -377,7 +384,7 @@
   });
   // What is shown changes the controls' height (a long title, a progress bar or none). As one value: `np` is
   // new at every report, and laying out again at each would be many times a second.
-  const shown = $derived(JSON.stringify([np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.playerRow, rowFacts.length]));
+  const shown = $derived(JSON.stringify([np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.playerRow, rowFacts.length, !!bandWave]));
   $effect(() => {
     void shown;
     untrack(() => requestAnimationFrame(relayout));
@@ -393,6 +400,7 @@
   <div class="veil"></div>
   <header
     class:landscape={layout?.landscape}
+    class:drop-bands={dropped('bands')}
     class:drop-gapsBig={dropped('gapsBig')}
     class:drop-buttons={dropped('buttons')}
     class:drop-gapsSmall={dropped('gapsSmall')}
@@ -609,6 +617,12 @@
         </div>
       {/if}
       <i class="sp d"></i>
+      <!-- The three bands at the foot, level with the cover's: landscape only, the first to give way. -->
+      {#if bandWave && np && prefs.playerBands !== 'off'}
+        <div class="bands">
+          <BandGlass bands={bandWave} progress={dur ? pos / dur : 0} paused={!!np.progress?.paused} look={prefs.playerBands} />
+        </div>
+      {/if}
     </div>
   </header>
 
@@ -1255,6 +1269,17 @@
   }
 
   /* What gives way, in this order. */
+  /* The three bands: landscape's foot only, and the first thing to give way when the height runs short. */
+  .bands {
+    width: 100%;
+    flex: none;
+  }
+
+  header:not(.landscape) .bands,
+  header.drop-bands .bands {
+    display: none;
+  }
+
   header.drop-gapsBig .sp {
     min-height: 6px;
   }

@@ -16,6 +16,12 @@
   import PlayerRowList from './PlayerRowList.svelte';
   import { offerReset } from './reset.svelte';
 
+  const BAND_LOOKS: { value: typeof prefs.playerBands; label: string }[] = [
+    { value: 'off', label: 'Off' },
+    { value: 'aurora', label: 'Aurora' },
+    { value: 'sirius', label: 'Sirius' },
+    { value: 'hairlines', label: 'Hairlines' },
+  ];
   const THEMES: { value: Theme; label: string }[] = [
     { value: 'auto', label: 'System' },
     { value: 'light', label: 'Light' },
@@ -56,6 +62,11 @@
   {/snippet}
   <Item name="Extra details" toggle={{ checked: prefs.playerRow, onchange: (on) => (prefs.playerRow = on) }} />
   {#if prefs.playerRow}<PlayerRowList />{/if}
+  <Item
+    name="Bands"
+    more={"The track's low, mid and high, under the buttons when the full-screen player is landscape.\n\nAurora: the whole track as three fields of light. Sirius: three ribbons as loud as the music is now. Hairlines: the whole track as three fine lines."}
+    ><Seg label="Bands" options={BAND_LOOKS} bind:value={prefs.playerBands} /></Item
+  >
 </Group>
 
 <Group title="Content">
