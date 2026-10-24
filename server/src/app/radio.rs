@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ToggleError;
 use super::playon::QueueTrack;
-use crate::similarity::{Library, MOODS, Profile, Signal, Track, Weights, unique};
+use crate::similarity::{Library, Profile, Signal, Track, Weights, unique};
 
 /// The lane of Radio's inserts (`QueueTrack::lane`): right after the own track they are like (and its hand-added run).
 pub const LANE_RADIO: &str = "radio";
@@ -395,7 +395,7 @@ impl Rng {
 pub(crate) struct Heard {
     pub energy: Option<f32>,
     pub danceability: Option<f32>,
-    pub moods: Option<[f32; MOODS.len()]>,
+    pub moods: Option<[f32; crate::similarity::MOODS.len()]>,
     pub styles: Vec<String>,
     pub sound: Option<Vec<f32>>,
 }
