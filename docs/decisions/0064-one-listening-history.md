@@ -60,11 +60,9 @@ nothing. "Starting empty" stands for the time ListenBrainz did not record.
   played in the seven days before an account's first told row becomes one row (`backfill:annotation`; finished,
   counted, nothing counted again; only each song's last play is known). Like the ListenBrainz rows, these rows do not
   make the log reach back (`heard_from`).
-- **What played while the listener slept is not theirs** (the owner: "If Home Assistant says I was asleep, exclude
-  it"): the user data keeps when an account slept (`asleep`, told by `POST /api/history/sleep`); the taste and Sounds
-  like your week read the log without those plays (`heard_awake_since`), the history itself keeps every play. Home
-  Assistant's Sleeping periods are loaded once (the owner: "only a one-time thing"), not followed: its house mode rarely
-  holds Sleeping (66 minutes in all from 13 to 23 October), so this leaves out little until its sleep detection does.
+- **Sleep is not Cratarr's** (amended 2026-10-24; the owner: "Sleep is not something that should be in Cratarr at
+  all"). It kept when an account slept, as Home Assistant said (`asleep`, `POST /api/history/sleep`), and left those
+  plays out of the taste and the week; that is gone: the table is dropped, every play counts.
 - **The taste** (Insights › Listening › Profile, `GET /api/history/profile`) reads its plays and skips from the log, so
   a period (Insights' one) narrows them; favourites, playlists and exclusions have no time.
 
