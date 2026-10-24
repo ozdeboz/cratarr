@@ -644,9 +644,13 @@
     cursor: pointer;
   }
 
+  /* Each line a fixed height: a title in another script (Chinese, Japanese) falls back to a font with taller lines,
+     and the page under it moved with every album that came to the front (the owner, 2026-10-24). */
   .caption .title,
   .caption .by {
+    height: 1.4em;
     overflow: hidden;
+    line-height: 1.4;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
