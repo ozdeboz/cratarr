@@ -140,6 +140,7 @@ object Downloads {
         val found = mutableListOf<JSONObject>()
         var bytes = 0L
         val albums = Kept.albumIds(context)
+        val manual = Kept.manualKeys(context)
         manager(context).downloadIndex.getDownloads().use { c ->
             while (c.moveToNext()) {
                 val d = c.download
@@ -156,6 +157,8 @@ object Downloads {
                     Download.STATE_DOWNLOADING -> "downloading"
                     else -> "waiting"
                 }
+                // Downloaded once by the owner, or there only for what is synced (decision 0038).
+                t.put("manual", manual(d.request.id))
                 t.put("download", JSONObject().put("id", d.request.id).put("state", state).put("bytes", d.bytesDownloaded).put("percent", d.percentDownloaded.toDouble()))
                 found.add(t)
                 bytes += d.bytesDownloaded

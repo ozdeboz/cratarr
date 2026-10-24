@@ -1,6 +1,6 @@
-// Kept on this device (decision 0038): albums, playlists, crates and artists the Android app keeps in step offline. The
-// app holds the list and does the work; the page switches items on and off and shows the app's progress (the progress
-// sheet, lib/KeptSheet). Outside the app there is nothing to keep: `kept.known` stays false.
+// Synced to this device (decision 0038; Keep on this device until 2026-10-24): albums, playlists, crates and artists the
+// Android app keeps in step offline. The app holds the list and does the work; the page switches items on and off and
+// shows its progress (the Downloads page). Outside the app there is nothing to keep: `kept.known` stays false.
 
 import { inApp, onApp, toApp } from './app.svelte';
 

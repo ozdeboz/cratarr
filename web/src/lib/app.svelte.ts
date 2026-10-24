@@ -72,6 +72,8 @@ export type DownloadedTrack = {
   album: string | null;
   album_id: string | null;
   download: { id: string; state: 'done' | 'downloading' | 'waiting' | 'failed'; bytes: number; percent: number };
+  /** Downloaded once by the owner (false: there only for what is synced); absent from an app before 0.8. */
+  manual?: boolean;
 };
 
 /** The owner's downloads on this device, as the app last told them (`known` once it has). */
