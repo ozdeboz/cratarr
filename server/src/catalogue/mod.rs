@@ -1708,8 +1708,13 @@ impl Catalogue {
         self.store_shape_blob(folder, rel, size, mtime, "band_wave", &wave.0)
     }
 
-    /// Present files with an analysis as they are now but no waveform in three bands (or one of an older form): the
-    /// analysis pass's work when it has nothing else to do, newest music first. Blocking.
+    /// Marks a file its waveform in three bands could not be worked out of (`band_wave::FAILED`), as it is now.
+    pub fn store_band_wave_failed(&self, folder: i64, rel: &str, size: u64, mtime: i64) -> Result<bool> {
+        self.store_shape_blob(folder, rel, size, mtime, "band_wave", &[crate::analysis::band_wave::FAILED])
+    }
+
+    /// Present files with an analysis as they are now but no waveform in three bands (or one of an older form), and not
+    /// marked as failed: the analysis pass's work when it has nothing else to do, newest music first. Blocking.
     pub fn without_band_wave(&self, limit: usize) -> Result<Vec<(i64, String, PathBuf, u64, i64)>> {
         let folders = self.folders();
         let db = self.db();
@@ -1719,11 +1724,12 @@ impl Catalogue {
                LEFT JOIN analysis_shape s ON s.folder = a.folder AND s.rel = a.rel
                LEFT JOIN tracks t ON t.id = f.track
              WHERE {PRESENT_F} AND f.state = ?1 AND (a.complete IS NULL OR a.complete != 0)
-               AND (s.band_wave IS NULL OR length(s.band_wave) != ?2 OR substr(s.band_wave, 1, 1) != ?3)
+               AND (s.band_wave IS NULL OR (s.band_wave != ?5 AND (length(s.band_wave) != ?2 OR substr(s.band_wave, 1, 1) != ?3)))
              ORDER BY t.born DESC, f.mtime DESC LIMIT ?4"
         ))?;
         let format = vec![crate::analysis::band_wave::FORMAT];
-        let rows = st.query_map(params![READ, crate::analysis::band_wave::LEN as i64, format, limit as i64], |r| {
+        let failed = vec![crate::analysis::band_wave::FAILED];
+        let rows = st.query_map(params![READ, crate::analysis::band_wave::LEN as i64, format, limit as i64, failed], |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?.max(0) as u64, r.get::<_, i64>(3)?))
         })?;
         let mut out = Vec::new();
@@ -2453,6 +2459,34 @@ mod tests {
         cat.walk_all();
         read_as_audio(&cat);
         assert_eq!(cat.beats_of(folder, &one), None);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_file_whose_bands_fail_is_marked_and_not_tried_again_until_it_changes() {
+        use crate::analysis::band_wave::{BandWave, FAILED, FORMAT, LEN};
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        let todo = cat.unanalysed(10).unwrap();
+        let (folder, one, _, size, mtime) = todo.iter().find(|t| t.1.ends_with("One.mp3")).unwrap().clone();
+        let two = todo.iter().find(|t| t.1.ends_with("Two.flac")).unwrap().clone();
+        cat.store_analysis(folder, &one, size, mtime, &an_analysis(-3.0, 500)).unwrap();
+        cat.store_analysis(two.0, &two.1, two.3, two.4, &an_analysis(-5.0, 480)).unwrap();
+        let wanted = |cat: &Catalogue| cat.without_band_wave(10).unwrap().into_iter().map(|t| t.1).collect::<Vec<_>>();
+        assert_eq!(wanted(&cat).len(), 2);
+        // One fails: marked, and the pass no longer asks for it; the other, worked out, neither.
+        assert!(cat.store_band_wave_failed(folder, &one, size, mtime).unwrap());
+        assert!(cat.band_wave_of(folder, &one).unwrap().unwrap().failed());
+        let mut w = vec![FORMAT];
+        w.resize(LEN, 9);
+        assert!(cat.store_band_wave(two.0, &two.1, two.3, two.4, &BandWave(w)).unwrap());
+        assert!(wanted(&cat).is_empty());
+        // An older form's mark is not this one's: asked for again.
+        cat.store_band_wave_failed(folder, &one, size, mtime).unwrap();
+        cat.db().execute("UPDATE analysis_shape SET band_wave = ?3 WHERE folder = ?1 AND rel = ?2", params![folder, one, vec![FAILED - 1]]).unwrap();
+        assert_eq!(wanted(&cat), vec![one.clone()]);
         std::fs::remove_dir_all(&d).ok();
     }
 

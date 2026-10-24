@@ -16,9 +16,7 @@
 
 use std::path::Path;
 
-use anyhow::{Result, bail};
-
-use crate::convert;
+use anyhow::Result;
 
 /// The kept form's first byte.
 pub const FORMAT: u8 = 1;
@@ -28,6 +26,9 @@ pub const BINS: usize = 512;
 pub const EDGES: [f32; 2] = [150.0, 2500.0];
 /// The kept form's length: the format byte and three bands of bins.
 pub const LEN: usize = 1 + 3 * BINS;
+/// Kept in its place for a file this Cratarr could not work them out of: not tried again, by the pass or a play, until
+/// the file changes (its analysis then goes, and this with it), so a file that fails costs one decode, not one a start.
+pub const FAILED: u8 = 0x80 | FORMAT;
 
 /// A track's waveform in three bands, as kept: see the module.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -37,6 +38,11 @@ impl BandWave {
     /// Whether these are of the form this Cratarr makes (an older one counts as not worked out).
     pub fn current(&self) -> bool {
         self.0.len() == LEN && self.0[0] == FORMAT
+    }
+
+    /// Whether this is the mark of a file they could not be worked out of ([`FAILED`]).
+    pub fn failed(&self) -> bool {
+        self.0 == [FAILED]
     }
 }
 
@@ -168,26 +174,16 @@ impl Splitter {
     }
 }
 
-/// A file's waveform in three bands, from one decode of it (any format the converter reads, lossy ones too).
+/// A file's waveform in three bands, from one decode of it: the analysis's own mono reader (`super::Mono`), which
+/// reads every format symphonia does, MP3s behind a large ID3 tag and damaged frames included. Not the converter's
+/// `Source`: that one is for lossless copies and Opus streams, and took no MP3 (0.8.3: no bands for 25k of 31k).
 pub fn work_out(path: &Path) -> Result<BandWave> {
-    let Some(mut source) = convert::Source::open_any(path)? else { bail!("{} cannot be decoded here", path.display()) };
-    let channels = source.format.channels;
-    if channels == 0 {
-        bail!("{} has no audio channels", path.display());
-    }
-    let mut split = Splitter::new(source.format.sample_rate);
-    let mut planes: Vec<Vec<f32>> = vec![Vec::new(); channels];
-    let mut scratch = Vec::new();
-    while source.read(&mut planes, &mut scratch)? {
-        let n = planes[0].len();
-        for i in 0..n {
-            let mut x = 0.0;
-            for p in &planes {
-                x += p[i];
-            }
-            split.hear(x / channels as f32);
-        }
-        planes.iter_mut().for_each(Vec::clear);
+    let mut mono = super::Mono::open(path)?;
+    let mut split = Splitter::new(mono.rate());
+    let mut frames = Vec::new();
+    while mono.read(&mut frames)? {
+        frames.iter().for_each(|&x| split.hear(x));
+        frames.clear();
     }
     Ok(split.finish())
 }
@@ -274,5 +270,18 @@ mod tests {
         let mid = &w.0[1 + BINS..1 + 2 * BINS];
         assert!(mean(&mid[..240]) < 5.0 && mean(&mid[272..]) > 200.0, "{} then {}", mean(&mid[..240]), mean(&mid[272..]));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Real files (comma-separated in CRATARR_BANDS: MP3s behind a large cover, AAC, Vorbis): each one's bands worked out,
+    /// with each band's mean printed. Run with `--ignored`.
+    #[test]
+    #[ignore]
+    fn real_files_for_the_lab() {
+        for input in std::env::var("CRATARR_BANDS").unwrap_or_default().split(',').filter(|p| !p.is_empty()) {
+            let w = work_out(Path::new(input)).unwrap();
+            let m = |i: usize| mean(&w.0[1 + i * BINS..1 + (i + 1) * BINS]);
+            println!("{input}: low {:.0}, mid {:.0}, high {:.0}", m(0), m(1), m(2));
+            assert!(m(0) + m(1) + m(2) > 10.0, "{input} came out silent");
+        }
     }
 }
