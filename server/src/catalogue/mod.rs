@@ -126,7 +126,7 @@ const GENERATION: &str = "generation";
 const GONE_KEEP_SECS: i64 = 24 * 3600;
 
 /// Columns added after the first schema; added to an existing database when missing.
-const ADDED_COLUMNS: [(&str, &str); 9] = [
+const ADDED_COLUMNS: [(&str, &str); 10] = [
     ("files", "issue TEXT"),
     ("files", "issue_detail TEXT"),
     // Decision 0011: the Cratarr track id, when the file was last seen missing, and the trash token while trashed.
@@ -142,6 +142,8 @@ const ADDED_COLUMNS: [(&str, &str); 9] = [
     ("analysis_shape", "bands BLOB"),
     // Decision 0049, amended: whose the kept beats are (NULL: the analysis' own grid; 1: Beat this!'s).
     ("analysis_shape", "beats_by INTEGER"),
+    // The waveform in three bands (`analysis::band_wave::BandWave`; NULL: not worked out yet), 2026-10-24.
+    ("analysis_shape", "band_wave BLOB"),
 ];
 
 /// File states.
@@ -1696,6 +1698,43 @@ impl Catalogue {
     }
 
     /// One of the shape's blobs worked out apart (`beats`, `bands`), while the file is as it was analysed.
+    /// A file's waveform in three bands, as `signals_of`: `Some(None)` until it is first worked out.
+    pub fn band_wave_of(&self, folder: i64, rel: &str) -> Option<Option<crate::analysis::band_wave::BandWave>> {
+        self.shape_blob(folder, rel, "band_wave").map(|b| b.map(crate::analysis::band_wave::BandWave))
+    }
+
+    /// Keeps a file's waveform in three bands beside its analysis (false: the file has no analysis as it is now).
+    pub fn store_band_wave(&self, folder: i64, rel: &str, size: u64, mtime: i64, wave: &crate::analysis::band_wave::BandWave) -> Result<bool> {
+        self.store_shape_blob(folder, rel, size, mtime, "band_wave", &wave.0)
+    }
+
+    /// Present files with an analysis as they are now but no waveform in three bands (or one of an older form): the
+    /// analysis pass's work when it has nothing else to do, newest music first. Blocking.
+    pub fn without_band_wave(&self, limit: usize) -> Result<Vec<(i64, String, PathBuf, u64, i64)>> {
+        let folders = self.folders();
+        let db = self.db();
+        let mut st = db.prepare(&format!(
+            "SELECT f.folder, f.rel, f.size, f.mtime FROM files f
+               JOIN analysis a ON a.folder = f.folder AND a.rel = f.rel AND a.size = f.size AND a.mtime = f.mtime
+               LEFT JOIN analysis_shape s ON s.folder = a.folder AND s.rel = a.rel
+               LEFT JOIN tracks t ON t.id = f.track
+             WHERE {PRESENT_F} AND f.state = ?1 AND (a.complete IS NULL OR a.complete != 0)
+               AND (s.band_wave IS NULL OR length(s.band_wave) != ?2 OR substr(s.band_wave, 1, 1) != ?3)
+             ORDER BY t.born DESC, f.mtime DESC LIMIT ?4"
+        ))?;
+        let format = vec![crate::analysis::band_wave::FORMAT];
+        let rows = st.query_map(params![READ, crate::analysis::band_wave::LEN as i64, format, limit as i64], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?.max(0) as u64, r.get::<_, i64>(3)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (folder, rel, size, mtime) = row?;
+            let Some(root) = usize::try_from(folder).ok().and_then(|i| folders.get(i)) else { continue };
+            out.push((folder, rel.clone(), root.join(&rel), size, mtime));
+        }
+        Ok(out)
+    }
+
     fn shape_blob(&self, folder: i64, rel: &str, column: &'static str) -> Option<Option<Vec<u8>>> {
         self.db()
             .query_row(

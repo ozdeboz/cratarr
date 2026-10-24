@@ -4,7 +4,8 @@
 //! took: about a quarter of one core, so Cratarr answers as fast as ever meanwhile.
 //!
 //! When it has nothing to analyse, it hears new music's beats with Beat this! (decision 0049, amended; `beat_this`), a
-//! file at a time, resting as long again.
+//! file at a time, resting as long again; and with no beats left to hear either, it works out the waveform in three
+//! bands (`analysis::band_wave`) of a file that has none yet, a file at a time, resting as long again.
 //!
 //! `CRATARR_ANALYSIS`: `keep` (the default: waits until most of the library has an analysis, as after the ThinkBook's
 //! import, then keeps up), `all` (does the first pass itself, when no ThinkBook is at hand), `off`.
@@ -14,6 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::analysis::Beats;
+use crate::analysis::band_wave::BandWave;
 use crate::analysis::signals::Signals;
 use crate::catalogue::Catalogue;
 
@@ -55,6 +57,7 @@ pub fn run(cat: Arc<Catalogue>, mode: Mode) {
         // again.
         let mut failed: HashSet<(i64, String, u64, i64)> = HashSet::new();
         let mut unheard: HashSet<(i64, String, u64, i64)> = HashSet::new();
+        let mut unbanded: HashSet<(i64, String, u64, i64)> = HashSet::new();
         let mut waiting_said = false;
         loop {
             let c = cat.clone();
@@ -82,7 +85,43 @@ pub fn run(cat: Arc<Catalogue>, mode: Mode) {
                     .into_iter()
                     .find(|(f, r, _, s, m)| !unheard.contains(&(*f, r.clone(), *s, *m)));
                 let Some((folder, rel, path, size, mtime)) = next else {
-                    tokio::time::sleep(IDLE).await;
+                    // No beats to hear either: one file's waveform in three bands, else a rest.
+                    let (c, limit) = (cat.clone(), 1 + unbanded.len());
+                    let next = tokio::task::spawn_blocking(move || c.without_band_wave(limit))
+                        .await
+                        .ok()
+                        .and_then(|r| r.ok())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .find(|(f, r, _, s, m)| !unbanded.contains(&(*f, r.clone(), *s, *m)));
+                    let Some((folder, rel, path, size, mtime)) = next else {
+                        tokio::time::sleep(IDLE).await;
+                        continue;
+                    };
+                    let started = Instant::now();
+                    let c = cat.clone();
+                    let r = rel.clone();
+                    let done = tokio::task::spawn_blocking(move || {
+                        let _one = BAND_WAVES.lock().unwrap_or_else(|e| e.into_inner());
+                        let w = crate::analysis::band_wave::work_out(&path)?;
+                        c.store_band_wave(folder, &r, size, mtime, &w)
+                    })
+                    .await;
+                    match done {
+                        Ok(Ok(true)) => {}
+                        Ok(Ok(false)) => {
+                            unbanded.insert((folder, rel, size, mtime));
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!("band waveform: {rel}: {e:#}");
+                            unbanded.insert((folder, rel, size, mtime));
+                        }
+                        Err(e) => {
+                            tracing::warn!("band waveform: {rel}: {e}");
+                            unbanded.insert((folder, rel, size, mtime));
+                        }
+                    }
+                    tokio::time::sleep(started.elapsed() * REST).await;
                     continue;
                 };
                 let started = Instant::now();
@@ -127,6 +166,47 @@ pub fn run(cat: Arc<Catalogue>, mode: Mode) {
             }
         }
     });
+}
+
+/// One waveform in three bands worked out at a time, whether a play asked for it or the pass: a play's waits for the
+/// pass's file to finish (a second or two).
+static BAND_WAVES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A file's waveform in three bands (`analysis::band_wave`): as kept, or worked out now and kept, the first time a
+/// track plays. `None`: the file cannot be decoded, or it took too long (`DECODE`; it is still kept when it comes).
+pub async fn band_wave(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<BandWave> {
+    let (c, r) = (cat.clone(), rel.clone());
+    let kept = tokio::task::spawn_blocking(move || c.band_wave_of(folder, &r)).await.ok().flatten();
+    if let Some(Some(w)) = kept.filter(|k| k.as_ref().is_some_and(BandWave::current)) {
+        return Some(w);
+    }
+    let work = tokio::task::spawn_blocking(move || -> anyhow::Result<BandWave> {
+        let _one = BAND_WAVES.lock().unwrap_or_else(|e| e.into_inner());
+        // Kept while this one waited.
+        if let Some(Some(w)) = cat.band_wave_of(folder, &rel).filter(|k| k.as_ref().is_some_and(BandWave::current)) {
+            return Ok(w);
+        }
+        let (path, size, mtime) = cat.file_to_analyse(folder, &rel).ok_or_else(|| anyhow::anyhow!("not in the library"))?;
+        let w = crate::analysis::band_wave::work_out(&path)?;
+        // Without an analysis of the file as it is now it is not kept: the pass analyses it first.
+        cat.store_band_wave(folder, &rel, size, mtime, &w)?;
+        Ok(w)
+    });
+    match tokio::time::timeout(DECODE, work).await {
+        Ok(Ok(Ok(w))) => Some(w),
+        Ok(Ok(Err(e))) => {
+            tracing::warn!("band waveform when asked for: {e:#}");
+            None
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("band waveform when asked for: {e}");
+            None
+        }
+        Err(_) => {
+            tracing::warn!("band waveform when asked for took over {} s", DECODE.as_secs());
+            None
+        }
+    }
 }
 
 /// What the visuals ask for (decision 0046) worked out when first asked: one decode at a time, beside the pass.

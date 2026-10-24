@@ -48,6 +48,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/track/{source}/{id}/playlists", get(track_state))
         .route("/api/track/{source}/{id}/details", get(track_details))
         .route("/api/track/{source}/{id}/waveform", get(track_waveform))
+        .route("/api/track/{source}/{id}/bands", get(track_band_wave))
         .route("/api/track/{source}/{id}/beats", get(track_beats))
         .route("/api/track/{source}/{id}/bands", get(track_bands))
         .route("/api/track/{source}/{id}/playlists/{playlist}", post(track_toggle))
@@ -779,6 +780,39 @@ async fn track_waveform(State(app): State<Arc<App>>, Path((source, id)): Path<(S
     };
     let h = res.headers_mut();
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=2592000"));
+    if let Ok(v) = HeaderValue::from_str(&etag) {
+        h.insert(header::ETAG, v);
+    }
+    res
+}
+
+/// A track's waveform in three bands (`analysis::band_wave`, the full-screen player's): a format byte (1), then 512
+/// bins of the low band (below 150 Hz), 512 of the mid and 512 of the high (above 2.5 kHz), each its RMS as 0..=255 of
+/// the loudest bin of any band. Worked out the first time it is asked for (a second or two), kept after. 404 for a
+/// track Cratarr does not keep the file of; 503 when it cannot be worked out now. An ETag of its bytes.
+async fn track_band_wave(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
+    let cat = app.library.catalogue();
+    let c = cat.clone();
+    let Some((folder, rel)) = tokio::task::spawn_blocking(move || {
+        let track = c.track_of_source(&source, &id)?;
+        c.file_of(track)
+    })
+    .await
+    .ok()
+    .flatten() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(wave) = crate::app::analysis_pass::band_wave(cat, folder, rel).await else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let etag = format!("\"b{:08x}\"", crate::opus_copy::crc32(&wave.0));
+    let mut res = if headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) == Some(etag.as_str()) {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        ([(header::CONTENT_TYPE, "application/octet-stream")], wave.0).into_response()
+    };
+    let h = res.headers_mut();
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-cache"));
     if let Ok(v) = HeaderValue::from_str(&etag) {
         h.insert(header::ETAG, v);
     }
@@ -2068,7 +2102,9 @@ async fn opus_stream(path: std::path::PathBuf, from_ms: u64, lossy_too: bool) ->
     tokio::task::spawn_blocking(move || {
         let failed = tx.clone();
         let out = ChannelWriter { tx, buf: Vec::with_capacity(ChannelWriter::PIECE) };
-        let told = |h| drop(said.send(h));
+        let told = |h| {
+            let _ = said.send(h);
+        };
         if let Err(e) = crate::opus_copy::stream_mp4(&path, from_ms, lossy_too, told, out) {
             // A closed body: the page stopped reading (a skip, a seek).
             let stopped = e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe);
