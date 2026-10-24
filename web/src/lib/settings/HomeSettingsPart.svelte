@@ -3,7 +3,7 @@
   // as the player's details and the profile's rows); and its header: a personal greeting in place of the moment's name,
   // and a picture of one's own in place of the weather's sky, kept on this device (lib/localCovers). Acts at once.
   import { HOME_HEADER, HOME_HEADER_PX, localCovers, removeLocalPicture, setLocalPicture } from '../localCovers.svelte';
-  import { HOME_PARTS, homeDefault, prefs } from '../prefs.svelte';
+  import { FLOW_PARTS, HOME_PARTS, homeDefault, prefs, type HomePart } from '../prefs.svelte';
   import { toast } from '../toast.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
@@ -18,6 +18,17 @@
       void removeLocalPicture(HOME_HEADER);
     },
   );
+
+  /** The first section leads Home as the flow on top, so only one made of albums may be first (the owner, 2026-10-24):
+   *  another dragged there lands under the first that can lead; the last that can lead stays switched on. */
+  function setParts(parts: HomePart[]) {
+    const at = parts.findIndex((p) => FLOW_PARTS.includes(p));
+    if (at < 0) {
+      toast.show({ text: 'One album section stays on top', tone: 'error' });
+      return;
+    }
+    prefs.homeParts = at === 0 ? parts : [parts[at], ...parts.slice(0, at), ...parts.slice(at + 1)];
+  }
 
   let busy = $state(false);
   async function pick(e: Event) {
@@ -36,8 +47,8 @@
   }
 </script>
 
-<Group title="Sections">
-  <OrderList items={HOME_PARTS} on={prefs.homeParts} label="Home's sections" onchange={(v) => (prefs.homeParts = v)} />
+<Group title="Sections" more="The first is the flow at the top, so it is one made of albums: Music for the moment, New for you, Blast from the past, Grave digging or Favourite albums.">
+  <OrderList items={HOME_PARTS} on={prefs.homeParts} label="Home's sections" onchange={setParts} />
 </Group>
 
 <Group title="Header">

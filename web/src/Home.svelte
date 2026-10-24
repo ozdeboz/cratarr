@@ -22,7 +22,7 @@
   import { shownPlaylists } from './lib/output.svelte';
   import { albumSubject, viewOver, viewPlaylist } from './lib/panel.svelte';
   import { playCollection } from './lib/play.svelte';
-  import { prefs, type HomePart } from './lib/prefs.svelte';
+  import { FLOW_PARTS, prefs, type HomePart } from './lib/prefs.svelte';
   import { HOME_HEADER, localCovers } from './lib/localCovers.svelte';
   import { me } from './lib/me.svelte';
   import greet from 'greet-by-time';
@@ -71,10 +71,24 @@
     return () => (gone = true);
   });
   const newest = $derived(heard ? candidates.filter((c) => !(c.source === 'cratarr' && heard!.has(c.a.id))).slice(0, NEWEST) : []);
+  /** The Library's newest albums (New for you's ›). */
   function allNewest() {
     prefs.libraryOrder = 'added';
     prefs.libraryDown = true;
     location.hash = '#/library';
+  }
+  /** Plays the album in front of the flow (New for you leading: its Play, the owner 2026-10-24). */
+  async function playFront() {
+    const a = frontAlbum;
+    if (!a) return;
+    starting = true;
+    try {
+      await playCollection({ kind: 'album', source: a.source, id: a.id }, 'play', a.title);
+    } catch (e) {
+      toast.fail(e, 'Could not start playing');
+    } finally {
+      starting = false;
+    }
   }
 
   // Sounds like your week: its first rows (for the covers), its size, its genres, and how many tracks were played.
@@ -139,11 +153,11 @@
   const skyPhoto = $derived.by(() => {
     // A picture of the user's own, chosen on this device (Settings › Home), in place of the weather's.
     if (localCovers[HOME_HEADER]) return localCovers[HOME_HEADER];
-    if (!moment) return null;
+    // Without the weather, the plain sky of the hour.
+    if (!moment) return `skies/plain-${new Date().getHours() >= 7 && new Date().getHours() < 19 ? 'day' : 'night'}.jpg`;
     const one: Record<string, string> = { sunny: 'sunny-day', hot: 'hot-day', clear: 'clear-night' };
     return `skies/${one[moment.sky] ?? `${moment.sky}-${moment.dark ? 'night' : 'day'}`}.jpg`;
   });
-  const frontAlbum = $derived(momentAlbums[Math.min(momentFront, momentAlbums.length - 1)]);
   async function momentRadio() {
     if (!moment) return;
     navigator.vibrate?.(8);
@@ -335,6 +349,33 @@
     return me.name ? `${words}, ${me.name}!` : `${words}!`;
   });
 
+  // The first section leads Home as the flow on top, over the sky (the owner, 2026-10-24): only those made of albums
+  // can lead (FLOW_PARTS; Settings › Home keeps one of them first). Its albums, its title.
+  const lead = $derived(order[0]);
+  type FlowAlbum = { source: string; id: string; title: string; artist: string | null };
+  const flowOf = (source: string, a: { id: string; title: string; artist: string | null }): FlowAlbum => ({ source, id: a.id, title: a.title, artist: a.artist });
+  const heroAlbums = $derived.by((): FlowAlbum[] => {
+    const own = sources.find((s) => s.id === 'cratarr')?.albums ?? [];
+    switch (lead) {
+      case 'moment':
+        return momentAlbums.map((a) => flowOf('cratarr', a));
+      case 'newest':
+        return newest.map((n) => flowOf(n.source, n.a));
+      case 'past':
+        return pastAlbums.flatMap((t) => own.filter((a) => a.id === t.album_id).map((a) => flowOf('cratarr', a)));
+      case 'graves':
+        return graves.map((g) => flowOf('cratarr', g.a));
+      case 'favAlbums':
+        return favAlbums.map((a) => flowOf('cratarr', a));
+      default:
+        return [];
+    }
+  });
+  const TITLES: Partial<Record<Part, string>> = { newest: 'New for you', past: 'Blast from the past', graves: 'Grave digging', favAlbums: 'Favourite albums' };
+  const leadTitle = $derived(lead === 'moment' ? (moment?.name ?? '') : (TITLES[lead] ?? ''));
+  /** The album in front of the flow, named under it. */
+  const frontAlbum = $derived(heroAlbums[Math.min(momentFront, heroAlbums.length - 1)]);
+
   /** Each section, drawn where the user's order puts it. */
   const PARTS: Record<Part, Snippet> = {
     moment: momentPart,
@@ -360,37 +401,58 @@
 <div class="home">
   {#if loading}<PageLoading />{/if}
   <!-- Its sections in the user's order, those switched on (Settings › Home; the owner, 2026-10-24). -->
-  {#each order as part (part)}{@render PARTS[part]()}{/each}
+  {#each order as part, i (part)}{@render (i === 0 && FLOW_PARTS.includes(part) ? heroPart : PARTS[part])()}{/each}
 </div>
 
-{#snippet momentPart()}
-  {#if turn('moment') && moment && momentAlbums.length}
-    <section class="moment" class:top={order[0] === 'moment'} data-sky={moment.sky} class:dark={moment.dark} style:--photo={skyPhoto ? `url(${skyPhoto})` : 'none'} aria-label={moment.name}>
+{#snippet heroPart()}
+  {#if turn(lead) && heroAlbums.length}
+    <section class="moment top" data-sky={moment?.sky ?? 'plain'} class:dark={moment?.dark ?? false} style:--photo={skyPhoto ? `url(${skyPhoto})` : 'none'} aria-label={leadTitle}>
       {#if prefs.homeGreeting}
         <!-- The personal greeting (Settings › Home): the time of day and their name, then what plays here. -->
         <h2>{greeting}</h2>
-        <p class="for-now">Best for now</p>
+        <p class="for-now">{lead === 'moment' ? 'Best for now' : leadTitle}</p>
       {:else}
-        <h2>{moment.name}</h2>
+        <h2>{leadTitle}</h2>
       {/if}
       <div class="sky-flow">
         <CoverFlow
-          covers={momentAlbums.map((a) => albumCoverUrl('cratarr', a.id))}
+          covers={heroAlbums.map((a) => albumCoverUrl(a.source, a.id))}
           top={0}
           foot={SHADOW}
-          onopen={(i) => viewOver(albumSubject('cratarr', momentAlbums[i].id))}
+          onopen={(i) => viewOver(albumSubject(heroAlbums[i].source, heroAlbums[i].id))}
           onfront={(i) => (momentFront = i)}
         />
       </div>
       <div class="caption">
         {#if frontAlbum}
-          <button class="name" onclick={() => viewOver(albumSubject('cratarr', frontAlbum.id))}>
+          <button class="name" onclick={() => viewOver(albumSubject(frontAlbum.source, frontAlbum.id))}>
             <span class="title">{frontAlbum.title}</span>
             <span class="by">{frontAlbum.artist ?? ''}</span>
           </button>
         {/if}
-        <button class="radio" disabled={starting} onclick={momentRadio}><Icon name="radioTower" size={18} />Radio</button>
+        {#if lead === 'moment'}
+          <button class="radio" disabled={starting} onclick={momentRadio}><Icon name="radioTower" size={18} />Radio</button>
+        {:else if lead === 'past' || lead === 'newest'}
+          <button class="radio" disabled={starting} onclick={() => (lead === 'past' ? playPast('play') : playFront())}><Icon name="play" size={18} />Play</button>
+        {/if}
       </div>
+    </section>
+  {/if}
+{/snippet}
+
+{#snippet momentPart()}
+  <!-- The moment further down (not leading): a shelf as New for you's, its covers a little bigger, Radio at its heading
+       in place of the › (the owner, 2026-10-24). -->
+  {#if turn('moment') && moment && momentAlbums.length}
+    <section aria-label={moment.name}>
+      <SectionHead title={moment.name}>
+        {#snippet end()}<button class="radio" disabled={starting} onclick={momentRadio}><Icon name="radioTower" size={18} />Radio</button>{/snippet}
+      </SectionHead>
+      <ul class="shelf big">
+        {#each momentAlbums as a (a.id)}
+          <li><AlbumCard source="cratarr" album={a} lines={[a.artist ?? '', a.year ? String(a.year) : '']} /></li>
+        {/each}
+      </ul>
     </section>
   {/if}
 {/snippet}
@@ -664,7 +726,8 @@
     font-size: 0.9rem;
   }
 
-  .caption .radio {
+  /* The moment's Radio (and a leading section's Play): one pill, in its caption or at its shelf's heading. */
+  .radio {
     display: inline-flex;
     flex: none;
     align-items: center;
@@ -678,7 +741,7 @@
     cursor: pointer;
   }
 
-  .caption .radio:disabled {
+  .radio:disabled {
     opacity: 0.6;
   }
 
@@ -699,6 +762,10 @@
     flex: none;
     width: 150px;
     scroll-snap-align: start;
+  }
+
+  .shelf.big li {
+    width: 190px;
   }
 
   /* One line each on a shelf's cards: a shelf is as tall as its tallest card, and one long title anywhere in it, out of

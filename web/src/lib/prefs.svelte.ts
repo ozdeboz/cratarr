@@ -143,6 +143,8 @@ export const HOME_PARTS: { id: HomePart; label: string }[] = [
   { id: 'favAlbums', label: 'Favourite albums' },
   { id: 'favTracks', label: 'Favourite tracks' },
 ];
+/** The sections that can lead Home (the owner, 2026-10-24): made of albums, so the first is shown as the flow on top. */
+export const FLOW_PARTS: HomePart[] = ['moment', 'newest', 'past', 'graves', 'favAlbums'];
 /** Off until switched on in Settings › Home. */
 const HOME_OFF: HomePart[] = ['favAlbums', 'favTracks'];
 /** Home's sections as they come: in the first order, the standard ones off. */
