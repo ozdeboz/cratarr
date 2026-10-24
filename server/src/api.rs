@@ -2768,8 +2768,8 @@ struct LastFmBack {
 async fn scrobble_lastfm_callback(Query(q): Query<LastFmBack>) -> Response {
     let back = |why: Option<String>| {
         let to = match why {
-            None => "/#/settings?view=settings%3Aconnections".to_string(),
-            Some(w) => format!("/#/settings?view=settings%3Aconnections&scrobble={}", urlencoding_lite(&w)),
+            None => "/#/settings?view=settings%3Aconnections%2Flastfm".to_string(),
+            Some(w) => format!("/#/settings?view=settings%3Aconnections%2Flastfm&scrobble={}", urlencoding_lite(&w)),
         };
         axum::response::Redirect::to(&to).into_response()
     };
