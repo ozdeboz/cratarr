@@ -88,3 +88,11 @@ the card shows as much as is known of the suggestion.
   brings tags and listeners (five calls a second); MusicBrainz's discography lookup brings each album's genres with
   it. Length and track count need one MusicBrainz release each (one a second): looked up for the cards in view first,
   then the rest, and kept, so a card fills in as it is seen the first time and opens complete after.
+
+## Amendment, 2026-10-24: shown as soon as found (0.9)
+
+The owner, 2026-10-24: the first look waited behind the page's loader until every album's listening links (Bandcamp,
+YouTube: MusicBrainz, one request a second) were found. Now the suggestions show the moment they are known; what is
+still looked up (the links, a card's length and track count) goes on behind them, shown as every page shows work in
+progress (the line and bar at the top, the page action's ring), each card filling in as its part arrives. The loader
+shows only until there is a first suggestion.
