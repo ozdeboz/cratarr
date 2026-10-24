@@ -409,7 +409,7 @@
     <section class="moment top" data-sky={moment?.sky ?? 'plain'} class:dark={moment?.dark ?? false} style:--photo={skyPhoto ? `url(${skyPhoto})` : 'none'} aria-label={leadTitle}>
       {#if prefs.homeGreeting}
         <!-- The personal greeting (Settings › Home): the time of day and their name, then what plays here. -->
-        <h2>{greeting}</h2>
+        <h2 class="greeting">{greeting}</h2>
         <p class="for-now">{lead === 'moment' ? 'Best for now' : leadTitle}</p>
       {:else}
         <h2>{leadTitle}</h2>
@@ -665,12 +665,16 @@
     font-weight: 400;
   }
 
-  /* Under the personal greeting: what the section is, a line in the heading's own colour, quieter. */
+  /* The personal greeting a little larger than a section's title; the leading section's name under it as one (the
+     owner, 2026-10-24). */
+  .moment h2.greeting {
+    font-size: 28px;
+  }
+
   .moment .for-now {
-    margin: 2px 0 0;
+    margin: 4px 0 0;
     padding: 0 16px;
-    font-size: 15px;
-    opacity: 0.75;
+    font-size: 23px;
   }
 
   /* Room under the covers for their shadow (it fades over 30 px): at the flow's very foot, its clip cut the shadow off
