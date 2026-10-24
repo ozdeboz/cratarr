@@ -277,7 +277,7 @@ class SettingsEditor {
   stepLine = (j: ImportJob) => {
     const st = j.step;
     if (!st) return { label: 'Starting', value: 0 };
-    const of = st.total ? ` ${count(st.read)} of ${count(st.total)}` : st.read ? ` ${count(st.read)}` : '';
+    const of = st.total ? ` · ${count(st.read)} of ${count(st.total)}` : st.read ? ` · ${count(st.read)}` : '';
     return { label: `${STEPS[st.name]}${of}`, value: st.total ? st.read / st.total : 0 };
   };
 

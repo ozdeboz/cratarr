@@ -40,6 +40,7 @@ pub mod import_files;
 pub mod lastfm;
 pub mod listening;
 pub mod scrobble;
+pub mod tasks;
 pub mod listenbrainz;
 pub mod moment;
 pub mod refind;

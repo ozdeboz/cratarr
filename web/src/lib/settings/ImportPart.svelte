@@ -5,7 +5,8 @@
   // server brings plays, favourites, ratings and added dates; ListenBrainz every listen it kept, into the history of the
   // account signed in. Add import: a Subsonic server (Navidrome, gonic, Airsonic, …) by its address and login, found in
   // the library by name; its password is asked for each run and kept nowhere. Acts at once; a server's import is
-  // followed while it runs.
+  // followed while it runs. ListenBrainz, Last.fm and files run as the server's tasks (lib/tasks): their row shows how
+  // far they are, and what they brought, also when this page was left meanwhile.
   import {
     getLastFm,
     importFile,
@@ -21,7 +22,9 @@
     type FileBrought,
     type ImportTally,
     type LastFmImported,
+    type Task,
   } from '../api';
+  import { progressOf, tasks } from '../tasks.svelte';
   import { backFromThing, openThing } from '../panel.svelte';
   import { nameThing } from '../settingsSections.svelte';
   import ChoiceSheet from './ChoiceSheet.svelte';
@@ -42,7 +45,7 @@
     "A listening history exported elsewhere goes into your history: ListenBrainz's export (its .zip), Spotify's (the JSON files of your extended streaming history, or of your account data; plays under 30 seconds left out) or Last.fm's as export tools write it (CSV: artist, album, track, date). A playlist becomes a new playlist of the tracks found: .m3u, .m3u8, .xspf, or Exportify's CSV of a Spotify playlist.\n\nPreview first; nothing of the file is kept.";
   const FROM_NAMES = { listenbrainz: 'ListenBrainz', spotify: 'Spotify', lastfm: 'Last.fm' } as const;
   const FM_MORE =
-    "Your Last.fm scrobbles into your listening history (for your taste and your week, not the play counts), and your loved tracks as favourites. A scrobble already in your history from elsewhere is not added twice; run again, it brings only what is new.\n\nLast.fm asks every app for an API key: make one at last.fm/api/account/create (any name will do) and give it here once.";
+    "Your Last.fm scrobbles into your listening history (for your taste and your week, not the play counts), and your loved tracks as favourites. A scrobble already in your history from elsewhere is not added twice; run again, it brings only what is new.\n\nLast.fm asks every app for an API key: make one at last.fm/api/account/create (any name will do) and give it here once. With Last.fm connected under Connections, its sign-in is used instead, which also reads a history you keep private.\n\nIt runs on the server: leave the page, and its result waits here for an hour. An Import right after a Preview reads only what is new.";
   const SERVER = 'server:';
   const SERVER_MORE = 'Plays, favourites, ratings and added dates from a server, into an account. Run again, it brings only what changed.';
   const LB_MORE =
@@ -65,34 +68,61 @@
 
   let choosing = $state<{ source: string; which: 'user' | 'account' } | null>(null);
 
-  // ListenBrainz: whose listens; the last preview or import, and its undo.
+  // The server's tasks, followed while this part shows.
+  $effect(() => tasks.follow());
+  const said = (e: unknown) => (e instanceof Error ? e.message : String(e));
+  /** An import's task as its row shows it: running (and how far), or what it brought; `hide`: a task an undo since took
+   *  back, no longer shown. */
+  function view<T>(kind: string, hide: number | null) {
+    const t = tasks.of(kind);
+    const shown = t && t.id !== hide ? t : null;
+    const busy = !!shown && shown.finished === null;
+    return {
+      busy,
+      what: shown?.preview ? 'Previewing' : 'Importing',
+      result: shown && !busy && !shown.error ? (shown.result as T) : null,
+      previewed: !!shown?.preview,
+      error: shown && !busy ? shown.error : null,
+      progress: busy ? progressOf(shown) : null,
+    };
+  }
+
+  // ListenBrainz: whose listens; the last preview or import (a task), and its undo.
   let lbUser = $state('');
   let naming = $state(false);
-  type LbRun = { busy: 'preview' | 'import' | 'undo' | null; tally: ImportTally | null; previewed: boolean; removed: number | null; error: string | null };
-  let lb = $state<LbRun>({ busy: null, tally: null, previewed: false, removed: null, error: null });
   let undoing = $state(false);
+  let lbOwn = $state<{ busy: 'undo' | null; removed: number | null; error: string | null; hide: number | null }>({ busy: null, removed: null, error: null, hide: null });
+  const lb = $derived(view<ImportTally>('import:listenbrainz', lbOwn.hide));
   async function runLb(what: 'preview' | 'import') {
-    lb = { busy: what, tally: null, previewed: false, removed: null, error: null };
+    lbOwn = { busy: null, removed: null, error: null, hide: null };
     try {
-      const tally = what === 'preview' ? await previewListenBrainz(lbUser) : await importListenBrainz(lbUser);
-      lb = { busy: null, tally, previewed: what === 'preview', removed: null, error: null };
+      tasks.begun((what === 'preview' ? await previewListenBrainz(lbUser) : await importListenBrainz(lbUser)).task);
     } catch (e) {
-      lb = { busy: null, tally: null, previewed: false, removed: null, error: e instanceof Error ? e.message : String(e) };
+      lbOwn = { ...lbOwn, error: said(e) };
     }
   }
   async function undoLb() {
-    lb = { ...lb, busy: 'undo', error: null };
+    lbOwn = { ...lbOwn, busy: 'undo', error: null };
     try {
-      lb = { busy: null, tally: null, previewed: false, removed: (await undoListenBrainz()).removed, error: null };
+      lbOwn = { busy: null, removed: (await undoListenBrainz()).removed, error: null, hide: tasks.of('import:listenbrainz')?.id ?? null };
     } catch (e) {
-      lb = { ...lb, busy: null, error: e instanceof Error ? e.message : String(e) };
+      lbOwn = { ...lbOwn, busy: null, error: said(e) };
     }
   }
   const n = (x: number) => x.toLocaleString();
   const tallyLine = (t: ImportTally, previewed: boolean) =>
     `${n(t.found)} of ${n(t.items)} found · ${n(t.new)} ${previewed ? 'would be new' : 'new'}`;
+  const lbError = $derived(lbOwn.error ?? lb.error);
   const lbLine = $derived(
-    lb.busy ? null : lb.error ? lb.error : lb.tally ? tallyLine(lb.tally, lb.previewed) : lb.removed !== null ? `${n(lb.removed)} listens taken out` : null,
+    lb.progress
+      ? lb.progress.line
+      : lbError
+        ? lbError
+        : lb.result
+          ? tallyLine(lb.result, lb.previewed)
+          : lbOwn.removed !== null
+            ? `${n(lbOwn.removed)} listens taken out`
+            : null,
   );
 
   // Add import: a Subsonic server by its address and login (decision 0067), opened on its own page.
@@ -142,8 +172,8 @@
   let fmKey = $state('');
   let fmNaming = $state<'user' | 'key' | null>(null);
   let fmUndoing = $state(false);
-  type FmRun = { busy: 'preview' | 'import' | 'undo' | null; done: LastFmImported | null; previewed: boolean; undone: string | null; error: string | null };
-  let fm = $state<FmRun>({ busy: null, done: null, previewed: false, undone: null, error: null });
+  let fmOwn = $state<{ busy: 'undo' | null; undone: string | null; error: string | null; hide: number | null }>({ busy: null, undone: null, error: null, hide: null });
+  const fm = $derived(view<LastFmImported>('import:lastfm', fmOwn.hide));
   getLastFm().then(
     (k) => {
       fmUser ||= k.user ?? '';
@@ -152,36 +182,41 @@
     () => {},
   );
   async function runFm(what: 'preview' | 'import') {
-    fm = { busy: what, done: null, previewed: false, undone: null, error: null };
+    fmOwn = { busy: null, undone: null, error: null, hide: null };
     try {
       const key = fmKey.trim() || undefined;
-      const done = what === 'preview' ? await previewLastFm(fmUser, key) : await importLastFm(fmUser, key);
+      tasks.begun((what === 'preview' ? await previewLastFm(fmUser, key) : await importLastFm(fmUser, key)).task);
       if (key) {
         fmKeyKept = true;
         fmKey = '';
       }
-      fm = { busy: null, done, previewed: what === 'preview', undone: null, error: null };
     } catch (e) {
-      fm = { busy: null, done: null, previewed: false, undone: null, error: e instanceof Error ? e.message : String(e) };
+      fmOwn = { ...fmOwn, error: said(e) };
     }
   }
   async function undoFm() {
-    fm = { ...fm, busy: 'undo', error: null };
+    fmOwn = { ...fmOwn, busy: 'undo', error: null };
     try {
       const u = await undoLastFm(fmUser);
-      fm = { busy: null, done: null, previewed: false, undone: `${n(u.scrobbles)} scrobbles and ${n(u.unstarred)} favourites taken back`, error: null };
+      fmOwn = {
+        busy: null,
+        undone: `${n(u.scrobbles)} scrobbles and ${n(u.unstarred)} favourites taken back`,
+        error: null,
+        hide: tasks.of('import:lastfm')?.id ?? null,
+      };
     } catch (e) {
-      fm = { ...fm, busy: null, error: e instanceof Error ? e.message : String(e) };
+      fmOwn = { ...fmOwn, busy: null, error: said(e) };
     }
   }
+  const fmError = $derived(fmOwn.error ?? fm.error);
   const fmLine = $derived(
-    fm.busy
-      ? null
-      : fm.error
-        ? fm.error
-        : fm.done
-          ? `Scrobbles: ${tallyLine(fm.done.scrobbles, fm.previewed)} · Loved: ${n(fm.done.loved.found)} of ${n(fm.done.loved.items)} found`
-          : fm.undone,
+    fm.progress
+      ? fm.progress.line
+      : fmError
+        ? fmError
+        : fm.result
+          ? `Scrobbles: ${tallyLine(fm.result.scrobbles, fm.previewed)} · Loved: ${n(fm.result.loved.found)} of ${n(fm.result.loved.items)} found`
+          : fmOwn.undone,
   );
   const fmReady = $derived(!!fmUser.trim() && (!!fmKey.trim() || fmKeyKept));
 
@@ -195,20 +230,38 @@
   let filesPreviewed = $state(false);
   let undoingFrom = $state<string | null>(null);
   let filesUndone = $state<string | null>(null);
+  /** The file's task, once it has ended. */
+  function ended(id: number): Promise<Task> {
+    return new Promise((done) => {
+      const look = () => {
+        const t = tasks.of('import:file');
+        if (t && t.id === id && t.finished !== null) done(t);
+        else setTimeout(look, 300);
+      };
+      look();
+    });
+  }
+  let fileNow = $state<string | null>(null);
   async function runFiles(what: 'preview' | 'import') {
     filesBusy = what;
     filesUndone = null;
     fileRuns = [];
     for (const f of files) {
+      fileNow = f.name;
       try {
-        fileRuns = [...fileRuns, { file: f.name, done: await importFile(f, what === 'preview'), error: null }];
+        const started = (await importFile(f, what === 'preview')).task;
+        tasks.begun(started);
+        const t = await ended(started.id);
+        fileRuns = [...fileRuns, { file: f.name, done: t.error ? null : (t.result as FileBrought), error: t.error }];
       } catch (e) {
-        fileRuns = [...fileRuns, { file: f.name, done: null, error: e instanceof Error ? e.message : String(e) }];
+        fileRuns = [...fileRuns, { file: f.name, done: null, error: said(e) }];
       }
     }
+    fileNow = null;
     filesPreviewed = what === 'preview';
     filesBusy = null;
   }
+  const fileProgress = $derived(filesBusy && tasks.running('import:file') ? progressOf(tasks.of('import:file')) : null);
   const fileLine = (r: FileRun) => {
     if (r.error || !r.done) return r.error ?? '';
     const d = r.done;
@@ -251,18 +304,31 @@
   </Group>
   <Group>
     <Item
-      lead={lb.busy ? 'off' : lb.error ? 'bad' : lb.tally && !lb.previewed ? 'on' : null}
-      name={lb.busy === 'preview' ? 'Previewing' : lb.busy === 'import' ? 'Importing' : lb.busy === 'undo' ? 'Taking out' : lb.error ? 'Not imported' : lb.previewed ? 'Previewed' : lb.tally ? 'Imported' : lb.removed !== null ? 'Undone' : 'Not run yet'}
+      lead={lb.busy || lbOwn.busy ? 'off' : lbError ? 'bad' : lb.result && !lb.previewed ? 'on' : null}
+      name={lb.busy
+        ? lb.what
+        : lbOwn.busy
+          ? 'Taking out'
+          : lbError
+            ? 'Not imported'
+            : lb.result
+              ? lb.previewed
+                ? 'Previewed'
+                : 'Imported'
+              : lbOwn.removed !== null
+                ? 'Undone'
+                : 'Not run yet'}
       line={lbLine}
-      tone={lb.error ? 'bad' : null}
+      progress={lb.progress?.value ?? null}
+      tone={lbError && !lb.busy ? 'bad' : null}
       wrap
     >
-      <button disabled={!!lb.busy || !lbUser.trim()} onclick={() => runLb('preview')}>Preview</button>
-      <button class="primary" disabled={!!lb.busy || !lbUser.trim()} onclick={() => runLb('import')}>Import</button>
+      <button disabled={lb.busy || !!lbOwn.busy || !lbUser.trim()} onclick={() => runLb('preview')}>Preview</button>
+      <button class="primary" disabled={lb.busy || !!lbOwn.busy || !lbUser.trim()} onclick={() => runLb('import')}>Import</button>
     </Item>
   </Group>
-  {#if lb.tally?.missing.length}
-    {@const t = lb.tally}
+  {#if lb.result?.missing.length}
+    {@const t = lb.result}
     <Group title={`Not in your library (${n(t.missing_tracks)})`}>
       {#each t.missing as m (`${m.artist}\n${m.title}`)}
         <Item name={m.title} line={`${m.artist} · ${n(m.count)} ${m.count === 1 ? 'listen' : 'listens'}`} />
@@ -299,32 +365,31 @@
   </Group>
   <Group>
     <Item
-      lead={fm.busy ? 'off' : fm.error ? 'bad' : fm.done && !fm.previewed ? 'on' : null}
-      name={fm.busy === 'preview'
-        ? 'Previewing'
-        : fm.busy === 'import'
-          ? 'Importing'
-          : fm.busy === 'undo'
-            ? 'Taking back'
-            : fm.error
-              ? 'Not imported'
-              : fm.previewed
+      lead={fm.busy || fmOwn.busy ? 'off' : fmError ? 'bad' : fm.result && !fm.previewed ? 'on' : null}
+      name={fm.busy
+        ? fm.what
+        : fmOwn.busy
+          ? 'Taking back'
+          : fmError
+            ? 'Not imported'
+            : fm.result
+              ? fm.previewed
                 ? 'Previewed'
-                : fm.done
-                  ? 'Imported'
-                  : fm.undone
-                    ? 'Undone'
-                    : 'Not run yet'}
+                : 'Imported'
+              : fmOwn.undone
+                ? 'Undone'
+                : 'Not run yet'}
       line={fmLine}
-      tone={fm.error ? 'bad' : null}
+      progress={fm.progress?.value ?? null}
+      tone={fmError && !fm.busy ? 'bad' : null}
       wrap
     >
-      <button disabled={!!fm.busy || !fmReady} onclick={() => runFm('preview')}>Preview</button>
-      <button class="primary" disabled={!!fm.busy || !fmReady} onclick={() => runFm('import')}>Import</button>
+      <button disabled={fm.busy || !!fmOwn.busy || !fmReady} onclick={() => runFm('preview')}>Preview</button>
+      <button class="primary" disabled={fm.busy || !!fmOwn.busy || !fmReady} onclick={() => runFm('import')}>Import</button>
     </Item>
   </Group>
-  {#if fm.done?.scrobbles.missing.length}
-    {@const t = fm.done.scrobbles}
+  {#if fm.result?.scrobbles.missing.length}
+    {@const t = fm.result.scrobbles}
     <Group title={`Not in your library (${n(t.missing_tracks)})`}>
       {#each t.missing as m (`${m.artist}|${m.title}`)}
         <Item name={m.title} line={`${m.artist} · ${n(m.count)} ${m.count === 1 ? 'scrobble' : 'scrobbles'}`} />
@@ -366,7 +431,12 @@
       wrap
       onclick={() => picker?.click()}
     />
-    <Item lead={filesBusy ? 'off' : null} name={filesBusy === 'preview' ? 'Previewing' : filesBusy === 'import' ? 'Importing' : filesPreviewed ? 'Previewed' : fileRuns.length ? 'Imported' : 'Not run yet'}>
+    <Item
+      lead={filesBusy ? 'off' : null}
+      name={filesBusy === 'preview' ? 'Previewing' : filesBusy === 'import' ? 'Importing' : filesPreviewed ? 'Previewed' : fileRuns.length ? 'Imported' : 'Not run yet'}
+      line={filesBusy && fileNow ? `${fileNow}${fileProgress ? ` · ${fileProgress.line}` : ''}` : null}
+      progress={fileProgress?.value ?? null}
+    >
       <button disabled={!!filesBusy || !files.length} onclick={() => runFiles('preview')}>Preview</button>
       <button class="primary" disabled={!!filesBusy || !files.length} onclick={() => runFiles('import')}>Import</button>
     </Item>
@@ -438,7 +508,7 @@
     <Group>
       {#if job && job.finished === null}
         {@const st = ed.stepLine(job)}
-        <Item lead="off" name="Importing" line={`${st.label}${st.value ? ` · ${Math.round(st.value * 100)}%` : ''}`} />
+        <Item lead="off" name={job.preview ? 'Previewing' : 'Importing'} line={st.label} progress={st.value || null} />
       {:else}
         <Item
           lead={job ? (job.error ? 'bad' : 'on') : null}
@@ -490,17 +560,19 @@
       <Item lead={src.error ? 'bad' : s.lead} name={`From ${ed.serverName(src.id)}`} line={src.error ?? s.line} tone={src.error || s.lead === 'bad' ? 'bad' : null} onclick={() => openThing('import', SERVER + src.id)} />
     {/each}
     <Item
-      lead={lb.tally && !lb.previewed ? 'on' : lb.error ? 'bad' : null}
+      lead={lb.busy ? 'off' : lb.result && !lb.previewed ? 'on' : lbError ? 'bad' : null}
       name="From ListenBrainz"
       line={lbLine ?? 'Listens into your history'}
-      tone={lb.error ? 'bad' : null}
+      progress={lb.progress?.value ?? null}
+      tone={lbError && !lb.busy ? 'bad' : null}
       onclick={() => openThing('import', LISTENBRAINZ)}
     />
     <Item
-      lead={fm.done && !fm.previewed ? 'on' : fm.error ? 'bad' : null}
+      lead={fm.busy ? 'off' : fm.result && !fm.previewed ? 'on' : fmError ? 'bad' : null}
       name="From Last.fm"
       line={fmLine ?? 'Scrobbles into your history, loved tracks as favourites'}
-      tone={fm.error ? 'bad' : null}
+      progress={fm.progress?.value ?? null}
+      tone={fmError && !fm.busy ? 'bad' : null}
       onclick={() => openThing('import', LASTFM)}
     />
     <Item name="From files" line="A history export, or a playlist" onclick={() => openThing('import', FILES)} />

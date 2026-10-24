@@ -6,9 +6,11 @@
   //   - `kind: 'add'` (accent, a plus in front) and `kind: 'danger'` (red): the row is the action itself;
   //   - children: a control of its own (a choice of a few, a button), which goes under the name where both do not fit.
   // `lead`: a dot in front (on, off, warn, bad) or a colour's swatch. `more`: a longer text behind an (i), beside the
-  // row's control and never inside it (lib/MoreInfo).
+  // row's control and never inside it (lib/MoreInfo). `progress` (0 to 1): work under way with a count, its line shown
+  // as the one Meter (ui-conventions, Progress).
   import type { Snippet } from 'svelte';
   import Icon from '../Icon.svelte';
+  import Meter from '../Meter.svelte';
   import MoreInfo from '../MoreInfo.svelte';
   import SwitchTrack from '../SwitchTrack.svelte';
 
@@ -26,6 +28,7 @@
     kind = null,
     disabled = false,
     busy = false,
+    progress = null,
     children,
   }: {
     name: string;
@@ -45,6 +48,7 @@
     kind?: 'add' | 'danger' | null;
     disabled?: boolean;
     busy?: boolean;
+    progress?: number | null;
     children?: Snippet;
   } = $props();
 
@@ -60,7 +64,7 @@
   {/if}
   <span class="text">
     <span class="name">{name}</span>
-    {#if line}<small class:wrap class:warn={tone === 'warn'} class:bad={tone === 'bad'}>{line}</small>{/if}
+    {#if progress !== null && line}<Meter label={line} value={progress} />{:else if line}<small class:wrap class:warn={tone === 'warn'} class:bad={tone === 'bad'}>{line}</small>{/if}
   </span>
 {/snippet}
 

@@ -8,11 +8,15 @@
 //!   ListenBrainz say, which a scrobbler often fed too) is not added twice.
 //! - **Loved tracks** are stars, kept as an import's (`userdata::apply_import`, source `lastfm`), so the undo takes
 //!   away the ones still as it set them, and a track loved no more there is unstarred here next time.
+//!
+//! It runs as a task (`app::tasks`): reading the scrobbles and the loves says how far it is, and what was read is kept
+//! for an hour, so the Import after a Preview reads only what came since. A history Last.fm keeps private is read
+//! through the account's own Last.fm sign-in (Connections, `app::scrobble`), where it has one.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -79,6 +83,9 @@ struct Item {
 struct Attr {
     #[serde(rename = "totalPages", default)]
     total_pages: String,
+    /// How many there are in all.
+    #[serde(default)]
+    total: String,
 }
 
 #[derive(Deserialize)]
@@ -102,7 +109,37 @@ struct List {
 /// Last.fm's answer when it refuses ("User not found", "Invalid API key").
 #[derive(Deserialize)]
 struct Refused {
+    #[serde(default)]
+    error: Option<i64>,
     message: String,
+}
+
+/// Last.fm's error for a history its user keeps private, asked without their sign-in.
+const PRIVATE: i64 = 17;
+
+/// How Cratarr asks Last.fm: with an API key, and the account's Last.fm sign-in where it has one (signed with the
+/// secret its key came with), which also reads a history kept private.
+#[derive(Debug, Clone)]
+pub struct Auth {
+    pub key: String,
+    pub signed: Option<(String, String)>,
+}
+
+/// Where a long read is: what it does, how many done, of how many.
+pub type Progress = dyn Fn(&str, u64, Option<u64>) + Send + Sync;
+
+/// What was read, per account and Last.fm user, for an hour: the Import after a Preview reads only what is new.
+struct Kept {
+    at: Instant,
+    scrobbles: Vec<Scrobble>,
+    loved: Vec<Scrobble>,
+}
+
+const KEPT_FOR: Duration = Duration::from_secs(3600);
+
+fn kept() -> &'static Mutex<HashMap<(String, String), Kept>> {
+    static KEPT: std::sync::OnceLock<Mutex<HashMap<(String, String), Kept>>> = std::sync::OnceLock::new();
+    KEPT.get_or_init(Default::default)
 }
 
 fn scrobble(i: Item) -> Option<Scrobble> {
@@ -120,26 +157,40 @@ fn scrobble(i: Item) -> Option<Scrobble> {
     })
 }
 
-/// Every page of `method` for `user`, read into scrobbles.
-async fn read(method: &str, user: &str, api_key: &str) -> Result<Vec<Scrobble>> {
+/// Every page of `method` for `user` (from `from` on, where given), read into scrobbles; `step` says how far.
+async fn read(method: &str, user: &str, auth: &Auth, from: Option<i64>, step: &str, progress: &Progress) -> Result<Vec<Scrobble>> {
     let http = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
     let mut out = Vec::new();
     let mut page = 1usize;
     loop {
-        let q = [
-            ("method", method.to_string()),
-            ("user", user.to_string()),
-            ("api_key", api_key.to_string()),
-            ("format", "json".into()),
-            ("limit", PAGE.to_string()),
-            ("page", page.to_string()),
-        ];
+        let mut q: BTreeMap<&str, String> = BTreeMap::new();
+        q.insert("method", method.to_string());
+        q.insert("user", user.to_string());
+        q.insert("api_key", auth.key.clone());
+        q.insert("limit", PAGE.to_string());
+        q.insert("page", page.to_string());
+        if let Some(f) = from {
+            q.insert("from", f.to_string());
+        }
+        if let Some((session, secret)) = &auth.signed {
+            q.insert("sk", session.clone());
+            let sig = super::scrobble::signature(&q, secret);
+            q.insert("api_sig", sig);
+        }
+        q.insert("format", "json".into());
         let res = http.get(API).query(&q).send().await.context("Last.fm did not answer")?;
         let ok = res.status().is_success();
         let body = res.text().await?;
+        if let Some(r) = serde_json::from_str::<Refused>(&body).ok().filter(|r| !ok || r.error.is_some()) {
+            if r.error == Some(PRIVATE) {
+                bail!(
+                    "{user}'s Last.fm history is private. Connect Last.fm under Connections › Listening services, or turn off Hide recent listening information on last.fm while it imports."
+                );
+            }
+            bail!("Last.fm refused: {}", r.message);
+        }
         if !ok {
-            let why = serde_json::from_str::<Refused>(&body).map(|r| r.message).unwrap_or(body);
-            bail!("Last.fm refused: {why}");
+            bail!("Last.fm refused: {body}");
         }
         let list = if method == "user.getlovedtracks" {
             serde_json::from_str::<Loved>(&body).context("Last.fm's answer could not be read")?.lovedtracks
@@ -148,6 +199,7 @@ async fn read(method: &str, user: &str, api_key: &str) -> Result<Vec<Scrobble>> 
         };
         let pages: usize = list.attr.total_pages.parse().unwrap_or(1);
         out.extend(list.track.into_iter().filter_map(scrobble));
+        progress(step, out.len() as u64, list.attr.total.parse().ok());
         if page >= pages {
             return Ok(out);
         }
@@ -172,11 +224,37 @@ pub struct Imported {
     pub loved: Tally,
 }
 
+/// `user`'s scrobbles and loves: as read within the hour plus what came since, or read now.
+async fn scrobbles_and_loves(account: &str, user: &str, auth: &Auth, progress: &Progress) -> Result<(Vec<Scrobble>, Vec<Scrobble>)> {
+    let id = (account.to_string(), user.to_lowercase());
+    let before = {
+        let mut k = kept().lock().unwrap_or_else(|e| e.into_inner());
+        k.retain(|_, v| v.at.elapsed() < KEPT_FOR);
+        k.get(&id).map(|v| (v.scrobbles.clone(), v.loved.clone()))
+    };
+    let (scrobbles, loved) = match before {
+        Some((mut scrobbles, loved)) => {
+            let newest = scrobbles.iter().map(|s| s.at).max();
+            let mut new = read("user.getrecenttracks", user, auth, newest.map(|n| n + 1), "Reading new scrobbles", progress).await?;
+            new.retain(|s| newest.is_none_or(|n| s.at > n));
+            new.append(&mut scrobbles);
+            (new, loved)
+        }
+        None => {
+            let scrobbles = read("user.getrecenttracks", user, auth, None, "Reading scrobbles", progress).await?;
+            let loved = read("user.getlovedtracks", user, auth, None, "Reading loved tracks", progress).await?;
+            (scrobbles, loved)
+        }
+    };
+    kept().lock().unwrap_or_else(|e| e.into_inner()).insert(id, Kept { at: Instant::now(), scrobbles: scrobbles.clone(), loved: loved.clone() });
+    Ok((scrobbles, loved))
+}
+
 /// Reads Last.fm and does the work, writing nothing for a preview. Blocking parts run apart.
-async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, api_key: &str, preview: bool) -> Result<Imported> {
+async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: &Auth, preview: bool, progress: &Progress) -> Result<Imported> {
     let dir = serve.data_dir.clone().context("the history needs Cratarr's data folder")?;
-    let scrobbles = read("user.getrecenttracks", user, api_key).await?;
-    let loved = read("user.getlovedtracks", user, api_key).await?;
+    let (scrobbles, loved) = scrobbles_and_loves(account, user, auth, progress).await?;
+    progress("Matching", 0, None);
     let (serve, account, user) = (serve.clone(), account.to_string(), user.to_string());
     tokio::task::spawn_blocking(move || -> Result<Imported> {
         let songs = Matcher::read(&Path::new(&dir).join("library.sqlite"))?;
@@ -217,14 +295,9 @@ async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, api_ke
     .await?
 }
 
-/// What importing `user`'s Last.fm into `account` would bring: nothing written.
-pub async fn preview(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, api_key: &str) -> Result<Imported> {
-    run(serve, account, user, api_key, true).await
-}
-
-/// Imports `user`'s scrobbles and loved tracks into `account` (decision 0067).
-pub async fn import(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, api_key: &str) -> Result<Imported> {
-    run(serve, account, user, api_key, false).await
+/// What importing `user`'s Last.fm into `account` would bring (nothing written), or imports it (decision 0067).
+pub async fn bring(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: &Auth, preview: bool, progress: &Progress) -> Result<Imported> {
+    run(serve, account, user, auth, preview, progress).await
 }
 
 /// What an undo took back: the scrobbles out of the history, the loves' stars.

@@ -1430,16 +1430,31 @@ export const getMoment = (source?: string, without?: string[]) =>
 /** What an import would bring (a preview) or brought (decision 0067): the source's items, those found in the library,
  *  those new; and what was not found, the most first (at most 100 of `missing_tracks`). */
 export type ImportTally = { items: number; found: number; new: number; missing: { artist: string; title: string; count: number }[]; missing_tracks: number };
-/** A ListenBrainz user's listens into the asking account's history (decisions 0064 and 0067). */
-export const importListenBrainz = (user: string) => post<ImportTally>('/api/history/listenbrainz', { user });
+/** Long work on the server (`app::tasks`): where it is (`step`: what it does, how many done, of how many where known),
+ *  and once finished its `result` or `error`. Followed on the live channel (`task`), or by `getTasks`. */
+export type Task = {
+  id: number;
+  kind: string;
+  preview: boolean;
+  started: number;
+  finished: number | null;
+  step: { name: string; done: number; total: number | null } | null;
+  error: string | null;
+  result: unknown;
+};
+type Started = { task: Task };
+export const getTasks = () => quietly<{ tasks: Task[] }>('/api/tasks');
+
+/** A ListenBrainz user's listens into the asking account's history (decisions 0064 and 0067), as a task. */
+export const importListenBrainz = (user: string) => post<Started>('/api/history/listenbrainz', { user });
 /** What importing them would bring, nothing written. */
-export const previewListenBrainz = (user: string) => post<ImportTally>('/api/history/listenbrainz/preview', { user });
+export const previewListenBrainz = (user: string) => post<Started>('/api/history/listenbrainz/preview', { user });
 /** Last.fm into the asking account (decision 0067): its scrobbles into the history, its loved tracks as favourites;
  *  `key` the API key made at Last.fm, else the one kept from last time. */
 export type LastFmImported = { scrobbles: ImportTally; loved: ImportTally };
 export const getLastFm = () => quietly<{ user: string | null; key: boolean }>('/api/history/lastfm');
-export const importLastFm = (user: string, key?: string) => post<LastFmImported>('/api/history/lastfm', { user, key });
-export const previewLastFm = (user: string, key?: string) => post<LastFmImported>('/api/history/lastfm/preview', { user, key });
+export const importLastFm = (user: string, key?: string) => post<Started>('/api/history/lastfm', { user, key });
+export const previewLastFm = (user: string, key?: string) => post<Started>('/api/history/lastfm/preview', { user, key });
 export const undoLastFm = (user: string) =>
   request<{ scrobbles: number; unstarred: number }>('/api/history/lastfm', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user }) });
 /** What a file brought or would bring (decision 0067, step 4): listens into the history (`from` the kind of export), or
@@ -1448,7 +1463,7 @@ export type FileBrought =
   | { kind: 'history'; from: 'listenbrainz' | 'spotify' | 'lastfm'; tally: ImportTally }
   | { kind: 'playlist'; name: string; tally: ImportTally; undo: string | null };
 export const importFile = (file: File, preview: boolean) =>
-  request<FileBrought>(`/api/import/file?${new URLSearchParams({ name: file.name, preview: String(preview) })}`, { method: 'POST', body: file });
+  request<Started>(`/api/import/file?${new URLSearchParams({ name: file.name, preview: String(preview) })}`, { method: 'POST', body: file });
 /** The listens imported from files of one kind out of the asking account's history again: how many. */
 export const undoFileImport = (from: string) => request<{ removed: number }>(`/api/import/file?${new URLSearchParams({ from })}`, { method: 'DELETE' });
 /** A listening service the asking account scrobbles to (decision 0068): its account there, why it stopped (until
