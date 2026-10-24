@@ -288,11 +288,17 @@ impl App {
         Ok(vec![f])
     }
 
-    /// Each server switched on that cannot be reached, and Lidarr.
+    /// Each server switched on that cannot be reached, and Lidarr; and settings that cannot be saved (no data folder:
+    /// About showed it until the owner, 2026-10-24).
     async fn check_servers(&self) -> anyhow::Result<Vec<Finding>> {
         let view = self.settings.view().await?;
         let settings = || Some(Open { page: "settings", switch: None });
         let mut out = Vec::new();
+        if view.settings_file.is_none() {
+            let mut f = finding("server", "server:settings-file", Level::Critical, 1, "Settings can't be saved");
+            f.detail = Some("Cratarr has no data folder: set CRATARR_DATA_DIR.".into());
+            out.push(f);
+        }
         for s in view.sources.iter().filter(|s| s.enabled && !s.status.connected) {
             let mut f = finding("servers", format!("servers:{}", s.id), Level::Critical, 1, format!("{} can't be reached", s.label));
             f.detail = s.status.error.clone().or_else(|| s.error.clone());

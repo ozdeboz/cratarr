@@ -1056,7 +1056,8 @@ export const getMe = () => quietly<Me>('/api/me');
 export const endMySession = (id: string) => request<void>(`/api/me/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
 export const removeMyDevice = (id: string) => request<void>(`/api/me/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
 /** The server's version and when it started, for everyone (the rest of its settings are its administrators'). */
-export const getAbout = () => quietly<{ version: string; started: number }>('/api/about');
+/** About Cratarr: its version, since when it runs, its licence (SPDX) and where its source is. */
+export const getAbout = () => quietly<{ version: string; started: number; licence?: string; source?: string }>('/api/about');
 /** One's own settings (decision 0051), one object per account, as the pages and the app name its parts; `version`
  *  counts its saves (0: none kept yet). A save names the version it changed, and is refused (409) if another came first. */
 export type MySettings = { version: number; settings: Record<string, unknown> };
