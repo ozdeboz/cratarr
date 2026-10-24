@@ -82,8 +82,10 @@ mod tests {
         started("me", "Phone", "tr-1");
         started("me", "Salon tablet", "tr-2");
         let mut told = Vec::new();
-        while let Ok(Event::Started { player, song, .. }) = rx.try_recv() {
-            told.push((player, song));
+        while let Ok(e) = rx.try_recv() {
+            if let Event::Started { player, song, .. } = e {
+                told.push((player, song));
+            }
         }
         // Other tests may tell too: only ours count.
         told.retain(|(p, _)| p == "Salon tablet" || p == "Phone");

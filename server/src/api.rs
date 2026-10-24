@@ -2637,14 +2637,14 @@ fn scrobbler() -> Result<(Arc<crate::serve::Serve>, String), ApiError> {
     Ok((serve, account))
 }
 
-fn refused(e: impl std::fmt::Display) -> ApiError {
+fn scrobble_refused(e: impl std::fmt::Display) -> ApiError {
     ToggleError::Refused(e.to_string()).into()
 }
 
 /// The asking account's listening services (Connections): whom it scrobbles to, never a secret.
 async fn scrobble_targets() -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = scrobbler()?;
-    let targets = tokio::task::spawn_blocking(move || serve.userdata.scrobble_targets(&account)).await.map_err(refused)?.map_err(|e| refused(format!("{e:#}")))?;
+    let targets = tokio::task::spawn_blocking(move || serve.userdata.scrobble_targets(&account)).await.map_err(scrobble_refused)?.map_err(|e| scrobble_refused(format!("{e:#}")))?;
     Ok(Json(json!({ "targets": targets })))
 }
 
@@ -2657,13 +2657,13 @@ struct ListenBrainzToken {
 async fn scrobble_listenbrainz(Json(b): Json<ListenBrainzToken>) -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = scrobbler()?;
     let token = b.token.trim().to_string();
-    let name = crate::app::scrobble::listenbrainz_user(&token).await.map_err(|e| refused(format!("{e:#}")))?;
-    let secret = serde_json::to_string(&crate::app::scrobble::Secret { token: Some(token), ..Default::default() }).map_err(refused)?;
+    let name = crate::app::scrobble::listenbrainz_user(&token).await.map_err(|e| scrobble_refused(format!("{e:#}")))?;
+    let secret = serde_json::to_string(&crate::app::scrobble::Secret { token: Some(token), ..Default::default() }).map_err(scrobble_refused)?;
     let n = name.clone();
     tokio::task::spawn_blocking(move || serve.userdata.set_scrobble_target(&account, crate::app::scrobble::LISTENBRAINZ, &n, &secret))
         .await
-        .map_err(refused)?
-        .map_err(|e| refused(format!("{e:#}")))?;
+        .map_err(scrobble_refused)?
+        .map_err(|e| scrobble_refused(format!("{e:#}")))?;
     Ok(Json(json!({ "name": name })))
 }
 
@@ -2680,17 +2680,17 @@ async fn scrobble_lastfm(Json(b): Json<LastFmKeys>) -> Result<Json<serde_json::V
     let (serve, account) = scrobbler()?;
     let (key, secret) = (b.api_key.trim().to_string(), b.api_secret.trim().to_string());
     if key.is_empty() || secret.is_empty() {
-        return Err(refused("Last.fm needs the API key and its shared secret, from last.fm/api/account/create."));
+        return Err(scrobble_refused("Last.fm needs the API key and its shared secret, from last.fm/api/account/create."));
     }
-    let url = crate::app::scrobble::lastfm_sign_in(&key, &b.callback).map_err(|e| refused(format!("{e:#}")))?;
-    let kept = serde_json::to_string(&crate::app::scrobble::Secret { api_key: Some(key), api_secret: Some(secret), ..Default::default() }).map_err(refused)?;
+    let url = crate::app::scrobble::lastfm_sign_in(&key, &b.callback).map_err(|e| scrobble_refused(format!("{e:#}")))?;
+    let kept = serde_json::to_string(&crate::app::scrobble::Secret { api_key: Some(key), api_secret: Some(secret), ..Default::default() }).map_err(scrobble_refused)?;
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         serve.userdata.set_scrobble_target(&account, crate::app::scrobble::LASTFM, "", &kept)?;
         serve.userdata.scrobble_broken(&account, crate::app::scrobble::LASTFM, "Not signed in at Last.fm yet")
     })
     .await
-    .map_err(refused)?
-    .map_err(|e| refused(format!("{e:#}")))?;
+    .map_err(scrobble_refused)?
+    .map_err(|e| scrobble_refused(format!("{e:#}")))?;
     Ok(Json(json!({ "url": url })))
 }
 
@@ -2739,7 +2739,7 @@ fn urlencoding_lite(s: &str) -> String {
 /// A listening service disconnected, with what waited for it.
 async fn scrobble_forget(Path(target): Path<String>) -> Result<StatusCode, ApiError> {
     let (serve, account) = scrobbler()?;
-    tokio::task::spawn_blocking(move || serve.userdata.forget_scrobble_target(&account, &target)).await.map_err(refused)?.map_err(|e| refused(format!("{e:#}")))?;
+    tokio::task::spawn_blocking(move || serve.userdata.forget_scrobble_target(&account, &target)).await.map_err(scrobble_refused)?.map_err(|e| scrobble_refused(format!("{e:#}")))?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -169,7 +169,8 @@ async fn send_listenbrainz(token: &str, plays: &[Play]) -> Result<(), Failed> {
         401 | 403 => Err(Failed::Login("ListenBrainz no longer takes the token".into())),
         // A listen it will never take (400): sending it again would block the queue, so it goes.
         400 => {
-            tracing::warn!(target: "scrobble", body = %res.text().await.unwrap_or_default(), "ListenBrainz refused listens; dropped");
+            let body = res.text().await.unwrap_or_default();
+            tracing::warn!(target: "scrobble", body = %body, "ListenBrainz refused listens; dropped");
             Ok(())
         }
         s => Err(Failed::Later(format!("ListenBrainz answered {s}"))),
