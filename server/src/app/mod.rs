@@ -119,6 +119,8 @@ pub struct App {
     pub plays: Plays,
     /// The visuals each sync group shares (decision 0046, amended).
     pub visuals: Arc<visuals::GroupVisuals>,
+    /// The Opus copies kept for the app's streams on mobile data and smaller downloads; none without a data folder.
+    pub opus_copies: Option<Arc<crate::opus_copies::OpusCopies>>,
 }
 
 impl App {
@@ -191,7 +193,8 @@ impl App {
                 }
             });
         }
-        let app = Arc::new(Self { library, sync, playing, playlists, incoming, collection, insights, artists, settings, journal, events: Default::default(), play_on, plays, visuals });
+        let opus_copies = crate::opus_copies::OpusCopies::open(cfg.data_dir.as_deref());
+        let app = Arc::new(Self { library, sync, playing, playlists, incoming, collection, insights, artists, settings, journal, events: Default::default(), play_on, plays, visuals, opus_copies });
         // What a Play On play names is chosen through app::play, as every play.
         app.play_on.set_app(&app);
         Ok(app)

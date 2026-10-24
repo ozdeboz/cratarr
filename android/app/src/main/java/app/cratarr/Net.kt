@@ -35,6 +35,11 @@ object Net {
      *  (`X-Cratarr-Connection`), so Cratarr's log ties them to that connection. */
     @Volatile var connection: String? = null
 
+    /** Whether the connection now is paid for by the byte (mobile data, a phone's hotspot): streams then take
+     *  Cratarr's smaller copies (`Downloads.locate`). */
+    fun metered(context: Context): Boolean =
+        (context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager).isActiveNetworkMetered
+
     private fun ours(prefs: Prefs, url: String) = Prefs.originOf(url)?.let { it in prefs.origins() } == true
     private fun session(url: String) = cookie(url).orEmpty()
 
