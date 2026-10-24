@@ -92,9 +92,24 @@
       showing = false;
       return;
     }
-    if (a.progress === null) a.run();
+    // Not running: two steps (the owner, 2026-10-24): the pill asks first, ✓ starts it, ✕ leaves it.
+    if (a.progress === null) {
+      confirming = true;
+      return;
+    }
     unfold();
   }
+  /** The page's work asked for and not yet confirmed: the pill is ✓ and ✕ alone. */
+  let confirming = $state(false);
+  function confirm(a: NonNullable<typeof pageView.action>) {
+    confirming = false;
+    a.run();
+    unfold();
+  }
+  $effect(() => {
+    void page;
+    confirming = false;
+  });
   $effect(() => {
     const p = pageView.action?.progress;
     if (p != null) ran = true;
@@ -111,6 +126,12 @@
 </script>
 
   <div class="pill" role="toolbar" aria-label="The page's tools">
+    {#if confirming && page && pageView.action}
+      {@const a = pageView.action}
+      <!-- The page's work asked for: the whole pill is ✓ (start it) and ✕ (leave it), until one is tapped. -->
+      <button class="confirm" aria-label={a.label} title={a.label} onclick={() => confirm(a)} transition:slide={UNFOLD}><Icon name="check" size={22} /></button>
+      <button aria-label="Cancel" title="Cancel" onclick={() => (confirming = false)} transition:slide={UNFOLD}><Icon name="close" size={22} /></button>
+    {:else}
     {#if showing && page && pageView.action && !searching}
       {@const a = pageView.action}
       <!-- The page's work unfolded: only its bar and what it is at, the pill grown leftwards, its buttons where they
@@ -162,6 +183,7 @@
               )} 100" /></svg
           >{/if}</button
       >
+    {/if}
     {/if}
   </div>
 {#if filterOpen}
@@ -229,6 +251,11 @@
 
   .ring .bg {
     stroke: color-mix(in srgb, var(--accent) 25%, transparent);
+  }
+
+  /* The page's work asked for: its ✓ in the accent, the ✕ as the pill's other buttons. */
+  .confirm {
+    color: var(--accent-ink);
   }
 
   /* A search or a filter that applies. */

@@ -49,8 +49,15 @@
     const t = task;
     if (t && t.finished !== null && t.id !== seenEnd) {
       seenEnd = t.id;
+      // A look asked for by hand (Look again) always ends in a toast, whatever it came to (the owner, 2026-10-24).
+      const said = askedLook;
+      askedLook = false;
       if (t.error) toast.show({ text: t.error, tone: 'error' });
-      load();
+      load().then(() => {
+        if (!said || t.error) return;
+        const n = view?.found?.albums.length ?? 0;
+        toast.show({ text: n ? `Found ${n} ${n === 1 ? 'suggestion' : 'suggestions'}` : 'Nothing new to suggest', tone: 'done' });
+      });
     }
   });
   const progress = $derived(looking ? progressOf(task) : null);
@@ -71,8 +78,11 @@
     }
   });
 
+  /** Look again was tapped: its end is said in a toast. */
+  let askedLook = false;
   async function refresh() {
     try {
+      askedLook = true;
       tasks.begun((await refreshDiscover()).task);
     } catch (e) {
       toast.fail(e, 'Could not look again');
