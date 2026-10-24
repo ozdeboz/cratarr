@@ -82,12 +82,9 @@ pub fn copy_at(input: &Path, out: impl Write, gains: (Option<f64>, Option<f64>),
     let frames = convert::stream(|planes| source.read(planes, &mut scratch), format.channels, format.sample_rate, RATE, &mut sink)?;
     drop(sink);
 
-    // The last frame, padded with silence; the last page's position says where the music ends, so a player trims
-    // the padding (RFC 7845 §4).
-    if !pcm.is_empty() {
-        pcm.resize(FRAME * channels, 0.0);
-        packets.push(encoder.encode(&pcm)?);
-    }
+    // The encoder's delay still holds the music's last samples: silence after it lets them out. The last frame
+    // padded too; the last page's position says where the music ends, so a player trims the padding (RFC 7845 §4).
+    drain_encoder(&mut encoder, &mut pcm, channels, pre_skip, &mut packets)?;
     let length = convert::output_frames(frames, format.sample_rate, RATE);
     let refs: Vec<&[u8]> = packets.iter().map(Vec::as_slice).collect();
     ogg.page(&refs, pre_skip as u64 + length, EOS)?;
@@ -107,13 +104,15 @@ pub struct StreamHead {
 /// A lossless track as Opus in fragmented MP4, for a phone's stream (the owner, 2026-10-24: Opus on phones, about a
 /// sixth of FLAC's data): an init segment, then fragments of about a second, made as they are sent. `from_ms` starts at
 /// the packet holding that moment, as the FLAC stream does (`stream::FlacToMp4`). `head` hears the placing before the
-/// first byte goes out. `false` (nothing written) when it is not a lossless file.
+/// first byte goes out. `lossy_too`: a lossy file the browser cannot take as it is (AAC, Ogg Vorbis) is made one too.
+/// `false` (nothing written) when it is not a file it makes one of.
 ///
 /// The fragments' times are the encoder's own, so its delay comes first; the page drops it (its offset), as it drops an
 /// MP3's. Opus-in-ISOBMFF would declare it in `dOps` instead, but whether a browser then trims it is the browser's to
 /// say: declared as none, nothing is trimmed twice.
-pub fn stream_mp4(input: &Path, from_ms: u64, head: impl FnOnce(StreamHead), mut out: impl Write) -> Result<bool> {
-    let Some(mut source) = convert::Source::open(input)? else { return Ok(false) };
+pub fn stream_mp4(input: &Path, from_ms: u64, lossy_too: bool, head: impl FnOnce(StreamHead), mut out: impl Write) -> Result<bool> {
+    let opened = if lossy_too { convert::Source::open_any(input)? } else { convert::Source::open(input)? };
+    let Some(mut source) = opened else { return Ok(false) };
     let format = source.format.clone();
     let channels = format.channels.min(2);
     if channels == 0 {
@@ -149,16 +148,26 @@ pub fn stream_mp4(input: &Path, from_ms: u64, head: impl FnOnce(StreamHead), mut
     let mut scratch = Vec::new();
     convert::stream(|planes| source.read(planes, &mut scratch), format.channels, format.sample_rate, RATE, &mut sink)?;
     drop(sink);
-    // The last frame, padded with silence: the page ends the track at its length (appendWindowEnd).
-    if !pcm.is_empty() {
-        pcm.resize(FRAME * channels, 0.0);
-        packets.push(encoder.encode(&pcm)?);
-    }
+    // The encoder's delay still holds the music's last samples: silence after it lets them out, the last frame padded;
+    // the page ends the track at its length (appendWindowEnd).
+    drain_encoder(&mut encoder, &mut pcm, channels, pre_skip, &mut packets)?;
     if !packets.is_empty() {
         fragment_out(&mut out, &mut sequence, &mut at, &mut packets)?;
     }
     out.flush()?;
     Ok(true)
+}
+
+/// The end of a track: `pre_skip` samples of silence after the music, so the encoder lets out the last of it (its
+/// delay held them back: a stream ended 6.5 ms short), then the last frame padded.
+fn drain_encoder(encoder: &mut Encoder, pcm: &mut Vec<f32>, channels: usize, pre_skip: u16, packets: &mut Vec<Vec<u8>>) -> Result<()> {
+    pcm.resize(pcm.len() + usize::from(pre_skip) * channels, 0.0);
+    pcm.resize(pcm.len().div_ceil(FRAME * channels) * FRAME * channels, 0.0);
+    for frame in pcm.chunks(FRAME * channels) {
+        packets.push(encoder.encode(frame)?);
+    }
+    pcm.clear();
+    Ok(())
 }
 
 /// `packets` (20 ms each) out as one fragment starting at `at`.
@@ -526,6 +535,24 @@ pub(crate) mod tests {
         (kinds, out)
     }
 
+    /// Not a check: which files the converter takes as lossless and which it streams (`CRATARR_FORMATS="a.m4a,b.ogg"`),
+    /// each stream written beside it (`<file>.mp4`, its head in `<file>.mp4.json`). Run with `--ignored`.
+    #[test]
+    #[ignore]
+    fn formats_for_the_lab() {
+        for input in std::env::var("CRATARR_FORMATS").unwrap_or_default().split(',').filter(|p| !p.is_empty()) {
+            let lossless = convert::Source::open(Path::new(input)).unwrap().is_some();
+            let mut head = None;
+            let mut out = Vec::new();
+            let streamed = stream_mp4(Path::new(input), 0, true, |h| head = Some(h), &mut out).unwrap();
+            println!("{input}: lossless {lossless}, streamed {streamed}, head {head:?}, {} bytes", out.len());
+            if let Some(h) = head {
+                std::fs::write(format!("{input}.mp4"), &out).unwrap();
+                std::fs::write(format!("{input}.mp4.json"), format!("{{\"start\":{},\"pre_skip\":{},\"total\":{}}}", h.start, h.pre_skip, h.total.unwrap_or(0))).unwrap();
+            }
+        }
+    }
+
     /// Not a check: a phone's stream of real files for a browser to try (`CRATARR_OPUS="in.flac:out.mp4:from_ms,..."`),
     /// each with its head beside it (`out.mp4.json`). Run with `--ignored`.
     #[test]
@@ -538,7 +565,7 @@ pub(crate) mod tests {
             let from: u64 = parts.next().map_or(0, |f| f.parse().unwrap());
             let mut head = None;
             let mut out = Vec::new();
-            assert!(stream_mp4(Path::new(input), from, |h| head = Some(h), &mut out).unwrap());
+            assert!(stream_mp4(Path::new(input), from, true, |h| head = Some(h), &mut out).unwrap());
             let h = head.unwrap();
             std::fs::write(output, out).unwrap();
             std::fs::write(format!("{output}.json"), format!("{{\"start\":{},\"pre_skip\":{},\"total\":{}}}", h.start, h.pre_skip, h.total.unwrap_or(0))).unwrap();
@@ -553,7 +580,7 @@ pub(crate) mod tests {
         wav(&input, 44_100, 3.0);
         let mut heard = None;
         let mut out = Vec::new();
-        assert!(stream_mp4(&input, 0, |h| heard = Some(h), &mut out).unwrap());
+        assert!(stream_mp4(&input, 0, false, |h| heard = Some(h), &mut out).unwrap());
         let head = heard.unwrap();
         assert_eq!((head.start, head.total), (0, Some(144_000)), "3 s at 48 kHz");
         assert!(head.pre_skip > 0, "the encoder's delay is told");
@@ -561,14 +588,14 @@ pub(crate) mod tests {
         assert_eq!(&kinds[..2], &[*b"ftyp", *b"moov"]);
         let moov = &out[..];
         assert!(moov.windows(4).any(|w| w == b"Opus") && moov.windows(4).any(|w| w == b"dOps"), "an Opus sample entry");
-        assert_eq!(frags.iter().map(|f| f.0).collect::<Vec<_>>(), [0, 48_000, 96_000], "a second each, back to back");
+        assert_eq!(frags.iter().map(|f| f.0).collect::<Vec<_>>(), [0, 48_000, 96_000, 144_000], "a second each, back to back, then the encoder's delay let out");
         assert!(frags.iter().all(|f| f.1.iter().all(|&d| d == 960)), "20 ms packets");
-        assert_eq!(frags.iter().map(|f| f.1.len()).sum::<usize>(), 150, "the whole track: 3 s of 20 ms packets");
+        assert_eq!(frags.iter().map(|f| f.1.len()).sum::<usize>(), 151, "the whole track: 3 s of 20 ms packets, and one that lets the encoder's delay out");
 
         // From 1.5 s: the packet holding that moment, no later, and the fragments go on from there.
         let mut heard = None;
         let mut out = Vec::new();
-        assert!(stream_mp4(&input, 1_500, |h| heard = Some(h), &mut out).unwrap());
+        assert!(stream_mp4(&input, 1_500, false, |h| heard = Some(h), &mut out).unwrap());
         let head = heard.unwrap();
         assert!(head.start <= 72_000 && head.start > 60_000, "starts at {}", head.start);
         let (_, frags) = fragments(&out);
@@ -579,7 +606,7 @@ pub(crate) mod tests {
         let mp3 = dir.join("b.mp3");
         std::fs::write(&mp3, [0xFF, 0xFB, 0x90, 0x00]).unwrap();
         let mut out = Vec::new();
-        assert!(!stream_mp4(&mp3, 0, |_| panic!("told"), &mut out).unwrap_or(false));
+        assert!(!stream_mp4(&mp3, 0, false, |_| panic!("told"), &mut out).unwrap_or(false));
         assert!(out.is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -614,7 +641,7 @@ pub(crate) mod tests {
         assert_eq!(last.1, pre_skip + 3 * 48_000, "ends exactly where the music does");
         assert!(pages.windows(2).all(|w| w[1].2 == w[0].2 + 1), "pages in sequence");
         let audio: usize = pages[2..].iter().map(|p| p.3.len()).sum();
-        assert_eq!(audio, (3 * 48_000usize).div_ceil(FRAME), "one packet per 20 ms");
+        assert_eq!(audio, (3 * 48_000 + pre_skip as usize).div_ceil(FRAME), "one packet per 20 ms, the encoder's delay let out after the music");
         // About 160 kb/s: 3 s near 60 kB, far below the 529 kB of the WAV.
         assert!(out.len() > 30_000 && out.len() < 90_000, "{} bytes", out.len());
         std::fs::remove_dir_all(&dir).ok();
@@ -661,8 +688,9 @@ pub(crate) mod tests {
         assert_eq!(data.len(), word(after + 16));
         assert_eq!(&data[..3], &[0xFF, 0xD8, 0xFF], "a JPEG");
         // The music after it, as without a cover.
+        let pre_skip = usize::from(u16::from_le_bytes([pages[0].3[0][10], pages[0].3[0][11]]));
         let audio: usize = pages[next..].iter().map(|p| p.3.len()).sum();
-        assert_eq!(audio, 48_000usize.div_ceil(FRAME));
+        assert_eq!(audio, (48_000 + pre_skip).div_ceil(FRAME));
         std::fs::remove_dir_all(&dir).ok();
     }
 

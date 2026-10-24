@@ -41,7 +41,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The OpenSubsonic API's parameters, where a name may repeat (decision 0030).
 serde_urlencoded = "0.7"
-symphonia = { version = "=0.6.1", default-features = false, features = ["flac", "mp3", "wav", "aiff", "pcm", "isomp4", "alac"] }
+symphonia = { version = "=0.6.1", default-features = false, features = ["flac", "mp3", "wav", "aiff", "pcm", "isomp4", "alac", "aac", "ogg", "vorbis"] }
 # Decision 0035: loudness (EBU R128, ReplayGain 2.0) and tempo with a confidence (one file, no dependency, no unsafe).
 ebur128 = "0.1"
 taktus = "=0.1.0"

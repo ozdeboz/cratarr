@@ -60,6 +60,8 @@ pub enum Container {
     Aiff,
     /// MP4/M4A holding ALAC.
     Mp4,
+    /// A lossy file (AAC, Ogg Vorbis), opened only to stream it ([`Source::open_any`]).
+    Other,
 }
 
 /// A lossless source's audio format.
@@ -355,6 +357,16 @@ pub(crate) struct Source {
 impl Source {
     /// `None` when the file is not one of the lossless kinds this converts.
     pub(crate) fn open(path: &Path) -> Result<Option<Source>> {
+        Self::open_with(path, false)
+    }
+
+    /// Any file a decoder here reads, lossy ones too (AAC, Ogg Vorbis): a browser's stream of a track it cannot take
+    /// as it is (`opus_copy::stream_mp4`). Never for a copy or a conversion: a second lossy pass only loses more.
+    pub(crate) fn open_any(path: &Path) -> Result<Option<Source>> {
+        Self::open_with(path, true)
+    }
+
+    fn open_with(path: &Path, lossy_too: bool) -> Result<Option<Source>> {
         let kind = Probe::open(path)
             .with_context(|| format!("opening {}", path.display()))?
             .guess_file_type()?
@@ -364,6 +376,7 @@ impl Source {
             Some(FileType::Wav) => Container::Wav,
             Some(FileType::Aiff) => Container::Aiff,
             Some(FileType::Mp4) => Container::Mp4,
+            _ if lossy_too => Container::Other,
             _ => return Ok(None),
         };
         let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
@@ -374,12 +387,26 @@ impl Source {
         let track = reader.default_track(TrackType::Audio).context("no audio track")?;
         let Some(params) = track.codec_params.as_ref().and_then(|p| p.audio()).cloned() else { return Ok(None) };
         let codecs = symphonia::default::get_codecs();
-        // Only lossless decoders are built in, so an unknown codec here is a lossy one (AAC in MP4, say).
         if codecs.get_audio_decoder(params.codec).is_none() {
             return Ok(None);
         }
+        // AAC's and Vorbis's decoders are built in too (for streams), and MP4 holds AAC as often as ALAC: lossless is
+        // FLAC, PCM, or ALAC in MP4.
+        let lossless = match container {
+            Container::Other => false,
+            Container::Mp4 => params.codec == symphonia::core::codecs::audio::well_known::CODEC_ID_ALAC,
+            _ => true,
+        };
+        if !lossless && !lossy_too {
+            return Ok(None);
+        }
         let sample_rate = params.sample_rate.context("the sample rate is unknown")?;
-        let bits_per_sample = params.bits_per_sample.context("the bit depth is unknown")?;
+        // A lossy codec has no bit depth of its own.
+        let bits_per_sample = match params.bits_per_sample.or_else(|| alac_bit_depth(params.extra_data.as_deref())) {
+            Some(b) => b,
+            None if !lossless => 16,
+            None => bail!("the bit depth is unknown"),
+        };
         let channels = params.channels.as_ref().map(|c| c.count()).context("the channels are unknown")?;
         let format = SourceFormat { container, sample_rate, bits_per_sample, channels, frames: track.num_frames };
         let track = track.id;
@@ -420,6 +447,14 @@ impl Source {
             return Ok(true);
         }
     }
+}
+
+/// ALAC's bit depth from its magic cookie (ALACSpecificConfig: frame length, compatible version, then the bit depth),
+/// which symphonia does not hand on; the cookie may still carry its `alac` atom's header.
+fn alac_bit_depth(cookie: Option<&[u8]>) -> Option<u32> {
+    let c = cookie?;
+    let c = if c.len() >= 12 && &c[4..8] == b"alac" { &c[12..] } else { c };
+    c.get(5).copied().filter(|b| matches!(b, 16 | 20 | 24 | 32)).map(u32::from)
 }
 
 /// Dithers float frames to 16 bit and hands them to the FLAC writer one block at a time.

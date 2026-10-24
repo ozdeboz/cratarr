@@ -1980,12 +1980,17 @@ async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, S
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
     if q.as_.as_deref() == Some("opus")
-        && let Some(opus) = opus_stream(path.clone(), q.from_ms).await
+        && let Some(opus) = opus_stream(path.clone(), q.from_ms, false).await
     {
         return opus;
     }
     let Some(kind) = kind else {
-        return (StatusCode::UNSUPPORTED_MEDIA_TYPE, Json(json!({ "error": "Only FLAC and MP3 play here for now." }))).into_response();
+        // Neither FLAC nor MP3 (ALAC, AAC, WAV, AIFF, Ogg Vorbis): decoded here and sent as Opus, which every browser's
+        // stream takes.
+        if let Some(opus) = opus_stream(path, q.from_ms, true).await {
+            return opus;
+        }
+        return (StatusCode::UNSUPPORTED_MEDIA_TYPE, Json(json!({ "error": "This file's format does not play here." }))).into_response();
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(2);
     let mut headers = HeaderMap::new();
@@ -2054,16 +2059,17 @@ async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, S
     (headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response()
 }
 
-/// A lossless track as Opus in fragmented MP4 for a phone's stream, made as it is sent; `None` for a lossy file (it
-/// streams as it is). The headers place it: 48 kHz, the encoder's delay (`x-pre-skip`) and the track's length.
-async fn opus_stream(path: std::path::PathBuf, from_ms: u64) -> Option<Response> {
+/// A track as Opus in fragmented MP4, made as it is sent: a lossless one for a phone's stream, and with `lossy_too` one
+/// the browser cannot take as it is. `None` when it makes none (a lossy file for a phone streams as it is). The headers
+/// place it: 48 kHz, the encoder's delay (`x-pre-skip`) and the track's length.
+async fn opus_stream(path: std::path::PathBuf, from_ms: u64, lossy_too: bool) -> Option<Response> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(2);
     let (said, heard) = tokio::sync::oneshot::channel();
     tokio::task::spawn_blocking(move || {
         let failed = tx.clone();
         let out = ChannelWriter { tx, buf: Vec::with_capacity(ChannelWriter::PIECE) };
         let told = |h| drop(said.send(h));
-        if let Err(e) = crate::opus_copy::stream_mp4(&path, from_ms, told, out) {
+        if let Err(e) = crate::opus_copy::stream_mp4(&path, from_ms, lossy_too, told, out) {
             // A closed body: the page stopped reading (a skip, a seek).
             let stopped = e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe);
             if !stopped {

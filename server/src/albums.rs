@@ -7,7 +7,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-const AUDIO: [&str; 7] = ["mp3", "flac", "m4a", "ogg", "opus", "wav", "aac"];
+/// The audio files an album holds: the catalogue's list, so the two never disagree.
+use crate::catalogue::walk::AUDIO;
 
 /// Lower-case, accents folded to their base letter, everything but letters and digits dropped. Two folder names
 /// that fold to the same key are duplicate candidates.
