@@ -135,3 +135,15 @@ Incoming's Keep, Delete and Replace, upgrades, covers, Discover deciding what is
 sources than Soulseek, so Lidarr stays. The owner liked the intermediate step: in 0.9 **Cratarr keeps the want list and
 each request's status itself, and Lidarr is one way of carrying a request out**, behind an interface another could take
 (slskd directly, say) without the requests, their queue or their statuses changing.
+
+## Listening before Want: Bandcamp, and YouTube
+
+The owner, 2026-10-24, after first deciding against it and then reading GitHub's rules (no rule against software
+using another service's public pages; Bandcamp's streams carry no copy protection; NewPipe, Bandcamp support
+included, has long been on GitHub): "I do want to include this. Most definitely. Even possibly the entire NewPipe
+extractor for YouTube too, unless YouTube fights too hard." A Discover suggestion's tracks play as a preview in
+Cratarr's own player, never counted as plays nor scrobbled. Bandcamp: each album page lists its tracks' streams
+(NewPipeExtractor's Bandcamp part, GPL-3.0-or-later, ported to the server with its notice; a browser may not read
+the pages, the server can). YouTube changes its scrambling and checks often (NewPipe and yt-dlp release fixes every
+few weeks) and NewPipeExtractor is Java (too heavy for the NAS's 768 MB): proposed through yt-dlp as an optional
+service of its own, as AudioMuse is, updated apart from Cratarr. A decision (0071) to be written first.
