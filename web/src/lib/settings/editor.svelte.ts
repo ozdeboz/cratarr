@@ -242,10 +242,10 @@ class SettingsEditor {
     this.imp.known = true;
   };
 
-  runImport = async (source: string, preview: boolean) => {
+  runImport = async (source: string, preview: boolean, password?: string) => {
     const c = this.imp.choice[source];
     try {
-      this.imp.job = (await startImport({ source, user: c.user, account: c.account, what: { ...c.what }, preview })).job;
+      this.imp.job = (await startImport({ source, user: c.user, account: c.account, what: { ...c.what }, preview, password })).job;
     } catch (e) {
       toast.fail(e, 'Could not start the import');
     }
@@ -396,6 +396,8 @@ class SettingsEditor {
   };
 
   serverName = (id: string) => {
+    // A Subsonic server imported from (decision 0067): its address, without the scheme.
+    if (id.startsWith('subsonic:')) return id.slice('subsonic:'.length).replace(/^https?:\/\//, '');
     const v = this.s?.sources.find((x) => x.id === id);
     return v ? (this.s!.sources.length > 1 ? `${v.label} (${id})` : v.label) : id;
   };

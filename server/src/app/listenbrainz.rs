@@ -2,16 +2,17 @@
 //! the log; Jellyfin kept none, and its ListenBrainz plugin sent every listen there). An account's listens are read
 //! from ListenBrainz's public API (no token: a user's listens are public), each matched to a song of Cratarr's library
 //! and logged as heard: finished, not counted (the plays they were reached the counts by Jellyfin's import already),
-//! context `listenbrainz`. A listen's own id (its time and recording) makes an import safe to run again.
+//! context `listenbrainz`. A listen's own id (its time and recording) makes an import safe to run again. One import
+//! (decision 0067): found by the shared matcher (`app::import`), previewed before, undone as a whole (by its context).
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
+use super::import::{Counter, Matcher, Tally, Track};
 use crate::userdata::{Ended, Heard};
 
 const API: &str = "https://api.listenbrainz.org/1/user";
@@ -110,77 +111,68 @@ async fn fetch(user: &str) -> Result<Vec<Listen>> {
     }
 }
 
-/// A name to match by: lower case, letters and digits only.
-fn key(s: &str) -> String {
-    s.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
-}
-
-/// The library's songs, to match listens to: by recording, by artist and title, by album and title.
-#[derive(Default)]
-struct Songs {
-    by_recording: HashMap<String, String>,
-    by_artist: HashMap<(String, String), String>,
-    by_album: HashMap<(String, String), String>,
-}
-
-impl Songs {
-    fn read(library: &Path) -> Result<Self> {
-        let conn = crate::db::open_read_only(library)?;
-        let mut st = conn.prepare("SELECT id, title, artist, album, mbid FROM songs")?;
-        let mut s = Songs::default();
-        let rows = st.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?))
-        })?;
-        for row in rows {
-            let (id, title, artist, album, mbid) = row?;
-            s.add(&id, &title, artist.as_deref(), &album, mbid.as_deref());
-        }
-        Ok(s)
-    }
-
-    fn add(&mut self, id: &str, title: &str, artist: Option<&str>, album: &str, mbid: Option<&str>) {
-        if let Some(m) = mbid.filter(|m| !m.is_empty()) {
-            self.by_recording.entry(m.to_lowercase()).or_insert_with(|| id.to_string());
-        }
-        if let Some(a) = artist {
-            self.by_artist.entry((key(a), key(title))).or_insert_with(|| id.to_string());
-        }
-        self.by_album.entry((key(album), key(title))).or_insert_with(|| id.to_string());
-    }
-
-    /// The song a listen was of: its recording's, else its artist's and title's, else its album's and title's.
-    fn of(&self, l: &Listen) -> Option<&String> {
-        l.recording
-            .as_ref()
-            .and_then(|r| self.by_recording.get(&r.to_lowercase()))
-            .or_else(|| self.by_artist.get(&(key(&l.artist), key(&l.title))))
-            .or_else(|| l.release.as_ref().and_then(|r| self.by_album.get(&(key(r), key(&l.title)))))
+/// A listen's track, for the matcher.
+fn track(l: &Listen) -> Track<'_> {
+    Track {
+        recording: l.recording.as_deref(),
+        artist: &l.artist,
+        title: &l.title,
+        album: l.release.as_deref(),
+        length_secs: l.duration_ms.map(|d| d as f64 / 1000.0),
     }
 }
 
-/// What an import did.
-#[derive(Debug, Default, Serialize)]
-pub struct Imported {
-    /// Listens ListenBrainz has.
-    pub listens: usize,
-    /// Of those, matched to a song of the library.
-    pub matched: usize,
-    /// Of those, new to the log (the rest were there from an earlier import).
-    pub added: usize,
+/// The history's own id for a listen: its time and ListenBrainz's id for it (safe to import again).
+fn event(l: &Listen) -> String {
+    format!("{CONTEXT}:{}:{}", l.at, l.msid)
 }
 
-/// Imports a ListenBrainz user's listens into `account`'s log (decision 0064). Blocking parts run apart.
-pub async fn import(serve: &Arc<crate::serve::Serve>, account: &str, user: &str) -> Result<Imported> {
+/// What the history calls an imported listen's context: how its undo finds it.
+const CONTEXT: &str = "listenbrainz";
+
+/// What importing a ListenBrainz user's listens into `account`'s history would bring (decision 0067): nothing written.
+pub async fn preview(serve: &Arc<crate::serve::Serve>, account: &str, user: &str) -> Result<Tally> {
     let dir = serve.data_dir.clone().context("the history needs Cratarr's data folder")?;
     let listens = fetch(user).await?;
     let (serve, account) = (serve.clone(), account.to_string());
-    tokio::task::spawn_blocking(move || -> Result<Imported> {
-        let songs = Songs::read(&Path::new(&dir).join("library.sqlite"))?;
-        let mut done = Imported { listens: listens.len(), ..Imported::default() };
+    tokio::task::spawn_blocking(move || -> Result<Tally> {
+        let songs = Matcher::read(&Path::new(&dir).join("library.sqlite"))?;
+        let there = serve.userdata.heard_events(&account, CONTEXT)?;
+        let mut c = Counter::default();
         for l in &listens {
-            let Some(song) = songs.of(l) else { continue };
-            done.matched += 1;
-            let Some((pid, album, artists)) = serve.library.play_targets(song)? else { continue };
+            match songs.find(&track(l)) {
+                Some(_) => c.found(!there.contains(&event(l))),
+                None => c.missed(&track(l)),
+            }
+        }
+        Ok(c.tally())
+    })
+    .await?
+}
+
+/// Takes out every listen imported from ListenBrainz into `account`'s history (decision 0067): how many.
+pub fn undo(serve: &crate::serve::Serve, account: &str) -> Result<usize> {
+    serve.userdata.forget_heard(account, CONTEXT)
+}
+
+/// Imports a ListenBrainz user's listens into `account`'s history (decisions 0064 and 0067): what it brought. Blocking
+/// parts run apart.
+pub async fn import(serve: &Arc<crate::serve::Serve>, account: &str, user: &str) -> Result<Tally> {
+    let dir = serve.data_dir.clone().context("the history needs Cratarr's data folder")?;
+    let listens = fetch(user).await?;
+    let (serve, account) = (serve.clone(), account.to_string());
+    tokio::task::spawn_blocking(move || -> Result<Tally> {
+        let songs = Matcher::read(&Path::new(&dir).join("library.sqlite"))?;
+        let mut c = Counter::default();
+        for l in &listens {
+            let Some(song) = songs.find(&track(l)) else {
+                c.missed(&track(l));
+                continue;
+            };
+            let Some((pid, album, artists)) = serve.library.play_targets(song)? else {
+                c.missed(&track(l));
+                continue;
+            };
             let secs = l.duration_ms.map(|d| d as f64 / 1000.0);
             let heard = Heard {
                 at: l.at,
@@ -190,44 +182,12 @@ pub async fn import(serve: &Arc<crate::serve::Serve>, account: &str, user: &str)
                 counts: false,
                 player: l.player.clone(),
                 output: None,
-                context: Some("listenbrainz".into()),
-                event: Some(format!("listenbrainz:{}:{}", l.at, l.msid)),
+                context: Some(CONTEXT.into()),
+                event: Some(event(l)),
             };
-            if serve.userdata.record(&account, (song, &pid), &album, &artists, &heard)? {
-                done.added += 1;
-            }
+            c.found(serve.userdata.record(&account, (song, &pid), &album, &artists, &heard)?);
         }
-        Ok(done)
+        Ok(c.tally())
     })
     .await?
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn listen(title: &str, artist: &str, release: Option<&str>, recording: Option<&str>) -> Listen {
-        Listen {
-            at: 1,
-            msid: "m".into(),
-            recording: recording.map(str::to_string),
-            artist: artist.into(),
-            title: title.into(),
-            release: release.map(str::to_string),
-            duration_ms: None,
-            player: None,
-        }
-    }
-
-    #[test]
-    fn a_listen_finds_its_song_by_recording_then_artist_then_album() {
-        let mut s = Songs::default();
-        s.add("tr-1", "These Fruits, These Vegetables", Some("Photay"), "Two EPs", Some("F4F4"));
-        s.add("tr-2", "Untitled", Some("DJ Healer"), "Prisoner of Love", None);
-        s.add("tr-3", "Intro", None, "Some Album", None);
-        assert_eq!(s.of(&listen("Other name", "Other", None, Some("f4f4"))), Some(&"tr-1".to_string()), "by recording, any case");
-        assert_eq!(s.of(&listen("untitled", "DJ  Healer", None, None)), Some(&"tr-2".to_string()), "by artist and title, punctuation aside");
-        assert_eq!(s.of(&listen("Intro", "Someone", Some("Some Album"), None)), Some(&"tr-3".to_string()), "by album and title");
-        assert_eq!(s.of(&listen("Nothing", "Nobody", None, None)), None);
-    }
 }

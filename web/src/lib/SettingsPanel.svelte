@@ -127,7 +127,7 @@
     {:else if section === 'auth'}
       <AuthPart />
     {:else if section === 'import'}
-      <ImportPart />
+      <ImportPart {thing} />
     {/if}
 
     {#if resetting && partReset.run}

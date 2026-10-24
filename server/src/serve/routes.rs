@@ -87,7 +87,7 @@ pub fn router(serve: Arc<Serve>) -> Router {
         .merge(
             Router::new()
                 .route("/api/subsonic/accounts", get(accounts).post(create_account))
-                .route("/api/subsonic/import", get(super::import::status).post(super::import::start))
+                .route("/api/subsonic/import", get(super::import::status).post(super::import::start).delete(super::import::undo))
                 .route("/api/subsonic/import/sources", get(super::import::sources))
                 .layer(axum::middleware::from_fn(super::access::admin)),
         )

@@ -1118,15 +1118,18 @@ export const getDirectory = () => quietly<DirectorySettings>('/api/auth/ldap');
 export type ImportWhat = { plays: boolean; favorites: boolean; ratings: boolean; added: boolean };
 /** A server that can import: its accounts (`id` is the server's), and the choices made last time. */
 export type ImportSource = {
+  /** A connected server's id, or `subsonic:<address>` for a Subsonic server imported from (decision 0067). */
   id: string;
   users: { id: string; name: string }[];
+  /** A Subsonic server imported from: its password is asked for each run. */
+  password?: boolean;
   user?: string | null;
   account?: string | null;
   what?: ImportWhat;
   error?: string;
 };
 export type ImportSources = { accounts: string[]; sources: ImportSource[] };
-export type ImportRequest = { source: string; user: string; account: string; what: ImportWhat; preview: boolean };
+export type ImportRequest = { source: string; user: string; account: string; what: ImportWhat; preview: boolean; password?: string };
 export type ImportCounts = { plays: number; songs: number; starred: number; unstarred: number; rated: number; added: number; skipped: number };
 export type ImportJob = ImportRequest & {
   started: number;
@@ -1140,6 +1143,10 @@ export const getImportSources = () => quietly<ImportSources>('/api/subsonic/impo
 /** The import running now, or the last one. */
 export const getImport = () => quietly<{ job: ImportJob | null }>('/api/subsonic/import');
 export const startImport = (r: ImportRequest) => post<{ job: ImportJob }>('/api/subsonic/import', r);
+/** An import from a server undone as a whole (decision 0067): what it took back. */
+export type ImportUndone = { items: number; plays: number; unstarred: number; unrated: number };
+export const undoImport = (source: string, user: string, account: string) =>
+  request<{ undone: ImportUndone }>('/api/subsonic/import', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source, user, account }) });
 
 /** Lidarr on the Settings page; the key is never sent. */
 export type LidarrView = { url: string; key_set: boolean; version: string | null; error: string | null };
@@ -1420,9 +1427,15 @@ export const getMoment = (source?: string, without?: string[]) =>
   quietly<Moment>(
     `/api/home/moment?${new URLSearchParams({ ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}), tz: String(-new Date().getTimezoneOffset() * 60) })}`,
   );
-/** A ListenBrainz user's listens into the asking account's history (decision 0064, amended): how many there were,
- *  matched to the library, and new. */
-export const importListenBrainz = (user: string) => post<{ listens: number; matched: number; added: number }>('/api/history/listenbrainz', { user });
+/** What an import would bring (a preview) or brought (decision 0067): the source's items, those found in the library,
+ *  those new; and what was not found, the most first (at most 100 of `missing_tracks`). */
+export type ImportTally = { items: number; found: number; new: number; missing: { artist: string; title: string; count: number }[]; missing_tracks: number };
+/** A ListenBrainz user's listens into the asking account's history (decisions 0064 and 0067). */
+export const importListenBrainz = (user: string) => post<ImportTally>('/api/history/listenbrainz', { user });
+/** What importing them would bring, nothing written. */
+export const previewListenBrainz = (user: string) => post<ImportTally>('/api/history/listenbrainz/preview', { user });
+/** Every listen imported from ListenBrainz out of the asking account's history again: how many. */
+export const undoListenBrainz = () => request<{ removed: number }>('/api/history/listenbrainz', { method: 'DELETE' });
 /** Tells the server tracks heard; answers with the ids it has (now or before). */
 export const reportPlays = (events: HeardEvent[]) => post<{ done: string[] }>('/api/plays', { events });
 export const trackPlayed = (source: string, id: string) => quietly<{ counted: boolean }>(`${trackPath(source, id)}/played`, { method: 'POST' });

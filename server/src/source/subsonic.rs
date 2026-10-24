@@ -273,6 +273,8 @@ struct Song {
     played: Option<String>,
     /// 1 to 5.
     user_rating: Option<u8>,
+    /// MusicBrainz's recording (OpenSubsonic).
+    music_brainz_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -447,6 +449,14 @@ fn song_data(s: Song) -> Option<super::TrackData> {
         return None;
     }
     let epoch = |d: Option<&str>| d.and_then(crate::nowplaying::parse_iso_epoch).filter(|t| *t > 0);
+    // Its names, for an import that finds it by them (decision 0067).
+    let meta = super::TrackMeta {
+        artist: s.artist.clone().or_else(|| s.display_album_artist.clone()).unwrap_or_default(),
+        title: s.title.clone(),
+        album: s.album.clone(),
+        length_secs: s.duration.filter(|d| *d > 0.0),
+        recording: s.music_brainz_id.clone().filter(|m| !m.is_empty()),
+    };
     Some(super::TrackData {
         last_played: epoch(s.played.as_deref()),
         favorite: s.starred.is_some(),
@@ -454,6 +464,7 @@ fn song_data(s: Song) -> Option<super::TrackData> {
         id: s.id,
         plays,
         rating,
+        meta: Some(meta),
     })
 }
 
@@ -808,6 +819,7 @@ impl Source for SubsonicSource {
             struct Starred {
                 id: String,
                 name: Option<String>,
+                artist: Option<String>,
                 starred: Option<String>,
             }
             #[derive(Deserialize, Default)]
@@ -824,7 +836,7 @@ impl Source for SubsonicSource {
                 let songs = self.api.album(&a.id).await.map(|x| x.song).unwrap_or_default();
                 let path = album_folder(songs.iter().filter_map(|s| s.path.as_deref()));
                 let track = songs.into_iter().next().map(|s| s.id);
-                groups.albums.push((super::AlbumRef { id: a.id, track, path }, at(a.starred.as_deref())));
+                groups.albums.push((super::AlbumRef { id: a.id, track, path, name: a.name, artist: a.artist }, at(a.starred.as_deref())));
             }
             for a in all.artist {
                 if let Some(name) = a.name.filter(|n| !n.trim().is_empty()) {
@@ -869,7 +881,7 @@ impl Source for SubsonicSource {
                     let own = by_album.get(a.id.as_str()).map(Vec::as_slice).unwrap_or_default();
                     let path = album_folder(own.iter().filter_map(|s| s.path.as_deref()));
                     let track = own.first().map(|s| s.id.clone());
-                    Some((super::AlbumRef { id: a.id, track, path }, at))
+                    Some((super::AlbumRef { id: a.id, track, path, name: Some(a.name).filter(|n| !n.is_empty()), artist: a.artist }, at))
                 })
                 .collect();
             Ok(super::AddedPage { items, next: None, total: Some(total) })

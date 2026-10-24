@@ -296,6 +296,20 @@ pub struct TrackData {
     pub favorite_at: Option<i64>,
     /// 1 to 5; 0 when not rated.
     pub rating: u8,
+    /// The track as the source names it, for finding it by name where the catalogue links none of the source's ids
+    /// (a Subsonic server imported from without being a source, decision 0067).
+    pub meta: Option<TrackMeta>,
+}
+
+/// A track's names as a source gives them (decision 0067).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TrackMeta {
+    pub artist: String,
+    pub title: String,
+    pub album: Option<String>,
+    pub length_secs: Option<f64>,
+    /// MusicBrainz's recording.
+    pub recording: Option<String>,
 }
 
 /// A page of [`TrackData`]. `next` asks for the page after it; `None` when the listing is done.
@@ -314,6 +328,9 @@ pub struct AlbumRef {
     pub id: String,
     pub track: Option<String>,
     pub path: Option<String>,
+    /// Its name and album artist, to find it by where neither its track nor its folder does (decision 0067).
+    pub name: Option<String>,
+    pub artist: Option<String>,
 }
 
 /// An artist as an import names it: the source's id and the name, by which Cratarr finds it.

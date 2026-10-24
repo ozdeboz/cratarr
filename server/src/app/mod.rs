@@ -35,6 +35,7 @@ mod playon;
 mod plays;
 mod queue;
 pub mod history;
+pub mod import;
 pub mod listenbrainz;
 pub mod moment;
 pub mod refind;
