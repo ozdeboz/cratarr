@@ -5,6 +5,7 @@
   // checked for both themes; a legend with each genre's time, as light mode's lighter hues need words beside them; a
   // tooltip on every column); and the period's top artists, albums and tracks. The log starts empty (filled from
   // ListenBrainz where that kept the history): what is not there yet is not made up.
+  import { matchesSearch } from './pageView.svelte';
   import { albumCoverUrl, coverUrl, getListening, type Listening, type ListeningTop } from './api';
   import ReleaseRow from './ReleaseRow.svelte';
   import Group from './settings/Group.svelte';
@@ -83,7 +84,9 @@
   const logged = $derived(data?.log_from ? day(data.log_from, { day: 'numeric', month: 'long', year: 'numeric' }) : null);
 </script>
 
-{#snippet top(title: string, list: ListeningTop[], kind: 'artist' | 'album' | 'track')}
+{#snippet top(title: string, all: ListeningTop[], kind: 'artist' | 'album' | 'track')}
+  <!-- The pill's search narrows it (the owner, 2026-10-25). -->
+  {@const list = all.filter((t) => matchesSearch(t.name, t.by))}
   {#if list.length}
     <section>
       <h2>{title}</h2>

@@ -14,6 +14,8 @@
   import HealthIncoming from './HealthIncoming.svelte';
   import HealthMissing from './HealthMissing.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
+  import { matchesSearch } from './pageView.svelte';
+  import TopPill from './TopPill.svelte';
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
   import { albumSubject, backFromStep, closePlaylist, HEALTH, healthItemOf, openStep, openTab, panel, viewOver } from './panel.svelte';
@@ -51,6 +53,7 @@
     <h2 class="title">
       {#if item}<span class="up">{p?.title}</span><span class="sep" aria-hidden="true">›</span>{item.title}{:else if p}<span class="up">{p.domain}</span><span class="sep" aria-hidden="true">›</span>{p.title}{:else}Health{/if}
     </h2>
+    {#if !beside && !item}<TopPill device={false} filter={false} view={false} search="health" />{/if}
   </div>
   <div class="scroll">
     {#if item}
@@ -90,7 +93,8 @@
         <!-- An album a release row, as in every one of these panels (lib/ReleaseRow); anything else a settings row. -->
         <Group>
           {#each p.items as x, i (i)}
-            {#if x.album}
+            {#if !matchesSearch(x.title, x.line)}<!-- left out by the search -->
+            {:else if x.album}
               <ReleaseRow cover={albumCoverUrl(x.album[0], x.album[1])} title={x.title} line={x.line ?? null} onclick={() => openStep(`${HEALTH}${problem}/${i}`)} />
             {:else}
               <Item name={x.title} line={x.line ?? null} onclick={() => openStep(`${HEALTH}${problem}/${i}`)} />

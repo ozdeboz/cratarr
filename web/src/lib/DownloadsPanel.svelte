@@ -17,6 +17,7 @@
   import { matchesSearch } from './pageView.svelte';
   import PageLoading from './PageLoading.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
+  import TopPill from './TopPill.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -106,6 +107,7 @@
   <div class="bar" class:beside>
     {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
     <h2 class="title"><span class="up">Downloads</span><span class="sep" aria-hidden="true">›</span>{L.label}</h2>
+    {#if !beside}<TopPill device={false} filter={false} view={false} search="downloads" />{/if}
   </div>
   <div class="scroll">
     {#if !downloads.known}

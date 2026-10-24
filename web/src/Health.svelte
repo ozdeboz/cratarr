@@ -9,9 +9,11 @@
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { HEALTH, healthOf, panel, viewPlaylist } from './lib/panel.svelte';
+  import { matchesSearch } from './lib/pageView.svelte';
 
   $effect(loadHealth);
-  const list = $derived(problems());
+  // The pill's search (the owner, 2026-10-25): a problem whose words, or one of its items', hold every word.
+  const list = $derived(problems().filter((p) => matchesSearch(p.domain, p.title, p.line, ...p.items.map((x) => `${x.title} ${x.line ?? ''}`))));
 </script>
 
 <main>
@@ -19,7 +21,7 @@
   {#if !health.loaded}
     <PageLoading />
   {:else if !list.length}
-    <p class="empty">All good.</p>
+    <p class="empty">{problems().length ? 'None of them match.' : 'All good.'}</p>
   {:else}
     <ul class="cards">
       {#each list as p (p.key)}

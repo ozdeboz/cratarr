@@ -27,6 +27,7 @@
     kind = null,
     counted = null,
     onfilter = null,
+    search = null,
     onview = null,
     filterLit = null,
   }: {
@@ -47,6 +48,9 @@
     /** A panel's own filter and View (Insights' sheets): the buttons open these instead of the lists' sheets; `filterLit`:
      *  whether its filter leaves something out. */
     onfilter?: (() => void) | null;
+    /** In a panel over its page (a phone): the page whose search it carries, so the search is there with the page
+     *  hidden; beside the page (the page's pill shows it) none, so it is never there twice (the owner, 2026-10-25). */
+    search?: string | null;
     onview?: (() => void) | null;
     filterLit?: boolean | null;
   } = $props();
@@ -56,7 +60,7 @@
 
   // The search: the magnifier opens a field over the row (the whole row on a phone, the pill grown leftwards on a
   // wide page); Esc or leaving it empty folds it, ✕ empties it. A search that applies keeps the magnifier lit.
-  const words = $derived(page ? searchFor(page) : null);
+  const words = $derived(page ? searchFor(page) : search ? searchFor(search) : null);
   let searching = $state(false);
   let field = $state<HTMLInputElement>();
   $effect(() => {

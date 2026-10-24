@@ -34,7 +34,7 @@
   <div class="bar" class:beside>
     {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
     <h2 class="title"><span class="up">{v.group}</span><span class="sep" aria-hidden="true">›</span>{v.label}</h2>
-    {#if filters.length || views.length}
+    {#if filters.length || views.length || !beside}
       <TopPill
         device={false}
         filter={filters.length > 0}
@@ -42,6 +42,7 @@
         filterLit={leftOut}
         onfilter={() => (sheet = 'filter')}
         onview={() => (sheet = 'view')}
+        search={beside ? null : 'insights'}
       />
     {/if}
   </div>

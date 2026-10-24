@@ -4,6 +4,7 @@
   // one series each in the accent, labelled directly; the playlists' figures as tiles and the tracks in the most
   // playlists as a list. Four views, chosen in the tabs' pill: Overview (the figures, quality and decades), Genres and
   // Artists (all of them), Tracks (those in playlists).
+  import { matchesSearch } from './pageView.svelte';
   import type { Count, Insights, Layered } from './api';
   import { plural } from './insights.svelte';
   import { prefs } from './prefs.svelte';
@@ -85,7 +86,7 @@
   {@const listed = prefs.insightsCount === 'listed'}
   <!-- Every one comes (the server ranks none away): each order is the top of the whole set; the first SHOWN of it. -->
   {@const counted = listed ? all.filter((r) => r.listed > 0).sort((x, y) => y.listed - x.listed || x.name.localeCompare(y.name)) : all}
-  {@const rows = (prefs.insightsSort === 'az' ? [...counted].sort((x, y) => x.name.localeCompare(y.name)) : counted).slice(0, SHOWN)}
+  {@const rows = (prefs.insightsSort === 'az' ? [...counted].sort((x, y) => x.name.localeCompare(y.name)) : counted).filter((r) => matchesSearch(r.name)).slice(0, SHOWN)}
   {@const value = (r: Layered) => (listed ? r.listed : r.n)}
   {@const most = Math.max(1, ...rows.map(value))}
   {#if rows.length}

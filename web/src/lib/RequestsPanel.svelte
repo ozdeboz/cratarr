@@ -13,6 +13,8 @@
   import Notice from './Notice.svelte';
   import PageLoading from './PageLoading.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
+  import { matchesSearch } from './pageView.svelte';
+  import TopPill from './TopPill.svelte';
   import { closePlaylist } from './panel.svelte';
   import { answersRequests, decide, loadRequests, lookAtLidarr, REQUESTS_LISTS, requests, takeBack, type RequestsList } from './requests.svelte';
   import SelectBar from './SelectBar.svelte';
@@ -84,7 +86,10 @@
   // --- Select (everyone's waiting ones) ---
   let selecting = $state<Set<number> | null>(null);
   let selectSheet = $state(false);
-  const waiting = $derived(view?.waiting ?? []);
+  // The pill's search (the owner, 2026-10-25): a request whose album, artist or asker holds every word.
+  const found = (r: AlbumRequest) => matchesSearch(r.album, r.artist, r.user);
+  const waiting = $derived((view?.waiting ?? []).filter(found));
+  const mine = $derived((view?.mine ?? []).filter(found));
   const ticked = $derived(selecting ? waiting.filter((r) => selecting!.has(r.id)).map((r) => r.id) : []);
   function tick(id: number) {
     if (!selecting) return;
@@ -119,6 +124,7 @@
   <div class="bar" class:beside>
     {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
     <h2 class="title"><span class="up">Requests</span><span class="sep" aria-hidden="true">›</span>{L.label}</h2>
+    {#if !beside}<TopPill device={false} filter={false} view={false} search="requests" />{/if}
     {#if list === 'waiting' && waiting.length}
       <span class="navpill"
         ><button aria-label="Select" title="Select" aria-pressed={!!selecting} onclick={() => (selecting = selecting ? null : new Set())}><Icon name="listChecks" size={22} /></button></span
@@ -137,7 +143,7 @@
       </Group>
     {:else if list === 'mine'}
       <Group>
-        {#each view.mine as r (r.id)}{@render row(r, false, false)}{:else}
+        {#each mine as r (r.id)}{@render row(r, false, false)}{:else}
           <Item name="None yet" line="Want an album in Discover to ask for it." onclick={() => (location.hash = '#/discover')} />
         {/each}
       </Group>
@@ -147,11 +153,11 @@
       {@const w = requests.watching}
       {#if w.fetching.length}
         <Group title="Fetching now">
-          {#each w.fetching as a (`f:${a.release_group ?? a.album}`)}<ReleaseRow cover={coverOf(a)} title={a.album} line={watchLine(a)} fill={a.done} />{/each}
+          {#each w.fetching.filter((a) => matchesSearch(a.album, a.artist)) as a (`f:${a.release_group ?? a.album}`)}<ReleaseRow cover={coverOf(a)} title={a.album} line={watchLine(a)} fill={a.done} />{/each}
         </Group>
       {/if}
       <Group title="Not found yet" more="What Lidarr watches for and has not found yet (its Wanted).">
-        {#each w.looking as a (`l:${a.release_group ?? a.album}`)}<ReleaseRow cover={coverOf(a)} title={a.album} line={watchLine(a)} />{:else}<Item name="Nothing" />{/each}
+        {#each w.looking.filter((a) => matchesSearch(a.album, a.artist)) as a (`l:${a.release_group ?? a.album}`)}<ReleaseRow cover={coverOf(a)} title={a.album} line={watchLine(a)} />{:else}<Item name="Nothing" />{/each}
         {#if w.more}<Item name="{w.more.toLocaleString()} more" line="In Lidarr's Wanted" />{/if}
       </Group>
     {/if}

@@ -5,7 +5,7 @@
   import { prefs, type CrateOrder } from './lib/prefs.svelte';
   import type { Crate } from './lib/api';
   import ListHead from './lib/ListHead.svelte';
-  import { CRATE_ORDERS, howMany, usePageAction } from './lib/pageView.svelte';
+  import { CRATE_ORDERS, howMany, matchesSearch, usePageAction } from './lib/pageView.svelte';
   import { crates, CRATE, EDIT_CRATE, loadCrates, startCrate } from './lib/crates.svelte';
   import CrateCard from './lib/CrateCard.svelte';
   import CrateMenu from './lib/CrateMenu.svelte';
@@ -34,8 +34,9 @@
     unplayed: (c) => c.stats?.unplayed,
     newWeek: (c) => c.stats?.new_week,
   };
+  // The pill's search (the owner, 2026-10-25): a crate whose name holds every word.
   const sorted = $derived.by(() => {
-    const list = [...(crates.list ?? [])];
+    const list = (crates.list ?? []).filter((c) => matchesSearch(c.name));
     const of = stat[prefs.crateOrder];
     if (prefs.crateOrder === 'name') list.sort(byName);
     else if (of) list.sort((a, b) => (of(a) ?? -1) - (of(b) ?? -1) || byName(a, b));

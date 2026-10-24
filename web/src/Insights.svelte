@@ -7,9 +7,14 @@
   import { insights } from './lib/insights.svelte';
   import { INSIGHTS_GROUPS, INSIGHTS_VIEWS, type InsightsView } from './lib/insightsViews';
   import { INSIGHTS, insightsOf, panel, viewPlaylist } from './lib/panel.svelte';
+  import { matchesSearch } from './lib/pageView.svelte';
 
   $effect(() => insights.load());
-  const groups = INSIGHTS_GROUPS.map((g) => ({ title: g, views: INSIGHTS_VIEWS.filter((v) => v.group === g) }));
+  // The pill's search (the owner, 2026-10-25, as Settings'): a view whose name or group holds every word; the lists in
+  // the panel narrow by it too.
+  const groups = $derived(
+    INSIGHTS_GROUPS.map((g) => ({ title: g, views: INSIGHTS_VIEWS.filter((v) => v.group === g && matchesSearch(v.label, v.group)) })).filter((g) => g.views.length),
+  );
 
   const count = (n: number, one: string, many: string) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
   /** A view's number, where the collection's answer has one. */
