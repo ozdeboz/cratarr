@@ -24,8 +24,10 @@
     onchange: (on: T[]) => void;
     /** The fold line: how many of those on are above it. */
     fold?: { at: number; onchange: (at: number) => void } | null;
-    /** A first place only some may take (Home's top: the flow; the owner, 2026-10-24): marked by a line under it, named
-     *  `label`; one that may not is never dragged above the line, and the first stays unless the next may take it. */
+    /** A first place only some may take (Home's top: the flow; the owner, 2026-10-24): marked by a line under it; each
+     *  that may take it, on or off, has the stars beside its name (`label` says what they mean; no word on the first,
+     *  the owner the same day); one that may not is never dragged above the line, and the first stays unless the next
+     *  may take it. */
     lead?: { may: (id: T) => boolean; label: string } | null;
   } = $props();
 
@@ -62,6 +64,12 @@
   );
 </script>
 
+{#snippet shownName(id: T)}
+  <span
+    >{label(id)}{#if lead?.may(id)}<span class="may" title={lead.label} aria-label={lead.label}><Icon name="sparkles" size={16} /></span>{/if}</span
+  >
+{/snippet}
+
 <ol class="facts" class:dragging={!!reorder.drag} bind:this={list} aria-label={name}>
   {#each entries as id, i (id ?? '|')}
     <li class:lifted={reorder.drag?.from === i} class:line={id === null} class:lead={!!lead && i === 0} style:transform={reorder.drag ? `translateY(${reorder.offset(i)}px)` : null}>
@@ -70,7 +78,7 @@
         <span class="row fold"><span class="pill"><Icon name="chevronUp" size={14} />Fold</span></span>
       {:else}
         <button class="row" role="switch" aria-checked="true" onclick={() => flip(id)}
-          ><span>{label(id)}{#if lead && i === 0}<small class="lead-label">{lead.label}</small>{/if}</span><SwitchTrack on={true} /></button
+          >{@render shownName(id)}<SwitchTrack on={true} /></button
         >
       {/if}
       <button
@@ -85,7 +93,7 @@
   {/each}
   {#each off as id (id)}
     <li>
-      <button class="row" role="switch" aria-checked="false" onclick={() => flip(id)}><span>{label(id)}</span><SwitchTrack on={false} /></button>
+      <button class="row" role="switch" aria-checked="false" onclick={() => flip(id)}>{@render shownName(id)}<SwitchTrack on={false} /></button>
       <span class="grip-room" aria-hidden="true"></span>
     </li>
   {/each}
@@ -111,13 +119,12 @@
     border-bottom: 2px solid var(--accent);
   }
 
-  .lead-label {
+  /* Can take the first place: the stars, small, after the name. */
+  .may {
+    display: inline-flex;
     margin-left: 8px;
-    color: var(--accent-ink);
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    color: var(--accent);
+    vertical-align: -2px;
   }
 
   .facts.dragging li {
