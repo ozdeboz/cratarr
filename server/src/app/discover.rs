@@ -911,7 +911,7 @@ pub async fn look(
     cat: Arc<crate::catalogue::Catalogue>,
     account: &str,
     who: &Who,
-    artists: Option<Arc<super::artists::ArtistInfo>>,
+    store: Option<Arc<super::artists::ArtistInfo>>,
     progress: &Progress,
 ) -> Result<Found> {
     let dir = serve.data_dir.clone().context("Discover needs Cratarr's data folder")?;
@@ -1066,7 +1066,7 @@ pub async fn look(
     // The new artists' pictures and descriptions, with the sync (the owner, 2026-10-25: "It should be in the sync",
     // "as well as description if we can get it"): the first few new artists, as the artist store reads the library's,
     // kept there; a suggestion says whether its artist has a picture, the page only features one that has.
-    if let Some(store) = artists {
+    if let Some(store) = store {
         let mut new: Vec<String> = Vec::new();
         for s in albums.iter().filter(|s| s.new_artist) {
             if !new.contains(&s.artist) && new.len() < NEW_ARTIST_PICTURES {
