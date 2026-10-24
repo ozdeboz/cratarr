@@ -641,7 +641,7 @@ pub fn who(serve: &crate::serve::Serve, account: &str) -> Result<Who> {
 
 /// Lidarr, where it is connected and switched on: Want fetches through it.
 /// What Want adds an album with: Lidarr's choices in Connections.
-fn add_with(app: &super::App) -> crate::lidarr::AddWith {
+pub fn add_with(app: &super::App) -> crate::lidarr::AddWith {
     let cfg = app.incoming.lidarr_state().0;
     crate::lidarr::AddWith {
         quality: cfg.as_ref().and_then(|c| c.quality_profile),
@@ -661,16 +661,6 @@ pub fn start(app: &Arc<super::App>, serve: Arc<crate::serve::Serve>, account: &s
         let progress = move |name: &str, done: u64, total: Option<u64>| h.step(name, done, total);
         look(&serve, cat, &a, &who, &progress).await
     })
-}
-
-/// Want (decision 0069): Lidarr fetches the suggestion into Incoming, and it leaves the list (`wanted`). What Lidarr
-/// did, in words.
-pub async fn want(app: &super::App, serve: &crate::serve::Serve, account: &str, key: &str) -> Result<String> {
-    let l = lidarr(app).context("Lidarr is not connected, or is switched off")?;
-    let s = kept(serve, account)?.and_then(|f| f.albums.into_iter().find(|s| s.key == key)).context("That suggestion is gone; look again")?;
-    let said = l.want(&add_with(app), s.release_group.as_deref(), &s.artist, &s.album).await?;
-    serve.userdata.answer_discover(account, &s.key, &s.artist_key, "wanted")?;
-    Ok(said)
 }
 
 /// Not interested (decision 0069): it never comes back, and an artist said no to twice is left out.

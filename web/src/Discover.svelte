@@ -1,11 +1,12 @@
 <script lang="ts">
   // Discover (decision 0069; the owner, 2026-10-24: "suggestions outside of" the library, "a discover page next to
   // playlists"): albums the library does not have, from the signed-in account's ListenBrainz and Last.fm, each with why
-  // it is suggested, a cover, where to listen elsewhere, Want (Lidarr fetches it into Incoming, where it is heard and
-  // kept or deleted) and Not interested (it never comes back). Looked up again once a day as a task, its progress in
+  // it is suggested, a cover, where to listen elsewhere, Want (a request, decision 0070: Lidarr fetches it into Incoming
+  // once approved, where it is heard and kept or deleted; the card says how far it is) and Not interested (it never
+  // comes back). Looked up again once a day as a task, its progress in
   // one line (ui-conventions, Progress); Refresh in the page's pill asks again now. Without a service connected, the
   // page says what it needs.
-  import { getDiscover, notDiscover, refreshDiscover, wantDiscover, type DiscoverAlbum, type DiscoverView } from './lib/api';
+  import { getDiscover, notDiscover, refreshDiscover, wantDiscover, type AlbumRequest, type DiscoverAlbum, type DiscoverView } from './lib/api';
   import Cover from './lib/Cover.svelte';
   import Icon from './lib/Icon.svelte';
   import Meter from './lib/Meter.svelte';
@@ -16,7 +17,8 @@
   import { me } from './lib/me.svelte';
   import { toast } from './lib/toast.svelte';
 
-  // Want: an administrator's, with Lidarr connected and on (the owner, 2026-10-24: others ask, from 0.9).
+  // Want: a request for everyone who may ask (decision 0070); an administrator's (or Auto-approve) is handed to Lidarr
+  // at once.
 
   const KIND = 'discover';
   let view = $state<DiscoverView | null>(null);
@@ -32,8 +34,7 @@
   $effect(() => tasks.follow());
   const task = $derived(tasks.of(KIND));
   const looking = $derived(tasks.running(KIND));
-  const canWant = $derived(me.admin && !!view?.lidarr);
-  const wantWhy = $derived(!me.admin ? 'Ask an administrator' : 'Needs Lidarr');
+  const canWant = $derived(!!view?.may_request);
   let seenEnd = $state<number | null>(null);
   $effect(() => {
     const t = task;
@@ -78,15 +79,31 @@
   async function want(a: DiscoverAlbum) {
     asking = a.key;
     try {
-      const { said } = await wantDiscover(a.key);
-      gone = [...gone, a.key];
-      toast.show({ text: `${a.album}: ${said}` });
+      const { request } = await wantDiscover(a.key);
+      if (view) view.requests = { ...view.requests, [a.key]: request };
+      if (request.fetched?.startsWith('Not handed over')) toast.show({ text: request.fetched, tone: 'error' });
     } catch (e) {
-      toast.fail(e, 'Lidarr could not fetch it');
+      toast.fail(e, 'Could not ask for it');
     } finally {
       asking = null;
     }
   }
+  /** Where an asked-for album stands, on its card. */
+  function asked(r: AlbumRequest): string {
+    const a = r.album_state;
+    if (a?.state === 'in_library') return 'In the library';
+    if (r.status === 'pending') return 'Requested';
+    if (r.status === 'declined') return r.reason ? `Declined: ${r.reason}` : 'Declined';
+    if (r.status === 'cancelled') return '';
+    if (r.fetched?.startsWith('Not handed over')) return r.fetched;
+    if (a?.state === 'fetching') return `Being fetched · ${Math.round(a.done * 100)}%`;
+    if (a?.state === 'in_incoming') return 'In Incoming';
+    if (a?.state === 'partly_there') return `Partly there · ${a.tracks} of ${a.of}`;
+    return 'Approved';
+  }
+  /** Asked for and not taken back: Want is done for it. */
+  const open = (r: AlbumRequest | undefined) => !!r && (r.status === 'pending' || r.status === 'approved');
+
   async function no(a: DiscoverAlbum) {
     gone = [...gone, a.key];
     try {
@@ -125,13 +142,12 @@
     {#if !albums.length}
       {#if !looking}<p class="note">{view.found ? 'Nothing new to suggest right now.' : 'Looking for albums you might like…'}</p>{/if}
     {:else}
-      {#if !me.admin}
-        <p class="note">Want is an administrator's: ask one.</p>
-      {:else if !view.lidarr}
+      {#if me.admin && !view.lidarr}
         <p class="note">Want needs Lidarr: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>
       {/if}
       <ul class="grid">
         {#each albums as a (a.key)}
+          {@const r = view.requests?.[a.key]}
           <li class="card">
             <!-- Cratarr's own cover: a picture that does not load is its stand-in, and the suggestion stays. -->
             <div class="cover"><Cover src={a.cover} /></div>
@@ -143,11 +159,17 @@
               <span class="links">
                 {#each a.links as l (l.name)}<a href={l.url} target="_blank" rel="noopener noreferrer">{l.name}</a>{/each}
               </span>
+              {#if r && asked(r)}
+                <a class="asked" class:bad={r.status === 'declined' || r.fetched?.startsWith('Not handed over')} href="#/requests">{asked(r)}</a>
+              {/if}
               <span class="acts">
-                <!-- Unavailable, not hidden, without Lidarr or for someone not an administrator (the owner, 2026-10-24: they
-                     will ask, in a queue the administrators answer, in 0.9); the note above says why. -->
-                <button class="primary" disabled={!canWant || asking === a.key} aria-busy={asking === a.key} title={canWant ? null : wantWhy} onclick={() => want(a)}
-                  >Want</button
+                <!-- Unavailable, not hidden, for an account that may not ask (an administrator took it away), and once asked. -->
+                <button
+                  class="primary"
+                  disabled={!canWant || asking === a.key || open(r)}
+                  aria-busy={asking === a.key}
+                  title={canWant ? null : 'Requesting albums is not on for this account'}
+                  onclick={() => want(a)}>Want</button
                 >
                 <button class="no" aria-label="Not interested" title="Not interested" onclick={() => no(a)}><Icon name="thumbsDown" size={20} /></button>
               </span>
@@ -310,6 +332,17 @@
     display: grid;
     place-items: center;
     padding: 0 10px;
+  }
+
+  /* Where an asked-for album stands: the Requests page's line, opening it. */
+  .asked {
+    color: var(--accent-ink);
+    font-size: 13px;
+    text-decoration: none;
+  }
+
+  .asked.bad {
+    color: var(--danger-ink);
   }
 
   /* Where it comes from: each service a small label. */

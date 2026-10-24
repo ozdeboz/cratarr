@@ -1031,7 +1031,16 @@ export const setHomeAssistantOn = (on: boolean) => putJson('/api/connections/hom
 
 /** What a user may do beyond listening (decision 0051), in Cratarr and in OpenSubsonic apps alike: keep tracks to play
  *  offline, make playlists, share them with the other users, make public share links. */
-export type Permissions = { offline: boolean; playlists: boolean; share: boolean; links: boolean };
+export type Permissions = {
+  offline: boolean;
+  playlists: boolean;
+  share: boolean;
+  links: boolean;
+  /** Requests (decision 0070): ask for albums, have that approved at once, answer everyone's. */
+  request: boolean;
+  auto_approve: boolean;
+  manage_requests: boolean;
+};
 /** A device that belongs to an account (it plays only on its own, decision 0051): uid=197609(Oskar) gid=197121 groups=197121 its player's name. One that is
  *  connected, or a Kodi (removed under Players), is not taken away. */
 export type OwnDevice = { id: string; name: string; kind: string; online?: boolean; last_seen: number | null };
@@ -1508,10 +1517,54 @@ export type DiscoverView = {
   found: { at: number; albums: DiscoverAlbum[]; notes: string[] } | null;
   services: { listenbrainz: boolean; lastfm: boolean };
   lidarr: boolean;
+  /** Each card's request, by its key, if it was asked for (decision 0070). */
+  requests?: Record<string, AlbumRequest>;
+  /** The account may ask for albums. */
+  may_request?: boolean;
 };
 export const getDiscover = () => request<DiscoverView>('/api/discover');
 export const refreshDiscover = () => post<Started>('/api/discover/refresh', {});
-export const wantDiscover = (key: string) => post<{ said: string }>('/api/discover/want', { key });
+/** Want: a request, handed to Lidarr at once where the account may (decision 0070). */
+export const wantDiscover = (key: string) => post<{ request: AlbumRequest }>('/api/discover/want', { key });
+
+/** An album's own state beside its request's (decision 0070). */
+export type RequestedAlbum =
+  | { state: 'requested' | 'looking' | 'in_incoming' | 'in_library' | 'unknown' }
+  | { state: 'fetching'; done: number }
+  | { state: 'partly_there'; tracks: number; of: number };
+/** An album asked for (decision 0070): who asked, its status and who answered, and its album's state. */
+export type AlbumRequest = {
+  id: number;
+  user: string;
+  album_key: string;
+  artist_key: string;
+  release_group: string | null;
+  album: string;
+  artist: string;
+  year: number | null;
+  cover: string | null;
+  at: number;
+  status: 'pending' | 'approved' | 'declined' | 'cancelled';
+  reason: string | null;
+  decided_by: string | null;
+  decided_at: number | null;
+  /** What Lidarr said when it was handed it. */
+  fetched: string | null;
+  /** Absent on a request just made (Want's answer). */
+  album_state?: RequestedAlbum;
+};
+/** The Requests page: the account's own, everyone's waiting ones for those who answer them (else null). */
+export type RequestsView = { mine: AlbumRequest[]; waiting: AlbumRequest[] | null; may: Permissions; fetcher: boolean };
+/** An album Lidarr is looking for, or fetching (`done`, 0 to 1, and what it says of it). */
+export type WatchedAlbum = { album: string; artist: string; release_group: string | null; year: number | null; done: number | null; status: string | null };
+export type Watching = { fetching: WatchedAlbum[]; looking: WatchedAlbum[]; more: number };
+export const getRequests = () => request<RequestsView>('/api/requests');
+/** What Lidarr is looking for and fetching now; null without Lidarr. */
+export const getWatching = () => quietly<Watching | null>('/api/requests/watching');
+/** Requests answered, one or many: each one's outcome, in words. */
+export const decideRequests = (ids: number[], approve: boolean, reason: string | null = null) =>
+  post<{ id: number; said: string }[]>('/api/requests/decide', { ids, approve, reason });
+export const cancelRequest = (id: number) => post<void>(`/api/requests/${id}/cancel`, {});
 export const notDiscover = (key: string) => post<void>('/api/discover/no', { key });
 
 /** A ListenBrainz user's listens into the asking account's history (decisions 0064 and 0067), as a task. */

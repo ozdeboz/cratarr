@@ -163,6 +163,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/discover/refresh", post(discover_refresh))
         .route("/api/discover/want", post(discover_want))
         .route("/api/discover/no", post(discover_no))
+        .route("/api/requests", get(requests))
+        .route("/api/requests/watching", get(requests_watching))
+        .route("/api/requests/decide", post(requests_decide))
+        .route("/api/requests/{id}/cancel", post(requests_cancel))
         // The administrators' (decision 0051): the server's settings, what comes in, the library's changes and its
         // health, the folders, the diagnostics.
         .merge(
@@ -2745,9 +2749,24 @@ async fn discover(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>
     let stale = found.as_ref().is_none_or(|f| crate::app::moment::now_secs() - f.at > crate::app::discover::FRESH_SECS);
     let running = crate::app::tasks::tasks().of(&account).iter().any(|t| t.kind == crate::app::discover::KIND && t.finished.is_none());
     if stale && !running && who.any() {
-        let _ = crate::app::discover::start(&app, serve, &account, who);
+        let _ = crate::app::discover::start(&app, serve.clone(), &account, who);
     }
-    Ok(Json(json!({ "found": found, "services": services, "lidarr": crate::app::discover::lidarr(&app).is_some() })))
+    // Each card's request, if it was asked for, with its album's state (decision 0070).
+    let keys: Vec<String> = found.as_ref().map(|f| f.albums.iter().map(|s| s.key.clone()).collect()).unwrap_or_default();
+    let asked: serde_json::Map<String, serde_json::Value> = crate::app::requests::of_suggestions(&app, &serve, &account, &keys)
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .into_iter()
+        .map(|(k, v)| (k, json!(v)))
+        .collect();
+    let may = crate::app::requests::rights(&serve);
+    Ok(Json(json!({
+        "found": found,
+        "services": services,
+        "lidarr": crate::app::discover::lidarr(&app).is_some(),
+        "requests": asked,
+        "may_request": may.request,
+    })))
 }
 
 /// Discover looked up again now: 202 with its task.
@@ -2769,15 +2788,49 @@ struct DiscoverKey {
     key: String,
 }
 
-/// A suggestion wanted: Lidarr fetches it into Incoming.
+/// A suggestion wanted: a request (decision 0070), handed to Lidarr at once where the account may (an administrator's,
+/// or Auto-approve), else waiting for an answer.
 async fn discover_want(State(app): State<Arc<App>>, Json(b): Json<DiscoverKey>) -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = discoverer()?;
-    // An administrator's (the owner, 2026-10-24: anyone else's goes into a queue the administrators answer, in 0.9).
-    if !serve.current_is_admin() {
-        return Err(ToggleError::Refused("Want is an administrator's: ask one.".into()).into());
-    }
-    let said = crate::app::discover::want(&app, &serve, &account, &b.key).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(Json(json!({ "said": said })))
+    let r = crate::app::requests::ask(&app, &serve, &account, &b.key).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "request": r })))
+}
+
+/// The Requests page (decision 0070): the account's requests, everyone's waiting ones for those who answer them.
+async fn requests(State(app): State<Arc<App>>) -> Result<Json<crate::app::requests::Listing>, ApiError> {
+    let (serve, account) = discoverer()?;
+    Ok(Json(crate::app::requests::list(&app, &serve, &account).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+/// What Lidarr is looking for and fetching now; `null` without Lidarr.
+async fn requests_watching(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
+    discoverer()?;
+    let w = crate::app::requests::watching(&app).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!(w)))
+}
+
+#[derive(Deserialize)]
+struct RequestsDecide {
+    ids: Vec<i64>,
+    approve: bool,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// Requests answered, one or many: each id's outcome, in words.
+async fn requests_decide(State(app): State<Arc<App>>, Json(b): Json<RequestsDecide>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = discoverer()?;
+    let out = crate::app::requests::decide(&app, &serve, &account, &b.ids, b.approve, b.reason.as_deref())
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!(out.into_iter().map(|(id, said)| json!({ "id": id, "said": said })).collect::<Vec<_>>())))
+}
+
+/// A request taken back.
+async fn requests_cancel(State(app): State<Arc<App>>, Path(id): Path<i64>) -> Result<StatusCode, ApiError> {
+    let (serve, account) = discoverer()?;
+    crate::app::requests::cancel(&app, &serve, &account, id).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// A suggestion not wanted: it never comes back.

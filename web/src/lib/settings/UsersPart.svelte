@@ -45,6 +45,9 @@
     { key: 'offline', label: 'Download in apps' },
     { key: 'playlists', label: 'Change playlists in apps' },
     { key: 'share', label: 'Share playlists' },
+    { key: 'request', label: 'Request albums' },
+    { key: 'auto_approve', label: 'Requests approved at once' },
+    { key: 'manage_requests', label: 'Answer requests' },
   ];
   const ROLES: { value: 'user' | 'admin'; label: string }[] = [
     { value: 'user', label: 'User' },

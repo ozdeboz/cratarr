@@ -74,6 +74,37 @@ impl Acquisition for crate::lidarr::Lidarr {
     }
 }
 
+/// What carries out an approved request (decision 0070): Lidarr first; slskd directly, say, could take its place without
+/// the requests, their queue or their statuses changing. An album is named by its MusicBrainz release group where known.
+pub trait Fetcher: Send + Sync {
+    /// Fetch this album into Incoming. What was done, in words.
+    fn want<'a>(&'a self, release_group: Option<&'a str>, artist: &'a str, album: &'a str) -> Fut<'a, String>;
+    /// How far it is with this album.
+    fn status<'a>(&'a self, release_group: &'a str) -> Fut<'a, crate::lidarr::Progress>;
+    /// Stop fetching it (what is there already stays).
+    fn cancel<'a>(&'a self, release_group: &'a str) -> Fut<'a, ()>;
+}
+
+/// Lidarr as the fetcher: Want with the profiles and root folder chosen on its page in Connections.
+pub struct LidarrFetcher {
+    pub lidarr: crate::lidarr::Lidarr,
+    pub with: crate::lidarr::AddWith,
+}
+
+impl Fetcher for LidarrFetcher {
+    fn want<'a>(&'a self, release_group: Option<&'a str>, artist: &'a str, album: &'a str) -> Fut<'a, String> {
+        Box::pin(self.lidarr.want(&self.with, release_group, artist, album))
+    }
+
+    fn status<'a>(&'a self, release_group: &'a str) -> Fut<'a, crate::lidarr::Progress> {
+        Box::pin(self.lidarr.progress(release_group))
+    }
+
+    fn cancel<'a>(&'a self, release_group: &'a str) -> Fut<'a, ()> {
+        Box::pin(self.lidarr.unwant(release_group))
+    }
+}
+
 /// The real adapters, as the services hold them.
 pub fn disk() -> Arc<dyn Files> {
     Arc::new(Disk)

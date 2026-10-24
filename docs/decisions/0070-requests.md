@@ -49,7 +49,12 @@ albums into Incoming. Music also comes from elsewhere than Soulseek, so Lidarr s
     each with how far it is, so the requests and Lidarr's own watch read as one.
 - **Health:** "3 requests waiting", for those who manage requests, opening the Requests page.
 - **Discover:** Want for everyone who may request: "Requested" on the card once asked, then the album's status;
-  declined shows the reason. An administrator's Want goes straight through, as in 0069.
+  declined shows the reason. An administrator's Want goes straight through, as in 0069. An album asked for stays on
+  Discover, its status on its card, until the library has it (0069's Want took it off the list at once).
+- **Taken back:** a pending request by the one who asked (or by those who manage requests); an approved one only by
+  those who manage requests, the fetcher then told to stop looking for it (`cancel`; what is there already stays).
+- **The rights are the account's permissions** (0051's `Permissions`, the Users panel): *Request albums*, *Requests
+  approved at once*, *Answer requests*, beside the others.
 - **No limits** in 0.9 (Seerr's per-week limits can come later).
 
 ## Consequences

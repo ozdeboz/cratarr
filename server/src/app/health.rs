@@ -194,6 +194,20 @@ pub fn incoming(upgrades: u64, duplicates: u64, failed: u64) -> Vec<Finding> {
     out
 }
 
+/// Requests waiting for an answer (decision 0070), each named, opening the Requests page.
+fn check_requests() -> anyhow::Result<Vec<Finding>> {
+    let Some(serve) = crate::serve::instance() else { return Ok(Vec::new()) };
+    let waiting = serve.userdata.requests(None, Some(super::requests::PENDING), ITEMS)?;
+    if waiting.is_empty() {
+        return Ok(Vec::new());
+    }
+    let count = super::requests::waiting(&serve)? as u64;
+    let mut f = finding("requests", "requests:waiting", Level::Info, count, format!("{} waiting", n(count, "request", "requests")));
+    f.open = Some(Open { page: "requests", switch: None });
+    f.items = waiting.into_iter().map(|r| Item { title: r.album, line: Some(format!("{} · asked by {}", r.artist, r.user)), ..Item::default() }).collect();
+    Ok(vec![f])
+}
+
 impl App {
     /// Every domain's findings now (decision 0063), worst first, the most recent first among equals.
     pub async fn health_report(&self) -> Report {
@@ -216,7 +230,7 @@ impl App {
         }
         findings.extend(self.check_players());
         checked.insert("players", at);
-        for (domain, found) in [("sign-in", check_sign_in(at)), ("server", check_server(at))] {
+        for (domain, found) in [("sign-in", check_sign_in(at)), ("server", check_server(at)), ("requests", check_requests())] {
             findings.extend(or_failed(domain, found));
             checked.insert(domain, at);
         }

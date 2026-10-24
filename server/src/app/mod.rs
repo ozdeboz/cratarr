@@ -46,6 +46,7 @@ pub mod tasks;
 pub mod listenbrainz;
 pub mod moment;
 pub mod refind;
+pub mod requests;
 pub mod radio;
 pub mod similar;
 pub mod taste;

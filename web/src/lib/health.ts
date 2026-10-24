@@ -14,9 +14,10 @@ export const DOMAINS: Record<string, { name: string; icon: IconName }> = {
   players: { name: 'Players', icon: 'speaker' },
   'sign-in': { name: 'Sign-in', icon: 'key' },
   server: { name: 'Cratarr', icon: 'health' },
+  requests: { name: 'Requests', icon: 'inbox' },
 };
 
-const PAGES: Record<string, string> = { library: '#/library', playlists: '#/', settings: '#/settings', health: '#/health' };
+const PAGES: Record<string, string> = { library: '#/library', playlists: '#/', settings: '#/settings', health: '#/health', requests: '#/requests' };
 
 /** Opens where a finding is dealt with (a switch turned on there first); none: nothing. */
 export function openFinding(f: HealthFinding) {

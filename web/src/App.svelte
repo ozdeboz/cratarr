@@ -14,6 +14,7 @@
   import { localMode, switchable } from './lib/deviceMusic.svelte';
   import Insights from './Insights.svelte';
   import Downloads from './Downloads.svelte';
+  import Requests from './Requests.svelte';
   import SettingsPanel from './lib/SettingsPanel.svelte';
   import HealthPanel from './lib/HealthPanel.svelte';
   import { health, problems } from './lib/healthReport.svelte';
@@ -76,6 +77,9 @@
   const CRATES: Page = { id: 'crates', href: '#/crates', label: 'Crates', icon: 'crates' };
   const HEALTH: Page = { id: 'health', href: '#/health', label: 'Health', icon: 'health' };
   const SETTINGS: Page = { id: 'settings', href: '#/settings', label: 'Settings', icon: 'settings' };
+  // Albums asked for from Discover, and their answers (decision 0070): left of Downloads (the owner, 2026-10-24), for
+  // whoever may ask or answer.
+  const REQUESTS: Page = { id: 'requests', href: '#/requests', label: 'Requests', icon: 'inbox' };
   // In the app only: what is kept on this device (decision 0033, step 4), playable without a connection.
   const DOWNLOADS: Page = { id: 'downloads', href: '#/downloads', label: 'Downloads', icon: 'download' };
   // Local mode's (decision 0052): the device's own music, and the menu shows only these (and Settings).
@@ -97,7 +101,7 @@
       return LIBRARY.id;
     }
     if (!h) return HOME.id;
-    return [HOME, HEALTH, SETTINGS, LIBRARY, INSIGHTS, CRATES, DISCOVER, DOWNLOADS, ...LOCAL].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
+    return [HOME, HEALTH, SETTINGS, LIBRARY, INSIGHTS, CRATES, DISCOVER, REQUESTS, DOWNLOADS, ...LOCAL].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
   };
   let page = $state(fromHash());
   // Where the player shows (decision 0018): beside the page on a roomy window while something plays (`sidebar`);
@@ -469,7 +473,10 @@
   const MAIN: Page[] = $derived(localMode() ? LOCAL : [HOME, LIBRARY, CRATES, PLAYLISTS, DISCOVER]);
   // Apart, at the bottom of the sidebar: Insights beside Health, then Settings.
   // Health is the library's, so its administrators' (decision 0051). In Local mode, Settings only.
-  const APART: Page[] = $derived(localMode() ? [SETTINGS] : [...(inApp ? [DOWNLOADS] : []), INSIGHTS, ...(me.admin ? [HEALTH] : []), SETTINGS]);
+  const mayRequest = $derived(me.admin || me.permissions.request || me.permissions.manage_requests);
+  const APART: Page[] = $derived(
+    localMode() ? [SETTINGS] : [...(mayRequest ? [REQUESTS] : []), ...(inApp ? [DOWNLOADS] : []), INSIGHTS, ...(me.admin ? [HEALTH] : []), SETTINGS],
+  );
   // A switch of the mode (decision 0052) goes to the first page of the mode it went to, unless the page is one both
   // have (Settings).
   $effect(() => {
@@ -568,6 +575,8 @@
       <Crates />
     {:else if page === 'discover'}
       <Discover />
+    {:else if page === 'requests'}
+      <Requests />
     {:else if page === 'home'}
       <Home />
     {:else}

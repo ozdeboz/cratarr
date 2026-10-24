@@ -4,7 +4,7 @@
 // the answer comes, nothing of the administrators' shows: a user never sees it flash.
 import { ApiError, getMe, type Me, type Permissions } from './api';
 
-const ALL: Permissions = { offline: true, playlists: true, share: true, links: true };
+const ALL: Permissions = { offline: true, playlists: true, share: true, links: true, request: true, auto_approve: true, manage_requests: true };
 
 export const me = $state<Me & { known: boolean }>({ known: false, name: null, admin: false, permissions: ALL });
 

@@ -19,7 +19,7 @@
   const p = $derived(problems().find((x) => x.key === problem) ?? null);
   const f = $derived(p?.finding ?? null);
   const LEVEL = { critical: 'Critical', warning: 'Warning', info: 'To know' } as const;
-  const WHERE: Record<string, string> = { library: 'Open the Library', playlists: 'Open Playlists', settings: 'Open Settings', health: 'Open Health' };
+  const WHERE: Record<string, string> = { library: 'Open the Library', playlists: 'Open Playlists', settings: 'Open Settings', health: 'Open Health', requests: 'Open Requests' };
   // The third level (the owner, 2026-10-23): an item's own page, a step deeper in the panel, back to the problem.
   const at = $derived(healthItemOf(panel.viewed));
   const item = $derived(p && at !== null ? (p.items[at] ?? null) : null);

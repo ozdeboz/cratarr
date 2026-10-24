@@ -42,7 +42,8 @@ fn yes() -> bool {
 }
 
 /// What a user may do beyond playing (decision 0051, the Users panel): keep tracks to play offline, make playlists,
-/// share them with the others, and make public share links (OpenSubsonic's `createShare`).
+/// share them with the others, and make public share links (OpenSubsonic's `createShare`); ask for albums, have that
+/// asking approved at once, and answer everyone's requests (decision 0070).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Permissions {
@@ -50,11 +51,21 @@ pub struct Permissions {
     pub playlists: bool,
     pub share: bool,
     pub links: bool,
+    pub request: bool,
+    pub auto_approve: bool,
+    pub manage_requests: bool,
 }
 
 impl Default for Permissions {
     fn default() -> Self {
-        Self { offline: true, playlists: true, share: true, links: false }
+        Self { offline: true, playlists: true, share: true, links: false, request: true, auto_approve: false, manage_requests: false }
+    }
+}
+
+impl Permissions {
+    /// An administrator's: everything.
+    pub fn all() -> Self {
+        Self { offline: true, playlists: true, share: true, links: true, request: true, auto_approve: true, manage_requests: true }
     }
 }
 

@@ -99,6 +99,13 @@ CREATE TABLE IF NOT EXISTS discover_found (user TEXT PRIMARY KEY, at INTEGER NOT
 CREATE TABLE IF NOT EXISTS discover_answer (
   user TEXT NOT NULL, album TEXT NOT NULL, artist TEXT NOT NULL, answer TEXT NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (user, album)) WITHOUT ROWID;
+-- Requests (decision 0070): an album asked for, by whom and when, its own status (pending, approved, declined,
+-- cancelled) with who decided and why, and what the fetcher said of it (the rights are the account's, serve::users).
+CREATE TABLE IF NOT EXISTS request (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user TEXT NOT NULL, album_key TEXT NOT NULL, artist_key TEXT NOT NULL,
+  release_group TEXT, album TEXT NOT NULL, artist TEXT NOT NULL, year INTEGER, cover TEXT,
+  at INTEGER NOT NULL, status TEXT NOT NULL, reason TEXT, decided_by TEXT, decided_at INTEGER, fetched TEXT);
+CREATE INDEX IF NOT EXISTS request_status ON request (status, at);
 -- Sleep is no longer kept (the owner, 2026-10-24: not something that should be in Cratarr at all).
 DROP TABLE IF EXISTS asleep;
 ";
@@ -1013,6 +1020,51 @@ impl UserData {
         Ok((albums, artists))
     }
 
+    /// A request kept (decision 0070): its id.
+    pub fn add_request(&self, r: &Request) -> Result<i64> {
+        let db = self.db();
+        db.execute(
+            "INSERT INTO request (user, album_key, artist_key, release_group, album, artist, year, cover, at, status, reason, decided_by, decided_at, fetched)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![r.user, r.album_key, r.artist_key, r.release_group, r.album, r.artist, r.year, r.cover, r.at, r.status, r.reason, r.decided_by, r.decided_at, r.fetched],
+        )?;
+        Ok(db.last_insert_rowid())
+    }
+
+    /// Requests, newest first: `user`'s own, or everyone's (`None`); only those of `status` when given.
+    pub fn requests(&self, user: Option<&str>, status: Option<&str>, limit: usize) -> Result<Vec<Request>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(&format!(
+            "SELECT {REQUEST_COLUMNS} FROM request WHERE (?1 IS NULL OR user = ?1) AND (?2 IS NULL OR status = ?2) ORDER BY at DESC, id DESC LIMIT ?3"
+        ))?;
+        let rows = st.query_map(params![user, status, limit as i64], request_row)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn request(&self, id: i64) -> Result<Option<Request>> {
+        Ok(self.db().query_row(&format!("SELECT {REQUEST_COLUMNS} FROM request WHERE id = ?1"), [id], request_row).optional()?)
+    }
+
+    /// A request answered or withdrawn: its status, why, by whom (now).
+    pub fn set_request_status(&self, id: i64, status: &str, reason: Option<&str>, by: Option<&str>) -> Result<()> {
+        self.db().execute(
+            "UPDATE request SET status = ?2, reason = ?3, decided_by = ?4, decided_at = ?5 WHERE id = ?1",
+            params![id, status, reason, by, now()],
+        )?;
+        Ok(())
+    }
+
+    /// What the fetcher said of a request it was handed.
+    pub fn set_request_fetched(&self, id: i64, said: &str) -> Result<()> {
+        self.db().execute("UPDATE request SET fetched = ?2 WHERE id = ?1", params![id, said])?;
+        Ok(())
+    }
+
+    /// How many requests wait for an answer (Health).
+    pub fn requests_waiting(&self) -> Result<usize> {
+        Ok(self.db().query_row("SELECT count(*) FROM request WHERE status = 'pending'", [], |r| r.get::<_, i64>(0))? as usize)
+    }
+
     pub fn import_choice(&self, source: &str) -> Result<Option<String>> {
         Ok(self.db().query_row("SELECT choice FROM import_choices WHERE source = ?1", [source], |r| r.get(0)).optional()?)
     }
@@ -1496,6 +1548,53 @@ fn occurrences(entries: &[String]) -> Vec<(String, usize)> {
         .collect()
 }
 
+/// An album asked for (decision 0070), as kept.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Request {
+    pub id: i64,
+    pub user: String,
+    /// The suggestion's key and its artist's (app::discover), so it leaves that account's Discover.
+    pub album_key: String,
+    pub artist_key: String,
+    pub release_group: Option<String>,
+    pub album: String,
+    pub artist: String,
+    pub year: Option<i32>,
+    pub cover: Option<String>,
+    pub at: i64,
+    /// `pending`, `approved`, `declined` or `cancelled`.
+    pub status: String,
+    /// Why it was declined, if a reason was given.
+    pub reason: Option<String>,
+    pub decided_by: Option<String>,
+    pub decided_at: Option<i64>,
+    /// What the fetcher (Lidarr) said when it was handed the request.
+    pub fetched: Option<String>,
+}
+
+const REQUEST_COLUMNS: &str =
+    "id, user, album_key, artist_key, release_group, album, artist, year, cover, at, status, reason, decided_by, decided_at, fetched";
+
+fn request_row(r: &rusqlite::Row) -> rusqlite::Result<Request> {
+    Ok(Request {
+        id: r.get(0)?,
+        user: r.get(1)?,
+        album_key: r.get(2)?,
+        artist_key: r.get(3)?,
+        release_group: r.get(4)?,
+        album: r.get(5)?,
+        artist: r.get(6)?,
+        year: r.get(7)?,
+        cover: r.get(8)?,
+        at: r.get(9)?,
+        status: r.get(10)?,
+        reason: r.get(11)?,
+        decided_by: r.get(12)?,
+        decided_at: r.get(13)?,
+        fetched: r.get(14)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1712,6 +1811,41 @@ mod tests {
         assert_eq!((get(Kind::Album, "al-x").play_count, get(Kind::Artist, "ar-a").play_count), (1, 1));
         assert!(get(Kind::Song, "tr-1").starred_at.is_none());
         assert!(u.imported(KEY, Kind::Song, &["tr-1".into()]).unwrap().is_empty(), "forgotten: the next import starts afresh");
+    }
+
+    #[test]
+    fn requests_keep_who_asked_their_status_and_who_answered() {
+        let u = UserData::open(None).unwrap();
+        let r = |user: &str, album: &str, at: i64| Request {
+            id: 0,
+            user: user.into(),
+            album_key: format!("rg-{album}"),
+            artist_key: "air".into(),
+            release_group: Some(format!("rg-{album}")),
+            album: album.into(),
+            artist: "Air".into(),
+            year: Some(1998),
+            cover: None,
+            at,
+            status: "pending".into(),
+            reason: None,
+            decided_by: None,
+            decided_at: None,
+            fetched: None,
+        };
+        let a = u.add_request(&r("me", "Moon Safari", 1)).unwrap();
+        let b = u.add_request(&r("you", "Talkie Walkie", 2)).unwrap();
+        assert_eq!(u.requests_waiting().unwrap(), 2);
+        assert_eq!(u.requests(None, None, 10).unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), vec![b, a], "newest first");
+        assert_eq!(u.requests(Some("me"), None, 10).unwrap().len(), 1, "each account its own");
+        u.set_request_status(b, "declined", Some("Not on Soulseek"), Some("admin")).unwrap();
+        let d = u.request(b).unwrap().unwrap();
+        assert_eq!((d.status.as_str(), d.reason.as_deref(), d.decided_by.as_deref()), ("declined", Some("Not on Soulseek"), Some("admin")));
+        assert!(d.decided_at.is_some());
+        assert_eq!(u.requests(None, Some("pending"), 10).unwrap().iter().map(|r| r.id).collect::<Vec<_>>(), vec![a]);
+        u.set_request_fetched(a, "Lidarr is looking for it").unwrap();
+        assert_eq!(u.request(a).unwrap().unwrap().fetched.as_deref(), Some("Lidarr is looking for it"));
+        assert!(u.request(99).unwrap().is_none());
     }
 
     #[test]
