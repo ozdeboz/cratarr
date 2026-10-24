@@ -168,7 +168,9 @@ object Downloads {
         return JSONObject().put("type", "downloads").put("tracks", tracks).put("bytes", bytes)
     }
 
-    /** A track's item, its file from the store when it was downloaded whole, else from Cratarr (`server`). */
+    /** A track's item, its file from the store when it was downloaded whole, else from Cratarr (`server`): kept ahead
+     *  whole in either form, that one; else on mobile data Cratarr's smaller copy (Opus; the owner, 2026-10-24), else
+     *  the file as it is. */
     fun locate(context: Context, item: MediaItem, server: String?): MediaItem {
         val key = item.mediaId
         val done = try {
@@ -180,10 +182,19 @@ object Downloads {
         if (done != null) {
             b.setUri(done.request.uri).setCustomCacheKey(done.request.customCacheKey)
         } else if (server != null) {
-            b.setUri("$server/api/file/$key").setCustomCacheKey(key)
+            val store = cache(context.applicationContext)
+            val opus = when {
+                whole(store, key) -> false
+                whole(store, "$key#opus") -> true
+                else -> Net.metered(context)
+            }
+            b.setUri(fileUri(server, key, opus)).setCustomCacheKey(if (opus) "$key#opus" else key)
         }
         return b.build()
     }
+
+    /** A track's file from Cratarr: as it is, or its smaller copy (kept under its own name, `#opus`). */
+    private fun fileUri(server: String, key: String, opus: Boolean) = "$server/api/file/$key" + if (opus) "?as=opus" else ""
 
     /**
      * Keeps the next tracks of the queue on the device, one after the other, and lets go of those played some time
@@ -193,26 +204,31 @@ object Downloads {
         val app = context.applicationContext
         val server = Prefs(app).serverUrl?.trimEnd('/') ?: return
         val wanted = queue.drop(playing.coerceAtLeast(0)).take(UP_NEXT + 1).map { it.mediaId }
-        val keep = (queue.drop((playing - KEEP_PLAYED).coerceAtLeast(0)).take(KEEP_PLAYED + UP_NEXT + 1).map { it.mediaId }).toSet()
+        // Near ones are kept in either form (the connection may have changed since).
+        val keep = queue.drop((playing - KEEP_PLAYED).coerceAtLeast(0)).take(KEEP_PLAYED + UP_NEXT + 1)
+            .flatMap { listOf(it.mediaId, "${it.mediaId}#opus") }.toSet()
+        // On mobile data the smaller copies, as the playing track's (`locate`).
+        val opus = Net.metered(app)
         writing?.cancel()
         ahead.execute {
             val store = cache(app)
             val kept = autoKept(app).toMutableList()
             // Let go of what is no longer near; a download of the owner's under the same name stays.
-            for (key in kept.filter { it !in keep }) {
-                val downloaded = manager(app).downloadIndex.getDownload(key) != null
-                if (!downloaded) store.removeResource(key)
-                kept.remove(key)
+            for (stored in kept.filter { it !in keep }) {
+                val downloaded = manager(app).downloadIndex.getDownload(stored.removeSuffix("#opus"))?.request?.customCacheKey == stored
+                if (!downloaded) store.removeResource(stored)
+                kept.remove(stored)
             }
             saveAutoKept(app, kept)
             for (key in wanted) {
                 if (manager(app).downloadIndex.getDownload(key)?.state == Download.STATE_COMPLETED) continue
-                if (whole(store, key)) continue
-                if (key !in kept) {
-                    kept.add(key)
+                if (whole(store, key) || whole(store, "$key#opus")) continue
+                val stored = if (opus) "$key#opus" else key
+                if (stored !in kept) {
+                    kept.add(stored)
                     saveAutoKept(app, kept)
                 }
-                val spec = DataSpec.Builder().setUri("$server/api/file/$key").setKey(key).build()
+                val spec = DataSpec.Builder().setUri(fileUri(server, key, opus)).setKey(stored).build()
                 val source = CacheDataSource.Factory().setCache(store).setUpstreamDataSourceFactory(http(app)).createDataSourceForDownloading()
                 val writer = CacheWriter(source, spec, null, null)
                 writing = writer
@@ -220,7 +236,7 @@ object Downloads {
                     writer.cache()
                 } catch (e: Exception) {
                     // No connection, or the queue changed (cancelled): the next change tries again.
-                    Log.i(TAG, "keeping $key: ${e.message}")
+                    Log.i(TAG, "keeping $stored: ${e.message}")
                     return@execute
                 } finally {
                     writing = null

@@ -1934,7 +1934,9 @@ struct FileAs {
 }
 
 /// A track's file as it is, with byte ranges: for a native player (the Android app's, decision 0031 amended), which
-/// seeks in the file itself and plays gapless from its own headers. With `?as=opus`, the downloads' smaller copy.
+/// seeks in the file itself and plays gapless from its own headers. With `?as=opus`, a lossless track's smaller copy:
+/// the app's stream on mobile data and its smaller downloads, kept on the NAS (`opus_copies`) so it has a length and
+/// ranges too.
 async fn file(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<FileAs>, headers: HeaderMap) -> Response {
     let cat = app.library.catalogue();
     let source_id = (source.clone(), id.clone());
@@ -1942,10 +1944,15 @@ async fn file(State(app): State<Arc<App>>, Path((source, id)): Path<(String, Str
     let Some((path, _, _)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
-    if q.as_.as_deref() == Some("opus")
-        && let Some(copy) = opus_copy(path.clone(), replay_gain_of(&app, &source_id.0, &source_id.1).await).await
-    {
-        return copy;
+    if q.as_.as_deref() == Some("opus") {
+        let gain = replay_gain_of(&app, &source_id.0, &source_id.1).await;
+        let copy = match &app.opus_copies {
+            Some(copies) => copies.serve(path.clone(), gain.map_or((None, None), |g| (g.track_gain, g.album_gain)), &headers).await,
+            None => opus_copy(path.clone(), gain).await,
+        };
+        if let Some(copy) = copy {
+            return copy;
+        }
     }
     crate::serve::files::serve_file(&path, &headers, false).await
 }

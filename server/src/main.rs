@@ -27,6 +27,7 @@ mod mounts;
 mod moves;
 mod naming;
 mod nowplaying;
+mod opus_copies;
 mod opus_copy;
 mod placement;
 mod playlist_rewrite;

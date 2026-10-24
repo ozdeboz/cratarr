@@ -122,8 +122,14 @@ pub fn run(cat: Arc<Catalogue>, mode: Mode, hear_beats: bool) {
                     let done = tokio::task::spawn_blocking(move || {
                         let _turn = turn;
                         let _job = crate::memwatch::job(format!("band wave: {r}"));
-                        let w = crate::analysis::band_wave::work_out(&path)?;
-                        c.store_band_wave(folder, &r, size, mtime, &w)
+                        match crate::analysis::band_wave::work_out(&path) {
+                            Ok(w) => c.store_band_wave(folder, &r, size, mtime, &w),
+                            Err(e) => {
+                                // Marked, so it is not tried again after a restart either.
+                                c.store_band_wave_failed(folder, &r, size, mtime)?;
+                                Err(e)
+                            }
+                        }
                     })
                     .await;
                     match done {
@@ -205,8 +211,11 @@ static HEAVY: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 pub async fn band_wave(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<BandWave> {
     let (c, r) = (cat.clone(), rel.clone());
     let kept = tokio::task::spawn_blocking(move || c.band_wave_of(folder, &r)).await.ok().flatten();
-    if let Some(Some(w)) = kept.filter(|k| k.as_ref().is_some_and(BandWave::current)) {
-        return Some(w);
+    match kept {
+        Some(Some(w)) if w.current() => return Some(w),
+        // Tried before and failed, the file as it is now.
+        Some(Some(w)) if w.failed() => return None,
+        _ => {}
     }
     let turn = tokio::time::timeout(TURN, HEAVY.acquire()).await.ok()?.ok()?;
     let work = tokio::task::spawn_blocking(move || -> anyhow::Result<BandWave> {
@@ -217,8 +226,14 @@ pub async fn band_wave(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<
             return Ok(w);
         }
         let (path, size, mtime) = cat.file_to_analyse(folder, &rel).ok_or_else(|| anyhow::anyhow!("not in the library"))?;
-        let w = crate::analysis::band_wave::work_out(&path)?;
-        // Without an analysis of the file as it is now it is not kept: the pass analyses it first.
+        // Without an analysis of the file as it is now neither is kept: the pass analyses it first.
+        let w = match crate::analysis::band_wave::work_out(&path) {
+            Ok(w) => w,
+            Err(e) => {
+                cat.store_band_wave_failed(folder, &rel, size, mtime)?;
+                return Err(e);
+            }
+        };
         cat.store_band_wave(folder, &rel, size, mtime, &w)?;
         Ok(w)
     });
