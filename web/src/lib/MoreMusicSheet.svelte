@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import { panSafe } from './panSafe';
   import { local, type AutoplayMode, type RadioBy } from './localPlayer.svelte';
 
   export const AUTOPLAY_NAMES: Record<AutoplayMode, string> = { similar: 'Similar', artist: 'Same artist', era: 'Same era', random: 'Random' };
@@ -58,7 +59,7 @@
       {#if local.radio}<div class="count">
         <SettingRow label="After each track">
           <input
-            type="range"
+            type="range" use:panSafe
             min="1"
             max={RADIO_MAX}
             step="1"

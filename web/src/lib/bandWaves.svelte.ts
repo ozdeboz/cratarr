@@ -27,13 +27,16 @@ export const BAND_LOOKS: { value: Prefs['playerBands']; label: string }[] = [
   { value: 'hairlines', label: 'Hairlines' },
   { value: 'meter', label: 'Meter' },
 ];
-export const BAND_DIRECTIONS: { value: Prefs['playerBandsDirection']; label: string }[] = [
+/** How this device draws them: SVG, the finest, or a canvas, the fastest. */
+export const BAND_ENGINES: { value: 'svg' | 'canvas'; label: string }[] = [
+  { value: 'svg', label: 'Quality' },
+  { value: 'canvas', label: 'Speed' },
+];
+export const ENGINE_MORE =
+  'How this device draws them. Quality: every effect as designed (a true glow, the light blended), for a fast device. Speed: the same looks drawn far more cheaply, smooth on a slower one.';
+export const BAND_DIRECTIONS: { value: 'left' | 'right'; label: string }[] = [
   { value: 'left', label: 'To the left' },
   { value: 'right', label: 'To the right' },
-];
-export const BAND_ENDS: { value: Prefs['playerBandsEnds']; label: string }[] = [
-  { value: 'taper', label: 'Taper' },
-  { value: 'fade', label: 'Fade' },
 ];
 export const BANDS_MORE =
   "The track's sound from low to high, under the buttons when the full-screen player is landscape (a tap on them opens these settings).\n\nAurora: curtains of light. Sirius: pairs of ribbons. Hairlines: fine glowing lines. Meter: a bar for each band, its peak falling back over it.";

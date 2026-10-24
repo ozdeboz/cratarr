@@ -35,7 +35,9 @@
     count = 3,
     gap = 0,
     direction = 'left',
-    ends = 'taper',
+    engine = 'canvas',
+    tapering = 1,
+    fading = 0,
   }: {
     spectrum: Spectrum;
     progress: number;
@@ -52,13 +54,20 @@
     gap?: number;
     /** Which way the music flows: to the left, what comes entering on the right; or the other way. */
     direction?: 'left' | 'right';
-    /** How it ends at both sides: tapering to nothing (Siri's), or full height fading out. */
-    ends?: 'taper' | 'fade';
+    /** How it is drawn: SVG, every effect as designed, or a canvas, one bitmap a frame (lib/prefs). */
+    engine?: 'svg' | 'canvas';
+    /** How much it tapers towards the ends (0..1): Siri's attenuation, wholly at 1. */
+    tapering?: number;
+    /** How much the ends fade (0..1): the share of the room they fade over, an ease in and out. */
+    fading?: number;
   } = $props();
 
   const H = 132;
-  const FLOOR_DB = 60;
   const uid = $props.id();
+  /** How far the drawing may reach past its box, above and below, without the player's layout moving (the owner,
+   *  2026-10-24: swung or spread lines were cut off at the box's foot). */
+  const OVER = 40;
+  const FLOOR_DB = 60;
 
   const n = $derived(Math.max(1, Math.round(count)));
   /** A band's place from low (0) to high (1). */
@@ -69,11 +78,12 @@
     [0x6f, 0xf0, 0xb4],
     [0x86, 0xc6, 0xff],
   ];
-  function hue(f: number, white = 0): string {
+  /** A band's colour at `f` (0 low, 1 high), `white` of the way to white, as `rgba(…)` at `alpha`. */
+  function hue(f: number, white = 0, alpha = 1): string {
     const x = f * (STOPS.length - 1);
     const i = Math.min(STOPS.length - 2, Math.floor(x));
     const c = STOPS[i].map((v, k) => v + (STOPS[i + 1][k] - v) * (x - i)).map((v) => Math.round(v + (255 - v) * white));
-    return `rgb(${c[0]} ${c[1]} ${c[2]})`;
+    return `rgba(${c[0]},${c[1]},${c[2]},${alpha})`;
   }
   const colors = $derived(Array.from({ length: n }, (_, j) => hue(place(j))));
   const edges = $derived(Array.from({ length: n }, (_, j) => hue(place(j), 0.45)));
@@ -102,13 +112,12 @@
     }
     return { db, amp };
   });
-  const smooth = $derived.by(() => {
+  /** Each band's amplitude summed up to each frame (frames + 1 rows): any stretch's mean in two lookups (`loud`). */
+  const sums = $derived.by(() => {
     const frames = spectrum.frames;
     const amp = grouped.amp;
-    const out = new Float32Array(amp.length);
-    const at = (f: number, j: number) => amp[Math.max(0, Math.min(frames - 1, f)) * n + j];
-    for (let f = 0; f < frames; f++)
-      for (let j = 0; j < n; j++) out[f * n + j] = (at(f - 2, j) + 4 * at(f - 1, j) + 6 * at(f, j) + 4 * at(f + 1, j) + at(f + 2, j)) / 16;
+    const out = new Float64Array((frames + 1) * n);
+    for (let f = 0; f < frames; f++) for (let j = 0; j < n; j++) out[(f + 1) * n + j] = out[f * n + j] + amp[f * n + j];
     return out;
   });
 
@@ -189,54 +198,142 @@
     });
   }
 
-  /** A band's loudness at `t` seconds into the track, 0..1: a curve through the smoothed frames (Catmull-Rom), so it
-   *  has no corners where it turns; none outside the track. */
-  function loud(j: number, t: number): number {
-    const { frames, fps } = spectrum;
-    if (!frames || t < 0 || t > duration) return 0;
-    const f = Math.max(0, t * fps - 0.5);
-    const i = Math.min(frames - 1, Math.floor(f));
-    const x = f - i;
-    const v = (k: number) => smooth[Math.max(0, Math.min(frames - 1, k)) * n + j];
-    const p0 = v(i - 1), p1 = v(i), p2 = v(i + 1), p3 = v(i + 2);
-    const y = p1 + 0.5 * x * (p2 - p0 + x * (2 * p0 - 5 * p1 + 4 * p2 - p3 + x * (3 * (p1 - p2) + p3 - p0)));
-    return Math.max(0, Math.min(1, y)) * input;
-  }
+  /** A soft ceiling: `v` as it is well below `top`, bending into it rather than cut off flat (a flat cut leaves a straight
+   *  piece with a corner at each end; the owner: "unsmooth parts"). */
+  const ceiling = (v: number, top: number) => (v <= top * 0.6 ? v : top * 0.6 + top * 0.4 * Math.tanh((v - top * 0.6) / (top * 0.4)));
+
+  // Speed (the owner, 2026-10-24: the tablet held 34 frames a second, the main thread 97 % busy): everything a frame
+  // reads that is reactive (props, $state, $derived) is read once into a plain local before the loops, as each read
+  // through Svelte's getters cost more than the drawing; each band's loudness along the width is worked out once a frame
+  // (`envelopes`), each frame's mean once, and shared by a band's two waves; the paths' numbers are written without
+  // toFixed.
 
   /** Points across the width: where each is (`x`), how far along (`at`, 0..1) and from the middle (`u`, -1..1). */
   const moments = $derived.by(() => {
-    if (!width || look === 'meter') return [];
+    if (!width || look === 'meter') return { x: new Float32Array(0), at: new Float32Array(0), u: new Float32Array(0) };
     // Eight points a cycle of the quickest wave, so many cycles across do not alias into a moiré; at most one every
-    // pixel and a half (every three with many bands to draw).
-    const k = Math.max(64, Math.min(Math.ceil(width / (n > 8 ? 3 : 1.5)), Math.ceil(window * cyclesOf(n - 1) * cycles * 1.15 * 8)));
-    return Array.from({ length: k + 1 }, (_, i) => ({ x: (i / k) * width, u: (i / k) * 2 - 1, at: i / k }));
+    // pixel and a half (every two and a half with many bands to draw); at least one every three pixels (five with many
+    // bands), so a tall crest turning fast stays round (the owner: one point every 14 px left it pointed).
+    const fewest = Math.ceil(width / (n > 8 ? 5 : 3));
+    const k = Math.max(fewest, Math.min(Math.ceil(width / (n > 8 ? 2.5 : 1.5)), Math.ceil(window * cyclesOf(n - 1) * cycles * 1.15 * 8)));
+    const x = new Float32Array(k + 1), at = new Float32Array(k + 1), u = new Float32Array(k + 1);
+    for (let i = 0; i <= k; i++) {
+      at[i] = i / k;
+      x[i] = at[i] * width;
+      u[i] = at[i] * 2 - 1;
+    }
+    return { x, at, u };
   });
   /** Siri's attenuation, (K / (K + x^4))^K with K = 2: full in the middle, tapering to nothing at the ends (the owner:
-   *  they should taper off to the ends); none when the ends fade instead. `u` is -1..1 across the width. */
-  const taper = (u: number, reach: number) => (ends === 'fade' ? 1 : Math.pow(2 / (2 + (u * reach) ** 4), 2));
-  const xy = (x: number, y: number) => `${x.toFixed(1)} ${y.toFixed(1)}`;
-  /** How high a band's line is lifted by Gap (px): low at the foot, high at the top. */
-  const lift = (j: number) => place(j) * gap * (H * 0.62);
-  /** A wave's middle line: the middle, spread by Gap, low below and high above. */
-  const middle = (j: number) => H / 2 + (0.5 - place(j)) * gap * (H * 0.62);
+   *  they should taper off to the ends), as much as Taper says. `u` is -1..1 across the width. */
+  const taper = (u: number, reach: number) => 1 - tapering * (1 - Math.pow(2 / (2 + (u * reach) ** 4), 2));
+  /** Each point's taper, for the curtains (reach 1.5) and the waves (reach 2): made again only for a new width or Taper. */
+  const tapers = $derived.by(() => {
+    const { u } = moments;
+    const curtains = new Float32Array(u.length), lines = new Float32Array(u.length);
+    for (let i = 0; i < u.length; i++) {
+      curtains[i] = taper(u[i], 1.5);
+      lines[i] = taper(u[i], 2);
+    }
+    return { curtains, lines };
+  });
+  /** Each band's place, cycles a second, pace, lift and middle line, once for its count and Gap. */
+  const bandsOf = $derived(
+    Array.from({ length: n }, (_, j) => ({
+      place: place(j),
+      cycles: cyclesOf(j),
+      pace: paceOf(j),
+      lift: place(j) * gap * (H * 0.62),
+      middle: H / 2 + (0.5 - place(j)) * gap * (H * 0.62),
+    })),
+  );
+
+  /** Each band's loudness at each point now, 0..1: the mean over the stretch the point stands for (at least a quarter
+   *  second, and at least a third of the band's own wave: loudness changing faster than the wave it rides on pushes it
+   *  up and down mid-swing), taken at each frame once and joined by a curve (Catmull-Rom), so it turns no corner at a
+   *  frame (the owner: "rough peaks", "unsmooth parts", "still not awesome"). */
+  const envelopes = $derived.by((): Float32Array[] => {
+    const { at } = moments;
+    const k = at.length;
+    if (!k) return [];
+    const { frames, fps } = spectrum;
+    const S = sums, count = n, t0 = now, w = window, dir = way, dur = duration, gain = input, times = cycles, bands = bandsOf;
+    const span = k > 1 ? w / (k - 1) : 0;
+    const out: Float32Array[] = [];
+    for (let j = 0; j < count; j++) {
+      const env = new Float32Array(k);
+      out.push(env);
+      if (!frames) continue;
+      // A third of the wave at most half a second each side: slow waves would otherwise average many seconds away, the
+      // peaks with them (the owner: the height had to go to its top to reach what it reached before).
+      const half = Math.max(0.125, span, Math.min(0.5, 0.35 / (bands[j].cycles * times))) * fps;
+      const total = (f: number) => {
+        const c = f < 0 ? 0 : f > frames ? frames : f;
+        const i = Math.floor(c);
+        const below = S[i * count + j];
+        return i < frames ? below + (S[(i + 1) * count + j] - below) * (c - i) : below;
+      };
+      // Each frame's mean over the window's frames, once.
+      const lo = Math.floor((t0 - w / 2) * fps) - 3, hi = Math.ceil((t0 + w / 2) * fps) + 3;
+      const means = new Float32Array(hi - lo + 1);
+      for (let i = lo; i <= hi; i++) means[i - lo] = (total(i + 0.5 + half) - total(i + 0.5 - half)) / (2 * half);
+      for (let p = 0; p < k; p++) {
+        const t = t0 + dir * (at[p] - 0.5) * w;
+        if (t < 0 || t > dur) continue;
+        const f = t * fps - 0.5;
+        const i = Math.floor(f), x = f - i, b = i - lo;
+        const p0 = means[b - 1], p1 = means[b], p2 = means[b + 1], p3 = means[b + 2];
+        const y = p1 + 0.5 * x * (p2 - p0 + x * (2 * p0 - 5 * p1 + 4 * p2 - p3 + x * (3 * (p1 - p2) + p3 - p0)));
+        env[p] = (y < 0 ? 0 : y > 1 ? 1 : y) * gain;
+      }
+    }
+    return out;
+  });
+
+  /** A smooth curve through points (Catmull-Rom as cubic Béziers) onto `g`'s path: from a move (or on from where the
+   *  path is), forwards or backwards. */
+  function trace(g: CanvasRenderingContext2D, xs: Float32Array, ys: Float32Array, move = true, backwards = false) {
+    const k = xs.length;
+    const X = (i: number) => xs[backwards ? k - 1 - i : i], Y = (i: number) => ys[backwards ? k - 1 - i : i];
+    if (move) g.moveTo(X(0), Y(0));
+    else g.lineTo(X(0), Y(0));
+    for (let i = 0; i < k - 1; i++) {
+      const a = i > 0 ? i - 1 : 0, d = i + 2 < k ? i + 2 : k - 1;
+      g.bezierCurveTo(
+        X(i) + (X(i + 1) - X(a)) / 6,
+        Y(i) + (Y(i + 1) - Y(a)) / 6,
+        X(i + 1) - (X(d) - X(i)) / 6,
+        Y(i + 1) - (Y(d) - Y(i)) / 6,
+        X(i + 1),
+        Y(i + 1),
+      );
+    }
+  }
+  /** Easy ease (the owner): in and out softly, 0..1 to 0..1. */
+  const ease = (x: number) => x * x * (3 - 2 * x);
   /** Many bands drawn over each other are each drawn lighter. */
   const share = $derived(Math.min(1, Math.sqrt(3 / n)));
 
   // Aurora: each band a curtain whose top is its loudness along the window, rippled by two waves of its own cycles.
   const aurora = $derived.by(() => {
-    if (look !== 'aurora' || !moments.length) return [];
-    return Array.from({ length: n }, (_, j) => {
-      const top = (shift: number, scale: number) =>
-        moments.map((m) => {
-          const t = now + way * (m.at - 0.5) * window;
-          const c = 2 * Math.PI * cyclesOf(j) * cycles * t;
-          const ripple = 0.74 + 0.16 * Math.sin(c + flow * (0.6 + place(j) * 0.8) + shift) + 0.1 * Math.sin(2.1 * c + flow * 1.3 + shift);
-          const rise = Math.min(H - 6 - lift(j), (6 + loud(j, t) * 104 * height) * scale * ripple);
-          return xy(m.x, H - 2 - lift(j) - rise * taper(m.u, 1.5));
-        });
-      const front = top(j * 1.3, 1);
-      const back = top(j * 1.3 + 2.1, 0.8);
-      return { j, edge: `M${front.join(' L')}`, fill: `M${front.join(' L')} L${width} ${H} L0 ${H} Z`, back: `M${back.join(' L')} L${width} ${H} L0 ${H} Z` };
+    const env = envelopes;
+    if (look !== 'aurora' || !env.length) return [];
+    const { x, at } = moments;
+    const k = at.length, t0 = now, w = window, dir = way, f0 = flow, times = cycles, tall = height;
+    const cut = tapers.curtains;
+    return bandsOf.map((band, j) => {
+      const top = (shift: number, scale: number) => {
+        const ys = new Float32Array(k);
+        const travel = f0 * (0.6 + band.place * 0.8) + shift, travel2 = f0 * 1.3 + shift;
+        const roof = H - 6 - band.lift;
+        for (let p = 0; p < k; p++) {
+          const c = 2 * Math.PI * band.cycles * times * (t0 + dir * (at[p] - 0.5) * w);
+          const ripple = 0.74 + 0.16 * Math.sin(c + travel) + 0.1 * Math.sin(2.1 * c + travel2);
+          ys[p] = H - 2 - band.lift - ceiling((6 + env[j][p] * 104 * tall) * scale * ripple, roof) * cut[p];
+        }
+        return ys;
+      };
+      return { j, front: top(j * 1.3, 1), back: top(j * 1.3 + 2.1, 0.8) };
     });
   });
 
@@ -244,35 +341,39 @@
   // the band is loud at each moment.
   type Wave = { j: number; rate: number; pace: number; shift: number; opacity: number; size: number };
   const waves = $derived<Wave[]>(
-    Array.from({ length: n }, (_, j) => {
-      const main = { j, rate: 1, pace: paceOf(j), shift: j * 1.3, opacity: 0.42, size: 1 };
-      return n <= 6 ? [main, { j, rate: 1.15, pace: paceOf(j) * 0.78, shift: j * 1.3 + 1.7, opacity: 0.3, size: 0.62 }] : [main];
-    }).flat(),
+    bandsOf
+      .map((band, j) => {
+        const main = { j, rate: 1, pace: band.pace, shift: j * 1.3, opacity: 0.42, size: 1 };
+        return n <= 6 ? [main, { j, rate: 1.15, pace: band.pace * 0.78, shift: j * 1.3 + 1.7, opacity: 0.3, size: 0.62 }] : [main];
+      })
+      .flat(),
   );
-  function wave(w: Wave, base: number, scale: number): [number, number][] {
-    return moments.map((m) => {
-      const t = now + way * (m.at - 0.5) * window;
-      const amp = Math.min(H / 2 - 3, (base + loud(w.j, t) * scale * height) * w.size) * taper(m.u, 2);
-      return [m.x, amp * Math.sin(2 * Math.PI * cyclesOf(w.j) * cycles * w.rate * t + flow * w.pace + w.shift)];
+  /** Each wave's height above (and below) its middle line at each point now. */
+  const swings = $derived.by((): Float32Array[] => {
+    const env = envelopes;
+    if ((look !== 'sirius' && look !== 'hairlines') || !env.length) return [];
+    const { at } = moments;
+    const k = at.length, t0 = now, w = window, dir = way, f0 = flow, times = cycles, tall = height, bands = bandsOf;
+    const [base, scale] = look === 'sirius' ? [4, 56] : [3, 58];
+    const cut = tapers.lines;
+    return waves.map((wv) => {
+      const ys = new Float32Array(k);
+      const e = env[wv.j], rate = 2 * Math.PI * bands[wv.j].cycles * times * wv.rate, phase = f0 * wv.pace + wv.shift;
+      for (let p = 0; p < k; p++) {
+        const t = t0 + dir * (at[p] - 0.5) * w;
+        ys[p] = ceiling((base + e[p] * scale * tall) * wv.size, H / 2 - 3) * cut[p] * Math.sin(rate * t + phase);
+      }
+      return ys;
     });
-  }
-  const ribbons = $derived(
-    look === 'sirius' && moments.length
-      ? waves.map((w) => {
-          const p = wave(w, 4, 56);
-          const c = middle(w.j);
-          const d = `M${p.map(([x, y]) => xy(x, c - y)).join(' L')} L${p.map(([x, y]) => xy(x, c + y)).reverse().join(' L')} Z`;
-          return { d, color: colors[w.j], opacity: w.opacity * share };
-        })
-      : [],
-  );
-  const hairlines = $derived(
-    look === 'hairlines' && moments.length
-      ? waves.map((w) => ({ d: `M${wave(w, 3, 58).map(([x, y]) => xy(x, middle(w.j) - y)).join(' L')}`, color: edges[w.j], main: w.size === 1 }))
-      : [],
-  );
-
-  // The meter's layout: `n` bars with a gap between, each of small segments from the foot up.
+  });
+  // The meter's layout: `n` bars with a gap between, each of small segments from the foot up. Its level runs up, so its
+  // ends are its tops (the owner, 2026-10-24): Taper narrows the segments towards the top, Fade fades them out over
+  // that share of the height.
+  /** A segment's width at row `r` (of `rows`): whole at the foot, narrowing evenly up the bar, to an eighth at the top
+   *  at full Taper (the owner: thinner bars at the top end; the waves' curve stays flat too long for a bar). */
+  const segment = (w: number, r: number) => w * (1 - tapering * 0.88 * (r / (rows - 1)));
+  /** A segment's opacity share at row `r`: fading out, eased, over the top `fading` share of the height. */
+  const towardsTop = (r: number) => ease(Math.min(1, (1 - r / rows) / Math.max(0.01, fading)));
   const SEGMENT = 4;
   const STEP = 6;
   const rows = Math.floor((H - 2) / STEP);
@@ -285,20 +386,185 @@
       // Bass on the left when the music flows left, on the right the other way.
       const slot = way === 1 ? j : n - 1 - j;
       const x = slot * (w + space);
-      const u = n > 1 ? ((x + w / 2) / width) * 2 - 1 : 0;
-      const reach = taper(u, 1.5);
-      const lit = Math.round(bars[j] * reach * rows);
-      const peak = Math.min(rows - 1, Math.round(peaks[j].at * reach * rows));
-      return { j, x, w, lit, peak, showPeak: peaks[j].at * reach > 0.02 };
+      const lit = Math.round(bars[j] * rows);
+      const peak = Math.min(rows - 1, Math.round(peaks[j].at * rows));
+      return { j, x, w, lit, peak, showPeak: peaks[j].at > 0.02 };
     });
+  });
+
+  // The drawing, on a canvas (2026-10-24: the SVG repainted itself in a pass of its own for each effect, the blur, the
+  // blend, the masks: 35 frames a second on the tablet): one bitmap a frame, the bands' light added ('lighter'), then
+  // both sides faded in one wipe (the thin lines' 8 %, or as much as Fade says, eased).
+  let canvas = $state<HTMLCanvasElement>();
+  const TALL = H + 2 * OVER;
+  $effect(() => {
+    const cv = canvas;
+    const W = width;
+    if (engine !== 'canvas' || !cv || !W) return;
+    const ratio = globalThis.devicePixelRatio || 1;
+    const pw = Math.round(W * ratio), ph = Math.round(TALL * ratio);
+    if (cv.width !== pw) cv.width = pw;
+    if (cv.height !== ph) cv.height = ph;
+    const g = cv.getContext('2d');
+    if (!g) return;
+    g.setTransform(ratio, 0, 0, ratio, 0, OVER * ratio);
+    g.globalCompositeOperation = 'source-over';
+    g.globalAlpha = 1;
+    g.clearRect(0, -OVER, W, TALL);
+    g.globalCompositeOperation = 'lighter';
+    g.lineJoin = 'round';
+    g.lineCap = 'round';
+    const { x } = moments;
+    const light = share, bands = bandsOf;
+    if (look === 'aurora') {
+      for (const c of aurora) {
+        const f = bands[c.j].place;
+        const fill = g.createLinearGradient(0, 0, 0, H);
+        fill.addColorStop(0, hue(f, 0, 0.68 * light));
+        fill.addColorStop(1, hue(f, 0, 0));
+        g.fillStyle = fill;
+        for (const [ys, alpha] of [[c.back, 0.35], [c.front, 1]] as const) {
+          g.globalAlpha = alpha;
+          g.beginPath();
+          trace(g, x, ys);
+          g.lineTo(W, H);
+          g.lineTo(0, H);
+          g.closePath();
+          g.fill();
+        }
+        g.globalAlpha = 0.88 * light;
+        g.strokeStyle = edges[c.j];
+        g.lineWidth = 1.2;
+        g.beginPath();
+        trace(g, x, c.front);
+        g.stroke();
+      }
+    } else if (look === 'sirius' || look === 'hairlines') {
+      const s = swings, list = waves;
+      if (look === 'sirius') {
+        g.globalAlpha = 0.18;
+        g.strokeStyle = '#fff';
+        g.lineWidth = 1;
+        g.beginPath();
+        g.moveTo(0, H / 2);
+        g.lineTo(W, H / 2);
+        g.stroke();
+      }
+      list.forEach((wv, i) => {
+        const sw = s[i];
+        if (!sw) return;
+        const c = bands[wv.j].middle;
+        const up = new Float32Array(sw.length);
+        for (let p = 0; p < sw.length; p++) up[p] = c - sw[p];
+        if (look === 'sirius') {
+          const down = new Float32Array(sw.length);
+          for (let p = 0; p < sw.length; p++) down[p] = c + sw[p];
+          g.globalAlpha = wv.opacity * light;
+          g.fillStyle = colors[wv.j];
+          g.beginPath();
+          trace(g, x, up);
+          trace(g, x, down, false, true);
+          g.closePath();
+          g.fill();
+        } else {
+          const main = wv.size === 1;
+          g.strokeStyle = edges[wv.j];
+          g.beginPath();
+          trace(g, x, up);
+          // Its glow: a soft, wider stroke under it.
+          g.globalAlpha = (main ? 0.16 : 0.08) * light;
+          g.lineWidth = main ? 6 : 4;
+          g.stroke();
+          g.globalAlpha = (main ? 0.95 : 0.4) * light;
+          g.lineWidth = main ? 1.5 : 0.9;
+          g.stroke();
+        }
+      });
+    } else if (look === 'meter') {
+      for (const b of meter) {
+        for (let r = 0; r < rows; r++) {
+          const lit = r < b.lit, peak = !lit && r === b.peak && b.showPeak;
+          const w = segment(b.w, r);
+          g.globalAlpha = (lit ? 0.85 : peak ? 0.95 : 0.05) * towardsTop(r);
+          g.fillStyle = lit ? colors[b.j] : peak ? edges[b.j] : '#fff';
+          g.fillRect(b.x + (b.w - w) / 2, H - 1 - (r + 1) * STEP + (STEP - SEGMENT), w, SEGMENT);
+        }
+      }
+    }
+    // Both sides fade: the thin lines' 8 % (the meter's 6 %), or over as much as Fade says, eased.
+    g.globalCompositeOperation = 'destination-in';
+    g.globalAlpha = 1;
+    const reach = look === 'meter' ? 0.06 : Math.max(0.08, fading * 0.45);
+    const wipe = g.createLinearGradient(0, 0, W, 0);
+    for (let k = 0; k <= 8; k++) {
+      const o = look !== 'meter' && fading > 0 ? ease(k / 8) : k / 8;
+      wipe.addColorStop((k / 8) * reach, `rgba(0,0,0,${o})`);
+      wipe.addColorStop(1 - (k / 8) * reach, `rgba(0,0,0,${o})`);
+    }
+    g.fillStyle = wipe;
+    g.fillRect(0, -OVER, W, TALL);
+    g.globalCompositeOperation = 'source-over';
+  });
+
+  // The SVG engine (Quality): the same shapes as paths, with their true blur, blend and masks.
+  /** A number for a path, to a tenth. */
+  const r1 = (v: number) => Math.round(v * 10) / 10;
+  /** A smooth curve through points (Catmull-Rom as cubic Béziers) as path text, from `M` (or `L` to go on). */
+  function curve(xs: Float32Array, ys: Float32Array, start = 'M', backwards = false): string {
+    const k = xs.length;
+    const X = (i: number) => xs[backwards ? k - 1 - i : i], Y = (i: number) => ys[backwards ? k - 1 - i : i];
+    const parts: (string | number)[] = [start, r1(X(0)), r1(Y(0))];
+    for (let i = 0; i < k - 1; i++) {
+      const a = i > 0 ? i - 1 : 0, d = i + 2 < k ? i + 2 : k - 1;
+      parts.push('C', r1(X(i) + (X(i + 1) - X(a)) / 6), r1(Y(i) + (Y(i + 1) - Y(a)) / 6), r1(X(i + 1) - (X(d) - X(i)) / 6), r1(Y(i + 1) - (Y(d) - Y(i)) / 6), r1(X(i + 1)), r1(Y(i + 1)));
+    }
+    return parts.join(' ');
+  }
+  /** Fade's ramp at each side: over `fading` × 45 % of the width, eased, as gradient stops. */
+  const ramp = $derived(Array.from({ length: 9 }, (_, k) => ({ at: (k / 8) * fading * 0.45, opacity: ease(k / 8) })));
+  type SvgPaths = {
+    aurora: { j: number; edge: string; fill: string; back: string }[];
+    ribbons: { d: string; color: string; opacity: number }[];
+    hairlines: { d: string; color: string; main: boolean }[];
+  };
+  const paths = $derived.by((): SvgPaths => {
+    const none: SvgPaths = { aurora: [], ribbons: [], hairlines: [] };
+    if (engine !== 'svg') return none;
+    const { x } = moments;
+    const W = width, bands = bandsOf, light = share;
+    if (look === 'aurora')
+      return {
+        ...none,
+        aurora: aurora.map((c) => {
+          const edge = curve(x, c.front);
+          return { j: c.j, edge, fill: `${edge} L ${W} ${H} L 0 ${H} Z`, back: `${curve(x, c.back)} L ${W} ${H} L 0 ${H} Z` };
+        }),
+      };
+    const lines = (sign: number) =>
+      waves.map((wv, i) => {
+        const sw = swings[i] ?? new Float32Array(0), c = bands[wv.j].middle;
+        const ys = new Float32Array(sw.length);
+        for (let p = 0; p < sw.length; p++) ys[p] = c + sign * sw[p];
+        return ys;
+      });
+    if (look === 'sirius' && swings.length) {
+      const up = lines(-1), down = lines(1);
+      return { ...none, ribbons: waves.map((wv, i) => ({ d: `${curve(x, up[i])} ${curve(x, down[i], 'L', true)} Z`, color: colors[wv.j], opacity: wv.opacity * light })) };
+    }
+    if (look === 'hairlines' && swings.length) {
+      const up = lines(-1);
+      return { ...none, hairlines: waves.map((wv, i) => ({ d: curve(x, up[i]), color: edges[wv.j], main: wv.size === 1 })) };
+    }
+    return none;
   });
 </script>
 
 <div class="glass" bind:clientWidth={width} aria-hidden="true">
-  {#if width}
-    <svg {width} height={H} viewBox="0 0 {width} {H}">
-      <!-- The thin lines' ends always fade (the owner: never a hard edge), in the drawing itself; the fills keep the
-           glass's feather. -->
+  {#if width && engine === 'canvas'}
+    <canvas bind:this={canvas} style:width="{width}px" style:height="{TALL}px"></canvas>
+  {:else if width}
+    <svg class="svg" {width} height={TALL} viewBox="0 {-OVER} {width} {TALL}">
+      <!-- The thin lines' ends always fade (the owner: never a hard edge); Fade fades the whole drawing, eased. -->
       <defs>
         <linearGradient id="{uid}-fade" x1="0" y1="0" x2="1" y2="0">
           <stop offset="0" stop-color="#fff" stop-opacity="0" />
@@ -306,46 +572,43 @@
           <stop offset="0.92" stop-color="#fff" stop-opacity="1" />
           <stop offset="1" stop-color="#fff" stop-opacity="0" />
         </linearGradient>
-        <mask id="{uid}-ends" maskUnits="userSpaceOnUse" x="0" y="0" width={width} height={H}>
-          <rect x="0" y="0" width={width} height={H} fill="url(#{uid}-fade)" />
+        <mask id="{uid}-ends" maskUnits="userSpaceOnUse" x="0" y={-OVER} width={width} height={TALL}>
+          <rect x="0" y={-OVER} width={width} height={TALL} fill="url(#{uid}-fade)" />
         </mask>
-        <!-- Ends: Fade, the whole drawing fading out over a fifth at each side. -->
         <linearGradient id="{uid}-wide" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0" stop-color="#fff" stop-opacity="0" />
-          <stop offset="0.2" stop-color="#fff" stop-opacity="1" />
-          <stop offset="0.8" stop-color="#fff" stop-opacity="1" />
-          <stop offset="1" stop-color="#fff" stop-opacity="0" />
+          {#each ramp as r, k (k)}<stop offset={r.at} stop-color="#fff" stop-opacity={r.opacity} />{/each}
+          {#each [...ramp].reverse() as r, k (k)}<stop offset={1 - r.at} stop-color="#fff" stop-opacity={r.opacity} />{/each}
         </linearGradient>
-        <mask id="{uid}-faded" maskUnits="userSpaceOnUse" x="0" y="0" width={width} height={H}>
-          <rect x="0" y="0" width={width} height={H} fill="url(#{uid}-wide)" />
+        <mask id="{uid}-faded" maskUnits="userSpaceOnUse" x="0" y={-OVER} width={width} height={TALL}>
+          <rect x="0" y={-OVER} width={width} height={TALL} fill="url(#{uid}-wide)" />
         </mask>
       </defs>
-      <g mask={ends === 'fade' ? `url(#${uid}-faded)` : undefined}>
+      <g mask={fading > 0 && look !== 'meter' ? `url(#${uid}-faded)` : undefined}>
         {#if look === 'aurora'}
           <defs>
-            {#each colors as c, j (j)}
+            {#each bandsOf as _, j (j)}
               <linearGradient id="{uid}-c{j}" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0" stop-color={c} stop-opacity={0.68 * share} />
-                <stop offset="1" stop-color={c} stop-opacity="0" />
+                <stop offset="0" stop-color={colors[j]} stop-opacity={0.68 * share} />
+                <stop offset="1" stop-color={colors[j]} stop-opacity="0" />
               </linearGradient>
             {/each}
             <filter id="{uid}-soft" x="-5%" y="-30%" width="110%" height="160%"><feGaussianBlur stdDeviation="1.4" /></filter>
             <filter id="{uid}-haze" x="-5%" y="-30%" width="110%" height="160%"><feGaussianBlur stdDeviation="4" /></filter>
           </defs>
           <g filter="url(#{uid}-haze)" opacity="0.35">
-            {#each aurora as c (c.j)}<path d={c.back} fill="url(#{uid}-c{c.j})" />{/each}
+            {#each paths.aurora as c (c.j)}<path d={c.back} fill="url(#{uid}-c{c.j})" />{/each}
           </g>
           <g filter="url(#{uid}-soft)">
-            {#each aurora as c (c.j)}<path d={c.fill} fill="url(#{uid}-c{c.j})" />{/each}
+            {#each paths.aurora as c (c.j)}<path d={c.fill} fill="url(#{uid}-c{c.j})" />{/each}
           </g>
           <g filter="url(#{uid}-soft)" mask="url(#{uid}-ends)">
-            {#each aurora as c (c.j)}<path d={c.edge} stroke={edges[c.j]} stroke-width="1.2" stroke-opacity={0.88 * share} fill="none" stroke-linejoin="round" />{/each}
+            {#each paths.aurora as c (c.j)}<path d={c.edge} stroke={edges[c.j]} stroke-width="1.2" stroke-opacity={0.88 * share} fill="none" stroke-linejoin="round" />{/each}
           </g>
         {:else if look === 'sirius'}
           <defs><filter id="{uid}-soft" x="-5%" y="-20%" width="110%" height="140%"><feGaussianBlur stdDeviation="0.6" /></filter></defs>
           <line x1="0" y1={H / 2} x2={width} y2={H / 2} stroke="#fff" stroke-opacity="0.18" mask="url(#{uid}-ends)" />
           <g filter="url(#{uid}-soft)">
-            {#each ribbons as r, i (i)}<path d={r.d} fill={r.color} fill-opacity={r.opacity} />{/each}
+            {#each paths.ribbons as r, i (i)}<path d={r.d} fill={r.color} fill-opacity={r.opacity} />{/each}
           </g>
         {:else if look === 'hairlines'}
           <defs>
@@ -356,21 +619,20 @@
           </defs>
           <g mask="url(#{uid}-ends)">
             <g filter="url(#{uid}-glow)" fill="none" stroke-linecap="round" stroke-linejoin="round">
-              {#each hairlines as l, i (i)}<path d={l.d} stroke={l.color} stroke-width={l.main ? 1.5 : 0.9} stroke-opacity={(l.main ? 0.95 : 0.4) * share} />{/each}
+              {#each paths.hairlines as l, i (i)}<path d={l.d} stroke={l.color} stroke-width={l.main ? 1.5 : 0.9} stroke-opacity={(l.main ? 0.95 : 0.4) * share} />{/each}
             </g>
           </g>
         {:else if look === 'meter'}
-          <!-- Each bar: its segments faint, those lit up to its level, and its peak a brighter segment above. -->
           {#each meter as b (b.j)}
             {#each { length: rows } as _, r (r)}
               <rect
-                x={b.x}
+                x={b.x + (b.w - segment(b.w, r)) / 2}
                 y={H - 1 - (r + 1) * STEP + (STEP - SEGMENT)}
-                width={b.w}
+                width={segment(b.w, r)}
                 height={SEGMENT}
-                rx={Math.min(1.5, b.w / 4)}
+                rx={Math.min(1.5, segment(b.w, r) / 4)}
                 fill={r < b.lit ? colors[b.j] : r === b.peak && b.showPeak ? edges[b.j] : '#fff'}
-                fill-opacity={r < b.lit ? 0.85 : r === b.peak && b.showPeak ? 0.95 : 0.05}
+                fill-opacity={(r < b.lit ? 0.85 : r === b.peak && b.showPeak ? 0.95 : 0.05) * towardsTop(r)}
               />
             {/each}
           {/each}
@@ -381,16 +643,28 @@
 </div>
 
 <style>
+  /* The box keeps the layout's height; the drawing reaches OVER (40 px) past it above and below, its sides faded in the
+     drawing itself. */
   .glass {
+    position: relative;
     width: 100%;
     height: 132px;
-    -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%);
-    mask-image: linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%);
     pointer-events: none;
   }
 
-  svg {
+  canvas,
+  .svg {
+    position: absolute;
+    top: -40px;
+    left: 0;
     display: block;
     mix-blend-mode: plus-lighter;
+  }
+
+  /* SVG: the glass's feather on the drawing too. */
+  .svg {
+    overflow: visible;
+    -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%);
+    mask-image: linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%);
   }
 </style>

@@ -4,6 +4,7 @@
   // down: up toward 100, down toward 0. A device's volume stays its own (Play On's `volume`): in the app Android's media
   // volume, in a browser the page's. One device alone (a page in a browser, whose volume nothing else on the device
   // shows): its row only.
+  import { panSafe } from './panSafe';
   import { playerCommand } from './api';
   import { playOn, selfName } from './playOn.svelte';
 
@@ -61,13 +62,13 @@
   {#if names.length > 1}
     <label class="row group">
       <span>Group</span>
-      <input type="range" min="0" max="100" step="1" value={group} oninput={(e) => setGroup(Number(e.currentTarget.value))} onchange={done} />
+      <input type="range" use:panSafe min="0" max="100" step="1" value={group} oninput={(e) => setGroup(Number(e.currentTarget.value))} onchange={done} />
     </label>
   {/if}
   {#each names as n (n)}
     <label class="row">
       <span>{shown(n)}</span>
-      <input type="range" min="0" max="100" step="1" value={vol(n)} oninput={(e) => send(n, Number(e.currentTarget.value))} onchange={done} />
+      <input type="range" use:panSafe min="0" max="100" step="1" value={vol(n)} oninput={(e) => send(n, Number(e.currentTarget.value))} onchange={done} />
     </label>
   {/each}
 </div>

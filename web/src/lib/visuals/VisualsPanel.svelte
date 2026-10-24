@@ -8,6 +8,7 @@
   // Step 9 (the owner, the standard module page): where it is (crumbs, each a tap, the graph at its level); its picture
   // while the graph is hidden; its knobs; its inputs (← what comes in); its outputs (→ where it goes: a tap follows the
   // cable to its module, "+ Add" cables it somewhere new); Randomize, Remove.
+  import { panSafe } from '../panSafe';
   import Icon from '../Icon.svelte';
   import { longpress } from '../longpress';
   import { held } from './held.svelte';
@@ -312,7 +313,7 @@
   <div class="knob">
     <label class="row pinnable">
       <span>{k.label}</span>
-      <input type="range" min={k.min} max={k.max} step={k.kind === 'step' ? 1 : (k.max - k.min) / 100} value={v} oninput={(e) => edit({ kind: 'knob', module: at, knob: k.id, value: Number(e.currentTarget.value) })} />
+      <input type="range" use:panSafe min={k.min} max={k.max} step={k.kind === 'step' ? 1 : (k.max - k.min) / 100} value={v} oninput={(e) => edit({ kind: 'knob', module: at, knob: k.id, value: Number(e.currentTarget.value) })} />
       <output>{knobText(k, v)}</output>
       {@render pinButton(level, at.slice(0, -1), `${m.id}.${k.id}`, k.label)}
     </label>
@@ -340,7 +341,7 @@
           {@const v = (x as { value: number }).value}
           <label class="row">
             <span>{(x as { label: string }).label}</span>
-            <input type="range" min="0" max="1" step="0.01" value={v} oninput={(e) => edit({ kind: 'macro', scope: [], id: x.id, value: Number(e.currentTarget.value) })} />
+            <input type="range" use:panSafe min="0" max="1" step="0.01" value={v} oninput={(e) => edit({ kind: 'macro', scope: [], id: x.id, value: Number(e.currentTarget.value) })} />
             <output>{percent(v)}</output>
           </label>
         {/each}
@@ -388,7 +389,7 @@
       {#each DEVICE_ROWS as r (r.key)}
         <label class="row">
           <span>{r.label}</span>
-          <input type="range" min={RANGES[r.key][0]} max={RANGES[r.key][1]} step={r.step} value={s[r.key]} oninput={(e) => setDevice(r.key, Number(e.currentTarget.value))} />
+          <input type="range" use:panSafe min={RANGES[r.key][0]} max={RANGES[r.key][1]} step={r.step} value={s[r.key]} oninput={(e) => setDevice(r.key, Number(e.currentTarget.value))} />
           <output>{r.text(s[r.key])}</output>
         </label>
       {/each}
@@ -416,7 +417,7 @@
             {#each d.macros as x (x.id)}
               <label class="row">
                 <span>{x.label}</span>
-                <input type="range" min="0" max="1" step="0.01" value={x.value} oninput={(e) => edit({ kind: 'knob', module: at, knob: `macro:${x.id}`, value: Number(e.currentTarget.value) })} />
+                <input type="range" use:panSafe min="0" max="1" step="0.01" value={x.value} oninput={(e) => edit({ kind: 'knob', module: at, knob: `macro:${x.id}`, value: Number(e.currentTarget.value) })} />
                 <output>{percent(x.value)}</output>
               </label>
             {/each}

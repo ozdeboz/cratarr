@@ -3,6 +3,7 @@
   // in Settings › Display › Player visualisation and the player's own sheet (lib/BandSheet). Even in feel: each step is
   // the same share more, value = min × (max / min)^position; `linear` for one from 0 (Gap). `whole` keeps it a whole
   // number (Bands). Its ends named; its value after it when `unit` is given (or it is `whole`).
+  import { panSafe } from './panSafe';
   let {
     label,
     range,
@@ -11,6 +12,7 @@
     unit = null,
     linear = false,
     whole = false,
+    wide = false,
   }: {
     label: string;
     range: { min: number; max: number };
@@ -20,6 +22,8 @@
     unit?: string | null;
     linear?: boolean;
     whole?: boolean;
+    /** As wide as where it is (the player's sheet), the slider taking the room. */
+    wide?: boolean;
   } = $props();
 
   const STEPS = 100;
@@ -34,10 +38,10 @@
   }
 </script>
 
-<span class="slider">
+<span class="slider" class:wide>
   <small>{ends[0]}</small>
   <input
-    type="range"
+    type="range" use:panSafe
     min="0"
     max={STEPS}
     step="1"
@@ -54,6 +58,16 @@
     display: inline-flex;
     align-items: center;
     gap: 8px;
+  }
+
+  .wide {
+    display: flex;
+    width: 100%;
+  }
+
+  .wide input {
+    flex: 1;
+    width: auto;
   }
 
   input {
