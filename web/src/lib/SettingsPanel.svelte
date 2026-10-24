@@ -34,6 +34,7 @@
   import NetworkPart from './settings/NetworkPart.svelte';
   import SyncPart from './settings/SyncPart.svelte';
   import ImportPart from './settings/ImportPart.svelte';
+  import ListeningPart from './settings/ListeningPart.svelte';
   import LibrariesPart from './settings/LibrariesPart.svelte';
   import DiagnosticsPart from './settings/DiagnosticsPart.svelte';
   import PlayersSettings from './PlayersSettings.svelte';
@@ -54,7 +55,10 @@
   $effect(() => {
     if (me.admin) untrack(() => ed.load());
   });
-  const allowed = $derived(!SECTIONS.find((x) => x.id === section)?.admin || me.admin);
+  const allowed = $derived.by(() => {
+    const x = SECTIONS.find((x) => x.id === section);
+    return !x?.admin || me.admin || !!x.everyone;
+  });
 
   // Another page (a part, a thing, back) starts at its top.
   let scrollEl = $state<HTMLElement>();
@@ -118,6 +122,9 @@
       <PlayersSettings {thing} />
     {:else if section === 'diagnostics'}
       <DiagnosticsPart />
+    {:else if section === 'connections' && !me.admin}
+      <!-- Anyone's own: their listening services (decision 0068). -->
+      <ListeningPart />
     {:else if !ed.s}
       {#if !ed.loadError}<PageLoading />{/if}
     {:else if section === 'connections'}

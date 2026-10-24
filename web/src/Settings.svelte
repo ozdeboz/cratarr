@@ -133,7 +133,7 @@
     if (words.length) void loadSettingsWords();
   });
   const found = (id: SettingsSection, title: string) => (words.length ? settingsMatches(id, title, words) : null);
-  const allowed = $derived(SECTIONS.filter((x) => (!x.app || inApp) && (!x.admin || me.admin)));
+  const allowed = $derived(SECTIONS.filter((x) => (!x.app || inApp) && (!x.admin || me.admin || x.everyone)));
   const shown = $derived(
     words.length
       ? allowed.filter((x) => {
@@ -142,7 +142,8 @@
         })
       : allowed,
   );
-  const groups = $derived([shown.filter((x) => !x.admin), shown.filter((x) => x.admin)]);
+  // A part of the server's that anyone opens (Connections) is Personal for someone not an administrator.
+  const groups = $derived([shown.filter((x) => !x.admin || !me.admin), shown.filter((x) => x.admin && me.admin)]);
 </script>
 
 <main>

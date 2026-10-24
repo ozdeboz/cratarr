@@ -251,6 +251,8 @@ async fn main() -> Result<()> {
     serve::accounts::watch_directory(served.clone());
     served.set_incoming(app.incoming.clone());
     served.follow();
+    // Scrobbling: the plays queued for the connected listening services, sent (decision 0068).
+    app::scrobble::run(served.clone());
     // Imports of plays and favourites read the sources in use (decision 0030, amended 2026-10-15).
     let importer = app.clone();
     served.import.connect(std::sync::Arc::new(move || importer.library.connected_sources()));

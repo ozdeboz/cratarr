@@ -156,6 +156,11 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/history/listenbrainz", post(import_listenbrainz).delete(undo_listenbrainz))
             .route("/api/history/listenbrainz/preview", post(preview_listenbrainz))
             .route("/api/history/lastfm", get(lastfm_kept).post(import_lastfm).delete(undo_lastfm))
+            .route("/api/scrobble", get(scrobble_targets))
+            .route("/api/scrobble/listenbrainz", post(scrobble_listenbrainz))
+            .route("/api/scrobble/lastfm", post(scrobble_lastfm))
+            .route("/api/scrobble/lastfm/callback", get(scrobble_lastfm_callback))
+            .route("/api/scrobble/{target}", axum::routing::delete(scrobble_forget))
             .route("/api/history/lastfm/preview", post(preview_lastfm))
             .route("/api/import/file", post(import_file).delete(undo_file).layer(axum::extract::DefaultBodyLimit::max(256 << 20)))
         .route("/api/library/find", get(library_find))
@@ -2587,6 +2592,119 @@ async fn import_listenbrainz(Json(b): Json<ListenBrainzImport>) -> Result<Json<c
 async fn preview_listenbrainz(Json(b): Json<ListenBrainzImport>) -> Result<Json<crate::app::import::Tally>, ApiError> {
     let (serve, account, user) = listenbrainz_who(&b)?;
     Ok(Json(crate::app::listenbrainz::preview(&serve, &account, &user).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+/// The asking account and Cratarr's own library, for scrobbling (decision 0068).
+fn scrobbler() -> Result<(Arc<crate::serve::Serve>, String), ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: scrobbling is an account's own.".into()))?;
+    Ok((serve, account))
+}
+
+fn refused(e: impl std::fmt::Display) -> ApiError {
+    ToggleError::Refused(e.to_string()).into()
+}
+
+/// The asking account's listening services (Connections): whom it scrobbles to, never a secret.
+async fn scrobble_targets() -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = scrobbler()?;
+    let targets = tokio::task::spawn_blocking(move || serve.userdata.scrobble_targets(&account)).await.map_err(refused)?.map_err(|e| refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "targets": targets })))
+}
+
+#[derive(Deserialize)]
+struct ListenBrainzToken {
+    token: String,
+}
+
+/// ListenBrainz connected with the user token from its settings page, checked first.
+async fn scrobble_listenbrainz(Json(b): Json<ListenBrainzToken>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = scrobbler()?;
+    let token = b.token.trim().to_string();
+    let name = crate::app::scrobble::listenbrainz_user(&token).await.map_err(|e| refused(format!("{e:#}")))?;
+    let secret = serde_json::to_string(&crate::app::scrobble::Secret { token: Some(token), ..Default::default() }).map_err(refused)?;
+    let n = name.clone();
+    tokio::task::spawn_blocking(move || serve.userdata.set_scrobble_target(&account, crate::app::scrobble::LISTENBRAINZ, &n, &secret))
+        .await
+        .map_err(refused)?
+        .map_err(|e| refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "name": name })))
+}
+
+#[derive(Deserialize)]
+struct LastFmKeys {
+    api_key: String,
+    api_secret: String,
+    /// Where Last.fm's sign-in comes back to (this address's `/api/scrobble/lastfm/callback`).
+    callback: String,
+}
+
+/// Last.fm: the API key and its shared secret kept (not sending yet), and where to send the browser to sign in.
+async fn scrobble_lastfm(Json(b): Json<LastFmKeys>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = scrobbler()?;
+    let (key, secret) = (b.api_key.trim().to_string(), b.api_secret.trim().to_string());
+    if key.is_empty() || secret.is_empty() {
+        return Err(refused("Last.fm needs the API key and its shared secret, from last.fm/api/account/create."));
+    }
+    let url = crate::app::scrobble::lastfm_sign_in(&key, &b.callback).map_err(|e| refused(format!("{e:#}")))?;
+    let kept = serde_json::to_string(&crate::app::scrobble::Secret { api_key: Some(key), api_secret: Some(secret), ..Default::default() }).map_err(refused)?;
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        serve.userdata.set_scrobble_target(&account, crate::app::scrobble::LASTFM, "", &kept)?;
+        serve.userdata.scrobble_broken(&account, crate::app::scrobble::LASTFM, "Not signed in at Last.fm yet")
+    })
+    .await
+    .map_err(refused)?
+    .map_err(|e| refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "url": url })))
+}
+
+#[derive(Deserialize)]
+struct LastFmBack {
+    token: String,
+}
+
+/// Last.fm's sign-in coming back: its token traded for a session key, and the browser back to Connections.
+async fn scrobble_lastfm_callback(Query(q): Query<LastFmBack>) -> Response {
+    let back = |why: Option<String>| {
+        let to = match why {
+            None => "/#/settings?view=settings%3Aconnections".to_string(),
+            Some(w) => format!("/#/settings?view=settings%3Aconnections&scrobble={}", urlencoding_lite(&w)),
+        };
+        axum::response::Redirect::to(&to).into_response()
+    };
+    let Ok((serve, account)) = scrobbler() else { return back(Some("Sign in to Cratarr first".into())) };
+    let (ud, a) = (serve.userdata.clone(), account.clone());
+    let kept = tokio::task::spawn_blocking(move || ud.scrobble_secret_any(&a, crate::app::scrobble::LASTFM)).await.ok().and_then(Result::ok).flatten();
+    let Some(mut secret) = kept.and_then(|k| serde_json::from_str::<crate::app::scrobble::Secret>(&k).ok()) else {
+        return back(Some("Give Last.fm's API key first".into()));
+    };
+    let (Some(key), Some(sec)) = (secret.api_key.clone(), secret.api_secret.clone()) else { return back(Some("Give Last.fm's API key first".into())) };
+    match crate::app::scrobble::lastfm_session(&key, &sec, q.token.trim()).await {
+        Ok((session, name)) => {
+            secret.session = Some(session);
+            let Ok(kept) = serde_json::to_string(&secret) else { return back(Some("Could not keep the sign-in".into())) };
+            let ok = tokio::task::spawn_blocking(move || serve.userdata.set_scrobble_target(&account, crate::app::scrobble::LASTFM, &name, &kept)).await;
+            back(match ok {
+                Ok(Ok(())) => None,
+                _ => Some("Could not keep the sign-in".into()),
+            })
+        }
+        Err(e) => back(Some(format!("{e:#}"))),
+    }
+}
+
+/// A short text safe in a page address.
+fn urlencoding_lite(s: &str) -> String {
+    s.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect()
+}
+
+/// A listening service disconnected, with what waited for it.
+async fn scrobble_forget(Path(target): Path<String>) -> Result<StatusCode, ApiError> {
+    let (serve, account) = scrobbler()?;
+    tokio::task::spawn_blocking(move || serve.userdata.forget_scrobble_target(&account, &target)).await.map_err(refused)?.map_err(|e| refused(format!("{e:#}")))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// A Last.fm import as asked: whose scrobbles, and the API key made at Last.fm (else the one kept last time).

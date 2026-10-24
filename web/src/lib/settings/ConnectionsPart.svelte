@@ -11,6 +11,7 @@
   import { ed, str, type Draft } from './editor.svelte';
   import Group from './Group.svelte';
   import HomeAssistantPart from './HomeAssistantPart.svelte';
+  import ListeningPart from './ListeningPart.svelte';
   import Item from './Item.svelte';
   import ValueSheet from './ValueSheet.svelte';
 
@@ -222,6 +223,7 @@
     </Group>
   {/if}
   <HomeAssistantPart />
+  <ListeningPart />
   {#if addingKind}
     <ChoiceSheet title="Add server" options={s.kinds.map((k) => ({ value: k.id, label: k.label }))} value={''} onchange={add} onclose={() => (addingKind = false)} />
   {/if}

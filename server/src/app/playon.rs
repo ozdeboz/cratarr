@@ -1669,6 +1669,13 @@ impl PlayOn {
             Some(e) => e.view(name, false),
             None => return Ok(()),
         };
+        // A track begun (decision 0068): told once per change of song on this player, Cratarr's own songs only.
+        if after.playing
+            && let (Some(user), Some(t)) = (whose(), after.track.as_ref())
+            && t.source == crate::source::cratarr::KIND.id
+        {
+            super::listening::started(&user, name, &t.id);
+        }
         // A position that moves on as counted is no news; a jump (a seek) is.
         let jumped = before.position_ms.abs_diff(after.position_ms) > 2_000;
         let still = |v: &PlayerView| PlayerView { position_ms: 0, position_at: 0, seen: 0, ..v.clone() };

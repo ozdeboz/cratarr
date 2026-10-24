@@ -474,11 +474,8 @@ pub async fn handle(serve: &Arc<Serve>, user: &User, method: &str, p: &Params, h
                 let times = p.all("time");
                 for (i, id) in p.all("id").into_iter().enumerate() {
                     let at = times.get(i).and_then(|t| t.parse::<i64>().ok()).map_or_else(now, |ms| ms / 1000);
-                    let lib = serve.library.clone();
-                    let song = id.clone();
-                    if let Some((pid, album, artists)) = blocking(move || lib.play_targets(&song)).await? {
-                        serve.userdata.count_play(&me, (&id, &pid), &album, &artists, at)?;
-                    }
+                    // One way in for listening (decision 0068).
+                    crate::app::listening::heard(serve, &me, &id, &crate::userdata::Heard::counted(at)).await?;
                 }
             }
             Ok(Answer::Json(json!({})))

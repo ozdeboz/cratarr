@@ -10,6 +10,7 @@ const PARTS: Record<string, SettingsSection> = {
   'DirectoryPart': 'auth',
   'ConnectionsPart': 'connections',
   'HomeAssistantPart': 'connections',
+  'ListeningPart': 'connections',
   'DevicePart': 'device',
   'DiagnosticsPart': 'diagnostics',
   'DisplayPart': 'display',

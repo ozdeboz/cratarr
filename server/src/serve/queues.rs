@@ -149,6 +149,9 @@ pub async fn report_playback(serve: &Arc<Serve>, user: &User, p: &Params) -> Res
     if state == "starting" && all.get(&key).is_some_and(|s| s.song == song && s.moving()) {
         return Ok(Answer::Json(json!({})));
     }
+    if state == "playing" || state == "starting" {
+        crate::app::listening::started(&key.0, &key.1, &song);
+    }
     all.insert(key, Session { song, state, position_ms, rate, duration_ms, at: Instant::now(), at_epoch: now() });
     Ok(Answer::Json(json!({})))
 }
@@ -161,6 +164,7 @@ pub async fn now_playing_from_scrobble(serve: &Arc<Serve>, user: &User, p: &Para
     let key = (user.name.clone(), client(p));
     let mut all = serve.now_playing.lock();
     if all.get(&key).is_none_or(|s| s.song != song) {
+        crate::app::listening::started(&key.0, &key.1, &song);
         all.insert(key, Session { song, state: "playing", position_ms: 0, rate: 1.0, duration_ms, at: Instant::now(), at_epoch: now() });
     }
     Ok(())
@@ -177,13 +181,9 @@ pub async fn count_play(serve: &Arc<Serve>, user: &str, song: &str, at: i64) -> 
     Ok(record(serve, user, song, &crate::userdata::Heard::counted(at)).await?)
 }
 
-/// A song heard (decision 0064): logged, and counted on it, its album and artists when it counts.
+/// A song heard (decision 0064): through the one way in for listening (decision 0068).
 pub async fn record(serve: &Arc<Serve>, user: &str, song: &str, heard: &crate::userdata::Heard) -> anyhow::Result<()> {
-    let (lib, id) = (serve.library.clone(), song.to_string());
-    if let Some((pid, album, artists)) = tokio::task::spawn_blocking(move || lib.play_targets(&id)).await?? {
-        serve.userdata.record(user, (song, &pid), &album, &artists, heard)?;
-    }
-    Ok(())
+    crate::app::listening::heard(serve, user, song, heard).await.map(|_| ())
 }
 
 /// One of Cratarr's players as an app may see it.

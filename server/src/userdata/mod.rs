@@ -82,6 +82,16 @@ CREATE TABLE IF NOT EXISTS plays (
   ended TEXT NOT NULL, counted INTEGER NOT NULL, player TEXT, output TEXT, context TEXT, event TEXT);
 CREATE INDEX IF NOT EXISTS plays_by_user ON plays (user, at);
 CREATE UNIQUE INDEX IF NOT EXISTS plays_by_event ON plays (event) WHERE event IS NOT NULL;
+-- The listening services an account sends its plays to (app::scrobble): the service's user, what it needs to sign in
+-- (JSON), and why it stopped (its login refused) until connected again.
+CREATE TABLE IF NOT EXISTS scrobble_target (
+  user TEXT NOT NULL, target TEXT NOT NULL, name TEXT NOT NULL, secret TEXT NOT NULL, broken TEXT, at INTEGER NOT NULL,
+  PRIMARY KEY (user, target)) WITHOUT ROWID;
+-- Plays to send, one per service, oldest first; `next` when to try again, `why` the last failure.
+CREATE TABLE IF NOT EXISTS scrobble_queue (
+  id INTEGER PRIMARY KEY, user TEXT NOT NULL, target TEXT NOT NULL, song TEXT NOT NULL, at INTEGER NOT NULL,
+  tries INTEGER NOT NULL DEFAULT 0, next INTEGER NOT NULL DEFAULT 0, why TEXT);
+CREATE INDEX IF NOT EXISTS scrobble_queue_due ON scrobble_queue (next, at);
 -- Sleep is no longer kept (the owner, 2026-10-24: not something that should be in Cratarr at all).
 DROP TABLE IF EXISTS asleep;
 ";
@@ -374,6 +384,30 @@ pub struct UserData {
     db: Mutex<Connection>,
 }
 
+/// A play waiting to be sent to a listening service (app::scrobble).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Queued {
+    pub id: i64,
+    pub user: String,
+    pub target: String,
+    pub song: String,
+    pub at: i64,
+    pub tries: i64,
+}
+
+/// A listening service an account sends its plays to, as Connections shows it (never its secret).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ScrobbleTarget {
+    pub target: String,
+    /// The account on the service.
+    pub name: String,
+    /// Why it stopped sending, until connected again.
+    pub broken: Option<String>,
+    /// Plays waiting to be sent, and why the last try failed.
+    pub queued: u64,
+    pub waiting: Option<String>,
+}
+
 fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
@@ -576,6 +610,14 @@ impl UserData {
         if added == 0 {
             return Ok(false);
         }
+        // A counted play goes to the listening services the user connected (app::scrobble), queued in the same
+        // transaction (decision 0068). Imported listens never count, so none of them goes back.
+        if h.counts {
+            tx.execute(
+                "INSERT INTO scrobble_queue (user, target, song, at) SELECT ?1, target, ?2, ?3 FROM scrobble_target WHERE user = ?1 AND broken IS NULL",
+                params![user, song.0, h.at],
+            )?;
+        }
         if h.counts {
             let at = h.at;
             let mut st = tx.prepare_cached(
@@ -592,6 +634,102 @@ impl UserData {
         }
         tx.commit()?;
         Ok(true)
+    }
+
+    /// A listening service connected (or connected again) for `user`: its account there and what it signs in with.
+    pub fn set_scrobble_target(&self, user: &str, target: &str, name: &str, secret: &str) -> Result<()> {
+        self.db().execute(
+            "INSERT INTO scrobble_target (user, target, name, secret, broken, at) VALUES (?1, ?2, ?3, ?4, NULL, ?5)
+             ON CONFLICT (user, target) DO UPDATE SET name = excluded.name, secret = excluded.secret, broken = NULL, at = excluded.at",
+            params![user, target, name, secret, now()],
+        )?;
+        // What waited while it was stopped goes now.
+        self.db().execute("UPDATE scrobble_queue SET next = 0, tries = 0 WHERE user = ?1 AND target = ?2", params![user, target])?;
+        Ok(())
+    }
+
+    /// A listening service disconnected: it and its waiting plays go.
+    pub fn forget_scrobble_target(&self, user: &str, target: &str) -> Result<()> {
+        let db = self.db();
+        db.execute("DELETE FROM scrobble_target WHERE user = ?1 AND target = ?2", params![user, target])?;
+        db.execute("DELETE FROM scrobble_queue WHERE user = ?1 AND target = ?2", params![user, target])?;
+        Ok(())
+    }
+
+    /// A user's listening services, each with how many plays wait.
+    pub fn scrobble_targets(&self, user: &str) -> Result<Vec<ScrobbleTarget>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT t.target, t.name, t.broken,
+                    (SELECT count(*) FROM scrobble_queue q WHERE q.user = t.user AND q.target = t.target),
+                    (SELECT why FROM scrobble_queue q WHERE q.user = t.user AND q.target = t.target AND q.why IS NOT NULL ORDER BY q.at LIMIT 1)
+             FROM scrobble_target t WHERE t.user = ?1 ORDER BY t.target",
+        )?;
+        let rows = st.query_map([user], |r| {
+            Ok(ScrobbleTarget { target: r.get(0)?, name: r.get(1)?, broken: r.get(2)?, queued: r.get::<_, i64>(3)?.max(0) as u64, waiting: r.get(4)? })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// What a user's service signs in with (JSON), while it is not stopped.
+    pub fn scrobble_secret(&self, user: &str, target: &str) -> Result<Option<String>> {
+        Ok(self
+            .db()
+            .query_row("SELECT secret FROM scrobble_target WHERE user = ?1 AND target = ?2 AND broken IS NULL", params![user, target], |r| r.get(0))
+            .optional()?)
+    }
+
+    /// What a user's service signs in with (JSON), stopped or not: to sign in again with what was given before.
+    pub fn scrobble_secret_any(&self, user: &str, target: &str) -> Result<Option<String>> {
+        Ok(self.db().query_row("SELECT secret FROM scrobble_target WHERE user = ?1 AND target = ?2", params![user, target], |r| r.get(0)).optional()?)
+    }
+
+    /// Plays due to be sent now, oldest first, of services not stopped.
+    pub fn due_scrobbles(&self, now: i64, limit: usize) -> Result<Vec<Queued>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT q.id, q.user, q.target, q.song, q.at, q.tries FROM scrobble_queue q
+             JOIN scrobble_target t ON t.user = q.user AND t.target = q.target AND t.broken IS NULL
+             WHERE q.next <= ?1 ORDER BY q.at LIMIT ?2",
+        )?;
+        let rows = st.query_map(params![now, limit as i64], |r| {
+            Ok(Queued { id: r.get(0)?, user: r.get(1)?, target: r.get(2)?, song: r.get(3)?, at: r.get(4)?, tries: r.get(5)? })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Plays sent (or gone): out of the queue.
+    pub fn scrobbled(&self, ids: &[i64]) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        {
+            let mut st = tx.prepare_cached("DELETE FROM scrobble_queue WHERE id = ?1")?;
+            for id in ids {
+                st.execute([id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Plays not sent this time: tried again at `next`, `why` kept.
+    pub fn scrobbles_wait(&self, ids: &[i64], next: i64, why: &str) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        {
+            let mut st = tx.prepare_cached("UPDATE scrobble_queue SET tries = tries + 1, next = ?2, why = ?3 WHERE id = ?1")?;
+            for id in ids {
+                st.execute(params![id, next, why])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// A service's login refused: it stops (its plays wait) until connected again.
+    pub fn scrobble_broken(&self, user: &str, target: &str, why: &str) -> Result<()> {
+        self.db().execute("UPDATE scrobble_target SET broken = ?3 WHERE user = ?1 AND target = ?2", params![user, target, why])?;
+        Ok(())
     }
 
     /// The ids of the listens imported into a user's history from `context` (an import's, decision 0067), to tell
@@ -1509,6 +1647,37 @@ mod tests {
         assert_eq!((get(Kind::Album, "al-x").play_count, get(Kind::Artist, "ar-a").play_count), (1, 1));
         assert!(get(Kind::Song, "tr-1").starred_at.is_none());
         assert!(u.imported(KEY, Kind::Song, &["tr-1".into()]).unwrap().is_empty(), "forgotten: the next import starts afresh");
+    }
+
+    #[test]
+    fn a_counted_play_is_queued_for_each_service_and_an_imported_listen_never() {
+        let u = UserData::open(None).unwrap();
+        u.set_scrobble_target("me", "listenbrainz", "me-lb", "{}").unwrap();
+        u.set_scrobble_target("me", "lastfm", "me-fm", "{}").unwrap();
+        u.count_play("me", ("tr-1", "p"), "al-x", &[], 100).unwrap();
+        u.count_play("you", ("tr-1", "p"), "al-x", &[], 100).unwrap();
+        let imported = Heard { counts: false, context: Some("lastfm".into()), event: Some("e".into()), ..Heard::counted(200) };
+        u.record("me", ("tr-2", "p2"), "al-x", &[], &imported).unwrap();
+        let due = u.due_scrobbles(1_000, 10).unwrap();
+        let mut got: Vec<(String, String)> = due.iter().map(|q| (q.target.clone(), q.song.clone())).collect();
+        got.sort();
+        assert_eq!(got, [("lastfm".to_string(), "tr-1".to_string()), ("listenbrainz".to_string(), "tr-1".to_string())]);
+        assert!(due.iter().all(|q| q.user == "me" && q.song == "tr-1"), "the other user has no service; the import is never sent");
+        // Failing waits; a refused login stops the service until it is connected again.
+        let fm: Vec<i64> = due.iter().filter(|q| q.target == "lastfm").map(|q| q.id).collect();
+        u.scrobbles_wait(&fm, 5_000, "offline").unwrap();
+        assert_eq!(u.due_scrobbles(1_000, 10).unwrap().len(), 1, "lastfm waits until 5000");
+        u.scrobble_broken("me", "listenbrainz", "token refused").unwrap();
+        assert!(u.due_scrobbles(10_000, 10).unwrap().iter().all(|q| q.target == "lastfm"), "a stopped service sends nothing");
+        let t = u.scrobble_targets("me").unwrap();
+        assert_eq!((t[0].target.as_str(), t[0].queued, t[0].waiting.as_deref()), ("lastfm", 1, Some("offline")));
+        assert_eq!(t[1].broken.as_deref(), Some("token refused"));
+        u.set_scrobble_target("me", "listenbrainz", "me-lb", "{}").unwrap();
+        assert_eq!(u.due_scrobbles(1_000, 10).unwrap().len(), 1, "connected again: what waited goes");
+        u.scrobbled(&u.due_scrobbles(10_000, 10).unwrap().iter().map(|q| q.id).collect::<Vec<_>>()).unwrap();
+        assert!(u.due_scrobbles(10_000, 10).unwrap().is_empty());
+        u.forget_scrobble_target("me", "lastfm").unwrap();
+        assert_eq!(u.scrobble_targets("me").unwrap().len(), 1);
     }
 
     #[test]

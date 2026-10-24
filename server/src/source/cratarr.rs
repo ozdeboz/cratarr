@@ -355,9 +355,8 @@ impl Source for CratarrSource {
         Box::pin(async move {
             let s = server()?;
             let me = owner(&s)?;
-            let (lib, song) = (s.library.clone(), track.to_string());
-            let Some((pid, album, artists)) = blocking(move || lib.play_targets(&song)).await? else { bail!("no such track") };
-            s.userdata.count_play(&me, (track, &pid), &album, &artists, at)?;
+            // One way in for listening (decision 0068).
+            crate::app::listening::heard(&s, &me, track, &crate::userdata::Heard::counted(at)).await?;
             Ok(())
         })
     }

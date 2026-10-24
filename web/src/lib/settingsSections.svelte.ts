@@ -22,7 +22,9 @@ export type SettingsSection =
   | 'auth'
   | 'diagnostics';
 
-export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app?: true; admin?: true }[] = [
+/** `admin`: the server's, its administrators' only; `everyone` as well: a part anyone opens, showing them only their own
+ *  (Connections' listening services, decision 0068). */
+export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app?: true; admin?: true; everyone?: true }[] = [
   // In a browser too: its name as a Play On player.
   { id: 'device', title: 'This device', icon: 'speaker' },
   { id: 'network', title: 'Network', icon: 'wifi', app: true },
@@ -34,7 +36,7 @@ export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app
   { id: 'taste', title: 'Taste', icon: 'music' },
   // Home's sections, their order, and its header (the owner, 2026-10-24).
   { id: 'home', title: 'Home', icon: 'home' },
-  { id: 'connections', title: 'Connections', icon: 'server', admin: true },
+  { id: 'connections', title: 'Connections', icon: 'server', admin: true, everyone: true },
   { id: 'libraries', title: 'Libraries', icon: 'library', admin: true },
   { id: 'players', title: 'Players', icon: 'speakers', admin: true },
   { id: 'users', title: 'Users', icon: 'users', admin: true },
