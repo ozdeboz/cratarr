@@ -1504,7 +1504,12 @@ async fn crate_update(State(app): State<Arc<App>>, Path(id): Path<String>, Json(
 }
 
 async fn crate_get(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<crate::crates::CrateDef>, ApiError> {
-    Ok(Json(app.playlists.crate_def(&id).await?))
+    let mut def = app.playlists.crate_def(&id).await?;
+    // Home's crates are a list of lines (Value::Within), not conditions anyone sets: sent without them.
+    if crate::crates::home_crate(&id) {
+        def.conditions.clear();
+    }
+    Ok(Json(def))
 }
 
 async fn crate_delete(State(app): State<Arc<App>>, Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
@@ -1739,13 +1744,17 @@ async fn playlist_tracks(State(app): State<Arc<App>>, Path(id): Path<String>, Qu
 
 #[derive(Deserialize)]
 struct StreamFrom {
-    /// Start at the frame holding this moment (milliseconds; FLAC only), for seeking.
+    /// Start at the frame holding this moment (milliseconds; FLAC and Opus), for seeking.
     #[serde(default)]
     from_ms: u64,
+    /// `opus`: a lossless track as Opus (a phone's stream, the owner 2026-10-24); a lossy one comes as it is.
+    #[serde(default, rename = "as")]
+    as_: Option<String>,
 }
 
 /// A track's audio for the local player (decision 0022): FLAC as fragmented MP4, MP3 as it is, read from Cratarr's own
-/// mount one piece at a time (a fragment of about a second, or 64 KB) so memory stays small.
+/// mount one piece at a time (a fragment of about a second, or 64 KB) so memory stays small. With `?as=opus` (a
+/// phone), a lossless track as Opus in fragmented MP4 instead.
 // --- Play On (decision 0031; app/playon.rs) ---
 
 async fn players(State(app): State<Arc<App>>) -> Json<serde_json::Value> {
@@ -1966,6 +1975,11 @@ async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, S
     let Some((path, kind, duration_ms)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
+    if q.as_.as_deref() == Some("opus")
+        && let Some(opus) = opus_stream(path.clone(), q.from_ms).await
+    {
+        return opus;
+    }
     let Some(kind) = kind else {
         return (StatusCode::UNSUPPORTED_MEDIA_TYPE, Json(json!({ "error": "Only FLAC and MP3 play here for now." }))).into_response();
     };
@@ -2034,6 +2048,36 @@ async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, S
         }
     }
     (headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response()
+}
+
+/// A lossless track as Opus in fragmented MP4 for a phone's stream, made as it is sent; `None` for a lossy file (it
+/// streams as it is). The headers place it: 48 kHz, the encoder's delay (`x-pre-skip`) and the track's length.
+async fn opus_stream(path: std::path::PathBuf, from_ms: u64) -> Option<Response> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(2);
+    let (said, heard) = tokio::sync::oneshot::channel();
+    tokio::task::spawn_blocking(move || {
+        let failed = tx.clone();
+        let out = ChannelWriter { tx, buf: Vec::with_capacity(ChannelWriter::PIECE) };
+        let told = |h| drop(said.send(h));
+        if let Err(e) = crate::opus_copy::stream_mp4(&path, from_ms, told, out) {
+            // A closed body: the page stopped reading (a skip, a seek).
+            let stopped = e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe);
+            if !stopped {
+                tracing::warn!("Opus stream of {}: {e:#}", path.display());
+                let _ = failed.blocking_send(Err(std::io::Error::other(format!("{e:#}"))));
+            }
+        }
+    });
+    let head = heard.await.ok()?;
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/mp4; codecs=\"opus\""));
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert("x-sample-rate", HeaderValue::from(48_000u32));
+    headers.insert("x-pre-skip", HeaderValue::from(head.pre_skip));
+    if let Some(total) = head.total {
+        headers.insert("x-total-samples", HeaderValue::from(total));
+    }
+    Some((headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response())
 }
 
 async fn incoming(State(app): State<Arc<App>>, Query(f): Query<Follow>) -> Json<crate::app::IncomingView> {
