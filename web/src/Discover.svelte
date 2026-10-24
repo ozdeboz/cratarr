@@ -44,6 +44,22 @@
     }
   });
   const progress = $derived(looking ? progressOf(task) : null);
+  // Shown the moment they are known (the owner, 2026-10-24, 0.9): the server keeps the list before it looks up where to
+  // listen (server discover::LISTEN_STEP), and again every ten albums; read again then, so the list shows at once and
+  // fills in behind its progress line at the top.
+  const LISTEN_STEP = 'Finding where to listen';
+  let readAt = -1;
+  $effect(() => {
+    const s = looking ? task?.step : null;
+    if (!s || s.name !== LISTEN_STEP) {
+      readAt = -1;
+      return;
+    }
+    if (readAt < 0 || s.done >= readAt + 10) {
+      readAt = s.done;
+      load();
+    }
+  });
 
   async function refresh() {
     try {

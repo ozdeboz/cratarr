@@ -570,10 +570,18 @@ pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::C
     let (ud, a) = (serve.userdata.clone(), account.to_string());
     let (answered, no_artists) = tokio::task::spawn_blocking(move || ud.discover_answered(&a)).await??;
     let mut albums = one_list(candidates, &|c: &Candidate| have.has(c), &have.known, &answered, &no_artists);
+    // Shown the moment they are known (the owner, 2026-10-24, 0.9): kept now, so the page lists them while the rest is
+    // looked up behind them, and kept again as it fills in (the page reads them again as this step moves on).
+    let at = super::moment::now_secs();
+    keep_found(serve, account, &Found { at, albums: albums.clone(), notes: notes.clone() }).await?;
     // Where to hear each: its Bandcamp and YouTube pages as MusicBrainz knows them, else a search there.
     let total = albums.len() as u64;
-    for (i, s) in albums.iter_mut().enumerate() {
-        progress("Finding where to listen", i as u64, Some(total));
+    for i in 0..albums.len() {
+        if i > 0 && i % KEEP_EVERY == 0 {
+            keep_found(serve, account, &Found { at, albums: albums.clone(), notes: notes.clone() }).await?;
+        }
+        let s = &mut albums[i];
+        progress(LISTEN_STEP, i as u64, Some(total));
         let urls = match &s.release_group {
             Some(g) => {
                 let got = mb_urls(&http, g).await.unwrap_or_default();
@@ -584,11 +592,21 @@ pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::C
         };
         s.links.extend(listen_links(&urls, &s.artist, &s.album));
     }
-    let found = Found { at: super::moment::now_secs(), albums, notes };
-    let (ud, a, json) = (serve.userdata.clone(), account.to_string(), serde_json::to_string(&found)?);
-    let at = found.at;
-    tokio::task::spawn_blocking(move || ud.set_discover_found(&a, at, &json)).await??;
+    let found = Found { at, albums, notes };
+    keep_found(serve, account, &found).await?;
     Ok(found)
+}
+
+/// The step after which the list is kept and can be shown (lib's Discover reads it again from this step on).
+pub const LISTEN_STEP: &str = "Finding where to listen";
+/// Kept again after this many albums' links, so the page fills in as it goes.
+const KEEP_EVERY: usize = 10;
+
+/// What a look found, kept for the account (`kept` reads it).
+async fn keep_found(serve: &Arc<crate::serve::Serve>, account: &str, found: &Found) -> Result<()> {
+    let (ud, a, json, at) = (serve.userdata.clone(), account.to_string(), serde_json::to_string(found)?, found.at);
+    tokio::task::spawn_blocking(move || ud.set_discover_found(&a, at, &json)).await??;
+    Ok(())
 }
 
 /// What was found last for the account, the albums answered since left out.
