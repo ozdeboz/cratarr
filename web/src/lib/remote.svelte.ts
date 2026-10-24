@@ -6,6 +6,7 @@ import { expect, expectFailed, live, refresh } from './live.svelte';
 import { local, jump as localJump, next as localNext, previous as localPrevious, togglePlay as localToggle, seek as localSeek } from './localPlayer.svelte';
 import { isLocal, localNowPlaying, localState, tookLocal } from './output.svelte';
 import { setFavorite as setRowFavorite } from './favourites.svelte';
+import { on } from './events.svelte';
 import { toast } from './toast.svelte';
 import { playOn } from './playOn.svelte';
 
@@ -210,6 +211,12 @@ export function favorite(): boolean {
   const np = playing();
   return np && fav.wanted?.id === np.id ? fav.wanted.on : (np?.favorite ?? false);
 }
+// A favourite changed anywhere (Home Assistant's "I love this track", another device): the playing track's heart shows
+// it at once, ahead of the state that follows (app/events.rs `favourite`).
+on<{ source: string; kind: string; items: string[]; on: boolean }>('favourite', (c) => {
+  const np = playing();
+  if (c.kind === 'song' && np && np.source === c.source && c.items.includes(np.id)) fav.wanted = { id: np.id, on: c.on };
+});
 // The lists' rows show the playing track's heart as the player does (a change from the player, its menu or elsewhere).
 // Only when it changes: a row's own flip is not undone by a player that has not heard of it yet.
 let mirrored = '';

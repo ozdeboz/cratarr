@@ -1,6 +1,7 @@
 // The hearts on lists' rows (Finamp's, decision 0023): which tracks are favourites, as last asked in one request per
 // list, and the long-press that flips one. Shared by the queue sheet and the playlist view.
 import { getFavoriteAlbums, getFavorites, getPlaylistFavorites, setPlaylistFavorite, setTrackFavorite } from './api';
+import { on } from './events.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 
@@ -109,6 +110,20 @@ export function playlistFavoriteRenamed(from: string, to: string) {
   playlistFavs[to] = playlistFavs[from];
   delete playlistFavs[from];
 }
+
+// A favourite changed anywhere (this page, another device, a Subsonic app, Home Assistant): the server tells every open
+// page of the account (its live channel's `favourite`, app/events.rs), so every heart shows it at once (the owner,
+// 2026-10-25).
+on<{ source: string; kind: string; items: string[]; on: boolean }>('favourite', (c) => {
+  for (const id of c.items) {
+    if (c.kind === 'playlist') playlistFavs[id] = c.on;
+    else if (c.kind === 'song' || c.kind === 'album') favs[k(c.source, id)] = c.on;
+    if (c.kind === 'album') {
+      if (c.on) albumLists[c.source]?.add(id);
+      else albumLists[c.source]?.delete(id);
+    }
+  }
+});
 
 /** The long-press on a row's heart: a favourite or not (a heavy tick, as Finamp's). */
 export async function flipFavorite(source: string, id: string) {

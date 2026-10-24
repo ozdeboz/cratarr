@@ -400,6 +400,22 @@ pub struct Review {
 
 pub struct UserData {
     db: Mutex<Connection>,
+    /// Every change of favourites, as `set_starred` makes it (`subscribe_starred`).
+    starred: tokio::sync::broadcast::Sender<Starred>,
+}
+
+/// A change of favourites (stars) as `set_starred` made it, whichever way it came: a page, a Subsonic app, Home
+/// Assistant's API (the owner, 2026-10-25: a favourite said to Assist showed in the app only later). The live channel
+/// tells every open page of `user` (app/events.rs `favourite`), so each heart shows it at once.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Starred {
+    #[serde(skip)]
+    pub user: String,
+    /// `song`, `album`, `artist` or `playlist`.
+    pub kind: &'static str,
+    /// Their ids (a playlist's: its name).
+    pub items: Vec<String>,
+    pub on: bool,
 }
 
 /// A play waiting to be sent to a listening service (app::scrobble).
@@ -511,7 +527,7 @@ impl UserData {
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
         add_scrobble_off(&conn)?;
         conn.execute_batch(WEEK_BEFORE_THE_LOG).context("writing the week before the log from the last plays")?;
-        Ok(Self { db: Mutex::new(conn) })
+        Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0 })
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -559,7 +575,15 @@ impl UserData {
             }
         }
         tx.commit()?;
+        drop(db);
+        // Told once written; nobody listening is no error.
+        let _ = self.starred.send(Starred { user: user.to_string(), kind: kind.as_str(), items: items.to_vec(), on });
         Ok(())
+    }
+
+    /// Every change of favourites from now on (`Starred`), whoever made it.
+    pub fn subscribe_starred(&self) -> tokio::sync::broadcast::Receiver<Starred> {
+        self.starred.subscribe()
     }
 
     /// Every item of one kind a user played or rated, with its annotation (the Library's orders and filters by plays
@@ -1695,7 +1719,10 @@ mod tests {
         let u = UserData::open(None).unwrap();
         u.count_play("me", ("tr-1", "pid1"), "al-1", &[], 100).unwrap();
         u.set_rating("me", Kind::Album, "al-2", 4).unwrap();
+        let mut told = u.subscribe_starred();
         u.set_starred("me", Kind::Album, &["al-3".to_string()], true).unwrap();
+        // Every change told, whoever made it (the live channel passes it on to the account's pages).
+        assert_eq!(told.try_recv().unwrap(), Starred { user: "me".into(), kind: "album", items: vec!["al-3".into()], on: true });
         let used = u.used("me", Kind::Album).unwrap();
         assert_eq!((used["al-1"].play_count, used["al-1"].play_date, used["al-1"].rating), (1, Some(100), 0));
         assert_eq!((used["al-2"].play_count, used["al-2"].rating), (0, 4));
