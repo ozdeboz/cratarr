@@ -62,3 +62,17 @@ servers, the most common source people move from; (3) Last.fm; (4) files.
   (`subsonic:<address>` as the source, the password given each run and kept nowhere) and finds tracks by name, so the
   server needs no real paths and is not one of Cratarr's sources. Its address, login and choices are kept for next
   time. The Subsonic API shows the plays and stars of the account that logs in, so each person imports their own.
+- **Step 3, Last.fm** (`app::lastfm`). Its API (`user.getRecentTracks`, `user.getLovedTracks`) with the API key the
+  person makes at Last.fm, given once and kept per Cratarr account (never shown again). Scrobbles go into the history
+  as ListenBrainz's do (context `lastfm`, not counted); one the history has from elsewhere already (the same song within
+  a minute: a scrobbler often fed ListenBrainz too) is not added twice. Loved tracks become favourites kept as an
+  import's (source `lastfm`), so a track loved no more there is unstarred here and the undo takes back only what is
+  still its own. Its listens, like ListenBrainz's, are not where the history's own log starts (`heard_from`).
+- **Step 4, files** (`app::import_files`; `POST /api/import/file?name=…&preview=…` with the file as the body, up to
+  256 MB, kept nowhere). Histories: ListenBrainz's export (its zip, deflated files inflated with `flate2`, or its
+  JSON lines), Spotify's (extended streaming history, or account data; under 30 s is no listen, as Spotify counts it),
+  Last.fm's CSV as export tools write it. Their listens go into the history with context `file:<kind>`, a listen there
+  already from anywhere not added twice (one routine for every import that brings listens, `import::into_history`);
+  undone per kind. Playlists: `.m3u`/`.m3u8` (`#EXTINF` "Artist - Title", else the path's folders and file name),
+  `.xspf`, Exportify's CSV; each becomes a new playlist of the tracks found ("a playlist from these tracks"), named as the
+  file names it and free among one's own, undone as any playlist made is.

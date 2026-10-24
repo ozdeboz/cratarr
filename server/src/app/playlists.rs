@@ -1560,6 +1560,13 @@ impl PlaylistService {
         Ok(serve.userdata.set_playlist_shared(&store.key(&name), on)?)
     }
 
+    /// `name`, or the first free one after it ("Evening 2") among the asking account's own playlists.
+    pub async fn free_own_name(&self, name: &str) -> Result<String, ToggleError> {
+        let own = self.lib.store_for(asking_account().as_deref())?;
+        let taken: HashSet<String> = own.view(None).await?.into_iter().map(|p| p.id.to_lowercase()).collect();
+        Ok(crate::playlists::free_name(name, |n| taken.contains(&n.to_lowercase())))
+    }
+
     /// A copy of a playlist (another's shared one, or one's own) among one's own, under a free name. Returns its name
     /// and the undo token.
     pub async fn copy(&self, id: &str) -> Result<(String, Option<String>), ToggleError> {

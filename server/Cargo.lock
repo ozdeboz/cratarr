@@ -430,6 +430,7 @@ dependencies = [
  "cratarr-rules",
  "ebur128",
  "flacenc",
+ "flate2",
  "getrandom 0.3.4",
  "image",
  "ipnet",
