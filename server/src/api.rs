@@ -171,7 +171,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/diagnostics/download", get(diagnostics_download))
             .route("/api/diagnostics/levels", get(diagnostics_levels).put(set_diagnostics_levels))
             .route("/api/players/settings", get(play_on_settings).put(save_play_on_settings))
-            .route("/api/history/listenbrainz", post(import_listenbrainz).delete(undo_listenbrainz))
+            .route("/api/history/listenbrainz", get(listenbrainz_kept).post(import_listenbrainz).delete(undo_listenbrainz))
             .route("/api/history/listenbrainz/preview", post(preview_listenbrainz))
             .route("/api/history/lastfm", get(lastfm_kept).post(import_lastfm).delete(undo_lastfm))
             .route("/api/history/lastfm/preview", post(preview_lastfm))
@@ -2694,8 +2694,27 @@ async fn preview_listenbrainz(Json(b): Json<ListenBrainzImport>) -> Result<(Stat
     bring_listenbrainz(b, true)
 }
 
+/// The ListenBrainz user an account imports from, kept (an import choice, as Last.fm's): its next import, and
+/// Discover without a scrobble connection (the owner, 2026-10-24).
+fn listenbrainz_choice(account: &str) -> String {
+    format!("listenbrainz:{account}")
+}
+
+/// The ListenBrainz user the asking account imported from last.
+async fn listenbrainz_kept() -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
+    let ud = serve.userdata.clone();
+    let user = tokio::task::spawn_blocking(move || ud.import_choice(&listenbrainz_choice(&account))).await.ok().and_then(Result::ok).flatten();
+    Ok(Json(json!({ "user": user })))
+}
+
 fn bring_listenbrainz(b: ListenBrainzImport, preview: bool) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let (serve, account, user) = listenbrainz_who(&b)?;
+    // Kept for next time, and for Discover.
+    if let Err(e) = serve.userdata.set_import_choice(&listenbrainz_choice(&account), &user) {
+        tracing::warn!("import: the ListenBrainz user could not be kept: {e:#}");
+    }
     started(crate::app::tasks::spawn("import:listenbrainz", &account.clone(), preview, move |h| async move {
         let progress = progress_of(h);
         if preview {

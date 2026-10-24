@@ -1293,6 +1293,8 @@ export type Verdict = { kind: 'upgrade' | 'duplicate'; library: string; why: str
 export type AlbumsSource = ShelfSource & {
   library_info: LibraryInfo[];
   verdicts: Record<string, Verdict>;
+  /** Per album id of an Incoming library: what it lacks of what the library requires (cover, year, genre, …). */
+  lacks?: Record<string, string[]>;
   /** Per Music album: an album of another library that upgrades or duplicates it. */
   waiting: Record<string, { kind: 'upgrade' | 'duplicate'; album: string }>;
   deletable: string[];
@@ -1513,6 +1515,8 @@ export const wantDiscover = (key: string) => post<{ said: string }>('/api/discov
 export const notDiscover = (key: string) => post<void>('/api/discover/no', { key });
 
 /** A ListenBrainz user's listens into the asking account's history (decisions 0064 and 0067), as a task. */
+/** The ListenBrainz user the account imported from last (kept on the server). */
+export const getListenBrainzKept = () => quietly<{ user: string | null }>('/api/history/listenbrainz');
 export const importListenBrainz = (user: string) => post<Started>('/api/history/listenbrainz', { user });
 /** What importing them would bring, nothing written. */
 export const previewListenBrainz = (user: string) => post<Started>('/api/history/listenbrainz/preview', { user });

@@ -115,6 +115,8 @@
     menuShown = true;
   }
   const verdictOf = (shelf: ShelfSource, a: ListedAlbum) => sources?.find((x) => x.id === shelf.id)?.verdicts[a.id];
+  /** What an Incoming album lacks of what the library requires, to see before Keep (the owner, 2026-10-24). */
+  const lacksOf = (shelf: ShelfSource, a: ListedAlbum) => sources?.find((x) => x.id === shelf.id)?.lacks?.[a.id] ?? [];
 
   // The filter's own switches (Favourites only, Not played yet, 4 stars and up), remembered as the Library's (decision
   // 0060). Lossless only, Upgrades waiting and Duplicates waiting are none (the owner, 2026-10-24); one left on from
@@ -184,6 +186,7 @@
             {v.why}
           </span>
         {/if}
+        {#if me.admin && lacksOf(s, a).length}<span class="lacks">Missing {lacksOf(s, a).join(', ')}</span>{/if}
       {/snippet}
     </AlbumShelf>
   {/if}
@@ -232,6 +235,14 @@
     border-radius: 999px;
     color: var(--text);
     font-weight: 600;
+  }
+
+  /* What an Incoming album lacks: a warning, as Health's. */
+  .lacks {
+    display: block;
+    margin-top: 3px;
+    color: var(--warn-ink);
+    font-size: 0.8rem;
   }
 
   .verdict.upgrade .badge {

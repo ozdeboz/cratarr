@@ -137,7 +137,6 @@ pub fn genre_crate(id: &str) -> Option<CrateDef> {
 /// whose own filter could hide them): made when asked for, never saved; their tracks the albums the shelf shows, album
 /// by album in its order, of every library (what Home showed, whatever is switched off).
 pub const HOME_NEW: &str = "home:new";
-pub const HOME_GRAVES: &str = "home:graves";
 pub const fn home_crate(id: &str) -> bool {
     matches!(id.as_bytes(), b"home:new" | b"home:graves")
 }
@@ -859,6 +858,8 @@ pub fn is_axis(key: &str) -> bool {
 
 /// The axes with their domains in this library: genres, moods and styles most common first, the years', BPMs',
 /// energies' and danceabilities' span.
+// The tests' own: nothing else uses it (no warning in the server's build).
+#[cfg(test)]
 pub fn axes<'a>(files: impl IntoIterator<Item = &'a Facts>, playlists: &[String]) -> Vec<AxisView> {
     let one: Vec<[&Facts; 1]> = files.into_iter().map(|f| [f]).collect();
     let items: Vec<&[&Facts]> = one.iter().map(|f| f.as_slice()).collect();
@@ -1084,6 +1085,8 @@ pub fn passes(tracks: &[&Facts], conditions: &[Condition], w: &World) -> bool {
 /// files the crate may show: its other conditions hold for them, so the cut and the count agree; the owner saw 3
 /// tracks where the curve was cut at 20), its seeds found in `alike`'s files (they may be anywhere, a library switched
 /// off, left out), by the one similarity (`closest_weighted`). Seeds none of which is known: never holds.
+// The tests' own: nothing else uses it (no warning in the server's build).
+#[cfg(test)]
 pub fn resolved(conditions: &[Condition], alike: &Alike, among: &[&Facts], by: &Weights) -> Vec<Condition> {
     resolved_in(conditions, alike, among, by, &HashMap::new())
 }

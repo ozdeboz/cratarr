@@ -751,6 +751,8 @@ impl Catalogue {
     /// The files present in every folder in use, newest first (when the catalogue first saw the track; a moved file
     /// keeps its time), each with its folder and that time: what the crates are worked out on (decision 0024).
     /// Blocking.
+    // The tests' own: nothing else uses it (no warning in the server's build).
+    #[cfg(test)]
     pub fn files_newest_first(&self) -> Result<Vec<(i64, String, Option<i64>)>> {
         let db = self.db();
         let mut st = db.prepare(&format!(

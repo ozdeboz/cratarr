@@ -388,7 +388,9 @@ impl Rng {
     }
 }
 
-/// What AudioMuse heard of a song (decision 0054), as similarity takes it.
+/// What AudioMuse heard of a song (decision 0054), as similarity takes it. The tests' own: nothing else uses it (no
+/// warning in the server's build).
+#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Heard {
     pub energy: Option<f32>,

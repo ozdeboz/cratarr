@@ -52,6 +52,9 @@ pub struct AlbumsSourceView {
     pub library_info: Vec<LibraryView>,
     /// Per album id of a library other than Music: the Music album it upgrades or duplicates.
     pub verdicts: BTreeMap<String, VerdictView>,
+    /// Per album id of a library other than Music: what it lacks of what the library requires (the owner,
+    /// 2026-10-24: marked before Keep, as Health marks Music's).
+    pub lacks: BTreeMap<String, Vec<&'static str>>,
     /// Per Music album id: an album of another library that upgrades or duplicates it.
     pub waiting: BTreeMap<String, Waiting>,
     /// The albums Cratarr can delete.
@@ -112,6 +115,7 @@ impl App {
                     as_of: [c.map(|c| c.as_of), i.map(|i| i.as_of)].into_iter().flatten().min().unwrap_or_else(epoch_now),
                     waiting: waiting(&verdicts, music_albums),
                     verdicts,
+                    lacks: i.map(|i| i.lacks.clone()).unwrap_or_default(),
                     deletable: i
                         .map(|i| i.deletable.clone())
                         .unwrap_or_default()

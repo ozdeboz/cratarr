@@ -2032,7 +2032,7 @@ impl PlaylistService {
         self.own_crates()?.list().await?.into_iter().find(|c| c.id == id).ok_or(ToggleError::UnknownPlaylist)
     }
 
-    /// Home's shelf as a crate (`crates::HOME_NEW`, `HOME_GRAVES`): New for you, Cratarr's newest albums the asking account
+    /// Home's shelf as a crate (`crates::HOME_NEW`): New for you, Cratarr's newest albums the asking account
     /// has not heard much of yet (as Home leaves them out, `heard_albums`); Grave digging, `digging`'s albums. Their
     /// tracks album by album, in the shelf's order.
     async fn home_crate(&self, id: &str) -> Result<CrateDef, ToggleError> {

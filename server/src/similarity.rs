@@ -280,6 +280,8 @@ impl Profile {
 
     /// The profile of a playlist: as `of`, without the playlist itself among its words (all its tracks are in it, so
     /// it would only say it is like itself).
+    // The tests' own: nothing else uses it (no warning in the server's build).
+    #[cfg(test)]
     pub fn of_playlist<'a>(lib: &Library, playlist: u32, set: &[usize], track: impl Fn(usize) -> &'a Track) -> Self {
         let mut p = Self::of(lib, set, track);
         p.counts[0].remove(&playlist);
@@ -385,6 +387,8 @@ impl Signals {
         self.0[s as usize] = Some(x);
     }
 
+    // The tests' own: nothing else uses it (no warning in the server's build).
+    #[cfg(test)]
     pub fn get(&self, s: Signal) -> Option<f64> {
         self.0[s as usize]
     }

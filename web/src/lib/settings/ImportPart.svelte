@@ -9,6 +9,7 @@
   // far they are, and what they brought, also when this page was left meanwhile.
   import {
     getLastFm,
+    getListenBrainzKept,
     importFile,
     importLastFm,
     importListenBrainz,
@@ -89,6 +90,11 @@
 
   // ListenBrainz: whose listens; the last preview or import (a task), and its undo.
   let lbUser = $state('');
+  // The one imported from last, kept on the server (Discover uses it too).
+  getListenBrainzKept().then(
+    (k) => (lbUser ||= k.user ?? ''),
+    () => {},
+  );
   let naming = $state(false);
   let undoing = $state(false);
   let lbOwn = $state<{ busy: 'undo' | null; removed: number | null; error: string | null; hide: number | null }>({ busy: null, removed: null, error: null, hide: null });

@@ -606,7 +606,8 @@ pub fn who(serve: &crate::serve::Serve, account: &str) -> Result<Who> {
     let ud = &serve.userdata;
     let targets = ud.scrobble_targets(account)?;
     let on = |t: &str| targets.iter().find(|x| x.target == t && x.on && x.broken.is_none()).map(|x| x.name.clone()).filter(|n| !n.is_empty());
-    let listenbrainz = on(super::scrobble::LISTENBRAINZ);
+    // As it scrobbles, else the user its import keeps (the owner, 2026-10-24).
+    let listenbrainz = on(super::scrobble::LISTENBRAINZ).or(ud.import_choice(&format!("listenbrainz:{account}"))?.filter(|u| !u.is_empty()));
     let signed = ud
         .scrobble_secret(account, super::scrobble::LASTFM)?
         .and_then(|s| serde_json::from_str::<super::scrobble::Secret>(&s).ok())
