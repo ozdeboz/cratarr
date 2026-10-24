@@ -142,6 +142,8 @@ pub struct IncomingSourceView {
     pub verdicts: BTreeMap<String, VerdictView>,
     /// The albums Cratarr can delete: it sees their folder and can write there.
     pub deletable: Vec<String>,
+    /// Per album id, what it lacks of what the library requires (the owner, 2026-10-24: marked before Keep).
+    pub lacks: BTreeMap<String, Vec<&'static str>>,
     /// The libraries it was read from (the filter's library switches).
     pub libraries: Vec<String>,
 }
@@ -177,6 +179,8 @@ pub struct IncomingView {
 pub struct LidarrView {
     pub url: String,
     pub key_set: bool,
+    /// Switched on; off, not asked.
+    pub enabled: bool,
     /// Lidarr's version when it answered.
     pub version: Option<String>,
     pub error: Option<String>,
@@ -244,7 +248,8 @@ struct IncomingDir {
 pub(super) type LidarrPair = (Option<settings::LidarrConfig>, Option<crate::lidarr::Lidarr>);
 
 pub(super) fn lidarr_pair(cfg: Option<settings::LidarrConfig>) -> LidarrPair {
-    let client = cfg.as_ref().and_then(|c| match crate::lidarr::Lidarr::new(&c.url, &c.api_key) {
+    // Switched off: kept, not used.
+    let client = cfg.as_ref().filter(|c| c.enabled).and_then(|c| match crate::lidarr::Lidarr::new(&c.url, &c.api_key) {
         Ok(l) => Some(l),
         Err(e) => {
             tracing::warn!("Lidarr: {e:#}");
@@ -325,13 +330,14 @@ impl IncomingService {
     pub(super) async fn lidarr_view(cfg: Option<&settings::LidarrConfig>, client: Option<crate::lidarr::Lidarr>) -> Option<LidarrView> {
         let cfg = cfg?;
         let (version, error) = match client {
+            _ if !cfg.enabled => (None, None),
             Some(l) => match l.version().await {
                 Ok(v) => (Some(v), None),
                 Err(e) => (None, Some(format!("{e:#}"))),
             },
             None => (None, Some("the API key is not usable".into())),
         };
-        Some(LidarrView { url: cfg.url.clone(), key_set: !cfg.api_key.is_empty(), version, error })
+        Some(LidarrView { url: cfg.url.clone(), key_set: !cfg.api_key.is_empty(), enabled: cfg.enabled, version, error })
     }
 
     pub(super) fn trash_days(&self) -> u32 {
@@ -377,6 +383,24 @@ impl IncomingService {
         let hidden = self.hidden.lock().await.clone();
         for view in &mut sources {
             view.albums.retain(|a| !hidden.contains(&a.id));
+        }
+        // What each album lacks, where it is Cratarr's own (its ids are the library's).
+        let lacking: std::collections::HashMap<String, Vec<&'static str>> = match crate::serve::instance() {
+            Some(served) => {
+                let lib = served.library.clone();
+                tokio::task::spawn_blocking(move || lib.lacking())
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|l| (l.id.clone(), l.words()))
+                    .collect()
+            }
+            None => Default::default(),
+        };
+        for view in &mut sources {
+            view.lacks = view.albums.iter().filter_map(|a| Some((a.id.clone(), lacking.get(&a.id)?.clone()))).collect();
         }
         if let Some((library, incoming)) = self.owned_index().await {
             let folders = self.lib.catalogue().folders();
@@ -1291,6 +1315,7 @@ impl IncomingService {
             as_of: epoch_now(),
             verdicts: BTreeMap::new(),
             deletable: Vec::new(),
+            lacks: BTreeMap::new(),
             libraries: libraries.to_vec(),
         }
     }

@@ -154,7 +154,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/scrobble/listenbrainz", post(scrobble_listenbrainz))
         .route("/api/scrobble/lastfm", post(scrobble_lastfm))
         .route("/api/scrobble/lastfm/callback/{code}", get(scrobble_lastfm_callback))
-        .route("/api/scrobble/{target}", axum::routing::delete(scrobble_forget))
+        .route("/api/scrobble/{target}", axum::routing::put(scrobble_on).delete(scrobble_forget))
         // The administrators' (decision 0051): the server's settings, what comes in, the library's changes and its
         // health, the folders, the diagnostics.
         .merge(
@@ -2818,6 +2818,21 @@ fn urlencoding_lite(s: &str) -> String {
         .collect()
 }
 
+#[derive(Deserialize)]
+struct SwitchedOn {
+    on: bool,
+}
+
+/// A listening service switched on or off, its sign-in kept.
+async fn scrobble_on(Path(target): Path<String>, Json(b): Json<SwitchedOn>) -> Result<StatusCode, ApiError> {
+    let (serve, account) = scrobbler()?;
+    let found = tokio::task::spawn_blocking(move || serve.userdata.set_scrobble_on(&account, &target, b.on))
+        .await
+        .map_err(scrobble_refused)?
+        .map_err(|e| scrobble_refused(format!("{e:#}")))?;
+    Ok(if found { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND })
+}
+
 /// A listening service disconnected, with what waited for it.
 async fn scrobble_forget(Path(target): Path<String>) -> Result<StatusCode, ApiError> {
     let (serve, account) = scrobbler()?;
@@ -3040,16 +3055,26 @@ async fn home_digging(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) 
 
 /// How many artists Home's Artists to explore shows: the open one and the others.
 const EXPLORE: usize = 7;
+/// Of the artists to explore, how many not read yet are read on one visit while too few have a biography.
+const READ_NOW: usize = 3;
 
 /// Home's Artists to explore (the owner, 2026-10-23): artists of the libraries switched on with two albums or more, in a
-/// new random order each time; the first one TheAudioDB knows open (its description and photo, read now when it never
-/// was), each with its four biggest albums.
+/// new random order each time, only those TheAudioDB has a biography of (the owner, 2026-10-24); the first with a photo
+/// open, each with its four biggest albums.
 async fn home_artists(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) -> Result<Json<serde_json::Value>, ApiError> {
     let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
     let on = app.insights.folders_on(q.source.as_deref(), &without);
     let lib = served.library.clone();
-    let rows = tokio::task::spawn_blocking(move || lib.artist_albums()).await.map_err(anyhow::Error::from).and_then(|r| r).map_err(ToggleError::from)?;
+    let rows = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        // Home shows no album without a cover (the owner, 2026-10-24).
+        let coverless = lib.coverless()?;
+        Ok(lib.artist_albums()?.into_iter().filter(|r| !coverless.contains(&r.3)).collect::<Vec<_>>())
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r)
+    .map_err(ToggleError::from)?;
     // Per artist, their albums in the libraries switched on, the biggest first.
     let mut by: std::collections::BTreeMap<String, (String, Option<String>, Vec<(i64, String)>)> = Default::default();
     for (artist, name, mbid, album, folder, tracks) in rows {
@@ -3074,30 +3099,42 @@ async fn home_artists(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) 
         seed ^= seed << 17;
         pool.swap(i, (seed % (i as u64 + 1)) as usize);
     }
-    pool.truncate(EXPLORE * 4);
-    let store = app.artists.clone();
-    let keys: Vec<String> = pool.iter().map(|(_, n, m, _)| crate::app::artists::key(n, m.as_deref())).collect();
-    let known = store.as_ref().map(|s| s.known(&keys)).unwrap_or_default();
-    // The open one: the first TheAudioDB knows, else the first (read now).
-    if let Some(i) = keys.iter().position(|k| known.contains(k)) {
-        pool.swap(0, i);
+    // Only artists with a biography (the owner, 2026-10-24): those read with one first, in the shuffled order; while
+    // too few, a few not read yet are read now (a handful a visit, so Home stays quick; the rest on later visits).
+    let Some(store) = app.artists.clone() else { return Ok(Json(json!({ "artists": [], "credit": "TheAudioDB" }))) };
+    let mut chosen: Vec<((String, String, Option<String>, Vec<String>), crate::app::artists::Info)> = Vec::new();
+    let mut unread = Vec::new();
+    for item in pool {
+        if chosen.len() >= EXPLORE {
+            break;
+        }
+        match store.get(&crate::app::artists::key(&item.1, item.2.as_deref())) {
+            Some(info) if info.bio.is_some() => chosen.push((item, info)),
+            Some(_) => {}
+            None => unread.push(item),
+        }
     }
-    pool.truncate(EXPLORE);
-    let first_info = match (&store, pool.first()) {
-        (Some(s), Some((_, name, mbid, _))) => s.get_or_read(name, mbid.as_deref()).await,
-        _ => None,
-    };
-    let artists: Vec<serde_json::Value> = pool
+    for item in unread.into_iter().take(READ_NOW) {
+        if chosen.len() >= EXPLORE {
+            break;
+        }
+        if let Some(info) = store.get_or_read(&item.1, item.2.as_deref()).await.filter(|i| i.bio.is_some()) {
+            chosen.push((item, info));
+        }
+    }
+    // The open one: the first with a photo, else the first.
+    if let Some(i) = chosen.iter().position(|(_, info)| info.photo.is_some()) {
+        chosen.swap(0, i);
+    }
+    let artists: Vec<serde_json::Value> = chosen
         .iter()
-        .enumerate()
-        .map(|(i, (id, name, mbid, albums))| {
-            let info = if i == 0 { first_info.clone() } else { store.as_ref().and_then(|s| s.get(&crate::app::artists::key(name, mbid.as_deref()))) };
+        .map(|((id, name, _, albums), info)| {
             json!({
                 "id": id,
                 "name": name,
                 "albums": albums,
-                "bio": info.as_ref().and_then(|i| i.bio.clone()),
-                "photo": info.as_ref().is_some_and(|i| i.photo.is_some()),
+                "bio": info.bio.clone(),
+                "photo": info.photo.is_some(),
             })
         })
         .collect();

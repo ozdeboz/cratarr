@@ -47,7 +47,7 @@
   import ProgressBar from './lib/ProgressBar.svelte';
   import { untrack } from 'svelte';
   import { inSidebar, live, panelShowsPlayer, player } from './lib/live.svelte';
-  import { closePlaylist, HEALTH as HEALTH_VIEW, healthOf, INSIGHTS as INSIGHTS_VIEW, insightsOf, keepViewed, panel, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace, viewPlaylist } from './lib/panel.svelte';
+  import { closePlaylist, HEALTH as HEALTH_VIEW, healthOf, INSIGHTS as INSIGHTS_VIEW, insightsOf, keepViewed, openedHere, panel, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace, viewPlaylist } from './lib/panel.svelte';
   import PlaylistView from './lib/PlaylistView.svelte';
   import { poll } from './lib/live.svelte';
   import { known, remember } from './lib/sources.svelte';
@@ -180,6 +180,9 @@
   const downloadsSplit = $derived(page === 'downloads' && player.roomy && (downloads.tracks.length > 0 || kept.items.length > 0));
   const split = $derived(settingsSplit || healthSplit || insightsSplit || downloadsSplit);
   const sidebar = $derived(split || inSidebar());
+  $effect(() => {
+    panel.split = split;
+  });
   // The visuals beside the page: in the panel where the player goes, while it is there (a narrow window: over the page).
   const visualsBeside = $derived(visuals.open && visuals.side && sidebar);
   // Over the page unless the player is beside it: a split page (Settings, Health, Insights) has the panel, not the
@@ -224,12 +227,17 @@
   const PLAYABLE = ['playlists', 'crates', 'library', 'downloads', 'local-albums', 'local-artists', 'local-tracks'];
   // A part of the settings in the panel (lib/SettingsPanel), when the panel shows one.
   const settingsShown = $derived(SECTIONS.find((x) => x.id === settingsOf(panel.viewed))?.id ?? (null as SettingsSection | null));
+  // What the panel showed when this page was entered (panel.arrived, see openedHere).
+  $effect(() => {
+    void page;
+    panel.arrived = untrack(() => panel.viewed);
+  });
   // Beside Settings' list a part is always open: the one last open in this browser, else the first; opened in place, so
   // Back leaves the page rather than closing it. Once it is known who is signed in (the server's parts are its
   // administrators'). Only while the address is Settings' own: leaving it (Back, a link) clears the part a moment before
   // `page` follows, and opening one then would write it into the next page's address.
   $effect(() => {
-    if (!settingsSplit || settingsShown || !me.known || fromHash() !== 'settings') return;
+    if (!settingsSplit || settingsShown || openedHere() || !me.known || fromHash() !== 'settings') return;
     const parts = SECTIONS.filter((x) => (!x.app || inApp) && (!x.admin || me.admin));
     const part = parts.find((x) => x.id === prefs.settingsPart) ?? parts[0];
     if (part) untrack(() => viewInPlace(SETTINGS_VIEW + part.id));
@@ -239,7 +247,7 @@
   });
   // Beside Health's list a problem is always open: the one last open while it lasts, else the first (the worst).
   $effect(() => {
-    if (!healthSplit || healthShown || !health.loaded || fromHash() !== 'health') return;
+    if (!healthSplit || healthShown || openedHere() || !health.loaded || fromHash() !== 'health') return;
     const keys = problems().map((x) => x.key);
     const part = keys.includes(prefs.healthPart) ? prefs.healthPart : keys[0];
     if (part) untrack(() => viewInPlace(HEALTH_VIEW + part));
@@ -249,7 +257,7 @@
   });
   // Beside Insights' list a view is always open: the one last open (its tab and section, which the views keep).
   $effect(() => {
-    if (!insightsSplit || insightsShown || fromHash() !== 'insights') return;
+    if (!insightsSplit || insightsShown || openedHere() || fromHash() !== 'insights') return;
     untrack(() => viewInPlace(INSIGHTS_VIEW + viewNow()));
   });
   const pagePill = $derived(PLAYABLE.includes(page));
@@ -569,7 +577,7 @@
 
   {#if playlistLayer}
     <div class="playlist-layer" role="dialog" aria-label="Playlist" style:--mini-h={`${miniSpace}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
-      {#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else}<PlaylistView />{/if}
+      {#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else}<PlaylistView full />{/if}
     </div>
   {/if}
   {#if mini}

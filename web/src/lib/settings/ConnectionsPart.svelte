@@ -44,6 +44,7 @@
   }
   const lidarrState = $derived.by(() => {
     const v = ed.lid.view;
+    if (v && !v.enabled) return { lead: 'off', line: 'Off' };
     if (!v) return { lead: 'off', line: 'Not checked yet' };
     return v.version ? { lead: 'on', line: `Connected to Lidarr ${v.version}` } : { lead: 'bad', line: v.error ?? 'Not connected' };
   });
@@ -166,6 +167,11 @@
 {:else if thing && thing in LISTENING}
   <ListeningPart {thing} />
 {:else if thing === LIDARR}
+  {#if s.lidarr}
+    <Group>
+      <Item name="Use Lidarr" toggle={{ checked: ed.lid.enabled, onchange: (on) => (ed.lid.enabled = on) }} />
+    </Group>
+  {/if}
   <Group title="Connection">
     <Item
       name="Server address"

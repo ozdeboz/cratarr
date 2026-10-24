@@ -193,7 +193,28 @@ impl Sessions {
         Ok((key, k))
     }
 
-    /// The API key `key` is, while it is not revoked; its use is noted.
+    /// Whether the keys for `purpose` are switched off (Connections, the owner 2026-10-24): kept, but refused.
+    pub fn purpose_off(&self, purpose: &str) -> bool {
+        self.db()
+            .query_row("SELECT 1 FROM settings WHERE name = ?1", params![format!("off:{purpose}")], |_| Ok(()))
+            .optional()
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
+    /// The keys for `purpose` switched on or off.
+    pub fn set_purpose_on(&self, purpose: &str, on: bool) -> Result<()> {
+        let name = format!("off:{purpose}");
+        if on {
+            self.db().execute("DELETE FROM settings WHERE name = ?1", params![name])?;
+        } else {
+            self.db().execute("INSERT OR REPLACE INTO settings (name, value) VALUES (?1, '1')", params![name])?;
+        }
+        Ok(())
+    }
+
+    /// The API key `key` is, while it is not revoked and what it is for is not switched off; its use is noted.
     pub fn check_key(&self, key: &str, now: i64) -> Option<ApiKey> {
         if !key.starts_with(KEY_PREFIX) {
             return None;
@@ -206,6 +227,11 @@ impl Sessions {
                 tracing::warn!("sessions: cannot read the keys: {e}");
                 None
             })?;
+        drop(db);
+        if found.purpose.as_deref().is_some_and(|p| self.purpose_off(p)) {
+            return None;
+        }
+        let db = self.db();
         if found.last_used.is_none_or(|t| now - t >= TOUCH_EVERY) {
             let _ = db.execute("UPDATE api_keys SET last_used = ?2 WHERE id = ?1", params![found.id, now]);
         }

@@ -5,7 +5,7 @@
   // state, its fields as rows, and Disconnect at the foot. The signed-in account's only; acts at once. ListenBrainz
   // connects with the user token from its settings page; Last.fm with the API key and shared secret made at
   // last.fm/api, then its own sign-in page, which comes back to this page.
-  import { forgetScrobble, getScrobbles, scrobbleLastFm, scrobbleListenBrainz, type ScrobbleTarget } from '../api';
+  import { forgetScrobble, getScrobbles, scrobbleLastFm, scrobbleListenBrainz, setScrobbleOn, type ScrobbleTarget } from '../api';
   import { backFromThing, openThing } from '../panel.svelte';
   import { nameThing } from '../settingsSections.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
@@ -39,6 +39,7 @@
   const of = (s: Service) => targets?.find((t) => t.target === s) ?? null;
   function stateOf(t: ScrobbleTarget | null): { lead: string; line: string; bad: boolean } {
     if (!t) return { lead: 'off', line: 'Not connected', bad: false };
+    if (!t.on) return { lead: 'off', line: `Off · ${t.name}`, bad: false };
     if (t.broken) return { lead: 'bad', line: t.broken, bad: true };
     const waiting = t.queued ? ` · ${t.queued.toLocaleString()} waiting${t.waiting ? `: ${t.waiting}` : ''}` : '';
     return { lead: 'on', line: `Sending as ${t.name}${waiting}`, bad: false };
@@ -74,6 +75,18 @@
     }
   }
 
+  // Switched off: nothing is sent and nothing queued meanwhile; the sign-in stays.
+  async function switchOn(s: Service, on: boolean) {
+    error = null;
+    targets = targets?.map((t) => (t.target === s ? { ...t, on } : t)) ?? null;
+    try {
+      await setScrobbleOn(s, on);
+    } catch (e) {
+      error = said(e);
+    }
+    load();
+  }
+
   let typing = $state<'token' | 'key' | 'secret' | null>(null);
   let forgetting = $state(false);
   async function forget(s: Service) {
@@ -103,6 +116,16 @@
 {:else}
   {@const t = of(service)}
   {@const st = stateOf(t)}
+  {#if t}
+    {@const s = service}
+    <Group>
+      <Item
+        name={`Use ${NAMES[s]}`}
+        line={t.on ? null : 'Nothing is sent meanwhile, and your sign-in stays'}
+        toggle={{ checked: t.on, onchange: (on) => switchOn(s, on) }}
+      />
+    </Group>
+  {/if}
   <Group title="Connection" more={MORE}>
     <Item lead={st.lead} name={t && !t.broken ? 'Connected' : 'Not connected'} line={t ? st.line : null} tone={st.bad ? 'bad' : null} wrap />
     {#if error}<Item lead="bad" name={error} wrap />{/if}

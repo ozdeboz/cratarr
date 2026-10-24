@@ -83,7 +83,8 @@ CREATE TABLE IF NOT EXISTS plays (
 CREATE INDEX IF NOT EXISTS plays_by_user ON plays (user, at);
 CREATE UNIQUE INDEX IF NOT EXISTS plays_by_event ON plays (event) WHERE event IS NOT NULL;
 -- The listening services an account sends its plays to (app::scrobble): the service's user, what it needs to sign in
--- (JSON), and why it stopped (its login refused) until connected again.
+-- (JSON), and why it stopped (its login refused) until connected again; `off`: switched off in Connections (the owner,
+-- 2026-10-24), its sign-in kept and nothing queued meanwhile.
 CREATE TABLE IF NOT EXISTS scrobble_target (
   user TEXT NOT NULL, target TEXT NOT NULL, name TEXT NOT NULL, secret TEXT NOT NULL, broken TEXT, at INTEGER NOT NULL,
   PRIMARY KEY (user, target)) WITHOUT ROWID;
@@ -403,6 +404,8 @@ pub struct ScrobbleTarget {
     pub name: String,
     /// Why it stopped sending, until connected again.
     pub broken: Option<String>,
+    /// Switched on (sending), or off with its sign-in kept.
+    pub on: bool,
     /// Plays waiting to be sent, and why the last try failed.
     pub queued: u64,
     pub waiting: Option<String>,
@@ -450,6 +453,15 @@ fn snapshot_of(r: &rusqlite::Row) -> rusqlite::Result<Snapshot> {
 
 const SNAPSHOT_COLUMNS: &str = "id, name, settings, created, picture";
 
+/// Listening services from before they could be switched off: on. Safe to repeat.
+fn add_scrobble_off(conn: &Connection) -> Result<()> {
+    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('scrobble_target') WHERE name = 'off'")?.exists([])?;
+    if !has {
+        conn.execute_batch("ALTER TABLE scrobble_target ADD COLUMN off INTEGER NOT NULL DEFAULT 0")?;
+    }
+    Ok(())
+}
+
 /// Snapshots made before they had pictures (preview 63) get the column, empty. Safe to repeat.
 fn add_snapshot_pictures(conn: &Connection) -> Result<()> {
     let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('visual_snapshot') WHERE name = 'picture'")?.exists([])?;
@@ -480,6 +492,7 @@ impl UserData {
         conn.execute_batch(ALBUM_HEARTS).context("moving the panel's album hearts to the albums' stars")?;
         move_old_play_queues(&conn).context("moving the saved play queues to their apps")?;
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
+        add_scrobble_off(&conn)?;
         conn.execute_batch(WEEK_BEFORE_THE_LOG).context("writing the week before the log from the last plays")?;
         Ok(Self { db: Mutex::new(conn) })
     }
@@ -614,7 +627,7 @@ impl UserData {
         // transaction (decision 0068). Imported listens never count, so none of them goes back.
         if h.counts {
             tx.execute(
-                "INSERT INTO scrobble_queue (user, target, song, at) SELECT ?1, target, ?2, ?3 FROM scrobble_target WHERE user = ?1 AND broken IS NULL",
+                "INSERT INTO scrobble_queue (user, target, song, at) SELECT ?1, target, ?2, ?3 FROM scrobble_target WHERE user = ?1 AND broken IS NULL AND off = 0",
                 params![user, song.0, h.at],
             )?;
         }
@@ -648,6 +661,16 @@ impl UserData {
         Ok(())
     }
 
+    /// A listening service switched on or off (its sign-in kept): off, nothing more is queued for it, and what waits
+    /// stays until it is on again.
+    pub fn set_scrobble_on(&self, user: &str, target: &str, on: bool) -> Result<bool> {
+        let n = self.db().execute("UPDATE scrobble_target SET off = ?3 WHERE user = ?1 AND target = ?2", params![user, target, i64::from(!on)])?;
+        if on {
+            self.db().execute("UPDATE scrobble_queue SET next = 0, tries = 0 WHERE user = ?1 AND target = ?2", params![user, target])?;
+        }
+        Ok(n > 0)
+    }
+
     /// A listening service disconnected: it and its waiting plays go.
     pub fn forget_scrobble_target(&self, user: &str, target: &str) -> Result<()> {
         let db = self.db();
@@ -660,22 +683,29 @@ impl UserData {
     pub fn scrobble_targets(&self, user: &str) -> Result<Vec<ScrobbleTarget>> {
         let db = self.db();
         let mut st = db.prepare_cached(
-            "SELECT t.target, t.name, t.broken,
+            "SELECT t.target, t.name, t.broken, t.off,
                     (SELECT count(*) FROM scrobble_queue q WHERE q.user = t.user AND q.target = t.target),
                     (SELECT why FROM scrobble_queue q WHERE q.user = t.user AND q.target = t.target AND q.why IS NOT NULL ORDER BY q.at LIMIT 1)
              FROM scrobble_target t WHERE t.user = ?1 ORDER BY t.target",
         )?;
         let rows = st.query_map([user], |r| {
-            Ok(ScrobbleTarget { target: r.get(0)?, name: r.get(1)?, broken: r.get(2)?, queued: r.get::<_, i64>(3)?.max(0) as u64, waiting: r.get(4)? })
+            Ok(ScrobbleTarget {
+                target: r.get(0)?,
+                name: r.get(1)?,
+                broken: r.get(2)?,
+                on: r.get::<_, i64>(3)? == 0,
+                queued: r.get::<_, i64>(4)?.max(0) as u64,
+                waiting: r.get(5)?,
+            })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// What a user's service signs in with (JSON), while it is not stopped.
+    /// What a user's service signs in with (JSON), while it is on and not stopped.
     pub fn scrobble_secret(&self, user: &str, target: &str) -> Result<Option<String>> {
         Ok(self
             .db()
-            .query_row("SELECT secret FROM scrobble_target WHERE user = ?1 AND target = ?2 AND broken IS NULL", params![user, target], |r| r.get(0))
+            .query_row("SELECT secret FROM scrobble_target WHERE user = ?1 AND target = ?2 AND broken IS NULL AND off = 0", params![user, target], |r| r.get(0))
             .optional()?)
     }
 
@@ -689,7 +719,7 @@ impl UserData {
         let db = self.db();
         let mut st = db.prepare_cached(
             "SELECT q.id, q.user, q.target, q.song, q.at, q.tries FROM scrobble_queue q
-             JOIN scrobble_target t ON t.user = q.user AND t.target = q.target AND t.broken IS NULL
+             JOIN scrobble_target t ON t.user = q.user AND t.target = q.target AND t.broken IS NULL AND t.off = 0
              WHERE q.next <= ?1 ORDER BY q.at LIMIT ?2",
         )?;
         let rows = st.query_map(params![now, limit as i64], |r| {

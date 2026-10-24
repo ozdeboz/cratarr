@@ -146,6 +146,37 @@ pub fn files(issues: &BTreeMap<String, u64>) -> Vec<Finding> {
     out
 }
 
+/// The library's albums lacking what it requires, a finding for each kind, each album opening its panel: the cover,
+/// the year, the genre, the album artist and the track numbers are warnings; the MusicBrainz id, which many lack and
+/// which only some things use (Lidarr, Discover, exact imports), is told.
+pub fn library(rows: &[crate::serve::library::Lacks]) -> Vec<Finding> {
+    type Pick = fn(&crate::serve::library::Lacks) -> bool;
+    let kinds: [(&str, Level, &str, &str, Pick); 6] = [
+        ("cover", Level::Warning, "album without a cover", "albums without a cover", |r| r.cover),
+        ("year", Level::Warning, "album without a year", "albums without a year", |r| r.year),
+        ("genre", Level::Warning, "album without a genre", "albums without a genre", |r| r.genre),
+        ("album-artist", Level::Warning, "album without an album artist", "albums without an album artist", |r| r.album_artist),
+        ("track-numbers", Level::Warning, "album with tracks unnumbered", "albums with tracks unnumbered", |r| r.track_no),
+        ("musicbrainz", Level::Info, "album without its MusicBrainz id", "albums without their MusicBrainz id", |r| r.musicbrainz),
+    ];
+    let mut out = Vec::new();
+    for (key, level, one, many, pick) in kinds {
+        let mut hit: Vec<&crate::serve::library::Lacks> = rows.iter().filter(|r| pick(r)).collect();
+        if hit.is_empty() {
+            continue;
+        }
+        hit.sort_by(|a, b| a.artist.to_lowercase().cmp(&b.artist.to_lowercase()).then_with(|| a.name.cmp(&b.name)));
+        let mut f = finding("library", format!("library:{key}"), level, hit.len() as u64, n(hit.len() as u64, one, many));
+        f.items = hit
+            .iter()
+            .take(ITEMS)
+            .map(|r| Item { title: r.name.clone(), line: Some(r.artist.clone()), album: Some((crate::source::cratarr::KIND.id.to_string(), r.id.clone())), ..Item::default() })
+            .collect();
+        out.push(f);
+    }
+    out
+}
+
 /// Incoming's albums as they stand to Music (decision 0034), and the conversions that failed. Dealt with on their items'
 /// own pages (the comparison, the album's menu), not the Library, whose own filter could hide them (the owner,
 /// 2026-10-24): no `open`.
@@ -167,11 +198,19 @@ impl App {
     /// Every domain's findings now (decision 0063), worst first, the most recent first among equals.
     pub async fn health_report(&self) -> Report {
         let at = now();
-        let (files, playlists, incoming, analysis, servers) =
-            tokio::join!(self.check_files(), self.check_playlists(), self.check_incoming(), self.check_analysis(), self.check_servers());
+        let (files, playlists, incoming, analysis, servers, library) = tokio::join!(
+            self.check_files(),
+            self.check_playlists(),
+            self.check_incoming(),
+            self.check_analysis(),
+            self.check_servers(),
+            self.check_library()
+        );
         let mut findings = Vec::new();
         let mut checked = BTreeMap::new();
-        for (domain, found) in [("files", files), ("playlists", playlists), ("incoming", incoming), ("analysis", analysis), ("servers", servers)] {
+        for (domain, found) in
+            [("files", files), ("playlists", playlists), ("incoming", incoming), ("analysis", analysis), ("servers", servers), ("library", library)]
+        {
             findings.extend(or_failed(domain, found));
             checked.insert(domain, at);
         }
@@ -188,6 +227,17 @@ impl App {
         let c = self.library.catalogue();
         let status = tokio::task::spawn_blocking(move || c.status()).await??;
         Ok(files(&status.issues))
+    }
+
+    /// Music's albums lacking what the library requires (the owner, 2026-10-24): Incoming's are marked there instead.
+    async fn check_library(&self) -> anyhow::Result<Vec<Finding>> {
+        let Some(served) = crate::serve::instance() else { return Ok(Vec::new()) };
+        let music = self.library.folders().music;
+        let folders = self.library.catalogue().folders();
+        let music = music.and_then(|m| folders.iter().position(|f| f == std::path::Path::new(&m))).map(|i| i as i64);
+        let lib = served.library.clone();
+        let rows = tokio::task::spawn_blocking(move || lib.lacking()).await??;
+        Ok(library(&rows.into_iter().filter(|r| music.is_none_or(|m| r.folder == m)).collect::<Vec<_>>()))
     }
 
     /// One's own playlists' tracks whose file is gone (the Repair view, one playlist at a time).

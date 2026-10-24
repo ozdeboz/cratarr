@@ -219,6 +219,27 @@
           : fmOwn.undone,
   );
   const fmReady = $derived(!!fmUser.trim() && (!!fmKey.trim() || fmKeyKept));
+  // The loved tracks the library does not have: their albums (the most first), the tracks, and the whole list to copy.
+  const lovedMissing = $derived(fm.result?.loved_missing ?? []);
+  const lovedAlbums = $derived.by(() => {
+    const by = new Map<string, { album: string; artist: string; tracks: number }>();
+    for (const m of lovedMissing) {
+      if (!m.album) continue;
+      const k = `${m.artist.toLowerCase()}\n${m.album.toLowerCase()}`;
+      const a = by.get(k) ?? { album: m.album, artist: m.artist, tracks: 0 };
+      a.tracks++;
+      by.set(k, a);
+    }
+    return [...by.values()].sort((a, b) => b.tracks - a.tracks || a.artist.localeCompare(b.artist));
+  });
+  let lovedAll = $state(false);
+  let albumsAll = $state(false);
+  let lovedCopied = $state(false);
+  async function copyLoved() {
+    const text = lovedMissing.map((m) => [m.artist, m.title, m.album ?? ''].join('\t')).join('\n');
+    await navigator.clipboard?.writeText(`Artist\tTitle\tAlbum\n${text}\n`);
+    lovedCopied = true;
+  }
 
   // Files: chosen here, read by the server one at a time, kept nowhere. Each its result; a playlist made can be undone,
   // a history's listens are taken back by their kind.
@@ -396,6 +417,28 @@
       {/each}
       {#if t.missing_tracks > t.missing.length}<Item name={`And ${n(t.missing_tracks - t.missing.length)} more`} />{/if}
     </Group>
+  {/if}
+  {#if lovedMissing.length}
+    <Group
+      title={`Loved, not in your library (${n(lovedMissing.length)})`}
+      more="Last.fm keeps no album with a love: each is the album the track was most often scrobbled from, where it was."
+    >
+      <Item name="Copy the list" line={lovedCopied ? 'Copied: artist, title and album, a line each' : 'Artist, title and album, a line each'}>
+        <button onclick={copyLoved}>Copy</button>
+      </Item>
+      {#each lovedAll ? lovedMissing : lovedMissing.slice(0, 20) as m, i (i)}
+        <Item name={m.title} line={m.album ? `${m.artist} · ${m.album}` : m.artist} />
+      {/each}
+      {#if !lovedAll && lovedMissing.length > 20}<Item name={`Show all ${n(lovedMissing.length)}`} onclick={() => (lovedAll = true)} />{/if}
+    </Group>
+    {#if lovedAlbums.length}
+      <Group title={`Their albums (${n(lovedAlbums.length)})`}>
+        {#each albumsAll ? lovedAlbums : lovedAlbums.slice(0, 20) as a (`${a.artist}\n${a.album}`)}
+          <Item name={a.album} line={`${a.artist} · ${a.tracks} loved ${a.tracks === 1 ? 'track' : 'tracks'}`} />
+        {/each}
+        {#if !albumsAll && lovedAlbums.length > 20}<Item name={`Show all ${n(lovedAlbums.length)}`} onclick={() => (albumsAll = true)} />{/if}
+      </Group>
+    {/if}
   {/if}
   <Group>
     <Item name="Undo the import" kind="danger" disabled={!fmUser.trim()} onclick={() => (fmUndoing = true)} />

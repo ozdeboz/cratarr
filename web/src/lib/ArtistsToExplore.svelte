@@ -204,6 +204,10 @@
     overflow: hidden;
     color: rgb(255 255 255 / 0.86);
     font-size: 0.94rem;
+    /* Always as tall as its lines, a short biography or a long one: changing artists moves nothing (the owner,
+       2026-10-24). */
+    line-height: 1.4;
+    height: calc(3 * 1.4em);
     -webkit-line-clamp: 3;
     line-clamp: 3;
     -webkit-box-orient: vertical;
@@ -260,6 +264,7 @@
 
     .bio {
       grid-area: bio;
+      height: calc(5 * 1.4em);
       -webkit-line-clamp: 5;
       line-clamp: 5;
     }

@@ -618,6 +618,47 @@ impl Library {
         Ok(rows)
     }
 
+    /// Every album lacking something the library requires (the owner, 2026-10-24): its cover, year, genre, album
+    /// artist, a track number, its MusicBrainz id.
+    pub fn lacking(&self) -> Result<Vec<Lacks>> {
+        let db = self.db();
+        let mut st = db.prepare(
+            "SELECT al.id, al.name, al.artist, al.folder,
+                    al.cover IS NULL,
+                    al.year IS NULL OR al.year = 0,
+                    al.genres = '',
+                    EXISTS (SELECT 1 FROM songs s WHERE s.album_id = al.id AND (s.album_artist IS NULL OR s.album_artist = '')),
+                    EXISTS (SELECT 1 FROM songs s WHERE s.album_id = al.id AND (s.track_no IS NULL OR s.track_no = 0)),
+                    al.mbid IS NULL OR al.mbid = ''
+             FROM albums al",
+        )?;
+        let rows = st
+            .query_map([], |r| {
+                Ok(Lacks {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    artist: r.get(2)?,
+                    folder: r.get(3)?,
+                    cover: r.get(4)?,
+                    year: r.get(5)?,
+                    genre: r.get(6)?,
+                    album_artist: r.get(7)?,
+                    track_no: r.get(8)?,
+                    musicbrainz: r.get(9)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows.into_iter().filter(Lacks::any).collect())
+    }
+
+    /// The albums without a cover: Home leaves them out (the owner, 2026-10-24).
+    pub fn coverless(&self) -> Result<std::collections::HashSet<String>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id FROM albums WHERE cover IS NULL")?;
+        let ids = st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(ids)
+    }
+
     /// Each of these songs' catalogue folder (those the library has).
     pub fn song_folders(&self, ids: &[String]) -> Result<std::collections::HashMap<String, i64>> {
         let db = self.db();
@@ -968,5 +1009,41 @@ mod tests {
         assert_eq!(order_name("Theatre"), "theatre");
         assert_eq!(year_of("1997-09-22"), Some(1997));
         assert_eq!(leading_number("03/12"), Some(3));
+    }
+}
+
+/// What an album lacks of what the library requires (`Library::lacking`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Lacks {
+    pub id: String,
+    pub name: String,
+    pub artist: String,
+    pub folder: i64,
+    pub cover: bool,
+    pub year: bool,
+    pub genre: bool,
+    pub album_artist: bool,
+    pub track_no: bool,
+    pub musicbrainz: bool,
+}
+
+impl Lacks {
+    pub fn any(&self) -> bool {
+        self.cover || self.year || self.genre || self.album_artist || self.track_no || self.musicbrainz
+    }
+
+    /// What it lacks, in words (Incoming's marks).
+    pub fn words(&self) -> Vec<&'static str> {
+        [
+            (self.cover, "cover"),
+            (self.year, "year"),
+            (self.genre, "genre"),
+            (self.album_artist, "album artist"),
+            (self.track_no, "track numbers"),
+            (self.musicbrainz, "MusicBrainz id"),
+        ]
+        .into_iter()
+        .filter_map(|(lacks, word)| lacks.then_some(word))
+        .collect()
     }
 }

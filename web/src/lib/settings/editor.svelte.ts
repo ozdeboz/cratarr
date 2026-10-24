@@ -96,7 +96,7 @@ class SettingsEditor {
   importing = $derived(!!this.imp.job && this.imp.job.finished === null);
 
   // Lidarr as the page edits it; the saved key is never sent here.
-  lid = $state({ url: '', key: '', view: null as LidarrView | null, busy: false, removing: false });
+  lid = $state({ url: '', key: '', enabled: true, view: null as LidarrView | null, busy: false, removing: false });
 
   rules = $derived<TagRules>({
     artist_separators: fromWords(this.ruleText.artistSeps),
@@ -104,7 +104,12 @@ class SettingsEditor {
     artist_keep: fromLines(this.ruleText.artistKeep),
     genre_keep: fromLines(this.ruleText.genreKeep),
   });
-  lidarrChanged = $derived(!!this.s && (this.lid.url.trim().replace(/\/+$/, '') !== (this.s.lidarr?.url ?? '') || this.lid.key.trim() !== ''));
+  lidarrChanged = $derived(
+    !!this.s &&
+      (this.lid.url.trim().replace(/\/+$/, '') !== (this.s.lidarr?.url ?? '') ||
+        this.lid.key.trim() !== '' ||
+        (!!this.s.lidarr && this.lid.enabled !== this.s.lidarr.enabled)),
+  );
   /** The saved key is only reused for the same address. */
   lidarrKeyNeeded = $derived(!!this.s?.lidarr?.key_set && this.lid.url.trim().replace(/\/+$/, '') !== this.s.lidarr.url && this.lid.url.trim() !== '');
   /** Lidarr only matters to Incoming. */
@@ -149,7 +154,7 @@ class SettingsEditor {
       genreKeep: next.tag_rules.genre_keep.join('\n'),
     };
     this.cat = next.catalogue;
-    this.lid = { url: next.lidarr?.url ?? '', key: '', view: next.lidarr, busy: false, removing: false };
+    this.lid = { url: next.lidarr?.url ?? '', key: '', enabled: next.lidarr?.enabled ?? true, view: next.lidarr, busy: false, removing: false };
     this.trashDays = next.trash_days;
     if (next.music_folder) this.loadNaming();
     this.drafts = next.sources.map((v) => ({
@@ -370,7 +375,7 @@ class SettingsEditor {
   save = async () => {
     this.saving = true;
     try {
-      const lidarr = this.lidarrChanged ? { url: this.lid.url.trim(), api_key: this.lid.key.trim() } : undefined;
+      const lidarr = this.lidarrChanged ? { url: this.lid.url.trim(), api_key: this.lid.key.trim(), enabled: this.lid.enabled } : undefined;
       const namingChanged = !!this.namingInUse && this.naming.trim() !== this.namingInUse;
       this.fill(
         await saveSettings(

@@ -136,6 +136,13 @@ pub struct LidarrConfig {
     /// Secret: never sent to the page; reused only while the address stays the same.
     #[serde(default)]
     pub api_key: String,
+    /// Switched on (the owner, 2026-10-24: every connection has its switch); off, Cratarr does not use it.
+    #[serde(default = "switched_on")]
+    pub enabled: bool,
+}
+
+fn switched_on() -> bool {
+    true
 }
 
 /// Everything the Settings page saves.
@@ -261,7 +268,7 @@ pub fn from_env(env: &dyn Fn(&str) -> Option<String>) -> Vec<SourceConfig> {
 /// Lidarr from `LIDARR_URL` and `LIDARR_API_KEY` (until one is saved); nothing unless both are set.
 pub fn lidarr_from_env(env: &dyn Fn(&str) -> Option<String>) -> Option<LidarrConfig> {
     let get = |k: &str| env(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
-    Some(LidarrConfig { url: get("LIDARR_URL")?, api_key: get("LIDARR_API_KEY")? })
+    Some(LidarrConfig { url: get("LIDARR_URL")?, api_key: get("LIDARR_API_KEY")?, enabled: true })
 }
 
 /// Check the Lidarr from the page against the saved one: a blank address removes it; a blank key keeps the saved
@@ -275,11 +282,12 @@ pub fn merge_lidarr(saved: Option<&LidarrConfig>, draft: LidarrConfig) -> Result
         return Err(ChangeError::Invalid("Lidarr: the address must start with http:// or https://".into()));
     }
     let key = draft.api_key.trim().to_string();
+    let enabled = draft.enabled;
     if !key.is_empty() {
-        return Ok(Some(LidarrConfig { url, api_key: key }));
+        return Ok(Some(LidarrConfig { url, api_key: key, enabled }));
     }
     match saved.filter(|s| !s.api_key.is_empty()) {
-        Some(s) if s.url == url => Ok(Some(LidarrConfig { url, api_key: s.api_key.clone() })),
+        Some(s) if s.url == url => Ok(Some(LidarrConfig { url, api_key: s.api_key.clone(), enabled })),
         Some(_) => Err(ChangeError::SecretNeeded { name: "Lidarr".into(), field: "address".into(), secret: "API key".into() }),
         None => Err(ChangeError::Invalid("Lidarr: the API key is required".into())),
     }

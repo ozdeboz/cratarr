@@ -222,6 +222,44 @@ fn event(s: &Scrobble) -> String {
 pub struct Imported {
     pub scrobbles: Tally,
     pub loved: Tally,
+    /// Every loved track the library does not have (the owner, 2026-10-24: "a list of these tracks and their albums"),
+    /// by artist, album and title. Last.fm keeps no album with a love: it is the one the track was most often
+    /// scrobbled from, where it was.
+    pub loved_missing: Vec<Wanted>,
+}
+
+/// A loved track the library does not have.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Wanted {
+    pub artist: String,
+    pub title: String,
+    pub album: Option<String>,
+}
+
+/// The album each track was most often scrobbled from (by artist and title, as the matcher keys them).
+fn albums_of(scrobbles: &[Scrobble]) -> HashMap<(String, String), String> {
+    let mut counts: HashMap<(String, String), HashMap<&str, usize>> = HashMap::new();
+    for s in scrobbles {
+        if let Some(a) = s.album.as_deref() {
+            *counts.entry((key(&s.artist), key(&s.title))).or_default().entry(a).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .filter_map(|(k, by)| by.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(a.0))).map(|(a, _)| (k, a.to_string())))
+        .collect()
+}
+
+/// The loved tracks not `found`, each once, with the album they were scrobbled from; by artist, album and title.
+fn wanted(loved: &[Scrobble], found: impl Fn(&Scrobble) -> bool, albums: &HashMap<(String, String), String>) -> Vec<Wanted> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<Wanted> = loved
+        .iter()
+        .filter(|s| !found(s) && seen.insert((key(&s.artist), key(&s.title))))
+        .map(|s| Wanted { artist: s.artist.clone(), title: s.title.clone(), album: albums.get(&(key(&s.artist), key(&s.title))).cloned() })
+        .collect();
+    out.sort_by_cached_key(|w| (key(&w.artist), w.album.as_deref().map(key), key(&w.title)));
+    out
 }
 
 /// `user`'s scrobbles and loves: as read within the hour plus what came since, or read now.
@@ -264,6 +302,7 @@ async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: 
         let key = ImportKey { account: &account, source: SOURCE, server_user: &user };
         let mut l = Counter::default();
         let mut found: HashMap<String, Option<i64>> = HashMap::new();
+        let loved_missing = wanted(&loved, |s| songs.find(&track(s)).is_some(), &albums_of(&scrobbles));
         for s in &loved {
             match songs.find(&track(s)) {
                 Some(song) => {
@@ -290,7 +329,7 @@ async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: 
         if !preview {
             serve.userdata.apply_import(key, &changes)?;
         }
-        Ok(Imported { scrobbles: scrobbled, loved: l.tally() })
+        Ok(Imported { scrobbles: scrobbled, loved: l.tally(), loved_missing })
     })
     .await?
 }
@@ -319,6 +358,22 @@ pub fn undo(serve: &crate::serve::Serve, account: &str, user: &str) -> Result<Un
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_loved_track_not_in_the_library_is_listed_once_with_the_album_it_was_scrobbled_from() {
+        let s = |artist: &str, title: &str, album: Option<&str>| Scrobble { at: 0, artist: artist.into(), title: title.into(), album: album.map(Into::into), recording: None };
+        let scrobbles = [s("Bonobo", "Kerala", Some("Migration")), s("Bonobo", "Kerala", Some("Migration")), s("Bonobo", "Kerala", Some("Kerala (Remixes)")), s("Air", "Alone in Kyoto", None)];
+        let loved = [s("Bonobo", "Kerala", None), s("bonobo", "kerala", None), s("Air", "Alone in Kyoto", None), s("Air", "Venus", None)];
+        let got = wanted(&loved, |x| x.title == "Venus", &albums_of(&scrobbles));
+        assert_eq!(
+            got,
+            [
+                Wanted { artist: "Air".into(), title: "Alone in Kyoto".into(), album: None },
+                Wanted { artist: "Bonobo".into(), title: "Kerala".into(), album: Some("Migration".into()) },
+            ],
+            "the found one left out, the same track once, the album most scrobbled from"
+        );
+    }
 
     #[test]
     fn last_fms_answer_reads_into_scrobbles_without_the_one_playing_now() {

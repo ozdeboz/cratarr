@@ -118,7 +118,7 @@
   import { isKept, setKept } from './kept.svelte';
   import { longpress } from './longpress';
   import { isLocal, playlistsKnown, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
-  import { albumMoved, albumOf, artistOf, artistSubject, backToTracks, closePlaylist, NEW_PLAYLIST, panelDepth, viewOver, viewPlaylist, panel, TABS } from './panel.svelte';
+  import { albumMoved, albumOf, artistOf, artistSubject, backToTracks, closePlaylist, goHome, NEW_PLAYLIST, panelDepth, viewOver, viewPlaylist, panel, TABS } from './panel.svelte';
   import ArtistBody from './ArtistBody.svelte';
   import ArtistMenu from './ArtistMenu.svelte';
   import { coverKey, localCovers } from './localCovers.svelte';
@@ -908,7 +908,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
     void id;
     stuck = false;
   });
-  // Back is offered when the panel has a view before this one (each view is a history step of its own); ✕ always.
+  // How it is left (ui-conventions, Panels; the owner, 2026-10-24): full screen (a phone; a window without room beside
+  // the page), Back always, closing it where there is no view before this one, and Home beside it, as the navigation
+  // under it is out of reach; beside the page, ✕, and Back where there is a view before this one. Every mode and view
+  // of the panel the same, in the same place.
+  let { full = false }: { full?: boolean } = $props();
   let canGoBack = $state(false);
   $effect(() => {
     void panel.viewed;
@@ -1498,10 +1502,20 @@ ${r.album_artist ?? r.artist ?? ''}`;
   });
 </script>
 
+{#snippet leave()}
+  {#if full}
+    <button aria-label="Back" title="Back" onclick={() => (canGoBack ? history.back() : closePlaylist())}><Icon name="back" size={22} /></button>
+    <button aria-label="Home" title="Home" onclick={goHome}><Icon name="home" size={22} /></button>
+  {:else}
+    {#if canGoBack}<button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button>{/if}
+    <button aria-label={closeLabel} title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button>
+  {/if}
+{/snippet}
+
 <section class="view" aria-label={title}>
   {#if making}
     <div class="bar">
-      <button class="icon" aria-label="Close the crate" onclick={() => closePlaylist()}><Icon name="close" size={24} /></button>
+      <span class="navpill">{@render leave()}</span>
       <span class="end">
         <button class="barbtn iconic" aria-label="Cancel" title="Cancel" onclick={() => (making = null)} disabled={making.saving}><Icon name="reset" size={20} /></button>
         <button class="barbtn save" onclick={makePlaylist} disabled={making.saving || !making.name.trim()} aria-busy={making.saving}>Make playlist</button>
@@ -1512,7 +1526,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
     <!-- Another of the playlists' views (Info, Export, Repair, Sync; from their menu): back to the tracks, its name over
          theirs, the panel's place. -->
     <div class="bar sub">
-      <span class="navpill"><button aria-label="Back to the tracks" title="Back" onclick={backToTracks}><Icon name="back" size={22} /></button></span>
+      <span class="navpill"
+        ><button aria-label="Back to the tracks" title="Back" onclick={backToTracks}><Icon name="back" size={22} /></button
+        >{#if full}<button aria-label="Home" title="Home" onclick={goHome}><Icon name="home" size={22} /></button>{/if}</span
+      >
       <div class="subtitle">
         <h2>{TABS.find((t) => t.tab === tab)?.label}</h2>
         <p>{multi ? ids.join(', ') : title}</p>
@@ -1524,10 +1541,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
          filter, View and where it plays, and the panel's place, on the right (in edit mode the place only). Once the
          action bar has the top they float just under it. -->
     <div class="pills" class:below={stuck}>
-      <span class="navpill">
-        {#if canGoBack}<button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button>{/if}
-        <button aria-label={closeLabel} title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button>
-      </span>
+      <span class="navpill">{@render leave()}</span>
       <span class="end">{#if !editing && !crateEditing}<TopPill view order={listOrder} device={!playing()} filter={filterable} tempos={listTempos} {kind} counted={rows && shown ? { shown: shown.length, total: rows.length } : null} />{/if}<PanelPlace /></span>
     </div>
   {/if}
@@ -2201,10 +2215,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     fill: currentColor;
   }
 
-  /* The narrowest panel: the bar's icons a little closer, so ✕, the pencil, the pin, the heart, the menu and the
-     place button fit on one line. */
+  /* The narrowest panel: the place button a little closer, so the bar's buttons fit on one line. */
   @container (max-width: 299px) {
-    .bar .icon,
     .bar :global(.place) {
       width: 42px;
     }

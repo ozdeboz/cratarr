@@ -110,6 +110,11 @@ export const panel = $state({
   tab: 'tracks' as Tab,
   /** The player shows over what is viewed (the mini-player was tapped); folding the player shows it again. */
   playerTop: false,
+  /** The page keeps the panel beside its list (Settings, Health, Insights, Downloads on a roomy window): its place
+   *  cannot change there, so nothing offers to (PanelPlace). */
+  split: false,
+  /** What it showed when the page was entered (openedHere). */
+  arrived: null as string | null,
   /** Bumped when the viewed playlist is viewed again: its view scrolls back to the top. */
   again: 0,
 });
@@ -209,6 +214,19 @@ export function backToTracks() {
 
 /** Closes what is viewed (✕, Esc): the player shows if something plays, else the panel goes. `then` runs once it
  *  is closed (going Back is not immediate). */
+/** Whether what the panel shows was opened on this page, not kept from the one before. Settings, Health, Insights and
+ *  Downloads fill their panel on arriving (over a playlist kept viewed from the page before) and whenever it is empty,
+ *  but never over what is opened while on them: an artist from the player stays (the owner, 2026-10-24: it closed the
+ *  player and opened nothing). */
+export const openedHere = () => panel.viewed !== null && panel.viewed !== panel.arrived;
+
+/** Home, as the navigation's Home is (a step of its own: Back comes back to what was open); from a full-screen panel,
+ *  over the navigation (the owner, 2026-10-24). */
+export function goHome() {
+  panel.playerTop = false;
+  location.hash = '#/home';
+}
+
 export function closePlaylist(then?: () => void) {
   panel.playerTop = false;
   const d = depth();

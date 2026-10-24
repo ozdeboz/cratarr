@@ -400,7 +400,7 @@ impl SettingsService {
             None => old_lidarr,
         };
         let lidarr = lidarr_pair(lidarr);
-        if let Some(cfg) = &lidarr.0 {
+        if let Some(cfg) = lidarr.0.as_ref().filter(|c| c.enabled) {
             let client = lidarr.1.as_ref().ok_or_else(|| ToggleError::BadSettings("Lidarr: the API key is not usable".into()))?;
             client.version().await.map_err(|e| ToggleError::BadSettings(format!("Lidarr at {}: {e:#}", cfg.url)))?;
         }

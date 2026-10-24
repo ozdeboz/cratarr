@@ -2890,6 +2890,10 @@ impl PlaylistService {
             let mut past: Vec<(String, i64)> =
                 starred.iter().filter(|s| place(s).is_some()).filter_map(|s| Some((s.clone(), plays.get(s)?.1?))).collect();
             past.sort_by_key(|p| p.1);
+            // Of albums with a cover only (Home shows none without, the owner 2026-10-24).
+            let coverless = serve.library.coverless()?;
+            let album_of: HashMap<String, String> = serve.library.albums_of(&past.iter().map(|p| p.0.clone()).collect::<Vec<_>>())?.into_iter().collect();
+            past.retain(|(s, _)| album_of.get(s).is_none_or(|a| !coverless.contains(a)));
             past.truncate(DIG);
             let songs: HashMap<String, crate::serve::api::Song> = serve.library.songs_by_id(&past.iter().map(|p| p.0.clone()).collect::<Vec<_>>())?.into_iter().map(|s| (s.id.clone(), s)).collect();
             let past = past
@@ -2931,8 +2935,11 @@ impl PlaylistService {
                 let familiar = artist_of.get(id).and_then(|a| artist_plays.get(a)).map_or(0.0, |&n| n as f64 / most);
                 unplayed * (1.0 - 0.5 * familiar)
             };
+            // Home shows no album without a cover (the owner, 2026-10-24).
+            let coverless = serve.library.coverless()?;
             let mut albums: Vec<(String, f64)> = by_album
                 .iter()
+                .filter(|(id, _)| !coverless.contains(*id))
                 .filter_map(|(id, set)| Some((id.clone(), alike.compare(&taste, &alike.profile(set), lib.by())? * distance(id))))
                 .collect();
             albums.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -2979,6 +2986,9 @@ impl PlaylistService {
                 .filter(|(id, (n, _, all))| *n >= MOMENT_TRACKS && *n * 2 >= *all && last.get(id).is_none_or(|&t| t < rested))
                 .map(|(id, (n, sum, _))| (id, sum / f64::from(n)))
                 .collect();
+            // Home shows no album without a cover (the owner, 2026-10-24).
+            let coverless = serve.library.coverless()?;
+            near.retain(|(id, _)| !coverless.contains(id));
             near.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
             near.truncate(MOMENT_POOL * 4);
             let artist_of: HashMap<String, String> =

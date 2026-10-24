@@ -16,7 +16,7 @@
   import { albumOfDownload, library, readLibrary } from './lib/albums.svelte';
   import { askKept, kept, keptBusy, syncKept, type KeptItem } from './lib/kept.svelte';
   import { player } from './lib/live.svelte';
-  import { albumSubject, artistSubject, panel, SETTINGS, viewInPlace, viewPlaylist } from './lib/panel.svelte';
+  import { albumSubject, artistSubject, openedHere, panel, SETTINGS, viewInPlace, viewPlaylist } from './lib/panel.svelte';
   import { pageView, usePageAction } from './lib/pageView.svelte';
 
   askDownloads();
@@ -102,11 +102,11 @@
     return { text: parts.filter(Boolean).join(' · '), fill: null, bad: false };
   }
 
-  // Beside the list one item is always open on a roomy window: the first, until another is (not while leaving the page,
-  // whose address the opened item would be written into).
+  // Beside the list one item is always open on a roomy window: the first, until another is, as Settings, Health and
+  // Insights fill theirs (openedHere); not while leaving the page, whose address the opened item would be written into.
   const first = $derived(kept.items[0] ? keptSubject(kept.items[0]) : once[0] ? albumSubject(once[0].source, once[0].id) : null);
   $effect(() => {
-    if (!player.roomy || panel.viewed !== null || !first || !location.hash.startsWith('#/downloads')) return;
+    if (!player.roomy || openedHere() || panel.viewed === first || !first || !location.hash.startsWith('#/downloads')) return;
     viewInPlace(first);
   });
 

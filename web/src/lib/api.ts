@@ -1025,7 +1025,9 @@ export const newApiKey = (name: string, password: string, owner?: string, scope?
 /** The weather Home Assistant last told (its weather entity's `condition`, °C, `at` epoch s). */
 export type Weather = { condition?: string | null; cloud?: number | null; temperature?: number | null; at: number };
 /** Connections' Home Assistant: its keys (their last use is when it last called) and the weather it last told. */
-export const getHomeAssistant = () => quietly<{ keys: ApiKey[]; weather: Weather | null }>('/api/connections/home-assistant');
+export const getHomeAssistant = () => quietly<{ keys: ApiKey[]; weather: Weather | null; on: boolean }>('/api/connections/home-assistant');
+/** Home Assistant switched on or off: off, its keys are kept but refused. */
+export const setHomeAssistantOn = (on: boolean) => putJson('/api/connections/home-assistant', { on });
 
 /** What a user may do beyond listening (decision 0051), in Cratarr and in OpenSubsonic apps alike: keep tracks to play
  *  offline, make playlists, share them with the other users, make public share links. */
@@ -1149,10 +1151,10 @@ export const undoImport = (source: string, user: string, account: string) =>
   request<{ undone: ImportUndone }>('/api/subsonic/import', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source, user, account }) });
 
 /** Lidarr on the Settings page; the key is never sent. */
-export type LidarrView = { url: string; key_set: boolean; version: string | null; error: string | null };
+export type LidarrView = { url: string; key_set: boolean; enabled: boolean; version: string | null; error: string | null };
 
 /** What the page sends for Lidarr: a blank key keeps the saved one while the address stays; a blank address removes it. */
-export type LidarrDraft = { url: string; api_key: string };
+export type LidarrDraft = { url: string; api_key: string; enabled?: boolean };
 
 /** Check a Lidarr as filled in; nothing is saved. Null for a blank address. */
 export const previewLidarr = (draft: LidarrDraft) => post<LidarrView | null>('/api/settings/lidarr', draft);
@@ -1451,7 +1453,12 @@ export const importListenBrainz = (user: string) => post<Started>('/api/history/
 export const previewListenBrainz = (user: string) => post<Started>('/api/history/listenbrainz/preview', { user });
 /** Last.fm into the asking account (decision 0067): its scrobbles into the history, its loved tracks as favourites;
  *  `key` the API key made at Last.fm, else the one kept from last time. */
-export type LastFmImported = { scrobbles: ImportTally; loved: ImportTally };
+export type LastFmImported = {
+  scrobbles: ImportTally;
+  loved: ImportTally;
+  /** Every loved track the library does not have, with the album it was most scrobbled from. */
+  loved_missing?: { artist: string; title: string; album: string | null }[];
+};
 export const getLastFm = () => quietly<{ user: string | null; key: boolean }>('/api/history/lastfm');
 export const importLastFm = (user: string, key?: string) => post<Started>('/api/history/lastfm', { user, key });
 export const previewLastFm = (user: string, key?: string) => post<Started>('/api/history/lastfm/preview', { user, key });
@@ -1468,13 +1475,16 @@ export const importFile = (file: File, preview: boolean) =>
 export const undoFileImport = (from: string) => request<{ removed: number }>(`/api/import/file?${new URLSearchParams({ from })}`, { method: 'DELETE' });
 /** A listening service the asking account scrobbles to (decision 0068): its account there, why it stopped (until
  *  connected again), and how many plays wait. Never its secret. */
-export type ScrobbleTarget = { target: 'listenbrainz' | 'lastfm'; name: string; broken: string | null; queued: number; waiting: string | null };
+export type ScrobbleTarget = { target: 'listenbrainz' | 'lastfm'; name: string; broken: string | null; on: boolean; queued: number; waiting: string | null };
 export const getScrobbles = () => quietly<{ targets: ScrobbleTarget[] }>('/api/scrobble');
 /** ListenBrainz connected with the user token from its settings page (checked there first). */
 export const scrobbleListenBrainz = (token: string) => post<{ name: string }>('/api/scrobble/listenbrainz', { token });
 /** Last.fm's API key and shared secret kept; the answer is Last.fm's sign-in page, which comes back to `callback`. */
 export const scrobbleLastFm = (api_key: string, api_secret: string, callback: string, app: boolean) =>
   post<{ url: string }>('/api/scrobble/lastfm', { api_key, api_secret, callback, app });
+/** A listening service switched on or off, its sign-in kept. */
+export const setScrobbleOn = (target: string, on: boolean) =>
+  putJson(`/api/scrobble/${encodeURIComponent(target)}`, { on });
 export const forgetScrobble = (target: string) => request<void>(`/api/scrobble/${encodeURIComponent(target)}`, { method: 'DELETE' });
 /** Every listen imported from ListenBrainz out of the asking account's history again: how many. */
 export const undoListenBrainz = () => request<{ removed: number }>('/api/history/listenbrainz', { method: 'DELETE' });

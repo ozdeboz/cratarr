@@ -26,7 +26,8 @@ pub fn cover_file(dir: &Path) -> Option<PathBuf> {
     for e in std::fs::read_dir(dir).ok()?.filter_map(|e| e.ok()) {
         let name = e.file_name();
         let Some(rank) = name.to_str().and_then(crate::covers::candidate_rank) else { continue };
-        if e.file_type().is_ok_and(|t| t.is_file()) && best.as_ref().is_none_or(|(r, _)| rank < *r) {
+        // An empty file is no cover.
+        if e.file_type().is_ok_and(|t| t.is_file()) && e.metadata().is_ok_and(|m| m.len() > 0) && best.as_ref().is_none_or(|(r, _)| rank < *r) {
             best = Some((rank, e.path()));
         }
     }
@@ -41,11 +42,14 @@ pub fn print_of(path: &Path) -> Option<String> {
     Some(h.iter().take(5).map(|b| format!("{b:02x}")).collect())
 }
 
-/// The fingerprint of an album's art: its folder file's, else its first track's (its embedded picture changes with it).
+/// The fingerprint of an album's art: its folder file's, else its first track's (its embedded picture changes with it);
+/// none when it has neither (the owner, 2026-10-24: a first track without a picture had counted as a cover, and Home
+/// showed such albums blank). The first track is opened only for an album without a cover file, which the library's
+/// rule makes rare (covers inside the files and next to them, `covers_inside`).
 pub fn album_print(dir: &Path, first_track: Option<&Path>) -> Option<String> {
     match cover_file(dir) {
         Some(f) => print_of(&f),
-        None => first_track.and_then(print_of),
+        None => first_track.filter(|t| embedded(t).is_some()).and_then(print_of),
     }
 }
 

@@ -4,7 +4,7 @@
   // that and the weather it last told, and its keys: each acting for its owner, only reading or also in control, to
   // revoke; a new one asks for the password again and shows once (decisions 0043, 0051). Acts at once, not with the
   // Save bar.
-  import { getHomeAssistant, getUsers, newApiKey, revokeApiKey, type ApiKey, type KeyScope, type Weather } from '../api';
+  import { getHomeAssistant, getUsers, newApiKey, revokeApiKey, setHomeAssistantOn, type ApiKey, type KeyScope, type Weather } from '../api';
   import { me } from '../me.svelte';
   import { openThing } from '../panel.svelte';
   import Seg from '../Seg.svelte';
@@ -26,13 +26,15 @@
   const LIVELY = 3600;
 
   let keys = $state<ApiKey[] | null>(null);
+  // Switched on; off, its keys are kept and refused.
+  let on = $state(true);
   let weather = $state<Weather | null>(null);
   let owners = $state<string[]>([]);
   let error = $state<string | null>(null);
 
   const load = () => {
     getHomeAssistant().then(
-      (r) => ((keys = r.keys), (weather = r.weather)),
+      (r) => ((keys = r.keys), (weather = r.weather), (on = r.on ?? true)),
       () => (keys = []),
     );
     if (page)
@@ -46,6 +48,7 @@
   const heard = $derived(Math.max(0, ...(keys ?? []).map((k) => k.last_used ?? 0), weather?.at ?? 0));
   const status = $derived.by(() => {
     if (keys === null) return null;
+    if (!on) return { lead: 'off', line: 'Off' };
     if (!keys.length) return { lead: 'off', line: 'No key yet' };
     if (!heard) return { lead: 'off', line: 'Not heard from yet' };
     const lively = Date.now() / 1000 - heard < LIVELY;
@@ -75,6 +78,17 @@
       .join(' · ');
 
   const failed = (e: unknown) => (error = e instanceof Error ? e.message : String(e));
+
+  async function switchOn(to: boolean) {
+    error = null;
+    on = to;
+    try {
+      await setHomeAssistantOn(to);
+    } catch (e) {
+      on = !to;
+      failed(e);
+    }
+  }
 
   // A new key: whom it acts for (oneself unless chosen), what it may do, and the password; shown here once.
   let making = $state(false);
@@ -121,6 +135,9 @@
     {/if}
   </Group>
 {:else}
+  <Group>
+    <Item name="Use Home Assistant" line={on ? null : 'Its keys are kept, and refused until it is on again'} toggle={{ checked: on, onchange: switchOn }} />
+  </Group>
   <Group title="Connection" more={MORE}>
     {#if status}
       <Item lead={status.lead} name={status.lead === 'on' ? 'Connected' : 'Not connected'} line={status.line} tone={status.lead === 'bad' ? 'bad' : null} />

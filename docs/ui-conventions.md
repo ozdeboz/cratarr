@@ -462,6 +462,12 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   after 300 ms, so quick answers show nothing. Background polling and actions shown at once (the player, playlist
   taps, the favourite) never show it (`quietly` in `api.ts`). The button that was tapped shows a spinner in place of
   its label (`aria-busy` with `disabled`) until the answer. No full-page spinners.
+- **Leaving a panel** (the owner, 2026-10-24: Back the same everywhere). A panel that shows full screen (a phone; a
+  window without room beside the page: a playlist, an album, an artist, a crate) has, top left and always there, Back
+  and then Home: Back goes to the view before, and from the first one closes the panel; Home goes to Home as the
+  navigation does, which the panel covers. Beside the page: ✕, and Back where there is a view before this one; never
+  Home. Every mode and view of the panel (Make playlist, Info, Export, Repair, Sync) leaves the same way, in the same
+  place.
 - **Progress** (the owner, 2026-10-24: one way, not one per page). Work that can count shows one line, "Verb · n of
   N" ("Reading scrobbles · 12,400 of 79,000", "Converting 3 of 12"), with the thin bar under it (`lib/Meter.svelte`;
   a settings row takes it as `progress`). Nothing to count: the line alone ("Matching"), no bar and no percentage. A

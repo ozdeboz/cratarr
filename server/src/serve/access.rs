@@ -250,7 +250,7 @@ pub fn router(serve: Arc<Serve>) -> Router {
         .route("/api/auth/required", get(required).put(set_required))
         .route("/api/auth/keys", get(keys).post(new_key))
         .route("/api/auth/keys/{id}", delete(revoke_key))
-        .route("/api/connections/home-assistant", get(home_assistant))
+        .route("/api/connections/home-assistant", get(home_assistant).put(home_assistant_on))
         .layer(axum::middleware::from_fn(admin))
         .with_state(serve)
 }
@@ -316,8 +316,22 @@ async fn home_assistant(State(serve): State<Arc<Serve>>) -> Response {
     match serve.sessions.keys() {
         Ok(keys) => {
             let keys: Vec<_> = keys.into_iter().filter(|k| k.purpose.as_deref().is_none_or(|p| p == HOME_ASSISTANT)).collect();
-            axum::Json(json!({ "keys": keys, "weather": crate::app::moment::last_told() })).into_response()
+            let on = !serve.sessions.purpose_off(HOME_ASSISTANT);
+            axum::Json(json!({ "keys": keys, "weather": crate::app::moment::last_told(), "on": on })).into_response()
         }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(json!({ "error": format!("{e:#}") }))).into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct SwitchedOn {
+    on: bool,
+}
+
+/// Home Assistant switched on or off: off, its keys are kept but refused.
+async fn home_assistant_on(State(serve): State<Arc<Serve>>, axum::Json(b): axum::Json<SwitchedOn>) -> Response {
+    match serve.sessions.set_purpose_on(HOME_ASSISTANT, b.on) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(json!({ "error": format!("{e:#}") }))).into_response(),
     }
 }

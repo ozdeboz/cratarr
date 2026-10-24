@@ -233,12 +233,13 @@
     if (place === 'side') maximise();
   }
   const leaveFullscreen = () => document.exitFullscreen().catch(() => {});
-  // Beside the page again: the player moves into the panel, unless a playlist or crate is viewed there: that keeps the
-  // panel, and the mini-player's tap brings the player over it.
+  // Beside the page again: the player moves into the panel, over what it shows there (a playlist, a crate, a part of
+  // Settings, Health or Insights), as the mini-player's tap brings it; folding it shows that again (the owner,
+  // 2026-10-24: on Settings it went to the mini-player instead).
   function toSidebar() {
     prefs.sidebar = true;
     player.min = false;
-    panel.playerTop = false;
+    panel.playerTop = true;
     player.full = false;
   }
   $effect(() => {
