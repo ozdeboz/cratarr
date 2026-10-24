@@ -90,10 +90,9 @@
     }
   }
   const connected = $derived(!!view && (view.services.listenbrainz || view.services.lastfm));
-  // Every account looks (the library's discographies need no service, 0.9.1).
-  usePageAction(() =>
-    view ? { icon: 'refresh', label: 'Look again', run: refresh, progress: looking ? (progress?.value ?? 0) : null, line: progress?.line ?? null } : null,
-  );
+  // Every account looks (the library's discographies need no service, 0.9.1); the button is there from the start, so
+  // the pill does not grow again once the list has come.
+  usePageAction(() => ({ icon: 'refresh', label: 'Look again', run: refresh, progress: looking ? (progress?.value ?? 0) : null, line: progress?.line ?? null }));
 
   // Answered here: gone from the list at once (the server keeps the answer).
   let gone = $state<string[]>([]);

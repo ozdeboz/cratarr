@@ -10,6 +10,7 @@
   import Icon from './Icon.svelte';
   import Meter from './Meter.svelte';
   import { slide } from 'svelte/transition';
+  import { untrack } from 'svelte';
   import OutputSheet from './OutputSheet.svelte';
   import { filtersOn } from './listFilter.svelte';
   import { pageView, searchFor } from './pageView.svelte';
@@ -76,6 +77,20 @@
    *  together, so the pill's width changes in one smooth step; every button has it, played whatever brings it or takes
    *  it away (`|global`: a page change, the two steps' swap), so the pill never jumps (the owner, 2026-10-24). */
   const UNFOLD = { axis: 'x', duration: 200 } as const;
+  /** After a page change the slides wait this long: the new page draws first (Playlists blocks the browser for up to
+   *  about 90 ms as it is opened or left, measured 2026-10-24), so the slide is seen in full instead of jumping. */
+  const PAGE_WAIT = 100;
+  /** The page the pill last settled on (not shown, only compared): another page means a change still drawing. */
+  let settled = untrack(() => page);
+  $effect(() => {
+    const p = page;
+    if (p === settled) return;
+    const t = window.setTimeout(() => (settled = p), PAGE_WAIT);
+    return () => clearTimeout(t);
+  });
+  function paced(node: Element) {
+    return slide(node, { ...UNFOLD, delay: page !== settled ? PAGE_WAIT : 0 });
+  }
   let showing = $state(false);
   let ran = false;
   let fold = 0;
@@ -130,14 +145,14 @@
     {#if confirming && page && pageView.action}
       {@const a = pageView.action}
       <!-- The page's work asked for: the whole pill is ✓ (start it) and ✕ (leave it), until one is tapped. -->
-      <button class="confirm" aria-label={a.label} title={a.label} onclick={() => confirm(a)} transition:slide|global={UNFOLD}><Icon name="check" size={22} /></button>
-      <button aria-label="Cancel" title="Cancel" onclick={() => (confirming = false)} transition:slide|global={UNFOLD}><Icon name="close" size={22} /></button>
+      <button class="confirm" aria-label={a.label} title={a.label} onclick={() => confirm(a)} transition:paced|global><Icon name="check" size={22} /></button>
+      <button aria-label="Cancel" title="Cancel" onclick={() => (confirming = false)} transition:paced|global><Icon name="close" size={22} /></button>
     {:else}
     {#if showing && page && pageView.action && !searching}
       {@const a = pageView.action}
       <!-- The page's work unfolded: only its bar and what it is at, the pill grown leftwards, its buttons where they
            are, its glass as it is (the owner, 2026-10-24). -->
-      <span class="work" role="status" aria-live="polite" transition:slide|global={UNFOLD}
+      <span class="work" role="status" aria-live="polite" transition:paced|global
         ><Meter label={a.line ?? a.label} value={a.progress ?? 0} /></span
       >
     {/if}
@@ -150,13 +165,13 @@
         title={words}
         onmousedown={(e) => searching && e.preventDefault()}
         onclick={() => (searching = !searching)}
-        transition:slide|global={UNFOLD}
+        transition:paced|global
         ><Icon name="search" size={22} /></button
       >
       {#if searching}
         <!-- The search open: its field right of the magnifier, the pill grown leftwards, the other buttons where they
              are, its glass as it is (the owner, 2026-10-24). -->
-        <span class="field" role="search" transition:slide|global={UNFOLD}>
+        <span class="field" role="search" transition:paced|global>
           <input
             bind:this={field}
             type="search"
@@ -170,14 +185,14 @@
         </span>
       {/if}
     {/if}
-    {#if filter && !searching && !(showing && page && pageView.action)}<button class="funnel" class:lit={filtering} aria-label={filters ? `Filter, ${filters} on` : 'Filter'} title="Filter" aria-haspopup="dialog" onclick={() => (filterOpen = true)} transition:slide|global={UNFOLD}
+    {#if filter && !searching && !(showing && page && pageView.action)}<button class="funnel" class:lit={filtering} aria-label={filters ? `Filter, ${filters} on` : 'Filter'} title="Filter" aria-haspopup="dialog" onclick={() => (filterOpen = true)} transition:paced|global
         ><Icon name="funnel" size={22} />{#if filters}<span class="badge">{filters}</span>{/if}</button
       >{/if}
-    {#if view && (page || order?.columns?.shown.length)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (viewOpen = true)} transition:slide|global={UNFOLD}><Icon name="sliders" size={22} /></button>{/if}
-    {#if device}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)} transition:slide|global={UNFOLD}><Icon name="speaker" size={22} /></button>{/if}
+    {#if view && (page || order?.columns?.shown.length)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (viewOpen = true)} transition:paced|global><Icon name="sliders" size={22} /></button>{/if}
+    {#if device}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)} transition:paced|global><Icon name="speaker" size={22} /></button>{/if}
     {#if page && pageView.action && !searching}
       {@const a = pageView.action}
-      <button class="action" aria-label={a.label} title={a.label} onclick={() => act(a)} transition:slide|global={UNFOLD}
+      <button class="action" aria-label={a.label} title={a.label} onclick={() => act(a)} transition:paced|global
         ><Icon name={a.icon} size={22} />{#if a.progress != null}<svg class="ring" viewBox="0 0 36 36" aria-hidden="true"
             ><circle class="bg" cx="18" cy="18" r="16" /><circle cx="18" cy="18" r="16" pathLength="100" stroke-dasharray="{Math.round(
                 Math.min(1, Math.max(0, a.progress)) * 100,
