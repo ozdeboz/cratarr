@@ -6,13 +6,14 @@
   import Seg from './Seg.svelte';
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
-  import { insightsControls } from './insightsControls.svelte';
+  import { insightsFilter, insightsView } from './insightsControls.svelte';
 
-  let { title, onclose }: { title: string; onclose: () => void } = $props();
-  const groups = $derived(insightsControls());
+  /** `part`: the pill's filter (what is counted) or its View (how it is shown), as the pages' pill opens them. */
+  let { title, part, onclose }: { title: string; part: 'filter' | 'view'; onclose: () => void } = $props();
+  const groups = $derived(part === 'filter' ? insightsFilter() : insightsView());
 </script>
 
-<MenuSheet label="View" icon="sliders" {title} {onclose}>
+<MenuSheet label={part === 'filter' ? 'Filter' : 'View'} icon={part === 'filter' ? 'funnel' : 'sliders'} {title} {onclose}>
   <div class="controls">
     {#each groups as g, i (i)}
       <Group title={g.title}>

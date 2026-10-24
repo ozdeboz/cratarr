@@ -118,8 +118,9 @@ const map = (): ControlGroup[] => [
 ];
 
 /** The period, the open tab's own controls, then the libraries. */
-export const insightsControls = (): ControlGroup[] => [
-  ...periodGroup(),
-  ...(prefs.insightsTab === 'map' ? map() : prefs.insightsTab === 'collection' ? collection() : profile()),
-  ...libraryGroup(),
-];
+export const insightsControls = (): ControlGroup[] => [...insightsFilter(), ...insightsView()];
+
+/** The pill's two (the owner, 2026-10-25, as the pages' pill): the filter, what is counted (the period, the profile's
+ *  sources, the libraries); and View, how it is shown (the sort and the count, what connects the map). */
+export const insightsFilter = (): ControlGroup[] => [...periodGroup(), ...(prefs.insightsTab === 'listening' ? profile() : []), ...libraryGroup()];
+export const insightsView = (): ControlGroup[] => (prefs.insightsTab === 'map' ? map() : prefs.insightsTab === 'collection' ? collection() : []);

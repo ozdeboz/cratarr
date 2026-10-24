@@ -1,7 +1,8 @@
 <script lang="ts">
   // An Insights view in the panel (the owner, 2026-10-24: Insights as Settings and Health): opened from the page's list,
-  // beside it on a roomy window (no ✕ there), over it on a phone. Its bar: where it is (Collection › Overview) and, when
-  // the view has any, the sliders opening its controls in a sheet (lib/InsightsSheet). The views are the tabs' as they
+  // beside it on a roomy window (no ✕ there), over it on a phone. Its bar: where it is (Collection › Overview) and the
+  // pill the pages have (lib/TopPill: the same glass, the same motion; the owner, 2026-10-25): its funnel opening what is
+  // counted, its sliders how it is shown (lib/InsightsSheet), each where the view has any. The views are the tabs' as they
   // were (Collection's sections, Listening's History and Profile, the Map).
   import Icon from './Icon.svelte';
   import InsightsCollection from './InsightsCollection.svelte';
@@ -9,7 +10,8 @@
   import InsightsMap from './InsightsMap.svelte';
   import InsightsProfile from './InsightsProfile.svelte';
   import InsightsSheet from './InsightsSheet.svelte';
-  import { insightsControls } from './insightsControls.svelte';
+  import { insightsFilter, insightsView } from './insightsControls.svelte';
+  import TopPill from './TopPill.svelte';
   import { INSIGHTS_VIEWS, showView, type InsightsView } from './insightsViews';
   import { insights } from './insights.svelte';
   import PageLoading from './PageLoading.svelte';
@@ -21,15 +23,27 @@
   $effect.pre(() => showView(view));
   $effect(() => insights.load());
   const v = $derived(INSIGHTS_VIEWS.find((x) => x.id === view) ?? INSIGHTS_VIEWS[0]);
-  const controls = $derived(insightsControls().length > 0);
-  let sheet = $state(false);
+  const filters = $derived(insightsFilter());
+  const views = $derived(insightsView());
+  // The funnel is lit while it leaves something out: a library or a source switched off.
+  const leftOut = $derived(filters.some((g) => g.controls.some((c) => c.kind === 'toggle' && !c.get())));
+  let sheet = $state<'filter' | 'view' | null>(null);
 </script>
 
 <div class="view">
   <div class="bar" class:beside>
     {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
     <h2 class="title"><span class="up">{v.group}</span><span class="sep" aria-hidden="true">›</span>{v.label}</h2>
-    {#if controls}<span class="navpill"><button aria-label="View" title="View" onclick={() => (sheet = true)}><Icon name="sliders" size={22} /></button></span>{/if}
+    {#if filters.length || views.length}
+      <TopPill
+        device={false}
+        filter={filters.length > 0}
+        view={views.length > 0}
+        filterLit={leftOut}
+        onfilter={() => (sheet = 'filter')}
+        onview={() => (sheet = 'view')}
+      />
+    {/if}
   </div>
   <div class="scroll">
     {#if view === 'history'}
@@ -48,7 +62,7 @@
   </div>
 </div>
 
-{#if sheet}<InsightsSheet title={`${v.group} › ${v.label}`} onclose={() => (sheet = false)} />{/if}
+{#if sheet}<InsightsSheet title={`${v.group} › ${v.label}`} part={sheet} onclose={() => (sheet = null)} />{/if}
 
 <style>
   /* As a part of the settings in the panel (lib/SettingsPanel): its bar on top, what it holds under it. */

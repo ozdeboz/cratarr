@@ -26,6 +26,9 @@
     filter = true,
     kind = null,
     counted = null,
+    onfilter = null,
+    onview = null,
+    filterLit = null,
   }: {
     /** The page it is on (its search, its own filters and View), or null in the panel. */
     page?: string | null;
@@ -41,6 +44,11 @@
     kind?: PanelKind | null;
     /** In the panel: how many of its list the filter lets through, of how many. */
     counted?: { shown: number; total: number } | null;
+    /** A panel's own filter and View (Insights' sheets): the buttons open these instead of the lists' sheets; `filterLit`:
+     *  whether its filter leaves something out. */
+    onfilter?: (() => void) | null;
+    onview?: (() => void) | null;
+    filterLit?: boolean | null;
   } = $props();
   let filterOpen = $state(false);
   let viewOpen = $state(false);
@@ -185,10 +193,10 @@
         </span>
       {/if}
     {/if}
-    {#if filter && !searching && !(showing && page && pageView.action)}<button class="funnel" class:lit={filtering} aria-label={filters ? `Filter, ${filters} on` : 'Filter'} title="Filter" aria-haspopup="dialog" onclick={() => (filterOpen = true)} transition:paced|global
+    {#if filter && !searching && !(showing && page && pageView.action)}<button class="funnel" class:lit={filterLit ?? filtering} aria-label={filters ? `Filter, ${filters} on` : 'Filter'} title="Filter" aria-haspopup="dialog" onclick={() => (onfilter ? onfilter() : (filterOpen = true))} transition:paced|global
         ><Icon name="funnel" size={22} />{#if filters}<span class="badge">{filters}</span>{/if}</button
       >{/if}
-    {#if view && (page || order?.columns?.shown.length) && !searching && !(showing && page && pageView.action)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (viewOpen = true)} transition:paced|global><Icon name="sliders" size={22} /></button>{/if}
+    {#if view && (page || order?.columns?.shown.length || onview) && !searching && !(showing && page && pageView.action)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (onview ? onview() : (viewOpen = true))} transition:paced|global><Icon name="sliders" size={22} /></button>{/if}
     {#if device}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)} transition:paced|global><Icon name="speaker" size={22} /></button>{/if}
     {#if page && pageView.action && !searching}
       {@const a = pageView.action}
