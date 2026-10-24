@@ -59,6 +59,26 @@ pub struct QueueTrack {
     pub duration_secs: Option<f64>,
 }
 
+/// An announcement as a player reports it (Command::Announce).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Announcing {
+    /// The command's id.
+    pub id: String,
+    /// `playing` from its first sound, `done` once its last sample is heard, `failed` when it could not be played.
+    pub state: AnnounceState,
+    /// Why it failed, in a few words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AnnounceState {
+    Playing,
+    Done,
+    Failed,
+}
+
 /// What a player reports.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Report {
@@ -101,6 +121,10 @@ pub struct Report {
     pub volume: u8,
     #[serde(default)]
     pub ducked: bool,
+    /// An announcement it plays or last played (Command::Announce): Home Assistant waits on it. Apps from before it
+    /// leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub announce: Option<Announcing>,
     /// The whole queue when it changed since the last report; `None` keeps it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue: Option<Vec<QueueTrack>>,
@@ -428,6 +452,15 @@ pub enum Command {
     /// Quieter, for an announcement; `Unduck` brings it back.
     Duck,
     Unduck,
+    /// Speak this (Home Assistant's `tts.speak … announce: true`, the 0.9 announce channel): the clip at `url` played over
+    /// the music, which ducks by the clip's own loudness as it plays, word by word, and comes back after its last. A
+    /// group's is played by its leader, mixed into the group's sound, so every member hears it in step. `id` (the
+    /// caller's, else Cratarr's) names it in the player's reports (`announce`): playing, then done or failed.
+    Announce {
+        url: String,
+        #[serde(default)]
+        id: String,
+    },
     /// The queue and position move to player `to`, and this one stops. Handled here; never sent to a player.
     Handover { to: String },
     /// Queue history (decision 0033, amended): the player takes up its queue `id` where it was left, playing if it
@@ -511,6 +544,8 @@ pub struct PlayerView {
     pub duration_ms: Option<u64>,
     pub volume: u8,
     pub ducked: bool,
+    /// The announcement it plays or last played, as its app says; in a group, the leader's (the group hears it).
+    pub announce: Option<Announcing>,
     /// Why it does not play what it was told to, as it says (its device would not let it); none: nothing holds it.
     pub held: Option<String>,
     /// Where its sound goes now, as its app says (decision 0033, amended 2026-10-19); none where it does not say.
@@ -855,6 +890,7 @@ impl Entry {
             duration_ms: r.duration_ms,
             volume: r.volume,
             ducked: r.ducked,
+            announce: r.announce.clone(),
             held: r.held.clone(),
             output: r.output.clone(),
             queue_length: self.queue.tracks.len(),
@@ -1539,7 +1575,7 @@ impl PlayOn {
         if report.mode.as_deref() == Some(DEVICE_MODE) {
             e.seen = SystemTime::now();
             e.heard = Instant::now();
-            (e.report.volume, e.report.ducked) = (report.volume, report.ducked);
+            (e.report.volume, e.report.ducked, e.report.announce) = (report.volume, report.ducked, report.announce.clone());
             (e.report.output, e.report.link, e.report.held) = (report.output.clone(), report.link.clone(), report.held.clone());
             e.device = Some((report, Instant::now()));
             let after = e.view(name, false);
@@ -1728,6 +1764,7 @@ impl PlayOn {
             match command {
                 Command::Pause | Command::Resume | Command::Toggle | Command::Next | Command::Previous | Command::Volume { .. } => command,
                 Command::Duck | Command::Unduck | Command::Sleep { .. } | Command::Seek { .. } | Command::Sample { .. } => command,
+                Command::Announce { .. } => command,
                 Command::Play { .. } | Command::Queue { .. } | Command::QueueRename { .. } | Command::QueueDelete { .. } => command,
                 Command::Stop => Command::Pause,
                 _ => return Err(ToggleError::Refused(OWN_MUSIC.into())),
@@ -1828,6 +1865,16 @@ impl PlayOn {
                 Command::Seek { position_ms: Some(to), percent: None, by_ms: None }
             }
             Command::Seek { position_ms: None, percent: None, by_ms: None } => return Err(ToggleError::Refused("Seek where?".into())),
+            Command::Announce { url, id } => {
+                if url.trim().is_empty() {
+                    return Err(ToggleError::Refused("Announce what? Give the clip's url.".into()));
+                }
+                if self.entries().get(name).is_some_and(|e| matches!(e.kind, PlayerKind::Kodi)) {
+                    return Err(ToggleError::Refused(format!("{name} cannot announce: a Kodi plays no clip over its music.")));
+                }
+                let id = if id.trim().is_empty() { super::queue::new_entry() } else { id };
+                Command::Announce { url, id }
+            }
             other => other,
         };
         // The queue is edited here first (decision 0033), and the player told the edit by entry.
@@ -2718,6 +2765,14 @@ mod tests {
         let c: Command = serde_json::from_str(r#"{"command":"seek","percent":50}"#).unwrap();
         assert_eq!(c, Command::Seek { position_ms: None, percent: Some(50.0), by_ms: None });
         assert_eq!(serde_json::from_str::<Command>(r#"{"command":"duck"}"#).unwrap(), Command::Duck);
+        // The announce channel (0.9): a clip by url, its id the caller's or none (Cratarr gives one).
+        assert_eq!(
+            serde_json::from_str::<Command>(r#"{"command":"announce","url":"http://ha:8123/api/tts_proxy/a.mp3","id":"ha-1"}"#).unwrap(),
+            Command::Announce { url: "http://ha:8123/api/tts_proxy/a.mp3".into(), id: "ha-1".into() }
+        );
+        assert_eq!(serde_json::from_str::<Command>(r#"{"command":"announce","url":"u"}"#).unwrap(), Command::Announce { url: "u".into(), id: String::new() });
+        let r: Report = serde_json::from_str(r#"{"index":0,"position_ms":0,"playing":true,"announce":{"id":"ha-1","state":"done"}}"#).unwrap();
+        assert_eq!(r.announce, Some(Announcing { id: "ha-1".into(), state: AnnounceState::Done, error: None }));
         // To the player: tracks, never the playlist's name or the shuffle wish.
         let to_player = Command::play(vec![], 2, 5);
         assert_eq!(serde_json::to_string(&to_player).unwrap(), r#"{"command":"play","tracks":[],"index":2,"position_ms":5}"#);
@@ -3257,6 +3312,19 @@ mod tests {
         p.command("phone", Command::Volume { level: 40 }).await.unwrap();
         assert_eq!(said(&mut tablet), vec!["next"]);
         assert_eq!(said(&mut phone), vec!["volume"]);
+        // An announcement to the phone is the group's too: the tablet, its leader, mixes it into the group's sound (the
+        // 0.9 announce channel), with the caller's id or one of Cratarr's; one without a clip is refused.
+        p.command("phone", Command::Announce { url: "http://ha/tts.mp3".into(), id: "ha-1".into() }).await.unwrap();
+        let to_tablet = told(&mut tablet);
+        assert_eq!((to_tablet[0]["command"].as_str(), to_tablet[0]["url"].as_str(), to_tablet[0]["id"].as_str()), (Some("announce"), Some("http://ha/tts.mp3"), Some("ha-1")));
+        assert!(said(&mut phone).is_empty());
+        p.command("tablet", Command::Announce { url: "http://ha/tts.mp3".into(), id: String::new() }).await.unwrap();
+        assert!(!told(&mut tablet)[0]["id"].as_str().unwrap().is_empty(), "Cratarr's own id");
+        assert!(matches!(p.command("tablet", Command::Announce { url: " ".into(), id: String::new() }).await, Err(ToggleError::Refused(_))));
+        // The group shows the leader's announcement, as it shows the leader's music.
+        let playing = Announcing { id: "ha-1".into(), state: AnnounceState::Playing, error: None };
+        p.report("tablet", Report { index: 0, playing: true, volume: 80, announce: Some(playing.clone()), ..Report::default() }).unwrap();
+        assert_eq!(p.get("phone").unwrap().announce, Some(playing));
 
         // Joining the phone is joining the tablet's group; the tablet already leads it.
         p.command("kitchen", Command::Join { to: "phone".into() }).await.unwrap();

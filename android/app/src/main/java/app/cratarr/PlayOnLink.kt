@@ -62,6 +62,8 @@ class PlayOnLink(
         override fun onChange(selfChange: Boolean) = soon()
     }
     private var ducked = false
+    /** The announcement it plays or last played (Announcer), as reported. */
+    private var announcing: Announcer.State? = null
     private var queueSent = false
     /** The queue's version in the last command from Cratarr: reports say it, so Cratarr knows what they have seen. */
     private var version = -1L
@@ -358,7 +360,7 @@ class PlayOnLink(
         if (prefs.mode == Prefs.MODE_DEVICE) {
             when (m.optString("command")) {
                 "play" -> service.switchMode(Prefs.MODE_CRATARR, "play from Cratarr")
-                "pause", "resume", "toggle", "next", "previous", "sleep", "seek", "volume", "duck", "unduck" -> {}
+                "pause", "resume", "toggle", "next", "previous", "sleep", "seek", "volume", "duck", "unduck", "announce" -> {}
                 "group" -> if (!m.isNull("leader")) return report()
                 "stop" -> {
                     release()
@@ -464,6 +466,22 @@ class PlayOnLink(
                 ducked = false
                 applyVolume()
             }
+            // The announce channel (0.9): spoken over the music, which ducks by the speech itself (Announcer).
+            "announce" -> Announcer.announce(
+                service,
+                m.optString("url"),
+                m.optString("id"),
+                musicPlaying = { player.isPlaying },
+                heardLater = { if (sync.leads) sync.bufferMs else 0L },
+                duck = { on ->
+                    ducked = on
+                    applyVolume()
+                },
+                told = { state ->
+                    announcing = state
+                    report()
+                },
+            )
             else -> Log.w(TAG, "a command this app does not know: $json")
         }
         report()
@@ -717,6 +735,7 @@ class PlayOnLink(
             .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)
             .put("volume", volume())
             .put("ducked", ducked)
+            .put("announce", announcing?.json() ?: JSONObject.NULL)
             .put("held", heldBack ?: JSONObject.NULL)
             .put("output", Output.now(service) ?: JSONObject.NULL)
             .put("queue_id", Prefs(service).queueId.ifEmpty { null } ?: JSONObject.NULL)
@@ -748,6 +767,7 @@ class PlayOnLink(
             .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)
             .put("volume", volume())
             .put("ducked", ducked)
+            .put("announce", announcing?.json() ?: JSONObject.NULL)
             .put("held", heldBack ?: JSONObject.NULL)
             .put("output", Output.now(service) ?: JSONObject.NULL)
             .put("link", linkJson())
