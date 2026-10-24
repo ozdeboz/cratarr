@@ -15,7 +15,7 @@
   import { jobs } from './lib/jobs.svelte';
   import { on, stream } from './lib/events.svelte';
   import { albumFavoritesKnown, isFavorite, loadAlbumFavorites } from './lib/favourites.svelte';
-  import { isLossless, pageView } from './lib/pageView.svelte';
+  import { pageView } from './lib/pageView.svelte';
   import { passing, switchOn } from './lib/listFilter.svelte';
   import { libraryShown } from './lib/sources.svelte';
   import { untrack } from 'svelte';
@@ -116,14 +116,12 @@
   }
   const verdictOf = (shelf: ShelfSource, a: ListedAlbum) => sources?.find((x) => x.id === shelf.id)?.verdicts[a.id];
 
-  // The filter's own switches (Favourites only, Not played yet, 4 stars and up, Lossless only, Upgrades waiting,
-  // Duplicates waiting), remembered as the Library's (decision 0060).
+  // The filter's own switches (Favourites only, Not played yet, 4 stars and up), remembered as the Library's (decision
+  // 0060). Lossless only, Upgrades waiting and Duplicates waiting are none (the owner, 2026-10-24); one left on from
+  // before goes by nothing.
   const fav = $derived(switchOn('library', 'favourites'));
   const unplayed = $derived(switchOn('library', 'unplayed'));
   const top = $derived(switchOn('library', 'topRated'));
-  const lossless = $derived(switchOn('library', 'lossless'));
-  const up = $derived(switchOn('library', 'upgrades'));
-  const dup = $derived(switchOn('library', 'duplicates'));
   // Not played yet and 4 stars and up read how you used the albums, again each time one is switched on.
   $effect(() => {
     if (!unplayed && !top) return;
@@ -142,16 +140,13 @@
     // What a filter goes by not in yet: loading, not the albums unfiltered or none (the owner, 2026-10-23).
     const unknown = (has: (source: string) => boolean) => !!sources?.some((s) => !has(s.id));
     if ((fav && unknown(albumFavoritesKnown)) || ((unplayed || top) && unknown(albumUsesKnown)) || (pass.pending && !keys)) return null;
-    if (!sources || !(fav || up || dup || unplayed || top || lossless || keys)) return sources;
+    if (!sources || !(fav || unplayed || top || keys)) return sources;
     const keep = (s: ShelfSource, a: ListedAlbum) => {
       const u = useOf(s.id, a.id);
       return (
         (!fav || isFavorite(s.id, a.id)) &&
-        (!up || verdictOf(s, a)?.kind === 'upgrade') &&
-        (!dup || verdictOf(s, a)?.kind === 'duplicate') &&
         (!unplayed || (u.plays === 0 && !u.played)) &&
         (!top || u.rating >= 4) &&
-        (!lossless || isLossless(a.format)) &&
         (!keys || keys.has(a.id))
       );
     };

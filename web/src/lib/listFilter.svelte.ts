@@ -2,6 +2,7 @@
 // (lib/pageView SWITCHES), remembered per kind of list (a page's id, or a panel kind) in the prefs. The Filter sheet
 // changes them (lib/FilterSheet); the lists read them.
 import { filterList, type Condition, type FilterList } from './api';
+import { SWITCHES } from './pageView.svelte';
 import { prefs, type FilterCondition, type ListFilter } from './prefs.svelte';
 
 const NO_FILTER: ListFilter = { conditions: [], on: [] };
@@ -26,7 +27,9 @@ export function setConditions(kind: string, conditions: FilterCondition[]) {
 export const activeConditions = (kind: string) => filterOf(kind).conditions.filter((c) => c.enabled !== false);
 
 /** How many filters a kind of list has on (the funnel's count): its conditions that apply and its switches on. */
-export const filtersOn = (kind: string) => activeConditions(kind).length + filterOf(kind).on.length;
+// Only the switches the list still offers: one left on from before (Lossless only, say) is no filter now.
+export const filtersOn = (kind: string) =>
+  activeConditions(kind).length + filterOf(kind).on.filter((k) => (SWITCHES[kind] ?? []).some((w) => w.key === k)).length;
 
 /** The libraries switched off in the filter (`source/library`), for the server's crates (decision 0024, amended
  *  2026-10-23: a crate fills from every library switched on); none: undefined. */

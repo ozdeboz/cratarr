@@ -129,9 +129,7 @@ export const SWITCHES: Record<string, ListSwitch[]> = {
     { key: 'favourites', label: 'Favourites only' },
     { key: 'unplayed', label: 'Not played yet' },
     { key: 'topRated', label: '4 stars and up' },
-    { key: 'lossless', label: 'Lossless only' },
-    { key: 'upgrades', label: 'Upgrades waiting', incoming: true },
-    { key: 'duplicates', label: 'Duplicates waiting', incoming: true },
+    // Not Lossless only, Upgrades waiting or Duplicates waiting (the owner, 2026-10-24: not filter options).
   ],
   playlists: [
     { key: 'favourites', label: 'Favourites only' },
