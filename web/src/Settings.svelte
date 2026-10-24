@@ -4,7 +4,7 @@
   // name, what it is set to now in a line, and ›. A tap opens the part in the panel (lib/SettingsPanel): beside the list
   // on a roomy window, where a part is always open (App: the one last open), its row tinted; over the list on a phone,
   // as a playlist opens. About is a sheet from the info button at the page's top right (App, lib/AboutSheet).
-  import { getApiKeys, getImport, getLogLevels, getSettings, getSignInRequired, getUsers, type ImportJob, type Settings } from './lib/api';
+  import { getHomeAssistant, getImport, getLogLevels, getSettings, getSignInRequired, getUsers, type ImportJob, type Settings } from './lib/api';
   import { me } from './lib/me.svelte';
   import { appInfo, downloads, inApp } from './lib/app.svelte';
   import Icon from './lib/Icon.svelte';
@@ -22,7 +22,7 @@
   /** undefined until read: no "Not yet" before the answer. */
   let lastImport = $state<ImportJob | null | undefined>(undefined);
   let signIn = $state<boolean | null>(null);
-  let keyCount = $state<number | null>(null);
+  let homeAssistant = $state(false);
   let users = $state<number | null>(null);
   // Musical taste's line: what is excluded, everywhere and from crates.
   $effect(() => {
@@ -45,8 +45,8 @@
       (r) => (signIn = r.required),
       () => {},
     );
-    getApiKeys().then(
-      (r) => (keyCount = r.keys.length),
+    getHomeAssistant().then(
+      (r) => (homeAssistant = r.keys.length > 0),
       () => {},
     );
     getUsers().then(
@@ -70,7 +70,7 @@
         return [appInfo.player, appInfo.stayReady ? 'Stays ready' : null, downloads.known ? `${size(downloads.bytes)} downloaded` : null].filter(Boolean).join(' · ');
       case 'connections':
         if (!s) return '';
-        return [...s.sources.filter((v) => v.enabled).map((v) => (v.status.connected ? v.label : `${v.label} (not connected)`)), s.lidarr ? 'Lidarr' : null]
+        return [...s.sources.filter((v) => v.enabled).map((v) => (v.status.connected ? v.label : `${v.label} (not connected)`)), s.lidarr ? 'Lidarr' : null, homeAssistant ? 'Home Assistant' : null]
           .filter(Boolean)
           .join(' · ') || 'No server';
       case 'libraries': {
@@ -91,8 +91,8 @@
       case 'users':
         return users === null ? '' : users === 1 ? '1 user' : `${users} users`;
       case 'auth':
-        // Whether every request needs a sign-in, and the keys (the accounts are under Users, 0051 amended).
-        return [signIn === null ? null : signIn ? 'Sign-in required' : 'Sign-in not required', keyCount ? `${keyCount} ${keyCount === 1 ? 'key' : 'keys'}` : null]
+        // Whether every request needs a sign-in (the accounts are under Users, 0051 amended; Home Assistant's key under Connections).
+        return [signIn === null ? null : signIn ? 'Sign-in required' : 'Sign-in not required']
           .filter(Boolean)
           .join(' · ');
       case 'import':

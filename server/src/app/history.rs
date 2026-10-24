@@ -34,7 +34,7 @@ pub fn weighted(rows: &[Logged], now: i64) -> Vec<(String, f32)> {
 pub fn since(userdata: &UserData, user: &str, since: i64, now: i64) -> Result<Option<Vec<(String, f32)>>> {
     match userdata.heard_from(user)? {
         // What played while they slept is not theirs (the owner, 2026-10-23).
-        Some(first) if first <= since => Ok(Some(weighted(&userdata.heard_awake_since(user, since)?, now))),
+        Some(first) if first <= since => Ok(Some(weighted(&userdata.heard_since(user, since)?, now))),
         _ => Ok(None),
     }
 }

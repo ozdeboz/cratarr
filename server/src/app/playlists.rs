@@ -130,14 +130,14 @@ const DIG: usize = 12;
 const UNPLAYED_HALF_DAYS: f64 = 180.0;
 
 /// An account's taste as Insights' Profile has it, every source (`taste::profiles`): its favourites, playlists, plays
-/// (awake) and skips, and what it excluded, on `lib`'s libraries switched on. Blocking.
+/// and skips, and what it excluded, on `lib`'s libraries switched on. Blocking.
 fn taste_in(lib: &CrateLibrary, ud: &crate::userdata::UserData, user: &str, excluded: &[String]) -> Result<crate::similarity::Profile, ToggleError> {
     let alike = lib.alike();
     let place = |song: &str| crate::serve::ids::track_of(song).and_then(|t| alike.place_of_track(t)).filter(|&i| lib.on(i));
     let starred = ud.starred(user, crate::userdata::Kind::Song)?;
     let mut skips: HashMap<usize, u32> = HashMap::new();
     let mut played: HashMap<usize, u32> = HashMap::new();
-    for l in ud.heard_awake_since(user, 0)? {
+    for l in ud.heard_since(user, 0)? {
         let Some(i) = place(&l.song) else { continue };
         if l.ended == crate::userdata::Ended::Skipped && !l.counted {
             *skips.entry(i).or_default() += 1;
@@ -2780,10 +2780,9 @@ impl PlaylistService {
             let ud = &serve.userdata;
             let favourites = ud.starred(&user, crate::userdata::Kind::Song)?.iter().filter_map(|s| place(s)).collect();
             let playlists = lib.membership().iter().filter_map(|(line, lists)| Some((alike.place_of_line(line).filter(|&i| lib.on(i))?, lists.len()))).collect();
-            // Plays from the log (the counts have no times), finished or counted, none while they slept (the owner,
-            // 2026-10-23: "if Home Assistant says I was asleep, exclude it").
+            // Plays from the log (the counts have no times), finished or counted.
             let mut played: HashMap<usize, u32> = HashMap::new();
-            let heard = ud.heard_awake_since(&user, since)?;
+            let heard = ud.heard_since(&user, since)?;
             for l in heard.iter().filter(|l| l.counted || l.ended == crate::userdata::Ended::Finished) {
                 if let Some(i) = place(&l.song) {
                     *played.entry(i).or_default() += 1;

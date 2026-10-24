@@ -47,6 +47,11 @@ pub fn tell(mut w: Weather, now: i64) {
     *TOLD.lock().unwrap_or_else(|e| e.into_inner()) = Some(w);
 }
 
+/// The weather last told, however long ago (Connections shows when Home Assistant last told it).
+pub fn last_told() -> Option<Weather> {
+    TOLD.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// The weather, while it holds.
 pub fn told(now: i64) -> Option<Weather> {
     TOLD.lock().unwrap_or_else(|e| e.into_inner()).clone().filter(|w| now - w.at < STALE)
