@@ -68,3 +68,23 @@ artists new to the library, and nothing for an artist the library has; 60 at mos
   outside the library, Not interested, the answers, one suggestion with all its reasons).
 - MusicBrainz's one request a second is the pace: the discographies are looked up a few artists a day, most played
   first, and kept, so the page fills over days and opens at once; the links (Bandcamp, YouTube) only for what shows.
+
+## Amendment, 2026-10-24: a card shows, its menu acts (0.9)
+
+The owner, 2026-10-24: the links and buttons drawn into each card go into a menu, opened by a tap anywhere on the card;
+the card shows as much as is known of the suggestion.
+
+- **A tap on a card opens its menu** (the sheet every item's menu is: the cover, its name and chips on top): Want (or
+  Request, 0070), Not interested; to listen elsewhere, each through the Open/Copy sheet: Bandcamp, YouTube,
+  ListenBrainz, Last.fm, MusicBrainz; the artist in the library, where it is there; and why it is suggested, every
+  reason in full. The card itself has no buttons.
+- **The card:** the cover, album, artist, year; its type (album, EP, live); its genres, two or three; its length and how
+  many tracks; the reason, short ("Like Air and Bonobo", "Missing from Air's albums", "ListenBrainz recommends");
+  New to you or By an artist you have; how many listen to it (Last.fm's listeners, where known); and, with 0070, the
+  request's status.
+- **Genres:** MusicBrainz's own genres (its curated list), else the services' tags kept only where they name a genre
+  on that list (no "seen live").
+- **Where they come from, cheaply:** ListenBrainz's names come with their tags in the same call; Last.fm's album info
+  brings tags and listeners (five calls a second); MusicBrainz's discography lookup brings each album's genres with
+  it. Length and track count need one MusicBrainz release each (one a second): looked up for the cards in view first,
+  then the rest, and kept, so a card fills in as it is seen the first time and opens complete after.
