@@ -135,3 +135,10 @@ Incoming's Keep, Delete and Replace, upgrades, covers, Discover deciding what is
 sources than Soulseek, so Lidarr stays. The owner liked the intermediate step: in 0.9 **Cratarr keeps the want list and
 each request's status itself, and Lidarr is one way of carrying a request out**, behind an interface another could take
 (slskd directly, say) without the requests, their queue or their statuses changing.
+
+## Not done: playing Bandcamp in Cratarr
+
+Considered 2026-10-24: a Discover suggestion's tracks played as a preview from Bandcamp's album page, as NewPipe does
+(NewPipeExtractor, GPL-3.0-or-later; the reading would be the server's, as a browser may not read Bandcamp's pages).
+The owner decided against it: Bandcamp's streams are meant for its own player, and what Cratarr already does with
+outside services is questionable enough. Discover links to Bandcamp and YouTube; listening happens there.
