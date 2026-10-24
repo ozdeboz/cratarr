@@ -126,7 +126,8 @@
         class:lit={!searching && pageView.query.trim() !== ''}
         aria-label={words}
         title={words}
-        onclick={() => (searching ? field?.focus() : (searching = true))}
+        onmousedown={(e) => searching && e.preventDefault()}
+        onclick={() => (searching = !searching)}
         transition:slide={UNFOLD}
         ><Icon name="search" size={22} /></button
       >
