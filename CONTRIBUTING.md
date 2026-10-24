@@ -43,11 +43,12 @@ change, and propose one.
 
 ## How the repository is kept
 
-- `main` is the trunk: what the next preview or release is built from, and nothing else.
-- Work happens on a short-lived branch off `main`, named for the task (`playlist-stats`, `folders`), one task each.
-  When it is done and checked it goes into `main` once (a fast-forward, or a single merge when `main` moved meanwhile),
-  and the branch is deleted. Branches are not merged back and forth between each other.
-- Before a branch goes in, `main` is brought into it (merge or rebase) and checked again, so `main` only ever gets what
-  was checked together.
-- Every build that is put to use gets a tag on the commit it was built from (`preview-50`), so what runs can always be
-  found again.
+- `main` is what was released, and moves only at a release.
+- Work happens on branches named for it. They come together on a development branch, where the pieces are checked
+  together and run on a real install before they are released; a working branch takes the development branch back in
+  whenever it needs what landed there. A pull request against `main` is brought onto the development branch the same
+  way.
+- A release is the development branch, checked as a whole, brought onto `main` (a fast-forward) with the version in
+  `server/Cargo.toml` and `web/package.json` raised, and tagged `vX.Y.Z`. The tag builds the image for amd64 and arm64
+  and makes the GitHub release ([.github/workflows/release.yml](.github/workflows/release.yml)), so what runs can always
+  be found again. Builds before 0.8 were tagged `preview-N`.
