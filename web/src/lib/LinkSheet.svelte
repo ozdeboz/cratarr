@@ -4,6 +4,8 @@
   // to another site), so they all ask alike; Open goes to the browser (the app's own window for another site).
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
+  import { copyText } from './clipboard';
+  import { toast } from './toast.svelte';
 
   let { url, name, onclose }: { url: string; name: string; onclose: () => void } = $props();
 
@@ -12,12 +14,9 @@
     onclose();
   }
   async function copy() {
-    try {
-      await navigator.clipboard.writeText(url);
-    } catch {
-      /* no clipboard here: nothing copied */
-    }
+    const copied = await copyText(url);
     onclose();
+    if (!copied) toast.show({ text: "It couldn't be copied", tone: 'error' });
   }
 </script>
 

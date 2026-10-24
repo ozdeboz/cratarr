@@ -26,6 +26,7 @@
     type Task,
   } from '../api';
   import { progressOf, tasks } from '../tasks.svelte';
+  import { copyText } from '../clipboard';
   import { backFromThing, openThing } from '../panel.svelte';
   import { nameThing } from '../settingsSections.svelte';
   import ChoiceSheet from './ChoiceSheet.svelte';
@@ -243,8 +244,7 @@
   let lovedCopied = $state(false);
   async function copyLoved() {
     const text = lovedMissing.map((m) => [m.artist, m.title, m.album ?? ''].join('\t')).join('\n');
-    await navigator.clipboard?.writeText(`Artist\tTitle\tAlbum\n${text}\n`);
-    lovedCopied = true;
+    lovedCopied = await copyText(`Artist\tTitle\tAlbum\n${text}\n`);
   }
 
   // Files: chosen here, read by the server one at a time, kept nowhere. Each its result; a playlist made can be undone,

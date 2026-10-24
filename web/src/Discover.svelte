@@ -145,10 +145,13 @@
     if (a.kind) parts.push(a.kind);
     if (a.track_count) parts.push(`${a.track_count} ${a.track_count === 1 ? 'track' : 'tracks'}`);
     if (a.length_secs) parts.push(hoursMinutes(a.length_secs));
+    if (a.listeners) parts.push(listeners(a.listeners));
     return parts.join(' · ');
   }
   const listeners = (n: number) =>
     `${n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : n} listeners`;
+  /** The card's pills: one per page the album has elsewhere (the owner, 2026-10-24); a search there is no pill. */
+  const pages = (a: DiscoverAlbum) => a.links.filter((l) => !l.name.startsWith('Search '));
 
   // The menu of the card tapped.
   let opened = $state<DiscoverAlbum | null>(null);
@@ -211,27 +214,25 @@
       <ul class="grid">
         {#each albums as a (a.key)}
           {@const r = view.requests?.[a.key]}
-          <li>
-            <!-- The whole card opens its menu (the owner, 2026-10-24: every action in a menu, on a tap). -->
-            <button class="card" aria-haspopup="menu" onclick={() => (opened = a)}>
-              <!-- Cratarr's own cover: a picture that does not load is its stand-in, and the suggestion stays. -->
-              <span class="cover"><Cover src={a.cover} /></span>
-              <span class="text">
+          <li class="card">
+            <!-- A tap anywhere on the card opens its menu (the owner, 2026-10-24: every action in a menu), but on its
+                 pills, which are its links (each through the Open/Copy sheet, as every link to another site). -->
+            <button class="open" aria-haspopup="menu" aria-label={`${a.album} by ${a.artist}`} onclick={() => (opened = a)}></button>
+            <!-- Cratarr's own cover: a picture that does not load is its stand-in, and the suggestion stays. -->
+            <span class="cover"><Cover src={a.cover} /></span>
+            <span class="text">
                 <b>{a.album}</b>
                 <span class="by">{a.artist}{a.year ? ` · ${a.year}` : ''}{#if a.new_artist}<span class="new">New to you</span>{/if}</span>
                 {#if facts(a)}<small class="facts">{facts(a)}</small>{/if}
                 {#if a.genres?.length}<span class="tags">{#each a.genres as g (g)}<span class="tag">{g}</span>{/each}</span>{/if}
                 {#each a.why as w (w)}<small class="why">{w}</small>{/each}
-                <span class="tags">
-                  {#each a.sources ?? [] as src (src)}<span class="tag source">{src}</span>{/each}
-                  {#if a.listeners}<span class="tag source">{listeners(a.listeners)}</span>{/if}
-                  {#if a.bandcamp}<span class="tag source">On Bandcamp</span>{/if}
-                </span>
+                {#if pages(a).length}
+                  <span class="tags">{#each pages(a) as l (l.url)}<a class="tag link" href={l.url} target="_blank" rel="noopener noreferrer">{l.name}</a>{/each}</span>
+                {/if}
                 {#if r && asked(r)}
                   <small class="asked" class:bad={r.status === 'declined' || r.fetched?.startsWith('Not handed over')}>{asked(r)}</small>
                 {/if}
-              </span>
-            </button>
+            </span>
           </li>
         {/each}
       </ul>
@@ -301,25 +302,40 @@
     list-style: none;
   }
 
-  /* A card is one button: a tap opens its menu. */
+  /* A card: a button under all of it opens its menu; its pills (links) lie over that button. */
   .card {
+    position: relative;
     display: flex;
     gap: 14px;
-    width: 100%;
-    height: 100%;
     padding: 12px;
-    border: 0;
     border-radius: 14px;
     background: var(--surface);
-    color: var(--text);
-    font: inherit;
-    text-align: left;
+  }
+
+  .card:has(.open:hover),
+  .card:has(.open:focus-visible) {
+    background: color-mix(in srgb, var(--text) 6%, var(--surface));
+  }
+
+  .open {
+    position: absolute;
+    inset: 0;
+    padding: 0;
+    border: 0;
+    border-radius: inherit;
+    background: none;
     cursor: pointer;
   }
 
-  .card:hover,
-  .card:focus-visible {
-    background: color-mix(in srgb, var(--text) 6%, var(--surface));
+  /* What the card says lets a tap through to the button under it; its links take their own. */
+  .cover,
+  .text {
+    position: relative;
+    pointer-events: none;
+  }
+
+  .text a {
+    pointer-events: auto;
   }
 
   .cover {
@@ -399,9 +415,11 @@
     font-size: 11px;
   }
 
-  .tag.source {
+  /* A page elsewhere: a pill to tap. */
+  .tag.link {
     background: color-mix(in srgb, var(--text) 8%, transparent);
-    color: var(--muted);
+    color: var(--text);
+    text-decoration: none;
   }
 
   /* The way to connect a service, when none is. */

@@ -18,6 +18,7 @@
   import { sheetArea } from './SheetArea.svelte';
   import { sheetDrag } from './sheetDrag';
   import { toast } from './toast.svelte';
+  import { copyText } from './clipboard';
 
   let {
     label,
@@ -64,18 +65,14 @@
     children: Snippet;
   } = $props();
 
-  // The accent from the first image, fading in once known.
   /** The item copied (its `copy`), said as the share's copy says it. */
   async function copyItem() {
     if (!copy) return;
-    try {
-      await navigator.clipboard.writeText(copy);
-      toast.show({ text: 'Copied', tone: 'done' });
-    } catch (e) {
-      toast.fail(e, "It couldn't be copied");
-    }
+    if (await copyText(copy)) toast.show({ text: 'Copied', tone: 'done' });
+    else toast.show({ text: "It couldn't be copied", tone: 'error' });
   }
 
+  // The accent from the first image, fading in once known.
   let accent = $state<string | null>(null);
   $effect(() => {
     const src = images?.[0];

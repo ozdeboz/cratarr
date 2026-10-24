@@ -5,6 +5,7 @@
   // revoke; a new one asks for the password again and shows once (decisions 0043, 0051). Acts at once, not with the
   // Save bar.
   import { getHomeAssistant, getUsers, newApiKey, revokeApiKey, setHomeAssistantOn, type ApiKey, type KeyScope, type Weather } from '../api';
+  import { copyText } from '../clipboard';
   import { me } from '../me.svelte';
   import { openThing } from '../panel.svelte';
   import Seg from '../Seg.svelte';
@@ -149,7 +150,7 @@
       {#if made?.id === k.id}
         {@const m = made}
         <Item lead="on" name="Shown only now" line={m.key} wrap>
-          <button onclick={() => navigator.clipboard?.writeText(m.key)}>Copy</button>
+          <button onclick={() => copyText(m.key)}>Copy</button>
         </Item>
       {:else}
         <Item name={k.name} line={keyLine(k)}>
