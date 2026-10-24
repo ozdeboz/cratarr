@@ -66,7 +66,7 @@
           <MenuEntry icon="intoBox" label="Save as playlist" onclick={() => (saving = true)} />
         </MenuGroup>
         <MenuGroup>
-          {#if tracks.length}<MenuEntry icon="download" label="Export…" onclick={() => (step = 'export')} />{/if}
+          {#if tracks.length}<MenuEntry icon="export" label="Export…" onclick={() => (step = 'export')} />{/if}
         </MenuGroup>
         <MenuGroup>
           <MenuEntry icon="list" label="Queues…" onclick={() => (switching = true)} />

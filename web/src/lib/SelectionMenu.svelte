@@ -6,10 +6,10 @@
   import MenuSheet from './MenuSheet.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuGroup from './MenuGroup.svelte';
+  import DownloadEntry from './DownloadEntry.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import ExportStep from './ExportStep.svelte';
   import PlaylistsStep from './PlaylistsStep.svelte';
-  import { download, inApp } from './app.svelte';
   import { me } from './me.svelte';
   import TempoStep from './TempoStep.svelte';
   import type { LocalTrack } from './localPlayer.svelte';
@@ -78,17 +78,8 @@
         {#if toList.addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
       </MenuGroup>
       <MenuGroup>
-        {#if inApp}
-          <MenuEntry
-            icon="arrowDownToLine"
-            label="Download"
-            onclick={() => {
-              download(tracks);
-              onclose();
-            }}
-          />
-        {/if}
-        <MenuEntry icon="download" label="Export…" onclick={() => (exporting = true)} />
+        <DownloadEntry {tracks} />
+        <MenuEntry icon="export" label="Export…" onclick={() => (exporting = true)} />
       </MenuGroup>
       {#if me.admin && source !== 'device'}
         <MenuGroup>

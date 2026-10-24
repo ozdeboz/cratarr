@@ -32,6 +32,7 @@
   import { excludeGlobally } from './exclusions.svelte';
   import ExportStep from './ExportStep.svelte';
   import MenuCards from './MenuCards.svelte';
+  import DownloadEntry from './DownloadEntry.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
   import PlaylistToggles from './PlaylistToggles.svelte';
@@ -45,7 +46,6 @@
   import { albumSubject, artistOf, panel, viewOver } from './panel.svelte';
   import { linkTo, share } from './share';
   import { crateOf, genreOf, viewGenre, viewLike } from './crates.svelte';
-  import { download, inApp } from './app.svelte';
   import { me } from './me.svelte';
   import TempoStep from './TempoStep.svelte';
 
@@ -375,18 +375,8 @@
           {#if addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
         </MenuGroup>
         <MenuGroup>
-          {#if inApp && t && !onDevice}
-            {@const one = t}
-            <MenuEntry
-              icon="arrowDownToLine"
-              label="Download"
-              onclick={() => {
-                download([one]);
-                onclose();
-              }}
-            />
-          {/if}
-          {#if !onDevice}<MenuEntry icon="download" label="Export…" onclick={() => (step = 'export')} />{/if}
+          {#if t && !onDevice}<DownloadEntry tracks={[t]} />{/if}
+          {#if !onDevice}<MenuEntry icon="export" label="Export…" onclick={() => (step = 'export')} />{/if}
           {#if !onDevice}<MenuEntry icon="share" label="Share" onclick={shareIt} />{/if}
         </MenuGroup>
         <MenuGroup>

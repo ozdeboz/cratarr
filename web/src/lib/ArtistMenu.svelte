@@ -5,13 +5,14 @@
   // (one chosen here, or their newest album's cover again); in the app Keep on this device (decision 0038). No Instant mix (the owner: "a confusing thing"), no rating
   // (the server keeps none for artists).
   import { albumCoverUrl } from './api';
-  import { download, downloads, inApp, removeDownloads } from './app.svelte';
+  import { downloads, inApp, removeDownloads } from './app.svelte';
   import { artistPictureId } from './albums.svelte';
   import { coverKey, localCovers, removeLocalCover, setLocalCover } from './localCovers.svelte';
   import type { LocalTrack } from './localPlayer.svelte';
   import { isKept, setKept } from './kept.svelte';
   import ExportStep from './ExportStep.svelte';
   import MenuCards from './MenuCards.svelte';
+  import DownloadEntry from './DownloadEntry.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
@@ -154,22 +155,13 @@
         {#if toList.addable}<MenuEntry icon="playlists" label="Add to playlist" onclick={() => (step = 'lists')} />{/if}
       </MenuGroup>
       <MenuGroup>
-        {#if inApp && tracks.length && kept.length < tracks.length}
-          <MenuEntry
-            icon="arrowDownToLine"
-            label="Download"
-            onclick={() => {
-              onclose();
-              download(tracks);
-            }}
-          />
-        {/if}
+        <DownloadEntry {tracks} />
         {#if inApp}
           <!-- Kept on this device (decision 0038): their tracks stay in step offline. -->
           {@const on = isKept('artist', source, name)}
-          <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('artist', source, name, !on, name)} />
+          <MenuEntry icon="download" label="Sync to this device" switched={on} onclick={() => setKept('artist', source, name, !on, name)} />
         {/if}
-        {#if tracks.length}<MenuEntry icon="download" label="Export…" onclick={() => (exporting = true)} />{/if}
+        {#if tracks.length}<MenuEntry icon="export" label="Export…" onclick={() => (exporting = true)} />{/if}
         <MenuEntry icon="share" label="Share" onclick={shareIt} />
       </MenuGroup>
       <MenuGroup>

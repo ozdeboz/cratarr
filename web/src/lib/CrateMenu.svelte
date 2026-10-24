@@ -127,7 +127,7 @@
       {#if inApp && source && genre === null}
         {@const s = source}
         {@const on = isKept('crate', s, id)}
-        <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('crate', s, id, !on, name)} />
+        <MenuEntry icon="download" label="Sync to this device" switched={on} onclick={() => setKept('crate', s, id, !on, name)} />
       {/if}
       <MenuEntry icon="share" label="Share" onclick={shareIt} />
     </MenuGroup>
