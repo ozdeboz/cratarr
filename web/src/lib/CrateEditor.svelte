@@ -16,11 +16,14 @@
   let { conditions = $bindable(), total = $bindable(null) }: { conditions: FilterCondition[]; total?: number | null } = $props();
 
   // The axes: their kinds and domains in this library.
-  let axes = $state<Axis[]>([]);
+  let axes = $state<Axis[] | null>(null);
   $effect(() => {
     getCrateAxes(prefs.source || undefined).then(
       (a) => (axes = a),
-      (e) => toast.fail(e, "The crate's axes couldn't be loaded"),
+      (e) => {
+        axes ??= [];
+        toast.fail(e, "The crate's axes couldn't be loaded");
+      },
     );
   });
   // The live preview.

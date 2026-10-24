@@ -797,7 +797,7 @@
   }
 
   .go.add .name {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .danger {
@@ -867,7 +867,7 @@
   }
 
   .moves.on {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .pin {
@@ -883,7 +883,7 @@
   }
 
   .pin.on {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .sheet {

@@ -1,13 +1,26 @@
 <script lang="ts">
   // A section's heading in a panel's page (as Symfonium's: More from, About, Albums, Top tracks): large and plain, with
   // a › at the end when the heading opens all of it (`onmore`, the whole heading is the button then); or a play button
-  // at its end (`onplay`: Home's sections that play as a whole, the owner 2026-10-23).
+  // at its end (`onplay`: Home's sections that play as a whole, the owner 2026-10-23); or a control of the section's own
+  // there (`end`: the moment's Radio, as it has it leading Home, the owner 2026-10-24).
+  import type { Snippet } from 'svelte';
   import Icon from './Icon.svelte';
 
-  let { title, onmore, onplay, busy = false }: { title: string; onmore?: () => void; onplay?: () => void; busy?: boolean } = $props();
+  let {
+    title,
+    onmore,
+    onplay,
+    busy = false,
+    end,
+  }: { title: string; onmore?: () => void; onplay?: () => void; busy?: boolean; end?: Snippet } = $props();
 </script>
 
-{#if onplay}
+{#if end}
+  <div class="head">
+    <h2>{title}</h2>
+    {@render end()}
+  </div>
+{:else if onplay}
   <div class="head">
     <h2>{title}</h2>
     <button class="play" aria-label={`Play ${title}`} title="Play" disabled={busy} onclick={onplay}><Icon name="play" size={20} /></button>
@@ -53,7 +66,7 @@
 
   .more {
     display: flex;
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .play {

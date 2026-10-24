@@ -55,7 +55,11 @@
   const H = 140;
   const pct = (s: number) => `${Math.round(100 * s)}%`;
   /** The top of the scale: the highest share, up to the next 10%. */
-  const peak = $derived(Math.max(0.1, Math.ceil(10 * Math.max(0, ...(data?.taste.shares.flat() ?? []))) / 10));
+  /** How many genres the chart draws: four, the most that keep apart from each other and from the accent, the red and
+   *  the amber (Coral & honey, the owner 2026-10-24) for every kind of colour vision. */
+  const SERIES = 4;
+  const genres = $derived((data?.taste.genres ?? []).slice(0, SERIES));
+  const peak = $derived(Math.max(0.1, Math.ceil(10 * Math.max(0, ...(data?.taste.shares.map((row) => row.slice(0, SERIES)).flat() ?? []))) / 10));
   const x = (i: number) => (data && data.taste.starts.length > 1 ? (i * W) / (data.taste.starts.length - 1) : W / 2);
   const y = (s: number) => H - (s / peak) * H;
   const stepName = (st: number) =>
@@ -135,13 +139,13 @@
           <svg viewBox="0 0 {W} {H}" preserveAspectRatio="none" role="img" aria-label="Each genre's share of your listening per {t.step}">
             <line class="grid" x1="0" x2={W} y1={y(peak / 2)} y2={y(peak / 2)} />
             <line class="grid" x1="0" x2={W} y1={y(peak)} y2={y(peak)} /><line class="grid base" x1="0" x2={W} y1={H} y2={H} />
-            {#each t.genres as g, j (g)}
+            {#each genres as g, j (g)}
               <polyline points={t.shares.map((row, i) => `${x(i)},${y(row[j] ?? 0)}`).join(' ')} style:stroke={`var(--viz-${j + 1})`} />
             {/each}
             <!-- Hover: each step's shares. -->
             {#each t.starts as st, i (st)}
               <rect x={x(i) - W / t.starts.length / 2} y="0" width={W / t.starts.length} height={H}>
-                <title>{[stepName(st), ...t.genres.map((g, j) => `${g}: ${pct(t.shares[i][j] ?? 0)}`)].join('\n')}</title>
+                <title>{[stepName(st), ...genres.map((g, j) => `${g}: ${pct(t.shares[i][j] ?? 0)}`)].join('\n')}</title>
               </rect>
             {/each}
           </svg>
@@ -150,7 +154,7 @@
           </div>
         </div>
         <ul class="legend">
-          {#each t.genres as g, j (g)}
+          {#each genres as g, j (g)}
             <li><i style:background={`var(--viz-${j + 1})`}></i>{g}<span class="n">{pct(average(j))}</span></li>
           {/each}
         </ul>
@@ -164,33 +168,32 @@
 </div>
 
 <style>
-  /* The categorical slots (the dataviz reference palette, checked against both surfaces), and Other's neutral. */
+  /* The categorical slots, blue, magenta, violet, olive in both themes: none near the accent, the red or the amber
+     (their hues 35 degrees off at least), apart from each other for every kind of colour vision and 3 : 1 on the
+     page (the dataviz checks, searched in OKLCH for this palette, 2026-10-24). */
   .listening {
-    --viz-1: #3987e5;
-    --viz-2: #d95926;
-    --viz-3: #199e70;
-    --viz-4: #c98500;
-    --viz-5: #d55181;
+    --viz-1: #2892c9;
+    --viz-2: #c35ea9;
+    --viz-3: #6551b3;
+    --viz-4: #696c07;
     display: grid;
     gap: 28px;
   }
 
   @media (prefers-color-scheme: light) {
     :global(:root:not([data-theme='dark'])) .listening {
-      --viz-1: #2a78d6;
-      --viz-2: #eb6834;
-      --viz-3: #1baf7a;
-      --viz-4: #eda100;
-      --viz-5: #e87ba4;
+      --viz-1: #2892c9;
+      --viz-2: #d365a7;
+      --viz-3: #6843a5;
+      --viz-4: #556708;
     }
   }
 
   :global(:root[data-theme='light']) .listening {
-    --viz-1: #2a78d6;
-    --viz-2: #eb6834;
-    --viz-3: #1baf7a;
-    --viz-4: #eda100;
-    --viz-5: #e87ba4;
+    --viz-1: #2892c9;
+    --viz-2: #d365a7;
+    --viz-3: #6843a5;
+    --viz-4: #556708;
   }
 
   h2 {

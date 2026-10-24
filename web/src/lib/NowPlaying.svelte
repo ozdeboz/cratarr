@@ -7,7 +7,7 @@
   import { fade } from 'svelte/transition';
   import { reducedMotion } from './motion';
   import Icon from './Icon.svelte';
-  import { player, refresh } from './live.svelte';
+  import { live, player, refresh } from './live.svelte';
   import TrackMenu from './TrackMenu.svelte';
   import QueueSheet from './QueueSheet.svelte';
   import OutputSheet from './OutputSheet.svelte';
@@ -472,7 +472,8 @@
               >{/if}{#if np.artist && np.album}<span class="dot">·</span>{/if}{#if np.album && np.album_id}<button class="album-name" onclick={toAlbum}>{np.album}</button
               >{:else if np.album}<span class="album-name">{np.album}</span>{/if}
           </div>
-        {:else}
+        {:else if isLocal() || live.view}
+          <!-- Another player's: said once its state was read, not before the first poll (the owner, 2026-10-24). -->
           <div class="title idle">Nothing is playing</div>
         {/if}
       </div>

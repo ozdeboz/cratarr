@@ -189,7 +189,7 @@
   }
 
   .act.add {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
 
   .act:disabled {

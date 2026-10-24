@@ -1,6 +1,6 @@
 <script lang="ts">
-  // Account (decision 0051, several users): who is signed in and their role, read-only; the address apps reach Cratarr
-  // at; their password: a Cratarr account's own (0051, amended 2026-10-19; it is its OpenSubsonic one too), or for a
+  // Account (decision 0051, several users): who is signed in and their role, read-only (no address: a browser's is in
+  // its address bar, the app's under Network; the owner, 2026-10-24); their password: a Cratarr account's own (0051, amended 2026-10-19; it is its OpenSubsonic one too), or for a
   // directory's account its own password for OpenSubsonic apps (whose sign-in needs the password itself, which a
   // directory never gives); their devices (each plays only on its own) and their sign-ins, each to end. Acts at once.
   import { changeOwnPassword, endMySession, removable, removeMyDevice, setAppPassword, type OwnDevice, type UserSession } from '../api';
@@ -65,7 +65,6 @@
 
 <Group>
   {#if me.name}<Item name={me.name} line={me.admin ? 'Administrator' : 'User'} />{:else}<Item name={me.admin ? 'Administrator' : 'User'} />{/if}
-  <Item name="Address" line={location.origin} wrap />
   {#if me.name && me.directory === false}
     <Item name="Password" value="Change" onclick={() => ((error = null), (changing = true))} />
   {:else if me.name}

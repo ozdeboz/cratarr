@@ -142,6 +142,9 @@ export function shownPlaylists(): Playlist[] {
   if (!isLocal()) return live.view?.playlists ?? [];
   return localState.view?.playlists ?? (live.view?.playlists ?? []).map((p) => ({ ...p, member: false }));
 }
+/** Whether `shownPlaylists` has been read: until then its [] is not known to be empty, and a count says nothing
+ *  rather than "0 tracks" (the owner, 2026-10-24). */
+export const playlistsKnown = () => !!live.view || (isLocal() && !!localState.view);
 
 /** Puts what plays in the playlist or takes it out, where the output is. */
 export async function setPlayingMember(playlistId: string, member: boolean) {

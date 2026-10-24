@@ -1,42 +1,54 @@
 <script lang="ts">
-  // Insights' own panel (the owner, 2026-10-23): how the open tab is viewed, out of the tabs' pill. What it holds is the
-  // tab's controls (lib/insightsControls), each kind drawn one way here, as the settings' rows. Opened by the page row's
-  // button, closed by its ✕; beside the page at a fixed width on a roomy window, never over it there (no place to
-  // choose), over the page on a phone.
+  // An Insights view in the panel (the owner, 2026-10-24: Insights as Settings and Health): opened from the page's list,
+  // beside it on a roomy window (no ✕ there), over it on a phone. Its bar: where it is (Collection › Overview) and, when
+  // the view has any, the sliders opening its controls in a sheet (lib/InsightsSheet). The views are the tabs' as they
+  // were (Collection's sections, Listening's History and Profile, the Map).
   import Icon from './Icon.svelte';
-  import Seg from './Seg.svelte';
-  import Group from './settings/Group.svelte';
-  import Item from './settings/Item.svelte';
+  import InsightsCollection from './InsightsCollection.svelte';
+  import InsightsListening from './InsightsListening.svelte';
+  import InsightsMap from './InsightsMap.svelte';
+  import InsightsProfile from './InsightsProfile.svelte';
+  import InsightsSheet from './InsightsSheet.svelte';
   import { insightsControls } from './insightsControls.svelte';
+  import { INSIGHTS_VIEWS, showView, type InsightsView } from './insightsViews';
+  import { insights } from './insights.svelte';
+  import PageLoading from './PageLoading.svelte';
   import { closePlaylist } from './panel.svelte';
-  import { prefs } from './prefs.svelte';
 
-  const TITLES = { collection: 'Collection', listening: 'Listening', map: 'Map' } as const;
-  const SUBS: Record<string, string> = { overview: 'Overview', genres: 'Genres', artists: 'Artists', tracks: 'Tracks', history: 'History', profile: 'Profile' };
-  // Where the panel's controls apply, as one breadcrumb (the owner, 2026-10-23): the tab, then its section.
-  const sub = $derived(prefs.insightsTab === 'collection' ? SUBS[prefs.insightsCollection] : prefs.insightsTab === 'listening' ? SUBS[prefs.listeningView] : null);
-  const groups = $derived(insightsControls());
+  let { view, beside = false }: { view: InsightsView; beside?: boolean } = $props();
+
+  // The views and their controls read the tab and its section: set before they draw.
+  $effect.pre(() => showView(view));
+  $effect(() => insights.load());
+  const v = $derived(INSIGHTS_VIEWS.find((x) => x.id === view) ?? INSIGHTS_VIEWS[0]);
+  const controls = $derived(insightsControls().length > 0);
+  let sheet = $state(false);
 </script>
 
 <div class="view">
-  <div class="bar">
-    <span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>
-    <h2 class="title">{#if sub}<span class="up">{TITLES[prefs.insightsTab]}</span><span class="sep" aria-hidden="true">›</span>{sub}{:else}{TITLES[prefs.insightsTab]}{/if}</h2>
+  <div class="bar" class:beside>
+    {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
+    <h2 class="title"><span class="up">{v.group}</span><span class="sep" aria-hidden="true">›</span>{v.label}</h2>
+    {#if controls}<span class="navpill"><button aria-label="View" title="View" onclick={() => (sheet = true)}><Icon name="sliders" size={22} /></button></span>{/if}
   </div>
   <div class="scroll">
-    {#each groups as g, i (i)}
-      <Group title={g.title}>
-        {#each g.controls as c, j (j)}
-          {#if c.kind === 'choice'}
-            <Item name={c.name}><Seg label={c.name} options={c.options} bind:value={c.get, c.set} /></Item>
-          {:else}
-            <Item name={c.name} line={c.line ?? null} disabled={c.disabled} toggle={{ checked: c.get(), onchange: c.set }} />
-          {/if}
-        {/each}
-      </Group>
-    {/each}
+    {#if view === 'history'}
+      <InsightsListening />
+    {:else if view === 'profile'}
+      <InsightsProfile />
+    {:else if view === 'map'}
+      <InsightsMap />
+    {:else if insights.error}
+      <p class="error" role="alert">{insights.error}</p>
+    {:else if !insights.data}
+      <PageLoading />
+    {:else}
+      <InsightsCollection data={insights.data} />
+    {/if}
   </div>
 </div>
+
+{#if sheet}<InsightsSheet title={`${v.group} › ${v.label}`} onclose={() => (sheet = false)} />{/if}
 
 <style>
   /* As a part of the settings in the panel (lib/SettingsPanel): its bar on top, what it holds under it. */
@@ -57,6 +69,10 @@
     border-bottom: 1px solid var(--border);
   }
 
+  .bar.beside {
+    padding-left: clamp(12px, 2vw, 24px);
+  }
+
   .title {
     flex: 1;
     min-width: 0;
@@ -68,13 +84,13 @@
     white-space: nowrap;
   }
 
-  .up {
+  .up,
+  .sep {
     color: var(--muted);
   }
 
   .sep {
     margin: 0 8px;
-    color: var(--muted);
   }
 
   .scroll {
@@ -82,6 +98,10 @@
     min-height: 0;
     overflow-y: auto;
     padding: 16px clamp(12px, 2vw, 24px) calc(var(--mini-h, 0px) + 16px);
+  }
+
+  .error {
+    color: var(--danger-ink);
   }
 
   .navpill {

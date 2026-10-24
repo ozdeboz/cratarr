@@ -9,11 +9,6 @@
   // chip only shows the library's use. A tap on a server's card follows it; a tap on the followed one goes back to no choice, which is
   // Cratarr's own source where the server has it (lib/sources). The libraries are only shown, with their use: Cratarr
   // has no per-library visibility, and a use is set only in Settings (decision 0009).
-  // On the Library, under its switches, "Excluded (N)": Cratarr's global exclusions while there are any (decision 0024,
-  // amended 2026-10-19; moved here from the top of the page, the owner: "It takes up a lot of real estate"), opening
-  // their own sheet (lib/ExcludedSheet) over this one.
-  import ExcludedSheet from './ExcludedSheet.svelte';
-  import { excluded } from './exclusions.svelte';
   import Switch from './Switch.svelte';
   import ConditionList from './ConditionList.svelte';
   import type { ListAxis } from './ConditionCard.svelte';
@@ -60,7 +55,7 @@
   }
   // The axes and their values with their counts in the list in view, the most common first (decision 0061: over all
   // its items, so everything there is to choose from shows); a server from before it: the whole library's, uncounted.
-  let axes = $state<ListAxis[]>([]);
+  let axes = $state<ListAxis[] | null>(null);
   $effect(() => {
     if (!conditioned) return;
     const at = inView[list];
@@ -68,7 +63,10 @@
     const whole = () => getCrateAxes(prefs.source || undefined, hiddenLibraries());
     (at ? filterList(at.list, [], at.source, without).then((f) => f.axes, whole) : whole()).then(
       (a) => (axes = a),
-      (e) => toast.fail(e, "The filter's conditions couldn't be loaded"),
+      (e) => {
+        axes ??= [];
+        toast.fail(e, "The filter's conditions couldn't be loaded");
+      },
     );
   });
 
@@ -82,14 +80,24 @@
   });
 
   // Each server's own name and its libraries, as Settings → Libraries reads them. The cards show without them until
-  // they come: the list of servers alone is enough to choose one.
+  // they come: the list of servers alone is enough to choose one, but unnamed (not its kind first, then its own name
+  // over the kind: the owner, 2026-10-24). `settingsKnown`: read, or could not be (then the kind is the name).
   // (An administrator reads them from the server's settings; anyone else from the libraries, decision 0051.)
   let settings = $state<LibrariesView | null>(null);
+  let settingsKnown = $state(false);
   $effect(() => {
     let gone = false;
     (me.admin ? getSettings() : getLibraries()).then(
-      (s) => !gone && (settings = s),
-      (e) => !gone && toast.fail(e, "The servers' libraries couldn't be loaded"),
+      (s) => {
+        if (gone) return;
+        settings = s;
+        settingsKnown = true;
+      },
+      (e) => {
+        if (gone) return;
+        settingsKnown = true;
+        toast.fail(e, "The servers' libraries couldn't be loaded");
+      },
     );
     return () => (gone = true);
   });
@@ -111,7 +119,8 @@
         name: l.name,
         use: (view!.libraries.music.includes(l.id) ? 'music' : view!.libraries.incoming.includes(l.id) ? 'incoming' : 'unused') as LibraryUse,
       }));
-      return { id: s.id, name: own ?? (twin ? `${s.label} (${s.id})` : s.label), kind: own ? s.label : null, playing: s.playing, libraries };
+      const name = own ?? (twin ? `${s.label} (${s.id})` : s.label);
+      return { id: s.id, name: settingsKnown ? name : '', said: name, kind: own ? s.label : null, playing: s.playing, libraries };
     }),
   );
 
@@ -125,7 +134,6 @@
     prefs.source = prefs.source === id ? noChoice() : id;
   }
 
-  let excludedOpen = $state(false);
 </script>
 
 <MenuSheet
@@ -149,11 +157,6 @@
         {/each}
       </div>
     {/if}
-    {#if page === 'library' && excluded.n}
-      <button class="opens" onclick={() => (excludedOpen = true)}
-        ><span>Excluded ({excluded.n.toLocaleString()})</span><Icon name="chevronRight" size={22} /></button
-      >
-    {/if}
 
     {#each cards as c (c.id)}
       {@const on = prefs.source === c.id}
@@ -161,7 +164,7 @@
         <button
           class="pick"
           aria-pressed={on}
-          aria-label={[c.name, c.kind, c.playing ? 'playing' : null].filter(Boolean).join(', ')}
+          aria-label={[c.said, c.kind, c.playing ? 'playing' : null].filter(Boolean).join(', ')}
           onclick={() => follow(c.id)}
         >
           <Icon name="server" size={24} />
@@ -195,9 +198,6 @@
   </div>
 </MenuSheet>
 
-{#if excludedOpen}
-  <ExcludedSheet onclose={() => (excludedOpen = false)} />
-{/if}
 
 <style>
   /* Symfonium's sheet: rounded cards on the sheet, a little apart. */
@@ -214,44 +214,6 @@
   .toggles {
     display: grid;
     gap: 3px;
-  }
-
-  /* A row that opens a sheet of its own (the global exclusions): a card as a switch's, the chevron where its switch
-     would be. */
-  .opens {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    width: 100%;
-    min-height: 64px;
-    padding: 8px 16px 8px 20px;
-    border: 0;
-    border-radius: 20px;
-    background: var(--card);
-    color: var(--text);
-    font: inherit;
-    font-size: 16px;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .opens span {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .opens:hover {
-    background: var(--card-hover);
-  }
-
-  .opens :global(svg) {
-    flex: none;
-    color: var(--muted);
-  }
-
-  .opens:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
   }
 
   .count {

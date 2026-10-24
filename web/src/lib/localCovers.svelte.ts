@@ -48,11 +48,11 @@ async function load() {
 }
 if (typeof indexedDB !== 'undefined') load().catch(() => {});
 
-/** A picture no larger than it needs to be (JPEG, its longest side at most MAX_PX); as it is when it cannot be read. */
-async function shrink(file: Blob): Promise<Blob> {
+/** A picture no larger than it needs to be (JPEG, its longest side at most `max`); as it is when it cannot be read. */
+async function shrink(file: Blob, max = MAX_PX): Promise<Blob> {
   try {
     const img = await createImageBitmap(file);
-    const scale = Math.min(1, MAX_PX / Math.max(img.width, img.height));
+    const scale = Math.min(1, max / Math.max(img.width, img.height));
     const canvas = document.createElement('canvas');
     canvas.width = Math.round(img.width * scale);
     canvas.height = Math.round(img.height * scale);
@@ -64,23 +64,31 @@ async function shrink(file: Blob): Promise<Blob> {
   }
 }
 
-/** Shows `file` as the album's cover on this device from now on. */
-export async function setLocalCover(source: string, album: string, file: Blob) {
-  const key = coverKey(source, album);
+/** Keeps `file` on this device under `key` (its longest side at most `max`), shown from now on. */
+export async function setLocalPicture(key: string, file: Blob, max = MAX_PX) {
   // Read whole first: a picked file is only a reference to it on the device, which IndexedDB may not keep.
-  const small = await shrink(new Blob([await file.arrayBuffer()], { type: file.type }));
+  const small = await shrink(new Blob([await file.arrayBuffer()], { type: file.type }), max);
   await write(key, small);
   if (localCovers[key]) URL.revokeObjectURL(localCovers[key]);
   localCovers[key] = URL.createObjectURL(small);
 }
 
-/** The server's cover again. */
-export async function removeLocalCover(source: string, album: string) {
-  const key = coverKey(source, album);
+/** Forgets the picture kept under `key`. */
+export async function removeLocalPicture(key: string) {
   await write(key, null);
   if (localCovers[key]) URL.revokeObjectURL(localCovers[key]);
   delete localCovers[key];
 }
+
+/** Shows `file` as the album's cover on this device from now on. */
+export const setLocalCover = (source: string, album: string, file: Blob) => setLocalPicture(coverKey(source, album), file);
+/** The server's cover again. */
+export const removeLocalCover = (source: string, album: string) => removeLocalPicture(coverKey(source, album));
+
+/** Home's header picture chosen on this device in place of the weather's sky (the owner, 2026-10-24); wide, so kept
+ *  larger than a cover. */
+export const HOME_HEADER = 'home/header';
+export const HOME_HEADER_PX = 2400;
 
 /** Reads the album's cover from the server again, past the browser's copy (`url`: its plain address). */
 export async function refreshCover(source: string, album: string, url: string) {

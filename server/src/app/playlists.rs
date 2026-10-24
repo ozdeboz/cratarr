@@ -2229,6 +2229,16 @@ impl PlaylistService {
         Ok((sid.clone(), n, self.rows_of(lines, &sid).await?))
     }
 
+    /// Cratarr's own tracks by their song ids, as rows (Home's Favourite tracks), in the order given; songs whose file is
+    /// gone are left out.
+    pub async fn song_rows(&self, ids: Vec<String>) -> Result<Vec<PlaylistRow>, ToggleError> {
+        let cat = self.lib.catalogue();
+        let lines = tokio::task::spawn_blocking(move || ids.iter().filter_map(|id| crate::serve::playlists::line_of_song(&cat, id)).collect::<Vec<_>>())
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        self.rows_of(lines, crate::source::cratarr::KIND.id).await
+    }
+
     /// The Cratarr song ids of the tracks `user` excluded everywhere (`None`: the first administrator), for the picks
     /// that leave them out: Radio's and Autoplay's, the shuffles of the library and the favourites, Subsonic's random songs.
     pub async fn excluded_songs_of(&self, user: Option<&str>) -> Result<HashSet<String>, ToggleError> {

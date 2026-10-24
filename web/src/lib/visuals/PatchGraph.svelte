@@ -1266,7 +1266,7 @@
     cursor: pointer;
   }
   .catpin.on {
-    color: var(--accent);
+    color: var(--accent-ink);
     opacity: 1;
   }
   .crumbs {

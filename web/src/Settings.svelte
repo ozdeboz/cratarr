@@ -10,7 +10,8 @@
   import Icon from './lib/Icon.svelte';
   import { panel, SETTINGS, settingsOf, viewPlaylist } from './lib/panel.svelte';
   import { playOn } from './lib/playOn.svelte';
-  import { prefs } from './lib/prefs.svelte';
+  import { HOME_PARTS, prefs } from './lib/prefs.svelte';
+  import { HOME_HEADER, localCovers } from './lib/localCovers.svelte';
   import { kept } from './lib/kept.svelte';
   import { crates, loadCrates } from './lib/crates.svelte';
   import { excluded, loadExcluded } from './lib/exclusions.svelte';
@@ -103,6 +104,12 @@
         return [kept.known ? `${kept.items.length} kept` : null, appInfo.syncBudgetGb ? `${appInfo.syncBudgetGb} GB` : 'No limit'].filter(Boolean).join(' · ');
       case 'display':
         return THEME[prefs.theme];
+      case 'home': {
+        const n = prefs.homeParts.length;
+        return [n === HOME_PARTS.length ? 'Every section' : `${n} of ${HOME_PARTS.length} sections`, prefs.homeGreeting ? 'Greeting' : null, localCovers[HOME_HEADER] ? 'Your picture' : null]
+          .filter(Boolean)
+          .join(' · ');
+      }
       case 'taste': {
         const crate = (crates.list ?? []).filter((c) => (c.left_out ?? 0) > 0).length;
         return [excluded.n ? `${excluded.n.toLocaleString()} excluded everywhere` : null, crate ? `${crate} ${crate === 1 ? 'crate' : 'crates'}` : null]

@@ -189,7 +189,7 @@
   }
   .pinned {
     align-self: center;
-    color: var(--accent);
+    color: var(--accent-ink);
     line-height: 0;
   }
   .plus {

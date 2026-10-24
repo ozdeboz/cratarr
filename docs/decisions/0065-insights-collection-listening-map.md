@@ -7,6 +7,12 @@
 - Date: 2026-10-23
 - Builds on: 0023 (Related playlists, the graph), 0064 (one listening history), 0021 (the page's look)
 
+**Amended 2026-10-24 (the owner, for 0.8):** the tabs are gone. Insights is laid out as Settings and Health: its page
+lists the views in groups (Collection: Overview, Genres, Artists, Tracks; Listening: History, Profile; Playlists:
+Map), each opening in the panel (`insights:<view>`, beside the list on a roomy window, over it on a phone, the one last
+open opened again), with a breadcrumb; the panel's controls (the period, the libraries, sort, sources) are a sheet from
+the sliders in the view's bar. The Map in the panel opens a playlist over itself (back returns to the map).
+
 ## Context
 
 Insights had two tabs, Statistics and Related, as a segmented control under the page's overlay row: the back button

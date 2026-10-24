@@ -1211,7 +1211,8 @@ export type HealthFinding = {
   /** What it is about, one by one: an album (server, id) or a playlist opens where it is. */
   items?: HealthItem[];
 };
-export type HealthItem = { title: string; line?: string; album?: [string, string]; playlist?: string };
+/** One thing a finding is about: an album (its server and id), a playlist, the files it names (at most 30). */
+export type HealthItem = { title: string; line?: string; album?: [string, string]; playlist?: string; files?: string[] };
 /** Every domain's findings, worst first, the most recent first among equals; when each domain was checked. */
 export const getHealthReport = () => request<{ findings: HealthFinding[]; checked: Record<string, number> }>('/api/health/report');
 
@@ -1356,6 +1357,8 @@ export const getFavorites = (source: string, ids: string[]) =>
 
 /** The favourite albums of a server (their ids): the Library's Favourites only and the albums' hearts. */
 export const getFavoriteAlbums = (source: string) => quietly<string[]>(`/api/favorites/${encodeURIComponent(source)}/albums`);
+/** Cratarr's own favourite tracks as rows (Home's Favourite tracks), at most 100. */
+export const getFavoriteTracks = () => quietly<{ source: string; rows: PlaylistRow[] }>('/api/favorites/cratarr/tracks');
 
 /** Which playlists (by name) are favourites, as Finamp's playlist hearts (decision 0023). */
 export const getPlaylistFavorites = (source?: string) => quietly<Record<string, boolean>>(`/api/playlists/favorites${follow(source)}`);

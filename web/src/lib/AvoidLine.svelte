@@ -12,9 +12,16 @@
   let fit = $state<CrateFit | null>(null);
   let open = $state(false);
   let saved = $state(0);
+  /** The crate `fit` is of: another one's line goes at once, not shown while this one's comes; a read again keeps it
+   *  (the owner, 2026-10-24). */
+  let fitOf = '';
   $effect(() => {
     const c = crate;
     void [round, saved];
+    if (c !== fitOf) {
+      fitOf = c;
+      fit = null;
+    }
     getCrateFit(c).then(
       (f) => {
         if (c === crate) fit = f;

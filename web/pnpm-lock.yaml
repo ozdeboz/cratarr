@@ -23,6 +23,9 @@ importers:
       elkjs:
         specifier: 0.12.0
         version: 0.12.0
+      greet-by-time:
+        specifier: 1.0.1
+        version: 1.0.1
     devDependencies:
       '@sveltejs/vite-plugin-svelte':
         specifier: ^7.3.1
@@ -327,6 +330,9 @@ packages:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
+
+  greet-by-time@1.0.1:
+    resolution: {integrity: sha512-730Qxy10no4LEpweVdCX23DTLjIyVRiy17F6tw040wQxXaBqewPQeZd0svrD97dOyjhJ7qang0xyMPdKHTbOBw==}
 
   is-reference@3.0.3:
     resolution: {integrity: sha512-ixkJoqQvAP88E6wLydLGGqCJsrFUnqoH6HnaczB8XmDH1oaWU+xxdptvikTgaEhtZ53Ky6YXiBuUI2WXLMCwjw==}
@@ -738,6 +744,8 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  greet-by-time@1.0.1: {}
 
   is-reference@3.0.3:
     dependencies:

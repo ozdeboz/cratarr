@@ -67,7 +67,14 @@ pub struct Item {
     /// A playlist it opens (on its Repair tab).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub playlist: Option<String>,
+    /// The files it is about, by name (a folder's tracks AudioMuse has not heard), at most `FILES`: its own page lists
+    /// them (the owner, 2026-10-24: the third level).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
 }
+
+/// At most this many files an item names.
+const FILES: usize = 30;
 
 /// At most this many items a finding lists.
 const ITEMS: usize = 100;
@@ -269,12 +276,17 @@ impl App {
         f.of = Some(tracks);
         // The album folders with the most tracks not heard yet.
         let mut by: HashMap<&str, (u64, u64)> = HashMap::new();
+        let mut unheard: HashMap<&str, Vec<String>> = HashMap::new();
         for x in facts.iter().filter(|x| x.track.is_some()) {
-            let dir = x.rel.rsplit_once('/').map_or("", |(d, _)| d);
+            let (dir, file) = x.rel.rsplit_once('/').unwrap_or(("", x.rel.as_str()));
             let e = by.entry(dir).or_default();
             e.1 += 1;
             if x.sound.is_none() {
                 e.0 += 1;
+                let names = unheard.entry(dir).or_default();
+                if names.len() < FILES {
+                    names.push(file.to_string());
+                }
             }
         }
         let mut left: Vec<_> = by.into_iter().filter(|(_, (not, _))| *not > 0).collect();
@@ -283,7 +295,11 @@ impl App {
         f.items = left
             .into_iter()
             .take(ITEMS)
-            .map(|(dir, (not, all))| Item { title: dir.rsplit('/').next().unwrap_or(dir).trim_start_matches("../").to_string(), line: Some(format!("{not} of {all} not heard · {dir}")), ..Item::default() })
+            .map(|(dir, (not, all))| {
+                let mut files = unheard.remove(dir).unwrap_or_default();
+                files.sort();
+                Item { title: dir.rsplit('/').next().unwrap_or(dir).trim_start_matches("../").to_string(), line: Some(format!("{not} of {all} not heard · {dir}")), files, ..Item::default() }
+            })
             .collect();
         Ok(vec![f])
     }

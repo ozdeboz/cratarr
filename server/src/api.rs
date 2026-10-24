@@ -57,6 +57,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/history/listening", get(history_listening))
         .route("/api/favorites/{source}", post(favorites))
         .route("/api/favorites/{source}/albums", get(favorite_albums))
+        .route("/api/favorites/{source}/tracks", get(favorite_tracks))
         .route("/api/queue/add", post(queue_add))
         .route("/api/queue/jump", post(queue_jump))
         .route("/api/queue/playlist", post(queue_playlist))
@@ -1069,6 +1070,18 @@ async fn set_album_rating(
     Query(q): Query<Stars>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(json!({ "rating": app.playing.set_album_rating(&source, &album, q.stars).await? })))
+}
+
+/// Home's Favourite tracks: the favourite tracks of Cratarr's own library, as rows, at most `FAVOURITE_ROWS` (the
+/// owner, 2026-10-24). Another server's are not offered (their ids are not Cratarr's lines).
+async fn favorite_tracks(State(app): State<Arc<App>>, Path(source): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
+    const FAVOURITE_ROWS: usize = 100;
+    if source != crate::source::cratarr::KIND.id {
+        return Err(ToggleError::Refused("Only Cratarr's own library lists its favourite tracks here.".into()).into());
+    }
+    let mut ids = app.playing.favorite_tracks(&source).await?;
+    ids.truncate(FAVOURITE_ROWS);
+    Ok(Json(json!({ "source": source, "rows": app.playlists.song_rows(ids).await? })))
 }
 
 /// The favourite albums of a connected server (their ids): the Library's Favourites only and the album panel's heart.
