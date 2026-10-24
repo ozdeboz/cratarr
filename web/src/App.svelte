@@ -50,7 +50,9 @@
   import ProgressBar from './lib/ProgressBar.svelte';
   import { untrack } from 'svelte';
   import { inSidebar, live, panelShowsPlayer, player } from './lib/live.svelte';
-  import { closePlaylist, HEALTH as HEALTH_VIEW, healthOf, INSIGHTS as INSIGHTS_VIEW, insightsOf, keepViewed, openedHere, panel, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace, viewPlaylist } from './lib/panel.svelte';
+  import { closePlaylist, HEALTH as HEALTH_VIEW, healthOf, INSIGHTS as INSIGHTS_VIEW, insightsOf, keepViewed, openedHere, panel, REQUESTS as REQUESTS_VIEW, requestsOf, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace, viewPlaylist } from './lib/panel.svelte';
+  import RequestsPanel from './lib/RequestsPanel.svelte';
+  import { answersRequests, REQUESTS_LISTS, requests as requestsData, type RequestsList } from './lib/requests.svelte';
   import PlaylistView from './lib/PlaylistView.svelte';
   import { poll } from './lib/live.svelte';
   import { known, remember } from './lib/sources.svelte';
@@ -186,7 +188,11 @@
   const insightsShown = $derived(INSIGHTS_VIEWS.find((v) => v.id === insightsOf(panel.viewed))?.id ?? (null as InsightsView | null));
   // Downloads as Insights (the owner, 2026-10-24): its list beside the item opened, while it has any.
   const downloadsSplit = $derived(page === 'downloads' && player.roomy && (downloads.tracks.length > 0 || kept.items.length > 0));
-  const split = $derived(settingsSplit || healthSplit || insightsSplit || downloadsSplit);
+  // Requests as Insights (the owner, 2026-10-24): its index beside the list opened, the panel always beside it on a
+  // roomy window.
+  const requestsSplit = $derived(page === 'requests' && player.roomy);
+  const requestsShown = $derived(REQUESTS_LISTS.find((l) => l.id === requestsOf(panel.viewed))?.id ?? (null as RequestsList | null));
+  const split = $derived(settingsSplit || healthSplit || insightsSplit || downloadsSplit || requestsSplit);
   const sidebar = $derived(split || inSidebar());
   $effect(() => {
     panel.split = split;
@@ -267,6 +273,12 @@
   $effect(() => {
     if (healthShown) prefs.healthPart = healthShown;
   });
+  // Beside Requests' index a list is always open: the waiting ones for those who answer them, else the account's own.
+  $effect(() => {
+    // Only once the account's rights are known (they say which list comes first).
+    if (!requestsSplit || requestsShown || openedHere() || fromHash() !== 'requests' || !requestsData.view) return;
+    untrack(() => viewInPlace(REQUESTS_VIEW + (answersRequests() ? 'waiting' : 'mine')));
+  });
   // Beside Insights' list a view is always open: the one last open (its tab and section, which the views keep).
   $effect(() => {
     if (!insightsSplit || insightsShown || openedHere() || fromHash() !== 'insights') return;
@@ -296,7 +308,7 @@
     pageView.query = '';
   });
   // The page's device button gives way to the panel's (the owner, 2026-10-16): a list beside the page has its own.
-  const panelDevice = $derived(sidebar && panel.viewed !== null && !playerInPanel && !settingsShown && !healthShown && !insightsShown);
+  const panelDevice = $derived(sidebar && panel.viewed !== null && !playerInPanel && !settingsShown && !healthShown && !insightsShown && !requestsShown);
   const pillDevice = $derived(!playing() && !playerInPanel && !panelDevice);
   // Each step of this visit carries its place (`nav` in its history state): back shows from the second step on, never on
   // the one the app opened with.
@@ -605,9 +617,9 @@
     {/if}
     {#if sidebar}
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
-      <aside class="player-side" class:whole={split} aria-label={playerInPanel ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
+      <aside class="player-side" class:whole={split} aria-label={playerInPanel ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : requestsShown ? 'Requests' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
         <SheetArea area={() => sideEl}>
-          {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if playerInPanel}<NowPlaying place="side" />{:else if split && panel.viewed === null}<!-- Its part comes in a moment. -->{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else if healthShown}<HealthPanel problem={healthShown} beside={healthSplit} />{:else if insightsShown}<InsightsPanel view={insightsShown} beside={insightsSplit} />{:else}<PlaylistView />{/if}
+          {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if playerInPanel}<NowPlaying place="side" />{:else if split && panel.viewed === null}<!-- Its part comes in a moment. -->{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else if healthShown}<HealthPanel problem={healthShown} beside={healthSplit} />{:else if insightsShown}<InsightsPanel view={insightsShown} beside={insightsSplit} />{:else if requestsShown}<RequestsPanel list={requestsShown} beside={requestsSplit} />{:else}<PlaylistView />{/if}
         </SheetArea>
       </aside>
     {/if}
@@ -615,7 +627,7 @@
 
   {#if playlistLayer}
     <div class="playlist-layer" role="dialog" aria-label="Playlist" style:--mini-h={`${miniSpace}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
-      {#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else}<PlaylistView full />{/if}
+      {#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else if requestsShown}<RequestsPanel list={requestsShown} />{:else}<PlaylistView full />{/if}
     </div>
   {/if}
   {#if mini}

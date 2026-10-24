@@ -98,9 +98,15 @@ export function healthItemOf(viewed: string | null): number | null {
 export const INSIGHTS = 'insights:';
 export const insightsOf = (viewed: string | null) => (viewed?.startsWith(INSIGHTS) ? viewed.slice(INSIGHTS.length) : null);
 
+/** A list of Requests (`requests:mine`, lib/RequestsPanel), opened from its page's index, as Insights' views are (the
+ *  owner, 2026-10-24). */
+export const REQUESTS = 'requests:';
+export const requestsOf = (viewed: string | null) => (viewed?.startsWith(REQUESTS) ? viewed.slice(REQUESTS.length) : null);
+
 export const isSingleSubject = (viewed: string | null) =>
   !!viewed &&
-  (viewed.startsWith(INSIGHTS) || viewed.startsWith(HEALTH) || viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed === NEW_PLAYLIST || viewed.startsWith(SETTINGS) || viewed.startsWith(ALBUM) || artistOf(viewed) !== null);
+  (viewed.startsWith(INSIGHTS) ||
+    viewed.startsWith(REQUESTS) || viewed.startsWith(HEALTH) || viewed.startsWith('crate:') || viewed === 'crate-new' || viewed.startsWith('crate-edit:') || viewed === NEW_PLAYLIST || viewed.startsWith(SETTINGS) || viewed.startsWith(ALBUM) || artistOf(viewed) !== null);
 
 export const panel = $state({
   /** What is viewed: the (first) playlist's id, a crate's or an album's key; null when the panel shows the player only. */
@@ -270,5 +276,7 @@ export function albumGone(source: string, id: string) {
  *  Insights': they stay there. */
 export const keepViewed = (href: string) => {
   const q = location.hash.split('?')[1];
-  return panel.viewed && q && !panel.viewed.startsWith(SETTINGS) && !panel.viewed.startsWith(HEALTH) && !panel.viewed.startsWith(INSIGHTS) ? `${href}?${q}` : href;
+  return panel.viewed && q && !panel.viewed.startsWith(SETTINGS) && !panel.viewed.startsWith(HEALTH) && !panel.viewed.startsWith(INSIGHTS) && !panel.viewed.startsWith(REQUESTS)
+    ? `${href}?${q}`
+    : href;
 };
