@@ -1873,7 +1873,18 @@ impl PlayOn {
                     return Err(ToggleError::Refused(format!("{name} cannot announce: a Kodi plays no clip over its music.")));
                 }
                 let id = if id.trim().is_empty() { super::queue::new_entry() } else { id };
-                Command::Announce { url, id }
+                let command = Command::Announce { url, id };
+                // A group whose leader plays nothing: nothing runs through the leader's chain for its members to hear,
+                // so each plays the clip itself (on a player of its own, as one alone does); the leader's is the one
+                // reported. A member offline is left out.
+                if leader.is_some() && self.entries().get(name).is_some_and(|e| !e.report.playing) {
+                    for member in self.group(name).into_iter().filter(|m| m != name) {
+                        if let Err(e) = self.send(&member, &command) {
+                            tracing::info!(target: "playon", player = member.as_str(), "announce not sent to an idle group's member: {e:?}");
+                        }
+                    }
+                }
+                command
             }
             other => other,
         };
@@ -3321,6 +3332,14 @@ mod tests {
         p.command("tablet", Command::Announce { url: "http://ha/tts.mp3".into(), id: String::new() }).await.unwrap();
         assert!(!told(&mut tablet)[0]["id"].as_str().unwrap().is_empty(), "Cratarr's own id");
         assert!(matches!(p.command("tablet", Command::Announce { url: " ".into(), id: String::new() }).await, Err(ToggleError::Refused(_))));
+        // A group whose leader plays nothing: each of its players plays the clip itself, with the same id.
+        p.report("tablet", Report { index: 0, playing: false, volume: 80, ..Report::default() }).unwrap();
+        p.command("phone", Command::Announce { url: "http://ha/tts.mp3".into(), id: "ha-2".into() }).await.unwrap();
+        let announced = |c: &mut Commands| told(c).into_iter().filter(|m| m["command"] == "announce").map(|m| m["id"].as_str().map(str::to_string)).collect::<Vec<_>>();
+        assert_eq!(announced(&mut tablet), vec![Some("ha-2".to_string())]);
+        assert_eq!(announced(&mut phone), vec![Some("ha-2".to_string())]);
+        assert!(told(&mut kitchen).iter().all(|c| c["command"] != "announce"), "only the group's players");
+        p.report("tablet", Report { index: 0, playing: true, volume: 80, ..Report::default() }).unwrap();
         // The group shows the leader's announcement, as it shows the leader's music.
         let playing = Announcing { id: "ha-1".into(), state: AnnounceState::Playing, error: None };
         p.report("tablet", Report { index: 0, playing: true, volume: 80, announce: Some(playing.clone()), ..Report::default() }).unwrap();

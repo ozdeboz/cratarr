@@ -17,6 +17,7 @@
   import { accentOf } from './remote.svelte';
   import { sheetArea } from './SheetArea.svelte';
   import { sheetDrag } from './sheetDrag';
+  import { toast } from './toast.svelte';
 
   let {
     label,
@@ -32,6 +33,7 @@
     step = 'menu',
     top = false,
     over = false,
+    copy = null,
     children,
   }: {
     label: string;
@@ -56,10 +58,24 @@
     top?: boolean;
     /** Over the full-screen visuals (lib/visuals), which lie over everything else. */
     over?: boolean;
+    /** What a tap on the item (its cover, title and chips) copies: the usual "Artist – Title" (the owner, 2026-10-24,
+     *  Discover's sheet). Without it the item is not a button. */
+    copy?: string | null;
     children: Snippet;
   } = $props();
 
   // The accent from the first image, fading in once known.
+  /** The item copied (its `copy`), said as the share's copy says it. */
+  async function copyItem() {
+    if (!copy) return;
+    try {
+      await navigator.clipboard.writeText(copy);
+      toast.show({ text: 'Copied', tone: 'done' });
+    } catch (e) {
+      toast.fail(e, "It couldn't be copied");
+    }
+  }
+
   let accent = $state<string | null>(null);
   $effect(() => {
     const src = images?.[0];
@@ -163,6 +179,15 @@
   <div class="handle" aria-hidden="true"></div>
 
   <div class="card" class:bare={images === null}>
+    <svelte:element
+      this={copy ? 'button' : 'div'}
+      class="item"
+      class:copies={!!copy}
+      role={copy ? undefined : 'presentation'}
+      aria-label={copy ? `Copy “${copy}”` : undefined}
+      title={copy ? 'Copy' : undefined}
+      onclick={copy ? copyItem : undefined}
+    >
     {#if images === null}
       <!-- no image: the title and chips alone, the icon before them when there is one -->
       {#if icon}<span class="lead"><Icon name={icon} size={24} /></span>{/if}
@@ -176,6 +201,7 @@
       <div class="title">{title}</div>
       {#if chips.length}<div class="chips">{chips.join(' • ')}</div>{/if}
     </div>
+    </svelte:element>
     {#if heart}
       <button class="heart" class:on={heart.on} disabled={heart.disabled} aria-label={heart.on ? 'Favourite' : 'Not a favourite'} aria-pressed={heart.on} onclick={heart.toggle}
         ><Icon name="heart" size={24} /></button
@@ -308,6 +334,26 @@
   }
 
   /* No image: the title and its line alone. */
+  /* The item (cover, title, chips): a button where a tap copies it. */
+  .item {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  button.item {
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: copy;
+  }
+
   .card.bare .info {
     gap: 6px;
     padding: 2px 0 6px;
