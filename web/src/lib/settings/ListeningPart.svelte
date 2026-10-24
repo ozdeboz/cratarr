@@ -64,7 +64,9 @@
     error = null;
     signingIn = true;
     try {
-      const { url } = await scrobbleLastFm(apiKey.trim(), apiSecret.trim(), `${location.origin}/api/scrobble/lastfm/callback`);
+      // In the Android app, Last.fm opens in the browser, and its way back ends in the app (cratarr://).
+      const inApp = navigator.userAgent.includes('CratarrApp/');
+      const { url } = await scrobbleLastFm(apiKey.trim(), apiSecret.trim(), `${location.origin}/api/scrobble/lastfm/callback`, inApp);
       location.assign(url);
     } catch (e) {
       error = said(e);
@@ -115,7 +117,7 @@
       />
     </Group>
   {:else}
-    <Group title="Account" more="Make both at last.fm/api/account/create (any name will do). Then Last.fm asks you to allow Cratarr, and brings you back here. In the Android app, connect from a browser instead.">
+    <Group title="Account" more="Make both at last.fm/api/account/create (any name will do). Then Last.fm asks you to allow Cratarr, and brings you back here.">
       <Item name="API key" line={apiKey ? 'Given' : t ? 'Kept' : 'Not given'} tone={apiKey || t ? null : 'warn'} onclick={() => (typing = 'key')} />
       <Item name="Shared secret" line={apiSecret ? 'Given' : t ? 'Kept' : 'Not given'} tone={apiSecret || t ? null : 'warn'} onclick={() => (typing = 'secret')} />
       <Item name={t && !t.broken ? 'Signed in at Last.fm' : 'Not signed in at Last.fm'} line={apiKey && apiSecret ? null : 'Give the key and the secret first'}>

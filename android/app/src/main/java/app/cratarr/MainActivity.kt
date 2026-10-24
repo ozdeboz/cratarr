@@ -145,8 +145,21 @@ class MainActivity : AppCompatActivity() {
         fileCallback = null
     }
 
-    /** Open on Cratarr's Settings page (the launcher's Settings shortcut). */
-    private var openSettings = false
+    /** Where the first page opens, past the server's address: Settings (the launcher's Settings shortcut), or a
+     *  connection's own page (back from a sign-in in the browser). */
+    private var openAt: String? = null
+
+    /** Where an intent asks the page to open: `#/settings` for the Settings shortcut; for `cratarr://connected/<service>`
+     *  (the way back from a sign-in, with what went wrong as `scrobble`), that connection's page in Settings. */
+    private fun openAtOf(intent: Intent?): String? {
+        if (intent == null) return null
+        if (intent.getBooleanExtra(EXTRA_SETTINGS, false)) return "#/settings"
+        val data = intent.data ?: return null
+        if (data.scheme != "cratarr" || data.host != "connected") return null
+        val service = data.pathSegments.firstOrNull()?.takeIf { it.matches(Regex("[a-z]+")) } ?: return null
+        val why = data.getQueryParameter("scrobble")?.let { "&scrobble=" + Uri.encode(it) } ?: ""
+        return "#/settings?view=settings%3Aconnections%2F$service$why"
+    }
 
     /** The downloads' progress goes to the page as it changes, a second apart at most. */
     private val downloadsChanged = object : DownloadManager.Listener {
@@ -165,7 +178,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         LinkLog.catchCrashes(this)
         prefs = Prefs(this)
-        openSettings = intent?.getBooleanExtra(EXTRA_SETTINGS, false) == true
+        openAt = openAtOf(intent)
         frame = FrameLayout(this)
         setContentView(frame)
         ViewCompat.setOnApplyWindowInsetsListener(frame) { view, insets ->
@@ -226,8 +239,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (intent.getBooleanExtra(EXTRA_SETTINGS, false)) {
-            if (page != null) webView?.evaluateJavascript("location.hash = '#/settings'", null) else openSettings = true
+        val at = openAtOf(intent) ?: return
+        val base = shown
+        when {
+            page == null || base == null -> openAt = at
+            at == "#/settings" -> webView?.evaluateJavascript("location.hash = '#/settings'", null)
+            // Back from a sign-in: the page anew, so it reads the connection as it is now.
+            else -> webView?.loadUrl("${base.trimEnd('/')}/$at")
         }
     }
 
@@ -319,8 +337,8 @@ class MainActivity : AppCompatActivity() {
         webView = view
         keepPagePrefs(view)
         shown = url
-        view.loadUrl(if (openSettings) "${url.trimEnd('/')}/#/settings" else url)
-        openSettings = false
+        view.loadUrl(openAt?.let { "${url.trimEnd('/')}/$it" } ?: url)
+        openAt = null
     }
 
     /** A message from the page: `hello`, `player` (its player's calls), `target` (where the controls point), `device`

@@ -147,6 +147,14 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/home/heard", post(home_heard))
         .route("/api/home/weather", post(home_weather))
         .route("/api/home/moment", get(home_moment))
+        // Each account's own: its tasks, and its listening services (decision 0068: anyone's, not the administrators'
+        // only). Last.fm's way back carries its sign-in's code and needs no sign-in (`serve::access::public`).
+        .route("/api/tasks", get(own_tasks))
+        .route("/api/scrobble", get(scrobble_targets))
+        .route("/api/scrobble/listenbrainz", post(scrobble_listenbrainz))
+        .route("/api/scrobble/lastfm", post(scrobble_lastfm))
+        .route("/api/scrobble/lastfm/callback/{code}", get(scrobble_lastfm_callback))
+        .route("/api/scrobble/{target}", axum::routing::delete(scrobble_forget))
         // The administrators' (decision 0051): the server's settings, what comes in, the library's changes and its
         // health, the folders, the diagnostics.
         .merge(
@@ -155,15 +163,9 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/diagnostics/download", get(diagnostics_download))
             .route("/api/diagnostics/levels", get(diagnostics_levels).put(set_diagnostics_levels))
             .route("/api/players/settings", get(play_on_settings).put(save_play_on_settings))
-            .route("/api/tasks", get(own_tasks))
             .route("/api/history/listenbrainz", post(import_listenbrainz).delete(undo_listenbrainz))
             .route("/api/history/listenbrainz/preview", post(preview_listenbrainz))
             .route("/api/history/lastfm", get(lastfm_kept).post(import_lastfm).delete(undo_lastfm))
-            .route("/api/scrobble", get(scrobble_targets))
-            .route("/api/scrobble/listenbrainz", post(scrobble_listenbrainz))
-            .route("/api/scrobble/lastfm", post(scrobble_lastfm))
-            .route("/api/scrobble/lastfm/callback", get(scrobble_lastfm_callback))
-            .route("/api/scrobble/{target}", axum::routing::delete(scrobble_forget))
             .route("/api/history/lastfm/preview", post(preview_lastfm))
             .route("/api/import/file", post(import_file).delete(undo_file).layer(axum::extract::DefaultBodyLimit::max(256 << 20)))
         .route("/api/library/find", get(library_find))
@@ -2736,8 +2738,11 @@ async fn scrobble_listenbrainz(Json(b): Json<ListenBrainzToken>) -> Result<Json<
 struct LastFmKeys {
     api_key: String,
     api_secret: String,
-    /// Where Last.fm's sign-in comes back to (this address's `/api/scrobble/lastfm/callback`).
+    /// Where Last.fm's sign-in comes back to (this address's `/api/scrobble/lastfm/callback`), its code added.
     callback: String,
+    /// Begun in the Android app: the way back ends in the app.
+    #[serde(default)]
+    app: bool,
 }
 
 /// Last.fm: the API key and its shared secret kept (not sending yet), and where to send the browser to sign in.
@@ -2747,7 +2752,9 @@ async fn scrobble_lastfm(Json(b): Json<LastFmKeys>) -> Result<Json<serde_json::V
     if key.is_empty() || secret.is_empty() {
         return Err(scrobble_refused("Last.fm needs the API key and its shared secret, from last.fm/api/account/create."));
     }
-    let url = crate::app::scrobble::lastfm_sign_in(&key, &b.callback).map_err(|e| scrobble_refused(format!("{e:#}")))?;
+    let code = crate::app::scrobble::pending(crate::app::scrobble::Pending { account: account.clone(), app: b.app });
+    let callback = format!("{}/{code}", b.callback.trim_end_matches('/'));
+    let url = crate::app::scrobble::lastfm_sign_in(&key, &callback).map_err(|e| scrobble_refused(format!("{e:#}")))?;
     let kept = serde_json::to_string(&crate::app::scrobble::Secret { api_key: Some(key), api_secret: Some(secret), ..Default::default() }).map_err(scrobble_refused)?;
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         serve.userdata.set_scrobble_target(&account, crate::app::scrobble::LASTFM, "", &kept)?;
@@ -2765,15 +2772,25 @@ struct LastFmBack {
 }
 
 /// Last.fm's sign-in coming back: its token traded for a session key, and the browser back to Connections.
-async fn scrobble_lastfm_callback(Query(q): Query<LastFmBack>) -> Response {
-    let back = |why: Option<String>| {
-        let to = match why {
-            None => "/#/settings?view=settings%3Aconnections%2Flastfm".to_string(),
-            Some(w) => format!("/#/settings?view=settings%3Aconnections%2Flastfm&scrobble={}", urlencoding_lite(&w)),
-        };
+async fn scrobble_lastfm_callback(Path(code): Path<String>, Query(q): Query<LastFmBack>) -> Response {
+    let pending = crate::app::scrobble::take_pending(&code);
+    let app = pending.as_ref().is_some_and(|p| p.app);
+    let back = move |why: Option<String>| {
+        let why = why.map(|w| format!("?scrobble={}", urlencoding_lite(&w))).unwrap_or_default();
+        if app {
+            // The Android app's own link: a page that opens it (and a link to tap, where the browser asks first).
+            let to = format!("cratarr://connected/lastfm{why}");
+            let page = format!(
+                "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width\"><meta http-equiv=refresh content=\"0;url={to}\"><title>Cratarr</title><p style=\"font:16px system-ui;margin:2em\"><a href=\"{to}\">Back to Cratarr</a>"
+            );
+            return ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], page).into_response();
+        }
+        let to = format!("/#/settings?view=settings%3Aconnections%2Flastfm{}", why.replacen('?', "&", 1));
         axum::response::Redirect::to(&to).into_response()
     };
-    let Ok((serve, account)) = scrobbler() else { return back(Some("Sign in to Cratarr first".into())) };
+    let Some(pending) = pending else { return back(Some("That sign-in has expired; sign in again".into())) };
+    let Some(serve) = crate::serve::instance() else { return back(Some("Cratarr's own library is not open".into())) };
+    let account = pending.account;
     let (ud, a) = (serve.userdata.clone(), account.clone());
     let kept = tokio::task::spawn_blocking(move || ud.scrobble_secret_any(&a, crate::app::scrobble::LASTFM)).await.ok().and_then(Result::ok).flatten();
     let Some(mut secret) = kept.and_then(|k| serde_json::from_str::<crate::app::scrobble::Secret>(&k).ok()) else {
