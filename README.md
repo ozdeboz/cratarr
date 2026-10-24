@@ -174,7 +174,7 @@ Cratarr borrows freely from projects that got things right:
 - [Seerr](https://github.com/seerr-team/seerr), for its layout and its settings that choose from what the servers
   already know ([0009](docs/decisions/0009-library-uses.md)).
 - [AudioMuse-AI](https://github.com/NeptuneHub/AudioMuse-AI) for its analysis, [Beat This!](https://github.com/CPJKU/beat_this)
-  for the beats, and [ListenBrainz](https://listenbrainz.org) for listening history.
+  for the beats, and [ListenBrainz](https://listenbrainz.org) for listening history, imported and scrobbled.
 - The photographers of Home's skies, on Unsplash (named in [web/public/skies/CREDITS.txt](web/public/skies/CREDITS.txt)).
 
 ## License
