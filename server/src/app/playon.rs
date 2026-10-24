@@ -69,6 +69,9 @@ pub struct Announcing {
     /// Why it failed, in a few words.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// When its parts happened, as the app measured them (0.9.1); apps from before it leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<Timeline>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,6 +80,77 @@ pub enum AnnounceState {
     Playing,
     Done,
     Failed,
+}
+
+/// When an announcement's parts happened, in ms after the player was told (0.9.1; the owner, 2026-10-24: "we need
+/// better instrumentation", after a duck that came back ten seconds late): the clip's length, its first sound, the
+/// music fully ducked, the speech's end (its last loud block), the music back up, and done; `gave_up` when the clip
+/// was given up (the music stopped under it). Each as far as it came.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Timeline {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clip_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ducked_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speech_end_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub released_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gave_up: bool,
+}
+
+impl Timeline {
+    /// How long after the speech's end the music was back up: the duck's exit, the figure to tune by.
+    pub fn release_after_speech_ms(&self) -> Option<i64> {
+        Some(self.released_ms? as i64 - self.speech_end_ms? as i64)
+    }
+
+    /// Its parts in a line, as far as they came.
+    fn summary(&self) -> String {
+        let parts: Vec<String> = [
+            ("clip", self.clip_ms),
+            ("started", self.started_ms),
+            ("ducked", self.ducked_ms),
+            ("speech ended", self.speech_end_ms),
+            ("released", self.released_ms),
+            ("done", self.done_ms),
+        ]
+        .into_iter()
+        .filter_map(|(name, at)| Some(format!("{name} {} ms", at?)))
+        .collect();
+        let mut line = parts.join(", ");
+        if let Some(late) = self.release_after_speech_ms() {
+            line.push_str(&format!("; the music back up {late} ms after the speech"));
+        }
+        if self.gave_up {
+            line.push_str("; given up");
+        }
+        line
+    }
+}
+
+impl Announcing {
+    /// One line for the log as it ends: its id, how it ended and why, and its timeline.
+    pub fn summary(&self) -> String {
+        let how = match self.state {
+            AnnounceState::Playing => "playing",
+            AnnounceState::Done => "done",
+            AnnounceState::Failed => "failed",
+        };
+        let mut line = format!("announcement {} {how}", self.id);
+        if let Some(e) = &self.error {
+            line.push_str(&format!(" ({e})"));
+        }
+        if let Some(t) = &self.timeline {
+            line.push_str(&format!(": {}", t.summary()));
+        }
+        line
+    }
 }
 
 /// What a player reports.
@@ -1570,6 +1644,12 @@ impl PlayOn {
         let mut entries = self.entries();
         let e = claim(&mut entries, name, whose().as_deref())?;
         let before = e.view(name, false);
+        // The announce channel (0.9.1): each announcement written down once, as it ends, with its timeline.
+        if let Some(a) = report.announce.as_ref().filter(|a| a.state != AnnounceState::Playing)
+            && e.report.announce.as_ref().is_none_or(|was| was.id != a.id || was.state != a.state)
+        {
+            tracing::info!(target: "playon", player = name, "{}", a.summary());
+        }
         // Local mode (decision 0052): what plays there is kept as said, its volume, output and link with it; Cratarr's
         // queue, the queue given back on a return, and its history are left alone until the app plays Cratarr again.
         if report.mode.as_deref() == Some(DEVICE_MODE) {
@@ -2783,7 +2863,22 @@ mod tests {
         );
         assert_eq!(serde_json::from_str::<Command>(r#"{"command":"announce","url":"u"}"#).unwrap(), Command::Announce { url: "u".into(), id: String::new() });
         let r: Report = serde_json::from_str(r#"{"index":0,"position_ms":0,"playing":true,"announce":{"id":"ha-1","state":"done"}}"#).unwrap();
-        assert_eq!(r.announce, Some(Announcing { id: "ha-1".into(), state: AnnounceState::Done, error: None }));
+        assert_eq!(r.announce, Some(Announcing { id: "ha-1".into(), state: AnnounceState::Done, error: None, timeline: None }));
+        // With its timeline (0.9.1): each part as far as it came, and the duck's exit after the speech.
+        let r: Report = serde_json::from_str(
+            r#"{"index":0,"position_ms":0,"playing":true,"announce":{"id":"ha-2","state":"done","timeline":{"clip_ms":2400,"started_ms":120,"ducked_ms":150,"speech_end_ms":2380,"released_ms":3100,"done_ms":3350}}}"#,
+        )
+        .unwrap();
+        let a = r.announce.unwrap();
+        let t = a.timeline.clone().unwrap();
+        assert_eq!((t.clip_ms, t.done_ms, t.gave_up), (Some(2400), Some(3350), false));
+        assert_eq!(t.release_after_speech_ms(), Some(720));
+        assert_eq!(
+            a.summary(),
+            "announcement ha-2 done: clip 2400 ms, started 120 ms, ducked 150 ms, speech ended 2380 ms, released 3100 ms, done 3350 ms; the music back up 720 ms after the speech"
+        );
+        let gave_up: Announcing = serde_json::from_str(r#"{"id":"ha-3","state":"failed","error":"the music stopped under it","timeline":{"clip_ms":2000,"gave_up":true}}"#).unwrap();
+        assert_eq!(gave_up.summary(), "announcement ha-3 failed (the music stopped under it): clip 2000 ms; given up");
         // To the player: tracks, never the playlist's name or the shuffle wish.
         let to_player = Command::play(vec![], 2, 5);
         assert_eq!(serde_json::to_string(&to_player).unwrap(), r#"{"command":"play","tracks":[],"index":2,"position_ms":5}"#);
@@ -3341,7 +3436,7 @@ mod tests {
         assert!(told(&mut kitchen).iter().all(|c| c["command"] != "announce"), "only the group's players");
         p.report("tablet", Report { index: 0, playing: true, volume: 80, ..Report::default() }).unwrap();
         // The group shows the leader's announcement, as it shows the leader's music.
-        let playing = Announcing { id: "ha-1".into(), state: AnnounceState::Playing, error: None };
+        let playing = Announcing { id: "ha-1".into(), state: AnnounceState::Playing, error: None, timeline: None };
         p.report("tablet", Report { index: 0, playing: true, volume: 80, announce: Some(playing.clone()), ..Report::default() }).unwrap();
         assert_eq!(p.get("phone").unwrap().announce, Some(playing));
 
