@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::{Serve, ids};
+use crate::app::import::{Matcher, Track};
 use crate::source::{AlbumRef, Fut, Source, TrackData};
 use crate::userdata::{ImportChange, ImportKey, Imported, Kind};
 
@@ -73,7 +74,9 @@ impl Default for What {
     }
 }
 
-/// An import as the page asks for it: from which source and account on it, into which Cratarr account.
+/// An import as the page asks for it: from which source and account on it, into which Cratarr account. A source id
+/// `subsonic:<address>` is a Subsonic server imported from without being one of Cratarr's sources (decision 0067),
+/// logged in to as `user` with `password` (given for each run, never kept or shown).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
     pub source: String,
@@ -85,6 +88,23 @@ pub struct Request {
     /// Count what would change, change nothing.
     #[serde(default)]
     pub preview: bool,
+    #[serde(default, skip_serializing)]
+    pub password: Option<String>,
+}
+
+/// The id prefix of a Subsonic server imported from without being a source.
+pub const SUBSONIC: &str = "subsonic:";
+
+/// The library's songs and albums by name, for what a source names that the catalogue does not link (decision 0067).
+fn matcher(serve: &Serve) -> Option<Arc<Matcher>> {
+    let dir = serve.data_dir.as_ref()?;
+    match Matcher::read(&std::path::Path::new(dir).join("library.sqlite")) {
+        Ok(m) => Some(Arc::new(m)),
+        Err(e) => {
+            tracing::warn!(target: "imports", reason = %format!("{e:#}"), "the library could not be read to match by name");
+            None
+        }
+    }
 }
 
 /// What an import did (or, as a preview, would do).
@@ -305,13 +325,17 @@ impl AlbumPlaces {
 }
 
 /// An album of the library from a source's naming of it: through its track, else its folder.
-fn album_of(serve: &Serve, source: &str, places: &AlbumPlaces, a: &AlbumRef) -> Result<Option<String>> {
+fn album_of(serve: &Serve, source: &str, places: &AlbumPlaces, matcher: Option<&Matcher>, a: &AlbumRef) -> Result<Option<String>> {
     if let Some(track) = a.track.as_deref().and_then(|t| serve.catalogue().track_of_source(source, t))
         && let Some((_, album, _)) = serve.library.play_targets(&ids::song(track))?
     {
         return Ok(Some(album));
     }
-    Ok(a.path.as_deref().and_then(|p| places.find(p)).map(str::to_string))
+    if let Some(album) = a.path.as_deref().and_then(|p| places.find(p)) {
+        return Ok(Some(album.to_string()));
+    }
+    // By its name and artist (decision 0067).
+    Ok(a.name.as_deref().zip(matcher).and_then(|(name, m)| m.find_album(name, a.artist.as_deref())).map(str::to_string))
 }
 
 fn album_places(serve: &Serve) -> Result<AlbumPlaces> {
@@ -327,6 +351,8 @@ struct Run {
     listed: HashSet<String>,
     /// Server ids the library does not have.
     missed: HashSet<String>,
+    /// The library by name, for tracks the catalogue does not link.
+    matcher: Option<Arc<Matcher>>,
 }
 
 /// A page's tracks: found, decided, applied (unless a preview). Blocking.
@@ -336,11 +362,16 @@ fn tracks_page(serve: &Serve, req: &Request, items: Vec<TrackData>, run: &mut Ru
     let mut found = Vec::new();
     for t in items {
         run.listed.insert(t.id.clone());
-        let Some(track) = serve.catalogue().track_of_source(&req.source, &t.id) else {
+        // By the catalogue's link to the source's id, else by the names the source gives (decision 0067).
+        let by_name = || {
+            let (m, x) = (t.meta.as_ref()?, run.matcher.as_deref()?);
+            let track = Track { recording: m.recording.as_deref(), artist: &m.artist, title: &m.title, album: m.album.as_deref(), length_secs: m.length_secs };
+            x.find(&track).map(str::to_string)
+        };
+        let Some(song) = serve.catalogue().track_of_source(&req.source, &t.id).map(ids::song).or_else(by_name) else {
             run.missed.insert(t.id.clone());
             continue;
         };
-        let song = ids::song(track);
         if !run.done.insert(song.clone()) {
             continue;
         }
@@ -420,6 +451,7 @@ fn unstar_gone(serve: &Serve, req: &Request, kind: Kind, listed: &HashSet<String
 fn groups(serve: &Serve, req: &Request, g: crate::source::FavoriteGroups) -> Result<(Counts, Option<String>)> {
     let key = ImportKey { account: &req.account, source: &req.source, server_user: &req.user };
     let places = album_places(serve)?;
+    let names = matcher(serve);
     let mut counts = Counts::default();
     let mut notes = Vec::new();
     // (kind, Cratarr id, server id, since when)
@@ -427,7 +459,7 @@ fn groups(serve: &Serve, req: &Request, g: crate::source::FavoriteGroups) -> Res
     let mut listed: HashMap<Kind, HashSet<String>> = HashMap::new();
     for (a, at) in g.albums {
         listed.entry(Kind::Album).or_default().insert(a.id.clone());
-        match album_of(serve, &req.source, &places, &a)? {
+        match album_of(serve, &req.source, &places, names.as_deref(), &a)? {
             Some(album) => found.push((Kind::Album, album, a.id, at)),
             None => counts.skipped += 1,
         }
@@ -470,11 +502,18 @@ fn groups(serve: &Serve, req: &Request, g: crate::source::FavoriteGroups) -> Res
 }
 
 /// A page of albums' added dates: found, and set where earlier than the one known (`known` follows along). Blocking.
-fn added_page(serve: &Serve, req: &Request, places: &AlbumPlaces, items: Vec<(AlbumRef, i64)>, known: &mut HashMap<String, i64>) -> Result<Counts> {
+fn added_page(
+    serve: &Serve,
+    req: &Request,
+    places: &AlbumPlaces,
+    names: Option<&Matcher>,
+    items: Vec<(AlbumRef, i64)>,
+    known: &mut HashMap<String, i64>,
+) -> Result<Counts> {
     let mut counts = Counts::default();
     let mut earlier = Vec::new();
     for (a, at) in items {
-        let Some(album) = album_of(serve, &req.source, places, &a)? else {
+        let Some(album) = album_of(serve, &req.source, places, names, &a)? else {
             counts.skipped += 1;
             continue;
         };
@@ -530,7 +569,8 @@ async fn import(serve: &Arc<Serve>, source: &dyn Source, req: &Request, pace: &P
     let req = Arc::new(req.clone());
     if w.plays || w.favorites || w.ratings {
         step(serve, "tracks", 0, None);
-        let mut run = Run::default();
+        let s = serve.clone();
+        let mut run = Run { matcher: blocking(move || Ok(matcher(&s))).await?, ..Run::default() };
         let (mut cursor, mut read, mut total) = (None::<String>, 0, None);
         loop {
             let page = ask(pace, || source.track_data(&req.user, cursor.as_deref())).await?;
@@ -568,7 +608,7 @@ async fn import(serve: &Arc<Serve>, source: &dyn Source, req: &Request, pace: &P
     if w.added {
         step(serve, "added", 0, None);
         let s = serve.clone();
-        let (places, mut known) = blocking(move || Ok((Arc::new(album_places(&s)?), s.userdata.added()?))).await?;
+        let (places, names, mut known) = blocking(move || Ok((Arc::new(album_places(&s)?), matcher(&s), s.userdata.added()?))).await?;
         let (mut cursor, mut read, mut total) = (None::<String>, 0, None);
         loop {
             if cursor.is_some() {
@@ -577,8 +617,8 @@ async fn import(serve: &Arc<Serve>, source: &dyn Source, req: &Request, pace: &P
             let page = ask(pace, || source.albums_added(cursor.as_deref())).await?;
             total = page.total.or(total);
             read += page.items.len();
-            let (s, r, p) = (serve.clone(), req.clone(), places.clone());
-            let (counts, back) = blocking(move || Ok((added_page(&s, &r, &p, page.items, &mut known)?, known))).await?;
+            let (s, r, p, m) = (serve.clone(), req.clone(), places.clone(), names.clone());
+            let (counts, back) = blocking(move || Ok((added_page(&s, &r, &p, m.as_deref(), page.items, &mut known)?, known))).await?;
             known = back;
             counted(serve, &counts, None);
             step(serve, "added", total.map_or(read, |t| read.min(t)), total);
@@ -627,6 +667,22 @@ pub async fn sources(State(serve): State<Arc<Serve>>) -> Response {
             Err(e) => out.push(json!({ "id": id, "users": [], "error": format!("{e:#}") })),
         }
     }
+    // The Subsonic servers imported from before (decision 0067): their address, login and choices; the password is
+    // asked for again each run.
+    let ud = serve.userdata.clone();
+    let kept = tokio::task::spawn_blocking(move || ud.import_choices(SUBSONIC)).await.ok().and_then(Result::ok).unwrap_or_default();
+    for (id, choice) in kept {
+        let Ok(last) = serde_json::from_str::<Request>(&choice) else { continue };
+        let account = Some(last.account.clone()).filter(|a| accounts.contains(a));
+        out.push(json!({
+            "id": id,
+            "users": [{ "id": last.user, "name": last.user }],
+            "user": last.user,
+            "account": account,
+            "what": last.what,
+            "password": true,
+        }));
+    }
     axum::Json(json!({ "accounts": accounts, "sources": out })).into_response()
 }
 
@@ -638,8 +694,23 @@ pub async fn status(State(serve): State<Arc<Serve>>) -> Response {
 /// `POST /api/subsonic/import`: starts an import (or a preview) in the background.
 pub async fn start(State(serve): State<Arc<Serve>>, axum::Json(req): axum::Json<Request>) -> Response {
     let refuse = |status: StatusCode, why: &str| (status, axum::Json(json!({ "error": why }))).into_response();
-    let Some((_, source)) = serve.import.sources().into_iter().find(|(id, _)| *id == req.source) else {
-        return refuse(StatusCode::BAD_REQUEST, "That server is not connected.");
+    let source = match serve.import.sources().into_iter().find(|(id, _)| *id == req.source) {
+        Some((_, s)) => s,
+        // A Subsonic server, for this run only, with the password given now (decision 0067).
+        None if req.source.starts_with(SUBSONIC) => {
+            let Some(password) = req.password.as_deref().filter(|p| !p.is_empty()) else {
+                return refuse(StatusCode::BAD_REQUEST, "The server's password is needed.");
+            };
+            let mut values = crate::source::Values::new();
+            values.insert("url".into(), json!(&req.source[SUBSONIC.len()..]));
+            values.insert("username".into(), json!(req.user));
+            values.insert("password".into(), json!(password));
+            match (crate::source::subsonic::KIND.connect)(&values, false) {
+                Ok(s) => Arc::from(s),
+                Err(e) => return refuse(StatusCode::BAD_REQUEST, &format!("{e:#}")),
+            }
+        }
+        None => return refuse(StatusCode::BAD_REQUEST, "That server is not connected."),
     };
     if !serve.users.names().contains(&req.account) {
         return refuse(StatusCode::BAD_REQUEST, "There is no such account.");
@@ -660,6 +731,36 @@ pub async fn start(State(serve): State<Arc<Serve>>, axum::Json(req): axum::Json<
     }
     tokio::spawn(run(serve.clone(), source, req, Pace::default()));
     (StatusCode::ACCEPTED, axum::Json(json!({ "job": job }))).into_response()
+}
+
+/// Whose import an undo takes back (decision 0067).
+#[derive(Debug, Deserialize)]
+pub struct Whose {
+    pub source: String,
+    pub user: String,
+    pub account: String,
+}
+
+/// `DELETE /api/subsonic/import`: an import from a server undone as a whole (decision 0067): the plays it added, the
+/// stars and ratings it set that are still as it set them; not while an import runs.
+pub async fn undo(State(serve): State<Arc<Serve>>, axum::Json(w): axum::Json<Whose>) -> Response {
+    if serve.import.job().is_some_and(|j| j.finished.is_none()) {
+        return (StatusCode::CONFLICT, axum::Json(json!({ "error": "An import is running." }))).into_response();
+    }
+    let s = serve.clone();
+    let done = tokio::task::spawn_blocking(move || {
+        let key = ImportKey { account: &w.account, source: &w.source, server_user: &w.user };
+        s.userdata.undo_import(key, |song| s.library.play_targets(song).ok().flatten().map(|(_, album, artists)| (album, artists)))
+    })
+    .await;
+    match done {
+        Ok(Ok(u)) => {
+            tracing::info!(target: "imports", items = u.items, plays = u.plays, "import undone");
+            axum::Json(json!({ "undone": u })).into_response()
+        }
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(json!({ "error": format!("{e:#}") }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(json!({ "error": format!("{e:#}") }))).into_response(),
+    }
 }
 
 #[cfg(test)]
@@ -823,7 +924,7 @@ mod tests {
     }
 
     fn request(preview: bool) -> Request {
-        Request { source: "jf".into(), user: "u1".into(), account: "me".into(), what: What::default(), preview }
+        Request { source: "jf".into(), user: "u1".into(), account: "me".into(), what: What::default(), preview, password: None }
     }
 
     fn quick() -> Pace {
@@ -865,14 +966,14 @@ mod tests {
             ],
             groups: FavoriteGroups {
                 albums: vec![
-                    (AlbumRef { id: "a1".into(), track: None, path: homogenic_path.clone() }, Some(50)),
-                    (AlbumRef { id: "a2".into(), track: None, path: Some("/data/media/Music/Nobody/Nothing".into()) }, None),
+                    (AlbumRef { id: "a1".into(), track: None, path: homogenic_path.clone(), ..AlbumRef::default() }, Some(50)),
+                    (AlbumRef { id: "a2".into(), track: None, path: Some("/data/media/Music/Nobody/Nothing".into()), ..AlbumRef::default() }, None),
                 ],
                 artists: vec![(ArtistRef { id: "r1".into(), name: "björk".into() }, None)],
             },
             added: vec![
-                (AlbumRef { id: "a1".into(), track: None, path: homogenic_path }, 1_000),
-                (AlbumRef { id: "a3".into(), track: Some("s3".into()), path: None }, 2_000),
+                (AlbumRef { id: "a1".into(), track: None, path: homogenic_path, ..AlbumRef::default() }, 1_000),
+                (AlbumRef { id: "a3".into(), track: Some("s3".into()), path: None, ..AlbumRef::default() }, 2_000),
             ],
         })));
 

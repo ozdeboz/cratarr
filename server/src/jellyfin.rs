@@ -962,7 +962,7 @@ impl Jellyfin {
                 let n = page.items.len();
                 for i in page.items {
                     if kind == "MusicAlbum" {
-                        groups.albums.push((crate::source::AlbumRef { id: i.id, track: None, path: i.path }, None));
+                        groups.albums.push((crate::source::AlbumRef { id: i.id, track: None, path: i.path, ..Default::default() }, None));
                     } else if let Some(name) = i.name.filter(|n| !n.trim().is_empty()) {
                         groups.artists.push((crate::source::ArtistRef { id: i.id, name }, None));
                     }
@@ -998,7 +998,7 @@ impl Jellyfin {
             .filter_map(|i| {
                 // Jellyfin writes 0001-01-01 for "never".
                 let at = i.date_created.as_deref().and_then(crate::nowplaying::parse_iso_epoch).filter(|t| *t > 0)?;
-                Some((crate::source::AlbumRef { id: i.id, track: None, path: i.path }, at))
+                Some((crate::source::AlbumRef { id: i.id, track: None, path: i.path, ..Default::default() }, at))
             })
             .collect();
         Ok((items, total))
@@ -1115,6 +1115,8 @@ fn track_data(i: DataItem) -> crate::source::TrackData {
         // Jellyfin keeps no date for a favourite.
         favorite_at: None,
         rating: stars(d.and_then(|d| d.rating)),
+        // Linked through the catalogue: no names needed.
+        meta: None,
     }
 }
 

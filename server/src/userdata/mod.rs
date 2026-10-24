@@ -236,6 +236,15 @@ pub struct Imported {
     pub rating: u8,
 }
 
+/// What an import's undo took back (decision 0067): the plays, the stars and ratings, of how many items it had brought.
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize)]
+pub struct Undone {
+    pub items: usize,
+    pub plays: u64,
+    pub unstarred: usize,
+    pub unrated: usize,
+}
+
 /// Whose import: the Cratarr account it goes into, the source (its id in the settings) and the account on the server.
 #[derive(Debug, Clone, Copy)]
 pub struct ImportKey<'a> {
@@ -585,6 +594,21 @@ impl UserData {
         Ok(true)
     }
 
+    /// The ids of the listens imported into a user's history from `context` (an import's, decision 0067), to tell
+    /// what a preview would add.
+    pub fn heard_events(&self, user: &str, context: &str) -> Result<std::collections::HashSet<String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT event FROM plays WHERE user = ?1 AND context = ?2 AND event IS NOT NULL")?;
+        let rows = st.query_map(params![user, context], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// An import from `context` undone (decision 0067): its listens out of the user's history. They never counted, so
+    /// the counts stay. How many.
+    pub fn forget_heard(&self, user: &str, context: &str) -> Result<usize> {
+        Ok(self.db().execute("DELETE FROM plays WHERE user = ?1 AND context = ?2 AND counted = 0", params![user, context])?)
+    }
+
     /// What a user heard from `since` on (epoch seconds), oldest first (decision 0064).
     pub fn heard_since(&self, user: &str, since: i64) -> Result<Vec<Logged>> {
         let db = self.db();
@@ -729,6 +753,63 @@ impl UserData {
     }
 
     /// The choices of the last import from a source (the page's JSON), to offer them again.
+    /// An import undone as a whole (decision 0067): the plays it added taken off the song, its album and artists
+    /// (`groups` names them), the stars and ratings it set taken away where they are still as it set them, and what it
+    /// remembered forgotten, so a next import starts afresh. Last played and added dates stay. All or nothing.
+    pub fn undo_import(&self, key: ImportKey, groups: impl Fn(&str) -> Option<(String, Vec<String>)>) -> Result<Undone> {
+        let rows: Vec<(String, String, i64, bool, i64)> = {
+            let db = self.db();
+            let mut st = db.prepare_cached("SELECT kind, item, plays, starred, rating FROM imported WHERE account = ?1 AND source = ?2 AND server_user = ?3")?;
+            st.query_map(params![key.account, key.source, key.server_user], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)?.max(0), r.get::<_, i64>(3)? != 0, r.get::<_, i64>(4)?))
+            })?
+            .collect::<rusqlite::Result<_>>()?
+        };
+        // The songs' albums and artists, read before the database is written (`groups` reads the library).
+        let song = Kind::Song.as_str();
+        let of: std::collections::HashMap<&str, (String, Vec<String>)> =
+            rows.iter().filter(|r| r.0 == song && r.2 > 0).filter_map(|r| groups(&r.1).map(|g| (r.1.as_str(), g))).collect();
+        let user = key.account;
+        let mut done = Undone { items: rows.len(), ..Undone::default() };
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        {
+            let mut less = tx.prepare_cached("UPDATE annotation SET play_count = max(0, play_count - ?4) WHERE user = ?1 AND item = ?2 AND kind = ?3")?;
+            let mut unstar = tx.prepare_cached("UPDATE annotation SET starred = 0, starred_at = NULL WHERE user = ?1 AND item = ?2 AND kind = ?3 AND starred = 1")?;
+            let mut unrate = tx.prepare_cached("UPDATE annotation SET rating = 0 WHERE user = ?1 AND item = ?2 AND kind = ?3 AND rating = ?4")?;
+            for (kind, item, plays, starred, rating) in &rows {
+                if *plays > 0 {
+                    less.execute(params![user, item, kind, plays])?;
+                    done.plays += *plays as u64;
+                    if let Some((album, artists)) = of.get(item.as_str()) {
+                        less.execute(params![user, album, Kind::Album.as_str(), plays])?;
+                        for a in artists {
+                            less.execute(params![user, a, Kind::Artist.as_str(), plays])?;
+                        }
+                    }
+                }
+                if *starred {
+                    done.unstarred += unstar.execute(params![user, item, kind])?;
+                }
+                if *rating > 0 {
+                    done.unrated += unrate.execute(params![user, item, kind, rating])?;
+                }
+            }
+            tx.execute("DELETE FROM imported WHERE account = ?1 AND source = ?2 AND server_user = ?3", params![key.account, key.source, key.server_user])?;
+        }
+        tx.commit()?;
+        Ok(done)
+    }
+
+    /// The import choices kept for sources whose id starts with `prefix` (the Subsonic servers imported from, decision
+    /// 0067): (source, choice).
+    pub fn import_choices(&self, prefix: &str) -> Result<Vec<(String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT source, choice FROM import_choices WHERE substr(source, 1, length(?1)) = ?1 ORDER BY source")?;
+        let rows = st.query_map([prefix], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn import_choice(&self, source: &str) -> Result<Option<String>> {
         Ok(self.db().query_row("SELECT choice FROM import_choices WHERE source = ?1", [source], |r| r.get(0)).optional()?)
     }
@@ -1399,6 +1480,35 @@ mod tests {
         u.follow_pids(&[("p".into(), "tr-9".into())]).unwrap();
         assert!(u.imported(KEY, Kind::Song, &["tr-9".into()]).unwrap().contains_key("tr-9"));
         assert_eq!(u.get("me", Kind::Song, &["tr-9".into()]).unwrap()["tr-9"].play_count, 8);
+    }
+
+    #[test]
+    fn an_import_undone_takes_back_its_plays_stars_and_ratings_where_they_are_still_its_own() {
+        let u = UserData::open(None).unwrap();
+        u.count_play("me", ("tr-1", "p"), "al-x", &["ar-a".into()], 500).unwrap();
+        let change = |item: &str, star: bool, rating: u8| ImportChange {
+            kind: Kind::Song,
+            item: item.into(),
+            pid: None,
+            add_plays: 7,
+            played: Some(100),
+            album: Some("al-x".into()),
+            artists: vec!["ar-a".into()],
+            star: Some((star, Some(5))),
+            rating: Some(rating),
+            now: Imported { server_item: Some("s".into()), plays: 7, played: Some(100), starred: star, rating },
+        };
+        u.apply_import(KEY, &[change("tr-1", true, 4), change("tr-2", true, 3)]).unwrap();
+        // Since the import: tr-2's rating changed in Cratarr, so it stays.
+        u.apply_import(KEY, &[ImportChange { add_plays: 0, played: None, star: None, rating: Some(5), now: Imported { rating: 3, ..change("tr-2", true, 3).now }, ..change("tr-2", true, 3) }]).unwrap();
+        let undone = u.undo_import(KEY, |_| Some(("al-x".into(), vec!["ar-a".into()]))).unwrap();
+        assert_eq!(undone, Undone { items: 2, plays: 14, unstarred: 2, unrated: 1 });
+        let get = |kind, item: &str| u.get("me", kind, &[item.to_string()]).unwrap().remove(item).unwrap_or_default();
+        assert_eq!((get(Kind::Song, "tr-1").play_count, get(Kind::Song, "tr-1").rating), (1, 0), "Cratarr's own play stays");
+        assert_eq!(get(Kind::Song, "tr-2").rating, 5, "a rating changed since is the user's");
+        assert_eq!((get(Kind::Album, "al-x").play_count, get(Kind::Artist, "ar-a").play_count), (1, 1));
+        assert!(get(Kind::Song, "tr-1").starred_at.is_none());
+        assert!(u.imported(KEY, Kind::Song, &["tr-1".into()]).unwrap().is_empty(), "forgotten: the next import starts afresh");
     }
 
     #[test]

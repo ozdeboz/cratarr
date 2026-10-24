@@ -153,7 +153,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/diagnostics/download", get(diagnostics_download))
             .route("/api/diagnostics/levels", get(diagnostics_levels).put(set_diagnostics_levels))
             .route("/api/players/settings", get(play_on_settings).put(save_play_on_settings))
-            .route("/api/history/listenbrainz", post(import_listenbrainz))
+            .route("/api/history/listenbrainz", post(import_listenbrainz).delete(undo_listenbrainz))
+            .route("/api/history/listenbrainz/preview", post(preview_listenbrainz))
         .route("/api/library/find", get(library_find))
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
             .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
@@ -2558,14 +2559,36 @@ struct ListenBrainzImport {
 
 /// The asking account's listening history from ListenBrainz into its log (decision 0064, amended): how many listens
 /// there were, matched to the library, and new to the log.
-async fn import_listenbrainz(Json(b): Json<ListenBrainzImport>) -> Result<Json<crate::app::listenbrainz::Imported>, ApiError> {
+/// Whose history a ListenBrainz import goes into, and whose listens (decision 0067).
+fn listenbrainz_who(b: &ListenBrainzImport) -> Result<(Arc<crate::serve::Serve>, String, String), ApiError> {
     let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
     let user = b.user.trim();
     if user.is_empty() {
         return Err(ToggleError::Refused("Say whose ListenBrainz listens.".into()).into());
     }
-    Ok(Json(crate::app::listenbrainz::import(&serve, &account, user).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+    Ok((serve, account, user.to_string()))
+}
+
+async fn import_listenbrainz(Json(b): Json<ListenBrainzImport>) -> Result<Json<crate::app::import::Tally>, ApiError> {
+    let (serve, account, user) = listenbrainz_who(&b)?;
+    Ok(Json(crate::app::listenbrainz::import(&serve, &account, &user).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+async fn preview_listenbrainz(Json(b): Json<ListenBrainzImport>) -> Result<Json<crate::app::import::Tally>, ApiError> {
+    let (serve, account, user) = listenbrainz_who(&b)?;
+    Ok(Json(crate::app::listenbrainz::preview(&serve, &account, &user).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+/// Every listen imported from ListenBrainz out of the account's history again.
+async fn undo_listenbrainz() -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
+    let removed = tokio::task::spawn_blocking(move || crate::app::listenbrainz::undo(&serve, &account))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "removed": removed })))
 }
 
 #[derive(Deserialize)]
