@@ -94,7 +94,8 @@ CREATE TABLE IF NOT EXISTS scrobble_queue (
   tries INTEGER NOT NULL DEFAULT 0, next INTEGER NOT NULL DEFAULT 0, why TEXT);
 CREATE INDEX IF NOT EXISTS scrobble_queue_due ON scrobble_queue (next, at);
 -- Discover (decision 0069): each account's suggestions as last looked up (JSON, app::discover::Found), and the albums
--- it answered: `no` (Not interested: never again, and an artist twice so is left out) or `wanted` (asked of Lidarr).
+-- it answered: `no` (Not interested: never again, and an artist twice so is left out), `hidden` (Hide: gone from the
+-- list, nothing said of the artist; the owner, 2026-10-24) or `wanted` (asked of Lidarr, before 0.9's requests).
 CREATE TABLE IF NOT EXISTS discover_found (user TEXT PRIMARY KEY, at INTEGER NOT NULL, found TEXT NOT NULL) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS discover_answer (
   user TEXT NOT NULL, album TEXT NOT NULL, artist TEXT NOT NULL, answer TEXT NOT NULL, at INTEGER NOT NULL,
@@ -1007,6 +1008,12 @@ impl UserData {
             "INSERT OR REPLACE INTO discover_answer (user, album, artist, answer, at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![user, album, artist, answer, now()],
         )?;
+        Ok(())
+    }
+
+    /// An answer taken back (its Undo): the album is suggested again.
+    pub fn unanswer_discover(&self, user: &str, album: &str) -> Result<()> {
+        self.db().execute("DELETE FROM discover_answer WHERE user = ?1 AND album = ?2", params![user, album])?;
         Ok(())
     }
 

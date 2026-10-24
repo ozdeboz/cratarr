@@ -3,12 +3,18 @@
   // playlists"): albums the library does not have, from the signed-in account's ListenBrainz and Last.fm, each with why
   // it is suggested, a cover, where to listen elsewhere, Want (a request, decision 0070: Lidarr fetches it into Incoming
   // once approved, where it is heard and kept or deleted; the card says how far it is) and Not interested (it never
-  // comes back). Looked up again once a day as a task, its progress in
+  // comes back). Everything known of it is on its card (the owner, 2026-10-24: what it is, its genres, length and track
+  // count, why, whether the artist is new, its listeners, its request); every action in its menu, opened by a tap. Looked up again once a day as a task, its progress in
   // one line (ui-conventions, Progress); Refresh in the page's pill asks again now. Without a service connected, the
   // page says what it needs.
-  import { getDiscover, notDiscover, previewBandcamp, refreshDiscover, wantDiscover, type AlbumRequest, type DiscoverAlbum, type DiscoverView } from './lib/api';
+  import { getDiscover, hideDiscover, notDiscover, previewBandcamp, refreshDiscover, wantDiscover, type AlbumRequest, type DiscoverAlbum, type DiscoverView } from './lib/api';
   import Cover from './lib/Cover.svelte';
-  import Icon from './lib/Icon.svelte';
+  import { hoursMinutes } from './lib/duration';
+  import MenuEntry from './lib/MenuEntry.svelte';
+  import MenuSheet from './lib/MenuSheet.svelte';
+  import LinkSheet from './lib/LinkSheet.svelte';
+  import { goToArtist } from './lib/albums.svelte';
+  import { withUndo } from './lib/undo.svelte';
   import Meter from './lib/Meter.svelte';
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
@@ -127,10 +133,38 @@
     }
   }
 
-  async function no(a: DiscoverAlbum) {
+  /** The card's facts in one line: what it is, its tracks, its length. */
+  function facts(a: DiscoverAlbum): string {
+    const parts: string[] = [];
+    if (a.kind) parts.push(a.kind);
+    if (a.track_count) parts.push(`${a.track_count} ${a.track_count === 1 ? 'track' : 'tracks'}`);
+    if (a.length_secs) parts.push(hoursMinutes(a.length_secs));
+    return parts.join(' · ');
+  }
+  const listeners = (n: number) =>
+    `${n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : n} listeners`;
+
+  // The menu of the card tapped.
+  let opened = $state<DiscoverAlbum | null>(null);
+  const act = (what: () => unknown) => () => {
+    opened = null;
+    what();
+  };
+  // A link to another site asks first, Open or Copy link, as every such link does (lib/LinkSheet).
+  let link = $state<{ url: string; name: string } | null>(null);
+
+  /** Not interested (`no`: its artist held against it, twice and they are left out) or Hide (nothing said of it); Undo
+   *  in its toast brings it back (the one undo, decision 0026). */
+  async function no(a: DiscoverAlbum, hide = false) {
     gone = [...gone, a.key];
     try {
-      await notDiscover(a.key);
+      const { undo } = await (hide ? hideDiscover(a.key) : notDiscover(a.key));
+      withUndo(hide ? 'Hidden.' : 'Not interested.', [undo], {
+        after: (undone) => {
+          gone = undone ? gone.filter((k) => k !== a.key) : [...gone, a.key];
+          if (undone) load();
+        },
+      });
     } catch (e) {
       gone = gone.filter((k) => k !== a.key);
       toast.fail(e, 'Could not leave it out');
@@ -171,43 +205,56 @@
       <ul class="grid">
         {#each albums as a (a.key)}
           {@const r = view.requests?.[a.key]}
-          <li class="card">
-            <!-- Cratarr's own cover: a picture that does not load is its stand-in, and the suggestion stays. -->
-            <div class="cover"><Cover src={a.cover} /></div>
-            <div class="text">
-              <b>{a.album}</b>
-              <span class="by">{a.artist}{a.year ? ` · ${a.year}` : ''}{#if a.new_artist}<span class="new">New to you</span>{/if}</span>
-              {#each a.why as w (w)}<small class="why">{w}</small>{/each}
-              {#if a.sources?.length}<span class="sources">{#each a.sources as s (s)}<span class="source">{s}</span>{/each}</span>{/if}
-              <span class="links">
-                {#each a.links as l (l.name)}<a href={l.url} target="_blank" rel="noopener noreferrer">{l.name}</a>{/each}
-              </span>
-              {#if r && asked(r)}
-                <a class="asked" class:bad={r.status === 'declined' || r.fetched?.startsWith('Not handed over')} href="#/requests">{asked(r)}</a>
-              {/if}
-              <span class="acts">
-                <!-- Unavailable, not hidden, for an account that may not ask (an administrator took it away), and once asked. -->
-                <button
-                  class="primary"
-                  disabled={!canWant || asking === a.key || open(r)}
-                  aria-busy={asking === a.key}
-                  title={canWant ? null : 'Requesting albums is not on for this account'}
-                  onclick={() => want(a)}>Want</button
-                >
-                {#if a.bandcamp}
-                  <button class="no" aria-label="Play on Bandcamp" title="Play on Bandcamp" disabled={previewing === a.key} aria-busy={previewing === a.key} onclick={() => preview(a)}
-                    ><Icon name="play" size={20} /></button
-                  >
+          <li>
+            <!-- The whole card opens its menu (the owner, 2026-10-24: every action in a menu, on a tap). -->
+            <button class="card" aria-haspopup="menu" onclick={() => (opened = a)}>
+              <!-- Cratarr's own cover: a picture that does not load is its stand-in, and the suggestion stays. -->
+              <span class="cover"><Cover src={a.cover} /></span>
+              <span class="text">
+                <b>{a.album}</b>
+                <span class="by">{a.artist}{a.year ? ` · ${a.year}` : ''}{#if a.new_artist}<span class="new">New to you</span>{/if}</span>
+                {#if facts(a)}<small class="facts">{facts(a)}</small>{/if}
+                {#if a.genres?.length}<span class="tags">{#each a.genres as g (g)}<span class="tag">{g}</span>{/each}</span>{/if}
+                {#each a.why as w (w)}<small class="why">{w}</small>{/each}
+                <span class="tags">
+                  {#each a.sources ?? [] as src (src)}<span class="tag source">{src}</span>{/each}
+                  {#if a.listeners}<span class="tag source">{listeners(a.listeners)}</span>{/if}
+                  {#if !a.new_artist}<span class="tag source">By an artist you have</span>{/if}
+                  {#if a.bandcamp}<span class="tag source">On Bandcamp</span>{/if}
+                </span>
+                {#if r && asked(r)}
+                  <small class="asked" class:bad={r.status === 'declined' || r.fetched?.startsWith('Not handed over')}>{asked(r)}</small>
                 {/if}
-                <button class="no" aria-label="Not interested" title="Not interested" onclick={() => no(a)}><Icon name="thumbsDown" size={20} /></button>
               </span>
-            </div>
+            </button>
           </li>
         {/each}
       </ul>
     {/if}
   {/if}
 </main>
+
+{#if opened}
+  {@const a = opened}
+  {@const r = view?.requests?.[a.key]}
+  <MenuSheet label={a.album} title={a.album} images={a.cover ? [a.cover] : []} chips={[a.artist, ...(a.year ? [String(a.year)] : [])]} onclose={() => (opened = null)}>
+    <div role="menu">
+      {#if a.bandcamp}
+        <MenuEntry icon="play" label="Play on Bandcamp" busy={previewing === a.key} onclick={act(() => preview(a))} />
+      {/if}
+      {#if r && open(r)}
+        <MenuEntry icon="inbox" label={r.status === 'pending' ? 'Requested' : 'Approved'} onclick={act(() => (location.hash = '#/requests'))} />
+      {:else}
+        <MenuEntry icon="circlePlus" label="Want" disabled={!canWant || asking === a.key} busy={asking === a.key} onclick={act(() => want(a))} />
+      {/if}
+      {#if !a.new_artist}<MenuEntry icon="user" label="Go to {a.artist}" onclick={act(() => goToArtist('cratarr', a.artist))} />{/if}
+      {#each a.links as l (l.url)}<MenuEntry icon="externalLink" label={l.name} onclick={act(() => (link = l))} />{/each}
+      <MenuEntry icon="eyeOff" label="Hide" onclick={act(() => no(a, true))} />
+      <MenuEntry icon="thumbsDown" label="Not interested" onclick={act(() => no(a))} />
+    </div>
+  </MenuSheet>
+{/if}
+{#if link}{@const l = link}<LinkSheet url={l.url} name={l.name} onclose={() => (link = null)} />{/if}
 
 <style>
   /* The page answers to its own width (beside the player or not): a container, as Crates. */
@@ -249,12 +296,25 @@
     list-style: none;
   }
 
+  /* A card is one button: a tap opens its menu. */
   .card {
     display: flex;
     gap: 14px;
+    width: 100%;
+    height: 100%;
     padding: 12px;
+    border: 0;
     border-radius: 14px;
     background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .card:hover,
+  .card:focus-visible {
+    background: color-mix(in srgb, var(--text) 6%, var(--surface));
   }
 
   .cover {
@@ -299,92 +359,64 @@
     font-size: 12px;
   }
 
+  .facts,
   .why {
     color: var(--muted);
     font-size: 13px;
   }
 
-  .links {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    font-size: 13px;
-  }
-
-  .links a {
-    color: var(--accent-ink);
-  }
-
-  .acts {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: auto;
-    padding-top: 6px;
-  }
-
-  button,
-  .button {
-    min-height: 34px;
-    padding: 0 14px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--bg);
-    color: var(--text);
-    font: inherit;
-    font-size: 14px;
-    cursor: pointer;
-  }
-
-  .button {
-    display: inline-flex;
-    align-items: center;
-    text-decoration: none;
-  }
-
-  button.primary,
-  .button.primary {
-    border-color: var(--accent);
-    background: var(--accent);
-    color: var(--accent-text);
-    font-weight: 600;
-  }
-
-  button:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
-  /* Not interested: an icon beside Want, as round as the buttons beside it are tall. */
-  .no {
-    display: grid;
-    place-items: center;
-    padding: 0 10px;
-  }
-
-  /* Where an asked-for album stands: the Requests page's line, opening it. */
+  /* Where an asked-for album stands. */
   .asked {
     color: var(--accent-ink);
     font-size: 13px;
-    text-decoration: none;
   }
 
   .asked.bad {
     color: var(--danger-ink);
   }
 
-  /* Where it comes from: each service a small label. */
-  .sources {
+  /* Its genres, and where it comes from: each a small label. */
+  .tags {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
   }
 
-  .source {
+  .tags:empty {
+    display: none;
+  }
+
+  .tag {
     padding: 1px 7px;
     border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent-ink);
+    font-size: 11px;
+  }
+
+  .tag.source {
     background: color-mix(in srgb, var(--text) 8%, transparent);
     color: var(--muted);
-    font-size: 11px;
+  }
+
+  /* The way to connect a service, when none is. */
+  .button {
+    display: inline-flex;
+    align-items: center;
+    min-height: 34px;
+    padding: 0 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    text-decoration: none;
+  }
+
+  .button.primary {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-text);
+    font-weight: 600;
   }
 </style>

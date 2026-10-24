@@ -1513,6 +1513,12 @@ export type DiscoverAlbum = {
   sources?: string[];
   /** Its album page on Bandcamp: Play previews it there (decision 0071). */
   bandcamp?: string;
+  /** What MusicBrainz calls it (album, EP, single…), its genres, length, track count; Last.fm's listeners (0.9). */
+  kind?: string | null;
+  genres?: string[];
+  length_secs?: number | null;
+  track_count?: number | null;
+  listeners?: number | null;
 };
 /** Discover's page: the suggestions as last found (none before the first look), which services it asks, and whether
  *  Want can fetch through Lidarr. */
@@ -1568,7 +1574,10 @@ export const getWatching = () => quietly<Watching | null>('/api/requests/watchin
 export const decideRequests = (ids: number[], approve: boolean, reason: string | null = null) =>
   post<{ id: number; said: string }[]>('/api/requests/decide', { ids, approve, reason });
 export const cancelRequest = (id: number) => post<void>(`/api/requests/${id}/cancel`, {});
-export const notDiscover = (key: string) => post<void>('/api/discover/no', { key });
+/** Not interested: never again, its artist held against it (twice, and they are left out). Its undo token. */
+export const notDiscover = (key: string) => post<{ undo: string }>('/api/discover/no', { key });
+/** Hidden: gone from the list, its artist not held against it (unlike Not interested). Its undo token. */
+export const hideDiscover = (key: string) => post<{ undo: string }>('/api/discover/hide', { key });
 /** A Bandcamp album's tracks to play as a preview (decision 0071), as players hold them; never a play. */
 export const previewBandcamp = (url: string) =>
   request<{ album: string; artist: string; url: string; tracks: LocalTrack[] }>(`/api/preview/bandcamp?url=${encodeURIComponent(url)}`);

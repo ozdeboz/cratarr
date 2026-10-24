@@ -163,6 +163,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/discover/refresh", post(discover_refresh))
         .route("/api/discover/want", post(discover_want))
         .route("/api/discover/no", post(discover_no))
+        .route("/api/discover/hide", post(discover_hide))
         .route("/api/preview/bandcamp", get(preview_bandcamp))
         .route("/api/requests", get(requests))
         .route("/api/requests/watching", get(requests_watching))
@@ -2444,12 +2445,23 @@ struct UndoRequest {
 /// again in its own order (an edit before the rename that followed it). Incoming's tokens (its event ids) answer with
 /// the albums' titles, and are the administrators' to undo, as their changes are (decision 0051).
 async fn undo(State(app): State<Arc<App>>, Json(req): Json<UndoRequest>) -> Result<Json<serde_json::Value>, ApiError> {
-    if req.tokens.iter().any(|t| !t.starts_with('c')) && !crate::serve::access::administering() {
+    // Playlists' and crates' (`c…`) and Discover's (`d…`, the signed-in account's own) are anyone's; Incoming's are an
+    // administrator's.
+    if req.tokens.iter().any(|t| !t.starts_with('c') && !t.starts_with('d')) && !crate::serve::access::administering() {
         return Err(ToggleError::Forbidden("This is for administrators.".into()).into());
     }
     let (mut redo, mut restored) = (Vec::new(), Vec::new());
     for token in req.tokens.iter().rev() {
-        if token.starts_with('c') {
+        if token.starts_with('d') {
+            let (serve, account) = discoverer()?;
+            let t = token.clone();
+            redo.push(
+                tokio::task::spawn_blocking(move || crate::app::discover::undo(&serve, &account, &t))
+                    .await
+                    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+                    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?,
+            );
+        } else if token.starts_with('c') {
             redo.extend(app.playlists.undo(token).await?);
         } else {
             restored.push(app.incoming.undo(token).await?);
@@ -2934,14 +2946,24 @@ async fn requests_cancel(State(app): State<Arc<App>>, Path(id): Path<i64>) -> Re
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// A suggestion not wanted: it never comes back.
-async fn discover_no(Json(b): Json<DiscoverKey>) -> Result<StatusCode, ApiError> {
+/// A suggestion not wanted: it never comes back. Its undo token.
+async fn discover_no(Json(b): Json<DiscoverKey>) -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = discoverer()?;
-    tokio::task::spawn_blocking(move || crate::app::discover::not_interested(&serve, &account, &b.key))
+    let undo = tokio::task::spawn_blocking(move || crate::app::discover::not_interested(&serve, &account, &b.key))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Json(json!({ "undo": undo })))
+}
+
+/// A suggestion hidden: it leaves the list, its artist not held against it. Its undo token.
+async fn discover_hide(Json(b): Json<DiscoverKey>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = discoverer()?;
+    let undo = tokio::task::spawn_blocking(move || crate::app::discover::hide(&serve, &account, &b.key))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "undo": undo })))
 }
 
 /// The asking account and Cratarr's own library, for scrobbling (decision 0068).

@@ -319,8 +319,9 @@ async fn from_lastfm(user: &str, auth: &Auth, artists_had: &HashSet<String>, pro
         because.sort_by(|a, b| b.0.total_cmp(&a.0));
         let names: Vec<String> = because.into_iter().map(|b| b.1).take(2).collect();
         let why = match names.as_slice() {
-            [one] => format!("Like {one}, which you play"),
-            [one, two, ..] => format!("Like {one} and {two}, which you play"),
+            // Not ", which you play" after each: every card would say it (the owner, 2026-10-24).
+            [one] => format!("Like {one}"),
+            [one, two, ..] => format!("Like {one} and {two}"),
             [] => "Like what you play".into(),
         };
         let cover = a["image"].as_array().and_then(|i| i.iter().rev().find_map(|x| x["#text"].as_str().filter(|s| !s.is_empty()))).map(str::to_string);
@@ -682,6 +683,12 @@ pub fn kept(serve: &crate::serve::Serve, account: &str) -> Result<Option<Found>>
     let mut found: Found = serde_json::from_str(&json).unwrap_or_default();
     let (answered, no_artists) = serve.userdata.discover_answered(account)?;
     found.albums.retain(|s| !answered.contains(&s.key) && !no_artists.contains(&s.artist_key));
+    // A look kept before 0.9 said ", which you play" after each reason: read without it.
+    for w in found.albums.iter_mut().flat_map(|s| s.why.iter_mut()) {
+        if let Some(short) = w.strip_suffix(", which you play") {
+            *w = short.to_string();
+        }
+    }
     Ok(Some(found))
 }
 
@@ -730,10 +737,43 @@ pub fn start(app: &Arc<super::App>, serve: Arc<crate::serve::Serve>, account: &s
     })
 }
 
-/// Not interested (decision 0069): it never comes back, and an artist said no to twice is left out.
-pub fn not_interested(serve: &crate::serve::Serve, account: &str, key: &str) -> Result<()> {
+/// Hide (the owner, 2026-10-24: "hide suggestions without disliking"): it leaves the list and never comes back, and
+/// says nothing of its artist (only Not interested counts towards leaving an artist out). Its undo token.
+pub fn hide(serve: &crate::serve::Serve, account: &str, key: &str) -> Result<String> {
+    answer(serve, account, key, "hidden")
+}
+
+/// Not interested (decision 0069): it never comes back, and an artist said no to twice is left out. Its undo token.
+pub fn not_interested(serve: &crate::serve::Serve, account: &str, key: &str) -> Result<String> {
+    answer(serve, account, key, "no")
+}
+
+fn answer(serve: &crate::serve::Serve, account: &str, key: &str, answer: &str) -> Result<String> {
     let s = kept(serve, account)?.and_then(|f| f.albums.into_iter().find(|s| s.key == key)).context("That suggestion is gone; look again")?;
-    serve.userdata.answer_discover(account, &s.key, &s.artist_key, "no")
+    serve.userdata.answer_discover(account, &s.key, &s.artist_key, answer)?;
+    Ok(format!("{UNDO}{answer}:{key}"))
+}
+
+/// Discover's undo tokens (the one undo, decision 0026; the owner, 2026-10-24: "like all our actions, there should be
+/// an undo"): `du:<answer>:<key>` takes the answer back, `dr:<answer>:<key>` gives it again. The signed-in account's own.
+pub const UNDO: &str = "du:";
+const REDO: &str = "dr:";
+
+/// A Discover token undone or redone for `account`: the token that reverses it.
+pub fn undo(serve: &crate::serve::Serve, account: &str, token: &str) -> Result<String> {
+    let (back, rest) = match (token.strip_prefix(UNDO), token.strip_prefix(REDO)) {
+        (Some(r), _) => (true, r),
+        (_, Some(r)) => (false, r),
+        _ => anyhow::bail!("Not Discover's undo"),
+    };
+    let (answer, key) = rest.split_once(':').context("Not Discover's undo")?;
+    anyhow::ensure!(answer == "no" || answer == "hidden", "Not Discover's undo");
+    if back {
+        serve.userdata.unanswer_discover(account, key)?;
+        Ok(format!("{REDO}{answer}:{key}"))
+    } else {
+        self::answer(serve, account, key, answer)
+    }
 }
 
 #[cfg(test)]
@@ -764,7 +804,7 @@ mod tests {
         let list = one_list(
             vec![
                 c("Black Sands", "Bonobo", Some("rg-bs"), "listenbrainz", "Recommended by ListenBrainz", 0.9),
-                c("Moon Safari", "Air", None, "lastfm", "Like Bonobo, which you play", 1.0),
+                c("Moon Safari", "Air", None, "lastfm", "Like Bonobo", 1.0),
                 c("Black Sands", "Bonobo", Some("rg-bs"), "exploration", "In your Weekly Exploration", 0.6),
                 c("Black Sands", "Bonobo", Some("rg-bs"), "listenbrainz", "Recommended by ListenBrainz", 0.5),
             ],

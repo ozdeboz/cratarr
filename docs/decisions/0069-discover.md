@@ -78,6 +78,12 @@ the card shows as much as is known of the suggestion.
   Request, 0070), Not interested; to listen elsewhere, each through the Open/Copy sheet: Bandcamp, YouTube,
   ListenBrainz, Last.fm, MusicBrainz; the artist in the library, where it is there; and why it is suggested, every
   reason in full. The card itself has no buttons.
+- **Hide** beside Not interested (the owner, 2026-10-24: "a way to hide suggestions without disliking"): the album
+  leaves the list and does not come back, and nothing is held against its artist (only Not interested counts towards
+  leaving an artist out). Both have Undo in their toast, and Undo has Redo, as every action has (the one undo, 0026:
+  Discover's tokens are the signed-in account's own).
+- **No "which you play"** after each reason ("Like Bonobo", not "Like Bonobo, which you play"): every card would say
+  it (the owner, 2026-10-24); looks kept from before read without it.
 - **The card:** the cover, album, artist, year; its type (album, EP, live); its genres, two or three; its length and how
   many tracks; the reason, short ("Like Air and Bonobo", "Missing from Air's albums", "ListenBrainz recommends");
   New to you or By an artist you have; how many listen to it (Last.fm's listeners, where known); and, with 0070, the

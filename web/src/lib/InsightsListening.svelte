@@ -7,6 +7,7 @@
   // ListenBrainz where that kept the history): what is not there yet is not made up.
   import { albumCoverUrl, coverUrl, getListening, type Listening, type ListeningTop } from './api';
   import Cover from './Cover.svelte';
+  import { hoursMinutes } from './duration';
   import PageLoading from './PageLoading.svelte';
   import { hiddenLibraries } from './listFilter.svelte';
   import { prefs } from './prefs.svelte';
@@ -27,12 +28,6 @@
     return () => (gone = true);
   });
 
-  /** "12 h 30 min", "45 min". */
-  function duration(secs: number) {
-    const m = Math.round(secs / 60);
-    const h = Math.floor(m / 60);
-    return h ? `${h} h${m % 60 ? ` ${m % 60} min` : ''}` : `${m} min`;
-  }
   const day = (start: number, opts: Intl.DateTimeFormatOptions) => new Date(start * 1000).toLocaleDateString(undefined, opts);
 
   /** A column's label under the axis: a week's weekday letters, a month's every fifth day, a year's month where one
@@ -115,12 +110,12 @@
   {:else}
     <section aria-label="Listening time">
       <div class="tiles">
-        <div class="tile"><b>{duration(data.total_secs)}</b><span>listened</span></div>
+        <div class="tile"><b>{hoursMinutes(data.total_secs)}</b><span>listened</span></div>
         <div class="tile"><b>{data.plays.toLocaleString()}</b><span>{data.plays === 1 ? 'track' : 'tracks'}</span></div>
       </div>
       <div class="columns" role="list" aria-label="Time listened per {data.period === 'year' || data.period === 'all' ? 'week' : 'day'}">
         {#each data.time as t, i (t.start)}
-          <div class="column" role="listitem" title={`${when(t.start)}: ${duration(t.secs)}`}>
+          <div class="column" role="listitem" title={`${when(t.start)}: ${hoursMinutes(t.secs)}`}>
             <span class="col"><i style:height={`${(100 * t.secs) / tallest}%`}></i></span>
             <span class="x">{label(i, t.start)}</span>
           </div>
