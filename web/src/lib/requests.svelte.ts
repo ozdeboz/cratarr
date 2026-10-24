@@ -10,7 +10,7 @@ export type RequestsList = 'waiting' | 'mine' | 'lidarr';
 export const REQUESTS_LISTS: { id: RequestsList; label: string; icon: IconName }[] = [
   { id: 'waiting', label: 'Waiting for an answer', icon: 'inbox' },
   { id: 'mine', label: 'Your requests', icon: 'user' },
-  { id: 'lidarr', label: 'Lidarr is looking for these', icon: 'download' },
+  { id: 'lidarr', label: 'Lidarr monitor', icon: 'download' },
 ];
 
 export const requests = $state({

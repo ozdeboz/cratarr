@@ -50,8 +50,10 @@
   import ProgressBar from './lib/ProgressBar.svelte';
   import { untrack } from 'svelte';
   import { inSidebar, live, panelShowsPlayer, player } from './lib/live.svelte';
-  import { closePlaylist, HEALTH as HEALTH_VIEW, healthOf, INSIGHTS as INSIGHTS_VIEW, insightsOf, keepViewed, openedHere, panel, REQUESTS as REQUESTS_VIEW, requestsOf, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace, viewPlaylist } from './lib/panel.svelte';
+  import { closePlaylist, HEALTH as HEALTH_VIEW, healthOf, INSIGHTS as INSIGHTS_VIEW, insightsOf, keepViewed, openedHere, panel, REQUESTS as REQUESTS_VIEW, requestsOf, DOWNLOADS as DOWNLOADS_VIEW, downloadsOf, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace, viewPlaylist } from './lib/panel.svelte';
   import RequestsPanel from './lib/RequestsPanel.svelte';
+  import DownloadsPanel from './lib/DownloadsPanel.svelte';
+  import { DOWNLOADS_LISTS, type DownloadsList } from './lib/downloadsLists.svelte';
   import { answersRequests, REQUESTS_LISTS, requests as requestsData, type RequestsList } from './lib/requests.svelte';
   import PlaylistView from './lib/PlaylistView.svelte';
   import { poll } from './lib/live.svelte';
@@ -186,8 +188,10 @@
   // on a roomy window.
   const insightsSplit = $derived(page === 'insights' && player.roomy);
   const insightsShown = $derived(INSIGHTS_VIEWS.find((v) => v.id === insightsOf(panel.viewed))?.id ?? (null as InsightsView | null));
-  // Downloads as Insights (the owner, 2026-10-24): its list beside the item opened, while it has any.
-  const downloadsSplit = $derived(page === 'downloads' && player.roomy && (downloads.tracks.length > 0 || kept.items.length > 0));
+  // Downloads as Insights and Requests (the owner, 2026-10-24): its index beside the list opened, the panel always
+  // beside it on a roomy window; its own panel, never the content panel.
+  const downloadsSplit = $derived(page === 'downloads' && player.roomy);
+  const downloadsShown = $derived(DOWNLOADS_LISTS.find((l) => l.id === downloadsOf(panel.viewed))?.id ?? (null as DownloadsList | null));
   // Requests as Insights (the owner, 2026-10-24): its index beside the list opened, the panel always beside it on a
   // roomy window.
   const requestsSplit = $derived(page === 'requests' && player.roomy);
@@ -273,6 +277,11 @@
   $effect(() => {
     if (healthShown) prefs.healthPart = healthShown;
   });
+  // Beside Downloads' index a list is always open: what is synced where something is, else this device.
+  $effect(() => {
+    if (!downloadsSplit || downloadsShown || openedHere() || fromHash() !== 'downloads' || !downloads.known) return;
+    untrack(() => viewInPlace(DOWNLOADS_VIEW + (kept.items.length ? 'synced' : 'device')));
+  });
   // Beside Requests' index a list is always open: the waiting ones for those who answer them, else the account's own.
   $effect(() => {
     // Only once the account's rights are known (they say which list comes first).
@@ -308,7 +317,7 @@
     pageView.query = '';
   });
   // The page's device button gives way to the panel's (the owner, 2026-10-16): a list beside the page has its own.
-  const panelDevice = $derived(sidebar && panel.viewed !== null && !playerInPanel && !settingsShown && !healthShown && !insightsShown && !requestsShown);
+  const panelDevice = $derived(sidebar && panel.viewed !== null && !playerInPanel && !settingsShown && !healthShown && !insightsShown && !requestsShown && !downloadsShown);
   const pillDevice = $derived(!playing() && !playerInPanel && !panelDevice);
   // Each step of this visit carries its place (`nav` in its history state): back shows from the second step on, never on
   // the one the app opened with.
@@ -617,9 +626,9 @@
     {/if}
     {#if sidebar}
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
-      <aside class="player-side" class:whole={split} aria-label={playerInPanel ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : requestsShown ? 'Requests' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
+      <aside class="player-side" class:whole={split} aria-label={playerInPanel ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : requestsShown ? 'Requests' : downloadsShown ? 'Downloads' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
         <SheetArea area={() => sideEl}>
-          {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if playerInPanel}<NowPlaying place="side" />{:else if split && panel.viewed === null}<!-- Its part comes in a moment. -->{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else if healthShown}<HealthPanel problem={healthShown} beside={healthSplit} />{:else if insightsShown}<InsightsPanel view={insightsShown} beside={insightsSplit} />{:else if requestsShown}<RequestsPanel list={requestsShown} beside={requestsSplit} />{:else}<PlaylistView />{/if}
+          {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if playerInPanel}<NowPlaying place="side" />{:else if split && panel.viewed === null}<!-- Its part comes in a moment. -->{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else if healthShown}<HealthPanel problem={healthShown} beside={healthSplit} />{:else if insightsShown}<InsightsPanel view={insightsShown} beside={insightsSplit} />{:else if requestsShown}<RequestsPanel list={requestsShown} beside={requestsSplit} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} beside={downloadsSplit} />{:else}<PlaylistView />{/if}
         </SheetArea>
       </aside>
     {/if}
@@ -627,7 +636,7 @@
 
   {#if playlistLayer}
     <div class="playlist-layer" role="dialog" aria-label="Playlist" style:--mini-h={`${miniSpace}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
-      {#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else if requestsShown}<RequestsPanel list={requestsShown} />{:else}<PlaylistView full />{/if}
+      {#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else if requestsShown}<RequestsPanel list={requestsShown} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} />{:else}<PlaylistView full />{/if}
     </div>
   {/if}
   {#if mini}

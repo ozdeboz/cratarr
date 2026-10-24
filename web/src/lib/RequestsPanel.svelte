@@ -3,7 +3,7 @@
   // Settings; the lists in panels): opened from the page's index, beside it on a roomy window (no ✕ there), over it on a
   // phone. Its bar: where it is (Requests › Your requests). Waiting for an answer (those who answer requests): each
   // answered from its row's menu, or many at once in the select mode every list has (the bar's icon starts it). Your
-  // requests: each with where it stands, a waiting one taken back from its menu. Lidarr is looking for these: what it
+  // requests: each with where it stands, a waiting one taken back from its menu. Lidarr monitor: what it
   // fetches now (how far), then what it watches for and has not found yet.
   import type { AlbumRequest, WatchedAlbum } from './api';
   import Icon from './Icon.svelte';
@@ -12,6 +12,7 @@
   import MenuSheet from './MenuSheet.svelte';
   import Notice from './Notice.svelte';
   import PageLoading from './PageLoading.svelte';
+  import ReleaseRow from './ReleaseRow.svelte';
   import { closePlaylist } from './panel.svelte';
   import { answersRequests, decide, loadRequests, lookAtLidarr, REQUESTS_LISTS, requests, takeBack, type RequestsList } from './requests.svelte';
   import SelectBar from './SelectBar.svelte';
@@ -64,6 +65,8 @@
   }
   const tone = (r: AlbumRequest) => (r.status === 'declined' || r.fetched?.startsWith('Not handed over') ? 'bad' : null);
   const fill = (r: AlbumRequest) => (r.album_state?.state === 'fetching' ? r.album_state.done : null);
+  /** A release group's cover, as Discover's (the Cover Art Archive). */
+  const coverOf = (w: WatchedAlbum) => (w.release_group ? `https://coverartarchive.org/release-group/${w.release_group}/front-250` : null);
   const watchLine = (w: WatchedAlbum) =>
     [w.artist, w.year, w.done !== null ? `${Math.round(w.done * 100)}%${w.status && w.status !== 'downloading' ? ` · ${w.status}` : ''}` : null]
       .filter(Boolean)
@@ -102,13 +105,13 @@
 
 {#snippet row(r: AlbumRequest, who: boolean, tickable: boolean)}
   {#if tickable && selecting}
-    <Item name={r.album} line={line(r, who)} tone={tone(r)}>
+    <ReleaseRow cover={r.cover} title={r.album} line={line(r, who)} tone={tone(r)}>
       <button class="tick" class:on={selecting.has(r.id)} role="checkbox" aria-checked={selecting.has(r.id)} aria-label={`Select ${r.album}`} onclick={() => tick(r.id)}
         ><Icon name={selecting.has(r.id) ? 'circleCheck' : 'circle'} size={24} /></button
       >
-    </Item>
+    </ReleaseRow>
   {:else}
-    <Item name={r.album} line={line(r, who)} tone={tone(r)} progress={fill(r)} onclick={() => (opened = r)} />
+    <ReleaseRow cover={r.cover} title={r.album} line={line(r, who)} tone={tone(r)} fill={fill(r)} onclick={() => (opened = r)} />
   {/if}
 {/snippet}
 
@@ -144,11 +147,11 @@
       {@const w = requests.watching}
       {#if w.fetching.length}
         <Group title="Fetching now">
-          {#each w.fetching as a (`f:${a.release_group ?? a.album}`)}<Item name={a.album} line={watchLine(a)} progress={a.done} />{/each}
+          {#each w.fetching as a (`f:${a.release_group ?? a.album}`)}<ReleaseRow cover={coverOf(a)} title={a.album} line={watchLine(a)} fill={a.done} />{/each}
         </Group>
       {/if}
       <Group title="Not found yet" more="What Lidarr watches for and has not found yet (its Wanted).">
-        {#each w.looking as a (`l:${a.release_group ?? a.album}`)}<Item name={a.album} line={watchLine(a)} />{:else}<Item name="Nothing" />{/each}
+        {#each w.looking as a (`l:${a.release_group ?? a.album}`)}<ReleaseRow cover={coverOf(a)} title={a.album} line={watchLine(a)} />{:else}<Item name="Nothing" />{/each}
         {#if w.more}<Item name="{w.more.toLocaleString()} more" line="In Lidarr's Wanted" />{/if}
       </Group>
     {/if}
