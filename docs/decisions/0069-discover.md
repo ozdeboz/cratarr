@@ -47,3 +47,24 @@ where it is connected, fetches what is asked for into Incoming, where it is hear
   user yet), the page says so, and the other sources still fill it.
 - Not yet: a preview to hear in Cratarr (no source plays what the library does not have), suggestions by track rather
   than album, steering by mood or genre.
+
+## Amendment, 2026-10-24: more sources, for every account (0.9)
+
+The owner, 2026-10-24 ("this all sounds good for 0.9"), after a read of what held the page back: only the account's
+own ListenBrainz and Last.fm fed it, so an account without them saw nothing; ListenBrainz makes its recommendations
+only for users with enough listens, on its own schedule; Last.fm gave one album (often a compilation) for each of 30
+artists new to the library, and nothing for an artist the library has; 60 at most, from sources that change slowly.
+
+- **Gaps in the library's artists' discographies (first):** MusicBrainz's release groups for each artist the library
+  has (albums and EPs, official, released), those it has none of suggested ("By Air, whom you have"), ranked by how
+  much the account plays that artist (its own listening history, 0064). No service needed; each comes with its
+  release group, so Want and the library's match are exact.
+- **The account's own listening history as the seed:** its most played artists from Cratarr's plays (0064), not
+  Last.fm's; Last.fm's similar artists asked with one key for the whole server (Last.fm's `artist.getSimilar` needs no
+  user), so every account gets them, a Last.fm account or not. An account's own Last.fm still counts where it has one.
+- **ListenBrainz's fresh releases:** new albums by artists the account listens to (`/user/{user}/fresh_releases`),
+  where it has ListenBrainz.
+- Kept: ListenBrainz's recommendations and Weekly Exploration, Last.fm's artists like yours, every rule above (only
+  outside the library, Not interested, the answers, one suggestion with all its reasons).
+- MusicBrainz's one request a second is the pace: the discographies are looked up a few artists a day, most played
+  first, and kept, so the page fills over days and opens at once; the links (Bandcamp, YouTube) only for what shows.
