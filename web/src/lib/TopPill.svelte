@@ -179,6 +179,8 @@
   .pill {
     display: flex;
     padding: 2px;
+    /* Nothing draws past its outline: a button sliding out (narrower than its icon and ring) is cut at the edge. */
+    overflow: hidden;
     border-radius: 26px;
     background: var(--float-bg);
     -webkit-backdrop-filter: var(--float-blur);
