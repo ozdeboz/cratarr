@@ -237,7 +237,7 @@
 {#if opened}
   {@const a = opened}
   {@const r = view?.requests?.[a.key]}
-  <MenuSheet label={a.album} title={a.album} images={a.cover ? [a.cover] : []} chips={[a.artist, ...(a.year ? [String(a.year)] : [])]} onclose={() => (opened = null)}>
+  <MenuSheet label={a.album} title={a.album} images={a.cover ? [a.cover] : []} chips={[a.artist, ...(a.year ? [String(a.year)] : [])]} copy={`${a.artist} – ${a.album}`} onclose={() => (opened = null)}>
     <div role="menu">
       {#if a.bandcamp}
         <MenuEntry icon="play" label="Play on Bandcamp" busy={previewing === a.key} onclick={act(() => preview(a))} />
