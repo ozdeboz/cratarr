@@ -450,6 +450,8 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   mini-player, or the bottom edge without it (beside the sidebar from 1024 px), never moving the page. Neutral for done ("Deleted Chill."), amber for
   warnings, red for errors. Done and warnings go after a few seconds; errors stay until dismissed, replaced, or the
   page changes (not when the panel's view comes or goes). Errors say what failed in plain words, never a bare status code.
+  A sync asked for by hand (Downloads' Sync now and Retry) always ends in one, whatever it came to (the owner,
+  2026-10-24): "Synced", "Up to date", "Synced · 3 failed", "Not synced: waiting for Wi-Fi".
 - **Undo is in the toast right after the action, and only there** (decision 0026, `lib/undo.svelte.ts`): every change
   to playlists, crates or Incoming says what it did with Undo (`withUndo`); Undo says "Undone." with Redo; Redo says
   the action's words again, with Undo. A refused undo says why ("It changed since; nothing was undone."). What one tap

@@ -3,6 +3,7 @@
 // shows its progress (the Downloads page). Outside the app there is nothing to keep: `kept.known` stays false.
 
 import { inApp, onApp, toApp } from './app.svelte';
+import { toast } from './toast.svelte';
 
 export type KeptKind = 'album' | 'playlist' | 'crate' | 'artist';
 
@@ -67,8 +68,38 @@ export function setKept(kind: KeptKind, source: string, id: string, on: boolean,
 /** Asks the app for the list and its progress again. */
 export const askKept = () => inApp && toApp({ type: 'kept' });
 
-/** Sync now (the sheet's retry), whatever the schedule says; the rules (Wi-Fi, charging) still hold. */
-export const syncKept = () => inApp && toApp({ type: 'kept-sync' });
+/** Sync now (the sheet's retry), whatever the schedule says; the rules (Wi-Fi, charging) still hold. Its end is always
+ *  said in a toast, whatever it came to (the owner, 2026-10-24): when the app's reports show nothing syncing any more,
+ *  or, when nothing needed it (no report shows it syncing), after a moment. */
+export function syncKept() {
+  if (!inApp) return;
+  asked = { syncing: false };
+  clearTimeout(settle);
+  settle = window.setTimeout(() => asked && !asked.syncing && ended(true), SETTLE_MS);
+  toApp({ type: 'kept-sync' });
+}
+
+/** A sync asked for by hand, until its end is said: whether a report has shown it syncing yet. */
+let asked: { syncing: boolean } | null = null;
+let settle = 0;
+/** How long a sync asked for may take to show in a report before nothing is taken to have needed it. */
+const SETTLE_MS = 4000;
+const WAITING = { wifi: 'waiting for Wi-Fi', charging: 'waiting to charge', network: 'waiting for a connection' } as const;
+
+/** The sync's end in one line: synced (or up to date), held back and why, or what did not make it. */
+function ended(nothing = false) {
+  asked = null;
+  clearTimeout(settle);
+  const sum = (f: (i: KeptItem) => number) => kept.items.reduce((n, i) => n + f(i), 0);
+  const unread = kept.items.filter((i) => i.state === 'error').length;
+  const failed = sum((i) => i.failed);
+  const over = sum((i) => i.over_budget);
+  if (kept.waiting) toast.show({ text: `Not synced: ${WAITING[kept.waiting]}`, tone: 'warn' });
+  else if (unread) toast.show({ text: `${unread} couldn't be read`, tone: 'error' });
+  else if (failed) toast.show({ text: `Synced · ${failed} failed`, tone: 'warn' });
+  else if (over) toast.show({ text: `Synced · ${over} over budget`, tone: 'warn' });
+  else toast.show({ text: nothing ? 'Up to date' : 'Synced', tone: 'done' });
+}
 
 if (inApp) {
   onApp('kept', (m) => {
@@ -78,6 +109,11 @@ if (inApp) {
     kept.waiting = m.waiting === 'wifi' || m.waiting === 'charging' || m.waiting === 'network' ? m.waiting : null;
     kept.current = typeof m.current === 'string' ? m.current : null;
     kept.known = true;
+    // A sync asked for by hand: ended once nothing syncs any more (held back by the rules counts as its end).
+    if (asked) {
+      if (kept.items.some((i) => i.state === 'syncing')) asked.syncing = true;
+      else if (asked.syncing || kept.waiting) ended();
+    }
   });
   askKept();
 }
