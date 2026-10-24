@@ -444,7 +444,8 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
 
 /// Where an album can be heard elsewhere beyond the services that named it (the owner, 2026-10-24: "Bandcamp and
 /// YouTube links next to the Last.fm links"): its own Bandcamp and YouTube pages where MusicBrainz keeps them (`urls`:
-/// the album's releases' and its own), else a search for it there, named so.
+/// the album's releases' and its own, and the Bandcamp page found for it), else a search for it on YouTube, named so;
+/// none on Bandcamp where no page was found (the owner, 2026-10-24, decision 0071).
 pub fn listen_links(urls: &[String], artist: &str, album: &str) -> Vec<Link> {
     let find = |hosts: &[&str]| urls.iter().find(|u| reqwest::Url::parse(u).ok().and_then(|x| x.host_str().map(str::to_string)).is_some_and(|h| hosts.iter().any(|w| h == *w || h.ends_with(&format!(".{w}"))))).cloned();
     let words = format!("{artist} {album}");
@@ -453,16 +454,12 @@ pub fn listen_links(urls: &[String], artist: &str, album: &str) -> Vec<Link> {
         u.query_pairs_mut().append_pair(key, &words).extend_pairs(extra);
         u.to_string()
     };
-    vec![
-        match find(&["bandcamp.com"]) {
-            Some(url) => Link { name: "Bandcamp".into(), url },
-            None => Link { name: "Search Bandcamp".into(), url: search("https://bandcamp.com/search", "q", &[("item_type", "a")]) },
-        },
-        match find(&["youtube.com", "youtu.be", "music.youtube.com"]) {
-            Some(url) => Link { name: "YouTube".into(), url },
-            None => Link { name: "Search YouTube".into(), url: search("https://www.youtube.com/results", "search_query", &[]) },
-        },
-    ]
+    let mut links: Vec<Link> = find(&["bandcamp.com"]).map(|url| Link { name: "Bandcamp".into(), url }).into_iter().collect();
+    links.push(match find(&["youtube.com", "youtu.be", "music.youtube.com"]) {
+        Some(url) => Link { name: "YouTube".into(), url },
+        None => Link { name: "Search YouTube".into(), url: search("https://www.youtube.com/results", "search_query", &[]) },
+    });
+    links
 }
 
 #[derive(Deserialize)]
@@ -527,9 +524,9 @@ fn same(a: &str, b: &str) -> bool {
 }
 
 /// An album's page on Bandcamp (decision 0071): its own on MusicBrainz, else found on its artist's own Bandcamp page
-/// (MusicBrainz's for the artist) by its title; none otherwise (Bandcamp's search checks for a browser, which Cratarr
-/// does not get around). Bandcamp is asked at most once a second, as MusicBrainz is.
-async fn bandcamp_page(http: &reqwest::Client, urls: &[String], artists: &[String], album: &str) -> Option<String> {
+/// (MusicBrainz's for the artist) by its title, else Bandcamp's search box where artist and title both match; none
+/// otherwise. Bandcamp is asked at most once a second, as MusicBrainz is.
+async fn bandcamp_page(http: &reqwest::Client, urls: &[String], artists: &[String], artist: &str, album: &str) -> Option<String> {
     if let Some(p) = urls.iter().find_map(|u| crate::bandcamp::album_page(u)) {
         return Some(p);
     }
@@ -541,10 +538,14 @@ async fn bandcamp_page(http: &reqwest::Client, urls: &[String], artists: &[Strin
         if let Some(page) = page {
             let releases = bc.releases(&page).await.unwrap_or_default();
             tokio::time::sleep(MB_PAUSE).await;
-            return releases.into_iter().find(|(t, _)| same(t, album)).map(|(_, url)| url);
+            if let Some((_, url)) = releases.into_iter().find(|(t, _)| same(t, album)) {
+                return Some(url);
+            }
         }
     }
-    None
+    let found = bc.search(artist, album).await.unwrap_or_default();
+    tokio::time::sleep(MB_PAUSE).await;
+    found.into_iter().find(|(t, a, _)| same(t, album) && same(a, artist)).map(|(_, _, url)| url)
 }
 
 /// A name as MusicBrainz's search reads it: in quotes, its own quotes and backslashes escaped.
@@ -652,7 +653,7 @@ pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::C
             }
             None => (Vec::new(), Vec::new()),
         };
-        s.bandcamp = bandcamp_page(&http, &urls, &artists, &s.album).await;
+        s.bandcamp = bandcamp_page(&http, &urls, &artists, &s.artist, &s.album).await;
         if let Some(p) = &s.bandcamp {
             urls.insert(0, p.clone());
         }
@@ -749,10 +750,9 @@ mod tests {
         assert_eq!(own[0], Link { name: "Bandcamp".into(), url: "https://artist.bandcamp.com/album/x".into() });
         assert_eq!(own[1].name, "YouTube");
         let none = listen_links(&[], "Bonobo", "Migration");
-        assert_eq!(none[0].name, "Search Bandcamp");
-        assert!(none[0].url.starts_with("https://bandcamp.com/search?q=Bonobo+Migration"));
-        assert_eq!(none[1].name, "Search YouTube");
-        assert!(none[1].url.contains("search_query=Bonobo+Migration"));
+        assert_eq!(none.len(), 1, "no Bandcamp link without its page (decision 0071)");
+        assert_eq!(none[0].name, "Search YouTube");
+        assert!(none[0].url.contains("search_query=Bonobo+Migration"));
     }
 
     fn c(album: &str, artist: &str, rg: Option<&str>, source: &'static str, why: &str, score: f64) -> Candidate {

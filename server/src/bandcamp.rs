@@ -1,6 +1,7 @@
 //! Bandcamp, read to play from (decision 0071): an album's page, its tracks and each one's stream; an artist's list of
-//! releases. Played, never downloaded: nothing is kept on disk. Bandcamp's search is not used: it answers with a check
-//! for browsers (a "Client Challenge"), which Cratarr does not get around.
+//! releases; the search box's own answers (Bandcamp's autocomplete, JSON). Played, never downloaded: nothing is kept on
+//! disk. Bandcamp's search page is not read: it answers with a check for browsers (a "Client Challenge"), which Cratarr
+//! does not get around.
 //!
 //! The page is read as yt-dlp's Bandcamp extractor reads it (`yt_dlp/extractor/bandcamp.py`, the Unlicense: public
 //! domain): the album's data in the page's `data-tralbum` attribute (HTML-escaped JSON), each track's `file` holding
@@ -168,6 +169,16 @@ impl Bandcamp {
         Ok(resp)
     }
 
+    /// Bandcamp's search box asked for albums: (title, artist, album page), its first answers.
+    pub async fn search(&self, artist: &str, album: &str) -> Result<Vec<(String, String, String)>> {
+        let body = serde_json::json!({ "search_text": format!("{artist} {album}"), "search_filter": "a", "full_page": false, "fan_id": null });
+        let resp = self.http.post("https://bandcamp.com/api/bcsearch_public_api/1/autocomplete_elastic").json(&body).send().await.context("cannot reach Bandcamp")?;
+        if !resp.status().is_success() {
+            bail!("Bandcamp answered {}", resp.status());
+        }
+        Ok(parse_autocomplete(&resp.text().await?))
+    }
+
     /// An artist's releases on their own page (`/music`): (title, album page).
     pub async fn releases(&self, artist_page: &str) -> Result<Vec<(String, String)>> {
         let base = page(artist_page).context("Not a page on Bandcamp")?;
@@ -177,6 +188,40 @@ impl Bandcamp {
         Ok(parse_releases(&html, u.as_str()))
     }
 
+}
+
+/// One answer of Bandcamp's search box.
+#[derive(Debug, Deserialize)]
+struct Found {
+    #[serde(rename = "type", default)]
+    kind: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    band_name: String,
+    #[serde(default)]
+    item_url_path: String,
+}
+
+/// Bandcamp's search box's answers for albums (its autocomplete, as its own site asks it): (title, artist, album page).
+pub fn parse_autocomplete(json: &str) -> Vec<(String, String, String)> {
+    #[derive(Deserialize)]
+    struct Auto {
+        #[serde(default)]
+        results: Vec<Found>,
+    }
+    #[derive(Deserialize)]
+    struct Answer {
+        auto: Option<Auto>,
+    }
+    let Ok(a) = serde_json::from_str::<Answer>(json) else { return Vec::new() };
+    a.auto
+        .map(|x| x.results)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|f| f.kind == "a")
+        .filter_map(|f| Some((f.name, f.band_name, album_page(&f.item_url_path)?)))
+        .collect()
 }
 
 // ---- The pages
@@ -420,6 +465,19 @@ mod tests {
                 ("Talkie Walkie".to_string(), "https://air.bandcamp.com/album/talkie-walkie".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn the_search_boxs_albums_are_read() {
+        let json = r#"{"auto":{"results":[
+            {"type":"a","name":"Dive","band_name":"Tycho","item_url_path":"https://tycho.bandcamp.com/album/dive"},
+            {"type":"a","name":"Dive (Mashed Up by wolves.)","band_name":"Tycho","item_url_path":"https://wolvesperiod.bandcamp.com/album/dive-mashed-up-by-wolves"},
+            {"type":"b","name":"Tycho","band_name":"Tycho","item_url_path":"https://tycho.bandcamp.com"},
+            {"type":"a","name":"Elsewhere","band_name":"X","item_url_path":"https://elsewhere.example/album/x"}]},"tag":{},"genre":{}}"#;
+        let r = parse_autocomplete(json);
+        assert_eq!(r.len(), 2, "albums on Bandcamp only");
+        assert_eq!(r[0], ("Dive".into(), "Tycho".into(), "https://tycho.bandcamp.com/album/dive".into()));
+        assert!(parse_autocomplete("<html>challenge</html>").is_empty());
     }
 
     #[test]

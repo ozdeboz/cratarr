@@ -30,9 +30,12 @@ is Java, too heavy for the NAS's 768 MB, and a Rust port would need the same fix
   2. else the artist's own Bandcamp page on MusicBrainz (the artist's url-rels): its list of releases
      (`/music`), the album found by its title as the import's matcher compares names (`app::import::key`): the
      artist's own page, so no namesakes;
-  3. else none: no Play, its links as before (most major labels' albums are not on Bandcamp). Bandcamp's own search
-     was meant as a third way, but it answers with a check for browsers (a "Client Challenge", 2026-10-24), and
-     Cratarr does not get around such checks; its album and artist pages answer as any page does.
+  3. else Bandcamp's search box, as its own site asks it (`/api/bcsearch_public_api/1/autocomplete_elastic`, JSON),
+     taken only where both the artist and the title match;
+  4. else none: no Play and no Bandcamp link (the owner, 2026-10-24; most major labels' albums are not on Bandcamp).
+  Bandcamp's search page (`/search`) is not read: it answers with a check for browsers (a "Client Challenge"),
+  which NewPipe gets past by sending the cookie the check looks for; Cratarr does not get around such checks (the
+  owner, 2026-10-24). The album and artist pages and the search box answer as any page does.
   Only pages on `bandcamp.com` are read (an artist's own domain is left to its link).
 - **Play on its card** plays the album's tracks in Cratarr's player, on whatever plays now (this device, a player on
   Play On, the app; not the server's own outputs, Snapcast and Kodi, which play the library's files): a queue as any
