@@ -38,6 +38,8 @@ export type Prefs = {
   /** This browser's name as a Play On player, while a page plays here (lib/playOnTarget); '' until it has one. */
   browserName: string;
   levelling: boolean;
+  /** A phone's player streams lossless, not Opus (the owner, 2026-10-24: Opus on phones unless asked). */
+  phoneLossless: boolean;
   /** View's Dates: an album's date added as how long ago ("3 days ago"), not the date. */
   relativeDates: boolean;
   /** Source this browser follows when several are active; '' = whichever started playing most recently. */
@@ -178,6 +180,7 @@ export const DEFAULTS: Prefs = {
   homeParts: homeDefault(),
   homeGreeting: false,
   levelling: true,
+  phoneLossless: false,
   browserName: '',
   relativeDates: false,
   source: '',
@@ -257,6 +260,7 @@ function read(): Prefs {
         p.profileFoldAt = Math.min(saved.profileFoldAt - gone, p.profileRows.length);
       }
       if (typeof saved.levelling === 'boolean') p.levelling = saved.levelling;
+      if (typeof saved.phoneLossless === 'boolean') p.phoneLossless = saved.phoneLossless;
       if (typeof saved.browserName === 'string') p.browserName = saved.browserName;
       if (typeof saved.relativeDates === 'boolean') p.relativeDates = saved.relativeDates;
       if (typeof saved.source === 'string') p.source = saved.source;

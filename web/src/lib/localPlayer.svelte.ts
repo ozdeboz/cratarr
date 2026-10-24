@@ -1,5 +1,6 @@
 // The local player (decision 0022): Cratarr plays in the browser, gapless, through one continuous MSE stream. Each
-// track comes from the server (/api/stream: FLAC repackaged as fragmented MP4, MP3 as it is) and is appended to the
+// track comes from the server (/api/stream: FLAC repackaged as fragmented MP4, MP3 as it is; on a phone a lossless
+// track as Opus in fragmented MP4, the owner 2026-10-24) and is appended to the
 // same stream right after the one before: MP3 trimmed by its LAME header's encoder delay at the start and to its exact
 // length at the end (measured to the sample with tools/gapless-lab), FLAC placed at its own sample positions. The next
 // track is appended while the current one plays; what has been played is dropped from the buffer again. A track is
@@ -94,6 +95,7 @@ export const local = $state({
 });
 
 const MP4 = 'audio/mp4; codecs="flac"';
+const OPUS = 'audio/mp4; codecs="opus"';
 const MPEG = 'audio/mpeg';
 /** Keep this much ahead in the stream before fetching the next track (s). */
 const AHEAD = 30;
@@ -115,6 +117,12 @@ const Managed = typeof window === 'undefined' ? undefined : (window as unknown a
 const Source = Managed ?? (typeof MediaSource === 'undefined' ? undefined : MediaSource);
 /** Whether this browser can play here at all (FLAC or MP3 in its stream), or the app plays for it. */
 export const canPlayHere = inApp || (!!Source && (Source.isTypeSupported(MP4) || Source.isTypeSupported(MPEG)));
+/** A phone: touch first, its screen's short side under 600 px (a tablet keeps lossless). */
+export const isPhone =
+  typeof window !== 'undefined' && matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 600;
+/** Lossless tracks come as Opus: on a phone that plays it, unless it keeps lossless (Settings › This browser). About a
+ *  sixth of the data, and far less for the phone to fetch and hold. */
+const asOpus = () => isPhone && !prefs.phoneLossless && !!Source?.isTypeSupported(OPUS);
 
 const audio = typeof Audio === 'undefined' || !canPlayHere || inApp ? null : new Audio();
 // Safari opens a managed stream only for an element that cannot be sent to AirPlay (the stream cannot go there).
@@ -275,7 +283,10 @@ async function appendTrack(index: number, from: number, gen: number) {
   /** This track's segment, once placed in the stream. */
   let placedSegment = null as Segment | null; // set inside place(), which TypeScript does not follow
   try {
-    const res = await fetch(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}${from > 0 ? `?from_ms=${Math.floor(from * 1000)}` : ''}`, {
+    const query = new URLSearchParams();
+    if (from > 0) query.set('from_ms', String(Math.floor(from * 1000)));
+    if (asOpus()) query.set('as', 'opus');
+    const res = await fetch(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}${query.toString() ? `?${query}` : ''}`, {
       signal: ctl.signal,
     });
     if (!res.ok) {
@@ -289,8 +300,8 @@ async function appendTrack(index: number, from: number, gen: number) {
       throw new Error(`${t.name || 'A track'}: ${text || 'it could not be loaded.'}`);
     }
     const type = res.headers.get('content-type') ?? '';
-    const kind = type.startsWith('audio/mp4') ? MP4 : MPEG;
-    if (!Source?.isTypeSupported(kind)) throw new Error(`${t.name}: this browser cannot play ${kind === MP4 ? 'FLAC' : 'MP3'} here.`);
+    const kind = !type.startsWith('audio/mp4') ? MPEG : type.includes('opus') ? OPUS : MP4;
+    if (!Source?.isTypeSupported(kind)) throw new Error(`${t.name}: this browser cannot play ${kind === MP4 ? 'FLAC' : kind === OPUS ? 'Opus' : 'MP3'} here.`);
     const reader = res.body!.getReader();
     // The track's sample 0 goes to `start` in the stream (before the stream's 0 when starting mid-track).
     const start = streamEnd - from;
@@ -318,20 +329,21 @@ async function appendTrack(index: number, from: number, gen: number) {
       // Until every removal is done (this one, a cut's, played audio dropped): nothing below may run while one does.
       while (sb.updating) await waitUpdate();
       if (ms?.readyState === 'open') sb.abort();
-      // FLAC's fragments carry their own sample times (tfdt; after a seek they start at the frame holding the sample
-      // asked for), so it runs in segments mode with the offset at the track's sample 0. MP3 has no times of its own:
-      // sequence mode, the offset at its first decoded sample (the encoder delay before sample 0).
-      const mode: AppendMode = kind === MP4 ? 'segments' : 'sequence';
+      // FLAC's and Opus's fragments carry their own sample times (tfdt; after a seek they start at the frame holding
+      // the sample asked for), so they run in segments mode with the offset at the track's sample 0 (Opus's: past its
+      // encoder's delay, x-pre-skip). MP3 has no times of its own: sequence mode, the offset at its first decoded
+      // sample (the encoder delay before sample 0).
+      const mode: AppendMode = kind === MPEG ? 'sequence' : 'segments';
       if (sb.mode !== mode) sb.mode = mode;
       length = samples === null ? null : samples / rate;
       // An MP3 header that disagrees with the length Cratarr read is trusted no more than that length (one header said
       // 5:27 for 4:24; an early-stopping decode once said 7 s for 7:48): the track's own audio, once in, says where it
       // ends, so it is neither cut short nor followed by silence. FLAC's own sample count is exact.
-      if (kind !== MP4 && length !== null && told !== null && Math.abs(length - told) > 1.5) length = null;
+      if (kind === MPEG && length !== null && told !== null && Math.abs(length - told) > 1.5) length = null;
       sb.appendWindowEnd = Infinity;
       sb.appendWindowStart = Math.max(0, streamEnd);
       if (length !== null) sb.appendWindowEnd = start + length;
-      sb.timestampOffset = kind === MP4 ? start : start - skip / rate;
+      sb.timestampOffset = start - skip / rate;
       segment.length = length;
       segments.push(segment);
       placedSegment = segment;
@@ -339,10 +351,10 @@ async function appendTrack(index: number, from: number, gen: number) {
       levelSchedule();
       placed = true;
     };
-    if (kind === MP4) {
+    if (kind !== MPEG) {
       const rate = Number(res.headers.get('x-sample-rate')) || 44100;
       const total = Number(res.headers.get('x-total-samples')) || null;
-      await place(rate, 0, total);
+      await place(rate, Number(res.headers.get('x-pre-skip')) || 0, total);
     }
     for (;;) {
       const { value, done } = await reader.read();

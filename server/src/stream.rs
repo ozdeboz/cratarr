@@ -91,94 +91,12 @@ impl FlacToMp4 {
     /// The init segment: `ftyp` and `moov` (one audio track, FLAC, timescale = the sample rate).
     pub fn init(&self) -> Vec<u8> {
         let i = &self.info;
-        let ftyp = boxed(b"ftyp", &[b"iso6".as_slice(), &0u32.to_be_bytes(), b"iso6", b"mp41"].concat());
-        let unity: [u32; 9] = [0x0001_0000, 0, 0, 0, 0x0001_0000, 0, 0, 0, 0x4000_0000];
-        let matrix: Vec<u8> = unity.iter().flat_map(|v| v.to_be_bytes()).collect();
-
-        let mut mvhd = Vec::new();
-        mvhd.extend(0u32.to_be_bytes()); // creation
-        mvhd.extend(0u32.to_be_bytes()); // modification
-        mvhd.extend(i.sample_rate.to_be_bytes()); // timescale
-        mvhd.extend(0u32.to_be_bytes()); // duration: in the fragments
-        mvhd.extend(0x0001_0000u32.to_be_bytes()); // rate 1.0
-        mvhd.extend(0x0100u16.to_be_bytes()); // volume 1.0
-        mvhd.extend([0u8; 10]); // reserved
-        mvhd.extend(&matrix);
-        mvhd.extend([0u8; 24]); // pre_defined
-        mvhd.extend(2u32.to_be_bytes()); // next track id
-        let mvhd = full(b"mvhd", 0, 0, &mvhd);
-
-        let mut tkhd = Vec::new();
-        tkhd.extend(0u32.to_be_bytes()); // creation
-        tkhd.extend(0u32.to_be_bytes()); // modification
-        tkhd.extend(1u32.to_be_bytes()); // track id
-        tkhd.extend(0u32.to_be_bytes()); // reserved
-        tkhd.extend(0u32.to_be_bytes()); // duration
-        tkhd.extend([0u8; 8]); // reserved
-        tkhd.extend(0u16.to_be_bytes()); // layer
-        tkhd.extend(0u16.to_be_bytes()); // alternate group
-        tkhd.extend(0x0100u16.to_be_bytes()); // volume
-        tkhd.extend(0u16.to_be_bytes()); // reserved
-        tkhd.extend(&matrix);
-        tkhd.extend(0u32.to_be_bytes()); // width
-        tkhd.extend(0u32.to_be_bytes()); // height
-        let tkhd = full(b"tkhd", 0, 0x000003, &tkhd); // enabled, in movie
-
-        let mut mdhd = Vec::new();
-        mdhd.extend(0u32.to_be_bytes());
-        mdhd.extend(0u32.to_be_bytes());
-        mdhd.extend(i.sample_rate.to_be_bytes());
-        mdhd.extend(0u32.to_be_bytes());
-        mdhd.extend(0x55c4u16.to_be_bytes()); // language "und"
-        mdhd.extend(0u16.to_be_bytes());
-        let mdhd = full(b"mdhd", 0, 0, &mdhd);
-
-        let mut hdlr = Vec::new();
-        hdlr.extend(0u32.to_be_bytes());
-        hdlr.extend(b"soun");
-        hdlr.extend([0u8; 12]);
-        hdlr.extend(b"SoundHandler\0");
-        let hdlr = full(b"hdlr", 0, 0, &hdlr);
-
-        let smhd = full(b"smhd", 0, 0, &[0u8; 4]);
-        let dref = full(b"dref", 0, 0, &[1u32.to_be_bytes().as_slice(), &full(b"url ", 0, 1, &[])].concat());
-        let dinf = boxed(b"dinf", &dref);
-
         // The FLAC sample entry: an AudioSampleEntry named fLaC, holding dfLa with the STREAMINFO block (marked last).
         let mut dfla = vec![0x80, 0, 0, 34];
         dfla.extend_from_slice(&self.stream_info);
         let dfla = full(b"dfLa", 0, 0, &dfla);
-        let mut entry = Vec::new();
-        entry.extend([0u8; 6]); // reserved
-        entry.extend(1u16.to_be_bytes()); // data reference index
-        entry.extend([0u8; 8]); // reserved
-        entry.extend(i.channels.to_be_bytes());
-        entry.extend(i.bits_per_sample.to_be_bytes());
-        entry.extend(0u16.to_be_bytes()); // pre_defined
-        entry.extend(0u16.to_be_bytes()); // reserved
-        // The 16.16 rate field cannot hold rates above 65535 Hz; the spec says 0 then (dfLa has the real rate).
-        let rate = if i.sample_rate < 65536 { i.sample_rate << 16 } else { 0 };
-        entry.extend(rate.to_be_bytes());
-        entry.extend(&dfla);
-        let flac = boxed(b"fLaC", &entry);
-        let stsd = full(b"stsd", 0, 0, &[1u32.to_be_bytes().as_slice(), &flac].concat());
-        let empty = |kind: &[u8; 4]| full(kind, 0, 0, &0u32.to_be_bytes());
-        let stsz = full(b"stsz", 0, 0, &[0u32.to_be_bytes(), 0u32.to_be_bytes()].concat());
-        let stbl = boxed(b"stbl", &[stsd, empty(b"stts"), empty(b"stsc"), stsz, empty(b"stco")].concat());
-        let minf = boxed(b"minf", &[smhd, dinf, stbl].concat());
-        let mdia = boxed(b"mdia", &[mdhd, hdlr, minf].concat());
-        let trak = boxed(b"trak", &[tkhd, mdia].concat());
-
-        let mut trex = Vec::new();
-        trex.extend(1u32.to_be_bytes()); // track id
-        trex.extend(1u32.to_be_bytes()); // sample description index
-        trex.extend(0u32.to_be_bytes()); // default duration
-        trex.extend(0u32.to_be_bytes()); // default size
-        trex.extend(0u32.to_be_bytes()); // default flags
-        let mvex = boxed(b"mvex", &full(b"trex", 0, 0, &trex));
-
-        let moov = boxed(b"moov", &[mvhd, trak, mvex].concat());
-        [ftyp, moov].concat()
+        let flac = boxed(b"fLaC", &audio_entry(i.channels, i.bits_per_sample, i.sample_rate, &dfla));
+        init_segment(i.sample_rate, &flac)
     }
 
     /// The next fragment (`moof` + `mdat`) of about [`FRAGMENT_SECONDS`]; `None` at the end of the file.
@@ -205,8 +123,101 @@ impl FlacToMp4 {
     }
 }
 
+/// An init segment (`ftyp`, `moov`) for one audio track of `timescale` ticks a second whose samples `entry` describes
+/// (its sample entry box: FLAC's `fLaC`, Opus's `Opus`).
+pub(crate) fn init_segment(timescale: u32, entry: &[u8]) -> Vec<u8> {
+    let ftyp = boxed(b"ftyp", &[b"iso6".as_slice(), &0u32.to_be_bytes(), b"iso6", b"mp41"].concat());
+    let unity: [u32; 9] = [0x0001_0000, 0, 0, 0, 0x0001_0000, 0, 0, 0, 0x4000_0000];
+    let matrix: Vec<u8> = unity.iter().flat_map(|v| v.to_be_bytes()).collect();
+
+    let mut mvhd = Vec::new();
+    mvhd.extend(0u32.to_be_bytes()); // creation
+    mvhd.extend(0u32.to_be_bytes()); // modification
+    mvhd.extend(timescale.to_be_bytes()); // timescale
+    mvhd.extend(0u32.to_be_bytes()); // duration: in the fragments
+    mvhd.extend(0x0001_0000u32.to_be_bytes()); // rate 1.0
+    mvhd.extend(0x0100u16.to_be_bytes()); // volume 1.0
+    mvhd.extend([0u8; 10]); // reserved
+    mvhd.extend(&matrix);
+    mvhd.extend([0u8; 24]); // pre_defined
+    mvhd.extend(2u32.to_be_bytes()); // next track id
+    let mvhd = full(b"mvhd", 0, 0, &mvhd);
+
+    let mut tkhd = Vec::new();
+    tkhd.extend(0u32.to_be_bytes()); // creation
+    tkhd.extend(0u32.to_be_bytes()); // modification
+    tkhd.extend(1u32.to_be_bytes()); // track id
+    tkhd.extend(0u32.to_be_bytes()); // reserved
+    tkhd.extend(0u32.to_be_bytes()); // duration
+    tkhd.extend([0u8; 8]); // reserved
+    tkhd.extend(0u16.to_be_bytes()); // layer
+    tkhd.extend(0u16.to_be_bytes()); // alternate group
+    tkhd.extend(0x0100u16.to_be_bytes()); // volume
+    tkhd.extend(0u16.to_be_bytes()); // reserved
+    tkhd.extend(&matrix);
+    tkhd.extend(0u32.to_be_bytes()); // width
+    tkhd.extend(0u32.to_be_bytes()); // height
+    let tkhd = full(b"tkhd", 0, 0x000003, &tkhd); // enabled, in movie
+
+    let mut mdhd = Vec::new();
+    mdhd.extend(0u32.to_be_bytes());
+    mdhd.extend(0u32.to_be_bytes());
+    mdhd.extend(timescale.to_be_bytes());
+    mdhd.extend(0u32.to_be_bytes());
+    mdhd.extend(0x55c4u16.to_be_bytes()); // language "und"
+    mdhd.extend(0u16.to_be_bytes());
+    let mdhd = full(b"mdhd", 0, 0, &mdhd);
+
+    let mut hdlr = Vec::new();
+    hdlr.extend(0u32.to_be_bytes());
+    hdlr.extend(b"soun");
+    hdlr.extend([0u8; 12]);
+    hdlr.extend(b"SoundHandler\0");
+    let hdlr = full(b"hdlr", 0, 0, &hdlr);
+
+    let smhd = full(b"smhd", 0, 0, &[0u8; 4]);
+    let dref = full(b"dref", 0, 0, &[1u32.to_be_bytes().as_slice(), &full(b"url ", 0, 1, &[])].concat());
+    let dinf = boxed(b"dinf", &dref);
+
+    let stsd = full(b"stsd", 0, 0, &[1u32.to_be_bytes().as_slice(), entry].concat());
+    let empty = |kind: &[u8; 4]| full(kind, 0, 0, &0u32.to_be_bytes());
+    let stsz = full(b"stsz", 0, 0, &[0u32.to_be_bytes(), 0u32.to_be_bytes()].concat());
+    let stbl = boxed(b"stbl", &[stsd, empty(b"stts"), empty(b"stsc"), stsz, empty(b"stco")].concat());
+    let minf = boxed(b"minf", &[smhd, dinf, stbl].concat());
+    let mdia = boxed(b"mdia", &[mdhd, hdlr, minf].concat());
+    let trak = boxed(b"trak", &[tkhd, mdia].concat());
+
+    let mut trex = Vec::new();
+    trex.extend(1u32.to_be_bytes()); // track id
+    trex.extend(1u32.to_be_bytes()); // sample description index
+    trex.extend(0u32.to_be_bytes()); // default duration
+    trex.extend(0u32.to_be_bytes()); // default size
+    trex.extend(0u32.to_be_bytes()); // default flags
+    let mvex = boxed(b"mvex", &full(b"trex", 0, 0, &trex));
+
+    let moov = boxed(b"moov", &[mvhd, trak, mvex].concat());
+    [ftyp, moov].concat()
+}
+
+/// An AudioSampleEntry's fields (ISO/IEC 14496-12 §12.2.3) followed by `codec`, its codec's own box.
+pub(crate) fn audio_entry(channels: u16, bits_per_sample: u16, sample_rate: u32, codec: &[u8]) -> Vec<u8> {
+    let mut entry = Vec::new();
+    entry.extend([0u8; 6]); // reserved
+    entry.extend(1u16.to_be_bytes()); // data reference index
+    entry.extend([0u8; 8]); // reserved
+    entry.extend(channels.to_be_bytes());
+    entry.extend(bits_per_sample.to_be_bytes());
+    entry.extend(0u16.to_be_bytes()); // pre_defined
+    entry.extend(0u16.to_be_bytes()); // reserved
+    // The 16.16 rate field cannot hold rates above 65535 Hz; FLAC's spec says 0 then (dfLa has the real rate).
+    let rate = if sample_rate < 65536 { sample_rate << 16 } else { 0 };
+    entry.extend(rate.to_be_bytes());
+    entry.extend_from_slice(codec);
+    entry
+}
+
 /// One `moof` + `mdat`: the samples' durations and sizes in `trun`, `data_offset` pointing past `moof` into `mdat`.
-fn fragment(sequence: u32, base: u64, samples: &[(u32, u32)], data: &[u8]) -> Vec<u8> {
+pub(crate) fn fragment(sequence: u32, base: u64, samples: &[(u32, u32)], data: &[u8]) -> Vec<u8> {
     let mfhd = full(b"mfhd", 0, 0, &sequence.to_be_bytes());
     let tfhd = full(b"tfhd", 0, 0x02_0000, &1u32.to_be_bytes()); // default-base-is-moof, track 1
     let tfdt = full(b"tfdt", 1, 0, &base.to_be_bytes());

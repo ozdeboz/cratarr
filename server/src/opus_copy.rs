@@ -95,6 +95,104 @@ pub fn copy_at(input: &Path, out: impl Write, gains: (Option<f64>, Option<f64>),
     Ok(true)
 }
 
+/// How a phone's stream places itself (headers before its audio): where its first packet starts (48 kHz frames from
+/// the track's start), the encoder's delay to drop before it, and the track's whole length at 48 kHz when known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StreamHead {
+    pub start: u64,
+    pub pre_skip: u16,
+    pub total: Option<u64>,
+}
+
+/// A lossless track as Opus in fragmented MP4, for a phone's stream (the owner, 2026-10-24: Opus on phones, about a
+/// sixth of FLAC's data): an init segment, then fragments of about a second, made as they are sent. `from_ms` starts at
+/// the packet holding that moment, as the FLAC stream does (`stream::FlacToMp4`). `head` hears the placing before the
+/// first byte goes out. `false` (nothing written) when it is not a lossless file.
+///
+/// The fragments' times are the encoder's own, so its delay comes first; the page drops it (its offset), as it drops an
+/// MP3's. Opus-in-ISOBMFF would declare it in `dOps` instead, but whether a browser then trims it is the browser's to
+/// say: declared as none, nothing is trimmed twice.
+pub fn stream_mp4(input: &Path, from_ms: u64, head: impl FnOnce(StreamHead), mut out: impl Write) -> Result<bool> {
+    let Some(mut source) = convert::Source::open(input)? else { return Ok(false) };
+    let format = source.format.clone();
+    let channels = format.channels.min(2);
+    if channels == 0 {
+        bail!("{} has no audio channels", input.display());
+    }
+    let from = if from_ms > 0 { source.seek(from_ms * u64::from(format.sample_rate) / 1000)? } else { 0 };
+    let mut encoder = Encoder::new(channels, BITRATE)?;
+    let pre_skip = encoder.lookahead()?;
+    let start = convert::output_frames(from, format.sample_rate, RATE);
+    let total = format.frames.map(|f| convert::output_frames(f, format.sample_rate, RATE));
+    head(StreamHead { start, pre_skip, total });
+    out.write_all(&crate::stream::init_segment(RATE, &opus_entry(channels as u16)))?;
+
+    let mut pcm: Vec<f32> = Vec::with_capacity(FRAME * channels * 2);
+    let mut packets: Vec<Vec<u8>> = Vec::with_capacity(PAGE_PACKETS);
+    let mut sequence = 0u32;
+    let mut at = start;
+    let mut sink = |planes: &[Vec<f32>], first: usize, len: usize| -> Result<()> {
+        for i in first..first + len {
+            for p in &planes[..channels] {
+                pcm.push(p[i]);
+            }
+        }
+        while pcm.len() >= FRAME * channels {
+            packets.push(encoder.encode(&pcm[..FRAME * channels])?);
+            pcm.drain(..FRAME * channels);
+            if packets.len() == PAGE_PACKETS {
+                fragment_out(&mut out, &mut sequence, &mut at, &mut packets)?;
+            }
+        }
+        Ok(())
+    };
+    let mut scratch = Vec::new();
+    convert::stream(|planes| source.read(planes, &mut scratch), format.channels, format.sample_rate, RATE, &mut sink)?;
+    drop(sink);
+    // The last frame, padded with silence: the page ends the track at its length (appendWindowEnd).
+    if !pcm.is_empty() {
+        pcm.resize(FRAME * channels, 0.0);
+        packets.push(encoder.encode(&pcm)?);
+    }
+    if !packets.is_empty() {
+        fragment_out(&mut out, &mut sequence, &mut at, &mut packets)?;
+    }
+    out.flush()?;
+    Ok(true)
+}
+
+/// `packets` (20 ms each) out as one fragment starting at `at`.
+fn fragment_out(out: &mut impl Write, sequence: &mut u32, at: &mut u64, packets: &mut Vec<Vec<u8>>) -> Result<()> {
+    *sequence += 1;
+    let samples: Vec<(u32, u32)> = packets.iter().map(|p| (FRAME as u32, p.len() as u32)).collect();
+    out.write_all(&crate::stream::fragment(*sequence, *at, &samples, &packets.concat()))?;
+    *at += (FRAME * packets.len()) as u64;
+    packets.clear();
+    Ok(())
+}
+
+/// The Opus sample entry (Opus in ISOBMFF, §4.3): an AudioSampleEntry named `Opus` holding `dOps`, the identification
+/// header's fields (big-endian here), its pre-skip declared as none (see [`stream_mp4`]).
+fn opus_entry(channels: u16) -> Vec<u8> {
+    let mut dops = vec![0u8, channels as u8];
+    dops.extend(0u16.to_be_bytes()); // pre-skip: the page's
+    // The original rate is for information only (RFC 7845 §5.1); Chrome refuses a stream whose dOps rate is not the
+    // sample entry's 48 kHz.
+    dops.extend(RATE.to_be_bytes());
+    dops.extend(0i16.to_be_bytes()); // output gain
+    dops.push(0); // channel mapping family 0: mono or stereo
+    let mut b = Vec::with_capacity(8 + dops.len());
+    b.extend(((8 + dops.len()) as u32).to_be_bytes());
+    b.extend(b"dOps");
+    b.extend(dops);
+    let entry = crate::stream::audio_entry(channels, 16, RATE, &b);
+    let mut opus = Vec::with_capacity(8 + entry.len());
+    opus.extend(((8 + entry.len()) as u32).to_be_bytes());
+    opus.extend(b"Opus");
+    opus.extend(entry);
+    opus
+}
+
 /// A stream serial number, the same for the same file (copies of a track are alike).
 fn serial(input: &Path) -> u32 {
     crc32(input.to_string_lossy().as_bytes())
@@ -404,6 +502,86 @@ pub(crate) mod tests {
             b = &b[len..];
         }
         out
+    }
+
+    /// A fragmented MP4's top-level boxes, and per fragment its start (`tfdt`) and its samples' durations (`trun`).
+    fn fragments(b: &[u8]) -> (Vec<[u8; 4]>, Vec<(u64, Vec<u32>)>) {
+        let (mut kinds, mut out, mut i) = (Vec::new(), Vec::new(), 0);
+        while i + 8 <= b.len() {
+            let len = u32::from_be_bytes(b[i..i + 4].try_into().unwrap()) as usize;
+            let kind: [u8; 4] = b[i + 4..i + 8].try_into().unwrap();
+            if &kind == b"moof" {
+                let moof = &b[i..i + len];
+                let at = |name: &[u8]| moof.windows(4).position(|w| w == name).unwrap() + 4;
+                let t = at(b"tfdt");
+                let base = u64::from_be_bytes(moof[t + 4..t + 12].try_into().unwrap());
+                let r = at(b"trun");
+                let n = u32::from_be_bytes(moof[r + 4..r + 8].try_into().unwrap()) as usize;
+                let durations = (0..n).map(|k| u32::from_be_bytes(moof[r + 12 + 8 * k..r + 16 + 8 * k].try_into().unwrap())).collect();
+                out.push((base, durations));
+            }
+            kinds.push(kind);
+            i += len;
+        }
+        (kinds, out)
+    }
+
+    /// Not a check: a phone's stream of real files for a browser to try (`CRATARR_OPUS="in.flac:out.mp4:from_ms,..."`),
+    /// each with its head beside it (`out.mp4.json`). Run with `--ignored`.
+    #[test]
+    #[ignore]
+    fn phone_streams_for_the_lab() {
+        let pairs = std::env::var("CRATARR_OPUS").unwrap_or_default();
+        for spec in pairs.split(',').filter(|p| !p.is_empty()) {
+            let mut parts = spec.split(':');
+            let (input, output) = (parts.next().unwrap(), parts.next().unwrap());
+            let from: u64 = parts.next().map_or(0, |f| f.parse().unwrap());
+            let mut head = None;
+            let mut out = Vec::new();
+            assert!(stream_mp4(Path::new(input), from, |h| head = Some(h), &mut out).unwrap());
+            let h = head.unwrap();
+            std::fs::write(output, out).unwrap();
+            std::fs::write(format!("{output}.json"), format!("{{\"start\":{},\"pre_skip\":{},\"total\":{}}}", h.start, h.pre_skip, h.total.unwrap_or(0))).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_phones_stream_is_opus_in_fragments_of_a_second_placed_by_its_head() {
+        let dir = std::env::temp_dir().join(format!("cratarr-opus-mp4-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("a.wav");
+        wav(&input, 44_100, 3.0);
+        let mut heard = None;
+        let mut out = Vec::new();
+        assert!(stream_mp4(&input, 0, |h| heard = Some(h), &mut out).unwrap());
+        let head = heard.unwrap();
+        assert_eq!((head.start, head.total), (0, Some(144_000)), "3 s at 48 kHz");
+        assert!(head.pre_skip > 0, "the encoder's delay is told");
+        let (kinds, frags) = fragments(&out);
+        assert_eq!(&kinds[..2], &[*b"ftyp", *b"moov"]);
+        let moov = &out[..];
+        assert!(moov.windows(4).any(|w| w == b"Opus") && moov.windows(4).any(|w| w == b"dOps"), "an Opus sample entry");
+        assert_eq!(frags.iter().map(|f| f.0).collect::<Vec<_>>(), [0, 48_000, 96_000], "a second each, back to back");
+        assert!(frags.iter().all(|f| f.1.iter().all(|&d| d == 960)), "20 ms packets");
+        assert_eq!(frags.iter().map(|f| f.1.len()).sum::<usize>(), 150, "the whole track: 3 s of 20 ms packets");
+
+        // From 1.5 s: the packet holding that moment, no later, and the fragments go on from there.
+        let mut heard = None;
+        let mut out = Vec::new();
+        assert!(stream_mp4(&input, 1_500, |h| heard = Some(h), &mut out).unwrap());
+        let head = heard.unwrap();
+        assert!(head.start <= 72_000 && head.start > 60_000, "starts at {}", head.start);
+        let (_, frags) = fragments(&out);
+        assert_eq!(frags[0].0, head.start);
+        assert_eq!(frags[1].0, head.start + 48_000);
+
+        // A lossy file is not made into a stream: nothing written, nothing told.
+        let mp3 = dir.join("b.mp3");
+        std::fs::write(&mp3, [0xFF, 0xFB, 0x90, 0x00]).unwrap();
+        let mut out = Vec::new();
+        assert!(!stream_mp4(&mp3, 0, |_| panic!("told"), &mut out).unwrap_or(false));
+        assert!(out.is_empty());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

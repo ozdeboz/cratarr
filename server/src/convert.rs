@@ -29,9 +29,10 @@ use rubato::audioadapter_buffers::direct::SequentialSliceOfVecs;
 use rubato::{Fft, FixedSync, Indexing, Resampler, WindowFunction};
 use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
 use symphonia::core::formats::probe::Hint;
-use symphonia::core::formats::{FormatOptions, FormatReader, TrackType};
+use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
+use symphonia::core::units::Timestamp;
 
 /// Inside each Incoming folder: where converted files are made, before they take the originals' place. Hidden, so
 /// media servers, Lidarr and the catalogue leave it alone.
@@ -384,6 +385,17 @@ impl Source {
         let track = track.id;
         let decoder = codecs.make_audio_decoder(&params, &AudioDecoderOptions::default())?;
         Ok(Some(Source { reader, decoder, track, format }))
+    }
+
+    /// Move to the packet holding input frame `frame`; returns the frame that packet starts at, where reading
+    /// continues (a phone's stream after a seek, `opus_copy::OpusMp4`).
+    pub(crate) fn seek(&mut self, frame: u64) -> Result<u64> {
+        let to = self
+            .reader
+            .seek(SeekMode::Accurate, SeekTo::Timestamp { ts: Timestamp::from(frame as i64), track_id: self.track })
+            .context("seeking")?;
+        self.decoder.reset();
+        Ok(u64::try_from(to.actual_ts.get()).unwrap_or(0))
     }
 
     /// Decode the next packet and append it to `planes`. False at the end. A damaged packet is an error, not a
