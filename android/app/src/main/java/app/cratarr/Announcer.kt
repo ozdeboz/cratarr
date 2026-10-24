@@ -23,6 +23,7 @@ import android.media.MediaFormat
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
@@ -51,17 +52,17 @@ object Announcer {
     private const val TAG = "CratarrAnnounce"
 
     /** The music under speech: about -14 dB. */
-    private const val DUCK = 0.2f
+    internal const val DUCK = 0.2f
     /** A block of the clip whose loudness (RMS, 0..1) is above this counts as speech. */
-    private const val SPEECH = 0.02f
+    internal const val SPEECH = 0.02f
     /** The envelope's steps: how fast the music goes down, how long it stays down after a word, how slowly it returns. */
-    private const val ATTACK_MS = 30
-    private const val HOLD_MS = 220
-    private const val RELEASE_MS = 500
+    internal const val ATTACK_MS = 30
+    internal const val HOLD_MS = 220
+    internal const val RELEASE_MS = 500
     /** How far ahead of the clip the music starts down, so it is down at the first sound. */
-    private const val LOOK_AHEAD_MS = 40
+    internal const val LOOK_AHEAD_MS = 40
     /** The clip's loudness is measured in blocks this long. */
-    private const val BLOCK_MS = 10
+    internal const val BLOCK_MS = 10
     /** From the last sample mixed to its sound: the output's own latency, roughly (a Bluetooth speaker's included). */
     private const val HEARD_AFTER_MS = 250L
     /** Silence before a clip on a player that was idle, so a sleeping Bluetooth link wakes first. */
@@ -71,9 +72,45 @@ object Announcer {
     /** A mixed-in clip not out this long after its length (the music stopped under it) is given up. */
     private const val STUCK_AFTER_MS = 10_000L
 
-    /** An announcement as reported. */
-    data class State(val id: String, val state: String, val error: String? = null) {
-        fun json(): JSONObject = JSONObject().put("id", id).put("state", state).apply { error?.let { put("error", it) } }
+    /** An announcement as reported, with its timeline (0.9.1) as far as it has come. */
+    data class State(val id: String, val state: String, val error: String? = null, val timeline: Timeline? = null) {
+        fun json(): JSONObject =
+            JSONObject().put("id", id).put("state", state).apply {
+                error?.let { put("error", it) }
+                timeline?.let { put("timeline", it.json()) }
+            }
+    }
+
+    /** What the mixer marks of a clip as it mixes it. */
+    enum class Mark { STARTED, DUCKED, SPEECH_END, RELEASED }
+
+    /**
+     * An announcement's timeline (0.9.1, the owner: "better instrumentation"): the clip's length, and each moment in ms
+     * since the app received the command: its first frame mixed (or played alone), the music first down at the duck,
+     * the end of its last speech, the music back up, the announcement done; gave_up: given up (the music stopped under
+     * it). The mix's moments are when the app mixed them; the sound is heard a buffer later.
+     */
+    class Timeline(private val received: Long) {
+        var clip: Long? = null
+        var started: Long? = null
+        var ducked: Long? = null
+        var speechEnd: Long? = null
+        var released: Long? = null
+        var done: Long? = null
+        var gaveUp = false
+
+        /** Ms since the command, now. */
+        fun now(): Long = SystemClock.elapsedRealtime() - received
+
+        fun json(): JSONObject = JSONObject().apply {
+            clip?.let { put("clip_ms", it) }
+            started?.let { put("started_ms", it) }
+            ducked?.let { put("ducked_ms", it) }
+            speechEnd?.let { put("speech_end_ms", it) }
+            released?.let { put("released_ms", it) }
+            done?.let { put("done_ms", it) }
+            put("gave_up", gaveUp)
+        }
     }
 
     private data class Request(
@@ -84,6 +121,7 @@ object Announcer {
         val heardLater: () -> Long,
         val duck: (Boolean) -> Unit,
         val told: (State) -> Unit,
+        val line: Timeline = Timeline(SystemClock.elapsedRealtime()),
     )
 
     private val main = Handler(Looper.getMainLooper())
@@ -128,23 +166,41 @@ object Announcer {
                     null
                 }
                 main.post {
-                    if (clip == null) return@post finish(r, State(r.id, "failed", "the clip could not be read"))
-                    r.told(State(r.id, "playing"))
+                    if (clip == null) return@post finish(r, State(r.id, "failed", "the clip could not be read", r.line))
+                    r.line.clip = clip.frames * 1000L / clip.rate
+                    r.told(State(r.id, "playing", timeline = r.line))
                     var over = false
                     // The music stopped under it (the chain no longer runs): given up a while after it should have ended.
                     val stuck = Runnable {
                         if (over) return@Runnable
                         over = true
                         m.stop()
-                        finish(r, State(r.id, "failed", "the music stopped under it"))
+                        r.line.gaveUp = true
+                        r.line.done = r.line.now()
+                        finish(r, State(r.id, "failed", "the music stopped under it", r.line))
                     }
                     main.postDelayed(stuck, clip.frames * 1000L / clip.rate + STUCK_AFTER_MS)
-                    m.play(clip) {
+                    // The mixer's moments, in the clip's time from its first frame: since the command, from that frame.
+                    val marks = { what: Mark, ms: Long ->
+                        main.post {
+                            when (what) {
+                                Mark.STARTED -> r.line.started = r.line.now()
+                                Mark.DUCKED -> r.line.ducked = (r.line.started ?: 0) + ms
+                                Mark.SPEECH_END -> r.line.speechEnd = (r.line.started ?: 0) + ms
+                                Mark.RELEASED -> r.line.released = (r.line.started ?: 0) + ms
+                            }
+                        }
+                        Unit
+                    }
+                    m.play(clip, marks) {
                         main.post {
                             if (over) return@post
                             over = true
                             main.removeCallbacks(stuck)
-                            main.postDelayed({ finish(r, State(r.id, "done")) }, HEARD_AFTER_MS + r.heardLater())
+                            main.postDelayed({
+                                r.line.done = r.line.now()
+                                finish(r, State(r.id, "done", timeline = r.line))
+                            }, HEARD_AFTER_MS + r.heardLater())
                         }
                     }
                 }
@@ -172,7 +228,7 @@ object Announcer {
         Ready.ensure(r.context, "announce", briefly = true)
         main.postDelayed({
             if (Ready.foreground(r.context)) soundAlone(r)
-            else finish(r, State(r.id, "failed", "Android lets the app make no sound from the background: turn on Stay ready"))
+            else finish(r, State(r.id, "failed", "Android lets the app make no sound from the background: turn on Stay ready", r.line.also { it.done = it.now() }))
         }, READY_WAIT_MS)
     }
 
@@ -191,22 +247,32 @@ object Announcer {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (isPlaying && !said) {
                     said = true
-                    if (withMusic) r.duck(true)
-                    r.told(State(r.id, "playing"))
+                    r.line.started = r.line.now()
+                    p.duration.takeIf { it > 0 }?.let { r.line.clip = it }
+                    if (withMusic) {
+                        r.duck(true)
+                        r.line.ducked = r.line.now()
+                    }
+                    r.told(State(r.id, "playing", timeline = r.line))
                 }
             }
 
             override fun onPlaybackStateChanged(state: Int) {
                 if (state != Player.STATE_ENDED) return
                 p.removeListener(this)
-                if (withMusic) r.duck(false)
-                finish(r, State(r.id, "done"))
+                if (withMusic) {
+                    r.duck(false)
+                    r.line.released = r.line.now()
+                }
+                r.line.done = r.line.now()
+                finish(r, State(r.id, "done", timeline = r.line))
             }
 
             override fun onPlayerError(error: PlaybackException) {
                 p.removeListener(this)
                 if (withMusic) r.duck(false)
-                finish(r, State(r.id, "failed", error.errorCodeName))
+                r.line.done = r.line.now()
+                finish(r, State(r.id, "failed", error.errorCodeName, r.line))
             }
         })
         p.prepare()
@@ -335,23 +401,39 @@ object Announcer {
 
         @Volatile private var clip: Clip? = null
         @Volatile private var ended: (() -> Unit)? = null
+        /** Its moments as it mixes them (the announcement's timeline, 0.9.1): what, and when in the clip's time (ms
+         *  from its first frame mixed). Called on the audio thread. */
+        @Volatile private var marked: ((Mark, Long) -> Unit)? = null
         /** Where the clip is (frames), the music's gain now, and the last frame the clip was loud near. */
         private var at = 0
         private var gain = 1f
         private var loudUntil = -1
+        /** For the marks: the music first down at the duck, back up after it, and where the last speech ended. */
+        private var ducked = false
+        private var released = false
+        private var speechEnd = 0
 
         /** The clip given up: the music goes on as it was. */
         fun stop() {
             clip = null
             ended = null
+            marked = null
             // The music comes back up at the release's pace (queueInput), not at once.
         }
 
-        fun play(c: Clip, onEnded: () -> Unit) {
+        fun play(c: Clip, onMark: ((Mark, Long) -> Unit)? = null, onEnded: () -> Unit) {
             ended = onEnded
+            marked = onMark
             at = 0
             loudUntil = -1
+            ducked = false
+            released = false
+            speechEnd = 0
             clip = c
+        }
+
+        private fun mark(what: Mark, frame: Int, rate: Int) {
+            marked?.invoke(what, frame * 1000L / rate)
         }
 
         override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
@@ -392,11 +474,24 @@ object Announcer {
             val hold = rate * HOLD_MS / 1000
             val o = out.order(ByteOrder.LITTLE_ENDIAN)
             for (f in 0 until frames) {
+                if (at == 0) mark(Mark.STARTED, 0, rate)
                 // Speech just ahead: the music stays down until a hold after it.
                 val near = (at + ahead) / c.blockFrames
-                if (near < c.loudness.size && c.loudness[near] > SPEECH) loudUntil = at + ahead + hold
+                if (near < c.loudness.size && c.loudness[near] > SPEECH) {
+                    loudUntil = at + ahead + hold
+                    speechEnd = min(c.frames, (near + 1) * c.blockFrames)
+                }
                 val target = if (at <= loudUntil) DUCK else 1f
                 gain = if (gain > target) max(target, gain - attack) else min(target, gain + release)
+                if (!ducked && gain <= DUCK + 0.001f) {
+                    ducked = true
+                    mark(Mark.DUCKED, at, rate)
+                }
+                if (ducked && !released && at > loudUntil && gain >= 0.999f) {
+                    released = true
+                    mark(Mark.SPEECH_END, speechEnd, rate)
+                    mark(Mark.RELEASED, at, rate)
+                }
                 for (ch in 0 until c.channels) {
                     val m = music.get() * gain
                     val v = if (at < c.frames) c.pcm[at * c.channels + ch].toFloat() else 0f
@@ -411,6 +506,7 @@ object Announcer {
             // The clip is out and the music back up: done (its sound a little behind).
             if (at >= c.frames && gain >= 0.999f) {
                 clip = null
+                marked = null
                 val e = ended
                 ended = null
                 e?.invoke()
