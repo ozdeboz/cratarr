@@ -4,14 +4,15 @@
 // button changes. Everything else follows Finamp's code, step for step.
 
 /** What gives way when the player runs out of height, first to last (Finamp's `verticalHideOrder`, without its bottom
- *  actions row): Cratarr's own row (menu, favourite, queue), the output pill (the only way to the output), the title,
+ *  actions row; Cratarr's three bands, landscape's foot, before all): Cratarr's own row (menu, favourite, queue), the output pill (the only way to the output), the title,
  *  the artist line and previous / play / next never give way. Step n is dropped at level n + 1. */
-export const STEPS = ['gapsBig', 'buttons', 'gapsSmall', 'facts', 'title', 'progress'] as const;
+export const STEPS = ['bands', 'gapsBig', 'buttons', 'gapsSmall', 'facts', 'title', 'progress'] as const;
 export type Step = (typeof STEPS)[number];
 
 /** Finamp's `maxShrink`: how far (percent of the cover's size, per side, times the cover priority) the cover may shrink
  *  so that this step can stay. */
 const MAX_SHRINK: Record<Step, number> = {
+  bands: 0,
   gapsBig: 1,
   buttons: 1,
   gapsSmall: 2,
