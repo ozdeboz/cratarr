@@ -477,6 +477,11 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   on the server longer than a page should wait for is a task (`app::tasks`, `lib/tasks.svelte.ts`): it starts at once,
   goes on when the page is left, says how far it is on the live channel, and its result waits on its page for an hour.
   The waiting bar and the button's spinner above stay for answers that take seconds.
+- **Search: the page finds, the panel narrows** (the owner, 2026-10-25; the pattern for every search to come, a global
+  one included). One query, in the pill: the page shows everything that matches, searching deep (a playlist by its
+  name or by its tracks, a problem by its items); the item opened in the panel shows what of it matches the same words
+  (a playlist's or an album's tracks, a list's rows). Side by side the search field is the page's alone; where the
+  panel covers its page (a phone), the panel's pill carries it. Never two search fields for one query.
 - **A page's work in its pill** (the owner, 2026-10-24: as the search). The page's own button (Look again, Sync now)
   has a ring of the work's progress while it runs. A tap on it unfolds the pill leftwards into the one line and bar
   (above), for four seconds, and folds it again (at once when the work ends); a tap while it shows folds it, and a tap

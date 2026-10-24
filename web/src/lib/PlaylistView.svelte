@@ -142,7 +142,7 @@
   import { work } from './panelWork.svelte';
   import { prefs, type ListSort, type PanelKind } from './prefs.svelte';
   import { filtersOn, hiddenLibraries, inView, passing, switchOn } from './listFilter.svelte';
-  import { trackOrders, type TrackOrder } from './pageView.svelte';
+  import { matchesSearch, trackOrders, type TrackOrder } from './pageView.svelte';
   import { clockText, paused, playing } from './remote.svelte';
   import { on } from './events.svelte';
   import { swipe } from './swipe';
@@ -591,7 +591,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const shown = $derived.by(() => {
     // What a filter goes by not in yet: loading, not the rows unfiltered or none (the owner, 2026-10-23).
     if (!rows || (filterOn('favourites') && !rowFavsIn) || (pass.pending && !pass.keys)) return null;
-    const list = rows.map((r, i) => ({ r, i })).filter((x) => keeps(x.r));
+    // The page's search narrows what its panel shows too (the owner, 2026-10-25: the page finds, the panel shows the
+    // item narrowed to the same words): a track whose title, artist or album holds every word.
+    const list = rows.map((r, i) => ({ r, i })).filter((x) => keeps(x.r) && matchesSearch(x.r.name ?? x.r.file, x.r.artist, x.r.album));
     const text = (r: PlaylistRow) =>
       sortKey === 'title' ? (r.name ?? r.file) : sortKey === 'artist' ? (r.artist ?? '') : sortKey === 'albumArtist' ? (r.album_artist ?? '') : (r.album ?? '');
     // A number to order by; none (a value the file or the plays do not have) comes first, in the playlist's order.
@@ -917,6 +919,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   // under it is out of reach; beside the page, ✕, and Back where there is a view before this one. Every mode and view
   // of the panel the same, in the same place.
   let { full = false }: { full?: boolean } = $props();
+  /** The page under the panel (its address), whose search the panel carries while it covers it (a phone). */
+  const pageHere = location.hash.split('?')[0].replace(/^#\/?/, '') || 'playlists';
   let canGoBack = $state(false);
   $effect(() => {
     void panel.viewed;
@@ -1546,7 +1550,16 @@ ${r.album_artist ?? r.artist ?? ''}`;
          action bar has the top they float just under it. -->
     <div class="pills" class:below={stuck}>
       <span class="navpill">{@render leave()}</span>
-      <span class="end">{#if !editing && !crateEditing}<TopPill view order={listOrder} device={!playing()} filter={filterable} tempos={listTempos} {kind} counted={rows && shown ? { shown: shown.length, total: rows.length } : null} />{/if}<PanelPlace /></span>
+      <span class="end">{#if !editing && !crateEditing}<TopPill
+            view
+            order={listOrder}
+            device={!playing()}
+            filter={filterable}
+            tempos={listTempos}
+            {kind}
+            counted={rows && shown ? { shown: shown.length, total: rows.length } : null}
+            search={full ? pageHere : null}
+          />{/if}<PanelPlace /></span>
     </div>
   {/if}
 
