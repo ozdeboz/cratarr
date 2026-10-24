@@ -17,6 +17,44 @@ pub struct Lidarr {
 struct AlbumRow {
     id: i64,
     monitored: bool,
+    #[serde(rename = "releaseDate", default)]
+    release_date: Option<String>,
+    #[serde(default)]
+    statistics: Option<AlbumStats>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlbumStats {
+    #[serde(rename = "trackFileCount", default)]
+    files: u32,
+}
+
+impl AlbumRow {
+    /// Any of its tracks already there.
+    fn has_files(&self) -> bool {
+        self.statistics.as_ref().is_some_and(|s| s.files > 0)
+    }
+
+    /// Out already (a date in the past, or none known).
+    fn out(&self, now: i64) -> bool {
+        self.release_date.as_deref().and_then(crate::nowplaying::parse_iso_epoch).is_none_or(|t| t <= now)
+    }
+}
+
+/// What Want adds an album with (`settings::LidarrConfig`'s choices); a `None`: as the artists Lidarr has.
+#[derive(Debug, Clone, Default)]
+pub struct AddWith {
+    pub quality: Option<i64>,
+    pub metadata: Option<i64>,
+    pub root: Option<String>,
+}
+
+/// Lidarr's profiles and root folders, for the choices on its page in Connections.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct Options {
+    pub quality: Vec<(i64, String)>,
+    pub metadata: Vec<(i64, String)>,
+    pub roots: Vec<String>,
 }
 
 impl Lidarr {
@@ -72,16 +110,47 @@ impl Lidarr {
         Ok(())
     }
 
-    /// Discover's Want (decision 0069): Lidarr fetches the album into Incoming. One it knows is monitored and searched
-    /// for; one it does not is looked up (by its release group, else by its artist and name) and added, with its artist
-    /// where Lidarr has not got them (their other albums not monitored), as the artists it has are kept (their quality
-    /// and metadata profiles, their root folder), and searched for. What was done, in words.
-    pub async fn want(&self, release_group: Option<&str>, artist: &str, album: &str) -> Result<String> {
+    /// Lidarr's quality and metadata profiles and its root folders, by id and name.
+    pub async fn options(&self) -> Result<Options> {
+        #[derive(Deserialize)]
+        struct Named {
+            id: i64,
+            name: String,
+        }
+        #[derive(Deserialize)]
+        struct Root {
+            path: String,
+        }
+        let quality: Vec<Named> = self.get("/api/v1/qualityprofile", &[]).await?;
+        let metadata: Vec<Named> = self.get("/api/v1/metadataprofile", &[]).await?;
+        let roots: Vec<Root> = self.get("/api/v1/rootfolder", &[]).await?;
+        Ok(Options {
+            quality: quality.into_iter().map(|x| (x.id, x.name)).collect(),
+            metadata: metadata.into_iter().map(|x| (x.id, x.name)).collect(),
+            roots: roots.into_iter().map(|r| r.path).collect(),
+        })
+    }
+
+    /// Discover's Want (decision 0069): Lidarr fetches the album into Incoming. One it knows, as Seerr does with
+    /// Radarr: left alone when it has it already, monitored when it is not, searched for when it is out (one not out yet
+    /// waits for Lidarr's own watch). One it does not know is looked up (by its release group, else by its artist and
+    /// name) and added, with its artist where Lidarr has not got them (their other albums not monitored), with `with`'s
+    /// profiles and root folder (else as the artists it has), and searched for. What was done, in words.
+    pub async fn want(&self, with: &AddWith, release_group: Option<&str>, artist: &str, album: &str) -> Result<String> {
         if let Some(rg) = release_group {
-            let known: Vec<i64> = self.albums(rg).await?.into_iter().map(|a| a.id).collect();
+            let known = self.albums(rg).await?;
             if !known.is_empty() {
-                self.set_monitored(&known, true).await?;
-                self.search(&known).await?;
+                if known.iter().any(AlbumRow::has_files) {
+                    return Ok("Lidarr has it already".into());
+                }
+                let off: Vec<i64> = known.iter().filter(|a| !a.monitored).map(|a| a.id).collect();
+                self.set_monitored(&off, true).await?;
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+                let out: Vec<i64> = known.iter().filter(|a| a.out(now)).map(|a| a.id).collect();
+                if out.is_empty() {
+                    return Ok("Lidarr will fetch it when it comes out".into());
+                }
+                self.search(&out).await?;
                 return Ok("Lidarr is looking for it".into());
             }
         }
@@ -97,7 +166,8 @@ impl Lidarr {
             }
         };
         let Some(mut found) = found.into_iter().find(want) else { bail!("Lidarr does not know {album} by {artist}") };
-        // As the artists it has are kept: the first one's profiles and root folder, else Lidarr's first of each.
+        // As chosen on its page in Connections; what is not chosen as the artists it has are kept (the first one's
+        // profiles and root folder), else Lidarr's first of each.
         let artists: Vec<serde_json::Value> = self.get("/api/v1/artist", &[]).await?;
         let (quality, metadata, root) = match artists.first() {
             Some(a) => (a["qualityProfileId"].clone(), a["metadataProfileId"].clone(), a["rootFolderPath"].clone()),
@@ -109,6 +179,9 @@ impl Lidarr {
                 (first(&q, "id"), first(&m, "id"), first(&r, "path"))
             }
         };
+        let quality = with.quality.map_or(quality, |q| json!(q));
+        let metadata = with.metadata.map_or(metadata, |m| json!(m));
+        let root = with.root.clone().map_or(root, |r| json!(r));
         if quality.is_null() || metadata.is_null() || root.is_null() {
             bail!("Lidarr has no quality profile, metadata profile or root folder to add it with");
         }

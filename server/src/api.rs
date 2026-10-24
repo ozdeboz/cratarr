@@ -191,6 +191,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/settings", get(get_settings).put(save_settings))
             .route("/api/settings/preview", post(preview))
             .route("/api/settings/lidarr", post(preview_lidarr))
+            .route("/api/settings/lidarr/options", get(lidarr_options))
             .route("/api/settings/naming", get(naming))
             .route("/api/catalogue", get(catalogue_status))
             .route("/api/health/report", get(health_report))
@@ -2752,6 +2753,10 @@ struct DiscoverKey {
 /// A suggestion wanted: Lidarr fetches it into Incoming.
 async fn discover_want(State(app): State<Arc<App>>, Json(b): Json<DiscoverKey>) -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = discoverer()?;
+    // An administrator's (the owner, 2026-10-24: anyone else's goes into a queue the administrators answer, in 0.9).
+    if !serve.current_is_admin() {
+        return Err(ToggleError::Refused("Want is an administrator's: ask one.".into()).into());
+    }
     let said = crate::app::discover::want(&app, &serve, &account, &b.key).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!({ "said": said })))
 }
@@ -3484,6 +3489,12 @@ async fn play_playlist(
 #[derive(Deserialize)]
 struct PreviewBody {
     source: SourceConfig,
+}
+
+/// Lidarr's quality and metadata profiles and root folders (its page's choices for Want), of the saved Lidarr.
+async fn lidarr_options(State(app): State<Arc<App>>) -> Result<Json<crate::lidarr::Options>, ApiError> {
+    let l = crate::app::discover::lidarr(&app).ok_or_else(|| ToggleError::Refused("Lidarr is not connected, or is switched off.".into()))?;
+    Ok(Json(l.options().await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
 async fn preview_lidarr(

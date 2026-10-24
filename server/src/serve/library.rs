@@ -651,6 +651,14 @@ impl Library {
         Ok(rows.into_iter().filter(Lacks::any).collect())
     }
 
+    /// Every artist a track credits (on compilations and as guests too): Discover's "New to you" is for none of them.
+    pub fn track_artist_names(&self) -> Result<Vec<String>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT DISTINCT name FROM song_artists")?;
+        let names = st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(names)
+    }
+
     /// The albums without a cover: Home leaves them out (the owner, 2026-10-24).
     pub fn coverless(&self) -> Result<std::collections::HashSet<String>> {
         let db = self.db();

@@ -326,7 +326,11 @@ async fn from_lastfm(user: &str, auth: &Auth, artists_had: &HashSet<String>, pro
 pub struct Have {
     pub release_groups: HashSet<String>,
     pub matcher: Matcher,
+    /// The artists the library has albums by: Last.fm's new artists are none of these.
     pub artists: HashSet<String>,
+    /// Those and every artist a track credits (compilations, guests): "New to you" is for none of these (the owner,
+    /// 2026-10-24: one on a compilation is not new).
+    pub known: HashSet<String>,
 }
 
 impl Have {
@@ -345,7 +349,10 @@ pub fn have(data_dir: &Path, cat: &crate::catalogue::Catalogue, artists: impl In
             }
         }
     }
-    Ok(Have { release_groups, matcher: Matcher::read(&data_dir.join("library.sqlite"))?, artists: artists.into_iter().map(|a| loose(&a)).collect() })
+    {
+        let artists: HashSet<String> = artists.into_iter().map(|a| loose(&a)).collect();
+        Ok(Have { release_groups, matcher: Matcher::read(&data_dir.join("library.sqlite"))?, known: artists.clone(), artists })
+    }
 }
 
 /// An album's key: its release group, else its artist's and its name's.
@@ -458,6 +465,38 @@ async fn mb_urls(http: &reqwest::Client, release_group: &str) -> Result<Vec<Stri
     Ok(b.releases.into_iter().flat_map(|r| r.relations).filter_map(|r| r.url.map(|u| u.resource)).collect())
 }
 
+/// A name as MusicBrainz's search reads it: in quotes, its own quotes and backslashes escaped.
+fn quoted(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// The release group MusicBrainz is sure an album is (its search's score 95 or more, the name the same as the matcher
+/// reads names): its id and year.
+async fn mb_release_group(http: &reqwest::Client, artist: &str, album: &str) -> Result<Option<(String, Option<i32>)>> {
+    #[derive(Deserialize)]
+    struct Group {
+        id: String,
+        #[serde(default)]
+        score: u32,
+        #[serde(default)]
+        title: String,
+        #[serde(rename = "first-release-date", default)]
+        first: String,
+    }
+    #[derive(Deserialize)]
+    struct Search {
+        #[serde(rename = "release-groups", default)]
+        groups: Vec<Group>,
+    }
+    let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/release-group")?;
+    url.query_pairs_mut()
+        .append_pair("query", &format!("releasegroup:{} AND artist:{}", quoted(album), quoted(artist)))
+        .append_pair("fmt", "json")
+        .append_pair("limit", "3");
+    let s: Search = http.get(url).send().await?.error_for_status()?.json().await?;
+    Ok(s.groups.into_iter().find(|g| g.score >= 95 && loose(&g.title) == loose(album)).map(|g| (g.id, g.first.get(..4).and_then(|y| y.parse().ok()))))
+}
+
 /// MusicBrainz asks for at most one request a second.
 const MB_PAUSE: Duration = Duration::from_millis(1100);
 
@@ -468,7 +507,9 @@ pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::C
     let (lib, d) = (serve.library.clone(), dir.clone());
     let have = tokio::task::spawn_blocking(move || -> Result<Have> {
         let artists = lib.artist_albums()?.into_iter().map(|r| r.1).collect::<Vec<_>>();
-        have(&d, &cat, artists)
+        let mut have = have(&d, &cat, artists)?;
+        have.known = have.artists.iter().cloned().chain(lib.track_artist_names()?.iter().map(|a| loose(a))).collect();
+        Ok(have)
     })
     .await??;
     let mut candidates = Vec::new();
@@ -488,12 +529,27 @@ pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::C
             Err(e) => notes.push(format!("Last.fm could not be asked: {e:#}")),
         }
     }
+    // Albums named without their MusicBrainz id (Last.fm's mostly): looked up there.
+    let http = http()?;
+    let unknown = candidates.iter().filter(|c| c.release_group.is_none()).count() as u64;
+    let mut n = 0;
+    for c in candidates.iter_mut().filter(|c| c.release_group.is_none()) {
+        progress("Finding albums on MusicBrainz", n, Some(unknown));
+        n += 1;
+        if let Ok(Some((g, year))) = mb_release_group(&http, &c.artist, &c.album).await {
+            if c.cover.is_none() {
+                c.cover = Some(format!("https://coverartarchive.org/release-group/{g}/front-250"));
+            }
+            c.year = c.year.or(year);
+            c.release_group = Some(g);
+        }
+        tokio::time::sleep(MB_PAUSE).await;
+    }
     progress("Leaving out what you have", 0, None);
     let (ud, a) = (serve.userdata.clone(), account.to_string());
     let (answered, no_artists) = tokio::task::spawn_blocking(move || ud.discover_answered(&a)).await??;
-    let mut albums = one_list(candidates, &|c: &Candidate| have.has(c), &have.artists, &answered, &no_artists);
+    let mut albums = one_list(candidates, &|c: &Candidate| have.has(c), &have.known, &answered, &no_artists);
     // Where to hear each: its Bandcamp and YouTube pages as MusicBrainz knows them, else a search there.
-    let http = http()?;
     let total = albums.len() as u64;
     for (i, s) in albums.iter_mut().enumerate() {
         progress("Finding where to listen", i as u64, Some(total));
@@ -544,6 +600,16 @@ pub fn who(serve: &crate::serve::Serve, account: &str) -> Result<Who> {
 }
 
 /// Lidarr, where it is connected and switched on: Want fetches through it.
+/// What Want adds an album with: Lidarr's choices in Connections.
+fn add_with(app: &super::App) -> crate::lidarr::AddWith {
+    let cfg = app.incoming.lidarr_state().0;
+    crate::lidarr::AddWith {
+        quality: cfg.as_ref().and_then(|c| c.quality_profile),
+        metadata: cfg.as_ref().and_then(|c| c.metadata_profile),
+        root: cfg.and_then(|c| c.root_folder),
+    }
+}
+
 pub fn lidarr(app: &super::App) -> Option<crate::lidarr::Lidarr> {
     app.incoming.lidarr_state().1
 }
@@ -562,7 +628,7 @@ pub fn start(app: &Arc<super::App>, serve: Arc<crate::serve::Serve>, account: &s
 pub async fn want(app: &super::App, serve: &crate::serve::Serve, account: &str, key: &str) -> Result<String> {
     let l = lidarr(app).context("Lidarr is not connected, or is switched off")?;
     let s = kept(serve, account)?.and_then(|f| f.albums.into_iter().find(|s| s.key == key)).context("That suggestion is gone; look again")?;
-    let said = l.want(s.release_group.as_deref(), &s.artist, &s.album).await?;
+    let said = l.want(&add_with(app), s.release_group.as_deref(), &s.artist, &s.album).await?;
     serve.userdata.answer_discover(account, &s.key, &s.artist_key, "wanted")?;
     Ok(said)
 }
@@ -640,7 +706,7 @@ mod tests {
     fn the_library_is_matched_by_release_group_or_by_name_and_artist() {
         let mut m = Matcher::default();
         m.add_album("al-1", "Moon Safari", Some("Air"));
-        let have = Have { release_groups: HashSet::from(["rg-1".to_string()]), matcher: m, artists: HashSet::new() };
+        let have = Have { release_groups: HashSet::from(["rg-1".to_string()]), matcher: m, artists: HashSet::new(), known: HashSet::new() };
         assert!(have.has(&c("Anything", "Anyone", Some("rg-1"), "lastfm", "", 0.0)));
         assert!(have.has(&c("Moon Safari (Remastered)", "AIR", None, "lastfm", "", 0.0)), "loosely, as imports match");
         assert!(!have.has(&c("Talkie Walkie", "Air", Some("rg-2"), "lastfm", "", 0.0)));

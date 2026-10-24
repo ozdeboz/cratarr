@@ -4,6 +4,7 @@
   // line); its settings are on its own page behind it (`thing`: a server's id, or `lidarr`): its fields as rows, a value
   // typed or chosen in a sheet, its connection checked there, and Remove last (the settings' North Star, 2026-10-19).
   import type { Field } from '../api';
+  import { getLidarrOptions } from '../api';
   import { backFromThing, openThing } from '../panel.svelte';
   import { nameThing } from '../settingsSections.svelte';
   import ChoiceSheet from './ChoiceSheet.svelte';
@@ -25,6 +26,36 @@
   const LISTENING: Record<string, string> = { listenbrainz: 'ListenBrainz', lastfm: 'Last.fm' };
   const own = (t: string) => t === LIDARR || t === HOME_ASSISTANT || t in LISTENING;
   const LIDARR_MORE = "With Lidarr's address and API key, Delete in Incoming also stops Lidarr fetching that album again.";
+  const WANT_MORE =
+    "What Discover's Want adds an album to Lidarr with: its quality and metadata profiles, and the root folder it lands in (Incoming's). As your artists: the ones the artists Lidarr has already use.";
+  const AS_ARTISTS = 'As your artists';
+  // Lidarr's own profiles and root folders, read when its page opens.
+  let lidOptions = $state<{ quality: [number, string][]; metadata: [number, string][]; roots: string[] } | null>(null);
+  $effect(() => {
+    if (thing !== LIDARR || !s.lidarr) return;
+    getLidarrOptions().then(
+      (o) => (lidOptions = o),
+      () => (lidOptions = null),
+    );
+  });
+  const named = (list: [number, string][] | undefined, id: number | null) => (id === null ? AS_ARTISTS : (list?.find((x) => x[0] === id)?.[1] ?? `#${id}`));
+  function chooseLidarr(which: 'quality' | 'metadata' | 'root') {
+    const o = lidOptions;
+    const options =
+      which === 'root'
+        ? (o?.roots ?? []).map((r) => ({ value: r, label: r }))
+        : (o?.[which] ?? []).map(([id, name]) => ({ value: String(id), label: name }));
+    const now = which === 'root' ? ed.lid.root : ed.lid[which];
+    choosing = {
+      title: which === 'quality' ? 'Quality profile' : which === 'metadata' ? 'Metadata profile' : 'Root folder',
+      options: [{ value: '', label: AS_ARTISTS }, ...options],
+      value: now === null ? '' : String(now),
+      save: (v) => {
+        if (which === 'root') ed.lid.root = v || null;
+        else ed.lid[which] = v ? Number(v) : null;
+      },
+    };
+  }
 
   // Its id only beside another server of its kind.
   const label = (d: Draft) => `${ed.kindOf(d)?.label ?? d.kind}${ed.drafts.filter((x) => x.kind === d.kind).length > 1 ? ` (${d.id})` : ''}`;
@@ -191,6 +222,12 @@
     </Item>
   </Group>
   {#if s.lidarr && ed.lid.url}
+    <!-- What Discover's Want adds an album with, as Seerr asks of each server (the owner, 2026-10-24). -->
+    <Group title="Want" more={WANT_MORE}>
+      <Item name="Quality profile" value={named(lidOptions?.quality, ed.lid.quality)} onclick={() => chooseLidarr('quality')} />
+      <Item name="Metadata profile" value={named(lidOptions?.metadata, ed.lid.metadata)} onclick={() => chooseLidarr('metadata')} />
+      <Item name="Root folder" value={ed.lid.root ?? AS_ARTISTS} wrap onclick={() => chooseLidarr('root')} />
+    </Group>
     <Group>
       <Item name="Remove Lidarr" kind="danger" onclick={() => (removing = 'lidarr')} />
     </Group>

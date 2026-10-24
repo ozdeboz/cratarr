@@ -181,6 +181,10 @@ pub struct LidarrView {
     pub key_set: bool,
     /// Switched on; off, not asked.
     pub enabled: bool,
+    /// What Discover's Want adds an album with (`settings::LidarrConfig`); none: as the artists Lidarr has.
+    pub quality_profile: Option<i64>,
+    pub metadata_profile: Option<i64>,
+    pub root_folder: Option<String>,
     /// Lidarr's version when it answered.
     pub version: Option<String>,
     pub error: Option<String>,
@@ -337,7 +341,16 @@ impl IncomingService {
             },
             None => (None, Some("the API key is not usable".into())),
         };
-        Some(LidarrView { url: cfg.url.clone(), key_set: !cfg.api_key.is_empty(), enabled: cfg.enabled, version, error })
+        Some(LidarrView {
+            url: cfg.url.clone(),
+            key_set: !cfg.api_key.is_empty(),
+            enabled: cfg.enabled,
+            quality_profile: cfg.quality_profile,
+            metadata_profile: cfg.metadata_profile,
+            root_folder: cfg.root_folder.clone(),
+            version,
+            error,
+        })
     }
 
     pub(super) fn trash_days(&self) -> u32 {

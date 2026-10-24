@@ -139,6 +139,15 @@ pub struct LidarrConfig {
     /// Switched on (the owner, 2026-10-24: every connection has its switch); off, Cratarr does not use it.
     #[serde(default = "switched_on")]
     pub enabled: bool,
+    /// What Discover's Want adds an album with, as Seerr asks of each server (the owner, 2026-10-24): Lidarr's
+    /// quality and metadata profiles and its root folder (which decides where it lands: Incoming's). None: as the
+    /// artists Lidarr has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_profile: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_profile: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_folder: Option<String>,
 }
 
 fn switched_on() -> bool {
@@ -268,7 +277,7 @@ pub fn from_env(env: &dyn Fn(&str) -> Option<String>) -> Vec<SourceConfig> {
 /// Lidarr from `LIDARR_URL` and `LIDARR_API_KEY` (until one is saved); nothing unless both are set.
 pub fn lidarr_from_env(env: &dyn Fn(&str) -> Option<String>) -> Option<LidarrConfig> {
     let get = |k: &str| env(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
-    Some(LidarrConfig { url: get("LIDARR_URL")?, api_key: get("LIDARR_API_KEY")?, enabled: true })
+    Some(LidarrConfig { url: get("LIDARR_URL")?, api_key: get("LIDARR_API_KEY")?, enabled: true, ..Default::default() })
 }
 
 /// Check the Lidarr from the page against the saved one: a blank address removes it; a blank key keeps the saved
@@ -282,12 +291,12 @@ pub fn merge_lidarr(saved: Option<&LidarrConfig>, draft: LidarrConfig) -> Result
         return Err(ChangeError::Invalid("Lidarr: the address must start with http:// or https://".into()));
     }
     let key = draft.api_key.trim().to_string();
-    let enabled = draft.enabled;
+    let with = LidarrConfig { enabled: draft.enabled, quality_profile: draft.quality_profile, metadata_profile: draft.metadata_profile, root_folder: draft.root_folder.clone(), ..Default::default() };
     if !key.is_empty() {
-        return Ok(Some(LidarrConfig { url, api_key: key, enabled }));
+        return Ok(Some(LidarrConfig { url, api_key: key, ..with }));
     }
     match saved.filter(|s| !s.api_key.is_empty()) {
-        Some(s) if s.url == url => Ok(Some(LidarrConfig { url, api_key: s.api_key.clone(), enabled })),
+        Some(s) if s.url == url => Ok(Some(LidarrConfig { url, api_key: s.api_key.clone(), ..with })),
         Some(_) => Err(ChangeError::SecretNeeded { name: "Lidarr".into(), field: "address".into(), secret: "API key".into() }),
         None => Err(ChangeError::Invalid("Lidarr: the API key is required".into())),
     }
@@ -509,8 +518,8 @@ mod tests {
 
     #[test]
     fn lidarr_keeps_its_key_only_for_the_same_address() {
-        let saved = LidarrConfig { url: "http://lidarr:8686".into(), api_key: "k".into(), enabled: true };
-        let draft = |url: &str, key: &str| LidarrConfig { url: url.into(), api_key: key.into(), enabled: true };
+        let saved = LidarrConfig { url: "http://lidarr:8686".into(), api_key: "k".into(), enabled: true, ..Default::default() };
+        let draft = |url: &str, key: &str| LidarrConfig { url: url.into(), api_key: key.into(), enabled: true, ..Default::default() };
         assert_eq!(merge_lidarr(Some(&saved), draft("http://lidarr:8686/", "")).unwrap(), Some(saved.clone()));
         assert!(matches!(merge_lidarr(Some(&saved), draft("http://evil:8686", "")), Err(ChangeError::SecretNeeded { .. })));
         assert_eq!(merge_lidarr(Some(&saved), draft("http://new:8686", "k2")).unwrap().unwrap().api_key, "k2");
@@ -548,7 +557,7 @@ mod tests {
         let s = vec![jf("jellyfin", "http://jf:8096", Some("k"))];
         let mut s = s;
         s[0].libraries = Roles { music: vec!["m".into()], incoming: vec!["i1".into(), "i2".into()], ..Roles::default() };
-        let lidarr = Some(LidarrConfig { url: "http://lidarr:8686".into(), api_key: "k".into(), enabled: true });
+        let lidarr = Some(LidarrConfig { url: "http://lidarr:8686".into(), api_key: "k".into(), enabled: true, ..Default::default() });
         let saved = Saved {
             sources: s,
             music_folder: Some("/music".into()),

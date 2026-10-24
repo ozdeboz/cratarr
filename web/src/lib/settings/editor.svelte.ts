@@ -96,7 +96,18 @@ class SettingsEditor {
   importing = $derived(!!this.imp.job && this.imp.job.finished === null);
 
   // Lidarr as the page edits it; the saved key is never sent here.
-  lid = $state({ url: '', key: '', enabled: true, view: null as LidarrView | null, busy: false, removing: false });
+  lid = $state({
+    url: '',
+    key: '',
+    enabled: true,
+    // What Discover's Want adds an album with (null: as the artists Lidarr has).
+    quality: null as number | null,
+    metadata: null as number | null,
+    root: null as string | null,
+    view: null as LidarrView | null,
+    busy: false,
+    removing: false,
+  });
 
   rules = $derived<TagRules>({
     artist_separators: fromWords(this.ruleText.artistSeps),
@@ -108,7 +119,11 @@ class SettingsEditor {
     !!this.s &&
       (this.lid.url.trim().replace(/\/+$/, '') !== (this.s.lidarr?.url ?? '') ||
         this.lid.key.trim() !== '' ||
-        (!!this.s.lidarr && this.lid.enabled !== this.s.lidarr.enabled)),
+        (!!this.s.lidarr &&
+          (this.lid.enabled !== this.s.lidarr.enabled ||
+            this.lid.quality !== this.s.lidarr.quality_profile ||
+            this.lid.metadata !== this.s.lidarr.metadata_profile ||
+            this.lid.root !== this.s.lidarr.root_folder))),
   );
   /** The saved key is only reused for the same address. */
   lidarrKeyNeeded = $derived(!!this.s?.lidarr?.key_set && this.lid.url.trim().replace(/\/+$/, '') !== this.s.lidarr.url && this.lid.url.trim() !== '');
@@ -154,7 +169,17 @@ class SettingsEditor {
       genreKeep: next.tag_rules.genre_keep.join('\n'),
     };
     this.cat = next.catalogue;
-    this.lid = { url: next.lidarr?.url ?? '', key: '', enabled: next.lidarr?.enabled ?? true, view: next.lidarr, busy: false, removing: false };
+    this.lid = {
+      url: next.lidarr?.url ?? '',
+      key: '',
+      enabled: next.lidarr?.enabled ?? true,
+      quality: next.lidarr?.quality_profile ?? null,
+      metadata: next.lidarr?.metadata_profile ?? null,
+      root: next.lidarr?.root_folder ?? null,
+      view: next.lidarr,
+      busy: false,
+      removing: false,
+    };
     this.trashDays = next.trash_days;
     if (next.music_folder) this.loadNaming();
     this.drafts = next.sources.map((v) => ({
@@ -375,7 +400,16 @@ class SettingsEditor {
   save = async () => {
     this.saving = true;
     try {
-      const lidarr = this.lidarrChanged ? { url: this.lid.url.trim(), api_key: this.lid.key.trim(), enabled: this.lid.enabled } : undefined;
+      const lidarr = this.lidarrChanged
+        ? {
+            url: this.lid.url.trim(),
+            api_key: this.lid.key.trim(),
+            enabled: this.lid.enabled,
+            quality_profile: this.lid.quality,
+            metadata_profile: this.lid.metadata,
+            root_folder: this.lid.root,
+          }
+        : undefined;
       const namingChanged = !!this.namingInUse && this.naming.trim() !== this.namingInUse;
       this.fill(
         await saveSettings(

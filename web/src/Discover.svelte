@@ -6,6 +6,7 @@
   // one line (ui-conventions, Progress); Refresh in the page's pill asks again now. Without a service connected, the
   // page says what it needs.
   import { getDiscover, notDiscover, refreshDiscover, wantDiscover, type DiscoverAlbum, type DiscoverView } from './lib/api';
+  import Icon from './lib/Icon.svelte';
   import Meter from './lib/Meter.svelte';
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
@@ -129,7 +130,7 @@
                 <button class="primary" disabled={!canWant || asking === a.key} aria-busy={asking === a.key} title={canWant ? null : wantWhy} onclick={() => want(a)}
                   >Want</button
                 >
-                <button onclick={() => no(a)}>Not interested</button>
+                <button class="no" aria-label="Not interested" title="Not interested" onclick={() => no(a)}><Icon name="thumbsDown" size={20} /></button>
               </span>
             </div>
           </li>
@@ -283,5 +284,12 @@
   button:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  /* Not interested: an icon beside Want, as round as the buttons beside it are tall. */
+  .no {
+    display: grid;
+    place-items: center;
+    padding: 0 10px;
   }
 </style>

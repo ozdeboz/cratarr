@@ -1151,10 +1151,29 @@ export const undoImport = (source: string, user: string, account: string) =>
   request<{ undone: ImportUndone }>('/api/subsonic/import', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source, user, account }) });
 
 /** Lidarr on the Settings page; the key is never sent. */
-export type LidarrView = { url: string; key_set: boolean; enabled: boolean; version: string | null; error: string | null };
+export type LidarrView = {
+  url: string;
+  key_set: boolean;
+  enabled: boolean;
+  /** What Discover's Want adds an album with; null: as the artists Lidarr has. */
+  quality_profile: number | null;
+  metadata_profile: number | null;
+  root_folder: string | null;
+  version: string | null;
+  error: string | null;
+};
 
 /** What the page sends for Lidarr: a blank key keeps the saved one while the address stays; a blank address removes it. */
-export type LidarrDraft = { url: string; api_key: string; enabled?: boolean };
+export type LidarrDraft = {
+  url: string;
+  api_key: string;
+  enabled?: boolean;
+  quality_profile?: number | null;
+  metadata_profile?: number | null;
+  root_folder?: string | null;
+};
+/** The saved Lidarr's quality and metadata profiles ([id, name]) and root folders: Want's choices on its page. */
+export const getLidarrOptions = () => quietly<{ quality: [number, string][]; metadata: [number, string][]; roots: string[] }>('/api/settings/lidarr/options');
 
 /** Check a Lidarr as filled in; nothing is saved. Null for a blank address. */
 export const previewLidarr = (draft: LidarrDraft) => post<LidarrView | null>('/api/settings/lidarr', draft);
