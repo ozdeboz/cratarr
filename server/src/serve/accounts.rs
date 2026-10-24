@@ -83,7 +83,9 @@ fn view(serve: &Serve, u: &User, current: Option<&str>) -> serde_json::Value {
 }
 
 async fn me(State(serve): State<Arc<Serve>>, headers: HeaderMap) -> Response {
-    if !serve.sign_in_required() {
+    // Off, one still signed in is that account all the same (`access::require`): the page must show what they may,
+    // not the administrator's (a test account's phone showed the server's settings, each refused, 2026-10-24).
+    if !serve.sign_in_required() && session_of(&serve, &headers).is_none() {
         return refused(StatusCode::NOT_FOUND, "Signing in is off: there is one user.");
     }
     let Some(u) = serve.current_user().and_then(|n| serve.users.get(&n)) else { return refused(StatusCode::NOT_FOUND, "No one is signed in.") };

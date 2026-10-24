@@ -479,6 +479,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn with_signing_in_off_one_still_signed_in_is_told_who_they_are() {
+        let s = served(false);
+        s.users.from_directory("ann", false).unwrap();
+        let (token, _) = s.sessions.create("ann", "d", now()).unwrap();
+        let as_ann = |uri: &str| HttpRequest::get(uri).header("cookie", format!("{COOKIE}={token}")).body(Body::empty()).unwrap();
+        let me = app(&s).oneshot(as_ann("/api/me")).await.unwrap();
+        assert_eq!(me.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(me.into_body(), 1 << 16).await.unwrap()).unwrap();
+        assert_eq!((body["name"].as_str(), body["admin"].as_bool()), (Some("ann"), Some(false)), "ann, no administrator");
+        assert_eq!(status(&s, as_ann("/api/users")).await.0, StatusCode::FORBIDDEN, "as the server treats her");
+        // No one signed in: the one user, as before.
+        assert_eq!(status(&s, HttpRequest::get("/api/me").body(Body::empty()).unwrap()).await.0, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn the_users_panel_makes_and_keeps_cratarr_accounts_and_says_why_not() {
         // Signing in off: the owner ("me") administers.
         let s = served(false);
