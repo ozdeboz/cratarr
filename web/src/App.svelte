@@ -17,6 +17,7 @@
   import { health, problems } from './lib/healthReport.svelte';
   import { SECTIONS, type SettingsSection } from './lib/settingsSections.svelte';
   import { askDownloads, downloads, inApp } from './lib/app.svelte';
+  import { kept } from './lib/kept.svelte';
   import { reach } from './lib/reach.svelte';
   import { keepCoversAway } from './lib/coversAway.svelte';
   import Visuals from './lib/visuals/Visuals.svelte';
@@ -175,7 +176,10 @@
   // on a roomy window.
   const insightsSplit = $derived(page === 'insights' && player.roomy);
   const insightsShown = $derived(INSIGHTS_VIEWS.find((v) => v.id === insightsOf(panel.viewed))?.id ?? (null as InsightsView | null));
-  const sidebar = $derived(settingsSplit || healthSplit || insightsSplit || inSidebar());
+  // Downloads as Insights (the owner, 2026-10-24): its list beside the item opened, while it has any.
+  const downloadsSplit = $derived(page === 'downloads' && player.roomy && (downloads.tracks.length > 0 || kept.items.length > 0));
+  const split = $derived(settingsSplit || healthSplit || insightsSplit || downloadsSplit);
+  const sidebar = $derived(split || inSidebar());
   // The visuals beside the page: in the panel where the player goes, while it is there (a narrow window: over the page).
   const visualsBeside = $derived(visuals.open && visuals.side && sidebar);
   // Over the page unless the player is beside it: a split page (Settings, Health, Insights) has the panel, not the
@@ -318,7 +322,7 @@
   const playerWidth = $derived(fitWidth(dragged ?? prefs.playerWidth));
   // Beside Settings' list the part takes all but the list's column (no grip there: the list's width is its own).
   const SETTINGS_LIST = 400;
-  const sideWidth = $derived(settingsSplit || healthSplit || insightsSplit ? Math.max(PLAYER_MIN, area.w - SETTINGS_LIST) : playerWidth);
+  const sideWidth = $derived(split ? Math.max(PLAYER_MIN, area.w - SETTINGS_LIST) : playerWidth);
   let contentEl = $state<HTMLElement>();
   // The page's side and the panel's: sheets opened in either stand over it (lib/SheetArea.svelte).
   let pageEl = $state<HTMLElement>();
@@ -538,7 +542,7 @@
     {/if}
     </SheetArea>
     </div>
-    {#if settingsSplit || healthSplit || insightsSplit}
+    {#if split}
       <div class="grip line" aria-hidden="true"></div>
     {:else if sidebar}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
@@ -557,7 +561,7 @@
     {/if}
     {#if sidebar}
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
-      <aside class="player-side" class:whole={settingsSplit || healthSplit || insightsSplit} aria-label={panelShowsPlayer() ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
+      <aside class="player-side" class:whole={split} aria-label={panelShowsPlayer() ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
         <SheetArea area={() => sideEl}>
           {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if panelShowsPlayer()}<NowPlaying place="side" />{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else if healthShown}<HealthPanel problem={healthShown} beside={healthSplit} />{:else if insightsShown}<InsightsPanel view={insightsShown} beside={insightsSplit} />{:else}<PlaylistView />{/if}
         </SheetArea>
