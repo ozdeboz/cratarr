@@ -1417,8 +1417,8 @@ export type HomeWeek = {
   played: number;
   covers: { track: string; album_id: string | null }[];
 };
-export const getHomeWeek = (source: string | undefined, without: string[]) =>
-  quietly<{ week: HomeWeek | null }>(`/api/home/week?${new URLSearchParams({ ...(source ? { source } : {}), without: without.join(',') })}`);
+export const getHomeWeek = (source: string | undefined, without: string[] | undefined) =>
+  quietly<{ week: HomeWeek | null }>(`/api/home/week?${new URLSearchParams({ ...(source ? { source } : {}), without: (without ?? []).join(',') })}`);
 /** Home's Artists to explore: artists in a random order, the first open (its TheAudioDB description and photo, the
  *  server's artist store), each with its biggest albums (Cratarr's ids). */
 export type ExploredArtist = { id: string; name: string; albums: string[]; bio: string | null; photo: boolean };
