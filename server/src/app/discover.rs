@@ -410,6 +410,57 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
     out
 }
 
+/// Where an album can be heard elsewhere beyond the services that named it (the owner, 2026-10-24: "Bandcamp and
+/// YouTube links next to the Last.fm links"): its own Bandcamp and YouTube pages where MusicBrainz keeps them (`urls`:
+/// the album's releases' and its own), else a search for it there, named so.
+pub fn listen_links(urls: &[String], artist: &str, album: &str) -> Vec<Link> {
+    let find = |hosts: &[&str]| urls.iter().find(|u| reqwest::Url::parse(u).ok().and_then(|x| x.host_str().map(str::to_string)).is_some_and(|h| hosts.iter().any(|w| h == *w || h.ends_with(&format!(".{w}"))))).cloned();
+    let words = format!("{artist} {album}");
+    let search = |base: &str, key: &str, extra: &[(&str, &str)]| {
+        let mut u = reqwest::Url::parse(base).expect("a fixed address");
+        u.query_pairs_mut().append_pair(key, &words).extend_pairs(extra);
+        u.to_string()
+    };
+    vec![
+        match find(&["bandcamp.com"]) {
+            Some(url) => Link { name: "Bandcamp".into(), url },
+            None => Link { name: "Search Bandcamp".into(), url: search("https://bandcamp.com/search", "q", &[("item_type", "a")]) },
+        },
+        match find(&["youtube.com", "youtu.be", "music.youtube.com"]) {
+            Some(url) => Link { name: "YouTube".into(), url },
+            None => Link { name: "Search YouTube".into(), url: search("https://www.youtube.com/results", "search_query", &[]) },
+        },
+    ]
+}
+
+/// The pages MusicBrainz keeps for a release group and its releases (their "url" relations).
+async fn mb_urls(http: &reqwest::Client, release_group: &str) -> Result<Vec<String>> {
+    #[derive(Deserialize)]
+    struct Url {
+        resource: String,
+    }
+    #[derive(Deserialize)]
+    struct Relation {
+        url: Option<Url>,
+    }
+    #[derive(Deserialize)]
+    struct Release {
+        #[serde(default)]
+        relations: Vec<Relation>,
+    }
+    #[derive(Deserialize)]
+    struct Browse {
+        #[serde(default)]
+        releases: Vec<Release>,
+    }
+    let url = format!("https://musicbrainz.org/ws/2/release?release-group={release_group}&inc=url-rels&fmt=json&limit=10");
+    let b: Browse = http.get(url).send().await?.error_for_status()?.json().await?;
+    Ok(b.releases.into_iter().flat_map(|r| r.relations).filter_map(|r| r.url.map(|u| u.resource)).collect())
+}
+
+/// MusicBrainz asks for at most one request a second.
+const MB_PAUSE: Duration = Duration::from_millis(1100);
+
 /// Looks up the account's suggestions now (blocking parts apart) and keeps them.
 pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::Catalogue>, account: &str, who: &Who, progress: &Progress) -> Result<Found> {
     let dir = serve.data_dir.clone().context("Discover needs Cratarr's data folder")?;
@@ -440,7 +491,22 @@ pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::C
     progress("Leaving out what you have", 0, None);
     let (ud, a) = (serve.userdata.clone(), account.to_string());
     let (answered, no_artists) = tokio::task::spawn_blocking(move || ud.discover_answered(&a)).await??;
-    let albums = one_list(candidates, &|c: &Candidate| have.has(c), &have.artists, &answered, &no_artists);
+    let mut albums = one_list(candidates, &|c: &Candidate| have.has(c), &have.artists, &answered, &no_artists);
+    // Where to hear each: its Bandcamp and YouTube pages as MusicBrainz knows them, else a search there.
+    let http = http()?;
+    let total = albums.len() as u64;
+    for (i, s) in albums.iter_mut().enumerate() {
+        progress("Finding where to listen", i as u64, Some(total));
+        let urls = match &s.release_group {
+            Some(g) => {
+                let got = mb_urls(&http, g).await.unwrap_or_default();
+                tokio::time::sleep(MB_PAUSE).await;
+                got
+            }
+            None => Vec::new(),
+        };
+        s.links.extend(listen_links(&urls, &s.artist, &s.album));
+    }
     let found = Found { at: super::moment::now_secs(), albums, notes };
     let (ud, a, json) = (serve.userdata.clone(), account.to_string(), serde_json::to_string(&found)?);
     let at = found.at;
@@ -510,6 +576,22 @@ pub fn not_interested(serve: &crate::serve::Serve, account: &str, key: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_albums_own_pages_else_a_search_there() {
+        let own = listen_links(
+            &["https://www.discogs.com/master/1".into(), "https://artist.bandcamp.com/album/x".into(), "https://www.youtube.com/playlist?list=OLAK5uy".into()],
+            "Bonobo",
+            "Migration",
+        );
+        assert_eq!(own[0], Link { name: "Bandcamp".into(), url: "https://artist.bandcamp.com/album/x".into() });
+        assert_eq!(own[1].name, "YouTube");
+        let none = listen_links(&[], "Bonobo", "Migration");
+        assert_eq!(none[0].name, "Search Bandcamp");
+        assert!(none[0].url.starts_with("https://bandcamp.com/search?q=Bonobo+Migration"));
+        assert_eq!(none[1].name, "Search YouTube");
+        assert!(none[1].url.contains("search_query=Bonobo+Migration"));
+    }
 
     fn c(album: &str, artist: &str, rg: Option<&str>, source: &'static str, why: &str, score: f64) -> Candidate {
         Candidate { album: album.into(), artist: artist.into(), release_group: rg.map(Into::into), source, why: why.into(), score, ..Candidate::default() }

@@ -111,3 +111,27 @@ the limits are real, as long as it degrades gracefully:
   analysis, the listening history or biographies, which only the server has: left out. In Settings › Home they show
   unavailable there, not switched off (the owner, 2026-10-24): greyed, "Needs your server", not to be switched on in
   local mode, and the account's own choice for them kept, so with the server again Home is as it was chosen.
+
+## Requests: Want for everyone, in a queue (0.9)
+
+Discover's Want sends an album to Lidarr (0069). The owner (2026-10-24): for someone not an administrator it should not
+reach Lidarr directly, but go into a queue "the way Seer works"; to come in 0.9. Until then Want is an administrator's
+(the server refuses anyone else's), shown unavailable to others.
+
+Overseerr's and Jellyseerr's model (MIT; their code is TypeScript for films and series through Radarr and Sonarr, so
+the design is taken, not the code, and they are credited): permissions per account (Request, Auto-approve, Manage
+requests); a request's own status (pending, approved, declined with a reason) beside the album's (requested, being
+fetched, partly there, in the library), which the requester sees on the album; the administrators' queue (approve,
+decline, many at once), "3 requests waiting" in Health; limits per account if wanted (so many a week).
+
+The owner, the same day, for 0.9 too: "surface the monitor of Lidarr in Cratarr to see what is currently being
+monitored". Lidarr keeps the monitored albums it has not found yet (its Wanted, `/api/v1/wanted/missing`) and what it
+is fetching now (`/api/v1/queue`): shown in Cratarr beside the requests ("Lidarr is looking for these"), each with how
+far it is, so the queue and Lidarr's own watch read as one.
+
+What Lidarr is for Cratarr (the owner and a5, 2026-10-24): an acquisition engine, a want list on MusicBrainz plus a
+search-and-import pipeline that drops albums into Incoming; Cratarr is already the curator around it (the library,
+Incoming's Keep, Delete and Replace, upgrades, covers, Discover deciding what is wanted). Music also comes from other
+sources than Soulseek, so Lidarr stays. The owner liked the intermediate step: in 0.9 **Cratarr keeps the want list and
+each request's status itself, and Lidarr is one way of carrying a request out**, behind an interface another could take
+(slskd directly, say) without the requests, their queue or their statuses changing.

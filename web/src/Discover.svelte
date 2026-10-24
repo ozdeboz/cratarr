@@ -11,7 +11,10 @@
   import PageLoading from './lib/PageLoading.svelte';
   import { usePageAction } from './lib/pageView.svelte';
   import { progressOf, tasks } from './lib/tasks.svelte';
+  import { me } from './lib/me.svelte';
   import { toast } from './lib/toast.svelte';
+
+  // Want: an administrator's, with Lidarr connected and on (the owner, 2026-10-24: others ask, from 0.9).
 
   const KIND = 'discover';
   let view = $state<DiscoverView | null>(null);
@@ -27,6 +30,8 @@
   $effect(() => tasks.follow());
   const task = $derived(tasks.of(KIND));
   const looking = $derived(tasks.running(KIND));
+  const canWant = $derived(me.admin && !!view?.lidarr);
+  const wantWhy = $derived(!me.admin ? 'Ask an administrator' : 'Needs Lidarr');
   let seenEnd = $state<number | null>(null);
   $effect(() => {
     const t = task;
@@ -75,6 +80,12 @@
   }
 </script>
 
+{#snippet how()}
+  {#if progress}
+    {#if progress.value !== null}<Meter label={progress.line} value={progress.value} />{:else}<p class="note">{progress.line}</p>{/if}
+  {/if}
+{/snippet}
+
 <main>
   {#if error && !view}
     <Notice text={error} />
@@ -86,11 +97,21 @@
       <a class="button primary" href="#/settings?view=settings%3Aconnections">Connect a listening service</a>
     </div>
   {:else}
-    {#if progress}<div class="looking"><Meter label={progress.line} value={progress.value ?? 0} /></div>{/if}
-    {#each view.found?.notes ?? [] as note (note)}<p class="note">{note}</p>{/each}
+    {#if looking && !albums.length}
+      <!-- The first look: the page's loader where it always is, how far it is under it (ui-conventions, Progress). -->
+      <PageLoading>{@render how()}</PageLoading>
+    {:else}
+      {#if progress}<div class="looking">{@render how()}</div>{/if}
+      {#each view.found?.notes ?? [] as note (note)}<p class="note">{note}</p>{/each}
+    {/if}
     {#if !albums.length}
       {#if !looking}<p class="note">{view.found ? 'Nothing new to suggest right now.' : 'Looking for albums you might like…'}</p>{/if}
     {:else}
+      {#if !me.admin}
+        <p class="note">Want is an administrator's: ask one.</p>
+      {:else if !view.lidarr}
+        <p class="note">Want needs Lidarr: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>
+      {/if}
       <ul class="grid">
         {#each albums as a (a.key)}
           <li class="card">
@@ -103,9 +124,11 @@
                 {#each a.links as l (l.name)}<a href={l.url} target="_blank" rel="noopener noreferrer">{l.name}</a>{/each}
               </span>
               <span class="acts">
-                {#if view.lidarr}
-                  <button class="primary" disabled={asking === a.key} aria-busy={asking === a.key} onclick={() => want(a)}>Want</button>
-                {/if}
+                <!-- Unavailable, not hidden, without Lidarr or for someone not an administrator (the owner, 2026-10-24: they
+                     will ask, in a queue the administrators answer, in 0.9); the note above says why. -->
+                <button class="primary" disabled={!canWant || asking === a.key} aria-busy={asking === a.key} title={canWant ? null : wantWhy} onclick={() => want(a)}
+                  >Want</button
+                >
                 <button onclick={() => no(a)}>Not interested</button>
               </span>
             </div>

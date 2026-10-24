@@ -4,7 +4,9 @@
   // panel or sheet that scrolls it); lower only where what comes before it reaches that far.
   import MarkLoader from './MarkLoader.svelte';
 
-  let { size = 96 }: { size?: number } = $props();
+  /** `children`: what goes under the mark, where the work can say how far it is (the owner, 2026-10-24: Discover's
+   *  first look, its progress under the loader at its usual place). */
+  let { size = 96, children }: { size?: number; children?: import('svelte').Snippet } = $props();
 
   let el: HTMLDivElement;
   /** Its height (to the bottom of what can be seen) and the mark's offset from its top; null until measured. */
@@ -50,6 +52,7 @@
   style:padding-top={fit ? `${fit.top}px` : null}
 >
   <MarkLoader {size} />
+  {#if children}<div class="under">{@render children()}</div>{/if}
 </div>
 
 <style>
@@ -57,6 +60,12 @@
     display: grid;
     place-items: center;
     min-height: 40vh;
+  }
+
+  .under {
+    width: min(320px, 100%);
+    margin-top: 16px;
+    text-align: center;
   }
 
   /* Measured: as high as the room left, the mark placed from the top. */

@@ -1,5 +1,6 @@
 <script lang="ts">
   import Playlists from './Playlists.svelte';
+  import LinkSheet from './lib/LinkSheet.svelte';
   import Discover from './Discover.svelte';
   import Health from './Health.svelte';
   import Settings from './Settings.svelte';
@@ -270,6 +271,21 @@
   const pagePill = $derived(PLAYABLE.includes(page));
   // An icon button's label on a long-press or right-click, everywhere (lib/labels).
   $effect(installLabels);
+  // A link to another site asks first, Open or Copy link (lib/LinkSheet; the owner, 2026-10-24), wherever it is.
+  let outLink = $state<{ url: string; name: string } | null>(null);
+  $effect(() => {
+    const tapped = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+      if (!a) return;
+      const to = new URL(a.href, location.href);
+      if (!/^https?:$/.test(to.protocol) || to.origin === location.origin) return;
+      e.preventDefault();
+      outLink = { url: to.href, name: a.textContent?.trim() || to.host };
+    };
+    document.addEventListener('click', tapped, true);
+    return () => document.removeEventListener('click', tapped, true);
+  });
   // Each page starts with its search empty (the pill's field).
   $effect(() => {
     void page;
@@ -470,6 +486,8 @@
   const overflow = $derived(ALL.filter((p) => !bar.includes(p)));
   const overflowActive = $derived(overflow.some((p) => p.id === page));
 </script>
+
+{#if outLink}{@const l = outLink}<LinkSheet url={l.url} name={l.name} onclose={() => (outLink = null)} />{/if}
 
 <div class="shell" class:folded={navFoldedNow} style:--nav-w={navDrag !== null ? `${navDrag}px` : undefined}>
   <!-- The navigation's column: the sidebar, which scrolls (and so would cut off anything past its edge), and the handle
