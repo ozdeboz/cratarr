@@ -147,3 +147,17 @@ Cratarr's own player, never counted as plays nor scrobbled. Bandcamp: each album
 the pages, the server can). YouTube changes its scrambling and checks often (NewPipe and yt-dlp release fixes every
 few weeks) and NewPipeExtractor is Java (too heavy for the NAS's 768 MB): proposed through yt-dlp as an optional
 service of its own, as AudioMuse is, updated apart from Cratarr. A decision (0071) to be written first.
+
+## Genre territories on Insights' Map
+
+The owner, 2026-10-24, from a ChatGPT conversation they shared: the playlists' map (Insights › Map, decision 0065)
+gets genre territories, like a political map. Each genre is an area drawn around the playlists where that genre makes
+up much of the music, so islands, holes and enclaves (a pocket of electronic inside rock) come out by themselves. A
+mock-up was made (artifact UJ4zeUZEZPw2pcUie2D25B; geometry from scratchpad `territories/geo.py`: each genre's outline
+is the 0.5 contour, by marching squares, of a Gaussian field weighted by the genre's share in each playlist, only
+playlists with a share of 0.25 or more counting). The owner: "Yes, it looks fine." Not built, and no decision written
+yet. Recorded late: the mock-up was accepted but never written down here, so no session had a trace of it.
+
+Open before building: where a playlist's genres come from (its tracks' tags, MusicBrainz genres, AudioMuse's styles);
+whether the territories are a switch on the Map or always shown; how many genres are drawn at once (the mock-up drew
+six, each its own colour, from the palette's categorical order).
