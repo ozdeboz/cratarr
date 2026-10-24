@@ -4,6 +4,7 @@ version = "0.8.0"
 edition = "2024"
 description = "Cratarr core: Jellyfin playlist index and API"
 license = "AGPL-3.0-or-later"
+repository = "https://github.com/ozdeboz/cratarr"
 
 # The rules for what plays and in what order (rules/), shared with players that play on their own.
 [workspace]

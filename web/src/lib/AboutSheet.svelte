@@ -1,54 +1,85 @@
 <script lang="ts">
   // About Cratarr (the owner, 2026-10-16): a sheet from the info button at the settings page's top right, in place of an
-  // About card among the settings. The version, since when it runs, where the playlists and the settings are, the port;
-  // to anyone but an administrator, the version and since when (decision 0051).
-  import { getAbout, getSettings, type Settings } from './api';
-  import { me } from './me.svelte';
+  // About card among the settings. To everyone (the owner, 2026-10-24): the version, since when it runs, the app's
+  // version in the app, the licence and the source (the AGPL offers it to whoever uses Cratarr, 0029), and thanks to
+  // what it builds on (README's Credits) and to the photographers of Home's skies (public/skies/CREDITS.txt). Settings
+  // that can't be saved are a Health finding now.
+  import { getAbout } from './api';
+  import { appInfo, inApp } from './app.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { since } from './settings/editor.svelte';
-  import { settingsRead } from './settingsSections.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
 
-  // The last answer at once (the settings page's), then the server's latest.
-  const s = $derived<Settings | null>(me.admin ? settingsRead.s : null);
-  let about = $state<{ version: string; started: number } | null>(null);
-  $effect(() => {
-    if (me.admin)
-      getSettings().then(
-        (v) => (settingsRead.s = v),
-        () => {},
-      );
-    else
-      getAbout().then(
-        (a) => (about = a),
-        () => {},
-      );
-  });
+  let about = $state<{ version: string; started: number; licence?: string; source?: string } | null>(null);
+  getAbout().then(
+    (a) => (about = a),
+    () => {},
+  );
+
+  const THANKS: [string, string][] = [
+    ['Jellyfin', 'https://jellyfin.org'],
+    ['Navidrome', 'https://www.navidrome.org'],
+    ['gonic', 'https://github.com/sentriz/gonic'],
+    ['nghe', 'https://github.com/vnghia/nghe'],
+    ['Snapcast', 'https://github.com/badaix/snapcast'],
+    ['Finamp', 'https://github.com/finamp-app/finamp'],
+    ['Seerr', 'https://github.com/seerr-team/seerr'],
+    ['AudioMuse-AI', 'https://github.com/NeptuneHub/AudioMuse-AI'],
+    ['Beat This!', 'https://github.com/CPJKU/beat_this'],
+    ['ListenBrainz', 'https://listenbrainz.org'],
+  ];
+  // Home's skies, from Unsplash.
+  const PHOTOS: [string, string][] = [
+    ['engin akyurt', 'lvmrwCLfDUg'],
+    ['Nathan Anderson', 'L95xDkSSuWw'],
+    ['Sam Schooler', 'E9aetBe2w40'],
+    ['Ciocan Ciprian', 'i3SUvEFv0aA'],
+    ['Barry Simon', '4C6Rp23RjnE'],
+    ['Andriyko Podilnyk', 'E6ne6IUNxZw'],
+    ['Patrick Hendry', '37ZuGYD3JOk'],
+    ['Luca Bravo', 'cs6Omgsf0fU'],
+    ['Joy Stamp', 'pGQbWXBC1dA'],
+    ['Max van den Oetelaar', '1e60bqR1Ar0'],
+    ['Daniel Lerman', 'GBkssTODNT0'],
+    ['Raychel Sanner', '1cJXplTxrmI'],
+    ['Chandler Cruttenden', 'w8hWTFpGtpY'],
+    ['Dillon Kydd', 'ffIIyc3EN58'],
+    ['Khamkéo', 'WtwSsqwYlA0'],
+    ['Lena Tolmacheva', 'bNeo5CMDOJc'],
+    ['James Day', '5YWf-5hyZcw'],
+    ['Chris Linnett', 'hatFT0_uiEQ'],
+    ['Mahdi Soheili', 'Ojo0zSaCphU'],
+  ];
 </script>
 
-<MenuSheet label="About" title="Cratarr" icon="info" chips={s ? [s.version] : about ? [about.version] : []} {onclose}>
-  {#if about && !s}
-    <dl>
+{#snippet links(list: [string, string][], href: (v: string) => string)}
+  {#each list as [name, v], i (name)}<a href={href(v)} target="_blank" rel="noopener noreferrer">{name}</a>{i < list.length - 1 ? ', ' : ''}{/each}
+{/snippet}
+
+<MenuSheet label="About" title="Cratarr" icon="info" chips={about ? [about.version] : []} {onclose}>
+  <dl>
+    {#if about}
       <dt>Running since</dt>
       <dd>{since(about.started)}</dd>
-    </dl>
-  {:else if s}
-    <dl>
-      <dt>Running since</dt>
-      <dd>{since(s.started)}</dd>
-      {#if s.music_folder}
-        <dt>Playlists</dt>
-        <dd>{s.playlists} in <code>{s.music_folder}</code></dd>
-      {/if}
-      <dt>Port</dt>
-      <dd><code>{s.fixed.bind}</code></dd>
-      <dt>Settings file</dt>
-      <dd>
-        {#if s.settings_file}<code>{s.settings_file}</code>{:else}<span class="bad">None, so settings can't be saved. Set CRATARR_DATA_DIR.</span>{/if}
-      </dd>
-    </dl>
-  {/if}
+    {/if}
+    {#if inApp && appInfo.version}
+      <dt>App</dt>
+      <dd>{appInfo.version}</dd>
+    {/if}
+    {#if about?.licence}
+      <dt>Licence</dt>
+      <dd>{#if about.source}<a href={`${about.source}/blob/main/LICENSE`} target="_blank" rel="noopener noreferrer">{about.licence}</a>{:else}{about.licence}{/if}</dd>
+    {/if}
+    {#if about?.source}
+      <dt>Source</dt>
+      <dd><a href={about.source} target="_blank" rel="noopener noreferrer">{about.source.replace(/^https:\/\//, '')}</a></dd>
+    {/if}
+    <dt>Thanks to</dt>
+    <dd>{@render links(THANKS, (v) => v)}</dd>
+    <dt>Skies by</dt>
+    <dd>{@render links(PHOTOS, (v) => `https://unsplash.com/photos/${v}`)} on Unsplash</dd>
+  </dl>
 </MenuSheet>
 
 <style>
@@ -72,11 +103,7 @@
     overflow-wrap: anywhere;
   }
 
-  code {
-    font-size: 14px;
-  }
-
-  .bad {
-    color: var(--danger-ink);
+  a {
+    color: inherit;
   }
 </style>

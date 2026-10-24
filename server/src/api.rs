@@ -2323,7 +2323,8 @@ async fn naming(State(app): State<Arc<App>>, Query(q): Query<NamingQuery>) -> Re
 /// The version and when this run started, for everyone (About).
 async fn about(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
     let v = app.settings.view().await.map_err(ToggleError::from)?;
-    Ok(Json(json!({ "version": v.version, "started": v.started })))
+    // Its licence and where its source is (the AGPL offers the source to whoever uses it over the network, 0029).
+    Ok(Json(json!({ "version": v.version, "started": v.started, "licence": env!("CARGO_PKG_LICENSE"), "source": env!("CARGO_PKG_REPOSITORY") })))
 }
 
 /// The servers and their music libraries, each with its use, for everyone (the filter): no secrets, values or folders.
