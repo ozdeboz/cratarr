@@ -161,3 +161,11 @@ yet. Recorded late: the mock-up was accepted but never written down here, so no 
 Decided (the owner, 2026-10-24): a playlist's genres come from its tracks' genre tags (counted per playlist; not
 MusicBrainz's genres, not AudioMuse's styles); the territories are a switch on the Map, off until turned on; the top
 six genres are drawn, each its own colour (the palette's categorical order), the rest no territory.
+
+## 0.9.2: deep search everywhere, and global search
+
+The owner, 2026-10-25: "Deep Search Everywhere 0.9.2, together with Global Search. Same thing, really." Every page's
+search finds deep (a playlist by its tracks, a crate by what it holds, an artist by its albums), and one global search
+finds across them all; both by the one pattern (ui-conventions, "Search: the page finds, the panel narrows"): what
+matches shows, and the item opened shows what of it matches the same words. Needs a server search over the library and
+the playlists' and crates' contents (one call, its results by kind).
