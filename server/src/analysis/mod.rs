@@ -15,6 +15,7 @@
 //! Blocking and single-threaded: the pass runs several at once.
 
 pub mod band_wave;
+pub mod spectrum;
 pub mod batch;
 pub mod signals;
 

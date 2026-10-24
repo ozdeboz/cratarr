@@ -6,6 +6,20 @@ import { LIST_WIDTHS } from './pageView.svelte';
 import type { Condition } from './api';
 import { FACTS, type FactId } from './facts';
 
+/** The bands' Speed (lib/BandSlider): Calm to Radical, times each look's own pace (Radical: four times the first
+ *  Lively, the owner, 2026-10-24). */
+export const BAND_PACE = { min: 0.7, max: 10.4 };
+/** The bands' Window (lib/BandSlider): the seconds of music around now their levels are of (the owner, 2026-10-24: a
+ *  wider range than the first 1 to 8). */
+export const BAND_WINDOW = { min: 0.25, max: 30 };
+/** The bands' Cycles (times each band's cycles a second) and Height (times how tall loudness draws), lib/BandSlider. */
+export const BAND_CYCLES = { min: 0.25, max: 4 };
+export const BAND_HEIGHT = { min: 0.4, max: 2.5 };
+/** How many bands the bands are drawn in: 3 (low, mid, high) to the 32 measured (the owner, 2026-10-24). */
+export const BAND_COUNT = { min: 3, max: 32 };
+/** How far apart the bands are drawn: 0 all on one line; 1 spread over the height (the meter: its bars apart). */
+export const BAND_GAP = { min: 0, max: 1 };
+
 export type Theme = 'auto' | 'light' | 'dark';
 
 export type Prefs = {
@@ -21,7 +35,20 @@ export type Prefs = {
    *  button, in the user's order (lib/trackFacts; none at first). */
   playerRow: boolean;
   /** The full-screen player's three bands, landscape (lib/BandGlass): off, or how they are drawn. */
-  playerBands: 'off' | 'aurora' | 'sirius' | 'hairlines';
+  playerBands: 'off' | 'aurora' | 'sirius' | 'hairlines' | 'meter';
+  /** The bands' two settings, for every look (the owner, 2026-10-24): how fast they move (times their own pace, within
+   *  BAND_PACE), and how many seconds of music around now their levels are of (within BAND_WINDOW; short: every beat,
+   *  long: the phrase). Sliders, lib/BandSlider. */
+  playerBandsSpeed: number;
+  playerBandsWindow: number;
+  playerBandsCycles: number;
+  playerBandsCount: number;
+  playerBandsGap: number;
+  playerBandsHeight: number;
+  /** Which way the bands' music flows: to the left (what comes enters on the right) or to the right. */
+  playerBandsDirection: 'left' | 'right';
+  /** How the bands end at both sides: tapering to nothing, or full height fading out. */
+  playerBandsEnds: 'taper' | 'fade';
   playerFacts: FactId[];
   /** A list's profile on top of it (the owner, 2026-10-23): open or folded, for every list at once; its rows switched
    *  on, in the user's order; and its fold line, how many of them stay when it is folded (0: none; Settings › Display ›
@@ -175,6 +202,14 @@ export const DEFAULTS: Prefs = {
   listDown: false,
   playerRow: true,
   playerBands: 'off',
+  playerBandsSpeed: 1.6,
+  playerBandsWindow: 3,
+  playerBandsCycles: 1,
+  playerBandsCount: 3,
+  playerBandsGap: 0,
+  playerBandsHeight: 1,
+  playerBandsDirection: 'left',
+  playerBandsEnds: 'taper',
   playerFacts: [],
   profileOpen: true,
   profile: true,
@@ -250,7 +285,16 @@ function read(): Prefs {
         if (typeof saved[k] === 'boolean') p[k] = saved[k];
       }
       if (typeof saved.playerRow === 'boolean') p.playerRow = saved.playerRow;
-      if (['off', 'aurora', 'sirius', 'hairlines'].includes(saved.playerBands)) p.playerBands = saved.playerBands;
+      if (['off', 'aurora', 'sirius', 'hairlines', 'meter'].includes(saved.playerBands)) p.playerBands = saved.playerBands;
+      if (typeof saved.playerBandsSpeed === 'number' && saved.playerBandsSpeed >= BAND_PACE.min && saved.playerBandsSpeed <= BAND_PACE.max)
+        p.playerBandsSpeed = saved.playerBandsSpeed;
+      if (typeof saved.playerBandsWindow === 'number' && saved.playerBandsWindow >= BAND_WINDOW.min && saved.playerBandsWindow <= BAND_WINDOW.max)
+        p.playerBandsWindow = saved.playerBandsWindow;
+      if (['left', 'right'].includes(saved.playerBandsDirection)) p.playerBandsDirection = saved.playerBandsDirection;
+      if (['taper', 'fade'].includes(saved.playerBandsEnds)) p.playerBandsEnds = saved.playerBandsEnds;
+      for (const [k, r] of [['playerBandsCycles', BAND_CYCLES], ['playerBandsHeight', BAND_HEIGHT], ['playerBandsCount', BAND_COUNT], ['playerBandsGap', BAND_GAP]] as const) {
+        if (typeof saved[k] === 'number' && saved[k] >= r.min && saved[k] <= r.max) p[k] = saved[k];
+      }
       if (Array.isArray(saved.playerFacts)) p.playerFacts = saved.playerFacts.filter((x: unknown): x is FactId => FACTS.some((f) => f.id === x));
       if (typeof saved.profileOpen === 'boolean') p.profileOpen = saved.profileOpen;
       if (typeof saved.profile === 'boolean') p.profile = saved.profile;

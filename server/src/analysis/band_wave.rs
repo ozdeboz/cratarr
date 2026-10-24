@@ -46,9 +46,9 @@ impl BandWave {
     }
 }
 
-/// One second-order section (RBJ's cookbook), direct form I.
+/// One second-order section (RBJ's cookbook), direct form I; the spectrum's filters too (`analysis::spectrum`).
 #[derive(Clone, Copy)]
-struct Biquad {
+pub(super) struct Biquad {
     b: [f32; 3],
     a: [f32; 2],
     x: [f32; 2],
@@ -66,7 +66,16 @@ impl Biquad {
         Biquad { b: [b0 / a0, b1 / a0, b0 / a0], a: [-2.0 * cos / a0, (1.0 - alpha) / a0], x: [0.0; 2], y: [0.0; 2] }
     }
 
-    fn run(&mut self, x: f32) -> f32 {
+    /// A band pass around `hz`, its peak at 0 dB, `q` sharp.
+    pub(super) fn band_pass(rate: f32, hz: f32, q: f32) -> Self {
+        let w = 2.0 * std::f32::consts::PI * (hz / rate).min(0.49);
+        let (sin, cos) = w.sin_cos();
+        let alpha = sin / (2.0 * q);
+        let a0 = 1.0 + alpha;
+        Biquad { b: [alpha / a0, 0.0, -alpha / a0], a: [-2.0 * cos / a0, (1.0 - alpha) / a0], x: [0.0; 2], y: [0.0; 2] }
+    }
+
+    pub(super) fn run(&mut self, x: f32) -> f32 {
         let y = self.b[0] * x + self.b[1] * self.x[0] + self.b[2] * self.x[1] - self.a[0] * self.y[0] - self.a[1] * self.y[1];
         self.x = [x, self.x[0]];
         self.y = [y, self.y[0]];
@@ -76,15 +85,15 @@ impl Biquad {
 
 /// A fourth-order Linkwitz-Riley pass: the same Butterworth section twice.
 #[derive(Clone, Copy)]
-struct Lr4([Biquad; 2]);
+pub(super) struct Lr4([Biquad; 2]);
 
 impl Lr4 {
-    fn new(rate: f32, hz: f32, high: bool) -> Self {
+    pub(super) fn new(rate: f32, hz: f32, high: bool) -> Self {
         let s = Biquad::new(rate, hz, high);
         Lr4([s, s])
     }
 
-    fn run(&mut self, x: f32) -> f32 {
+    pub(super) fn run(&mut self, x: f32) -> f32 {
         let y = self.0[0].run(x);
         self.0[1].run(y)
     }

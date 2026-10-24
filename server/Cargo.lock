@@ -421,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "cratarr-server"
-version = "0.8.4"
+version = "0.8.6"
 dependencies = [
  "anyhow",
  "argon2",

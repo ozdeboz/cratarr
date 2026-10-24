@@ -49,6 +49,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/track/{source}/{id}/details", get(track_details))
         .route("/api/track/{source}/{id}/waveform", get(track_waveform))
         .route("/api/track/{source}/{id}/band-wave", get(track_band_wave))
+        .route("/api/track/{source}/{id}/spectrum", get(track_spectrum))
         .route("/api/track/{source}/{id}/beats", get(track_beats))
         .route("/api/track/{source}/{id}/bands", get(track_bands))
         .route("/api/track/{source}/{id}/playlists/{playlist}", post(track_toggle))
@@ -813,11 +814,38 @@ async fn track_band_wave(State(app): State<Arc<App>>, Path((source, id)): Path<(
     let Some(wave) = crate::app::analysis_pass::band_wave(cat, folder, rel).await else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
-    let etag = format!("\"b{:08x}\"", crate::opus_copy::crc32(&wave.0));
+    kept_bytes(wave.0, 'b', &headers)
+}
+
+/// A track's spectrum (`analysis::spectrum`, the full-screen player's bands): 32 bands 20 times a second, as kept. Worked
+/// out the first time it is asked for (a few seconds) and kept after. 404 for a track Cratarr does not keep the file
+/// of; 503 when it cannot be worked out now. An ETag of its bytes.
+async fn track_spectrum(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
+    let cat = app.library.catalogue();
+    let c = cat.clone();
+    let Some((folder, rel)) = tokio::task::spawn_blocking(move || {
+        let track = c.track_of_source(&source, &id)?;
+        c.file_of(track)
+    })
+    .await
+    .ok()
+    .flatten() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(spectrum) = crate::app::analysis_pass::spectrum(cat, folder, rel).await else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    kept_bytes(spectrum.0, 's', &headers)
+}
+
+/// Bytes kept for a track (its bands, its spectrum), with an ETag of them (`tag` before the crc) and asked again each
+/// time (no-cache).
+fn kept_bytes(bytes: Vec<u8>, tag: char, headers: &HeaderMap) -> Response {
+    let etag = format!("\"{tag}{:08x}\"", crate::opus_copy::crc32(&bytes));
     let mut res = if headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) == Some(etag.as_str()) {
         StatusCode::NOT_MODIFIED.into_response()
     } else {
-        ([(header::CONTENT_TYPE, "application/octet-stream")], wave.0).into_response()
+        ([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response()
     };
     let h = res.headers_mut();
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-cache"));

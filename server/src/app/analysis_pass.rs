@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use crate::analysis::Beats;
 use crate::analysis::band_wave::BandWave;
+use crate::analysis::spectrum::Spectrum;
 use crate::analysis::signals::Signals;
 use crate::catalogue::Catalogue;
 
@@ -249,6 +250,54 @@ pub async fn band_wave(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<
         }
         Err(_) => {
             tracing::warn!("band waveform when asked for took over {} s", DECODE.as_secs());
+            None
+        }
+    }
+}
+
+/// A file's spectrum (`analysis::spectrum`): as kept, or worked out now and kept, the first time a track plays with the
+/// full-screen player's bands on (never by the pass: the owner, 2026-10-24). `None`: the file cannot be decoded (marked,
+/// so it is not tried again until it changes), or it took too long (`DECODE`; it is still kept when it comes).
+pub async fn spectrum(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<Spectrum> {
+    let (c, r) = (cat.clone(), rel.clone());
+    let kept = tokio::task::spawn_blocking(move || c.spectrum_of(folder, &r)).await.ok().flatten();
+    match kept {
+        Some(Some(s)) if s.current() => return Some(s),
+        Some(Some(s)) if s.failed() => return None,
+        _ => {}
+    }
+    let turn = tokio::time::timeout(TURN, HEAVY.acquire()).await.ok()?.ok()?;
+    let work = tokio::task::spawn_blocking(move || -> anyhow::Result<Spectrum> {
+        let _turn = turn;
+        let _job = crate::memwatch::job(format!("spectrum when asked for: {rel}"));
+        // Kept while this one waited.
+        if let Some(Some(s)) = cat.spectrum_of(folder, &rel).filter(|k| k.as_ref().is_some_and(Spectrum::current)) {
+            return Ok(s);
+        }
+        let (path, size, mtime) = cat.file_to_analyse(folder, &rel).ok_or_else(|| anyhow::anyhow!("not in the library"))?;
+        // Without an analysis of the file as it is now neither is kept: the pass analyses it first.
+        let s = match crate::analysis::spectrum::work_out(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                cat.store_spectrum(folder, &rel, size, mtime, &Spectrum(vec![crate::analysis::spectrum::FAILED]))?;
+                return Err(e);
+            }
+        };
+        cat.store_spectrum(folder, &rel, size, mtime, &s)?;
+        Ok(s)
+    });
+    match tokio::time::timeout(DECODE, work).await {
+        Ok(Ok(Ok(s))) => Some(s),
+        Ok(Ok(Err(e))) => {
+            tracing::warn!("spectrum when asked for: {e:#}");
+            None
+        }
+        Ok(Err(e)) => {
+            tracing::warn!("spectrum when asked for: {e}");
+            None
+        }
+        Err(_) => {
+            tracing::warn!("spectrum when asked for took over {} s", DECODE.as_secs());
             None
         }
     }
