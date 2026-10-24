@@ -37,6 +37,7 @@ mod queue;
 pub mod history;
 pub mod import;
 pub mod import_files;
+pub mod discover;
 pub mod lastfm;
 pub mod listening;
 pub mod scrobble;

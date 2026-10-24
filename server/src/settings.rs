@@ -509,8 +509,8 @@ mod tests {
 
     #[test]
     fn lidarr_keeps_its_key_only_for_the_same_address() {
-        let saved = LidarrConfig { url: "http://lidarr:8686".into(), api_key: "k".into() };
-        let draft = |url: &str, key: &str| LidarrConfig { url: url.into(), api_key: key.into() };
+        let saved = LidarrConfig { url: "http://lidarr:8686".into(), api_key: "k".into(), enabled: true };
+        let draft = |url: &str, key: &str| LidarrConfig { url: url.into(), api_key: key.into(), enabled: true };
         assert_eq!(merge_lidarr(Some(&saved), draft("http://lidarr:8686/", "")).unwrap(), Some(saved.clone()));
         assert!(matches!(merge_lidarr(Some(&saved), draft("http://evil:8686", "")), Err(ChangeError::SecretNeeded { .. })));
         assert_eq!(merge_lidarr(Some(&saved), draft("http://new:8686", "k2")).unwrap().unwrap().api_key, "k2");
@@ -548,7 +548,7 @@ mod tests {
         let s = vec![jf("jellyfin", "http://jf:8096", Some("k"))];
         let mut s = s;
         s[0].libraries = Roles { music: vec!["m".into()], incoming: vec!["i1".into(), "i2".into()], ..Roles::default() };
-        let lidarr = Some(LidarrConfig { url: "http://lidarr:8686".into(), api_key: "k".into() });
+        let lidarr = Some(LidarrConfig { url: "http://lidarr:8686".into(), api_key: "k".into(), enabled: true });
         let saved = Saved {
             sources: s,
             music_folder: Some("/music".into()),

@@ -1,5 +1,6 @@
 <script lang="ts">
   import Playlists from './Playlists.svelte';
+  import Discover from './Discover.svelte';
   import Health from './Health.svelte';
   import Settings from './Settings.svelte';
   import Library from './Library.svelte';
@@ -61,6 +62,8 @@
   // Main pages in order; Insights, Health and Settings sit apart at the bottom of the sidebar, in that order (decision
   // 0025: Health beside Settings, Insights beside Health).
   const PLAYLISTS: Page = { id: 'playlists', href: '#/', label: 'Playlists', icon: 'playlists' };
+  // Albums outside the library, from what is listened to (decision 0069): beside Playlists (the owner, 2026-10-24).
+  const DISCOVER: Page = { id: 'discover', href: '#/discover', label: 'Discover', icon: 'compass' };
   // The quick look, the leftmost tab (the owner, 2026-10-23); where the app opens without an address.
   const HOME: Page = { id: 'home', href: '#/home', label: 'Home', icon: 'home' };
   // Every used library's albums, Music and Incoming (decision 0034: one page; a dashboard will give the quick look).
@@ -93,7 +96,7 @@
       return LIBRARY.id;
     }
     if (!h) return HOME.id;
-    return [HOME, HEALTH, SETTINGS, LIBRARY, INSIGHTS, CRATES, DOWNLOADS, ...LOCAL].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
+    return [HOME, HEALTH, SETTINGS, LIBRARY, INSIGHTS, CRATES, DISCOVER, DOWNLOADS, ...LOCAL].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
   };
   let page = $state(fromHash());
   // Where the player shows (decision 0018): beside the page on a roomy window while something plays (`sidebar`);
@@ -443,7 +446,7 @@
             : { ok: true, text: `Connected to ${status.server_name ?? 'Jellyfin'}` }
           : { ok: false, text: 'Jellyfin unreachable' },
   );
-  const MAIN: Page[] = $derived(localMode() ? LOCAL : [HOME, LIBRARY, CRATES, PLAYLISTS]);
+  const MAIN: Page[] = $derived(localMode() ? LOCAL : [HOME, LIBRARY, CRATES, PLAYLISTS, DISCOVER]);
   // Apart, at the bottom of the sidebar: Insights beside Health, then Settings.
   // Health is the library's, so its administrators' (decision 0051). In Local mode, Settings only.
   const APART: Page[] = $derived(localMode() ? [SETTINGS] : [...(inApp ? [DOWNLOADS] : []), INSIGHTS, ...(me.admin ? [HEALTH] : []), SETTINGS]);
@@ -541,6 +544,8 @@
       <Insights />
     {:else if page === 'crates'}
       <Crates />
+    {:else if page === 'discover'}
+      <Discover />
     {:else if page === 'home'}
       <Home />
     {:else}

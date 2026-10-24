@@ -155,6 +155,11 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/scrobble/lastfm", post(scrobble_lastfm))
         .route("/api/scrobble/lastfm/callback/{code}", get(scrobble_lastfm_callback))
         .route("/api/scrobble/{target}", axum::routing::put(scrobble_on).delete(scrobble_forget))
+        // Discover (decision 0069): each account's own.
+        .route("/api/discover", get(discover))
+        .route("/api/discover/refresh", post(discover_refresh))
+        .route("/api/discover/want", post(discover_want))
+        .route("/api/discover/no", post(discover_no))
         // The administrators' (decision 0051): the server's settings, what comes in, the library's changes and its
         // health, the folders, the diagnostics.
         .merge(
@@ -2695,6 +2700,67 @@ fn bring_listenbrainz(b: ListenBrainzImport, preview: bool) -> Result<(StatusCod
             crate::app::listenbrainz::import(&serve, &account, &user, &progress).await
         }
     }))
+}
+
+/// The asking account and Cratarr's own library, for Discover (decision 0069).
+fn discoverer() -> Result<(Arc<crate::serve::Serve>, String), ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: Discover is an account's own.".into()))?;
+    Ok((serve, account))
+}
+
+/// Discover (decision 0069): the account's suggestions as last found, which of its services it asks, and whether Want
+/// can fetch through Lidarr. Looked up again, as a task the page follows, when the last look is a day old.
+async fn discover(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = discoverer()?;
+    let (s, a) = (serve.clone(), account.clone());
+    let (found, who) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> { Ok((crate::app::discover::kept(&s, &a)?, crate::app::discover::who(&s, &a)?)) })
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let services = json!({ "listenbrainz": who.listenbrainz.is_some(), "lastfm": who.lastfm.is_some() });
+    let stale = found.as_ref().is_none_or(|f| crate::app::moment::now_secs() - f.at > crate::app::discover::FRESH_SECS);
+    let running = crate::app::tasks::tasks().of(&account).iter().any(|t| t.kind == crate::app::discover::KIND && t.finished.is_none());
+    if stale && !running && who.any() {
+        let _ = crate::app::discover::start(&app, serve, &account, who);
+    }
+    Ok(Json(json!({ "found": found, "services": services, "lidarr": crate::app::discover::lidarr(&app).is_some() })))
+}
+
+/// Discover looked up again now: 202 with its task.
+async fn discover_refresh(State(app): State<Arc<App>>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let (serve, account) = discoverer()?;
+    let (s, a) = (serve.clone(), account.clone());
+    let who = tokio::task::spawn_blocking(move || crate::app::discover::who(&s, &a))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    if !who.any() {
+        return Err(ToggleError::Refused("Connect ListenBrainz or Last.fm under Connections first.".into()).into());
+    }
+    started(crate::app::discover::start(&app, serve, &account, who))
+}
+
+#[derive(Deserialize)]
+struct DiscoverKey {
+    key: String,
+}
+
+/// A suggestion wanted: Lidarr fetches it into Incoming.
+async fn discover_want(State(app): State<Arc<App>>, Json(b): Json<DiscoverKey>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = discoverer()?;
+    let said = crate::app::discover::want(&app, &serve, &account, &b.key).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "said": said })))
+}
+
+/// A suggestion not wanted: it never comes back.
+async fn discover_no(Json(b): Json<DiscoverKey>) -> Result<StatusCode, ApiError> {
+    let (serve, account) = discoverer()?;
+    tokio::task::spawn_blocking(move || crate::app::discover::not_interested(&serve, &account, &b.key))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// The asking account and Cratarr's own library, for scrobbling (decision 0068).
