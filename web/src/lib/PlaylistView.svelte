@@ -141,7 +141,7 @@
   import SelectBar from './SelectBar.svelte';
   import { work } from './panelWork.svelte';
   import { prefs, type ListSort, type PanelKind } from './prefs.svelte';
-  import { conditionsFor, filtersOn, hiddenLibraries, inView, passing, switchOn } from './listFilter.svelte';
+  import { filtersOn, hiddenLibraries, inView, passing, switchOn } from './listFilter.svelte';
   import { trackOrders, type TrackOrder } from './pageView.svelte';
   import { clockText, paused, playing } from './remote.svelte';
   import { on } from './events.svelte';
@@ -567,20 +567,15 @@ ${r.album_artist ?? r.artist ?? ''}`;
   // The list's filter, remembered per kind of list (decisions 0060 and 0061): its switches here; its conditions the
   // server's (any of what it knows of a track: genre, mood, tempo, …), which says which rows pass. A crate's rows come
   // filtered and ordered by the server, as they are paged, from the libraries switched on.
-  const filterOn = (key: string) => switchOn(kind, key);
+  // A playlist's only (the owner, 2026-10-24): an album is too short and alike to filter, a crate is a filter already,
+  // an artist's lists are theirs; a filter left on there from before goes by nothing.
+  const filterable = $derived(kind === 'playlist');
+  const filterOn = (key: string) => filterable && switchOn(kind, key);
   // A Home shelf's crate shows what Home showed, of every library, whatever is switched off (the owner, 2026-10-24).
-  const crateLook = $derived<CrateLook>({ without: homeCrate(crate) ? undefined : hiddenLibraries(), filter: conditionsFor('crate'), order: sortKey, down: sortDown });
+  const crateLook = $derived<CrateLook>({ without: homeCrate(crate) ? undefined : hiddenLibraries(), filter: undefined, order: sortKey, down: sortDown });
   const lookKey = $derived(JSON.stringify(crateLook));
   const pass = passing(() => kind, () =>
-    crate
-      ? { list: { kind: 'crate', id: crate }, source: prefs.source || undefined }
-      : album && album.source !== DEVICE
-        ? { list: { kind: 'album', source: album.source, id: album.id } }
-        : artist && artist.source !== DEVICE
-          ? { list: { kind: 'artist', source: artist.source, name: artist.name } }
-          : p && !multi
-            ? { list: { kind: 'playlist', id: p.id }, source: prefs.source || undefined }
-            : null,
+    filterable && !crate && !album && !artist && p && !multi ? { list: { kind: 'playlist', id: p.id }, source: prefs.source || undefined } : null,
   );
   const keeps = (r: PlaylistRow) =>
     (!filterOn('missing') || (!!r.id && !r.missing)) &&
@@ -619,7 +614,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const shownPlayable = $derived(shownRows.filter((r) => r.id && !r.missing));
   const sorted = $derived(sortKey !== 'own' || sortDown);
   /** What shows is not the subject as it is: ordered otherwise, or filtered; it plays as it shows. */
-  const reshaped = $derived(sorted || filtersOn(kind) > 0);
+  const reshaped = $derived(sorted || (filterable && filtersOn(kind) > 0));
 
   // Select mode (Symfonium's): a long-press on a track or the header's icon starts it, a tap ticks a track, and a bar
   // over the list acts on the ticked ones. A tick is a row (its place), so a track that is there twice is ticked once.
@@ -1533,7 +1528,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         {#if canGoBack}<button aria-label="Back" title="Back" onclick={() => history.back()}><Icon name="back" size={22} /></button>{/if}
         <button aria-label={closeLabel} title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button>
       </span>
-      <span class="end">{#if !editing && !crateEditing}<TopPill view order={listOrder} device={!playing()} tempos={listTempos} {kind} counted={rows && shown ? { shown: shown.length, total: rows.length } : null} />{/if}<PanelPlace /></span>
+      <span class="end">{#if !editing && !crateEditing}<TopPill view order={listOrder} device={!playing()} filter={filterable} tempos={listTempos} {kind} counted={rows && shown ? { shown: shown.length, total: rows.length } : null} />{/if}<PanelPlace /></span>
     </div>
   {/if}
 

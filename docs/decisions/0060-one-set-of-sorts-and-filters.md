@@ -65,3 +65,10 @@ list: the owner, 2026-10-23).
   the table columns (0042) and the View sheet; no page keeps its own list of fields.
 - The panel's sort and filters move from component state into remembered settings.
 - A crate's header keeps its two favourites switches.
+
+## Amendment (2026-10-24): in the panel, a playlist's filter only
+
+The owner, asked why an album's panel has a filter: "Fine, keep it on playlists." In the panel only a playlist's tracks
+are filtered (Favourites only, Not played yet, Hide missing, and 0061's conditions). An album is too short and alike to
+filter, a crate is a filter on the library already (its rules are where it narrows), and an artist's lists are theirs.
+Their pill keeps View; a filter remembered for them from before goes by nothing.

@@ -135,10 +135,8 @@ export const SWITCHES: Record<string, ListSwitch[]> = {
     { key: 'favourites', label: 'Favourites only' },
     { key: 'mine', label: 'Mine only' },
   ],
+  // In the panel a playlist's only (the owner, 2026-10-24): not an album's, a crate's or an artist's.
   playlist: TRACK_SWITCHES,
-  crate: TRACK_SWITCHES,
-  album: TRACK_SWITCHES,
-  artist: TRACK_SWITCHES,
 };
 
 /** View's Dates, on the album lists: how long ago, or the date. */
