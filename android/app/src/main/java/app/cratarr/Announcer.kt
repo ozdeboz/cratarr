@@ -344,7 +344,7 @@ object Announcer {
         fun stop() {
             clip = null
             ended = null
-            gain = 1f
+            // The music comes back up at the release's pace (queueInput), not at once.
         }
 
         fun play(c: Clip, onEnded: () -> Unit) {
@@ -364,6 +364,20 @@ object Announcer {
             if (n == 0) return
             val out = replaceOutputBuffer(n)
             val c = clip
+            // A clip given up while the music was down: the music rises again at the release's pace.
+            if (c == null && mixes && gain < 0.999f) {
+                val music = inputBuffer.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+                val channels = format.channelCount
+                val release = 1f / max(1, format.sampleRate * RELEASE_MS / 1000)
+                val o = out.order(ByteOrder.LITTLE_ENDIAN)
+                for (f in 0 until music.remaining() / channels) {
+                    gain = min(1f, gain + release)
+                    for (ch in 0 until channels) o.putShort((music.get() * gain).toInt().coerceIn(-32768, 32767).toShort())
+                }
+                inputBuffer.position(inputBuffer.limit())
+                out.flip()
+                return
+            }
             if (c == null || !mixes || c.channels != format.channelCount || c.rate != format.sampleRate) {
                 out.put(inputBuffer)
                 out.flip()
@@ -388,7 +402,9 @@ object Announcer {
                     val v = if (at < c.frames) c.pcm[at * c.channels + ch].toFloat() else 0f
                     o.putShort((m + v).toInt().coerceIn(-32768, 32767).toShort())
                 }
-                if (at < c.frames) at++
+                // On past the clip's end too: held at its end, the hold after its last words never passed and the music
+                // stayed down until the give-up (the owner, 2026-10-24: "the duck exit was way too late").
+                at++
             }
             inputBuffer.position(inputBuffer.limit())
             out.flip()
