@@ -6,6 +6,7 @@
   // one line (ui-conventions, Progress); Refresh in the page's pill asks again now. Without a service connected, the
   // page says what it needs.
   import { getDiscover, notDiscover, refreshDiscover, wantDiscover, type DiscoverAlbum, type DiscoverView } from './lib/api';
+  import Cover from './lib/Cover.svelte';
   import Icon from './lib/Icon.svelte';
   import Meter from './lib/Meter.svelte';
   import Notice from './lib/Notice.svelte';
@@ -116,11 +117,13 @@
       <ul class="grid">
         {#each albums as a (a.key)}
           <li class="card">
-            <div class="cover">{#if a.cover}<img src={a.cover} alt="" loading="lazy" />{/if}</div>
+            <!-- Cratarr's own cover: a picture that does not load is its stand-in, and the suggestion stays. -->
+            <div class="cover"><Cover src={a.cover} /></div>
             <div class="text">
               <b>{a.album}</b>
               <span class="by">{a.artist}{a.year ? ` · ${a.year}` : ''}{#if a.new_artist}<span class="new">New to you</span>{/if}</span>
               {#each a.why as w (w)}<small class="why">{w}</small>{/each}
+              {#if a.sources?.length}<span class="sources">{#each a.sources as s (s)}<span class="source">{s}</span>{/each}</span>{/if}
               <span class="links">
                 {#each a.links as l (l.name)}<a href={l.url} target="_blank" rel="noopener noreferrer">{l.name}</a>{/each}
               </span>
@@ -197,7 +200,7 @@
     background: color-mix(in srgb, var(--text) 8%, transparent);
   }
 
-  .cover img {
+  .cover :global(img) {
     display: block;
     width: 100%;
     height: 100%;
@@ -291,5 +294,20 @@
     display: grid;
     place-items: center;
     padding: 0 10px;
+  }
+
+  /* Where it comes from: each service a small label. */
+  .sources {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .source {
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+    color: var(--muted);
+    font-size: 11px;
   }
 </style>

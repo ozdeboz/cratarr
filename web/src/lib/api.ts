@@ -1497,6 +1497,8 @@ export type DiscoverAlbum = {
   links: { name: string; url: string }[];
   new_artist: boolean;
   why: string[];
+  /** Which services suggested it. */
+  sources?: string[];
 };
 /** Discover's page: the suggestions as last found (none before the first look), which services it asks, and whether
  *  Want can fetch through Lidarr. */

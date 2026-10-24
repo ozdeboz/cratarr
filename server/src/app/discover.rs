@@ -30,8 +30,11 @@ use super::lastfm::{Auth, Progress};
 pub const KIND: &str = "discover";
 /// Looked up again after this long, when the page is opened.
 pub const FRESH_SECS: i64 = 86_400;
-/// How many suggestions are kept.
-const MOST: usize = 60;
+/// How many suggestions are kept: everything the sources bring, as far as is sensible (the owner, 2026-10-24: "are
+/// you 100% sure that we have all the recommendations that come to us?"; it was 60).
+const MOST: usize = 500;
+/// How many of ListenBrainz's Weekly Explorations are read, the newest first (the owner: two, it was one).
+const EXPLORATIONS: usize = 2;
 const LB_API: &str = "https://api.listenbrainz.org/1";
 const FM_API: &str = "https://ws.audioscrobbler.com/2.0/";
 /// Last.fm asks for no more than about five calls a second.
@@ -62,6 +65,9 @@ pub struct Suggestion {
     pub new_artist: bool,
     /// Why, one reason a source.
     pub why: Vec<String>,
+    /// Which services suggested it, by name (the owner, 2026-10-24: "where the suggestion comes from").
+    #[serde(default)]
+    pub sources: Vec<String>,
     #[serde(skip)]
     pub score: f64,
 }
@@ -139,7 +145,7 @@ async fn lb_recommended(http: &reqwest::Client, user: &str) -> Result<Vec<(Strin
     Ok(r.payload.mbids.into_iter().map(|m| (m.recording_mbid, m.score)).collect())
 }
 
-/// The recordings of the newest Weekly Exploration made for `user`.
+/// The recordings of the newest Weekly Explorations made for `user` (`EXPLORATIONS` of them).
 async fn lb_exploration(http: &reqwest::Client, user: &str) -> Result<Vec<String>> {
     let list: serde_json::Value = http
         .get(format!("{LB_API}/user/{user}/playlists/createdfor"))
@@ -151,19 +157,29 @@ async fn lb_exploration(http: &reqwest::Client, user: &str) -> Result<Vec<String
         .json()
         .await?;
     let ext = "https://musicbrainz.org/doc/jspf#playlist";
-    let Some(newest) = list["playlists"].as_array().into_iter().flatten().find(|p| {
-        p["playlist"]["extension"][ext]["additional_metadata"]["algorithm_metadata"]["source_patch"].as_str() == Some("weekly-exploration")
-    }) else {
-        return Ok(Vec::new());
-    };
-    let Some(id) = newest["playlist"]["identifier"].as_str().and_then(|u| u.rsplit('/').next()) else { return Ok(Vec::new()) };
-    let pl: serde_json::Value = http.get(format!("{LB_API}/playlist/{id}")).send().await?.error_for_status()?.json().await?;
-    Ok(pl["playlist"]["track"]
+    let ids: Vec<String> = list["playlists"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|t| t["identifier"].as_array()?.iter().find_map(|i| i.as_str()?.rsplit('/').next().map(str::to_string)))
-        .collect())
+        .filter(|p| p["playlist"]["extension"][ext]["additional_metadata"]["algorithm_metadata"]["source_patch"].as_str() == Some("weekly-exploration"))
+        .filter_map(|p| p["playlist"]["identifier"].as_str().and_then(|u| u.rsplit('/').next()).map(str::to_string))
+        .take(EXPLORATIONS)
+        .collect();
+    let mut out = Vec::new();
+    for id in ids {
+        let pl: serde_json::Value = http.get(format!("{LB_API}/playlist/{id}")).send().await?.error_for_status()?.json().await?;
+        for r in pl["playlist"]["track"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|t| t["identifier"].as_array()?.iter().find_map(|i| i.as_str()?.rsplit('/').next().map(str::to_string)))
+        {
+            if !out.contains(&r) {
+                out.push(r);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Recordings' albums, as ListenBrainz names them: (recording, album).
@@ -391,6 +407,7 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
                     links,
                     new_artist: !artists_had.contains(&artist_key),
                     why: Vec::new(),
+                    sources: Vec::new(),
                     score: 0.0,
                 },
                 HashSet::new(),
@@ -399,6 +416,10 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
         let (s, sources) = e;
         if !s.why.contains(&c.why) {
             s.why.push(c.why.clone());
+        }
+        let named = if c.source == "lastfm" { "Last.fm" } else { "ListenBrainz" };
+        if !s.sources.iter().any(|x| x == named) {
+            s.sources.push(named.to_string());
         }
         if let Some(u) = &c.lastfm_url
             && !s.links.iter().any(|l| l.name == "Last.fm")
