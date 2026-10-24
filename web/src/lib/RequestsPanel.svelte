@@ -187,13 +187,13 @@
   >
     <div role="menu">
       {#if answers && (r.status === 'pending' || (r.status === 'approved' && r.fetched?.startsWith('Not handed over')))}
-        <MenuEntry icon="check" label={r.status === 'pending' ? 'Approve' : 'Hand over again'} onclick={() => ((opened = null), answer([r.id], true))} />
+        <MenuEntry icon="check" label={r.status === 'pending' ? 'Approve' : 'Hand over again'} onclick={() => (answer([r.id], true), (opened = null))} />
       {/if}
       {#if answers && r.status === 'pending'}
-        <MenuEntry icon="ban" label="Decline…" onclick={() => ((opened = null), (declining = [r.id]))} />
+        <MenuEntry icon="ban" label="Decline…" onclick={() => ((declining = [r.id]), (opened = null))} />
       {/if}
       {#if canTakeBack(r)}
-        <MenuEntry icon="undo" label="Take back" danger onclick={() => ((opened = null), takeBack(r))} />
+        <MenuEntry icon="undo" label="Take back" danger onclick={() => (takeBack(r), (opened = null))} />
       {/if}
       {#if !answers && !canTakeBack(r)}
         <MenuEntry icon="compass" label="Discover" onclick={() => ((opened = null), (location.hash = '#/discover'))} />

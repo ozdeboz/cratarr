@@ -104,7 +104,9 @@
   const passes = (a: DiscoverAlbum) =>
     !(a.sources?.length && a.sources.every((s) => switchOn('discover', `no-source:${s}`))) &&
     !(switchOn('discover', 'no-favourite-artists') && favourites.has(a.key)) &&
-    !(switchOn('discover', 'no-library-artists') && !a.new_artist);
+    !(switchOn('discover', 'no-library-artists') && !a.new_artist) &&
+    // Unplayable: no page on Bandcamp to hear it on (the owner, 2026-10-25).
+    !(switchOn('discover', 'no-unplayable') && !a.bandcamp);
   const kept = $derived((view?.found?.albums ?? []).filter((a) => !gone.includes(a.key)));
   const albums = $derived(
     kept.filter((a) => passes(a) && matchesSearch(a.album, a.artist, a.kind, a.year?.toString(), ...(a.genres ?? []), ...a.why, ...(a.sources ?? []))),
@@ -179,9 +181,11 @@
 
   // The menu of the card tapped.
   let opened = $state<DiscoverAlbum | null>(null);
+  // The action first, then the menu closed: what it acts on is read from the open menu, which closing empties (the
+  // owner's Play on Bandcamp did nothing, 2026-10-25: it read a menu already closed).
   const act = (what: () => unknown) => () => {
-    opened = null;
     what();
+    opened = null;
   };
   // A link to another site asks first, Open or Copy link, as every such link does (lib/LinkSheet).
   let link = $state<{ url: string; name: string } | null>(null);

@@ -179,8 +179,8 @@
   {:else}
     <MenuSheet label={m.name} title={m.name} images={m.cover ? [m.cover] : []} onclose={() => (menu = null)}>
       <div role="menu">
-        <MenuEntry icon={GO_ICON[m.kind]} label="Go to {m.name}" onclick={() => ((menu = null), goTo(m.kind, m.subject))} />
-        {#if m.synced}<MenuEntry icon="close" label="Stop syncing" danger onclick={() => ((menu = null), setKept(m.kind, m.source, m.id, false, m.name))} />{/if}
+        <MenuEntry icon={GO_ICON[m.kind]} label="Go to {m.name}" onclick={() => (goTo(m.kind, m.subject), (menu = null))} />
+        {#if m.synced}<MenuEntry icon="close" label="Stop syncing" danger onclick={() => (setKept(m.kind, m.source, m.id, false, m.name), (menu = null))} />{/if}
       </div>
     </MenuSheet>
   {/if}
