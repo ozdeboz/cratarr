@@ -935,7 +935,11 @@ const GENERIC_IDLE: Duration = Duration::from_secs(3600);
 /// Whether a name is one a browser gives itself (lib/playOnTarget's `defaultBrowserName`, "Chrome on Android", with
 /// `freeName`'s number when taken: "Chrome on Android 2"): no one chose it.
 fn generic_name(name: &str) -> bool {
-    let base = name.rsplit_once(' ').filter(|(_, n)| n.parse::<u32>().is_ok()).map_or(name, |(b, _)| b);
+    // Its numbers off, however many a free name was given ("Edge on Windows 3 2 2").
+    let mut base = name;
+    while let Some((b, _)) = base.rsplit_once(' ').filter(|(_, n)| n.parse::<u32>().is_ok()) {
+        base = b;
+    }
     let (browser, os) = base.split_once(" on ").map_or((base, None), |(b, o)| (b, Some(o)));
     ["Edge", "Firefox", "Chrome", "Safari", "Browser"].contains(&browser) && os.is_none_or(|o| ["Android", "iOS", "Windows", "Mac", "Linux"].contains(&o))
 }
@@ -3183,6 +3187,7 @@ mod tests {
     #[tokio::test]
     async fn a_generically_named_player_is_forgotten_an_hour_after_it_went_offline() {
         assert!(generic_name("Chrome on Android") && generic_name("Edge on Windows 2") && generic_name("Safari"));
+        assert!(generic_name("Edge on Windows 3 2 2 2"), "renumbered again and again");
         assert!(!generic_name("Salon tablet") && !generic_name("Chrome on the shelf") && !generic_name("Chromecast"));
         let p = play_on().await;
         let (_a, _b) = (p.connect("Chrome on Android").unwrap(), p.connect("Salon tablet").unwrap());

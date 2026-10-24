@@ -66,10 +66,13 @@ the page itself says what is on the device and why.
 
 - **Names.** The switch is **Sync to this device**; the context menu's snapshot is **Download once** (it fills its row
   as the tracks come in, the menu staying open). Export has its own icon.
-- **At the top**: the tracks, their size against the budget (a bar), the quality; what waits ("Waiting for Wi-Fi", or
-  how many) and what failed, with Retry; a gear to Settings → Sync.
-- **Synced**: each item with its picture, kind, count and size or state; its row fills while it syncs; its ⋮ has View,
-  Sync now and Stop syncing.
-- **Downloaded once**: the albums of the one-time copies (the app marks each download `manual` or not); a row plays
-  what is on the device, its ⋮ is the album's menu.
-- Wide enough, the two groups stand side by side. The pill's button syncs now, ringed while anything syncs or waits.
+- **Laid out as Insights, Health and Settings** (the owner, the same day): rows in groups, each with its picture or
+  icon, a line and ›; a tap opens the item in the panel, beside the list on a roomy window (one always open, its row
+  tinted), over it on a phone.
+- **This device**: the tracks, their size against the budget (the row fills as far as it is used) and the quality,
+  › Settings → Sync; what waits ("Waiting for Wi-Fi", or how many); what failed, with Retry.
+- **Synced**: each item with its picture, kind, count and size or state; its row fills while it syncs. Its own menu
+  (in the panel) has the switch.
+- **Downloaded once**: the albums of the one-time copies (the app marks each download `manual` or not), filling as
+  they come.
+- The pill's button syncs now, ringed while anything syncs or waits.

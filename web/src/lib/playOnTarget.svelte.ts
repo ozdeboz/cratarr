@@ -32,11 +32,16 @@ export function defaultBrowserName(): string {
   return os ? `${browser} on ${os}` : browser;
 }
 
-/** The first of `base`, "`base` 2", … that none of `players` has. */
+/** A name without the numbers a free name was given ("Edge on Windows 3 2 2" is "Edge on Windows"). */
+const unnumbered = (name: string) => name.replace(/( \d+)+$/, '') || name;
+
+/** The first of `base`, "`base` 2", … that none of `players` has; counted from the name without its numbers, so a
+ *  name renumbered again never grows ("… 3 2 2", the owner's player list, 2026-10-24). */
 function freeName(base: string, players: { name: string }[]): string {
   const taken = new Set(players.map((p) => p.name));
+  const root = unnumbered(base);
   let name = base;
-  for (let n = 2; taken.has(name); n++) name = `${base} ${n}`;
+  for (let n = 2; taken.has(name); n++) name = `${root} ${n}`;
   return name;
 }
 
