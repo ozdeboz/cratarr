@@ -14,6 +14,7 @@
 // of Cratarr's players (Play On, `drive`): then every call below is handed to that player (app.svelte.ts, or the
 // server's /api/players), what it reports is shown in `local`, and the stream here is not used.
 
+import { cue } from './queueCue.svelte';
 import { keep, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
 import { getTrackGain, playerCommand, radioNext, type TrackGain } from './api';
@@ -1186,6 +1187,7 @@ export function playQueue(tracks: LocalTrack[], index = 0, from: string | null =
 /** Adds tracks by hand (decision 0033's two lanes): right after the playing one (`next`, so the newest come first), or
  *  after those added before (`last`), ahead of the rest of the album or playlist either way. */
 export function enqueue(tracks: LocalTrack[], how: 'next' | 'last') {
+  cue(how);
   tracks = tracks.map((t) => ({ ...t, lane: 'next' as const }));
   if (local.index < 0) return playQueue(tracks);
   const at = local.index + 1 + (how === 'next' ? 0 : addedAhead(local.queue, local.index).length);

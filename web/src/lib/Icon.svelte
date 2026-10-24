@@ -40,6 +40,9 @@
     arrowUp: '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
     arrowDown: '<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>',
     listChecks: '<path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>',
+    // Lucide's list-start and list-end: the mini-player's queue button a moment after Play next, and after Add to queue.
+    listStart: '<path d="M3 5h6"/><path d="M3 12h13"/><path d="M3 19h13"/><path d="m16 8-3-3 3-3"/><path d="M21 19V7a2 2 0 0 0-2-2h-6"/>',
+    listEnd: '<path d="M16 5H3"/><path d="M16 12H3"/><path d="M9 19H3"/><path d="m16 16-3 3 3 3"/><path d="M21 5v12a2 2 0 0 1-2 2h-6"/>',
     circle: '<circle cx="12" cy="12" r="10"/>',
     // Lucide's crown: a group's leader (the owner, decision 0037).
     crown:
