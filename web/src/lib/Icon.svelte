@@ -109,6 +109,8 @@
     resetSettings: '<path d="M21 6H3"/><path d="M7 12H3"/><path d="M7 18H3"/><path d="M12 18a5 5 0 0 0 9-3 4.5 4.5 0 0 0-4.5-4.5c-1.33 0-2.54.54-3.41 1.41L11 14"/><path d="M11 10v4h4"/>',
     filter: '<path d="M2 5h20"/><path d="M6 12h12"/><path d="M9 19h6"/>',
     download: '<path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/>',
+    // Sync now (Lucide's refresh-cw).
+    refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
     // Export (the owner, 2026-10-24: not Keep's icon; Lucide's log-out): out of Cratarr, as files.
     export: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/>',
     circlePlus: '<path stroke-width="1.6" d="M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0"/><path stroke-width="1.6" d="M9 12h6"/><path stroke-width="1.6" d="M12 9v6"/>',

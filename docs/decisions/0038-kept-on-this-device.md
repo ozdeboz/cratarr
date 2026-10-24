@@ -58,3 +58,18 @@ list; crates change by themselves (a heart, a new album). Play On's live channel
 - The app's store counts holders per track; removing a kept item removes only what nothing else holds.
 - **Work:** the radio's builders (the HA session) build it end to end (the owner), announcing each edit in claude-5f's
   files (the app, Play On, the server's app/) and claude-a5's (menus, settings, the Downloads page) first.
+
+## Amendment (2026-10-24): the Downloads page shows it, as Finamp's
+
+The owner, after looking at Finamp's Downloads page: take more from it, in Cratarr's look. The progress sheet goes;
+the page itself says what is on the device and why.
+
+- **Names.** The switch is **Sync to this device**; the context menu's snapshot is **Download once** (it fills its row
+  as the tracks come in, the menu staying open). Export has its own icon.
+- **At the top**: the tracks, their size against the budget (a bar), the quality; what waits ("Waiting for Wi-Fi", or
+  how many) and what failed, with Retry; a gear to Settings → Sync.
+- **Synced**: each item with its picture, kind, count and size or state; its row fills while it syncs; its ⋮ has View,
+  Sync now and Stop syncing.
+- **Downloaded once**: the albums of the one-time copies (the app marks each download `manual` or not); a row plays
+  what is on the device, its ⋮ is the album's menu.
+- Wide enough, the two groups stand side by side. The pill's button syncs now, ringed while anything syncs or waits.
