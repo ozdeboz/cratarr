@@ -48,7 +48,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/track/{source}/{id}/playlists", get(track_state))
         .route("/api/track/{source}/{id}/details", get(track_details))
         .route("/api/track/{source}/{id}/waveform", get(track_waveform))
-        .route("/api/track/{source}/{id}/bands", get(track_band_wave))
+        .route("/api/track/{source}/{id}/band-wave", get(track_band_wave))
         .route("/api/track/{source}/{id}/beats", get(track_beats))
         .route("/api/track/{source}/{id}/bands", get(track_bands))
         .route("/api/track/{source}/{id}/playlists/{playlist}", post(track_toggle))
@@ -3191,6 +3191,23 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::{ExportRequest, PreviewOf, attachment, form_decode};
+
+    /// axum refuses to start on a path and method routed twice (0.8.3 did, on `/bands`, and never came up); no test
+    /// builds the whole router, so this reads the table here instead: one route a line, its methods on it.
+    #[test]
+    fn no_path_and_method_is_routed_twice() {
+        let mut seen = std::collections::HashSet::new();
+        for line in include_str!("api.rs").lines().filter(|l| l.trim_start().starts_with(".route(\"")) {
+            let path = line.split('"').nth(1).unwrap();
+            for (i, _) in line.match_indices('(') {
+                let word = line[..i].rsplit(|c: char| !c.is_ascii_alphabetic()).next().unwrap();
+                if ["get", "post", "put", "delete", "patch"].contains(&word) {
+                    assert!(seen.insert((path.to_string(), word.to_string())), "{word} {path} is routed twice");
+                }
+            }
+        }
+        assert!(seen.len() > 100, "the table was not read: {}", seen.len());
+    }
 
     #[tokio::test]
     async fn every_answer_carries_its_request_id() {

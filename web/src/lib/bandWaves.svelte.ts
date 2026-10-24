@@ -19,7 +19,7 @@ export function loadBandWave(source: string, id: string) {
   const key = `${source}/${id}`;
   if (asked.has(key)) return;
   asked.add(key);
-  fetch(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/bands`)
+  fetch(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/band-wave`)
     .then((r) => {
       if (asksSignIn(r)) toSignIn();
       return r.ok ? r.arrayBuffer() : null;
