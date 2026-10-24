@@ -164,6 +164,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/discover/want", post(discover_want))
         .route("/api/discover/no", post(discover_no))
         .route("/api/discover/hide", post(discover_hide))
+        .route("/api/discover/artist", get(discover_artist))
+        .route("/api/discover/artist/photo", get(discover_artist_photo))
         .route("/api/preview/bandcamp", get(preview_bandcamp))
         .route("/api/requests", get(requests))
         .route("/api/requests/watching", get(requests_watching))
@@ -999,6 +1001,9 @@ async fn analysis_import(
 }
 
 async fn track_details(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>) -> Response {
+    if source == crate::bandcamp::SOURCE {
+        return bandcamp_details(&id).await;
+    }
     // Its tempo as the library serves it (the BPM tag, else the analysis').
     let bpm = served_song(&app, &source, &id).await.and_then(|s| s.bpm);
     let cat = app.library.catalogue();
@@ -1053,6 +1058,44 @@ async fn track_details(State(app): State<Arc<App>>, Path((source, id)): Path<(St
     }
 }
 
+/// A Bandcamp preview's details (decision 0071): no file of Cratarr's, so what its album's page says of it, the stream
+/// as Bandcamp serves it (MP3, 128 kb/s), its page in place of a path (the owner, 2026-10-25: Info failed on it).
+async fn bandcamp_details(id: &str) -> Response {
+    let found = match crate::bandcamp::read_id(id) {
+        Some((url, n)) => crate::bandcamp::Bandcamp::get().album(&url).await.ok().map(|a| (a, n)),
+        None => None,
+    };
+    let Some((a, n)) = found else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track's page on Bandcamp cannot be read." }))).into_response();
+    };
+    let t = a.tracks.iter().find(|t| t.n == n);
+    let mut tags = vec![
+        json!({ "name": "Title", "value": t.map(|t| t.title.clone()).unwrap_or_default() }),
+        json!({ "name": "Artist", "value": t.and_then(|t| t.artist.clone()).unwrap_or_else(|| a.artist.clone()) }),
+        json!({ "name": "Album", "value": a.title }),
+    ];
+    if n > 0 {
+        tags.push(json!({ "name": "Track", "value": n.to_string() }));
+    }
+    Json(json!({
+        "path": t.and_then(|t| t.page.clone()).unwrap_or_else(|| a.url.clone()),
+        "folder": null,
+        "format": "MP3",
+        "bitrate_kbps": crate::bandcamp::BYTES_PER_SEC * 8 / 1000,
+        "sample_rate_hz": null,
+        "bit_depth": null,
+        "channels": null,
+        "duration_ms": t.and_then(|t| t.duration_secs).map(|s| (s * 1000.0).round() as u64),
+        "bpm": null,
+        "size": null,
+        "modified": null,
+        "added": null,
+        "genres": [],
+        "tags": tags,
+    }))
+    .into_response()
+}
+
 /// An album's view in the panel (decision 0023), and its tracks for the local player (decision 0022).
 /// An album as the panel shows it. One that left Incoming is followed: where it is now, or what became of it.
 /// Kept on this device (decision 0038): what the app's kept items hold now, with their versions.
@@ -1062,6 +1105,9 @@ async fn kept_ask(State(app): State<Arc<App>>, Json(ask): Json<crate::app::kept:
 
 async fn album_view(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::AlbumView>, ApiError> {
     use crate::app::AlbumFate;
+    if source == crate::bandcamp::SOURCE {
+        return Ok(Json(bandcamp_album_view(&album).await?));
+    }
     let failed = match app.playing.album_view(&source, &album).await {
         Ok(v) if !v.rows.is_empty() => return Ok(Json(v)),
         Ok(v) => Ok(v),
@@ -1073,6 +1119,47 @@ async fn album_view(State(app): State<Arc<App>>, Path((source, album)): Path<(St
         Some(AlbumFate::Deleted(title)) => Err(ToggleError::Refused(format!("{title} was deleted.")).into()),
         _ => Ok(Json(failed?)),
     }
+}
+
+/// A Bandcamp album in the panel (decision 0071, the owner 2026-10-25: "I don't see why not"): its tracks as its page
+/// gives them, each played through the relay as a preview's; the ones Bandcamp does not stream shown, not playable.
+async fn bandcamp_album_view(album: &str) -> Result<crate::app::AlbumView, ToggleError> {
+    let (url, _) = crate::bandcamp::read_id(album).ok_or_else(|| ToggleError::Refused("That is not an album on Bandcamp.".into()))?;
+    let a = crate::bandcamp::Bandcamp::get().album(&url).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let rows = a
+        .tracks
+        .iter()
+        .map(|t| {
+            let id = crate::bandcamp::track_id(&a.url, t.n);
+            crate::app::PlaylistRow {
+                entry: id.clone(),
+                file: t.title.clone(),
+                id: t.stream.is_some().then_some(id),
+                name: Some(t.title.clone()),
+                artist: Some(t.artist.clone().unwrap_or_else(|| a.artist.clone())),
+                album: Some(a.title.clone()),
+                duration_secs: t.duration_secs,
+                track: Some(t.n),
+                album_id: Some(album.to_string()),
+                missing: t.stream.is_none(),
+                ..Default::default()
+            }
+        })
+        .collect();
+    Ok(crate::app::AlbumView {
+        source: crate::bandcamp::SOURCE.into(),
+        id: album.to_string(),
+        title: a.title,
+        artist: Some(a.artist),
+        year: None,
+        genres: Vec::new(),
+        format: Some("MP3".into()),
+        bitrate_kbps: Some((crate::bandcamp::BYTES_PER_SEC * 8 / 1000) as u32),
+        rows,
+        added: None,
+        played: None,
+        plays: None,
+    })
 }
 
 /// A track's playlists and favourite, for the local player's track (decision 0022).
@@ -3530,6 +3617,32 @@ async fn artist_about(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) 
     }
     .await;
     Json(found.unwrap_or_else(|| json!({ "id": null, "bio": null, "photo": false })))
+}
+
+/// An artist new to the library, for Discover's New to you (0069 amended, 0.9.1): TheAudioDB's description by name, as
+/// the artist store reads it for the library's (read now when it never was), and whether there is a photo.
+async fn discover_artist(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) -> Json<serde_json::Value> {
+    let found = async {
+        let store = app.artists.clone()?;
+        let info = store.get_or_read(q.name.trim(), None).await?;
+        Some(json!({ "bio": info.bio, "photo": info.photo.is_some() }))
+    }
+    .await;
+    Json(found.unwrap_or_else(|| json!({ "bio": null, "photo": false })))
+}
+
+/// That artist's photo, as the artist store kept it.
+async fn discover_artist_photo(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) -> Response {
+    let found = async {
+        let store = app.artists.clone()?;
+        let file = store.get(&crate::app::artists::key(q.name.trim(), None))?.photo?;
+        tokio::fs::read(store.photo_path(&file)).await.ok()
+    }
+    .await;
+    match found {
+        Some(bytes) => ([(header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg")), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=86400"))], bytes).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(json!({ "error": "no photo" }))).into_response(),
+    }
 }
 
 /// An artist's photo, as the artist store kept it.

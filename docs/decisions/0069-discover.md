@@ -109,3 +109,23 @@ YouTube: MusicBrainz, one request a second) were found. Now the suggestions show
 still looked up (the links, a card's length and track count) goes on behind them, shown as every page shows work in
 progress (the line and bar at the top, the page action's ring), each card filling in as its part arrives. The loader
 shows only until there is a first suggestion.
+
+## Amendment, 2026-10-25: a page of sections, not a list (0.9.1)
+
+The owner, 2026-10-25: "The discover page can be so much better than a list of cards, no matter how good the cards
+are. The cards are fucking fine. What I need is a more dynamic page"; inspired by Home's varied, organic sections
+("I don't want you to match its layout precisely"), each section taking the form its content suits. Mock-up accepted
+("Yes, I like the gaps, I like the masonry", artifact EfDukRyZTPCM9pyh5iNbSv); the genre cloud declined.
+
+- **Pick of the day:** one suggestion large (cover, facts, why it is here as a quote), Play on Bandcamp and its menu.
+- **The gaps in your artists:** per artist the library has, its albums in time order: those in the library faded,
+  the missing ones larger and lit (the discography source).
+- **Around the artists you play:** per group of seed artists ("Like A and B"), the seeds in the middle and their
+  suggestions in a masonry around them.
+- **New to you:** one new artist in the light (picture, a few lines of biography, the album suggested), the other new
+  artists as chips.
+- **New from artists you have:** the fresh releases, newest first.
+- **Your Weekly Exploration:** a compact list, as the playlist it is.
+- **Everything else** as the cards (the cards are kept as they are), the pill's search and filter over all of it.
+- **Bandcamp first:** within every section what plays on Bandcamp comes first by default, and the pick of the day is
+  always one that plays (the owner, 2026-10-25).

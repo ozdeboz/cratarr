@@ -22,9 +22,17 @@
     setTrackMember,
     trackFile,
     trackState,
+    getDiscover,
+    notDiscover,
+    wantDiscover,
+    type DiscoverAlbum,
     type TrackFile,
     type TrackState,
   } from './api';
+  import { BANDCAMP, previewPage, samePage } from './bandcampPreview';
+  import { withUndo } from './undo.svelte';
+  import { heardOf, loadWaveform, waveformOf } from './waveforms.svelte';
+  import { withHeard } from './trackFacts.svelte';
   import type { IconName } from './Icon.svelte';
   import MarkLoader from './MarkLoader.svelte';
   import { goToArtist as showArtist, mainArtist } from './albums.svelte';
@@ -134,7 +142,55 @@
     if (!t) return;
     const { source, name, artist, album_id } = t;
     onclose();
-    share(name, [artist, name].filter(Boolean).join(' – '), album_id ? linkTo('library', albumSubject(source, album_id)) : null);
+    // A Bandcamp preview's link is its album's page there, not one of Cratarr's (the owner, 2026-10-25).
+    const url = bandcampPage ?? (album_id ? linkTo('library', albumSubject(source, album_id)) : null);
+    share(name, [artist, name].filter(Boolean).join(' – '), url);
+  }
+
+  // Adjust BPM only where there is a waveform to adjust it on (the owner, 2026-10-25); a Bandcamp preview's, worked out
+  // on the device, keeps no tempo of the server's to adjust.
+  $effect(() => {
+    if (t && me.admin && !onDevice && t.source !== BANDCAMP) loadWaveform(t.source, t.id);
+  });
+  const hasWave = $derived(!!t && t.source !== BANDCAMP && !!waveformOf(t.source, t.id));
+
+  // A Bandcamp preview (decision 0071): the Discover suggestion it came from, for its own group, Want and Not
+  // interested, as on Discover's menu (the owner, 2026-10-25).
+  const bandcampPage = $derived(t?.source === BANDCAMP ? previewPage(t.id) : null);
+  let suggestion = $state<{ album: DiscoverAlbum; asked: boolean; may: boolean } | null>(null);
+  $effect(() => {
+    const page = bandcampPage;
+    if (!page) return;
+    getDiscover().then(
+      (v) => {
+        const album = v.found?.albums.find((a) => a.bandcamp && samePage(a.bandcamp, page));
+        const r = album ? v.requests?.[album.key] : undefined;
+        suggestion = album ? { album, asked: !!r && r.status !== 'cancelled' && r.status !== 'declined', may: !!v.may_request } : null;
+      },
+      () => (suggestion = null),
+    );
+  });
+  async function wantIt() {
+    const a = suggestion?.album;
+    if (!a) return;
+    onclose();
+    try {
+      const { request } = await wantDiscover(a.key);
+      if (request.fetched?.startsWith('Not handed over')) toast.show({ text: request.fetched, tone: 'error' });
+    } catch (e) {
+      toast.fail(e, 'Could not ask for it');
+    }
+  }
+  async function notInterested() {
+    const a = suggestion?.album;
+    if (!a) return;
+    onclose();
+    try {
+      const { undo } = await notDiscover(a.key);
+      withUndo('Not interested.', [undo]);
+    } catch (e) {
+      toast.fail(e, 'Could not leave it out');
+    }
   }
 
   // Web search: the track's artist and title, in a new tab (the app opens it outside).
@@ -200,7 +256,8 @@
   const plays = $derived(forPlaying ? (np?.info?.play_count ?? null) : (other?.info?.play_count ?? null));
   const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
   const day = (s: number) => new Date(s * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
-  function facts(d: TrackFile): [string, string][] {
+  function facts(file: TrackFile): [string, string][] {
+    const d = (t && withHeard(file, heardOf(t.source, t.id))) || file;
     const channels = d.channels === 1 ? 'mono' : d.channels === 2 ? 'stereo' : d.channels ? `${d.channels} channels` : null;
     const audio = [
       d.format,
@@ -216,7 +273,8 @@
     if (d.size) out.push(['Size', `${(d.size / 1e6).toFixed(1)} MB`]);
     if (plays !== null) out.push(['Plays', String(plays)]);
     if (d.added) out.push(['Added', day(d.added)]);
-    out.push(['File', d.folder ? `${d.folder}/${d.path}` : d.path]);
+    // A Bandcamp preview has no file of Cratarr's: its page there (decision 0071).
+    out.push(t?.source === BANDCAMP ? ['Bandcamp', d.path] : ['File', d.folder ? `${d.folder}/${d.path}` : d.path]);
     for (const tag of d.tags) out.push([tag.name, tag.value]);
     return out;
   }
@@ -367,6 +425,16 @@
           {/each}
           {#if t?.source === 'cratarr'}<MenuEntry icon="music" label="Sounds like this" onclick={goToLike} />{/if}
         </MenuGroup>
+        <MenuGroup label="Discover">
+          {#if suggestion}
+            {#if suggestion.asked}
+              <MenuEntry icon="inbox" label="Requested" onclick={() => { onclose(); location.hash = '#/requests'; }} />
+            {:else}
+              <MenuEntry icon="circlePlus" label="Want" disabled={!suggestion.may} onclick={wantIt} />
+            {/if}
+            <MenuEntry icon="thumbsDown" label="Not interested" onclick={notInterested} />
+          {/if}
+        </MenuGroup>
         <MenuGroup>
           {#if heartKnown}<MenuEntry icon="heart" label="Favourite" switched={heartOn} disabled={busy} onclick={heart} />{/if}
           {#if t && !onDevice}<MenuEntry icon="ban" label="Exclude everywhere" danger onclick={excludeEverywhere} />{/if}
@@ -381,7 +449,7 @@
         </MenuGroup>
         <MenuGroup>
           {#if !onDevice}<MenuEntry icon="info" label="Info" onclick={showDetails} />{/if}
-          {#if me.admin && !onDevice}<MenuEntry icon="gauge" label="Adjust BPM" onclick={() => (step = 'tempo')} />{/if}
+          {#if me.admin && !onDevice && hasWave}<MenuEntry icon="gauge" label="Adjust BPM" onclick={() => (step = 'tempo')} />{/if}
           <MenuEntry icon="search" label="Web search" onclick={webSearch} />
           <MenuEntry icon="search" label="Genius search" onclick={geniusSearch} />
         </MenuGroup>

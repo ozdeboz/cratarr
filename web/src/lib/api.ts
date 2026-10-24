@@ -1327,7 +1327,12 @@ export const setAlbumFavorite = (source: string, album: string, on: boolean) =>
   request<{ favorite: boolean }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/favorite?on=${on}`, { method: 'POST' });
 /** The album's cover as the server has it (no picture chosen on this device, no reading again). */
 export const serverCoverUrl = (source: string, album: string) =>
-  source === 'device' ? `/__device/cover/${encodeURIComponent(album)}` : `/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/cover`;
+  source === 'device'
+    ? `/__device/cover/${encodeURIComponent(album)}`
+    : // A Bandcamp album's: its page's, relayed (an album's id there is its track 0's, decision 0071).
+      source === 'bandcamp'
+      ? `/api/cover/bandcamp/${encodeURIComponent(album)}`
+      : `/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/cover`;
 /** The album's cover as this device shows it: a picture chosen here, else the server's (read again: a new address). */
 export const albumCoverUrl = (source: string, album: string) => {
   const key = coverKey(source, album);
@@ -1518,6 +1523,8 @@ export type DiscoverAlbum = {
   sources?: string[];
   /** Its album page on Bandcamp: Play previews it there (decision 0071). */
   bandcamp?: string;
+  /** Its new artist has a picture, read with the look (only such an artist is featured). */
+  artist_photo?: boolean;
   /** What MusicBrainz calls it (album, EP, single…), its genres, length, track count; Last.fm's listeners (0.9). */
   kind?: string | null;
   genres?: string[];
@@ -1586,6 +1593,9 @@ export const notDiscover = (key: string) => post<{ undo: string }>('/api/discove
 /** Hidden: gone from the list, its artist not held against it (unlike Not interested). Its undo token. */
 export const hideDiscover = (key: string) => post<{ undo: string }>('/api/discover/hide', { key });
 /** A Bandcamp album's tracks to play as a preview (decision 0071), as players hold them; never a play. */
+/** An artist new to the library (Discover's New to you): TheAudioDB's description, and whether there is a photo. */
+export const getDiscoverArtist = (name: string) => quietly<{ bio: string | null; photo: boolean }>(`/api/discover/artist?name=${encodeURIComponent(name)}`);
+export const discoverArtistPhotoUrl = (name: string) => `/api/discover/artist/photo?name=${encodeURIComponent(name)}`;
 export const previewBandcamp = (url: string) =>
   request<{ album: string; artist: string; url: string; tracks: LocalTrack[] }>(`/api/preview/bandcamp?url=${encodeURIComponent(url)}`);
 

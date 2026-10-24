@@ -88,6 +88,7 @@
     type CrateDraft,
   } from './crates.svelte';
   import { DEVICE, deviceAlbumView, deviceArtistView } from './deviceMusic.svelte';
+  import { BANDCAMP } from './bandcampPreview';
   import RowHeart from './RowHeart.svelte';
   import type { ExcludeEntry } from './crates.svelte';
   import CrateEditor from './CrateEditor.svelte';
@@ -280,6 +281,9 @@
   /** An album or artist of the device's own music (local mode, decision 0052): played and played next, nothing of
    *  Cratarr's (hearts, menus, About, radio, select). */
   const onDevice = $derived((album?.source ?? artist?.source) === DEVICE);
+  // Played here and kept by none of Cratarr's: the device's own music, or a Bandcamp album (a Discover suggestion's,
+  // decision 0071, the owner 2026-10-25): its tracks, no heart, rating, Resume or similar albums of the server's.
+  const offServer = $derived(onDevice || album?.source === BANDCAMP);
   async function toggleAlbumFavorite() {
     if (!album) return;
     const { source: s, id: a } = album;
@@ -361,8 +365,8 @@
         source = r.source;
         total = r.total;
         listGenres = r.genres;
-        rowFavsIn = r.source === DEVICE;
-        if (r.source !== DEVICE) loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : []))).then(() => want === id && (rowFavsIn = true));
+        rowFavsIn = r.source === DEVICE || r.source === BANDCAMP;
+        if (r.source !== DEVICE && r.source !== BANDCAMP) loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : []))).then(() => want === id && (rowFavsIn = true));
       },
       (e) => {
         if (want === id) error = e instanceof Error ? e.message : 'Unexpected error';
@@ -683,7 +687,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   }
   // An album's tracks carry its id: its cover, and the Incoming page's mark on what plays.
   const tracksOf = (list: PlaylistRow[], src = source): LocalTrack[] =>
-    list.map((x) => ({ source: src, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album?.id ?? x.album_id ?? null, duration_secs: x.duration_secs }));
+    list.map((x) => ({ source: src, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album?.id ?? x.album_id ?? null, duration_secs: x.duration_secs, ...(src === BANDCAMP ? { addable: false } : {}) }));
 
   // Several playlists: each section's rows, asked for when it comes into view; a section folds.
   let sections = $state<Record<string, { rows: PlaylistRow[]; source: string } | { error: string }>>({});
@@ -853,7 +857,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const barActions = $derived.by((): BarAction[] => {
     const play = (key: PlayMode, icon: IconName, label: string): BarAction => ({ key, icon, label, run: () => act(key), disabled: !canPlay });
     const list = [play('play', 'play', 'Play')];
-    if (album && !onDevice) list.push({ key: 'resume', icon: 'resume', label: 'Resume', run: resumeAlbum, disabled: !resumeAt });
+    if (album && !offServer) list.push({ key: 'resume', icon: 'resume', label: 'Resume', run: resumeAlbum, disabled: !resumeAt });
     list.push(play('shuffle', 'shuffle', 'Shuffle'));
     // Play next and Add to queue: an album's and an artist's, not a playlist's or a crate's (the owner, 2026-10-23).
     if (album || artist) list.push(play('next', 'playNext', 'Play next'), play('last', 'listAdd', 'Add to queue'));
@@ -1061,7 +1065,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     const c = crate;
     if (c && !crateEditing) return playCollection({ kind: 'crate', id: c }, mode, title, undefined, crateLook);
     // The server's library (decision 0059): an album or an artist whole, in its order; a sorted view what shows.
-    if (!onDevice) {
+    if (!offServer) {
       if (album && !reshaped) return playCollection({ kind: 'album', source: album.source, id: album.id }, mode, title);
       if (artist && !reshaped) return playCollection({ kind: 'artist', source: artist.source, name: artist.name }, mode, title);
       return playCollection({ kind: 'tracks', source, ids: shownPlayable.map((r) => r.id!) }, mode, title);
@@ -1117,7 +1121,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       // The device's own music: its rules here (decision 0059). The server's library: the server's choice from the
       // tapped track (500 at most): the whole crate, album, artist or playlist in its order; a sorted view or several
       // lists, what shows, in the order it shows (a queue's order is what is seen).
-      if (onDevice) return await playPlaylistFrom(name, src, tracksOf(ok, src), ok.indexOf(r));
+      if (offServer) return await playPlaylistFrom(name, src, tracksOf(ok, src), ok.indexOf(r));
       const c = crate;
       if (c && !crateEditing) return await playCollection({ kind: 'crate', id: c }, 'play', name, r.id, crateLook);
       if (album && !reshaped) return await playCollection({ kind: 'album', source: album.source, id: album.id }, 'play', name, r.id);
@@ -1688,7 +1692,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
             >
           {/if}
           <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (crateMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
-        {:else if onDevice}
+        {:else if offServer}
           <!-- The device's own music (local mode, decision 0052): no heart, no Cratarr menu. -->
         {:else if artist}
           {#if artistHead?.favorite !== undefined}
@@ -1934,7 +1938,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {#if p && !multi && p.mine !== false}<SuggestedTracks id={p.id} name={p.name} count={p.count} />{/if}
       {#if p && !multi}<SimilarLists kind="playlist" id={p.id} />{/if}
       {#if crate && !seeded(crate) && !crateEditing && rows.length >= total}<SimilarLists kind="crate" id={crate} />{/if}
-      {#if album && albumHead && !onDevice}
+      {#if album && albumHead && !offServer}
         <!-- As Symfonium's album: the artist's other albums, the similar ones, then About. -->
         {@const by = listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)}
         {#if by}<AlbumMore source={album.source} album={album.id} artist={by} />{/if}
@@ -2056,7 +2060,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     <button class="tool tick" class:on={selecting.has(i)} role="checkbox" aria-checked={selecting.has(i)} aria-label={`Select ${r.name ?? r.file}`} onclick={() => tick(i)}
       ><Icon name={selecting.has(i) ? 'circleCheck' : 'circle'} size={24} /></button
     >
-  {:else if !onDevice}
+  {:else if !offServer}
     <RowHeart
       source={src}
       id={r.id!}

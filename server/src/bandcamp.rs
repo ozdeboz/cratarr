@@ -18,6 +18,11 @@ use serde::{Deserialize, Serialize};
 const KEEP: Duration = Duration::from_secs(5 * 60);
 /// The most album pages kept at once.
 const KEEP_MOST: usize = 64;
+/// At most one page of Bandcamp's read in this long, server-wide (Discover's look, previews, a track's details): the
+/// owner asked, 2026-10-25, whether Cratarr is polite to it. A stream played is not paced: it is a listener's.
+const PACE: Duration = Duration::from_secs(1);
+/// How long Bandcamp is left alone after it says "too many" (429) or "unavailable" (503) without saying how long.
+const BACK_OFF: Duration = Duration::from_secs(60);
 
 /// The source a preview's tracks carry in a queue (`QueueTrack::source`): their streams and covers are relayed under
 /// Cratarr's own addresses by it (`/api/stream/bandcamp/…`, `/api/file/…`, `/api/cover/…`).
@@ -99,6 +104,8 @@ pub fn album_page(url: &str) -> Option<String> {
 pub struct Bandcamp {
     http: reqwest::Client,
     kept: Mutex<HashMap<String, (Instant, Album)>>,
+    /// When the next page may be read (PACE apart; later after a back-off).
+    next: tokio::sync::Mutex<Instant>,
 }
 
 impl Bandcamp {
@@ -107,7 +114,7 @@ impl Bandcamp {
             .timeout(Duration::from_secs(20))
             .user_agent(concat!("Cratarr/", env!("CARGO_PKG_VERSION")))
             .build()?;
-        Ok(Self { http, kept: Mutex::new(HashMap::new()) })
+        Ok(Self { http, kept: Mutex::new(HashMap::new()), next: tokio::sync::Mutex::new(Instant::now()) })
     }
 
     /// The one reader, for the server's life.
@@ -116,8 +123,29 @@ impl Bandcamp {
         ONE.get_or_init(|| Bandcamp::new().expect("an HTTP client"))
     }
 
+    /// A request of Bandcamp's (a page, a search), in turn: PACE after the one before, none while it asked to be left
+    /// alone.
+    async fn send(&self, req: reqwest::RequestBuilder) -> Result<reqwest::Response> {
+        let mut next = self.next.lock().await;
+        tokio::time::sleep_until((*next).into()).await;
+        let resp = req.send().await;
+        *next = Instant::now() + PACE;
+        let resp = resp.context("cannot reach Bandcamp")?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+            let wait = resp
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok()?.trim().parse::<u64>().ok())
+                .map_or(BACK_OFF, |secs| Duration::from_secs(secs.min(15 * 60)));
+            *next = Instant::now() + wait;
+            tracing::warn!("Bandcamp answered {status}: left alone for {}s", wait.as_secs());
+        }
+        Ok(resp)
+    }
+
     async fn text(&self, url: &str) -> Result<String> {
-        let resp = self.http.get(url).send().await.context("cannot reach Bandcamp")?;
+        let resp = self.send(self.http.get(url)).await?;
         if !resp.status().is_success() {
             bail!("Bandcamp answered {}", resp.status());
         }
@@ -172,7 +200,7 @@ impl Bandcamp {
     /// Bandcamp's search box asked for albums: (title, artist, album page), its first answers.
     pub async fn search(&self, artist: &str, album: &str) -> Result<Vec<(String, String, String)>> {
         let body = serde_json::json!({ "search_text": format!("{artist} {album}"), "search_filter": "a", "full_page": false, "fan_id": null });
-        let resp = self.http.post("https://bandcamp.com/api/bcsearch_public_api/1/autocomplete_elastic").json(&body).send().await.context("cannot reach Bandcamp")?;
+        let resp = self.send(self.http.post("https://bandcamp.com/api/bcsearch_public_api/1/autocomplete_elastic").json(&body)).await?;
         if !resp.status().is_success() {
             bail!("Bandcamp answered {}", resp.status());
         }

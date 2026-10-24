@@ -64,3 +64,16 @@ is Java, too heavy for the NAS's 768 MB, and a Rust port would need the same fix
 - Bandcamp's pages can change: the reading is one small module, and a page it cannot read leaves the suggestion as it
   was (its links), with nothing else waiting on it.
 - The NAS relays the stream (128 kb/s per listener): nothing to store, little to send.
+
+## Amended 2026-10-25 (0.9.1): a Bandcamp album is an album
+
+The owner: Bandcamp's albums should open in the album panel ("I don't see why not"). A tap on a suggestion that plays
+on Bandcamp opens it there (a long-press is its menu); its tracks play through the relay, and what Cratarr keeps of
+its own albums (the heart, the rating, Resume, similar albums) it leaves out. A preview's track is one in the player
+too: its menu has Discover's own group (Want, Not interested), its Share gives its page on Bandcamp, Info and the
+details row say what it is (the details from its album's page; sample rate and channels read on the device from its
+MP3 frames), and its waveform is worked out on the device, a few seconds decoded at a time.
+
+Bandcamp is asked politely: one page or search at a time, at most one a second, server-wide; after a "too many" (429)
+or "unavailable" (503) none for as long as it asks (a minute where it does not say). A new look keeps the pages the
+one before found instead of looking them up again, so what plays stays playable while a sync runs.

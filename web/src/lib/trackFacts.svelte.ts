@@ -41,6 +41,16 @@ export function detailsOf(source: string, id: string): Details | null {
   return read[key] ?? null;
 }
 
+/** The server's details with what the device read of the stream itself where they leave it out (a Bandcamp
+ *  preview's: its sample rate and channels from its frames, lib/waveforms). */
+export function withHeard<D extends { sample_rate_hz: number | null; channels: number | null; bitrate_kbps: number | null }>(
+  d: D | null,
+  h: { sample_rate_hz: number; channels: number; bitrate_kbps: number } | null,
+): D | null {
+  if (!d || !h) return d;
+  return { ...d, sample_rate_hz: d.sample_rate_hz ?? h.sample_rate_hz, channels: d.channels ?? h.channels, bitrate_kbps: h.bitrate_kbps ?? d.bitrate_kbps };
+}
+
 const tagOf = (f: Details | null, ...names: string[]) => {
   const want = names.map((n) => n.toLowerCase());
   return f?.tags.find((t) => want.includes(t.name.toLowerCase()) && t.value.trim())?.value.trim() ?? null;

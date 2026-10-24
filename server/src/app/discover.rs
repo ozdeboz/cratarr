@@ -90,6 +90,10 @@ pub struct Suggestion {
     /// Its album page on Bandcamp, where one was found: it plays there as a preview (decision 0071).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bandcamp: Option<String>,
+    /// Its artist new to the library has a picture (and so may be featured, the owner 2026-10-25): read with the look,
+    /// as the artist store reads the library's (TheAudioDB, picture and description, by name).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub artist_photo: bool,
     /// What MusicBrainz calls it (Album, EP, Single…), as ListenBrainz gives it (0069 amended: the card shows as much
     /// as is known).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -680,6 +684,7 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
                     why: Vec::new(),
                     sources: Vec::new(),
                     bandcamp: None,
+                    artist_photo: false,
                     kind: c.kind.clone(),
                     genres: c.genres.clone(),
                     length_secs: None,
@@ -901,7 +906,14 @@ async fn mb_release_group(http: &reqwest::Client, artist: &str, album: &str) -> 
 const MB_PAUSE: Duration = Duration::from_millis(1100);
 
 /// Looks up the account's suggestions now (blocking parts apart) and keeps them.
-pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::Catalogue>, account: &str, who: &Who, progress: &Progress) -> Result<Found> {
+pub async fn look(
+    serve: &Arc<crate::serve::Serve>,
+    cat: Arc<crate::catalogue::Catalogue>,
+    account: &str,
+    who: &Who,
+    artists: Option<Arc<super::artists::ArtistInfo>>,
+    progress: &Progress,
+) -> Result<Found> {
     let dir = serve.data_dir.clone().context("Discover needs Cratarr's data folder")?;
     progress("Reading your library", 0, None);
     let (lib, d, ud, a) = (serve.library.clone(), dir.clone(), serve.userdata.clone(), account.to_string());
@@ -993,6 +1005,20 @@ pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::C
         }
         Err(e) => tracing::info!("discover: ListenBrainz's facts of the albums could not be read: {e:#}"),
     }
+    // Where the look before found each on Bandcamp, kept from the start and not looked up again (the owner, 2026-10-25:
+    // the pick of the day, which plays, went while a sync ran, until the pages were found again; and Bandcamp is asked
+    // less).
+    let (sv, acc) = (serve.clone(), account.to_string());
+    let before: HashMap<String, String> = tokio::task::spawn_blocking(move || kept(&sv, &acc))
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .flatten()
+        .map(|f| f.albums.into_iter().filter_map(|s| Some((s.key, s.bandcamp?))).collect())
+        .unwrap_or_default();
+    for s in albums.iter_mut().filter(|s| s.bandcamp.is_none()) {
+        s.bandcamp = before.get(&s.key).cloned();
+    }
     // Shown the moment they are known (the owner, 2026-10-24, 0.9): kept now, so the page lists them while the rest is
     // looked up behind them, and kept again as it fills in (the page reads them again as this step moves on).
     let at = super::moment::now_secs();
@@ -1015,7 +1041,9 @@ pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::C
             None => MbAlbum::default(),
         };
         (s.track_count, s.length_secs) = (mb.tracks, mb.length_secs);
-        s.bandcamp = bandcamp_page(&http, &mb.urls, &mb.artists, &s.artist, &s.album).await;
+        if s.bandcamp.is_none() {
+            s.bandcamp = bandcamp_page(&http, &mb.urls, &mb.artists, &s.artist, &s.album).await;
+        }
         if let Some(p) = &s.bandcamp {
             mb.urls.insert(0, p.clone());
         }
@@ -1035,10 +1063,36 @@ pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::C
             }
         }
     }
+    // The new artists' pictures and descriptions, with the sync (the owner, 2026-10-25: "It should be in the sync",
+    // "as well as description if we can get it"): the first few new artists, as the artist store reads the library's,
+    // kept there; a suggestion says whether its artist has a picture, the page only features one that has.
+    if let Some(store) = artists {
+        let mut new: Vec<String> = Vec::new();
+        for s in albums.iter().filter(|s| s.new_artist) {
+            if !new.contains(&s.artist) && new.len() < NEW_ARTIST_PICTURES {
+                new.push(s.artist.clone());
+            }
+        }
+        let total = new.len() as u64;
+        for (i, name) in new.iter().enumerate() {
+            progress("Finding new artists' pictures", i as u64, Some(total));
+            // TheAudioDB's, not MusicBrainz's; asked at the same gentle pace all the same.
+            if i > 0 {
+                tokio::time::sleep(MB_PAUSE).await;
+            }
+            let photo = store.get_or_read(name, None).await.is_some_and(|info| info.photo.is_some());
+            for s in albums.iter_mut().filter(|s| &s.artist == name) {
+                s.artist_photo = photo;
+            }
+        }
+    }
     let found = Found { at, albums, notes };
     keep_found(serve, account, &found).await?;
     Ok(found)
 }
+
+/// How many new artists' pictures a look reads (the page features one; the rest are its chips).
+const NEW_ARTIST_PICTURES: usize = 12;
 
 /// The step after which the list is kept and can be shown (lib's Discover reads it again from this step on).
 pub const LISTEN_STEP: &str = "Finding where to listen";
@@ -1118,10 +1172,10 @@ pub fn lidarr(app: &super::App) -> Option<crate::lidarr::Lidarr> {
 
 /// Looks up the account's suggestions as a task (`app::tasks`), its result the `Found`.
 pub fn start(app: &Arc<super::App>, serve: Arc<crate::serve::Serve>, account: &str, who: Who) -> Result<super::tasks::Task, String> {
-    let (cat, a) = (app.library.catalogue(), account.to_string());
+    let (cat, a, artists) = (app.library.catalogue(), account.to_string(), app.artists.clone());
     super::tasks::spawn(KIND, account, false, move |h| async move {
         let progress = move |name: &str, done: u64, total: Option<u64>| h.step(name, done, total);
-        look(&serve, cat, &a, &who, &progress).await
+        look(&serve, cat, &a, &who, artists, &progress).await
     })
 }
 

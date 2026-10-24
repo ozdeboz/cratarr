@@ -19,7 +19,7 @@
   import { art, clockText, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import Waveform from './Waveform.svelte';
   import WaveLens from './WaveLens.svelte';
-  import { loadWaveform, waveformOf } from './waveforms.svelte';
+  import { heardOf, loadWaveform, waveformOf } from './waveforms.svelte';
   import { SILENT, loadSpectrum, spectrumOf } from './bandWaves.svelte';
   import { tuneOf } from './bandTune.svelte';
   import BandGlass from './BandGlass.svelte';
@@ -32,7 +32,8 @@
   import { isCircle } from './circle';
   import Cover from './Cover.svelte';
   import CoverOverview from './CoverOverview.svelte';
-  import { detailsOf, factsOf } from './trackFacts.svelte';
+  import { detailsOf, factsOf, withHeard } from './trackFacts.svelte';
+  import { BANDCAMP } from './bandcampPreview';
   import { longpress } from './longpress';
   import MoreMusicSheet from './MoreMusicSheet.svelte';
   import { visuals } from './visuals/shown.svelte';
@@ -278,8 +279,10 @@
     if (!key || !prefs.playerRow || !prefs.playerFacts.length) return [];
     const now = untrack(() => np);
     if (!now) return [];
-    const known = factsOf(detailsOf(now.source, now.id), now.info ?? null);
-    return prefs.playerFacts.flatMap((id) => (known[id] ? [{ id, short: known[id].short }] : []));
+    const known = factsOf(withHeard(detailsOf(now.source, now.id), heardOf(now.source, now.id)), now.info ?? null);
+    const facts = prefs.playerFacts.flatMap((id) => (known[id] ? [{ id: id as string, short: known[id].short }] : []));
+    // A Bandcamp preview's row says where it plays from (the owner, 2026-10-25).
+    return now.source === BANDCAMP ? [{ id: 'bandcamp', short: 'Bandcamp' }, ...facts] : facts;
   });
   /** The row's Add: Settings → Display, where the row's facts are chosen; the player over the page gives way. */
   function toRowSettings() {

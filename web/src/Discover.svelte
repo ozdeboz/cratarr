@@ -11,11 +11,20 @@
   import { getDiscover, hideDiscover, notDiscover, previewBandcamp, refreshDiscover, wantDiscover, type AlbumRequest, type DiscoverAlbum, type DiscoverView } from './lib/api';
   import Cover from './lib/Cover.svelte';
   import { hoursMinutes } from './lib/duration';
+  import MenuCards from './lib/MenuCards.svelte';
   import MenuEntry from './lib/MenuEntry.svelte';
+  import MenuGroup from './lib/MenuGroup.svelte';
   import MenuSheet from './lib/MenuSheet.svelte';
   import LinkSheet from './lib/LinkSheet.svelte';
-  import { goToArtist } from './lib/albums.svelte';
+  import { goToArtist, library, readLibrary } from './lib/albums.svelte';
+  import { albumCoverUrl } from './lib/api';
+  import DiscoverSections from './lib/DiscoverSections.svelte';
+  import { sections, type Owned } from './lib/discoverSections';
+  import SectionHead from './lib/SectionHead.svelte';
   import { withUndo } from './lib/undo.svelte';
+  import { longpress } from './lib/longpress';
+  import { albumSubject, viewOver } from './lib/panel.svelte';
+  import { BANDCAMP, albumIdOf } from './lib/bandcampPreview';
   import Meter from './lib/Meter.svelte';
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
@@ -108,9 +117,17 @@
     // Unplayable: no page on Bandcamp to hear it on (the owner, 2026-10-25).
     !(switchOn('discover', 'no-unplayable') && !a.bandcamp);
   const kept = $derived((view?.found?.albums ?? []).filter((a) => !gone.includes(a.key)));
+  // The page in sections (0069 amended 2026-10-25): what the filter and the search let through, sorted into the pick,
+  // the gaps (against the library's albums), the masonry, the new artists, the fresh releases and the Weekly
+  // Exploration; the rest stays the cards.
+  if (!library.view) readLibrary(false).catch(() => {});
+  const owned = $derived<Owned[]>(
+    (library.view?.sources ?? []).flatMap((src) => src.albums.map((x) => ({ title: x.title, artist: x.artist, year: x.year, cover: albumCoverUrl(src.id, x.id) }))),
+  );
   const albums = $derived(
     kept.filter((a) => passes(a) && matchesSearch(a.album, a.artist, a.kind, a.year?.toString(), ...(a.genres ?? []), ...a.why, ...(a.sources ?? []))),
   );
+  const sec = $derived(sections(albums, owned));
   // How many the filter lets through, of how many (the Filter sheet's count).
   $effect(() => {
     pageView.counted = view?.found ? { shown: kept.filter(passes).length, total: kept.length } : null;
@@ -187,6 +204,9 @@
     what();
     opened = null;
   };
+  // A tap: what plays on Bandcamp opens as an album in the panel, its tracks to hear (decision 0071, the owner
+  // 2026-10-25); the rest, which Cratarr cannot show, its menu. A long-press is always the menu.
+  const tap = (a: DiscoverAlbum) => (a.bandcamp ? viewOver(albumSubject(BANDCAMP, albumIdOf(a.bandcamp))) : (opened = a));
   // A link to another site asks first, Open or Copy link, as every such link does (lib/LinkSheet).
   let link = $state<{ url: string; name: string } | null>(null);
 
@@ -236,13 +256,15 @@
       {#if me.admin && !view.lidarr}
         <p class="note">Want needs Lidarr: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>
       {/if}
+      <DiscoverSections {sec} {facts} onopen={tap} onmenu={(a) => (opened = a)} onplay={preview} {previewing} />
+      {#if sec.rest.length}<SectionHead title="More for you" />{/if}
       <ul class="grid">
-        {#each albums as a (a.key)}
+        {#each sec.rest as a (a.key)}
           {@const r = view.requests?.[a.key]}
           <li class="card">
             <!-- A tap anywhere on the card opens its menu (the owner, 2026-10-24: every action in a menu), but on its
                  pills, which are its links (each through the Open/Copy sheet, as every link to another site). -->
-            <button class="open" aria-haspopup="menu" aria-label={`${a.album} by ${a.artist}`} onclick={() => (opened = a)}></button>
+            <button class="open" aria-label={`${a.album} by ${a.artist}`} onclick={() => tap(a)} use:longpress={() => (opened = a)}></button>
             <!-- Cratarr's own cover: a picture that does not load is its stand-in, and the suggestion stays. -->
             <span class="cover"><Cover src={a.cover} /></span>
             <span class="text">
@@ -269,20 +291,28 @@
   {@const a = opened}
   {@const r = view?.requests?.[a.key]}
   <MenuSheet label={a.album} title={a.album} images={a.cover ? [a.cover] : []} chips={[a.artist, ...(a.year ? [String(a.year)] : [])]} copy={`${a.artist} – ${a.album}`} onclose={() => (opened = null)}>
-    <div role="menu">
-      {#if a.bandcamp}
-        <MenuEntry icon="play" label="Play on Bandcamp" busy={previewing === a.key} onclick={act(() => preview(a))} />
-      {/if}
-      {#if r && open(r)}
-        <MenuEntry icon="inbox" label={r.status === 'pending' ? 'Requested' : 'Approved'} onclick={act(() => (location.hash = '#/requests'))} />
-      {:else}
-        <MenuEntry icon="circlePlus" label="Want" disabled={!canWant || asking === a.key} busy={asking === a.key} onclick={act(() => want(a))} />
-      {/if}
-      {#if !a.new_artist}<MenuEntry icon="user" label="Go to {a.artist}" onclick={act(() => goToArtist('cratarr', a.artist))} />{/if}
-      {#each a.links as l (l.url)}<MenuEntry icon="externalLink" label={l.name} onclick={act(() => (link = l))} />{/each}
-      <MenuEntry icon="eyeOff" label="Hide" onclick={act(() => no(a, true))} />
-      <MenuEntry icon="thumbsDown" label="Not interested" onclick={act(() => no(a))} />
-    </div>
+    <!-- Groups as every menu's (lib/MenuCards); Discover's own (Want, Hide, Not interested) one of them, as in the
+         player's menu of a Bandcamp preview (the owner, 2026-10-25). -->
+    <MenuCards>
+      <MenuGroup>
+        {#if a.bandcamp}
+          <MenuEntry icon="play" label="Play on Bandcamp" busy={previewing === a.key} onclick={act(() => preview(a))} />
+        {/if}
+        {#if !a.new_artist}<MenuEntry icon="user" label="Go to {a.artist}" onclick={act(() => goToArtist('cratarr', a.artist))} />{/if}
+      </MenuGroup>
+      <MenuGroup label="Discover">
+        {#if r && open(r)}
+          <MenuEntry icon="inbox" label={r.status === 'pending' ? 'Requested' : 'Approved'} onclick={act(() => (location.hash = '#/requests'))} />
+        {:else}
+          <MenuEntry icon="circlePlus" label="Want" disabled={!canWant || asking === a.key} busy={asking === a.key} onclick={act(() => want(a))} />
+        {/if}
+        <MenuEntry icon="eyeOff" label="Hide" onclick={act(() => no(a, true))} />
+        <MenuEntry icon="thumbsDown" label="Not interested" onclick={act(() => no(a))} />
+      </MenuGroup>
+      <MenuGroup>
+        {#each a.links as l (l.url)}<MenuEntry icon="externalLink" label={l.name} onclick={act(() => (link = l))} />{/each}
+      </MenuGroup>
+    </MenuCards>
   </MenuSheet>
 {/if}
 {#if link}{@const l = link}<LinkSheet url={l.url} name={l.name} onclose={() => (link = null)} />{/if}
