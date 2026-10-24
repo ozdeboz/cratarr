@@ -20,7 +20,9 @@ RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registr
 FROM scratch
 COPY --from=server /cratarr-server /cratarr-server
 ENV CRATARR_BIND=0.0.0.0:8080
-USER 1010:1001
+# Settings and databases in /data, mounted from outside; an install sets its own `user` (the owner of its music).
+ENV CRATARR_DATA_DIR=/data
+USER 1000:1000
 EXPOSE 8080
 # Five minutes to start before a failed check counts: a first start that moves a database (the analysis side table,
 # 2026-10-17: about 4.5 min from the RAID) must not be marked unhealthy halfway.
