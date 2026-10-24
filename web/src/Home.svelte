@@ -6,7 +6,7 @@
   // from the past (the favourite tracks unplayed longest) and Grave digging (the albums most like the taste and furthest
   // from the listening), and System status (claude-632's, lib/HomeStatus). A tile with nothing to show is left out.
   import { onMount, type Snippet } from 'svelte';
-  import { coverUrl, crateRows, getCrate, getDigging, getMoment, getFavoriteAlbums, getFavoriteTracks, heardAlbums, playlistStats, type Digging, type Moment, type PlaylistRow } from './lib/api';
+  import { albumView, coverUrl, crateRows, getCrate, getDigging, getMoment, getFavoriteAlbums, getFavoriteTracks, heardAlbums, playlistStats, type Digging, type Moment, type PlaylistRow } from './lib/api';
   import AlbumCard from './lib/AlbumCard.svelte';
   import { addedOn, albumUses, albumUsesKnown, library, loadAlbumUses, readLibrary } from './lib/albums.svelte';
   import { albumCoverUrl } from './lib/api';
@@ -77,13 +77,23 @@
     prefs.libraryDown = true;
     location.hash = '#/library';
   }
-  /** Plays the album in front of the flow (New for you leading: its Play, the owner 2026-10-24). */
-  async function playFront() {
-    const a = frontAlbum;
-    if (!a) return;
+  /** Plays New for you leading (the owner, 2026-10-24): all of its albums, one after the other in its order, from the
+   *  one in front (those before it stay before it in the queue). Its albums on the front one's server. */
+  async function playNewest() {
+    const front = frontAlbum;
+    if (!front) return;
+    const albums = newest.filter((n) => n.source === front.source);
     starting = true;
     try {
-      await playCollection({ kind: 'album', source: a.source, id: a.id }, 'play', a.title);
+      const views = await Promise.all(albums.map((n) => albumView(n.source, n.a.id).catch(() => null)));
+      const ids: string[] = [];
+      let from: string | undefined;
+      views.forEach((v, i) => {
+        const own = v ? v.rows.flatMap((r) => (r.id && !r.missing ? [r.id] : [])) : [];
+        if (albums[i].a.id === front.id) from = own[0];
+        ids.push(...own);
+      });
+      if (ids.length) await playCollection({ kind: 'tracks', source: front.source, ids }, 'play', 'New for you', from);
     } catch (e) {
       toast.fail(e, 'Could not start playing');
     } finally {
@@ -433,7 +443,7 @@
         {#if lead === 'moment'}
           <button class="radio" disabled={starting} onclick={momentRadio}><Icon name="radioTower" size={18} />Radio</button>
         {:else if lead === 'past' || lead === 'newest'}
-          <button class="radio" disabled={starting} onclick={() => (lead === 'past' ? playPast('play') : playFront())}><Icon name="play" size={18} />Play</button>
+          <button class="radio" disabled={starting} onclick={() => (lead === 'past' ? playPast('play') : playNewest())}><Icon name="play" size={18} />Play</button>
         {/if}
       </div>
     </section>
