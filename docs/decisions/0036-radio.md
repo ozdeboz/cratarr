@@ -203,3 +203,9 @@ out every track the owner has hearted. One switch covers both, like the sheet's 
   chooses. A heart set in the last ten minutes may still slip through, because the index is cached that long.
 - The queue keeps `skip_favourites` (left out while off); the player view carries it; reports may carry it
   (`skip_favourites` in Play On reports, `skipFavourites` over the app's bridge); a handover passes it on.
+
+## Amendment (2026-10-24): no Restart playlists
+
+The owner: "We can just remove the restart playlist function altogether. I don't like it." More music has no Restart
+playlists switch, and neither the page's player nor the app's starts a playlist again at its end. The `restart` field
+stays in the `autoplay` command and reports for older players and servers; set or not, it does nothing.
