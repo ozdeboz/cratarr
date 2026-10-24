@@ -3,8 +3,8 @@
  * player, which alone knows when a track starts and how many are left, offline too.
  * - Radio inserts: while on, each of the queue's own tracks (no lane) that starts playing gets about five tracks like it
  *   right after it and its run of tracks added by hand, in the "radio" lane; off drops those not yet played.
- * - Autoplay appends: when fewer than three tracks are left ahead, the next five by its mode (lane "autoplay"); with
- *   Restart, the queue's own tracks again once they have all played. Stop drops those not yet played.
+ * - Autoplay appends: when fewer than three tracks are left ahead, the next five by its mode (lane "autoplay"). Stop
+ *   drops those not yet played. (Its Restart, the queue's own tracks again, is no more: the owner, 2026-10-24.)
  * Cratarr's scorer chooses (`POST /api/radio/next`); without a connection, this device's downloads (the playing and seed
  * artists first). Autoplay and repeat all exclude each other; radio lives with both.
  */
@@ -252,8 +252,8 @@ object Autoplay {
         return JSONObject().put("mode", a.mode).put("albums", a.albums).put("restart", a.restart).put("seed", JSONArray(a.seed)).put("within", a.within ?: JSONObject.NULL)
     }
 
-    /** With Autoplay on and fewer than three tracks ahead: the queue's own tracks again (Restart, once they have all
-     *  played), else the next ones by its mode, appended. Called on the main thread. */
+    /** With Autoplay on and fewer than three tracks ahead: the next ones by its mode, appended. Called on the main
+     *  thread. */
     fun fill(context: Context, player: Player, server: String?, locate: (MediaItem) -> MediaItem) {
         val a = get(context) ?: return
         if (Prefs(context).mode == Prefs.MODE_DEVICE) return
@@ -262,12 +262,6 @@ object Autoplay {
         if (filling || count == 0 || count - c - 1 >= LOW) return
         val queue = Scorer.tracksOf(player)
         val own = queue.filter { it.optString("lane").isEmpty() }
-        if (a.restart) {
-            // Not before the last of them plays.
-            if ((c + 1 until count).any { trackOf(player.getMediaItemAt(it))?.optString("lane").isNullOrEmpty() }) return
-            restart(context, player, own, queue.getOrNull(c), locate)
-            return
-        }
         val playing = queue.getOrNull(c)
         val skip = SkipFavourites.on(context)
         val ask = JSONObject()
@@ -297,20 +291,5 @@ object Autoplay {
                 player.addMediaItems(mediaItems(got).map(locate))
             }
         }
-    }
-
-    /** Restart: the queue's own tracks again, as own tracks (radio inserts again too): in their order, or shuffled when
-     *  the queue plays shuffled, never starting with the one that just played. */
-    private fun restart(context: Context, player: Player, own: List<JSONObject>, last: JSONObject?, locate: (MediaItem) -> MediaItem) {
-        val once = own.distinctBy { if (it.has("n")) "n${it.optInt("n")}" else "${it.optString("source")}/${it.optString("id")}" }
-        if (once.isEmpty()) return
-        val round = if (Prefs(context).shuffled) {
-            once.shuffled().toMutableList().also { r ->
-                if (r.size > 1 && last != null && r[0].optString("id") == last.optString("id")) r.add(r.removeAt(0))
-            }
-        } else {
-            once.sortedBy { if (it.has("n")) it.optInt("n") else Int.MAX_VALUE }
-        }
-        player.addMediaItems(mediaItems(JSONArray(round.map { JSONObject(it.toString()).apply { remove("entry") } })).map(locate))
     }
 }

@@ -1074,16 +1074,12 @@ function insertRadio() {
     });
 }
 
-/** Autoplay, this page's own stream: when fewer than three tracks are left ahead, the queue's own tracks again
- *  (`restart`, once none of them is ahead) or Autoplay's picks, appended after everything. */
+/** Autoplay, this page's own stream: when fewer than three tracks are left ahead, Autoplay's picks, appended after
+ *  everything. (`restart`, the queue's own tracks again, is no more: the owner, 2026-10-24; one still set does
+ *  nothing.) */
 function fillAutoplay() {
   const auto = local.autoplay;
   if (!auto || handed() || filling || local.index < 0 || local.queue.length - local.index - 1 >= LOW) return;
-  if (auto.restart) {
-    if (local.queue.slice(local.index + 1).some((t) => !t.lane)) return;
-    restartOwn();
-    return;
-  }
   const ask = {
     mode: auto.mode,
     albums: auto.albums,
@@ -1103,23 +1099,6 @@ function fillAutoplay() {
     })
     .catch((e) => (local.error = e instanceof Error ? e.message : String(e)))
     .finally(() => (filling = false));
-}
-
-/** Restart playlists: the queue's own tracks again, in their own order (shuffled when the queue plays shuffled, never
- *  starting with the one that just played), as own tracks. */
-function restartOwn() {
-  const byPlace = new Map<number, LocalTrack>();
-  for (const t of local.queue) if (!t.lane && t.n !== undefined) byPlace.set(t.n, t);
-  let round = byPlace.size
-    ? [...byPlace.entries()].sort((a, b) => a[0] - b[0]).map(([, t]) => t)
-    : local.queue.filter((t, i, all) => !t.lane && all.findIndex((x) => x.source === t.source && x.id === t.id) === i);
-  if (!round.length) return;
-  if (local.shuffled) {
-    round = shuffledCopy(round);
-    const last = local.queue[local.index];
-    if (round.length > 1 && round[0].source === last.source && round[0].id === last.id) round.push(round.shift()!);
-  }
-  local.queue = [...local.queue, ...round.map(({ entry: _, ...t }) => t)];
 }
 
 /** Under repeat all, while the last track plays here: the next round of the album or playlist after it (decision 0033,

@@ -8,13 +8,13 @@
   export function moreMusicParts(): { icon: 'radio' | 'infinity'; text: string }[] {
     const parts: { icon: 'radio' | 'infinity'; text: string }[] = [];
     if (local.radio) parts.push({ icon: 'radio', text: local.radioBy === 'track' ? 'Radio' : `Radio, ${RADIO_NAMES[local.radioBy].toLowerCase()}` });
-    if (local.autoplay) parts.push({ icon: 'infinity', text: `${AUTOPLAY_NAMES[local.autoplay.mode]}${local.autoplay.albums ? ', albums' : ''}${local.autoplay.restart ? ', restart' : ''}` });
+    if (local.autoplay) parts.push({ icon: 'infinity', text: `${AUTOPLAY_NAMES[local.autoplay.mode]}${local.autoplay.albums ? ', albums' : ''}` });
     return parts;
   }
 
   /** What is on, in a line: the sheet's chip ("Radio · ∞ Similar", "Off"). */
   export function moreMusicLine() {
-    const parts = [local.radio ? (local.radioBy === 'track' ? 'Radio' : `Radio, ${RADIO_NAMES[local.radioBy].toLowerCase()}`) : null, local.autoplay ? `∞ ${AUTOPLAY_NAMES[local.autoplay.mode]}${local.autoplay.albums ? ', albums' : ''}${local.autoplay.restart ? ', restart' : ''}` : null];
+    const parts = [local.radio ? (local.radioBy === 'track' ? 'Radio' : `Radio, ${RADIO_NAMES[local.radioBy].toLowerCase()}`) : null, local.autoplay ? `∞ ${AUTOPLAY_NAMES[local.autoplay.mode]}${local.autoplay.albums ? ', albums' : ''}` : null];
     return parts.filter(Boolean).join(' · ') || 'Off';
   }
 </script>
@@ -23,9 +23,9 @@
   // More music (decision 0036, amended; one sheet for both, decided 2026-10-16): what plays besides what was chosen.
   // Radio, between: tracks like each of the queue's own tracks (similar to it, its artist or its era), so many after
   // it. Autoplay, at the end: what plays when the queue runs out, then its switches (whole albums while albums were
-  // playing; a playlist starting again instead), each saying what it does while it is on. Each a choice of one, as View's order (a round mark); the sheet stays
+  // playing), saying what it does while it is on (Restart playlists is gone, the owner 2026-10-24). Each a choice of one, as View's order (a round mark); the sheet stays
   // open while it is set. What depends on a choice shows only while that is on, beside it (the owner, 2026-10-24): how
-  // many after each track in Radio's card, Autoplay's switches in its card, Ignore favourites while either plays. From
+  // many after each track in Radio's card, Autoplay's switch in its card, Ignore favourites while either plays. From
   // the queue's floating pill and the player's radio button.
   import Card from './Card.svelte';
   import ChoiceList from './ChoiceList.svelte';
@@ -48,7 +48,6 @@
   ];
   const now = $derived<AutoplayMode | 'stop'>(local.autoplay?.mode ?? 'stop');
   const albums = $derived(local.autoplay?.albums ?? false);
-  const restart = $derived(local.autoplay?.restart ?? false);
 </script>
 
 <MenuSheet label="More music" icon="radio" title="More music" chips={[moreMusicLine()]} {onclose}>
@@ -86,14 +85,6 @@
             hintWhenOn
             checked={albums}
             onchange={(on) => setAutoplay(now, { albums: on })}
-          />
-          <Switch
-            label="Restart playlists"
-            hint="A playlist that ends starts again (shuffled if it played shuffled)."
-            hintWhenOn
-            more={"When what you played is a playlist, it starts again from the top once it ends, instead of Autoplay's picks; played shuffled, it comes back shuffled again.\n\nAnything else you played (an album, a radio) goes on with Autoplay as chosen above."}
-            checked={restart}
-            onchange={(on) => setAutoplay(now, { restart: on })}
           />
         </div>
       {/if}
