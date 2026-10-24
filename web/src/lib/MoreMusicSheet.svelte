@@ -91,6 +91,7 @@
             label="Restart playlists"
             hint="A playlist that ends starts again (shuffled if it played shuffled)."
             hintWhenOn
+            more={"When what you played is a playlist, it starts again from the top once it ends, instead of Autoplay's picks; played shuffled, it comes back shuffled again.\n\nAnything else you played (an album, a radio) goes on with Autoplay as chosen above."}
             checked={restart}
             onchange={(on) => setAutoplay(now, { restart: on })}
           />
