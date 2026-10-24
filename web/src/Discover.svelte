@@ -6,7 +6,7 @@
   // comes back). Looked up again once a day as a task, its progress in
   // one line (ui-conventions, Progress); Refresh in the page's pill asks again now. Without a service connected, the
   // page says what it needs.
-  import { getDiscover, notDiscover, refreshDiscover, wantDiscover, type AlbumRequest, type DiscoverAlbum, type DiscoverView } from './lib/api';
+  import { getDiscover, notDiscover, previewBandcamp, refreshDiscover, wantDiscover, type AlbumRequest, type DiscoverAlbum, type DiscoverView } from './lib/api';
   import Cover from './lib/Cover.svelte';
   import Icon from './lib/Icon.svelte';
   import Meter from './lib/Meter.svelte';
@@ -15,6 +15,8 @@
   import { usePageAction } from './lib/pageView.svelte';
   import { progressOf, tasks } from './lib/tasks.svelte';
   import { me } from './lib/me.svelte';
+  import { playQueue } from './lib/localPlayer.svelte';
+  import { isLocal } from './lib/output.svelte';
   import { toast } from './lib/toast.svelte';
 
   // Want: a request for everyone who may ask (decision 0070); an administrator's (or Auto-approve) is handed to Lidarr
@@ -104,6 +106,27 @@
   /** Asked for and not taken back: Want is done for it. */
   const open = (r: AlbumRequest | undefined) => !!r && (r.status === 'pending' || r.status === 'approved');
 
+  // Play (decision 0071): an album on Bandcamp heard in Cratarr's own player, here or on the player this page drives,
+  // as a queue of its own; never a play. Not on the server's own outputs (they play the library's files).
+  let previewing = $state<string | null>(null);
+  async function preview(a: DiscoverAlbum) {
+    if (!a.bandcamp) return;
+    if (!isLocal()) return toast.show({ text: 'A preview plays on this device or on a Cratarr player.', tone: 'error' });
+    previewing = a.key;
+    try {
+      const p = await previewBandcamp(a.bandcamp);
+      playQueue(
+        p.tracks.map((t) => ({ ...t, addable: false })),
+        0,
+        p.album || a.album,
+      );
+    } catch (e) {
+      toast.fail(e, 'Could not play it');
+    } finally {
+      previewing = null;
+    }
+  }
+
   async function no(a: DiscoverAlbum) {
     gone = [...gone, a.key];
     try {
@@ -171,6 +194,11 @@
                   title={canWant ? null : 'Requesting albums is not on for this account'}
                   onclick={() => want(a)}>Want</button
                 >
+                {#if a.bandcamp}
+                  <button class="no" aria-label="Play on Bandcamp" title="Play on Bandcamp" disabled={previewing === a.key} aria-busy={previewing === a.key} onclick={() => preview(a)}
+                    ><Icon name="play" size={20} /></button
+                  >
+                {/if}
                 <button class="no" aria-label="Not interested" title="Not interested" onclick={() => no(a)}><Icon name="thumbsDown" size={20} /></button>
               </span>
             </div>

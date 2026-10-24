@@ -163,6 +163,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/discover/refresh", post(discover_refresh))
         .route("/api/discover/want", post(discover_want))
         .route("/api/discover/no", post(discover_no))
+        .route("/api/preview/bandcamp", get(preview_bandcamp))
         .route("/api/requests", get(requests))
         .route("/api/requests/watching", get(requests_watching))
         .route("/api/requests/decide", post(requests_decide))
@@ -709,6 +710,9 @@ async fn toggle(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Q
 
 async fn cover(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
     use crate::covers::Outcome;
+    if source == crate::bandcamp::SOURCE {
+        return bandcamp_cover(&id).await;
+    }
     let inm = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
     let cache = (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=86400"));
     let tag = |etag: &str| HeaderValue::from_str(etag).unwrap_or(HeaderValue::from_static("\"\""));
@@ -1982,6 +1986,9 @@ struct FileAs {
 /// the app's stream on mobile data and its smaller downloads, kept on the NAS (`opus_copies`) so it has a length and
 /// ranges too.
 async fn file(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<FileAs>, headers: HeaderMap) -> Response {
+    if source == crate::bandcamp::SOURCE {
+        return bandcamp_relay(&id, headers.get(header::RANGE).and_then(|v| v.to_str().ok())).await;
+    }
     let cat = app.library.catalogue();
     let source_id = (source.clone(), id.clone());
     let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten();
@@ -2066,6 +2073,11 @@ impl std::io::Write for ChannelWriter {
 
 async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<StreamFrom>) -> Response {
     use crate::stream::{FlacToMp4, Kind};
+    if source == crate::bandcamp::SOURCE {
+        // Its MP3 as it is; a moment to start at, as the place in the file it is at (128 kb/s throughout).
+        let range = (q.from_ms > 0).then(|| format!("bytes={}-", q.from_ms * crate::bandcamp::BYTES_PER_SEC / 1000));
+        return bandcamp_relay(&id, range.as_deref()).await;
+    }
     let cat = app.library.catalogue();
     let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten();
     let Some((path, kind, duration_ms)) = found else {
@@ -2794,6 +2806,95 @@ async fn discover_want(State(app): State<Arc<App>>, Json(b): Json<DiscoverKey>) 
     let (serve, account) = discoverer()?;
     let r = crate::app::requests::ask(&app, &serve, &account, &b.key).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!({ "request": r })))
+}
+
+#[derive(Deserialize)]
+struct BandcampOf {
+    url: String,
+}
+
+/// A Bandcamp album to play as a preview (decision 0071): its tracks as players hold them (`QueueTrack`), each
+/// streamed and its cover shown through Cratarr's own addresses.
+async fn preview_bandcamp(Query(q): Query<BandcampOf>) -> Result<Json<serde_json::Value>, ApiError> {
+    let a = crate::bandcamp::Bandcamp::get().album(&q.url).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let album_id = crate::bandcamp::track_id(&a.url, 0);
+    let tracks: Vec<crate::app::QueueTrack> = a
+        .tracks
+        .iter()
+        .filter(|t| t.stream.is_some())
+        .map(|t| crate::app::QueueTrack {
+            source: crate::bandcamp::SOURCE.into(),
+            id: crate::bandcamp::track_id(&a.url, t.n),
+            name: t.title.clone(),
+            artist: Some(t.artist.clone().unwrap_or_else(|| a.artist.clone())),
+            album: Some(a.title.clone()),
+            album_id: Some(album_id.clone()),
+            duration_secs: t.duration_secs,
+            n: Some(t.n),
+            ..Default::default()
+        })
+        .collect();
+    if tracks.is_empty() {
+        return Err(ToggleError::Refused("None of its tracks can be heard on Bandcamp.".into()).into());
+    }
+    Ok(Json(json!({ "album": a.title, "artist": a.artist, "url": a.url, "tracks": tracks })))
+}
+
+/// A preview's track relayed from Bandcamp as it is sent (nothing kept): its status, length and ranges as Bandcamp
+/// gives them, so a player can seek.
+async fn bandcamp_relay(id: &str, range: Option<&str>) -> Response {
+    let Some((url, n)) = crate::bandcamp::read_id(id).filter(|(_, n)| *n > 0) else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "No such preview." }))).into_response();
+    };
+    let mut resp = match crate::bandcamp::Bandcamp::get().stream(&url, n, range).await {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::BAD_GATEWAY, Json(json!({ "error": format!("{e:#}") }))).into_response(),
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/mpeg"));
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    for h in [header::CONTENT_LENGTH, header::CONTENT_RANGE, header::ACCEPT_RANGES] {
+        if let Some(v) = resp.headers().get(&h) {
+            headers.insert(h, v.clone());
+        }
+    }
+    let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(4);
+    tokio::spawn(async move {
+        loop {
+            match resp.chunk().await {
+                Ok(Some(b)) => {
+                    if tx.send(Ok(b)).await.is_err() {
+                        return;
+                    }
+                }
+                Ok(None) => return,
+                Err(e) => {
+                    let _ = tx.send(Err(std::io::Error::other(e))).await;
+                    return;
+                }
+            }
+        }
+    });
+    (status, headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response()
+}
+
+/// A preview's cover: its album page's picture, relayed.
+async fn bandcamp_cover(id: &str) -> Response {
+    let not_found = || (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response();
+    let Some((url, _)) = crate::bandcamp::read_id(id) else { return not_found() };
+    let Ok(a) = crate::bandcamp::Bandcamp::get().album(&url).await else { return not_found() };
+    // Bandcamp's own pictures only (its image servers).
+    let Some(src) = a.cover.filter(|c| reqwest::Url::parse(c).ok().and_then(|u| u.host_str().map(|h| h.ends_with(".bcbits.com"))).unwrap_or(false)) else {
+        return not_found();
+    };
+    let Ok(resp) = reqwest::get(&src).await else { return not_found() };
+    if !resp.status().is_success() {
+        return not_found();
+    }
+    let kind = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap_or(HeaderValue::from_static("image/jpeg"));
+    let Ok(bytes) = resp.bytes().await else { return not_found() };
+    ([(header::CONTENT_TYPE, kind), (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=86400"))], bytes).into_response()
 }
 
 /// The Requests page (decision 0070): the account's requests, everyone's waiting ones for those who answer them.

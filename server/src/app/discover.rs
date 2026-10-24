@@ -68,6 +68,9 @@ pub struct Suggestion {
     /// Which services suggested it, by name (the owner, 2026-10-24: "where the suggestion comes from").
     #[serde(default)]
     pub sources: Vec<String>,
+    /// Its album page on Bandcamp, where one was found: it plays there as a preview (decision 0071).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bandcamp: Option<String>,
     #[serde(skip)]
     pub score: f64,
 }
@@ -408,6 +411,7 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
                     new_artist: !artists_had.contains(&artist_key),
                     why: Vec::new(),
                     sources: Vec::new(),
+                    bandcamp: None,
                     score: 0.0,
                 },
                 HashSet::new(),
@@ -461,29 +465,86 @@ pub fn listen_links(urls: &[String], artist: &str, album: &str) -> Vec<Link> {
     ]
 }
 
-/// The pages MusicBrainz keeps for a release group and its releases (their "url" relations).
-async fn mb_urls(http: &reqwest::Client, release_group: &str) -> Result<Vec<String>> {
+#[derive(Deserialize)]
+struct MbUrl {
+    resource: String,
+}
+
+#[derive(Deserialize)]
+struct MbRelation {
+    url: Option<MbUrl>,
+}
+
+/// The pages MusicBrainz keeps for a release group and its releases (their "url" relations), and its releases'
+/// artists (their ids, for their own pages).
+async fn mb_urls(http: &reqwest::Client, release_group: &str) -> Result<(Vec<String>, Vec<String>)> {
     #[derive(Deserialize)]
-    struct Url {
-        resource: String,
+    struct Artist {
+        id: String,
     }
     #[derive(Deserialize)]
-    struct Relation {
-        url: Option<Url>,
+    struct Credit {
+        artist: Artist,
     }
     #[derive(Deserialize)]
     struct Release {
         #[serde(default)]
-        relations: Vec<Relation>,
+        relations: Vec<MbRelation>,
+        #[serde(rename = "artist-credit", default)]
+        credits: Vec<Credit>,
     }
     #[derive(Deserialize)]
     struct Browse {
         #[serde(default)]
         releases: Vec<Release>,
     }
-    let url = format!("https://musicbrainz.org/ws/2/release?release-group={release_group}&inc=url-rels&fmt=json&limit=10");
+    let url = format!("https://musicbrainz.org/ws/2/release?release-group={release_group}&inc=url-rels+artist-credits&fmt=json&limit=10");
     let b: Browse = http.get(url).send().await?.error_for_status()?.json().await?;
-    Ok(b.releases.into_iter().flat_map(|r| r.relations).filter_map(|r| r.url.map(|u| u.resource)).collect())
+    let mut artists: Vec<String> = Vec::new();
+    for id in b.releases.iter().flat_map(|r| r.credits.iter().map(|c| c.artist.id.clone())) {
+        if !artists.contains(&id) {
+            artists.push(id);
+        }
+    }
+    Ok((b.releases.into_iter().flat_map(|r| r.relations).filter_map(|r| r.url.map(|u| u.resource)).collect(), artists))
+}
+
+/// The pages MusicBrainz keeps for an artist (their "url" relations).
+async fn mb_artist_urls(http: &reqwest::Client, artist: &str) -> Result<Vec<String>> {
+    #[derive(Deserialize)]
+    struct Artist {
+        #[serde(default)]
+        relations: Vec<MbRelation>,
+    }
+    let url = format!("https://musicbrainz.org/ws/2/artist/{artist}?inc=url-rels&fmt=json");
+    let a: Artist = http.get(url).send().await?.error_for_status()?.json().await?;
+    Ok(a.relations.into_iter().filter_map(|r| r.url.map(|u| u.resource)).collect())
+}
+
+/// Two names the same as the import's matcher compares them (exactly, else loosely).
+fn same(a: &str, b: &str) -> bool {
+    key(a) == key(b) || loose(a) == loose(b)
+}
+
+/// An album's page on Bandcamp (decision 0071): its own on MusicBrainz, else found on its artist's own Bandcamp page
+/// (MusicBrainz's for the artist) by its title; none otherwise (Bandcamp's search checks for a browser, which Cratarr
+/// does not get around). Bandcamp is asked at most once a second, as MusicBrainz is.
+async fn bandcamp_page(http: &reqwest::Client, urls: &[String], artists: &[String], album: &str) -> Option<String> {
+    if let Some(p) = urls.iter().find_map(|u| crate::bandcamp::album_page(u)) {
+        return Some(p);
+    }
+    let bc = crate::bandcamp::Bandcamp::get();
+    if let Some(id) = artists.first() {
+        let own = mb_artist_urls(http, id).await.unwrap_or_default();
+        tokio::time::sleep(MB_PAUSE).await;
+        let page = own.iter().filter_map(|u| crate::bandcamp::page(u)).find(|p| reqwest::Url::parse(p).ok().and_then(|u| u.host_str().map(|h| h != "bandcamp.com")).unwrap_or(false));
+        if let Some(page) = page {
+            let releases = bc.releases(&page).await.unwrap_or_default();
+            tokio::time::sleep(MB_PAUSE).await;
+            return releases.into_iter().find(|(t, _)| same(t, album)).map(|(_, url)| url);
+        }
+    }
+    None
 }
 
 /// A name as MusicBrainz's search reads it: in quotes, its own quotes and backslashes escaped.
@@ -574,7 +635,8 @@ pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::C
     // looked up behind them, and kept again as it fills in (the page reads them again as this step moves on).
     let at = super::moment::now_secs();
     keep_found(serve, account, &Found { at, albums: albums.clone(), notes: notes.clone() }).await?;
-    // Where to hear each: its Bandcamp and YouTube pages as MusicBrainz knows them, else a search there.
+    // Where to hear each: its Bandcamp and YouTube pages as MusicBrainz knows them, else a search there; and its album
+    // page on Bandcamp, found further where MusicBrainz has none (decision 0071), to play it from.
     let total = albums.len() as u64;
     for i in 0..albums.len() {
         if i > 0 && i % KEEP_EVERY == 0 {
@@ -582,14 +644,18 @@ pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::C
         }
         let s = &mut albums[i];
         progress(LISTEN_STEP, i as u64, Some(total));
-        let urls = match &s.release_group {
+        let (mut urls, artists) = match &s.release_group {
             Some(g) => {
                 let got = mb_urls(&http, g).await.unwrap_or_default();
                 tokio::time::sleep(MB_PAUSE).await;
                 got
             }
-            None => Vec::new(),
+            None => (Vec::new(), Vec::new()),
         };
+        s.bandcamp = bandcamp_page(&http, &urls, &artists, &s.album).await;
+        if let Some(p) = &s.bandcamp {
+            urls.insert(0, p.clone());
+        }
         s.links.extend(listen_links(&urls, &s.artist, &s.album));
     }
     let found = Found { at, albums, notes };

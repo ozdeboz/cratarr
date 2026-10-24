@@ -42,6 +42,10 @@ fn tell(e: Event) {
 /// A track heard (decision 0064) by `user`: written (logged, counted when it counts, queued for the connected
 /// services), then told. False when the play was there already (a player telling it again). Blocking.
 pub fn heard_blocking(serve: &Serve, user: &str, song: &str, h: &Heard) -> anyhow::Result<bool> {
+    // A preview is not listening (decision 0071).
+    if crate::bandcamp::is_preview(song) {
+        return Ok(false);
+    }
     let Some((pid, album, artists)) = serve.library.play_targets(song)? else { return Ok(false) };
     let new = serve.userdata.record(user, (song, &pid), &album, &artists, h)?;
     if new {
@@ -58,6 +62,9 @@ pub async fn heard(serve: &Arc<Serve>, user: &str, song: &str, h: &Heard) -> any
 
 /// A track began on `player` for `user`: told once per change of song on that player (players report often).
 pub fn started(user: &str, player: &str, song: &str) {
+    if crate::bandcamp::is_preview(song) {
+        return;
+    }
     static PLAYING: OnceLock<Mutex<HashMap<(String, String), String>>> = OnceLock::new();
     let mut playing = PLAYING.get_or_init(Default::default).lock().unwrap_or_else(|p| p.into_inner());
     let key = (user.to_string(), player.to_string());

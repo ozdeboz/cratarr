@@ -1,6 +1,7 @@
 import { track } from './progress.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached } from './reach.svelte';
+import type { LocalTrack } from './localPlayer.svelte';
 
 /** What a page says while Cratarr is out of reach (lib/reach.svelte.ts). */
 export const UNREACHED = 'Cannot reach the Cratarr server';
@@ -1510,6 +1511,8 @@ export type DiscoverAlbum = {
   why: string[];
   /** Which services suggested it. */
   sources?: string[];
+  /** Its album page on Bandcamp: Play previews it there (decision 0071). */
+  bandcamp?: string;
 };
 /** Discover's page: the suggestions as last found (none before the first look), which services it asks, and whether
  *  Want can fetch through Lidarr. */
@@ -1566,6 +1569,9 @@ export const decideRequests = (ids: number[], approve: boolean, reason: string |
   post<{ id: number; said: string }[]>('/api/requests/decide', { ids, approve, reason });
 export const cancelRequest = (id: number) => post<void>(`/api/requests/${id}/cancel`, {});
 export const notDiscover = (key: string) => post<void>('/api/discover/no', { key });
+/** A Bandcamp album's tracks to play as a preview (decision 0071), as players hold them; never a play. */
+export const previewBandcamp = (url: string) =>
+  request<{ album: string; artist: string; url: string; tracks: LocalTrack[] }>(`/api/preview/bandcamp?url=${encodeURIComponent(url)}`);
 
 /** A ListenBrainz user's listens into the asking account's history (decisions 0064 and 0067), as a task. */
 /** The ListenBrainz user the account imported from last (kept on the server). */
