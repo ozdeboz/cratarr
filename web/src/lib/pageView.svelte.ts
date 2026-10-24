@@ -122,7 +122,7 @@ export function trackOrders(kind: PanelKind): OrderField<TrackOrder>[] {
  *  is a page's id or a panel kind. `incoming`: only where a library is used as Incoming. */
 /** A list's switch in its filter. `invert`: shown on while the key is not kept (a source to include, the key keeping it
  *  left out), so what is left out counts as the filter on. */
-export type ListSwitch = { key: string; label: string; incoming?: true; invert?: true };
+export type ListSwitch = { key: string; label: string; incoming?: true; invert?: true; section?: string };
 const TRACK_SWITCHES: ListSwitch[] = [
   { key: 'favourites', label: 'Favourites only' },
   { key: 'unplayed', label: 'Not played yet' },
@@ -143,10 +143,10 @@ export const SWITCHES: Record<string, ListSwitch[]> = {
   playlist: TRACK_SWITCHES,
   // Discover (the owner, 2026-10-24): its sources, each on unless left out; and the artists to leave out.
   discover: [
-    { key: 'no-source:ListenBrainz', label: 'ListenBrainz', invert: true },
-    { key: 'no-source:Last.fm', label: 'Last.fm', invert: true },
-    { key: 'no-favourite-artists', label: 'Leave out favourite artists' },
-    { key: 'no-library-artists', label: 'Leave out artists you have' },
+    { key: 'no-source:ListenBrainz', label: 'ListenBrainz', invert: true, section: 'Sources' },
+    { key: 'no-source:Last.fm', label: 'Last.fm', invert: true, section: 'Sources' },
+    { key: 'no-favourite-artists', label: 'Favourite artists', section: 'Leave out' },
+    { key: 'no-library-artists', label: 'Artists you have', section: 'Leave out' },
   ],
 };
 

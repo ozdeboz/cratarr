@@ -46,6 +46,17 @@
   const conditioned = $derived(CONDITIONED.includes(list));
   const items = $derived(list === 'library' ? 'album' : list === 'playlists' ? 'playlist' : null);
   const switches = $derived((SWITCHES[list] ?? []).filter((w) => !w.incoming || hasIncoming));
+  /** The switches by section, in the order the sections first come; switches without one in a section of no title. */
+  const sections = $derived.by(() => {
+    const out: { title: string | null; switches: typeof switches }[] = [];
+    for (const w of switches) {
+      const title = w.section ?? null;
+      const s = out.find((x) => x.title === title);
+      if (s) s.switches.push(w);
+      else out.push({ title, switches: [w] });
+    }
+    return out;
+  });
   const filter = $derived(filterOf(list));
   /** Save as crate (the header's crate with a plus): the conditions that apply, a new crate in the panel's editor. */
   function saveAsCrate() {
@@ -150,13 +161,18 @@
         <ConditionList bind:conditions={() => filter.conditions, (c) => setConditions(list, c)} {axes} {items} bpms={tempos} />
       </div>
     {/if}
-    {#if switches.length}
-      <div class="toggles">
-        {#each switches as w (w.key)}
-          <Switch card label={w.label} checked={switchOn(list, w.key) !== !!w.invert} onchange={(on) => setSwitch(list, w.key, on !== !!w.invert)} />
-        {/each}
+    <!-- The switches, in their sections where the list has them (Discover's Sources and Leave out, the owner
+         2026-10-24), each section headed as a settings group is. -->
+    {#each sections as sec (sec.title ?? '')}
+      <div>
+        {#if sec.title}<h3 class="head">{sec.title}</h3>{/if}
+        <div class="toggles">
+          {#each sec.switches as w (w.key)}
+            <Switch card label={w.label} checked={switchOn(list, w.key) !== !!w.invert} onchange={(on) => setSwitch(list, w.key, on !== !!w.invert)} />
+          {/each}
+        </div>
       </div>
-    {/if}
+    {/each}
 
     <!-- The servers and libraries hold for the lists of music; Discover's suggestions are from none of them. -->
     {#each list === 'discover' ? [] : cards as c (c.id)}
@@ -215,6 +231,14 @@
   .toggles {
     display: grid;
     gap: 3px;
+  }
+
+  /* A section of switches, headed as a settings group (lib/settings/Group). */
+  .head {
+    margin: 0 4px 6px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 600;
   }
 
   .count {
