@@ -176,6 +176,14 @@ export function usePageAction(get: () => PageAction | null) {
 }
 
 /** The pill's search field's words on a page that has one. */
+/** Whether the pill's search lets these texts through: every word of it in one of them (any case). */
+export function matchesSearch(...texts: (string | null | undefined)[]): boolean {
+  const words = pageView.query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const hay = texts.filter(Boolean).join(' ').toLowerCase();
+  return words.every((w) => hay.includes(w));
+}
+
 export const searchFor = (page: string) =>
   page === 'playlists'
     ? 'Filter playlists'
@@ -183,6 +191,8 @@ export const searchFor = (page: string) =>
       ? 'Filter albums'
       : page === 'downloads'
         ? 'Filter downloads'
+        : page === 'discover'
+          ? 'Filter suggestions'
         : page === 'settings'
           ? 'Search settings'
       : page === 'local-artists'

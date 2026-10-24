@@ -320,7 +320,9 @@
   // Back is always there (the owner, 2026-10-23): a step back in this visit, else Home; only Home itself, opened first,
   // has none. On a phone the row always shows.
   const backHome = $derived(navAt === 0 && page !== 'home');
-  const pageRow = $derived(!playlistLayer && !overlay && (phone || navAt > 0 || backHome || pagePill || page === 'settings' || page === 'insights'));
+  const pageRow = $derived(
+    !playlistLayer && !overlay && (phone || navAt > 0 || backHome || pagePill || page === 'settings' || page === 'insights' || page === 'discover'),
+  );
   $effect(() => {
     const root = document.documentElement.style;
     root.setProperty('--top-h', phone ? `${topBar}px` : '0px');
@@ -637,8 +639,9 @@
       {:else}
         <span></span>
       {/if}
-      <!-- Settings' pill: its search and About, its own button (the owner, 2026-10-24: one pill as on every page). -->
-      {#if pagePill || page === 'settings'}<SheetArea area={() => pageEl}
+      <!-- Settings' pill: its search and About, its own button (the owner, 2026-10-24: one pill as on every page);
+           Discover's: its search and Look again (the owner, 2026-10-24). -->
+      {#if pagePill || page === 'settings' || page === 'discover'}<SheetArea area={() => pageEl}
           ><TopPill {page} view={hasView(page)} device={pagePill && pillDevice} filter={pagePill && !page.startsWith('local-') && page !== 'downloads'} /></SheetArea
         >{/if}
     </div>

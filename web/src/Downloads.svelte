@@ -17,7 +17,7 @@
   import { askKept, kept, keptBusy, syncKept, type KeptItem } from './lib/kept.svelte';
   import { player } from './lib/live.svelte';
   import { albumSubject, artistSubject, openedHere, panel, SETTINGS, viewInPlace, viewPlaylist } from './lib/panel.svelte';
-  import { pageView, usePageAction } from './lib/pageView.svelte';
+  import { matchesSearch, pageView, usePageAction } from './lib/pageView.svelte';
 
   askDownloads();
   askKept();
@@ -42,11 +42,7 @@
   }
 
   // The pill's search: an item or an album whose name (or artist) holds every word.
-  const words = $derived(pageView.query.trim().toLowerCase().split(/\s+/).filter(Boolean));
-  const matches = (...texts: (string | null | undefined)[]) => {
-    const hay = texts.filter(Boolean).join(' ').toLowerCase();
-    return words.every((w) => hay.includes(w));
-  };
+  const matches = matchesSearch;
 
   // --- Synced ---
   const KINDS = { album: 'Album', playlist: 'Playlist', crate: 'Crate', artist: 'Artist' } as const;

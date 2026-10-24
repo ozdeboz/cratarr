@@ -18,7 +18,7 @@
   import Meter from './lib/Meter.svelte';
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
-  import { usePageAction } from './lib/pageView.svelte';
+  import { matchesSearch, pageView, usePageAction } from './lib/pageView.svelte';
   import { progressOf, tasks } from './lib/tasks.svelte';
   import { me } from './lib/me.svelte';
   import { playQueue } from './lib/localPlayer.svelte';
@@ -83,7 +83,13 @@
   // Answered here: gone from the list at once (the server keeps the answer).
   let gone = $state<string[]>([]);
   let asking = $state<string | null>(null);
-  const albums = $derived((view?.found?.albums ?? []).filter((a) => !gone.includes(a.key)));
+  // The pill's search (as every page's): what a card says, every word of it somewhere.
+  const albums = $derived(
+    (view?.found?.albums ?? []).filter(
+      (a) => !gone.includes(a.key) && matchesSearch(a.album, a.artist, a.kind, a.year?.toString(), ...(a.genres ?? []), ...a.why, ...(a.sources ?? [])),
+    ),
+  );
+  const searched = $derived(pageView.query.trim() !== '');
   async function want(a: DiscoverAlbum) {
     asking = a.key;
     try {
@@ -197,7 +203,7 @@
       {#each view.found?.notes ?? [] as note (note)}<p class="note">{note}</p>{/each}
     {/if}
     {#if !albums.length}
-      {#if !looking}<p class="note">{view.found ? 'Nothing new to suggest right now.' : 'Looking for albums you might like…'}</p>{/if}
+      {#if !looking}<p class="note">{searched ? 'None of them match.' : view.found ? 'Nothing new to suggest right now.' : 'Looking for albums you might like…'}</p>{/if}
     {:else}
       {#if me.admin && !view.lidarr}
         <p class="note">Want needs Lidarr: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>
