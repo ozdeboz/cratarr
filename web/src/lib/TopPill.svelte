@@ -72,6 +72,9 @@
   // unfolds it again rather than starting it twice. Only the pill shows it (no line at the page's top); folded, the
   // button's ring does.
   const SHOWN_MS = 4000;
+  /** One motion for all that unfolds and makes way: the field or the bar slides in as the other's button slides out,
+   *  together, so the pill's width changes in one smooth step. */
+  const UNFOLD = { axis: 'x', duration: 200 } as const;
   let showing = $state(false);
   let ran = false;
   let fold = 0;
@@ -112,20 +115,25 @@
       {@const a = pageView.action}
       <!-- The page's work unfolded: only its bar and what it is at, the pill grown leftwards, its buttons where they
            are, its glass as it is (the owner, 2026-10-24). -->
-      <span class="work" role="status" aria-live="polite" transition:slide={{ axis: 'x', duration: 200 }}
+      <span class="work" role="status" aria-live="polite" transition:slide={UNFOLD}
         ><Meter label={a.line ?? a.label} value={a.progress ?? 0} /></span
       >
     {/if}
     <!-- One unfolds at a time, the other's button out of the way: the search hides while the work's progress shows, the
          page's button while the search is open (the owner, 2026-10-24). -->
     {#if words && !(showing && page && pageView.action)}
-      <button class:lit={!searching && pageView.query.trim() !== ''} aria-label={words} title={words} onclick={() => (searching ? field?.focus() : (searching = true))}
+      <button
+        class:lit={!searching && pageView.query.trim() !== ''}
+        aria-label={words}
+        title={words}
+        onclick={() => (searching ? field?.focus() : (searching = true))}
+        transition:slide={UNFOLD}
         ><Icon name="search" size={22} /></button
       >
       {#if searching}
         <!-- The search open: its field right of the magnifier, the pill grown leftwards, the other buttons where they
              are, its glass as it is (the owner, 2026-10-24). -->
-        <span class="field" role="search" transition:slide={{ axis: 'x', duration: 200 }}>
+        <span class="field" role="search" transition:slide={UNFOLD}>
           <input
             bind:this={field}
             type="search"
@@ -146,7 +154,7 @@
     {#if device}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)}><Icon name="speaker" size={22} /></button>{/if}
     {#if page && pageView.action && !searching}
       {@const a = pageView.action}
-      <button class="action" aria-label={a.label} title={a.label} onclick={() => act(a)}
+      <button class="action" aria-label={a.label} title={a.label} onclick={() => act(a)} transition:slide={UNFOLD}
         ><Icon name={a.icon} size={22} />{#if a.progress != null}<svg class="ring" viewBox="0 0 36 36" aria-hidden="true"
             ><circle class="bg" cx="18" cy="18" r="16" /><circle cx="18" cy="18" r="16" pathLength="100" stroke-dasharray="{Math.round(
                 Math.min(1, Math.max(0, a.progress)) * 100,
