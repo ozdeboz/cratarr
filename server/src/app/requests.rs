@@ -4,6 +4,8 @@
 //! github.com/seerr-team/seerr), not its code. Who may ask, have their asking approved at once, and answer everyone's:
 //! the account's permissions (`serve::users::Permissions`), an administrator's all.
 
+use std::collections::HashMap;
+
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
@@ -216,14 +218,16 @@ pub fn waiting(serve: &Serve) -> Result<usize> {
     serve.userdata.requests_waiting()
 }
 
-/// Requests with their albums' states, one after the other (a few, each a call or two to Lidarr).
+/// Requests with their albums' states: the fetcher asked once, for every approved one not in the library.
 async fn views(f: Option<&dyn Fetcher>, lib: Option<&Matcher>, rs: Vec<Request>) -> Vec<View> {
-    let mut out = Vec::with_capacity(rs.len());
-    for r in rs {
-        let album_state = state(f, lib, &r).await;
-        out.push(View { request: r, album_state });
-    }
-    out
+    let found: Vec<bool> = rs.iter().map(|r| lib.is_some_and(|m| m.find_album(&r.album, Some(&r.artist)).is_some())).collect();
+    let asked: Vec<String> =
+        rs.iter().zip(&found).filter(|(r, there)| !**there && r.status == APPROVED).filter_map(|(r, _)| r.release_group.clone()).collect();
+    let progress = match f {
+        Some(f) if !asked.is_empty() => f.statuses(&asked).await.ok(),
+        _ => None,
+    };
+    rs.into_iter().zip(found).map(|(r, there)| View { album_state: state(there, progress.as_ref(), &r), request: r }).collect()
 }
 
 /// The library's albums by name (the import's matcher), where Cratarr's data folder holds it.
@@ -232,21 +236,21 @@ async fn library(serve: &Serve) -> Option<Matcher> {
     tokio::task::spawn_blocking(move || Matcher::read(&dir.join("library.sqlite")).ok()).await.ok().flatten()
 }
 
-/// A request's album as it stands: the library first, then the fetcher (only for one handed to it).
-async fn state(f: Option<&dyn Fetcher>, lib: Option<&Matcher>, r: &Request) -> Album {
-    if lib.is_some_and(|m| m.find_album(&r.album, Some(&r.artist)).is_some()) {
+/// A request's album as it stands: the library first, then the fetcher's word (only for one handed to it; none when
+/// there is no fetcher or it could not be asked).
+fn state(in_library: bool, progress: Option<&HashMap<String, Progress>>, r: &Request) -> Album {
+    if in_library {
         return Album::InLibrary;
     }
     if r.status != APPROVED {
         return Album::Requested;
     }
-    let (Some(f), Some(rg)) = (f, r.release_group.as_deref()) else { return Album::Unknown };
-    match f.status(rg).await {
-        Ok(Progress::Fetched { tracks, of }) if of > 0 && tracks < of => Album::PartlyThere { tracks, of },
-        Ok(Progress::Fetched { .. }) => Album::InIncoming,
-        Ok(Progress::Fetching { done }) => Album::Fetching { done },
-        Ok(Progress::Looking) => Album::Looking,
-        Ok(Progress::NotWanted | Progress::Unknown) => Album::Requested,
-        Err(_) => Album::Unknown,
+    let Some(p) = r.release_group.as_deref().and_then(|rg| progress?.get(rg)) else { return Album::Unknown };
+    match *p {
+        Progress::Fetched { tracks, of } if of > 0 && tracks < of => Album::PartlyThere { tracks, of },
+        Progress::Fetched { .. } => Album::InIncoming,
+        Progress::Fetching { done } => Album::Fetching { done },
+        Progress::Looking => Album::Looking,
+        Progress::NotWanted | Progress::Unknown => Album::Requested,
     }
 }

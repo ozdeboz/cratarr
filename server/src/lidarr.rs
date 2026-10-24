@@ -1,12 +1,18 @@
 //! Lidarr, only as far as Incoming and Discover need it: when an album is deleted, stop Lidarr from fetching it again
 //! (unmonitor: `monitored` then `set_monitored`, see `ports::Acquisition`), and undo that; an album wanted in Discover
-//! (decision 0069), fetched (`want`); a request's album, how far it is (`progress`), stopped (`unwant`); what Lidarr
-//! is looking for and fetching now (`watching`, for the Requests page, decision 0070). Albums are found by their MusicBrainz release group, which is Lidarr's own album id
-//! (`foreignAlbumId`). Optional: set in Settings → Connections (LIDARR_URL / LIDARR_API_KEY until saved there).
+//! (decision 0069), fetched (`want`); requests' albums, how far they are (`progress`), stopped (`unwant`); what Lidarr
+//! is looking for and fetching now (`watching`, for the Requests page, decision 0070). Albums are found by their
+//! MusicBrainz release group, which is Lidarr's own album id (`foreignAlbumId`). Optional: set in Settings →
+//! Connections (LIDARR_URL / LIDARR_API_KEY until saved there).
+
+use std::collections::HashMap;
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::json;
+
+/// How much of Lidarr's queue is read: more than it ever holds here.
+const QUEUE_READ: usize = 200;
 
 #[derive(Clone)]
 pub struct Lidarr {
@@ -63,7 +69,8 @@ pub struct Watched {
     pub artist: String,
     pub release_group: Option<String>,
     pub year: Option<i32>,
-    /// Being fetched: how far (0 to 1) and what Lidarr says of it (downloading, importing, a warning); else looked for.
+    /// Being fetched: how far (0 to 1) and what Lidarr says of it (downloading, importing; a warning or an error with
+    /// why, which comes first); else looked for.
     pub done: Option<f32>,
     pub status: Option<String>,
 }
@@ -94,15 +101,42 @@ struct QueueRow {
     sizeleft: f64,
     #[serde(rename = "trackedDownloadState", default)]
     state: Option<String>,
+    /// `ok`, `warning` or `error`: a download stuck says so here, not in its state.
+    #[serde(rename = "trackedDownloadStatus", default)]
+    status: Option<String>,
+    #[serde(rename = "errorMessage", default)]
+    error: Option<String>,
+    #[serde(rename = "statusMessages", default)]
+    messages: Vec<StatusMessage>,
     #[serde(default)]
     album: Option<serde_json::Value>,
     #[serde(default)]
     artist: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Deserialize)]
+struct StatusMessage {
+    #[serde(default)]
+    messages: Vec<String>,
+}
+
 impl QueueRow {
     fn done(&self) -> f32 {
         if self.size > 0.0 { ((self.size - self.sizeleft) / self.size).clamp(0.0, 1.0) as f32 } else { 0.0 }
+    }
+
+    /// What Lidarr says of it: a warning or an error first, with why when it gives it; else its state.
+    fn said(&self) -> Option<String> {
+        match self.status.as_deref() {
+            Some(s) if !s.is_empty() && !s.eq_ignore_ascii_case("ok") => {
+                let given = self.messages.iter().flat_map(|m| m.messages.iter()).next().cloned();
+                Some(match self.error.clone().filter(|e| !e.is_empty()).or(given) {
+                    Some(why) => format!("{s}: {why}"),
+                    None => s.to_string(),
+                })
+            }
+            _ => self.state.clone(),
+        }
     }
 }
 
@@ -281,22 +315,35 @@ impl Lidarr {
         Ok("Lidarr added it and is looking for it".into())
     }
 
-    /// How far Lidarr is with a release group's album (decision 0070).
-    pub async fn progress(&self, release_group: &str) -> Result<Progress> {
-        let known = self.albums(release_group).await?;
-        if known.is_empty() {
-            return Ok(Progress::Unknown);
+    /// How far Lidarr is with each of these release groups' albums (decision 0070): its queue read once for them all,
+    /// and only when one is neither unknown to it nor fetched.
+    pub async fn progress(&self, release_groups: &[String]) -> Result<HashMap<String, Progress>> {
+        let mut out = HashMap::new();
+        let mut queue: Option<Vec<QueueRow>> = None;
+        for rg in release_groups {
+            if out.contains_key(rg) {
+                continue;
+            }
+            let known = self.albums(rg).await?;
+            let p = if known.is_empty() {
+                Progress::Unknown
+            } else if let Some(a) = known.iter().find(|a| a.has_files()) {
+                let st = a.statistics.as_ref().map_or((0, 0), |s| (s.files, s.tracks));
+                Progress::Fetched { tracks: st.0, of: st.1 }
+            } else {
+                if queue.is_none() {
+                    queue = Some(self.queue(QUEUE_READ).await?);
+                }
+                let ids: Vec<i64> = known.iter().map(|a| a.id).collect();
+                match queue.iter().flatten().find(|q| q.album_id.is_some_and(|id| ids.contains(&id))) {
+                    Some(q) => Progress::Fetching { done: q.done() },
+                    None if known.iter().any(|a| a.monitored) => Progress::Looking,
+                    None => Progress::NotWanted,
+                }
+            };
+            out.insert(rg.clone(), p);
         }
-        if let Some(a) = known.iter().find(|a| a.has_files()) {
-            let st = a.statistics.as_ref().map_or((0, 0), |s| (s.files, s.tracks));
-            return Ok(Progress::Fetched { tracks: st.0, of: st.1 });
-        }
-        let ids: Vec<i64> = known.iter().map(|a| a.id).collect();
-        let queue = self.queue(200).await?;
-        if let Some(q) = queue.iter().find(|q| q.album_id.is_some_and(|id| ids.contains(&id))) {
-            return Ok(Progress::Fetching { done: q.done() });
-        }
-        Ok(if known.iter().any(|a| a.monitored) { Progress::Looking } else { Progress::NotWanted })
+        Ok(out)
     }
 
     /// A request taken back after Lidarr was handed it (decision 0070): its album no longer looked for. The artist and
@@ -309,13 +356,13 @@ impl Lidarr {
     /// What Lidarr fetches now, and the first `limit` of what it is looking for (decision 0070).
     pub async fn watching(&self, limit: usize) -> Result<Watching> {
         let fetching = self
-            .queue(200)
+            .queue(QUEUE_READ)
             .await?
             .into_iter()
             .filter_map(|q| {
                 let mut w = watched(q.album.as_ref()?, q.artist.as_ref());
                 w.done = Some(q.done());
-                w.status = q.state.clone();
+                w.status = q.said();
                 Some(w)
             })
             .collect::<Vec<_>>();

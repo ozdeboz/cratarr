@@ -43,8 +43,10 @@ const FM_PAUSE: Duration = Duration::from_millis(250);
 const TOP_ARTISTS: &str = "25";
 const SIMILAR_PER: &str = "10";
 const NEW_ARTISTS: usize = 30;
-/// ListenBrainz's recordings named at a time.
+/// ListenBrainz's recordings (and release groups) named at a time.
 const META_BATCH: usize = 25;
+/// A card's genres, at most (0069 amended: "two or three").
+const GENRES: usize = 3;
 
 /// An album suggested.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -71,6 +73,21 @@ pub struct Suggestion {
     /// Its album page on Bandcamp, where one was found: it plays there as a preview (decision 0071).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bandcamp: Option<String>,
+    /// What MusicBrainz calls it (Album, EP, Single…), as ListenBrainz gives it (0069 amended: the card shows as much
+    /// as is known).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Its genres, `GENRES` at most: the album's own, else its artist's (`genres_of`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub genres: Vec<String>,
+    /// Its length and how many tracks, of one of its releases (an official one first).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length_secs: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track_count: Option<u32>,
+    /// How many listen to it on Last.fm, where the account asks Last.fm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listeners: Option<u64>,
     #[serde(skip)]
     pub score: f64,
 }
@@ -223,6 +240,55 @@ async fn lb_albums(http: &reqwest::Client, recordings: &[String], progress: &Pro
         }
     }
     Ok(out)
+}
+
+/// What ListenBrainz knows of these release groups, `META_BATCH` at a time: MusicBrainz's type for each, and its
+/// genres (the album's own, else its artist's).
+async fn lb_group_facts(http: &reqwest::Client, groups: &[String]) -> Result<HashMap<String, (Option<String>, Vec<String>)>> {
+    let mut out = HashMap::new();
+    for batch in groups.chunks(META_BATCH) {
+        let meta: HashMap<String, serde_json::Value> = http
+            .get(format!("{LB_API}/metadata/release_group/"))
+            .query(&[("release_group_mbids", batch.join(",").as_str()), ("inc", "tag")])
+            .send()
+            .await
+            .context("ListenBrainz did not answer")?
+            .error_for_status()?
+            .json()
+            .await
+            .context("ListenBrainz's facts could not be read")?;
+        for (g, m) in meta {
+            let kind = m["release_group"]["type"].as_str().filter(|t| !t.is_empty()).map(str::to_string);
+            let own = genres_of(&m["tag"]["release_group"]);
+            out.insert(g, (kind, if own.is_empty() { genres_of(&m["tag"]["artist"]) } else { own }));
+        }
+    }
+    Ok(out)
+}
+
+/// The tags that name one of MusicBrainz's genres (its curated list: those with a `genre_mbid`; no "seen live"), the
+/// most given first, `GENRES` at most; one given far less than the most (under a quarter as often) is left out, so a
+/// stray vote does not show.
+fn genres_of(tags: &serde_json::Value) -> Vec<String> {
+    let mut given: Vec<(i64, String)> = tags
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|t| t["genre_mbid"].as_str().is_some_and(|m| !m.is_empty()))
+        .filter_map(|t| Some((t["count"].as_i64().unwrap_or(0), t["tag"].as_str()?.to_string())))
+        .collect();
+    given.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    let least = given.first().map_or(0, |g| (g.0 / 4).max(1));
+    let mut out: Vec<String> = Vec::new();
+    for (n, tag) in given {
+        if n < least || out.len() == GENRES {
+            break;
+        }
+        if !out.contains(&tag) {
+            out.push(tag);
+        }
+    }
+    out
 }
 
 /// ListenBrainz's suggestions for `user`, and a note when it has none yet.
@@ -413,6 +479,11 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
                     why: Vec::new(),
                     sources: Vec::new(),
                     bandcamp: None,
+                    kind: None,
+                    genres: Vec::new(),
+                    length_secs: None,
+                    track_count: None,
+                    listeners: None,
                     score: 0.0,
                 },
                 HashSet::new(),
@@ -473,9 +544,21 @@ struct MbRelation {
     url: Option<MbUrl>,
 }
 
-/// The pages MusicBrainz keeps for a release group and its releases (their "url" relations), and its releases'
-/// artists (their ids, for their own pages).
-async fn mb_urls(http: &reqwest::Client, release_group: &str) -> Result<(Vec<String>, Vec<String>)> {
+/// What MusicBrainz keeps of a release group's releases (`mb_urls`).
+#[derive(Debug, Default)]
+struct MbAlbum {
+    /// Their pages ("url" relations).
+    urls: Vec<String>,
+    /// Their artists' ids, for their own pages.
+    artists: Vec<String>,
+    /// How many tracks one of them has (an official one first), and how long it is when every track's length is known.
+    tracks: Option<u32>,
+    length_secs: Option<u32>,
+}
+
+/// The pages MusicBrainz keeps for a release group and its releases (their "url" relations), its releases' artists,
+/// and one release's tracks and length, in the one call.
+async fn mb_urls(http: &reqwest::Client, release_group: &str) -> Result<MbAlbum> {
     #[derive(Deserialize)]
     struct Artist {
         id: String,
@@ -485,18 +568,32 @@ async fn mb_urls(http: &reqwest::Client, release_group: &str) -> Result<(Vec<Str
         artist: Artist,
     }
     #[derive(Deserialize)]
+    struct Track {
+        length: Option<u64>,
+    }
+    #[derive(Deserialize)]
+    struct Medium {
+        #[serde(rename = "track-count", default)]
+        count: u32,
+        #[serde(default)]
+        tracks: Vec<Track>,
+    }
+    #[derive(Deserialize)]
     struct Release {
         #[serde(default)]
         relations: Vec<MbRelation>,
         #[serde(rename = "artist-credit", default)]
         credits: Vec<Credit>,
+        status: Option<String>,
+        #[serde(default)]
+        media: Vec<Medium>,
     }
     #[derive(Deserialize)]
     struct Browse {
         #[serde(default)]
         releases: Vec<Release>,
     }
-    let url = format!("https://musicbrainz.org/ws/2/release?release-group={release_group}&inc=url-rels+artist-credits&fmt=json&limit=10");
+    let url = format!("https://musicbrainz.org/ws/2/release?release-group={release_group}&inc=url-rels+artist-credits+media+recordings&fmt=json&limit=10");
     let b: Browse = http.get(url).send().await?.error_for_status()?.json().await?;
     let mut artists: Vec<String> = Vec::new();
     for id in b.releases.iter().flat_map(|r| r.credits.iter().map(|c| c.artist.id.clone())) {
@@ -504,7 +601,15 @@ async fn mb_urls(http: &reqwest::Client, release_group: &str) -> Result<(Vec<Str
             artists.push(id);
         }
     }
-    Ok((b.releases.into_iter().flat_map(|r| r.relations).filter_map(|r| r.url.map(|u| u.resource)).collect(), artists))
+    let with_tracks = |r: &&Release| r.media.iter().any(|m| m.count > 0);
+    let one = b.releases.iter().filter(with_tracks).find(|r| r.status.as_deref() == Some("Official")).or_else(|| b.releases.iter().find(with_tracks));
+    let tracks = one.map(|r| r.media.iter().map(|m| m.count).sum::<u32>());
+    let length_secs = one.and_then(|r| {
+        let all: Vec<&Track> = r.media.iter().flat_map(|m| &m.tracks).collect();
+        let ms: Option<u64> = all.iter().map(|t| t.length).sum();
+        ms.filter(|_| !all.is_empty()).map(|ms| (ms / 1000) as u32)
+    });
+    Ok(MbAlbum { urls: b.releases.into_iter().flat_map(|r| r.relations).filter_map(|r| r.url.map(|u| u.resource)).collect(), artists, tracks, length_secs })
 }
 
 /// The pages MusicBrainz keeps for an artist (their "url" relations).
@@ -633,6 +738,19 @@ pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::C
     let (ud, a) = (serve.userdata.clone(), account.to_string());
     let (answered, no_artists) = tokio::task::spawn_blocking(move || ud.discover_answered(&a)).await??;
     let mut albums = one_list(candidates, &|c: &Candidate| have.has(c), &have.known, &answered, &no_artists);
+    // What each is and its genres, from ListenBrainz in a few calls, so the cards show them from the first.
+    progress("Reading what each album is", 0, None);
+    let groups: Vec<String> = albums.iter().filter_map(|s| s.release_group.clone()).collect();
+    match lb_group_facts(&http, &groups).await {
+        Ok(facts) => {
+            for s in albums.iter_mut() {
+                if let Some((kind, genres)) = s.release_group.as_ref().and_then(|g| facts.get(g)) {
+                    (s.kind, s.genres) = (kind.clone(), genres.clone());
+                }
+            }
+        }
+        Err(e) => tracing::info!("discover: ListenBrainz's facts of the albums could not be read: {e:#}"),
+    }
     // Shown the moment they are known (the owner, 2026-10-24, 0.9): kept now, so the page lists them while the rest is
     // looked up behind them, and kept again as it fills in (the page reads them again as this step moves on).
     let at = super::moment::now_secs();
@@ -646,19 +764,34 @@ pub async fn look(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::C
         }
         let s = &mut albums[i];
         progress(LISTEN_STEP, i as u64, Some(total));
-        let (mut urls, artists) = match &s.release_group {
+        let mut mb = match &s.release_group {
             Some(g) => {
                 let got = mb_urls(&http, g).await.unwrap_or_default();
                 tokio::time::sleep(MB_PAUSE).await;
                 got
             }
-            None => (Vec::new(), Vec::new()),
+            None => MbAlbum::default(),
         };
-        s.bandcamp = bandcamp_page(&http, &urls, &artists, &s.artist, &s.album).await;
+        (s.track_count, s.length_secs) = (mb.tracks, mb.length_secs);
+        s.bandcamp = bandcamp_page(&http, &mb.urls, &mb.artists, &s.artist, &s.album).await;
         if let Some(p) = &s.bandcamp {
-            urls.insert(0, p.clone());
+            mb.urls.insert(0, p.clone());
         }
-        s.links.extend(listen_links(&urls, &s.artist, &s.album));
+        s.links.extend(listen_links(&mb.urls, &s.artist, &s.album));
+        // How many listen to it, where the account asks Last.fm (its tracks too, where MusicBrainz had none).
+        if let Some((_, auth)) = &who.lastfm
+            && let Ok(info) = fm(&http, auth, "album.getinfo", &[("artist", &s.artist), ("album", &s.album), ("autocorrect", "1")]).await
+        {
+            let info = &info["album"];
+            s.listeners = Some(number(&info["listeners"]) as u64).filter(|n| *n > 0);
+            if s.track_count.is_none()
+                && let Some(tracks) = info["tracks"]["track"].as_array().filter(|t| !t.is_empty())
+            {
+                s.track_count = Some(tracks.len() as u32);
+                let secs: Vec<f64> = tracks.iter().map(|t| number(&t["duration"])).collect();
+                s.length_secs = secs.iter().all(|d| *d > 0.0).then(|| secs.iter().sum::<f64>() as u32);
+            }
+        }
     }
     let found = Found { at, albums, notes };
     keep_found(serve, account, &found).await?;
@@ -836,6 +969,21 @@ mod tests {
             &HashSet::from([loose("Twice")]),
         );
         assert_eq!(list.iter().map(|s| s.album.as_str()).collect::<Vec<_>>(), ["Kept"]);
+    }
+
+    #[test]
+    fn genres_are_tags_that_name_a_genre_the_most_given_first() {
+        let tags = serde_json::json!([
+            {"tag": "rock", "count": 8, "genre_mbid": "g1"},
+            {"tag": "alternative rock", "count": 12, "genre_mbid": "g2"},
+            {"tag": "jazz", "count": 1, "genre_mbid": "g3"},
+            {"tag": "alternative", "count": 30},
+            {"tag": "pop rock", "count": 5, "genre_mbid": "g4"},
+            {"tag": "indie rock", "count": 4, "genre_mbid": "g5"}
+        ]);
+        assert_eq!(genres_of(&tags), ["alternative rock", "rock", "pop rock"], "no tag without a genre, three at most, a stray vote left out");
+        assert!(genres_of(&serde_json::json!([])).is_empty());
+        assert_eq!(genres_of(&serde_json::json!([{"tag": "ambient", "count": 1, "genre_mbid": "g"}])), ["ambient"], "one vote is enough alone");
     }
 
     #[test]

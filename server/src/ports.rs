@@ -79,8 +79,8 @@ impl Acquisition for crate::lidarr::Lidarr {
 pub trait Fetcher: Send + Sync {
     /// Fetch this album into Incoming. What was done, in words.
     fn want<'a>(&'a self, release_group: Option<&'a str>, artist: &'a str, album: &'a str) -> Fut<'a, String>;
-    /// How far it is with this album.
-    fn status<'a>(&'a self, release_group: &'a str) -> Fut<'a, crate::lidarr::Progress>;
+    /// How far it is with each of these albums, all asked at once (the Requests page shows many).
+    fn statuses<'a>(&'a self, release_groups: &'a [String]) -> Fut<'a, std::collections::HashMap<String, crate::lidarr::Progress>>;
     /// Stop fetching it (what is there already stays).
     fn cancel<'a>(&'a self, release_group: &'a str) -> Fut<'a, ()>;
 }
@@ -96,8 +96,8 @@ impl Fetcher for LidarrFetcher {
         Box::pin(self.lidarr.want(&self.with, release_group, artist, album))
     }
 
-    fn status<'a>(&'a self, release_group: &'a str) -> Fut<'a, crate::lidarr::Progress> {
-        Box::pin(self.lidarr.progress(release_group))
+    fn statuses<'a>(&'a self, release_groups: &'a [String]) -> Fut<'a, std::collections::HashMap<String, crate::lidarr::Progress>> {
+        Box::pin(self.lidarr.progress(release_groups))
     }
 
     fn cancel<'a>(&'a self, release_group: &'a str) -> Fut<'a, ()> {
