@@ -86,7 +86,8 @@ the card shows as much as is known of the suggestion.
   it (the owner, 2026-10-24); looks kept from before read without it.
 - **The card:** the cover, album, artist, year; its type (album, EP, live); its genres, two or three; its length and how
   many tracks; the reason, short ("Like Air and Bonobo", "Missing from Air's albums", "ListenBrainz recommends");
-  New to you or By an artist you have; how many listen to it (Last.fm's listeners, where known); and, with 0070, the
+  New to you where the artist is (no label otherwise: "By an artist you have" on every other card said only that New
+  to you was not there, the owner, 2026-10-24); how many listen to it (Last.fm's listeners, where known); and, with 0070, the
   request's status.
 - **Genres:** MusicBrainz's own genres (its curated list), else the services' tags kept only where they name a genre
   on that list (no "seen live").

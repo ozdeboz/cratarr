@@ -225,7 +225,6 @@
                 <span class="tags">
                   {#each a.sources ?? [] as src (src)}<span class="tag source">{src}</span>{/each}
                   {#if a.listeners}<span class="tag source">{listeners(a.listeners)}</span>{/if}
-                  {#if !a.new_artist}<span class="tag source">By an artist you have</span>{/if}
                   {#if a.bandcamp}<span class="tag source">On Bandcamp</span>{/if}
                 </span>
                 {#if r && asked(r)}
