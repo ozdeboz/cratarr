@@ -1631,7 +1631,7 @@ export const takeBackExcluded = (what: { key: string } | { artist: string }) =>
   request<void>(`/api/discover/excluded?${new URLSearchParams(what)}`, { method: 'DELETE' });
 /** An album's page on Bandcamp, looked for when it is opened (MusicBrainz's link first, the artist's page, the search). */
 export const findOnBandcamp = (artist: string, album: string, release_group?: string) =>
-  quietly<{ page: string | null }>(`/api/bandcamp/find?${new URLSearchParams({ artist, album, ...(release_group ? { release_group } : {}) })}`);
+  request<{ page: string | null }>(`/api/bandcamp/find?${new URLSearchParams({ artist, album, ...(release_group ? { release_group } : {}) })}`);
 /** Want for any album (a missing one): the same request and rights as Discover's Want. */
 export const wantAlbum = (a: { release_group?: string; artist: string; album: string; year?: number | null; cover?: string | null }) =>
   post<{ request: AlbumRequest }>('/api/requests/want', a);

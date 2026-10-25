@@ -5,11 +5,12 @@
   // rows, `top`), whose › shows all their tracks; then related artists to explore (lib/RelatedArtists, 0.9.2).
   import type { Snippet } from 'svelte';
   import { tick } from 'svelte';
-  import { getArtistAbout, getDiscoverArtist, type ListedAlbum, type PhotoCredit } from './api';
+  import { getArtistAbout, getArtistMissing, getDiscoverArtist, type ListedAlbum, type MissingAlbum, type PhotoCredit } from './api';
   import { DISCOVER } from './discoverArtist';
   import { pageAsked } from './artistAbout.svelte';
   import AlbumCard from './AlbumCard.svelte';
   import RelatedArtists from './RelatedArtists.svelte';
+  import ElsewhereAlbum from './ElsewhereAlbum.svelte';
   import SectionHead from './SectionHead.svelte';
   import { matchesSearch } from './pageView.svelte';
 
@@ -75,6 +76,35 @@
       );
     return () => (gone = true);
   });
+  // Not in your library (the owner, 2026-10-25; the server's lookup since 0.9.3): the artist's albums MusicBrainz lists
+  // that the library lacks, asked when the page opens; while the server is still reading their discography (`looking`)
+  // asked again a little later. A tap opens one on Bandcamp, else its menu (Want; lib/ElsewhereAlbum). Cratarr's own
+  // library's artists only.
+  let missing = $state<MissingAlbum[]>([]);
+  $effect(() => {
+    const [s, n] = [source, name];
+    missing = [];
+    if (s !== 'cratarr') return;
+    let gone = false;
+    let t = 0;
+    const ask = (left: number) =>
+      getArtistMissing(n).then(
+        (r) => {
+          if (gone) return;
+          missing = r.albums;
+          if (r.looking && left > 0) t = window.setTimeout(() => ask(left - 1), 4000);
+        },
+        () => {},
+      );
+    void ask(5);
+    return () => {
+      gone = true;
+      clearTimeout(t);
+    };
+  });
+  const missingShown = $derived(missing.filter((a) => hit(a.title)));
+  let elsewhere = $state<ElsewhereAlbum>();
+  let finding = $state<string | null>(null);
   let aboutEl = $state<HTMLElement>();
   // Asked for from Home's fanned albums: Albums in view (once the page above it has its height).
   let albumsEl = $state<HTMLElement>();
@@ -122,6 +152,25 @@
     {@render grid(appearsShown)}
   </section>
 {/if}
+{#if missingShown.length}
+  <section aria-label="Not in your library">
+    <SectionHead title="Not in your library" />
+    <ul class="grid">
+      {#each missingShown as m (m.release_group)}
+        <li>
+          <AlbumCard
+            source="musicbrainz"
+            album={{ id: m.release_group, title: m.title, year: m.year }}
+            cover={m.cover}
+            busy={finding === m.release_group}
+            onopen={() => elsewhere?.open({ release_group: m.release_group, title: m.title, artist: m.artist, year: m.year, cover: m.cover })}
+          />
+        </li>
+      {/each}
+    </ul>
+  </section>
+{/if}
+<ElsewhereAlbum bind:this={elsewhere} bind:finding />
 {#if top}
   <section aria-label="Top recommendations">
     <SectionHead title="Top recommendations" onmore={ontracks} />

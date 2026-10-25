@@ -1,7 +1,8 @@
 <script lang="ts">
   // An album in a panel's page (an album's More from, an artist's Albums and Appears on; as Symfonium's): its cover,
   // title and year (or the `lines` given: Home's artist and when it came). A tap views it over the page (back returns); a long-press or a right-click opens its menu (decision
-  // 0058).
+  // 0058). Not in the library (an artist's missing albums, 0.9.5): its `cover` and its own `onopen` (Bandcamp, else
+  // its menu), no menu of the library's.
   import { albumCoverUrl, type ListedAlbum } from './api';
   import AlbumMenu from './AlbumMenu.svelte';
   import BandcampAlbumMenu from './BandcampAlbumMenu.svelte';
@@ -11,7 +12,24 @@
   import { albumSubject, viewOver } from './panel.svelte';
   import { libraryDot } from './albums.svelte';
 
-  let { source, album, lines = null }: { source: string; album: Pick<ListedAlbum, 'id' | 'title' | 'year'> & Partial<ListedAlbum>; lines?: string[] | null } = $props();
+  let {
+    source,
+    album,
+    lines = null,
+    cover = undefined,
+    onopen = null,
+    busy = false,
+  }: {
+    source: string;
+    album: Pick<ListedAlbum, 'id' | 'title' | 'year'> & Partial<ListedAlbum>;
+    lines?: string[] | null;
+    /** Not the library's cover (an album not in it): its own, or none. */
+    cover?: string | null;
+    /** Not the library's album: what a tap does instead of viewing it. */
+    onopen?: (() => void) | null;
+    /** Its tap is at work (looking on Bandcamp): the busy ring over it. */
+    busy?: boolean;
+  } = $props();
   let menu = $state(false);
   // Its library, as a dot before its title (0.9.3): as the Library's lists show it.
   const dot = $derived(libraryDot(source, album));
@@ -19,8 +37,14 @@
 
 {#if menu && source === BANDCAMP}<BandcampAlbumMenu album={{ id: album.id, title: album.title, artist: album.artist ?? null }} onclose={() => (menu = false)} />
 {:else if menu}<AlbumMenu {source} album={{ ...album, artist: album.artist ?? null }} onclose={() => (menu = false)} />{/if}
-<button class="card" onclick={() => viewOver(albumSubject(source, album.id))} aria-label="View {album.title}" use:longpress={() => (menu = true)}>
-  <span class="cover"><Cover src={albumCoverUrl(source, album.id)} /></span>
+<button
+  class="card"
+  onclick={() => (onopen ? onopen() : viewOver(albumSubject(source, album.id)))}
+  aria-label="{onopen ? 'Open' : 'View'} {album.title}"
+  aria-busy={busy || undefined}
+  use:longpress={() => !onopen && (menu = true)}
+>
+  <span class="cover"><Cover src={cover === undefined ? albumCoverUrl(source, album.id) : cover} /></span>
   <span class="title">{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{album.title}</span>
   {#if lines}{#each lines.filter(Boolean) as l, i (i)}<span class="year">{l}</span>{/each}{:else if album.year}<span class="year">{album.year}</span>{/if}
 </button>
@@ -37,6 +61,7 @@
   }
 
   .card {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 2px;

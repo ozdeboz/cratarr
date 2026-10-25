@@ -87,7 +87,7 @@
             <Row size="large" title={a.title} label={`Open ${a.title}`} onclick={() => open(a)}>
               {#snippet front()}<span class="art"><Cover src={a.cover} /></span>{/snippet}
               {#snippet sub()}{a.artist}{a.year ? ` · ${a.year}` : ''}{a.kind && a.kind !== 'Album' ? ` · ${a.kind}` : ''}{#if a.have}<span class="have"> · in your library</span>{:else if asked.includes(a.release_group)}<span class="have"> · asked for</span>{/if}{/snippet}
-              {#snippet action()}{#if finding === a.release_group}<span class="have" aria-label="Looking on Bandcamp">…</span>{/if}{/snippet}
+              {#snippet action()}{#if finding === a.release_group}<button class="spin" aria-busy="true" disabled aria-label="Looking on Bandcamp"></button>{/if}{/snippet}
             </Row>
           </li>
         {/each}
@@ -126,5 +126,15 @@
 
   .have {
     color: var(--accent-ink);
+  }
+
+  /* Looking on Bandcamp (the owner, 2026-10-25): the app's busy ring (app.css), in the row's end. */
+  .spin {
+    position: relative;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 0;
+    background: none;
   }
 </style>

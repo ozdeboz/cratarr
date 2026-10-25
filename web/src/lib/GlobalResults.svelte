@@ -13,6 +13,7 @@
   import Row from './Row.svelte';
   import SectionHead from './SectionHead.svelte';
   import { artistSubject, viewOver } from './panel.svelte';
+  import { libraryDot } from './albums.svelte';
   import type { FoundGroup } from './globalSearch.svelte';
   import { pageView } from './pageView.svelte';
   import type { SearchResult } from './search';
@@ -37,6 +38,13 @@
       viewOver(artistSubject('cratarr', one, g.kind === 'track'));
     };
   }
+  // An album's or a track's library, as a dot before its title, as the Library's lists show it (0.9.5): from its
+  // album's subject (`album:<source>/<id>`), the Library's list knowing which library each is in.
+  function dotOf(it: SearchResult) {
+    if (it.kind !== 'album' && it.kind !== 'track') return null;
+    const m = /^album:([^/]+)\/(.+)$/.exec(it.subject);
+    return m ? libraryDot(m[1], { id: m[2] }) : null;
+  }
   const why = (m: { on: string; text: string; count?: number }[]) => {
     const t = m.find((x) => x.on !== 'name');
     return t ? `${t.on === 'track' ? 'Track' : t.on === 'album' ? 'Album' : t.on === 'artist' ? 'By' : t.on}: ${t.text}${t.count && t.count > 1 ? ` · ${t.count}` : ''}` : null;
@@ -45,6 +53,7 @@
   // A tap: a page or a part where it shows (the words kept, so it narrows to them), an album not in the library on
   // Bandcamp or its menu, what Discover left out its menu (Take back), the rest in the panel.
   let elsewhere = $state<ElsewhereAlbum>();
+  let finding = $state<string | null>(null);
   let leftOut = $state<SearchResult | null>(null);
   // A result tapped empties the search (the owner, 2026-10-25: it stayed in the field over the panel it opened); a set
   // found deep keeps the words, so it opens narrowed to them as the page's own deep find does (decision 0072), its own
@@ -89,6 +98,8 @@
             <li>
               <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)}>
                 {#snippet front()}{#if it.kind !== 'setting' && !it.kind.startsWith('page:')}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /></span>{/if}{/snippet}
+                {#snippet action()}{#if it.kind === 'missing' && finding === it.subject.slice('missing:'.length)}<button class="spin" aria-busy="true" disabled aria-label="Looking on Bandcamp"></button>{/if}{/snippet}
+                {#snippet badges()}{@const dot = dotOf(it)}{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{/snippet}
                 {#snippet sub()}{it.sub ?? ''}{#if why(it.matched)}<span class="why">{it.sub ? ' · ' : ''}{why(it.matched)}</span>{/if}{/snippet}
               </Row>
             </li>
@@ -103,7 +114,7 @@
     {/if}
   </section>
 {/if}
-<ElsewhereAlbum bind:this={elsewhere} />
+<ElsewhereAlbum bind:this={elsewhere} bind:finding />
 {#if leftOut}
   {@const it = leftOut}
   <MenuSheet label={it.title} title={it.title} images={it.cover ? [it.cover] : []} chips={[it.sub ?? '']} onclose={() => (leftOut = null)}>
@@ -132,6 +143,24 @@
   }
 
   .art.round {
+    border-radius: 50%;
+  }
+
+  /* Looking on Bandcamp (the owner, 2026-10-25): the app's busy ring (app.css), in the row's end. */
+  .spin {
+    position: relative;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 0;
+    background: none;
+  }
+
+  /* The library's dot, as the Library's lists have it. */
+  .dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
   }
 

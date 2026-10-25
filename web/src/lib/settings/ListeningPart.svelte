@@ -131,7 +131,7 @@
     {#if error}<Item lead="bad" name={error} wrap />{/if}
   </Group>
   {#if service === 'listenbrainz'}
-    <Group title="Account">
+    <Group title="Sign-in">
       <Item
         name="User token"
         line={t ? 'Given' : 'On listenbrainz.org, under your name › Settings'}
@@ -140,7 +140,7 @@
       />
     </Group>
   {:else}
-    <Group title="Account" more="Make both at last.fm/api/account/create (any name will do). Then Last.fm asks you to allow Cratarr, and brings you back here.">
+    <Group title="Sign-in" more="Make both at last.fm/api/account/create (any name will do). Then Last.fm asks you to allow Cratarr, and brings you back here.">
       <Item name="API key" line={apiKey ? 'Given' : t ? 'Kept' : 'Not given'} tone={apiKey || t ? null : 'warn'} onclick={() => (typing = 'key')} />
       <Item name="Shared secret" line={apiSecret ? 'Given' : t ? 'Kept' : 'Not given'} tone={apiSecret || t ? null : 'warn'} onclick={() => (typing = 'secret')} />
       <Item name={t && !t.broken ? 'Signed in at Last.fm' : 'Not signed in at Last.fm'} line={apiKey && apiSecret ? null : 'Give the key and the secret first'}>

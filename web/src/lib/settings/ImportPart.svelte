@@ -360,7 +360,7 @@
   </Group>
   {#if lb.result?.missing.length}
     {@const t = lb.result}
-    <Group title={`Not in your library (${n(t.missing_tracks)})`}>
+    <Group title="Not in your library">
       {#each t.missing as m (`${m.artist}\n${m.title}`)}
         <Item name={m.title} line={`${m.artist} · ${n(m.count)} ${m.count === 1 ? 'listen' : 'listens'}`} />
       {/each}
@@ -428,7 +428,7 @@
   </Group>
   {#if fm.result?.scrobbles.missing.length}
     {@const t = fm.result.scrobbles}
-    <Group title={`Not in your library (${n(t.missing_tracks)})`}>
+    <Group title="Not in your library">
       {#each t.missing as m (`${m.artist}|${m.title}`)}
         <Item name={m.title} line={`${m.artist} · ${n(m.count)} ${m.count === 1 ? 'scrobble' : 'scrobbles'}`} />
       {/each}
@@ -437,7 +437,7 @@
   {/if}
   {#if lovedMissing.length}
     <Group
-      title={`Loved, not in your library (${n(lovedMissing.length)})`}
+      title="Loved, not in your library"
       more="Last.fm keeps no album with a love: each is the album the track was most often scrobbled from, where it was."
     >
       <Item name="Copy the list" line={lovedCopied ? 'Copied: artist, title and album, a line each' : 'Artist, title and album, a line each'}>
@@ -449,7 +449,7 @@
       {#if !lovedAll && lovedMissing.length > 20}<Item name={`Show all ${n(lovedMissing.length)}`} onclick={() => (lovedAll = true)} />{/if}
     </Group>
     {#if lovedAlbums.length}
-      <Group title={`Their albums (${n(lovedAlbums.length)})`}>
+      <Group title="Their albums">
         {#each albumsAll ? lovedAlbums : lovedAlbums.slice(0, 20) as a (`${a.artist}\n${a.album}`)}
           <Item name={a.album} line={`${a.artist} · ${a.tracks} loved ${a.tracks === 1 ? 'track' : 'tracks'}`} />
         {/each}
@@ -515,7 +515,7 @@
     </Group>
     {#each fileRuns.filter((r) => r.done?.tally.missing.length) as r (r.file)}
       {@const t = r.done!.tally}
-      <Group title={`Not in your library: ${r.file} (${n(t.missing_tracks)})`}>
+      <Group title={`Not in your library: ${r.file}`}>
         {#each t.missing.slice(0, 20) as m (`${m.artist}|${m.title}`)}
           <Item name={m.title} line={`${m.artist} · ${n(m.count)}`} />
         {/each}
