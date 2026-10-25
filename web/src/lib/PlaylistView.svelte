@@ -184,7 +184,7 @@
   /** What the artist's answer says besides their tracks: their albums, what they appear on, the heart. */
   let artistHead = $state<Pick<ArtistView, 'albums' | 'appears_on' | 'favorite'> | null>(null);
   /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
-  let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays'> & { kbps: number | null } | null>(null);
+  let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners'> & { kbps: number | null } | null>(null);
   /** An album's or a crate's genres, most shared first, as its first page came (a playlist's are its Insights'). */
   let listGenres = $state<string[] | null>(null);
   /** The selected playlists; several: Tracks shows a section per playlist (decision 0025). */
@@ -343,7 +343,7 @@
         ? (a.source === DEVICE ? Promise.resolve(deviceAlbumView(a.id)) : albumView(a.source, a.id)).then((r) => {
             if (want === id && r.id !== a.id) albumMoved(a.source, a.id, r.id);
             if (want === id)
-              albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays };
+              albumHead = { title: r.title, artist: r.artist, year: r.year, format: r.format ?? null, kbps: r.bitrate_kbps ?? null, added: r.added, played: r.played, plays: r.plays, released: r.released, label: r.label, about: r.about, credits: r.credits, tags: r.tags, links: r.links, listeners: r.listeners };
             return { ...r, total: r.rows.length };
           })
         : ar
@@ -1949,6 +1949,17 @@ ${r.album_artist ?? r.artist ?? ''}`;
         {#if by}<AlbumMore source={album.source} album={album.id} artist={by} />{/if}
         <SimilarAlbums source={album.source} album={album.id} />
         <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} />
+      {/if}
+      {#if album && albumHead && album.source === BANDCAMP}
+        <!-- A Bandcamp album's About (the owner, 2026-10-25: "as much as our own panel"): what its page says. -->
+        <AlbumAbout
+          source={album.source}
+          album={album.id}
+          genres={listGenres ?? []}
+          year={albumHead.year}
+          provider={{ server: 'Bandcamp', library: null, colour: null }}
+          more={albumHead}
+        />
       {/if}
     {:else}
       <PageLoading />

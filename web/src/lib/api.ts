@@ -1674,6 +1674,15 @@ export type AlbumView = {
   added?: number;
   played?: number;
   plays?: number;
+  /** What its page says of an album elsewhere (a Bandcamp album's, 0.9.2; the owner, 2026-10-25: "as much as our own
+   *  panel"): its release date, label, words about it and credits, its other tags, its pages, how many listen. */
+  released?: string;
+  label?: string;
+  about?: string;
+  credits?: string;
+  tags?: string[];
+  links?: { name: string; url: string }[];
+  listeners?: number;
 };
 export const albumView = (source: string, album: string) =>
   quietly<AlbumView>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`);
