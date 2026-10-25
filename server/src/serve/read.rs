@@ -590,6 +590,15 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The albums whose files carry no genre (0.9.5: asked of Discogs): their ids, MusicBrainz releases (or empty),
+    /// artists and names.
+    pub fn albums_without_genres(&self) -> Result<Vec<(String, String, String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, coalesce(mbid, ''), artist, name FROM albums WHERE genres = '' ORDER BY n")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// The MusicBrainz releases of the albums without an original year (0.9.5: asked of MusicBrainz), in the library's
     /// order.
     pub fn releases_without_original(&self) -> Result<Vec<String>> {
