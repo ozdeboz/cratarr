@@ -5,6 +5,8 @@
   // filter).
   import type { Snippet } from 'svelte';
   import MoreInfo from '../MoreInfo.svelte';
+  import { matchesSearch } from '../pageView.svelte';
+  import { groupHit, settingsNarrowed } from './narrow';
 
   let {
     title = null,
@@ -17,9 +19,14 @@
     tail?: Snippet;
     children: Snippet;
   } = $props();
+  // The panel's own search on a phone (lib/settings/narrow): a title with the words keeps all its rows; none left, the
+  // group goes too.
+  const narrowed = settingsNarrowed();
+  const hit = $derived(!!title && matchesSearch(title));
+  groupHit(() => hit);
 </script>
 
-<div class="group" role="group" aria-label={title ?? undefined}>
+<div class="group" class:narrowed={narrowed()} class:hit role="group" aria-label={title ?? undefined}>
   {#if title || tail}
     <h3>
       {#if title}<span>{title}</span>{/if}{#if title && more}<MoreInfo label={title} text={more} />{/if}
@@ -58,5 +65,9 @@
 
   .block > :global(* + *) {
     border-top: 1px solid var(--border);
+  }
+
+  .group.narrowed:not(.hit):not(:has(:global(.item:not(.left)))) {
+    display: none;
   }
 </style>

@@ -16,7 +16,9 @@
   import { plural } from './insights.svelte';
   import { clockText } from './remote.svelte';
 
-  let { crate: c, active, onclick, onmenu }: { crate: Crate; active: boolean; onclick: () => void; onmenu?: () => void } = $props();
+  // `why`: found by the search through its tracks (the server's deep search, decision 0072): which, and how many, in its
+  // genres' place.
+  let { crate: c, active, onclick, onmenu, why }: { crate: Crate; active: boolean; onclick: () => void; onmenu?: () => void; why?: string } = $props();
 
   const art = $derived(mosaicOf(crateArt(c.id)));
   const fav = $derived(FAVOURITES[favouritesOf(c.id)]);
@@ -55,7 +57,7 @@
       <span class="heart" class:filled={fav.filled} title={fav.label} aria-label={fav.label}><Icon name={fav.icon} size={12} /></span>
       <span class="heart" class:filled={albums.filled} title={albums.label} aria-label={albums.label}><Icon name={albums.icon} size={12} /></span>
     </span>
-    {#if st?.genres.length}<span class="genres">{st.genres.join(' • ')}</span>{/if}
+    {#if why}<span class="genres why">{why}</span>{:else if st?.genres.length}<span class="genres">{st.genres.join(' • ')}</span>{/if}
     {#if st?.unplayed || st?.new_week}
       <span class="badges">
         {#if st.unplayed}<span class="badge">{st.unplayed.toLocaleString()} unplayed</span>{/if}
@@ -188,6 +190,11 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     opacity: 0.75;
+  }
+
+  .genres.why {
+    color: var(--accent-ink);
+    opacity: 1;
   }
 
   .line {

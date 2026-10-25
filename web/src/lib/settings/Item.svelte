@@ -13,6 +13,8 @@
   import Meter from '../Meter.svelte';
   import MoreInfo from '../MoreInfo.svelte';
   import SwitchTrack from '../SwitchTrack.svelte';
+  import { matchesSearch } from '../pageView.svelte';
+  import { inGroupHit, settingsNarrowed } from './narrow';
 
   let {
     name,
@@ -55,6 +57,20 @@
   const act = $derived(toggle ? () => toggle.onchange(!toggle.checked) : onclick);
   const DOTS = ['on', 'off', 'warn', 'bad'];
   const opens = $derived(!!onclick && !kind && !toggle);
+  // Left out by the panel's own search on a phone (lib/settings/narrow), unless its group's title has the words: read
+  // in its name and all it shows (its line, its value, its choices' labels: "dark" finds Theme).
+  const narrowed = settingsNarrowed();
+  const groupHas = inGroupHit();
+  let el = $state<HTMLElement>();
+  /** Its texts apart (its choices' labels side by side would read as one word). */
+  function shown(node: HTMLElement | undefined) {
+    if (!node) return '';
+    const parts: string[] = [];
+    const walk = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    while (walk.nextNode()) parts.push(walk.currentNode.textContent ?? '');
+    return parts.join(' ');
+  }
+  const left = $derived(narrowed() && !groupHas() && !matchesSearch(name, shown(el)));
 </script>
 
 {#snippet body()}
@@ -68,7 +84,7 @@
   </span>
 {/snippet}
 
-<div class="item" class:act={!!act} class:add={kind === 'add'} class:danger={kind === 'danger'} class:off={disabled}>
+<div class="item" bind:this={el} class:left class:act={!!act} class:add={kind === 'add'} class:danger={kind === 'danger'} class:off={disabled}>
   {#if act}
     <button
       class="main"
@@ -105,6 +121,10 @@
 </div>
 
 <style>
+  .item.left {
+    display: none;
+  }
+
   .item {
     display: flex;
     flex-wrap: wrap;

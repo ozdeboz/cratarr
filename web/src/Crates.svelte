@@ -14,6 +14,7 @@
   import { switchOn } from './lib/listFilter.svelte';
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
+  import { deepMatches } from './lib/deepSearch.svelte';
 
   // Asked for when the page shows, and again when the playlists change (sorting a track shrinks Unlisted).
   // And when a library is switched on or off: a crate fills from every library switched on.
@@ -35,11 +36,12 @@
     unplayed: (c) => c.stats?.unplayed,
     newWeek: (c) => c.stats?.new_week,
   };
-  // The pill's search (the owner, 2026-10-25): a crate whose name holds every word.
+  // The pill's search (the owner, 2026-10-25): a crate whose name holds every word, or one the server finds by its tracks.
+  const deepOf = deepMatches('crate', 'crate:');
   const sorted = $derived.by(() => {
     // The filter's Hide built-in crates (0.9.3): only one's own.
     const noBuiltIn = switchOn('crates', 'no-built-in');
-    const list = (crates.list ?? []).filter((c) => matchesSearch(c.name) && !(noBuiltIn && c.permanent));
+    const list = (crates.list ?? []).filter((c) => (matchesSearch(c.name) || !!deepOf(c.id)) && !(noBuiltIn && c.permanent));
     const of = stat[prefs.crateOrder];
     if (prefs.crateOrder === 'name') list.sort(byName);
     else if (of) list.sort((a, b) => (of(a) ?? -1) - (of(b) ?? -1) || byName(a, b));
@@ -62,7 +64,7 @@
     <ul class="grid">
       {#each sorted as c (c.id)}
         <li>
-          <CrateCard crate={c} active={panel.viewed === CRATE + c.id || panel.viewed === EDIT_CRATE + c.id} onclick={() => viewPlaylist(CRATE + c.id)} onmenu={() => (menuFor = c.id)} />
+          <CrateCard crate={c} active={panel.viewed === CRATE + c.id || panel.viewed === EDIT_CRATE + c.id} onclick={() => viewPlaylist(CRATE + c.id)} onmenu={() => (menuFor = c.id)} why={deepOf(c.id)} />
         </li>
       {/each}
     </ul>

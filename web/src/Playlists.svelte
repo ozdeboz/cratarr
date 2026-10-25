@@ -2,8 +2,8 @@
   import ListHead from './lib/ListHead.svelte';
   import { matchesSearch, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, playlistBy, usePageAction } from './lib/pageView.svelte';
   import { passing, switchOn } from './lib/listFilter.svelte';
-  import { search, type Playlist, type PlayMode } from './lib/api';
-  import type { Matched } from './lib/search';
+  import type { Playlist, PlayMode } from './lib/api';
+  import { deepMatches } from './lib/deepSearch.svelte';
   import { prefs } from './lib/prefs.svelte';
   import { live, queueTap } from './lib/live.svelte';
   import Notice from './lib/Notice.svelte';
@@ -54,40 +54,9 @@
   const pass = passing(() => 'playlists', () => ({ list: { kind: 'playlists' }, source: prefs.source || undefined }));
   /** What a filter goes by is not in yet: the page loads rather than show them all, or none (the owner, 2026-10-23). */
   const waiting = $derived((switchOn('playlists', 'favourites') && !playlistFavoritesKnown()) || (pass.pending && !pass.keys));
-  // Deep (decision 0072): the playlists the server finds by their tracks, with why (the owner, 2026-10-25: "Gardner"
-  // found none of the playlists holding his tracks); asked a moment after the words stop changing, as the Library's.
-  let deep = $state<Map<string, Matched>>(new Map());
-  $effect(() => {
-    const q = pageView.query.trim();
-    if (!q) {
-      deep = new Map();
-      return;
-    }
-    let gone = false;
-    const t = setTimeout(() => {
-      search(q, ['playlist'], 100).then(
-        (r) => {
-          if (gone) return;
-          const m = new Map<string, Matched>();
-          for (const it of r.groups.playlist?.items ?? []) {
-            const on = it.matched.find((x) => x.on !== 'name');
-            if (on) m.set(it.subject.replace(/^playlist:/, ''), on);
-          }
-          deep = m;
-        },
-        () => {},
-      );
-    }, 250);
-    return () => {
-      gone = true;
-      clearTimeout(t);
-    };
-  });
-  /** Why a playlist found only by its tracks is there: the track or artist, and how many of its tracks match. */
-  const deepOf = (id: string) => {
-    const d = pageView.query.trim() ? deep.get(id) : undefined;
-    return d ? `${d.text}${d.count && d.count > 1 ? ` · ${d.count} tracks` : ''}` : undefined;
-  };
+  // The playlists the server finds by their tracks, with why (the owner, 2026-10-25: "Gardner" found none of those
+  // holding his tracks).
+  const deepOf = deepMatches('playlist', 'playlist:');
   const items = $derived.by(() => {
     let list = shownPlaylists().map((p) => {
       const member = optimistic[p.id] ?? p.member;

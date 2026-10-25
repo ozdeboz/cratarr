@@ -12,6 +12,9 @@
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { untrack } from 'svelte';
+  import { narrowSettings } from './settings/narrow';
+  import { matchesSearch, pageView } from './pageView.svelte';
+  import { words } from './search';
   import Crumbs from './Crumbs.svelte';
   import Icon from './Icon.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -85,7 +88,12 @@
   // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): handed over,
   // its own bar not drawn, its list under the glass.
   const handed = $derived(glass.one && !beside);
-  handGlass(() => handed, { left: glassLeft, pill: () => null, extra: glassExtra });
+  // Its own search there, as every panel's (the owner, 2026-10-25): the part's rows narrowed to it (lib/settings/narrow),
+  // all of them when the part's name has the words; a thing's page has none.
+  const narrowing = $derived(handed && !thing && words(pageView.query).length > 0 && !matchesSearch(partTitle));
+  narrowSettings(() => narrowing);
+  const pill = () => (!thing ? { device: false, filter: false, view: false, search: 'settings' } : null);
+  handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra });
 </script>
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
@@ -170,6 +178,8 @@
       <SaveBar saving={ed.saving} canSave={!!ed.s?.settings_file} onsave={ed.save} ondiscard={() => ed.s && ed.fill(ed.s)} />
     {/if}
       <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
+    <!-- Its own search leaving no row (shown until one is left, lib/settings/narrow). -->
+    {#if narrowing}<p class="none">No settings match.</p>{/if}
     {#if handed}<GlobalResults />{/if}
   </div>
 </div>
@@ -246,5 +256,15 @@
   /* Its glass handed to App's row on a phone (lib/glass): the list starts under it. */
   .view.handed .scroll {
     padding-top: 64px;
+  }
+
+  .none {
+    margin: 8px 4px;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
+  .scroll:has(:global(.item:not(.left))) .none {
+    display: none;
   }
 </style>
