@@ -553,7 +553,9 @@
   const ALL = $derived([...MAIN, ...APART]);
   /** The page's search has its two tabs (lib/SearchScope); everywhere's shown in the page's place. */
   const scoped = $derived(page !== 'home' && page !== 'find');
-  const everywhereShown = $derived(scoped && globalSearch.scope === 'everywhere' && pageView.query.trim() !== '');
+  /** Everywhere's results in the page's place: on a page's Everywhere tab, and on Home whenever it searches (it has
+   *  nothing of its own to find; the owner, 2026-10-25: its results came after all of Home, out of sight). */
+  const everywhereShown = $derived(pageView.query.trim() !== '' && (page === 'home' || (scoped && globalSearch.scope === 'everywhere')));
   // As many of the main pages as fit, each tab at least BAR_SLOT_PX wide (the owner, 2026-10-25: Discover in the bar where
   // there is room): four and More on a phone, all five on a tablet. The pages apart (Requests, Insights, Health,
   // Settings…) stay behind More ("requests is of the other category"), unless every page fits in five (Local mode).
@@ -629,7 +631,7 @@
     <SheetArea area={() => pageEl}>
     <!-- While searching: the page's own results or everywhere's (the owner, 2026-10-25, mockup 3); Home searches
          everything as it is, Find more music is MusicBrainz's. -->
-    {#if scoped}<SearchScope label={ALL.find((p) => p.id === page)?.label ?? 'This page'} count={pageView.counted?.shown ?? null} except={PAGE_KINDS[page] ?? []} />{/if}
+    {#if scoped}<SearchScope label={ALL.find((p) => p.id === page)?.label ?? 'This page'} count={pageView.searched} except={PAGE_KINDS[page] ?? []} />{/if}
     {#if page === 'settings'}
       <Settings />
     {:else if page === 'health' && me.admin}
@@ -665,7 +667,7 @@
       <Playlists />
     {/if}
     <!-- Global search at the end of what the page's own search leaves (decision 0072), but the kind the page shows. -->
-    {#if page === 'home' || everywhereShown}<GlobalResults except={PAGE_KINDS[page] ?? []} />{/if}
+    {#if everywhereShown}<GlobalResults except={PAGE_KINDS[page] ?? []} />{/if}
     </SheetArea>
     </div>
     {#if split}

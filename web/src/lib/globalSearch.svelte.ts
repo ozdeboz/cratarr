@@ -87,3 +87,21 @@ export const globalAsked = () => globalSearch.found?.q === pageView.query.trim()
 
 /** Everywhere chosen while searching: a page's or a panel's own content set aside for everywhere's. */
 export const everywhere = () => globalSearch.scope === 'everywhere' && pageView.query.trim() !== '';
+
+/** Before a tapped result goes there: the search kept with this step of the history, so back shows it again (the
+ *  owner, 2026-10-25: "after clicking on a search result, clicking back should reopen those results"). */
+export function rememberSearch() {
+  const q = pageView.query.trim();
+  if (q) history.replaceState({ ...(history.state ?? {}), search: { q, scope: globalSearch.scope } }, '');
+}
+if (typeof window !== 'undefined') {
+  addEventListener('popstate', () => {
+    const kept = history.state?.search as { q: string; scope: 'page' | 'everywhere' } | undefined;
+    if (!kept) return;
+    // After the page's own change has emptied its search (App: each page starts with it empty).
+    setTimeout(() => {
+      pageView.query = kept.q;
+      globalSearch.scope = kept.scope;
+    }, 0);
+  });
+}

@@ -7,11 +7,13 @@
   import { takeBackExcluded } from './api';
   import Cover from './Cover.svelte';
   import ElsewhereAlbum from './ElsewhereAlbum.svelte';
-  import { globalAsked, globalGroups, globalSearch } from './globalSearch.svelte';
+  import { globalAsked, globalGroups, globalSearch, rememberSearch } from './globalSearch.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import Row from './Row.svelte';
-  import { viewOver } from './panel.svelte';
+  import SectionHead from './SectionHead.svelte';
+  import { artistSubject, viewOver } from './panel.svelte';
+  import type { FoundGroup } from './globalSearch.svelte';
   import { pageView } from './pageView.svelte';
   import type { SearchResult } from './search';
   import { toast } from './toast.svelte';
@@ -22,6 +24,19 @@
   const q = $derived(pageView.query.trim());
   const groups = $derived(globalGroups(except));
   const asked = $derived(globalAsked());
+  /** Where a group's heading leads (its ›; the owner, 2026-10-25: "Tracks (N)" and an arrow to the artist's tracks):
+   *  a group found all by one artist's name, to that artist's tracks or page. */
+  function moreOf(g: FoundGroup): (() => void) | undefined {
+    if (g.kind !== 'track' && g.kind !== 'album') return undefined;
+    const by = g.items.map((it) => it.matched.find((m) => m.on === 'artist')?.text);
+    const one = by[0];
+    if (!one || by.some((a) => a !== one)) return undefined;
+    return () => {
+      rememberSearch();
+      pageView.query = '';
+      viewOver(artistSubject('cratarr', one, g.kind === 'track'));
+    };
+  }
   const why = (m: { on: string; text: string; count?: number }[]) => {
     const t = m.find((x) => x.on !== 'name');
     return t ? `${t.on === 'track' ? 'Track' : t.on === 'album' ? 'Album' : t.on === 'artist' ? 'By' : t.on}: ${t.text}${t.count && t.count > 1 ? ` · ${t.count}` : ''}` : null;
@@ -31,7 +46,10 @@
   // Bandcamp or its menu, what Discover left out its menu (Take back), the rest in the panel.
   let elsewhere = $state<ElsewhereAlbum>();
   let leftOut = $state<SearchResult | null>(null);
+  // A result tapped empties the search (the owner, 2026-10-25: it stayed in the field over the panel it opened).
   function open(it: SearchResult) {
+    rememberSearch();
+    pageView.query = '';
     if (it.subject.startsWith('#')) location.hash = it.subject;
     else if (it.kind === 'missing')
       void elsewhere?.open({ release_group: it.subject.slice('missing:'.length), title: it.title, artist: it.artist ?? '', year: null, cover: it.cover ?? null });
@@ -60,7 +78,7 @@
   <section class="global" aria-label="Everywhere">
     {#if groups.length}
       {#each groups as g (g.kind)}
-        <h3>{g.label}</h3>
+        <SectionHead title={`${g.label} (${g.total.toLocaleString()})`} onmore={moreOf(g)} />
         <ul class="rows">
           {#each g.items as it (it.subject + (it.track ?? ''))}
             <li>
@@ -92,13 +110,6 @@
 <style>
   .global {
     margin-top: 4px;
-  }
-
-  h3 {
-    margin: 14px 16px 6px;
-    color: var(--muted);
-    font-size: 14px;
-    font-weight: 500;
   }
 
   .rows {

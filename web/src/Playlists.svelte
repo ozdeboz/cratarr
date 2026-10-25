@@ -86,7 +86,8 @@
   $effect(() => {
     if (waiting) return;
     pageView.counted = { shown: items.length, total: shownPlaylists().length };
-    return () => (pageView.counted = null);
+    pageView.searched = items.length;
+    return () => ((pageView.counted = null), (pageView.searched = null));
   });
 
   const memberCount = $derived(shownPlaylists().filter((p) => optimistic[p.id] ?? p.member).length);

@@ -65,7 +65,21 @@
   let searching = $state(false);
   let field = $state<HTMLInputElement>();
   $effect(() => {
-    if (searching) field?.focus();
+    if (searching && !quiet) field?.focus();
+    quiet = false;
+  });
+  // Emptied from elsewhere (a result tapped, lib/GlobalResults) while not typed in: folded too.
+  // Given its words again from elsewhere (back to a search, lib/globalSearch): open, without the keyboard.
+  let typed = untrack(() => pageView.query);
+  let quiet = false;
+  $effect(() => {
+    const q = pageView.query;
+    if (q === '' && typed !== '' && document.activeElement !== field) searching = false;
+    if (q !== '' && typed === '' && !untrack(() => searching)) {
+      quiet = true;
+      searching = true;
+    }
+    typed = q;
   });
   // Folded when what it searches changes (another page, the panel's pill for the page's), not each time the settings
   // are given again: App's one pill gets a new object whenever the panel's settings are read again, and the search
