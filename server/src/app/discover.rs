@@ -64,7 +64,9 @@ const OWN_SEEDS: usize = 25;
 /// The masonry's artists (0.9.2; the owner: "more tiles should come from a5's related artists"): for this many seeds
 /// (those the most suggestions came from), this many of their related artists new to the library, an album each.
 const RELATED_SEEDS: usize = 3;
-const RELATED_PER_SEED: usize = 12;
+/// 36 (0.9.6, the owner: the masonry always runs past the edge, and a refresh brings other artists): the page draws
+/// some and rotates through the rest.
+const RELATED_PER_SEED: usize = 36;
 /// ListenBrainz's fresh releases: of the last this many days (90, the owner 2026-10-25: the row "New from artists you
 /// have" had 3 with 30).
 const FRESH_DAYS: &str = "90";
@@ -1054,6 +1056,19 @@ async fn mb_artist_by_name(http: &reqwest::Client, name: &str) -> Result<Option<
     Ok(s.artists.into_iter().find(|a| a.score >= 95 && loose(&a.name) == loose(name)).map(|a| a.id))
 }
 
+/// A release group's first credited artist on MusicBrainz (their id).
+async fn artist_of_group(http: &reqwest::Client, release_group: &str) -> Result<Option<String>> {
+    let v: serde_json::Value = http
+        .get(format!("https://musicbrainz.org/ws/2/release-group/{release_group}?inc=artist-credits&fmt=json"))
+        .asked()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    tokio::time::sleep(MB_PAUSE).await;
+    Ok(v["artist-credit"].as_array().and_then(|c| c.first()).and_then(|c| c["artist"]["id"].as_str()).map(str::to_string))
+}
+
 /// How many full-length studio albums an artist (their MusicBrainz id) has released (0.9.3; the owner: "how many
 /// full-length studio albums. That's the golden standard."): their release groups of the primary type Album with no
 /// secondary type (no compilation, live album, remix, soundtrack…), out by today, as the discographies count them.
@@ -1371,10 +1386,27 @@ pub struct Missing {
 /// An artist's albums and EPs the library has none of, newest first: their discography as Discover keeps it (read now
 /// and kept where it is not, or old), by the library's MusicBrainz id for them, else MusicBrainz's sure match by name;
 /// what the library has left out as every source's is (by release group, else by name and artist).
-pub async fn missing_albums(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::Catalogue>, name: &str) -> Result<Vec<Missing>> {
+/// `mbid`, `release_group` (0.9.6): what tells the artist where the name may not (an artist not in the library, from
+/// a Bandcamp album or a suggestion): their MusicBrainz id, else a release group of theirs; else the library's id for
+/// the name, else MusicBrainz's sure match for it.
+pub async fn missing_albums(
+    serve: &Arc<crate::serve::Serve>,
+    cat: Arc<crate::catalogue::Catalogue>,
+    name: &str,
+    mbid: Option<&str>,
+    release_group: Option<&str>,
+) -> Result<Vec<Missing>> {
     let http = http()?;
+    let hinted = match (mbid.filter(|m| super::discogs::is_mbid(m)), release_group.filter(|g| super::discogs::is_mbid(g))) {
+        (Some(m), _) => Some(m.to_string()),
+        (None, Some(g)) => artist_of_group(&http, g).await.unwrap_or_default(),
+        (None, None) => None,
+    };
     let (lib, n) = (serve.library.clone(), name.to_string());
-    let known = tokio::task::spawn_blocking(move || lib.artist_by_name(&n)).await??.and_then(|(_, m)| m).filter(|m| !m.is_empty());
+    let known = match hinted {
+        Some(m) => Some(m),
+        None => tokio::task::spawn_blocking(move || lib.artist_by_name(&n)).await??.and_then(|(_, m)| m).filter(|m| !m.is_empty()),
+    };
     let Some(mbid) = (match known {
         Some(m) => Some(m),
         None => mb_artist_by_name(&http, name).await?,
