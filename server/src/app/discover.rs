@@ -59,8 +59,13 @@ const DISCOGRAPHY_FRESH_SECS: i64 = 30 * 86_400;
 const VARIOUS_ARTISTS: &str = "89ad4ac3-39f7-470e-963a-56509c546377";
 /// Of the account's own most played artists (Cratarr's plays), how many seed Last.fm's artists like them.
 const OWN_SEEDS: usize = 25;
-/// ListenBrainz's fresh releases: of the last this many days.
-const FRESH_DAYS: &str = "30";
+/// The masonry's artists (0.9.2; the owner: "more tiles should come from a5's related artists"): for this many seeds
+/// (those the most suggestions came from), this many of their related artists new to the library, an album each.
+const RELATED_SEEDS: usize = 3;
+const RELATED_PER_SEED: usize = 12;
+/// ListenBrainz's fresh releases: of the last this many days (90, the owner 2026-10-25: the row "New from artists you
+/// have" had 3 with 30).
+const FRESH_DAYS: &str = "90";
 /// Where the server's own Last.fm key is kept (an import choice), and what gives it until one is saved.
 pub const SERVER_LASTFM: &str = "lastfm:server";
 const SERVER_LASTFM_ENV: &str = "LASTFM_API_KEY";
@@ -159,8 +164,10 @@ pub struct Candidate {
     /// What it is and its genres, where its source says (MusicBrainz's discographies, the fresh releases).
     pub kind: Option<String>,
     pub genres: Vec<String>,
-    /// How alike its artist is to each artist it was found from, where its source says (Last.fm).
+    /// How alike its artist is to each artist it was found from, where its source says (Last.fm, the related artists).
     pub alike: Vec<Alike>,
+    /// Its album page on Bandcamp, where its source found one (the related artists).
+    pub bandcamp: Option<String>,
     /// Which source, for the extra rank of more than one.
     pub source: &'static str,
     pub why: String,
@@ -586,6 +593,84 @@ async fn from_discographies(serve: &Arc<crate::serve::Serve>, http: &reqwest::Cl
     Ok(out)
 }
 
+// ---- The masonry's artists: related artists as suggestions
+
+/// For each seed (its name and MusicBrainz id), its related artists new to the library (app::related, kept a month for
+/// every account, looked up now where none are), an album each: the one that plays on Bandcamp where they have one
+/// (it plays at once), else their newest album on MusicBrainz with its cover. Each says "Like <seed>" and how related
+/// (the most related 1), as Last.fm's suggestions do, so the page groups them with that seed's.
+async fn from_related(serve: &Arc<crate::serve::Serve>, http: &reqwest::Client, seeds: &[(String, String)], progress: &Progress) -> Vec<Candidate> {
+    let today = today();
+    let mut out = Vec::new();
+    for (i, (seed, mbid)) in seeds.iter().enumerate() {
+        progress("Finding artists related to yours", i as u64, Some(seeds.len() as u64));
+        let found = match super::related::kept_or_look(serve, seed, mbid).await {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::info!("discover: {seed}'s related artists: {e:#}");
+                continue;
+            }
+        };
+        let new: Vec<&super::related::Related> = found.artists.iter().filter(|r| r.id.is_none()).take(RELATED_PER_SEED).collect();
+        let most = new.iter().map(|r| r.score).fold(0.0, f64::max).max(f64::EPSILON);
+        for r in new {
+            let value = (r.score / most).clamp(0.0, 1.0);
+            let base = Candidate {
+                artist: r.name.clone(),
+                source: "related",
+                why: format!("Like {seed}"),
+                alike: vec![Alike { seed: seed.clone(), value: value as f32 }],
+                score: 0.8 * value,
+                ..Candidate::default()
+            };
+            if let (Some(page), Some(title)) = (&r.bandcamp, &r.album) {
+                out.push(Candidate {
+                    album: title.clone(),
+                    cover: Some(format!("/api/cover/{}/{}", crate::bandcamp::SOURCE, crate::bandcamp::track_id(page, 0))),
+                    bandcamp: Some(page.clone()),
+                    ..base
+                });
+            } else if let Some(m) = &r.mbid {
+                let groups = mb_discography(http, m, &today).await.unwrap_or_default();
+                tokio::time::sleep(MB_PAUSE).await;
+                let newest = groups.iter().filter(|g| g.kind.as_deref() == Some("Album")).max_by_key(|g| g.year).or(groups.first());
+                if let Some(g) = newest {
+                    out.push(Candidate {
+                        album: g.title.clone(),
+                        year: g.year,
+                        release_group: Some(g.id.clone()),
+                        cover: Some(format!("https://coverartarchive.org/release-group/{}/front-250", g.id)),
+                        kind: g.kind.clone(),
+                        genres: g.genres.clone(),
+                        ..base
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The seeds the masonry centres on: those the most of Last.fm's suggestions came from (each suggestion's most alike),
+/// else the account's most played; each with its MusicBrainz id (from the library), `RELATED_SEEDS` at most.
+fn masonry_seeds(candidates: &[Candidate], artists: &[OwnArtist]) -> Vec<(String, String)> {
+    let mbid_of = |name: &str| artists.iter().find(|a| loose(&a.name) == loose(name)).and_then(|a| a.mbid.clone());
+    let mut count: HashMap<String, usize> = HashMap::new();
+    for c in candidates.iter().filter(|c| c.source == "lastfm") {
+        if let Some(a) = c.alike.first() {
+            *count.entry(a.seed.clone()).or_default() += 1;
+        }
+    }
+    let mut ranked: Vec<(String, usize)> = count.into_iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let mut seeds: Vec<(String, String)> = ranked.into_iter().filter_map(|(name, _)| Some((mbid_of(&name)?, name))).map(|(m, n)| (n, m)).collect();
+    if seeds.is_empty() {
+        seeds = artists.iter().filter(|a| a.plays > 0).filter_map(|a| Some((a.name.clone(), a.mbid.clone()?))).collect();
+    }
+    seeds.truncate(RELATED_SEEDS);
+    seeds
+}
+
 // ---- ListenBrainz's fresh releases
 
 /// ListenBrainz's fresh releases for `user` (0069 amended, 0.9): new albums and EPs (no singles, no compilations or
@@ -698,7 +783,7 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
                     new_artist: !artists_had.contains(&artist_key),
                     why: Vec::new(),
                     sources: Vec::new(),
-                    bandcamp: None,
+                    bandcamp: c.bandcamp.clone(),
                     artist_photo: false,
                     kind: c.kind.clone(),
                     genres: c.genres.clone(),
@@ -736,6 +821,9 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
         }
         if s.genres.is_empty() {
             s.genres = c.genres.clone();
+        }
+        if s.bandcamp.is_none() {
+            s.bandcamp = c.bandcamp.clone();
         }
         // Each seed once, at its strongest; the most alike first.
         for a in &c.alike {
@@ -992,6 +1080,9 @@ pub async fn look(
             }
         }
     }
+    // The masonry's artists: their related artists, an album each (0.9.2).
+    let seeds = masonry_seeds(&candidates, &artists);
+    candidates.extend(from_related(serve, &http, &seeds, progress).await);
     // Albums named without their MusicBrainz id (Last.fm's mostly): looked up there.
     let unknown = candidates.iter().filter(|c| c.release_group.is_none()).count() as u64;
     let mut n = 0;
@@ -1328,6 +1419,17 @@ mod tests {
         let lb = one_list(vec![c("X", "Y", Some("rg-x"), "listenbrainz", "Recommended", 1.0)], &|_: &Candidate| false, &HashSet::new(), &HashSet::new(), &HashSet::new());
         assert!(lb[0].alike.is_empty(), "only Last.fm says how alike");
         assert!(!serde_json::to_string(&lb[0]).unwrap().contains("alike"), "left out when empty");
+    }
+
+    #[test]
+    fn the_masonry_centres_on_the_seeds_most_suggestions_came_from() {
+        let a = |seed: &str| vec![Alike { seed: seed.into(), value: 0.9 }];
+        let own = |name: &str, mbid: Option<&str>, plays: u32| OwnArtist { name: name.into(), mbid: mbid.map(Into::into), plays };
+        let artists = vec![own("Air", Some("m-air"), 50), own("Bonobo", Some("m-bon"), 40), own("Moby", None, 30)];
+        let lastfm = |seed: &str| Candidate { alike: a(seed), ..c("A", "B", None, "lastfm", "Like", 0.5) };
+        let cands = vec![lastfm("Bonobo"), lastfm("Bonobo"), lastfm("Air"), lastfm("moby")];
+        assert_eq!(masonry_seeds(&cands, &artists), vec![("Bonobo".to_string(), "m-bon".to_string()), ("Air".to_string(), "m-air".to_string())], "most first; one without an id left out");
+        assert_eq!(masonry_seeds(&[], &artists).len(), 2, "without Last.fm, the most played with an id");
     }
 
     #[test]
