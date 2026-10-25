@@ -5,7 +5,7 @@
 import type { IconName } from './Icon.svelte';
 import { prefs } from './prefs.svelte';
 
-export type InsightsView = 'overview' | 'genres' | 'artists' | 'tracks' | 'history' | 'profile' | 'map';
+export type InsightsView = 'overview' | 'genres' | 'artists' | 'tracks' | 'discover' | 'history' | 'profile' | 'map';
 export type InsightsGroup = 'Collection' | 'Listening' | 'Playlists';
 
 export const INSIGHTS_VIEWS: { id: InsightsView; group: InsightsGroup; label: string; icon: IconName }[] = [
@@ -13,6 +13,8 @@ export const INSIGHTS_VIEWS: { id: InsightsView; group: InsightsGroup; label: st
   { id: 'genres', group: 'Collection', label: 'Genres', icon: 'swatch' },
   { id: 'artists', group: 'Collection', label: 'Artists', icon: 'mic' },
   { id: 'tracks', group: 'Collection', label: 'Tracks', icon: 'music' },
+  // What Discover finds beyond the collection (the owner, 2026-10-25: "a discovery panel under collection insights").
+  { id: 'discover', group: 'Collection', label: 'Discovery', icon: 'compass' },
   { id: 'history', group: 'Listening', label: 'History', icon: 'insights' },
   { id: 'profile', group: 'Listening', label: 'Profile', icon: 'user' },
   { id: 'map', group: 'Playlists', label: 'Map', icon: 'share' },

@@ -122,5 +122,8 @@ export const insightsControls = (): ControlGroup[] => [...insightsFilter(), ...i
 
 /** The pill's two (the owner, 2026-10-25, as the pages' pill): the filter, what is counted (the period, the profile's
  *  sources, the libraries); and View, how it is shown (the sort and the count, what connects the map). */
-export const insightsFilter = (): ControlGroup[] => [...periodGroup(), ...(prefs.insightsTab === 'listening' ? profile() : []), ...libraryGroup()];
+// Discovery has neither: Discover's list is as its last look found it, beyond the libraries.
+const discovery = () => prefs.insightsTab === 'collection' && prefs.insightsCollection === 'discover';
+export const insightsFilter = (): ControlGroup[] =>
+  discovery() ? [] : [...periodGroup(), ...(prefs.insightsTab === 'listening' ? profile() : []), ...libraryGroup()];
 export const insightsView = (): ControlGroup[] => (prefs.insightsTab === 'map' ? map() : prefs.insightsTab === 'collection' ? collection() : []);
