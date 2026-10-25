@@ -51,7 +51,7 @@ export function seedsOf(why: string): string[] | null {
 
 /** The sections, from the suggestions in their order (the strongest first). */
 /** How much each section takes; `aroundCols`: how many masonry columns the page has room for (lib/masonry). */
-export const LIMITS = { gaps: 4, gapsEach: 4, around: 3, aroundCols: 3, newArtists: 10 };
+export const LIMITS = { gaps: 4, gapsEach: 4, around: 3, aroundCols: 3, newArtists: 10, thisYear: new Date().getFullYear() };
 
 export function sections<S extends Suggested>(all: S[], given: Partial<typeof LIMITS> = {}): Sections<S> {
   const limits = { ...LIMITS, ...given };
@@ -62,6 +62,15 @@ export function sections<S extends Suggested>(all: S[], given: Partial<typeof LI
   // The pick of the day: the strongest that plays on Bandcamp, else none.
   const pick = all.find((s) => s.bandcamp) ?? null;
   if (pick) take(pick);
+
+  // New from artists you have: ListenBrainz's fresh releases, and the discographies' releases of this year and last
+  // (the owner, 2026-10-25: the row had 3, the discography gaps held 22 from 2025 and 2026); what plays first, then
+  // newest first. Taken before the gaps, which keep the older ones.
+  const recent = (s: S) => s.year !== null && s.year >= limits.thisYear - 1 && s.why.some((w) => GAP.test(w));
+  const fresh = all
+    .filter((s) => free(s) && (s.why.some((w) => FRESH.test(w)) || recent(s)))
+    .sort((a, b) => Number(!!b.bandcamp) - Number(!!a.bandcamp) || (b.year ?? 0) - (a.year ?? 0));
+  fresh.forEach(take);
 
   // Discography gaps (the owner, 2026-10-25: one shelf, as Home's New for you): the albums missing from the artists
   // most played (the list's order, the server's: "relevant for the most played artists"), a few each and taken in
@@ -132,11 +141,7 @@ export function sections<S extends Suggested>(all: S[], given: Partial<typeof LI
     return { artist, items };
   });
 
-  // The fresh releases, newest first; the Weekly Exploration as it came.
-  const fresh = all
-    .filter((s) => free(s) && s.why.some((w) => FRESH.test(w)))
-    .sort((a, b) => Number(!!b.bandcamp) - Number(!!a.bandcamp) || (b.year ?? 0) - (a.year ?? 0));
-  fresh.forEach(take);
+  // The Weekly Exploration as it came.
   const weekly = playableFirst(all.filter((s) => free(s) && s.why.includes(WEEKLY)));
   weekly.forEach(take);
 

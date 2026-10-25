@@ -97,3 +97,11 @@ test('the discography gaps: the artists most played first, a few each, taken in 
   const out = sections(all, { gaps: 2 });
   assert.deepEqual(out.gaps.map((x) => x.key), ['b1', 'a1', 'b2', 'a2', 'a3', 'a4']);
 });
+
+test("new from artists you have: ListenBrainz's fresh releases and the discographies' of this year and last", () => {
+  const g = (k: string, year: number) => s(k, 'A', ["Missing from A's albums"], { year });
+  const all = [g('old', 2009), g('last', 2025), g('now', 2026), s('lb', 'B', ['New from B'], { year: 2026 })];
+  const out = sections(all, { thisYear: 2026 });
+  assert.deepEqual(out.fresh.map((x) => x.key).sort(), ['last', 'lb', 'now']);
+  assert.deepEqual(out.gaps.map((x) => x.key), ['old']);
+});
