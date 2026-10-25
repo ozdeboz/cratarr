@@ -23,6 +23,7 @@
   import { DISCOVER } from './lib/discoverArtist';
   import DiscoverSections from './lib/DiscoverSections.svelte';
   import { sections } from './lib/discoverSections';
+  import { NearBlocks } from './lib/nearBlocks.svelte';
   import { mine, skipPick } from './lib/mySettings.svelte';
   import SectionHead from './lib/SectionHead.svelte';
   import { withUndo } from './lib/undo.svelte';
@@ -131,6 +132,17 @@
   let pageWidth = $state(0);
   const aroundCols = $derived(Math.max(3, Math.floor((pageWidth + 6 - 24) / 142)));
   const sec = $derived(sections(albums, { aroundCols }, mine.pickSkip));
+  // More for you made as it comes near (lib/nearBlocks, as the Library's albums; the owner, 2026-10-25): blocks of six
+  // whole rows of its grid (cards of 340 px at least, 12 px apart).
+  const blocks = new NearBlocks();
+  $effect(() => () => blocks.dispose());
+  const restCols = $derived(Math.max(1, Math.floor((pageWidth + 12) / 352)));
+  const restBlocks = $derived.by(() => {
+    const n = restCols * 6;
+    const out: (typeof sec.rest)[] = [];
+    for (let i = 0; i < sec.rest.length; i += n) out.push(sec.rest.slice(i, i + n));
+    return out;
+  });
   // How many albums the library has of each artist, by name (the owner, 2026-10-25: on the "Because you play" tile).
   if (!library.view) readLibrary(false).catch(() => {});
   const ownedBy = $derived.by(() => {
@@ -254,8 +266,13 @@
       {/if}
       <DiscoverSections {sec} {facts} owned={(name) => ownedBy.get(name.toLowerCase()) ?? 0} onopen={tap} onmenu={(a) => (opened = a)} onplay={preview} {previewing} status={(a) => a.request ?? markOf(view?.requests?.[a.key])} />
       {#if sec.rest.length}<SectionHead title="More for you" />{/if}
+      {#each restBlocks as block, bi (`${restCols}:${bi}`)}
+      {@const key = `${restCols}:${bi}`}
+      {@const made = blocks.made(key, bi === 0)}
+      <div {@attach blocks.watch(key)} style:height={made ? null : `${blocks.heights[key] ?? Math.ceil(block.length / restCols) * 162}px`}>
+      {#if made}
       <ul class="grid">
-        {#each sec.rest as a (a.key)}
+        {#each block as a (a.key)}
           {@const r = view.requests?.[a.key]}
           <li class="card">
             <!-- A tap anywhere on the card opens its menu (the owner, 2026-10-24: every action in a menu), but on its
@@ -279,6 +296,9 @@
           </li>
         {/each}
       </ul>
+      {/if}
+      </div>
+      {/each}
     {/if}
   {/if}
 </main>

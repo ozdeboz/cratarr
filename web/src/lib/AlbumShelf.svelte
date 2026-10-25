@@ -6,6 +6,7 @@
   // Playlists): the list header's icon or a long-press ticks albums, a tap then ticks too, and the select bar
   // (lib/SelectBar) plays, puts next, queues, favours or downloads the ticked ones, one album after another, or opens
   // the menu of one (a tile's menu is this way).
+  import { NearBlocks } from './nearBlocks.svelte';
   import { panelBeside } from './glass.svelte';
   import { untrack, type Snippet } from 'svelte';
   import { fromAction } from 'svelte/attachments';
@@ -75,11 +76,8 @@
     pageView.width = width;
   });
 
-  // Only what is near is made (2026-10-16: the whole Library at once hung the app). Each server's albums are cut into
-  // blocks of whole grid rows, each its own grid, so the columns line up from block to block. A block is made while it
-  // is within a screen of what shows, else it is an empty box as tall as it was when last made (an estimate before
-  // that), so the page keeps its length and the scroll does not jump. Watched against the box that scrolls (a margin
-  // reaches no further than the box that clips it).
+  // Only what is near is made (lib/nearBlocks). Each server's albums are cut into blocks of whole grid rows, each its
+  // own grid, so the columns line up from block to block.
   const table = $derived(prefs.albumLayout === 'table');
   // A table's lines touch, as a table's do.
   const GAP = $derived(table ? 0 : 10);
@@ -100,20 +98,18 @@
     for (let i = 0; i < albums.length; i += perBlock) out.push(albums.slice(i, i + perBlock));
     return out;
   };
-  /** Blocks within reach (made), and each block's height and rows when last made, by key. */
-  let near = $state<Record<string, boolean>>({});
-  let heights = $state<Record<string, number>>({});
-  const rowsOf: Record<string, number> = {};
+  const blocks = new NearBlocks();
+  $effect(() => () => blocks.dispose());
   /** A grid row's height as the blocks made so far measure it, else a row's usual height (a tile: its column's width
    *  and two lines), for the blocks not made yet. */
   const rowHeight = $derived.by(() => {
     let h = 0;
     let n = 0;
     const tail = `:${perBlock}:${prefs.albumLayout}:`;
-    for (const [key, height] of Object.entries(heights)) {
-      if (!key.includes(tail) || !rowsOf[key]) continue;
-      h += height - (rowsOf[key] - 1) * GAP;
-      n += rowsOf[key];
+    for (const [key, height] of Object.entries(blocks.heights)) {
+      if (!key.includes(tail) || !blocks.rowsOf[key]) continue;
+      h += height - (blocks.rowsOf[key] - 1) * GAP;
+      n += blocks.rowsOf[key];
     }
     if (n) return h / n;
     return prefs.albumLayout === 'grid' ? (width - GAP * (cols - 1)) / cols + 64 : table ? 64 : 90;
@@ -122,41 +118,6 @@
     const rows = Math.ceil(n / cols);
     return rows * rowHeight + (rows - 1) * GAP;
   };
-  const scrollerOf = (node: Element): Element | null => {
-    for (let el = node.parentElement; el; el = el.parentElement) {
-      const o = getComputedStyle(el).overflowY;
-      if (o === 'auto' || o === 'scroll') return el;
-    }
-    return null;
-  };
-  let seen: IntersectionObserver | null = null;
-  const sized = new ResizeObserver((entries) => {
-    for (const e of entries) {
-      const key = (e.target as HTMLElement).dataset.key!;
-      if (near[key] && e.contentRect.height > 0) heights[key] = e.contentRect.height;
-    }
-  });
-  /** Watches a block: made while near, measured while made. */
-  const watch = (key: string, rows: number) => (node: HTMLElement) => {
-    rowsOf[key] = rows;
-    seen ??= new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) near[(e.target as HTMLElement).dataset.key!] = e.isIntersecting;
-      },
-      { root: scrollerOf(node), rootMargin: '100% 0px' },
-    );
-    node.dataset.key = key;
-    seen.observe(node);
-    sized.observe(node);
-    return () => {
-      seen?.unobserve(node);
-      sized.unobserve(node);
-    };
-  };
-  $effect(() => () => {
-    seen?.disconnect();
-    sized.disconnect();
-  });
   // What is playing (the shell polls it), so the album being listened to stands out.
   const playing = $derived(nowPlaying());
 
@@ -502,8 +463,8 @@
       {:else}
       {#each blocksOf(albums) as block, bi (`${s.id}:${perBlock}:${prefs.albumLayout}:${bi}`)}
         {@const key = `${s.id}:${perBlock}:${prefs.albumLayout}:${bi}`}
-        {@const made = near[key] ?? bi === 0}
-        <div class="block" {@attach watch(key, Math.ceil(block.length / cols))} style:height={made ? null : `${heights[key] ?? estimate(block.length)}px`}>
+        {@const made = blocks.made(key, bi === 0)}
+        <div class="block" {@attach blocks.watch(key, Math.ceil(block.length / cols))} style:height={made ? null : `${blocks.heights[key] ?? estimate(block.length)}px`}>
           {#if made}
       <ul class={prefs.albumLayout} style:--min="{minPx}px">
         {#each block as a (a.id)}
