@@ -3,7 +3,8 @@
   // own tracks, from the server a page at a time (a5's /api/library/tracks; the next as the list's end comes near), in
   // the header's order, the page's search and the libraries switched off asked of the server; rows or the table (the
   // Library's View), the table's columns as wide as the list allows (decision 0042). A tap plays from that track, the
-  // tracks loaded so far the queue (500 at most); a cover views its album.
+  // tracks loaded so far the queue (500 at most); a cover views its album; a long-press the track's menu (lib/TrackMenu);
+  // Select as the albums' (the ticked ones to the selection's menu).
   import { albumCoverUrl, libraryTracks, type LibraryTrack } from './api';
   import { fit } from './columns.svelte';
   import Cover from './Cover.svelte';
@@ -17,6 +18,15 @@
   import { prefs } from './prefs.svelte';
   import Row, { type Cell } from './Row.svelte';
   import { toast } from './toast.svelte';
+  import Icon from './Icon.svelte';
+  import { longpress } from './longpress';
+  import SelectBar from './SelectBar.svelte';
+  import SelectionMenu from './SelectionMenu.svelte';
+  import SelectSheet from './SelectSheet.svelte';
+  import TrackMenu, { type MenuTrack } from './TrackMenu.svelte';
+  import type { LocalTrack } from './localPlayer.svelte';
+  import { plural } from './insights.svelte';
+  import { fromAction } from 'svelte/attachments';
 
   const PAGE = 200;
   let items = $state<LibraryTrack[]>([]);
@@ -95,6 +105,28 @@
     }),
   );
 
+  // Select (as the albums'): the ticked ones by id; null while not selecting.
+  let selecting = $state<Set<string> | null>(null);
+  let selectSheet = $state(false);
+  const ticked = $derived(selecting ? items.filter((t) => selecting!.has(t.id)) : []);
+  function tick(t: LibraryTrack) {
+    const s = new Set(selecting);
+    if (s.has(t.id)) s.delete(t.id);
+    else s.add(t.id);
+    selecting = s;
+  }
+  function selectWhich(which: 'all' | 'none' | 'others') {
+    const ids = items.map((t) => t.id);
+    selecting = new Set(which === 'all' ? ids : which === 'none' ? [] : ids.filter((id) => !selecting?.has(id)));
+  }
+  const asTrack = (t: LibraryTrack): LocalTrack => ({ source: 'cratarr', id: t.id, name: t.title, artist: t.artist, album: t.album, album_id: t.album_id, duration_secs: t.duration });
+  let several = $state<LocalTrack[] | null>(null);
+  let menuOf = $state<MenuTrack | null>(null);
+  const press = (t: LibraryTrack) =>
+    fromAction(longpress, () => () =>
+      selecting ? (selectSheet = true) : (menuOf = { source: 'cratarr', id: t.id, name: t.title, artist: t.artist, album: t.album, album_id: t.album_id }),
+    );
+
   async function play(t: LibraryTrack) {
     navigator.vibrate?.(8);
     try {
@@ -113,7 +145,14 @@
   {:else if !items.length}
     <p class="empty">{pageView.query.trim() ? 'No tracks match.' : 'No tracks.'}</p>
   {:else}
-    <ListHead fields={TRACK_ORDERS} bind:value={prefs.libraryTrackOrder} bind:down={prefs.libraryTrackDown} count={howMany(total, 'track')} />
+    <ListHead
+      fields={TRACK_ORDERS}
+      bind:value={prefs.libraryTrackOrder}
+      bind:down={prefs.libraryTrackDown}
+      count={howMany(total, 'track')}
+      selecting={!!selecting}
+      onselect={() => (selecting = selecting ? null : new Set())}
+    />
     {#if cols.length}
       <Row size="large" as="div" head title="Title" cells={headCells} count="Length">
         {#snippet front()}<span class="cover-space"></span>{/snippet}
@@ -128,9 +167,19 @@
             sub={[t.artist, cols.some((c) => c.id === 'album') ? null : t.album].filter(Boolean).join(' · ')}
             cells={cols.length ? cellsOf(t) : undefined}
             count={clock(t.duration)}
-            label={`Play ${t.title}`}
-            onclick={() => play(t)}
+            label={selecting ? `${selecting.has(t.id) ? 'Untick' : 'Tick'} ${t.title}` : `Play ${t.title}`}
+            active={!!selecting?.has(t.id)}
+            onclick={() => (selecting ? tick(t) : play(t))}
+            attach={press(t)}
           >
+            {#snippet action()}
+              {#if selecting}
+                {@const on = selecting.has(t.id)}
+                <button class="icon tick" class:on role="checkbox" aria-checked={on} aria-label="Select {t.title}" onclick={() => tick(t)}
+                  ><Icon name={on ? 'circleCheck' : 'circle'} size={24} /></button
+                >
+              {/if}
+            {/snippet}
             {#snippet front()}
               <button class="cover" aria-label="View {t.album ?? 'its album'}" title="View the album" onclick={(e) => (e.stopPropagation(), viewPlaylist(albumSubject('cratarr', t.album_id)))}
                 ><Cover src={albumCoverUrl('cratarr', t.album_id)} /></button
@@ -143,6 +192,28 @@
     <div class="end" bind:this={end} aria-hidden="true"></div>
   {/if}
 </div>
+
+{#if selecting}
+  <!-- All: the tracks loaded so far (the list comes a page at a time). -->
+  <SelectBar
+    label="Selected tracks"
+    count="{ticked.length}/{total ?? 0}"
+    onclose={() => (selecting = null)}
+    place="page"
+    every={{ all: !!items.length && ticked.length === items.length, onall: () => selectWhich('all'), onnone: () => selectWhich('none') }}
+  >
+    <button aria-label="Menu of the ticked tracks" title="More" disabled={!ticked.length} onclick={() => (several = ticked.map(asTrack))}><Icon name="moreVert" size={24} /></button>
+  </SelectBar>
+{/if}
+{#if several}
+  <SelectionMenu title={plural(several.length, 'track')} tracks={several} onclose={() => ((several = null), (selecting = null))} />
+{/if}
+{#if selectSheet}
+  <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />
+{/if}
+{#if menuOf}
+  <TrackMenu track={menuOf} onclose={() => (menuOf = null)} />
+{/if}
 
 <style>
   ul {
@@ -180,6 +251,23 @@
 
   .end {
     height: 1px;
+  }
+
+  .tick {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .tick.on {
+    color: var(--accent-ink);
   }
 
   .empty {
