@@ -501,6 +501,40 @@
         ? { page, view: hasView(page), device: pagePill && pillDevice, filter: (pagePill && !page.startsWith('local-') && page !== 'downloads') || page === 'discover' }
         : null,
   );
+  // One glass of a row that stays, emptied (the owner, 2026-10-25: "it should indeed slide away"): as the row does, up
+  // out under the bar whole (along the bottom, down), still showing what it held. A copy of it slides; the glass itself
+  // goes at once (Search's icons' folding unseen under it).
+  let rightEl = $state<HTMLElement>();
+  const leadHas = $derived(!!handed || navAt > 0 || backHome || (!!panelPage && phone) || page === 'library');
+  const rightHas = $derived(!!(pillNow || handed?.extra));
+  let had = { lead: false, right: false };
+  // Before the page changes, while the glass still shows what it held.
+  $effect.pre(() => {
+    const now = { lead: leadHas, right: rightHas };
+    const stays = rowWanted;
+    untrack(() => {
+      if (stays && rowKept && !rowAway) {
+        if (had.lead && !now.lead && leadEl) slideAway(leadEl, false);
+        if (had.right && !now.right && rightEl) slideAway(rightEl, true);
+      }
+      had = now;
+    });
+  });
+  function slideAway(el: HTMLElement, hide: boolean) {
+    const row = el.closest<HTMLElement>('.page-row');
+    if (!row || reducedMotion()) return;
+    const [r, rr] = [el.getBoundingClientRect(), row.getBoundingClientRect()];
+    if (!r.width) return;
+    const copy = el.cloneNode(true) as HTMLElement;
+    copy.setAttribute('aria-hidden', 'true');
+    copy.inert = true;
+    Object.assign(copy.style, { position: 'absolute', left: `${r.left - rr.left}px`, top: `${r.top - rr.top}px`, width: `${r.width}px`, height: `${r.height}px`, margin: '0', pointerEvents: 'none' });
+    row.append(copy);
+    if (hide) el.style.visibility = 'hidden';
+    const dy = row.classList.contains('at-bottom') ? innerHeight - r.top + 16 : -(r.bottom + 16);
+    const gone = () => copy.remove();
+    copy.animate([{ transform: 'none' }, { transform: `translateY(${dy}px)` }], { duration: ROW_SLIDE, easing: 'ease-in' }).finished.then(gone, gone);
+  }
   // The layout below 1024 px, the user's (Display; the owner, 2026-10-25): the bar of pages along the top or the
   // bottom, sliding away while scrolling down (and back up) or always shown, panels under it either way; the controls
   // (back, the title, the pill) at the top or just above the mini-player, following it as it comes and goes.
@@ -909,7 +943,7 @@
       <!-- Settings' pill: its search and About, its own button (the owner, 2026-10-24: one pill as on every page);
            Discover's: its search and Look again (the owner, 2026-10-24). The panel's where it handed its glass. -->
       {#if pillNow || handed?.extra}
-        <span class="right">
+        <span class="right" bind:this={rightEl}>
           {#if pillNow}<SheetArea area={() => pageEl}><TopPill {...pillNow} /></SheetArea>{/if}{#if handed?.extra}{@render handed.extra()}{/if}
         </span>
       {/if}
