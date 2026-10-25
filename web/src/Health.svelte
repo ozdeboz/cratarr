@@ -5,6 +5,7 @@
   // always open (App: the one last open, else the first), its card tinted; over the list on a phone. The report is an
   // administrator's; anyone else sees the files.
   import Icon from './lib/Icon.svelte';
+  import Meter from './lib/Meter.svelte';
   import { health, loadHealth, problems } from './lib/healthReport.svelte';
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
@@ -32,7 +33,9 @@
             <span class="text">
               <small class="domain">{p.domain}</small>
               <span class="name">{p.title}</span>
-              {#if p.line}<small>{p.line}</small>{/if}
+              <!-- With a whole (how many of how many): the line over the bar, as a row with work under way (lib/settings/Item,
+                   the owner 2026-10-25). -->
+              {#if p.finding?.of}<Meter label={p.line ?? `${p.finding.count.toLocaleString()} of ${p.finding.of.toLocaleString()}`} value={p.finding.count / p.finding.of} />{:else if p.line}<small>{p.line}</small>{/if}
             </span>
             <span class="chev"><Icon name="chevronRight" size={20} /></span>
           </button>
