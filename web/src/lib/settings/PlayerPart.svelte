@@ -34,14 +34,8 @@
   {#if prefs.playerRow}<PlayerRowList />{/if}
 </Group>
 
-<!-- The full-screen player's bands (lib/BandGlass): the look, and the two settings every look takes. -->
-<!-- The bands: the same controls as the player's own sheet (lib/BandControls). -->
+<!-- The full-screen player's bands (lib/BandGlass): the same settings as the player's own sheet (lib/BandControls), as
+     rows here, each slider in its sheet (the owner, 2026-10-25: as Settings' other sliders). -->
 <Group title="Visualisation">
-  <div class="bands"><BandControls /></div>
+  <BandControls rows />
 </Group>
-
-<style>
-  .bands {
-    padding: 12px 16px 16px;
-  }
-</style>

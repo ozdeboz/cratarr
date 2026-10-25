@@ -5,7 +5,8 @@
   // which to go on with (a takeover, the choice sheet as everywhere: lib/MenuSheet): its own, shown at once, or a copy of these,
   // carried over. Its reset asks first; a long
   // press resets every look to its own defaults (asking too).
-  import BandSlider from './BandSlider.svelte';
+  import BandSlider, { bandValueText } from './BandSlider.svelte';
+  import Item from './settings/Item.svelte';
   import { BAND_DIRECTIONS, BAND_ENGINES, BAND_LOOKS, BANDS_MORE, COUNT_MORE, ENGINE_MORE, WINDOW_MORE } from './bandWaves.svelte';
   import { resetTune, setTune, tuneIsDefault, tuneOf } from './bandTune.svelte';
   import Icon from './Icon.svelte';
@@ -40,8 +41,25 @@
     get: () => (tune as BandTune)[key],
     set: (v: BandTune[K]) => look && setTune(look, key, v),
   });
-  const speed = bind('speed'), window = bind('window'), cycles = bind('cycles'), height = bind('height');
-  const count = bind('count'), gap = bind('gap'), direction = bind('direction'), taper = bind('taper'), fade = bind('fade');
+  const direction = bind('direction');
+  /** The sliders, in their order (Direction's choice goes before Taper): the player's sheet shows each inline, Settings
+   *  a row with its value opening its sheet (the owner, 2026-10-25: as Settings' other sliders). */
+  type Slider = { key: 'count' | 'speed' | 'window' | 'cycles' | 'height' | 'gap' | 'taper' | 'fade'; label: string; ends: [string, string]; unit?: string; linear?: boolean; whole?: boolean; more?: string; not?: BandLookName[] };
+  const SLIDERS: Slider[] = [
+    { key: 'count', label: 'Bands', ends: ['3', '32'], whole: true, more: COUNT_MORE },
+    { key: 'speed', label: 'Speed', ends: ['Ultra slow', 'Radical'] },
+    { key: 'window', label: 'Window', ends: ['Beat', 'Phrase'], unit: 's', more: WINDOW_MORE },
+    { key: 'cycles', label: 'Cycles', ends: ['Few', 'Many'], not: ['meter'] },
+    { key: 'height', label: 'Height', ends: ['Low', 'Tall'] },
+    { key: 'gap', label: 'Gap', ends: ['None', 'Wide'], linear: true },
+    { key: 'taper', label: 'Taper', ends: ['None', 'Full'], linear: true },
+    { key: 'fade', label: 'Fade', ends: ['None', 'Wide'], linear: true },
+  ];
+  const valueOf = (x: Slider) => (tune ? `${bandValueText(tune[x.key] as number, x.whole)}${x.unit ? ` ${x.unit}` : ''}` : '');
+  /** `rows`: as Settings' rows (lib/settings/Item), each slider in its own sheet; else inline (the player's sheet). */
+  let { rows = false }: { rows?: boolean } = $props();
+  /** The slider whose sheet is open (rows). */
+  let sliding = $state<Slider | null>(null);
 
   type Prefs = typeof prefs;
 
@@ -52,10 +70,41 @@
   const anyChanged = $derived(Object.values(prefs.playerBandsTunes).some((t) => t && Object.keys(t).length));
 </script>
 
+{#snippet slider(x: Slider)}
+  {@const b = bind(x.key)}
+  <BandSlider label={x.label} range={TUNE_RANGES[x.key]} bind:value={b.get, b.set} ends={x.ends} unit={x.unit ?? null} linear={x.linear} whole={x.whole} wide />
+{/snippet}
+{#snippet directionRow()}
+  <div class="row beside">
+    {@render name('Direction')}
+    <Seg label="Direction" options={BAND_DIRECTIONS} bind:value={direction.get, direction.set} />
+  </div>
+{/snippet}
+
 {#snippet name(label: string, more: string | null = null)}
   <span class="name">{label}{#if more}<MoreInfo {label} text={more} />{/if}</span>
 {/snippet}
 
+{#if rows}
+  <!-- Settings' rows (the owner, 2026-10-25): the look a choice, each slider its value opening its sheet, Direction and
+       the engine short choices beside their names, the resets last. -->
+  <Item name="Look" more={BANDS_MORE} value={BAND_LOOKS.find((o) => o.value === prefs.playerBands)?.label ?? null} onclick={() => (picking = true)} />
+  {#if look && tune}
+    {#each SLIDERS.filter((x) => !x.not?.includes(look)) as x (x.key)}
+      {#if x.key === 'taper'}<Item name="Direction"><Seg label="Direction" options={BAND_DIRECTIONS} bind:value={direction.get, direction.set} /></Item>{/if}
+      <Item name={x.label} more={x.more ?? null} value={valueOf(x)} onclick={() => (sliding = x)} />
+    {/each}
+    <Item name="Engine" more={ENGINE_MORE}><Seg label="Engine" options={BAND_ENGINES} bind:value={prefs.playerBandsEngine} /></Item>
+    <Item name="Reset {named(look)}" disabled={tuneIsDefault(look)} onclick={() => (asking = 'look')} />
+    {#if anyChanged}<Item name="Reset every look" onclick={() => (asking = 'all')} />{/if}
+  {/if}
+  {#if sliding && look && tune}
+    {@const x = sliding}
+    <MenuSheet label={x.label} title={x.label} chips={[named(look)]} onclose={() => (sliding = null)}>
+      <div class="sheet-slider">{@render slider(x)}</div>
+    </MenuSheet>
+  {/if}
+{:else}
 <div class="rows">
   <div class="row">
     <span class="head">
@@ -76,44 +125,13 @@
     </span>
   </div>
   {#if look && tune}
-    <div class="row">
-      {@render name('Bands', COUNT_MORE)}
-      <BandSlider label="Bands" range={TUNE_RANGES.count} bind:value={count.get, count.set} ends={['3', '32']} whole wide />
-    </div>
-    <div class="row">
-      {@render name('Speed')}
-      <BandSlider label="Speed" range={TUNE_RANGES.speed} bind:value={speed.get, speed.set} ends={['Ultra slow', 'Radical']} wide />
-    </div>
-    <div class="row">
-      {@render name('Window', WINDOW_MORE)}
-      <BandSlider label="Window" range={TUNE_RANGES.window} bind:value={window.get, window.set} ends={['Beat', 'Phrase']} unit="s" wide />
-    </div>
-    {#if look !== 'meter'}
+    {#each SLIDERS.filter((x) => !x.not?.includes(look)) as x (x.key)}
+      {#if x.key === 'taper'}{@render directionRow()}{/if}
       <div class="row">
-        {@render name('Cycles')}
-        <BandSlider label="Cycles" range={TUNE_RANGES.cycles} bind:value={cycles.get, cycles.set} ends={['Few', 'Many']} wide />
+        {@render name(x.label, x.more ?? null)}
+        {@render slider(x)}
       </div>
-    {/if}
-    <div class="row">
-      {@render name('Height')}
-      <BandSlider label="Height" range={TUNE_RANGES.height} bind:value={height.get, height.set} ends={['Low', 'Tall']} wide />
-    </div>
-    <div class="row">
-      {@render name('Gap')}
-      <BandSlider label="Gap" range={TUNE_RANGES.gap} bind:value={gap.get, gap.set} ends={['None', 'Wide']} linear wide />
-    </div>
-    <div class="row beside">
-      {@render name('Direction')}
-      <Seg label="Direction" options={BAND_DIRECTIONS} bind:value={direction.get, direction.set} />
-    </div>
-    <div class="row">
-      {@render name('Taper')}
-      <BandSlider label="Taper" range={TUNE_RANGES.taper} bind:value={taper.get, taper.set} ends={['None', 'Full']} linear wide />
-    </div>
-    <div class="row">
-      {@render name('Fade')}
-      <BandSlider label="Fade" range={TUNE_RANGES.fade} bind:value={fade.get, fade.set} ends={['None', 'Wide']} linear wide />
-    </div>
+    {/each}
     <!-- This device's, for every look (not a look's setting: its reset leaves it). -->
     <div class="row beside">
       {@render name('Engine', ENGINE_MORE)}
@@ -121,6 +139,7 @@
     </div>
   {/if}
 </div>
+{/if}
 
 {#if picking}
   <ChoiceSheet title="Look" options={BAND_LOOKS} value={prefs.playerBands} onchange={choose} onclose={() => (picking = false)} />
@@ -168,6 +187,11 @@
   .rows {
     display: grid;
     gap: 14px;
+  }
+
+  /* A slider's sheet: the slider as wide as the sheet. */
+  .sheet-slider {
+    padding: 8px 24px 20px;
   }
 
   .row {

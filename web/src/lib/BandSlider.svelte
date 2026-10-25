@@ -1,3 +1,9 @@
+<script lang="ts" module>
+  /** A setting's value as written (the slider's, and Settings' row): whole for Bands, else a short decimal. */
+  export const bandValueText = (value: number, whole = false) =>
+    whole ? Math.round(value).toString() : value < 1 ? value.toFixed(2).replace(/0$/, '') : value < 10 ? value.toFixed(1).replace(/\.0$/, '') : Math.round(value).toString();
+</script>
+
 <script lang="ts">
   // One of the bands' settings as a slider (the owner, 2026-10-24: sliders, not steps): Speed and Window (lib/BandGlass),
   // in Settings › Display › Player visualisation and the player's own sheet (lib/BandSheet). Even in feel: each step is
@@ -29,9 +35,7 @@
   const STEPS = 100;
   const span = $derived(linear ? range.max - range.min : Math.log(range.max / range.min));
   const at = $derived(Math.round(((linear ? value - range.min : Math.log(value / range.min)) / span) * STEPS));
-  const shown = $derived(
-    whole ? Math.round(value).toString() : value < 1 ? value.toFixed(2).replace(/0$/, '') : value < 10 ? value.toFixed(1).replace(/\.0$/, '') : Math.round(value).toString(),
-  );
+  const shown = $derived(bandValueText(value, whole));
   function set(position: number) {
     const v = linear ? range.min + (position / STEPS) * span : range.min * Math.exp((position / STEPS) * span);
     value = whole ? Math.round(v) : v;
