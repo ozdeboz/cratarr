@@ -3239,6 +3239,10 @@ struct LastFmImport {
     user: String,
     #[serde(default)]
     key: Option<String>,
+    /// What comes in (0.9.2): the scrobbles, the loves, and whether un-loved tracks stop being favourites (not unless
+    /// asked).
+    #[serde(default)]
+    what: crate::app::lastfm::Choice,
 }
 
 /// What a Last.fm import keeps for next time, per Cratarr account: the Last.fm user and the API key (decision 0067).
@@ -3315,9 +3319,13 @@ async fn preview_lastfm(Json(b): Json<LastFmImport>) -> Result<(StatusCode, Json
 }
 
 async fn bring_lastfm(b: LastFmImport, preview: bool) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let what = b.what;
+    if !what.scrobbles && !what.loves {
+        return Err(ToggleError::Refused("Choose the scrobbles, the loved tracks, or both.".into()).into());
+    }
     let (serve, account, user, auth) = lastfm_who(b).await?;
     started(crate::app::tasks::spawn("import:lastfm", &account.clone(), preview, move |h| async move {
-        crate::app::lastfm::bring(&serve, &account, &user, &auth, preview, &progress_of(h)).await
+        crate::app::lastfm::bring(&serve, &account, &user, &auth, what, preview, &progress_of(h)).await
     }))
 }
 

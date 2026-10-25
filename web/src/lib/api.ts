@@ -1624,8 +1624,11 @@ export type LastFmImported = {
   loved_missing?: { artist: string; title: string; album: string | null }[];
 };
 export const getLastFm = () => quietly<{ user: string | null; key: boolean }>('/api/history/lastfm');
-export const importLastFm = (user: string, key?: string) => post<Started>('/api/history/lastfm', { user, key });
-export const previewLastFm = (user: string, key?: string) => post<Started>('/api/history/lastfm/preview', { user, key });
+/** What a Last.fm import brings (0.9.2): its scrobbles, its loved tracks; un-loved ones stop being favourites only
+ *  when asked. */
+export type LastFmWhat = { scrobbles: boolean; loves: boolean; unstar: boolean };
+export const importLastFm = (user: string, key?: string, what?: LastFmWhat) => post<Started>('/api/history/lastfm', { user, key, what });
+export const previewLastFm = (user: string, key?: string, what?: LastFmWhat) => post<Started>('/api/history/lastfm/preview', { user, key, what });
 export const undoLastFm = (user: string) =>
   request<{ scrobbles: number; unstarred: number }>('/api/history/lastfm', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user }) });
 /** What a file brought or would bring (decision 0067, step 4): listens into the history (`from` the kind of export), or
