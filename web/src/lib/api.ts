@@ -1596,6 +1596,12 @@ export const hideDiscover = (key: string) => post<{ undo: string }>('/api/discov
 /** An artist new to the library (Discover's New to you): TheAudioDB's description, and whether there is a photo. */
 export const getDiscoverArtist = (name: string) => quietly<{ bio: string | null; photo: boolean }>(`/api/discover/artist?name=${encodeURIComponent(name)}`);
 export const discoverArtistPhotoUrl = (name: string) => `/api/discover/artist/photo?name=${encodeURIComponent(name)}`;
+/** An artist related to another (the server's app/related.rs): why, their id in the library, or an album of theirs on
+ *  Bandcamp. */
+export type RelatedArtist = { name: string; mbid?: string; why: string[]; id?: string; bandcamp?: string };
+/** An artist's related artists to explore (0.9.2) as last looked up; `looking`: a look runs now. */
+export const getRelatedArtists = (name: string) =>
+  quietly<{ artists: RelatedArtist[]; looking: boolean }>(`/api/artists/related?name=${encodeURIComponent(name)}`);
 export const previewBandcamp = (url: string) =>
   request<{ album: string; artist: string; url: string; tracks: LocalTrack[] }>(`/api/preview/bandcamp?url=${encodeURIComponent(url)}`);
 
