@@ -15,6 +15,8 @@ export type Suggested = {
   new_artist: boolean;
   why: string[];
   bandcamp?: string;
+  /** Its artist, new to the library, has a picture (New to you shows only those). */
+  artist_photo?: boolean;
   /** How alike it is to each artist played it was found from (Last.fm's match, 0 to 1), where known. */
   alike?: { seed: string; value: number }[];
 };
@@ -133,9 +135,10 @@ export function sections<S extends Suggested>(all: S[], given: Partial<typeof LI
     width -= laid.grid.cols;
   }
 
-  // New to you: per new artist its suggestions, the first that plays first.
+  // New to you: per new artist with a picture (a flow of their pictures, the owner 2026-10-25) its suggestions, the
+  // first that plays first; those without one stay among the cards.
   const newBy = new Map<string, S[]>();
-  for (const s of playableFirst(all)) if (free(s) && s.new_artist) newBy.set(s.artist, [...(newBy.get(s.artist) ?? []), s]);
+  for (const s of playableFirst(all)) if (free(s) && s.new_artist && s.artist_photo) newBy.set(s.artist, [...(newBy.get(s.artist) ?? []), s]);
   const newArtists = [...newBy.entries()].slice(0, limits.newArtists).map(([artist, items]) => {
     items.forEach(take);
     return { artist, items };

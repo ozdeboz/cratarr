@@ -8,6 +8,7 @@
   import { INSIGHTS_GROUPS, INSIGHTS_VIEWS, type InsightsView } from './lib/insightsViews';
   import { INSIGHTS, insightsOf, panel, viewPlaylist } from './lib/panel.svelte';
   import { matchesSearch } from './lib/pageView.svelte';
+  import { getDiscover } from './lib/api';
 
   $effect(() => insights.load());
   // The pill's search (the owner, 2026-10-25, as Settings'): a view whose name or group holds every word; the lists in
@@ -17,6 +18,14 @@
   );
 
   const count = (n: number, one: string, many: string) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
+  // Discovery's number (the owner, 2026-10-25): Discover's suggestions, read once with the page.
+  let suggestions = $state<number | null>(null);
+  $effect(() => {
+    getDiscover().then(
+      (v) => (suggestions = v.found?.albums.length ?? 0),
+      () => {},
+    );
+  });
   /** A view's number, where the collection's answer has one. */
   function line(view: InsightsView): string | null {
     const d = insights.data;
@@ -32,6 +41,8 @@
         return `${d.playlists.library_tracks_in_playlists.toLocaleString()} in a playlist`;
       case 'map':
         return count(d.playlists.playlists, 'playlist', 'playlists');
+      case 'discover':
+        return suggestions === null ? null : count(suggestions, 'suggestion', 'suggestions');
       default:
         return null;
     }

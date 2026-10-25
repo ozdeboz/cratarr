@@ -20,6 +20,7 @@
     played,
     plays,
     provider,
+    more = null,
   }: {
     source: string;
     album: string;
@@ -30,9 +31,13 @@
     plays?: number;
     /** The server's name, and the library's (with its dot) when known. */
     provider: { server: string; library: string | null; colour: string | null };
+    /** What a page elsewhere says of it (a Bandcamp album's, 0.9.2): no rating then, which only a server keeps. */
+    more?: Pick<import('./api').AlbumView, 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners'> | null;
   } = $props();
 
-  $effect(() => loadAlbumRating(source, album));
+  $effect(() => {
+    if (!more) loadAlbumRating(source, album);
+  });
   const rating = $derived(albumRatings[`${source}/${album}`] ?? null);
 
   const two = (n: number) => String(n).padStart(2, '0');
@@ -54,9 +59,36 @@
       {#each genres as g (g)}<button class="chip" onclick={() => viewGenre(g)} use:longpress={() => (menuOf = CRATE + GENRE + g)}>{g}</button>{/each}
     </p>
   {/if}
-  {#if year}
+  {#if more?.tags?.length}
+    <h3>Tags</h3>
+    <p class="chips">{#each more.tags as t (t)}<span class="chip">{t}</span>{/each}</p>
+  {/if}
+  {#if more?.released}
+    <h3>Released</h3>
+    <p>{new Date(`${more.released}T00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+  {:else if year}
     <h3>Year</h3>
     <p class="chips"><span class="chip">{year}</span></p>
+  {/if}
+  {#if more?.label}
+    <h3>Label</h3>
+    <p>{more.label}</p>
+  {/if}
+  {#if more?.listeners}
+    <h3>Listeners</h3>
+    <p>{more.listeners.toLocaleString()} on Last.fm</p>
+  {/if}
+  {#if more?.about}
+    <h3>About</h3>
+    <p class="words">{more.about}</p>
+  {/if}
+  {#if more?.credits}
+    <h3>Credits</h3>
+    <p class="words">{more.credits}</p>
+  {/if}
+  {#if more?.links?.length}
+    <h3>Elsewhere</h3>
+    <p class="chips">{#each more.links as l (l.url)}<a class="chip" href={l.url} target="_blank" rel="noopener noreferrer">{l.name}</a>{/each}</p>
   {/if}
   {#if rating !== null}
     <h3>Rating</h3>
@@ -104,6 +136,18 @@
     padding-left: 8px;
     font-size: 15px;
     font-weight: 500;
+  }
+
+  /* Its own words (a page's description, its credits): as written, lines kept. */
+  .words {
+    color: var(--muted);
+    font-weight: 400;
+    line-height: 1.55;
+    white-space: pre-line;
+  }
+
+  a.chip {
+    text-decoration: none;
   }
 
   .chips {

@@ -2,10 +2,10 @@
   // Insights' Collection (decision 0065): what you have, the figures as charts by what each says (the dataviz method):
   // the headline figures as stat tiles, shares as meters (never pies), decades as columns, genres and artists as bars,
   // one series each in the accent, labelled directly; the playlists' figures as tiles and the tracks in the most
-  // playlists as a list. Four views, chosen in the tabs' pill: Overview (the figures, quality and decades), Genres and
-  // Artists (all of them), Tracks (those in playlists).
+  // playlists as a list. Five views, chosen in the tabs' pill: Overview (the figures, quality and decades), Genres and
+  // Artists (all of them), Tracks (those in playlists), Discovery (what Discover found, the owner 2026-10-25).
   import { matchesSearch } from './pageView.svelte';
-  import type { Count, Insights, Layered } from './api';
+  import { getDiscover, type Count, type DiscoverView, type Insights, type Layered } from './api';
   import { plural } from './insights.svelte';
   import { prefs } from './prefs.svelte';
 
@@ -68,6 +68,54 @@
     return at.toLocaleDateString(undefined, { weekday: 'narrow' });
   }
   const mostAdded = $derived(Math.max(1, ...(o?.added ?? []).map((m) => m.n)));
+
+  // Discovery (the owner, 2026-10-25: "how many releases and various other information"): Discover's list as the last
+  // look found it, read when the view opens.
+  let disc = $state<DiscoverView | null>(null);
+  let discError = $state<string | null>(null);
+  $effect(() => {
+    if (prefs.insightsCollection !== 'discover') return;
+    getDiscover().then(
+      (v) => (disc = v),
+      (e) => (discError = e instanceof Error ? e.message : 'Discover could not be read'),
+    );
+  });
+  /** Each name's count, the most first. */
+  const counted = (names: string[]): Count[] => {
+    const n = new Map<string, number>();
+    for (const x of names) n.set(x, (n.get(x) ?? 0) + 1);
+    return [...n.entries()].map(([name, c]) => ({ name, n: c })).sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
+  };
+  const found = $derived(disc?.found?.albums ?? []);
+  const asked = $derived(Object.values(disc?.requests ?? {}).filter((r) => r.status !== 'cancelled' && r.status !== 'declined'));
+  const thisYear = new Date().getFullYear();
+  const discTiles = $derived.by(() => {
+    const at = disc?.found?.at;
+    const hours = at ? Math.floor((Date.now() / 1000 - at) / 3600) : null;
+    return [
+      { value: num(found.length), label: 'suggestions', href: '#/discover' },
+      { value: num(new Set(found.map((a) => a.artist)).size), label: 'artists' },
+      { value: num(new Set(found.filter((a) => a.new_artist).map((a) => a.artist)).size), label: 'new to you' },
+      { value: num(found.filter((a) => a.bandcamp).length), label: 'play on Bandcamp' },
+      { value: num(found.filter((a) => (a.year ?? 0) >= thisYear - 1).length), label: `from ${thisYear - 1} and ${thisYear}` },
+      { value: num(asked.length), label: 'asked for', href: '#/requests' },
+      ...(hours !== null ? [{ value: hours < 1 ? 'now' : hours < 48 ? `${hours} h` : plural(Math.floor(hours / 24), 'day'), label: 'since the last look' }] : []),
+    ];
+  });
+  const discSources = $derived(counted(found.flatMap((a) => a.sources ?? [])));
+  const discGaps = $derived(
+    counted(found.flatMap((a) => a.why.flatMap((w) => /^Missing from (.+)'s albums$/.exec(w)?.[1] ?? []))).slice(0, 12),
+  );
+  const discSeeds = $derived(
+    counted(found.flatMap((a) => a.why.flatMap((w) => /^Like (.+)$/.exec(w)?.[1].split(' and ').slice(0, 1) ?? []).filter((x) => x !== 'what you play'))).slice(0, 12),
+  );
+  const discGenres = $derived(counted(found.flatMap((a) => a.genres ?? [])).slice(0, 12));
+  const discKinds = $derived(counted(found.map((a) => a.kind ?? 'Unknown')));
+  const discDecades = $derived.by(() => {
+    const d = counted(found.flatMap((a) => (a.year ? [`${Math.floor(a.year / 10) * 10}s`] : [])));
+    return d.sort((a, b) => a.name.localeCompare(b.name));
+  });
+  const discTallest = $derived(widest(discDecades));
 </script>
 
 {#snippet meter(label: string, of: string, s: number)}
@@ -101,6 +149,26 @@
             <span class="label">{r.name}</span>
             <span class="bar"><i style:width={`${(100 * value(r)) / most}%`}></i></span>
             <span class="n">{num(value(r))}</span>
+          </li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
+{/snippet}
+
+<!-- Plain bars: each name's count (Discovery's sources, artists, genres). -->
+{#snippet plainBars(title: string, unit: string, rows: Count[])}
+  {@const shown = rows.filter((r) => matchesSearch(r.name))}
+  {@const most = widest(shown)}
+  {#if shown.length}
+    <section>
+      <div class="head"><h2>{title}</h2><span class="unit">{unit}</span></div>
+      <ul class="bars">
+        {#each shown as r (r.name)}
+          <li title={`${r.name}: ${num(r.n)}`}>
+            <span class="label">{r.name}</span>
+            <span class="bar"><i style:width={`${(100 * r.n) / most}%`}></i></span>
+            <span class="n">{num(r.n)}</span>
           </li>
         {/each}
       </ul>
@@ -184,6 +252,49 @@
     </section>
   {/if}
 
+  {:else if prefs.insightsCollection === 'discover'}
+  {#if discError}
+    <p class="formats" role="alert">{discError}</p>
+  {:else if !disc}
+    <p class="formats">Reading Discover…</p>
+  {:else if !found.length}
+    <p class="formats">Discover has found nothing yet: <a href="#/discover">look on its page</a>.</p>
+  {:else}
+    <section aria-label="Discovery">
+      <div class="tiles">
+        {#each discTiles as t (t.label)}
+          {#if t.href}<a class="tile go" href={t.href}><b>{t.value}</b><span>{t.label}</span></a>{:else}<div class="tile"><b>{t.value}</b><span>{t.label}</span></div>{/if}
+        {/each}
+      </div>
+    </section>
+    <section>
+      <h2>Shares</h2>
+      <div class="meters">
+        {@render meter('Playable on Bandcamp', `${num(found.filter((a) => a.bandcamp).length)} of ${plural(found.length, 'suggestion')}`, share(found.filter((a) => a.bandcamp).length, found.length))}
+        {@render meter('By artists new to you', `${num(found.filter((a) => a.new_artist).length)} of ${plural(found.length, 'suggestion')}`, share(found.filter((a) => a.new_artist).length, found.length))}
+        {@render meter('Asked for', `${num(asked.length)} of ${plural(found.length, 'suggestion')}`, share(asked.length, found.length))}
+      </div>
+      <p class="formats">{discKinds.map((k) => `${num(k.n)} ${k.name}`).join(' · ')}</p>
+    </section>
+    {#if discDecades.length}
+      <section>
+        <div class="head"><h2>Decades</h2><span class="unit">suggestions</span></div>
+        <div class="columns" role="list">
+          {#each discDecades as d (d.name)}
+            <div class="column" role="listitem" title={`${d.name}: ${plural(d.n, 'suggestion')}`}>
+              <span class="v">{num(d.n)}</span>
+              <span class="col"><i style:height={`${(100 * d.n) / discTallest}%`}></i></span>
+              <span class="x">{d.name.replace(/^(\d\d)(\d\d)s$/, "'$2s")}</span>
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/if}
+    {@render plainBars('Sources', 'suggestions', discSources)}
+    {@render plainBars('Discography gaps', 'albums missing', discGaps)}
+    {@render plainBars('Because you play', 'suggestions like them', discSeeds)}
+    {@render plainBars('Genres', 'suggestions', discGenres)}
+  {/if}
   {:else if prefs.insightsCollection === 'genres'}
   {@render bars('Genres', l.genres)}
   {:else if prefs.insightsCollection === 'artists'}
