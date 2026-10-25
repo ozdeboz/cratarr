@@ -70,7 +70,8 @@
     quiet = false;
   });
   $effect(() => {
-    pageView.searchOpen = searching;
+    // The field, or the work's progress unfolded: either takes the row's room (App's title gives way where it must).
+    pageView.searchOpen = searching || showing;
     return () => (pageView.searchOpen = false);
   });
   // Emptied from elsewhere (a result tapped, lib/GlobalResults) while not typed in: folded too.
@@ -213,7 +214,7 @@
   const badge = $derived(globalAsked() ? found : lastFound);
 </script>
 
-<span class="pill-row">
+<span class="pill-row" class:wide={showing}>
   {#if globe}
     <span class="globe" transition:paced|global>
       <button
@@ -229,7 +230,7 @@
     </span>
   {/if}
 
-  <div class="pill" role="toolbar" aria-label="The page's tools">
+  <div class="pill" class:wide={showing} role="toolbar" aria-label="The page's tools">
     {#if confirming && page && pageView.action}
       {@const a = pageView.action}
       <!-- The page's work asked for: the whole pill is ✓ (start it) and ✕ (leave it), until one is tapped. -->
@@ -441,10 +442,19 @@
 
   /* The page's work unfolded, left of the buttons: its bar and what it is at, in the pill's own text colour; as wide
      as the search opens, so what it is at fits (the owner, 2026-10-25). */
+  /* The work's progress unfolded takes all the room the row has, up to 560 px (the owner, 2026-10-25: on a phone it drew
+     a little over half, its line cut, a gap left before back). */
+  .pill-row.wide,
+  .pill.wide {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+  }
+
   .work {
     display: flex;
+    flex: 1 1 auto;
     align-items: center;
-    width: min(320px, calc(100vw - 220px));
+    max-width: 560px;
     min-width: 140px;
     padding: 0 10px 0 16px;
     overflow: hidden;

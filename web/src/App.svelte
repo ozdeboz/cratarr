@@ -1094,7 +1094,14 @@
   .page-row .right {
     display: flex;
     align-items: flex-start;
+    justify-content: flex-end;
     gap: 8px;
+    min-width: 0;
+  }
+
+  /* The pill's work unfolded (lib/TopPill): the right side takes the row's room. */
+  .page-row .right:has(:global(.pill-row.wide)) {
+    flex: 1 1 auto;
   }
 
   .page-row.beside {
