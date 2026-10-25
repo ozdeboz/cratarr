@@ -67,8 +67,14 @@
   $effect(() => {
     if (searching) field?.focus();
   });
+  // Folded when what it searches changes (another page, the panel's pill for the page's), not each time the settings
+  // are given again: App's one pill gets a new object whenever the panel's settings are read again, and the search
+  // opened by a tap folded at once (the owner, 2026-10-25).
+  let searched = untrack(() => words);
   $effect(() => {
-    void page;
+    const w = words;
+    if (w === searched) return;
+    searched = w;
     searching = false;
   });
   // A filter leaves something out of what shows: its conditions and switches, counted on the funnel (the list stays

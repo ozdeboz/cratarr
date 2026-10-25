@@ -2,7 +2,8 @@
   import ListHead from './lib/ListHead.svelte';
   import { matchesSearch, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, playlistBy, usePageAction } from './lib/pageView.svelte';
   import { passing, switchOn } from './lib/listFilter.svelte';
-  import type { Playlist, PlayMode } from './lib/api';
+  import { search, type Playlist, type PlayMode } from './lib/api';
+  import type { Matched } from './lib/search';
   import { prefs } from './lib/prefs.svelte';
   import { live, queueTap } from './lib/live.svelte';
   import Notice from './lib/Notice.svelte';
@@ -53,13 +54,47 @@
   const pass = passing(() => 'playlists', () => ({ list: { kind: 'playlists' }, source: prefs.source || undefined }));
   /** What a filter goes by is not in yet: the page loads rather than show them all, or none (the owner, 2026-10-23). */
   const waiting = $derived((switchOn('playlists', 'favourites') && !playlistFavoritesKnown()) || (pass.pending && !pass.keys));
+  // Deep (decision 0072): the playlists the server finds by their tracks, with why (the owner, 2026-10-25: "Gardner"
+  // found none of the playlists holding his tracks); asked a moment after the words stop changing, as the Library's.
+  let deep = $state<Map<string, Matched>>(new Map());
+  $effect(() => {
+    const q = pageView.query.trim();
+    if (!q) {
+      deep = new Map();
+      return;
+    }
+    let gone = false;
+    const t = setTimeout(() => {
+      search(q, ['playlist'], 100).then(
+        (r) => {
+          if (gone) return;
+          const m = new Map<string, Matched>();
+          for (const it of r.groups.playlist?.items ?? []) {
+            const on = it.matched.find((x) => x.on !== 'name');
+            if (on) m.set(it.subject.replace(/^playlist:/, ''), on);
+          }
+          deep = m;
+        },
+        () => {},
+      );
+    }, 250);
+    return () => {
+      gone = true;
+      clearTimeout(t);
+    };
+  });
+  /** Why a playlist found only by its tracks is there: the track or artist, and how many of its tracks match. */
+  const deepOf = (id: string) => {
+    const d = pageView.query.trim() ? deep.get(id) : undefined;
+    return d ? `${d.text}${d.count && d.count > 1 ? ` · ${d.count} tracks` : ''}` : undefined;
+  };
   const items = $derived.by(() => {
     let list = shownPlaylists().map((p) => {
       const member = optimistic[p.id] ?? p.member;
       return { ...p, member, count: p.count + (member === p.member ? 0 : member ? 1 : -1) };
     });
-    // As every search reads (lib/search, decision 0072); by its tracks too once the server's search is (0.9.3).
-    list = list.filter((p) => matchesSearch(p.name));
+    // As every search reads (lib/search, decision 0072), and by its tracks (the server's deep search).
+    list = list.filter((p) => matchesSearch(p.name) || !!deepOf(p.id));
     if (switchOn('playlists', 'favourites')) list = list.filter((p) => isPlaylistFavorite(p.id));
     if (switchOn('playlists', 'mine')) list = list.filter((p) => p.mine !== false);
     const keys = pass.keys;
@@ -180,6 +215,9 @@
 
   {#if (!view || waiting) && !error}
     <PageLoading />
+  {:else if items.length === 0}
+    <!-- None left (the search or the filter): no header over an empty list, as the Library (the owner, 2026-10-25). -->
+    <p class="empty">No playlists match.</p>
   {:else}
     <!-- The list's header (lib/ListHead): its order, how many, and Select (decision 0025: on, a chip's name ticks it; the
          ticked ones are the select bar's: played, favoured, viewed in the panel, their menu). -->
@@ -206,6 +244,7 @@
                the playing track. The border: in the panel's selection (or ticked). -->
           <PlaylistItem
             {p}
+            sub={deepOf(p.id)}
             size={table ? 'large' : 'medium'}
             cells={table ? cellsOf(p.id) : undefined}
             class={['chip', busy[p.id] && 'busy', live.queued.includes(p.id) && 'queued', !np && 'idle', !!np && !np.addable && !p.member && 'blocked']
@@ -234,7 +273,6 @@
         </li>
       {/each}
     </ul>
-    {#if view && items.length === 0}<p class="empty">No playlists match.</p>{/if}
   {/if}
   {#if select.on}
     <!-- The panel's select bar (lib/SelectBar): play, put next, queue or favour the ticked playlists, view them in the

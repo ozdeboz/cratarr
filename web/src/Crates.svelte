@@ -54,6 +54,9 @@
     <Notice text={crates.error} />
   {:else if !crates.list}
     <PageLoading />
+  {:else if sorted.length === 0}
+    <!-- None left (the search or the filter): no header over an empty list, as the Library (the owner, 2026-10-25). -->
+    <p class="empty">No crates match.</p>
   {:else}
     <ListHead fields={CRATE_ORDERS} bind:value={prefs.crateOrder} bind:down={prefs.crateDown} count={howMany(sorted.length, 'crate')} />
     <ul class="grid">
@@ -87,5 +90,11 @@
     margin: 0;
     padding: 0;
     list-style: none;
+  }
+
+  .empty {
+    margin-top: 32px;
+    text-align: center;
+    color: var(--muted);
   }
 </style>
