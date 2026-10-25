@@ -912,8 +912,9 @@
   <ProgressBar />
 
   <nav class="bar" class:bottom={navBottom} class:away={navHidden} aria-label="Pages" onclickcapture={collapse}>
-    <!-- The mode switcher's slim row over the tabs (decision 0052, mock C), with a local folder on. -->
-    {#if switchable()}<div class="slim"><ModeSwitcher slim {connection} /></div>{/if}
+    <!-- The mode switcher's slim row over the tabs (decision 0052, mock C), with a local folder on; under them when the bar
+         is along the bottom (the owner, 2026-10-25), the tabs nearest the page either way. -->
+    {#if switchable() && !navBottom}<div class="slim"><ModeSwitcher slim {connection} /></div>{/if}
     <div class="tabs">
     {#each bar as p (p.id)}
       <a href={p.href} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => barTap(e, p.id)}
@@ -929,6 +930,7 @@
       >
     {/if}
     </div>
+    {#if switchable() && navBottom}<div class="slim"><ModeSwitcher slim up {connection} /></div>{/if}
   </nav>
 </div>
 
@@ -1276,6 +1278,10 @@
 
   .bar .slim {
     padding: 0 4px 4px;
+  }
+
+  .bar.bottom .slim {
+    padding: 4px 4px 0;
   }
 
   .bar a,

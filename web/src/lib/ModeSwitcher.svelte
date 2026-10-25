@@ -8,15 +8,25 @@
   // A switch is the whole app: what plays pauses and is put by, the other mode's queue comes back paused (the app's).
   import { appInfo } from './app.svelte';
   import { localMode, setMode } from './deviceMusic.svelte';
+  import GlassMenu from './GlassMenu.svelte';
   import Icon from './Icon.svelte';
   import { local } from './localPlayer.svelte';
   import Mark from './Mark.svelte';
 
-  /** `slim`: the phone's row. `connection`: the server's, as the sidebar says it. */
-  let { slim = false, connection }: { slim?: boolean; connection: { ok: boolean; text: string } | null } = $props();
-
+  /** `slim`: the phone's row. `connection`: the server's, as the sidebar says it. `up`: the menu opens upwards (the bar
+   *  along the bottom). */
+  let { slim = false, up = false, connection }: { slim?: boolean; up?: boolean; connection: { ok: boolean; text: string } | null } = $props();
   let open = $state(false);
   let root = $state<HTMLElement>();
+  let button = $state<HTMLElement>();
+  // The modes in the glass menu (lib/GlassMenu, as the Library's view), from the button's place.
+  let at = $state<{ top?: number; bottom?: number; left: number; minWidth: number }>({ left: 0, minWidth: 0 });
+  function place() {
+    const r = button?.getBoundingClientRect();
+    if (!r) return;
+    const left = Math.max(8, r.left);
+    at = up ? { bottom: innerHeight - r.top + 8, left, minWidth: 230 } : { top: r.bottom + 8, left, minWidth: Math.min(Math.max(230, r.width), innerWidth - 16) };
+  }
   const here = $derived(appInfo.player ?? 'This device');
   const playingHere = $derived(localMode() && !local.paused && local.index >= 0);
   const conn = $derived(connection?.ok ? 'Connected' : (connection?.text ?? 'Connecting'));
@@ -25,25 +35,13 @@
     open = false;
     setMode(mode);
   }
-  // Closed by a tap elsewhere or Esc.
-  $effect(() => {
-    if (!open) return;
-    const away = (e: PointerEvent) => !root?.contains(e.target as Node) && (open = false);
-    const esc = (e: KeyboardEvent) => e.key === 'Escape' && (open = false);
-    addEventListener('pointerdown', away, true);
-    addEventListener('keydown', esc);
-    return () => {
-      removeEventListener('pointerdown', away, true);
-      removeEventListener('keydown', esc);
-    };
-  });
 </script>
 
 {#snippet cratarrLine()}<i class="dot" class:down={!connection?.ok} aria-hidden="true"></i>{conn}{/snippet}
 {#snippet localLine()}{#if playingHere}<span class="note" role="img" aria-label="Playing"><Icon name="music" size={slim ? 12 : 14} /></span>{/if}{here}{/snippet}
 
 <div class="switcher" class:slim bind:this={root}>
-  <button class="current" class:open aria-haspopup="menu" aria-expanded={open} aria-label="Cratarr or Local" onclick={() => (open = !open)}>
+  <button class="current" class:open aria-haspopup="menu" aria-expanded={open} aria-label="Cratarr or Local" bind:this={button} onclick={() => (place(), (open = !open))}>
     <span class="tile"><Mark /></span>
     <span class="lines">
       <strong>{localMode() ? 'Local' : 'Cratarr'}</strong>
@@ -52,14 +50,14 @@
     <span class="chev" aria-hidden="true"><Icon name="chevronsUpDown" size={18} /></span>
   </button>
   {#if open}
-    <div class="menu" role="menu">
-      <button role="menuitemradio" aria-checked={!localMode()} class:on={!localMode()} onclick={() => choose('cratarr')}>
-        <strong>Cratarr</strong><span class="sub">{@render cratarrLine()}</span>
+    <GlassMenu {at} keep={() => button} label="Cratarr or Local" role="menu" onclose={() => (open = false)}>
+      <button class="option" role="menuitemradio" aria-checked={!localMode()} onclick={() => choose('cratarr')}>
+        <span class="mode"><span>Cratarr</span><span class="sub">{@render cratarrLine()}</span></span>{#if !localMode()}<Icon name="check" size={18} />{/if}
       </button>
-      <button role="menuitemradio" aria-checked={localMode()} class:on={localMode()} onclick={() => choose('device')}>
-        <strong>Local</strong><span class="sub">{@render localLine()}</span>
+      <button class="option" role="menuitemradio" aria-checked={localMode()} onclick={() => choose('device')}>
+        <span class="mode"><span>Local</span><span class="sub">{@render localLine()}</span></span>{#if localMode()}<Icon name="check" size={18} />{/if}
       </button>
-    </div>
+    </GlassMenu>
   {/if}
 </div>
 
@@ -156,37 +154,11 @@
     color: var(--muted);
   }
 
-  /* The two modes, under the button; the current one lit. */
-  .menu {
-    position: absolute;
-    inset: calc(100% + 6px) 0 auto;
-    z-index: 40;
-    display: grid;
-    gap: 4px;
-    padding: 6px;
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    background: var(--surface);
-    box-shadow: 0 12px 32px rgb(0 0 0 / 0.45);
-  }
-
-  .menu button {
+  /* A mode in the glass menu: its name over its line. */
+  .mode {
     display: grid;
     gap: 2px;
-    padding: 8px 12px;
-    border: 0;
-    border-radius: 10px;
-    background: none;
-    color: var(--text);
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .menu button:hover,
-  .menu button:focus-visible,
-  .menu button.on {
-    background: color-mix(in srgb, var(--text) 9%, transparent);
+    padding: 6px 0;
   }
 
   /* C: the phone's slim row over the tabs, the same in one line (about 34 px). */
@@ -218,10 +190,5 @@
 
   .slim strong {
     font-size: 0.95rem;
-  }
-
-  .slim .menu {
-    right: auto;
-    min-width: 230px;
   }
 </style>

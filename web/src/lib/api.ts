@@ -689,7 +689,10 @@ export const radioNext = (ask: {
   /** Leave the owner's favourites out. */
   skip_favourites?: boolean;
 }) =>
-  post<{ tracks: QueueTrack[] }>('/api/radio/next', ask);
+  post<{ tracks: QueueTrack[] }>('/api/radio/next', ask).then(({ tracks }) => ({
+    // Bandcamp's (Discover's suggestions, a5 0.9.5): previews, never in a playlist (decision 0071).
+    tracks: tracks.map((t) => (t.source === 'bandcamp' ? { ...t, addable: false } : t)),
+  }));
 
 /** Apply every safe repair, or only those of these playlists (the panel's Repair tab, decision 0025). */
 export const applySafe = (playlists?: string[]) =>
