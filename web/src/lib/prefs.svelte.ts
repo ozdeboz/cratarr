@@ -174,6 +174,9 @@ export type Prefs = {
    *  speed, and the pitch with it) or fading; over `startStopMs`; for next and previous too (`startStopSkips`). Tape
    *  rewind: Previous restarting a track scrubs back to its start, four times the ramp. The app keeps its own. */
   startStop: StartStop;
+  /** What the player's four swipes do (Settings › Player; the owner, 2026-10-26): up and down, on its left half and on
+   *  its right. */
+  playerSwipes: PlayerSwipes;
   /** A phone's player streams lossless, not Opus (the owner, 2026-10-24: Opus on phones unless asked). */
   phoneLossless: boolean;
   /** View's Dates: an album's date added as how long ago ("3 days ago"), not the date. */
@@ -262,6 +265,19 @@ export type ListSort = { key: string; down: boolean };
 export type ListFilter = { conditions: FilterCondition[]; on: string[] };
 /** A filter's condition: a crate's, which can be muted (`enabled` false, kept but not applied), and over items that
  *  hold tracks tested on any or all of them (decision 0061; absent: on, any). */
+/** Up: the queue, Add to playlist, the track's menu; down: the player closing, the visuals. */
+export type SwipeUp = 'queue' | 'playlists' | 'menu';
+export type SwipeDown = 'close' | 'visuals';
+export type PlayerSwipes = { upLeft: SwipeUp; upRight: SwipeUp; downLeft: SwipeDown; downRight: SwipeDown };
+export const SWIPES_UP: { value: SwipeUp; label: string }[] = [
+  { value: 'queue', label: 'Queue' },
+  { value: 'playlists', label: 'Add to playlist' },
+  { value: 'menu', label: 'Menu' },
+];
+export const SWIPES_DOWN: { value: SwipeDown; label: string }[] = [
+  { value: 'close', label: 'Close the player' },
+  { value: 'visuals', label: 'Visuals' },
+];
 export type StartStop = { mode: 'off' | 'vinyl' | 'fade'; ms: number; skips: boolean; rewind: boolean };
 /** The ramp's bounds (ms): a fifth of a second to three. */
 export const RAMP_MS = { min: 200, max: 3000 };
@@ -344,6 +360,7 @@ export const DEFAULTS: Prefs = {
   homeCrates: false,
   levelling: true,
   startStop: { mode: 'off', ms: 800, skips: false, rewind: false },
+  playerSwipes: { upLeft: 'queue', upRight: 'queue', downLeft: 'close', downRight: 'close' },
   phoneLossless: false,
   browserName: '',
   relativeDates: false,
@@ -445,6 +462,12 @@ function read(): Prefs {
         p.profileFoldAt = Math.min(saved.profileFoldAt - gone, p.profileRows.length);
       }
       if (typeof saved.levelling === 'boolean') p.levelling = saved.levelling;
+      if (saved.playerSwipes && typeof saved.playerSwipes === 'object') {
+        const w = saved.playerSwipes;
+        const up = (v: unknown, d: SwipeUp): SwipeUp => (SWIPES_UP.some((o) => o.value === v) ? (v as SwipeUp) : d);
+        const down = (v: unknown, d: SwipeDown): SwipeDown => (SWIPES_DOWN.some((o) => o.value === v) ? (v as SwipeDown) : d);
+        p.playerSwipes = { upLeft: up(w.upLeft, 'queue'), upRight: up(w.upRight, 'queue'), downLeft: down(w.downLeft, 'close'), downRight: down(w.downRight, 'close') };
+      }
       if (saved.startStop && typeof saved.startStop === 'object') {
         const x = saved.startStop;
         p.startStop = {

@@ -15,7 +15,7 @@
   import BandSheet from './BandSheet.svelte';
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
-  import { prefs } from './prefs.svelte';
+  import { prefs, type SwipeDown, type SwipeUp } from './prefs.svelte';
   import { art, clockText, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import Waveform from './Waveform.svelte';
   import WaveLens from './WaveLens.svelte';
@@ -284,7 +284,8 @@
     location.hash = keepViewed('#/');
   }
 
-  // Gestures, over the page and beside it. Anywhere: swipe down closes, swipe up opens the queue. On the cover: swipe left or right skips, a
+  // Gestures, over the page and beside it. Anywhere: a swipe up or down does what Settings › Player says for that half
+  // of the player (the owner, 2026-10-26: four of them; by default up the queue, down closing). On the cover: swipe left or right skips, a
   // tap plays or pauses, a double-tap toggles the favourite, a circle shows the overview (lib/CoverOverview; the owner,
   // 2026-10-19: the cover blurred, what is known about the track over it; a tap or another circle brings the cover back;
   // not for the device's own music). A swipe or a circle never also counts as a tap.
@@ -325,11 +326,12 @@
   });
   $effect(() => {
     if (!head) return;
-    let from: { x: number; y: number; cover: boolean; path: { x: number; y: number }[] } | null = null;
+    let from: { x: number; y: number; left: boolean; cover: boolean; path: { x: number; y: number }[] } | null = null;
     const down = (e: PointerEvent) => {
       // The seek bar's drags are its own.
       if ((e.target as Element).closest?.('.seek')) return;
-      from = { x: e.clientX, y: e.clientY, cover: !!(e.target as Element).closest?.('.cover-btn'), path: [{ x: e.clientX, y: e.clientY }] };
+      const r = head!.getBoundingClientRect();
+      from = { x: e.clientX, y: e.clientY, left: e.clientX < r.left + r.width / 2, cover: !!(e.target as Element).closest?.('.cover-btn'), path: [{ x: e.clientX, y: e.clientY }] };
     };
     const move = (e: PointerEvent) => {
       if (from?.cover && e.buttons) from.path.push({ x: e.clientX, y: e.clientY });
@@ -339,6 +341,7 @@
       const [dx, dy] = [e.clientX - from.x, e.clientY - from.y];
       const onCover = from.cover;
       const path = from.path;
+      const left = from.left;
       from = null;
       if (onCover && isCircle(path)) {
         swiped = true;
@@ -348,10 +351,10 @@
         send(dx < 0 ? 'next' : 'previous');
       } else if (dy > 80 && dy > 2 * Math.abs(dx)) {
         swiped = true;
-        close();
+        swipe(left ? prefs.playerSwipes.downLeft : prefs.playerSwipes.downRight);
       } else if (dy < -80 && -dy > 2 * Math.abs(dx)) {
         swiped = true;
-        if (playing()) queueOpen = true;
+        swipe(left ? prefs.playerSwipes.upLeft : prefs.playerSwipes.upRight);
       }
     };
     const el = head;
@@ -364,6 +367,16 @@
       el.removeEventListener('pointerup', up);
     };
   });
+
+  /** What a swipe up or down was chosen to do (Settings › Player). */
+  function swipe(what: SwipeUp | SwipeDown) {
+    if (what === 'close') return close();
+    if (what === 'visuals') return void (visuals.open = true);
+    if (!playing()) return;
+    if (what === 'queue') return void (queueOpen = true);
+    menuStart = what === 'playlists' ? 'lists' : 'menu';
+    menuAt = head?.getBoundingClientRect() ?? null;
+  }
 
   /** A tap waits this long for a second one (double-tap: favourite) before it plays or pauses. */
   const DOUBLE_TAP_MS = 250;
