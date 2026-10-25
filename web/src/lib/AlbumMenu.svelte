@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import { untrack } from 'svelte';
   import type { AlbumsSource, LibraryInfo, ListedAlbum } from './api';
   import { jobs } from './jobs.svelte';
 
@@ -91,8 +92,8 @@
 
   type Ask = 'move' | 'replace' | 'delete' | 'cover';
   let {
-    source,
-    album: a,
+    source: givenSource,
+    album: givenAlbum,
     cover = null,
     tracks: givenTracks = null,
     genres: givenGenres = null,
@@ -130,6 +131,26 @@
     onundone?: () => void;
     onclose: () => void;
   } = $props();
+  // What the menu was opened on, kept: an opener lets go of it as the menu closes (its {@const} turns null, so its
+  // props then read null or throw), while what a tap started still reads it (a5, 2026-10-25: Play in a flow view's
+  // menu said "Could not start playing"; Play, Shuffle, Play next, Add to queue, Share, the covers all read it after
+  // closing).
+  let keptAlbum = untrack(() => givenAlbum);
+  let keptSource = untrack(() => givenSource);
+  const a = $derived.by(() => {
+    try {
+      return (keptAlbum = givenAlbum ?? keptAlbum);
+    } catch {
+      return keptAlbum;
+    }
+  });
+  const source = $derived.by(() => {
+    try {
+      return (keptSource = givenSource ?? keptSource);
+    } catch {
+      return keptSource;
+    }
+  });
 
   // The tracks and genres, read as the menu opens unless given: Shuffle, Resume, Add to playlist and Download need the
   // tracks, Go to genre the genres.
