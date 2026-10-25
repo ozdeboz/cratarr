@@ -254,11 +254,15 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
     let wants = |k: &str| kinds.is_empty() || kinds.iter().any(|x| x == k);
     let limit = limit.clamp(1, 100);
     let mut groups: BTreeMap<&'static str, Vec<Item>> = BTreeMap::new();
+    // How many each kind matches in all, where the library shows fewer (`limit`); the rest count what they hold.
+    let mut totals: HashMap<&'static str, usize> = HashMap::new();
     if ["album", "artist", "track", "genre"].iter().any(|k| wants(k))
         && let Some(served) = crate::serve::instance()
     {
         let (lib, words_) = (served.library.clone(), w.clone());
         let found = tokio::task::spawn_blocking(move || lib.find(&words_, limit)).await??;
+        let t = found.totals;
+        totals.extend([("album", t.albums), ("artist", t.artists), ("track", t.tracks), ("genre", t.genres)]);
         let n = found.albums.len();
         groups.insert(
             "album",
@@ -416,7 +420,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
     let mut top: Vec<Item> = Vec::new();
     for (kind, weight) in KINDS {
         let Some(mut items) = groups.remove(kind) else { continue };
-        let total = items.len();
+        let total = totals.get(kind).copied().unwrap_or(0).max(items.len());
         items.truncate(limit);
         top.extend(items.iter().take(TOP).cloned().map(|mut i| {
             i.score *= weight;

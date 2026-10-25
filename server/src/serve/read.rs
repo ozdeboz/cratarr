@@ -135,6 +135,17 @@ pub struct Found {
     pub tracks: Vec<Song>,
     /// Genres and how many tracks they have.
     pub genres: Vec<(String, u32)>,
+    /// How many of each match in all, beyond the `limit` shown.
+    pub totals: Totals,
+}
+
+/// How many albums, artists, tracks and genres a search matches in all (decision 0072: a group's header counts them).
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Totals {
+    pub albums: usize,
+    pub artists: usize,
+    pub tracks: usize,
+    pub genres: usize,
 }
 
 /// Why something was found: on its `name`, its `artist`, one of its `track`s or `album`s (`text`, and how many).
@@ -428,6 +439,15 @@ impl Library {
             })
             .collect();
         let title_q = format!("title : ({fq})");
+        let count = |sql: &str, params: &[&dyn rusqlite::ToSql]| -> Result<usize> { Ok(db.prepare_cached(sql)?.query_row(params, |r| r.get::<_, i64>(0))?.max(0) as usize) };
+        let mut totals = Totals {
+            albums: count(
+                "SELECT count(*) FROM (SELECT a.id FROM albums_fts f JOIN albums a ON a.n = f.rowid WHERE albums_fts MATCH ?1
+                 UNION SELECT s.album_id FROM songs_fts f JOIN songs s ON s.n = f.rowid WHERE songs_fts MATCH ?2)",
+                &[&fq, &title_q],
+            )?,
+            ..Totals::default()
+        };
         let mut st = db.prepare_cached(
             "SELECT s.album_id, count(*), min(s.title) FROM songs_fts f JOIN songs s ON s.n = f.rowid WHERE songs_fts MATCH ?1
              GROUP BY s.album_id ORDER BY count(*) DESC LIMIT ?2",
@@ -461,6 +481,11 @@ impl Library {
             }
         }
         let name_q = format!("name : ({fq})");
+        totals.artists = count(
+            "SELECT count(*) FROM (SELECT a.id FROM artists_fts f JOIN artists a ON a.n = f.rowid WHERE artists_fts MATCH ?1
+             UNION SELECT aa.artist_id FROM albums_fts f JOIN albums a ON a.n = f.rowid JOIN album_artists aa ON aa.album_id = a.id WHERE albums_fts MATCH ?2)",
+            &[&fq, &name_q],
+        )?;
         let mut st = db.prepare_cached(
             "SELECT aa.artist_id, count(*), min(a.name) FROM albums_fts f JOIN albums a ON a.n = f.rowid JOIN album_artists aa ON aa.album_id = a.id
              WHERE albums_fts MATCH ?1 GROUP BY aa.artist_id ORDER BY count(*) DESC LIMIT ?2",
@@ -479,6 +504,7 @@ impl Library {
             }
         }
         // Tracks, the title counting most.
+        totals.tracks = count("SELECT count(*) FROM songs_fts WHERE songs_fts MATCH ?1", &[&fq])?;
         let ns = numbers(&db, "SELECT rowid FROM songs_fts WHERE songs_fts MATCH ?1 ORDER BY bm25(songs_fts, 10.0, 2.0, 1.0) LIMIT ?2", &[&fq, &lim])?;
         let mut tracks = by_numbers(&db, "songs", SONG_COLS, "s", &ns, song_of)?;
         self.song_artists(&db, &mut tracks)?;
@@ -490,8 +516,9 @@ impl Library {
             .filter(|(g, _)| crate::search::matches(g, words))
             .collect();
         genres.sort_by(|a, b| crate::search::closeness(&b.0, words).cmp(&crate::search::closeness(&a.0, words)).then(b.1.cmp(&a.1)));
+        totals.genres = genres.len();
         genres.truncate(limit);
-        Ok(Found { albums, artists, tracks, genres })
+        Ok(Found { albums, artists, tracks, genres, totals })
     }
 
     /// The songs whose title, artist and album hold the words, at most `cap`, by id with those three: what search
