@@ -1127,6 +1127,13 @@
   }
 
   /* Back, and the page's name beside it where the page is an index (Requests, Downloads, Insights, Health, Settings). */
+  /* Embedded always as with its extension (the owner, 2026-10-26: the glass moved a few pixels between the Library,
+     with its view picker's thin glass, and Home, without): the extension's 2 px, whether it shows or not. */
+  .lead,
+  .right {
+    padding: 2px;
+  }
+
   .lead {
     display: flex;
     align-items: center;
@@ -1156,7 +1163,7 @@
   }
 
   .lead.title-away {
-    padding: 0;
+    padding: 2px;
     background: none;
     box-shadow: none;
     -webkit-backdrop-filter: none;
