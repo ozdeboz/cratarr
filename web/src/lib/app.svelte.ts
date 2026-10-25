@@ -1,3 +1,4 @@
+import type { StartStop } from './prefs.svelte';
 import type { AudioOutput } from './api';
 
 // The Android app (decision 0031): on the server's own pages inside it, `window.CratarrApp` carries JSON messages both
@@ -42,6 +43,7 @@ export const appInfo = $state({
   syncOnlyCharging: false,
   /** Levelling (decision 0035): the app's player plays every track about as loud as the next. */
   levelling: true,
+  startStop: { mode: 'off', ms: 800, skips: false, rewind: false } as StartStop,
   /** Where this device can sound now (decision 0033, amended 2026-10-19: the Play On sheet chooses), and the one
    *  chosen; null: Android's own choice (Automatic), as again whenever an output comes or goes. */
   outputs: [] as AppOutput[],
@@ -114,6 +116,8 @@ export const setDevice = (change: {
   syncBudgetGb?: number;
   syncOnlyCharging?: boolean;
   levelling?: boolean;
+  /** How play and pause start and stop (lib/prefs StartStop), the app's own player's. */
+  startStop?: StartStop;
   /** This device's audio output by its id; null: Automatic. */
   output?: string | null;
   /** Automatic in the user's order, or Android's; the order (ids of `known`); one not connected forgotten. */
@@ -162,6 +166,10 @@ if (port) {
       appInfo.syncBudgetGb = typeof m.syncBudgetGb === 'number' ? m.syncBudgetGb : 20;
       appInfo.syncOnlyCharging = m.syncOnlyCharging === true;
       appInfo.levelling = m.levelling !== false;
+      {
+        const x = (m.startStop ?? {}) as Partial<StartStop>;
+        appInfo.startStop = { mode: x.mode === 'vinyl' || x.mode === 'fade' ? x.mode : 'off', ms: typeof x.ms === 'number' ? x.ms : 800, skips: x.skips === true, rewind: x.rewind === true };
+      }
       appInfo.outputs = Array.isArray(m.outputs) ? (m.outputs as AppOutput[]).filter((o) => typeof o?.id === 'string') : [];
       appInfo.output = typeof m.output === 'string' && appInfo.outputs.some((o) => o.id === m.output) ? m.output : null;
       appInfo.ordered = m.ordered === true;

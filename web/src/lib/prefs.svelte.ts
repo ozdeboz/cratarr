@@ -170,6 +170,10 @@ export type Prefs = {
   /** This browser's name as a Play On player, while a page plays here (lib/playOnTarget); '' until it has one. */
   browserName: string;
   levelling: boolean;
+  /** How play and pause start and stop (Settings › This device; the owner, 2026-10-25): at once, as a turntable (the
+   *  speed, and the pitch with it) or fading; over `startStopMs`; for next and previous too (`startStopSkips`). Tape
+   *  rewind: Previous restarting a track scrubs back to its start, four times the ramp. The app keeps its own. */
+  startStop: StartStop;
   /** A phone's player streams lossless, not Opus (the owner, 2026-10-24: Opus on phones unless asked). */
   phoneLossless: boolean;
   /** View's Dates: an album's date added as how long ago ("3 days ago"), not the date. */
@@ -258,6 +262,9 @@ export type ListSort = { key: string; down: boolean };
 export type ListFilter = { conditions: FilterCondition[]; on: string[] };
 /** A filter's condition: a crate's, which can be muted (`enabled` false, kept but not applied), and over items that
  *  hold tracks tested on any or all of them (decision 0061; absent: on, any). */
+export type StartStop = { mode: 'off' | 'vinyl' | 'fade'; ms: number; skips: boolean; rewind: boolean };
+/** The ramp's bounds (ms): a fifth of a second to three. */
+export const RAMP_MS = { min: 200, max: 3000 };
 export type FilterCondition = Condition & { enabled?: boolean; quantifier?: 'any' | 'all' };
 
 /** A list profile's rows (lib/ListProfile), in its order: the server's number keys and the word rows. */
@@ -336,6 +343,7 @@ export const DEFAULTS: Prefs = {
   homeGreetingCapital: false,
   homeCrates: false,
   levelling: true,
+  startStop: { mode: 'off', ms: 800, skips: false, rewind: false },
   phoneLossless: false,
   browserName: '',
   relativeDates: false,
@@ -437,6 +445,15 @@ function read(): Prefs {
         p.profileFoldAt = Math.min(saved.profileFoldAt - gone, p.profileRows.length);
       }
       if (typeof saved.levelling === 'boolean') p.levelling = saved.levelling;
+      if (saved.startStop && typeof saved.startStop === 'object') {
+        const x = saved.startStop;
+        p.startStop = {
+          mode: ['off', 'vinyl', 'fade'].includes(x.mode) ? x.mode : 'off',
+          ms: typeof x.ms === 'number' ? Math.min(RAMP_MS.max, Math.max(RAMP_MS.min, x.ms)) : 800,
+          skips: x.skips === true,
+          rewind: x.rewind === true,
+        };
+      }
       if (typeof saved.phoneLossless === 'boolean') p.phoneLossless = saved.phoneLossless;
       if (typeof saved.browserName === 'string') p.browserName = saved.browserName;
       if (typeof saved.relativeDates === 'boolean') p.relativeDates = saved.relativeDates;

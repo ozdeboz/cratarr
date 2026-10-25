@@ -1313,8 +1313,8 @@ export function togglePlay() {
     return hand('toggle');
   }
   if (!audio) return;
-  if (audio.paused) audio.play().catch(() => {});
-  else audio.pause();
+  if (audio.paused) rampIn();
+  else void pauseRamped();
 }
 
 /** To queue track `index`: within the stream when it is already appended (gapless), else a fresh stream. */
@@ -1335,14 +1335,17 @@ export function jump(index: number) {
   }
 }
 
-export const next = () => jump(local.index + 1);
+export const next = () => void skipRamped(() => jump(local.index + 1));
 
 export function previous() {
   if (handed()) return hand('previous');
   // Repeat all: previous on the first track goes to the last.
-  if (local.repeat === 'all' && local.index === 0 && local.position <= RESTART_AFTER && local.queue.length > 1) return jump(local.queue.length - 1);
-  if (local.position > RESTART_AFTER) seek(0);
-  else jump(Math.max(0, local.index - 1));
+  if (local.repeat === 'all' && local.index === 0 && local.position <= RESTART_AFTER && local.queue.length > 1) return void skipRamped(() => jump(local.queue.length - 1));
+  if (local.position > RESTART_AFTER) {
+    // Its start again: a tape's rewind where the device asks it.
+    if (prefs.startStop.rewind) void rewindTape().then((done) => done || seek(0));
+    else seek(0);
+  } else void skipRamped(() => jump(Math.max(0, local.index - 1)));
 }
 
 /** To `secs` into the playing track: within what is loaded, else a fresh stream from there. */
@@ -1528,7 +1531,114 @@ export function deleteLocal(id: string) {
 export const pageVolume = $state({ level: 100, ducked: false });
 const DUCKED = 0.25;
 function applyVolume() {
-  if (audio) audio.volume = (pageVolume.level / 100) * (pageVolume.ducked ? DUCKED : 1);
+  if (audio) audio.volume = (pageVolume.level / 100) * (pageVolume.ducked ? DUCKED : 1) * rampGain;
+}
+
+// --- Start and stop (Settings › This device; the owner, 2026-10-25) ---
+// Vinyl: the speed ramps, the pitch following, as a turntable spins up and down; Fade: the volume. Over the device's
+// ramp, eased; a new one cuts one under way short. Natural track ends stay gapless (only play, pause and, where asked,
+// next and previous ramp). Tape rewind: Previous restarting a track scrubs back to its start, pitched up, four times
+// the ramp. Stepped by time, not by frames, so a hidden page still gets there.
+let rampGain = 1;
+let rampToken = 0;
+/** The slowest a browser plays (Chrome and Firefox take 1/16). */
+const RAMP_LOW = 0.07;
+const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
+function ramp(from: number, to: number, ms: number, set: (v: number) => void): Promise<boolean> {
+  const token = ++rampToken;
+  const t0 = performance.now();
+  return new Promise((done) => {
+    const step = () => {
+      if (token !== rampToken) return done(false);
+      const t = Math.min(1, (performance.now() - t0) / ms);
+      set(from + (to - from) * easeInOut(t));
+      if (t < 1) setTimeout(step, 16);
+      else done(true);
+    };
+    step();
+  });
+}
+/** Back to plain playing: full speed, its own pitch, full volume. */
+function unramp() {
+  rampToken++;
+  rampGain = 1;
+  if (audio) {
+    audio.playbackRate = 1;
+    audio.preservesPitch = true;
+  }
+  applyVolume();
+}
+const rampSet = (mode: 'vinyl' | 'fade') => (v: number) => {
+  if (mode === 'fade') {
+    rampGain = v;
+    applyVolume();
+  } else if (audio) {
+    audio.preservesPitch = false;
+    audio.playbackRate = Math.max(RAMP_LOW, v);
+  }
+};
+/** Winds down what plays (nothing to do when it is at once, or not playing). */
+async function rampOut(): Promise<void> {
+  const { mode, ms } = prefs.startStop;
+  if (mode === 'off' || !audio || audio.paused) return;
+  await ramp(1, mode === 'fade' ? 0 : RAMP_LOW, ms, rampSet(mode));
+}
+/** Plays, winding up from still (or silence). */
+function rampIn() {
+  if (!audio) return;
+  const { mode, ms } = prefs.startStop;
+  if (mode === 'off') {
+    unramp();
+    void audio.play().catch(() => {});
+    return;
+  }
+  const set = rampSet(mode);
+  set(mode === 'fade' ? 0 : RAMP_LOW);
+  void audio.play().catch(() => {});
+  void ramp(mode === 'fade' ? 0 : RAMP_LOW, 1, ms, set).then((whole) => whole && unramp());
+}
+/** Pauses, winding down first. */
+async function pauseRamped() {
+  if (!audio) return;
+  await rampOut();
+  audio?.pause();
+  unramp();
+}
+/** For next and previous (where the device asks it): out, then on to `go`, then in. */
+async function skipRamped(go: () => void) {
+  const s = prefs.startStop;
+  if (s.mode === 'off' || !s.skips || !audio || audio.paused || handed()) return go();
+  await rampOut();
+  go();
+  rampIn();
+}
+/** Tape rewind: back to the track's start, scrubbing, pitched up; false where it cannot (nothing loaded there). */
+async function rewindTape(): Promise<boolean> {
+  if (!audio || audio.paused) return false;
+  const w = where();
+  const base = w ? w.seg.start : 0;
+  const from = audio.currentTime - base;
+  const loaded = (t: number) => {
+    for (let i = 0; i < audio!.buffered.length; i++) if (t >= audio!.buffered.start(i) && t <= audio!.buffered.end(i)) return true;
+    return false;
+  };
+  if (from <= 0 || !loaded(base)) return false;
+  const ms = Math.min(12_000, 4 * prefs.startStop.ms);
+  const token = ++rampToken;
+  const t0 = performance.now();
+  audio.preservesPitch = false;
+  audio.playbackRate = 2;
+  rampGain = 0.8;
+  applyVolume();
+  while (token === rampToken) {
+    const t = Math.min(1, (performance.now() - t0) / ms);
+    audio.currentTime = base + from * (1 - easeInOut(t));
+    if (t >= 1) break;
+    await new Promise((r) => setTimeout(r, 90));
+  }
+  if (token === rampToken) audio.currentTime = base;
+  unramp();
+  return true;
 }
 
 /** Cratarr's track as this player keeps it. */
@@ -1614,10 +1724,10 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
       return at >= 0;
     }
     case 'pause':
-      audio.pause();
+      void pauseRamped();
       return false;
     case 'resume':
-      audio.play().catch(() => {});
+      rampIn();
       return true;
     case 'toggle':
       togglePlay();
@@ -1672,8 +1782,8 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
 
 if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
   const ms_ = navigator.mediaSession;
-  ms_.setActionHandler('play', () => audio?.play());
-  ms_.setActionHandler('pause', () => audio?.pause());
+  ms_.setActionHandler('play', () => rampIn());
+  ms_.setActionHandler('pause', () => void pauseRamped());
   ms_.setActionHandler('nexttrack', () => next());
   ms_.setActionHandler('previoustrack', () => previous());
   try {
