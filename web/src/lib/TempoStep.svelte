@@ -2,6 +2,8 @@
   // Adjust BPM (the owner, 2026-10-23): one step inside a track's menu or a selection's, an administrator's. A tempo
   // measured at double or half (a hip-hop track at 168 instead of 84) is halved or doubled, or reset to Cratarr's own
   // measure; written into the files' BPM tags, for everyone. Nothing plays any differently. Undo in the toast.
+  import { askIfMany } from './many.svelte';
+  import { plural } from './insights.svelte';
   import { adjustTempo, getTempo, type TempoAdjust, type TrackTempo } from './api';
   import MarkLoader from './MarkLoader.svelte';
   import { refresh } from './live.svelte';
@@ -29,7 +31,13 @@
   const known = $derived((tempo ?? []).some((t) => t.bpm !== null));
 
   const WORDS: Record<TempoAdjust, string> = { half: 'Halved.', double: 'Doubled.', reset: 'Reset.' };
-  async function adjust(how: TempoAdjust) {
+  // Many ask first (lib/many).
+  function adjust(how: TempoAdjust) {
+    const n = plural(ids.length, 'track');
+    askIfMany(ids.length, { title: `Change the BPM of ${n}?`, label: `Change ${n}`, icon: 'reset' }, () => void change(how));
+  }
+
+  async function change(how: TempoAdjust) {
     working = true;
     try {
       const r = await adjustTempo(source, ids, how);

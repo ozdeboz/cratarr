@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { askIfMany } from './lib/many.svelte';
+  import { plural } from './lib/insights.svelte';
   import ListHead from './lib/ListHead.svelte';
   import { matchesSearch, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, playlistBy, usePageAction } from './lib/pageView.svelte';
   import { passing, switchOn } from './lib/listFilter.svelte';
@@ -167,10 +169,15 @@
       toast.fail(e, 'Could not start playing');
     }
   }
+  // Many ask first (lib/many), the selection kept on Cancel.
   function favouriteTicked() {
-    navigator.vibrate?.(8);
-    setPlaylistFavorites([...ticked], !tickedFav);
-    endSelect();
+    const [list, on] = [[...ticked], !tickedFav];
+    const n = plural(list.length, 'playlist');
+    askIfMany(list.length, { title: on ? `Favourite ${n}?` : `Unfavourite ${n}?`, label: on ? `Favourite ${n}` : `Unfavourite ${n}`, icon: 'heart' }, () => {
+      navigator.vibrate?.(8);
+      setPlaylistFavorites(list, on);
+      endSelect();
+    });
   }
 
 </script>

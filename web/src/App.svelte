@@ -54,6 +54,7 @@
   import { provideEverywhere } from './lib/everywhere.svelte';
   import Find from './Find.svelte';
   import Toasts from './lib/Toasts.svelte';
+  import ManyConfirm from './lib/ManyConfirm.svelte';
   import { toast } from './lib/toast.svelte';
   import ProgressBar from './lib/ProgressBar.svelte';
   import { untrack } from 'svelte';
@@ -962,6 +963,7 @@
     <Visuals onclose={() => (visuals.open = false)} />
   {/if}
   <Toasts />
+  <ManyConfirm />
 <LabelTip />
   <ProgressBar />
 

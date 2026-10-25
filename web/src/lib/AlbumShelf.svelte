@@ -9,6 +9,8 @@
   import { untrack, type Snippet } from 'svelte';
   import { fromAction } from 'svelte/attachments';
   import { albumCoverUrl, search, setAlbumFavorite, type ListedAlbum, type ShelfSource } from './api';
+  import { askIfMany, fewAtATime } from './many.svelte';
+  import { plural } from './insights.svelte';
   import type { Matched } from './search';
   import Cover from './Cover.svelte';
   import CoverFlow from './CoverFlow.svelte';
@@ -392,16 +394,20 @@
       toast.fail(e, 'Could not start playing');
     }
   }
-  /** The heart on the ticked albums: all favourites, or none when all already are. Shown at once, back on a refusal. */
-  async function favouriteTicked() {
+  /** The heart on the ticked albums: all favourites, or none when all already are. Shown at once, back on a refusal.
+   *  Many ask first (lib/many), the selection kept on Cancel. */
+  function favouriteTicked() {
     const list = [...ticked];
     const on = !tickedFav;
-    navigator.vibrate?.(8);
-    selecting = null;
-    for (const x of list) setFavorite(x.s.id, x.a.id, on);
-    const failed = (await Promise.allSettled(list.map((x) => setAlbumFavorite(x.s.id, x.a.id, on)))).flatMap((r, n) => (r.status === 'rejected' ? [list[n]] : []));
-    for (const x of failed) setFavorite(x.s.id, x.a.id, !on);
-    if (failed.length) toast.fail(null, "The favourites didn't all change");
+    const n = plural(list.length, 'album');
+    askIfMany(list.length, { title: on ? `Favourite ${n}?` : `Unfavourite ${n}?`, label: on ? `Favourite ${n}` : `Unfavourite ${n}`, icon: 'heart' }, async () => {
+      navigator.vibrate?.(8);
+      selecting = null;
+      for (const x of list) setFavorite(x.s.id, x.a.id, on);
+      const failed = await fewAtATime(list, (x) => setAlbumFavorite(x.s.id, x.a.id, on));
+      for (const x of failed) setFavorite(x.s.id, x.a.id, !on);
+      if (failed.length) toast.fail(null, "The favourites didn't all change");
+    });
   }
 
   /** The one ticked album's menu (a tile's menu is this way). */

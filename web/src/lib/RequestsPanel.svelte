@@ -5,6 +5,8 @@
   // answered from its row's menu, or many at once in the select mode every list has (the bar's icon starts it). Your
   // requests: each with where it stands, a waiting one taken back from its menu. Lidarr monitor: what it
   // fetches now (how far), then what it watches for and has not found yet.
+  import { askIfMany } from './many.svelte';
+  import { plural } from './insights.svelte';
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
@@ -82,9 +84,15 @@
   let opened = $state<AlbumRequest | null>(null);
   const canTakeBack = (r: AlbumRequest) => (r.status === 'pending' && (r.user === me.name || answers)) || (r.status === 'approved' && answers);
   let declining = $state<number[] | null>(null);
+  // Many approved at once ask first (lib/many; declining many asks already, for why).
   function answer(ids: number[], approve: boolean, reason: string | null = null) {
-    selecting = null;
-    decide(ids, approve, reason);
+    const go = () => {
+      selecting = null;
+      decide(ids, approve, reason);
+    };
+    if (!approve) return go();
+    const n = plural(ids.length, 'request');
+    askIfMany(ids.length, { title: `Approve ${n}?`, label: `Approve ${n}`, icon: 'check' }, go);
   }
 
   // --- Select (everyone's waiting ones) ---

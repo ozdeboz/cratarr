@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { askIfMany, fewAtATime } from './many.svelte';
   import { untrack } from 'svelte';
   // A viewed playlist (decision 0023), in the panel beside the page or in its own layer, styled as Finamp's playlist
   // screen (lib/components/AlbumScreen) in less room: a bar with ✕ and the menu; the covers beside the name, "N tracks
@@ -719,16 +720,20 @@ ${r.album_artist ?? r.artist ?? ''}`;
       toast.fail(e, 'Could not start playing');
     }
   }
-  /** The heart on the ticked tracks: all favourites, or none when all already are. Shown at once, back on a refusal. */
-  async function favouriteTicked() {
+  /** The heart on the ticked tracks: all favourites, or none when all already are. Shown at once, back on a refusal.
+   *  Many ask first (lib/many), the selection kept on Cancel. */
+  function favouriteTicked() {
     const list = ticked;
     const on = !tickedFav;
-    navigator.vibrate?.(8);
-    for (const r of list) setFavorite(source, r.id!, on);
-    selecting = null;
-    const failed = (await Promise.allSettled(list.map((r) => setTrackFavorite(source, r.id!, on)))).flatMap((x, n) => (x.status === 'rejected' ? [list[n]] : []));
-    for (const r of failed) setFavorite(source, r.id!, !on);
-    if (failed.length) toast.fail(null, "The favourites didn't all change");
+    const [src, n] = [source, plural(list.length, 'track')];
+    askIfMany(list.length, { title: on ? `Favourite ${n}?` : `Unfavourite ${n}?`, label: on ? `Favourite ${n}` : `Unfavourite ${n}`, icon: 'heart' }, async () => {
+      navigator.vibrate?.(8);
+      for (const r of list) setFavorite(src, r.id!, on);
+      selecting = null;
+      const failed = await fewAtATime(list, (r) => setTrackFavorite(src, r.id!, on));
+      for (const r of failed) setFavorite(src, r.id!, !on);
+      if (failed.length) toast.fail(null, "The favourites didn't all change");
+    });
   }
   // An album's tracks carry its id: its cover, and the Incoming page's mark on what plays.
   const tracksOf = (list: PlaylistRow[], src = source): LocalTrack[] =>

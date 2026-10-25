@@ -2,6 +2,8 @@
 // track's state (there is no call for several tracks at once), and adding them to one, its card spinning until the last
 // is in. A playlist that holds some of them already is asked about first (decision 0025, amended 2026-10-16). The steps
 // themselves are lib/PlaylistsStep's.
+import { askIfMany } from './many.svelte';
+import { plural } from './insights.svelte';
 import { appendNew, hasBatches } from './api';
 import { trackSteps } from './progress.svelte';
 import { appendTracks, setTrackMember, trackState, type Playlist, type TrackState } from './api';
@@ -76,11 +78,20 @@ export class TracksToPlaylist {
       step('again');
       return;
     }
-    await this.addOthers(p, step);
+    // Many ask first (lib/many).
+    const n = plural(can.length, 'track');
+    askIfMany(can.length, { title: `Add ${n} to ${p.name}?`, label: `Add ${n}`, icon: 'listAdd' }, () => void this.addOthers(p, step));
   };
 
-  /** Every one again at the playlist's end, those it holds included. */
-  addAgain = async (p: Playlist, done: () => void) => {
+  /** Every one again at the playlist's end, those it holds included; many ask first (lib/many). */
+  addAgain = (p: Playlist, done: () => void) => {
+    if (this.adding) return;
+    const count = this.ids().filter((id) => this.states[id].addable).length;
+    const n = plural(count, 'track');
+    askIfMany(count, { title: `Add ${n} to ${p.name}?`, label: `Add ${n}`, icon: 'listAdd' }, () => void this.appendAll(p, done));
+  };
+
+  private appendAll = async (p: Playlist, done: () => void) => {
     if (this.adding) return;
     this.adding = p.id;
     try {
