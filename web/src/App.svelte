@@ -706,7 +706,7 @@
   {/if}
   {#if pageRow || handed}
     <!-- The page's glass, or on a phone the panel's on top (lib/glass): one row, one pill whose settings change. -->
-    <div class="page-row" class:beside={sidebar && !handed} class:handed={!!handed} class:top={!!handed && !underBar} style:--player-w="{sideWidth}px">
+    <div class="page-row" class:beside={sidebar && !handed} class:handed={!!handed} class:steady={phone && !!panelPage && !moreOpen} class:top={!!handed && !underBar} style:--player-w="{sideWidth}px">
       {#if handed}
         <span class="lead" in:fade={{ duration: leadFade }}>{@render handed.left()}</span>
       {:else}
@@ -886,6 +886,12 @@
 
   /* Over the panel's layer while it holds the panel's glass (lib/glass). */
   .page-row.handed {
+    z-index: 22;
+  }
+
+  /* An index page's glass on a phone stays over its panel's layer as that fades out on closing, instead of showing
+     through it (the owner, 2026-10-25: "the top glass and title show a fade in"); under the More sheet while it is open. */
+  .page-row.steady {
     z-index: 22;
   }
 
