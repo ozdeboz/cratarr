@@ -10,8 +10,8 @@ import type { SettingsSection } from './settingsSections.svelte';
 /** The lists a part shows that are kept in another file (the owner, 2026-10-25: Home's sections, the profile's rows…
  *  found by their labels as every other row is). */
 const SHOWN: Partial<Record<SettingsSection, readonly { label: string }[]>> = {
-  home: HOME_PARTS,
-  display: [...PROFILE_ROWS, ...FACTS],
+  content: [...HOME_PARTS, ...PROFILE_ROWS],
+  player: FACTS,
   import: IMPORT_WHAT,
 };
 
@@ -25,10 +25,12 @@ const PARTS: Record<string, SettingsSection> = {
   'ListeningPart': 'connections',
   'DevicePart': 'device',
   'DiagnosticsPart': 'diagnostics',
-  'DisplayPart': 'display',
-  'PlayerRowList': 'display',
-  'AppearancePicker': 'display',
-  'HomeSettingsPart': 'home',
+  'AppearancePart': 'appearance',
+  'AppearancePicker': 'appearance',
+  'LayoutPart': 'layout',
+  'PlayerPart': 'player',
+  'PlayerRowList': 'player',
+  'ContentPart': 'content',
   'ImportPart': 'import',
   'LibrariesPart': 'libraries',
   'NetworkPart': 'network',

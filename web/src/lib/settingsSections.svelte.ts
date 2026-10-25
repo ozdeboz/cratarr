@@ -12,9 +12,11 @@ export type SettingsSection =
   | 'sync'
   | 'account'
   | 'import'
-  | 'display'
+  | 'appearance'
+  | 'layout'
+  | 'player'
   | 'taste'
-  | 'home'
+  | 'content'
   | 'connections'
   | 'libraries'
   | 'players'
@@ -32,9 +34,11 @@ export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app
   { id: 'account', title: 'Account', icon: 'user' },
   { id: 'network', title: 'Network', icon: 'wifi', app: true },
   { id: 'sync', title: 'Sync', icon: 'arrowDownToLine', app: true },
-  { id: 'display', title: 'Display', icon: 'swatch' },
+  { id: 'appearance', title: 'Appearance', icon: 'swatch' },
+  { id: 'layout', title: 'Layout', icon: 'layoutGrid' },
+  { id: 'player', title: 'Player', icon: 'play' },
   // Home's sections, their order, and its header (the owner, 2026-10-24).
-  { id: 'home', title: 'Home', icon: 'home' },
+  { id: 'content', title: 'Content', icon: 'home' },
   // What one has said one does not want (the owner, 2026-10-23): every exclusion, managed in one place.
   { id: 'taste', title: 'Taste', icon: 'music' },
   { id: 'connections', title: 'Connections', icon: 'server', admin: true, everyone: true },

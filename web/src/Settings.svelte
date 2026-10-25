@@ -106,11 +106,15 @@
         return appInfo.inUse ? appInfo.inUse.replace(/^\w+:\/\//, '') : '';
       case 'sync':
         return [kept.known ? `${kept.items.length} kept` : null, appInfo.syncBudgetGb ? `${appInfo.syncBudgetGb} GB` : 'No limit'].filter(Boolean).join(' · ');
-      case 'display':
-        return THEME[prefs.theme];
-      case 'home': {
+      case 'appearance':
+        return [THEME[prefs.theme], prefs.animations ? null : 'No animations'].filter(Boolean).join(' · ');
+      case 'layout':
+        return `Bar along the ${prefs.navAt} · Mini player along the ${prefs.miniAt}`;
+      case 'player':
+        return prefs.playerRow ? (prefs.playerFacts.length ? `${prefs.playerFacts.length} extra details` : 'Extra details') : 'No extra details';
+      case 'content': {
         const n = prefs.homeParts.length;
-        return [n === HOME_PARTS.length ? 'Every section' : `${n} of ${HOME_PARTS.length} sections`, prefs.homeGreeting ? 'Greeting' : null, localCovers[HOME_HEADER] ? 'Your picture' : null]
+        return [n === HOME_PARTS.length ? 'Every Home section' : `${n} of ${HOME_PARTS.length} Home sections`, prefs.homeGreeting ? 'Greeting' : null, localCovers[HOME_HEADER] ? 'Your picture' : null, prefs.profile ? null : 'No music profiles']
           .filter(Boolean)
           .join(' · ');
       }

@@ -35,9 +35,11 @@
   import { me } from './me.svelte';
   import ConnectionsPart from './settings/ConnectionsPart.svelte';
   import DevicePart from './settings/DevicePart.svelte';
-  import DisplayPart from './settings/DisplayPart.svelte';
+  import AppearancePart from './settings/AppearancePart.svelte';
+  import LayoutPart from './settings/LayoutPart.svelte';
+  import PlayerPart from './settings/PlayerPart.svelte';
   import TastePart from './settings/TastePart.svelte';
-  import HomeSettingsPart from './settings/HomeSettingsPart.svelte';
+  import ContentPart from './settings/ContentPart.svelte';
   import NetworkPart from './settings/NetworkPart.svelte';
   import SyncPart from './settings/SyncPart.svelte';
   import ImportPart from './settings/ImportPart.svelte';
@@ -138,12 +140,16 @@
       <NetworkPart />
     {:else if section === 'sync'}
       <SyncPart />
-    {:else if section === 'display'}
-      <DisplayPart />
+    {:else if section === 'appearance'}
+      <AppearancePart />
+    {:else if section === 'layout'}
+      <LayoutPart />
+    {:else if section === 'player'}
+      <PlayerPart />
     {:else if section === 'account'}
       <AccountPart />
-    {:else if section === 'home'}
-      <HomeSettingsPart />
+    {:else if section === 'content'}
+      <ContentPart />
     {:else if section === 'taste'}
       <TastePart {thing} />
     {:else if section === 'users'}

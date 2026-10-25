@@ -284,10 +284,10 @@
     // A Bandcamp preview's row says where it plays from (the owner, 2026-10-25).
     return now.source === BANDCAMP ? [{ id: 'bandcamp', short: 'Bandcamp' }, ...facts] : facts;
   });
-  /** The row's Add: Settings → Display, where the row's facts are chosen; the player over the page gives way. */
+  /** The row's Add: Settings → Player, where the row's facts are chosen; the player over the page gives way. */
   function toRowSettings() {
     player.full = false;
-    location.hash = `#/settings?view=${encodeURIComponent(SETTINGS + 'display')}`;
+    location.hash = `#/settings?view=${encodeURIComponent(SETTINGS + 'player')}`;
   }
   /** The album's name: the album in the panel, as the artist's chip opens the artist. */
   function toAlbum() {
