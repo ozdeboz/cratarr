@@ -4,7 +4,8 @@
   // and a picture of one's own in place of the weather's sky, kept on this device (lib/localCovers). Acts at once.
   import OrderReset from './OrderReset.svelte';
   import { HOME_HEADER, HOME_HEADER_PX, localCovers, removeLocalPicture, setLocalPicture } from '../localCovers.svelte';
-  import { FLOW_PARTS, HOME_PARTS, homeDefault, prefs, type HomePart } from '../prefs.svelte';
+  import { CRATE_PART, FLOW_PARTS, HOME_PARTS, homeDefault, prefs, type HomePart } from '../prefs.svelte';
+  import { crates, loadCrates } from '../crates.svelte';
   import { toast } from '../toast.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
@@ -16,6 +17,7 @@
     () => {
       prefs.homeParts = homeDefault();
       prefs.homeGreeting = false;
+      prefs.homeCrates = false;
       void removeLocalPicture(HOME_HEADER);
     },
   );
@@ -29,6 +31,26 @@
       return;
     }
     prefs.homeParts = at === 0 ? parts : [parts[at], ...parts.slice(0, at), ...parts.slice(at + 1)];
+  }
+
+  // Your crates on Home (0.9.3; the owner, 2026-10-25): on, each of one's own crates joins the sections below (switched
+  // on, at the end), to be ordered and switched as every section is; off, they leave Home and the list.
+  $effect(() => {
+    if (prefs.homeCrates && !crates.list) void loadCrates();
+  });
+  const ownCrates = $derived((crates.list ?? []).filter((c) => !c.permanent));
+  const partOf = (id: string) => `${CRATE_PART}${id}` as HomePart;
+  const items = $derived(prefs.homeCrates ? [...HOME_PARTS, ...ownCrates.map((c) => ({ id: partOf(c.id), label: c.name }))] : HOME_PARTS);
+  const onParts = $derived(prefs.homeParts.filter((p) => !p.startsWith(CRATE_PART) || (prefs.homeCrates && ownCrates.some((c) => p === partOf(c.id)))));
+  async function setHomeCrates(on: boolean) {
+    prefs.homeCrates = on;
+    const kept = prefs.homeParts.filter((p) => !p.startsWith(CRATE_PART));
+    if (!on) {
+      prefs.homeParts = kept;
+      return;
+    }
+    if (!crates.list) await loadCrates();
+    prefs.homeParts = [...kept, ...ownCrates.map((c) => partOf(c.id))];
   }
 
   let busy = $state(false);
@@ -60,7 +82,8 @@
       }}
     />
   {/snippet}
-  <OrderList items={HOME_PARTS} on={prefs.homeParts} label="Home's sections" onchange={setParts} lead={{ may: (id) => FLOW_PARTS.includes(id), label: 'Can be featured on top' }} />
+  <Item name="Your crates on Home" toggle={{ checked: prefs.homeCrates, onchange: (on) => void setHomeCrates(on) }} />
+  <OrderList {items} on={onParts} label="Home's sections" onchange={setParts} lead={{ may: (id) => FLOW_PARTS.includes(id), label: 'Can be featured on top' }} />
 </Group>
 
 <Group title="Header">

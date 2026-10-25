@@ -5,7 +5,7 @@
   // days' plays, none of them), Jump back in (the albums and playlists played last, and the queues left last), Blast
   // from the past (the favourite tracks unplayed longest) and Grave digging (the albums most like the taste and furthest
   // from the listening), and System status (claude-632's, lib/HomeStatus). A tile with nothing to show is left out.
-  import { onMount, type Snippet } from 'svelte';
+  import { onMount, untrack, type Snippet } from 'svelte';
   import {
     albumView,
     coverUrl,
@@ -30,7 +30,7 @@
   import TrackMenu, { type MenuTrack } from './lib/TrackMenu.svelte';
   import AlbumCard from './lib/AlbumCard.svelte';
   import { addedOn, library, readLibrary } from './lib/albums.svelte';
-  import { albumCoverUrl } from './lib/api';
+  import { albumCoverUrl, crateRows, getCrate } from './lib/api';
   import Cover from './lib/Cover.svelte';
   import CoverFlow from './lib/CoverFlow.svelte';
   import ArtistsToExplore from './lib/ArtistsToExplore.svelte';
@@ -43,7 +43,7 @@
   import { shownPlaylists } from './lib/output.svelte';
   import { albumSubject, viewOver, viewPlaylist } from './lib/panel.svelte';
   import { playCollection } from './lib/play.svelte';
-  import { FLOW_PARTS, prefs, type HomePart } from './lib/prefs.svelte';
+  import { CRATE_PART, FLOW_PARTS, prefs, type HomePart } from './lib/prefs.svelte';
   import { HOME_HEADER, localCovers } from './lib/localCovers.svelte';
   import { me } from './lib/me.svelte';
   import greet from 'greet-by-time';
@@ -261,8 +261,35 @@
     return () => clearTimeout(t);
   });
   type Part = HomePart;
-  /** Its sections switched on, in the user's order (Settings › Home). */
-  const order = $derived(prefs.homeParts);
+  /** Its sections switched on, in the user's order (Settings › Home); one's own crates while Your crates on Home is on. */
+  const order = $derived(prefs.homeParts.filter((p) => !p.startsWith(CRATE_PART) || prefs.homeCrates));
+
+  // One's own crates on Home (0.9.3; the owner, 2026-10-25): each a shelf of its albums, as New for you's, its › the
+  // crate; read once a visit, its first albums in the crate's order (`null`: nothing to show).
+  const CRATE_ALBUMS = 20;
+  type CrateShelf = { name: string; source: string; albums: { id: string; title: string; artist: string | null; year: number | null }[] };
+  let crateShelves = $state<Record<string, CrateShelf | null>>({});
+  const asking = new Set<string>();
+  $effect(() => {
+    const ids = order.filter((p) => p.startsWith(CRATE_PART)).map((p) => p.slice(CRATE_PART.length));
+    for (const id of untrack(() => ids.filter((x) => !(x in crateShelves) && !asking.has(x)))) {
+      asking.add(id);
+      Promise.all([crateRows(id, 0, 300, prefs.source || undefined, undefined, undefined, { without: hiddenLibraries() }), getCrate(id)]).then(
+        ([page, def]) => {
+          const albums: CrateShelf['albums'] = [];
+          for (const r of page.rows) {
+            if (!r.album_id || albums.some((a) => a.id === r.album_id)) continue;
+            albums.push({ id: r.album_id, title: r.album ?? '', artist: r.album_artist ?? r.artist ?? null, year: r.year ?? null });
+            if (albums.length === CRATE_ALBUMS) break;
+          }
+          crateShelves[id] = { name: def.name, source: page.source, albums };
+        },
+        () => (crateShelves[id] = null),
+      );
+    }
+  });
+  /** Whether a section has what it needs to show (a crate's: its shelf read). */
+  const settledOf = (part: Part) => (part.startsWith(CRATE_PART) ? part.slice(CRATE_PART.length) in crateShelves : settled[part]);
   const settled = $derived<Record<Part, boolean>>({
     moment: momentIn && (!moment || !!library.view),
     newest: newestIn,
@@ -275,9 +302,9 @@
     favAlbums: favAlbumIds !== null && !!library.view,
     favTracks: favRows !== null,
   });
-  const turn = (part: Part) => settled[part] && (!patient || order.slice(0, order.indexOf(part)).every((x) => settled[x]));
+  const turn = (part: Part) => settledOf(part) && (!patient || order.slice(0, order.indexOf(part)).every((x) => settledOf(x)));
   /** Nothing shown yet and something still to come: the page's loader, not a blank page. */
-  const loading = $derived(!order.some(turn) && !order.every((x) => settled[x]));
+  const loading = $derived(!order.some(turn) && !order.every((x) => settledOf(x)));
 
   /** The European days a greeting wishes (make-a-wish's dates without the American ones, the owner 2026-10-24), by
    *  `month-day`. */
@@ -389,7 +416,9 @@
 <div class="home">
   {#if loading}<PageLoading />{/if}
   <!-- Its sections in the user's order, those switched on (Settings › Home; the owner, 2026-10-24). -->
-  {#each order as part, i (part)}{@render (i === 0 && FLOW_PARTS.includes(part) ? heroPart : PARTS[part])()}{/each}
+  {#each order as part, i (part)}
+    {#if part.startsWith(CRATE_PART)}{@render cratePart(part.slice(CRATE_PART.length))}{:else}{@render (i === 0 && FLOW_PARTS.includes(part) ? heroPart : PARTS[part])()}{/if}
+  {/each}
 </div>
 
 {#snippet heroPart()}
@@ -442,6 +471,21 @@
       <ul class="shelf big">
         {#each momentAlbums as a (a.id)}
           <li><AlbumCard source="cratarr" album={a} lines={[a.artist ?? '', a.year ? String(a.year) : '']} /></li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
+{/snippet}
+
+{#snippet cratePart(id: string)}
+  <!-- One's own crate (0.9.3): its albums as New for you's shelf, › its crate. -->
+  {@const s = crateShelves[id]}
+  {#if s && s.albums.length && turn(`${CRATE_PART}${id}`)}
+    <section aria-label={s.name}>
+      <SectionHead title={s.name} onmore={() => viewPlaylist(CRATE + id)} />
+      <ul class="shelf">
+        {#each s.albums as a (a.id)}
+          <li><AlbumCard source={s.source} album={a} lines={[a.artist ?? '', a.year ? String(a.year) : '']} /></li>
         {/each}
       </ul>
     </section>

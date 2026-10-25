@@ -126,6 +126,9 @@ export type Prefs = {
   homeParts: HomePart[];
   /** Home's header greets by name ("Good evening, Oskar", then "Best for now") in place of the moment's own name. */
   homeGreeting: boolean;
+  /** One's own crates on Home (Settings › Home, 0.9.3; the owner, 2026-10-25): each a section of its own, a shelf of its
+   *  albums, ordered and switched in Home's sections list. */
+  homeCrates: boolean;
   profileFoldAt: number;
   /** Levelling (decision 0035): this browser's player plays every track about as loud as the next. */
   /** This browser's name as a Play On player, while a page plays here (lib/playOnTarget); '' until it has one. */
@@ -223,7 +226,9 @@ export type FilterCondition = Condition & { enabled?: boolean; quantifier?: 'any
 
 /** A list profile's rows (lib/ListProfile), in its order: the server's number keys and the word rows. */
 /** Home's sections (Home.svelte), in their first order. */
-export type HomePart = 'moment' | 'newest' | 'week' | 'back' | 'explore' | 'past' | 'graves' | 'status' | 'favAlbums' | 'favTracks';
+/** One's own crate as a Home section (0.9.3): `crate:<its id>`. */
+export const CRATE_PART = 'crate:';
+export type HomePart = 'moment' | 'newest' | 'week' | 'back' | 'explore' | 'past' | 'graves' | 'status' | 'favAlbums' | 'favTracks' | `crate:${string}`;
 export const HOME_PARTS: { id: HomePart; label: string }[] = [
   { id: 'moment', label: 'Music for the moment' },
   { id: 'newest', label: 'New for you' },
@@ -275,6 +280,7 @@ export const DEFAULTS: Prefs = {
   profileRows: PROFILE_ROWS.map((r) => r.id),
   homeParts: homeDefault(),
   homeGreeting: false,
+  homeCrates: false,
   levelling: true,
   phoneLossless: false,
   browserName: '',
@@ -350,9 +356,12 @@ function read(): Prefs {
       if (typeof saved.profileOpen === 'boolean') p.profileOpen = saved.profileOpen;
       if (typeof saved.profile === 'boolean') p.profile = saved.profile;
       if (typeof saved.homeGreeting === 'boolean') p.homeGreeting = saved.homeGreeting;
+      if (typeof saved.homeCrates === 'boolean') p.homeCrates = saved.homeCrates;
       if (Array.isArray(saved.profileRows)) p.profileRows = saved.profileRows.filter((x: unknown): x is ProfileRow => PROFILE_ROWS.some((r) => r.id === x));
       if (Array.isArray(saved.homeParts) && saved.homeParts.join(',') !== HOME_BEFORE)
-        p.homeParts = saved.homeParts.filter((x: unknown): x is HomePart => HOME_PARTS.some((r) => r.id === x));
+        p.homeParts = saved.homeParts.filter(
+          (x: unknown): x is HomePart => HOME_PARTS.some((r) => r.id === x) || (typeof x === 'string' && x.startsWith(CRATE_PART) && x.length > CRATE_PART.length),
+        );
       if (Number.isInteger(saved.profileFoldAt) && saved.profileFoldAt >= 0) {
         // Rows no longer in the profile (Artists, 2026-10-23) that were above the fold line no longer count there.
         const gone = Array.isArray(saved.profileRows) ? saved.profileRows.slice(0, saved.profileFoldAt).filter((x: unknown) => !PROFILE_ROWS.some((r) => r.id === x)).length : 0;
