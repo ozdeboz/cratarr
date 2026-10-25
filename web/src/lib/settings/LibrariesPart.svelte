@@ -157,7 +157,7 @@
       </Item>
     {/if}
     {#if u === 'incoming'}
-      <Item name="Dot" swatch={pol.colour ?? ed.palette[0] ?? '#e0a23a'} onclick={() => (colouring = l)} />
+      <Item name="Dot colour" swatch={pol.colour ?? ed.palette[0] ?? '#e0a23a'} onclick={() => (colouring = l)} />
     {/if}
   </Group>
   <Group title={l.folder ? 'Folder' : 'Where'}>
@@ -296,7 +296,7 @@
 {#if naming !== null}
   {@const before = naming}
   <ValueSheet
-    title="Names in Music"
+    title="Names"
     value={before}
     allowEmpty={false}
     oninput={(v) => {

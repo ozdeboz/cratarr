@@ -113,7 +113,7 @@
         toggle={{ checked: prefs.profileSources[s.id], onchange: (on) => (prefs.profileSources[s.id] = on) }}
       />
     {/each}
-    {#if profile && tracksIn}<Item name="Heard by AudioMuse" value={`${count(heard)} of ${count(tracksIn)}`} progress={heard / tracksIn} line={`${Math.round((100 * heard) / tracksIn)}%`} />{/if}
+    {#if profile && tracksIn}<Item name="Analysed" value={`${count(heard)} of ${count(tracksIn)}`} progress={heard / tracksIn} line={`${Math.round((100 * heard) / tracksIn)}%`} />{/if}
     <Item name="Your profile" onclick={openProfile} />
   </Group>
   <!-- Headed as what they are (the owner, 2026-10-24): Exclusions, everywhere and each crate's. -->

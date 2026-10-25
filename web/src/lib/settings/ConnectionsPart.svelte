@@ -338,7 +338,7 @@
   </Group>
   {#if s.lidarr && ed.lid.url}
     <!-- What Discover's Want adds an album with, as Seerr asks of each server (the owner, 2026-10-24). -->
-    <Group title="Want" more={WANT_MORE}>
+    <Group title="Adding albums" more={WANT_MORE}>
       <Item name="Quality profile" value={named(lidOptions?.quality, ed.lid.quality)} onclick={() => chooseLidarr('quality')} />
       <Item name="Metadata profile" value={named(lidOptions?.metadata, ed.lid.metadata)} onclick={() => chooseLidarr('metadata')} />
       <Item name="Root folder" value={ed.lid.root ?? AS_ARTISTS} wrap onclick={() => chooseLidarr('root')} />

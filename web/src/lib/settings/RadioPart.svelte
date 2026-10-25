@@ -46,7 +46,7 @@
   <Item name="Like" value={RADIO_NAMES[defaults.radio.by]} onclick={() => (choosing = 'by')} />
   <Item name="After each track" value={String(defaults.radio.count)} onclick={() => (choosing = 'count')} />
 </Group>
-<Group title="Both" more="What makes music alike for Radio and Autoplay.">
+<Group title="Shared" more="What makes music alike for Radio and Autoplay.">
   <Item name="Similar by" value={similarLine} onclick={() => (choosing = 'similar')} />
   <Item name="Ignore favourites" toggle={{ checked: defaults.skipFavourites, onchange: (on) => setDefaults({ skipFavourites: on }) }} />
 </Group>

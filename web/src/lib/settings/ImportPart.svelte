@@ -398,7 +398,7 @@
     <Item name="Scrobbles" toggle={{ checked: fmWhat.scrobbles, onchange: (on) => (fmWhat.scrobbles = on) }} />
     <Item name="Loved tracks" toggle={{ checked: fmWhat.loves, onchange: (on) => (fmWhat.loves = on) }} />
     {#if fmWhat.loves}
-      <Item name="Un-loved tracks stop being favourites" toggle={{ checked: fmWhat.unstar, onchange: (on) => (fmWhat.unstar = on) }} />
+      <Item name="Sync un-loving" toggle={{ checked: fmWhat.unstar, onchange: (on) => (fmWhat.unstar = on) }} />
     {/if}
   </Group>
   <Group>
