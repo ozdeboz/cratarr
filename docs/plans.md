@@ -190,3 +190,10 @@ the same tracks, Air's Moon Safari with one track more in Incoming, 6 another ed
   "prioritize Bandcamp playable artists"), so a new one can be heard at once. One in the library opens its artist page;
   a new one its Bandcamp album in the album panel, as Discover's do. Looked up with the artist's other facts and kept;
   MusicBrainz and Bandcamp at their one request a second.
+- **Discover's masonry** (the owner with claude-632, 2026-10-25; the page claude-632's): tiles keep their size (1×1 = 136
+  px, a little under a shelf's 150 px cover), the width decides the columns, two rows at least. Each artist gets the
+  smallest grid its suggestions fill, its seed tile in the middle with the artist's picture (tall over two rows); the
+  suggestions packed outward from it, the most alike nearest, those that play on Bandcamp 2×1 above and below it and
+  1×2 beside it. A first artist's grid grows only while its next suggestions stay close (about half the strongest
+  match or more); width left over goes to a second artist by the same rule. The server gives each suggestion how alike
+  it is to each artist it was found from (`alike`: Last.fm's match per seed).
