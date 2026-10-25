@@ -142,6 +142,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/home/artists", get(home_artists))
         .route("/api/artists/{id}/photo", get(artist_photo))
         .route("/api/artists/about", get(artist_about))
+        .route("/api/artists/related", get(artist_related))
         .route("/api/artists/picks", get(artist_picks))
         .route("/api/crates/fits", get(crate_fits))
         .route("/api/home/heard", post(home_heard))
@@ -3617,6 +3618,27 @@ async fn artist_about(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) 
     }
     .await;
     Json(found.unwrap_or_else(|| json!({ "id": null, "bio": null, "photo": false })))
+}
+
+/// Related artists to explore on an artist's page (0.9.2, app::related), by the artist's name: as last looked up, and
+/// whether a look runs now (started here when none was kept or it is old). An artist without a MusicBrainz id has none.
+async fn artist_related(Query(q): Query<AboutQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let (s, name) = (serve.clone(), q.name.trim().to_string());
+    let found = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<(String, Option<crate::app::related::Found>, bool)>> {
+        let Some((_, Some(mbid))) = s.library.artist_by_name(&name)? else { return Ok(None) };
+        let (kept, due) = crate::app::related::kept(&s, &mbid)?;
+        Ok(Some((mbid, kept, due)))
+    })
+    .await
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let Some((mbid, kept, due)) = found else { return Ok(Json(json!({ "artists": [], "looking": false }))) };
+    if due {
+        crate::app::related::start(serve, q.name.trim().to_string(), mbid.clone());
+    }
+    let artists = kept.map(|f| f.artists).unwrap_or_default();
+    Ok(Json(json!({ "artists": artists, "looking": crate::app::related::is_looking(&mbid) })))
 }
 
 /// An artist new to the library, for Discover's New to you (0069 amended, 0.9.1): TheAudioDB's description by name, as

@@ -110,6 +110,8 @@ CREATE INDEX IF NOT EXISTS request_status ON request (status, at);
 -- Discover's discographies (decision 0069 amended, 0.9): an artist's albums and EPs as MusicBrainz lists them (JSON),
 -- by the artist's MusicBrainz id, and when they were read; the same for every account.
 CREATE TABLE IF NOT EXISTS discography (artist TEXT PRIMARY KEY, at INTEGER NOT NULL, groups TEXT NOT NULL) WITHOUT ROWID;
+-- Related artists to explore (0.9.2): an artist's (by MusicBrainz id) as last looked up (JSON), the same for every account.
+CREATE TABLE IF NOT EXISTS related_artists (artist TEXT PRIMARY KEY, at INTEGER NOT NULL, found TEXT NOT NULL) WITHOUT ROWID;
 -- Sleep is no longer kept (the owner, 2026-10-24: not something that should be in Cratarr at all).
 DROP TABLE IF EXISTS asleep;
 ";
@@ -1017,6 +1019,16 @@ impl UserData {
         let mut st = db.prepare_cached("SELECT source, choice FROM import_choices WHERE substr(source, 1, length(?1)) = ?1 ORDER BY source")?;
         let rows = st.query_map([prefix], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// An artist's related artists as last looked up (JSON, app::related), and when.
+    pub fn related_artists(&self, artist: &str) -> Result<Option<(i64, String)>> {
+        Ok(self.db().query_row("SELECT at, found FROM related_artists WHERE artist = ?1", [artist], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
+    }
+
+    pub fn set_related_artists(&self, artist: &str, at: i64, found: &str) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO related_artists (artist, at, found) VALUES (?1, ?2, ?3)", params![artist, at, found])?;
+        Ok(())
     }
 
     /// An artist's discography as Discover keeps it (JSON), and when it was read (decision 0069 amended).

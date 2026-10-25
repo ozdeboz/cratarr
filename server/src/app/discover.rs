@@ -109,8 +109,19 @@ pub struct Suggestion {
     /// How many listen to it on Last.fm, where the account asks Last.fm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listeners: Option<u64>,
+    /// How alike its artist is to each artist it was found from (Last.fm's `match`, 0 to 1), the most alike first: the
+    /// masonry places it by these (0.9.2, the owner with claude-632). Only Last.fm's suggestions have them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alike: Vec<Alike>,
     #[serde(skip)]
     pub score: f64,
+}
+
+/// How alike a suggestion's artist is to one of the account's artists (`seed`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Alike {
+    pub seed: String,
+    pub value: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -148,6 +159,8 @@ pub struct Candidate {
     /// What it is and its genres, where its source says (MusicBrainz's discographies, the fresh releases).
     pub kind: Option<String>,
     pub genres: Vec<String>,
+    /// How alike its artist is to each artist it was found from, where its source says (Last.fm).
+    pub alike: Vec<Alike>,
     /// Which source, for the extra rank of more than one.
     pub source: &'static str,
     pub why: String,
@@ -155,7 +168,7 @@ pub struct Candidate {
     pub score: f64,
 }
 
-fn http() -> Result<reqwest::Client> {
+pub(super) fn http() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder().timeout(Duration::from_secs(30)).user_agent(concat!("Cratarr/", env!("CARGO_PKG_VERSION"))).build()?)
 }
 
@@ -410,7 +423,8 @@ async fn from_lastfm(user: Option<&str>, auth: &Auth, own: &[String], artists_ha
             continue;
         };
         let mut because = because;
-        because.sort_by(|a, b| b.0.total_cmp(&a.0));
+        because.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        let alike: Vec<Alike> = because.iter().map(|(m, seed)| Alike { seed: seed.clone(), value: *m as f32 }).collect();
         let names: Vec<String> = because.into_iter().map(|b| b.1).take(2).collect();
         let why = match names.as_slice() {
             // Not ", which you play" after each: every card would say it (the owner, 2026-10-24).
@@ -426,6 +440,7 @@ async fn from_lastfm(user: Option<&str>, auth: &Auth, own: &[String], artists_ha
             lastfm_url: a["url"].as_str().map(str::to_string),
             source: "lastfm",
             why,
+            alike,
             score: score / most,
             ..Candidate::default()
         });
@@ -690,6 +705,7 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
                     length_secs: None,
                     track_count: None,
                     listeners: None,
+                    alike: Vec::new(),
                     score: 0.0,
                 },
                 HashSet::new(),
@@ -721,6 +737,14 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
         if s.genres.is_empty() {
             s.genres = c.genres.clone();
         }
+        // Each seed once, at its strongest; the most alike first.
+        for a in &c.alike {
+            match s.alike.iter_mut().find(|x| x.seed == a.seed) {
+                Some(x) => x.value = x.value.max(a.value),
+                None => s.alike.push(a.clone()),
+            }
+        }
+        s.alike.sort_by(|a, b| b.value.total_cmp(&a.value).then_with(|| a.seed.cmp(&b.seed)));
         // A second source counts extra; more of one source's recordings on the album, a little.
         s.score += if sources.insert(c.source) { c.score + if sources.len() > 1 { 1.0 } else { 0.0 } } else { c.score * 0.25 };
     }
@@ -829,7 +853,7 @@ async fn mb_urls(http: &reqwest::Client, release_group: &str) -> Result<MbAlbum>
 }
 
 /// The pages MusicBrainz keeps for an artist (their "url" relations).
-async fn mb_artist_urls(http: &reqwest::Client, artist: &str) -> Result<Vec<String>> {
+pub(super) async fn mb_artist_urls(http: &reqwest::Client, artist: &str) -> Result<Vec<String>> {
     #[derive(Deserialize)]
     struct Artist {
         #[serde(default)]
@@ -903,7 +927,7 @@ async fn mb_release_group(http: &reqwest::Client, artist: &str, album: &str) -> 
 }
 
 /// MusicBrainz asks for at most one request a second.
-const MB_PAUSE: Duration = Duration::from_millis(1100);
+pub(super) const MB_PAUSE: Duration = Duration::from_millis(1100);
 
 /// Looks up the account's suggestions now (blocking parts apart) and keeps them.
 pub async fn look(
@@ -1292,6 +1316,18 @@ mod tests {
         let tw = list.iter().find(|s| s.album == "Talkie Walkie").unwrap();
         assert_eq!(tw.sources, ["MusicBrainz"], "a discography is MusicBrainz's");
         assert_eq!(tw.why, ["Missing from Air's albums"]);
+    }
+
+    #[test]
+    fn how_alike_to_each_seed_is_kept_at_its_strongest_the_most_alike_first() {
+        let a = |seed: &str, value: f32| Alike { seed: seed.into(), value };
+        let first = Candidate { alike: vec![a("Air", 0.4), a("Bonobo", 0.9)], ..c("Moon", "Zero 7", Some("rg-m"), "lastfm", "Like Bonobo and Air", 0.8) };
+        let again = Candidate { alike: vec![a("Air", 0.7)], ..c("Moon", "Zero 7", Some("rg-m"), "lastfm", "Like Air", 0.5) };
+        let list = one_list(vec![first, again], &|_: &Candidate| false, &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(list[0].alike, vec![a("Bonobo", 0.9), a("Air", 0.7)]);
+        let lb = one_list(vec![c("X", "Y", Some("rg-x"), "listenbrainz", "Recommended", 1.0)], &|_: &Candidate| false, &HashSet::new(), &HashSet::new(), &HashSet::new());
+        assert!(lb[0].alike.is_empty(), "only Last.fm says how alike");
+        assert!(!serde_json::to_string(&lb[0]).unwrap().contains("alike"), "left out when empty");
     }
 
     #[test]

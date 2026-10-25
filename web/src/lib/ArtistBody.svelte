@@ -2,12 +2,13 @@
   // An artist's page under their name (decided 2026-10-16, as Symfonium's): About (the owner, 2026-10-23: TheAudioDB's
   // description, from the server's artist store; a tap opens all of it; their photo is the page's header, not here too), their albums, the albums they
   // appear on (others', credited on a track), both newest first as covers, and their most played tracks (the panel's
-  // rows, `top`), whose › shows all their tracks.
+  // rows, `top`), whose › shows all their tracks; then related artists to explore (lib/RelatedArtists, 0.9.2).
   import type { Snippet } from 'svelte';
   import { tick } from 'svelte';
   import { getArtistAbout, type ListedAlbum } from './api';
   import { pageAsked } from './artistAbout.svelte';
   import AlbumCard from './AlbumCard.svelte';
+  import RelatedArtists from './RelatedArtists.svelte';
   import SectionHead from './SectionHead.svelte';
 
   let {
@@ -107,6 +108,8 @@
     {@render top()}
   </section>
 {/if}
+<!-- Related artists to explore (0.9.2): Cratarr's own library only (the server knows its artists' MusicBrainz ids). -->
+{#if source === 'cratarr'}<RelatedArtists {name} />{/if}
 {#if !albums.length && !appearsOn.length && !top}
   <p class="empty">Nothing by {name} on this server.</p>
 {/if}

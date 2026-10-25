@@ -169,3 +169,31 @@ search finds deep (a playlist by its tracks, a crate by what it holds, an artist
 finds across them all; both by the one pattern (ui-conventions, "Search: the page finds, the panel narrows"): what
 matches shows, and the item opened shows what of it matches the same words. Needs a server search over the library and
 the playlists' and crates' contents (one call, its results by kind).
+
+## 0.9.2: one copy of each album, related artists to explore
+
+The owner, 2026-10-25, looking at Dominik Eulberg's artist page on the phone: "What's up with these duplicate albums? And
+why do I not see anything in the health about this?" Bionik and Heimische Gefilde showed twice: Lidarr's copies in
+Incoming, left there when the FLAC upgrade of 2026-10-12 took them into Music. 24 such albums; 17 the same release with
+the same tracks, Air's Moon Safari with one track more in Incoming, 6 another edition.
+
+- **Health: albums in Music and Incoming at once** (the owner chose it): by MusicBrainz release, else by name and artist
+  as the import's matcher reads them; each says which (the same release, or another edition, with both track counts)
+  and opens its Incoming page, where Delete or Replace settles it.
+- **Similar albums leave out the album's own artist** (the owner: the albums in More from the artist should not be
+  similar albums too): every album by the artist, not only the ones More from shows; More from leads to all of them.
+- **Related artists to explore on an artist page** (the owner: "recommended artists, for example. related artists to
+  explore. That's the best."): one row of artists, as Home's Artists to explore, ranked from several sources: who
+  ListenBrainz finds listened to alongside (similar artists, by MusicBrainz id), MusicBrainz's members, projects and
+  collaborators, label mates (the labels MusicBrainz gives the artist's releases, and a label's own Bandcamp roster),
+  and Bandcamp's "you may also like" on the artist's album pages. Artists that play on Bandcamp first (the owner:
+  "prioritize Bandcamp playable artists"), so a new one can be heard at once. One in the library opens its artist page;
+  a new one its Bandcamp album in the album panel, as Discover's do. Looked up with the artist's other facts and kept;
+  MusicBrainz and Bandcamp at their one request a second.
+- **Discover's masonry** (the owner with claude-632, 2026-10-25; the page claude-632's): tiles keep their size (1×1 = 136
+  px, a little under a shelf's 150 px cover), the width decides the columns, two rows at least. Each artist gets the
+  smallest grid its suggestions fill, its seed tile in the middle with the artist's picture (tall over two rows); the
+  suggestions packed outward from it, the most alike nearest, those that play on Bandcamp 2×1 above and below it and
+  1×2 beside it. A first artist's grid grows only while its next suggestions stay close (about half the strongest
+  match or more); width left over goes to a second artist by the same rule. The server gives each suggestion how alike
+  it is to each artist it was found from (`alike`: Last.fm's match per seed).
