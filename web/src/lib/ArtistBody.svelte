@@ -5,7 +5,8 @@
   // rows, `top`), whose › shows all their tracks; then related artists to explore (lib/RelatedArtists, 0.9.2).
   import type { Snippet } from 'svelte';
   import { tick } from 'svelte';
-  import { getArtistAbout, type ListedAlbum } from './api';
+  import { getArtistAbout, getDiscoverArtist, type ListedAlbum } from './api';
+  import { DISCOVER } from './discoverArtist';
   import { pageAsked } from './artistAbout.svelte';
   import AlbumCard from './AlbumCard.svelte';
   import RelatedArtists from './RelatedArtists.svelte';
@@ -13,6 +14,7 @@
 
   let {
     source,
+    albumSource = source,
     name,
     albums,
     appearsOn,
@@ -22,6 +24,8 @@
     profileComing = false,
   }: {
     source: string;
+    /** Where the albums open (an artist from Discover: Bandcamp's). */
+    albumSource?: string;
     name: string;
     albums: ListedAlbum[];
     appearsOn: ListedAlbum[];
@@ -40,6 +44,12 @@
     let gone = false;
     about = null;
     whole = false;
+    // An artist from Discover (lib/discoverArtist): their words as New to you has them.
+    if (s === DISCOVER)
+      getDiscoverArtist(n).then(
+        (a) => !gone && (about = { id: null, bio: a.bio, photo: a.photo }),
+        () => {},
+      );
     if (s === 'cratarr')
       getArtistAbout(n).then(
         async (a) => {
@@ -70,7 +80,7 @@
 
 {#snippet grid(list: ListedAlbum[])}
   <ul class="grid">
-    {#each list as a (a.id)}<li><AlbumCard {source} album={a} /></li>{/each}
+    {#each list as a (a.id)}<li><AlbumCard source={albumSource} album={a} /></li>{/each}
   </ul>
 {/snippet}
 
@@ -109,7 +119,7 @@
   </section>
 {/if}
 <!-- Related artists to explore (0.9.2): Cratarr's own library only (the server knows its artists' MusicBrainz ids). -->
-{#if source === 'cratarr'}<RelatedArtists {name} />{/if}
+{#if source === 'cratarr' || source === DISCOVER}<RelatedArtists {name} />{/if}
 {#if !albums.length && !appearsOn.length && !top}
   <p class="empty">Nothing by {name} on this server.</p>
 {/if}

@@ -10,6 +10,8 @@
   import Cover from './Cover.svelte';
   import CoverPlay from './CoverPlay.svelte';
   import CoverFlow from './CoverFlow.svelte';
+  import { goToArtist } from './albums.svelte';
+  import { DISCOVER } from './discoverArtist';
   import type { Sections } from './discoverSections';
   import type { Tile } from './masonry';
   import Icon from './Icon.svelte';
@@ -165,7 +167,7 @@
       />
     </div>
     <div class="artist-caption">
-      <span class="title">{n.artist}</span>
+      <button class="title" onclick={() => goToArtist(DISCOVER, n.artist)}>{n.artist}</button>
       {#if a.artist_albums}<span class="by">{a.artist_albums} {a.artist_albums === 1 ? 'album' : 'albums'}</span>{/if}
     </div>
     <!-- Their biography, their album to its right with why it is here under it (the owner, 2026-10-25). -->
@@ -558,7 +560,13 @@
   }
 
   .artist-caption .title {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
     font-weight: 500;
+    cursor: pointer;
   }
 
   .artist-caption .by {

@@ -4,6 +4,8 @@
   // 0058).
   import { albumCoverUrl, type ListedAlbum } from './api';
   import AlbumMenu from './AlbumMenu.svelte';
+  import BandcampAlbumMenu from './BandcampAlbumMenu.svelte';
+  import { BANDCAMP } from './bandcampPreview';
   import Cover from './Cover.svelte';
   import { longpress } from './longpress';
   import { albumSubject, viewOver } from './panel.svelte';
@@ -12,7 +14,8 @@
   let menu = $state(false);
 </script>
 
-{#if menu}<AlbumMenu {source} album={{ ...album, artist: album.artist ?? null }} onclose={() => (menu = false)} />{/if}
+{#if menu && source === BANDCAMP}<BandcampAlbumMenu album={{ id: album.id, title: album.title, artist: album.artist ?? null }} onclose={() => (menu = false)} />
+{:else if menu}<AlbumMenu {source} album={{ ...album, artist: album.artist ?? null }} onclose={() => (menu = false)} />{/if}
 <button class="card" onclick={() => viewOver(albumSubject(source, album.id))} aria-label="View {album.title}" use:longpress={() => (menu = true)}>
   <span class="cover"><Cover src={albumCoverUrl(source, album.id)} /></span>
   <span class="title">{album.title}</span>
