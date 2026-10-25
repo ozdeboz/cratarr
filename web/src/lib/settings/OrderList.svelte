@@ -144,7 +144,7 @@
     justify-content: space-between;
     gap: 12px;
     min-height: 48px;
-    padding: 0 8px 0 16px;
+    padding: 0 16px 0 0;
     border: 0;
     background: none;
     color: var(--text);
@@ -164,8 +164,8 @@
     content: '';
     position: absolute;
     top: 50%;
-    right: 8px;
-    left: 16px;
+    right: 16px;
+    left: 0;
     border-top: 1px dashed var(--border);
   }
 
@@ -182,8 +182,11 @@
     font-size: 13px;
   }
 
+  /* The handle in front, the switch at the end (the owner, 2026-10-25: Home's sections, "their order handlebars on
+     the left and not on the right"); a row switched off keeps the handle's room, so the names line up. */
   .grip,
   .grip-room {
+    order: -1;
     flex: none;
     width: 44px;
     height: 48px;
