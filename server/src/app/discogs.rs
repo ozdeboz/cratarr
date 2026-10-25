@@ -215,6 +215,34 @@ pub async fn master_of(release_group: Option<&str>, artist: &str, title: &str) -
     Ok(v["results"].as_array().into_iter().flatten().find(|r| r["title"].as_str().is_some_and(|t| super::import::loose(t) == want)).and_then(|r| r["id"].as_u64()))
 }
 
+/// Some of a master's releases (the main one left out: the master's images are its), each with what it is
+/// ("CD · Germany · 2012").
+pub async fn versions(master: u64, most: usize) -> Result<Vec<(u64, String)>> {
+    let Some(v) = get(&format!("/masters/{master}/versions?per_page={}", most + 1)).await? else { return Ok(Vec::new()) };
+    let main = get(&format!("/masters/{master}")).await?.and_then(|m| m["main_release"].as_u64());
+    Ok(v["versions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| {
+            let id = r["id"].as_u64().filter(|id| Some(*id) != main)?;
+            let format = r["major_formats"].as_array().and_then(|f| f.first()).and_then(|f| f.as_str()).or(r["format"].as_str()).unwrap_or_default();
+            let year = r["released"].as_str().and_then(|d| d.get(..4)).filter(|y| *y != "0000").unwrap_or_default();
+            let what: Vec<&str> = [format, r["country"].as_str().unwrap_or_default(), year].into_iter().filter(|s| !s.is_empty()).collect();
+            Some((id, if what.is_empty() { "Release".to_string() } else { what.join(" · ") }))
+        })
+        .take(most)
+        .collect())
+}
+
+/// A release's images, the primary first.
+pub async fn release_images(release: u64) -> Result<Vec<Image>> {
+    let Some(v) = get(&format!("/releases/{release}")).await? else { return Ok(Vec::new()) };
+    let mut images = images_of(&v);
+    images.sort_by_key(|i| !i.primary);
+    Ok(images)
+}
+
 /// An artist's primary image on Discogs, by MusicBrainz's link from the artist; and their Discogs page.
 pub async fn artist_image(mbid: &str) -> Result<Option<(Image, String)>> {
     let Some(id) = id_in(&mb_links("artist", mbid).await?, "artist") else { return Ok(None) };
@@ -303,7 +331,7 @@ async fn genres_pass() -> Result<()> {
 }
 
 /// A MusicBrainz release's release group.
-async fn release_group_of(http: &reqwest::Client, release: &str) -> Result<Option<String>> {
+pub(super) async fn release_group_of(http: &reqwest::Client, release: &str) -> Result<Option<String>> {
     let v: Value = http.get(format!("https://musicbrainz.org/ws/2/release/{release}?inc=release-groups&fmt=json")).send().await?.error_for_status()?.json().await?;
     tokio::time::sleep(super::discover::MB_PAUSE).await;
     Ok(v["release-group"]["id"].as_str().map(str::to_string))

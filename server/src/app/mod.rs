@@ -59,6 +59,7 @@ mod sync;
 pub mod together;
 pub mod originals;
 pub mod discogs;
+pub mod covers;
 pub mod tracks;
 pub mod visuals;
 
