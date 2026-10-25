@@ -12,6 +12,7 @@
     getListenBrainzKept,
     importFile,
     importLastFm,
+    type LastFmWhat,
     importListenBrainz,
     previewLastFm,
     previewListenBrainz,
@@ -188,11 +189,14 @@
     },
     () => {},
   );
+  // What comes in (0.9.2; the owner, 2026-10-25: "choose what comes in", "leave unstarring off").
+  let fmWhat = $state<LastFmWhat>({ scrobbles: true, loves: true, unstar: false });
   async function runFm(what: 'preview' | 'import') {
     fmOwn = { busy: null, undone: null, error: null, hide: null };
     try {
       const key = fmKey.trim() || undefined;
-      tasks.begun((what === 'preview' ? await previewLastFm(fmUser, key) : await importLastFm(fmUser, key)).task);
+      const bring = { ...fmWhat };
+      tasks.begun((what === 'preview' ? await previewLastFm(fmUser, key, bring) : await importLastFm(fmUser, key, bring)).task);
       if (key) {
         fmKeyKept = true;
         fmKey = '';
@@ -225,7 +229,7 @@
           ? `Scrobbles: ${tallyLine(fm.result.scrobbles, fm.previewed)} · Loved: ${n(fm.result.loved.found)} of ${n(fm.result.loved.items)} found`
           : fmOwn.undone,
   );
-  const fmReady = $derived(!!fmUser.trim() && (!!fmKey.trim() || fmKeyKept));
+  const fmReady = $derived(!!fmUser.trim() && (!!fmKey.trim() || fmKeyKept) && (fmWhat.scrobbles || fmWhat.loves));
   // The loved tracks the library does not have: their albums (the most first), the tracks, and the whole list to copy.
   const lovedMissing = $derived(fm.result?.loved_missing ?? []);
   const lovedAlbums = $derived.by(() => {
@@ -389,6 +393,13 @@
       tone={fmKey || fmKeyKept ? null : 'warn'}
       onclick={() => (fmNaming = 'key')}
     />
+  </Group>
+  <Group title="What">
+    <Item name="Scrobbles" toggle={{ checked: fmWhat.scrobbles, onchange: (on) => (fmWhat.scrobbles = on) }} />
+    <Item name="Loved tracks" toggle={{ checked: fmWhat.loves, onchange: (on) => (fmWhat.loves = on) }} />
+    {#if fmWhat.loves}
+      <Item name="Un-loved tracks stop being favourites" toggle={{ checked: fmWhat.unstar, onchange: (on) => (fmWhat.unstar = on) }} />
+    {/if}
   </Group>
   <Group>
     <Item

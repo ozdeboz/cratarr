@@ -228,6 +228,29 @@ pub struct Imported {
     pub loved_missing: Vec<Wanted>,
 }
 
+/// What a Last.fm import brings (0.9.2; the owner, 2026-10-25: "choose what comes in", "leave unstarring off"): its
+/// scrobbles into the history, its loved tracks as favourites; and, only when asked, a track loved there no more stops
+/// being a favourite here (one the import made a favourite).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Choice {
+    #[serde(default = "yes")]
+    pub scrobbles: bool,
+    #[serde(default = "yes")]
+    pub loves: bool,
+    #[serde(default)]
+    pub unstar: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for Choice {
+    fn default() -> Self {
+        Self { scrobbles: true, loves: true, unstar: false }
+    }
+}
+
 /// A loved track the library does not have.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Wanted {
@@ -289,7 +312,7 @@ async fn scrobbles_and_loves(account: &str, user: &str, auth: &Auth, progress: &
 }
 
 /// Reads Last.fm and does the work, writing nothing for a preview. Blocking parts run apart.
-async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: &Auth, preview: bool, progress: &Progress) -> Result<Imported> {
+async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: &Auth, choice: Choice, preview: bool, progress: &Progress) -> Result<Imported> {
     let dir = serve.data_dir.clone().context("the history needs Cratarr's data folder")?;
     let (scrobbles, loved) = scrobbles_and_loves(account, user, auth, progress).await?;
     progress("Matching", 0, None);
@@ -297,13 +320,14 @@ async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: 
     tokio::task::spawn_blocking(move || -> Result<Imported> {
         let songs = Matcher::read(&Path::new(&dir).join("library.sqlite"))?;
         let listens: Vec<Listened> = scrobbles.iter().map(|s| Listened { track: track(s), at: s.at, event: event(s) }).collect();
-        let scrobbled = into_history(&serve, &songs, &account, CONTEXT, "Last.fm", &listens, preview)?;
+        // The scrobbles only when chosen (they are still read: the loved tracks' albums come from them).
+        let scrobbled = if choice.scrobbles { into_history(&serve, &songs, &account, CONTEXT, "Last.fm", &listens, preview)? } else { Tally::default() };
         // Loved: stars, as an import keeps them; one loved there no more is unstarred here (where it is still ours).
         let key = ImportKey { account: &account, source: SOURCE, server_user: &user };
         let mut l = Counter::default();
         let mut found: HashMap<String, Option<i64>> = HashMap::new();
         let loved_missing = wanted(&loved, |s| songs.find(&track(s)).is_some(), &albums_of(&scrobbles));
-        for s in &loved {
+        for s in loved.iter().filter(|_| choice.loves) {
             match songs.find(&track(s)) {
                 Some(song) => {
                     found.entry(song.to_string()).or_insert(Some(s.at));
@@ -320,7 +344,9 @@ async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: 
             l.found(d.star.is_some());
             changes.push(ImportChange { kind: Kind::Song, item: song.clone(), star: d.star, now: d.now, ..ImportChange::default() });
         }
-        for (song, was) in serve.userdata.imported_starred(key, Kind::Song)? {
+        // Unstarred only when asked (the owner: "leave unstarring off"), and only where the loves were imported.
+        let unstarring = if choice.loves && choice.unstar { serve.userdata.imported_starred(key, Kind::Song)? } else { Default::default() };
+        for (song, was) in unstarring {
             if !found.contains_key(&song) {
                 let d = decide(Some(&was), &Seen { server_item: song.clone(), star: Some((false, None)), ..Seen::default() });
                 changes.push(ImportChange { kind: Kind::Song, item: song, star: d.star, now: d.now, ..ImportChange::default() });
@@ -335,8 +361,8 @@ async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: 
 }
 
 /// What importing `user`'s Last.fm into `account` would bring (nothing written), or imports it (decision 0067).
-pub async fn bring(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: &Auth, preview: bool, progress: &Progress) -> Result<Imported> {
-    run(serve, account, user, auth, preview, progress).await
+pub async fn bring(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: &Auth, choice: Choice, preview: bool, progress: &Progress) -> Result<Imported> {
+    run(serve, account, user, auth, choice, preview, progress).await
 }
 
 /// What an undo took back: the scrobbles out of the history, the loves' stars.

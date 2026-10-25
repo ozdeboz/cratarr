@@ -61,6 +61,15 @@ pub struct Album {
     pub artist: String,
     pub cover: Option<String>,
     pub tracks: Vec<Track>,
+    /// When it came out ("2019-05-17"), as its page says.
+    pub released: Option<String>,
+    /// Its label: the page's publisher, where that is not the artist themselves.
+    pub label: Option<String>,
+    /// What the page says about it, and its credits, as written there.
+    pub about: Option<String>,
+    pub credits: Option<String>,
+    /// Bandcamp's tags for it, as the page lists them.
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -259,17 +268,25 @@ struct Tralbum {
     #[serde(default)]
     artist: Option<String>,
     #[serde(default)]
+    album_release_date: Option<String>,
+    #[serde(default)]
     current: Option<Current>,
     #[serde(default)]
     trackinfo: Vec<TrackInfo>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct Current {
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
     artist: Option<String>,
+    #[serde(default)]
+    about: Option<String>,
+    #[serde(default)]
+    credits: Option<String>,
+    #[serde(default)]
+    release_date: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -292,7 +309,7 @@ struct TrackInfo {
 pub fn parse_album(html: &str, url: &str) -> Result<Album> {
     let data = attribute(html, "data-tralbum").context("Bandcamp's page has no album data")?;
     let t: Tralbum = serde_json::from_str(&unescape(&data)).context("Bandcamp's album data was not understood")?;
-    let current = t.current.unwrap_or(Current { title: None, artist: None });
+    let current = t.current.unwrap_or_default();
     let artist = current.artist.or(t.artist).unwrap_or_default();
     let base = reqwest::Url::parse(url).ok();
     let tracks = t
@@ -311,8 +328,77 @@ pub fn parse_album(html: &str, url: &str) -> Result<Album> {
             }
         })
         .collect();
-    let cover = meta(html, "og:image");
-    Ok(Album { url: url.to_string(), title: current.title.unwrap_or_default(), artist, cover, tracks })
+    let cover = meta(html, "og:image").map(|c| large(&c));
+    // The rest of what the page says of the album (0.9.2, the owner: its panel "as much as our own panel"): the date, its
+    // label and tags from its schema.org description, its about and credits from its own data.
+    let ld = ld_json(html);
+    let released = current
+        .release_date
+        .as_deref()
+        .or(t.album_release_date.as_deref())
+        .and_then(iso_date)
+        .or_else(|| ld.as_ref().and_then(|l| l["datePublished"].as_str()).and_then(iso_date));
+    let label = ld
+        .as_ref()
+        .and_then(|l| l["publisher"]["name"].as_str())
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case(&artist))
+        .map(str::to_string);
+    let mut tags: Vec<String> = Vec::new();
+    let words: Vec<String> = match ld.as_ref().map(|l| &l["keywords"]) {
+        Some(serde_json::Value::Array(a)) => a.iter().filter_map(|k| k.as_str().map(str::to_string)).collect(),
+        Some(serde_json::Value::String(s)) => s.split(',').map(str::to_string).collect(),
+        _ => Vec::new(),
+    };
+    for w in words.iter().map(|w| w.trim()).filter(|w| !w.is_empty()) {
+        if !tags.iter().any(|t| t.eq_ignore_ascii_case(w)) {
+            tags.push(w.to_string());
+        }
+    }
+    let text = |s: Option<String>| s.map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
+    Ok(Album {
+        url: url.to_string(),
+        title: current.title.unwrap_or_default(),
+        artist,
+        cover,
+        tracks,
+        released,
+        label,
+        about: text(current.about),
+        credits: text(current.credits),
+        tags,
+    })
+}
+
+/// The page's own description of the album (schema.org's, its ld+json script).
+fn ld_json(html: &str) -> Option<serde_json::Value> {
+    let at = html.find("application/ld+json")?;
+    let start = at + html[at..].find('>')? + 1;
+    let end = start + html[start..].find("</script>")?;
+    serde_json::from_str(html[start..end].trim()).ok()
+}
+
+/// A date as Bandcamp writes it ("17 May 2019 00:00:00 GMT", or already "2019-05-17…") as "2019-05-17".
+fn iso_date(s: &str) -> Option<String> {
+    const MONTHS: [&str; 12] = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+    let s = s.trim();
+    if s.len() >= 10 && s.as_bytes()[4] == b'-' && s.as_bytes()[7] == b'-' {
+        return Some(s[..10].to_string());
+    }
+    let mut w = s.split_whitespace();
+    let day: u32 = w.next()?.parse().ok()?;
+    let month = w.next()?.get(..3)?.to_ascii_lowercase();
+    let m = MONTHS.iter().position(|x| *x == month)? + 1;
+    let year: u32 = w.next()?.parse().ok()?;
+    (1..=31).contains(&day).then(|| format!("{year:04}-{m:02}-{day:02}"))
+}
+
+/// A cover's address at Bandcamp's large size (`_10`, 1200 px), from any size's.
+fn large(cover: &str) -> String {
+    match cover.strip_suffix(".jpg").and_then(|c| c.rsplit_once('_')) {
+        Some((base, size)) if !size.is_empty() && size.chars().all(|c| c.is_ascii_digit()) => format!("{base}_10.jpg"),
+        _ => cover.to_string(),
+    }
 }
 
 /// An artist's `/music` page: each release's title and page, from its grid (and the rest of it, which the page keeps in
@@ -474,6 +560,27 @@ mod tests {
         assert_eq!(a.tracks[2].artist.as_deref(), Some("Guest"));
         assert_eq!(a.tracks[2].duration_secs, None);
         assert!(parse_album("<html></html>", "https://air.bandcamp.com/album/x").is_err());
+        assert_eq!((a.released, a.label, a.about, a.tags.len()), (None, None, None, 0), "a page that says no more");
+    }
+
+    #[test]
+    fn an_albums_page_says_when_it_came_out_its_label_its_tags_and_about() {
+        let data = r#"{"artist":"Air","album_release_date":"01 Jan 1998 00:00:00 GMT","current":{"title":"Moon Safari","release_date":"16 Jan 1998 00:00:00 GMT","about":"  Their first album.  ","credits":"Produced by Air"},"trackinfo":[]}"#;
+        let esc = data.replace('"', "&quot;");
+        let ld = r#"{"@type":"MusicAlbum","publisher":{"name":"Source"},"keywords":["electronic","Electronic","downtempo"," Paris "]}"#;
+        let html = format!(r#"<meta property="og:image" content="https://f4.bcbits.com/img/a1_16.jpg"><script type="application/ld+json">{ld}</script><script data-tralbum="{esc}"></script>"#);
+        let a = parse_album(&html, "https://air.bandcamp.com/album/moon-safari").unwrap();
+        assert_eq!(a.released.as_deref(), Some("1998-01-16"), "the album's own date first");
+        assert_eq!(a.label.as_deref(), Some("Source"));
+        assert_eq!(a.about.as_deref(), Some("Their first album."));
+        assert_eq!(a.credits.as_deref(), Some("Produced by Air"));
+        assert_eq!(a.tags, ["electronic", "downtempo", "Paris"], "each once, trimmed");
+        assert_eq!(a.cover.as_deref(), Some("https://f4.bcbits.com/img/a1_10.jpg"), "the large size");
+        assert_eq!(iso_date("2019-05-17T00:00:00Z").as_deref(), Some("2019-05-17"));
+        assert_eq!(iso_date("5 Sept 2003 00:00:00 GMT").as_deref(), Some("2003-09-05"));
+        assert_eq!(iso_date("someday"), None);
+        let own = format!(r#"<script type="application/ld+json">{{"publisher":{{"name":"Air"}}}}</script><script data-tralbum="{esc}"></script>"#);
+        assert_eq!(parse_album(&own, "https://air.bandcamp.com/album/x").unwrap().label, None, "the artist's own page is no label");
     }
 
     #[test]

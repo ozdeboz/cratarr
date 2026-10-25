@@ -69,7 +69,7 @@ pub use error::ToggleError;
 pub use incoming::{AlbumFate, DeleteResult, IncomingService, IncomingView, JobView, KeepPreview, KeepResult, LidarrView, ReplacePreview};
 pub use insights::InsightsService;
 pub use library::{Library, SourceTab};
-pub use playing::{AlbumRef, AlbumView, ArtistView, FromQueue, PlayingService, StateView, TrackStateView};
+pub use playing::{AlbumMore, AlbumRef, AlbumView, ArtistView, FromQueue, PlayingService, StateView, TrackStateView};
 pub use playlists::{ByName, CrateLook, CrateOrder, CrateView, Digging, FitSummary, FitView, LikeCurve, MomentView, PlayResult, PlaylistRow, PlaylistService, PlaylistStats};
 pub use playon::{Command as PlayOnCommand, PlayOn, PlayOnSettings, PlayOnSettingsView, QueueTrack, Report as PlayerReport, whose as whose_players};
 pub use plays::{PlayEvent, Plays};

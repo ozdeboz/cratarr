@@ -1127,6 +1127,33 @@ async fn album_view(State(app): State<Arc<App>>, Path((source, album)): Path<(St
 async fn bandcamp_album_view(album: &str) -> Result<crate::app::AlbumView, ToggleError> {
     let (url, _) = crate::bandcamp::read_id(album).ok_or_else(|| ToggleError::Refused("That is not an album on Bandcamp.".into()))?;
     let a = crate::bandcamp::Bandcamp::get().album(&url).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    // What Discover knows of it, where it suggested it (the owner, 2026-10-25: "as much as our own panel").
+    let known = match crate::serve::instance().and_then(|s| s.current_user().map(|a| (s, a))) {
+        Some((s, account)) => {
+            let page = a.url.clone();
+            tokio::task::spawn_blocking(move || crate::app::discover::suggestion_on_bandcamp(&s, &account, &page)).await.ok().and_then(Result::ok).flatten()
+        }
+        None => None,
+    };
+    let year = a
+        .released
+        .as_deref()
+        .and_then(|d| d.get(..4)?.parse::<u32>().ok())
+        .or_else(|| known.as_ref().and_then(|k| k.year).and_then(|y| u32::try_from(y).ok()))
+        .filter(|y| *y > 0);
+    let genres = known.as_ref().map(|k| k.genres.clone()).unwrap_or_default();
+    let tags: Vec<String> = a.tags.iter().filter(|t| !genres.iter().any(|g| g.eq_ignore_ascii_case(t))).cloned().collect();
+    let mut links = vec![crate::app::discover::Link { name: "Bandcamp".into(), url: a.url.clone() }];
+    links.extend(known.as_ref().map(|k| k.links.clone()).unwrap_or_default().into_iter().filter(|l| l.name != "Bandcamp"));
+    let more = crate::app::AlbumMore {
+        released: a.released.clone(),
+        label: a.label.clone(),
+        about: a.about.clone(),
+        credits: a.credits.clone(),
+        tags,
+        links,
+        listeners: known.as_ref().and_then(|k| k.listeners),
+    };
     let rows = a
         .tracks
         .iter()
@@ -1152,14 +1179,15 @@ async fn bandcamp_album_view(album: &str) -> Result<crate::app::AlbumView, Toggl
         id: album.to_string(),
         title: a.title,
         artist: Some(a.artist),
-        year: None,
-        genres: Vec::new(),
+        year,
+        genres,
         format: Some("MP3".into()),
         bitrate_kbps: Some((crate::bandcamp::BYTES_PER_SEC * 8 / 1000) as u32),
         rows,
         added: None,
         played: None,
         plays: None,
+        more,
     })
 }
 
@@ -3211,6 +3239,10 @@ struct LastFmImport {
     user: String,
     #[serde(default)]
     key: Option<String>,
+    /// What comes in (0.9.2): the scrobbles, the loves, and whether un-loved tracks stop being favourites (not unless
+    /// asked).
+    #[serde(default)]
+    what: crate::app::lastfm::Choice,
 }
 
 /// What a Last.fm import keeps for next time, per Cratarr account: the Last.fm user and the API key (decision 0067).
@@ -3287,9 +3319,13 @@ async fn preview_lastfm(Json(b): Json<LastFmImport>) -> Result<(StatusCode, Json
 }
 
 async fn bring_lastfm(b: LastFmImport, preview: bool) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let what = b.what;
+    if !what.scrobbles && !what.loves {
+        return Err(ToggleError::Refused("Choose the scrobbles, the loved tracks, or both.".into()).into());
+    }
     let (serve, account, user, auth) = lastfm_who(b).await?;
     started(crate::app::tasks::spawn("import:lastfm", &account.clone(), preview, move |h| async move {
-        crate::app::lastfm::bring(&serve, &account, &user, &auth, preview, &progress_of(h)).await
+        crate::app::lastfm::bring(&serve, &account, &user, &auth, what, preview, &progress_of(h)).await
     }))
 }
 

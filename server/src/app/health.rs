@@ -183,10 +183,12 @@ pub fn library(rows: &[crate::serve::library::Lacks]) -> Vec<Finding> {
 pub fn incoming(upgrades: u64, duplicates: u64, failed: u64) -> Vec<Finding> {
     let mut out = Vec::new();
     if upgrades > 0 {
-        out.push(finding("incoming", "incoming:upgrades", Level::Critical, upgrades, n(upgrades, "upgrade waiting", "upgrades waiting")));
+        // Said as what the library holds (the owner, 2026-10-25: duplicates on an artist's page went unnoticed under
+        // "duplicates waiting").
+        out.push(finding("incoming", "incoming:upgrades", Level::Critical, upgrades, n(upgrades, "better copy waits to replace Music's", "better copies wait to replace Music's")));
     }
     if duplicates > 0 {
-        out.push(finding("incoming", "incoming:duplicates", Level::Critical, duplicates, n(duplicates, "duplicate waiting", "duplicates waiting")));
+        out.push(finding("incoming", "incoming:duplicates", Level::Critical, duplicates, n(duplicates, "album is in Music and Incoming at once", "albums are in Music and Incoming at once")));
     }
     if failed > 0 {
         out.push(finding("incoming", "incoming:failed", Level::Warning, failed, n(failed, "conversion failed", "conversions failed")));
@@ -308,7 +310,8 @@ impl App {
                     let a = s.albums.iter().find(|a| &a.id == id);
                     let title = a.map_or_else(|| id.clone(), |a| a.title.clone());
                     let by = a.and_then(|a| a.artist.clone());
-                    let line = [by, Some(format!("{} {}", if kind == "upgrade" { "upgrades" } else { "duplicates" }, v.library)), Some(v.why.clone()).filter(|w| !w.is_empty())]
+                    // Both places: the copy in Music, as Incoming's verdict names it (this one opens Incoming's).
+                    let line = [by, Some(format!("in Music as {}", v.library)), Some(v.why.clone()).filter(|w| !w.is_empty())]
                         .into_iter()
                         .flatten()
                         .collect::<Vec<_>>()
@@ -509,9 +512,11 @@ mod tests {
         let found = files(&issues);
         assert_eq!(found.iter().map(|f| (f.title.as_str(), f.level)).collect::<Vec<_>>(), [("2 files can't be read", Level::Critical), ("1 file has no length", Level::Info)]);
         let waiting = incoming(13, 0, 1);
-        assert_eq!(waiting[0].title, "13 upgrades waiting");
+        assert_eq!(waiting[0].title, "13 better copies wait to replace Music's");
         assert_eq!(waiting[0].open, None);
         assert_eq!(waiting[1].title, "1 conversion failed");
+        assert_eq!(incoming(0, 17, 0)[0].title, "17 albums are in Music and Incoming at once");
+        assert_eq!(incoming(1, 1, 0).iter().map(|f| f.title.as_str()).collect::<Vec<_>>(), ["1 better copy waits to replace Music's", "1 album is in Music and Incoming at once"]);
         assert!(incoming(0, 0, 0).is_empty());
     }
 }

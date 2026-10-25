@@ -38,10 +38,13 @@ pub struct Related {
     /// Their id in the library, whose page they open; none: new to the library.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    /// An album of theirs that plays on Bandcamp (a new artist's way in).
+    /// An album of theirs that plays on Bandcamp (a new artist's way in), and its title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bandcamp: Option<String>,
-    #[serde(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album: Option<String>,
+    /// How related, as ranked (kept, so Discover can weigh them: the most related 1, roughly).
+    #[serde(default)]
     pub score: f64,
 }
 
@@ -69,6 +72,26 @@ pub fn kept(serve: &crate::serve::Serve, mbid: &str) -> Result<(Option<Found>, b
     let found = serve.userdata.related_artists(mbid)?.and_then(|(_, json)| serde_json::from_str::<Found>(&json).ok());
     let due = found.as_ref().is_none_or(|f| super::moment::now_secs() - f.at > FRESH_SECS);
     Ok((found, due))
+}
+
+/// The artist's related artists as kept, looked up now (and kept) when none are or they are old: for Discover, which
+/// waits for them in its own background look (0.9.2: the masonry's artists get their tiles from here). While another
+/// look of the same artist runs, what is kept (possibly nothing).
+pub async fn kept_or_look(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &str) -> Result<Found> {
+    let (s, key) = (serve.clone(), mbid.to_string());
+    let (found, due) = tokio::task::spawn_blocking(move || kept(&s, &key)).await??;
+    if !due || !looking().get_or_insert_with(HashSet::new).insert(mbid.to_string()) {
+        return Ok(found.unwrap_or_default());
+    }
+    let looked = look(serve, name, mbid).await;
+    if let Some(l) = looking().as_mut() {
+        l.remove(mbid);
+    }
+    let found = looked?;
+    let (ud, key, json) = (serve.userdata.clone(), mbid.to_string(), serde_json::to_string(&found)?);
+    let at = found.at;
+    tokio::task::spawn_blocking(move || ud.set_related_artists(&key, at, &json)).await??;
+    Ok(found)
 }
 
 /// Looks the artist up in the background, unless that runs already; kept when done.
@@ -155,13 +178,14 @@ async fn mb_related(http: &reqwest::Client, mbid: &str) -> Result<Vec<(String, S
         .collect())
 }
 
-/// An album of the artist that plays on Bandcamp: their own Bandcamp page as MusicBrainz keeps it, its newest release.
-async fn on_bandcamp(http: &reqwest::Client, mbid: &str) -> Option<String> {
+/// An album of the artist that plays on Bandcamp, and its title: their own Bandcamp page as MusicBrainz keeps it, its
+/// newest release.
+async fn on_bandcamp(http: &reqwest::Client, mbid: &str) -> Option<(String, String)> {
     let urls = super::discover::mb_artist_urls(http, mbid).await.ok()?;
     tokio::time::sleep(super::discover::MB_PAUSE).await;
     let own = urls.iter().filter_map(|u| crate::bandcamp::page(u)).find(|p| reqwest::Url::parse(p).ok().and_then(|u| u.host_str().map(|h| h != "bandcamp.com")).unwrap_or(false))?;
     let releases = crate::bandcamp::Bandcamp::get().releases(&own).await.ok()?;
-    releases.into_iter().find_map(|(_, url)| crate::bandcamp::album_page(&url))
+    releases.into_iter().find_map(|(title, url)| Some((title, crate::bandcamp::album_page(&url)?)))
 }
 
 /// Looks up the artists related to one (`name`, `mbid`): ListenBrainz's and MusicBrainz's, the library's marked, the new
@@ -170,7 +194,7 @@ async fn look(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &str) -> Resul
     let http = super::discover::http()?;
     let mut by: HashMap<String, Related> = HashMap::new();
     let mut add = |id: String, name: String, why: &str, score: f64| {
-        let r = by.entry(id.clone()).or_insert_with(|| Related { name, mbid: Some(id), why: Vec::new(), id: None, bandcamp: None, score: 0.0 });
+        let r = by.entry(id.clone()).or_insert_with(|| Related { name, mbid: Some(id), why: Vec::new(), id: None, bandcamp: None, album: None, score: 0.0 });
         if !r.why.iter().any(|w| w == why) {
             r.why.push(why.to_string());
         }
@@ -211,8 +235,10 @@ async fn look(serve: &Arc<crate::serve::Serve>, name: &str, mbid: &str) -> Resul
             break;
         }
         looked += 1;
-        if let Some(id) = r.mbid.clone() {
-            r.bandcamp = on_bandcamp(&http, &id).await;
+        if let Some(id) = r.mbid.clone()
+            && let Some((title, page)) = on_bandcamp(&http, &id).await
+        {
+            (r.album, r.bandcamp) = (Some(title), Some(page));
         }
     }
     // Those that play first (the owner: "prioritize Bandcamp playable artists"), then the most related.
@@ -232,12 +258,20 @@ mod tests {
     fn a_kept_look_reads_back_and_says_when_it_is_due() {
         let found = Found {
             at: super::super::moment::now_secs(),
-            artists: vec![Related { name: "Extrawelt".into(), mbid: Some("m1".into()), why: vec!["Listened alongside".into()], id: None, bandcamp: Some("https://extrawelt.bandcamp.com/album/x".into()), score: 1.0 }],
+            artists: vec![Related {
+                name: "Extrawelt".into(),
+                mbid: Some("m1".into()),
+                why: vec!["Listened alongside".into()],
+                id: None,
+                bandcamp: Some("https://extrawelt.bandcamp.com/album/x".into()),
+                album: Some("Fernweh".into()),
+                score: 0.75,
+            }],
         };
         let json = serde_json::to_string(&found).unwrap();
-        assert!(!json.contains("score"), "the rank is not sent");
         let back: Found = serde_json::from_str(&json).unwrap();
         assert_eq!(back.artists[0].bandcamp.as_deref(), Some("https://extrawelt.bandcamp.com/album/x"));
+        assert_eq!((back.artists[0].album.as_deref(), back.artists[0].score), (Some("Fernweh"), 0.75), "kept with its rank, for Discover");
         assert!(super::super::moment::now_secs() - back.at <= FRESH_SECS, "fresh");
     }
 }

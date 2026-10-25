@@ -98,6 +98,34 @@ pub struct AlbumView {
     pub played: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plays: Option<u32>,
+    /// What else is known of it (a Bandcamp album's page, and Discover's suggestion of it): each left out when unknown.
+    #[serde(flatten)]
+    pub more: AlbumMore,
+}
+
+/// An album's further facts, beyond what its tracks say (0.9.2; the owner, 2026-10-25: a Bandcamp album's panel "as much
+/// as our own panel").
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct AlbumMore {
+    /// When it came out ("2019-05-17").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub released: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Its description, and its credits, as its page writes them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credits: Option<String>,
+    /// Its tags that are not among its genres.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// Where it is elsewhere: its own page first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<super::discover::Link>,
+    /// How many listen to it on Last.fm.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listeners: Option<u64>,
 }
 
 /// A track the page plays itself (decision 0022) as the player shows it: its playlists, and whether it can be added
@@ -598,6 +626,7 @@ impl PlayingService {
             added: listening.added,
             played: listening.played,
             plays: listening.plays,
+            more: AlbumMore::default(),
         })
     }
 
