@@ -147,6 +147,16 @@
     pageEl?.scrollTo({ top: 0, behavior: 'smooth' });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
+  /** The bar of pages (and its More sheet) on a phone: the panel over the page closed, so the page gone to shows (the
+   *  owner, 2026-10-25); its own page's link closes the panel there, else takes the page to its top. */
+  function barTap(e: MouseEvent, id: string) {
+    if (playlistLayer && id === page) {
+      e.preventDefault();
+      closePlaylist();
+      return;
+    }
+    samePage(e, id);
+  }
   function stripTap(e: MouseEvent) {
     if (prefs.navFolded && !peek && !(e.target as Element).closest('a, button')) peek = true;
   }
@@ -444,7 +454,8 @@
   const rightBottom = $derived(phone && prefs.contentControlsAt === 'bottom');
   let navAway = $state(false);
   $effect(() => {
-    if (!phone || !prefs.navHides) return void (navAway = false);
+    // Along the bottom it never slides away (the owner, 2026-10-25).
+    if (!phone || navBottom || !prefs.navHides) return void (navAway = false);
     const last = new WeakMap<object, number>();
     const scrolled = (e: Event) => {
       const el = e.target === document ? document.scrollingElement : (e.target as Element);
@@ -459,6 +470,9 @@
     addEventListener('scroll', scrolled, { capture: true, passive: true });
     return () => removeEventListener('scroll', scrolled, { capture: true });
   });
+  // In a panel whose action bar sticks (lib/glass's `below`), the bar is away exactly while it sticks, scrolling up
+  // too (the owner, 2026-10-25).
+  const navHidden = $derived(!navBottom && (navAway || (phone && prefs.stickyActions && !!handed?.below?.())));
   // Somewhere else: the bar shows again.
   $effect(() => {
     void page;
@@ -467,7 +481,7 @@
   });
   $effect(() => {
     const root = document.documentElement.style;
-    const shown = phone && !navAway ? topBar : 0;
+    const shown = phone && !navHidden ? topBar : 0;
     const up = miniTop ? miniSpace : 0;
     const down = miniTop ? 0 : miniSpace;
     // Along each edge, from it inwards: the bar, the mini-player, the controls. The page's room (kept while the bar
@@ -877,7 +891,7 @@
       out:fly|global={{ y: navBottom ? 400 : -400, duration: SHEET_OUT, easing: decelerate }}
     >
       {#each overflow as p (p.id)}
-        <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => samePage(e, p.id)}><Icon name={p.icon} />{p.label}{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
+        <a href={p.href} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => barTap(e, p.id)}><Icon name={p.icon} />{p.label}{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
       {/each}
     </div>
   {/if}
@@ -889,12 +903,12 @@
 <LabelTip />
   <ProgressBar />
 
-  <nav class="bar" class:bottom={navBottom} class:away={navAway} aria-label="Pages" onclickcapture={collapse}>
+  <nav class="bar" class:bottom={navBottom} class:away={navHidden} aria-label="Pages" onclickcapture={collapse}>
     <!-- The mode switcher's slim row over the tabs (decision 0052, mock C), with a local folder on. -->
     {#if switchable()}<div class="slim"><ModeSwitcher slim {connection} /></div>{/if}
     <div class="tabs">
     {#each bar as p (p.id)}
-      <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => samePage(e, p.id)}
+      <a href={p.href} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => barTap(e, p.id)}
         ><span class="icon"><Icon name={p.icon} />{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{p.label}</span></a
       >
     {/each}

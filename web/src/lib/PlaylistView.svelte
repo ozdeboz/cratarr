@@ -960,8 +960,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
     const sc = scroller;
     const a = actbar;
     if (!sc || !a) return;
-    // Its distance from the top: where it docks while it stays there (a sticky element's offset is where it shows).
-    stuck = a.offsetTop - sc.scrollTop <= (parseFloat(getComputedStyle(a).top) || 0) + 0.5;
+    // Its distance from the top: where it docks while it stays there (a sticky element's offset is where it shows);
+    // not sticky (Display), never.
+    stuck = prefs.stickyActions && a.offsetTop - sc.scrollTop <= (parseFloat(getComputedStyle(a).top) || 0) + 0.5;
   }
   $effect(() => {
     // Another subject shows from its cover.
@@ -1682,7 +1683,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {#if editing}
       <!-- Edit mode's bar in the action bar's place, its buttons where the bar's were: Delete, then Cancel (in red once
            something changed) in the pencil's place, the heart staying, Save in the menu's place. -->
-      <div class="actbar" class:stuck bind:this={actbar} role="toolbar" aria-label="Edit">
+      <div class="actbar" class:stuck class:loose={!prefs.stickyActions} bind:this={actbar} role="toolbar" aria-label="Edit">
         <span class="grow"></span>
         {#if creating}
           <!-- New playlist: nothing to delete or favour yet; Cancel leaves, Save makes it once it has a name. -->
@@ -1713,7 +1714,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {:else if crateEditing}
       <!-- A crate's edit bar, as a playlist's: Delete (one's own; a second tap confirms), Cancel in the pencil's place,
            the favourites toggle staying, Save in the last place. -->
-      <div class="actbar" class:stuck bind:this={actbar} role="toolbar" aria-label="Edit">
+      <div class="actbar" class:stuck class:loose={!prefs.stickyActions} bind:this={actbar} role="toolbar" aria-label="Edit">
         <span class="grow"></span>
         {#if builder?.id}
           <button
@@ -1744,7 +1745,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       </div>
       {:else}
       <!-- The action bar, at the cover's foot; at the top it stays. -->
-      <div class="actbar" class:stuck bind:this={actbar} role="toolbar" aria-label="Play">
+      <div class="actbar" class:stuck class:loose={!prefs.stickyActions} bind:this={actbar} role="toolbar" aria-label="Play">
         {#each barActions as a (a.key)}
           <button class="icon" aria-label={a.label} title={a.label} disabled={a.disabled} onclick={a.run}><Icon name={a.icon} size={24} /></button>
         {/each}
@@ -2874,6 +2875,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
   }
 
   /* The action bar, icons only: over the cover's foot, then staying at the top (with back and the panel's place). */
+  /* Not sticky (Display's Sticky action bar off): it scrolls away with the rest. */
+  .actbar.loose {
+    position: relative;
+    top: auto;
+  }
+
   .actbar {
     position: sticky;
     /* Docked under the bar of pages and a mini-player along the top, both drawn over the panel (App). */

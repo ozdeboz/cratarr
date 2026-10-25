@@ -101,6 +101,9 @@ export type Prefs = {
   navAt: 'top' | 'bottom';
   /** The bar of pages slides away while scrolling down (and back up); off, it always shows. */
   navHides: boolean;
+  /** A panel's action bar docks at the top when scrolled to (on by default); in such a panel the bar of pages slides
+   *  away scrolling down, as with navHides. Off, the action bar scrolls away with the rest. */
+  stickyActions: boolean;
   /** Where the mini-player floats below 1024 px: along the bottom, or the top (under the bar there). */
   miniAt: 'top' | 'bottom';
   /** Where back (or ✕), Home and the title float below 1024 px, next to the mini-player on that edge. */
@@ -280,6 +283,7 @@ export const DEFAULTS: Prefs = {
   animations: true,
   navAt: 'top',
   navHides: false,
+  stickyActions: true,
   miniAt: 'bottom',
   navControlsAt: 'top',
   contentControlsAt: 'top',
@@ -351,6 +355,7 @@ function read(): Prefs {
       if (typeof saved.animations === 'boolean') p.animations = saved.animations;
       if (saved.navAt === 'top' || saved.navAt === 'bottom') p.navAt = saved.navAt;
       if (typeof saved.navHides === 'boolean') p.navHides = saved.navHides;
+      if (typeof saved.stickyActions === 'boolean') p.stickyActions = saved.stickyActions;
       for (const k of ['miniAt', 'navControlsAt', 'contentControlsAt'] as const) if (saved[k] === 'top' || saved[k] === 'bottom') p[k] = saved[k];
       if (Number.isInteger(saved.zoom) && saved.zoom >= 0 && saved.zoom < ZOOM_STEPS) p.zoom = saved.zoom;
       if (Number.isInteger(saved.listZoom) && saved.listZoom >= 0 && saved.listZoom < LIST_WIDTHS.length) p.listZoom = saved.listZoom;

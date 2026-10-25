@@ -32,6 +32,7 @@
       prefs.animations = true;
       prefs.navAt = 'top';
       prefs.navHides = false;
+      prefs.stickyActions = true;
       prefs.miniAt = 'bottom';
       prefs.navControlsAt = 'top';
       prefs.contentControlsAt = 'top';
@@ -65,8 +66,31 @@
      away while scrolling (panels open under it either way); the mini-player's edge; where each of the two kinds of
      controls floats. Along an edge, from it inwards: the bar, the mini-player, the controls. -->
 <Group title="Layout" more="On a phone or a narrow window, where the bar of pages runs along an edge of the screen.">
+  {#snippet tail()}
+    <OrderReset
+      label="Layout"
+      isDefault={prefs.navAt === 'top' && !prefs.navHides && prefs.stickyActions && prefs.miniAt === 'bottom' && prefs.navControlsAt === 'top' && prefs.contentControlsAt === 'top'}
+      reset={() => {
+        const was = { navAt: prefs.navAt, navHides: prefs.navHides, stickyActions: prefs.stickyActions, miniAt: prefs.miniAt, navControlsAt: prefs.navControlsAt, contentControlsAt: prefs.contentControlsAt };
+        Object.assign(prefs, { navAt: 'top', navHides: false, stickyActions: true, miniAt: 'bottom', navControlsAt: 'top', contentControlsAt: 'top' });
+        return () => Object.assign(prefs, was);
+      }}
+    />
+  {/snippet}
   <Item name="Navigation bar"><Seg label="Navigation bar" options={EDGES} bind:value={prefs.navAt} /></Item>
-  <Item name="Hide when scrolling" toggle={{ checked: prefs.navHides, onchange: (on) => (prefs.navHides = on) }} />
+  <!-- Along the bottom it never slides away (the owner, 2026-10-25). -->
+  <Item
+    name="Hide when scrolling"
+    line={prefs.navAt === 'bottom' ? 'Not along the bottom' : null}
+    disabled={prefs.navAt === 'bottom'}
+    toggle={{ checked: prefs.navHides && prefs.navAt !== 'bottom', onchange: (on) => (prefs.navHides = on) }}
+  />
+  <Item
+    name="Sticky action bar"
+    line="Play buttons stay in sight"
+    more="On, the action bar stays at the top as you scroll a playlist, an album or an artist, and the navigation bar slides away while you scroll down there. Off, the action bar scrolls away with the rest."
+    toggle={{ checked: prefs.stickyActions, onchange: (on) => (prefs.stickyActions = on) }}
+  />
   <Item name="Mini player"><Seg label="Mini player" options={EDGES} bind:value={prefs.miniAt} /></Item>
   <Item name="Navigation controls" line="Back, Home and the title"><Seg label="Navigation controls" options={EDGES} bind:value={prefs.navControlsAt} /></Item>
   <Item name="Content controls" line="The search, the filter and View"><Seg label="Content controls" options={EDGES} bind:value={prefs.contentControlsAt} /></Item>
