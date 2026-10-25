@@ -21,7 +21,7 @@ export type RequestsList = 'waiting' | 'mine' | 'lidarr';
 /** `label`: the row on the Requests page; `name`: short, the panel's breadcrumb (the owner, 2026-10-26: Requests ›
  *  Queue, not Requests › Waiting for an answer; as Health's). */
 export const REQUESTS_LISTS: { id: RequestsList; label: string; name: string; icon: IconName }[] = [
-  { id: 'waiting', label: 'Waiting for an answer', name: 'Queue', icon: 'inbox' },
+  { id: 'waiting', label: 'Queue', name: 'Queue', icon: 'inbox' },
   { id: 'mine', label: 'Your requests', name: 'Yours', icon: 'user' },
   { id: 'lidarr', label: 'Monitor', name: 'Monitor', icon: 'download' },
 ];
