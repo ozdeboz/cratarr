@@ -9,6 +9,8 @@ export type SearchResult = {
   title: string;
   sub?: string | null;
   cover?: string | null;
+  /** The artist, where a result needs it apart from its line (an album not in the library: to look it up). */
+  artist?: string | null;
   score: number;
   matched: Matched[];
 };

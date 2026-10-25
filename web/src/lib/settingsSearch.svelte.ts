@@ -27,6 +27,7 @@ const PARTS: Record<string, SettingsSection> = {
   'DiagnosticsPart': 'diagnostics',
   'DisplayPart': 'display',
   'PlayerRowList': 'display',
+  'AppearancePicker': 'display',
   'HomeSettingsPart': 'home',
   'ImportPart': 'import',
   'LibrariesPart': 'libraries',
@@ -37,7 +38,7 @@ const PARTS: Record<string, SettingsSection> = {
   'PlayersSettings': 'players',
 };
 
-const SOURCES = import.meta.glob(['./settings/*Part.svelte', './settings/PlayerRowList.svelte', './PlayersSettings.svelte'], {
+const SOURCES = import.meta.glob(['./settings/*Part.svelte', './settings/PlayerRowList.svelte', './settings/AppearancePicker.svelte', './PlayersSettings.svelte'], {
   query: '?raw',
   import: 'default',
 }) as Record<string, () => Promise<string>>;

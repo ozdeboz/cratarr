@@ -3,17 +3,25 @@
   // "after filtering the current page, at the end of what remains should be our global search results"): the same
   // words asked of the server (/api/search), a group per kind but the kind the page already shows (`except`), a few of
   // each, why each is there. Nothing found anywhere: one button, Find more music, which closes the search and looks the
-  // words up on MusicBrainz (the Find page).
-  import { search, type SearchKind, type ServerSearch } from './api';
+  // words up on MusicBrainz (the Find page). Besides the library (the owner, 2026-10-25: "It's a global search"): the
+  // pages and Settings' parts, found in the browser at once (lib/everywhere), and what is not in the library, the
+  // albums missing from its artists and what Discover leaves out (decision 0072, 7).
+  import { search, takeBackExcluded, type SearchKind, type ServerSearch } from './api';
   import Cover from './Cover.svelte';
+  import ElsewhereAlbum from './ElsewhereAlbum.svelte';
+  import MenuEntry from './MenuEntry.svelte';
+  import MenuSheet from './MenuSheet.svelte';
   import Row from './Row.svelte';
   import SectionHead from './SectionHead.svelte';
   import { viewOver } from './panel.svelte';
   import { pageView } from './pageView.svelte';
-  import { words } from './search';
+  import { provided, words, type SearchResult } from './search';
+  import { toast } from './toast.svelte';
 
-  let { except = [] }: { except?: SearchKind[] } = $props();
+  /** The kinds the page already shows: left out here (the browser's, Settings' parts, by their `kind` too). */
+  let { except = [] }: { except?: string[] } = $props();
 
+  /** The server's kinds, the library's first, then what is not in it. */
   const KINDS: { kind: SearchKind; label: string }[] = [
     { kind: 'artist', label: 'Artists' },
     { kind: 'album', label: 'Albums' },
@@ -22,19 +30,26 @@
     { kind: 'crate', label: 'Crates' },
     { kind: 'genre', label: 'Genres' },
   ];
+  const ELSEWHERE: { kind: SearchKind; label: string }[] = [
+    { kind: 'missing', label: 'Not in your library' },
+    { kind: 'excluded', label: 'Left out by Discover' },
+  ];
   /** A few of each kind. */
   const EACH = 5;
 
   const q = $derived(pageView.query.trim());
   let found = $state<{ q: string; r: ServerSearch } | null>(null);
+  /** Asked again after something changed what it finds (an exclusion taken back). */
+  let again = $state(0);
   // Asked a moment after the words stop changing; nothing for no words.
   $effect(() => {
     const now = q;
+    void again;
     found = null;
     if (!words(now).length) return;
     let gone = false;
     const t = setTimeout(() => {
-      search(now, KINDS.map((k) => k.kind).filter((k) => !except.includes(k)), EACH).then(
+      search(now, [...KINDS, ...ELSEWHERE].map((k) => k.kind).filter((k) => !except.includes(k)), EACH).then(
         (r) => !gone && (found = { q: now, r }),
         () => {},
       );
@@ -44,13 +59,44 @@
       clearTimeout(t);
     };
   });
-  const groups = $derived(
-    found ? KINDS.filter((k) => !except.includes(k.kind)).map((k) => ({ ...k, items: found!.r.groups[k.kind]?.items ?? [] })).filter((g) => g.items.length) : [],
+  const server = (kinds: typeof KINDS) =>
+    found ? kinds.filter((k) => !except.includes(k.kind)).map((k) => ({ ...k, items: (found!.r.groups[k.kind]?.items ?? []) as (SearchResult & { track?: string })[] })).filter((g) => g.items.length) : [];
+  /** The browser's own finds (lib/everywhere), at once. */
+  const here = $derived(
+    words(q).length
+      ? provided()
+          .filter((p) => !except.includes(p.kind))
+          .map((p) => ({ kind: p.kind, label: p.label, items: p.find(words(q)).sort((a, b) => b.score - a.score).slice(0, EACH) as (SearchResult & { track?: string })[] }))
+          .filter((g) => g.items.length)
+      : [],
   );
+  const groups = $derived([...server(KINDS), ...here, ...server(ELSEWHERE)]);
+  const asked = $derived(!!found && found.q === q);
   const why = (m: { on: string; text: string; count?: number }[]) => {
     const t = m.find((x) => x.on !== 'name');
     return t ? `${t.on === 'track' ? 'Track' : t.on === 'album' ? 'Album' : t.on === 'artist' ? 'By' : t.on}: ${t.text}${t.count && t.count > 1 ? ` · ${t.count}` : ''}` : null;
   };
+
+  // A tap: a page or a part where it shows (the words kept, so it narrows to them), an album not in the library on
+  // Bandcamp or its menu, what Discover left out its menu (Take back), the rest in the panel.
+  let elsewhere = $state<ElsewhereAlbum>();
+  let leftOut = $state<SearchResult | null>(null);
+  function open(it: SearchResult) {
+    if (it.subject.startsWith('#')) location.hash = it.subject;
+    else if (it.kind === 'missing')
+      void elsewhere?.open({ release_group: it.subject.slice('missing:'.length), title: it.title, artist: it.artist ?? '', year: null, cover: it.cover ?? null });
+    else if (it.kind === 'excluded') leftOut = it;
+    else viewOver(it.subject);
+  }
+  async function takeBack(it: SearchResult) {
+    leftOut = null;
+    try {
+      await takeBackExcluded(it.subject.startsWith('excluded-artist:') ? { artist: it.subject.slice('excluded-artist:'.length) } : { key: it.subject.slice('excluded:'.length) });
+      again++;
+    } catch (e) {
+      toast.fail(e, 'Could not take it back');
+    }
+  }
 
   /** Nothing anywhere: the search closed, the words looked up on MusicBrainz. */
   function findMore() {
@@ -60,7 +106,7 @@
   }
 </script>
 
-{#if q && found && found.q === q}
+{#if q && (here.length || asked)}
   <section class="global" aria-label="Everywhere">
     {#if groups.length}
       <SectionHead title="Everywhere" />
@@ -69,21 +115,28 @@
         <ul class="rows">
           {#each g.items as it (it.subject + (it.track ?? ''))}
             <li>
-              <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => viewOver(it.subject)}>
-                {#snippet front()}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /></span>{/snippet}
+              <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)}>
+                {#snippet front()}{#if it.kind !== 'setting' && it.kind !== 'page'}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /></span>{/if}{/snippet}
                 {#snippet sub()}{it.sub ?? ''}{#if why(it.matched)}<span class="why">{it.sub ? ' · ' : ''}{why(it.matched)}</span>{/if}{/snippet}
               </Row>
             </li>
           {/each}
         </ul>
       {/each}
-    {:else}
+    {:else if asked}
       <div class="none">
         <p>Nothing in Cratarr for “{q}”.</p>
         <button class="find" onclick={findMore}>Find more music</button>
       </div>
     {/if}
   </section>
+{/if}
+<ElsewhereAlbum bind:this={elsewhere} />
+{#if leftOut}
+  {@const it = leftOut}
+  <MenuSheet label={it.title} title={it.title} images={it.cover ? [it.cover] : []} chips={[it.sub ?? '']} onclose={() => (leftOut = null)}>
+    <MenuEntry icon="undo" label="Take back" onclick={() => takeBack(it)} />
+  </MenuSheet>
 {/if}
 <!-- A server that cannot search (before 0.9.3) or did not answer: nothing more than the page's own. -->
 

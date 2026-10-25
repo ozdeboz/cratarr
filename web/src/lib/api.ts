@@ -1733,7 +1733,9 @@ export type AlbumView = {
 };
 /** One search's answer from the server (decision 0072, 0.9.3): per kind, and the kinds merged for Top results. Each
  *  item in lib/search's shape; a track's subject is its album's, the track itself in `track`. */
-export type SearchKind = 'album' | 'artist' | 'track' | 'genre' | 'playlist' | 'crate';
+/** What the server's search finds: the library's kinds, the account's playlists and crates, and what is not in the
+ *  library (decision 0072, 7): albums missing from its artists, and what Discover leaves out. */
+export type SearchKind = 'album' | 'artist' | 'track' | 'genre' | 'playlist' | 'crate' | 'missing' | 'excluded';
 export type ServerSearch = {
   q: string;
   groups: Partial<Record<SearchKind, { total: number; items: (SearchResult & { track?: string })[] }>>;

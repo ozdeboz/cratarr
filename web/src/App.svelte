@@ -47,8 +47,8 @@
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './lib/motion';
   import { glass } from './lib/glass.svelte';
   import GlobalResults from './lib/GlobalResults.svelte';
+  import { provideEverywhere } from './lib/everywhere.svelte';
   import Find from './Find.svelte';
-  import type { SearchKind } from './lib/api';
   import Toasts from './lib/Toasts.svelte';
   import { toast } from './lib/toast.svelte';
   import ProgressBar from './lib/ProgressBar.svelte';
@@ -95,7 +95,7 @@
    *  along the top (`phone`: under 1024 px; the owner, 2026-10-25). */
   const PANEL_PAGES: Page[] = [REQUESTS, DOWNLOADS, INSIGHTS, HEALTH, SETTINGS];
   /** The kind a page already shows, left out of the global results under it (decision 0072). */
-  const PAGE_KINDS: Record<string, SearchKind[]> = { library: ['album'], playlists: ['playlist'], crates: ['crate', 'genre'] };
+  const PAGE_KINDS: Record<string, string[]> = { library: ['album'], playlists: ['playlist'], crates: ['crate', 'genre'], settings: ['setting'] };
   const panelPage = $derived(PANEL_PAGES.find((p) => p.id === page) ?? null);
   // Local mode's (decision 0052): the device's own music, and the menu shows only these (and Settings).
   const LOCAL_ALBUMS: Page = { id: 'local-albums', href: '#/local/albums', label: 'Albums', icon: 'disc' };
@@ -535,6 +535,8 @@
   const APART: Page[] = $derived(
     localMode() ? [SETTINGS] : [...(mayRequest ? [REQUESTS] : []), ...(inApp ? [DOWNLOADS] : []), INSIGHTS, ...(me.admin ? [HEALTH] : []), SETTINGS],
   );
+  // The global search finds the pages shown and their parts, and Settings' (lib/everywhere).
+  provideEverywhere(() => [...MAIN, ...APART]);
   // A switch of the mode (decision 0052) goes to the first page of the mode it went to, unless the page is one both
   // have (Settings).
   $effect(() => {

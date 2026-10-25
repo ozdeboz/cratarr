@@ -3,21 +3,15 @@
   // the search and loads a MusicBrainz query or fetch page): the words looked up on MusicBrainz (its albums and artists,
   // the surest first, what the library has marked), each album to hear from Bandcamp where it is there (looked for when
   // opened), else its menu to Want it. The words ride in the address (`#/find?q=`); the pill's search asks again.
-  import { findOnBandcamp, musicBrainzSearch, wantAlbum, type MusicBrainzFound } from './lib/api';
-  import { albumIdOf, BANDCAMP } from './lib/bandcampPreview';
+  import { musicBrainzSearch, type MusicBrainzFound } from './lib/api';
   import Cover from './lib/Cover.svelte';
+  import ElsewhereAlbum from './lib/ElsewhereAlbum.svelte';
   import LinkSheet from './lib/LinkSheet.svelte';
-  import MenuCards from './lib/MenuCards.svelte';
-  import MenuEntry from './lib/MenuEntry.svelte';
-  import MenuGroup from './lib/MenuGroup.svelte';
-  import MenuSheet from './lib/MenuSheet.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import Row from './lib/Row.svelte';
   import SectionHead from './lib/SectionHead.svelte';
-  import { albumSubject, viewOver } from './lib/panel.svelte';
   import { pageView } from './lib/pageView.svelte';
   import { goToArtist } from './lib/albums.svelte';
-  import { toast } from './lib/toast.svelte';
 
   /** The words: the pill's while it searches, else the address's. */
   const fromAddress = () => new URLSearchParams(location.hash.split('?')[1] ?? '').get('q') ?? '';
@@ -49,31 +43,11 @@
   });
   type Album = MusicBrainzFound['albums'][number];
 
+  // Opened: on Bandcamp in the panel, else its menu (lib/ElsewhereAlbum, as the global search's missing albums).
+  let elsewhere = $state<ElsewhereAlbum>();
   let finding = $state<string | null>(null);
-  let menuFor = $state<Album | null>(null);
-  async function open(a: Album) {
-    finding = a.release_group;
-    try {
-      const { page } = await findOnBandcamp(a.artist, a.title, a.release_group);
-      if (page) viewOver(albumSubject(BANDCAMP, albumIdOf(page)));
-      else menuFor = a;
-    } catch {
-      menuFor = a;
-    } finally {
-      finding = null;
-    }
-  }
   let asked = $state<string[]>([]);
-  async function want(a: Album) {
-    menuFor = null;
-    try {
-      const { request } = await wantAlbum({ release_group: a.release_group, artist: a.artist, album: a.title, year: a.year, cover: a.cover });
-      asked = [...asked, a.release_group];
-      if (request.fetched?.startsWith('Not handed over')) toast.show({ text: request.fetched, tone: 'error' });
-    } catch (e) {
-      toast.fail(e, 'Could not ask for it');
-    }
-  }
+  const open = (a: Album) => elsewhere?.open(a);
   let link = $state<{ url: string; name: string } | null>(null);
 </script>
 
@@ -122,26 +96,7 @@
   {/if}
 </main>
 
-{#if menuFor}
-  {@const a = menuFor}
-  <MenuSheet label={a.title} title={a.title} images={a.cover ? [a.cover] : []} chips={[a.artist, ...(a.year ? [String(a.year)] : [])]} copy={`${a.artist} – ${a.title}`} onclose={() => (menuFor = null)}>
-    <MenuCards>
-      <MenuGroup label="Discover">
-        {#if a.have}
-          <MenuEntry icon="disc" label="In your library" disabled onclick={() => {}} />
-        {:else if asked.includes(a.release_group)}
-          <MenuEntry icon="inbox" label="Requested" onclick={() => ((menuFor = null), (location.hash = '#/requests'))} />
-        {:else}
-          <MenuEntry icon="circlePlus" label="Want" onclick={() => want(a)} />
-        {/if}
-      </MenuGroup>
-      <MenuGroup>
-        <MenuEntry icon="externalLink" label="MusicBrainz" onclick={() => ((link = { url: `https://musicbrainz.org/release-group/${a.release_group}`, name: 'MusicBrainz' }), (menuFor = null))} />
-        <MenuEntry icon="search" label="Search YouTube" onclick={() => ((link = { url: `https://www.youtube.com/results?search_query=${encodeURIComponent(`${a.artist} ${a.title}`)}`, name: 'YouTube' }), (menuFor = null))} />
-      </MenuGroup>
-    </MenuCards>
-  </MenuSheet>
-{/if}
+<ElsewhereAlbum bind:this={elsewhere} bind:finding bind:asked />
 {#if link}{@const l = link}<LinkSheet url={l.url} name={l.name} onclose={() => (link = null)} />{/if}
 
 <style>
