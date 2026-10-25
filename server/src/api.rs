@@ -161,6 +161,7 @@ pub fn router(app: Arc<App>) -> Router {
         // Each account's own: its tasks, and its listening services (decision 0068: anyone's, not the administrators'
         // only). Last.fm's way back carries its sign-in's code and needs no sign-in (`serve::access::public`).
         .route("/api/tasks", get(own_tasks))
+        .route("/api/tasks/{id}", delete(stop_task))
         .route("/api/scrobble", get(scrobble_targets))
         .route("/api/scrobble/listenbrainz", post(scrobble_listenbrainz))
         .route("/api/scrobble/lastfm", post(scrobble_lastfm))
@@ -218,7 +219,11 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/settings/lidarr/options", get(lidarr_options))
             .route("/api/settings/lastfm", get(get_lastfm_key).put(put_lastfm_key))
             .route("/api/settings/discogs", get(get_discogs_keys).put(put_discogs_keys))
-            .route("/api/albums/{source}/{album}/covers", get(album_covers).post(set_album_cover))
+            .route(
+                "/api/albums/{source}/{album}/covers",
+                get(album_covers).post(set_album_cover).put(upload_album_cover).layer(axum::extract::DefaultBodyLimit::max(13 << 20)),
+            )
+            .route("/api/albums/{source}/{album}/covers/look", post(look_album_covers))
             .route("/api/settings/naming", get(naming))
             .route("/api/catalogue", get(catalogue_status))
             .route("/api/health/report", get(health_report))
@@ -2998,6 +3003,14 @@ async fn own_tasks() -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(json!({ "tasks": crate::app::tasks::tasks().of(&account) })))
 }
 
+/// One's own running task asked to stop (0.9.6: a cover picked ends its look); refused when it is not running. Work that
+/// cannot stop part-way runs on.
+async fn stop_task(Path(id): Path<u64>) -> Result<StatusCode, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: tasks are an account's own.".into()))?;
+    if crate::app::tasks::tasks().stop(&account, id) { Ok(StatusCode::NO_CONTENT) } else { Err(ToggleError::Refused("That task is not running.".into()).into()) }
+}
+
 /// Long work begun as a task: 202 with the task, which the page follows (`app::tasks`).
 fn started(task: Result<crate::app::tasks::Task, String>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let task = task.map_err(ToggleError::Refused)?;
@@ -4307,6 +4320,20 @@ fn own_album(source: &str) -> Result<(), ApiError> {
 async fn album_covers(Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::covers::Covers>, ApiError> {
     own_album(&source)?;
     Ok(Json(crate::app::covers::candidates(&album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+/// The covers looked for as a task (0.9.6), its progress on the live channel, its result as `GET …/covers` answers.
+async fn look_album_covers(Path((source, album)): Path<(String, String)>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    own_album(&source)?;
+    let account = crate::serve::instance().and_then(|s| s.current_user()).ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
+    started(crate::app::covers::start(&account, &album))
+}
+
+/// Upload cover (0.9.6): the picture sent as the body (JPEG, PNG or WebP) set as a chosen cover is; Undo as there.
+async fn upload_album_cover(Path((source, album)): Path<(String, String)>, body: axum::body::Bytes) -> Result<Json<serde_json::Value>, ApiError> {
+    own_album(&source)?;
+    let token = crate::app::covers::upload(&album, body.to_vec()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "undo": [token] })))
 }
 
 #[derive(Deserialize)]

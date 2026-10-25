@@ -6,6 +6,7 @@
 //! A task says where it is as a step: what it does ("Reading scrobbles"), how many done and of how many, where that is
 //! known. One of a kind runs at a time for an account; the last of each kind is kept for an hour after it ended.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -37,7 +38,8 @@ pub struct Task {
     pub finished: Option<i64>,
     pub step: Option<Step>,
     pub error: Option<String>,
-    /// What it brought, once finished without an error (the work's own answer, as its route gave it before).
+    /// What it brought, once finished without an error (the work's own answer, as its route gave it before); while it
+    /// runs, what it has found so far where the work says (a covers look's, 0.9.6).
     pub result: Option<serde_json::Value>,
 }
 
@@ -45,6 +47,8 @@ struct Kept {
     task: Task,
     ended: Option<Instant>,
     told: Instant,
+    /// Asked to stop (`Tasks::stop`): the work that looks at it stops before its next step.
+    stop: Arc<AtomicBool>,
 }
 
 pub struct Tasks {
@@ -85,10 +89,20 @@ impl Tasks {
         list.retain(|k| !(k.task.kind == kind && k.task.account == account));
         let id = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         let task = Task { id, kind: kind.into(), account: account.into(), preview, started: now(), finished: None, step: None, error: None, result: None };
-        list.push(Kept { task: task.clone(), ended: None, told: Instant::now() });
+        let stop = Arc::new(AtomicBool::new(false));
+        list.push(Kept { task: task.clone(), ended: None, told: Instant::now(), stop: stop.clone() });
         drop(list);
         let _ = self.tell.send(task);
-        Ok(Handle { tasks: self, id })
+        Ok(Handle { tasks: self, id, stop })
+    }
+
+    /// `account`'s running task `id` asked to stop (0.9.6: a cover picked ends its look). Work that looks
+    /// (`Handle::stopped`) ends before its next step, with what it found; other work runs on. Whether it was running.
+    pub fn stop(&self, account: &str, id: u64) -> bool {
+        let list = self.list.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(k) = list.iter().find(|k| k.task.id == id && k.task.account == account && k.ended.is_none()) else { return false };
+        k.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        true
     }
 
     fn change(&self, id: u64, f: impl FnOnce(&mut Task), at_once: bool) {
@@ -109,11 +123,23 @@ impl Tasks {
 pub struct Handle {
     tasks: &'static Tasks,
     id: u64,
+    stop: Arc<AtomicBool>,
 }
 
 impl Handle {
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    /// Whether it was asked to stop.
+    pub fn stopped(&self) -> bool {
+        self.stop.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// What it has found so far, as its result while it runs (told with its steps, at most four times a second).
+    pub fn found<T: Serialize>(&self, so_far: &T) {
+        let value = serde_json::to_value(so_far).ok();
+        self.tasks.change(self.id, |t| t.result = value, false);
     }
 
     /// Where it is now. A new step is told at once; the same step's count at most four times a second.
