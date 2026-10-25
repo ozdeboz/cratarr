@@ -87,8 +87,8 @@
   // In the app only: what is kept on this device (decision 0033, step 4), playable without a connection.
   const DOWNLOADS: Page = { id: 'downloads', href: '#/downloads', label: 'Downloads', icon: 'download' };
   /** The pages that are an index with their lists in the panel (Requests, Downloads, Insights, Health, Settings): their
-   *  name on the page beside back and their panel under the top bar, not over it, both on a phone only (the owner,
-   *  2026-10-25). */
+   *  name on the page beside back and their panel under the top bar, not over it, both wherever the bar of pages is
+   *  along the top (`phone`: under 1024 px; the owner, 2026-10-25). */
   const PANEL_PAGES: Page[] = [REQUESTS, DOWNLOADS, INSIGHTS, HEALTH, SETTINGS];
   const panelPage = $derived(PANEL_PAGES.find((p) => p.id === page) ?? null);
   // Local mode's (decision 0052): the device's own music, and the menu shows only these (and Settings).
@@ -652,7 +652,7 @@
   </div>
 
   {#if playlistLayer}
-    <div class="playlist-layer" class:under-bar={!!panelPage && (settingsShown || healthShown || insightsShown || requestsShown || downloadsShown)} role="dialog" aria-label="Playlist" style:--mini-h={`${miniSpace}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
+    <div class="playlist-layer" class:under-bar={phone && !!panelPage && (settingsShown || healthShown || insightsShown || requestsShown || downloadsShown)} role="dialog" aria-label="Playlist" style:--mini-h={`${miniSpace}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
       {#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else if requestsShown}<RequestsPanel list={requestsShown} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} />{:else}<PlaylistView full />{/if}
     </div>
   {/if}
@@ -676,8 +676,9 @@
         {#if navAt > 0 || backHome}
           <span class="navpill"><button aria-label="Back" title="Back" onclick={() => (backHome ? (location.hash = keepViewed(HOME.href)) : history.back())}><Icon name="back" size={22} /></button></span>
         {/if}
-        <!-- On a phone only (the owner, 2026-10-25): with room, the sidebar names the page. -->
-        {#if panelPage && !sidebar}<h1 class="page-name">{panelPage.label}</h1>{/if}
+        <!-- Wherever the bar of pages is along the top (under 1024 px, as the CSS; the owner, 2026-10-25): from there the
+             sidebar of pages names it. -->
+        {#if panelPage && phone}<h1 class="page-name">{panelPage.label}</h1>{/if}
       </span>
       <!-- Settings' pill: its search and About, its own button (the owner, 2026-10-24: one pill as on every page);
            Discover's: its search and Look again (the owner, 2026-10-24). -->
