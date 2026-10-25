@@ -367,6 +367,9 @@
   const handed = $derived(!overlay && playlistLayer ? glass.panel : null);
   /** The layer under the top bar (an index page's panel) or over all of it (a playlist's, an album's, an artist's). */
   const underBar = $derived(phone && !!panelPage && !!(settingsShown || healthShown || insightsShown || requestsShown || downloadsShown));
+  /** An index page and its panel share the row's place: going one level deeper (or back) changes what the glass holds,
+   *  at once, instead of fading it in anew (the owner, 2026-10-25: "the top left and top right glass hide"). */
+  const leadFade = $derived(reducedMotion() || (phone && !!panelPage && (underBar || !playlistLayer)) ? 0 : 150);
   /** The one pill's settings: the panel's where it handed them, else the page's. */
   const pagePillShown = $derived(pagePill || ['settings', 'discover', 'insights', 'health', 'requests', 'home', 'find'].includes(page));
   const pillNow = $derived(
@@ -613,7 +616,9 @@
   </div>
 
   <div class="content" class:with-side={sidebar} style:--player-w="{sideWidth}px" bind:this={contentEl}>
-    <div class="page" class:under-row={pageRow} bind:this={pageEl}>
+    <!-- Its room under the glass kept while a panel covers it on a phone (the owner, 2026-10-25: opening a list on Requests
+         shifted the page up under the coming panel). -->
+    <div class="page" class:under-row={pageRow || (phone && playlistLayer)} bind:this={pageEl}>
     <SheetArea area={() => pageEl}>
     {#if page === 'settings'}
       <Settings />
@@ -703,9 +708,9 @@
     <!-- The page's glass, or on a phone the panel's on top (lib/glass): one row, one pill whose settings change. -->
     <div class="page-row" class:beside={sidebar && !handed} class:handed={!!handed} class:top={!!handed && !underBar} style:--player-w="{sideWidth}px">
       {#if handed}
-        <span class="lead" in:fade={{ duration: reducedMotion() ? 0 : 150 }}>{@render handed.left()}</span>
+        <span class="lead" in:fade={{ duration: leadFade }}>{@render handed.left()}</span>
       {:else}
-        <span class="lead" in:fade={{ duration: reducedMotion() ? 0 : 150 }}>
+        <span class="lead" in:fade={{ duration: leadFade }}>
           {#if navAt > 0 || backHome}
             <span class="navpill"><button aria-label="Back" title="Back" onclick={() => (backHome ? (location.hash = keepViewed(HOME.href)) : history.back())}><Icon name="back" size={22} /></button></span>
           {/if}
