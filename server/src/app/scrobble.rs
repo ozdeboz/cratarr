@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::serve::Serve;
 use crate::userdata::Queued;
+use super::reach::Sent as _;
 
 pub const LISTENBRAINZ: &str = "listenbrainz";
 pub const LASTFM: &str = "lastfm";
@@ -62,7 +63,7 @@ pub async fn listenbrainz_user(token: &str) -> Result<String> {
     let v: Valid = http()?
         .get(format!("{LB_API}/validate-token"))
         .header("Authorization", format!("Token {token}"))
-        .send()
+        .sent()
         .await
         .context("ListenBrainz did not answer")?
         .json()
@@ -147,7 +148,7 @@ pub async fn lastfm_session(api_key: &str, api_secret: &str, token: &str) -> Res
     let sig = signature(&p, api_secret);
     p.insert("api_sig", sig);
     p.insert("format", "json".into());
-    let a: Answer = http()?.get(FM_API).query(&p).send().await.context("Last.fm did not answer")?.json().await?;
+    let a: Answer = http()?.get(FM_API).query(&p).sent().await.context("Last.fm did not answer")?.json().await?;
     match a.session {
         Some(s) => Ok((s.key, s.name)),
         None => bail!("Last.fm refused the sign-in: {}", a.message.unwrap_or_default()),
@@ -195,7 +196,7 @@ async fn send_listenbrainz(token: &str, plays: &[Play]) -> Result<(), Failed> {
         .post(format!("{LB_API}/submit-listens"))
         .header("Authorization", format!("Token {token}"))
         .json(&serde_json::json!({ "listen_type": kind, "payload": payload }))
-        .send()
+        .sent()
         .await
         .map_err(|e| Failed::Later(format!("{e:#}")))?;
     match res.status().as_u16() {
@@ -230,7 +231,7 @@ async fn send_lastfm(secret: &Secret, plays: &[Play]) -> Result<(), Failed> {
     let sig = signature(&by, sec);
     p.insert("api_sig".into(), sig);
     p.insert("format".into(), "json".into());
-    let res = http().map_err(|e| Failed::Later(format!("{e:#}")))?.post(FM_API).form(&p).send().await.map_err(|e| Failed::Later(format!("{e:#}")))?;
+    let res = http().map_err(|e| Failed::Later(format!("{e:#}")))?.post(FM_API).form(&p).sent().await.map_err(|e| Failed::Later(format!("{e:#}")))?;
     let body: serde_json::Value = res.json().await.map_err(|e| Failed::Later(format!("{e:#}")))?;
     match body.get("error").and_then(|e| e.as_i64()) {
         None => Ok(()),
@@ -355,7 +356,7 @@ async fn now_playing(serve: Arc<Serve>, user: String, song: String) -> Result<()
             let body = serde_json::json!({ "listen_type": "playing_now", "payload": [{ "track_metadata": {
                 "artist_name": s.artist, "track_name": s.title, "release_name": s.album,
                 "additional_info": { "duration_ms": s.duration * 1000, "media_player": "Cratarr", "submission_client": "Cratarr" } } }] });
-            http()?.post(format!("{LB_API}/submit-listens")).header("Authorization", format!("Token {token}")).json(&body).send().await.map(|_| ())
+            http()?.post(format!("{LB_API}/submit-listens")).header("Authorization", format!("Token {token}")).json(&body).sent().await.map(|_| ())
         } else {
             let (Some(key), Some(sec), Some(sk)) = (&secret.api_key, &secret.api_secret, &secret.session) else { continue };
             let mut p: BTreeMap<&str, String> = BTreeMap::new();
@@ -369,7 +370,7 @@ async fn now_playing(serve: Arc<Serve>, user: String, song: String) -> Result<()
             let sig = signature(&p, sec);
             p.insert("api_sig", sig);
             p.insert("format", "json".into());
-            http()?.post(FM_API).form(&p).send().await.map(|_| ())
+            http()?.post(FM_API).form(&p).sent().await.map(|_| ())
         };
         if let Err(e) = sent {
             tracing::debug!(target: "scrobble", user = %user, to = %target, reason = %format!("{e:#}"), "now playing not sent");

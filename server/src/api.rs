@@ -222,6 +222,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/settings/discogs", get(get_discogs_keys).put(put_discogs_keys))
             .route("/api/settings/musicbrainz", get(musicbrainz_status).put(musicbrainz_switch))
             .route("/api/server/restart", post(restart_server))
+            .route("/api/settings/connections/state", get(connections_state))
             .route(
                 "/api/albums/{source}/{album}/covers",
                 get(album_covers).post(set_album_cover).put(upload_album_cover).layer(axum::extract::DefaultBodyLimit::max(13 << 20)),
@@ -4418,6 +4419,27 @@ async fn set_album_cover(Path((source, album)): Path<(String, String)>, Json(b):
 /// How MusicBrainz stands (0.9.6, Settings › Connections): when last reached, the last failure, the background pass.
 async fn musicbrainz_status() -> Result<Json<crate::app::musicbrainz::Status>, ApiError> {
     Ok(Json(crate::app::musicbrainz::status().await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+/// Every outside connection's state since the server started (0.9.6): when it last answered, its last failure, and
+/// whether it is failing now (as Health says).
+async fn connections_state() -> Json<serde_json::Value> {
+    let now = crate::app::moment::now_secs();
+    let failing: Vec<&str> = crate::app::reach::failing(now).into_iter().map(|(n, _)| n).collect();
+    let all: Vec<serde_json::Value> = ["musicbrainz", "discogs", "lastfm", "listenbrainz", "coverartarchive", "bandcamp", "theaudiodb", "wikimedia"]
+        .into_iter()
+        .map(|name| {
+            let s = crate::app::reach::state(name);
+            json!({
+                "name": name,
+                "label": crate::app::reach::label(name),
+                "last_ok": Some(s.last_ok).filter(|t| *t > 0),
+                "last_error": s.last_error.map(|(at, message)| json!({ "at": at, "message": message })),
+                "failing": failing.contains(&name),
+            })
+        })
+        .collect();
+    Json(json!({ "connections": all }))
 }
 
 /// Cratarr restarted from Settings (0.9.6, the owner: no command line needed): answered at once, then stopped as

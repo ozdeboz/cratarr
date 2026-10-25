@@ -65,6 +65,7 @@ pub mod renumber;
 pub mod describe;
 pub mod musicbrainz;
 pub mod switches;
+pub mod reach;
 pub mod tracks;
 pub mod visuals;
 

@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use crate::userdata::UserData;
 use super::musicbrainz::Asked as _;
+use super::reach::Sent as _;
 
 /// Where the key and secret are kept (user data's server choices, as the server's Last.fm key).
 pub const KEY: &str = "discogs:key";
@@ -121,7 +122,7 @@ async fn get(path: &str) -> Result<Option<Value>> {
         if let Some((k, s)) = &creds {
             req = req.header(reqwest::header::AUTHORIZATION, format!("Discogs key={k}, secret={s}"));
         }
-        let r = req.send().await?;
+        let r = req.sent().await?;
         note_limits(r.headers());
         match r.status() {
             reqwest::StatusCode::TOO_MANY_REQUESTS if std::mem::take(&mut again) => {
@@ -291,7 +292,7 @@ pub async fn release_group_cover(rg: &str) -> Result<Option<String>> {
         return Ok(url);
     }
     let caa = format!("https://coverartarchive.org/release-group/{rg}/front-250");
-    let found = if super::discover::http()?.head(&caa).send().await.is_ok_and(|r| r.status().is_success()) {
+    let found = if super::discover::http()?.head(&caa).sent().await.is_ok_and(|r| r.status().is_success()) {
         Some(caa)
     } else {
         match master_of(Some(rg), "", "").await? {

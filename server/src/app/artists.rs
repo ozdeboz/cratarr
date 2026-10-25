@@ -17,6 +17,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use super::library::epoch_now;
 use super::musicbrainz::Asked as _;
+use super::reach::Sent as _;
 
 /// TheAudioDB's public key (its documented free one; Jellyfin's plugin carries a key of its own).
 const KEY: &str = "123";
@@ -140,7 +141,7 @@ impl ArtistInfo {
             Some(m) => format!("{BASE}/{KEY}/artist-mb.php?i={}", urlencode(m)),
             None => format!("{BASE}/{KEY}/search.php?s={}", urlencode(name)),
         };
-        let answer: serde_json::Value = self.http.get(&url).send().await?.error_for_status()?.json().await?;
+        let answer: serde_json::Value = self.http.get(&url).sent().await?.error_for_status()?.json().await?;
         let found = answer["artists"].as_array().and_then(|a| a.first()).cloned().unwrap_or_default();
         let text = |field: &str| found[field].as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
         // English is the plain field; the others carry their language.
@@ -151,7 +152,7 @@ impl ArtistInfo {
             // A smaller copy where TheAudioDB has one, else the original.
             let file = format!("{id}.jpg");
             for u in [format!("{thumb}/medium"), thumb.clone()] {
-                if let Ok(r) = self.http.get(&u).send().await
+                if let Ok(r) = self.http.get(&u).sent().await
                     && r.status().is_success()
                     && let Ok(bytes) = r.bytes().await
                     && !bytes.is_empty()
@@ -225,7 +226,7 @@ impl ArtistInfo {
             return Ok(None);
         };
         let entity: serde_json::Value =
-            self.http.get(format!("https://www.wikidata.org/wiki/Special:EntityData/{}.json", urlencode(&item))).send().await?.error_for_status()?.json().await?;
+            self.http.get(format!("https://www.wikidata.org/wiki/Special:EntityData/{}.json", urlencode(&item))).sent().await?.error_for_status()?.json().await?;
         let Some(image) = entity["entities"][&item]["claims"]["P18"][0]["mainsnak"]["datavalue"]["value"].as_str().map(str::to_string) else {
             return Ok(None);
         };
@@ -240,7 +241,7 @@ impl ArtistInfo {
                 ("iiurlwidth", &COMMONS_WIDTH.to_string()),
                 ("format", "json"),
             ])
-            .send()
+            .sent()
             .await?
             .error_for_status()?
             .json()
@@ -253,7 +254,7 @@ impl ArtistInfo {
         };
         let author = meta["Artist"]["value"].as_str().map(plain).filter(|a| !a.is_empty()).unwrap_or_else(|| "Unknown".to_string());
         let url = ii["descriptionurl"].as_str().unwrap_or("https://commons.wikimedia.org").to_string();
-        let bytes = self.http.get(thumb).send().await?.error_for_status()?.bytes().await?;
+        let bytes = self.http.get(thumb).sent().await?.error_for_status()?.bytes().await?;
         if bytes.is_empty() {
             return Ok(None);
         }
@@ -265,7 +266,7 @@ impl ArtistInfo {
     /// The artist's primary image on Discogs, kept as a file, credited to Discogs with their page there (0.9.5).
     async fn discogs_photo(&self, mbid: &str) -> Result<Option<(String, Credit)>> {
         let Some((image, page)) = super::discogs::artist_image(mbid).await? else { return Ok(None) };
-        let bytes = self.http.get(&image.url).send().await?.error_for_status()?.bytes().await?;
+        let bytes = self.http.get(&image.url).sent().await?.error_for_status()?.bytes().await?;
         if bytes.is_empty() {
             return Ok(None);
         }

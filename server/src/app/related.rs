@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::import::loose;
 use super::musicbrainz::Asked as _;
+use super::reach::Sent as _;
 
 /// ListenBrainz's similar artists, as its own artist pages ask for them (its labs API, with the algorithm they use).
 const LB_LABS: &str = "https://labs.api.listenbrainz.org/similar-artists/json";
@@ -128,7 +129,7 @@ async fn lb_similar(http: &reqwest::Client, mbid: &str) -> Result<Vec<(String, S
     let list: Vec<Similar> = http
         .get(LB_LABS)
         .query(&[("artist_mbids", mbid), ("algorithm", LB_ALGORITHM)])
-        .send()
+        .sent()
         .await
         .context("ListenBrainz did not answer")?
         .error_for_status()?

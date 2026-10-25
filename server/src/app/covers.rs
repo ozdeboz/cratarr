@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use super::reach::Sent as _;
 
 /// What an undo token starts with.
 pub const UNDO: char = 'v';
@@ -185,7 +186,7 @@ async fn archive(
             break;
         }
         let mut out = Vec::new();
-        if let Ok(r) = http.get(format!("https://coverartarchive.org/{what}")).send().await
+        if let Ok(r) = http.get(format!("https://coverartarchive.org/{what}")).sent().await
             && r.status().is_success()
             && let Ok(v) = r.json::<serde_json::Value>().await
         {
@@ -272,7 +273,7 @@ pub async fn set(album: &str, url: &str) -> Result<String> {
     if !allowed(url) {
         bail!("That image is not one of the album's covers to choose from");
     }
-    let r = super::discover::http()?.get(url).timeout(Duration::from_secs(60)).send().await?.error_for_status()?;
+    let r = super::discover::http()?.get(url).timeout(Duration::from_secs(60)).sent().await?.error_for_status()?;
     if r.content_length().is_some_and(|n| n as usize > MOST_BYTES) {
         bail!("That image is too large");
     }

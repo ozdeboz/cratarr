@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use super::reach::Sent as _;
 
 /// The data folder's folder for them.
 const FOLDER: &str = "cover-cache";
@@ -130,7 +131,7 @@ async fn fetch(of: &Of) -> Result<Option<Vec<u8>>> {
 
 /// An image's bytes; `None` where there is none (404).
 async fn image(http: &reqwest::Client, url: &str) -> Result<Option<Vec<u8>>> {
-    let r = http.get(url).timeout(Duration::from_secs(30)).send().await?;
+    let r = http.get(url).timeout(Duration::from_secs(30)).sent().await?;
     if r.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }

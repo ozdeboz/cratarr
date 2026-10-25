@@ -1,17 +1,12 @@
 //! MusicBrainz as Settings shows it (0.9.6, the owner: Connections › Discovery and metadata, no key): when Cratarr
 //! last reached it, the last time it could not, and how far the background pass (original years and release types) has
-//! come. Every question to MusicBrainz notes its answer (`Noted`).
+//! come. Every question to MusicBrainz notes its answer (`reach`).
 
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use anyhow::Result;
 use serde::Serialize;
 
-/// When MusicBrainz last answered (epoch s; 0: not since the server started).
-static LAST_OK: AtomicI64 = AtomicI64::new(0);
-/// The last time it could not be asked, and why.
-static LAST_ERROR: Mutex<Option<(i64, String)>> = Mutex::new(None);
 /// Whether the background pass is asking now, and when it asks next (epoch s; 0: not known).
 pub static PASS_RUNNING: AtomicBool = AtomicBool::new(false);
 pub static PASS_NEXT: AtomicI64 = AtomicI64::new(0);
@@ -29,39 +24,8 @@ impl Asked for reqwest::RequestBuilder {
             if !super::switches::is_on(super::switches::MUSICBRAINZ) {
                 anyhow::bail!("MusicBrainz is switched off");
             }
-            Ok(self.send().await.noted()?)
+            Ok(super::reach::Sent::sent(self).await?)
         }
-    }
-}
-
-/// A question's answer noted: reached (any answer but MusicBrainz busy or refusing), or not and why.
-pub trait Noted {
-    fn noted(self) -> Self;
-}
-
-impl Noted for reqwest::Result<reqwest::Response> {
-    fn noted(self) -> Self {
-        let now = super::moment::now_secs();
-        match &self {
-            Ok(r) if !(r.status().is_server_error() || r.status() == reqwest::StatusCode::TOO_MANY_REQUESTS || r.status() == reqwest::StatusCode::FORBIDDEN) => {
-                LAST_OK.store(now, Ordering::Relaxed);
-            }
-            Ok(r) => *LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = Some((now, format!("MusicBrainz answered {}", r.status()))),
-            Err(e) => *LAST_ERROR.lock().unwrap_or_else(|p| p.into_inner()) = Some((now, plain(e))),
-        }
-        self
-    }
-}
-
-/// A request's error without its address (an artist's name in a query is no one's business in Settings).
-fn plain(e: &reqwest::Error) -> String {
-    if e.is_timeout() {
-        "MusicBrainz did not answer in time".into()
-    } else if e.is_connect() {
-        "MusicBrainz could not be reached".into()
-    } else {
-        let said = e.to_string();
-        format!("MusicBrainz: {}", said.split(" for url").next().unwrap_or(&said))
     }
 }
 
@@ -108,10 +72,11 @@ pub async fn status() -> Result<Status> {
         None => (0, 0),
     };
     let next = PASS_NEXT.load(Ordering::Relaxed);
+    let reach = super::reach::state("musicbrainz");
     Ok(Status {
         enabled: super::switches::is_on(super::switches::MUSICBRAINZ),
-        last_ok: Some(LAST_OK.load(Ordering::Relaxed)).filter(|t| *t > 0),
-        last_error: LAST_ERROR.lock().unwrap_or_else(|e| e.into_inner()).clone().map(|(at, message)| Failed { at, message }),
+        last_ok: Some(reach.last_ok).filter(|t| *t > 0),
+        last_error: reach.last_error.map(|(at, message)| Failed { at, message }),
         pace_secs: PACE_SECS,
         passes: vec![Pass { name: "Release types and years", done: asked, total: of, running: PASS_RUNNING.load(Ordering::Relaxed), next_at: Some(next).filter(|t| *t > 0) }],
         asked,
