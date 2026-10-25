@@ -8,7 +8,7 @@
   import type { Snippet } from 'svelte';
   import { tick } from 'svelte';
   import { getArtistAbout, getArtistMissing, getDiscoverArtist, type ListedAlbum, type MissingAlbum, type PhotoCredit } from './api';
-  import { DISCOVER } from './discoverArtist';
+  import { cameFrom, DISCOVER } from './discoverArtist';
   import { pageAsked } from './artistAbout.svelte';
   import AlbumCard from './AlbumCard.svelte';
   import RelatedArtists from './RelatedArtists.svelte';
@@ -83,16 +83,18 @@
   // Not in your library (the owner, 2026-10-25; the server's lookup since 0.9.3): the artist's albums MusicBrainz lists
   // that the library lacks, asked when the page opens; while the server is still reading their discography (`looking`)
   // asked again a little later. A tap opens one on Bandcamp, else its menu (Want; lib/ElsewhereAlbum). Cratarr's own
-  // library's artists only.
+  // library's artists, and an artist from Discover (the owner, 2026-10-26: whatever Discover suggests today), found by
+  // the Bandcamp album the page was opened from where its release group is known.
   let missing = $state<MissingAlbum[]>([]);
   $effect(() => {
     const [s, n] = [source, name];
     missing = [];
-    if (s !== 'cratarr') return;
+    if (s !== 'cratarr' && s !== DISCOVER) return;
+    const hint = s === DISCOVER && cameFrom.name?.toLowerCase() === n.toLowerCase() ? { release_group: cameFrom.album?.release_group ?? null } : {};
     let gone = false;
     let t = 0;
     const ask = (left: number) =>
-      getArtistMissing(n).then(
+      getArtistMissing(n, hint).then(
         (r) => {
           if (gone) return;
           missing = r.albums;

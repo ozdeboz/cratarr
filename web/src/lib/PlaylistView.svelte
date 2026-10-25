@@ -1856,7 +1856,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {#if details}<p class="details">{#if albumDot}<i class="dot" style:background={albumDot.colour} role="img" aria-label={albumDot.name}></i>{/if}{details}</p>{/if}
           {#if multi}<p class="details">{ids.join(', ')}</p>{/if}
           {#if album && albumHead?.artist}
-            <button class="chip" disabled={!albumBy} onclick={() => albumBy && goToArtist(album.source, albumBy)}
+            <button class="chip" disabled={!albumBy} onclick={() => albumBy && goToArtist(album.source, albumBy, album.source === BANDCAMP ? { id: album.id, title } : null)}
               >{#if covers[0]}<span class="chip-art"><Cover src={covers[0]} /></span>{/if}<span>{albumHead.artist}</span>{#if albumByFavorite}<i class="liked" role="img" aria-label="Favourite"
                   ><Icon name="heart" size={16} /></i
                 >{/if}</button

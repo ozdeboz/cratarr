@@ -54,7 +54,7 @@
           <MenuEntry icon="user" label="Go to {album.artist}" onclick={act(() => goToArtist('cratarr', album.artist!))} />
         {:else if album.artist}
           <!-- Their page from Discover (lib/discoverArtist); Bandcamp's own, its site, in the third group. -->
-          <MenuEntry icon="user" label="Go to {album.artist}" onclick={act(() => goToArtist(DISCOVER, album.artist!))} />
+          <MenuEntry icon="user" label="Go to {album.artist}" onclick={act(() => goToArtist(DISCOVER, album.artist!, album))} />
         {/if}
       </MenuGroup>
       <DiscoverEntries {page} artist={album.artist} album={album.title} {onclose} />

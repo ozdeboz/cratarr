@@ -3,6 +3,7 @@
 // group, as the server answers them (it keeps every find a month) and as this device found them since; and Play on
 // Bandcamp, as Discover's cards have it (decision 0071), one place for every cover that plays one.
 import { previewBandcamp } from './api';
+import { albumIdOf } from './bandcampPreview';
 import { playQueue } from './localPlayer.svelte';
 import { isLocal } from './output.svelte';
 import { toast } from './toast.svelte';
@@ -10,6 +11,8 @@ import { toast } from './toast.svelte';
 const pages = $state<Record<string, string>>({});
 /** An album's page on Bandcamp by its release group, where one is known. */
 export const bandcampOf = (release_group: string, told?: string | null) => told ?? pages[release_group] ?? null;
+/** The release group a Bandcamp album (its id, lib/bandcampPreview albumIdOf) was found for, where it was. */
+export const releaseGroupOfBandcamp = (album: string) => Object.entries(pages).find(([, p]) => albumIdOf(p) === album)?.[0] ?? null;
 export function rememberBandcamp(release_group: string, page: string) {
   pages[release_group] = page;
 }

@@ -20,7 +20,8 @@ import { enqueue, type LocalTrack } from './localPlayer.svelte';
 import { isLocal, playAlbumHere, playPlaylistFrom } from './output.svelte';
 import { artistSubject, viewOver } from './panel.svelte';
 import { BANDCAMP } from './bandcampPreview';
-import { DISCOVER } from './discoverArtist';
+import { cameFrom, DISCOVER } from './discoverArtist';
+import { releaseGroupOfBandcamp } from './bandcampFound.svelte';
 import { prefs } from './prefs.svelte';
 import { libraryShown } from './sources.svelte';
 import { toast } from './toast.svelte';
@@ -164,8 +165,10 @@ export const mainArtist = (artist: string | null | undefined) => artist?.split(/
 
 /** Go to artist: the artist's panel (decided 2026-10-16, as Symfonium's), over what the panel views (back returns to
  *  it). From the full-screen player, which closes, or it would cover the panel. */
-export function goToArtist(source: string, name: string) {
+export function goToArtist(source: string, name: string, from: { id: string; title: string; year?: number | null } | null = null) {
   if (player.full) player.full = false;
+  // From a Bandcamp album (`from`): kept for their page from Discover (lib/discoverArtist cameFrom).
+  if (from) Object.assign(cameFrom, { name, album: { id: from.id, title: from.title, year: from.year ?? null, release_group: releaseGroupOfBandcamp(from.id) } });
   // From something on Bandcamp (an album, a preview's track): no server of that name (the owner, 2026-10-25: it said
   // "server is not connected"), so the library's page where it has the artist, else theirs from Discover.
   if (source === BANDCAMP) source = hasArtist(name) ? 'cratarr' : DISCOVER;

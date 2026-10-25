@@ -1716,8 +1716,14 @@ export type MissingAlbum = {
 /** Every album missing from the library's artists read so far (`artists`: how many), newest first. */
 export const getDiscoverMissing = () => quietly<{ albums: MissingAlbum[]; artists: number }>('/api/discover/missing');
 /** One artist's missing albums (their page). */
-export const getArtistMissing = (name: string) =>
-  quietly<{ albums: MissingAlbum[]; looking: boolean }>(`/api/artists/missing?name=${encodeURIComponent(name)}`);
+/** `release_group`: one of theirs, so an artist the library lacks is found by it on MusicBrainz (a5, 0.9.6); `mbid`
+ *  the artist's own. */
+export const getArtistMissing = (name: string, hint: { release_group?: string | null; mbid?: string | null } = {}) => {
+  const q = new URLSearchParams({ name });
+  if (hint.mbid) q.set('mbid', hint.mbid);
+  if (hint.release_group) q.set('release_group', hint.release_group);
+  return quietly<{ albums: MissingAlbum[]; looking: boolean }>(`/api/artists/missing?${q}`);
+};
 /** What Discover leaves out for the account: its answers (Not interested: `no`, Hide: `hidden`), the artists left out. */
 export type DiscoverExcluded = { key: string; album: string; artist: string; year?: number | null; cover?: string | null; how: 'no' | 'hidden'; at: number };
 export const getDiscoverExcluded = () => quietly<{ albums: DiscoverExcluded[]; artists: { artist: string; key: string; at: number }[] }>('/api/discover/excluded');
