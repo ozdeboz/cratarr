@@ -456,6 +456,22 @@ pub trait Source: Send + Sync {
         Box::pin(async { anyhow::bail!("this server cannot list an album's tracks") })
     }
 
+    /// Several albums' tracks, each with its album's id: the albums in the order given, each one's in play order (0.9.4:
+    /// Select › All's menu on thousands of albums). One album after another where the source has no better way; an
+    /// album it cannot read left out.
+    fn tracks_of_albums<'a>(&'a self, albums: &'a [String]) -> Fut<'a, Vec<(String, AlbumTrack)>> {
+        Box::pin(async move {
+            let mut out = Vec::new();
+            for a in albums {
+                match self.tracks_of_album(a).await {
+                    Ok(tracks) => out.extend(tracks.into_iter().map(|t| (a.clone(), t))),
+                    Err(e) => tracing::debug!("album {a}: its tracks not read: {e:#}"),
+                }
+            }
+            Ok(out)
+        })
+    }
+
     /// Whether this source implements [`Source::track_paths`], which the catalogue uses to know its track ids.
     fn lists_tracks(&self) -> bool {
         false

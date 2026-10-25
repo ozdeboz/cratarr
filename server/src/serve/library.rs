@@ -989,6 +989,12 @@ mod tests {
         let rows = lib.track_rows(&words("bjork"), &[]).unwrap();
         assert_eq!((rows.len(), rows[0].album.as_str()), (2, "Homogenic"));
         assert!(lib.track_rows(&words("bjork"), &[0]).unwrap().is_empty());
+        // Several albums' tracks: the albums in the order asked for, each one's in its own; one asked twice once.
+        let rows = lib.track_rows(&[], &[]).unwrap();
+        let id_of = |album: &str| rows.iter().find(|r| r.album == album).unwrap().album_id.clone();
+        let (homogenic, orb) = (id_of("Homogenic"), id_of("Adventures Beyond the Ultraworld"));
+        let songs = lib.songs_of_albums(&[orb.clone(), homogenic.clone(), "nothing".into(), orb]).unwrap();
+        assert_eq!(songs.iter().map(|s| s.title.as_str()).collect::<Vec<_>>(), ["Little Fluffy Clouds", "Hunter", "Jóga"]);
         assert_eq!(fts_query("a OR b").as_deref(), Some("(\"a\" OR \"a\"*) AND (\"OR\" OR \"OR\"*) AND (\"b\" OR \"b\"*)"), "quoted: a word, not an operator");
     }
 

@@ -590,6 +590,23 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The songs of these albums, the albums in the order given, each one's in its own order (disc, track, file), as
+    /// `album` has them; read 500 albums at a time (0.9.4: several albums' tracks in one call).
+    pub fn songs_of_albums(&self, albums: &[String]) -> Result<Vec<Song>> {
+        let db = self.db();
+        let mut of: HashMap<String, Vec<Song>> = HashMap::new();
+        for chunk in albums.chunks(500) {
+            let marks = vec!["?"; chunk.len()].join(", ");
+            let mut st = db.prepare(&format!("SELECT {SONG_COLS} FROM songs s WHERE s.album_id IN ({marks}) ORDER BY coalesce(s.disc_no, 1), s.track_no, s.rel"))?;
+            let mut songs = st.query_map(params_from_iter(chunk.iter()), song_of)?.collect::<rusqlite::Result<Vec<_>>>()?;
+            self.song_artists(&db, &mut songs)?;
+            for s in songs {
+                of.entry(s.album_id.clone()).or_default().push(s);
+            }
+        }
+        Ok(albums.iter().filter_map(|a| of.remove(a)).flatten().collect())
+    }
+
     /// Every track for the Library page's Tracks (0.9.4): those whose title, artist and album hold the words (every one
     /// without any), but those in the catalogue folders `off` (libraries switched off); in no order.
     pub fn track_rows(&self, words: &[String], off: &[i64]) -> Result<Vec<TrackRow>> {
