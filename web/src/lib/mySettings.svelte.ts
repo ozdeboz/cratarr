@@ -8,8 +8,11 @@ import { ApiError, getMySettings, putMySettings } from './api';
 import type { AutoplayMode, RadioBy } from './localPlayer.svelte';
 
 export type Choices = {
+  /** Radio as it starts when switched on: by what, how many; leaving favourites out (both). */
   radio?: { by: RadioBy; count: number; skip_favourites: boolean };
-  autoplay?: { mode: AutoplayMode; albums: boolean } | null;
+  /** Autoplay as it starts when switched on, and whether each new queue starts with it on (auto arm; absent: armed, as
+   *  before). Null, as kept before 0.9.5: not armed. */
+  autoplay?: { mode: AutoplayMode; albums: boolean; arm?: boolean } | null;
   similar_by?: Signal[];
   /** What Radio and Autoplay choose from (the owner, 2026-10-25): Cratarr's own libraries (null: all of them), and
    *  Discover's suggestions on Bandcamp. */
@@ -43,11 +46,47 @@ export function setSimilarBy(by: Signal[]) {
   keep({ similar_by: by });
 }
 
+/** Radio's and Autoplay's defaults (the owner, 2026-10-25: Settings' Radio and Autoplay "should set defaults ... and
+ *  also offer things like auto arm"; they "kick in when autoplay is initialized after first being off"): how each starts
+ *  when switched on from off, and auto arm, whether a new queue starts with Autoplay on. Changed while playing, they
+ *  are that queue's own. */
+export type Defaults = {
+  radio: { by: RadioBy; count: number };
+  autoplay: { arm: boolean; mode: AutoplayMode; albums: boolean };
+  skipFavourites: boolean;
+};
+export const defaults = $state<Defaults>({
+  radio: { by: 'track', count: 5 },
+  autoplay: { arm: true, mode: 'similar', albums: false },
+  skipFavourites: false,
+});
+/** Whether the defaults were read (a server keeping none: the player keeps what it has). */
+export const defaultsKnown = $state({ yes: false });
+export function setDefaults(part: { radio?: Partial<Defaults['radio']>; autoplay?: Partial<Defaults['autoplay']>; skipFavourites?: boolean }) {
+  if (part.radio) defaults.radio = { ...defaults.radio, ...part.radio };
+  if (part.autoplay) defaults.autoplay = { ...defaults.autoplay, ...part.autoplay };
+  if (part.skipFavourites !== undefined) defaults.skipFavourites = part.skipFavourites;
+  const r = defaults.radio;
+  const a = defaults.autoplay;
+  keep({ radio: { by: r.by, count: r.count, skip_favourites: defaults.skipFavourites }, autoplay: { arm: a.arm, mode: a.mode, albums: a.albums } });
+}
+
 /** The Personal parts' own (Radio and Autoplay, Tracking), as kept. */
 export const mine = $state({ moreFrom: { libraries: null, bandcamp: false } as MoreFrom, tracking: true });
-export function setMoreFrom(part: Partial<MoreFrom>) {
+/** What Radio and Autoplay choose from, changed: saved at once (the server reads it for every player of the account),
+ *  so what they pick next comes from there. */
+export function setMoreFrom(part: Partial<MoreFrom>): Promise<void> {
   mine.moreFrom = { ...mine.moreFrom, ...part };
   keep({ more_music: mine.moreFrom });
+  return flush();
+}
+/** Whether a library of Cratarr's own is one Radio and Autoplay choose from. */
+export const libraryOn = (id: string) => mine.moreFrom.libraries === null || mine.moreFrom.libraries.includes(id);
+/** A library on or off, of `all` there are: every one on is all of them (null), as a library added later is then on
+ *  too. */
+export function turnLibrary(id: string, on: boolean, all: string[]) {
+  const now = all.filter((x) => (x === id ? on : libraryOn(x)));
+  return setMoreFrom({ libraries: now.length === all.length ? null : now });
 }
 export function setTracking(on: boolean) {
   mine.tracking = on;
@@ -71,6 +110,14 @@ export async function loadMine(): Promise<Choices | null> {
     const from = (settings as Choices).more_music;
     mine.moreFrom = { libraries: Array.isArray(from?.libraries) ? from.libraries : null, bandcamp: !!from?.bandcamp };
     mine.tracking = (settings as Choices).tracking !== false;
+    const c = settings as Choices;
+    if (c.radio) {
+      defaults.radio = { by: c.radio.by ?? 'track', count: c.radio.count > 0 ? c.radio.count : 5 };
+      defaults.skipFavourites = c.radio.skip_favourites === true;
+    }
+    if (c.autoplay === null) defaults.autoplay = { ...defaults.autoplay, arm: false };
+    else if (c.autoplay) defaults.autoplay = { arm: c.autoplay.arm !== false, mode: c.autoplay.mode ?? 'similar', albums: c.autoplay.albums === true };
+    defaultsKnown.yes = true;
     return r.version ? (settings as Choices) : null;
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) kept = false;
@@ -84,6 +131,12 @@ export function keep(part: Partial<Choices>) {
   changed = { ...changed, ...part };
   clearTimeout(timer);
   timer = setTimeout(save, 1000);
+}
+
+/** What waits to be kept, kept now. */
+function flush(): Promise<void> {
+  clearTimeout(timer);
+  return kept ? save() : Promise.resolve();
 }
 
 async function save(again = true) {

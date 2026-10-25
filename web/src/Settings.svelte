@@ -5,8 +5,8 @@
   // on a roomy window, where a part is always open (App: the one last open), its row tinted; over the list on a phone,
   // as a playlist opens. About is a sheet from the info button, the pill's own (App, lib/AboutSheet).
   import { library } from './lib/albums.svelte';
-  import { moreMusicLine } from './lib/MoreMusicSheet.svelte';
-  import { mine } from './lib/mySettings.svelte';
+  import { AUTOPLAY_NAMES, RADIO_NAMES } from './lib/MoreMusicSheet.svelte';
+  import { defaults, mine } from './lib/mySettings.svelte';
   import { OWN } from './lib/sources.svelte';
   import { plural } from './lib/insights.svelte';
   import { deviceName } from './lib/playOnTarget.svelte';
@@ -159,7 +159,17 @@
         const off = (library.view?.sources.find((s) => s.id === OWN)?.library_info ?? []).filter(
           (l) => mine.moreFrom.libraries !== null && !mine.moreFrom.libraries.includes(l.id),
         );
-        return [moreMusicLine(), ...off.map((l) => `Not ${l.name}`), mine.moreFrom.bandcamp ? 'Bandcamp' : null].filter(Boolean).join(' · ');
+        const d = defaults;
+        return changed([
+          !d.autoplay.arm && 'No auto arm',
+          d.autoplay.mode !== 'similar' && AUTOPLAY_NAMES[d.autoplay.mode],
+          d.autoplay.albums && 'Queue albums',
+          d.radio.by !== 'track' && `Radio: ${RADIO_NAMES[d.radio.by]}`,
+          d.radio.count !== 5 && `${d.radio.count} after each track`,
+          d.skipFavourites && 'Ignore favourites',
+          ...off.map((l) => `Not ${l.name}`),
+          mine.moreFrom.bandcamp && 'Bandcamp',
+        ]);
       }
       case 'tracking':
         return changed([!mine.tracking && 'No play history']);

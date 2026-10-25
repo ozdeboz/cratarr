@@ -34,7 +34,10 @@
   import Switch from './Switch.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import SimilarBy from './SimilarBy.svelte';
-  import { RADIO_BYS, RADIO_MAX, setAutoplay, setRadio, setSkipFavourites } from './localPlayer.svelte';
+  import { RADIO_BYS, RADIO_MAX, setAutoplay, setRadio, setSkipFavourites, sourcesChanged } from './localPlayer.svelte';
+  import { library, readLibrary } from './albums.svelte';
+  import { libraryOn, mine, setMoreFrom, turnLibrary } from './mySettings.svelte';
+  import { OWN } from './sources.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
 
@@ -49,6 +52,12 @@
   ];
   const now = $derived<AutoplayMode | 'stop'>(local.autoplay?.mode ?? 'stop');
   const albums = $derived(local.autoplay?.albums ?? false);
+
+  // From (the owner, 2026-10-25: the sources in the sheet too, "otherwise there will be no way to control that"): the
+  // account's own, as Settings' Radio and Autoplay has them; every player reads them, so a change counts at once.
+  if (!library.view) readLibrary(false).catch(() => {});
+  const libraries = $derived(library.view?.sources.find((s) => s.id === OWN)?.library_info ?? []);
+  const changedThen = (p: Promise<void>) => p.then(sourcesChanged, () => {});
 </script>
 
 <MenuSheet label="More music" icon="radio" title="More music" chips={[moreMusicLine()]} {onclose}>
@@ -100,6 +109,18 @@
         checked={local.skipFavourites}
         onchange={setSkipFavourites}
       />
+      <Card title="From" note="where they find music" label="From">
+        {#each libraries as l (l.id)}
+          <Switch label={l.name} checked={libraryOn(l.id)} onchange={(on) => changedThen(turnLibrary(l.id, on, libraries.map((x) => x.id)))} />
+        {/each}
+        <Switch
+          label="Bandcamp"
+          hint="Discover's suggestions that play there, as previews."
+          hintWhenOn
+          checked={mine.moreFrom.bandcamp}
+          onchange={(on) => changedThen(setMoreFrom({ bandcamp: on }))}
+        />
+      </Card>
     {/if}
   </div>
 </MenuSheet>

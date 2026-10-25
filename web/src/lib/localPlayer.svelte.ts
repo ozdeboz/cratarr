@@ -15,7 +15,7 @@
 // server's /api/players), what it reports is shown in `local`, and the stream here is not used.
 
 import { cue } from './queueCue.svelte';
-import { keep, type Choices } from './mySettings.svelte';
+import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
 import { getTrackGain, playerCommand, radioNext, type TrackGain } from './api';
 import { prefs } from './prefs.svelte';
@@ -942,12 +942,13 @@ export function setRepeat(mode: Repeat) {
  *  stream, else the app or Cratarr's player). Off, or another choice or count while on, takes the inserts still to come
  *  out; on, the playing track gets them anew. What is not given stays. */
 export function setRadio(on: boolean, opts: { by?: RadioBy; count?: number } = {}) {
+  // Switched on from off: as the defaults say, where the choice does not (the owner, 2026-10-25).
+  if (on && !local.radio && defaultsKnown.yes) opts = { by: opts.by ?? defaults.radio.by, count: opts.count ?? defaults.radio.count };
   const count = opts.count === undefined ? undefined : Math.min(Math.max(Math.round(opts.count), 1), RADIO_MAX);
   const other = (opts.by !== undefined && opts.by !== local.radioBy) || (count !== undefined && count !== local.radioCount);
   const anew = local.radio && on && other;
   if (opts.by !== undefined) local.radioBy = opts.by;
   if (count !== undefined) local.radioCount = count;
-  if (other) keepRadio();
   local.radio = on;
   if (!on || anew) dropAhead('radio');
   if (handed()) {
@@ -963,10 +964,19 @@ export function setRadio(on: boolean, opts: { by?: RadioBy; count?: number } = {
 export function setSkipFavourites(on: boolean) {
   if (on === local.skipFavourites) return;
   local.skipFavourites = on;
-  keepRadio();
   dropAhead('radio');
   dropAhead('autoplay');
   if (handed()) return hand('skip_favourites', { on });
+  insertedFor.clear();
+  fill();
+}
+
+/** What Radio and Autoplay choose from changed (lib/mySettings' more_music, already kept): their picks still to come
+ *  out, and picked anew from there, as when favourites are left out. */
+export function sourcesChanged() {
+  dropAhead('radio');
+  dropAhead('autoplay');
+  if (handed()) return;
   insertedFor.clear();
   fill();
 }
@@ -977,7 +987,6 @@ export function setSkipFavourites(on: boolean) {
 export function setAutoplay(mode: AutoplayMode | 'stop', opts: { albums?: boolean; restart?: boolean; seed?: string[]; within?: string | null } = {}) {
   if (mode === 'stop') {
     local.autoplay = null;
-    keep({ autoplay: null });
     dropAhead('autoplay');
     if (handed()) hand('autoplay', { mode: 'stop' });
     return;
@@ -985,14 +994,14 @@ export function setAutoplay(mode: AutoplayMode | 'stop', opts: { albums?: boolea
   const was = local.autoplay;
   const next: Autoplay = {
     mode,
-    albums: opts.albums ?? was?.albums ?? false,
+    // Switched on from off: whole albums as the defaults say (the owner, 2026-10-25).
+    albums: opts.albums ?? was?.albums ?? (defaultsKnown.yes ? defaults.autoplay.albums : false),
     restart: opts.restart ?? was?.restart ?? false,
     seed: opts.seed ?? was?.seed ?? [],
     within: opts.within === undefined ? (was?.within ?? null) : opts.within,
   };
   if (was && (was.mode !== next.mode || was.albums !== next.albums || was.within !== next.within)) dropAhead('autoplay');
   local.autoplay = next;
-  keep({ autoplay: { mode: next.mode, albums: next.albums } });
   if (local.repeat === 'all') local.repeat = 'off';
   // What is given only: the player keeps the rest (a player's view does not show the seed here).
   if (handed()) {
@@ -1007,19 +1016,29 @@ export function setAutoplay(mode: AutoplayMode | 'stop', opts: { albums?: boolea
   fillAutoplay();
 }
 
-/** Radio's choices (and leaving favourites out) as one's own settings keep them (lib/mySettings). */
-const keepRadio = () => keep({ radio: { by: local.radioBy, count: local.radioCount, skip_favourites: local.skipFavourites } });
+/** Auto arm (lib/mySettings' defaults, the owner 2026-10-25), as a new queue starts: armed, Autoplay that was off
+ *  starts as the defaults say. Never off by it: on, Autoplay stays as it is, armed or not ("I don't want autoplay to
+ *  stop in that case"). */
+function arm() {
+  if (!defaultsKnown.yes) return;
+  const a = defaults.autoplay;
+  if (a.arm && !local.autoplay) local.autoplay = { mode: a.mode, albums: a.albums, restart: false, seed: [], within: null };
+  if (local.autoplay && local.repeat === 'all') local.repeat = 'off';
+}
+/** Auto arm told to the player that plays elsewhere, after its new queue. */
+function handArm() {
+  if (!defaultsKnown.yes) return;
+  hand('autoplay', local.autoplay ? { mode: local.autoplay.mode, albums: local.autoplay.albums } : { mode: 'stop' });
+}
 
-/** One's own choices (decision 0051, lib/mySettings), for a page that starts with nothing playing: Radio's, leaving
- *  favourites out, Autoplay's. A player's own state, reported, comes over them. */
-export function startWith(c: Choices) {
-  if (local.queue.length || local.index >= 0) return;
-  if (c.radio) {
-    if (RADIO_BYS.includes(c.radio.by)) local.radioBy = c.radio.by;
-    if (c.radio.count > 0) local.radioCount = Math.min(Math.round(c.radio.count), RADIO_MAX);
-    local.skipFavourites = c.radio.skip_favourites === true;
-  }
-  if (c.autoplay !== undefined) local.autoplay = autoplayOf(c.autoplay);
+/** One's own choices (decision 0051, lib/mySettings), for a page that starts with nothing playing: Radio as it starts,
+ *  leaving favourites out, and auto arm. A player's own state, reported, comes over them. */
+export function startWith(_c: Choices) {
+  if (local.queue.length || local.index >= 0 || !defaultsKnown.yes) return;
+  if (RADIO_BYS.includes(defaults.radio.by)) local.radioBy = defaults.radio.by;
+  local.radioCount = Math.min(Math.max(Math.round(defaults.radio.count), 1), RADIO_MAX);
+  local.skipFavourites = defaults.skipFavourites;
+  arm();
 }
 
 /** A lane's tracks still to come, out here (the player that plays elsewhere does the same with what it is told). */
@@ -1155,7 +1174,7 @@ export const restoreUpcoming = (tracks: LocalTrack[]) => replaceUpcoming(tracks)
 /** Plays `tracks` from `index`, `position` seconds into it; `shuffle`: all of them mixed, from the first. Something new
  *  replaces the album or playlist that played, not what was added by hand: those come right after its first track, as
  *  before (decision 0033's two lanes). */
-export function playQueue(tracks: LocalTrack[], index = 0, from: string | null = null, position = 0, shuffle = false) {
+export function playQueue(tracks: LocalTrack[], index = 0, from: string | null = null, position = 0, shuffle = false, moved = false) {
   // Played here: the queue it leaves is kept as it stood (decision 0033, amended); a player that plays elsewhere keeps
   // its own.
   const left = handed() ? null : standing();
@@ -1165,9 +1184,14 @@ export function playQueue(tracks: LocalTrack[], index = 0, from: string | null =
   local.shuffled = shuffle || looksShuffled(tracks, index);
   // Something new turns repeat one off; repeat all stays (decision 0033, amended).
   if (local.repeat === 'one') local.repeat = 'off';
-  // Radio and Autoplay stay on; Autoplay now after the new album or playlist, which is its seed. Autoplay's tracks only
-  // are "Start radio", which brings its own seed (decision 0036, amended).
-  if (local.autoplay && !tracks.every((t) => t.lane === 'autoplay')) local.autoplay = { ...local.autoplay, seed: [], within: null };
+  // Radio stays as it is; so does Autoplay, but off and armed it starts (the owner, 2026-10-25: auto arm), after the
+  // new album or playlist, which is its seed. Autoplay's tracks only are "Start radio", which brings
+  // its own seed (decision 0036, amended); a queue moved here whole keeps what it had.
+  const anew = !moved && !tracks.every((t) => t.lane === 'autoplay');
+  if (anew) {
+    arm();
+    if (local.autoplay) local.autoplay = { ...local.autoplay, seed: [], within: null };
+  }
   // Those the new queue holds already (a queue moved here whole) are not added twice.
   const holds = (t: LocalTrack) => tracks.some((x) => x === t || (!!t.entry && x.entry === t.entry));
   const ahead = local.index < 0 ? [] : addedAhead(local.queue, local.index).filter((t) => !holds(t));
@@ -1177,7 +1201,9 @@ export function playQueue(tracks: LocalTrack[], index = 0, from: string | null =
   if (handed()) {
     Object.assign(local, { index, position, paused: false, error: null });
     reported = { positionMs: position * 1000, at: performance.now() };
-    return hand('queue', { tracks, index, positionMs: Math.round(position * 1000), play: true, shuffled: local.shuffled, name: from });
+    hand('queue', { tracks, index, positionMs: Math.round(position * 1000), play: true, shuffled: local.shuffled, name: from });
+    if (anew) handArm();
+    return;
   }
   keepLocal(left, newQueueId());
   fresh(index, position);

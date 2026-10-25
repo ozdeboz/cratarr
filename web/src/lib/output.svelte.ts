@@ -372,7 +372,7 @@ export async function moveTo(output: typeof prefs.output) {
     setTimeout(refresh, 700);
     return;
   }
-  playQueue(was.tracks, was.index, null, was.position > 1 ? was.position : 0);
+  playQueue(was.tracks, was.index, null, was.position > 1 ? was.position : 0, false, true);
 }
 
 /** Whether music plays (or waits, paused) where the music plays now: what a move would take along. */
