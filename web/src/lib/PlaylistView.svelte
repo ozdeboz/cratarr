@@ -108,7 +108,7 @@
   import SubjectMenu from './SubjectMenu.svelte';
   import SelectionMenu from './SelectionMenu.svelte';
   import { pickOf, playCollection } from './play.svelte';
-  import { addedOn, artistPictureId, goToArtist, library, mainArtist, readLibrary } from './albums.svelte';
+  import { addedOn, artistPictureId, goToArtist, library, libraryDot, mainArtist, readLibrary } from './albums.svelte';
   import AlbumAbout from './AlbumAbout.svelte';
   import AlbumMore from './AlbumMore.svelte';
   import SimilarAlbums from './SimilarAlbums.svelte';
@@ -190,6 +190,8 @@
   /** What the artist's answer says besides their tracks: their albums, what they appear on, the heart. */
   let artistHead = $state<(Pick<ArtistView, 'albums' | 'appears_on' | 'favorite'> & { studio?: number | null }) | null>(null);
   /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
+  // The album's library, as a dot before its details (0.9.3): which copy this is, beside its year.
+  const albumDot = $derived(album ? libraryDot(album.source, { id: album.id }) : null);
   let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners'> & { kbps: number | null } | null>(null);
   /** An album's or a crate's genres, most shared first, as its first page came (a playlist's are its Insights'). */
   let listGenres = $state<string[] | null>(null);
@@ -1835,7 +1837,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {:else}
             <h2>{title}</h2>
           {/if}
-          {#if details}<p class="details">{details}</p>{/if}
+          {#if details}<p class="details">{#if albumDot}<i class="dot" style:background={albumDot.colour} role="img" aria-label={albumDot.name}></i>{/if}{details}</p>{/if}
           {#if multi}<p class="details">{ids.join(', ')}</p>{/if}
           {#if album && albumHead?.artist}
             <button class="chip" disabled={!albumBy} onclick={() => albumBy && goToArtist(album.source, albumBy)}
@@ -3065,5 +3067,15 @@ ${r.album_artist ?? r.artist ?? ''}`;
     display: grid;
     place-items: center;
     padding: 16px 0;
+  }
+
+  /* The album's library's dot, as an album list's tile has it. */
+  .details .dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 6px;
+    border-radius: 50%;
+    vertical-align: 1px;
   }
 </style>
