@@ -221,7 +221,7 @@
 {/snippet}
 
 {#if np}
-  <div class="qback" class:screen role="presentation" onclick={onclose} transition:fade={{ duration: SHEET_OUT }}></div>
+  <div class="qback" class:screen role="presentation" onclick={onclose} transition:fade|global={{ duration: SHEET_OUT }}></div>
   <div
     class="queue"
     class:screen
@@ -231,8 +231,8 @@
     style:transform={pull ? `translateY(${pull}px)` : null}
     class:pulling={pull !== 0}
     use:sheetDrag={{ onclose, ondrag: (d) => (pull = d) }}
-    in:fly={{ y: 600, duration: reducedMotion() ? 0 : SHEET_IN, easing: decelerate }}
-    out:fly={{ y: 600, duration: reducedMotion() ? 0 : SHEET_OUT, easing: decelerate }}
+    in:fly|global={{ y: 600, duration: reducedMotion() ? 0 : SHEET_IN, easing: decelerate }}
+    out:fly|global={{ y: 600, duration: reducedMotion() ? 0 : SHEET_OUT, easing: decelerate }}
   >
     {#if src && !coverBroken(src)}<img class="blur" {src} alt="" aria-hidden="true" onerror={() => coverBroke(src)} />{/if}
     <div class="veil"></div>
