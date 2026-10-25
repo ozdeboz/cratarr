@@ -10,40 +10,33 @@
   import { RADIO_BYS, RADIO_MAX } from '../localPlayer.svelte';
   import { AUTOPLAY_NAMES, RADIO_NAMES } from '../MoreMusicSheet.svelte';
   import { defaults, libraryOn, loadMine, mine, setDefaults, setMoreFrom, setSimilarBy, similar, SIGNALS, turnLibrary } from '../mySettings.svelte';
-  import { openThing } from '../panel.svelte';
-  import { nameThing } from '../settingsSections.svelte';
+  import MenuSheet from '../MenuSheet.svelte';
+  import { panSafe } from '../panSafe';
+  import SettingRow from '../SettingRow.svelte';
   import OrderList from './OrderList.svelte';
   import { OWN } from '../sources.svelte';
   import ChoiceSheet from './ChoiceSheet.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
 
-  let { thing = null }: { thing?: string | null } = $props();
-
   void loadMine();
-  // Similar by on its own page (`thing`: `similar`), as Settings' lists are (lib/settings/OrderList): the ones on in
-  // their order, the first counting most; all of them while none is chosen.
-  const SIMILAR = 'similar';
-  nameThing(() => (thing === SIMILAR ? 'Similar by' : null));
+  // Similar by in a sheet, as Radio's Like (the owner, 2026-10-25), its list as Settings' lists are
+  // (lib/settings/OrderList): the ones on in their order, the first counting most; all of them while none is chosen.
   const equal = $derived(similar.by.length === 0);
   const similarOn = $derived(equal ? SIGNALS.map((s) => s.id) : similar.by);
   const similarLine = $derived(equal ? 'All, equally' : similar.by.map((id) => SIGNALS.find((s) => s.id === id)?.label).join(', '));
   if (!library.view) readLibrary(false).catch(() => {});
 
-  let choosing = $state<'mode' | 'by' | 'count' | null>(null);
+  let choosing = $state<'mode' | 'by' | 'count' | 'similar' | null>(null);
   const MODES = (Object.entries(AUTOPLAY_NAMES) as [AutoplayMode, string][]).map(([value, label]) => ({ value, label }));
   const BYS = RADIO_BYS.map((by) => ({ value: by, label: RADIO_NAMES[by] }));
-  const COUNTS = Array.from({ length: RADIO_MAX }, (_, i) => ({ value: String(i + 1), label: String(i + 1) }));
+  // How many after each track: a slider in a sheet (the owner, 2026-10-25), as the More music sheet's; the number
+  // follows the finger and is kept when it lifts.
+  let dragging = $state<number | null>(null);
 
   const libraries = $derived(library.view?.sources.find((s) => s.id === OWN)?.library_info ?? []);
 </script>
 
-{#if thing === SIMILAR}
-  <Group more={equal ? 'All count the same.' : 'The first counts most, the next half as much, and so on.'}>
-    <OrderList items={SIGNALS} on={similarOn} label="Similar by" onchange={(on) => on.length && setSimilarBy(on)} />
-  </Group>
-  {#if !equal}<Group><Item name="All the same" kind="add" onclick={() => setSimilarBy([])} /></Group>{/if}
-{:else}
 <Group title="Autoplay" more="What plays when the queue ends. Auto arm: a new queue turns Autoplay on when it was off; off, a new queue leaves it as it was. Turned on, it starts as set here.">
   <Item name="Auto arm" toggle={{ checked: defaults.autoplay.arm, onchange: (on) => setDefaults({ autoplay: { arm: on } }) }} />
   <Item name="Plays" value={AUTOPLAY_NAMES[defaults.autoplay.mode]} onclick={() => (choosing = 'mode')} />
@@ -54,7 +47,7 @@
   <Item name="After each track" value={String(defaults.radio.count)} onclick={() => (choosing = 'count')} />
 </Group>
 <Group title="Both" more="What makes music alike for Radio and Autoplay.">
-  <Item name="Similar by" value={similarLine} onclick={() => openThing('radio', SIMILAR)} />
+  <Item name="Similar by" value={similarLine} onclick={() => (choosing = 'similar')} />
   <Item name="Ignore favourites" toggle={{ checked: defaults.skipFavourites, onchange: (on) => setDefaults({ skipFavourites: on }) }} />
 </Group>
 <Group title="From" more="Where Radio and Autoplay find their music, whatever the pages show. Bandcamp: Discover's suggestions that play there, heard as previews; never counted as plays.">
@@ -63,11 +56,64 @@
   {/each}
   <Item name="Bandcamp" toggle={{ checked: mine.moreFrom.bandcamp, onchange: (on) => void setMoreFrom({ bandcamp: on }) }} />
 </Group>
-{/if}
-{#if choosing === 'mode'}
+{#if choosing === 'similar'}
+  <MenuSheet label="Similar by" title="Similar by" chips={[similarLine]} onclose={() => (choosing = null)}>
+    <div class="similar">
+      <Group more={equal ? 'All count the same.' : 'The first counts most, the next half as much, and so on.'}>
+        <OrderList items={SIGNALS} on={similarOn} label="Similar by" onchange={(on) => on.length && setSimilarBy(on)} />
+      </Group>
+      {#if !equal}<Group><Item name="All the same" kind="add" onclick={() => setSimilarBy([])} /></Group>{/if}
+    </div>
+  </MenuSheet>
+{:else if choosing === 'mode'}
   <ChoiceSheet title="Autoplay plays" options={MODES} value={defaults.autoplay.mode} onchange={(v: AutoplayMode) => setDefaults({ autoplay: { mode: v } })} onclose={() => (choosing = null)} />
 {:else if choosing === 'by'}
   <ChoiceSheet title="Radio like" options={BYS} value={defaults.radio.by} onchange={(v: RadioBy) => setDefaults({ radio: { by: v } })} onclose={() => (choosing = null)} />
 {:else if choosing === 'count'}
-  <ChoiceSheet title="After each track" options={COUNTS} value={String(defaults.radio.count)} onchange={(v: string) => setDefaults({ radio: { count: Number(v) } })} onclose={() => (choosing = null)} />
+  <MenuSheet label="After each track" title="After each track" onclose={() => (choosing = null)}>
+    <div class="count">
+      <SettingRow label="After each track">
+        <input
+          type="range"
+          use:panSafe
+          min="1"
+          max={RADIO_MAX}
+          step="1"
+          value={dragging ?? defaults.radio.count}
+          aria-label="Tracks after each track"
+          oninput={(e) => (dragging = Number(e.currentTarget.value))}
+          onchange={(e) => {
+            setDefaults({ radio: { count: Number(e.currentTarget.value) } });
+            dragging = null;
+          }}
+        />
+        <output>{dragging ?? defaults.radio.count}</output>
+      </SettingRow>
+    </div>
+  </MenuSheet>
 {/if}
+
+<style>
+  /* The sheet's list, as a part's groups. */
+  .similar {
+    padding: 0 16px 16px;
+  }
+
+  /* The slider, its number after it, as the More music sheet's. */
+  .count {
+    padding: 0 16px 16px;
+  }
+
+  .count input {
+    width: 11em;
+    max-width: 100%;
+    accent-color: var(--accent);
+  }
+
+  .count output {
+    width: 2ch;
+    margin-left: 8px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+</style>

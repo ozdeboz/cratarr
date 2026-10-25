@@ -156,7 +156,7 @@
     {:else if section === 'taste'}
       <TastePart {thing} />
     {:else if section === 'radio'}
-      <RadioPart {thing} />
+      <RadioPart />
     {:else if section === 'tracking'}
       <TrackingPart {thing} />
     {:else if section === 'users'}
