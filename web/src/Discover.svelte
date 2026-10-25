@@ -140,7 +140,9 @@
     const r = view?.requests?.[key];
     return !!r && (r.status === 'pending' || r.status === 'approved');
   };
-  const sec = $derived(sections(albums, { aroundCols }, (s) => mine.pickSkip.includes(s.key) || !!s.request || askedFor(s.key)));
+  /** Around artists' refreshes (its heading's button): each on to other suggestions of theirs. */
+  let aroundRound = $state(0);
+  const sec = $derived(sections(albums, { aroundCols, aroundRound }, (s) => mine.pickSkip.includes(s.key) || !!s.request || askedFor(s.key)));
   // More for you made as it comes near (lib/nearBlocks, as the Library's albums; the owner, 2026-10-25): blocks of six
   // whole rows of its grid (cards of 340 px at least, 12 px apart).
   const blocks = new NearBlocks();
@@ -286,7 +288,7 @@
       {#if me.admin && !view.lidarr}
         <p class="note">Want needs Lidarr: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>
       {/if}
-      <DiscoverSections {sec} {facts} owned={(name) => ownedBy.get(name.toLowerCase()) ?? 0} onopen={tap} onmenu={(a) => (opened = a)} onplay={preview} {previewing} {problemOf} {onproblem} status={(a) => a.request ?? markOf(view?.requests?.[a.key])} />
+      <DiscoverSections {sec} {facts} owned={(name) => ownedBy.get(name.toLowerCase()) ?? 0} onopen={tap} onmenu={(a) => (opened = a)} onplay={preview} {previewing} {problemOf} {onproblem} onaroundrefresh={() => aroundRound++} status={(a) => a.request ?? markOf(view?.requests?.[a.key])} />
       {#if sec.rest.length}<SectionHead title="More for you" />{/if}
       {#each restBlocks as block, bi (`${restCols}:${bi}`)}
       {@const key = `${restCols}:${bi}`}

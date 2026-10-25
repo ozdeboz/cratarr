@@ -4,13 +4,25 @@
   // at its end (`onplay`: Home's sections that play as a whole, the owner 2026-10-23).
   import Icon from './Icon.svelte';
 
-  let { title, onmore, onplay, busy = false }: { title: string; onmore?: () => void; onplay?: () => void; busy?: boolean } = $props();
+  /** `onrefresh`: a refresh at its end (Discover's Around artists: other artists, the owner 2026-10-26). */
+  let {
+    title,
+    onmore,
+    onplay,
+    onrefresh,
+    busy = false,
+  }: { title: string; onmore?: () => void; onplay?: () => void; onrefresh?: () => void; busy?: boolean } = $props();
 </script>
 
 {#if onplay}
   <div class="head">
     <h2>{title}</h2>
     <button class="play" aria-label={`Play ${title}`} title="Play" disabled={busy} onclick={onplay}><Icon name="play" size={20} /></button>
+  </div>
+{:else if onrefresh}
+  <div class="head">
+    <h2>{title}</h2>
+    <button class="play" aria-label={`Refresh ${title}`} title="Refresh" disabled={busy} onclick={onrefresh}><Icon name="refresh" size={20} /></button>
   </div>
 {:else if onmore}
   <button class="head" onclick={onmore}>

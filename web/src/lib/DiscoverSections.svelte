@@ -32,6 +32,7 @@
     previewing = null,
     problemOf = () => null,
     onproblem = () => {},
+    onaroundrefresh = null,
     status = (a) => a.request ?? null,
   }: {
     sec: Sections<DiscoverAlbum>;
@@ -48,6 +49,8 @@
     problemOf?: (a: DiscoverAlbum) => string | null;
     /** A red "!" tapped: the request's or the play's, said in a sheet (lib/ProblemSheet). */
     onproblem?: (a: DiscoverAlbum, what: 'request' | 'play') => void;
+    /** Around artists' refresh: on to other suggestions of theirs (the owner, 2026-10-26). */
+    onaroundrefresh?: (() => void) | null;
     /** Asked for: where it stands, on its cover (lib/CoverStatus). */
     status?: (a: DiscoverAlbum) => RequestMark | null;
   } = $props();
@@ -137,13 +140,15 @@
 <!-- Around the artists you play: the seeds in the middle, their suggestions in a masonry around them. -->
 {#if sec.around.length}
   <section aria-label="Around artists you play">
-    <SectionHead title={sec.around.length === 1 ? `Around ${[sec.around[0].seeds[0], sec.around[0].partner].filter(Boolean).join(' and ')}` : 'Around artists you play'} />
+    <SectionHead title={sec.around.length === 1 ? `Around ${[sec.around[0].seeds[0], sec.around[0].partner].filter(Boolean).join(' and ')}` : 'Around artists you play'} onrefresh={onaroundrefresh ?? undefined} />
     <div class="arounds">
       {#each sec.around as g (g.seeds.join('|'))}
         {@const grid = g.grid}
         {@const name = g.seeds[0]}
         {@const fan = ownAlbums(name)}
         {@const wash = photos[name] ? discoverArtistPhotoUrl(name) : (fan[0] ?? null)}
+        <!-- Wider than the page (the owner, 2026-10-26): it scrolls sideways, never leaving empty room. -->
+        <div class="around-scroll">
         <div class="masonry" style={`--cols: ${grid.cols}; --rows: ${grid.rows};`}>
           <!-- The seed's own tile (the owner, 2026-10-25), as an artist to explore's card: glass washed in its photo (else
                its first album), its round photo at the top of the left half, its words at the foot of it, a fan of its
@@ -178,6 +183,7 @@
               </div>
             {/if}
           {/each}
+        </div>
         </div>
       {/each}
     </div>
@@ -444,11 +450,21 @@
   /* The masonries side by side, each as many columns and rows as it was laid out (lib/masonry); a tile slightly smaller
      than a shelf's cover (the owner, 2026-10-25: "slightly smaller than the discography gaps tiles", 150 px), smaller
      still where three do not fit (a phone). */
+  /* Each artist's grid its own row, wider than the page: it scrolls sideways (no bar), past the page's padding. */
   .arounds {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
     gap: 24px;
     container-type: inline-size;
+  }
+
+  .around-scroll {
+    overflow-x: auto;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+  }
+
+  .around-scroll::-webkit-scrollbar {
+    display: none;
   }
 
   .masonry {

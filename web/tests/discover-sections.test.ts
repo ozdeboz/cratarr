@@ -87,7 +87,7 @@ test('around an artist played: laid out to the room given, what no longer fits w
 test('an artist played gathers every suggestion like them, whoever else a reason names (the owner\'s page had none)', () => {
   // As Last.fm's reasons come: each names the seed with a different second artist.
   const all = ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].map((x, i) => s(`k${i}`, `n${i}`, [`Like Holydrug Couple and ${x}`]));
-  const out = sections(all, { around: 1 });
+  const out = sections(all, { around: 1, aroundPast: 0 });
   assert.deepEqual(out.around[0].seeds, ['Holydrug Couple']);
   assert.equal(out.around[0].items.length, 8);
 });

@@ -52,8 +52,15 @@ export function seedsOf(why: string): string[] | null {
 }
 
 /** The sections, from the suggestions in their order (the strongest first). */
-/** How much each section takes; `aroundCols`: how many masonry columns the page has room for (lib/masonry). */
-export const LIMITS = { gaps: 4, gapsEach: 4, around: 3, aroundCols: 3, newArtists: 10, thisYear: new Date().getFullYear() };
+/** How much each section takes; `aroundCols`: how many masonry columns the page has room for (lib/masonry);
+ *  `aroundPast`: how many more each group's grid takes, so it runs past the page's edge (the owner, 2026-10-26: more
+ *  than the width, scrolled a little, never empty room); `aroundRound`: Around's refreshes, each on to the next of each
+ *  artist's suggestions. */
+export const LIMITS = { gaps: 4, gapsEach: 4, around: 3, aroundCols: 3, aroundPast: 2, aroundRound: 0, newArtists: 10, thisYear: new Date().getFullYear() };
+/** How far a refresh moves on in each artist's suggestions: about a grid's worth. */
+const ROUND_STEP = 12;
+/** The list from its `n`th on, the ones before after it (a refresh: the others first, none lost). */
+const turned = <T>(list: T[], n: number) => (list.length ? [...list.slice(n % list.length), ...list.slice(0, n % list.length)] : list);
 
 /** `notPick`: what is no pick of the day (moved on from in Discover's menu, kept for the account; or asked for already):
  *  the next that plays is the pick. */
@@ -110,13 +117,14 @@ export function sections<S extends Suggested>(all: S[], given: Partial<typeof LI
     return items.filter((s) => of(s) === undefined || !top || of(s)! >= top / 2);
   };
   const around: Around<S>[] = [];
-  let width = limits.aroundCols;
+  // Each group its own row, as wide as the page and a little more (it scrolls); no longer side by side.
+  const width = limits.aroundCols + limits.aroundPast;
   const ranked = [...groups.values()].sort((a, b) => cellsOf(b) - cellsOf(a) || b.items.length - a.items.length);
   const partnered = new Set<string>();
   for (const g of ranked) {
-    if (around.length >= limits.around || width < 3) break;
+    if (around.length >= limits.around) break;
     if (partnered.has(key(g.seeds[0]))) continue;
-    const mine = close(g.seeds[0], playableFirst(g.items).filter(free));
+    const mine = turned(close(g.seeds[0], playableFirst(g.items).filter(free)), limits.aroundRound * ROUND_STEP);
     // The library's artist closest to this one (the owner, 2026-10-25: "use that in the row as well"): one Last.fm
     // found suggestions for together with it ("Like A and B"), of those the one adding the most of its own (the one
     // sharing the most added none: the same suggestions, a place less); theirs join, after this artist's own.
@@ -135,7 +143,6 @@ export function sections<S extends Suggested>(all: S[], given: Partial<typeof LI
     const partner = laid.grid.partner && other ? other.seeds[0] : null;
     if (partner) partnered.add(key(partner));
     around.push({ seeds: g.seeds, partner, items, grid: laid.grid });
-    width -= laid.grid.cols;
   }
 
   // New to you: per new artist with a picture (a flow of their pictures, the owner 2026-10-25) its suggestions, the
