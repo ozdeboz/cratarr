@@ -69,6 +69,10 @@
     if (searching && !quiet) field?.focus();
     quiet = false;
   });
+  $effect(() => {
+    pageView.searchOpen = searching;
+    return () => (pageView.searchOpen = false);
+  });
   // Emptied from elsewhere (a result tapped, lib/GlobalResults) while not typed in: folded too.
   // Given its words again from elsewhere (back to a search, lib/globalSearch): open, without the keyboard.
   let typed = untrack(() => pageView.query);

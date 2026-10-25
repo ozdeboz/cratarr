@@ -335,6 +335,28 @@
     void page;
     pageView.query = '';
   });
+  // The title beside back gives way to the open search where it would be cut to a few letters or less (the owner,
+  // 2026-10-25): measured as the field slides open (200 ms, after a page change 100 ms later), and as the window
+  // changes; a title that fits beside the open field stays as it is.
+  let leadEl = $state<HTMLElement>();
+  let titleAway = $state(false);
+  $effect(() => {
+    if (!pageView.searchOpen) return void (titleAway = false);
+    const measure = () => {
+      if (!leadEl || titleAway) return;
+      const parts = [...leadEl.querySelectorAll<HTMLElement>('.page-name, .crumbs .up, .crumbs .here, .title')];
+      const cut = parts.reduce((n, e) => n + Math.max(0, e.scrollWidth - e.clientWidth), 0);
+      const room = parts.reduce((n, e) => n + e.clientWidth, 0);
+      // More than a few letters cut (about three, or a third of it: "Req…"), or no room at all.
+      titleAway = parts.length > 0 && (cut > 36 || room < 48 || room < 0.7 * (room + cut));
+    };
+    const ts = [150, 350, 600].map((ms) => window.setTimeout(measure, ms));
+    addEventListener('resize', measure);
+    return () => {
+      ts.forEach(clearTimeout);
+      removeEventListener('resize', measure);
+    };
+  });
   // Where a page was scrolled to, kept with its step of the history: back there brings it back; any other way there
   // (its link, Home's button) starts at its top (the owner, 2026-10-25).
   let popped = false;
@@ -749,9 +771,9 @@
     <!-- The page's glass, or on a phone the panel's on top (lib/glass): one row, one pill whose settings change. -->
     <div class="page-row" class:beside={sidebar && !handed} class:handed={!!handed} class:below={!!handed?.below?.()} class:steady={phone && !!panelPage && !moreOpen} class:top={!!handed && !underBar} style:--player-w="{sideWidth}px">
       {#if handed}
-        <span class="lead" in:fade={{ duration: leadFade }}>{@render handed.left()}</span>
+        <span class="lead" class:title-away={titleAway} bind:this={leadEl} in:fade={{ duration: leadFade }}>{@render handed.left()}</span>
       {:else}
-        <span class="lead" in:fade={{ duration: leadFade }}>
+        <span class="lead" class:title-away={titleAway} bind:this={leadEl} in:fade={{ duration: leadFade }}>
           {#if navAt > 0 || backHome}
             <span class="navpill"><button aria-label="Back" title="Back" onclick={() => (backHome ? (location.hash = keepViewed(HOME.href)) : history.back())}><Icon name="back" size={22} /></button></span>
           {/if}
@@ -932,6 +954,23 @@
 
   .lead:has(:global(.page-name, .crumbs, .title)) .navpill {
     box-shadow: none;
+  }
+
+  /* The search open with no room for the title: only the round button, its thin glass gone with the title. */
+  .lead.title-away :global(:is(.page-name, .crumbs, .title)) {
+    display: none;
+  }
+
+  .lead.title-away {
+    padding: 0;
+    background: none;
+    box-shadow: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .lead.title-away .navpill {
+    box-shadow: 0 2px 12px rgb(0 0 0 / 0.3);
   }
 
   .page-name {

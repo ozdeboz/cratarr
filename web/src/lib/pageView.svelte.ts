@@ -175,6 +175,8 @@ export const pageView = $state({
   narrowed: false,
   /** How many of the page's list its filter lets through, of how many (the Filter sheet's count); null: not counted. */
   counted: null as { shown: number; total: number } | null,
+  /** The pill's search field is open (App's title gives way when it leaves no room, lib/TopPill). */
+  searchOpen: false,
   /** The page's own button at the pill's end (usePageAction), while it shows. */
   action: null as PageAction | null,
 });
