@@ -23,6 +23,7 @@
   import { DISCOVER } from './lib/discoverArtist';
   import DiscoverSections from './lib/DiscoverSections.svelte';
   import { sections } from './lib/discoverSections';
+  import { mine, skipPick } from './lib/mySettings.svelte';
   import SectionHead from './lib/SectionHead.svelte';
   import { withUndo } from './lib/undo.svelte';
   import { longpress } from './lib/longpress';
@@ -129,7 +130,7 @@
   // grids (lib/masonry, the owner 2026-10-25: responsive to any width), three at least.
   let pageWidth = $state(0);
   const aroundCols = $derived(Math.max(3, Math.floor((pageWidth + 6 - 24) / 142)));
-  const sec = $derived(sections(albums, { aroundCols }));
+  const sec = $derived(sections(albums, { aroundCols }, mine.pickSkip));
   // How many albums the library has of each artist, by name (the owner, 2026-10-25: on the "Because you play" tile).
   if (!library.view) readLibrary(false).catch(() => {});
   const ownedBy = $derived.by(() => {
@@ -302,6 +303,8 @@
         {:else}
           <MenuEntry icon="circlePlus" label="Want" disabled={!canWant || asking === a.key} busy={asking === a.key} onclick={act(() => want(a))} />
         {/if}
+        <!-- The pick of the day: on to the next that plays (the owner, 2026-10-25), with the approval's entries. -->
+        {#if sec.pick?.key === a.key}<MenuEntry icon="refresh" label="Next pick" onclick={act(() => skipPick(a.key))} />{/if}
         <MenuEntry icon="eyeOff" label="Hide" onclick={act(() => no(a, true))} />
         <MenuEntry icon="thumbsDown" label="Not interested" onclick={act(() => no(a))} />
       </MenuGroup>

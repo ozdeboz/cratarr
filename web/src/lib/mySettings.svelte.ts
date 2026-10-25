@@ -19,6 +19,8 @@ export type Choices = {
   more_music?: MoreFrom;
   /** Whether the account's plays are kept at all (the owner, 2026-10-25; absent: on). */
   tracking?: boolean;
+  /** Discover's picks of the day moved on from (the owner, 2026-10-25: rotated from its menu), the latest last. */
+  discover_pick_skip?: string[];
 };
 export type MoreFrom = { libraries: string[] | null; bandcamp: boolean };
 
@@ -72,7 +74,13 @@ export function setDefaults(part: { radio?: Partial<Defaults['radio']>; autoplay
 }
 
 /** The Personal parts' own (Radio and Autoplay, Tracking), as kept. */
-export const mine = $state({ moreFrom: { libraries: null, bandcamp: false } as MoreFrom, tracking: true });
+export const mine = $state({ moreFrom: { libraries: null, bandcamp: false } as MoreFrom, tracking: true, pickSkip: [] as string[] });
+/** The pick of the day moved on to the next that plays (Discover's menu of it): kept for the account, so every device
+ *  shows the same; the last 50. */
+export function skipPick(key: string) {
+  mine.pickSkip = [...mine.pickSkip.filter((k) => k !== key), key].slice(-50);
+  keep({ discover_pick_skip: mine.pickSkip });
+}
 /** What Radio and Autoplay choose from, changed: saved at once (the server reads it for every player of the account),
  *  so what they pick next comes from there. */
 export function setMoreFrom(part: Partial<MoreFrom>): Promise<void> {
@@ -110,6 +118,8 @@ export async function loadMine(): Promise<Choices | null> {
     const from = (settings as Choices).more_music;
     mine.moreFrom = { libraries: Array.isArray(from?.libraries) ? from.libraries : null, bandcamp: !!from?.bandcamp };
     mine.tracking = (settings as Choices).tracking !== false;
+    const skip = (settings as Choices).discover_pick_skip;
+    mine.pickSkip = Array.isArray(skip) ? skip.filter((k) => typeof k === 'string') : [];
     const c = settings as Choices;
     if (c.radio) {
       defaults.radio = { by: c.radio.by ?? 'track', count: c.radio.count > 0 ? c.radio.count : 5 };
