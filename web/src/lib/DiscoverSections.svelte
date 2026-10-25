@@ -38,7 +38,14 @@
   // New to you: the artist in the light, the first of the new artists with a picture (the owner, 2026-10-25: one
   // without is never featured; the pictures and descriptions come with the sync); a few lines about them
   // (TheAudioDB's, as the sync kept it); none with a picture: the chips alone.
-  const lit = $derived(sec.newArtists.find((n) => n.items.some((a) => a.artist_photo)) ?? null);
+  // The artist in the light: the one tapped among the chips (the owner, 2026-10-25: a chip opens the artist here, not
+  // their album in the panel), else the first with a picture.
+  let chosen = $state<string | null>(null);
+  const lit = $derived(
+    sec.newArtists.find((n) => n.artist === chosen) ?? sec.newArtists.find((n) => n.items.some((a) => a.artist_photo)) ?? null,
+  );
+  // A picture that does not come: the light without it.
+  let unpictured = $state<string[]>([]);
   let bio = $state<{ name: string; text: string | null } | null>(null);
   $effect(() => {
     const name = lit?.artist;
@@ -150,7 +157,9 @@
 {#if lit}
   {@const a = lit.items[0]}
   <section class="spot" aria-label="New to you">
-    <span class="spot-photo"><img src={discoverArtistPhotoUrl(lit.artist)} alt="" /></span>
+    {#if !unpictured.includes(lit.artist)}
+      <span class="spot-photo"><img src={discoverArtistPhotoUrl(lit.artist)} alt="" onerror={() => (unpictured = [...unpictured, lit.artist])} /></span>
+    {/if}
     <div class="spot-text">
       <span class="kicker">New to you</span>
       <span class="spot-name">{lit.artist}</span>
@@ -159,14 +168,14 @@
         ><span class="art small"><Cover src={a.cover} /></span><span><b>{a.album}</b><small>{a.why[0] ?? ''}</small></span></button
       >
       {#if others.length}
-        <span class="chips">{#each others as n (n.artist)}<button class="chip" onclick={() => onopen(n.items[0])} use:longpress={() => onmenu(n.items[0])}>{n.artist}</button>{/each}</span>
+        <span class="chips">{#each others as n (n.artist)}<button class="chip" onclick={() => (chosen = n.artist)} use:longpress={() => onmenu(n.items[0])}>{n.artist}</button>{/each}</span>
       {/if}
     </div>
   </section>
 {:else if others.length}
   <section aria-label="New to you">
     <SectionHead title="New to you" />
-    <span class="chips">{#each others as n (n.artist)}<button class="chip" onclick={() => onopen(n.items[0])} use:longpress={() => onmenu(n.items[0])}>{n.artist}</button>{/each}</span>
+    <span class="chips">{#each others as n (n.artist)}<button class="chip" onclick={() => (chosen = n.artist)} use:longpress={() => onmenu(n.items[0])}>{n.artist}</button>{/each}</span>
   </section>
 {/if}
 
