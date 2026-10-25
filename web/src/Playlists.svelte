@@ -1,6 +1,6 @@
 <script lang="ts">
   import ListHead from './lib/ListHead.svelte';
-  import { PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, playlistBy, usePageAction } from './lib/pageView.svelte';
+  import { matchesSearch, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, playlistBy, usePageAction } from './lib/pageView.svelte';
   import { passing, switchOn } from './lib/listFilter.svelte';
   import type { Playlist, PlayMode } from './lib/api';
   import { prefs } from './lib/prefs.svelte';
@@ -54,12 +54,12 @@
   /** What a filter goes by is not in yet: the page loads rather than show them all, or none (the owner, 2026-10-23). */
   const waiting = $derived((switchOn('playlists', 'favourites') && !playlistFavoritesKnown()) || (pass.pending && !pass.keys));
   const items = $derived.by(() => {
-    const q = pageView.query.trim().toLowerCase();
     let list = shownPlaylists().map((p) => {
       const member = optimistic[p.id] ?? p.member;
       return { ...p, member, count: p.count + (member === p.member ? 0 : member ? 1 : -1) };
     });
-    if (q) list = list.filter((p) => p.name.toLowerCase().includes(q));
+    // As every search reads (lib/search, decision 0072); by its tracks too once the server's search is (0.9.3).
+    list = list.filter((p) => matchesSearch(p.name));
     if (switchOn('playlists', 'favourites')) list = list.filter((p) => isPlaylistFavorite(p.id));
     if (switchOn('playlists', 'mine')) list = list.filter((p) => p.mine !== false);
     const keys = pass.keys;

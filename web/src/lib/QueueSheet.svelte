@@ -12,6 +12,7 @@
   // its menu; a row's heart adds it to a playlist, a long-press on the heart makes it a favourite or not; on this device
   // a row's handle reorders and a swipe left removes it (the server's player takes neither command). Haptics as
   // Finamp's: light on a tap or a drag starting, heavy on a drop, a removal and opening.
+  import { matches as matchesWords, words } from './search';
   import { untrack } from 'svelte';
   import { linear } from 'svelte/easing';
   import { fade, fly } from 'svelte/transition';
@@ -109,9 +110,9 @@
   /** The queues kept (decision 0033, amended), to switch to one: its sheet open. */
   let switching = $state(false);
   let query = $state('');
-  const q = $derived(searching ? query.trim().toLowerCase() : '');
-  const matches = (t: { name: string; artist: string | null; album: string | null }) =>
-    !q || [t.name, t.artist, t.album].some((x) => x?.toLowerCase().includes(q));
+  // As every search reads (lib/search, decision 0072).
+  const q = $derived(searching ? words(query) : []);
+  const matches = (t: { name: string; artist: string | null; album: string | null }) => matchesWords(q, t.name, t.artist, t.album);
 
 
   // Clear: what comes next goes; the toast's Undo puts it back.

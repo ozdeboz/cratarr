@@ -19,6 +19,7 @@
   import { pageView, usePageAction } from './lib/pageView.svelte';
   import { about } from './lib/AboutSheet.svelte';
   import { loadSettingsWords, settingsMatches } from './lib/settingsSearch.svelte';
+  import { words as searchWords } from './lib/search';
 
   // The last answer (kept for the panel too), read again here.
   const s = $derived<Settings | null>(settingsRead.s);
@@ -128,7 +129,8 @@
   usePageAction(() => ({ icon: 'info', label: 'About', run: () => (about.open = true) }));
 
   // The pill's search (lib/settingsSearch): the parts that hold what is searched, each saying where in its line.
-  const words = $derived(pageView.query.trim().toLowerCase().split(/\s+/).filter(Boolean));
+  // As every search reads (lib/search, decision 0072).
+  const words = $derived(searchWords(pageView.query));
   $effect(() => {
     if (words.length) void loadSettingsWords();
   });

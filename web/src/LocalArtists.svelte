@@ -6,16 +6,14 @@
   import { plural } from './lib/insights.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { artistSubject, panel, viewPlaylist } from './lib/panel.svelte';
-  import { pageView } from './lib/pageView.svelte';
+  import { matchesSearch, pageView } from './lib/pageView.svelte';
   import Row from './lib/Row.svelte';
 
   $effect(() => {
     askLibrary();
   });
-  const shown = $derived.by(() => {
-    const q = pageView.query.trim().toLowerCase();
-    return deviceArtists().filter((a) => !q || a.name.toLowerCase().includes(q));
-  });
+  // As every search reads (lib/search, decision 0072).
+  const shown = $derived(deviceArtists().filter((a) => matchesSearch(a.name)));
 </script>
 
 <main>
