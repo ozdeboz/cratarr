@@ -366,9 +366,10 @@
   }
 
   /* The masonry: the seeds in the middle, the suggestions around. */
-  /* Half as wide and as tall as it was (the owner, 2026-10-25): a tile about the size of a shelf's cover. */
+  /* A tile slightly smaller than a shelf's cover (the owner, 2026-10-25: half the size it was, then "slightly smaller
+     than the discography gaps tiles", 150 px): 136 px, three and their gaps. */
   .masonry-box {
-    max-width: 360px;
+    max-width: calc(3 * 136px + 12px);
     container-type: inline-size;
   }
 
