@@ -39,6 +39,8 @@
     // Lucide's arrow-up, arrow-down, list-checks and circle: the list's order and its select mode.
     arrowUp: '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
     arrowDown: '<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>',
+    // Lucide's clock: an album not in the library that was asked for (lib/CoverStatus).
+    clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
     listChecks: '<path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>',
     // Lucide's list-start and list-end: the mini-player's queue button a moment after Play next, and after Add to queue.
     listStart: '<path d="M3 5h6"/><path d="M3 12h13"/><path d="M3 19h13"/><path d="m16 8-3-3 3-3"/><path d="M21 19V7a2 2 0 0 0-2-2h-6"/>',

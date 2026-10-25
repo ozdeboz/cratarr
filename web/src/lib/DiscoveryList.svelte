@@ -15,6 +15,7 @@
   } from './api';
   import { albumIdOf, BANDCAMP } from './bandcampPreview';
   import Cover from './Cover.svelte';
+  import CoverStatus from './CoverStatus.svelte';
   import LinkSheet from './LinkSheet.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -104,7 +105,7 @@
       {#each shownMissing as a (a.release_group)}
         <li>
           <Row size="large" title={a.title} label={`Open ${a.title}`} onclick={() => open(a)}>
-            {#snippet front()}<span class="art"><Cover src={a.cover} /></span>{/snippet}
+            {#snippet front()}<span class="art"><Cover src={a.cover} /><CoverStatus mark={a.request ?? (asked.includes(a.release_group) ? { state: 'wanted' } : null)} small /></span>{/snippet}
             {#snippet sub()}{a.artist}{a.year ? ` · ${a.year}` : ''}{a.kind && a.kind !== 'Album' ? ` · ${a.kind}` : ''}{#if asked.includes(a.release_group)}<span class="asked"> · asked for</span>{/if}{/snippet}
             {#snippet action()}{#if finding === a.release_group}<button class="spin" aria-busy="true" disabled aria-label="Looking on Bandcamp"></button>{/if}{/snippet}
           </Row>
@@ -188,6 +189,7 @@
   }
 
   .art {
+    position: relative;
     display: block;
     width: 48px;
     height: 48px;

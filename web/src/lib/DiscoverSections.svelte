@@ -6,9 +6,10 @@
   // plays on Bandcamp comes first everywhere (lib/discoverSections). A tap on a suggestion opens it (`onopen`), a long-press its
   // menu (`onmenu`), as Home's albums; Play hears it on Bandcamp in Cratarr's own player (`onplay`).
   import { untrack } from 'svelte';
-  import { discoverArtistPhotoUrl, getDiscoverArtist, type DiscoverAlbum } from './api';
+  import { discoverArtistPhotoUrl, getDiscoverArtist, type DiscoverAlbum, type RequestMark } from './api';
   import Cover from './Cover.svelte';
   import CoverPlay from './CoverPlay.svelte';
+  import CoverStatus from './CoverStatus.svelte';
   import CoverFlow from './CoverFlow.svelte';
   import { goToArtist } from './albums.svelte';
   import { DISCOVER } from './discoverArtist';
@@ -26,6 +27,7 @@
     owned,
     onplay,
     previewing = null,
+    status = (a) => a.request ?? null,
   }: {
     sec: Sections<DiscoverAlbum>;
     /** A suggestion's facts in one line (its type, tracks, length, listeners). */
@@ -37,6 +39,8 @@
     owned: (name: string) => number;
     onplay: (a: DiscoverAlbum) => void;
     previewing?: string | null;
+    /** Asked for: where it stands, on its cover (lib/CoverStatus). */
+    status?: (a: DiscoverAlbum) => RequestMark | null;
   } = $props();
 
   // New to you's front artist (the flow's), and their biography (TheAudioDB's, as the sync kept it; the owner,
@@ -76,7 +80,7 @@
 {#if sec.pick}
   {@const a = sec.pick}
   <section class="pick" aria-label="Pick of the day">
-    <button class="pick-cover" aria-label={`${a.album} by ${a.artist}`} onclick={() => onopen(a)} use:longpress={() => onmenu(a)}><Cover src={a.cover} /></button>
+    <button class="pick-cover" aria-label={`${a.album} by ${a.artist}`} onclick={() => onopen(a)} use:longpress={() => onmenu(a)}><Cover src={a.cover} /><CoverStatus mark={status(a)} /></button>
     <div class="pick-text">
       <span class="kicker">Pick of the day</span>
       <span class="pick-title">{a.album}</span>
@@ -105,7 +109,7 @@
             <b>{a.album}</b>
             <small>{a.artist}{a.year ? ` · ${a.year}` : ''}</small>
           </button>
-          {#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => onplay(a)} />{/if}
+          <CoverStatus mark={status(a)} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => onplay(a)} />{/if}
         </div>
       {/each}
     </div>
@@ -139,7 +143,7 @@
                   <Cover src={a.cover} />
                   <span class="tile-text"><b>{a.album}</b><small>{a.artist}</small></span>
                 </button>
-                {#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => onplay(a)} />{/if}
+                <CoverStatus mark={status(a)} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => onplay(a)} />{/if}
               </div>
             {/if}
           {/each}
@@ -183,7 +187,7 @@
             <b>{a.album}</b>
             <small>{a.year ?? ''}</small>
           </button>
-          {#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => onplay(a)} />{/if}
+          <CoverStatus mark={status(a)} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => onplay(a)} />{/if}
         </div>
       </div>
     </div>
@@ -202,7 +206,7 @@
             <b>{a.album}</b>
             <small>{a.artist}{a.year ? ` · ${a.year}` : ''}</small>
           </button>
-          {#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => onplay(a)} />{/if}
+          <CoverStatus mark={status(a)} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => onplay(a)} />{/if}
         </div>
       {/each}
     </div>
@@ -218,7 +222,7 @@
         <li>
           <button class="weekly-row" onclick={() => onopen(a)} use:longpress={() => onmenu(a)}>
             <span class="n">{i + 1}</span>
-            <span class="art tiny"><Cover src={a.cover} /></span>
+            <span class="art tiny"><Cover src={a.cover} /><CoverStatus mark={status(a)} small /></span>
             <span class="weekly-text"><b>{a.album}</b><small>{a.artist}</small></span>
           </button>
           {#if a.bandcamp}<button class="weekly-play" aria-label={`Play ${a.album} on Bandcamp`} title="Play on Bandcamp" disabled={previewing === a.key} onclick={() => onplay(a)}><Icon name="play" size={17} /></button>{/if}
@@ -245,6 +249,7 @@
   }
 
   .art.tiny {
+    position: relative;
     width: 40px;
     height: 40px;
   }
@@ -305,6 +310,7 @@
   }
 
   .pick-cover {
+    position: relative;
     flex: none;
     width: clamp(120px, 34cqi, 340px);
     aspect-ratio: 1;

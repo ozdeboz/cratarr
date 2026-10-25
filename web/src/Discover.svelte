@@ -11,6 +11,8 @@
   import { getDiscover, hideDiscover, notDiscover, refreshDiscover, wantDiscover, type AlbumRequest, type DiscoverAlbum, type DiscoverView } from './lib/api';
   import Cover from './lib/Cover.svelte';
   import CoverPlay from './lib/CoverPlay.svelte';
+  import CoverStatus from './lib/CoverStatus.svelte';
+  import { markOf } from './lib/requests.svelte';
   import { hoursMinutes } from './lib/duration';
   import MenuCards from './lib/MenuCards.svelte';
   import MenuEntry from './lib/MenuEntry.svelte';
@@ -249,7 +251,7 @@
       {#if me.admin && !view.lidarr}
         <p class="note">Want needs Lidarr: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>
       {/if}
-      <DiscoverSections {sec} {facts} owned={(name) => ownedBy.get(name.toLowerCase()) ?? 0} onopen={tap} onmenu={(a) => (opened = a)} onplay={preview} {previewing} />
+      <DiscoverSections {sec} {facts} owned={(name) => ownedBy.get(name.toLowerCase()) ?? 0} onopen={tap} onmenu={(a) => (opened = a)} onplay={preview} {previewing} status={(a) => a.request ?? markOf(view?.requests?.[a.key])} />
       {#if sec.rest.length}<SectionHead title="More for you" />{/if}
       <ul class="grid">
         {#each sec.rest as a (a.key)}
@@ -259,7 +261,7 @@
                  pills, which are its links (each through the Open/Copy sheet, as every link to another site). -->
             <button class="open" aria-label={`${a.album} by ${a.artist}`} onclick={() => tap(a)} use:longpress={() => (opened = a)}></button>
             <!-- Cratarr's own cover: a picture that does not load is its stand-in, and the suggestion stays. -->
-            <span class="cover"><Cover src={a.cover} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => preview(a)} />{/if}</span>
+            <span class="cover"><Cover src={a.cover} /><CoverStatus mark={a.request ?? markOf(r)} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => preview(a)} />{/if}</span>
             <span class="text">
                 <b>{a.album}</b>
                 <span class="by">{a.artist}{a.year ? ` · ${a.year}` : ''}{#if a.new_artist}<span class="new">New to you</span>{/if}</span>

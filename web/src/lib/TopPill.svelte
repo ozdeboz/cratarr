@@ -7,6 +7,7 @@
   // make something, its ticked ones' ⋮; pageView.usePageAction). Google's Cast guidelines put the device button at the
   // top right of the screen that plays.
   import FilterSheet from './FilterSheet.svelte';
+  import ProgressRing from './ProgressRing.svelte';
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
   import Meter from './Meter.svelte';
@@ -283,11 +284,7 @@
     {#if page && pageView.action && !searching}
       {@const a = pageView.action}
       <button class="action" aria-label={a.label} title={a.label} onclick={() => act(a)} use:longpress={() => hold(a)} transition:paced|global
-        ><Icon name={a.icon} size={22} />{#if a.progress != null}<svg class="ring" viewBox="0 0 36 36" aria-hidden="true"
-            ><circle class="bg" cx="18" cy="18" r="16" /><circle cx="18" cy="18" r="16" pathLength="100" stroke-dasharray="{Math.round(
-                Math.min(1, Math.max(0, a.progress)) * 100,
-              )} 100" /></svg
-          >{/if}</button
+        ><Icon name={a.icon} size={22} />{#if a.progress != null}<ProgressRing progress={a.progress} size={38} />{/if}</button
       >
     {/if}
     {/if}
@@ -367,24 +364,6 @@
   /* The page's own button with work going on: a ring of its progress around the icon. */
   .action {
     position: relative;
-  }
-
-  .ring {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 38px;
-    height: 38px;
-    fill: none;
-    stroke: var(--accent);
-    stroke-width: 2.5;
-    stroke-linecap: round;
-    transform: translate(-50%, -50%) rotate(-90deg);
-    pointer-events: none;
-  }
-
-  .ring .bg {
-    stroke: color-mix(in srgb, var(--accent) 25%, transparent);
   }
 
   /* The page's work asked for: its ✓ in the accent, the ✕ as the pill's other buttons. */

@@ -1,9 +1,20 @@
 // Requests (decision 0070) as the page and its panel share them (the owner, 2026-10-24: the page an index, as
 // Downloads, Insights, Health and Settings; the lists in the panel): the account's requests and everyone's waiting ones,
 // what Lidarr is looking for, and the actions on them.
-import { cancelRequest, decideRequests, getRequests, getWatching, type AlbumRequest, type RequestsView, type Watching } from './api';
+import { cancelRequest, decideRequests, getRequests, getWatching, type AlbumRequest, type RequestMark, type RequestsView, type Watching } from './api';
 import type { IconName } from './Icon.svelte';
 import { toast } from './toast.svelte';
+
+/** A request's mark on its album's cover (lib/CoverStatus), where the server's own is not there: wanted while open,
+ *  downloading while Lidarr fetches it or it waits in Incoming; none when answered no, taken back or in the library. */
+export function markOf(r: AlbumRequest | null | undefined): RequestMark | null {
+  if (!r || (r.status !== 'pending' && r.status !== 'approved')) return null;
+  const a = r.album_state;
+  if (a?.state === 'in_library') return null;
+  if (a?.state === 'fetching') return { state: 'downloading', done: a.done };
+  if (a?.state === 'in_incoming' || a?.state === 'partly_there') return { state: 'downloading', done: 1 };
+  return { state: 'wanted' };
+}
 
 /** The page's lists, each opened in the panel (`requests:<id>`). */
 export type RequestsList = 'waiting' | 'mine' | 'lidarr';

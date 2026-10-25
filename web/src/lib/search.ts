@@ -13,6 +13,8 @@ export type SearchResult = {
   artist?: string | null;
   /** An album not in the library: its page on Bandcamp, where an open found it (a5, 0.9.5). */
   bandcamp?: string | null;
+  /** An album not in the library, asked for: where it stands (lib/CoverStatus). */
+  request?: import('./api').RequestMark | null;
   score: number;
   matched: Matched[];
 };

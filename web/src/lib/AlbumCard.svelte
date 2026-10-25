@@ -3,7 +3,8 @@
   // title and year (or the `lines` given: Home's artist and when it came). A tap views it over the page (back returns); a long-press or a right-click opens its menu (decision
   // 0058). Not in the library (an artist's missing albums, 0.9.5): its `cover` and its own `onopen` (Bandcamp, else
   // its menu), no menu of the library's.
-  import { albumCoverUrl, type ListedAlbum } from './api';
+  import { albumCoverUrl, type ListedAlbum, type RequestMark } from './api';
+  import CoverStatus from './CoverStatus.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
   import BandcampAlbumMenu from './BandcampAlbumMenu.svelte';
   import { BANDCAMP } from './bandcampPreview';
@@ -19,6 +20,7 @@
     cover = undefined,
     onopen = null,
     busy = false,
+    request = undefined,
   }: {
     source: string;
     album: Pick<ListedAlbum, 'id' | 'title' | 'year'> & Partial<ListedAlbum>;
@@ -29,6 +31,8 @@
     onopen?: (() => void) | null;
     /** Its tap is at work (looking on Bandcamp): the busy ring over it. */
     busy?: boolean;
+    /** Not in the library, asked for: where it stands, on its cover (lib/CoverStatus); else the album's own. */
+    request?: RequestMark | null;
   } = $props();
   let menu = $state(false);
   // Its library, as a dot before its title (0.9.3): as the Library's lists show it.
@@ -44,7 +48,7 @@
   aria-busy={busy || undefined}
   use:longpress={() => !onopen && (menu = true)}
 >
-  <span class="cover"><Cover src={cover === undefined ? albumCoverUrl(source, album.id) : cover} /></span>
+  <span class="cover"><Cover src={cover === undefined ? albumCoverUrl(source, album.id) : cover} /><CoverStatus mark={request ?? album.request} /></span>
   <span class="title">{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{album.title}</span>
   {#if lines}{#each lines.filter(Boolean) as l, i (i)}<span class="year">{l}</span>{/each}{:else if album.year}<span class="year">{album.year}</span>{/if}
 </button>
@@ -77,6 +81,7 @@
   }
 
   .cover {
+    position: relative;
     display: block;
     width: 100%;
     aspect-ratio: 1;

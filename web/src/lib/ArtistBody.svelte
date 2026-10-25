@@ -108,6 +108,7 @@
   const missingShown = $derived(missing.filter((a) => hit(a.title)));
   let elsewhere = $state<ElsewhereAlbum>();
   let finding = $state<string | null>(null);
+  let asked = $state<string[]>([]);
   let aboutEl = $state<HTMLElement>();
   // Asked for from Home's fanned albums: Albums in view (once the page above it has its height).
   let albumsEl = $state<HTMLElement>();
@@ -176,6 +177,7 @@
             album={{ id: m.release_group, title: m.title, year: m.year }}
             cover={m.cover}
             busy={finding === m.release_group}
+            request={m.request ?? (asked.includes(m.release_group) ? { state: 'wanted' } : null)}
             onopen={() => elsewhere?.open({ release_group: m.release_group, title: m.title, artist: m.artist, year: m.year, cover: m.cover, bandcamp: page })}
           />
           <!-- On Bandcamp: Play on its cover, as Discover's cards have it (beside the card's button, over its cover). -->
@@ -185,7 +187,7 @@
     </ul>
   </section>
 {/if}
-<ElsewhereAlbum bind:this={elsewhere} bind:finding />
+<ElsewhereAlbum bind:this={elsewhere} bind:finding bind:asked />
 {#if searching && !albumsShown.length && !appearsShown.length && !top && !(about?.bio && hit(about.bio))}
   <p class="empty">Nothing of {name}'s matches.</p>
 {:else if !albums.length && !appearsOn.length && !top}

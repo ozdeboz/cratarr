@@ -4,6 +4,7 @@
 // words as New to you has them. Nothing of a server's: no tracks, no heart, no menu of the library's.
 import { getDiscover, type ArtistView, type ListedAlbum } from './api';
 import { albumIdOf } from './bandcampPreview';
+import { markOf } from './requests.svelte';
 
 /** The source an artist from Discover is viewed under. */
 export const DISCOVER = 'discover';
@@ -17,6 +18,8 @@ export async function discoverArtistView(name: string): Promise<ArtistView> {
     .sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
     .map((a) => ({
       id: albumIdOf(a.bandcamp!),
+      // Asked for: where it stands, on its cover (lib/CoverStatus).
+      request: a.request ?? markOf(v.requests?.[a.key]),
       title: a.album,
       artist: a.artist,
       year: a.year,

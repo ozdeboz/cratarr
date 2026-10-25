@@ -6,6 +6,7 @@
   // button, Find more music, which closes the search and looks the words up on MusicBrainz (the Find page).
   import { takeBackExcluded } from './api';
   import Cover from './Cover.svelte';
+  import CoverStatus from './CoverStatus.svelte';
   import ElsewhereAlbum from './ElsewhereAlbum.svelte';
   import { globalAsked, globalGroups, globalSearch, leaveSearch, rememberSearch } from './globalSearch.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -95,7 +96,7 @@
           {#each g.items as it (it.subject + (it.track ?? ''))}
             <li>
               <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)}>
-                {#snippet front()}{#if it.kind !== 'setting' && !it.kind.startsWith('page:')}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /></span>{/if}{/snippet}
+                {#snippet front()}{#if it.kind !== 'setting' && !it.kind.startsWith('page:')}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /><CoverStatus mark={it.request} small /></span>{/if}{/snippet}
                 {#snippet action()}{#if it.kind === 'missing' && finding === it.subject.slice('missing:'.length)}<button class="spin" aria-busy="true" disabled aria-label="Looking on Bandcamp"></button>{/if}{/snippet}
                 {#snippet badges()}{@const dot = dotOf(it)}{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{/snippet}
                 {#snippet sub()}{it.sub ?? ''}{#if why(it.matched)}<span class="why">{it.sub ? ' · ' : ''}{why(it.matched)}</span>{/if}{/snippet}
@@ -133,6 +134,7 @@
   }
 
   .art {
+    position: relative;
     display: block;
     width: 48px;
     height: 48px;

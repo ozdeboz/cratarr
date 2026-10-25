@@ -1270,6 +1270,8 @@ export const getHealthReport = () => request<{ findings: HealthFinding[]; checke
 
 /** An album in a server's library list (Incoming, Collection). */
 export type ListedAlbum = {
+  /** Not the library's (a Bandcamp album): asked for, where it stands (lib/CoverStatus). */
+  request?: RequestMark | null;
   id: string;
   title: string;
   artist: string | null;
@@ -1521,6 +1523,7 @@ export const getTasks = () => quietly<{ tasks: Task[] }>('/api/tasks');
 
 /** An album Discover suggests (decision 0069): outside the library, with why (one reason a source). */
 export type DiscoverAlbum = {
+  request?: RequestMark | null;
   key: string;
   album: string;
   artist: string;
@@ -1567,6 +1570,9 @@ export const refreshDiscover = () => post<Started>('/api/discover/refresh', {});
 export const wantDiscover = (key: string) => post<{ request: AlbumRequest }>('/api/discover/want', { key });
 
 /** An album's own state beside its request's (decision 0070). */
+/** Where an album not in the library that was asked for stands (the owner, 2026-10-25; lib/CoverStatus): wanted, or
+ *  downloading (`done`, 0 to 1). The server's, on what it lists (a5, 0.9.5); none once it is in the library. */
+export type RequestMark = { state: 'wanted' | 'downloading'; done?: number | null };
 export type RequestedAlbum =
   | { state: 'requested' | 'looking' | 'in_incoming' | 'in_library' | 'unknown' }
   | { state: 'fetching'; done: number }
@@ -1626,6 +1632,7 @@ export type MissingAlbum = {
   cover: string | null;
   /** Its page on Bandcamp, where an open found it (the server keeps a find a month; a5, 0.9.5). */
   bandcamp?: string | null;
+  request?: RequestMark | null;
 };
 /** Every album missing from the library's artists read so far (`artists`: how many), newest first. */
 export const getDiscoverMissing = () => quietly<{ albums: MissingAlbum[]; artists: number }>('/api/discover/missing');
@@ -1647,7 +1654,7 @@ export const wantAlbum = (a: { release_group?: string; artist: string; album: st
 /** The words looked up on MusicBrainz (Find more music, 0.9.3): its albums and artists, the surest first, `have` where
  *  the library has them. */
 export type MusicBrainzFound = {
-  albums: { release_group: string; title: string; artist: string; year: number | null; kind: string | null; cover: string | null; have: boolean }[];
+  albums: { release_group: string; title: string; artist: string; year: number | null; kind: string | null; cover: string | null; have: boolean; request?: RequestMark | null }[];
   artists: { mbid: string; name: string; disambiguation?: string | null; have: boolean }[];
 };
 export const musicBrainzSearch = (q: string, limit = 20) =>
