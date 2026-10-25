@@ -82,6 +82,8 @@ class MainActivity : AppCompatActivity() {
 
     /** The page that said hello: where the player's reports go. */
     private var page: JavaScriptReplyProxy? = null
+    /** The keyboard's height over the page, as last told to it (page pixels; 0 while it is down). */
+    private var keyboardOver = 0
 
     /** The app's player (PlayerService), once connected; the page's player calls before that wait in `waiting`. */
     private lateinit var controllerFuture: ListenableFuture<MediaController>
@@ -184,6 +186,15 @@ class MainActivity : AppCompatActivity() {
         ViewCompat.setOnApplyWindowInsetsListener(frame) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            // The keyboard's height over the page (the owner, 2026-10-25: the bottom glass's search field went behind
+            // it): Android's own measure, above the system bar the page already stands on, in the page's pixels. The
+            // page puts what floats along the bottom just above it.
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+            val over = ((ime - bars.bottom).coerceAtLeast(0) / resources.displayMetrics.density).toInt()
+            if (over != keyboardOver) {
+                keyboardOver = over
+                page?.postMessage(JSONObject().put("type", "keyboard").put("height", over).toString())
+            }
             WindowInsetsCompat.CONSUMED
         }
         onBackPressedDispatcher.addCallback(

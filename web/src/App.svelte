@@ -20,6 +20,7 @@
   import { health, problems } from './lib/healthReport.svelte';
   import { SECTIONS, type SettingsSection } from './lib/settingsSections.svelte';
   import { askDownloads, downloads, inApp } from './lib/app.svelte';
+  import './lib/keyboard.svelte';
   import { kept } from './lib/kept.svelte';
   import { reach } from './lib/reach.svelte';
   import { keepCoversAway } from './lib/coversAway.svelte';
@@ -1257,7 +1258,8 @@
   /* The controls just above the mini-player (Display's Controls), following it as it comes and goes. */
   .page-row.at-bottom {
     top: auto;
-    bottom: calc(var(--bottom-now, 0px) + env(safe-area-inset-bottom) + var(--gutter-y));
+    /* With the keyboard up, just above it (lib/keyboard's --kb): its search field stays in view. */
+    bottom: max(calc(var(--bottom-now, 0px) + env(safe-area-inset-bottom) + var(--gutter-y)), calc(var(--kb, 0px) + var(--gutter-y)));
   }
 
   .page-row {
