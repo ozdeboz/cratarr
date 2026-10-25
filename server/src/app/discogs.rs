@@ -215,11 +215,10 @@ pub async fn master_of(release_group: Option<&str>, artist: &str, title: &str) -
     Ok(v["results"].as_array().into_iter().flatten().find(|r| r["title"].as_str().is_some_and(|t| super::import::loose(t) == want)).and_then(|r| r["id"].as_u64()))
 }
 
-/// Some of a master's releases (the main one left out: the master's images are its), each with what it is
+/// Some of a master's releases (its `main` one left out: the master's images are its), each with what it is
 /// ("CD · Germany · 2012").
-pub async fn versions(master: u64, most: usize) -> Result<Vec<(u64, String)>> {
+pub async fn versions(master: u64, main: Option<u64>, most: usize) -> Result<Vec<(u64, String)>> {
     let Some(v) = get(&format!("/masters/{master}/versions?per_page={}", most + 1)).await? else { return Ok(Vec::new()) };
-    let main = get(&format!("/masters/{master}")).await?.and_then(|m| m["main_release"].as_u64());
     Ok(v["versions"]
         .as_array()
         .into_iter()
