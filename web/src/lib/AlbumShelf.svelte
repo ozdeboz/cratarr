@@ -219,12 +219,21 @@
       quality: (x, y) => qualityOf(x) - qualityOf(y) || byArtist(x, y) || byTitle(x, y),
     };
   };
-  const shown = $derived(
+  const found = $derived(
     sources.map((s) => {
       const albums = s.albums.filter((a) => (!a.library || libraryShown(s.id, a.library)) && matches(s, a)).sort(compareIn(s.id)[order]);
       return { s, albums: down ? albums.reverse() : albums };
     }),
   );
+  // Searching, the server's finds not in yet and the browser's own none: the last list stays till they are (the owner,
+  // 2026-10-25: the list and its header went and came back with the albums found by a track).
+  let last = $state.raw<typeof found>([]);
+  const pending = $derived(!!pageView.query.trim() && deepFor !== pageView.query.trim());
+  const none = (l: typeof found) => l.every((x) => !x.albums.length);
+  $effect(() => {
+    if (!pending || !none(found)) last = found;
+  });
+  const shown = $derived(pending && none(found) && !none(last) ? last : found);
   // How you used them, read when such an order is chosen (and each time again: plays change).
   $effect(() => {
     if (!USE_ORDERS.includes(order)) return;
