@@ -1198,6 +1198,12 @@ export const getLidarrOptions = () => quietly<{ quality: [number, string][]; met
 export const getLastfmServerKey = () => quietly<{ set: boolean; saved: boolean }>('/api/settings/lastfm');
 /** The server's own Last.fm key saved at once; an empty one takes it away. */
 export const setLastfmServerKey = (key: string) => putJson('/api/settings/lastfm', { key });
+/** The server's Discogs app (0.9.5, a5): set or not, and the requests a minute Discogs last allowed. The secret is never
+ *  sent back; both empty take it away. */
+export type DiscogsSetting = { set: boolean; per_minute: number | null };
+export const getDiscogs = () => quietly<DiscogsSetting>('/api/settings/discogs');
+export const setDiscogs = (key: string, secret: string) =>
+  request<DiscogsSetting>('/api/settings/discogs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, secret }) });
 
 /** Check a Lidarr as filled in; nothing is saved. Null for a blank address. */
 export const previewLidarr = (draft: LidarrDraft) => post<LidarrView | null>('/api/settings/lidarr', draft);
@@ -1832,17 +1838,19 @@ export type ReplacePreview = {
   convert: number;
   /** Whether a Lidarr is set to be told to stop fetching it; without one it may fetch the album again. */
   acquisition: boolean;
+  /** The album's cover in Music and the new copy's (a5, 0.9.5), for Replace's keep-or-new. */
+  covers?: { current: string | null; new: string | null };
 };
 const replacePath = (source: string, album: string) =>
   `/api/incoming/replace/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
 export const replacePreview = (source: string, album: string, year?: string) =>
   request<ReplacePreview>(`${replacePath(source, album)}${year ? `?year=${encodeURIComponent(year)}` : ''}`);
 /** Replace the album in Music with an upgrade: the old files go to the trash (Undo brings them back). */
-export const replaceIncoming = (source: string, album: string, year?: string) =>
+export const replaceIncoming = (source: string, album: string, year?: string, cover?: 'keep' | 'new') =>
   request<AlbumMoved>(replacePath(source, album), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(year ? { year } : {}),
+    body: JSON.stringify({ ...(year ? { year } : {}), ...(cover ? { cover } : {}) }),
   });
 
 /** An album in the conversion queue: waiting, converting (`done` of `total` files), or just finished. */
@@ -2095,3 +2103,13 @@ export const batchRows = (ids: string[], source?: string) =>
   post<{ playlists: ({ id: string; source: string; rows: PlaylistRow[] } | { id: string; error: string })[] }>('/api/batch/playlists/rows', { ids, source });
 /** A call the server does not have (one before 0.9.4): the caller goes one by one instead. */
 export const missingCall = (e: unknown) => e instanceof ApiError && (e.status === 404 || e.status === 405);
+
+/** An album's covers to choose from (0.9.5, a5; the owner: "the option to control covers of albums when I'm not happy
+ *  with one"): its own, and Discogs' (its master's and releases') and the Cover Art Archive's, each with its size and
+ *  what it is ("Master", "CD · Germany · 2012", "Front"). Albums whose files Cratarr holds. */
+export type CoverChoice = { url: string; width: number | null; height: number | null; from?: 'discogs' | 'coverartarchive'; what?: string };
+export const getAlbumCovers = (source: string, album: string) =>
+  request<{ current: CoverChoice | null; candidates: CoverChoice[] }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`);
+/** One of them as the album's cover, inside every file and beside them; its undo token. */
+export const setAlbumCover = (source: string, album: string, url: string) =>
+  post<{ undo: string[] }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/cover`, { url });

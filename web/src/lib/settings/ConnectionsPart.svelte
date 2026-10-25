@@ -4,7 +4,9 @@
   // line); its settings are on its own page behind it (`thing`: a server's id, or `lidarr`): its fields as rows, a value
   // typed or chosen in a sheet, its connection checked there, and Remove last (the settings' North Star, 2026-10-19).
   import type { Field } from '../api';
-  import { getLastfmServerKey, getLidarrOptions, setLastfmServerKey } from '../api';
+  import { getDiscogs, getLastfmServerKey, getLidarrOptions, setDiscogs, setLastfmServerKey, type DiscogsSetting } from '../api';
+  import FormSheet from './FormSheet.svelte';
+  import { toast } from '../toast.svelte';
   import { backFromThing, openThing } from '../panel.svelte';
   import { nameThing } from '../settingsSections.svelte';
   import ChoiceSheet from './ChoiceSheet.svelte';
@@ -40,6 +42,30 @@
       () => (fmKey = null),
     );
   loadFmKey();
+  // The server's Discogs app (0.9.5, the owner): covers and artist photos where there are none, genres where the files
+  // have none, and other covers to choose from. Its key and secret typed together; the secret never comes back.
+  const DISCOGS_MORE =
+    "Covers and artist photos where Cratarr has none, genres for albums whose files have none, and more covers to choose from. Made at discogs.com/settings/developers.";
+  let discogs = $state<DiscogsSetting | null>(null);
+  const loadDiscogs = () =>
+    getDiscogs().then(
+      (d) => (discogs = d),
+      () => (discogs = null),
+    );
+  loadDiscogs();
+  let discogsForm = $state<{ key: string; secret: string; busy: boolean; error: string | null } | null>(null);
+  async function saveDiscogs(f: { key: string; secret: string; busy: boolean; error: string | null }) {
+    f.busy = true;
+    f.error = null;
+    try {
+      discogs = await setDiscogs(f.key.trim(), f.secret.trim());
+      discogsForm = null;
+    } catch (e) {
+      f.error = e instanceof Error ? e.message : String(e);
+    } finally {
+      f.busy = false;
+    }
+  }
   // Lidarr's own profiles and root folders, read when its page opens.
   let lidOptions = $state<{ quality: [number, string][]; metadata: [number, string][]; roots: string[] } | null>(null);
   $effect(() => {
@@ -96,7 +122,7 @@
   type Choosing = { title: string; options: { value: string; label: string }[]; value: string; save: (v: string) => void };
   let typing = $state<Typing | null>(null);
   let choosing = $state<Choosing | null>(null);
-  let removing = $state<'server' | 'lidarr' | null>(null);
+  let removing = $state<'server' | 'lidarr' | 'discogs' | null>(null);
   let addingKind = $state(false);
 
   function add(kind: string) {
@@ -298,6 +324,22 @@
         })}
     />
   </Group>
+  <Group title="Discogs" more={DISCOGS_MORE}>
+    <Item
+      name="App key and secret"
+      value={discogs?.set ? (discogs.per_minute ? `Set · ${discogs.per_minute} a minute` : 'Set') : 'None'}
+      onclick={() => (discogsForm = { key: '', secret: '', busy: false, error: null })}
+    />
+    {#if discogs?.set}<Item name="Remove Discogs" kind="danger" onclick={() => (removing = 'discogs')} />{/if}
+  </Group>
+  {#if removing === 'discogs'}
+    <ConfirmSheet
+      title="Remove Discogs?"
+      label="Remove"
+      onconfirm={() => setDiscogs('', '').then((d) => (discogs = d), (e) => toast.fail(e, "Discogs wasn't removed"))}
+      onclose={() => (removing = null)}
+    />
+  {/if}
   <HomeAssistantPart />
   <ListeningPart />
   {#if addingKind}
@@ -305,6 +347,14 @@
   {/if}
 {/if}
 
+{#if discogsForm}
+  {@const f = discogsForm}
+  <FormSheet title="Discogs" submitLabel="Save" canSubmit={!!f.key.trim() && !!f.secret.trim()} busy={f.busy} error={f.error} onsubmit={() => saveDiscogs(f)} onclose={() => (discogsForm = null)}>
+    <!-- svelte-ignore a11y_autofocus -->
+    <label>Consumer key<input bind:value={f.key} autocomplete="off" spellcheck="false" autofocus /></label>
+    <label>Consumer secret<input type="password" bind:value={f.secret} autocomplete="off" /></label>
+  </FormSheet>
+{/if}
 {#if typing}
   {@const t = typing}
   <ValueSheet title={t.title} type={t.type} value={t.value} placeholder={t.placeholder ?? ''} help={t.help ?? null} onsave={(v) => t.save(v)} onclose={() => (typing = null)} />

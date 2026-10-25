@@ -49,6 +49,9 @@
     moveAlbum,
     movePreview,
     replaceIncoming,
+    getAlbumCovers,
+    setAlbumCover,
+    type CoverChoice,
     replacePreview,
     setAlbumFavorite,
     type AlbumMoved,
@@ -78,10 +81,14 @@
   import { coverKey, localCovers, refreshCover, removeLocalCover, setLocalCover } from './localCovers.svelte';
   import { linkTo, share } from './share';
   import { toast } from './toast.svelte';
+  import AlbumCard from './AlbumCard.svelte';
+  import Seg from './Seg.svelte';
+  import SettingRow from './SettingRow.svelte';
+  import Cover from './Cover.svelte';
   import { withUndo } from './undo.svelte';
   import { me } from './me.svelte';
 
-  type Ask = 'move' | 'replace' | 'delete';
+  type Ask = 'move' | 'replace' | 'delete' | 'cover';
   let {
     source,
     album: a,
@@ -309,6 +316,29 @@
   let to = $state<LibraryInfo | null>(null);
   let keep = $state<KeepPreview | null>(null);
   let swap = $state<ReplacePreview | null>(null);
+  /** Replace's cover (the owner, 2026-10-25): the album's own kept, or the new copy's. */
+  let coverWay = $state<'keep' | 'new'>('keep');
+  /** Change cover: the album's own and those to choose from (null while asked). */
+  let covers = $state<{ current: CoverChoice | null; candidates: CoverChoice[] } | null>(null);
+  async function askCover() {
+    ask = 'cover';
+    covers = null;
+    try {
+      covers = await getAlbumCovers(source, a.id);
+    } catch (e) {
+      toast.fail(e, 'Could not find covers');
+      onclose();
+    }
+  }
+  const setCover = (c: CoverChoice) =>
+    act(async () => {
+      const { undo } = await setAlbumCover(source, a.id, c.url);
+      onclose();
+      const again = () => void refreshCover(source, a.id, albumCoverUrl(source, a.id));
+      again();
+      withUndo(`Changed the cover of ${a.title}.`, undo, { after: again });
+    }, 'Could not change the cover');
+  const size = (c: CoverChoice) => (c.width && c.height ? `${c.width} × ${c.height}` : '');
   let year = $state('');
   let working = $state(false);
 
@@ -327,6 +357,7 @@
   async function askReplace() {
     ask = 'replace';
     swap = null;
+    coverWay = 'keep';
     year = '';
     try {
       swap = await replacePreview(source, a.id);
@@ -379,7 +410,7 @@
     }, 'Could not move the album');
   const replaceIt = () =>
     act(async () => {
-      const r = await replaceIncoming(source, a.id, year.trim() || undefined);
+      const r = await replaceIncoming(source, a.id, year.trim() || undefined, swap?.covers ? coverWay : undefined);
       moved(r, `Replaced ${r.title} in ${music}.`);
     }, 'Could not replace the album');
   const remove = () =>
@@ -455,6 +486,15 @@
             {` ${swap.convert} hi-res ${swap.convert === 1 ? 'file is' : 'files are'} converted to 16-bit/44.1 kHz first.`}{/if}{#if !swap.acquisition}
             {` ${NO_LIDARR}`}{/if}
         </p>
+        <!-- Its cover (the owner, 2026-10-25): the one it has, or the new copy's; both shown. -->
+        {#if swap.covers && (swap.covers.current || swap.covers.new)}
+          {@const c = swap.covers}
+          <div class="covers">
+            <figure class:on={coverWay === 'keep'}><span class="thumb"><Cover src={c.current} /></span><figcaption>Current</figcaption></figure>
+            <figure class:on={coverWay === 'new'}><span class="thumb"><Cover src={c.new} /></span><figcaption>New</figcaption></figure>
+          </div>
+          <SettingRow label="Cover"><Seg label="Cover" options={[{ value: 'keep', label: 'Keep' }, { value: 'new', label: 'New' }]} bind:value={coverWay} /></SettingRow>
+        {/if}
       {/if}
       <div class="actions">
         {#if swap && (!swap.refused || swap.refused.kind === 'needs_year')}
@@ -463,6 +503,22 @@
         <button onclick={onclose}>Cancel</button>
       </div>
     </div>
+  {:else if ask === 'cover'}
+    <!-- Change cover (0.9.5): the album's own first, then Discogs' and the Cover Art Archive's, as an artist's albums;
+         a tap makes it the cover, inside every file and beside them (Undo brings the old one back). -->
+    {#if !covers}
+      <p class="ask pad">Looking for covers…</p>
+    {:else if !covers.candidates.length}
+      <p class="ask pad">No other covers found.</p>
+    {:else}
+      {@const list = covers}
+      <ul class="cover-grid">
+        {#if list.current}<li><AlbumCard source="cover" album={{ id: 'current', title: 'Current', year: null }} cover={list.current.url} lines={[size(list.current)]} onopen={() => onclose()} /></li>{/if}
+        {#each list.candidates as c (c.url)}
+          <li><AlbumCard source="cover" album={{ id: c.url, title: c.what ?? (c.from === 'discogs' ? 'Discogs' : 'Cover Art Archive'), year: null }} cover={c.url} lines={[size(c), c.from === 'discogs' ? 'Discogs' : 'Cover Art Archive']} busy={working} onopen={() => setCover(c)} /></li>
+        {/each}
+      </ul>
+    {/if}
   {:else if ask === 'delete'}
     <div class="form">
       <p class="ask">Delete {a.title}? It stays in the trash for {trashDays} {trashDays === 1 ? 'day' : 'days'}.</p>
@@ -538,6 +594,7 @@
       </MenuGroup>
       <!-- Change: its cover on this device, its resume point, and (its administrators', decision 0051) the library's. -->
       <MenuGroup>
+        {#if me.admin && source === 'cratarr'}<MenuEntry icon="image" label="Change cover" onclick={askCover} />{/if}
         <MenuEntry icon="image" label="Change cover on this device" onclick={() => picker?.click()} />
         <MenuEntry icon={ownCover ? 'imageOff' : 'reset'} label={ownCover ? "Use the server's cover" : 'Read the cover again'} onclick={serverCover} />
         {#if resumeAt}<MenuEntry icon="resume" label="Remove resume point" onclick={forgetResume} />{/if}
@@ -596,6 +653,54 @@
 
   .picker {
     display: none;
+  }
+
+  /* Change cover's choices: as an artist's albums, a grid of covers. */
+  .cover-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 16px 12px;
+    margin: 0;
+    padding: 0 16px 12px;
+    list-style: none;
+  }
+
+  .pad {
+    padding: 0 16px;
+  }
+
+  /* Replace's two covers, the chosen one ringed in the accent. */
+  .covers {
+    display: flex;
+    gap: 12px;
+  }
+
+  .covers figure {
+    margin: 0;
+    opacity: 0.55;
+  }
+
+  .covers figure.on {
+    opacity: 1;
+  }
+
+  .covers .thumb {
+    display: block;
+    width: 88px;
+    height: 88px;
+    overflow: hidden;
+    border-radius: 8px;
+  }
+
+  .covers figure.on .thumb {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .covers figcaption {
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 13px;
   }
 
   .form {
