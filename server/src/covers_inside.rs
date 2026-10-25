@@ -65,6 +65,52 @@ pub fn complete(dir: &Path) -> Result<Done> {
     Ok(done)
 }
 
+/// An album's audio files (`tracks_under`), for a cover changed by hand (app::covers).
+pub fn tracks_of(dir: &Path) -> Vec<PathBuf> {
+    tracks_under(dir)
+}
+
+/// A cover file written (over one of that name): a cover changed by hand.
+pub fn write_file(path: &Path, data: &[u8]) -> Result<()> {
+    if path.exists() {
+        std::fs::remove_file(path).with_context(|| format!("replacing {}", path.display()))?;
+    }
+    write_new(path, data)
+}
+
+/// The front cover inside each FLAC and MP3 track replaced by this picture (`None`: taken out), the audio untouched
+/// (crate::retag); a cover changed by hand, or that change undone. The tracks left as they were, and why.
+pub fn replace(tracks: &[PathBuf], picture: Option<(&[u8], &str)>) -> Vec<(PathBuf, String)> {
+    use lofty::picture::{MimeType, Picture, PictureType};
+    let mut left = Vec::new();
+    for t in tracks {
+        if !t.extension().and_then(|x| x.to_str()).is_some_and(|x| matches!(x.to_ascii_lowercase().as_str(), "flac" | "mp3")) {
+            continue;
+        }
+        let done = crate::retag::rewrite(
+            t,
+            |tag| {
+                tag.remove_picture_type(PictureType::CoverFront);
+                if let Some((data, mime)) = picture {
+                    tag.push_picture(Picture::unchecked(data.to_vec()).pic_type(PictureType::CoverFront).mime_type(MimeType::from_str(mime)).build());
+                }
+            },
+            |copy| {
+                if let Some((data, _)) = picture
+                    && crate::serve::art::embedded(copy).is_none_or(|(_, b)| b != data)
+                {
+                    bail!("the picture could not be read back");
+                }
+                Ok(())
+            },
+        );
+        if let Err(e) = done {
+            left.push((t.clone(), format!("{e:#}")));
+        }
+    }
+    left
+}
+
 /// The album's audio files, in its folder and any folders in it (a disc each), in name order.
 fn tracks_under(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -173,6 +219,34 @@ mod tests {
         // Done again: nothing more to do.
         let again = complete(&d).unwrap();
         assert!(again.embedded.is_empty() && again.cover_file.is_none());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_cover_changed_by_hand_replaces_the_picture_inside_and_undone_comes_back() {
+        let d = dir("replace");
+        let one = flac(&d, "01");
+        let two = d.join("02.mp3");
+        mp3(&two);
+        let old = jpeg(&d.join("cover.jpg"));
+        complete(&d).unwrap();
+        let audio = audio_of(&std::fs::read(&one).unwrap(), Kind::Flac).unwrap().to_vec();
+        let new = {
+            let img = image::RgbImage::from_fn(32, 32, |x, _| image::Rgb([x as u8 * 8, 10, 200]));
+            let mut out = std::io::Cursor::new(Vec::new());
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90).encode_image(&img).unwrap();
+            out.into_inner()
+        };
+        let tracks = tracks_of(&d);
+        assert!(replace(&tracks, Some((&new, "image/jpeg"))).is_empty());
+        for t in [&one, &two] {
+            assert_eq!(crate::serve::art::embedded(t).unwrap().1, new, "one front cover inside: the new one");
+        }
+        assert_eq!(audio_of(&std::fs::read(&one).unwrap(), Kind::Flac).unwrap(), audio.as_slice(), "the audio as it was");
+        assert!(replace(&tracks, Some((&old, "image/jpeg"))).is_empty());
+        assert_eq!(crate::serve::art::embedded(&one).unwrap().1, old);
+        write_file(&d.join("cover.jpg"), &new).unwrap();
+        assert_eq!(std::fs::read(d.join("cover.jpg")).unwrap(), new);
         std::fs::remove_dir_all(&d).ok();
     }
 

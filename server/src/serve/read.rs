@@ -590,6 +590,22 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The album in a catalogue folder's folder (`dir`), by its id (0.9.5: Replace shows its cover).
+    pub fn album_in(&self, folder: i64, dir: &str) -> Result<Option<String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT id FROM albums WHERE folder = ?1 AND dir = ?2 ORDER BY n LIMIT 1")?;
+        Ok(st.query_map(rusqlite::params![folder, dir], |r| r.get::<_, String>(0))?.next().transpose()?)
+    }
+
+    /// An album's place: its catalogue folder and folder in it, its MusicBrainz release, artist and name (0.9.5: its
+    /// cover changed by hand).
+    #[allow(clippy::type_complexity)]
+    pub fn album_place(&self, id: &str) -> Result<Option<(i64, String, Option<String>, String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT folder, dir, mbid, artist, name FROM albums WHERE id = ?1")?;
+        Ok(st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.next().transpose()?)
+    }
+
     /// The albums whose files carry no genre (0.9.5: asked of Discogs): their ids, MusicBrainz releases (or empty),
     /// artists and names.
     pub fn albums_without_genres(&self) -> Result<Vec<(String, String, String, String)>> {

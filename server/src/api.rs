@@ -218,6 +218,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/settings/lidarr/options", get(lidarr_options))
             .route("/api/settings/lastfm", get(get_lastfm_key).put(put_lastfm_key))
             .route("/api/settings/discogs", get(get_discogs_keys).put(put_discogs_keys))
+            .route("/api/albums/{source}/{album}/covers", get(album_covers).post(set_album_cover))
             .route("/api/settings/naming", get(naming))
             .route("/api/catalogue", get(catalogue_status))
             .route("/api/health/report", get(health_report))
@@ -2455,13 +2456,28 @@ async fn replace_preview(
     Ok(Json(app.incoming.replace_preview(&source, &album, q.year.as_deref()).await?))
 }
 
+/// Replace's ask (0.9.5): the year where the tags lack it, and the cover: `keep` the one in Music, or the `new` copy's
+/// (the default, as before).
+#[derive(Deserialize, Default)]
+struct ReplaceBody {
+    #[serde(default)]
+    year: Option<String>,
+    #[serde(default)]
+    cover: Option<String>,
+}
+
 async fn replace_incoming(
     State(app): State<Arc<App>>,
     Path((source, album)): Path<(String, String)>,
-    body: Option<Json<KeepYear>>,
+    body: Option<Json<ReplaceBody>>,
 ) -> Result<Json<crate::app::KeepResult>, ApiError> {
-    let year = body.map(|Json(b)| b).unwrap_or_default().year;
-    Ok(Json(app.incoming.replace(&source, &album, year.as_deref()).await?))
+    let b = body.map(|Json(b)| b).unwrap_or_default();
+    let keep = match b.cover.as_deref() {
+        None | Some("new") => false,
+        Some("keep") => true,
+        Some(_) => return Err(ToggleError::Refused("cover is keep or new".into()).into()),
+    };
+    Ok(Json(app.incoming.replace(&source, &album, b.year.as_deref(), keep).await?))
 }
 
 /// Albums waiting for their hi-res files to be converted before Keep or Replace, and those just finished.
@@ -2739,6 +2755,8 @@ async fn undo(State(app): State<Arc<App>>, Json(req): Json<UndoRequest>) -> Resu
             );
         } else if token.starts_with('c') {
             redo.extend(app.playlists.undo(token).await?);
+        } else if token.starts_with(crate::app::covers::UNDO) {
+            crate::app::covers::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         } else {
             restored.push(app.incoming.undo(token).await?);
         }
@@ -4273,6 +4291,32 @@ async fn put_discogs_keys(Json(b): Json<DiscogsKeys>) -> Result<Json<serde_json:
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     get_discogs_keys().await
+}
+
+/// Change cover (0.9.5): only for Cratarr's own library's albums, whose files Cratarr holds.
+fn own_album(source: &str) -> Result<(), ApiError> {
+    if source != crate::source::cratarr::KIND.id {
+        return Err(ToggleError::Refused("Covers are changed for Cratarr's own library's albums.".into()).into());
+    }
+    Ok(())
+}
+
+/// An album's covers to choose from (its Discogs master's and releases', the Cover Art Archive's) and its own.
+async fn album_covers(Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::covers::Covers>, ApiError> {
+    own_album(&source)?;
+    Ok(Json(crate::app::covers::candidates(&album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+#[derive(Deserialize)]
+struct SetCover {
+    url: String,
+}
+
+/// An album's cover set to one of its candidates: beside its tracks and inside each; Undo puts the old one back.
+async fn set_album_cover(Path((source, album)): Path<(String, String)>, Json(b): Json<SetCover>) -> Result<Json<serde_json::Value>, ApiError> {
+    own_album(&source)?;
+    let token = crate::app::covers::set(&album, &b.url).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "undo": [token] })))
 }
 
 /// A release group's cover for albums not in the library (0.9.5): to the Cover Art Archive's, else Discogs' master's;

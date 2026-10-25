@@ -30,6 +30,64 @@ pub struct ReplacePreview {
     pub convert: usize,
     /// Whether a Lidarr is set, to be told to stop fetching the album; without one it may fetch it again.
     pub acquisition: bool,
+    /// Both covers, side by side for the choice (0.9.5): the album's in Music and the new copy's.
+    pub covers: ReplaceCovers,
+}
+
+/// The two covers Replace chooses between (0.9.5): `keep` the one in Music, or take the `new` copy's.
+#[derive(Debug, Default, Serialize)]
+pub struct ReplaceCovers {
+    pub current: Option<String>,
+    pub new: Option<String>,
+}
+
+/// The cover of the album in Music at `old_dir` and of the new copy, as the page shows covers.
+fn covers_of(source_id: &str, album_id: &str, old_dir: &str) -> ReplaceCovers {
+    let current = crate::serve::instance()
+        .and_then(|s| s.library.album_in(0, old_dir).ok().flatten())
+        .map(|id| format!("/api/albums/{}/{id}/cover", crate::source::cratarr::KIND.id));
+    ReplaceCovers { current, new: Some(format!("/api/albums/{source_id}/{album_id}/cover")) }
+}
+
+/// The Music album's cover written into the new copy's folder before Replace (0.9.5, `cover: keep`): its cover file
+/// (else the picture inside its first track) beside the new tracks and inside each, the copy's own cover file set aside
+/// in the data folder. Never stops Replace: what could not be done is logged.
+fn keep_cover(old: &std::path::Path, new: &std::path::Path) {
+    let picture = match crate::serve::art::cover_file(old) {
+        Some(f) => std::fs::read(&f).ok(),
+        None => crate::covers_inside::tracks_of(old).iter().find_map(|t| crate::serve::art::embedded(t)).map(|(_, b)| b),
+    };
+    let Some(data) = picture else {
+        tracing::info!("covers: {} has no cover to keep", old.display());
+        return;
+    };
+    let mime = crate::serve::art::sniff(&data);
+    let ext = match mime {
+        "image/png" => "png",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        _ => "jpg",
+    };
+    if let Some(own) = crate::serve::art::cover_file(new) {
+        let aside = crate::serve::instance().and_then(|s| s.data_dir.clone()).map(|d| std::path::Path::new(&d).join("cover-undo").join(format!("replace-{}", epoch_now())));
+        if let Some(aside) = aside
+            && std::fs::create_dir_all(&aside).is_ok()
+            && let Some(name) = own.file_name()
+        {
+            let _ = std::fs::copy(&own, aside.join(name));
+        }
+        if let Err(e) = std::fs::remove_file(&own) {
+            tracing::warn!("covers: {}: {e}", own.display());
+            return;
+        }
+    }
+    if let Err(e) = crate::covers_inside::write_file(&new.join(format!("cover.{ext}")), &data) {
+        tracing::warn!("covers: {}: {e:#}", new.display());
+        return;
+    }
+    for (t, why) in crate::covers_inside::replace(&crate::covers_inside::tracks_of(new), Some((&data, mime))) {
+        tracing::warn!("covers: {} kept its own picture: {why}", t.display());
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -160,6 +218,7 @@ impl IncomingService {
         let acquisition = self.acquisition().is_some();
         Ok(match self.plan_replace(&at, year).await? {
             Ok(p) => ReplacePreview {
+                covers: covers_of(source_id, album_id, &p.old_dir),
                 title: at.album.title,
                 old: p.old_dir,
                 folder: Some(p.plan.folder),
@@ -169,7 +228,17 @@ impl IncomingService {
                 convert,
                 acquisition,
             },
-            Err(r) => ReplacePreview { title: at.album.title, old, folder: None, tracks: 0, added: 0, refused: Some(r), convert, acquisition },
+            Err(r) => ReplacePreview {
+                covers: covers_of(source_id, album_id, &old),
+                title: at.album.title,
+                old,
+                folder: None,
+                tracks: 0,
+                added: 0,
+                refused: Some(r),
+                convert,
+                acquisition,
+            },
         })
     }
 
@@ -178,13 +247,21 @@ impl IncomingService {
     /// named per the library's template, each taking over its old track's id. Lidarr stops fetching the album and the
     /// old tracks' play data goes to the new server items (handlers). Undo puts it all back.
     /// Hi-res files are converted first, in the queue: the plan is checked now, so a refusal shows at once.
-    pub async fn replace(&self, source_id: &str, album_id: &str, year: Option<&str>) -> Result<KeepResult, ToggleError> {
+    pub async fn replace(&self, source_id: &str, album_id: &str, year: Option<&str>, keep: bool) -> Result<KeepResult, ToggleError> {
         self.refuse_if_queued(album_id)?;
         let at = self.locate(source_id, album_id).await?;
         let planned = self.plan_replace(&at, year).await?.map_err(refused)?;
         let music = PathBuf::from(self.lib.music().unwrap_or_default());
         if !self.can_write(&at.root).await || !self.can_write(&music).await {
             return Err(ToggleError::Refused("Cratarr cannot write in Incoming or Music".into()));
+        }
+        // The cover in Music kept (0.9.5, the owner's choice in the ask): written into the new copy first, so it moves
+        // in with it (a conversion's tracks get it inside again from the cover file).
+        if keep {
+            let (old, new) = (music.join(&planned.old_dir), at.root.join(&at.dir.dir));
+            if let Err(e) = tokio::task::spawn_blocking(move || keep_cover(&old, &new)).await {
+                tracing::warn!("covers: {e}");
+            }
         }
         let convert = self.to_convert(&at).await;
         if !convert.is_empty() {
