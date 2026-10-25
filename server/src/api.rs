@@ -220,6 +220,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/settings/lidarr/options", get(lidarr_options))
             .route("/api/settings/lastfm", get(get_lastfm_key).put(put_lastfm_key))
             .route("/api/settings/discogs", get(get_discogs_keys).put(put_discogs_keys))
+            .route("/api/settings/musicbrainz", get(musicbrainz_status).put(musicbrainz_switch))
             .route(
                 "/api/albums/{source}/{album}/covers",
                 get(album_covers).post(set_album_cover).put(upload_album_cover).layer(axum::extract::DefaultBodyLimit::max(13 << 20)),
@@ -4258,7 +4259,12 @@ struct PreviewBody {
 
 #[derive(Deserialize)]
 struct LastfmKey {
-    key: String,
+    /// A new key (empty: taken away); absent: kept.
+    #[serde(default)]
+    key: Option<String>,
+    /// Switched on or off (0.9.6), the key kept.
+    #[serde(default)]
+    enabled: Option<bool>,
 }
 
 /// The server's own Last.fm key (Discover's artists like each account's own most played, decision 0069 amended):
@@ -4273,21 +4279,29 @@ async fn get_lastfm_key() -> Result<Json<serde_json::Value>, ApiError> {
     .await
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(Json(json!({ "set": used, "saved": saved })))
+    Ok(Json(json!({ "set": used, "saved": saved, "enabled": crate::app::switches::is_on(crate::app::switches::LASTFM) })))
 }
 
 /// The server's own Last.fm key saved; an empty one takes it away.
 async fn put_lastfm_key(Json(b): Json<LastfmKey>) -> Result<Json<serde_json::Value>, ApiError> {
-    let key = b.key.trim().to_string();
-    if !key.is_empty() && !crate::app::discover::lastfm_key_ok(&key) {
+    let key = b.key.map(|k| k.trim().to_string());
+    if key.as_deref().is_some_and(|k| !k.is_empty() && !crate::app::discover::lastfm_key_ok(k)) {
         return Err(ToggleError::Refused("A Last.fm API key is 32 letters and digits.".into()).into());
     }
     let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     let ud = serve.userdata.clone();
-    tokio::task::spawn_blocking(move || ud.set_import_choice(crate::app::discover::SERVER_LASTFM, &key))
-        .await
-        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
-        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        if let Some(key) = key {
+            ud.set_import_choice(crate::app::discover::SERVER_LASTFM, &key)?;
+        }
+        if let Some(on) = b.enabled {
+            crate::app::switches::set_on(crate::app::switches::LASTFM, on)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     get_lastfm_key().await
 }
 
@@ -4300,28 +4314,45 @@ async fn get_discogs_keys() -> Result<Json<serde_json::Value>, ApiError> {
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .is_some();
-    Ok(Json(json!({ "set": set, "per_minute": crate::app::discogs::per_minute() })))
+    Ok(Json(json!({ "set": set, "per_minute": crate::app::discogs::per_minute(), "enabled": crate::app::switches::is_on(crate::app::switches::DISCOGS) })))
 }
 
 #[derive(Deserialize)]
 struct DiscogsKeys {
+    /// New ones (both empty: taken away); absent: kept.
     #[serde(default)]
-    key: String,
+    key: Option<String>,
     #[serde(default)]
-    secret: String,
+    secret: Option<String>,
+    /// Switched on or off (0.9.6), the key and secret kept.
+    #[serde(default)]
+    enabled: Option<bool>,
 }
 
 /// The server's Discogs key and secret saved (0.9.5, the owner registers the app); both blank takes them away.
 async fn put_discogs_keys(Json(b): Json<DiscogsKeys>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (key, secret) = (b.key.trim().to_string(), b.secret.trim().to_string());
-    if !(key.is_empty() && secret.is_empty()) && !(crate::app::discogs::valid(&key) && crate::app::discogs::valid(&secret)) {
+    let keys = match (b.key, b.secret) {
+        (None, None) => None,
+        (key, secret) => Some((key.unwrap_or_default().trim().to_string(), secret.unwrap_or_default().trim().to_string())),
+    };
+    if let Some((key, secret)) = &keys
+        && !(key.is_empty() && secret.is_empty())
+        && !(crate::app::discogs::valid(key) && crate::app::discogs::valid(secret))
+    {
         return Err(ToggleError::Refused("A Discogs key and secret are both letters and digits.".into()).into());
     }
     let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     let ud = serve.userdata.clone();
+    let enabled = b.enabled;
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        ud.set_import_choice(crate::app::discogs::KEY, &key)?;
-        ud.set_import_choice(crate::app::discogs::SECRET, &secret)
+        if let Some((key, secret)) = keys {
+            ud.set_import_choice(crate::app::discogs::KEY, &key)?;
+            ud.set_import_choice(crate::app::discogs::SECRET, &secret)?;
+        }
+        if let Some(on) = enabled {
+            crate::app::switches::set_on(crate::app::switches::DISCOGS, on)?;
+        }
+        Ok(())
     })
     .await
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
@@ -4381,6 +4412,26 @@ async fn set_album_cover(Path((source, album)): Path<(String, String)>, Json(b):
     own_album(&source)?;
     let token = crate::app::covers::set(&album, &b.url).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!({ "undo": [token] })))
+}
+
+/// How MusicBrainz stands (0.9.6, Settings › Connections): when last reached, the last failure, the background pass.
+async fn musicbrainz_status() -> Result<Json<crate::app::musicbrainz::Status>, ApiError> {
+    Ok(Json(crate::app::musicbrainz::status().await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+#[derive(Deserialize)]
+struct Switched {
+    enabled: bool,
+}
+
+/// MusicBrainz switched on or off (0.9.6): off, Cratarr asks it nothing (the background pass waits; Find more music
+/// and Renumber say so).
+async fn musicbrainz_switch(Json(b): Json<Switched>) -> Result<Json<crate::app::musicbrainz::Status>, ApiError> {
+    tokio::task::spawn_blocking(move || crate::app::switches::set_on(crate::app::switches::MUSICBRAINZ, b.enabled))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    musicbrainz_status().await
 }
 
 /// A release group's cover for albums not in the library (0.9.5): to the Cover Art Archive's, else Discogs' master's;

@@ -16,6 +16,7 @@ use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::library::epoch_now;
+use super::musicbrainz::Asked as _;
 
 /// TheAudioDB's public key (its documented free one; Jellyfin's plugin carries a key of its own).
 const KEY: &str = "123";
@@ -197,7 +198,7 @@ impl ArtistInfo {
     /// The artist MusicBrainz is sure a name is (its search's score 100, the same name): their id.
     async fn mbid_by_name(&self, name: &str) -> Result<Option<String>> {
         let url = format!("https://musicbrainz.org/ws/2/artist?query=artist:%22{}%22&fmt=json&limit=3", urlencode(name));
-        let answer: serde_json::Value = self.http.get(&url).send().await?.error_for_status()?.json().await?;
+        let answer: serde_json::Value = self.http.get(&url).asked().await?.error_for_status()?.json().await?;
         tokio::time::sleep(MB_PAUSE).await;
         Ok(answer["artists"]
             .as_array()
@@ -212,7 +213,7 @@ impl ArtistInfo {
     /// step has nothing.
     async fn commons_photo(&self, mbid: &str) -> Result<Option<(String, Credit)>> {
         let rels: serde_json::Value =
-            self.http.get(format!("https://musicbrainz.org/ws/2/artist/{}?inc=url-rels&fmt=json", urlencode(mbid))).send().await?.error_for_status()?.json().await?;
+            self.http.get(format!("https://musicbrainz.org/ws/2/artist/{}?inc=url-rels&fmt=json", urlencode(mbid))).asked().await?.error_for_status()?.json().await?;
         tokio::time::sleep(MB_PAUSE).await;
         let Some(item) = rels["relations"]
             .as_array()

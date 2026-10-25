@@ -13,6 +13,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::import::loose;
+use super::musicbrainz::Asked as _;
 
 /// ListenBrainz's similar artists, as its own artist pages ask for them (its labs API, with the algorithm they use).
 const LB_LABS: &str = "https://labs.api.listenbrainz.org/similar-artists/json";
@@ -159,7 +160,7 @@ async fn mb_related(http: &reqwest::Client, mbid: &str) -> Result<Vec<(String, S
         relations: Vec<Relation>,
     }
     let url = format!("https://musicbrainz.org/ws/2/artist/{mbid}?inc=artist-rels&fmt=json");
-    let found: Lookup = http.get(url).send().await?.error_for_status()?.json().await?;
+    let found: Lookup = http.get(url).asked().await?.error_for_status()?.json().await?;
     Ok(found
         .relations
         .into_iter()

@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use super::import::{Matcher, key, loose};
 use super::lastfm::{Auth, Progress};
+use super::musicbrainz::Asked as _;
 
 /// The task's kind (`app::tasks`).
 pub const KIND: &str = "discover";
@@ -554,7 +555,7 @@ async fn mb_discography(http: &reqwest::Client, artist: &str, today: &str) -> Re
     // MusicBrainz busy (503, the owner's sync 2026-10-25): once more after a pause, not the artist lost.
     let mut again = true;
     let b: Browse = loop {
-        let r = http.get(url.clone()).send().await?;
+        let r = http.get(url.clone()).asked().await?;
         if r.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE && std::mem::take(&mut again) {
             tokio::time::sleep(MB_BUSY_PAUSE).await;
             continue;
@@ -970,7 +971,7 @@ async fn mb_urls(http: &reqwest::Client, release_group: &str) -> Result<MbAlbum>
         releases: Vec<Release>,
     }
     let url = format!("https://musicbrainz.org/ws/2/release?release-group={release_group}&inc=url-rels+artist-credits+media+recordings&fmt=json&limit=10");
-    let b: Browse = http.get(url).send().await?.error_for_status()?.json().await?;
+    let b: Browse = http.get(url).asked().await?.error_for_status()?.json().await?;
     let mut artists: Vec<String> = Vec::new();
     for id in b.releases.iter().flat_map(|r| r.credits.iter().map(|c| c.artist.id.clone())) {
         if !artists.contains(&id) {
@@ -996,7 +997,7 @@ pub(super) async fn mb_artist_urls(http: &reqwest::Client, artist: &str) -> Resu
         relations: Vec<MbRelation>,
     }
     let url = format!("https://musicbrainz.org/ws/2/artist/{artist}?inc=url-rels&fmt=json");
-    let a: Artist = http.get(url).send().await?.error_for_status()?.json().await?;
+    let a: Artist = http.get(url).asked().await?.error_for_status()?.json().await?;
     Ok(a.relations.into_iter().filter_map(|r| r.url.map(|u| u.resource)).collect())
 }
 
@@ -1048,7 +1049,7 @@ async fn mb_artist_by_name(http: &reqwest::Client, name: &str) -> Result<Option<
     }
     let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/artist")?;
     url.query_pairs_mut().append_pair("query", &format!("artist:{}", quoted(name))).append_pair("fmt", "json").append_pair("limit", "3");
-    let s: Search = http.get(url).send().await?.error_for_status()?.json().await?;
+    let s: Search = http.get(url).asked().await?.error_for_status()?.json().await?;
     Ok(s.artists.into_iter().find(|a| a.score >= 95 && loose(&a.name) == loose(name)).map(|a| a.id))
 }
 
@@ -1112,7 +1113,7 @@ async fn mb_release_group(http: &reqwest::Client, artist: &str, album: &str) -> 
         .append_pair("query", &format!("releasegroup:{} AND artist:{}", quoted(album), quoted(artist)))
         .append_pair("fmt", "json")
         .append_pair("limit", "3");
-    let s: Search = http.get(url).send().await?.error_for_status()?.json().await?;
+    let s: Search = http.get(url).asked().await?.error_for_status()?.json().await?;
     Ok(s.groups.into_iter().find(|g| g.score >= 95 && loose(&g.title) == loose(album)).map(|g| (g.id, g.first.get(..4).and_then(|y| y.parse().ok()))))
 }
 
@@ -1630,11 +1631,11 @@ pub async fn musicbrainz_search(serve: &Arc<crate::serve::Serve>, cat: Arc<crate
     let text = words.join(" ");
     let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/release-group")?;
     url.query_pairs_mut().append_pair("query", &text).append_pair("fmt", "json").append_pair("limit", &limit.to_string());
-    let rg: serde_json::Value = http.get(url).send().await?.error_for_status()?.json().await?;
+    let rg: serde_json::Value = http.get(url).asked().await?.error_for_status()?.json().await?;
     tokio::time::sleep(MB_PAUSE).await;
     let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/artist")?;
     url.query_pairs_mut().append_pair("query", &text).append_pair("fmt", "json").append_pair("limit", &limit.to_string());
-    let ar: serde_json::Value = http.get(url).send().await?.error_for_status()?.json().await?;
+    let ar: serde_json::Value = http.get(url).asked().await?.error_for_status()?.json().await?;
     let credit = |g: &serde_json::Value| {
         g["artist-credit"].as_array().map(|c| c.iter().map(|x| format!("{}{}", x["name"].as_str().unwrap_or_default(), x["joinphrase"].as_str().unwrap_or_default())).collect::<String>()).unwrap_or_default()
     };
@@ -1742,6 +1743,10 @@ pub fn who(serve: &crate::serve::Serve, account: &str) -> Result<Who> {
 /// The server's own Last.fm key (0069 amended, 0.9: "one key for the whole server", so every account gets the artists
 /// like its own most played, a Last.fm account or not): the one saved under Connections, else `LASTFM_API_KEY`.
 pub fn server_lastfm_key(ud: &crate::userdata::UserData) -> Result<Option<String>> {
+    // Switched off (0.9.6): the key is kept, not used.
+    if !super::switches::is_on(super::switches::LASTFM) {
+        return Ok(None);
+    }
     let saved = ud.import_choice(SERVER_LASTFM)?.filter(|k| !k.trim().is_empty());
     Ok(saved.or_else(|| std::env::var(SERVER_LASTFM_ENV).ok().filter(|k| !k.trim().is_empty())))
 }

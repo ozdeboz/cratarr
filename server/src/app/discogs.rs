@@ -12,6 +12,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::userdata::UserData;
+use super::musicbrainz::Asked as _;
 
 /// Where the key and secret are kept (user data's server choices, as the server's Last.fm key).
 pub const KEY: &str = "discogs:key";
@@ -108,6 +109,10 @@ fn note_limits(h: &reqwest::header::HeaderMap) {
 
 /// One GET of Discogs' API (`path` with its query), paced; none where Discogs has no such thing.
 async fn get(path: &str) -> Result<Option<Value>> {
+    // Switched off (0.9.6): Discogs is asked nothing; as if it had nothing.
+    if !super::switches::is_on(super::switches::DISCOGS) {
+        return Ok(None);
+    }
     let creds = saved().await;
     let mut again = true;
     loop {
@@ -187,7 +192,7 @@ async fn mb_links(entity: &str, id: &str) -> Result<Vec<String>> {
         return Ok(Vec::new());
     }
     let http = super::discover::http()?;
-    let v: Value = http.get(format!("https://musicbrainz.org/ws/2/{entity}/{id}?inc=url-rels&fmt=json")).send().await?.error_for_status()?.json().await?;
+    let v: Value = http.get(format!("https://musicbrainz.org/ws/2/{entity}/{id}?inc=url-rels&fmt=json")).asked().await?.error_for_status()?.json().await?;
     tokio::time::sleep(super::discover::MB_PAUSE).await;
     Ok(v["relations"].as_array().into_iter().flatten().filter_map(|r| r["url"]["resource"].as_str().map(str::to_string)).collect())
 }
@@ -406,7 +411,7 @@ async fn genres_pass() -> Result<()> {
 
 /// A MusicBrainz release's release group.
 pub(super) async fn release_group_of(http: &reqwest::Client, release: &str) -> Result<Option<String>> {
-    let v: Value = http.get(format!("https://musicbrainz.org/ws/2/release/{release}?inc=release-groups&fmt=json")).send().await?.error_for_status()?.json().await?;
+    let v: Value = http.get(format!("https://musicbrainz.org/ws/2/release/{release}?inc=release-groups&fmt=json")).asked().await?.error_for_status()?.json().await?;
     tokio::time::sleep(super::discover::MB_PAUSE).await;
     Ok(v["release-group"]["id"].as_str().map(str::to_string))
 }
