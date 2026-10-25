@@ -1878,7 +1878,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           {#if leftOut}<button class="details left-out" onclick={() => (leftOutOpen = true)}><Icon name="crateOut" size={14} /><span>{leftOut.toLocaleString()} excluded</span></button>{/if}
         </div>
         <!-- A ranked crate's fit (the owner, 2026-10-23): what it learned not to suggest; a tap corrects it. -->
-        {#if crate && like && !multi}<AvoidLine {crate} name={suggestsFor?.name ?? title} round={saved} onchange={() => saved++} />{/if}
+        {#if crate && like && !multi}<AvoidLine {crate} name={suggestsFor?.name ?? title} round={saved} seed={like.item} onchange={() => saved++} />{/if}
         {#if (shownProfile || (like && curve?.alike.length)) && !multi}
           <div class="head-spread" class:artist-head={!!artist && !artist.tracks}>
             {#if like && curve?.alike.length}<LikeCurve curve={curve.alike} count={like.count} onpreview={(n) => (preview = n)} onchange={(n) => viewLike(like.item, n)} />{/if}

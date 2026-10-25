@@ -3,11 +3,52 @@
   // learned not to suggest, from what was turned down for it, and how many rules of one's own; a tap opens its Not for
   // sheet (lib/NotForSheet) to dismiss a trait, write a rule or put a track back. `round`: read again when it changes
   // (something turned down or put back).
-  import { getCrateFit, traitLabel, type CrateFit } from './api';
+  import { crateLeftOut, getCrateFit, leaveOutOfCrate, putBackInCrate, trackState, traitLabel, type CrateFit } from './api';
+  import { toast } from './toast.svelte';
+  import { withUndo } from './undo.svelte';
   import Icon from './Icon.svelte';
   import NotForSheet from './NotForSheet.svelte';
 
-  let { crate, name, round = 0, onchange = () => {} }: { crate: string; name: string; round?: number; onchange?: () => void } = $props();
+  /** `seed`: a Sounds like crate's seed (an album's al-… or a track's tr-…, Cratarr's own): Hide album beside the line
+   *  leaves the seed's album out of the crate (the owner, 2026-10-25), as a crate's albums are left out by hand
+   *  (decision 0024, amended: its tracks now and later), shown in the Not for sheet to put back. */
+  let { crate, name, round = 0, seed = null, onchange = () => {} }: { crate: string; name: string; round?: number; seed?: string | null; onchange?: () => void } = $props();
+
+  /** The seed's album: an album seed is it, a track's says. */
+  let seedAlbum = $state<string | null>(null);
+  $effect(() => {
+    const s = seed;
+    seedAlbum = s?.startsWith('al-') ? s : null;
+    if (s?.startsWith('tr-')) trackState('cratarr', s).then((t) => s === seed && (seedAlbum = t.album_id), () => {});
+  });
+  /** The crate's albums left out, as last read. */
+  let outAlbums = $state<string[]>([]);
+  $effect(() => {
+    const c = crate;
+    void [round, saved];
+    if (!seed) return;
+    crateLeftOut(c).then(
+      (l) => c === crate && (outAlbums = (l.albums ?? []).map((a) => a.id)),
+      () => {},
+    );
+  });
+  const hidden = $derived(!!seedAlbum && outAlbums.includes(seedAlbum));
+  let hiding = $state(false);
+  async function hideAlbum() {
+    const a = seedAlbum;
+    if (!a || hiding) return;
+    hiding = true;
+    try {
+      const { undo } = hidden ? await putBackInCrate(crate, 'cratarr', { albums: [a] }) : await leaveOutOfCrate(crate, 'cratarr', { albums: [a] });
+      withUndo(hidden ? `The album is suggested for ${name} again.` : `The album is left out of ${name}.`, [undo], { after: () => (saved++, onchange()) });
+      saved++;
+      onchange();
+    } catch (e) {
+      toast.fail(e, hidden ? "The album wasn't put back" : "The album wasn't left out");
+    } finally {
+      hiding = false;
+    }
+  }
 
   let fit = $state<CrateFit | null>(null);
   let open = $state(false);
@@ -34,12 +75,19 @@
 </script>
 
 {#if fit}
-  <button class="avoid" onclick={() => (open = true)}>
-    <Icon name="sliders" size={16} />
-    <span>
-      {#if avoiding.length}Avoiding {#each avoiding as a, i (a)}{#if i}{' · '}{/if}<b>{a}</b>{/each}{:else}Nothing avoided yet{/if}{#if rules}{' · '}{rules} {rules === 1 ? 'rule' : 'rules'}{/if}
-    </span>
-  </button>
+  <div class="line">
+    <button class="avoid" onclick={() => (open = true)}>
+      <Icon name="sliders" size={16} />
+      <span>
+        {#if avoiding.length}Avoiding {#each avoiding as a, i (a)}{#if i}{' · '}{/if}<b>{a}</b>{/each}{:else}Nothing avoided yet{/if}{#if rules}{' · '}{rules} {rules === 1 ? 'rule' : 'rules'}{/if}
+      </span>
+    </button>
+    {#if seedAlbum}
+      <button class="avoid pill" class:on={hidden} aria-pressed={hidden} disabled={hiding} aria-busy={hiding || undefined} onclick={hideAlbum}
+        ><Icon name="eyeOff" size={16} /><span>{hidden ? 'Album hidden' : 'Hide album'}</span></button
+      >
+    {/if}
+  </div>
 {/if}
 {#if open}
   <NotForSheet
@@ -54,6 +102,29 @@
 {/if}
 
 <style>
+  /* The line and Hide album beside it, in the line's place. */
+  .line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 16px 6px;
+  }
+
+  .line .avoid {
+    margin: 0;
+  }
+
+  /* A pill: round-ended, as wide as its words. */
+  .avoid.pill {
+    flex: none;
+    border-radius: 999px;
+  }
+
+  .avoid.pill.on {
+    color: var(--text);
+  }
+
   .avoid {
     display: flex;
     align-items: center;
