@@ -8,7 +8,7 @@
   import { deviceName } from './lib/playOnTarget.svelte';
   import { getHomeAssistant, getImport, getLogLevels, getSettings, getSignInRequired, getUsers, type ImportJob, type Settings } from './lib/api';
   import { me } from './lib/me.svelte';
-  import { appInfo, downloads, inApp } from './lib/app.svelte';
+  import { appInfo, inApp } from './lib/app.svelte';
   import Icon from './lib/Icon.svelte';
   import { panel, SETTINGS, settingsOf, viewPlaylist } from './lib/panel.svelte';
   import { playOn } from './lib/playOn.svelte';
@@ -65,7 +65,6 @@
     );
   });
 
-  const size = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`);
   const THEME = { auto: 'System theme', light: 'Light', dark: 'Dark' } as const;
 
   /** A preference part's line: what differs from its default, or "Default" (the owner, 2026-10-25). */
@@ -74,9 +73,15 @@
   function line(id: SettingsSection): string {
     switch (id) {
       case 'device':
-        // Its name is the row's title; the line says what it is (the owner, 2026-10-25).
-        if (!inApp) return 'This browser';
-        return ['This device', appInfo.stayReady ? 'Stays ready' : null, downloads.known ? `${size(downloads.bytes)} downloaded` : null].filter(Boolean).join(' · ');
+        // Its name is the row's title; its line what of its own differs from the default, as every part of preferences
+        // (the owner, 2026-10-25: what is downloaded is Sync's).
+        return changed([
+          !(inApp ? appInfo.levelling : prefs.levelling) && 'No levelling',
+          !inApp && prefs.phoneLossless && 'Lossless',
+          inApp && appInfo.stayReady && 'Stays ready',
+          inApp && !appInfo.batteryAllowed && 'Android may stop it',
+          inApp && appInfo.deviceMusic === 'granted' && 'Its own music',
+        ]);
       case 'connections':
         if (!s) return '';
         return [...s.sources.filter((v) => v.enabled).map((v) => (v.status.connected ? v.label : `${v.label} (not connected)`)), s.lidarr ? 'Lidarr' : null, homeAssistant ? 'Home Assistant' : null]
