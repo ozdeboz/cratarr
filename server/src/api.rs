@@ -221,6 +221,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/settings/lastfm", get(get_lastfm_key).put(put_lastfm_key))
             .route("/api/settings/discogs", get(get_discogs_keys).put(put_discogs_keys))
             .route("/api/settings/musicbrainz", get(musicbrainz_status).put(musicbrainz_switch))
+            .route("/api/server/restart", post(restart_server))
             .route(
                 "/api/albums/{source}/{album}/covers",
                 get(album_covers).post(set_album_cover).put(upload_album_cover).layer(axum::extract::DefaultBodyLimit::max(13 << 20)),
@@ -4417,6 +4418,17 @@ async fn set_album_cover(Path((source, album)): Path<(String, String)>, Json(b):
 /// How MusicBrainz stands (0.9.6, Settings › Connections): when last reached, the last failure, the background pass.
 async fn musicbrainz_status() -> Result<Json<crate::app::musicbrainz::Status>, ApiError> {
     Ok(Json(crate::app::musicbrainz::status().await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+/// Cratarr restarted from Settings (0.9.6, the owner: no command line needed): answered at once, then stopped as
+/// `docker stop` stops it (`main`'s graceful stop); Docker's restart policy (unless-stopped) brings it back.
+async fn restart_server() -> (StatusCode, Json<serde_json::Value>) {
+    tracing::info!(target: "server", "restart asked from Settings");
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        crate::RESTART.notify_one();
+    });
+    (StatusCode::ACCEPTED, Json(json!({ "restarting": true })))
 }
 
 #[derive(Deserialize)]

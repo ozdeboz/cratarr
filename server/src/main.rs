@@ -291,7 +291,11 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// SIGTERM (what docker stop sends) or Ctrl-C.
+/// A restart asked from Settings (0.9.6): Cratarr stops as `docker stop` stops it, and Docker's restart policy brings it
+/// back.
+pub(crate) static RESTART: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// SIGTERM (what docker stop sends), Ctrl-C, or a restart asked from Settings.
 async fn stop_signal() {
     #[cfg(unix)]
     {
@@ -301,11 +305,15 @@ async fn stop_signal() {
                 tokio::select! {
                     _ = term.recv() => {}
                     _ = tokio::signal::ctrl_c() => {}
+                    () = RESTART.notified() => {}
                 }
                 return;
             }
             Err(e) => tracing::warn!("cannot listen for SIGTERM: {e}"),
         }
     }
-    let _ = tokio::signal::ctrl_c().await;
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        () = RESTART.notified() => {}
+    }
 }

@@ -151,7 +151,11 @@ async fn hand(app: &super::App, serve: &Serve, r: &Request) -> String {
         None => "Not handed over: Lidarr is not connected, or is switched off".to_string(),
         Some(f) => match f.want(r.release_group.as_deref(), &r.artist, &r.album).await {
             Ok(said) => said,
-            Err(e) => format!("Not handed over: {e:#}"),
+            Err(e) => {
+                // In the log too (0.9.6: a Lidarr timeout the owner saw left no trace to follow).
+                tracing::warn!("request {}: not handed to Lidarr: {e:#}", r.id);
+                format!("Not handed over: {e:#}")
+            }
         },
     };
     if let Err(e) = serve.userdata.set_request_fetched(r.id, &said) {
