@@ -162,7 +162,9 @@ Decided (the owner, 2026-10-24): a playlist's genres come from its tracks' genre
 MusicBrainz's genres, not AudioMuse's styles); the territories are a switch on the Map, off until turned on; the top
 six genres are drawn, each its own colour (the palette's categorical order), the rest no territory.
 
-## 0.9.2: deep search everywhere, and global search
+## 0.9.3: deep search everywhere, and global search
+
+Moved from 0.9.2 by the owner, 2026-10-25: 0.9.2 ships without it.
 
 The owner, 2026-10-25: "Deep Search Everywhere 0.9.2, together with Global Search. Same thing, really." Every page's
 search finds deep (a playlist by its tracks, a crate by what it holds, an artist by its albums), and one global search
@@ -197,3 +199,16 @@ the same tracks, Air's Moon Safari with one track more in Incoming, 6 another ed
   1×2 beside it. A first artist's grid grows only while its next suggestions stay close (about half the strongest
   match or more); width left over goes to a second artist by the same rule. The server gives each suggestion how alike
   it is to each artist it was found from (`alike`: Last.fm's match per seed).
+
+## 0.9.3: built-in crates, and your crates on Home
+
+The owner, 2026-10-25: Home's crates belong on the Crates page too, and one's own crates may come onto Home.
+
+- **Built-in crates** (the owner chose the word): New for you, Grave digging and Sounds like your week (Home's shelves
+  that are crates) are listed on the Crates page beside Unlisted, which is one already. Like Unlisted, none can be
+  removed (no Delete, no Rename); each is marked as built-in. The crates' filter sheet gets a toggle, "Hide built-in
+  crates".
+- **Your crates on Home:** Settings › Home gets a switch at the top, under the section header, "Your crates on Home".
+  On, each of one's own crates joins the sections list right below, to be ordered and switched on or off as every
+  section is. On Home a crate shows as a shelf of its albums (as New for you does): its name as the header, a row of its
+  albums' covers, › opening the crate, a cover its album, the shelf's play buttons as the others'.
