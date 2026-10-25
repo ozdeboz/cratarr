@@ -1527,7 +1527,7 @@ impl PlaylistService {
     }
 
     /// The asking account's playlists and the ones others share, with their lines and when each last changed, by id.
-    async fn visible_lines(&self) -> Result<Vec<(String, i64, Vec<String>)>, ToggleError> {
+    pub(super) async fn visible_lines(&self) -> Result<Vec<(String, i64, Vec<String>)>, ToggleError> {
         let Ok(own) = self.lib.store_for(asking_account().as_deref()) else { return Ok(Vec::new()) };
         let mut out = own.lines_of_all().await?;
         let shared = self.shared_keys();
@@ -2016,6 +2016,38 @@ impl PlaylistService {
         }
         out.extend(self.own_crates()?.list().await?.into_iter().map(|c| (c.id, c.name)));
         Ok(out)
+    }
+
+    /// Every crate the account sees with the lines it shows now, as the Crates page shows them from every library
+    /// (built-in and its own; one that cannot be made now left out): search finds a crate by its tracks (decision 0072).
+    pub async fn crate_members(&self) -> Result<Vec<(String, String, Vec<String>)>, ToggleError> {
+        let mut all = crates::permanent();
+        for id in [crates::HOME_NEW, crates::HOME_WEEK, crates::HOME_GRAVES] {
+            match self.crate_def(id).await {
+                Ok(def) => all.push(def),
+                Err(e) => tracing::debug!("search: the built-in {id} is left out now: {e}"),
+            }
+        }
+        all.extend(self.own_crates()?.list().await?);
+        let set = self.own_crates()?.all_favourites().await?;
+        let albums_set = self.own_crates()?.all_favourite_albums().await?;
+        let left_set = self.own_crates()?.all_left_out().await?;
+        let album_tracks = album_lines(self.lib.catalogue(), left_set.values().flat_map(|l| l.albums.iter().cloned()).collect()).await;
+        let excluded = self.own_crates()?.excluded().await?;
+        let none = crates::LeftOut::default();
+        let favourites_of = |id: &str| set.get(id).copied().unwrap_or(crates::Favourites::None);
+        let albums_of = |id: &str| albums_set.get(id).copied().unwrap_or(crates::Favourites::All);
+        let needed = all.iter().any(|c| crates::needs_favourites(&c.conditions) || favourites_of(&c.id) != crates::Favourites::All);
+        let needed_albums = all.iter().any(|c| crates::needs_favourite_albums(&c.conditions) || albums_of(&c.id) != crates::Favourites::All);
+        let lib = self.crate_library(None, needed, needed_albums, &[]).await?;
+        Ok(all
+            .into_iter()
+            .filter_map(|c| {
+                let gone = left_lines(left_set.get(&c.id).unwrap_or(&none), &album_tracks, &excluded);
+                let shown = crates::leaving_out(&gone, &crates::shown(&c.conditions, favourites_of(&c.id), albums_of(&c.id)));
+                lib.knows(&shown).then(|| (c.id, c.name, lib.select(&shown)))
+            })
+            .collect())
     }
 
     /// A built-in crate is everyone's: its picture is the administrators' to change (decision 0051).
