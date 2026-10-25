@@ -1255,6 +1255,14 @@ async fn keep_found(serve: &Arc<crate::serve::Serve>, account: &str, found: &Fou
     Ok(())
 }
 
+/// The account's kept suggestion of an album on Bandcamp (by its page), where there is one: what Discover knows of it,
+/// for the album's panel (0.9.2).
+pub fn suggestion_on_bandcamp(serve: &crate::serve::Serve, account: &str, page: &str) -> Result<Option<Suggestion>> {
+    let bare = |u: &str| u.to_ascii_lowercase().trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/').to_string();
+    let page = bare(page);
+    Ok(kept(serve, account)?.and_then(|f| f.albums.into_iter().find(|s| s.bandcamp.as_deref().is_some_and(|b| bare(b) == page))))
+}
+
 /// What was found last for the account, the albums answered since left out.
 pub fn kept(serve: &crate::serve::Serve, account: &str) -> Result<Option<Found>> {
     let Some((_, json)) = serve.userdata.discover_found(account)? else { return Ok(None) };
