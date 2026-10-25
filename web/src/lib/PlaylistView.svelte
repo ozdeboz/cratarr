@@ -185,7 +185,7 @@
   /** A crate, an album or an artist: tracks without a playlist's file (no tabs, no editing, no statistics). */
   const plain = $derived(!!crate || !!album || !!artist || crateEditing || creating);
   /** What the artist's answer says besides their tracks: their albums, what they appear on, the heart. */
-  let artistHead = $state<Pick<ArtistView, 'albums' | 'appears_on' | 'favorite'> | null>(null);
+  let artistHead = $state<(Pick<ArtistView, 'albums' | 'appears_on' | 'favorite'> & { released?: { releases: number | null; albums: number | null } }) | null>(null);
   /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
   let albumHead = $state<Pick<AlbumView, 'title' | 'artist' | 'year' | 'format' | 'added' | 'played' | 'plays' | 'released' | 'label' | 'about' | 'credits' | 'tags' | 'links' | 'listeners'> & { kbps: number | null } | null>(null);
   /** An album's or a crate's genres, most shared first, as its first page came (a playlist's are its Insights'). */
@@ -354,7 +354,7 @@
         : ar
           ? (ar.source === DEVICE ? Promise.resolve(deviceArtistView(ar.name)) : fromDiscover(ar.source) ? discoverArtistView(ar.name) : artistView(ar.source, ar.name)).then((r) => {
               if (want === id) {
-                artistHead = { albums: r.albums, appears_on: r.appears_on, favorite: r.favorite };
+                artistHead = { albums: r.albums, appears_on: r.appears_on, favorite: r.favorite, released: (r as { released?: { releases: number | null; albums: number | null } }).released };
                 // Their picture: their newest album's cover (Symfonium's, without an artist's photo); one from Discover's
                 // albums are Bandcamp's.
                 const first = r.albums[0] ?? r.appears_on[0];
@@ -911,8 +911,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (crate) return rows ? plural(total, 'track') : '';
     if (multi) return playlistsKnown() ? plural(chosenCount, 'track') : '';
     if (!rows) return '';
-    // An artist from Discover: their albums on Bandcamp, no tracks of a server's.
-    if (artist && fromDiscover(artist.source)) return `${plural(artistHead?.albums.length ?? 0, 'album')} on Bandcamp`;
+    // An artist from Discover: how much they have released (the owner, 2026-10-25), as far as the look counted; no tracks
+    // of a server's.
+    if (artist && fromDiscover(artist.source)) {
+      const r = artistHead?.released;
+      return r?.releases ? plural(r.releases, 'release') : r?.albums ? plural(r.albums, 'album') : '';
+    }
     if (artist) {
       const albums = artist.tracks ? null : plural(artistHead?.albums.length ?? 0, 'album');
       return [albums, plural(rows.length, 'track'), length ? clockText(length) : null].filter(Boolean).join(' • ');

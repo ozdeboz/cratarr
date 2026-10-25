@@ -1532,6 +1532,8 @@ export type DiscoverAlbum = {
   artist_photo?: boolean;
   /** How many albums the artist new to the library has released, where the look found out (New to you). */
   artist_albums?: number;
+  /** How many releases the artist has made, every kind (MusicBrainz's release groups), where the look found out. */
+  artist_releases?: number;
   /** What MusicBrainz calls it (album, EP, single…), its genres, length, track count; Last.fm's listeners (0.9). */
   kind?: string | null;
   genres?: string[];
