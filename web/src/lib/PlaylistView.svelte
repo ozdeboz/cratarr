@@ -115,6 +115,7 @@
   import CoverFlow from './CoverFlow.svelte';
   import SimilarLists from './SimilarLists.svelte';
   import SuggestedTracks from './SuggestedTracks.svelte';
+  import { glass, handGlass } from './glass.svelte';
   import AvoidLine from './AvoidLine.svelte';
   import ListHead from './ListHead.svelte';
   import { insights, plural } from './insights.svelte';
@@ -1559,7 +1560,28 @@ ${r.album_artist ?? r.artist ?? ''}`;
     addEventListener('keydown', esc);
     return () => removeEventListener('keydown', esc);
   });
+  // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): its pills
+  // handed over while it shows its tracks (making a playlist and the playlists' other views keep their own bar).
+  const handed = $derived(glass.one && full && !making && !other);
+  const pill = () =>
+    !editing && !crateEditing
+      ? {
+          view: true,
+          order: listOrder,
+          device: !playing(),
+          filter: filterable,
+          tempos: listTempos,
+          kind,
+          counted: rows && shown ? { shown: shown.length, total: rows.length } : null,
+          search: full ? pageHere : null,
+        }
+      : null;
+  handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra });
 </script>
+
+<!-- This panel's glass: its floating pills, or App's row on a phone (lib/glass). -->
+{#snippet glassLeft()}<span class="navpill">{@render leave()}</span>{/snippet}
+{#snippet glassExtra()}<PanelPlace />{/snippet}
 
 {#snippet leave()}
   {#if full}
@@ -1599,19 +1621,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
     <!-- Symfonium's floating pills over the cover: back (when there is a view before this one) and ✕ on the left; the
          filter, View and where it plays, and the panel's place, on the right (in edit mode the place only). Once the
          action bar has the top they float just under it. -->
-    <div class="pills" class:below={stuck}>
-      <span class="navpill">{@render leave()}</span>
-      <span class="end">{#if !editing && !crateEditing}<TopPill
-            view
-            order={listOrder}
-            device={!playing()}
-            filter={filterable}
-            tempos={listTempos}
-            {kind}
-            counted={rows && shown ? { shown: shown.length, total: rows.length } : null}
-            search={full ? pageHere : null}
-          />{/if}<PanelPlace /></span>
-    </div>
+    {#if !handed}
+      <div class="pills" class:below={stuck}>
+        {@render glassLeft()}
+        <span class="end">{#if pill()}<TopPill {...pill()!} />{/if}<PanelPlace /></span>
+      </div>
+    {/if}
   {/if}
 
   <div class="scroll" bind:this={scroller} onscroll={onScroll}>

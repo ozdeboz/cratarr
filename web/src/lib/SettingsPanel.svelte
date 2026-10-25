@@ -9,6 +9,7 @@
   // going from one to another. Authentication's account, Import, this device's settings and Display act at once. The
   // server's parts are its administrators' (decision 0051): for anyone else they show nothing, and the server's
   // settings are not asked for.
+  import { glass, handGlass } from './glass.svelte';
   import { untrack } from 'svelte';
   import Crumbs from './Crumbs.svelte';
   import Icon from './Icon.svelte';
@@ -80,29 +81,43 @@
       resetBusy = false;
     }
   }
+  // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): handed over,
+  // its own bar not drawn, its list under the glass.
+  const handed = $derived(glass.one && !beside);
+  handGlass(() => handed, { left: glassLeft, pill: () => null, extra: glassExtra });
 </script>
 
-<div class="view">
+<!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
+{#snippet glassLeft()}
+  {#if thing}
+    <span class="navpill"><button aria-label="Back" title="Back" onclick={() => backFromThing(section)}><Icon name="back" size={22} /></button></span>
+  {:else if !beside}
+    <span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>
+  {/if}
+  <!-- Settings › the part; a thing's page: its part › its name (lib/Crumbs: two at most, the owner 2026-10-25). -->
+  {#if thing}
+    <Crumbs up={{ label: partTitle, go: () => backFromThing(section) }} here={title} />
+  {:else}
+    <Crumbs up={{ label: 'Settings', go: beside ? undefined : () => upToPage('#/settings') }} here={partTitle} />
+  {/if}
+{/snippet}
+{#snippet glassExtra()}
+  <!-- Diagnostics' file for a bug report, in the bar as Finamp's logs have their export. -->
+  {#if section === 'diagnostics'}<span class="navpill"><a href="/api/diagnostics/download" download aria-label="Download" title="Download"><Icon name="download" size={22} /></a></span>{/if}
+  <!-- Each part with preferences offers a Reset, as each of Finamp's settings screens has one in its bar. -->
+  {#if partReset.run && !thing}<span class="navpill"><button aria-label="Reset" title="Reset" onclick={() => (resetting = true)}><Icon name="resetSettings" size={22} /></button></span>{/if}
+  {#if !beside}<PanelPlace />{/if}
+{/snippet}
+
+<div class="view" class:handed>
+  {#if !handed}
   <div class="bar" class:beside={beside && !thing}>
-    {#if thing}
-      <span class="navpill"><button aria-label="Back" title="Back" onclick={() => backFromThing(section)}><Icon name="back" size={22} /></button></span>
-    {:else if !beside}
-      <span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>
-    {/if}
-    <!-- Settings › the part; a thing's page: its part › its name (lib/Crumbs: two at most, the owner 2026-10-25). -->
-    {#if thing}
-      <Crumbs up={{ label: partTitle, go: () => backFromThing(section) }} here={title} />
-    {:else}
-      <Crumbs up={{ label: 'Settings', go: beside ? undefined : () => upToPage('#/settings') }} here={partTitle} />
-    {/if}
+    {@render glassLeft()}
     <span class="end">
-      <!-- Diagnostics' file for a bug report, in the bar as Finamp's logs have their export. -->
-      {#if section === 'diagnostics'}<span class="navpill"><a href="/api/diagnostics/download" download aria-label="Download" title="Download"><Icon name="download" size={22} /></a></span>{/if}
-      <!-- Each part with preferences offers a Reset, as each of Finamp's settings screens has one in its bar. -->
-      {#if partReset.run && !thing}<span class="navpill"><button aria-label="Reset" title="Reset" onclick={() => (resetting = true)}><Icon name="resetSettings" size={22} /></button></span>{/if}
-      {#if !beside}<PanelPlace />{/if}
+      {@render glassExtra()}
     </span>
   </div>
+  {/if}
   <div class="scroll" bind:this={scrollEl}>
     {#if ed.loadError && me.admin}<Notice text={ed.loadError} />{/if}
     {#if !allowed}
@@ -223,5 +238,10 @@
     min-height: 0;
     overflow-y: auto;
     padding: 16px clamp(12px, 2vw, 24px) calc(96px + var(--mini-h, 0px));
+  }
+
+  /* Its glass handed to App's row on a phone (lib/glass): the list starts under it. */
+  .view.handed .scroll {
+    padding-top: 64px;
   }
 </style>

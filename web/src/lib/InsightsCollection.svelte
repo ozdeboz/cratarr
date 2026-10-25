@@ -5,7 +5,8 @@
   // playlists as a list. Five views, chosen in the tabs' pill: Overview (the figures, quality and decades), Genres and
   // Artists (all of them), Tracks (those in playlists), Discovery (what Discover found, the owner 2026-10-25).
   import { matchesSearch } from './pageView.svelte';
-  import { getDiscover, type Count, type DiscoverView, type Insights, type Layered } from './api';
+  import { getDiscover, getDiscoverExcluded, getDiscoverMissing, type Count, type DiscoverView, type Insights, type Layered } from './api';
+  import Icon from './Icon.svelte';
   import { plural } from './insights.svelte';
   import { prefs } from './prefs.svelte';
 
@@ -73,6 +74,14 @@
   // look found it, read when the view opens.
   let disc = $state<DiscoverView | null>(null);
   let discError = $state<string | null>(null);
+  // Its two lists' sizes (0.9.3's server): a tile each, one level deeper.
+  let missingN = $state<number | null>(null);
+  let excludedN = $state<number | null>(null);
+  $effect(() => {
+    if (prefs.insightsCollection !== 'discover') return;
+    getDiscoverMissing().then((r) => (missingN = r.albums.length), () => {});
+    getDiscoverExcluded().then((r) => (excludedN = r.albums.length + r.artists.length), () => {});
+  });
   $effect(() => {
     if (prefs.insightsCollection !== 'discover') return;
     getDiscover().then(
@@ -99,6 +108,9 @@
       { value: num(found.filter((a) => a.bandcamp).length), label: 'play on Bandcamp' },
       { value: num(found.filter((a) => (a.year ?? 0) >= thisYear - 1).length), label: `from ${thisYear - 1} and ${thisYear}` },
       { value: num(asked.length), label: 'asked for', href: '#/requests' },
+      // The two lists one level deeper (the owner, 2026-10-25), where the server keeps them.
+      ...(missingN !== null ? [{ value: num(missingN), label: 'missing albums', href: '#/insights?view=insights%3Adiscover-missing' }] : []),
+      ...(excludedN !== null ? [{ value: num(excludedN), label: 'excluded', href: '#/insights?view=insights%3Adiscover-excluded' }] : []),
       ...(hours !== null ? [{ value: hours < 1 ? 'now' : hours < 48 ? `${hours} h` : plural(Math.floor(hours / 24), 'day'), label: 'since the last look' }] : []),
     ];
   });
@@ -181,7 +193,7 @@
   <section aria-label="Your music">
     <div class="tiles">
       {#each tiles as t (t.label)}
-        {#if t.href}<a class="tile go" href={t.href}><b>{t.value}</b><span>{t.label}</span></a>{:else}<div class="tile"><b>{t.value}</b><span>{t.label}</span></div>{/if}
+        {#if t.href}<a class="tile go" href={t.href}><b>{t.value}</b><span>{t.label}</span><i class="go-arrow" aria-hidden="true"><Icon name="arrowRight" size={16} /></i></a>{:else}<div class="tile"><b>{t.value}</b><span>{t.label}</span></div>{/if}
       {/each}
     </div>
   </section>
@@ -263,7 +275,7 @@
     <section aria-label="Discovery">
       <div class="tiles">
         {#each discTiles as t (t.label)}
-          {#if t.href}<a class="tile go" href={t.href}><b>{t.value}</b><span>{t.label}</span></a>{:else}<div class="tile"><b>{t.value}</b><span>{t.label}</span></div>{/if}
+          {#if t.href}<a class="tile go" href={t.href}><b>{t.value}</b><span>{t.label}</span><i class="go-arrow" aria-hidden="true"><Icon name="arrowRight" size={16} /></i></a>{:else}<div class="tile"><b>{t.value}</b><span>{t.label}</span></div>{/if}
         {/each}
       </div>
     </section>
@@ -536,7 +548,17 @@
     white-space: nowrap;
   }
 
+  /* A tile that leads somewhere: a highlighted arrow in its top right (the owner, 2026-10-25). */
+  .go-arrow {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    display: grid;
+    color: var(--accent-ink);
+  }
+
   a.tile.go {
+    position: relative;
     color: inherit;
     text-decoration: none;
   }

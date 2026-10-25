@@ -5,16 +5,20 @@
 import type { IconName } from './Icon.svelte';
 import { prefs } from './prefs.svelte';
 
-export type InsightsView = 'overview' | 'genres' | 'artists' | 'tracks' | 'discover' | 'history' | 'profile' | 'map';
+export type InsightsView = 'overview' | 'genres' | 'artists' | 'tracks' | 'discover' | 'discover-missing' | 'discover-excluded' | 'history' | 'profile' | 'map';
 export type InsightsGroup = 'Collection' | 'Listening' | 'Playlists';
 
-export const INSIGHTS_VIEWS: { id: InsightsView; group: InsightsGroup; label: string; icon: IconName }[] = [
+/** `under`: a view one level deeper, opened from that view (its breadcrumb's level above), not in the page's list. */
+export const INSIGHTS_VIEWS: { id: InsightsView; group: InsightsGroup; label: string; icon: IconName; under?: InsightsView }[] = [
   { id: 'overview', group: 'Collection', label: 'Overview', icon: 'layoutGrid' },
   { id: 'genres', group: 'Collection', label: 'Genres', icon: 'swatch' },
   { id: 'artists', group: 'Collection', label: 'Artists', icon: 'mic' },
   { id: 'tracks', group: 'Collection', label: 'Tracks', icon: 'music' },
   // What Discover finds beyond the collection (the owner, 2026-10-25: "a discovery panel under collection insights").
   { id: 'discover', group: 'Collection', label: 'Discovery', icon: 'compass' },
+  // Its two lists (the owner, 2026-10-25: tiles leading one level deeper).
+  { id: 'discover-missing', group: 'Collection', label: 'Missing albums', icon: 'compass', under: 'discover' },
+  { id: 'discover-excluded', group: 'Collection', label: 'Discovery exclusions', icon: 'compass', under: 'discover' },
   { id: 'history', group: 'Listening', label: 'History', icon: 'insights' },
   { id: 'profile', group: 'Listening', label: 'Profile', icon: 'user' },
   { id: 'map', group: 'Playlists', label: 'Map', icon: 'share' },
@@ -23,13 +27,16 @@ export const INSIGHTS_GROUPS: InsightsGroup[] = ['Collection', 'Listening', 'Pla
 
 /** Shows `view`: the tab and its section the views and their controls read. */
 export function showView(view: InsightsView) {
+  // A view under another shows as that one does (its controls: none for Discovery's).
+  const parent = INSIGHTS_VIEWS.find((v) => v.id === view)?.under;
+  if (parent) view = parent;
   if (view === 'map') prefs.insightsTab = 'map';
   else if (view === 'history' || view === 'profile') {
     prefs.insightsTab = 'listening';
     prefs.listeningView = view;
   } else {
     prefs.insightsTab = 'collection';
-    prefs.insightsCollection = view;
+    prefs.insightsCollection = view as typeof prefs.insightsCollection;
   }
 }
 

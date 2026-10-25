@@ -5,6 +5,7 @@
   // one by one (the owner: "more deeper information": the albums waiting, the playlists and their missing tracks, the
   // folders not heard, the slow pages, the files), each opening where it is; and where to deal with it all. Beside the
   // list on a roomy window (no ✕ there), over it on a phone.
+  import { glass, handGlass } from './glass.svelte';
   import Cover from './Cover.svelte';
   import Icon from './Icon.svelte';
   import { albumCoverUrl, type HealthItem } from './api';
@@ -42,24 +43,36 @@
   const onward = (x: HealthItem) =>
     x.album ? { label: 'Open the album', go: () => viewOver(albumSubject(x.album![0], x.album![1])) } : x.playlist ? { label: 'Open the playlist', go: () => openTab([x.playlist!], 'tracks') } : null;
   const since = (t: number) => new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): handed over,
+  // its own bar not drawn, its list under the glass.
+  const handed = $derived(glass.one && !beside);
+  const pill = () => (!beside && !item ? { device: false, filter: false, view: false, search: 'health' } : null);
+  handGlass(() => handed, { left: glassLeft, pill });
 </script>
 
-<div class="view">
-  <div class="bar" class:beside>
-    {#if item}
-      <span class="navpill"><button aria-label="Back" title="Back" onclick={() => backFromStep(HEALTH + problem)}><Icon name="back" size={22} /></button></span>
-    {:else if !beside}
-      <span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>
-    {/if}
-    {#if item}
-      <Crumbs up={{ label: p?.title ?? 'Health', go: () => backFromStep(HEALTH + problem) }} here={item.title} />
-    {:else if p}
-      <Crumbs up={{ label: p.domain, go: beside ? undefined : () => upToPage('#/health') }} here={p.title} />
-    {:else}
-      <h2 class="title">Health</h2>
-    {/if}
-    {#if !beside && !item}<TopPill device={false} filter={false} view={false} search="health" />{/if}
-  </div>
+<!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
+{#snippet glassLeft()}
+  {#if item}
+    <span class="navpill"><button aria-label="Back" title="Back" onclick={() => backFromStep(HEALTH + problem)}><Icon name="back" size={22} /></button></span>
+  {:else if !beside}
+    <span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>
+  {/if}
+  {#if item}
+    <Crumbs up={{ label: p?.title ?? 'Health', go: () => backFromStep(HEALTH + problem) }} here={item.title} />
+  {:else if p}
+    <Crumbs up={{ label: p.domain, go: beside ? undefined : () => upToPage('#/health') }} here={p.title} />
+  {:else}
+    <h2 class="title">Health</h2>
+  {/if}
+{/snippet}
+
+<div class="view" class:handed>
+  {#if !handed}
+    <div class="bar" class:beside>
+      {@render glassLeft()}
+      {#if pill()}<TopPill {...pill()!} />{/if}
+    </div>
+  {/if}
   <div class="scroll">
     {#if item}
       <!-- An item's own page: what it is, and what can be done with it here. -->
@@ -269,5 +282,10 @@
     font: inherit;
     font-weight: 600;
     cursor: pointer;
+  }
+
+  /* Its glass handed to App's row on a phone (lib/glass): the list starts under it. */
+  .view.handed .scroll {
+    padding-top: 64px;
   }
 </style>

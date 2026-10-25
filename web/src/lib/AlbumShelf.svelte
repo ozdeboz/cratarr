@@ -8,7 +8,8 @@
   // the menu of one (a tile's menu is this way).
   import { untrack, type Snippet } from 'svelte';
   import { fromAction } from 'svelte/attachments';
-  import { albumCoverUrl, setAlbumFavorite, type ListedAlbum, type ShelfSource } from './api';
+  import { albumCoverUrl, search, setAlbumFavorite, type ListedAlbum, type ShelfSource } from './api';
+  import type { Matched } from './search';
   import Cover from './Cover.svelte';
   import CoverFlow from './CoverFlow.svelte';
   import { addedOn, albumPlay, loadAlbumUses, playAlbums, playListedAlbum, quality, tracksOfAlbums, useOf, weak } from './albums.svelte';
@@ -156,7 +157,38 @@
   const playing = $derived(nowPlaying());
 
   // As every search reads (lib/search, decision 0072).
-  const matches = (a: ListedAlbum) => matchesSearch(a.artist, a.title);
+  // Deep (decision 0072, 0.9.3): Cratarr's own albums the server finds by one of their tracks, with why; asked a moment
+  // after the words stop changing. The rest as every search reads, in the browser.
+  let deep = $state<Map<string, Matched>>(new Map());
+  $effect(() => {
+    const q = pageView.query.trim();
+    if (!q) {
+      deep = new Map();
+      return;
+    }
+    let gone = false;
+    const t = setTimeout(() => {
+      search(q, ['album'], 100).then(
+        (r) => {
+          if (gone) return;
+          const m = new Map<string, Matched>();
+          for (const it of r.groups.album?.items ?? []) {
+            const on = it.matched.find((x) => x.on === 'track');
+            if (on) m.set(it.subject, on);
+          }
+          deep = m;
+        },
+        () => {},
+      );
+    }, 250);
+    return () => {
+      gone = true;
+      clearTimeout(t);
+    };
+  });
+  /** Why an album found only by a track is there: the track, and how many of its tracks match. */
+  const deepOf = (s: ShelfSource, a: ListedAlbum) => (pageView.query.trim() ? deep.get(albumSubject(s.id, a.id)) : undefined);
+  const matches = (s: ShelfSource, a: ListedAlbum) => matchesSearch(a.artist, a.title) || !!deepOf(s, a);
   // The libraries switched off in the filter leave their albums out; the pill's funnel says so while one is.
   $effect(() => {
     pageView.narrowed = sources.some((s) => (s.libraries ?? []).some((l) => !libraryShown(s.id, l)));
@@ -184,7 +216,7 @@
   };
   const shown = $derived(
     sources.map((s) => {
-      const albums = s.albums.filter((a) => (!a.library || libraryShown(s.id, a.library)) && matches(a)).sort(compareIn(s.id)[order]);
+      const albums = s.albums.filter((a) => (!a.library || libraryShown(s.id, a.library)) && matches(s, a)).sort(compareIn(s.id)[order]);
       return { s, albums: down ? albums.reverse() : albums };
     }),
   );
@@ -373,6 +405,12 @@
   }
 </script>
 
+{#snippet why(s: ShelfSource, a: ListedAlbum)}
+  <!-- Found by a track (the server's deep search, decision 0072): which, and how many of its tracks match. -->
+  {@const d = deepOf(s, a)}
+  {#if d}<span class="why"><Icon name="music" size={12} /> {d.text}{#if d.count && d.count > 1} · {d.count} tracks{/if}</span>{/if}
+{/snippet}
+
 <div class="lists" class:table bind:clientWidth={width}>
   {#each shown as { s, albums } (s.id)}
     {#if sources.length > 1}<h2>{s.label}</h2>{/if}
@@ -459,6 +497,7 @@
                 {#snippet image()}{@render cover(s, a)}{/snippet}
                 {#snippet sub()}
                   <span class="line">{a.artist ?? 'Unknown artist'}</span>
+                  {@render why(s, a)}
                   {@render extra?.(s, a)}
                 {/snippet}
                 {#snippet action()}{#if selecting}{@render tickOf(s, a)}{:else}{@render play(s, a)}{/if}{/snippet}
@@ -478,7 +517,7 @@
                   {@const dot = dotOf(s, a)}
                   {#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}
                 {/snippet}
-                {#snippet sub()}{a.artist ?? 'Unknown artist'}{#if here}<span class="now"> · playing</span>{/if}{/snippet}
+                {#snippet sub()}{a.artist ?? 'Unknown artist'}{#if here}<span class="now"> · playing</span>{/if}{@render why(s, a)}{/snippet}
                 {#snippet action()}
                   {#if selecting}{@render tickOf(s, a)}{:else}
                     <button class="icon" aria-label="Menu of {a.title}" title="Menu" onclick={(e) => openMenu(s, a, e.currentTarget.getBoundingClientRect())}
@@ -504,6 +543,7 @@
                 {/snippet}
                 {#snippet sub()}
                   <span class="artist">{a.artist ?? 'Unknown artist'}{#if here}<span class="now"> · playing</span>{/if}</span>
+                  {@render why(s, a)}
                   <span class="facts">
                     <span>{a.tracks} {a.tracks === 1 ? 'track' : 'tracks'}</span>
                     <span class:weak={weak(a)}>{quality(a)}</span>
@@ -786,6 +826,18 @@
   .artist {
     display: block;
     font-size: 0.9rem;
+  }
+
+  /* Why an album is there when only one of its tracks matched (decision 0072). */
+  .why {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    overflow: hidden;
+    color: var(--accent-ink);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .line {

@@ -44,7 +44,8 @@
   import { art, playing } from './lib/remote.svelte';
   import { fade, fly } from 'svelte/transition';
   import { linear, quadInOut } from 'svelte/easing';
-  import { reducedMotion } from './lib/motion';
+  import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './lib/motion';
+  import { glass } from './lib/glass.svelte';
   import Toasts from './lib/Toasts.svelte';
   import { toast } from './lib/toast.svelte';
   import ProgressBar from './lib/ProgressBar.svelte';
@@ -86,6 +87,11 @@
   const REQUESTS: Page = { id: 'requests', href: '#/requests', label: 'Requests', icon: 'inbox' };
   // In the app only: what is kept on this device (decision 0033, step 4), playable without a connection.
   const DOWNLOADS: Page = { id: 'downloads', href: '#/downloads', label: 'Downloads', icon: 'download' };
+  /** The pages that are an index with their lists in the panel (Requests, Downloads, Insights, Health, Settings): their
+   *  name on the page beside back and their panel under the top bar, not over it, both wherever the bar of pages is
+   *  along the top (`phone`: under 1024 px; the owner, 2026-10-25). */
+  const PANEL_PAGES: Page[] = [REQUESTS, DOWNLOADS, INSIGHTS, HEALTH, SETTINGS];
+  const panelPage = $derived(PANEL_PAGES.find((p) => p.id === page) ?? null);
   // Local mode's (decision 0052): the device's own music, and the menu shows only these (and Settings).
   const LOCAL_ALBUMS: Page = { id: 'local-albums', href: '#/local/albums', label: 'Albums', icon: 'disc' };
   const LOCAL_ARTISTS: Page = { id: 'local-artists', href: '#/local/artists', label: 'Artists', icon: 'users' };
@@ -227,6 +233,10 @@
   // Same breakpoint as the CSS: from 1024 px the sidebar shows; below it the bar of pages along the top.
   const wide = window.matchMedia('(min-width: 1024px)');
   let phone = $state(!wide.matches);
+  // One glass on a phone (lib/glass): the panel on top hands its parts to the page's row.
+  $effect(() => {
+    glass.one = phone;
+  });
   $effect(() => {
     const on = () => (phone = !wide.matches);
     wide.addEventListener('change', on);
@@ -345,6 +355,19 @@
   const backHome = $derived(navAt === 0 && page !== 'home');
   const pageRow = $derived(
     !playlistLayer && !overlay && (phone || navAt > 0 || backHome || pagePill || page === 'settings' || page === 'insights' || page === 'discover'),
+  );
+  // The panel on top's glass, handed over on a phone (lib/glass): the row shows it over the panel's layer.
+  const handed = $derived(!overlay && playlistLayer ? glass.panel : null);
+  /** The layer under the top bar (an index page's panel) or over all of it (a playlist's, an album's, an artist's). */
+  const underBar = $derived(phone && !!panelPage && !!(settingsShown || healthShown || insightsShown || requestsShown || downloadsShown));
+  /** The one pill's settings: the panel's where it handed them, else the page's. */
+  const pagePillShown = $derived(pagePill || ['settings', 'discover', 'insights', 'health', 'requests'].includes(page));
+  const pillNow = $derived(
+    handed
+      ? handed.pill()
+      : pagePillShown
+        ? { page, view: hasView(page), device: pagePill && pillDevice, filter: (pagePill && !page.startsWith('local-') && page !== 'downloads') || page === 'discover' }
+        : null,
   );
   $effect(() => {
     const root = document.documentElement.style;
@@ -647,7 +670,7 @@
   </div>
 
   {#if playlistLayer}
-    <div class="playlist-layer" role="dialog" aria-label="Playlist" style:--mini-h={`${miniSpace}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
+    <div class="playlist-layer" class:under-bar={underBar} role="dialog" aria-label="Playlist" style:--mini-h={`${miniSpace}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
       {#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else if requestsShown}<RequestsPanel list={requestsShown} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} />{:else}<PlaylistView full />{/if}
     </div>
   {/if}
@@ -665,18 +688,28 @@
       }}><Icon name="play" size={20} />Tap to play</button
     >
   {/if}
-  {#if pageRow}
-    <div class="page-row" class:beside={sidebar} style:--player-w="{sideWidth}px">
-      {#if navAt > 0 || backHome}
-        <span class="navpill"><button aria-label="Back" title="Back" onclick={() => (backHome ? (location.hash = keepViewed(HOME.href)) : history.back())}><Icon name="back" size={22} /></button></span>
+  {#if pageRow || handed}
+    <!-- The page's glass, or on a phone the panel's on top (lib/glass): one row, one pill whose settings change. -->
+    <div class="page-row" class:beside={sidebar && !handed} class:handed={!!handed} class:top={!!handed && !underBar} style:--player-w="{sideWidth}px">
+      {#if handed}
+        <span class="lead" in:fade={{ duration: reducedMotion() ? 0 : 150 }}>{@render handed.left()}</span>
       {:else}
-        <span></span>
+        <span class="lead" in:fade={{ duration: reducedMotion() ? 0 : 150 }}>
+          {#if navAt > 0 || backHome}
+            <span class="navpill"><button aria-label="Back" title="Back" onclick={() => (backHome ? (location.hash = keepViewed(HOME.href)) : history.back())}><Icon name="back" size={22} /></button></span>
+          {/if}
+          <!-- Wherever the bar of pages is along the top (under 1024 px, as the CSS; the owner, 2026-10-25): from there the
+               sidebar of pages names it. -->
+          {#if panelPage && phone}<h1 class="page-name">{panelPage.label}</h1>{/if}
+        </span>
       {/if}
       <!-- Settings' pill: its search and About, its own button (the owner, 2026-10-24: one pill as on every page);
-           Discover's: its search and Look again (the owner, 2026-10-24). -->
-      {#if pagePill || ['settings', 'discover', 'insights', 'health', 'requests'].includes(page)}<SheetArea area={() => pageEl}
-          ><TopPill {page} view={hasView(page)} device={pagePill && pillDevice} filter={(pagePill && !page.startsWith('local-') && page !== 'downloads') || page === 'discover'} /></SheetArea
-        >{/if}
+           Discover's: its search and Look again (the owner, 2026-10-24). The panel's where it handed its glass. -->
+      {#if pillNow || handed?.extra}
+        <span class="right">
+          {#if pillNow}<SheetArea area={() => pageEl}><TopPill {...pillNow} /></SheetArea>{/if}{#if handed?.extra}{@render handed.extra()}{/if}
+        </span>
+      {/if}
     </div>
   {/if}
   {#if overlay}
@@ -690,8 +723,17 @@
   {#if about.open}<AboutSheet onclose={() => (about.open = false)} />{/if}
 
   {#if moreOpen}
-    <button class="scrim" aria-label="Close menu" onclick={() => (moreOpen = false)}></button>
-    <div class="sheet" id="more-sheet" role="dialog" aria-label="More pages" onclickcapture={collapse}>
+    <!-- As every sheet comes and goes (lib/MenuSheet's, from the top; the owner, 2026-10-25: it only appeared). -->
+    <button class="scrim" aria-label="Close menu" onclick={() => (moreOpen = false)} transition:fade|global={{ duration: SHEET_OUT }}></button>
+    <div
+      class="sheet"
+      id="more-sheet"
+      role="dialog"
+      aria-label="More pages"
+      onclickcapture={collapse}
+      in:fly|global={{ y: -400, duration: SHEET_IN, easing: decelerate }}
+      out:fly|global={{ y: -400, duration: SHEET_OUT, easing: decelerate }}
+    >
       {#each overflow as p (p.id)}
         <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => samePage(e, p.id)}><Icon name={p.icon} />{p.label}{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
       {/each}
@@ -781,6 +823,12 @@
     background: var(--surface);
   }
 
+  /* A panel of Requests, Downloads, Insights, Health or Settings on a phone: under the top bar, not over it (the owner,
+     2026-10-25); a playlist's, an album's or an artist's still covers it all. */
+  .playlist-layer.under-bar {
+    top: calc(var(--top-h, 0px) + env(safe-area-inset-top));
+  }
+
   /* The page's row: back and the pill floating over the page's top, which starts under them (.under-row); under the page
      bar on a phone, beside the navigation and left of the panel on a wide window. Over the page and its bar, under a
      viewed playlist. */
@@ -801,6 +849,41 @@
 
   .page-row > :global(*) {
     pointer-events: auto;
+  }
+
+  /* Back, and the page's name beside it where the page is an index (Requests, Downloads, Insights, Health, Settings). */
+  .lead {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .page-name {
+    margin: 0;
+    overflow: hidden;
+    font-size: 22px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Over the panel's layer while it holds the panel's glass (lib/glass). */
+  .page-row.handed {
+    z-index: 22;
+  }
+
+  /* Over a layer that covers the bar of pages too (a playlist's): at the very top, where its pills were. */
+  .page-row.top {
+    top: calc(env(safe-area-inset-top) + 6px);
+    left: 8px;
+    right: 8px;
+  }
+
+  .page-row .right {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
   }
 
   .page-row.beside {

@@ -73,6 +73,11 @@ What others do, read for this:
    kind, a chip per kind to narrow after seeing results (Spotify's filters), the scope said at the top. Where it lives
    is decided when the pieces exist (the owner, 2026-10-25: no preference yet).
 
+7. **What is not in the library is found too** (the owner, 2026-10-25): an album missing from an artist the library
+   has (the discographies Discover reads) and what Discover leaves out (Not interested, Hide, artists left out) are
+   kinds of their own (`missing`, `excluded`), so a title one looks for shows up even when it is not there, marked as
+   missing or excluded. Insights › Collection › Discovery lists both, one level deeper each.
+
 ## Consequences
 
 - Accents and case no longer split the server's search from the pages' ("bjork" finds Björk everywhere).

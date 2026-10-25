@@ -7,6 +7,7 @@
   // (lib/ReleaseRow); a tap opens its menu (the owner, 2026-10-24: not the item itself): an album's own, a playlist's or
   // a crate's own; an artist (or what is not known well enough for its own menu) a short one: Go to it, Stop syncing.
   // The pill's search narrows the two lists.
+  import { glass, handGlass } from './glass.svelte';
   import { albumCoverUrl, crateImageUrl } from './api';
   import { albumSubject, artistSubject, closePlaylist, SETTINGS, upToPage, viewPlaylist } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
@@ -102,14 +103,26 @@
     const parts = [listed?.artist ?? g.tracks[0].artist, listed?.year ? String(listed.year) : null, listed?.format, of && of > g.tracks.length ? `${g.tracks.length} of ${of}` : null];
     return { text: parts.filter(Boolean).join(' · '), fill: null, bad: false };
   }
+  // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): handed over,
+  // its own bar not drawn, its list under the glass.
+  const handed = $derived(glass.one && !beside);
+  const pill = () => (!beside ? { device: false, filter: false, view: false, search: 'downloads' } : null);
+  handGlass(() => handed, { left: glassLeft, pill });
 </script>
 
-<div class="view">
-  <div class="bar" class:beside>
-    {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
-    <Crumbs up={{ label: 'Downloads', go: beside ? undefined : () => upToPage('#/downloads') }} here={L.label} />
-    {#if !beside}<TopPill device={false} filter={false} view={false} search="downloads" />{/if}
-  </div>
+<!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
+{#snippet glassLeft()}
+  {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
+  <Crumbs up={{ label: 'Downloads', go: beside ? undefined : () => upToPage('#/downloads') }} here={L.label} />
+{/snippet}
+
+<div class="view" class:handed>
+  {#if !handed}
+    <div class="bar" class:beside>
+      {@render glassLeft()}
+      {#if pill()}<TopPill {...pill()!} />{/if}
+    </div>
+  {/if}
   <div class="scroll">
     {#if !downloads.known}
       <PageLoading />
@@ -253,5 +266,10 @@
     font: inherit;
     font-size: 14px;
     cursor: pointer;
+  }
+
+  /* Its glass handed to App's row on a phone (lib/glass): the list starts under it. */
+  .view.handed .scroll {
+    padding-top: 64px;
   }
 </style>

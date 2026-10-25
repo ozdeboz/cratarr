@@ -5,6 +5,7 @@
   // answered from its row's menu, or many at once in the select mode every list has (the bar's icon starts it). Your
   // requests: each with where it stands, a waiting one taken back from its menu. Lidarr monitor: what it
   // fetches now (how far), then what it watches for and has not found yet.
+  import { glass, handGlass } from './glass.svelte';
   import type { AlbumRequest, WatchedAlbum } from './api';
   import Icon from './Icon.svelte';
   import { me } from './me.svelte';
@@ -107,7 +108,25 @@
     void list;
     selecting = null;
   });
+  // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): handed over,
+  // its own bar not drawn, its list under the glass.
+  const handed = $derived(glass.one && !beside);
+  const pill = () => (!beside ? { device: false, filter: false, view: false, search: 'requests' } : null);
+  handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra });
 </script>
+
+<!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
+{#snippet glassLeft()}
+  {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
+  <Crumbs up={{ label: 'Requests', go: beside ? undefined : () => upToPage('#/requests') }} here={L.label} />
+{/snippet}
+{#snippet glassExtra()}
+  {#if list === 'waiting' && waiting.length}
+    <span class="navpill"
+      ><button aria-label="Select" title="Select" aria-pressed={!!selecting} onclick={() => (selecting = selecting ? null : new Set())}><Icon name="listChecks" size={22} /></button></span
+    >
+  {/if}
+{/snippet}
 
 {#snippet row(r: AlbumRequest, who: boolean, tickable: boolean)}
   {#if tickable && selecting}
@@ -121,17 +140,14 @@
   {/if}
 {/snippet}
 
-<div class="view">
-  <div class="bar" class:beside>
-    {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
-    <Crumbs up={{ label: 'Requests', go: beside ? undefined : () => upToPage('#/requests') }} here={L.label} />
-    {#if !beside}<TopPill device={false} filter={false} view={false} search="requests" />{/if}
-    {#if list === 'waiting' && waiting.length}
-      <span class="navpill"
-        ><button aria-label="Select" title="Select" aria-pressed={!!selecting} onclick={() => (selecting = selecting ? null : new Set())}><Icon name="listChecks" size={22} /></button></span
-      >
-    {/if}
-  </div>
+<div class="view" class:handed>
+  {#if !handed}
+    <div class="bar" class:beside>
+      {@render glassLeft()}
+      {#if pill()}<TopPill {...pill()!} />{/if}
+      {@render glassExtra()}
+    </div>
+  {/if}
   <div class="scroll">
     {#if requests.error && !view}
       <Notice text={requests.error} />
@@ -300,5 +316,10 @@
 
   .tick.on {
     color: var(--accent);
+  }
+
+  /* Its glass handed to App's row on a phone (lib/glass): the list starts under it. */
+  .view.handed .scroll {
+    padding-top: 64px;
   }
 </style>
