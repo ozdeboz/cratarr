@@ -6,22 +6,23 @@
   // owner, 2026-10-25: Settings › Display beside Settings' list said Settings twice).
   // Where one is, cut short by …: a tap on it shows the whole line (the owner, 2026-10-25: "unellipse the whole
   // breadcrumb tree and align right so the own title is most definitely visible"), scrolled to its end; again, short.
+  // For every panel on this device ("global on the device": prefs.crumbsWhole).
   import { tick } from 'svelte';
+  import { prefs } from './prefs.svelte';
 
   let { up = null, here }: { up?: { label: string; go?: () => void } | null; here: string } = $props();
   let line = $state<HTMLElement>();
   let hereEl = $state<HTMLElement>();
-  let whole = $state(false);
+  const whole = $derived(prefs.crumbsWhole);
+  // Whole: its end in view, whatever the panel or its title.
   $effect(() => {
     void here;
-    whole = false;
+    if (whole && line) tick().then(() => line?.scrollTo({ left: line.scrollWidth }));
   });
-  async function show() {
-    if (whole) return void (whole = false);
+  function show() {
+    if (whole) return void (prefs.crumbsWhole = false);
     if (!hereEl || hereEl.scrollWidth <= hereEl.clientWidth) return;
-    whole = true;
-    await tick();
-    line?.scrollTo({ left: line.scrollWidth });
+    prefs.crumbsWhole = true;
   }
 </script>
 

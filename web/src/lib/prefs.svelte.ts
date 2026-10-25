@@ -104,6 +104,9 @@ export type Prefs = {
   libraryTrackDown: boolean;
   /** This device's animations (Display, the owner 2026-10-25): off, as the system's reduced motion (lib/motion). */
   animations: boolean;
+  /** Panels' breadcrumbs whole, scrolled to where one is, rather than cut short (lib/Crumbs; a tap on a cut title, the
+   *  owner 2026-10-25: "global on the device"). */
+  crumbsWhole: boolean;
   /** Where the bar of pages runs below 1024 px (Display, the owner 2026-10-25): along the top or the bottom. */
   navAt: 'top' | 'bottom';
   /** The bar of pages slides away while scrolling down (and back up); off, it always shows. */
@@ -291,6 +294,7 @@ export const ZOOM_STEPS = 6;
 export const DEFAULTS: Prefs = {
   theme: 'auto',
   animations: true,
+  crumbsWhole: false,
   libraryView: 'albums',
   libraryArtistOrder: 'name',
   libraryArtistDown: false,
@@ -370,6 +374,7 @@ function read(): Prefs {
     if (saved && typeof saved === 'object') {
       if (['auto', 'light', 'dark'].includes(saved.theme)) p.theme = saved.theme;
       if (typeof saved.animations === 'boolean') p.animations = saved.animations;
+      if (typeof saved.crumbsWhole === 'boolean') p.crumbsWhole = saved.crumbsWhole;
       if (['albums', 'artists', 'tracks'].includes(saved.libraryView)) p.libraryView = saved.libraryView;
       if (['name', 'albums', 'tracks'].includes(saved.libraryArtistOrder)) p.libraryArtistOrder = saved.libraryArtistOrder;
       if (typeof saved.libraryArtistDown === 'boolean') p.libraryArtistDown = saved.libraryArtistDown;
