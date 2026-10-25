@@ -1,6 +1,7 @@
 <script lang="ts" module>
   import type { IconName } from './Icon.svelte';
-  export type SheetAction = { icon: IconName; label: string; onclick: () => void; disabled?: boolean };
+  /** `busy`: under way, the app's busy ring in its place (Change cover's look, at the top right). */
+  export type SheetAction = { icon: IconName; label: string; onclick: () => void; disabled?: boolean; busy?: boolean };
 </script>
 
 <script lang="ts">
@@ -31,6 +32,7 @@
     end = null,
     actions = [],
     onback = null,
+    beside = null,
     step = 'menu',
     over = false,
     copy = null,
@@ -53,6 +55,8 @@
     actions?: SheetAction[];
     /** In a step: back to the entries (Esc too). */
     onback?: (() => void) | null;
+    /** In the back button's row, beside it: how far a step's work is (Change cover's look). */
+    beside?: Snippet | null;
     /** Which step shows: a change fades the new content in (500 ms) while the sheet resizes. */
     step?: string;
     /** Over the full-screen visuals (lib/visuals), which lie over everything else. */
@@ -202,7 +206,7 @@
       >
     {:else if end}
       {#each Array.isArray(end) ? end : [end] as x (x.label)}
-        <button class="heart" aria-label={x.label} title={x.label} disabled={x.disabled} onclick={x.onclick}><Icon name={x.icon} size={24} /></button>
+        <button class="heart" aria-label={x.label} title={x.label} disabled={x.disabled} aria-busy={x.busy || undefined} onclick={x.onclick}><Icon name={x.icon} size={24} /></button>
       {/each}
     {/if}
   </div>
@@ -210,7 +214,10 @@
   <div class="body" style:height={height === null ? null : `${height}px`}>
     <div class="content" bind:this={inner}>
       {#if onback}
-        <button class="back" aria-label="Back" onclick={onback}><Icon name="back" size={22} /></button>
+        <div class="back-row">
+          <button class="back" aria-label="Back" onclick={onback}><Icon name="back" size={22} /></button>
+          {#if beside}<span class="beside">{@render beside()}</span>{/if}
+        </div>
       {:else if actions.length}
         <div class="actions">
           {#each actions as a (a.label)}
@@ -462,7 +469,21 @@
     cursor: default;
   }
 
+  .back-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-right: 16px;
+  }
+
+  .beside {
+    flex: 1;
+    min-width: 0;
+    margin-bottom: 4px;
+  }
+
   .back {
+    flex: none;
     display: grid;
     place-items: center;
     width: 44px;

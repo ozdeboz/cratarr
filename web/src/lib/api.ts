@@ -1531,6 +1531,8 @@ export type Task = {
 };
 type Started = { task: Task };
 export const getTasks = () => quietly<{ tasks: Task[] }>('/api/tasks');
+/** Stops one of the account's tasks (a5, 0.9.6: Change cover's look, once a cover is chosen). */
+export const stopTask = (id: number) => request<unknown>(`/api/tasks/${id}`, { method: 'DELETE' });
 
 /** An album Discover suggests (decision 0069): outside the library, with why (one reason a source). */
 export type DiscoverAlbum = {

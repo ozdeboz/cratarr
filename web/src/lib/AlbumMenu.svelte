@@ -53,6 +53,7 @@
     getAlbumCovers,
     lookAlbumCovers,
     missingCall,
+    stopTask,
     uploadAlbumCover,
     COVER_MAX,
     ApiError,
@@ -371,6 +372,16 @@
   let coverTask = $state<number | null>(null);
   const coverLook = $derived(coverTask !== null ? tasks.of(`covers:${a.id}`) : null);
   const coverProgress = $derived(coverLook && coverLook.finished === null ? progressOf(coverLook) : null);
+  // As they are found (the owner, 2026-10-25): what the running look has so far, its result once it ends.
+  const coversSoFar = $derived(covers ?? ((coverLook?.result as Covers | null | undefined) || null));
+  /** Stops the look (a cover chosen, or the menu left): no more of Discogs' pace spent on it. */
+  function stopLook() {
+    const id = coverTask;
+    if (id === null || !coverLook || coverLook.finished !== null) return;
+    coverTask = null;
+    stopTask(id).catch(() => {});
+  }
+  $effect(() => () => untrack(stopLook));
   $effect(() => (ask === 'cover' ? tasks.follow() : undefined));
   $effect(() => {
     const t = coverLook;
@@ -408,6 +419,7 @@
   const setCover = (c: CoverChoice) => {
     if (working) return;
     settingCover = c.url;
+    stopLook();
     return act(async () => {
       const { undo } = await setAlbumCover(source, a.id, c.url);
       onclose();
@@ -508,6 +520,10 @@
   }
 </script>
 
+{#snippet lookProgress()}
+  {#if coverProgress}{#if coverProgress.value !== null}<Meter label={coverProgress.line} value={coverProgress.value} />{:else}<span class="look-line">{coverProgress.line}</span>{/if}{/if}
+{/snippet}
+
 <MenuSheet
   label={a.title}
   {onclose}
@@ -516,8 +532,10 @@
   chips={[a.artist ?? 'Unknown artist']}
   heart={ask || exporting || step !== 'menu' ? null : { on: fav, toggle: toggleFavourite }}
   {actions}
+  beside={ask === 'cover' && coverProgress ? lookProgress : null}
   end={ask === 'cover'
     ? [
+        ...(coverProgress ? [{ icon: 'search' as const, label: 'Looking for covers', busy: true, onclick: () => {} }] : []),
         { icon: 'link', label: 'From an address', onclick: () => ((coverUrl = ''), (ask = 'cover-url')) },
         { icon: 'upload', label: 'Upload cover', onclick: () => picker?.click() },
       ]
@@ -600,17 +618,14 @@
   {:else if ask === 'cover'}
     <!-- Change cover (0.9.5): the album's own first, then Discogs' and the Cover Art Archive's, as an artist's albums;
          a tap makes it the cover, inside every file and beside them (Undo brings the old one back). -->
-    {#if !covers}
-      <!-- A few seconds with Discogs (its master and up to six releases, at its pace; a5): how far, under the loader. -->
-      <PageLoading>
-        {#if coverProgress}
-          {#if coverProgress.value !== null}<Meter label={coverProgress.line} value={coverProgress.value} />{:else}<p class="ask pad">{coverProgress.line}</p>{/if}
-        {/if}
-      </PageLoading>
-    {:else if !covers.candidates.length}
+    <!-- A few seconds with Discogs (its master and up to six releases, at its pace; a5): the covers as they are found,
+         how far beside the back button, the busy ring at the top right (the owner, 2026-10-25). -->
+    {#if !coversSoFar}
+      {#if !coverProgress}<PageLoading />{/if}
+    {:else if covers && !covers.candidates.length}
       <p class="ask pad">No other covers found.</p>
     {:else}
-      {@const list = covers}
+      {@const list = coversSoFar}
       <ul class="cover-grid">
         {#if list.current}<li><AlbumCard source="cover" album={{ id: 'current', title: 'Current', year: null }} cover={list.current.url} lines={[size(list.current)]} onopen={() => onclose()} /></li>{/if}
         {#each list.candidates as c (c.url)}
@@ -874,5 +889,11 @@
     border-radius: 10px;
     font: inherit;
     color: inherit;
+  }
+
+  /* The look's step without a count, beside the back button: as Meter's line. */
+  .look-line {
+    color: var(--accent-ink);
+    font-size: 0.8rem;
   }
 </style>
