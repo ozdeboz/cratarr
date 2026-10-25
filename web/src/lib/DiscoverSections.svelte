@@ -8,6 +8,7 @@
   import { untrack } from 'svelte';
   import { discoverArtistPhotoUrl, getDiscoverArtist, type DiscoverAlbum } from './api';
   import Cover from './Cover.svelte';
+  import CoverPlay from './CoverPlay.svelte';
   import CoverFlow from './CoverFlow.svelte';
   import type { Sections } from './discoverSections';
   import type { Tile } from './masonry';
@@ -96,11 +97,14 @@
     <SectionHead title="Discography gaps" />
     <div class="row">
       {#each gaps as a (a.key)}
-        <button class="album" onclick={() => onopen(a)} use:longpress={() => onmenu(a)}>
-          <span class="art big"><Cover src={a.cover} onfail={() => (coverless = [...coverless, a.key])} /></span>
-          <b>{a.album}</b>
-          <small>{a.artist}{a.year ? ` · ${a.year}` : ''}</small>
-        </button>
+        <div class="album-box">
+          <button class="album" onclick={() => onopen(a)} use:longpress={() => onmenu(a)}>
+            <span class="art big"><Cover src={a.cover} onfail={() => (coverless = [...coverless, a.key])} /></span>
+            <b>{a.album}</b>
+            <small>{a.artist}{a.year ? ` · ${a.year}` : ''}</small>
+          </button>
+          {#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => onplay(a)} />{/if}
+        </div>
       {/each}
     </div>
   </section>
@@ -128,11 +132,13 @@
           {#each g.items as a (a.key)}
             {@const t = grid.tiles.find((x) => x.key === a.key)}
             {#if t}
-              <button class="tile" style={place(t)} aria-label={`${a.album} by ${a.artist}`} onclick={() => onopen(a)} use:longpress={() => onmenu(a)}>
-                <Cover src={a.cover} />
-                <span class="tile-text"><b>{a.album}</b><small>{a.artist}</small></span>
-                {#if a.bandcamp}<span class="tile-play" aria-hidden="true"><Icon name="play" size={14} /></span>{/if}
-              </button>
+              <div class="tile-box" style={place(t)}>
+                <button class="tile" aria-label={`${a.album} by ${a.artist}`} onclick={() => onopen(a)} use:longpress={() => onmenu(a)}>
+                  <Cover src={a.cover} />
+                  <span class="tile-text"><b>{a.album}</b><small>{a.artist}</small></span>
+                </button>
+                {#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => onplay(a)} />{/if}
+              </div>
             {/if}
           {/each}
         </div>
@@ -165,12 +171,17 @@
     <!-- Their biography, their album to its right with why it is here under it (the owner, 2026-10-25). -->
     <div class="artist-about">
       {#if bio?.name === n.artist && bio.text}<p>{bio.text}</p>{/if}
-      <button class="album" onclick={() => onopen(a)} use:longpress={() => onmenu(a)}>
+      <div class="album-col">
         {#if a.why.length}<small class="why">{a.why.join('. ')}</small>{/if}
-        <span class="art big"><Cover src={a.cover} /></span>
-        <b>{a.album}</b>
-        <small>{a.year ?? ''}</small>
-      </button>
+        <div class="album-box">
+          <button class="album" onclick={() => onopen(a)} use:longpress={() => onmenu(a)}>
+            <span class="art big"><Cover src={a.cover} /></span>
+            <b>{a.album}</b>
+            <small>{a.year ?? ''}</small>
+          </button>
+          {#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => onplay(a)} />{/if}
+        </div>
+      </div>
     </div>
   </section>
 {/if}
@@ -181,11 +192,14 @@
     <SectionHead title="New from artists you have" />
     <div class="row">
       {#each sec.fresh as a (a.key)}
-        <button class="album" onclick={() => onopen(a)} use:longpress={() => onmenu(a)}>
-          <span class="art big"><Cover src={a.cover} /></span>
-          <b>{a.album}</b>
-          <small>{a.artist}{a.year ? ` · ${a.year}` : ''}</small>
-        </button>
+        <div class="album-box">
+          <button class="album" onclick={() => onopen(a)} use:longpress={() => onmenu(a)}>
+            <span class="art big"><Cover src={a.cover} /></span>
+            <b>{a.album}</b>
+            <small>{a.artist}{a.year ? ` · ${a.year}` : ''}</small>
+          </button>
+          {#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => onplay(a)} />{/if}
+        </div>
       {/each}
     </div>
   </section>
@@ -203,7 +217,7 @@
             <span class="art tiny"><Cover src={a.cover} /></span>
             <span class="weekly-text"><b>{a.album}</b><small>{a.artist}</small></span>
           </button>
-          {#if a.bandcamp}<button class="weekly-play" aria-label={`Play ${a.album} on Bandcamp`} title="Play on Bandcamp" disabled={previewing === a.key} onclick={() => onplay(a)}><Icon name="play" size={16} /></button>{/if}
+          {#if a.bandcamp}<button class="weekly-play" aria-label={`Play ${a.album} on Bandcamp`} title="Play on Bandcamp" disabled={previewing === a.key} onclick={() => onplay(a)}><Icon name="play" size={17} /></button>{/if}
         </li>
       {/each}
     </ol>
@@ -471,8 +485,16 @@
     overflow-wrap: anywhere;
   }
 
+  /* A tile's place, holding the tile and its play (a button cannot hold another). */
+  .tile-box {
+    position: relative;
+    display: grid;
+  }
+
   .tile {
     position: relative;
+    width: 100%;
+    height: 100%;
     padding: 0;
     overflow: hidden;
     border: 0;
@@ -508,18 +530,6 @@
     color: rgb(255 255 255 / 0.8);
   }
 
-  .tile-play {
-    position: absolute;
-    top: 5px;
-    right: 5px;
-    display: grid;
-    place-items: center;
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
-    background: var(--accent);
-    color: var(--accent-text);
-  }
 
 
   /* New to you: the pictures as a flow (as Home's), the front one's name under it, then their biography beside their
@@ -584,6 +594,19 @@
     gap: 14px;
     overflow-x: auto;
     scrollbar-width: none;
+  }
+
+  /* A card and its play over its cover. */
+  .album-box {
+    position: relative;
+    flex: none;
+  }
+
+  .album-col {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    width: 150px;
   }
 
   .album {

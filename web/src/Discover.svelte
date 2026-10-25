@@ -10,6 +10,7 @@
   // a line says what one would add.
   import { getDiscover, hideDiscover, notDiscover, previewBandcamp, refreshDiscover, wantDiscover, type AlbumRequest, type DiscoverAlbum, type DiscoverView } from './lib/api';
   import Cover from './lib/Cover.svelte';
+  import CoverPlay from './lib/CoverPlay.svelte';
   import { hoursMinutes } from './lib/duration';
   import MenuCards from './lib/MenuCards.svelte';
   import MenuEntry from './lib/MenuEntry.svelte';
@@ -275,7 +276,7 @@
                  pills, which are its links (each through the Open/Copy sheet, as every link to another site). -->
             <button class="open" aria-label={`${a.album} by ${a.artist}`} onclick={() => tap(a)} use:longpress={() => (opened = a)}></button>
             <!-- Cratarr's own cover: a picture that does not load is its stand-in, and the suggestion stays. -->
-            <span class="cover"><Cover src={a.cover} /></span>
+            <span class="cover"><Cover src={a.cover} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => preview(a)} />{/if}</span>
             <span class="text">
                 <b>{a.album}</b>
                 <span class="by">{a.artist}{a.year ? ` · ${a.year}` : ''}{#if a.new_artist}<span class="new">New to you</span>{/if}</span>
@@ -399,6 +400,7 @@
   }
 
   .cover {
+    position: relative;
     flex: none;
     width: 112px;
     height: 112px;
