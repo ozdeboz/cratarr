@@ -1,0 +1,17 @@
+[
+  { "q": "Björk", "words": ["bjork"] },
+  { "q": "  Sigur Rós  ", "words": ["sigur", "ros"] },
+  { "q": "Beyoncé — Lemonade", "words": ["beyonce", "lemonade"] },
+  { "q": "Ça va", "words": ["ca", "va"] },
+  { "q": "AC/DC", "words": ["ac", "dc"] },
+  { "q": "Hello-World", "words": ["hello", "world"] },
+  { "q": "Röyksopp's", "words": ["royksopp", "s"] },
+  { "q": "5 Years", "words": ["5", "years"] },
+  { "q": "ＡＢＣ", "words": ["abc"] },
+  { "q": "ﬁre", "words": ["fire"] },
+  { "q": "Ⅳ", "words": ["iv"] },
+  { "q": "\"quoted\" AND or*", "words": ["quoted", "and", "or"] },
+  { "q": "跡部進一", "words": ["跡部進一"] },
+  { "q": "", "words": [] },
+  { "q": "   ", "words": [] }
+]

@@ -2,6 +2,7 @@
 // layout, size) live in the View sheet (lib/ViewSheet) and its own filters in the Filter sheet (lib/FilterSheet), not
 // on the page. The page measures its grid and keeps its list as these say; the sheets read and change them (most are
 // prefs, remembered by the browser).
+import { matches, words } from './search';
 import { untrack } from 'svelte';
 import type { IconName } from './Icon.svelte';
 import type { AlbumLayout, CollectionOrder, CrateOrder, PanelKind, PlaylistOrder } from './prefs.svelte';
@@ -189,12 +190,10 @@ export function usePageAction(get: () => PageAction | null) {
 }
 
 /** The pill's search field's words on a page that has one. */
-/** Whether the pill's search lets these texts through: every word of it in one of them (any case). */
+/** Whether the pill's search lets these texts through: every word of it a word's start in one of them. */
 export function matchesSearch(...texts: (string | null | undefined)[]): boolean {
-  const words = pageView.query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  if (!words.length) return true;
-  const hay = texts.filter(Boolean).join(' ').toLowerCase();
-  return words.every((w) => hay.includes(w));
+  // Read as every search reads (lib/search, decision 0072): accents and case aside, each word a word's start.
+  return matches(words(pageView.query), ...texts);
 }
 
 export const searchFor = (page: string) =>
