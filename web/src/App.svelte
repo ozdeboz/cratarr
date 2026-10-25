@@ -933,7 +933,7 @@
         id="more-pages"
         role="group"
         aria-label="More pages"
-        style:--cols={bar.length + 1}
+        style:--cols={Math.max(1, Math.min(overflow.length, bar.length + 1))}
         transition:slide|global={{ duration: reducedMotion() ? 0 : SHEET_IN, easing: decelerate }}
       >
         {#each overflow as p (p.id)}
