@@ -60,6 +60,7 @@ pub mod together;
 pub mod originals;
 pub mod discogs;
 pub mod covers;
+pub mod cover_cache;
 pub mod tracks;
 pub mod visuals;
 

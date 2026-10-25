@@ -86,8 +86,10 @@ The owner added Personal › Tracking: "Keep play history" is on by default. Off
   dropped and never sent.
 - No taste profile, and Insights' listening pages come back empty, because the history's readers answer nothing.
 - Discover and Radio/Autoplay do not learn from the account's plays: counts read as nothing, and "recently played" is
-  ignored. They still use what the person said: favourites, ratings, exclusions and the library. Discover's
-  recommendations from ListenBrainz or Last.fm come from those services, not from this log.
+  ignored. They still use what the person said: favourites, ratings, exclusions and the library. Discover is not
+  personalised either (the owner, 2026-10-25): it gives the recommendations it can make without the account's
+  listening (its artists' discographies and their related artists), and it does not ask ListenBrainz or Last.fm for
+  picks from the account's own listening there.
 
 The history kept before the switch stays, unread, and turning tracking on again carries on from it. "Delete play
 history" (`DELETE /api/me/history` → `{ removed }`, which the page confirms first) removes the account's log, its
