@@ -86,6 +86,11 @@
   const REQUESTS: Page = { id: 'requests', href: '#/requests', label: 'Requests', icon: 'inbox' };
   // In the app only: what is kept on this device (decision 0033, step 4), playable without a connection.
   const DOWNLOADS: Page = { id: 'downloads', href: '#/downloads', label: 'Downloads', icon: 'download' };
+  /** The pages that are an index with their lists in the panel (Requests, Downloads, Insights, Health, Settings): their
+   *  name on the page beside back and their panel under the top bar, not over it, both on a phone only (the owner,
+   *  2026-10-25). */
+  const PANEL_PAGES: Page[] = [REQUESTS, DOWNLOADS, INSIGHTS, HEALTH, SETTINGS];
+  const panelPage = $derived(PANEL_PAGES.find((p) => p.id === page) ?? null);
   // Local mode's (decision 0052): the device's own music, and the menu shows only these (and Settings).
   const LOCAL_ALBUMS: Page = { id: 'local-albums', href: '#/local/albums', label: 'Albums', icon: 'disc' };
   const LOCAL_ARTISTS: Page = { id: 'local-artists', href: '#/local/artists', label: 'Artists', icon: 'users' };
@@ -647,7 +652,7 @@
   </div>
 
   {#if playlistLayer}
-    <div class="playlist-layer" role="dialog" aria-label="Playlist" style:--mini-h={`${miniSpace}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
+    <div class="playlist-layer" class:under-bar={!!panelPage && (settingsShown || healthShown || insightsShown || requestsShown || downloadsShown)} role="dialog" aria-label="Playlist" style:--mini-h={`${miniSpace}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
       {#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else if requestsShown}<RequestsPanel list={requestsShown} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} />{:else}<PlaylistView full />{/if}
     </div>
   {/if}
@@ -667,11 +672,13 @@
   {/if}
   {#if pageRow}
     <div class="page-row" class:beside={sidebar} style:--player-w="{sideWidth}px">
-      {#if navAt > 0 || backHome}
-        <span class="navpill"><button aria-label="Back" title="Back" onclick={() => (backHome ? (location.hash = keepViewed(HOME.href)) : history.back())}><Icon name="back" size={22} /></button></span>
-      {:else}
-        <span></span>
-      {/if}
+      <span class="lead">
+        {#if navAt > 0 || backHome}
+          <span class="navpill"><button aria-label="Back" title="Back" onclick={() => (backHome ? (location.hash = keepViewed(HOME.href)) : history.back())}><Icon name="back" size={22} /></button></span>
+        {/if}
+        <!-- On a phone only (the owner, 2026-10-25): with room, the sidebar names the page. -->
+        {#if panelPage && !sidebar}<h1 class="page-name">{panelPage.label}</h1>{/if}
+      </span>
       <!-- Settings' pill: its search and About, its own button (the owner, 2026-10-24: one pill as on every page);
            Discover's: its search and Look again (the owner, 2026-10-24). -->
       {#if pagePill || ['settings', 'discover', 'insights', 'health', 'requests'].includes(page)}<SheetArea area={() => pageEl}
@@ -790,6 +797,12 @@
     background: var(--surface);
   }
 
+  /* A panel of Requests, Downloads, Insights, Health or Settings on a phone: under the top bar, not over it (the owner,
+     2026-10-25); a playlist's, an album's or an artist's still covers it all. */
+  .playlist-layer.under-bar {
+    top: calc(var(--top-h, 0px) + env(safe-area-inset-top));
+  }
+
   /* The page's row: back and the pill floating over the page's top, which starts under them (.under-row); under the page
      bar on a phone, beside the navigation and left of the panel on a wide window. Over the page and its bar, under a
      viewed playlist. */
@@ -810,6 +823,23 @@
 
   .page-row > :global(*) {
     pointer-events: auto;
+  }
+
+  /* Back, and the page's name beside it where the page is an index (Requests, Downloads, Insights, Health, Settings). */
+  .lead {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .page-name {
+    margin: 0;
+    overflow: hidden;
+    font-size: 22px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .page-row.beside {
