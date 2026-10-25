@@ -1577,7 +1577,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           search: full ? pageHere : null,
         }
       : null;
-  handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra });
+  handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra, below: () => stuck });
 </script>
 
 <!-- This panel's glass: its floating pills, or App's row on a phone (lib/glass). -->

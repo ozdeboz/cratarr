@@ -11,7 +11,13 @@ import type { ComponentProps } from 'svelte';
 export type PillSettings = ComponentProps<typeof TopPill>;
 /** What a panel hands: its left part (back or ✕, its breadcrumbs or name), its pill's settings (none: no pill), and a
  *  button of its own beside the pill. */
-export type GlassParts = { left: Snippet; pill: () => PillSettings | null; extra?: Snippet | null };
+export type GlassParts = {
+  left: Snippet;
+  pill: () => PillSettings | null;
+  extra?: Snippet | null;
+  /** The panel's action bar has the top (stuck): the glass goes just under it, as the panel's own pills did. */
+  below?: () => boolean;
+};
 
 export const glass = $state<{ one: boolean; panel: GlassParts | null }>({ one: false, panel: null });
 

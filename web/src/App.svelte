@@ -708,7 +708,7 @@
   {/if}
   {#if pageRow || handed}
     <!-- The page's glass, or on a phone the panel's on top (lib/glass): one row, one pill whose settings change. -->
-    <div class="page-row" class:beside={sidebar && !handed} class:handed={!!handed} class:steady={phone && !!panelPage && !moreOpen} class:top={!!handed && !underBar} style:--player-w="{sideWidth}px">
+    <div class="page-row" class:beside={sidebar && !handed} class:handed={!!handed} class:below={!!handed?.below?.()} class:steady={phone && !!panelPage && !moreOpen} class:top={!!handed && !underBar} style:--player-w="{sideWidth}px">
       {#if handed}
         <span class="lead" in:fade={{ duration: leadFade }}>{@render handed.left()}</span>
       {:else}
@@ -907,6 +907,13 @@
   /* Over the panel's layer while it holds the panel's glass (lib/glass). */
   .page-row.handed {
     z-index: 22;
+    transition: transform 150ms ease;
+  }
+
+  /* The panel's action bar has the top: its glass slides just under it (52 px), as its own pills did (the owner,
+     2026-10-25: "the top panel used to slide down when this sticky action bar took its space"). */
+  .page-row.below {
+    transform: translateY(52px);
   }
 
   /* An index page's glass on a phone stays over its panel's layer as that fades out on closing, instead of showing
