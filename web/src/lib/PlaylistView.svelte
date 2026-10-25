@@ -1099,10 +1099,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
       (r) => !own || matchesSearch(r.name ?? r.file, r.artist, r.album),
     ),
   );
-  // Its own search over the page (the owner, 2026-10-25): only what is a hit. The cover, the action bar, the title and
-  // its lines go; the about, the albums, the tracks narrow to the words; what leads off the panel (similar ones,
-  // suggestions, related artists, the album's About) goes too.
-  const own = $derived(full && words(pageView.query).length > 0);
+  // Seen through a search, on every device (the owner, 2026-10-25: beside the page and over it they differed): the
+  // cover and the action bar go; the name and its lines, the About stay; the tracks and the albums narrow to the
+  // words; what leads off the panel (similar ones, More by, suggestions, related artists) goes.
+  const own = $derived(words(pageView.query).length > 0);
 
   async function crateRadio(inside: boolean) {
     const c = crate;
@@ -1638,7 +1638,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     {/if}
   {/if}
 
-  <div class="scroll" class:away={handed && everywhere()} class:own bind:this={scroller} onscroll={onScroll}>
+  <div class="scroll" class:away={(handed || full) && everywhere()} class:own bind:this={scroller} onscroll={onScroll}>
     {#if making}
       <header class="head">
         <div class="top">
@@ -2015,11 +2015,15 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {#if p && !multi && p.mine !== false}<SuggestedTracks id={p.id} name={p.name} count={p.count} />{/if}
       {#if p && !multi}<SimilarLists kind="playlist" id={p.id} />{/if}
       {#if crate && !seeded(crate) && !crateEditing && rows.length >= total}<SimilarLists kind="crate" id={crate} />{/if}
+      {/if}
       {#if album && albumHead && !offServer}
-        <!-- As Symfonium's album: the artist's other albums, the similar ones, then About. -->
-        {@const by = listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)}
-        {#if by}<AlbumMore source={album.source} album={album.id} artist={by} />{/if}
-        <SimilarAlbums source={album.source} album={album.id} />
+        <!-- As Symfonium's album: the artist's other albums, the similar ones, then About; seen through a search, its
+             About only. -->
+        {#if !own}
+          {@const by = listedHere?.a.artists?.[0] ?? mainArtist(albumHead.artist)}
+          {#if by}<AlbumMore source={album.source} album={album.id} artist={by} />{/if}
+          <SimilarAlbums source={album.source} album={album.id} />
+        {/if}
         <AlbumAbout source={album.source} album={album.id} genres={listGenres ?? []} year={albumHead.year} added={albumHead.added} played={albumHead.played} plays={albumHead.plays} provider={provider} />
       {/if}
       {#if album && albumHead && album.source === BANDCAMP}
@@ -2033,12 +2037,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
           more={albumHead}
         />
       {/if}
-      {/if}
     {:else}
       <PageLoading />
     {/if}
       <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
-    {#if handed && everywhere()}<GlobalResults />{/if}
+    {#if (handed || full) && everywhere()}<GlobalResults />{/if}
   </div>
 
   {#if selecting}
@@ -2792,8 +2795,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
      fades into the panel, where the action bar sits. */
   /* Its own search (`own`): the cover, the action bar and the title's header set aside while it narrows. */
   .scroll.own > .hero,
-  .scroll.own > .actbar,
-  .scroll.own > .meta {
+  .scroll.own > .actbar {
     display: none;
   }
 

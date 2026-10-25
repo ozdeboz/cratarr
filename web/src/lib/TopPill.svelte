@@ -184,8 +184,20 @@
   // The globe (the owner, 2026-10-25): while a search is on, left of the magnifier on thinner glass (as the title's),
   // how many everywhere finds on its badge; a tap shows everywhere's results in the page's or the panel's place, lit,
   // another its own again. Home searches everywhere as it is, Find more music is MusicBrainz's: no globe there.
-  const searchesIn = $derived(page ?? search ?? null);
-  const globe = $derived(!!words && !!searchesIn && searchesIn !== 'home' && searchesIn !== 'find' && pageView.query.trim() !== '');
+  // Not on a panel that is a search's result, carrying the page's words (the owner, 2026-10-25); a search typed in
+  // the panel's own field is its own, and has it.
+  const pillOf = $derived(`${page ?? ''}|${search ?? ''}`);
+  let typedHere = $state(false);
+  let pillWas = untrack(() => pillOf);
+  $effect(() => {
+    if (pillOf === pillWas) return;
+    pillWas = pillOf;
+    typedHere = false;
+  });
+  $effect(() => {
+    if (pageView.query.trim() === '') typedHere = false;
+  });
+  const globe = $derived(!!words && pageView.query.trim() !== '' && (page ? page !== 'home' && page !== 'find' : typedHere));
   const found = $derived(globe ? globalGroups(page ? (PAGE_KINDS[page] ?? []) : []).reduce((n, g) => n + g.total, 0) : 0);
   const globeOn = $derived(globalSearch.scope === 'everywhere');
   // While the new words are asked, the count the last ones had (the owner, 2026-10-25: the badge went while typing).
@@ -250,6 +262,7 @@
             placeholder={words}
             aria-label={words}
             bind:value={pageView.query}
+            oninput={() => (typedHere = true)}
             onkeydown={(e) => e.key === 'Escape' && (searching = false)}
             onblur={() => pageView.query.trim() === '' && (searching = false)}
           />
