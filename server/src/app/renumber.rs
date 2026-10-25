@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use super::musicbrainz::Asked as _;
 
 /// What an undo token starts with.
 pub const UNDO: char = 'r';
@@ -248,7 +249,7 @@ async fn musicbrainz(http: &reqwest::Client, release: &str) -> Result<Vec<Releas
     let Some(rg) = super::discogs::release_group_of(http, release).await? else { return Ok(Vec::new()) };
     let v: Value = http
         .get(format!("https://musicbrainz.org/ws/2/release?release-group={rg}&inc=media+recordings&limit=100&fmt=json"))
-        .send()
+        .asked()
         .await?
         .error_for_status()?
         .json()

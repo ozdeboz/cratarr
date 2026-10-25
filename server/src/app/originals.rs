@@ -7,11 +7,12 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use super::musicbrainz::Asked as _;
 
 /// Releases asked about in one pass, kept together at its end: each keeping builds the library again.
 const BATCH: usize = 500;
 /// Between two questions: half Discover's pace, so the two together stay within MusicBrainz's one a second.
-const PAUSE: Duration = Duration::from_secs(2);
+const PAUSE: Duration = Duration::from_secs(super::musicbrainz::PACE_SECS);
 /// A release MusicBrainz knew no date for is asked about again after this.
 const AGAIN_SECS: i64 = 90 * 86_400;
 /// Nothing left to ask: looked at again after this (new albums).
@@ -24,13 +25,22 @@ pub fn start() {
     tokio::spawn(async {
         tokio::time::sleep(Duration::from_secs(300)).await;
         loop {
+            // Switched off (0.9.6): looked at again later.
+            if !super::switches::is_on(super::switches::MUSICBRAINZ) {
+                super::musicbrainz::PASS_NEXT.store(0, std::sync::atomic::Ordering::Relaxed);
+                tokio::time::sleep(IDLE).await;
+                continue;
+            }
+            super::musicbrainz::PASS_RUNNING.store(true, std::sync::atomic::Ordering::Relaxed);
             let asked = pass().await.unwrap_or_else(|e| {
                 tracing::info!("original years: MusicBrainz could not be asked now: {e:#}");
                 0
             });
-            if asked == 0 {
-                tokio::time::sleep(IDLE).await;
-            }
+            super::musicbrainz::PASS_RUNNING.store(false, std::sync::atomic::Ordering::Relaxed);
+            // Settings shows when it asks next (0.9.6).
+            let wait = if asked == 0 { IDLE } else { Duration::ZERO };
+            super::musicbrainz::PASS_NEXT.store(super::moment::now_secs() + wait.as_secs() as i64, std::sync::atomic::Ordering::Relaxed);
+            tokio::time::sleep(wait).await;
         }
     });
 }
@@ -96,7 +106,7 @@ async fn release_group(http: &reqwest::Client, release: &str) -> Result<Option<G
     let url = format!("https://musicbrainz.org/ws/2/release/{release}?inc=release-groups&fmt=json");
     let mut again = true;
     loop {
-        let r = http.get(&url).send().await?;
+        let r = http.get(&url).asked().await?;
         match r.status() {
             reqwest::StatusCode::SERVICE_UNAVAILABLE if std::mem::take(&mut again) => {
                 tokio::time::sleep(BUSY).await;
