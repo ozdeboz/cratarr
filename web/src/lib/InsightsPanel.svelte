@@ -18,6 +18,7 @@
   import PageLoading from './PageLoading.svelte';
   import { closePlaylist, INSIGHTS, upToPage, viewPlaylist } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
+  import { glass, handGlass } from './glass.svelte';
 
   let { view, beside = false }: { view: InsightsView; beside?: boolean } = $props();
 
@@ -30,29 +31,42 @@
   // The funnel is lit while it leaves something out: a library or a source switched off.
   const leftOut = $derived(filters.some((g) => g.controls.some((c) => c.kind === 'toggle' && !c.get())));
   let sheet = $state<'filter' | 'view' | null>(null);
+  // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): handed over,
+  // its own bar not drawn, its view under the glass.
+  const handed = $derived(glass.one && !beside);
+  const pill = () =>
+    filters.length || views.length || !beside
+      ? {
+          device: false,
+          filter: filters.length > 0,
+          view: views.length > 0,
+          filterLit: leftOut,
+          onfilter: () => (sheet = 'filter'),
+          onview: () => (sheet = 'view'),
+          search: beside ? null : 'insights',
+        }
+      : null;
+  handGlass(() => handed, { left: glassLeft, pill });
 </script>
 
-<div class="view">
-  <div class="bar" class:beside>
-    {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
-    {#if v.under}
-      {@const parent = INSIGHTS_VIEWS.find((x) => x.id === v.under)}
-      <Crumbs up={{ label: parent?.label ?? v.group, go: () => viewPlaylist(INSIGHTS + v.under) }} here={v.label} />
-    {:else}
-      <Crumbs up={{ label: v.group, go: beside ? undefined : () => upToPage('#/insights') }} here={v.label} />
-    {/if}
-    {#if filters.length || views.length || !beside}
-      <TopPill
-        device={false}
-        filter={filters.length > 0}
-        view={views.length > 0}
-        filterLit={leftOut}
-        onfilter={() => (sheet = 'filter')}
-        onview={() => (sheet = 'view')}
-        search={beside ? null : 'insights'}
-      />
-    {/if}
-  </div>
+<!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
+{#snippet glassLeft()}
+  {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
+  {#if v.under}
+    {@const parent = INSIGHTS_VIEWS.find((x) => x.id === v.under)}
+    <Crumbs up={{ label: parent?.label ?? v.group, go: () => viewPlaylist(INSIGHTS + v.under) }} here={v.label} />
+  {:else}
+    <Crumbs up={{ label: v.group, go: beside ? undefined : () => upToPage('#/insights') }} here={v.label} />
+  {/if}
+{/snippet}
+
+<div class="view" class:handed>
+  {#if !handed}
+    <div class="bar" class:beside>
+      {@render glassLeft()}
+      {#if pill()}<TopPill {...pill()!} />{/if}
+    </div>
+  {/if}
   <div class="scroll">
     {#if view === 'discover-missing' || view === 'discover-excluded'}
       <DiscoveryList kind={view === 'discover-missing' ? 'missing' : 'excluded'} />
@@ -129,5 +143,10 @@
     background: none;
     color: var(--text);
     cursor: pointer;
+  }
+
+  /* Its glass handed to App's row on a phone (lib/glass): the view starts under it. */
+  .view.handed .scroll {
+    padding-top: 64px;
   }
 </style>
