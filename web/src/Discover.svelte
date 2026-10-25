@@ -18,6 +18,7 @@
   import MenuSheet from './lib/MenuSheet.svelte';
   import LinkSheet from './lib/LinkSheet.svelte';
   import { goToArtist, library, readLibrary } from './lib/albums.svelte';
+  import { DISCOVER } from './lib/discoverArtist';
   import DiscoverSections from './lib/DiscoverSections.svelte';
   import { sections } from './lib/discoverSections';
   import SectionHead from './lib/SectionHead.svelte';
@@ -308,7 +309,8 @@
         {#if a.bandcamp}
           <MenuEntry icon="play" label="Play on Bandcamp" busy={previewing === a.key} onclick={act(() => preview(a))} />
         {/if}
-        {#if !a.new_artist}<MenuEntry icon="user" label="Go to {a.artist}" onclick={act(() => goToArtist('cratarr', a.artist))} />{/if}
+        <!-- The library's artist their page, one new to it their page from Discover (lib/discoverArtist). -->
+        <MenuEntry icon="user" label="Go to {a.artist}" onclick={act(() => goToArtist(a.new_artist ? DISCOVER : 'cratarr', a.artist))} />
       </MenuGroup>
       <MenuGroup label="Discover">
         {#if r && open(r)}

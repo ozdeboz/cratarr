@@ -1,12 +1,13 @@
 <script lang="ts">
   // A Bandcamp album's menu in the panel (decision 0071, the owner 2026-10-25: "Bandcamp albums also deserve their own
-  // context menu ... Want ... Go to artist"): Go to the artist (their page where the library has them, else theirs on
-  // Bandcamp), Discover's group where it is a suggestion (Want, Not interested), Open on Bandcamp, Share. The menu's
+  // context menu ... Want ... Go to artist"): Go to the artist (their page where the library has them, else theirs from
+  // Discover, lib/discoverArtist; theirs on Bandcamp beside Open on Bandcamp), Discover's group where it is a suggestion (Want, Not interested), Open on Bandcamp, Share. The menu's
   // pieces as every menu's; what the server keeps of its own albums (heart, rating, playlists) it has none of.
   import { goToArtist, library, readLibrary } from './albums.svelte';
   import { albumCoverUrl } from './api';
   import { BANDCAMP, previewPage } from './bandcampPreview';
   import DiscoverEntries from './DiscoverEntries.svelte';
+  import { DISCOVER } from './discoverArtist';
   import LinkSheet from './LinkSheet.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -51,14 +52,16 @@
       <MenuGroup>
         {#if album.artist && inLibrary}
           <MenuEntry icon="user" label="Go to {album.artist}" onclick={act(() => goToArtist('cratarr', album.artist!))} />
-        {:else if album.artist && artistPage}
-          <MenuEntry icon="user" label="Go to {album.artist}" onclick={act(() => (link = { url: artistPage, name: `${album.artist} on Bandcamp` }))} />
+        {:else if album.artist}
+          <!-- Their page from Discover (lib/discoverArtist); Bandcamp's own, its site, in the third group. -->
+          <MenuEntry icon="user" label="Go to {album.artist}" onclick={act(() => goToArtist(DISCOVER, album.artist!))} />
         {/if}
       </MenuGroup>
       <DiscoverEntries {page} {onclose} />
       <MenuGroup>
         {#if page}
           <MenuEntry icon="externalLink" label="Open on Bandcamp" onclick={act(() => (link = { url: page, name: 'Bandcamp' }))} />
+          {#if album.artist && artistPage && !inLibrary}<MenuEntry icon="externalLink" label="{album.artist} on Bandcamp" onclick={act(() => (link = { url: artistPage, name: `${album.artist} on Bandcamp` }))} />{/if}
           <MenuEntry icon="share" label="Share" onclick={act(() => share(album.title, [album.artist, album.title].filter(Boolean).join(' – '), page))} />
         {/if}
       </MenuGroup>

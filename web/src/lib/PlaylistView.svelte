@@ -51,6 +51,8 @@
     setAlbumFavorite,
     getArtistAbout,
     artistPhotoUrl,
+    getDiscoverArtist,
+    discoverArtistPhotoUrl,
     type ListedAlbum,
     type PlaylistRow,
   } from './api';
@@ -89,6 +91,7 @@
   } from './crates.svelte';
   import { DEVICE, deviceAlbumView, deviceArtistView } from './deviceMusic.svelte';
   import { BANDCAMP } from './bandcampPreview';
+  import { DISCOVER, discoverArtistView } from './discoverArtist';
   import RowHeart from './RowHeart.svelte';
   import type { ExcludeEntry } from './crates.svelte';
   import CrateEditor from './CrateEditor.svelte';
@@ -284,7 +287,7 @@
   const onDevice = $derived((album?.source ?? artist?.source) === DEVICE);
   // Played here and kept by none of Cratarr's: the device's own music, or a Bandcamp album (a Discover suggestion's,
   // decision 0071, the owner 2026-10-25): its tracks, no heart, rating, Resume or similar albums of the server's.
-  const offServer = $derived(onDevice || album?.source === BANDCAMP);
+  const offServer = $derived(onDevice || album?.source === BANDCAMP || artist?.source === DISCOVER);
   async function toggleAlbumFavorite() {
     if (!album) return;
     const { source: s, id: a } = album;
@@ -347,12 +350,13 @@
             return { ...r, total: r.rows.length };
           })
         : ar
-          ? (ar.source === DEVICE ? Promise.resolve(deviceArtistView(ar.name)) : artistView(ar.source, ar.name)).then((r) => {
+          ? (ar.source === DEVICE ? Promise.resolve(deviceArtistView(ar.name)) : ar.source === DISCOVER ? discoverArtistView(ar.name) : artistView(ar.source, ar.name)).then((r) => {
               if (want === id) {
                 artistHead = { albums: r.albums, appears_on: r.appears_on, favorite: r.favorite };
-                // Their picture: their newest album's cover (Symfonium's, without an artist's photo).
+                // Their picture: their newest album's cover (Symfonium's, without an artist's photo); one from Discover's
+                // albums are Bandcamp's.
                 const first = r.albums[0] ?? r.appears_on[0];
-                covers = first ? [albumCoverUrl(r.source, first.id)] : [];
+                covers = first ? [albumCoverUrl(r.source === DISCOVER ? BANDCAMP : r.source, first.id)] : [];
               }
               return { ...r, total: r.rows.length, genres: null };
             })
@@ -423,7 +427,22 @@
     const ar = artist;
     artistPhoto = null;
     artistPhotoKnown = true;
-    if (!ar || ar.source !== 'cratarr' || ar.tracks) return;
+    if (!ar || ar.tracks) return;
+    // One from Discover (lib/discoverArtist): their picture as New to you has it.
+    if (ar.source === DISCOVER) {
+      artistPhotoKnown = false;
+      let gone = false;
+      getDiscoverArtist(ar.name).then(
+        (a) => {
+          if (gone) return;
+          if (a.photo) artistPhoto = discoverArtistPhotoUrl(ar.name);
+          artistPhotoKnown = true;
+        },
+        () => !gone && (artistPhotoKnown = true),
+      );
+      return () => (gone = true);
+    }
+    if (ar.source !== 'cratarr') return;
     artistPhotoKnown = false;
     let gone = false;
     getArtistAbout(ar.name).then(
@@ -1698,7 +1717,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           <!-- A Bandcamp album (decision 0071): no heart, its own menu (lib/BandcampAlbumMenu). -->
           <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (bandcampMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
         {:else if offServer}
-          <!-- The device's own music (local mode, decision 0052): no heart, no Cratarr menu. -->
+          <!-- The device's own music (local mode, decision 0052), an artist from Discover: no heart, no Cratarr menu. -->
         {:else if artist}
           {#if artistHead?.favorite !== undefined}
             <button class="icon" class:fav={artistHead.favorite} aria-pressed={artistHead.favorite} aria-label="Favourite" onclick={toggleArtistFavorite}
@@ -1909,6 +1928,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       <!-- An artist's page (Symfonium's): their albums, what they appear on, their most played. -->
       <ArtistBody
         source={artist.source}
+        albumSource={artist.source === DISCOVER ? BANDCAMP : artist.source}
         name={artist.name}
         albums={artistHead.albums}
         appearsOn={artistHead.appears_on}
