@@ -138,9 +138,12 @@
                albums in the right half. -->
           <div class="seeds seed-card" style={place(grid.seed)}>
             {#if wash}<div class="wash" aria-hidden="true"><img src={wash} alt="" onerror={() => photos[name] && (photos[name] = false)} /></div>{/if}
-            <div class="seed-left">
-              {#if photos[name]}<img class="face" src={discoverArtistPhotoUrl(name)} alt="" />{/if}
-              <span class="seed-text"><small>Because you play</small><b>{name}</b>{#if owned(name)}<span class="owned">{albumsOf(owned(name))}</span>{/if}</span>
+            <!-- "Because you play" at the top left, the round photo under it taking the rest of the column, the name and how
+                 many albums at its foot (the owner, 2026-10-26). -->
+            <div class="seed-left" class:photo={photos[name]}>
+              <small class="because">Because you play</small>
+              {#if photos[name]}<span class="face-room"><img class="face" src={discoverArtistPhotoUrl(name)} alt="" /></span>{/if}
+              <span class="seed-text"><b>{name}</b>{#if owned(name)}<span class="owned">{albumsOf(owned(name))}</span>{/if}</span>
             </div>
             {#if fan.length}<div class="fan" aria-hidden="true">{#each [...fan].reverse() as src (src)}<img {src} alt="" />{/each}</div>{/if}
           </div>
@@ -534,26 +537,48 @@
   }
 
   .seed-left {
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    align-items: flex-start;
+    position: relative;
+    display: grid;
+    grid-template-rows: auto 1fr;
+    justify-items: start;
     min-width: 0;
-    gap: 6px;
+    min-height: 0;
+    gap: 4px;
+  }
+
+  .seed-left .because {
+    font-size: 11px;
+  }
+
+  /* The photo's room: the rest of the column, the round photo as tall as it, the name and count over its foot. */
+  .face-room {
+    position: relative;
+    min-height: 0;
+    height: 100%;
+    max-width: 100%;
+    aspect-ratio: 1;
   }
 
   .seed-card .face {
     position: static;
-    width: 44px;
-    height: 44px;
+    width: 100%;
+    height: 100%;
     border-radius: 50%;
     object-fit: cover;
     box-shadow: 0 4px 12px rgb(0 0 0 / 0.45);
   }
 
   .seed-card .seed-text {
-    margin-top: auto;
+    align-self: end;
     text-align: start;
+  }
+
+  .seed-left.photo .seed-text {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    text-shadow: 0 1px 4px rgb(0 0 0 / 0.8);
   }
 
   .seed-card .seed-text b {
