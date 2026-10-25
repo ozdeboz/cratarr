@@ -1605,6 +1605,9 @@ export const hideDiscover = (key: string) => post<{ undo: string }>('/api/discov
 /** An artist new to the library (Discover's New to you): TheAudioDB's description, and whether there is a photo. */
 export const getDiscoverArtist = (name: string) =>
   quietly<{ bio: string | null; photo: boolean; photo_credit?: PhotoCredit | null }>(`/api/discover/artist?name=${encodeURIComponent(name)}`);
+/** How many releases an artist from Discover has made, counted on MusicBrainz when first asked (0.9.3). */
+export const getDiscoverArtistReleases = (name: string) =>
+  quietly<{ releases: number | null }>(`/api/discover/artist/releases?name=${encodeURIComponent(name)}`);
 export const discoverArtistPhotoUrl = (name: string) => `/api/discover/artist/photo?name=${encodeURIComponent(name)}`;
 /** An artist related to another (the server's app/related.rs): why, their id in the library, or an album of theirs on
  *  Bandcamp. */

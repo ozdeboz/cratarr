@@ -52,6 +52,7 @@
     getArtistAbout,
     artistPhotoUrl,
     getDiscoverArtist,
+    getDiscoverArtistReleases,
     discoverArtistPhotoUrl,
     type ListedAlbum,
     type PlaylistRow,
@@ -454,6 +455,22 @@
         artistPhotoKnown = true;
       },
       () => !gone && (artistPhotoKnown = true),
+    );
+    return () => (gone = true);
+  });
+
+  // An artist from Discover without the look's count of their releases: the server's, counted when first asked (a few
+  // seconds the first time), filled in when it comes (the owner, 2026-10-25).
+  $effect(() => {
+    const ar = artist;
+    const h = artistHead;
+    if (!ar || !fromDiscover(ar.source) || !h || h.released?.releases) return;
+    let gone = false;
+    getDiscoverArtistReleases(ar.name).then(
+      (r) => {
+        if (!gone && r.releases && artistHead === h) artistHead = { ...h, released: { albums: h.released?.albums ?? null, releases: r.releases } };
+      },
+      () => {},
     );
     return () => (gone = true);
   });

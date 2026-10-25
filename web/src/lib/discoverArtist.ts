@@ -28,6 +28,7 @@ export async function discoverArtistView(name: string): Promise<ArtistView> {
       tags: a.genres ?? [],
     })) as ListedAlbum[];
   // How much they have released (the owner, 2026-10-25: "how many releases an artist has done"), as the look counted.
+  // The look's count; the panel asks the server's beside it where there is none (lib/PlaylistView), not holding the page.
   const releases = all.find((a) => a.artist_releases)?.artist_releases ?? null;
   const albumCount = all.find((a) => a.artist_albums)?.artist_albums ?? null;
   return { source: DISCOVER, name, albums, appears_on: [], rows: [], released: { releases, albums: albumCount } } as unknown as ArtistView;
