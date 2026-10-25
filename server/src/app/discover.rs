@@ -99,6 +99,10 @@ pub struct Suggestion {
     /// as the artist store reads the library's (TheAudioDB, picture and description, by name).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub artist_photo: bool,
+    /// How many albums its artist new to the library has released (MusicBrainz's albums of their own, as the
+    /// discographies count them), read with the picture (0.9.2, the owner: under each new artist's picture).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist_albums: Option<u32>,
     /// What MusicBrainz calls it (Album, EP, Single…), as ListenBrainz gives it (0069 amended: the card shows as much
     /// as is known).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -785,6 +789,7 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
                     sources: Vec::new(),
                     bandcamp: c.bandcamp.clone(),
                     artist_photo: false,
+                    artist_albums: None,
                     kind: c.kind.clone(),
                     genres: c.genres.clone(),
                     length_secs: None,
@@ -980,6 +985,28 @@ async fn bandcamp_page(http: &reqwest::Client, urls: &[String], artists: &[Strin
     let found = bc.search(artist, album).await.unwrap_or_default();
     tokio::time::sleep(MB_PAUSE).await;
     found.into_iter().find(|(t, a, _)| same(t, album) && same(a, artist)).map(|(_, _, url)| url)
+}
+
+/// The artist MusicBrainz is sure a name is (its search's score 95 or more, the name the same as the matcher reads
+/// names): their id.
+async fn mb_artist_by_name(http: &reqwest::Client, name: &str) -> Result<Option<String>> {
+    #[derive(Deserialize)]
+    struct Artist {
+        id: String,
+        #[serde(default)]
+        score: u32,
+        #[serde(default)]
+        name: String,
+    }
+    #[derive(Deserialize)]
+    struct Search {
+        #[serde(default)]
+        artists: Vec<Artist>,
+    }
+    let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/artist")?;
+    url.query_pairs_mut().append_pair("query", &format!("artist:{}", quoted(name))).append_pair("fmt", "json").append_pair("limit", "3");
+    let s: Search = http.get(url).send().await?.error_for_status()?.json().await?;
+    Ok(s.artists.into_iter().find(|a| a.score >= 95 && loose(&a.name) == loose(name)).map(|a| a.id))
 }
 
 /// A name as MusicBrainz's search reads it: in quotes, its own quotes and backslashes escaped.
@@ -1196,8 +1223,15 @@ pub async fn look(
                 tokio::time::sleep(MB_PAUSE).await;
             }
             let photo = store.get_or_read(name, None).await.is_some_and(|info| info.photo.is_some());
+            // How many albums they have released: their MusicBrainz id by name (a sure match only), their albums.
+            let mut released = None;
+            if let Ok(Some(mbid)) = mb_artist_by_name(&http, name).await {
+                tokio::time::sleep(MB_PAUSE).await;
+                released = mb_discography(&http, &mbid, &today()).await.ok().map(|groups| groups.iter().filter(|g| g.kind.as_deref() == Some("Album")).count() as u32);
+            }
+            tokio::time::sleep(MB_PAUSE).await;
             for s in albums.iter_mut().filter(|s| &s.artist == name) {
-                s.artist_photo = photo;
+                (s.artist_photo, s.artist_albums) = (photo, released);
             }
         }
     }
