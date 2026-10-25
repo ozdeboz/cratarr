@@ -115,6 +115,9 @@ CREATE TABLE IF NOT EXISTS related_artists (artist TEXT PRIMARY KEY, at INTEGER 
 -- An album's page on Bandcamp as found when the album was opened (0.9.3; none: not found), by the album's key (its
 -- release group, else its artist's and its name's), and when; the same for every account.
 CREATE TABLE IF NOT EXISTS bandcamp_found (album TEXT PRIMARY KEY, at INTEGER NOT NULL, page TEXT) WITHOUT ROWID;
+-- An album's original year as MusicBrainz gives it (0.9.5): its release's release group's first release year (none:
+-- MusicBrainz knew none), by the MusicBrainz release, and when it was asked.
+CREATE TABLE IF NOT EXISTS original_years (release TEXT PRIMARY KEY, year INTEGER, at INTEGER NOT NULL) WITHOUT ROWID;
 -- Sleep is no longer kept (the owner, 2026-10-24: not something that should be in Cratarr at all).
 DROP TABLE IF EXISTS asleep;
 ";
@@ -1067,6 +1070,15 @@ impl UserData {
         Ok(self.db().query_row("SELECT at, page FROM bandcamp_found WHERE album = ?1", [album], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
     }
 
+    /// Every album page found on Bandcamp since `since` (epoch seconds), by the album's key: what lists of albums not in
+    /// the library show without looking again (0.9.5).
+    pub fn bandcamp_pages(&self, since: i64) -> Result<std::collections::HashMap<String, String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT album, page FROM bandcamp_found WHERE at >= ?1 AND page IS NOT NULL")?;
+        let rows = st.query_map([since], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn set_bandcamp_found(&self, album: &str, at: i64, page: Option<&str>) -> Result<()> {
         self.db().execute("INSERT OR REPLACE INTO bandcamp_found (album, at, page) VALUES (?1, ?2, ?3)", params![album, at, page])?;
         Ok(())
@@ -1670,6 +1682,36 @@ impl UserData {
         Ok(())
     }
 
+    /// Every original year MusicBrainz gave, by the album's MusicBrainz release (0.9.5).
+    pub fn original_years(&self) -> Result<std::collections::HashMap<String, u32>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT release, year FROM original_years WHERE year IS NOT NULL")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.clamp(0, i64::from(u32::MAX)) as u32)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The releases not to ask about again: those with a year, and those asked since `since`.
+    pub fn original_years_asked(&self, since: i64) -> Result<std::collections::HashSet<String>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT release FROM original_years WHERE year IS NOT NULL OR at >= ?1")?;
+        let rows = st.query_map([since], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// What MusicBrainz answered for these releases (a year, or none), as one write.
+    pub fn set_original_years(&self, found: &[(String, Option<u32>)], at: i64) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        {
+            let mut st = tx.prepare("INSERT OR REPLACE INTO original_years (release, year, at) VALUES (?1, ?2, ?3)")?;
+            for (release, year) in found {
+                st.execute(params![release, year, at])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn added(&self) -> Result<std::collections::HashMap<String, i64>> {
         let db = self.db();
         let mut st = db.prepare("SELECT album, at FROM added")?;
@@ -1741,6 +1783,16 @@ fn request_row(r: &rusqlite::Row) -> rusqlite::Result<Request> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn original_years_are_kept_and_a_release_without_one_waits() {
+        let u = UserData::open(None).unwrap();
+        u.set_original_years(&[("rel-a".into(), Some(2008)), ("rel-b".into(), None)], 100).unwrap();
+        assert_eq!(u.original_years().unwrap(), [("rel-a".to_string(), 2008)].into());
+        let asked = |since| u.original_years_asked(since).unwrap().into_iter().collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(asked(50), ["rel-a".to_string(), "rel-b".to_string()].into());
+        assert_eq!(asked(200), ["rel-a".to_string()].into(), "one MusicBrainz knew no year for, asked again later");
+    }
 
     #[test]
     fn entries_date_from_the_write_that_brought_them() {

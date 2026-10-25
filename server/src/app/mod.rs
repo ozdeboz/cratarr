@@ -57,6 +57,7 @@ mod settings;
 mod shelf;
 mod sync;
 pub mod together;
+pub mod originals;
 pub mod tracks;
 pub mod visuals;
 
@@ -172,6 +173,7 @@ impl App {
         if let Some(a) = &artists {
             a.build_slowly();
         }
+        originals::start();
         // Cratarr's own library (0032) built anew (a first start, a new layout): what was read from it while it was
         // empty is read again.
         if let Some(served) = crate::serve::instance() {
