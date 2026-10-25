@@ -151,7 +151,17 @@ function replace(url: string) {
   history.replaceState(history.state, '', url);
 }
 
+/** What follows the address with the panel, in the same step (App's page): a page and its panel change together, never
+ *  one drawn without the other (the owner, 2026-10-25: Home from an artist's panel showed the Library's filter and
+ *  sort for a moment, the panel closed while the page was still the Library). */
+const alongside = new Set<() => void>();
+export function followAddress(f: () => void) {
+  alongside.add(f);
+  return () => void alongside.delete(f);
+}
+
 function read() {
+  for (const f of alongside) f();
   const q = query();
   const viewed = q.getAll('view');
   const first = viewed[0] ?? null;

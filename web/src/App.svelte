@@ -58,6 +58,7 @@
   import ProgressBar from './lib/ProgressBar.svelte';
   import { untrack } from 'svelte';
   import { inSidebar, live, panelShowsPlayer, player } from './lib/live.svelte';
+  import { followAddress } from './lib/panel.svelte';
   import { closePlaylist, HEALTH as HEALTH_VIEW, healthOf, INSIGHTS as INSIGHTS_VIEW, insightsOf, keepViewed, openedHere, panel, REQUESTS as REQUESTS_VIEW, requestsOf, DOWNLOADS as DOWNLOADS_VIEW, downloadsOf, SETTINGS as SETTINGS_VIEW, settingsOf, viewInPlace, viewPlaylist } from './lib/panel.svelte';
   import RequestsPanel from './lib/RequestsPanel.svelte';
   import DownloadsPanel from './lib/DownloadsPanel.svelte';
@@ -615,14 +616,13 @@
     prefs.playerWidth = fitWidth(playerWidth + step);
   }
 
-  $effect(() => {
-    const on = () => {
+  // The page follows the address in the same step as the panel (lib/panel's followAddress), not after it.
+  $effect(() =>
+    followAddress(() => {
       page = fromHash();
       moreOpen = false;
-    };
-    addEventListener('hashchange', on);
-    return () => removeEventListener('hashchange', on);
-  });
+    }),
+  );
 
   $effect(() => {
     if (!moreOpen) return;
