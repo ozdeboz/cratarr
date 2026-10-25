@@ -449,9 +449,13 @@
   // Back is always there (the owner, 2026-10-23): a step back in this visit, else Home; only Home itself, opened first,
   // has none. On a phone the row always shows.
   const backHome = $derived(navAt === 0 && page !== 'home');
-  const pageRow = $derived(
-    !playlistLayer && !overlay && (phone || navAt > 0 || backHome || pagePill || page === 'settings' || page === 'insights' || page === 'discover'),
+  /** The page has the row (its room at its top kept for it). */
+  const pageHasRow = $derived(
+    !playlistLayer && (phone || navAt > 0 || backHome || pagePill || page === 'settings' || page === 'insights' || page === 'discover'),
   );
+  // Shown unless the player is over everything; its room stays then, so the page under the player does not jump up as
+  // it opens (the owner, 2026-10-25).
+  const pageRow = $derived(pageHasRow && !overlay);
   // The panel on top's glass, handed over on a phone (lib/glass): the row shows it over the panel's layer.
   const handed = $derived(!overlay && playlistLayer ? glass.panel : null);
   /** The layer under the top bar (an index page's panel) or over all of it (a playlist's, an album's, an artist's). */
@@ -771,7 +775,7 @@
   <div class="content" class:with-side={sidebar} style:--player-w="{sideWidth}px" bind:this={contentEl}>
     <!-- Its room under the glass kept while a panel covers it on a phone (the owner, 2026-10-25: opening a list on Requests
          shifted the page up under the coming panel). -->
-    <div class="page" class:under-row={pageRow || (phone && playlistLayer)} class:away={everywhereShown} bind:this={pageEl}>
+    <div class="page" class:under-row={pageHasRow || (phone && playlistLayer)} class:away={everywhereShown} bind:this={pageEl}>
     <SheetArea area={() => pageEl}>
     {#if page === 'settings'}
       <Settings />
