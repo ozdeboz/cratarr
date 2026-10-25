@@ -7,7 +7,8 @@ import { inApp } from './app.svelte';
 import { DOWNLOADS_LISTS } from './downloadsLists.svelte';
 import { INSIGHTS_VIEWS } from './insightsViews';
 import { me } from './me.svelte';
-import { DOWNLOADS, INSIGHTS, REQUESTS, SETTINGS } from './panel.svelte';
+import { DOWNLOADS, HEALTH, INSIGHTS, REQUESTS, SETTINGS } from './panel.svelte';
+import { problems } from './healthReport.svelte';
 import { REQUESTS_LISTS } from './requests.svelte';
 import { matchedOn, matches, provide, type SearchResult } from './search';
 import { loadSettingsWords, settingsMatches } from './settingsSearch.svelte';
@@ -33,8 +34,7 @@ export function provideEverywhere(pages: () => PageLink[]) {
     label: 'Settings',
     find: (query) => {
       void loadSettingsWords();
-      const page = matches(query, 'Settings') ? [{ ...result('setting', '#/settings', 'Settings', '', query), score: 3 }] : [];
-      return page.concat(SECTIONS.filter((x) => (!x.app || inApp) && (!x.admin || me.admin || x.everyone)).flatMap((x) => {
+      return SECTIONS.filter((x) => (!x.app || inApp) && (!x.admin || me.admin || x.everyone)).flatMap((x) => {
         const f = settingsMatches(x.id, x.title, query);
         if (!f.title && !f.rows.length) return [];
         return [
@@ -48,21 +48,18 @@ export function provideEverywhere(pages: () => PageLink[]) {
             matched: matchedOn(query, [{ on: 'name', text: x.title }]),
           },
         ];
-      }));
+      });
     },
   });
-  // Each page under its own name with what is in it (the owner, 2026-10-25: "pages doesn't exist", a Downloads list
-  // showed under "Pages"): the page itself where its name has the words, then its parts; a page not shown, nothing.
+  // The control pages' parts, each page's under its name (the owner, 2026-10-25): Requests, Downloads, Insights, Health
+  // and Settings. Home, Library and Discover only gather, so nothing of theirs; crates and playlists are sets, found as
+  // the albums and artists are (the server's); a page itself is never a result.
   const PARTS: { href: string; label: string; parts: () => { view: string; label: string; sub?: string }[] }[] = [
-    { href: '#/home', label: 'Home', parts: () => [] },
-    { href: '#/library', label: 'Library', parts: () => [] },
-    { href: '#/crates', label: 'Crates', parts: () => [] },
-    { href: '#/', label: 'Playlists', parts: () => [] },
-    { href: '#/discover', label: 'Discover', parts: () => [] },
     { href: '#/requests', label: 'Requests', parts: () => REQUESTS_LISTS.map((l) => ({ view: REQUESTS + l.id, label: l.label })) },
     { href: '#/downloads', label: 'Downloads', parts: () => DOWNLOADS_LISTS.map((l) => ({ view: DOWNLOADS + l.id, label: l.label })) },
     { href: '#/insights', label: 'Insights', parts: () => INSIGHTS_VIEWS.map((v) => ({ view: INSIGHTS + v.id, label: v.label, sub: v.group })) },
-    { href: '#/health', label: 'Health', parts: () => [] },
+    // Its problems as far as its report is in (read when Health was opened).
+    { href: '#/health', label: 'Health', parts: () => problems().map((x) => ({ view: HEALTH + x.key, label: x.title, sub: x.domain })) },
   ];
   for (const p of PARTS)
     provide({
@@ -70,10 +67,7 @@ export function provideEverywhere(pages: () => PageLink[]) {
       label: p.label,
       find: (query) => {
         if (!pages().some((x) => x.href === p.href)) return [];
-        return [
-          { ...result(`page:${p.href}`, p.href, p.label, '', query), score: 2 },
-          ...p.parts().map((x) => result(`page:${p.href}`, at(p.href, x.view), x.label, x.sub ?? '', query)),
-        ].filter((r) => matches(query, r.title));
+        return p.parts().map((x) => result(`page:${p.href}`, at(p.href, x.view), x.label, x.sub ?? '', query)).filter((r) => matches(query, r.title));
       },
     });
 }
