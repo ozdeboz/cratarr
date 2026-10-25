@@ -213,16 +213,23 @@
     else if (globalAsked()) lastFound = found;
   });
   const badge = $derived(globalAsked() ? found : lastFound);
+  // Only with something found (the owner, 2026-10-25): none, no globe; once gone, back only with an answer that finds
+  // something, so no empty glass comes and goes while typing. An answer comes 300 ms after the last key at the
+  // earliest (lib/globalSearch), past the owner's 100 ms. Gone while lit: the page's own results again.
+  const globeShown = $derived(globe && (badge ?? 0) > 0);
+  $effect(() => {
+    if (!globeShown && untrack(() => globalSearch.scope) === 'everywhere') globalSearch.scope = 'page';
+  });
 </script>
 
 <span class="pill-row" class:wide={showing}>
-  {#if globe}
+  {#if globeShown}
     <span class="globe" transition:paced|global>
       <button
         class="funnel"
         class:on={globeOn}
         aria-pressed={globeOn}
-        aria-label={globeOn ? "Back to this page's results" : `Everywhere, ${badge ?? found} found`}
+        aria-label={globeOn ? "Back to this page's results" : `Everywhere, ${badge} found`}
         title="Everywhere"
         onmousedown={(e) => e.preventDefault()}
         onclick={() => (globalSearch.scope = globeOn ? 'page' : 'everywhere')}
