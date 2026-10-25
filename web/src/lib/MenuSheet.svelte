@@ -47,8 +47,9 @@
     title: string;
     chips?: string[];
     heart?: { on: boolean; disabled?: boolean; toggle: () => void } | null;
-    /** An action at the title's end where there is no heart (the Filter sheet's Save as crate). */
-    end?: SheetAction | null;
+    /** An action at the title's end where there is no heart (the Filter sheet's Save as crate), or a few side by side
+     *  (Change cover's From an address and Upload). */
+    end?: SheetAction | SheetAction[] | null;
     actions?: SheetAction[];
     /** In a step: back to the entries (Esc too). */
     onback?: (() => void) | null;
@@ -200,7 +201,9 @@
         ><Icon name="heart" size={24} /></button
       >
     {:else if end}
-      <button class="heart" aria-label={end.label} title={end.label} disabled={end.disabled} onclick={end.onclick}><Icon name={end.icon} size={24} /></button>
+      {#each Array.isArray(end) ? end : [end] as x (x.label)}
+        <button class="heart" aria-label={x.label} title={x.label} disabled={x.disabled} onclick={x.onclick}><Icon name={x.icon} size={24} /></button>
+      {/each}
     {/if}
   </div>
 

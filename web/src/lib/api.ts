@@ -1353,11 +1353,13 @@ export const serverCoverUrl = (source: string, album: string) =>
       source === 'bandcamp'
       ? `/api/cover/bandcamp/${encodeURIComponent(album)}`
       : `/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/cover`;
-/** The album's cover as this device shows it: a picture chosen here, else the server's (read again: a new address). */
+/** The album's cover as this device shows it: a picture chosen here, else the server's (read again: a new address).
+ *  Cratarr's own library has no covers of a device's own (the owner, 2026-10-25: its administrators upload one for
+ *  everyone instead), so one chosen here before is passed over. */
 export const albumCoverUrl = (source: string, album: string) => {
   const key = coverKey(source, album);
   const round = coverRounds[key];
-  return localCovers[key] ?? `${serverCoverUrl(source, album)}${round ? `?v=${round}` : ''}`;
+  return (source === 'cratarr' ? undefined : localCovers[key]) ?? `${serverCoverUrl(source, album)}${round ? `?v=${round}` : ''}`;
 };
 /** How the owner used an album (decided 2026-10-16: the Library's orders and filters): its plays, when last played
  *  (epoch seconds), its rating (0: none). */
@@ -2120,6 +2122,16 @@ export const lookAlbumCovers = (source: string, album: string) =>
   post<Started>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers/look`, {});
 export const setAlbumCover = (source: string, album: string, url: string) =>
   post<{ undo: string[] }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`, { url });
+/** A picture of one's own as the album's cover, for everyone (its administrators', the owner 2026-10-25): written as a
+ *  chosen cover is, inside the files and beside them; Undo puts the old one back. JPEG, PNG or WebP, kept as sent, at
+ *  most COVER_MAX (a FLAC's picture holds 16 MiB, and every track carries it; a5). */
+export const COVER_MAX = 12 * 1024 * 1024;
+export const uploadAlbumCover = (source: string, album: string, file: Blob) =>
+  request<{ undo: string[] }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`, {
+    method: 'PUT',
+    headers: { 'Content-Type': file.type || 'application/octet-stream' },
+    body: file,
+  });
 
 /** The account's play history deleted, and what was learned from it (a5, 0.9.5): how many plays went. */
 export const deleteHistory = () => request<{ removed: number }>('/api/me/history', { method: 'DELETE' });

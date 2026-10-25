@@ -53,6 +53,9 @@
     getAlbumCovers,
     lookAlbumCovers,
     missingCall,
+    uploadAlbumCover,
+    COVER_MAX,
+    ApiError,
     setAlbumCover,
     type CoverChoice,
     replacePreview,
@@ -94,7 +97,7 @@
   import { withUndo } from './undo.svelte';
   import { me } from './me.svelte';
 
-  type Ask = 'move' | 'replace' | 'delete' | 'cover';
+  type Ask = 'move' | 'replace' | 'delete' | 'cover' | 'cover-url';
   let {
     source: givenSource,
     album: givenAlbum,
@@ -283,17 +286,33 @@
     share(a.title, [a.artist, a.title].filter(Boolean).join(' – '), linkTo('library', albumSubject(source, a.id)));
   }
 
-  // Its cover on this device (lib/localCovers.svelte.ts): a picture chosen here, or the server's read again.
-  const ownCover = $derived(!!localCovers[coverKey(source, a.id)]);
+  // Its cover on this device (lib/localCovers.svelte.ts): a picture chosen here, or the server's read again. Not in
+  // Cratarr's own library (the owner, 2026-10-25): there its administrators upload one, for everyone.
+  const deviceCovers = $derived(source !== 'cratarr');
+  const ownCover = $derived(deviceCovers && !!localCovers[coverKey(source, a.id)]);
   let picker = $state<HTMLInputElement>();
   async function chosen(e: Event) {
     const file = (e.currentTarget as HTMLInputElement).files?.[0];
+    const [src, id, title, here] = [source, a.id, a.title, deviceCovers];
     onclose();
     if (!file) return;
+    if (!here) return upload(src, id, title, file);
     try {
-      await setLocalCover(source, a.id, file);
+      await setLocalCover(src, id, file);
     } catch (e) {
       toast.fail(e, "The cover wasn't changed");
+    }
+  }
+  async function upload(src: string, id: string, title: string, file: File) {
+    if (file.size > COVER_MAX) return toast.fail(null, 'That picture is too large (at most 12 MB)');
+    try {
+      const { undo } = await uploadAlbumCover(src, id, file);
+      const again = () => void refreshCover(src, id, albumCoverUrl(src, id));
+      again();
+      withUndo(`Changed the cover of ${title}.`, undo, { after: again });
+    } catch (e) {
+      const big = e instanceof ApiError && e.status === 413;
+      toast.fail(missingCall(e) || big ? null : e, big ? 'That picture is too large (at most 12 MB)' : missingCall(e) ? "This server can't take a cover yet" : "The cover wasn't uploaded");
     }
   }
   async function serverCover() {
@@ -382,6 +401,8 @@
       }
     }
   }
+  /** Change cover's From an address. */
+  let coverUrl = $state('');
   /** The cover being made the album's: only its card turns busy (the owner, 2026-10-25). */
   let settingCover = $state<string | null>(null);
   const setCover = (c: CoverChoice) => {
@@ -495,7 +516,13 @@
   chips={[a.artist ?? 'Unknown artist']}
   heart={ask || exporting || step !== 'menu' ? null : { on: fav, toggle: toggleFavourite }}
   {actions}
-  onback={ask ? () => (ask = false) : exporting ? () => (exporting = false) : step === 'menu' ? null : () => (step = step === 'again' ? 'lists' : 'menu')}
+  end={ask === 'cover'
+    ? [
+        { icon: 'link', label: 'From an address', onclick: () => ((coverUrl = ''), (ask = 'cover-url')) },
+        { icon: 'upload', label: 'Upload cover', onclick: () => picker?.click() },
+      ]
+    : null}
+  onback={ask === 'cover-url' ? () => (ask = 'cover') : ask ? () => (ask = false) : exporting ? () => (exporting = false) : step === 'menu' ? null : () => (step = step === 'again' ? 'lists' : 'menu')}
   step={ask || (exporting ? 'export' : step)}
 >
   {#if exporting && tracks}
@@ -558,6 +585,16 @@
           <button class="primary" disabled={working || !!swap.refused} aria-busy={working} onclick={replaceIt}>Replace</button>
         {/if}
         <button onclick={onclose}>Cancel</button>
+      </div>
+    </div>
+  {:else if ask === 'cover-url'}
+    <!-- A picture's address for its cover (the owner, 2026-10-25: beside Upload, top right of Change cover). -->
+    <div class="form">
+      <p class="ask">The picture's address</p>
+      <input class="url" type="url" inputmode="url" placeholder="https://…" aria-label="Picture address" bind:value={coverUrl} />
+      <div class="actions">
+        <button class="solid" disabled={working || !/^https?:\/\/\S+$/.test(coverUrl.trim())} aria-busy={working} onclick={() => setCover({ url: coverUrl.trim(), width: null, height: null })}>Use it</button>
+        <button onclick={() => (ask = 'cover')}>Cancel</button>
       </div>
     </div>
   {:else if ask === 'cover'}
@@ -656,8 +693,11 @@
       </MenuGroup>
       <!-- Change: its cover on this device, its resume point, and (its administrators', decision 0051) the library's. -->
       <MenuGroup>
-        {#if me.admin && source === 'cratarr'}<MenuEntry icon="image" label="Change cover" onclick={askCover} />{/if}
-        <MenuEntry icon="image" label="Change cover on this device" onclick={() => picker?.click()} />
+        {#if me.admin && source === 'cratarr'}
+          <MenuEntry icon="image" label="Change cover" onclick={askCover} />
+        {:else if deviceCovers}
+          <MenuEntry icon="image" label="Change cover on this device" onclick={() => picker?.click()} />
+        {/if}
         <MenuEntry icon={ownCover ? 'imageOff' : 'reset'} label={ownCover ? "Use the server's cover" : 'Read the cover again'} onclick={serverCover} />
         {#if resumeAt}<MenuEntry icon="resume" label="Remove resume point" onclick={forgetResume} />{/if}
       </MenuGroup>
@@ -815,6 +855,19 @@
   .year {
     min-height: 40px;
     width: 7em;
+    padding: 0 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font: inherit;
+    color: inherit;
+  }
+
+  /* From an address: the whole width, as the year's field otherwise. */
+  .url {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 40px;
     padding: 0 12px;
     background: var(--bg);
     border: 1px solid var(--border);
