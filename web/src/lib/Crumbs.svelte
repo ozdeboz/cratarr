@@ -31,9 +31,10 @@
     text-overflow: ellipsis;
   }
 
+  /* Whole while there is room (the owner, 2026-10-25: "you have been limiting it too much"; a 45% cap of its own
+     width cut it with room to spare); short of room, the level above gives way first, where one is last. */
   .up {
-    flex: 0 1 auto;
-    max-width: 45%;
+    flex: 0 1000 auto;
     color: var(--muted);
   }
 

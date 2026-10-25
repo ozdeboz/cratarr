@@ -931,7 +931,7 @@
   }
 
   .page.under-row {
-    padding-top: 60px;
+    padding-top: var(--glass-room);
   }
 
   /* Back, round as the pill (lib/TopPill). */

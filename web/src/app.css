@@ -37,6 +37,9 @@
      unplayed part (the playing cover's at 25 % over the page), a little see-through, what is under it blurred. */
   --float-bg: color-mix(in srgb, color-mix(in srgb, var(--now-accent) 25%, var(--bg)) 70%, transparent);
   --float-blur: blur(16px) saturate(1.4);
+  /* The room the floating glass row takes over a page's or a panel's top (App's .page-row): what is under it starts
+     there, the page and its panels alike (the owner, 2026-10-25). */
+  --glass-room: 60px;
   transition: --now-accent 1s linear;
   color-scheme: dark;
 }

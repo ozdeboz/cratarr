@@ -13,33 +13,33 @@
 </script>
 
 <div class="seg" class:plain role="group" aria-label="Size">
-  <button aria-label="Smaller" disabled={smaller === null} onclick={() => smaller !== null && (value = smaller)}><Icon name="zoomOut" size={22} /></button>
-  <button aria-label="Larger" disabled={larger === null} onclick={() => larger !== null && (value = larger)}><Icon name="zoomIn" size={22} /></button>
+  <button aria-label="Smaller" disabled={smaller === null} onclick={() => smaller !== null && (value = smaller)}><Icon name="zoomOut" size={plain ? 22 : 20} /></button>
+  <button aria-label="Larger" disabled={larger === null} onclick={() => larger !== null && (value = larger)}><Icon name="zoomIn" size={plain ? 22 : 20} /></button>
 </div>
 
 <style>
+  /* As the choices' track (lib/Seg, the owner 2026-10-25): one rounded track, its two buttons round in it, low; actions,
+     not a choice, so neither is in the accent. */
   .seg {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    overflow: hidden;
-    background: var(--surface);
+    gap: 2px;
+    padding: 3px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text) 9%, transparent);
   }
 
   button {
     display: grid;
     place-items: center;
-    min-height: 44px;
-    padding: 0 12px;
-    background: var(--surface);
+    min-width: 40px;
+    min-height: 30px;
+    padding: 0 10px;
     border: 0;
+    border-radius: 999px;
+    background: none;
     color: var(--text);
     cursor: pointer;
-  }
-
-  button + button {
-    border-left: 1px solid var(--border);
   }
 
   button:disabled {
@@ -47,9 +47,15 @@
     cursor: default;
   }
 
+  @media (hover: hover) {
+    .seg:not(.plain) button:not(:disabled):hover {
+      background: color-mix(in srgb, var(--text) 10%, transparent);
+    }
+  }
+
   .plain {
     gap: 4px;
-    border: 0;
+    padding: 0;
     background: none;
   }
 

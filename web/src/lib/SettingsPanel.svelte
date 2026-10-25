@@ -253,9 +253,10 @@
     padding: 16px clamp(12px, 2vw, 24px) calc(96px + var(--mini-h, 0px));
   }
 
-  /* Its glass handed to App's row on a phone (lib/glass): the list starts under it. */
+  /* Its glass handed to App's row on a phone (lib/glass): the list starts under it, its first heading where the page's
+     is (the glass's room, then its own 16 px; it began 12 px higher, the owner 2026-10-25). */
   .view.handed .scroll {
-    padding-top: 64px;
+    padding-top: calc(var(--glass-room) + 16px);
   }
 
   .none {
