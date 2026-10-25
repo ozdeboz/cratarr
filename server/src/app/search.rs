@@ -1,7 +1,7 @@
 //! One search, answered by kind (decision 0072): `GET /api/search?q=&kinds=&limit=` → `{ q, groups, top }`. Every
 //! result in one shape (`Item`), what the panel opens as its `subject`, why it is there in `matched`. Cratarr's own
 //! library: albums (by their tracks too), artists (by their albums too), tracks, genres; the account's playlists and
-//! crates by their names and by the tracks in them. `top` is every group merged by score, a weight per kind
+//! crates by their names and by the tracks in them (a track's title, artist or album). `top` is every group merged by score, a weight per kind
 //! (Meilisearch's federated search).
 
 use std::collections::{BTreeMap, HashMap};
@@ -24,6 +24,26 @@ const DEEP: usize = 2000;
 const CRATES_KEEP: Duration = Duration::from_secs(60);
 
 type Members = Arc<Vec<(String, String, Vec<String>)>>;
+
+/// Why a track found makes a list found: the field that holds the words (`track`, its title, best; then `artist`;
+/// then `album`), how well, and its text.
+#[derive(Debug, Clone, PartialEq)]
+struct Entry {
+    rank: (u8, u8),
+    on: &'static str,
+    text: String,
+}
+
+/// A found track's `Entry`: the first of its title, artist and album holding every word; its title where the words
+/// are spread over them.
+fn entry(title: String, artist: String, album: String, w: &[String]) -> Entry {
+    for (rank, on, text) in [(3, "track", &title), (2, "artist", &artist), (1, "album", &album)] {
+        if crate::search::matches(text, w) {
+            return Entry { rank: (rank, closeness(text, w)), on, text: text.clone() };
+        }
+    }
+    Entry { rank: (0, 0), on: "track", text: title }
+}
 
 /// Why a result is there: what it matched on (`name`, `artist`, `album`, `track`), the text, and how many.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -79,31 +99,39 @@ fn matched(h: &crate::serve::read::Hit) -> Vec<Matched> {
     vec![Matched { on: h.on, text: h.text.clone(), count: h.count }]
 }
 
-/// The lines of the tracks whose title has the words, with that title; none without Cratarr's own library.
-async fn titled_lines(w: &[String]) -> anyhow::Result<HashMap<String, String>> {
+/// The lines of the tracks the words name (title, artist, album), with why; none without Cratarr's own library.
+async fn found_lines(w: &[String]) -> anyhow::Result<HashMap<String, Entry>> {
     let Some(served) = crate::serve::instance() else { return Ok(HashMap::new()) };
     let words = w.to_vec();
-    tokio::task::spawn_blocking(move || -> anyhow::Result<HashMap<String, String>> {
+    tokio::task::spawn_blocking(move || -> anyhow::Result<HashMap<String, Entry>> {
         let cat = served.catalogue();
-        Ok(served.library.titled(&words, DEEP)?.into_iter().filter_map(|(id, title)| Some((crate::serve::playlists::line_of_song(cat, &id)?, title))).collect())
+        Ok(served
+            .library
+            .songs_naming(&words, DEEP)?
+            .into_iter()
+            .filter_map(|(id, title, artist, album)| Some((crate::serve::playlists::line_of_song(cat, &id)?, entry(title, artist, album, &words))))
+            .collect())
     })
     .await?
 }
 
-/// How many of a list's lines are tracks found, and the first one's title; none when it has none.
-fn holding<'a>(lines: impl IntoIterator<Item = &'a String>, deep: &HashMap<String, String>) -> Option<(u32, String)> {
-    let mut first = None;
+/// How many of a list's lines are tracks found, and the best of them (`Entry::rank`, the first among equals); none when
+/// it has none.
+fn holding<'a>(lines: impl IntoIterator<Item = &'a String>, deep: &HashMap<String, Entry>) -> Option<(u32, Entry)> {
+    let mut best: Option<&Entry> = None;
     let mut n = 0;
-    for t in lines.into_iter().filter_map(|l| deep.get(l)) {
+    for e in lines.into_iter().filter_map(|l| deep.get(l)) {
         n += 1;
-        first.get_or_insert_with(|| t.clone());
+        if best.is_none_or(|b| e.rank > b.rank) {
+            best = Some(e);
+        }
     }
-    first.map(|t| (n, t))
+    best.map(|e| (n, e.clone()))
 }
 
 /// A list found by its tracks only: below every name that matches (those score 2 and up), more tracks higher.
-fn by_tracks(count: u32, text: String) -> (f32, Vec<Matched>) {
-    (1.0 - 1.0 / (1.0 + count as f32), vec![Matched { on: "track", text, count: Some(count) }])
+fn by_tracks(count: u32, e: Entry) -> (f32, Vec<Matched>) {
+    (1.0 - 1.0 / (1.0 + count as f32), vec![Matched { on: e.on, text: e.text, count: Some(count) }])
 }
 
 /// The asking account's crates with their tracks, kept a minute (`CRATES_KEEP`).
@@ -219,8 +247,8 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                 .collect(),
         );
     }
-    // Playlists and crates by their names, and by the tracks in them (a track's title).
-    let deep = if wants("playlist") || wants("crate") { titled_lines(&w).await? } else { HashMap::new() };
+    // Playlists and crates by their names, and by the tracks in them (a track's title, artist or album).
+    let deep = if wants("playlist") || wants("crate") { found_lines(&w).await? } else { HashMap::new() };
     if wants("playlist") {
         let lines: HashMap<String, Vec<String>> =
             if deep.is_empty() { HashMap::new() } else { app.playlists.visible_lines().await?.into_iter().map(|(id, _, l)| (id, l)).collect() };
@@ -228,8 +256,8 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
         for p in app.playlists.view(None).await? {
             let (score, matched) = if crate::search::matches(&p.name, &w) {
                 (score(&p.name, &w, 0, 1), matched_name(&p.name))
-            } else if let Some((count, text)) = lines.get(&p.id).and_then(|l| holding(l, &deep)) {
-                by_tracks(count, text)
+            } else if let Some((count, e)) = lines.get(&p.id).and_then(|l| holding(l, &deep)) {
+                by_tracks(count, e)
             } else {
                 continue;
             };
@@ -261,8 +289,8 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
         for (id, name) in names {
             let (score, matched) = if crate::search::matches(&name, &w) {
                 (score(&name, &w, 0, 1), matched_name(&name))
-            } else if let Some((count, text)) = members.as_ref().and_then(|m| m.iter().find(|x| x.0 == id)).and_then(|x| holding(&x.2, &deep)) {
-                by_tracks(count, text)
+            } else if let Some((count, e)) = members.as_ref().and_then(|m| m.iter().find(|x| x.0 == id)).and_then(|x| holding(&x.2, &deep)) {
+                by_tracks(count, e)
             } else {
                 continue;
             };
@@ -302,13 +330,36 @@ mod tests {
     }
 
     #[test]
-    fn a_list_found_by_its_tracks_counts_them_and_stays_below_a_name() {
-        let deep: HashMap<String, String> = [("a/1.flac", "Kelly Watch the Stars"), ("a/2.flac", "Sexy Boy")].into_iter().map(|(l, t)| (l.to_string(), t.to_string())).collect();
-        let lines: Vec<String> = ["b/9.flac", "a/2.flac", "a/1.flac"].into_iter().map(str::to_string).collect();
-        assert_eq!(holding(&lines, &deep), Some((2, "Sexy Boy".to_string())));
+    fn a_track_is_found_by_its_title_first_then_its_artist_then_its_album() {
+        let w = words("gardner");
+        let e = entry("Clear the Air".into(), "Jacco Gardner".into(), "Cabinet of Curiosities".into(), &w);
+        assert_eq!((e.on, e.text.as_str()), ("artist", "Jacco Gardner"));
+        let e = entry("Gardner's Song".into(), "Jacco Gardner".into(), "X".into(), &w);
+        assert_eq!((e.on, e.text.as_str()), ("track", "Gardner's Song"));
+        let e = entry("Help".into(), "Someone".into(), "The Gardner Tapes".into(), &w);
+        assert_eq!(e.on, "album");
+        // The words spread over its fields: its title.
+        let e = entry("Clear the Air".into(), "Jacco Gardner".into(), "X".into(), &words("gardner clear"));
+        assert_eq!((e.on, e.text.as_str(), e.rank.0), ("track", "Clear the Air", 0));
+    }
+
+    #[test]
+    fn a_list_found_by_its_tracks_counts_them_names_the_best_and_stays_below_a_name() {
+        let w = words("gardner");
+        let deep: HashMap<String, Entry> = [
+            ("a/1.flac", entry("Clear the Air".into(), "Jacco Gardner".into(), "Cabinet".into(), &w)),
+            ("a/2.flac", entry("Gardner's Song".into(), "Jacco Gardner".into(), "Cabinet".into(), &w)),
+        ]
+        .into_iter()
+        .map(|(l, e)| (l.to_string(), e))
+        .collect();
+        let lines: Vec<String> = ["b/9.flac", "a/1.flac", "a/2.flac"].into_iter().map(str::to_string).collect();
+        let (count, best) = holding(&lines, &deep).unwrap();
+        assert_eq!((count, best.on, best.text.as_str()), (2, "track", "Gardner's Song"));
         assert_eq!(holding(&lines[..1], &deep), None);
-        let w = words("sexy");
-        assert!(by_tracks(500, String::new()).0 < score("Sexy", &w, 9, 10).min(score("Sexy Things", &w, 9, 10)));
-        assert!(by_tracks(3, String::new()).0 > by_tracks(1, String::new()).0);
+        let (s, m) = by_tracks(count, best);
+        assert_eq!(m, vec![Matched { on: "track", text: "Gardner's Song".into(), count: Some(2) }]);
+        assert!(by_tracks(500, deep["a/1.flac"].clone()).0 < score("Gardner", &w, 9, 10).min(score("Gardners", &w, 9, 10)));
+        assert!(s > by_tracks(1, deep["a/1.flac"].clone()).0);
     }
 }
