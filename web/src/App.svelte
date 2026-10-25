@@ -435,10 +435,57 @@
         ? { page, view: hasView(page), device: pagePill && pillDevice, filter: (pagePill && !page.startsWith('local-') && page !== 'downloads') || page === 'discover' }
         : null,
   );
+  // The layout below 1024 px, the user's (Display; the owner, 2026-10-25): the bar of pages along the top or the
+  // bottom, sliding away while scrolling down (and back up) or always shown, panels under it either way; the controls
+  // (back, the title, the pill) at the top or just above the mini-player, following it as it comes and goes.
+  const navBottom = $derived(phone && prefs.navAt === 'bottom');
+  const miniTop = $derived(phone && prefs.miniAt === 'top');
+  const leadBottom = $derived(phone && prefs.navControlsAt === 'bottom');
+  const rightBottom = $derived(phone && prefs.contentControlsAt === 'bottom');
+  let navAway = $state(false);
+  $effect(() => {
+    if (!phone || !prefs.navHides) return void (navAway = false);
+    const last = new WeakMap<object, number>();
+    const scrolled = (e: Event) => {
+      const el = e.target === document ? document.scrollingElement : (e.target as Element);
+      if (!el) return;
+      const y = el.scrollTop;
+      const was = last.get(el) ?? y;
+      last.set(el, y);
+      if (y < 80) navAway = false;
+      else if (y - was > 6) navAway = true;
+      else if (was - y > 6) navAway = false;
+    };
+    addEventListener('scroll', scrolled, { capture: true, passive: true });
+    return () => removeEventListener('scroll', scrolled, { capture: true });
+  });
+  // Somewhere else: the bar shows again.
+  $effect(() => {
+    void page;
+    void panel.viewed;
+    navAway = false;
+  });
   $effect(() => {
     const root = document.documentElement.style;
-    root.setProperty('--top-h', phone ? `${topBar}px` : '0px');
-    root.setProperty('--bottom-h', `${miniSpace}px`);
+    const shown = phone && !navAway ? topBar : 0;
+    const up = miniTop ? miniSpace : 0;
+    const down = miniTop ? 0 : miniSpace;
+    // Along each edge, from it inwards: the bar, the mini-player, the controls. The page's room (kept while the bar
+    // slides away, so the page does not jump), and where things float as the bar shows now.
+    root.setProperty('--top-h', `${(phone && !navBottom ? topBar : 0) + up}px`);
+    root.setProperty('--bar-top', navBottom ? '0px' : `${shown}px`);
+    root.setProperty('--top-now', `${(navBottom ? 0 : shown) + up}px`);
+    root.setProperty('--nav-b', navBottom ? `${shown}px` : '0px');
+    // The mini-player along the top floats over what scrolls, as along the bottom: room before the first thing only.
+    root.setProperty('--mini-top', `${up}px`);
+    // The bar's own room at a panel's top or foot (kept while it slides away): panels fill the screen under the bar,
+    // which is drawn over them, so what scrolls goes on behind its glass as on a page (the owner, 2026-10-25).
+    root.setProperty('--bar-room', phone && !navBottom ? `${topBar}px` : '0px');
+    root.setProperty('--bar-room-b', navBottom ? `${topBar}px` : '0px');
+    root.setProperty('--bottom-h', `${down + (navBottom ? topBar : 0)}px`);
+    root.setProperty('--bottom-now', `${down + (navBottom ? shown : 0)}px`);
+    root.setProperty('--glass-top', phone && leadBottom && rightBottom ? '0px' : 'var(--glass-room)');
+    root.setProperty('--glass-bottom', leadBottom || rightBottom ? 'var(--glass-room)' : '0px');
   });
   // The playing cover's colour, for the floating controls' surface (app.css --float-bg): the mini-player's.
   $effect(() => {
@@ -740,7 +787,7 @@
     {/if}
     {#if sidebar}
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
-      <aside class="player-side" class:whole={split} aria-label={playerInPanel ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : requestsShown ? 'Requests' : downloadsShown ? 'Downloads' : 'Playlist'} style:--mini-h={`${miniSpace}px`} bind:this={sideEl}>
+      <aside class="player-side" class:whole={split} aria-label={playerInPanel ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : requestsShown ? 'Requests' : downloadsShown ? 'Downloads' : 'Playlist'} style:--mini-h={`${miniTop ? 0 : miniSpace}px`} bind:this={sideEl}>
         <SheetArea area={() => sideEl}>
           {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if playerInPanel}<NowPlaying place="side" />{:else if split && panel.viewed === null}<!-- Its part comes in a moment. -->{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else if healthShown}<HealthPanel problem={healthShown} beside={healthSplit} />{:else if insightsShown}<InsightsPanel view={insightsShown} beside={insightsSplit} />{:else if requestsShown}<RequestsPanel list={requestsShown} beside={requestsSplit} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} beside={downloadsSplit} />{:else}<PlaylistView />{/if}
         </SheetArea>
@@ -749,12 +796,12 @@
   </div>
 
   {#if playlistLayer}
-    <div class="playlist-layer" class:under-bar={underBar} role="dialog" aria-label="Playlist" style:--mini-h={`${miniSpace}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
+    <div class="playlist-layer" class:under-bar={underBar} role="dialog" aria-label="Playlist" style:--mini-h={`${(miniTop ? 0 : miniSpace) + (navBottom ? topBar : 0)}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
       {#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else if requestsShown}<RequestsPanel list={requestsShown} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} />{:else}<PlaylistView full />{/if}
     </div>
   {/if}
   {#if mini}
-    <div class="mini-dock" class:over={playlistLayer}><MiniPlayer /></div>
+    <div class="mini-dock" class:over={playlistLayer} class:at-top={miniTop}><MiniPlayer /></div>
   {/if}
   <!-- Played on from elsewhere before this page was touched: the browser holds the sound back until a tap. -->
   {#if target.tapToPlay}
@@ -767,9 +814,7 @@
       }}><Icon name="play" size={20} />Tap to play</button
     >
   {/if}
-  {#if pageRow || handed}
-    <!-- The page's glass, or on a phone the panel's on top (lib/glass): one row, one pill whose settings change. -->
-    <div class="page-row" class:beside={sidebar && !handed} class:handed={!!handed} class:below={!!handed?.below?.()} class:steady={phone && !!panelPage && !moreOpen} class:top={!!handed && !underBar} style:--player-w="{sideWidth}px">
+  {#snippet leadPart()}
       {#if handed}
         <span class="lead" class:title-away={titleAway} bind:this={leadEl} in:fade={{ duration: leadFade }}>{@render handed.left()}</span>
       {:else}
@@ -782,6 +827,8 @@
           {#if panelPage && phone}<h1 class="page-name">{panelPage.label}</h1>{/if}
         </span>
       {/if}
+  {/snippet}
+  {#snippet rightPart()}
       <!-- Settings' pill: its search and About, its own button (the owner, 2026-10-24: one pill as on every page);
            Discover's: its search and Look again (the owner, 2026-10-24). The panel's where it handed its glass. -->
       {#if pillNow || handed?.extra}
@@ -789,7 +836,22 @@
           {#if pillNow}<SheetArea area={() => pageEl}><TopPill {...pillNow} /></SheetArea>{/if}{#if handed?.extra}{@render handed.extra()}{/if}
         </span>
       {/if}
-    </div>
+  {/snippet}
+  {#if pageRow || handed}
+    <!-- The page's glass, or on a phone the panel's on top (lib/glass): one row, one pill whose settings change. Below
+         1024 px each half at the edge its setting says (Display: Navigation controls, Content controls). -->
+    {#if !leadBottom || !rightBottom}
+      <div class="page-row" class:beside={sidebar && !handed} class:handed={!!handed} class:below={!!handed?.below?.()} class:steady={phone && !!panelPage && !moreOpen} style:--player-w="{sideWidth}px">
+        {#if !leadBottom}{@render leadPart()}{:else}<span></span>{/if}
+        {#if !rightBottom}{@render rightPart()}{/if}
+      </div>
+    {/if}
+    {#if leadBottom || rightBottom}
+      <div class="page-row at-bottom" class:handed={!!handed} class:steady={phone && !!panelPage && !moreOpen}>
+        {#if leadBottom}{@render leadPart()}{:else}<span></span>{/if}
+        {#if rightBottom}{@render rightPart()}{/if}
+      </div>
+    {/if}
   {/if}
   {#if overlay}
     <!-- Over everything, as Finamp's: it slides up when it opens (300 ms, easeInOutQuad) and fades when it closes
@@ -806,12 +868,13 @@
     <button class="scrim" aria-label="Close menu" onclick={() => (moreOpen = false)} transition:fade|global={{ duration: SHEET_OUT }}></button>
     <div
       class="sheet"
+      class:from-bottom={navBottom}
       id="more-sheet"
       role="dialog"
       aria-label="More pages"
       onclickcapture={collapse}
-      in:fly|global={{ y: -400, duration: SHEET_IN, easing: decelerate }}
-      out:fly|global={{ y: -400, duration: SHEET_OUT, easing: decelerate }}
+      in:fly|global={{ y: navBottom ? 400 : -400, duration: SHEET_IN, easing: decelerate }}
+      out:fly|global={{ y: navBottom ? 400 : -400, duration: SHEET_OUT, easing: decelerate }}
     >
       {#each overflow as p (p.id)}
         <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => samePage(e, p.id)}><Icon name={p.icon} />{p.label}{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
@@ -826,7 +889,7 @@
 <LabelTip />
   <ProgressBar />
 
-  <nav class="bar" aria-label="Pages" onclickcapture={collapse}>
+  <nav class="bar" class:bottom={navBottom} class:away={navAway} aria-label="Pages" onclickcapture={collapse}>
     <!-- The mode switcher's slim row over the tabs (decision 0052, mock C), with a local folder on. -->
     {#if switchable()}<div class="slim"><ModeSwitcher slim {connection} /></div>{/if}
     <div class="tabs">
@@ -868,7 +931,7 @@
   .tap-to-play {
     position: fixed;
     left: 50%;
-    bottom: calc(112px + env(safe-area-inset-bottom));
+    bottom: calc(112px + var(--nav-b, 0px) + env(safe-area-inset-bottom));
     transform: translateX(-50%);
     z-index: 30;
     display: inline-flex;
@@ -886,8 +949,17 @@
 
   .mini-dock {
     position: fixed;
-    inset: auto 12px calc(12px + env(safe-area-inset-bottom));
+    inset: auto 12px calc(12px + var(--nav-b, 0px) + env(safe-area-inset-bottom));
     z-index: 22;
+    transition:
+      top 200ms ease,
+      bottom 200ms ease;
+  }
+
+  /* Along the top (Display's Mini player), under the bar there. */
+  .mini-dock.at-top {
+    top: calc(var(--bar-top, 0px) + env(safe-area-inset-top) + 12px);
+    bottom: auto;
   }
 
   /* A viewed playlist without room beside the page (decision 0023): full height over the page and its navigation, the
@@ -905,7 +977,6 @@
   /* A panel of Requests, Downloads, Insights, Health or Settings on a phone: under the top bar, not over it (the owner,
      2026-10-25); a playlist's, an album's or an artist's still covers it all. */
   .playlist-layer.under-bar {
-    top: calc(var(--top-h, 0px) + env(safe-area-inset-top));
     /* The page's colour, as beside the page (.player-side); a playlist's layer keeps the cards' (the owner, 2026-10-25). */
     background: var(--bg);
   }
@@ -915,7 +986,7 @@
      viewed playlist. */
   .page-row {
     position: fixed;
-    top: calc(var(--top-h, 0px) + env(safe-area-inset-top) + 8px);
+    top: calc(var(--top-now, 0px) + env(safe-area-inset-top) + 8px);
     left: 12px;
     right: 12px;
     z-index: 20;
@@ -1000,13 +1071,6 @@
     z-index: 22;
   }
 
-  /* Over a layer that covers the bar of pages too (a playlist's): at the very top, where its pills were. */
-  .page-row.top {
-    top: calc(env(safe-area-inset-top) + 6px);
-    left: 8px;
-    right: 8px;
-  }
-
   .page-row .right {
     display: flex;
     align-items: flex-start;
@@ -1018,7 +1082,7 @@
   }
 
   .page.under-row {
-    padding-top: var(--glass-room);
+    padding-top: var(--glass-top);
   }
 
   /* Back, round as the pill (lib/TopPill). */
@@ -1064,7 +1128,7 @@
 
   .page {
     min-width: 0;
-    padding-bottom: calc(var(--bottom-h, 0px) + env(safe-area-inset-bottom));
+    padding-bottom: calc(var(--bottom-h, 0px) + var(--glass-bottom, 0px) + env(safe-area-inset-bottom));
   }
 
   .grip,
@@ -1130,6 +1194,50 @@
     background: color-mix(in srgb, var(--surface) 88%, transparent);
     backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--border);
+  }
+
+  .bar {
+    transition: transform 200ms ease;
+  }
+
+  /* Along the bottom (Display's Navigation bar): its line on top, the phone's bottom inset under it. */
+  .bar.bottom {
+    inset: auto 0 0;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border);
+    border-bottom: 0;
+  }
+
+  /* Scrolled away (Display's Hide when scrolling): off its edge. */
+  .bar.away {
+    transform: translateY(-100%);
+  }
+
+  .bar.bottom.away {
+    transform: translateY(100%);
+  }
+
+  /* Every panel under the bar of pages, never over it (the owner, 2026-10-25): the panel fills the screen, the bar is
+     drawn over it (its glass shows what scrolls behind it), and the panel's content leaves the bar's room. */
+  .bar {
+    z-index: 24;
+  }
+
+  /* The controls just above the mini-player (Display's Controls), following it as it comes and goes. */
+  .page-row.at-bottom {
+    top: auto;
+    bottom: calc(var(--bottom-now, 0px) + env(safe-area-inset-bottom) + 8px);
+  }
+
+  .page-row {
+    transition:
+      top 200ms ease,
+      bottom 200ms ease;
+  }
+
+  /* The More sheet from the bottom, with the bar there. */
+  .sheet.from-bottom {
+    inset: auto 8px calc(var(--nav-b, 0px) + env(safe-area-inset-bottom) + 8px);
   }
 
   .bar .tabs {
@@ -1208,8 +1316,9 @@
 
   .sheet {
     position: fixed;
-    inset: calc(var(--top-h, 0px) + env(safe-area-inset-top) + 8px) 8px auto;
-    z-index: 21;
+    inset: calc(var(--bar-top, 0px) + env(safe-area-inset-top) + 8px) 8px auto;
+    /* Over the floating controls and the mini-player (22). */
+    z-index: 23;
     display: grid;
     gap: 2px;
     padding: 8px;

@@ -291,6 +291,7 @@
   /* Its glass handed to App's row on a phone (lib/glass): the list starts under it, its first heading where the page's
      is (the glass's room, then its own 16 px; it began 12 px higher, the owner 2026-10-25). */
   .view.handed .scroll {
-    padding-top: calc(var(--glass-room) + 16px);
+    padding-top: calc(var(--bar-room, 0px) + var(--mini-top, 0px) + var(--glass-top) + 16px);
+    padding-bottom: calc(var(--mini-h, 0px) + var(--glass-bottom) + 16px);
   }
 </style>

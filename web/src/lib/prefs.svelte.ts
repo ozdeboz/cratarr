@@ -97,6 +97,16 @@ export type Prefs = {
   theme: Theme;
   /** This device's animations (Display, the owner 2026-10-25): off, as the system's reduced motion (lib/motion). */
   animations: boolean;
+  /** Where the bar of pages runs below 1024 px (Display, the owner 2026-10-25): along the top or the bottom. */
+  navAt: 'top' | 'bottom';
+  /** The bar of pages slides away while scrolling down (and back up); off, it always shows. */
+  navHides: boolean;
+  /** Where the mini-player floats below 1024 px: along the bottom, or the top (under the bar there). */
+  miniAt: 'top' | 'bottom';
+  /** Where back (or ✕), Home and the title float below 1024 px, next to the mini-player on that edge. */
+  navControlsAt: 'top' | 'bottom';
+  /** Where the pill (the search, the filter, View, the page's own button) floats below 1024 px. */
+  contentControlsAt: 'top' | 'bottom';
   /** Index into the playlist chip widths (Playlists.svelte). */
   zoom: number;
   /** Index into a menu's playlists' widths (LIST_WIDTHS, Add to playlist): one column by default. */
@@ -268,6 +278,11 @@ export const ZOOM_STEPS = 6;
 export const DEFAULTS: Prefs = {
   theme: 'auto',
   animations: true,
+  navAt: 'top',
+  navHides: false,
+  miniAt: 'bottom',
+  navControlsAt: 'top',
+  contentControlsAt: 'top',
   zoom: 2,
   listZoom: LIST_WIDTHS.length - 1,
   listOrder: 'playing',
@@ -334,6 +349,9 @@ function read(): Prefs {
     if (saved && typeof saved === 'object') {
       if (['auto', 'light', 'dark'].includes(saved.theme)) p.theme = saved.theme;
       if (typeof saved.animations === 'boolean') p.animations = saved.animations;
+      if (saved.navAt === 'top' || saved.navAt === 'bottom') p.navAt = saved.navAt;
+      if (typeof saved.navHides === 'boolean') p.navHides = saved.navHides;
+      for (const k of ['miniAt', 'navControlsAt', 'contentControlsAt'] as const) if (saved[k] === 'top' || saved[k] === 'bottom') p[k] = saved[k];
       if (Number.isInteger(saved.zoom) && saved.zoom >= 0 && saved.zoom < ZOOM_STEPS) p.zoom = saved.zoom;
       if (Number.isInteger(saved.listZoom) && saved.listZoom >= 0 && saved.listZoom < LIST_WIDTHS.length) p.listZoom = saved.listZoom;
       if (typeof saved.filterOpen === 'boolean') p.filterOpen = saved.filterOpen;

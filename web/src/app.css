@@ -40,6 +40,9 @@
   /* The room the floating glass row takes over a page's or a panel's top (App's .page-row): what is under it starts
      there, the page and its panels alike (the owner, 2026-10-25). */
   --glass-room: 60px;
+  /* Where it is now (Display's Controls, set by App): over the top, or over the bottom just above the mini-player. */
+  --glass-top: var(--glass-room);
+  --glass-bottom: 0px;
   transition: --now-accent 1s linear;
   color-scheme: dark;
 }

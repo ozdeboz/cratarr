@@ -960,8 +960,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     const sc = scroller;
     const a = actbar;
     if (!sc || !a) return;
-    // Its distance from the top: 0 while it stays there (a sticky element's offset is where it shows).
-    stuck = a.offsetTop - sc.scrollTop <= 0.5;
+    // Its distance from the top: where it docks while it stays there (a sticky element's offset is where it shows).
+    stuck = a.offsetTop - sc.scrollTop <= (parseFloat(getComputedStyle(a).top) || 0) + 0.5;
   }
   $effect(() => {
     // Another subject shows from its cover.
@@ -2801,7 +2801,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
   /* With no cover to start under, the list starts under the glass. */
   .scroll.own {
-    padding-top: calc(var(--glass-room) + 4px);
+    padding-top: calc(var(--bar-room, 0px) + var(--mini-top, 0px) + var(--glass-top) + 4px);
   }
 
   .hero {
@@ -2876,7 +2876,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /* The action bar, icons only: over the cover's foot, then staying at the top (with back and the panel's place). */
   .actbar {
     position: sticky;
-    top: 0;
+    /* Docked under the bar of pages and a mini-player along the top, both drawn over the panel (App). */
+    top: calc(var(--bar-top, 0px) + var(--mini-top, 0px));
     z-index: 2;
     display: flex;
     align-items: center;

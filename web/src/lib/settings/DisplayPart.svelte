@@ -13,17 +13,28 @@
   import OrderList from './OrderList.svelte';
   import OrderReset from './OrderReset.svelte';
   import Group from './Group.svelte';
+  import Seg from '../Seg.svelte';
   import Item from './Item.svelte';
   import PlayerRowList from './PlayerRowList.svelte';
   import { offerReset } from './reset.svelte';
 
 
 
+  const EDGES: { value: 'top' | 'bottom'; label: string }[] = [
+    { value: 'top', label: 'Top' },
+    { value: 'bottom', label: 'Bottom' },
+  ];
+
   offerReset(
-    () => "Theme, animations, the player's extra details and the profiles back to their defaults.",
+    () => "Theme, animations, the layout, the player's extra details and the profiles back to their defaults.",
     () => {
       prefs.theme = 'auto';
       prefs.animations = true;
+      prefs.navAt = 'top';
+      prefs.navHides = false;
+      prefs.miniAt = 'bottom';
+      prefs.navControlsAt = 'top';
+      prefs.contentControlsAt = 'top';
       prefs.playerRow = true;
       prefs.playerFacts = [];
       prefs.profileOpen = true;
@@ -48,6 +59,17 @@
     }}
   />
   <Item name="Animations" toggle={{ checked: prefs.animations, onchange: (on) => (prefs.animations = on) }} />
+</Group>
+
+<!-- Where the bar of pages runs along an edge (below 1024 px; the owner, 2026-10-25): which edge, whether it slides
+     away while scrolling (panels open under it either way); the mini-player's edge; where each of the two kinds of
+     controls floats. Along an edge, from it inwards: the bar, the mini-player, the controls. -->
+<Group title="Layout" more="On a phone or a narrow window, where the bar of pages runs along an edge of the screen.">
+  <Item name="Navigation bar"><Seg label="Navigation bar" options={EDGES} bind:value={prefs.navAt} /></Item>
+  <Item name="Hide when scrolling" toggle={{ checked: prefs.navHides, onchange: (on) => (prefs.navHides = on) }} />
+  <Item name="Mini player"><Seg label="Mini player" options={EDGES} bind:value={prefs.miniAt} /></Item>
+  <Item name="Navigation controls" line="Back, Home and the title"><Seg label="Navigation controls" options={EDGES} bind:value={prefs.navControlsAt} /></Item>
+  <Item name="Content controls" line="The search, the filter and View"><Seg label="Content controls" options={EDGES} bind:value={prefs.contentControlsAt} /></Item>
 </Group>
 
 <Group title="Player details">
