@@ -975,6 +975,15 @@ mod tests {
         assert_eq!(found("albums_fts", "bjork homo"), 1);
         assert_eq!(found("artists_fts", "orb"), 1);
         assert_eq!(fts_query("\" *"), None, "nothing left to search for");
+        drop(db);
+        // Each kind counted in all, beyond the one shown: an album by its own name or by a track's title, an artist by
+        // their name or an album's.
+        let words = |q: &str| crate::search::words(q);
+        let f = lib.find(&words("bjork"), 1).unwrap();
+        assert_eq!((f.tracks.len(), f.totals.tracks, f.totals.albums, f.totals.artists), (1, 2, 1, 1));
+        assert_eq!(lib.find(&words("hunter"), 1).unwrap().totals.albums, 1, "by a track's title");
+        assert_eq!(lib.find(&words("homogenic"), 1).unwrap().totals.artists, 1, "by an album's name");
+        assert_eq!(lib.find(&words("art"), 1).unwrap().totals.genres, 1);
         assert_eq!(fts_query("a OR b").as_deref(), Some("(\"a\" OR \"a\"*) AND (\"OR\" OR \"OR\"*) AND (\"b\" OR \"b\"*)"), "quoted: a word, not an operator");
     }
 
