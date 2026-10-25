@@ -109,14 +109,14 @@
       case 'sync':
         return [kept.known ? `${kept.items.length} kept` : null, appInfo.syncBudgetGb ? `${appInfo.syncBudgetGb} GB` : 'No limit'].filter(Boolean).join(' · ');
       case 'appearance':
-        return [THEME[prefs.theme], prefs.animations ? null : 'No animations'].filter(Boolean).join(' · ');
+        return [THEME[prefs.theme], prefs.animations ? null : 'No animations', prefs.homeGreeting ? 'Greeting' : null, localCovers[HOME_HEADER] ? 'Your picture' : null].filter(Boolean).join(' · ');
       case 'layout':
         return `Bar along the ${prefs.navAt} · Mini player along the ${prefs.miniAt}`;
       case 'player':
         return prefs.playerRow ? (prefs.playerFacts.length ? `${prefs.playerFacts.length} extra details` : 'Extra details') : 'No extra details';
       case 'content': {
         const n = prefs.homeParts.length;
-        return [n === HOME_PARTS.length ? 'Every Home section' : `${n} of ${HOME_PARTS.length} Home sections`, prefs.homeGreeting ? 'Greeting' : null, localCovers[HOME_HEADER] ? 'Your picture' : null, prefs.profile ? null : 'No music profiles']
+        return [n === HOME_PARTS.length ? 'Every Home section' : `${n} of ${HOME_PARTS.length} Home sections`, prefs.profile ? null : 'No music profiles']
           .filter(Boolean)
           .join(' · ');
       }
