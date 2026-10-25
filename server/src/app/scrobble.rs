@@ -261,6 +261,19 @@ async fn pass(serve: &Arc<Serve>) -> Result<()> {
         groups.entry((q.user.clone(), q.target.clone())).or_default().push(q);
     }
     for ((user, target), rows) in groups {
+        // Queued before the account switched its play history off (0.9.5): never sent.
+        let (ud, u) = (serve.userdata.clone(), user.clone());
+        if tokio::task::spawn_blocking(move || -> Result<bool> {
+            let off = !ud.tracking(&u);
+            if off {
+                ud.forget_scrobbles(&u)?;
+            }
+            Ok(off)
+        })
+        .await??
+        {
+            continue;
+        }
         let (ud, u, t) = (serve.userdata.clone(), user.clone(), target.clone());
         let Some(secret) = tokio::task::spawn_blocking(move || ud.scrobble_secret(&u, &t)).await?? else { continue };
         let secret: Secret = serde_json::from_str(&secret).unwrap_or_default();

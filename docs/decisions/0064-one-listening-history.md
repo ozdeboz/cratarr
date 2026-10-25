@@ -76,3 +76,21 @@ nothing. "Starting empty" stands for the time ListenBrainz did not record.
 - A few thousand rows a month per listener; years stay small. An account's deletion deletes its rows.
 - Two records of plays: the log and `annotation`. Only the history module writes both, so they agree from the day the
   log starts; plays before it exist only in `annotation`.
+
+## Amendment (2026-10-25): an account can switch its history off, and delete it (0.9.5)
+
+The owner added Personal › Tracking: "Keep play history" is on by default. Off means all of it:
+
+- No plays are kept in the log. No player's report and no import writes one; `UserData::record` refuses them.
+- Nothing is sent to ListenBrainz or Last.fm: no scrobbles and no "now playing". Plays queued before the switch are
+  dropped and never sent.
+- No taste profile, and Insights' listening pages come back empty, because the history's readers answer nothing.
+- Discover and Radio/Autoplay do not learn from the account's plays: counts read as nothing, and "recently played" is
+  ignored. They still use what the person said: favourites, ratings, exclusions and the library. Discover's
+  recommendations from ListenBrainz or Last.fm come from those services, not from this log.
+
+The history kept before the switch stays, unread, and turning tracking on again carries on from it. "Delete play
+history" (`DELETE /api/me/history` → `{ removed }`, which the page confirms first) removes the account's log, its
+counts, its plays waiting to be sent and its last Discover look. Its favourites, ratings and exclusions stay. The
+switch is the account's own setting, `settings.tracking` in `GET`/`PUT /api/me/settings` (absent means on), and the
+server reads it wherever listening comes in or is read.

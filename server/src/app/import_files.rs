@@ -69,6 +69,10 @@ pub async fn import(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, acc
     let (s, account2) = (serve.clone(), account.to_string());
     let songs = tokio::task::spawn_blocking(move || Matcher::read(&Path::new(&dir).join("library.sqlite"))).await??;
     match read {
+        // Its play history off (0.9.5): no listens are brought in either.
+        Read::History { .. } if !preview && !serve.userdata.tracking(account) => {
+            anyhow::bail!("Play history is off for this account (Settings › Tracking).")
+        }
         Read::History { from, listens } => {
             let tally = tokio::task::spawn_blocking(move || {
                 let ctx = context(from);
