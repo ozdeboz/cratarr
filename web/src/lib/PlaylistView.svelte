@@ -808,7 +808,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
     return best?.profile ?? null;
   });
   /** The profile shown: the preview's or the list's, while music profiles are on (Settings › Display › Content). */
-  const shownProfile = $derived(prefs.profile ? (previewProfile ?? profile) : null);
+  // Beside the similarity curve always, whatever Settings says of music profiles (the owner, 2026-10-25): what the
+  // curve's cut takes in is read off it.
+  const shownProfile = $derived(prefs.profile || !!(like && curve?.alike.length) ? (previewProfile ?? profile) : null);
   /** The seed the curve is of: moving the cut (another crate of the same seed) keeps it shown until the new one comes. */
   let curveOf = '';
   $effect(() => {

@@ -21,6 +21,13 @@
 
   const W = 300;
   const H = 96;
+  /** The drawing's margins: on the left the room the scale's labels take ("100%"), on the right what the handle needs
+   *  (the owner, 2026-10-25: the labels were cut off, room to spare on the right). */
+  const LEFT = 30;
+  const RIGHT = 8;
+  const TOP = 8;
+  /** The handle's radius (the owner, 2026-10-25: smaller). */
+  const KNOB = 6;
   const most = $derived(Math.max(fewest, curve.length));
   const x = (rank: number) => (Math.log(rank) / Math.log(most)) * W;
   /** The scale's foot (the owner): the curve's lowest point never above the bottom quarter, at 0 only when it gets
@@ -41,7 +48,7 @@
   function rankOf(e: PointerEvent) {
     const r = svg!.getBoundingClientRect();
     // The drawing's own units: the view box is wider than W by its margins.
-    const px = ((e.clientX - r.left) / r.width) * (W + 24) - 12;
+    const px = ((e.clientX - r.left) / r.width) * (W + LEFT + RIGHT) - LEFT;
     return clampCount(tidy(rankAt(px)));
   }
   function down(e: PointerEvent) {
@@ -75,7 +82,7 @@
 <svg
   bind:this={svg}
   class="curve"
-  viewBox="-12 -12 {W + 24} {H + 30}"
+  viewBox="{-LEFT} {-TOP} {W + LEFT + RIGHT} {H + TOP + 18}"
   role="slider"
   tabindex="0"
   aria-label="How many tracks"
@@ -92,9 +99,9 @@
   <rect x="0" y="0" width={x(fewest)} height={H} class="none" />
   <polygon points="0,{H} {points} {x(curve.length)},{H}" class="area" />
   <polyline {points} class="line" />
-  <rect x={handle.cx} y="-12" width={Math.max(0, W - handle.cx + 12)} height={H + 12} class="after" />
+  <rect x={handle.cx} y={-TOP} width={Math.max(0, W - handle.cx + RIGHT)} height={H + TOP} class="after" />
   <line x1={handle.cx} x2={handle.cx} y1="0" y2={H} class="cut" />
-  <circle cx={handle.cx} cy={handle.cy} r="11" class="knob" />
+  <circle cx={handle.cx} cy={handle.cy} r={KNOB} class="knob" />
   <text x="0" y={H + 14}>1</text>
   <text x={x(fewest)} y={H + 14} text-anchor="middle">{fewest}</text>
   <text x={x(100)} y={H + 14} text-anchor="middle">100</text>
