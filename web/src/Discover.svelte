@@ -367,6 +367,9 @@
     padding: 12px;
     border-radius: 14px;
     background: var(--surface);
+    /* Only the cards on screen are drawn, as a playlist's rows (the owner, 2026-10-25: More for you is 250 long). */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 150px;
   }
 
   .card:has(.open:hover),
