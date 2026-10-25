@@ -489,6 +489,41 @@ fn today() -> String {
 /// An artist's albums and EPs on MusicBrainz that are out (first released by `today`; MusicBrainz's dates may be only
 /// a year, which sorts before any day of it) and their own (no secondary type: no compilation, live album, remix,
 /// soundtrack…), each with its genres (MusicBrainz's own, the most given first, `GENRES` at most).
+/// How long to wait before asking MusicBrainz again when it says it is busy (503).
+const MB_BUSY_PAUSE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// How long a related artist's albums are kept before MusicBrainz is asked again (0.9.4, the owner: "Finding artists
+/// related to yours" took long, each look asking for every one of them, a second apart).
+const RELATED_DISCOGRAPHY_SECS: i64 = 7 * 86_400;
+
+/// A related artist's albums and EPs: as kept where read within a week (no call, no pause), else read from MusicBrainz
+/// and kept (in the discographies, by their MusicBrainz id, as the library's artists' are); none where it cannot say.
+async fn related_discography(serve: &Arc<crate::serve::Serve>, http: &reqwest::Client, mbid: &str, today: &str) -> Vec<Group> {
+    let now = super::moment::now_secs();
+    let (ud, key) = (serve.userdata.clone(), mbid.to_string());
+    let kept = tokio::task::spawn_blocking(move || ud.discography(&key)).await.ok().and_then(Result::ok).flatten();
+    if let Some(groups) = kept.filter(|(at, _)| now - at <= RELATED_DISCOGRAPHY_SECS).and_then(|(_, json)| serde_json::from_str::<Vec<Group>>(&json).ok()) {
+        return groups;
+    }
+    let groups = match mb_discography(http, mbid, today).await {
+        Ok(groups) => {
+            if let Ok(json) = serde_json::to_string(&groups) {
+                let (ud, key) = (serve.userdata.clone(), mbid.to_string());
+                if let Ok(Err(e)) = tokio::task::spawn_blocking(move || ud.set_discography(&key, now, &json)).await {
+                    tracing::warn!("discover: a related artist's albums not kept: {e:#}");
+                }
+            }
+            groups
+        }
+        Err(e) => {
+            tracing::info!("discover: a related artist's albums ({mbid}) could not be read from MusicBrainz: {e:#}");
+            Vec::new()
+        }
+    };
+    tokio::time::sleep(MB_PAUSE).await;
+    groups
+}
+
 async fn mb_discography(http: &reqwest::Client, artist: &str, today: &str) -> Result<Vec<Group>> {
     #[derive(Deserialize)]
     struct Genre {
@@ -516,7 +551,16 @@ async fn mb_discography(http: &reqwest::Client, artist: &str, today: &str) -> Re
     }
     let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/release-group")?;
     url.query_pairs_mut().append_pair("artist", artist).append_pair("type", "album|ep").append_pair("inc", "genres").append_pair("fmt", "json").append_pair("limit", "100");
-    let b: Browse = http.get(url).send().await?.error_for_status()?.json().await?;
+    // MusicBrainz busy (503, the owner's sync 2026-10-25): once more after a pause, not the artist lost.
+    let mut again = true;
+    let b: Browse = loop {
+        let r = http.get(url.clone()).send().await?;
+        if r.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE && std::mem::take(&mut again) {
+            tokio::time::sleep(MB_BUSY_PAUSE).await;
+            continue;
+        }
+        break r.error_for_status()?.json().await?;
+    };
     Ok(b.groups
         .into_iter()
         .filter(|g| g.secondary.is_empty() && !g.first.is_empty() && g.first.as_str() <= today)
@@ -635,8 +679,7 @@ async fn from_related(serve: &Arc<crate::serve::Serve>, http: &reqwest::Client, 
                     ..base
                 });
             } else if let Some(m) = &r.mbid {
-                let groups = mb_discography(http, m, &today).await.unwrap_or_default();
-                tokio::time::sleep(MB_PAUSE).await;
+                let groups = related_discography(serve, http, m, &today).await;
                 let newest = groups.iter().filter(|g| g.kind.as_deref() == Some("Album")).max_by_key(|g| g.year).or(groups.first());
                 if let Some(g) = newest {
                     out.push(Candidate {
