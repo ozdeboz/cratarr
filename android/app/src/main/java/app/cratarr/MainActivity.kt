@@ -528,9 +528,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 tellDownloads()
             }
-            // The Background switch (the owner, 2026-10-25): on asks Android's dialog; off opens Android's list, where
-            // only the user can take it back.
-            "battery" -> if (message.optString("op") == "settings") openBatterySettings() else askToRunInBackground()
+            // The Background switch (the owner, 2026-10-25): on asks Android's dialog; off opens this app's page, its
+            // "App battery usage" one tap away (Android's list of every app made the user look for Cratarr in it).
+            "battery" -> if (message.optString("op") == "settings") openAppSettings() else askToRunInBackground()
             "address" -> askForAddress()
             "open" -> message.optString("url").takeIf { it.isNotEmpty() }?.let { openOutside(it) }
             // Share (a menu's): Android's share sheet, as the WebView has no navigator.share. `text` holds the link.
@@ -639,16 +639,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Android's list of apps left out of battery optimisation: where running in the background is taken back. */
-    private fun openBatterySettings() {
-        try {
-            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-        } catch (e: ActivityNotFoundException) {
-            openAppSettings()
-        }
-    }
-
-    /** Android's page of this app: its permissions (the device's music) and its battery use. */
+    /** Android's page of this app: its permissions (the device's music) and its battery use (Background). Android has
+     *  no public way to open one permission's page or the app's battery page directly; this is the documented one. */
     private fun openAppSettings() {
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
     }

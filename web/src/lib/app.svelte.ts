@@ -133,7 +133,7 @@ export const askDownloads = () => toApp({ type: 'downloads' });
 export const removeDownloads = (ids: string[] | 'all') => toApp(ids === 'all' ? { type: 'download-remove', all: true } : { type: 'download-remove', ids });
 /** Opens Android's dialog that lets the app run in the background. */
 export const allowBackground = () => toApp({ type: 'battery' });
-/** Android's list where running in the background is taken back (only the user can, there). */
+/** Android's page of the app, its battery use one tap away: where running in the background is taken back. */
 export const backgroundSettings = () => toApp({ type: 'battery', op: 'settings' });
 /** Asks the app for its settings again. */
 export const askDevice = () => toApp({ type: 'device' });
