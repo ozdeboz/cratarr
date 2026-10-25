@@ -166,6 +166,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/discover/want", post(discover_want))
         .route("/api/requests/want", post(want_album))
         .route("/api/artists/missing", get(artist_missing))
+        .route("/api/discover/missing", get(discover_missing))
+        .route("/api/musicbrainz/search", get(musicbrainz_search))
+        .route("/api/discover/excluded", get(discover_excluded).delete(discover_take_back))
         .route("/api/bandcamp/find", get(bandcamp_find))
         .route("/api/discover/no", post(discover_no))
         .route("/api/discover/hide", post(discover_hide))
@@ -2980,6 +2983,59 @@ async fn artist_missing(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>
 }
 
 #[derive(Deserialize)]
+struct MbSearch {
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// "Find more music" (0.9.3): the words looked up on MusicBrainz, albums and artists, each marked where the library
+/// has it.
+async fn musicbrainz_search(State(app): State<Arc<App>>, Query(q): Query<MbSearch>) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let (albums, artists) = crate::app::discover::musicbrainz_search(&serve, app.library.catalogue(), &q.q, q.limit.unwrap_or(20))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "albums": albums, "artists": artists })))
+}
+
+/// Every missing album of the library's artists Discover has read (Insights › Discovery › Missing albums, 0.9.3).
+async fn discover_missing(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let (albums, artists) = crate::app::discover::all_missing(&serve, app.library.catalogue()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "albums": albums, "artists": artists })))
+}
+
+/// The account's Discover exclusions (Insights › Discovery › Discovery exclusions, 0.9.3): albums and artists.
+async fn discover_excluded() -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = discoverer()?;
+    let (albums, artists) = tokio::task::spawn_blocking(move || crate::app::discover::exclusions(&serve, &account))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "albums": albums, "artists": artists })))
+}
+
+#[derive(Deserialize)]
+struct TakeBack {
+    #[serde(default)]
+    key: Option<String>,
+    #[serde(default)]
+    artist: Option<String>,
+}
+
+/// An exclusion taken back, any time: an album suggested again, or an artist.
+async fn discover_take_back(Query(q): Query<TakeBack>) -> Result<StatusCode, ApiError> {
+    let (serve, account) = discoverer()?;
+    tokio::task::spawn_blocking(move || crate::app::discover::take_back(&serve, &account, q.key.as_deref(), q.artist.as_deref()))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
 struct FindOnBandcamp {
     artist: String,
     album: String,
@@ -2989,7 +3045,8 @@ struct FindOnBandcamp {
 
 /// An album's page on Bandcamp, looked up when it is opened (0.9.3), or null.
 async fn bandcamp_find(Query(q): Query<FindOnBandcamp>) -> Result<Json<serde_json::Value>, ApiError> {
-    let page = crate::app::discover::find_on_bandcamp(q.artist.trim(), q.album.trim(), q.release_group.as_deref())
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let page = crate::app::discover::find_on_bandcamp(&serve, q.artist.trim(), q.album.trim(), q.release_group.as_deref())
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!({ "page": page })))

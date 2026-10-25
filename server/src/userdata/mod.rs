@@ -112,6 +112,9 @@ CREATE INDEX IF NOT EXISTS request_status ON request (status, at);
 CREATE TABLE IF NOT EXISTS discography (artist TEXT PRIMARY KEY, at INTEGER NOT NULL, groups TEXT NOT NULL) WITHOUT ROWID;
 -- Related artists to explore (0.9.2): an artist's (by MusicBrainz id) as last looked up (JSON), the same for every account.
 CREATE TABLE IF NOT EXISTS related_artists (artist TEXT PRIMARY KEY, at INTEGER NOT NULL, found TEXT NOT NULL) WITHOUT ROWID;
+-- An album's page on Bandcamp as found when the album was opened (0.9.3; none: not found), by the album's key (its
+-- release group, else its artist's and its name's), and when; the same for every account.
+CREATE TABLE IF NOT EXISTS bandcamp_found (album TEXT PRIMARY KEY, at INTEGER NOT NULL, page TEXT) WITHOUT ROWID;
 -- Sleep is no longer kept (the owner, 2026-10-24: not something that should be in Cratarr at all).
 DROP TABLE IF EXISTS asleep;
 ";
@@ -420,6 +423,21 @@ pub struct Starred {
     pub on: bool,
 }
 
+/// An album answered in Discover, as kept (`discover_exclusions`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Answer {
+    pub key: String,
+    pub artist_key: String,
+    /// `no` (Not interested) or `hidden`.
+    pub answer: String,
+    pub at: i64,
+    /// Its name and its artist's, its year and cover, where they were kept with the answer (from 0.9.3).
+    pub name: Option<String>,
+    pub artist: Option<String>,
+    pub year: Option<i32>,
+    pub cover: Option<String>,
+}
+
 /// A play waiting to be sent to a listening service (app::scrobble).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Queued {
@@ -497,6 +515,18 @@ fn add_scrobble_off(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Discover's answers from before their names were kept (0.9.3) get the columns, empty. Safe to repeat.
+fn add_answer_names(conn: &Connection) -> Result<()> {
+    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('discover_answer') WHERE name = 'name'")?.exists([])?;
+    if !has {
+        conn.execute_batch(
+            "ALTER TABLE discover_answer ADD COLUMN name TEXT; ALTER TABLE discover_answer ADD COLUMN artist_name TEXT;
+             ALTER TABLE discover_answer ADD COLUMN year INTEGER; ALTER TABLE discover_answer ADD COLUMN cover TEXT;",
+        )?;
+    }
+    Ok(())
+}
+
 /// Snapshots made before they had pictures (preview 63) get the column, empty. Safe to repeat.
 fn add_snapshot_pictures(conn: &Connection) -> Result<()> {
     let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('visual_snapshot') WHERE name = 'picture'")?.exists([])?;
@@ -528,6 +558,7 @@ impl UserData {
         move_old_play_queues(&conn).context("moving the saved play queues to their apps")?;
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
         add_scrobble_off(&conn)?;
+        add_answer_names(&conn)?;
         conn.execute_batch(WEEK_BEFORE_THE_LOG).context("writing the week before the log from the last plays")?;
         Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0 })
     }
@@ -1031,6 +1062,16 @@ impl UserData {
         Ok(())
     }
 
+    /// An album's page on Bandcamp as last looked for (`Some(None)`: looked for, not found), and when.
+    pub fn bandcamp_found(&self, album: &str) -> Result<Option<(i64, Option<String>)>> {
+        Ok(self.db().query_row("SELECT at, page FROM bandcamp_found WHERE album = ?1", [album], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
+    }
+
+    pub fn set_bandcamp_found(&self, album: &str, at: i64, page: Option<&str>) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO bandcamp_found (album, at, page) VALUES (?1, ?2, ?3)", params![album, at, page])?;
+        Ok(())
+    }
+
     /// An artist's discography as Discover keeps it (JSON), and when it was read (decision 0069 amended).
     pub fn discography(&self, artist: &str) -> Result<Option<(i64, String)>> {
         Ok(self.db().query_row("SELECT at, groups FROM discography WHERE artist = ?1", [artist], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
@@ -1058,6 +1099,52 @@ impl UserData {
             params![user, album, artist, answer, now()],
         )?;
         Ok(())
+    }
+
+    /// What an answered album is called, kept with the answer (0.9.3: Insights' Discovery exclusions list it).
+    pub fn name_discover_answer(&self, user: &str, album: &str, name: &str, artist: &str, year: Option<i32>, cover: Option<&str>) -> Result<()> {
+        self.db().execute(
+            "UPDATE discover_answer SET name = ?3, artist_name = ?4, year = ?5, cover = ?6 WHERE user = ?1 AND album = ?2",
+            params![user, album, name, artist, year, cover],
+        )?;
+        Ok(())
+    }
+
+    /// The albums `user` left out of Discover (Not interested and Hide; not those wanted), the newest first, with what
+    /// is kept of them.
+    pub fn discover_exclusions(&self, user: &str) -> Result<Vec<Answer>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT album, artist, answer, at, name, artist_name, year, cover FROM discover_answer
+             WHERE user = ?1 AND answer IN ('no', 'hidden') ORDER BY at DESC",
+        )?;
+        let rows = st.query_map([user], |r| {
+            Ok(Answer {
+                key: r.get(0)?,
+                artist_key: r.get(1)?,
+                answer: r.get(2)?,
+                at: r.get(3)?,
+                name: r.get(4)?,
+                artist: r.get(5)?,
+                year: r.get(6)?,
+                cover: r.get(7)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Every Not interested for an artist taken back: they are suggested again.
+    pub fn unanswer_discover_artist(&self, user: &str, artist: &str) -> Result<()> {
+        self.db().execute("DELETE FROM discover_answer WHERE user = ?1 AND artist = ?2 AND answer = 'no'", params![user, artist])?;
+        Ok(())
+    }
+
+    /// Every discography Discover keeps: (the artist's MusicBrainz id, its albums as JSON).
+    pub fn discographies(&self) -> Result<Vec<(String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT artist, groups FROM discography")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// An answer taken back (its Undo): the album is suggested again.
@@ -1911,6 +1998,9 @@ mod tests {
     fn discover_keeps_its_answers_and_leaves_out_an_artist_said_no_to_twice() {
         let u = UserData::open(None).unwrap();
         u.answer_discover("me", "rg-1", "bonobo", "no").unwrap();
+        u.name_discover_answer("me", "rg-1", "Black Sands", "Bonobo", Some(2010), None).unwrap();
+        let kept = u.discover_exclusions("me").unwrap();
+        assert_eq!((kept[0].name.as_deref(), kept[0].artist.as_deref(), kept[0].year), (Some("Black Sands"), Some("Bonobo"), Some(2010)), "its names kept with it");
         u.answer_discover("me", "rg-2", "air", "wanted").unwrap();
         let (albums, artists) = u.discover_answered("me").unwrap();
         assert!(albums.contains("rg-1") && albums.contains("rg-2"));

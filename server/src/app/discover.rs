@@ -1346,9 +1346,29 @@ pub async fn missing_albums(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::ca
     Ok(out)
 }
 
+/// How long an album's page found on Bandcamp (or not found) is kept before it is looked for again.
+const BANDCAMP_FOUND_SECS: i64 = 30 * 86_400;
+
 /// An album's page on Bandcamp, looked up when it is opened (0.9.3: an artist's missing album; never for a whole list):
-/// as a look finds them (`bandcamp_page`), from its release group's MusicBrainz pages where it is known.
-pub async fn find_on_bandcamp(artist: &str, album: &str, release_group: Option<&str>) -> Result<Option<String>> {
+/// as a look finds them (`bandcamp_page`), from its release group's MusicBrainz pages where it is known. Kept a month
+/// for every account, a miss too (the owner: "Yes, please"), so a second open is at once and Bandcamp asked less.
+pub async fn find_on_bandcamp(serve: &Arc<crate::serve::Serve>, artist: &str, album: &str, release_group: Option<&str>) -> Result<Option<String>> {
+    let album_key = release_group.filter(|g| !g.is_empty()).map_or_else(|| format!("{}|{}", key(artist), key(album)), str::to_string);
+    let now = super::moment::now_secs();
+    let (ud, k) = (serve.userdata.clone(), album_key.clone());
+    if let Some((at, page)) = tokio::task::spawn_blocking(move || ud.bandcamp_found(&k)).await??
+        && now - at <= BANDCAMP_FOUND_SECS
+    {
+        return Ok(page);
+    }
+    let page = look_on_bandcamp(artist, album, release_group).await?;
+    let (ud, p) = (serve.userdata.clone(), page.clone());
+    tokio::task::spawn_blocking(move || ud.set_bandcamp_found(&album_key, now, p.as_deref())).await??;
+    Ok(page)
+}
+
+/// The look itself, `find_on_bandcamp`'s.
+async fn look_on_bandcamp(artist: &str, album: &str, release_group: Option<&str>) -> Result<Option<String>> {
     let http = http()?;
     let (urls, artists) = match release_group.filter(|g| !g.is_empty()) {
         Some(g) => {
@@ -1359,6 +1379,241 @@ pub async fn find_on_bandcamp(artist: &str, album: &str, release_group: Option<&
         None => (Vec::new(), Vec::new()),
     };
     Ok(bandcamp_page(&http, &urls, &artists, artist, album).await)
+}
+
+/// A missing album of one of the library's artists (Insights › Discovery › Missing albums, 0.9.3).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MissingOf {
+    pub release_group: String,
+    pub title: String,
+    pub artist: String,
+    pub year: Option<i32>,
+    pub kind: Option<String>,
+    pub cover: String,
+}
+
+/// Every missing album of the library's artists whose discography Discover keeps (shared by every account), newest
+/// first, as an artist's page counts them; and how many artists that is.
+pub async fn all_missing(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::Catalogue>) -> Result<(Vec<MissingOf>, usize)> {
+    let dir = serve.data_dir.clone().context("Cratarr's data folder is needed")?;
+    let (lib, ud) = (serve.library.clone(), serve.userdata.clone());
+    tokio::task::spawn_blocking(move || -> Result<(Vec<MissingOf>, usize)> {
+        let rows = lib.artist_albums()?;
+        let names: HashMap<String, String> = rows.iter().filter_map(|(_, name, mbid, _, _, _)| Some((mbid.clone().filter(|m| !m.is_empty())?, name.clone()))).collect();
+        let have = have(Path::new(&dir), &cat, rows.into_iter().map(|r| r.1))?;
+        let mut out = Vec::new();
+        let mut artists = 0;
+        for (mbid, json) in ud.discographies()? {
+            let Some(artist) = names.get(&mbid) else { continue };
+            let Ok(groups) = serde_json::from_str::<Vec<Group>>(&json) else { continue };
+            artists += 1;
+            for g in groups {
+                if have.has(&Candidate { album: g.title.clone(), artist: artist.clone(), release_group: Some(g.id.clone()), ..Candidate::default() }) {
+                    continue;
+                }
+                out.push(MissingOf { cover: format!("https://coverartarchive.org/release-group/{}/front-250", g.id), release_group: g.id, title: g.title, artist: artist.clone(), year: g.year, kind: g.kind });
+            }
+        }
+        out.sort_by(|a, b| b.year.cmp(&a.year).then_with(|| a.artist.cmp(&b.artist)).then_with(|| a.title.cmp(&b.title)));
+        Ok((out, artists))
+    })
+    .await?
+}
+
+/// An album left out of Discover (Insights › Discovery › Discovery exclusions, 0.9.3): Not interested (`no`) or
+/// hidden, and when.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Excluded {
+    pub key: String,
+    pub album: String,
+    pub artist: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub year: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover: Option<String>,
+    pub how: String,
+    pub at: i64,
+}
+
+/// An artist left out of Discover: twice Not interested.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LeftOutArtist {
+    pub artist: String,
+    pub key: String,
+    pub at: i64,
+}
+
+/// The account's Discover exclusions, the newest first: each album with its names (kept with the answer since 0.9.3;
+/// an older one's from the last look where it is still there, else its key's own words), and the artists left out.
+pub fn exclusions(serve: &crate::serve::Serve, account: &str) -> Result<(Vec<Excluded>, Vec<LeftOutArtist>)> {
+    let rows = serve.userdata.discover_exclusions(account)?;
+    let last: HashMap<String, Suggestion> = serve
+        .userdata
+        .discover_found(account)?
+        .and_then(|(_, json)| serde_json::from_str::<Found>(&json).ok())
+        .map(|f| f.albums.into_iter().map(|s| (s.key.clone(), s)).collect())
+        .unwrap_or_default();
+    let albums: Vec<Excluded> = rows
+        .iter()
+        .map(|r| {
+            let s = last.get(&r.key);
+            let (from_key_artist, from_key_album) = r.key.split_once('|').map_or(("", "Unknown album"), |(a, b)| (a, b));
+            Excluded {
+                key: r.key.clone(),
+                album: r.name.clone().or_else(|| s.map(|s| s.album.clone())).unwrap_or_else(|| from_key_album.to_string()),
+                artist: r.artist.clone().or_else(|| s.map(|s| s.artist.clone())).unwrap_or_else(|| from_key_artist.to_string()),
+                year: r.year.or_else(|| s.and_then(|s| s.year)),
+                cover: r.cover.clone().or_else(|| s.and_then(|s| s.cover.clone())),
+                how: r.answer.clone(),
+                at: r.at,
+            }
+        })
+        .collect();
+    // Twice Not interested: the artist is left out (as `discover_answered` decides).
+    let mut by_artist: HashMap<&str, (usize, i64, String)> = HashMap::new();
+    for (r, a) in rows.iter().zip(&albums).filter(|(r, _)| r.answer == "no") {
+        let e = by_artist.entry(r.artist_key.as_str()).or_insert((0, 0, a.artist.clone()));
+        e.0 += 1;
+        if r.at > e.1 {
+            (e.1, e.2) = (r.at, a.artist.clone());
+        }
+    }
+    let mut artists: Vec<LeftOutArtist> =
+        by_artist.into_iter().filter(|(_, (n, _, _))| *n >= 2).map(|(k, (_, at, name))| LeftOutArtist { artist: name, key: k.to_string(), at }).collect();
+    artists.sort_by(|a, b| b.at.cmp(&a.at));
+    Ok((albums, artists))
+}
+
+/// An exclusion taken back, any time (as its Undo): an album (`key`) or an artist (`artist`, their key).
+pub fn take_back(serve: &crate::serve::Serve, account: &str, key: Option<&str>, artist: Option<&str>) -> Result<()> {
+    if let Some(k) = key.filter(|k| !k.is_empty()) {
+        serve.userdata.unanswer_discover(account, k)?;
+    }
+    if let Some(a) = artist.filter(|a| !a.is_empty()) {
+        serve.userdata.unanswer_discover_artist(account, a)?;
+    }
+    Ok(())
+}
+
+/// An album MusicBrainz finds for "Find more music" (0.9.3, the owner: global search's last resort), and whether the
+/// library has it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FoundAlbum {
+    pub release_group: String,
+    pub title: String,
+    pub artist: String,
+    pub year: Option<i32>,
+    pub kind: Option<String>,
+    pub cover: String,
+    pub have: bool,
+}
+
+/// An artist MusicBrainz finds, and whether the library has them.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FoundArtist {
+    pub mbid: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disambiguation: Option<String>,
+    pub have: bool,
+}
+
+/// How long a query's answer from MusicBrainz is kept (in memory): the page asks again as it is typed and opened.
+const MB_SEARCH_KEEP: i64 = 600;
+
+/// "Find more music" (0.9.3): MusicBrainz's release groups and artists for the words, its surest first, each marked
+/// where the library has it; kept a few minutes per query. Two MusicBrainz calls, a second apart.
+pub async fn musicbrainz_search(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::Catalogue>, q: &str, limit: usize) -> Result<(Vec<FoundAlbum>, Vec<FoundArtist>)> {
+    use std::sync::{Mutex, OnceLock};
+    type Kept = HashMap<String, (i64, Vec<FoundAlbum>, Vec<FoundArtist>)>;
+    static KEPT: OnceLock<Mutex<Kept>> = OnceLock::new();
+    let words = crate::search::words(q);
+    if words.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let limit = limit.clamp(1, 50);
+    let query = format!("{}@{limit}", words.join(" "));
+    let now = super::moment::now_secs();
+    let kept = KEPT.get_or_init(Default::default);
+    if let Some((at, albums, artists)) = kept.lock().unwrap_or_else(|p| p.into_inner()).get(&query).cloned()
+        && now - at < MB_SEARCH_KEEP
+    {
+        return Ok((albums, artists));
+    }
+    let http = http()?;
+    let text = words.join(" ");
+    let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/release-group")?;
+    url.query_pairs_mut().append_pair("query", &text).append_pair("fmt", "json").append_pair("limit", &limit.to_string());
+    let rg: serde_json::Value = http.get(url).send().await?.error_for_status()?.json().await?;
+    tokio::time::sleep(MB_PAUSE).await;
+    let mut url = reqwest::Url::parse("https://musicbrainz.org/ws/2/artist")?;
+    url.query_pairs_mut().append_pair("query", &text).append_pair("fmt", "json").append_pair("limit", &limit.to_string());
+    let ar: serde_json::Value = http.get(url).send().await?.error_for_status()?.json().await?;
+    let credit = |g: &serde_json::Value| {
+        g["artist-credit"].as_array().map(|c| c.iter().map(|x| format!("{}{}", x["name"].as_str().unwrap_or_default(), x["joinphrase"].as_str().unwrap_or_default())).collect::<String>()).unwrap_or_default()
+    };
+    let mut albums: Vec<(u64, FoundAlbum)> = rg["release-groups"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|g| {
+            let id = g["id"].as_str()?.to_string();
+            Some((
+                g["score"].as_u64().unwrap_or(0),
+                FoundAlbum {
+                    cover: format!("https://coverartarchive.org/release-group/{id}/front-250"),
+                    title: g["title"].as_str()?.to_string(),
+                    artist: credit(g),
+                    year: g["first-release-date"].as_str().and_then(|d| d.get(..4)?.parse().ok()),
+                    kind: g["primary-type"].as_str().map(str::to_string),
+                    release_group: id,
+                    have: false,
+                },
+            ))
+        })
+        .collect();
+    albums.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut artists: Vec<(u64, FoundArtist)> = ar["artists"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|a| {
+            Some((
+                a["score"].as_u64().unwrap_or(0),
+                FoundArtist {
+                    mbid: a["id"].as_str()?.to_string(),
+                    name: a["name"].as_str()?.to_string(),
+                    disambiguation: a["disambiguation"].as_str().filter(|d| !d.is_empty()).map(str::to_string),
+                    have: false,
+                },
+            ))
+        })
+        .collect();
+    artists.sort_by(|a, b| b.0.cmp(&a.0));
+    let (mut albums, mut artists): (Vec<FoundAlbum>, Vec<FoundArtist>) = (albums.into_iter().map(|x| x.1).collect(), artists.into_iter().map(|x| x.1).collect());
+    // What the library has, as Discover leaves it out: albums by release group, else by name and artist; artists by
+    // their MusicBrainz id, else their name.
+    let dir = serve.data_dir.clone().context("Cratarr's data folder is needed")?;
+    let lib = serve.library.clone();
+    let (albums_in, artists_in) = (albums.clone(), artists.clone());
+    let (have_albums, have_artists) = tokio::task::spawn_blocking(move || -> Result<(Vec<bool>, Vec<bool>)> {
+        let rows = lib.artist_albums()?;
+        let mbids: HashSet<String> = rows.iter().filter_map(|r| r.2.clone()).collect();
+        let names: HashSet<String> = rows.iter().map(|r| loose(&r.1)).collect();
+        let have = have(Path::new(&dir), &cat, rows.into_iter().map(|r| r.1))?;
+        let a = albums_in.iter().map(|x| have.has(&Candidate { album: x.title.clone(), artist: x.artist.clone(), release_group: Some(x.release_group.clone()), ..Candidate::default() })).collect();
+        let b = artists_in.iter().map(|x| mbids.contains(&x.mbid) || names.contains(&loose(&x.name))).collect();
+        Ok((a, b))
+    })
+    .await??;
+    for (x, h) in albums.iter_mut().zip(have_albums) {
+        x.have = h;
+    }
+    for (x, h) in artists.iter_mut().zip(have_artists) {
+        x.have = h;
+    }
+    kept.lock().unwrap_or_else(|p| p.into_inner()).insert(query, (now, albums.clone(), artists.clone()));
+    Ok((albums, artists))
 }
 
 /// What was found last for the account, the albums answered since left out.
@@ -1448,6 +1703,8 @@ pub fn not_interested(serve: &crate::serve::Serve, account: &str, key: &str) -> 
 fn answer(serve: &crate::serve::Serve, account: &str, key: &str, answer: &str) -> Result<String> {
     let s = kept(serve, account)?.and_then(|f| f.albums.into_iter().find(|s| s.key == key)).context("That suggestion is gone; look again")?;
     serve.userdata.answer_discover(account, &s.key, &s.artist_key, answer)?;
+    // Its names kept with it, for Insights' Discovery exclusions (0.9.3).
+    serve.userdata.name_discover_answer(account, &s.key, &s.album, &s.artist, s.year, s.cover.as_deref())?;
     Ok(format!("{UNDO}{answer}:{key}"))
 }
 
