@@ -2,11 +2,13 @@ import { mount } from 'svelte';
 import './app.css';
 import App from './App.svelte';
 import { enterCloses } from './lib/enterCloses';
+import { inputWay } from './lib/inputWay';
 import { watchForUpdates } from './lib/update.svelte';
 
 export default mount(App, { target: document.getElementById('app')! });
 
 enterCloses();
+inputWay();
 
 // A new Cratarr live while this page is open: the page reloads itself when nothing would be lost.
 watchForUpdates();

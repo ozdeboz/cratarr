@@ -209,3 +209,8 @@ button.solid[aria-busy='true']::after {
 .away > :not(.search-scope, .global) {
   display: none !important;
 }
+
+/* Focus rings for the keyboard only (lib/inputWay): after a touch or a click, none, whatever counted as focus. */
+:root[data-input='pointer'] :focus-visible {
+  outline: none !important;
+}
