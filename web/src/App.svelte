@@ -500,8 +500,11 @@
   // In a panel whose action bar sticks (lib/glass's `below`), the bar is away exactly while it sticks, scrolling up
   // too (the owner, 2026-10-25).
   // And while a library item is open, where the user wants it so (Display; its panel hands a `below`).
+  // The panel's glass whether or not the player is over it: opening the player over an item hands its glass back, and
+  // the bar slid in behind the player (the owner, 2026-10-25).
+  const under = $derived(playlistLayer ? glass.panel : null);
   const navHidden = $derived(
-    !navBottom && (navAway || (phone && !!handed?.below && (prefs.navHidesOnItem || (prefs.stickyActions && handed.below())))),
+    !navBottom && (navAway || (phone && !!under?.below && (prefs.navHidesOnItem || (prefs.stickyActions && under.below())))),
   );
   // Somewhere else: the bar shows again.
   $effect(() => {

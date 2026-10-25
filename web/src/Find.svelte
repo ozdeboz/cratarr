@@ -6,6 +6,7 @@
   import { musicBrainzSearch, type MusicBrainzFound } from './lib/api';
   import Cover from './lib/Cover.svelte';
   import CoverStatus from './lib/CoverStatus.svelte';
+  import CoverBusy from './lib/CoverBusy.svelte';
   import ElsewhereAlbum from './lib/ElsewhereAlbum.svelte';
   import LinkSheet from './lib/LinkSheet.svelte';
   import PageLoading from './lib/PageLoading.svelte';
@@ -86,9 +87,8 @@
         {#each found.r.albums as a (a.release_group)}
           <li>
             <Row size="large" title={a.title} label={`Open ${a.title}`} onclick={() => open(a)}>
-              {#snippet front()}<span class="art"><Cover src={a.cover} /><CoverStatus mark={a.request ?? (asked.includes(a.release_group) ? { state: 'wanted' } : null)} small /></span>{/snippet}
+              {#snippet front()}<span class="art"><Cover src={a.cover} /><CoverStatus mark={a.request ?? (asked.includes(a.release_group) ? { state: 'wanted' } : null)} small />{#if finding === a.release_group}<CoverBusy small />{/if}</span>{/snippet}
               {#snippet sub()}{a.artist}{a.year ? ` · ${a.year}` : ''}{a.kind && a.kind !== 'Album' ? ` · ${a.kind}` : ''}{#if a.have}<span class="have"> · in your library</span>{:else if asked.includes(a.release_group)}<span class="have"> · asked for</span>{/if}{/snippet}
-              {#snippet action()}{#if finding === a.release_group}<button class="spin" aria-busy="true" disabled aria-label="Looking on Bandcamp"></button>{/if}{/snippet}
             </Row>
           </li>
         {/each}
@@ -130,13 +130,4 @@
     color: var(--accent-ink);
   }
 
-  /* Looking on Bandcamp (the owner, 2026-10-25): the app's busy ring (app.css), in the row's end. */
-  .spin {
-    position: relative;
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    border: 0;
-    background: none;
-  }
 </style>

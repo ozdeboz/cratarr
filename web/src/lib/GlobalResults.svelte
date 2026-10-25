@@ -7,6 +7,7 @@
   import { takeBackExcluded } from './api';
   import Cover from './Cover.svelte';
   import CoverStatus from './CoverStatus.svelte';
+  import CoverBusy from './CoverBusy.svelte';
   import ElsewhereAlbum from './ElsewhereAlbum.svelte';
   import { globalAsked, globalGroups, globalSearch, leaveSearch, rememberSearch } from './globalSearch.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -96,8 +97,7 @@
           {#each g.items as it (it.subject + (it.track ?? ''))}
             <li>
               <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)}>
-                {#snippet front()}{#if it.kind !== 'setting' && !it.kind.startsWith('page:')}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /><CoverStatus mark={it.request} small /></span>{/if}{/snippet}
-                {#snippet action()}{#if it.kind === 'missing' && finding === it.subject.slice('missing:'.length)}<button class="spin" aria-busy="true" disabled aria-label="Looking on Bandcamp"></button>{/if}{/snippet}
+                {#snippet front()}{#if it.kind !== 'setting' && !it.kind.startsWith('page:')}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /><CoverStatus mark={it.request} small />{#if it.kind === 'missing' && finding === it.subject.slice('missing:'.length)}<CoverBusy small />{/if}</span>{/if}{/snippet}
                 {#snippet badges()}{@const dot = dotOf(it)}{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{/snippet}
                 {#snippet sub()}{it.sub ?? ''}{#if why(it.matched)}<span class="why">{it.sub ? ' · ' : ''}{why(it.matched)}</span>{/if}{/snippet}
               </Row>
@@ -144,16 +144,6 @@
 
   .art.round {
     border-radius: 50%;
-  }
-
-  /* Looking on Bandcamp (the owner, 2026-10-25): the app's busy ring (app.css), in the row's end. */
-  .spin {
-    position: relative;
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    border: 0;
-    background: none;
   }
 
   /* The library's dot, as the Library's lists have it. */

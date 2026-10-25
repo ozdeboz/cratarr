@@ -4,6 +4,7 @@
   // 0058). Not in the library (an artist's missing albums, 0.9.5): its `cover` and its own `onopen` (Bandcamp, else
   // its menu), no menu of the library's.
   import { albumCoverUrl, type ListedAlbum, type RequestMark } from './api';
+  import CoverBusy from './CoverBusy.svelte';
   import CoverStatus from './CoverStatus.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
   import BandcampAlbumMenu from './BandcampAlbumMenu.svelte';
@@ -29,7 +30,7 @@
     cover?: string | null;
     /** Not the library's album: what a tap does instead of viewing it. */
     onopen?: (() => void) | null;
-    /** Its tap is at work (looking on Bandcamp): the busy ring over it. */
+    /** Its tap is at work (looking on Bandcamp): the busy round on its cover (lib/CoverBusy). */
     busy?: boolean;
     /** Not in the library, asked for: where it stands, on its cover (lib/CoverStatus); else the album's own. */
     request?: RequestMark | null;
@@ -45,10 +46,9 @@
   class="card"
   onclick={() => (onopen ? onopen() : viewOver(albumSubject(source, album.id)))}
   aria-label="{onopen ? 'Open' : 'View'} {album.title}"
-  aria-busy={busy || undefined}
   use:longpress={() => !onopen && (menu = true)}
 >
-  <span class="cover"><Cover src={cover === undefined ? albumCoverUrl(source, album.id) : cover} /><CoverStatus mark={request ?? album.request} /></span>
+  <span class="cover"><Cover src={cover === undefined ? albumCoverUrl(source, album.id) : cover} /><CoverStatus mark={request ?? album.request} />{#if busy}<CoverBusy />{/if}</span>
   <span class="title">{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{album.title}</span>
   {#if lines}{#each lines.filter(Boolean) as l, i (i)}<span class="year">{l}</span>{/each}{:else if album.year}<span class="year">{album.year}</span>{/if}
 </button>

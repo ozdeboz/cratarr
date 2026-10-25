@@ -16,6 +16,7 @@
   import { albumIdOf, BANDCAMP } from './bandcampPreview';
   import Cover from './Cover.svelte';
   import CoverStatus from './CoverStatus.svelte';
+  import CoverBusy from './CoverBusy.svelte';
   import LinkSheet from './LinkSheet.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -105,9 +106,8 @@
       {#each shownMissing as a (a.release_group)}
         <li>
           <Row size="large" title={a.title} label={`Open ${a.title}`} onclick={() => open(a)}>
-            {#snippet front()}<span class="art"><Cover src={a.cover} /><CoverStatus mark={a.request ?? (asked.includes(a.release_group) ? { state: 'wanted' } : null)} small /></span>{/snippet}
+            {#snippet front()}<span class="art"><Cover src={a.cover} /><CoverStatus mark={a.request ?? (asked.includes(a.release_group) ? { state: 'wanted' } : null)} small />{#if finding === a.release_group}<CoverBusy small />{/if}</span>{/snippet}
             {#snippet sub()}{a.artist}{a.year ? ` · ${a.year}` : ''}{a.kind && a.kind !== 'Album' ? ` · ${a.kind}` : ''}{#if asked.includes(a.release_group)}<span class="asked"> · asked for</span>{/if}{/snippet}
-            {#snippet action()}{#if finding === a.release_group}<button class="spin" aria-busy="true" disabled aria-label="Looking on Bandcamp"></button>{/if}{/snippet}
           </Row>
         </li>
       {/each}
@@ -197,14 +197,7 @@
     border-radius: 6px;
   }
 
-  .asked,
-  /* Looking on Bandcamp (the owner, 2026-10-25): the app's busy ring (app.css), in the row's end. */
-  .spin {
-    position: relative;
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    border: 0;
-    background: none;
+  .asked {
+    color: var(--accent-ink);
   }
 </style>
