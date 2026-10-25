@@ -266,8 +266,9 @@
   // 400 px and the player 275 px. Its width is dragged at its edge and remembered.
   const NAV_WIDTH = 240;
   const TOP_BAR = 65;
-  /** The phone's slim row of the mode switcher over the tabs (decision 0052, mock C), while it shows. */
-  const SLIM = 34;
+  /** The phone's slim row of the mode switcher over the tabs (decision 0052, mock C), while it shows: its 34 px and the
+   *  4 px under it (.bar .slim). Counted as 34, the glass under the bar sat 4 px into its gap (the owner, 2026-10-25). */
+  const SLIM = 38;
   const topBar = $derived(TOP_BAR + (switchable() ? SLIM : 0));
   /** The mini-player's height with its margin (64 px and app.css's --gutter-x either side), kept free under the page
    *  and the toasts. */
