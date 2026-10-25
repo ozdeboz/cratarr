@@ -52,9 +52,10 @@
   }
 
   /* Whole while there is room (the owner, 2026-10-25: "you have been limiting it too much"; a 45% cap of its own
-     width cut it with room to spare); short of room, the level above gives way first, where one is last. */
+     width cut it with room to spare); short of room, both cut with …, each by its length (the owner, 2026-10-25: the
+     level above giving way first left nothing of it beside a long name). */
   .up {
-    flex: 0 1000 auto;
+    flex: 0 1 auto;
     color: var(--muted);
   }
 
