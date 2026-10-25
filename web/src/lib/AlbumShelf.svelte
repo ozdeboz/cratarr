@@ -160,10 +160,14 @@
   // Deep (decision 0072, 0.9.3): Cratarr's own albums the server finds by one of their tracks, with why; asked a moment
   // after the words stop changing. The rest as every search reads, in the browser.
   let deep = $state<Map<string, Matched>>(new Map());
+  /** The words the server has answered (or failed) for: till then no "none match" (the owner, 2026-10-25: it said so
+   *  before the albums found by a track were in). */
+  let deepFor = $state('');
   $effect(() => {
     const q = pageView.query.trim();
     if (!q) {
       deep = new Map();
+      deepFor = '';
       return;
     }
     let gone = false;
@@ -177,8 +181,9 @@
             if (on) m.set(it.subject, on);
           }
           deep = m;
+          deepFor = q;
         },
-        () => {},
+        () => !gone && (deepFor = q),
       );
     }, 250);
     return () => {
@@ -418,6 +423,8 @@
       <p class="empty">{s.label} can't list albums.</p>
     {:else if s.error && s.albums.length === 0}
       <p class="error" role="alert">{s.error}</p>
+    {:else if albums.length === 0 && pageView.query.trim() && deepFor !== pageView.query.trim()}
+      <!-- Searching: the server's finds not in yet, so nothing said. -->
     {:else if albums.length === 0}
       <!-- None shown: none at all, or the search or the libraries switched off leave none (it said "0 albums" over
            empty column headings, the owner 2026-10-23). -->
