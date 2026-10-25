@@ -194,6 +194,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/history/lastfm/preview", post(preview_lastfm))
             .route("/api/import/file", post(import_file).delete(undo_file).layer(axum::extract::DefaultBodyLimit::max(256 << 20)))
         .route("/api/library/find", get(library_find))
+        .route("/api/library/tracks", get(library_tracks))
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
             .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
             .route("/api/sync/targets", get(sync_targets))
@@ -1587,6 +1588,31 @@ fn attachment(name: &str) -> String {
         .map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
         .collect();
     format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{utf8}")
+}
+
+#[derive(Deserialize)]
+struct TracksQuery {
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    order: Option<String>,
+    #[serde(default)]
+    down: bool,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// The Library page's Tracks (0.9.4): Cratarr's own library's tracks, a page of them (`offset`, `limit` up to 500) in
+/// an `order` (title, artist, album, added, year, plays, duration; `down` the other way), filtered by the words `q`,
+/// from the libraries switched on (`without=<source>/<library>`, as for crates); with how many in all.
+async fn library_tracks(State(app): State<Arc<App>>, Query(t): Query<TracksQuery>, RawQuery(raw): RawQuery) -> Result<Json<serde_json::Value>, ApiError> {
+    let without = without_of(raw.as_deref());
+    let (items, total) = crate::app::tracks::list(&app, &t.q, t.order.as_deref().unwrap_or("album"), t.down, &without, t.offset, t.limit.unwrap_or(100))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "items": items, "total": total, "offset": t.offset })))
 }
 
 /// The libraries a crate leaves out (decision 0024, amended 2026-10-23: a crate draws from every library switched on):

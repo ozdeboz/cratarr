@@ -139,6 +139,63 @@ pub struct Found {
     pub totals: Totals,
 }
 
+/// One track of the Library page's Tracks list (0.9.4): what its row shows. `plays` and `favorite` are the asking
+/// account's, filled in by `app::tracks`; `folder` and `order_title` only order and filter it.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct TrackRow {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub album_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_no: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disc_no: Option<i64>,
+    /// Seconds.
+    pub duration: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub year: Option<i64>,
+    /// When it came into the library (epoch seconds).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub added: Option<i64>,
+    pub plays: u32,
+    pub favorite: bool,
+    /// Its file's kind (`flac`, `mp3`…) and bitrate (kbps).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bitrate: Option<i64>,
+    #[serde(skip)]
+    pub folder: i64,
+    #[serde(skip)]
+    pub order_title: String,
+}
+
+fn track_row(r: &rusqlite::Row) -> rusqlite::Result<TrackRow> {
+    Ok(TrackRow {
+        id: r.get(0)?,
+        title: r.get(1)?,
+        artist: r.get(2)?,
+        album: r.get(3)?,
+        album_id: r.get(4)?,
+        track_no: r.get(5)?,
+        disc_no: r.get(6)?,
+        duration: r.get::<_, Option<i64>>(7)?.map_or(0, |d| (d.max(0) as u64 + 500) / 1000),
+        year: r.get(8)?,
+        added: r.get(9)?,
+        plays: 0,
+        favorite: false,
+        format: r.get::<_, Option<String>>(10)?.filter(|s| !s.is_empty()),
+        bitrate: r.get(11)?,
+        folder: r.get(12)?,
+        order_title: r.get(13)?,
+    })
+}
+
+const TRACK_ROW_COLS: &str = "s.id, s.title, coalesce(s.artist, ''), s.album, s.album_id, s.track_no, s.disc_no, s.duration_ms, s.year, s.created,
+  s.suffix, s.kbps, s.folder, s.order_title";
+
 /// How many albums, artists, tracks and genres a search matches in all (decision 0072: a group's header counts them).
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct Totals {
@@ -531,6 +588,23 @@ impl Library {
         )?;
         let rows = st.query_map(rusqlite::params![fq, cap as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Every track for the Library page's Tracks (0.9.4): those whose title, artist and album hold the words (every one
+    /// without any), but those in the catalogue folders `off` (libraries switched off); in no order.
+    pub fn track_rows(&self, words: &[String], off: &[i64]) -> Result<Vec<TrackRow>> {
+        let db = self.db();
+        let rows: Vec<TrackRow> = match crate::search::fts(words) {
+            Some(fq) => {
+                let mut st = db.prepare_cached(&format!("SELECT {TRACK_ROW_COLS} FROM songs_fts f JOIN songs s ON s.n = f.rowid WHERE songs_fts MATCH ?1"))?;
+                st.query_map([fq], track_row)?.collect::<rusqlite::Result<_>>()?
+            }
+            None => {
+                let mut st = db.prepare_cached(&format!("SELECT {TRACK_ROW_COLS} FROM songs s"))?;
+                st.query_map([], track_row)?.collect::<rusqlite::Result<_>>()?
+            }
+        };
+        Ok(rows.into_iter().filter(|r| !off.contains(&r.folder)).collect())
     }
 
     /// An album's id as it is (or would be) in Music: what its tags are kept under.

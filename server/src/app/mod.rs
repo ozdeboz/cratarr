@@ -57,6 +57,7 @@ mod settings;
 mod shelf;
 mod sync;
 pub mod together;
+pub mod tracks;
 pub mod visuals;
 
 use std::sync::Arc;
