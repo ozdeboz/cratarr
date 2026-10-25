@@ -1082,6 +1082,17 @@ export const removeMyDevice = (id: string) => request<void>(`/api/me/devices/${e
 /** The server's version and when it started, for everyone (the rest of its settings are its administrators'). */
 /** About Cratarr: its version, since when it runs, its licence (SPDX) and where its source is. */
 export const getAbout = () => quietly<{ version: string; started: number; licence?: string; source?: string }>('/api/about');
+/** Cratarr restarted (a5, 0.9.6; its administrators'): it answers, then stops as `docker stop` stops it, and Docker's
+ *  restart policy starts it again. */
+export const restartServer = () => post<{ restarting: boolean }>('/api/server/restart', {});
+/** Whether the server answers at all (its health), as a restart waits for it to be back. */
+export async function serverAnswers(): Promise<boolean> {
+  try {
+    return (await fetch('/api/health', { cache: 'no-store' })).ok;
+  } catch {
+    return false;
+  }
+}
 /** One's own settings (decision 0051), one object per account, as the pages and the app name its parts; `version`
  *  counts its saves (0: none kept yet). A save names the version it changed, and is refused (409) if another came first. */
 export type MySettings = { version: number; settings: Record<string, unknown> };

@@ -5,7 +5,10 @@
   // and as the player last told; then the log, newest first, by player, area and level (its filter in a sheet from the
   // group's heading). Groups of rows (the settings' North Star, 2026-10-19). The file for a bug report is the bar's
   // Download. The log as it is, no prose.
-  import { getLog, getLogLevels, getPlayers, setLogLevels, type LogLevels, type LogRow, type PlayOnPlayer } from '../api';
+  import { getAbout, getLog, getLogLevels, getPlayers, missingCall, restartServer, serverAnswers, setLogLevels, type LogLevels, type LogRow, type PlayOnPlayer } from '../api';
+  import ConfirmSheet from './ConfirmSheet.svelte';
+  import { toast } from '../toast.svelte';
+  import { when } from './when';
   import ChoiceList from '../ChoiceList.svelte';
   import Icon from '../Icon.svelte';
   import MenuSheet from '../MenuSheet.svelte';
@@ -25,6 +28,36 @@
   };
   const areaName = (a: string) => AREA_NAMES[a] ?? a;
   const PAGE = 200;
+
+  // Restart (the owner, 2026-10-26: "without command line"): asked first; then it stops, and the page waits for it to
+  // answer again (a minute at most before it says so), then reads itself again.
+  let started = $state<number | null>(null);
+  getAbout().then(
+    (a) => (started = a.started),
+    () => {},
+  );
+  let restartAsk = $state(false);
+  let restarting = $state(false);
+  async function restart() {
+    restarting = true;
+    try {
+      await restartServer();
+    } catch (e) {
+      restarting = false;
+      return toast.fail(missingCall(e) ? null : e, missingCall(e) ? "This server can't restart itself yet" : "Cratarr didn't restart");
+    }
+    // Down first (it stops half a second after answering), then back.
+    const t0 = Date.now();
+    let down = false;
+    while (Date.now() - t0 < 180_000) {
+      await new Promise((r) => setTimeout(r, 1500));
+      const up = await serverAnswers();
+      if (!up) down = true;
+      else if (down || Date.now() - t0 > 8000) return location.reload();
+    }
+    restarting = false;
+    toast.fail(null, "Cratarr hasn't come back yet");
+  }
 
   let players = $state<PlayOnPlayer[]>([]);
   let rows = $state<LogRow[]>([]);
@@ -136,6 +169,26 @@
   let filtering = $state(false);
   const filtered = $derived(!!place || !!area || !!level);
 </script>
+
+<Group title="Server">
+  <Item
+    name="Restart Cratarr"
+    line={restarting ? 'Restarting…' : started ? `Running since ${when(started)}` : null}
+    busy={restarting}
+    disabled={restarting}
+    onclick={() => (restartAsk = true)}
+  />
+</Group>
+{#if restartAsk}
+  <ConfirmSheet
+    title="Restart Cratarr?"
+    text="It stops for everyone and every player, and is back in about half a minute; longer when it rebuilds the library."
+    label="Restart"
+    icon="reset"
+    onconfirm={restart}
+    onclose={() => (restartAsk = false)}
+  />
+{/if}
 
 {#if levels}
   <Group>
