@@ -366,16 +366,17 @@
   }
 
   /* The masonry: the seeds in the middle, the suggestions around. */
+  /* Half as wide and as tall as it was (the owner, 2026-10-25): a tile about the size of a shelf's cover. */
   .masonry-box {
-    max-width: 720px;
+    max-width: 360px;
     container-type: inline-size;
   }
 
   .masonry {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    grid-auto-rows: calc((100cqi - 20px) / 3);
-    gap: 10px;
+    grid-auto-rows: calc((100cqi - 12px) / 3);
+    gap: 6px;
   }
 
   .seeds {
@@ -386,17 +387,24 @@
     gap: 4px;
     grid-column: 2;
     grid-row: 2;
-    padding: 10px;
+    padding: 6px;
     border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
-    border-radius: 16px;
+    border-radius: 8px;
     background: color-mix(in srgb, var(--accent) 12%, transparent);
     text-align: center;
   }
 
   .seeds small {
     color: var(--accent-ink);
-    letter-spacing: 0.08em;
+    font-size: 10px;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
+  }
+
+  .seeds b {
+    font-size: 13px;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
   }
 
   .tile {
@@ -404,7 +412,7 @@
     padding: 0;
     overflow: hidden;
     border: 0;
-    border-radius: 10px;
+    border-radius: 8px;
     background: color-mix(in srgb, var(--text) 8%, transparent);
     cursor: pointer;
   }
@@ -415,7 +423,7 @@
     bottom: 0;
     left: 0;
     display: grid;
-    padding: 24px 10px 8px;
+    padding: 18px 7px 5px;
     background: linear-gradient(to top, rgb(0 0 0 / 0.78), transparent);
     color: #fff;
     text-align: left;
@@ -429,7 +437,7 @@
   }
 
   .tile-text b {
-    font-size: 13px;
+    font-size: 12px;
   }
 
   .tile-text small {
@@ -438,12 +446,12 @@
 
   .tile-play {
     position: absolute;
-    top: 8px;
-    right: 8px;
+    top: 5px;
+    right: 5px;
     display: grid;
     place-items: center;
-    width: 26px;
-    height: 26px;
+    width: 22px;
+    height: 22px;
     border-radius: 50%;
     background: var(--accent);
     color: var(--accent-text);
