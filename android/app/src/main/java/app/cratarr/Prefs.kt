@@ -266,6 +266,32 @@ class Prefs(context: Context) {
             p.edit().putBoolean(LEVELLING, value).apply()
         }
 
+    /** Start and stop (0.9.6, Settings › This device; `StartStop`): off, vinyl or fade; over this long; for next and
+     *  previous too; Tape rewind on Previous restarting a track. */
+    var startStopMode: String
+        get() = p.getString(START_STOP_MODE, START_STOP_OFF)?.takeIf { it == START_STOP_VINYL || it == START_STOP_FADE } ?: START_STOP_OFF
+        set(value) {
+            p.edit().putString(START_STOP_MODE, value).apply()
+        }
+
+    var startStopMs: Long
+        get() = p.getLong(START_STOP_MS, 800L).coerceIn(200L, 3000L)
+        set(value) {
+            p.edit().putLong(START_STOP_MS, value.coerceIn(200L, 3000L)).apply()
+        }
+
+    var startStopSkips: Boolean
+        get() = p.getBoolean(START_STOP_SKIPS, false)
+        set(value) {
+            p.edit().putBoolean(START_STOP_SKIPS, value).apply()
+        }
+
+    var startStopRewind: Boolean
+        get() = p.getBoolean(START_STOP_REWIND, false)
+        set(value) {
+            p.edit().putBoolean(START_STOP_REWIND, value).apply()
+        }
+
     /** Ignore favourites (SkipFavourites): Radio's inserts and Autoplay's picks leave the hearted tracks out. */
     var skipFavourites: Boolean
         get() = p.getBoolean(SKIP_FAVOURITES, false)
@@ -335,6 +361,13 @@ class Prefs(context: Context) {
         const val RADIO_COUNT = "radio_count"
         const val SKIP_FAVOURITES = "skip_favourites"
         const val LEVELLING = "levelling"
+        const val START_STOP_MODE = "start_stop_mode"
+        const val START_STOP_MS = "start_stop_ms"
+        const val START_STOP_SKIPS = "start_stop_skips"
+        const val START_STOP_REWIND = "start_stop_rewind"
+        const val START_STOP_OFF = "off"
+        const val START_STOP_VINYL = "vinyl"
+        const val START_STOP_FADE = "fade"
         const val AUTOPLAY = "autoplay"
         private const val OLD_RADIO = "radio"
         const val SLEEP = "sleep"

@@ -58,12 +58,13 @@ fun entryOf(item: MediaItem): String? =
 /** The place of an entry in the player's queue; -1 when it is not there. */
 fun placeOf(player: Player, entry: String): Int = (0 until player.mediaItemCount).firstOrNull { entryOf(player.getMediaItemAt(it)) == entry } ?: -1
 
-/** The player's queue, as the page and Cratarr describe tracks. */
-fun queueOf(player: Player): JSONArray {
+/** The player's queue, as the page and Cratarr describe tracks; [thin]: the tracks Cratarr describes as their identity
+ *  only (0.9.6, decision 0033 amended). */
+fun queueOf(player: Player, thin: Boolean = false): JSONArray {
     val queue = JSONArray()
     for (i in 0 until player.mediaItemCount) {
-        val track = player.getMediaItemAt(i).mediaMetadata.extras?.getString(TRACK)
-        queue.put(track?.let(::JSONObject) ?: JSONObject())
+        val track = player.getMediaItemAt(i).mediaMetadata.extras?.getString(TRACK)?.let(::JSONObject) ?: JSONObject()
+        queue.put(if (thin && Describe.describes(track.optString("source"))) Describe.identity(track) else track)
     }
     return queue
 }

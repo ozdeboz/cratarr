@@ -57,6 +57,9 @@ class PlayerService : MediaSessionService() {
     private lateinit var player: ExoPlayer
     /** Sync play (decision 0037): this device in a group. */
     private lateinit var sync: SyncPlay
+
+    /** Start and stop (0.9.6): play, pause and stop, and next and previous where asked, ramped as the device says. */
+    lateinit var startStop: StartStop
     /** The app's own player as the session shows it (its previous and shuffle the app's way). */
     private lateinit var sessionPlayer: Player
     /** The player the screen drives, as the session shows it meanwhile (the owner, 2026-10-23). */
@@ -129,9 +132,28 @@ class PlayerService : MediaSessionService() {
         // headset's or the system's shuffle shuffles what is to come once, and the player never plays shuffled, so it
         // says it is not. Cratarr's queue is shuffled by Cratarr (Play On's `shuffle`, which sends the new order back);
         // local mode's here, the playing track staying where it is.
+        startStop = StartStop(player, prefs) { sync.leader != null }
         sessionPlayer = object : ForwardingPlayer(player) {
+            // The lock screen's, the notification's, a headset's and the page's play, pause and stop, ramped (0.9.6).
+            override fun play() = startStop.play { super.play() }
+
+            override fun pause() = startStop.pause { super.pause() }
+
+            override fun setPlayWhenReady(playWhenReady: Boolean) {
+                if (playWhenReady) play() else pause()
+            }
+
+            override fun stop() = startStop.pause { super.stop() }
+
+            override fun seekToNext() = startStop.skip { super.seekToNext() }
+
+            override fun seekToNextMediaItem() = startStop.skip { super.seekToNextMediaItem() }
+
+            override fun seekToPreviousMediaItem() = startStop.skip { super.seekToPreviousMediaItem() }
+
             override fun seekToPrevious() {
-                if (!Repeat.previous(this@PlayerService, player)) super.seekToPrevious()
+                if (startStop.rewind(RESTART_AFTER_MS)) return
+                startStop.skip { if (!Repeat.previous(this@PlayerService, player)) super.seekToPrevious() }
             }
 
             override fun setShuffleModeEnabled(shuffleModeEnabled: Boolean) {
@@ -367,6 +389,8 @@ class PlayerService : MediaSessionService() {
         private val keep = Runnable {
             // Local mode's tracks are on the device already.
             if (prefs.mode == Prefs.MODE_DEVICE) return@Runnable
+            // What the notification and the lock screen show, as Cratarr describes it (0.9.6).
+            Describe.fill(this@PlayerService, player)
             val items = (0 until player.mediaItemCount).map(player::getMediaItemAt)
             Downloads.keepAhead(this@PlayerService, items, player.currentMediaItemIndex)
         }
@@ -569,7 +593,7 @@ class PlayerService : MediaSessionService() {
 
     companion object {
         private const val TAG = "CratarrPlayer"
-        private const val RESTART_AFTER_MS = 5_000L
+        const val RESTART_AFTER_MS = 5_000L
         /** A track Cratarr could not give for a minute: asked for again after this long. */
         private const val AGAIN_MS = 15_000L
         /** How often the playing track is looked at for counting. */

@@ -45,6 +45,7 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
     private val main = Handler(Looper.getMainLooper())
     val source = Source()
     val silencer = Silencer()
+    val fader = Fader()
     /** The announce channel's mix-in (lib Announcer): first in the chain, so a group hears what its leader announces. */
     val announcer = Announcer.Mixer().also { Announcer.mixer = it }
     private val snapclient = Snapclient(context)
@@ -76,7 +77,8 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
             val sink = DefaultAudioSink.Builder(context)
                 .setEnableFloatOutput(enableFloatOutput)
                 .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-                .setAudioProcessors(arrayOf<AudioProcessor>(announcer, TeeAudioProcessor(source), TeeAudioProcessor(LiveSound), silencer))
+                // Start and stop's fade first (0.9.6, `StartStop`): a group hears its leader's fade.
+                .setAudioProcessors(arrayOf<AudioProcessor>(fader, announcer, TeeAudioProcessor(source), TeeAudioProcessor(LiveSound), silencer))
                 .build()
             // A seek, a jump or a stop: the sound breaks off here, in order with what was played before it.
             return object : ForwardingAudioSink(sink) {
