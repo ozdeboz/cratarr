@@ -1616,6 +1616,25 @@ export const getDiscoverArtist = (name: string) =>
  *  asked (0.9.3). */
 export const getDiscoverArtistAlbums = (name: string) =>
   quietly<{ albums: number | null }>(`/api/discover/artist/albums?name=${encodeURIComponent(name)}`);
+/** An album missing from an artist the library has (their discography as MusicBrainz lists it, 0.9.3). */
+export type MissingAlbum = { release_group: string; title: string; artist: string; year: number | null; kind: string | null; cover: string | null };
+/** Every album missing from the library's artists read so far (`artists`: how many), newest first. */
+export const getDiscoverMissing = () => quietly<{ albums: MissingAlbum[]; artists: number }>('/api/discover/missing');
+/** One artist's missing albums (their page). */
+export const getArtistMissing = (name: string) =>
+  quietly<{ albums: MissingAlbum[]; looking: boolean }>(`/api/artists/missing?name=${encodeURIComponent(name)}`);
+/** What Discover leaves out for the account: its answers (Not interested: `no`, Hide: `hidden`), the artists left out. */
+export type DiscoverExcluded = { key: string; album: string; artist: string; year?: number | null; cover?: string | null; how: 'no' | 'hidden'; at: number };
+export const getDiscoverExcluded = () => quietly<{ albums: DiscoverExcluded[]; artists: { artist: string; key: string; at: number }[] }>('/api/discover/excluded');
+/** Takes an exclusion back, any time (as Undo): an album's answer, or an artist's every "no". */
+export const takeBackExcluded = (what: { key: string } | { artist: string }) =>
+  request<void>(`/api/discover/excluded?${new URLSearchParams(what)}`, { method: 'DELETE' });
+/** An album's page on Bandcamp, looked for when it is opened (MusicBrainz's link first, the artist's page, the search). */
+export const findOnBandcamp = (artist: string, album: string, release_group?: string) =>
+  quietly<{ page: string | null }>(`/api/bandcamp/find?${new URLSearchParams({ artist, album, ...(release_group ? { release_group } : {}) })}`);
+/** Want for any album (a missing one): the same request and rights as Discover's Want. */
+export const wantAlbum = (a: { release_group?: string; artist: string; album: string; year?: number | null; cover?: string | null }) =>
+  post<{ request: AlbumRequest }>('/api/requests/want', a);
 export const discoverArtistPhotoUrl = (name: string) => `/api/discover/artist/photo?name=${encodeURIComponent(name)}`;
 /** An artist related to another (the server's app/related.rs): why, their id in the library, or an album of theirs on
  *  Bandcamp. */

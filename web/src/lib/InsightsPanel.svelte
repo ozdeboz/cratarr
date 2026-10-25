@@ -6,6 +6,7 @@
   // were (Collection's sections, Listening's History and Profile, the Map).
   import Icon from './Icon.svelte';
   import InsightsCollection from './InsightsCollection.svelte';
+  import DiscoveryList from './DiscoveryList.svelte';
   import InsightsListening from './InsightsListening.svelte';
   import InsightsMap from './InsightsMap.svelte';
   import InsightsProfile from './InsightsProfile.svelte';
@@ -15,7 +16,7 @@
   import { INSIGHTS_VIEWS, showView, type InsightsView } from './insightsViews';
   import { insights } from './insights.svelte';
   import PageLoading from './PageLoading.svelte';
-  import { closePlaylist, upToPage } from './panel.svelte';
+  import { closePlaylist, INSIGHTS, upToPage, viewPlaylist } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
 
   let { view, beside = false }: { view: InsightsView; beside?: boolean } = $props();
@@ -34,7 +35,12 @@
 <div class="view">
   <div class="bar" class:beside>
     {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
-    <Crumbs up={{ label: v.group, go: beside ? undefined : () => upToPage('#/insights') }} here={v.label} />
+    {#if v.under}
+      {@const parent = INSIGHTS_VIEWS.find((x) => x.id === v.under)}
+      <Crumbs up={{ label: parent?.label ?? v.group, go: () => viewPlaylist(INSIGHTS + v.under) }} here={v.label} />
+    {:else}
+      <Crumbs up={{ label: v.group, go: beside ? undefined : () => upToPage('#/insights') }} here={v.label} />
+    {/if}
     {#if filters.length || views.length || !beside}
       <TopPill
         device={false}
@@ -48,7 +54,9 @@
     {/if}
   </div>
   <div class="scroll">
-    {#if view === 'history'}
+    {#if view === 'discover-missing' || view === 'discover-excluded'}
+      <DiscoveryList kind={view === 'discover-missing' ? 'missing' : 'excluded'} />
+    {:else if view === 'history'}
       <InsightsListening />
     {:else if view === 'profile'}
       <InsightsProfile />
