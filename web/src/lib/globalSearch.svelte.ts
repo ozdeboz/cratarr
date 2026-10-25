@@ -109,6 +109,14 @@ export function rememberSearch() {
   const q = pageView.query.trim();
   if (q) history.replaceState({ ...(history.state ?? {}), search: { q, scope: globalSearch.scope } }, '');
 }
+/** A found one opened (a result, a page's own list): kept for back, then the words gone (the owner, 2026-10-25: "When
+ *  clicking on a search result, the search input field should always go back to zero"), but where it was found deep, in
+ *  its contents: it opens narrowed to them (decision 0072). */
+export function leaveSearch(deep: boolean) {
+  rememberSearch();
+  if (deep) globalSearch.scope = 'page';
+  else pageView.query = '';
+}
 if (typeof window !== 'undefined') {
   addEventListener('popstate', () => {
     const kept = history.state?.search as { q: string; scope: 'page' | 'everywhere' } | undefined;

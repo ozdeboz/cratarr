@@ -8,7 +8,7 @@
   // count, why, whether the artist is new, its listeners, its request); every action in its menu, opened by a tap. Looked up again once a day as a task, its progress in
   // the pill (ui-conventions, A page's work in its pill); Look again there asks again now. Without a service connected,
   // a line says what one would add.
-  import { getDiscover, hideDiscover, notDiscover, previewBandcamp, refreshDiscover, wantDiscover, type AlbumRequest, type DiscoverAlbum, type DiscoverView } from './lib/api';
+  import { getDiscover, hideDiscover, notDiscover, refreshDiscover, wantDiscover, type AlbumRequest, type DiscoverAlbum, type DiscoverView } from './lib/api';
   import Cover from './lib/Cover.svelte';
   import CoverPlay from './lib/CoverPlay.svelte';
   import { hoursMinutes } from './lib/duration';
@@ -33,8 +33,7 @@
   import { switchOn } from './lib/listFilter.svelte';
   import { progressOf, tasks } from './lib/tasks.svelte';
   import { me } from './lib/me.svelte';
-  import { playQueue } from './lib/localPlayer.svelte';
-  import { isLocal } from './lib/output.svelte';
+  import { bandcampPlay, playOnBandcamp } from './lib/bandcampFound.svelte';
   import { toast } from './lib/toast.svelte';
 
   // Want: a request for everyone who may ask (decision 0070); an administrator's (or Auto-approve) is handed to Lidarr
@@ -169,26 +168,9 @@
   /** Asked for and not taken back: Want is done for it. */
   const open = (r: AlbumRequest | undefined) => !!r && (r.status === 'pending' || r.status === 'approved');
 
-  // Play (decision 0071): an album on Bandcamp heard in Cratarr's own player, here or on the player this page drives,
-  // as a queue of its own; never a play. Not on the server's own outputs (they play the library's files).
-  let previewing = $state<string | null>(null);
-  async function preview(a: DiscoverAlbum) {
-    if (!a.bandcamp) return;
-    if (!isLocal()) return toast.show({ text: 'A preview plays on this device or on a Cratarr player.', tone: 'error' });
-    previewing = a.key;
-    try {
-      const p = await previewBandcamp(a.bandcamp);
-      playQueue(
-        p.tracks.map((t) => ({ ...t, addable: false })),
-        0,
-        p.album || a.album,
-      );
-    } catch (e) {
-      toast.fail(e, 'Could not play it');
-    } finally {
-      previewing = null;
-    }
-  }
+  // Play (decision 0071): lib/bandcampFound's, one place for every cover that plays an album on Bandcamp.
+  const previewing = $derived(bandcampPlay.key);
+  const preview = (a: DiscoverAlbum) => a.bandcamp && playOnBandcamp(a.key, a.bandcamp, a.album);
 
   /** The card's facts in one line: what it is, its tracks, its length. */
   function facts(a: DiscoverAlbum): string {

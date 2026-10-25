@@ -1617,7 +1617,16 @@ export const getDiscoverArtist = (name: string) =>
 export const getDiscoverArtistAlbums = (name: string) =>
   quietly<{ albums: number | null }>(`/api/discover/artist/albums?name=${encodeURIComponent(name)}`);
 /** An album missing from an artist the library has (their discography as MusicBrainz lists it, 0.9.3). */
-export type MissingAlbum = { release_group: string; title: string; artist: string; year: number | null; kind: string | null; cover: string | null };
+export type MissingAlbum = {
+  release_group: string;
+  title: string;
+  artist: string;
+  year: number | null;
+  kind: string | null;
+  cover: string | null;
+  /** Its page on Bandcamp, where an open found it (the server keeps a find a month; a5, 0.9.5). */
+  bandcamp?: string | null;
+};
 /** Every album missing from the library's artists read so far (`artists`: how many), newest first. */
 export const getDiscoverMissing = () => quietly<{ albums: MissingAlbum[]; artists: number }>('/api/discover/missing');
 /** One artist's missing albums (their page). */

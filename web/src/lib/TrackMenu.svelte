@@ -385,7 +385,7 @@
           {/each}
           {#if t?.source === 'cratarr'}<MenuEntry icon="music" label="Sounds like this" onclick={goToLike} />{/if}
         </MenuGroup>
-        <DiscoverEntries page={bandcampPage} {onclose} />
+        <DiscoverEntries page={bandcampPage} artist={t?.artist} album={t?.album} {onclose} />
         <MenuGroup>
           {#if heartKnown}<MenuEntry icon="heart" label="Favourite" switched={heartOn} disabled={busy} onclick={heart} />{/if}
           {#if t && !onDevice}<MenuEntry icon="ban" label="Exclude everywhere" danger onclick={excludeEverywhere} />{/if}

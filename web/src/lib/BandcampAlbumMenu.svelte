@@ -1,7 +1,7 @@
 <script lang="ts">
   // A Bandcamp album's menu in the panel (decision 0071, the owner 2026-10-25: "Bandcamp albums also deserve their own
   // context menu ... Want ... Go to artist"): Go to the artist (their page where the library has them, else theirs from
-  // Discover, lib/discoverArtist; theirs on Bandcamp beside Open on Bandcamp), Discover's group where it is a suggestion (Want, Not interested), Open on Bandcamp, Share. The menu's
+  // Discover, lib/discoverArtist; theirs on Bandcamp beside Open on Bandcamp), Discover's group (Want, and Not interested where it is a suggestion), Open on Bandcamp, Share. The menu's
   // pieces as every menu's; what the server keeps of its own albums (heart, rating, playlists) it has none of.
   import { goToArtist, library, readLibrary } from './albums.svelte';
   import { albumCoverUrl } from './api';
@@ -57,7 +57,7 @@
           <MenuEntry icon="user" label="Go to {album.artist}" onclick={act(() => goToArtist(DISCOVER, album.artist!))} />
         {/if}
       </MenuGroup>
-      <DiscoverEntries {page} {onclose} />
+      <DiscoverEntries {page} artist={album.artist} album={album.title} {onclose} />
       <MenuGroup>
         {#if page}
           <MenuEntry icon="externalLink" label="Open on Bandcamp" onclick={act(() => (link = { url: page, name: 'Bandcamp' }))} />

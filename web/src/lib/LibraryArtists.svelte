@@ -11,6 +11,7 @@
   import ListHead from './ListHead.svelte';
   import { artistSubject, panel, viewPlaylist } from './panel.svelte';
   import { ARTIST_ORDERS, howMany, matchesSearch } from './pageView.svelte';
+  import { leaveSearch } from './globalSearch.svelte';
   import { prefs } from './prefs.svelte';
   import Row, { type Cell } from './Row.svelte';
   import { libraryShown } from './sources.svelte';
@@ -130,7 +131,7 @@
             cells={cols.length ? cellsOf(a) : undefined}
             label={selecting ? `${selecting.has(keyOf(a)) ? 'Untick' : 'Tick'} ${a.name}` : `View ${a.name}`}
             active={panel.viewed === artistSubject(a.source, a.name) || !!selecting?.has(keyOf(a))}
-            onclick={() => (selecting ? tick(a) : viewPlaylist(artistSubject(a.source, a.name)))}
+            onclick={() => (selecting ? tick(a) : (leaveSearch(false), viewPlaylist(artistSubject(a.source, a.name))))}
             attach={press(a)}
           >
             {#snippet front()}<span class="face"><Cover src={a.cover} /></span>{/snippet}

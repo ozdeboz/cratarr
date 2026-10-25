@@ -25,6 +25,7 @@
   import { longpress } from './longpress';
   import SelectSheet from './SelectSheet.svelte';
   import { albumSubject, panel, viewPlaylist } from './panel.svelte';
+  import { leaveSearch } from './globalSearch.svelte';
   import { prefs, type AlbumLayout, type CollectionOrder } from './prefs.svelte';
   import { playing as nowPlaying } from './remote.svelte';
   import Row from './Row.svelte';
@@ -240,7 +241,11 @@
     for (const s of untrack(() => sources)) loadAlbumUses(s.id);
   });
 
-  const view = (source: string, a: ListedAlbum) => viewPlaylist(albumSubject(source, a.id));
+  // Opened from a search, the words go, but where it was found by its tracks (lib/globalSearch's leaveSearch).
+  const view = (source: string, a: ListedAlbum) => {
+    if (pageView.query.trim()) leaveSearch(!!deep.get(albumSubject(source, a.id)));
+    viewPlaylist(albumSubject(source, a.id));
+  };
   /** Flow: each server's front album, by its place in its list. */
   let flowAt = $state<Record<string, number>>({});
   /** Flow's stage fills the page down to the mini-player's place, leaving room for the album's name

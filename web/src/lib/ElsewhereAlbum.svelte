@@ -2,12 +2,13 @@
   // An album not in the library, found by a search (Find more music's MusicBrainz, the global search's missing albums;
   // decision 0072): opened, it is looked for on Bandcamp and shown in the panel to hear; not there, its menu: Want it,
   // or look on MusicBrainz or YouTube. One place for both, so they act the same.
-  export type Elsewhere = { release_group: string; title: string; artist: string; year: number | null; cover: string | null; have?: boolean };
+  export type Elsewhere = { release_group: string; title: string; artist: string; year: number | null; cover: string | null; have?: boolean; bandcamp?: string | null };
 </script>
 
 <script lang="ts">
   import { findOnBandcamp, wantAlbum } from './api';
   import { albumIdOf, BANDCAMP } from './bandcampPreview';
+  import { bandcampOf, rememberBandcamp } from './bandcampFound.svelte';
   import LinkSheet from './LinkSheet.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -24,13 +25,17 @@
   let menuFor = $state<Elsewhere | null>(null);
   let link = $state<{ url: string; name: string } | null>(null);
 
-  /** Opens it: on Bandcamp in the panel, else its menu. */
+  /** Opens it: on Bandcamp in the panel (a page known at once, lib/bandcampFound), else its menu. */
   export async function open(a: Elsewhere) {
+    const known = bandcampOf(a.release_group, a.bandcamp);
+    if (known) return viewOver(albumSubject(BANDCAMP, albumIdOf(known)));
     finding = a.release_group;
     try {
       const { page } = await findOnBandcamp(a.artist, a.title, a.release_group);
-      if (page) viewOver(albumSubject(BANDCAMP, albumIdOf(page)));
-      else menuFor = a;
+      if (page) {
+        rememberBandcamp(a.release_group, page);
+        viewOver(albumSubject(BANDCAMP, albumIdOf(page)));
+      } else menuFor = a;
     } catch {
       menuFor = a;
     } finally {

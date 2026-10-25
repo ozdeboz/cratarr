@@ -2,7 +2,8 @@
   // An artist's page under their name (decided 2026-10-16, as Symfonium's): About (the owner, 2026-10-23: TheAudioDB's
   // description, from the server's artist store; a tap opens all of it; their photo is the page's header, not here too), their albums, the albums they
   // appear on (others', credited on a track), both newest first as covers, and their most played tracks (the panel's
-  // rows, `top`), whose › shows all their tracks; then related artists to explore (lib/RelatedArtists, 0.9.2).
+  // rows, `top`), whose › shows all their tracks; then related artists to explore (lib/RelatedArtists, 0.9.2); last
+  // their albums not in the library (0.9.5).
   import type { Snippet } from 'svelte';
   import { tick } from 'svelte';
   import { getArtistAbout, getArtistMissing, getDiscoverArtist, type ListedAlbum, type MissingAlbum, type PhotoCredit } from './api';
@@ -11,6 +12,8 @@
   import AlbumCard from './AlbumCard.svelte';
   import RelatedArtists from './RelatedArtists.svelte';
   import ElsewhereAlbum from './ElsewhereAlbum.svelte';
+  import CoverPlay from './CoverPlay.svelte';
+  import { bandcampOf, bandcampPlay, playOnBandcamp } from './bandcampFound.svelte';
   import SectionHead from './SectionHead.svelte';
   import { matchesSearch } from './pageView.svelte';
 
@@ -152,25 +155,6 @@
     {@render grid(appearsShown)}
   </section>
 {/if}
-{#if missingShown.length}
-  <section aria-label="Not in your library">
-    <SectionHead title="Not in your library" />
-    <ul class="grid">
-      {#each missingShown as m (m.release_group)}
-        <li>
-          <AlbumCard
-            source="musicbrainz"
-            album={{ id: m.release_group, title: m.title, year: m.year }}
-            cover={m.cover}
-            busy={finding === m.release_group}
-            onopen={() => elsewhere?.open({ release_group: m.release_group, title: m.title, artist: m.artist, year: m.year, cover: m.cover })}
-          />
-        </li>
-      {/each}
-    </ul>
-  </section>
-{/if}
-<ElsewhereAlbum bind:this={elsewhere} bind:finding />
 {#if top}
   <section aria-label="Top recommendations">
     <SectionHead title="Top recommendations" onmore={ontracks} />
@@ -179,6 +163,29 @@
 {/if}
 <!-- Related artists to explore (0.9.2): Cratarr's own library only (the server knows its artists' MusicBrainz ids). -->
 {#if !searching && (source === 'cratarr' || source === DISCOVER)}<RelatedArtists {name} />{/if}
+<!-- Their albums the library lacks, last on the page (the owner, 2026-10-25: "at the very bottom"). -->
+{#if missingShown.length}
+  <section aria-label="Not in your library">
+    <SectionHead title="Not in your library" />
+    <ul class="grid">
+      {#each missingShown as m (m.release_group)}
+        {@const page = bandcampOf(m.release_group, m.bandcamp)}
+        <li class="missing">
+          <AlbumCard
+            source="musicbrainz"
+            album={{ id: m.release_group, title: m.title, year: m.year }}
+            cover={m.cover}
+            busy={finding === m.release_group}
+            onopen={() => elsewhere?.open({ release_group: m.release_group, title: m.title, artist: m.artist, year: m.year, cover: m.cover, bandcamp: page })}
+          />
+          <!-- On Bandcamp: Play on its cover, as Discover's cards have it (beside the card's button, over its cover). -->
+          {#if page}<CoverPlay label={m.title} busy={bandcampPlay.key === m.release_group} onplay={() => playOnBandcamp(m.release_group, page, m.title)} />{/if}
+        </li>
+      {/each}
+    </ul>
+  </section>
+{/if}
+<ElsewhereAlbum bind:this={elsewhere} bind:finding />
 {#if searching && !albumsShown.length && !appearsShown.length && !top && !(about?.bio && hit(about.bio))}
   <p class="empty">Nothing of {name}'s matches.</p>
 {:else if !albums.length && !appearsOn.length && !top}
@@ -186,6 +193,11 @@
 {/if}
 
 <style>
+  /* A missing album's card with Play over its cover (lib/CoverPlay is placed by it). */
+  .missing {
+    position: relative;
+  }
+
   section {
     margin-top: 16px;
   }
