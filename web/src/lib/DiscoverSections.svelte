@@ -11,6 +11,7 @@
   import Cover from './Cover.svelte';
   import CoverPlay from './CoverPlay.svelte';
   import CoverBusy from './CoverBusy.svelte';
+  import { bandcampFailed } from './bandcampFound.svelte';
   import CoverStatus from './CoverStatus.svelte';
   import CoverFlow from './CoverFlow.svelte';
   import { goToArtist } from './albums.svelte';
@@ -29,6 +30,8 @@
     owned,
     onplay,
     previewing = null,
+    problemOf = () => null,
+    onproblem = () => {},
     status = (a) => a.request ?? null,
   }: {
     sec: Sections<DiscoverAlbum>;
@@ -41,6 +44,10 @@
     owned: (name: string) => number;
     onplay: (a: DiscoverAlbum) => void;
     previewing?: string | null;
+    /** What went wrong with an album's request (not handed over): its mark a red "!" (the owner, 2026-10-26). */
+    problemOf?: (a: DiscoverAlbum) => string | null;
+    /** A red "!" tapped: the request's or the play's, said in a sheet (lib/ProblemSheet). */
+    onproblem?: (a: DiscoverAlbum, what: 'request' | 'play') => void;
     /** Asked for: where it stands, on its cover (lib/CoverStatus). */
     status?: (a: DiscoverAlbum) => RequestMark | null;
   } = $props();
@@ -120,7 +127,7 @@
             <b>{a.album}</b>
             <small>{a.artist}{a.year ? ` · ${a.year}` : ''}</small>
           </button>
-          <CoverStatus mark={status(a)} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => onplay(a)} />{/if}
+          <CoverStatus mark={status(a)} problem={problemOf(a)} onproblem={() => onproblem(a, 'request')} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} problem={bandcampFailed[a.key] ?? null} onplay={() => onplay(a)} onproblem={() => onproblem(a, 'play')} />{/if}
         </div>
       {/each}
     </div>
@@ -167,7 +174,7 @@
                   <Cover src={a.cover} />
                   <span class="tile-text"><b>{a.album}</b><small>{a.artist}</small></span>
                 </button>
-                <CoverStatus mark={status(a)} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => onplay(a)} />{/if}
+                <CoverStatus mark={status(a)} problem={problemOf(a)} onproblem={() => onproblem(a, 'request')} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} problem={bandcampFailed[a.key] ?? null} onplay={() => onplay(a)} onproblem={() => onproblem(a, 'play')} />{/if}
               </div>
             {/if}
           {/each}
@@ -211,7 +218,7 @@
             <b>{a.album}</b>
             <small>{a.year ?? ''}</small>
           </button>
-          <CoverStatus mark={status(a)} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => onplay(a)} />{/if}
+          <CoverStatus mark={status(a)} problem={problemOf(a)} onproblem={() => onproblem(a, 'request')} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} problem={bandcampFailed[a.key] ?? null} onplay={() => onplay(a)} onproblem={() => onproblem(a, 'play')} />{/if}
         </div>
       </div>
     </div>
@@ -230,7 +237,7 @@
             <b>{a.album}</b>
             <small>{a.artist}{a.year ? ` · ${a.year}` : ''}</small>
           </button>
-          <CoverStatus mark={status(a)} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => onplay(a)} />{/if}
+          <CoverStatus mark={status(a)} problem={problemOf(a)} onproblem={() => onproblem(a, 'request')} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} problem={bandcampFailed[a.key] ?? null} onplay={() => onplay(a)} onproblem={() => onproblem(a, 'play')} />{/if}
         </div>
       {/each}
     </div>

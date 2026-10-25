@@ -4,6 +4,7 @@
   // appear on (others', credited on a track), both newest first as covers, and their most played tracks (the panel's
   // rows, `top`), whose › shows all their tracks; then related artists to explore (lib/RelatedArtists, 0.9.2); last
   // their albums not in the library (0.9.5).
+  import ProblemSheet from './ProblemSheet.svelte';
   import type { Snippet } from 'svelte';
   import { tick } from 'svelte';
   import { getArtistAbout, getArtistMissing, getDiscoverArtist, type ListedAlbum, type MissingAlbum, type PhotoCredit } from './api';
@@ -13,7 +14,7 @@
   import RelatedArtists from './RelatedArtists.svelte';
   import ElsewhereAlbum from './ElsewhereAlbum.svelte';
   import CoverPlay from './CoverPlay.svelte';
-  import { bandcampOf, bandcampPlay, playOnBandcamp } from './bandcampFound.svelte';
+  import { bandcampOf, bandcampPlay, playOnBandcamp, bandcampFailed } from './bandcampFound.svelte';
   import SectionHead from './SectionHead.svelte';
   import { matchesSearch } from './pageView.svelte';
 
@@ -118,6 +119,8 @@
     const el = albumsEl;
     setTimeout(() => el.scrollIntoView({ block: 'start', behavior: 'smooth' }), 400);
   });
+  /** A play that failed, said in its sheet (its button a red "!"; the owner, 2026-10-26). */
+  let playProblem = $state<{ title: string; text: string; retry: () => void } | null>(null);
 </script>
 
 {#snippet grid(list: ListedAlbum[])}
@@ -181,13 +184,20 @@
             onopen={() => elsewhere?.open({ release_group: m.release_group, title: m.title, artist: m.artist, year: m.year, cover: m.cover, bandcamp: page })}
           />
           <!-- On Bandcamp: Play on its cover, as Discover's cards have it (beside the card's button, over its cover). -->
-          {#if page}<CoverPlay label={m.title} busy={bandcampPlay.key === m.release_group} onplay={() => playOnBandcamp(m.release_group, page, m.title)} />{/if}
+          {#if page}<CoverPlay
+              label={m.title}
+              busy={bandcampPlay.key === m.release_group}
+              problem={bandcampFailed[m.release_group] ?? null}
+              onplay={() => playOnBandcamp(m.release_group, page, m.title)}
+              onproblem={() => (playProblem = { title: `${m.title} did not play`, text: bandcampFailed[m.release_group], retry: () => playOnBandcamp(m.release_group, page, m.title) })}
+            />{/if}
         </li>
       {/each}
     </ul>
   </section>
 {/if}
 <ElsewhereAlbum bind:this={elsewhere} bind:finding bind:asked />
+{#if playProblem}{@const x = playProblem}<ProblemSheet title={x.title} text={x.text} retry={x.retry} onclose={() => (playProblem = null)} />{/if}
 {#if searching && !albumsShown.length && !appearsShown.length && !top && !(about?.bio && hit(about.bio))}
   <p class="empty">Nothing of {name}'s matches.</p>
 {:else if !albums.length && !appearsOn.length && !top}

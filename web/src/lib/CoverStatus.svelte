@@ -7,12 +7,32 @@
   import Icon from './Icon.svelte';
   import ProgressRing from './ProgressRing.svelte';
 
-  let { mark, small = false }: { mark: RequestMark | null | undefined; small?: boolean } = $props();
+  /** `problem`: what went wrong with it (not handed over to Lidarr): the mark a red "!", a tap on it `onproblem` (the
+   *  owner, 2026-10-26: not the message in the card's words). */
+  let {
+    mark,
+    small = false,
+    problem = null,
+    onproblem = null,
+  }: { mark: RequestMark | null | undefined; small?: boolean; problem?: string | null; onproblem?: (() => void) | null } = $props();
   const size = $derived(small ? 20 : 30);
   const done = $derived(mark?.state === 'downloading' ? (mark.done ?? 0) : null);
 </script>
 
-{#if mark}
+{#if problem}
+  <button
+    class="cover-status problem"
+    class:small
+    aria-label={`Something went wrong: ${problem}`}
+    title="Something went wrong"
+    style:width="{size}px"
+    style:height="{size}px"
+    onclick={(e) => {
+      e.stopPropagation();
+      onproblem?.();
+    }}><Icon name="bang" size={small ? 14 : 20} /></button
+  >
+{:else if mark}
   <span
     class="cover-status"
     class:small
@@ -38,6 +58,16 @@
     color: var(--accent-text);
     box-shadow: 0 1px 4px rgb(0 0 0 / 0.35);
     pointer-events: none;
+  }
+
+  /* What went wrong: the danger's colour, and it takes its own tap. */
+  .cover-status.problem {
+    padding: 0;
+    border: 0;
+    background: var(--danger);
+    color: #fff;
+    pointer-events: auto;
+    cursor: pointer;
   }
 
   .cover-status.small {

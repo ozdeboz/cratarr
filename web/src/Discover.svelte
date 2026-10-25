@@ -8,6 +8,7 @@
   // count, why, whether the artist is new, its listeners, its request); every action in its menu, opened by a tap. Looked up again once a day as a task, its progress in
   // the pill (ui-conventions, A page's work in its pill); Look again there asks again now. Without a service connected,
   // a line says what one would add.
+  import ProblemSheet from './lib/ProblemSheet.svelte';
   import { getDiscover, hideDiscover, notDiscover, refreshDiscover, wantDiscover, type AlbumRequest, type DiscoverAlbum, type DiscoverView } from './lib/api';
   import Cover from './lib/Cover.svelte';
   import CoverPlay from './lib/CoverPlay.svelte';
@@ -37,7 +38,7 @@
   import { switchOn } from './lib/listFilter.svelte';
   import { progressOf, tasks } from './lib/tasks.svelte';
   import { me } from './lib/me.svelte';
-  import { bandcampPlay, playOnBandcamp } from './lib/bandcampFound.svelte';
+  import { bandcampPlay, playOnBandcamp, bandcampFailed } from './lib/bandcampFound.svelte';
   import { toast } from './lib/toast.svelte';
 
   // Want: a request for everyone who may ask (decision 0070); an administrator's (or Auto-approve) is handed to Lidarr
@@ -182,7 +183,8 @@
     if (r.status === 'pending') return 'Requested';
     if (r.status === 'declined') return r.reason ? `Declined: ${r.reason}` : 'Declined';
     if (r.status === 'cancelled') return '';
-    if (r.fetched?.startsWith('Not handed over')) return r.fetched;
+    // Not handed over: its mark a red "!", the message in its sheet (the owner, 2026-10-26: it broke the card's layout).
+    if (r.fetched?.startsWith('Not handed over')) return '';
     if (a?.state === 'fetching') return `Being fetched · ${Math.round(a.done * 100)}%`;
     if (a?.state === 'in_incoming') return 'In Incoming';
     if (a?.state === 'partly_there') return `Partly there · ${a.tracks} of ${a.of}`;
@@ -194,6 +196,18 @@
   // Play (decision 0071): lib/bandcampFound's, one place for every cover that plays an album on Bandcamp.
   const previewing = $derived(bandcampPlay.key);
   const preview = (a: DiscoverAlbum) => a.bandcamp && playOnBandcamp(a.key, a.bandcamp, a.album);
+  // What went wrong with a card's request or its play (the owner, 2026-10-26): its round mark a red "!", the message
+  // in a sheet with Try again, never the card's words.
+  const problemOf = (a: DiscoverAlbum) => {
+    const f = view?.requests?.[a.key]?.fetched;
+    return f?.startsWith('Not handed over') ? f : null;
+  };
+  let problem = $state<{ title: string; text: string; retry: () => void } | null>(null);
+  function onproblem(a: DiscoverAlbum, what: 'request' | 'play') {
+    const text = what === 'play' ? bandcampFailed[a.key] : problemOf(a);
+    if (!text) return;
+    problem = what === 'play' ? { title: `${a.album} did not play`, text, retry: () => preview(a) } : { title: `${a.album} was not handed over`, text, retry: () => want(a) };
+  }
 
   /** The card's facts in one line: what it is, its tracks, its length. */
   function facts(a: DiscoverAlbum): string {
@@ -272,7 +286,7 @@
       {#if me.admin && !view.lidarr}
         <p class="note">Want needs Lidarr: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>
       {/if}
-      <DiscoverSections {sec} {facts} owned={(name) => ownedBy.get(name.toLowerCase()) ?? 0} onopen={tap} onmenu={(a) => (opened = a)} onplay={preview} {previewing} status={(a) => a.request ?? markOf(view?.requests?.[a.key])} />
+      <DiscoverSections {sec} {facts} owned={(name) => ownedBy.get(name.toLowerCase()) ?? 0} onopen={tap} onmenu={(a) => (opened = a)} onplay={preview} {previewing} {problemOf} {onproblem} status={(a) => a.request ?? markOf(view?.requests?.[a.key])} />
       {#if sec.rest.length}<SectionHead title="More for you" />{/if}
       {#each restBlocks as block, bi (`${restCols}:${bi}`)}
       {@const key = `${restCols}:${bi}`}
@@ -287,7 +301,7 @@
                  pills, which are its links (each through the Open/Copy sheet, as every link to another site). -->
             <button class="open" aria-label={`${a.album} by ${a.artist}`} onclick={() => tap(a)} use:longpress={() => (opened = a)}></button>
             <!-- Cratarr's own cover: a picture that does not load is its stand-in, and the suggestion stays. -->
-            <span class="cover"><Cover src={a.cover} /><CoverStatus mark={a.request ?? markOf(r)} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} onplay={() => preview(a)} />{/if}</span>
+            <span class="cover"><Cover src={a.cover} /><CoverStatus mark={a.request ?? markOf(r)} problem={problemOf(a)} onproblem={() => onproblem(a, 'request')} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} problem={bandcampFailed[a.key] ?? null} onplay={() => preview(a)} onproblem={() => onproblem(a, 'play')} />{/if}</span>
             <span class="text">
                 <b>{a.album}</b>
                 <span class="by">{a.artist}{a.year ? ` · ${a.year}` : ''}{#if a.new_artist}<span class="new">New to you</span>{/if}</span>
@@ -342,6 +356,7 @@
     </MenuCards>
   </MenuSheet>
 {/if}
+{#if problem}{@const x = problem}<ProblemSheet title={x.title} text={x.text} retry={x.retry} onclose={() => (problem = null)} />{/if}
 {#if link}{@const l = link}<LinkSheet url={l.url} name={l.name} onclose={() => (link = null)} />{/if}
 
 <style>

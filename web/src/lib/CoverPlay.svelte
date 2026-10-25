@@ -4,22 +4,36 @@
   // button (a button cannot hold another), over it. What holds it is positioned.
   import Icon from './Icon.svelte';
 
-  let { label, busy = false, onplay }: { label: string; busy?: boolean; onplay: () => void } = $props();
+  /** `problem`: why it last failed to play: a red "!" in its place, a tap on it `onproblem` (the owner, 2026-10-26). */
+  let {
+    label,
+    busy = false,
+    problem = null,
+    onplay,
+    onproblem = null,
+  }: { label: string; busy?: boolean; problem?: string | null; onplay: () => void; onproblem?: (() => void) | null } = $props();
 </script>
 
 <button
   class="cover-play"
-  aria-label={`Play ${label} on Bandcamp`}
-  title="Play on Bandcamp"
+  class:problem={!!problem}
+  aria-label={problem ? `${label} did not play: ${problem}` : `Play ${label} on Bandcamp`}
+  title={problem ? 'It did not play' : 'Play on Bandcamp'}
   disabled={busy}
   aria-busy={busy}
   onclick={(e) => {
     e.stopPropagation();
-    onplay();
-  }}><Icon name="play" size={17} /></button
+    if (problem && onproblem) onproblem();
+    else onplay();
+  }}><Icon name={problem ? 'bang' : 'play'} size={problem ? 20 : 17} /></button
 >
 
 <style>
+  .cover-play.problem {
+    background: var(--danger) !important;
+    color: #fff !important;
+  }
+
   .cover-play {
     position: absolute;
     top: 6px;

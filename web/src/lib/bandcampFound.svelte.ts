@@ -16,6 +16,8 @@ export function rememberBandcamp(release_group: string, page: string) {
 
 /** What plays (its key) while its tracks are asked for: its cover's button is busy. */
 export const bandcampPlay = $state({ key: null as string | null });
+/** Why a Bandcamp album last failed to play, by its key (its play button a red "!"); gone once it plays. */
+export const bandcampFailed = $state<Record<string, string>>({});
 /** Heard in Cratarr's own player, here or on the player this page drives, as a queue of its own; never a play. Not
  *  on the server's own outputs (they play the library's files). */
 export async function playOnBandcamp(key: string, page: string, title: string) {
@@ -28,8 +30,9 @@ export async function playOnBandcamp(key: string, page: string, title: string) {
       0,
       p.album || title,
     );
+    delete bandcampFailed[key];
   } catch (e) {
-    toast.fail(e, 'Could not play it');
+    bandcampFailed[key] = e instanceof Error && e.message ? e.message : 'It could not be played.';
   } finally {
     bandcampPlay.key = null;
   }
