@@ -97,7 +97,15 @@
    *  along the top (`phone`: under 1024 px; the owner, 2026-10-25). */
   const PANEL_PAGES: Page[] = [REQUESTS, DOWNLOADS, INSIGHTS, HEALTH, SETTINGS];
   /** The kind a page already shows, left out of the global results under it (decision 0072). */
-  const PAGE_KINDS: Record<string, string[]> = { library: ['album'], playlists: ['playlist'], crates: ['crate', 'genre'], settings: ['setting'] };
+  const PAGE_KINDS: Record<string, string[]> = {
+    library: ['album'],
+    playlists: ['playlist'],
+    crates: ['crate', 'genre'],
+    settings: ['setting'],
+    requests: ['page:#/requests'],
+    downloads: ['page:#/downloads'],
+    insights: ['page:#/insights'],
+  };
   const panelPage = $derived(PANEL_PAGES.find((p) => p.id === page) ?? null);
   // Local mode's (decision 0052): the device's own music, and the menu shows only these (and Settings).
   const LOCAL_ALBUMS: Page = { id: 'local-albums', href: '#/local/albums', label: 'Albums', icon: 'disc' };
@@ -336,6 +344,40 @@
   $effect(() => {
     void page;
     pageView.query = '';
+  });
+  // Where a page was scrolled to, kept with its step of the history: back there brings it back; any other way there
+  // (its link, Home's button) starts at its top (the owner, 2026-10-25).
+  let popped = false;
+  $effect(() => {
+    let t = 0;
+    const keep = () => {
+      clearTimeout(t);
+      t = window.setTimeout(() => history.replaceState({ ...(history.state ?? {}), scroll: Math.round(scrollY) }, ''), 150);
+    };
+    const pop = () => (popped = true);
+    addEventListener('scroll', keep, { passive: true });
+    addEventListener('popstate', pop);
+    return () => {
+      clearTimeout(t);
+      removeEventListener('scroll', keep);
+      removeEventListener('popstate', pop);
+    };
+  });
+  $effect(() => {
+    void page;
+    const back = popped;
+    popped = false;
+    const y = back ? Number(history.state?.scroll ?? 0) : 0;
+    if (!y) return void window.scrollTo(0, 0);
+    // Its content comes in a moment: tried again until it is long enough (four seconds at most: Home's sections load).
+    let n = 0;
+    let t = 0;
+    const go = () => {
+      window.scrollTo(0, y);
+      if (Math.abs(scrollY - y) > 2 && n++ < 40) t = window.setTimeout(go, 100);
+    };
+    requestAnimationFrame(go);
+    return () => clearTimeout(t);
   });
   // The page's device button gives way to the panel's (the owner, 2026-10-16): a list beside the page has its own.
   const panelDevice = $derived(sidebar && panel.viewed !== null && !playerInPanel && !settingsShown && !healthShown && !insightsShown && !requestsShown && !downloadsShown);

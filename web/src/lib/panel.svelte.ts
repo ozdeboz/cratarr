@@ -236,6 +236,8 @@ export const openedHere = () => panel.viewed !== null && panel.viewed !== panel.
 export function goHome() {
   panel.playerTop = false;
   location.hash = '#/home';
+  // Home's button starts it at its top, from Home itself too (the owner, 2026-10-25); back brings back where it was.
+  window.scrollTo(0, 0);
 }
 
 export function closePlaylist(then?: () => void) {
