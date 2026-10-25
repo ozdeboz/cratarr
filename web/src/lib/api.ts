@@ -1,4 +1,5 @@
 import { track } from './progress.svelte';
+import type { SearchResult } from './search';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached } from './reach.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
@@ -1695,6 +1696,17 @@ export type AlbumView = {
   links?: { name: string; url: string }[];
   listeners?: number;
 };
+/** One search's answer from the server (decision 0072, 0.9.3): per kind, and the kinds merged for Top results. Each
+ *  item in lib/search's shape; a track's subject is its album's, the track itself in `track`. */
+export type SearchKind = 'album' | 'artist' | 'track' | 'genre' | 'playlist' | 'crate';
+export type ServerSearch = {
+  q: string;
+  groups: Partial<Record<SearchKind, { total: number; items: (SearchResult & { track?: string })[] }>>;
+  top: (SearchResult & { track?: string })[];
+};
+/** Searches the server: `kinds` only (all where none), `limit` a kind (20; 100 at most). */
+export const search = (q: string, kinds: SearchKind[] = [], limit = 20) =>
+  quietly<ServerSearch>(`/api/search?${new URLSearchParams({ q, ...(kinds.length ? { kinds: kinds.join(',') } : {}), limit: String(limit) })}`);
 export const albumView = (source: string, album: string) =>
   quietly<AlbumView>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`);
 /** An artist as their panel shows them (decided 2026-10-16, as Symfonium's), by name as the albums credit them: their
