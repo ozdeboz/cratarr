@@ -1349,6 +1349,9 @@ pub struct Missing {
     /// Its page on Bandcamp where an open of it found one lately (0.9.5: its cover's play button, as Discover's).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bandcamp: Option<String>,
+    /// An open request's mark (0.9.5): wanted, or coming and how far; none without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<super::requests::Mark>,
 }
 
 /// An artist's albums and EPs the library has none of, newest first: their discography as Discover keeps it (read now
@@ -1388,6 +1391,7 @@ pub async fn missing_albums(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::ca
             .map(|g| Missing {
                 cover: format!("https://coverartarchive.org/release-group/{}/front-250", g.id),
                 bandcamp: pages.get(&g.id).cloned(),
+                request: None,
                 release_group: g.id,
                 title: g.title,
                 year: g.year,
@@ -1447,6 +1451,9 @@ pub struct MissingOf {
     /// Its page on Bandcamp where an open of it found one lately (0.9.5: its cover's play button, as Discover's).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bandcamp: Option<String>,
+    /// An open request's mark (0.9.5): wanted, or coming and how far; none without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<super::requests::Mark>,
 }
 
 /// Every missing album of the library's artists whose discography Discover keeps (shared by every account), newest
@@ -1472,6 +1479,7 @@ pub async fn all_missing(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catal
                 out.push(MissingOf {
                     cover: format!("https://coverartarchive.org/release-group/{}/front-250", g.id),
                     bandcamp: pages.get(&g.id).cloned(),
+                    request: None,
                     release_group: g.id,
                     title: g.title,
                     artist: artist.clone(),
