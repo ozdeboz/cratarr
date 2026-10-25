@@ -1019,6 +1019,21 @@ impl PlayOn {
     }
 }
 
+/// Whether an account's settings arm Autoplay for a new queue, and with which mode and albums (0.9.5): `autoplay`'s
+/// `arm` (absent: armed), its `mode` and `albums` as defaults; an old `autoplay: null` was Autoplay off: not armed.
+fn armed(settings: &serde_json::Value) -> Option<(super::radio::AutoMode, bool)> {
+    let a = match settings.get("autoplay") {
+        Some(serde_json::Value::Null) => return None,
+        Some(a) => a.clone(),
+        None => serde_json::json!({}),
+    };
+    if a["arm"].as_bool() == Some(false) {
+        return None;
+    }
+    let mode = serde_json::from_value(a["mode"].clone()).unwrap_or_default();
+    Some((mode, a["albums"].as_bool().unwrap_or(false)))
+}
+
 /// Whether `e` is `user`'s (`first`: the first administrator's name).
 fn belongs_to(e: &Entry, user: &str, first: Option<&str>) -> bool {
     e.owner.as_deref().or(first) == Some(user)
@@ -1828,6 +1843,33 @@ impl PlayOn {
     /// As [`PlayOn::command`], answered with the command that undoes it: a `restore` for a shuffle or a clear that changed
     /// what was to come (the order before, by entry), else none.
     pub async fn answer(&self, name: &str, command: Command) -> Result<Option<Command>, ToggleError> {
+        // A new queue (not one taken up again, not a radio): Autoplay armed as its account says (0.9.5).
+        let new_queue = matches!(&command, Command::Play { queue_id: None, from, .. } if !from.radio);
+        let answer = self.answer_now(name, command).await?;
+        if new_queue {
+            self.arm(name).await;
+        }
+        Ok(answer)
+    }
+
+    /// Autoplay armed for a new queue (0.9.5, the owner): off, and the account's `settings.autoplay` arming it (`arm`
+    /// absent: armed; an old `autoplay: null`: not), it is turned on with the account's default mode and albums. Never
+    /// turned off; a queue moved or taken up again keeps its own.
+    async fn arm(&self, name: &str) {
+        let leader = self.leader_of(name).unwrap_or_else(|| name.to_string());
+        if !self.entries().get(&leader).is_some_and(|e| e.queue.autoplay.is_none()) {
+            return;
+        }
+        let Some(user) = self.account_of(&leader) else { return };
+        let Some(Ok((_, settings))) = crate::serve::instance().map(|s| s.userdata.settings_of(&user)) else { return };
+        let Some((mode, albums)) = armed(&settings) else { return };
+        let auto = Command::Autoplay { mode: AutoplayMode::of(Some(mode)), albums: Some(albums), restart: None, seed: None, within: None };
+        if let Err(e) = Box::pin(self.command(&leader, auto)).await {
+            tracing::info!(player = %leader, "Autoplay not armed: {e}");
+        }
+    }
+
+    async fn answer_now(&self, name: &str, command: Command) -> Result<Option<Command>, ToggleError> {
         // One's own players only, and only with one's own (decision 0051).
         self.reached(name)?;
         if let Command::Join { to } | Command::Handover { to } = &command {
@@ -3564,4 +3606,15 @@ mod tests {
         assert!(valid_name("a\nb").is_err());
         assert!(valid_name(&"x".repeat(65)).is_err());
     }
+
+    #[test]
+    fn a_new_queue_arms_autoplay_as_the_account_says() {
+        use super::super::radio::AutoMode;
+        assert_eq!(armed(&serde_json::json!({})), Some((AutoMode::Similar, false)), "nothing said: armed, the default mode");
+        assert_eq!(armed(&serde_json::json!({ "autoplay": { "mode": "era", "albums": true } })), Some((AutoMode::Era, true)));
+        assert_eq!(armed(&serde_json::json!({ "autoplay": { "mode": "artist", "arm": false } })), None);
+        assert_eq!(armed(&serde_json::json!({ "autoplay": null })), None, "an old Autoplay off");
+        assert_eq!(armed(&serde_json::json!({ "autoplay": { "mode": "nonsense" } })), Some((AutoMode::Similar, false)));
+    }
+
 }
