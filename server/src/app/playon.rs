@@ -2172,6 +2172,9 @@ impl PlayOn {
             skip_favourites,
             // Its account's "Similar by": a start from Home Assistant or another of Cratarr's own has no listener.
             similar_by: self.account_of(name).and_then(|u| super::radio::similar_by_of(&u)),
+            // Its account's More music choice (0.9.5), as for its "Similar by".
+            account: self.account_of(name),
+            folders: None,
         };
         let first = super::radio::next(ask).await?;
         if first.is_empty() {
