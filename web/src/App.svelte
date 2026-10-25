@@ -45,7 +45,7 @@
   import { installLabels } from './lib/labels.svelte';
   import { hasView, pageView } from './lib/pageView.svelte';
   import { art, playing } from './lib/remote.svelte';
-  import { fade, fly } from 'svelte/transition';
+  import { fade, fly, slide } from 'svelte/transition';
   import { linear, quadInOut } from 'svelte/easing';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './lib/motion';
   import { glass } from './lib/glass.svelte';
@@ -924,6 +924,26 @@
       }}><Icon name="play" size={20} />Tap to play</button
     >
   {/if}
+  {#snippet morePages()}
+    <!-- More (the owner, 2026-10-26): the bar itself grows, full width, and the other pages are its tabs there, in
+         columns under (along the bottom: over) the bar's own, as they are drawn. -->
+    {#if moreOpen}
+      <div
+        class="more-tabs"
+        id="more-pages"
+        role="group"
+        aria-label="More pages"
+        style:--cols={bar.length + 1}
+        transition:slide|global={{ duration: reducedMotion() ? 0 : SHEET_IN, easing: decelerate }}
+      >
+        {#each overflow as p (p.id)}
+          <a href={p.href} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => barTap(e, p.id)}
+            ><span class="icon"><Icon name={p.icon} />{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{p.label}</span></a
+          >
+        {/each}
+      </div>
+    {/if}
+  {/snippet}
   {#snippet leadPart()}
       {#if handed}
         <span class="lead" class:title-away={titleAway} bind:this={leadEl} in:fade={{ duration: leadFade }}>{@render handed.left()}</span>
@@ -976,22 +996,8 @@
   {#if about.open}<AboutSheet onclose={() => (about.open = false)} />{/if}
 
   {#if moreOpen}
-    <!-- As every sheet comes and goes (lib/MenuSheet's, from the top; the owner, 2026-10-25: it only appeared). -->
+    <!-- The page under the bar grown with the other pages dims; a tap there closes it. -->
     <button class="scrim" aria-label="Close menu" onclick={() => (moreOpen = false)} transition:fade|global={{ duration: SHEET_OUT }}></button>
-    <div
-      class="sheet"
-      class:from-bottom={navBottom}
-      id="more-sheet"
-      role="dialog"
-      aria-label="More pages"
-      onclickcapture={collapse}
-      in:fly|global={{ y: navBottom ? 400 : -400, duration: SHEET_IN, easing: decelerate }}
-      out:fly|global={{ y: navBottom ? 400 : -400, duration: SHEET_OUT, easing: decelerate }}
-    >
-      {#each overflow as p (p.id)}
-        <a href={p.href} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => barTap(e, p.id)}><Icon name={p.icon} />{p.label}{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
-      {/each}
-    </div>
   {/if}
 
   {#if visuals.open && !visualsBeside}
@@ -1006,6 +1012,7 @@
     <!-- The mode switcher's slim row over the tabs (decision 0052, mock C), with a local folder on; under them when the bar
          is along the bottom (the owner, 2026-10-25), the tabs nearest the page either way. -->
     {#if switchInBar && !navBottom}<div class="slim"><ModeSwitcher slim {connection} /></div>{/if}
+    {#if navBottom}{@render morePages()}{/if}
     <div class="tabs">
     {#each bar as p (p.id)}
       <a href={p.href} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => barTap(e, p.id)}
@@ -1016,11 +1023,12 @@
       <button
         class:active={overflowActive}
         aria-expanded={moreOpen}
-        aria-controls="more-sheet"
+        aria-controls="more-pages"
         onclick={() => (moreOpen = !moreOpen)}><Icon name="more" /><span>More</span></button
       >
     {/if}
     </div>
+    {#if !navBottom}{@render morePages()}{/if}
     {#if switchInBar && navBottom}<div class="slim"><ModeSwitcher slim up {connection} /></div>{/if}
   </nav>
 </div>
@@ -1373,14 +1381,32 @@
       bottom 200ms ease;
   }
 
-  /* The More sheet from the bottom, with the bar there. */
-  .sheet.from-bottom {
-    inset: auto 8px calc(var(--nav-b, 0px) + env(safe-area-inset-bottom) + 8px);
-  }
-
   .bar .tabs {
     display: flex;
     justify-content: space-around;
+  }
+
+  /* The other pages, in the bar's columns: each as wide as a tab, under the bar's own (over them along the bottom),
+     a line between. */
+  .bar .more-tabs {
+    display: grid;
+    grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+    justify-items: center;
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px solid var(--border);
+  }
+
+  .bar.bottom .more-tabs {
+    order: -1;
+    margin: 0 0 4px;
+    padding: 0 0 4px;
+    border-top: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .bar .more-tabs a {
+    width: 100%;
   }
 
   .bar .slim {
@@ -1431,7 +1457,6 @@
     text-align: center;
   }
 
-  .sheet .count,
   .sidebar .count {
     margin-left: auto;
   }
@@ -1456,21 +1481,6 @@
     border: 0;
   }
 
-  .sheet {
-    position: fixed;
-    inset: calc(var(--bar-top, 0px) + env(safe-area-inset-top) + 8px) 8px auto;
-    /* Over the floating controls and the mini-player (22). */
-    z-index: 23;
-    display: grid;
-    gap: 2px;
-    padding: 8px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    box-shadow: 0 10px 30px rgb(0 0 0 / 0.35);
-  }
-
-  .sheet a,
   .sidebar nav a,
   .foot a {
     display: flex;
@@ -1483,13 +1493,11 @@
     text-decoration: none;
   }
 
-  .sheet a:hover,
   .sidebar nav a:hover,
   .foot a:hover {
     background: color-mix(in srgb, var(--text) 7%, transparent);
   }
 
-  .sheet a[aria-current='page'],
   .sidebar nav a[aria-current='page'],
   .foot a[aria-current='page'] {
     background: var(--accent);
@@ -1553,8 +1561,7 @@
     }
 
     .bar,
-    .scrim,
-    .sheet {
+    .scrim {
       display: none;
     }
   }
