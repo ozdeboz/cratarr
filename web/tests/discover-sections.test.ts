@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 
 const { sections, seedsOf, playableFirst } = await import('../src/lib/discoverSections.ts');
 
-const s = (key: string, artist: string, why: string[], more: Partial<{ year: number | null; new_artist: boolean; bandcamp: string }> = {}) => ({
+const s = (key: string, artist: string, why: string[], more: Partial<{ year: number | null; new_artist: boolean; bandcamp: string; artist_photo: boolean }> = {}) => ({
   key,
   album: key,
   artist,
@@ -13,6 +13,7 @@ const s = (key: string, artist: string, why: string[], more: Partial<{ year: num
   new_artist: more.new_artist ?? false,
   why,
   bandcamp: more.bandcamp,
+  artist_photo: more.artist_photo,
 });
 
 test('the reasons name their seeds, and only those', () => {
@@ -41,7 +42,8 @@ test('each suggestion shows once, in the first section that takes it', () => {
     s('like6', 'Like 6', ['Like Gavin Bryars and Simon Fisher Turner'], { new_artist: true }),
     s('like7', 'Like 7', ['Like Gavin Bryars and Simon Fisher Turner'], { new_artist: true }),
     s('like8', 'Like 8', ['Like Gavin Bryars and Simon Fisher Turner'], { new_artist: true }),
-    s('new1', 'Foxygen', ['Recommended by ListenBrainz'], { new_artist: true }),
+    s('new1', 'Foxygen', ['Recommended by ListenBrainz'], { new_artist: true, artist_photo: true }),
+    s('new2', 'Unpictured', ['Recommended by ListenBrainz'], { new_artist: true }),
     s('fresh1', 'Air', ['New from Air'], { year: 2026 }),
     s('weekly1', 'Björk', ['In your Weekly Exploration']),
   ];
@@ -53,11 +55,11 @@ test('each suggestion shows once, in the first section that takes it', () => {
   // Around: one group, whichever order its seeds were named in.
   assert.equal(out.around.length, 1);
   assert.deepEqual(out.around[0].items.map((x) => x.key).sort(), ['like1', 'like2', 'like3', 'like4', 'like5', 'like6', 'like7', 'like8']);
-  // New to you takes the new artists the groups did not.
+  // New to you takes the new artists with a picture the groups did not; one without stays among the cards.
   assert.deepEqual(out.newArtists.map((n) => n.artist), ['Foxygen']);
   assert.deepEqual(out.fresh.map((x) => x.key), ['fresh1']);
   assert.deepEqual(out.weekly.map((x) => x.key), ['weekly1']);
-  assert.deepEqual(out.rest.map((x) => x.key), ['rec']);
+  assert.deepEqual(out.rest.map((x) => x.key), ['rec', 'new2']);
   // Once each: every key in exactly one section.
   const shown = [out.pick!.key, ...out.gaps.map((x) => x.key), ...out.around.flatMap((g) => g.items.map((x) => x.key)), ...out.newArtists.flatMap((n) => n.items.map((x) => x.key)), ...out.fresh.map((x) => x.key), ...out.weekly.map((x) => x.key), ...out.rest.map((x) => x.key)];
   assert.deepEqual([...shown].sort(), all.map((x) => x.key).sort());

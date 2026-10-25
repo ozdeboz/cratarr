@@ -1,13 +1,14 @@
 <script lang="ts">
   // Discover's sections (decision 0069, amended 2026-10-25: "a more dynamic page", each section the form its content
   // suits, inspired by Home's variety, not a copy of it): the pick of the day as a spread; the discography gaps of the
-  // artists most played, as a shelf; the masonry around the artists played; one new artist
-  // in the light, the others as chips; the fresh releases as a row; the Weekly Exploration as the list it is. What
+  // artists most played, as a shelf; the masonry around the artists played; the new artists' pictures as a flow;
+  // the fresh releases as a row; the Weekly Exploration as the list it is. What
   // plays on Bandcamp comes first everywhere (lib/discoverSections). A tap on a suggestion opens it (`onopen`), a long-press its
   // menu (`onmenu`), as Home's albums; Play hears it on Bandcamp in Cratarr's own player (`onplay`).
   import { untrack } from 'svelte';
   import { discoverArtistPhotoUrl, getDiscoverArtist, type DiscoverAlbum } from './api';
   import Cover from './Cover.svelte';
+  import CoverFlow from './CoverFlow.svelte';
   import type { Sections } from './discoverSections';
   import type { Tile } from './masonry';
   import Icon from './Icon.svelte';
@@ -35,32 +36,19 @@
     previewing?: string | null;
   } = $props();
 
-  // New to you: the artist in the light, the first of the new artists with a picture (the owner, 2026-10-25: one
-  // without is never featured; the pictures and descriptions come with the sync); a few lines about them
-  // (TheAudioDB's, as the sync kept it); none with a picture: the chips alone.
-  // The artist in the light: the one tapped among the chips (the owner, 2026-10-25: a chip opens the artist here, not
-  // their album in the panel), else the first with a picture.
-  let chosen = $state<string | null>(null);
-  const lit = $derived(
-    sec.newArtists.find((n) => n.artist === chosen) ?? sec.newArtists.find((n) => n.items.some((a) => a.artist_photo)) ?? null,
-  );
-  // A picture that does not come: the light without it.
-  let unpictured = $state<string[]>([]);
+  // New to you's front artist (the flow's), and their biography (TheAudioDB's, as the sync kept it; the owner,
+  // 2026-10-25: an artist without a picture is never featured).
+  let front = $state(0);
+  const frontArtist = $derived(sec.newArtists[Math.min(front, Math.max(0, sec.newArtists.length - 1))]?.artist ?? null);
   let bio = $state<{ name: string; text: string | null } | null>(null);
   $effect(() => {
-    const name = lit?.artist;
+    const name = frontArtist;
     if (!name || bio?.name === name) return;
     getDiscoverArtist(name).then(
-      (a) => (bio = { name, text: a.bio }),
+      (x) => (bio = { name, text: x.bio }),
       () => (bio = { name, text: null }),
     );
   });
-  const others = $derived(sec.newArtists.filter((n) => n.artist !== lit?.artist));
-  /** A biography's first lines: at most a few sentences. */
-  const short = (bio: string) => {
-    const s = bio.split(/(?<=[.!?])\s+/).slice(0, 3).join(' ');
-    return s.length > 420 ? `${s.slice(0, 417)}…` : s;
-  };
 
   // The gaps whose covers came (Cover's onfail: none to show, so not shown).
   let coverless = $state<string[]>([]);
@@ -153,29 +141,35 @@
   </section>
 {/if}
 
-<!-- New to you: one new artist in the light, the others as chips. -->
-{#if lit}
-  {@const a = lit.items[0]}
-  <section class="spot" aria-label="New to you">
-    {#if !unpictured.includes(lit.artist)}
-      <span class="spot-photo"><img src={discoverArtistPhotoUrl(lit.artist)} alt="" onerror={() => (unpictured = [...unpictured, lit.artist])} /></span>
-    {/if}
-    <div class="spot-text">
-      <span class="kicker">New to you</span>
-      <span class="spot-name">{lit.artist}</span>
-      {#if bio?.name === lit.artist && bio.text}<p>{short(bio.text)}</p>{/if}
-      <button class="spot-album" onclick={() => onopen(a)} use:longpress={() => onmenu(a)}
-        ><span class="art small"><Cover src={a.cover} /></span><span><b>{a.album}</b><small>{a.why[0] ?? ''}</small></span></button
-      >
-      {#if others.length}
-        <span class="chips">{#each others as n (n.artist)}<button class="chip" onclick={() => (chosen = n.artist)} use:longpress={() => onmenu(n.items[0])}>{n.artist}</button>{/each}</span>
-      {/if}
-    </div>
-  </section>
-{:else if others.length}
+<!-- New to you (the owner, 2026-10-25): the new artists' pictures as a flow (Home's, lib/CoverFlow), the front one's
+     name and how many albums they have released under it; below, their biography with their album as a card beside it. -->
+{#if sec.newArtists.length}
+  {@const n = sec.newArtists[Math.min(front, sec.newArtists.length - 1)]}
+  {@const a = n.items[0]}
   <section aria-label="New to you">
     <SectionHead title="New to you" />
-    <span class="chips">{#each others as n (n.artist)}<button class="chip" onclick={() => (chosen = n.artist)} use:longpress={() => onmenu(n.items[0])}>{n.artist}</button>{/each}</span>
+    <div class="artist-flow">
+      <CoverFlow
+        covers={sec.newArtists.map((x) => discoverArtistPhotoUrl(x.artist))}
+        top={0}
+        foot={40}
+        onfront={(i) => (front = i)}
+        onopen={(i) => onopen(sec.newArtists[i].items[0])}
+        onmenu={(i) => onmenu(sec.newArtists[i].items[0])}
+      />
+    </div>
+    <div class="artist-caption">
+      <span class="title">{n.artist}</span>
+      {#if a.artist_albums}<span class="by">{a.artist_albums} {a.artist_albums === 1 ? 'album' : 'albums'}</span>{/if}
+    </div>
+    <div class="artist-about">
+      <button class="album" onclick={() => onopen(a)} use:longpress={() => onmenu(a)}>
+        <span class="art big"><Cover src={a.cover} /></span>
+        <b>{a.album}</b>
+        <small>{a.year ?? ''}</small>
+      </button>
+      {#if bio?.name === n.artist && bio.text}<p>{bio.text}</p>{/if}
+    </div>
   </section>
 {/if}
 
@@ -228,11 +222,6 @@
     overflow: hidden;
     border-radius: 6px;
     background: color-mix(in srgb, var(--text) 8%, transparent);
-  }
-
-  .art.small {
-    width: 52px;
-    height: 52px;
   }
 
   .art.tiny {
@@ -531,82 +520,54 @@
   }
 
 
-  /* New to you: one artist in the light. */
-  .spot {
+  /* New to you: the pictures as a flow (as Home's), the front one's name under it, then their biography beside their
+     album's card. */
+  .artist-flow {
+    position: relative;
+    height: calc(clamp(180px, 26vw, 260px) + 40px);
+  }
+
+  .artist-caption {
     display: flex;
-    flex-wrap: wrap;
-    gap: 24px;
-    align-items: flex-start;
-  }
-
-  .spot-photo {
-    display: grid;
-    flex: none;
-    place-items: center;
-    width: 160px;
-    height: 160px;
-    overflow: hidden;
-    border-radius: 50%;
-    background: color-mix(in srgb, var(--text) 8%, transparent);
-    color: var(--muted);
-  }
-
-  .spot-photo img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  .spot-text {
-    display: flex;
-    flex: 1 1 360px;
     flex-direction: column;
-    gap: 10px;
-    min-width: 0;
-  }
-
-  .spot-name {
-    font-size: 30px;
-    font-weight: 700;
-  }
-
-  .spot-text p {
-    margin: 0;
-    color: var(--text);
-    font-size: 15px;
-    line-height: 1.55;
-  }
-
-  .spot-album {
-    display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 6px;
-    border: 0;
-    border-radius: 10px;
-    background: color-mix(in srgb, var(--text) 5%, transparent);
-    text-align: left;
-    cursor: pointer;
+    margin-top: -24px;
+    text-align: center;
   }
 
-  .spot-album span:last-child {
-    display: grid;
+  .artist-caption .title,
+  .artist-caption .by {
+    height: 1.4em;
+    max-width: 100%;
+    overflow: hidden;
+    line-height: 1.4;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .chips {
+  .artist-caption .title {
+    font-weight: 500;
+  }
+
+  .artist-caption .by {
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
+  .artist-about {
     display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
+    gap: 20px;
+    align-items: flex-start;
+    margin-top: 18px;
   }
 
-  .chip {
-    height: 34px;
-    padding: 0 14px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: none;
-    font-size: 13px;
-    cursor: pointer;
+  .artist-about p {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.55;
   }
 
   /* The fresh releases: a row. */
