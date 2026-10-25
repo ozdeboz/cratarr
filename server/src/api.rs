@@ -3214,7 +3214,7 @@ async fn want_album(State(app): State<Arc<App>>, Json(b): Json<WantAlbum>) -> Re
 /// (a MusicBrainz call or two the first time, kept for every account).
 async fn artist_missing(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) -> Result<Json<serde_json::Value>, ApiError> {
     let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let mut albums = crate::app::discover::missing_albums(&serve, app.library.catalogue(), q.name.trim()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let mut albums = crate::app::discover::missing_albums(&serve, app.library.catalogue(), q.name.trim(), q.mbid.as_deref(), q.release_group.as_deref()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     if let Some(marks) = request_marks(&app, &serve).await {
         for a in &mut albums {
             a.request = crate::app::requests::mark_of(&marks, Some(&a.release_group), q.name.trim(), &a.title);
@@ -3998,6 +3998,11 @@ async fn library_find(State(app): State<Arc<App>>, Query(q): Query<FindQuery>) -
 #[derive(Deserialize)]
 struct AboutQuery {
     name: String,
+    /// The artist's MusicBrainz id, or a release group of theirs, where known (0.9.6: an artist not in the library).
+    #[serde(default)]
+    mbid: Option<String>,
+    #[serde(default)]
+    release_group: Option<String>,
 }
 
 /// About an artist, for their page (the owner, 2026-10-23): TheAudioDB's description and whether there is a photo
