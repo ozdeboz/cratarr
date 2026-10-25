@@ -15,7 +15,7 @@
   import BandSheet from './BandSheet.svelte';
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
-  import { prefs, type SwipeDown, type SwipeUp } from './prefs.svelte';
+  import { prefs, SEEK_STEP, type CoverTouch, type SwipeDown, type SwipeSide, type SwipeUp } from './prefs.svelte';
   import { art, clockText, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import Waveform from './Waveform.svelte';
   import WaveLens from './WaveLens.svelte';
@@ -345,10 +345,10 @@
       from = null;
       if (onCover && isCircle(path)) {
         swiped = true;
-        overview = !overview && np?.source !== 'device';
+        touch(prefs.playerSwipes.circle);
       } else if (onCover && Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) {
         swiped = true;
-        send(dx < 0 ? 'next' : 'previous');
+        side(dx < 0 ? prefs.playerSwipes.left : prefs.playerSwipes.right);
       } else if (dy > 80 && dy > 2 * Math.abs(dx)) {
         swiped = true;
         swipe(left ? prefs.playerSwipes.downLeft : prefs.playerSwipes.downRight);
@@ -368,6 +368,19 @@
     };
   });
 
+  /** What a swipe left or right on the cover was chosen to do: a track on or back, or a seek. */
+  function side(what: SwipeSide) {
+    if (what === 'next' || what === 'previous') return send(what);
+    const at = position();
+    seekTo(Math.max(0, what === 'forward' ? Math.min((dur ?? at) - 1, at + SEEK_STEP) : at - SEEK_STEP));
+  }
+  /** What a tap, a double tap or a circle on the cover was chosen to do. */
+  function touch(what: CoverTouch) {
+    if (what === 'playPause') send('play-pause');
+    else if (what === 'favourite') toggleFavorite();
+    else if (what === 'album') toAlbum();
+    else overview = !overview && np?.source !== 'device';
+  }
   /** What a swipe up or down was chosen to do (Settings › Player). */
   function swipe(what: SwipeUp | SwipeDown) {
     if (what === 'close') return close();
@@ -394,12 +407,12 @@
     if (tapTimer) {
       clearTimeout(tapTimer);
       tapTimer = null;
-      toggleFavorite();
+      touch(prefs.playerSwipes.doubleTap);
       return;
     }
     tapTimer = setTimeout(() => {
       tapTimer = null;
-      send('play-pause');
+      touch(prefs.playerSwipes.tap);
     }, DOUBLE_TAP_MS);
   }
 

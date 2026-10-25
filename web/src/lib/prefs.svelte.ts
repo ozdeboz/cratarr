@@ -268,7 +268,46 @@ export type ListFilter = { conditions: FilterCondition[]; on: string[] };
 /** Up: the queue, Add to playlist, the track's menu; down: the player closing, the visuals. */
 export type SwipeUp = 'queue' | 'playlists' | 'menu';
 export type SwipeDown = 'close' | 'visuals';
-export type PlayerSwipes = { upLeft: SwipeUp; upRight: SwipeUp; downLeft: SwipeDown; downRight: SwipeDown };
+/** Left and right (on the cover): a track on or back, or a seek. */
+export type SwipeSide = 'next' | 'previous' | 'forward' | 'back';
+/** A tap, a double tap, a circle (on the cover). */
+export type CoverTouch = 'playPause' | 'favourite' | 'album' | 'details';
+export type PlayerSwipes = {
+  upLeft: SwipeUp;
+  upRight: SwipeUp;
+  downLeft: SwipeDown;
+  downRight: SwipeDown;
+  left: SwipeSide;
+  right: SwipeSide;
+  tap: CoverTouch;
+  doubleTap: CoverTouch;
+  circle: CoverTouch;
+};
+/** A seek's step (s). */
+export const SEEK_STEP = 10;
+export const SWIPES_SIDE: { value: SwipeSide; label: string }[] = [
+  { value: 'next', label: 'Next track' },
+  { value: 'previous', label: 'Previous track' },
+  { value: 'forward', label: `Forward ${SEEK_STEP} s` },
+  { value: 'back', label: `Back ${SEEK_STEP} s` },
+];
+export const COVER_TOUCHES: { value: CoverTouch; label: string }[] = [
+  { value: 'playPause', label: 'Play or pause' },
+  { value: 'favourite', label: 'Favourite' },
+  { value: 'album', label: 'Open the album' },
+  { value: 'details', label: 'Details' },
+];
+export const SWIPES_DEFAULT: PlayerSwipes = {
+  upLeft: 'queue',
+  upRight: 'queue',
+  downLeft: 'close',
+  downRight: 'close',
+  left: 'next',
+  right: 'previous',
+  tap: 'playPause',
+  doubleTap: 'favourite',
+  circle: 'details',
+};
 export const SWIPES_UP: { value: SwipeUp; label: string }[] = [
   { value: 'queue', label: 'Queue' },
   { value: 'playlists', label: 'Add to playlist' },
@@ -360,7 +399,7 @@ export const DEFAULTS: Prefs = {
   homeCrates: false,
   levelling: true,
   startStop: { mode: 'off', ms: 800, skips: false, rewind: false },
-  playerSwipes: { upLeft: 'queue', upRight: 'queue', downLeft: 'close', downRight: 'close' },
+  playerSwipes: { ...SWIPES_DEFAULT },
   phoneLossless: false,
   browserName: '',
   relativeDates: false,
@@ -466,7 +505,18 @@ function read(): Prefs {
         const w = saved.playerSwipes;
         const up = (v: unknown, d: SwipeUp): SwipeUp => (SWIPES_UP.some((o) => o.value === v) ? (v as SwipeUp) : d);
         const down = (v: unknown, d: SwipeDown): SwipeDown => (SWIPES_DOWN.some((o) => o.value === v) ? (v as SwipeDown) : d);
-        p.playerSwipes = { upLeft: up(w.upLeft, 'queue'), upRight: up(w.upRight, 'queue'), downLeft: down(w.downLeft, 'close'), downRight: down(w.downRight, 'close') };
+        const one = <T extends string>(v: unknown, of: { value: T }[], d: T): T => (of.some((o) => o.value === v) ? (v as T) : d);
+  p.playerSwipes = {
+    upLeft: up(w.upLeft, 'queue'),
+    upRight: up(w.upRight, 'queue'),
+    downLeft: down(w.downLeft, 'close'),
+    downRight: down(w.downRight, 'close'),
+    left: one(w.left, SWIPES_SIDE, 'next'),
+    right: one(w.right, SWIPES_SIDE, 'previous'),
+    tap: one(w.tap, COVER_TOUCHES, 'playPause'),
+    doubleTap: one(w.doubleTap, COVER_TOUCHES, 'favourite'),
+    circle: one(w.circle, COVER_TOUCHES, 'details'),
+  };
       }
       if (saved.startStop && typeof saved.startStop === 'object') {
         const x = saved.startStop;
