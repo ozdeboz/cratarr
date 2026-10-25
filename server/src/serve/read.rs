@@ -494,6 +494,18 @@ impl Library {
         Ok(Found { albums, artists, tracks, genres })
     }
 
+    /// The songs whose title, artist and album hold the words, at most `cap`, by id with those three: what search
+    /// finds playlists and crates by (decision 0072, deep).
+    pub fn songs_naming(&self, words: &[String], cap: usize) -> Result<Vec<(String, String, String, String)>> {
+        let Some(fq) = crate::search::fts(words) else { return Ok(Vec::new()) };
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT s.id, s.title, coalesce(s.artist, ''), s.album FROM songs_fts f JOIN songs s ON s.n = f.rowid WHERE songs_fts MATCH ?1 LIMIT ?2",
+        )?;
+        let rows = st.query_map(rusqlite::params![fq, cap as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// An album's id as it is (or would be) in Music: what its tags are kept under.
     pub fn album_base(&self, album: &str) -> Result<Option<String>> {
         let db = self.db();
