@@ -3,6 +3,7 @@
   // two pictures with Automatic under them (lib/settings/AppearancePicker), and Animations; Home's header (the owner,
   // 2026-10-25): a personal greeting in place of the moment's name, and a picture of one's own in place of the
   // weather's sky, kept on this device (lib/localCovers).
+  import { slide } from 'svelte/transition';
   import { inApp } from '../app.svelte';
   import { prefs } from '../prefs.svelte';
   import AppearancePicker from './AppearancePicker.svelte';
@@ -18,6 +19,7 @@
       prefs.theme = 'auto';
       prefs.animations = true;
       prefs.homeGreeting = true;
+      prefs.homeGreetingCapital = false;
       void removeLocalPicture(HOME_HEADER);
     },
   );
@@ -60,6 +62,12 @@
     name="Personal greeting"
     toggle={{ checked: prefs.homeGreeting, onchange: (on) => (prefs.homeGreeting = on) }}
   />
+  <!-- Out from under the greeting while it is on (the owner, 2026-10-25): for an account named in lower case. -->
+  {#if prefs.homeGreeting}
+    <div transition:slide={{ duration: 160 }}>
+      <Item name="Capital first letter" line="Of your name, in the greeting" toggle={{ checked: prefs.homeGreetingCapital, onchange: (on) => (prefs.homeGreetingCapital = on) }} />
+    </div>
+  {/if}
   <Item name="Background" line={localCovers[HOME_HEADER] ? 'Your picture, on this device' : 'The sky for the weather'}>
     <span class="pick">
       <label class="button" class:busy>{localCovers[HOME_HEADER] ? 'Change' : 'Choose a picture'}<input type="file" accept="image/*" hidden disabled={busy} onchange={pick} /></label>

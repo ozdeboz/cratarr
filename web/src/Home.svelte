@@ -332,7 +332,9 @@
     const list = h >= 5 && h < 12 ? greet.morningGreetings : h >= 12 && h < 18 ? greet.dayGreetings : greet.eveningGreetings;
     return day ?? list[Math.floor(pick * list.length)];
   });
-  const greeting = $derived(me.name ? `${greetWords}, ${me.name}!` : `${greetWords}!`);
+  /** The account's name as greeted: with a capital first letter where Settings says (an account named in lower case). */
+  const greetName = $derived(me.name && prefs.homeGreetingCapital ? me.name[0].toLocaleUpperCase() + me.name.slice(1) : me.name);
+  const greeting = $derived(greetName ? `${greetWords}, ${greetName}!` : `${greetWords}!`);
   /** A word worth repeating: not "a", "the", "for". */
   const wordsOf = (s: string) => new Set(s.toLowerCase().match(/[a-z]+/g)?.filter((w) => w.length > 3) ?? []);
   /** The moment's own name under the greeting, unless the two share a word ("Good evening" over "Music for a Rainy
