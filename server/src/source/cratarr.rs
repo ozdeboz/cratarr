@@ -424,6 +424,7 @@ impl Source for CratarrSource {
                             tags: ud.tags_of(&base)?,
                             library: None,
                             artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },
+                            release: a.release,
                             id: a.id,
                         },
                         stamp: Some(stamp),
@@ -483,6 +484,7 @@ impl Source for CratarrSource {
                 tags: Vec::new(),
                 library: None,
                 artists: if a.artists.len() > 1 { a.artists.iter().map(|r| r.name.clone()).collect() } else { Vec::new() },
+                release: a.release,
                 id: a.id,
             };
             let tracks = songs

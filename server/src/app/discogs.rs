@@ -308,9 +308,65 @@ pub fn start() {
             if let Err(e) = genres_pass().await {
                 tracing::info!("discogs: genres not asked now: {e:#}");
             }
+            if let Err(e) = types_pass().await {
+                tracing::info!("discogs: release types not asked now: {e:#}");
+            }
             tokio::time::sleep(Duration::from_secs(6 * 3600)).await;
         }
     });
+}
+
+/// Albums whose type MusicBrainz did not give (0.9.6): their master's main release's format descriptions ("EP",
+/// "Single", "LP", "Compilation"), kept by album (`dc:<album id>`). An album with a MusicBrainz release waits until
+/// MusicBrainz was asked about it.
+async fn types_pass() -> Result<()> {
+    let Some(served) = crate::serve::instance() else { return Ok(()) };
+    let now = super::moment::now_secs();
+    let (lib, ud) = (served.library.clone(), served.userdata.clone());
+    let due: Vec<(String, String, String, String)> = tokio::task::spawn_blocking(move || -> Result<_> {
+        let asked = ud.release_types_asked("dc:", now - GENRES_AGAIN_SECS)?;
+        let mb = ud.release_types_asked("mb:", 0)?;
+        Ok(lib
+            .albums_without_type()?
+            .into_iter()
+            .filter(|a| !asked.contains(&a.0) && (!is_mbid(&a.1) || mb.contains(&a.1)))
+            .take(GENRES_BATCH)
+            .collect())
+    })
+    .await??;
+    if due.is_empty() {
+        return Ok(());
+    }
+    let http = super::discover::http()?;
+    let mut found = Vec::new();
+    for (album, release, artist, title) in due {
+        let rg = match is_mbid(&release) {
+            true => release_group_of(&http, &release).await.unwrap_or_default(),
+            false => None,
+        };
+        let main = match master_of(rg.as_deref(), &artist, &title).await {
+            Ok(Some(id)) => master(id).await?.and_then(|m| m.main_release),
+            Ok(None) => None,
+            Err(e) => {
+                tracing::info!("discogs: {artist} – {title}: {e:#}");
+                continue;
+            }
+        };
+        let words: Vec<String> = match main {
+            Some(id) => release_raw(id)
+                .await?
+                .map(|v| v["formats"].as_array().into_iter().flatten().flat_map(|f| f["descriptions"].as_array().into_iter().flatten().filter_map(|d| d.as_str().map(str::to_string)).collect::<Vec<_>>()).collect())
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let (primary, secondary) = crate::serve::library::release_words(words.iter().map(String::as_str));
+        found.push((format!("dc:{album}"), primary, secondary));
+    }
+    let n = found.len();
+    let ud = served.userdata.clone();
+    tokio::task::spawn_blocking(move || ud.set_release_types(&found, super::moment::now_secs())).await??;
+    tracing::info!("discogs: release types asked for {n} albums");
+    Ok(())
 }
 
 async fn genres_pass() -> Result<()> {

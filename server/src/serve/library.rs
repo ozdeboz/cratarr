@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS albums (
   year INTEGER, original_year INTEGER, genre TEXT, genres TEXT NOT NULL, song_count INTEGER NOT NULL,
   duration_ms INTEGER NOT NULL, size INTEGER NOT NULL, discs INTEGER NOT NULL, created INTEGER, mbid TEXT,
   folder INTEGER NOT NULL, dir TEXT NOT NULL, compilation INTEGER NOT NULL, order_name TEXT NOT NULL, base_id TEXT NOT NULL,
-  format TEXT, min_kbps INTEGER, cover TEXT);
+  format TEXT, min_kbps INTEGER, cover TEXT, release_type TEXT, type_from TEXT, secondary TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS albums_by_base ON albums (base_id);
 CREATE INDEX IF NOT EXISTS albums_by_name ON albums (order_name, n);
 CREATE INDEX IF NOT EXISTS albums_by_created ON albums (created DESC, n);
@@ -65,8 +65,90 @@ CREATE VIRTUAL TABLE IF NOT EXISTS albums_fts USING fts5(name, artist, content='
 CREATE VIRTUAL TABLE IF NOT EXISTS artists_fts USING fts5(name, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
 ";
 
+/// A release's types as kept (0.9.6): its primary type ("album", "ep", "single", "other") and its secondary ones
+/// ("compilation", "live", "remix", "soundtrack"…), lower case, from MusicBrainz's names ("Album", "EP",
+/// "Broadcast" as other) or Discogs' format descriptions ("LP", "EP", "Single", "Compilation"). Words of neither kind
+/// are left out.
+pub fn release_words<'a>(words: impl IntoIterator<Item = &'a str>) -> (Option<String>, Vec<String>) {
+    const SECONDARY: [&str; 12] =
+        ["compilation", "soundtrack", "spokenword", "interview", "audiobook", "audio drama", "live", "remix", "dj-mix", "mixtape/street", "demo", "field recording"];
+    let (mut primary, mut secondary): (Option<String>, Vec<String>) = (None, Vec::new());
+    for w in words {
+        let w = w.trim().to_lowercase();
+        let main = match w.as_str() {
+            "album" | "lp" => Some("album"),
+            "ep" => Some("ep"),
+            "single" => Some("single"),
+            "other" | "broadcast" => Some("other"),
+            _ => None,
+        };
+        match main {
+            Some(m) => {
+                primary.get_or_insert_with(|| m.to_string());
+            }
+            None if SECONDARY.contains(&w.as_str()) && !secondary.contains(&w) => secondary.push(w),
+            None => {}
+        }
+    }
+    (primary, secondary)
+}
+
+/// A release type as the axes and OpenSubsonic show it ("EP", "DJ-mix", "Compilation").
+pub fn type_label(word: &str) -> String {
+    match word {
+        "ep" => "EP".into(),
+        "dj-mix" => "DJ-mix".into(),
+        w => {
+            let mut c = w.chars();
+            c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+        }
+    }
+}
+
+/// An album's release type (0.9.6, the owner): its release group's on MusicBrainz, else Discogs' format, else a guess
+/// for a short one (three tracks or fewer, under 15 minutes: a single); else none, never an EP by its length.
+/// (primary, where from, secondary).
+fn release_type_of(
+    musicbrainz: Option<&(Option<String>, Vec<String>)>,
+    discogs: Option<&(Option<String>, Vec<String>)>,
+    tracks: usize,
+    duration_ms: u64,
+) -> (Option<String>, Option<&'static str>, Vec<String>) {
+    let secondary = || musicbrainz.or(discogs).map(|t| t.1.clone()).unwrap_or_default();
+    if let Some((Some(p), s)) = musicbrainz {
+        return (Some(p.clone()), Some("musicbrainz"), s.clone());
+    }
+    if let Some((Some(p), s)) = discogs {
+        return (Some(p.clone()), Some("discogs"), s.clone());
+    }
+    if (1..=3).contains(&tracks) && duration_ms > 0 && duration_ms < 15 * 60 * 1000 {
+        return (Some("single".into()), Some("guess"), secondary());
+    }
+    (None, None, secondary())
+}
+
+#[cfg(test)]
+mod release_type_tests {
+    use super::*;
+
+    #[test]
+    fn release_types_come_from_musicbrainz_then_discogs_then_a_guess_for_a_single() {
+        assert_eq!(release_words(["EP", "Live", "Remastered"]), (Some("ep".into()), vec!["live".into()]));
+        assert_eq!(release_words(["LP", "Album", "Compilation"]), (Some("album".into()), vec!["compilation".into()]));
+        assert_eq!(release_words(["Broadcast"]).0.as_deref(), Some("other"));
+        let mb = (Some("album".to_string()), vec!["live".to_string()]);
+        let dc = (Some("ep".to_string()), Vec::new());
+        assert_eq!(release_type_of(Some(&mb), Some(&dc), 12, 3_000_000), (Some("album".into()), Some("musicbrainz"), vec!["live".into()]));
+        assert_eq!(release_type_of(None, Some(&dc), 4, 1_200_000), (Some("ep".into()), Some("discogs"), Vec::new()));
+        assert_eq!(release_type_of(None, None, 2, 7 * 60_000), (Some("single".into()), Some("guess"), Vec::new()));
+        assert_eq!(release_type_of(None, None, 5, 22 * 60_000), (None, None, Vec::new()), "never an EP by its length");
+        assert_eq!(type_label("ep"), "EP");
+        assert_eq!(type_label("compilation"), "Compilation");
+    }
+}
+
 /// The tables' layout; a library of another layout is built again.
-const LAYOUT: i64 = 8;
+const LAYOUT: i64 = 9;
 
 /// The meta key of the catalogue state the library was built from.
 const BUILT_FROM: &str = "built_from";
@@ -108,6 +190,8 @@ pub struct Library {
     /// Albums' original years from MusicBrainz (0.9.5), by their MusicBrainz release: for an album whose files carry no
     /// original date.
     originals: Mutex<HashMap<String, u32>>,
+    /// The release types found (0.9.6), by `mb:<release>` and `dc:<album id>` (user data `release_types`).
+    release_types: Mutex<HashMap<String, (Option<String>, Vec<String>)>>,
     /// Discogs' genres and styles for albums whose files carry none (0.9.5), by album id.
     extra_genres: Mutex<HashMap<String, Vec<String>>>,
 }
@@ -268,7 +352,7 @@ impl Library {
         }
         conn.execute_batch(SCHEMA).context("creating the library tables")?;
         conn.execute_batch(&format!("PRAGMA user_version = {LAYOUT}"))?;
-        Ok(Self { db: Mutex::new(conn), added: Mutex::default(), originals: Mutex::default(), extra_genres: Mutex::default() })
+        Ok(Self { db: Mutex::new(conn), added: Mutex::default(), originals: Mutex::default(), extra_genres: Mutex::default(), release_types: Mutex::default() })
     }
 
     /// The added dates known better than the catalogue's (by album id); a change builds the library again.
@@ -279,6 +363,11 @@ impl Library {
     /// The original years known from MusicBrainz (by MusicBrainz release); a change builds the library again.
     pub fn set_originals(&self, originals: HashMap<String, u32>) {
         *self.originals.lock().unwrap_or_else(|p| p.into_inner()) = originals;
+    }
+
+    /// The release types found on MusicBrainz and Discogs (0.9.6); a change builds the library again.
+    pub fn set_release_types(&self, types: HashMap<String, (Option<String>, Vec<String>)>) {
+        *self.release_types.lock().unwrap_or_else(|p| p.into_inner()) = types;
     }
 
     /// Discogs' genres for albums whose files carry none (by album id); a change builds the library again.
@@ -384,6 +473,7 @@ impl Library {
         let added = self.added.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let originals = self.originals.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let extra_genres = self.extra_genres.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let release_types = self.release_types.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let mut songs: Vec<Song> =
             folders.iter().flat_map(|f| f.rows.iter().filter(|r| r.track.is_some()).map(move |r| (f.folder, r))).map(|(folder, r)| song(r, folder, rules)).collect();
         one_album_per_folder(&mut songs);
@@ -458,8 +548,10 @@ impl Library {
         {
             let mut ins_album = tx.prepare(
                 "INSERT INTO albums (id, name, artist, artist_id, year, original_year, genre, genres, song_count, duration_ms,
-                   size, discs, created, mbid, folder, dir, compilation, order_name, base_id, format, min_kbps, cover)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+                   size, discs, created, mbid, folder, dir, compilation, order_name, base_id, format, min_kbps, cover,
+                   release_type, type_from, secondary)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
+                   ?23, ?24, ?25)",
             )?;
             let mut ins_fts = tx.prepare("INSERT INTO albums_fts (rowid, name, artist) VALUES (?1, ?2, ?3)")?;
             let mut ins_aa = tx.prepare("INSERT INTO album_artists (album_id, artist_id, name, position) VALUES (?1, ?2, ?3, ?4)")?;
@@ -508,6 +600,13 @@ impl Library {
                 let cover = super::art::album_print(&Path::new(root).join(&dir), first_track.as_deref()).map(|p| format!("{album_id}_{p}"));
                 let formats: BTreeSet<&str> = songs.iter().filter_map(|s| s.row.format.as_deref()).collect();
                 let format = (formats.len() == 1).then(|| formats.iter().next().map(|f| f.to_string())).flatten();
+                let duration_ms = songs.iter().filter_map(|s| s.row.duration_ms).sum::<u64>();
+                let (kind, type_from, secondary) = release_type_of(
+                    first.row.first("musicbrainz_albumid").and_then(|m| release_types.get(&format!("mb:{m}"))),
+                    release_types.get(&format!("dc:{album_id}")),
+                    songs.len(),
+                    duration_ms,
+                );
                 ins_album.execute(params![
                     album_id,
                     first.album,
@@ -518,7 +617,7 @@ impl Library {
                     genres.first(),
                     genres.join("\u{1f}"),
                     songs.len() as i64,
-                    songs.iter().filter_map(|s| s.row.duration_ms).sum::<u64>() as i64,
+                    duration_ms as i64,
                     songs.iter().map(|s| s.row.size).sum::<u64>() as i64,
                     discs,
                     songs.iter().filter_map(|s| s.row.born).chain(added.get(album_id).copied()).min(),
@@ -531,6 +630,9 @@ impl Library {
                     format,
                     songs.iter().filter_map(|s| s.row.kbps).min(),
                     cover,
+                    kind,
+                    type_from,
+                    secondary.join("\u{1f}"),
                 ])?;
                 ins_fts.execute(params![tx.last_insert_rowid(), first.album, first.album_artist])?;
                 for (i, name) in first.album_artists.iter().enumerate() {

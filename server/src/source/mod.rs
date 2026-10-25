@@ -208,6 +208,19 @@ pub struct AlbumTrack {
     pub duration_secs: Option<f64>,
 }
 
+/// An album's release type (0.9.6, the owner: the Library can hide EPs and singles): its primary type ("album", "ep",
+/// "single", "other"; none: not known), where that came from ("musicbrainz", "discogs", "guess"), and its secondary
+/// types ("compilation", "live"…). Cratarr's own library's; other servers' albums say none.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, serde::Deserialize)]
+pub struct ReleaseType {
+    #[serde(rename = "type", default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub type_from: Option<String>,
+    #[serde(default)]
+    pub secondary: Vec<String>,
+}
+
 /// An album as a source sees it. Paths are the source's own (see `placement`).
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub struct Album {
@@ -231,6 +244,9 @@ pub struct Album {
     /// Its artists one by one, when the source credits several (the menu's Go to each); empty: `artist` alone.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artists: Vec<String>,
+    /// Its release type (0.9.6): `type`, `type_from`, `secondary`.
+    #[serde(flatten, default)]
+    pub release: ReleaseType,
 }
 
 /// What a source knows of an artist (the artist panel, decided 2026-10-16, as Symfonium's): the albums credited to them

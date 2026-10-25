@@ -1,7 +1,8 @@
 //! Albums' original years from MusicBrainz (0.9.5, the owner: Ott's Skylon showed 2012, its reissue's year, not 2008).
 //! Every album whose files carry no original date but a MusicBrainz release gets its release group's first release
 //! year, asked in the background one album at a time and kept (user data `original_years`); the library is built with
-//! it (`Library::set_originals`), no file changed.
+//! it (`Library::set_originals`), no file changed. The same question gives the release group's types (0.9.6, the owner:
+//! hide EPs and singles), asked of every album with a release and kept in `release_types` (`mb:<release>`).
 
 use std::time::Duration;
 
@@ -39,19 +40,31 @@ async fn pass() -> Result<usize> {
     let Some(served) = crate::serve::instance() else { return Ok(0) };
     let now = super::moment::now_secs();
     let (lib, ud) = (served.library.clone(), served.userdata.clone());
-    let due: Vec<String> = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+    // (release, its year wanted): those without a year not asked yet, then those whose types are not asked yet.
+    let due: Vec<(String, bool)> = tokio::task::spawn_blocking(move || -> Result<Vec<(String, bool)>> {
         let asked = ud.original_years_asked(now - AGAIN_SECS)?;
-        Ok(lib.releases_without_original()?.into_iter().filter(|r| !asked.contains(r)).take(BATCH).collect())
+        let typed = ud.release_types_asked("mb:", now - AGAIN_SECS)?;
+        let years: std::collections::HashSet<String> = lib.releases_without_original()?.into_iter().filter(|r| !asked.contains(r)).collect();
+        let mut due: Vec<(String, bool)> = years.iter().map(|r| (r.clone(), true)).collect();
+        due.extend(lib.album_releases()?.into_iter().filter(|r| !typed.contains(r) && !years.contains(r)).map(|r| (r, false)));
+        due.truncate(BATCH);
+        Ok(due)
     })
     .await??;
     if due.is_empty() {
         return Ok(0);
     }
     let http = super::discover::http()?;
-    let mut found = Vec::with_capacity(due.len());
-    for release in &due {
-        match first_release_year(&http, release).await {
-            Ok(year) => found.push((release.clone(), year)),
+    let (mut found, mut types) = (Vec::with_capacity(due.len()), Vec::with_capacity(due.len()));
+    for (release, year_wanted) in &due {
+        match release_group(&http, release).await {
+            Ok(group) => {
+                let (year, primary, secondary) = group.unwrap_or_default();
+                if *year_wanted {
+                    found.push((release.clone(), year));
+                }
+                types.push((format!("mb:{release}"), primary, secondary));
+            }
             // MusicBrainz out of reach: what was found is kept, the rest asked next time.
             Err(e) => {
                 tracing::info!("original years: stopped after {} of {}: {e:#}", found.len(), due.len());
@@ -60,16 +73,24 @@ async fn pass() -> Result<usize> {
         }
         tokio::time::sleep(PAUSE).await;
     }
-    let n = found.len();
+    let n = types.len();
     let ud = served.userdata.clone();
-    tokio::task::spawn_blocking(move || ud.set_original_years(&found, super::moment::now_secs())).await??;
-    tracing::info!("original years: {n} albums asked of MusicBrainz");
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let at = super::moment::now_secs();
+        ud.set_original_years(&found, at)?;
+        ud.set_release_types(&types, at)
+    })
+    .await??;
+    tracing::info!("original years and release types: {n} albums asked of MusicBrainz");
     Ok(n)
 }
 
-/// A release's release group's first release year; none where MusicBrainz has no date, or no such release.
-async fn first_release_year(http: &reqwest::Client, release: &str) -> Result<Option<u32>> {
-    if release.len() != 36 || !release.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+/// What a release's release group says: (its first release year, its primary type, its secondary types); none where
+/// there is no such release.
+type Group = (Option<u32>, Option<String>, Vec<String>);
+
+async fn release_group(http: &reqwest::Client, release: &str) -> Result<Option<Group>> {
+    if !super::discogs::is_mbid(release) {
         return Ok(None);
     }
     let url = format!("https://musicbrainz.org/ws/2/release/{release}?inc=release-groups&fmt=json");
@@ -85,7 +106,10 @@ async fn first_release_year(http: &reqwest::Client, release: &str) -> Result<Opt
             _ => {}
         }
         let v: serde_json::Value = r.error_for_status()?.json().await?;
-        return Ok(year_of(&v));
+        let g = &v["release-group"];
+        let words = g["primary-type"].as_str().into_iter().chain(g["secondary-types"].as_array().into_iter().flatten().filter_map(|t| t.as_str()));
+        let (primary, secondary) = crate::serve::library::release_words(words);
+        return Ok(Some((year_of(&v), primary, secondary)));
     }
 }
 
