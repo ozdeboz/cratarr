@@ -209,3 +209,26 @@ out every track the owner has hearted. One switch covers both, like the sheet's 
 The owner: "We can just remove the restart playlist function altogether. I don't like it." More music has no Restart
 playlists switch, and neither the page's player nor the app's starts a playlist again at its end. The `restart` field
 stays in the `autoplay` command and reports for older players and servers; set or not, it does nothing.
+
+## Amendment (2026-10-25): a library choice of its own, and Bandcamp (0.9.5)
+
+The owner: Radio and Autoplay get a library choice of their own, apart from the pages' library filter, with Bandcamp
+as an extra source. This amends "Cratarr's own library only" above.
+
+- **Where it is kept.** It is the account's own setting, kept on the server in the account's settings (`GET`/`PUT
+  /api/me/settings`) beside `similar_by`: `more_music: { libraries: string[] | null, bandcamp: boolean }`. The
+  libraries are Cratarr's own library ids, its folders. `null` or absent means all of them; `bandcamp` absent means
+  off. Every player of the account reads it: the page's own player through `POST /api/radio/next`, and Cratarr's
+  players (Play On) through their account.
+- **Libraries.** Radio and Autoplay choose only songs in the libraries switched on. A seed from a library that is
+  switched off still seeds, but it is never picked. A crate that plays keeps its own libraries. With none of the chosen
+  libraries there (all switched off), `radio/next` says so: "No library is switched on for Radio and Autoplay."
+- **Bandcamp.** With `bandcamp` on, the account's Discover suggestions that play on Bandcamp join the candidates "as
+  they come", with no fixed share. They compete on likeness alone, by the same weights as the library's songs: their
+  artist, the library artists Discover found them from (its `alike` seeds and "Like …" reasons), their styles as
+  genres, and their year. There is no sound and no playlists for them. Each one, the most alike first, takes the place
+  of the least alike pick it is more alike than. This applies to Similar, Continuous and Radio, not inside a crate.
+  Such a pick is one streaming track of its album, chosen at random, as a Bandcamp preview: source `bandcamp`, id
+  `bc.…`. Following decision 0071 it is never a play and never scrobbled, and Want stays in its menu.
+- **Picks already queued.** After a change, the page drops Radio's and Autoplay's picks still to come and asks again.
+  Cratarr's own players let the picks they already queued run out.
