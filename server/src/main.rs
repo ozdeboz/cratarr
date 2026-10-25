@@ -37,6 +37,7 @@ mod playlist_merge;
 mod ports;
 mod playlists;
 mod retag;
+mod search;
 mod serve;
 mod settings;
 mod similarity;

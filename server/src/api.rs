@@ -143,6 +143,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/artists/{id}/photo", get(artist_photo))
         .route("/api/artists/about", get(artist_about))
         .route("/api/artists/related", get(artist_related))
+        .route("/api/search", get(search_all))
         .route("/api/artists/picks", get(artist_picks))
         .route("/api/crates/fits", get(crate_fits))
         .route("/api/home/heard", post(home_heard))
@@ -167,6 +168,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/discover/hide", post(discover_hide))
         .route("/api/discover/artist", get(discover_artist))
         .route("/api/discover/artist/photo", get(discover_artist_photo))
+        .route("/api/discover/artist/albums", get(discover_artist_albums))
         .route("/api/preview/bandcamp", get(preview_bandcamp))
         .route("/api/requests", get(requests))
         .route("/api/requests/watching", get(requests_watching))
@@ -3650,10 +3652,28 @@ async fn artist_about(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) 
         let name = q.name.clone();
         let (id, mbid) = tokio::task::spawn_blocking(move || lib.artist_by_name(&name)).await.ok()?.ok()??;
         let info = store.get_or_read(&q.name, mbid.as_deref()).await?;
-        Some(json!({ "id": id, "bio": info.bio, "photo": info.photo.is_some() }))
+        Some(json!({ "id": id, "bio": info.bio, "photo": info.photo.is_some(), "photo_credit": info.credit }))
     }
     .await;
     Json(found.unwrap_or_else(|| json!({ "id": null, "bio": null, "photo": false })))
+}
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    #[serde(default)]
+    q: String,
+    /// Which kinds, comma-separated (album, artist, track, genre, playlist, crate); all when none.
+    #[serde(default)]
+    kinds: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// One search, answered by kind and merged (decision 0072): `{ q, groups: { kind: { total, items } }, top }`.
+async fn search_all(State(app): State<Arc<App>>, Query(s): Query<SearchQuery>) -> Result<Json<crate::app::search::Answer>, ApiError> {
+    let kinds: Vec<String> = s.kinds.unwrap_or_default().split(',').map(str::trim).filter(|k| !k.is_empty()).map(str::to_string).collect();
+    let answer = crate::app::search::search(&app, &s.q, &kinds, s.limit.unwrap_or(crate::app::search::LIMIT)).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(answer))
 }
 
 /// Related artists to explore on an artist's page (0.9.2, app::related), by the artist's name: as last looked up, and
@@ -3692,10 +3712,16 @@ async fn discover_artist(State(app): State<Arc<App>>, Query(q): Query<AboutQuery
         let store = app.artists.clone()?;
         let mbid = library_mbid(q.name.trim()).await;
         let info = store.get_or_read(q.name.trim(), mbid.as_deref()).await?;
-        Some(json!({ "bio": info.bio, "photo": info.photo.is_some() }))
+        Some(json!({ "bio": info.bio, "photo": info.photo.is_some(), "photo_credit": info.credit }))
     }
     .await;
     Json(found.unwrap_or_else(|| json!({ "bio": null, "photo": false })))
+}
+
+/// How many full-length studio albums an artist new to the library has released (0.9.3): its own call, as the first
+/// count takes MusicBrainz a few seconds and the page's photo and description must not wait for it.
+async fn discover_artist_albums(Query(q): Query<AboutQuery>) -> Json<serde_json::Value> {
+    Json(json!({ "albums": crate::app::discover::artist_albums(q.name.trim()).await }))
 }
 
 /// That artist's photo, as the artist store kept it.

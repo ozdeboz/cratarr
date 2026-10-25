@@ -2008,6 +2008,16 @@ impl PlaylistService {
         Ok(())
     }
 
+    /// Every crate the account sees, by id and name: the built-in ones and its own (search, decision 0072).
+    pub async fn crate_names(&self) -> Result<Vec<(String, String)>, ToggleError> {
+        let mut out: Vec<(String, String)> = crates::permanent().into_iter().map(|c| (c.id, c.name)).collect();
+        for (id, name) in [(crates::HOME_NEW, "New for you"), (crates::HOME_WEEK, "Sounds like your week"), (crates::HOME_GRAVES, "Grave digging")] {
+            out.push((id.to_string(), name.to_string()));
+        }
+        out.extend(self.own_crates()?.list().await?.into_iter().map(|c| (c.id, c.name)));
+        Ok(out)
+    }
+
     /// A built-in crate is everyone's: its picture is the administrators' to change (decision 0051).
     fn may_picture(&self, id: &str) -> Result<(), ToggleError> {
         let built_in = crates::permanent().iter().any(|c| c.id == id) || crates::genre_crate(id).is_some() || id.starts_with(crates::LIKE) || crates::home_crate(id);

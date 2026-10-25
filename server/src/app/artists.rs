@@ -3,6 +3,10 @@
 //! library's artists at ten a minute while nobody asks for one; one asked for (Home's open artist, not read yet) is read
 //! at once. Kept in `artist-info.sqlite`, the photo on disk beside it; read again after a few months, one not found
 //! sooner. Personal use: the server reads it for its own listeners and publishes nothing.
+//!
+//! Where TheAudioDB has no photo, Wikimedia Commons' (0.9.3; the owner, 2026-10-25: "a secondary artist photo source
+//! without license hassle"): the artist's Wikidata item as MusicBrainz links it, its image (P18), a 600 px copy of it;
+//! freely licensed, so shown with its author and licence (`Credit`).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -25,6 +29,17 @@ const MISSING_KEEP: i64 = 30 * 86_400;
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS artist_info (
   key TEXT PRIMARY KEY, name TEXT NOT NULL, mbid TEXT, adb TEXT, bio TEXT, photo TEXT, read_at INTEGER NOT NULL);";
+/// Wikimedia Commons' photo, a 600 px copy, and MusicBrainz asked at most once a second.
+const COMMONS_WIDTH: u32 = 600;
+const MB_PAUSE: Duration = Duration::from_millis(1100);
+
+/// Who made a freely licensed photo and under which licence, and its page: shown beside it, as its licence asks.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Credit {
+    pub author: String,
+    pub licence: String,
+    pub url: String,
+}
 
 /// What is known of an artist.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
@@ -33,6 +48,8 @@ pub struct Info {
     /// The photo's file in the photos folder, when there is one.
     #[serde(skip)]
     pub photo: Option<String>,
+    /// The photo's credit, where it is Wikimedia Commons' (TheAudioDB's are credited as TheAudioDB).
+    pub credit: Option<Credit>,
 }
 
 pub struct ArtistInfo {
@@ -55,9 +72,16 @@ impl ArtistInfo {
         let open = || -> Result<Self> {
             let db = Connection::open(dir.join("artist-info.sqlite"))?;
             db.execute_batch(SCHEMA)?;
+            // 0.9.3: Commons' credit, and whether Commons was asked (those read before are asked once).
+            let has = |c: &str| db.prepare("SELECT 1 FROM pragma_table_info('artist_info') WHERE name = ?1").and_then(|mut s| s.exists([c]));
+            if !has("credit")? {
+                db.execute_batch("ALTER TABLE artist_info ADD COLUMN credit TEXT; ALTER TABLE artist_info ADD COLUMN commons INTEGER NOT NULL DEFAULT 0;")?;
+            }
             let photos = dir.join("artist-photos");
             std::fs::create_dir_all(&photos)?;
-            Ok(Self { db: Mutex::new(db), photos, http: reqwest::Client::builder().timeout(Duration::from_secs(20)).build()?, turn: Default::default() })
+            // A name as MusicBrainz and Wikimedia ask of every caller.
+            let http = reqwest::Client::builder().timeout(Duration::from_secs(20)).user_agent(concat!("Cratarr/", env!("CARGO_PKG_VERSION"))).build()?;
+            Ok(Self { db: Mutex::new(db), photos, http, turn: Default::default() })
         };
         match open() {
             Ok(s) => Some(Arc::new(s)),
@@ -75,7 +99,10 @@ impl ArtistInfo {
     /// What is known, if it was read.
     pub fn get(&self, key: &str) -> Option<Info> {
         self.db()
-            .query_row("SELECT bio, photo FROM artist_info WHERE key = ?1", [key], |r| Ok(Info { bio: r.get(0)?, photo: r.get(1)? }))
+            .query_row("SELECT bio, photo, credit FROM artist_info WHERE key = ?1", [key], |r| {
+                let credit: Option<String> = r.get(2)?;
+                Ok(Info { bio: r.get(0)?, photo: r.get(1)?, credit: credit.and_then(|c| serde_json::from_str(&c).ok()) })
+            })
             .optional()
             .ok()
             .flatten()
@@ -88,15 +115,19 @@ impl ArtistInfo {
 
     /// Whether `key` wants reading: never read, or read too long ago.
     fn due(&self, key: &str, now: i64) -> bool {
-        let row: Option<(i64, bool)> = self
+        let row: Option<(i64, bool, bool)> = self
             .db()
-            .query_row("SELECT read_at, (bio IS NOT NULL OR photo IS NOT NULL) FROM artist_info WHERE key = ?1", [key], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_row("SELECT read_at, (bio IS NOT NULL OR photo IS NOT NULL), (photo IS NULL AND commons = 0) FROM artist_info WHERE key = ?1", [key], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
             .optional()
             .ok()
             .flatten();
         match row {
             None => true,
-            Some((at, found)) => now - at > if found { FOUND_KEEP } else { MISSING_KEEP },
+            // Without a photo, and Commons never asked (read before 0.9.3): once more now.
+            Some((_, _, true)) => true,
+            Some((at, found, false)) => now - at > if found { FOUND_KEEP } else { MISSING_KEEP },
         }
     }
 
@@ -130,13 +161,96 @@ impl ArtistInfo {
                 }
             }
         }
+        // No photo from TheAudioDB: Wikimedia Commons', by the artist's MusicBrainz id (looked up by name where not known).
+        let mut credit = None;
+        if photo.is_none() {
+            let found_mbid = match mbid.filter(|m| !m.is_empty()) {
+                Some(m) => Some(m.to_string()),
+                None => self.mbid_by_name(name).await.ok().flatten(),
+            };
+            if let Some(m) = found_mbid {
+                match self.commons_photo(&m).await {
+                    Ok(Some((file, c))) => (photo, credit) = (Some(file), Some(c)),
+                    Ok(None) => {}
+                    Err(e) => tracing::debug!(target: "artists", artist = name, reason = %e, "Wikimedia Commons did not answer"),
+                }
+            }
+        }
+        let credit_json = credit.as_ref().and_then(|c| serde_json::to_string(c).ok());
         self.db().execute(
-            "INSERT INTO artist_info (key, name, mbid, adb, bio, photo, read_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO artist_info (key, name, mbid, adb, bio, photo, read_at, credit, commons) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)
              ON CONFLICT (key) DO UPDATE SET name = excluded.name, mbid = excluded.mbid, adb = excluded.adb, bio = excluded.bio,
-               photo = excluded.photo, read_at = excluded.read_at",
-            params![key, name, mbid, adb, bio, photo, epoch_now()],
+               photo = excluded.photo, read_at = excluded.read_at, credit = excluded.credit, commons = 1",
+            params![key, name, mbid, adb, bio, photo, epoch_now(), credit_json],
         )?;
-        Ok(Info { bio, photo })
+        Ok(Info { bio, photo, credit })
+    }
+
+    /// The artist MusicBrainz is sure a name is (its search's score 100, the same name): their id.
+    async fn mbid_by_name(&self, name: &str) -> Result<Option<String>> {
+        let url = format!("https://musicbrainz.org/ws/2/artist?query=artist:%22{}%22&fmt=json&limit=3", urlencode(name));
+        let answer: serde_json::Value = self.http.get(&url).send().await?.error_for_status()?.json().await?;
+        tokio::time::sleep(MB_PAUSE).await;
+        Ok(answer["artists"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|a| a["score"].as_u64() == Some(100) && a["name"].as_str().is_some_and(|n| n.to_lowercase() == name.to_lowercase()))
+            .and_then(|a| a["id"].as_str().map(str::to_string)))
+    }
+
+    /// The artist's photo on Wikimedia Commons, kept as a file, and its credit: their Wikidata item as MusicBrainz links
+    /// it, its image (P18), Commons' 600 px copy and what Commons says of it (author, licence, page). None where any
+    /// step has nothing.
+    async fn commons_photo(&self, mbid: &str) -> Result<Option<(String, Credit)>> {
+        let rels: serde_json::Value =
+            self.http.get(format!("https://musicbrainz.org/ws/2/artist/{}?inc=url-rels&fmt=json", urlencode(mbid))).send().await?.error_for_status()?.json().await?;
+        tokio::time::sleep(MB_PAUSE).await;
+        let Some(item) = rels["relations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|r| r["type"].as_str() == Some("wikidata"))
+            .find_map(|r| r["url"]["resource"].as_str()?.rsplit('/').next().map(str::to_string))
+        else {
+            return Ok(None);
+        };
+        let entity: serde_json::Value =
+            self.http.get(format!("https://www.wikidata.org/wiki/Special:EntityData/{}.json", urlencode(&item))).send().await?.error_for_status()?.json().await?;
+        let Some(image) = entity["entities"][&item]["claims"]["P18"][0]["mainsnak"]["datavalue"]["value"].as_str().map(str::to_string) else {
+            return Ok(None);
+        };
+        let info: serde_json::Value = self
+            .http
+            .get("https://commons.wikimedia.org/w/api.php")
+            .query(&[
+                ("action", "query"),
+                ("titles", &format!("File:{image}")),
+                ("prop", "imageinfo"),
+                ("iiprop", "url|extmetadata"),
+                ("iiurlwidth", &COMMONS_WIDTH.to_string()),
+                ("format", "json"),
+            ])
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let Some(page) = info["query"]["pages"].as_object().and_then(|p| p.values().next()) else { return Ok(None) };
+        let ii = &page["imageinfo"][0];
+        let meta = &ii["extmetadata"];
+        let (Some(thumb), Some(licence)) = (ii["thumburl"].as_str(), meta["LicenseShortName"]["value"].as_str().map(plain).filter(|l| !l.is_empty())) else {
+            return Ok(None);
+        };
+        let author = meta["Artist"]["value"].as_str().map(plain).filter(|a| !a.is_empty()).unwrap_or_else(|| "Unknown".to_string());
+        let url = ii["descriptionurl"].as_str().unwrap_or("https://commons.wikimedia.org").to_string();
+        let bytes = self.http.get(thumb).send().await?.error_for_status()?.bytes().await?;
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+        let file = format!("wm-{mbid}.jpg");
+        std::fs::write(self.photos.join(&file), &bytes)?;
+        Ok(Some((file, Credit { author, licence, url })))
     }
 
     /// What is known of an artist, read now when it never was (Home's open artist); what was known on a failure.
@@ -183,6 +297,21 @@ impl ArtistInfo {
     }
 }
 
+/// Commons' metadata as plain text: its HTML's tags left out, its spaces made single.
+fn plain(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut inside = false;
+    for c in html.chars() {
+        match c {
+            '<' => inside = true,
+            '>' => inside = false,
+            _ if !inside => out.push(c),
+            _ => {}
+        }
+    }
+    out.replace("&amp;", "&").replace("&quot;", "\"").replace("&#039;", "'").split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn urlencode(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
@@ -211,10 +340,13 @@ mod tests {
         let s = ArtistInfo::open(dir.to_str()).unwrap();
         let now = epoch_now();
         assert!(s.due("mbid:x", now), "never read");
-        s.db().execute("INSERT INTO artist_info (key, name, bio, read_at) VALUES ('mbid:x', 'X', 'A bio.', ?1)", [now]).unwrap();
+        s.db().execute("INSERT INTO artist_info (key, name, bio, read_at, commons) VALUES ('mbid:x', 'X', 'A bio.', ?1, 1)", [now]).unwrap();
+        s.db().execute("INSERT INTO artist_info (key, name, bio, read_at) VALUES ('mbid:z', 'Z', 'A bio.', ?1)", [now]).unwrap();
         s.db().execute("INSERT INTO artist_info (key, name, read_at) VALUES ('name:y', 'Y', ?1)", [now - 40 * 86_400]).unwrap();
         assert!(!s.due("mbid:x", now));
         assert!(s.due("name:y", now), "nothing found forty days ago: due");
+        assert!(s.due("mbid:z", now), "no photo, and Commons never asked: due once");
+        assert_eq!(plain("<a href=\"x\">Eric de Redelijkheid</a> from  Utrecht &amp; co"), "Eric de Redelijkheid from Utrecht & co");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
