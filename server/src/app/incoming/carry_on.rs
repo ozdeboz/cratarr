@@ -84,6 +84,19 @@ impl IncomingService {
     }
 }
 
+/// A track's id on its source after the move: a server's new one, once it has the file; Cratarr's own the same, once
+/// its library has the file where it now is.
+fn id_after(c: &crate::catalogue::Catalogue, source: &str, track: i64) -> Option<String> {
+    if source != crate::source::cratarr::KIND.id {
+        return c.source_id_of(source, track);
+    }
+    let song = crate::serve::ids::song(track);
+    let s = crate::serve::instance()?;
+    let (folder, rel) = s.library.file_of(&song).ok()??;
+    let root = s.library.roots().into_iter().find(|(f, _)| *f == folder)?.1;
+    std::path::Path::new(&root).join(rel).exists().then_some(song)
+}
+
 /// A playing file's track id after the move.
 fn before_ids(before: &[(i64, i64)], track: Option<i64>) -> Option<i64> {
     let t = track?;
@@ -120,10 +133,12 @@ async fn follow(lib: &Arc<Library>, p: &Playing) {
             }
             let Some((_, s)) = lib.connected_sources().into_iter().find(|(id, _)| *id == p.source) else { return };
             let c = lib.catalogue();
-            let new = c.source_id_of(&p.source, p.track).filter(|n| *n != p.old_item);
+            // Cratarr's own tracks keep their ids (0.9.6: waiting for a new one flagged it as stuck, its player stopped).
+            let own = p.source == crate::source::cratarr::KIND.id;
+            let new = id_after(&c, &p.source, p.track).filter(|n| own || *n != p.old_item);
             if let Ok(Some(now_playing)) = s.now_playing().await {
                 let id = now_playing.track.id;
-                if Some(&id) == new.as_ref() {
+                if !own && Some(&id) == new.as_ref() {
                     return; // the server knows it again
                 }
                 if id != p.old_item && c.track_of_source(&p.source, &id).is_some_and(|t| t != p.track) {
@@ -138,7 +153,7 @@ async fn follow(lib: &Arc<Library>, p: &Playing) {
                 rest.remove(0);
                 position = 0.0;
             }
-            let ids: Vec<String> = rest.iter().filter_map(|t| c.source_id_of(&p.source, *t)).collect();
+            let ids: Vec<String> = rest.iter().filter_map(|t| id_after(&c, &p.source, *t)).collect();
             if ids.is_empty() {
                 return;
             }
