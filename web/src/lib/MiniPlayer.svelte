@@ -10,6 +10,7 @@
   // while the bar is there (lib/TopPill). Left of it, where the bar has room, the queue (the owner, 2026-10-24): it opens
   // the queue's sheet, and answers tracks put in from elsewhere (lib/queueCue): list-start a moment for Play next,
   // list-end for Add to queue.
+  import { portal } from './portal';
   import Icon from './Icon.svelte';
   import OutputSheet from './OutputSheet.svelte';
   import QueueSheet from './QueueSheet.svelte';
@@ -184,7 +185,9 @@
   <OutputSheet onclose={() => (outputOpen = false)} />
 {/if}
 {#if queueOpen && np}
-  <QueueSheet {src} screen onclose={() => (queueOpen = false)} />
+  <!-- At the page's end, not in the mini-player's dock (its own layer order): over the bar and the floating controls,
+       as the other sheets (the owner, 2026-10-25). -->
+  <div use:portal><QueueSheet {src} screen onclose={() => (queueOpen = false)} /></div>
 {/if}
 {#if heartMenu && np}
   <HeartSheet
