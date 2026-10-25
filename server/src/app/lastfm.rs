@@ -33,8 +33,9 @@ const PAUSE: Duration = Duration::from_millis(250);
 /// Of the loved tracks with no album from the scrobbles and not in the library, at most this many are asked of
 /// Last.fm's track info (one a quarter second).
 const TRACK_LOOKUPS: usize = 500;
-/// A title this short (as the matcher keys it) is too common to take an album by the title alone.
-const TITLE_ALONE_MIN: usize = 4;
+/// A title this short (as the matcher keys it) is too common to take an album by the title alone: "Intro", "Outro",
+/// "Home" (their test).
+const TITLE_ALONE_MIN: usize = 6;
 /// What the history calls a scrobble's context: how its undo finds it.
 pub const CONTEXT: &str = "lastfm";
 /// The import's source, for its stars.
