@@ -98,9 +98,24 @@
   const spectrum = $derived(np && prefs.playerBands !== 'off' ? spectrumOf(np.source, np.id) : null);
   /** The chosen look's settings (lib/bandTune: its own defaults, the user's changes over them). */
   const tune = $derived(tuneOf(prefs.playerBands === 'off' ? 'sirius' : prefs.playerBands));
-  /** Where the handle is held (seconds), and after release until the player is there. */
+  /** Where the handle is held (seconds), while the finger is down; only then. */
   let held = $state<number | null>(null);
-  let heldTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Where it was let go (or a key sent it), until the player is there: the bar shows it, then hands over to where it
+   *  plays in one step, on arrival (the owner, 2026-10-25: the two "structurally unable to differ", the takeover
+   *  atomic). Not a fixed time: a player slow to say where it is now made the bar jump back, then forward. */
+  let sought = $state<number | null>(null);
+  let soughtTimer: ReturnType<typeof setTimeout> | undefined;
+  // There: within half a second of it (a player reports in steps). Never there (refused, or the track changed): back
+  // to where it plays after 3 s.
+  $effect(() => {
+    if (sought !== null && Math.abs(position() - sought) <= 0.5) sought = null;
+  });
+  /** A waveform that shows something (a Bandcamp analysis whose parts did not decode gives bins of nothing: a flat
+   *  line, the plain bar's). It decides the thumb or the lens and the white line, everywhere; while held, as it was
+   *  when the finger went down (a waveform coming in then takes over on release, not under the finger). */
+  const shapedNow = $derived(!!wave && wave.some((v) => v > 0));
+  let shapedHeld = $state<boolean | null>(null);
+  const shaped = $derived(shapedHeld ?? shapedNow);
   // While held, where it plays stays marked, still moving (the owner, 2026-10-24: "something to aim for"); held within
   // SNAP_PX of it, the handle snaps onto it, and let go there nothing is sought (cancelling the seek). Only while the
   // finger is near the bar (SNAP_AWAY_PX above or below it): dragged further off, it comes loose (the owner,
@@ -110,9 +125,10 @@
   let snapped = $state(false);
   /** The seek bar's width (px) while held. */
   let seekWidth = 0;
-  const pos = $derived(snapped ? position() : (held ?? position()));
-  /** Where it plays, 0..1, while the handle is held and elsewhere. */
-  const nowMark = $derived(held !== null && !snapped && dur ? position() / dur : null);
+  const pos = $derived(snapped ? position() : (held ?? sought ?? position()));
+  /** Where it plays, 0..1, while the handle is held elsewhere over a waveform (a white line there); the plain bar has
+   *  none (the owner, 2026-10-25: no white lines without a waveform). */
+  const nowMark = $derived(held !== null && !snapped && shaped && dur ? position() / dur : null);
   /** Held at `secs`, `away` px above or below the bar: on the playing position (snapped) or not. */
   function hold(secs: number, away = 0) {
     const near = !!dur && seekWidth > 0 && away <= SNAP_AWAY_PX && (Math.abs(secs - position()) / dur) * seekWidth <= SNAP_PX;
@@ -136,13 +152,13 @@
     if (!canSeek) return;
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
-    clearTimeout(heldTimer);
+    shapedHeld = shapedNow;
     seekWidth = el.getBoundingClientRect().width;
     hold(at(e, el));
     const r = el.getBoundingClientRect();
     const room = head?.getBoundingClientRect() ?? r;
     const w = el.querySelector('.wave')?.getBoundingClientRect();
-    lens = wave && w ? { width: r.width, middle: r.height / 2, waveHeight: w.height, min: room.left - r.left + 75, max: room.right - r.left - 75 } : null;
+    lens = shapedHeld && w ? { width: r.width, middle: r.height / 2, waveHeight: w.height, min: room.left - r.left + 75, max: room.right - r.left - 75 } : null;
   }
   function seekMove(e: PointerEvent) {
     if (held === null || !(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return;
@@ -154,19 +170,24 @@
     lens = null;
     if (held === null || !el.hasPointerCapture(e.pointerId)) return;
     // Let go on the playing position: nothing changes.
-    if (snapped) {
-      snapped = false;
-      held = null;
-      return;
-    }
+    if (snapped) return letGo();
     release(at(e, el));
   }
-  /** Seek, and keep the handle there until the player has moved (no jump back to the old position). */
-  function release(secs: number) {
-    held = secs;
-    seekTo(secs);
-    heldTimer = setTimeout(() => (held = null), 600);
+  function letGo() {
+    held = null;
+    snapped = false;
+    shapedHeld = null;
+    lens = null;
   }
+  /** Seek, the bar on it until the player is there (`sought`). */
+  function release(secs: number) {
+    letGo();
+    sought = secs;
+    seekTo(secs);
+    clearTimeout(soughtTimer);
+    soughtTimer = setTimeout(() => (sought = null), 3000);
+  }
+  $effect(() => () => clearTimeout(soughtTimer));
   function seekKey(e: KeyboardEvent) {
     if (!canSeek || !dur) return;
     const now = position();
@@ -551,18 +572,18 @@
                 onpointerdown={seekDown}
                 onpointermove={seekMove}
                 onpointerup={seekUp}
-                onpointercancel={() => ((held = null), (snapped = false), (lens = null))}
+                onpointercancel={letGo}
                 onkeydown={seekKey}
               >
-                {#if wave}
+                {#if wave && shaped}
                   <Waveform bins={wave} progress={dur ? pos / dur : 0} paused={np.progress.paused} now={nowMark} />
                 {:else}
                   <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
                 {/if}
-                <!-- The plain bar's handle; over a waveform, while held, the lens instead (where it is going). -->
-                {#if canSeek && !wave}<span class="thumb" style:left="{dur ? (pos / dur) * 100 : 0}%"></span>{/if}
-                {#if !wave && nowMark !== null}<span class="now-mark" style:left="{nowMark * 100}%"></span>{/if}
-                {#if wave && lens && held !== null && dur}
+                <!-- The plain bar's handle (no lens there, the owner 2026-10-25); over a waveform, while held, the lens
+                     instead (where it is going). -->
+                {#if canSeek && !shaped}<span class="thumb" style:left="{dur ? (pos / dur) * 100 : 0}%"></span>{/if}
+                {#if wave && shaped && lens && held !== null && dur}
                   <WaveLens bins={wave} point={pos / dur} now={nowMark} {...lens} time={clockText(pos)} paused={np.progress.paused} />
                 {/if}
               </div>
@@ -1133,18 +1154,6 @@
 
   .seek.held .thumb {
     transform: scale(1.3);
-  }
-
-  /* Where it plays while the handle is held elsewhere (on a plain bar; a waveform draws its own). */
-  .now-mark {
-    position: absolute;
-    top: 50%;
-    width: 2px;
-    height: 16px;
-    margin: -8px 0 0 -1px;
-    border-radius: 1px;
-    background: var(--text);
-    pointer-events: none;
   }
 
   .bar {
