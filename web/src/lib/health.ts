@@ -7,13 +7,15 @@ import { setSwitch } from './listFilter.svelte';
 /** Each domain's name and icon, in the Health page's order. */
 export const DOMAINS: Record<string, { name: string; icon: IconName }> = {
   servers: { name: 'Servers', icon: 'wifi' },
+  library: { name: 'Library', icon: 'library' },
   incoming: { name: 'Incoming', icon: 'arrowDown' },
   files: { name: 'Files', icon: 'music' },
   playlists: { name: 'Playlists', icon: 'playlists' },
   analysis: { name: 'Analysis', icon: 'gauge' },
   players: { name: 'Players', icon: 'speaker' },
   'sign-in': { name: 'Sign-in', icon: 'key' },
-  server: { name: 'Cratarr', icon: 'health' },
+  // Its answers and the clients asking it (the owner, 2026-10-25: "That group should be Network").
+  server: { name: 'Network', icon: 'health' },
   requests: { name: 'Requests', icon: 'inbox' },
 };
 

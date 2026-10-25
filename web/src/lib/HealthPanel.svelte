@@ -18,7 +18,8 @@
   import TopPill from './TopPill.svelte';
   import Group from './settings/Group.svelte';
   import Item from './settings/Item.svelte';
-  import { albumSubject, backFromStep, closePlaylist, HEALTH, healthItemOf, openStep, openTab, panel, viewOver } from './panel.svelte';
+  import { albumSubject, backFromStep, closePlaylist, HEALTH, healthItemOf, openStep, openTab, panel, upToPage, viewOver } from './panel.svelte';
+  import Crumbs from './Crumbs.svelte';
 
   let { problem, beside = false }: { problem: string; beside?: boolean } = $props();
   const p = $derived(problems().find((x) => x.key === problem) ?? null);
@@ -50,9 +51,13 @@
     {:else if !beside}
       <span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>
     {/if}
-    <h2 class="title">
-      {#if item}<span class="up">{p?.title}</span><span class="sep" aria-hidden="true">›</span>{item.title}{:else if p}<span class="up">{p.domain}</span><span class="sep" aria-hidden="true">›</span>{p.title}{:else}Health{/if}
-    </h2>
+    {#if item}
+      <Crumbs up={{ label: p?.title ?? 'Health', go: () => backFromStep(HEALTH + problem) }} here={item.title} />
+    {:else if p}
+      <Crumbs up={{ label: p.domain, go: beside ? undefined : () => upToPage('#/health') }} here={p.title} />
+    {:else}
+      <h2 class="title">Health</h2>
+    {/if}
     {#if !beside && !item}<TopPill device={false} filter={false} view={false} search="health" />{/if}
   </div>
   <div class="scroll">
@@ -144,14 +149,8 @@
     white-space: nowrap;
   }
 
-  .up,
-  .sep,
   .muted {
     color: var(--muted);
-  }
-
-  .sep {
-    margin: 0 8px;
   }
 
   .scroll {

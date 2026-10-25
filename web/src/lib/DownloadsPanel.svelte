@@ -8,7 +8,8 @@
   // a crate's own; an artist (or what is not known well enough for its own menu) a short one: Go to it, Stop syncing.
   // The pill's search narrows the two lists.
   import { albumCoverUrl, crateImageUrl } from './api';
-  import { albumSubject, artistSubject, closePlaylist, SETTINGS, viewPlaylist } from './panel.svelte';
+  import { albumSubject, artistSubject, closePlaylist, SETTINGS, upToPage, viewPlaylist } from './panel.svelte';
+  import Crumbs from './Crumbs.svelte';
   import { appInfo, download, downloads } from './app.svelte';
   import { library } from './albums.svelte';
   import { DOWNLOADS_LISTS, goTo, onceAlbums, WAITS, type DownloadsList, type OnceAlbum } from './downloadsLists.svelte';
@@ -106,7 +107,7 @@
 <div class="view">
   <div class="bar" class:beside>
     {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
-    <h2 class="title"><span class="up">Downloads</span><span class="sep" aria-hidden="true">›</span>{L.label}</h2>
+    <Crumbs up={{ label: 'Downloads', go: beside ? undefined : () => upToPage('#/downloads') }} here={L.label} />
     {#if !beside}<TopPill device={false} filter={false} view={false} search="downloads" />{/if}
   </div>
   <div class="scroll">
@@ -207,26 +208,6 @@
 
   .bar.beside {
     padding-left: clamp(12px, 2vw, 24px);
-  }
-
-  .title {
-    flex: 1;
-    min-width: 0;
-    margin: 0;
-    overflow: hidden;
-    font-size: 20px;
-    font-weight: 600;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .up,
-  .sep {
-    color: var(--muted);
-  }
-
-  .sep {
-    margin: 0 8px;
   }
 
   .scroll {

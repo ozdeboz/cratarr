@@ -251,6 +251,14 @@ export function closePlaylist(then?: () => void) {
   }
 }
 
+/** A breadcrumb's page (lib/Crumbs, 0.9.3): the panel closed, as its ✕ closes it, and that page shown, wherever the
+ *  panel was opened from (the owner, 2026-10-25: breadcrumbs as what global search needs, its results opening anywhere). */
+export function upToPage(href: string) {
+  closePlaylist(() => {
+    if (!location.hash.startsWith(href)) location.hash = href;
+  });
+}
+
 /** A renamed playlist stays viewed under its new name; a deleted one leaves the selection. */
 export function playlistRenamed(from: string, to: string) {
   if (!panel.selection.includes(from)) return;

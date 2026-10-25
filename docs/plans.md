@@ -219,3 +219,13 @@ The owner, 2026-10-25: Home's crates belong on the Crates page too, and one's ow
   only (not for a short, common title), else Last.fm's track info's (500 at most, four a second). The album found
   also matches the library's track by album and title, so the love becomes a favourite under whichever artist it was
   kept. A track loved under several of its artists is one row with all of them.
+- **Pure breadcrumbs** (the owner, 2026-10-25: Requests, Downloads, Insights, Health, Settings; "2 at most. So the
+  current and one level above."): every such panel's title is the level above › where one is (lib/Crumbs): Requests ›
+  Waiting for an answer, Collection › Genres, Library › a Health problem (on an item's page: the problem › the item),
+  Settings › Account (on a thing's page: Account › the thing): for Insights and Health the level above is the view's
+  group (the owner chose it). The level above is a tap: a page's or a group's name closes the panel and shows that page
+  wherever the panel was opened from (`upToPage`: global search's results will open anywhere); a part's name goes back
+  to it. Health names its Library domain (it showed "library").
+- **Discover in the bar where there is room** (the owner): the phone and tablet bar shows as many of the main pages as
+  fit (a tab at least 72 px wide): four and More on a phone, all five with Discover on a tablet. The pages apart
+  (Requests, Insights, Health, Settings) stay behind More: "requests is of the other category".
