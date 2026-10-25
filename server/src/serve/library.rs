@@ -105,6 +105,9 @@ pub struct Library {
     /// When albums were added, where known better than the catalogue's first sight of their files (imported from a
     /// media server): an album's `created` is the earlier of the two.
     added: Mutex<HashMap<String, i64>>,
+    /// Albums' original years from MusicBrainz (0.9.5), by their MusicBrainz release: for an album whose files carry no
+    /// original date.
+    originals: Mutex<HashMap<String, u32>>,
 }
 
 /// A number at the start of a tag ("3/12" is 3).
@@ -263,12 +266,23 @@ impl Library {
         }
         conn.execute_batch(SCHEMA).context("creating the library tables")?;
         conn.execute_batch(&format!("PRAGMA user_version = {LAYOUT}"))?;
-        Ok(Self { db: Mutex::new(conn), added: Mutex::default() })
+        Ok(Self { db: Mutex::new(conn), added: Mutex::default(), originals: Mutex::default() })
     }
 
     /// The added dates known better than the catalogue's (by album id); a change builds the library again.
     pub fn set_added(&self, added: HashMap<String, i64>) {
         *self.added.lock().unwrap_or_else(|p| p.into_inner()) = added;
+    }
+
+    /// The original years known from MusicBrainz (by MusicBrainz release); a change builds the library again.
+    pub fn set_originals(&self, originals: HashMap<String, u32>) {
+        *self.originals.lock().unwrap_or_else(|p| p.into_inner()) = originals;
+    }
+
+    /// A summary of the original years, part of what the library was built from.
+    fn originals_print(&self) -> String {
+        let o = self.originals.lock().unwrap_or_else(|p| p.into_inner());
+        format!("{}/{}", o.len(), o.values().fold(0u64, |a, v| a.wrapping_add(u64::from(*v))))
     }
 
     /// A summary of the added dates, part of what the library was built from.
@@ -320,7 +334,7 @@ impl Library {
             "catalogue {} {} {} rules {:x} files {}",
             cat.generation(),
             cat.folders().len(),
-            self.added_print(),
+            format!("{} originals {}", self.added_print(), self.originals_print()),
             {
                 use md5::Digest;
                 md5::Md5::digest(serde_json::to_string(rules)?.as_bytes())
@@ -360,6 +374,7 @@ impl Library {
 
     fn build(&self, folders: &[FolderRows], rules: &Rules) -> Result<()> {
         let added = self.added.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let originals = self.originals.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let mut songs: Vec<Song> =
             folders.iter().flat_map(|f| f.rows.iter().filter(|r| r.track.is_some()).map(move |r| (f.folder, r))).map(|(folder, r)| song(r, folder, rules)).collect();
         one_album_per_folder(&mut songs);
@@ -443,7 +458,17 @@ impl Library {
             for (album_id, songs) in &albums {
                 let first = songs[0];
                 let years: Vec<u32> = songs.iter().filter_map(|s| s.row.first("date").and_then(year_of)).collect();
-                let original: Vec<u32> = songs.iter().filter_map(|s| s.row.first("originaldate").and_then(year_of)).collect();
+                // Its original year: its files' original date, else MusicBrainz's for its release (0.9.5); shown as its
+                // year where it is earlier than its release's (a reissue's), so every list and order has it.
+                let original = songs
+                    .iter()
+                    .filter_map(|s| s.row.first("originaldate").and_then(year_of))
+                    .min()
+                    .or_else(|| first.row.first("musicbrainz_albumid").and_then(|m| originals.get(m)).copied());
+                let album_year = match (original, years.iter().max().copied()) {
+                    (Some(o), Some(d)) => Some(o.min(d)),
+                    (o, d) => o.or(d),
+                };
                 let mut genres: Vec<String> = Vec::new();
                 for s in songs.iter() {
                     for g in &s.genres {
@@ -473,8 +498,8 @@ impl Library {
                     first.album,
                     first.album_artist,
                     artist_id,
-                    years.iter().max(),
-                    original.iter().min(),
+                    album_year,
+                    original,
                     genres.first(),
                     genres.join("\u{1f}"),
                     songs.len() as i64,
@@ -910,6 +935,42 @@ mod tests {
         assert_eq!(lib.counts().unwrap().1, 1);
         let year: i64 = lib.db().query_row("SELECT year FROM albums", [], |r| r.get(0)).unwrap();
         assert_eq!(year, 2015, "the album's aggregates still count every song");
+    }
+
+    #[test]
+    fn an_album_shows_its_original_year_from_its_files_else_musicbrainz() {
+        let album = |t: i64, name: &str, tags: &[(&str, &str)]| {
+            let mut all = vec![("title", "A"), ("artist", "Ott"), ("albumartist", "Ott"), ("album", name)];
+            all.extend_from_slice(tags);
+            row(t, &format!("Ott/{name}/01 A.flac"), &all)
+        };
+        let folders = || {
+            vec![FolderRows {
+                folder: 0,
+                root: "/music".into(),
+                rows: vec![
+                    album(1, "Skylon", &[("date", "2012-09-24"), ("musicbrainz_albumid", "rel-skylon")]),
+                    album(2, "Mir", &[("date", "2015"), ("originaldate", "2011-03-01"), ("musicbrainz_albumid", "rel-mir")]),
+                    album(3, "Odd", &[("date", "2005"), ("musicbrainz_albumid", "rel-odd")]),
+                ],
+            }]
+        };
+        let years = |lib: &Library| -> Vec<(String, Option<i64>, Option<i64>)> {
+            let db = lib.db();
+            let mut st = db.prepare("SELECT name, year, original_year FROM albums ORDER BY name").unwrap();
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(Result::unwrap).collect()
+        };
+        let lib = Library::open(None).unwrap();
+        lib.refresh(&folders(), &Rules::default()).unwrap();
+        assert_eq!(years(&lib)[2], ("Skylon".into(), Some(2012), None), "a reissue's year without anything better");
+        let lib = Library::open(None).unwrap();
+        lib.set_originals([("rel-skylon".into(), 2008), ("rel-mir".into(), 1999), ("rel-odd".into(), 2009)].into());
+        lib.refresh(&folders(), &Rules::default()).unwrap();
+        assert_eq!(
+            years(&lib),
+            [("Mir".into(), Some(2011), Some(2011)), ("Odd".into(), Some(2005), Some(2009)), ("Skylon".into(), Some(2008), Some(2008))],
+            "the files' original date first; MusicBrainz's where they have none; never later than the release's"
+        );
     }
 
     #[test]

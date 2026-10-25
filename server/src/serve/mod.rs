@@ -257,13 +257,23 @@ impl Serve {
         }
         let rules = self.rules.read().unwrap_or_else(|p| p.into_inner()).clone();
         let added = self.userdata.added()?;
-        // The catalogue is only looked at after it finished a pass (or the rules or added dates changed): reading its
-        // files' summary every minute kept its 200 MB file in memory for nothing.
-        let inputs = (self.catalogue().last_pass(), format!("{}|{}", serde_json::to_string(&rules)?, added.len() as i64 + added.values().sum::<i64>()));
+        let originals = self.userdata.original_years()?;
+        // The catalogue is only looked at after it finished a pass (or the rules, added dates or original years changed):
+        // reading its files' summary every minute kept its 200 MB file in memory for nothing.
+        let inputs = (
+            self.catalogue().last_pass(),
+            format!(
+                "{}|{}|{}",
+                serde_json::to_string(&rules)?,
+                added.len() as i64 + added.values().sum::<i64>(),
+                originals.len() as u64 + originals.values().map(|y| u64::from(*y)).sum::<u64>()
+            ),
+        );
         if self.checked.lock().unwrap_or_else(|p| p.into_inner()).as_ref() == Some(&inputs) {
             return Ok(false);
         }
         self.library.set_added(added);
+        self.library.set_originals(originals);
         let (change, print) = self.library.change(self.catalogue(), &rules)?;
         // New analyses alone wait for their gap: not noted as checked, so the next check looks again, and builds once
         // the gap has passed (with every analysis that came meanwhile).

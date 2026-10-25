@@ -590,6 +590,15 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The MusicBrainz releases of the albums without an original year (0.9.5: asked of MusicBrainz), in the library's
+    /// order.
+    pub fn releases_without_original(&self) -> Result<Vec<String>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT DISTINCT mbid FROM albums WHERE original_year IS NULL AND mbid IS NOT NULL AND mbid <> '' ORDER BY n")?;
+        let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// The songs of these albums, the albums in the order given, each one's in its own order (disc, track, file), as
     /// `album` has them; read 500 albums at a time (0.9.4: several albums' tracks in one call).
     pub fn songs_of_albums(&self, albums: &[String]) -> Result<Vec<Song>> {

@@ -1346,6 +1346,9 @@ pub struct Missing {
     pub year: Option<i32>,
     pub kind: Option<String>,
     pub cover: String,
+    /// Its page on Bandcamp where an open of it found one lately (0.9.5: its cover's play button, as Discover's).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bandcamp: Option<String>,
 }
 
 /// An artist's albums and EPs the library has none of, newest first: their discography as Discover keeps it (read now
@@ -1374,14 +1377,22 @@ pub async fn missing_albums(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::ca
         }
     };
     let dir = serve.data_dir.clone().context("Cratarr's data folder is needed")?;
-    let (lib, artist) = (serve.library.clone(), name.to_string());
+    let (lib, ud, artist) = (serve.library.clone(), serve.userdata.clone(), name.to_string());
     let mut out = tokio::task::spawn_blocking(move || -> Result<Vec<Missing>> {
         let names = lib.artist_albums()?.into_iter().map(|r| r.1).collect::<Vec<_>>();
         let have = have(Path::new(&dir), &cat, names)?;
+        let pages = ud.bandcamp_pages(now - BANDCAMP_FOUND_SECS)?;
         Ok(groups
             .into_iter()
             .filter(|g| !have.has(&Candidate { album: g.title.clone(), artist: artist.clone(), release_group: Some(g.id.clone()), ..Candidate::default() }))
-            .map(|g| Missing { cover: format!("https://coverartarchive.org/release-group/{}/front-250", g.id), release_group: g.id, title: g.title, year: g.year, kind: g.kind })
+            .map(|g| Missing {
+                cover: format!("https://coverartarchive.org/release-group/{}/front-250", g.id),
+                bandcamp: pages.get(&g.id).cloned(),
+                release_group: g.id,
+                title: g.title,
+                year: g.year,
+                kind: g.kind,
+            })
             .collect())
     })
     .await??;
@@ -1433,6 +1444,9 @@ pub struct MissingOf {
     pub year: Option<i32>,
     pub kind: Option<String>,
     pub cover: String,
+    /// Its page on Bandcamp where an open of it found one lately (0.9.5: its cover's play button, as Discover's).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bandcamp: Option<String>,
 }
 
 /// Every missing album of the library's artists whose discography Discover keeps (shared by every account), newest
@@ -1444,6 +1458,7 @@ pub async fn all_missing(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catal
         let rows = lib.artist_albums()?;
         let names: HashMap<String, String> = rows.iter().filter_map(|(_, name, mbid, _, _, _)| Some((mbid.clone().filter(|m| !m.is_empty())?, name.clone()))).collect();
         let have = have(Path::new(&dir), &cat, rows.into_iter().map(|r| r.1))?;
+        let pages = ud.bandcamp_pages(super::moment::now_secs() - BANDCAMP_FOUND_SECS)?;
         let mut out = Vec::new();
         let mut artists = 0;
         for (mbid, json) in ud.discographies()? {
@@ -1454,7 +1469,15 @@ pub async fn all_missing(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catal
                 if have.has(&Candidate { album: g.title.clone(), artist: artist.clone(), release_group: Some(g.id.clone()), ..Candidate::default() }) {
                     continue;
                 }
-                out.push(MissingOf { cover: format!("https://coverartarchive.org/release-group/{}/front-250", g.id), release_group: g.id, title: g.title, artist: artist.clone(), year: g.year, kind: g.kind });
+                out.push(MissingOf {
+                    cover: format!("https://coverartarchive.org/release-group/{}/front-250", g.id),
+                    bandcamp: pages.get(&g.id).cloned(),
+                    release_group: g.id,
+                    title: g.title,
+                    artist: artist.clone(),
+                    year: g.year,
+                    kind: g.kind,
+                });
             }
         }
         out.sort_by(|a, b| b.year.cmp(&a.year).then_with(|| a.artist.cmp(&b.artist)).then_with(|| a.title.cmp(&b.title)));
