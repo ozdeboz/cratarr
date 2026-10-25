@@ -6,6 +6,7 @@
   // from the room it has: the front cover as large as the height allows between `top` and `foot`, the covers beside it
   // spread over the width (off its edges where it is narrow), the sides fading out. Only the covers in sight are made,
   // and the next few are fetched ahead.
+  import { untrack } from 'svelte';
   import Cover from './Cover.svelte';
 
   let {
@@ -17,7 +18,11 @@
     onspare,
     onmenu,
     marked,
+    enter = false,
   }: {
+    /** Come in when shown (Home's featured flow; the owner, 2026-10-26): from both edges towards the middle, the outer
+     *  covers first, the front one last. */
+    enter?: boolean;
     covers: string[];
     /** Which covers are highlighted, by their place (the ticked ones in select mode; the owner, 2026-10-23: a border). */
     marked?: boolean[];
@@ -85,6 +90,25 @@
       w,
     };
   }
+  // Coming in: each cover from its side's edge (the front one only fading in), the outer ones first; then as ever.
+  const ENTER_MS = 650;
+  const STAGGER_MS = 70;
+  let entering = $state(untrack(() => enter) && !matchMedia('(prefers-reduced-motion: reduce)').matches);
+  let entered = $state(!untrack(() => entering));
+  $effect(() => {
+    if (!entering) return;
+    let t = 0;
+    const r = requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        entering = false;
+        t = window.setTimeout(() => (entered = true), ENTER_MS + STAGGER_MS * 6);
+      }),
+    );
+    return () => {
+      cancelAnimationFrame(r);
+      clearTimeout(t);
+    };
+  });
   const items = $derived.by(() => {
     if (!n) return [];
     const base = Math.floor(pos);
@@ -217,9 +241,11 @@
       style:left="{front.left}px"
       style:width="{c.w}px"
       style:height="{c.w}px"
-      style:transform={c.t}
+      style:transform={entering && c.key !== Math.round(pos) ? `translateX(${(c.key < pos ? -1 : 1) * size}px) ${c.t}` : c.t}
       style:filter="brightness({c.f})"
-      style:opacity={c.o}
+      style:opacity={entering ? 0 : c.o}
+      style:transition-duration={entered ? null : `${ENTER_MS}ms`}
+      style:transition-delay={entered ? null : `${Math.max(0, front.sides + 1 - Math.abs(c.key - Math.round(pos))) * STAGGER_MS}ms`}
       style:z-index={c.z}><Cover src={c.src} lazy={false} /></span
     >
   {/each}

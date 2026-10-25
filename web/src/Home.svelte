@@ -302,7 +302,27 @@
     favAlbums: favAlbumIds !== null && !!library.view,
     favTracks: favRows !== null,
   });
-  const turn = (part: Part) => settledOf(part) && (!patient || order.slice(0, order.indexOf(part)).every((x) => settledOf(x)));
+  // The header's picture first (the owner, 2026-10-26: "The first thing to show should be the header image. After that,
+  // the rest can start to enter"): with a flow leading Home, its sky shows as soon as it is known which (the moment's
+  // weather, or one's own picture) and that picture is in, then its words and albums, then the sections after it; two
+  // and a half seconds at most, then whatever there is.
+  let skyIn = $state(false);
+  $effect(() => {
+    if (skyIn) return;
+    if (!heroLead) return void (skyIn = true);
+    const t = setTimeout(() => (skyIn = true), 2500);
+    if (!(localCovers[HOME_HEADER] || momentIn) || !skyPhoto) return () => clearTimeout(t);
+    let gone = false;
+    const img = new Image();
+    img.onload = img.onerror = () => !gone && (skyIn = true);
+    img.src = new URL(skyPhoto, document.baseURI).href;
+    return () => {
+      gone = true;
+      clearTimeout(t);
+    };
+  });
+  const turn = (part: Part) =>
+    settledOf(part) && (part === lead || !heroLead || skyIn) && (!patient || order.slice(0, order.indexOf(part)).every((x) => settledOf(x)));
   /** Nothing shown yet and something still to come: the page's loader, not a blank page. */
   const loading = $derived(!order.some(turn) && !order.every((x) => settledOf(x)));
 
@@ -367,6 +387,10 @@
         return [];
     }
   });
+  const heroLead = $derived(FLOW_PARTS.includes(lead));
+  /** The header's words and albums, after its picture. */
+  const heroReady = $derived(skyIn && turn(lead) && heroAlbums.length > 0);
+
   const TITLES: Partial<Record<Part, string>> = { newest: 'New for you', past: 'Blast from the past', graves: 'Grave digging', favAlbums: 'Favourite albums' };
   const leadTitle = $derived(lead === 'moment' ? (moment?.name ?? '') : (TITLES[lead] ?? ''));
   /** The album in front of the flow, named under it. */
@@ -424,8 +448,16 @@
 </div>
 
 {#snippet heroPart()}
-  {#if turn(lead) && heroAlbums.length}
-    <section class="moment top" data-sky={moment?.sky ?? 'plain'} class:dark={moment?.dark ?? false} style:--photo={skyPhoto ? `url("${new URL(skyPhoto, document.baseURI)}")` : 'none'} aria-label={leadTitle}>
+  <!-- Its sky at once, its picture as soon as it is in; its words and albums after it (heroReady). -->
+  {#if !settledOf(lead) || heroAlbums.length}
+    <section
+      class="moment top"
+      class:waiting={!heroReady}
+      data-sky={moment?.sky ?? 'plain'}
+      class:dark={moment?.dark ?? false}
+      style:--photo={skyIn && skyPhoto ? `url("${new URL(skyPhoto, document.baseURI)}")` : 'none'}
+      aria-label={leadTitle}
+    >
       {#if prefs.homeGreeting}
         <!-- The personal greeting (Settings › Home): the time of day and their name, then what plays here. -->
         <h2 class="greeting">{greeting}</h2>
@@ -434,14 +466,15 @@
         <h2>{leadTitle}</h2>
       {/if}
       <div class="sky-flow">
-        <CoverFlow
+        {#if heroReady}<CoverFlow
+          enter
           covers={heroAlbums.map((a) => albumCoverUrl(a.source, a.id))}
           top={0}
           foot={SHADOW}
           onopen={(i) => viewOver(albumSubject(heroAlbums[i].source, heroAlbums[i].id))}
           onfront={(i) => (momentFront = i)}
           onmenu={(i) => (albumMenu = { ...heroAlbums[i] })}
-        />
+        />{/if}
       </div>
       <div class="caption">
         {#if frontAlbum}
@@ -725,6 +758,16 @@
 
   /* Room under the covers for their shadow (it fades over 30 px): at the flow's very foot, its clip cut the shadow off
      in a hard line (the owner, 2026-10-23). The caption comes up as much. */
+  /* Its words and caption wait for its picture (heroReady), then fade in. */
+  .moment > :is(h2, .for-now, .caption) {
+    transition: opacity 300ms ease;
+  }
+
+  .moment.waiting > :is(h2, .for-now, .caption) {
+    opacity: 0;
+    pointer-events: none;
+  }
+
   .sky-flow {
     position: relative;
     height: calc(clamp(200px, 30vw, 290px) + 40px);
