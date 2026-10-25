@@ -145,8 +145,13 @@
     background: color-mix(in srgb, var(--text) 5%, transparent);
   }
 
-  .item.off {
+  .item.off > :not(.more) {
     opacity: 0.5;
+  }
+
+  /* A control of its own (a choice) takes no tap while the row does not apply. */
+  .item.off .own {
+    pointer-events: none;
   }
 
   /* The name's room: little reserved (6em, it was 10), so a short choice fits beside it on a phone instead of a line
