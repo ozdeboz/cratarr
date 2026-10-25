@@ -10,6 +10,7 @@
   // server's parts are its administrators' (decision 0051): for anyone else they show nothing, and the server's
   // settings are not asked for.
   import { glass, handGlass } from './glass.svelte';
+  import GlobalResults from './GlobalResults.svelte';
   import { untrack } from 'svelte';
   import Crumbs from './Crumbs.svelte';
   import Icon from './Icon.svelte';
@@ -168,6 +169,8 @@
     {#if ed.dirty}
       <SaveBar saving={ed.saving} canSave={!!ed.s?.settings_file} onsave={ed.save} ondiscard={() => ed.s && ed.fill(ed.s)} />
     {/if}
+      <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
+    {#if handed}<GlobalResults />{/if}
   </div>
 </div>
 

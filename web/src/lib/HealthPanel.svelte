@@ -6,6 +6,7 @@
   // folders not heard, the slow pages, the files), each opening where it is; and where to deal with it all. Beside the
   // list on a roomy window (no ✕ there), over it on a phone.
   import { glass, handGlass } from './glass.svelte';
+  import GlobalResults from './GlobalResults.svelte';
   import Cover from './Cover.svelte';
   import Icon from './Icon.svelte';
   import { albumCoverUrl, type HealthItem } from './api';
@@ -125,6 +126,8 @@
         <button class="act" onclick={() => f && openFinding(f)}>{WHERE[f.open.page] ?? 'Open'}<Icon name="chevronRight" size={18} /></button>
       {/if}
     {/if}
+      <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
+    {#if handed}<GlobalResults />{/if}
   </div>
 </div>
 

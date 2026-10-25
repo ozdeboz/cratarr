@@ -1635,6 +1635,14 @@ export const findOnBandcamp = (artist: string, album: string, release_group?: st
 /** Want for any album (a missing one): the same request and rights as Discover's Want. */
 export const wantAlbum = (a: { release_group?: string; artist: string; album: string; year?: number | null; cover?: string | null }) =>
   post<{ request: AlbumRequest }>('/api/requests/want', a);
+/** The words looked up on MusicBrainz (Find more music, 0.9.3): its albums and artists, the surest first, `have` where
+ *  the library has them. */
+export type MusicBrainzFound = {
+  albums: { release_group: string; title: string; artist: string; year: number | null; kind: string | null; cover: string | null; have: boolean }[];
+  artists: { mbid: string; name: string; disambiguation?: string | null; have: boolean }[];
+};
+export const musicBrainzSearch = (q: string, limit = 20) =>
+  quietly<MusicBrainzFound>(`/api/musicbrainz/search?${new URLSearchParams({ q, limit: String(limit) })}`);
 export const discoverArtistPhotoUrl = (name: string) => `/api/discover/artist/photo?name=${encodeURIComponent(name)}`;
 /** An artist related to another (the server's app/related.rs): why, their id in the library, or an album of theirs on
  *  Bandcamp. */

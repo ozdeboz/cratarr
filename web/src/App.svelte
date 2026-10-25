@@ -46,6 +46,9 @@
   import { linear, quadInOut } from 'svelte/easing';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './lib/motion';
   import { glass } from './lib/glass.svelte';
+  import GlobalResults from './lib/GlobalResults.svelte';
+  import Find from './Find.svelte';
+  import type { SearchKind } from './lib/api';
   import Toasts from './lib/Toasts.svelte';
   import { toast } from './lib/toast.svelte';
   import ProgressBar from './lib/ProgressBar.svelte';
@@ -91,12 +94,16 @@
    *  name on the page beside back and their panel under the top bar, not over it, both wherever the bar of pages is
    *  along the top (`phone`: under 1024 px; the owner, 2026-10-25). */
   const PANEL_PAGES: Page[] = [REQUESTS, DOWNLOADS, INSIGHTS, HEALTH, SETTINGS];
+  /** The kind a page already shows, left out of the global results under it (decision 0072). */
+  const PAGE_KINDS: Record<string, SearchKind[]> = { library: ['album'], playlists: ['playlist'], crates: ['crate', 'genre'] };
   const panelPage = $derived(PANEL_PAGES.find((p) => p.id === page) ?? null);
   // Local mode's (decision 0052): the device's own music, and the menu shows only these (and Settings).
   const LOCAL_ALBUMS: Page = { id: 'local-albums', href: '#/local/albums', label: 'Albums', icon: 'disc' };
   const LOCAL_ARTISTS: Page = { id: 'local-artists', href: '#/local/artists', label: 'Artists', icon: 'users' };
   const LOCAL_TRACKS: Page = { id: 'local-tracks', href: '#/local/tracks', label: 'Tracks', icon: 'music' };
   const LOCAL = [LOCAL_ALBUMS, LOCAL_ARTISTS, LOCAL_TRACKS];
+  /** Find more music (0.9.3): the words looked up on MusicBrainz, reached from a search that found nothing anywhere. */
+  const FIND: Page = { id: 'find', href: '#/find', label: 'Find more music', icon: 'search' };
 
   // Phones get a bottom bar. Up to five fit; beyond that the first four stay and the rest go under "More".
   const BAR_SLOTS = 5;
@@ -113,7 +120,7 @@
       return LIBRARY.id;
     }
     if (!h) return HOME.id;
-    return [HOME, HEALTH, SETTINGS, LIBRARY, INSIGHTS, CRATES, DISCOVER, REQUESTS, DOWNLOADS, ...LOCAL].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
+    return [HOME, HEALTH, SETTINGS, LIBRARY, INSIGHTS, CRATES, DISCOVER, REQUESTS, DOWNLOADS, FIND, ...LOCAL].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
   };
   let page = $state(fromHash());
   // Where the player shows (decision 0018): beside the page on a roomy window while something plays (`sidebar`);
@@ -361,7 +368,7 @@
   /** The layer under the top bar (an index page's panel) or over all of it (a playlist's, an album's, an artist's). */
   const underBar = $derived(phone && !!panelPage && !!(settingsShown || healthShown || insightsShown || requestsShown || downloadsShown));
   /** The one pill's settings: the panel's where it handed them, else the page's. */
-  const pagePillShown = $derived(pagePill || ['settings', 'discover', 'insights', 'health', 'requests'].includes(page));
+  const pagePillShown = $derived(pagePill || ['settings', 'discover', 'insights', 'health', 'requests', 'home', 'find'].includes(page));
   const pillNow = $derived(
     handed
       ? handed.pill()
@@ -637,9 +644,13 @@
       <Requests />
     {:else if page === 'home'}
       <Home />
+    {:else if page === 'find'}
+      <Find />
     {:else}
       <Playlists />
     {/if}
+    <!-- Global search at the end of what the page's own search leaves (decision 0072), but the kind the page shows. -->
+    {#if page !== 'find'}<GlobalResults except={PAGE_KINDS[page] ?? []} />{/if}
     </SheetArea>
     </div>
     {#if split}

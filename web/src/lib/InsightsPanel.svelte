@@ -19,6 +19,7 @@
   import { closePlaylist, INSIGHTS, upToPage, viewPlaylist } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
   import { glass, handGlass } from './glass.svelte';
+  import GlobalResults from './GlobalResults.svelte';
 
   let { view, beside = false }: { view: InsightsView; beside?: boolean } = $props();
 
@@ -83,6 +84,8 @@
     {:else}
       <InsightsCollection data={insights.data} />
     {/if}
+      <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
+    {#if handed}<GlobalResults />{/if}
   </div>
 </div>
 

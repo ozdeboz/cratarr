@@ -6,6 +6,7 @@
   // requests: each with where it stands, a waiting one taken back from its menu. Lidarr monitor: what it
   // fetches now (how far), then what it watches for and has not found yet.
   import { glass, handGlass } from './glass.svelte';
+  import GlobalResults from './GlobalResults.svelte';
   import type { AlbumRequest, WatchedAlbum } from './api';
   import Icon from './Icon.svelte';
   import { me } from './me.svelte';
@@ -178,6 +179,8 @@
         {#if w.more}<Item name="{w.more.toLocaleString()} more" line="In Lidarr's Wanted" />{/if}
       </Group>
     {/if}
+      <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
+    {#if handed}<GlobalResults />{/if}
   </div>
 </div>
 

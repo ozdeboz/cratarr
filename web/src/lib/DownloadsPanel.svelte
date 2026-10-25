@@ -8,6 +8,7 @@
   // a crate's own; an artist (or what is not known well enough for its own menu) a short one: Go to it, Stop syncing.
   // The pill's search narrows the two lists.
   import { glass, handGlass } from './glass.svelte';
+  import GlobalResults from './GlobalResults.svelte';
   import { albumCoverUrl, crateImageUrl } from './api';
   import { albumSubject, artistSubject, closePlaylist, SETTINGS, upToPage, viewPlaylist } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
@@ -181,6 +182,8 @@
         {/each}
       </Group>
     {/if}
+      <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
+    {#if handed}<GlobalResults />{/if}
   </div>
 </div>
 

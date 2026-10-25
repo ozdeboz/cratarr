@@ -116,6 +116,7 @@
   import SimilarLists from './SimilarLists.svelte';
   import SuggestedTracks from './SuggestedTracks.svelte';
   import { glass, handGlass } from './glass.svelte';
+  import GlobalResults from './GlobalResults.svelte';
   import AvoidLine from './AvoidLine.svelte';
   import ListHead from './ListHead.svelte';
   import { insights, plural } from './insights.svelte';
@@ -2023,6 +2024,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     {:else}
       <PageLoading />
     {/if}
+      <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
+    {#if handed}<GlobalResults />{/if}
   </div>
 
   {#if selecting}
