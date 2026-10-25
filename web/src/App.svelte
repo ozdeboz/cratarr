@@ -472,7 +472,10 @@
   });
   // In a panel whose action bar sticks (lib/glass's `below`), the bar is away exactly while it sticks, scrolling up
   // too (the owner, 2026-10-25).
-  const navHidden = $derived(!navBottom && (navAway || (phone && prefs.stickyActions && !!handed?.below?.())));
+  // And while a library item is open, where the user wants it so (Display; its panel hands a `below`).
+  const navHidden = $derived(
+    !navBottom && (navAway || (phone && !!handed?.below && (prefs.navHidesOnItem || (prefs.stickyActions && handed.below())))),
+  );
   // Somewhere else: the bar shows again.
   $effect(() => {
     void page;

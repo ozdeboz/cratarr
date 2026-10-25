@@ -32,6 +32,7 @@
       prefs.animations = true;
       prefs.navAt = 'top';
       prefs.navHides = false;
+      prefs.navHidesOnItem = true;
       prefs.stickyActions = true;
       prefs.miniAt = 'bottom';
       prefs.navControlsAt = 'top';
@@ -69,15 +70,21 @@
   {#snippet tail()}
     <OrderReset
       label="Layout"
-      isDefault={prefs.navAt === 'top' && !prefs.navHides && prefs.stickyActions && prefs.miniAt === 'bottom' && prefs.navControlsAt === 'top' && prefs.contentControlsAt === 'top'}
+      isDefault={prefs.navAt === 'top' && !prefs.navHides && prefs.navHidesOnItem && prefs.stickyActions && prefs.miniAt === 'bottom' && prefs.navControlsAt === 'top' && prefs.contentControlsAt === 'top'}
       reset={() => {
-        const was = { navAt: prefs.navAt, navHides: prefs.navHides, stickyActions: prefs.stickyActions, miniAt: prefs.miniAt, navControlsAt: prefs.navControlsAt, contentControlsAt: prefs.contentControlsAt };
-        Object.assign(prefs, { navAt: 'top', navHides: false, stickyActions: true, miniAt: 'bottom', navControlsAt: 'top', contentControlsAt: 'top' });
+        const was = { navAt: prefs.navAt, navHides: prefs.navHides, navHidesOnItem: prefs.navHidesOnItem, stickyActions: prefs.stickyActions, miniAt: prefs.miniAt, navControlsAt: prefs.navControlsAt, contentControlsAt: prefs.contentControlsAt };
+        Object.assign(prefs, { navAt: 'top', navHides: false, navHidesOnItem: true, stickyActions: true, miniAt: 'bottom', navControlsAt: 'top', contentControlsAt: 'top' });
         return () => Object.assign(prefs, was);
       }}
     />
   {/snippet}
   <Item name="Navigation bar"><Seg label="Navigation bar" options={EDGES} bind:value={prefs.navAt} /></Item>
+  <Item
+    name="Hide when opening a library item"
+    line={prefs.navAt === 'bottom' ? 'Not along the bottom' : null}
+    disabled={prefs.navAt === 'bottom'}
+    toggle={{ checked: prefs.navHidesOnItem && prefs.navAt !== 'bottom', onchange: (on) => (prefs.navHidesOnItem = on) }}
+  />
   <!-- Along the bottom it never slides away (the owner, 2026-10-25). -->
   <Item
     name="Hide when scrolling"
