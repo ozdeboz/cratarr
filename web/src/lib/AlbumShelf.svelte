@@ -220,11 +220,6 @@
       return { s, albums: down ? albums.reverse() : albums };
     }),
   );
-  // The search's count, for its tab (lib/SearchScope; it said the filter's 2,881 for 16 found, the owner 2026-10-25).
-  $effect(() => {
-    pageView.searched = shown.reduce((n, x) => n + x.albums.length, 0);
-    return () => (pageView.searched = null);
-  });
   // How you used them, read when such an order is chosen (and each time again: plays change).
   $effect(() => {
     if (!USE_ORDERS.includes(order)) return;

@@ -117,7 +117,6 @@
   import SuggestedTracks from './SuggestedTracks.svelte';
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
-  import SearchScope from './SearchScope.svelte';
   import { everywhere } from './globalSearch.svelte';
   import AvoidLine from './AvoidLine.svelte';
   import ListHead from './ListHead.svelte';
@@ -1640,8 +1639,6 @@ ${r.album_artist ?? r.artist ?? ''}`;
   {/if}
 
   <div class="scroll" class:away={handed && everywhere()} class:own bind:this={scroller} onscroll={onScroll}>
-    <!-- Searching on a phone: its own results or everywhere's (lib/SearchScope, the owner 2026-10-25). -->
-    {#if handed}<SearchScope label={title} />{/if}
     {#if making}
       <header class="head">
         <div class="top">

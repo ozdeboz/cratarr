@@ -47,8 +47,7 @@
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './lib/motion';
   import { glass } from './lib/glass.svelte';
   import GlobalResults from './lib/GlobalResults.svelte';
-  import SearchScope from './lib/SearchScope.svelte';
-  import { globalSearch } from './lib/globalSearch.svelte';
+  import { globalSearch, PAGE_KINDS } from './lib/globalSearch.svelte';
   import { provideEverywhere } from './lib/everywhere.svelte';
   import Find from './Find.svelte';
   import Toasts from './lib/Toasts.svelte';
@@ -97,15 +96,6 @@
    *  along the top (`phone`: under 1024 px; the owner, 2026-10-25). */
   const PANEL_PAGES: Page[] = [REQUESTS, DOWNLOADS, INSIGHTS, HEALTH, SETTINGS];
   /** The kind a page already shows, left out of the global results under it (decision 0072). */
-  const PAGE_KINDS: Record<string, string[]> = {
-    library: ['album'],
-    playlists: ['playlist'],
-    crates: ['crate', 'genre'],
-    settings: ['setting'],
-    requests: ['page:#/requests'],
-    downloads: ['page:#/downloads'],
-    insights: ['page:#/insights'],
-  };
   const panelPage = $derived(PANEL_PAGES.find((p) => p.id === page) ?? null);
   // Local mode's (decision 0052): the device's own music, and the menu shows only these (and Settings).
   const LOCAL_ALBUMS: Page = { id: 'local-albums', href: '#/local/albums', label: 'Albums', icon: 'disc' };
@@ -593,7 +583,7 @@
     else if (!local && p.startsWith('local-')) location.hash = LIBRARY.href;
   });
   const ALL = $derived([...MAIN, ...APART]);
-  /** The page's search has its two tabs (lib/SearchScope); everywhere's shown in the page's place. */
+  /** The page's search has its globe (lib/TopPill): everywhere's shown in the page's place. */
   const scoped = $derived(page !== 'home' && page !== 'find');
   /** Everywhere's results in the page's place: on a page's Everywhere tab, and on Home whenever it searches (it has
    *  nothing of its own to find; the owner, 2026-10-25: its results came after all of Home, out of sight). */
@@ -671,9 +661,6 @@
          shifted the page up under the coming panel). -->
     <div class="page" class:under-row={pageRow || (phone && playlistLayer)} class:away={everywhereShown} bind:this={pageEl}>
     <SheetArea area={() => pageEl}>
-    <!-- While searching: the page's own results or everywhere's (the owner, 2026-10-25, mockup 3); Home searches
-         everything as it is, Find more music is MusicBrainz's. -->
-    {#if scoped}<SearchScope label={ALL.find((p) => p.id === page)?.label ?? 'This page'} count={pageView.searched} except={PAGE_KINDS[page] ?? []} />{/if}
     {#if page === 'settings'}
       <Settings />
     {:else if page === 'health' && me.admin}

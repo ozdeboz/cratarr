@@ -1,6 +1,6 @@
 // The global search's state (decision 0072; the owner, 2026-10-25, mockup 3): what the words find everywhere, asked
 // while any search is on, so its count shows beside the page's before it is looked at; and which the page or panel
-// shows, its own results or everywhere's (lib/SearchScope). The library's kinds and what is not in it from the
+// shows, its own results or everywhere's (the globe beside the search, lib/TopPill). The library's kinds and what is not in it from the
 // server, the pages and Settings' parts from the browser (lib/everywhere).
 import { search, type SearchKind, type ServerSearch } from './api';
 import { pageView } from './pageView.svelte';
@@ -22,6 +22,16 @@ const ELSEWHERE: { kind: SearchKind; label: string }[] = [
   { kind: 'missing', label: 'Not in your library' },
   { kind: 'excluded', label: 'Left out by Discover' },
 ];
+/** The kinds a page shows itself: left out of its everywhere (lib/GlobalResults). */
+export const PAGE_KINDS: Record<string, string[]> = {
+  library: ['album'],
+  playlists: ['playlist'],
+  crates: ['crate', 'genre'],
+  settings: ['setting'],
+  requests: ['page:#/requests'],
+  downloads: ['page:#/downloads'],
+  insights: ['page:#/insights'],
+};
 /** A few of each kind. */
 const EACH = 5;
 

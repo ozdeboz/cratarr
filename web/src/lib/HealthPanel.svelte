@@ -7,7 +7,6 @@
   // list on a roomy window (no ✕ there), over it on a phone.
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
-  import SearchScope from './SearchScope.svelte';
   import { everywhere } from './globalSearch.svelte';
   import Cover from './Cover.svelte';
   import Icon from './Icon.svelte';
@@ -77,8 +76,6 @@
     </div>
   {/if}
   <div class="scroll" class:away={handed && everywhere()}>
-    <!-- Searching on a phone: its own results or everywhere's (lib/SearchScope, the owner 2026-10-25). -->
-    {#if handed}<SearchScope label={item?.title ?? p?.title ?? 'Health'} />{/if}
     {#if item}
       <!-- An item's own page: what it is, and what can be done with it here. -->
       {@const on = onward(item)}

@@ -2,7 +2,7 @@
   // Global search's results (decision 0072): a group per kind but the kind the page already shows (`except`), a few
   // of each, why each is there; the server's (the library, what is not in it) and the browser's (pages, Settings'
   // parts; lib/everywhere), as lib/globalSearch holds them. Shown as the page's or the panel's Everywhere (the owner,
-  // 2026-10-25, mockup 3: two tabs under the search, lib/SearchScope), or as Home's own. Nothing found anywhere: one
+  // 2026-10-25: the globe beside the search, lib/TopPill), or as Home's own. Nothing found anywhere: one
   // button, Find more music, which closes the search and looks the words up on MusicBrainz (the Find page).
   import { takeBackExcluded } from './api';
   import Cover from './Cover.svelte';

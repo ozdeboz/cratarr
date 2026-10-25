@@ -15,6 +15,7 @@
   import OutputSheet from './OutputSheet.svelte';
   import { filtersOn } from './listFilter.svelte';
   import { pageView, searchFor } from './pageView.svelte';
+  import { globalAsked, globalGroups, globalSearch, PAGE_KINDS } from './globalSearch.svelte';
   import type { PanelKind } from './prefs.svelte';
   import ViewSheet, { type ListOrder } from './ViewSheet.svelte';
 
@@ -179,7 +180,31 @@
     showing = false;
   });
   $effect(() => () => clearTimeout(fold));
+
+  // The globe (the owner, 2026-10-25): while a search is on, left of the magnifier on thinner glass (as the title's),
+  // how many everywhere finds on its badge; a tap shows everywhere's results in the page's or the panel's place, lit,
+  // another its own again. Home searches everywhere as it is, Find more music is MusicBrainz's: no globe there.
+  const searchesIn = $derived(page ?? search ?? null);
+  const globe = $derived(!!words && !!searchesIn && searchesIn !== 'home' && searchesIn !== 'find' && pageView.query.trim() !== '');
+  const found = $derived(globe ? globalGroups(page ? (PAGE_KINDS[page] ?? []) : []).reduce((n, g) => n + g.total, 0) : 0);
+  const globeOn = $derived(globalSearch.scope === 'everywhere');
 </script>
+
+<span class="pill-row">
+  {#if globe}
+    <span class="globe" transition:paced|global>
+      <button
+        class="funnel"
+        class:on={globeOn}
+        aria-pressed={globeOn}
+        aria-label={globeOn ? "Back to this page's results" : `Everywhere, ${found} found`}
+        title="Everywhere"
+        onmousedown={(e) => e.preventDefault()}
+        onclick={() => (globalSearch.scope = globeOn ? 'page' : 'everywhere')}
+        ><Icon name="globe" size={22} />{#if globalAsked() || found}<span class="badge">{found > 99 ? '99+' : found}</span>{/if}</button
+      >
+    </span>
+  {/if}
 
   <div class="pill" role="toolbar" aria-label="The page's tools">
     {#if confirming && page && pageView.action}
@@ -242,6 +267,7 @@
     {/if}
     {/if}
   </div>
+</span>
 {#if filterOpen}
   <FilterSheet {page} {kind} {tempos} counted={page ? pageView.counted : counted} onclose={() => (filterOpen = false)} />
 {/if}
@@ -253,8 +279,35 @@
 {/if}
 
 <style>
+  /* The pill and the globe left of it, the pill's round end over the globe's glass. */
+  .pill-row {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+
+  /* Thinner glass than the pill's (as the title's, App's .lead): more light through. */
+  .globe {
+    display: flex;
+    align-items: center;
+    margin-right: -24px;
+    padding: 2px 26px 2px 2px;
+    border-radius: 26px 0 0 26px;
+    background: color-mix(in srgb, var(--float-bg) 45%, transparent);
+    -webkit-backdrop-filter: blur(10px) saturate(1.3);
+    backdrop-filter: blur(10px) saturate(1.3);
+    box-shadow: 0 2px 10px rgb(0 0 0 / 0.18);
+  }
+
+  /* Everywhere's shown: lit. */
+  .globe button.on {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+    color: var(--accent-ink);
+  }
+
   /* A dark round-ended pill as Symfonium's, a little see-through and blurring what is under it. */
   .pill {
+    position: relative;
     display: flex;
     padding: 2px;
     /* Nothing draws past its outline: a button sliding out (narrower than its icon and ring) is cut at the edge. */

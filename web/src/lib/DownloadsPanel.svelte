@@ -9,7 +9,6 @@
   // The pill's search narrows the two lists.
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
-  import SearchScope from './SearchScope.svelte';
   import { everywhere } from './globalSearch.svelte';
   import { albumCoverUrl, crateImageUrl } from './api';
   import { albumSubject, artistSubject, closePlaylist, SETTINGS, upToPage, viewPlaylist } from './panel.svelte';
@@ -127,8 +126,6 @@
     </div>
   {/if}
   <div class="scroll" class:away={handed && everywhere()}>
-    <!-- Searching on a phone: its own results or everywhere's (lib/SearchScope, the owner 2026-10-25). -->
-    {#if handed}<SearchScope label={L.label} />{/if}
     {#if !downloads.known}
       <PageLoading />
     {:else if list === 'device'}
