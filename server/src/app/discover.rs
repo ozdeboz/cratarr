@@ -1009,6 +1009,38 @@ async fn mb_artist_by_name(http: &reqwest::Client, name: &str) -> Result<Option<
     Ok(s.artists.into_iter().find(|a| a.score >= 95 && loose(&a.name) == loose(name)).map(|a| a.id))
 }
 
+/// How many full-length studio albums an artist (their MusicBrainz id) has released (0.9.3; the owner: "how many
+/// full-length studio albums. That's the golden standard."): their release groups of the primary type Album with no
+/// secondary type (no compilation, live album, remix, soundtrack…), out by today, as the discographies count them.
+async fn studio_albums(http: &reqwest::Client, artist: &str) -> Result<u32> {
+    Ok(mb_discography(http, artist, &today()).await?.iter().filter(|g| g.kind.as_deref() == Some("Album")).count() as u32)
+}
+
+/// How many studio albums an artist new to the library has released, by name (a Discover artist's page, 0.9.3):
+/// MusicBrainz's sure match, counted, and kept a day. None where MusicBrainz is not sure who they are.
+pub async fn artist_albums(name: &str) -> Option<u32> {
+    use std::sync::{Mutex, OnceLock};
+    static KEPT: OnceLock<Mutex<HashMap<String, (i64, Option<u32>)>>> = OnceLock::new();
+    let kept = KEPT.get_or_init(Default::default);
+    let key = loose(name);
+    let now = super::moment::now_secs();
+    if let Some((at, n)) = kept.lock().unwrap_or_else(|p| p.into_inner()).get(&key).copied()
+        && now - at < 86_400
+    {
+        return n;
+    }
+    let http = http().ok()?;
+    let n = match mb_artist_by_name(&http, name).await.ok().flatten() {
+        Some(mbid) => {
+            tokio::time::sleep(MB_PAUSE).await;
+            studio_albums(&http, &mbid).await.ok()
+        }
+        None => None,
+    };
+    kept.lock().unwrap_or_else(|p| p.into_inner()).insert(key, (now, n));
+    n
+}
+
 /// A name as MusicBrainz's search reads it: in quotes, its own quotes and backslashes escaped.
 fn quoted(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
@@ -1227,7 +1259,7 @@ pub async fn look(
             let mut released = None;
             if let Ok(Some(mbid)) = mb_artist_by_name(&http, name).await {
                 tokio::time::sleep(MB_PAUSE).await;
-                released = mb_discography(&http, &mbid, &today()).await.ok().map(|groups| groups.iter().filter(|g| g.kind.as_deref() == Some("Album")).count() as u32);
+                released = studio_albums(&http, &mbid).await.ok();
             }
             tokio::time::sleep(MB_PAUSE).await;
             for s in albums.iter_mut().filter(|s| &s.artist == name) {

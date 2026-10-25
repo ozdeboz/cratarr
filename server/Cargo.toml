@@ -11,6 +11,7 @@ repository = "https://github.com/ozdeboz/cratarr"
 members = [".", "rules"]
 
 [dependencies]
+unicode-normalization = "0.1"
 anyhow = "1"
 cratarr-rules = { path = "rules" }
 axum = "0.8"

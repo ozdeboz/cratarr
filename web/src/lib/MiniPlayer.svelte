@@ -7,9 +7,13 @@
   // not scroll (Finamp's default).
   // Where it plays sits on the bar, as Spotify's device button beside the heart (the owner, 2026-10-17): it opens the
   // output's sheet, and is in the accent while the music plays on another player. The pills at the top give it up
-  // while the bar is there (lib/TopPill).
+  // while the bar is there (lib/TopPill). Left of it, where the bar has room, the queue (the owner, 2026-10-24): it opens
+  // the queue's sheet, and answers tracks put in from elsewhere (lib/queueCue): list-start a moment for Play next,
+  // list-end for Add to queue.
   import Icon from './Icon.svelte';
   import OutputSheet from './OutputSheet.svelte';
+  import QueueSheet from './QueueSheet.svelte';
+  import { queueCue } from './queueCue.svelte';
   import { playingCrateOuts } from './crates.svelte';
   import HeartSheet from './HeartSheet.svelte';
   import { longpress } from './longpress';
@@ -27,6 +31,25 @@
   const dur = $derived(duration());
   const share = $derived(dur ? Math.min(1, pos / dur) : 0);
   let outputOpen = $state(false);
+  /** The bar's width from which the queue button has room beside the title. */
+  const QUEUE_ROOM = 420;
+  /** How long the queue button shows what went in. */
+  const ANSWER_MS = 1400;
+  let queueOpen = $state(false);
+  /** The bar's width: the queue button shows where there is room for it beside the title. */
+  let barWidth = $state(0);
+  const roomForQueue = $derived(barWidth >= QUEUE_ROOM);
+  /** What the queue button answers now: a Play next or an Add to queue a moment ago, else nothing. */
+  let answer = $state<'next' | 'last' | null>(null);
+  let answered: ReturnType<typeof setTimeout> | undefined;
+  let seen = queueCue.n;
+  $effect(() => {
+    if (queueCue.n === seen) return;
+    seen = queueCue.n;
+    answer = queueCue.how;
+    clearTimeout(answered);
+    answered = setTimeout(() => (answer = null), ANSWER_MS);
+  });
 
   /** The full player: beside the page when the window has room and that is the chosen place, else over it. */
   // Tapping it brings the player: into the panel beside the page (over a viewed playlist there), or over everything.
@@ -105,6 +128,7 @@
     style:--share={share}
     style:transform="translateX({dx}px)"
     bind:this={el}
+    bind:clientWidth={barWidth}
     role="button"
     tabindex="0"
     aria-label="Open the player: {np.name}"
@@ -132,6 +156,11 @@
           {#if np.progress}<span class="time">{clockText(pos)} / {dur ? clockText(dur) : '–:––'}</span>{/if}
         </div>
       </div>
+      {#if roomForQueue}
+        <button class="own queue" class:answer={!!answer} aria-haspopup="dialog" aria-label="Queue" onclick={() => (queueOpen = true)}
+          >{#key answer}<Icon name={answer === 'next' ? 'listStart' : answer === 'last' ? 'listEnd' : 'playlists'} size={24} />{/key}</button
+        >
+      {/if}
       <button class="own device" class:elsewhere={!!np.player} aria-haspopup="dialog"
         aria-label={np.player ? `Playing on ${np.player}; play on` : 'Where it plays'} onclick={() => (outputOpen = true)}
         ><Icon name="speaker" size={24} /></button
@@ -153,6 +182,9 @@
 {/if}
 {#if outputOpen}
   <OutputSheet onclose={() => (outputOpen = false)} />
+{/if}
+{#if queueOpen && np}
+  <QueueSheet {src} onclose={() => (queueOpen = false)} />
 {/if}
 {#if heartMenu && np}
   <HeartSheet
@@ -275,6 +307,7 @@
   }
 
   .fav,
+  .queue,
   .device {
     position: relative;
     display: grid;
@@ -289,8 +322,30 @@
     cursor: pointer;
   }
 
+  .queue,
   .device {
     width: 40px;
+  }
+
+  /* Tracks went in: the queue's answer, in the accent, with a small pop. */
+  .queue.answer {
+    color: var(--accent-ink);
+  }
+
+  .queue.answer :global(svg) {
+    animation: pop 0.35s ease-out;
+  }
+
+  @keyframes pop {
+    0% {
+      transform: scale(1);
+    }
+    40% {
+      transform: scale(1.25);
+    }
+    100% {
+      transform: scale(1);
+    }
   }
 
   .device.elsewhere {
@@ -308,6 +363,10 @@
   @media (prefers-reduced-motion: reduce) {
     .mini {
       transition: none;
+    }
+
+    .queue.answer :global(svg) {
+      animation: none;
     }
   }
 </style>

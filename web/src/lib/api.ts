@@ -1,4 +1,5 @@
 import { track } from './progress.svelte';
+import { cue } from './queueCue.svelte';
 import type { SearchResult } from './search';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached } from './reach.svelte';
@@ -312,15 +313,18 @@ export type PlayMode = 'play' | 'shuffle' | 'next' | 'last';
 export type PlayResult = { player: string; sent: number; total: number; unknown: number };
 
 export const playPlaylist = (playlistId: string, mode: PlayMode, source?: string) =>
-  post<PlayResult>(`/api/playlists/${encodeURIComponent(playlistId)}/play${follow(source)}`, { mode });
+  post<PlayResult>(`/api/playlists/${encodeURIComponent(playlistId)}/play${follow(source)}`, { mode }).then((r) => {
+    if (mode === 'next' || mode === 'last') cue(mode);
+    return r;
+  });
 
 // The queue (decision 0019): one track after the current one or at the end, playing on from an upcoming track, and a
 // new playlist made of what plays and what comes next (tracks in the library only).
 export const queueTrack = (id: string, mode: 'next' | 'last', source?: string) =>
-  post<{ player: string }>(`/api/queue/add${follow(source)}`, { id, mode });
+  post<{ player: string }>(`/api/queue/add${follow(source)}`, { id, mode }).then((r) => (cue(mode), r));
 /** Several tracks, in order (a crate's Play next / Add to queue, decision 0024). */
 export const queueTracks = (ids: string[], mode: 'next' | 'last', source?: string) =>
-  post<{ player: string }>(`/api/queue/add${follow(source)}`, { ids, mode });
+  post<{ player: string }>(`/api/queue/add${follow(source)}`, { ids, mode }).then((r) => (cue(mode), r));
 
 // What plays is the server's choice (server/src/app/play.rs): any collection, played, shuffled, put next or queued, at
 // most 500 of its tracks, picked from all of it (the owner, 2026-10-23: a big crate's Shuffle played the same few, its
@@ -360,7 +364,11 @@ export type Picked = {
 /** The server picks what plays of `what`; with `on` it also queues them: on the server's player (`server`), or on one
  *  of Cratarr's players by name. `from`: the track (its id) to play first. */
 export const pickCollection = (what: Picking, how: PlayHow, opts: { from?: string; on?: 'server' | { player: string }; source?: string } = {}) =>
-  post<Picked>(`/api/play${follow(opts.source)}`, { what, how, ...(opts.from ? { from: opts.from } : {}), ...(opts.on ? { on: opts.on } : {}) });
+  post<Picked>(`/api/play${follow(opts.source)}`, { what, how, ...(opts.from ? { from: opts.from } : {}), ...(opts.on ? { on: opts.on } : {}) }).then((r) => {
+    // Queued by the server (picked only, this browser queues them itself: lib/localPlayer's enqueue tells it).
+    if (opts.on && (how === 'next' || how === 'last')) cue(how);
+    return r;
+  });
 
 /** A crate (decision 0024): a permanent one or one's own; `count` null when not known (the server's favourites could
  *  not be read). */

@@ -15,7 +15,8 @@
   import { INSIGHTS_VIEWS, showView, type InsightsView } from './insightsViews';
   import { insights } from './insights.svelte';
   import PageLoading from './PageLoading.svelte';
-  import { closePlaylist } from './panel.svelte';
+  import { closePlaylist, upToPage } from './panel.svelte';
+  import Crumbs from './Crumbs.svelte';
 
   let { view, beside = false }: { view: InsightsView; beside?: boolean } = $props();
 
@@ -33,7 +34,7 @@
 <div class="view">
   <div class="bar" class:beside>
     {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
-    <h2 class="title"><span class="up">{v.group}</span><span class="sep" aria-hidden="true">›</span>{v.label}</h2>
+    <Crumbs up={{ label: v.group, go: beside ? undefined : () => upToPage('#/insights') }} here={v.label} />
     {#if filters.length || views.length || !beside}
       <TopPill
         device={false}
@@ -86,26 +87,6 @@
 
   .bar.beside {
     padding-left: clamp(12px, 2vw, 24px);
-  }
-
-  .title {
-    flex: 1;
-    min-width: 0;
-    margin: 0;
-    overflow: hidden;
-    font-size: 20px;
-    font-weight: 600;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .up,
-  .sep {
-    color: var(--muted);
-  }
-
-  .sep {
-    margin: 0 8px;
   }
 
   .scroll {

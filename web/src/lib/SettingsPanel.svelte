@@ -10,6 +10,7 @@
   // server's parts are its administrators' (decision 0051): for anyone else they show nothing, and the server's
   // settings are not asked for.
   import { untrack } from 'svelte';
+  import Crumbs from './Crumbs.svelte';
   import Icon from './Icon.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -17,7 +18,7 @@
   import PageLoading from './PageLoading.svelte';
   import PanelPlace from './PanelPlace.svelte';
   import { askDevice, askDownloads, inApp } from './app.svelte';
-  import { backFromThing, closePlaylist, panel, settingsThing } from './panel.svelte';
+  import { backFromThing, closePlaylist, panel, settingsThing, upToPage } from './panel.svelte';
   import { SECTIONS, thingTitle, type SettingsSection } from './settingsSections.svelte';
   import { ed } from './settings/editor.svelte';
   import { partReset } from './settings/reset.svelte';
@@ -88,8 +89,12 @@
     {:else if !beside}
       <span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>
     {/if}
-    <!-- A thing's page: its part › its name, the breadcrumb Health's and Insights' panels have (the owner, 2026-10-23). -->
-    <h2 class="title">{#if thing}<span class="up">{partTitle}</span><span class="sep" aria-hidden="true">›</span>{/if}{title}</h2>
+    <!-- Settings › the part; a thing's page: its part › its name (lib/Crumbs: two at most, the owner 2026-10-25). -->
+    {#if thing}
+      <Crumbs up={{ label: partTitle, go: () => backFromThing(section) }} here={title} />
+    {:else}
+      <Crumbs up={{ label: 'Settings', go: beside ? undefined : () => upToPage('#/settings') }} here={partTitle} />
+    {/if}
     <span class="end">
       <!-- Diagnostics' file for a bug report, in the bar as Finamp's logs have their export. -->
       {#if section === 'diagnostics'}<span class="navpill"><a href="/api/diagnostics/download" download aria-label="Download" title="Download"><Icon name="download" size={22} /></a></span>{/if}
@@ -175,27 +180,7 @@
     padding-left: clamp(12px, 2vw, 24px);
   }
 
-  .bar .title {
-    flex: 1;
-    min-width: 0;
-    margin: 0;
-    overflow: hidden;
-    font-size: 20px;
-    font-weight: 600;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   /* The breadcrumb's part and its ›, as Health's panel has them. */
-  .bar .up,
-  .bar .sep {
-    color: var(--muted);
-  }
-
-  .bar .sep {
-    margin: 0 8px;
-  }
-
   .end {
     display: flex;
     align-items: center;

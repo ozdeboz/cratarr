@@ -127,6 +127,24 @@ fn numbers(db: &Connection, sql: &str, params: &[&dyn rusqlite::ToSql]) -> Resul
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// What `Library::find` found (decision 0072): each with why it was found, where it was not by its own name.
+#[derive(Debug, Default)]
+pub struct Found {
+    pub albums: Vec<(Album, Hit)>,
+    pub artists: Vec<(Artist, Hit)>,
+    pub tracks: Vec<Song>,
+    /// Genres and how many tracks they have.
+    pub genres: Vec<(String, u32)>,
+}
+
+/// Why something was found: on its `name`, its `artist`, one of its `track`s or `album`s (`text`, and how many).
+#[derive(Debug, Clone, Default)]
+pub struct Hit {
+    pub on: &'static str,
+    pub text: String,
+    pub count: Option<u32>,
+}
+
 impl Library {
     /// Fills songs' artists and album artists (OpenSubsonic's lists).
     fn song_artists(&self, db: &Connection, songs: &mut [Song]) -> Result<()> {
@@ -390,6 +408,90 @@ impl Library {
         let mut found_songs = by_numbers(&db, "songs", SONG_COLS, "s", &song_ns, song_of)?;
         self.song_artists(&db, &mut found_songs)?;
         Ok((found_artists, found_albums, found_songs))
+    }
+
+    /// A structured search of the library (decision 0072): albums by their own name or artist and by their tracks,
+    /// artists by their name and by their albums, tracks, and genres; `limit` of each, the best first. `words` as
+    /// `crate::search::words` reads a query.
+    pub fn find(&self, words: &[String], limit: usize) -> Result<Found> {
+        let Some(fq) = crate::search::fts(words) else { return Ok(Found::default()) };
+        let db = self.db();
+        let lim = limit as i64;
+        // Albums by themselves, the name counting most; then those found only by a track's title.
+        let own = numbers(&db, "SELECT rowid FROM albums_fts WHERE albums_fts MATCH ?1 ORDER BY bm25(albums_fts, 10.0, 2.0) LIMIT ?2", &[&fq, &lim])?;
+        let mut albums: Vec<(Album, Hit)> = by_numbers(&db, "albums", ALBUM_COLS, "a", &own, album_of)?
+            .into_iter()
+            .map(|a| {
+                let on = if crate::search::matches(&a.name, words) { "name" } else { "artist" };
+                let text = if on == "name" { a.name.clone() } else { a.artist.clone() };
+                (a, Hit { on, text, count: None })
+            })
+            .collect();
+        let title_q = format!("title : ({fq})");
+        let mut st = db.prepare_cached(
+            "SELECT s.album_id, count(*), min(s.title) FROM songs_fts f JOIN songs s ON s.n = f.rowid WHERE songs_fts MATCH ?1
+             GROUP BY s.album_id ORDER BY count(*) DESC LIMIT ?2",
+        )?;
+        let by_tracks: Vec<(String, u32, String)> =
+            st.query_map(rusqlite::params![title_q, lim], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u32, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        for (id, count, title) in by_tracks {
+            if albums.len() >= limit || albums.iter().any(|(a, _)| a.id == id) {
+                continue;
+            }
+            let ns = numbers(&db, "SELECT n FROM albums WHERE id = ?1", &[&id])?;
+            if let Some(a) = by_numbers(&db, "albums", ALBUM_COLS, "a", &ns, album_of)?.pop() {
+                albums.push((a, Hit { on: "track", text: title, count: Some(count) }));
+            }
+        }
+        // Their artists, as every album the API gives has them.
+        let (mut list, hits): (Vec<Album>, Vec<Hit>) = albums.into_iter().unzip();
+        self.album_artists(&db, &mut list)?;
+        let albums: Vec<(Album, Hit)> = list.into_iter().zip(hits).collect();
+        // Artists by their name; then those found only by an album's name.
+        let own = numbers(&db, "SELECT rowid FROM artists_fts WHERE artists_fts MATCH ?1 ORDER BY bm25(artists_fts) LIMIT ?2", &[&fq, &lim])?;
+        let mut artists: Vec<(Artist, Hit)> = Vec::new();
+        {
+            let mut st = db.prepare_cached("SELECT id, name, mbid, album_count, order_name FROM artists WHERE n = ?1")?;
+            for n in own {
+                if let Some(a) = st.query_map([n], artist_of)?.next() {
+                    let a = a?;
+                    let text = a.name.clone();
+                    artists.push((a, Hit { on: "name", text, count: None }));
+                }
+            }
+        }
+        let name_q = format!("name : ({fq})");
+        let mut st = db.prepare_cached(
+            "SELECT aa.artist_id, count(*), min(a.name) FROM albums_fts f JOIN albums a ON a.n = f.rowid JOIN album_artists aa ON aa.album_id = a.id
+             WHERE albums_fts MATCH ?1 GROUP BY aa.artist_id ORDER BY count(*) DESC LIMIT ?2",
+        )?;
+        let by_albums: Vec<(String, u32, String)> =
+            st.query_map(rusqlite::params![name_q, lim], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u32, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        {
+            let mut st = db.prepare_cached("SELECT id, name, mbid, album_count, order_name FROM artists WHERE id = ?1")?;
+            for (id, count, name) in by_albums {
+                if artists.len() >= limit || artists.iter().any(|(a, _)| a.id == id) {
+                    continue;
+                }
+                if let Some(a) = st.query_map([&id], artist_of)?.next() {
+                    artists.push((a?, Hit { on: "album", text: name, count: Some(count) }));
+                }
+            }
+        }
+        // Tracks, the title counting most.
+        let ns = numbers(&db, "SELECT rowid FROM songs_fts WHERE songs_fts MATCH ?1 ORDER BY bm25(songs_fts, 10.0, 2.0, 1.0) LIMIT ?2", &[&fq, &lim])?;
+        let mut tracks = by_numbers(&db, "songs", SONG_COLS, "s", &ns, song_of)?;
+        self.song_artists(&db, &mut tracks)?;
+        // Genres, by their name.
+        let mut st = db.prepare_cached("SELECT name, song_count FROM genres")?;
+        let mut genres: Vec<(String, u32)> = st
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as u32)))?
+            .filter_map(Result::ok)
+            .filter(|(g, _)| crate::search::matches(g, words))
+            .collect();
+        genres.sort_by(|a, b| crate::search::closeness(&b.0, words).cmp(&crate::search::closeness(&a.0, words)).then(b.1.cmp(&a.1)));
+        genres.truncate(limit);
+        Ok(Found { albums, artists, tracks, genres })
     }
 
     /// An album's id as it is (or would be) in Music: what its tags are kept under.

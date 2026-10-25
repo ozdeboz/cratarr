@@ -15,7 +15,8 @@
   import ReleaseRow from './ReleaseRow.svelte';
   import { matchesSearch } from './pageView.svelte';
   import TopPill from './TopPill.svelte';
-  import { closePlaylist } from './panel.svelte';
+  import { closePlaylist, upToPage } from './panel.svelte';
+  import Crumbs from './Crumbs.svelte';
   import { answersRequests, decide, loadRequests, lookAtLidarr, REQUESTS_LISTS, requests, takeBack, type RequestsList } from './requests.svelte';
   import SelectBar from './SelectBar.svelte';
   import SelectSheet from './SelectSheet.svelte';
@@ -123,7 +124,7 @@
 <div class="view">
   <div class="bar" class:beside>
     {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
-    <h2 class="title"><span class="up">Requests</span><span class="sep" aria-hidden="true">›</span>{L.label}</h2>
+    <Crumbs up={{ label: 'Requests', go: beside ? undefined : () => upToPage('#/requests') }} here={L.label} />
     {#if !beside}<TopPill device={false} filter={false} view={false} search="requests" />{/if}
     {#if list === 'waiting' && waiting.length}
       <span class="navpill"
@@ -235,26 +236,6 @@
 
   .bar.beside {
     padding-left: clamp(12px, 2vw, 24px);
-  }
-
-  .title {
-    flex: 1;
-    min-width: 0;
-    margin: 0;
-    overflow: hidden;
-    font-size: 20px;
-    font-weight: 600;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .up,
-  .sep {
-    color: var(--muted);
-  }
-
-  .sep {
-    margin: 0 8px;
   }
 
   .scroll {

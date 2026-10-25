@@ -94,6 +94,8 @@
 
   // Phones get a bottom bar. Up to five fit; beyond that the first four stay and the rest go under "More".
   const BAR_SLOTS = 5;
+  /** A tab's least width in the bar: more fit on a wider screen. */
+  const BAR_SLOT_PX = 72;
 
   // Playlists are created, renamed, deleted and repaired on the Playlists page and its panel now; old Manage and
   // Repairs links land there (decision 0025). The page is the address before `?` (what is viewed rides along as
@@ -512,7 +514,17 @@
     else if (!local && p.startsWith('local-')) location.hash = LIBRARY.href;
   });
   const ALL = $derived([...MAIN, ...APART]);
-  const bar = $derived(ALL.length <= BAR_SLOTS ? ALL : ALL.slice(0, BAR_SLOTS - 1));
+  // As many of the main pages as fit, each tab at least BAR_SLOT_PX wide (the owner, 2026-10-25: Discover in the bar where
+  // there is room): four and More on a phone, all five on a tablet. The pages apart (Requests, Insights, Health,
+  // Settings…) stay behind More ("requests is of the other category"), unless every page fits in five (Local mode).
+  let barWidth = $state(innerWidth);
+  $effect(() => {
+    const on = () => (barWidth = innerWidth);
+    addEventListener('resize', on);
+    return () => removeEventListener('resize', on);
+  });
+  const slots = $derived(Math.max(BAR_SLOTS, Math.floor(barWidth / BAR_SLOT_PX)));
+  const bar = $derived(ALL.length <= BAR_SLOTS ? ALL : MAIN.slice(0, Math.min(MAIN.length, slots - 1)));
   const overflow = $derived(ALL.filter((p) => !bar.includes(p)));
   const overflowActive = $derived(overflow.some((p) => p.id === page));
 </script>

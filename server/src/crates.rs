@@ -137,6 +137,9 @@ pub fn genre_crate(id: &str) -> Option<CrateDef> {
 /// whose own filter could hide them): made when asked for, never saved; their tracks the albums the shelf shows, album
 /// by album in its order, of every library (what Home showed, whatever is switched off).
 pub const HOME_NEW: &str = "home:new";
+pub const HOME_GRAVES: &str = "home:graves";
+/// Sounds like your week, Home's crate of what sounds like the account's week (`like_crate`'s `WEEK`).
+pub const HOME_WEEK: &str = "like:week";
 pub const fn home_crate(id: &str) -> bool {
     matches!(id.as_bytes(), b"home:new" | b"home:graves")
 }
