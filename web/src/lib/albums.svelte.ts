@@ -98,7 +98,19 @@ export async function playListedAlbum(source: string, a: ListedAlbum) {
 
 /** Several albums' tracks, one album after another, in each album's order (an album's select bar). */
 export async function tracksOfAlbums(list: { source: string; a: ListedAlbum }[]): Promise<LocalTrack[]> {
-  const views = await Promise.all(list.map(({ source, a }) => albumView(source, a.id).then((r) => ({ r, a }))));
+  // A few albums at a time: thousands at once (Select, All) waited in the browser's line until they timed out, "cannot
+  // reach" (the owner, 2026-10-25). One call for them all comes from the server (a5).
+  const views: { r: Awaited<ReturnType<typeof albumView>>; a: ListedAlbum }[] = new Array(list.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(6, list.length) }, async () => {
+      while (next < list.length) {
+        const i = next++;
+        const { source, a } = list[i];
+        views[i] = { r: await albumView(source, a.id), a };
+      }
+    }),
+  );
   return views.flatMap(({ r, a }) =>
     r.rows
       .filter((x) => x.id && !x.missing)
