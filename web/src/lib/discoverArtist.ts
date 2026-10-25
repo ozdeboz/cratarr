@@ -8,10 +8,11 @@ import { albumIdOf } from './bandcampPreview';
 /** The source an artist from Discover is viewed under. */
 export const DISCOVER = 'discover';
 
-/** Their page: their suggestions that play on Bandcamp, newest first, as albums. */
+/** Their page: their suggestions that play on Bandcamp, newest first, as albums; how much they have released. */
 export async function discoverArtistView(name: string): Promise<ArtistView> {
   const v = await getDiscover();
-  const theirs = (v.found?.albums ?? []).filter((a) => a.artist.toLowerCase() === name.toLowerCase() && a.bandcamp);
+  const all = (v.found?.albums ?? []).filter((a) => a.artist.toLowerCase() === name.toLowerCase());
+  const theirs = all.filter((a) => a.bandcamp);
   const albums: ListedAlbum[] = theirs
     .sort((a, b) => (b.year ?? 0) - (a.year ?? 0))
     .map((a) => ({
@@ -26,5 +27,8 @@ export async function discoverArtistView(name: string): Promise<ArtistView> {
       bitrate_kbps: 128,
       tags: a.genres ?? [],
     })) as ListedAlbum[];
-  return { source: DISCOVER, name, albums, appears_on: [], rows: [] } as unknown as ArtistView;
+  // How much they have released (the owner, 2026-10-25: "how many releases an artist has done"), as the look counted.
+  const releases = all.find((a) => a.artist_releases)?.artist_releases ?? null;
+  const albumCount = all.find((a) => a.artist_albums)?.artist_albums ?? null;
+  return { source: DISCOVER, name, albums, appears_on: [], rows: [], released: { releases, albums: albumCount } } as unknown as ArtistView;
 }

@@ -16,6 +16,8 @@ import { player, refresh, untilNewTrack } from './live.svelte';
 import { enqueue, type LocalTrack } from './localPlayer.svelte';
 import { isLocal, playAlbumHere, playPlaylistFrom } from './output.svelte';
 import { artistSubject, viewOver } from './panel.svelte';
+import { BANDCAMP } from './bandcampPreview';
+import { DISCOVER } from './discoverArtist';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
 
@@ -123,7 +125,16 @@ export const mainArtist = (artist: string | null | undefined) => artist?.split(/
  *  it). From the full-screen player, which closes, or it would cover the panel. */
 export function goToArtist(source: string, name: string) {
   if (player.full) player.full = false;
+  // From something on Bandcamp (an album, a preview's track): no server of that name (the owner, 2026-10-25: it said
+  // "server is not connected"), so the library's page where it has the artist, else theirs from Discover.
+  if (source === BANDCAMP) source = hasArtist(name) ? 'cratarr' : DISCOVER;
   viewOver(artistSubject(source, name));
+}
+
+/** Whether Cratarr's own library has albums by the artist (as far as the library is read). */
+function hasArtist(name: string): boolean {
+  const n = name.toLowerCase();
+  return (library.view?.sources ?? []).some((s) => s.id === 'cratarr' && s.albums.some((a) => a.artist?.toLowerCase() === n));
 }
 
 // How the owner used the albums (decided 2026-10-16): plays, last played and rating, per server, for the Library's

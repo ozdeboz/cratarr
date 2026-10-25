@@ -5,7 +5,7 @@
   // rows, `top`), whose › shows all their tracks; then related artists to explore (lib/RelatedArtists, 0.9.2).
   import type { Snippet } from 'svelte';
   import { tick } from 'svelte';
-  import { getArtistAbout, getDiscoverArtist, type ListedAlbum } from './api';
+  import { getArtistAbout, getDiscoverArtist, type ListedAlbum, type PhotoCredit } from './api';
   import { DISCOVER } from './discoverArtist';
   import { pageAsked } from './artistAbout.svelte';
   import AlbumCard from './AlbumCard.svelte';
@@ -37,7 +37,7 @@
   } = $props();
 
   // About: Cratarr's own library only (the store knows its artists).
-  let about = $state<{ id: string | null; bio: string | null; photo: boolean } | null>(null);
+  let about = $state<{ id: string | null; bio: string | null; photo: boolean; photo_credit?: PhotoCredit | null } | null>(null);
   let whole = $state(false);
   $effect(() => {
     const [s, n] = [source, name];
@@ -47,7 +47,7 @@
     // An artist from Discover (lib/discoverArtist): their words as New to you has them.
     if (s === DISCOVER)
       getDiscoverArtist(n).then(
-        (a) => !gone && (about = { id: null, bio: a.bio, photo: a.photo }),
+        (a) => !gone && (about = { id: null, bio: a.bio, photo: a.photo, photo_credit: a.photo_credit }),
         () => {},
       );
     if (s === 'cratarr')
@@ -84,7 +84,7 @@
   </ul>
 {/snippet}
 
-{#if about?.bio}
+{#if about?.bio || about?.photo_credit}
   <section aria-label="About" bind:this={aboutEl}>
     <SectionHead title="About" />
     <div class="about">
@@ -93,6 +93,8 @@
       {/if}
     </div>
     {#if about.bio}<small class="credit">TheAudioDB</small>{/if}
+    <!-- A free photo's credit, as its licence asks (Wikimedia Commons', 0.9.3). -->
+    {#if about.photo_credit}<small class="credit"><a href={about.photo_credit.url} target="_blank" rel="noopener noreferrer">Photo: {about.photo_credit.author} · {about.photo_credit.licence}</a></small>{/if}
   </section>
 {/if}
 <!-- On a wide panel the albums and the artist's profile side by side, the profile all open (the owner, 2026-10-23); on

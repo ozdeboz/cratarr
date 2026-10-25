@@ -43,12 +43,12 @@
   // 2026-10-25: an artist without a picture is never featured).
   let front = $state(0);
   const frontArtist = $derived(sec.newArtists[Math.min(front, Math.max(0, sec.newArtists.length - 1))]?.artist ?? null);
-  let bio = $state<{ name: string; text: string | null } | null>(null);
+  let bio = $state<{ name: string; text: string | null; credit?: import('./api').PhotoCredit | null } | null>(null);
   $effect(() => {
     const name = frontArtist;
     if (!name || bio?.name === name) return;
     getDiscoverArtist(name).then(
-      (x) => (bio = { name, text: x.bio }),
+      (x) => (bio = { name, text: x.bio, credit: x.photo_credit }),
       () => (bio = { name, text: null }),
     );
   });
@@ -169,6 +169,7 @@
     <div class="artist-caption">
       <button class="title" onclick={() => goToArtist(DISCOVER, n.artist)}>{n.artist}</button>
       {#if a.artist_albums}<span class="by">{a.artist_albums} {a.artist_albums === 1 ? 'album' : 'albums'}</span>{/if}
+      {#if bio?.name === n.artist && bio.credit}<a class="photo-credit" href={bio.credit.url} target="_blank" rel="noopener noreferrer">Photo: {bio.credit.author} · {bio.credit.licence}</a>{/if}
     </div>
     <!-- Their biography, their album to its right with why it is here under it (the owner, 2026-10-25). -->
     <div class="artist-about">
@@ -572,6 +573,12 @@
   .artist-caption .by {
     color: var(--muted);
     font-size: 0.9rem;
+  }
+
+  .photo-credit {
+    color: var(--muted);
+    font-size: 11px;
+    text-decoration: none;
   }
 
   .artist-about {
