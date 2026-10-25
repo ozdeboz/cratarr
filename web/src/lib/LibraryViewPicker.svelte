@@ -5,11 +5,7 @@
   import Icon from './Icon.svelte';
   import { prefs } from './prefs.svelte';
 
-  const VIEWS: { value: 'albums' | 'artists' | 'tracks'; label: string }[] = [
-    { value: 'albums', label: 'Albums' },
-    { value: 'artists', label: 'Artists' },
-    { value: 'tracks', label: 'Tracks' },
-  ];
+  import { LIBRARY_VIEWS as VIEWS } from './libraryViews';
   let open = $state(false);
   let el = $state<HTMLElement>();
   // Under the button, in the glass menu (lib/GlassMenu).

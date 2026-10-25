@@ -97,6 +97,9 @@ export type Prefs = {
   theme: Theme;
   /** What the Library shows (the switch beside back; the owner, 2026-10-25): its albums, or their artists. */
   libraryView: 'albums' | 'artists' | 'tracks';
+  /** Which view the Library opens on (Settings › Content; the owner, 2026-10-25): the one it was left on, or always
+   *  the same. */
+  libraryOpens: 'last' | 'albums' | 'artists' | 'tracks';
   /** The Library's Artists' and Tracks' orders, as its albums' (libraryOrder). */
   libraryArtistOrder: 'name' | 'albums' | 'tracks';
   libraryArtistDown: boolean;
@@ -300,6 +303,7 @@ export const DEFAULTS: Prefs = {
   crumbsWhole: true,
   modeSwitchInBar: false,
   libraryView: 'albums',
+  libraryOpens: 'last',
   libraryArtistOrder: 'name',
   libraryArtistDown: false,
   libraryTrackOrder: 'album',
@@ -381,6 +385,7 @@ function read(): Prefs {
       if (typeof saved.crumbsWhole === 'boolean') p.crumbsWhole = saved.crumbsWhole;
       if (typeof saved.modeSwitchInBar === 'boolean') p.modeSwitchInBar = saved.modeSwitchInBar;
       if (['albums', 'artists', 'tracks'].includes(saved.libraryView)) p.libraryView = saved.libraryView;
+      if (['last', 'albums', 'artists', 'tracks'].includes(saved.libraryOpens)) p.libraryOpens = saved.libraryOpens;
       if (['name', 'albums', 'tracks'].includes(saved.libraryArtistOrder)) p.libraryArtistOrder = saved.libraryArtistOrder;
       if (typeof saved.libraryArtistDown === 'boolean') p.libraryArtistDown = saved.libraryArtistDown;
       if (['title', 'artist', 'album', 'added', 'year', 'plays', 'duration'].includes(saved.libraryTrackOrder)) p.libraryTrackOrder = saved.libraryTrackOrder;

@@ -22,6 +22,8 @@
   import { libraryShown } from './lib/sources.svelte';
   import { untrack } from 'svelte';
   import { me } from './lib/me.svelte';
+  // Opened on the view Settings says, unless that is the one it was left on (the owner, 2026-10-25).
+  if (prefs.libraryOpens !== 'last') prefs.libraryView = prefs.libraryOpens;
 
   let error = $state<string | null>(null);
   const sources = $derived<AlbumsSource[] | null>(library.view?.sources ?? null);

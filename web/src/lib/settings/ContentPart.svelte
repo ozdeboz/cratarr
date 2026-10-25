@@ -7,7 +7,9 @@
   import { CRATE_PART, FLOW_PARTS, HOME_PARTS, homeDefault, PROFILE_ROWS, prefs, type HomePart } from '../prefs.svelte';
   import { crates, loadCrates } from '../crates.svelte';
   import { toast } from '../toast.svelte';
+  import ChoiceSheet from './ChoiceSheet.svelte';
   import Group from './Group.svelte';
+  import { LIBRARY_VIEWS } from '../libraryViews';
   import Item from './Item.svelte';
   import OrderList from './OrderList.svelte';
   import { offerReset } from './reset.svelte';
@@ -21,6 +23,7 @@
       prefs.profileRows = PROFILE_ROWS.map((r) => r.id);
       prefs.homeParts = homeDefault();
       prefs.homeCrates = false;
+      prefs.libraryOpens = 'last';
     },
   );
 
@@ -54,6 +57,9 @@
     if (!crates.list) await loadCrates();
     prefs.homeParts = [...kept, ...ownCrates.map((c) => partOf(c.id))];
   }
+  // The Library's view to open on: the last one, or one of them always.
+  const OPENS = [{ value: 'last', label: 'The last one used' }, ...LIBRARY_VIEWS];
+  let opensOpen = $state(false);
 </script>
 
 <Group title="Home" more="The first is the flow at the top, so it is one made of albums: Music for the moment, New for you, Blast from the past, Grave digging or Favourite albums.">
@@ -71,6 +77,14 @@
   <Item name="Your crates on Home" toggle={{ checked: prefs.homeCrates, onchange: (on) => void setHomeCrates(on) }} />
   <OrderList {items} on={onParts} label="Home's sections" onchange={setParts} lead={{ may: (id) => FLOW_PARTS.includes(id), label: 'Can be featured on top' }} />
 </Group>
+
+<!-- The Library: the view it opens on (the owner, 2026-10-25): the one it was left on, or always the same. -->
+<Group title="Library">
+  <Item name="Opens on" value={OPENS.find((o) => o.value === prefs.libraryOpens)?.label ?? null} onclick={() => (opensOpen = true)} />
+</Group>
+{#if opensOpen}
+  <ChoiceSheet title="Library opens on" options={OPENS} value={prefs.libraryOpens} onchange={(v) => (prefs.libraryOpens = v as typeof prefs.libraryOpens)} onclose={() => (opensOpen = false)} />
+{/if}
 
 <Group title="Music profiles">
   {#snippet tail()}
