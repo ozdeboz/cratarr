@@ -4,11 +4,30 @@
   // where one is. The page's own name above does what the panel's ✕ does; without a way back (`go`), it is only said.
   // No level above (`up` left out): only where one is, as beside the page whose name its list already shows (the
   // owner, 2026-10-25: Settings › Display beside Settings' list said Settings twice).
+  // Where one is, cut short by …: a tap on it shows the whole line (the owner, 2026-10-25: "unellipse the whole
+  // breadcrumb tree and align right so the own title is most definitely visible"), scrolled to its end; again, short.
+  import { tick } from 'svelte';
+
   let { up = null, here }: { up?: { label: string; go?: () => void } | null; here: string } = $props();
+  let line = $state<HTMLElement>();
+  let hereEl = $state<HTMLElement>();
+  let whole = $state(false);
+  $effect(() => {
+    void here;
+    whole = false;
+  });
+  async function show() {
+    if (whole) return void (whole = false);
+    if (!hereEl || hereEl.scrollWidth <= hereEl.clientWidth) return;
+    whole = true;
+    await tick();
+    line?.scrollTo({ left: line.scrollWidth });
+  }
 </script>
 
-<h2 class="crumbs">
-  {#if up}{#if up.go}<button class="up" onclick={up.go}>{up.label}</button>{:else}<span class="up">{up.label}</span>{/if}<span class="sep" aria-hidden="true">›</span>{/if}<span class="here" aria-current="page">{here}</span>
+<h2 class="crumbs" class:whole bind:this={line}>
+  {#if up}{#if up.go}<button class="up" onclick={up.go}>{up.label}</button>{:else}<span class="up">{up.label}</span>{/if}<span class="sep" aria-hidden="true">›</span>{/if}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <span class="here" aria-current="page" bind:this={hereEl} onclick={show}>{here}</span>
 </h2>
 
 <style>
@@ -58,5 +77,21 @@
 
   .here {
     flex: 0 1 auto;
+  }
+
+  /* The whole line: nothing cut, scrolled sideways (no bar), its end in view. */
+  .crumbs.whole {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .crumbs.whole::-webkit-scrollbar {
+    display: none;
+  }
+
+  .crumbs.whole .up,
+  .crumbs.whole .here {
+    flex: none;
+    overflow: visible;
   }
 </style>
