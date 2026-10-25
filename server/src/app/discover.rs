@@ -168,7 +168,7 @@ pub struct Candidate {
     pub score: f64,
 }
 
-fn http() -> Result<reqwest::Client> {
+pub(super) fn http() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder().timeout(Duration::from_secs(30)).user_agent(concat!("Cratarr/", env!("CARGO_PKG_VERSION"))).build()?)
 }
 
@@ -853,7 +853,7 @@ async fn mb_urls(http: &reqwest::Client, release_group: &str) -> Result<MbAlbum>
 }
 
 /// The pages MusicBrainz keeps for an artist (their "url" relations).
-async fn mb_artist_urls(http: &reqwest::Client, artist: &str) -> Result<Vec<String>> {
+pub(super) async fn mb_artist_urls(http: &reqwest::Client, artist: &str) -> Result<Vec<String>> {
     #[derive(Deserialize)]
     struct Artist {
         #[serde(default)]
@@ -927,7 +927,7 @@ async fn mb_release_group(http: &reqwest::Client, artist: &str, album: &str) -> 
 }
 
 /// MusicBrainz asks for at most one request a second.
-const MB_PAUSE: Duration = Duration::from_millis(1100);
+pub(super) const MB_PAUSE: Duration = Duration::from_millis(1100);
 
 /// Looks up the account's suggestions now (blocking parts apart) and keeps them.
 pub async fn look(
