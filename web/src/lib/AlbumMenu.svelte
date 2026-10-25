@@ -51,6 +51,8 @@
     movePreview,
     replaceIncoming,
     getAlbumCovers,
+    lookAlbumCovers,
+    missingCall,
     setAlbumCover,
     type CoverChoice,
     replacePreview,
@@ -87,6 +89,8 @@
   import SettingRow from './SettingRow.svelte';
   import Cover from './Cover.svelte';
   import PageLoading from './PageLoading.svelte';
+  import Meter from './Meter.svelte';
+  import { progressOf, tasks } from './tasks.svelte';
   import { withUndo } from './undo.svelte';
   import { me } from './me.svelte';
 
@@ -341,25 +345,56 @@
   /** Replace's cover (the owner, 2026-10-25): the album's own kept, or the new copy's. */
   let coverWay = $state<'keep' | 'new'>('keep');
   /** Change cover: the album's own and those to choose from (null while asked). */
-  let covers = $state<{ current: CoverChoice | null; candidates: CoverChoice[] } | null>(null);
+  type Covers = { current: CoverChoice | null; candidates: CoverChoice[] };
+  let covers = $state<Covers | null>(null);
+  // Looked for as a task (the owner, 2026-10-25: Discover's progress, how many from which source): its step under the
+  // loader, its result the covers. A server before it: asked in one go, as before.
+  let coverTask = $state<number | null>(null);
+  const coverLook = $derived(coverTask !== null ? tasks.of(`covers:${a.id}`) : null);
+  const coverProgress = $derived(coverLook && coverLook.finished === null ? progressOf(coverLook) : null);
+  $effect(() => (ask === 'cover' ? tasks.follow() : undefined));
+  $effect(() => {
+    const t = coverLook;
+    if (!t || t.id !== coverTask || t.finished === null) return;
+    coverTask = null;
+    if (t.error) {
+      toast.show({ text: t.error, tone: 'error' });
+      onclose();
+    } else covers = t.result as Covers;
+  });
   async function askCover() {
     ask = 'cover';
     covers = null;
     try {
-      covers = await getAlbumCovers(source, a.id);
+      const { task } = await lookAlbumCovers(source, a.id);
+      tasks.begun(task);
+      coverTask = task.id;
     } catch (e) {
-      toast.fail(e, 'Could not find covers');
-      onclose();
+      if (!missingCall(e)) {
+        toast.fail(e, 'Could not find covers');
+        return onclose();
+      }
+      try {
+        covers = await getAlbumCovers(source, a.id);
+      } catch (e2) {
+        toast.fail(e2, 'Could not find covers');
+        onclose();
+      }
     }
   }
-  const setCover = (c: CoverChoice) =>
-    act(async () => {
+  /** The cover being made the album's: only its card turns busy (the owner, 2026-10-25). */
+  let settingCover = $state<string | null>(null);
+  const setCover = (c: CoverChoice) => {
+    if (working) return;
+    settingCover = c.url;
+    return act(async () => {
       const { undo } = await setAlbumCover(source, a.id, c.url);
       onclose();
       const again = () => void refreshCover(source, a.id, albumCoverUrl(source, a.id));
       again();
       withUndo(`Changed the cover of ${a.title}.`, undo, { after: again });
-    }, 'Could not change the cover');
+    }, 'Could not change the cover').finally(() => (settingCover = null));
+  };
   const size = (c: CoverChoice) => (c.width && c.height ? `${c.width} × ${c.height}` : '');
   let year = $state('');
   let working = $state(false);
@@ -529,8 +564,12 @@
     <!-- Change cover (0.9.5): the album's own first, then Discogs' and the Cover Art Archive's, as an artist's albums;
          a tap makes it the cover, inside every file and beside them (Undo brings the old one back). -->
     {#if !covers}
-      <!-- A few seconds with Discogs (its master and up to six releases, at its pace; a5). -->
-      <PageLoading />
+      <!-- A few seconds with Discogs (its master and up to six releases, at its pace; a5): how far, under the loader. -->
+      <PageLoading>
+        {#if coverProgress}
+          {#if coverProgress.value !== null}<Meter label={coverProgress.line} value={coverProgress.value} />{:else}<p class="ask pad">{coverProgress.line}</p>{/if}
+        {/if}
+      </PageLoading>
     {:else if !covers.candidates.length}
       <p class="ask pad">No other covers found.</p>
     {:else}
@@ -538,7 +577,7 @@
       <ul class="cover-grid">
         {#if list.current}<li><AlbumCard source="cover" album={{ id: 'current', title: 'Current', year: null }} cover={list.current.url} lines={[size(list.current)]} onopen={() => onclose()} /></li>{/if}
         {#each list.candidates as c (c.url)}
-          <li><AlbumCard source="cover" album={{ id: c.url, title: c.what ?? (c.from === 'discogs' ? 'Discogs' : 'Cover Art Archive'), year: null }} cover={c.url} lines={[size(c), c.from === 'discogs' ? 'Discogs' : 'Cover Art Archive']} busy={working} onopen={() => setCover(c)} /></li>
+          <li><AlbumCard source="cover" album={{ id: c.url, title: c.what ?? (c.from === 'discogs' ? 'Discogs' : 'Cover Art Archive'), year: null }} cover={c.url} lines={[size(c), c.from === 'discogs' ? 'Discogs' : 'Cover Art Archive']} busy={settingCover === c.url} onopen={() => setCover(c)} /></li>
         {/each}
       </ul>
     {/if}

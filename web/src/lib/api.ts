@@ -2114,6 +2114,10 @@ export type CoverChoice = { url: string; width: number | null; height: number | 
 export const getAlbumCovers = (source: string, album: string) =>
   request<{ current: CoverChoice | null; candidates: CoverChoice[] }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`);
 /** One of them as the album's cover, inside every file and beside them; its undo token. */
+/** Change cover's look as a task (a5, 0.9.6; kind `covers:<album>`), its steps per source (MusicBrainz, the Cover Art
+ *  Archive, Discogs), its result the same as getAlbumCovers'. One already running for the album is given back. */
+export const lookAlbumCovers = (source: string, album: string) =>
+  post<Started>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers/look`, {});
 export const setAlbumCover = (source: string, album: string, url: string) =>
   post<{ undo: string[] }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`, { url });
 
