@@ -130,7 +130,8 @@
     /** View in the panel (not from the panel showing it). */
     viewable?: boolean;
     /** The step it opens on: the entries, or straight at the playlists. */
-    start?: 'menu' | 'lists';
+    /** 'cover': straight on Change cover (Health's albums without one). */
+    start?: 'menu' | 'lists' | 'cover';
     /** Its resume point was removed here (the panel's Resume goes too). */
     onresumegone?: () => void;
     /** The album left its library (moved, replaced or deleted; not when queued to convert first). */
@@ -339,7 +340,10 @@
   const addable = $derived(toList.addable);
 
   // svelte-ignore state_referenced_locally
-  let step = $state<ToPlaylistStep>(start);
+  let step = $state<ToPlaylistStep>(start === 'cover' ? 'menu' : start);
+  $effect(() => {
+    if (untrack(() => start) === 'cover') untrack(askCover);
+  });
   /** Export… (decision 0058): its tracks, in lib/ExportStep. */
   let exporting = $state(false);
   // Opened at the playlists for an album outside Music: there is nothing to add it to.

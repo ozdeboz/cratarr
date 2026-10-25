@@ -1531,6 +1531,20 @@ export type Task = {
 };
 type Started = { task: Task };
 export const getTasks = () => quietly<{ tasks: Task[] }>('/api/tasks');
+/** An album's numbers as a release has them (a5, 0.9.6; Health's track numbers): where from, whether its discs stay
+ *  (a CD's, a CD-sized digital release's) or run on as one (vinyl, cassette), each track now and after. */
+export type Renumbering = {
+  from: 'musicbrainz' | 'discogs' | 'files';
+  release: { title: string; format: string | null; country: string | null; year: number | null } | null;
+  discs: 'kept' | 'flattened';
+  why: string;
+  tracks: { id: string; file: string; title: string | null; now: { disc: number | null; track: number | null }; to: { disc: number; track: number } }[];
+  totals: { discs: number; tracks_per_disc: number[] };
+};
+export const lookRenumber = (album: string) => post<Started>(`/api/albums/cratarr/${encodeURIComponent(album)}/renumber/look`, {});
+/** Writes the numbers shown (the preview's `to`), Undo puts the old ones back. */
+export const renumber = (album: string, tracks: { id: string; disc: number; track: number }[]) =>
+  post<{ undo: string[] }>(`/api/albums/cratarr/${encodeURIComponent(album)}/renumber`, { tracks });
 /** Stops one of the account's tasks (a5, 0.9.6: Change cover's look, once a cover is chosen). */
 export const stopTask = (id: number) => request<unknown>(`/api/tasks/${id}`, { method: 'DELETE' });
 

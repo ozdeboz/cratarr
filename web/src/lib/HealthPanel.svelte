@@ -12,10 +12,13 @@
   import Icon from './Icon.svelte';
   import { albumCoverUrl, type HealthItem } from './api';
   import { openFinding } from './health';
-  import { health, problems } from './healthReport.svelte';
+  import { health, loadHealth, problems } from './healthReport.svelte';
   import HealthEvents from './HealthEvents.svelte';
   import HealthIncoming from './HealthIncoming.svelte';
   import HealthMissing from './HealthMissing.svelte';
+  import HealthRenumber from './HealthRenumber.svelte';
+  import AlbumMenu from './AlbumMenu.svelte';
+  import { me } from './me.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
   import { matchesSearch } from './pageView.svelte';
   import TopPill from './TopPill.svelte';
@@ -42,6 +45,8 @@
     'sign-in:throttled': { area: 'signin', what: 'sign-in throttled', by: 'client' },
   };
   /** Where an item's page sends on: its album, its playlist. */
+  /** The album whose Change cover is open (Health's albums without a cover). */
+  let coverOf = $state<string | null>(null);
   const onward = (x: HealthItem) =>
     x.album ? { label: 'Open the album', go: () => viewOver(albumSubject(x.album![0], x.album![1])) } : x.playlist ? { label: 'Open the playlist', go: () => openTab([x.playlist!], 'tracks') } : null;
   const since = (t: number) => new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
@@ -88,6 +93,15 @@
       {#if item.line}<p class="what">{item.line}</p>{/if}
       {#if item.playlist}<HealthMissing playlist={item.playlist} />{/if}
       {#if incoming && item.album}<HealthIncoming source={item.album[0]} album={item.album[1]} ongone={() => backFromStep(HEALTH + problem)} />{/if}
+      <!-- Track numbers off (unnumbered ones too): renumbered as a release has them (lib/HealthRenumber). -->
+      {#if problem === 'library:track-numbers' && item.album?.[0] === 'cratarr'}<HealthRenumber album={item.album[1]} title={item.title} ongone={() => backFromStep(HEALTH + problem)} />{/if}
+      <!-- No cover: Change cover, straight on its choices (Upload and an address in its corner). -->
+      {#if problem === 'library:cover' && item.album?.[0] === 'cratarr' && me.admin}
+        <button class="act" onclick={() => (coverOf = item.album![1])}>Change cover<Icon name="chevronRight" size={18} /></button>
+        {#if coverOf === item.album[1]}
+          <AlbumMenu source="cratarr" album={{ id: item.album[1], title: item.title, artist: null }} start="cover" onclose={() => ((coverOf = null), loadHealth())} />
+        {/if}
+      {/if}
       {#if EVENTS[problem]}<HealthEvents {...EVENTS[problem]} value={item.title} />{/if}
       {#if item.files?.length}
         <!-- A folder's files not heard yet, by name. -->
