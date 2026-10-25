@@ -28,12 +28,20 @@ export class Reorder {
   }
 
   /** The handle of row `i` was pressed. */
-  down = (e: PointerEvent, i: number) => {
+  down = (e: PointerEvent, i: number) => this.lift(e.currentTarget as HTMLElement, e.pointerId, e.clientY, i);
+
+  /** Row `i` lifted by `el` (its handle, or the row held: the queue's long press, the owner 2026-10-26), the pointer
+   *  `pointerId` at `y`. */
+  lift = (el: HTMLElement, pointerId: number, y: number, i: number) => {
     const list = this.#list();
     if (!list) return;
-    const el = e.currentTarget as HTMLElement;
-    el.setPointerCapture(e.pointerId);
-    this.#start = { y: e.clientY, scroll: list.scrollTop, rowH: el.closest('li')!.getBoundingClientRect().height };
+    try {
+      el.setPointerCapture(pointerId);
+    } catch {
+      /* the press has ended */
+      return;
+    }
+    this.#start = { y, scroll: list.scrollTop, rowH: el.closest('li')!.getBoundingClientRect().height };
     this.drag = { from: i, to: i, dy: 0 };
     navigator.vibrate?.(8);
   };

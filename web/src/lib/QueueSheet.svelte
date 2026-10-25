@@ -180,6 +180,22 @@
     (from, to) => moveUpcoming(from, to),
   );
   const drag = $derived(reorder.drag);
+  // A long press on a row lifts it to drag (the owner, 2026-10-26: its ⋮ opens the menu; the grip alone was hard to
+  // find): from where it was pressed. The list does not scroll under the finger meanwhile.
+  let pressed: { id: number; y: number; el: HTMLElement } | null = null;
+  function liftRow(i: number) {
+    if (!pressed) return;
+    reorder.lift(pressed.el, pressed.id, pressed.y, i);
+  }
+  function noScrollWhileDragging(e: TouchEvent) {
+    if (reorder.drag && e.cancelable) e.preventDefault();
+  }
+  $effect(() => {
+    const l = list;
+    if (!l) return;
+    l.addEventListener('touchmove', noScrollWhileDragging, { passive: false });
+    return () => l.removeEventListener('touchmove', noScrollWhileDragging);
+  });
 
   // Swipe left removes (this device; lib/swipe.ts): the row slides out, then the track leaves the queue. Remove shows
   // in the strip it uncovers (lib/SwipeBehind).
@@ -230,7 +246,7 @@
     bind:this={sheet}
     style:transform={pull ? `translateY(${pull}px)` : null}
     class:pulling={pull !== 0}
-    use:sheetDrag={{ onclose, ondrag: (d) => (pull = d) }}
+    use:sheetDrag={{ onclose, ondrag: (d) => (pull = d), enabled: !drag }}
     in:fly|global={{ y: 600, duration: reducedMotion() ? 0 : SHEET_IN, easing: decelerate }}
     out:fly|global={{ y: 600, duration: reducedMotion() ? 0 : SHEET_OUT, easing: decelerate }}
   >
@@ -343,7 +359,11 @@
               <button
                 class="row"
                 onclick={() => play(i)}
-                use:longpress={() => rowMenu(asTrack(t, np.source), { list: 'upcoming', at: i })}
+                onpointerdown={(e) => (pressed = { id: e.pointerId, y: e.clientY, el: e.currentTarget as HTMLElement })}
+                onpointermove={reorder.move}
+                onpointerup={reorder.end}
+                onpointercancel={reorder.end}
+                use:longpress={() => (here && !q ? liftRow(i) : rowMenu(asTrack(t, np.source), { list: 'upcoming', at: i }))}
                 use:swipe={{ enabled: here && !drag, left: () => removeSwiped(i) }}
               >
                 {@render heldCover({ source: np.source, id: t.id, album_id: t.album_id, duration_secs: t.duration_secs })}

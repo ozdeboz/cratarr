@@ -54,6 +54,8 @@ export function sheetDrag(node: HTMLElement, options: SheetDragOptions) {
 
   function move(e: PointerEvent) {
     if (!press || e.pointerId !== press.id) return;
+    // Something on it took the press over meanwhile (a row lifted by a long press): not the sheet's.
+    if (opts.enabled === false && !dragging) return void (press = null);
     const dx = e.clientX - press.x;
     const dy = (e.clientY - press.y) * dir();
     if (!dragging) {
@@ -101,7 +103,7 @@ export function sheetDrag(node: HTMLElement, options: SheetDragOptions) {
   // On a touch screen the browser pans a list (or the page behind) unless its move is cancelled: once the press goes
   // the closing way from a list at its edge, it is the sheet's.
   function touchMove(e: TouchEvent) {
-    if (!press || !e.cancelable) return;
+    if (!press || !e.cancelable || (opts.enabled === false && !dragging)) return;
     const t = e.touches[0];
     if (!t) return;
     const dx = t.clientX - press.x;
