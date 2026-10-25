@@ -16,7 +16,7 @@
   import MenuGroup from './lib/MenuGroup.svelte';
   import MenuSheet from './lib/MenuSheet.svelte';
   import LinkSheet from './lib/LinkSheet.svelte';
-  import { goToArtist } from './lib/albums.svelte';
+  import { goToArtist, library, readLibrary } from './lib/albums.svelte';
   import DiscoverSections from './lib/DiscoverSections.svelte';
   import { sections } from './lib/discoverSections';
   import SectionHead from './lib/SectionHead.svelte';
@@ -122,7 +122,18 @@
   const albums = $derived(
     kept.filter((a) => passes(a) && matchesSearch(a.album, a.artist, a.kind, a.year?.toString(), ...(a.genres ?? []), ...a.why, ...(a.sources ?? []))),
   );
-  const sec = $derived(sections(albums));
+  // The masonry's columns: as many 136 px places (6 px apart) as the page is wide, less the room between two artists'
+  // grids (lib/masonry, the owner 2026-10-25: responsive to any width), three at least.
+  let pageWidth = $state(0);
+  const aroundCols = $derived(Math.max(3, Math.floor((pageWidth + 6 - 24) / 142)));
+  const sec = $derived(sections(albums, { aroundCols }));
+  // How many albums the library has of each artist, by name (the owner, 2026-10-25: on the "Because you play" tile).
+  if (!library.view) readLibrary(false).catch(() => {});
+  const ownedBy = $derived.by(() => {
+    const n = new Map<string, number>();
+    for (const src of library.view?.sources ?? []) for (const a of src.albums) if (a.artist) n.set(a.artist.toLowerCase(), (n.get(a.artist.toLowerCase()) ?? 0) + 1);
+    return n;
+  });
   // How many the filter lets through, of how many (the Filter sheet's count).
   $effect(() => {
     pageView.counted = view?.found ? { shown: kept.filter(passes).length, total: kept.length } : null;
@@ -231,6 +242,7 @@
 {/snippet}
 
 <main>
+  <div class="measure" bind:clientWidth={pageWidth}></div>
   {#if error && !view}
     <Notice text={error} />
   {:else if !view}
@@ -253,7 +265,7 @@
       {#if me.admin && !view.lidarr}
         <p class="note">Want needs Lidarr: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>
       {/if}
-      <DiscoverSections {sec} {facts} onopen={tap} onmenu={(a) => (opened = a)} onplay={preview} {previewing} />
+      <DiscoverSections {sec} {facts} owned={(name) => ownedBy.get(name.toLowerCase()) ?? 0} onopen={tap} onmenu={(a) => (opened = a)} onplay={preview} {previewing} />
       {#if sec.rest.length}<SectionHead title="More for you" />{/if}
       <ul class="grid">
         {#each sec.rest as a (a.key)}
@@ -315,6 +327,11 @@
 {#if link}{@const l = link}<LinkSheet url={l.url} name={l.name} onclose={() => (link = null)} />{/if}
 
 <style>
+  /* The page's width, for the masonry. */
+  .measure {
+    height: 0;
+  }
+
   /* The page answers to its own width (beside the player or not): a container, as Crates. */
   main {
     position: relative;
@@ -350,6 +367,9 @@
     padding: 12px;
     border-radius: 14px;
     background: var(--surface);
+    /* Only the cards on screen are drawn, as a playlist's rows (the owner, 2026-10-25: More for you is 250 long). */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 150px;
   }
 
   .card:has(.open:hover),

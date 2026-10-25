@@ -1523,6 +1523,8 @@ export type DiscoverAlbum = {
   sources?: string[];
   /** Its album page on Bandcamp: Play previews it there (decision 0071). */
   bandcamp?: string;
+  /** How alike to each artist played it was found from (Last.fm's match, 0 to 1); Last.fm's suggestions only. */
+  alike?: { seed: string; value: number }[];
   /** Its new artist has a picture, read with the look (only such an artist is featured). */
   artist_photo?: boolean;
   /** What MusicBrainz calls it (album, EP, single…), its genres, length, track count; Last.fm's listeners (0.9). */
