@@ -70,27 +70,22 @@ test('no pick when nothing plays; a group of fewer than three is no section', ()
   assert.deepEqual(out.rest.map((x) => x.key), ['a', 'b']);
 });
 
-test('around the seeds all eight places are filled: what plays takes two, what no longer fits waits', () => {
+test('around an artist played: laid out to the room given, what no longer fits waits; too few, no section', () => {
   const like = (k: string, bandcamp?: string) => s(k, k, ['Like Air'], { bandcamp });
-  const limits = { gaps: 4, gapsEach: 4, around: 1, aroundCells: 8, newArtists: 10 };
-  // The pick takes p1; p2, p3 and p4 take six places, a and b the last two; c is left for the cards.
-  let out = sections([like('p1', 'u'), like('p2', 'u'), like('p3', 'u'), like('a'), like('b'), like('c'), like('p4', 'u')], limits);
-  assert.deepEqual(out.around[0].items.map((x) => x.key), ['p2', 'p3', 'p4', 'a', 'b']);
-  assert.deepEqual(out.around[0].wide, ['p2', 'p3', 'p4']);
-  assert.deepEqual(out.rest.map((x) => x.key), ['c']);
-  // Four that play fill the eight on their own.
-  out = sections([like('p1', 'u'), like('p2', 'u'), like('a'), like('p3', 'u'), like('p4', 'u'), like('p5', 'u')], limits);
-  assert.deepEqual(out.around[0].wide, ['p2', 'p3', 'p4', 'p5']);
-  assert.deepEqual(out.rest.map((x) => x.key), ['a']);
-  // Not enough to fill the eight: no section.
-  out = sections([like('p1', 'u'), like('p2', 'u'), like('a'), like('b'), like('c')], limits);
-  assert.equal(out.around.length, 0);
+  const all = Array.from({ length: 30 }, (_, i) => like(`x${i}`, i % 3 ? undefined : 'u'));
+  const out = sections(all, { aroundCols: 3 });
+  // The pick takes x0; the grid takes some, the rest wait for the cards.
+  assert.equal(out.around.length, 1);
+  assert.ok(out.around[0].items.length >= 3 && out.rest.length > 0);
+  const wider = sections(all, { aroundCols: 8 });
+  assert.ok(wider.around[0].items.length > out.around[0].items.length);
+  assert.equal(sections([like('a'), like('b')]).around.length, 0);
 });
 
 test('an artist played gathers every suggestion like them, whoever else a reason names (the owner\'s page had none)', () => {
   // As Last.fm's reasons come: each names the seed with a different second artist.
   const all = ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].map((x, i) => s(`k${i}`, `n${i}`, [`Like Holydrug Couple and ${x}`]));
-  const out = sections(all, { gaps: 4, gapsEach: 4, around: 1, aroundCells: 8, newArtists: 10 });
+  const out = sections(all, { around: 1 });
   assert.deepEqual(out.around[0].seeds, ['Holydrug Couple']);
   assert.equal(out.around[0].items.length, 8);
 });
@@ -99,6 +94,6 @@ test('the discography gaps: the artists most played first, a few each, taken in 
   const g = (k: string, artist: string) => s(k, artist, [`Missing from ${artist}'s albums`]);
   // In the list's order (the server's: the most played first); A has the most missing, which no longer puts it first.
   const all = [g('b1', 'B'), g('a1', 'A'), g('a2', 'A'), g('a3', 'A'), g('a4', 'A'), g('a5', 'A'), g('b2', 'B'), g('c1', 'C')];
-  const out = sections(all, { gaps: 2, gapsEach: 4, around: 1, aroundCells: 8, newArtists: 10 });
+  const out = sections(all, { gaps: 2 });
   assert.deepEqual(out.gaps.map((x) => x.key), ['b1', 'a1', 'b2', 'a2', 'a3', 'a4']);
 });

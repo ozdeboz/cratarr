@@ -5,9 +5,11 @@
   // in the light, the others as chips; the fresh releases as a row; the Weekly Exploration as the list it is. What
   // plays on Bandcamp comes first everywhere (lib/discoverSections). A tap on a suggestion opens it (`onopen`), a long-press its
   // menu (`onmenu`), as Home's albums; Play hears it on Bandcamp in Cratarr's own player (`onplay`).
+  import { untrack } from 'svelte';
   import { discoverArtistPhotoUrl, getDiscoverArtist, type DiscoverAlbum } from './api';
   import Cover from './Cover.svelte';
   import type { Sections } from './discoverSections';
+  import type { Tile } from './masonry';
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
   import SectionHead from './SectionHead.svelte';
@@ -17,6 +19,7 @@
     facts,
     onopen,
     onmenu,
+    owned,
     onplay,
     previewing = null,
   }: {
@@ -26,6 +29,8 @@
     onopen: (a: DiscoverAlbum) => void;
     /** Its menu: a long-press, or the pick's More. */
     onmenu: (a: DiscoverAlbum) => void;
+    /** How many albums the library has of an artist (the "Because you play" tiles). */
+    owned: (name: string) => number;
     onplay: (a: DiscoverAlbum) => void;
     previewing?: string | null;
   } = $props();
@@ -54,21 +59,19 @@
   let coverless = $state<string[]>([]);
   const gaps = $derived(sec.gaps.filter((a) => a.cover && !coverless.includes(a.key)));
 
-  // The masonry (the owner, 2026-10-25: "because you listen to this, and then 8 tiles around that, or fewer"): a grid
-  // of three by three, the seeds in the middle, the suggestions in the eight places around them, always all filled, in
-  // turn from the top left; what plays on Bandcamp a tile of one by two, the rest one by one (the owner, 2026-10-25). Places numbered 1
-  // to 9 as read, 5 the middle; any two following each other around it are side by side.
-  const RING = [1, 2, 3, 6, 9, 8, 7, 4];
-  const places = (g: { items: { key: string }[]; wide: string[] }) => {
-    let at = 0;
-    return g.items.map((s) => {
-      const cells = RING.slice(at, (at += g.wide.includes(s.key) ? 2 : 1));
-      const cols = cells.map((c) => ((c - 1) % 3) + 1);
-      const rows = cells.map((c) => Math.floor((c - 1) / 3) + 1);
-      const span = (v: number[]) => `${Math.min(...v)} / span ${Math.max(...v) - Math.min(...v) + 1}`;
-      return `grid-column: ${span(cols)}; grid-row: ${span(rows)};`;
-    });
-  };
+  // The masonry (lib/masonry, the owner 2026-10-25, 0.9.2): each tile in its grid's place; the artist's photo where the
+  // artist store has one, else the words alone.
+  const place = (t: Tile) => `grid-column: ${t.col + 1} / span ${t.w}; grid-row: ${t.row + 1} / span ${t.h};`;
+  // The artist's photo: asked of the artist store first (it reads TheAudioDB where it has none yet), shown once it has.
+  let photos = $state<Record<string, boolean>>({});
+  const albumsOf = (n: number) => `${n} ${n === 1 ? 'album' : 'albums'} in your library`;
+  $effect(() => {
+    for (const name of sec.around.flatMap((g) => [g.seeds[0], ...(g.partner ? [g.partner] : [])])) {
+      if (name in untrack(() => photos)) continue;
+      photos[name] = false;
+      getDiscoverArtist(name).then((a) => (photos[name] = a.photo), () => {});
+    }
+  });
 </script>
 
 <!-- The pick of the day: one suggestion large, why it is here as a quote. -->
@@ -109,22 +112,39 @@
 {/if}
 
 <!-- Around the artists you play: the seeds in the middle, their suggestions in a masonry around them. -->
-{#each sec.around as g (g.seeds.join('|'))}
-  {@const at = places(g)}
-  <section aria-label={`Around ${g.seeds.join(' and ')}`}>
-    <SectionHead title={`Around ${g.seeds.join(' and ')}`} />
-    <div class="masonry-box"><div class="masonry">
-      <div class="seeds"><small>Because you play</small><b>{g.seeds.join(' · ')}</b></div>
-      {#each g.items as a, i (a.key)}
-        <button class="tile" style={at[i]} aria-label={`${a.album} by ${a.artist}`} onclick={() => onopen(a)} use:longpress={() => onmenu(a)}>
-          <Cover src={a.cover} />
-          <span class="tile-text"><b>{a.album}</b><small>{a.artist}</small></span>
-          {#if a.bandcamp}<span class="tile-play" aria-hidden="true"><Icon name="play" size={14} /></span>{/if}
-        </button>
+{#if sec.around.length}
+  <section aria-label="Around artists you play">
+    <SectionHead title={sec.around.length === 1 ? `Around ${[sec.around[0].seeds[0], sec.around[0].partner].filter(Boolean).join(' and ')}` : 'Around artists you play'} />
+    <div class="arounds">
+      {#each sec.around as g (g.seeds.join('|'))}
+        {@const grid = g.grid}
+        <div class="masonry" style={`--cols: ${grid.cols}; --rows: ${grid.rows};`}>
+          <div class="seeds" class:photo={photos[g.seeds[0]]} style={place(grid.seed)}>
+            {#if photos[g.seeds[0]]}<img src={discoverArtistPhotoUrl(g.seeds[0])} alt="" onerror={() => (photos[g.seeds[0]] = false)} />{/if}
+            <span class="seed-text"><small>Because you play</small><b>{g.seeds[0]}</b>{#if owned(g.seeds[0])}<span class="owned">{albumsOf(owned(g.seeds[0]))}</span>{/if}</span>
+          </div>
+          {#if grid.partner && g.partner}
+            <!-- The library's artist closest to the first, one place (the owner, 2026-10-25). -->
+            <div class="seeds partner" class:photo={photos[g.partner]} style={place(grid.partner)}>
+              {#if photos[g.partner]}<img src={discoverArtistPhotoUrl(g.partner)} alt="" onerror={() => g.partner && (photos[g.partner] = false)} />{/if}
+              <span class="seed-text"><small>And</small><b>{g.partner}</b>{#if owned(g.partner)}<span class="owned">{albumsOf(owned(g.partner))}</span>{/if}</span>
+            </div>
+          {/if}
+          {#each g.items as a (a.key)}
+            {@const t = grid.tiles.find((x) => x.key === a.key)}
+            {#if t}
+              <button class="tile" style={place(t)} aria-label={`${a.album} by ${a.artist}`} onclick={() => onopen(a)} use:longpress={() => onmenu(a)}>
+                <Cover src={a.cover} />
+                <span class="tile-text"><b>{a.album}</b><small>{a.artist}</small></span>
+                {#if a.bandcamp}<span class="tile-play" aria-hidden="true"><Icon name="play" size={14} /></span>{/if}
+              </button>
+            {/if}
+          {/each}
+        </div>
       {/each}
-    </div></div>
+    </div>
   </section>
-{/each}
+{/if}
 
 <!-- New to you: one new artist in the light, the others as chips. -->
 {#if lit}
@@ -366,33 +386,76 @@
   }
 
   /* The masonry: the seeds in the middle, the suggestions around. */
-  /* A tile slightly smaller than a shelf's cover (the owner, 2026-10-25: half the size it was, then "slightly smaller
-     than the discography gaps tiles", 150 px): 136 px, three and their gaps. */
-  .masonry-box {
-    max-width: calc(3 * 136px + 12px);
+  /* The masonries side by side, each as many columns and rows as it was laid out (lib/masonry); a tile slightly smaller
+     than a shelf's cover (the owner, 2026-10-25: "slightly smaller than the discography gaps tiles", 150 px), smaller
+     still where three do not fit (a phone). */
+  .arounds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 24px;
     container-type: inline-size;
   }
 
   .masonry {
+    --tile: min(136px, calc((100cqi - 12px) / 3));
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    grid-auto-rows: calc((100cqi - 12px) / 3);
+    grid-template-columns: repeat(var(--cols), var(--tile));
+    grid-template-rows: repeat(var(--rows), var(--tile));
     gap: 6px;
   }
 
   .seeds {
+    position: relative;
     display: flex;
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    gap: 4px;
-    grid-column: 2;
-    grid-row: 2;
+    overflow: hidden;
     padding: 6px;
     border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
     border-radius: 8px;
     background: color-mix(in srgb, var(--accent) 12%, transparent);
     text-align: center;
+  }
+
+  .seed-text {
+    display: grid;
+    gap: 4px;
+  }
+
+  /* With the artist's photo: the words over it at the foot, as a tile's. */
+  .seeds.photo {
+    justify-content: flex-end;
+    padding: 0;
+  }
+
+  .seeds img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .seeds.photo .seed-text {
+    position: relative;
+    width: 100%;
+    padding: 18px 7px 6px;
+    background: linear-gradient(to top, rgb(0 0 0 / 0.78), transparent);
+    color: #fff;
+  }
+
+  .seeds.photo small {
+    color: rgb(255 255 255 / 0.85);
+  }
+
+  .owned {
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .seeds.photo .owned {
+    color: rgb(255 255 255 / 0.8);
   }
 
   .seeds small {

@@ -3621,10 +3621,19 @@ async fn artist_about(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) 
 
 /// An artist new to the library, for Discover's New to you (0069 amended, 0.9.1): TheAudioDB's description by name, as
 /// the artist store reads it for the library's (read now when it never was), and whether there is a photo.
+/// A name's MusicBrainz id where it is one of the library's artists: the artist store keeps those by it, as the
+/// artist pages read them (the owner, 2026-10-25: the masonry's artist, one the library has, showed no photo).
+async fn library_mbid(name: &str) -> Option<String> {
+    let lib = crate::serve::instance()?.library.clone();
+    let name = name.to_string();
+    tokio::task::spawn_blocking(move || lib.artist_by_name(&name)).await.ok()?.ok()??.1.filter(|m| !m.is_empty())
+}
+
 async fn discover_artist(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) -> Json<serde_json::Value> {
     let found = async {
         let store = app.artists.clone()?;
-        let info = store.get_or_read(q.name.trim(), None).await?;
+        let mbid = library_mbid(q.name.trim()).await;
+        let info = store.get_or_read(q.name.trim(), mbid.as_deref()).await?;
         Some(json!({ "bio": info.bio, "photo": info.photo.is_some() }))
     }
     .await;
@@ -3635,7 +3644,8 @@ async fn discover_artist(State(app): State<Arc<App>>, Query(q): Query<AboutQuery
 async fn discover_artist_photo(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) -> Response {
     let found = async {
         let store = app.artists.clone()?;
-        let file = store.get(&crate::app::artists::key(q.name.trim(), None))?.photo?;
+        let mbid = library_mbid(q.name.trim()).await;
+        let file = store.get(&crate::app::artists::key(q.name.trim(), mbid.as_deref()))?.photo?;
         tokio::fs::read(store.photo_path(&file)).await.ok()
     }
     .await;
