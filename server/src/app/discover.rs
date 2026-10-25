@@ -268,7 +268,7 @@ async fn lb_albums(http: &reqwest::Client, recordings: &[String], progress: &Pro
             let rg = r["release_group_mbid"].as_str().filter(|s| !s.is_empty()).map(str::to_string);
             let cover = rg
                 .as_ref()
-                .map(|g| format!("https://coverartarchive.org/release-group/{g}/front-250"))
+                .map(|g| format!("/api/covers/release-group/{g}"))
                 .or_else(|| r["caa_release_mbid"].as_str().map(|m| format!("https://coverartarchive.org/release/{m}/front-250")));
             out.insert(
                 rec,
@@ -628,7 +628,7 @@ async fn from_discographies(serve: &Arc<crate::serve::Serve>, http: &reqwest::Cl
                 artist: a.name.clone(),
                 year: g.year,
                 release_group: Some(g.id.clone()),
-                cover: Some(format!("https://coverartarchive.org/release-group/{}/front-250", g.id)),
+                cover: Some(format!("/api/covers/release-group/{}", g.id)),
                 kind: g.kind.clone(),
                 genres: g.genres.clone(),
                 source: "discography",
@@ -686,7 +686,7 @@ async fn from_related(serve: &Arc<crate::serve::Serve>, http: &reqwest::Client, 
                         album: g.title.clone(),
                         year: g.year,
                         release_group: Some(g.id.clone()),
-                        cover: Some(format!("https://coverartarchive.org/release-group/{}/front-250", g.id)),
+                        cover: Some(format!("/api/covers/release-group/{}", g.id)),
                         kind: g.kind.clone(),
                         genres: g.genres.clone(),
                         ..base
@@ -744,7 +744,7 @@ async fn from_fresh(http: &reqwest::Client, user: &str) -> Result<Vec<Candidate>
             Some(Candidate {
                 album: r["release_name"].as_str()?.to_string(),
                 year: r["release_date"].as_str().and_then(|d| d.get(..4)?.parse().ok()),
-                cover: Some(format!("https://coverartarchive.org/release-group/{rg}/front-250")),
+                cover: Some(format!("/api/covers/release-group/{rg}")),
                 kind: r["release_group_primary_type"].as_str().map(str::to_string),
                 source: "fresh",
                 why: format!("New from {artist}"),
@@ -1193,7 +1193,7 @@ pub async fn look(
         n += 1;
         if let Ok(Some((g, year))) = mb_release_group(&http, &c.artist, &c.album).await {
             if c.cover.is_none() {
-                c.cover = Some(format!("https://coverartarchive.org/release-group/{g}/front-250"));
+                c.cover = Some(format!("/api/covers/release-group/{g}"));
             }
             c.year = c.year.or(year);
             c.release_group = Some(g);
@@ -1389,7 +1389,7 @@ pub async fn missing_albums(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::ca
             .into_iter()
             .filter(|g| !have.has(&Candidate { album: g.title.clone(), artist: artist.clone(), release_group: Some(g.id.clone()), ..Candidate::default() }))
             .map(|g| Missing {
-                cover: format!("https://coverartarchive.org/release-group/{}/front-250", g.id),
+                cover: format!("/api/covers/release-group/{}", g.id),
                 bandcamp: pages.get(&g.id).cloned(),
                 request: None,
                 release_group: g.id,
@@ -1477,7 +1477,7 @@ pub async fn all_missing(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catal
                     continue;
                 }
                 out.push(MissingOf {
-                    cover: format!("https://coverartarchive.org/release-group/{}/front-250", g.id),
+                    cover: format!("/api/covers/release-group/{}", g.id),
                     bandcamp: pages.get(&g.id).cloned(),
                     request: None,
                     release_group: g.id,
@@ -1635,7 +1635,7 @@ pub async fn musicbrainz_search(serve: &Arc<crate::serve::Serve>, cat: Arc<crate
             Some((
                 g["score"].as_u64().unwrap_or(0),
                 FoundAlbum {
-                    cover: format!("https://coverartarchive.org/release-group/{id}/front-250"),
+                    cover: format!("/api/covers/release-group/{id}"),
                     title: g["title"].as_str()?.to_string(),
                     artist: credit(g),
                     year: g["first-release-date"].as_str().and_then(|d| d.get(..4)?.parse().ok()),

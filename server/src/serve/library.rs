@@ -108,6 +108,8 @@ pub struct Library {
     /// Albums' original years from MusicBrainz (0.9.5), by their MusicBrainz release: for an album whose files carry no
     /// original date.
     originals: Mutex<HashMap<String, u32>>,
+    /// Discogs' genres and styles for albums whose files carry none (0.9.5), by album id.
+    extra_genres: Mutex<HashMap<String, Vec<String>>>,
 }
 
 /// A number at the start of a tag ("3/12" is 3).
@@ -266,7 +268,7 @@ impl Library {
         }
         conn.execute_batch(SCHEMA).context("creating the library tables")?;
         conn.execute_batch(&format!("PRAGMA user_version = {LAYOUT}"))?;
-        Ok(Self { db: Mutex::new(conn), added: Mutex::default(), originals: Mutex::default() })
+        Ok(Self { db: Mutex::new(conn), added: Mutex::default(), originals: Mutex::default(), extra_genres: Mutex::default() })
     }
 
     /// The added dates known better than the catalogue's (by album id); a change builds the library again.
@@ -279,10 +281,16 @@ impl Library {
         *self.originals.lock().unwrap_or_else(|p| p.into_inner()) = originals;
     }
 
+    /// Discogs' genres for albums whose files carry none (by album id); a change builds the library again.
+    pub fn set_extra_genres(&self, genres: HashMap<String, Vec<String>>) {
+        *self.extra_genres.lock().unwrap_or_else(|p| p.into_inner()) = genres;
+    }
+
     /// A summary of the original years, part of what the library was built from.
     fn originals_print(&self) -> String {
         let o = self.originals.lock().unwrap_or_else(|p| p.into_inner());
-        format!("{}/{}", o.len(), o.values().fold(0u64, |a, v| a.wrapping_add(u64::from(*v))))
+        let g = self.extra_genres.lock().unwrap_or_else(|p| p.into_inner());
+        format!("{}/{} genres {}/{}", o.len(), o.values().fold(0u64, |a, v| a.wrapping_add(u64::from(*v))), g.len(), g.values().map(Vec::len).sum::<usize>())
     }
 
     /// A summary of the added dates, part of what the library was built from.
@@ -375,6 +383,7 @@ impl Library {
     fn build(&self, folders: &[FolderRows], rules: &Rules) -> Result<()> {
         let added = self.added.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let originals = self.originals.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        let extra_genres = self.extra_genres.lock().unwrap_or_else(|p| p.into_inner()).clone();
         let mut songs: Vec<Song> =
             folders.iter().flat_map(|f| f.rows.iter().filter(|r| r.track.is_some()).map(move |r| (f.folder, r))).map(|(folder, r)| song(r, folder, rules)).collect();
         one_album_per_folder(&mut songs);
@@ -479,6 +488,12 @@ impl Library {
                         e.1 += 1;
                         e.2.insert(album_id.clone());
                     }
+                }
+                // None in its files: Discogs' genres and styles where they were asked (0.9.5; the files never written).
+                if genres.is_empty()
+                    && let Some(g) = extra_genres.get(album_id)
+                {
+                    genres = g.clone();
                 }
                 // The album's folder: the one its files share.
                 let dirs: Vec<&str> = songs.iter().map(|s| s.row.rel.rsplit_once('/').map_or("", |(d, _)| d)).collect();

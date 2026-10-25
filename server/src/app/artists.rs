@@ -117,7 +117,7 @@ impl ArtistInfo {
     fn due(&self, key: &str, now: i64) -> bool {
         let row: Option<(i64, bool, bool)> = self
             .db()
-            .query_row("SELECT read_at, (bio IS NOT NULL OR photo IS NOT NULL), (photo IS NULL AND commons = 0) FROM artist_info WHERE key = ?1", [key], |r| {
+            .query_row("SELECT read_at, (bio IS NOT NULL OR photo IS NOT NULL), (photo IS NULL AND commons < 2) FROM artist_info WHERE key = ?1", [key], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
             })
             .optional()
@@ -125,7 +125,7 @@ impl ArtistInfo {
             .flatten();
         match row {
             None => true,
-            // Without a photo, and Commons never asked (read before 0.9.3): once more now.
+            // Without a photo, and Commons (before 0.9.3) or Discogs (before 0.9.5) never asked: once more now.
             Some((_, _, true)) => true,
             Some((at, found, false)) => now - at > if found { FOUND_KEEP } else { MISSING_KEEP },
         }
@@ -174,13 +174,21 @@ impl ArtistInfo {
                     Ok(None) => {}
                     Err(e) => tracing::debug!(target: "artists", artist = name, reason = %e, "Wikimedia Commons did not answer"),
                 }
+                // Nor from Commons: Discogs' (0.9.5), credited to Discogs with the artist's page there.
+                if photo.is_none() {
+                    match self.discogs_photo(&m).await {
+                        Ok(Some((file, c))) => (photo, credit) = (Some(file), Some(c)),
+                        Ok(None) => {}
+                        Err(e) => tracing::debug!(target: "artists", artist = name, reason = %e, "Discogs did not answer"),
+                    }
+                }
             }
         }
         let credit_json = credit.as_ref().and_then(|c| serde_json::to_string(c).ok());
         self.db().execute(
-            "INSERT INTO artist_info (key, name, mbid, adb, bio, photo, read_at, credit, commons) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)
+            "INSERT INTO artist_info (key, name, mbid, adb, bio, photo, read_at, credit, commons) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 2)
              ON CONFLICT (key) DO UPDATE SET name = excluded.name, mbid = excluded.mbid, adb = excluded.adb, bio = excluded.bio,
-               photo = excluded.photo, read_at = excluded.read_at, credit = excluded.credit, commons = 1",
+               photo = excluded.photo, read_at = excluded.read_at, credit = excluded.credit, commons = 2",
             params![key, name, mbid, adb, bio, photo, epoch_now(), credit_json],
         )?;
         Ok(Info { bio, photo, credit })
@@ -251,6 +259,18 @@ impl ArtistInfo {
         let file = format!("wm-{mbid}.jpg");
         std::fs::write(self.photos.join(&file), &bytes)?;
         Ok(Some((file, Credit { author, licence, url })))
+    }
+
+    /// The artist's primary image on Discogs, kept as a file, credited to Discogs with their page there (0.9.5).
+    async fn discogs_photo(&self, mbid: &str) -> Result<Option<(String, Credit)>> {
+        let Some((image, page)) = super::discogs::artist_image(mbid).await? else { return Ok(None) };
+        let bytes = self.http.get(&image.url).send().await?.error_for_status()?.bytes().await?;
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+        let file = format!("dc-{mbid}.jpg");
+        std::fs::write(self.photos.join(&file), &bytes)?;
+        Ok(Some((file, Credit { author: "Discogs".into(), licence: String::new(), url: page })))
     }
 
     /// What is known of an artist, read now when it never was (Home's open artist); what was known on a failure.
@@ -340,12 +360,14 @@ mod tests {
         let s = ArtistInfo::open(dir.to_str()).unwrap();
         let now = epoch_now();
         assert!(s.due("mbid:x", now), "never read");
-        s.db().execute("INSERT INTO artist_info (key, name, bio, read_at, commons) VALUES ('mbid:x', 'X', 'A bio.', ?1, 1)", [now]).unwrap();
+        s.db().execute("INSERT INTO artist_info (key, name, bio, read_at, commons) VALUES ('mbid:x', 'X', 'A bio.', ?1, 2)", [now]).unwrap();
         s.db().execute("INSERT INTO artist_info (key, name, bio, read_at) VALUES ('mbid:z', 'Z', 'A bio.', ?1)", [now]).unwrap();
         s.db().execute("INSERT INTO artist_info (key, name, read_at) VALUES ('name:y', 'Y', ?1)", [now - 40 * 86_400]).unwrap();
         assert!(!s.due("mbid:x", now));
         assert!(s.due("name:y", now), "nothing found forty days ago: due");
         assert!(s.due("mbid:z", now), "no photo, and Commons never asked: due once");
+        s.db().execute("INSERT INTO artist_info (key, name, bio, read_at, commons) VALUES ('mbid:w', 'W', 'A bio.', ?1, 1)", [now]).unwrap();
+        assert!(s.due("mbid:w", now), "no photo, and Discogs never asked: due once");
         assert_eq!(plain("<a href=\"x\">Eric de Redelijkheid</a> from  Utrecht &amp; co"), "Eric de Redelijkheid from Utrecht & co");
         let _ = std::fs::remove_dir_all(&dir);
     }

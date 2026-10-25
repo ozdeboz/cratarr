@@ -116,6 +116,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/albums/tracks", post(albums_tracks))
         .route("/api/kept", post(kept_ask))
         .route("/api/albums/{source}/{album}/cover", get(album_cover))
+        .route("/api/covers/release-group/{rg}", get(release_group_cover))
         .route("/api/albums/{source}/{album}/similar", get(similar_albums))
         .route("/api/albums/{source}/{album}/play", post(play_album))
         .route("/api/albums/{source}/{album}/favorite", post(album_favorite))
@@ -216,6 +217,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/settings/lidarr", post(preview_lidarr))
             .route("/api/settings/lidarr/options", get(lidarr_options))
             .route("/api/settings/lastfm", get(get_lastfm_key).put(put_lastfm_key))
+            .route("/api/settings/discogs", get(get_discogs_keys).put(put_discogs_keys))
             .route("/api/settings/naming", get(naming))
             .route("/api/catalogue", get(catalogue_status))
             .route("/api/health/report", get(health_report))
@@ -4220,6 +4222,60 @@ async fn put_lastfm_key(Json(b): Json<LastfmKey>) -> Result<Json<serde_json::Val
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     get_lastfm_key().await
+}
+
+/// Whether the server's Discogs key and secret are saved (never them), and the limit a minute Discogs said last.
+async fn get_discogs_keys() -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let ud = serve.userdata.clone();
+    let set = tokio::task::spawn_blocking(move || crate::app::discogs::credentials(&ud))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .is_some();
+    Ok(Json(json!({ "set": set, "per_minute": crate::app::discogs::per_minute() })))
+}
+
+#[derive(Deserialize)]
+struct DiscogsKeys {
+    #[serde(default)]
+    key: String,
+    #[serde(default)]
+    secret: String,
+}
+
+/// The server's Discogs key and secret saved (0.9.5, the owner registers the app); both blank takes them away.
+async fn put_discogs_keys(Json(b): Json<DiscogsKeys>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (key, secret) = (b.key.trim().to_string(), b.secret.trim().to_string());
+    if !(key.is_empty() && secret.is_empty()) && !(crate::app::discogs::valid(&key) && crate::app::discogs::valid(&secret)) {
+        return Err(ToggleError::Refused("A Discogs key and secret are both letters and digits.".into()).into());
+    }
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let ud = serve.userdata.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        ud.set_import_choice(crate::app::discogs::KEY, &key)?;
+        ud.set_import_choice(crate::app::discogs::SECRET, &secret)
+    })
+    .await
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    get_discogs_keys().await
+}
+
+/// A release group's cover for albums not in the library (0.9.5): to the Cover Art Archive's, else Discogs' master's;
+/// 404 where neither has one.
+async fn release_group_cover(Path(rg): Path<String>) -> Response {
+    match crate::app::discogs::release_group_cover(&rg).await {
+        Ok(Some(url)) => match HeaderValue::from_str(&url) {
+            Ok(to) => (StatusCode::FOUND, [(header::LOCATION, to), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=86400"))]).into_response(),
+            Err(_) => StatusCode::NOT_FOUND.into_response(),
+        },
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            tracing::debug!("cover of release group {rg}: {e:#}");
+            StatusCode::NOT_FOUND.into_response()
+        }
+    }
 }
 
 /// Lidarr's quality and metadata profiles and root folders (its page's choices for Want), of the saved Lidarr.

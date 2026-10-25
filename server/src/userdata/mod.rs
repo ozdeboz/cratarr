@@ -118,6 +118,12 @@ CREATE TABLE IF NOT EXISTS bandcamp_found (album TEXT PRIMARY KEY, at INTEGER NO
 -- An album's original year as MusicBrainz gives it (0.9.5): its release's release group's first release year (none:
 -- MusicBrainz knew none), by the MusicBrainz release, and when it was asked.
 CREATE TABLE IF NOT EXISTS original_years (release TEXT PRIMARY KEY, year INTEGER, at INTEGER NOT NULL) WITHOUT ROWID;
+-- A release group's cover for albums not in the library (0.9.5): the Cover Art Archive's, else Discogs' (none: neither
+-- has one), and when it was looked for.
+CREATE TABLE IF NOT EXISTS rg_covers (rg TEXT PRIMARY KEY, url TEXT, at INTEGER NOT NULL) WITHOUT ROWID;
+-- Discogs' genres and styles for a library album whose files carry none (0.9.5; joined by U+001F, empty: none found),
+-- by the album's id, and when they were asked.
+CREATE TABLE IF NOT EXISTS discogs_genres (album TEXT PRIMARY KEY, genres TEXT NOT NULL, at INTEGER NOT NULL) WITHOUT ROWID;
 -- Sleep is no longer kept (the owner, 2026-10-24: not something that should be in Cratarr at all).
 DROP TABLE IF EXISTS asleep;
 ";
@@ -1682,6 +1688,46 @@ impl UserData {
         Ok(())
     }
 
+    /// A release group's cover as last looked for (`Some(None)`: neither has one), and when.
+    pub fn rg_cover(&self, rg: &str) -> Result<Option<(i64, Option<String>)>> {
+        Ok(self.db().query_row("SELECT at, url FROM rg_covers WHERE rg = ?1", [rg], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
+    }
+
+    pub fn set_rg_cover(&self, rg: &str, url: Option<&str>, at: i64) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO rg_covers (rg, url, at) VALUES (?1, ?2, ?3)", params![rg, url, at])?;
+        Ok(())
+    }
+
+    /// Discogs' genres and styles found for albums, by album (those found none left out).
+    pub fn discogs_genres(&self) -> Result<std::collections::HashMap<String, Vec<String>>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT album, genres FROM discogs_genres WHERE genres <> ''")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?.split('\u{1f}').map(str::to_string).collect())))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The albums not to ask Discogs about again: those with genres found, and those asked since `since`.
+    pub fn discogs_genres_asked(&self, since: i64) -> Result<std::collections::HashSet<String>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT album FROM discogs_genres WHERE genres <> '' OR at >= ?1")?;
+        let rows = st.query_map([since], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// What Discogs answered for these albums (genres and styles, or none), as one write.
+    pub fn set_discogs_genres(&self, found: &[(String, Vec<String>)], at: i64) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        {
+            let mut st = tx.prepare("INSERT OR REPLACE INTO discogs_genres (album, genres, at) VALUES (?1, ?2, ?3)")?;
+            for (album, genres) in found {
+                st.execute(params![album, genres.join("\u{1f}"), at])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Every original year MusicBrainz gave, by the album's MusicBrainz release (0.9.5).
     pub fn original_years(&self) -> Result<std::collections::HashMap<String, u32>> {
         let db = self.db();
@@ -1783,6 +1829,17 @@ fn request_row(r: &rusqlite::Row) -> rusqlite::Result<Request> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discogs_genres_and_covers_are_kept_and_an_album_without_any_waits() {
+        let u = UserData::open(None).unwrap();
+        u.set_discogs_genres(&[("al-1".into(), vec!["Electronic".into(), "Dub".into()]), ("al-2".into(), Vec::new())], 100).unwrap();
+        assert_eq!(u.discogs_genres().unwrap(), [("al-1".to_string(), vec!["Electronic".to_string(), "Dub".to_string()])].into());
+        assert_eq!(u.discogs_genres_asked(200).unwrap(), ["al-1".to_string()].into(), "one without genres asked again later");
+        u.set_rg_cover("rg-1", None, 5).unwrap();
+        assert_eq!(u.rg_cover("rg-1").unwrap(), Some((5, None)));
+        assert_eq!(u.rg_cover("rg-2").unwrap(), None);
+    }
 
     #[test]
     fn original_years_are_kept_and_a_release_without_one_waits() {

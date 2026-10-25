@@ -58,6 +58,7 @@ mod shelf;
 mod sync;
 pub mod together;
 pub mod originals;
+pub mod discogs;
 pub mod tracks;
 pub mod visuals;
 
@@ -174,6 +175,7 @@ impl App {
             a.build_slowly();
         }
         originals::start();
+        discogs::start();
         // Cratarr's own library (0032) built anew (a first start, a new layout): what was read from it while it was
         // empty is read again.
         if let Some(served) = crate::serve::instance() {
