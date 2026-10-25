@@ -168,7 +168,8 @@
     </div>
     <div class="artist-caption">
       <button class="title" onclick={() => goToArtist(DISCOVER, n.artist)}>{n.artist}</button>
-      {#if a.artist_albums}<span class="by">{a.artist_albums} {a.artist_albums === 1 ? 'album' : 'albums'}</span>{/if}
+      <!-- Their studio albums (the owner, 2026-10-25: "the golden standard"), as the look counted. -->
+      {#if a.artist_albums}<span class="by">{a.artist_albums} studio {a.artist_albums === 1 ? 'album' : 'albums'}</span>{/if}
       {#if bio?.name === n.artist && bio.credit}<a class="photo-credit" href={bio.credit.url} target="_blank" rel="noopener noreferrer">Photo: {bio.credit.author} · {bio.credit.licence}</a>{/if}
     </div>
     <!-- Their biography, their album to its right with why it is here under it (the owner, 2026-10-25). -->

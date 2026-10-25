@@ -1540,8 +1540,6 @@ export type DiscoverAlbum = {
   artist_photo?: boolean;
   /** How many albums the artist new to the library has released, where the look found out (New to you). */
   artist_albums?: number;
-  /** How many releases the artist has made, every kind (MusicBrainz's release groups), where the look found out. */
-  artist_releases?: number;
   /** What MusicBrainz calls it (album, EP, single…), its genres, length, track count; Last.fm's listeners (0.9). */
   kind?: string | null;
   genres?: string[];
@@ -1613,6 +1611,10 @@ export const hideDiscover = (key: string) => post<{ undo: string }>('/api/discov
 /** An artist new to the library (Discover's New to you): TheAudioDB's description, and whether there is a photo. */
 export const getDiscoverArtist = (name: string) =>
   quietly<{ bio: string | null; photo: boolean; photo_credit?: PhotoCredit | null }>(`/api/discover/artist?name=${encodeURIComponent(name)}`);
+/** How many studio albums an artist from Discover has made (MusicBrainz: albums, no secondary type), counted when first
+ *  asked (0.9.3). */
+export const getDiscoverArtistAlbums = (name: string) =>
+  quietly<{ albums: number | null }>(`/api/discover/artist/albums?name=${encodeURIComponent(name)}`);
 export const discoverArtistPhotoUrl = (name: string) => `/api/discover/artist/photo?name=${encodeURIComponent(name)}`;
 /** An artist related to another (the server's app/related.rs): why, their id in the library, or an album of theirs on
  *  Bandcamp. */

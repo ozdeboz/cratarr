@@ -28,7 +28,7 @@
   import { playing as nowPlaying } from './remote.svelte';
   import Row from './Row.svelte';
   import ListHead from './ListHead.svelte';
-  import { ALBUM_ORDERS, ALBUM_WIDTHS, howMany, isLossless, pageView, qualityOf, USE_ORDERS } from './pageView.svelte';
+  import { matchesSearch, ALBUM_ORDERS, ALBUM_WIDTHS, howMany, isLossless, pageView, qualityOf, USE_ORDERS } from './pageView.svelte';
   import { libraryShown } from './sources.svelte';
   import Tile from './Tile.svelte';
   import type { Cell } from './Row.svelte';
@@ -155,11 +155,8 @@
   // What is playing (the shell polls it), so the album being listened to stands out.
   const playing = $derived(nowPlaying());
 
-  const matches = (a: ListedAlbum) => {
-    const q = pageView.query.trim().toLowerCase();
-    if (!q) return true;
-    return `${a.artist ?? ''} ${a.title}`.toLowerCase().includes(q);
-  };
+  // As every search reads (lib/search, decision 0072).
+  const matches = (a: ListedAlbum) => matchesSearch(a.artist, a.title);
   // The libraries switched off in the filter leave their albums out; the pill's funnel says so while one is.
   $effect(() => {
     pageView.narrowed = sources.some((s) => (s.libraries ?? []).some((l) => !libraryShown(s.id, l)));

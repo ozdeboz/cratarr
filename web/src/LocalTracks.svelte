@@ -10,7 +10,7 @@
   import MenuSheet from './lib/MenuSheet.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { albumSubject, artistSubject, viewPlaylist } from './lib/panel.svelte';
-  import { pageView } from './lib/pageView.svelte';
+  import { matchesSearch, pageView } from './lib/pageView.svelte';
   import { clockText } from './lib/remote.svelte';
   import Row from './lib/Row.svelte';
   import { swipe } from './lib/swipe';
@@ -21,10 +21,8 @@
   $effect(() => {
     askLibrary();
   });
-  const shown = $derived.by(() => {
-    const q = pageView.query.trim().toLowerCase();
-    return (device.tracks ?? []).filter((t) => !q || [t.name, t.artist, t.album].some((x) => x?.toLowerCase().includes(q)));
-  });
+  // As every search reads (lib/search, decision 0072).
+  const shown = $derived((device.tracks ?? []).filter((t) => matchesSearch(t.name, t.artist, t.album)));
   const playingId = $derived(local.queue[local.index]?.source === DEVICE ? local.queue[local.index].id : null);
 
   function playFrom(t: DeviceTrack) {
