@@ -46,10 +46,15 @@
   // Bandcamp or its menu, what Discover left out its menu (Take back), the rest in the panel.
   let elsewhere = $state<ElsewhereAlbum>();
   let leftOut = $state<SearchResult | null>(null);
-  // A result tapped empties the search (the owner, 2026-10-25: it stayed in the field over the panel it opened).
+  // A result tapped empties the search (the owner, 2026-10-25: it stayed in the field over the panel it opened); a set
+  // found deep keeps the words, so it opens narrowed to them as the page's own deep find does (decision 0072), its own
+  // results, not everywhere's, in the panel.
+  const DEEP_KINDS = ['album', 'artist', 'playlist', 'crate'];
+  const deep = (it: SearchResult) => DEEP_KINDS.includes(it.kind) && it.matched.some((m) => m.on !== 'name');
   function open(it: SearchResult) {
     rememberSearch();
-    pageView.query = '';
+    if (deep(it)) globalSearch.scope = 'page';
+    else pageView.query = '';
     if (it.subject.startsWith('#')) location.hash = it.subject;
     else if (it.kind === 'missing')
       void elsewhere?.open({ release_group: it.subject.slice('missing:'.length), title: it.title, artist: it.artist ?? '', year: null, cover: it.cover ?? null });
