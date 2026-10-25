@@ -4,7 +4,7 @@
   // with a tap), one's own rules (strict: the crate builder's condition cards, saved as they change), and what was
   // turned down (each put back, with Undo as excluding has).
   import { untrack } from 'svelte';
-  import { coverUrl, crateLeftOut, getCrateAxes, getCrateFit, putBackInCrate, setCrateFit, traitLabel, type Axis, type CrateFit, type PlaylistRow, albumCoverUrl, type ExcludedAlbum } from './api';
+  import { coverUrl, crateLeftOut, getCrateAxes, getCrateFit, putBackInCrate, setCrateFit, traitLabel, type Axis, type CrateFit, type PlaylistRow } from './api';
   import ConditionList from './ConditionList.svelte';
   import Icon from './Icon.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -19,7 +19,7 @@
   let fit = $state<CrateFit | null>(null);
   let rules = $state<FilterCondition[]>([]);
   let axes = $state<Axis[] | null>(null);
-  let down = $state<{ source: string; rows: PlaylistRow[]; albums: ExcludedAlbum[] } | null>(null);
+  let down = $state<{ source: string; rows: PlaylistRow[] } | null>(null);
   let busy = $state(false);
   /** The rules as last kept. */
   let saving = '';
@@ -30,7 +30,7 @@
       fit = f;
       rules = f.rules;
       saving = JSON.stringify(f.rules);
-      down = { source: l.source, rows: l.rows, albums: l.albums ?? [] };
+      down = { source: l.source, rows: l.rows };
     } catch (e) {
       toast.fail(e, "The crate's fit couldn't be read");
     }
@@ -72,22 +72,6 @@
     return () => clearTimeout(t);
   });
 
-  /** An album left out of the crate (Hide album, beside its Avoiding line): back in. */
-  async function albumBack(a: ExcludedAlbum) {
-    const d = down;
-    if (!d) return;
-    busy = true;
-    try {
-      const { undo } = await putBackInCrate(crate, d.source, { albums: [a.id] });
-      withUndo(`${a.title ?? 'The album'} is suggested for ${name} again.`, [undo], { after: onchange });
-      onchange();
-      await load();
-    } catch (e) {
-      toast.fail(e, "It wasn't put back");
-    } finally {
-      busy = false;
-    }
-  }
   async function putBack(r: PlaylistRow) {
     const d = down;
     if (!d || !r.id) return;
@@ -121,21 +105,6 @@
     {/if}
     <h3>Your rules</h3>
     <div class="rules"><ConditionList bind:conditions={rules} {axes} /></div>
-    {#if down?.albums.length}
-      <h3>Albums left out</h3>
-      <ol class="rows" aria-busy={busy}>
-        {#each down.albums as a (a.id)}
-          <li>
-            <Row size="large" title={a.title ?? 'An album no longer in the library'} sub={a.artist ?? ''} off={!a.title}>
-              {#snippet lead()}<TrackCover src={a.title ? albumCoverUrl(down!.source, a.id) : null} />{/snippet}
-              {#snippet action()}
-                <button class="back" disabled={busy} onclick={() => albumBack(a)}>Put back</button>
-              {/snippet}
-            </Row>
-          </li>
-        {/each}
-      </ol>
-    {/if}
     {#if down?.rows.length}
       <h3>Turned down</h3>
       <ol class="rows" aria-busy={busy}>
