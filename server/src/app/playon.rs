@@ -1355,7 +1355,13 @@ impl PlayOn {
             .filter(|(_, e)| e.index() >= 0)
             .max_by_key(|(_, e)| (e.report.playing, std::cmp::Reverse(e.at.elapsed())))
             .or_else(|| online.max_by_key(|(_, e)| std::cmp::Reverse(e.heard.elapsed())));
-        best.and_then(|(n, _)| view_in(&entries, n, true))
+        let mut v = best.and_then(|(n, _)| view_in(&entries, n, true));
+        drop(entries);
+        // Described by Cratarr, not as reported (0.9.6).
+        if let Some(v) = v.as_mut() {
+            super::describe::fill_view(v);
+        }
+        v
     }
 
     /// A short summary of what the players do (track, playing, queue), compared to notice a change cheaply.
@@ -1507,6 +1513,7 @@ impl PlayOn {
         for v in &mut out {
             v.delay_ms = delays.get(&v.name).copied().unwrap_or(0);
             v.grouped = grouped.contains(&v.name);
+            super::describe::fill_view(v);
         }
         out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         out
@@ -1572,8 +1579,9 @@ impl PlayOn {
 
     pub fn get(&self, name: &str) -> Option<PlayerView> {
         self.reached(name).ok()?;
-        let v = view_in(&self.entries(), name, true);
-        v.map(|v| PlayerView { delay_ms: self.delay_of(name), ..v })
+        let mut v = view_in(&self.entries(), name, true)?;
+        super::describe::fill_view(&mut v);
+        Some(PlayerView { delay_ms: self.delay_of(name), ..v })
     }
 
     /// An app's player, without a connection id (the tests').
