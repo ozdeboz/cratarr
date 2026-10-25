@@ -16,6 +16,8 @@ export type SettingsSection =
   | 'layout'
   | 'player'
   | 'taste'
+  | 'radio'
+  | 'tracking'
   | 'content'
   | 'connections'
   | 'libraries'
@@ -34,6 +36,10 @@ export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; kep
   // they have said they do not want (the owner, 2026-10-23: every exclusion, in one place).
   { id: 'account', title: 'Account', icon: 'user', kept: 'personal' },
   { id: 'taste', title: 'Taste', icon: 'music', kept: 'personal' },
+  // What Radio and Autoplay play and draw from, and whether plays are kept at all, with one's listening services (the
+  // owner, 2026-10-25).
+  { id: 'radio', title: 'Radio and Autoplay', icon: 'radio', kept: 'personal' },
+  { id: 'tracking', title: 'Tracking', icon: 'resume', kept: 'personal' },
   // Device, in the owner's order: the device itself (named as Play On knows it; in a browser too), then how it reaches
   // Cratarr, what it keeps, and how it looks and lays out.
   { id: 'device', title: 'This device', icon: 'speaker', kept: 'device' },
@@ -44,7 +50,7 @@ export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; kep
   { id: 'player', title: 'Player', icon: 'play', kept: 'device' },
   // Home's sections and the music profiles (the owner, 2026-10-25).
   { id: 'content', title: 'Content', icon: 'home', kept: 'device' },
-  { id: 'connections', title: 'Connections', icon: 'server', kept: 'server', admin: true, everyone: true },
+  { id: 'connections', title: 'Connections', icon: 'server', kept: 'server', admin: true },
   { id: 'libraries', title: 'Libraries', icon: 'library', kept: 'server', admin: true },
   // The server's devices (the owner, 2026-10-25: "players should be called devices"), its line still how many players.
   { id: 'players', title: 'Devices', icon: 'speakers', kept: 'server', admin: true },

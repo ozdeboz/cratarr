@@ -4,9 +4,8 @@
   // amended: out of every crate and every automatic pick), then each crate that leaves tracks out by hand; each opens
   // its own page here (`thing`: `everywhere`, or `crate:<id>`) with the list to put back (lib/ExcludedList). Then each
   // ranked crate's Not for (a5's fit models, GET /api/crates/fits): what it avoids and its rules, in its sheet
-  // (lib/NotForSheet). First (the owner, 2026-10-24): this device's own More music (radio and Autoplay), in its sheet.
+  // (lib/NotForSheet). Radio and Autoplay are their own part since 0.9.5 (lib/settings/RadioPart).
   import { getCrateFits, traitLabel, type FitSummary } from '../api';
-  import MoreMusicSheet, { moreMusicParts } from '../MoreMusicSheet.svelte';
   import { crateName, crates, loadCrates } from '../crates.svelte';
   import ExcludedList from '../ExcludedList.svelte';
   import ExcludedSheet from '../ExcludedSheet.svelte';
@@ -33,7 +32,6 @@
       () => (fits = []),
     );
   loadFits();
-  let moreMusic = $state(false);
   /** The exclusions open in a sheet (the owner, 2026-10-24: not another page): everywhere's (`EVERYWHERE`) or a
    *  crate's id. */
   let excludedOf = $state<string | null>(null);
@@ -69,10 +67,7 @@
 {:else if !known}
   <PageLoading />
 {:else}
-  <!-- Headed as what they are (the owner, 2026-10-24): Radio and Autoplay; Exclusions, everywhere and each crate's. -->
-  <Group title="Radio and Autoplay" more="What plays besides what you chose, on this device's own player: Radio's tracks after each track, and Autoplay when the queue ends.">
-    <Item name="More music" value={moreMusicParts().map((p) => p.text).join(' · ') || 'Off'} onclick={() => (moreMusic = true)} />
-  </Group>
+  <!-- Headed as what they are (the owner, 2026-10-24): Exclusions, everywhere and each crate's. -->
   <Group title="Exclusions" more="Everywhere: out of every crate, and never picked by Radio, Autoplay or a shuffle of the library or the favourites; it still plays when you choose it. A crate's: left out of that crate only.">
     <Item name="Everywhere" value={excluded.n === null ? null : count(excluded.n)} onclick={excluded.n ? () => (excludedOf = EVERYWHERE) : null} />
     {#each leaving as c (c.id)}
@@ -93,9 +88,6 @@
     onchange={() => (excludedOf === EVERYWHERE ? loadExcluded() : loadCrates())}
     onclose={() => (excludedOf = null)}
   />
-{/if}
-{#if moreMusic}
-  <MoreMusicSheet onclose={() => (moreMusic = false)} />
 {/if}
 {#if notFor}
   <NotForSheet crate={notFor.crate} name={notFor.of} onchange={loadFits} onclose={() => (notFor = null)} />

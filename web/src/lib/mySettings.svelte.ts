@@ -11,7 +11,13 @@ export type Choices = {
   radio?: { by: RadioBy; count: number; skip_favourites: boolean };
   autoplay?: { mode: AutoplayMode; albums: boolean } | null;
   similar_by?: Signal[];
+  /** What Radio and Autoplay choose from (the owner, 2026-10-25): Cratarr's own libraries (null: all of them), and
+   *  Discover's suggestions on Bandcamp. */
+  more_music?: MoreFrom;
+  /** Whether the account's plays are kept at all (the owner, 2026-10-25; absent: on). */
+  tracking?: boolean;
 };
+export type MoreFrom = { libraries: string[] | null; bandcamp: boolean };
 
 /** What can make music alike for Radio and Autoplay (the server's one similarity, `similarity.rs`), in the order offered. */
 export type Signal = 'sound' | 'artists' | 'genre' | 'style' | 'mood' | 'energy' | 'tempo' | 'danceability' | 'era' | 'playlists' | 'tags';
@@ -37,6 +43,17 @@ export function setSimilarBy(by: Signal[]) {
   keep({ similar_by: by });
 }
 
+/** The Personal parts' own (Radio and Autoplay, Tracking), as kept. */
+export const mine = $state({ moreFrom: { libraries: null, bandcamp: false } as MoreFrom, tracking: true });
+export function setMoreFrom(part: Partial<MoreFrom>) {
+  mine.moreFrom = { ...mine.moreFrom, ...part };
+  keep({ more_music: mine.moreFrom });
+}
+export function setTracking(on: boolean) {
+  mine.tracking = on;
+  keep({ tracking: on });
+}
+
 let version = 0;
 let settings: Record<string, unknown> = {};
 let kept = true;
@@ -51,6 +68,9 @@ export async function loadMine(): Promise<Choices | null> {
     settings = r.settings ?? {};
     const by = (settings as Choices).similar_by;
     similar.by = Array.isArray(by) ? by.filter((x) => SIGNALS.some((s) => s.id === x)) : [];
+    const from = (settings as Choices).more_music;
+    mine.moreFrom = { libraries: Array.isArray(from?.libraries) ? from.libraries : null, bandcamp: !!from?.bandcamp };
+    mine.tracking = (settings as Choices).tracking !== false;
     return r.version ? (settings as Choices) : null;
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) kept = false;

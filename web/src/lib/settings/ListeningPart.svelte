@@ -5,6 +5,7 @@
   // state, its fields as rows, and Disconnect at the foot. The signed-in account's only; acts at once. ListenBrainz
   // connects with the user token from its settings page; Last.fm with the API key and shared secret made at
   // last.fm/api, then its own sign-in page, which comes back to this page.
+  import type { SettingsSection } from '../settingsSections.svelte';
   import { forgetScrobble, getScrobbles, scrobbleLastFm, scrobbleListenBrainz, setScrobbleOn, type ScrobbleTarget } from '../api';
   import { backFromThing, openThing } from '../panel.svelte';
   import { nameThing } from '../settingsSections.svelte';
@@ -13,8 +14,8 @@
   import Item from './Item.svelte';
   import ValueSheet from './ValueSheet.svelte';
 
-  /** `own`: the part alone (Connections for someone not an administrator), naming its pages itself. */
-  let { thing = null, own = false }: { thing?: string | null; own?: boolean } = $props();
+  /** `own`: the part alone, naming its pages itself; `part`: the Settings part it is in (Tracking, since 0.9.5). */
+  let { thing = null, own = false, part = 'tracking' }: { thing?: string | null; own?: boolean; part?: SettingsSection } = $props();
 
   const MORE =
     "Every play Cratarr counts, from any of your players or Subsonic apps, sent to the services you connect, and what starts as now playing. Yours only. Imported listens are never sent back.\n\nA service that is down gets them later; one that refuses the login stops until you connect it again.";
@@ -93,7 +94,7 @@
     try {
       await forgetScrobble(s);
       await load();
-      backFromThing('connections');
+      backFromThing(part);
     } catch (e) {
       error = said(e);
     }
@@ -107,9 +108,9 @@
       {@const t = of(s)}
       {#if t}
         {@const st = stateOf(t)}
-        <Item lead={st.lead} {name} line={st.line} tone={st.bad ? 'bad' : null} onclick={() => openThing('connections', s)} />
+        <Item lead={st.lead} {name} line={st.line} tone={st.bad ? 'bad' : null} onclick={() => openThing(part, s)} />
       {:else if targets}
-        <Item name={`Add ${name}`} kind="add" onclick={() => openThing('connections', s)} />
+        <Item name={`Add ${name}`} kind="add" onclick={() => openThing(part, s)} />
       {/if}
     {/each}
   </Group>

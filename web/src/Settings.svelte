@@ -4,6 +4,10 @@
   // name, what it is set to now in a line, and ›. A tap opens the part in the panel (lib/SettingsPanel): beside the list
   // on a roomy window, where a part is always open (App: the one last open), its row tinted; over the list on a phone,
   // as a playlist opens. About is a sheet from the info button, the pill's own (App, lib/AboutSheet).
+  import { library } from './lib/albums.svelte';
+  import { moreMusicLine } from './lib/MoreMusicSheet.svelte';
+  import { mine } from './lib/mySettings.svelte';
+  import { OWN } from './lib/sources.svelte';
   import { plural } from './lib/insights.svelte';
   import { deviceName } from './lib/playOnTarget.svelte';
   import { getHomeAssistant, getImport, getLog, getSettings, getSignInRequired, getUsers, type ImportJob, type Settings } from './lib/api';
@@ -151,6 +155,14 @@
           .filter(Boolean)
           .join(' · ') || 'Nothing excluded';
       }
+      case 'radio': {
+        const off = (library.view?.sources.find((s) => s.id === OWN)?.library_info ?? []).filter(
+          (l) => mine.moreFrom.libraries !== null && !mine.moreFrom.libraries.includes(l.id),
+        );
+        return [moreMusicLine(), ...off.map((l) => `Not ${l.name}`), mine.moreFrom.bandcamp ? 'Bandcamp' : null].filter(Boolean).join(' · ');
+      }
+      case 'tracking':
+        return changed([!mine.tracking && 'No play history']);
       case 'diagnostics':
         return errorsToday === null ? '' : errorsToday ? plural(errorsToday, 'error') + ' today' : 'No errors today';
     }

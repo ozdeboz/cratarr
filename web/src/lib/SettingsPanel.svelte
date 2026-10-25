@@ -40,6 +40,8 @@
   import LayoutPart from './settings/LayoutPart.svelte';
   import PlayerPart from './settings/PlayerPart.svelte';
   import TastePart from './settings/TastePart.svelte';
+  import RadioPart from './settings/RadioPart.svelte';
+  import TrackingPart from './settings/TrackingPart.svelte';
   import ContentPart from './settings/ContentPart.svelte';
   import NetworkPart from './settings/NetworkPart.svelte';
   import SyncPart from './settings/SyncPart.svelte';
@@ -153,15 +155,16 @@
       <ContentPart />
     {:else if section === 'taste'}
       <TastePart {thing} />
+    {:else if section === 'radio'}
+      <RadioPart />
+    {:else if section === 'tracking'}
+      <TrackingPart {thing} />
     {:else if section === 'users'}
       <UsersPart {thing} />
     {:else if section === 'players'}
       <PlayersSettings {thing} />
     {:else if section === 'diagnostics'}
       <DiagnosticsPart />
-    {:else if section === 'connections' && !me.admin}
-      <!-- Anyone's own: their listening services (decision 0068). -->
-      <ListeningPart {thing} own />
     {:else if !ed.s}
       {#if !ed.loadError}<PageLoading />{/if}
     {:else if section === 'connections'}

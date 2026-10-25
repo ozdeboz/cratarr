@@ -14,7 +14,6 @@
   import { ed, str, type Draft } from './editor.svelte';
   import Group from './Group.svelte';
   import HomeAssistantPart from './HomeAssistantPart.svelte';
-  import ListeningPart from './ListeningPart.svelte';
   import Item from './Item.svelte';
   import ValueSheet from './ValueSheet.svelte';
 
@@ -24,9 +23,7 @@
   const s = $derived(ed.s!);
   const LIDARR = 'lidarr';
   const HOME_ASSISTANT = 'home-assistant';
-  // The listening services' own pages (lib/settings/ListeningPart).
-  const LISTENING: Record<string, string> = { listenbrainz: 'ListenBrainz', lastfm: 'Last.fm' };
-  const own = (t: string) => t === LIDARR || t === HOME_ASSISTANT || t in LISTENING;
+  const own = (t: string) => t === LIDARR || t === HOME_ASSISTANT;
   const LIDARR_MORE = "With Lidarr's address and API key, Delete in Incoming also stops Lidarr fetching that album again.";
   const WANT_MORE =
     "What Discover's Want adds an album to Lidarr with: its quality and metadata profiles, and the root folder it lands in (Incoming's). As your artists: the ones the artists Lidarr has already use.";
@@ -97,7 +94,7 @@
   // Its id only beside another server of its kind.
   const label = (d: Draft) => `${ed.kindOf(d)?.label ?? d.kind}${ed.drafts.filter((x) => x.kind === d.kind).length > 1 ? ` (${d.id})` : ''}`;
   const draft = $derived(thing && !own(thing) ? (ed.drafts.find((d) => d.id === thing) ?? null) : null);
-  nameThing(() => (thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : thing && thing in LISTENING ? LISTENING[thing] : draft ? label(draft) : null));
+  nameThing(() => (thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : draft ? label(draft) : null));
   // A server removed (or never there): back to the list.
   $effect(() => {
     if (thing && !own(thing) && !draft) backFromThing('connections');
@@ -232,8 +229,6 @@
   {/if}
 {:else if thing === HOME_ASSISTANT}
   <HomeAssistantPart page />
-{:else if thing && thing in LISTENING}
-  <ListeningPart {thing} />
 {:else if thing === LIDARR}
   {#if s.lidarr}
     <Group>
@@ -341,7 +336,6 @@
     />
   {/if}
   <HomeAssistantPart />
-  <ListeningPart />
   {#if addingKind}
     <ChoiceSheet title="Add server" options={s.kinds.map((k) => ({ value: k.id, label: k.label }))} value={''} onchange={add} onclose={() => (addingKind = false)} />
   {/if}
