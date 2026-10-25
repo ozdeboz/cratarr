@@ -13,7 +13,6 @@
   import Group from './Group.svelte';
   import Item from './Item.svelte';
   import { offerReset } from './reset.svelte';
-  import { logDetail } from '../settingsSections.svelte';
 
   const AREA_NAMES: Record<string, string> = {
     playon: 'Play On',
@@ -93,10 +92,6 @@
   }
 
   const detailed = $derived(!!levels && Object.keys(levels.now).length > 0);
-  // The Settings page's row says it too.
-  $effect(() => {
-    if (levels) logDetail.on = detailed;
-  });
   /** More detail: every area, or back to normal. */
   const detail = (on: boolean) => levels && setLevels(on ? Object.fromEntries(levels.areas.map((a) => [a, 'debug'])) : {});
   offerReset(

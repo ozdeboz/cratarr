@@ -6,7 +6,7 @@
   // as a playlist opens. About is a sheet from the info button, the pill's own (App, lib/AboutSheet).
   import { plural } from './lib/insights.svelte';
   import { deviceName } from './lib/playOnTarget.svelte';
-  import { getHomeAssistant, getImport, getLogLevels, getSettings, getSignInRequired, getUsers, type ImportJob, type Settings } from './lib/api';
+  import { getHomeAssistant, getImport, getLog, getSettings, getSignInRequired, getUsers, type ImportJob, type Settings } from './lib/api';
   import { me } from './lib/me.svelte';
   import { appInfo, inApp } from './lib/app.svelte';
   import Icon from './lib/Icon.svelte';
@@ -17,7 +17,7 @@
   import { kept } from './lib/kept.svelte';
   import { crates, loadCrates } from './lib/crates.svelte';
   import { excluded, loadExcluded } from './lib/exclusions.svelte';
-  import { logDetail, SECTIONS, settingsRead, settingsSaved, type SettingsSection } from './lib/settingsSections.svelte';
+  import { SECTIONS, settingsRead, settingsSaved, type SettingsSection } from './lib/settingsSections.svelte';
   import { pageView, usePageAction } from './lib/pageView.svelte';
   import { about } from './lib/AboutSheet.svelte';
   import { loadSettingsWords, settingsMatches } from './lib/settingsSearch.svelte';
@@ -59,11 +59,13 @@
       (u) => (users = u.length),
       () => {},
     );
-    getLogLevels().then(
-      (l) => (logDetail.on = Object.keys(l.now).length > 0),
+    // Diagnostics' line: only the most important (the owner, 2026-10-25): errors in the last day.
+    getLog({ level: 'error', limit: 500 }).then(
+      (r) => (errorsToday = r.rows.filter((x) => x.last > Date.now() - 86_400_000).reduce((n, x) => n + Math.max(1, x.count), 0)),
       () => {},
     );
   });
+  let errorsToday = $state<number | null>(null);
 
   const THEME = { auto: 'System theme', light: 'Light', dark: 'Dark' } as const;
 
@@ -150,7 +152,7 @@
           .join(' · ') || 'Nothing excluded';
       }
       case 'diagnostics':
-        return logDetail.on === null ? '' : logDetail.on ? 'More detail on' : 'More detail off';
+        return errorsToday === null ? '' : errorsToday ? plural(errorsToday, 'error') + ' today' : 'No errors today';
     }
   }
 
