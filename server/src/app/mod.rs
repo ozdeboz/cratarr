@@ -61,6 +61,7 @@ pub mod originals;
 pub mod discogs;
 pub mod covers;
 pub mod cover_cache;
+pub mod renumber;
 pub mod tracks;
 pub mod visuals;
 

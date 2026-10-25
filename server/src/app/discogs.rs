@@ -234,6 +234,25 @@ pub async fn versions(master: u64, main: Option<u64>, most: usize) -> Result<Vec
         .collect())
 }
 
+/// A master's releases with their format as Discogs lists them ("CD", "File", "Vinyl"), at most `most` (Renumber).
+pub async fn version_formats(master: u64, most: usize) -> Result<Vec<(u64, String)>> {
+    let Some(v) = get(&format!("/masters/{master}/versions?per_page={most}")).await? else { return Ok(Vec::new()) };
+    Ok(v["versions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| {
+            let format = r["major_formats"].as_array().and_then(|f| f.first()).and_then(|f| f.as_str()).or(r["format"].as_str()).unwrap_or_default();
+            Some((r["id"].as_u64()?, format.to_string()))
+        })
+        .collect())
+}
+
+/// A release as Discogs gives it: its formats and tracklist (Renumber).
+pub async fn release_raw(release: u64) -> Result<Option<Value>> {
+    get(&format!("/releases/{release}")).await
+}
+
 /// A release's images, the primary first.
 pub async fn release_images(release: u64) -> Result<Vec<Image>> {
     let Some(v) = get(&format!("/releases/{release}")).await? else { return Ok(Vec::new()) };
