@@ -597,6 +597,43 @@ impl Library {
         Ok(st.query_map(rusqlite::params![folder, dir], |r| r.get::<_, String>(0))?.next().transpose()?)
     }
 
+    /// An album's tracks for Renumber (0.9.6): (song id, path in its catalogue folder, title, length in ms, disc, track),
+    /// in the album's order.
+    #[allow(clippy::type_complexity)]
+    pub fn album_tracks(&self, album: &str) -> Result<Vec<(String, String, String, u64, Option<u32>, Option<u32>)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached(
+            "SELECT id, rel, title, coalesce(duration_ms, 0), disc_no, track_no FROM songs WHERE album_id = ?1 ORDER BY coalesce(disc_no, 1), track_no, rel",
+        )?;
+        let rows = st.query_map([album], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)?.max(0) as u64, r.get::<_, Option<i64>>(4)?.map(|d| d.max(0) as u32), r.get::<_, Option<i64>>(5)?.map(|t| t.max(0) as u32)))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Every album's numbering in a catalogue folder (all without one) for Health (0.9.6): (album id, name, artist, each
+    /// track's (disc, track)).
+    #[allow(clippy::type_complexity)]
+    pub fn numbering(&self, folder: Option<i64>) -> Result<Vec<(String, String, String, Vec<(Option<u32>, Option<u32>)>)>> {
+        let db = self.db();
+        let mut albums: Vec<(String, String, String, Vec<(Option<u32>, Option<u32>)>)> = Vec::new();
+        let mut at: HashMap<String, usize> = HashMap::new();
+        let mut st = db.prepare("SELECT id, name, artist FROM albums WHERE ?1 IS NULL OR folder = ?1")?;
+        for row in st.query_map([folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))? {
+            let (id, name, artist) = row?;
+            at.insert(id.clone(), albums.len());
+            albums.push((id, name, artist, Vec::new()));
+        }
+        let mut st = db.prepare("SELECT album_id, disc_no, track_no FROM songs")?;
+        for row in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?, r.get::<_, Option<i64>>(2)?)))? {
+            let (album, disc, track) = row?;
+            if let Some(i) = at.get(&album) {
+                albums[*i].3.push((disc.map(|d| d.max(0) as u32), track.map(|t| t.max(0) as u32)));
+            }
+        }
+        Ok(albums)
+    }
+
     /// An album's place: its catalogue folder and folder in it, its MusicBrainz release, artist and name (0.9.5: its
     /// cover changed by hand).
     #[allow(clippy::type_complexity)]

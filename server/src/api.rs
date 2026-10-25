@@ -224,6 +224,8 @@ pub fn router(app: Arc<App>) -> Router {
                 get(album_covers).post(set_album_cover).put(upload_album_cover).layer(axum::extract::DefaultBodyLimit::max(13 << 20)),
             )
             .route("/api/albums/{source}/{album}/covers/look", post(look_album_covers))
+            .route("/api/albums/{source}/{album}/renumber/look", post(look_renumber))
+            .route("/api/albums/{source}/{album}/renumber", post(renumber_album))
             .route("/api/settings/naming", get(naming))
             .route("/api/catalogue", get(catalogue_status))
             .route("/api/health/report", get(health_report))
@@ -2762,6 +2764,8 @@ async fn undo(State(app): State<Arc<App>>, Json(req): Json<UndoRequest>) -> Resu
             redo.extend(app.playlists.undo(token).await?);
         } else if token.starts_with(crate::app::covers::UNDO) {
             crate::app::covers::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        } else if token.starts_with(crate::app::renumber::UNDO) {
+            crate::app::renumber::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         } else {
             restored.push(app.incoming.undo(token).await?);
         }
@@ -4333,6 +4337,20 @@ async fn look_album_covers(Path((source, album)): Path<(String, String)>) -> Res
 async fn upload_album_cover(Path((source, album)): Path<(String, String)>, body: axum::body::Bytes) -> Result<Json<serde_json::Value>, ApiError> {
     own_album(&source)?;
     let token = crate::app::covers::upload(&album, body.to_vec()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "undo": [token] })))
+}
+
+/// Renumber's look (0.9.6) as a task: its result the preview, what `POST …/renumber` would write.
+async fn look_renumber(Path((source, album)): Path<(String, String)>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    own_album(&source)?;
+    let account = crate::serve::instance().and_then(|s| s.current_user()).ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
+    started(crate::app::renumber::start(&account, &album))
+}
+
+/// The numbers shown in the preview written into the album's tracks; Undo puts the old ones back.
+async fn renumber_album(Path((source, album)): Path<(String, String)>, Json(b): Json<crate::app::renumber::Asked>) -> Result<Json<serde_json::Value>, ApiError> {
+    own_album(&source)?;
+    let token = crate::app::renumber::apply(&album, b).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!({ "undo": [token] })))
 }
 

@@ -148,15 +148,16 @@ pub fn files(issues: &BTreeMap<String, u64>) -> Vec<Finding> {
 
 /// The library's albums lacking what it requires, a finding for each kind, each album opening its panel: the cover,
 /// the year, the genre, the album artist and the track numbers are warnings; the MusicBrainz id, which many lack and
-/// which only some things use (Lidarr, Discover, exact imports), is told.
-pub fn library(rows: &[crate::serve::library::Lacks]) -> Vec<Finding> {
+/// which only some things use (Lidarr, Discover, exact imports), is told. A cover missing is critical (the owner,
+/// 2026-10-25). Each of all the albums (`whole`), so the page shows its share. Track numbers (0.9.6): `numbering`'s
+/// albums whose numbers are off (twice, missing, none), each with what is off; Renumber fixes them.
+pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, String, String, String)], whole: u64) -> Vec<Finding> {
     type Pick = fn(&crate::serve::library::Lacks) -> bool;
-    let kinds: [(&str, Level, &str, &str, Pick); 6] = [
-        ("cover", Level::Warning, "album without a cover", "albums without a cover", |r| r.cover),
+    let kinds: [(&str, Level, &str, &str, Pick); 5] = [
+        ("cover", Level::Critical, "album without a cover", "albums without a cover", |r| r.cover),
         ("year", Level::Warning, "album without a year", "albums without a year", |r| r.year),
         ("genre", Level::Warning, "album without a genre", "albums without a genre", |r| r.genre),
         ("album-artist", Level::Warning, "album without an album artist", "albums without an album artist", |r| r.album_artist),
-        ("track-numbers", Level::Warning, "album with tracks unnumbered", "albums with tracks unnumbered", |r| r.track_no),
         ("musicbrainz", Level::Info, "album without its MusicBrainz id", "albums without their MusicBrainz id", |r| r.musicbrainz),
     ];
     let mut out = Vec::new();
@@ -172,6 +173,25 @@ pub fn library(rows: &[crate::serve::library::Lacks]) -> Vec<Finding> {
             .take(ITEMS)
             .map(|r| Item { title: r.name.clone(), line: Some(r.artist.clone()), album: Some((crate::source::cratarr::KIND.id.to_string(), r.id.clone())), ..Item::default() })
             .collect();
+        f.of = Some(whole);
+        out.push(f);
+    }
+    if !numbering.is_empty() {
+        let mut hit: Vec<&(String, String, String, String)> = numbering.iter().collect();
+        hit.sort_by(|a, b| a.2.to_lowercase().cmp(&b.2.to_lowercase()).then_with(|| a.1.cmp(&b.1)));
+        let count = hit.len() as u64;
+        let mut f = finding("library", "library:track-numbers", Level::Warning, count, n(count, "album with track numbers off", "albums with track numbers off"));
+        f.items = hit
+            .iter()
+            .take(ITEMS)
+            .map(|(id, name, artist, line)| Item {
+                title: name.clone(),
+                line: Some(format!("{artist} · {line}")),
+                album: Some((crate::source::cratarr::KIND.id.to_string(), id.clone())),
+                ..Item::default()
+            })
+            .collect();
+        f.of = Some(whole);
         out.push(f);
     }
     out
@@ -252,8 +272,11 @@ impl App {
         let folders = self.library.catalogue().folders();
         let music = music.and_then(|m| folders.iter().position(|f| f == std::path::Path::new(&m))).map(|i| i as i64);
         let lib = served.library.clone();
-        let rows = tokio::task::spawn_blocking(move || lib.lacking()).await??;
-        Ok(library(&rows.into_iter().filter(|r| music.is_none_or(|m| r.folder == m)).collect::<Vec<_>>()))
+        let (rows, numbering) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> { Ok((lib.lacking()?, lib.numbering(music)?)) }).await??;
+        let whole = numbering.len() as u64;
+        let off: Vec<(String, String, String, String)> =
+            numbering.into_iter().filter_map(|(id, name, artist, numbers)| super::renumber::off(&numbers).map(|line| (id, name, artist, line))).collect();
+        Ok(library(&rows.into_iter().filter(|r| music.is_none_or(|m| r.folder == m)).collect::<Vec<_>>(), &off, whole))
     }
 
     /// One's own playlists' tracks whose file is gone (the Repair view, one playlist at a time).
