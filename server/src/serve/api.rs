@@ -197,6 +197,12 @@ pub struct Album {
     pub genres: Vec<GenreRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub song: Option<Vec<Song>>,
+    /// OpenSubsonic's release types ("Album", "Compilation"), from `release`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub release_types: Vec<String>,
+    /// Its release type as Cratarr's own lists give it (0.9.6).
+    #[serde(skip)]
+    pub release: crate::source::ReleaseType,
 }
 
 /// An artist, as the API's `ArtistID3` (with `album` for `getArtist`).

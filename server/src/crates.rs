@@ -724,6 +724,8 @@ pub struct Facts {
     pub length: Option<f64>,
     pub quality: Option<String>,
     pub key: Option<String>,
+    /// Its album's release types as shown ("EP", "Live"), primary first (0.9.6); empty where not known.
+    pub release_types: Vec<String>,
 }
 
 /// What a listener did with a line (the owner, 2026-10-23: crates on plays, last played and rating): how often it was
@@ -810,7 +812,7 @@ pub struct World<'a> {
     pub now: i64,
 }
 
-const AXES: [(&str, &str, Kind); 19] = [
+const AXES: [(&str, &str, Kind); 20] = [
     ("favourite", "Favourite", Kind::YesNo),
     ("favourite_album", "Favourite album", Kind::YesNo),
     ("playlist", "In playlist", Kind::Membership),
@@ -822,6 +824,8 @@ const AXES: [(&str, &str, Kind); 19] = [
     ("rating", "Rating", Kind::Range),
     ("genre", "Genre", Kind::Values),
     ("artist", "Artist", Kind::Values),
+    // The album's release type (0.9.6, the owner: hide EPs and singles); an album of no known type has none.
+    ("type", "Type", Kind::Values),
     ("year", "Year", Kind::Range),
     ("bpm", "BPM", Kind::Range),
     // Length in minutes; quality (lossless or a bitrate's class); key.
@@ -910,6 +914,7 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                 "playlist" => membership.and_then(|m| m.get(&f.rel)).map(|l| l.join("|")).unwrap_or_default(),
                 "genre" => f.genres.iter().map(|g| g.to_lowercase()).collect::<Vec<_>>().join("|"),
                 "artist" => f.artists.iter().map(|a| a.to_lowercase()).collect::<Vec<_>>().join("|"),
+                "type" => f.release_types.join("|"),
                 "mood" => f.moods.join("|"),
                 "style" => f.styles.join("|"),
                 "quality" => f.quality.clone().unwrap_or_default(),
@@ -938,6 +943,10 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                 "artist" => {
                     (a.values, a.counts) = counted(|f| &f.artists);
                     a.known = known(|f| !f.artists.is_empty());
+                }
+                "type" => {
+                    (a.values, a.counts) = counted(|f| &f.release_types);
+                    a.known = known(|f| !f.release_types.is_empty());
                 }
                 "mood" => {
                     (a.values, a.counts) = counted(|f| &f.moods);
@@ -1013,6 +1022,7 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
         ("added", Value::Range { min, max }) => within(f.born.map(|b| days_ago(w.now, b)), min, max),
         ("rating", Value::Range { min, max }) => within(used().and_then(|u| u.rating).map(f64::from), min, max),
         ("artist", Value::AnyOf { values }) => values.iter().any(|v| f.artists.iter().any(|a| a.eq_ignore_ascii_case(v))),
+        ("type", Value::AnyOf { values }) => values.iter().any(|v| f.release_types.iter().any(|t| t.eq_ignore_ascii_case(v))),
         ("length", Value::Range { min, max }) => within(f.length.map(minutes), min, max),
         ("quality", Value::AnyOf { values }) => f.quality.as_ref().is_some_and(|q| values.contains(q)),
         ("key", Value::AnyOf { values }) => f.key.as_ref().is_some_and(|k| values.iter().any(|v| v.eq_ignore_ascii_case(k))),
@@ -1045,6 +1055,7 @@ fn has_value(c: &Condition, f: &Facts, w: &World) -> bool {
         "favourite_album" => w.favourite_albums.is_some(),
         "playlist" | LEFT_OUT => true,
         "genre" => !f.genres.is_empty(),
+        "type" => !f.release_types.is_empty(),
         "year" => f.year.is_some(),
         "bpm" => f.bpm.is_some(),
         "mood" => f.danceability.is_some(),

@@ -259,16 +259,18 @@ impl Serve {
         let added = self.userdata.added()?;
         let originals = self.userdata.original_years()?;
         let extra_genres = self.userdata.discogs_genres()?;
+        let release_types = self.userdata.release_types()?;
         // The catalogue is only looked at after it finished a pass (or the rules, added dates or original years changed):
         // reading its files' summary every minute kept its 200 MB file in memory for nothing.
         let inputs = (
             self.catalogue().last_pass(),
             format!(
-                "{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}",
                 serde_json::to_string(&rules)?,
                 added.len() as i64 + added.values().sum::<i64>(),
                 originals.len() as u64 + originals.values().map(|y| u64::from(*y)).sum::<u64>(),
-                extra_genres.len() + extra_genres.values().map(Vec::len).sum::<usize>()
+                extra_genres.len() + extra_genres.values().map(Vec::len).sum::<usize>(),
+                release_types.len() + release_types.values().map(|t| usize::from(t.0.is_some()) + t.1.len()).sum::<usize>()
             ),
         );
         if self.checked.lock().unwrap_or_else(|p| p.into_inner()).as_ref() == Some(&inputs) {
@@ -277,6 +279,7 @@ impl Serve {
         self.library.set_added(added);
         self.library.set_originals(originals);
         self.library.set_extra_genres(extra_genres);
+        self.library.set_release_types(release_types);
         let (change, print) = self.library.change(self.catalogue(), &rules)?;
         // New analyses alone wait for their gap: not noted as checked, so the next check looks again, and builds once
         // the gap has passed (with every analysis that came meanwhile).

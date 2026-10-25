@@ -343,7 +343,7 @@ pub struct Catalogue {
     /// Asks the background loop for a pass now (settings changed, a playlist was edited…).
     poke: tokio::sync::Notify,
     /// The crates' facts, as of the database's change count and the folders in use (see `crate_facts`).
-    facts: Mutex<Option<(u64, Vec<PathBuf>, Arc<Vec<crate::crates::Facts>>)>>,
+    facts: Mutex<Option<(u64, Vec<PathBuf>, i64, Arc<Vec<crate::crates::Facts>>)>>,
     /// The database file, for readers with their own connection (`reader`); `None` in memory.
     file: Option<PathBuf>,
 }
@@ -768,16 +768,29 @@ impl Catalogue {
     /// with its folder and what the crates' axes test: genres, year, BPM, AudioMuse's. Kept until the catalogue or its
     /// folders change: reading them means reading every file's tags. Blocking.
     pub fn crate_facts(&self) -> Result<Arc<Vec<crate::crates::Facts>>> {
-        let (changes, folders) = (self.db().total_changes(), self.folders());
+        // Read again when the library is built again too: its albums' release types (0.9.6) come from there.
+        let served = crate::serve::instance();
+        let (changes, folders, built) = (self.db().total_changes(), self.folders(), served.as_ref().map_or(0, |s| s.built_at()));
         let mut kept = self.facts.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some((c, f, facts)) = kept.as_ref()
+        if let Some((c, f, b, facts)) = kept.as_ref()
             && *c == changes
             && *f == folders
+            && *b == built
         {
             return Ok(facts.clone());
         }
-        let facts = Arc::new(self.read_crate_facts(&folders)?);
-        *kept = Some((changes, folders, facts.clone()));
+        let mut facts = self.read_crate_facts(&folders)?;
+        if let Some(s) = &served
+            && let Ok(types) = s.library.song_release_types()
+        {
+            for f in &mut facts {
+                if let Some(t) = f.track.and_then(|t| types.get(&crate::serve::ids::song(t))) {
+                    f.release_types = t.clone();
+                }
+            }
+        }
+        let facts = Arc::new(facts);
+        *kept = Some((changes, folders, built, facts.clone()));
         Ok(facts)
     }
 
@@ -885,6 +898,7 @@ impl Catalogue {
                     quality: crate::crates::quality_of(format.as_deref(), bitrate),
                     // The key the tags say, else AudioMuse's; as one spelling ("D minor").
                     key: tag_keys.remove(&place).and_then(|k| crate::crates::key_name(&k)).or_else(|| muse_key.and_then(|k| crate::crates::key_name(&k))),
+                    release_types: Vec::new(),
                 })
             })
             .collect())

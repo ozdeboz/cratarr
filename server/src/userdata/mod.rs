@@ -118,6 +118,10 @@ CREATE TABLE IF NOT EXISTS bandcamp_found (album TEXT PRIMARY KEY, at INTEGER NO
 -- An album's original year as MusicBrainz gives it (0.9.5): its release's release group's first release year (none:
 -- MusicBrainz knew none), by the MusicBrainz release, and when it was asked.
 CREATE TABLE IF NOT EXISTS original_years (release TEXT PRIMARY KEY, year INTEGER, at INTEGER NOT NULL) WITHOUT ROWID;
+-- An album's release type (0.9.6): its primary type (album, ep, single, other; none: not known there) and its
+-- secondary types (joined by U+001F), by `mb:<MusicBrainz release>` (its release group's) or `dc:<album id>` (Discogs'
+-- format descriptions), and when it was asked.
+CREATE TABLE IF NOT EXISTS release_types (key TEXT PRIMARY KEY, primary_type TEXT, secondary TEXT NOT NULL, at INTEGER NOT NULL) WITHOUT ROWID;
 -- A release group's cover for albums not in the library (0.9.5): the Cover Art Archive's, else Discogs' (none: neither
 -- has one), and when it was looked for.
 CREATE TABLE IF NOT EXISTS rg_covers (rg TEXT PRIMARY KEY, url TEXT, at INTEGER NOT NULL) WITHOUT ROWID;
@@ -1768,6 +1772,40 @@ impl UserData {
         Ok(())
     }
 
+    /// Every release type found (0.9.6), by `mb:<release>` or `dc:<album id>`: (primary, secondary).
+    pub fn release_types(&self) -> Result<std::collections::HashMap<String, (Option<String>, Vec<String>)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT key, primary_type, secondary FROM release_types WHERE primary_type IS NOT NULL OR secondary <> ''")?;
+        let rows = st.query_map([], |r| {
+            let secondary: String = r.get(2)?;
+            Ok((r.get::<_, String>(0)?, (r.get::<_, Option<String>>(1)?, secondary.split('\u{1f}').filter(|s| !s.is_empty()).map(str::to_string).collect())))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The keys starting `prefix` not to ask about again: those with a primary type, and those asked since `since`;
+    /// without their prefix.
+    pub fn release_types_asked(&self, prefix: &str, since: i64) -> Result<std::collections::HashSet<String>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT key FROM release_types WHERE substr(key, 1, length(?1)) = ?1 AND (primary_type IS NOT NULL OR at >= ?2)")?;
+        let rows = st.query_map(params![prefix, since], |r| r.get::<_, String>(0))?;
+        Ok(rows.filter_map(|k| k.ok().map(|k| k[prefix.len()..].to_string())).collect())
+    }
+
+    /// What was found for these keys (a primary type or none, the secondary ones), as one write.
+    pub fn set_release_types(&self, found: &[(String, Option<String>, Vec<String>)], at: i64) -> Result<()> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        {
+            let mut st = tx.prepare("INSERT OR REPLACE INTO release_types (key, primary_type, secondary, at) VALUES (?1, ?2, ?3, ?4)")?;
+            for (key, primary, secondary) in found {
+                st.execute(params![key, primary, secondary.join("\u{1f}"), at])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Every original year MusicBrainz gave, by the album's MusicBrainz release (0.9.5).
     pub fn original_years(&self) -> Result<std::collections::HashMap<String, u32>> {
         let db = self.db();
@@ -1898,6 +1936,18 @@ mod tests {
         let (version, _) = u.settings_of("me").unwrap();
         u.put_settings("me", version, &serde_json::json!({ "tracking": true })).unwrap().ok().unwrap();
         assert!(u.heard_since("me", 0).unwrap().is_empty(), "the history gone");
+    }
+
+    #[test]
+    fn release_types_are_kept_by_their_key_and_one_without_a_type_waits() {
+        let u = UserData::open(None).unwrap();
+        u.set_release_types(&[("mb:a".into(), Some("ep".into()), vec!["live".into()]), ("mb:b".into(), None, Vec::new()), ("dc:al-1".into(), Some("single".into()), Vec::new())], 100).unwrap();
+        let all = u.release_types().unwrap();
+        assert_eq!(all.get("mb:a"), Some(&(Some("ep".to_string()), vec!["live".to_string()])));
+        assert!(!all.contains_key("mb:b"), "nothing known");
+        assert_eq!(u.release_types_asked("mb:", 200).unwrap(), ["a".to_string()].into(), "b asked again after a while");
+        assert_eq!(u.release_types_asked("mb:", 50).unwrap().len(), 2);
+        assert_eq!(u.release_types_asked("dc:", 50).unwrap(), ["al-1".to_string()].into());
     }
 
     #[test]

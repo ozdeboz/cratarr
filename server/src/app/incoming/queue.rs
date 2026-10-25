@@ -570,6 +570,7 @@ mod tests {
                 tags: Vec::new(),
                 library: None,
                 artists: Vec::new(),
+                release: Default::default(),
             },
             folder: 1,
             dir: "X".into(),

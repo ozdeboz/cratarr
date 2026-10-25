@@ -36,6 +36,8 @@ pub struct Finding {
     pub domain: &'static str,
     /// Stable while the same thing is found (its first sight is kept by it).
     pub key: String,
+    /// A short name for it, a noun phrase in title case (0.9.6, the owner: the panel's breadcrumb): "Missing covers".
+    pub name: String,
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
@@ -96,7 +98,42 @@ static FIRST_SEEN: Mutex<Option<HashMap<String, i64>>> = Mutex::new(None);
 
 /// A finding as a check makes it; its time is set by the report.
 fn finding(domain: &'static str, key: impl Into<String>, level: Level, count: u64, title: impl Into<String>) -> Finding {
-    Finding { domain, key: key.into(), title: title.into(), detail: None, count, of: None, level, since: 0, open: None, items: Vec::new() }
+    let key = key.into();
+    Finding { domain, name: name_of(&key).into(), key, title: title.into(), detail: None, count, of: None, level, since: 0, open: None, items: Vec::new() }
+}
+
+/// A finding's short name, by its key (the breadcrumb's; its title stays the sentence).
+fn name_of(key: &str) -> &'static str {
+    match key {
+        "files:broken" => "Unreadable files",
+        "files:damaged_tag" => "Damaged tags",
+        "files:no_tags" => "Untagged files",
+        "files:no_length" => "Files without a length",
+        "library:cover" => "Missing covers",
+        "library:year" => "Missing years",
+        "library:genre" => "Missing genres",
+        "library:album-artist" => "Missing album artists",
+        "library:track-numbers" => "Track numbers",
+        "library:musicbrainz" => "Missing MusicBrainz ids",
+        "incoming:upgrades" => "Quality replacements",
+        "incoming:duplicates" => "Duplicates",
+        "incoming:failed" => "Failed conversions",
+        "playlists:missing" => "Missing tracks",
+        "analysis:audiomuse" => "AudioMuse",
+        "servers:lidarr" => "Lidarr",
+        "sign-in:refused" => "Refused requests",
+        "sign-in:throttled" => "Throttled sign-ins",
+        "server:runaway" => "Runaway client",
+        "server:slow" => "Slow responses",
+        "server:settings-file" => "Settings",
+        "requests:waiting" => "Requests",
+        k if k.starts_with("files:") => "File problems",
+        k if k.starts_with("servers:") => "Unreachable server",
+        k if k.starts_with("players:held:") => "Held plays",
+        k if k.starts_with("players:away:") => "Silent player",
+        k if k.ends_with(":check") => "Check failed",
+        _ => "Finding",
+    }
 }
 
 fn n(count: u64, one: &str, many: &str) -> String {
@@ -514,6 +551,14 @@ fn check_server(at: i64) -> anyhow::Result<Vec<Finding>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_finding_has_a_short_name() {
+        for key in ["files:broken", "library:cover", "library:track-numbers", "incoming:upgrades", "server:slow", "servers:jellyfin", "players:away:Tablet", "library:check"] {
+            assert_ne!(name_of(key), "Finding", "{key}");
+        }
+        assert_eq!(finding("library", "library:genre", Level::Warning, 12, "12 albums without a genre").name, "Missing genres");
+    }
 
     #[test]
     fn findings_are_worst_first_then_newest_and_keep_their_first_sight() {

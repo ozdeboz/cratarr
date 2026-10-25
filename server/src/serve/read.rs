@@ -14,7 +14,7 @@ const SONG_COLS: &str = "s.n, s.id, s.folder, s.path, s.album_id, s.title, s.art
   s.year, s.genre, s.bpm, s.duration_ms, s.size, s.suffix, s.kbps, s.created, s.mbid, s.cover,
   s.rg_track_gain, s.rg_track_peak, s.rg_album_gain, s.rg_album_peak, s.genres";
 const ALBUM_COLS: &str = "a.n, a.id, a.name, a.artist, a.artist_id, a.year, a.genre, a.genres, a.song_count, a.duration_ms,
-  a.created, a.mbid, a.compilation, a.cover";
+  a.created, a.mbid, a.compilation, a.cover, a.release_type, a.type_from, a.secondary";
 
 /// A song in Cratarr's ids, with its album's name and album artist (see `Library::song_ids`).
 #[allow(dead_code)] // for the pushed player state (decision 0031), which comes next
@@ -85,6 +85,7 @@ fn album_of(r: &rusqlite::Row) -> rusqlite::Result<Album> {
     let genres: String = r.get(7)?;
     let artist: String = r.get(3)?;
     let id: String = r.get(1)?;
+    let release = release_of(r.get(14)?, r.get(15)?, r.get::<_, Option<String>>(16)?.as_deref());
     Ok(Album {
         cover_art: r.get::<_, Option<String>>(13)?.unwrap_or_else(|| id.clone()),
         id,
@@ -100,8 +101,15 @@ fn album_of(r: &rusqlite::Row) -> rusqlite::Result<Album> {
         created: created.map(iso),
         music_brainz_id: r.get(11)?,
         is_compilation: r.get(12)?,
+        release_types: release.kind.iter().chain(&release.secondary).map(|w| super::library::type_label(w)).collect(),
+        release,
         ..Album::default()
     })
+}
+
+/// An album's release type as kept (0.9.6).
+fn release_of(kind: Option<String>, from: Option<String>, secondary: Option<&str>) -> crate::source::ReleaseType {
+    crate::source::ReleaseType { kind, type_from: from, secondary: secondary.unwrap_or_default().split('\u{1f}').filter(|s| !s.is_empty()).map(str::to_string).collect() }
 }
 
 /// Rows by number, in the order given (the second phase).
@@ -650,6 +658,38 @@ impl Library {
         let mut st = db.prepare("SELECT id, coalesce(mbid, ''), artist, name FROM albums WHERE genres = '' ORDER BY n")?;
         let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Every album's MusicBrainz release (0.9.6: its release group's types asked of MusicBrainz), in the library's order.
+    pub fn album_releases(&self) -> Result<Vec<String>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT DISTINCT mbid FROM albums WHERE mbid IS NOT NULL AND mbid <> '' ORDER BY n")?;
+        let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.filter_map(|r| r.ok()).filter(|m| crate::app::discogs::is_mbid(m)).collect())
+    }
+
+    /// The albums whose type is not known, or only guessed (0.9.6: asked of Discogs): (id, MusicBrainz release, artist,
+    /// name).
+    pub fn albums_without_type(&self) -> Result<Vec<(String, String, String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, coalesce(mbid, ''), artist, name FROM albums WHERE release_type IS NULL OR type_from = 'guess' ORDER BY n")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Each song's album's release types as the axes show them ("EP", "Live"), primary first (0.9.6); songs of albums of
+    /// no known type left out.
+    pub fn song_release_types(&self) -> Result<HashMap<String, Vec<String>>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT s.id, a.release_type, a.secondary FROM songs s JOIN albums a ON a.id = s.album_id WHERE a.release_type IS NOT NULL OR a.secondary <> ''")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, String>(2)?)))?;
+        let mut out = HashMap::new();
+        for row in rows {
+            let (song, primary, secondary) = row?;
+            let words: Vec<String> = primary.iter().map(String::as_str).chain(secondary.split('\u{1f}').filter(|s| !s.is_empty())).map(super::library::type_label).collect();
+            out.insert(song, words);
+        }
+        Ok(out)
     }
 
     /// The MusicBrainz releases of the albums without an original year (0.9.5: asked of MusicBrainz), in the library's
