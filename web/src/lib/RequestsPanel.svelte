@@ -3,7 +3,7 @@
   // Settings; the lists in panels): opened from the page's index, beside it on a roomy window (no ✕ there), over it on a
   // phone. Its bar: where it is (Requests › Your requests). Waiting for an answer (those who answer requests): each
   // answered from its row's menu, or many at once in the select mode every list has (the bar's icon starts it). Your
-  // requests: each with where it stands, a waiting one taken back from its menu. Lidarr monitor: what it
+  // requests: each with where it stands, a waiting one taken back from its menu. Monitor (the owner, 2026-10-26: not Lidarr's name, so another downloader fits): what it
   // fetches now (how far), then what it watches for and has not found yet.
   import { askIfMany } from './many.svelte';
   import { plural } from './insights.svelte';
@@ -128,7 +128,7 @@
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
   {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={() => closePlaylist()}><Icon name="back" size={22} /></button></span>{/if}
-  <Crumbs trail={beside ? [] : [{ label: 'Requests', go: () => upToPage('#/requests') }]} here={L.label} />
+  <Crumbs trail={beside ? [] : [{ label: 'Requests', go: () => upToPage('#/requests') }]} here={L.name} />
 {/snippet}
 {#snippet glassExtra()}
   {#if list === 'waiting' && waiting.length}
