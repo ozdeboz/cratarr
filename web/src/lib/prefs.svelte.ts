@@ -105,7 +105,7 @@ export type Prefs = {
   /** This device's animations (Display, the owner 2026-10-25): off, as the system's reduced motion (lib/motion). */
   animations: boolean;
   /** Panels' breadcrumbs whole, scrolled to where one is, rather than cut short (lib/Crumbs; a tap on a cut title, the
-   *  owner 2026-10-25: "global on the device"). */
+   *  owner 2026-10-25: "global on the device"); whole by default (the owner, the same day). */
   crumbsWhole: boolean;
   /** Where the bar of pages runs below 1024 px (Display, the owner 2026-10-25): along the top or the bottom. */
   navAt: 'top' | 'bottom';
@@ -294,7 +294,7 @@ export const ZOOM_STEPS = 6;
 export const DEFAULTS: Prefs = {
   theme: 'auto',
   animations: true,
-  crumbsWhole: false,
+  crumbsWhole: true,
   libraryView: 'albums',
   libraryArtistOrder: 'name',
   libraryArtistDown: false,
