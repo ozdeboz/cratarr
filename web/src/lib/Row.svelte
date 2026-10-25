@@ -331,10 +331,10 @@
 
   .act :global(button.text) {
     min-height: 36px;
-    padding: 0 12px;
+    padding: 0 14px;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: 999px;
     color: inherit;
     font: inherit;
     font-size: 0.9rem;

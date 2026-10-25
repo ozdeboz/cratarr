@@ -423,7 +423,7 @@
   .form button {
     min-height: 44px;
     border: 0;
-    border-radius: 10px;
+    border-radius: 999px;
     font: inherit;
     cursor: pointer;
   }

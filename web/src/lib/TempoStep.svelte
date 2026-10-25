@@ -124,9 +124,9 @@
   }
 
   .choices button {
-    padding: 14px;
+    padding: 12px 16px;
     border: 1px solid var(--border);
-    border-radius: 14px;
+    border-radius: 999px;
     background: color-mix(in srgb, var(--text) 6%, transparent);
     color: var(--text);
     font: inherit;

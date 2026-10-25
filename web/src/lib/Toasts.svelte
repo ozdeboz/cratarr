@@ -134,10 +134,10 @@
     flex: none;
     min-width: 40px;
     min-height: 36px;
-    padding: 0 10px;
+    padding: 0 14px;
     background: none;
     border: 0;
-    border-radius: 8px;
+    border-radius: 999px;
     font: inherit;
     cursor: pointer;
   }

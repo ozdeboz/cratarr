@@ -258,7 +258,7 @@
     padding: 0 14px;
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: 999px;
     color: inherit;
     font: inherit;
     cursor: pointer;
