@@ -22,6 +22,7 @@
   import { SECTIONS, type SettingsSection } from './lib/settingsSections.svelte';
   import { askDownloads, downloads, inApp } from './lib/app.svelte';
   import './lib/keyboard.svelte';
+  import './lib/described.svelte';
   import { kept } from './lib/kept.svelte';
   import { reach } from './lib/reach.svelte';
   import { keepCoversAway } from './lib/coversAway.svelte';

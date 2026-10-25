@@ -7,6 +7,7 @@
 // gone from the list (offline). A browser lets sound start only after the page was touched once: a play before that shows
 // "Tap to play". Behind a locked screen a paused page is frozen after a minute or so, and shows offline until it is
 // looked at again; playing, it stays. No sync play in a browser: it joins no group.
+import { describing } from './described.svelte';
 import { getPlayers } from './api';
 import { me } from './me.svelte';
 import { inApp } from './app.svelte';
@@ -208,14 +209,13 @@ async function report(withQueue = false) {
     },
     ...(queue
       ? {
+          // Which tracks, not what they are, where the server describes them (lib/described); a server before it is
+          // still told the details.
           queue: own.map((q) => ({
             entry: q.entry,
             source: q.source,
             id: q.id,
-            name: q.name,
-            artist: q.artist,
-            album: q.album,
-            album_id: q.album_id,
+            ...(describing.server ? {} : { name: q.name, artist: q.artist, album: q.album, album_id: q.album_id }),
             ...(q.lane ? { lane: q.lane } : {}),
           })),
         }

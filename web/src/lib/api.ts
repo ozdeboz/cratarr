@@ -1545,6 +1545,22 @@ export const lookRenumber = (album: string) => post<Started>(`/api/albums/cratar
 /** Writes the numbers shown (the preview's `to`), Undo puts the old ones back. */
 export const renumber = (album: string, tracks: { id: string; disc: number; track: number }[], totals?: Renumbering['totals']) =>
   post<{ undo: string[] }>(`/api/albums/cratarr/${encodeURIComponent(album)}/renumber`, { tracks, totals });
+/** A track as the server describes it (decision 0033, amended: the queue holds identities, Cratarr describes them; a5,
+ *  0.9.6): `found` false for one it does not know (its name empty); `favorite` the signed-in account's, null for none. */
+export type DescribedTrack = {
+  source: string;
+  id: string;
+  name: string;
+  artist: string | null;
+  album: string | null;
+  album_id: string | null;
+  duration_secs: number | null;
+  addable: boolean;
+  favorite: boolean | null;
+  found: boolean;
+};
+/** At most 500 at a time, in the order asked. */
+export const describeTracks = (tracks: { source: string; id: string }[]) => post<{ tracks: DescribedTrack[] }>('/api/tracks/describe', { tracks });
 /** Stops one of the account's tasks (a5, 0.9.6: Change cover's look, once a cover is chosen). */
 export const stopTask = (id: number) => request<unknown>(`/api/tasks/${id}`, { method: 'DELETE' });
 
