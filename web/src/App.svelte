@@ -843,6 +843,8 @@
      2026-10-25); a playlist's, an album's or an artist's still covers it all. */
   .playlist-layer.under-bar {
     top: calc(var(--top-h, 0px) + env(safe-area-inset-top));
+    /* The page's colour, as beside the page (.player-side); a playlist's layer keeps the cards' (the owner, 2026-10-25). */
+    background: var(--bg);
   }
 
   /* The page's row: back and the pill floating over the page's top, which starts under them (.under-row); under the page
@@ -873,6 +875,22 @@
     align-items: center;
     gap: 10px;
     min-width: 0;
+  }
+
+  /* A title in the glass (the owner, 2026-10-25, mockup 3: content scrolling under a bare title made it hard to read):
+     the page's name or the panel's breadcrumbs on a thinner glass than the button's, more light through, the button's
+     round glass in front of it. */
+  .lead:has(:global(.page-name, .crumbs, .title)) {
+    padding: 2px 18px 2px 2px;
+    border-radius: 26px;
+    background: color-mix(in srgb, var(--float-bg) 45%, transparent);
+    -webkit-backdrop-filter: blur(10px) saturate(1.3);
+    backdrop-filter: blur(10px) saturate(1.3);
+    box-shadow: 0 2px 10px rgb(0 0 0 / 0.18);
+  }
+
+  .lead:has(:global(.page-name, .crumbs, .title)) .navpill {
+    box-shadow: none;
   }
 
   .page-name {
