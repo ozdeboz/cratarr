@@ -130,7 +130,7 @@
     {/if}
   </MenuSheet>
 {:else}
-  <MenuSheet label="Rename" title="Rename" top onclose={() => (renaming = null)}>
+  <MenuSheet label="Rename" title="Rename" onclose={() => (renaming = null)}>
     <form class="form" onsubmit={(e) => (e.preventDefault(), rename())}>
       <!-- svelte-ignore a11y_autofocus -->
       <input type="text" aria-label="Name of the queue" maxlength="100" autofocus bind:value={name} />

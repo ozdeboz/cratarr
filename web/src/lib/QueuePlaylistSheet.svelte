@@ -55,7 +55,6 @@
   title="New playlist from the queue"
   onback={step === 'repeats' ? () => (step = 'name') : null}
   {step}
-  top
 >
   {#if step === 'repeats'}
     <div class="heading">The queue plays some tracks more than once</div>

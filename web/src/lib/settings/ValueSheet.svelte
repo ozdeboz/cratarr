@@ -60,7 +60,7 @@
   }
 </script>
 
-<MenuSheet label={title} {title} top {onclose}>
+<MenuSheet label={title} {title} {onclose}>
   <form class="form" onsubmit={(e) => (e.preventDefault(), done())}>
     <div class="field">
       {#if lines}

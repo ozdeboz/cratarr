@@ -26,7 +26,7 @@
   } = $props();
 </script>
 
-<MenuSheet label={title} {title} top {onclose}>
+<MenuSheet label={title} {title} {onclose}>
   <form class="form" onsubmit={(e) => (e.preventDefault(), canSubmit && !busy && onsubmit())}>
     {@render children()}
     {#if error}<p class="error" role="alert">{error}</p>{/if}

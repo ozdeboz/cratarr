@@ -32,7 +32,6 @@
     actions = [],
     onback = null,
     step = 'menu',
-    top = false,
     over = false,
     copy = null,
     children,
@@ -55,8 +54,6 @@
     onback?: (() => void) | null;
     /** Which step shows: a change fades the new content in (500 ms) while the sheet resizes. */
     step?: string;
-    /** From the top of the window, not the bottom: a sheet to type in (a name), which the keyboard would cover. */
-    top?: boolean;
     /** Over the full-screen visuals (lib/visuals), which lie over everything else. */
     over?: boolean;
     /** What a tap on the item (its cover, title and chips) copies: the usual "Artist – Title" (the owner, 2026-10-24,
@@ -165,11 +162,10 @@
   style:left={side ? `${side.left + side.width / 2}px` : null}
   style:transform={dy ? `translateY(${dy}px)` : null}
   class:dragging={dy !== 0}
-  class:top
   bind:this={sheet}
-  use:sheetDrag={{ onclose, top, ondrag: (d) => (dy = d) }}
-  in:fly|global={{ y: top ? -400 : 400, duration: SHEET_IN, easing: decelerate }}
-  out:fly|global={{ y: top ? -400 : 400, duration: SHEET_OUT, easing: decelerate }}
+  use:sheetDrag={{ onclose, ondrag: (d) => (dy = d) }}
+  in:fly|global={{ y: 400, duration: SHEET_IN, easing: decelerate }}
+  out:fly|global={{ y: 400, duration: SHEET_OUT, easing: decelerate }}
 >
   {#if images?.[0] && !coverBroken(images[0])}<img class="blur" src={images[0]} alt="" aria-hidden="true" onerror={() => coverBroke(images?.[0])} />{/if}
   <div class="veil"></div>
@@ -252,17 +248,19 @@
     background: rgb(0 0 0 / 0.54);
   }
 
-  /* Finamp's sheet: at most 500 px wide, centred (in its side, or the window), top corners 20 px. */
+  /* Finamp's sheet: at most 500 px wide, centred (in its side, or the window), top corners 20 px. With the keyboard up,
+     just above it (lib/keyboard's --kb, as the bottom glass; the owner, 2026-10-25: every sheet to type in this way,
+     none from the top). */
   .sheet {
     position: fixed;
     left: 50%;
-    bottom: 0;
+    bottom: var(--kb, 0px);
     z-index: 41;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
     width: min(500px, var(--side-w, 100vw));
-    max-height: 92dvh;
+    max-height: calc(92dvh - var(--kb, 0px));
     margin-left: calc(min(500px, var(--side-w, 100vw)) / -2);
     padding-bottom: calc(16px + env(safe-area-inset-bottom));
     overflow: hidden;
@@ -275,20 +273,6 @@
 
   .sheet.dragging {
     transition: none;
-  }
-
-  /* From the top: square at the top, rounded below, the handle at its foot. */
-  .sheet.top {
-    top: 0;
-    bottom: auto;
-    padding-top: calc(16px + env(safe-area-inset-top));
-    padding-bottom: 0;
-    border-radius: 0 0 20px 20px;
-  }
-
-  .sheet.top .handle {
-    order: 1;
-    margin: 6px auto 12px;
   }
 
   .blur {
