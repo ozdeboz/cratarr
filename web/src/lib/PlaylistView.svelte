@@ -99,6 +99,7 @@
   import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
+  import BandcampAlbumMenu from './BandcampAlbumMenu.svelte';
   import CrateMenu from './CrateMenu.svelte';
   import SubjectMenu from './SubjectMenu.svelte';
   import SelectionMenu from './SelectionMenu.svelte';
@@ -952,6 +953,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   });
   // An album's menu (its ⋮ in the action bar).
   let albumMenuOpen = $state(false);
+  let bandcampMenuOpen = $state(false);
   let artistMenuOpen = $state(false);
   async function resumeAlbum() {
     const at = resumeAt;
@@ -1504,7 +1506,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   // Esc closes it (when no sheet of its own is open; in edit mode Cancel is the way out).
   $effect(() => {
     const esc = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || menuOpen || crateMenuOpen || trackMenu || editing || crateEditing || making || sortOpen || albumMenuOpen || artistMenuOpen) return;
+      if (e.key !== 'Escape' || menuOpen || crateMenuOpen || trackMenu || editing || crateEditing || making || sortOpen || albumMenuOpen || bandcampMenuOpen || artistMenuOpen) return;
       if (selecting) selecting = null;
       else if (other) backToTracks();
       else closePlaylist();
@@ -1692,6 +1694,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
             >
           {/if}
           <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (crateMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
+        {:else if album?.source === BANDCAMP}
+          <!-- A Bandcamp album (decision 0071): no heart, its own menu (lib/BandcampAlbumMenu). -->
+          <button class="icon" aria-label={`Menu of ${title}`} onclick={() => (bandcampMenuOpen = true)}><Icon name="moreVert" size={24} /></button>
         {:else if offServer}
           <!-- The device's own music (local mode, decision 0052): no heart, no Cratarr menu. -->
         {:else if artist}
@@ -2154,6 +2159,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
 {#if flowMenu}
   {@const m = flowMenu}
   <AlbumMenu {source} album={m} onclose={() => (flowMenu = null)} />
+{/if}
+{#if bandcampMenuOpen && album && albumHead}
+  <BandcampAlbumMenu album={{ id: album.id, title: albumHead.title, artist: albumHead.artist }} onclose={() => (bandcampMenuOpen = false)} />
 {/if}
 {#if albumMenuOpen && album}
   <AlbumMenu

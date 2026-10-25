@@ -22,15 +22,11 @@
     setTrackMember,
     trackFile,
     trackState,
-    getDiscover,
-    notDiscover,
-    wantDiscover,
-    type DiscoverAlbum,
     type TrackFile,
     type TrackState,
   } from './api';
-  import { BANDCAMP, previewPage, samePage } from './bandcampPreview';
-  import { withUndo } from './undo.svelte';
+  import { BANDCAMP, previewPage } from './bandcampPreview';
+  import DiscoverEntries from './DiscoverEntries.svelte';
   import { heardOf, loadWaveform, waveformOf } from './waveforms.svelte';
   import { withHeard } from './trackFacts.svelte';
   import type { IconName } from './Icon.svelte';
@@ -154,44 +150,8 @@
   });
   const hasWave = $derived(!!t && t.source !== BANDCAMP && !!waveformOf(t.source, t.id));
 
-  // A Bandcamp preview (decision 0071): the Discover suggestion it came from, for its own group, Want and Not
-  // interested, as on Discover's menu (the owner, 2026-10-25).
+  // A Bandcamp preview (decision 0071): its album's page, for its Discover group (lib/DiscoverEntries) and Share.
   const bandcampPage = $derived(t?.source === BANDCAMP ? previewPage(t.id) : null);
-  let suggestion = $state<{ album: DiscoverAlbum; asked: boolean; may: boolean } | null>(null);
-  $effect(() => {
-    const page = bandcampPage;
-    if (!page) return;
-    getDiscover().then(
-      (v) => {
-        const album = v.found?.albums.find((a) => a.bandcamp && samePage(a.bandcamp, page));
-        const r = album ? v.requests?.[album.key] : undefined;
-        suggestion = album ? { album, asked: !!r && r.status !== 'cancelled' && r.status !== 'declined', may: !!v.may_request } : null;
-      },
-      () => (suggestion = null),
-    );
-  });
-  async function wantIt() {
-    const a = suggestion?.album;
-    if (!a) return;
-    onclose();
-    try {
-      const { request } = await wantDiscover(a.key);
-      if (request.fetched?.startsWith('Not handed over')) toast.show({ text: request.fetched, tone: 'error' });
-    } catch (e) {
-      toast.fail(e, 'Could not ask for it');
-    }
-  }
-  async function notInterested() {
-    const a = suggestion?.album;
-    if (!a) return;
-    onclose();
-    try {
-      const { undo } = await notDiscover(a.key);
-      withUndo('Not interested.', [undo]);
-    } catch (e) {
-      toast.fail(e, 'Could not leave it out');
-    }
-  }
 
   // Web search: the track's artist and title, in a new tab (the app opens it outside).
   function webSearch() {
@@ -425,16 +385,7 @@
           {/each}
           {#if t?.source === 'cratarr'}<MenuEntry icon="music" label="Sounds like this" onclick={goToLike} />{/if}
         </MenuGroup>
-        <MenuGroup label="Discover">
-          {#if suggestion}
-            {#if suggestion.asked}
-              <MenuEntry icon="inbox" label="Requested" onclick={() => { onclose(); location.hash = '#/requests'; }} />
-            {:else}
-              <MenuEntry icon="circlePlus" label="Want" disabled={!suggestion.may} onclick={wantIt} />
-            {/if}
-            <MenuEntry icon="thumbsDown" label="Not interested" onclick={notInterested} />
-          {/if}
-        </MenuGroup>
+        <DiscoverEntries page={bandcampPage} {onclose} />
         <MenuGroup>
           {#if heartKnown}<MenuEntry icon="heart" label="Favourite" switched={heartOn} disabled={busy} onclick={heart} />{/if}
           {#if t && !onDevice}<MenuEntry icon="ban" label="Exclude everywhere" danger onclick={excludeEverywhere} />{/if}
