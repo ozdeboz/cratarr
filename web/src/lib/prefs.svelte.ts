@@ -96,7 +96,12 @@ export type Theme = 'auto' | 'light' | 'dark';
 export type Prefs = {
   theme: Theme;
   /** What the Library shows (the switch beside back; the owner, 2026-10-25): its albums, or their artists. */
-  libraryView: 'albums' | 'artists';
+  libraryView: 'albums' | 'artists' | 'tracks';
+  /** The Library's Artists' and Tracks' orders, as its albums' (libraryOrder). */
+  libraryArtistOrder: 'name' | 'albums' | 'tracks';
+  libraryArtistDown: boolean;
+  libraryTrackOrder: 'title' | 'artist' | 'album' | 'added' | 'year' | 'plays' | 'duration';
+  libraryTrackDown: boolean;
   /** This device's animations (Display, the owner 2026-10-25): off, as the system's reduced motion (lib/motion). */
   animations: boolean;
   /** Where the bar of pages runs below 1024 px (Display, the owner 2026-10-25): along the top or the bottom. */
@@ -287,6 +292,10 @@ export const DEFAULTS: Prefs = {
   theme: 'auto',
   animations: true,
   libraryView: 'albums',
+  libraryArtistOrder: 'name',
+  libraryArtistDown: false,
+  libraryTrackOrder: 'album',
+  libraryTrackDown: false,
   navAt: 'top',
   navHides: false,
   navHidesOnItem: true,
@@ -360,7 +369,11 @@ function read(): Prefs {
     if (saved && typeof saved === 'object') {
       if (['auto', 'light', 'dark'].includes(saved.theme)) p.theme = saved.theme;
       if (typeof saved.animations === 'boolean') p.animations = saved.animations;
-      if (saved.libraryView === 'albums' || saved.libraryView === 'artists') p.libraryView = saved.libraryView;
+      if (['albums', 'artists', 'tracks'].includes(saved.libraryView)) p.libraryView = saved.libraryView;
+      if (['name', 'albums', 'tracks'].includes(saved.libraryArtistOrder)) p.libraryArtistOrder = saved.libraryArtistOrder;
+      if (typeof saved.libraryArtistDown === 'boolean') p.libraryArtistDown = saved.libraryArtistDown;
+      if (['title', 'artist', 'album', 'added', 'year', 'plays', 'duration'].includes(saved.libraryTrackOrder)) p.libraryTrackOrder = saved.libraryTrackOrder;
+      if (typeof saved.libraryTrackDown === 'boolean') p.libraryTrackDown = saved.libraryTrackDown;
       if (saved.navAt === 'top' || saved.navAt === 'bottom') p.navAt = saved.navAt;
       if (typeof saved.navHides === 'boolean') p.navHides = saved.navHides;
       if (typeof saved.navHidesOnItem === 'boolean') p.navHidesOnItem = saved.navHidesOnItem;

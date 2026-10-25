@@ -24,7 +24,8 @@ const ELSEWHERE: { kind: SearchKind; label: string }[] = [
   { kind: 'excluded', label: 'Left out by Discover' },
 ];
 /** The kinds a page shows itself: left out of its everywhere (lib/GlobalResults); the Library's by what it shows. */
-export const pageKinds = (page: string): string[] => (page === 'library' && prefs.libraryView === 'artists' ? ['artist'] : (PAGE_KINDS[page] ?? []));
+export const pageKinds = (page: string): string[] =>
+  page === 'library' && prefs.libraryView !== 'albums' ? [prefs.libraryView === 'artists' ? 'artist' : 'track'] : (PAGE_KINDS[page] ?? []);
 const PAGE_KINDS: Record<string, string[]> = {
   library: ['album'],
   playlists: ['playlist'],

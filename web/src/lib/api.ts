@@ -2022,3 +2022,31 @@ export const saveOverVisualsSnapshot = (id: string, settings: Record<string, unk
     body: JSON.stringify({ settings, ...(picture ? { picture } : {}), ...(name ? { name } : {}) }),
   });
 export const deleteVisualsSnapshot = (id: string) => request<void>(`/api/visuals/snapshots/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+/** One of Cratarr's own tracks as the Library's Tracks lists them (a5, 0.9.4: GET /api/library/tracks). */
+export type LibraryTrack = {
+  id: string;
+  title: string;
+  artist: string | null;
+  album: string | null;
+  album_id: string;
+  track_no?: number | null;
+  disc_no?: number | null;
+  /** Seconds. */
+  duration: number;
+  year?: number | null;
+  /** Epoch seconds. */
+  added?: number | null;
+  plays: number;
+  favorite: boolean;
+  format?: string | null;
+  bitrate?: number | null;
+};
+export type LibraryTrackOrder = 'title' | 'artist' | 'album' | 'added' | 'year' | 'plays' | 'duration';
+/** A page of the library's tracks: the words (as the search reads them), the order, the libraries switched off. */
+export const libraryTracks = (p: { q?: string; order: LibraryTrackOrder; down: boolean; offset: number; limit: number; without?: string[] }) => {
+  const u = new URLSearchParams({ order: p.order, down: String(p.down), offset: String(p.offset), limit: String(p.limit) });
+  if (p.q) u.set('q', p.q);
+  for (const w of p.without ?? []) u.append('without', w);
+  return quietly<{ items: LibraryTrack[]; total: number; offset: number }>(`/api/library/tracks?${u}`);
+};

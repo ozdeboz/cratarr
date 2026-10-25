@@ -53,6 +53,21 @@ export const ALBUM_ORDERS: OrderField<CollectionOrder>[] = [
   { value: 'rating', label: 'Rating', most: true },
   { value: 'quality', label: 'Quality', most: true },
 ];
+/** The Library's Artists and Tracks (the owner, 2026-10-25): their orders, as the albums' header has them. */
+export const ARTIST_ORDERS: OrderField<'name' | 'albums' | 'tracks'>[] = [
+  { value: 'name', label: 'Name' },
+  { value: 'albums', label: 'Albums', most: true },
+  { value: 'tracks', label: 'Tracks', most: true },
+];
+export const TRACK_ORDERS: OrderField<'title' | 'artist' | 'album' | 'added' | 'year' | 'plays' | 'duration'>[] = [
+  { value: 'album', label: 'Album' },
+  { value: 'title', label: 'Title' },
+  { value: 'artist', label: 'Artist' },
+  { value: 'year', label: 'Year' },
+  { value: 'added', label: 'Added' },
+  { value: 'plays', label: 'Plays', most: true },
+  { value: 'duration', label: 'Length' },
+];
 /** The orders by how you used the albums (lib/albums albumUses): read when chosen. */
 export const USE_ORDERS: readonly CollectionOrder[] = ['plays', 'played', 'rating'];
 /** An album's quality, to order by: lossless above lossy, then its lowest bit rate (decision 0060). */

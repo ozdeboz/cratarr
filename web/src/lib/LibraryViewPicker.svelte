@@ -5,9 +5,10 @@
   import { portal } from './portal';
   import { prefs } from './prefs.svelte';
 
-  const VIEWS: { value: 'albums' | 'artists'; label: string }[] = [
+  const VIEWS: { value: 'albums' | 'artists' | 'tracks'; label: string }[] = [
     { value: 'albums', label: 'Albums' },
     { value: 'artists', label: 'Artists' },
+    { value: 'tracks', label: 'Tracks' },
   ];
   let open = $state(false);
   let el = $state<HTMLElement>();
