@@ -11,6 +11,7 @@
     count,
     onclose,
     place = 'panel',
+    every,
     children,
   }: {
     /** What is ticked, for screen readers ("Selected tracks"). */
@@ -19,12 +20,19 @@
     count: string;
     onclose: () => void;
     place?: 'panel' | 'page';
+    /** All or none at once (the owner, 2026-10-25): the top row's left button, "All", or "None" with every one ticked. */
+    every?: { all: boolean; onall: () => void; onnone: () => void } | null;
     children: Snippet;
   } = $props();
 </script>
 
 <div class="selbar {place}" role="toolbar" aria-label={label}>
   <div class="selhead">
+    {#if every}
+      <button class="every" onclick={() => (every.all ? every.onnone() : every.onall())}>{every.all ? 'None' : 'All'}</button>
+    {:else}
+      <span></span>
+    {/if}
     <span class="selcount">{count}</span>
     <button class="close" aria-label="Stop selecting" title="Stop selecting" onclick={onclose}><Icon name="close" size={22} /></button>
   </div>
@@ -60,10 +68,23 @@
 
   .selhead {
     display: grid;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: 48px 1fr 48px;
     align-items: center;
-    padding: 0 4px 0 48px;
+    padding: 0 4px;
     border-bottom: 1px solid color-mix(in srgb, var(--text) 15%, transparent);
+  }
+
+  .every {
+    min-height: 40px;
+    padding: 0 4px;
+    border: 0;
+    border-radius: 20px;
+    background: none;
+    color: var(--accent-ink);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
   }
 
   .selcount {

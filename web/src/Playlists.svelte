@@ -247,7 +247,7 @@
     <!-- The panel's select bar (lib/SelectBar): play, put next, queue or favour the ticked playlists, view them in the
          panel (unless it shows them), their menu. -->
     {@const viewLabel = ticked.length === 1 ? 'View 1 playlist' : `View ${ticked.length} playlists`}
-    <SelectBar label="Selected playlists" count="{ticked.length}/{items.length}" onclose={endSelect} place="page">
+    <SelectBar label="Selected playlists" count="{ticked.length}/{items.length}" onclose={endSelect} place="page" every={{ all: !!items.length && ticked.length === items.length, onall: () => pickWhich(items.map((p) => p.id), 'all'), onnone: () => pickWhich(items.map((p) => p.id), 'none') }}>
       <button aria-label="Play" title="Play" disabled={!ticked.length} onclick={() => playTicked('play')}><Icon name="play" size={24} /></button>
       <button class:fav={tickedFav} aria-pressed={tickedFav} aria-label="Favourite" title="Favourite" disabled={!ticked.length} onclick={favouriteTicked}
         ><Icon name="heart" size={24} /></button

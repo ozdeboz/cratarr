@@ -587,7 +587,7 @@
     {/if}
   {/each}
   {#if selecting}
-    <SelectBar label="Selected albums" count="{ticked.length}/{all.length}" onclose={() => (selecting = null)} place="page">
+    <SelectBar label="Selected albums" count="{ticked.length}/{all.length}" onclose={() => (selecting = null)} place="page" every={{ all: !!all.length && ticked.length === all.length, onall: () => selectWhich('all'), onnone: () => selectWhich('none') }}>
       {#if actions}
         {@render actions(ticked, () => (selecting = null))}
         <button aria-label="Menu of the ticked albums" title="More" disabled={!ticked.length} onclick={menuOfTicked}><Icon name="moreVert" size={24} /></button>

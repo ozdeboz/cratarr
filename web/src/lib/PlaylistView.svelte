@@ -2046,7 +2046,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
   </div>
 
   {#if selecting}
-    <SelectBar label="Selected tracks" count="{selecting.size}/{shown?.length ?? 0}" onclose={() => (selecting = null)}>
+    <SelectBar label="Selected tracks" count="{selecting.size}/{shown?.length ?? 0}" onclose={() => (selecting = null)} every={{ all: !!shown?.length && selecting.size === shown.length, onall: () => selectWhich('all'), onnone: () => selectWhich('none') }}>
         <button class="icon" aria-label="Play" title="Play" disabled={!ticked.length} onclick={() => actOnTicked('play')}><Icon name="play" size={24} /></button>
         <button class="icon" aria-label="Play next" title="Play next" disabled={!ticked.length} onclick={() => actOnTicked('next')}><Icon name="playNext" size={24} /></button>
         <button class="icon" aria-label="Add to queue" title="Add to queue" disabled={!ticked.length} onclick={() => actOnTicked('last')}><Icon name="listAdd" size={24} /></button>

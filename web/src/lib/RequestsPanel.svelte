@@ -186,7 +186,7 @@
 </div>
 
 {#if selecting}
-  <SelectBar label="Selected requests" count="{ticked.length}/{waiting.length}" onclose={() => (selecting = null)}>
+  <SelectBar label="Selected requests" count="{ticked.length}/{waiting.length}" onclose={() => (selecting = null)} every={{ all: !!waiting.length && ticked.length === waiting.length, onall: () => selectWhich('all'), onnone: () => selectWhich('none') }}>
     <button aria-label="Select which" title="Select…" onclick={() => (selectSheet = true)}><Icon name="listChecks" size={24} /></button>
     <button aria-label="Approve" title="Approve" disabled={!ticked.length} onclick={() => answer(ticked, true)}><Icon name="check" size={24} /></button>
     <button aria-label="Decline" title="Decline" disabled={!ticked.length} onclick={() => (declining = ticked)}><Icon name="ban" size={24} /></button>
