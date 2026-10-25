@@ -4,7 +4,7 @@
   // line); its settings are on its own page behind it (`thing`: a server's id, or `lidarr`): its fields as rows, a value
   // typed or chosen in a sheet, its connection checked there, and Remove last (the settings' North Star, 2026-10-19).
   import type { Field } from '../api';
-  import { getDiscogs, getLastfmServerKey, getLidarrOptions, setDiscogs, setLastfmServerKey, type DiscogsSetting } from '../api';
+  import { getDiscogs, getLastfmServerKey, getLidarrOptions, missingCall, setDiscogs, setLastfmServerKey, type DiscogsSetting } from '../api';
   import FormSheet from './FormSheet.svelte';
   import { toast } from '../toast.svelte';
   import { backFromThing, openThing } from '../panel.svelte';
@@ -44,10 +44,12 @@
   const DISCOGS_MORE =
     "Covers and artist photos where Cratarr has none, genres for albums whose files have none, and more covers to choose from. Made at discogs.com/settings/developers.";
   let discogs = $state<DiscogsSetting | null>(null);
+  /** A server before Discogs (0.9.5) has no such setting: no group, rather than a key it cannot keep. */
+  let discogsKnown = $state(false);
   const loadDiscogs = () =>
     getDiscogs().then(
-      (d) => (discogs = d),
-      () => (discogs = null),
+      (d) => ((discogs = d), (discogsKnown = true)),
+      (e) => ((discogs = null), (discogsKnown = !missingCall(e))),
     );
   loadDiscogs();
   let discogsForm = $state<{ key: string; secret: string; busy: boolean; error: string | null } | null>(null);
@@ -319,6 +321,7 @@
         })}
     />
   </Group>
+  {#if discogsKnown}
   <Group title="Discogs" more={DISCOGS_MORE}>
     <Item
       name="App key and secret"
@@ -327,6 +330,7 @@
     />
     {#if discogs?.set}<Item name="Remove Discogs" kind="danger" onclick={() => (removing = 'discogs')} />{/if}
   </Group>
+  {/if}
   {#if removing === 'discogs'}
     <ConfirmSheet
       title="Remove Discogs?"
