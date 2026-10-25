@@ -4,6 +4,7 @@
   // no file anywhere (Not found: removed one by one or all), and tracks a playlist holds more than once (Repeated: the
   // repeats taken out on request, the first copy staying; decision 0025, amended 2026-10-16). Every change can be
   // undone.
+  import { trackSteps } from './progress.svelte';
   import {
     applyOne,
     applySafe,
@@ -40,7 +41,9 @@
     const want = [...ids];
     try {
       const r = await getRepairs();
-      const rows = await Promise.all(want.map((id) => playlistRows(id, prefs.source || undefined).then((x) => [id, x.rows] as const)));
+      const rows = await trackSteps(want.length, (done) =>
+        Promise.all(want.map((id) => playlistRows(id, prefs.source || undefined).then((x) => (done(), [id, x.rows] as const)))),
+      );
       if (want.join('\n') !== ids.join('\n')) return;
       safe = r.safe.filter((x) => mine(x.playlist));
       review = r.review.filter((x) => mine(x.playlist));

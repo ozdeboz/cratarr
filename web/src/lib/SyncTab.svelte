@@ -2,6 +2,7 @@
   // The panel's Sync tab (decisions 0014, 0025): whether the selected playlists are shared with everyone, and their
   // copy in each account, with any problem it has. Your account has every playlist and follows by itself; sharing puts
   // a playlist in every account. With several playlists: "3 of 5" where only some are; ticking shares all of them.
+  import { trackSteps } from './progress.svelte';
   import { linkPlaylist, unlinkPlaylist, type Link } from './api';
   import { refresh } from './live.svelte';
   import { shownPlaylists } from './output.svelte';
@@ -24,11 +25,15 @@
     working = true;
     const touched: string[] = [];
     try {
-      for (const id of ids.filter((id) => isShared(id) !== on)) {
-        changed[id] = on;
-        touched.push(id);
-        await (on ? linkPlaylist(id, SHARED) : unlinkPlaylist(id, SHARED));
-      }
+      const changing = ids.filter((id) => isShared(id) !== on);
+      await trackSteps(changing.length, async (done) => {
+        for (const id of changing) {
+          changed[id] = on;
+          touched.push(id);
+          await (on ? linkPlaylist(id, SHARED) : unlinkPlaylist(id, SHARED));
+          done();
+        }
+      });
     } catch (e) {
       for (const id of touched) delete changed[id];
       toast.fail(e, on ? 'Could not share it' : 'Could not stop sharing it');

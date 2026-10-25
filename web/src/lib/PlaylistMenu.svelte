@@ -9,6 +9,7 @@
   // than changed (nor repaired); Sync… is the administrators'.
   // Success shows where it happens (the header, the list); what can be undone says so in a toast, to offer Undo
   // (decision 0026).
+  import { trackSteps } from './progress.svelte';
   import { linkTo, share } from './share';
   import { untrack } from 'svelte';
   import { copyPlaylist, deletePlaylist, setPlaylistShared, setSpoken, spokenNames, type Link, type PlayMode, albumCoverUrl, playlistCovers, playlistTrackIds } from './api';
@@ -209,12 +210,15 @@
     const gone: string[] = [];
     const tokens: (string | null)[] = [];
     try {
-      for (const { id } of list) {
-        tokens.push((await deletePlaylist(id)).undo);
-        gone.push(id);
-        followDelete(id);
-        ondeleted?.(id);
-      }
+      await trackSteps(list.length, async (done) => {
+        for (const { id } of list) {
+          tokens.push((await deletePlaylist(id)).undo);
+          gone.push(id);
+          followDelete(id);
+          ondeleted?.(id);
+          done();
+        }
+      });
       onclose();
     } catch (e) {
       fail(e, 'Something went wrong');

@@ -2,6 +2,7 @@
 // track's state (there is no call for several tracks at once), and adding them to one, its card spinning until the last
 // is in. A playlist that holds some of them already is asked about first (decision 0025, amended 2026-10-16). The steps
 // themselves are lib/PlaylistsStep's.
+import { trackSteps } from './progress.svelte';
 import { appendTracks, setTrackMember, trackState, type Playlist, type TrackState } from './api';
 import { refresh } from './live.svelte';
 import { toast } from './toast.svelte';
@@ -103,11 +104,15 @@ export class TracksToPlaylist {
     step('lists');
     this.adding = p.id;
     try {
-      for (const id of this.ids()) {
-        const s = this.states[id];
-        if (s && (!s.addable || this.member(id, p))) continue;
-        this.states[id] = await setTrackMember(this.source(), id, p.id, true);
-      }
+      // The bar at the top says how far it is (lib/progress; the owner, 2026-10-25).
+      const ids = this.ids();
+      await trackSteps(ids.length, async (done) => {
+        for (const id of ids) {
+          const s = this.states[id];
+          if (!(s && (!s.addable || this.member(id, p)))) this.states[id] = await setTrackMember(this.source(), id, p.id, true);
+          done();
+        }
+      });
       refresh();
     } catch (e) {
       toast.fail(e, 'Not every track was added');

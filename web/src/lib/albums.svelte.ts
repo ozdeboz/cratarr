@@ -1,4 +1,5 @@
 // What the album lists (Incoming, Collection) share: playing an album, and how its facts read.
+import { trackSteps } from './progress.svelte';
 import {
   albumView,
   getAlbumRating,
@@ -102,14 +103,18 @@ export async function tracksOfAlbums(list: { source: string; a: ListedAlbum }[])
   // reach" (the owner, 2026-10-25). One call for them all comes from the server (a5).
   const views: { r: Awaited<ReturnType<typeof albumView>>; a: ListedAlbum }[] = new Array(list.length);
   let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(6, list.length) }, async () => {
-      while (next < list.length) {
-        const i = next++;
-        const { source, a } = list[i];
-        views[i] = { r: await albumView(source, a.id), a };
-      }
-    }),
+  // The bar at the top says how far it is (lib/progress).
+  await trackSteps(list.length, (step) =>
+    Promise.all(
+      Array.from({ length: Math.min(6, list.length) }, async () => {
+        while (next < list.length) {
+          const i = next++;
+          const { source, a } = list[i];
+          views[i] = { r: await albumView(source, a.id), a };
+          step();
+        }
+      }),
+    ),
   );
   return views.flatMap(({ r, a }) =>
     r.rows
