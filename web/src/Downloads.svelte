@@ -4,6 +4,7 @@
   // Downloaded once, each its icon, its name, how many in a line, and ›. A tap opens the list in the panel
   // (lib/DownloadsPanel): beside the index on a roomy window, where one is always open (App), its row tinted; over it
   // on a phone. The pill: its search narrows the lists, and its button syncs now (two steps, a toast at the end).
+  import { panelBeside } from './lib/glass.svelte';
   import { askDevice, askDownloads, downloads, inApp } from './lib/app.svelte';
   import { library, readLibrary } from './lib/albums.svelte';
   import { DOWNLOADS_LISTS, onceAlbums, WAITS, type DownloadsList } from './lib/downloadsLists.svelte';
@@ -57,7 +58,7 @@
     <section class="group" aria-label="Downloads">
       <div class="list">
         {#each DOWNLOADS_LISTS as l (l.id)}
-          {@const open = downloadsOf(panel.viewed) === l.id}
+          {@const open = panelBeside() && downloadsOf(panel.viewed) === l.id}
           <button class="row" class:open aria-pressed={open} onclick={() => viewPlaylist(DOWNLOADS + l.id)}>
             <Icon name={l.icon} size={24} />
             <span class="text">

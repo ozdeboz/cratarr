@@ -3,6 +3,7 @@
   // (Collection, Listening, Playlists), each its icon, its name, a number in a line, and ›. A tap opens the view in the
   // panel (lib/InsightsPanel): beside the list on a roomy window, where one is always open (App: the one last open), its
   // row tinted; over the list on a phone.
+  import { panelBeside } from './lib/glass.svelte';
   import Icon from './lib/Icon.svelte';
   import { insights } from './lib/insights.svelte';
   import { INSIGHTS_GROUPS, INSIGHTS_VIEWS, type InsightsView } from './lib/insightsViews';
@@ -55,7 +56,7 @@
       <h2 id="insights-{group.title}">{group.title}</h2>
       <div class="list">
         {#each group.views as v (v.id)}
-          {@const open = insightsOf(panel.viewed) === v.id}
+          {@const open = panelBeside() && insightsOf(panel.viewed) === v.id}
           {@const l = line(v.id)}
           <button class="row" class:open aria-pressed={open} onclick={() => viewPlaylist(INSIGHTS + v.id)}>
             <Icon name={v.icon} size={24} />

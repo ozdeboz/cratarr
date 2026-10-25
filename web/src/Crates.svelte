@@ -2,6 +2,7 @@
   // Crates (decision 0024): the second step after Incoming. Dynamic cross-sections of the library (the built-in ones,
   // Unlisted and Home's New for you, Sounds like your week and Grave digging, 0.9.3; and one's own), each a big card (lib/CrateCard, decided 2026-10-16) with its picture and what it holds;
   // a tap views it in the panel (decision 0023), where it plays and is sorted like a playlist, and can be saved as one.
+  import { panelBeside } from './lib/glass.svelte';
   import { prefs, type CrateOrder } from './lib/prefs.svelte';
   import type { Crate } from './lib/api';
   import ListHead from './lib/ListHead.svelte';
@@ -64,7 +65,7 @@
     <ul class="grid">
       {#each sorted as c (c.id)}
         <li>
-          <CrateCard crate={c} active={panel.viewed === CRATE + c.id || panel.viewed === EDIT_CRATE + c.id} onclick={() => viewPlaylist(CRATE + c.id)} onmenu={() => (menuFor = c.id)} why={deepOf(c.id)} />
+          <CrateCard crate={c} active={panelBeside() && (panel.viewed === CRATE + c.id || panel.viewed === EDIT_CRATE + c.id)} onclick={() => viewPlaylist(CRATE + c.id)} onmenu={() => (menuFor = c.id)} why={deepOf(c.id)} />
         </li>
       {/each}
     </ul>

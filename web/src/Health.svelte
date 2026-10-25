@@ -4,6 +4,7 @@
   // problem in the panel (lib/HealthPanel, one layout for every problem): beside the list on a roomy window, where one is
   // always open (App: the one last open, else the first), its card tinted; over the list on a phone. The report is an
   // administrator's; anyone else sees the files.
+  import { panelBeside } from './lib/glass.svelte';
   import Icon from './lib/Icon.svelte';
   import Meter from './lib/Meter.svelte';
   import { health, loadHealth, problems } from './lib/healthReport.svelte';
@@ -26,7 +27,7 @@
   {:else}
     <ul class="cards">
       {#each list as p (p.key)}
-        {@const open = healthOf(panel.viewed) === p.key}
+        {@const open = panelBeside() && healthOf(panel.viewed) === p.key}
         <li>
           <button class="card" class:open class:urgent={p.urgent} aria-pressed={open} onclick={() => viewPlaylist(HEALTH + p.key)}>
             <Icon name={p.icon} size={24} />

@@ -4,6 +4,7 @@
   // name, what it is set to now in a line, and ›. A tap opens the part in the panel (lib/SettingsPanel): beside the list
   // on a roomy window, where a part is always open (App: the one last open), its row tinted; over the list on a phone,
   // as a playlist opens. About is a sheet from the info button, the pill's own (App, lib/AboutSheet).
+  import { panelBeside } from './lib/glass.svelte';
   import { library } from './lib/albums.svelte';
   import { serverConnection } from './lib/connection.svelte';
   import { switchable } from './lib/deviceMusic.svelte';
@@ -224,7 +225,7 @@
         <h2 id="settings-g{g}">{group.title}</h2>
         <div class="list">
           {#each group.parts as c (c.id)}
-            {@const open = settingsOf(panel.viewed) === c.id}
+            {@const open = panelBeside() && settingsOf(panel.viewed) === c.id}
             {@const f = found(c.id, c.title)}
             {@const l = f?.rows.length ? f.rows.slice(0, 4).join(' · ') : line(c.id)}
             <button class="row" class:open aria-pressed={open} onclick={() => viewPlaylist(SETTINGS + c.id)}>

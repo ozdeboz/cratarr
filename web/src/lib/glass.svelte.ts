@@ -21,6 +21,10 @@ export type GlassParts = {
 
 export const glass = $state<{ one: boolean; panel: GlassParts | null }>({ one: false, panel: null });
 
+/** A panel beside its list (from 1024 px), not over it (a phone): only then does a list mark the item open in it (the
+ *  owner, 2026-10-25: on a phone the mark showed through the panel fading in, frames before it was there). */
+export const panelBeside = () => !glass.one;
+
 /** A panel's glass handed to App while `when()` holds (on a phone, its layer on top); taken back when it does not or the
  *  panel goes. Called in the panel's script. */
 export function handGlass(when: () => boolean, parts: GlassParts) {

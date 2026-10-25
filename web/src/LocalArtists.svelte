@@ -2,6 +2,7 @@
   // Local mode's Artists (decision 0052): the device's own music by its tracks' artists, A to Z, as rows (how many
   // albums and tracks); the page's search filters them. A tap views the artist in the panel (their tracks, album by
   // album).
+  import { panelBeside } from './lib/glass.svelte';
   import { askLibrary, device, DEVICE, deviceArtists } from './lib/deviceMusic.svelte';
   import { plural } from './lib/insights.svelte';
   import PageLoading from './lib/PageLoading.svelte';
@@ -31,7 +32,7 @@
             size="medium"
             title={a.name}
             sub={`${plural(a.albums, 'album')} · ${plural(a.tracks, 'track')}`}
-            active={panel.viewed === artistSubject(DEVICE, a.name)}
+            active={panelBeside() && panel.viewed === artistSubject(DEVICE, a.name)}
             onclick={() => viewPlaylist(artistSubject(DEVICE, a.name))}
           />
         </li>

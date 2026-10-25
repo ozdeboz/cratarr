@@ -4,6 +4,7 @@
   // layouts, rows or the table (the Library's View); in the table their columns as wide as the list allows (decision
   // 0042). The page's search filters them by name. A tap views the artist in the panel, as an album's artist does; a
   // long-press their menu (lib/ArtistRowMenu); Select as the albums' (their tracks to the selection's menu).
+  import { panelBeside } from './glass.svelte';
   import { albumCoverUrl, type ShelfSource } from './api';
   import { fit } from './columns.svelte';
   import Cover from './Cover.svelte';
@@ -130,7 +131,7 @@
             sub={table && cols.length ? undefined : `${plural(a.albums, 'album')} · ${plural(a.tracks, 'track')}`}
             cells={cols.length ? cellsOf(a) : undefined}
             label={selecting ? `${selecting.has(keyOf(a)) ? 'Untick' : 'Tick'} ${a.name}` : `View ${a.name}`}
-            active={panel.viewed === artistSubject(a.source, a.name) || !!selecting?.has(keyOf(a))}
+            active={(panelBeside() && panel.viewed === artistSubject(a.source, a.name)) || !!selecting?.has(keyOf(a))}
             onclick={() => (selecting ? tick(a) : (leaveSearch(false), viewPlaylist(artistSubject(a.source, a.name))))}
             attach={press(a)}
           >

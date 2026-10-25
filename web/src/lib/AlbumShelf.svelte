@@ -6,6 +6,7 @@
   // Playlists): the list header's icon or a long-press ticks albums, a tap then ticks too, and the select bar
   // (lib/SelectBar) plays, puts next, queues, favours or downloads the ticked ones, one album after another, or opens
   // the menu of one (a tile's menu is this way).
+  import { panelBeside } from './glass.svelte';
   import { untrack, type Snippet } from 'svelte';
   import { fromAction } from 'svelte/attachments';
   import { albumCoverUrl, search, setAlbumFavorite, type ListedAlbum, type ShelfSource } from './api';
@@ -507,7 +508,7 @@
       <ul class={prefs.albumLayout} style:--min="{minPx}px">
         {#each block as a (a.id)}
           {@const here = playing?.album_id === a.id}
-          {@const viewed = panel.viewed === albumSubject(s.id, a.id)}
+          {@const viewed = panelBeside() && panel.viewed === albumSubject(s.id, a.id)}
           {@const on = !!selecting && selecting.has(keyOf(s, a))}
           <li class:playing={here} class:ticked={on}>
             {#if prefs.albumLayout === 'grid'}

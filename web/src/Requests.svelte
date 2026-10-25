@@ -3,6 +3,7 @@
   // its lists, each its icon, its name, how many in a line, and ›. A tap opens the list in the panel (lib/RequestsPanel):
   // beside the index on a roomy window, where one is always open (App), its row tinted; over it on a phone. Waiting for
   // an answer only for those who answer requests.
+  import { panelBeside } from './lib/glass.svelte';
   import Icon from './lib/Icon.svelte';
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
@@ -44,7 +45,7 @@
     <section class="group" aria-label="Requests">
       <div class="list">
         {#each lists as l (l.id)}
-          {@const open = requestsOf(panel.viewed) === l.id}
+          {@const open = panelBeside() && requestsOf(panel.viewed) === l.id}
           {@const said = line(l.id)}
           <button class="row" class:open aria-pressed={open} onclick={() => viewPlaylist(REQUESTS + l.id)}>
             <Icon name={l.icon} size={24} />
