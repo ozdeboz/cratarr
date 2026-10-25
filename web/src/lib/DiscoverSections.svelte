@@ -6,7 +6,8 @@
   // plays on Bandcamp comes first everywhere (lib/discoverSections). A tap on a suggestion opens it (`onopen`), a long-press its
   // menu (`onmenu`), as Home's albums; Play hears it on Bandcamp in Cratarr's own player (`onplay`).
   import { untrack } from 'svelte';
-  import { discoverArtistPhotoUrl, getDiscoverArtist, type DiscoverAlbum, type RequestMark } from './api';
+  import { albumCoverUrl, discoverArtistPhotoUrl, getDiscoverArtist, type DiscoverAlbum, type RequestMark } from './api';
+  import { library } from './albums.svelte';
   import Cover from './Cover.svelte';
   import CoverPlay from './CoverPlay.svelte';
   import CoverStatus from './CoverStatus.svelte';
@@ -67,6 +68,11 @@
   // The artist's photo: asked of the artist store first (it reads TheAudioDB where it has none yet), shown once it has.
   let photos = $state<Record<string, boolean>>({});
   const albumsOf = (n: number) => `${n} ${n === 1 ? 'album' : 'albums'} in your library`;
+  /** The seed's own albums in the library, for its card's fan (a few covers, as Artists to explore's). */
+  const ownAlbums = (name: string) => {
+    const n = name.toLowerCase();
+    return (library.view?.sources ?? []).flatMap((s) => s.albums.filter((a) => a.artist?.toLowerCase() === n).map((a) => albumCoverUrl(s.id, a.id))).slice(0, 3);
+  };
   $effect(() => {
     for (const name of sec.around.flatMap((g) => [g.seeds[0], ...(g.partner ? [g.partner] : [])])) {
       if (name in untrack(() => photos)) continue;
@@ -123,10 +129,20 @@
     <div class="arounds">
       {#each sec.around as g (g.seeds.join('|'))}
         {@const grid = g.grid}
+        {@const name = g.seeds[0]}
+        {@const fan = ownAlbums(name)}
+        {@const wash = photos[name] ? discoverArtistPhotoUrl(name) : (fan[0] ?? null)}
         <div class="masonry" style={`--cols: ${grid.cols}; --rows: ${grid.rows};`}>
-          <div class="seeds" class:photo={photos[g.seeds[0]]} style={place(grid.seed)}>
-            {#if photos[g.seeds[0]]}<img src={discoverArtistPhotoUrl(g.seeds[0])} alt="" onerror={() => (photos[g.seeds[0]] = false)} />{/if}
-            <span class="seed-text"><small>Because you play</small><b>{g.seeds[0]}</b>{#if owned(g.seeds[0])}<span class="owned">{albumsOf(owned(g.seeds[0]))}</span>{/if}</span>
+          <!-- The seed's own tile (the owner, 2026-10-25), as an artist to explore's card: glass washed in its photo (else
+               its first album), its round photo at the top of the left half, its words at the foot of it, a fan of its
+               albums in the right half. -->
+          <div class="seeds seed-card" style={place(grid.seed)}>
+            {#if wash}<div class="wash" aria-hidden="true"><img src={wash} alt="" onerror={() => photos[name] && (photos[name] = false)} /></div>{/if}
+            <div class="seed-left">
+              {#if photos[name]}<img class="face" src={discoverArtistPhotoUrl(name)} alt="" />{/if}
+              <span class="seed-text"><small>Because you play</small><b>{name}</b>{#if owned(name)}<span class="owned">{albumsOf(owned(name))}</span>{/if}</span>
+            </div>
+            {#if fan.length}<div class="fan" aria-hidden="true">{#each [...fan].reverse() as src (src)}<img {src} alt="" />{/each}</div>{/if}
           </div>
           {#if grid.partner && g.partner}
             <!-- The library's artist closest to the first, one place (the owner, 2026-10-25). -->
@@ -476,6 +492,110 @@
   .owned {
     color: var(--muted);
     font-size: 11px;
+  }
+
+  /* The seed's card (Artists to explore's look, lib/ArtistsToExplore): glass washed in its photo, a dark veil over
+     it; the left half the round photo over the words, the right half the fanned covers. */
+  .seeds.seed-card {
+    isolation: isolate;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    align-items: stretch;
+    justify-content: stretch;
+    padding: 10px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--surface);
+    color: #fff;
+    box-shadow: inset 0 0 0 1px var(--island-ring, rgb(255 255 255 / 0.08));
+  }
+
+  .seed-card .wash {
+    position: absolute;
+    inset: -30%;
+    z-index: -2;
+    filter: blur(36px) saturate(1.6);
+    opacity: 0.8;
+  }
+
+  .seed-card .wash img {
+    position: static;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .seed-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: linear-gradient(180deg, rgb(10 12 16 / 0.3), rgb(10 12 16 / 0.7));
+  }
+
+  .seed-left {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: flex-start;
+    min-width: 0;
+    gap: 6px;
+  }
+
+  .seed-card .face {
+    position: static;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    object-fit: cover;
+    box-shadow: 0 4px 12px rgb(0 0 0 / 0.45);
+  }
+
+  .seed-card .seed-text {
+    margin-top: auto;
+    text-align: start;
+  }
+
+  .seed-card .seed-text b {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .seed-card small,
+  .seed-card .owned {
+    color: rgb(255 255 255 / 0.8);
+  }
+
+  /* Its albums fanned, as Artists to explore's, sized to the half. */
+  .seed-card .fan {
+    position: relative;
+    min-width: 0;
+  }
+
+  .seed-card .fan img {
+    position: absolute;
+    top: 50%;
+    width: min(64%, 84px);
+    height: auto;
+    aspect-ratio: 1;
+    object-fit: cover;
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgb(0 0 0 / 0.5);
+  }
+
+  .seed-card .fan img:nth-child(1) {
+    left: 6%;
+    transform: translateY(-50%) rotate(-9deg);
+  }
+
+  .seed-card .fan img:nth-child(2) {
+    left: 20%;
+    transform: translateY(-50%) rotate(-3deg);
+  }
+
+  .seed-card .fan img:nth-child(3) {
+    left: 34%;
+    transform: translateY(-50%) rotate(4deg);
   }
 
   .seeds.photo .owned {
