@@ -51,18 +51,54 @@
     const px = ((e.clientX - r.left) / r.width) * (W + LEFT + RIGHT) - LEFT;
     return clampCount(tidy(rankAt(px)));
   }
-  function down(e: PointerEvent) {
-    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+  // As any slider (the owner, 2026-10-25): the handle moves when it is grabbed, or anywhere after a long press; a tap
+  // or a swipe elsewhere leaves it (the page scrolls over it).
+  const GRAB_PX = 24;
+  const HOLD_MS = 400;
+  const STILL_PX = 8;
+  let holdTimer: ReturnType<typeof setTimeout> | undefined;
+  let pressAt: { x: number; y: number } | null = null;
+  /** Whether the pointer is on the handle (within GRAB_PX of it on screen). */
+  function onHandle(e: PointerEvent) {
+    const r = svg!.getBoundingClientRect();
+    const hx = r.left + ((handle.cx + LEFT) / (W + LEFT + RIGHT)) * r.width;
+    const hy = r.top + ((handle.cy + TOP) / (H + TOP + 18)) * r.height;
+    return Math.hypot(e.clientX - hx, e.clientY - hy) <= GRAB_PX;
+  }
+  function grab(e: PointerEvent) {
+    svg?.setPointerCapture(e.pointerId);
     drag = rankOf(e);
     onpreview?.(drag);
   }
+  function down(e: PointerEvent) {
+    if (onHandle(e)) {
+      e.preventDefault();
+      return grab(e);
+    }
+    pressAt = { x: e.clientX, y: e.clientY };
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => {
+      if (!pressAt) return;
+      navigator.vibrate?.(8);
+      grab(e);
+    }, HOLD_MS);
+  }
   function move(e: PointerEvent) {
-    if (drag === null) return;
+    if (drag === null) {
+      if (pressAt && Math.hypot(e.clientX - pressAt.x, e.clientY - pressAt.y) > STILL_PX) cancelHold();
+      return;
+    }
     const n = rankOf(e);
     if (n !== drag) onpreview?.(n);
     drag = n;
   }
+  function cancelHold() {
+    clearTimeout(holdTimer);
+    pressAt = null;
+  }
+  $effect(() => () => clearTimeout(holdTimer));
   function up() {
+    cancelHold();
     if (drag === null) return;
     const n = drag;
     drag = null;
@@ -115,8 +151,8 @@
     display: block;
     width: 100%;
     overflow: visible;
-    touch-action: none;
-    cursor: ew-resize;
+    /* Swiped over, the page scrolls; a grabbed handle (or a long press) drags. */
+    touch-action: pan-y;
     /* A drag selects no text. */
     user-select: none;
   }
@@ -153,6 +189,7 @@
   }
 
   .knob {
+    cursor: ew-resize;
     fill: var(--text);
     stroke: rgb(0 0 0 / 0.35);
   }
