@@ -38,6 +38,11 @@ What others do, read for this:
 
 **One contract for every search**, so the global one only puts the others together.
 
+**Deep search** (the owner, 2026-10-25): the words looked for *within* a set, among its members (an album by one of its
+tracks, a playlist or a crate by the tracks in it), where an ordinary search matches the set's own attributes (its
+title, its artist, its name). A set found deep says why (the member that matched, how many), and opened from the
+search it shows itself narrowed to the words: its members that match.
+
 1. **The query, read one way** on the server and in the browser (server `search::words`, web `lib/search.ts`, tested
    against the same examples): Unicode NFKD, combining marks dropped (as `remove_diacritics 2`), case folded,
    punctuation to spaces, split on spaces. Every word must match (AND), as a word's start (`word*`). A whole-word or
