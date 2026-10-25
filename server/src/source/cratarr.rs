@@ -254,15 +254,21 @@ impl Source for CratarrSource {
             let Some(here) = queue.get(at) else { return Ok(None) };
             let s = server()?;
             let ids: Vec<(String, String)> = queue[at..].iter().take(21).map(|t| (t.source.clone(), t.id.clone())).collect();
-            let ours = blocking(move || Ok(ids.iter().map(|(src, id)| own_id(&s, src, id)).collect::<Vec<_>>())).await?;
-            let track_of = |t: &crate::app::QueueTrack, id: &Option<String>| Track {
-                id: id.clone().unwrap_or_else(|| t.id.clone()),
-                title: t.name.clone(),
-                artist: t.artist.clone(),
-                album: t.album.clone(),
-                album_id: None,
-                path: None,
-                library_id: None,
+            // Described by Cratarr (0.9.6, decision 0033 amended): what the track is, its album, its file and the
+            // account's favourite, whatever the player reported.
+            let account = owner(&s).ok();
+            let ours = blocking(move || crate::app::describe::ours(&s, &ids, account.as_deref())).await?;
+            let track_of = |t: &crate::app::QueueTrack, d: &Option<crate::app::describe::Described>| match d {
+                Some(d) => Track {
+                    id: d.own.clone().unwrap_or_else(|| t.id.clone()),
+                    title: d.name.clone(),
+                    artist: d.artist.clone(),
+                    album: d.album.clone(),
+                    album_id: d.album_id.clone(),
+                    path: d.path.clone(),
+                    library_id: None,
+                },
+                None => Track { id: t.id.clone(), title: t.name.clone(), artist: t.artist.clone(), album: t.album.clone(), album_id: t.album_id.clone(), path: None, library_id: None },
             };
             Ok(Some(super::Playing {
                 track: track_of(here, &ours[0]),
@@ -274,11 +280,11 @@ impl Source for CratarrSource {
                 }),
                 player: Some(p.name.clone()),
                 started_at: None,
-                favorite: None,
+                favorite: ours[0].as_ref().and_then(|d| d.favorite),
                 upcoming: queue[at + 1..]
                     .iter()
                     .zip(ours.iter().skip(1))
-                    .map(|(t, id)| super::Upcoming { track: track_of(t, id), duration_secs: None })
+                    .map(|(t, d)| super::Upcoming { track: track_of(t, d), duration_secs: d.as_ref().and_then(|d| d.duration_secs).or(t.duration_secs) })
                     .collect(),
             }))
         })

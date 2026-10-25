@@ -317,3 +317,19 @@ whether that is how it should be: "Duh."
   and takes the next free one ("ThinkBook 2") for itself only (the tab's session storage), numbered after the
   browser's name, never after its own. Before, it saved the new name for the whole browser, so the first tab then
   moved too, and each round added a number: 41 players, "Edge on Windows 3 2 2 2 …".
+
+## Amendment (2026-10-25): the queue holds identities; Cratarr describes them (0.9.6)
+
+The owner, after "Go to album" went missing on the full-screen player: the tablet's queue reached the server with
+`album_id: null` and no favourite, because a queued track carried a copy of its details, written by whichever list
+started play, and the server passed that copy on.
+
+- A queued track is its identity: `source`, `id`, and the queue's own `entry`, `lane` and `n`. Players may send only
+  these. The details old apps still send are accepted and ignored for Cratarr's own tracks.
+- Cratarr describes every track it shows, from its catalogue and the account's own data: name, artist, album,
+  `album_id`, length, favourite, and whether it can be added to a playlist. This covers `/api/state`'s now playing and
+  upcoming, and the Play On player views with their queues. A Bandcamp preview is described from its album's page.
+  Another server's track that is not a file of Cratarr's stays as reported.
+- `POST /api/tracks/describe` `{tracks: [{source, id}]}` (at most 500) answers `{tracks: [{source, id, name, artist,
+  album, album_id, duration_secs, addable, favorite, found}]}` in the order asked. The browser's own player and the
+  app's notification and lock screen use it, since they need titles before or without the server's state.

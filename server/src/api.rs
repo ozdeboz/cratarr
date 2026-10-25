@@ -162,6 +162,7 @@ pub fn router(app: Arc<App>) -> Router {
         // only). Last.fm's way back carries its sign-in's code and needs no sign-in (`serve::access::public`).
         .route("/api/tasks", get(own_tasks))
         .route("/api/tasks/{id}", delete(stop_task))
+        .route("/api/tracks/describe", post(describe_tracks))
         .route("/api/scrobble", get(scrobble_targets))
         .route("/api/scrobble/listenbrainz", post(scrobble_listenbrainz))
         .route("/api/scrobble/lastfm", post(scrobble_lastfm))
@@ -3013,6 +3014,22 @@ async fn stop_task(Path(id): Path<u64>) -> Result<StatusCode, ApiError> {
     let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: tasks are an account's own.".into()))?;
     if crate::app::tasks::tasks().stop(&account, id) { Ok(StatusCode::NO_CONTENT) } else { Err(ToggleError::Refused("That task is not running.".into()).into()) }
+}
+
+#[derive(Deserialize)]
+struct DescribeBody {
+    tracks: Vec<crate::app::describe::Asked>,
+}
+
+/// What these tracks are (0.9.6, decision 0033 amended: a queue holds identities, Cratarr describes them), in the order
+/// asked, with the signed-in account's favourites; for the browser's player and the app's notification.
+async fn describe_tracks(Json(b): Json<DescribeBody>) -> Result<Json<serde_json::Value>, ApiError> {
+    if b.tracks.len() > crate::app::describe::MOST {
+        return Err(ToggleError::Refused(format!("At most {} tracks at once.", crate::app::describe::MOST)).into());
+    }
+    let account = crate::serve::instance().and_then(|s| s.current_user());
+    let tracks = crate::app::describe::describe(b.tracks, account).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "tracks": tracks })))
 }
 
 /// Long work begun as a task: 202 with the task, which the page follows (`app::tasks`).
