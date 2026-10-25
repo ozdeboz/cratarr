@@ -187,6 +187,18 @@ impl Bandcamp {
         Ok(album)
     }
 
+    /// An album's cover address at 700 px (`_16`), for the covers Cratarr keeps (app::cover_cache): its page read in
+    /// turn, not its tracks' pages, and not kept with the albums being played.
+    pub async fn cover(&self, url: &str) -> Result<Option<String>> {
+        let url = album_page(url).context("Not an album's page on Bandcamp")?;
+        let known = self.kept.lock().unwrap_or_else(|p| p.into_inner()).get(&url).map(|(_, a)| a.cover.clone());
+        let cover = match known {
+            Some(c) => c,
+            None => parse_album(&self.text(&url).await?, &url)?.cover,
+        };
+        Ok(cover.map(|c| sized(&c, 16)))
+    }
+
     /// A track's stream, asked for as it is played: the response, its status and headers as Bandcamp sends them
     /// (`range` passed on, so a player can seek).
     pub async fn stream(&self, url: &str, n: u32, range: Option<&str>) -> Result<reqwest::Response> {
@@ -395,8 +407,13 @@ fn iso_date(s: &str) -> Option<String> {
 
 /// A cover's address at Bandcamp's large size (`_10`, 1200 px), from any size's.
 fn large(cover: &str) -> String {
+    sized(cover, 10)
+}
+
+/// A cover's address at one of Bandcamp's sizes (`_10` 1200 px, `_16` 700 px), from any size's.
+fn sized(cover: &str, n: u32) -> String {
     match cover.strip_suffix(".jpg").and_then(|c| c.rsplit_once('_')) {
-        Some((base, size)) if !size.is_empty() && size.chars().all(|c| c.is_ascii_digit()) => format!("{base}_10.jpg"),
+        Some((base, size)) if !size.is_empty() && size.chars().all(|c| c.is_ascii_digit()) => format!("{base}_{n}.jpg"),
         _ => cover.to_string(),
     }
 }

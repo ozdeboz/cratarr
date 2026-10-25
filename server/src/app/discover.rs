@@ -1129,6 +1129,16 @@ pub async fn look(
     progress: &Progress,
 ) -> Result<Found> {
     let dir = serve.data_dir.clone().context("Discover needs Cratarr's data folder")?;
+    // Its play history off (0.9.5, the owner): what Discover can find without its listening, nothing personalised: no
+    // ListenBrainz or Last.fm picks from the account's listening (the server's Last.fm key still asks for nothing).
+    let (ud, a) = (serve.userdata.clone(), account.to_string());
+    let general;
+    let who = if tokio::task::spawn_blocking(move || ud.tracking(&a)).await? {
+        who
+    } else {
+        general = Who { listenbrainz: None, lastfm: None, server_lastfm: who.server_lastfm.clone() };
+        &general
+    };
     progress("Reading your library", 0, None);
     let (lib, d, ud, a) = (serve.library.clone(), dir.clone(), serve.userdata.clone(), account.to_string());
     let (have, artists) = tokio::task::spawn_blocking(move || -> Result<(Have, Vec<OwnArtist>)> {
@@ -1312,6 +1322,8 @@ pub async fn look(
     }
     let found = Found { at, albums, notes };
     keep_found(serve, account, &found).await?;
+    // Its covers fetched ahead and kept (0.9.5), so the page shows them at once.
+    super::cover_cache::warm(found.albums.iter().filter_map(|s| s.cover.clone()).collect());
     Ok(found)
 }
 

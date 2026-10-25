@@ -2456,8 +2456,8 @@ async fn replace_preview(
     Ok(Json(app.incoming.replace_preview(&source, &album, q.year.as_deref()).await?))
 }
 
-/// Replace's ask (0.9.5): the year where the tags lack it, and the cover: `keep` the one in Music, or the `new` copy's
-/// (the default, as before).
+/// Replace's ask (0.9.5): the year where the tags lack it, and the cover: `keep` the one in Music (the default, the
+/// owner's choice), or the `new` copy's.
 #[derive(Deserialize, Default)]
 struct ReplaceBody {
     #[serde(default)]
@@ -2473,8 +2473,8 @@ async fn replace_incoming(
 ) -> Result<Json<crate::app::KeepResult>, ApiError> {
     let b = body.map(|Json(b)| b).unwrap_or_default();
     let keep = match b.cover.as_deref() {
-        None | Some("new") => false,
-        Some("keep") => true,
+        None | Some("keep") => true,
+        Some("new") => false,
         Some(_) => return Err(ToggleError::Refused("cover is keep or new".into()).into()),
     };
     Ok(Json(app.incoming.replace(&source, &album, b.year.as_deref(), keep).await?))
@@ -3332,22 +3332,24 @@ async fn bandcamp_relay(id: &str, range: Option<&str>) -> Response {
     (status, headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response()
 }
 
-/// A preview's cover: its album page's picture, relayed.
+/// A preview's cover: its album page's picture, kept by Cratarr (app::cover_cache).
 async fn bandcamp_cover(id: &str) -> Response {
-    let not_found = || (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response();
-    let Some((url, _)) = crate::bandcamp::read_id(id) else { return not_found() };
-    let Ok(a) = crate::bandcamp::Bandcamp::get().album(&url).await else { return not_found() };
-    // Bandcamp's own pictures only (its image servers).
-    let Some(src) = a.cover.filter(|c| reqwest::Url::parse(c).ok().and_then(|u| u.host_str().map(|h| h.ends_with(".bcbits.com"))).unwrap_or(false)) else {
-        return not_found();
-    };
-    let Ok(resp) = reqwest::get(&src).await else { return not_found() };
-    if !resp.status().is_success() {
-        return not_found();
+    let Some((page, _)) = crate::bandcamp::read_id(id) else { return (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response() };
+    kept_cover(crate::app::cover_cache::Of::Bandcamp(page)).await
+}
+
+/// A cover Cratarr keeps for an album not in the library (0.9.5), as an image; 404 where it has none.
+async fn kept_cover(of: crate::app::cover_cache::Of) -> Response {
+    match crate::app::cover_cache::cover(&of).await {
+        Ok(Some((bytes, mime))) => {
+            ([(header::CONTENT_TYPE, HeaderValue::from_static(mime)), (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=604800"))], bytes).into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
+        Err(e) => {
+            tracing::debug!("cover of {of:?}: {e:#}");
+            (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response()
+        }
     }
-    let kind = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap_or(HeaderValue::from_static("image/jpeg"));
-    let Ok(bytes) = resp.bytes().await else { return not_found() };
-    ([(header::CONTENT_TYPE, kind), (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=86400"))], bytes).into_response()
 }
 
 /// The Requests page (decision 0070): the account's requests, everyone's waiting ones for those who answer them.
@@ -4322,17 +4324,10 @@ async fn set_album_cover(Path((source, album)): Path<(String, String)>, Json(b):
 /// A release group's cover for albums not in the library (0.9.5): to the Cover Art Archive's, else Discogs' master's;
 /// 404 where neither has one.
 async fn release_group_cover(Path(rg): Path<String>) -> Response {
-    match crate::app::discogs::release_group_cover(&rg).await {
-        Ok(Some(url)) => match HeaderValue::from_str(&url) {
-            Ok(to) => (StatusCode::FOUND, [(header::LOCATION, to), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=86400"))]).into_response(),
-            Err(_) => StatusCode::NOT_FOUND.into_response(),
-        },
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
-            tracing::debug!("cover of release group {rg}: {e:#}");
-            StatusCode::NOT_FOUND.into_response()
-        }
+    if !crate::app::discogs::is_mbid(&rg) {
+        return StatusCode::NOT_FOUND.into_response();
     }
+    kept_cover(crate::app::cover_cache::Of::ReleaseGroup(rg)).await
 }
 
 /// Lidarr's quality and metadata profiles and root folders (its page's choices for Want), of the saved Lidarr.
