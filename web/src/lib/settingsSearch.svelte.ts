@@ -1,8 +1,19 @@
 // Settings' search (the owner, 2026-10-24: in the top right, left of the info button): which parts hold a row, a group
 // or a choice by the words searched. The words are read from the parts themselves (their rows' names, their groups'
 // titles, their choices' labels), so the search never falls behind them; loaded the first time something is searched.
+import { FACTS } from './facts';
+import { HOME_PARTS, PROFILE_ROWS } from './prefs.svelte';
 import { matches } from './search';
+import { IMPORT_WHAT } from './settings/editor.svelte';
 import type { SettingsSection } from './settingsSections.svelte';
+
+/** The lists a part shows that are kept in another file (the owner, 2026-10-25: Home's sections, the profile's rows…
+ *  found by their labels as every other row is). */
+const SHOWN: Partial<Record<SettingsSection, readonly { label: string }[]>> = {
+  home: HOME_PARTS,
+  display: [...PROFILE_ROWS, ...FACTS],
+  import: IMPORT_WHAT,
+};
 
 /** Each file's part: a part's own file, and those a part shows (its groups of their own). */
 const PARTS: Record<string, SettingsSection> = {
@@ -44,10 +55,15 @@ export function loadSettingsWords(): Promise<void> {
         const part = PARTS[path.split('/').pop()!.replace('.svelte', '')];
         if (!part) return;
         const text = await load();
-        const found = [...text.matchAll(/\b(?:name|title|label)="([^"{}]{2,60})"/g)].map((m) => m[1].trim());
+        // A row's, a group's or a choice's text, written in the markup (`label="Dark"`) or in the code (`label: 'Dark'`,
+        // a choice's; the owner, 2026-10-25: "dark and light should be labels, no?").
+        const found = [...text.matchAll(/\b(?:name|title|label)\s*(?:=|:)\s*(?:"([^"{}]{2,60})"|'([^'{}]{2,60})')/g)].map((m) => (m[1] ?? m[2]).trim());
         by[part] = [...new Set([...(by[part] ?? []), ...found])];
       }),
     );
+    for (const [part, list] of Object.entries(SHOWN) as [SettingsSection, readonly { label: string }[]][]) {
+      by[part] = [...new Set([...(by[part] ?? []), ...list.map((x) => x.label)])];
+    }
     settingsWords.by = by;
   })();
   return loading;
