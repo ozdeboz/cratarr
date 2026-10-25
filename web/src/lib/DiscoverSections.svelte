@@ -1,7 +1,7 @@
 <script lang="ts">
   // Discover's sections (decision 0069, amended 2026-10-25: "a more dynamic page", each section the form its content
-  // suits, inspired by Home's variety, not a copy of it): the pick of the day as a spread; the gaps in the artists the
-  // library has, each artist's albums in time, the missing ones lit; the masonry around the artists played; one new artist
+  // suits, inspired by Home's variety, not a copy of it): the pick of the day as a spread; the discography gaps of the
+  // artists most played, as a shelf; the masonry around the artists played; one new artist
   // in the light, the others as chips; the fresh releases as a row; the Weekly Exploration as the list it is. What
   // plays on Bandcamp comes first everywhere (lib/discoverSections). A tap on a suggestion opens it (`onopen`), a long-press its
   // menu (`onmenu`), as Home's albums; Play hears it on Bandcamp in Cratarr's own player (`onplay`).
@@ -50,6 +50,10 @@
     return s.length > 420 ? `${s.slice(0, 417)}…` : s;
   };
 
+  // The gaps whose covers came (Cover's onfail: none to show, so not shown).
+  let coverless = $state<string[]>([]);
+  const gaps = $derived(sec.gaps.filter((a) => a.cover && !coverless.includes(a.key)));
+
   // The masonry (the owner, 2026-10-25: "because you listen to this, and then 8 tiles around that, or fewer"): a grid
   // of three by three, the seeds in the middle, the suggestions in the eight places around them, always all filled, in
   // turn from the top left; what plays on Bandcamp a tile of one by two, the rest one by one (the owner, 2026-10-25). Places numbered 1
@@ -87,26 +91,18 @@
   </section>
 {/if}
 
-<!-- The gaps in your artists: each artist's albums in time, those the library has faded, the missing ones lit. -->
-{#if sec.gaps.length}
-  <section aria-label="The gaps in your artists">
-    <SectionHead title="The gaps in your artists" />
-    <div class="gaps">
-      {#each sec.gaps as g (g.artist)}
-        <div class="gap-line">
-          <span class="gap-artist">{g.artist}</span>
-          <div class="gap-points">
-            {#each g.points as p, i (i)}
-              {#if p.kind === 'have'}
-                <span class="point have" title={`${p.title} (in your library)`}><span class="art small"><Cover src={p.cover} /></span><small>{p.year ?? ''}</small></span>
-              {:else}
-                <button class="point gap" aria-label={`${p.s.album}`} title={p.s.album} onclick={() => onopen(p.s)} use:longpress={() => onmenu(p.s)}
-                  ><span class="art"><Cover src={p.s.cover} /></span><small>{p.s.year ?? ''}</small></button
-                >
-              {/if}
-            {/each}
-          </div>
-        </div>
+<!-- Discography gaps (the owner, 2026-10-25): one shelf, as Home's New for you, of the albums missing from the artists
+     most played; a card whose cover does not come leaves (no coverless albums, as on Home). -->
+{#if gaps.length}
+  <section aria-label="Discography gaps">
+    <SectionHead title="Discography gaps" />
+    <div class="row">
+      {#each gaps as a (a.key)}
+        <button class="album" onclick={() => onopen(a)} use:longpress={() => onmenu(a)}>
+          <span class="art big"><Cover src={a.cover} onfail={() => (coverless = [...coverless, a.key])} /></span>
+          <b>{a.album}</b>
+          <small>{a.artist}{a.year ? ` · ${a.year}` : ''}</small>
+        </button>
       {/each}
     </div>
   </section>
@@ -367,61 +363,6 @@
   button:disabled {
     opacity: 0.6;
     cursor: default;
-  }
-
-  /* The gaps: each artist's line in time. */
-  .gaps {
-    display: grid;
-    gap: 18px;
-  }
-
-  .gap-line {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px 16px;
-    align-items: center;
-  }
-
-  .gap-artist {
-    flex: 0 0 170px;
-    font-size: 16px;
-    font-weight: 600;
-  }
-
-  .gap-points {
-    display: flex;
-    flex: 1 1 320px;
-    gap: 8px;
-    align-items: flex-end;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .point {
-    display: flex;
-    flex: none;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 0;
-    border: 0;
-    background: none;
-  }
-
-  .point.have {
-    opacity: 0.32;
-  }
-
-  button.point {
-    cursor: pointer;
-  }
-
-  .point.gap .art {
-    box-shadow: 0 0 0 2px var(--accent);
-  }
-
-  .point.gap small {
-    color: var(--accent-ink);
   }
 
   /* The masonry: the seeds in the middle, the suggestions around. */

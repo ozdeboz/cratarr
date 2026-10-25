@@ -118,7 +118,7 @@ are. The cards are fucking fine. What I need is a more dynamic page"; inspired b
 ("Yes, I like the gaps, I like the masonry", artifact EfDukRyZTPCM9pyh5iNbSv); the genre cloud declined.
 
 - **Pick of the day:** one suggestion large (cover, facts, why it is here as a quote), Play on Bandcamp and its menu.
-- **The gaps in your artists:** per artist the library has, its albums in time order: those in the library faded,
+- **Discography gaps** (the owner's title; the artists most played first, as the server ranks them): per artist the library has, its albums in time order: those in the library faded,
   the missing ones larger and lit (the discography source).
 - **Around the artists you play:** per group of seed artists ("Like A and B"), the seeds in the middle and their
   suggestions in a masonry around them.
