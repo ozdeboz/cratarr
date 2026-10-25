@@ -482,6 +482,8 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   name or by its tracks, a problem by its items); the item opened in the panel shows what of it matches the same words
   (a playlist's or an album's tracks, a list's rows). Side by side the search field is the page's alone; where the
   panel covers its page (a phone), the panel's pill carries it. Never two search fields for one query.
+  Every search reads the words one way and answers in one shape, deep from the server by kind (decision 0072): the
+  global search puts the pages' together.
 - **A page's work in its pill** (the owner, 2026-10-24: as the search). The page's own button (Look again, Sync now)
   has a ring of the work's progress while it runs. A tap on it unfolds the pill leftwards into the one line and bar
   (above), for four seconds, and folds it again (at once when the work ends); a tap while it shows folds it, and a tap
