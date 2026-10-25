@@ -374,14 +374,16 @@
     cursor: pointer;
   }
 
-  /* What the card says lets a tap through to the button under it; its links take their own. */
+  /* What the card says lets a tap through to the button under it; its links and the cover's play button take their
+     own (the owner, 2026-10-26: Play opened the album instead). */
   .cover,
   .text {
     position: relative;
     pointer-events: none;
   }
 
-  .text a {
+  .text a,
+  .cover :global(.cover-play) {
     pointer-events: auto;
   }
 
