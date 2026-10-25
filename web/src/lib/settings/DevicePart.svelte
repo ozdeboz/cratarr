@@ -13,6 +13,7 @@
   import { outputName } from '../playOn.svelte';
   import { allowDeviceMusic, askFolders, device, deviceMusicSettings, setFolder } from '../deviceMusic.svelte';
   import { plural } from '../insights.svelte';
+  import { switchable } from '../deviceMusic.svelte';
   import { prefs } from '../prefs.svelte';
   import { defaultBrowserName } from '../playOnTarget.svelte';
   import Group from './Group.svelte';
@@ -94,6 +95,13 @@
       {/each}
     {:else if device.folders}
       <Item name="No music found on this device" />
+    {/if}
+    {#if switchable()}
+      <Item
+        name="Mode switch in the bar"
+        more="Cratarr or Local, over the bar's pages. Off, it is at the top of Settings."
+        toggle={{ checked: prefs.modeSwitchInBar, onchange: (on) => (prefs.modeSwitchInBar = on) }}
+      />
     {/if}
   </Group>
 {/if}

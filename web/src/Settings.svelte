@@ -5,6 +5,9 @@
   // on a roomy window, where a part is always open (App: the one last open), its row tinted; over the list on a phone,
   // as a playlist opens. About is a sheet from the info button, the pill's own (App, lib/AboutSheet).
   import { library } from './lib/albums.svelte';
+  import { serverConnection } from './lib/connection.svelte';
+  import { switchable } from './lib/deviceMusic.svelte';
+  import ModeSwitcher from './lib/ModeSwitcher.svelte';
   import { AUTOPLAY_NAMES, RADIO_NAMES } from './lib/MoreMusicSheet.svelte';
   import { defaults, mine } from './lib/mySettings.svelte';
   import { OWN } from './lib/sources.svelte';
@@ -211,6 +214,9 @@
 </script>
 
 <main>
+  <!-- The mode switch where the bar does not have it (This device › Mode switch in the bar, off by default; the owner,
+       2026-10-25): the very top of Settings. -->
+  {#if switchable() && !prefs.modeSwitchInBar && !words.length}<div class="mode"><ModeSwitcher connection={serverConnection.value} /></div>{/if}
   {#if words.length && !shown.length}<p class="none">No settings match.</p>{/if}
   {#each groups as group, g (g)}
     {#if group.parts.length}
@@ -328,5 +334,10 @@
     display: grid;
     flex: none;
     color: var(--muted);
+  }
+
+  /* The mode switch at the top, as the groups' width. */
+  .mode {
+    margin-bottom: 4px;
   }
 </style>

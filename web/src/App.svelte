@@ -12,6 +12,7 @@
   import LocalTracks from './LocalTracks.svelte';
   import ModeSwitcher from './lib/ModeSwitcher.svelte';
   import { localMode, switchable } from './lib/deviceMusic.svelte';
+  import { serverConnection } from './lib/connection.svelte';
   import Insights from './Insights.svelte';
   import Downloads from './Downloads.svelte';
   import Requests from './Requests.svelte';
@@ -270,7 +271,10 @@
   /** The phone's slim row of the mode switcher over the tabs (decision 0052, mock C), while it shows: its 34 px and the
    *  4 px under it (.bar .slim). Counted as 34, the glass under the bar sat 4 px into its gap (the owner, 2026-10-25). */
   const SLIM = 38;
-  const topBar = $derived(TOP_BAR + (switchable() ? SLIM : 0));
+  /** The mode switch in the bar or the sidebar (Settings' This device › Mode switch in the bar); else at the top of
+   *  Settings. */
+  const switchInBar = $derived(switchable() && prefs.modeSwitchInBar);
+  const topBar = $derived(TOP_BAR + (switchInBar ? SLIM : 0));
   /** The mini-player's height with its margin (64 px and app.css's --gutter-x either side), kept free under the page
    *  and the toasts. */
   const MINI_SPACE = 80;
@@ -652,6 +656,9 @@
             : { ok: true, text: `Connected to ${status.server_name ?? 'Jellyfin'}` }
           : { ok: false, text: 'Jellyfin unreachable' },
   );
+  $effect(() => {
+    serverConnection.value = connection;
+  });
   const MAIN: Page[] = $derived(localMode() ? LOCAL : [HOME, LIBRARY, CRATES, PLAYLISTS, DISCOVER]);
   // Apart, at the bottom of the sidebar: Insights beside Health, then Settings.
   // Health is the library's, so its administrators' (decision 0051). In Local mode, Settings only.
@@ -709,7 +716,7 @@
   >
     <aside class="sidebar" class:peek>
       <!-- The mode switcher with a local folder on (decision 0052, mock B); otherwise the mark and the connection line. -->
-      {#if switchable()}
+      {#if switchInBar}
         <ModeSwitcher {connection} />
       {:else}
         <div class="brand">
@@ -915,7 +922,7 @@
   <nav class="bar" class:bottom={navBottom} class:away={navHidden} aria-label="Pages" onclickcapture={collapse}>
     <!-- The mode switcher's slim row over the tabs (decision 0052, mock C), with a local folder on; under them when the bar
          is along the bottom (the owner, 2026-10-25), the tabs nearest the page either way. -->
-    {#if switchable() && !navBottom}<div class="slim"><ModeSwitcher slim {connection} /></div>{/if}
+    {#if switchInBar && !navBottom}<div class="slim"><ModeSwitcher slim {connection} /></div>{/if}
     <div class="tabs">
     {#each bar as p (p.id)}
       <a href={p.href} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => barTap(e, p.id)}
@@ -931,7 +938,7 @@
       >
     {/if}
     </div>
-    {#if switchable() && navBottom}<div class="slim"><ModeSwitcher slim up {connection} /></div>{/if}
+    {#if switchInBar && navBottom}<div class="slim"><ModeSwitcher slim up {connection} /></div>{/if}
   </nav>
 </div>
 

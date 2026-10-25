@@ -107,6 +107,9 @@ export type Prefs = {
   /** Panels' breadcrumbs whole, scrolled to where one is, rather than cut short (lib/Crumbs; a tap on a cut title, the
    *  owner 2026-10-25: "global on the device"); whole by default (the owner, the same day). */
   crumbsWhole: boolean;
+  /** The mode switch (Cratarr | Local, decision 0052) in the bar (the phone's) or the sidebar; off, at the top of
+   *  Settings (the owner, 2026-10-25: off by default). */
+  modeSwitchInBar: boolean;
   /** Where the bar of pages runs below 1024 px (Display, the owner 2026-10-25): along the top or the bottom. */
   navAt: 'top' | 'bottom';
   /** The bar of pages slides away while scrolling down (and back up); off, it always shows. */
@@ -295,6 +298,7 @@ export const DEFAULTS: Prefs = {
   theme: 'auto',
   animations: true,
   crumbsWhole: true,
+  modeSwitchInBar: false,
   libraryView: 'albums',
   libraryArtistOrder: 'name',
   libraryArtistDown: false,
@@ -375,6 +379,7 @@ function read(): Prefs {
       if (['auto', 'light', 'dark'].includes(saved.theme)) p.theme = saved.theme;
       if (typeof saved.animations === 'boolean') p.animations = saved.animations;
       if (typeof saved.crumbsWhole === 'boolean') p.crumbsWhole = saved.crumbsWhole;
+      if (typeof saved.modeSwitchInBar === 'boolean') p.modeSwitchInBar = saved.modeSwitchInBar;
       if (['albums', 'artists', 'tracks'].includes(saved.libraryView)) p.libraryView = saved.libraryView;
       if (['name', 'albums', 'tracks'].includes(saved.libraryArtistOrder)) p.libraryArtistOrder = saved.libraryArtistOrder;
       if (typeof saved.libraryArtistDown === 'boolean') p.libraryArtistDown = saved.libraryArtistDown;
