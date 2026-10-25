@@ -9,6 +9,7 @@
   // than changed (nor repaired); Sync… is the administrators'.
   // Success shows where it happens (the header, the list); what can be undone says so in a toast, to offer Undo
   // (decision 0026).
+  import { batchDelete, missingCall } from './api';
   import { trackSteps } from './progress.svelte';
   import { linkTo, share } from './share';
   import { untrack } from 'svelte';
@@ -210,7 +211,22 @@
     const gone: string[] = [];
     const tokens: (string | null)[] = [];
     try {
-      await trackSteps(list.length, async (done) => {
+      // One call where the server has it (a5, 0.9.4): one Undo for them all; else one by one.
+      let batched = false;
+      try {
+        const r = await batchDelete(list.map((x) => x.id));
+        tokens.push(...r.undo);
+        for (const id of r.deleted) {
+          gone.push(id);
+          followDelete(id);
+          ondeleted?.(id);
+        }
+        batched = true;
+        if (r.failed.length) throw new Error(r.failed[0].error);
+      } catch (e) {
+        if (batched || !missingCall(e)) throw e;
+      }
+      if (!batched) await trackSteps(list.length, async (done) => {
         for (const { id } of list) {
           tokens.push((await deletePlaylist(id)).undo);
           gone.push(id);

@@ -2058,3 +2058,24 @@ export const albumsTracks = (albums: { source: string; id: string }[]) =>
     '/api/albums/tracks',
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ albums }) },
   );
+
+/** Whether the server has 0.9.4's calls for many at once (a5: its library tracks list answers), asked once: a call it
+ *  already had with a new meaning (append's only_new) is used only then. */
+let newer: Promise<boolean> | null = null;
+export const hasBatches = () =>
+  (newer ??= quietly(`/api/library/tracks?${new URLSearchParams({ offset: '0', limit: '1' })}`).then(
+    () => true,
+    (e) => !(e instanceof ApiError && (e.status === 404 || e.status === 405)),
+  ));
+/** Those of `ids` a playlist does not hold yet, added in one call (a5, 0.9.4). */
+export const appendNew = (id: string, source: string, ids: string[]) =>
+  post<{ playlist: string; added: number } & Undo>(`/api/playlists/${encodeURIComponent(id)}/append`, { source, ids, only_new: true });
+type Batch = { failed: { id: string; error: string }[] };
+/** Several playlists at once (a5, 0.9.4): favourites, deleted (their undo tokens), shared or not, their rows. */
+export const batchFavorite = (ids: string[], on: boolean, source?: string) => post<Batch & { done: string[] }>('/api/batch/playlists/favorite', { ids, on, source });
+export const batchDelete = (ids: string[]) => post<Batch & { deleted: string[]; undo: string[] }>('/api/batch/playlists/delete', { ids });
+export const batchLink = (ids: string[], on: boolean, target?: string) => post<Batch & { done: string[] }>('/api/batch/playlists/link', { ids, on, target });
+export const batchRows = (ids: string[], source?: string) =>
+  post<{ playlists: ({ id: string; source: string; rows: PlaylistRow[] } | { id: string; error: string })[] }>('/api/batch/playlists/rows', { ids, source });
+/** A call the server does not have (one before 0.9.4): the caller goes one by one instead. */
+export const missingCall = (e: unknown) => e instanceof ApiError && (e.status === 404 || e.status === 405);

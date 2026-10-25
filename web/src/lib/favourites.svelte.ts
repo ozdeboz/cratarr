@@ -1,5 +1,6 @@
 // The hearts on lists' rows (Finamp's, decision 0023): which tracks are favourites, as last asked in one request per
 // list, and the long-press that flips one. Shared by the queue sheet and the playlist view.
+import { batchFavorite, missingCall } from './api';
 import { trackSteps } from './progress.svelte';
 import { getFavoriteAlbums, getFavorites, getPlaylistFavorites, setPlaylistFavorite, setTrackFavorite } from './api';
 import { on } from './events.svelte';
@@ -99,6 +100,14 @@ export async function setPlaylistFavorites(names: string[], on: boolean) {
   navigator.vibrate?.(8);
   try {
     const changing = was.filter(([, before]) => before !== on);
+    // One call where the server has it (a5, 0.9.4); else one by one.
+    try {
+      const r = await batchFavorite(changing.map(([n]) => n), on, prefs.source || undefined);
+      if (r.failed.length) throw new Error(r.failed[0].error);
+      return;
+    } catch (e) {
+      if (!missingCall(e)) throw e;
+    }
     await trackSteps(changing.length, async (done) => {
       for (const [n] of changing) {
         await setPlaylistFavorite(n, on, prefs.source || undefined);

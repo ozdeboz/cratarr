@@ -2,6 +2,7 @@
   // The panel's Sync tab (decisions 0014, 0025): whether the selected playlists are shared with everyone, and their
   // copy in each account, with any problem it has. Your account has every playlist and follows by itself; sharing puts
   // a playlist in every account. With several playlists: "3 of 5" where only some are; ticking shares all of them.
+  import { batchLink, missingCall } from './api';
   import { trackSteps } from './progress.svelte';
   import { linkPlaylist, unlinkPlaylist, type Link } from './api';
   import { refresh } from './live.svelte';
@@ -26,6 +27,16 @@
     const touched: string[] = [];
     try {
       const changing = ids.filter((id) => isShared(id) !== on);
+      // One call where the server has it (a5, 0.9.4); else one by one.
+      try {
+        for (const id of changing) ((changed[id] = on), touched.push(id));
+        const r = await batchLink(changing, on, SHARED);
+        if (r.failed.length) throw new Error(r.failed[0].error);
+        return;
+      } catch (e) {
+        if (!missingCall(e)) throw e;
+        touched.length = 0;
+      }
       await trackSteps(changing.length, async (done) => {
         for (const id of changing) {
           changed[id] = on;

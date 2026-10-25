@@ -68,8 +68,8 @@
   const size = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`);
   const THEME = { auto: 'System theme', light: 'Light', dark: 'Dark' } as const;
 
-  /** A preference part's line: what differs from how it came, or that nothing does. */
-  const changed = (what: (string | false | null | undefined)[]) => what.filter(Boolean).join(' · ') || 'As it came';
+  /** A preference part's line: what differs from its default, or "Default" (the owner, 2026-10-25). */
+  const changed = (what: (string | false | null | undefined)[]) => what.filter(Boolean).join(' · ') || 'Default';
   /** What a part is set to now, in a line. */
   function line(id: SettingsSection): string {
     switch (id) {
@@ -111,7 +111,7 @@
         return appInfo.inUse ? appInfo.inUse.replace(/^\w+:\/\//, '') : '';
       case 'sync':
         return [kept.known ? `${kept.items.length} kept` : null, appInfo.syncBudgetGb ? `${appInfo.syncBudgetGb} GB` : 'No limit'].filter(Boolean).join(' · ');
-      // A part of preferences says only what differs from how it came (the owner, 2026-10-25), else "As it came".
+      // A part of preferences says only what differs from how it came (the owner, 2026-10-25), else "Default".
       case 'appearance':
         return changed([
           prefs.theme !== 'auto' && THEME[prefs.theme],

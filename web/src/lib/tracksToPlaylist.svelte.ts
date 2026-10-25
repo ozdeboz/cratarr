@@ -2,6 +2,7 @@
 // track's state (there is no call for several tracks at once), and adding them to one, its card spinning until the last
 // is in. A playlist that holds some of them already is asked about first (decision 0025, amended 2026-10-16). The steps
 // themselves are lib/PlaylistsStep's.
+import { appendNew, hasBatches } from './api';
 import { trackSteps } from './progress.svelte';
 import { appendTracks, setTrackMember, trackState, type Playlist, type TrackState } from './api';
 import { refresh } from './live.svelte';
@@ -104,8 +105,19 @@ export class TracksToPlaylist {
     step('lists');
     this.adding = p.id;
     try {
-      // The bar at the top says how far it is (lib/progress; the owner, 2026-10-25).
+      // One call where the server has it (a5, 0.9.4); else one by one, the bar at the top saying how far it is.
       const ids = this.ids();
+      if (await hasBatches()) {
+        const want = ids.filter((id) => !(this.states[id] && !this.states[id].addable));
+        await appendNew(p.id, this.source(), want);
+        // Every one of them is in it now (the call's promise): marked so, without asking each again.
+        for (const id of want) {
+          const s = this.states[id];
+          if (s) this.states[id] = { ...s, playlists: s.playlists.map((x) => (x.id === p.id ? { ...x, member: true } : x)) };
+        }
+        refresh();
+        return;
+      }
       await trackSteps(ids.length, async (done) => {
         for (const id of ids) {
           const s = this.states[id];
