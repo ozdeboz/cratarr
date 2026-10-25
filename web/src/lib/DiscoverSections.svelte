@@ -142,7 +142,7 @@
 {/if}
 
 <!-- New to you (the owner, 2026-10-25): the new artists' pictures as a flow (Home's, lib/CoverFlow), the front one's
-     name and how many albums they have released under it; below, their biography with their album as a card beside it. -->
+     name and how many albums they have released under it; below, their biography with their album as a card to its right. -->
 {#if sec.newArtists.length}
   {@const n = sec.newArtists[Math.min(front, sec.newArtists.length - 1)]}
   {@const a = n.items[0]}
@@ -162,13 +162,15 @@
       <span class="title">{n.artist}</span>
       {#if a.artist_albums}<span class="by">{a.artist_albums} {a.artist_albums === 1 ? 'album' : 'albums'}</span>{/if}
     </div>
+    <!-- Their biography, their album to its right with why it is here under it (the owner, 2026-10-25). -->
     <div class="artist-about">
+      {#if bio?.name === n.artist && bio.text}<p>{bio.text}</p>{/if}
       <button class="album" onclick={() => onopen(a)} use:longpress={() => onmenu(a)}>
+        {#if a.why.length}<small class="why">{a.why.join('. ')}</small>{/if}
         <span class="art big"><Cover src={a.cover} /></span>
         <b>{a.album}</b>
         <small>{a.year ?? ''}</small>
       </button>
-      {#if bio?.name === n.artist && bio.text}<p>{bio.text}</p>{/if}
     </div>
   </section>
 {/if}
@@ -559,6 +561,12 @@
     gap: 20px;
     align-items: flex-start;
     margin-top: 18px;
+  }
+
+  .artist-about .why {
+    margin-bottom: 6px;
+    color: var(--muted);
+    white-space: normal;
   }
 
   .artist-about p {
