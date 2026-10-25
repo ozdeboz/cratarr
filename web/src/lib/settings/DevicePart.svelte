@@ -7,11 +7,11 @@
   // How it plays (the owner, 2026-10-24: a play affair, kept with the device): where its music plays (the device
   // sheet, lib/OutputSheet), and levelling (decision 0035: in the app its own player's, here this browser's). On a
   // phone's browser: Lossless, off by default (lossless tracks stream as Opus there, the owner 2026-10-24).
-  import { allowBackground, appInfo, inApp, setDevice } from '../app.svelte';
+  import { allowBackground, appInfo, backgroundSettings, inApp, setDevice } from '../app.svelte';
   import { isPhone, setLevelling } from '../localPlayer.svelte';
   import OutputSheet from '../OutputSheet.svelte';
   import { outputName } from '../playOn.svelte';
-  import { allowDeviceMusic, askFolders, device, setFolder } from '../deviceMusic.svelte';
+  import { allowDeviceMusic, askFolders, device, deviceMusicSettings, setFolder } from '../deviceMusic.svelte';
   import { plural } from '../insights.svelte';
   import { prefs } from '../prefs.svelte';
   import { defaultBrowserName } from '../playOnTarget.svelte';
@@ -63,28 +63,31 @@
       more="While nothing plays, the app keeps its connection to Cratarr up (a wake lock and a Wi-Fi lock), so Play On from Home Assistant or another device starts music here with the screen locked. It uses some battery."
       toggle={{ checked: appInfo.stayReady, onchange: (on) => setDevice({ stayReady: on }) }}
     />
+    <!-- A switch (the owner, 2026-10-25: not an Allow button): on asks Android's dialog, off opens Android's list, where
+         only the user takes it back; the switch follows what Android says when the app comes back. -->
     <Item
       name="Background"
       line={appInfo.batteryAllowed ? 'Allowed to run' : 'Android may stop Cratarr'}
       tone={appInfo.batteryAllowed ? null : 'warn'}
-      more="Android may stop an app in the background to save battery. Allowed, Cratarr keeps playing and stays ready with the screen off."
-    >
-      {#if !appInfo.batteryAllowed}<button onclick={allowBackground}>Allow</button>{/if}
-    </Item>
+      more="Android may stop an app in the background to save battery. Allowed, Cratarr keeps playing and stays ready with the screen off. Turned off, Android's own settings open, where it is taken back."
+      toggle={{ checked: appInfo.batteryAllowed, onchange: (on) => (on ? allowBackground() : backgroundSettings()) }}
+    />
   {/if}
 </Group>
 
 {#if inApp}
   <Group title="Local music">
+    <!-- A switch (the owner, 2026-10-25): on asks Android (or opens its settings, refused before), off opens Android's
+         settings, where a permission is taken back; the folders under it once allowed. -->
+    <Item
+      name="This device's music"
+      line={appInfo.deviceMusic === 'granted' ? null : appInfo.deviceMusic === 'denied' ? 'Not allowed' : 'Not read'}
+      tone={appInfo.deviceMusic === 'denied' ? 'warn' : null}
+      more="Allowed, the app finds the music on this device, and the folders you turn on here play in Local, beside Cratarr. Turned off, Android's own settings open, where it is taken back."
+      toggle={{ checked: appInfo.deviceMusic === 'granted', onchange: (on) => (on ? allowDeviceMusic() : deviceMusicSettings()) }}
+    />
     {#if appInfo.deviceMusic !== 'granted'}
-      <Item
-        name="This device's music"
-        line={appInfo.deviceMusic === 'denied' ? 'Not allowed' : 'Not read'}
-        tone={appInfo.deviceMusic === 'denied' ? 'warn' : null}
-        more="Allowed, the app finds the music on this device, and the folders you turn on here play in Local, beside Cratarr."
-      >
-        <button onclick={allowDeviceMusic}>Allow</button>
-      </Item>
+      <!-- Nothing read yet. -->
     {:else if device.folders?.length}
       {#each device.folders as f (f.path)}
         <Item name={f.name} line={plural(f.tracks, 'track')} toggle={{ checked: f.on, onchange: (on) => setFolder(f.path, on) }} />

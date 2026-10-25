@@ -382,7 +382,14 @@ class MainActivity : AppCompatActivity() {
                     if (to == Prefs.MODE_DEVICE && !DeviceMusic.on(this)) reply.postMessage(appMessage()) else switchMode(to)
                 }
                 // Settings: Android's permission, the folders it found music in, and one turned on or off.
-                "allow" -> if (DeviceMusic.granted(this)) reply.postMessage(appMessage()) else deviceMusicAsk.launch(DeviceMusic.permission)
+                // Asked once and refused for good, Android shows no dialog again: its app settings, where it is given.
+                "allow" -> when {
+                    DeviceMusic.granted(this) -> reply.postMessage(appMessage())
+                    prefs.deviceMusicAsked && !shouldShowRequestPermissionRationale(DeviceMusic.permission) -> openAppSettings()
+                    else -> deviceMusicAsk.launch(DeviceMusic.permission)
+                }
+                // The switch turned off (the owner, 2026-10-25): a permission is taken back in Android's app settings only.
+                "settings" -> openAppSettings()
                 "folders" -> tellFolders(reply)
                 "folder" -> {
                     val path = message.optString("path")
@@ -521,7 +528,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 tellDownloads()
             }
-            "battery" -> askToRunInBackground()
+            // The Background switch (the owner, 2026-10-25): on asks Android's dialog; off opens Android's list, where
+            // only the user can take it back.
+            "battery" -> if (message.optString("op") == "settings") openBatterySettings() else askToRunInBackground()
             "address" -> askForAddress()
             "open" -> message.optString("url").takeIf { it.isNotEmpty() }?.let { openOutside(it) }
             // Share (a menu's): Android's share sheet, as the WebView has no navigator.share. `text` holds the link.
@@ -628,6 +637,20 @@ class MainActivity : AppCompatActivity() {
         } catch (e: ActivityNotFoundException) {
             startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
         }
+    }
+
+    /** Android's list of apps left out of battery optimisation: where running in the background is taken back. */
+    private fun openBatterySettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        } catch (e: ActivityNotFoundException) {
+            openAppSettings()
+        }
+    }
+
+    /** Android's page of this app: its permissions (the device's music) and its battery use. */
+    private fun openAppSettings() {
+        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
     }
 
     private fun openOutside(url: String) {

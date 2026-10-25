@@ -50,6 +50,8 @@ export const askLibrary = () => toApp({ type: 'device-music', op: 'library' });
 export const askFolders = () => toApp({ type: 'device-music', op: 'folders' });
 /** Android's permission dialog. */
 export const allowDeviceMusic = () => toApp({ type: 'device-music', op: 'allow' });
+/** Android's page of the app, where its permission to read the device's music is taken back. */
+export const deviceMusicSettings = () => toApp({ type: 'device-music', op: 'settings' });
 export function setFolder(path: string, on: boolean) {
   const f = device.folders?.find((x) => x.path === path);
   if (f) f.on = on;
