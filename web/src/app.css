@@ -36,10 +36,19 @@
   /* The floating controls' surface (the pill, back, ✕, the mark, the select bars): the colour of the mini-player's
      unplayed part (the playing cover's at 25 % over the page), a little see-through, what is under it blurred. */
   --float-bg: color-mix(in srgb, color-mix(in srgb, var(--now-accent) 25%, var(--bg)) 70%, transparent);
+  /* Every glass island's 2 px band of the extensions' thinner glass (the owner, 2026-10-25: an island with an
+     extension (a title, the globe) has it, so one without has it too and all are the same size). A shadow: nothing
+     moves. Inside an extension an island has none of its own; the extension is its band. */
+  --island-ring: 0 0 0 2px color-mix(in srgb, var(--float-bg) 45%, transparent);
+  /* The floating glass's room from the edge it floats along (the window's, the bar's), smaller now that every island
+     has its band (the owner, 2026-10-25: by a third or a half, "whatever rounds well"): beside it 8 px (was 12), above
+     and below it 6 px (was 8; half would leave the band 2 px from the bar). */
+  --gutter-x: 8px;
+  --gutter-y: 6px;
   --float-blur: blur(16px) saturate(1.4);
   /* The room the floating glass row takes over a page's or a panel's top (App's .page-row): what is under it starts
      there, the page and its panels alike (the owner, 2026-10-25). */
-  --glass-room: 60px;
+  --glass-room: calc(var(--gutter-y) + 52px);
   /* Where it is now (Display's Controls, set by App): over the top, or over the bottom just above the mini-player. */
   --glass-top: var(--glass-room);
   --glass-bottom: 0px;

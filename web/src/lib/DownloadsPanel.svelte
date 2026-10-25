@@ -244,7 +244,7 @@
     background: var(--float-bg);
     -webkit-backdrop-filter: var(--float-blur);
     backdrop-filter: var(--float-blur);
-    box-shadow: 0 2px 12px rgb(0 0 0 / 0.3);
+    box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
   }
 
   .navpill button {

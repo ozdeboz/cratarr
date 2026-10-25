@@ -269,8 +269,9 @@
   /** The phone's slim row of the mode switcher over the tabs (decision 0052, mock C), while it shows. */
   const SLIM = 34;
   const topBar = $derived(TOP_BAR + (switchable() ? SLIM : 0));
-  /** The mini-player's height with its margin, kept free under the page and the toasts. */
-  const MINI_SPACE = 88;
+  /** The mini-player's height with its margin (64 px and app.css's --gutter-x either side), kept free under the page
+   *  and the toasts. */
+  const MINI_SPACE = 80;
   const miniSpace = $derived(mini && playing() ? MINI_SPACE : 0);
   // The page's row (Symfonium's, decided 2026-10-15), floating over the page's top: back on the left, when this visit
   // has a step before this one; on the right, on a page with something to play, the pill (lib/TopPill): the filter
@@ -951,7 +952,7 @@
   .tap-to-play {
     position: fixed;
     left: 50%;
-    bottom: calc(112px + var(--nav-b, 0px) + env(safe-area-inset-bottom));
+    bottom: calc(104px + var(--nav-b, 0px) + env(safe-area-inset-bottom));
     transform: translateX(-50%);
     z-index: 30;
     display: inline-flex;
@@ -969,7 +970,7 @@
 
   .mini-dock {
     position: fixed;
-    inset: auto 12px calc(12px + var(--nav-b, 0px) + env(safe-area-inset-bottom));
+    inset: auto var(--gutter-x) calc(var(--gutter-x) + var(--nav-b, 0px) + env(safe-area-inset-bottom));
     z-index: 22;
     transition:
       top 200ms ease,
@@ -978,7 +979,7 @@
 
   /* Along the top (Display's Mini player), under the bar there. */
   .mini-dock.at-top {
-    top: calc(var(--bar-top, 0px) + env(safe-area-inset-top) + 12px);
+    top: calc(var(--bar-top, 0px) + env(safe-area-inset-top) + var(--gutter-x));
     bottom: auto;
   }
 
@@ -1006,9 +1007,9 @@
      viewed playlist. */
   .page-row {
     position: fixed;
-    top: calc(var(--top-now, 0px) + env(safe-area-inset-top) + 8px);
-    left: 12px;
-    right: 12px;
+    top: calc(var(--top-now, 0px) + env(safe-area-inset-top) + var(--gutter-y));
+    left: var(--gutter-x);
+    right: var(--gutter-x);
     z-index: 20;
     display: flex;
     justify-content: space-between;
@@ -1043,7 +1044,7 @@
     box-shadow: 0 2px 10px rgb(0 0 0 / 0.18);
   }
 
-  .lead:has(:global(.page-name, .crumbs, .title, .views)) .navpill {
+  .lead:has(:global(.page-name, .crumbs, .title, .views)) :global(.navpill) {
     box-shadow: none;
   }
 
@@ -1060,8 +1061,8 @@
     backdrop-filter: none;
   }
 
-  .lead.title-away .navpill {
-    box-shadow: 0 2px 12px rgb(0 0 0 / 0.3);
+  .lead.title-away :global(.navpill) {
+    box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
   }
 
   .page-name {
@@ -1105,7 +1106,7 @@
   }
 
   .page-row.beside {
-    right: calc(var(--player-w) + 10px + 12px);
+    right: calc(var(--player-w) + 10px + var(--gutter-x));
   }
 
   .page.under-row {
@@ -1120,7 +1121,7 @@
     background: var(--float-bg);
     -webkit-backdrop-filter: var(--float-blur);
     backdrop-filter: var(--float-blur);
-    box-shadow: 0 2px 12px rgb(0 0 0 / 0.3);
+    box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
   }
 
   .navpill button {
@@ -1253,7 +1254,7 @@
   /* The controls just above the mini-player (Display's Controls), following it as it comes and goes. */
   .page-row.at-bottom {
     top: auto;
-    bottom: calc(var(--bottom-now, 0px) + env(safe-area-inset-bottom) + 8px);
+    bottom: calc(var(--bottom-now, 0px) + env(safe-area-inset-bottom) + var(--gutter-y));
   }
 
   .page-row {
@@ -1423,7 +1424,7 @@
 
     .mini-dock,
     .page-row {
-      left: calc(var(--nav-w) + 12px);
+      left: calc(var(--nav-w) + var(--gutter-x));
     }
 
     /* Tap to play in the middle of the page's area, not the window's (the owner, 2026-10-24). */
@@ -1434,7 +1435,7 @@
     /* A playlist over the page covers the navigation too: the mini-player floats over it with the same space on both
        sides, never pushed to one side by a navigation it is not beside (the owner, 2026-10-17). */
     .mini-dock.over {
-      left: 12px;
+      left: var(--gutter-x);
     }
 
     .bar,

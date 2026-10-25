@@ -313,7 +313,8 @@
     display: flex;
     align-items: center;
     margin-right: -24px;
-    padding: 2px 26px 2px 2px;
+    /* As tall as the pill with its band (app.css --island-ring). */
+    padding: 4px 26px 4px 4px;
     border-radius: 26px 0 0 26px;
     background: color-mix(in srgb, var(--float-bg) 45%, transparent);
     -webkit-backdrop-filter: blur(10px) saturate(1.3);
@@ -338,7 +339,7 @@
     background: var(--float-bg);
     -webkit-backdrop-filter: var(--float-blur);
     backdrop-filter: var(--float-blur);
-    box-shadow: 0 2px 12px rgb(0 0 0 / 0.3);
+    box-shadow: var(--island-ring), 0 2px 12px rgb(0 0 0 / 0.3);
   }
 
   button {
