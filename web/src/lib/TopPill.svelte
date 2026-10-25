@@ -334,11 +334,13 @@
     outline: none;
   }
 
-  /* The page's work unfolded, left of the buttons: its bar and what it is at, in the pill's own text colour. */
+  /* The page's work unfolded, left of the buttons: its bar and what it is at, in the pill's own text colour; as wide
+     as the search opens, so what it is at fits (the owner, 2026-10-25). */
   .work {
     display: flex;
     align-items: center;
-    width: min(220px, 40vw);
+    width: min(320px, calc(100vw - 220px));
+    min-width: 140px;
     padding: 0 10px 0 16px;
     overflow: hidden;
     white-space: nowrap;

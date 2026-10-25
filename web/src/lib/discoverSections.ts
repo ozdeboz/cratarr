@@ -73,20 +73,20 @@ export function sections<S extends Suggested>(all: S[], owned: Owned[], limits =
       return { artist, points: points.map((p) => (p.kind === 'have' ? { kind: p.kind, title: p.title, year: p.year, cover: p.cover } : { kind: p.kind, s: p.s })) };
     });
 
-  // Around the artists played: per group of seeds, its suggestions; the largest groups first.
+  // Around the artists played: per artist played, the suggestions like them ("Like A and B" counts for A and for B:
+  // grouping by the pair split them into groups too small to fill the eight places, the owner's 2026-10-25 page had
+  // none); the groups that fill the most places first.
   const groups = new Map<string, { seeds: string[]; items: S[] }>();
   for (const s of all) {
     if (!free(s)) continue;
-    for (const w of s.why) {
-      const seeds = seedsOf(w);
-      if (!seeds) continue;
-      const k = seeds.map(key).sort().join('|');
-      const g = groups.get(k) ?? { seeds, items: [] };
-      if (!g.items.includes(s)) g.items.push(s);
-      groups.set(k, g);
-      break;
+    const seeds = s.why.map(seedsOf).find((x) => x) ?? [];
+    for (const seed of seeds) {
+      const g = groups.get(key(seed)) ?? { seeds: [seed], items: [] };
+      g.items.push(s);
+      groups.set(key(seed), g);
     }
   }
+  const cellsOf = (g: { items: S[] }) => g.items.reduce((n, s) => n + (s.bandcamp ? 2 : 1), 0);
   // The eight places around the seeds, always all filled (the owner, 2026-10-25): what plays takes two (a tile of one
   // by two), the rest one, so one tile of two makes seven suggestions; a group that cannot fill them all is no
   // section, and what no longer fits waits for the cards.
@@ -104,7 +104,7 @@ export function sections<S extends Suggested>(all: S[], owned: Owned[], limits =
     return cells ? null : { seeds: g.seeds, items, wide };
   };
   const around: Around<S>[] = [];
-  for (const g of [...groups.values()].sort((a, b) => b.items.length - a.items.length)) {
+  for (const g of [...groups.values()].sort((a, b) => cellsOf(b) - cellsOf(a) || b.items.length - a.items.length)) {
     if (around.length >= limits.around) break;
     const f = fill(g);
     if (!f) continue;

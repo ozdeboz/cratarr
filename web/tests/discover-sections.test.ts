@@ -91,3 +91,11 @@ test('around the seeds all eight places are filled: what plays takes two, what n
   out = sections([like('p1', 'u'), like('p2', 'u'), like('a'), like('b'), like('c')], [], limits);
   assert.equal(out.around.length, 0);
 });
+
+test('an artist played gathers every suggestion like them, whoever else a reason names (the owner\'s page had none)', () => {
+  // As Last.fm's reasons come: each names the seed with a different second artist.
+  const all = ['B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'].map((x, i) => s(`k${i}`, `n${i}`, [`Like Holydrug Couple and ${x}`]));
+  const out = sections(all, [], { gaps: 4, around: 1, aroundCells: 8, newArtists: 10 });
+  assert.deepEqual(out.around[0].seeds, ['Holydrug Couple']);
+  assert.equal(out.around[0].items.length, 8);
+});
