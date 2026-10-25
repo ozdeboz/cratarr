@@ -113,6 +113,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/artists/{source}", get(artist_view))
         .route("/api/artists/{source}/favorite", get(artist_is_favorite).post(artist_favorite))
         .route("/api/albums/{source}/{album}", get(album_view))
+        .route("/api/albums/tracks", post(albums_tracks))
         .route("/api/kept", post(kept_ask))
         .route("/api/albums/{source}/{album}/cover", get(album_cover))
         .route("/api/albums/{source}/{album}/similar", get(similar_albums))
@@ -1111,6 +1112,30 @@ async fn bandcamp_details(id: &str) -> Response {
 /// Kept on this device (decision 0038): what the app's kept items hold now, with their versions.
 async fn kept_ask(State(app): State<Arc<App>>, Json(ask): Json<crate::app::kept::Ask>) -> Json<serde_json::Value> {
     Json(json!({ "items": crate::app::kept::ask(&app, ask).await }))
+}
+
+#[derive(Deserialize)]
+struct AlbumRef {
+    source: String,
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct AlbumsTracks {
+    albums: Vec<AlbumRef>,
+}
+
+/// Most albums one call reads.
+const ALBUMS_TRACKS_MOST: usize = 20_000;
+
+/// Several albums' tracks in one call (0.9.4, the owner: Select › All's menu on 2,884 albums said "cannot reach"):
+/// the albums in the order given, each one's in play order; Cratarr's own library read in one go, a few queries.
+async fn albums_tracks(State(app): State<Arc<App>>, Json(b): Json<AlbumsTracks>) -> Result<Json<serde_json::Value>, ApiError> {
+    if b.albums.len() > ALBUMS_TRACKS_MOST {
+        return Err(ToggleError::Refused(format!("At most {ALBUMS_TRACKS_MOST} albums at once.")).into());
+    }
+    let albums: Vec<(String, String)> = b.albums.into_iter().map(|a| (a.source, a.id)).collect();
+    Ok(Json(json!({ "tracks": app.playing.tracks_of_albums(&albums).await })))
 }
 
 async fn album_view(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::AlbumView>, ApiError> {

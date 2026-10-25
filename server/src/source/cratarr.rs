@@ -563,6 +563,30 @@ impl Source for CratarrSource {
         })
     }
 
+    /// One read of the library for them all.
+    fn tracks_of_albums<'a>(&'a self, albums: &'a [String]) -> Fut<'a, Vec<(String, AlbumTrack)>> {
+        Box::pin(async move {
+            let s = server()?;
+            let (lib, ids) = (s.library.clone(), albums.to_vec());
+            let songs = blocking(move || lib.songs_of_albums(&ids)).await?;
+            Ok(songs
+                .into_iter()
+                .map(|t| {
+                    (t.album_id.clone(), AlbumTrack {
+                        id: t.id,
+                        title: t.title,
+                        artist: Some(t.artist).filter(|a| !a.is_empty()),
+                        album: Some(t.album),
+                        album_artist: Some(t.display_album_artist).filter(|a| !a.is_empty()),
+                        year: t.year,
+                        path: Some(t.path),
+                        duration_secs: Some(t.duration as f64),
+                    })
+                })
+                .collect())
+        })
+    }
+
     fn lists_tracks(&self) -> bool {
         true
     }

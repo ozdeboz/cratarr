@@ -13,6 +13,18 @@ use crate::nowplaying::Progress;
 use crate::playlists::PlaylistView;
 use crate::source::{self, Playing, TrackInfo};
 
+/// One track of several albums' (`Playing::tracks_of_albums`), as the web's album tracks are.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AlbumsTrack {
+    pub source: String,
+    pub id: String,
+    pub name: String,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub album_id: String,
+    pub duration_secs: Option<f64>,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct NowPlayingView {
     /// Which source this came from; covers are looked up there.
@@ -576,6 +588,44 @@ impl PlayingService {
     }
 
     /// An album of a connected server, for its view in the panel.
+    /// Several albums' tracks in one call (0.9.4): the albums in the order given (`(source, album)`), each one's in play
+    /// order. A source read once for all its albums; an album, or a source, that cannot be read left out.
+    pub async fn tracks_of_albums(&self, albums: &[(String, String)]) -> Vec<AlbumsTrack> {
+        let mut by_source: Vec<(&str, Vec<String>)> = Vec::new();
+        for (source, id) in albums.iter().filter(|(_, id)| crate::covers::valid_item_id(id)) {
+            match by_source.iter_mut().find(|(s, _)| *s == source.as_str()) {
+                Some((_, ids)) => ids.push(id.clone()),
+                None => by_source.push((source.as_str(), vec![id.clone()])),
+            }
+        }
+        let mut of: std::collections::HashMap<(String, String), Vec<source::AlbumTrack>> = std::collections::HashMap::new();
+        for (source_id, ids) in by_source {
+            let tracks = match self.source(source_id) {
+                Ok((_, s)) => s.tracks_of_albums(&ids).await,
+                Err(e) => Err(anyhow::anyhow!("{e}")),
+            };
+            match tracks {
+                Ok(t) => t.into_iter().for_each(|(album, t)| of.entry((source_id.to_string(), album)).or_default().push(t)),
+                Err(e) => tracing::warn!("{source_id}: {} albums' tracks not read: {e:#}", ids.len()),
+            }
+        }
+        albums
+            .iter()
+            .filter_map(|k| Some((k, of.remove(k)?)))
+            .flat_map(|((source, album), tracks)| {
+                tracks.into_iter().map(move |t| AlbumsTrack {
+                    source: source.clone(),
+                    id: t.id,
+                    name: t.title,
+                    artist: t.artist,
+                    album: t.album,
+                    album_id: album.clone(),
+                    duration_secs: t.duration_secs,
+                })
+            })
+            .collect()
+    }
+
     pub async fn album_view(&self, source_id: &str, album_id: &str) -> Result<AlbumView, ToggleError> {
         if !crate::covers::valid_item_id(album_id) {
             return Err(ToggleError::Refused("That is not an album.".into()));
