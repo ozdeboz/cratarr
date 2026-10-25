@@ -888,15 +888,27 @@ fn listener_weights() -> Weights {
     similar_by_of_listener().map(|o| Weights::ranked(&o)).unwrap_or(Weights::EQUAL)
 }
 
-/// Albums like an album (its OpenSubsonic id), the closest first, with how alike (0 to 100).
+/// Albums like an album (its OpenSubsonic id), the closest first, with how alike (0 to 100); none by its own artist.
 pub async fn similar_albums(album: &str, count: usize) -> Result<Vec<(String, f64)>, ToggleError> {
     let (index, _) = ready().await?;
     let (album, weights) = (album.to_string(), listener_weights());
     tokio::task::spawn_blocking(move || {
         let seed: Vec<usize> = (0..index.songs.len()).filter(|&i| index.songs[i].album_id == album).collect();
         let own = seed.first().map(|&i| index.songs[i].album_n);
-        let candidates =
-            index.albums.iter().filter(|(a, _)| Some(**a) != own).map(|(_, songs)| (index.songs[songs[0]].album_id.clone(), songs.clone())).collect();
+        // An album's own artist: those on every one of its songs (its album artist is among each song's artists). An
+        // album by the same artist is no similar album: More from the artist shows those (the owner, 2026-10-25).
+        let artists_of = |songs: &[usize]| -> HashSet<u32> {
+            let mut each = songs.iter().map(|&i| index.songs[i].like.artists.iter().copied().collect::<HashSet<u32>>());
+            let first = each.next().unwrap_or_default();
+            each.fold(first, |all, these| &all & &these)
+        };
+        let by = artists_of(&seed);
+        let candidates = index
+            .albums
+            .iter()
+            .filter(|(a, songs)| Some(**a) != own && artists_of(songs).is_disjoint(&by))
+            .map(|(_, songs)| (index.songs[songs[0]].album_id.clone(), songs.clone()))
+            .collect();
         closest_lists(&index, &seed, candidates, &weights, count)
     })
     .await
