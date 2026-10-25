@@ -8,6 +8,7 @@
   // top right of the screen that plays.
   import FilterSheet from './FilterSheet.svelte';
   import Icon from './Icon.svelte';
+  import { longpress } from './longpress';
   import Meter from './Meter.svelte';
   import { slide } from 'svelte/transition';
   import { untrack } from 'svelte';
@@ -127,6 +128,13 @@
     }
     unfold();
   }
+  /** A long-press while the work runs: its progress unfolds and stays, no fold after SHOWN_MS (the owner, 2026-10-25);
+   *  a tap folds it, and it folds when the work ends, as ever. */
+  function hold(a: NonNullable<typeof pageView.action>) {
+    if (a.progress == null) return;
+    clearTimeout(fold);
+    showing = true;
+  }
   /** The page's work asked for and not yet confirmed: the pill is ✓ and ✕ alone. */
   let confirming = $state(false);
   function confirm(a: NonNullable<typeof pageView.action>) {
@@ -204,7 +212,7 @@
     {#if device}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)} transition:paced|global><Icon name="speaker" size={22} /></button>{/if}
     {#if page && pageView.action && !searching}
       {@const a = pageView.action}
-      <button class="action" aria-label={a.label} title={a.label} onclick={() => act(a)} transition:paced|global
+      <button class="action" aria-label={a.label} title={a.label} onclick={() => act(a)} use:longpress={() => hold(a)} transition:paced|global
         ><Icon name={a.icon} size={22} />{#if a.progress != null}<svg class="ring" viewBox="0 0 36 36" aria-hidden="true"
             ><circle class="bg" cx="18" cy="18" r="16" /><circle cx="18" cy="18" r="16" pathLength="100" stroke-dasharray="{Math.round(
                 Math.min(1, Math.max(0, a.progress)) * 100,
