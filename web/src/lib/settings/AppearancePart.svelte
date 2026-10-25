@@ -40,7 +40,7 @@
 </script>
 
 <!-- Where it is kept is the group's name: this browser (in the app, this device). -->
-<Group title={inApp ? 'This device' : 'This browser'}>
+<Group title="Theme">
   <!-- Light or dark as two pictures, Automatic under them (the owner, 2026-10-25: Apple's way, mockup T3). Automatic
        switched off keeps the look the system gave. -->
   <AppearancePicker />

@@ -24,7 +24,7 @@
 <!-- Where the bar of pages runs along an edge (below 1024 px; the owner, 2026-10-25): which edge, whether it slides
      away while scrolling (panels open under it either way); the mini-player's edge; where each of the two kinds of
      controls floats. Along an edge, from it inwards: the bar, the mini-player, the controls. -->
-<Group title="Layout" more="On a phone or a narrow window, where the bar of pages runs along an edge of the screen.">
+<Group>
   <Item name="Navigation bar"><Seg label="Navigation bar" options={EDGES} bind:value={prefs.navAt} /></Item>
   <Item
     name="Hide when opening a library item"

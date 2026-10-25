@@ -18,7 +18,7 @@
   );
 </script>
 
-<Group title="Player details">
+<Group title="Details">
   {#snippet tail()}
     {#if prefs.playerRow}<OrderReset
         label="Extra details"
@@ -36,7 +36,7 @@
 
 <!-- The full-screen player's bands (lib/BandGlass): the look, and the two settings every look takes. -->
 <!-- The bands: the same controls as the player's own sheet (lib/BandControls). -->
-<Group title="Player visualisation">
+<Group title="Visualisation">
   <div class="bands"><BandControls /></div>
 </Group>
 

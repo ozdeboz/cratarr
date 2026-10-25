@@ -159,7 +159,7 @@
 {/if}
 
 {#if players.length}
-  <Group title="Players">
+  <Group title="Devices">
     {#each players as p (p.name)}
       {@const l = linkLine(p)}
       <Item lead={p.online ? 'on' : 'off'} name={p.name} line={l} tone={p.link?.own?.failed ? 'warn' : null} wrap />

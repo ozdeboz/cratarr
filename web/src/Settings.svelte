@@ -4,6 +4,7 @@
   // name, what it is set to now in a line, and ›. A tap opens the part in the panel (lib/SettingsPanel): beside the list
   // on a roomy window, where a part is always open (App: the one last open), its row tinted; over the list on a phone,
   // as a playlist opens. About is a sheet from the info button, the pill's own (App, lib/AboutSheet).
+  import { plural } from './lib/insights.svelte';
   import { deviceName } from './lib/playOnTarget.svelte';
   import { getHomeAssistant, getImport, getLogLevels, getSettings, getSignInRequired, getUsers, type ImportJob, type Settings } from './lib/api';
   import { me } from './lib/me.svelte';
@@ -11,7 +12,7 @@
   import Icon from './lib/Icon.svelte';
   import { panel, SETTINGS, settingsOf, viewPlaylist } from './lib/panel.svelte';
   import { playOn } from './lib/playOn.svelte';
-  import { HOME_PARTS, prefs } from './lib/prefs.svelte';
+  import { HOME_PARTS, homeDefault, prefs } from './lib/prefs.svelte';
   import { HOME_HEADER, localCovers } from './lib/localCovers.svelte';
   import { kept } from './lib/kept.svelte';
   import { crates, loadCrates } from './lib/crates.svelte';
@@ -67,6 +68,8 @@
   const size = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`);
   const THEME = { auto: 'System theme', light: 'Light', dark: 'Dark' } as const;
 
+  /** A preference part's line: what differs from how it came, or that nothing does. */
+  const changed = (what: (string | false | null | undefined)[]) => what.filter(Boolean).join(' · ') || 'As it came';
   /** What a part is set to now, in a line. */
   function line(id: SettingsSection): string {
     switch (id) {
@@ -108,17 +111,32 @@
         return appInfo.inUse ? appInfo.inUse.replace(/^\w+:\/\//, '') : '';
       case 'sync':
         return [kept.known ? `${kept.items.length} kept` : null, appInfo.syncBudgetGb ? `${appInfo.syncBudgetGb} GB` : 'No limit'].filter(Boolean).join(' · ');
+      // A part of preferences says only what differs from how it came (the owner, 2026-10-25), else "As it came".
       case 'appearance':
-        return [THEME[prefs.theme], prefs.animations ? null : 'No animations', prefs.homeGreeting ? 'Greeting' : null, localCovers[HOME_HEADER] ? 'Your picture' : null].filter(Boolean).join(' · ');
+        return changed([
+          prefs.theme !== 'auto' && THEME[prefs.theme],
+          !prefs.animations && 'No animations',
+          prefs.homeGreeting && 'Greeting',
+          !!localCovers[HOME_HEADER] && 'Your picture',
+        ]);
       case 'layout':
-        return `Bar along the ${prefs.navAt} · Mini player along the ${prefs.miniAt}`;
+        return changed([
+          prefs.navAt === 'bottom' && 'Bar at the bottom',
+          prefs.navAt === 'top' && prefs.navHides && 'Bar hides when scrolling',
+          prefs.navAt === 'top' && !prefs.navHidesOnItem && 'Bar stays over library items',
+          !prefs.stickyActions && 'Action bar scrolls away',
+          prefs.miniAt === 'top' && 'Mini player at the top',
+          prefs.navControlsAt === 'bottom' && 'Navigation controls at the bottom',
+          prefs.contentControlsAt === 'bottom' && 'Content controls at the bottom',
+        ]);
       case 'player':
-        return prefs.playerRow ? (prefs.playerFacts.length ? `${prefs.playerFacts.length} extra details` : 'Extra details') : 'No extra details';
+        return changed([!prefs.playerRow && 'No extra details', prefs.playerRow && prefs.playerFacts.length > 0 && plural(prefs.playerFacts.length, 'extra detail')]);
       case 'content': {
         const n = prefs.homeParts.length;
-        return [n === HOME_PARTS.length ? 'Every Home section' : `${n} of ${HOME_PARTS.length} Home sections`, prefs.profile ? null : 'No music profiles']
-          .filter(Boolean)
-          .join(' · ');
+        return changed([
+          prefs.homeParts.join() !== homeDefault().join() && `${n} of ${HOME_PARTS.length} Home sections`,
+          !prefs.profile && 'No music profiles',
+        ]);
       }
       case 'taste': {
         const crate = (crates.list ?? []).filter((c) => (c.left_out ?? 0) > 0).length;
@@ -150,18 +168,25 @@
         })
       : allowed,
   );
-  // A part of the server's that anyone opens (Connections) is Personal for someone not an administrator.
-  const groups = $derived([shown.filter((x) => !x.admin || !me.admin), shown.filter((x) => x.admin && me.admin)]);
+  // Personal, Device, Server (lib/settingsSections); a part of the server's that anyone opens (Connections) is Personal
+  // for someone not an administrator.
+  const keptOf = (x: (typeof SECTIONS)[number]) => (x.admin && !me.admin ? 'personal' : x.kept);
+  const GROUPS = [
+    { kept: 'personal', title: 'Personal' },
+    { kept: 'device', title: 'Device' },
+    { kept: 'server', title: 'Server' },
+  ] as const;
+  const groups = $derived(GROUPS.map((g) => ({ ...g, parts: shown.filter((x) => keptOf(x) === g.kept) })));
 </script>
 
 <main>
   {#if words.length && !shown.length}<p class="none">No settings match.</p>{/if}
   {#each groups as group, g (g)}
-    {#if group.length}
+    {#if group.parts.length}
       <section class="group" aria-labelledby="settings-g{g}">
-        <h2 id="settings-g{g}">{g ? 'Server' : 'Personal'}</h2>
+        <h2 id="settings-g{g}">{group.title}</h2>
         <div class="list">
-          {#each group as c (c.id)}
+          {#each group.parts as c (c.id)}
             {@const open = settingsOf(panel.viewed) === c.id}
             {@const f = found(c.id, c.title)}
             {@const l = f?.rows.length ? f.rows.slice(0, 4).join(' · ') : line(c.id)}

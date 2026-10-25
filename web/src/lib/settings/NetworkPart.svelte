@@ -38,7 +38,7 @@
 </script>
 
 {#if inApp}
-  <Group title="This device">
+  <Group>
     {#if appInfo.refused}<Item lead="bad" name="Cratarr does not answer" line={appInfo.refused} tone="bad" wrap />{/if}
     <Item name="Public address" line={appInfo.publicAddress ?? 'Not set'} wrap onclick={() => (editing = 'public')} />
     {#if appInfo.addresses}

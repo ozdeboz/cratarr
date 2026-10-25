@@ -24,33 +24,36 @@ export type SettingsSection =
   | 'auth'
   | 'diagnostics';
 
-/** `admin`: the server's, its administrators' only; `everyone` as well: a part anyone opens, showing them only their own
- *  (Connections' listening services, decision 0068). */
-export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app?: true; admin?: true; everyone?: true }[] = [
-  // Personal, in the owner's order (2026-10-25): This device, Account, Network, Sync, Display, Home, Taste.
-  // In a browser too: its name as a Play On player.
-  { id: 'device', title: 'This device', icon: 'speaker' },
-  // Who is signed in: their role, their password for OpenSubsonic apps, their devices and sign-ins.
-  { id: 'account', title: 'Account', icon: 'user' },
-  { id: 'network', title: 'Network', icon: 'wifi', app: true },
-  { id: 'sync', title: 'Sync', icon: 'arrowDownToLine', app: true },
-  { id: 'appearance', title: 'Appearance', icon: 'swatch' },
-  { id: 'layout', title: 'Layout', icon: 'layoutGrid' },
-  { id: 'player', title: 'Player', icon: 'play' },
-  // Home's sections, their order, and its header (the owner, 2026-10-24).
-  { id: 'content', title: 'Content', icon: 'home' },
-  // What one has said one does not want (the owner, 2026-10-23): every exclusion, managed in one place.
-  { id: 'taste', title: 'Taste', icon: 'music' },
-  { id: 'connections', title: 'Connections', icon: 'server', admin: true, everyone: true },
-  { id: 'libraries', title: 'Libraries', icon: 'library', admin: true },
+/** Where a part is kept, its group on the Settings page (the owner, 2026-10-25): the account's own (Personal), this
+ *  device's (Device: kept here, every device its own), the server's (Server). `admin`: the server's, its administrators'
+ *  only; `everyone` as well: a part anyone opens, showing them only their own (Connections' listening services,
+ *  decision 0068), Personal for someone not an administrator. */
+export type SettingsKept = 'personal' | 'device' | 'server';
+export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; kept: SettingsKept; app?: true; admin?: true; everyone?: true }[] = [
+  // Personal: who is signed in (their role, their password for OpenSubsonic apps, their devices and sign-ins), and what
+  // they have said they do not want (the owner, 2026-10-23: every exclusion, in one place).
+  { id: 'account', title: 'Account', icon: 'user', kept: 'personal' },
+  { id: 'taste', title: 'Taste', icon: 'music', kept: 'personal' },
+  // Device, in the owner's order: the device itself (named as Play On knows it; in a browser too), then how it reaches
+  // Cratarr, what it keeps, and how it looks and lays out.
+  { id: 'device', title: 'This device', icon: 'speaker', kept: 'device' },
+  { id: 'network', title: 'Network', icon: 'wifi', kept: 'device', app: true },
+  { id: 'sync', title: 'Sync', icon: 'arrowDownToLine', kept: 'device', app: true },
+  { id: 'appearance', title: 'Appearance', icon: 'swatch', kept: 'device' },
+  { id: 'layout', title: 'Layout', icon: 'layoutGrid', kept: 'device' },
+  { id: 'player', title: 'Player', icon: 'play', kept: 'device' },
+  // Home's sections and the music profiles (the owner, 2026-10-25).
+  { id: 'content', title: 'Content', icon: 'home', kept: 'device' },
+  { id: 'connections', title: 'Connections', icon: 'server', kept: 'server', admin: true, everyone: true },
+  { id: 'libraries', title: 'Libraries', icon: 'library', kept: 'server', admin: true },
   // The server's devices (the owner, 2026-10-25: "players should be called devices"), its line still how many players.
-  { id: 'players', title: 'Devices', icon: 'speakers', admin: true },
-  { id: 'users', title: 'Users', icon: 'users', admin: true },
-  { id: 'auth', title: 'Authentication', icon: 'key', admin: true },
+  { id: 'players', title: 'Devices', icon: 'speakers', kept: 'server', admin: true },
+  { id: 'users', title: 'Users', icon: 'users', kept: 'server', admin: true },
+  { id: 'auth', title: 'Authentication', icon: 'key', kept: 'server', admin: true },
   // Another server's plays and favourites into an account: its administrators' (listening is private).
-  { id: 'import', title: 'Import', icon: 'intoBox', admin: true },
+  { id: 'import', title: 'Import', icon: 'intoBox', kept: 'server', admin: true },
   // What happened, as Cratarr keeps it (decision 0045).
-  { id: 'diagnostics', title: 'Diagnostics', icon: 'list', admin: true },
+  { id: 'diagnostics', title: 'Diagnostics', icon: 'list', kept: 'server', admin: true },
 ];
 
 export const settingsSaved = $state({ n: 0 });

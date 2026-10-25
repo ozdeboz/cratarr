@@ -30,7 +30,7 @@
 </script>
 
 {#if inApp}
-  <Group title="This device">
+  <Group>
     <!-- Four choices: the row says it, the choice sheet picks it (the owner, 2026-10-25). -->
     <Item
       name="Storage"

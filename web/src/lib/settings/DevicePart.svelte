@@ -39,7 +39,7 @@
   }
 </script>
 
-<Group title={inApp ? 'This device' : 'This browser'}>
+<Group title="Playing">
   <Item name="Player name" value={name} onclick={() => (naming = true)} />
   <Item name="Where music plays" value={outputName()} onclick={() => (where = true)} />
   <Item
