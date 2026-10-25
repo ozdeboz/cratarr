@@ -184,7 +184,7 @@
   <OutputSheet onclose={() => (outputOpen = false)} />
 {/if}
 {#if queueOpen && np}
-  <QueueSheet {src} onclose={() => (queueOpen = false)} />
+  <QueueSheet {src} screen onclose={() => (queueOpen = false)} />
 {/if}
 {#if heartMenu && np}
   <HeartSheet

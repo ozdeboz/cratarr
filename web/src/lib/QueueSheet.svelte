@@ -44,7 +44,9 @@
   import { clockText, coverSrc, duration, favorite, paused, pending, playUpcoming, playing, position, send, toggleFavorite } from './remote.svelte';
   import { toast } from './toast.svelte';
 
-  let { src, onclose }: { src: string | null; onclose: () => void } = $props();
+  /** `screen`: over the whole window, as the other sheets (opened from the mini-player, the owner 2026-10-25: it was
+   *  held inside the bar); else over the full player that holds it. */
+  let { src, onclose, screen = false }: { src: string | null; onclose: () => void; screen?: boolean } = $props();
 
   const np = $derived(playing());
   const pos = $derived(position());
@@ -219,9 +221,10 @@
 {/snippet}
 
 {#if np}
-  <div class="qback" role="presentation" onclick={onclose} transition:fade={{ duration: SHEET_OUT }}></div>
+  <div class="qback" class:screen role="presentation" onclick={onclose} transition:fade={{ duration: SHEET_OUT }}></div>
   <div
     class="queue"
+    class:screen
     role="dialog"
     aria-label="Queue"
     bind:this={sheet}
@@ -431,6 +434,17 @@
     background: var(--surface);
     box-shadow: 0 -8px 30px rgb(0 0 0 / 0.4);
     transition: transform 200ms linear;
+  }
+
+  /* Over the whole window (from the mini-player), on the layer the other sheets use (lib/MenuSheet). */
+  .qback.screen {
+    position: fixed;
+    z-index: 40;
+  }
+
+  .queue.screen {
+    position: fixed;
+    z-index: 41;
   }
 
   .queue.pulling {
