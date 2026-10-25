@@ -44,7 +44,7 @@
   import { art, playing } from './lib/remote.svelte';
   import { fade, fly } from 'svelte/transition';
   import { linear, quadInOut } from 'svelte/easing';
-  import { reducedMotion } from './lib/motion';
+  import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './lib/motion';
   import Toasts from './lib/Toasts.svelte';
   import { toast } from './lib/toast.svelte';
   import ProgressBar from './lib/ProgressBar.svelte';
@@ -690,8 +690,17 @@
   {#if about.open}<AboutSheet onclose={() => (about.open = false)} />{/if}
 
   {#if moreOpen}
-    <button class="scrim" aria-label="Close menu" onclick={() => (moreOpen = false)}></button>
-    <div class="sheet" id="more-sheet" role="dialog" aria-label="More pages" onclickcapture={collapse}>
+    <!-- As every sheet comes and goes (lib/MenuSheet's, from the top; the owner, 2026-10-25: it only appeared). -->
+    <button class="scrim" aria-label="Close menu" onclick={() => (moreOpen = false)} transition:fade|global={{ duration: SHEET_OUT }}></button>
+    <div
+      class="sheet"
+      id="more-sheet"
+      role="dialog"
+      aria-label="More pages"
+      onclickcapture={collapse}
+      in:fly|global={{ y: -400, duration: SHEET_IN, easing: decelerate }}
+      out:fly|global={{ y: -400, duration: SHEET_OUT, easing: decelerate }}
+    >
       {#each overflow as p (p.id)}
         <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => samePage(e, p.id)}><Icon name={p.icon} />{p.label}{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a>
       {/each}
