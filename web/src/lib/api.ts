@@ -1303,7 +1303,8 @@ export type HealthFinding = {
   of?: number;
   level: 'critical' | 'warning' | 'info';
   since: number;
-  open?: { page: string; switch?: string };
+  /** Where it is dealt with; `thing`: a connection's own page in Settings (a5, 0.9.6: lastfm, discogs, musicbrainz). */
+  open?: { page: string; switch?: string; thing?: string };
   /** What it is about, one by one: an album (server, id) or a playlist opens where it is. */
   items?: HealthItem[];
 };

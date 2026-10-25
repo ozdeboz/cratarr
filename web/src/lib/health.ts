@@ -7,6 +7,8 @@ import { setSwitch } from './listFilter.svelte';
 /** Each domain's name and icon, in the Health page's order. */
 export const DOMAINS: Record<string, { name: string; icon: IconName }> = {
   servers: { name: 'Servers', icon: 'wifi' },
+  // The services Cratarr asks (a5, 0.9.6): each one failing (the owner, 2026-10-26: every connection's problems).
+  connections: { name: 'Connections', icon: 'server' },
   library: { name: 'Library', icon: 'library' },
   incoming: { name: 'Incoming', icon: 'arrowDown' },
   files: { name: 'Files', icon: 'music' },
@@ -25,6 +27,8 @@ const PAGES: Record<string, string> = { library: '#/library', playlists: '#/', s
 export function openFinding(f: HealthFinding) {
   if (!f.open) return;
   if (f.open.page === 'library' && f.open.switch) setSwitch('library', f.open.switch, true);
+  // A connection's own page in Settings › Connections.
+  if (f.open.page === 'settings' && f.open.thing) return void (location.hash = `#/settings?view=${encodeURIComponent(`settings:connections/${f.open.thing}`)}`);
   const to = PAGES[f.open.page];
   if (to && location.hash !== to) location.hash = to;
 }
