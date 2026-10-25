@@ -4,6 +4,7 @@
   // reaches it, and a group takes it in as a follower. Each is a row, its settings on its own page behind it (`thing`:
   // `kodi:<n>`, the settings' North Star, 2026-10-19), a value typed in a sheet. Saved apart from the other settings,
   // with its own Save bar. Its password is never shown again (blank keeps it).
+  import type { Snippet } from 'svelte';
   import { getPlayOnSettings, savePlayOnSettings, type KodiSetting } from './api';
   import { backFromThing, openThing } from './panel.svelte';
   import { playOn } from './playOn.svelte';
@@ -15,7 +16,8 @@
   import { nameThing } from './settingsSections.svelte';
   import { toast } from './toast.svelte';
 
-  let { thing = null }: { thing?: string | null } = $props();
+  /** `delay`: a Kodi's speaker delay row, on its page (lib/PlayersSettings' own). */
+  let { thing = null, delay = null }: { thing?: string | null; delay?: Snippet<[string]> | null } = $props();
 
   const KODI_MORE =
     "Cratarr drives a Kodi over Kodi's own remote control (Settings → Services → Control → Allow remote control via HTTP); nothing is installed on Kodi. In a group it follows, and never leads.";
@@ -98,6 +100,7 @@
         onclick={() => edit({ title: 'Cratarr for Kodi', value: k.stream_from, type: 'url', placeholder: base ?? 'http://cratarr:8081', save: (v) => ((k.stream_from = v), (dirty = true)) })}
       />
     </Group>
+    {#if delay}<Group>{@render delay(k.name)}</Group>{/if}
     <Group>
       <Item name={`Remove ${k.name}`} kind="danger" onclick={() => (removing = true)} />
     </Group>

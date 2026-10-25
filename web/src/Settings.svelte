@@ -101,10 +101,12 @@
         return names.join(' · ') || 'None in use';
       }
       case 'players': {
-        // Counted, as Users: their names do not fit a line.
-        const n = playOn.players.length;
+        // Counted by kind, as Users: their names do not fit a line (the owner, 2026-10-25: what is set up; a browser is a
+        // player only while it is open).
         if (!playOn.known) return '';
-        return n === 0 ? 'None yet' : n === 1 ? '1 player' : `${n} players`;
+        const apps = playOn.players.filter((p) => !p.kind || p.kind === 'app').length;
+        const kodis = playOn.players.filter((p) => p.kind === 'kodi').length;
+        return [apps ? plural(apps, 'app') : null, kodis ? `${kodis} Kodi` : null].filter(Boolean).join(' · ') || 'None yet';
       }
       case 'account':
         return [me.name, me.admin ? 'Administrator' : null].filter(Boolean).join(' · ');
