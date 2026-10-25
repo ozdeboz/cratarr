@@ -7,7 +7,21 @@
   // longer rows of their own kind). Headed by what each is for, generic (the owner, 2026-10-25: Media servers, Download
   // stack, Discovery and metadata, Home automation), which the settings search finds too.
   import type { Field } from '../api';
-  import { getDiscogs, getLastfmServerKey, getLidarrOptions, missingCall, setDiscogs, setLastfmServerKey, type DiscogsSetting } from '../api';
+  import {
+    getDiscogs,
+    getLastfmServerKey,
+    getLidarrOptions,
+    getMusicBrainz,
+    missingCall,
+    setDiscogs,
+    setDiscogsEnabled,
+    setLastfmEnabled,
+    setLastfmServerKey,
+    setMusicBrainzEnabled,
+    type DiscogsSetting,
+    type MusicBrainzStatus,
+  } from '../api';
+  import { when } from './when';
   import FormSheet from './FormSheet.svelte';
   import { toast } from '../toast.svelte';
   import { backFromThing, openThing } from '../panel.svelte';
@@ -28,7 +42,8 @@
   const HOME_ASSISTANT = 'home-assistant';
   const LASTFM = 'lastfm';
   const DISCOGS = 'discogs';
-  const own = (t: string) => t === LIDARR || t === HOME_ASSISTANT || t === LASTFM || t === DISCOGS;
+  const MUSICBRAINZ = 'musicbrainz';
+  const own = (t: string) => t === LIDARR || t === HOME_ASSISTANT || t === LASTFM || t === DISCOGS || t === MUSICBRAINZ;
   const LIDARR_MORE = "With Lidarr's address and API key, Delete in Incoming also stops Lidarr fetching that album again.";
   const WANT_MORE =
     "What Discover's Want adds an album to Lidarr with: its quality and metadata profiles, and the root folder it lands in (Incoming's). As your artists: the ones the artists Lidarr has already use.";
@@ -37,7 +52,7 @@
   // played, a Last.fm account or not. Saved at once, not with the Save bar.
   const LASTFM_MORE =
     "Discover asks Last.fm for artists like each person's most played. With a key here, everyone gets them, with a Last.fm account or without.";
-  let fmKey = $state<{ set: boolean; saved: boolean } | null>(null);
+  let fmKey = $state<{ set: boolean; saved: boolean; enabled?: boolean } | null>(null);
   const loadFmKey = () =>
     getLastfmServerKey().then(
       (k) => (fmKey = k),
@@ -58,6 +73,38 @@
     );
   loadDiscogs();
   let discogsForm = $state<{ key: string; secret: string; busy: boolean; error: string | null } | null>(null);
+  // MusicBrainz (the owner, 2026-10-25: visible, without a key): how its questions stand, read as the part opens; a
+  // server before it has no row.
+  const MB_MORE =
+    "Asked without a key, at its own pace: original years and release types for albums with a MusicBrainz release, Find more music, artists' links and Renumber's track order.";
+  let mb = $state<MusicBrainzStatus | null>(null);
+  const loadMb = () =>
+    getMusicBrainz().then(
+      (m) => (mb = m),
+      () => (mb = null),
+    );
+  loadMb();
+  /** Its last answer failed: an error later than the last answer. */
+  const mbFailing = $derived(!!mb?.last_error && (mb.last_ok === null || mb.last_error.at > mb.last_ok));
+  const mbLine = $derived(
+    !mb
+      ? null
+      : !mb.enabled
+        ? 'Off'
+        : [mbFailing ? `Failing since ${when(mb.last_error!.at)}` : mb.last_ok ? `Reached ${when(mb.last_ok)}` : 'Not asked yet', mb.of ? `releases ${mb.asked.toLocaleString()} of ${mb.of.toLocaleString()}` : null]
+            .filter(Boolean)
+            .join(' · '),
+  );
+  // Each connection switched on or off (the owner, 2026-10-25: all of them), the key kept; a switch says it at once.
+  async function turn(what: 'lastfm' | 'discogs' | 'musicbrainz', on: boolean) {
+    try {
+      if (what === 'lastfm') await setLastfmEnabled(on).then(loadFmKey);
+      else if (what === 'discogs') discogs = await setDiscogsEnabled(on);
+      else mb = await setMusicBrainzEnabled(on);
+    } catch (e) {
+      toast.fail(e, on ? "It wasn't switched on" : "It wasn't switched off");
+    }
+  }
   async function saveDiscogs(f: { key: string; secret: string; busy: boolean; error: string | null }) {
     f.busy = true;
     f.error = null;
@@ -102,11 +149,23 @@
   const label = (d: Draft) => `${ed.kindOf(d)?.label ?? d.kind}${ed.drafts.filter((x) => x.kind === d.kind).length > 1 ? ` (${d.id})` : ''}`;
   const draft = $derived(thing && !own(thing) ? (ed.drafts.find((d) => d.id === thing) ?? null) : null);
   nameThing(() =>
-    thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : thing === LASTFM ? 'Last.fm' : thing === DISCOGS ? 'Discogs' : draft ? label(draft) : null,
+    thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : thing === LASTFM ? 'Last.fm' : thing === DISCOGS ? 'Discogs' : thing === MUSICBRAINZ ? 'MusicBrainz' : draft ? label(draft) : null,
   );
   // Last.fm's key and Discogs' app as rows say them.
-  const fmLine = $derived(fmKey?.saved ? 'Set, for everyone' : fmKey?.set ? "From the container's settings" : 'Not set');
-  const discogsLine = $derived(discogs?.set ? (discogs.per_minute ? `Set · ${discogs.per_minute} a minute` : 'Set') : 'Not set');
+  const fmOff = $derived(fmKey?.enabled === false);
+  const fmLine = $derived(fmOff ? 'Off' : fmKey?.saved ? 'Set, for everyone' : fmKey?.set ? "From the container's settings" : 'Not set');
+  const discogsOff = $derived(discogs?.enabled === false);
+  const discogsLine = $derived(discogsOff ? 'Off' : discogs?.set ? (discogs.per_minute ? `Set · ${discogs.per_minute} a minute` : 'Set') : 'Not set');
+  /** Discovery and metadata's rows, those switched off last (as the servers). */
+  const metaRows = $derived(
+    [
+      { id: MUSICBRAINZ, shown: !!mb, off: mb?.enabled === false },
+      { id: LASTFM, shown: true, off: fmOff },
+      { id: DISCOGS, shown: discogsKnown, off: discogsOff },
+    ]
+      .filter((r) => r.shown)
+      .sort((a, b) => Number(a.off) - Number(b.off)),
+  );
   function typeFmKey() {
     typing = {
       title: 'Last.fm API key',
@@ -301,7 +360,33 @@
       onclose={() => (removing = null)}
     />
   {/if}
+{:else if thing === MUSICBRAINZ}
+  {#if mb}
+    <Group>
+      <Item name="Use MusicBrainz" line={mb.enabled ? null : 'Nothing is asked of it until it is on again'} toggle={{ checked: mb.enabled, onchange: (on) => turn('musicbrainz', on) }} />
+    </Group>
+    <Group title="Connection" more={MB_MORE}>
+      <Item lead={!mb.enabled ? 'off' : mbFailing ? 'bad' : mb.last_ok ? 'on' : 'off'} name={mb.last_ok ? `Reached ${when(mb.last_ok)}` : 'Not reached yet'} line={mb.last_error ? `${when(mb.last_error.at)}: ${mb.last_error.message}` : null} tone={mbFailing ? 'bad' : null} wrap />
+      <Item name="Pace" value={`One question every ${mb.pace_secs} s`} />
+    </Group>
+    {#if mb.passes.length}
+      <Group title="In the background">
+        {#each mb.passes as x (x.name)}
+          <Item
+            name={x.name}
+            line={`${x.done.toLocaleString()} of ${x.total.toLocaleString()}${x.running ? '' : x.next_at ? ` · next ${when(x.next_at)}` : ''}`}
+            progress={x.total ? x.done / x.total : null}
+          />
+        {/each}
+      </Group>
+    {/if}
+  {/if}
 {:else if thing === LASTFM}
+  {#if fmKey?.saved || fmKey?.set}
+    <Group>
+      <Item name="Use Last.fm" line={fmOff ? 'Its key is kept, and not used until it is on again' : null} toggle={{ checked: !fmOff, onchange: (on) => turn('lastfm', on) }} />
+    </Group>
+  {/if}
   <Group title="Connection" more={LASTFM_MORE}>
     <Item name="API key" line={fmLine} onclick={typeFmKey} />
   </Group>
@@ -323,10 +408,15 @@
     />
   {/if}
 {:else if thing === DISCOGS}
+  {#if discogs?.set || discogsOff}
+    <Group>
+      <Item name="Use Discogs" line={discogsOff ? 'Its keys are kept, and nothing is asked of it until it is on again' : null} toggle={{ checked: !discogsOff, onchange: (on) => turn('discogs', on) }} />
+    </Group>
+  {/if}
   <Group title="Connection" more={DISCOGS_MORE}>
     <Item name="App key and secret" line={discogsLine} onclick={() => (discogsForm = { key: '', secret: '', busy: false, error: null })} />
   </Group>
-  {#if discogs?.set}
+  {#if discogs?.set || discogsOff}
     <Group>
       <Item name="Remove Discogs" kind="danger" onclick={() => (removing = 'discogs')} />
     </Group>
@@ -370,18 +460,23 @@
   {/if}
   <!-- Last.fm for Discover's artists, Discogs for covers, photos and genres: both bring what is known about music. -->
   <Group title="Discovery and metadata">
-    {#if fmKey?.set}
-      <Item lead="on" name="Last.fm" line={fmLine} onclick={() => openThing('connections', LASTFM)} />
-    {:else}
-      <Item name="Add Last.fm" kind="add" onclick={() => openThing('connections', LASTFM)} />
-    {/if}
-    {#if discogsKnown}
-      {#if discogs?.set}
-        <Item lead="on" name="Discogs" line={discogsLine} onclick={() => openThing('connections', DISCOGS)} />
-      {:else}
-        <Item name="Add Discogs" kind="add" onclick={() => openThing('connections', DISCOGS)} />
+    {#each metaRows as r (r.id)}
+      {#if r.id === MUSICBRAINZ && mb}
+        <Item lead={!mb.enabled ? 'off' : mbFailing ? 'bad' : 'on'} name="MusicBrainz" line={mbLine} tone={mbFailing && mb.enabled ? 'bad' : null} onclick={() => openThing('connections', MUSICBRAINZ)} />
+      {:else if r.id === LASTFM}
+        {#if fmKey?.saved || fmKey?.set}
+          <Item lead={fmOff ? 'off' : 'on'} name="Last.fm" line={fmLine} onclick={() => openThing('connections', LASTFM)} />
+        {:else}
+          <Item name="Add Last.fm" kind="add" onclick={() => openThing('connections', LASTFM)} />
+        {/if}
+      {:else if r.id === DISCOGS}
+        {#if discogs?.set || discogsOff}
+          <Item lead={discogsOff ? 'off' : 'on'} name="Discogs" line={discogsLine} onclick={() => openThing('connections', DISCOGS)} />
+        {:else}
+          <Item name="Add Discogs" kind="add" onclick={() => openThing('connections', DISCOGS)} />
+        {/if}
       {/if}
-    {/if}
+    {/each}
   </Group>
   <HomeAssistantPart />
   {#if addingKind}

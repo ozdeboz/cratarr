@@ -1198,15 +1198,36 @@ export type LidarrDraft = {
 export const getLidarrOptions = () => quietly<{ quality: [number, string][]; metadata: [number, string][]; roots: string[] }>('/api/settings/lidarr/options');
 /** The server's own Last.fm key for Discover (artists like each account's own most played, decision 0069 amended): in
  *  use, and saved here (else the container's LASTFM_API_KEY gives it). The key itself is never sent. */
-export const getLastfmServerKey = () => quietly<{ set: boolean; saved: boolean }>('/api/settings/lastfm');
+/** `set`: in use (false while switched off); `saved`: a key kept; `enabled`: switched on (a5, 0.9.6). */
+export const getLastfmServerKey = () => quietly<{ set: boolean; saved: boolean; enabled?: boolean }>('/api/settings/lastfm');
+/** Switched on or off, the key kept (a5, 0.9.6: off, no Discover artists from it). */
+export const setLastfmEnabled = (enabled: boolean) => putJson('/api/settings/lastfm', { enabled });
 /** The server's own Last.fm key saved at once; an empty one takes it away. */
 export const setLastfmServerKey = (key: string) => putJson('/api/settings/lastfm', { key });
 /** The server's Discogs app (0.9.5, a5): set or not, and the requests a minute Discogs last allowed. The secret is never
  *  sent back; both empty take it away. */
-export type DiscogsSetting = { set: boolean; per_minute: number | null };
+export type DiscogsSetting = { set: boolean; per_minute: number | null; enabled?: boolean };
 export const getDiscogs = () => quietly<DiscogsSetting>('/api/settings/discogs');
 export const setDiscogs = (key: string, secret: string) =>
   request<DiscogsSetting>('/api/settings/discogs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, secret }) });
+/** Switched on or off, the keys kept (a5, 0.9.6: off, Discogs is asked nothing). */
+export const setDiscogsEnabled = (enabled: boolean) =>
+  request<DiscogsSetting>('/api/settings/discogs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+/** How Cratarr's MusicBrainz questions stand (a5, 0.9.6; administrators'): when it last answered or failed (since the
+ *  server started), its pace, each background pass (how many of the albums with a release it has asked about). */
+export type MusicBrainzStatus = {
+  enabled: boolean;
+  last_ok: number | null;
+  last_error: { at: number; message: string } | null;
+  pace_secs: number;
+  passes: { name: string; done: number; total: number; running: boolean; next_at: number | null }[];
+  asked: number;
+  of: number;
+};
+export const getMusicBrainz = () => quietly<MusicBrainzStatus>('/api/settings/musicbrainz');
+/** Switched on or off (off: no background passes, and Find more music, Renumber and artist lookups say so). */
+export const setMusicBrainzEnabled = (enabled: boolean) =>
+  request<MusicBrainzStatus>('/api/settings/musicbrainz', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
 
 /** Check a Lidarr as filled in; nothing is saved. Null for a blank address. */
 export const previewLidarr = (draft: LidarrDraft) => post<LidarrView | null>('/api/settings/lidarr', draft);
