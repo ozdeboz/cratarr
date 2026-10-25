@@ -192,3 +192,8 @@ button.solid[aria-busy='true']::after {
   opacity: 1;
 }
 
+/* Searching, Everywhere chosen (lib/SearchScope): the page's or the panel's own content is set aside (kept, not
+   remade), its tabs and everywhere's results shown in its place. */
+.away > :not(.search-scope, .global) {
+  display: none !important;
+}

@@ -7,6 +7,8 @@
   // fetches now (how far), then what it watches for and has not found yet.
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
+  import SearchScope from './SearchScope.svelte';
+  import { everywhere } from './globalSearch.svelte';
   import type { AlbumRequest, WatchedAlbum } from './api';
   import Icon from './Icon.svelte';
   import { me } from './me.svelte';
@@ -149,7 +151,9 @@
       {@render glassExtra()}
     </div>
   {/if}
-  <div class="scroll">
+  <div class="scroll" class:away={handed && everywhere()}>
+    <!-- Searching on a phone: its own results or everywhere's (lib/SearchScope, the owner 2026-10-25). -->
+    {#if handed}<SearchScope label={L.label} />{/if}
     {#if requests.error && !view}
       <Notice text={requests.error} />
     {:else if !view}
@@ -180,7 +184,7 @@
       </Group>
     {/if}
       <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
-    {#if handed}<GlobalResults />{/if}
+    {#if handed && everywhere()}<GlobalResults />{/if}
   </div>
 </div>
 

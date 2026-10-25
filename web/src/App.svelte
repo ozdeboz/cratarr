@@ -47,6 +47,8 @@
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './lib/motion';
   import { glass } from './lib/glass.svelte';
   import GlobalResults from './lib/GlobalResults.svelte';
+  import SearchScope from './lib/SearchScope.svelte';
+  import { globalSearch } from './lib/globalSearch.svelte';
   import { provideEverywhere } from './lib/everywhere.svelte';
   import Find from './Find.svelte';
   import Toasts from './lib/Toasts.svelte';
@@ -549,6 +551,9 @@
     else if (!local && p.startsWith('local-')) location.hash = LIBRARY.href;
   });
   const ALL = $derived([...MAIN, ...APART]);
+  /** The page's search has its two tabs (lib/SearchScope); everywhere's shown in the page's place. */
+  const scoped = $derived(page !== 'home' && page !== 'find');
+  const everywhereShown = $derived(scoped && globalSearch.scope === 'everywhere' && pageView.query.trim() !== '');
   // As many of the main pages as fit, each tab at least BAR_SLOT_PX wide (the owner, 2026-10-25: Discover in the bar where
   // there is room): four and More on a phone, all five on a tablet. The pages apart (Requests, Insights, Health,
   // Settings…) stay behind More ("requests is of the other category"), unless every page fits in five (Local mode).
@@ -620,8 +625,11 @@
   <div class="content" class:with-side={sidebar} style:--player-w="{sideWidth}px" bind:this={contentEl}>
     <!-- Its room under the glass kept while a panel covers it on a phone (the owner, 2026-10-25: opening a list on Requests
          shifted the page up under the coming panel). -->
-    <div class="page" class:under-row={pageRow || (phone && playlistLayer)} bind:this={pageEl}>
+    <div class="page" class:under-row={pageRow || (phone && playlistLayer)} class:away={everywhereShown} bind:this={pageEl}>
     <SheetArea area={() => pageEl}>
+    <!-- While searching: the page's own results or everywhere's (the owner, 2026-10-25, mockup 3); Home searches
+         everything as it is, Find more music is MusicBrainz's. -->
+    {#if scoped}<SearchScope label={ALL.find((p) => p.id === page)?.label ?? 'This page'} count={pageView.counted?.shown ?? null} except={PAGE_KINDS[page] ?? []} />{/if}
     {#if page === 'settings'}
       <Settings />
     {:else if page === 'health' && me.admin}
@@ -657,7 +665,7 @@
       <Playlists />
     {/if}
     <!-- Global search at the end of what the page's own search leaves (decision 0072), but the kind the page shows. -->
-    {#if page !== 'find'}<GlobalResults except={PAGE_KINDS[page] ?? []} />{/if}
+    {#if page === 'home' || everywhereShown}<GlobalResults except={PAGE_KINDS[page] ?? []} />{/if}
     </SheetArea>
     </div>
     {#if split}

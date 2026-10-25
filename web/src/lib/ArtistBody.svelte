@@ -11,6 +11,7 @@
   import AlbumCard from './AlbumCard.svelte';
   import RelatedArtists from './RelatedArtists.svelte';
   import SectionHead from './SectionHead.svelte';
+  import { matchesSearch } from './pageView.svelte';
 
   let {
     source,
@@ -22,6 +23,7 @@
     ontracks,
     profile,
     profileComing = false,
+    searching = false,
   }: {
     source: string;
     /** Where the albums open (an artist from Discover: Bandcamp's). */
@@ -34,7 +36,13 @@
     profile?: Snippet;
     /** The profile is on its way: its column is kept from the start, so the albums do not narrow when it comes. */
     profileComing?: boolean;
+    /** The panel's own search is on (the owner, 2026-10-25): only hits; the about if it has the words (whole), the
+     *  albums that have them, no profile, no related artists (they lead off the panel). */
+    searching?: boolean;
   } = $props();
+  const hit = (...texts: (string | null | undefined)[]) => !searching || matchesSearch(...texts);
+  const albumsShown = $derived(albums.filter((a) => hit(a.title, a.artist)));
+  const appearsShown = $derived(appearsOn.filter((a) => hit(a.title, a.artist)));
 
   // About: Cratarr's own library only (the store knows its artists).
   let about = $state<{ id: string | null; bio: string | null; photo: boolean; photo_credit?: PhotoCredit | null } | null>(null);
@@ -84,12 +92,12 @@
   </ul>
 {/snippet}
 
-{#if about?.bio || about?.photo_credit}
+{#if about && (searching ? !!about.bio && hit(about.bio) : !!(about.bio || about.photo_credit))}
   <section aria-label="About" bind:this={aboutEl}>
     <SectionHead title="About" />
     <div class="about">
       {#if about.bio}
-        <button class="bio" class:whole onclick={() => (whole = !whole)} aria-expanded={whole}>{about.bio}</button>
+        <button class="bio" class:whole={whole || searching} onclick={() => (whole = !whole)} aria-expanded={whole || searching}>{about.bio}</button>
       {/if}
     </div>
     {#if about.bio}<small class="credit">TheAudioDB</small>{/if}
@@ -99,19 +107,19 @@
 {/if}
 <!-- On a wide panel the albums and the artist's profile side by side, the profile all open (the owner, 2026-10-23); on
      a narrow one the profile stays in the header, to fold. -->
-<div class="beside" class:with-profile={!!profile || profileComing}>
-  {#if albums.length}
+<div class="beside" class:with-profile={!searching && (!!profile || profileComing)}>
+  {#if albumsShown.length}
     <section aria-label="Albums" bind:this={albumsEl}>
       <SectionHead title="Albums" />
-      {@render grid(albums)}
+      {@render grid(albumsShown)}
     </section>
   {/if}
-  {#if profile}<aside class="profile" aria-label="Profile">{@render profile()}</aside>{:else if profileComing}<aside class="profile" aria-hidden="true"></aside>{/if}
+  {#if searching}<!-- no profile while searching -->{:else if profile}<aside class="profile" aria-label="Profile">{@render profile()}</aside>{:else if profileComing}<aside class="profile" aria-hidden="true"></aside>{/if}
 </div>
-{#if appearsOn.length}
+{#if appearsShown.length}
   <section aria-label="Appears on">
     <SectionHead title="Appears on" />
-    {@render grid(appearsOn)}
+    {@render grid(appearsShown)}
   </section>
 {/if}
 {#if top}
@@ -121,8 +129,10 @@
   </section>
 {/if}
 <!-- Related artists to explore (0.9.2): Cratarr's own library only (the server knows its artists' MusicBrainz ids). -->
-{#if source === 'cratarr' || source === DISCOVER}<RelatedArtists {name} />{/if}
-{#if !albums.length && !appearsOn.length && !top}
+{#if !searching && (source === 'cratarr' || source === DISCOVER)}<RelatedArtists {name} />{/if}
+{#if searching && !albumsShown.length && !appearsShown.length && !top && !(about?.bio && hit(about.bio))}
+  <p class="empty">Nothing of {name}'s matches.</p>
+{:else if !albums.length && !appearsOn.length && !top}
   <p class="empty">Nothing by {name} on this server.</p>
 {/if}
 

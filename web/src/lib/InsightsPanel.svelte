@@ -20,6 +20,8 @@
   import Crumbs from './Crumbs.svelte';
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
+  import SearchScope from './SearchScope.svelte';
+  import { everywhere } from './globalSearch.svelte';
 
   let { view, beside = false }: { view: InsightsView; beside?: boolean } = $props();
 
@@ -68,7 +70,9 @@
       {#if pill()}<TopPill {...pill()!} />{/if}
     </div>
   {/if}
-  <div class="scroll">
+  <div class="scroll" class:away={handed && everywhere()}>
+    <!-- Searching on a phone: its own results or everywhere's (lib/SearchScope, the owner 2026-10-25). -->
+    {#if handed}<SearchScope label={v.label} />{/if}
     {#if view === 'discover-missing' || view === 'discover-excluded'}
       <DiscoveryList kind={view === 'discover-missing' ? 'missing' : 'excluded'} />
     {:else if view === 'history'}
@@ -85,7 +89,7 @@
       <InsightsCollection data={insights.data} />
     {/if}
       <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
-    {#if handed}<GlobalResults />{/if}
+    {#if handed && everywhere()}<GlobalResults />{/if}
   </div>
 </div>
 

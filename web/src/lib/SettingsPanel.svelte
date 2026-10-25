@@ -11,6 +11,8 @@
   // settings are not asked for.
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
+  import SearchScope from './SearchScope.svelte';
+  import { everywhere } from './globalSearch.svelte';
   import { untrack } from 'svelte';
   import { narrowSettings } from './settings/narrow';
   import { matchesSearch, pageView } from './pageView.svelte';
@@ -127,7 +129,9 @@
     </span>
   </div>
   {/if}
-  <div class="scroll" bind:this={scrollEl}>
+  <div class="scroll" class:away={handed && everywhere()} bind:this={scrollEl}>
+    <!-- Searching on a phone: its own results or everywhere's (lib/SearchScope, the owner 2026-10-25). -->
+    {#if handed}<SearchScope label={title} />{/if}
     {#if ed.loadError && me.admin}<Notice text={ed.loadError} />{/if}
     {#if !allowed}
       <!-- Another user's view of an administrator's part: nothing. -->
@@ -180,7 +184,7 @@
       <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
     <!-- Its own search leaving no row (shown until one is left, lib/settings/narrow). -->
     {#if narrowing}<p class="none">No settings match.</p>{/if}
-    {#if handed}<GlobalResults />{/if}
+    {#if handed && everywhere()}<GlobalResults />{/if}
   </div>
 </div>
 

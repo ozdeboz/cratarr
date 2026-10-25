@@ -117,6 +117,8 @@
   import SuggestedTracks from './SuggestedTracks.svelte';
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
+  import SearchScope from './SearchScope.svelte';
+  import { everywhere } from './globalSearch.svelte';
   import AvoidLine from './AvoidLine.svelte';
   import ListHead from './ListHead.svelte';
   import { insights, plural } from './insights.svelte';
@@ -150,7 +152,8 @@
   import { work } from './panelWork.svelte';
   import { prefs, type ListSort, type PanelKind } from './prefs.svelte';
   import { filtersOn, hiddenLibraries, inView, passing, switchOn } from './listFilter.svelte';
-  import { matchesSearch, trackOrders, type TrackOrder } from './pageView.svelte';
+  import { matchesSearch, pageView, trackOrders, type TrackOrder } from './pageView.svelte';
+  import { words } from './search';
   import { clockText, paused, playing } from './remote.svelte';
   import { on } from './events.svelte';
   import { swipe } from './swipe';
@@ -1093,8 +1096,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
     );
   });
   const topRows = $derived(
-    artist && !artist.tracks && rows && picks?.name === artist.name ? picks.ids.flatMap((x) => playable.find((r) => r.id === x) ?? []) : [],
+    (artist && !artist.tracks && rows && picks?.name === artist.name ? picks.ids.flatMap((x) => playable.find((r) => r.id === x) ?? []) : []).filter(
+      (r) => !own || matchesSearch(r.name ?? r.file, r.artist, r.album),
+    ),
   );
+  // Its own search over the page (the owner, 2026-10-25): only what is a hit. The cover, the action bar, the title and
+  // its lines go; the about, the albums, the tracks narrow to the words; what leads off the panel (similar ones,
+  // suggestions, related artists, the album's About) goes too.
+  const own = $derived(full && words(pageView.query).length > 0);
 
   async function crateRadio(inside: boolean) {
     const c = crate;
@@ -1577,7 +1586,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           search: full ? pageHere : null,
         }
       : null;
-  handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra, below: () => stuck });
+  handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra, below: () => stuck && !own });
 </script>
 
 <!-- This panel's glass: its floating pills, or App's row on a phone (lib/glass). -->
@@ -1630,7 +1639,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
     {/if}
   {/if}
 
-  <div class="scroll" bind:this={scroller} onscroll={onScroll}>
+  <div class="scroll" class:away={handed && everywhere()} class:own bind:this={scroller} onscroll={onScroll}>
+    <!-- Searching on a phone: its own results or everywhere's (lib/SearchScope, the owner 2026-10-25). -->
+    {#if handed}<SearchScope label={title} />{/if}
     {#if making}
       <header class="head">
         <div class="top">
@@ -1972,6 +1983,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         source={fromDiscover(artist.source) ? DISCOVER : artist.source}
         albumSource={fromDiscover(artist.source) ? BANDCAMP : artist.source}
         name={artist.name}
+        searching={own}
         albums={artistHead.albums}
         appearsOn={artistHead.appears_on}
         top={topRows.length ? topList : undefined}
@@ -2002,6 +2014,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {#if crate && rows.length < total}<div class="loading" bind:this={more}><MarkLoader size={40} /></div>{/if}
       <!-- Each list's own kind of similar ones at its foot (the owner, 2026-10-23); a crate's once all its rows are in. -->
       <!-- One's own playlist: tracks to add to it (lib/SuggestedTracks; the owner, 2026-10-23). -->
+      {#if !own}
       {#if p && !multi && p.mine !== false}<SuggestedTracks id={p.id} name={p.name} count={p.count} />{/if}
       {#if p && !multi}<SimilarLists kind="playlist" id={p.id} />{/if}
       {#if crate && !seeded(crate) && !crateEditing && rows.length >= total}<SimilarLists kind="crate" id={crate} />{/if}
@@ -2023,11 +2036,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
           more={albumHead}
         />
       {/if}
+      {/if}
     {:else}
       <PageLoading />
     {/if}
       <!-- On a phone, over the page: the global results at the end of this list (decision 0072). -->
-    {#if handed}<GlobalResults />{/if}
+    {#if handed && everywhere()}<GlobalResults />{/if}
   </div>
 
   {#if selecting}
@@ -2779,6 +2793,18 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
   /* The cover, edge to edge as Symfonium's; beside the page never so tall that the tracks drop out of sight. Its foot
      fades into the panel, where the action bar sits. */
+  /* Its own search (`own`): the cover, the action bar and the title's header set aside while it narrows. */
+  .scroll.own > .hero,
+  .scroll.own > .actbar,
+  .scroll.own > .meta {
+    display: none;
+  }
+
+  /* With no cover to start under, the list starts under the glass. */
+  .scroll.own {
+    padding-top: calc(var(--glass-room) + 4px);
+  }
+
   .hero {
     position: relative;
     width: 100%;
