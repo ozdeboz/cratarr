@@ -115,7 +115,7 @@
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
   {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={() => closePlaylist()}><Icon name="back" size={22} /></button></span>{/if}
-  <Crumbs up={beside ? null : { label: 'Downloads', go: () => upToPage('#/downloads') }} here={L.label} />
+  <Crumbs trail={beside ? [] : [{ label: 'Downloads', go: () => upToPage('#/downloads') }]} here={L.label} />
 {/snippet}
 
 <div class="view" class:handed>

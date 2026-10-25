@@ -1,19 +1,21 @@
 <script lang="ts">
   // A panel's title as a breadcrumb (0.9.3; the owner, 2026-10-25: Requests, Downloads, Insights, Health and Settings
-  // get "pure breadcrumbs", "2 at most. So the current and one level above."): the level above, a tap back there, then
-  // where one is. The page's own name above does what the panel's ✕ does; without a way back (`go`), it is only said.
-  // No level above (`up` left out): only where one is, as beside the page whose name its list already shows (the
-  // owner, 2026-10-25: Settings › Display beside Settings' list said Settings twice).
-  // Where one is, cut short by …: a tap on it shows the whole line (the owner, 2026-10-25: "unellipse the whole
-  // breadcrumb tree and align right so the own title is most definitely visible"), scrolled to its end; again, short.
-  // For every panel on this device ("global on the device": prefs.crumbsWhole).
+  // get "pure breadcrumbs"): `trail` the levels above, the top first, each a tap back there (without `go`, only said),
+  // then where one is. Short (the owner: "2 at most. So the current and one level above"): the last level above and
+  // where one is, both cut with … when short of room. Whole: every level, nothing cut, scrolled to its end (the owner,
+  // 2026-10-25: "in scroll mode, the entire breadcrumb should be visible. In the other mode, only one level
+  // difference"). A tap on where one is turns from one to the other while there is more to show (a level left out, or
+  // something cut), for every panel on this device ("global on the device": prefs.crumbsWhole). No levels above: only
+  // where one is, as beside the page whose name its list already shows (Settings › Display beside Settings' list said
+  // Settings twice).
   import { tick } from 'svelte';
   import { prefs } from './prefs.svelte';
 
-  let { up = null, here }: { up?: { label: string; go?: () => void } | null; here: string } = $props();
+  type Level = { label: string; go?: () => void };
+  let { trail = [], here }: { trail?: Level[]; here: string } = $props();
   let line = $state<HTMLElement>();
-  let hereEl = $state<HTMLElement>();
   const whole = $derived(prefs.crumbsWhole);
+  const shown = $derived(whole ? trail : trail.slice(-1));
   // Whole: its end in view, whatever the panel or its title.
   $effect(() => {
     void here;
@@ -21,14 +23,14 @@
   });
   function show() {
     if (whole) return void (prefs.crumbsWhole = false);
-    if (!hereEl || hereEl.scrollWidth <= hereEl.clientWidth) return;
-    prefs.crumbsWhole = true;
+    const cut = [...(line?.querySelectorAll<HTMLElement>('.up, .here') ?? [])].some((x) => x.scrollWidth > x.clientWidth);
+    if (cut || trail.length > 1) prefs.crumbsWhole = true;
   }
 </script>
 
 <h2 class="crumbs" class:whole bind:this={line}>
-  {#if up}{#if up.go}<button class="up" onclick={up.go}>{up.label}</button>{:else}<span class="up">{up.label}</span>{/if}<span class="sep" aria-hidden="true">›</span>{/if}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <span class="here" aria-current="page" bind:this={hereEl} onclick={show}>{here}</span>
+  {#each shown as up, i (i)}{#if up.go}<button class="up" onclick={up.go}>{up.label}</button>{:else}<span class="up">{up.label}</span>{/if}<span class="sep" aria-hidden="true">›</span>{/each}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <span class="here" aria-current="page" onclick={show}>{here}</span>
 </h2>
 
 <style>

@@ -54,12 +54,15 @@
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
   {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={() => closePlaylist()}><Icon name="back" size={22} /></button></span>{/if}
-  {#if v.under}
-    {@const parent = INSIGHTS_VIEWS.find((x) => x.id === v.under)}
-    <Crumbs up={{ label: parent?.label ?? v.group, go: () => viewPlaylist(INSIGHTS + v.under) }} here={v.label} />
-  {:else}
-    <Crumbs up={{ label: v.group, go: beside ? undefined : () => upToPage('#/insights') }} here={v.label} />
-  {/if}
+  {@const parent = v.under ? INSIGHTS_VIEWS.find((x) => x.id === v.under) : null}
+  <Crumbs
+    trail={[
+      ...(beside ? [] : [{ label: 'Insights', go: () => upToPage('#/insights') }]),
+      { label: v.group, go: beside ? undefined : () => upToPage('#/insights') },
+      ...(v.under ? [{ label: parent?.label ?? v.group, go: () => viewPlaylist(INSIGHTS + v.under) }] : []),
+    ]}
+    here={v.label}
+  />
 {/snippet}
 
 <div class="view" class:handed>

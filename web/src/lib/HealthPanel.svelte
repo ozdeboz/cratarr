@@ -50,6 +50,11 @@
   const handed = $derived(glass.one && !beside);
   const pill = () => (!beside && !item ? { device: false, filter: false, view: false, search: 'health' } : null);
   handGlass(() => handed, { left: glassLeft, pill });
+  // The levels over a problem: Health (not beside its list, which names it) and the problem's domain.
+  const top = $derived([
+    ...(beside ? [] : [{ label: 'Health', go: () => upToPage('#/health') }]),
+    ...(p ? [{ label: p.domain, go: beside ? undefined : () => upToPage('#/health') }] : []),
+  ]);
 </script>
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
@@ -60,9 +65,9 @@
     <span class="navpill"><button aria-label="Back" title="Back" onclick={() => closePlaylist()}><Icon name="back" size={22} /></button></span>
   {/if}
   {#if item}
-    <Crumbs up={{ label: p?.title ?? 'Health', go: () => backFromStep(HEALTH + problem) }} here={item.title} />
+    <Crumbs trail={[...top, ...(p ? [{ label: p.title, go: () => backFromStep(HEALTH + problem) }] : [])]} here={item.title} />
   {:else if p}
-    <Crumbs up={{ label: p.domain, go: beside ? undefined : () => upToPage('#/health') }} here={p.title} />
+    <Crumbs trail={top} here={p.title} />
   {:else}
     <h2 class="title">Health</h2>
   {/if}

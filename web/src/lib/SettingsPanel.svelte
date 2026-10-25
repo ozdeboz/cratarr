@@ -110,10 +110,11 @@
     <span class="navpill"><button aria-label="Back" title="Back" onclick={() => closePlaylist()}><Icon name="back" size={22} /></button></span>
   {/if}
   <!-- Settings › the part; a thing's page: its part › its name (lib/Crumbs: two at most, the owner 2026-10-25). -->
+  {@const top = beside ? [] : [{ label: 'Settings', go: () => upToPage('#/settings') }]}
   {#if thing}
-    <Crumbs up={{ label: partTitle, go: () => backFromThing(section) }} here={title} />
+    <Crumbs trail={[...top, { label: partTitle, go: () => backFromThing(section) }]} here={title} />
   {:else}
-    <Crumbs up={beside ? null : { label: 'Settings', go: () => upToPage('#/settings') }} here={partTitle} />
+    <Crumbs trail={top} here={partTitle} />
   {/if}
 {/snippet}
 {#snippet glassExtra()}
