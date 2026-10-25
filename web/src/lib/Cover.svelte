@@ -23,18 +23,20 @@
   // place on another ground (the visuals' sheets) sets --cover-tile and --cover-mark.
   import Mark from './Mark.svelte';
 
-  let { src, lazy = true, onfail }: { src: string | null | undefined; lazy?: boolean; onfail?: (src: string) => void } = $props();
+  /** `onready`: its picture in (or failed, its stand-in shown). */
+  let { src, lazy = true, onfail, onready }: { src: string | null | undefined; lazy?: boolean; onfail?: (src: string) => void; onready?: () => void } = $props();
 
   function fail(e: Event) {
     const at = (e.currentTarget as HTMLImageElement).getAttribute('src');
     if (!at) return;
     coverBroke(at);
     onfail?.(at);
+    onready?.();
   }
 </script>
 
 {#if src && !failed[src]}
-  <img class="cover" {src} alt="" loading={lazy ? 'lazy' : 'eager'} decoding="async" draggable="false" onerror={fail} />
+  <img class="cover" {src} alt="" loading={lazy ? 'lazy' : 'eager'} decoding="async" draggable="false" onerror={fail} onload={() => onready?.()} />
 {:else}
   <span class="cover standin" aria-hidden="true"><Mark fill="currentColor" /></span>
 {/if}

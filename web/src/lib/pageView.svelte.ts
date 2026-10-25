@@ -167,6 +167,8 @@ export const SWITCHES: Record<string, ListSwitch[]> = {
     { key: 'no-favourite-artists', label: 'Favourite artists', section: 'Leave out' },
     { key: 'no-library-artists', label: 'Artists you have', section: 'Leave out' },
     { key: 'no-unplayable', label: 'Unplayable', section: 'Leave out' },
+    // Monitored in Lidarr, or a request waiting or approved (the owner, 2026-10-26: a control of the filter).
+    { key: 'no-monitored', label: 'Monitored', section: 'Leave out' },
   ],
 };
 

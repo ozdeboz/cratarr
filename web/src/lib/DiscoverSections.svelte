@@ -10,6 +10,7 @@
   import { library } from './albums.svelte';
   import Cover from './Cover.svelte';
   import CoverPlay from './CoverPlay.svelte';
+  import CoverBusy from './CoverBusy.svelte';
   import CoverStatus from './CoverStatus.svelte';
   import CoverFlow from './CoverFlow.svelte';
   import { goToArtist } from './albums.svelte';
@@ -67,6 +68,8 @@
   const place = (t: Tile) => `grid-column: ${t.col + 1} / span ${t.w}; grid-row: ${t.row + 1} / span ${t.h};`;
   // The artist's photo: asked of the artist store first (it reads TheAudioDB where it has none yet), shown once it has.
   let photos = $state<Record<string, boolean>>({});
+  /** The pick whose cover is in: another pick's shows the busy round until its picture comes. */
+  let pickIn = $state<string | null>(null);
   const albumsOf = (n: number) => `${n} ${n === 1 ? 'album' : 'albums'} in your library`;
   /** The seed's own albums in the library, for its card's fan (a few covers, as Artists to explore's). */
   const ownAlbums = (name: string) => {
@@ -86,7 +89,9 @@
 {#if sec.pick}
   {@const a = sec.pick}
   <section class="pick" aria-label="Pick of the day">
-    <button class="pick-cover" aria-label={`${a.album} by ${a.artist}`} onclick={() => onopen(a)} use:longpress={() => onmenu(a)}><Cover src={a.cover} /><CoverStatus mark={status(a)} /></button>
+    <button class="pick-cover" aria-label={`${a.album} by ${a.artist}`} onclick={() => onopen(a)} use:longpress={() => onmenu(a)}
+      ><Cover src={a.cover} lazy={false} onready={() => (pickIn = a.key)} /><CoverStatus mark={status(a)} />{#if a.cover && pickIn !== a.key}<CoverBusy />{/if}</button
+    >
     <div class="pick-text">
       <span class="kicker">Pick of the day</span>
       <span class="pick-title">{a.album}</span>

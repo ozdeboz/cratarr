@@ -119,7 +119,9 @@
     !(switchOn('discover', 'no-favourite-artists') && favourites.has(a.key)) &&
     !(switchOn('discover', 'no-library-artists') && !a.new_artist) &&
     // Unplayable: no page on Bandcamp to hear it on (the owner, 2026-10-25).
-    !(switchOn('discover', 'no-unplayable') && !a.bandcamp);
+    !(switchOn('discover', 'no-unplayable') && !a.bandcamp) &&
+    // Monitored: wanted in Lidarr already, or a request waiting or approved (the owner, 2026-10-26).
+    !(switchOn('discover', 'no-monitored') && (!!a.request || askedFor(a.key)));
   const kept = $derived((view?.found?.albums ?? []).filter((a) => !gone.includes(a.key)));
   // The page in sections (0069 amended 2026-10-25): what the filter and the search let through, sorted into the pick,
   // the discography gaps, the masonry, the new artists, the fresh releases and the Weekly
@@ -131,7 +133,13 @@
   // grids (lib/masonry, the owner 2026-10-25: responsive to any width), three at least.
   let pageWidth = $state(0);
   const aroundCols = $derived(Math.max(3, Math.floor((pageWidth + 6 - 24) / 142)));
-  const sec = $derived(sections(albums, { aroundCols }, mine.pickSkip));
+  // No pick of the day moved on from (its menu's Next pick), or already asked for: monitored in Lidarr or a request
+  // waiting or approved (the owner, 2026-10-26).
+  const askedFor = (key: string) => {
+    const r = view?.requests?.[key];
+    return !!r && (r.status === 'pending' || r.status === 'approved');
+  };
+  const sec = $derived(sections(albums, { aroundCols }, (s) => mine.pickSkip.includes(s.key) || !!s.request || askedFor(s.key)));
   // More for you made as it comes near (lib/nearBlocks, as the Library's albums; the owner, 2026-10-25): blocks of six
   // whole rows of its grid (cards of 340 px at least, 12 px apart).
   const blocks = new NearBlocks();

@@ -55,16 +55,17 @@ export function seedsOf(why: string): string[] | null {
 /** How much each section takes; `aroundCols`: how many masonry columns the page has room for (lib/masonry). */
 export const LIMITS = { gaps: 4, gapsEach: 4, around: 3, aroundCols: 3, newArtists: 10, thisYear: new Date().getFullYear() };
 
-/** `skipped`: picks of the day moved on from (Discover's menu, kept for the account): the next that plays is the pick. */
-export function sections<S extends Suggested>(all: S[], given: Partial<typeof LIMITS> = {}, skipped: readonly string[] = []): Sections<S> {
+/** `notPick`: what is no pick of the day (moved on from in Discover's menu, kept for the account; or asked for already):
+ *  the next that plays is the pick. */
+export function sections<S extends Suggested>(all: S[], given: Partial<typeof LIMITS> = {}, notPick: (s: S) => boolean = () => false): Sections<S> {
   const limits = { ...LIMITS, ...given };
   const used = new Set<string>();
   const take = (s: S) => used.add(s.key);
   const free = (s: S) => !used.has(s.key);
 
-  // The pick of the day: the strongest that plays on Bandcamp, else none; one moved on from, the next (all moved on
-  // from: the strongest again).
-  const pick = all.find((s) => s.bandcamp && !skipped.includes(s.key)) ?? all.find((s) => s.bandcamp) ?? null;
+  // The pick of the day: the strongest that plays on Bandcamp and is no pick's to pass (moved on from, or asked for
+  // already: the owner, 2026-10-26, a monitored album came up), else none.
+  const pick = all.find((s) => s.bandcamp && !notPick(s)) ?? null;
   if (pick) take(pick);
 
   // New from artists you have: ListenBrainz's fresh releases, and the discographies' releases of this year and last
