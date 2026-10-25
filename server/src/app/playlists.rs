@@ -2808,9 +2808,10 @@ impl PlaylistService {
     }
 
     /// Add these tracks (ids on `source_id`, in order) at a playlist's end, whether or not it holds them already: the
-    /// page asked and the user chose Add again (decision 0025, amended 2026-10-16). Tracks outside the library are left
-    /// out. Returns how many were added and the undo token.
-    pub async fn append_tracks(&self, id: &str, source_id: &str, ids: &[String]) -> Result<(usize, Option<String>), ToggleError> {
+    /// page asked and the user chose Add again (decision 0025, amended 2026-10-16). With `only_new` (0.9.4: many ticked
+    /// tracks into a playlist in one call) those it holds already, and repeats among them, are left out instead. Tracks
+    /// outside the library are left out. Returns how many were added and the undo token (none when nothing was).
+    pub async fn append_tracks(&self, id: &str, source_id: &str, ids: &[String], only_new: bool) -> Result<(usize, Option<String>), ToggleError> {
         let gone = || ToggleError::Refused("Those tracks are not on a connected server.".into());
         let (a, s) = self.lib.connected().into_iter().find(|(a, _)| a.cfg.id == source_id).ok_or_else(gone)?;
         let (store, name) = self.own(id)?;
@@ -2828,6 +2829,13 @@ impl PlaylistService {
         }
         if entries.is_empty() {
             return Err(ToggleError::NotInLibrary);
+        }
+        if only_new {
+            let mut seen: HashSet<String> = store.entries(&name).await?.into_iter().collect();
+            entries.retain(|e| seen.insert(e.clone()));
+            if entries.is_empty() {
+                return Ok((0, None));
+            }
         }
         let edit = store.append(&name, &entries).await?;
         self.tell_sources(&store, vec![(name, PlaylistChange::Edited)]);

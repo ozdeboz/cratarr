@@ -131,6 +131,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/repairs/apply", post(apply_repairs))
         .route("/api/repairs/relink", post(relink_line))
         .route("/api/undo", post(undo))
+        .route("/api/batch/playlists/favorite", post(playlists_favorite))
+        .route("/api/batch/playlists/delete", post(playlists_delete))
+        .route("/api/batch/playlists/link", post(playlists_link))
+        .route("/api/batch/playlists/rows", post(playlists_rows))
 
         // For everyone: the version and when it started (About), the servers and their libraries (the filter): what
         // the server's settings showed every page, without the rest of them (decision 0051).
@@ -1999,10 +2003,13 @@ async fn remove_repeats(State(app): State<Arc<App>>, Path(id): Path<String>) -> 
 struct Append {
     source: String,
     ids: Vec<String>,
+    /// Only those the playlist does not hold yet (0.9.4).
+    #[serde(default)]
+    only_new: bool,
 }
 
 async fn append_tracks(State(app): State<Arc<App>>, Path(id): Path<String>, Json(a): Json<Append>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (added, undo) = app.playlists.append_tracks(&id, &a.source, &a.ids).await?;
+    let (added, undo) = app.playlists.append_tracks(&id, &a.source, &a.ids, a.only_new).await?;
     Ok(Json(json!({ "playlist": id, "added": added, "undo": undo })))
 }
 
@@ -2608,6 +2615,97 @@ async fn health_report(State(app): State<Arc<App>>) -> Json<crate::app::health::
 
 async fn album_duplicates(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(json!({ "groups": app.playlists.album_duplicates().await.map_err(ToggleError::from)? })))
+}
+
+/// Several playlists at once (0.9.4, the owner: one call for what is done to many ticked playlists, not one each).
+/// Under `/api/batch/`: a word under `/api/playlists/` would hide a playlist of that name.
+#[derive(Deserialize)]
+struct ManyPlaylists {
+    ids: Vec<String>,
+    #[serde(default)]
+    on: bool,
+    #[serde(default)]
+    source: Option<String>,
+    /// A link's target (`link`); `shared` where none.
+    #[serde(default)]
+    target: Option<String>,
+}
+
+/// Most playlists one call acts on.
+const PLAYLISTS_MOST: usize = 5_000;
+
+impl ManyPlaylists {
+    fn checked(self) -> Result<Self, ApiError> {
+        if self.ids.len() > PLAYLISTS_MOST {
+            return Err(ToggleError::Refused(format!("At most {PLAYLISTS_MOST} playlists at once.")).into());
+        }
+        Ok(self)
+    }
+}
+
+/// One playlist an action on several could not do, and why.
+fn refusal(id: &str, e: &ToggleError) -> serde_json::Value {
+    json!({ "id": id, "error": e.to_string() })
+}
+
+/// Several playlists favourited, or not (`on`), each as its own heart (decision 0023): those done, those not and why.
+async fn playlists_favorite(State(app): State<Arc<App>>, Json(b): Json<ManyPlaylists>) -> Result<Json<serde_json::Value>, ApiError> {
+    let b = b.checked()?;
+    let (mut done, mut not) = (Vec::new(), Vec::new());
+    for id in &b.ids {
+        match app.playlists.set_favorite(id, b.source.as_deref(), b.on).await {
+            Ok(()) => done.push(id.clone()),
+            Err(e) => not.push(refusal(id, &e)),
+        }
+    }
+    Ok(Json(json!({ "favorite": b.on, "done": done, "failed": not })))
+}
+
+/// Several playlists deleted, each as its own delete: those deleted, the undo tokens of them all (for `/api/undo` at
+/// once: one Undo for the lot), those not and why.
+async fn playlists_delete(State(app): State<Arc<App>>, Json(b): Json<ManyPlaylists>) -> Result<Json<serde_json::Value>, ApiError> {
+    let b = b.checked()?;
+    let (mut deleted, mut undo, mut not) = (Vec::new(), Vec::new(), Vec::new());
+    for id in &b.ids {
+        match app.playlists.delete(id).await {
+            Ok(token) => {
+                deleted.push(id.clone());
+                undo.extend(token);
+            }
+            Err(e) => not.push(refusal(id, &e)),
+        }
+    }
+    Ok(Json(json!({ "deleted": deleted, "undo": undo, "failed": not })))
+}
+
+/// Several playlists linked to a target (`on`), or the links taken off, each as its own (the Sync tab's Shared: target
+/// `shared`): those done, those not and why.
+async fn playlists_link(State(app): State<Arc<App>>, Json(b): Json<ManyPlaylists>) -> Result<Json<serde_json::Value>, ApiError> {
+    let b = b.checked()?;
+    let target = b.target.clone().unwrap_or_else(|| "shared".to_string());
+    let (mut done, mut not) = (Vec::new(), Vec::new());
+    for id in &b.ids {
+        let r = if b.on { app.playlists.link(id, &target).await } else { app.playlists.unlink(id, &target).await };
+        match r {
+            Ok(()) => done.push(id.clone()),
+            Err(e) => not.push(refusal(id, &e)),
+        }
+    }
+    Ok(Json(json!({ "target": target, "on": b.on, "done": done, "failed": not })))
+}
+
+/// Several playlists' rows for their views (the Repair tab), each as `/api/playlists/{id}/rows` answers: in the order
+/// asked, one that cannot be read with why.
+async fn playlists_rows(State(app): State<Arc<App>>, Json(b): Json<ManyPlaylists>) -> Result<Json<serde_json::Value>, ApiError> {
+    let b = b.checked()?;
+    let mut out = Vec::with_capacity(b.ids.len());
+    for id in &b.ids {
+        out.push(match app.playlists.rows(id, b.source.as_deref()).await {
+            Ok((source, rows)) => json!({ "id": id, "source": source, "rows": rows }),
+            Err(e) => refusal(id, &e),
+        });
+    }
+    Ok(Json(json!({ "playlists": out })))
 }
 
 /// One action's undo tokens (decision 0026): one, or one per playlist of an action on several.
