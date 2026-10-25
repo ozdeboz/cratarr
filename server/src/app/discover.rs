@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use super::import::{Matcher, key, loose};
 use super::lastfm::{Auth, Progress};
 use super::musicbrainz::Asked as _;
+use super::reach::Sent as _;
 
 /// The task's kind (`app::tasks`).
 pub const KIND: &str = "discover";
@@ -202,7 +203,7 @@ struct Rec {
 
 /// The recordings ListenBrainz recommends for `user`, scored (none while it has made none).
 async fn lb_recommended(http: &reqwest::Client, user: &str) -> Result<Vec<(String, f64)>> {
-    let res = http.get(format!("{LB_API}/cf/recommendation/user/{user}/recording")).query(&[("count", "100")]).send().await.context("ListenBrainz did not answer")?;
+    let res = http.get(format!("{LB_API}/cf/recommendation/user/{user}/recording")).query(&[("count", "100")]).sent().await.context("ListenBrainz did not answer")?;
     if res.status() == reqwest::StatusCode::NO_CONTENT || res.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(Vec::new());
     }
@@ -215,7 +216,7 @@ async fn lb_exploration(http: &reqwest::Client, user: &str) -> Result<Vec<String
     let list: serde_json::Value = http
         .get(format!("{LB_API}/user/{user}/playlists/createdfor"))
         .query(&[("count", "25")])
-        .send()
+        .sent()
         .await
         .context("ListenBrainz did not answer")?
         .error_for_status()?
@@ -232,7 +233,7 @@ async fn lb_exploration(http: &reqwest::Client, user: &str) -> Result<Vec<String
         .collect();
     let mut out = Vec::new();
     for id in ids {
-        let pl: serde_json::Value = http.get(format!("{LB_API}/playlist/{id}")).send().await?.error_for_status()?.json().await?;
+        let pl: serde_json::Value = http.get(format!("{LB_API}/playlist/{id}")).sent().await?.error_for_status()?.json().await?;
         for r in pl["playlist"]["track"]
             .as_array()
             .into_iter()
@@ -255,7 +256,7 @@ async fn lb_albums(http: &reqwest::Client, recordings: &[String], progress: &Pro
         let meta: HashMap<String, serde_json::Value> = http
             .get(format!("{LB_API}/metadata/recording/"))
             .query(&[("recording_mbids", batch.join(",").as_str()), ("inc", "artist release")])
-            .send()
+            .sent()
             .await
             .context("ListenBrainz did not answer")?
             .error_for_status()?
@@ -295,7 +296,7 @@ async fn lb_group_facts(http: &reqwest::Client, groups: &[String]) -> Result<Has
         let meta: HashMap<String, serde_json::Value> = http
             .get(format!("{LB_API}/metadata/release_group/"))
             .query(&[("release_group_mbids", batch.join(",").as_str()), ("inc", "tag")])
-            .send()
+            .sent()
             .await
             .context("ListenBrainz did not answer")?
             .error_for_status()?
@@ -380,7 +381,7 @@ async fn fm(http: &reqwest::Client, auth: &Auth, method: &str, params: &[(&str, 
     }
     q.insert("format", "json".into());
     tokio::time::sleep(FM_PAUSE).await;
-    let body: serde_json::Value = http.get(FM_API).query(&q).send().await.context("Last.fm did not answer")?.json().await?;
+    let body: serde_json::Value = http.get(FM_API).query(&q).sent().await.context("Last.fm did not answer")?.json().await?;
     if let Some(why) = body["message"].as_str().filter(|_| body.get("error").is_some()) {
         anyhow::bail!("Last.fm: {why}");
     }
@@ -727,7 +728,7 @@ async fn from_fresh(http: &reqwest::Client, user: &str) -> Result<Vec<Candidate>
     let body: serde_json::Value = http
         .get(format!("{LB_API}/user/{user}/fresh_releases"))
         .query(&[("days", FRESH_DAYS), ("past", "true"), ("future", "false")])
-        .send()
+        .sent()
         .await
         .context("ListenBrainz did not answer")?
         .error_for_status()?

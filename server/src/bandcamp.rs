@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use crate::app::reach::Sent as _;
 
 /// An album's page read again after this long: its streams' addresses expire.
 const KEEP: Duration = Duration::from_secs(5 * 60);
@@ -137,7 +138,7 @@ impl Bandcamp {
     async fn send(&self, req: reqwest::RequestBuilder) -> Result<reqwest::Response> {
         let mut next = self.next.lock().await;
         tokio::time::sleep_until((*next).into()).await;
-        let resp = req.send().await;
+        let resp = req.sent().await;
         *next = Instant::now() + PACE;
         let resp = resp.context("cannot reach Bandcamp")?;
         let status = resp.status();
@@ -209,7 +210,7 @@ impl Bandcamp {
         if let Some(r) = range {
             req = req.header(reqwest::header::RANGE, r);
         }
-        let resp = req.send().await.context("cannot reach Bandcamp")?;
+        let resp = req.sent().await.context("cannot reach Bandcamp")?;
         if !resp.status().is_success() {
             // An address expired early: read the page again next time.
             self.kept.lock().unwrap_or_else(|p| p.into_inner()).remove(&a.url);

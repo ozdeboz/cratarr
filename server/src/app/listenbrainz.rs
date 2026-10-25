@@ -14,6 +14,7 @@ use serde::Deserialize;
 
 use super::import::{Counter, Matcher, Tally, Track};
 use crate::userdata::{Ended, Heard};
+use super::reach::Sent as _;
 
 const API: &str = "https://api.listenbrainz.org/1/user";
 /// ListenBrainz's largest page.
@@ -87,7 +88,7 @@ async fn fetch(user: &str, progress: &super::lastfm::Progress) -> Result<Vec<Lis
         if let Some(ts) = before {
             url.query_pairs_mut().append_pair("max_ts", &ts.to_string());
         }
-        let page: Page = http.get(url).send().await?.error_for_status().context("ListenBrainz did not answer")?.json().await?;
+        let page: Page = http.get(url).sent().await?.error_for_status().context("ListenBrainz did not answer")?.json().await?;
         let n = page.payload.listens.len();
         for r in page.payload.listens {
             let m = r.track_metadata;

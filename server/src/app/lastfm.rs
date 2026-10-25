@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use super::import::{Counter, Listened, Matcher, Tally, Track, into_history, key};
 use crate::serve::import::{Seen, decide};
 use crate::userdata::{ImportChange, ImportKey, Kind};
+use super::reach::Sent as _;
 
 const API: &str = "https://ws.audioscrobbler.com/2.0/";
 /// Last.fm's largest page of recent tracks (and of loved ones).
@@ -184,7 +185,7 @@ async fn read(method: &str, user: &str, auth: &Auth, from: Option<i64>, step: &s
             q.insert("api_sig", sig);
         }
         q.insert("format", "json".into());
-        let res = http.get(API).query(&q).send().await.context("Last.fm did not answer")?;
+        let res = http.get(API).query(&q).sent().await.context("Last.fm did not answer")?;
         let ok = res.status().is_success();
         let body = res.text().await?;
         if let Some(r) = serde_json::from_str::<Refused>(&body).ok().filter(|r| !ok || r.error.is_some()) {
@@ -305,7 +306,7 @@ async fn track_album(http: &reqwest::Client, auth: &Auth, artist: &str, title: &
     let body: serde_json::Value = http
         .get(API)
         .query(&[("method", "track.getinfo"), ("api_key", auth.key.as_str()), ("artist", artist), ("track", title), ("autocorrect", "1"), ("format", "json")])
-        .send()
+        .sent()
         .await
         .context("Last.fm did not answer")?
         .json()

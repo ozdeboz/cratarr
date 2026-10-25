@@ -28,6 +28,9 @@ pub struct Open {
     pub page: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub switch: Option<&'static str>,
+    /// The thing on that page it opens (a connection in Settings: `musicbrainz`, `discogs`, `lastfm`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thing: Option<&'static str>,
 }
 
 /// What a check finds.
@@ -119,7 +122,8 @@ fn name_of(key: &str) -> &'static str {
         "incoming:duplicates" => "Duplicates",
         "incoming:failed" => "Failed conversions",
         "playlists:missing" => "Missing tracks",
-        "analysis:audiomuse" => "AudioMuse",
+        // No tool names in the names (the owner, 2026-10-26).
+        "analysis:audiomuse" => "Analysis",
         "servers:lidarr" => "Lidarr",
         "sign-in:refused" => "Refused requests",
         "sign-in:throttled" => "Throttled sign-ins",
@@ -163,7 +167,7 @@ pub fn ordered(mut findings: Vec<Finding>, at: i64) -> Vec<Finding> {
 
 /// The library's files the catalogue could not read properly (decision 0025): its own counts.
 pub fn files(issues: &BTreeMap<String, u64>) -> Vec<Finding> {
-    let health = || Some(Open { page: "health", switch: None });
+    let health = || Some(Open { page: "health", switch: None, thing: None });
     let mut out = Vec::new();
     for (kind, &count) in issues {
         if count == 0 {
@@ -253,6 +257,43 @@ pub fn incoming(upgrades: u64, duplicates: u64, failed: u64) -> Vec<Finding> {
     out
 }
 
+/// The connections failing (0.9.6, the owner: each one's signal): a service Cratarr calls out to that failed a few
+/// times in a row, or for a quarter of an hour, with no answer since; a switched-off one says nothing. MusicBrainz is
+/// critical (the background pass and Find more music stop), the rest a warning.
+fn check_connections(at: i64) -> Vec<Finding> {
+    let tz = super::moment::tz(super::moment::told(at).as_ref());
+    let clock = |t: i64| {
+        let s = (t + tz).rem_euclid(86_400);
+        format!("{:02}:{:02}", s / 3600, (s % 3600) / 60)
+    };
+    let switched_off = |name: &str| match name {
+        "musicbrainz" => !super::switches::is_on(super::switches::MUSICBRAINZ),
+        "discogs" => !super::switches::is_on(super::switches::DISCOGS),
+        "lastfm" => !super::switches::is_on(super::switches::LASTFM),
+        _ => false,
+    };
+    super::reach::failing(at)
+        .into_iter()
+        .filter(|(name, _)| !switched_off(name))
+        .map(|(name, s)| {
+            let level = if name == "musicbrainz" { Level::Critical } else { Level::Warning };
+            let mut f = finding("connections", format!("connections:{name}"), level, 1, format!("{} is failing since {}", super::reach::label(name), clock(s.failing_since)));
+            f.name = super::reach::label(name).to_string();
+            f.detail = s.last_error.map(|(_, why)| why);
+            f.open = matches!(name, "musicbrainz" | "discogs" | "lastfm").then_some(Open { page: "settings", switch: None, thing: Some(name_static(name)) });
+            f
+        })
+        .collect()
+}
+
+fn name_static(name: &str) -> &'static str {
+    match name {
+        "musicbrainz" => "musicbrainz",
+        "discogs" => "discogs",
+        _ => "lastfm",
+    }
+}
+
 /// Requests waiting for an answer (decision 0070), each named, opening the Requests page.
 fn check_requests() -> anyhow::Result<Vec<Finding>> {
     let Some(serve) = crate::serve::instance() else { return Ok(Vec::new()) };
@@ -262,7 +303,7 @@ fn check_requests() -> anyhow::Result<Vec<Finding>> {
     }
     let count = super::requests::waiting(&serve)? as u64;
     let mut f = finding("requests", "requests:waiting", Level::Info, count, format!("{} waiting", n(count, "request", "requests")));
-    f.open = Some(Open { page: "requests", switch: None });
+    f.open = Some(Open { page: "requests", switch: None, thing: None });
     f.items = waiting.into_iter().map(|r| Item { title: r.album, line: Some(format!("{} · asked by {}", r.artist, r.user)), ..Item::default() }).collect();
     Ok(vec![f])
 }
@@ -289,7 +330,7 @@ impl App {
         }
         findings.extend(self.check_players());
         checked.insert("players", at);
-        for (domain, found) in [("sign-in", check_sign_in(at)), ("server", check_server(at)), ("requests", check_requests())] {
+        for (domain, found) in [("sign-in", check_sign_in(at)), ("server", check_server(at)), ("requests", check_requests()), ("connections", Ok(check_connections(at)))] {
             findings.extend(or_failed(domain, found));
             checked.insert(domain, at);
         }
@@ -333,7 +374,7 @@ impl App {
             .take(ITEMS)
             .map(|p| Item { title: p.name.clone(), line: Some(n(p.dead as u64, "missing track", "missing tracks")), playlist: Some(p.name.clone()), ..Item::default() })
             .collect();
-        f.open = Some(Open { page: "playlists", switch: None });
+        f.open = Some(Open { page: "playlists", switch: None, thing: None });
         Ok(vec![f])
     }
 
@@ -394,7 +435,7 @@ impl App {
         if tracks == 0 || heard >= tracks {
             return Ok(Vec::new());
         }
-        let mut f = finding("analysis", "analysis:audiomuse", Level::Info, heard, format!("AudioMuse has heard {heard} of {tracks}"));
+        let mut f = finding("analysis", "analysis:audiomuse", Level::Info, heard, format!("{heard} of {tracks} tracks analysed"));
         f.of = Some(tracks);
         // The album folders with the most tracks not heard yet.
         let mut by: HashMap<&str, (u64, u64)> = HashMap::new();
@@ -430,7 +471,7 @@ impl App {
     /// About showed it until the owner, 2026-10-24).
     async fn check_servers(&self) -> anyhow::Result<Vec<Finding>> {
         let view = self.settings.view().await?;
-        let settings = || Some(Open { page: "settings", switch: None });
+        let settings = || Some(Open { page: "settings", switch: None, thing: None });
         let mut out = Vec::new();
         if view.settings_file.is_none() {
             let mut f = finding("server", "server:settings-file", Level::Critical, 1, "Settings can't be saved");
