@@ -1,5 +1,6 @@
 <script lang="ts" generics="T extends string | boolean">
-  // A segmented switch: one of a few choices, pressed in the accent (a page's order, its layout). Words or icons.
+  // One of a few short choices (two or three, a page's layout, a direction): a rounded track, the chosen one in the
+  // accent. Words or icons. More choices, or long ones, are a row that opens a sheet (lib/settings/ChoiceSheet).
   import Icon, { type IconName } from './Icon.svelte';
 
   let {
@@ -23,29 +24,34 @@
       aria-pressed={value === o.value}
       aria-label={o.icon ? o.label : undefined}
       title={o.title ?? (o.icon ? o.label : undefined)}
-      onclick={() => (value = o.value)}>{#if o.icon}<Icon name={o.icon} size={22} />{:else}{o.label}{/if}</button
+      onclick={() => (value = o.value)}>{#if o.icon}<Icon name={o.icon} size={20} />{:else}{o.label}{/if}</button
     >
   {/each}
 </div>
 
 <style>
+  /* One rounded track, the choice an accent thumb in it (the owner, 2026-10-25: mockup B, for "our squarish
+     multi-pill selector" everywhere): low, as wide as its words, so it sits beside a row's name. */
   .seg {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    overflow: hidden;
-    background: var(--surface);
+    gap: 2px;
+    max-width: 100%;
+    padding: 3px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--text) 9%, transparent);
   }
 
   /* A choice's words on one line: where they do not fit, the row puts the whole control under its name instead. */
   button {
-    min-height: 44px;
-    padding: 0 16px;
-    background: var(--surface);
+    min-height: 30px;
+    padding: 0 14px;
     border: 0;
-    color: var(--text);
+    border-radius: 999px;
+    background: none;
+    color: var(--muted);
     font: inherit;
+    font-size: 0.93em;
     white-space: nowrap;
     cursor: pointer;
   }
@@ -53,7 +59,7 @@
   button.icon {
     display: grid;
     place-items: center;
-    padding: 0 12px;
+    padding: 0 10px;
   }
 
   button[aria-pressed='true'] {

@@ -2,12 +2,14 @@
   // Cratarr's loading sign: the mark in motion (lib/markMotion.ts, the owner's tuning). It opens with the Reveal, plays
   // loop variations while `loading`, and once that is false ends with the Vanish after the playing variation, then
   // calls `ondone`. Reduced motion: the still mark. `size` is its diameter.
+  import { reducedMotion } from './motion';
   import { untrack } from 'svelte';
   import { CENTRE, GAP, LINE_EDGE_IN, LINE_EDGE_OUT, NOTHING, VARIANTS, WHOLE, paths, shuffleBag, type Paths, type VariantName } from './markMotion';
 
   let { size = 48, loading = true, ondone }: { size?: number; loading?: boolean; ondone?: () => void } = $props();
 
-  const reduced = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // The system's reduced motion, or Animations off on this device (lib/motion).
+  const reduced = typeof matchMedia !== 'undefined' && reducedMotion();
   let frame = $state<Paths>(reduced ? WHOLE : NOTHING);
   // The lines show only between two edges (one per mark on the page, so the mask's id is its own).
   const edge = `mark-edge-${Math.random().toString(36).slice(2)}`;

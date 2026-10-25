@@ -3033,6 +3033,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
     }
   }
 
+  /* Animations off on this device (Display): the same as the system's reduced motion. */
+  :global(:root[data-motion='off']) .dots i {
+    animation: none;
+  }
+
   /* A row's tick in select mode: an empty circle, filled with its check once ticked. */
   .tick :global(svg) {
     opacity: 0.7;

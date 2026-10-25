@@ -149,9 +149,11 @@
     opacity: 0.5;
   }
 
+  /* The name's room: little reserved (6em, it was 10), so a short choice fits beside it on a phone instead of a line
+     of its own (the owner, 2026-10-25). */
   .main {
     display: flex;
-    flex: 1 1 10em;
+    flex: 1 1 6em;
     align-items: center;
     gap: 14px;
     min-width: 0;

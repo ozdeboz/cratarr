@@ -2,11 +2,13 @@
   // A panel's title as a breadcrumb (0.9.3; the owner, 2026-10-25: Requests, Downloads, Insights, Health and Settings
   // get "pure breadcrumbs", "2 at most. So the current and one level above."): the level above, a tap back there, then
   // where one is. The page's own name above does what the panel's ✕ does; without a way back (`go`), it is only said.
-  let { up, here }: { up: { label: string; go?: () => void }; here: string } = $props();
+  // No level above (`up` left out): only where one is, as beside the page whose name its list already shows (the
+  // owner, 2026-10-25: Settings › Display beside Settings' list said Settings twice).
+  let { up = null, here }: { up?: { label: string; go?: () => void } | null; here: string } = $props();
 </script>
 
 <h2 class="crumbs">
-  {#if up.go}<button class="up" onclick={up.go}>{up.label}</button>{:else}<span class="up">{up.label}</span>{/if}<span class="sep" aria-hidden="true">›</span><span class="here" aria-current="page">{here}</span>
+  {#if up}{#if up.go}<button class="up" onclick={up.go}>{up.label}</button>{:else}<span class="up">{up.label}</span>{/if}<span class="sep" aria-hidden="true">›</span>{/if}<span class="here" aria-current="page">{here}</span>
 </h2>
 
 <style>

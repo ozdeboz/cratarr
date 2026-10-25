@@ -107,7 +107,7 @@
   {#if thing}
     <Crumbs up={{ label: partTitle, go: () => backFromThing(section) }} here={title} />
   {:else}
-    <Crumbs up={{ label: 'Settings', go: beside ? undefined : () => upToPage('#/settings') }} here={partTitle} />
+    <Crumbs up={beside ? null : { label: 'Settings', go: () => upToPage('#/settings') }} here={partTitle} />
   {/if}
 {/snippet}
 {#snippet glassExtra()}

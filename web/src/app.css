@@ -121,6 +121,20 @@ button[aria-busy='true']::after {
   }
 }
 
+/* Animations off on this device (Display, the owner 2026-10-25): what the system's reduced motion stops (each part's
+   rules beside its own), every change of a style at once (no transitions), and a busy button's ring as slow. Svelte's
+   own transitions end at once too (lib/motion). */
+:root[data-motion='off'] *,
+:root[data-motion='off'] *::before,
+:root[data-motion='off'] *::after {
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+
+:root[data-motion='off'] button[aria-busy='true']::after {
+  animation-duration: 2s;
+}
+
 button[aria-busy='true']:disabled {
   opacity: 1;
 }

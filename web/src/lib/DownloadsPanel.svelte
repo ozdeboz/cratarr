@@ -114,7 +114,7 @@
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
   {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
-  <Crumbs up={{ label: 'Downloads', go: beside ? undefined : () => upToPage('#/downloads') }} here={L.label} />
+  <Crumbs up={beside ? null : { label: 'Downloads', go: () => upToPage('#/downloads') }} here={L.label} />
 {/snippet}
 
 <div class="view" class:handed>

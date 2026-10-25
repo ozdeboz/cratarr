@@ -95,6 +95,8 @@ export type Theme = 'auto' | 'light' | 'dark';
 
 export type Prefs = {
   theme: Theme;
+  /** This device's animations (Display, the owner 2026-10-25): off, as the system's reduced motion (lib/motion). */
+  animations: boolean;
   /** Index into the playlist chip widths (Playlists.svelte). */
   zoom: number;
   /** Index into a menu's playlists' widths (LIST_WIDTHS, Add to playlist): one column by default. */
@@ -265,6 +267,7 @@ const KEY = 'cratarr-prefs';
 export const ZOOM_STEPS = 6;
 export const DEFAULTS: Prefs = {
   theme: 'auto',
+  animations: true,
   zoom: 2,
   listZoom: LIST_WIDTHS.length - 1,
   listOrder: 'playing',
@@ -330,6 +333,7 @@ function read(): Prefs {
     const saved = JSON.parse(localStorage.getItem(KEY) ?? 'null');
     if (saved && typeof saved === 'object') {
       if (['auto', 'light', 'dark'].includes(saved.theme)) p.theme = saved.theme;
+      if (typeof saved.animations === 'boolean') p.animations = saved.animations;
       if (Number.isInteger(saved.zoom) && saved.zoom >= 0 && saved.zoom < ZOOM_STEPS) p.zoom = saved.zoom;
       if (Number.isInteger(saved.listZoom) && saved.listZoom >= 0 && saved.listZoom < LIST_WIDTHS.length) p.listZoom = saved.listZoom;
       if (typeof saved.filterOpen === 'boolean') p.filterOpen = saved.filterOpen;
@@ -445,5 +449,7 @@ $effect.root(() => {
     if (inApp) toApp({ type: 'page-prefs', prefs: snapshot });
     if (prefs.theme === 'auto') document.documentElement.removeAttribute('data-theme');
     else document.documentElement.dataset.theme = prefs.theme;
+    if (prefs.animations) document.documentElement.removeAttribute('data-motion');
+    else document.documentElement.dataset.motion = 'off';
   });
 });

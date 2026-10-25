@@ -68,4 +68,9 @@
     }
   }
 
+  /* Animations off on this device (Display): the same as the system's reduced motion. */
+  :global(:root[data-motion='off']) .eq i {
+    animation: none;
+  }
+
 </style>

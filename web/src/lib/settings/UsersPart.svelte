@@ -27,7 +27,7 @@
   import { me } from '../me.svelte';
   import { backFromThing, openThing } from '../panel.svelte';
   import PageLoading from '../PageLoading.svelte';
-  import Seg from '../Seg.svelte';
+  import Switch from '../Switch.svelte';
   import { nameThing } from '../settingsSections.svelte';
   import { toast } from '../toast.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
@@ -49,11 +49,6 @@
     { key: 'auto_approve', label: 'Requests approved at once' },
     { key: 'manage_requests', label: 'Answer requests' },
   ];
-  const ROLES: { value: 'user' | 'admin'; label: string }[] = [
-    { value: 'user', label: 'User' },
-    { value: 'admin', label: 'Administrator' },
-  ];
-
   let users = $state<User[] | null>(null);
   const load = () =>
     getUsers().then(
@@ -183,9 +178,8 @@
       {#if isMe(u) || !u.active}
         <Item name="Role" value={u.admin ? 'Administrator' : 'User'} line={u.active ? null : 'Removed: switched off, their data kept'} tone={u.active ? null : 'warn'} />
       {:else}
-        <Item name="Role">
-          <Seg label={`Role of ${u.name}`} options={ROLES} bind:value={() => (u.admin ? 'admin' : 'user'), (v) => role(u, v === 'admin')} />
-        </Item>
+        <!-- A yes or no (the owner, 2026-10-25): administers or not. -->
+        <Item name="Administrator" toggle={{ checked: u.admin, onchange: (on) => role(u, on) }} />
       {/if}
       {#if u.active}<Item name="Password" value="Set a new one" onclick={() => (passwording = u)} />{/if}
     </Group>
@@ -249,7 +243,7 @@
     {#if firstOwn}
       <p class="first">The first account administers.</p>
     {:else}
-      <span class="role"><Seg label="Role" options={ROLES} bind:value={newRole} /></span>
+      <Switch card label="Administrator" checked={newRole === 'admin'} onchange={(on) => (newRole = on ? 'admin' : 'user')} />
     {/if}
   </FormSheet>
 {/if}
@@ -263,10 +257,6 @@
 {/if}
 
 <style>
-  .role {
-    display: flex;
-  }
-
   .first {
     margin: 0;
     color: var(--muted);

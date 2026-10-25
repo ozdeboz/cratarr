@@ -6,10 +6,10 @@
   // for every list, the row a folded one keeps, and each row on or off; under Content (the owner, 2026-10-24), switched
   // off as a whole with Music profiles. A list's Typical artists always show where it has
   // them (the owner, 2026-10-24: no switch).
-  import Seg from '../Seg.svelte';
   import BandControls from '../BandControls.svelte';
   import { inApp } from '../app.svelte';
-  import { PROFILE_ROWS, prefs, type Theme } from '../prefs.svelte';
+  import { PROFILE_ROWS, prefs } from '../prefs.svelte';
+  import AppearancePicker from './AppearancePicker.svelte';
   import OrderList from './OrderList.svelte';
   import OrderReset from './OrderReset.svelte';
   import Group from './Group.svelte';
@@ -17,17 +17,13 @@
   import PlayerRowList from './PlayerRowList.svelte';
   import { offerReset } from './reset.svelte';
 
-  const THEMES: { value: Theme; label: string }[] = [
-    { value: 'auto', label: 'System' },
-    { value: 'light', label: 'Light' },
-    { value: 'dark', label: 'Dark' },
-  ];
 
 
   offerReset(
-    () => "Theme, the player's extra details and the profiles back to their defaults.",
+    () => "Theme, animations, the player's extra details and the profiles back to their defaults.",
     () => {
       prefs.theme = 'auto';
+      prefs.animations = true;
       prefs.playerRow = true;
       prefs.playerFacts = [];
       prefs.profileOpen = true;
@@ -40,7 +36,18 @@
 
 <!-- Where it is kept is the group's name: this browser (in the app, this device). -->
 <Group title={inApp ? 'This device' : 'This browser'}>
-  <Item name="Theme"><Seg label="Theme" options={THEMES} bind:value={prefs.theme} /></Item>
+  <!-- Light or dark as two pictures, Automatic under them (the owner, 2026-10-25: Apple's way, mockup T3). Automatic
+       switched off keeps the look the system gave. -->
+  <AppearancePicker />
+  <Item
+    name="Automatic"
+    line="Follows the system"
+    toggle={{
+      checked: prefs.theme === 'auto',
+      onchange: (on) => (prefs.theme = on ? 'auto' : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'),
+    }}
+  />
+  <Item name="Animations" toggle={{ checked: prefs.animations, onchange: (on) => (prefs.animations = on) }} />
 </Group>
 
 <Group title="Player details">

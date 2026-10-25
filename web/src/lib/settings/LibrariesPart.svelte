@@ -8,6 +8,7 @@
   import { backFromThing, openThing } from '../panel.svelte';
   import Seg from '../Seg.svelte';
   import { nameThing } from '../settingsSections.svelte';
+  import ChoiceSheet from './ChoiceSheet.svelte';
   import ConfirmSheet from './ConfirmSheet.svelte';
   import { count, ed, FORMATS, USES, type Draft } from './editor.svelte';
   import FolderBrowser from './FolderBrowser.svelte';
@@ -136,6 +137,8 @@
   let naming = $state<string | null>(null);
   let namingTaken = false;
   let colouring = $state<Lib | null>(null);
+  /** The library whose use is being chosen (the choice sheet). */
+  let choosingUse = $state<Lib | null>(null);
   let removing = $state<Lib | null>(null);
   const incomingUsed = $derived(ed.drafts.some((d) => d.enabled && d.libraries.incoming.length));
   const lines = (t: string) => t.split('\n').map((l) => l.trim()).filter(Boolean);
@@ -146,9 +149,8 @@
   {@const u = ed.useOf(l.d, l.id)}
   {@const pol = ed.policyOf(l.d, l.id)}
   <Group>
-    <Item name="Use" more={USE_MORE}>
-      <Seg label={`Use of ${l.name}`} options={USE_OPTIONS} bind:value={() => u, (v) => ed.setUse(l.d, l.id, v)} />
-    </Item>
+    <!-- The row says it, the choice sheet picks it (the owner, 2026-10-25). -->
+    <Item name="Use" more={USE_MORE} value={useLabel(u)} onclick={() => (choosingUse = l)} />
     {#if u !== 'unused'}
       <Item name="Albums moved in">
         <Seg label={`Albums moved into ${l.name}`} options={FORMAT_OPTIONS} bind:value={() => pol.format, (v) => ed.setPolicy(l.d, l.id, { format: v })} />
@@ -326,6 +328,10 @@
       {/if}
     {/snippet}
   </ValueSheet>
+{/if}
+{#if choosingUse}
+  {@const l = choosingUse}
+  <ChoiceSheet title={`Use of ${l.name}`} options={USE_OPTIONS} value={ed.useOf(l.d, l.id)} onchange={(v) => ed.setUse(l.d, l.id, v)} onclose={() => (choosingUse = null)} />
 {/if}
 {#if colouring}
   {@const l = colouring}

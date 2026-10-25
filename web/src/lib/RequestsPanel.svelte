@@ -119,7 +119,7 @@
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
   {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
-  <Crumbs up={{ label: 'Requests', go: beside ? undefined : () => upToPage('#/requests') }} here={L.label} />
+  <Crumbs up={beside ? null : { label: 'Requests', go: () => upToPage('#/requests') }} here={L.label} />
 {/snippet}
 {#snippet glassExtra()}
   {#if list === 'waiting' && waiting.length}

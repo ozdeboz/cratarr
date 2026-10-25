@@ -103,4 +103,9 @@
       transition: none;
     }
   }
+
+  /* Animations off on this device (Display): the same as the system's reduced motion. */
+  :global(:root[data-motion='off']) .head :global(svg) {
+    transition: none;
+  }
 </style>

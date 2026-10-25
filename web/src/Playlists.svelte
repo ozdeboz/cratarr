@@ -347,6 +347,11 @@
     }
   }
 
+  /* Animations off on this device (Display): the same as the system's reduced motion. */
+  :global(:root[data-motion='off']) .grid :global(.chip.queued) {
+    animation: none;
+  }
+
   /* Track outside Music: adding is refused, so the add chips are quieter and their plus circle dashed (Finamp's mark
      for a playlist it cannot add to); tapping explains why. */
   .grid :global(.chip.blocked) {

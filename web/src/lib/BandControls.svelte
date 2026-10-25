@@ -10,6 +10,7 @@
   import { resetTune, setTune, tuneIsDefault, tuneOf } from './bandTune.svelte';
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
+  import ChoiceSheet from './settings/ChoiceSheet.svelte';
   import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -46,6 +47,8 @@
 
   /** A reset asked about: this look's, or every look's. */
   let asking = $state<'look' | 'all' | null>(null);
+  /** Five looks: the row says the one, the choice sheet picks it (the owner, 2026-10-25). */
+  let picking = $state(false);
   const anyChanged = $derived(Object.values(prefs.playerBandsTunes).some((t) => t && Object.keys(t).length));
 </script>
 
@@ -57,6 +60,7 @@
   <div class="row">
     <span class="head">
       {@render name('Look', BANDS_MORE)}
+      <span class="end">
       {#if look}<button
           class="reset"
           disabled={!anyChanged}
@@ -65,8 +69,11 @@
           onclick={() => !tuneIsDefault(look) && (asking = 'look')}
           use:longpress={() => (asking = 'all')}><Icon name="reset" size={18} /></button
         >{/if}
+      <button class="pick" aria-haspopup="dialog" aria-label="Look: {BAND_LOOKS.find((o) => o.value === prefs.playerBands)?.label}" onclick={() => (picking = true)}
+        >{BAND_LOOKS.find((o) => o.value === prefs.playerBands)?.label}<Icon name="chevronRight" size={18} /></button
+      >
+      </span>
     </span>
-    <Seg label="Look" options={BAND_LOOKS} bind:value={() => prefs.playerBands, choose} />
   </div>
   {#if look && tune}
     <div class="row">
@@ -95,7 +102,7 @@
       {@render name('Gap')}
       <BandSlider label="Gap" range={TUNE_RANGES.gap} bind:value={gap.get, gap.set} ends={['None', 'Wide']} linear wide />
     </div>
-    <div class="row">
+    <div class="row beside">
       {@render name('Direction')}
       <Seg label="Direction" options={BAND_DIRECTIONS} bind:value={direction.get, direction.set} />
     </div>
@@ -108,13 +115,16 @@
       <BandSlider label="Fade" range={TUNE_RANGES.fade} bind:value={fade.get, fade.set} ends={['None', 'Wide']} linear wide />
     </div>
     <!-- This device's, for every look (not a look's setting: its reset leaves it). -->
-    <div class="row">
+    <div class="row beside">
       {@render name('Engine', ENGINE_MORE)}
       <Seg label="Engine" options={BAND_ENGINES} bind:value={prefs.playerBandsEngine} />
     </div>
   {/if}
 </div>
 
+{#if picking}
+  <ChoiceSheet title="Look" options={BAND_LOOKS} value={prefs.playerBands} onchange={choose} onclose={() => (picking = false)} />
+{/if}
 {#if takeover && takeover.to === look}
   <MenuSheet label="Settings for {named(takeover.to)}" icon="sliders" title="Settings for {named(takeover.to)}" onclose={() => (takeover = null)}>
     <div role="menu">
@@ -179,22 +189,33 @@
     font-size: 0.9em;
   }
 
-  /* The segments share the width. */
-  .row :global(.seg) {
-    width: 100%;
+  /* A short choice beside its name (lib/Seg), not a line of its own (the owner, 2026-10-25). */
+  .row.beside {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 12px;
   }
 
-  /* Compact pills here (the owner, 2026-10-24: at most two thirds as tall, little room round the words, the words a
-     touch smaller): 28 px against Seg's 44. */
-  .row :global(.seg) {
-    border-radius: 8px;
+  /* The look: its name, at the end the reset and the one chosen, which opens the choices. */
+  .head .end {
+    display: flex;
+    align-items: center;
+    gap: 4px;
   }
 
-  .row :global(.seg button) {
-    flex: 1;
-    min-height: 28px;
-    padding: 0 8px;
-    font-size: 0.9em;
+  .pick {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-height: 36px;
+    padding: 0 2px 0 10px;
+    border: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
   }
 
 </style>

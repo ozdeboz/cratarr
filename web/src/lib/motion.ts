@@ -17,7 +17,21 @@ export const decelerate = (t: number) => {
   return 3 * (1 - u) * u * u * 1 + u * u * u + 3 * (1 - u) * (1 - u) * u * 0;
 };
 
-export const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+/** Motion reduced: by the system, or Animations switched off on this device (Display; lib/prefs sets `data-motion`). */
+export const reducedMotion = () => document.documentElement.dataset.motion === 'off' || matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Animations off (the owner, 2026-10-25): every transition of Svelte's ends at once, the ones with a duration of their
+// own too. Svelte runs them as Web Animations (Element.animate); with Animations off each runs for no time, so what
+// comes shows and what goes is gone at once, and Svelte's own bookkeeping (its end, the element's removal) still runs.
+if (typeof Element !== 'undefined') {
+  const animate = Element.prototype.animate;
+  Element.prototype.animate = function (keyframes, options) {
+    if (document.documentElement.dataset.motion === 'off') {
+      options = { ...(typeof options === 'number' ? { duration: options } : options), duration: 0, delay: 0 };
+    }
+    return animate.call(this, keyframes, options);
+  };
+}
 
 /** Bottom sheets (menus, the queue): in 250 ms, out 200 ms (Flutter's showModalBottomSheet). */
 export const SHEET_IN = 250;

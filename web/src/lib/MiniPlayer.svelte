@@ -369,4 +369,13 @@
       animation: none;
     }
   }
+
+  /* Animations off on this device (Display): the same as the system's reduced motion. */
+  :global(:root[data-motion='off']) .mini {
+    transition: none;
+  }
+
+  :global(:root[data-motion='off']) .queue.answer :global(svg) {
+    animation: none;
+  }
 </style>

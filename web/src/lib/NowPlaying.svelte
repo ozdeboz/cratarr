@@ -723,6 +723,11 @@
     }
   }
 
+  /* Animations off on this device (Display): the same as the system's reduced motion. */
+  :global(:root[data-motion='off']) .player {
+    transition: none;
+  }
+
   .backdrop {
     position: absolute;
     inset: -15%;
