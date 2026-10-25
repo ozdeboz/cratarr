@@ -102,7 +102,7 @@
   {#if thing}
     <span class="navpill"><button aria-label="Back" title="Back" onclick={() => backFromThing(section)}><Icon name="back" size={22} /></button></span>
   {:else if !beside}
-    <span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>
+    <span class="navpill"><button aria-label="Back" title="Back" onclick={() => closePlaylist()}><Icon name="back" size={22} /></button></span>
   {/if}
   <!-- Settings › the part; a thing's page: its part › its name (lib/Crumbs: two at most, the owner 2026-10-25). -->
   {#if thing}

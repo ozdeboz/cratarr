@@ -57,7 +57,7 @@
   {#if item}
     <span class="navpill"><button aria-label="Back" title="Back" onclick={() => backFromStep(HEALTH + problem)}><Icon name="back" size={22} /></button></span>
   {:else if !beside}
-    <span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>
+    <span class="navpill"><button aria-label="Back" title="Back" onclick={() => closePlaylist()}><Icon name="back" size={22} /></button></span>
   {/if}
   {#if item}
     <Crumbs up={{ label: p?.title ?? 'Health', go: () => backFromStep(HEALTH + problem) }} here={item.title} />

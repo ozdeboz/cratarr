@@ -53,7 +53,7 @@
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
 {#snippet glassLeft()}
-  {#if !beside}<span class="navpill"><button aria-label="Close" title="Close" onclick={() => closePlaylist()}><Icon name="close" size={22} /></button></span>{/if}
+  {#if !beside}<span class="navpill"><button aria-label="Back" title="Back" onclick={() => closePlaylist()}><Icon name="back" size={22} /></button></span>{/if}
   {#if v.under}
     {@const parent = INSIGHTS_VIEWS.find((x) => x.id === v.under)}
     <Crumbs up={{ label: parent?.label ?? v.group, go: () => viewPlaylist(INSIGHTS + v.under) }} here={v.label} />
