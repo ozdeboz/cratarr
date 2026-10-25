@@ -4,6 +4,7 @@
   // name, what it is set to now in a line, and ›. A tap opens the part in the panel (lib/SettingsPanel): beside the list
   // on a roomy window, where a part is always open (App: the one last open), its row tinted; over the list on a phone,
   // as a playlist opens. About is a sheet from the info button, the pill's own (App, lib/AboutSheet).
+  import { deviceName } from './lib/playOnTarget.svelte';
   import { getHomeAssistant, getImport, getLogLevels, getSettings, getSignInRequired, getUsers, type ImportJob, type Settings } from './lib/api';
   import { me } from './lib/me.svelte';
   import { appInfo, downloads, inApp } from './lib/app.svelte';
@@ -70,8 +71,9 @@
   function line(id: SettingsSection): string {
     switch (id) {
       case 'device':
-        if (!inApp) return prefs.browserName || 'This browser';
-        return [appInfo.player, appInfo.stayReady ? 'Stays ready' : null, downloads.known ? `${size(downloads.bytes)} downloaded` : null].filter(Boolean).join(' · ');
+        // Its name is the row's title; the line says what it is (the owner, 2026-10-25).
+        if (!inApp) return 'This browser';
+        return ['This device', appInfo.stayReady ? 'Stays ready' : null, downloads.known ? `${size(downloads.bytes)} downloaded` : null].filter(Boolean).join(' · ');
       case 'connections':
         if (!s) return '';
         return [...s.sources.filter((v) => v.enabled).map((v) => (v.status.connected ? v.label : `${v.label} (not connected)`)), s.lidarr ? 'Lidarr' : null, homeAssistant ? 'Home Assistant' : null]
@@ -166,7 +168,7 @@
             <button class="row" class:open aria-pressed={open} onclick={() => viewPlaylist(SETTINGS + c.id)}>
               <Icon name={c.icon} size={24} />
               <span class="text">
-                <span class="name">{c.title}</span>
+                <span class="name">{c.id === 'device' ? deviceName() : c.title}</span>
                 {#if l}<small>{l}</small>{/if}
               </span>
               <span class="chev"><Icon name="chevronRight" size={20} /></span>

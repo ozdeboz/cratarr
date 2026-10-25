@@ -43,7 +43,8 @@ export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app
   { id: 'taste', title: 'Taste', icon: 'music' },
   { id: 'connections', title: 'Connections', icon: 'server', admin: true, everyone: true },
   { id: 'libraries', title: 'Libraries', icon: 'library', admin: true },
-  { id: 'players', title: 'Players', icon: 'speakers', admin: true },
+  // The server's devices (the owner, 2026-10-25: "players should be called devices"), its line still how many players.
+  { id: 'players', title: 'Devices', icon: 'speakers', admin: true },
   { id: 'users', title: 'Users', icon: 'users', admin: true },
   { id: 'auth', title: 'Authentication', icon: 'key', admin: true },
   // Another server's plays and favourites into an account: its administrators' (listening is private).

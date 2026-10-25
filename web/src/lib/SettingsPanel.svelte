@@ -9,6 +9,7 @@
   // going from one to another. Authentication's account, Import, this device's settings and Display act at once. The
   // server's parts are its administrators' (decision 0051): for anyone else they show nothing, and the server's
   // settings are not asked for.
+  import { deviceName } from './playOnTarget.svelte';
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
@@ -51,7 +52,7 @@
   let { section, beside = false }: { section: SettingsSection; beside?: boolean } = $props();
   const thing = $derived(settingsThing(panel.viewed));
   // The part's name, as its row on the Settings page has it; on a thing's page the thing's.
-  const partTitle = $derived(SECTIONS.find((x) => x.id === section)?.title ?? 'Settings');
+  const partTitle = $derived(section === 'device' ? deviceName() : (SECTIONS.find((x) => x.id === section)?.title ?? 'Settings'));
   const title = $derived(thing ? (thingTitle.text ?? '') : partTitle);
 
   // Inside the Android app: its settings as they are now (Android's background permission may have changed meanwhile).

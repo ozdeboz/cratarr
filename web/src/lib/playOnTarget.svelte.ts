@@ -14,6 +14,7 @@ import { canPlayHere, local, pageVolume, playOnCommand, stop } from './localPlay
 import { followGroup, leaveGroup, listening } from './groupListen.svelte';
 import { playOn, drivenName, hereAgain } from './playOn.svelte';
 import { prefs } from './prefs.svelte';
+import { appInfo } from './app.svelte';
 import { asksSignIn, refused, refusedFor, toSignIn } from './reach.svelte';
 import { setOwnSleep, sleep } from './sleep.svelte';
 
@@ -379,3 +380,7 @@ if (typeof window !== 'undefined' && !inApp) {
   setInterval(() => target.connected && report(), HEARTBEAT_MS);
   setInterval(() => target.connected && name && seq > logged && sendLog(name), LOG_MS);
 }
+
+/** This device's name as Play On knows it: the app's player, this browser's (the owner, 2026-10-25: Settings' "This
+ *  device" says it, "Salon tablet"); "This device" before it is known. */
+export const deviceName = () => (inApp ? appInfo.player : prefs.browserName || defaultBrowserName()) || 'This device';
