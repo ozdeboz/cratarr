@@ -85,6 +85,7 @@
   import Seg from './Seg.svelte';
   import SettingRow from './SettingRow.svelte';
   import Cover from './Cover.svelte';
+  import PageLoading from './PageLoading.svelte';
   import { withUndo } from './undo.svelte';
   import { me } from './me.svelte';
 
@@ -507,7 +508,8 @@
     <!-- Change cover (0.9.5): the album's own first, then Discogs' and the Cover Art Archive's, as an artist's albums;
          a tap makes it the cover, inside every file and beside them (Undo brings the old one back). -->
     {#if !covers}
-      <p class="ask pad">Looking for covers…</p>
+      <!-- A few seconds with Discogs (its master and up to six releases, at its pace; a5). -->
+      <PageLoading />
     {:else if !covers.candidates.length}
       <p class="ask pad">No other covers found.</p>
     {:else}

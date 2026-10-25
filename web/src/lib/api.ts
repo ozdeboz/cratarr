@@ -2115,7 +2115,7 @@ export const getAlbumCovers = (source: string, album: string) =>
   request<{ current: CoverChoice | null; candidates: CoverChoice[] }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`);
 /** One of them as the album's cover, inside every file and beside them; its undo token. */
 export const setAlbumCover = (source: string, album: string, url: string) =>
-  post<{ undo: string[] }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/cover`, { url });
+  post<{ undo: string[] }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`, { url });
 
 /** The account's play history deleted, and what was learned from it (a5, 0.9.5): how many plays went. */
 export const deleteHistory = () => request<{ removed: number }>('/api/me/history', { method: 'DELETE' });
