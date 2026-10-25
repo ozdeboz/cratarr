@@ -14,10 +14,14 @@
   let line = $state<HTMLElement>();
   let hereEl = $state<HTMLElement>();
   const whole = $derived(prefs.crumbsWhole);
+  /** Whole and scrolled: what is out of view at the start fades away (the owner, 2026-10-25), not a hard edge. */
+  let hidden = $state(false);
+  const measure = () => (hidden = !!line && line.scrollLeft > 0);
   // Whole: its end in view, whatever the panel or its title.
   $effect(() => {
     void here;
-    if (whole && line) tick().then(() => line?.scrollTo({ left: line.scrollWidth }));
+    if (whole && line) tick().then(() => (line?.scrollTo({ left: line.scrollWidth }), measure()));
+    else hidden = false;
   });
   function show() {
     if (whole) return void (prefs.crumbsWhole = false);
@@ -26,7 +30,7 @@
   }
 </script>
 
-<h2 class="crumbs" class:whole bind:this={line}>
+<h2 class="crumbs" class:whole class:hidden={whole && hidden} bind:this={line} onscroll={measure}>
   {#if up}{#if up.go}<button class="up" onclick={up.go}>{up.label}</button>{:else}<span class="up">{up.label}</span>{/if}<span class="sep" aria-hidden="true">›</span>{/if}<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <span class="here" aria-current="page" bind:this={hereEl} onclick={show}>{here}</span>
 </h2>
@@ -84,6 +88,12 @@
   .crumbs.whole {
     overflow-x: auto;
     scrollbar-width: none;
+  }
+
+  /* Scrolled: its start fades out under what is beside it (the back button). */
+  .crumbs.hidden {
+    mask-image: linear-gradient(to right, transparent, #000 32px);
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 32px);
   }
 
   .crumbs.whole::-webkit-scrollbar {
