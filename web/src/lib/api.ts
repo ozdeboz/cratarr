@@ -2050,3 +2050,11 @@ export const libraryTracks = (p: { q?: string; order: LibraryTrackOrder; down: b
   for (const w of p.without ?? []) u.append('without', w);
   return quietly<{ items: LibraryTrack[]; total: number; offset: number }>(`/api/library/tracks?${u}`);
 };
+
+/** Several albums' tracks in one call (a5, 0.9.4): in the albums' order, each album's in its play order; one that can't
+ *  be read left out. Counted for the progress bar. */
+export const albumsTracks = (albums: { source: string; id: string }[]) =>
+  request<{ tracks: { source: string; id: string; name: string; artist?: string | null; album?: string | null; album_id: string; duration_secs?: number | null }[] }>(
+    '/api/albums/tracks',
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ albums }) },
+  );

@@ -11,6 +11,8 @@ import {
   type AlbumsView,
   type AlbumUse,
   type ListedAlbum,
+  albumsTracks,
+  ApiError,
 } from './api';
 import type { DownloadedTrack } from './app.svelte';
 import { player, refresh, untilNewTrack } from './live.svelte';
@@ -99,8 +101,15 @@ export async function playListedAlbum(source: string, a: ListedAlbum) {
 
 /** Several albums' tracks, one album after another, in each album's order (an album's select bar). */
 export async function tracksOfAlbums(list: { source: string; a: ListedAlbum }[]): Promise<LocalTrack[]> {
-  // A few albums at a time: thousands at once (Select, All) waited in the browser's line until they timed out, "cannot
-  // reach" (the owner, 2026-10-25). One call for them all comes from the server (a5).
+  // One call for them all (a5, 0.9.4: thousands of album views at once timed out, "cannot reach", the owner 2026-10-25).
+  try {
+    const { tracks } = await albumsTracks(list.map(({ source, a }) => ({ source, id: a.id })));
+    return tracks.map((t) => ({ source: t.source, id: t.id, name: t.name, artist: t.artist ?? null, album: t.album ?? null, album_id: t.album_id, duration_secs: t.duration_secs ?? null }));
+  } catch (e) {
+    // A server before it (no such call): album by album as below; anything else is the error it is.
+    if (!(e instanceof ApiError && (e.status === 404 || e.status === 405))) throw e;
+  }
+  // A few albums at a time: thousands at once waited in the browser's line until they timed out.
   const views: { r: Awaited<ReturnType<typeof albumView>>; a: ListedAlbum }[] = new Array(list.length);
   let next = 0;
   // The bar at the top says how far it is (lib/progress).
