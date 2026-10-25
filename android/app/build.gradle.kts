@@ -21,7 +21,7 @@ android {
         applicationId = "app.cratarr"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionName = "0.9.1"
+        versionName = "0.9.2"
         versionCode = 8
     }
 
