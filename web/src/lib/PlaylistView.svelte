@@ -877,6 +877,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   type BarAction = { key: string; icon: IconName; label: string; run: () => void; disabled: boolean };
   const canPlay = $derived(multi ? chosenCount > 0 : playable.length > 0);
   const barActions = $derived.by((): BarAction[] => {
+    // An artist from Discover: nothing of theirs to play from here (their albums play on their own panels).
+    if (artist && fromDiscover(artist.source)) return [];
     const play = (key: PlayMode, icon: IconName, label: string): BarAction => ({ key, icon, label, run: () => act(key), disabled: !canPlay });
     const list = [play('play', 'play', 'Play')];
     if (album && !offServer) list.push({ key: 'resume', icon: 'resume', label: 'Resume', run: resumeAlbum, disabled: !resumeAt });
@@ -909,6 +911,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
     if (crate) return rows ? plural(total, 'track') : '';
     if (multi) return playlistsKnown() ? plural(chosenCount, 'track') : '';
     if (!rows) return '';
+    // An artist from Discover: their albums on Bandcamp, no tracks of a server's.
+    if (artist && fromDiscover(artist.source)) return `${plural(artistHead?.albums.length ?? 0, 'album')} on Bandcamp`;
     if (artist) {
       const albums = artist.tracks ? null : plural(artistHead?.albums.length ?? 0, 'album');
       return [albums, plural(rows.length, 'track'), length ? clockText(length) : null].filter(Boolean).join(' • ');

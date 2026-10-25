@@ -1473,7 +1473,10 @@ export type FoundTrack = { id: string; title: string; artist: string; album: str
 /** The library searched by words (`q`), or found again for a missing playlist line (`line`, lib/HealthMissing). */
 export const findTracks = (q: string, line?: string) =>
   request<FoundTrack[]>(`/api/library/find?${new URLSearchParams(line ? { line } : { q })}`);
-export const getArtistAbout = (name: string) => quietly<{ id: string | null; bio: string | null; photo: boolean }>(`/api/artists/about?name=${encodeURIComponent(name)}`);
+/** Whose a photo is and under which licence, where it is free to use with credit (Wikimedia Commons', 0.9.3). */
+export type PhotoCredit = { author: string; licence: string; url: string };
+export const getArtistAbout = (name: string) =>
+  quietly<{ id: string | null; bio: string | null; photo: boolean; photo_credit?: PhotoCredit | null }>(`/api/artists/about?name=${encodeURIComponent(name)}`);
 export const getDigging = (source?: string, without?: string[]) =>
   quietly<Digging>(`/api/home/digging?${new URLSearchParams({ ...(source ? { source } : {}), ...(without?.length ? { without: without.join(',') } : {}) })}`);
 /** An artist's Top recommendations (the owner, 2026-10-23: "a list of tracks which follows taste"): their tracks
@@ -1598,7 +1601,8 @@ export const notDiscover = (key: string) => post<{ undo: string }>('/api/discove
 export const hideDiscover = (key: string) => post<{ undo: string }>('/api/discover/hide', { key });
 /** A Bandcamp album's tracks to play as a preview (decision 0071), as players hold them; never a play. */
 /** An artist new to the library (Discover's New to you): TheAudioDB's description, and whether there is a photo. */
-export const getDiscoverArtist = (name: string) => quietly<{ bio: string | null; photo: boolean }>(`/api/discover/artist?name=${encodeURIComponent(name)}`);
+export const getDiscoverArtist = (name: string) =>
+  quietly<{ bio: string | null; photo: boolean; photo_credit?: PhotoCredit | null }>(`/api/discover/artist?name=${encodeURIComponent(name)}`);
 export const discoverArtistPhotoUrl = (name: string) => `/api/discover/artist/photo?name=${encodeURIComponent(name)}`;
 /** An artist related to another (the server's app/related.rs): why, their id in the library, or an album of theirs on
  *  Bandcamp. */
