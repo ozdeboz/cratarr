@@ -1295,6 +1295,72 @@ pub fn suggestion_on_bandcamp(serve: &crate::serve::Serve, account: &str, page: 
     Ok(kept(serve, account)?.and_then(|f| f.albums.into_iter().find(|s| s.bandcamp.as_deref().is_some_and(|b| bare(b) == page))))
 }
 
+/// An album of an artist's the library has none of (0.9.3, the owner: an artist's page shows their missing albums).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Missing {
+    pub release_group: String,
+    pub title: String,
+    pub year: Option<i32>,
+    pub kind: Option<String>,
+    pub cover: String,
+}
+
+/// An artist's albums and EPs the library has none of, newest first: their discography as Discover keeps it (read now
+/// and kept where it is not, or old), by the library's MusicBrainz id for them, else MusicBrainz's sure match by name;
+/// what the library has left out as every source's is (by release group, else by name and artist).
+pub async fn missing_albums(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::Catalogue>, name: &str) -> Result<Vec<Missing>> {
+    let http = http()?;
+    let (lib, n) = (serve.library.clone(), name.to_string());
+    let known = tokio::task::spawn_blocking(move || lib.artist_by_name(&n)).await??.and_then(|(_, m)| m).filter(|m| !m.is_empty());
+    let Some(mbid) = (match known {
+        Some(m) => Some(m),
+        None => mb_artist_by_name(&http, name).await?,
+    }) else {
+        return Ok(Vec::new());
+    };
+    let (ud, key) = (serve.userdata.clone(), mbid.clone());
+    let kept = tokio::task::spawn_blocking(move || ud.discography(&key)).await??;
+    let now = super::moment::now_secs();
+    let groups: Vec<Group> = match kept.filter(|(at, _)| now - at <= DISCOGRAPHY_FRESH_SECS).and_then(|(_, json)| serde_json::from_str(&json).ok()) {
+        Some(g) => g,
+        None => {
+            let g = mb_discography(&http, &mbid, &today()).await?;
+            let (ud, key, json) = (serve.userdata.clone(), mbid.clone(), serde_json::to_string(&g)?);
+            tokio::task::spawn_blocking(move || ud.set_discography(&key, now, &json)).await??;
+            g
+        }
+    };
+    let dir = serve.data_dir.clone().context("Cratarr's data folder is needed")?;
+    let (lib, artist) = (serve.library.clone(), name.to_string());
+    let mut out = tokio::task::spawn_blocking(move || -> Result<Vec<Missing>> {
+        let names = lib.artist_albums()?.into_iter().map(|r| r.1).collect::<Vec<_>>();
+        let have = have(Path::new(&dir), &cat, names)?;
+        Ok(groups
+            .into_iter()
+            .filter(|g| !have.has(&Candidate { album: g.title.clone(), artist: artist.clone(), release_group: Some(g.id.clone()), ..Candidate::default() }))
+            .map(|g| Missing { cover: format!("https://coverartarchive.org/release-group/{}/front-250", g.id), release_group: g.id, title: g.title, year: g.year, kind: g.kind })
+            .collect())
+    })
+    .await??;
+    out.sort_by(|a, b| b.year.cmp(&a.year).then_with(|| a.title.cmp(&b.title)));
+    Ok(out)
+}
+
+/// An album's page on Bandcamp, looked up when it is opened (0.9.3: an artist's missing album; never for a whole list):
+/// as a look finds them (`bandcamp_page`), from its release group's MusicBrainz pages where it is known.
+pub async fn find_on_bandcamp(artist: &str, album: &str, release_group: Option<&str>) -> Result<Option<String>> {
+    let http = http()?;
+    let (urls, artists) = match release_group.filter(|g| !g.is_empty()) {
+        Some(g) => {
+            let got = mb_urls(&http, g).await.unwrap_or_default();
+            tokio::time::sleep(MB_PAUSE).await;
+            (got.urls, got.artists)
+        }
+        None => (Vec::new(), Vec::new()),
+    };
+    Ok(bandcamp_page(&http, &urls, &artists, artist, album).await)
+}
+
 /// What was found last for the account, the albums answered since left out.
 pub fn kept(serve: &crate::serve::Serve, account: &str) -> Result<Option<Found>> {
     let Some((_, json)) = serve.userdata.discover_found(account)? else { return Ok(None) };

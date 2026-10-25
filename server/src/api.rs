@@ -164,6 +164,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/discover", get(discover))
         .route("/api/discover/refresh", post(discover_refresh))
         .route("/api/discover/want", post(discover_want))
+        .route("/api/requests/want", post(want_album))
+        .route("/api/artists/missing", get(artist_missing))
+        .route("/api/bandcamp/find", get(bandcamp_find))
         .route("/api/discover/no", post(discover_no))
         .route("/api/discover/hide", post(discover_hide))
         .route("/api/discover/artist", get(discover_artist))
@@ -2944,6 +2947,52 @@ async fn discover_want(State(app): State<Arc<App>>, Json(b): Json<DiscoverKey>) 
     let (serve, account) = discoverer()?;
     let r = crate::app::requests::ask(&app, &serve, &account, &b.key).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!({ "request": r })))
+}
+
+#[derive(Deserialize)]
+struct WantAlbum {
+    #[serde(default)]
+    release_group: Option<String>,
+    artist: String,
+    album: String,
+    #[serde(default)]
+    year: Option<i32>,
+    #[serde(default)]
+    cover: Option<String>,
+}
+
+/// Any album wanted (0.9.3: an artist's missing album), as Discover's Want: a request, handed to Lidarr where the
+/// account may.
+async fn want_album(State(app): State<Arc<App>>, Json(b): Json<WantAlbum>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = discoverer()?;
+    let r = crate::app::requests::ask_album(&app, &serve, &account, b.release_group, b.artist.trim(), b.album.trim(), b.year, b.cover)
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "request": r })))
+}
+
+/// An artist's missing albums (0.9.3): their albums and EPs the library has none of, newest first; read when asked
+/// (a MusicBrainz call or two the first time, kept for every account).
+async fn artist_missing(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let albums = crate::app::discover::missing_albums(&serve, app.library.catalogue(), q.name.trim()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "albums": albums, "looking": false })))
+}
+
+#[derive(Deserialize)]
+struct FindOnBandcamp {
+    artist: String,
+    album: String,
+    #[serde(default)]
+    release_group: Option<String>,
+}
+
+/// An album's page on Bandcamp, looked up when it is opened (0.9.3), or null.
+async fn bandcamp_find(Query(q): Query<FindOnBandcamp>) -> Result<Json<serde_json::Value>, ApiError> {
+    let page = crate::app::discover::find_on_bandcamp(q.artist.trim(), q.album.trim(), q.release_group.as_deref())
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "page": page })))
 }
 
 #[derive(Deserialize)]

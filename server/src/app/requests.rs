@@ -78,11 +78,41 @@ pub fn fetcher(app: &super::App) -> Option<Box<dyn Fetcher>> {
 /// A suggestion of the account's Discover asked for: kept pending, or approved and handed over at once where the account
 /// may (an administrator's, or Auto-approve). Asked again, the request already open is the answer.
 pub async fn ask(app: &super::App, serve: &Serve, account: &str, key: &str) -> Result<Request> {
-    let may = rights(serve);
-    if !may.request {
+    if !rights(serve).request {
         bail!("Requesting albums is not on for this account");
     }
     let s = super::discover::kept(serve, account)?.and_then(|f| f.albums.into_iter().find(|s| s.key == key)).context("That suggestion is gone; look again")?;
+    ask_for(app, serve, account, Asked { key: s.key, artist_key: s.artist_key, release_group: s.release_group, album: s.album, artist: s.artist, year: s.year, cover: s.cover }).await
+}
+
+/// Any album asked for by its names (0.9.3, the owner: Want for any album an artist's page says is missing): keyed as
+/// Discover keys albums (its release group, else its artist's and its name's), so its suggestion leaves Discover too.
+#[allow(clippy::too_many_arguments)]
+pub async fn ask_album(app: &super::App, serve: &Serve, account: &str, release_group: Option<String>, artist: &str, album: &str, year: Option<i32>, cover: Option<String>) -> Result<Request> {
+    if !rights(serve).request {
+        bail!("Requesting albums is not on for this account");
+    }
+    let release_group = release_group.filter(|g| !g.is_empty());
+    let key = release_group.clone().unwrap_or_else(|| format!("{}|{}", super::import::key(artist), super::import::key(album)));
+    let asked = Asked { key, artist_key: super::import::loose(artist), release_group, album: album.to_string(), artist: artist.to_string(), year, cover };
+    ask_for(app, serve, account, asked).await
+}
+
+/// What a request asks for: an album, by its key and its artist's, and what to show of it.
+struct Asked {
+    key: String,
+    artist_key: String,
+    release_group: Option<String>,
+    album: String,
+    artist: String,
+    year: Option<i32>,
+    cover: Option<String>,
+}
+
+/// The request for `s`: the account's open one for that album where there is one, else a new one (approved at once
+/// where the account may, and handed to the fetcher).
+async fn ask_for(app: &super::App, serve: &Serve, account: &str, s: Asked) -> Result<Request> {
+    let may = rights(serve);
     let open = serve.userdata.requests(Some(account), None, LIST)?;
     if let Some(r) = open.into_iter().find(|r| r.album_key == s.key && (r.status == PENDING || r.status == APPROVED)) {
         return Ok(r);
