@@ -16,10 +16,9 @@
   import MenuGroup from './lib/MenuGroup.svelte';
   import MenuSheet from './lib/MenuSheet.svelte';
   import LinkSheet from './lib/LinkSheet.svelte';
-  import { goToArtist, library, readLibrary } from './lib/albums.svelte';
-  import { albumCoverUrl } from './lib/api';
+  import { goToArtist } from './lib/albums.svelte';
   import DiscoverSections from './lib/DiscoverSections.svelte';
-  import { sections, type Owned } from './lib/discoverSections';
+  import { sections } from './lib/discoverSections';
   import SectionHead from './lib/SectionHead.svelte';
   import { withUndo } from './lib/undo.svelte';
   import { longpress } from './lib/longpress';
@@ -118,16 +117,12 @@
     !(switchOn('discover', 'no-unplayable') && !a.bandcamp);
   const kept = $derived((view?.found?.albums ?? []).filter((a) => !gone.includes(a.key)));
   // The page in sections (0069 amended 2026-10-25): what the filter and the search let through, sorted into the pick,
-  // the gaps (against the library's albums), the masonry, the new artists, the fresh releases and the Weekly
+  // the discography gaps, the masonry, the new artists, the fresh releases and the Weekly
   // Exploration; the rest stays the cards.
-  if (!library.view) readLibrary(false).catch(() => {});
-  const owned = $derived<Owned[]>(
-    (library.view?.sources ?? []).flatMap((src) => src.albums.map((x) => ({ title: x.title, artist: x.artist, year: x.year, cover: albumCoverUrl(src.id, x.id) }))),
-  );
   const albums = $derived(
     kept.filter((a) => passes(a) && matchesSearch(a.album, a.artist, a.kind, a.year?.toString(), ...(a.genres ?? []), ...a.why, ...(a.sources ?? []))),
   );
-  const sec = $derived(sections(albums, owned));
+  const sec = $derived(sections(albums));
   // How many the filter lets through, of how many (the Filter sheet's count).
   $effect(() => {
     pageView.counted = view?.found ? { shown: kept.filter(passes).length, total: kept.length } : null;
@@ -239,7 +234,9 @@
   {#if error && !view}
     <Notice text={error} />
   {:else if !view}
-    <PageLoading />
+    <!-- Waiting for the list: a look running says how far it is under the loader too, never only in the pill (the
+         owner, 2026-10-25). -->
+    <PageLoading>{@render how()}</PageLoading>
   {:else}
     {#if !connected}
       <p class="note">ListenBrainz or Last.fm would add albums like what you play: <a href="#/settings?view=settings%3Aconnections">connect one</a>.</p>

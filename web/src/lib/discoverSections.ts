@@ -1,6 +1,6 @@
 // Discover as a page of sections (decision 0069, amended 2026-10-25: "a more dynamic page", each section the form its
-// content suits): the suggestions, already filtered and searched, sorted into the pick of the day, the gaps in the
-// artists the library has, the groups around the artists played, the artists new to it, the fresh releases and the
+// content suits): the suggestions, already filtered and searched, sorted into the pick of the day, the discography
+// gaps of the artists most played, the groups around the artists played, the artists new to it, the fresh releases and the
 // Weekly Exploration; what none of those takes stays as the cards. Each suggestion shows once, in the first section
 // that takes it, and within each what plays on Bandcamp comes first (the owner, 2026-10-25). Pure: what the page draws.
 
@@ -15,15 +15,10 @@ export type Suggested = {
   bandcamp?: string;
 };
 
-/** An album the library has, for an artist's line in time. */
-export type Owned = { title: string; artist: string | null; year: number | null; cover?: string | null };
-
-export type GapLine<S extends Suggested = Suggested> = { artist: string; points: ({ kind: 'have'; title: string; year: number | null; cover: string | null } | { kind: 'gap'; s: S })[] };
-/** A group around its seeds; `wide` the keys of the tiles of one by two. */
 export type Around<S extends Suggested = Suggested> = { seeds: string[]; items: S[]; wide: string[] };
 export type Sections<S extends Suggested> = {
   pick: S | null;
-  gaps: GapLine<S>[];
+  gaps: S[];
   around: Around<S>[];
   newArtists: { artist: string; items: S[] }[];
   fresh: S[];
@@ -49,8 +44,8 @@ export function seedsOf(why: string): string[] | null {
   return m[1].split(' and ').map((x) => x.trim()).filter(Boolean);
 }
 
-/** The sections, from the suggestions in their order (the strongest first) and the library's albums. */
-export function sections<S extends Suggested>(all: S[], owned: Owned[], limits = { gaps: 4, around: 1, aroundCells: 8, newArtists: 10 }): Sections<S> {
+/** The sections, from the suggestions in their order (the strongest first). */
+export function sections<S extends Suggested>(all: S[], limits = { gaps: 4, gapsEach: 4, around: 1, aroundCells: 8, newArtists: 10 }): Sections<S> {
   const used = new Set<string>();
   const take = (s: S) => used.add(s.key);
   const free = (s: S) => !used.has(s.key);
@@ -59,34 +54,30 @@ export function sections<S extends Suggested>(all: S[], owned: Owned[], limits =
   const pick = all.find((s) => s.bandcamp) ?? null;
   if (pick) take(pick);
 
-  // The gaps: per artist, the albums the library has and those it lacks, in time; the most missing first.
+  // Discography gaps (the owner, 2026-10-25: one shelf, as Home's New for you): the albums missing from the artists
+  // most played (the list's order, the server's: "relevant for the most played artists"), a few each and taken in
+  // turn, so one prolific artist does not fill the row; within an artist what plays first.
   const byArtist = new Map<string, S[]>();
   for (const s of all) if (free(s) && s.why.some((w) => GAP.test(w))) byArtist.set(s.artist, [...(byArtist.get(s.artist) ?? []), s]);
-  const gaps = [...byArtist.entries()]
-    .sort((a, b) => b[1].length - a[1].length)
-    .slice(0, limits.gaps)
-    .map(([artist, missing]) => {
-      missing.forEach(take);
-      const have = owned.filter((o) => o.artist && key(o.artist) === key(artist)).map((o) => ({ kind: 'have' as const, title: o.title, year: o.year, cover: o.cover ?? null }));
-      const lacks = playableFirst(missing).map((s) => ({ kind: 'gap' as const, s, year: s.year }));
-      const points = [...have, ...lacks].sort((a, b) => (a.year ?? 9999) - (b.year ?? 9999));
-      return { artist, points: points.map((p) => (p.kind === 'have' ? { kind: p.kind, title: p.title, year: p.year, cover: p.cover } : { kind: p.kind, s: p.s })) };
-    });
+  const lines = [...byArtist.values()].slice(0, limits.gaps).map((l) => playableFirst(l).slice(0, limits.gapsEach));
+  const gaps: S[] = [];
+  for (let i = 0; lines.some((l) => l[i]); i++) for (const l of lines) if (l[i]) gaps.push(l[i]);
+  gaps.forEach(take);
 
-  // Around the artists played: per group of seeds, its suggestions; the largest groups first.
+  // Around the artists played: per artist played, the suggestions like them ("Like A and B" counts for A and for B:
+  // grouping by the pair split them into groups too small to fill the eight places, the owner's 2026-10-25 page had
+  // none); the groups that fill the most places first.
   const groups = new Map<string, { seeds: string[]; items: S[] }>();
   for (const s of all) {
     if (!free(s)) continue;
-    for (const w of s.why) {
-      const seeds = seedsOf(w);
-      if (!seeds) continue;
-      const k = seeds.map(key).sort().join('|');
-      const g = groups.get(k) ?? { seeds, items: [] };
-      if (!g.items.includes(s)) g.items.push(s);
-      groups.set(k, g);
-      break;
+    const seeds = s.why.map(seedsOf).find((x) => x) ?? [];
+    for (const seed of seeds) {
+      const g = groups.get(key(seed)) ?? { seeds: [seed], items: [] };
+      g.items.push(s);
+      groups.set(key(seed), g);
     }
   }
+  const cellsOf = (g: { items: S[] }) => g.items.reduce((n, s) => n + (s.bandcamp ? 2 : 1), 0);
   // The eight places around the seeds, always all filled (the owner, 2026-10-25): what plays takes two (a tile of one
   // by two), the rest one, so one tile of two makes seven suggestions; a group that cannot fill them all is no
   // section, and what no longer fits waits for the cards.
@@ -104,7 +95,7 @@ export function sections<S extends Suggested>(all: S[], owned: Owned[], limits =
     return cells ? null : { seeds: g.seeds, items, wide };
   };
   const around: Around<S>[] = [];
-  for (const g of [...groups.values()].sort((a, b) => b.items.length - a.items.length)) {
+  for (const g of [...groups.values()].sort((a, b) => cellsOf(b) - cellsOf(a) || b.items.length - a.items.length)) {
     if (around.length >= limits.around) break;
     const f = fill(g);
     if (!f) continue;
