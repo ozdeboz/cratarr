@@ -984,6 +984,11 @@ mod tests {
         assert_eq!(lib.find(&words("hunter"), 1).unwrap().totals.albums, 1, "by a track's title");
         assert_eq!(lib.find(&words("homogenic"), 1).unwrap().totals.artists, 1, "by an album's name");
         assert_eq!(lib.find(&words("art"), 1).unwrap().totals.genres, 1);
+        // The Library page's Tracks: every track without words, those the words name, none from a folder switched off.
+        assert_eq!(lib.track_rows(&[], &[]).unwrap().len(), 3);
+        let rows = lib.track_rows(&words("bjork"), &[]).unwrap();
+        assert_eq!((rows.len(), rows[0].album.as_str()), (2, "Homogenic"));
+        assert!(lib.track_rows(&words("bjork"), &[0]).unwrap().is_empty());
         assert_eq!(fts_query("a OR b").as_deref(), Some("(\"a\" OR \"a\"*) AND (\"OR\" OR \"OR\"*) AND (\"b\" OR \"b\"*)"), "quoted: a word, not an operator");
     }
 

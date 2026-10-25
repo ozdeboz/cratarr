@@ -326,6 +326,16 @@ impl Library {
         self.live.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
+    /// The catalogue folders of the libraries switched off (`without`, `<source>/<library>` keys as the pages keep them),
+    /// by their place in it: what a list from Cratarr's own library leaves out.
+    pub(super) fn folders_off(&self, without: &[String]) -> Vec<i64> {
+        if without.is_empty() {
+            return Vec::new();
+        }
+        let off: Vec<std::path::PathBuf> = self.connected().into_iter().flat_map(|(a, _)| folders_switched_off(&a, without)).map(std::path::PathBuf::from).collect();
+        self.catalogue().folders().iter().enumerate().filter(|(_, f)| off.contains(f)).map(|(i, _)| i as i64).collect()
+    }
+
     pub(super) fn connected(&self) -> Vec<(Arc<Active>, Arc<dyn Source>)> {
         self.live().iter().filter_map(|a| a.source.clone().map(|s| (a.clone(), s))).collect()
     }
