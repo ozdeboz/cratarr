@@ -557,9 +557,10 @@
       <ul class="back">
         {#each pastAlbums as t (t.id)}
           <li>
+            <!-- A tap opens its album, as every card does (the owner, 2026-10-25: it played at once, with no play to be
+                 seen); the section's Play plays them, the long-press is the track's menu. -->
             <button
-              disabled={starting}
-              onclick={() => playPast('play', t.id)}
+              onclick={() => viewOver(albumSubject('cratarr', t.album_id))}
               use:longpress={() => (trackMenu = { source: 'cratarr', id: t.id, name: t.name, artist: t.artist, album: t.album, album_id: t.album_id })}
             >
               <span class="cover"><Cover src={albumCoverUrl('cratarr', t.album_id)} /></span>
@@ -618,7 +619,11 @@
       <ul class="back">
         {#each favRows.slice(0, 12) as t (t.id)}
           <li>
-            <button disabled={starting} onclick={() => playFavourites(t.id!)}>
+            <!-- As Blast from the past's: a tap opens its album, the section's Play plays them, a long-press its menu. -->
+            <button
+              onclick={() => t.album_id && viewOver(albumSubject('cratarr', t.album_id))}
+              use:longpress={() => (trackMenu = { source: 'cratarr', id: t.id!, name: t.name ?? t.file, artist: t.artist, album: t.album, album_id: t.album_id ?? null })}
+            >
               <span class="cover"><Cover src={coverUrl({ source: 'cratarr', id: t.id!, album_id: t.album_id })} /></span>
               <span class="text">
                 <span class="title">{t.name ?? t.file}</span>
