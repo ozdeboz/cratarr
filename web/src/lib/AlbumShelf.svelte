@@ -824,8 +824,11 @@
     width: 20px;
     height: 20px;
     border-radius: 50%;
-    background: rgb(0 0 0 / 0.55);
-    color: var(--accent-ink);
+    /* Hard coloured, as Play's and the request mark's rounds (the owner, 2026-10-25): the translucent dark round did
+       not look nice. */
+    background: var(--accent);
+    color: var(--accent-text);
+    box-shadow: 0 1px 4px rgb(0 0 0 / 0.35);
   }
 
   .fav :global(svg) {
