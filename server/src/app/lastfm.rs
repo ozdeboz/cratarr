@@ -30,6 +30,11 @@ const API: &str = "https://ws.audioscrobbler.com/2.0/";
 const PAGE: usize = 200;
 /// Between pages: Last.fm asks for no more than about five calls a second.
 const PAUSE: Duration = Duration::from_millis(250);
+/// Of the loved tracks with no album from the scrobbles and not in the library, at most this many are asked of
+/// Last.fm's track info (one a quarter second).
+const TRACK_LOOKUPS: usize = 500;
+/// A title this short (as the matcher keys it) is too common to take an album by the title alone.
+const TITLE_ALONE_MIN: usize = 4;
 /// What the history calls a scrobble's context: how its undo finds it.
 pub const CONTEXT: &str = "lastfm";
 /// The import's source, for its stars.
@@ -273,14 +278,65 @@ fn albums_of(scrobbles: &[Scrobble]) -> HashMap<(String, String), String> {
         .collect()
 }
 
-/// The loved tracks not `found`, each once, with the album they were scrobbled from; by artist, album and title.
-fn wanted(loved: &[Scrobble], found: impl Fn(&Scrobble) -> bool, albums: &HashMap<(String, String), String>) -> Vec<Wanted> {
-    let mut seen = std::collections::HashSet::new();
-    let mut out: Vec<Wanted> = loved
-        .iter()
-        .filter(|s| !found(s) && seen.insert((key(&s.artist), key(&s.title))))
-        .map(|s| Wanted { artist: s.artist.clone(), title: s.title.clone(), album: albums.get(&(key(&s.artist), key(&s.title))).cloned() })
-        .collect();
+/// Each loved track's album (`fill_albums`): the one it was most often scrobbled from under its own artist; else, by its
+/// title alone, where that title was scrobbled from one album only (0.9.3; the owner, 2026-10-25: a love is often kept
+/// under another of the track's artists, Alchemist's "Eggs on the Third Floor" being Action Bronson's on Rare
+/// Chandeliers). A short title is too common for that.
+fn fill_albums(loved: &mut [Scrobble], scrobbles: &[Scrobble]) {
+    let exact = albums_of(scrobbles);
+    let mut by_title: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for s in scrobbles {
+        if let Some(a) = s.album.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
+            by_title.entry(key(&s.title)).or_default().entry(key(a)).or_insert_with(|| a.to_string());
+        }
+    }
+    for s in loved.iter_mut().filter(|s| s.album.is_none()) {
+        let title = key(&s.title);
+        s.album = exact.get(&(key(&s.artist), title.clone())).cloned().or_else(|| {
+            let albums = by_title.get(&title).filter(|a| a.len() == 1 && title.chars().count() >= TITLE_ALONE_MIN)?;
+            albums.values().next().cloned()
+        });
+    }
+}
+
+/// The album Last.fm gives a track (its track info), where it knows one.
+async fn track_album(http: &reqwest::Client, auth: &Auth, artist: &str, title: &str) -> Result<Option<String>> {
+    let body: serde_json::Value = http
+        .get(API)
+        .query(&[("method", "track.getinfo"), ("api_key", auth.key.as_str()), ("artist", artist), ("track", title), ("autocorrect", "1"), ("format", "json")])
+        .send()
+        .await
+        .context("Last.fm did not answer")?
+        .json()
+        .await?;
+    Ok(body["track"]["album"]["title"].as_str().map(str::trim).filter(|a| !a.is_empty()).map(str::to_string))
+}
+
+/// The loved tracks not `found`, each track once (the owner, 2026-10-25): one loved under each of its artists is one row
+/// with all of them (by its title and album where it has one, else by its artist and title); by artist, album and title.
+fn wanted(loved: &[Scrobble], found: impl Fn(&Scrobble) -> bool) -> Vec<Wanted> {
+    let mut out: Vec<Wanted> = Vec::new();
+    let mut artists: Vec<Vec<String>> = Vec::new();
+    let mut at: HashMap<(String, String), usize> = HashMap::new();
+    for s in loved.iter().filter(|s| !found(s)) {
+        let k = match &s.album {
+            Some(a) => (format!("album {}", key(a)), key(&s.title)),
+            None => (format!("artist {}", key(&s.artist)), key(&s.title)),
+        };
+        match at.get(&k) {
+            Some(&i) => {
+                if !artists[i].contains(&key(&s.artist)) {
+                    artists[i].push(key(&s.artist));
+                    out[i].artist = format!("{}, {}", out[i].artist, s.artist);
+                }
+            }
+            None => {
+                at.insert(k, out.len());
+                artists.push(vec![key(&s.artist)]);
+                out.push(Wanted { artist: s.artist.clone(), title: s.title.clone(), album: s.album.clone() });
+            }
+        }
+    }
     out.sort_by_cached_key(|w| (key(&w.artist), w.album.as_deref().map(key), key(&w.title)));
     out
 }
@@ -316,9 +372,29 @@ async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: 
     let dir = serve.data_dir.clone().context("the history needs Cratarr's data folder")?;
     let (scrobbles, loved) = scrobbles_and_loves(account, user, auth, progress).await?;
     progress("Matching", 0, None);
+    // The loved tracks' albums: from the scrobbles (`fill_albums`); then, for those still without one and not in the
+    // library, from Last.fm's track info. An album found also matches the library's track by album and title, under
+    // whichever artist it was loved.
+    let at = dir.clone();
+    let (songs, mut loved, scrobbles, asks) = tokio::task::spawn_blocking(move || -> Result<(Matcher, Vec<Scrobble>, Vec<Scrobble>, Vec<usize>)> {
+        let songs = Matcher::read(&Path::new(&at).join("library.sqlite"))?;
+        let mut loved = loved;
+        fill_albums(&mut loved, &scrobbles);
+        let asks = loved.iter().enumerate().filter(|(_, s)| s.album.is_none() && songs.find(&track(s)).is_none()).map(|(i, _)| i).take(TRACK_LOOKUPS).collect();
+        Ok((songs, loved, scrobbles, asks))
+    })
+    .await??;
+    let http = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
+    for (n, &i) in asks.iter().enumerate() {
+        progress("Finding the loved tracks' albums", n as u64, Some(asks.len() as u64));
+        if let Ok(Some(album)) = track_album(&http, auth, &loved[i].artist, &loved[i].title).await {
+            loved[i].album = Some(album);
+        }
+        tokio::time::sleep(PAUSE).await;
+    }
+    progress("Matching", 0, None);
     let (serve, account, user) = (serve.clone(), account.to_string(), user.to_string());
     tokio::task::spawn_blocking(move || -> Result<Imported> {
-        let songs = Matcher::read(&Path::new(&dir).join("library.sqlite"))?;
         let listens: Vec<Listened> = scrobbles.iter().map(|s| Listened { track: track(s), at: s.at, event: event(s) }).collect();
         // The scrobbles only when chosen (they are still read: the loved tracks' albums come from them).
         let scrobbled = if choice.scrobbles { into_history(&serve, &songs, &account, CONTEXT, "Last.fm", &listens, preview)? } else { Tally::default() };
@@ -326,7 +402,7 @@ async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: 
         let key = ImportKey { account: &account, source: SOURCE, server_user: &user };
         let mut l = Counter::default();
         let mut found: HashMap<String, Option<i64>> = HashMap::new();
-        let loved_missing = wanted(&loved, |s| songs.find(&track(s)).is_some(), &albums_of(&scrobbles));
+        let loved_missing = wanted(&loved, |s| songs.find(&track(s)).is_some());
         for s in loved.iter().filter(|_| choice.loves) {
             match songs.find(&track(s)) {
                 Some(song) => {
@@ -389,8 +465,9 @@ mod tests {
     fn a_loved_track_not_in_the_library_is_listed_once_with_the_album_it_was_scrobbled_from() {
         let s = |artist: &str, title: &str, album: Option<&str>| Scrobble { at: 0, artist: artist.into(), title: title.into(), album: album.map(Into::into), recording: None };
         let scrobbles = [s("Bonobo", "Kerala", Some("Migration")), s("Bonobo", "Kerala", Some("Migration")), s("Bonobo", "Kerala", Some("Kerala (Remixes)")), s("Air", "Alone in Kyoto", None)];
-        let loved = [s("Bonobo", "Kerala", None), s("bonobo", "kerala", None), s("Air", "Alone in Kyoto", None), s("Air", "Venus", None)];
-        let got = wanted(&loved, |x| x.title == "Venus", &albums_of(&scrobbles));
+        let mut loved = [s("Bonobo", "Kerala", None), s("bonobo", "kerala", None), s("Air", "Alone in Kyoto", None), s("Air", "Venus", None)];
+        fill_albums(&mut loved, &scrobbles);
+        let got = wanted(&loved, |x| x.title == "Venus");
         assert_eq!(
             got,
             [
@@ -399,6 +476,30 @@ mod tests {
             ],
             "the found one left out, the same track once, the album most scrobbled from"
         );
+    }
+
+    #[test]
+    fn a_track_loved_under_each_of_its_artists_is_one_row_with_the_album_its_title_was_scrobbled_from() {
+        let s = |artist: &str, title: &str, album: Option<&str>| Scrobble { at: 0, artist: artist.into(), title: title.into(), album: album.map(Into::into), recording: None };
+        let scrobbles = [
+            s("Action Bronson", "Eggs on the Third Floor", Some("Rare Chandeliers (Extended Version)")),
+            s("Some Band", "Intro", Some("First")),
+            s("Other Band", "Ruins", Some("One")),
+            s("Third Band", "Ruins", Some("Two")),
+        ];
+        let mut loved = [
+            s("Action Bronson", "Eggs on the Third Floor", None),
+            s("Alchemist", "Eggs On The Third Floor", None),
+            s("Nobody", "Intro", None),
+            s("Somebody", "Ruins", None),
+        ];
+        fill_albums(&mut loved, &scrobbles);
+        assert_eq!(loved[1].album.as_deref(), Some("Rare Chandeliers (Extended Version)"), "by its title, scrobbled from one album");
+        assert_eq!(loved[2].album, None, "too short a title to go by alone");
+        assert_eq!(loved[3].album, None, "a title from two albums is not guessed");
+        let got = wanted(&loved, |_| false);
+        assert_eq!(got[0], Wanted { artist: "Action Bronson, Alchemist".into(), title: "Eggs on the Third Floor".into(), album: Some("Rare Chandeliers (Extended Version)".into()) });
+        assert_eq!(got.len(), 3, "the other two as they were");
     }
 
     #[test]

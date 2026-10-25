@@ -212,3 +212,10 @@ The owner, 2026-10-25: Home's crates belong on the Crates page too, and one's ow
   On, each of one's own crates joins the sections list right below, to be ordered and switched on or off as every
   section is. On Home a crate shows as a shelf of its albums (as New for you does): its name as the header, a row of its
   albums' covers, › opening the crate, a cover its album, the shelf's play buttons as the others'.
+- **The loved tracks not in the library, with their albums** (the owner, 2026-10-25: "please", after the list showed
+  many without one): Last.fm keeps no album with a love, and a love is often kept under another of the track's artists
+  (Alchemist's "Eggs on the Third Floor" is Action Bronson's on Rare Chandeliers). Each loved track's album is the one
+  it was most scrobbled from under its own artist, else by its title alone where that title was scrobbled from one album
+  only (not for a short, common title), else Last.fm's track info's (500 at most, four a second). The album found
+  also matches the library's track by album and title, so the love becomes a favourite under whichever artist it was
+  kept. A track loved under several of its artists is one row with all of them.
