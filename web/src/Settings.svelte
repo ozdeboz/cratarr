@@ -123,7 +123,7 @@
         return changed([
           prefs.theme !== 'auto' && THEME[prefs.theme],
           !prefs.animations && 'No animations',
-          prefs.homeGreeting && 'Greeting',
+          !prefs.homeGreeting && 'No greeting',
           !!localCovers[HOME_HEADER] && 'Your picture',
         ]);
       case 'layout':

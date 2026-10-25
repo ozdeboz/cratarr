@@ -317,7 +317,8 @@ export const DEFAULTS: Prefs = {
   profileFoldAt: 0,
   profileRows: PROFILE_ROWS.map((r) => r.id),
   homeParts: homeDefault(),
-  homeGreeting: false,
+  // On by default (the owner, 2026-10-25).
+  homeGreeting: true,
   homeCrates: false,
   levelling: true,
   phoneLossless: false,

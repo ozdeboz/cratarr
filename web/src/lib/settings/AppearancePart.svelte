@@ -13,11 +13,11 @@
   import { toast } from '../toast.svelte';
 
   offerReset(
-    () => "The theme following the system again, the animations on; Home's header the moment's name and the weather's sky.",
+    () => "The theme following the system again, the animations on; Home's header greeting you, its sky the weather's.",
     () => {
       prefs.theme = 'auto';
       prefs.animations = true;
-      prefs.homeGreeting = false;
+      prefs.homeGreeting = true;
       void removeLocalPicture(HOME_HEADER);
     },
   );
@@ -58,7 +58,6 @@
 <Group title="Home's header">
   <Item
     name="Personal greeting"
-    line="Good evening and your name, then Best for now"
     toggle={{ checked: prefs.homeGreeting, onchange: (on) => (prefs.homeGreeting = on) }}
   />
   <Item name="Background" line={localCovers[HOME_HEADER] ? 'Your picture, on this device' : 'The sky for the weather'}>
