@@ -3027,6 +3027,12 @@ fn bring_listenbrainz(b: ListenBrainzImport, preview: bool) -> Result<(StatusCod
     }))
 }
 
+/// Every open request's mark (0.9.5), for lists of albums not in the library; none when they cannot be read (the list
+/// is shown without them).
+async fn request_marks(app: &App, serve: &crate::serve::Serve) -> Option<Arc<std::collections::HashMap<String, crate::app::requests::Mark>>> {
+    crate::app::requests::marks(app, serve).await.inspect_err(|e| tracing::debug!("the requests' marks not read: {e:#}")).ok()
+}
+
 /// The asking account and Cratarr's own library, for Discover (decision 0069).
 fn discoverer() -> Result<(Arc<crate::serve::Serve>, String), ApiError> {
     let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
@@ -3067,6 +3073,21 @@ async fn discover(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>
         .as_ref()
         .map(|f| f.albums.iter().filter(|s| starred.contains(&crate::serve::ids::artist(&s.artist))).map(|s| s.key.as_str()).collect())
         .unwrap_or_default();
+    // Each card's mark (0.9.5): any account's open request for its album, wanted or coming.
+    let mut found = json!(found);
+    if let (Some(marks), Some(cards)) = (request_marks(&app, &serve).await, found.get_mut("albums").and_then(|a| a.as_array_mut())) {
+        for c in cards {
+            let mark = crate::app::requests::mark_of(
+                &marks,
+                c["release_group"].as_str().or_else(|| c["key"].as_str()),
+                c["artist"].as_str().unwrap_or_default(),
+                c["album"].as_str().unwrap_or_default(),
+            );
+            if let Some(m) = mark {
+                c["request"] = json!(m);
+            }
+        }
+    }
     Ok(Json(json!({
         "found": found,
         "services": services,
@@ -3127,7 +3148,12 @@ async fn want_album(State(app): State<Arc<App>>, Json(b): Json<WantAlbum>) -> Re
 /// (a MusicBrainz call or two the first time, kept for every account).
 async fn artist_missing(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) -> Result<Json<serde_json::Value>, ApiError> {
     let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let albums = crate::app::discover::missing_albums(&serve, app.library.catalogue(), q.name.trim()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let mut albums = crate::app::discover::missing_albums(&serve, app.library.catalogue(), q.name.trim()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    if let Some(marks) = request_marks(&app, &serve).await {
+        for a in &mut albums {
+            a.request = crate::app::requests::mark_of(&marks, Some(&a.release_group), q.name.trim(), &a.title);
+        }
+    }
     Ok(Json(json!({ "albums": albums, "looking": false })))
 }
 
@@ -3152,7 +3178,12 @@ async fn musicbrainz_search(State(app): State<Arc<App>>, Query(q): Query<MbSearc
 /// Every missing album of the library's artists Discover has read (Insights › Discovery › Missing albums, 0.9.3).
 async fn discover_missing(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
     let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let (albums, artists) = crate::app::discover::all_missing(&serve, app.library.catalogue()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let (mut albums, artists) = crate::app::discover::all_missing(&serve, app.library.catalogue()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    if let Some(marks) = request_marks(&app, &serve).await {
+        for a in &mut albums {
+            a.request = crate::app::requests::mark_of(&marks, Some(&a.release_group), &a.artist, &a.title);
+        }
+    }
     Ok(Json(json!({ "albums": albums, "artists": artists })))
 }
 

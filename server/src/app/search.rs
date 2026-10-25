@@ -78,6 +78,9 @@ pub struct Item {
     /// A missing album's page on Bandcamp where an open of it found one lately (0.9.5).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bandcamp: Option<String>,
+    /// A missing album's open request (0.9.5): wanted, or coming and how far.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<super::requests::Mark>,
     pub score: f32,
     pub matched: Vec<Matched>,
 }
@@ -156,7 +159,7 @@ fn album_match(title: &str, artist: &str, w: &[String]) -> Option<(u8, Vec<Match
 }
 
 /// The missing albums the words name (`subject` `missing:<release group>`), the best first, the newest among equals.
-fn missing_items(list: &[crate::app::discover::MissingOf], w: &[String]) -> Vec<Item> {
+fn missing_items(list: &[crate::app::discover::MissingOf], w: &[String], marks: Option<&HashMap<String, super::requests::Mark>>) -> Vec<Item> {
     let n = list.len();
     let mut out: Vec<Item> = list
         .iter()
@@ -172,6 +175,7 @@ fn missing_items(list: &[crate::app::discover::MissingOf], w: &[String]) -> Vec<
                 track: None,
                 artist: Some(m.artist.clone()),
                 bandcamp: m.bandcamp.clone(),
+                request: marks.and_then(|k| super::requests::mark_of(k, Some(&m.release_group), &m.artist, &m.title)),
                 score: f32::from(close) + 1.0 - i as f32 / n.max(1) as f32,
                 matched,
             })
@@ -199,6 +203,7 @@ fn excluded_items(albums: &[crate::app::discover::Excluded], artists: &[crate::a
                 track: None,
                 artist: Some(x.artist.clone()),
                 bandcamp: None,
+                request: None,
                 score: f32::from(close) + 1.0 - i as f32 / n.max(1) as f32,
                 matched,
             })
@@ -212,6 +217,7 @@ fn excluded_items(albums: &[crate::app::discover::Excluded], artists: &[crate::a
             track: None,
             artist: Some(a.artist.clone()),
             bandcamp: None,
+            request: None,
             score: score(&a.artist, w, i, n),
             matched: matched_name(&a.artist),
         }))
@@ -285,6 +291,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                     track: None,
                     artist: None,
                     bandcamp: None,
+                    request: None,
                     score: score(&a.name, &w, i, n),
                     matched: matched(h),
                 })
@@ -309,6 +316,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                     track: None,
                     artist: None,
                     bandcamp: None,
+                    request: None,
                     score: score(&a.name, &w, i, n),
                     matched: matched(h),
                 })
@@ -330,6 +338,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                     track: Some(t.id.clone()),
                     artist: None,
                     bandcamp: None,
+                    request: None,
                     score: score(&t.title, &w, i, n),
                     matched: if closeness(&t.title, &w) > 0 { matched_name(&t.title) } else { vec![Matched { on: "artist", text: t.artist.clone(), count: None }] },
                 })
@@ -354,6 +363,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                     track: None,
                     artist: None,
                     bandcamp: None,
+                    request: None,
                     score: score(g, &w, i, n),
                     matched: matched_name(g),
                 })
@@ -385,6 +395,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                 track: None,
                 artist: None,
                 bandcamp: None,
+                request: None,
                 score,
                 matched,
                 title: p.name,
@@ -409,7 +420,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
             } else {
                 continue;
             };
-            found.push(Item { kind: "crate", subject: format!("crate:{id}"), sub: String::new(), cover: None, track: None, artist: None, bandcamp: None, score, matched, title: name });
+            found.push(Item { kind: "crate", subject: format!("crate:{id}"), sub: String::new(), cover: None, track: None, artist: None, bandcamp: None, request: None, score, matched, title: name });
         }
         found.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.title.cmp(&b.title)));
         groups.insert("crate", found);
@@ -417,7 +428,8 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
     // What is not in the library (point 7): only from Cratarr's own library; the exclusions an account's own.
     if let Some(served) = crate::serve::instance() {
         if wants("missing") {
-            groups.insert("missing", missing_items(&all_missing(app, &served).await?, &w));
+            let marks = super::requests::marks(app, &served).await.inspect_err(|e| tracing::debug!("search: the requests' marks not read: {e:#}")).ok();
+            groups.insert("missing", missing_items(&all_missing(app, &served).await?, &w, marks.as_deref()));
         }
         if wants("excluded")
             && let Some(account) = served.current_user()
@@ -460,13 +472,13 @@ mod tests {
     #[test]
     fn albums_not_in_the_library_are_found_by_their_name_or_artist_with_the_artist_apart() {
         use crate::app::discover::{Excluded, LeftOutArtist, MissingOf};
-        let m = |t: &str, a: &str, y| MissingOf { release_group: format!("rg-{t}"), title: t.into(), artist: a.into(), year: y, kind: None, cover: "c".into(), bandcamp: None };
+        let m = |t: &str, a: &str, y| MissingOf { release_group: format!("rg-{t}"), title: t.into(), artist: a.into(), year: y, kind: None, cover: "c".into(), bandcamp: None, request: None };
         let list = [m("Somersault", "Jacco Gardner", Some(2023)), m("Hypnophobia", "Jacco Gardner", Some(2015)), m("Moon Safari", "Air", Some(1998))];
-        let found = missing_items(&list, &words("gardner"));
+        let found = missing_items(&list, &words("gardner"), None);
         assert_eq!(found.iter().map(|i| i.title.as_str()).collect::<Vec<_>>(), ["Somersault", "Hypnophobia"]);
         assert_eq!((found[0].subject.as_str(), found[0].sub.as_str(), found[0].artist.as_deref()), ("missing:rg-Somersault", "Jacco Gardner · 2023", Some("Jacco Gardner")));
         assert_eq!(found[0].matched, vec![Matched { on: "artist", text: "Jacco Gardner".into(), count: None }]);
-        let found = missing_items(&list, &words("hypno gardner"));
+        let found = missing_items(&list, &words("hypno gardner"), None);
         assert_eq!((found.len(), found[0].matched[0].on), (1, "name"));
         let x = |k: &str, al: &str, ar: &str, how: &str| Excluded { key: k.into(), album: al.into(), artist: ar.into(), year: None, cover: None, how: how.into(), at: 0 };
         let found = excluded_items(

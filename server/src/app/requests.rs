@@ -5,6 +5,8 @@
 //! the account's permissions (`serve::users::Permissions`), an administrator's all.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -243,6 +245,67 @@ pub async fn watching(app: &super::App) -> Result<Option<crate::lidarr::Watching
     }
 }
 
+/// An open request's mark on an album not in the library (0.9.5, the owner: a clock while it is wanted, an arrow in
+/// the progress ring while it comes; none once it is in): `wanted`, or `downloading` and how far (0 to 1).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct Mark {
+    pub state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub done: Option<f32>,
+}
+
+/// How long the marks are kept: lists ask for them as they open and as search is typed, the fetcher asked once.
+const MARKS_KEEP: Duration = Duration::from_secs(30);
+/// The most requests looked at for them.
+const OPEN: usize = 1000;
+
+/// A request's album state as its mark; none once it is in the library.
+fn mark(state: &Album) -> Option<Mark> {
+    match *state {
+        Album::InLibrary => None,
+        Album::Fetching { done } => Some(Mark { state: "downloading", done: Some(done.clamp(0.0, 1.0)) }),
+        // Arrived, not in the library yet (Keep or Replace puts it there): still coming, all of it fetched.
+        Album::InIncoming | Album::PartlyThere { .. } => Some(Mark { state: "downloading", done: Some(1.0) }),
+        Album::Requested | Album::Looking | Album::Unknown => Some(Mark { state: "wanted", done: None }),
+    }
+}
+
+/// Every open request's mark (pending or approved, any account's: an album someone asked for comes for the whole
+/// server), by its album's key as Discover keys albums (its release group, else its artist's and its name's); one
+/// coming wins over one only wanted. Kept `MARKS_KEEP`.
+pub async fn marks(app: &super::App, serve: &Serve) -> Result<Arc<HashMap<String, Mark>>> {
+    type Kept = Option<(Instant, Arc<HashMap<String, Mark>>)>;
+    static KEPT: OnceLock<Mutex<Kept>> = OnceLock::new();
+    let kept = KEPT.get_or_init(Default::default);
+    if let Some((at, m)) = kept.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        && at.elapsed() < MARKS_KEEP
+    {
+        return Ok(m);
+    }
+    let open: Vec<Request> = serve.userdata.requests(None, None, OPEN)?.into_iter().filter(|r| r.status == PENDING || r.status == APPROVED).collect();
+    let (f, lib) = (fetcher(app), library(serve).await);
+    let mut out: HashMap<String, Mark> = HashMap::new();
+    for v in views(f.as_deref(), lib.as_ref(), open).await {
+        let Some(m) = mark(&v.album_state) else { continue };
+        let e = out.entry(v.request.album_key.clone()).or_insert(m);
+        if e.state == "wanted" && m.state == "downloading" {
+            *e = m;
+        }
+    }
+    let m = Arc::new(out);
+    *kept.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), m.clone()));
+    Ok(m)
+}
+
+/// An album's mark, by its release group, else by its artist's and its name's key (a Bandcamp album's Want).
+pub fn mark_of(marks: &HashMap<String, Mark>, release_group: Option<&str>, artist: &str, album: &str) -> Option<Mark> {
+    release_group
+        .filter(|g| !g.is_empty())
+        .and_then(|g| marks.get(g))
+        .or_else(|| marks.get(&format!("{}|{}", super::import::key(artist), super::import::key(album))))
+        .copied()
+}
+
 /// How many requests wait for an answer (Health, for those who answer them).
 pub fn waiting(serve: &Serve) -> Result<usize> {
     serve.userdata.requests_waiting()
@@ -282,5 +345,27 @@ fn state(in_library: bool, progress: Option<&HashMap<String, Progress>>, r: &Req
         Progress::Fetching { done } => Album::Fetching { done },
         Progress::Looking => Album::Looking,
         Progress::NotWanted | Progress::Unknown => Album::Requested,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_request_marks_its_album_wanted_or_coming_and_none_once_in() {
+        assert_eq!(mark(&Album::InLibrary), None);
+        assert_eq!(mark(&Album::Looking), Some(Mark { state: "wanted", done: None }));
+        assert_eq!(mark(&Album::Unknown), Some(Mark { state: "wanted", done: None }), "no fetcher, or not handed over");
+        assert_eq!(mark(&Album::Fetching { done: 0.4 }), Some(Mark { state: "downloading", done: Some(0.4) }));
+        assert_eq!(mark(&Album::PartlyThere { tracks: 3, of: 9 }), Some(Mark { state: "downloading", done: Some(1.0) }));
+        let marks: HashMap<String, Mark> = [
+            ("rg-1".to_string(), Mark { state: "wanted", done: None }),
+            (format!("{}|{}", crate::app::import::key("Ott"), crate::app::import::key("Skylon")), Mark { state: "downloading", done: Some(0.5) }),
+        ]
+        .into();
+        assert_eq!(mark_of(&marks, Some("rg-1"), "X", "Y").map(|m| m.state), Some("wanted"));
+        assert_eq!(mark_of(&marks, Some("rg-2"), "OTT", "Skylon").map(|m| m.state), Some("downloading"), "by its names where its release group has none");
+        assert_eq!(mark_of(&marks, None, "Ott", "Mir"), None);
     }
 }
