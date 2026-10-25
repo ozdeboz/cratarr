@@ -24,6 +24,7 @@ pub fn router(serve: Arc<Serve>) -> Router {
         .route("/api/me/sessions/{id}", delete(end_own_session))
         .route("/api/me/devices/{id}", delete(forget_own_device))
         .route("/api/me/settings", get(own_settings).put(set_own_settings))
+        .route("/api/me/history", delete(forget_own_history))
         .merge(
             Router::new()
                 .route("/api/users", get(users).post(create_user))
@@ -145,6 +146,18 @@ fn forget(user: &str, id: &str) -> Response {
 
 async fn forget_device(Path((name, id)): Path<(String, String)>) -> Response {
     forget(&name, &id)
+}
+
+/// "Delete play history" (0.9.5): the account's plays and what was made of them; its favourites, ratings and
+/// exclusions stay. The page asks once more before.
+async fn forget_own_history(State(serve): State<Arc<Serve>>) -> Response {
+    let Some(me) = serve.current_user() else { return refused(StatusCode::NOT_FOUND, "No one is signed in.") };
+    let ud = serve.userdata.clone();
+    match tokio::task::spawn_blocking(move || ud.forget_history(&me)).await {
+        Ok(Ok(removed)) => axum::Json(json!({ "removed": removed })).into_response(),
+        Ok(Err(e)) => refused(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e:#}")),
+        Err(e) => refused(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
 }
 
 /// One's own settings (decision 0051's split: the server's are the administrators', these each user's): what the apps

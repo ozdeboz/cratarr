@@ -42,3 +42,14 @@ counted `Heard`); the history's views and Home Assistant's now-playing can follo
 - Play On and Subsonic's sessions call `listening::started` when what a player plays changes.
 - Scrobbling: the send queue is filled in `heard`'s transaction (so a play is never lost between writing and sending),
   and the sender wakes on the channel.
+
+## Amendment (2026-10-25): the way in closes when an account keeps no history (0.9.5)
+
+With an account's `settings.tracking` off (Personal › Tracking, see 0064's amendment), the way in takes nothing for it:
+
+- `heard` writes nothing and tells nothing, so no scrobble is queued.
+- `started` tells nothing, so there is no "now playing".
+- `UserData::record` refuses the play for every other writer too, including the imports. The listening imports
+  (ListenBrainz, Last.fm's scrobbles, history files) are refused with "Play history is off for this account".
+  Last.fm's loved tracks are favourites and still come in.
+- The scrobbler drops whatever was queued for the account before the switch.

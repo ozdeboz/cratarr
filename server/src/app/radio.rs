@@ -1121,7 +1121,10 @@ async fn ready() -> Result<(Arc<Index>, HashMap<String, i64>), ToggleError> {
     let (recent, starred) = match user {
         Some(user) => tokio::task::spawn_blocking(move || -> Result<_> {
             let userdata = dir.join("userdata.sqlite");
-            Ok((recent_plays(&userdata, &user)?, starred_songs(&userdata, &user)?))
+            // Its play history off (0.9.5): what it played is not learned from.
+            let keeps = crate::serve::instance().is_none_or(|s| s.userdata.tracking(&user));
+            let recent = if keeps { recent_plays(&userdata, &user)? } else { HashMap::new() };
+            Ok((recent, starred_songs(&userdata, &user)?))
         })
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))??,

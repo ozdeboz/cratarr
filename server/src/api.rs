@@ -2990,7 +2990,16 @@ fn progress_of(h: Arc<crate::app::tasks::Handle>) -> impl Fn(&str, u64, Option<u
     move |name, done, total| h.step(name, done, total)
 }
 
+/// Refused while the asking account keeps no play history (0.9.5, Tracking off): listening is not brought in either.
+fn keeps_history() -> Result<(), ApiError> {
+    match crate::serve::instance().and_then(|s| s.current_user().map(|me| s.userdata.tracking(&me))) {
+        Some(false) => Err(ToggleError::Refused("Play history is off for this account (Settings › Tracking).".into()).into()),
+        _ => Ok(()),
+    }
+}
+
 async fn import_listenbrainz(Json(b): Json<ListenBrainzImport>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    keeps_history()?;
     bring_listenbrainz(b, false)
 }
 
@@ -3468,7 +3477,7 @@ async fn scrobble_lastfm_callback(Path(code): Path<String>, Query(q): Query<Last
             );
             return ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], page).into_response();
         }
-        let to = format!("/#/settings?view=settings%3Aconnections%2Flastfm{}", why.replacen('?', "&", 1));
+        let to = format!("/#/settings?view=settings%3Atracking%2Flastfm{}", why.replacen('?', "&", 1));
         axum::response::Redirect::to(&to).into_response()
     };
     let Some(pending) = pending else { return back(Some("That sign-in has expired; sign in again".into())) };
@@ -3612,6 +3621,10 @@ async fn bring_lastfm(b: LastFmImport, preview: bool) -> Result<(StatusCode, Jso
     let what = b.what;
     if !what.scrobbles && !what.loves {
         return Err(ToggleError::Refused("Choose the scrobbles, the loved tracks, or both.".into()).into());
+    }
+    // The scrobbles are listening; the loved tracks are favourites, and come in either way.
+    if what.scrobbles && !preview {
+        keeps_history()?;
     }
     let (serve, account, user, auth) = lastfm_who(b).await?;
     started(crate::app::tasks::spawn("import:lastfm", &account.clone(), preview, move |h| async move {

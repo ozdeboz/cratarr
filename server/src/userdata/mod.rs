@@ -631,6 +631,8 @@ impl UserData {
     /// Every item of one kind a user played or rated, with its annotation (the Library's orders and filters by plays
     /// and rating): one read for all of them.
     pub fn used(&self, user: &str, kind: Kind) -> Result<std::collections::HashMap<String, Annotation>> {
+        // Its play history off (0.9.5): only what it rated, nothing of what it played.
+        let keeps = self.tracking(user);
         let db = self.db();
         let mut st = db.prepare_cached(
             "SELECT item, play_count, play_date, rating, starred, starred_at FROM annotation
@@ -647,7 +649,11 @@ impl UserData {
                 },
             ))
         })?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+        let all: std::collections::HashMap<String, Annotation> = rows.collect::<rusqlite::Result<_>>()?;
+        Ok(match keeps {
+            true => all,
+            false => all.into_iter().filter(|(_, a)| a.rating > 0).map(|(k, a)| (k, Annotation { play_count: 0, play_date: None, ..a })).collect(),
+        })
     }
 
     /// The items of one kind a user starred, newest star first.
@@ -696,6 +702,10 @@ impl UserData {
     /// song, its album and its artists, together. A report with an `event` already in the log changes nothing; false
     /// then.
     pub fn record(&self, user: &str, song: (&str, &str), album: &str, artists: &[String], h: &Heard) -> Result<bool> {
+        // Its play history off (0.9.5): nothing written, whoever brings it (a player, an import).
+        if !self.tracking(user) {
+            return Ok(false);
+        }
         let mut db = self.db();
         let tx = db.transaction()?;
         let added = tx.execute(
@@ -862,6 +872,10 @@ impl UserData {
 
     /// What a user heard from `since` on (epoch seconds), oldest first (decision 0064).
     pub fn heard_since(&self, user: &str, since: i64) -> Result<Vec<Logged>> {
+        // Its play history off (0.9.5): Insights' listening, the taste and the rest read nothing.
+        if !self.tracking(user) {
+            return Ok(Vec::new());
+        }
         let db = self.db();
         let mut st = db.prepare_cached(
             "SELECT song, at, heard_secs, length_secs, ended, counted, context FROM plays WHERE user = ?1 AND at >= ?2 ORDER BY at",
@@ -1440,6 +1454,32 @@ impl UserData {
         Ok(Ok(version))
     }
 
+    /// Whether an account keeps its play history (0.9.5, the owner: Personal › Tracking; its settings' `tracking`, on
+    /// unless set off). Off: nothing of its listening is kept, sent or learned from; what it said (favourites, ratings,
+    /// exclusions) still counts.
+    pub fn tracking(&self, user: &str) -> bool {
+        self.settings_of(user).map_or(true, |(_, s)| s.get("tracking").and_then(serde_json::Value::as_bool) != Some(false))
+    }
+
+    /// "Delete play history" (0.9.5): an account's plays and what was made of them: its log, its counts (its stars and
+    /// ratings stay), the plays waiting to be sent, its last Discover look. How many plays went.
+    pub fn forget_history(&self, user: &str) -> Result<usize> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let removed = tx.execute("DELETE FROM plays WHERE user = ?1", [user])?;
+        tx.execute("UPDATE annotation SET play_count = 0, play_date = NULL WHERE user = ?1", [user])?;
+        tx.execute("DELETE FROM annotation WHERE user = ?1 AND play_count = 0 AND rating = 0 AND starred = 0", [user])?;
+        tx.execute("DELETE FROM scrobble_queue WHERE user = ?1", [user])?;
+        tx.execute("DELETE FROM discover_found WHERE user = ?1", [user])?;
+        tx.commit()?;
+        Ok(removed)
+    }
+
+    /// The plays waiting to be sent for an account, taken away (its play history switched off).
+    pub fn forget_scrobbles(&self, user: &str) -> Result<usize> {
+        Ok(self.db().execute("DELETE FROM scrobble_queue WHERE user = ?1", [user])?)
+    }
+
     /// A user's own settings (decision 0051: Radio's and Autoplay's defaults and the like, as the apps keep them) and
     /// their version; version 0 and none while nothing is kept.
     pub fn settings_of(&self, user: &str) -> Result<(i64, serde_json::Value)> {
@@ -1839,6 +1879,25 @@ mod tests {
         u.set_rg_cover("rg-1", None, 5).unwrap();
         assert_eq!(u.rg_cover("rg-1").unwrap(), Some((5, None)));
         assert_eq!(u.rg_cover("rg-2").unwrap(), None);
+    }
+
+    #[test]
+    fn tracking_off_reads_no_plays_and_deleting_the_history_keeps_what_was_said() {
+        let u = UserData::open(None).unwrap();
+        assert!(u.tracking("me"), "on unless set off");
+        u.count_play("me", ("tr-1", "p1"), "al-1", &[], 100).unwrap();
+        u.count_play("me", ("tr-2", "p2"), "al-1", &[], 200).unwrap();
+        u.set_starred("me", Kind::Song, &["tr-2".to_string()], true).unwrap();
+        assert_eq!(u.heard_since("me", 0).unwrap().len(), 2);
+        u.put_settings("me", 0, &serde_json::json!({ "tracking": false })).unwrap().ok().unwrap();
+        assert!(!u.tracking("me"));
+        assert!(u.heard_since("me", 0).unwrap().is_empty());
+        assert!(u.used("me", Kind::Song).unwrap().values().all(|a| a.play_count == 0), "no counts read");
+        assert_eq!(u.forget_history("me").unwrap(), 2);
+        assert_eq!(u.starred("me", Kind::Song).unwrap(), ["tr-2".to_string()], "the favourite stays");
+        let (version, _) = u.settings_of("me").unwrap();
+        u.put_settings("me", version, &serde_json::json!({ "tracking": true })).unwrap().ok().unwrap();
+        assert!(u.heard_since("me", 0).unwrap().is_empty(), "the history gone");
     }
 
     #[test]

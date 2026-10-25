@@ -46,6 +46,10 @@ pub fn heard_blocking(serve: &Serve, user: &str, song: &str, h: &Heard) -> anyho
     if crate::bandcamp::is_preview(song) {
         return Ok(false);
     }
+    // Its play history off (0.9.5): nothing kept, counted or sent.
+    if !serve.userdata.tracking(user) {
+        return Ok(false);
+    }
     let Some((pid, album, artists)) = serve.library.play_targets(song)? else { return Ok(false) };
     let new = serve.userdata.record(user, (song, &pid), &album, &artists, h)?;
     if new {
@@ -73,6 +77,10 @@ pub fn started(user: &str, player: &str, song: &str) {
     }
     playing.insert(key, song.to_string());
     drop(playing);
+    // Its play history off (0.9.5): no "now playing" either.
+    if crate::serve::instance().is_some_and(|s| !s.userdata.tracking(user)) {
+        return;
+    }
     let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
     tell(Event::Started { user: user.to_string(), player: player.to_string(), song: song.to_string(), at });
 }
