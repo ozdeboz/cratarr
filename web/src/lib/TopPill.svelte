@@ -188,6 +188,13 @@
   const globe = $derived(!!words && !!searchesIn && searchesIn !== 'home' && searchesIn !== 'find' && pageView.query.trim() !== '');
   const found = $derived(globe ? globalGroups(page ? (PAGE_KINDS[page] ?? []) : []).reduce((n, g) => n + g.total, 0) : 0);
   const globeOn = $derived(globalSearch.scope === 'everywhere');
+  // While the new words are asked, the count the last ones had (the owner, 2026-10-25: the badge went while typing).
+  let lastFound = $state<number | null>(null);
+  $effect(() => {
+    if (!globe) lastFound = null;
+    else if (globalAsked()) lastFound = found;
+  });
+  const badge = $derived(globalAsked() ? found : lastFound);
 </script>
 
 <span class="pill-row">
@@ -197,11 +204,11 @@
         class="funnel"
         class:on={globeOn}
         aria-pressed={globeOn}
-        aria-label={globeOn ? "Back to this page's results" : `Everywhere, ${found} found`}
+        aria-label={globeOn ? "Back to this page's results" : `Everywhere, ${badge ?? found} found`}
         title="Everywhere"
         onmousedown={(e) => e.preventDefault()}
         onclick={() => (globalSearch.scope = globeOn ? 'page' : 'everywhere')}
-        ><Icon name="globe" size={22} />{#if globalAsked() || found}<span class="badge">{found > 99 ? '99+' : found}</span>{/if}</button
+        ><Icon name="globe" size={22} />{#if badge !== null}<span class="badge">{badge > 99 ? '99+' : badge}</span>{/if}</button
       >
     </span>
   {/if}

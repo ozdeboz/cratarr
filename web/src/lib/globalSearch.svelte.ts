@@ -38,7 +38,8 @@ const EACH = 5;
 export const globalSearch = $state({
   /** What the page or the panel shows while searching: its own results, or everywhere's. */
   scope: 'page' as 'page' | 'everywhere',
-  /** The server's answer, for these words; null while asked (or none). */
+  /** The server's last answer: kept while new words are asked, so the results stay until the new ones are in (the
+   *  owner, 2026-10-25); none without words. */
   found: null as { q: string; r: ServerSearch } | null,
   /** Asked again after something changed what it finds (an exclusion taken back). */
   again: 0,
@@ -49,8 +50,8 @@ $effect.root(() => {
   $effect(() => {
     const q = pageView.query.trim();
     void globalSearch.again;
-    globalSearch.found = null;
     if (!words(q).length) {
+      globalSearch.found = null;
       globalSearch.scope = 'page';
       return;
     }
@@ -74,7 +75,8 @@ export function globalGroups(except: readonly string[]): FoundGroup[] {
   const q = pageView.query.trim();
   const query = words(q);
   if (!query.length) return [];
-  const f = globalSearch.found?.q === q ? globalSearch.found.r : null;
+  // The last answer, the words' own once it is in.
+  const f = globalSearch.found?.r ?? null;
   const server = (kinds: typeof LIBRARY): FoundGroup[] =>
     f
       ? kinds
