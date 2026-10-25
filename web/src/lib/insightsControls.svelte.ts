@@ -87,8 +87,9 @@ const periodGroup = (): ControlGroup[] =>
     ? []
     : [{ title: null, controls: [{ kind: 'choice', name: 'Period', options: PERIODS, get: () => prefs.insightsPeriod, set: (v) => (prefs.insightsPeriod = v as typeof prefs.insightsPeriod) }] }];
 
-// Profile's sources (the owner, 2026-10-23: the one tab with an algorithm worth choosing the inputs of, beside the map).
-const SOURCES = [
+// Profile's sources (the owner, 2026-10-23: the one tab with an algorithm worth choosing the inputs of, beside the map);
+// Settings' Taste switches the same ones (lib/settings/TastePart).
+export const PROFILE_SOURCES = [
   { id: 'favourites', label: 'Favourites', line: 'More of' },
   { id: 'playlists', label: 'Playlists', line: 'More of' },
   { id: 'plays', label: 'Plays', line: 'More of' },
@@ -100,7 +101,7 @@ const profile = (): ControlGroup[] =>
     ? [
         {
           title: 'Built from',
-          controls: SOURCES.map((s) => ({ kind: 'toggle', name: s.label, line: s.line, get: () => prefs.profileSources[s.id], set: (on: boolean) => (prefs.profileSources[s.id] = on) })),
+          controls: PROFILE_SOURCES.map((s) => ({ kind: 'toggle', name: s.label, line: s.line, get: () => prefs.profileSources[s.id], set: (on: boolean) => (prefs.profileSources[s.id] = on) })),
         },
       ]
     : [];
