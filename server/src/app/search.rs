@@ -1,8 +1,9 @@
 //! One search, answered by kind (decision 0072): `GET /api/search?q=&kinds=&limit=` → `{ q, groups, top }`. Every
 //! result in one shape (`Item`), what the panel opens as its `subject`, why it is there in `matched`. Cratarr's own
 //! library: albums (by their tracks too), artists (by their albums too), tracks, genres; the account's playlists and
-//! crates by their names and by the tracks in them (a track's title, artist or album). `top` is every group merged by score, a weight per kind
-//! (Meilisearch's federated search).
+//! crates by their names and by the tracks in them (a track's title, artist or album); and what is not in the library
+//! (point 7): the albums missing from its artists, and what Discover leaves out for the account. `top` is every group
+//! merged by score, a weight per kind (Meilisearch's federated search).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -13,12 +14,15 @@ use serde::Serialize;
 use crate::search::{closeness, words};
 
 /// What a search may find, and how much each kind weighs in `top`.
-const KINDS: [(&str, f32); 6] = [("artist", 1.0), ("album", 0.95), ("playlist", 0.9), ("crate", 0.85), ("track", 0.8), ("genre", 0.7)];
+const KINDS: [(&str, f32); 8] =
+    [("artist", 1.0), ("album", 0.95), ("playlist", 0.9), ("crate", 0.85), ("track", 0.8), ("genre", 0.7), ("missing", 0.6), ("excluded", 0.5)];
 /// Each group's most, unless asked for fewer (`limit`), and `top`'s.
 pub const LIMIT: usize = 20;
 const TOP: usize = 8;
 /// Most tracks a search looks for in playlists and crates.
 const DEEP: usize = 2000;
+/// How long the missing albums are kept for search: reading them weighs the whole library against every discography.
+const MISSING_KEEP: Duration = Duration::from_secs(60);
 /// How long an account's crates, with their tracks, are kept for search: a query is asked again as it is typed, and
 /// making every crate is the Crates page's work.
 const CRATES_KEEP: Duration = Duration::from_secs(60);
@@ -68,6 +72,9 @@ pub struct Item {
     /// A track's own id, to play it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub track: Option<String>,
+    /// An album's artist where the panel needs it apart from `sub`: one not in the library, to look for on Bandcamp.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
     pub score: f32,
     pub matched: Vec<Matched>,
 }
@@ -134,6 +141,94 @@ fn by_tracks(count: u32, e: Entry) -> (f32, Vec<Matched>) {
     (1.0 - 1.0 / (1.0 + count as f32), vec![Matched { on: e.on, text: e.text, count: Some(count) }])
 }
 
+/// Why an album not in the library is there: its name holding the words, else its artist; its name where the words are
+/// spread over both. Its closeness, the better of the two.
+fn album_match(title: &str, artist: &str, w: &[String]) -> Option<(u8, Vec<Matched>)> {
+    if !crate::search::matches(&format!("{title} {artist}"), w) {
+        return None;
+    }
+    let close = closeness(title, w).max(closeness(artist, w));
+    let on = if !crate::search::matches(title, w) && crate::search::matches(artist, w) { ("artist", artist) } else { ("name", title) };
+    Some((close, vec![Matched { on: on.0, text: on.1.to_string(), count: None }]))
+}
+
+/// The missing albums the words name (`subject` `missing:<release group>`), the best first, the newest among equals.
+fn missing_items(list: &[crate::app::discover::MissingOf], w: &[String]) -> Vec<Item> {
+    let n = list.len();
+    let mut out: Vec<Item> = list
+        .iter()
+        .enumerate()
+        .filter_map(|(i, m)| {
+            let (close, matched) = album_match(&m.title, &m.artist, w)?;
+            Some(Item {
+                kind: "missing",
+                subject: format!("missing:{}", m.release_group),
+                title: m.title.clone(),
+                sub: [Some(m.artist.clone()), m.year.map(|y| y.to_string())].into_iter().flatten().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "),
+                cover: Some(m.cover.clone()),
+                track: None,
+                artist: Some(m.artist.clone()),
+                score: f32::from(close) + 1.0 - i as f32 / n.max(1) as f32,
+                matched,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| b.score.total_cmp(&a.score));
+    out
+}
+
+/// What Discover leaves out for the account that the words name: albums (`excluded:<key>`, Not interested or Hidden)
+/// and artists (`excluded-artist:<their key>`, what Take back takes), the best first, the newest among equals.
+fn excluded_items(albums: &[crate::app::discover::Excluded], artists: &[crate::app::discover::LeftOutArtist], w: &[String]) -> Vec<Item> {
+    let n = albums.len() + artists.len();
+    let mut out: Vec<Item> = albums
+        .iter()
+        .enumerate()
+        .filter_map(|(i, x)| {
+            let (close, matched) = album_match(&x.album, &x.artist, w)?;
+            Some(Item {
+                kind: "excluded",
+                subject: format!("excluded:{}", x.key),
+                title: x.album.clone(),
+                sub: if x.how == "hidden" { "Hidden" } else { "Not interested" }.to_string(),
+                cover: x.cover.clone(),
+                track: None,
+                artist: Some(x.artist.clone()),
+                score: f32::from(close) + 1.0 - i as f32 / n.max(1) as f32,
+                matched,
+            })
+        })
+        .chain(artists.iter().enumerate().filter(|(_, a)| crate::search::matches(&a.artist, w)).map(|(i, a)| Item {
+            kind: "excluded",
+            subject: format!("excluded-artist:{}", a.key),
+            title: a.artist.clone(),
+            sub: "Artist left out".to_string(),
+            cover: None,
+            track: None,
+            artist: Some(a.artist.clone()),
+            score: score(&a.artist, w, i, n),
+            matched: matched_name(&a.artist),
+        }))
+        .collect();
+    out.sort_by(|a, b| b.score.total_cmp(&a.score));
+    out
+}
+
+/// Every missing album of the library's artists, kept a minute (`MISSING_KEEP`): the same for every account.
+async fn all_missing(app: &super::App, served: &Arc<crate::serve::Serve>) -> anyhow::Result<Arc<Vec<crate::app::discover::MissingOf>>> {
+    type Kept = Option<(Instant, Arc<Vec<crate::app::discover::MissingOf>>)>;
+    static KEPT: OnceLock<Mutex<Kept>> = OnceLock::new();
+    let kept = KEPT.get_or_init(Default::default);
+    if let Some((at, m)) = kept.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        && at.elapsed() < MISSING_KEEP
+    {
+        return Ok(m);
+    }
+    let m = Arc::new(crate::app::discover::all_missing(served, app.library.catalogue()).await?.0);
+    *kept.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), m.clone()));
+    Ok(m)
+}
+
 /// The asking account's crates with their tracks, kept a minute (`CRATES_KEEP`).
 async fn crate_members(app: &super::App) -> anyhow::Result<Members> {
     static KEPT: OnceLock<Mutex<HashMap<Option<String>, (Instant, Members)>>> = OnceLock::new();
@@ -178,6 +273,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                     sub: [Some(a.artist.clone()), a.year.map(|y| y.to_string())].into_iter().flatten().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "),
                     cover: Some(format!("/api/albums/cratarr/{}/cover", a.id)),
                     track: None,
+                    artist: None,
                     score: score(&a.name, &w, i, n),
                     matched: matched(h),
                 })
@@ -200,6 +296,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                     },
                     cover: Some(format!("/api/artists/{}/photo", a.id)),
                     track: None,
+                    artist: None,
                     score: score(&a.name, &w, i, n),
                     matched: matched(h),
                 })
@@ -219,6 +316,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                     sub: [t.artist.clone(), t.album.clone()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "),
                     cover: Some(format!("/api/albums/cratarr/{}/cover", t.album_id)),
                     track: Some(t.id.clone()),
+                    artist: None,
                     score: score(&t.title, &w, i, n),
                     matched: if closeness(&t.title, &w) > 0 { matched_name(&t.title) } else { vec![Matched { on: "artist", text: t.artist.clone(), count: None }] },
                 })
@@ -241,6 +339,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                     },
                     cover: None,
                     track: None,
+                    artist: None,
                     score: score(g, &w, i, n),
                     matched: matched_name(g),
                 })
@@ -270,6 +369,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                 },
                 cover: None,
                 track: None,
+                artist: None,
                 score,
                 matched,
                 title: p.name,
@@ -294,10 +394,23 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
             } else {
                 continue;
             };
-            found.push(Item { kind: "crate", subject: format!("crate:{id}"), sub: String::new(), cover: None, track: None, score, matched, title: name });
+            found.push(Item { kind: "crate", subject: format!("crate:{id}"), sub: String::new(), cover: None, track: None, artist: None, score, matched, title: name });
         }
         found.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.title.cmp(&b.title)));
         groups.insert("crate", found);
+    }
+    // What is not in the library (point 7): only from Cratarr's own library; the exclusions an account's own.
+    if let Some(served) = crate::serve::instance() {
+        if wants("missing") {
+            groups.insert("missing", missing_items(&all_missing(app, &served).await?, &w));
+        }
+        if wants("excluded")
+            && let Some(account) = served.current_user()
+        {
+            let s = served.clone();
+            let (albums, artists) = tokio::task::spawn_blocking(move || crate::app::discover::exclusions(&s, &account)).await??;
+            groups.insert("excluded", excluded_items(&albums, &artists, &w));
+        }
     }
     // Each group as asked for; `top` the best of all, weighed by kind.
     let mut top: Vec<Item> = Vec::new();
@@ -327,6 +440,27 @@ mod tests {
         assert!(score("Air", &w, 3, 10) > score("Air Supply", &w, 0, 10));
         assert!(score("Air Supply", &w, 0, 10) > score("Airbag", &w, 0, 10));
         assert!(score("Airbag", &w, 0, 10) > score("Airbag", &w, 5, 10));
+    }
+
+    #[test]
+    fn albums_not_in_the_library_are_found_by_their_name_or_artist_with_the_artist_apart() {
+        use crate::app::discover::{Excluded, LeftOutArtist, MissingOf};
+        let m = |t: &str, a: &str, y| MissingOf { release_group: format!("rg-{t}"), title: t.into(), artist: a.into(), year: y, kind: None, cover: "c".into() };
+        let list = [m("Somersault", "Jacco Gardner", Some(2023)), m("Hypnophobia", "Jacco Gardner", Some(2015)), m("Moon Safari", "Air", Some(1998))];
+        let found = missing_items(&list, &words("gardner"));
+        assert_eq!(found.iter().map(|i| i.title.as_str()).collect::<Vec<_>>(), ["Somersault", "Hypnophobia"]);
+        assert_eq!((found[0].subject.as_str(), found[0].sub.as_str(), found[0].artist.as_deref()), ("missing:rg-Somersault", "Jacco Gardner · 2023", Some("Jacco Gardner")));
+        assert_eq!(found[0].matched, vec![Matched { on: "artist", text: "Jacco Gardner".into(), count: None }]);
+        let found = missing_items(&list, &words("hypno gardner"));
+        assert_eq!((found.len(), found[0].matched[0].on), (1, "name"));
+        let x = |k: &str, al: &str, ar: &str, how: &str| Excluded { key: k.into(), album: al.into(), artist: ar.into(), year: None, cover: None, how: how.into(), at: 0 };
+        let found = excluded_items(
+            &[x("k1", "Talkie Walkie", "Air", "no"), x("k2", "Pocket Symphony", "Air", "hidden")],
+            &[LeftOutArtist { artist: "Airbag".into(), key: "airbag".into(), at: 0 }],
+            &words("air"),
+        );
+        let got: Vec<_> = found.iter().map(|i| (i.subject.as_str(), i.sub.as_str())).collect();
+        assert_eq!(got, [("excluded:k1", "Not interested"), ("excluded:k2", "Hidden"), ("excluded-artist:airbag", "Artist left out")]);
     }
 
     #[test]
