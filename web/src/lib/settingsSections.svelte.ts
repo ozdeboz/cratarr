@@ -25,17 +25,18 @@ export type SettingsSection =
 /** `admin`: the server's, its administrators' only; `everyone` as well: a part anyone opens, showing them only their own
  *  (Connections' listening services, decision 0068). */
 export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; app?: true; admin?: true; everyone?: true }[] = [
+  // Personal, in the owner's order (2026-10-25): This device, Account, Network, Sync, Display, Home, Taste.
   // In a browser too: its name as a Play On player.
   { id: 'device', title: 'This device', icon: 'speaker' },
-  { id: 'network', title: 'Network', icon: 'wifi', app: true },
-  { id: 'sync', title: 'Sync', icon: 'arrowDownToLine', app: true },
   // Who is signed in: their role, their password for OpenSubsonic apps, their devices and sign-ins.
   { id: 'account', title: 'Account', icon: 'user' },
+  { id: 'network', title: 'Network', icon: 'wifi', app: true },
+  { id: 'sync', title: 'Sync', icon: 'arrowDownToLine', app: true },
   { id: 'display', title: 'Display', icon: 'swatch' },
-  // What one has said one does not want (the owner, 2026-10-23): every exclusion, managed in one place.
-  { id: 'taste', title: 'Taste', icon: 'music' },
   // Home's sections, their order, and its header (the owner, 2026-10-24).
   { id: 'home', title: 'Home', icon: 'home' },
+  // What one has said one does not want (the owner, 2026-10-23): every exclusion, managed in one place.
+  { id: 'taste', title: 'Taste', icon: 'music' },
   { id: 'connections', title: 'Connections', icon: 'server', admin: true, everyone: true },
   { id: 'libraries', title: 'Libraries', icon: 'library', admin: true },
   { id: 'players', title: 'Players', icon: 'speakers', admin: true },
