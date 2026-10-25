@@ -130,7 +130,7 @@
 </script>
 
 {#if !page}
-  <Group title="Home Assistant" more={MORE}>
+  <Group title="Home automation" more={MORE}>
     {#if status}
       <Item lead={status.lead} name="Home Assistant" line={status.line} tone={status.lead === 'bad' ? 'bad' : null} onclick={() => openThing('connections', 'home-assistant')} />
     {/if}

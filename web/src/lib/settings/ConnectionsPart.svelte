@@ -1,8 +1,11 @@
 <script lang="ts">
-  // Connections: the servers Cratarr works with, Lidarr, and Home Assistant (the owner, 2026-10-24: its own section,
-  // its key with it; it acts at once, lib/settings/HomeAssistantPart); the rest saved with the Save bar. Each is a row (its state in a
-  // line); its settings are on its own page behind it (`thing`: a server's id, or `lidarr`): its fields as rows, a value
-  // typed or chosen in a sheet, its connection checked there, and Remove last (the settings' North Star, 2026-10-19).
+  // Connections: the servers Cratarr works with, Lidarr, Last.fm and Discogs, and Home Assistant (the owner, 2026-10-24:
+  // its own section, its key with it; it acts at once, lib/settings/HomeAssistantPart); the rest saved with the Save bar.
+  // Each is a row (its state in a line); its settings are on its own page behind it (`thing`: a server's id, `lidarr`,
+  // `lastfm`, `discogs`): its fields as rows, a value typed or chosen in a sheet, its connection checked there, and
+  // Remove last (the settings' North Star, 2026-10-19; the owner, 2026-10-25: Last.fm and Discogs the same way, no
+  // longer rows of their own kind). Headed by what each is for, generic (the owner, 2026-10-25: Media servers, Download
+  // stack, Discovery and metadata, Home automation), which the settings search finds too.
   import type { Field } from '../api';
   import { getDiscogs, getLastfmServerKey, getLidarrOptions, missingCall, setDiscogs, setLastfmServerKey, type DiscogsSetting } from '../api';
   import FormSheet from './FormSheet.svelte';
@@ -23,7 +26,9 @@
   const s = $derived(ed.s!);
   const LIDARR = 'lidarr';
   const HOME_ASSISTANT = 'home-assistant';
-  const own = (t: string) => t === LIDARR || t === HOME_ASSISTANT;
+  const LASTFM = 'lastfm';
+  const DISCOGS = 'discogs';
+  const own = (t: string) => t === LIDARR || t === HOME_ASSISTANT || t === LASTFM || t === DISCOGS;
   const LIDARR_MORE = "With Lidarr's address and API key, Delete in Incoming also stops Lidarr fetching that album again.";
   const WANT_MORE =
     "What Discover's Want adds an album to Lidarr with: its quality and metadata profiles, and the root folder it lands in (Incoming's). As your artists: the ones the artists Lidarr has already use.";
@@ -96,7 +101,24 @@
   // Its id only beside another server of its kind.
   const label = (d: Draft) => `${ed.kindOf(d)?.label ?? d.kind}${ed.drafts.filter((x) => x.kind === d.kind).length > 1 ? ` (${d.id})` : ''}`;
   const draft = $derived(thing && !own(thing) ? (ed.drafts.find((d) => d.id === thing) ?? null) : null);
-  nameThing(() => (thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : draft ? label(draft) : null));
+  nameThing(() =>
+    thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : thing === LASTFM ? 'Last.fm' : thing === DISCOGS ? 'Discogs' : draft ? label(draft) : null,
+  );
+  // Last.fm's key and Discogs' app as rows say them.
+  const fmLine = $derived(fmKey?.saved ? 'Set, for everyone' : fmKey?.set ? "From the container's settings" : 'Not set');
+  const discogsLine = $derived(discogs?.set ? (discogs.per_minute ? `Set · ${discogs.per_minute} a minute` : 'Set') : 'Not set');
+  function typeFmKey() {
+    typing = {
+      title: 'Last.fm API key',
+      type: 'password',
+      value: '',
+      help: 'Made at last.fm/api.',
+      save: async (v) => {
+        await setLastfmServerKey(v);
+        await loadFmKey();
+      },
+    };
+  }
   // A server removed (or never there): back to the list.
   $effect(() => {
     if (thing && !own(thing) && !draft) backFromThing('connections');
@@ -121,7 +143,7 @@
   type Choosing = { title: string; options: { value: string; label: string }[]; value: string; save: (v: string) => void };
   let typing = $state<Typing | null>(null);
   let choosing = $state<Choosing | null>(null);
-  let removing = $state<'server' | 'lidarr' | 'discogs' | null>(null);
+  let removing = $state<'server' | 'lidarr' | 'discogs' | 'lastfm' | null>(null);
   let addingKind = $state(false);
 
   function add(kind: string) {
@@ -279,8 +301,50 @@
       onclose={() => (removing = null)}
     />
   {/if}
+{:else if thing === LASTFM}
+  <Group title="Connection" more={LASTFM_MORE}>
+    <Item name="API key" line={fmLine} onclick={typeFmKey} />
+  </Group>
+  {#if fmKey?.saved}
+    <Group>
+      <Item name="Remove Last.fm" kind="danger" onclick={() => (removing = 'lastfm')} />
+    </Group>
+  {/if}
+  {#if removing === 'lastfm'}
+    <ConfirmSheet
+      title="Remove Last.fm?"
+      label="Remove"
+      onconfirm={() =>
+        setLastfmServerKey('').then(
+          () => (loadFmKey(), backFromThing('connections')),
+          (e) => toast.fail(e, "Last.fm wasn't removed"),
+        )}
+      onclose={() => (removing = null)}
+    />
+  {/if}
+{:else if thing === DISCOGS}
+  <Group title="Connection" more={DISCOGS_MORE}>
+    <Item name="App key and secret" line={discogsLine} onclick={() => (discogsForm = { key: '', secret: '', busy: false, error: null })} />
+  </Group>
+  {#if discogs?.set}
+    <Group>
+      <Item name="Remove Discogs" kind="danger" onclick={() => (removing = 'discogs')} />
+    </Group>
+  {/if}
+  {#if removing === 'discogs'}
+    <ConfirmSheet
+      title="Remove Discogs?"
+      label="Remove"
+      onconfirm={() =>
+        setDiscogs('', '').then(
+          (d) => ((discogs = d), backFromThing('connections')),
+          (e) => toast.fail(e, "Discogs wasn't removed"),
+        )}
+      onclose={() => (removing = null)}
+    />
+  {/if}
 {:else}
-  <Group title="Servers" more="Shared by everyone who uses Cratarr, not this device's own.">
+  <Group title="Media servers" more="Shared by everyone who uses Cratarr, not this device's own.">
     {#if s.origin === 'env'}<Item name="From the container's settings" line="Until you save here" />{/if}
     <!-- Those switched off last (the owner, 2026-10-24), each side in its own order. -->
     {#each [...ed.drafts.filter((d) => d.enabled), ...ed.drafts.filter((d) => !d.enabled)] as d (d)}
@@ -296,7 +360,7 @@
     {/if}
   </Group>
   {#if ed.showLidarr}
-    <Group title="Downloads" more={LIDARR_MORE}>
+    <Group title="Download stack" more={LIDARR_MORE}>
       {#if s.lidarr || ed.lid.url}
         <Item lead={lidarrState.lead} name="Lidarr" line={lidarrState.line} tone={lidarrState.lead === 'bad' ? 'bad' : null} onclick={() => openThing('connections', LIDARR)} />
       {:else}
@@ -304,41 +368,21 @@
       {/if}
     </Group>
   {/if}
-  <Group title="Discover" more={LASTFM_MORE}>
-    <Item
-      name="Last.fm key for everyone"
-      value={fmKey?.saved ? 'Set' : fmKey?.set ? "From the container's settings" : 'None'}
-      onclick={() =>
-        (typing = {
-          title: 'Last.fm API key',
-          type: 'password',
-          value: '',
-          help: 'Made at last.fm/api. Empty takes the key away.',
-          save: async (v) => {
-            await setLastfmServerKey(v);
-            await loadFmKey();
-          },
-        })}
-    />
+  <!-- Last.fm for Discover's artists, Discogs for covers, photos and genres: both bring what is known about music. -->
+  <Group title="Discovery and metadata">
+    {#if fmKey?.set}
+      <Item lead="on" name="Last.fm" line={fmLine} onclick={() => openThing('connections', LASTFM)} />
+    {:else}
+      <Item name="Add Last.fm" kind="add" onclick={() => openThing('connections', LASTFM)} />
+    {/if}
+    {#if discogsKnown}
+      {#if discogs?.set}
+        <Item lead="on" name="Discogs" line={discogsLine} onclick={() => openThing('connections', DISCOGS)} />
+      {:else}
+        <Item name="Add Discogs" kind="add" onclick={() => openThing('connections', DISCOGS)} />
+      {/if}
+    {/if}
   </Group>
-  {#if discogsKnown}
-  <Group title="Discogs" more={DISCOGS_MORE}>
-    <Item
-      name="App key and secret"
-      value={discogs?.set ? (discogs.per_minute ? `Set · ${discogs.per_minute} a minute` : 'Set') : 'None'}
-      onclick={() => (discogsForm = { key: '', secret: '', busy: false, error: null })}
-    />
-    {#if discogs?.set}<Item name="Remove Discogs" kind="danger" onclick={() => (removing = 'discogs')} />{/if}
-  </Group>
-  {/if}
-  {#if removing === 'discogs'}
-    <ConfirmSheet
-      title="Remove Discogs?"
-      label="Remove"
-      onconfirm={() => setDiscogs('', '').then((d) => (discogs = d), (e) => toast.fail(e, "Discogs wasn't removed"))}
-      onclose={() => (removing = null)}
-    />
-  {/if}
   <HomeAssistantPart />
   {#if addingKind}
     <ChoiceSheet title="Add server" options={s.kinds.map((k) => ({ value: k.id, label: k.label }))} value={''} onchange={add} onclose={() => (addingKind = false)} />
