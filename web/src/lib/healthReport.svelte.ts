@@ -49,7 +49,12 @@ export type Problem = {
   icon: IconName;
   urgent: boolean;
   domain: string;
+  /** Its short name, the panel's breadcrumb (the owner, 2026-10-25: "Quality replacements", "Missing genres"). */
+  name: string;
+  /** What it is, on its card ("12 albums without a genre"; a file kind's "Files without tags"). */
   title: string;
+  /** What it is in a sentence with how many, at the top of its panel (the owner, 2026-10-25). */
+  said: string;
   line: string | null;
   finding: HealthFinding | null;
   /** What it is about, one by one: the server's items, or the files. */
@@ -67,11 +72,11 @@ const fileItem = (p: FileProblem): HealthItem => {
 export function problems(): Problem[] {
   const out: Problem[] = health.findings
     .filter((f) => f.domain !== 'files')
-    .map((f) => ({ key: f.key, icon: iconOf(f), urgent: f.level === 'critical', domain: DOMAINS[f.domain]?.name ?? f.domain, title: f.title, line: f.detail ?? null, finding: f, items: f.items ?? [], hint: null }));
+    .map((f) => ({ key: f.key, icon: iconOf(f), urgent: f.level === 'critical', domain: DOMAINS[f.domain]?.name ?? f.domain, name: f.name ?? f.title, title: f.title, said: f.title, line: f.detail ?? null, finding: f, items: f.items ?? [], hint: null }));
   for (const k of FILE_KINDS) {
     const files = (health.problems ?? []).filter((p) => p.kind === k.kind);
     if (files.length)
-      out.push({ key: `files-${k.kind}`, icon: DOMAINS.files.icon, urgent: k.kind === 'broken', domain: DOMAINS.files.name, title: k.title, line: `${files.length} ${files.length === 1 ? 'file' : 'files'}`, finding: null, items: files.map(fileItem), hint: k.hint });
+      out.push({ key: `files-${k.kind}`, icon: DOMAINS.files.icon, urgent: k.kind === 'broken', domain: DOMAINS.files.name, name: health.findings.find((f) => f.key === `files:${k.kind}`)?.name ?? k.title, title: k.title, said: `${files.length.toLocaleString()} ${files.length === 1 ? 'file' : 'files'}${k.title.slice('Files'.length)}`, line: `${files.length} ${files.length === 1 ? 'file' : 'files'}`, finding: null, items: files.map(fileItem), hint: k.hint });
   }
   return out;
 }

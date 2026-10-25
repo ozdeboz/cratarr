@@ -70,9 +70,9 @@
     <span class="navpill"><button aria-label="Back" title="Back" onclick={() => closePlaylist()}><Icon name="back" size={22} /></button></span>
   {/if}
   {#if item}
-    <Crumbs trail={[...top, ...(p ? [{ label: p.title, go: () => backFromStep(HEALTH + problem) }] : [])]} here={item.title} />
+    <Crumbs trail={[...top, ...(p ? [{ label: p.name, go: () => backFromStep(HEALTH + problem) }] : [])]} here={item.title} />
   {:else if p}
-    <Crumbs trail={top} here={p.title} />
+    <Crumbs trail={top} here={p.name} />
   {:else}
     <h2 class="title">Health</h2>
   {/if}
@@ -121,11 +121,12 @@
       <!-- How much. -->
       {#if f && f.of}
         <div class="meter" role="meter" aria-valuemin="0" aria-valuemax={f.of} aria-valuenow={f.count} aria-label={p.title}>
-          <div class="head"><span>{f.count.toLocaleString()} of {f.of.toLocaleString()}</span><b>{Math.round((100 * f.count) / f.of)}%</b></div>
+          <!-- What it is, in its sentence (the owner, 2026-10-25), over how much of the whole. -->
+          <div class="head"><span>{p.said}</span><b>{Math.round((100 * f.count) / f.of)}%</b></div>
           <div class="track"><i style:width={`${(100 * f.count) / f.of}%`}></i></div>
         </div>
-      {:else if f && f.count > 1}
-        <p class="count"><b>{f.count.toLocaleString()}</b></p>
+      {:else}
+        <p class="count"><b>{p.said}</b></p>
       {/if}
       <!-- The things it is about, one by one. -->
       {#if p.items.length}

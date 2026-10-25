@@ -1262,6 +1262,9 @@ export const getAlbumDuplicates = () => request<{ groups: AlbumGroup[] }>('/api/
 export type HealthFinding = {
   domain: string;
   key: string;
+  /** Its short name, the panel's breadcrumb ("Quality replacements"; a5, 0.9.6); a server before it has none. */
+  name?: string;
+  /** What it is, in a sentence ("11 better copies wait to replace Music"): its card's, and the panel's top. */
   title: string;
   detail?: string;
   count: number;
