@@ -1,6 +1,6 @@
 <script lang="ts">
-  // Crates (decision 0024): the second step after Incoming. Dynamic cross-sections of the library (the permanent
-  // Unlisted, and one's own), each a big card (lib/CrateCard, decided 2026-10-16) with its picture and what it holds;
+  // Crates (decision 0024): the second step after Incoming. Dynamic cross-sections of the library (the built-in ones,
+  // Unlisted and Home's New for you, Sounds like your week and Grave digging, 0.9.3; and one's own), each a big card (lib/CrateCard, decided 2026-10-16) with its picture and what it holds;
   // a tap views it in the panel (decision 0023), where it plays and is sorted like a playlist, and can be saved as one.
   import { prefs, type CrateOrder } from './lib/prefs.svelte';
   import type { Crate } from './lib/api';
@@ -11,6 +11,7 @@
   import CrateMenu from './lib/CrateMenu.svelte';
   import { shownPlaylists } from './lib/output.svelte';
   import { viewPlaylist, panel } from './lib/panel.svelte';
+  import { switchOn } from './lib/listFilter.svelte';
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
 
@@ -36,7 +37,9 @@
   };
   // The pill's search (the owner, 2026-10-25): a crate whose name holds every word.
   const sorted = $derived.by(() => {
-    const list = (crates.list ?? []).filter((c) => matchesSearch(c.name));
+    // The filter's Hide built-in crates (0.9.3): only one's own.
+    const noBuiltIn = switchOn('crates', 'no-built-in');
+    const list = (crates.list ?? []).filter((c) => matchesSearch(c.name) && !(noBuiltIn && c.permanent));
     const of = stat[prefs.crateOrder];
     if (prefs.crateOrder === 'name') list.sort(byName);
     else if (of) list.sort((a, b) => (of(a) ?? -1) - (of(b) ?? -1) || byName(a, b));

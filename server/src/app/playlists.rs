@@ -1880,7 +1880,17 @@ impl PlaylistService {
 
     pub async fn crates(&self, want: Option<&str>, without: &[String]) -> Result<Vec<CrateView>, ToggleError> {
         let own = self.own_crates()?.list().await?;
-        let all: Vec<(bool, CrateDef)> = crates::permanent().into_iter().map(|c| (true, c)).chain(own.into_iter().map(|c| (false, c))).collect();
+        // The built-in crates (0.9.3, the owner's word): Home's that are crates beside the permanent Unlisted, each made as
+        // Home makes it (one that cannot be made now, an account's week without sign-in say, is left out); none removable.
+        let mut built_in = Vec::new();
+        for id in [crates::HOME_NEW, crates::HOME_WEEK, crates::HOME_GRAVES] {
+            match self.crate_def(id).await {
+                Ok(def) => built_in.push(def),
+                Err(e) => tracing::debug!("crates: the built-in {id} is left out now: {e}"),
+            }
+        }
+        let all: Vec<(bool, CrateDef)> =
+            crates::permanent().into_iter().chain(built_in).map(|c| (true, c)).chain(own.into_iter().map(|c| (false, c))).collect();
         let set = self.own_crates()?.all_favourites().await?;
         let albums_set = self.own_crates()?.all_favourite_albums().await?;
         let albums_of = |id: &str| albums_set.get(id).copied().unwrap_or(crates::Favourites::All);
