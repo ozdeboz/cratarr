@@ -1543,8 +1543,8 @@ export type Renumbering = {
 };
 export const lookRenumber = (album: string) => post<Started>(`/api/albums/cratarr/${encodeURIComponent(album)}/renumber/look`, {});
 /** Writes the numbers shown (the preview's `to`), Undo puts the old ones back. */
-export const renumber = (album: string, tracks: { id: string; disc: number; track: number }[]) =>
-  post<{ undo: string[] }>(`/api/albums/cratarr/${encodeURIComponent(album)}/renumber`, { tracks });
+export const renumber = (album: string, tracks: { id: string; disc: number; track: number }[], totals?: Renumbering['totals']) =>
+  post<{ undo: string[] }>(`/api/albums/cratarr/${encodeURIComponent(album)}/renumber`, { tracks, totals });
 /** Stops one of the account's tasks (a5, 0.9.6: Change cover's look, once a cover is chosen). */
 export const stopTask = (id: number) => request<unknown>(`/api/tasks/${id}`, { method: 'DELETE' });
 

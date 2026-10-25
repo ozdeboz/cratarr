@@ -51,7 +51,7 @@
     if (!preview || working) return;
     working = true;
     try {
-      const { undo } = await renumber(album, preview.tracks.map((t) => ({ id: t.id, ...t.to })));
+      const { undo } = await renumber(album, preview.tracks.map((t) => ({ id: t.id, ...t.to })), preview.totals);
       withUndo(`Renumbered ${title}.`, undo, { after: loadHealth });
       loadHealth();
       ongone();
