@@ -47,7 +47,8 @@
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './lib/motion';
   import { glass } from './lib/glass.svelte';
   import GlobalResults from './lib/GlobalResults.svelte';
-  import { globalSearch, PAGE_KINDS } from './lib/globalSearch.svelte';
+  import LibraryViewPicker from './lib/LibraryViewPicker.svelte';
+  import { globalSearch, pageKinds } from './lib/globalSearch.svelte';
   import { provideEverywhere } from './lib/everywhere.svelte';
   import Find from './Find.svelte';
   import Toasts from './lib/Toasts.svelte';
@@ -782,7 +783,7 @@
       <Playlists />
     {/if}
     <!-- Global search at the end of what the page's own search leaves (decision 0072), but the kind the page shows. -->
-    {#if everywhereShown}<GlobalResults except={PAGE_KINDS[page] ?? []} />{/if}
+    {#if everywhereShown}<GlobalResults except={pageKinds(page)} />{/if}
     </SheetArea>
     </div>
     {#if split}
@@ -842,6 +843,8 @@
           <!-- Wherever the bar of pages is along the top (under 1024 px, as the CSS; the owner, 2026-10-25): from there the
                sidebar of pages names it. -->
           {#if panelPage && phone}<h1 class="page-name">{panelPage.label}</h1>{/if}
+          <!-- The Library's view, on the glass's extension as a control page's name (the owner, 2026-10-25). -->
+          {#if page === 'library'}<LibraryViewPicker />{/if}
         </span>
       {/if}
   {/snippet}
@@ -1031,7 +1034,7 @@
   /* A title in the glass (the owner, 2026-10-25, mockup 3: content scrolling under a bare title made it hard to read):
      the page's name or the panel's breadcrumbs on a thinner glass than the button's, more light through, the button's
      round glass in front of it. */
-  .lead:has(:global(.page-name, .crumbs, .title)) {
+  .lead:has(:global(.page-name, .crumbs, .title, .views)) {
     padding: 2px 18px 2px 2px;
     border-radius: 26px;
     background: color-mix(in srgb, var(--float-bg) 45%, transparent);
@@ -1040,7 +1043,7 @@
     box-shadow: 0 2px 10px rgb(0 0 0 / 0.18);
   }
 
-  .lead:has(:global(.page-name, .crumbs, .title)) .navpill {
+  .lead:has(:global(.page-name, .crumbs, .title, .views)) .navpill {
     box-shadow: none;
   }
 

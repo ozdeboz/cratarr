@@ -15,7 +15,7 @@
   import OutputSheet from './OutputSheet.svelte';
   import { filtersOn } from './listFilter.svelte';
   import { pageView, searchFor } from './pageView.svelte';
-  import { globalAsked, globalGroups, globalSearch, PAGE_KINDS } from './globalSearch.svelte';
+  import { globalAsked, globalGroups, globalSearch, pageKinds } from './globalSearch.svelte';
   import type { PanelKind } from './prefs.svelte';
   import ViewSheet, { type ListOrder } from './ViewSheet.svelte';
 
@@ -202,7 +202,7 @@
     if (pageView.query.trim() === '') typedHere = false;
   });
   const globe = $derived(!!words && pageView.query.trim() !== '' && (page ? page !== 'home' && page !== 'find' : typedHere));
-  const found = $derived(globe ? globalGroups(page ? (PAGE_KINDS[page] ?? []) : []).reduce((n, g) => n + g.total, 0) : 0);
+  const found = $derived(globe ? globalGroups(page ? pageKinds(page) : []).reduce((n, g) => n + g.total, 0) : 0);
   const globeOn = $derived(globalSearch.scope === 'everywhere');
   // While the new words are asked, the count the last ones had (the owner, 2026-10-25: the badge went while typing).
   let lastFound = $state<number | null>(null);

@@ -4,6 +4,7 @@
   // facts show with it: its library as a dot in that library's colour (none for Music, and only while more than one
   // shows), an Incoming album's conversion, or how it relates to Music (an upgrade, a duplicate). Its menu
   // (lib/LibrarySheet) moves it into another library, replaces the album in Music it upgrades, or deletes it.
+  import LibraryArtists from './lib/LibraryArtists.svelte';
   import { ApiError, type AlbumsSource, type ListedAlbum, type ShelfSource } from './lib/api';
   import AlbumShelf from './lib/AlbumShelf.svelte';
   import Meter from './lib/Meter.svelte';
@@ -171,6 +172,8 @@
   {:else if shown.length === 0}
     <p class="empty">No server with a Music or Incoming library is connected.</p>
   {:else}
+    <!-- Its artists instead (the switch beside back, App): the albums' artists. -->
+    {#if prefs.libraryView === 'artists'}<LibraryArtists sources={shown} />{:else}
     <AlbumShelf sources={shown} empty="No albums." onmenu={openMenu} bind:order={prefs.libraryOrder} bind:down={prefs.libraryDown}>
       {#snippet extra(s: ShelfSource, a: ListedAlbum)}
         {#if jobs.of(s.id, a.id)}
@@ -189,6 +192,7 @@
         {#if me.admin && lacksOf(s, a).length}<span class="lacks">Missing {lacksOf(s, a).join(', ')}</span>{/if}
       {/snippet}
     </AlbumShelf>
+    {/if}
   {/if}
 </main>
 

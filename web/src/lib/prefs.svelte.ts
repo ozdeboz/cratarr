@@ -95,6 +95,8 @@ export type Theme = 'auto' | 'light' | 'dark';
 
 export type Prefs = {
   theme: Theme;
+  /** What the Library shows (the switch beside back; the owner, 2026-10-25): its albums, or their artists. */
+  libraryView: 'albums' | 'artists';
   /** This device's animations (Display, the owner 2026-10-25): off, as the system's reduced motion (lib/motion). */
   animations: boolean;
   /** Where the bar of pages runs below 1024 px (Display, the owner 2026-10-25): along the top or the bottom. */
@@ -284,6 +286,7 @@ export const ZOOM_STEPS = 6;
 export const DEFAULTS: Prefs = {
   theme: 'auto',
   animations: true,
+  libraryView: 'albums',
   navAt: 'top',
   navHides: false,
   navHidesOnItem: true,
@@ -357,6 +360,7 @@ function read(): Prefs {
     if (saved && typeof saved === 'object') {
       if (['auto', 'light', 'dark'].includes(saved.theme)) p.theme = saved.theme;
       if (typeof saved.animations === 'boolean') p.animations = saved.animations;
+      if (saved.libraryView === 'albums' || saved.libraryView === 'artists') p.libraryView = saved.libraryView;
       if (saved.navAt === 'top' || saved.navAt === 'bottom') p.navAt = saved.navAt;
       if (typeof saved.navHides === 'boolean') p.navHides = saved.navHides;
       if (typeof saved.navHidesOnItem === 'boolean') p.navHidesOnItem = saved.navHidesOnItem;

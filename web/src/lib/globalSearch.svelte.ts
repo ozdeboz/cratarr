@@ -4,6 +4,7 @@
 // server, the pages and Settings' parts from the browser (lib/everywhere).
 import { search, type SearchKind, type ServerSearch } from './api';
 import { pageView } from './pageView.svelte';
+import { prefs } from './prefs.svelte';
 import { provided, words, type SearchResult } from './search';
 
 export type Found = SearchResult & { track?: string };
@@ -22,8 +23,9 @@ const ELSEWHERE: { kind: SearchKind; label: string }[] = [
   { kind: 'missing', label: 'Not in your library' },
   { kind: 'excluded', label: 'Left out by Discover' },
 ];
-/** The kinds a page shows itself: left out of its everywhere (lib/GlobalResults). */
-export const PAGE_KINDS: Record<string, string[]> = {
+/** The kinds a page shows itself: left out of its everywhere (lib/GlobalResults); the Library's by what it shows. */
+export const pageKinds = (page: string): string[] => (page === 'library' && prefs.libraryView === 'artists' ? ['artist'] : (PAGE_KINDS[page] ?? []));
+const PAGE_KINDS: Record<string, string[]> = {
   library: ['album'],
   playlists: ['playlist'],
   crates: ['crate', 'genre'],
