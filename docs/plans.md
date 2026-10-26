@@ -155,8 +155,10 @@ gets genre territories, like a political map. Each genre is an area drawn around
 up much of the music, so islands, holes and enclaves (a pocket of electronic inside rock) come out by themselves. A
 mock-up was made (artifact UJ4zeUZEZPw2pcUie2D25B; geometry from scratchpad `territories/geo.py`: each genre's outline
 is the 0.5 contour, by marching squares, of a Gaussian field weighted by the genre's share in each playlist, only
-playlists with a share of 0.25 or more counting). The owner: "Yes, it looks fine." Not built, and no decision written
-yet. Recorded late: the mock-up was accepted but never written down here, so no session had a trace of it.
+playlists with a share of 0.25 or more counting). The owner: "Yes, it looks fine." Built in 0.9.8 (2026-10-26,
+lib/territories; a5's per-playlist `shares`): the Map's points no longer move (the owner: "no node movement, a real
+map"; pan and zoom stay), the six genres follow the Map's filters, a legend tap shows one, a tap inside one highlights
+its playlists, and the Map fills its page with nothing to scroll.
 
 Decided (the owner, 2026-10-24): a playlist's genres come from its tracks' genre tags (counted per playlist; not
 MusicBrainz's genres, not AudioMuse's styles); the territories are a switch on the Map, off until turned on; the top
