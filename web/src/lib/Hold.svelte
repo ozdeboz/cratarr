@@ -7,11 +7,18 @@
   // that long says nothing true any more), the new content still showing whole once ready; after HOLD_GIVE_UP_MS as it
   // is. A place opening (the app starting, the phone's panel coming up) holds its first content too, over its own empty
   // background. `shown`: the key whose content shows (what a page marks as open follows it, not the key asked for).
+  // `along`: what of the window outside the place belongs to its content (a page's controls row, which the new page
+  // fills at once): pictured with it, the new one hidden until the switch (a5's lab, 2026-10-27).
   import { mount, setContext, tick, unmount, untrack, type Snippet } from 'svelte';
   import { HOLD, type HoldPlace } from './holdPlace.svelte';
   import MarkLoader from './MarkLoader.svelte';
 
-  let { key, shown = $bindable(), children }: { key: unknown; shown?: unknown; children: Snippet } = $props();
+  let {
+    key,
+    shown = $bindable(),
+    along = () => [],
+    children,
+  }: { key: unknown; shown?: unknown; along?: () => HTMLElement[]; children: Snippet } = $props();
 
   const HOLD_SIGN_MS = 300;
   const HOLD_MAX_MS = 3000;
@@ -25,6 +32,9 @@
   const claims = new Set<object>();
   let holding = $state(false);
   let picture: HTMLElement | null = null;
+  /** `along`'s pictures, and the live ones hidden meanwhile. */
+  let parts: HTMLElement[] = [];
+  let hidden: HTMLElement[] = [];
   let sign: ReturnType<typeof mount> | null = null;
   let signTimer: ReturnType<typeof setTimeout> | undefined;
   let maxTimer: ReturnType<typeof setTimeout> | undefined;
@@ -90,6 +100,9 @@
       visibility: 'visible',
     });
     p.classList.add('hold-picture');
+    // On the place's own layer, after it: over it (a page is lifted above what is behind it).
+    const z = getComputedStyle(frame).zIndex;
+    if (z !== 'auto') p.style.zIndex = z;
     frame.after(p);
     // Scrolled as it was, its drawings copied (a copy's canvas starts blank).
     for (const [e, top, left] of scrolled) {
@@ -104,6 +117,23 @@
       }
     }
     picture = p;
+    if (!blank) {
+      for (const el of along()) {
+        const q = el.getBoundingClientRect();
+        if (!q.width || !q.height) continue;
+        const c = el.cloneNode(true) as HTMLElement;
+        for (const e of c.querySelectorAll('[id]')) e.removeAttribute('id');
+        c.setAttribute('aria-hidden', 'true');
+        c.inert = true;
+        Object.assign(c.style, { position: 'fixed', left: `${q.left}px`, top: `${q.top}px`, width: `${q.width}px`, height: `${q.height}px`, margin: '0', right: 'auto', bottom: 'auto', transform: 'none', pointerEvents: 'none' });
+        c.classList.add('hold-picture');
+        el.after(c);
+        parts.push(c);
+      }
+    }
+    // The live ones stay hidden while held: the new content's, filled at once.
+    hidden = along();
+    for (const el of hidden) el.style.visibility = 'hidden';
     signTimer = setTimeout(() => {
       if (picture !== p) return;
       const at = document.createElement('div');
@@ -117,8 +147,17 @@
     }, HOLD_SIGN_MS);
   }
 
+  /** `along`'s pictures gone, the live ones shown. */
+  function dropParts() {
+    for (const c of parts) c.remove();
+    parts = [];
+    for (const el of hidden) el.style.visibility = '';
+    hidden = [];
+  }
+
   function dropPicture() {
     clearTimeout(signTimer);
+    dropParts();
     if (sign) void unmount(sign);
     sign = null;
     picture?.remove();
@@ -160,6 +199,7 @@
       if (r !== round || !picture) return;
       // The background and the sign, no longer what was there.
       for (const c of [...picture.children]) if (!c.classList.contains('hold-sign')) c.remove();
+      dropParts();
     }, HOLD_MAX_MS);
     giveUpTimer = setTimeout(() => {
       if (r !== round) return;

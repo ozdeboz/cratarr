@@ -873,7 +873,7 @@
     <SheetArea area={() => pageEl}>
     <!-- One commit (lib/Hold; the owner, 2026-10-26, "Old page stays, then switch"): the page before stays until the new
          one is ready, and the bar's highlight moves with it. -->
-    <Hold key={page} bind:shown={shownPage}>
+    <Hold key={page} bind:shown={shownPage} along={() => [...document.querySelectorAll<HTMLElement>('.page-row:not(.hold-picture)')]}>
     {#if page === 'settings'}
       <Settings />
     {:else if page === 'health' && me.admin}
