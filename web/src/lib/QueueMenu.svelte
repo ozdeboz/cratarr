@@ -1,7 +1,7 @@
 <script lang="ts">
   // The queue's menu (decision 0058; the owner, 2026-10-23): the Queue sheet's ⋮ beside its search, and a long-press on
-  // the full player's Queue button. Shuffle at its header's end (the owner, 2026-10-26: beside Repeat once that moves
-  // here; once: a queue always has an order, Undo puts the order before back), and under the name what the queue is
+  // the full player's Queue button. Shuffle and Repeat at its header's end (the owner, 2026-10-26: Repeat out of the
+  // player's row, 0.9.8; Repeat off, all, one, lit while on; once: a queue always has an order, Undo puts the order before back), and under the name what the queue is
   // made of: how many of its tracks Radio put in and how many Autoplay serves; then Save as playlist; Export…; Queues…
   // (the switcher); Clear the queue last (with its Undo).
   import MenuSheet from './MenuSheet.svelte';
@@ -11,7 +11,7 @@
   import ExportStep from './ExportStep.svelte';
   import QueuePlaylistSheet from './QueuePlaylistSheet.svelte';
   import QueuesSheet from './QueuesSheet.svelte';
-  import { clearUpcoming, local, restoreUpcoming, shuffleUpcoming } from './localPlayer.svelte';
+  import { clearUpcoming, local, restoreUpcoming, setRepeat, shuffleUpcoming } from './localPlayer.svelte';
   import { isLocal } from './output.svelte';
   import { playing } from './remote.svelte';
   import { plural } from './insights.svelte';
@@ -56,7 +56,17 @@
     icon="list"
     title={name}
     chips={[plural(tracks.length, 'track'), ...(fromRadio ? [`${fromRadio} from Radio`] : []), ...(fromAutoplay ? [`${fromAutoplay} from Autoplay`] : [])]}
-    end={step === 'menu' && here ? { icon: 'shuffle', label: 'Shuffle', disabled: upcoming < 2, onclick: shuffle } : null}
+    end={step === 'menu' && here
+      ? [
+          { icon: 'shuffle', label: 'Shuffle', disabled: upcoming < 2, onclick: shuffle },
+          {
+            icon: local.repeat === 'one' ? 'repeatOne' : 'repeat',
+            label: local.repeat === 'one' ? 'Repeat one' : local.repeat === 'all' ? 'Repeat all' : 'Repeat',
+            on: local.repeat !== 'off',
+            onclick: () => setRepeat(local.repeat === 'off' ? 'all' : local.repeat === 'all' ? 'one' : 'off'),
+          },
+        ]
+      : null}
     onback={step === 'menu' ? null : () => (step = 'menu')}
     {step}
   >

@@ -1,7 +1,8 @@
 <script lang="ts" module>
   import type { IconName } from './Icon.svelte';
   /** `busy`: under way, the app's busy ring in its place (Change cover's look, at the top right). */
-  export type SheetAction = { icon: IconName; label: string; onclick: () => void; disabled?: boolean; busy?: boolean };
+  /** `on`: a state it shows (Repeat in the queue's sheet): pressed, in the accent. */
+  export type SheetAction = { icon: IconName; label: string; onclick: () => void; disabled?: boolean; busy?: boolean; on?: boolean };
 </script>
 
 <script lang="ts">
@@ -206,7 +207,7 @@
       >
     {:else if end}
       {#each Array.isArray(end) ? end : [end] as x (x.label)}
-        <button class="heart" aria-label={x.label} title={x.label} disabled={x.disabled} aria-busy={x.busy || undefined} onclick={x.onclick}><Icon name={x.icon} size={24} /></button>
+        <button class="heart" class:lit={x.on} aria-label={x.label} title={x.label} disabled={x.disabled} aria-busy={x.busy || undefined} aria-pressed={x.on ?? undefined} onclick={x.onclick}><Icon name={x.icon} size={24} /></button>
       {/each}
     {/if}
   </div>
@@ -416,6 +417,10 @@
   .heart:disabled {
     opacity: 0.4;
     cursor: default;
+  }
+
+  .heart.lit {
+    color: var(--accent-ink);
   }
 
   .heart.on :global(svg) {

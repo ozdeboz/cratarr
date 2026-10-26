@@ -29,7 +29,7 @@
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { ramping } from './ramping.svelte';
   import { appInfo, inApp } from './app.svelte';
-  import { local, restoreUpcoming, setRepeat, shuffleUpcoming, windUpMs } from './localPlayer.svelte';
+  import { local, restoreUpcoming, shuffleUpcoming, windUpMs } from './localPlayer.svelte';
   import QueueMenu from './QueueMenu.svelte';
   import { playingCrateOuts } from './crates.svelte';
   import { localMode } from './deviceMusic.svelte';
@@ -556,17 +556,9 @@
               /></button
             >
             <button aria-label="Next track" onclick={() => send('next')}><Icon name="next" size={24} /></button>
-            {#if isLocal()}
-              <!-- Finamp's repeat, right of next: off, all, one. -->
-              <button
-                class="shuffle"
-                class:on={local.repeat !== 'off'}
-                aria-label={local.repeat === 'one' ? 'Repeat one' : local.repeat === 'all' ? 'Repeat all' : 'Repeat'}
-                aria-pressed={local.repeat !== 'off'}
-                onclick={() => setRepeat(local.repeat === 'off' ? 'all' : local.repeat === 'all' ? 'one' : 'off')}
-                ><Icon name={local.repeat === 'one' ? 'repeatOne' : 'repeat'} size={22} /></button
-              >
-            {/if}
+            <!-- Repeat is in the queue's sheet (a long press on Queue; the owner, 2026-10-26, 0.9.8): its place kept, so
+                 play stays in the middle. -->
+            {#if isLocal()}<span class="spot" aria-hidden="true"></span>{/if}
           </div>
         </div>
         <i class="sp c"></i>
@@ -1143,13 +1135,15 @@
     cursor: pointer;
   }
 
-  /* Shuffle and repeat show their state by colour, as Finamp's. */
+  /* Shuffle in the muted colour, as Finamp's. */
   .transport button.shuffle {
     color: var(--muted);
   }
 
-  .transport button.shuffle.on {
-    color: var(--art-accent, var(--accent));
+  /* Repeat's place, kept empty (it is in the queue's sheet): a button's width. */
+  .transport span.spot {
+    width: 48px;
+    height: 48px;
   }
 
   /* Play/pause in Finamp's shape: a rounded square (a quarter of its size as radius), tinted with the text colour,
