@@ -203,9 +203,10 @@ pub fn files(issues: &BTreeMap<String, u64>) -> Vec<Finding> {
 /// The library's albums lacking what it requires, a finding for each kind, each album opening its panel: the cover,
 /// the year, the genre, the album artist and the track numbers are warnings; the MusicBrainz id, which many lack and
 /// which only some things use (Lidarr, Discover, exact imports), is told. A cover missing is critical (the owner,
-/// 2026-10-25). Each of all the albums (`whole`), so the page shows its share. Track numbers (0.9.6): `numbering`'s
+/// 2026-10-25). No share of all the albums (0.9.7, the owner: a bar is for something good, not for what is wrong).
+/// Track numbers (0.9.6): `numbering`'s
 /// albums whose numbers are off (twice, missing, none), each with what is off; Renumber fixes them.
-pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, String, String, String)], whole: u64) -> Vec<Finding> {
+pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, String, String, String)]) -> Vec<Finding> {
     type Pick = fn(&crate::serve::library::Lacks) -> bool;
     let kinds: [(&str, Level, &str, &str, Pick); 5] = [
         ("cover", Level::Critical, "album without a cover", "albums without a cover", |r| r.cover),
@@ -227,7 +228,6 @@ pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, Stri
             .take(ITEMS)
             .map(|r| Item { title: r.name.clone(), line: Some(r.artist.clone()), album: Some((crate::source::cratarr::KIND.id.to_string(), r.id.clone())), ..Item::default() })
             .collect();
-        f.of = Some(whole);
         out.push(f);
     }
     if !numbering.is_empty() {
@@ -245,7 +245,6 @@ pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, Stri
                 ..Item::default()
             })
             .collect();
-        f.of = Some(whole);
         out.push(f);
     }
     out
@@ -365,12 +364,11 @@ impl App {
         let (lib, ud) = (served.library.clone(), served.userdata.clone());
         let (rows, numbering, matched) =
             tokio::task::spawn_blocking(move || -> anyhow::Result<_> { Ok((lib.lacking()?, lib.numbering(music)?, ud.renumber_matched()?)) }).await??;
-        let whole = numbering.len() as u64;
         let off: Vec<(String, String, String, String)> = numbering
             .into_iter()
             .filter_map(|(id, name, artist, numbers)| super::renumber::off(&numbers, !matched.contains(&id)).map(|line| (id, name, artist, line)))
             .collect();
-        Ok(library(&rows.into_iter().filter(|r| music.is_none_or(|m| r.folder == m)).collect::<Vec<_>>(), &off, whole))
+        Ok(library(&rows.into_iter().filter(|r| music.is_none_or(|m| r.folder == m)).collect::<Vec<_>>(), &off))
     }
 
     /// One's own playlists' tracks whose file is gone (the Repair view, one playlist at a time).
