@@ -20,7 +20,7 @@
     marked,
     enter = false,
     bleed = 0,
-    fade = true,
+    fade = false,
     front: frontLayer,
   }: {
     /** Come in when shown (Home's featured flow; the owner, 2026-10-26): from both edges towards the middle, the outer
@@ -32,8 +32,8 @@
     /** How far below its place it may still draw (the covers' lower edges and shadows, the owner 2026-10-26: no hard
      *  edge under them), the covers laid out as if it did not. */
     bleed?: number;
-    /** Its sides fading out (the owner, 2026-10-23); none where the picture behind it reaches the screen's edges (the
-     *  owner, 2026-10-26). */
+    /** Its sides fading out (the owner, 2026-10-23). Off everywhere since (the owner, 2026-10-26: every flow's picture
+     *  reaches its edges, "no transparency gradient at the sides"); kept for a flow on a plain page. */
     fade?: boolean;
     /** Drawn over the front cover, which blurs under it (a flow's details, lib/FlowStage). */
     front?: Snippet | null;

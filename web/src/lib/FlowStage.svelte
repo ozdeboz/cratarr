@@ -110,7 +110,7 @@
 {#if wall}<div class="wall flow-wall" {@attach besidePage} aria-hidden="true"></div>{/if}
 <div class="flow" class:on-wall={wall} style:margin-top="{-spare / 2}px">
   <div class="stage" {@attach fill} style:height="{stageHeight}px">
-    <CoverFlow {covers} top={12} foot={12} bleed={48} fade={false} {onopen} {marked} onfront={toFront} front={showing && details ? facts : null} onspare={(px) => (spare = last.spare = px)} {onmenu} />
+    <CoverFlow {covers} top={12} foot={12} bleed={48} {onopen} {marked} onfront={toFront} front={showing && details ? facts : null} onspare={(px) => (spare = last.spare = px)} {onmenu} />
   </div>
   {#if front}
     <div class="caption">

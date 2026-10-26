@@ -470,7 +470,6 @@
       <div class="sky-flow">
         {#if heroReady}<CoverFlow
           enter
-          fade={false}
           covers={heroAlbums.map((a) => albumCoverUrl(a.source, a.id))}
           top={0}
           foot={SHADOW}
