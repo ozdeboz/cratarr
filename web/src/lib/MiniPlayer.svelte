@@ -11,6 +11,7 @@
   // the queue's sheet, and answers tracks put in from elsewhere (lib/queueCue): list-start a moment for Play next,
   // list-end for Add to queue.
   import { tick } from 'svelte';
+  import { BANDCAMP } from './bandcampPreview';
   import { portal } from './portal';
   import Icon from './Icon.svelte';
   import OutputSheet from './OutputSheet.svelte';
@@ -219,8 +220,10 @@
         aria-label={np.player ? `Playing on ${np.player}; play on` : 'Where it plays'} onclick={() => (outputOpen = true)}
         ><Icon name="speaker" size={24} /></button
       >
-      <!-- No heart for the device's own music (local mode, decision 0052). -->
-      {#if np.favorite !== null && np.source !== 'device'}
+      <!-- No heart for the device's own music (local mode, decision 0052); a Bandcamp track's crossed out, said so. -->
+      {#if np.source === BANDCAMP}
+        <span class="own fav off" role="img" aria-label="On Bandcamp" title="On Bandcamp"><Icon name="heartOff" size={28} /></span>
+      {:else if np.favorite !== null && np.source !== 'device'}
         <button
           class="own fav"
           class:on={favorite()}
@@ -472,5 +475,10 @@
 
   :global(:root[data-motion='off']) .queue.answer :global(svg) {
     animation: none;
+  }
+
+  .fav.off {
+    color: var(--muted);
+    cursor: default;
   }
 </style>

@@ -38,6 +38,7 @@
   import { albumSubject, viewPlaylist } from './panel.svelte';
   import { CRATE, crates, loadCrates, queueCrate } from './crates.svelte';
   import HeartSheet from './HeartSheet.svelte';
+  import { BANDCAMP } from './bandcampPreview';
   import { player } from './live.svelte';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './motion';
   import { isLocal, shownPlaylists } from './output.svelte';
@@ -221,8 +222,9 @@
 {/snippet}
 
 <!-- A row's second line: the artist, then the album (as Symfonium's), unless it is the album the queue plays. -->
-{#snippet byline(t: { artist: string | null; album: string | null })}
-  {[t.artist, t.album === from ? null : t.album].filter(Boolean).join(' • ')}
+{#snippet byline(t: { artist: string | null; album: string | null; source?: string })}
+  <!-- Played from Bandcamp (the owner, 2026-10-26): said first. -->
+  {#if (t.source ?? np?.source) === BANDCAMP}<b class="bc">Bandcamp</b>{[t.artist, t.album === from ? null : t.album].some(Boolean) ? ' • ' : ''}{/if}{[t.artist, t.album === from ? null : t.album].filter(Boolean).join(' • ')}
 {/snippet}
 
 <!-- A row's ⋮: its menu, as a long-press on the row. -->
@@ -320,7 +322,9 @@
           <span>{np.artist ?? ''}</span>
         </div>
         <span class="ntime">{clockText(pos)}{dur ? ` / ${clockText(dur)}` : ''}</span>
-        {#if np.favorite !== null && np.source !== 'device'}
+        {#if np.source === BANDCAMP}
+          <span class="nbtn off" role="img" aria-label="On Bandcamp" title="On Bandcamp"><Icon name="heartOff" size={28} /></span>
+        {:else if np.favorite !== null && np.source !== 'device'}
           <button
             class="nbtn"
             class:on={favorite()}
@@ -982,5 +986,16 @@
   .empty {
     margin: 16px;
     color: var(--muted);
+  }
+
+  /* Played from Bandcamp: said first in its line. */
+  .bc {
+    color: var(--accent-ink);
+    font-weight: 600;
+  }
+
+  .nbtn.off {
+    color: var(--muted);
+    cursor: default;
   }
 </style>

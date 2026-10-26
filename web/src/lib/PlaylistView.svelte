@@ -1779,7 +1779,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       <div class="actbar" class:stuck class:loose={!prefs.stickyActions} bind:this={actbar} role="toolbar" aria-label="Play">
         {#each barActions as a (a.key)}
           <button class="icon" aria-label={a.label} title={a.label} disabled={a.disabled || (!!starting && starting !== a.key)} aria-busy={starting === a.key} onclick={a.run}
-            >{#if starting === a.key}<span class="ring-in"><ProgressRing progress={null} size={24} /></span>{:else}<Icon name={a.icon} size={24} />{/if}</button
+            >{#if starting === a.key}<span class="ring-in"><ProgressRing progress={null} size={24} spin /></span>{:else}<Icon name={a.icon} size={24} />{/if}</button
           >
         {/each}
         <span class="grow"></span>

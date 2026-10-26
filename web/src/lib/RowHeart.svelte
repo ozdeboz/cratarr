@@ -7,6 +7,7 @@
   import HeartSheet from './HeartSheet.svelte';
   import Icon from './Icon.svelte';
   import { longpress } from './longpress';
+  import { BANDCAMP } from './bandcampPreview';
 
   let {
     source,
@@ -20,6 +21,10 @@
   let sheet = $state(false);
 </script>
 
+<!-- A Bandcamp track has no heart here (the owner, 2026-10-26): crossed out, said so. -->
+{#if source === BANDCAMP}
+  <span class="rheart off" role="img" aria-label="On Bandcamp" title="On Bandcamp"><Icon name="heartOff" size={24} /></span>
+{:else}
 <button
   class="rheart"
   class:on={isFavorite(source, id)}
@@ -27,6 +32,7 @@
   onclick={() => (navigator.vibrate?.(8), onopen())}
   use:longpress={() => (navigator.vibrate?.(8), (sheet = true))}><Icon name="heart" size={24} /></button
 >
+{/if}
 {#if sheet}
   <HeartSheet
     track={{ source, id, name, artist }}
@@ -53,5 +59,10 @@
 
   .rheart.on :global(svg) {
     fill: currentColor;
+  }
+
+  .rheart.off {
+    color: var(--muted);
+    cursor: default;
   }
 </style>
