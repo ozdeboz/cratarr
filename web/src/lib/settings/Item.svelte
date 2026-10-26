@@ -22,6 +22,7 @@
     tone = null,
     wrap = false,
     more = null,
+    experimental = false,
     lead = null,
     value = null,
     swatch = null,
@@ -40,6 +41,8 @@
     /** The line may take more than one line (an address, a path). */
     wrap?: boolean;
     more?: string | null;
+    /** Its (i) red, saying it is experimental. */
+    experimental?: boolean;
     /** A dot ('on', 'off', 'warn', 'bad'), a colour, or '' for the room of one. */
     lead?: string | null;
     value?: string | null;
@@ -98,7 +101,7 @@
   {:else}
     <div class="main">{@render body()}</div>
   {/if}
-  {#if more}<span class="more"><MoreInfo label={name} text={more} /></span>{/if}
+  {#if more}<span class="more"><MoreInfo label={name} text={more} {experimental} /></span>{/if}
   {#if act && (toggle || opens)}
     <!-- The row's end is the row too (a second way to the same act, kept out of the tab order). -->
     <button class="end" type="button" tabindex="-1" aria-hidden="true" {disabled} onclick={act}>

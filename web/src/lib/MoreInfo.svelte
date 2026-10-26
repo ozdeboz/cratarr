@@ -5,15 +5,18 @@
   import Icon from './Icon.svelte';
   import MenuSheet from './MenuSheet.svelte';
 
-  let { label, text }: { label: string; text: string } = $props();
+  /** `experimental`: a red (i), its sheet saying so first (the owner, 2026-10-26: experimental features marked). */
+  let { label, text, experimental = false }: { label: string; text: string; experimental?: boolean } = $props();
   let open = $state(false);
+  const EXPERIMENTAL = 'Experimental: it may not behave as described yet.';
   const paragraphs = $derived(text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean));
 </script>
 
-<button class="info" type="button" aria-label={`About ${label}`} title={`About ${label}`} onclick={() => (open = true)}><Icon name="info" size={18} /></button>
+<button class="info" class:experimental type="button" aria-label={`About ${label}`} title={`About ${label}`} onclick={() => (open = true)}><Icon name="info" size={18} /></button>
 {#if open}
   <MenuSheet label={label} icon="info" title={label} onclose={() => (open = false)}>
     <div class="text">
+      {#if experimental}<p class="experimental">{EXPERIMENTAL}</p>{/if}
       {#each paragraphs as p (p)}<p>{p}</p>{/each}
     </div>
   </MenuSheet>
@@ -40,6 +43,16 @@
   .info:focus-visible {
     background: color-mix(in srgb, var(--text) 8%, transparent);
     color: var(--text);
+  }
+
+  .info.experimental,
+  .text .experimental {
+    color: var(--danger-ink);
+  }
+
+  .info.experimental:hover,
+  .info.experimental:focus-visible {
+    color: var(--danger);
   }
 
   /* Padding, not margin: the sheet measures its content's height, which a child's margin would fall outside of. */

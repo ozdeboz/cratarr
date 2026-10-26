@@ -74,7 +74,7 @@
   <!-- Start and stop (the owner, 2026-10-25): play and pause at once, as a turntable or fading, over a ramp; next and
        previous too where asked. Tape rewind waits for the real thing, the track played backwards (the owner,
        2026-10-26: hidden until then). -->
-  <Item name="Start and stop" more={STARTSTOP_MORE}><Seg label="Start and stop" options={MODES} bind:value={() => ss.mode, (v) => setSS({ mode: v })} /></Item>
+  <Item name="Start and stop" more={STARTSTOP_MORE} experimental><Seg label="Start and stop" options={MODES} bind:value={() => ss.mode, (v) => setSS({ mode: v })} /></Item>
   {#if ss.mode !== 'off'}
     <Item name="Ramp" value={`${(ss.ms / 1000).toFixed(1)} s`} onclick={() => (rampOpen = true)} />
     <Item name="Also for next and previous" toggle={{ checked: ss.skips, onchange: (on) => setSS({ skips: on }) }} />
