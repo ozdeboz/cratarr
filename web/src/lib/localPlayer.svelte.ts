@@ -483,7 +483,8 @@ let lastShown = -1;
 function tick() {
   // Played elsewhere (another of Cratarr's players): this page's own, idle audio says nothing about it.
   if (!audio || local.index < 0 || handed()) return;
-  local.paused = audio.paused;
+  // A ramp under way has committed to where it goes (lib's Start and stop): that is what shows, everywhere.
+  local.paused = committed ?? audio.paused;
   const w = where();
   if (w) {
     if (w.seg.index !== local.index) {
@@ -1541,6 +1542,10 @@ function applyVolume() {
 // the ramp. Stepped by time, not by frames, so a hidden page still gets there.
 let rampGain = 1;
 let rampToken = 0;
+/** What a ramp under way has committed to (paused or playing), shown at once on every device; until it is done, play
+ *  and pause wait (the owner, 2026-10-26: a press during a ramp is not taken, rather than starting it over with a hard
+ *  edge). Null: no ramp. */
+let committed: boolean | null = null;
 /** The slowest a browser plays (Chrome and Firefox take 1/16). */
 const RAMP_LOW = 0.07;
 const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
@@ -1586,32 +1591,50 @@ async function rampOut(): Promise<void> {
   if (mode === 'off' || !audio || audio.paused) return;
   await ramp(1, mode === 'fade' ? 0 : RAMP_LOW, ms, rampSet(mode));
 }
-/** Plays, winding up from still (or silence). */
+/** Plays, winding up from still (or silence); not while a ramp is under way. */
 function rampIn() {
-  if (!audio) return;
+  if (!audio || committed !== null) return;
   const { mode, ms } = prefs.startStop;
   if (mode === 'off') {
     unramp();
     void audio.play().catch(() => {});
     return;
   }
+  committed = false;
+  local.paused = false;
   const set = rampSet(mode);
   set(mode === 'fade' ? 0 : RAMP_LOW);
   void audio.play().catch(() => {});
-  void ramp(mode === 'fade' ? 0 : RAMP_LOW, 1, ms, set).then((whole) => whole && unramp());
+  void ramp(mode === 'fade' ? 0 : RAMP_LOW, 1, ms, set).then(() => {
+    unramp();
+    committed = null;
+  });
 }
-/** Pauses, winding down first. */
+/** Pauses, winding down first; paused at once as far as anyone sees, and nothing takes it back meanwhile. */
 async function pauseRamped() {
-  if (!audio) return;
-  await rampOut();
-  audio?.pause();
-  unramp();
+  if (!audio || committed !== null) return;
+  if (prefs.startStop.mode === 'off' || audio.paused) return void audio.pause();
+  committed = true;
+  local.paused = true;
+  try {
+    await rampOut();
+    audio?.pause();
+  } finally {
+    unramp();
+    committed = null;
+  }
 }
 /** For next and previous (where the device asks it): out, then on to `go`, then in. */
 async function skipRamped(go: () => void) {
   const s = prefs.startStop;
+  if (committed !== null) return;
   if (s.mode === 'off' || !s.skips || !audio || audio.paused || handed()) return go();
-  await rampOut();
+  committed = false;
+  try {
+    await rampOut();
+  } finally {
+    committed = null;
+  }
   go();
   rampIn();
 }
@@ -1625,7 +1648,8 @@ async function rewindTape(): Promise<boolean> {
     for (let i = 0; i < audio!.buffered.length; i++) if (t >= audio!.buffered.start(i) && t <= audio!.buffered.end(i)) return true;
     return false;
   };
-  if (from <= 0 || !loaded(base)) return false;
+  if (from <= 0 || !loaded(base) || committed !== null) return false;
+  committed = false;
   const ms = Math.min(12_000, 4 * prefs.startStop.ms);
   const token = ++rampToken;
   const t0 = performance.now();
@@ -1641,6 +1665,7 @@ async function rewindTape(): Promise<boolean> {
   }
   if (token === rampToken) audio.currentTime = base;
   unramp();
+  committed = null;
   return true;
 }
 

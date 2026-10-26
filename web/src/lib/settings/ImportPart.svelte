@@ -7,6 +7,7 @@
   // the library by name; its password is asked for each run and kept nowhere. Acts at once; a server's import is
   // followed while it runs. ListenBrainz, Last.fm and files run as the server's tasks (lib/tasks): their row shows how
   // far they are, and what they brought, also when this page was left meanwhile.
+  import { toast } from '../toast.svelte';
   import {
     getLastFm,
     getListenBrainzKept,
@@ -245,10 +246,11 @@
   });
   let lovedAll = $state(false);
   let albumsAll = $state(false);
-  let lovedCopied = $state(false);
   async function copyLoved() {
     const text = lovedMissing.map((m) => [m.artist, m.title, m.album ?? ''].join('\t')).join('\n');
-    lovedCopied = await copyText(`Artist\tTitle\tAlbum\n${text}\n`);
+    // The answer to a button is a toast, not the row's line (the owner, 2026-10-26).
+    if (await copyText(`Artist\tTitle\tAlbum\n${text}\n`)) toast.show({ text: 'Copied.', tone: 'done' });
+    else toast.fail(null, "It couldn't be copied");
   }
 
   // Files: chosen here, read by the server one at a time, kept nowhere. Each its result; a playlist made can be undone,
@@ -440,7 +442,7 @@
       title="Loved, not in your library"
       more="Last.fm keeps no album with a love: each is the album the track was most often scrobbled from, where it was."
     >
-      <Item name="Copy the list" line={lovedCopied ? 'Copied: artist, title and album, a line each' : 'Artist, title and album, a line each'}>
+      <Item name="Copy the list" line="Artist, title and album, a line each">
         <button onclick={copyLoved}>Copy</button>
       </Item>
       {#each lovedAll ? lovedMissing : lovedMissing.slice(0, 20) as m, i (i)}

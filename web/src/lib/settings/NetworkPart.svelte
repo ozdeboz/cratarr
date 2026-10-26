@@ -4,6 +4,7 @@
   // carries only the local network); the app looks again at every change of network. The address in use, and a test of
   // both. Signing in away from home is Cratarr's sign-in page (decision 0039), not a setting here. This device's own; it
   // acts at once. Only in the app.
+  import { toast } from '../toast.svelte';
   import { appInfo, inApp, networkTest, setDevice, testNetwork } from '../app.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
@@ -35,6 +36,20 @@
     if (!local && !pub) return signedOut ? 'Local network address not reachable · not signed in' : 'Neither reachable';
     return local ? pubFailed : 'Local network address not reachable';
   });
+  // The answer to a button is a toast (the owner, 2026-10-26: "a subrow is a horrible place for a result from clicking
+  // a button"), as a connection's Check: good news plainly, anything not reached as an error.
+  let asked = false;
+  function test() {
+    asked = true;
+    testNetwork();
+  }
+  $effect(() => {
+    const r = result;
+    if (!asked || networkTest.testing || !r) return;
+    asked = false;
+    const good = r === 'Reachable' || r === 'Both reachable';
+    toast.show({ text: `${r}.`, tone: good ? undefined : 'error' });
+  });
 </script>
 
 {#if inApp}
@@ -53,8 +68,8 @@
         <Item name="Local network address" line={appInfo.localAddress || 'Not set'} wrap onclick={() => (editing = 'local')} />
       {/if}
       <Item name="Active address" line={appInfo.inUse ?? ''} wrap />
-      <Item name="Test both connections" line={networkTest.testing ? null : result}>
-        <button disabled={networkTest.testing} aria-busy={networkTest.testing} onclick={testNetwork}>Test</button>
+      <Item name="Test both connections">
+        <button disabled={networkTest.testing} aria-busy={networkTest.testing} onclick={test}>Test</button>
       </Item>
     {/if}
   </Group>
