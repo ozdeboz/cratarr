@@ -356,6 +356,10 @@ pub struct Catalogue {
     poke: tokio::sync::Notify,
     /// Told when files were read again outside a pass (`reread`): the library is built from them at once.
     reread: tokio::sync::Notify,
+    /// How much the passes have done since the server started (files read, folders walked, links made): what shows a
+    /// long pass moving (0.9.7: a reader's reread of every file takes hours on the NAS, and Cratarr's own library
+    /// looked stopped to the watch on the servers' scans).
+    worked: std::sync::atomic::AtomicU64,
     /// The crates' facts, as of the database's change count and the folders in use (see `crate_facts`).
     facts: Mutex<Option<(u64, Vec<PathBuf>, i64, Arc<Vec<crate::crates::Facts>>)>>,
     /// The database file, for readers with their own connection (`reader`); `None` in memory.
@@ -397,6 +401,7 @@ impl Catalogue {
             progress: Mutex::default(),
             poke: Default::default(),
             reread: Default::default(),
+            worked: Default::default(),
             facts: Mutex::default(),
             file: file.map(Path::to_path_buf),
         };
@@ -580,11 +585,21 @@ impl Catalogue {
         self.progress.lock().unwrap_or_else(|p| p.into_inner()).doing.clone()
     }
 
+    /// How much the passes have done since the server started (`worked`): it moves while a pass does.
+    pub fn worked(&self) -> u64 {
+        self.worked.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn work(&self, n: u64) {
+        self.worked.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub fn poke(&self) {
         self.poke.notify_one();
     }
 
     fn set_doing(&self, doing: Option<String>) {
+        self.work(1);
         self.progress.lock().unwrap_or_else(|p| p.into_inner()).doing = doing;
     }
 
@@ -594,6 +609,7 @@ impl Catalogue {
         for (id, folder) in self.folders().into_iter().enumerate() {
             match walk::walk_with_covers(&folder) {
                 Ok((found, covers, skipped)) => {
+                    self.work(1);
                     if let Err(e) = self.record_walk(id as i64, &found).and_then(|()| self.record_covers(id as i64, &covers)) {
                         problems.push(format!("{}: {e:#}", folder.display()));
                     }
@@ -780,6 +796,7 @@ impl Catalogue {
             }
         }
         tx.commit()?;
+        self.work(results.len() as u64);
         Ok(results.len())
     }
 
@@ -796,6 +813,7 @@ impl Catalogue {
             }
         }
         tx.commit()?;
+        self.work(links.len() as u64);
         Ok(())
     }
 

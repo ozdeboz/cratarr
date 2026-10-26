@@ -760,7 +760,9 @@ impl Source for CratarrSource {
     fn library_scan(&self) -> Fut<'_, LibraryScan> {
         Box::pin(async move {
             let s = server()?;
-            Ok(LibraryScan { running: s.has_catalogue().then(|| s.catalogue().doing()).flatten().map(|_| 0.0), last_end: Some(s.built_at()) })
+            // While a pass runs, how much it has done (0.9.7): a long one moves, a stuck one does not.
+            let cat = s.has_catalogue().then(|| s.catalogue());
+            Ok(LibraryScan { running: cat.and_then(|c| c.doing().map(|_| c.worked() as f64)), last_end: Some(s.built_at()) })
         })
     }
 
