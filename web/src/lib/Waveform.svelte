@@ -19,9 +19,17 @@
     loading = null,
   }: { bins: Uint8Array | null; progress: number; paused?: boolean; now?: number | null; loading?: number | null } = $props();
 
-  /** Each bar's growth, and how much later the last starts than the first (the owner, 2026-10-26: left to right). */
+  // The flow (the owner, 2026-10-26): a front runs along the line, left to right. Behind it each piece opens its gap and
+  // slims to the thinnest bar's height (the line is thicker than the quietest bars), over RAMP pieces; then each bar
+  // grows to its height, HOLD_MS after it slimmed and never before its turn (the last SPREAD_MS after the first). While
+  // it loads, the front stands as far as it has loaded (a progress bar); once in, it runs on to the end in CUT_MS.
+  const CUT_MS = 360;
+  const HOLD_MS = 80;
   const GROW_MS = 320;
   const SPREAD_MS = 480;
+  /** The quietest bar's height, which the pieces slim to. */
+  const LOW = 6;
+  const ALL = Math.max(CUT_MS, SPREAD_MS) + HOLD_MS + GROW_MS;
   let width = $state(0);
   let height = $state(28);
   const n = $derived(Math.max(16, Math.min(512, Math.floor(width / 3))));
@@ -29,15 +37,16 @@
   const done = $derived(Math.min(1, Math.max(0, progress)));
   /** The plain bar's line (4 px), in the drawing's units. */
   const line = $derived((100 * 4) / Math.max(4, height));
-  /** How many pieces have their gaps. */
-  const cut = $derived(shown ? n : Math.round(Math.min(1, Math.max(0, loading ?? 0)) * n));
-  // How long the pieces have been growing into bars (ms), the leftmost first: grown at once where it was in from the
-  // start; from the line where it loaded in sight.
-  const ALL = GROW_MS + SPREAD_MS;
+  /** How many pieces the slimming takes behind the front. */
+  const ramp = $derived(Math.max(4, Math.round(n * 0.06)));
+  // How long since the waveform came in (ms): all done at once where it was in from the start.
   let grown = $state(untrack(() => (bins ? ALL : 0)));
+  /** Where the front stood when it came in (pieces). */
+  let frontAt = $state(0);
   $effect(() => {
     if (!bins) return void (grown = 0);
     if (untrack(() => grown) >= ALL) return;
+    if (untrack(() => grown) === 0) frontAt = untrack(() => Math.min(1, Math.max(0, loading ?? 0)) * n);
     if (reducedMotion()) return void (grown = ALL);
     const start = performance.now();
     let r = 0;
@@ -48,17 +57,26 @@
     r = requestAnimationFrame(step);
     return () => cancelAnimationFrame(r);
   });
+  /** The front (pieces): as far as it has loaded; once in, running on past the end. */
+  const front = $derived(
+    shown ? (grown >= ALL ? n + ramp : frontAt + (n + ramp - frontAt) * Math.min(1, grown / CUT_MS)) : Math.min(1, Math.max(0, loading ?? 0)) * n,
+  );
+  /** When the front has piece `i` slimmed, ms after it came in. */
+  const slimAt = (i: number) => Math.max(0, ((i + ramp - frontAt) / Math.max(1, n + ramp - frontAt)) * CUT_MS);
   const f = (x: number) => Math.round(x * 100) / 100;
-  /** The bars (or the pieces of the line) as one path, the line not yet cut after them. */
+  /** Every piece as one path: in the line (full width, the line's height), slimming behind the front, growing. */
   const d = $derived.by(() => {
     let s = '';
-    for (let i = 0; i < cut; i++) {
-      const own = Math.min(1, Math.max(0, (grown - (i / n) * SPREAD_MS) / GROW_MS));
-      const e = 1 - (1 - own) ** 2;
-      const h = shown ? line + (Math.max(6, shown[i] * 100) - line) * e : line;
-      s += `M${f(i + 0.15)} ${f((100 - h) / 2)}h0.7v${f(h)}h-0.7z`;
+    for (let i = 0; i < n; i++) {
+      const g = Math.min(1, Math.max(0, (front - i) / ramp));
+      let h = line + (LOW - line) * g;
+      if (shown && g >= 1) {
+        const own = Math.min(1, Math.max(0, (grown - Math.max(slimAt(i), (i / n) * SPREAD_MS) - HOLD_MS) / GROW_MS));
+        h = LOW + (Math.max(LOW, shown[i] * 100) - LOW) * (1 - (1 - own) ** 2);
+      }
+      const w = 1 - 0.3 * g;
+      s += `M${f(i + (1 - w) / 2)} ${f((100 - h) / 2)}h${f(w)}v${f(h)}h${f(-w)}z`;
     }
-    if (cut < n) s += `M${cut} ${f((100 - line) / 2)}h${n - cut}v${f(line)}h${cut - n}z`;
     return s;
   });
 </script>
