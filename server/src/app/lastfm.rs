@@ -121,6 +121,11 @@ struct Refused {
     message: String,
 }
 
+/// A page is asked this many times before the import gives up (waiting 2, 4, 8 s between).
+const TRIES: u32 = 4;
+/// Last.fm's errors that say to try again: operation failed, service offline, temporarily unavailable, rate limit.
+const TRY_AGAIN: [i64; 4] = [8, 11, 16, 29];
+
 /// Last.fm's error for a history its user keeps private, asked without their sign-in.
 const PRIVATE: i64 = 17;
 
@@ -185,9 +190,30 @@ async fn read(method: &str, user: &str, auth: &Auth, from: Option<i64>, step: &s
             q.insert("api_sig", sig);
         }
         q.insert("format", "json".into());
-        let res = http.get(API).query(&q).sent().await.context("Last.fm did not answer")?;
-        let ok = res.status().is_success();
-        let body = res.text().await?;
+        // A page asked again a few times, waiting longer each time, where Last.fm did not answer, was busy or said to
+        // try again (0.9.7: one timeout on page 8 threw away the seven read before it).
+        let mut tries = 0u32;
+        let (ok, body) = loop {
+            tries += 1;
+            let sent = http.get(API).query(&q).sent().await;
+            let busy = match &sent {
+                Err(_) => true,
+                Ok(res) => res.status().is_server_error() || res.status() == reqwest::StatusCode::TOO_MANY_REQUESTS,
+            };
+            if busy && tries < TRIES {
+                tokio::time::sleep(Duration::from_secs(2u64.pow(tries))).await;
+                continue;
+            }
+            let res = sent.context("Last.fm did not answer")?;
+            let ok = res.status().is_success();
+            let body = res.text().await?;
+            let again = serde_json::from_str::<Refused>(&body).ok().and_then(|r| r.error).is_some_and(|e| TRY_AGAIN.contains(&e));
+            if again && tries < TRIES {
+                tokio::time::sleep(Duration::from_secs(2u64.pow(tries))).await;
+                continue;
+            }
+            break (ok, body);
+        };
         if let Some(r) = serde_json::from_str::<Refused>(&body).ok().filter(|r| !ok || r.error.is_some()) {
             if r.error == Some(PRIVATE) {
                 bail!(

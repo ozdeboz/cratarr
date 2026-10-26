@@ -3,7 +3,7 @@
 //! value as stored: nothing is split or merged here (see `normalise`). Cover art is not read.
 
 /// Bumped when reading improves, so files that failed before are tried again (see `Catalogue::open`).
-pub const READER_VERSION: u32 = 5;
+pub const READER_VERSION: u32 = 6;
 
 /// What is wrong with a file that could still be read (a file that cannot be read at all is an error instead).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +64,9 @@ fn normalised(key: ItemKey) -> Option<&'static str> {
         ItemKey::OriginalReleaseDate => "originaldate",
         ItemKey::ReleaseDate => "releasedate",
         ItemKey::Genre => "genre",
+        // The library's words (0.9.7): a file's moods and grouping.
+        ItemKey::Mood => "mood",
+        ItemKey::ContentGroup => "grouping",
         ItemKey::Performer => "performer",
         ItemKey::Composer => "composer",
         ItemKey::Label => "label",
@@ -87,8 +90,10 @@ fn normalised(key: ItemKey) -> Option<&'static str> {
 /// where lofty does not map them (Opus's `R128_*`, a lower-case MP4 freeform), decision 0035.
 fn by_raw_key(raw: &str) -> Option<&'static str> {
     let last = raw.rsplit(':').next().unwrap_or(raw);
-    const NAMED: [&str; 7] = [
+    const NAMED: [&str; 8] = [
         "albumartists",
+        // A style (0.9.7), as Vorbis `STYLE`, ID3v2 `TXXX:STYLE` or an MP4 freeform keeps it.
+        "style",
         "replaygain_track_gain",
         "replaygain_track_peak",
         "replaygain_album_gain",

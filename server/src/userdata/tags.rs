@@ -32,6 +32,14 @@ impl UserData {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Every album's tags: (album, tag), the library's words read them (`app::words`).
+    pub fn all_album_tags(&self) -> Result<Vec<(String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT album, tag FROM album_tags")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Adds a tag; `false` when the album had it already.
     pub fn add_tag(&self, album: &str, tag: &str) -> Result<bool> {
         let Some(tag) = clean(tag) else { return Ok(false) };

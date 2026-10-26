@@ -2,7 +2,10 @@
 //! multi-value fields through per-library rules. Artist fields split on credit-list separators only ("&", ","
 //! and "feat." are part of credits, so they stay); genres split on more; whitelisted names are never split, also
 //! inside a longer value ("Jazz/Rock/Folk, World, & Country" gives Jazz, Rock and "Folk, World, & Country").
-//! Old ID3v1 numeric genres become names; repeats are dropped case-insensitively.
+//! Old ID3v1 numeric genres become names; repeats are dropped case-insensitively. Aliases (0.9.7, the owner) name one
+//! thing one way: "Hip-Hop" read as "Hip Hop", several names merged into one ("Electronica", "Electronic Music" as
+//! "Electronic"); applied to the library, to the harvested words (`app::words`), and offered as fixes for the files
+//! (`app::fixes`, written only when an administrator applies them).
 
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +21,24 @@ pub struct Rules {
     /// Genres that contain a separator but are one genre ("Funk / Soul").
     #[serde(default)]
     pub genre_keep: Vec<String>,
+    /// Names read as another (an alias: one `from`; a merge: several), matched case-insensitively after splitting.
+    #[serde(default)]
+    pub genre_aliases: Vec<Alias>,
+    #[serde(default)]
+    pub artist_aliases: Vec<Alias>,
+}
+
+/// One name for others (0.9.7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Alias {
+    pub from: Vec<String>,
+    pub to: String,
+}
+
+/// A value as the aliases name it: the `to` of the first alias one of whose `from` it is, else itself.
+pub fn aliased(value: &str, aliases: &[Alias]) -> String {
+    let v = value.trim();
+    aliases.iter().find(|a| a.from.iter().any(|f| f.trim().eq_ignore_ascii_case(v))).map_or_else(|| v.to_string(), |a| a.to.trim().to_string())
 }
 
 fn artist_separators() -> Vec<String> {
@@ -30,7 +51,14 @@ fn genre_separators() -> Vec<String> {
 
 impl Default for Rules {
     fn default() -> Self {
-        Self { artist_separators: artist_separators(), genre_separators: genre_separators(), artist_keep: vec![], genre_keep: vec![] }
+        Self {
+            artist_separators: artist_separators(),
+            genre_separators: genre_separators(),
+            artist_keep: vec![],
+            genre_keep: vec![],
+            genre_aliases: vec![],
+            artist_aliases: vec![],
+        }
     }
 }
 
@@ -42,11 +70,12 @@ impl Rules {
     /// empty values.
     pub fn values(&self, field: &str, raw: &[String]) -> Vec<String> {
         let parts: Vec<String> = if ARTIST_FIELDS.contains(&field) {
-            raw.iter().flat_map(|v| split(v, &self.artist_separators, &self.artist_keep)).collect()
+            raw.iter().flat_map(|v| split(v, &self.artist_separators, &self.artist_keep)).map(|a| aliased(&a, &self.artist_aliases)).collect()
         } else if field == "genre" {
             raw.iter()
                 .flat_map(|v| split(v, &self.genre_separators, &self.genre_keep))
                 .map(|g| id3v1_genre(&g).map(str::to_string).unwrap_or(g))
+                .map(|g| aliased(&g, &self.genre_aliases))
                 .collect()
         } else {
             raw.iter().map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).collect()
@@ -153,6 +182,21 @@ mod tests {
             genre_keep: s(&["Folk, World, & Country", "Funk / Soul"]),
             ..Rules::default()
         }
+    }
+
+    #[test]
+    fn aliases_name_one_thing_one_way_and_merges_many() {
+        let r = Rules {
+            genre_aliases: vec![
+                Alias { from: s(&["Hip-Hop"]), to: "Hip Hop".into() },
+                Alias { from: s(&["Electronica", "electronic music"]), to: "Electronic".into() },
+            ],
+            artist_aliases: vec![Alias { from: s(&["Beyonce"]), to: "Beyoncé".into() }],
+            ..reference()
+        };
+        assert_eq!(r.values("genre", &s(&["hip-hop; Electronica", "Electronic Music"])), s(&["Hip Hop", "Electronic"]), "merged, then once");
+        assert_eq!(r.values("artist", &s(&["Beyonce/Jay-Z"])), s(&["Beyoncé", "Jay-Z"]));
+        assert_eq!(aliased(" Jazz ", &r.genre_aliases), "Jazz");
     }
 
     #[test]

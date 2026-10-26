@@ -346,12 +346,12 @@ async fn write(album: &str, data: Vec<u8>) -> Result<String> {
         for (t, why) in &done {
             tracing::warn!("covers: {} kept its old picture: {why}", t.display());
         }
+        if let Some(served) = crate::serve::instance() {
+            served.reread(&tracks);
+        }
         Ok(format!("{UNDO}{id}"))
     })
     .await??;
-    if let Some(served) = crate::serve::instance() {
-        served.catalogue().poke();
-    }
     Ok(token)
 }
 
@@ -381,12 +381,12 @@ pub async fn undo(token: &str) -> Result<()> {
             tracing::warn!("covers: {} not given its old picture back: {why}", t.display());
         }
         std::fs::remove_dir_all(&keep).ok();
+        if let Some(served) = crate::serve::instance() {
+            served.reread(&tracks);
+        }
         Ok(())
     })
     .await??;
-    if let Some(served) = crate::serve::instance() {
-        served.catalogue().poke();
-    }
     Ok(())
 }
 

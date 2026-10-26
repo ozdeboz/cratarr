@@ -221,6 +221,33 @@ pub struct Hit {
     pub count: Option<u32>,
 }
 
+/// The FTS5 query for the words, each with the index terms it meets with typos (0.9.7, `search::typo_terms`): the
+/// terms of the songs', albums' and artists' indexes that begin with its first letter.
+fn fts_query(db: &Connection, words: &[String]) -> Result<Option<String>> {
+    let mut typo = Vec::with_capacity(words.len());
+    for w in words {
+        let Some(first) = w.chars().next().filter(|_| crate::search::typo_budget(w) > 0) else {
+            typo.push(Vec::new());
+            continue;
+        };
+        let from = first.to_string();
+        let to = char::from_u32(first as u32 + 1).map_or_else(|| format!("{first}\u{10ffff}"), |c| c.to_string());
+        let mut terms: Vec<String> = Vec::new();
+        for table in ["songs_vocab", "albums_vocab", "artists_vocab"] {
+            let mut st = db.prepare_cached(&format!("SELECT term FROM {table} WHERE term >= ?1 AND term < ?2"))?;
+            terms.extend(st.query_map([&from, &to], |r| r.get::<_, String>(0))?.filter_map(Result::ok));
+        }
+        terms.sort_unstable();
+        terms.dedup();
+        typo.push(crate::search::typo_terms(w, terms.iter().map(String::as_str)));
+    }
+    Ok(crate::search::fts_with(words, &typo))
+}
+
+/// Search asks the index for this many times what it shows (0.9.7), at most `WIDEST`, and ranks them before the cut.
+const WIDER: usize = 4;
+const WIDEST: usize = 200;
+
 impl Library {
     /// Fills songs' artists and album artists (OpenSubsonic's lists).
     fn song_artists(&self, db: &Connection, songs: &mut [Song]) -> Result<()> {
@@ -490,12 +517,26 @@ impl Library {
     /// artists by their name and by their albums, tracks, and genres; `limit` of each, the best first. `words` as
     /// `crate::search::words` reads a query.
     pub fn find(&self, words: &[String], limit: usize) -> Result<Found> {
-        let Some(fq) = crate::search::fts(words) else { return Ok(Found::default()) };
         let db = self.db();
+        let Some(fq) = fts_query(&db, words)? else { return Ok(Found::default()) };
         let lim = limit as i64;
+        // More asked of the index than are shown (0.9.7): ranked here (`search::rank`, a direct hit first) before the
+        // cut, so one found by its artist or album cannot push one named by the words out of the first `limit`.
+        let wide = (limit * WIDER).clamp(limit, WIDEST) as i64;
+        let ranked = |names: Vec<&str>| -> Vec<usize> {
+            let n = names.len();
+            let mut order: Vec<(usize, f32)> = names.iter().enumerate().map(|(i, name)| (i, crate::search::rank(name, words, i, n))).collect();
+            order.sort_by(|a, b| b.1.total_cmp(&a.1));
+            order.into_iter().take(limit).map(|(i, _)| i).collect()
+        };
+        fn pick<T: Clone>(list: &[T], order: &[usize]) -> Vec<T> {
+            order.iter().map(|&i| list[i].clone()).collect()
+        }
         // Albums by themselves, the name counting most; then those found only by a track's title.
-        let own = numbers(&db, "SELECT rowid FROM albums_fts WHERE albums_fts MATCH ?1 ORDER BY bm25(albums_fts, 10.0, 2.0) LIMIT ?2", &[&fq, &lim])?;
-        let mut albums: Vec<(Album, Hit)> = by_numbers(&db, "albums", ALBUM_COLS, "a", &own, album_of)?
+        let own = numbers(&db, "SELECT rowid FROM albums_fts WHERE albums_fts MATCH ?1 ORDER BY bm25(albums_fts, 10.0, 2.0) LIMIT ?2", &[&fq, &wide])?;
+        let listed = by_numbers(&db, "albums", ALBUM_COLS, "a", &own, album_of)?;
+        let listed = pick(&listed, &ranked(listed.iter().map(|a| a.name.as_str()).collect()));
+        let mut albums: Vec<(Album, Hit)> = listed
             .into_iter()
             .map(|a| {
                 let on = if crate::search::matches(&a.name, words) { "name" } else { "artist" };
@@ -533,16 +574,19 @@ impl Library {
         self.album_artists(&db, &mut list)?;
         let albums: Vec<(Album, Hit)> = list.into_iter().zip(hits).collect();
         // Artists by their name; then those found only by an album's name.
-        let own = numbers(&db, "SELECT rowid FROM artists_fts WHERE artists_fts MATCH ?1 ORDER BY bm25(artists_fts) LIMIT ?2", &[&fq, &lim])?;
+        let own = numbers(&db, "SELECT rowid FROM artists_fts WHERE artists_fts MATCH ?1 ORDER BY bm25(artists_fts) LIMIT ?2", &[&fq, &wide])?;
         let mut artists: Vec<(Artist, Hit)> = Vec::new();
         {
             let mut st = db.prepare_cached("SELECT id, name, mbid, album_count, order_name FROM artists WHERE n = ?1")?;
+            let mut listed: Vec<Artist> = Vec::new();
             for n in own {
                 if let Some(a) = st.query_map([n], artist_of)?.next() {
-                    let a = a?;
-                    let text = a.name.clone();
-                    artists.push((a, Hit { on: "name", text, count: None }));
+                    listed.push(a?);
                 }
+            }
+            for a in pick(&listed, &ranked(listed.iter().map(|a| a.name.as_str()).collect())) {
+                let text = a.name.clone();
+                artists.push((a, Hit { on: "name", text, count: None }));
             }
         }
         let name_q = format!("name : ({fq})");
@@ -570,8 +614,9 @@ impl Library {
         }
         // Tracks, the title counting most.
         totals.tracks = count("SELECT count(*) FROM songs_fts WHERE songs_fts MATCH ?1", &[&fq])?;
-        let ns = numbers(&db, "SELECT rowid FROM songs_fts WHERE songs_fts MATCH ?1 ORDER BY bm25(songs_fts, 10.0, 2.0, 1.0) LIMIT ?2", &[&fq, &lim])?;
-        let mut tracks = by_numbers(&db, "songs", SONG_COLS, "s", &ns, song_of)?;
+        let ns = numbers(&db, "SELECT rowid FROM songs_fts WHERE songs_fts MATCH ?1 ORDER BY bm25(songs_fts, 10.0, 2.0, 1.0) LIMIT ?2", &[&fq, &wide])?;
+        let listed = by_numbers(&db, "songs", SONG_COLS, "s", &ns, song_of)?;
+        let mut tracks = pick(&listed, &ranked(listed.iter().map(|t| t.title.as_str()).collect()));
         self.song_artists(&db, &mut tracks)?;
         // Genres, by their name.
         let mut st = db.prepare_cached("SELECT name, song_count FROM genres")?;
@@ -580,7 +625,8 @@ impl Library {
             .filter_map(Result::ok)
             .filter(|(g, _)| crate::search::matches(g, words))
             .collect();
-        genres.sort_by(|a, b| crate::search::closeness(&b.0, words).cmp(&crate::search::closeness(&a.0, words)).then(b.1.cmp(&a.1)));
+        // Ranked as the rest (a direct hit, closeness, then how much of the name), the most played among equals.
+        genres.sort_by(|a, b| crate::search::rank(&b.0, words, 0, 1).total_cmp(&crate::search::rank(&a.0, words, 0, 1)).then(b.1.cmp(&a.1)));
         totals.genres = genres.len();
         genres.truncate(limit);
         Ok(Found { albums, artists, tracks, genres, totals })
@@ -589,8 +635,8 @@ impl Library {
     /// The songs whose title, artist and album hold the words, at most `cap`, by id with those three: what search
     /// finds playlists and crates by (decision 0072, deep).
     pub fn songs_naming(&self, words: &[String], cap: usize) -> Result<Vec<(String, String, String, String)>> {
-        let Some(fq) = crate::search::fts(words) else { return Ok(Vec::new()) };
         let db = self.db();
+        let Some(fq) = fts_query(&db, words)? else { return Ok(Vec::new()) };
         let mut st = db.prepare_cached(
             "SELECT s.id, s.title, coalesce(s.artist, ''), s.album FROM songs_fts f JOIN songs s ON s.n = f.rowid WHERE songs_fts MATCH ?1 LIMIT ?2",
         )?;
@@ -649,6 +695,58 @@ impl Library {
         let db = self.db();
         let mut st = db.prepare_cached("SELECT folder, dir, mbid, artist, name FROM albums WHERE id = ?1")?;
         Ok(st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.next().transpose()?)
+    }
+
+    /// Every album's id, Music-form id, artist id and the files' genres (0.9.7: the library's words, `app::words`).
+    pub fn album_word_inputs(&self) -> Result<Vec<(String, String, String, Vec<String>)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, base_id, artist_id, genres FROM albums ORDER BY n")?;
+        let rows = st.query_map([], |r| {
+            let genres: String = r.get(3)?;
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, genres.split('\u{1f}').filter(|g| !g.is_empty()).map(str::to_string).collect()))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The harvest's albums (0.9.7, `app::harvest`): each Music-form id once, with its MusicBrainz release (or empty),
+    /// artist and name.
+    pub fn album_subjects(&self) -> Result<Vec<(String, String, String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT base_id, coalesce(max(mbid), ''), min(artist), min(name) FROM albums GROUP BY base_id ORDER BY min(n)")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The harvest's artists: those with albums, by id, with their MusicBrainz id (or empty) and name.
+    pub fn artist_subjects(&self) -> Result<Vec<(String, String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, coalesce(mbid, ''), name FROM artists WHERE album_count > 0 ORDER BY n")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The albums these files (catalogue folder, path) are in, each once (0.9.7: the rules' fixes).
+    pub fn albums_of_files(&self, files: &[(i64, String)]) -> Result<Vec<String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT album_id FROM songs WHERE folder = ?1 AND rel = ?2")?;
+        let mut out: Vec<String> = Vec::new();
+        for (folder, rel) in files {
+            if let Some(a) = st.query_map(rusqlite::params![folder, rel], |r| r.get::<_, String>(0))?.next() {
+                let a = a?;
+                if !out.contains(&a) {
+                    out.push(a);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Each song's album (0.9.7: a file's words are its album's).
+    pub fn song_albums(&self) -> Result<HashMap<String, String>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, album_id FROM songs")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// The albums whose files carry no genre (0.9.5: asked of Discogs): their ids, MusicBrainz releases (or empty),
@@ -722,7 +820,7 @@ impl Library {
     /// without any), but those in the catalogue folders `off` (libraries switched off); in no order.
     pub fn track_rows(&self, words: &[String], off: &[i64]) -> Result<Vec<TrackRow>> {
         let db = self.db();
-        let rows: Vec<TrackRow> = match crate::search::fts(words) {
+        let rows: Vec<TrackRow> = match fts_query(&db, words)? {
             Some(fq) => {
                 let mut st = db.prepare_cached(&format!("SELECT {TRACK_ROW_COLS} FROM songs_fts f JOIN songs s ON s.n = f.rowid WHERE songs_fts MATCH ?1"))?;
                 st.query_map([fq], track_row)?.collect::<rusqlite::Result<_>>()?
@@ -838,6 +936,22 @@ impl Library {
 
     /// What an album's art is found from: (catalogue folder, its folder in it, its cover id, its first track's path in
     /// the catalogue folder).
+    /// Every album's cover stamp (0.9.7): its art's fingerprint, from its cover id (`<album>_<print>`); an album
+    /// without a cover has none.
+    pub fn cover_stamps(&self) -> Result<std::collections::HashMap<String, String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT id, cover FROM albums WHERE cover IS NOT NULL")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = std::collections::HashMap::new();
+        for row in rows {
+            let (id, cover) = row?;
+            if let Some(print) = cover.strip_prefix(&format!("{id}_")).filter(|p| !p.is_empty()) {
+                out.insert(id, print.to_string());
+            }
+        }
+        Ok(out)
+    }
+
     pub fn album_art(&self, album: &str) -> Result<Option<(i64, String, Option<String>, Option<String>)>> {
         let db = self.db();
         let mut st = db.prepare_cached("SELECT folder, dir, cover FROM albums WHERE id = ?1")?;

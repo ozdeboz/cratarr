@@ -110,15 +110,15 @@ fn kind_of(format: &str) -> Kind {
 
 /// A release's medium: its tracks' titles and lengths (s), in order.
 #[derive(Debug, Clone, PartialEq)]
-struct Medium {
-    format: String,
-    tracks: Vec<(String, Option<u32>)>,
+pub(super) struct Medium {
+    pub(super) format: String,
+    pub(super) tracks: Vec<(String, Option<u32>)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct Release {
-    facts: ReleaseFacts,
-    media: Vec<Medium>,
+pub(super) struct Release {
+    pub(super) facts: ReleaseFacts,
+    pub(super) media: Vec<Medium>,
 }
 
 impl Release {
@@ -134,7 +134,7 @@ fn titled(t: &str) -> [String; 2] {
     [super::import::loose(t), super::import::loose(base)]
 }
 
-fn same_title(a: &str, b: &str) -> bool {
+pub(super) fn same_title(a: &str, b: &str) -> bool {
     let (x, y) = (titled(a), titled(b));
     !x[0].is_empty() && (x[0] == y[0] || (!x[1].is_empty() && x[1] == y[1]))
 }
@@ -247,6 +247,11 @@ fn mb_release(v: &Value) -> Release {
 /// The release group's releases with their tracks (one call, at most 100 releases).
 async fn musicbrainz(http: &reqwest::Client, release: &str) -> Result<Vec<Release>> {
     let Some(rg) = super::discogs::release_group_of(http, release).await? else { return Ok(Vec::new()) };
+    group_releases(http, &rg).await
+}
+
+/// A release group's releases with their tracks (one call, at most 100 releases): Renumber's, and `incomplete`'s.
+pub(super) async fn group_releases(http: &reqwest::Client, rg: &str) -> Result<Vec<Release>> {
     let v: Value = http
         .get(format!("https://musicbrainz.org/ws/2/release?release-group={rg}&inc=media+recordings&limit=100&fmt=json"))
         .asked()
@@ -319,7 +324,7 @@ async fn discogs(rg: Option<&str>, artist: &str, title: &str, tell: &(dyn Fn(u64
 
 // ---- The look and the writing
 
-fn tracks_of(album: &str) -> Result<(Vec<Track>, Option<String>, String, String)> {
+pub(super) fn tracks_of(album: &str) -> Result<(Vec<Track>, Option<String>, String, String)> {
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     let (folder, _, mbid, artist, name) = served.library.album_place(album)?.context("No such album in Cratarr's own library")?;
     let root = served.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?;
@@ -497,12 +502,12 @@ pub async fn apply(album: &str, asked: Asked) -> Result<String> {
                 tracing::warn!("renumber: {}: {e:#}", path.display());
             }
         }
+        if let Some(served) = crate::serve::instance() {
+            served.reread(&before.tracks.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>());
+        }
         Ok(format!("{UNDO}{id}"))
     })
     .await??;
-    if let Some(served) = crate::serve::instance() {
-        served.catalogue().poke();
-    }
     Ok(token)
 }
 
@@ -518,12 +523,12 @@ pub async fn undo(token: &str) -> Result<()> {
             }
         }
         std::fs::remove_file(&file).ok();
+        if let Some(served) = crate::serve::instance() {
+            served.reread(&before.tracks.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>());
+        }
         Ok(())
     })
     .await??;
-    if let Some(served) = crate::serve::instance() {
-        served.catalogue().poke();
-    }
     Ok(())
 }
 

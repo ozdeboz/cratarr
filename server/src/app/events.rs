@@ -83,6 +83,8 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
     let mut tasks = super::tasks::tasks().subscribe();
     // The account's favourites as they change, by any way (userdata `Starred`), where Cratarr's own library is open.
     let mut starred = crate::serve::instance().map(|s| s.userdata.subscribe_starred());
+    // Albums' covers as they change (0.9.7): their new stamps.
+    let mut covers = crate::serve::instance().map(|s| s.subscribe_covers());
     let app = app.clone();
     tokio::spawn(crate::serve::who::carried(async move {
         // Whose tasks this page is told of (`app::tasks`): the account it is signed in as.
@@ -188,6 +190,20 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
                         true
                     }
                 },
+                r = async {
+                    match covers.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => match r {
+                    Ok(changes) => covers_changed(&out, &app.library.own_sources(), &changes).await,
+                    // Too many to tell one by one: the page reads every stamp again.
+                    Err(broadcast::error::RecvError::Lagged(_)) => covers_changed(&out, &app.library.own_sources(), &[]).await,
+                    Err(broadcast::error::RecvError::Closed) => {
+                        covers = None;
+                        true
+                    }
+                },
                 () = out.closed() => false,
             };
             if !alive {
@@ -196,6 +212,32 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
         }
     }));
     rx
+}
+
+/// Above this many covers changed at once (a library restructured), the page is told to read every stamp again.
+const COVERS_ONE_BY_ONE: usize = 200;
+
+/// Covers changed: each told (`cover`: source, album, its stamp), or, for none or too many, all at once (`covers`: the
+/// page reads `GET /api/covers/stamps` again).
+async fn covers_changed(out: &tokio::sync::mpsc::Sender<Message>, sources: &[String], changes: &[crate::serve::CoverChange]) -> bool {
+    for source in sources {
+        if changes.is_empty() || changes.len() > COVERS_ONE_BY_ONE {
+            if let Some(m) = Message::of("covers", &serde_json::json!({ "source": source }))
+                && out.send(m).await.is_err()
+            {
+                return false;
+            }
+            continue;
+        }
+        for c in changes {
+            if let Some(m) = Message::of("cover", &serde_json::json!({ "source": source, "album": c.album, "v": c.v }))
+                && out.send(m).await.is_err()
+            {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// An album action was applied or undone, or new albums arrived: the pages showing those `areas` read them again.

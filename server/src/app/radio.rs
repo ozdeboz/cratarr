@@ -327,11 +327,12 @@ impl Index {
 
     /// With the catalogue's facts of each song (`crates::Facts::like`: the one reading of a track the crates use too):
     /// its genres, AudioMuse's styles, energy, danceability and moods, its year and tempo, and its sound into the
-    /// library. Its artists, playlists and album tags stay the index's own. A song the catalogue has no facts of keeps
-    /// its year and tempo and loses its genres (their numbers are the facts' now).
+    /// library. Its artists and playlists stay the index's own; its tags are the facts' (the library's words, 0.9.7, the
+    /// household's album tags among them). A song the catalogue has no facts of keeps its year, tempo and album tags and
+    /// loses its genres (their numbers are the facts' now).
     pub(crate) fn with_facts(mut self, facts: &[crate::crates::Facts]) -> Self {
         let by_track: HashMap<i64, &crate::crates::Facts> = facts.iter().filter_map(|f| Some((f.track?, f))).collect();
-        let mut names: [HashMap<String, u32>; 4] = Default::default();
+        let mut names: [HashMap<String, u32>; 5] = Default::default();
         let mut intern = |kind: usize, name: &str| {
             let key = name.trim().to_lowercase();
             let next = names[kind].len() as u32;
@@ -345,7 +346,6 @@ impl Index {
                     let mut t = f.like(&mut intern);
                     t.playlists = std::mem::take(&mut s.like.playlists);
                     t.artists = std::mem::take(&mut s.like.artists);
-                    t.tags = std::mem::take(&mut s.like.tags);
                     s.like = t;
                 }
                 None => s.like.genres.clear(),

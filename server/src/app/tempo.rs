@@ -65,18 +65,12 @@ pub fn adjusted(t: &TrackTempo, how: Adjust) -> Option<u32> {
     }
 }
 
-/// Writes a track's BPM tag (none: removes it) and carries Cratarr's analysis of it over to the rewritten file, so its
-/// measure and beats stay. Blocking.
+/// Writes a track's BPM tag (none: removes it); the catalogue reads it again at once and carries Cratarr's analysis of
+/// it over to the rewritten file, so its measure and beats stay (`Catalogue::reread`). Blocking.
 pub(super) fn write(cat: &crate::catalogue::Catalogue, source: &str, id: &str, to: Option<u32>) -> Result<()> {
-    let (folder, rel, path) = place(cat, source, id).context("the track's file is not known")?;
-    let stamp = |p: &std::path::Path| -> Result<(u64, i64)> {
-        let m = std::fs::metadata(p)?;
-        let mtime = m.modified()?.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-        Ok((m.len(), mtime))
-    };
-    let before = stamp(&path)?;
+    let (_, _, path) = place(cat, source, id).context("the track's file is not known")?;
     crate::retag::set_bpm(&path, to)?;
-    cat.retagged(folder, &rel, before, stamp(&path)?)
+    cat.reread(std::slice::from_ref(&path)).map(drop)
 }
 
 #[cfg(test)]

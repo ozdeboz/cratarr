@@ -83,7 +83,7 @@ pub async fn ask(app: &super::App, serve: &Serve, account: &str, key: &str) -> R
     if !rights(serve).request {
         bail!("Requesting albums is not on for this account");
     }
-    let s = super::discover::kept(serve, account)?.and_then(|f| f.albums.into_iter().find(|s| s.key == key)).context("That suggestion is gone; look again")?;
+    let s = super::discover::suggestion(serve, account, key)?.context("That suggestion is gone; look again")?;
     ask_for(app, serve, account, Asked { key: s.key, artist_key: s.artist_key, release_group: s.release_group, album: s.album, artist: s.artist, year: s.year, cover: s.cover }).await
 }
 

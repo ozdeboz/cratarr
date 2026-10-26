@@ -76,6 +76,14 @@ pub struct Item {
     /// them (the owner, 2026-10-24: the third level).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<String>,
+    /// An album's missing tracks (0.9.7, `library:incomplete`): "06 · Title", "Disc 2 · 03 · Title".
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
+    /// Its release group, for "Ask for the full album" (a request, as Discover's Want), and the request already out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_group: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request: Option<super::requests::Mark>,
 }
 
 /// At most this many files an item names.
@@ -118,6 +126,8 @@ fn name_of(key: &str) -> &'static str {
         "library:album-artist" => "Missing album artists",
         "library:track-numbers" => "Track numbers",
         "library:musicbrainz" => "Missing MusicBrainz ids",
+        "library:incomplete" => "Albums missing tracks",
+        "library:rules" => "Named otherwise by a rule",
         "incoming:upgrades" => "Quality replacements",
         "incoming:duplicates" => "Duplicates",
         "incoming:failed" => "Failed conversions",
@@ -203,9 +213,10 @@ pub fn files(issues: &BTreeMap<String, u64>) -> Vec<Finding> {
 /// The library's albums lacking what it requires, a finding for each kind, each album opening its panel: the cover,
 /// the year, the genre, the album artist and the track numbers are warnings; the MusicBrainz id, which many lack and
 /// which only some things use (Lidarr, Discover, exact imports), is told. A cover missing is critical (the owner,
-/// 2026-10-25). Each of all the albums (`whole`), so the page shows its share. Track numbers (0.9.6): `numbering`'s
+/// 2026-10-25). No share of all the albums (0.9.7, the owner: a bar is for something good, not for what is wrong).
+/// Track numbers (0.9.6): `numbering`'s
 /// albums whose numbers are off (twice, missing, none), each with what is off; Renumber fixes them.
-pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, String, String, String)], whole: u64) -> Vec<Finding> {
+pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, String, String, String)]) -> Vec<Finding> {
     type Pick = fn(&crate::serve::library::Lacks) -> bool;
     let kinds: [(&str, Level, &str, &str, Pick); 5] = [
         ("cover", Level::Critical, "album without a cover", "albums without a cover", |r| r.cover),
@@ -227,7 +238,6 @@ pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, Stri
             .take(ITEMS)
             .map(|r| Item { title: r.name.clone(), line: Some(r.artist.clone()), album: Some((crate::source::cratarr::KIND.id.to_string(), r.id.clone())), ..Item::default() })
             .collect();
-        f.of = Some(whole);
         out.push(f);
     }
     if !numbering.is_empty() {
@@ -245,7 +255,6 @@ pub fn library(rows: &[crate::serve::library::Lacks], numbering: &[(String, Stri
                 ..Item::default()
             })
             .collect();
-        f.of = Some(whole);
         out.push(f);
     }
     out
@@ -365,12 +374,99 @@ impl App {
         let (lib, ud) = (served.library.clone(), served.userdata.clone());
         let (rows, numbering, matched) =
             tokio::task::spawn_blocking(move || -> anyhow::Result<_> { Ok((lib.lacking()?, lib.numbering(music)?, ud.renumber_matched()?)) }).await??;
-        let whole = numbering.len() as u64;
         let off: Vec<(String, String, String, String)> = numbering
             .into_iter()
             .filter_map(|(id, name, artist, numbers)| super::renumber::off(&numbers, !matched.contains(&id)).map(|line| (id, name, artist, line)))
             .collect();
-        Ok(library(&rows.into_iter().filter(|r| music.is_none_or(|m| r.folder == m)).collect::<Vec<_>>(), &off, whole))
+        let mut out = library(&rows.into_iter().filter(|r| music.is_none_or(|m| r.folder == m)).collect::<Vec<_>>(), &off);
+        out.extend(self.check_incomplete(&served, music).await?);
+        // Albums whose files a rule names otherwise (0.9.7): their fix writes the rules' names into the files.
+        let s = served.clone();
+        let ruled = tokio::task::spawn_blocking(move || super::fixes::ruled_albums(&s)).await??;
+        if !ruled.is_empty() {
+            let s = served.clone();
+            let items = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Item>> {
+                let mut items = Vec::new();
+                for a in ruled.iter().take(ITEMS) {
+                    if let Some((_, _, _, artist, name)) = s.library.album_place(a)? {
+                        items.push(Item { title: name, line: Some(artist), album: Some((crate::source::cratarr::KIND.id.to_string(), a.clone())), ..Item::default() });
+                    }
+                }
+                Ok(items)
+            })
+            .await??;
+            let count = ruled.len() as u64;
+            let mut f = finding("library", "library:rules", Level::Info, count, n(count, "album a rule names otherwise", "albums a rule names otherwise"));
+            f.items = items;
+            out.push(f);
+        }
+        Ok(out)
+    }
+
+    /// Albums missing tracks (0.9.7, `app::incomplete`): each with what its release has beyond it and whether it is
+    /// asked for already; and the albums whose numbers have gaps that no release could be held against yet.
+    async fn check_incomplete(&self, served: &std::sync::Arc<crate::serve::Serve>, music: Option<i64>) -> anyhow::Result<Vec<Finding>> {
+        let s = served.clone();
+        let (found, gaps) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let mut found: Vec<(String, String, String, super::incomplete::Incomplete)> = Vec::new();
+            for (album, json) in s.userdata.albums_incomplete()? {
+                let Ok(i) = serde_json::from_str::<super::incomplete::Incomplete>(&json) else { continue };
+                let Some((folder, _, _, artist, name)) = s.library.album_place(&album)? else { continue };
+                if music.is_some_and(|m| folder != m) {
+                    continue;
+                }
+                found.push((album, name, artist, i));
+            }
+            // Gaps in the numbers where no release was held against the album (no MusicBrainz id, no match yet).
+            let checked = s.userdata.album_complete_at()?;
+            let mut gaps = Vec::new();
+            for (id, name, artist, numbers) in s.library.numbering(music)? {
+                if checked.contains_key(&id) {
+                    continue;
+                }
+                let mut seen: Vec<u32> = numbers.iter().filter_map(|(_, t)| *t).filter(|t| *t > 0).collect();
+                seen.sort_unstable();
+                seen.dedup();
+                let top = seen.last().copied().unwrap_or(0);
+                let missing: Vec<String> = (1..top).filter(|n| !seen.contains(n)).map(|n| format!("{n:02}")).collect();
+                if !missing.is_empty() && numbers.iter().all(|(d, _)| d.unwrap_or(1) <= 1) {
+                    gaps.push((id, name, artist, missing));
+                }
+            }
+            Ok((found, gaps))
+        })
+        .await??;
+        if found.is_empty() && gaps.is_empty() {
+            return Ok(Vec::new());
+        }
+        let marks = super::requests::marks(self, served).await.ok();
+        let mut items: Vec<Item> = found
+            .into_iter()
+            .map(|(album, name, artist, i)| {
+                let discs = i.missing.iter().any(|m| m.0 > 1);
+                Item {
+                    title: name.clone(),
+                    line: Some(format!("{artist} · {} of {}", i.has, i.of)),
+                    album: Some((crate::source::cratarr::KIND.id.to_string(), album)),
+                    missing: i.missing.iter().map(|(d, t, title)| if discs { format!("Disc {d} · {t:02} · {title}") } else { format!("{t:02} · {title}") }).collect(),
+                    request: marks.as_deref().and_then(|m| super::requests::mark_of(m, i.release_group.as_deref(), &artist, &name)),
+                    release_group: i.release_group,
+                    ..Item::default()
+                }
+            })
+            .collect();
+        items.extend(gaps.into_iter().map(|(album, name, artist, missing)| Item {
+            title: name,
+            line: Some(format!("{artist} · no MusicBrainz match yet")),
+            album: Some((crate::source::cratarr::KIND.id.to_string(), album)),
+            missing,
+            ..Item::default()
+        }));
+        items.sort_by(|a, b| a.line.cmp(&b.line).then_with(|| a.title.cmp(&b.title)));
+        let count = items.len() as u64;
+        let mut f = finding("library", "library:incomplete", Level::Warning, count, n(count, "album missing tracks", "albums missing tracks"));
+        f.items = items.into_iter().take(ITEMS).collect();
+        Ok(vec![f])
     }
 
     /// One's own playlists' tracks whose file is gone (the Repair view, one playlist at a time).

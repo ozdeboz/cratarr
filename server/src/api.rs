@@ -117,6 +117,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/kept", post(kept_ask))
         .route("/api/albums/{source}/{album}/cover", get(album_cover))
         .route("/api/covers/release-group/{rg}", get(release_group_cover))
+        .route("/api/covers/stamps", get(cover_stamps))
         .route("/api/albums/{source}/{album}/similar", get(similar_albums))
         .route("/api/albums/{source}/{album}/play", post(play_album))
         .route("/api/albums/{source}/{album}/favorite", post(album_favorite))
@@ -171,6 +172,8 @@ pub fn router(app: Arc<App>) -> Router {
         // Discover (decision 0069): each account's own.
         .route("/api/discover", get(discover))
         .route("/api/discover/refresh", post(discover_refresh))
+        .route("/api/discover/around", get(discover_around))
+        .route("/api/discover/around/next", post(discover_around_next))
         .route("/api/discover/want", post(discover_want))
         .route("/api/requests/want", post(want_album))
         .route("/api/artists/missing", get(artist_missing))
@@ -188,6 +191,15 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/requests/watching", get(requests_watching))
         .route("/api/requests/decide", post(requests_decide))
         .route("/api/requests/{id}/cancel", post(requests_cancel))
+        // One's own listening imported into one's own account (0.9.7, the owner: a personal concern; the account is the
+        // session's, never a parameter). Another server's users' import stays the administrators' (serve::routes).
+        .route("/api/history/listenbrainz", get(listenbrainz_kept).post(import_listenbrainz).delete(undo_listenbrainz))
+        .route("/api/history/listenbrainz/preview", post(preview_listenbrainz))
+        .route("/api/history/lastfm", get(lastfm_kept).post(import_lastfm).delete(undo_lastfm))
+        .route("/api/history/lastfm/preview", post(preview_lastfm))
+        .route("/api/import/file", post(import_file).delete(undo_file).layer(axum::extract::DefaultBodyLimit::max(256 << 20)))
+        // The Library's Tracks, everyone's (it sat with the administrators' by mistake since 0.9.4).
+        .route("/api/library/tracks", get(library_tracks))
         // The administrators' (decision 0051): the server's settings, what comes in, the library's changes and its
         // health, the folders, the diagnostics.
         .merge(
@@ -196,13 +208,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/diagnostics/download", get(diagnostics_download))
             .route("/api/diagnostics/levels", get(diagnostics_levels).put(set_diagnostics_levels))
             .route("/api/players/settings", get(play_on_settings).put(save_play_on_settings))
-            .route("/api/history/listenbrainz", get(listenbrainz_kept).post(import_listenbrainz).delete(undo_listenbrainz))
-            .route("/api/history/listenbrainz/preview", post(preview_listenbrainz))
-            .route("/api/history/lastfm", get(lastfm_kept).post(import_lastfm).delete(undo_lastfm))
-            .route("/api/history/lastfm/preview", post(preview_lastfm))
-            .route("/api/import/file", post(import_file).delete(undo_file).layer(axum::extract::DefaultBodyLimit::max(256 << 20)))
-        .route("/api/library/find", get(library_find))
-        .route("/api/library/tracks", get(library_tracks))
+            .route("/api/library/find", get(library_find))
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
             .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
             .route("/api/sync/targets", get(sync_targets))
@@ -230,6 +236,9 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/albums/{source}/{album}/covers/look", post(look_album_covers))
             .route("/api/albums/{source}/{album}/renumber/look", post(look_renumber))
             .route("/api/albums/{source}/{album}/renumber", post(renumber_album))
+            .route("/api/health/fixes", get(health_fixes))
+            .route("/api/health/fixes/apply", post(apply_fixes))
+            .route("/api/albums/{source}/{album}/intake", get(album_intake))
             .route("/api/settings/naming", get(naming))
             .route("/api/catalogue", get(catalogue_status))
             .route("/api/health/report", get(health_report))
@@ -747,7 +756,8 @@ async fn cover(State(app): State<Arc<App>>, Path((source, id)): Path<(String, St
         return bandcamp_cover(&id).await;
     }
     let inm = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
-    let cache = (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=86400"));
+    // Asked again each time, answered by its ETag (0.9.7): a changed cover shows at once, an unchanged one costs a 304.
+    let cache = (header::CACHE_CONTROL, HeaderValue::from_static("public, no-cache"));
     let tag = |etag: &str| HeaderValue::from_str(etag).unwrap_or(HeaderValue::from_static("\"\""));
     match app.playing.cover(&source, &id, inm).await {
         Outcome::NotFound => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
@@ -2475,6 +2485,9 @@ struct ReplaceBody {
     year: Option<String>,
     #[serde(default)]
     cover: Option<String>,
+    /// Replace and carry over (0.9.7): the album's MusicBrainz ids and numbers written into the new copy first.
+    #[serde(default)]
+    carry: bool,
 }
 
 async fn replace_incoming(
@@ -2488,7 +2501,7 @@ async fn replace_incoming(
         Some("new") => false,
         Some(_) => return Err(ToggleError::Refused("cover is keep or new".into()).into()),
     };
-    Ok(Json(app.incoming.replace(&source, &album, b.year.as_deref(), keep).await?))
+    Ok(Json(app.incoming.replace(&source, &album, b.year.as_deref(), keep, b.carry).await?))
 }
 
 /// Albums waiting for their hi-res files to be converted before Keep or Replace, and those just finished.
@@ -2500,14 +2513,37 @@ async fn cancel_job(State(app): State<Arc<App>>, Path(id): Path<u64>) -> Result<
     Ok(Json(app.incoming.cancel(id).await?))
 }
 
-async fn album_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Response {
+#[derive(Deserialize)]
+struct CoverStamp {
+    #[serde(default)]
+    v: Option<String>,
+}
+
+/// An album's cover. Asked by its stamp (`?v=`, 0.9.7): kept for good, a changed cover having another address; else
+/// for an hour (another server's album, a device's picture).
+async fn album_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Query(q): Query<CoverStamp>) -> Response {
     match app.playing.album_cover(&source, &album).await {
         Some((content_type, bytes)) => {
             let ct = HeaderValue::from_str(&content_type).unwrap_or(HeaderValue::from_static("application/octet-stream"));
-            ([(header::CONTENT_TYPE, ct), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=3600"))], bytes).into_response()
+            let keep = if q.v.is_some_and(|v| !v.is_empty()) { "private, max-age=31536000, immutable" } else { "private, max-age=3600" };
+            ([(header::CONTENT_TYPE, ct), (header::CACHE_CONTROL, HeaderValue::from_static(keep))], bytes).into_response()
         }
         None => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
     }
+}
+
+/// Every album's cover stamp in Cratarr's own library (0.9.7), as `{"<source>/<album>": "<stamp>"}`: the page puts it
+/// on each cover's address; the live channel's `cover` tells it of changes.
+async fn cover_stamps(State(app): State<Arc<App>>) -> Json<serde_json::Value> {
+    let Some(serve) = crate::serve::instance() else { return Json(json!({})) };
+    let stamps = tokio::task::spawn_blocking(move || serve.cover_stamps()).await.unwrap_or_default();
+    let mut out = serde_json::Map::new();
+    for source in app.library.own_sources() {
+        for (album, v) in stamps.iter() {
+            out.insert(format!("{source}/{album}"), json!(v));
+        }
+    }
+    Json(serde_json::Value::Object(out))
 }
 
 async fn repairs(State(app): State<Arc<App>>) -> Result<Json<Repairs>, ApiError> {
@@ -2770,6 +2806,8 @@ async fn undo(State(app): State<Arc<App>>, Json(req): Json<UndoRequest>) -> Resu
             crate::app::covers::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         } else if token.starts_with(crate::app::renumber::UNDO) {
             crate::app::renumber::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        } else if token.starts_with(crate::app::fixes::UNDO) {
+            crate::app::fixes::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         } else {
             restored.push(app.incoming.undo(token).await?);
         }
@@ -3139,20 +3177,9 @@ async fn discover(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>
         .as_ref()
         .map(|f| f.albums.iter().filter(|s| starred.contains(&crate::serve::ids::artist(&s.artist))).map(|s| s.key.as_str()).collect())
         .unwrap_or_default();
-    // Each card's mark (0.9.5): any account's open request for its album, wanted or coming.
     let mut found = json!(found);
-    if let (Some(marks), Some(cards)) = (request_marks(&app, &serve).await, found.get_mut("albums").and_then(|a| a.as_array_mut())) {
-        for c in cards {
-            let mark = crate::app::requests::mark_of(
-                &marks,
-                c["release_group"].as_str().or_else(|| c["key"].as_str()),
-                c["artist"].as_str().unwrap_or_default(),
-                c["album"].as_str().unwrap_or_default(),
-            );
-            if let Some(m) = mark {
-                c["request"] = json!(m);
-            }
-        }
+    if let Some(cards) = found.get_mut("albums").and_then(|a| a.as_array_mut()) {
+        mark_cards(&app, &serve, cards).await;
     }
     Ok(Json(json!({
         "found": found,
@@ -3173,6 +3200,43 @@ async fn discover_refresh(State(app): State<Arc<App>>) -> Result<(StatusCode, Js
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     started(crate::app::discover::start(&app, serve, &account, who))
+}
+
+/// Each card's mark (0.9.5): any account's open request for its album, wanted or coming.
+async fn mark_cards(app: &App, serve: &crate::serve::Serve, cards: &mut [serde_json::Value]) {
+    let Some(marks) = request_marks(app, serve).await else { return };
+    for c in cards {
+        let mark = crate::app::requests::mark_of(
+            &marks,
+            c["release_group"].as_str().or_else(|| c["key"].as_str()),
+            c["artist"].as_str().unwrap_or_default(),
+            c["album"].as_str().unwrap_or_default(),
+        );
+        if let Some(m) = mark {
+            c["request"] = json!(m);
+        }
+    }
+}
+
+/// Around artists you play (0.9.7, app::around): the group showing, its seeds and their suggestions, and whether it is
+/// still being made (asked again until it is not).
+async fn discover_around(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = discoverer()?;
+    let shown = crate::app::around::showing(&app, &serve, &account).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(around_json(&app, &serve, shown).await))
+}
+
+/// Around's Refresh: on to the next group, the three most played artists not shown yet.
+async fn discover_around_next(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = discoverer()?;
+    let shown = crate::app::around::next(&app, &serve, &account).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(around_json(&app, &serve, shown).await))
+}
+
+async fn around_json(app: &App, serve: &crate::serve::Serve, (seeds, albums, making): (Vec<String>, Vec<crate::app::discover::Suggestion>, bool)) -> serde_json::Value {
+    let mut cards: Vec<serde_json::Value> = albums.iter().map(|s| json!(s)).collect();
+    mark_cards(app, serve, &mut cards).await;
+    json!({ "seeds": seeds, "albums": cards, "making": making })
 }
 
 #[derive(Deserialize)]
@@ -4407,6 +4471,55 @@ async fn renumber_album(Path((source, album)): Path<(String, String)>, Json(b): 
     own_album(&source)?;
     let token = crate::app::renumber::apply(&album, b).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!({ "undo": [token] })))
+}
+
+#[derive(Deserialize)]
+struct FixesOf {
+    finding: String,
+}
+
+/// A Health finding's fixes (0.9.7, `app::fixes`): each album's, the certain first, and how many are certain.
+async fn health_fixes(State(app): State<Arc<App>>, Query(q): Query<FixesOf>) -> Result<Json<serde_json::Value>, ApiError> {
+    let fixes = crate::app::fixes::of_finding(&app, &q.finding).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let certain = fixes.iter().filter(|f| f.certainty == "certain").count();
+    // Album artist and MusicBrainz ids come from matches made in a task (`match`): the page asks again as it runs.
+    let matching = crate::serve::instance().and_then(|s| s.current_user()).is_some_and(|a| crate::app::matching::running(&a));
+    Ok(Json(json!({ "fixes": fixes, "certain": certain, "matching": matching })))
+}
+
+/// Fixes to apply: these (`ids`), or every certain one of a finding (`certain`: its key).
+#[derive(Deserialize)]
+struct ApplyFixes {
+    #[serde(default)]
+    ids: Vec<String>,
+    #[serde(default)]
+    certain: Option<String>,
+}
+
+/// Fixes written into the files (0.9.7, an administrator's tap): `{undo: [token], applied, failed: [{id, why}]}`.
+async fn apply_fixes(State(app): State<Arc<App>>, Json(b): Json<ApplyFixes>) -> Result<Json<serde_json::Value>, ApiError> {
+    let refused = |e: anyhow::Error| ToggleError::Refused(format!("{e:#}"));
+    let fixes = match &b.certain {
+        Some(finding) => crate::app::fixes::of_finding(&app, finding).await.map_err(refused)?.into_iter().filter(|f| f.certainty == "certain").collect(),
+        None => crate::app::fixes::by_ids(&app, &b.ids).await.map_err(refused)?,
+    };
+    if fixes.is_empty() {
+        return Err(ToggleError::Refused("Nothing to fix: look again".into()).into());
+    }
+    let n = fixes.len();
+    let (tokens, failed) = crate::app::fixes::apply(fixes).await.map_err(refused)?;
+    let failed: Vec<serde_json::Value> = failed.into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect();
+    Ok(Json(json!({ "undo": tokens, "applied": n, "failed": failed })))
+}
+
+/// An arrival's intake (0.9.7): every fix the album would get before it is kept (year, genre, album artist,
+/// MusicBrainz ids, cover), the certain first; `matching` while its match is looked for. Applied as Health's are.
+async fn album_intake(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+    own_album(&source)?;
+    let (mut fixes, matching) = crate::app::fixes::of_album(&app, &album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    fixes.sort_by(|a, b| (a.certainty != "certain").cmp(&(b.certainty != "certain")).then_with(|| a.field.cmp(b.field)));
+    let certain = fixes.iter().filter(|f| f.certainty == "certain").count();
+    Ok(Json(json!({ "fixes": fixes, "certain": certain, "matching": matching })))
 }
 
 #[derive(Deserialize)]

@@ -39,6 +39,12 @@ pub mod home;
 pub mod import;
 pub mod import_files;
 pub mod discover;
+pub mod around;
+pub mod words;
+pub mod harvest;
+pub mod fixes;
+pub mod matching;
+pub mod incomplete;
 pub mod lastfm;
 pub mod listening;
 pub mod scrobble;
@@ -183,6 +189,8 @@ impl App {
         }
         originals::start();
         discogs::start();
+        // The library's words (0.9.7): MusicBrainz, Discogs and Last.fm asked in the background.
+        harvest::start();
         // Cratarr's own library (0032) built anew (a first start, a new layout): what was read from it while it was
         // empty is read again.
         if let Some(served) = crate::serve::instance() {

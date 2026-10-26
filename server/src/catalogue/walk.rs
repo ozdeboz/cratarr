@@ -21,7 +21,14 @@ pub fn is_audio(name: &str) -> bool {
 
 /// Every audio file under `root`. Unreadable sub-folders are skipped (and counted), not fatal.
 pub fn walk(root: &Path) -> std::io::Result<(Vec<Found>, usize)> {
+    walk_with_covers(root).map(|(found, _, skipped)| (found, skipped))
+}
+
+/// Every audio file under `root`, and every cover file beside them (0.9.7: Cratarr's cover names, `covers::CANDIDATES`,
+/// not empty), each with its size and time: a cover changed on disk changes its album's stamp.
+pub fn walk_with_covers(root: &Path) -> std::io::Result<(Vec<Found>, Vec<Found>, usize)> {
     let mut out = Vec::new();
+    let mut covers = Vec::new();
     let mut skipped = 0;
     let mut stack = vec![(root.to_path_buf(), String::new())];
     // The root itself must be readable; below it, problems only skip that part.
@@ -48,7 +55,7 @@ pub fn walk(root: &Path) -> std::io::Result<(Vec<Found>, usize)> {
             let rel = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
             if kind.is_dir() {
                 stack.push((entry.path(), rel));
-            } else if kind.is_file() && is_audio(&name) {
+            } else if kind.is_file() && (is_audio(&name) || crate::covers::candidate_rank(&name).is_some()) {
                 let Ok(meta) = entry.metadata() else {
                     skipped += 1;
                     continue;
@@ -59,12 +66,18 @@ pub fn walk(root: &Path) -> std::io::Result<(Vec<Found>, usize)> {
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_secs() as i64)
                     .unwrap_or(0);
-                out.push(Found { rel, size: meta.len(), mtime });
+                if is_audio(&name) {
+                    out.push(Found { rel, size: meta.len(), mtime });
+                } else if meta.len() > 0 {
+                    // An empty file is no cover (`serve::art::cover_file`).
+                    covers.push(Found { rel, size: meta.len(), mtime });
+                }
             }
         }
     }
     out.sort_by(|a, b| a.rel.cmp(&b.rel));
-    Ok((out, skipped))
+    covers.sort_by(|a, b| a.rel.cmp(&b.rel));
+    Ok((out, covers, skipped))
 }
 
 #[cfg(test)]
@@ -87,6 +100,9 @@ mod tests {
         assert_eq!(found[0].size, 5);
         assert!(found[0].mtime > 0);
         assert!(walk(&d.join("missing")).is_err(), "an unreadable root is an error");
+        std::fs::write(d.join("A - B (2020)/folder.jpg"), b"").unwrap();
+        let (_, covers, _) = walk_with_covers(&d).unwrap();
+        assert_eq!(covers.iter().map(|c| c.rel.as_str()).collect::<Vec<_>>(), ["A - B (2020)/cover.jpg"], "its cover beside it; an empty one is none");
         std::fs::remove_dir_all(&d).ok();
     }
 
