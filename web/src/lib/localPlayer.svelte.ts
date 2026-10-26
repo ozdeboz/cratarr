@@ -1682,9 +1682,9 @@ const FROM_START = 0.5;
 /** How long a wind-up from `offset` s into the track takes: its set `ms`, but no longer than the track before it
  *  allows (at a vinyl's pace, two thirds of full speed on average); none from the very start (the play button shows
  *  this before it starts, lib/NowPlaying). */
-export function windUpMs(ms: number, mode: 'off' | 'vinyl' | 'fade', offset: number): number {
+export function windUpMs(ms: number, mode: 'off' | 'vinyl' | 'fade', offset: number, low = RAMP_LOW): number {
   if (mode === 'off' || offset < FROM_START) return 0;
-  const pace = mode === 'fade' ? 1 : RAMP_LOW + ((1 - RAMP_LOW) * 2) / 3;
+  const pace = mode === 'fade' ? 1 : low + ((1 - low) * 2) / 3;
   return Math.min(ms, (offset / pace) * 1000);
 }
 /** Cratarr's track as this player keeps it. */
