@@ -188,6 +188,15 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/requests/watching", get(requests_watching))
         .route("/api/requests/decide", post(requests_decide))
         .route("/api/requests/{id}/cancel", post(requests_cancel))
+        // One's own listening imported into one's own account (0.9.7, the owner: a personal concern; the account is the
+        // session's, never a parameter). Another server's users' import stays the administrators' (serve::routes).
+        .route("/api/history/listenbrainz", get(listenbrainz_kept).post(import_listenbrainz).delete(undo_listenbrainz))
+        .route("/api/history/listenbrainz/preview", post(preview_listenbrainz))
+        .route("/api/history/lastfm", get(lastfm_kept).post(import_lastfm).delete(undo_lastfm))
+        .route("/api/history/lastfm/preview", post(preview_lastfm))
+        .route("/api/import/file", post(import_file).delete(undo_file).layer(axum::extract::DefaultBodyLimit::max(256 << 20)))
+        // The Library's Tracks, everyone's (it sat with the administrators' by mistake since 0.9.4).
+        .route("/api/library/tracks", get(library_tracks))
         // The administrators' (decision 0051): the server's settings, what comes in, the library's changes and its
         // health, the folders, the diagnostics.
         .merge(
@@ -196,13 +205,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/diagnostics/download", get(diagnostics_download))
             .route("/api/diagnostics/levels", get(diagnostics_levels).put(set_diagnostics_levels))
             .route("/api/players/settings", get(play_on_settings).put(save_play_on_settings))
-            .route("/api/history/listenbrainz", get(listenbrainz_kept).post(import_listenbrainz).delete(undo_listenbrainz))
-            .route("/api/history/listenbrainz/preview", post(preview_listenbrainz))
-            .route("/api/history/lastfm", get(lastfm_kept).post(import_lastfm).delete(undo_lastfm))
-            .route("/api/history/lastfm/preview", post(preview_lastfm))
-            .route("/api/import/file", post(import_file).delete(undo_file).layer(axum::extract::DefaultBodyLimit::max(256 << 20)))
-        .route("/api/library/find", get(library_find))
-        .route("/api/library/tracks", get(library_tracks))
+            .route("/api/library/find", get(library_find))
         .route("/api/analysis/import", post(analysis_import).layer(axum::extract::DefaultBodyLimit::disable()))
             .route("/api/playlists/{id}/link", put(link_playlist).delete(unlink_playlist))
             .route("/api/sync/targets", get(sync_targets))
