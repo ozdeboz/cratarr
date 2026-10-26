@@ -110,15 +110,15 @@ fn kind_of(format: &str) -> Kind {
 
 /// A release's medium: its tracks' titles and lengths (s), in order.
 #[derive(Debug, Clone, PartialEq)]
-struct Medium {
-    format: String,
-    tracks: Vec<(String, Option<u32>)>,
+pub(super) struct Medium {
+    pub(super) format: String,
+    pub(super) tracks: Vec<(String, Option<u32>)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct Release {
-    facts: ReleaseFacts,
-    media: Vec<Medium>,
+pub(super) struct Release {
+    pub(super) facts: ReleaseFacts,
+    pub(super) media: Vec<Medium>,
 }
 
 impl Release {
@@ -247,6 +247,11 @@ fn mb_release(v: &Value) -> Release {
 /// The release group's releases with their tracks (one call, at most 100 releases).
 async fn musicbrainz(http: &reqwest::Client, release: &str) -> Result<Vec<Release>> {
     let Some(rg) = super::discogs::release_group_of(http, release).await? else { return Ok(Vec::new()) };
+    group_releases(http, &rg).await
+}
+
+/// A release group's releases with their tracks (one call, at most 100 releases): Renumber's, and `incomplete`'s.
+pub(super) async fn group_releases(http: &reqwest::Client, rg: &str) -> Result<Vec<Release>> {
     let v: Value = http
         .get(format!("https://musicbrainz.org/ws/2/release?release-group={rg}&inc=media+recordings&limit=100&fmt=json"))
         .asked()

@@ -87,6 +87,10 @@ async fn round() -> Result<()> {
         let said = mb_words(&http, &format!("artist/{}", a.1)).await;
         keep(&served, &subject, "musicbrainz", said).await?;
     }
+    // Albums missing tracks (`incomplete`): at MusicBrainz's pace too.
+    if let Err(e) = super::incomplete::pass(&served, &http).await {
+        tracing::info!("harvest: albums missing tracks not looked at: {e:#}");
+    }
     // Discogs: every album's master (not only those without a genre, as the genres' pass asks).
     for (subject, a) in due(&served, "discogs", albums.iter().map(|a| (format!("album:{}", a.0), a)), DISCOGS_AGAIN).await? {
         let rg = if super::discogs::is_mbid(&a.1) { super::discogs::release_group_of(&http, &a.1).await.unwrap_or_default() } else { None };

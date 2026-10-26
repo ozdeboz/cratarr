@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS words_asked (subject TEXT NOT NULL, source TEXT NOT N
   PRIMARY KEY (subject, source)) WITHOUT ROWID;
 -- An album's match with a MusicBrainz release (0.9.7, app::matching; JSON, none where none was found), and when.
 CREATE TABLE IF NOT EXISTS album_matches (album TEXT PRIMARY KEY, at INTEGER NOT NULL, found TEXT) WITHOUT ROWID;
+-- An album held against its release group's releases (0.9.7, app::incomplete): what it misses (JSON; none: whole, or
+-- no release holds it), and when.
+CREATE TABLE IF NOT EXISTS album_complete (album TEXT PRIMARY KEY, at INTEGER NOT NULL, found TEXT) WITHOUT ROWID;
 ";
 
 /// A word as a source said it.
@@ -83,6 +86,27 @@ impl UserData {
 
     pub fn set_album_match(&self, album: &str, found: Option<&str>, at: i64) -> Result<()> {
         self.db().execute("INSERT OR REPLACE INTO album_matches (album, at, found) VALUES (?1, ?2, ?3)", params![album, at, found])?;
+        Ok(())
+    }
+
+    /// When each album was last held against its releases (`app::incomplete`).
+    pub fn album_complete_at(&self) -> Result<std::collections::HashMap<String, i64>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT album, at FROM album_complete")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The albums found missing tracks: (album, what it misses as JSON).
+    pub fn albums_incomplete(&self) -> Result<Vec<(String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT album, found FROM album_complete WHERE found IS NOT NULL")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn set_album_complete(&self, album: &str, found: Option<&str>, at: i64) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO album_complete (album, at, found) VALUES (?1, ?2, ?3)", params![album, at, found])?;
         Ok(())
     }
 
