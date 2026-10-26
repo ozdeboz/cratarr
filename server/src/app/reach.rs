@@ -6,9 +6,10 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-/// A service failing this many times in a row, or for this long, is failing (one timeout is not).
+/// A service failing this many times in a row and for this long, no answer between, is failing: a busy moment (a few
+/// 503s while MusicBrainz is shared) is not (the sim, 2026-10-26).
 const FAILURES: u32 = 3;
-const FAILING_SECS: i64 = 15 * 60;
+const FAILING_SECS: i64 = 5 * 60;
 
 #[derive(Debug, Clone, Default)]
 pub struct State {
@@ -109,13 +110,13 @@ pub fn state(name: &str) -> State {
     STATES.lock().unwrap_or_else(|e| e.into_inner()).as_ref().and_then(|s| s.get(name)).cloned().unwrap_or_default()
 }
 
-/// The connections failing now: failed at least `FAILURES` times with no answer since, or for `FAILING_SECS`.
+/// The connections failing now: failed at least `FAILURES` times over `FAILING_SECS` or more, with no answer since.
 pub fn failing(now: i64) -> Vec<(&'static str, State)> {
     let states = STATES.lock().unwrap_or_else(|e| e.into_inner());
     let mut out: Vec<(&'static str, State)> = states
         .iter()
         .flat_map(|s| s.iter())
-        .filter(|(_, s)| s.failures >= FAILURES || (s.failures > 0 && now - s.failing_since >= FAILING_SECS))
+        .filter(|(_, s)| s.failures >= FAILURES && now - s.failing_since >= FAILING_SECS)
         .map(|(n, s)| (*n, s.clone()))
         .collect();
     out.sort_by_key(|(n, _)| *n);
@@ -156,9 +157,11 @@ mod tests {
         assert_eq!(name_of(&url("https://evil-musicbrainz.org/")), None);
         let mut states = STATES.lock().unwrap();
         let s = states.get_or_insert_with(HashMap::new).entry("theaudiodb").or_default();
-        (s.failures, s.failing_since) = (2, 1000);
+        (s.failures, s.failing_since) = (3, 1000);
         drop(states);
-        assert!(failing(1000 + 60).iter().all(|(n, _)| *n != "theaudiodb"), "two tries in a minute are not failing");
-        assert!(failing(1000 + FAILING_SECS).iter().any(|(n, _)| *n == "theaudiodb"), "a quarter of an hour is");
+        assert!(failing(1000 + 60).iter().all(|(n, _)| *n != "theaudiodb"), "three tries in a minute are a busy moment");
+        assert!(failing(1000 + FAILING_SECS).iter().any(|(n, _)| *n == "theaudiodb"), "five minutes without an answer are not");
+        STATES.lock().unwrap().get_or_insert_with(HashMap::new).get_mut("theaudiodb").unwrap().failures = 2;
+        assert!(failing(1000 + 3600).iter().all(|(n, _)| *n != "theaudiodb"), "two failures, however long ago, are not");
     }
 }
