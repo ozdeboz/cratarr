@@ -54,8 +54,13 @@
   const waveShown = $derived(keepWave || want !== 'line');
   const pos = $derived(seek.pos);
   const nowMark = $derived(seek.held !== null && seek.lensOn && !seek.snapped && !seek.overCancel && shaped && dur ? seek.now() / dur : null);
-  /** Where the Cancel button stands: above the waveform's middle. */
+  /** Where the Cancel button stands: above the waveform's middle, measured whenever it shows (never left at 0). */
   let cancelX = $state(0);
+  $effect(() => {
+    if (seek.held === null || !seek.lensOn || !el) return;
+    const r = el.getBoundingClientRect();
+    cancelX = r.left + r.width / 2;
+  });
 
   const awayFrom = (e: PointerEvent, target: HTMLElement) => {
     const r = target.getBoundingClientRect();
@@ -63,8 +68,6 @@
   };
   function start(e: { clientX: number }) {
     if (!el) return;
-    const r = el.getBoundingClientRect();
-    cancelX = r.left + r.width / 2;
     seek.begin(e.clientX, el, shapedNow, room);
   }
   function down(e: PointerEvent) {
