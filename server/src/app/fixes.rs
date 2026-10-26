@@ -23,7 +23,7 @@ pub struct Fix {
     /// `<field>:<album>`: the same fix keeps its id while it stands.
     pub id: String,
     pub album: String,
-    /// What it sets: year, genre, albumartist, musicbrainz.
+    /// What it sets: year, genre, albumartist, musicbrainz, cover (its `to` the picture's address).
     pub field: &'static str,
     /// What the album has now (none: nothing).
     pub from: Option<String>,
@@ -104,10 +104,20 @@ fn track_paths(album: &str) -> Result<Vec<PathBuf>> {
     Ok(super::renumber::tracks_of(album)?.0.into_iter().map(|t| t.path).collect())
 }
 
-/// Writes the fixes into their albums' tracks, the values before kept first, and reads them again at once. Returns
-/// the undo token, and the fixes that could not be written with why (the rest stand).
-pub async fn apply(fixes: Vec<Fix>) -> Result<(String, Vec<(String, String)>)> {
-    tokio::task::spawn_blocking(move || -> Result<(String, Vec<(String, String)>)> {
+/// Writes the fixes into their albums' tracks, the values before kept first, and reads them again at once; a cover is
+/// set as a chosen one is (`covers::set`, its own undo). Returns the undo tokens, and the fixes that could not be
+/// written with why (the rest stand).
+pub async fn apply(fixes: Vec<Fix>) -> Result<(Vec<String>, Vec<(String, String)>)> {
+    let (covers, fixes): (Vec<Fix>, Vec<Fix>) = fixes.into_iter().partition(|f| f.field == "cover");
+    let mut tokens = Vec::new();
+    let mut failed = Vec::new();
+    for c in covers {
+        match super::covers::set(&c.album, &c.to).await {
+            Ok(t) => tokens.push(t),
+            Err(e) => failed.push((c.id, format!("{e:#}"))),
+        }
+    }
+    let (token, more) = tokio::task::spawn_blocking(move || -> Result<(String, Vec<(String, String)>)> {
         let id = format!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis());
         let file = undo_file(&id)?;
         std::fs::create_dir_all(file.parent().context("no folder")?)?;
@@ -138,7 +148,10 @@ pub async fn apply(fixes: Vec<Fix>) -> Result<(String, Vec<(String, String)>)> {
         }
         Ok((format!("{UNDO}{id}"), failed))
     })
-    .await?
+    .await??;
+    tokens.push(token);
+    failed.extend(more);
+    Ok((tokens, failed))
 }
 
 /// Undoes fixes (`f…`): each track's values as they were. Safe to repeat.
@@ -266,24 +279,65 @@ fn names(sources: &[String]) -> String {
     }
 }
 
-/// The fixes asked for by id, worked out again now (a fix applies as it stands, not as it was shown).
+/// The fixes asked for by id (`<field>:<album>`), worked out again now for their albums (a fix applies as it stands,
+/// not as it was shown), in Music or in Incoming.
 pub async fn by_ids(app: &super::App, ids: &[String]) -> Result<Vec<Fix>> {
-    let mut findings: HashMap<&'static str, Vec<&String>> = HashMap::new();
+    let mut albums: HashMap<&str, Vec<&String>> = HashMap::new();
     for id in ids {
-        let finding = match id.split_once(':').map(|(f, _)| f) {
-            Some("year") => "library:year",
-            Some("genre") => "library:genre",
-            Some("albumartist") => "library:album-artist",
-            Some("musicbrainz") => "library:musicbrainz",
-            _ => bail!("Not a fix: {id}"),
-        };
-        findings.entry(finding).or_default().push(id);
+        let (_, album) = id.split_once(':').with_context(|| format!("Not a fix: {id}"))?;
+        albums.entry(album).or_default().push(id);
     }
     let mut out = Vec::new();
-    for (finding, wanted) in findings {
-        out.extend(of_finding(app, finding).await?.into_iter().filter(|f| wanted.contains(&&f.id)));
+    for (album, wanted) in albums {
+        out.extend(of_album(app, album).await?.0.into_iter().filter(|f| wanted.contains(&&f.id)));
     }
     Ok(out)
+}
+
+/// Every fix one album has (0.9.7, Incoming's intake: what an arrival would get before it is kept), wherever it is: a
+/// year, a genre, the album artist and MusicBrainz ids from a match, a cover where it has none (the first the cover
+/// look finds; certain from the Cover Art Archive). And whether its match is still being looked for.
+pub async fn of_album(_app: &super::App, album: &str) -> Result<(Vec<Fix>, bool)> {
+    let served = crate::serve::instance().context("Cratarr's own library is not open")?;
+    let (s, a) = (served.clone(), album.to_string());
+    let (mut fixes, lacks) = tokio::task::spawn_blocking(move || -> Result<(Vec<Fix>, Option<crate::serve::library::Lacks>)> {
+        let Some(l) = s.library.lacking()?.into_iter().find(|r| r.id == a) else { return Ok((Vec::new(), None)) };
+        let mut out = Vec::new();
+        if l.year {
+            out.extend(year_fixes(&s, std::iter::once(a.as_str()))?);
+        }
+        if l.genre {
+            out.extend(genre_fixes(&s, std::iter::once(a.as_str()))?);
+        }
+        Ok((out, Some(l)))
+    })
+    .await??;
+    let Some(l) = lacks else { return Ok((fixes, false)) };
+    if l.album_artist {
+        fixes.extend(super::matching::fixes(&served, "library:album-artist", vec![album.to_string()]).await?);
+    }
+    if l.musicbrainz {
+        fixes.extend(super::matching::fixes(&served, "library:musicbrainz", vec![album.to_string()]).await?);
+    }
+    if l.cover
+        && let Ok(found) = super::covers::candidates(album).await
+        && let Some(c) = found.candidates.first()
+    {
+        let size = c.width.zip(c.height).map(|(w, h)| format!(" · {w}×{h}")).unwrap_or_default();
+        fixes.push(Fix {
+            id: format!("cover:{album}"),
+            album: album.to_string(),
+            field: "cover",
+            from: None,
+            to: c.url.clone(),
+            source: if c.from == "discogs" { "Discogs" } else { "Cover Art Archive" }.into(),
+            certainty: if c.from == "coverartarchive" { "certain" } else { "likely" },
+            why: format!("{}{size}", c.what),
+            writes: Vec::new(),
+        });
+    }
+    let matching = served.current_user().is_some_and(|a| super::matching::running(&a));
+    Ok((fixes, matching))
 }
 
 #[cfg(test)]

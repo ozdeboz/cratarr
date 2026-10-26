@@ -238,6 +238,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/albums/{source}/{album}/renumber", post(renumber_album))
             .route("/api/health/fixes", get(health_fixes))
             .route("/api/health/fixes/apply", post(apply_fixes))
+            .route("/api/albums/{source}/{album}/intake", get(album_intake))
             .route("/api/settings/naming", get(naming))
             .route("/api/catalogue", get(catalogue_status))
             .route("/api/health/report", get(health_report))
@@ -4503,9 +4504,19 @@ async fn apply_fixes(State(app): State<Arc<App>>, Json(b): Json<ApplyFixes>) -> 
         return Err(ToggleError::Refused("Nothing to fix: look again".into()).into());
     }
     let n = fixes.len();
-    let (token, failed) = crate::app::fixes::apply(fixes).await.map_err(refused)?;
+    let (tokens, failed) = crate::app::fixes::apply(fixes).await.map_err(refused)?;
     let failed: Vec<serde_json::Value> = failed.into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect();
-    Ok(Json(json!({ "undo": [token], "applied": n, "failed": failed })))
+    Ok(Json(json!({ "undo": tokens, "applied": n, "failed": failed })))
+}
+
+/// An arrival's intake (0.9.7): every fix the album would get before it is kept (year, genre, album artist,
+/// MusicBrainz ids, cover), the certain first; `matching` while its match is looked for. Applied as Health's are.
+async fn album_intake(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+    own_album(&source)?;
+    let (mut fixes, matching) = crate::app::fixes::of_album(&app, &album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    fixes.sort_by(|a, b| (a.certainty != "certain").cmp(&(b.certainty != "certain")).then_with(|| a.field.cmp(b.field)));
+    let certain = fixes.iter().filter(|f| f.certainty == "certain").count();
+    Ok(Json(json!({ "fixes": fixes, "certain": certain, "matching": matching })))
 }
 
 #[derive(Deserialize)]
