@@ -6,6 +6,8 @@
   // above the waveform's middle: let go over it, nothing is sought (the owner, 2026-10-26).
   // `grab(e)`: the mini player's long press hands the pointer here, held from where it is.
   import Icon from './Icon.svelte';
+  import { isLocal } from './output.svelte';
+  import { ramping } from './ramping.svelte';
   import { portal } from './portal';
   import { clockText } from './remote.svelte';
   import type { Seek } from './seekState.svelte';
@@ -128,6 +130,7 @@
   class:cancelling={seek.overCancel}
   class:paused
   class:estimated
+  style:--ramp-ms={isLocal() && ramping.dir ? `${ramping.ms}ms` : '0ms'}
   bind:this={el}
   role={canSeek ? 'slider' : 'progressbar'}
   tabindex={canSeek ? 0 : undefined}
@@ -218,6 +221,11 @@
     height: 100%;
     background: var(--art-accent);
     transform-origin: left;
+  }
+
+  /* Paused, what has played loses its colour: over a Start and stop ramp, in step with it (the owner, 2026-10-26). */
+  .fill {
+    transition: background var(--ramp-ms, 0ms) linear;
   }
 
   .paused .fill {

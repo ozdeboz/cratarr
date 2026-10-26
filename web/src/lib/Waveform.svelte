@@ -186,6 +186,8 @@
 
   svg.played {
     fill: var(--art-accent, var(--accent));
+    /* Over a Start and stop ramp (lib/SeekWave's --ramp-ms), in step with it; else at once. */
+    transition: fill var(--ramp-ms, 0ms) linear;
   }
 
   .paused svg.played {
