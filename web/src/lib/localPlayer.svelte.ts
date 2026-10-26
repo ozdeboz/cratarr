@@ -1342,11 +1342,7 @@ export function previous() {
   if (handed()) return hand('previous');
   // Repeat all: previous on the first track goes to the last.
   if (local.repeat === 'all' && local.index === 0 && local.position <= RESTART_AFTER && local.queue.length > 1) return void skipRamped(() => jump(local.queue.length - 1));
-  if (local.position > RESTART_AFTER) {
-    // Its start again: a tape's rewind where the device asks it.
-    if (prefs.startStop.rewind) void rewindTape().then((done) => done || seek(0));
-    else seek(0);
-  } else void skipRamped(() => jump(Math.max(0, local.index - 1)));
+  if (local.position > RESTART_AFTER) seek(0); else void skipRamped(() => jump(Math.max(0, local.index - 1)));
 }
 
 /** To `secs` into the playing track: within what is loaded, else a fresh stream from there. */
@@ -1538,8 +1534,8 @@ function applyVolume() {
 // --- Start and stop (Settings › This device; the owner, 2026-10-25) ---
 // Vinyl: the speed ramps, the pitch following, as a turntable spins up and down; Fade: the volume. Over the device's
 // ramp, eased; a new one cuts one under way short. Natural track ends stay gapless (only play, pause and, where asked,
-// next and previous ramp). Tape rewind: Previous restarting a track scrubs back to its start, pitched up, four times
-// the ramp. Stepped by time, not by frames, so a hidden page still gets there.
+// next and previous ramp). Stepped by time, not by frames, so a hidden page still gets there. (Tape rewind is hidden
+// until it plays the track backwards, the owner 2026-10-26; the stepped seeks it had were no rewind.)
 let rampGain = 1;
 let rampToken = 0;
 /** What a ramp under way has committed to (paused or playing), shown at once on every device; until it is done, play
@@ -1676,37 +1672,8 @@ function inBuffer(t: number) {
   for (let i = 0; i < audio.buffered.length; i++) if (t >= audio.buffered.start(i) && t <= audio.buffered.end(i)) return true;
   return false;
 }
-const REWIND_STEP_MS = 300;
 /** Within this much of a track's start (s), play is never ramped. */
 const FROM_START = 0.5;
-/** Tape rewind: back to the track's start, scrubbing, pitched up; false where it cannot (nothing loaded there). */
-async function rewindTape(): Promise<boolean> {
-  if (!audio || audio.paused) return false;
-  const w = where();
-  const base = w ? w.seg.start : 0;
-  const from = audio.currentTime - base;
-  if (from <= 0 || !inBuffer(base) || committed !== null) return false;
-  committed = false;
-  const ms = Math.min(12_000, 4 * prefs.startStop.ms);
-  const token = ++rampToken;
-  const t0 = performance.now();
-  audio.preservesPitch = false;
-  audio.playbackRate = 2;
-  rampGain = 0.8;
-  applyVolume();
-  while (token === rampToken) {
-    const t = Math.min(1, (performance.now() - t0) / ms);
-    audio.currentTime = base + from * (1 - easeInOut(t));
-    if (t >= 1) break;
-    // Each step heard before the next: seeking again sooner re-buffers without a sound (a5, in the app, 2026-10-26).
-    await new Promise((r) => setTimeout(r, REWIND_STEP_MS));
-  }
-  if (token === rampToken) audio.currentTime = base;
-  unramp();
-  committed = null;
-  return true;
-}
-
 /** Cratarr's track as this player keeps it. */
 function trackOf(t: Record<string, unknown>): LocalTrack | null {
   if (typeof t.source !== 'string' || typeof t.id !== 'string') return null;

@@ -50,7 +50,6 @@
   ];
   const STARTSTOP_MORE =
     "Vinyl: play and pause speed up from still and slow down to still, the pitch following, as a turntable. Fade: they fade in and out. Over the ramp's time. A track running into the next stays seamless.";
-  const REWIND_MORE = "Previous, back to the start of the track playing, rewinds it audibly, as a tape: four times the ramp's time.";
   const ss = $derived(inApp ? appInfo.startStop : prefs.startStop);
   function setSS(change: Partial<StartStop>) {
     const next = { ...ss, ...change };
@@ -73,15 +72,13 @@
     toggle={{ checked: inApp ? appInfo.levelling : prefs.levelling, onchange: setLevel }}
   />
   <!-- Start and stop (the owner, 2026-10-25): play and pause at once, as a turntable or fading, over a ramp; next and
-       previous too where asked; and a tape's rewind for Previous back to a track's start. -->
+       previous too where asked. Tape rewind waits for the real thing, the track played backwards (the owner,
+       2026-10-26: hidden until then). -->
   <Item name="Start and stop" more={STARTSTOP_MORE}><Seg label="Start and stop" options={MODES} bind:value={() => ss.mode, (v) => setSS({ mode: v })} /></Item>
-  {#if ss.mode !== 'off' || ss.rewind}
-    <Item name="Ramp" value={`${(ss.ms / 1000).toFixed(1)} s`} onclick={() => (rampOpen = true)} />
-  {/if}
   {#if ss.mode !== 'off'}
+    <Item name="Ramp" value={`${(ss.ms / 1000).toFixed(1)} s`} onclick={() => (rampOpen = true)} />
     <Item name="Also for next and previous" toggle={{ checked: ss.skips, onchange: (on) => setSS({ skips: on }) }} />
   {/if}
-  <Item name="Tape rewind" line="Previous back to a track's start" more={REWIND_MORE} toggle={{ checked: ss.rewind, onchange: (on) => setSS({ rewind: on }) }} />
   {#if !inApp && isPhone}
     <Item
       name="Lossless"
