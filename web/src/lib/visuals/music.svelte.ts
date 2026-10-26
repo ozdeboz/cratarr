@@ -5,6 +5,7 @@
 // none, from the sound as it plays where the page plays it (live.ts); in the app the music plays natively, out of the
 // page's reach, and on another player it plays elsewhere: there the loudness comes from the waveform until the server's
 // signals are in. Read once per frame by the visuals' loop.
+import { NEXT } from '../analysisAsks';
 import { getTrackGain, trackState, type TrackGain } from '../api';
 import { appInfo, inApp } from '../app.svelte';
 import { prefs } from '../prefs.svelte';
@@ -78,8 +79,8 @@ export function musicNow(at: number, lighting: readonly number[] = visualSetting
   const signals = signalsOf(np.source, np.id);
   // The next track's too, so it pulses from its first beat.
   if (np.upcoming[0]) {
-    beatsOf(np.source, np.upcoming[0].id);
-    signalsOf(np.source, np.upcoming[0].id);
+    beatsOf(np.source, np.upcoming[0].id, NEXT);
+    signalsOf(np.source, np.upcoming[0].id, NEXT);
   }
   const bpm = tempos.get(key) ?? null;
   const wave = waveformOf(np.source, np.id);

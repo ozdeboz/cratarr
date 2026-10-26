@@ -3,6 +3,7 @@
 // harmonic parts, crest and width; the whole track's loudness as heard, spectral centroid, chroma, harmonic change,
 // section novelty and boundaries, bar position, swells and build-up. Read once per track and kept while the page is
 // open; the visuals ask for the playing track's and the next one's.
+import { PLAYING, askAnalysis } from '../analysisAsks';
 import { asksSignIn, toSignIn } from '../reach.svelte';
 
 export { ID } from './signal-ids';
@@ -42,7 +43,7 @@ const asking = new Map<string, { at: number; tries: number; busy: boolean }>();
 
 /** A track's signals: undefined while they are asked for (or worked out), null where it has none (a file Cratarr does
  *  not keep, or one that does not decode whole). */
-export function signalsOf(source: string, id: string): Signals | null | undefined {
+export function signalsOf(source: string, id: string, rank = PLAYING): Signals | null | undefined {
   const key = `${source}/${id}`;
   if (kept.has(key)) return kept.get(key);
   const now = performance.now();
@@ -57,7 +58,7 @@ export function signalsOf(source: string, id: string): Signals | null | undefine
   const done = () => asking.set(key, { at: performance.now(), tries, busy: false });
   // `v`: the form read here; `b`: Beat this!'s beats, which the signals follow (decision 0049, amended). A browser
   // keeps older ones under another address.
-  fetch(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/bands?v=3&b=2`)
+  askAnalysis(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/bands?v=3&b=2`, rank)
     .then(async (r) => {
       if (asksSignIn(r)) toSignIn();
       if (r.ok) kept.set(key, decode(await r.arrayBuffer()));

@@ -4,6 +4,7 @@
 // it plays, a few seconds) and kept here while the page is open. Undefined while it loads, null where the track has
 // none (its server is not Cratarr's own, or it cannot be decoded).
 
+import { AGAIN_MS, BUSY, PLAYING, TRIES, askAnalysis } from './analysisAsks';
 import type { Prefs } from './prefs.svelte';
 import { asksSignIn, toSignIn } from './reach.svelte';
 
@@ -53,11 +54,16 @@ const WAVE_FORMAT = 1;
 const spectra = $state<Record<string, Spectrum | null>>({});
 const asked = new Set<string>();
 
+/** The server busy (lib/analysisAsks): not none, asked again a little later. */
+class Busy extends Error {}
 const get = (source: string, id: string, what: string) =>
-  fetch(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/${what}`).then((r) => {
+  askAnalysis(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/${what}`, PLAYING).then((r) => {
     if (asksSignIn(r)) toSignIn();
+    if (r.status === BUSY) throw new Busy();
     return r.ok ? r.arrayBuffer() : null;
   });
+/** How often each track's spectrum found the server busy. */
+const busyTries = new Map<string, number>();
 
 /** A spectrum's bytes as read, or null. */
 function spectrumFrom(b: ArrayBuffer | null): Spectrum | null {
@@ -94,9 +100,14 @@ export function loadSpectrum(source: string, id: string, duration: number) {
       (s) => {
         spectra[key] = s;
       },
-      () => {
-        // Asked again the next time it shows.
+      (e) => {
+        // Asked again the next time it shows; the server busy, by itself a little later too.
         asked.delete(key);
+        const tries = (busyTries.get(key) ?? 0) + 1;
+        if (e instanceof Busy && tries < TRIES) {
+          busyTries.set(key, tries);
+          setTimeout(() => loadSpectrum(source, id, duration), AGAIN_MS);
+        }
       },
     );
 }

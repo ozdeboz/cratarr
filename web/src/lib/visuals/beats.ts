@@ -1,6 +1,7 @@
 // A track's beats (decision 0046): every beat's time and how strongly it starts, from the track's analysis on the
 // server, which works them out the first time they are asked for (about a second). Read once per track and kept while
 // the page is open; the visuals ask for the playing track's and the next one's.
+import { PLAYING, askAnalysis } from '../analysisAsks';
 import { asksSignIn, toSignIn } from '../reach.svelte';
 
 export type Beats = {
@@ -34,7 +35,7 @@ const kept = new Map<string, Beats | null>();
 const asking = new Map<string, { at: number; tries: number; busy: boolean }>();
 
 /** A track's beats: undefined while they are asked for, null where it has none (no tempo, or not a file Cratarr keeps). */
-export function beatsOf(source: string, id: string): Beats | null | undefined {
+export function beatsOf(source: string, id: string, rank = PLAYING): Beats | null | undefined {
   const key = `${source}/${id}`;
   if (kept.has(key)) return kept.get(key);
   const now = performance.now();
@@ -49,7 +50,7 @@ export function beatsOf(source: string, id: string): Beats | null | undefined {
   const done = () => asking.set(key, { at: performance.now(), tries, busy: false });
   // `b`: Beat this!'s beats may replace the analysis' own (decision 0049, amended); a browser keeps the older ones,
   // kept a month, under the older address.
-  fetch(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/beats?b=2`)
+  askAnalysis(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/beats?b=2`, rank)
     .then(async (r) => {
       if (asksSignIn(r)) toSignIn();
       if (r.ok) kept.set(key, decode(await r.arrayBuffer()));

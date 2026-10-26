@@ -2,6 +2,7 @@
 // once per track (the browser keeps it a month, with an ETag) and kept here while the page is open. Undefined while it
 // loads, null where the track has none (not analysed yet, or its server is not Cratarr's own).
 
+import { AGAIN_MS, BUSY, TRIES, WAVE, askAnalysis } from './analysisAsks';
 import { asksSignIn, toSignIn } from './reach.svelte';
 import { BANDCAMP } from './bandcampPreview';
 import { binFrames, frames, scaled } from './mp3Frames';
@@ -89,7 +90,11 @@ async function analyse(key: string, url: string) {
   return scaled(rms);
 }
 
-/** Reads a track's waveform, once; a Bandcamp preview's is worked out here. */
+/** How often each track's waveform found the server busy. */
+const busyTries = new Map<string, number>();
+
+/** Reads a track's waveform, once; a Bandcamp preview's is worked out here. The server busy, asked again a little later
+ *  (lib/analysisAsks), not taken as none. */
 export function loadWaveform(source: string, id: string) {
   const key = `${source}/${id}`;
   if (!asked.has(key) && source === BANDCAMP) {
@@ -104,9 +109,15 @@ export function loadWaveform(source: string, id: string) {
   if (!asked.has(key)) {
     asked.add(key);
     loading[key] = 0;
-    fetch(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/waveform`)
+    askAnalysis(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/waveform`, WAVE)
       .then((r) => {
         if (asksSignIn(r)) toSignIn();
+        const tries = (busyTries.get(key) ?? 0) + 1;
+        if (r.status === BUSY && tries < TRIES) {
+          busyTries.set(key, tries);
+          setTimeout(() => loadWaveform(source, id), AGAIN_MS);
+          throw new Error('busy');
+        }
         return r.ok ? readAll(r, (share) => (loading[key] = share)) : null;
       })
       .then(
