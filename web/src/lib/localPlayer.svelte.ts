@@ -141,7 +141,15 @@ export function losslessAs(): 'opus' | 'aac' | null {
   return null;
 }
 // What this browser's player takes, once per page in its log (the iPhone's tracks that would not play, 2026-10-26).
-if (Source) playback('info', 'formats', { managed: !!Managed, flac: Source.isTypeSupported(MP4), opus: Source.isTypeSupported(OPUS), aac: Source.isTypeSupported(AAC), mp3: Source.isTypeSupported(MPEG) });
+if (Source)
+  playback('info', 'formats', {
+    managed: !!Managed,
+    flac: Source.isTypeSupported(MP4),
+    opus: Source.isTypeSupported(OPUS),
+    aac: Source.isTypeSupported(AAC),
+    alac: Source.isTypeSupported('audio/mp4; codecs="alac"'),
+    mp3: Source.isTypeSupported(MPEG),
+  });
 
 const audio = typeof Audio === 'undefined' || !canPlayHere || inApp ? null : new Audio();
 // Safari opens a managed stream only for an element that cannot be sent to AirPlay (the stream cannot go there).
@@ -366,7 +374,14 @@ async function appendTrack(index: number, from: number, gen: number) {
       sb.appendWindowEnd = Infinity;
       sb.appendWindowStart = Math.max(0, streamEnd);
       if (length !== null) sb.appendWindowEnd = start + length;
-      sb.timestampOffset = start - skip / rate;
+      // At a stream's start an MP3's encoder delay would put its offset below 0. Lead (a5's measure, 2026-10-26): the
+      // iPhone's four MP3s that stalled all carry a LAME/Info header (a delay), the one that played none; iOS's
+      // ManagedMediaSource may not take a negative offset in sequence mode. From 0 there (a few ms of the encoder's
+      // silence at a fresh stream's start; joins between tracks keep their gapless trim), and what was set in the log.
+      const offset = start - skip / rate;
+      sb.timestampOffset = kind === MPEG ? Math.max(0, offset) : offset;
+      if (kind === MPEG)
+        playback('info', 'mp3 placed', { index, rate, skip, offset: Math.round(offset * 1000) / 1000, set: Math.round(sb.timestampOffset * 1000) / 1000, from: sb.appendWindowStart, to: Number.isFinite(sb.appendWindowEnd) ? Math.round(sb.appendWindowEnd * 10) / 10 : null });
       segment.length = length;
       segments.push(segment);
       placedSegment = segment;
