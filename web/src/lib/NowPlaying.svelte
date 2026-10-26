@@ -1176,7 +1176,7 @@
   }
 
   /* Play/pause in Finamp's shape: a rounded square (a quarter of its size as radius), tinted with the text colour,
-     its icon lifted by a soft shadow. Previous and next are plain icons. */
+     its icon lifted by a soft shadow (not on a weak chip, below). Previous and next are plain icons. */
   .transport button.main {
     position: relative;
     width: 62px;
@@ -1238,7 +1238,8 @@
     }
   }
 
-  .transport button.main :global(svg) {
+  /* Its icon lifted by a soft shadow, but not on a weak graphics chip (lib/gpu: the tablet's Mali drew specks around it). */
+  :global(:root:not([data-gpu='lite'])) .transport button.main :global(svg) {
     filter: drop-shadow(0 2px 1px color-mix(in srgb, var(--text) 25%, transparent));
   }
 
@@ -1333,11 +1334,14 @@
     position: relative;
   }
 
+  /* Centred by a box wider than the button, not by a half-width shift: a shift by a fraction of a pixel had the tablet's
+     Mali draw specks around it (the owner's tablet, 2026-10-26, as the play icon's drop-shadow did; lib/gpu). */
   .act.labelled small {
     position: absolute;
     top: calc(100% - 4px);
-    left: 50%;
-    transform: translateX(-50%);
+    left: -40px;
+    right: -40px;
+    text-align: center;
     color: var(--muted);
     font-size: 0.7rem;
     font-variant-numeric: tabular-nums;

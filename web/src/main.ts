@@ -2,9 +2,11 @@ import { mount } from 'svelte';
 import './app.css';
 import App from './App.svelte';
 import { enterCloses } from './lib/enterCloses';
+import { markGpu } from './lib/gpu';
 import { inputWay } from './lib/inputWay';
 import { watchForUpdates } from './lib/update.svelte';
 
+markGpu();
 export default mount(App, { target: document.getElementById('app')! });
 
 enterCloses();
