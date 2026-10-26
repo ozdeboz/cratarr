@@ -440,11 +440,11 @@ async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: 
                 return Err(e);
             }
             let n = spool.items.len();
-            let partial = (spool.items, Vec::new());
+            let partial: Vec<Scrobble> = spool.items;
             let (serve, account) = (serve.clone(), account.to_string());
             tokio::task::spawn_blocking(move || -> Result<Tally> {
                 let songs = Matcher::read(&Path::new(&dir).join("library.sqlite"))?;
-                let listens: Vec<Listened> = partial.0.iter().map(|s| Listened { track: track(s), at: s.at, event: event(s) }).collect();
+                let listens: Vec<Listened> = partial.iter().map(|s| Listened { track: track(s), at: s.at, event: event(s) }).collect();
                 into_history(&serve, &songs, &account, CONTEXT, "Last.fm", &listens, false)
             })
             .await??;
