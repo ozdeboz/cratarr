@@ -41,9 +41,39 @@ pub fn closeness(text: &str, words: &[String]) -> u8 {
     }
 }
 
+/// How much of a name the words make up (0.9.7, the owner: "player" is all of a setting called Player, a small part
+/// of a long track title): their letters over the name's, at most 1.
+pub fn coverage(text: &str, words: &[String]) -> f32 {
+    let name: usize = self::words(text).iter().map(|w| w.chars().count()).sum();
+    let asked: usize = words.iter().map(|w| w.chars().count()).sum();
+    if name == 0 { 0.0 } else { (asked as f32 / name as f32).min(1.0) }
+}
+
+/// A result's rank within its group (0.9.7), higher first: a direct hit (its own name holds every word) before any
+/// found through what it holds; among direct hits the closer (`closeness`), then the more of its name the words make
+/// up (`coverage`); then the place its source gave it (`at` of `of`).
+pub fn rank(text: &str, words: &[String], at: usize, of: usize) -> f32 {
+    let close = closeness(text, words);
+    let covered = if close > 0 { 0.9 * coverage(text, words) } else { 0.0 };
+    f32::from(close) + covered + 0.09 * (1.0 - at as f32 / of.max(1) as f32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_direct_hit_ranks_first_then_the_closer_then_the_more_of_its_name() {
+        let w = words("player");
+        let setting = rank("Player", &w, 4, 5);
+        let long = rank("The Player of the Long Night Remastered", &w, 0, 5);
+        let deep = rank("Night Songs", &w, 0, 5);
+        assert!(setting > long, "all of its name before a small part, whatever the order given");
+        assert!(long > deep, "a direct hit before one found through what it holds");
+        assert!(rank("Players", &w, 0, 5) < setting, "a start ranks below the whole word");
+        assert!((coverage("Player", &w) - 1.0).abs() < f32::EPSILON);
+        assert_eq!(coverage("", &w), 0.0);
+    }
 
     #[derive(serde::Deserialize)]
     struct Example {

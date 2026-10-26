@@ -221,6 +221,10 @@ pub struct Hit {
     pub count: Option<u32>,
 }
 
+/// Search asks the index for this many times what it shows (0.9.7), at most `WIDEST`, and ranks them before the cut.
+const WIDER: usize = 4;
+const WIDEST: usize = 200;
+
 impl Library {
     /// Fills songs' artists and album artists (OpenSubsonic's lists).
     fn song_artists(&self, db: &Connection, songs: &mut [Song]) -> Result<()> {
@@ -493,9 +497,23 @@ impl Library {
         let Some(fq) = crate::search::fts(words) else { return Ok(Found::default()) };
         let db = self.db();
         let lim = limit as i64;
+        // More asked of the index than are shown (0.9.7): ranked here (`search::rank`, a direct hit first) before the
+        // cut, so one found by its artist or album cannot push one named by the words out of the first `limit`.
+        let wide = (limit * WIDER).clamp(limit, WIDEST) as i64;
+        let ranked = |names: Vec<&str>| -> Vec<usize> {
+            let n = names.len();
+            let mut order: Vec<(usize, f32)> = names.iter().enumerate().map(|(i, name)| (i, crate::search::rank(name, words, i, n))).collect();
+            order.sort_by(|a, b| b.1.total_cmp(&a.1));
+            order.into_iter().take(limit).map(|(i, _)| i).collect()
+        };
+        fn pick<T: Clone>(list: &[T], order: &[usize]) -> Vec<T> {
+            order.iter().map(|&i| list[i].clone()).collect()
+        }
         // Albums by themselves, the name counting most; then those found only by a track's title.
-        let own = numbers(&db, "SELECT rowid FROM albums_fts WHERE albums_fts MATCH ?1 ORDER BY bm25(albums_fts, 10.0, 2.0) LIMIT ?2", &[&fq, &lim])?;
-        let mut albums: Vec<(Album, Hit)> = by_numbers(&db, "albums", ALBUM_COLS, "a", &own, album_of)?
+        let own = numbers(&db, "SELECT rowid FROM albums_fts WHERE albums_fts MATCH ?1 ORDER BY bm25(albums_fts, 10.0, 2.0) LIMIT ?2", &[&fq, &wide])?;
+        let listed = by_numbers(&db, "albums", ALBUM_COLS, "a", &own, album_of)?;
+        let listed = pick(&listed, &ranked(listed.iter().map(|a| a.name.as_str()).collect()));
+        let mut albums: Vec<(Album, Hit)> = listed
             .into_iter()
             .map(|a| {
                 let on = if crate::search::matches(&a.name, words) { "name" } else { "artist" };
@@ -533,16 +551,19 @@ impl Library {
         self.album_artists(&db, &mut list)?;
         let albums: Vec<(Album, Hit)> = list.into_iter().zip(hits).collect();
         // Artists by their name; then those found only by an album's name.
-        let own = numbers(&db, "SELECT rowid FROM artists_fts WHERE artists_fts MATCH ?1 ORDER BY bm25(artists_fts) LIMIT ?2", &[&fq, &lim])?;
+        let own = numbers(&db, "SELECT rowid FROM artists_fts WHERE artists_fts MATCH ?1 ORDER BY bm25(artists_fts) LIMIT ?2", &[&fq, &wide])?;
         let mut artists: Vec<(Artist, Hit)> = Vec::new();
         {
             let mut st = db.prepare_cached("SELECT id, name, mbid, album_count, order_name FROM artists WHERE n = ?1")?;
+            let mut listed: Vec<Artist> = Vec::new();
             for n in own {
                 if let Some(a) = st.query_map([n], artist_of)?.next() {
-                    let a = a?;
-                    let text = a.name.clone();
-                    artists.push((a, Hit { on: "name", text, count: None }));
+                    listed.push(a?);
                 }
+            }
+            for a in pick(&listed, &ranked(listed.iter().map(|a| a.name.as_str()).collect())) {
+                let text = a.name.clone();
+                artists.push((a, Hit { on: "name", text, count: None }));
             }
         }
         let name_q = format!("name : ({fq})");
@@ -570,8 +591,9 @@ impl Library {
         }
         // Tracks, the title counting most.
         totals.tracks = count("SELECT count(*) FROM songs_fts WHERE songs_fts MATCH ?1", &[&fq])?;
-        let ns = numbers(&db, "SELECT rowid FROM songs_fts WHERE songs_fts MATCH ?1 ORDER BY bm25(songs_fts, 10.0, 2.0, 1.0) LIMIT ?2", &[&fq, &lim])?;
-        let mut tracks = by_numbers(&db, "songs", SONG_COLS, "s", &ns, song_of)?;
+        let ns = numbers(&db, "SELECT rowid FROM songs_fts WHERE songs_fts MATCH ?1 ORDER BY bm25(songs_fts, 10.0, 2.0, 1.0) LIMIT ?2", &[&fq, &wide])?;
+        let listed = by_numbers(&db, "songs", SONG_COLS, "s", &ns, song_of)?;
+        let mut tracks = pick(&listed, &ranked(listed.iter().map(|t| t.title.as_str()).collect()));
         self.song_artists(&db, &mut tracks)?;
         // Genres, by their name.
         let mut st = db.prepare_cached("SELECT name, song_count FROM genres")?;
@@ -580,7 +602,8 @@ impl Library {
             .filter_map(Result::ok)
             .filter(|(g, _)| crate::search::matches(g, words))
             .collect();
-        genres.sort_by(|a, b| crate::search::closeness(&b.0, words).cmp(&crate::search::closeness(&a.0, words)).then(b.1.cmp(&a.1)));
+        // Ranked as the rest (a direct hit, closeness, then how much of the name), the most played among equals.
+        genres.sort_by(|a, b| crate::search::rank(&b.0, words, 0, 1).total_cmp(&crate::search::rank(&a.0, words, 0, 1)).then(b.1.cmp(&a.1)));
         totals.genres = genres.len();
         genres.truncate(limit);
         Ok(Found { albums, artists, tracks, genres, totals })
