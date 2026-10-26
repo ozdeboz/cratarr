@@ -14,6 +14,7 @@ export const BACKDROPS = [
   { value: 'amplifier', label: 'Amplifier' },
   { value: 'records', label: 'Records' },
   { value: 'checks', label: 'Checks' },
+  { value: 'clock', label: 'Clock' },
 ] as const;
 
 /** A photo of Cratarr's, whole against the page (a relative url() would resolve against a stylesheet's place). */
