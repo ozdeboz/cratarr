@@ -154,6 +154,13 @@ const PENDING: i64 = 0;
 const READ: i64 = 1;
 const FAILED: i64 = 2;
 
+/// The files the library serves (0.9.7): those read, and those changed since they were read, with what was read of
+/// them until they are read again (an album being retagged no longer leaves the library meanwhile; the owner,
+/// 2026-10-26). `alias` is the files table's, with its dot ("f.") or none.
+fn served(alias: &str) -> String {
+    format!("({alias}state = {READ} OR ({alias}state = {PENDING} AND {alias}format IS NOT NULL))")
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Progress {
     /// What the background pass is doing now, if anything: "walking", "reading tags", "linking <server>".
@@ -342,6 +349,8 @@ pub struct Catalogue {
     progress: Mutex<Progress>,
     /// Asks the background loop for a pass now (settings changed, a playlist was edited…).
     poke: tokio::sync::Notify,
+    /// Told when files were read again outside a pass (`reread`): the library is built from them at once.
+    reread: tokio::sync::Notify,
     /// The crates' facts, as of the database's change count and the folders in use (see `crate_facts`).
     facts: Mutex<Option<(u64, Vec<PathBuf>, i64, Arc<Vec<crate::crates::Facts>>)>>,
     /// The database file, for readers with their own connection (`reader`); `None` in memory.
@@ -382,6 +391,7 @@ impl Catalogue {
             folders: RwLock::new(Vec::new()),
             progress: Mutex::default(),
             poke: Default::default(),
+            reread: Default::default(),
             facts: Mutex::default(),
             file: file.map(Path::to_path_buf),
         };
@@ -634,6 +644,51 @@ impl Catalogue {
             let mut st = db.prepare(&format!("SELECT folder, rel FROM files WHERE state = ?1 AND {PRESENT} LIMIT ?2"))?;
             st.query_map(params![PENDING, n as i64], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
         };
+        self.read_tags(todo)
+    }
+
+    /// Files Cratarr wrote itself (0.9.7: Renumber, a cover set or uploaded or undone, a tempo; the owner, 2026-10-26),
+    /// read again now rather than at the next pass: each one's new size and time noted, its analysis and beats carried
+    /// over (their audio is as it was), its tags read; then the library is told to build at once. Files the catalogue
+    /// does not know are left to the pass. How many were read. Blocking.
+    pub fn reread(&self, paths: &[PathBuf]) -> Result<usize> {
+        let folders = self.folders();
+        let mut todo = Vec::new();
+        for path in paths {
+            let Some((folder, rel)) = folders.iter().enumerate().find_map(|(i, root)| {
+                let rel = path.strip_prefix(root).ok()?;
+                let rel: Vec<&str> = rel.components().filter_map(|c| c.as_os_str().to_str()).collect();
+                (!rel.is_empty()).then(|| (i as i64, rel.join("/")))
+            }) else {
+                continue;
+            };
+            let Ok(meta) = std::fs::metadata(path) else { continue };
+            let after = (meta.len(), meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs() as i64));
+            let before: Option<(i64, i64)> = self
+                .db()
+                .query_row("SELECT size, mtime FROM files WHERE folder = ?1 AND rel = ?2", params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?)))
+                .optional()?;
+            let Some(before) = before else { continue };
+            if (before.0 as u64, before.1) != after {
+                self.carry_over(folder, &rel, (before.0 as u64, before.1), after)?;
+            }
+            todo.push((folder, rel));
+        }
+        let read = self.read_tags(todo)?;
+        if read > 0 {
+            self.progress.lock().unwrap_or_else(|p| p.into_inner()).last_pass = Some(now());
+            self.reread.notify_one();
+        }
+        Ok(read)
+    }
+
+    /// Files were read again outside a pass (`reread`).
+    pub async fn reread_done(&self) {
+        self.reread.notified().await;
+    }
+
+    /// The tags of these files read, and kept. How many were handled. Blocking.
+    fn read_tags(&self, todo: Vec<(i64, String)>) -> Result<usize> {
         let folders = self.folders();
         // Read outside the lock: this is the slow part.
         let results: Vec<(i64, String, Result<(tags::FileTags, Option<(tags::Issue, String)>)>)> = todo
@@ -1522,10 +1577,9 @@ impl Catalogue {
     // `analysis::VERSION`, waits to be analysed again (`unanalysed`). It follows its file through moves, a parked
     // folder and the trash, as the tags do.
 
-    /// A file Cratarr rewrote itself (its tags; crate::retag), its audio untouched: its analysis and beats are carried
-    /// over to it (they are tied to the file's size and time) and its tags read again on the next pass, started now.
-    /// Blocking.
-    pub fn retagged(&self, folder: i64, rel: &str, before: (u64, i64), after: (u64, i64)) -> Result<()> {
+    /// A file's analysis and beats carried over to its new size and time (its audio as it was), and the file noted as
+    /// changed, its tags to read again. Blocking.
+    fn carry_over(&self, folder: i64, rel: &str, before: (u64, i64), after: (u64, i64)) -> Result<()> {
         let db = self.db();
         for table in ["analysis", "beat_this"] {
             db.execute(
@@ -1534,8 +1588,6 @@ impl Catalogue {
             )?;
         }
         db.execute("UPDATE files SET size = ?3, mtime = ?4, state = 0 WHERE folder = ?1 AND rel = ?2", params![folder, rel, after.0 as i64, after.1])?;
-        drop(db);
-        self.poke();
         Ok(())
     }
 
@@ -2113,9 +2165,10 @@ pub fn served_rows(db: &Connection, folder: i64) -> Result<Vec<ServedRow>> {
     let mut index: HashMap<String, usize> = HashMap::new();
     let mut st = db.prepare(&format!(
         "SELECT f.rel, f.track, t.born, f.format, f.bitrate, f.duration_ms, f.size, f.mtime
-         FROM files f LEFT JOIN tracks t ON t.id = f.track WHERE f.folder = ?1 AND {PRESENT} AND f.state = ?2"
+         FROM files f LEFT JOIN tracks t ON t.id = f.track WHERE f.folder = ?1 AND {PRESENT} AND {}",
+        served("f.")
     ))?;
-    let files = st.query_map(params![folder, READ], |r| {
+    let files = st.query_map(params![folder], |r| {
         Ok(ServedRow {
             rel: r.get(0)?,
             track: r.get(1)?,
@@ -2324,10 +2377,11 @@ pub fn album_gains(db: &Connection, folder: i64) -> Result<HashMap<String, (f32,
         "SELECT f.rel, {ANALYSIS_COLS} FROM files f
            LEFT JOIN analysis a ON a.folder = f.folder AND a.rel = f.rel AND a.size = f.size AND a.mtime = f.mtime
            {SHAPE_JOIN}
-         WHERE {PRESENT_F} AND f.folder = ?1 AND f.state = ?2"
+         WHERE {PRESENT_F} AND f.folder = ?1 AND {}",
+        served("f.")
     ))?;
     let mut dirs: HashMap<String, Option<Vec<crate::analysis::Analysis>>> = HashMap::new();
-    let rows = st.query_map(params![folder, READ], |r| {
+    let rows = st.query_map(params![folder], |r| {
         let rel: String = r.get(0)?;
         // The version: NULL where the file has no analysis (the LEFT JOIN).
         let has: Option<i64> = r.get(1)?;
@@ -2358,14 +2412,20 @@ pub fn album_gains(db: &Connection, folder: i64) -> Result<HashMap<String, (f32,
 
 /// See `Catalogue::served_fingerprint`; any connection to the catalogue's file.
 pub fn served_fingerprint(db: &Connection) -> Result<String> {
-    let (n, size, mtime, tracks, folders): (i64, f64, f64, f64, f64) = db.query_row(
-        &format!("SELECT count(*), total(size), total(mtime), total(track), total(folder) FROM files WHERE {PRESENT} AND state = ?1"),
-        [READ],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+    // How many are read counts too: a file changed (served as it was read) and then read again has the same size and
+    // time, and its new tags are to be built.
+    let (n, size, mtime, tracks, folders, read): (i64, f64, f64, f64, f64, i64) = db.query_row(
+        &format!(
+            "SELECT count(*), total(size), total(mtime), total(track), total(folder), count(CASE WHEN state = {READ} THEN 1 END)
+             FROM files WHERE {PRESENT} AND {}",
+            served("")
+        ),
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
     )?;
     // New analyses build the library again too (their gains and tempi are the songs').
     let (analysed, at): (i64, f64) = db.query_row("SELECT count(*), total(analysed_at) FROM analysis", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
-    Ok(format!("{n}/{size}/{mtime}/{tracks}/{folders} analysis {analysed}/{at}"))
+    Ok(format!("{n}/{size}/{mtime}/{tracks}/{folders}/{read} analysis {analysed}/{at}"))
 }
 
 #[cfg(test)]
@@ -2567,7 +2627,32 @@ mod tests {
     }
 
     #[test]
-    fn a_file_cratarr_retagged_keeps_its_analysis_and_is_read_again() {
+    fn a_changed_file_is_served_as_it_was_read_until_it_is_read_again() {
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        let folder = cat.unanalysed(10).unwrap()[0].0;
+        let before = cat.served_fingerprint().unwrap();
+        let rows = cat.served_rows(folder).unwrap();
+        let one = rows.iter().find(|r| r.rel.ends_with("One.mp3")).unwrap().rel.clone();
+        cat.db().execute("UPDATE files SET format = 'mp3' WHERE format IS NULL", []).unwrap();
+        // Changed on disk (Cratarr's own write, or another's): waiting to be read, served as it was.
+        std::fs::write(d.join(&one), b"its tags written again").unwrap();
+        cat.walk_all();
+        let state: i64 = cat.db().query_row("SELECT state FROM files WHERE rel = ?1", [&one], |r| r.get(0)).unwrap();
+        assert_eq!(state, PENDING);
+        assert!(cat.served_rows(folder).unwrap().iter().any(|r| r.rel == one), "still served");
+        let pending = cat.served_fingerprint().unwrap();
+        assert_ne!(pending, before, "its new size is the library's to build");
+        // Read again as it is now: the same size and time, but read, so built again with its new tags.
+        cat.db().execute("UPDATE files SET state = ?1 WHERE rel = ?2", params![READ, one]).unwrap();
+        assert_ne!(cat.served_fingerprint().unwrap(), pending, "its new tags are the library's to build");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_reread_reads_cratarrs_own_write_at_once() {
         let d = music();
         let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
         cat.walk_all();
@@ -2575,16 +2660,13 @@ mod tests {
         let (folder, one, path, size, mtime) = cat.unanalysed(10).unwrap().into_iter().find(|t| t.1.ends_with("One.mp3")).unwrap();
         cat.store_analysis(folder, &one, size, mtime, &an_analysis(-3.0, 500)).unwrap();
         std::fs::write(&path, b"its tags written again, its audio as it was").unwrap();
-        let m = std::fs::metadata(&path).unwrap();
-        let after = (m.len(), m.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64);
-        cat.retagged(folder, &one, (size, mtime), after).unwrap();
-        assert_eq!(cat.analysis_of(folder, &one).unwrap().bpm, Some(120.0), "carried over");
-        let state: i64 = cat.db().query_row("SELECT state FROM files WHERE folder = ?1 AND rel = ?2", params![folder, one], |r| r.get(0)).unwrap();
-        assert_eq!(state, PENDING, "its tags are read again");
-        cat.walk_all();
-        read_as_audio(&cat);
-        assert!(cat.analysis_of(folder, &one).is_some(), "the walk finds it as it is");
-        assert!(cat.unanalysed(10).unwrap().iter().all(|t| t.1 != one), "not analysed again");
+        assert_eq!(cat.reread(&[path.clone(), d.join("not known.mp3")]).unwrap(), 1, "the file the catalogue knows");
+        let (state, size_now): (i64, i64) =
+            cat.db().query_row("SELECT state, size FROM files WHERE folder = ?1 AND rel = ?2", params![folder, one], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_ne!(state, PENDING, "read now, not at the next pass");
+        assert_eq!(size_now as u64, std::fs::metadata(&path).unwrap().len());
+        assert!(cat.analysis_of(folder, &one).is_some(), "its analysis carried over");
+        assert!(cat.last_pass().is_some(), "the library builds from it");
         std::fs::remove_dir_all(&d).ok();
     }
 

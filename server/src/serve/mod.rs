@@ -333,6 +333,16 @@ impl Serve {
         Ok(true)
     }
 
+    /// Files Cratarr wrote itself (0.9.7: Renumber, a cover, a tempo), read again now, and the library built from them
+    /// at once: an album shows its change in seconds, not at the next pass. Where that fails, the next pass reads them.
+    /// Blocking.
+    pub fn reread(&self, paths: &[PathBuf]) {
+        if let Err(e) = self.catalogue().reread(paths) {
+            tracing::warn!(target: "library", reason = %format!("{e:#}"), "written files not read again at once");
+            self.catalogue().poke();
+        }
+    }
+
     /// Every album's cover stamp (0.9.7): the page puts it on each cover's address, which may then be kept for good.
     pub fn cover_stamps(&self) -> Arc<std::collections::HashMap<String, String>> {
         if let Some(s) = self.stamps.read().unwrap_or_else(|p| p.into_inner()).as_ref() {
@@ -391,7 +401,12 @@ impl Serve {
                     Ok(Ok(_)) => {}
                 }
                 first = false;
-                tokio::time::sleep(CHECK_EVERY).await;
+                // Files Cratarr wrote and read again at once (`reread`) are built without waiting for the next check.
+                let cat = me.catalogue().clone();
+                tokio::select! {
+                    _ = tokio::time::sleep(CHECK_EVERY) => {}
+                    _ = cat.reread_done() => {}
+                }
             }
         });
     }

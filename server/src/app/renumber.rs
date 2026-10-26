@@ -497,12 +497,12 @@ pub async fn apply(album: &str, asked: Asked) -> Result<String> {
                 tracing::warn!("renumber: {}: {e:#}", path.display());
             }
         }
+        if let Some(served) = crate::serve::instance() {
+            served.reread(&before.tracks.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>());
+        }
         Ok(format!("{UNDO}{id}"))
     })
     .await??;
-    if let Some(served) = crate::serve::instance() {
-        served.catalogue().poke();
-    }
     Ok(token)
 }
 
@@ -518,12 +518,12 @@ pub async fn undo(token: &str) -> Result<()> {
             }
         }
         std::fs::remove_file(&file).ok();
+        if let Some(served) = crate::serve::instance() {
+            served.reread(&before.tracks.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>());
+        }
         Ok(())
     })
     .await??;
-    if let Some(served) = crate::serve::instance() {
-        served.catalogue().poke();
-    }
     Ok(())
 }
 
