@@ -206,6 +206,8 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             .put("radioCount", Radio.count(context))
             .put("skipFavourites", SkipFavourites.on(context))
             .put("autoplay", Autoplay.json(context))
+            // What levelling turns the playing track down by (0.9.8, the Level button): 0 when off.
+            .put("levelDb", Levelling.appliedDb)
         if (withQueue) out.put("queue", queueOf(c))
         send(out.toString())
     }

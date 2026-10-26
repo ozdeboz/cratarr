@@ -27,6 +27,10 @@ object Levelling {
     @Volatile var factor = 1f
         private set
 
+    /** What that turns the track down by, in dB (0 or less; 0 when off): the page shows it (0.9.8). */
+    val appliedDb: Double
+        get() = if (factor >= 1f) 0.0 else Math.round(20.0 * kotlin.math.log10(factor.toDouble()) * 100.0) / 100.0
+
     private val gains = LruCache<String, JSONObject>(1000)
     private val asks = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
@@ -70,11 +74,12 @@ object Levelling {
     }
 
     private fun set(g: JSONObject, albumWise: Boolean, apply: () -> Unit) {
-        val gain = (if (albumWise) g.optDouble("albumGain", Double.NaN) else Double.NaN).takeUnless { it.isNaN() }
-            ?: g.optDouble("trackGain", Double.NaN).takeUnless { it.isNaN() } ?: UNKNOWN_DB
-        val peak = (if (albumWise) g.optDouble("albumPeak", Double.NaN) else Double.NaN).takeUnless { it.isNaN() }
-            ?: g.optDouble("trackPeak", Double.NaN).takeUnless { it.isNaN() } ?: 1.0
-        val f = min(min(10.0.pow(gain / 20.0), if (peak > 0) 1.0 / peak else 1.0), 1.0).toFloat()
+        // The dB Cratarr says to turn it down by (0.9.8: the rule kept on the server, the page shows the same); a
+        // track not measured gets a typical one.
+        fun down(key: String) = if (g.isNull(key)) Double.NaN else g.optDouble(key, Double.NaN)
+        val db = (if (albumWise) down("albumDown") else Double.NaN).takeUnless { it.isNaN() }
+            ?: down("trackDown").takeUnless { it.isNaN() } ?: UNKNOWN_DB
+        val f = min(10.0.pow(db / 20.0), 1.0).toFloat()
         if (f != factor) {
             factor = f
             apply()
