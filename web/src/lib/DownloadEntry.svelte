@@ -2,15 +2,30 @@
   // Download once, in a menu (the owner, 2026-10-24): a one-time copy on this device, as against Sync to this device
   // (decision 0038), which follows the item. The menu stays open and the row itself fills as the tracks come in, its
   // label counting them ("Downloading 3 of 12"); opened again later, it shows the same. Some tracks failed: Retry; some
-  // not there yet: the rest; all there: no row (Remove from this device stays last in the menu).
+  // not there yet: the rest; all there: no row (Remove from this device stays last in the menu). In the installed page
+  // (0.9.8, lib/offline) the same, kept in this browser, and all there: Remove from this browser.
   import { askDownloads, download, downloads, inApp, type Downloadable } from './app.svelte';
+  import { forgetOffline, installed, keepOffline, keyOf, offline } from './offline.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import { plural } from './insights.svelte';
 
   let { tracks }: { tracks: Downloadable[] } = $props();
 
-  // What the app tells of each of them.
-  const on = $derived(new Map(downloads.tracks.map((t) => [`${t.source}/${t.id}`, t.download])));
+  // What the app tells of each of them; in the installed page, what this browser holds and fetches.
+  const pwa = !inApp && installed;
+  type State = { state: 'done' | 'downloading' | 'waiting' | 'failed'; percent?: number | null };
+  const on = $derived(
+    pwa
+      ? new Map<string, State>(
+          tracks.flatMap((t): [string, State][] => {
+            const k = keyOf(t);
+            if (offline.kept[k]) return [[k, { state: 'done' }]];
+            const f = offline.fetching[k];
+            return f ? [[k, { state: f.state, percent: f.percent ?? null }]] : [];
+          }),
+        )
+      : new Map<string, State>(downloads.tracks.map((t) => [`${t.source}/${t.id}`, t.download as State])),
+  );
   const of = $derived(tracks.map((t) => ({ t, d: on.get(`${t.source}/${t.id}`) })));
   const done = $derived(of.filter((x) => x.d?.state === 'done').length);
   const going = $derived(of.filter((x) => x.d?.state === 'downloading' || x.d?.state === 'waiting'));
@@ -26,18 +41,19 @@
   if (inApp) askDownloads();
   // The app tells each track's change; its bytes in between only when asked.
   $effect(() => {
-    if (!coming) return;
+    if (!coming || pwa) return;
     const tick = setInterval(askDownloads, 1500);
     return () => clearInterval(tick);
   });
 
   function get(list: Downloadable[]) {
     asked = true;
-    download(list);
+    if (pwa) void keepOffline(list);
+    else download(list);
   }
 </script>
 
-{#if inApp && tracks.length}
+{#if (inApp || pwa) && tracks.length}
   {#if coming}
     <MenuEntry icon="arrowDownToLine" label={`Downloading ${done} of ${plural(tracks.length, 'track')}`} progress={progress} onclick={() => {}} />
   {:else if failed.length}
@@ -46,5 +62,7 @@
     <MenuEntry icon="arrowDownToLine" label="Download once" onclick={() => get(tracks)} />
   {:else if missing.length}
     <MenuEntry icon="arrowDownToLine" label={`Download the other ${plural(missing.length, 'track')} once`} onclick={() => get(missing)} />
+  {:else if pwa}
+    <MenuEntry icon="trash" label="Remove from this browser" onclick={() => void forgetOffline(tracks)} />
   {/if}
 {/if}

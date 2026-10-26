@@ -10,6 +10,8 @@
   import Item from './Item.svelte';
   import { offerReset } from './reset.svelte';
   import ChoiceSheet from './ChoiceSheet.svelte';
+  import { installed, keptBytes, offline } from '../offline.svelte';
+  import { prefs } from '../prefs.svelte';
 
   const BUDGETS: { value: string; label: string }[] = [
     { value: '20', label: '20 GB' },
@@ -44,6 +46,16 @@
     </Item>
     <Item name="Download over mobile data" toggle={{ checked: appInfo.downloadOverMobile, onchange: (on) => setDevice({ downloadOverMobile: on }) }} />
     <Item name="Only while charging" toggle={{ checked: appInfo.syncOnlyCharging, onchange: (on) => setDevice({ syncOnlyCharging: on }) }} />
+  </Group>
+{/if}
+{#if !inApp && installed}
+  <!-- The installed page's own downloads (0.9.8, lib/offline): what it holds, and in which quality (the owner,
+       2026-10-26: Opus in the options too). -->
+  <Group>
+    <Item name="Kept in this browser" value={`${Object.keys(offline.kept).length} tracks · ${downloadedSize(keptBytes())}`} />
+    <Item name="Quality" more="Smaller copies: Cratarr makes Opus copies of lossless files (AAC where this browser plays no Opus), about a fifth of the size; lossy files come as they are. Originals: the files as they are, where this browser plays them.">
+      <Seg label="Quality" options={QUALITY} bind:value={() => prefs.offlineQuality, (v) => (prefs.offlineQuality = v)} />
+    </Item>
   </Group>
 {/if}
 {#if choosingStorage}

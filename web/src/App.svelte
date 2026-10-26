@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { installed } from './lib/offline.svelte';
   import { backdropUrl } from './lib/backdrop.svelte';
   import Playlists from './Playlists.svelte';
   import LinkSheet from './lib/LinkSheet.svelte';
@@ -766,7 +767,7 @@
   // Health is the library's, so its administrators' (decision 0051). In Local mode, Settings only.
   const mayRequest = $derived(me.admin || me.permissions.request || me.permissions.manage_requests);
   const APART: Page[] = $derived(
-    localMode() ? [SETTINGS] : [...(mayRequest ? [REQUESTS] : []), ...(inApp ? [DOWNLOADS] : []), INSIGHTS, ...(me.admin ? [HEALTH] : []), SETTINGS],
+    localMode() ? [SETTINGS] : [...(mayRequest ? [REQUESTS] : []), ...(inApp || installed ? [DOWNLOADS] : []), INSIGHTS, ...(me.admin ? [HEALTH] : []), SETTINGS],
   );
   // The global search finds the pages shown and their parts, and Settings' (lib/everywhere).
   provideEverywhere(() => [...MAIN, ...APART]);
@@ -874,7 +875,7 @@
     {:else if page === 'health' && !me.known}
       <!-- Whether they may see it is not known yet: not another page first. -->
       <PageLoading />
-    {:else if page === 'downloads' && inApp}
+    {:else if page === 'downloads' && (inApp || installed)}
       <Downloads />
     {:else if page === 'library'}
       <Library />

@@ -18,6 +18,11 @@ const KEPT_AFTER_MS = 4000;
 const KEPT = /^\/api\/(?:(?:albums|playlists|crates|artists|home|library|discover|insights|history|favorites|excluded|me|requests|visuals)(?:\/|$)|covers\/stamps$|cover\/|track\/[^/]+\/[^/]+\/waveform$)/;
 const NEVER = /^\/api\/(events|players|player|state|tasks|auth|health|status|time|stream|file|preview|catalogue|diagnostics|search)/;
 const ALBUM_COVER = /^\/api\/albums\/[^/]+\/[^/]+\/cover$/;
+// Tracks kept for offline play in the installed page (0.9.8, lib/offline): each one's stream, whole from its start, under
+// the track's address alone. The player's own stream request for it is answered from there, whatever position or form it
+// asks (the player cuts what lies before the position); the page's fetch of the whole copy (?whole=1) passes.
+const OFFLINE = 'cratarr-offline';
+const STREAM = /^\/api\/stream\/[^/]+\/[^/]+$/;
 
 /** Keeps every file of the build that is not kept yet, and lets go of those of earlier builds. */
 async function keepTheApp() {
@@ -60,7 +65,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== COVERS && k !== DATA).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== COVERS && k !== DATA && k !== OFFLINE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
@@ -172,6 +177,10 @@ self.addEventListener('fetch', (event) => {
     }
     event.waitUntil(fresh.catch(() => {}));
     event.respondWith(caches.match(req).then((hit) => hit || fresh));
+    return;
+  }
+  if (STREAM.test(url.pathname) && url.searchParams.get('whole') !== '1') {
+    event.respondWith(caches.match(url.pathname, { cacheName: OFFLINE }).then((hit) => hit || fetch(req)));
     return;
   }
   if (ALBUM_COVER.test(url.pathname)) {

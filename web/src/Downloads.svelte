@@ -14,10 +14,14 @@
   import { DOWNLOADS, downloadsOf, panel, viewPlaylist } from './lib/panel.svelte';
   import { usePageAction } from './lib/pageView.svelte';
   import { downloadedSize } from './lib/settings/editor.svelte';
+  import BrowserDownloads from './lib/BrowserDownloads.svelte';
 
-  askDownloads();
-  askKept();
-  askDevice();
+  // The app's; the installed page's own are in this browser (lib/offline).
+  if (inApp) {
+    askDownloads();
+    askKept();
+    askDevice();
+  }
   // The Library's list, for what each album is (the kept copy first; without a connection that is all there is).
   if (!library.view) readLibrary(false).catch(() => {});
 
@@ -52,7 +56,10 @@
 </script>
 
 <main>
-  {#if !downloads.known}
+  <!-- The installed page's own (0.9.8, lib/BrowserDownloads); the app's lists below. -->
+  {#if !inApp}
+    <BrowserDownloads />
+  {:else if !downloads.known}
     <PageLoading />
   {:else}
     <section class="group" aria-label="Downloads">

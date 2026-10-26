@@ -4,6 +4,7 @@
   // name, what it is set to now in a line, and ›. A tap opens the part in the panel (lib/SettingsPanel): beside the list
   // on a roomy window, where a part is always open (App: the one last open), its row tinted; over the list on a phone,
   // as a playlist opens. About is a sheet from the info button, the pill's own (App, lib/AboutSheet).
+  import { installed } from './lib/offline.svelte';
   import { panelBeside } from './lib/glass.svelte';
   import { library } from './lib/albums.svelte';
   import { serverConnection } from './lib/connection.svelte';
@@ -197,7 +198,8 @@
     if (words.length) void loadSettingsWords();
   });
   const found = (id: SettingsSection, title: string) => (words.length ? settingsMatches(id, title, words) : null);
-  const allowed = $derived(SECTIONS.filter((x) => (!x.app || inApp) && (!x.admin || me.admin || x.everyone)));
+  // Sync in the installed page too (0.9.8: its own downloads, lib/offline).
+  const allowed = $derived(SECTIONS.filter((x) => (!x.app || inApp || (x.id === 'sync' && installed)) && (!x.admin || me.admin || x.everyone)));
   const shown = $derived(
     words.length
       ? allowed.filter((x) => {

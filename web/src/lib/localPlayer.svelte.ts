@@ -133,7 +133,9 @@ export { isPhone };
 const asOpus = () => isPhone && !prefs.phoneLossless && !!Source?.isTypeSupported(OPUS);
 /** The form a lossless track is asked in: Opus on a phone (above); where this browser takes no FLAC in MP4, Opus if it
  *  takes that, else AAC; else as it is. */
-function losslessAs(): 'opus' | 'aac' | null {
+/** The smaller copy this browser plays: Opus where taken, else AAC; null where neither. */
+export const playsSmaller = (): 'opus' | 'aac' | null => (Source?.isTypeSupported(OPUS) ? 'opus' : Source?.isTypeSupported(AAC) ? 'aac' : null);
+export function losslessAs(): 'opus' | 'aac' | null {
   if (asOpus()) return 'opus';
   if (Source && !Source.isTypeSupported(MP4)) return Source.isTypeSupported(OPUS) ? 'opus' : Source.isTypeSupported(AAC) ? 'aac' : null;
   return null;
