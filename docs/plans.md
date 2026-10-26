@@ -162,6 +162,32 @@ Decided (the owner, 2026-10-24): a playlist's genres come from its tracks' genre
 MusicBrainz's genres, not AudioMuse's styles); the territories are a switch on the Map, off until turned on; the top
 six genres are drawn, each its own colour (the palette's categorical order), the rest no territory.
 
+## 0.9.8: offline in the PWA, levelling you can see, single-track replacement
+
+Agreed by the owner during 0.9.7 (2026-10-26); 0.9.7 went live 2026-10-26 19:58 CET.
+
+- **Downloads in the installed PWA.** The app keeps tracks for offline play (0038); an installed PWA keeps them too, in
+  the browser's own storage, and plays them without the server. Downloads and Offline show them as the app's do.
+  Catches: storage limits per browser (Safari's evicts), a download's stream for the service worker, and what the
+  player does with a kept track when the server is back.
+- **Levelling you can see.** A Level button in the player (Lucide audio-lines), filled by how many dB it turns the
+  track down; a long press opens its sheet. The waveform is drawn as heard, the original a ghost behind it. Levelling
+  only turns down, and it is shown, never given as a number. Shuffle moves to the queue sheet only.
+- **Repeat into the queue sheet.** It leaves the player's primary row (its far right) for the queue sheet a long press
+  on the queue button opens, at its header's end beside Shuffle.
+- **Single-track replacement.** An album missing a track gets it one at a time when the whole album cannot be had: a
+  Soulseek search, each candidate fingerprinted (Chromaprint) and checked with AcoustID against the release, then
+  "Add to album" into the existing folder, tagged from MusicBrainz, with Undo. About 2.5–3 server days (a5's estimate).
+- **Carried over from 0.9.7.**
+  - Some tracks play silently not at all on an iPhone (Safari, some MP3s, Bandcamp previews). 0.9.7 sends the browser
+    player's own log (diagnostics, area playback); read it, then fix.
+  - Play from an album's menu in Home's flow said "Could not start playing" (seen on the phone, not reproduced since).
+  - Saving a cover to a read-only music folder showed the raw system error; it gets one short line.
+  - A browser's stored player name with repeated numbers ("Safari on iOS 2 2 2") is tidied on load.
+
+Who: the server and the app are a5's (replacement, PWA download support, levelling's numbers from the player); the
+page is claude-632's (PWA storage and playback, the Level button and sheet, the waveform as heard, Repeat, the fixes).
+
 ## 0.9.3: deep search everywhere, and global search
 
 Moved from 0.9.2 by the owner, 2026-10-25: 0.9.2 ships without it.
