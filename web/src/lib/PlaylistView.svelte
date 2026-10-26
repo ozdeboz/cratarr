@@ -126,7 +126,8 @@
   import { insights, plural } from './insights.svelte';
   import { refresh } from './live.svelte';
   import { enqueue, startRadio, type LocalTrack } from './localPlayer.svelte';
-  import { inApp } from './app.svelte';
+  import { downloads, inApp } from './app.svelte';
+  import { reach } from './reach.svelte';
   import { isKept, setKept } from './kept.svelte';
   import { longpress } from './longpress';
   import { isLocal, playlistsKnown, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
@@ -570,6 +571,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /** Edit mode: there is a picture of its own to remove (as saved, or picked). */
   const ownImage = $derived(crateImage ? crateImage !== 'remove' : !!crates.list?.find((c) => c.id === builder?.id)?.image);
 
+  /** Offline (lib/reach), a track that cannot play: not kept on this device (the owner, 2026-10-26: dimmed). */
+  const awayDim = (r: PlaylistRow, src: string) =>
+    reach.away && !(inApp && downloads.tracks.some((t) => t.id === r.id && t.source === src && t.download.state === 'done'));
   const length = $derived(rows ? rows.reduce((a, r) => a + (r.duration_secs ?? 0), 0) : 0);
   const playable = $derived(rows ? rows.filter((r) => r.id && !r.missing) : []);
 
@@ -2155,7 +2159,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       title={r.name ?? r.file}
       count={r.duration_secs ? clockText(r.duration_secs) : undefined}
       cells={columns ? cellsOf(r) : undefined}
-      off={!ok}
+      off={!ok || awayDim(r, src)}
       disabled={!ok}
       onclick={() => (selecting && i !== null ? tick(i) : playFrom(name, src, list, r))}
       attach={fromAction(swipe, () => ({ enabled: !selecting, right: ok ? () => playNext(r, src) : null, left: out }))}

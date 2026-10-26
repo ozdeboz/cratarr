@@ -8,6 +8,15 @@
 // downloads play (decision 0033, step 4).
 const CACHE = 'cratarr-v4';
 const COVERS = 'cratarr-covers';
+// The last copy of what the pages read (the owner, 2026-10-26: with the server down, playlists and the rest showed
+// nothing): kept per account (the page names it, `account`), each read tried on the network first; one that does not
+// answer within KEPT_AFTER_MS, or fails, or meets the proxy's refusal, is answered with its last copy, marked
+// `X-Cratarr-Kept` (when it was kept) so the page says it is offline. Live reads (the event stream, players, tasks,
+// sign-in, sound) are never kept.
+const DATA = 'cratarr-data';
+const KEPT_AFTER_MS = 4000;
+const KEPT = /^\/api\/(?:(?:albums|playlists|crates|artists|home|library|discover|insights|history|favorites|excluded|me|requests|visuals)(?:\/|$)|covers\/stamps$|cover\/|track\/[^/]+\/[^/]+\/waveform$)/;
+const NEVER = /^\/api\/(events|players|player|state|tasks|auth|health|status|time|stream|file|preview|catalogue|diagnostics|search)/;
 const ALBUM_COVER = /^\/api\/albums\/[^/]+\/[^/]+\/cover$/;
 
 /** Keeps every file of the build that is not kept yet, and lets go of those of earlier builds. */
@@ -51,7 +60,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== COVERS).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== COVERS && k !== DATA).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
@@ -63,6 +72,64 @@ const put = (key, response) => {
   }
   return response;
 };
+
+/** A read answered from its last copy, marked with when it was kept. */
+async function keptCopy(req) {
+  const hit = await caches.match(req, { cacheName: DATA });
+  if (!hit) return null;
+  const headers = new Headers(hit.headers);
+  headers.set('X-Cratarr-Kept', hit.headers.get('X-Cratarr-Kept-At') ?? '1');
+  return new Response(hit.body, { status: hit.status, statusText: hit.statusText, headers });
+}
+/** Keeps a read's answer, with when. */
+async function keep(req, r) {
+  const headers = new Headers(r.headers);
+  headers.set('X-Cratarr-Kept-At', String(Date.now()));
+  const copy = new Response(await r.clone().arrayBuffer(), { status: r.status, statusText: r.statusText, headers });
+  await (await caches.open(DATA)).put(req, copy);
+}
+/** Network first; its last copy where the network does not answer in time (the fetch going on to keep a fresh one), fails, or
+ *  meets the proxy's refusal (403 or a 5xx without Cratarr behind it). Not found or signed out stay the server's answer. */
+function keptRead(event, req) {
+  const net = fetch(req).then(
+    (r) => {
+      if (r.ok) event.waitUntil(keep(req, r).catch(() => {}));
+      return r;
+    },
+    () => null,
+  );
+  event.waitUntil(net);
+  return new Promise((resolve) => {
+    let done = false;
+    const give = (r) => !done && ((done = true), resolve(r));
+    const timer = setTimeout(async () => {
+      const k = await keptCopy(req);
+      if (k) give(k);
+    }, KEPT_AFTER_MS);
+    net.then(async (r) => {
+      clearTimeout(timer);
+      if (r && (r.ok || r.status === 401 || r.status === 404 || (r.status < 500 && r.status !== 403))) return give(r);
+      const k = await keptCopy(req);
+      give(k ?? r ?? Response.error());
+    });
+  });
+}
+
+// The account whose copies are kept: another one signing in, the last one's go.
+self.addEventListener('message', (event) => {
+  if (event.data?.type !== 'account' || typeof event.data.name !== 'string') return;
+  event.waitUntil(
+    caches.open(DATA).then(async (c) => {
+      const was = await c.match('/__account');
+      const name = was ? await was.text() : null;
+      if (name !== null && name !== event.data.name) {
+        await caches.delete(DATA);
+        c = await caches.open(DATA);
+      }
+      await c.put('/__account', new Response(event.data.name));
+    }),
+  );
+});
 
 // The covers to keep (their paths, without a version): those no longer listed go, the missing ones are fetched.
 self.addEventListener('message', (event) => {
@@ -122,6 +189,10 @@ self.addEventListener('fetch', (event) => {
         })
         .catch(async () => (await kept()) || Response.error()),
     );
+    return;
+  }
+  if (url.pathname.startsWith('/api/') && !NEVER.test(url.pathname) && KEPT.test(url.pathname)) {
+    event.respondWith(keptRead(event, req));
     return;
   }
   if (url.pathname.startsWith('/api/')) return;

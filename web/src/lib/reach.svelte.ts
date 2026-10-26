@@ -8,6 +8,9 @@ export const reach = $state({
   away: false,
   /** Cratarr answered at least once since the page opened. */
   answered: false,
+  /** What the pages show came from their last copies (public/sw.js: Cratarr out of reach; the owner, 2026-10-26):
+   *  offline, as last seen, until Cratarr answers again. */
+  kept: false,
 });
 
 /** A status with no words from Cratarr in it that means it was not reached, rather than that it refused. */
@@ -16,6 +19,12 @@ export const notReached = (status: number) => status === 403 || status === 502 |
 export function reached() {
   reach.away = false;
   reach.answered = true;
+  reach.kept = false;
+}
+/** An answer from its last copy (the service worker's X-Cratarr-Kept): out of reach, shown as last seen. */
+export function keptAnswer() {
+  reach.away = true;
+  reach.kept = true;
 }
 
 export function unreached() {

@@ -3,7 +3,7 @@ import { cue } from './queueCue.svelte';
 import type { SearchResult } from './search';
 import { coverStamps } from './coverStamps.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
-import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached } from './reach.svelte';
+import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached, keptAnswer } from './reach.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
 
 /** What a page says while Cratarr is out of reach (lib/reach.svelte.ts). */
@@ -156,7 +156,9 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     reached();
     throw message ? new ApiError(message, false, res.status) : new ApiError(`Server returned ${res.status}`, true, res.status);
   }
-  reached();
+  // Its last copy, the server out of reach (public/sw.js): shown, and said to be offline.
+  if (res.headers.get('X-Cratarr-Kept')) keptAnswer();
+  else reached();
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
