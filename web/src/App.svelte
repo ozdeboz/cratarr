@@ -881,7 +881,7 @@
     <SheetArea area={() => pageEl}>
     <!-- One commit (lib/Hold; the owner, 2026-10-26, "Old page stays, then switch"): the page before stays until the new
          one is ready, and the bar's highlight moves with it. -->
-    <Hold key={page} bind:shown={shownPage} along={() => [...document.querySelectorAll<HTMLElement>('.page-row:not(.hold-picture)')]}>
+    <Hold key={page} bind:shown={shownPage}>
     {#if page === 'settings'}
       <Settings />
     {:else if page === 'health' && me.admin}
@@ -1019,13 +1019,13 @@
     <!-- The page's glass, or on a phone the panel's on top (lib/glass): one row, one pill whose settings change. Below
          1024 px each half at the edge its setting says (Display: Navigation controls, Content controls). -->
     {#if !leadBottom || !rightBottom}
-      <div class="page-row" class:away={rowAway} class:beside={sidebar && !handed} class:handed={!!handed} class:below={!!handed?.below?.()} class:steady={phone && !!panelPage && !moreOpen} style:--player-w="{sideWidth}px">
+      <div inert={page !== shownPage || undefined} class="page-row" class:away={rowAway} class:beside={sidebar && !handed} class:handed={!!handed} class:below={!!handed?.below?.()} class:steady={phone && !!panelPage && !moreOpen} style:--player-w="{sideWidth}px">
         {#if !leadBottom}{@render leadPart()}{:else}<span></span>{/if}
         {#if !rightBottom}{@render rightPart()}{/if}
       </div>
     {/if}
     {#if leadBottom || rightBottom}
-      <div class="page-row at-bottom" class:away={rowAway} class:handed={!!handed} class:steady={phone && !!panelPage && !moreOpen}>
+      <div inert={page !== shownPage || undefined} class="page-row at-bottom" class:away={rowAway} class:handed={!!handed} class:steady={phone && !!panelPage && !moreOpen}>
         {#if leadBottom}{@render leadPart()}{:else}<span></span>{/if}
         {#if rightBottom}{@render rightPart()}{/if}
       </div>
