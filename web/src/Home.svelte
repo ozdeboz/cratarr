@@ -44,7 +44,7 @@
   import { albumSubject, viewOver, viewPlaylist } from './lib/panel.svelte';
   import { playCollection } from './lib/play.svelte';
   import { CRATE_PART, FLOW_PARTS, prefs, type HomePart } from './lib/prefs.svelte';
-  import { HOME_HEADER, localCovers } from './lib/localCovers.svelte';
+  import { backdropUrl } from './lib/backdrop.svelte';
   import { me } from './lib/me.svelte';
   import greet from 'greet-by-time';
   import { queuesPlayer, queuesVersion, switchQueue } from './lib/queueHistory.svelte';
@@ -143,7 +143,7 @@
   const skyPhoto = $derived.by(() => {
     // A picture of the user's own, chosen on this device (Settings › Appearance), in place of the weather's where asked
     // (Also on Home; the owner, 2026-10-26: it is every flow's backdrop first).
-    if (localCovers[HOME_HEADER] && prefs.flowPictureOnHome) return localCovers[HOME_HEADER];
+    if (prefs.flowPictureOnHome && backdropUrl()) return backdropUrl();
     // Without the weather, the plain sky of the hour.
     if (!moment) return `skies/plain-${new Date().getHours() >= 7 && new Date().getHours() < 19 ? 'day' : 'night'}.jpg`;
     const one: Record<string, string> = { sunny: 'sunny-day', hot: 'hot-day', clear: 'clear-night' };
@@ -312,7 +312,7 @@
     if (skyIn) return;
     if (!heroLead) return void (skyIn = true);
     const t = setTimeout(() => (skyIn = true), 2500);
-    if (!((localCovers[HOME_HEADER] && prefs.flowPictureOnHome) || momentIn) || !skyPhoto) return () => clearTimeout(t);
+    if (!((prefs.flowPictureOnHome && backdropUrl()) || momentIn) || !skyPhoto) return () => clearTimeout(t);
     let gone = false;
     const img = new Image();
     img.onload = img.onerror = () => !gone && (skyIn = true);

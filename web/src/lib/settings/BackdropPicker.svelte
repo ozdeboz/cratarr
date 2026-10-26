@@ -1,0 +1,99 @@
+<script lang="ts">
+  // What stands behind every flow (the owner, 2026-10-26: photos to pick instead of the grey), as the theme's pictures
+  // (lib/settings/AppearancePicker): small pictures in a row, a round tick under the one shown. The grey canvas,
+  // Cratarr's photos (lib/backdrop), and one's own picture once there is one (chosen under it, Your picture).
+  import { BACKDROPS, backdropPhoto } from '../backdrop.svelte';
+  import { HOME_HEADER, localCovers } from '../localCovers.svelte';
+  import { prefs } from '../prefs.svelte';
+
+  const choices = $derived([
+    { value: 'grey', label: 'Grey', src: null as string | null },
+    ...BACKDROPS.map((b) => ({ value: b.value, label: b.label, src: backdropPhoto(b.value) as string | null })),
+    ...(localCovers[HOME_HEADER] ? [{ value: 'own', label: 'Yours', src: localCovers[HOME_HEADER] as string | null }] : []),
+  ] as { value: typeof prefs.flowBackdrop; label: string; src: string | null }[]);
+</script>
+
+<div class="looks" role="radiogroup" aria-label="Behind the flows">
+  {#each choices as c (c.value)}
+    {@const on = prefs.flowBackdrop === c.value}
+    <button type="button" class="look" class:on role="radio" aria-checked={on} onclick={() => (prefs.flowBackdrop = c.value)}>
+      <span class="picture" class:grey={!c.src} style:background-image={c.src ? `url("${c.src}")` : null} aria-hidden="true"></span>
+      <span class="name">{c.label}</span>
+      <span class="tick" aria-hidden="true"></span>
+    </button>
+  {/each}
+</div>
+
+<style>
+  .looks {
+    display: flex;
+    gap: 18px;
+    padding: 16px 16px 12px;
+    overflow-x: auto;
+  }
+
+  .look {
+    display: grid;
+    flex: none;
+    justify-items: center;
+    gap: 8px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  /* The backdrop itself, as a flow shows it: the photo cropped towards its top, or the grey canvas. */
+  .picture {
+    box-sizing: border-box;
+    width: 74px;
+    height: 74px;
+    border: 2px solid var(--border);
+    border-radius: 14px;
+    background: center 20% / cover no-repeat;
+  }
+
+  .picture.grey {
+    background: linear-gradient(to bottom, color-mix(in srgb, var(--text) 24%, var(--surface)), color-mix(in srgb, var(--text) 11%, var(--surface)));
+  }
+
+  .look.on .picture {
+    border-color: var(--accent);
+  }
+
+  .look:focus-visible .picture {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .name {
+    font-size: 14px;
+  }
+
+  /* A round mark, ticked under the one shown (as the theme's pictures). */
+  .tick {
+    display: grid;
+    place-items: center;
+    box-sizing: border-box;
+    width: 22px;
+    height: 22px;
+    border: 2px solid var(--border);
+    border-radius: 50%;
+  }
+
+  .look.on .tick {
+    border-color: var(--accent);
+    background: var(--accent);
+  }
+
+  .look.on .tick::after {
+    content: '';
+    width: 5px;
+    height: 10px;
+    border: solid var(--accent-text);
+    border-width: 0 2px 2px 0;
+    transform: translateY(-1px) rotate(45deg);
+  }
+</style>

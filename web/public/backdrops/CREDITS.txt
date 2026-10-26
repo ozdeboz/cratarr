@@ -1,0 +1,10 @@
+The photos one can pick to stand behind every flow (Settings › Appearance › Behind the flows).
+
+These photos are not under Cratarr's licence (AGPL-3.0-or-later). They are from Unsplash, under the Unsplash License
+(https://unsplash.com/license): free to use, copy, modify and distribute, commercially too, without permission or
+credit; the photos may not be compiled to replicate a similar or competing service. Thank you to the photographers:
+
+wall        Tim Mossholder      https://unsplash.com/photos/opeF-ObCG0A
+lamp        engin akyurt        https://unsplash.com/photos/-yPnoLNc_Go
+flowers     Juli Kosolapova     https://unsplash.com/photos/COUZB0613Ns
+mountains   Marek Piwnicki      https://unsplash.com/photos/-_OuVFhN5BU

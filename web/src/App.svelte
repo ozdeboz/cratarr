@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { HOME_HEADER, localCovers } from './lib/localCovers.svelte';
+  import { backdropUrl } from './lib/backdrop.svelte';
   import Playlists from './Playlists.svelte';
   import LinkSheet from './lib/LinkSheet.svelte';
   import Discover from './Discover.svelte';
@@ -272,7 +272,7 @@
   // One's own header picture (Settings › Appearance) behind every flow (the owner, 2026-10-26): one variable for the
   // page, each flow's canvas drawing it under a veil (--flow-photo; none without one).
   $effect(() => {
-    const pic = localCovers[HOME_HEADER];
+    const pic = backdropUrl();
     document.documentElement.style.setProperty('--flow-photo', pic ? `url("${pic}")` : 'none');
     document.documentElement.toggleAttribute('data-flow-photo', !!pic);
   });

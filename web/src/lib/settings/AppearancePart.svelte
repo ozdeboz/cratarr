@@ -7,6 +7,7 @@
   import { inApp } from '../app.svelte';
   import { prefs } from '../prefs.svelte';
   import AppearancePicker from './AppearancePicker.svelte';
+  import BackdropPicker from './BackdropPicker.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
   import { offerReset } from './reset.svelte';
@@ -21,10 +22,17 @@
       prefs.homeGreeting = true;
       prefs.homeGreetingCapital = false;
       void removeLocalPicture(HOME_HEADER);
+      prefs.flowBackdrop = 'grey';
+      prefs.flowPictureOnHome = false;
     },
   );
 
   let busy = $state(false);
+  /** One's own picture gone: the grey canvas again where it stood behind the flows. */
+  function dropOwn() {
+    void removeLocalPicture(HOME_HEADER);
+    if (prefs.flowBackdrop === 'own') prefs.flowBackdrop = 'grey';
+  }
   async function pick(e: Event) {
     const input = e.currentTarget as HTMLInputElement;
     const file = input.files?.[0];
@@ -33,6 +41,8 @@
     busy = true;
     try {
       await setLocalPicture(HOME_HEADER, file, HOME_HEADER_PX);
+      // Chosen, it is what stands behind the flows.
+      prefs.flowBackdrop = 'own';
     } catch (err) {
       toast.fail(err, "The picture couldn't be kept");
     } finally {
@@ -68,15 +78,19 @@
       <Item name="Capital first letter" line="Of your name, in the greeting" toggle={{ checked: prefs.homeGreetingCapital, onchange: (on) => (prefs.homeGreetingCapital = on) }} />
     </div>
   {/if}
-  <Item name="Your picture" line={localCovers[HOME_HEADER] ? 'Behind every flow, on this device' : 'None: the sky for the weather'}>
+</Group>
+
+<!-- Behind every flow (crates', a wide album header's, the Library's Flow, Discover's; the owner, 2026-10-26): the grey
+     canvas, Cratarr's photos or one's own; Home's sky too only when asked. -->
+<Group title="Behind the flows">
+  <BackdropPicker />
+  <Item name="Your picture" line={localCovers[HOME_HEADER] ? 'On this device' : 'One of your own, kept on this device'}>
     <span class="pick">
       <label class="button" class:busy>{localCovers[HOME_HEADER] ? 'Change' : 'Choose a picture'}<input type="file" accept="image/*" hidden disabled={busy} onchange={pick} /></label>
-      {#if localCovers[HOME_HEADER]}<button onclick={() => removeLocalPicture(HOME_HEADER)}>Remove</button>{/if}
+      {#if localCovers[HOME_HEADER]}<button onclick={dropOwn}>Remove</button>{/if}
     </span>
   </Item>
-  <!-- It is every flow's backdrop (crates', a wide album header's, the Library's Flow, Discover's); Home's sky too only
-       when asked (the owner, 2026-10-26). -->
-  {#if localCovers[HOME_HEADER]}
+  {#if prefs.flowBackdrop !== 'grey'}
     <Item name="Also on Home" line="In place of the weather's sky" toggle={{ checked: prefs.flowPictureOnHome, onchange: (on) => (prefs.flowPictureOnHome = on) }} />
   {/if}
 </Group>
