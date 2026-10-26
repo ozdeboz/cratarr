@@ -70,7 +70,8 @@ impl Rules {
     /// empty values.
     pub fn values(&self, field: &str, raw: &[String]) -> Vec<String> {
         let parts: Vec<String> = if ARTIST_FIELDS.contains(&field) {
-            raw.iter().flat_map(|v| split(v, &self.artist_separators, &self.artist_keep)).map(|a| aliased(&a, &self.artist_aliases)).collect()
+            let seps = artist_separators_as_used(&self.artist_separators);
+            raw.iter().flat_map(|v| split(v, &seps, &self.artist_keep)).map(|a| aliased(&a, &self.artist_aliases)).collect()
         } else if field == "genre" {
             raw.iter()
                 .flat_map(|v| split(v, &self.genre_separators, &self.genre_keep))
@@ -82,6 +83,13 @@ impl Rules {
         };
         dedupe(parts)
     }
+}
+
+/// The artist separators as they are used (0.9.7, the owner: 30/70 was read as two artists, "30" and "70"): a slash
+/// splits artists only with a space each side (" / "), as a credit list writes it; a slash inside a name (30/70, AC/DC,
+/// Cos/Mes) is the name. The tags' own lists (ARTISTS, ALBUMARTISTS) are several values already.
+pub fn artist_separators_as_used(separators: &[String]) -> Vec<String> {
+    separators.iter().map(|s| if s.trim() == "/" { " / ".to_string() } else { s.clone() }).collect()
 }
 
 /// Split `value` on any separator, except inside whitelisted names (matched case-insensitively).
@@ -195,19 +203,23 @@ mod tests {
             ..reference()
         };
         assert_eq!(r.values("genre", &s(&["hip-hop; Electronica", "Electronic Music"])), s(&["Hip Hop", "Electronic"]), "merged, then once");
-        assert_eq!(r.values("artist", &s(&["Beyonce/Jay-Z"])), s(&["Beyoncé", "Jay-Z"]));
+        assert_eq!(r.values("artist", &s(&["Beyonce / Jay-Z"])), s(&["Beyoncé", "Jay-Z"]));
         assert_eq!(aliased(" Jazz ", &r.genre_aliases), "Jazz");
     }
 
     #[test]
     fn artists_split_on_list_separators_only() {
         let r = reference();
-        assert_eq!(r.values("artist", &s(&["Moodymann/Andrés; Theo Parrish"])), s(&["Moodymann", "Andrés", "Theo Parrish"]));
+        assert_eq!(r.values("artist", &s(&["Moodymann / Andrés; Theo Parrish"])), s(&["Moodymann", "Andrés", "Theo Parrish"]));
+        let none_kept = Rules::default();
+        assert_eq!(none_kept.values("artist", &s(&["30/70"])), s(&["30/70"]), "a slash inside a name is the name, kept or not");
+        assert_eq!(none_kept.values("artist", &s(&["AC/DC / Lamb"])), s(&["AC/DC", "Lamb"]), "a spaced slash splits");
+        assert_eq!(none_kept.values("genre", &s(&["Jazz/Rock"])), s(&["Jazz", "Rock"]), "genres split on a slash as before"
         assert_eq!(r.values("artist", &s(&["Simon & Garfunkel"])), s(&["Simon & Garfunkel"]));
         assert_eq!(r.values("artist", &s(&["Kruder, Dorfmeister"])), s(&["Kruder, Dorfmeister"]));
         assert_eq!(r.values("artist", &s(&["Wax feat. Cuffed"])), s(&["Wax feat. Cuffed"]));
         assert_eq!(r.values("albumartist", &s(&["AC/DC"])), s(&["AC/DC"]));
-        assert_eq!(r.values("artist", &s(&["Cos/Mes/Moodymann"])), s(&["Cos/Mes", "Moodymann"]));
+        assert_eq!(r.values("artist", &s(&["Cos/Mes / Moodymann"])), s(&["Cos/Mes", "Moodymann"]));
         assert_eq!(r.values("artist", &s(&["ac/dc"])), s(&["ac/dc"]), "whitelist ignores case");
     }
 
@@ -221,9 +233,10 @@ mod tests {
     }
 
     #[test]
-    fn without_a_whitelist_names_with_separators_are_split() {
+    fn without_a_whitelist_names_with_separators_are_split_but_an_artist_s_slash_only_spaced() {
         let r = Rules::default();
-        assert_eq!(r.values("artist", &s(&["AC/DC"])), s(&["AC", "DC"]));
+        assert_eq!(r.values("artist", &s(&["AC/DC"])), s(&["AC/DC"]), "0.9.7: a slash inside a name is the name");
+        assert_eq!(r.values("artist", &s(&["AC / DC"])), s(&["AC", "DC"]));
         assert_eq!(r.values("genre", &s(&["Funk / Soul"])), s(&["Funk", "Soul"]));
     }
 

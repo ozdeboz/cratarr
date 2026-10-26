@@ -282,10 +282,12 @@ pub fn ruled_albums(served: &crate::serve::Serve) -> Result<Vec<String>> {
         return Ok(Vec::new());
     }
     let cat = served.catalogue();
+    // Artists split as the library splits them (a slash only spaced, `artist_separators_as_used`).
+    let artist_seps = crate::catalogue::normalise::artist_separators_as_used(&rules.artist_separators);
     let mut places = Vec::new();
     for (folder, rel, name, value) in cat.tag_values(&["genre", "artist", "albumartist"])? {
         let aliases = if name == "genre" { &rules.genre_aliases } else { &rules.artist_aliases };
-        let seps = if name == "genre" { &rules.genre_separators } else { &rules.artist_separators };
+        let seps = if name == "genre" { &rules.genre_separators } else { &artist_seps };
         let keep = if name == "genre" { &rules.genre_keep } else { &rules.artist_keep };
         if crate::catalogue::normalise::split(&value, seps, keep).iter().any(|v| crate::catalogue::normalise::aliased(v, aliases) != v.trim()) {
             places.push((folder, rel));
@@ -301,10 +303,11 @@ fn rule_fix(served: &crate::serve::Serve, album: &str) -> Result<Option<Fix>> {
     if rules.genre_aliases.is_empty() && rules.artist_aliases.is_empty() {
         return Ok(None);
     }
+    let artist_seps = crate::catalogue::normalise::artist_separators_as_used(&rules.artist_separators);
     let fields: [(&'static str, &[crate::catalogue::normalise::Alias], &[String], &[String]); 3] = [
         ("genre", &rules.genre_aliases, &rules.genre_separators, &rules.genre_keep),
-        ("artist", &rules.artist_aliases, &rules.artist_separators, &rules.artist_keep),
-        ("albumartist", &rules.artist_aliases, &rules.artist_separators, &rules.artist_keep),
+        ("artist", &rules.artist_aliases, &artist_seps, &rules.artist_keep),
+        ("albumartist", &rules.artist_aliases, &artist_seps, &rules.artist_keep),
     ];
     let names: Vec<&str> = fields.iter().map(|f| f.0).collect();
     let (mut writes, mut said) = (Vec::new(), Vec::<String>::new());
