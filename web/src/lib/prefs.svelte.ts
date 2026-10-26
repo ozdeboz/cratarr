@@ -165,7 +165,7 @@ export type Prefs = {
   /** One's own header picture (Appearance) replaces Home's weather sky too, besides being every flow's backdrop. */
   flowPictureOnHome: boolean;
   /** Behind every flow (the owner, 2026-10-26): the grey canvas, one of Cratarr's photos (public/backdrops), or one's own picture. */
-  flowBackdrop: 'grey' | 'wall' | 'lamp' | 'flowers' | 'mountains' | 'leaf' | 'yellow' | 'amplifier' | 'records' | 'own';
+  flowBackdrop: 'grey' | 'wall' | 'lamp' | 'flowers' | 'mountains' | 'leaf' | 'yellow' | 'amplifier' | 'records' | 'checks' | 'own';
   /** One's own crates on Home (Settings › Home, 0.9.3; the owner, 2026-10-25): each a section of its own, a shelf of its
    *  albums, ordered and switched in Home's sections list. */
   homeCrates: boolean;
@@ -497,7 +497,7 @@ function read(): Prefs {
       if (typeof saved.homeGreeting === 'boolean') p.homeGreeting = saved.homeGreeting;
       if (typeof saved.homeGreetingCapital === 'boolean') p.homeGreetingCapital = saved.homeGreetingCapital;
       if (typeof saved.flowPictureOnHome === 'boolean') p.flowPictureOnHome = saved.flowPictureOnHome;
-      if (['grey', 'wall', 'lamp', 'flowers', 'mountains', 'leaf', 'yellow', 'amplifier', 'records', 'own'].includes(saved.flowBackdrop as string)) p.flowBackdrop = saved.flowBackdrop as Prefs['flowBackdrop'];
+      if (['grey', 'wall', 'lamp', 'flowers', 'mountains', 'leaf', 'yellow', 'amplifier', 'records', 'checks', 'own'].includes(saved.flowBackdrop as string)) p.flowBackdrop = saved.flowBackdrop as Prefs['flowBackdrop'];
       if (typeof saved.homeCrates === 'boolean') p.homeCrates = saved.homeCrates;
       if (Array.isArray(saved.profileRows)) p.profileRows = saved.profileRows.filter((x: unknown): x is ProfileRow => PROFILE_ROWS.some((r) => r.id === x));
       if (Array.isArray(saved.homeParts) && saved.homeParts.join(',') !== HOME_BEFORE)
