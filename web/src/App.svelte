@@ -365,7 +365,17 @@
     if (!insightsSplit || insightsShown || openedHere() || fromHash() !== 'insights') return;
     untrack(() => viewInPlace(INSIGHTS_VIEW + viewNow()));
   });
-  const pagePill = $derived(PLAYABLE.includes(page));
+  /** The page that shows (lib/Hold: the one before while the one asked for gets ready), for the bar's highlight and the
+   *  row's glass: its pill does not change under the held picture (0.9.8; a5's lab saw Home's pill arrive over Crates'). */
+  let shownPage = $state(untrack(() => page));
+  const rowPage = $derived(shownPage);
+  /** The shown page's own button for the pill: as it sets it while it shows; while the next page is held, the one it
+   *  had (that page has gone under the picture, taking its button with it). */
+  let shownAction = $state(untrack(() => pageView.action));
+  $effect(() => {
+    if (page === shownPage) shownAction = pageView.action;
+  });
+  const pagePill = $derived(PLAYABLE.includes(rowPage));
   // An icon button's label on a long-press or right-click, everywhere (lib/labels).
   $effect(installLabels);
   // A link to another site asks first, Open or Copy link (lib/LinkSheet; the owner, 2026-10-24), wherever it is.
@@ -472,10 +482,10 @@
   });
   // Back is always there (the owner, 2026-10-23): a step back in this visit, else Home; only Home itself, opened first,
   // has none. On a phone the row always shows.
-  const backHome = $derived(navAt === 0 && page !== 'home');
+  const backHome = $derived(navAt === 0 && rowPage !== 'home');
   /** The page has the row (its room at its top kept for it). */
   const pageHasRow = $derived(
-    !playlistLayer && (phone || navAt > 0 || backHome || pagePill || page === 'settings' || page === 'insights' || page === 'discover'),
+    !playlistLayer && (phone || navAt > 0 || backHome || pagePill || rowPage === 'settings' || rowPage === 'insights' || rowPage === 'discover'),
   );
   // Kept under the player over everything, which covers it (the owner, 2026-10-25: "since the full screen player is on
   // top, just don't hide these glass panels"; neither the page's room nor the glass goes as it opens).
@@ -516,19 +526,19 @@
    *  at once, instead of fading it in anew (the owner, 2026-10-25: "the top left and top right glass hide"). */
   const leadFade = $derived(reducedMotion() || (phone && !!panelPage && (underBar || !playlistLayer)) ? 0 : 150);
   /** The one pill's settings: the panel's where it handed them, else the page's. */
-  const pagePillShown = $derived(pagePill || ['settings', 'discover', 'insights', 'health', 'requests', 'home', 'find'].includes(page));
+  const pagePillShown = $derived(pagePill || ['settings', 'discover', 'insights', 'health', 'requests', 'home', 'find'].includes(rowPage));
   const pillNow = $derived(
     handed
       ? handed.pill()
       : pagePillShown
-        ? { page, view: hasView(page), device: pagePill && pillDevice, filter: (pagePill && !page.startsWith('local-') && page !== 'downloads') || page === 'discover' }
+        ? { page: rowPage, view: hasView(rowPage), device: pagePill && pillDevice, filter: (pagePill && !rowPage.startsWith('local-') && rowPage !== 'downloads') || rowPage === 'discover', action: shownAction }
         : null,
   );
   // One glass of a row that stays, emptied (the owner, 2026-10-25: "it should indeed slide away"): as the row does, up
   // out under the bar whole (along the bottom, down), still showing what it held. A copy of it slides; the glass itself
   // goes at once (Search's icons' folding unseen under it).
   let rightEl = $state<HTMLElement>();
-  const leadHas = $derived(!!handed || navAt > 0 || backHome || (!!panelPage && phone) || page === 'library');
+  const leadHas = $derived(!!handed || navAt > 0 || backHome || (!!panelPage && phone) || rowPage === 'library');
   const rightHas = $derived(!!(pillNow || handed?.extra));
   let had = { lead: false, right: false };
   // Before the page changes, while the glass still shows what it held.
@@ -808,8 +818,6 @@
     const rows = Math.ceil(overflow.length / most);
     return Math.max(1, Math.ceil(overflow.length / Math.max(1, rows)));
   });
-  /** The page that shows (lib/Hold: the one before while the one asked for gets ready), for the bar's highlight. */
-  let shownPage = $state(untrack(() => page));
   const overflowActive = $derived(overflow.some((p) => p.id === shownPage));
 </script>
 
@@ -994,7 +1002,7 @@
                sidebar of pages names it. -->
           {#if panelPage && phone}<h1 class="page-name">{panelPage.label}</h1>{/if}
           <!-- The Library's view, on the glass's extension as a control page's name (the owner, 2026-10-25). -->
-          {#if page === 'library'}<LibraryViewPicker />{/if}
+          {#if rowPage === 'library'}<LibraryViewPicker />{/if}
         </span>
       {/if}
   {/snippet}

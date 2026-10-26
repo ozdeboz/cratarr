@@ -33,9 +33,13 @@
     search = null,
     onview = null,
     filterLit = null,
+    action = undefined,
   }: {
     /** The page it is on (its search, its own filters and View), or null in the panel. */
     page?: string | null;
+    /** The page's own button, where App says whose (lib/Hold, 0.9.8: the shown page's while the next one is held);
+     *  absent, the page that set it last (pageView.action). */
+    action?: import('./pageView.svelte').PageAction | null;
     view?: boolean;
     device?: boolean;
     /** The panel list's order, for its View. */
@@ -57,6 +61,8 @@
     onview?: (() => void) | null;
     filterLit?: boolean | null;
   } = $props();
+  /** The page's own button: App's say, else the page that set it last. */
+  const pageAction = $derived(action !== undefined ? action : pageView.action);
   let filterOpen = $state(false);
   let viewOpen = $state(false);
   let outputOpen = $state(false);
@@ -174,7 +180,7 @@
     confirming = false;
   });
   $effect(() => {
-    const p = pageView.action?.progress;
+    const p = pageAction?.progress;
     if (p != null) ran = true;
     else if (ran) {
       ran = false;
@@ -239,14 +245,14 @@
   {/if}
 
   <div class="pill" class:wide={showing} role="toolbar" aria-label="The page's tools">
-    {#if confirming && page && pageView.action}
-      {@const a = pageView.action}
+    {#if confirming && page && pageAction}
+      {@const a = pageAction}
       <!-- The page's work asked for: the whole pill is ✓ (start it) and ✕ (leave it), until one is tapped. -->
       <button class="confirm" aria-label={a.label} title={a.label} onclick={() => confirm(a)} transition:paced|global><Icon name="check" size={22} /></button>
       <button aria-label="Cancel" title="Cancel" onclick={() => (confirming = false)} transition:paced|global><Icon name="close" size={22} /></button>
     {:else}
-    {#if showing && page && pageView.action && !searching}
-      {@const a = pageView.action}
+    {#if showing && page && pageAction && !searching}
+      {@const a = pageAction}
       <!-- The page's work unfolded: only its bar and what it is at, the pill grown leftwards, its buttons where they
            are, its glass as it is (the owner, 2026-10-24). -->
       <span class="work" role="status" aria-live="polite" transition:paced|global
@@ -255,7 +261,7 @@
     {/if}
     <!-- One unfolds at a time, the other's button out of the way: the search hides while the work's progress shows, the
          page's button while the search is open (the owner, 2026-10-24). -->
-    {#if words && !(showing && page && pageView.action)}
+    {#if words && !(showing && page && pageAction)}
       <button
         class:lit={!searching && pageView.query.trim() !== ''}
         aria-label={words}
@@ -283,14 +289,14 @@
         </span>
       {/if}
     {/if}
-    {#if filter && !searching && !(showing && page && pageView.action)}<button class="funnel" class:lit={filterLit ?? filtering} aria-label={filters ? `Filter, ${filters} on` : 'Filter'} title="Filter" aria-haspopup="dialog" onclick={() => (onfilter ? onfilter() : (filterOpen = true))} transition:paced|global
+    {#if filter && !searching && !(showing && page && pageAction)}<button class="funnel" class:lit={filterLit ?? filtering} aria-label={filters ? `Filter, ${filters} on` : 'Filter'} title="Filter" aria-haspopup="dialog" onclick={() => (onfilter ? onfilter() : (filterOpen = true))} transition:paced|global
         ><Icon name="funnel" size={22} />{#if filters}<span class="badge">{filters}</span>{/if}</button
       >{/if}
-    {#if view && (page || order?.columns?.shown.length || onview) && !searching && !(showing && page && pageView.action)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (onview ? onview() : (viewOpen = true))} transition:paced|global><Icon name="sliders" size={22} /></button>{/if}
+    {#if view && (page || order?.columns?.shown.length || onview) && !searching && !(showing && page && pageAction)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (onview ? onview() : (viewOpen = true))} transition:paced|global><Icon name="sliders" size={22} /></button>{/if}
     <!-- Where it plays gives way to the open field too, as the rest (the owner, 2026-10-26). -->
     {#if device && !searching}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)} transition:paced|global><Icon name="speaker" size={22} /></button>{/if}
-    {#if page && pageView.action && !searching}
-      {@const a = pageView.action}
+    {#if page && pageAction && !searching}
+      {@const a = pageAction}
       <button class="action" aria-label={a.label} title={a.label} onclick={() => act(a)} use:longpress={() => hold(a)} transition:paced|global
         ><Icon name={a.icon} size={22} />{#if a.progress != null}<ProgressRing progress={a.progress} size={38} />{/if}</button
       >
