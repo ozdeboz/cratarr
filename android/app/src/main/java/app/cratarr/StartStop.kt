@@ -19,9 +19,9 @@ import kotlin.math.pow
 /**
  * Start and stop (Settings › This device; the owner, 2026-10-25), as the page's own player has them
  * (lib/localPlayer): Vinyl ramps the speed, the pitch following, as a turntable spins up and down; Fade the volume.
- * Over the device's ramp, eased; a new one cuts one under way short. Natural track ends stay gapless: only play,
- * pause and stop ramp, and next and previous where the device asks. Tape rewind: Previous restarting a track scrubs
- * back to its start, pitched up, four times the ramp.
+ * Over the device's ramp, eased. Natural track ends stay gapless: only play, pause and stop ramp, and next and previous
+ * where the device asks: out only, the track changing at the end of it and the next one starting as it is (the owner,
+ * 2026-10-26). Tape rewind: Previous restarting a track scrubs back to its start, pitched up, four times the ramp.
  *
  * Where it acts (the owner tried the first build, 2026-10-26: Vinyl broke into one odd speed, Fade ended early and
  * dropped, and came in with a plop): the speed on Android's own output (AudioTrack's playback rate, changed smoothly
@@ -45,6 +45,8 @@ class StartStop(
     private val groupDelayMs: () -> Long,
     /** What the controls show changed ([committed] set or let go): told to the session and to Cratarr. */
     private val changed: () -> Unit,
+    /** The app's own log (LinkLog): what each press did, to follow a device's report. */
+    private val log: (String, Array<Pair<String, Any?>>) -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
     private var token = 0
@@ -62,6 +64,14 @@ class StartStop(
         committed = to
         changed()
     }
+
+    /** A ramp's direction told to the page (the play button draws it): `out`, `in`, or none at its end. */
+    private fun ramping(dir: String?, ms: Long) {
+        rampListener?.invoke(dir, ms)
+    }
+
+    private fun note(what: String, vararg fields: Pair<String, Any?>) =
+        log(what, arrayOf<Pair<String, Any?>>("mode" to prefs.startStopMode, "playing" to player.isPlaying, "grouped" to grouped(), *fields))
 
     private fun mode(): String {
         val m = prefs.startStopMode
@@ -105,6 +115,7 @@ class StartStop(
     /** Back to plain playing: full speed, its own pitch, full volume; a ramp under way stopped. */
     fun reset() {
         token++
+        if (committed != null) ramping(null, 0)
         commit(null)
         Fader.target = 1f
         if (gain != 1f) {
@@ -116,6 +127,7 @@ class StartStop(
 
     /** Plays ([start]), winding up from still and silent. */
     fun play(start: () -> Unit) {
+        note("play", "busy" to busy)
         if (busy) return
         val m = mode()
         if (m == Prefs.START_STOP_OFF || player.isPlaying) {
@@ -128,12 +140,14 @@ class StartStop(
         set(0f)
         if (grouped()) Fader.snap()
         commit(true)
+        ramping("in", prefs.startStopMs)
         start()
         ramp(0f, 1f, prefs.startStopMs, set) { whole -> if (whole) reset() }
     }
 
     /** Pauses or stops ([stop]), winding down first: once what was wound down has been heard. */
     fun pause(stop: () -> Unit) {
+        note("pause", "busy" to busy)
         if (busy) return
         val m = mode()
         if (m == Prefs.START_STOP_OFF || !player.isPlaying) {
@@ -142,6 +156,7 @@ class StartStop(
             return
         }
         commit(false)
+        ramping("out", prefs.startStopMs)
         val mine = token + 1
         ramp(1f, 0f, prefs.startStopMs, setter(m)) { whole ->
             if (!whole) return@ramp
@@ -156,8 +171,9 @@ class StartStop(
         }
     }
 
-    /** Next or previous ([go]) where the device asks it: out, on, in. */
+    /** Next or previous ([go]) where the device asks it: out, then on, the next one as it is. */
     fun skip(go: () -> Unit) {
+        note("skip", "busy" to busy, "skips" to prefs.startStopSkips)
         if (busy) return
         val m = mode()
         if (m == Prefs.START_STOP_OFF || !prefs.startStopSkips || !player.isPlaying || grouped()) {
@@ -165,13 +181,13 @@ class StartStop(
             go()
             return
         }
-        val set = setter(m)
         commit(true)
-        ramp(1f, 0f, prefs.startStopMs, set) { whole ->
+        ramping("out", prefs.startStopMs)
+        ramp(1f, 0f, prefs.startStopMs, setter(m)) { whole ->
             if (!whole) return@ramp
+            // Full speed and volume first: the next one starts as it is.
+            reset()
             go()
-            set(0f)
-            ramp(0f, 1f, prefs.startStopMs, set) { done -> if (done) reset() }
         }
     }
 
@@ -180,6 +196,7 @@ class StartStop(
      * (off, not playing, in a group, or early in the track, where Previous goes to the one before).
      */
     fun rewind(restartAfterMs: Long): Boolean {
+        note("rewind", "busy" to busy, "rewind" to prefs.startStopRewind, "at_ms" to player.currentPosition)
         if (busy) return true
         if (!prefs.startStopRewind || grouped() || !player.isPlaying) return false
         val from = player.currentPosition
@@ -187,6 +204,7 @@ class StartStop(
         val ms = minOf(REWIND_MOST_MS, 4 * prefs.startStopMs)
         val mine = ++token
         commit(true)
+        ramping("out", ms)
         val t0 = SystemClock.elapsedRealtime()
         player.playbackParameters = PlaybackParameters(REWIND_SPEED, REWIND_SPEED)
         gain = REWIND_GAIN
@@ -209,6 +227,10 @@ class StartStop(
     }
 
     companion object {
+        /** Told when a ramp starts (`out`, `in`, with its length) and ends (none): the page's player draws it. */
+        @Volatile
+        var rampListener: ((String?, Long) -> Unit)? = null
+
         /** The volume's share now (1: none), on the player's volume: `PlayOnLink.applyVolume` multiplies it in. */
         @Volatile
         var gain = 1f
@@ -224,7 +246,8 @@ class StartStop(
         private const val STEP_MS = 16L
         private const val GROUP_MARGIN_MS = 250L
         private const val REWIND_SPEED = 2f
-        private const val REWIND_STEP_MS = 90L
+        /** Each step plays this long before the next seek back: shorter, and the seeks left nothing to hear. */
+        private const val REWIND_STEP_MS = 300L
         private const val REWIND_MOST_MS = 12_000L
         private const val REWIND_GAIN = 0.8f
     }

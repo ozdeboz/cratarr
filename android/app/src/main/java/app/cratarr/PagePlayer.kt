@@ -50,10 +50,22 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
     }
 
     fun release() {
+        StartStop.rampListener = null
         previewer?.release()
         previewer = null
         controller.removeListener(this)
         Prefs.shared(context).unregisterOnSharedPreferenceChangeListener(sleepChanged)
+    }
+
+    private fun skip(dir: String) {
+        controller.sendCustomCommand(SessionCommand(PlayerService.COMMAND_SKIP, Bundle.EMPTY), Bundle().apply { putString("dir", dir) })
+    }
+
+    init {
+        // A ramp's direction to the page (0.9.6): its play button draws it.
+        StartStop.rampListener = { dir, ms ->
+            send(JSONObject().put("type", "ramp").put("dir", dir ?: JSONObject.NULL).put("ms", ms).toString())
+        }
     }
 
     fun handle(m: JSONObject) {
@@ -103,8 +115,9 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
                 c.seekTo(m.optInt("index"), 0)
                 play()
             }
-            "next" -> c.seekToNextMediaItem()
-            "previous" -> c.seekToPrevious()
+            // Through the service (0.9.6, Start and stop): the change shows once it is made, after a ramp out.
+            "next" -> skip("next")
+            "previous" -> skip("previous")
             // Its items are located by the service when they reach it.
             "repeat" -> Repeat.set(context, c, m.optString("mode")) { it }
             // Kept by the service (Sleep); the change reaches the page as a report.
