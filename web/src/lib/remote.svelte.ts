@@ -122,6 +122,15 @@ export function position(): number {
   return frozen.on ? frozen.pos : running();
 }
 export const paused = (): boolean => playing()?.progress?.paused ?? false;
+/** A Start and stop ramp under way on this device's player: the play button is inert until it ends (the owner,
+ *  2026-10-26). */
+export const rampBusy = () => isLocal() && ramping.dir !== null;
+/** Paused as the play button shows it: from the press on, the way the ramp goes. */
+export const shownPaused = (): boolean => (rampBusy() ? ramping.dir === 'out' : paused());
+/** The play button: play or pause, not while a ramp runs. */
+export function playPause() {
+  if (!rampBusy()) send('play-pause');
+}
 
 export function clockText(secs: number) {
   const s = Math.floor(secs);

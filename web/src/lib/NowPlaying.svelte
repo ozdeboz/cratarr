@@ -16,7 +16,7 @@
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs, SEEK_STEP, type CoverTouch, type SwipeDown, type SwipeSide, type SwipeUp } from './prefs.svelte';
-  import { art, clockText, coverComing, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
+  import { art, clockText, coverComing, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite, playPause, rampBusy, shownPaused } from './remote.svelte';
   import SeekWave from './SeekWave.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import { Seek } from './seekState.svelte';
@@ -303,7 +303,7 @@
   }
   /** What a tap, a double tap or a circle on the cover was chosen to do. */
   function touch(what: CoverTouch) {
-    if (what === 'playPause') send('play-pause');
+    if (what === 'playPause') playPause();
     else if (what === 'favourite') toggleFavorite();
     else if (what === 'album') toAlbum();
     else overview = !overview && np?.source !== 'device';
@@ -525,7 +525,7 @@
             <!-- Its fill (the owner, 2026-10-26), inside a border of the same colour: winding down (Start and stop) it drains
                  from the top over the ramp; paused with Start and stop on it stays empty (a start winds up); winding up it
                  fills from the bottom over the ramp, the way it went. -->
-            <button class="main" aria-label={paused() ? 'Play' : 'Pause'} onclick={() => send('play-pause')}
+            <button class="main" aria-label={shownPaused() ? 'Play' : 'Pause'} aria-disabled={rampBusy()} onclick={playPause}
               >{#key `${ramp}:${ramping.at}`}<span
                   class="fillbg"
                   class:drain={ramp === 'out'}
@@ -534,7 +534,7 @@
                   style:--pre={ramp === 'in' ? 1 - ramping.ms / Math.max(1, ramping.full) : armed && paused() ? pre : 0}
                   style:animation-duration={ramp ? `${ramping.ms}ms` : null}
                 ></span>{/key}<Icon
-                name={paused() ? 'play' : 'pause'}
+                name={shownPaused() ? 'play' : 'pause'}
                 size={32}
               /></button
             >
