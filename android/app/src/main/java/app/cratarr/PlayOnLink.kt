@@ -445,7 +445,7 @@ class PlayOnLink(
                 }
             }
             "next" -> service.startStop.skip { p.seekToNextMediaItem() }
-            "previous" -> if (!service.startStop.rewind(PlayerService.RESTART_AFTER_MS)) service.startStop.skip { if (!Repeat.previous(service, p)) p.seekToPrevious() }
+            "previous" -> service.startStop.skip { if (!Repeat.previous(service, p)) p.seekToPrevious() }
             "repeat" -> Repeat.set(service, p, m.optString("mode"), service::located)
             "sleep" -> Sleep.set(service, m, "at_ms", "end_of_track")
             // Sync play (decision 0037): the group this player plays in, by its leader (none: alone).
@@ -737,7 +737,7 @@ class PlayOnLink(
             .put("skip_favourites", SkipFavourites.on(service))
             .put("autoplay", Autoplay.json(service))
             // Leading a group, where it is heard: a buffer behind this player.
-            .put("position_ms", sync.heardPosition(p).coerceAtLeast(0))
+            .put("position_ms", (service.startStop.heldPosition ?: sync.heardPosition(p)).coerceAtLeast(0))
             .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
             // A ramp under way says where it is going (0.9.6, StartStop): a pause is paused at once.
             .put("playing", service.startStop.committed ?: (p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE))
@@ -771,7 +771,7 @@ class PlayOnLink(
             .put("mode", Prefs.MODE_DEVICE)
             .put("index", -1)
             .put("device_track", track ?: JSONObject.NULL)
-            .put("position_ms", p.currentPosition.coerceAtLeast(0))
+            .put("position_ms", (service.startStop.heldPosition ?: p.currentPosition).coerceAtLeast(0))
             .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
             // A ramp under way says where it is going (0.9.6, StartStop): a pause is paused at once.
             .put("playing", service.startStop.committed ?: (p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE))

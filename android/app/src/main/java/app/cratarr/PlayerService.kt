@@ -148,7 +148,9 @@ class PlayerService : MediaSessionService() {
         // headset's or the system's shuffle shuffles what is to come once, and the player never plays shuffled, so it
         // says it is not. Cratarr's queue is shuffled by Cratarr (Play On's `shuffle`, which sends the new order back);
         // local mode's here, the playing track staying where it is.
-        startStop = StartStop(player, prefs, { link?.applyVolume() }, { sync.leader != null }, { sync.bufferMs }, ::startStopChanged)
+        startStop = StartStop(player, prefs, { link?.applyVolume() }, { sync.leader != null }, { sync.bufferMs }, ::startStopChanged) { what, fields ->
+            LinkLog.add(this, "info", "startstop", what, *fields)
+        }
         sessionPlayer = object : ForwardingPlayer(player) {
             // A ramp under way shows where it is going (0.9.6): the session's listeners told when that changes.
             override fun addListener(listener: Player.Listener) {
@@ -164,6 +166,11 @@ class PlayerService : MediaSessionService() {
             override fun getPlayWhenReady() = startStop.committed ?: super.getPlayWhenReady()
 
             override fun isPlaying() = startStop.committed ?: super.isPlaying()
+
+            // Held through a ramp (0.9.6): where the press was.
+            override fun getCurrentPosition() = startStop.heldPosition ?: super.getCurrentPosition()
+
+            override fun getContentPosition() = startStop.heldPosition ?: super.getContentPosition()
 
             // The lock screen's, the notification's, a headset's and the page's play, pause and stop, ramped (0.9.6).
             override fun play() = startStop.play { super.play() }
@@ -183,7 +190,6 @@ class PlayerService : MediaSessionService() {
             override fun seekToPreviousMediaItem() = startStop.skip { super.seekToPreviousMediaItem() }
 
             override fun seekToPrevious() {
-                if (startStop.rewind(RESTART_AFTER_MS)) return
                 startStop.skip { if (!Repeat.previous(this@PlayerService, player)) super.seekToPrevious() }
             }
 
@@ -577,6 +583,7 @@ class PlayerService : MediaSessionService() {
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
                 .add(SessionCommand(COMMAND_MODE, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_TARGET, Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_SKIP, Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller).setAvailableSessionCommands(commands).build()
         }
@@ -590,6 +597,9 @@ class PlayerService : MediaSessionService() {
             when (customCommand.customAction) {
                 COMMAND_MODE -> switchMode(args.getString("mode").orEmpty(), "page")
                 COMMAND_TARGET -> pointAt(args.getString("to").orEmpty(), "the page asked")
+                // The page's next and previous (0.9.6): through Start and stop, the page showing the change once it is
+                // made (a controller's own next shows the next track at once, before a ramp out).
+                COMMAND_SKIP -> if (args.getString("dir") == "previous") sessionPlayer.seekToPrevious() else sessionPlayer.seekToNextMediaItem()
                 else -> return super.onCustomCommand(session, controller, customCommand, args)
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -636,6 +646,7 @@ class PlayerService : MediaSessionService() {
         const val COMMAND_MODE = "cratarr.MODE"
         /** The page asks where the controls point (decision 0062): `to`, self, player:<name> or server. */
         const val COMMAND_TARGET = "cratarr.TARGET"
+        const val COMMAND_SKIP = "cratarr.SKIP"
 
         /** Started, and ready (or let go) as Stay ready says. Called while the app is in front, where both are allowed. */
         fun ready(context: Context) {
