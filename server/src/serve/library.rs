@@ -63,6 +63,10 @@ CREATE TABLE IF NOT EXISTS genres (name TEXT PRIMARY KEY, song_count INTEGER NOT
 CREATE VIRTUAL TABLE IF NOT EXISTS songs_fts USING fts5(title, artist, album, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
 CREATE VIRTUAL TABLE IF NOT EXISTS albums_fts USING fts5(name, artist, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
 CREATE VIRTUAL TABLE IF NOT EXISTS artists_fts USING fts5(name, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
+-- The indexes' terms (0.9.7): a query's word with typos stands for those it meets (`search::typo_terms`).
+CREATE VIRTUAL TABLE IF NOT EXISTS songs_vocab USING fts5vocab(songs_fts, 'row');
+CREATE VIRTUAL TABLE IF NOT EXISTS albums_vocab USING fts5vocab(albums_fts, 'row');
+CREATE VIRTUAL TABLE IF NOT EXISTS artists_vocab USING fts5vocab(artists_fts, 'row');
 ";
 
 /// A release's types as kept (0.9.6): its primary type ("album", "ep", "single", "other") and its secondary ones

@@ -159,11 +159,11 @@ fn album_match(title: &str, artist: &str, w: &[String]) -> Option<(u8, Vec<Match
     Some((close, vec![Matched { on: on.0, text: on.1.to_string(), count: None }]))
 }
 
-/// An album outside the library ranked as `search::rank` ranks a name: its name's or its artist's closeness, then how
-/// much of the one matched the words make up.
+/// An album outside the library ranked as `search::rank` ranks a name: its name's or its artist's closeness, the typos
+/// the one matched needs, then how much of it the words make up.
 fn matched_rank(close: u8, matched: &[Matched], w: &[String], at: usize, of: usize) -> f32 {
-    let covered = matched.first().map_or(0.0, |m| crate::search::coverage(&m.text, w));
-    f32::from(close) + if close > 0 { 0.9 * covered } else { 0.0 } + 0.09 * (1.0 - at as f32 / of.max(1) as f32)
+    let text = matched.first().map_or("", |m| m.text.as_str());
+    crate::search::ranked(close, crate::search::typos(text, w), crate::search::coverage(text, w), at, of)
 }
 
 /// The missing albums the words name (`subject` `missing:<release group>`), the best first, the newest among equals.
@@ -348,7 +348,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                     bandcamp: None,
                     request: None,
                     score: score(&t.title, &w, i, n),
-                    matched: if closeness(&t.title, &w) > 0 { matched_name(&t.title) } else { vec![Matched { on: "artist", text: t.artist.clone(), count: None }] },
+                    matched: if crate::search::matches(&t.title, &w) { matched_name(&t.title) } else { vec![Matched { on: "artist", text: t.artist.clone(), count: None }] },
                 })
                 .collect(),
         );
