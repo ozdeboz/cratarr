@@ -14,6 +14,7 @@
 // of Cratarr's players (Play On, `drive`): then every call below is handed to that player (app.svelte.ts, or the
 // server's /api/players), what it reports is shown in `local`, and the stream here is not used.
 
+import { playback } from './deviceLog';
 import { cue } from './queueCue.svelte';
 import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
@@ -302,6 +303,7 @@ async function appendTrack(index: number, from: number, gen: number) {
     }
     const type = res.headers.get('content-type') ?? '';
     const kind = !type.startsWith('audio/mp4') ? MPEG : type.includes('opus') ? OPUS : MP4;
+    playback('info', 'stream', { track: t.id, source: t.source, status: res.status, type, kind, supported: !!Source?.isTypeSupported(kind), from, managed: !!Managed });
     if (!Source?.isTypeSupported(kind)) throw new Error(`${t.name}: this browser cannot play ${kind === MP4 ? 'FLAC' : kind === OPUS ? 'Opus' : 'MP3'} here.`);
     const reader = res.body!.getReader();
     // The track's sample 0 goes to `start` in the stream (before the stream's 0 when starting mid-track).
@@ -315,6 +317,8 @@ async function appendTrack(index: number, from: number, gen: number) {
       if (!sb) {
         sb = ms!.addSourceBuffer(kind);
         if (Managed) sb.addEventListener('bufferedchange', purged);
+        const added = sb;
+        added.addEventListener('error', () => playback('warn', 'buffer error', { index, mime: kind }));
         mime = kind;
       } else if (mime !== kind) {
         await waitUpdate();
@@ -399,6 +403,7 @@ async function appendTrack(index: number, from: number, gen: number) {
     }
   } catch (e) {
     if ((e as DOMException).name === 'AbortError' || gen !== generation) return;
+    playback('warn', 'track failed', { track: t.id, source: t.source, error: e instanceof Error ? `${e.name}: ${e.message}` : String(e), ms: ms?.readyState ?? null, sb: !!sb, mime });
     local.error = e instanceof Error ? e.message : String(e);
     errorIndex = index;
     // Skip what cannot play, as a player does, unless it was the only thing.
@@ -437,7 +442,9 @@ async function fresh(index: number, from = 0, play = true) {
   ms = new Source!();
   const url = URL.createObjectURL(ms);
   audio.src = url;
-  if (play) audio.play().catch(() => {});
+  playback('info', 'fresh', { index, track: local.queue[index]?.id ?? null, from: Math.round(from * 10) / 10, play });
+  watchSource(ms);
+  if (play) audio.play().catch(refused);
   await new Promise((r) => ms!.addEventListener('sourceopen', r, { once: true }));
   // The element holds the stream now; the URL is no longer needed (each seek or jump makes a new one).
   URL.revokeObjectURL(url);
@@ -675,6 +682,25 @@ if (audio) {
   audio.addEventListener('seeked', levelSchedule);
   audio.addEventListener('pause', levelSchedule);
   audio.addEventListener('timeupdate', levelSchedule);
+}
+
+/** A play() the browser refused (Safari on iOS: not from a press), in the log; nothing on screen said so. */
+function refused(e: unknown) {
+  playback('warn', 'play refused', { error: e instanceof Error ? `${e.name}: ${e.message}` : String(e), index: local.index });
+}
+/** A stream's own events, in the log. */
+function watchSource(m: MediaSource) {
+  for (const ev of ['sourceended', 'sourceclose', 'startstreaming', 'endstreaming'])
+    m.addEventListener(ev, () => playback('info', ev, { index: local.index, ms: m.readyState }));
+}
+// What the element itself says (the owner, 2026-10-26: tracks that silently do not play on an iPhone): its errors and
+// stalls as warnings, its waits as notes.
+if (audio) {
+  const el = audio;
+  el.addEventListener('error', () => playback('warn', 'element error', { code: el.error?.code ?? null, message: el.error?.message ?? '', index: local.index }));
+  el.addEventListener('stalled', () => playback('warn', 'stalled', { index: local.index, at: Math.round(el.currentTime * 10) / 10, buffered: el.buffered.length ? Math.round(el.buffered.end(el.buffered.length - 1) * 10) / 10 : 0 }));
+  el.addEventListener('waiting', () => playback('info', 'waiting', { index: local.index, at: Math.round(el.currentTime * 10) / 10 }));
+  el.addEventListener('playing', () => playback('info', 'playing', { index: local.index, track: local.queue[local.index]?.id ?? null }));
 }
 
 if (audio) {
@@ -1335,7 +1361,7 @@ export function jump(index: number) {
   if (seg && audio.buffered.length && seg.start >= audio.buffered.start(0)) {
     audio.currentTime = seg.start;
     local.index = index;
-    if (audio.paused) audio.play().catch(() => {});
+    if (audio.paused) audio.play().catch(refused);
   } else {
     fresh(index, 0, true);
   }
@@ -1624,7 +1650,7 @@ function rampIn() {
   // From a track's start it plays at once, always (the owner, 2026-10-26): there is nothing to wind up from.
   if (mode === 'off' || (where()?.offset ?? 0) < FROM_START) {
     unramp();
-    void audio.play().catch(() => {});
+    void audio.play().catch(refused);
     return;
   }
   committed = false;
@@ -1643,7 +1669,7 @@ function rampIn() {
   const set = rampSet(mode);
   set(mode === 'fade' ? 0 : RAMP_LOW);
   rampBegins('in', ms, full);
-  void audio.play().catch(() => {});
+  void audio.play().catch(refused);
   const mine = ++run;
   void ramp(mode === 'fade' ? 0 : RAMP_LOW, 1, ms, set, mode === 'fade' ? easeInOut : easeOut).then(() => {
     if (mine !== run) return;

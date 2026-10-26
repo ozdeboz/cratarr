@@ -36,7 +36,8 @@ use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
 /// The areas an event can be of (its `target`).
-pub const AREAS: [&str; 7] = ["playon", "syncplay", "signin", "library", "subsonic", "imports", "server"];
+// `playback`: a page's own player, what it did with each track (its device lines; the owner, 2026-10-26).
+pub const AREAS: [&str; 8] = ["playon", "playback", "syncplay", "signin", "library", "subsonic", "imports", "server"];
 /// How long a row is kept.
 const KEEP_MS: i64 = 14 * 24 * 3600 * 1000;
 /// At most this many rows.

@@ -7,6 +7,7 @@
 // gone from the list (offline). A browser lets sound start only after the page was touched once: a play before that shows
 // "Tap to play". Behind a locked screen a paused page is frozen after a minute or so, and shows offline until it is
 // looked at again; playing, it stays. No sync play in a browser: it joins no group.
+import { lastSeq, logLines, note, sendSoonWith } from './deviceLog';
 import { describing } from './described.svelte';
 import { getPlayers } from './api';
 import { me } from './me.svelte';
@@ -123,16 +124,9 @@ const PAGE = (() => {
   }
 })();
 
-// Its own log while it is open (decision 0045, item 2), numbered, the newest 500 kept: what became of its connection.
-// Each time it connects, the lines Cratarr has not had yet go to it. A new log each time the page loads.
+// Its own log while it is open (lib/deviceLog). Each time it connects, the lines Cratarr has not had yet go to it. A new
+// log each time the page loads.
 const LOG = `${PAGE}-${Date.now().toString(36)}`;
-type Line = { seq: number; at: number; level: 'info' | 'warn'; area: 'playon'; what: string; fields: Record<string, unknown> };
-const lines: Line[] = [];
-let seq = 0;
-function note(level: Line['level'], what: string, fields: Record<string, unknown> = {}) {
-  lines.push({ seq: ++seq, at: Date.now(), level, area: 'playon', what, fields });
-  if (lines.length > 500) lines.shift();
-}
 
 /** The last line Cratarr has had. */
 let logged = 0;
@@ -146,7 +140,7 @@ async function sendLog(player: string) {
     const held = await fetch(`${base}?log=${encodeURIComponent(LOG)}`);
     if (!held.ok) return;
     const last = ((await held.json()) as { last?: number }).last ?? 0;
-    const out = lines.filter((l) => l.seq > last);
+    const out = logLines.filter((l) => l.seq > last);
     if (out.length && (await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ log: LOG, lines: out }) })).ok)
       logged = out[out.length - 1].seq;
   } catch {
@@ -378,7 +372,13 @@ if (typeof window !== 'undefined' && !inApp) {
     });
   });
   setInterval(() => target.connected && report(), HEARTBEAT_MS);
-  setInterval(() => target.connected && name && seq > logged && sendLog(name), LOG_MS);
+  setInterval(() => target.connected && name && lastSeq() > logged && sendLog(name), LOG_MS);
+  // A warning (a track that will not play): within moments.
+  let soonTimer: ReturnType<typeof setTimeout> | undefined;
+  sendSoonWith(() => {
+    clearTimeout(soonTimer);
+    soonTimer = setTimeout(() => target.connected && name && sendLog(name), 2000);
+  });
 }
 
 /** This device's name as Play On knows it: the app's player, this browser's (the owner, 2026-10-25: Settings' "This
