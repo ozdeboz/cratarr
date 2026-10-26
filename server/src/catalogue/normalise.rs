@@ -214,7 +214,7 @@ mod tests {
         let none_kept = Rules::default();
         assert_eq!(none_kept.values("artist", &s(&["30/70"])), s(&["30/70"]), "a slash inside a name is the name, kept or not");
         assert_eq!(none_kept.values("artist", &s(&["AC/DC / Lamb"])), s(&["AC/DC", "Lamb"]), "a spaced slash splits");
-        assert_eq!(none_kept.values("genre", &s(&["Jazz/Rock"])), s(&["Jazz", "Rock"]), "genres split on a slash as before"
+        assert_eq!(none_kept.values("genre", &s(&["Jazz/Rock"])), s(&["Jazz", "Rock"]), "genres split on a slash as before");
         assert_eq!(r.values("artist", &s(&["Simon & Garfunkel"])), s(&["Simon & Garfunkel"]));
         assert_eq!(r.values("artist", &s(&["Kruder, Dorfmeister"])), s(&["Kruder, Dorfmeister"]));
         assert_eq!(r.values("artist", &s(&["Wax feat. Cuffed"])), s(&["Wax feat. Cuffed"]));
