@@ -56,7 +56,7 @@ function save() {
 
 type Wanted = { source: string; id: string; name: string; artist: string | null; album: string | null; album_id: string | null };
 type Prepared = { source: string; id: string; offline: boolean; error?: string; file?: { url: string; type: string; ready: boolean; bytes: number | null } };
-type Facts = Prepared & { cover?: string; waveform?: string; track?: { duration_secs?: number | null } };
+type Facts = Prepared & { cover?: string; waveform?: string; track?: { duration?: number | null } };
 
 const post = async <T>(path: string, body: unknown): Promise<T> => {
   const r = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -65,10 +65,12 @@ const post = async <T>(path: string, body: unknown): Promise<T> => {
 };
 /** The form asked of Cratarr: the smaller copy this browser plays (Opus, else AAC) when Sync's Quality says so, else
  *  the original where this browser plays it (where it does not, the smaller copy all the same). */
-function chosen(): 'opus' | 'aac' | 'original' {
+function chosen(): 'opus' | 'original' {
+  // AAC is not made yet (a5, 0.9.8: its encoder's licence; ALAC or MP3 instead once the iPhone's formats are known):
+  // the original meanwhile.
   const small = playsSmaller();
-  if (prefs.offlineQuality === 'smaller' && small) return small;
-  return losslessAs() ?? 'original';
+  if (prefs.offlineQuality === 'smaller' && small === 'opus') return 'opus';
+  return losslessAs() === 'opus' ? 'opus' : 'original';
 }
 const form = () => ({ as: 'stream', form: chosen(), opus: chosen() === 'opus' });
 
@@ -131,7 +133,7 @@ async function fetchOne(t: Wanted, f: Facts) {
       artist: t.artist,
       album: t.album,
       album_id: t.album_id,
-      duration_secs: f.track?.duration_secs ?? null,
+      duration_secs: f.track?.duration ?? null,
       bytes: got,
       at: Date.now(),
     };
