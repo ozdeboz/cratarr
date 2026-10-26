@@ -4,11 +4,12 @@
   // it is, when it was last seen, its speaker delay and Remove. The speaker delay (sync play, decision 0037): how late
   // its speaker sounds, so a group sounds as one; set from any device (standing between two speakers), heard at once
   // while the finger moves, as Snapweb and Iris set Snapcast's per-client latency. 0 to 500 ms in steps of 5, its slider
-  // in a sheet (the settings' North Star, 2026-10-19).
+  // in a sheet (the settings' North Star, 2026-10-19). Shared with everyone (0.9.8, the owner): others on this Cratarr
+  // play on it with Play On as its owner does, nothing more; only one's own devices are here.
   import { loadRuntime, runtime, saveRuntime } from './serverRuntime.svelte';
   import ValueSheet from './settings/ValueSheet.svelte';
   import { panSafe } from './panSafe';
-  import { removeMyDevice, setPlayerDelay, type PlayOnPlayer } from './api';
+  import { removeMyDevice, setPlayerDelay, setPlayerShared, type PlayOnPlayer } from './api';
   import { backFromThing, openThing } from './panel.svelte';
   import { nameThing } from './settingsSections.svelte';
   import { when } from './settings/when';
@@ -32,15 +33,17 @@
     "How late each player's speaker sounds. In a group, a player whose speaker sounds late (Bluetooth, a soundbar's processing) plays that much earlier, so the group sounds as one.\n\nStand between two speakers and move it until they sound together. A Kodi's counts its own buffering too, up to a second.";
 
   const byName = (a: PlayOnPlayer, b: PlayOnPlayer) => a.name.toLowerCase().localeCompare(b.name.toLowerCase());
-  /** The apps (an app from before kinds says none), and the browsers that played: each kind its group. */
-  const apps = $derived(playOn.players.filter((p) => !p.kind || p.kind === 'app').sort(byName));
-  const browsers = $derived(playOn.players.filter((p) => p.kind === 'browser').sort(byName));
+  /** One's own apps (an app from before kinds says none), and browsers that played: each kind its group. Another's
+   *  shared device is not one's own to set. */
+  const own = $derived(playOn.players.filter((p) => p.mine !== false));
+  const apps = $derived(own.filter((p) => !p.kind || p.kind === 'app').sort(byName));
+  const browsers = $derived(own.filter((p) => p.kind === 'browser').sort(byName));
   const KIND = { app: 'App', kodi: 'Kodi', browser: 'Browser' } as const;
   const seen = (p: PlayOnPlayer) => (p.online ? 'Online' : p.seen ? `Seen ${when(p.seen)}` : 'Offline');
 
   // A device's own page.
   const DEVICE = 'device:';
-  const shown = $derived(thing?.startsWith(DEVICE) ? (playOn.players.find((p) => p.name === thing.slice(DEVICE.length)) ?? null) : null);
+  const shown = $derived(thing?.startsWith(DEVICE) ? (own.find((p) => p.name === thing.slice(DEVICE.length)) ?? null) : null);
   nameThing(() => shown?.name ?? null);
   // A device gone (removed, or not there once known): back to the list.
   $effect(() => {
@@ -80,6 +83,21 @@
     go();
   }
 
+  // Shared with everyone: as saved here until the player list says so.
+  let sharing = $state<Record<string, boolean>>({});
+  const isShared = (p: PlayOnPlayer) => sharing[p.name] ?? p.shared === true;
+  const SHARED_MORE =
+    'Everyone on this Cratarr can play on it with Play On, as you do: what plays, its queue, and groups. Its settings and Remove stay yours.';
+  async function share(name: string, on: boolean) {
+    sharing[name] = on;
+    try {
+      sharing[name] = (await setPlayerShared(name, on)).shared;
+    } catch (e) {
+      delete sharing[name];
+      toast.fail(e, on ? `${name} wasn't shared` : `${name} is still shared`);
+    }
+  }
+
   // The player whose delay is being set, in its sheet.
   let adjusting = $state<string | null>(null);
   // A player removed from its sheet (the owner, 2026-10-24): one's own device forgotten, its queue with it; not while
@@ -115,6 +133,9 @@
   </Group>
   <!-- A browser plays only while it is open, never in a group: no delay. -->
   {#if p.kind !== 'browser'}<Group>{@render delayRow(p.name)}</Group>{/if}
+  <Group>
+    <Item name="Shared with everyone" more={SHARED_MORE} toggle={{ checked: isShared(p), onchange: (on) => void share(p.name, on) }} />
+  </Group>
   <Group>
     <Item name={`Remove ${p.name}`} kind="danger" line={p.online ? 'Close Cratarr there first' : null} disabled={p.online} onclick={() => (removing = p.name)} />
   </Group>

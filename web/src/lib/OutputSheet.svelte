@@ -211,9 +211,10 @@
       {/if}
       {#each players as name (name)}
         {@const now = playing(name)}
+        {@const owner = playOn.players.find((p) => p.name === name)?.owner}
         <div use:hold={{ start: () => held(name), end: () => {}, enabled: groupable(name), ms: HOLD_MS }}>
           <MenuEntry
-            label={name}
+            label={owner ? `${name} · ${owner}'s` : name}
             sub={now?.text ?? null}
             subIcon={now ? (now.playing ? 'play' : 'pause') : null}
             checked={drivenName() === name || group.includes(name)}

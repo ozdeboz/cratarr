@@ -212,6 +212,11 @@ export type PlayOnPlayer = {
   kind?: 'app' | 'kodi' | 'browser';
   /** It has been in a group (only such players need a speaker delay). */
   grouped?: boolean;
+  /** Shared with everyone on this Cratarr, for Play On (0.9.8). */
+  shared?: boolean;
+  /** The asking account's own (a server before 0.9.8 says nothing: then it is); another's, shared, names its owner. */
+  mine?: boolean;
+  owner?: string | null;
   /** Its link to Cratarr (decision 0045). */
   link?: PlayerLink;
   track: QueueTrack | null;
@@ -298,6 +303,13 @@ export const setPlayerDelay = (name: string, ms: number) =>
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ ms }),
+  });
+/** One's own device shared with everyone on this Cratarr, for Play On, or not (0.9.8). */
+export const setPlayerShared = (name: string, shared: boolean) =>
+  request<{ shared: boolean }>(`/api/players/${encodeURIComponent(name)}/shared`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shared }),
   });
 /** A command for one of Cratarr's players (`{ command: 'play', tracks, index, position_ms }`, `{ command: 'pause' }`…). */
 export const playerCommand = (name: string, command: Record<string, unknown>) =>

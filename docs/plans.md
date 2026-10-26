@@ -180,6 +180,14 @@ Agreed by the owner during 0.9.7 (2026-10-26); 0.9.7 went live 2026-10-26 19:58 
 - **Single-track replacement.** An album missing a track gets it one at a time when the whole album cannot be had: a
   Soulseek search, each candidate fingerprinted (Chromaprint) and checked with AcoustID against the release, then
   "Add to album" into the existing folder, tagged from MusicBrainz, with Undo. About 2.5–3 server days (a5's estimate).
+- **Devices shared with everyone.** One switch on each device's page (Settings › Devices), off until turned on: then
+  everyone on this Cratarr plays on it with Play On as its owner does (what plays, its queue, groups), nothing more;
+  its settings, Remove and the switch stay its owner's. In Play On it carries its owner's name.
+- **Server settings in Settings.** Trusted proxies (Authentication), the analysis here and Beat This! (Libraries),
+  Playing in step's address (Devices): seeded by the environment, changed in Settings, at once. Unset, only a proxy on
+  a local address is believed.
+- **An album that plays moving.** Keep/Replace carries on on the player it stopped (0.9.7 played on the followed one),
+  stopping and playing again with Start and stop's wind-down and wind-up on the page and in the app.
 - **Carried over from 0.9.7.**
   - Some tracks play silently not at all on an iPhone (Safari, some MP3s, Bandcamp previews). 0.9.7 sends the browser
     player's own log (diagnostics, area playback); read it, then fix.
