@@ -2139,7 +2139,9 @@ export type Insights = {
 /** Playlists as points and how close each two are, by three signals (0..1 each). */
 export type Proximity = {
   /** `focus`: how concentrated its genres are, 0..1 (null without genre tags). */
-  playlists: { name: string; tracks: number; genres: string[]; focus: number | null }[];
+  /** `shares` (a5, 0.9.8): each genre's share of its tracks' genres (the rules' aliases applied, 0.05 and up), for the
+   *  Map's genre territories. */
+  playlists: { name: string; tracks: number; genres: string[]; focus: number | null; shares?: Record<string, number> }[];
   links: {
     a: number;
     b: number;

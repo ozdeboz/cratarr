@@ -1,6 +1,9 @@
 <script lang="ts">
   // Insights' Map (decision 0023; in the panel since 0.8, lib/InsightsPanel): the playlists as a graph, the closest
   // joined. A point selected shows its closest; View opens it over the map (back returns here); a long press its menu.
+  // As tall as its page leaves it, nothing below it and nothing to scroll (the owner, 2026-10-26). Genres (a switch in
+  // its corner, off until turned on) draws the genre territories (lib/territories), their legend beside it: a tap on a
+  // genre shows only its territory, again all.
   import { type Signal } from './api';
   import { insights, plural } from './insights.svelte';
   import { live } from './live.svelte';
@@ -48,6 +51,47 @@
   ];
   const anyOn = $derived(SIGNALS.some((s) => prefs.signals[s.id]));
 
+  // The territories' legend, as the graph drew them; the one shown alone.
+  let territoryGenres = $state<{ genre: string; colour: string }[]>([]);
+  let solo = $state<string | null>(null);
+  $effect(() => {
+    if (!prefs.mapTerritories) solo = null;
+  });
+
+  // The page's height left for the map: from its top to its scroller's foot, then less by whatever would still scroll.
+  let mapH = $state<number | null>(null);
+  function fill(node: HTMLElement) {
+    const scroller = () => {
+      for (let e = node.parentElement; e; e = e.parentElement) {
+        const o = getComputedStyle(e).overflowY;
+        if ((o === 'auto' || o === 'scroll') && e.clientHeight < e.scrollHeight + 1) return e;
+      }
+      return null;
+    };
+    let frame = 0;
+    const measure = () => {
+      const s = scroller();
+      const top = node.getBoundingClientRect().top;
+      const foot = s ? s.getBoundingClientRect().bottom - parseFloat(getComputedStyle(s).paddingBottom) : window.innerHeight;
+      const h = Math.max(240, Math.floor(foot - top - 8));
+      mapH = h;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const box = s ?? document.documentElement;
+        const over = box.scrollHeight - box.clientHeight;
+        if (over > 0) mapH = Math.max(240, h - over);
+      });
+    };
+    measure();
+    const later = setTimeout(measure, 300);
+    addEventListener('resize', measure);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(later);
+      removeEventListener('resize', measure);
+    };
+  }
+
 
 </script>
 
@@ -61,7 +105,7 @@
   {:else if !anyOn}
     <p class="empty">Turn on at least one of shared tracks, genre or artists.</p>
   {:else}
-    <div class="stage">
+    <div class="stage" {@attach fill} style:--map-h={mapH ? `${mapH}px` : null}>
       <div class="box">
         {#key insights.removed.join('/')}
           <ProximityGraph
@@ -69,6 +113,9 @@
             signals={prefs.signals}
             bind:selected
             bind:groups
+            bind:genres={territoryGenres}
+            showTerritories={prefs.mapTerritories}
+            {solo}
             onmenu={(i, anchor) => (menu = { name: shown.playlists[i].name, anchor })}
           />
         {/key}
@@ -77,11 +124,21 @@
         {/if}
         <!-- The legend explains the graph: always at hand, in the graph's corner. -->
         <button class="corner legend-btn" onclick={() => (legendOpen = true)}><Icon name="info" size={18} /><span>Legend</span></button>
+        <!-- Genres: the territories on or off; on, their genres, a tap showing one alone. -->
+        <div class="lands">
+          <button class="corner-left" class:on={prefs.mapTerritories} aria-pressed={prefs.mapTerritories} onclick={() => (prefs.mapTerritories = !prefs.mapTerritories)}
+            ><Icon name="globe" size={18} /><span>Genres</span></button
+          >
+          {#if prefs.mapTerritories}
+            {#each territoryGenres as g (g.genre)}
+              <button class="chip" class:off={solo !== null && solo !== g.genre} aria-pressed={solo === g.genre} onclick={() => (solo = solo === g.genre ? null : g.genre)}
+                ><i style:background={g.colour}></i>{g.genre}</button
+              >
+            {/each}
+          {/if}
+        </div>
       </div>
     </div>
-    {#if !me}
-      <p class="hint">Tap a playlist to highlight its closest playlists. Pinch or scroll to zoom.</p>
-    {/if}
   {/if}
 </div>
 
@@ -164,6 +221,61 @@
     bottom: 10px;
   }
 
+  /* Genres, top left, and on, its genres under it. */
+  .lands {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    max-width: 45%;
+  }
+
+  .corner-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 40px;
+    padding: 0 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-weight: 600;
+  }
+
+  .corner-left.on {
+    border-color: var(--accent);
+  }
+
+  .chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 30px;
+    max-width: 100%;
+    padding: 0 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .chip i {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+
+  .chip.off {
+    opacity: 0.45;
+  }
+
 
   .corner span {
     overflow: hidden;
@@ -228,12 +340,10 @@
   }
 
   .muted,
-  .hint,
   .empty {
     color: var(--muted);
   }
 
-  .hint,
   .empty {
     font-size: 0.9rem;
   }

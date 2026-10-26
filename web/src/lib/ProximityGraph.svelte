@@ -1,13 +1,17 @@
 <script lang="ts">
   // Playlists as points, drawn close when they are alike (Insights → Related). What is measured and which links are
-  // drawn is in proximity.ts; d3-force only computes positions and Svelte draws the SVG. Switching a signal swaps the
-  // links of the running simulation and warms it up, so the points glide to their new places.
+  // drawn is in proximity.ts; d3-force only computes positions and Svelte draws the SVG. The points never move (the
+  // owner, 2026-10-26: "just no node movement"): the layout is worked out to rest at once, and again when a signal
+  // changes, then fitted to the box; panning and pinch-zoom stay. With `showTerritories` (lib/territories) the six genres
+  // with most share among the playlists shown are drawn as areas under them, the points then neutral; `solo` shows one;
+  // a tap inside one highlights its playlists.
   import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY, type Simulation } from 'd3-force';
   import { select } from 'd3-selection';
   import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from 'd3-zoom';
   import type { Proximity, Signal } from './api';
   import { longpress } from './longpress';
   import { GROUP_NEIGHBOURS, GROUP_RESOLUTION, backbone, communities, nearest, rankers, spread, weigh } from './proximity';
+  import { sharesOf, territories, topGenres, type Territory } from './territories';
 
   let {
     data,
@@ -15,6 +19,9 @@
     selected = $bindable(null),
     groups = $bindable([]),
     onmenu,
+    showTerritories = false,
+    solo = null,
+    genres = $bindable([]),
   }: {
     data: Proximity;
     signals: Record<Signal, boolean>;
@@ -23,6 +30,12 @@
     groups?: { colour: string; members: number[] }[];
     /** Long-press or right-click on a point: open that playlist's menu. */
     onmenu?: (i: number, anchor: DOMRect) => void;
+    /** Genre territories drawn (the Map's switch). */
+    showTerritories?: boolean;
+    /** The one territory shown (the legend's tap); null: all. */
+    solo?: string | null;
+    /** The territories' genres and colours as drawn, for the legend. */
+    genres?: { genre: string; colour: string }[];
   } = $props();
 
   type Node = { i: number; r: number; x?: number; y?: number; vx?: number; vy?: number };
@@ -71,10 +84,9 @@
   let height = $state(480);
   let svg = $state<SVGSVGElement>();
   let view = $state<ZoomTransform>(zoomIdentity);
-  /** Bumped on every simulation tick: what the drawing below depends on. */
+  /** Bumped when a layout is done: what the drawing below depends on. */
   let frame = $state(0);
   let zoomer: ZoomBehavior<SVGSVGElement, unknown> | undefined;
-  let fitted = false;
 
   let sim: Simulation<Node, Edge> | undefined;
 
@@ -106,8 +118,7 @@
       .force('x', forceX<Node>(0).strength(0.05))
       .force('y', forceY<Node>(0).strength(0.05))
       .force('group', pullToGroups)
-      .on('tick', () => frame++)
-      .on('end', fit);
+      .stop();
     return () => sim?.stop();
   });
 
@@ -133,7 +144,11 @@
           return 0.3 + 0.7 * e.r;
         }),
     );
-    sim.alpha(Math.max(sim.alpha(), 0.6)).restart();
+    // To rest at once, unseen (no gliding), then drawn and fitted.
+    sim.alpha(1);
+    for (let t = 0; t < 400 && sim.alpha() > sim.alphaMin(); t++) sim.tick();
+    frame++;
+    queueMicrotask(fit);
   });
 
   // Pan and pinch-zoom.
@@ -146,10 +161,9 @@
     return () => select(svg!).on('.zoom', null);
   });
 
-  /** Once, when the first layout has settled: zoom so every point is in view. */
+  /** Each layout, once worked out: zoomed so every point is in view. */
   function fit() {
-    if (fitted || !svg || !zoomer) return;
-    fitted = true;
+    if (!svg || !zoomer) return;
     const xs = nodes.map((p) => p.x ?? 0);
     const ys = nodes.map((p) => p.y ?? 0);
     const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
@@ -175,8 +189,22 @@
     return nodes.map((p) => [p.x ?? 0, p.y ?? 0] as const);
   });
 
-  const dim = (i: number) => selected !== null && i !== selected && !neighbours.has(i);
-  const labelled = (i: number) => (selected === null ? hubs.has(i) || view.k > 1.8 : i === selected || neighbours.has(i));
+  // The territories (lib/territories): the six genres with most share among the playlists shown, in the groups'
+  // palette's order, on the layout as drawn.
+  const shares = $derived(data.playlists.map((p) => sharesOf(p)));
+  const top = $derived(showTerritories ? topGenres(shares) : []);
+  const lands = $derived<Territory[]>(showTerritories ? territories(pos, shares, top) : []);
+  const tint = (k: number) => PALETTE[k % PALETTE.length];
+  $effect(() => {
+    genres = top.map((genre, k) => ({ genre, colour: tint(k) }));
+  });
+  /** A territory tapped: its playlists highlighted (the rest dim); again, or the background, none. */
+  let land = $state<string | null>(null);
+  const landMembers = $derived(lands.find((l) => l.genre === land)?.members ?? null);
+
+  const dim = (i: number) => (landMembers ? !landMembers.has(i) : selected !== null && i !== selected && !neighbours.has(i));
+  const labelled = (i: number) =>
+    landMembers ? landMembers.has(i) : selected === null ? hubs.has(i) || view.k > 1.8 : i === selected || neighbours.has(i);
 </script>
 
 <div class="wrap" bind:clientWidth={width} bind:clientHeight={height}>
@@ -187,9 +215,22 @@
     viewBox={`${-width / 2} ${-height / 2} ${width} ${height}`}
     role="img"
     aria-label="Playlists drawn close together when they are alike"
-    onclick={(e) => e.target === svg && (selected = null)}
+    onclick={(e) => e.target === svg && ((selected = null), (land = null))}
   >
     <g transform={view.toString()}>
+      {#each lands as l, k (l.genre)}
+        {#if !solo || solo === l.genre}
+          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+          <path
+            class="land"
+            class:on={land === l.genre}
+            d={l.path}
+            style:--tint={tint(k)}
+            stroke-width={1.2 / view.k}
+            onclick={() => ((land = land === l.genre ? null : l.genre), (selected = null))}
+          />
+        {/if}
+      {/each}
       {#each data.links as l (`${l.a}-${l.b}`)}
         {@const k = `${l.a}-${l.b}`}
         {@const r = ranked.get(k)}
@@ -222,11 +263,16 @@
           onkeydown={(e) =>
             e.key === 'Escape' ? (selected = null) : (e.key === 'Enter' || e.key === ' ') && (selected = selected === p.i ? null : p.i)}
         >
-          <circle r={p.r} style:fill={colour(p.i)} />
+          <circle r={p.r} style:fill={showTerritories ? 'var(--text)' : colour(p.i)} />
           {#if labelled(p.i)}
             <text y={-p.r - 4} style:font-size={`${11 / Math.sqrt(view.k)}px`}>{data.playlists[p.i].name}</text>
           {/if}
         </g>
+      {/each}
+      {#each lands as l, k (l.genre)}
+        {#if !solo || solo === l.genre}
+          <text class="land-name" x={l.label.x} y={l.label.y} style:--tint={tint(k)} style:font-size={`${13 / Math.sqrt(view.k)}px`}>{l.genre}</text>
+        {/if}
       {/each}
     </g>
   </svg>
@@ -235,7 +281,8 @@
 <style>
   .wrap {
     width: 100%;
-    height: min(70vh, 620px);
+    /* As tall as the Map's page leaves it (lib/InsightsMap measures it: nothing to scroll). */
+    height: var(--map-h, min(70vh, 620px));
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 12px;
@@ -248,6 +295,32 @@
     height: 100%;
     touch-action: none;
     cursor: grab;
+  }
+
+  /* A genre's territory: a soft fill in its colour with a thin outline, under the links and points. */
+  .land {
+    fill: var(--tint);
+    fill-opacity: 0.16;
+    stroke: var(--tint);
+    stroke-opacity: 0.55;
+    cursor: pointer;
+    transition: fill-opacity 0.2s;
+  }
+
+  .land.on {
+    fill-opacity: 0.3;
+  }
+
+  .land-name {
+    fill: var(--tint);
+    font-weight: 700;
+    text-anchor: middle;
+    dominant-baseline: middle;
+    paint-order: stroke;
+    stroke: var(--surface);
+    stroke-width: 3px;
+    stroke-linejoin: round;
+    pointer-events: none;
   }
 
   .link {
