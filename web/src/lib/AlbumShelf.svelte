@@ -215,6 +215,21 @@
     if (pageView.query.trim()) leaveSearch(!!deep.get(albumSubject(source, a.id)));
     viewPlaylist(albumSubject(source, a.id));
   };
+  /** A flow's front album's facts, its Details (the owner, 2026-10-26: as the player's info): what is known of it. */
+  function detailsOf(s: ShelfSource, a: ListedAlbum) {
+    const u = useOf(s.id, a.id);
+    const lines = [
+      { id: 'artist', label: 'Artist', full: a.artist ?? '' },
+      { id: 'year', label: 'Year', full: a.year ? String(a.year) : '' },
+      { id: 'tracks', label: 'Tracks', full: a.tracks ? String(a.tracks) : '' },
+      { id: 'quality', label: 'Quality', full: quality(a) ?? '' },
+      { id: 'added', label: 'Added', full: a.added ? addedOn(a.added) : '' },
+      { id: 'plays', label: 'Plays', full: u.plays ? String(u.plays) : '' },
+      { id: 'played', label: 'Last played', full: u.played ? addedOn(u.played) : '' },
+      { id: 'rating', label: 'Rating', full: u.rating ? '★'.repeat(u.rating) : '' },
+    ].filter((l) => l.full);
+    return { genres: a.tags ?? [], lines };
+  }
   /** Flow: each server's front album, by its place in its list. */
   let flowAt = $state<Record<string, number>>({});
   // A tile shows its title and artist; the value the list is ordered by, when it is neither, is a pill over the cover's
@@ -432,6 +447,7 @@
           onplay={() => front && playOf(s, front)}
           canPlay={albumPlay.starting === null}
           playing={!!front && albumPlay.starting === front.id}
+          details={front ? detailsOf(s, front) : null}
         />
       {:else}
       {#each blocksOf(albums) as block, bi (`${s.id}:${perBlock}:${layout}:${bi}`)}

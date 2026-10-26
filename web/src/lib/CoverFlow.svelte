@@ -6,7 +6,7 @@
   // from the room it has: the front cover as large as the height allows between `top` and `foot`, the covers beside it
   // spread over the width (off its edges where it is narrow), the sides fading out. Only the covers in sight are made,
   // and the next few are fetched ahead.
-  import { untrack } from 'svelte';
+  import { untrack, type Snippet } from 'svelte';
   import Cover from './Cover.svelte';
 
   let {
@@ -21,6 +21,7 @@
     enter = false,
     bleed = 0,
     fade = true,
+    front: frontLayer,
   }: {
     /** Come in when shown (Home's featured flow; the owner, 2026-10-26): from both edges towards the middle, the outer
      *  covers first, the front one last. */
@@ -34,6 +35,8 @@
     /** Its sides fading out (the owner, 2026-10-23); none where the picture behind it reaches the screen's edges (the
      *  owner, 2026-10-26). */
     fade?: boolean;
+    /** Drawn over the front cover, which blurs under it (a flow's details, lib/FlowStage). */
+    front?: Snippet | null;
     /** Room kept free along the top (a header's buttons) and over the foot (the fade under its action bar). */
     top?: number;
     foot?: number;
@@ -279,7 +282,8 @@
       style:opacity={entering || !ready[c.src] ? 0 : c.o}
       style:transition-duration={entered ? null : `${ENTER_MS}ms`}
       style:transition-delay={entered ? null : `${Math.max(0, front.sides + 1 - Math.abs(c.key - Math.round(pos))) * STAGGER_MS}ms`}
-      style:z-index={c.z}><Cover src={c.src} lazy={false} onready={() => (ready[c.src] = true)} /></span
+      class:veiled={!!frontLayer && c.key === Math.round(pos)}
+      style:z-index={c.z}><Cover src={c.src} lazy={false} onready={() => (ready[c.src] = true)} />{#if frontLayer && c.key === Math.round(pos)}{@render frontLayer()}{/if}</span
     >
   {/each}
 </div>
@@ -312,6 +316,15 @@
       top 0.45s cubic-bezier(0.2, 0.8, 0.2, 1),
       filter 0.45s,
       opacity 0.45s;
+  }
+
+  /* Under the front cover's details: blurred, as the player's cover under its overview; its text sized by its width. */
+  .rec {
+    container-type: inline-size;
+  }
+
+  .rec.veiled > :global(.cover) {
+    filter: blur(14px) saturate(1.2);
   }
 
   .rec.marked {

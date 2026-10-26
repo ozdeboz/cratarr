@@ -13,6 +13,7 @@
   import { untrack } from 'svelte';
   import CoverFlow from './CoverFlow.svelte';
   import Icon from './Icon.svelte';
+  import CoverFacts, { type CoverFact } from './CoverFacts.svelte';
   import { backdropUrl } from './backdrop.svelte';
 
   let {
@@ -26,6 +27,7 @@
     onplay,
     playing = false,
     canPlay = true,
+    details = null,
   }: {
     covers: string[];
     /** The ticked ones, by their place (Select). */
@@ -41,6 +43,8 @@
     /** Starting to play. */
     playing?: boolean;
     canPlay?: boolean;
+    /** The front one's facts, shown over its cover by Details (the owner, 2026-10-26: as the player's info). */
+    details?: { genres: string[]; lines: CoverFact[] } | null;
   } = $props();
 
   /** The stage fills the page down to the mini-player's place, leaving room for the name and buttons under it (the
@@ -53,6 +57,12 @@
    *  them, no scroll left under them), so they sit together in the middle of the room. */
   let spare = $state(last.spare);
   const wall = $derived(!!backdropUrl());
+  /** Details on: the front one's facts over its cover, until another comes to the front. */
+  let showing = $state(false);
+  function toFront(i: number) {
+    showing = false;
+    onfront(i);
+  }
 
   const px = (el: Element | null, side: string) => (el ? parseFloat(getComputedStyle(el).getPropertyValue(side)) || 0 : 0);
   // Down to what lies under it (the owner, 2026-10-26: no room to scroll with nothing in it): its own padding, the
@@ -95,10 +105,12 @@
   }
 </script>
 
+{#snippet facts()}{#if details}<CoverFacts genres={details.genres} lines={details.lines} />{/if}{/snippet}
+
 {#if wall}<div class="wall flow-wall" {@attach besidePage} aria-hidden="true"></div>{/if}
 <div class="flow" class:on-wall={wall} style:margin-top="{-spare / 2}px">
   <div class="stage" {@attach fill} style:height="{stageHeight}px">
-    <CoverFlow {covers} top={12} foot={12} bleed={48} fade={false} {onopen} {marked} {onfront} onspare={(px) => (spare = last.spare = px)} {onmenu} />
+    <CoverFlow {covers} top={12} foot={12} bleed={48} fade={false} {onopen} {marked} onfront={toFront} front={showing && details ? facts : null} onspare={(px) => (spare = last.spare = px)} {onmenu} />
   </div>
   {#if front}
     <div class="caption">
@@ -109,6 +121,7 @@
       <div class="acts">
         <button class="main" disabled={!canPlay} aria-busy={playing} onclick={onplay}><Icon name="play" size={18} />Play</button>
         <button onclick={onname}>Open</button>
+        {#if details}<button class:on={showing} aria-pressed={showing} onclick={() => (showing = !showing)}><Icon name="info" size={18} />Details</button>{/if}
       </div>
     </div>
   {/if}
@@ -173,6 +186,10 @@
     color: var(--text);
     font: inherit;
     cursor: pointer;
+  }
+
+  .acts button.on {
+    background: color-mix(in srgb, var(--text) 22%, transparent);
   }
 
   .acts button.main {

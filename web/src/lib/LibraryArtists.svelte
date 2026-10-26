@@ -165,6 +165,16 @@
         onplay={() => flowFront && playArtist(flowFront)}
         canPlay={!starting}
         playing={starting}
+        details={flowFront
+          ? {
+              genres: [...new Set(flowFront.list.flatMap((x) => x.tags ?? []))].slice(0, 6),
+              lines: [
+                { id: 'albums', label: 'Albums', full: String(flowFront.albums) },
+                { id: 'tracks', label: 'Tracks', full: String(flowFront.tracks) },
+                { id: 'years', label: 'Years', full: (() => { const y = flowFront.list.map((x) => x.year).filter((v): v is number => !!v); return y.length ? (Math.min(...y) === Math.max(...y) ? String(y[0]) : `${Math.min(...y)}–${Math.max(...y)}`) : ''; })() },
+              ].filter((l) => l.full),
+            }
+          : null}
       />
     {:else if layout === 'grid'}
       <ul class="grid" style:--min="{ALBUM_WIDTHS.grid[prefs.albumZoom] ?? 170}px">
