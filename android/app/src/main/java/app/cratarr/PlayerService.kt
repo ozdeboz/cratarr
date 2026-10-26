@@ -167,6 +167,11 @@ class PlayerService : MediaSessionService() {
 
             override fun isPlaying() = startStop.committed ?: super.isPlaying()
 
+            // Held through a ramp (0.9.6): where the press was.
+            override fun getCurrentPosition() = startStop.heldPosition ?: super.getCurrentPosition()
+
+            override fun getContentPosition() = startStop.heldPosition ?: super.getContentPosition()
+
             // The lock screen's, the notification's, a headset's and the page's play, pause and stop, ramped (0.9.6).
             override fun play() = startStop.play { super.play() }
 

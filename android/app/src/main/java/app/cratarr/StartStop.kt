@@ -6,6 +6,7 @@ import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.PlaybackParameters
+import androidx.media3.common.Player
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
@@ -29,6 +30,11 @@ import kotlin.math.pow
  * volume, which also acts at once. Playing in a group (decision 0037) the leader's sound is sent on before both, so
  * Fade fades the sound itself there ([Fader]) and waits for the group's buffer before it pauses; Vinyl and Tape
  * rewind wait in a group (the owner: Vinyl later). Every volume follows a perceptual (dB) curve, and starts silent.
+ *
+ * The position holds through a ramp (the owner, 2026-10-26): a pause rests where it was pressed, its tail heard after
+ * it; a play starts that much earlier ([lead]) so it is at full where it left off, the position shown held meanwhile.
+ * Vinyl's speed eases in going down and out coming up, so the whole ramp is heard turning; a play from a track's
+ * start never ramps.
  *
  * A ramp is not interrupted (the owner, 2026-10-26): while one runs, play, pause, next and previous are ignored, and
  * the state it commits to ([committed]) is what every control shows from its first moment: a pause says paused at once
@@ -56,6 +62,11 @@ class StartStop(
     var committed: Boolean? = null
         private set
 
+    /** The position shown while a ramp runs (ms): where the press was; null otherwise. */
+    @Volatile
+    var heldPosition: Long? = null
+        private set
+
     /** Whether a ramp (or Tape rewind) runs: presses wait for its end. */
     val busy: Boolean get() = committed != null
 
@@ -81,14 +92,25 @@ class StartStop(
     private fun ease(t: Float) = if (t < 0.5f) 2 * t * t else 1 - (-2 * t + 2) * (-2 * t + 2) / 2
 
     /** Steps [set] from [from] to [to] (0 still, 1 playing) over [ms], eased; then [done] (false: cut short). */
-    private fun ramp(from: Float, to: Float, ms: Long, set: (Float) -> Unit, done: (Boolean) -> Unit) {
+    /** A ramp's curve: Vinyl's speed eases in going down and out coming up (what the turntable does); Fade eases both. */
+    private fun curve(mode: String, down: Boolean): (Float) -> Float = when {
+        mode != Prefs.START_STOP_VINYL -> ::ease
+        down -> { t -> t * t }
+        else -> { t -> 1 - (1 - t) * (1 - t) }
+    }
+
+    /** How much earlier a play starts so it is at full where it left off: the ramp's length at its mean speed. */
+    private fun lead(mode: String): Long =
+        (prefs.startStopMs * if (mode == Prefs.START_STOP_VINYL) LOW + (1f - LOW) * 2f / 3f else 1f).toLong()
+
+    private fun ramp(from: Float, to: Float, ms: Long, set: (Float) -> Unit, curve: (Float) -> Float, done: (Boolean) -> Unit) {
         val mine = ++token
         val t0 = SystemClock.elapsedRealtime()
         val step = object : Runnable {
             override fun run() {
                 if (mine != token) return done(false)
                 val t = ((SystemClock.elapsedRealtime() - t0).toFloat() / ms).coerceIn(0f, 1f)
-                set(from + (to - from) * ease(t))
+                set(from + (to - from) * curve(t))
                 if (t < 1f) main.postDelayed(this, STEP_MS) else done(true)
             }
         }
@@ -115,6 +137,7 @@ class StartStop(
     /** Back to plain playing: full speed, its own pitch, full volume; a ramp under way stopped. */
     fun reset() {
         token++
+        heldPosition = null
         if (committed != null) ramping(null, 0)
         commit(null)
         Fader.target = 1f
@@ -130,7 +153,9 @@ class StartStop(
         note("play", "busy" to busy)
         if (busy) return
         val m = mode()
-        if (m == Prefs.START_STOP_OFF || player.isPlaying) {
+        val at = player.currentPosition
+        // From a track's start: at once, always.
+        if (m == Prefs.START_STOP_OFF || player.isPlaying || at < FROM_START_MS) {
             reset()
             start()
             return
@@ -139,10 +164,13 @@ class StartStop(
         // Silent before the first sound: no plop.
         set(0f)
         if (grouped()) Fader.snap()
+        // Earlier by the ramp's lead, the position shown where it left off until it is there.
+        heldPosition = at
+        player.seekTo((at - lead(m)).coerceAtLeast(0))
         commit(true)
         ramping("in", prefs.startStopMs)
         start()
-        ramp(0f, 1f, prefs.startStopMs, set) { whole -> if (whole) reset() }
+        ramp(0f, 1f, prefs.startStopMs, set, curve(m, down = false)) { whole -> if (whole) reset() }
     }
 
     /** Pauses or stops ([stop]), winding down first: once what was wound down has been heard. */
@@ -155,16 +183,20 @@ class StartStop(
             stop()
             return
         }
+        // Where it was pressed: shown meanwhile, and where it rests once paused.
+        val at = player.currentPosition
+        heldPosition = at
         commit(false)
         ramping("out", prefs.startStopMs)
         val mine = token + 1
-        ramp(1f, 0f, prefs.startStopMs, setter(m)) { whole ->
+        ramp(1f, 0f, prefs.startStopMs, setter(m), curve(m, down = true)) { whole ->
             if (!whole) return@ramp
             // A group hears what the leader sends a buffer later: silent meanwhile, then paused.
             val tail = if (grouped()) groupDelayMs() + GROUP_MARGIN_MS else 0L
             main.postDelayed({
                 if (token == mine) {
                     stop()
+                    if (player.playbackState != Player.STATE_IDLE && player.mediaItemCount > 0) player.seekTo(at)
                     reset()
                 }
             }, tail)
@@ -181,9 +213,10 @@ class StartStop(
             go()
             return
         }
+        heldPosition = player.currentPosition
         commit(true)
         ramping("out", prefs.startStopMs)
-        ramp(1f, 0f, prefs.startStopMs, setter(m)) { whole ->
+        ramp(1f, 0f, prefs.startStopMs, setter(m), curve(m, down = true)) { whole ->
             if (!whole) return@ramp
             // Full speed and volume first: the next one starts as it is.
             reset()
@@ -237,6 +270,9 @@ class StartStop(
 
         /** Perceptual loudness: 0 silent, 1 full, −60 dB at the quiet end and even in decibels between. */
         fun loudness(v: Float): Float = if (v <= 0f) 0f else 10f.pow(3f * (min(1f, v) - 1f))
+
+        /** A play this near a track's start never ramps (the owner, 2026-10-26). */
+        private const val FROM_START_MS = 500L
 
         /** Vinyl's slowest: Android's output takes the pitch down to a quarter, no lower. */
         private const val LOW = 0.25f
