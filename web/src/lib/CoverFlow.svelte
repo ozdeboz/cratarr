@@ -19,6 +19,7 @@
     onmenu,
     marked,
     enter = false,
+    bleed = 0,
   }: {
     /** Come in when shown (Home's featured flow; the owner, 2026-10-26): from both edges towards the middle, the outer
      *  covers first, the front one last. */
@@ -26,6 +27,9 @@
     covers: string[];
     /** Which covers are highlighted, by their place (the ticked ones in select mode; the owner, 2026-10-23: a border). */
     marked?: boolean[];
+    /** How far below its place it may still draw (the covers' lower edges and shadows, the owner 2026-10-26: no hard
+     *  edge under them), the covers laid out as if it did not. */
+    bleed?: number;
     /** Room kept free along the top (a header's buttons) and over the foot (the fade under its action bar). */
     top?: number;
     foot?: number;
@@ -68,7 +72,7 @@
   type Place = { t: string; f: number; o: number; z: number; w: number };
   /** The layout from the room there is (the owner, 2026-10-23: responsive, the space used). */
   const front = $derived.by(() => {
-    const room = height - TOP - FOOT - 8;
+    const room = height - bleed - TOP - FOOT - 8;
     // Its share of the width: most of a narrow place (the sides may go off its edges, the owner: "quite okay"), less of
     // a wide one, which then shows more covers beside it.
     const share = clamp(0.98 - size * 0.0005, 0.42, 0.8);
@@ -241,6 +245,7 @@
   bind:this={root}
   bind:clientWidth={size}
   bind:clientHeight={height}
+  style:bottom={bleed ? `${-bleed}px` : null}
   style:perspective="{620 * front.u}px"
   role="listbox"
   aria-label="Albums"

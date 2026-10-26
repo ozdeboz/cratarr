@@ -92,7 +92,7 @@
 {#if wall}<div class="wall flow-wall" {@attach besidePage} aria-hidden="true"></div>{/if}
 <div class="flow" class:on-wall={wall} style:margin-top="{-spare / 2}px">
   <div class="stage" {@attach fill} style:height="{stageHeight}px">
-    <CoverFlow {covers} top={12} foot={12} {onopen} {marked} {onfront} onspare={(px) => (spare = px)} {onmenu} />
+    <CoverFlow {covers} top={12} foot={12} bleed={48} {onopen} {marked} {onfront} onspare={(px) => (spare = px)} {onmenu} />
   </div>
   {#if front}
     <div class="caption">
@@ -140,7 +140,10 @@
   }
 
   /* The front one: its name large, who or what under it, then Play and Open as Home's buttons. */
+  /* Over the covers' bleed under the stage: its name and buttons take the taps there. */
   .caption {
+    position: relative;
+    z-index: 1;
     display: flex;
     flex-direction: column;
     align-items: center;
