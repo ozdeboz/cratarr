@@ -349,11 +349,14 @@ impl App {
         let music = self.library.folders().music;
         let folders = self.library.catalogue().folders();
         let music = music.and_then(|m| folders.iter().position(|f| f == std::path::Path::new(&m))).map(|i| i as i64);
-        let lib = served.library.clone();
-        let (rows, numbering) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> { Ok((lib.lacking()?, lib.numbering(music)?)) }).await??;
+        let (lib, ud) = (served.library.clone(), served.userdata.clone());
+        let (rows, numbering, matched) =
+            tokio::task::spawn_blocking(move || -> anyhow::Result<_> { Ok((lib.lacking()?, lib.numbering(music)?, ud.renumber_matched()?)) }).await??;
         let whole = numbering.len() as u64;
-        let off: Vec<(String, String, String, String)> =
-            numbering.into_iter().filter_map(|(id, name, artist, numbers)| super::renumber::off(&numbers).map(|line| (id, name, artist, line))).collect();
+        let off: Vec<(String, String, String, String)> = numbering
+            .into_iter()
+            .filter_map(|(id, name, artist, numbers)| super::renumber::off(&numbers, !matched.contains(&id)).map(|line| (id, name, artist, line)))
+            .collect();
         Ok(library(&rows.into_iter().filter(|r| music.is_none_or(|m| r.folder == m)).collect::<Vec<_>>(), &off, whole))
     }
 

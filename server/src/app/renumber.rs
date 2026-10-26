@@ -384,7 +384,15 @@ pub fn start(account: &str, album: &str) -> Result<super::tasks::Task, String> {
     let a = album.to_string();
     super::tasks::spawn(&kind, account, false, move |h| async move {
         let progress = move |name: &str, done: u64, total: Option<u64>| h.step(name, done, total);
-        look(&a, &progress).await
+        let preview = look(&a, &progress).await?;
+        // Matched to a release (the owner, 2026-10-26): its gaps are tracks not held; Health leaves them out.
+        if preview.from != "files"
+            && let Some(serve) = crate::serve::instance()
+        {
+            let (ud, album) = (serve.userdata.clone(), a.clone());
+            tokio::task::spawn_blocking(move || ud.set_renumber_matched(&album, super::moment::now_secs())).await??;
+        }
+        Ok(preview)
     })
 }
 
@@ -520,8 +528,9 @@ pub async fn undo(token: &str) -> Result<()> {
 }
 
 /// What is off in an album's numbering, per disc (none when nothing is): numbers twice, numbers missing below the
-/// highest, tracks without one. `numbers`: each track's (disc, track).
-pub fn off(numbers: &[(Option<u32>, Option<u32>)]) -> Option<String> {
+/// highest (`gaps`: not for an album a renumber look matched to a release, whose gaps are tracks not held; the owner,
+/// 2026-10-26), tracks without one. `numbers`: each track's (disc, track).
+pub fn off(numbers: &[(Option<u32>, Option<u32>)], gaps: bool) -> Option<String> {
     let mut discs: std::collections::BTreeMap<u32, Vec<Option<u32>>> = std::collections::BTreeMap::new();
     for (d, t) in numbers {
         discs.entry(d.unwrap_or(1).max(1)).or_default().push(*t);
@@ -540,7 +549,7 @@ pub fn off(numbers: &[(Option<u32>, Option<u32>)]) -> Option<String> {
         }
         let top = seen.keys().max().copied().unwrap_or(0);
         let missing: Vec<String> = (1..top).filter(|n| !seen.contains_key(n)).map(|n| n.to_string()).collect();
-        if !missing.is_empty() {
+        if gaps && !missing.is_empty() {
             said.push(format!("{} missing", if missing.len() > 6 { format!("{} numbers", missing.len()) } else { missing.join(", ") }));
         }
         let unnumbered = tracks.iter().filter(|n| n.is_none_or(|n| n == 0)).count();
@@ -574,9 +583,11 @@ mod tests {
 
     #[test]
     fn what_is_off_is_said_per_disc() {
-        assert_eq!(off(&[(None, Some(1)), (None, Some(2)), (None, Some(3))]), None);
-        assert_eq!(off(&[(None, Some(1)), (None, Some(3)), (None, Some(3)), (None, None)]).as_deref(), Some("Track 3 twice; 2 missing; 1 unnumbered"));
-        assert_eq!(off(&[(Some(1), Some(1)), (Some(2), Some(1)), (Some(2), Some(1))]).as_deref(), Some("Disc 2: track 1 twice"));
+        assert_eq!(off(&[(None, Some(1)), (None, Some(2)), (None, Some(3))], true), None);
+        assert_eq!(off(&[(None, Some(1)), (None, Some(3)), (None, Some(3)), (None, None)], true).as_deref(), Some("Track 3 twice; 2 missing; 1 unnumbered"));
+        assert_eq!(off(&[(Some(1), Some(1)), (Some(2), Some(1)), (Some(2), Some(1))], true).as_deref(), Some("Disc 2: track 1 twice"));
+        assert_eq!(off(&[(None, Some(1)), (None, Some(4))], false), None, "matched to a release: its gaps are tracks not held");
+        assert_eq!(off(&[(None, Some(1)), (None, Some(4)), (None, None)], false).as_deref(), Some("1 unnumbered"));
     }
 
     #[test]
