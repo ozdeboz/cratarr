@@ -725,6 +725,15 @@
     height: calc(clamp(180px, 26vw, 260px) + 40px);
   }
 
+  /* One's own picture behind every flow, under a veil (Settings › Appearance; the owner, 2026-10-26). */
+  :global(:root[data-flow-photo]) .artist-flow {
+    background:
+      linear-gradient(to bottom, rgb(0 0 0 / 0.35), rgb(0 0 0 / 0.55)),
+      var(--flow-photo) center 20% / cover no-repeat,
+      var(--surface);
+    border-radius: 12px;
+  }
+
   .artist-caption {
     display: flex;
     flex-direction: column;

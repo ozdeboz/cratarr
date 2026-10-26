@@ -2853,6 +2853,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
     background: linear-gradient(to bottom, color-mix(in srgb, var(--text) 24%, var(--surface)), color-mix(in srgb, var(--text) 11%, var(--surface)));
   }
 
+  /* One's own picture behind every flow, under a veil (Settings › Appearance; the owner, 2026-10-26). */
+  :global(:root[data-flow-photo]) .hero.flowing {
+    background:
+      linear-gradient(to bottom, rgb(0 0 0 / 0.35), rgb(0 0 0 / 0.55)),
+      var(--flow-photo) center 20% / cover no-repeat,
+      var(--surface);
+  }
+
   .hero.flowing::after {
     height: 72px;
   }

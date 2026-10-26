@@ -880,6 +880,16 @@
     padding: 4px 0 12px;
   }
 
+  /* One's own picture behind every flow, under a veil (Settings › Appearance; the owner, 2026-10-26). */
+  /* Behind the covers only: the front album's name stays on the page, legible in either theme. */
+  :global(:root[data-flow-photo]) .stage {
+    background:
+      linear-gradient(to bottom, rgb(0 0 0 / 0.35), rgb(0 0 0 / 0.55)),
+      var(--flow-photo) center 20% / cover no-repeat,
+      var(--surface);
+    border-radius: 12px;
+  }
+
   .stage {
     position: relative;
   }

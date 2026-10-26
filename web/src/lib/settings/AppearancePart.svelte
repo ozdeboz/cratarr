@@ -68,12 +68,17 @@
       <Item name="Capital first letter" line="Of your name, in the greeting" toggle={{ checked: prefs.homeGreetingCapital, onchange: (on) => (prefs.homeGreetingCapital = on) }} />
     </div>
   {/if}
-  <Item name="Background" line={localCovers[HOME_HEADER] ? 'Your picture, on this device' : 'The sky for the weather'}>
+  <Item name="Your picture" line={localCovers[HOME_HEADER] ? 'Behind every flow, on this device' : 'None: the sky for the weather'}>
     <span class="pick">
       <label class="button" class:busy>{localCovers[HOME_HEADER] ? 'Change' : 'Choose a picture'}<input type="file" accept="image/*" hidden disabled={busy} onchange={pick} /></label>
-      {#if localCovers[HOME_HEADER]}<button onclick={() => removeLocalPicture(HOME_HEADER)}>The sky</button>{/if}
+      {#if localCovers[HOME_HEADER]}<button onclick={() => removeLocalPicture(HOME_HEADER)}>Remove</button>{/if}
     </span>
   </Item>
+  <!-- It is every flow's backdrop (crates', a wide album header's, the Library's Flow, Discover's); Home's sky too only
+       when asked (the owner, 2026-10-26). -->
+  {#if localCovers[HOME_HEADER]}
+    <Item name="Also on Home" line="In place of the weather's sky" toggle={{ checked: prefs.flowPictureOnHome, onchange: (on) => (prefs.flowPictureOnHome = on) }} />
+  {/if}
 </Group>
 
 <style>

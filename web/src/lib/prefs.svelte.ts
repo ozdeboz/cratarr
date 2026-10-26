@@ -162,6 +162,8 @@ export type Prefs = {
   homeGreeting: boolean;
   /** The greeting's name with a capital first letter, for an account named in lower case (the owner, 2026-10-25). */
   homeGreetingCapital: boolean;
+  /** One's own header picture (Appearance) replaces Home's weather sky too, besides being every flow's backdrop. */
+  flowPictureOnHome: boolean;
   /** One's own crates on Home (Settings › Home, 0.9.3; the owner, 2026-10-25): each a section of its own, a shelf of its
    *  albums, ordered and switched in Home's sections list. */
   homeCrates: boolean;
@@ -397,6 +399,7 @@ export const DEFAULTS: Prefs = {
   // On by default (the owner, 2026-10-25).
   homeGreeting: true,
   homeGreetingCapital: false,
+  flowPictureOnHome: false,
   homeCrates: false,
   levelling: true,
   startStop: { mode: 'off', ms: 800, skips: false, rewind: false },
@@ -490,6 +493,7 @@ function read(): Prefs {
       if (typeof saved.profile === 'boolean') p.profile = saved.profile;
       if (typeof saved.homeGreeting === 'boolean') p.homeGreeting = saved.homeGreeting;
       if (typeof saved.homeGreetingCapital === 'boolean') p.homeGreetingCapital = saved.homeGreetingCapital;
+      if (typeof saved.flowPictureOnHome === 'boolean') p.flowPictureOnHome = saved.flowPictureOnHome;
       if (typeof saved.homeCrates === 'boolean') p.homeCrates = saved.homeCrates;
       if (Array.isArray(saved.profileRows)) p.profileRows = saved.profileRows.filter((x: unknown): x is ProfileRow => PROFILE_ROWS.some((r) => r.id === x));
       if (Array.isArray(saved.homeParts) && saved.homeParts.join(',') !== HOME_BEFORE)

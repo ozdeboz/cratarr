@@ -141,8 +141,9 @@
    *  by day or after sunset. Made whole against the page where it is set: a var() resolves a relative url() against the
  *  stylesheet that uses it, assets/ in a build (the tablet asked for assets/skies/…, 404). */
   const skyPhoto = $derived.by(() => {
-    // A picture of the user's own, chosen on this device (Settings › Home), in place of the weather's.
-    if (localCovers[HOME_HEADER]) return localCovers[HOME_HEADER];
+    // A picture of the user's own, chosen on this device (Settings › Appearance), in place of the weather's where asked
+    // (Also on Home; the owner, 2026-10-26: it is every flow's backdrop first).
+    if (localCovers[HOME_HEADER] && prefs.flowPictureOnHome) return localCovers[HOME_HEADER];
     // Without the weather, the plain sky of the hour.
     if (!moment) return `skies/plain-${new Date().getHours() >= 7 && new Date().getHours() < 19 ? 'day' : 'night'}.jpg`;
     const one: Record<string, string> = { sunny: 'sunny-day', hot: 'hot-day', clear: 'clear-night' };
@@ -311,7 +312,7 @@
     if (skyIn) return;
     if (!heroLead) return void (skyIn = true);
     const t = setTimeout(() => (skyIn = true), 2500);
-    if (!(localCovers[HOME_HEADER] || momentIn) || !skyPhoto) return () => clearTimeout(t);
+    if (!((localCovers[HOME_HEADER] && prefs.flowPictureOnHome) || momentIn) || !skyPhoto) return () => clearTimeout(t);
     let gone = false;
     const img = new Image();
     img.onload = img.onerror = () => !gone && (skyIn = true);
