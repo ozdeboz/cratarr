@@ -358,7 +358,16 @@ pub async fn fetch(search: &str, candidate: usize) -> Result<String> {
     });
     let job = id.clone();
     tokio::spawn(async move {
-        let set = |f: &dyn Fn(&mut FetchJob)| jobs(|j| j.fetches.get_mut(&job).map(f));
+        let set = |f: &dyn Fn(&mut FetchJob)| {
+            let changed = jobs(|j| j.fetches.get_mut(&job).map(|x| {
+                let before = (x.view.state.clone(), x.view.percent.round());
+                f(x);
+                before != (x.view.state.clone(), x.view.percent.round())
+            }));
+            if changed == Some(true) {
+                tell(&job);
+            }
+        };
         let got = follow(&slskd, &c, &batch, &folder, &staging.join(&job), &|p| {
             set(&|f| (f.view.state, f.view.percent) = (if p > 0.0 { Fetching::Downloading } else { Fetching::Queued }, p));
         })
@@ -378,6 +387,30 @@ pub async fn fetch(search: &str, candidate: usize) -> Result<String> {
         });
     });
     Ok(id)
+}
+
+/// A fetch's state as it changes, for the live channel (`fetch`: its id with its state).
+#[derive(Debug, Clone, Serialize)]
+pub struct Told {
+    pub id: String,
+    #[serde(flatten)]
+    pub view: FetchView,
+}
+
+fn channel() -> &'static tokio::sync::broadcast::Sender<Told> {
+    static C: std::sync::OnceLock<tokio::sync::broadcast::Sender<Told>> = std::sync::OnceLock::new();
+    C.get_or_init(|| tokio::sync::broadcast::channel(64).0)
+}
+
+pub fn subscribe() -> tokio::sync::broadcast::Receiver<Told> {
+    channel().subscribe()
+}
+
+/// The fetch changed: told to whoever listens.
+fn tell(id: &str) {
+    if let Some(view) = fetch_view(id) {
+        let _ = channel().send(Told { id: id.to_string(), view });
+    }
 }
 
 pub fn fetch_view(id: &str) -> Option<FetchView> {
@@ -551,6 +584,7 @@ pub async fn add(fetch: &str) -> Result<String> {
             f.view.state = Fetching::Added;
         }
     });
+    tell(fetch);
     drop_fetch(fetch);
     Ok(token)
 }

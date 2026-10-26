@@ -26,6 +26,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/stream/{source}/{id}", get(stream))
         .route("/api/file/{source}/{id}", get(file))
         .route("/api/track/{source}/{id}/gain", get(track_gain))
+        .route("/api/offline", post(offline_facts))
+        .route("/api/offline/prepare", post(offline_prepare))
         .route("/api/players", get(players))
         .route("/api/groups/{group}/visuals", get(group_visuals).put(put_group_visuals))
         .route("/api/visuals/snapshots", get(visual_snapshots).post(add_visual_snapshot))
@@ -784,12 +786,17 @@ async fn track_gain(State(app): State<Arc<App>>, Path((source, id)): Path<(Strin
     let gain = replay_gain_of(&app, &source, &id).await;
     // Short-lived: an analysis comes, and the gain with it.
     let cache = (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=600"));
-    let mut v = gain.as_ref().map_or(json!({}), |g| serde_json::to_value(g).unwrap_or_default());
-    // What levelling turns it down by (0.9.8: shown on the page, applied by the app and the browser), by track and by
-    // album; null where the gain is not known (the page's choice for unmeasured tracks decides).
-    v["trackDown"] = json!(gain.as_ref().and_then(|g| turned_down(g.track_gain, g.track_peak)));
-    v["albumDown"] = json!(gain.as_ref().and_then(|g| turned_down(g.album_gain.or(g.track_gain), g.album_peak.or(g.track_peak))));
-    ([cache], Json(v)).into_response()
+    ([cache], Json(gain_view(gain.as_ref()))).into_response()
+}
+
+/// A track's gains as the page and the app read them, with what levelling turns it down by (0.9.8: shown on the page,
+/// applied by the app and the browser), by track and by album; null where the gain is not known (the page's choice for
+/// unmeasured tracks decides).
+fn gain_view(gain: Option<&crate::serve::api::ReplayGain>) -> serde_json::Value {
+    let mut v = gain.map_or(json!({}), |g| serde_json::to_value(g).unwrap_or_default());
+    v["trackDown"] = json!(gain.and_then(|g| turned_down(g.track_gain, g.track_peak)));
+    v["albumDown"] = json!(gain.and_then(|g| turned_down(g.album_gain.or(g.track_gain), g.album_peak.or(g.track_peak))));
+    v
 }
 
 /// Levelling's rule (decision 0035): the gain, never past the peak (no clipping) and never up: the dB a track is turned
@@ -2227,7 +2234,7 @@ async fn file(State(app): State<Arc<App>>, Path((source, id)): Path<(String, Str
     if q.as_.as_deref() == Some("opus") {
         let gain = replay_gain_of(&app, &source_id.0, &source_id.1).await;
         let copy = match &app.opus_copies {
-            Some(copies) => copies.serve(path.clone(), gain.map_or((None, None), |g| (g.track_gain, g.album_gain)), &headers).await,
+            Some(copies) => copies.serve(path.clone(), copy_gains(gain.as_ref()), &headers).await,
             None => opus_copy(path.clone(), gain).await,
         };
         if let Some(copy) = copy {
@@ -2235,6 +2242,126 @@ async fn file(State(app): State<Arc<App>>, Path((source, id)): Path<(String, Str
         }
     }
     crate::serve::files::serve_file(&path, &headers, false).await
+}
+
+/// The gains written into a track's Opus copy (its name says them: the same gains, the same copy).
+fn copy_gains(g: Option<&crate::serve::api::ReplayGain>) -> (Option<f64>, Option<f64>) {
+    g.map_or((None, None), |g| (g.track_gain, g.album_gain))
+}
+
+/// The most tracks one offline call takes (an album, a playlist).
+const OFFLINE_MOST: usize = 500;
+
+#[derive(Deserialize)]
+struct OfflineTracks {
+    tracks: Vec<TrackRefOf>,
+    /// "opus" (the default: lossless as its Opus copy, the rest as it is) or "original".
+    #[serde(default, rename = "as")]
+    as_: Option<String>,
+}
+
+#[derive(Deserialize, Clone)]
+struct TrackRefOf {
+    source: String,
+    id: String,
+}
+
+/// A track's file as a device keeps it for offline play: where to fetch it, as what, and whether it is ready (a copy
+/// being made has no length yet: the device waits for it).
+async fn offline_file(app: &App, t: &TrackRefOf, opus: bool) -> serde_json::Value {
+    if t.source == crate::bandcamp::SOURCE {
+        return json!({ "source": t.source, "id": t.id, "offline": false });
+    }
+    let cat = app.library.catalogue();
+    let (source, id) = (t.source.clone(), t.id.clone());
+    let Some((path, ..)) = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten() else {
+        return json!({ "source": t.source, "id": t.id, "offline": false, "error": "That track is not in the library." });
+    };
+    let base = format!("/api/file/{}/{}", form_urlencoded_segment(&t.source), form_urlencoded_segment(&t.id));
+    if opus && let Some(copies) = &app.opus_copies {
+        let gain = replay_gain_of(app, &t.source, &t.id).await;
+        if let Some(kept) = copies.prepare(path.clone(), copy_gains(gain.as_ref())).await {
+            return json!({ "source": t.source, "id": t.id, "offline": true, "file": {
+                "url": format!("{base}?as=opus"), "type": "audio/ogg", "as": "opus", "ready": kept.is_some(), "bytes": kept,
+            }});
+        }
+    }
+    let bytes = tokio::fs::metadata(&path).await.ok().map(|m| m.len());
+    let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+    let kind = match ext.as_str() {
+        "flac" => "audio/flac",
+        "mp3" => "audio/mpeg",
+        "m4a" | "alac" | "aac" => "audio/mp4",
+        "ogg" | "opus" => "audio/ogg",
+        "wav" => "audio/wav",
+        _ => "application/octet-stream",
+    };
+    json!({ "source": t.source, "id": t.id, "offline": true, "file": { "url": base, "type": kind, "as": "original", "ready": true, "bytes": bytes } })
+}
+
+/// A path segment, percent-encoded.
+fn form_urlencoded_segment(s: &str) -> String {
+    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+/// Offline play (0.9.8, the installed web app): the tracks' files readied, each with where to fetch it and whether it
+/// is ready yet; asked again until all are.
+async fn offline_prepare(State(app): State<Arc<App>>, Json(b): Json<OfflineTracks>) -> Result<Json<serde_json::Value>, ApiError> {
+    if b.tracks.len() > OFFLINE_MOST {
+        return Err(ToggleError::Refused(format!("At most {OFFLINE_MOST} tracks at once.")).into());
+    }
+    let opus = b.as_.as_deref() != Some("original");
+    let mut out = Vec::with_capacity(b.tracks.len());
+    for t in &b.tracks {
+        out.push(offline_file(&app, t, opus).await);
+    }
+    Ok(Json(json!({ "tracks": out })))
+}
+
+/// Offline play's facts (0.9.8): each track's row (as the Tracks list has it, with the account's plays), its gains and
+/// what levelling turns it down by, its cover's and waveform's addresses (fetched and kept as they are), and its file
+/// (as `offline/prepare` gives it).
+async fn offline_facts(State(app): State<Arc<App>>, Json(b): Json<OfflineTracks>) -> Result<Json<serde_json::Value>, ApiError> {
+    if b.tracks.len() > OFFLINE_MOST {
+        return Err(ToggleError::Refused(format!("At most {OFFLINE_MOST} tracks at once.")).into());
+    }
+    let opus = b.as_.as_deref() != Some("original");
+    let own: Vec<String> = b.tracks.iter().filter(|t| t.source == crate::source::cratarr::KIND.id).map(|t| t.id.clone()).collect();
+    let (rows, stamps) = match crate::serve::instance() {
+        Some(served) => tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let mut rows = served.library.track_rows_by_id(&own)?;
+            if let Some(user) = served.current_user() {
+                crate::app::tracks::of_account(&served, &user, &mut rows)?;
+            }
+            Ok((rows, served.cover_stamps()))
+        })
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?,
+        None => (Vec::new(), Arc::default()),
+    };
+    let rows: std::collections::HashMap<String, crate::serve::read::TrackRow> = rows.into_iter().map(|r| (r.id.clone(), r)).collect();
+    let mut out = Vec::with_capacity(b.tracks.len());
+    for t in &b.tracks {
+        let mut v = offline_file(&app, t, opus).await;
+        if v["offline"] != json!(true) {
+            out.push(v);
+            continue;
+        }
+        let (s, i) = (form_urlencoded_segment(&t.source), form_urlencoded_segment(&t.id));
+        let row = rows.get(&t.id).filter(|_| t.source == crate::source::cratarr::KIND.id);
+        if let Some(r) = row {
+            v["track"] = serde_json::to_value(r).unwrap_or_default();
+            let stamp = stamps.get(&r.album_id).map(|p| format!("?v={p}")).unwrap_or_default();
+            v["cover"] = format!("/api/albums/{s}/{}/cover{stamp}", form_urlencoded_segment(&r.album_id)).into();
+        } else {
+            v["cover"] = format!("/api/cover/{s}/{i}").into();
+        }
+        v["gain"] = gain_view(replay_gain_of(&app, &t.source, &t.id).await.as_ref());
+        v["waveform"] = format!("/api/track/{s}/{i}/waveform").into();
+        out.push(v);
+    }
+    Ok(Json(json!({ "tracks": out })))
 }
 
 /// A lossless file as Ogg Opus, made as it is sent (no length, no ranges: downloads take it whole). `None` for a file

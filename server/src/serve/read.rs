@@ -844,6 +844,19 @@ impl Library {
         Ok(rows.into_iter().filter(|r| !off.contains(&r.folder)).collect())
     }
 
+    /// These tracks' rows, as the Tracks list has them (0.9.8: what a device keeps for offline play); unknown ids left
+    /// out.
+    pub fn track_rows_by_id(&self, ids: &[String]) -> Result<Vec<TrackRow>> {
+        let db = self.db();
+        let mut out = Vec::new();
+        for chunk in ids.chunks(500) {
+            let marks = vec!["?"; chunk.len()].join(",");
+            let mut st = db.prepare(&format!("SELECT {TRACK_ROW_COLS} FROM songs s WHERE s.id IN ({marks})"))?;
+            out.extend(st.query_map(params_from_iter(chunk.iter()), track_row)?.collect::<rusqlite::Result<Vec<_>>>()?);
+        }
+        Ok(out)
+    }
+
     /// An album's id as it is (or would be) in Music: what its tags are kept under.
     pub fn album_base(&self, album: &str) -> Result<Option<String>> {
         let db = self.db();

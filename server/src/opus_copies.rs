@@ -79,6 +79,19 @@ impl OpusCopies {
         }
     }
 
+    /// A lossless track's copy readied for a download (0.9.8, the installed web app's offline play): its length when
+    /// it is kept, none while it is made (started now where it was not); `None` for a file that is not lossless.
+    pub async fn prepare(self: &Arc<Self>, path: PathBuf, gains: (Option<f64>, Option<f64>)) -> Option<Option<u64>> {
+        let meta = tokio::fs::metadata(&path).await.ok()?;
+        let mtime = meta.modified().ok().and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+        let key = key(&path, meta.len(), mtime, gains);
+        if let Ok(m) = tokio::fs::metadata(self.dir.join(format!("{key}.opus"))).await {
+            return Some(Some(m.len()));
+        }
+        self.start(&key, path, gains).await?;
+        Some(None)
+    }
+
     /// A kept copy as a file; served now, so it is the last to go.
     async fn send_kept(&self, kept: &Path, headers: &HeaderMap) -> Response {
         let k = kept.to_path_buf();
