@@ -395,7 +395,7 @@ class PlayOnLink(
                 release()
                 if (m.optBoolean("paused")) p.pause() else {
                     asked()
-                    p.play()
+                    service.startStop.play { p.play() }
                 }
             }
             // Edits name entries (decision 0033); by place only when the entry is not found here.
@@ -430,19 +430,22 @@ class PlayOnLink(
                 p.seekTo(it, 0)
                 play()
             }
+            // Start and stop as the device says (0.9.6).
             "pause" -> {
                 release()
-                p.pause()
+                service.startStop.pause { p.pause() }
             }
             "resume" -> play()
-            "toggle" -> if (p.playWhenReady && p.playbackState != Player.STATE_ENDED) p.pause() else play()
+            "toggle" -> if (p.playWhenReady && p.playbackState != Player.STATE_ENDED) service.startStop.pause { p.pause() } else play()
             "stop" -> {
                 release()
-                p.stop()
-                p.clearMediaItems()
+                service.startStop.pause {
+                    p.stop()
+                    p.clearMediaItems()
+                }
             }
-            "next" -> p.seekToNextMediaItem()
-            "previous" -> if (!Repeat.previous(service, p)) p.seekToPrevious()
+            "next" -> service.startStop.skip { p.seekToNextMediaItem() }
+            "previous" -> if (!service.startStop.rewind(PlayerService.RESTART_AFTER_MS)) service.startStop.skip { if (!Repeat.previous(service, p)) p.seekToPrevious() }
             "repeat" -> Repeat.set(service, p, m.optString("mode"), service::located)
             "sleep" -> Sleep.set(service, m, "at_ms", "end_of_track")
             // Sync play (decision 0037): the group this player plays in, by its leader (none: alone).
@@ -544,7 +547,7 @@ class PlayOnLink(
         if (p.playbackState == Player.STATE_IDLE) p.prepare()
         if (p.playbackState == Player.STATE_ENDED) p.seekTo(p.currentMediaItemIndex, 0)
         asked(again)
-        p.play()
+        service.startStop.play { p.play() }
     }
 
     // --- a start Android refuses ---
@@ -663,9 +666,10 @@ class PlayOnLink(
         }
     }
 
-    /** Ducked or not, levelled (decision 0035): what the player plays at, under Android's media volume. */
-    private fun applyVolume() {
-        player.volume = (if (ducked) DUCKED else 1f) * Levelling.factor
+    /** Ducked or not, levelled (decision 0035), faded (0.9.6, `StartStop`): what the player plays at, under Android's
+     *  media volume. */
+    fun applyVolume() {
+        player.volume = (if (ducked) DUCKED else 1f) * Levelling.factor * StartStop.gain
     }
 
     /** Android's media volume, 0 to 100. */
@@ -706,6 +710,9 @@ class PlayOnLink(
         }
     }
 
+    /** Start and stop committed to a state, or let it go (0.9.6): Cratarr is told at once. */
+    fun startStopChanged() = report()
+
     /** Changes close together go as one report. */
     private fun soon() {
         if (reportPending) return
@@ -732,7 +739,8 @@ class PlayOnLink(
             // Leading a group, where it is heard: a buffer behind this player.
             .put("position_ms", sync.heardPosition(p).coerceAtLeast(0))
             .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
-            .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)
+            // A ramp under way says where it is going (0.9.6, StartStop): a pause is paused at once.
+            .put("playing", service.startStop.committed ?: (p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE))
             .put("volume", volume())
             .put("ducked", ducked)
             .put("announce", announcing?.json() ?: JSONObject.NULL)
@@ -742,7 +750,8 @@ class PlayOnLink(
             .put("queue_name", Prefs(service).queueName.ifEmpty { null } ?: JSONObject.NULL)
             .put("link", linkJson())
         val withQueue = !queueSent
-        if (withQueue) out.put("queue", queueOf(p))
+        // Identities where Cratarr describes them (0.9.6); a server from before is told the details.
+        if (withQueue) out.put("queue", queueOf(p, thin = Describe.available == true))
         val body = out.toString()
         if (reports.isShutdown) return
         reports.execute {
@@ -764,7 +773,8 @@ class PlayOnLink(
             .put("device_track", track ?: JSONObject.NULL)
             .put("position_ms", p.currentPosition.coerceAtLeast(0))
             .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
-            .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)
+            // A ramp under way says where it is going (0.9.6, StartStop): a pause is paused at once.
+            .put("playing", service.startStop.committed ?: (p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE))
             .put("volume", volume())
             .put("ducked", ducked)
             .put("announce", announcing?.json() ?: JSONObject.NULL)

@@ -465,6 +465,13 @@ class MainActivity : AppCompatActivity() {
                 }
                 message.optString("downloadQuality").takeIf { it.isNotEmpty() }?.let { prefs.downloadQuality = it }
                 if (message.has("levelling")) prefs.levelling = message.optBoolean("levelling")
+                // Start and stop (0.9.6): the page's This device setting, kept here for the app's own player.
+                message.optJSONObject("startStop")?.let { s ->
+                    prefs.startStopMode = s.optString("mode", Prefs.START_STOP_OFF)
+                    prefs.startStopMs = s.optLong("ms", 800L)
+                    prefs.startStopSkips = s.optBoolean("skips")
+                    prefs.startStopRewind = s.optBoolean("rewind")
+                }
                 if (message.has("downloadOverMobile") || message.has("syncOnlyCharging")) {
                     if (message.has("downloadOverMobile")) prefs.downloadOverMobile = message.optBoolean("downloadOverMobile")
                     if (message.has("syncOnlyCharging")) prefs.syncOnlyCharging = message.optBoolean("syncOnlyCharging")
@@ -603,6 +610,14 @@ class MainActivity : AppCompatActivity() {
         .put("syncBudgetGb", prefs.syncBudgetGb)
         .put("syncOnlyCharging", prefs.syncOnlyCharging)
         .put("levelling", prefs.levelling)
+        .put(
+            "startStop",
+            JSONObject()
+                .put("mode", prefs.startStopMode)
+                .put("ms", prefs.startStopMs)
+                .put("skips", prefs.startStopSkips)
+                .put("rewind", prefs.startStopRewind),
+        )
         // Local mode (decision 0052): which music plays, and whether Android lets the app read the device's.
         .put("mode", prefs.mode)
         // Where this device's controls point (decision 0062): the page shows that, and keeps no output of its own. None
