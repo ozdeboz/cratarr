@@ -154,6 +154,19 @@ const ADDED_COLUMNS: [(&str, &str); 11] = [
     ("analysis_shape", "spectrum BLOB"),
 ];
 
+/// The crates' facts as last read (`Catalogue::crate_facts`), and what they were read from.
+struct KeptFacts {
+    changes: u64,
+    folders: Vec<PathBuf>,
+    built: i64,
+    words: i64,
+    at: std::time::Instant,
+    facts: Arc<Vec<crate::crates::Facts>>,
+}
+
+/// The crates' facts are read again for a catalogue write or a harvested word at most this often (a build, at once).
+const FACTS_EVERY: Duration = Duration::from_secs(300);
+
 /// File states.
 const PENDING: i64 = 0;
 const READ: i64 = 1;
@@ -361,7 +374,7 @@ pub struct Catalogue {
     /// looked stopped to the watch on the servers' scans).
     worked: std::sync::atomic::AtomicU64,
     /// The crates' facts, as of the database's change count and the folders in use (see `crate_facts`).
-    facts: Mutex<Option<(u64, Vec<PathBuf>, i64, Arc<Vec<crate::crates::Facts>>)>>,
+    facts: Mutex<Option<KeptFacts>>,
     /// The database file, for readers with their own connection (`reader`); `None` in memory.
     file: Option<PathBuf>,
 }
@@ -887,15 +900,19 @@ impl Catalogue {
     pub fn crate_facts(&self) -> Result<Arc<Vec<crate::crates::Facts>>> {
         // Read again when the library is built again too: its albums' release types (0.9.6) come from there.
         let served = crate::serve::instance();
+        let (changes, folders, built) = (self.db().total_changes(), self.folders(), served.as_ref().map_or(0, |s| s.built_at()));
         // And when the library's words change (0.9.7, `app::words::stamp`).
-        let (changes, folders, built) = (self.db().total_changes(), self.folders(), served.as_ref().map_or(0, |s| crate::app::words::stamp(s)));
+        let words = served.as_ref().map_or(0, |s| crate::app::words::stamp(s));
         let mut kept = self.facts.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some((c, f, b, facts)) = kept.as_ref()
-            && *c == changes
-            && *f == folders
-            && *b == built
+        if let Some(k) = kept.as_ref()
+            && k.folders == folders
+            && k.built == built
+            // A write to the catalogue or a word harvested reads them again only every so often (0.9.7: a reader's
+            // reread of every file writes all along for hours, the harvest a word at a time; each Home read them
+            // all again, and the sim went past 768 MB). A build or other folders read them at once.
+            && ((k.changes == changes && k.words == words) || k.at.elapsed() < FACTS_EVERY)
         {
-            return Ok(facts.clone());
+            return Ok(k.facts.clone());
         }
         let mut facts = self.read_crate_facts(&folders)?;
         if let Some(s) = &served
@@ -918,7 +935,7 @@ impl Catalogue {
             }
         }
         let facts = Arc::new(facts);
-        *kept = Some((changes, folders, built, facts.clone()));
+        *kept = Some(KeptFacts { changes, folders, built, words, at: std::time::Instant::now(), facts: facts.clone() });
         Ok(facts)
     }
 
