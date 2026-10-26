@@ -21,15 +21,16 @@
 
   // The flow (the owner, 2026-10-26): a front runs along the line, left to right. Behind it each piece opens its gap and
   // slims to the thinnest bar's height (the line is thicker than the quietest bars), over RAMP pieces; then each bar
-  // grows to its height, HOLD_MS after it slimmed and never before its turn (the last SPREAD_MS after the first). While
+  // grows to its height HOLD_MS after it slimmed: the two waves run together across it, one after the other per piece. While
   // it loads, the front stands as far as it has loaded (a progress bar); once in, it runs on to the end in CUT_MS.
-  const CUT_MS = 360;
-  const HOLD_MS = 80;
+  const CUT_MS = 420;
+  /** After its own slimming, how soon a bar grows: the growth's wave follows the slimming's at its speed, a little
+   *  behind, so across the waveform the two run together (the owner, 2026-10-26), each piece one after the other. */
+  const HOLD_MS = 40;
   const GROW_MS = 320;
-  const SPREAD_MS = 480;
   /** The quietest bar's height, which the pieces slim to. */
   const LOW = 6;
-  const ALL = Math.max(CUT_MS, SPREAD_MS) + HOLD_MS + GROW_MS;
+  const ALL = CUT_MS + HOLD_MS + GROW_MS;
   let width = $state(0);
   let height = $state(28);
   const n = $derived(Math.max(16, Math.min(512, Math.floor(width / 3))));
@@ -61,8 +62,10 @@
   const front = $derived(
     shown ? (grown >= ALL ? n + ramp : frontAt + (n + ramp - frontAt) * Math.min(1, grown / CUT_MS)) : Math.min(1, Math.max(0, loading ?? 0)) * n,
   );
-  /** When the front has piece `i` slimmed, ms after it came in. */
-  const slimAt = (i: number) => Math.max(0, ((i + ramp - frontAt) / Math.max(1, n + ramp - frontAt)) * CUT_MS);
+  /** When piece `i` is slimmed, ms after it came in: behind the front as it runs on; those slimmed already while it
+   *  loaded take their turns over the time the front spent on them, left to right. */
+  const slimAt = (i: number) =>
+    i + ramp <= frontAt ? (i / n) * CUT_MS : ((i + ramp - frontAt) / Math.max(1, n + ramp - frontAt)) * CUT_MS;
   const f = (x: number) => Math.round(x * 100) / 100;
   /** Every piece as one path: in the line (full width, the line's height), slimming behind the front, growing. */
   const d = $derived.by(() => {
@@ -71,7 +74,7 @@
       const g = Math.min(1, Math.max(0, (front - i) / ramp));
       let h = line + (LOW - line) * g;
       if (shown && g >= 1) {
-        const own = Math.min(1, Math.max(0, (grown - Math.max(slimAt(i), (i / n) * SPREAD_MS) - HOLD_MS) / GROW_MS));
+        const own = Math.min(1, Math.max(0, (grown - slimAt(i) - HOLD_MS) / GROW_MS));
         h = LOW + (Math.max(LOW, shown[i] * 100) - LOW) * (1 - (1 - own) ** 2);
       }
       const w = 1 - 0.3 * g;
