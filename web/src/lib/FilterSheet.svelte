@@ -19,6 +19,7 @@
   import { me } from './me.svelte';
   import Icon from './Icon.svelte';
   import MenuSheet from './MenuSheet.svelte';
+  import MarkLoader from './MarkLoader.svelte';
   import { prefs, type PanelKind } from './prefs.svelte';
   import { known, libraryShown, noChoice, remember, showLibrary } from './sources.svelte';
   import { toast } from './toast.svelte';
@@ -35,7 +36,7 @@
     page?: string | null;
     kind?: PanelKind | null;
     tempos?: readonly (number | null | undefined)[] | null;
-    counted?: { shown: number; total: number } | null;
+    counted?: { shown: number; total: number; pending?: boolean } | null;
     onclose: () => void;
   } = $props();
 
@@ -155,7 +156,11 @@
   {onclose}
 >
   <div class="cards">
-    {#if counted && filtersOn(list)}<p class="count">{counted.shown.toLocaleString()} of {counted.total.toLocaleString()}</p>{/if}
+    <!-- While a changed filter's answer is on its way: the last count, dimmed, the loading sign after it (the owner,
+         2026-10-27: it took long with nothing saying so). -->
+    {#if counted && filtersOn(list)}<p class="count" class:pending={counted.pending} aria-busy={counted.pending}>
+        {counted.shown.toLocaleString()} of {counted.total.toLocaleString()}{#if counted.pending}<MarkLoader size={18} />{/if}
+      </p>{/if}
     {#if conditioned}
       <div>
         <ConditionList bind:conditions={() => filter.conditions, (c) => setConditions(list, c)} {axes} {items} bpms={tempos} />
@@ -242,9 +247,17 @@
   }
 
   .count {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 20px;
     margin: 0 8px;
     color: var(--muted);
     font-size: 14px;
+  }
+
+  .count.pending {
+    color: color-mix(in srgb, var(--muted) 60%, transparent);
   }
 
   /* A server's card: the followed one bordered in the accent (the row's "ticked" state) and checked. */

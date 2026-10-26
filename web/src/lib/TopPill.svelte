@@ -47,7 +47,7 @@
     /** In the panel: the kind of list it shows, whose filter is remembered (decision 0060). */
     kind?: PanelKind | null;
     /** In the panel: how many of its list the filter lets through, of how many. */
-    counted?: { shown: number; total: number } | null;
+    counted?: { shown: number; total: number; pending?: boolean } | null;
     /** A panel's own filter and View (Insights' sheets): the buttons open these instead of the lists' sheets; `filterLit`:
      *  whether its filter leaves something out. */
     onfilter?: (() => void) | null;

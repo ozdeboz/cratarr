@@ -194,8 +194,9 @@ export const pageView = $state({
   query: '',
   /** A library of the page's list is switched off (lib/AlbumShelf): the pill's funnel is lit. */
   narrowed: false,
-  /** How many of the page's list its filter lets through, of how many (the Filter sheet's count); null: not counted. */
-  counted: null as { shown: number; total: number } | null,
+  /** How many of the page's list its filter lets through, of how many (the Filter sheet's count); null: not counted.
+   *  `pending`: the server's answer to a changed filter is on its way (the count is the last one's). */
+  counted: null as { shown: number; total: number; pending?: boolean } | null,
   /** The pill's search field is open (App's title gives way when it leaves no room, lib/TopPill). */
   searchOpen: false,
   /** The page's own button at the pill's end (usePageAction), while it shows. */

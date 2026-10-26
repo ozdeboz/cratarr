@@ -1631,7 +1631,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
           filter: filterable,
           tempos: listTempos,
           kind,
-          counted: rows && shown ? { shown: shown.length, total: rows.length } : null,
+          counted: rows && shown ? { shown: shown.length, total: rows.length, pending: pass.pending } : null,
           search: full ? pageHere : null,
         }
       : null;

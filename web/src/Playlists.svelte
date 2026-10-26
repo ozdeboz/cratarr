@@ -88,7 +88,7 @@
   // How many the filter lets through, of how many (the Filter sheet's count).
   $effect(() => {
     if (waiting) return;
-    pageView.counted = { shown: items.length, total: shownPlaylists().length };
+    pageView.counted = { shown: items.length, total: shownPlaylists().length, pending: pass.pending };
     return () => (pageView.counted = null);
   });
 

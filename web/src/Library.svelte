@@ -162,7 +162,7 @@
   // the shelf shows them (it said 605 of 2,861 with Music switched off).
   $effect(() => {
     const count = (l: ShelfSource[] | null) => (l ?? []).reduce((n, s) => n + s.albums.filter((a) => !a.library || libraryShown(s.id, a.library)).length, 0);
-    pageView.counted = sources ? { shown: count(shown), total: count(sources) } : null;
+    pageView.counted = sources ? { shown: count(shown), total: count(sources), pending: pass.pending } : null;
     return () => (pageView.counted = null);
   });
 </script>
