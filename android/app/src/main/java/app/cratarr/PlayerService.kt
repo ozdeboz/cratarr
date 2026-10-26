@@ -190,7 +190,6 @@ class PlayerService : MediaSessionService() {
             override fun seekToPreviousMediaItem() = startStop.skip { super.seekToPreviousMediaItem() }
 
             override fun seekToPrevious() {
-                if (startStop.rewind(RESTART_AFTER_MS)) return
                 startStop.skip { if (!Repeat.previous(this@PlayerService, player)) super.seekToPrevious() }
             }
 

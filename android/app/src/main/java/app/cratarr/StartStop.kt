@@ -22,14 +22,15 @@ import kotlin.math.pow
  * (lib/localPlayer): Vinyl ramps the speed, the pitch following, as a turntable spins up and down; Fade the volume.
  * Over the device's ramp, eased. Natural track ends stay gapless: only play, pause and stop ramp, and next and previous
  * where the device asks: out only, the track changing at the end of it and the next one starting as it is (the owner,
- * 2026-10-26). Tape rewind: Previous restarting a track scrubs back to its start, pitched up, four times the ramp.
+ * 2026-10-26). Tape rewind waits until it is real reverse play (the owner, 2026-10-26: hidden until then; the stepped
+ * seeks were not it), so Previous restarts a track as it always did.
  *
  * Where it acts (the owner tried the first build, 2026-10-26: Vinyl broke into one odd speed, Fade ended early and
  * dropped, and came in with a plop): the speed on Android's own output (AudioTrack's playback rate, changed smoothly
  * and at once, never Media3's time-stretcher, which starts over at each change); the volume alone on the player's
  * volume, which also acts at once. Playing in a group (decision 0037) the leader's sound is sent on before both, so
- * Fade fades the sound itself there ([Fader]) and waits for the group's buffer before it pauses; Vinyl and Tape
- * rewind wait in a group (the owner: Vinyl later). Every volume follows a perceptual (dB) curve, and starts silent.
+ * Fade fades the sound itself there ([Fader]) and waits for the group's buffer before it pauses; Vinyl waits in a
+ * group (the owner: later). Every volume follows a perceptual (dB) curve, and starts silent.
  *
  * The position holds through a ramp (the owner, 2026-10-26): a pause rests where it was pressed, its tail heard after
  * it; a play starts that much earlier ([lead]) so it is at full where it left off, the position shown held meanwhile.
@@ -67,7 +68,7 @@ class StartStop(
     var heldPosition: Long? = null
         private set
 
-    /** Whether a ramp (or Tape rewind) runs: presses wait for its end. */
+    /** Whether a ramp runs: presses wait for its end. */
     val busy: Boolean get() = committed != null
 
     private fun commit(to: Boolean?) {
@@ -224,41 +225,6 @@ class StartStop(
         }
     }
 
-    /**
-     * Tape rewind: Previous that restarts the track scrubs back to its start, pitched up; false where it does not
-     * (off, not playing, in a group, or early in the track, where Previous goes to the one before).
-     */
-    fun rewind(restartAfterMs: Long): Boolean {
-        note("rewind", "busy" to busy, "rewind" to prefs.startStopRewind, "at_ms" to player.currentPosition)
-        if (busy) return true
-        if (!prefs.startStopRewind || grouped() || !player.isPlaying) return false
-        val from = player.currentPosition
-        if (from <= restartAfterMs) return false
-        val ms = minOf(REWIND_MOST_MS, 4 * prefs.startStopMs)
-        val mine = ++token
-        commit(true)
-        ramping("out", ms)
-        val t0 = SystemClock.elapsedRealtime()
-        player.playbackParameters = PlaybackParameters(REWIND_SPEED, REWIND_SPEED)
-        gain = REWIND_GAIN
-        volume()
-        val step = object : Runnable {
-            override fun run() {
-                if (mine != token) return
-                val t = ((SystemClock.elapsedRealtime() - t0).toFloat() / ms).coerceIn(0f, 1f)
-                player.seekTo((from * (1 - ease(t))).toLong())
-                if (t < 1f) {
-                    main.postDelayed(this, REWIND_STEP_MS)
-                } else {
-                    player.seekTo(0)
-                    reset()
-                }
-            }
-        }
-        step.run()
-        return true
-    }
-
     companion object {
         /** Told when a ramp starts (`out`, `in`, with its length) and ends (none): the page's player draws it. */
         @Volatile
@@ -281,11 +247,6 @@ class StartStop(
         private const val VINYL_SOUND = 0.35f
         private const val STEP_MS = 16L
         private const val GROUP_MARGIN_MS = 250L
-        private const val REWIND_SPEED = 2f
-        /** Each step plays this long before the next seek back: shorter, and the seeks left nothing to hear. */
-        private const val REWIND_STEP_MS = 300L
-        private const val REWIND_MOST_MS = 12_000L
-        private const val REWIND_GAIN = 0.8f
     }
 }
 
