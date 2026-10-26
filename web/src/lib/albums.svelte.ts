@@ -87,7 +87,7 @@ export function albumOfDownload(t: DownloadedTrack): string | null {
 export const albumPlay = $state({ starting: null as string | null });
 
 /** Plays an album: here when the output is this browser (decision 0022), else on the server's player. */
-export async function playListedAlbum(source: string, a: ListedAlbum) {
+export async function playListedAlbum(source: string, a: Pick<ListedAlbum, 'id' | 'title'>) {
   if (albumPlay.starting) return;
   albumPlay.starting = a.id;
   try {

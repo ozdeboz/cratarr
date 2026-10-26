@@ -6,6 +6,8 @@
   // Playlists): the list header's icon or a long-press ticks albums, a tap then ticks too, and the select bar
   // (lib/SelectBar) plays, puts next, queues, favours or downloads the ticked ones, one album after another, or opens
   // the menu of one (a tile's menu is this way).
+  import CoverPlay from './CoverPlay.svelte';
+  import CoverWait from './CoverWait.svelte';
   import { NearBlocks } from './nearBlocks.svelte';
   import { panelBeside } from './glass.svelte';
   import { untrack, type Snippet } from 'svelte';
@@ -478,7 +480,8 @@
                   {@render why(s, a)}
                   {@render extra?.(s, a)}
                 {/snippet}
-                {#snippet action()}{#if selecting}{@render tickOf(s, a)}{:else}{@render play(s, a)}{/if}{/snippet}
+                {#snippet over()}{#if !selecting}{@render play(s, a)}{/if}<CoverWait subject={albumSubject(s.id, a.id)} />{/snippet}
+                {#snippet action()}{#if selecting}{@render tickOf(s, a)}{/if}{/snippet}
               </Tile>
             {:else if table}
               <Row
@@ -574,40 +577,29 @@
   >
 {/snippet}
 
-<!-- An album's cover; a favourite's has a small heart in its upper right corner (as Symfonium's lists). -->
+<!-- An album's cover (no heart on it: the owner, 2026-10-27). -->
 {#snippet cover(s: ShelfSource, a: ListedAlbum)}
-  <span class="art">
-    <Cover src={albumCoverUrl(s.id, a.id)} />
-    {#if isFavorite(s.id, a.id)}<span class="fav" role="img" aria-label="Favourite"><Icon name="heart" size={12} /></span>{/if}
-  </span>
+  <span class="art"><Cover src={albumCoverUrl(s.id, a.id)} /></span>
 {/snippet}
 
-<!-- A row's cover plays the album (decided 2026-10-16): wherever a cover plays, the play icon is in its lower right
-     corner, as on a tile's. -->
+<!-- A row's cover (the owner, 2026-10-27): a tap on it opens the album, as on the rest of the row; Play in its upper
+     right corner alone plays (lib/CoverPlay), and it dims with the ring while it opens, when that takes long. -->
 {#snippet playCover(s: ShelfSource, a: ListedAlbum)}
   {#if selecting}
     <button class="cover plays" aria-label="Select {a.title}" title="Select" onclick={() => tick(s, a)}>{@render cover(s, a)}</button>
   {:else}
-    <button
-      class="cover plays"
-      aria-label="Play {a.title}"
-      title="Play"
-      disabled={albumPlay.starting !== null}
-      aria-busy={albumPlay.starting === a.id}
-      onclick={() => playOf(s, a)}
-      >{@render cover(s, a)}<span class="corner" aria-hidden="true"><Icon name="play" size={14} /></span></button
+    <span class="cover"
+      ><button class="open" aria-label="View {a.title}" onclick={() => view(s.id, a)}>{@render cover(s, a)}</button>{@render play(s, a, true)}<CoverWait
+        subject={albumSubject(s.id, a.id)}
+        size={28}
+      /></span
     >
   {/if}
 {/snippet}
 
-{#snippet play(s: ShelfSource, a: ListedAlbum)}
-  <button
-    class="icon"
-    aria-label="Play {a.title}"
-    disabled={albumPlay.starting !== null}
-    aria-busy={albumPlay.starting === a.id}
-    onclick={() => playOf(s, a)}><Icon name="play" size={26} /></button
-  >
+<!-- Play, in the cover's upper right corner (lib/CoverPlay): the only thing on a cover that plays. -->
+{#snippet play(s: ShelfSource, a: ListedAlbum, small = false)}
+  <CoverPlay label={a.title} album={a.id} {small} busy={albumPlay.starting === a.id} disabled={albumPlay.starting !== null} onplay={() => playOf(s, a)} />
 {/snippet}
 
 {#if several}
@@ -679,21 +671,8 @@
     height: 0;
   }
 
-  ul.table .cover.plays .corner {
-    right: 2px;
-    bottom: 2px;
-    width: 20px;
-    height: 20px;
-  }
-
-  /* With a mouse, a line's play shows on the line pointed at (a table is many small covers); by touch it stays. */
-  @media (hover: hover) {
-    ul.table li:not(:hover) .cover.plays:not(:focus-visible) .corner {
-      opacity: 0;
-    }
-  }
-
   .cover {
+    position: relative;
     flex: none;
     display: block;
     width: 72px;
@@ -732,8 +711,7 @@
     color: var(--accent-text);
   }
 
-  /* The cover that plays: a button, its play icon a small round in the accent in the lower right corner (the tile's
-     Play, smaller). */
+  /* A cover that is a button (selecting: it ticks). */
   .cover.plays {
     position: relative;
     padding: 0;
@@ -745,25 +723,18 @@
     cursor: default;
   }
 
-  .cover.plays .corner {
-    position: absolute;
-    right: 4px;
-    bottom: 4px;
-    display: grid;
-    place-items: center;
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    background: var(--accent);
-    color: var(--accent-text);
-    box-shadow: 0 1px 4px rgb(0 0 0 / 0.4);
-  }
-
-  .cover > :not(.corner) {
+  .cover > .art,
+  .cover > .open {
     display: block;
     width: 100%;
     height: 100%;
-    object-fit: cover;
+  }
+
+  .open {
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
   }
 
   .art {
@@ -771,26 +742,6 @@
     display: block;
     width: 100%;
     height: 100%;
-  }
-
-  .fav {
-    position: absolute;
-    top: 4px;
-    right: 4px;
-    display: grid;
-    place-items: center;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    /* Hard coloured, as Play's and the request mark's rounds (the owner, 2026-10-25): the translucent dark round did
-       not look nice. */
-    background: var(--accent);
-    color: var(--accent-text);
-    box-shadow: 0 1px 4px rgb(0 0 0 / 0.35);
-  }
-
-  .fav :global(svg) {
-    fill: currentColor;
   }
 
   .none {

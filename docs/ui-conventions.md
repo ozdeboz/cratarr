@@ -384,16 +384,20 @@ or a sync target looks and behaves as one kind of thing wherever it is listed.
   Rows are extra large rows (the cover, the year after the title, the artist, tracks, format and when it was added,
   and an Incoming album's lines: its conversion and how it relates to Music; an album of a library other than Music
   has a dot in its library's colour after its title, while more than one library shows); its menu is the album's one
-  menu (above); Covers are tiles (the dot before the title). A row's cover
-  plays the album (the rest of the row views it); a row ends in ⋮ (its menu): **wherever a cover plays, its play
-  icon is in the cover's lower right corner**, as on a tile (decided 2026-10-16). **Select** as on every list: the
+  menu (above); Covers are tiles (the dot before the title). A row ends in ⋮ (its menu). **Covers** (the owner,
+  2026-10-27; `lib/CoverPlay`, `lib/CoverWait`, `lib/PlayingDots`): a tap on a cover opens its album, never plays it;
+  a cover that plays has **Play in its upper right corner**, which alone plays, its ring turning while it starts;
+  the album that plays has its one playing sign there instead (dots in a wave, as a list's playing track; a tap
+  pauses); opening slow (300 ms), the cover dims with everything on it and the ring turns over it, only on the
+  cover opened; a cover's picture loading never moves; no heart on a cover. **Select** as on every list: the
   header's icon or a long-press ticks albums (a row lighter edge to edge, a tile bordered, the tick at a row's end or
   over a tile's corner), and the select bar plays, puts next, queues, favours (in the app downloads) the ticked ones,
   one album after another, or opens the menu of one (a tile's menu is this way). Layout and
   size are one choice for every album list, remembered by the browser.
 - **Tiles** (`lib/Tile.svelte`): Row's sibling for things shown by their picture: the square picture on top, as wide
   as the column the page's Size makes, the title and muted lines under it (an album: its artist only, and the page's
-  own lines), the action (Play) over the picture's lower right corner, and over its upper left one a pill with what
+  own lines), what sits over the picture (`over`: an album's Play in its upper right corner, the wait of its
+  opening), the action (a tick while selecting) over its lower right corner, and over its upper left one a pill with what
   the list is ordered by when the lines do not say it already (an album list by Year or Added; decided 2026-10-16).
   The album lists' View also has **Dates**: Relative ("3 days ago") or Absolute ("14 Oct"), remembered. Its states are the row's: a border when viewed, a tint when it holds what plays.
 - **A list's sections** (`lib/Section.svelte`): a heading with its count that folds the list, and while open one line

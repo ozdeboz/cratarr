@@ -347,7 +347,7 @@
                  pills, which are its links (each through the Open/Copy sheet, as every link to another site). -->
             <button class="open" aria-label={`${a.album} by ${a.artist}`} onclick={() => tap(a)} use:longpress={() => (opened = a)}></button>
             <!-- Cratarr's own cover: a picture that does not load is its stand-in, and the suggestion stays. -->
-            <span class="cover"><Cover src={a.cover} /><CoverStatus mark={a.request ?? markOf(r)} problem={problemOf(a)} onproblem={() => onproblem(a, 'request')} />{#if a.bandcamp}<CoverPlay label={a.album} busy={previewing === a.key} problem={bandcampFailed[a.key] ?? null} onplay={() => preview(a)} onproblem={() => onproblem(a, 'play')} />{/if}</span>
+            <span class="cover"><Cover src={a.cover} /><CoverStatus mark={a.request ?? markOf(r)} problem={problemOf(a)} onproblem={() => onproblem(a, 'request')} />{#if a.bandcamp}<CoverPlay bandcamp label={a.album} busy={previewing === a.key} problem={bandcampFailed[a.key] ?? null} onplay={() => preview(a)} onproblem={() => onproblem(a, 'play')} />{/if}</span>
             <span class="text">
                 <b>{a.album}</b>
                 <span class="by">{a.artist}{a.year ? ` · ${a.year}` : ''}{#if a.new_artist}<span class="new">New to you</span>{/if}</span>

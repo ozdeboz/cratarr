@@ -1,31 +1,60 @@
 <script lang="ts">
-  // Play on a Discover suggestion's cover (decision 0071, the owner 2026-10-25: every item that plays on Bandcamp gets
-  // one, "a tad larger", and it plays at once): the accent's round button in the cover's corner, beside the card's own
-  // button (a button cannot hold another), over it. What holds it is positioned.
+  // Play on an album's cover (the owner, 2026-10-27: every cover that plays has it, in its upper right corner, and only
+  // it plays; a tap on the rest of the cover opens the album). Decision 0071's Bandcamp suggestions had it first ("a tad
+  // larger", it plays at once). The accent's round button, beside the cover's own (a button cannot hold another), over
+  // it; what holds it is positioned. Starting (`busy`): the ring turning in it. `small`: on a list's small cover.
+  // `album`: the album it plays; while that plays, it is the cover's one sign of it (the owner, 2026-10-27: one playing
+  // sign on covers, lib/PlayingDots), and a tap pauses; paused, a tap goes on.
   import Icon from './Icon.svelte';
+  import { playing as nowPlaying, playPause, shownPaused } from './remote.svelte';
+  import PlayingDots from './PlayingDots.svelte';
+  import ProgressRing from './ProgressRing.svelte';
 
-  /** `problem`: why it last failed to play: a red "!" in its place, a tap on it `onproblem` (the owner, 2026-10-26). */
+  /** `problem`: why it last failed to play: a red "!" in its place, a tap on it `onproblem` (the owner, 2026-10-26).
+   *  `disabled`: another is starting. `bandcamp`: it plays a Bandcamp preview, and says so. */
   let {
     label,
     busy = false,
+    disabled = false,
+    bandcamp = false,
+    small = false,
     problem = null,
+    album = null,
     onplay,
     onproblem = null,
-  }: { label: string; busy?: boolean; problem?: string | null; onplay: () => void; onproblem?: (() => void) | null } = $props();
+  }: {
+    label: string;
+    busy?: boolean;
+    disabled?: boolean;
+    bandcamp?: boolean;
+    small?: boolean;
+    problem?: string | null;
+    album?: string | null;
+    onplay: () => void;
+    onproblem?: (() => void) | null;
+  } = $props();
+  const current = $derived(album !== null && nowPlaying()?.album_id === album);
+  const sounding = $derived(current && !shownPaused());
 </script>
 
 <button
   class="cover-play"
+  class:small
   class:problem={!!problem}
-  aria-label={problem ? `${label} did not play: ${problem}` : `Play ${label} on Bandcamp`}
-  title={problem ? 'It did not play' : 'Play on Bandcamp'}
-  disabled={busy}
+  aria-label={problem ? `${label} did not play: ${problem}` : sounding ? `Pause ${label}` : bandcamp ? `Play ${label} on Bandcamp` : `Play ${label}`}
+  title={problem ? 'It did not play' : sounding ? 'Playing' : bandcamp ? 'Play on Bandcamp' : 'Play'}
+  disabled={busy || disabled}
   aria-busy={busy}
   onclick={(e) => {
     e.stopPropagation();
     if (problem && onproblem) onproblem();
+    else if (current) playPause();
     else onplay();
-  }}><Icon name={problem ? 'bang' : 'play'} size={problem ? 20 : 17} /></button
+  }}
+  >{#if busy}<ProgressRing progress={null} size={small ? 16 : 22} spin onAccent />{:else}{#if sounding}<PlayingDots count={3} {small} />{:else}<Icon
+        name={problem ? 'bang' : 'play'}
+        size={problem ? (small ? 15 : 20) : small ? 13 : 17}
+      />{/if}{/if}</button
 >
 
 <style>
@@ -52,8 +81,23 @@
     cursor: pointer;
   }
 
+  .cover-play.small {
+    top: 3px;
+    right: 3px;
+    width: 22px;
+    height: 22px;
+  }
+
+  /* Its own ring, not the page's busy one (app.css) over it. */
+  .cover-play[aria-busy='true']::after {
+    content: none;
+  }
+
   .cover-play:disabled {
-    opacity: 0.7;
     cursor: progress;
+  }
+
+  .cover-play:disabled:not([aria-busy='true']) {
+    opacity: 0.7;
   }
 </style>

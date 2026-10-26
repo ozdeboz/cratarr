@@ -13,6 +13,7 @@
     sub,
     image,
     action,
+    over,
     tag = null,
     onclick,
     label,
@@ -29,6 +30,9 @@
     image: Snippet;
     /** Over the picture's lower right corner. */
     action?: Snippet;
+    /** Over the picture, as large as it: what sits on it (an album's Play in its upper right corner, lib/CoverPlay; the
+     *  wait of its opening, lib/CoverWait). */
+    over?: Snippet;
     /** A pill over the picture's upper left corner: the value the list is ordered by (a year, a date). */
     tag?: string | null;
     onclick?: () => void;
@@ -49,6 +53,7 @@
   {:else}
     <div class="main">{@render inside()}</div>
   {/if}
+  {#if over}<span class="over">{@render over()}</span>{/if}
   {#if tag}<span class="tag">{tag}</span>{/if}
   {#if action}<span class="act">{@render action()}</span>{/if}
 </div>
@@ -145,6 +150,21 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     pointer-events: none;
+  }
+
+  /* As large as the picture, over it; only its buttons take a tap (the wait, while on, takes them all). */
+  .over {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    width: 100cqw;
+    height: 100cqw;
+    border-radius: 8px;
+    pointer-events: none;
+  }
+
+  .over > :global(.cover-play) {
+    pointer-events: auto;
   }
 
   /* 8 px in from the picture's corner: the padding (6 px) + its width (100cqw, the content box) − the button − 8 px. */

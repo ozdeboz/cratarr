@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PlayingDots from './PlayingDots.svelte';
   import { askIfMany, fewAtATime } from './many.svelte';
   import { untrack } from 'svelte';
   import { holdUntil } from './holdPlace.svelte';
@@ -2247,7 +2248,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       attachMain={fromAction(longpress, () => () => ok && !onDevice && (selecting ? (selectSheet = true) : startSelect(i)))}
     >
       {#snippet lead()}
-        <span class="num">{#if here}<span class="dots" class:still={paused()} aria-label="Playing"><i></i><i></i><i></i><i></i></span>{:else}{i + 1}{/if}</span>
+        <span class="num">{#if here}<span class="dots" role="img" aria-label="Playing"><PlayingDots still={paused()} /></span>{:else}{i + 1}{/if}</span>
       {/snippet}
       {#snippet action()}{#if ok}{@render rowEnd(r, source, i)}{/if}{/snippet}
     </Row>
@@ -3090,58 +3091,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
     font-variant-numeric: tabular-nums;
   }
 
-  /* The playing track's dots in place of its number; still while paused. */
+  /* The playing track's dots in place of its number (lib/PlayingDots), in the cover's colour. */
   .dots {
     display: inline-flex;
-    align-items: center;
-    gap: 3px;
-  }
-
-  .dots i {
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    background: var(--art-accent, var(--accent));
-    animation: dot 1.1s ease-in-out infinite;
-  }
-
-  .dots i:nth-child(2) {
-    animation-delay: 0.15s;
-  }
-
-  .dots i:nth-child(3) {
-    animation-delay: 0.3s;
-  }
-
-  .dots i:nth-child(4) {
-    animation-delay: 0.45s;
-  }
-
-  .dots.still i {
-    animation: none;
-  }
-
-  @keyframes dot {
-    0%,
-    100% {
-      opacity: 0.35;
-      transform: translateY(0);
-    }
-    50% {
-      opacity: 1;
-      transform: translateY(-3px);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .dots i {
-      animation: none;
-    }
-  }
-
-  /* Animations off on this device (Display): the same as the system's reduced motion. */
-  :global(:root[data-motion='off']) .dots i {
-    animation: none;
+    color: var(--art-accent, var(--accent));
   }
 
   /* A row's tick in select mode: an empty circle, filled with its check once ticked. */

@@ -186,7 +186,7 @@
             onopen={() => elsewhere?.open({ release_group: m.release_group, title: m.title, artist: m.artist, year: m.year, cover: m.cover, bandcamp: page })}
           />
           <!-- On Bandcamp: Play on its cover, as Discover's cards have it (beside the card's button, over its cover). -->
-          {#if page}<CoverPlay
+          {#if page}<CoverPlay bandcamp
               label={m.title}
               busy={bandcampPlay.key === m.release_group}
               problem={bandcampFailed[m.release_group] ?? null}
