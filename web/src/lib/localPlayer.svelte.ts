@@ -103,6 +103,9 @@ export const local = $state({
 
 const MP4 = 'audio/mp4; codecs="flac"';
 const OPUS = 'audio/mp4; codecs="opus"';
+/** AAC in MP4 (a5, 0.9.8, `?as=aac`): lossless for a browser that takes neither FLAC nor Opus in MP4 (Safari on iOS,
+ *  the owner's iPhone 2026-10-26: "cannot play FLAC here"). */
+const AAC = 'audio/mp4; codecs="mp4a.40.2"';
 const MPEG = 'audio/mpeg';
 /** Keep this much ahead in the stream before fetching the next track (s). */
 const AHEAD = 30;
@@ -128,6 +131,15 @@ export { isPhone };
 /** Lossless tracks come as Opus: on a phone that plays it, unless it keeps lossless (Settings › This browser). About a
  *  sixth of the data, and far less for the phone to fetch and hold. */
 const asOpus = () => isPhone && !prefs.phoneLossless && !!Source?.isTypeSupported(OPUS);
+/** The form a lossless track is asked in: Opus on a phone (above); where this browser takes no FLAC in MP4, Opus if it
+ *  takes that, else AAC; else as it is. */
+function losslessAs(): 'opus' | 'aac' | null {
+  if (asOpus()) return 'opus';
+  if (Source && !Source.isTypeSupported(MP4)) return Source.isTypeSupported(OPUS) ? 'opus' : Source.isTypeSupported(AAC) ? 'aac' : null;
+  return null;
+}
+// What this browser's player takes, once per page in its log (the iPhone's tracks that would not play, 2026-10-26).
+if (Source) playback('info', 'formats', { managed: !!Managed, flac: Source.isTypeSupported(MP4), opus: Source.isTypeSupported(OPUS), aac: Source.isTypeSupported(AAC), mp3: Source.isTypeSupported(MPEG) });
 
 const audio = typeof Audio === 'undefined' || !canPlayHere || inApp ? null : new Audio();
 // Safari opens a managed stream only for an element that cannot be sent to AirPlay (the stream cannot go there).
@@ -290,7 +302,8 @@ async function appendTrack(index: number, from: number, gen: number) {
   try {
     const query = new URLSearchParams();
     if (from > 0) query.set('from_ms', String(Math.floor(from * 1000)));
-    if (asOpus()) query.set('as', 'opus');
+    const form = losslessAs();
+    if (form) query.set('as', form);
     const res = await fetch(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}${query.toString() ? `?${query}` : ''}`, {
       signal: ctl.signal,
     });
@@ -305,9 +318,9 @@ async function appendTrack(index: number, from: number, gen: number) {
       throw new Error(`${t.name || 'A track'}: ${text || 'it could not be loaded.'}`);
     }
     const type = res.headers.get('content-type') ?? '';
-    const kind = !type.startsWith('audio/mp4') ? MPEG : type.includes('opus') ? OPUS : MP4;
+    const kind = !type.startsWith('audio/mp4') ? MPEG : type.includes('opus') ? OPUS : type.includes('mp4a') || type.includes('aac') ? AAC : MP4;
     playback('info', 'stream', { track: t.id, source: t.source, status: res.status, type, kind, supported: !!Source?.isTypeSupported(kind), from, managed: !!Managed });
-    if (!Source?.isTypeSupported(kind)) throw new Error(`${t.name}: this browser cannot play ${kind === MP4 ? 'FLAC' : kind === OPUS ? 'Opus' : 'MP3'} here.`);
+    if (!Source?.isTypeSupported(kind)) throw new Error(`${t.name}: this browser cannot play ${kind === MP4 ? 'FLAC' : kind === OPUS ? 'Opus' : kind === AAC ? 'AAC' : 'MP3'} here.`);
     const reader = res.body!.getReader();
     // The track's sample 0 goes to `start` in the stream (before the stream's 0 when starting mid-track).
     const start = streamEnd - from;
