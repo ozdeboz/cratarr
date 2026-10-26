@@ -13,10 +13,8 @@ pub struct Config {
     pub data_dir: Option<String>,
     /// Where Snapcast's clients connect for sync play (decision 0037), e.g. `0.0.0.0:1704`; empty: not served.
     pub snapcast_bind: Option<String>,
-    /// The host the players reach that port on, when not the one they reach Cratarr on (a page behind a reverse proxy
-    /// on a public name, the port open on the local network only): e.g. the server's LAN address.
-    pub snapcast_host: Option<String>,
-    /// The proxies whose `X-Forwarded-*` headers are believed (`CRATARR_PROXIES`); `None`: every peer's (serve::proxy).
+    /// The proxies whose `X-Forwarded-*` headers are believed (`CRATARR_PROXIES`); `None`: local peers' (serve::proxy).
+    /// `CRATARR_SNAPCAST_HOST`, the analysis and Beat this! are read as Settings' seeds (`app::runtime`).
     pub proxies: Option<Vec<ipnet::IpNet>>,
 }
 
@@ -34,7 +32,6 @@ impl Config {
                 Some(b) => Some(b.trim().to_string()).filter(|b| !b.is_empty()),
                 None => Some("0.0.0.0:1704".into()),
             },
-            snapcast_host: get("CRATARR_SNAPCAST_HOST"),
             proxies: crate::serve::proxy::parse(get("CRATARR_PROXIES").as_deref()),
         })
     }

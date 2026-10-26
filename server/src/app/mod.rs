@@ -46,6 +46,7 @@ pub mod fixes;
 pub mod matching;
 pub mod incomplete;
 pub mod track_fetch;
+pub mod runtime;
 pub mod resume;
 pub mod lastfm;
 pub mod listening;

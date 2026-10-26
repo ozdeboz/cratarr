@@ -2385,6 +2385,13 @@ impl PlayOn {
         *self.sync_play.lock().unwrap_or_else(|p| p.into_inner()) = Some((port, buffer_ms, host));
     }
 
+    /// The host players reach sync play on, changed in Settings (0.9.8): the same port, the new host.
+    pub fn set_sync_host(&self, host: Option<String>) {
+        if let Some(s) = self.sync_play.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+            s.2 = host;
+        }
+    }
+
     fn sync_play(&self) -> Option<(u16, u32, Option<String>)> {
         self.sync_play.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }

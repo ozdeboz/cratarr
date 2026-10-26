@@ -248,6 +248,7 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/track-fetch/{id}", get(track_fetch).delete(drop_track_fetch))
             .route("/api/track-fetch/{id}/add", post(add_fetched_track))
             .route("/api/settings/slskd", get(get_slskd).put(put_slskd))
+            .route("/api/settings/server-runtime", get(get_runtime).put(put_runtime))
             .route("/api/settings/acoustid", get(get_acoustid).put(put_acoustid))
             .route("/api/settings/naming", get(naming))
             .route("/api/catalogue", get(catalogue_status))
@@ -4769,6 +4770,36 @@ async fn put_discogs_keys(Json(b): Json<DiscogsKeys>) -> Result<Json<serde_json:
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     get_discogs_keys().await
+}
+
+// ---- Server settings that were the environment's only (0.9.8)
+
+/// The proxies believed, the analysis pass, Beat this! and sync play's host, with what the environment set.
+async fn get_runtime() -> Result<Json<crate::app::runtime::View>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let ud = serve.userdata.clone();
+    Ok(Json(
+        tokio::task::spawn_blocking(move || crate::app::runtime::view(&ud))
+            .await
+            .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+            .map_err(|e| ToggleError::Refused(format!("{e:#}")))?,
+    ))
+}
+
+/// Saved and in force at once (sync play's host for the players asking from now on).
+async fn put_runtime(State(app): State<Arc<App>>, Json(c): Json<crate::app::runtime::Change>) -> Result<Json<crate::app::runtime::View>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let ud = serve.userdata.clone();
+    let host_changed = c.snapcast_host.is_some();
+    let r = tokio::task::spawn_blocking(move || crate::app::runtime::save(&ud, &c))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(ToggleError::Refused)?;
+    if host_changed {
+        app.play_on.set_sync_host(r.snapcast_host.clone());
+        app.play_on.set_lan_base(crate::app::runtime::lan_base(&r));
+    }
+    get_runtime().await
 }
 
 // ---- Single-track replacement (0.9.8)
