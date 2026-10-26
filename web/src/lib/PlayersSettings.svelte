@@ -5,6 +5,8 @@
   // its speaker sounds, so a group sounds as one; set from any device (standing between two speakers), heard at once
   // while the finger moves, as Snapweb and Iris set Snapcast's per-client latency. 0 to 500 ms in steps of 5, its slider
   // in a sheet (the settings' North Star, 2026-10-19).
+  import { loadRuntime, runtime, saveRuntime } from './serverRuntime.svelte';
+  import ValueSheet from './settings/ValueSheet.svelte';
   import { panSafe } from './panSafe';
   import { removeMyDevice, setPlayerDelay, type PlayOnPlayer } from './api';
   import { backFromThing, openThing } from './panel.svelte';
@@ -91,6 +93,11 @@
       toast.fail(e, `${name} wasn't removed`);
     }
   }
+  // Playing in step's address (lib/serverRuntime).
+  loadRuntime();
+  let editingHost = $state(false);
+  const STEP_HOST_MORE =
+    'Players in a group (and a Kodi box) reach Cratarr at this address on your home network. Empty: the address the page is opened at, which a proxy on a public name may not be.';
 </script>
 
 {#snippet row(p: PlayOnPlayer)}
@@ -117,6 +124,31 @@
   </Group>
 {/if}
 <KodiSettings {thing} delay={delayRow} />
+<!-- Playing in step's address (0.9.8: the environment's until then; lib/serverRuntime). -->
+{#if !thing && runtime.value}
+  {@const r = runtime.value}
+  <Group title="Playing in step" more={STEP_HOST_MORE}>
+    <Item
+      name="Address on the home network"
+      line={r.from_env?.snapcast_host ? 'Set by the environment until changed here' : null}
+      value={r.snapcast_host || 'As the page is opened at'}
+      onclick={() => (editingHost = true)}
+    />
+    {#if runtime.error}<Item lead="bad" name={runtime.error} />{/if}
+  </Group>
+{/if}
+{#if editingHost}
+  <ValueSheet
+    title="Address on the home network"
+    value={runtime.value?.snapcast_host ?? ''}
+    placeholder="As the page is opened at"
+    help="The server's address on your home network, e.g. 192.168.1.5"
+    onsave={async (v) => {
+      if (await saveRuntime({ snapcast_host: v.trim() || null })) editingHost = false;
+    }}
+    onclose={() => (editingHost = false)}
+  />
+{/if}
 {#if !thing && browsers.length}
   <Group title="Browsers" more="A page that plays in a browser: a player while it is open, never in a group.">
     {#each browsers as p (p.name)}{@render row(p)}{/each}

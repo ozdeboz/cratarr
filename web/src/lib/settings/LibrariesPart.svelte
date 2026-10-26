@@ -3,6 +3,7 @@
   // its own page behind it (`thing`: `lib:<server>:<library>`) with its use and, for a used one, its format and dot
   // (decision 0034); Music's names, how long deleted albums are kept, the catalogue and tag splitting (its own page,
   // `tags`). Saved with the Save bar (the settings' North Star, 2026-10-19).
+  import { loadRuntime, runtime, saveRuntime } from '../serverRuntime.svelte';
   import { folderStatus, getCatalogue, type FolderStatus, type ServerLibrary } from '../api';
   import MenuSheet from '../MenuSheet.svelte';
   import { backFromThing, openThing } from '../panel.svelte';
@@ -142,6 +143,17 @@
   let removing = $state<Lib | null>(null);
   const incomingUsed = $derived(ed.drafts.some((d) => d.enabled && d.libraries.incoming.length));
   const lines = (t: string) => t.split('\n').map((l) => l.trim()).filter(Boolean);
+  // The server's own settings (lib/serverRuntime), read once here.
+  loadRuntime();
+  const ANALYSIS: { value: 'keep' | 'all' | 'off'; label: string }[] = [
+    { value: 'keep', label: 'New music' },
+    { value: 'all', label: 'All' },
+    { value: 'off', label: 'Off' },
+  ];
+  const ANALYSIS_MORE =
+    "Cratarr's own analysis of the music: waveforms, tempo, loudness and the visuals' signals.\n\nNew music: what comes in, once half the library has an analysis (the first pass made elsewhere, or all of it here). All: everything, here. Off: none here.";
+  const BEAT_THIS_MORE =
+    'Beats and downbeats as the Beat This! model hears them, for the visuals: heard here as new music comes in (about 650 MB while it hears). Off, they come from tools/beat_this_pass.py on another computer, or the visuals keep the beat grid of the analysis.';
 </script>
 
 {#if open}
@@ -300,6 +312,21 @@
       line={[`Artists: ${ed.ruleText.artistSeps || 'not split'}`, `Genres: ${ed.ruleText.genreSeps || 'not split'}`].join(' · ')}
       onclick={() => openThing('libraries', 'tags')}
     />
+    <!-- The analysis on this server and Beat This! (0.9.8: the environment's until then; lib/serverRuntime). -->
+    {#if runtime.value}
+      {@const r = runtime.value}
+      <Item name="Analysis here" more={ANALYSIS_MORE} line={r.from_env?.analysis ? 'Set by the environment until changed here' : null}>
+        <Seg label="Analysis here" options={ANALYSIS} bind:value={() => r.analysis, (v) => void saveRuntime({ analysis: v })} />
+      </Item>
+      <Item
+        name="Beats with Beat This!"
+        more={BEAT_THIS_MORE}
+        line={r.from_env?.beat_this ? 'Set by the environment until changed here' : 'About 650 MB while it hears'}
+        toggle={{ checked: r.beat_this, onchange: (on) => void saveRuntime({ beat_this: on }) }}
+      />
+      {#if r.restart?.some((x) => x === 'analysis' || x === 'beat_this')}<Item lead="warn" name="Takes effect when Cratarr restarts" />{/if}
+    {/if}
+    {#if runtime.error}<Item lead="bad" name={runtime.error} />{/if}
   </Group>
 {/if}
 

@@ -109,7 +109,7 @@ services:
   Every request needs a sign-in already; a proxy can ask Cratarr to check sign-ins for it (`/api/auth/check`, for
   Caddy's `forward_auth`, Traefik's `forwardAuth` or nginx's `auth_request`). Cratarr believes the client's address that
   a proxy forwards (`X-Forwarded-For`) only from a proxy on a local address (the same computer, its Docker network or
-  your home network); a proxy anywhere else is named in Settings → Server → Trusted proxies (or `CRATARR_PROXIES`).
+  your home network); a proxy anywhere else is named in Settings → Authentication → Trusted proxies (or `CRATARR_PROXIES`).
 - **The data folder** holds `settings.json` (secrets: readable by its owner only) and SQLite databases.
   `library.sqlite` is rebuilt when it is missing; the others are worth backing up.
 
@@ -135,10 +135,10 @@ few settings Settings can change later (what Settings saves wins):
 | `CRATARR_BIND` | `0.0.0.0:8080` | The address and port the server listens on. |
 | `CRATARR_DATA_DIR` | `/data` in the image | Settings and databases. Without it nothing is kept between starts. |
 | `CRATARR_SNAPCAST_BIND` | `0.0.0.0:1704` | The port for playing in step; empty turns it off. |
-| `CRATARR_SNAPCAST_HOST` | none | The local address players reach that port on (and a Kodi box reaches Cratarr on), when it is not the one they open Cratarr's pages at. Also in Settings → Server. |
-| `CRATARR_BEAT_THIS` | off | `on`: the server hears new music's beats with the Beat this! model itself (about 650 MB while it runs). Off, they come from `tools/beat_this_pass.py` on another computer. Also in Settings → Server. |
-| `CRATARR_ANALYSIS` | `keep` | The server's own analysis of the music (waveforms, tempo, loudness, the visuals' signals): `keep` analyses new music once half the library has an analysis (a first pass elsewhere, or all of it here), `all` analyses everything here, `off` none. Also in Settings → Server. |
-| `CRATARR_PROXIES` | local addresses | The proxies whose forwarded client address is believed, as addresses or ranges, comma-separated (`172.19.0.0/16, 192.168.1.5`). Unset: a proxy on a local address (loopback, private ranges, link-local, IPv6 unique local); one elsewhere must be named. Also in Settings → Server. |
+| `CRATARR_SNAPCAST_HOST` | none | The local address players reach that port on (and a Kodi box reaches Cratarr on), when it is not the one they open Cratarr's pages at. Also in Settings → Devices. |
+| `CRATARR_BEAT_THIS` | off | `on`: the server hears new music's beats with the Beat this! model itself (about 650 MB while it runs). Off, they come from `tools/beat_this_pass.py` on another computer. Also in Settings → Libraries. |
+| `CRATARR_ANALYSIS` | `keep` | The server's own analysis of the music (waveforms, tempo, loudness, the visuals' signals): `keep` analyses new music once half the library has an analysis (a first pass elsewhere, or all of it here), `all` analyses everything here, `off` none. Also in Settings → Libraries. |
+| `CRATARR_PROXIES` | local addresses | The proxies whose forwarded client address is believed, as addresses or ranges, comma-separated (`172.19.0.0/16, 192.168.1.5`). Unset: a proxy on a local address (loopback, private ranges, link-local, IPv6 unique local); one elsewhere must be named. Also in Settings → Authentication. |
 | `CRATARR_PLAYLIST_DIR` | none | The playlists' folder until a music folder is chosen in Settings. |
 | `CRATARR_SUBSONIC_USER`, `CRATARR_SUBSONIC_PASSWORD` | none | An account made (or its password set) at every start. |
 | `JELLYFIN_URL`, `JELLYFIN_API_KEY`, `CRATARR_PLAYER_CLIENT` | none | A Jellyfin source on the first start, until one is saved in Settings. |
