@@ -5,7 +5,7 @@
 import { search, type SearchKind, type ServerSearch } from './api';
 import { pageView } from './pageView.svelte';
 import { prefs } from './prefs.svelte';
-import { provided, words, type SearchResult } from './search';
+import { byRelevance, provided, relevance, words, type SearchResult } from './search';
 
 export type Found = SearchResult & { track?: string };
 export type FoundGroup = { kind: string; label: string; items: Found[]; total: number };
@@ -94,7 +94,18 @@ export function globalGroups(except: readonly string[]): FoundGroup[] {
       return { kind: p.kind, label: p.label, items: all.slice(0, EACH) as Found[], total: all.length };
     })
     .filter((g) => g.items.length);
-  return [...server(LIBRARY), ...here, ...server(ELSEWHERE)];
+  // Ordered by relevance (the owner, 2026-10-26): within a group, direct hits first; the groups by their best, so the
+  // one with the hit leads (an album found by its title above its artist found by it). What is not in the library
+  // stays after the rest. Sorting keeps the order given for equals.
+  const ranked = (gs: FoundGroup[]) =>
+    gs
+      .map((g) => {
+        const items = g.items.map((it) => ({ it, r: relevance(query, it) })).sort((a, b) => byRelevance(a.r, b.r));
+        return { g: { ...g, items: items.map((x) => x.it) }, best: items[0].r };
+      })
+      .sort((a, b) => byRelevance(a.best, b.best))
+      .map((x) => x.g);
+  return [...ranked([...server(LIBRARY), ...here]), ...ranked(server(ELSEWHERE))];
 }
 
 /** Whether the server has answered these words (else everywhere's count and its "nothing" wait). */
