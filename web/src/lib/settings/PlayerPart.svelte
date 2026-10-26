@@ -1,13 +1,12 @@
 <script lang="ts">
   // Player (the owner, 2026-10-25: Display's concerns apart): the player's row of extra details (shown or not, and which
-  // facts in what order: lib/settings/PlayerRowList) and the full-screen player's bands (lib/BandControls).
+  // facts in what order: lib/settings/DetailsGroup) and the full-screen player's bands (lib/BandControls).
   import BandControls from '../BandControls.svelte';
   import { COVER_TOUCHES, prefs, SWIPES_DEFAULT, SWIPES_DOWN, SWIPES_SIDE, SWIPES_UP, type PlayerSwipes } from '../prefs.svelte';
   import ChoiceSheet from './ChoiceSheet.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
-  import OrderReset from './OrderReset.svelte';
-  import PlayerRowList from './PlayerRowList.svelte';
+  import DetailsGroup from './DetailsGroup.svelte';
   import { offerReset } from './reset.svelte';
 
   offerReset(
@@ -32,21 +31,7 @@
   let choosing = $state<(typeof SWIPE_ROWS)[number] | null>(null);
 </script>
 
-<Group title="Details">
-  {#snippet tail()}
-    {#if prefs.playerRow}<OrderReset
-        label="Extra details"
-        isDefault={!prefs.playerFacts.length}
-        reset={() => {
-          const was = prefs.playerFacts;
-          prefs.playerFacts = [];
-          return () => (prefs.playerFacts = was);
-        }}
-      />{/if}
-  {/snippet}
-  <Item name="Extra details" toggle={{ checked: prefs.playerRow, onchange: (on) => (prefs.playerRow = on) }} />
-  {#if prefs.playerRow}<PlayerRowList />{/if}
-</Group>
+<DetailsGroup />
 
 <!-- The player's swipes (the owner, 2026-10-26): up and down, on its left half and its right, each its choice. -->
 <Group
