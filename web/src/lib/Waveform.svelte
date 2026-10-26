@@ -19,7 +19,9 @@
     loading = null,
   }: { bins: Uint8Array | null; progress: number; paused?: boolean; now?: number | null; loading?: number | null } = $props();
 
+  /** Each bar's growth, and how much later the last starts than the first (the owner, 2026-10-26: left to right). */
   const GROW_MS = 320;
+  const SPREAD_MS = 480;
   let width = $state(0);
   let height = $state(28);
   const n = $derived(Math.max(16, Math.min(512, Math.floor(width / 3))));
@@ -29,18 +31,19 @@
   const line = $derived((100 * 4) / Math.max(4, height));
   /** How many pieces have their gaps. */
   const cut = $derived(shown ? n : Math.round(Math.min(1, Math.max(0, loading ?? 0)) * n));
-  // How far the pieces have grown into bars, 0..1: at once where it was in from the start; from the line where it
-  // loaded in sight.
-  let grown = $state(untrack(() => (bins ? 1 : 0)));
+  // How long the pieces have been growing into bars (ms), the leftmost first: grown at once where it was in from the
+  // start; from the line where it loaded in sight.
+  const ALL = GROW_MS + SPREAD_MS;
+  let grown = $state(untrack(() => (bins ? ALL : 0)));
   $effect(() => {
     if (!bins) return void (grown = 0);
-    if (untrack(() => grown) >= 1) return;
-    if (reducedMotion()) return void (grown = 1);
+    if (untrack(() => grown) >= ALL) return;
+    if (reducedMotion()) return void (grown = ALL);
     const start = performance.now();
     let r = 0;
     const step = (t: number) => {
-      grown = Math.min(1, (t - start) / GROW_MS);
-      if (grown < 1) r = requestAnimationFrame(step);
+      grown = Math.min(ALL, t - start);
+      if (grown < ALL) r = requestAnimationFrame(step);
     };
     r = requestAnimationFrame(step);
     return () => cancelAnimationFrame(r);
@@ -48,9 +51,10 @@
   const f = (x: number) => Math.round(x * 100) / 100;
   /** The bars (or the pieces of the line) as one path, the line not yet cut after them. */
   const d = $derived.by(() => {
-    const e = 1 - (1 - grown) ** 2;
     let s = '';
     for (let i = 0; i < cut; i++) {
+      const own = Math.min(1, Math.max(0, (grown - (i / n) * SPREAD_MS) / GROW_MS));
+      const e = 1 - (1 - own) ** 2;
       const h = shown ? line + (Math.max(6, shown[i] * 100) - line) * e : line;
       s += `M${f(i + 0.15)} ${f((100 - h) / 2)}h0.7v${f(h)}h-0.7z`;
     }
