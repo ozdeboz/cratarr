@@ -84,12 +84,15 @@
     return ss.ms ? 1 - windUpMs(ss.ms, ss.mode, pos, inApp ? 0.25 : undefined) / ss.ms : 1;
   });
   // A new cover slow to come (the owner, 2026-10-26): after COVER_WAIT_MS the old one fades to dark and the ring fades
-  // in over it; the new one takes its place at once when it is in.
-  const COVER_WAIT_MS = 300;
-  let coverSlow = $state(false);
+  // in over it; the new one takes its place at once when it is in, at full brightness (the owner, 2026-10-26: it faded up
+  // from the dark, `coverSlow` let go an effect later than the new cover came). Twice the wait it had (300 ms), so an
+  // ordinary load never dims.
+  const COVER_WAIT_MS = 600;
+  let slowSince = $state(false);
+  const coverSlow = $derived(slowSince && coverComing());
   $effect(() => {
-    if (!coverComing()) return void (coverSlow = false);
-    const t = setTimeout(() => (coverSlow = true), COVER_WAIT_MS);
+    if (!coverComing()) return void (slowSince = false);
+    const t = setTimeout(() => (slowSince = true), COVER_WAIT_MS);
     return () => clearTimeout(t);
   });
   // The backdrop list: the current blurred cover, and while it fades in, the one before it.
