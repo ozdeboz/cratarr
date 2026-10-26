@@ -8,8 +8,9 @@
   // from wherever it is when that changes. A piece is the plain bar's line (its gap closed), slim (its gap open, the
   // quietest bar's height) or a bar (slim and risen to its height); it rises only with its gap open, and closes its gap
   // only once it is down. So:
-  //   - `want` 'wait' (its waveform loading): the bars stay; the line gets its gaps as far as it has loaded
-  //     (`loading`, 0..1: a progress bar of its own), pieces with their gaps already keep them;
+  //   - `want` 'wait' (its waveform loading): the bars shrink to slim pieces (the owner, 2026-10-26: shrinking is the
+  //     goal while it loads); the line gets its gaps as far as it has loaded (`loading`, 0..1: a progress bar of its
+  //     own), pieces with their gaps already keep them;
   //   - 'wave': into the bars (`bins`); from another track's straight to this one's, each bar up or down (the owner,
   //     2026-10-26: no need to go back to zero);
   //   - 'line' (none): down, then the gaps close into the line; `onflat` once all of it is the line.
@@ -65,9 +66,9 @@
 
   const gapWanted = (i: number, w: typeof want) =>
     w === 'wave' ? 1 : w === 'line' ? 0 : gap[i] > 0 || i < Math.min(1, Math.max(0, loading ?? 0)) * n ? 1 : 0;
-  // Waiting for the next waveform, the bars stay as they are (its heights not known yet; the owner, 2026-10-26: as the
-  // cover stays until the next one is in), then go straight to it, or back into the line where there is none.
-  const riseWanted = (i: number, w: typeof want) => (w === 'wave' && heights ? (heights[i] ?? 0) : w === 'wait' ? rise[i] : 0);
+  // Waiting for the next waveform, the bars shrink (its heights not known yet; the owner, 2026-10-26), then rise to it,
+  // or close back into the line where there is none.
+  const riseWanted = (i: number, w: typeof want) => (w === 'wave' && heights ? (heights[i] ?? 0) : 0);
 
   let raf = 0;
   let last = 0;
