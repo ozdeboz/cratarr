@@ -697,6 +697,25 @@ impl Library {
         Ok(st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.next().transpose()?)
     }
 
+    /// Every album's id, Music-form id, artist id and the files' genres (0.9.7: the library's words, `app::words`).
+    pub fn album_word_inputs(&self) -> Result<Vec<(String, String, String, Vec<String>)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, base_id, artist_id, genres FROM albums ORDER BY n")?;
+        let rows = st.query_map([], |r| {
+            let genres: String = r.get(3)?;
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, genres.split('\u{1f}').filter(|g| !g.is_empty()).map(str::to_string).collect()))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Each song's album (0.9.7: a file's words are its album's).
+    pub fn song_albums(&self) -> Result<HashMap<String, String>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, album_id FROM songs")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// The albums whose files carry no genre (0.9.5: asked of Discogs): their ids, MusicBrainz releases (or empty),
     /// artists and names.
     pub fn albums_without_genres(&self) -> Result<Vec<(String, String, String, String)>> {

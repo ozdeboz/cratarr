@@ -118,16 +118,20 @@ pub struct CrateDef {
 }
 
 /// A genre, viewed in the panel: a crate of one condition, made when asked for (`genre:<name>`), never saved. Its tracks
-/// are those whose genre tags hold the name (as the crate builder's genre axis matches).
+/// are those whose genre holds the name (as the crate builder's genre axis matches: the files' genres and the
+/// library's words of that kind, `app::words`). A style, a mood and a tag are crates the same way (0.9.7, the owner:
+/// the words' page is the genre crate's): `style:`, `mood:`, `tag:`.
 pub const GENRE: &str = "genre:";
+const WORDS: [&str; 4] = ["genre", "style", "mood", "tag"];
 
 pub fn genre_crate(id: &str) -> Option<CrateDef> {
-    let name = id.strip_prefix(GENRE)?.trim();
-    if name.is_empty() {
+    let (axis, name) = id.split_once(':')?;
+    let name = name.trim();
+    if !WORDS.contains(&axis) || name.is_empty() {
         return None;
     }
-    let genre = Condition::new("genre", false, Value::AnyOf { values: vec![name.to_string()] });
-    Some(CrateDef { id: id.to_string(), name: name.to_string(), conditions: vec![genre] })
+    let word = Condition::new(axis, false, Value::AnyOf { values: vec![name.to_string()] });
+    Some(CrateDef { id: id.to_string(), name: name.to_string(), conditions: vec![word] })
 }
 
 /// A track or an album, viewed in the panel as a crate of what sounds like it (the owner, 2026-10-23: "just like genre,
@@ -713,6 +717,8 @@ pub struct Facts {
     pub danceability: Option<f64>,
     pub moods: Vec<String>,
     pub styles: Vec<String>,
+    /// The library's words of its album that are tags (0.9.7, `app::words`): Last.fm's, MusicBrainz's, the household's.
+    pub tags: Vec<String>,
     /// Its track in the catalogue, and AudioMuse's "sounds like" vector of it (unit length; none where not heard).
     pub track: Option<i64>,
     pub sound: Option<Arc<[f32]>>,
@@ -837,6 +843,8 @@ const AXES: [(&str, &str, Kind); 20] = [
     ("energy", "Energy", Kind::Range),
     ("danceability", "Danceability", Kind::Range),
     ("style", "Style", Kind::Values),
+    // The library's words that are tags (0.9.7).
+    ("tag", "Tag", Kind::Values),
     // One similarity's sound (the owner, 2026-10-23); seeded from a track or an album, not added by hand.
     ("like", "Sounds like", Kind::Like),
 ];
@@ -917,6 +925,7 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                 "type" => f.release_types.join("|"),
                 "mood" => f.moods.join("|"),
                 "style" => f.styles.join("|"),
+                "tag" => f.tags.join("|"),
                 "quality" => f.quality.clone().unwrap_or_default(),
                 "key" => f.key.clone().unwrap_or_default(),
                 "played" => format!("{:?}", used(f).map(|u| u.last)),
@@ -955,6 +964,10 @@ pub fn list_axes(items: &[&[&Facts]], playlists: &[String], membership: Option<&
                 "style" => {
                     (a.values, a.counts) = counted(|f| &f.styles);
                     a.known = known(|f| !f.styles.is_empty());
+                }
+                "tag" => {
+                    (a.values, a.counts) = counted(|f| &f.tags);
+                    a.known = known(|f| !f.tags.is_empty());
                 }
                 "quality" => {
                     (a.values, a.counts) = counted(|f| f.quality.as_slice());
@@ -1039,6 +1052,7 @@ fn matches(c: &Condition, f: &Facts, w: &World) -> bool {
         ("bpm", Value::Range { min, max }) => within(f.bpm, min, max),
         ("mood", Value::AnyOf { values }) => values.iter().any(|v| f.moods.iter().any(|m| m.eq_ignore_ascii_case(v))),
         ("style", Value::AnyOf { values }) => values.iter().any(|v| f.styles.iter().any(|s| s.eq_ignore_ascii_case(v))),
+        ("tag", Value::AnyOf { values }) => values.iter().any(|v| f.tags.iter().any(|t| t.eq_ignore_ascii_case(v))),
         ("energy", Value::Range { min, max }) => within(f.energy, min, max),
         ("danceability", Value::Range { min, max }) => within(f.danceability, min, max),
         ("like", Value::Within { lines, .. }) => lines.contains(&f.rel),
@@ -1058,8 +1072,10 @@ fn has_value(c: &Condition, f: &Facts, w: &World) -> bool {
         "type" => !f.release_types.is_empty(),
         "year" => f.year.is_some(),
         "bpm" => f.bpm.is_some(),
-        "mood" => f.danceability.is_some(),
+        // Heard by CLAP, or given moods by the library's words.
+        "mood" => f.danceability.is_some() || !f.moods.is_empty(),
         "style" => !f.styles.is_empty(),
+        "tag" => !f.tags.is_empty(),
         "energy" => f.energy.is_some(),
         "danceability" => f.danceability.is_some(),
         "like" => f.sound.is_some(),
@@ -1766,6 +1782,9 @@ mod tests {
         assert_eq!(shelf.name, "New for you");
         assert!(matches!(&shelf.conditions[0].value, Value::Within { ranked, .. } if **ranked == ["b/1.flac", "a/1.flac"]));
         assert!(genre_crate("unlisted").is_none());
+        let style = genre_crate("style:Shoegaze").unwrap();
+        assert_eq!((style.name.as_str(), style.conditions[0].axis.as_str()), ("Shoegaze", "style"), "a word's crate, by its kind");
+        assert!(genre_crate("tempo:fast").is_none(), "no other kind");
     }
 
     #[test]

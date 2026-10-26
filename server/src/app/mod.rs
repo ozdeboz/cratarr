@@ -40,6 +40,7 @@ pub mod import;
 pub mod import_files;
 pub mod discover;
 pub mod around;
+pub mod words;
 pub mod lastfm;
 pub mod listening;
 pub mod scrobble;

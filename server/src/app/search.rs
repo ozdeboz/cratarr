@@ -14,8 +14,20 @@ use serde::Serialize;
 use crate::search::{closeness, words};
 
 /// What a search may find, and how much each kind weighs in `top`.
-const KINDS: [(&str, f32); 8] =
-    [("artist", 1.0), ("album", 0.95), ("playlist", 0.9), ("crate", 0.85), ("track", 0.8), ("genre", 0.7), ("missing", 0.6), ("excluded", 0.5)];
+const KINDS: [(&str, f32); 11] = [
+    ("artist", 1.0),
+    ("album", 0.95),
+    ("playlist", 0.9),
+    ("crate", 0.85),
+    ("track", 0.8),
+    ("genre", 0.7),
+    // The library's words of the other kinds (0.9.7, `app::words`).
+    ("style", 0.68),
+    ("mood", 0.66),
+    ("tag", 0.64),
+    ("missing", 0.6),
+    ("excluded", 0.5),
+];
 /// Each group's most, unless asked for fewer (`limit`), and `top`'s.
 pub const LIMIT: usize = 20;
 const TOP: usize = 8;
@@ -377,6 +389,45 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                 })
                 .collect(),
         );
+    }
+    // The library's words (0.9.7, `app::words`): a group per kind, each word opening its crate (`crate:<kind>:<word>`),
+    // by how many albums carry it among equals. In place of the library's genres where they can be read.
+    if super::words::KINDS.iter().any(|k| wants(k))
+        && let Some(served) = crate::serve::instance()
+    {
+        let (s, cat) = (served.clone(), app.library.catalogue());
+        match tokio::task::spawn_blocking(move || super::words::search_index(&s, &cat)).await? {
+            Ok(index) => {
+                for kind in super::words::KINDS.into_iter().filter(|k| wants(k)) {
+                    let hits: Vec<&(&'static str, String, usize)> = index.iter().filter(|(k, word, _)| *k == kind && crate::search::matches(word, &w)).collect();
+                    let n = hits.len();
+                    totals.insert(kind, n);
+                    groups.insert(
+                        kind,
+                        hits.iter()
+                            .enumerate()
+                            .map(|(i, (_, word, albums))| Item {
+                                kind,
+                                subject: format!("crate:{kind}:{word}"),
+                                title: word.clone(),
+                                sub: match albums {
+                                    1 => "1 album".to_string(),
+                                    c => format!("{c} albums"),
+                                },
+                                cover: None,
+                                track: None,
+                                artist: None,
+                                bandcamp: None,
+                                request: None,
+                                score: score(word, &w, i, n),
+                                matched: vec![Matched { on: kind, text: word.clone(), count: None }],
+                            })
+                            .collect(),
+                    );
+                }
+            }
+            Err(e) => tracing::debug!("search: the library's words not read: {e:#}"),
+        }
     }
     // Playlists and crates by their names, and by the tracks in them (a track's title, artist or album).
     let deep = if wants("playlist") || wants("crate") { found_lines(&w).await? } else { HashMap::new() };

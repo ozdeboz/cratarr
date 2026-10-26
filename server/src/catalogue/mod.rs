@@ -853,7 +853,8 @@ impl Catalogue {
     pub fn crate_facts(&self) -> Result<Arc<Vec<crate::crates::Facts>>> {
         // Read again when the library is built again too: its albums' release types (0.9.6) come from there.
         let served = crate::serve::instance();
-        let (changes, folders, built) = (self.db().total_changes(), self.folders(), served.as_ref().map_or(0, |s| s.built_at()));
+        // And when the library's words change (0.9.7, `app::words::stamp`).
+        let (changes, folders, built) = (self.db().total_changes(), self.folders(), served.as_ref().map_or(0, |s| crate::app::words::stamp(s)));
         let mut kept = self.facts.lock().unwrap_or_else(|p| p.into_inner());
         if let Some((c, f, b, facts)) = kept.as_ref()
             && *c == changes
@@ -869,6 +870,16 @@ impl Catalogue {
             for f in &mut facts {
                 if let Some(t) = f.track.and_then(|t| types.get(&crate::serve::ids::song(t))) {
                     f.release_types = t.clone();
+                }
+            }
+        }
+        // Each file with its album's words (0.9.7): genres, styles, moods and tags from every source.
+        if let Some(s) = &served
+            && let (Ok(merged), Ok(albums)) = (crate::app::words::merged(s), s.library.song_albums())
+        {
+            for f in &mut facts {
+                if let Some(words) = f.track.and_then(|t| albums.get(&crate::serve::ids::song(t))).and_then(|a| merged.albums.get(a)) {
+                    crate::app::words::add_to(f, words);
                 }
             }
         }
@@ -982,6 +993,7 @@ impl Catalogue {
                     // The key the tags say, else AudioMuse's; as one spelling ("D minor").
                     key: tag_keys.remove(&place).and_then(|k| crate::crates::key_name(&k)).or_else(|| muse_key.and_then(|k| crate::crates::key_name(&k))),
                     release_types: Vec::new(),
+                    tags: Vec::new(),
                 })
             })
             .collect())
