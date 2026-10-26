@@ -183,6 +183,11 @@ class PlayerService : MediaSessionService() {
 
             override fun stop() = startStop.pause { super.stop() }
 
+            // A seek in the middle of a Start and stop ramp ends it at once (0.9.7, `StartStop.seek`).
+            override fun seekTo(positionMs: Long) = startStop.seek { super.seekTo(positionMs) }
+
+            override fun seekTo(mediaItemIndex: Int, positionMs: Long) = startStop.seek { super.seekTo(mediaItemIndex, positionMs) }
+
             override fun seekToNext() = startStop.skip { super.seekToNext() }
 
             override fun seekToNextMediaItem() = startStop.skip { super.seekToNextMediaItem() }

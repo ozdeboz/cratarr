@@ -71,6 +71,12 @@ class StartStop(
     /** Whether a ramp runs: presses wait for its end. */
     val busy: Boolean get() = committed != null
 
+    /** The ramp under way (`in`, `out`; none), where it is (0 still, 1 playing), and a pause's own stop, waiting for
+     *  its ramp's end: what a seek in the middle of one needs (`seek`). */
+    private var running: String? = null
+    private var level = 1f
+    private var stopping: (() -> Unit)? = null
+
     private fun commit(to: Boolean?) {
         if (committed == to) return
         committed = to
@@ -79,6 +85,7 @@ class StartStop(
 
     /** A ramp's direction told to the page (the play button draws it): `out`, `in`, or none at its end. */
     private fun ramping(dir: String?, ms: Long, full: Long = ms) {
+        running = dir
         rampListener?.invoke(dir, ms, full)
     }
 
@@ -115,7 +122,8 @@ class StartStop(
             override fun run() {
                 if (mine != token) return done(false)
                 val t = ((SystemClock.elapsedRealtime() - t0).toFloat() / ms).coerceIn(0f, 1f)
-                set(from + (to - from) * curve(t))
+                level = from + (to - from) * curve(t)
+                set(level)
                 if (t < 1f) main.postDelayed(this, STEP_MS) else done(true)
             }
         }
@@ -143,6 +151,8 @@ class StartStop(
     fun reset() {
         token++
         heldPosition = null
+        stopping = null
+        level = 1f
         if (committed != null) ramping(null, 0)
         commit(null)
         Fader.target = 1f
@@ -193,6 +203,7 @@ class StartStop(
         // Where it was pressed: shown meanwhile, and where it rests once paused.
         val at = player.currentPosition
         heldPosition = at
+        stopping = stop
         commit(false)
         ramping("out", prefs.startStopMs)
         val mine = token + 1
@@ -207,6 +218,38 @@ class StartStop(
                     reset()
                 }
             }, tail)
+        }
+    }
+
+    /**
+     * A seek ([go]) in the middle of a ramp wins at once, with no gap added and no click (0.9.7, the owner; as the web's
+     * player): during a wind-up (or a skip's wind-down), the jump at once, then speed and volume from where the ramp was
+     * to full over [SETTLE_MS]; during a pause's wind-down, [SILENCE_MS] to silence, paused, resting where it was sent.
+     * Either way the ramp ends now and the position is no longer held. Without a ramp, a seek as ever.
+     */
+    fun seek(go: () -> Unit) {
+        val dir = running
+        if (!busy || dir == null) return go()
+        val m = mode()
+        val set = setter(m)
+        val from = level
+        val stop = stopping
+        heldPosition = null
+        stopping = null
+        ramping(null, 0)
+        commit(null)
+        if (dir == "out" && stop != null) {
+            note("seek", "during" to "pause")
+            ramp(from, 0f, SILENCE_MS, set, { it }) { whole ->
+                if (!whole) return@ramp
+                stop()
+                go()
+                reset()
+            }
+        } else {
+            note("seek", "during" to dir)
+            go()
+            ramp(from, 1f, SETTLE_MS, set, { it }) { whole -> if (whole) reset() }
         }
     }
 
@@ -243,6 +286,10 @@ class StartStop(
 
         /** Perceptual loudness: 0 silent, 1 full, −60 dB at the quiet end and even in decibels between. */
         fun loudness(v: Float): Float = if (v <= 0f) 0f else 10f.pow(3f * (min(1f, v) - 1f))
+
+        /** A seek in a wind-up: speed and volume back to full over this; in a pause's wind-down: silent over this. */
+        private const val SETTLE_MS = 30L
+        private const val SILENCE_MS = 8L
 
         /** A play this near a track's start never ramps (the owner, 2026-10-26). */
         private const val FROM_START_MS = 500L
