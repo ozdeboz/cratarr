@@ -13,6 +13,7 @@ export const BACKDROPS = [
   { value: 'checks', label: 'Checks' },
   { value: 'mosaic', label: 'Mosaic' },
   { value: 'planks', label: 'Planks' },
+  { value: 'amplifier', label: 'Amplifier' },
 ] as const;
 /** What stands there until another is chosen (the owner, 2026-10-26: no grey canvas any more). */
 export const DEFAULT_BACKDROP = 'wall';

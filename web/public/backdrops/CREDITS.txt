@@ -11,4 +11,5 @@ mellow      Danielle Suijkerbuijk https://unsplash.com/photos/YUMDBd6wFME
 records     james chan          https://unsplash.com/photos/zk-a1QqWcjo
 checks      Simon Takatomi      https://unsplash.com/photos/6Tqg0wro_vI
 mosaic      Adrien Antal        https://unsplash.com/photos/zSAOhFU1hh4
-planks      Aedrian Salazar     https://unsplash.com/photos/752S2X6tot8
+planks      Tim Mossholder      https://unsplash.com/photos/n9cuJ6N8etE
+amplifier   Goh Rhy Yan         https://unsplash.com/photos/6a3Ml_MGA5E
