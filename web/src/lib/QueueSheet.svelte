@@ -367,7 +367,7 @@
                 onpointermove={reorder.move}
                 onpointerup={reorder.end}
                 onpointercancel={reorder.end}
-                use:longpress={() => (here && !q ? liftRow(i) : rowMenu(asTrack(t, np.source), { list: 'upcoming', at: i }))}
+                use:longpress={() => (here && !q.length ? liftRow(i) : rowMenu(asTrack(t, np.source), { list: 'upcoming', at: i }))}
                 use:swipe={{ enabled: here && !drag, left: () => removeSwiped(i) }}
               >
                 {@render heldCover({ source: np.source, id: t.id, album_id: t.album_id, duration_secs: t.duration_secs })}
@@ -376,7 +376,7 @@
               </button>
               {@render rowHeart(asTrack(t, np.source))}
               {@render more(asTrack(t, np.source), { list: 'upcoming', at: i })}
-              {#if here && !q}
+              {#if here && !q.length}
                 <button
                   class="grip"
                   aria-label="Drag to reorder"
