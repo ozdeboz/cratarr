@@ -1,15 +1,21 @@
+<script lang="ts" module>
+  import { toast } from '../toast.svelte';
+
+  /** Resets (`reset` returns its undo) and says so, with Undo: the button's own, and a sheet's header action's. */
+  export function resetWithUndo(label: string, reset: () => () => void) {
+    const undo = reset();
+    toast.show({ text: `${label} reset.`, tone: 'done', act: { label: 'Undo', run: undo } });
+  }
+</script>
+
 <script lang="ts">
   // A group's order back to its default (the owner, 2026-10-24: every settings section with an order, a reset at the
   // right of its heading; lib/settings/Group's `tail`). Dimmed while it is the default already; Undo in the toast.
   import Icon from '../Icon.svelte';
-  import { toast } from '../toast.svelte';
 
   let { label, isDefault, reset }: { label: string; isDefault: boolean; reset: () => () => void } = $props();
 
-  function run() {
-    const undo = reset();
-    toast.show({ text: `${label} reset.`, tone: 'done', act: { label: 'Undo', run: undo } });
-  }
+  const run = () => resetWithUndo(label, reset);
 </script>
 
 <button class="reset" disabled={isDefault} aria-label={`Reset ${label.toLowerCase()}`} title="Reset" onclick={run}><Icon name="reset" size={18} /></button>
