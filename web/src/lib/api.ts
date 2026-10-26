@@ -1234,6 +1234,23 @@ export const setDiscogs = (key: string, secret: string) =>
 /** Switched on or off, the keys kept (a5, 0.9.6: off, Discogs is asked nothing). */
 export const setDiscogsEnabled = (enabled: boolean) =>
   request<DiscogsSetting>('/api/settings/discogs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+/** The server's slskd, Soulseek (a5, 0.9.8: single-track replacement): its address, its API key kept or not (`set`; the
+ *  key is never sent back), the folder its completed downloads are in as Cratarr sees them, and what it answered: its
+ *  version, or what is wrong. */
+export type SlskdSetting = { url: string; set: boolean; folder: string; enabled: boolean; version?: string; error?: string };
+export const getSlskd = () => quietly<SlskdSetting>('/api/settings/slskd');
+/** Saved at once; without a key the kept one stays, an empty address takes it away. */
+export const setSlskd = (s: { url: string; key?: string; folder: string }) =>
+  request<SlskdSetting>('/api/settings/slskd', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) });
+/** Switched on or off, the key kept (a5, 0.9.8: off, slskd is asked nothing). */
+export const setSlskdEnabled = (enabled: boolean) =>
+  request<SlskdSetting>('/api/settings/slskd', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+/** The server's AcoustID key (a5, 0.9.8: single-track replacement fingerprints what it fetched): set or not, never sent
+ *  back; an empty one takes it away. */
+export type AcoustidSetting = { set: boolean };
+export const getAcoustid = () => quietly<AcoustidSetting>('/api/settings/acoustid');
+export const setAcoustid = (key: string) =>
+  request<AcoustidSetting>('/api/settings/acoustid', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) });
 /** How Cratarr's MusicBrainz questions stand (a5, 0.9.6; administrators'): when it last answered or failed (since the
  *  server started), its pace, each background pass (how many of the albums with a release it has asked about). */
 export type MusicBrainzStatus = {

@@ -8,18 +8,25 @@
   // stack, Discovery and metadata, Home automation), which the settings search finds too.
   import type { Field } from '../api';
   import {
+    getAcoustid,
     getDiscogs,
     getLastfmServerKey,
     getLidarrOptions,
     getMusicBrainz,
+    getSlskd,
     missingCall,
+    setAcoustid,
     setDiscogs,
     setDiscogsEnabled,
     setLastfmEnabled,
     setLastfmServerKey,
     setMusicBrainzEnabled,
+    setSlskd,
+    setSlskdEnabled,
+    type AcoustidSetting,
     type DiscogsSetting,
     type MusicBrainzStatus,
+    type SlskdSetting,
   } from '../api';
   import { when } from './when';
   import FormSheet from './FormSheet.svelte';
@@ -43,7 +50,9 @@
   const LASTFM = 'lastfm';
   const DISCOGS = 'discogs';
   const MUSICBRAINZ = 'musicbrainz';
-  const own = (t: string) => t === LIDARR || t === HOME_ASSISTANT || t === LASTFM || t === DISCOGS || t === MUSICBRAINZ;
+  const SLSKD = 'slskd';
+  const ACOUSTID = 'acoustid';
+  const own = (t: string) => t === LIDARR || t === HOME_ASSISTANT || t === LASTFM || t === DISCOGS || t === MUSICBRAINZ || t === SLSKD || t === ACOUSTID;
   const LIDARR_MORE = "With Lidarr's address and API key, Delete in Incoming also stops Lidarr fetching that album again.";
   const WANT_MORE =
     "What Discover's Want adds an album to Lidarr with: its quality and metadata profiles, and the root folder it lands in (Incoming's). As your artists: the ones the artists Lidarr has already use.";
@@ -73,6 +82,31 @@
     );
   loadDiscogs();
   let discogsForm = $state<{ key: string; secret: string; busy: boolean; error: string | null } | null>(null);
+  // slskd and AcoustID (a5, 0.9.8: single-track replacement): a missing track fetched from Soulseek, fingerprinted
+  // against the release, added to its album. Each saved at once, as Discogs; slskd's key never comes back, nor AcoustID's.
+  const SLSKD_MORE = 'Soulseek through slskd: a single missing track found, fingerprinted with AcoustID against the release, and added to its album.';
+  const ACOUSTID_MORE = 'Fingerprints a track fetched for an album, so only the right recording is added. A free key from acoustid.org/new-application.';
+  const SLSKD_FOLDER = '/slskd';
+  let slskd = $state<SlskdSetting | null>(null);
+  /** A server before slskd (0.9.8) has no such setting: no row. */
+  let slskdKnown = $state(false);
+  const loadSlskd = () =>
+    getSlskd().then(
+      (d) => ((slskd = d), (slskdKnown = true)),
+      (e) => ((slskd = null), (slskdKnown = !missingCall(e))),
+    );
+  loadSlskd();
+  type SlskdForm = { url: string; key: string; folder: string; busy: boolean; error: string | null };
+  let slskdForm = $state<SlskdForm | null>(null);
+  let acoustid = $state<AcoustidSetting | null>(null);
+  let acoustidKnown = $state(false);
+  const loadAcoustid = () =>
+    getAcoustid().then(
+      (d) => ((acoustid = d), (acoustidKnown = true)),
+      (e) => ((acoustid = null), (acoustidKnown = !missingCall(e))),
+    );
+  loadAcoustid();
+  let acoustidForm = $state<{ key: string; busy: boolean; error: string | null } | null>(null);
   // MusicBrainz (the owner, 2026-10-25: visible, without a key): how its questions stand, read as the part opens; a
   // server before it has no row.
   const MB_MORE =
@@ -104,10 +138,11 @@
             .join(' · '),
   );
   // Each connection switched on or off (the owner, 2026-10-25: all of them), the key kept; a switch says it at once.
-  async function turn(what: 'lastfm' | 'discogs' | 'musicbrainz', on: boolean) {
+  async function turn(what: 'lastfm' | 'discogs' | 'musicbrainz' | 'slskd', on: boolean) {
     try {
       if (what === 'lastfm') await setLastfmEnabled(on).then(loadFmKey);
       else if (what === 'discogs') discogs = await setDiscogsEnabled(on);
+      else if (what === 'slskd') slskd = await setSlskdEnabled(on);
       else mb = await setMusicBrainzEnabled(on);
     } catch (e) {
       toast.fail(e, on ? "It wasn't switched on" : "It wasn't switched off");
@@ -119,6 +154,34 @@
     try {
       discogs = await setDiscogs(f.key.trim(), f.secret.trim());
       discogsForm = null;
+    } catch (e) {
+      f.error = e instanceof Error ? e.message : String(e);
+    } finally {
+      f.busy = false;
+    }
+  }
+  const openSlskdForm = () => (slskdForm = { url: slskd?.url ?? '', key: '', folder: slskd?.folder || SLSKD_FOLDER, busy: false, error: null });
+  // Kept when slskd did not answer, its error in the sheet's line.
+  async function saveSlskd(f: SlskdForm) {
+    f.busy = true;
+    f.error = null;
+    try {
+      const key = f.key.trim();
+      slskd = await setSlskd({ url: f.url.trim(), folder: f.folder.trim() || SLSKD_FOLDER, ...(key ? { key } : {}) });
+      if (slskd.error) f.error = slskd.error;
+      else slskdForm = null;
+    } catch (e) {
+      f.error = e instanceof Error ? e.message : String(e);
+    } finally {
+      f.busy = false;
+    }
+  }
+  async function saveAcoustid(f: { key: string; busy: boolean; error: string | null }) {
+    f.busy = true;
+    f.error = null;
+    try {
+      acoustid = await setAcoustid(f.key.trim());
+      acoustidForm = null;
     } catch (e) {
       f.error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -157,19 +220,29 @@
   const label = (d: Draft) => `${ed.kindOf(d)?.label ?? d.kind}${ed.drafts.filter((x) => x.kind === d.kind).length > 1 ? ` (${d.id})` : ''}`;
   const draft = $derived(thing && !own(thing) ? (ed.drafts.find((d) => d.id === thing) ?? null) : null);
   nameThing(() =>
-    thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : thing === LASTFM ? 'Last.fm' : thing === DISCOGS ? 'Discogs' : thing === MUSICBRAINZ ? 'MusicBrainz' : draft ? label(draft) : null,
+    thing === LIDARR ? 'Lidarr' : thing === HOME_ASSISTANT ? 'Home Assistant' : thing === LASTFM ? 'Last.fm' : thing === DISCOGS ? 'Discogs' : thing === MUSICBRAINZ ? 'MusicBrainz' : thing === SLSKD ? 'slskd' : thing === ACOUSTID ? 'AcoustID' : draft ? label(draft) : null,
   );
   // Last.fm's key and Discogs' app as rows say them.
   const fmOff = $derived(fmKey?.enabled === false);
   const fmLine = $derived(fmOff ? 'Off' : fmKey?.saved ? 'Set, for everyone' : fmKey?.set ? "From the container's settings" : 'Not set');
   const discogsOff = $derived(discogs?.enabled === false);
   const discogsLine = $derived(discogsOff ? 'Off' : discogs?.set ? (discogs.per_minute ? `Set · ${discogs.per_minute} a minute` : 'Set') : 'Not set');
+  // slskd's (its address and what it answered) and AcoustID's.
+  const slskdHas = $derived(!!slskd?.url || !!slskd?.set);
+  const slskdOff = $derived(slskd?.enabled === false);
+  const slskdState = $derived.by(() => {
+    if (slskdOff) return { lead: 'off', line: 'Off' };
+    const said = slskd?.version ? `slskd ${slskd.version}` : (slskd?.error ?? null);
+    return { lead: slskd?.error ? 'bad' : slskd?.version ? 'on' : 'off', line: [slskd?.url, said].filter(Boolean).join(' · ') || 'Not set' };
+  });
+  const acoustidLine = $derived(acoustid?.set ? 'Set' : 'Not set');
   /** Discovery and metadata's rows, those switched off last (as the servers). */
   const metaRows = $derived(
     [
       { id: MUSICBRAINZ, shown: !!mb, off: mb?.enabled === false },
       { id: LASTFM, shown: true, off: fmOff },
       { id: DISCOGS, shown: discogsKnown, off: discogsOff },
+      { id: ACOUSTID, shown: acoustidKnown, off: false },
     ]
       .filter((r) => r.shown)
       .sort((a, b) => Number(a.off) - Number(b.off)),
@@ -210,7 +283,7 @@
   type Choosing = { title: string; options: { value: string; label: string }[]; value: string; save: (v: string) => void };
   let typing = $state<Typing | null>(null);
   let choosing = $state<Choosing | null>(null);
-  let removing = $state<'server' | 'lidarr' | 'discogs' | 'lastfm' | null>(null);
+  let removing = $state<'server' | 'lidarr' | 'discogs' | 'lastfm' | 'slskd' | 'acoustid' | null>(null);
   let addingKind = $state(false);
 
   function add(kind: string) {
@@ -441,6 +514,58 @@
       onclose={() => (removing = null)}
     />
   {/if}
+{:else if thing === SLSKD}
+  {#if slskdHas}
+    <Group>
+      <Item name="Use slskd" line={slskdOff ? 'Its key is kept, and nothing is asked of it until it is on again' : null} toggle={{ checked: !slskdOff, onchange: (on) => turn('slskd', on) }} />
+    </Group>
+  {/if}
+  <Group title="Connection" more={SLSKD_MORE}>
+    <Item name="Address" line={slskd?.url || 'Not set'} wrap={!!slskd?.url} onclick={openSlskdForm} />
+    <Item name="API key" line={slskd?.set ? 'Set' : 'Not set'} onclick={openSlskdForm} />
+    <Item name="Folder" line={slskd?.folder || SLSKD_FOLDER} wrap more="Its completed downloads as Cratarr sees them." onclick={openSlskdForm} />
+    {#if slskd?.url && !slskdOff}
+      <Item lead={slskdState.lead} name={slskd.version ? 'Connected' : 'Not connected'} line={slskd.version ? `slskd ${slskd.version}` : (slskd.error ?? null)} tone={slskd.error ? 'bad' : null} wrap />
+    {/if}
+  </Group>
+  {#if slskdHas}
+    <Group>
+      <Item name="Remove slskd" kind="danger" onclick={() => (removing = 'slskd')} />
+    </Group>
+  {/if}
+  {#if removing === 'slskd'}
+    <ConfirmSheet
+      title="Remove slskd?"
+      label="Remove"
+      onconfirm={() =>
+        setSlskd({ url: '', key: '', folder: slskd?.folder || SLSKD_FOLDER }).then(
+          (d) => ((slskd = d), backFromThing('connections')),
+          (e) => toast.fail(e, "slskd wasn't removed"),
+        )}
+      onclose={() => (removing = null)}
+    />
+  {/if}
+{:else if thing === ACOUSTID}
+  <Group title="Connection" more={ACOUSTID_MORE}>
+    <Item name="API key" line={acoustidLine} onclick={() => (acoustidForm = { key: '', busy: false, error: null })} />
+  </Group>
+  {#if acoustid?.set}
+    <Group>
+      <Item name="Remove AcoustID" kind="danger" onclick={() => (removing = 'acoustid')} />
+    </Group>
+  {/if}
+  {#if removing === 'acoustid'}
+    <ConfirmSheet
+      title="Remove AcoustID?"
+      label="Remove"
+      onconfirm={() =>
+        setAcoustid('').then(
+          (d) => ((acoustid = d), backFromThing('connections')),
+          (e) => toast.fail(e, "AcoustID wasn't removed"),
+        )}
+      onclose={() => (removing = null)}
+    />
+  {/if}
 {:else}
   <Group title="Media servers" more="Shared by everyone who uses Cratarr, not this device's own.">
     {#if s.origin === 'env'}<Item name="From the container's settings" line="Until you save here" />{/if}
@@ -457,12 +582,21 @@
       <Item name="Add server" kind="add" onclick={() => (addingKind = true)} />
     {/if}
   </Group>
-  {#if ed.showLidarr}
-    <Group title="Download stack" more={LIDARR_MORE}>
-      {#if s.lidarr || ed.lid.url}
-        <Item lead={lidarrState.lead} name="Lidarr" line={lidarrState.line} tone={lidarrState.lead === 'bad' ? 'bad' : null} onclick={() => openThing('connections', LIDARR)} />
-      {:else}
-        <Item name="Add Lidarr" kind="add" onclick={() => openThing('connections', LIDARR)} />
+  {#if ed.showLidarr || slskdKnown}
+    <Group title="Download stack" more={ed.showLidarr ? LIDARR_MORE : null}>
+      {#if ed.showLidarr}
+        {#if s.lidarr || ed.lid.url}
+          <Item lead={lidarrState.lead} name="Lidarr" line={lidarrState.line} tone={lidarrState.lead === 'bad' ? 'bad' : null} onclick={() => openThing('connections', LIDARR)} />
+        {:else}
+          <Item name="Add Lidarr" kind="add" onclick={() => openThing('connections', LIDARR)} />
+        {/if}
+      {/if}
+      {#if slskdKnown}
+        {#if slskdHas}
+          <Item lead={slskdState.lead} name="slskd" line={slskdState.line} tone={slskdState.lead === 'bad' ? 'bad' : null} onclick={() => openThing('connections', SLSKD)} />
+        {:else}
+          <Item name="Add slskd" kind="add" onclick={() => openThing('connections', SLSKD)} />
+        {/if}
       {/if}
     </Group>
   {/if}
@@ -483,6 +617,12 @@
         {:else}
           <Item name="Add Discogs" kind="add" onclick={() => openThing('connections', DISCOGS)} />
         {/if}
+      {:else if r.id === ACOUSTID}
+        {#if acoustid?.set}
+          <Item lead="on" name="AcoustID" line={acoustidLine} onclick={() => openThing('connections', ACOUSTID)} />
+        {:else}
+          <Item name="Add AcoustID" kind="add" onclick={() => openThing('connections', ACOUSTID)} />
+        {/if}
       {/if}
     {/each}
   </Group>
@@ -498,6 +638,23 @@
     <!-- svelte-ignore a11y_autofocus -->
     <label>Consumer key<input bind:value={f.key} autocomplete="off" spellcheck="false" autofocus /></label>
     <label>Consumer secret<input type="password" bind:value={f.secret} autocomplete="off" /></label>
+  </FormSheet>
+{/if}
+{#if slskdForm}
+  {@const f = slskdForm}
+  <!-- The key typed again only to change it: blank keeps the one kept. -->
+  <FormSheet title="slskd" submitLabel="Save" canSubmit={!!f.url.trim() && (!!f.key.trim() || !!slskd?.set)} busy={f.busy} error={f.error} onsubmit={() => saveSlskd(f)} onclose={() => (slskdForm = null)}>
+    <!-- svelte-ignore a11y_autofocus -->
+    <label>Address<input type="url" bind:value={f.url} placeholder="http://slskd:5030" autocomplete="off" spellcheck="false" autofocus /></label>
+    <label>API key<input type="password" bind:value={f.key} placeholder={slskd?.set ? 'Kept' : ''} autocomplete="off" /></label>
+    <label>Folder<input bind:value={f.folder} placeholder={SLSKD_FOLDER} autocomplete="off" spellcheck="false" /></label>
+  </FormSheet>
+{/if}
+{#if acoustidForm}
+  {@const f = acoustidForm}
+  <FormSheet title="AcoustID" submitLabel="Save" canSubmit={!!f.key.trim()} busy={f.busy} error={f.error} onsubmit={() => saveAcoustid(f)} onclose={() => (acoustidForm = null)}>
+    <!-- svelte-ignore a11y_autofocus -->
+    <label>API key<input type="password" bind:value={f.key} autocomplete="off" autofocus /></label>
   </FormSheet>
 {/if}
 {#if typing}

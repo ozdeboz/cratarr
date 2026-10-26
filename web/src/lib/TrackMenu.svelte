@@ -14,6 +14,7 @@
   // From a queue row (`queue`) it is about that place in the queue: Play now and Play next (moving it there on this
   // device; again, as a copy, on the server's player, which takes no reorder) as the large actions, and Remove from
   // queue last (this device, as the row's swipe).
+  import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
   import {
     coverUrl,
     albumCoverUrl,
@@ -76,6 +77,8 @@
   /** The menu is for what plays (no track given, or the given one plays); a queue row is always its own place. */
   const forPlaying = $derived(!place && (!track || (!!np && np.source === track.source && np.id === track.id)));
   const t = $derived<MenuTrack | null>(forPlaying ? np : track);
+  /** Find a better copy open (lib/ReplaceTrackSheet), in the menu's place. */
+  let betterOpen = $state(false);
 
   /** One of the device's own (local mode, decision 0052): none of Cratarr's (hearts, playlists, downloads, share,
    *  details); Play next, Add to queue, its album and artist, the web search. */
@@ -333,7 +336,10 @@
   }
 </script>
 
-{#if t}
+{#if t && betterOpen && t.album_id}
+  <!-- A better copy of it (0.9.8, lib/ReplaceTrackSheet): the menu gives way to it. -->
+  <ReplaceTrackSheet source={t.source} album={{ id: t.album_id, title: t.album ?? '' }} replace={{ source: t.source, id: t.id }} {onclose} />
+{:else if t}
   <MenuSheet
     label={t.name}
     {onclose}
@@ -401,6 +407,7 @@
         <MenuGroup>
           {#if !onDevice}<MenuEntry icon="info" label="Info" onclick={showDetails} />{/if}
           {#if me.admin && !onDevice && hasWave}<MenuEntry icon="gauge" label="Adjust BPM" onclick={() => (step = 'tempo')} />{/if}
+          {#if me.admin && t.source === 'cratarr' && t.album_id}<MenuEntry icon="search" label="Find a better copy…" onclick={() => (betterOpen = true)} />{/if}
           <MenuEntry icon="search" label="Web search" onclick={webSearch} />
           <MenuEntry icon="search" label="Genius search" onclick={geniusSearch} />
         </MenuGroup>

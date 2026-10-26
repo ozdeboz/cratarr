@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
   import { untrack } from 'svelte';
   import type { AlbumsSource, LibraryInfo, ListedAlbum } from './api';
   import { jobs } from './jobs.svelte';
@@ -230,6 +231,8 @@
     }
   }
   const listed = () => [{ source, a: a as ListedAlbum }];
+  /** Missing tracks open (lib/ReplaceTrackSheet), in the menu's place. */
+  let missingOpen = $state(false);
   const actions = $derived.by<SheetAction[]>(() => {
     if (ask || exporting || step !== 'menu') return [];
     const t = tracks;
@@ -532,6 +535,10 @@
   {#if coverProgress}{#if coverProgress.value !== null}<Meter label={coverProgress.line} value={coverProgress.value} />{:else}<span class="look-line">{coverProgress.line}</span>{/if}{/if}
 {/snippet}
 
+<!-- Missing tracks (0.9.8, lib/ReplaceTrackSheet): the menu gives way to it. -->
+{#if missingOpen}
+  <ReplaceTrackSheet {source} album={{ id: a.id, title: a.title }} {onclose} />
+{:else}
 <MenuSheet
   label={a.title}
   {onclose}
@@ -751,6 +758,8 @@
       <MenuGroup>
         {#if me.admin && source === 'cratarr'}
           <MenuEntry icon="image" label="Change cover" onclick={askCover} />
+          <!-- Its release's tracks, the missing ones found one at a time (0.9.8, a5's single-track replacement). -->
+          <MenuEntry icon="search" label="Missing tracks…" onclick={() => (missingOpen = true)} />
         {:else if deviceCovers}
           <MenuEntry icon="image" label="Change cover on this device" onclick={() => picker?.click()} />
         {/if}
@@ -781,6 +790,7 @@
     <PlaylistsStep to={toList} bind:step {onclose} />
   {/if}
 </MenuSheet>
+{/if}
 
 <style>
   /* The rating's card: its word, then five stars, filled up to the rating in the accent. */
