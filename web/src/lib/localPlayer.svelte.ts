@@ -1738,13 +1738,14 @@ async function rampOut(): Promise<void> {
     rampEnds();
   }
 }
-/** Plays, winding up from still (or silence); not while a ramp is under way. */
-function rampIn() {
+/** Plays, winding up from still (or silence); not while a ramp is under way. `early`: a stream begun that much (`lead`
+ *  s) before the point it winds up to, over `ms` (playInto). */
+function rampIn(early?: { ms: number; lead: number }) {
   if (!audio || committed !== null) return;
   const { mode } = prefs.startStop;
   let { ms } = prefs.startStop;
   // From a track's start it plays at once, always (the owner, 2026-10-26): there is nothing to wind up from.
-  if (mode === 'off' || (where()?.offset ?? 0) < FROM_START) {
+  if (mode === 'off' || (!early && (where()?.offset ?? 0) < FROM_START)) {
     unramp();
     void audio.play().catch(refused);
     return;
@@ -1756,12 +1757,17 @@ function rampIn() {
   const saved = audio.currentTime;
   const w = where(saved);
   // No longer than there is track before it (the owner, 2026-10-26: a 3 s fade 1 s in is a 1 s fade).
-  const pace = mode === 'fade' ? 1 : RAMP_LOW + ((1 - RAMP_LOW) * 2) / 3;
+  const pace = paceOf(mode);
   const full = ms;
-  ms = windUpMs(ms, mode, w ? w.offset : 0);
-  const start = Math.max(w ? w.seg.start : 0, saved - (ms / 1000) * pace);
-  heldAt = saved;
-  if (inBuffer(start)) audio.currentTime = start;
+  if (early) {
+    ms = early.ms;
+    heldAt = saved + early.lead;
+  } else {
+    ms = windUpMs(ms, mode, w ? w.offset : 0);
+    const start = Math.max(w ? w.seg.start : 0, saved - (ms / 1000) * pace);
+    heldAt = saved;
+    if (inBuffer(start)) audio.currentTime = start;
+  }
   const set = rampSet(mode);
   set(mode === 'fade' ? 0 : RAMP_LOW);
   rampBegins('in', ms, full);
@@ -1774,6 +1780,41 @@ function rampIn() {
     unramp();
     committed = null;
   });
+}
+/** A queue played from `from` s into track `index`, as Cratarr asks (a move's carry-on, 0.9.8): winding up into that
+ *  point as play does (the stream begun early by the wind-up's lead), at once from a track's start or with Start and
+ *  stop off. */
+function playInto(index: number, from: number) {
+  const { mode } = prefs.startStop;
+  const ms = windUpMs(prefs.startStop.ms, mode, from);
+  if (ms <= 0 || !audio) return void fresh(index, from, true);
+  const lead = (ms / 1000) * paceOf(mode);
+  void fresh(index, from - lead, false);
+  const gen = generation;
+  // The counter where it is asked for meanwhile, not the lead's early start.
+  local.position = from;
+  local.paused = false;
+  audio.addEventListener('canplay', () => gen === generation && rampIn({ ms, lead }), { once: true });
+}
+/** Stops as Cratarr asks (a move's hold, a handover elsewhere; 0.9.8): winding down first, as a pause does; a ramp
+ *  under way is waited out first, never dropped (the owner, 2026-10-26). */
+async function stopRamped() {
+  while (committed !== null) await new Promise((r) => setTimeout(r, 50));
+  if (!audio || prefs.startStop.mode === 'off' || audio.paused) return void stop();
+  committed = true;
+  local.paused = true;
+  heldAt = audio.currentTime;
+  const mine = ++run;
+  try {
+    await rampOut();
+  } finally {
+    if (mine === run) {
+      heldAt = null;
+      unramp();
+      committed = null;
+    }
+  }
+  stop();
 }
 /** Pauses, winding down first; paused at once as far as anyone sees, and nothing takes it back meanwhile. */
 async function pauseRamped() {
@@ -1885,8 +1926,11 @@ const FROM_START = 0.5;
  *  this before it starts, lib/NowPlaying). */
 export function windUpMs(ms: number, mode: 'off' | 'vinyl' | 'fade', offset: number, low = RAMP_LOW): number {
   if (mode === 'off' || offset < FROM_START) return 0;
-  const pace = mode === 'fade' ? 1 : low + ((1 - low) * 2) / 3;
-  return Math.min(ms, (offset / pace) * 1000);
+  return Math.min(ms, (offset / paceOf(mode, low)) * 1000);
+}
+/** Track seconds per second while winding (full speed for a fade; a vinyl's, eased, two thirds of the way up). */
+function paceOf(mode: 'off' | 'vinyl' | 'fade', low = RAMP_LOW): number {
+  return mode === 'vinyl' ? low + ((1 - low) * 2) / 3 : 1;
 }
 /** Cratarr's track as this player keeps it. */
 function trackOf(t: Record<string, unknown>): LocalTrack | null {
@@ -1934,7 +1978,9 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
       if (local.repeat === 'one') local.repeat = 'off';
       local.from = typeof m.queue_name === 'string' ? m.queue_name : null;
       keepLocal(left, typeof m.queue_id === 'string' ? m.queue_id : newQueueId());
-      fresh(index, (typeof m.position_ms === 'number' ? m.position_ms : 0) / 1000, m.paused !== true);
+      const from = (typeof m.position_ms === 'number' ? m.position_ms : 0) / 1000;
+      if (m.paused === true) void fresh(index, from, false);
+      else playInto(index, from);
       fill();
       return m.paused !== true;
     }
@@ -1980,7 +2026,7 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
       togglePlay();
       return !audio.paused;
     case 'stop':
-      stop();
+      void stopRamped();
       return false;
     case 'next':
       next();
