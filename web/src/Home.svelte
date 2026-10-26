@@ -448,8 +448,9 @@
 </div>
 
 {#snippet heroPart()}
-  <!-- Its sky at once, its picture as soon as it is in; its words and albums after it (heroReady). -->
-  {#if !settledOf(lead) || heroAlbums.length}
+  <!-- Its sky at once, its picture as soon as it is in; its words and albums after it (heroReady). Not under the page's
+       loader: its sky's top showed below it as a hard edge (the owner, 2026-10-26); it comes whole, its fade with it. -->
+  {#if !loading && (!settledOf(lead) || heroAlbums.length)}
     <section
       class="moment top"
       class:waiting={!heroReady}
