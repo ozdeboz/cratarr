@@ -174,6 +174,14 @@ pub struct TrackRow {
     pub format: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bitrate: Option<i64>,
+    /// Its tempo (BPM), its album's artist, and when the asking account last played it (epoch seconds) (0.9.7: the
+    /// Tracks table's columns).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bpm: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_artist: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_played: Option<i64>,
     #[serde(skip)]
     pub folder: i64,
     #[serde(skip)]
@@ -198,11 +206,14 @@ fn track_row(r: &rusqlite::Row) -> rusqlite::Result<TrackRow> {
         bitrate: r.get(11)?,
         folder: r.get(12)?,
         order_title: r.get(13)?,
+        bpm: r.get::<_, Option<i64>>(14)?.filter(|b| *b > 0),
+        album_artist: r.get::<_, Option<String>>(15)?.filter(|a| !a.is_empty()),
+        last_played: None,
     })
 }
 
 const TRACK_ROW_COLS: &str = "s.id, s.title, coalesce(s.artist, ''), s.album, s.album_id, s.track_no, s.disc_no, s.duration_ms, s.year, s.created,
-  s.suffix, s.kbps, s.folder, s.order_title";
+  s.suffix, s.kbps, s.folder, s.order_title, s.bpm, s.album_artist";
 
 /// How many albums, artists, tracks and genres a search matches in all (decision 0072: a group's header counts them).
 #[derive(Debug, Default, Clone, Copy, PartialEq)]

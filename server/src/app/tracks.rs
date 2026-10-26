@@ -17,7 +17,8 @@ fn ci(a: &str, b: &str) -> Ordering {
     a.chars().flat_map(char::to_lowercase).cmp(b.chars().flat_map(char::to_lowercase))
 }
 
-/// The rows in `order` (`title`, `artist`, `album`, `added`, `year`, `plays`, `duration`; any other: `album`), the other
+/// The rows in `order` (`title`, `artist`, `album`, `added`, `year`, `plays`, `duration`, and 0.9.7's `tempo`,
+/// `lastPlayed`, `albumArtist`; any other: `album`), the other
 /// way round where `down`; equals in their album's order (album, disc, track), always the same way.
 pub fn sort(rows: &mut [TrackRow], order: &str, down: bool) {
     rows.sort_by(|a, b| {
@@ -28,6 +29,9 @@ pub fn sort(rows: &mut [TrackRow], order: &str, down: bool) {
             "year" => a.year.cmp(&b.year),
             "plays" => a.plays.cmp(&b.plays),
             "duration" => a.duration.cmp(&b.duration),
+            "tempo" => a.bpm.cmp(&b.bpm),
+            "lastPlayed" => a.last_played.cmp(&b.last_played),
+            "albumArtist" => ci(a.album_artist.as_deref().unwrap_or(&a.artist), b.album_artist.as_deref().unwrap_or(&b.artist)),
             _ => ci(&a.album, &b.album),
         };
         (if down { first.reverse() } else { first })
@@ -51,7 +55,9 @@ pub async fn list(app: &super::App, q: &str, order: &str, down: bool, without: &
             let used = served.userdata.used(&user, crate::userdata::Kind::Song)?;
             let starred: HashSet<String> = served.userdata.starred(&user, crate::userdata::Kind::Song)?.into_iter().collect();
             for r in &mut rows {
-                r.plays = used.get(&r.id).map_or(0, |a| a.play_count);
+                let u = used.get(&r.id);
+                r.plays = u.map_or(0, |a| a.play_count);
+                r.last_played = u.and_then(|a| a.play_date);
                 r.favorite = starred.contains(&r.id);
             }
         }
@@ -100,6 +106,15 @@ mod tests {
         assert_eq!(titles(&rows), ["Little Fluffy Clouds", "Hunter", "Jóga", "The Bachelorette"], "case aside; down, the albums still in order");
         sort(&mut rows, "plays", true);
         assert_eq!(titles(&rows), ["Jóga", "The Bachelorette", "Little Fluffy Clouds", "Hunter"]);
+        for r in rows.iter_mut() {
+            r.bpm = match r.title.as_str() {
+                "Hunter" => Some(120),
+                "Jóga" => Some(90),
+                _ => None,
+            };
+        }
+        sort(&mut rows, "tempo", true);
+        assert_eq!(titles(&rows)[..2], ["Hunter", "Jóga"], "the fastest first, those without a tempo last");
         sort(&mut rows, "nonsense", false);
         assert_eq!(titles(&rows)[0], "Little Fluffy Clouds", "the album order");
     }

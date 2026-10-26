@@ -21,7 +21,7 @@ const API: &str = "https://api.listenbrainz.org/1/user";
 const PAGE: usize = 1000;
 
 /// One listen as ListenBrainz keeps it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Listen {
     pub at: i64,
     pub msid: String,
@@ -76,11 +76,12 @@ struct Info {
     recording_mbid: Option<String>,
 }
 
-/// Every listen of a ListenBrainz user, newest first, a page at a time; `progress` says how many so far.
-async fn fetch(user: &str, progress: &super::lastfm::Progress) -> Result<Vec<Listen>> {
+/// Every listen of a ListenBrainz user, newest first, a page at a time, each page kept in `spool` as it comes; one that
+/// holds a read stopped before goes on from its oldest (0.9.7). `progress` says how many so far.
+async fn fetch(user: &str, progress: &super::lastfm::Progress, spool: &mut super::resume::Spool<Listen>) -> Result<Vec<Listen>> {
     let http = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
     let mut out = Vec::new();
-    let mut before: Option<i64> = None;
+    let mut before: Option<i64> = spool.items.iter().map(|l| l.at).min();
     loop {
         let mut url = reqwest::Url::parse(API)?;
         url.path_segments_mut().map_err(|()| anyhow::anyhow!("no path"))?.extend([user, "listens"]);
@@ -90,6 +91,7 @@ async fn fetch(user: &str, progress: &super::lastfm::Progress) -> Result<Vec<Lis
         }
         let page: Page = http.get(url).sent().await?.error_for_status().context("ListenBrainz did not answer")?.json().await?;
         let n = page.payload.listens.len();
+        let from = out.len();
         for r in page.payload.listens {
             let m = r.track_metadata;
             let info = m.additional_info.unwrap_or(Info { duration_ms: None, media_player: None, recording_mbid: None });
@@ -104,11 +106,12 @@ async fn fetch(user: &str, progress: &super::lastfm::Progress) -> Result<Vec<Lis
                 player: info.media_player.filter(|x| !x.is_empty()),
             });
         }
-        progress("Reading listens", out.len() as u64, None);
+        spool.add(out[from..].iter().cloned())?;
+        progress("Reading listens", (spool.items.len()) as u64, None);
         // The next page: listens before the oldest so far (two at one second are rare; one may be missed then).
         match out.last() {
             Some(last) if n == PAGE => before = Some(last.at),
-            _ => return Ok(out),
+            _ => return Ok(spool.items.clone()),
         }
     }
 }
@@ -135,7 +138,11 @@ const CONTEXT: &str = "listenbrainz";
 /// What importing a ListenBrainz user's listens into `account`'s history would bring (decision 0067): nothing written.
 pub async fn preview(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, progress: &super::lastfm::Progress) -> Result<Tally> {
     let dir = serve.data_dir.clone().context("the history needs Cratarr's data folder")?;
-    let listens = fetch(user, progress).await?;
+    // Its read kept too: an import after it goes on from there.
+    let mut spool = super::resume::Spool::<Listen>::open(Path::new(&dir), CONTEXT, account, user);
+    let listens = fetch(user, progress, &mut spool).await?;
+    // Read whole: the import after it reads again (and the new listens with it).
+    spool.finish();
     progress("Matching", 0, None);
     let (serve, account) = (serve.clone(), account.to_string());
     tokio::task::spawn_blocking(move || -> Result<Tally> {
@@ -162,10 +169,18 @@ pub fn undo(serve: &crate::serve::Serve, account: &str) -> Result<usize> {
 /// parts run apart.
 pub async fn import(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, progress: &super::lastfm::Progress) -> Result<Tally> {
     let dir = serve.data_dir.clone().context("the history needs Cratarr's data folder")?;
-    let listens = fetch(user, progress).await?;
+    let mut spool = super::resume::Spool::<Listen>::open(Path::new(&dir), CONTEXT, account, user);
+    // Stopped part of the way (0.9.7): the listens read so far go in now, and the next import goes on from there.
+    let (listens, stopped) = match fetch(user, progress, &mut spool).await {
+        Ok(listens) => (listens, None),
+        Err(e) => (spool.items.clone(), Some(e)),
+    };
+    if stopped.is_none() {
+        spool.finish();
+    }
     progress("Matching", 0, None);
     let (serve, account) = (serve.clone(), account.to_string());
-    tokio::task::spawn_blocking(move || -> Result<Tally> {
+    let tally = tokio::task::spawn_blocking(move || -> Result<Tally> {
         let songs = Matcher::read(&Path::new(&dir).join("library.sqlite"))?;
         let mut c = Counter::default();
         for l in &listens {
@@ -193,5 +208,17 @@ pub async fn import(serve: &Arc<crate::serve::Serve>, account: &str, user: &str,
         }
         Ok(c.tally())
     })
-    .await?
+    .await?;
+    match stopped {
+        None => tally,
+        Some(e) => {
+            let n = listens_in(&tally);
+            Err(e.context(format!("the {n} listens read before it stopped are in; the next import goes on from where it stopped")))
+        }
+    }
+}
+
+/// How many of a tally's listens were found in the library (what went in).
+fn listens_in(t: &Result<Tally>) -> u64 {
+    t.as_ref().map_or(0, |t| t.found as u64)
 }
