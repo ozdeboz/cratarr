@@ -8,7 +8,10 @@ import { isLocal, localNowPlaying, localState, tookLocal } from './output.svelte
 import { setFavorite as setRowFavorite } from './favourites.svelte';
 import { on } from './events.svelte';
 import { toast } from './toast.svelte';
-import { ramping } from './ramping.svelte';
+import { ramping, rampPressed } from './ramping.svelte';
+import { appInfo, inApp } from './app.svelte';
+import { prefs } from './prefs.svelte';
+import { windUpMs } from './localPlayer.svelte';
 import { playOn } from './playOn.svelte';
 
 /** What plays where the output is: the server's player, or this browser (decision 0022). */
@@ -118,8 +121,17 @@ $effect.root(() => {
     });
   });
 });
+// Never a small step back (the owner, 2026-10-26: "the jumping back should never happen"): a player's report a little
+// behind the page's own reckoning, or a pause settling where the press was, holds the position until it is passed.
+// Seeks, restarts and other tracks (more than STEP_BACK back, or another track) show at once.
+const STEP_BACK = 1.5;
+let lastShown: { id: string | null; pos: number } = { id: null, pos: 0 };
 export function position(): number {
-  return frozen.on ? frozen.pos : running();
+  const p = frozen.on ? frozen.pos : running();
+  const id = playing()?.id ?? null;
+  if (id === lastShown.id && p < lastShown.pos && lastShown.pos - p < STEP_BACK) return lastShown.pos;
+  lastShown = { id, pos: p };
+  return p;
 }
 export const paused = (): boolean => playing()?.progress?.paused ?? false;
 /** A Start and stop ramp under way on this device's player: the play button is inert until it ends (the owner,
@@ -129,7 +141,16 @@ export const rampBusy = () => isLocal() && ramping.dir !== null;
 export const shownPaused = (): boolean => (rampBusy() ? ramping.dir === 'out' : paused());
 /** The play button: play or pause, not while a ramp runs. */
 export function playPause() {
-  if (!rampBusy()) send('play-pause');
+  if (rampBusy()) return;
+  const ss = inApp ? appInfo.startStop : prefs.startStop;
+  if (isLocal() && ss.mode !== 'off') {
+    if (!paused()) rampPressed('out', ss.ms);
+    else {
+      const ms = windUpMs(ss.ms, ss.mode, position(), inApp ? 0.25 : undefined);
+      if (ms > 0) rampPressed('in', ms, ss.ms);
+    }
+  }
+  send('play-pause');
 }
 
 export function clockText(secs: number) {
