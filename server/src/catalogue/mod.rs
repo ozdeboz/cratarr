@@ -405,6 +405,11 @@ impl Catalogue {
             cat.db().execute("UPDATE files SET state = ?1 WHERE state = ?2", params![PENDING, FAILED])?;
             // Reader 5 names ID3v2's TBPM and MP4's tmpo "bpm" as it already named Vorbis's BPM: the tags read before.
             cat.db().execute("UPDATE tags SET name = 'bpm' WHERE raw IN ('TBPM', 'tmpo') AND name IS NULL", [])?;
+            // Reader 6 names a file's mood, style and grouping (0.9.7, the library's words), which no reader before kept:
+            // every file read before is read again, and served as it was read until then.
+            if cat.meta("reader").and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v < 6) {
+                cat.db().execute("UPDATE files SET state = ?1 WHERE state = ?2", params![PENDING, READ])?;
+            }
             cat.set_meta("reader", &tags::READER_VERSION.to_string());
         }
         // Track ids are this catalogue's own: one made afresh numbers them anew, and what holds ids from the old one
@@ -909,7 +914,7 @@ impl Catalogue {
             tag_keys.entry(place).or_insert(value);
         }
         let mut st = db.prepare(
-            "SELECT folder, rel, name, value FROM tags WHERE folder >= 0 AND name IN ('genre', 'date', 'originaldate', 'bpm', 'artist', 'albumartist') ORDER BY folder, rel, n",
+            "SELECT folder, rel, name, value FROM tags WHERE folder >= 0 AND name IN ('genre', 'date', 'originaldate', 'bpm', 'artist', 'albumartist', 'mood', 'style', 'grouping') ORDER BY folder, rel, n",
         )?;
         let mut by: HashMap<Place, Vec<(String, String)>> = HashMap::new();
         for row in st.query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, String>(2)?, r.get::<_, String>(3)?)))? {
@@ -946,15 +951,23 @@ impl Catalogue {
                 let first: BTreeMap<&str, &str> =
                     tags.iter().rev().map(|(n, v)| (n.as_str(), v.as_str())).collect::<BTreeMap<_, _>>();
                 let (mut genres, mut artists): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+                // The file's own moods, styles and grouping (0.9.7, the library's words), each value split where it
+                // holds several ("Chill; Dreamy").
+                let (mut file_moods, mut file_styles, mut file_tags): (Vec<String>, Vec<String>, Vec<String>) = (Vec::new(), Vec::new(), Vec::new());
                 for (n, v) in &tags {
-                    let into = match n.as_str() {
-                        "genre" => &mut genres,
+                    let (into, parts): (&mut Vec<String>, Vec<&str>) = match n.as_str() {
+                        "genre" => (&mut genres, vec![v.as_str()]),
                         // A compilation's album artist is no artist (as the radio has it).
-                        "artist" | "albumartist" if !crate::crates::various(v) => &mut artists,
+                        "artist" | "albumartist" if !crate::crates::various(v) => (&mut artists, vec![v.as_str()]),
+                        "mood" => (&mut file_moods, v.split([';', ',', '/']).collect()),
+                        "style" => (&mut file_styles, v.split([';', ',', '/']).collect()),
+                        "grouping" => (&mut file_tags, v.split([';', ',', '/']).collect()),
                         _ => continue,
                     };
-                    if !into.iter().any(|g| g.eq_ignore_ascii_case(v)) {
-                        into.push(v.clone());
+                    for p in parts.into_iter().map(str::trim).filter(|p| !p.is_empty()) {
+                        if !into.iter().any(|g| g.eq_ignore_ascii_case(p)) {
+                            into.push(p.to_string());
+                        }
                     }
                 }
                 let (mut energy, mut danceability, mut moods, mut styles, mut sound, mut clap_moods, mut muse_key) = (None, None, Vec::new(), Vec::new(), None, None, None);
@@ -972,6 +985,13 @@ impl Catalogue {
                     energy = e.map(|e| (e * 100.0).round());
                     danceability = d.map(|d| (d * 100.0).round());
                     styles = crate::app::audiomuse::weighted(style.as_deref()).into_iter().take(crate::app::audiomuse::STYLES).map(|(n, _)| n).collect();
+                }
+                for (into, own) in [(&mut moods, file_moods), (&mut styles, file_styles)] {
+                    for w in own {
+                        if !into.iter().any(|x| x.eq_ignore_ascii_case(&w)) {
+                            into.push(w);
+                        }
+                    }
                 }
                 Some(crate::crates::Facts {
                     year: crate::crates::year_of(&first),
@@ -993,7 +1013,7 @@ impl Catalogue {
                     // The key the tags say, else AudioMuse's; as one spelling ("D minor").
                     key: tag_keys.remove(&place).and_then(|k| crate::crates::key_name(&k)).or_else(|| muse_key.and_then(|k| crate::crates::key_name(&k))),
                     release_types: Vec::new(),
-                    tags: Vec::new(),
+                    tags: file_tags,
                 })
             })
             .collect())

@@ -367,7 +367,7 @@ async fn from_listenbrainz(user: &str, progress: &Progress) -> Result<(Vec<Candi
 // ---- Last.fm
 
 /// One call to Last.fm, signed with the account's sign-in where it has one.
-async fn fm(http: &reqwest::Client, auth: &Auth, method: &str, params: &[(&str, &str)]) -> Result<serde_json::Value> {
+pub(super) async fn fm(http: &reqwest::Client, auth: &Auth, method: &str, params: &[(&str, &str)]) -> Result<serde_json::Value> {
     let mut q: std::collections::BTreeMap<&str, String> = std::collections::BTreeMap::new();
     q.insert("method", method.to_string());
     q.insert("api_key", auth.key.clone());

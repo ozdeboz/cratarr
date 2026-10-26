@@ -708,6 +708,23 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The harvest's albums (0.9.7, `app::harvest`): each Music-form id once, with its MusicBrainz release (or empty),
+    /// artist and name.
+    pub fn album_subjects(&self) -> Result<Vec<(String, String, String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT base_id, coalesce(max(mbid), ''), min(artist), min(name) FROM albums GROUP BY base_id ORDER BY min(n)")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The harvest's artists: those with albums, by id, with their MusicBrainz id (or empty) and name.
+    pub fn artist_subjects(&self) -> Result<Vec<(String, String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT id, coalesce(mbid, ''), name FROM artists WHERE album_count > 0 ORDER BY n")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Each song's album (0.9.7: a file's words are its album's).
     pub fn song_albums(&self) -> Result<HashMap<String, String>> {
         let db = self.db();
