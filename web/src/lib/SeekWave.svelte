@@ -6,6 +6,7 @@
   // above the waveform's middle: let go over it, nothing is sought (the owner, 2026-10-26).
   // `grab(e)`: the mini player's long press hands the pointer here, held from where it is.
   import Icon from './Icon.svelte';
+  import { local } from './localPlayer.svelte';
   import { isLocal } from './output.svelte';
   import { ramping } from './ramping.svelte';
   import { portal } from './portal';
@@ -55,6 +56,8 @@
   });
   const waveShown = $derived(keepWave || want !== 'line');
   const pos = $derived(seek.pos);
+  /** As heard: this device's player's level (0..1), the waveform's bars scaled by it (lib/Waveform `heard`). */
+  const heard = $derived(isLocal() ? 10 ** (local.levelDb / 20) : 1);
   /** Shown as paused: from the moment a stop ramp begins, playing from the moment a start ramp begins (the owner,
    *  2026-10-26: the colour goes with the ramp, whenever the player says it paused). */
   // After a ramp, its way holds until the player says the same (an app reporting the pause a moment late: no flash).
@@ -158,7 +161,7 @@
   onkeydown={key}
 >
   {#if waveShown}
-    <Waveform bins={shaped ? (bins ?? null) : null} {want} {loading} progress={dur ? pos / dur : 0} paused={grey} now={nowMark} onflat={() => (keepWave = false)} />
+    <Waveform bins={shaped ? (bins ?? null) : null} {want} {loading} progress={dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} onflat={() => (keepWave = false)} />
   {:else}
     <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
   {/if}

@@ -46,6 +46,7 @@ export const appInfo = $state({
   syncOnlyCharging: false,
   /** Levelling (decision 0035): the app's player plays every track about as loud as the next. */
   levelling: true,
+  levelUnknown: 'typical' as 'typical' | 'untouched',
   startStop: { mode: 'off', ms: 800, skips: false, rewind: false } as StartStop,
   /** Where this device can sound now (decision 0033, amended 2026-10-19: the Play On sheet chooses), and the one
    *  chosen; null: Android's own choice (Automatic), as again whenever an output comes or goes. */
@@ -119,6 +120,8 @@ export const setDevice = (change: {
   syncBudgetGb?: number;
   syncOnlyCharging?: boolean;
   levelling?: boolean;
+  /** A track not measured yet: turned down as a typical one, or left as it is (lib/prefs levelUnknown). */
+  levelUnknown?: 'typical' | 'untouched';
   /** How play and pause start and stop (lib/prefs StartStop), the app's own player's. */
   startStop?: StartStop;
   /** This device's audio output by its id; null: Automatic. */
@@ -170,6 +173,7 @@ if (port) {
       appInfo.syncBudgetGb = typeof m.syncBudgetGb === 'number' ? m.syncBudgetGb : 20;
       appInfo.syncOnlyCharging = m.syncOnlyCharging === true;
       appInfo.levelling = m.levelling !== false;
+      appInfo.levelUnknown = m.levelUnknown === 'untouched' ? 'untouched' : 'typical';
       {
         const x = (m.startStop ?? {}) as Partial<StartStop>;
         appInfo.startStop = { mode: x.mode === 'vinyl' || x.mode === 'fade' ? x.mode : 'off', ms: typeof x.ms === 'number' ? x.ms : 800, skips: x.skips === true, rewind: x.rewind === true };

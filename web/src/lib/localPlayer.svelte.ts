@@ -78,6 +78,9 @@ export const local = $state({
   duration: null as number | null,
   /** The last thing that failed, in plain words. */
   error: null as string | null,
+  /** How far the playing track is turned down (dB, 0 or less): the level the player applies (this page's, or the app's
+   *  `levelDb`); 0 with levelling off. The player's Level button and waveform show it (the owner, 2026-10-26). */
+  levelDb: 0,
   /** What comes of the album or playlist plays shuffled (the player's shuffle switch). */
   shuffled: false,
   /** Repeat (decision 0033, amended): off, one (the playing track), all (the album or playlist). */
@@ -531,7 +534,8 @@ function tick() {
 // start plays silence. Not in Safari (the managed stream's browser): WebKit suspends an audio context when the page
 // goes to the background or the screen locks, which would silence the element routed into it; it plays unlevelled.
 const UNKNOWN_DB = -6;
-const UNKNOWN = 10 ** (UNKNOWN_DB / 20);
+/** A track's level while its gain is asked for, or never measured: typical, or as it is (Level's sheet). */
+const unknownLevel = () => (prefs.levelUnknown === 'untouched' ? 1 : 10 ** (UNKNOWN_DB / 20));
 const canLevel = !!audio && !Managed && typeof AudioContext !== 'undefined';
 const gains = new Map<string, TrackGain | null>();
 let level: { ctx: AudioContext; gain: GainNode; source: MediaElementAudioSourceNode } | null = null;
@@ -606,7 +610,11 @@ function levelOf(index: number): number | null {
   if (!g) return null;
   const sameAlbum = (j: number) => !!t.album_id && local.queue[j]?.album_id === t.album_id && !local.queue[j]?.lane;
   const albumWise = !local.shuffled && (sameAlbum(index - 1) || sameAlbum(index + 1));
-  const gainDb = (albumWise ? g.albumGain : undefined) ?? g.trackGain ?? UNKNOWN_DB;
+  // The server's own rule where it says it (a5, 0.9.8: one rule, here and in the app); not measured (null): as a
+  // typical track, or as it is (Level's sheet).
+  const down = albumWise && g.albumDown !== undefined ? g.albumDown : g.trackDown;
+  if (down !== undefined) return down === null ? unknownLevel() : Math.min(1, 10 ** (down / 20));
+  const gainDb = (albumWise ? g.albumGain : undefined) ?? g.trackGain ?? (prefs.levelUnknown === 'untouched' ? 0 : UNKNOWN_DB);
   const peak = (albumWise ? g.albumPeak : undefined) ?? g.trackPeak ?? 1;
   return Math.min(10 ** (gainDb / 20), peak > 0 ? 1 / peak : 1, 1);
 }
@@ -616,7 +624,7 @@ function segmentLevel(s: Segment): number {
   if (!prefs.levelling) return 1;
   if (s.level === undefined) {
     const l = levelOf(s.index);
-    if (l === null) return UNKNOWN;
+    if (l === null) return unknownLevel();
     s.level = l;
   }
   return s.level;
@@ -638,7 +646,8 @@ function levelSchedule() {
   const now = audio.currentTime;
   const cur = [...segments].reverse().find((s) => s.start <= now);
   const next = segments.find((s) => s.start > now);
-  const f = cur ? segmentLevel(cur) : prefs.levelling ? UNKNOWN : 1;
+  const f = cur ? segmentLevel(cur) : prefs.levelling ? unknownLevel() : 1;
+  local.levelDb = f > 0 && f < 1 ? Math.round(20 * Math.log10(f) * 10) / 10 : 0;
   // Paused: the stream's clock stands still while the context's runs on, so no next step is set.
   const nf = next && !audio.paused ? segmentLevel(next) : null;
   const at = next ? t + (next.start - now) : 0;
@@ -668,6 +677,7 @@ function levelSchedule() {
 /** Levelling on or off for this browser's player, the playing track too. */
 export function setLevelling(on: boolean) {
   prefs.levelling = on;
+  if (!on) local.levelDb = 0;
   // The switch is a press: an audio context can start now.
   if (audio && !audio.paused) levelRoute();
   levelSchedule();
@@ -772,6 +782,7 @@ export function reportedBy(m: {
   radioCount?: unknown;
   skipFavourites?: unknown;
   autoplay?: unknown;
+  levelDb?: unknown;
 }) {
   if (m.repeat === 'off' || m.repeat === 'one' || m.repeat === 'all') local.repeat = m.repeat;
   // Left out: not said (a report of the queue alone); null: none.
@@ -794,6 +805,8 @@ export function reportedBy(m: {
   local.paused = m.paused !== false;
   local.duration = typeof m.durationMs === 'number' && m.durationMs > 0 ? m.durationMs / 1000 : null;
   local.error = typeof m.error === 'string' ? m.error : null;
+  // The app's own level (a5, 0.9.8): what it applies now; 0 when it levels nothing or says nothing.
+  local.levelDb = typeof m.levelDb === 'number' && m.levelDb < 0 ? m.levelDb : 0;
   reported = { positionMs: Number(m.positionMs) || 0, at: performance.now() };
   local.position = reported.positionMs / 1000;
 }

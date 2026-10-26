@@ -174,6 +174,8 @@ export type Prefs = {
   /** This browser's name as a Play On player, while a page plays here (lib/playOnTarget); '' until it has one. */
   browserName: string;
   levelling: boolean;
+  /** Levelling a track not measured yet (the owner, 2026-10-26): turned down as a typical track is, or left as it is. */
+  levelUnknown: 'typical' | 'untouched';
   /** How play and pause start and stop (Settings › This device; the owner, 2026-10-25): at once, as a turntable (the
    *  speed, and the pitch with it) or fading; over `startStopMs`; for next and previous too (`startStopSkips`). `rewind`:
    *  Tape rewind, kept but hidden and unused until it plays the track backwards (the owner, 2026-10-26). The app keeps
@@ -405,6 +407,7 @@ export const DEFAULTS: Prefs = {
   flowBackdrop: 'wall',
   homeCrates: false,
   levelling: true,
+  levelUnknown: 'typical',
   startStop: { mode: 'off', ms: 800, skips: false, rewind: false },
   playerSwipes: { ...SWIPES_DEFAULT },
   phoneLossless: false,
@@ -513,6 +516,7 @@ function read(): Prefs {
         p.profileFoldAt = Math.min(saved.profileFoldAt - gone, p.profileRows.length);
       }
       if (typeof saved.levelling === 'boolean') p.levelling = saved.levelling;
+      if (saved.levelUnknown === 'typical' || saved.levelUnknown === 'untouched') p.levelUnknown = saved.levelUnknown;
       if (saved.playerSwipes && typeof saved.playerSwipes === 'object') {
         const w = saved.playerSwipes;
         const up = (v: unknown, d: SwipeUp): SwipeUp => (SWIPES_UP.some((o) => o.value === v) ? (v as SwipeUp) : d);

@@ -1,6 +1,8 @@
 <script lang="ts">
   import DetailsSheet from './DetailsSheet.svelte';
   import StartStopSheet from './StartStopSheet.svelte';
+  import LevelSheet from './LevelSheet.svelte';
+  import { levelOn, levelShare, setLevelOn } from './level.svelte';
   // The full player (decision 0018): over the page (`overlay`, opened from the mini-player) or beside it (`side`, the
   // shell's sidebar on wide windows). It shows the cover, the track, the controls, the progress, the favourite and
   // how many playlists hold the track, laid out by lib/playerLayout.ts, on the blurred cover in its colours.
@@ -29,7 +31,7 @@
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { ramping } from './ramping.svelte';
   import { appInfo, inApp } from './app.svelte';
-  import { local, restoreUpcoming, shuffleUpcoming, windUpMs } from './localPlayer.svelte';
+  import { local, windUpMs } from './localPlayer.svelte';
   import QueueMenu from './QueueMenu.svelte';
   import { playingCrateOuts } from './crates.svelte';
   import { localMode } from './deviceMusic.svelte';
@@ -152,10 +154,6 @@
   let queueOpen = $state(false);
   /** The queue's menu (a long-press on the Queue button, lib/QueueMenu). */
   let queueMenuOpen = $state(false);
-  function shuffleOnce() {
-    const before = shuffleUpcoming();
-    if (before) toast.show({ text: 'Shuffled.', tone: 'done', act: { label: 'Undo', run: () => restoreUpcoming(before) } });
-  }
   let outputOpen = $state(false);
   let sleepOpen = $state(false);
   let bandsOpen = $state(false);
@@ -402,6 +400,8 @@
   });
   /** A long press on the play button: Start and stop's controls (lib/StartStopSheet; the owner, 2026-10-26). */
   let startStopOpen = $state(false);
+  /** A long press on Level: its sheet (lib/LevelSheet). */
+  let levelOpen = $state(false);
   /** A long press on the info button: the facts beside it (lib/DetailsSheet; the owner, 2026-10-26). */
   let detailsOpen = $state(false);
 </script>
@@ -533,10 +533,22 @@
             </div>
           {/if}
           <div class="transport" role="group" aria-label="Player controls">
-            <!-- Shuffle, left of previous, where the page holds the queue (here, the app, a Cratarr player): once, no state
-                 (the owner, 2026-10-23: a queue always has an order); Undo puts the order before back. -->
+            <!-- Level, left of previous, where the page holds the queue (the owner, 2026-10-26, 0.9.8: in Shuffle's place;
+                 Shuffle is in the queue's sheet): on, it fills from the bottom by how far the playing track is turned down
+                 (shown, never a number); a tap switches it, a long press opens its sheet. -->
             {#if isLocal()}
-              <button class="shuffle" aria-label="Shuffle the rest of the queue" onclick={shuffleOnce}><Icon name="shuffle" size={22} /></button>
+              <button
+                class="level"
+                class:on={levelOn()}
+                aria-pressed={levelOn()}
+                aria-label="Level the volume"
+                title="Level the volume"
+                onclick={() => setLevelOn(!levelOn())}
+                use:longpress={() => (levelOpen = true)}
+                ><Icon name="audioLines" size={22} />{#if levelOn()}<span class="fill" style:--down={levelShare(local.levelDb)} aria-hidden="true"
+                    ><Icon name="audioLines" size={22} /></span
+                  >{/if}</button
+              >
             {/if}
             <button aria-label="Previous track" onclick={() => send('previous')}><Icon name="previous" size={24} /></button>
             <!-- Its fill (the owner, 2026-10-26), inside a border of the same colour: winding down (Start and stop) it drains
@@ -675,6 +687,7 @@
 
 
 {#if startStopOpen}<StartStopSheet onclose={() => (startStopOpen = false)} />{/if}
+{#if levelOpen}<LevelSheet onclose={() => (levelOpen = false)} />{/if}
 {#if detailsOpen}<DetailsSheet onclose={() => (detailsOpen = false)} />{/if}
 
 <style>
@@ -1135,9 +1148,25 @@
     cursor: pointer;
   }
 
-  /* Shuffle in the muted colour, as Finamp's. */
-  .transport button.shuffle {
+  /* Level: muted while off; on, in the text colour, the accent filling it from the bottom by how far the track is
+     turned down. */
+  .transport button.level {
+    position: relative;
     color: var(--muted);
+  }
+
+  .transport button.level.on {
+    color: var(--text);
+  }
+
+  .level .fill {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--art-accent, var(--accent));
+    clip-path: inset(calc((1 - var(--down)) * 100%) 0 0 0);
+    transition: clip-path 400ms ease-out;
   }
 
   /* Repeat's place, kept empty (it is in the queue's sheet): a button's width. */

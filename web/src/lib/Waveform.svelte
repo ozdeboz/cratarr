@@ -26,6 +26,7 @@
     paused = false,
     now = null,
     loading = null,
+    heard = 1,
     onflat,
   }: {
     bins: Uint8Array | null;
@@ -34,6 +35,9 @@
     paused?: boolean;
     now?: number | null;
     loading?: number | null;
+    /** As heard (the owner, 2026-10-26, 0.9.8: levelling you can see): the bars scaled by the level the player applies
+     *  (0..1), the original heights a ghost behind them. */
+    heard?: number;
     onflat?: () => void;
   } = $props();
 
@@ -180,20 +184,31 @@
 
   const f = (x: number) => Math.round(x * 100) / 100;
   /** Every piece as one path: in the line (full width, the line's height), slim, or risen. */
-  const d = $derived.by(() => {
-    void frame;
+  /** The pieces drawn with their rise scaled by `scale`: as heard (the level) or as made (1, the ghost). */
+  const draw = (scale: number) => {
     let s = '';
     for (let i = 0; i < gap.length; i++) {
       const g = gap[i];
-      const h = line + (LOW - line) * g + rise[i];
+      const h = line + (LOW - line) * g + rise[i] * scale;
       const w = 1 - 0.3 * g;
       s += `M${f(i + (1 - w) / 2)} ${f((100 - h) / 2)}h${f(w)}v${f(h)}h${f(-w)}z`;
     }
     return s;
+  };
+  /** Levelled visibly: its scale a step from 1 (a fraction of a dB shows nothing). */
+  const levelled = $derived(heard < 0.97);
+  const d = $derived.by(() => {
+    void frame;
+    return draw(levelled ? heard : 1);
+  });
+  const ghost = $derived.by(() => {
+    void frame;
+    return levelled ? draw(1) : '';
   });
 </script>
 
 <div class="wave" class:paused bind:clientWidth={width} bind:clientHeight={height} aria-hidden="true">
+  {#if ghost}<svg class="ghost" viewBox="0 0 {n} 100" preserveAspectRatio="none"><path d={ghost} /></svg>{/if}
   {#each [false, true] as played (played)}
     <svg class:played viewBox="0 0 {n} 100" preserveAspectRatio="none" style:clip-path={played ? `inset(0 ${(1 - done) * 100}% 0 0)` : undefined}>
       <path {d} />
@@ -215,6 +230,14 @@
     width: 100%;
     height: 100%;
     fill: color-mix(in srgb, var(--text) 22%, transparent);
+  }
+
+  /* The track as made, behind the track as heard: a faint outline of what levelling took off. */
+  svg.ghost {
+    fill: none;
+    stroke: color-mix(in srgb, var(--text) 28%, transparent);
+    stroke-width: 0.6;
+    vector-effect: non-scaling-stroke;
   }
 
   svg.played {

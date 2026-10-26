@@ -8,7 +8,8 @@
   // sheet, lib/OutputSheet), and levelling (decision 0035: in the app its own player's, here this browser's). On a
   // phone's browser: Lossless, off by default (lossless tracks stream as Opus there, the owner 2026-10-24).
   import { allowBackground, appInfo, backgroundSettings, inApp, setDevice } from '../app.svelte';
-  import { isPhone, setLevelling } from '../localPlayer.svelte';
+  import { isPhone } from '../localPlayer.svelte';
+  import LevelItems from './LevelItems.svelte';
   import OutputSheet from '../OutputSheet.svelte';
   import { outputName } from '../playOn.svelte';
   import { allowDeviceMusic, askFolders, device, deviceMusicSettings, setFolder } from '../deviceMusic.svelte';
@@ -32,7 +33,6 @@
   });
   let naming = $state(false);
   let where = $state(false);
-  const setLevel = (on: boolean) => (inApp ? setDevice({ levelling: on }) : setLevelling(on));
   const name = $derived(inApp ? (appInfo.player ?? '') : prefs.browserName || defaultBrowserName());
   function rename(v: string) {
     if (!v) return;
@@ -44,12 +44,8 @@
 <Group title="Playing">
   <Item name="Player name" value={name} onclick={() => (naming = true)} />
   <Item name="Where music plays" value={outputName()} onclick={() => (where = true)} />
-  <Item
-    name="Level the volume"
-    line="Every track about as loud as the next"
-    more={"Each track plays at about the same loudness, as Cratarr measured it (or as the file's ReplayGain tags say, until it has).\n\nAn album played through keeps its own dynamics; shuffle and radio are levelled track by track."}
-    toggle={{ checked: inApp ? appInfo.levelling : prefs.levelling, onchange: setLevel }}
-  />
+  <!-- Level the volume (lib/settings/LevelItems: the same rows as the Level button's long press). -->
+  <LevelItems />
   <!-- Start and stop (lib/settings/StartStopItems: the same rows as the play button's long press). -->
   <StartStopItems />
   {#if !inApp && isPhone}
