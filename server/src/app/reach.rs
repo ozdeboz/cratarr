@@ -134,7 +134,9 @@ impl Sent for reqwest::RequestBuilder {
             let (client, req) = self.build_split();
             let req = req?;
             let name = name_of(req.url());
-            let r = client.execute(req).await;
+            // Its address left out of any error (0.9.7): a query holds keys, signatures and session keys (Last.fm's
+            // `api_key`, `api_sig`, `sk`), and the error reaches the page, Health and Connections.
+            let r = client.execute(req).await.map_err(reqwest::Error::without_url);
             if let Some(n) = name {
                 note(n, &r);
             }
@@ -146,6 +148,13 @@ impl Sent for reqwest::RequestBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn an_error_never_carries_the_address_and_its_keys() {
+        let e = reqwest::Client::new().get("http://127.0.0.1:1/2.0/?api_key=KEY123&sk=SESSION456").sent().await.unwrap_err();
+        let said = format!("{e:#} {e:?}");
+        assert!(!said.contains("KEY123") && !said.contains("SESSION456"), "{said}");
+    }
 
     #[test]
     fn a_connection_is_known_by_its_host_and_fails_after_a_few_tries() {
