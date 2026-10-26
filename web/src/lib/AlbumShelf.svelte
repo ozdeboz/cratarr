@@ -407,6 +407,7 @@
         count={`${howMany(albums.length, 'album')}${countMore ? ` · ${countMore}` : ''}`}
         selecting={!!selecting}
         onselect={() => (selecting ? (selecting = null) : startSelect())}
+        countOnly={layout === 'flow'}
       />
       {#if tableCols.length}
         <!-- The table's column names, a row of the same shape so they line up; a tap on one orders by it. -->

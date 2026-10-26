@@ -175,6 +175,7 @@
       count={howMany(total, 'track')}
       selecting={!!selecting}
       onselect={() => (selecting = selecting ? null : new Set())}
+      countOnly={layout === 'flow'}
     />
     {#if layout === 'flow'}
       <FlowStage

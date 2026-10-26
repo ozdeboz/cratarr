@@ -15,6 +15,7 @@
     selecting = null,
     onselect,
     open = $bindable(false),
+    countOnly = false,
   }: {
     /** `most`: chosen, it starts most first (lib/pageView OrderField). */
     fields: readonly { value: K; label: string; most?: true }[];
@@ -28,19 +29,23 @@
     onselect?: () => void;
     /** The order's sheet is open (a view closing on Esc leaves it be meanwhile). */
     open?: boolean;
+    /** How many alone, no order or select (a Library list as Flow, the owner 2026-10-26). */
+    countOnly?: boolean;
   } = $props();
 
   const label = $derived(fields.find((f) => f.value === value)?.label ?? fields[0]?.label ?? '');
 </script>
 
 <div class="listhead">
-  <button class="sortby" onclick={() => (open = true)}>{label}</button>
-  <button class="icon" aria-label={down ? 'Descending' : 'Ascending'} title={down ? 'Descending' : 'Ascending'} onclick={() => (down = !down)}
-    ><Icon name={down ? 'arrowDown' : 'arrowUp'} size={20} /></button
-  >
+  {#if !countOnly}
+    <button class="sortby" onclick={() => (open = true)}>{label}</button>
+    <button class="icon" aria-label={down ? 'Descending' : 'Ascending'} title={down ? 'Descending' : 'Ascending'} onclick={() => (down = !down)}
+      ><Icon name={down ? 'arrowDown' : 'arrowUp'} size={20} /></button
+    >
+  {/if}
   <span class="grow"></span>
   <span class="count">{count}</span>
-  {#if selecting !== null}
+  {#if selecting !== null && !countOnly}
     <button class="icon" class:on={selecting} aria-pressed={selecting} aria-label="Start multi-select" title="Start multi-select" onclick={onselect}
       ><Icon name="listChecks" size={22} /></button
     >
