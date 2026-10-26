@@ -2265,6 +2265,9 @@ struct OfflineTracks {
     as_: Option<String>,
     #[serde(default)]
     opus: bool,
+    /// The stream's form (0.9.8 page): "opus", "original", or "aac" (not made yet: such tracks say so); over `opus`.
+    #[serde(default)]
+    form: Option<String>,
 }
 
 /// What form an offline call asks for.
@@ -2274,12 +2277,20 @@ enum OfflineAs {
     File { opus: bool },
     /// The browser player's stream kept whole, lossless as Opus where `opus`.
     Stream { opus: bool },
+    /// A form Cratarr does not make (yet): each track says so.
+    Unmade(&'static str),
 }
 
 impl OfflineTracks {
     fn form(&self) -> OfflineAs {
         match self.as_.as_deref() {
-            Some("stream") => OfflineAs::Stream { opus: self.opus },
+            Some("stream") => match self.form.as_deref() {
+                Some("opus") => OfflineAs::Stream { opus: true },
+                Some("original") => OfflineAs::Stream { opus: false },
+                Some("aac") => OfflineAs::Unmade("AAC is not made yet."),
+                Some(_) => OfflineAs::Unmade("That form is not made."),
+                None => OfflineAs::Stream { opus: self.opus },
+            },
             Some("original") => OfflineAs::File { opus: false },
             _ => OfflineAs::File { opus: true },
         }
@@ -2304,6 +2315,7 @@ async fn offline_file(app: &App, t: &TrackRefOf, form: OfflineAs) -> serde_json:
         return json!({ "source": t.source, "id": t.id, "offline": false, "error": "That track is not in the library." });
     };
     let opus = match form {
+        OfflineAs::Unmade(why) => return json!({ "source": t.source, "id": t.id, "offline": false, "error": why }),
         OfflineAs::File { opus } => opus,
         OfflineAs::Stream { opus } => {
             let url = format!("/api/stream/{}/{}?whole=1{}", form_urlencoded_segment(&t.source), form_urlencoded_segment(&t.id), if opus { "&as=opus" } else { "" });
