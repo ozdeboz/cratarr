@@ -29,6 +29,10 @@ import kotlin.math.pow
  * volume, which also acts at once. Playing in a group (decision 0037) the leader's sound is sent on before both, so
  * Fade fades the sound itself there ([Fader]) and waits for the group's buffer before it pauses; Vinyl and Tape
  * rewind wait in a group (the owner: Vinyl later). Every volume follows a perceptual (dB) curve, and starts silent.
+ *
+ * A ramp is not interrupted (the owner, 2026-10-26): while one runs, play, pause, next and previous are ignored, and
+ * the state it commits to ([committed]) is what every control shows from its first moment: a pause says paused at once
+ * while its sound winds down.
  */
 class StartStop(
     private val player: ExoPlayer,
@@ -39,9 +43,25 @@ class StartStop(
     private val grouped: () -> Boolean,
     /** How long, playing in a group, until what is sent on is heard (its buffer). */
     private val groupDelayMs: () -> Long,
+    /** What the controls show changed ([committed] set or let go): told to the session and to Cratarr. */
+    private val changed: () -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
     private var token = 0
+
+    /** While a ramp runs: whether it ends playing (true) or paused (false); null while none runs. */
+    @Volatile
+    var committed: Boolean? = null
+        private set
+
+    /** Whether a ramp (or Tape rewind) runs: presses wait for its end. */
+    val busy: Boolean get() = committed != null
+
+    private fun commit(to: Boolean?) {
+        if (committed == to) return
+        committed = to
+        changed()
+    }
 
     private fun mode(): String {
         val m = prefs.startStopMode
@@ -85,6 +105,7 @@ class StartStop(
     /** Back to plain playing: full speed, its own pitch, full volume; a ramp under way stopped. */
     fun reset() {
         token++
+        commit(null)
         Fader.target = 1f
         if (gain != 1f) {
             gain = 1f
@@ -95,6 +116,7 @@ class StartStop(
 
     /** Plays ([start]), winding up from still and silent. */
     fun play(start: () -> Unit) {
+        if (busy) return
         val m = mode()
         if (m == Prefs.START_STOP_OFF || player.isPlaying) {
             reset()
@@ -105,18 +127,21 @@ class StartStop(
         // Silent before the first sound: no plop.
         set(0f)
         if (grouped()) Fader.snap()
+        commit(true)
         start()
         ramp(0f, 1f, prefs.startStopMs, set) { whole -> if (whole) reset() }
     }
 
     /** Pauses or stops ([stop]), winding down first: once what was wound down has been heard. */
     fun pause(stop: () -> Unit) {
+        if (busy) return
         val m = mode()
         if (m == Prefs.START_STOP_OFF || !player.isPlaying) {
             reset()
             stop()
             return
         }
+        commit(false)
         val mine = token + 1
         ramp(1f, 0f, prefs.startStopMs, setter(m)) { whole ->
             if (!whole) return@ramp
@@ -133,6 +158,7 @@ class StartStop(
 
     /** Next or previous ([go]) where the device asks it: out, on, in. */
     fun skip(go: () -> Unit) {
+        if (busy) return
         val m = mode()
         if (m == Prefs.START_STOP_OFF || !prefs.startStopSkips || !player.isPlaying || grouped()) {
             reset()
@@ -140,6 +166,7 @@ class StartStop(
             return
         }
         val set = setter(m)
+        commit(true)
         ramp(1f, 0f, prefs.startStopMs, set) { whole ->
             if (!whole) return@ramp
             go()
@@ -153,11 +180,13 @@ class StartStop(
      * (off, not playing, in a group, or early in the track, where Previous goes to the one before).
      */
     fun rewind(restartAfterMs: Long): Boolean {
+        if (busy) return true
         if (!prefs.startStopRewind || grouped() || !player.isPlaying) return false
         val from = player.currentPosition
         if (from <= restartAfterMs) return false
         val ms = minOf(REWIND_MOST_MS, 4 * prefs.startStopMs)
         val mine = ++token
+        commit(true)
         val t0 = SystemClock.elapsedRealtime()
         player.playbackParameters = PlaybackParameters(REWIND_SPEED, REWIND_SPEED)
         gain = REWIND_GAIN

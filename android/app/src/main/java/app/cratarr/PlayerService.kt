@@ -60,6 +60,21 @@ class PlayerService : MediaSessionService() {
 
     /** Start and stop (0.9.6): play, pause and stop, and next and previous where asked, ramped as the device says. */
     lateinit var startStop: StartStop
+
+    /** Who listens to the session's player (the session itself): told when a ramp commits to a state. */
+    private val sessionListeners = java.util.concurrent.CopyOnWriteArraySet<Player.Listener>()
+
+    /** A ramp committed to playing or paused, or let go: the session (lock screen, notification, the page) and Cratarr
+     *  hear the state it shows. */
+    private fun startStopChanged() {
+        val events = Player.Events(androidx.media3.common.FlagSet.Builder().addAll(Player.EVENT_PLAY_WHEN_READY_CHANGED, Player.EVENT_IS_PLAYING_CHANGED).build())
+        for (l in sessionListeners) {
+            l.onPlayWhenReadyChanged(sessionPlayer.playWhenReady, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
+            l.onIsPlayingChanged(sessionPlayer.isPlaying)
+            l.onEvents(sessionPlayer, events)
+        }
+        link?.startStopChanged()
+    }
     /** The app's own player as the session shows it (its previous and shuffle the app's way). */
     private lateinit var sessionPlayer: Player
     /** The player the screen drives, as the session shows it meanwhile (the owner, 2026-10-23). */
@@ -133,8 +148,23 @@ class PlayerService : MediaSessionService() {
         // headset's or the system's shuffle shuffles what is to come once, and the player never plays shuffled, so it
         // says it is not. Cratarr's queue is shuffled by Cratarr (Play On's `shuffle`, which sends the new order back);
         // local mode's here, the playing track staying where it is.
-        startStop = StartStop(player, prefs, { link?.applyVolume() }, { sync.leader != null }, { sync.bufferMs })
+        startStop = StartStop(player, prefs, { link?.applyVolume() }, { sync.leader != null }, { sync.bufferMs }, ::startStopChanged)
         sessionPlayer = object : ForwardingPlayer(player) {
+            // A ramp under way shows where it is going (0.9.6): the session's listeners told when that changes.
+            override fun addListener(listener: Player.Listener) {
+                sessionListeners.add(listener)
+                super.addListener(listener)
+            }
+
+            override fun removeListener(listener: Player.Listener) {
+                sessionListeners.remove(listener)
+                super.removeListener(listener)
+            }
+
+            override fun getPlayWhenReady() = startStop.committed ?: super.getPlayWhenReady()
+
+            override fun isPlaying() = startStop.committed ?: super.isPlaying()
+
             // The lock screen's, the notification's, a headset's and the page's play, pause and stop, ramped (0.9.6).
             override fun play() = startStop.play { super.play() }
 

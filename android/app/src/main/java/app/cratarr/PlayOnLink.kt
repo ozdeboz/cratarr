@@ -710,6 +710,9 @@ class PlayOnLink(
         }
     }
 
+    /** Start and stop committed to a state, or let it go (0.9.6): Cratarr is told at once. */
+    fun startStopChanged() = report()
+
     /** Changes close together go as one report. */
     private fun soon() {
         if (reportPending) return
@@ -736,7 +739,8 @@ class PlayOnLink(
             // Leading a group, where it is heard: a buffer behind this player.
             .put("position_ms", sync.heardPosition(p).coerceAtLeast(0))
             .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
-            .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)
+            // A ramp under way says where it is going (0.9.6, StartStop): a pause is paused at once.
+            .put("playing", service.startStop.committed ?: (p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE))
             .put("volume", volume())
             .put("ducked", ducked)
             .put("announce", announcing?.json() ?: JSONObject.NULL)
@@ -769,7 +773,8 @@ class PlayOnLink(
             .put("device_track", track ?: JSONObject.NULL)
             .put("position_ms", p.currentPosition.coerceAtLeast(0))
             .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
-            .put("playing", p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE)
+            // A ramp under way says where it is going (0.9.6, StartStop): a pause is paused at once.
+            .put("playing", service.startStop.committed ?: (p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE))
             .put("volume", volume())
             .put("ducked", ducked)
             .put("announce", announcing?.json() ?: JSONObject.NULL)
