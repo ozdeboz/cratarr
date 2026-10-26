@@ -18,7 +18,7 @@
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs, SEEK_STEP, type CoverTouch, type SwipeDown, type SwipeSide, type SwipeUp } from './prefs.svelte';
-  import { art, clockText, coverComing, coverFailed, coverLate, coverSrc, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite, playPause, rampBusy, shownPaused } from './remote.svelte';
+  import { art, clockText, coverComing, coverFailed, coverLate, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampBusy, shownPaused } from './remote.svelte';
   import SeekWave from './SeekWave.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import { Seek } from './seekState.svelte';
@@ -49,7 +49,8 @@
 
   let { place }: { place: 'overlay' | 'side' } = $props();
 
-  const np = $derived(playing());
+  // As shown: the new track's words with its cover, one commit (lib/remote shownPlaying).
+  const np = $derived(shownPlaying());
 
   // The artist as a chip (the owner, 2026-10-17): it opens their panel, the player closing (lib/albums goToArtist); a
   // "feat." credit goes to the main artist, as the track menu's Go to artist. A favourite artist's chip has a heart.

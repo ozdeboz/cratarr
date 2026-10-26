@@ -25,13 +25,14 @@
   import { panel } from './panel.svelte';
   import { prefs } from './prefs.svelte';
   import Cover from './Cover.svelte';
-  import { art, clockText, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite, playPause, rampBusy, shownPaused } from './remote.svelte';
+  import { art, clockText, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampBusy, shownPaused } from './remote.svelte';
   import { isLocal } from './output.svelte';
   import SeekWave from './SeekWave.svelte';
   import { Seek } from './seekState.svelte';
   import { loadWaveform, waveformOf, waveLoading } from './waveforms.svelte';
 
-  const np = $derived(playing());
+  // As shown: the new track's words with its cover, one commit (lib/remote shownPlaying).
+  const np = $derived(shownPlaying());
   const src = $derived(shownCover());
   // A long press on the heart: the full player's sheet (lib/HeartSheet), its crate Excludes included.
   let heartMenu = $state(false);

@@ -73,6 +73,33 @@ export const coverComing = () => shown.coming !== null;
 /** The cover did not come in time: the stand-in shows meanwhile. */
 export const coverLate = () => shown.late;
 
+// The track as the players show it (the owner, 2026-10-26: a track change is one commit): its words with its cover, so
+// while a new cover comes the one before stays named; once it is in (or after TEXT_WAIT_MS, when the cover darkens and
+// its ring comes, lib/NowPlaying) the new track shows whole. The track itself plays at once (playing()).
+const TEXT_WAIT_MS = 600;
+let named = $state.raw<NowPlaying | null>(null);
+/** The cover the playing track is waiting for: its address differs from the one shown, and it has not given way. */
+const coverPending = () => {
+  const want = coverSrc();
+  return !!want && want !== shown.src && !shown.late;
+};
+$effect.root(() => {
+  $effect(() => {
+    const np = playing();
+    const pending = coverPending();
+    const was = untrack(() => named);
+    if (!np || !was || was.id === np.id || !pending) return void (named = np);
+    const t = setTimeout(() => (named = untrack(playing)), TEXT_WAIT_MS);
+    return () => clearTimeout(t);
+  });
+});
+/** What plays, as the players show it: the track before while the new one's cover comes (at most TEXT_WAIT_MS). Its
+ *  progress is the playing track's own once it shows. */
+export const shownPlaying = (): NowPlaying | null => {
+  const np = playing();
+  return named && np && named.id !== np.id ? named : np;
+};
+
 // The clock: between polls the position runs locally. It is re-anchored to the server only when the server disagrees
 // with it (track, pause state, or more than 1.5 s off: a seek or drift), so it moves smoothly.
 type Anchor = { id: string; pos: number; at: number; paused: boolean };
