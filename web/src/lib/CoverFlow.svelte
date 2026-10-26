@@ -40,8 +40,17 @@
     onspare?: (px: number) => void;
   } = $props();
 
-  let size = $state(340);
-  let height = $state(340);
+  // Its room, once measured: no cover placed before (the owner, 2026-10-26: switched to Flow, they came in jagged, laid
+  // out for a guessed room and then sliding to the real one), none moving the frame they are first placed.
+  let size = $state(0);
+  let height = $state(0);
+  const measured = $derived(size > 0 && height > 0);
+  let settled = $state(false);
+  $effect(() => {
+    if (!measured || settled) return;
+    const r = requestAnimationFrame(() => requestAnimationFrame(() => (settled = true)));
+    return () => cancelAnimationFrame(r);
+  });
   /** The front cover's place in `covers`, between whole places while dragged. */
   let pos = $state(0);
   let dragging = $state(false);
@@ -99,7 +108,7 @@
   let entering = $state(untrack(() => enter) && !matchMedia('(prefers-reduced-motion: reduce)').matches);
   let entered = $state(!untrack(() => entering));
   $effect(() => {
-    if (!entering) return;
+    if (!entering || !measured) return;
     let t = 0;
     const r = requestAnimationFrame(() =>
       requestAnimationFrame(() => {
@@ -113,7 +122,7 @@
     };
   });
   const items = $derived.by(() => {
-    if (!n) return [];
+    if (!n || !measured) return [];
     if (single) return [{ key: 0, src: covers[0], marked: !!marked?.[0], ...place(0) }];
     const base = Math.floor(pos);
     const out: (Place & { key: number; src: string; marked: boolean })[] = [];
@@ -242,7 +251,7 @@
   {#each items as c (c.key)}
     <span
       class="rec"
-      class:still={dragging}
+      class:still={dragging || !settled}
       class:marked={c.marked}
       style:top="{front.top}px"
       style:left="{front.left}px"

@@ -42,20 +42,30 @@
   /** Room kept for the mini-player at the window's foot, there or not (the owner, 2026-10-23: assume it). */
   const MINI = 96;
   let stageHeight = $state(420);
-  /** What the coverflow leaves unused over its covers: the stage and the name move up by half, so they sit together in
-   *  the middle of the room. */
+  /** What the coverflow leaves unused over its covers: the stage and the name move up by half (taking that room with
+   *  them, no scroll left under them), so they sit together in the middle of the room. */
   let spare = $state(0);
   const wall = $derived(!!backdropUrl());
 
+  // Then less by whatever would still scroll below it (the owner, 2026-10-26: room to scroll with nothing in it): the
+  // page's own padding under the list, the gap the covers leave over them.
   function fill(node: HTMLElement) {
+    let frame = 0;
     const measure = () => {
       const bottom = window.innerHeight - MINI;
-      stageHeight = Math.max(260, Math.round(bottom - node.getBoundingClientRect().top - CAPTION));
+      const room = Math.max(260, Math.round(bottom - node.getBoundingClientRect().top - CAPTION));
+      stageHeight = room;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const over = document.documentElement.scrollHeight - window.innerHeight;
+        if (over > 0) stageHeight = Math.max(260, room - over);
+      });
     };
     measure();
     const later = setTimeout(measure, 300);
     addEventListener('resize', measure);
     return () => {
+      cancelAnimationFrame(frame);
       clearTimeout(later);
       removeEventListener('resize', measure);
     };
@@ -81,7 +91,7 @@
 </script>
 
 {#if wall}<div class="wall" {@attach besidePage} aria-hidden="true"></div>{/if}
-<div class="flow" class:on-wall={wall} style:transform="translateY({-spare / 2}px)">
+<div class="flow" class:on-wall={wall} style:margin-top="{-spare / 2}px">
   <div class="stage" {@attach fill} style:height="{stageHeight}px">
     <CoverFlow {covers} top={12} foot={12} {onopen} {marked} {onfront} onspare={(px) => (spare = px)} {onmenu} />
   </div>
