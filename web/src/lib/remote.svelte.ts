@@ -35,26 +35,30 @@ export const coverFailed = (src: string) => (failed[src] = true);
 // The cover shown: a new one takes the old one's place only once it is loaded and decoded, so a track change never
 // shows a frame without a cover, and the same picture at another track's address shows no change at all. A cover
 // that fails is skipped (`coverSrc` offers the next candidate).
-const shown = $state<{ src: string | null }>({ src: null });
+const shown = $state<{ src: string | null; coming: string | null }>({ src: null, coming: null });
 $effect.root(() => {
   $effect(() => {
     const want = coverSrc();
     if (!want) {
       shown.src = null;
+      shown.coming = null;
       return;
     }
-    if (want === untrack(() => shown.src)) return;
+    if (want === untrack(() => shown.src)) return void (shown.coming = null);
     let current = true;
+    shown.coming = want;
     const img = new Image();
     img.src = want;
     img.decode().then(
-      () => current && (shown.src = want),
-      () => current && coverFailed(want),
+      () => current && ((shown.src = want), (shown.coming = null)),
+      () => current && ((shown.coming = null), coverFailed(want)),
     );
     return () => (current = false);
   });
 });
 export const shownCover = () => shown.src;
+/** Another cover is on its way (the old one still shown meanwhile). */
+export const coverComing = () => shown.coming !== null;
 
 // The clock: between polls the position runs locally. It is re-anchored to the server only when the server disagrees
 // with it (track, pause state, or more than 1.5 s off: a seek or drift), so it moves smoothly.

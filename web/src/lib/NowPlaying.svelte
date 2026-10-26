@@ -16,8 +16,9 @@
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs, SEEK_STEP, type CoverTouch, type SwipeDown, type SwipeSide, type SwipeUp } from './prefs.svelte';
-  import { art, clockText, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
+  import { art, clockText, coverComing, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
   import SeekWave from './SeekWave.svelte';
+  import ProgressRing from './ProgressRing.svelte';
   import { Seek } from './seekState.svelte';
   import { heardOf, loadWaveform, waveformOf, waveLoading } from './waveforms.svelte';
   import { SILENT, loadSpectrum, spectrumOf } from './bandWaves.svelte';
@@ -69,6 +70,15 @@
   });
   const memberCount = $derived(shownPlaylists().filter((p) => p.member).length);
   const src = $derived(shownCover());
+  // A new cover slow to come (the owner, 2026-10-26): after COVER_WAIT_MS the old one fades to dark and the ring fades
+  // in over it; the new one takes its place at once when it is in.
+  const COVER_WAIT_MS = 300;
+  let coverSlow = $state(false);
+  $effect(() => {
+    if (!coverComing()) return void (coverSlow = false);
+    const t = setTimeout(() => (coverSlow = true), COVER_WAIT_MS);
+    return () => clearTimeout(t);
+  });
   // The backdrop list: the current blurred cover, and while it fades in, the one before it.
   let backdrops = $state<{ key: number; src: string }[]>([]);
   let backdropKey = 0;
@@ -420,7 +430,7 @@
     </div>
     <!-- Finamp's layout: the cover's region, then the controls' box with three groups spread in it (track name,
          controls, actions); in landscape side by side. Sizes from lib/playerLayout.ts. -->
-    <div class="album" style:width={layout ? `${layout.album.width}px` : null} style:height={layout ? `${layout.album.height}px` : null}>
+    <div class="album" class:waiting={coverSlow} style:width={layout ? `${layout.album.width}px` : null} style:height={layout ? `${layout.album.height}px` : null}>
       <!-- the stand-in only when there is no cover to load (lib/Cover), not while one loads -->
       {#if np && (src || !coverSrc())}
         {#key src}
@@ -439,6 +449,7 @@
           </button>
         {/key}
       {/if}
+      <span class="cover-wait" class:on={coverSlow} aria-hidden="true"><ProgressRing progress={null} size={56} /></span>
     </div>
     <div
       class="controls"
@@ -699,6 +710,7 @@
   }
 
   .album {
+    position: relative;
     flex: none;
     display: grid;
     place-items: center;
@@ -1025,6 +1037,27 @@
 
   .progress .t:last-child {
     text-align: right;
+  }
+
+  /* A new cover slow to come: the old one darkens and the ring comes in over its middle, both over 400 ms. */
+  .album .cover-btn {
+    transition: filter 400ms ease-out;
+  }
+
+  .album.waiting .cover-btn {
+    filter: brightness(0.3);
+  }
+
+  .cover-wait {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 400ms ease-out;
+  }
+
+  .cover-wait.on {
+    opacity: 1;
   }
 
   /* The seek bar's own (its waveform, handle and lens): lib/SeekWave. */
