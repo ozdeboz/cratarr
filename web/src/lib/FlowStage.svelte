@@ -89,7 +89,7 @@
   }
 </script>
 
-{#if wall}<div class="wall" {@attach besidePage} aria-hidden="true"></div>{/if}
+{#if wall}<div class="wall flow-wall" {@attach besidePage} aria-hidden="true"></div>{/if}
 <div class="flow" class:on-wall={wall} style:margin-top="{-spare / 2}px">
   <div class="stage" {@attach fill} style:height="{stageHeight}px">
     <CoverFlow {covers} top={12} foot={12} {onopen} {marked} {onfront} onspare={(px) => (spare = px)} {onmenu} />
@@ -123,6 +123,12 @@
       var(--flow-photo) center 20% / cover no-repeat,
       var(--surface);
     pointer-events: none;
+  }
+
+  /* The body's own background painted over it (behind the page, it is under the body): while it shows, the body lets
+     it through; the page's ground is the root's, under the picture (the owner, 2026-10-26: a black box over it). */
+  :global(body:has(.flow-wall)) {
+    background: transparent;
   }
 
   .stage {
