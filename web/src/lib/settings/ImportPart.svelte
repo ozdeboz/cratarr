@@ -40,7 +40,10 @@
   import Group from './Group.svelte';
   import Item from './Item.svelte';
 
-  let { thing = null }: { thing?: string | null } = $props();
+  // `own`: one's own imports (ListenBrainz, Last.fm, files) into one's own history, under Personal (the owner,
+  // 2026-10-26: importing is a personal concern); else the administrators' Import from a server, into any account.
+  let { thing = null, own = false }: { thing?: string | null; own?: boolean } = $props();
+  const SECTION = $derived(own ? 'import' : 'serverimport');
 
   const LISTENBRAINZ = 'listenbrainz';
   const LASTFM = 'lastfm';
@@ -60,7 +63,7 @@
   nameThing(() => (thing === LISTENBRAINZ ? 'ListenBrainz' : thing === LASTFM ? 'Last.fm' : thing === FILES ? 'Files' : serverId ? ed.serverName(serverId) : null));
   // A server gone (or never there): back to the list.
   $effect(() => {
-    if (serverId && ed.imp.known && !server) backFromThing('import');
+    if (serverId && ed.imp.known && !server) backFromThing(SECTION);
   });
 
   // While a server's import runs, its progress.
@@ -151,7 +154,7 @@
     adding = false;
     addUrl = '';
     addUser = '';
-    openThing('import', SERVER + id);
+    openThing(SECTION, SERVER + id);
   }
   // A Subsonic server's password: for this page's runs only.
   const SUBSONIC = 'subsonic:';
@@ -615,12 +618,16 @@
       />
     {/if}
   {/if}
-{:else}
-  <Group title="Imports" more="What you did elsewhere, into Cratarr: preview first, then import; run again, it brings only what is new.">
+{:else if !own}
+  <Group title="Imports" more="Another server's plays, favourites, ratings and added dates, into an account here: preview first, then import; run again, it brings only what is new.">
     {#each ed.imp.sources as src (src.id)}
       {@const s = serverLine(src.id)}
-      <Item lead={src.error ? 'bad' : s.lead} name={`From ${ed.serverName(src.id)}`} line={src.error ?? s.line} tone={src.error || s.lead === 'bad' ? 'bad' : null} onclick={() => openThing('import', SERVER + src.id)} />
+      <Item lead={src.error ? 'bad' : s.lead} name={`From ${ed.serverName(src.id)}`} line={src.error ?? s.line} tone={src.error || s.lead === 'bad' ? 'bad' : null} onclick={() => openThing(SECTION, SERVER + src.id)} />
     {/each}
+    <Item name="Add import" kind="add" onclick={() => (adding = true)} />
+  </Group>
+{:else}
+  <Group title="Imports" more="What you did elsewhere, into your history: preview first, then import; run again, it brings only what is new.">
     <Item
       lead={lb.busy ? 'off' : lb.result && !lb.previewed ? 'on' : lbError ? 'bad' : null}
       name="From ListenBrainz"
@@ -638,8 +645,9 @@
       onclick={() => openThing('import', LASTFM)}
     />
     <Item name="From files" line="A history export, or a playlist" onclick={() => openThing('import', FILES)} />
-    <Item name="Add import" kind="add" onclick={() => (adding = true)} />
   </Group>
+{/if}
+{#if !own}
   {#if adding}
     <FormSheet
       title="From a Subsonic server"

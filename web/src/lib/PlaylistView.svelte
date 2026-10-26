@@ -103,6 +103,8 @@
   import { undos, withUndo } from './undo.svelte';
   import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
+  import ProgressRing from './ProgressRing.svelte';
+  import { untilAudible } from './audible.svelte';
   import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
   import BandcampAlbumMenu from './BandcampAlbumMenu.svelte';
   import CrateMenu from './CrateMenu.svelte';
@@ -546,6 +548,12 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /** A flow cover's album, its menu open (a long-press or a right-click on it). */
   let flowMenu = $state<{ id: string; title: string; artist: string | null } | null>(null);
   const flowing = $derived(flowShown.length >= 3);
+  // One cover in a header too wide for it (the owner, 2026-10-26): the square fills the width up to 60% of the window's
+  // height, so a wide panel shows only a band of it. Where less than 90% of it would show, the flow's canvas instead,
+  // the cover whole in the middle (lib/CoverFlow, one cover alone).
+  let heroW = $state(0);
+  let heroH = $state(0);
+  const heroWide = $derived(heroW > 0 && heroH / heroW < 0.9);
   /** The hero's art is not known yet (the owner, 2026-10-23: nothing shown that something else then replaces): it keeps
    *  its full size, empty; a crate's on the coverflow's canvas, which most become. */
   const heroPending = $derived.by(() => {
@@ -557,6 +565,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   // As drawn: covers that fail to load leave a mosaic (lib/Cover).
   const coversShown = $derived(mosaicOf(covers));
   const heroShown = $derived(mosaicOf(heroArt));
+  /** One cover, too wide for it: the flow's canvas instead (above). Not while a crate is edited (its tools sit there). */
+  const oneWide = $derived(!heroPending && !flowing && !crateEditing && heroShown.length === 1 && heroWide);
   /** Edit mode: there is a picture of its own to remove (as saved, or picked). */
   const ownImage = $derived(crateImage ? crateImage !== 'remove' : !!crates.list?.find((c) => c.id === builder?.id)?.image);
 
@@ -1049,14 +1059,24 @@ ${r.album_artist ?? r.artist ?? ''}`;
     return () => seen.disconnect();
   });
 
+  /** A Play or a Shuffle under way: its button the ring until the music can be heard (the owner, 2026-10-26), then the
+   *  player changes all at once. */
+  let starting = $state<PlayMode | null>(null);
   async function act(mode: PlayMode) {
+    if (starting) return;
     navigator.vibrate?.(8);
+    const plays = mode === 'play' || mode === 'shuffle';
+    if (plays) starting = mode;
     try {
+      const heard = plays ? untilAudible() : null;
       if (plain || (sorted && !multi)) await actOnRows(mode);
       else await startPlaylists([...ids], mode);
       if (mode === 'next' || mode === 'last') toast.show({ text: mode === 'next' ? 'Plays next.' : 'Added to the queue.', tone: 'done' });
+      await heard;
     } catch (e) {
       toast.fail(e, 'Could not start playing');
+    } finally {
+      starting = null;
     }
   }
 
@@ -1667,13 +1687,17 @@ ${r.album_artist ?? r.artist ?? ''}`;
         class="hero"
         class:mosaic={!heroPending && heroShown.length === 4 && !flowing}
         class:bare={!heroPending && !heroShown.length && !flowing}
-        class:flowing={flowing || (heroPending && !!crate)}
+        class:flowing={flowing || (heroPending && !!crate) || oneWide}
+        bind:clientWidth={heroW}
+        bind:clientHeight={heroH}
       >
         {#if heroPending}
           <!-- Its art on its way: the place kept, empty. -->
         {:else if flowing}
           <!-- A crate's albums as a coverflow on a light canvas (the owner, 2026-10-23); a drag or a tap moves through them. -->
           <CoverFlow covers={flowShown} onmenu={(i) => (flowMenu = flowItems[i]?.album ?? null)} />
+        {:else if oneWide}
+          <CoverFlow covers={heroShown} />
         {:else}
           {#each heroShown as c, i (i)}<Cover src={c} lazy={false} />{:else}{#if !crateEditing}<Cover src={null} />{/if}{/each}
         {/if}
@@ -1754,7 +1778,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
       <!-- The action bar, at the cover's foot; at the top it stays. -->
       <div class="actbar" class:stuck class:loose={!prefs.stickyActions} bind:this={actbar} role="toolbar" aria-label="Play">
         {#each barActions as a (a.key)}
-          <button class="icon" aria-label={a.label} title={a.label} disabled={a.disabled} onclick={a.run}><Icon name={a.icon} size={24} /></button>
+          <button class="icon" aria-label={a.label} title={a.label} disabled={a.disabled || (!!starting && starting !== a.key)} aria-busy={starting === a.key} onclick={a.run}
+            >{#if starting === a.key}<span class="ring-in"><ProgressRing progress={null} size={24} /></span>{:else}<Icon name={a.icon} size={24} />{/if}</button
+          >
         {/each}
         <span class="grow"></span>
         {#if crate}
@@ -2886,6 +2912,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
   .actbar.loose {
     position: relative;
     top: auto;
+  }
+
+  /* A Play under way: the shared ring where its icon was (lib/ProgressRing centres itself on what holds it). */
+  .ring-in {
+    position: relative;
+    display: block;
+    width: 24px;
+    height: 24px;
   }
 
   .actbar {

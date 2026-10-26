@@ -43,7 +43,6 @@
     albumCoverUrl,
     albumResume,
     albumView,
-    serverCoverUrl,
     cancelJob,
     deleteAlbum,
     forgetAlbumResume,
@@ -289,7 +288,7 @@
     share(a.title, [a.artist, a.title].filter(Boolean).join(' – '), linkTo('library', albumSubject(source, a.id)));
   }
 
-  // Its cover on this device (lib/localCovers.svelte.ts): a picture chosen here, or the server's read again. Not in
+  // Its cover on this device (lib/localCovers.svelte.ts): a picture chosen here, or the server's again. Not in
   // Cratarr's own library (the owner, 2026-10-25): there its administrators upload one, for everyone.
   const deviceCovers = $derived(source !== 'cratarr');
   const ownCover = $derived(deviceCovers && !!localCovers[coverKey(source, a.id)]);
@@ -318,13 +317,13 @@
       toast.fail(missingCall(e) || big ? null : e, big ? 'That picture is too large (at most 12 MB)' : missingCall(e) ? "This server can't take a cover yet" : "The cover wasn't uploaded");
     }
   }
+  /** The server's cover again, instead of the picture chosen on this device. */
   async function serverCover() {
     onclose();
     try {
-      if (ownCover) await removeLocalCover(source, a.id);
-      else await refreshCover(source, a.id, serverCoverUrl(source, a.id));
+      await removeLocalCover(source, a.id);
     } catch (e) {
-      toast.fail(e, "The cover wasn't read again");
+      toast.fail(e, "The cover wasn't changed");
     }
   }
 
@@ -503,11 +502,15 @@
       const name = to.name;
       moved(await moveAlbum(source, a.id, to.id, year.trim() || undefined), `Moved ${a.title} to ${name}.`);
     }, 'Could not move the album');
-  const replaceIt = () =>
+  /** `carry`: Replace and carry over (0.9.7): what Cratarr knew of the album (its ids, numbers, cover) into the new copy. */
+  const replaceIt = (carry = false) =>
     act(async () => {
-      const r = await replaceIncoming(source, a.id, year.trim() || undefined, swap?.covers ? coverWay : undefined);
+      const r = await replaceIncoming(source, a.id, year.trim() || undefined, swap?.covers ? coverWay : undefined, carry);
       moved(r, `Replaced ${r.title} in ${music}.`);
     }, 'Could not replace the album');
+  /** The tag differences shown at first (the rest behind "And N more"). */
+  const DIFF_SHOWN = 12;
+  let diffAll = $state(false);
   const remove = () =>
     act(async () => {
       const { undo, title } = await deleteAlbum(source, a.id);
@@ -602,10 +605,30 @@
           </div>
           <SettingRow label="Cover"><Seg label="Cover" options={[{ value: 'keep', label: 'Keep' }, { value: 'new', label: 'New' }]} bind:value={coverWay} /></SettingRow>
         {/if}
+        <!-- What changes in the tags (0.9.7; the owner, 2026-10-26: only the differences), what the new copy lacks, and what
+             carrying over brings along. -->
+        {#if swap.lost?.length}<p class="ask lost">The new copy lacks: {swap.lost.join(', ')}.</p>{/if}
+        {#if swap.diff?.length}
+          <ul class="diff">
+            {#each diffAll ? swap.diff : swap.diff.slice(0, DIFF_SHOWN) as d, i (i)}
+              <li>
+                <small>{d.track ?? 'Every track'} · {d.field}</small>
+                <span><span class="was">{d.old || '–'}</span> → <b>{d.new || '–'}</b></span>
+              </li>
+            {/each}
+          </ul>
+          {#if !diffAll && swap.diff.length > DIFF_SHOWN}<button class="more" onclick={() => (diffAll = true)}>And {swap.diff.length - DIFF_SHOWN} more</button>{/if}
+        {/if}
+        {#if swap.carry?.length}<p class="ask carried">Carried over: {swap.carry.join(', ')}.</p>{/if}
       {/if}
       <div class="actions">
         {#if swap && (!swap.refused || swap.refused.kind === 'needs_year')}
-          <button class="primary" disabled={working || !!swap.refused} aria-busy={working} onclick={replaceIt}>Replace</button>
+          {#if swap.carry?.length}
+            <button class="primary" disabled={working || !!swap.refused} aria-busy={working} onclick={() => replaceIt(true)}>Replace and carry over</button>
+            <button disabled={working || !!swap.refused} onclick={() => replaceIt()}>Replace only</button>
+          {:else}
+            <button class="primary" disabled={working || !!swap.refused} aria-busy={working} onclick={() => replaceIt()}>Replace</button>
+          {/if}
         {/if}
         <button onclick={onclose}>Cancel</button>
       </div>
@@ -731,7 +754,9 @@
         {:else if deviceCovers}
           <MenuEntry icon="image" label="Change cover on this device" onclick={() => picker?.click()} />
         {/if}
-        <MenuEntry icon={ownCover ? 'imageOff' : 'reset'} label={ownCover ? "Use the server's cover" : 'Read the cover again'} onclick={serverCover} />
+        <!-- No Read the cover again (the owner, 2026-10-26): a cover's address carries its stamp (lib/coverStamps), so a
+             changed one shows by itself. Only a picture chosen on this device is undone here. -->
+        {#if ownCover}<MenuEntry icon="imageOff" label="Use the server's cover" onclick={serverCover} />{/if}
         {#if resumeAt}<MenuEntry icon="resume" label="Remove resume point" onclick={forgetResume} />{/if}
       </MenuGroup>
       {#if me.admin && offer && (offer.job !== null || offer.targets.length || offer.replaceable)}
@@ -835,6 +860,47 @@
   .ask {
     margin: 0;
     font-size: 0.92rem;
+  }
+
+  /* Replace's tag differences (0.9.7): each as it was and as it comes, what the new copy lacks in amber. */
+  .ask.lost {
+    color: var(--warn-ink);
+  }
+
+  .ask.carried {
+    color: var(--muted);
+  }
+
+  .diff {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 0.88rem;
+  }
+
+  .diff li {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .diff small,
+  .diff .was {
+    color: var(--muted);
+  }
+
+  .more {
+    justify-self: start;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent-ink);
+    font: inherit;
+    font-size: 0.88rem;
+    cursor: pointer;
   }
 
   .actions {

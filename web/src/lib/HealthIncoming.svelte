@@ -10,6 +10,8 @@
   import Icon from './Icon.svelte';
   import { loadHealth } from './healthReport.svelte';
 
+  import IntakeCheck from './IntakeCheck.svelte';
+
   let { source, album, ongone }: { source: string; album: string; ongone: () => void } = $props();
 
   $effect(() => {
@@ -44,6 +46,8 @@
       </div>
     {/each}
   </div>
+  <!-- What its tags would get before it comes in (0.9.7, lib/IntakeCheck): Accept, then Keep. -->
+  <IntakeCheck {source} {album} title={a.title} />
   <button class="act" onclick={() => (menu = true)}>Keep, replace or delete<Icon name="chevronRight" size={18} /></button>
   {#if menu}
     <AlbumMenu

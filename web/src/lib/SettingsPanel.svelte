@@ -160,6 +160,8 @@
       <RadioPart />
     {:else if section === 'tracking'}
       <TrackingPart {thing} />
+    {:else if section === 'import'}
+      <ImportPart {thing} own />
     {:else if section === 'users'}
       <UsersPart {thing} />
     {:else if section === 'players'}
@@ -174,7 +176,7 @@
       <LibrariesPart {thing} />
     {:else if section === 'auth'}
       <AuthPart />
-    {:else if section === 'import'}
+    {:else if section === 'serverimport'}
       <ImportPart {thing} />
     {/if}
 

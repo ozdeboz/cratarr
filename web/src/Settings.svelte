@@ -121,7 +121,10 @@
         return [signIn === null ? null : signIn ? 'Sign-in required' : 'Sign-in not required']
           .filter(Boolean)
           .join(' · ');
+      // One's own imports (ListenBrainz, Last.fm, files): their state is on their page.
       case 'import':
+        return '';
+      case 'serverimport':
         if (lastImport === undefined) return '';
         return lastImport?.finished ? `Last ${new Date(lastImport.finished * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : 'Not yet';
       case 'network':

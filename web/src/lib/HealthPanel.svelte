@@ -10,13 +10,17 @@
   import { everywhere } from './globalSearch.svelte';
   import Cover from './Cover.svelte';
   import Icon from './Icon.svelte';
-  import { albumCoverUrl, type HealthItem } from './api';
+  import { albumCoverUrl, wantAlbum, type HealthItem } from './api';
+  import { toast } from './toast.svelte';
   import { openFinding } from './health';
   import { health, loadHealth, problems } from './healthReport.svelte';
   import HealthEvents from './HealthEvents.svelte';
   import HealthIncoming from './HealthIncoming.svelte';
   import HealthMissing from './HealthMissing.svelte';
   import HealthRenumber from './HealthRenumber.svelte';
+  import HealthFixes from './HealthFixes.svelte';
+  import { apply, FIXABLE, healthFixes, readFixes } from './fixes.svelte';
+  import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
   import { me } from './me.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
@@ -55,6 +59,36 @@
   const handed = $derived(glass.one && !beside);
   const pill = () => (!beside && !item ? { device: false, filter: false, view: false, search: 'health' } : null);
   handGlass(() => handed, { left: glassLeft, pill });
+  // An album missing tracks: the whole release asked for (Lidarr fetches it into Incoming; Replace carries over).
+  let asking = $state(false);
+  let askedFull = $state<string | null>(null);
+  async function askFull(x: HealthItem) {
+    if (!x.release_group || asking) return;
+    asking = true;
+    try {
+      await wantAlbum({ release_group: x.release_group, artist: (x.line ?? '').split(' · ')[0], album: x.title });
+      askedFull = x.release_group;
+    } catch (e) {
+      toast.fail(e, "The album wasn't asked for");
+    } finally {
+      asking = false;
+    }
+  }
+  // A library finding's fixes (0.9.7, the administrators' metadata workflow): read for its list (Apply all certain) and
+  // its items' pages (lib/HealthFixes).
+  const fixable = $derived(me.admin && FIXABLE.has(problem));
+  $effect(() => {
+    if (fixable) readFixes(problem);
+  });
+  const certain = $derived(fixable ? (healthFixes[problem]?.certain ?? 0) : 0);
+  let applyingAll = $state(false);
+  let askAll = $state(false);
+  async function applyAll() {
+    askAll = false;
+    applyingAll = true;
+    await apply({ certain: problem }, problem, `Applied ${certain} certain ${certain === 1 ? 'fix' : 'fixes'}`);
+    applyingAll = false;
+  }
   // The levels over a problem: Health (not beside its list, which names it). Not the problem's domain: no level of its
   // own (it led to Health too), and often the problem's name again (the owner, 2026-10-26: "Health › Analysis ›
   // Analysis").
@@ -94,6 +128,8 @@
       {#if incoming && item.album}<HealthIncoming source={item.album[0]} album={item.album[1]} ongone={() => backFromStep(HEALTH + problem)} />{/if}
       <!-- Track numbers off (unnumbered ones too): renumbered as a release has them (lib/HealthRenumber). -->
       {#if problem === 'library:track-numbers' && item.album?.[0] === 'cratarr'}<HealthRenumber album={item.album[1]} title={item.title} ongone={() => backFromStep(HEALTH + problem)} />{/if}
+      <!-- Year, genre, album artist, MusicBrainz release, a rule's names: the fix proposed, Apply (lib/HealthFixes). -->
+      {#if fixable && item.album?.[0] === 'cratarr'}<HealthFixes finding={problem} album={item.album[1]} title={item.title} ongone={() => backFromStep(HEALTH + problem)} />{/if}
       <!-- No cover: Change cover, straight on its choices (Upload and an address in its corner). -->
       {#if problem === 'library:cover' && item.album?.[0] === 'cratarr' && me.admin}
         <button class="act" onclick={() => (coverOf = item.album![1])}>Change cover<Icon name="chevronRight" size={18} /></button>
@@ -102,6 +138,17 @@
         {/if}
       {/if}
       {#if EVENTS[problem]}<HealthEvents {...EVENTS[problem]} value={item.title} />{/if}
+      {#if item.missing?.length}
+        <!-- An album missing tracks (0.9.7; the owner, 2026-10-26: "golden work"): which, and the whole album asked for. -->
+        <ul class="files">{#each item.missing as m (m)}<li>{m}</li>{/each}</ul>
+        {#if item.release_group}
+          {#if item.request || askedFull === item.release_group}
+            <p class="muted">Asked for the full album.</p>
+          {:else}
+            <button class="act" disabled={asking} aria-busy={asking} onclick={() => askFull(item)}>Ask for the full album</button>
+          {/if}
+        {/if}
+      {/if}
       {#if item.files?.length}
         <!-- A folder's files not heard yet, by name. -->
         <ul class="files">{#each item.files as f (f)}<li>{f}</li>{/each}</ul>
@@ -127,6 +174,10 @@
       {:else}
         <p class="count"><b>{p.said}</b></p>
       {/if}
+      <!-- Every certain fix of it at once (the owner, 2026-10-26), asked once more; likely ones one by one, on their pages. -->
+      {#if certain > 0}
+        <button class="act" disabled={applyingAll} aria-busy={applyingAll} onclick={() => (askAll = true)}>Apply all certain ({certain.toLocaleString()})</button>
+      {/if}
       <!-- The things it is about, one by one. -->
       {#if p.items.length}
         <!-- An album a release row, as in every one of these panels (lib/ReleaseRow); anything else a settings row. -->
@@ -150,6 +201,17 @@
     {#if handed && everywhere()}<GlobalResults />{/if}
   </div>
 </div>
+
+{#if askAll}
+  <ConfirmSheet
+    title={`Apply ${certain.toLocaleString()} certain ${certain === 1 ? 'fix' : 'fixes'}?`}
+    text="Written into the files; Undo puts the old values back."
+    label="Apply"
+    icon="check"
+    onconfirm={applyAll}
+    onclose={() => (askAll = false)}
+  />
+{/if}
 
 <style>
   /* As a part of the settings in the panel (lib/SettingsPanel): its bar on top, what it holds under it. */

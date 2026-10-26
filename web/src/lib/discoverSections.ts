@@ -63,8 +63,14 @@ const ROUND_STEP = 12;
 const turned = <T>(list: T[], n: number) => (list.length ? [...list.slice(n % list.length), ...list.slice(0, n % list.length)] : list);
 
 /** `notPick`: what is no pick of the day (moved on from in Discover's menu, kept for the account; or asked for already):
- *  the next that plays is the pick. */
-export function sections<S extends Suggested>(all: S[], given: Partial<typeof LIMITS> = {}, notPick: (s: S) => boolean = () => false): Sections<S> {
+ *  the next that plays is the pick. `aroundFrom`: the server's own Around (0.9.7): its artists in order and their
+ *  related artists' albums; null for a server before it (the groups then come from `all`, as before). */
+export function sections<S extends Suggested>(
+  all: S[],
+  given: Partial<typeof LIMITS> = {},
+  notPick: (s: S) => boolean = () => false,
+  aroundFrom: { seeds: string[]; albums: S[] } | null = null,
+): Sections<S> {
   const limits = { ...LIMITS, ...given };
   const used = new Set<string>();
   const take = (s: S) => used.add(s.key);
@@ -119,7 +125,24 @@ export function sections<S extends Suggested>(all: S[], given: Partial<typeof LI
   const around: Around<S>[] = [];
   // Each group its own row, as wide as the page and a little more (it scrolls); no longer side by side.
   const width = limits.aroundCols + limits.aroundPast;
-  const ranked = [...groups.values()].sort((a, b) => cellsOf(b) - cellsOf(a) || b.items.length - a.items.length);
+  // The server's artists, in its order, a group each: their related artists' albums, then Last.fm's suggestions like
+  // them from the list (the owner, 2026-10-26: those stay in Around, after the artists' own).
+  for (const seed of aroundFrom?.seeds ?? []) {
+    const of = (s: S) => s.why.some((w) => seedsOf(w)?.some((x) => key(x) === key(seed)));
+    const own = aroundFrom!.albums.filter((s) => free(s) && of(s));
+    const lastfm = all.filter((s) => free(s) && of(s) && !own.some((o) => o.key === s.key));
+    const ready = [...close(seed, playableFirst(own)), ...close(seed, playableFirst(lastfm))];
+    const laid = layout(
+      ready.map((s) => ({ key: s.key, plays: !!s.bandcamp, s })),
+      width,
+      seed,
+    );
+    if (!laid) continue;
+    const items = laid.items.map((x) => x.s);
+    items.forEach(take);
+    around.push({ seeds: [seed], partner: null, items, grid: laid.grid });
+  }
+  const ranked = aroundFrom ? [] : [...groups.values()].sort((a, b) => cellsOf(b) - cellsOf(a) || b.items.length - a.items.length);
   const partnered = new Set<string>();
   for (const g of ranked) {
     if (around.length >= limits.around) break;

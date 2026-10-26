@@ -163,8 +163,9 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   on the rating it has takes it off); Add to playlist, Download (in the app), Share; what its library allows
   (decision 0034: Move to each other used library, Replace in Music for an upgrade, Delete, a second step when it is
   in Music, Cancel conversion while queued), each question asked in the sheet; Change cover on this device (a
-  picture kept in this browser, shown wherever the album's cover is) and Read the cover again (or Use the server's
-  cover); Remove resume point, Web search, Genius search.
+  picture kept in this browser, shown wherever the album's cover is; not in Cratarr's own library, where an
+  administrator's Change cover is everyone's) and Use the server's cover while such a picture is chosen (no Read the cover
+  again since 0.9.7: a cover's address carries its stamp, so a changed cover shows by itself); Remove resume point, Web search, Genius search.
 - **An artist's menu** (`lib/ArtistMenu.svelte`, the artist panel's ⋮, decided 2026-10-16) as the album's: the artist
   with their heart, the large actions (Start radio among them, as on a track's and a playlist's), Add to playlist (all
   their tracks), Download, Share, and their picture on this device. No Instant mix (the owner) and no rating.

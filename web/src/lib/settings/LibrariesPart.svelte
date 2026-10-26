@@ -193,6 +193,36 @@
       onclick={() => (typing = { title: 'Genres never split', value: ed.ruleText.genreKeep, help: 'One per line', placeholder: 'Funk / Soul', lines: true, save: (v) => (ed.ruleText.genreKeep = v) })}
     />
   </Group>
+  <!-- Names given otherwise (0.9.7; the owner, 2026-10-26: decided once, for the library, what arrives and the harvest):
+       one name for several, written into the files through Health's fixes. -->
+  <Group title="Named otherwise">
+    <Item
+      name="Genres"
+      line={lines(ed.ruleText.genreAliases).join(' · ') || 'None'}
+      onclick={() =>
+        (typing = {
+          title: 'Genres named otherwise',
+          value: ed.ruleText.genreAliases,
+          help: 'One per line: the names, then → and the one name',
+          placeholder: 'Hip-Hop, Hip Hop Music → Hip Hop',
+          lines: true,
+          save: (v) => (ed.ruleText.genreAliases = v),
+        })}
+    />
+    <Item
+      name="Artists"
+      line={lines(ed.ruleText.artistAliases).join(' · ') || 'None'}
+      onclick={() =>
+        (typing = {
+          title: 'Artists named otherwise',
+          value: ed.ruleText.artistAliases,
+          help: 'One per line: the names, then → and the one name',
+          placeholder: 'Beatles → The Beatles',
+          lines: true,
+          save: (v) => (ed.ruleText.artistAliases = v),
+        })}
+    />
+  </Group>
 {:else}
   {#if ed.drafts.some((d) => d.enabled && d.view) && !ed.drafts.some((d) => d.enabled && d.libraries.music.length)}
     <Group><Item lead="warn" name="Choose a Music library" /></Group>

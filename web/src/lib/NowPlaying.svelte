@@ -17,9 +17,9 @@
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs, SEEK_STEP, type CoverTouch, type SwipeDown, type SwipeSide, type SwipeUp } from './prefs.svelte';
   import { art, clockText, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
-  import Waveform from './Waveform.svelte';
-  import WaveLens from './WaveLens.svelte';
-  import { heardOf, loadWaveform, waveformOf } from './waveforms.svelte';
+  import SeekWave from './SeekWave.svelte';
+  import { Seek } from './seekState.svelte';
+  import { heardOf, loadWaveform, waveformOf, waveLoading } from './waveforms.svelte';
   import { SILENT, loadSpectrum, spectrumOf } from './bandWaves.svelte';
   import { tuneOf } from './bandTune.svelte';
   import BandGlass from './BandGlass.svelte';
@@ -99,116 +99,9 @@
   const spectrum = $derived(np && prefs.playerBands !== 'off' ? spectrumOf(np.source, np.id) : null);
   /** The chosen look's settings (lib/bandTune: its own defaults, the user's changes over them). */
   const tune = $derived(tuneOf(prefs.playerBands === 'off' ? 'sirius' : prefs.playerBands));
-  /** Where the handle is held (seconds), while the finger is down; only then. */
-  let held = $state<number | null>(null);
-  /** Where it was let go (or a key sent it), until the player is there: the bar shows it, then hands over to where it
-   *  plays in one step, on arrival (the owner, 2026-10-25: the two "structurally unable to differ", the takeover
-   *  atomic). Not a fixed time: a player slow to say where it is now made the bar jump back, then forward. */
-  let sought = $state<number | null>(null);
-  let soughtTimer: ReturnType<typeof setTimeout> | undefined;
-  // There: within half a second of it (a player reports in steps). Never there (refused, or the track changed): back
-  // to where it plays after 3 s.
-  $effect(() => {
-    if (sought !== null && Math.abs(position() - sought) <= 0.5) sought = null;
-  });
-  /** A waveform that shows something (a Bandcamp analysis whose parts did not decode gives bins of nothing: a flat
-   *  line, the plain bar's). It decides the thumb or the lens and the white line, everywhere; while held, as it was
-   *  when the finger went down (a waveform coming in then takes over on release, not under the finger). */
-  const shapedNow = $derived(!!wave && wave.some((v) => v > 0));
-  let shapedHeld = $state<boolean | null>(null);
-  const shaped = $derived(shapedHeld ?? shapedNow);
-  // While held, where it plays stays marked, still moving (the owner, 2026-10-24: "something to aim for"); held within
-  // SNAP_PX of it, the handle snaps onto it, and let go there nothing is sought (cancelling the seek). Only while the
-  // finger is near the bar (SNAP_AWAY_PX above or below it): dragged further off, it comes loose (the owner,
-  // 2026-10-24), so a seek just beside where it plays can still be made.
-  const SNAP_PX = 12;
-  const SNAP_AWAY_PX = 40;
-  let snapped = $state(false);
-  /** The seek bar's width (px) while held. */
-  let seekWidth = 0;
-  const pos = $derived(snapped ? position() : (held ?? sought ?? position()));
-  /** The lens and the white line come only after LENS_AFTER ms held (the owner, 2026-10-26): a tap shows only where it
-   *  goes, in the waveform's colours. */
-  const LENS_AFTER = 100;
-  let lensOn = $state(false);
-  let lensTimer: ReturnType<typeof setTimeout> | undefined;
-  $effect(() => () => clearTimeout(lensTimer));
-  /** Where it plays, 0..1, while the handle is held elsewhere over a waveform (a white line there); the plain bar has
-   *  none (the owner, 2026-10-25: no white lines without a waveform). */
-  const nowMark = $derived(held !== null && lensOn && !snapped && shaped && dur ? position() / dur : null);
-  /** Held at `secs`, `away` px above or below the bar: on the playing position (snapped) or not. */
-  function hold(secs: number, away = 0) {
-    const near = !!dur && seekWidth > 0 && away <= SNAP_AWAY_PX && (Math.abs(secs - position()) / dur) * seekWidth <= SNAP_PX;
-    if (near && !snapped) navigator.vibrate?.(8);
-    snapped = near;
-    held = secs;
-  }
-  const at = (e: PointerEvent, el: HTMLElement) => {
-    const r = el.getBoundingClientRect();
-    return Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * (dur ?? 0);
-  };
-  /** How far (px) the pointer is above or below the bar; 0 on it. */
-  const awayFrom = (e: PointerEvent, el: HTMLElement) => {
-    const r = el.getBoundingClientRect();
-    return Math.max(0, r.top - e.clientY, e.clientY - r.bottom);
-  };
-  // The waveform lens (the owner, 2026-10-19; lib/WaveLens): while the bar is held over a waveform, where it is, and
-  // the room it has (the player's edges).
-  let lens = $state<{ width: number; middle: number; waveHeight: number; min: number; max: number } | null>(null);
-  function seekDown(e: PointerEvent) {
-    if (!canSeek) return;
-    const el = e.currentTarget as HTMLElement;
-    el.setPointerCapture(e.pointerId);
-    clearTimeout(lensTimer);
-    lensOn = false;
-    lensTimer = setTimeout(() => (lensOn = true), LENS_AFTER);
-    shapedHeld = shapedNow;
-    seekWidth = el.getBoundingClientRect().width;
-    hold(at(e, el));
-    const r = el.getBoundingClientRect();
-    const room = head?.getBoundingClientRect() ?? r;
-    const w = el.querySelector('.wave')?.getBoundingClientRect();
-    lens = shapedHeld && w ? { width: r.width, middle: r.height / 2, waveHeight: w.height, min: room.left - r.left + 75, max: room.right - r.left - 75 } : null;
-  }
-  function seekMove(e: PointerEvent) {
-    if (held === null || !(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId)) return;
-    const el = e.currentTarget as HTMLElement;
-    hold(at(e, el), awayFrom(e, el));
-  }
-  function seekUp(e: PointerEvent) {
-    const el = e.currentTarget as HTMLElement;
-    lens = null;
-    if (held === null || !el.hasPointerCapture(e.pointerId)) return;
-    // Let go on the playing position: nothing changes.
-    if (snapped) return letGo();
-    release(at(e, el));
-  }
-  function letGo() {
-    clearTimeout(lensTimer);
-    lensOn = false;
-    held = null;
-    snapped = false;
-    shapedHeld = null;
-    lens = null;
-  }
-  /** Seek, the bar on it until the player is there (`sought`). */
-  function release(secs: number) {
-    letGo();
-    sought = secs;
-    seekTo(secs);
-    clearTimeout(soughtTimer);
-    soughtTimer = setTimeout(() => (sought = null), 3000);
-  }
-  $effect(() => () => clearTimeout(soughtTimer));
-  function seekKey(e: KeyboardEvent) {
-    if (!canSeek || !dur) return;
-    const now = position();
-    const to =
-      e.key === 'ArrowLeft' ? now - 5 : e.key === 'ArrowRight' ? now + 5 : e.key === 'Home' ? 0 : e.key === 'End' ? dur - 1 : null;
-    if (to === null) return;
-    e.preventDefault();
-    release(Math.min(dur, Math.max(0, to)));
-  }
+  // Seeking (lib/seekState, the same control as the mini player's, lib/SeekWave): what the bar and the time show.
+  const seek = new Seek(position, () => dur, seekTo);
+  const pos = $derived(seek.pos);
 
   // The track menu (the menu button, or a right-click on the cover) and the queue (decision 0019).
   let menuAt = $state<DOMRect | null>(null);
@@ -595,36 +488,7 @@
                   : undefined}
             >
               <span class="t">{np.progress.estimated ? '≈' : ''}{clockText(pos)}</span>
-              <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-              <div
-                class="seek"
-                class:can={canSeek}
-                class:held={held !== null}
-                role={canSeek ? 'slider' : 'progressbar'}
-                tabindex={canSeek ? 0 : undefined}
-                aria-label={np.progress.paused ? 'Track position, paused' : 'Track position'}
-                aria-valuemin={0}
-                aria-valuemax={dur ?? undefined}
-                aria-valuenow={Math.floor(pos)}
-                aria-valuetext={dur ? `${clockText(pos)} of ${clockText(dur)}` : clockText(pos)}
-                onpointerdown={seekDown}
-                onpointermove={seekMove}
-                onpointerup={seekUp}
-                onpointercancel={letGo}
-                onkeydown={seekKey}
-              >
-                {#if wave && shaped}
-                  <Waveform bins={wave} progress={dur ? pos / dur : 0} paused={np.progress.paused} now={nowMark} />
-                {:else}
-                  <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
-                {/if}
-                <!-- The plain bar's handle (no lens there, the owner 2026-10-25); over a waveform, while held, the lens
-                     instead (where it is going). -->
-                {#if canSeek && !shaped}<span class="thumb" style:left="{dur ? (pos / dur) * 100 : 0}%"></span>{/if}
-                {#if wave && shaped && lens && lensOn && held !== null && dur}
-                  <WaveLens bins={wave} point={pos / dur} now={nowMark} {...lens} time={clockText(pos)} paused={np.progress.paused} />
-                {/if}
-              </div>
+              <SeekWave {seek} bins={wave} loading={np ? waveLoading(np.source, np.id) : null} {dur} {canSeek} paused={np.progress.paused} estimated={np.progress.estimated} room={head} />
               <span class="t">{dur ? clockText(dur) : '–:––'}</span>
             </div>
           {/if}
@@ -1163,62 +1027,7 @@
     text-align: right;
   }
 
-  /* Finamp's slider: 24 px to hold, the track in the middle, a round handle when it can seek. */
-  .seek {
-    position: relative;
-    flex: 1;
-    display: flex;
-    align-items: center;
-    height: 24px;
-  }
-
-  .seek.can {
-    cursor: pointer;
-    touch-action: none;
-  }
-
-  .seek:focus-visible {
-    outline: 2px solid var(--art-accent);
-    outline-offset: 2px;
-    border-radius: 4px;
-  }
-
-  .thumb {
-    position: absolute;
-    top: 50%;
-    width: 14px;
-    height: 14px;
-    margin: -7px 0 0 -7px;
-    border-radius: 50%;
-    background: var(--art-accent);
-    pointer-events: none;
-  }
-
-  .seek.held .thumb {
-    transform: scale(1.3);
-  }
-
-  .bar {
-    flex: 1;
-    height: 4px;
-    border-radius: 2px;
-    background: color-mix(in srgb, var(--text) 18%, transparent);
-    overflow: hidden;
-  }
-
-  .fill {
-    height: 100%;
-    background: var(--art-accent);
-    transform-origin: left;
-  }
-
-  .progress.paused .fill {
-    background: var(--muted);
-  }
-
-  .progress.estimated .fill {
-    opacity: 0.5;
-  }
+  /* The seek bar's own (its waveform, handle and lens): lib/SeekWave. */
 
   /* Finamp's buttons row: as wide as the controls, the buttons spread evenly. */
   .transport {

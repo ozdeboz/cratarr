@@ -8,6 +8,33 @@ import { binFrames, frames, scaled } from './mp3Frames';
 
 const waves = $state<Record<string, Uint8Array | null>>({});
 const asked = new Set<string>();
+/** How far a waveform being read has come, 0..1 (the owner, 2026-10-26: its line gets its gaps as it loads, a
+ *  progress bar of its own); gone once it is in. */
+const loading = $state<Record<string, number>>({});
+export const waveLoading = (source: string, id: string): number | null => loading[`${source}/${id}`] ?? null;
+
+/** A response's bytes, `onpart` told how far they have come (by its length, where it says one). */
+async function readAll(r: Response, onpart: (share: number) => void): Promise<Uint8Array> {
+  const total = Number(r.headers.get('content-length')) || 0;
+  if (!r.body || !total) return new Uint8Array(await r.arrayBuffer());
+  const reader = r.body.getReader();
+  const parts: Uint8Array[] = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    got += value.length;
+    onpart(Math.min(1, got / total));
+  }
+  const all = new Uint8Array(got);
+  let at = 0;
+  for (const p of parts) {
+    all.set(p, at);
+    at += p.length;
+  }
+  return all;
+}
 
 /** What the device read of a track it worked out itself (a Bandcamp preview's): its stream as its frames say. */
 export type Heard = { format: string; sample_rate_hz: number; channels: number; bitrate_kbps: number };
@@ -21,10 +48,12 @@ const SLICE = 16;
 /** A Bandcamp preview's waveform worked out on the device (the owner, 2026-10-25), as the server's analysis has it:
  *  its file read once, its frames found from their headers, decoded a slice of bins at a time, each bin's RMS. */
 async function analyse(key: string, url: string) {
+  loading[key] = 0;
   const r = await fetch(url);
   if (asksSignIn(r)) toSignIn();
   if (!r.ok) return null;
-  const bytes = new Uint8Array(await r.arrayBuffer());
+  // The file the first half of the way, its slices decoded the second.
+  const bytes = await readAll(r, (share) => (loading[key] = share / 2));
   const mp3 = frames(bytes);
   if (!mp3) return null;
   heard[key] = { format: 'MP3', sample_rate_hz: mp3.sampleRate, channels: mp3.channels, bitrate_kbps: mp3.bitrateKbps };
@@ -33,6 +62,7 @@ async function analyse(key: string, url: string) {
   const bins = binFrames(mp3.starts.length, BINS);
   const rms: number[] = [];
   for (let i = 0; i < bins.length; i += SLICE) {
+    loading[key] = 0.5 + i / bins.length / 2;
     const part = bins.slice(i, i + SLICE);
     const from = part[0][0];
     const to = part[part.length - 1][1];
@@ -64,25 +94,29 @@ export function loadWaveform(source: string, id: string) {
   const key = `${source}/${id}`;
   if (!asked.has(key) && source === BANDCAMP) {
     asked.add(key);
-    analyse(key, `/api/file/${encodeURIComponent(source)}/${encodeURIComponent(id)}`).then(
-      (w) => (waves[key] = w),
-      () => (waves[key] = null),
-    );
+    analyse(key, `/api/file/${encodeURIComponent(source)}/${encodeURIComponent(id)}`)
+      .then(
+        (w) => (waves[key] = w),
+        () => (waves[key] = null),
+      )
+      .finally(() => delete loading[key]);
   }
   if (!asked.has(key)) {
     asked.add(key);
+    loading[key] = 0;
     fetch(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/waveform`)
       .then((r) => {
         if (asksSignIn(r)) toSignIn();
-        return r.ok ? r.arrayBuffer() : null;
+        return r.ok ? readAll(r, (share) => (loading[key] = share)) : null;
       })
       .then(
-        (b) => (waves[key] = b && b.byteLength ? new Uint8Array(b) : null),
+        (b) => (waves[key] = b && b.byteLength ? b : null),
         () => {
           // Asked again the next time it shows.
           asked.delete(key);
         },
-      );
+      )
+      .finally(() => delete loading[key]);
   }
 }
 

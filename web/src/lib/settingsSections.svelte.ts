@@ -12,6 +12,7 @@ export type SettingsSection =
   | 'sync'
   | 'account'
   | 'import'
+  | 'serverimport'
   | 'appearance'
   | 'layout'
   | 'player'
@@ -40,6 +41,9 @@ export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; kep
   // owner, 2026-10-25).
   { id: 'radio', title: 'Radio and Autoplay', icon: 'radio', kept: 'personal' },
   { id: 'tracking', title: 'Tracking', icon: 'resume', kept: 'personal' },
+  // One's own listening from elsewhere (ListenBrainz, Last.fm, files) into one's own history, beside what is kept of it
+  // (the owner, 2026-10-26: importing is a personal concern, not the server's).
+  { id: 'import', title: 'Import', icon: 'intoBox', kept: 'personal' },
   // Device, in the owner's order: the device itself (named as Play On knows it; in a browser too), then how it reaches
   // Cratarr, what it keeps, and how it looks and lays out.
   { id: 'device', title: 'This device', icon: 'speaker', kept: 'device' },
@@ -57,7 +61,7 @@ export const SECTIONS: { id: SettingsSection; title: string; icon: IconName; kep
   { id: 'users', title: 'Users', icon: 'users', kept: 'server', admin: true },
   { id: 'auth', title: 'Authentication', icon: 'key', kept: 'server', admin: true },
   // Another server's plays and favourites into an account: its administrators' (listening is private).
-  { id: 'import', title: 'Import', icon: 'intoBox', kept: 'server', admin: true },
+  { id: 'serverimport', title: 'Import from a server', icon: 'intoBox', kept: 'server', admin: true },
   // What happened, as Cratarr keeps it (decision 0045).
   { id: 'diagnostics', title: 'Diagnostics', icon: 'list', kept: 'server', admin: true },
 ];

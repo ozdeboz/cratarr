@@ -33,6 +33,7 @@
     problemOf = () => null,
     onproblem = () => {},
     onaroundrefresh = null,
+    aroundbusy = false,
     status = (a) => a.request ?? null,
   }: {
     sec: Sections<DiscoverAlbum>;
@@ -49,8 +50,10 @@
     problemOf?: (a: DiscoverAlbum) => string | null;
     /** A red "!" tapped: the request's or the play's, said in a sheet (lib/ProblemSheet). */
     onproblem?: (a: DiscoverAlbum, what: 'request' | 'play') => void;
-    /** Around artists' refresh: on to other suggestions of theirs (the owner, 2026-10-26). */
+    /** Around artists' refresh: on to other artists (the owner, 2026-10-26). */
     onaroundrefresh?: (() => void) | null;
+    /** The next artists are being made: the refresh waits, the groups shown stay. */
+    aroundbusy?: boolean;
     /** Asked for: where it stands, on its cover (lib/CoverStatus). */
     status?: (a: DiscoverAlbum) => RequestMark | null;
   } = $props();
@@ -140,7 +143,7 @@
 <!-- Around the artists you play: the seeds in the middle, their suggestions in a masonry around them. -->
 {#if sec.around.length}
   <section aria-label="Around artists you play">
-    <SectionHead title={sec.around.length === 1 ? `Around ${[sec.around[0].seeds[0], sec.around[0].partner].filter(Boolean).join(' and ')}` : 'Around artists you play'} onrefresh={onaroundrefresh ?? undefined} />
+    <SectionHead title={sec.around.length === 1 ? `Around ${[sec.around[0].seeds[0], sec.around[0].partner].filter(Boolean).join(' and ')}` : 'Around artists you play'} onrefresh={onaroundrefresh ?? undefined} busy={aroundbusy} />
     <div class="arounds">
       {#each sec.around as g (g.seeds.join('|'))}
         {@const grid = g.grid}

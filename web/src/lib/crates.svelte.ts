@@ -32,7 +32,7 @@ export async function loadCrates() {
 // shows no favourites. A tap shows at once; the setting follows to the server.
 const pending: Record<string, CrateFavourites> = {};
 let saving: Promise<unknown> = Promise.resolve();
-export const favouritesOf = (id: string): CrateFavourites => crates.list?.find((c) => c.id === id)?.favourites ?? (genreOf(id) !== null ? 'all' : 'none');
+export const favouritesOf = (id: string): CrateFavourites => crates.list?.find((c) => c.id === id)?.favourites ?? (wordOf(id) !== null ? 'all' : 'none');
 /** Resolves when every tap so far (on either toggle) is on the server (Make playlist reads the settings there). */
 export const favouritesSaved = () => saving;
 /** How each setting shows, on the panel's toggle and the Crates page's rows: a variation on the heart. */
@@ -167,7 +167,7 @@ export const HOME_CRATES: Record<string, string> = { 'home:new': 'New for you', 
 export const homeCrate = (id: string | null) => !!id && id in HOME_CRATES;
 export const crateNameKnown = (id: string): string | null =>
   HOME_CRATES[id] ??
-  crates.list?.find((c) => c.id === id)?.name ?? genreOf(id) ?? likeNames[id] ?? (crates.list && !likeOf(id) ? id : null);
+  crates.list?.find((c) => c.id === id)?.name ?? wordOf(id)?.word ?? likeNames[id] ?? (crates.list && !likeOf(id) ? id : null);
 export const crateName = (id: string) => crateNameKnown(id) ?? id;
 
 // A crate's picture (decided 2026-10-16): its own, else its albums' covers (four as a mosaic, else the first), on its
@@ -195,6 +195,16 @@ export async function setCrateArt(id: string, file: Blob | null) {
 export const GENRE = 'genre:';
 export const genreOf = (crate: string | null) => (crate?.startsWith(GENRE) ? crate.slice(GENRE.length) : null);
 export const viewGenre = (name: string) => viewPlaylist(CRATE + GENRE + name);
+/** A word's crate (0.9.7, the harvest: the owner, 2026-10-26): as a genre's, for each kind of word (`crate:style:<w>`,
+ *  `crate:mood:<w>`, `crate:tag:<w>`), the server's crates::genre_crate making all four; found by the global search. */
+export const WORD_KINDS = ['genre', 'style', 'mood', 'tag'] as const;
+export type WordKind = (typeof WORD_KINDS)[number];
+export const WORD_LABEL: Record<WordKind, string> = { genre: 'Genre', style: 'Style', mood: 'Mood', tag: 'Tag' };
+export function wordOf(crate: string | null): { kind: WordKind; word: string } | null {
+  if (!crate) return null;
+  for (const kind of WORD_KINDS) if (crate.startsWith(`${kind}:`)) return { kind, word: crate.slice(kind.length + 1) };
+  return null;
+}
 
 /** A track or an album in the panel as a crate of what sounds like it (the owner, 2026-10-23: "just like genre"),
  *  made by the server when asked for (`crate:like:<id>`), never saved; reached from the track's or the album's menu. */
@@ -220,7 +230,7 @@ export function viewLike(id: string, count = LIKE_COUNT) {
   if (!likeNames[crate]) getCrate(crate).then((d) => (likeNames[crate] = d.name)).catch(() => {});
 }
 /** A crate the server makes from a seed (a genre, a track, an album): the library's, never one's own. */
-export const seeded = (crate: string | null) => genreOf(crate) !== null || likeOf(crate) !== null || homeCrate(crate);
+export const seeded = (crate: string | null) => wordOf(crate) !== null || likeOf(crate) !== null || homeCrate(crate);
 
 /** A new crate, named in the name sheet (as a new playlist is): the builder opens on a fresh draft of that name, saved
  *  only with its Save (a crate without conditions would hold the whole library). `conditions`: what it starts from (a

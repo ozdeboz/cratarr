@@ -10,6 +10,7 @@
   // while the bar is there (lib/TopPill). Left of it, where the bar has room, the queue (the owner, 2026-10-24): it opens
   // the queue's sheet, and answers tracks put in from elsewhere (lib/queueCue): list-start a moment for Play next,
   // list-end for Add to queue.
+  import { tick } from 'svelte';
   import { portal } from './portal';
   import Icon from './Icon.svelte';
   import OutputSheet from './OutputSheet.svelte';
@@ -22,14 +23,36 @@
   import { panel } from './panel.svelte';
   import { prefs } from './prefs.svelte';
   import Cover from './Cover.svelte';
-  import { art, clockText, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, position, send, toggleFavorite } from './remote.svelte';
+  import { art, clockText, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite } from './remote.svelte';
+  import { isLocal } from './output.svelte';
+  import SeekWave from './SeekWave.svelte';
+  import { Seek } from './seekState.svelte';
+  import { loadWaveform, waveformOf, waveLoading } from './waveforms.svelte';
 
   const np = $derived(playing());
   const src = $derived(shownCover());
   // A long press on the heart: the full player's sheet (lib/HeartSheet), its crate Excludes included.
   let heartMenu = $state(false);
-  const pos = $derived(position());
   const dur = $derived(duration());
+  // A long press anywhere but on a button grabs the waveform (the owner, 2026-10-26: as the full player's,
+  // lib/SeekWave): the bar is the waveform alone while held, its usual self again once let go.
+  const seek = new Seek(position, () => dur, seekTo);
+  const pos = $derived(seek.pos);
+  const canSeek = $derived(isLocal() && !!dur);
+  $effect(() => {
+    if (np) loadWaveform(np.source, np.id);
+  });
+  const wave = $derived(np ? waveformOf(np.source, np.id) : null);
+  let grabbing = $state(false);
+  /** The extra long press under way: the bar's words and buttons fade out over its second (the owner, 2026-10-26). */
+  let arming = $state(false);
+  let seekWave = $state<ReturnType<typeof SeekWave>>();
+  let grabTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Where the finger is, for the grab. */
+  let finger = { pointerId: 0, clientX: 0 };
+  /** An extra long press (the owner, 2026-10-26): the bar is swiped too, so twice a menu's long press, held still. */
+  const GRAB_MS = 1000;
+  $effect(() => () => clearTimeout(grabTimer));
   const share = $derived(dur ? Math.min(1, pos / dur) : 0);
   let outputOpen = $state(false);
   /** The bar's width from which the queue button has room beside the title. */
@@ -73,15 +96,35 @@
   let el = $state<HTMLElement>();
 
   function down(e: PointerEvent) {
+    if (grabbing) return;
     if ((e.target as Element).closest('.own')) return; // the play button, the device and the heart act on their own
     from = { x: e.clientX, y: e.clientY, id: e.pointerId, t: e.timeStamp };
     last = { x: e.clientX, t: e.timeStamp };
     speed = 0;
     moved = false;
+    finger = { pointerId: e.pointerId, clientX: e.clientX };
+    clearTimeout(grabTimer);
+    // Anywhere but on a button (those return above), the words included (the owner, 2026-10-26).
+    if (canSeek) {
+      grabTimer = setTimeout(grab, GRAB_MS);
+      arming = true;
+    }
+  }
+  /** Held still long enough: the waveform takes the bar and the finger (the swipe and the tap are off). */
+  async function grab() {
+    arming = false;
+    if (!from || moved) return;
+    from = null;
+    grabbing = true;
+    navigator.vibrate?.(8);
+    await tick();
+    seekWave?.grab(finger);
   }
   function move(e: PointerEvent) {
     if (!from || e.pointerId !== from.id) return;
+    finger = { pointerId: e.pointerId, clientX: e.clientX };
     const [mx, my] = [e.clientX - from.x, e.clientY - from.y];
+    if (Math.abs(mx) > 8 || Math.abs(my) > 8) (clearTimeout(grabTimer), (arming = false));
     if (!dragging && Math.abs(mx) > 8 && Math.abs(mx) > Math.abs(my)) {
       dragging = true;
       el?.setPointerCapture(e.pointerId);
@@ -103,6 +146,8 @@
   }
 
   function up(e: PointerEvent) {
+    clearTimeout(grabTimer);
+    arming = false;
     if (!from || e.pointerId !== from.id) return;
     const [mx, my] = [e.clientX - from.x, e.clientY - from.y];
     const width = el?.clientWidth ?? 300;
@@ -125,6 +170,7 @@
   <div
     class="mini"
     class:dragging
+    class:arming
     style:--art-accent={art.accent ?? 'var(--accent)'}
     style:--share={share}
     style:transform="translateX({dx}px)"
@@ -136,7 +182,7 @@
     onpointerdown={down}
     onpointermove={move}
     onpointerup={up}
-    onpointercancel={() => ((from = null), (dragging = false), (dx = 0))}
+    onpointercancel={() => (clearTimeout(grabTimer), (arming = false), (from = null), (dragging = false), (dx = 0))}
     onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), openPlayer())}
   >
     <div class="cover-wrap">
@@ -149,6 +195,12 @@
       >
     </div>
     <div class="body">
+      {#if grabbing}
+        <!-- The waveform alone while it is held (lib/SeekWave), the rest of the bar back once let go. -->
+        <div class="grab">
+          <SeekWave bind:this={seekWave} {seek} bins={wave} loading={waveLoading(np.source, np.id)} {dur} {canSeek} paused={paused()} room={el} onend={() => (grabbing = false)} />
+        </div>
+      {:else}
       <div class="fill" aria-hidden="true"></div>
       <div class="text">
         <div class="title">{np.name}</div>
@@ -177,6 +229,7 @@
           onclick={toggleFavorite}
           use:longpress={() => (heartMenu = true)}><Icon name="heart" size={28} /></button
         >
+      {/if}
       {/if}
     </div>
   </div>
@@ -210,8 +263,11 @@
     background: var(--surface);
     box-shadow: 0 4px 20px rgb(0 0 0 / 0.45);
     cursor: pointer;
-    touch-action: pan-y;
+    /* Every swipe the bar's own (the owner, 2026-10-26): with pan-y the browser took the upward ones to scroll and
+       cancelled them, so Swipe up never opened the player; and a hold drifting a little would lose its grab. */
+    touch-action: none;
     user-select: none;
+    -webkit-touch-callout: none;
     transition: transform 200ms linear, --art-accent 1s linear;
   }
 
@@ -262,6 +318,26 @@
     align-items: center;
     min-width: 0;
     background: color-mix(in srgb, var(--art-accent) 25%, var(--bg));
+  }
+
+  /* The extra long press under way: the words and buttons fade out over its second, after a moment (a tap does not
+     flicker); let go or swiped, they are back at once. */
+  .body > :global(*) {
+    transition: opacity 120ms ease-out;
+  }
+
+  .mini.arming .body > :global(*) {
+    opacity: 0;
+    transition: opacity 850ms linear 150ms;
+  }
+
+  /* The waveform alone across the bar while it is held (lib/SeekWave), clear of the cover. */
+  .grab {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    min-width: 0;
+    padding: 0 14px;
   }
 
   .fill {

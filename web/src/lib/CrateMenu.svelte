@@ -12,7 +12,7 @@
   import MenuEntry from './MenuEntry.svelte';
   import { crateRows, getCrate } from './api';
   import { inApp } from './app.svelte';
-  import { CRATE, EDIT_CRATE, crateArt, crateName, crateRadio, crates, deleteOwnCrate, genreOf, likeOf, playCrate, seeded, shuffleCrate, startCrate } from './crates.svelte';
+  import { CRATE, EDIT_CRATE, WORD_LABEL, crateArt, crateName, crateRadio, crates, deleteOwnCrate, genreOf, likeOf, playCrate, seeded, shuffleCrate, startCrate, wordOf } from './crates.svelte';
   import { isKept, setKept } from './kept.svelte';
   import { panel, viewPlaylist } from './panel.svelte';
   import { work } from './panelWork.svelte';
@@ -25,6 +25,8 @@
 
   const name = $derived(crateName(id));
   const genre = $derived(genreOf(id));
+  /** A style's, a mood's or a tag's (0.9.7): named by its kind, as a genre is. */
+  const word = $derived(wordOf(id));
   const crate = $derived(crates.list?.find((c) => c.id === id) ?? null);
   const like = $derived(likeOf(id));
   /** One's own (a permanent crate, a genre and what sounds like a track or an album are the library's). */
@@ -102,7 +104,7 @@
   {onclose}
   images={crateArt(id)}
   title={name}
-  chips={[genre !== null ? 'Genre' : like !== null ? 'Sounds like' : 'Crate', ...(tracks !== null ? [plural(tracks, 'track')] : [])]}
+  chips={[word !== null ? WORD_LABEL[word.kind] : like !== null ? 'Sounds like' : 'Crate', ...(tracks !== null ? [plural(tracks, 'track')] : [])]}
   actions={[
     { icon: 'play', label: 'Play', disabled: working, onclick: () => run(() => playCrate(id, name, 'play'), null, 'Could not start playing') },
     { icon: 'shuffle', label: 'Shuffle', disabled: working, onclick: () => run(() => shuffleCrate(id, name), null, 'Could not start playing') },

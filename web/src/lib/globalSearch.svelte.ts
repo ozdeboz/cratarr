@@ -18,6 +18,10 @@ const LIBRARY: { kind: SearchKind; label: string }[] = [
   { kind: 'playlist', label: 'Playlists' },
   { kind: 'crate', label: 'Crates' },
   { kind: 'genre', label: 'Genres' },
+  // The harvest's words (0.9.7; the owner, 2026-10-26: a group per kind), each opening its crate.
+  { kind: 'style', label: 'Styles' },
+  { kind: 'mood', label: 'Moods' },
+  { kind: 'tag', label: 'Tags' },
 ];
 const ELSEWHERE: { kind: SearchKind; label: string }[] = [
   { kind: 'missing', label: 'Not in your library' },

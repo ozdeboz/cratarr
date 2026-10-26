@@ -1,6 +1,7 @@
 import { track } from './progress.svelte';
 import { cue } from './queueCue.svelte';
 import type { SearchResult } from './search';
+import { coverStamps } from './coverStamps.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached } from './reach.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
@@ -967,7 +968,12 @@ export type TagRules = {
   artist_keep: string[];
   /** Genres containing a separator that are one genre ("Funk / Soul"). */
   genre_keep: string[];
+  /** Names given otherwise (0.9.7): one `from` an alias ("Hip-Hop" → "Hip Hop"), several a merge; in what the library
+   *  shows, in harvested words, and as a fix written into the files. */
+  genre_aliases?: TagAlias[];
+  artist_aliases?: TagAlias[];
 };
+export type TagAlias = { from: string[]; to: string };
 
 export type CatalogueStatus = {
   folders: { path: string; files: number }[];
@@ -1309,7 +1315,18 @@ export type HealthFinding = {
   items?: HealthItem[];
 };
 /** One thing a finding is about: an album (its server and id), a playlist, the files it names (at most 30). */
-export type HealthItem = { title: string; line?: string; album?: [string, string]; playlist?: string; files?: string[] };
+export type HealthItem = {
+  title: string;
+  line?: string;
+  album?: [string, string];
+  playlist?: string;
+  files?: string[];
+  /** An album missing tracks (0.9.7): those it lacks ("06 · Title", "Disc 2 · 03 · Title"), its release group to ask
+   *  for the whole album by, and its request where one is out. */
+  missing?: string[];
+  release_group?: string;
+  request?: RequestMark | null;
+};
 /** Every domain's findings, worst first, the most recent first among equals; when each domain was checked. */
 export const getHealthReport = () => request<{ findings: HealthFinding[]; checked: Record<string, number> }>('/api/health/report');
 
@@ -1389,13 +1406,14 @@ export const serverCoverUrl = (source: string, album: string) =>
       source === 'bandcamp'
       ? `/api/cover/bandcamp/${encodeURIComponent(album)}`
       : `/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/cover`;
-/** The album's cover as this device shows it: a picture chosen here, else the server's (read again: a new address).
- *  Cratarr's own library has no covers of a device's own (the owner, 2026-10-25: its administrators upload one for
- *  everyone instead), so one chosen here before is passed over. */
+/** The album's cover as this device shows it: a picture chosen here, else the server's, its address carrying the
+ *  cover's stamp (lib/coverStamps: a new cover, a new address, everywhere) and, just after a change made here, a round
+ *  of its own (until the stamp has come). Cratarr's own library has no covers of a device's own (the owner,
+ *  2026-10-25: its administrators upload one for everyone instead), so one chosen here before is passed over. */
 export const albumCoverUrl = (source: string, album: string) => {
   const key = coverKey(source, album);
-  const round = coverRounds[key];
-  return (source === 'cratarr' ? undefined : localCovers[key]) ?? `${serverCoverUrl(source, album)}${round ? `?v=${round}` : ''}`;
+  const v = [coverStamps[key], coverRounds[key]].filter(Boolean).join('-');
+  return (source === 'cratarr' ? undefined : localCovers[key]) ?? `${serverCoverUrl(source, album)}${v ? `?v=${v}` : ''}`;
 };
 /** How the owner used an album (decided 2026-10-16: the Library's orders and filters): its plays, when last played
  *  (epoch seconds), its rating (0: none). */
@@ -1581,6 +1599,28 @@ export const lookRenumber = (album: string) => post<Started>(`/api/albums/cratar
 /** Writes the numbers shown (the preview's `to`), Undo puts the old ones back. */
 export const renumber = (album: string, tracks: { id: string; disc: number; track: number }[], totals?: Renumbering['totals']) =>
   post<{ undo: string[] }>(`/api/albums/cratarr/${encodeURIComponent(album)}/renumber`, { tracks, totals });
+/** A fix Cratarr proposes for an album's tags (0.9.7, the administrators' metadata workflow; the owner, 2026-10-26:
+ *  Cratarr proposes, an administrator approves, written into the files with Undo): its field, the value now and the one
+ *  proposed, where that comes from, and how sure (`certain` ones may be applied as a list in one tap). */
+export type Fix = {
+  id: string;
+  album: string;
+  field: 'year' | 'genre' | 'albumartist' | 'musicbrainz' | 'cover' | 'rule';
+  from: string | null;
+  to: string;
+  source: string;
+  certainty: 'certain' | 'likely';
+  why: string;
+};
+export type Fixes = { fixes: Fix[]; certain: number; matching?: boolean };
+/** A Health finding's fixes, for every album of it (certain ones first); `matching`: MusicBrainz is still being asked
+ *  (ask again). */
+export const getFixes = (finding: string) => request<Fixes>(`/api/health/fixes?finding=${encodeURIComponent(finding)}`);
+/** An album's fixes wherever it is (Incoming's intake check, or Music). */
+export const getIntake = (source: string, album: string) => request<Fixes>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/intake`);
+/** Applies fixes (by id, or every certain one of a finding): what was applied, what failed and why, and Undo. */
+export const applyFixes = (which: { ids: string[] } | { certain: string }) =>
+  post<{ undo: string[]; applied: number; failed: { id: string; why: string }[] }>('/api/health/fixes/apply', which);
 /** A track as the server describes it (decision 0033, amended: the queue holds identities, Cratarr describes them; a5,
  *  0.9.6): `found` false for one it does not know (its name empty); `favorite` the signed-in account's, null for none. */
 export type DescribedTrack = {
@@ -1645,6 +1685,13 @@ export type DiscoverView = {
 };
 export const getDiscover = () => request<DiscoverView>('/api/discover');
 export const refreshDiscover = () => post<Started>('/api/discover/refresh', {});
+/** Around artists you play (0.9.7, the server's app::around; the owner, 2026-10-26: a refresh brings other artists,
+ *  from all those played): the three artists shown, their related artists' albums (Discover's cards, "Like <artist>"),
+ *  and whether the group is still being made (ask again). */
+export type AroundView = { seeds: string[]; albums: DiscoverAlbum[]; making: boolean };
+export const getAround = () => request<AroundView>('/api/discover/around');
+/** Around's Refresh: on to the three most played artists not shown yet (from the top again once all have been). */
+export const nextAround = () => post<AroundView>('/api/discover/around/next', {});
 /** Want: a request, handed to Lidarr at once where the account may (decision 0070). */
 export const wantDiscover = (key: string) => post<{ request: AlbumRequest }>('/api/discover/want', { key });
 
@@ -1836,7 +1883,7 @@ export type AlbumView = {
  *  item in lib/search's shape; a track's subject is its album's, the track itself in `track`. */
 /** What the server's search finds: the library's kinds, the account's playlists and crates, and what is not in the
  *  library (decision 0072, 7): albums missing from its artists, and what Discover leaves out. */
-export type SearchKind = 'album' | 'artist' | 'track' | 'genre' | 'playlist' | 'crate' | 'missing' | 'excluded';
+export type SearchKind = 'album' | 'artist' | 'track' | 'genre' | 'style' | 'mood' | 'tag' | 'playlist' | 'crate' | 'missing' | 'excluded';
 export type ServerSearch = {
   q: string;
   groups: Partial<Record<SearchKind, { total: number; items: (SearchResult & { track?: string })[] }>>;
@@ -1919,17 +1966,24 @@ export type ReplacePreview = {
   acquisition: boolean;
   /** The album's cover in Music and the new copy's (a5, 0.9.5), for Replace's keep-or-new. */
   covers?: { current: string | null; new: string | null };
+  /** How the new copy's tags differ from the album's (0.9.7): only the differences, a change the same on every track
+   *  once (`track` null). */
+  diff?: { track: string | null; field: string; old: string | null; new: string | null }[];
+  /** What the album had that the new copy lacks ("Year", "MusicBrainz ids", "3 fewer tags"…). */
+  lost?: string[];
+  /** What Replace and carry over brings into the new copy ("MusicBrainz ids", "Track numbers", "Cover"…). */
+  carry?: string[];
 };
 const replacePath = (source: string, album: string) =>
   `/api/incoming/replace/${encodeURIComponent(source)}/${encodeURIComponent(album)}`;
 export const replacePreview = (source: string, album: string, year?: string) =>
   request<ReplacePreview>(`${replacePath(source, album)}${year ? `?year=${encodeURIComponent(year)}` : ''}`);
 /** Replace the album in Music with an upgrade: the old files go to the trash (Undo brings them back). */
-export const replaceIncoming = (source: string, album: string, year?: string, cover?: 'keep' | 'new') =>
+export const replaceIncoming = (source: string, album: string, year?: string, cover?: 'keep' | 'new', carry = false) =>
   request<AlbumMoved>(replacePath(source, album), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...(year ? { year } : {}), ...(cover ? { cover } : {}) }),
+    body: JSON.stringify({ ...(year ? { year } : {}), ...(cover ? { cover } : {}), ...(carry ? { carry: true } : {}) }),
   });
 
 /** An album in the conversion queue: waiting, converting (`done` of `total` files), or just finished. */

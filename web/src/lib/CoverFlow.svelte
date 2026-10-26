@@ -46,6 +46,9 @@
   let pos = $state(0);
   let dragging = $state(false);
   const n = $derived(covers.length);
+  /** One cover alone (a panel's header too wide to show all of it, the owner 2026-10-26): it faces, nothing beside it,
+   *  nothing to move through (the covers would come round to it again on both sides). */
+  const single = $derived(n === 1);
   const wrap = (i: number) => ((i % n) + n) % n;
   const clamp = (x: number, a: number, b: number) => Math.max(a, Math.min(b, x));
 
@@ -111,6 +114,7 @@
   });
   const items = $derived.by(() => {
     if (!n) return [];
+    if (single) return [{ key: 0, src: covers[0], marked: !!marked?.[0], ...place(0) }];
     const base = Math.floor(pos);
     const out: (Place & { key: number; src: string; marked: boolean })[] = [];
     for (let k = base - front.sides - 1; k <= base + front.sides + 2; k++) {
@@ -175,6 +179,7 @@
     clearTimeout(hold);
     if (start.menu) return;
     start.moved = true;
+    if (single) return;
     dragging = true;
     pos = start.pos - dx / (front.w * 0.42);
   }
@@ -199,6 +204,7 @@
       pos = Math.round(pos);
       return;
     }
+    if (single) return void (onopen && tapX >= front.left && tapX <= front.left + front.w && onopen(0));
     if (onopen) {
       if (tapX < front.left) pos = Math.round(pos) - 1;
       else if (tapX > front.left + front.w) pos = Math.round(pos) + 1;
@@ -208,6 +214,7 @@
     pos = Math.round(pos) + 1;
   }
   function key(e: KeyboardEvent) {
+    if (single && e.key !== 'Enter') return;
     if (e.key === 'ArrowLeft') pos = Math.round(pos) - 1;
     else if (e.key === 'ArrowRight') pos = Math.round(pos) + 1;
     else if (e.key === 'Enter' && onopen) onopen(at);

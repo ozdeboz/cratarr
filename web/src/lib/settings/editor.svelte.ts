@@ -27,6 +27,7 @@ import {
   type Settings,
   type SourceConfig,
   type SourceView,
+  type TagAlias,
   type TagRules,
 } from '../api';
 import { settingsRead, settingsSaved } from '../settingsSections.svelte';
@@ -38,6 +39,14 @@ type ImportChoice = { user: string; account: string; what: ImportWhat };
 
 const clone = <T>(x: T): T => JSON.parse(JSON.stringify(x));
 const fromWords = (text: string) => text.split(/\s+/).filter(Boolean);
+/** Aliases as typed, a line each: "Hip-Hop → Hip Hop", "Electronica, Electronic Music → Electronic" (-> or = will do). */
+const fromAliases = (text: string): TagAlias[] =>
+  text
+    .split('\n')
+    .map((l) => l.split(/\s*(?:→|->|=>|=)\s*/))
+    .filter((p) => p.length === 2 && !!p[0].trim() && !!p[1].trim())
+    .map(([from, to]) => ({ from: from.split(',').map((f) => f.trim()).filter(Boolean), to: to.trim() }));
+const toAliases = (list: TagAlias[] | undefined) => (list ?? []).map((a) => `${a.from.join(', ')} → ${a.to}`).join('\n');
 const fromLines = (text: string) =>
   text
     .split('\n')
@@ -75,7 +84,7 @@ class SettingsEditor {
 
   // Saved with the servers: how tags are split. Edited as text (so Enter and spaces can be typed) and parsed when
   // compared or saved.
-  ruleText = $state({ artistSeps: '', genreSeps: '', artistKeep: '', genreKeep: '' });
+  ruleText = $state({ artistSeps: '', genreSeps: '', artistKeep: '', genreKeep: '', genreAliases: '', artistAliases: '' });
   cat = $state<CatalogueStatus | null>(null);
   trashDays = $state(14);
 
@@ -114,6 +123,8 @@ class SettingsEditor {
     genre_separators: fromWords(this.ruleText.genreSeps),
     artist_keep: fromLines(this.ruleText.artistKeep),
     genre_keep: fromLines(this.ruleText.genreKeep),
+    genre_aliases: fromAliases(this.ruleText.genreAliases),
+    artist_aliases: fromAliases(this.ruleText.artistAliases),
   });
   lidarrChanged = $derived(
     !!this.s &&
@@ -167,6 +178,8 @@ class SettingsEditor {
       genreSeps: next.tag_rules.genre_separators.join(' '),
       artistKeep: next.tag_rules.artist_keep.join('\n'),
       genreKeep: next.tag_rules.genre_keep.join('\n'),
+      genreAliases: toAliases(next.tag_rules.genre_aliases),
+      artistAliases: toAliases(next.tag_rules.artist_aliases),
     };
     this.cat = next.catalogue;
     this.lid = {

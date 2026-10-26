@@ -9,7 +9,7 @@
   // the pill (ui-conventions, A page's work in its pill); Look again there asks again now. Without a service connected,
   // a line says what one would add.
   import ProblemSheet from './lib/ProblemSheet.svelte';
-  import { getDiscover, hideDiscover, notDiscover, refreshDiscover, wantDiscover, type AlbumRequest, type DiscoverAlbum, type DiscoverView } from './lib/api';
+  import { getAround, getDiscover, hideDiscover, nextAround, notDiscover, refreshDiscover, wantDiscover, type AlbumRequest, type AroundView, type DiscoverAlbum, type DiscoverView } from './lib/api';
   import Cover from './lib/Cover.svelte';
   import CoverPlay from './lib/CoverPlay.svelte';
   import CoverStatus from './lib/CoverStatus.svelte';
@@ -140,9 +140,52 @@
     const r = view?.requests?.[key];
     return !!r && (r.status === 'pending' || r.status === 'approved');
   };
-  /** Around artists' refreshes (its heading's button): each on to other suggestions of theirs. */
+  // Around artists you play from the server (0.9.7): its three artists and their related artists' albums; a Refresh
+  // goes on to the next three (the owner, 2026-10-26: not the same artists reshuffled). The group shown is always a
+  // whole one: one still being made is asked for again, the one before staying until it is in (one change, at once).
+  // Null: none yet, or a server before 0.9.7 (`aroundOld`: the masonry from Discover's own list, refreshed by turning).
+  let around = $state<AroundView | null>(null);
+  let aroundOld = $state(false);
+  let aroundBusy = $state(false);
+  let aroundWait: ReturnType<typeof setTimeout> | undefined;
+  async function askAround(next = false) {
+    clearTimeout(aroundWait);
+    try {
+      const a = next ? await nextAround() : await getAround();
+      if (a.making) {
+        aroundWait = setTimeout(() => void askAround(), 2000);
+        return;
+      }
+      around = a;
+    } catch {
+      aroundOld = !around;
+    }
+    aroundBusy = false;
+  }
+  $effect(() => {
+    void askAround();
+    return () => clearTimeout(aroundWait);
+  });
+  function refreshAround() {
+    if (aroundOld) return void aroundRound++;
+    if (aroundBusy) return;
+    aroundBusy = true;
+    void askAround(true);
+  }
+  /** The old server's refreshes: each on to other suggestions of the same artists. */
   let aroundRound = $state(0);
-  const sec = $derived(sections(albums, { aroundCols, aroundRound }, (s) => mine.pickSkip.includes(s.key) || !!s.request || askedFor(s.key)));
+  // Its albums as the page's other cards are: not hidden, through the filter and the search.
+  const aroundShown = $derived(
+    around
+      ? {
+          seeds: around.seeds,
+          albums: around.albums.filter((a) => !gone.includes(a.key) && passes(a) && matchesSearch(a.album, a.artist, a.kind, a.year?.toString(), ...(a.genres ?? []), ...a.why)),
+        }
+      : null,
+  );
+  const sec = $derived(
+    sections(albums, { aroundCols, aroundRound }, (s) => mine.pickSkip.includes(s.key) || !!s.request || askedFor(s.key), aroundOld ? null : (aroundShown ?? { seeds: [], albums: [] })),
+  );
   // More for you made as it comes near (lib/nearBlocks, as the Library's albums; the owner, 2026-10-25): blocks of six
   // whole rows of its grid (cards of 340 px at least, 12 px apart).
   const blocks = new NearBlocks();
@@ -289,7 +332,7 @@
       {#if me.admin && !view.lidarr}
         <p class="note">Want needs Lidarr: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>
       {/if}
-      <DiscoverSections {sec} {facts} owned={(name) => ownedBy.get(name.toLowerCase()) ?? 0} onopen={tap} onmenu={(a) => (opened = a)} onplay={preview} {previewing} {problemOf} {onproblem} onaroundrefresh={() => aroundRound++} status={(a) => a.request ?? markOf(view?.requests?.[a.key])} />
+      <DiscoverSections {sec} {facts} owned={(name) => ownedBy.get(name.toLowerCase()) ?? 0} onopen={tap} onmenu={(a) => (opened = a)} onplay={preview} {previewing} {problemOf} {onproblem} onaroundrefresh={refreshAround} aroundbusy={aroundBusy} status={(a) => a.request ?? markOf(view?.requests?.[a.key])} />
       {#if sec.rest.length}<SectionHead title="More for you" />{/if}
       {#each restBlocks as block, bi (`${restCols}:${bi}`)}
       {@const key = `${restCols}:${bi}`}
