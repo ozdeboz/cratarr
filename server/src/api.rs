@@ -117,6 +117,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/kept", post(kept_ask))
         .route("/api/albums/{source}/{album}/cover", get(album_cover))
         .route("/api/covers/release-group/{rg}", get(release_group_cover))
+        .route("/api/covers/stamps", get(cover_stamps))
         .route("/api/albums/{source}/{album}/similar", get(similar_albums))
         .route("/api/albums/{source}/{album}/play", post(play_album))
         .route("/api/albums/{source}/{album}/favorite", post(album_favorite))
@@ -752,7 +753,8 @@ async fn cover(State(app): State<Arc<App>>, Path((source, id)): Path<(String, St
         return bandcamp_cover(&id).await;
     }
     let inm = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok());
-    let cache = (header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=86400"));
+    // Asked again each time, answered by its ETag (0.9.7): a changed cover shows at once, an unchanged one costs a 304.
+    let cache = (header::CACHE_CONTROL, HeaderValue::from_static("public, no-cache"));
     let tag = |etag: &str| HeaderValue::from_str(etag).unwrap_or(HeaderValue::from_static("\"\""));
     match app.playing.cover(&source, &id, inm).await {
         Outcome::NotFound => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
@@ -2505,14 +2507,37 @@ async fn cancel_job(State(app): State<Arc<App>>, Path(id): Path<u64>) -> Result<
     Ok(Json(app.incoming.cancel(id).await?))
 }
 
-async fn album_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Response {
+#[derive(Deserialize)]
+struct CoverStamp {
+    #[serde(default)]
+    v: Option<String>,
+}
+
+/// An album's cover. Asked by its stamp (`?v=`, 0.9.7): kept for good, a changed cover having another address; else
+/// for an hour (another server's album, a device's picture).
+async fn album_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>, Query(q): Query<CoverStamp>) -> Response {
     match app.playing.album_cover(&source, &album).await {
         Some((content_type, bytes)) => {
             let ct = HeaderValue::from_str(&content_type).unwrap_or(HeaderValue::from_static("application/octet-stream"));
-            ([(header::CONTENT_TYPE, ct), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=3600"))], bytes).into_response()
+            let keep = if q.v.is_some_and(|v| !v.is_empty()) { "private, max-age=31536000, immutable" } else { "private, max-age=3600" };
+            ([(header::CONTENT_TYPE, ct), (header::CACHE_CONTROL, HeaderValue::from_static(keep))], bytes).into_response()
         }
         None => (StatusCode::NOT_FOUND, Json(json!({ "error": "no cover" }))).into_response(),
     }
+}
+
+/// Every album's cover stamp in Cratarr's own library (0.9.7), as `{"<source>/<album>": "<stamp>"}`: the page puts it
+/// on each cover's address; the live channel's `cover` tells it of changes.
+async fn cover_stamps(State(app): State<Arc<App>>) -> Json<serde_json::Value> {
+    let Some(serve) = crate::serve::instance() else { return Json(json!({})) };
+    let stamps = tokio::task::spawn_blocking(move || serve.cover_stamps()).await.unwrap_or_default();
+    let mut out = serde_json::Map::new();
+    for source in app.library.own_sources() {
+        for (album, v) in stamps.iter() {
+            out.insert(format!("{source}/{album}"), json!(v));
+        }
+    }
+    Json(serde_json::Value::Object(out))
 }
 
 async fn repairs(State(app): State<Arc<App>>) -> Result<Json<Repairs>, ApiError> {

@@ -838,6 +838,22 @@ impl Library {
 
     /// What an album's art is found from: (catalogue folder, its folder in it, its cover id, its first track's path in
     /// the catalogue folder).
+    /// Every album's cover stamp (0.9.7): its art's fingerprint, from its cover id (`<album>_<print>`); an album
+    /// without a cover has none.
+    pub fn cover_stamps(&self) -> Result<std::collections::HashMap<String, String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT id, cover FROM albums WHERE cover IS NOT NULL")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        let mut out = std::collections::HashMap::new();
+        for row in rows {
+            let (id, cover) = row?;
+            if let Some(print) = cover.strip_prefix(&format!("{id}_")).filter(|p| !p.is_empty()) {
+                out.insert(id, print.to_string());
+            }
+        }
+        Ok(out)
+    }
+
     pub fn album_art(&self, album: &str) -> Result<Option<(i64, String, Option<String>, Option<String>)>> {
         let db = self.db();
         let mut st = db.prepare_cached("SELECT folder, dir, cover FROM albums WHERE id = ?1")?;

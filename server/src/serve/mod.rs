@@ -100,6 +100,27 @@ pub struct Serve {
     pub now_playing: queues::Sessions,
     /// Cratarr's Incoming, once the app is up (`set_incoming`): promote and reject are its Keep and Delete.
     incoming: std::sync::OnceLock<Arc<crate::app::IncomingService>>,
+    /// Each album's cover stamp (0.9.7, `cover_stamps`), as of the last build; read from the library when first asked.
+    stamps: RwLock<Option<Arc<std::collections::HashMap<String, String>>>>,
+    /// The covers a build changed (`subscribe_covers`).
+    covers: tokio::sync::broadcast::Sender<Arc<Vec<CoverChange>>>,
+}
+
+/// An album's cover changed (0.9.7): its new stamp, none where it has no cover now. The live channel tells the pages
+/// (app/events.rs `cover`), which ask for its cover again by the new stamp.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct CoverChange {
+    pub album: String,
+    pub v: Option<String>,
+}
+
+/// The albums whose stamp differs between two builds, by id (none where the cover went).
+fn cover_changes(before: &std::collections::HashMap<String, String>, now: &std::collections::HashMap<String, String>) -> Vec<CoverChange> {
+    let mut out: Vec<CoverChange> =
+        now.iter().filter(|(id, v)| before.get(*id) != Some(*v)).map(|(id, v)| CoverChange { album: id.clone(), v: Some(v.clone()) }).collect();
+    out.extend(before.keys().filter(|id| !now.contains_key(*id)).map(|id| CoverChange { album: id.clone(), v: None }));
+    out.sort_by(|a, b| a.album.cmp(&b.album));
+    out
 }
 
 fn now() -> i64 {
@@ -146,6 +167,8 @@ impl Serve {
             held: Default::default(),
             now_playing: Default::default(),
             incoming: Default::default(),
+            stamps: Default::default(),
+            covers: tokio::sync::broadcast::channel(16).0,
         }))
     }
 
@@ -304,9 +327,45 @@ impl Serve {
         // id, and a poke is a full pass of the folders), and tell those who keep what it listed.
         if change == library::Change::Songs {
             self.catalogue().poke();
+            self.covers_built();
         }
         self.built.send_replace(at);
         Ok(true)
+    }
+
+    /// Every album's cover stamp (0.9.7): the page puts it on each cover's address, which may then be kept for good.
+    pub fn cover_stamps(&self) -> Arc<std::collections::HashMap<String, String>> {
+        if let Some(s) = self.stamps.read().unwrap_or_else(|p| p.into_inner()).as_ref() {
+            return s.clone();
+        }
+        let read = Arc::new(self.library.cover_stamps().unwrap_or_else(|e| {
+            tracing::warn!(target: "library", reason = %format!("{e:#}"), "cover stamps not read");
+            Default::default()
+        }));
+        *self.stamps.write().unwrap_or_else(|p| p.into_inner()) = Some(read.clone());
+        read
+    }
+
+    /// Every change of an album's cover from now on, a build's at once.
+    pub fn subscribe_covers(&self) -> tokio::sync::broadcast::Receiver<Arc<Vec<CoverChange>>> {
+        self.covers.subscribe()
+    }
+
+    /// After a build: the stamps read again, and the covers that changed told (none before any page asked for them).
+    fn covers_built(&self) {
+        let now = match self.library.cover_stamps() {
+            Ok(s) => Arc::new(s),
+            Err(e) => {
+                tracing::warn!(target: "library", reason = %format!("{e:#}"), "cover stamps not read");
+                return;
+            }
+        };
+        let before = self.stamps.write().unwrap_or_else(|p| p.into_inner()).replace(now.clone());
+        let Some(before) = before else { return };
+        let changes = cover_changes(&before, &now);
+        if !changes.is_empty() {
+            let _ = self.covers.send(Arc::new(changes));
+        }
     }
 
     /// Keeps the library in step with the catalogue, in the background. The first check waits a little, so it does not
@@ -433,5 +492,21 @@ impl Serve {
             Some(s) => (head("image/jpeg"), s).into_response(),
             None => (head(&ct), bytes).into_response(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cover_changed_new_or_gone_is_told_an_unchanged_one_is_not() {
+        let map = |pairs: &[(&str, &str)]| pairs.iter().map(|(a, v)| (a.to_string(), v.to_string())).collect::<std::collections::HashMap<_, _>>();
+        let before = map(&[("al-1", "aaaa"), ("al-2", "bbbb"), ("al-3", "cccc")]);
+        let now = map(&[("al-1", "aaaa"), ("al-2", "dddd"), ("al-4", "eeee")]);
+        let told = cover_changes(&before, &now);
+        let one = |album: &str, v: Option<&str>| CoverChange { album: album.into(), v: v.map(Into::into) };
+        assert_eq!(told, vec![one("al-2", Some("dddd")), one("al-3", None), one("al-4", Some("eeee"))]);
+        assert!(cover_changes(&now, &now).is_empty());
     }
 }
