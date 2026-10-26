@@ -790,6 +790,9 @@ impl Facts {
         Track {
             genres: self.genres.iter().map(|g| intern(2, g)).collect(),
             styles: self.styles.iter().map(|x| intern(3, x)).collect(),
+            // The library's words that are tags (0.9.7: the household's album tags among them, with Last.fm's,
+            // MusicBrainz's and the files' grouping).
+            tags: self.tags.iter().map(|x| intern(4, x)).collect(),
             year: self.year.filter(|y| y.is_finite() && *y > 0.0).map(|y| y as u32),
             bpm: self.bpm.filter(|b| b.is_finite() && *b > 0.0).map(|b| b as f32),
             energy: self.energy.map(|e| (e / 100.0) as f32),
@@ -1155,8 +1158,8 @@ pub fn resolved_in(conditions: &[Condition], alike: &Alike, among: &[&Facts], by
 pub struct Alike {
     lib: Library,
     tracks: Vec<Track>,
-    /// The names by their numbers, per kind (0 playlists, 1 artists, 2 genres, 3 styles), as first spelled.
-    names: [Vec<String>; 4],
+    /// The names by their numbers, per kind (0 playlists, 1 artists, 2 genres, 3 styles, 4 tags), as first spelled.
+    names: [Vec<String>; 5],
     /// Each file's place, by its line.
     place: HashMap<String, usize>,
     /// Each file's place, by its track in the catalogue.
@@ -1166,8 +1169,8 @@ pub struct Alike {
 impl Alike {
     /// From the files and the playlists holding each line.
     pub fn of(all: &[Facts], membership: &HashMap<String, Vec<String>>) -> Self {
-        let mut numbers: [HashMap<String, u32>; 4] = Default::default();
-        let mut names: [Vec<String>; 4] = Default::default();
+        let mut numbers: [HashMap<String, u32>; 5] = Default::default();
+        let mut names: [Vec<String>; 5] = Default::default();
         let mut intern = |kind: usize, name: &str| {
             let key = name.trim().to_lowercase();
             let next = numbers[kind].len() as u32;
@@ -1196,7 +1199,7 @@ impl Alike {
         crate::similarity::Profile::of_weighted(&self.lib, set, |i| &self.tracks[i])
     }
 
-    /// A word's name: its kind (`Signal::Playlists`, `Artists`, `Genres`, `Styles`) and number.
+    /// A word's name: its kind (`Signal::Playlists`, `Artists`, `Genres`, `Styles`, `Tags`) and number.
     pub fn name(&self, kind: crate::similarity::Signal, id: u32) -> Option<&str> {
         use crate::similarity::Signal;
         let k = match kind {
@@ -1204,6 +1207,7 @@ impl Alike {
             Signal::Artists => 1,
             Signal::Genres => 2,
             Signal::Styles => 3,
+            Signal::Tags => 4,
             _ => return None,
         };
         self.names[k].get(id as usize).map(String::as_str)
