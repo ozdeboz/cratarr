@@ -113,6 +113,8 @@ pub struct Word {
     pub word: String,
     pub kind: &'static str,
     pub weight: f32,
+    /// The sources that said it (musicbrainz, discogs, lastfm, files, household), each once.
+    pub sources: Vec<String>,
 }
 
 /// The library's words by album id.
@@ -152,7 +154,7 @@ pub fn merge(said: &[Said]) -> Merged {
     let mood_said: HashSet<String> = said.iter().filter(|s| s.raw_kind == "mood").map(|s| key(&s.word)).collect();
     // Each key's spellings, the most used shown.
     let mut spellings: HashMap<String, HashMap<&str, usize>> = HashMap::new();
-    let mut weights: HashMap<(&str, String), f32> = HashMap::new();
+    let mut weights: HashMap<(&str, String), (f32, Vec<String>)> = HashMap::new();
     for s in said {
         let k = key(&s.word);
         if k.is_empty() {
@@ -161,7 +163,11 @@ pub fn merge(said: &[Said]) -> Merged {
         *spellings.entry(k.clone()).or_default().entry(s.word.as_str()).or_default() += 1;
         let w = s.weight.clamp(0.0, 1.0) * trust(&s.source, &s.raw_kind);
         for a in &s.albums {
-            *weights.entry((a.as_str(), k.clone())).or_default() += w;
+            let e = weights.entry((a.as_str(), k.clone())).or_default();
+            e.0 += w;
+            if !e.1.contains(&s.source) {
+                e.1.push(s.source.clone());
+            }
         }
     }
     let shown: HashMap<String, String> = spellings
@@ -172,13 +178,13 @@ pub fn merge(said: &[Said]) -> Merged {
         })
         .collect();
     let mut albums: HashMap<String, Vec<Word>> = HashMap::new();
-    for ((album, k), w) in weights {
+    for ((album, k), (w, sources)) in weights {
         let w = w.min(1.0);
         if w < FLOOR {
             continue;
         }
         let kind = kind_of(&k, mood_said.contains(&k));
-        albums.entry(album.to_string()).or_default().push(Word { word: shown.get(&k).cloned().unwrap_or(k), kind, weight: w });
+        albums.entry(album.to_string()).or_default().push(Word { word: shown.get(&k).cloned().unwrap_or(k), kind, weight: w, sources });
     }
     for words in albums.values_mut() {
         words.sort_by(|a, b| b.weight.total_cmp(&a.weight).then_with(|| a.word.cmp(&b.word)));

@@ -319,7 +319,7 @@ async fn discogs(rg: Option<&str>, artist: &str, title: &str, tell: &(dyn Fn(u64
 
 // ---- The look and the writing
 
-fn tracks_of(album: &str) -> Result<(Vec<Track>, Option<String>, String, String)> {
+pub(super) fn tracks_of(album: &str) -> Result<(Vec<Track>, Option<String>, String, String)> {
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     let (folder, _, mbid, artist, name) = served.library.album_place(album)?.context("No such album in Cratarr's own library")?;
     let root = served.library.roots().into_iter().find(|(f, _)| *f == folder).map(|(_, r)| r).context("Its library is not there")?;

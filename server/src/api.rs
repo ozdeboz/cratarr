@@ -236,6 +236,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/albums/{source}/{album}/covers/look", post(look_album_covers))
             .route("/api/albums/{source}/{album}/renumber/look", post(look_renumber))
             .route("/api/albums/{source}/{album}/renumber", post(renumber_album))
+            .route("/api/health/fixes", get(health_fixes))
+            .route("/api/health/fixes/apply", post(apply_fixes))
             .route("/api/settings/naming", get(naming))
             .route("/api/catalogue", get(catalogue_status))
             .route("/api/health/report", get(health_report))
@@ -2800,6 +2802,8 @@ async fn undo(State(app): State<Arc<App>>, Json(req): Json<UndoRequest>) -> Resu
             crate::app::covers::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         } else if token.starts_with(crate::app::renumber::UNDO) {
             crate::app::renumber::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        } else if token.starts_with(crate::app::fixes::UNDO) {
+            crate::app::fixes::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         } else {
             restored.push(app.incoming.undo(token).await?);
         }
@@ -4463,6 +4467,43 @@ async fn renumber_album(Path((source, album)): Path<(String, String)>, Json(b): 
     own_album(&source)?;
     let token = crate::app::renumber::apply(&album, b).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!({ "undo": [token] })))
+}
+
+#[derive(Deserialize)]
+struct FixesOf {
+    finding: String,
+}
+
+/// A Health finding's fixes (0.9.7, `app::fixes`): each album's, the certain first, and how many are certain.
+async fn health_fixes(State(app): State<Arc<App>>, Query(q): Query<FixesOf>) -> Result<Json<serde_json::Value>, ApiError> {
+    let fixes = crate::app::fixes::of_finding(&app, &q.finding).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let certain = fixes.iter().filter(|f| f.certainty == "certain").count();
+    Ok(Json(json!({ "fixes": fixes, "certain": certain })))
+}
+
+/// Fixes to apply: these (`ids`), or every certain one of a finding (`certain`: its key).
+#[derive(Deserialize)]
+struct ApplyFixes {
+    #[serde(default)]
+    ids: Vec<String>,
+    #[serde(default)]
+    certain: Option<String>,
+}
+
+/// Fixes written into the files (0.9.7, an administrator's tap): `{undo: [token], applied, failed: [{id, why}]}`.
+async fn apply_fixes(State(app): State<Arc<App>>, Json(b): Json<ApplyFixes>) -> Result<Json<serde_json::Value>, ApiError> {
+    let refused = |e: anyhow::Error| ToggleError::Refused(format!("{e:#}"));
+    let fixes = match &b.certain {
+        Some(finding) => crate::app::fixes::of_finding(&app, finding).await.map_err(refused)?.into_iter().filter(|f| f.certainty == "certain").collect(),
+        None => crate::app::fixes::by_ids(&app, &b.ids).await.map_err(refused)?,
+    };
+    if fixes.is_empty() {
+        return Err(ToggleError::Refused("Nothing to fix: look again".into()).into());
+    }
+    let n = fixes.len();
+    let (token, failed) = crate::app::fixes::apply(fixes).await.map_err(refused)?;
+    let failed: Vec<serde_json::Value> = failed.into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect();
+    Ok(Json(json!({ "undo": [token], "applied": n, "failed": failed })))
 }
 
 #[derive(Deserialize)]
