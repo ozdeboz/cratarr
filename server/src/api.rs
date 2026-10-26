@@ -2079,6 +2079,10 @@ struct StreamFrom {
     /// `opus`: a lossless track as Opus (a phone's stream, the owner 2026-10-24); a lossy one comes as it is.
     #[serde(default, rename = "as")]
     as_: Option<String>,
+    /// The stream from its start kept whole (0.9.8, the installed web app's offline play): a length and ranges, the
+    /// same bytes and headers; a conflict while it is still being made (`offline/prepare` says when it is ready).
+    #[serde(default)]
+    whole: Option<u8>,
 }
 
 /// A track's audio for the local player (decision 0022): FLAC as fragmented MP4, MP3 as it is, read from Cratarr's own
@@ -2255,9 +2259,31 @@ const OFFLINE_MOST: usize = 500;
 #[derive(Deserialize)]
 struct OfflineTracks {
     tracks: Vec<TrackRefOf>,
-    /// "opus" (the default: lossless as its Opus copy, the rest as it is) or "original".
+    /// "opus" (the default: lossless as its Opus copy, the rest as it is), "original", or "stream": the form the
+    /// browser player streams (`/api/stream`), kept whole (`?whole=1`), with `opus` for a lossless track as Opus.
     #[serde(default, rename = "as")]
     as_: Option<String>,
+    #[serde(default)]
+    opus: bool,
+}
+
+/// What form an offline call asks for.
+#[derive(Clone, Copy)]
+enum OfflineAs {
+    /// The file (`/api/file`), lossless as its Opus copy where `opus`.
+    File { opus: bool },
+    /// The browser player's stream kept whole, lossless as Opus where `opus`.
+    Stream { opus: bool },
+}
+
+impl OfflineTracks {
+    fn form(&self) -> OfflineAs {
+        match self.as_.as_deref() {
+            Some("stream") => OfflineAs::Stream { opus: self.opus },
+            Some("original") => OfflineAs::File { opus: false },
+            _ => OfflineAs::File { opus: true },
+        }
+    }
 }
 
 #[derive(Deserialize, Clone)]
@@ -2268,14 +2294,34 @@ struct TrackRefOf {
 
 /// A track's file as a device keeps it for offline play: where to fetch it, as what, and whether it is ready (a copy
 /// being made has no length yet: the device waits for it).
-async fn offline_file(app: &App, t: &TrackRefOf, opus: bool) -> serde_json::Value {
+async fn offline_file(app: &App, t: &TrackRefOf, form: OfflineAs) -> serde_json::Value {
     if t.source == crate::bandcamp::SOURCE {
         return json!({ "source": t.source, "id": t.id, "offline": false });
     }
     let cat = app.library.catalogue();
     let (source, id) = (t.source.clone(), t.id.clone());
-    let Some((path, ..)) = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten() else {
+    let Some((path, kind, _)) = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten() else {
         return json!({ "source": t.source, "id": t.id, "offline": false, "error": "That track is not in the library." });
+    };
+    let opus = match form {
+        OfflineAs::File { opus } => opus,
+        OfflineAs::Stream { opus } => {
+            let url = format!("/api/stream/{}/{}?whole=1{}", form_urlencoded_segment(&t.source), form_urlencoded_segment(&t.id), if opus { "&as=opus" } else { "" });
+            let Some(sf) = stream_form(&path, kind, opus).await else {
+                // An MP3 streams as it is.
+                let bytes = tokio::fs::metadata(&path).await.ok().map(|m| m.len());
+                return json!({ "source": t.source, "id": t.id, "offline": true, "file": { "url": url, "type": "audio/mpeg", "as": "stream", "ready": true, "bytes": bytes } });
+            };
+            let kept = match &app.opus_copies {
+                Some(copies) => copies.prepare_stream(path, sf).await,
+                None => None,
+            };
+            let Some(kept) = kept else {
+                return json!({ "source": t.source, "id": t.id, "offline": false, "error": "Cratarr cannot keep this track." });
+            };
+            let kind = if matches!(sf, crate::opus_copies::Form::Opus { .. }) { "audio/mp4; codecs=\"opus\"" } else { "audio/mp4" };
+            return json!({ "source": t.source, "id": t.id, "offline": true, "file": { "url": url, "type": kind, "as": "stream", "ready": kept.is_some(), "bytes": kept } });
+        }
     };
     let base = format!("/api/file/{}/{}", form_urlencoded_segment(&t.source), form_urlencoded_segment(&t.id));
     if opus && let Some(copies) = &app.opus_copies {
@@ -2310,10 +2356,10 @@ async fn offline_prepare(State(app): State<Arc<App>>, Json(b): Json<OfflineTrack
     if b.tracks.len() > OFFLINE_MOST {
         return Err(ToggleError::Refused(format!("At most {OFFLINE_MOST} tracks at once.")).into());
     }
-    let opus = b.as_.as_deref() != Some("original");
+    let form = b.form();
     let mut out = Vec::with_capacity(b.tracks.len());
     for t in &b.tracks {
-        out.push(offline_file(&app, t, opus).await);
+        out.push(offline_file(&app, t, form).await);
     }
     Ok(Json(json!({ "tracks": out })))
 }
@@ -2325,7 +2371,7 @@ async fn offline_facts(State(app): State<Arc<App>>, Json(b): Json<OfflineTracks>
     if b.tracks.len() > OFFLINE_MOST {
         return Err(ToggleError::Refused(format!("At most {OFFLINE_MOST} tracks at once.")).into());
     }
-    let opus = b.as_.as_deref() != Some("original");
+    let form = b.form();
     let own: Vec<String> = b.tracks.iter().filter(|t| t.source == crate::source::cratarr::KIND.id).map(|t| t.id.clone()).collect();
     let (rows, stamps) = match crate::serve::instance() {
         Some(served) => tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
@@ -2343,7 +2389,7 @@ async fn offline_facts(State(app): State<Arc<App>>, Json(b): Json<OfflineTracks>
     let rows: std::collections::HashMap<String, crate::serve::read::TrackRow> = rows.into_iter().map(|r| (r.id.clone(), r)).collect();
     let mut out = Vec::with_capacity(b.tracks.len());
     for t in &b.tracks {
-        let mut v = offline_file(&app, t, opus).await;
+        let mut v = offline_file(&app, t, form).await;
         if v["offline"] != json!(true) {
             out.push(v);
             continue;
@@ -2427,7 +2473,7 @@ impl std::io::Write for ChannelWriter {
     }
 }
 
-async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<StreamFrom>) -> Response {
+async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<StreamFrom>, headers: HeaderMap) -> Response {
     use crate::stream::{FlacToMp4, Kind};
     if source == crate::bandcamp::SOURCE {
         // Its MP3 as it is; a moment to start at, as the place in the file it is at (128 kb/s throughout).
@@ -2439,6 +2485,9 @@ async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, S
     let Some((path, kind, duration_ms)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
+    if q.whole == Some(1) {
+        return whole_stream(&app, path, kind, duration_ms, q.as_.as_deref() == Some("opus"), &headers).await;
+    }
     if q.as_.as_deref() == Some("opus")
         && let Some(opus) = opus_stream(path.clone(), q.from_ms, false).await
     {
@@ -2496,8 +2545,15 @@ async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, S
                 headers.insert("x-duration-ms", HeaderValue::from(ms));
             }
             tokio::spawn(async move {
-                use tokio::io::AsyncReadExt;
+                use tokio::io::{AsyncReadExt, AsyncSeekExt};
+                // From its first frame (0.9.8: an ID3v2 tag with a large cover held the sound back by seconds on a
+                // phone's connection); its LAME header frame comes first, as the page trims by it.
+                let p = path.clone();
+                let skip = tokio::task::spawn_blocking(move || crate::analysis::after_id3(&p)).await.unwrap_or(0);
                 let Ok(mut file) = tokio::fs::File::open(&path).await else { return };
+                if skip > 0 && file.seek(std::io::SeekFrom::Start(skip)).await.is_err() {
+                    return;
+                }
                 let mut buf = vec![0u8; 64 * 1024];
                 loop {
                     match file.read(&mut buf).await {
@@ -2517,6 +2573,42 @@ async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, S
         }
     }
     (headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response()
+}
+
+/// The form `/api/stream` sends a track in from its start, for keeping whole (0.9.8): Opus where asked and lossless,
+/// FLAC as fragmented MP4, MP3 as it is (`None`), anything else as Opus.
+async fn stream_form(path: &std::path::Path, kind: Option<crate::stream::Kind>, opus: bool) -> Option<crate::opus_copies::Form> {
+    use crate::opus_copies::Form;
+    use crate::stream::Kind;
+    let p = path.to_path_buf();
+    let lossless = || async move { tokio::task::spawn_blocking(move || crate::convert::Source::open(&p).ok().flatten().is_some()).await.unwrap_or(false) };
+    if opus && lossless().await {
+        return Some(Form::Opus { lossy_too: false });
+    }
+    match kind {
+        Some(Kind::Flac) => Some(Form::Flac),
+        Some(Kind::Mp3) => None,
+        None => Some(Form::Opus { lossy_too: true }),
+    }
+}
+
+/// The stream kept whole (`?whole=1`): the kept form with its headers, length and ranges; an MP3 as its file.
+async fn whole_stream(app: &App, path: std::path::PathBuf, kind: Option<crate::stream::Kind>, duration_ms: Option<u64>, opus: bool, headers: &HeaderMap) -> Response {
+    let Some(form) = stream_form(&path, kind, opus).await else {
+        let mut r = crate::serve::files::serve_file(&path, headers, false).await;
+        r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/mpeg"));
+        if let Some(ms) = duration_ms {
+            r.headers_mut().insert("x-duration-ms", HeaderValue::from(ms));
+        }
+        return r;
+    };
+    let Some(copies) = &app.opus_copies else {
+        return (StatusCode::CONFLICT, Json(json!({ "error": "Cratarr keeps no copies without its data folder." }))).into_response();
+    };
+    match copies.serve_stream(path, form, headers).await {
+        Some(r) => r,
+        None => (StatusCode::CONFLICT, Json(json!({ "error": "Not ready yet." }))).into_response(),
+    }
 }
 
 /// A track as Opus in fragmented MP4, made as it is sent: a lossless one for a phone's stream, and with `lossy_too` one

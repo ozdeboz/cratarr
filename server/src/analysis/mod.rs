@@ -222,7 +222,7 @@ impl MediaSource for After {
 }
 
 /// Where the audio starts after an ID3v2 tag (its header's syncsafe size, and a footer when flagged); 0 without one.
-fn after_id3(path: &Path) -> u64 {
+pub(crate) fn after_id3(path: &Path) -> u64 {
     let mut h = [0u8; 10];
     let Ok(mut f) = File::open(path) else { return 0 };
     if f.read_exact(&mut h).is_err() || &h[..3] != b"ID3" {
