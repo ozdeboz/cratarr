@@ -4,6 +4,7 @@
   // opens it (`onopen`), one beside it comes to the front. One's own picture stands behind the whole page (the owner,
   // 2026-10-26: "should cover the entire page always"), fixed under the top bar and as wide as the page, the covers'
   // side fades reaching its edges past the page's gutter, the name light on it in either theme.
+  import { untrack } from 'svelte';
   import CoverFlow from './CoverFlow.svelte';
   import Icon from './Icon.svelte';
   import { backdropUrl } from './backdrop.svelte';
@@ -47,25 +48,23 @@
   let spare = $state(0);
   const wall = $derived(!!backdropUrl());
 
-  // Then less by whatever would still scroll below it (the owner, 2026-10-26: room to scroll with nothing in it): the
-  // page's own padding under the list, the gap the covers leave over them.
+  const px = (el: Element | null, side: string) => (el ? parseFloat(getComputedStyle(el).getPropertyValue(side)) || 0 : 0);
+  // Down to what lies under it (the owner, 2026-10-26: no room to scroll with nothing in it): its own padding, the
+  // list's, and the page's (the bars, the mini-player's room: at least MINI). Measured from where it stands before it
+  // moves up by half its spare room, so measuring again finds the same (it grew and jumped 300 ms in).
   function fill(node: HTMLElement) {
-    let frame = 0;
-    const measure = () => {
-      const bottom = window.innerHeight - MINI;
-      const room = Math.max(260, Math.round(bottom - node.getBoundingClientRect().top - CAPTION));
-      stageHeight = room;
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        const over = document.documentElement.scrollHeight - window.innerHeight;
-        if (over > 0) stageHeight = Math.max(260, room - over);
+    const measure = () =>
+      untrack(() => {
+        const top = node.getBoundingClientRect().top + spare / 2;
+        const flow = node.parentElement;
+        const caption = flow?.querySelector('.caption')?.getBoundingClientRect().height || CAPTION;
+        const under = px(flow, 'padding-bottom') + px(node.closest('main'), 'padding-bottom') + Math.max(MINI, px(node.closest('.page'), 'padding-bottom'));
+        stageHeight = Math.max(260, Math.floor(window.innerHeight - top - caption - under));
       });
-    };
     measure();
     const later = setTimeout(measure, 300);
     addEventListener('resize', measure);
     return () => {
-      cancelAnimationFrame(frame);
       clearTimeout(later);
       removeEventListener('resize', measure);
     };

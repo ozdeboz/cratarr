@@ -45,9 +45,13 @@
   let size = $state(0);
   let height = $state(0);
   const measured = $derived(size > 0 && height > 0);
+  // Its room changing later (a page settling, a window resized) moves them at once too, not sliding.
   let settled = $state(false);
   $effect(() => {
-    if (!measured || settled) return;
+    void size;
+    void height;
+    if (!measured) return;
+    settled = false;
     const r = requestAnimationFrame(() => requestAnimationFrame(() => (settled = true)));
     return () => cancelAnimationFrame(r);
   });
