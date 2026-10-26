@@ -2517,7 +2517,11 @@ pub fn served_fingerprint(db: &Connection) -> Result<String> {
         db.query_row("SELECT count(*), total(size), total(mtime) FROM cover_files", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
     // New analyses build the library again too (their gains and tempi are the songs').
     let (analysed, at): (i64, f64) = db.query_row("SELECT count(*), total(analysed_at) FROM analysis", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
-    Ok(format!("{n}/{size}/{mtime}/{tracks}/{folders}/{read} covers {covers}/{cover_size}/{cover_mtime} analysis {analysed}/{at}"))
+    // How many are read goes with the analyses' tail (0.9.7): tags read again over unchanged files (a new reader's
+    // reread of every file, hours on the NAS) build the library at most every so often, as new analyses do, and not
+    // after every pass: each build had the radio and the crates read everything again, and the sim went past 768 MB.
+    // A file Cratarr wrote changes its size and time, which still builds at once.
+    Ok(format!("{n}/{size}/{mtime}/{tracks}/{folders} covers {covers}/{cover_size}/{cover_mtime} analysis {analysed}/{at}/{read}"))
 }
 
 #[cfg(test)]
