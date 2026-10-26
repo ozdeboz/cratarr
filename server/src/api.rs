@@ -171,6 +171,8 @@ pub fn router(app: Arc<App>) -> Router {
         // Discover (decision 0069): each account's own.
         .route("/api/discover", get(discover))
         .route("/api/discover/refresh", post(discover_refresh))
+        .route("/api/discover/around", get(discover_around))
+        .route("/api/discover/around/next", post(discover_around_next))
         .route("/api/discover/want", post(discover_want))
         .route("/api/requests/want", post(want_album))
         .route("/api/artists/missing", get(artist_missing))
@@ -3142,20 +3144,9 @@ async fn discover(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>
         .as_ref()
         .map(|f| f.albums.iter().filter(|s| starred.contains(&crate::serve::ids::artist(&s.artist))).map(|s| s.key.as_str()).collect())
         .unwrap_or_default();
-    // Each card's mark (0.9.5): any account's open request for its album, wanted or coming.
     let mut found = json!(found);
-    if let (Some(marks), Some(cards)) = (request_marks(&app, &serve).await, found.get_mut("albums").and_then(|a| a.as_array_mut())) {
-        for c in cards {
-            let mark = crate::app::requests::mark_of(
-                &marks,
-                c["release_group"].as_str().or_else(|| c["key"].as_str()),
-                c["artist"].as_str().unwrap_or_default(),
-                c["album"].as_str().unwrap_or_default(),
-            );
-            if let Some(m) = mark {
-                c["request"] = json!(m);
-            }
-        }
+    if let Some(cards) = found.get_mut("albums").and_then(|a| a.as_array_mut()) {
+        mark_cards(&app, &serve, cards).await;
     }
     Ok(Json(json!({
         "found": found,
@@ -3176,6 +3167,43 @@ async fn discover_refresh(State(app): State<Arc<App>>) -> Result<(StatusCode, Js
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     started(crate::app::discover::start(&app, serve, &account, who))
+}
+
+/// Each card's mark (0.9.5): any account's open request for its album, wanted or coming.
+async fn mark_cards(app: &App, serve: &crate::serve::Serve, cards: &mut [serde_json::Value]) {
+    let Some(marks) = request_marks(app, serve).await else { return };
+    for c in cards {
+        let mark = crate::app::requests::mark_of(
+            &marks,
+            c["release_group"].as_str().or_else(|| c["key"].as_str()),
+            c["artist"].as_str().unwrap_or_default(),
+            c["album"].as_str().unwrap_or_default(),
+        );
+        if let Some(m) = mark {
+            c["request"] = json!(m);
+        }
+    }
+}
+
+/// Around artists you play (0.9.7, app::around): the group showing, its seeds and their suggestions, and whether it is
+/// still being made (asked again until it is not).
+async fn discover_around(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = discoverer()?;
+    let shown = crate::app::around::showing(&app, &serve, &account).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(around_json(&app, &serve, shown).await))
+}
+
+/// Around's Refresh: on to the next group, the three most played artists not shown yet.
+async fn discover_around_next(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = discoverer()?;
+    let shown = crate::app::around::next(&app, &serve, &account).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(around_json(&app, &serve, shown).await))
+}
+
+async fn around_json(app: &App, serve: &crate::serve::Serve, (seeds, albums, making): (Vec<String>, Vec<crate::app::discover::Suggestion>, bool)) -> serde_json::Value {
+    let mut cards: Vec<serde_json::Value> = albums.iter().map(|s| json!(s)).collect();
+    mark_cards(app, serve, &mut cards).await;
+    json!({ "seeds": seeds, "albums": cards, "making": making })
 }
 
 #[derive(Deserialize)]

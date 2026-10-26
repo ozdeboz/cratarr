@@ -61,11 +61,9 @@ const DISCOGRAPHY_FRESH_SECS: i64 = 30 * 86_400;
 const VARIOUS_ARTISTS: &str = "89ad4ac3-39f7-470e-963a-56509c546377";
 /// Of the account's own most played artists (Cratarr's plays), how many seed Last.fm's artists like them.
 const OWN_SEEDS: usize = 25;
-/// The masonry's artists (0.9.2; the owner: "more tiles should come from a5's related artists"): for this many seeds
-/// (those the most suggestions came from, then the most played), this many of their related artists new to the library,
-/// an album each. Nine (0.9.7, the owner: a refresh brought "99% the same"): the page shows three groups at a time and a
-/// refresh steps to the next three; sixteen each run a group past the screen's edge.
-const RELATED_SEEDS: usize = 9;
+/// The masonry's artists (0.9.2; the owner: "more tiles should come from a5's related artists"): of each seed
+/// (`app::around`, 0.9.7), this many of its related artists new to the library, an album each; sixteen run a group past
+/// the screen's edge.
 const RELATED_PER_SEED: usize = 16;
 /// ListenBrainz's fresh releases: of the last this many days (90, the owner 2026-10-25: the row "New from artists you
 /// have" had 3 with 30).
@@ -478,10 +476,10 @@ struct Group {
 
 /// An artist the library has, with how much the account plays them.
 #[derive(Debug, Clone)]
-struct OwnArtist {
-    name: String,
-    mbid: Option<String>,
-    plays: u32,
+pub(super) struct OwnArtist {
+    pub(super) name: String,
+    pub(super) mbid: Option<String>,
+    pub(super) plays: u32,
 }
 
 /// Today as MusicBrainz writes dates (UTC).
@@ -651,7 +649,7 @@ async fn from_discographies(serve: &Arc<crate::serve::Serve>, http: &reqwest::Cl
 /// every account, looked up now where none are), an album each: the one that plays on Bandcamp where they have one
 /// (it plays at once), else their newest album on MusicBrainz with its cover. Each says "Like <seed>" and how related
 /// (the most related 1), as Last.fm's suggestions do, so the page groups them with that seed's.
-async fn from_related(serve: &Arc<crate::serve::Serve>, http: &reqwest::Client, seeds: &[(String, String)], progress: &Progress) -> Vec<Candidate> {
+pub(super) async fn from_related(serve: &Arc<crate::serve::Serve>, http: &reqwest::Client, seeds: &[(String, String)], progress: &Progress) -> Vec<Candidate> {
     let today = today();
     let mut out = Vec::new();
     for (i, (seed, mbid)) in seeds.iter().enumerate() {
@@ -700,29 +698,6 @@ async fn from_related(serve: &Arc<crate::serve::Serve>, http: &reqwest::Client, 
         }
     }
     out
-}
-
-/// The seeds the masonry centres on: those the most of Last.fm's suggestions came from (each suggestion's most alike),
-/// else the account's most played; each with its MusicBrainz id (from the library), `RELATED_SEEDS` at most.
-fn masonry_seeds(candidates: &[Candidate], artists: &[OwnArtist]) -> Vec<(String, String)> {
-    let mbid_of = |name: &str| artists.iter().find(|a| loose(&a.name) == loose(name)).and_then(|a| a.mbid.clone());
-    let mut count: HashMap<String, usize> = HashMap::new();
-    for c in candidates.iter().filter(|c| c.source == "lastfm") {
-        if let Some(a) = c.alike.first() {
-            *count.entry(a.seed.clone()).or_default() += 1;
-        }
-    }
-    let mut ranked: Vec<(String, usize)> = count.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    let mut seeds: Vec<(String, String)> = ranked.into_iter().filter_map(|(name, _)| Some((mbid_of(&name)?, name))).map(|(m, n)| (n, m)).collect();
-    // Fewer than wanted (or none without Last.fm): the most played after them, so each refresh has seeds of its own.
-    for (name, mbid) in artists.iter().filter(|a| a.plays > 0).filter_map(|a| Some((a.name.clone(), a.mbid.clone()?))) {
-        if !seeds.iter().any(|(n, _)| loose(n) == loose(&name)) {
-            seeds.push((name, mbid));
-        }
-    }
-    seeds.truncate(RELATED_SEEDS);
-    seeds
 }
 
 // ---- ListenBrainz's fresh releases
@@ -779,7 +754,7 @@ pub struct Have {
 }
 
 impl Have {
-    fn has(&self, c: &Candidate) -> bool {
+    pub(super) fn has(&self, c: &Candidate) -> bool {
         c.release_group.as_deref().is_some_and(|g| self.release_groups.contains(g)) || self.matcher.find_album(&c.album, Some(&c.artist)).is_some()
     }
 }
@@ -1148,7 +1123,6 @@ pub async fn look(
     store: Option<Arc<super::artists::ArtistInfo>>,
     progress: &Progress,
 ) -> Result<Found> {
-    let dir = serve.data_dir.clone().context("Discover needs Cratarr's data folder")?;
     // Its play history off (0.9.5, the owner): what Discover can find without its listening, nothing personalised: no
     // ListenBrainz or Last.fm picks from the account's listening (the server's Last.fm key still asks for nothing).
     let (ud, a) = (serve.userdata.clone(), account.to_string());
@@ -1160,26 +1134,7 @@ pub async fn look(
         &general
     };
     progress("Reading your library", 0, None);
-    let (lib, d, ud, a) = (serve.library.clone(), dir.clone(), serve.userdata.clone(), account.to_string());
-    let (have, artists) = tokio::task::spawn_blocking(move || -> Result<(Have, Vec<OwnArtist>)> {
-        let rows = lib.artist_albums()?;
-        // The library's artists, the account's most played first (its own plays, 0064).
-        let plays: HashMap<String, u32> = ud.used(&a, crate::userdata::Kind::Artist)?.into_iter().map(|(id, x)| (id, x.play_count)).collect();
-        let mut by_id: HashMap<&str, OwnArtist> = HashMap::new();
-        for (id, name, mbid, _, _, _) in &rows {
-            by_id.entry(id.as_str()).or_insert_with(|| OwnArtist {
-                name: name.clone(),
-                mbid: mbid.clone().filter(|m| !m.is_empty() && m != VARIOUS_ARTISTS),
-                plays: plays.get(id).copied().unwrap_or(0),
-            });
-        }
-        let mut artists: Vec<OwnArtist> = by_id.into_values().collect();
-        artists.sort_by(|x, y| y.plays.cmp(&x.plays).then_with(|| x.name.cmp(&y.name)));
-        let mut have = have(&d, &cat, rows.iter().map(|r| r.1.clone()))?;
-        have.known = have.artists.iter().cloned().chain(lib.track_artist_names()?.iter().map(|a| loose(a))).collect();
-        Ok((have, artists))
-    })
-    .await??;
+    let (have, artists) = own(serve, cat, account).await?;
     let http = http()?;
     let mut candidates = Vec::new();
     let mut notes = Vec::new();
@@ -1212,9 +1167,7 @@ pub async fn look(
             }
         }
     }
-    // The masonry's artists: their related artists, an album each (0.9.2).
-    let seeds = masonry_seeds(&candidates, &artists);
-    candidates.extend(from_related(serve, &http, &seeds, progress).await);
+    // The masonry's artists are Around's own (0.9.7, `app::around`): the look waits on none of their seeds.
     // Albums named without their MusicBrainz id (Last.fm's mostly): looked up there.
     let unknown = candidates.iter().filter(|c| c.release_group.is_none()).count() as u64;
     let mut n = 0;
@@ -1345,6 +1298,30 @@ pub async fn look(
     // Its covers fetched ahead and kept (0.9.5), so the page shows them at once.
     super::cover_cache::warm(found.albums.iter().filter_map(|s| s.cover.clone()).collect());
     Ok(found)
+}
+
+/// The library's artists, the account's most played first (its own plays, 0064), and what the library has.
+pub(super) async fn own(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::Catalogue>, account: &str) -> Result<(Have, Vec<OwnArtist>)> {
+    let dir = serve.data_dir.clone().context("Discover needs Cratarr's data folder")?;
+    let (lib, ud, a) = (serve.library.clone(), serve.userdata.clone(), account.to_string());
+    tokio::task::spawn_blocking(move || -> Result<(Have, Vec<OwnArtist>)> {
+        let rows = lib.artist_albums()?;
+        let plays: HashMap<String, u32> = ud.used(&a, crate::userdata::Kind::Artist)?.into_iter().map(|(id, x)| (id, x.play_count)).collect();
+        let mut by_id: HashMap<&str, OwnArtist> = HashMap::new();
+        for (id, name, mbid, _, _, _) in &rows {
+            by_id.entry(id.as_str()).or_insert_with(|| OwnArtist {
+                name: name.clone(),
+                mbid: mbid.clone().filter(|m| !m.is_empty() && m != VARIOUS_ARTISTS),
+                plays: plays.get(id).copied().unwrap_or(0),
+            });
+        }
+        let mut artists: Vec<OwnArtist> = by_id.into_values().collect();
+        artists.sort_by(|x, y| y.plays.cmp(&x.plays).then_with(|| x.name.cmp(&y.name)));
+        let mut have = have(&dir, &cat, rows.iter().map(|r| r.1.clone()))?;
+        have.known = have.artists.iter().cloned().chain(lib.track_artist_names()?.iter().map(|a| loose(a))).collect();
+        Ok((have, artists))
+    })
+    .await?
 }
 
 /// How many new artists' pictures a look reads (the page features one; the rest are its chips).
@@ -1827,8 +1804,16 @@ pub fn not_interested(serve: &crate::serve::Serve, account: &str, key: &str) -> 
     answer(serve, account, key, "no")
 }
 
+/// A suggestion of the account's by its key: the look's, else Around's (0.9.7).
+pub fn suggestion(serve: &crate::serve::Serve, account: &str, key: &str) -> Result<Option<Suggestion>> {
+    if let Some(s) = kept(serve, account)?.and_then(|f| f.albums.into_iter().find(|s| s.key == key)) {
+        return Ok(Some(s));
+    }
+    Ok(super::around::suggestions(serve, account)?.into_iter().find(|s| s.key == key))
+}
+
 fn answer(serve: &crate::serve::Serve, account: &str, key: &str, answer: &str) -> Result<String> {
-    let s = kept(serve, account)?.and_then(|f| f.albums.into_iter().find(|s| s.key == key)).context("That suggestion is gone; look again")?;
+    let s = suggestion(serve, account, key)?.context("That suggestion is gone; look again")?;
     serve.userdata.answer_discover(account, &s.key, &s.artist_key, answer)?;
     // Its names kept with it, for Insights' Discovery exclusions (0.9.3).
     serve.userdata.name_discover_answer(account, &s.key, &s.album, &s.artist, s.year, s.cover.as_deref())?;
@@ -1943,22 +1928,6 @@ mod tests {
         let lb = one_list(vec![c("X", "Y", Some("rg-x"), "listenbrainz", "Recommended", 1.0)], &|_: &Candidate| false, &HashSet::new(), &HashSet::new(), &HashSet::new());
         assert!(lb[0].alike.is_empty(), "only Last.fm says how alike");
         assert!(!serde_json::to_string(&lb[0]).unwrap().contains("alike"), "left out when empty");
-    }
-
-    #[test]
-    fn the_masonry_centres_on_the_seeds_most_suggestions_came_from() {
-        let a = |seed: &str| vec![Alike { seed: seed.into(), value: 0.9 }];
-        let own = |name: &str, mbid: Option<&str>, plays: u32| OwnArtist { name: name.into(), mbid: mbid.map(Into::into), plays };
-        let artists = vec![own("Air", Some("m-air"), 50), own("Bonobo", Some("m-bon"), 40), own("Moby", None, 30)];
-        let lastfm = |seed: &str| Candidate { alike: a(seed), ..c("A", "B", None, "lastfm", "Like", 0.5) };
-        let cands = vec![lastfm("Bonobo"), lastfm("Bonobo"), lastfm("Air"), lastfm("moby")];
-        assert_eq!(masonry_seeds(&cands, &artists), vec![("Bonobo".to_string(), "m-bon".to_string()), ("Air".to_string(), "m-air".to_string())], "most first; one without an id left out");
-        assert_eq!(masonry_seeds(&[], &artists).len(), 2, "without Last.fm, the most played with an id");
-        assert_eq!(
-            masonry_seeds(&[lastfm("Bonobo")], &artists),
-            vec![("Bonobo".to_string(), "m-bon".to_string()), ("Air".to_string(), "m-air".to_string())],
-            "Last.fm's seeds first, the most played after them"
-        );
     }
 
     #[test]

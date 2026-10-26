@@ -97,6 +97,9 @@ CREATE INDEX IF NOT EXISTS scrobble_queue_due ON scrobble_queue (next, at);
 -- it answered: `no` (Not interested: never again, and an artist twice so is left out), `hidden` (Hide: gone from the
 -- list, nothing said of the artist; the owner, 2026-10-24) or `wanted` (asked of Lidarr, before 0.9's requests).
 CREATE TABLE IF NOT EXISTS discover_found (user TEXT PRIMARY KEY, at INTEGER NOT NULL, found TEXT NOT NULL) WITHOUT ROWID;
+-- Discover's Around artists you play (0.9.7): each account's seeds shown, the group showing and the next (JSON,
+-- app::around::State).
+CREATE TABLE IF NOT EXISTS discover_around (user TEXT PRIMARY KEY, state TEXT NOT NULL) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS discover_answer (
   user TEXT NOT NULL, album TEXT NOT NULL, artist TEXT NOT NULL, answer TEXT NOT NULL, at INTEGER NOT NULL,
   PRIMARY KEY (user, album)) WITHOUT ROWID;
@@ -1131,6 +1134,16 @@ impl UserData {
         Ok(())
     }
 
+    /// Discover's Around artists for `user` (JSON, 0.9.7).
+    pub fn discover_around(&self, user: &str) -> Result<Option<String>> {
+        Ok(self.db().query_row("SELECT state FROM discover_around WHERE user = ?1", [user], |r| r.get(0)).optional()?)
+    }
+
+    pub fn set_discover_around(&self, user: &str, state: &str) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO discover_around (user, state) VALUES (?1, ?2)", params![user, state])?;
+        Ok(())
+    }
+
     /// An album of Discover answered: `no` or `wanted`, kept by its key and its artist's.
     pub fn answer_discover(&self, user: &str, album: &str, artist: &str, answer: &str) -> Result<()> {
         self.db().execute(
@@ -1478,6 +1491,7 @@ impl UserData {
         tx.execute("DELETE FROM annotation WHERE user = ?1 AND play_count = 0 AND rating = 0 AND starred = 0", [user])?;
         tx.execute("DELETE FROM scrobble_queue WHERE user = ?1", [user])?;
         tx.execute("DELETE FROM discover_found WHERE user = ?1", [user])?;
+        tx.execute("DELETE FROM discover_around WHERE user = ?1", [user])?;
         tx.commit()?;
         Ok(removed)
     }
