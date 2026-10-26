@@ -81,7 +81,8 @@
   /* The page answers to its own width (beside the player or not): a container, as Playlists. */
   main {
     position: relative;
-    padding: 14px clamp(12px, 2vw, 32px) 48px;
+    /* As the Library's: its list's header as near the glass (the owner, 2026-10-26: the headers alike). */
+    padding: 6px clamp(12px, 2vw, 32px) 48px;
     container-type: inline-size;
   }
 
