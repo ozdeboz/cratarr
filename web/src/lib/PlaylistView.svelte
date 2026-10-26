@@ -1701,7 +1701,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
           <!-- A crate's albums as a coverflow on a light canvas (the owner, 2026-10-23); a drag or a tap moves through them. -->
           <CoverFlow covers={flowShown} onmenu={(i) => (flowMenu = flowItems[i]?.album ?? null)} />
         {:else if oneWide}
-          <CoverFlow covers={heroShown} />
+          <!-- Alone, it takes the top row's middle too (the glass is at that row's far ends) and comes nearer the action
+               bar (the owner, 2026-10-26: at least twice the size it had). -->
+          <CoverFlow covers={heroShown} top={8} foot={40} />
         {:else}
           {#each heroShown as c, i (i)}<Cover src={c} lazy={false} />{:else}{#if !crateEditing}<Cover src={null} />{/if}{/each}
         {/if}
