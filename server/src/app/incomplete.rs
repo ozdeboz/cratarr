@@ -29,6 +29,9 @@ pub struct Incomplete {
     /// Its release group: what "Ask for the full album" asks Lidarr for.
     #[serde(default)]
     pub release_group: Option<String>,
+    /// The release's MusicBrainz id (0.9.8: where single-track replacement finds the missing tracks).
+    #[serde(default)]
+    pub release_id: Option<String>,
     /// Each missing track: its disc and number on the release (from 1), and its title.
     pub missing: Vec<(u32, u32, String)>,
 }
@@ -67,7 +70,7 @@ pub(super) fn check(files: &[(String, i64)], releases: &[super::renumber::Releas
         .collect();
     let f = &r.facts;
     let release = [Some(f.title.clone()), f.year.map(|y| y.to_string()), Some(f.format.clone()).filter(|x| !x.is_empty())].into_iter().flatten().collect::<Vec<_>>().join(", ");
-    Some(Incomplete { of, has: files.len(), release, release_group: None, missing })
+    Some(Incomplete { of, has: files.len(), release, release_group: None, release_id: Some(r.id.clone()).filter(|i| !i.is_empty()), missing })
 }
 
 /// A round's batch: the Music albums with a release, never looked at first, then those looked at longest ago.
@@ -127,6 +130,7 @@ mod tests {
 
     fn release(format: &str, tracks: &[(&str, u32)]) -> Release {
         Release {
+            id: String::new(),
             facts: ReleaseFacts { title: "Delight".into(), format: format.into(), country: None, year: Some(2023) },
             media: vec![Medium { format: format.into(), tracks: tracks.iter().map(|(t, s)| (t.to_string(), Some(*s))).collect() }],
         }

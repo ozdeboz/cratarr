@@ -10,6 +10,7 @@ use anyhow::Result;
 pub const LASTFM: &str = "lastfm";
 pub const DISCOGS: &str = "discogs";
 pub const MUSICBRAINZ: &str = "musicbrainz";
+pub const SLSKD: &str = "slskd";
 
 static KNOWN: Mutex<Option<HashMap<&'static str, bool>>> = Mutex::new(None);
 

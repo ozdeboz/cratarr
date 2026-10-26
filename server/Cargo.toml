@@ -53,6 +53,9 @@ tract-onnx = "=0.21.19"
 # Decision 0046: a track's beats in an analysis' JSON line (already in the tree, through reqwest).
 base64 = "0.22"
 thiserror = "2"
+# Single-track replacement's gate (0.9.8): Chromaprint's fingerprint in pure Rust (MIT), on Symphonia's decode, as
+# AcoustID takes it; no fpcalc binary.
+rusty-chromaprint = "=0.3.0"
 tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 # The page's live channel: an mpsc receiver as the SSE body.
 tokio-stream = "0.1"

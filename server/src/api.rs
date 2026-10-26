@@ -239,6 +239,14 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/health/fixes", get(health_fixes))
             .route("/api/health/fixes/apply", post(apply_fixes))
             .route("/api/albums/{source}/{album}/intake", get(album_intake))
+            .route("/api/albums/{source}/{album}/release", get(album_release))
+            .route("/api/track-search", post(start_track_search))
+            .route("/api/track-search/{id}", get(track_search))
+            .route("/api/track-search/{id}/fetch", post(start_track_fetch))
+            .route("/api/track-fetch/{id}", get(track_fetch).delete(drop_track_fetch))
+            .route("/api/track-fetch/{id}/add", post(add_fetched_track))
+            .route("/api/settings/slskd", get(get_slskd).put(put_slskd))
+            .route("/api/settings/acoustid", get(get_acoustid).put(put_acoustid))
             .route("/api/settings/naming", get(naming))
             .route("/api/catalogue", get(catalogue_status))
             .route("/api/health/report", get(health_report))
@@ -776,7 +784,20 @@ async fn track_gain(State(app): State<Arc<App>>, Path((source, id)): Path<(Strin
     let gain = replay_gain_of(&app, &source, &id).await;
     // Short-lived: an analysis comes, and the gain with it.
     let cache = (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=600"));
-    ([cache], Json(gain.map_or(json!({}), |g| serde_json::to_value(g).unwrap_or_default()))).into_response()
+    let mut v = gain.as_ref().map_or(json!({}), |g| serde_json::to_value(g).unwrap_or_default());
+    // What levelling turns it down by (0.9.8: shown on the page, applied by the app and the browser), by track and by
+    // album; null where the gain is not known (the page's choice for unmeasured tracks decides).
+    v["trackDown"] = json!(gain.as_ref().and_then(|g| turned_down(g.track_gain, g.track_peak)));
+    v["albumDown"] = json!(gain.as_ref().and_then(|g| turned_down(g.album_gain.or(g.track_gain), g.album_peak.or(g.track_peak))));
+    ([cache], Json(v)).into_response()
+}
+
+/// Levelling's rule (decision 0035): the gain, never past the peak (no clipping) and never up: the dB a track is turned
+/// down by (0 or less); none without a gain.
+fn turned_down(gain: Option<f64>, peak: Option<f64>) -> Option<f64> {
+    let gain = gain?;
+    let room = peak.filter(|p| *p > 0.0).map_or(f64::INFINITY, |p| -20.0 * p.log10());
+    Some((gain.min(room).min(0.0) * 100.0).round() / 100.0)
 }
 
 /// A track as Cratarr's library serves it: its gains and tempo from its analysis, else from its file's tags.
@@ -2808,6 +2829,8 @@ async fn undo(State(app): State<Arc<App>>, Json(req): Json<UndoRequest>) -> Resu
             crate::app::renumber::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         } else if token.starts_with(crate::app::fixes::UNDO) {
             crate::app::fixes::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        } else if token.starts_with(crate::app::track_fetch::UNDO) {
+            crate::app::track_fetch::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         } else {
             restored.push(app.incoming.undo(token).await?);
         }
@@ -4431,6 +4454,170 @@ async fn put_discogs_keys(Json(b): Json<DiscogsKeys>) -> Result<Json<serde_json:
     get_discogs_keys().await
 }
 
+// ---- Single-track replacement (0.9.8)
+
+/// The album's MusicBrainz release, each track with the file that holds it (none: missing).
+async fn album_release(Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::track_fetch::ReleaseView>, ApiError> {
+    own_album(&source)?;
+    Ok(Json(crate::app::track_fetch::release(&album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+#[derive(Deserialize)]
+struct TrackRef {
+    source: String,
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct TrackSearch {
+    album: TrackRef,
+    recording: String,
+    #[serde(default)]
+    replace: Option<TrackRef>,
+}
+
+/// One slskd search for one of the release's tracks (never bulk).
+async fn start_track_search(Json(b): Json<TrackSearch>) -> Result<Json<serde_json::Value>, ApiError> {
+    own_album(&b.album.source)?;
+    if b.replace.as_ref().is_some_and(|r| r.source != b.album.source) {
+        return Err(ToggleError::Refused("The track to replace is not on that album.".into()).into());
+    }
+    let id = crate::app::track_fetch::search(&b.album.id, &b.recording, b.replace.map(|r| r.id)).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "id": id })))
+}
+
+async fn track_search(Path(id): Path<String>) -> Result<Json<crate::app::track_fetch::SearchView>, ApiError> {
+    Ok(Json(crate::app::track_fetch::search_view(&id).ok_or_else(|| ToggleError::Refused("That search is gone; search again.".into()))?))
+}
+
+#[derive(Deserialize)]
+struct FetchOne {
+    candidate: usize,
+}
+
+/// One of a search's files fetched and checked.
+async fn start_track_fetch(Path(id): Path<String>, Json(b): Json<FetchOne>) -> Result<Json<serde_json::Value>, ApiError> {
+    let fetch = crate::app::track_fetch::fetch(&id, b.candidate).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "id": fetch })))
+}
+
+async fn track_fetch(Path(id): Path<String>) -> Result<Json<crate::app::track_fetch::FetchView>, ApiError> {
+    Ok(Json(crate::app::track_fetch::fetch_view(&id).ok_or_else(|| ToggleError::Refused("That download is gone.".into()))?))
+}
+
+async fn drop_track_fetch(Path(id): Path<String>) -> StatusCode {
+    tokio::task::spawn_blocking(move || crate::app::track_fetch::drop_fetch(&id)).await.ok();
+    StatusCode::NO_CONTENT
+}
+
+/// A checked track into its album; Undo takes it out again (and puts back the one it replaced).
+async fn add_fetched_track(Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
+    let token = crate::app::track_fetch::add(&id).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "undo": [token] })))
+}
+
+/// slskd as set (never its key) and whether it answers: its version, or why not.
+async fn get_slskd() -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let ud = serve.userdata.clone();
+    let (url, key, folder) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        use crate::app::track_fetch::{SLSKD_FOLDER, SLSKD_KEY, SLSKD_URL};
+        Ok((ud.import_choice(SLSKD_URL)?.unwrap_or_default(), ud.import_choice(SLSKD_KEY)?.unwrap_or_default(), ud.import_choice(SLSKD_FOLDER)?.unwrap_or_default()))
+    })
+    .await
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let enabled = crate::app::switches::is_on(crate::app::switches::SLSKD);
+    let mut out = json!({ "url": url, "set": !key.is_empty(), "folder": folder, "enabled": enabled });
+    if enabled && !url.is_empty() && !key.is_empty() {
+        match crate::slskd::Slskd::new(&url, &key) {
+            Ok(s) => match s.version().await {
+                Ok(v) => out["version"] = v.into(),
+                Err(e) => out["error"] = format!("{e:#}").into(),
+            },
+            Err(e) => out["error"] = format!("{e:#}").into(),
+        }
+        if !folder.is_empty() && !std::path::Path::new(&folder).is_dir() {
+            out["error"] = format!("{folder} is not a folder Cratarr can see").into();
+        }
+    }
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+struct SlskdChoices {
+    #[serde(default)]
+    url: Option<String>,
+    /// A new key (empty: taken away); absent: kept.
+    #[serde(default)]
+    key: Option<String>,
+    #[serde(default)]
+    folder: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+/// slskd's address, key and completed-downloads folder saved; switched on or off.
+async fn put_slskd(Json(b): Json<SlskdChoices>) -> Result<Json<serde_json::Value>, ApiError> {
+    if let Some(url) = &b.url
+        && !url.trim().is_empty()
+        && !(url.trim().starts_with("http://") || url.trim().starts_with("https://"))
+    {
+        return Err(ToggleError::Refused("slskd's address starts with http:// or https://.".into()).into());
+    }
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let ud = serve.userdata.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        use crate::app::track_fetch::{SLSKD_FOLDER, SLSKD_KEY, SLSKD_URL};
+        for (k, v) in [(SLSKD_URL, b.url), (SLSKD_KEY, b.key), (SLSKD_FOLDER, b.folder)] {
+            if let Some(v) = v {
+                ud.set_import_choice(k, v.trim())?;
+            }
+        }
+        if let Some(on) = b.enabled {
+            crate::app::switches::set_on(crate::app::switches::SLSKD, on)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    get_slskd().await
+}
+
+/// Whether the server's AcoustID key is saved (never it).
+async fn get_acoustid() -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let ud = serve.userdata.clone();
+    let set = tokio::task::spawn_blocking(move || crate::app::track_fetch::acoustid_key(&ud))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .is_some();
+    Ok(Json(json!({ "set": set })))
+}
+
+#[derive(Deserialize)]
+struct AcoustidKey {
+    /// A new key (empty: taken away).
+    key: String,
+}
+
+/// The server's AcoustID application key saved (the owner registers the application).
+async fn put_acoustid(Json(b): Json<AcoustidKey>) -> Result<Json<serde_json::Value>, ApiError> {
+    let key = b.key.trim().to_string();
+    if !key.is_empty() && (!(4..=64).contains(&key.len()) || !key.chars().all(|c| c.is_ascii_alphanumeric())) {
+        return Err(ToggleError::Refused("An AcoustID key is letters and digits.".into()).into());
+    }
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let ud = serve.userdata.clone();
+    tokio::task::spawn_blocking(move || ud.set_import_choice(crate::app::track_fetch::ACOUSTID_KEY, &key))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    get_acoustid().await
+}
+
 /// Change cover (0.9.5): only for Cratarr's own library's albums, whose files Cratarr holds.
 fn own_album(source: &str) -> Result<(), ApiError> {
     if source != crate::source::cratarr::KIND.id {
@@ -4659,6 +4846,16 @@ mod tests {
 
     /// axum refuses to start on a path and method routed twice (0.8.3 did, on `/bands`, and never came up); no test
     /// builds the whole router, so this reads the table here instead: one route a line, its methods on it.
+    #[test]
+    fn levelling_only_turns_down_and_never_past_the_peak() {
+        use super::turned_down;
+        assert_eq!(turned_down(Some(-6.5), Some(0.9)), Some(-6.5));
+        assert_eq!(turned_down(Some(3.0), Some(0.5)), Some(0.0), "never up");
+        assert_eq!(turned_down(Some(-1.0), Some(1.2)), Some(-1.58), "never past the peak");
+        assert_eq!(turned_down(None, Some(0.9)), None, "not known");
+        assert_eq!(turned_down(Some(-4.0), None), Some(-4.0));
+    }
+
     #[test]
     fn no_path_and_method_is_routed_twice() {
         let mut seen = std::collections::HashSet::new();

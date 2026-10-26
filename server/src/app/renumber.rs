@@ -117,6 +117,8 @@ pub(super) struct Medium {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Release {
+    /// MusicBrainz's id (none for a Discogs release).
+    pub(super) id: String,
     pub(super) facts: ReleaseFacts,
     pub(super) media: Vec<Medium>,
 }
@@ -234,6 +236,7 @@ fn mb_release(v: &Value) -> Release {
         .collect::<Vec<_>>();
     let format = media.first().map(|m| m.format.clone()).unwrap_or_default();
     Release {
+        id: v["id"].as_str().unwrap_or_default().to_string(),
         facts: ReleaseFacts {
             title: v["title"].as_str().unwrap_or_default().to_string(),
             format: if media.len() > 1 { format!("{}× {format}", media.len()) } else { format },
@@ -295,6 +298,7 @@ fn discogs_release(v: &Value) -> Release {
         }
     }
     Release {
+        id: String::new(),
         facts: ReleaseFacts {
             title: v["title"].as_str().unwrap_or_default().to_string(),
             format,
@@ -581,6 +585,7 @@ mod tests {
 
     fn release(format: &str, media: &[&[(&str, u32)]]) -> Release {
         Release {
+            id: String::new(),
             facts: ReleaseFacts { title: "R".into(), format: format.into(), country: None, year: None },
             media: media.iter().map(|m| Medium { format: format.into(), tracks: m.iter().map(|(t, s)| (t.to_string(), Some(*s))).collect() }).collect(),
         }

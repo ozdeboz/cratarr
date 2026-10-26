@@ -1,3 +1,4 @@
+mod acoustid;
 mod albums;
 // Decision 0035's core; the pass that uses it (claude-5f) comes next.
 #[allow(dead_code)]
@@ -41,6 +42,7 @@ mod search;
 mod serve;
 mod settings;
 mod similarity;
+mod slskd;
 mod snapcast;
 mod source;
 mod stream;
