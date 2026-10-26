@@ -26,6 +26,9 @@ docker run -d --name cratarr -p 8080:8080 --user "$(id -u):$(id -g)" \
 Open `http://localhost:8080`, make the first account, and in Settings → Libraries choose your music folder. Cratarr
 reads it once (covers, waveforms, tempo, loudness), and plays while it does.
 
+Until that first account exists, anyone who reaches the server can make it, and act as its owner (as Navidrome's first
+run). Make it before the server can be reached from outside your home.
+
 For the Android app, install the APK from the latest [release](https://github.com/ozdeboz/cratarr/releases) and give
 it your server's address.
 
@@ -104,7 +107,9 @@ services:
   catalogue among them (about 6 KB per track). About 768 MB suits 30,000 tracks.
 - **From outside your home**: put it behind a reverse proxy with HTTPS (which also makes the web app installable).
   Every request needs a sign-in already; a proxy can ask Cratarr to check sign-ins for it (`/api/auth/check`, for
-  Caddy's `forward_auth`, Traefik's `forwardAuth` or nginx's `auth_request`).
+  Caddy's `forward_auth`, Traefik's `forwardAuth` or nginx's `auth_request`). Cratarr believes the client's address that
+  a proxy forwards (`X-Forwarded-For`) only from a proxy on a local address (the same computer, its Docker network or
+  your home network); a proxy anywhere else is named in Settings → Server → Trusted proxies (or `CRATARR_PROXIES`).
 - **The data folder** holds `settings.json` (secrets: readable by its owner only) and SQLite databases.
   `library.sqlite` is rebuilt when it is missing; the others are worth backing up.
 
@@ -122,15 +127,18 @@ else works as usual.
 
 ### Configuration
 
-Almost everything is set in Settings. The environment covers what has to be known before the page opens:
+Almost everything is set in Settings. The environment covers what has to be known before the page opens, and seeds a
+few settings Settings can change later (what Settings saves wins):
 
 | Variable | Default | |
 |---|---|---|
 | `CRATARR_BIND` | `0.0.0.0:8080` | The address and port the server listens on. |
 | `CRATARR_DATA_DIR` | `/data` in the image | Settings and databases. Without it nothing is kept between starts. |
 | `CRATARR_SNAPCAST_BIND` | `0.0.0.0:1704` | The port for playing in step; empty turns it off. |
-| `CRATARR_SNAPCAST_HOST` | none | The local address players reach that port on (and a Kodi box reaches Cratarr on), when it is not the one they open Cratarr's pages at. |
-| `CRATARR_BEAT_THIS` | off | `on`: the server hears new music's beats with the Beat this! model itself (about 650 MB while it runs). Off, they come from `tools/beat_this_pass.py` on another computer. |
+| `CRATARR_SNAPCAST_HOST` | none | The local address players reach that port on (and a Kodi box reaches Cratarr on), when it is not the one they open Cratarr's pages at. Also in Settings → Server. |
+| `CRATARR_BEAT_THIS` | off | `on`: the server hears new music's beats with the Beat this! model itself (about 650 MB while it runs). Off, they come from `tools/beat_this_pass.py` on another computer. Also in Settings → Server. |
+| `CRATARR_ANALYSIS` | `keep` | The server's own analysis of the music (waveforms, tempo, loudness, the visuals' signals): `keep` analyses new music once half the library has an analysis (a first pass elsewhere, or all of it here), `all` analyses everything here, `off` none. Also in Settings → Server. |
+| `CRATARR_PROXIES` | local addresses | The proxies whose forwarded client address is believed, as addresses or ranges, comma-separated (`172.19.0.0/16, 192.168.1.5`). Unset: a proxy on a local address (loopback, private ranges, link-local, IPv6 unique local); one elsewhere must be named. Also in Settings → Server. |
 | `CRATARR_PLAYLIST_DIR` | none | The playlists' folder until a music folder is chosen in Settings. |
 | `CRATARR_SUBSONIC_USER`, `CRATARR_SUBSONIC_PASSWORD` | none | An account made (or its password set) at every start. |
 | `JELLYFIN_URL`, `JELLYFIN_API_KEY`, `CRATARR_PLAYER_CLIENT` | none | A Jellyfin source on the first start, until one is saved in Settings. |
@@ -188,7 +196,13 @@ Cratarr borrows freely from projects that got things right:
   already know ([0009](docs/decisions/0009-library-uses.md)).
 - [AudioMuse-AI](https://github.com/NeptuneHub/AudioMuse-AI) for its analysis, [Beat This!](https://github.com/CPJKU/beat_this)
   for the beats, and [ListenBrainz](https://listenbrainz.org) for listening history, imported and scrobbled.
-- The photographers of Home's skies, on Unsplash (named in [web/public/skies/CREDITS.txt](web/public/skies/CREDITS.txt)).
+- The photographers of Home's skies and the flows' backgrounds, on Unsplash (named in
+  [web/public/skies/CREDITS.txt](web/public/skies/CREDITS.txt) and [web/public/backdrops/CREDITS.txt](web/public/backdrops/CREDITS.txt)).
+- [libopus](https://opus-codec.org) (BSD) for the Opus copies, [LAME](https://lame.sourceforge.io) (LGPL) for the MP3
+  copies a browser that takes neither FLAC nor Opus plays, [alac-encoder](https://crates.io/crates/alac-encoder) (Apache
+  2.0 or MIT) for the ALAC copies, [Symphonia](https://github.com/pdeljanov/Symphonia) (MPL 2.0) to read the files, and
+  [rusty-chromaprint](https://github.com/darksv/rusty-chromaprint) (MIT) with [AcoustID](https://acoustid.org) to know a
+  recording by its sound.
 
 ## License
 
