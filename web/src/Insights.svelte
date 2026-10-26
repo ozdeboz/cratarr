@@ -56,7 +56,7 @@
       <h2 id="insights-{group.title}">{group.title}</h2>
       <div class="list">
         {#each group.views as v (v.id)}
-          {@const open = panelBeside() && insightsOf(panel.viewed) === v.id}
+          {@const open = panelBeside() && insightsOf(panel.shown) === v.id}
           {@const l = line(v.id)}
           <button class="row" class:open aria-pressed={open} onclick={() => viewPlaylist(INSIGHTS + v.id)}>
             <Icon name={v.icon} size={24} />

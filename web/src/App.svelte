@@ -808,7 +808,9 @@
     const rows = Math.ceil(overflow.length / most);
     return Math.max(1, Math.ceil(overflow.length / Math.max(1, rows)));
   });
-  const overflowActive = $derived(overflow.some((p) => p.id === page));
+  /** The page that shows (lib/Hold: the one before while the one asked for gets ready), for the bar's highlight. */
+  let shownPage = $state(untrack(() => page));
+  const overflowActive = $derived(overflow.some((p) => p.id === shownPage));
 </script>
 
 {#if outLink}{@const l = outLink}<LinkSheet url={l.url} name={l.name} onclose={() => (outLink = null)} />{/if}
@@ -841,7 +843,7 @@
 
       <nav aria-label="Pages">
         {#each MAIN as p (p.id)}
-          <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}
+          <a href={keepViewed(p.href)} aria-current={shownPage === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}
             ><Icon name={p.icon} /><span class="label">{p.label}</span>{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a
           >
         {/each}
@@ -849,7 +851,7 @@
 
       <div class="foot">
         {#each APART as p (p.id)}
-          <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}><Icon name={p.icon} /><span class="label">{p.label}</span></a>
+          <a href={keepViewed(p.href)} aria-current={shownPage === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}><Icon name={p.icon} /><span class="label">{p.label}</span></a>
         {/each}
         {#if status}<div class="version">Cratarr {status.version}</div>{/if}
       </div>
@@ -869,6 +871,9 @@
          shifted the page up under the coming panel). -->
     <div class="page" class:under-row={pageHasRow || (phone && playlistLayer)} class:away={everywhereShown} bind:this={pageEl}>
     <SheetArea area={() => pageEl}>
+    <!-- One commit (lib/Hold; the owner, 2026-10-26, "Old page stays, then switch"): the page before stays until the new
+         one is ready, and the bar's highlight moves with it. -->
+    <Hold key={page} bind:shown={shownPage}>
     {#if page === 'settings'}
       <Settings />
     {:else if page === 'health' && me.admin}
@@ -903,6 +908,7 @@
     {:else}
       <Playlists />
     {/if}
+    </Hold>
     <!-- Global search at the end of what the page's own search leaves (decision 0072), but the kind the page shows. -->
     {#if everywhereShown}<GlobalResults except={pageKinds(page)} />{/if}
     </SheetArea>
@@ -929,7 +935,7 @@
       <aside class="player-side" class:whole={split} aria-label={playerInPanel ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : requestsShown ? 'Requests' : downloadsShown ? 'Downloads' : 'Playlist'} style:--mini-h={`${miniTop ? 0 : miniSpace}px`} bind:this={sideEl}>
         <SheetArea area={() => sideEl}>
           <!-- One commit (lib/Hold): what the panel showed stays until the item opened is ready. -->
-          <Hold key={panel.viewed}>
+          <Hold key={panel.viewed} bind:shown={panel.shown}>
           {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if playerInPanel}<NowPlaying place="side" />{:else if split && panel.viewed === null}<!-- Its part comes in a moment. -->{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else if healthShown}<HealthPanel problem={healthShown} beside={healthSplit} />{:else if insightsShown}<InsightsPanel view={insightsShown} beside={insightsSplit} />{:else if requestsShown}<RequestsPanel list={requestsShown} beside={requestsSplit} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} beside={downloadsSplit} />{:else}<PlaylistView />{/if}
           </Hold>
         </SheetArea>
@@ -939,7 +945,7 @@
 
   {#if playlistLayer}
     <div class="playlist-layer" class:under-bar={underBar} role="dialog" aria-label="Playlist" style:--mini-h={`${(miniTop ? 0 : miniSpace) + (navBottom ? topBar : 0)}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
-      <Hold key={panel.viewed}>{#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else if requestsShown}<RequestsPanel list={requestsShown} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} />{:else}<PlaylistView full />{/if}</Hold>
+      <Hold key={panel.viewed} bind:shown={panel.shown}>{#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else if requestsShown}<RequestsPanel list={requestsShown} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} />{:else}<PlaylistView full />{/if}</Hold>
     </div>
   {/if}
   {#if mini}
@@ -969,7 +975,7 @@
         transition:slide|global={{ duration: reducedMotion() ? 0 : SHEET_IN, easing: decelerate }}
       >
         {#each overflow as p (p.id)}
-          <a href={p.href} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => barTap(e, p.id)}
+          <a href={p.href} aria-current={shownPage === p.id ? 'page' : undefined} onclick={(e) => barTap(e, p.id)}
             ><span class="icon"><Icon name={p.icon} />{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{p.label}</span></a
           >
         {/each}
@@ -1047,7 +1053,7 @@
     {#if navBottom}{@render morePages()}{/if}
     <div class="tabs">
     {#each bar as p (p.id)}
-      <a href={p.href} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => barTap(e, p.id)}
+      <a href={p.href} aria-current={shownPage === p.id ? 'page' : undefined} onclick={(e) => barTap(e, p.id)}
         ><span class="icon"><Icon name={p.icon} />{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{p.label}</span></a
       >
     {/each}

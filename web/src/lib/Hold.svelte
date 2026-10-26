@@ -3,7 +3,10 @@
   // changes, a still picture of what it showed is laid over it (the same elements, copied, scrolled as they were) while
   // the new content gets ready unseen beneath; once what it shows is ready (holdUntil), its pictures are in and the
   // whole of it shows at once. Nothing claimed: at once, as before. After HOLD_SIGN_MS the shared loading sign shows over
-  // the picture; after HOLD_MAX_MS the new content shows as it is.
+  // the picture; after HOLD_MAX_MS what was there gives way to the place's background with the sign (a page before kept
+  // that long says nothing true any more), the new content still showing whole once ready; after HOLD_GIVE_UP_MS as it
+  // is. A place opening (the app starting, the phone's panel coming up) holds its first content too, over its own empty
+  // background. `shown`: the key whose content shows (what a page marks as open follows it, not the key asked for).
   import { mount, setContext, tick, unmount, untrack, type Snippet } from 'svelte';
   import { HOLD, type HoldPlace } from './holdPlace.svelte';
   import MarkLoader from './MarkLoader.svelte';
@@ -12,8 +15,10 @@
 
   const HOLD_SIGN_MS = 300;
   const HOLD_MAX_MS = 3000;
-  /** How long a picture of the new content may take to be drawn, once it is ready. */
-  const PICTURE_MS = 500;
+  const HOLD_GIVE_UP_MS = 10000;
+  /** How long the new content's big pictures may take to be drawn, once it is ready; the small ones (a row's) may follow. */
+  const PICTURE_MS = 400;
+  const BIG_PICTURE = 96 * 96;
 
   let box: HTMLElement;
   /** What is not ready yet, this hold's (HOLD_MAX_MS lets them all go). */
@@ -23,8 +28,8 @@
   let sign: ReturnType<typeof mount> | null = null;
   let signTimer: ReturnType<typeof setTimeout> | undefined;
   let maxTimer: ReturnType<typeof setTimeout> | undefined;
+  let giveUpTimer: ReturnType<typeof setTimeout> | undefined;
   let round = 0;
-  shown = untrack(() => key);
 
   const place: HoldPlace = {
     claim() {
@@ -37,15 +42,39 @@
   };
   setContext(HOLD, place);
 
-  /** A still copy of what shows now, laid over the place (once per hold: a key changing again keeps the first). */
-  function takePicture() {
+  /** A still copy of what shows now, laid over the place (once per hold: a key changing again keeps the first);
+   *  `blank`, opening: the place's background only (what is there is the new content). */
+  function takePicture(blank = false) {
     if (picture || !box) return;
     const frame = box.parentElement;
-    if (!frame || !box.firstElementChild) return;
+    if (!frame) return;
     const r = frame.getBoundingClientRect();
     if (!r.width || !r.height) return;
     const p = frame.cloneNode(false) as HTMLElement;
-    for (const c of box.childNodes) p.appendChild(c.cloneNode(true));
+    // Down to the foot of what can be seen only (a crate's hundreds of rows below it cost a still tap, a5's lab); read
+    // before anything is added, so nothing is laid out again meanwhile.
+    const foot = Math.min(r.bottom, innerHeight);
+    const scrolled: [HTMLElement, number, number][] = [];
+    const drawings: [HTMLCanvasElement, HTMLCanvasElement][] = [];
+    const copy = (from: Node, into: Node) => {
+      for (const n of from.childNodes) {
+        if (!(n instanceof Element)) {
+          into.appendChild(n.cloneNode(false));
+          continue;
+        }
+        if (n instanceof SVGElement || n.getBoundingClientRect().top >= foot) {
+          if (!(n instanceof SVGElement)) continue;
+          into.appendChild(n.cloneNode(true));
+          continue;
+        }
+        const c = n.cloneNode(false) as Element;
+        into.appendChild(c);
+        if (n.scrollTop || n.scrollLeft) scrolled.push([c as HTMLElement, n.scrollTop, n.scrollLeft]);
+        if (n instanceof HTMLCanvasElement) drawings.push([n, c as HTMLCanvasElement]);
+        copy(n, c);
+      }
+    };
+    if (!blank) copy(box, p);
     p.removeAttribute('id');
     for (const e of p.querySelectorAll('[id]')) e.removeAttribute('id');
     p.setAttribute('aria-hidden', 'true');
@@ -63,22 +92,15 @@
     p.classList.add('hold-picture');
     frame.after(p);
     // Scrolled as it was, its drawings copied (a copy's canvas starts blank).
-    const from = document.createTreeWalker(box, NodeFilter.SHOW_ELEMENT);
-    const to = document.createTreeWalker(p, NodeFilter.SHOW_ELEMENT);
-    to.nextNode();
-    for (let a = from.nextNode(), b = to.nextNode(); a && b; a = from.nextNode(), b = to.nextNode()) {
-      const ea = a as HTMLElement;
-      const eb = b as HTMLElement;
-      if (ea.scrollTop || ea.scrollLeft) {
-        eb.scrollTop = ea.scrollTop;
-        eb.scrollLeft = ea.scrollLeft;
-      }
-      if (ea instanceof HTMLCanvasElement && eb instanceof HTMLCanvasElement) {
-        try {
-          eb.getContext('2d')?.drawImage(ea, 0, 0);
-        } catch {
-          /* a drawing that cannot be copied stays blank */
-        }
+    for (const [e, top, left] of scrolled) {
+      e.scrollTop = top;
+      e.scrollLeft = left;
+    }
+    for (const [from, to] of drawings) {
+      try {
+        to.getContext('2d')?.drawImage(from, 0, 0);
+      } catch {
+        /* a drawing that cannot be copied stays blank */
       }
     }
     picture = p;
@@ -86,6 +108,10 @@
       if (picture !== p) return;
       const at = document.createElement('div');
       at.className = 'hold-sign';
+      // In the middle of what can be seen of the place (a page may reach far past the window).
+      const top = Math.max(0, -r.top);
+      at.style.top = `${top}px`;
+      at.style.height = `${Math.max(0, Math.min(r.height, innerHeight - r.top) - top)}px`;
       p.appendChild(at);
       sign = mount(MarkLoader, { target: at, props: { size: 40 } });
     }, HOLD_SIGN_MS);
@@ -105,7 +131,7 @@
     if (!frame) return Promise.resolve();
     const imgs = [...box.querySelectorAll('img')].filter((i) => {
       const r = i.getBoundingClientRect();
-      return r.width > 0 && r.bottom > frame.top && r.top < frame.bottom && r.right > frame.left && r.left < frame.right;
+      return r.width * r.height >= BIG_PICTURE && r.bottom > frame.top && r.top < frame.bottom && r.right > frame.left && r.left < frame.right;
     });
     const drawn = Promise.all(imgs.map((i) => i.decode().catch(() => {})));
     return Promise.race([drawn, new Promise((r) => setTimeout(r, PICTURE_MS))]);
@@ -117,9 +143,33 @@
     if (waited) await picturesIn();
     if (r !== round || claims.size) return;
     clearTimeout(maxTimer);
+    clearTimeout(giveUpTimer);
     holding = false;
     shown = key;
     dropPicture();
+  }
+
+  /** A hold begins: the picture of what shows (none yet: the place's background), until ready or HOLD_MAX_MS. */
+  function begin(opening = false) {
+    const r = ++round;
+    takePicture(opening);
+    holding = true;
+    clearTimeout(maxTimer);
+    clearTimeout(giveUpTimer);
+    maxTimer = setTimeout(() => {
+      if (r !== round || !picture) return;
+      // The background and the sign, no longer what was there.
+      for (const c of [...picture.children]) if (!c.classList.contains('hold-sign')) c.remove();
+    }, HOLD_MAX_MS);
+    giveUpTimer = setTimeout(() => {
+      if (r !== round) return;
+      claims.clear();
+      void release(r, false);
+    }, HOLD_GIVE_UP_MS);
+    // What shows says in this same update whether it is ready; nothing said: at once.
+    void tick().then(() => {
+      if (!claims.size) void release(r, false);
+    });
   }
 
   let last = untrack(() => key);
@@ -127,24 +177,14 @@
     const k = key;
     if (k === last) return;
     last = k;
-    untrack(() => {
-      const r = ++round;
-      takePicture();
-      holding = true;
-      clearTimeout(maxTimer);
-      maxTimer = setTimeout(() => {
-        if (r !== round) return;
-        claims.clear();
-        void release(r, false);
-      }, HOLD_MAX_MS);
-      // What shows says in this same update whether it is ready; nothing said: at once.
-      void tick().then(() => {
-        if (!claims.size) void release(r, false);
-      });
-    });
+    untrack(() => begin());
   });
+  // Opening: hidden from the start, the picture (its background only) once the place is there.
+  holding = true;
+  $effect(() => untrack(() => begin(true)));
   $effect(() => () => {
     clearTimeout(maxTimer);
+    clearTimeout(giveUpTimer);
     dropPicture();
   });
 </script>
@@ -163,7 +203,8 @@
 
   :global(.hold-picture .hold-sign) {
     position: absolute;
-    inset: 0;
+    left: 0;
+    right: 0;
     display: grid;
     place-items: center;
     pointer-events: none;

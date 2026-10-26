@@ -50,6 +50,7 @@
   import { queuesPlayer, queuesVersion, switchQueue } from './lib/queueHistory.svelte';
   import SectionHead from './lib/SectionHead.svelte';
   import PageLoading from './lib/PageLoading.svelte';
+  import { holdUntil } from './lib/holdPlace.svelte';
   import { toast } from './lib/toast.svelte';
 
   const WEEK = `${LIKE}week`;
@@ -308,6 +309,8 @@
   // weather, or one's own picture) and that picture is in, then its words and albums, then the sections after it; two
   // and a half seconds at most, then whatever there is.
   let skyIn = $state(false);
+  /** The sections a first screen shows: the lead and the one after it. */
+  const FIRST_SCREEN = 2;
   $effect(() => {
     if (skyIn) return;
     if (!heroLead) return void (skyIn = true);
@@ -326,6 +329,12 @@
     settledOf(part) && (part === lead || !heroLead || skyIn) && (!patient || order.slice(0, order.indexOf(part)).every((x) => settledOf(x)));
   /** Nothing shown yet and something still to come: the page's loader, not a blank page. */
   const loading = $derived(!order.some(turn) && !order.every((x) => settledOf(x)));
+  // One commit (lib/Hold; the owner, 2026-10-26: "Hold until its first screen is ready"): the page before stays until
+  // the header's picture and the first sections are in; those further down may follow.
+  holdUntil(
+    () => 0,
+    () => (!heroLead || skyIn) && order.slice(0, FIRST_SCREEN).every((x) => settledOf(x)),
+  );
 
   /** The European days a greeting wishes (make-a-wish's dates without the American ones, the owner 2026-10-24), by
    *  `month-day`. */

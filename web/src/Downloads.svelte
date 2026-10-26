@@ -65,7 +65,7 @@
     <section class="group" aria-label="Downloads">
       <div class="list">
         {#each DOWNLOADS_LISTS as l (l.id)}
-          {@const open = panelBeside() && downloadsOf(panel.viewed) === l.id}
+          {@const open = panelBeside() && downloadsOf(panel.shown) === l.id}
           <button class="row" class:open aria-pressed={open} onclick={() => viewPlaylist(DOWNLOADS + l.id)}>
             <Icon name={l.icon} size={24} />
             <span class="text">

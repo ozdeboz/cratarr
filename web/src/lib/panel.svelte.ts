@@ -116,6 +116,8 @@ export const isSingleSubject = (viewed: string | null) =>
 export const panel = $state({
   /** What is viewed: the (first) playlist's id, a crate's or an album's key; null when the panel shows the player only. */
   viewed: null as string | null,
+  /** What the panel shows: `viewed` once it is ready there (lib/Hold), which a page marks as open. */
+  shown: null as string | null,
   /** The playlists selected, in the order ticked; empty for a crate. */
   selection: [] as string[],
   tab: 'tracks' as Tab,
@@ -169,6 +171,7 @@ function read() {
     panel.playerTop = false;
   }
   panel.viewed = first;
+  if (first === null) panel.shown = null;
   panel.selection = first && !isSingleSubject(first) ? viewed : [];
   const tab = q.get('tab');
   panel.tab = panel.selection.length && isTab(tab) ? tab : 'tracks';

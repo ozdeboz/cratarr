@@ -27,7 +27,7 @@
   {:else}
     <ul class="cards">
       {#each list as p (p.key)}
-        {@const open = panelBeside() && healthOf(panel.viewed) === p.key}
+        {@const open = panelBeside() && healthOf(panel.shown) === p.key}
         <li>
           <button class="card" class:open class:urgent={p.urgent} aria-pressed={open} onclick={() => viewPlaylist(HEALTH + p.key)}>
             <Icon name={p.icon} size={24} />

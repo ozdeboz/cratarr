@@ -3,10 +3,17 @@
   // be seen of the page or the component it is in (the window between the bar of pages and the mini-player, or the
   // panel or sheet that scrolls it); lower only where what comes before it reaches that far.
   import MarkLoader from './MarkLoader.svelte';
+  import { holdUntil } from './holdPlace.svelte';
 
   /** `children`: what goes under the mark, where the work can say how far it is (the owner, 2026-10-24: Discover's
    *  first look, its progress under the loader at its usual place). */
   let { size = 96, children }: { size?: number; children?: import('svelte').Snippet } = $props();
+
+  // A page or panel loading as a whole is not ready (lib/Hold): what it showed stays while this is here.
+  holdUntil(
+    () => 0,
+    () => false,
+  );
 
   let el: HTMLDivElement;
   /** Its height (to the bottom of what can be seen) and the mark's offset from its top; null until measured. */

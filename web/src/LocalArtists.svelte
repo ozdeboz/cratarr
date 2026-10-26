@@ -32,7 +32,7 @@
             size="medium"
             title={a.name}
             sub={`${plural(a.albums, 'album')} · ${plural(a.tracks, 'track')}`}
-            active={panelBeside() && panel.viewed === artistSubject(DEVICE, a.name)}
+            active={panelBeside() && panel.shown === artistSubject(DEVICE, a.name)}
             onclick={() => viewPlaylist(artistSubject(DEVICE, a.name))}
           />
         </li>
