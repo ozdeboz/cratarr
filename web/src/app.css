@@ -214,3 +214,12 @@ button.solid[aria-busy='true']::after {
 :root[data-input='pointer'] :focus-visible {
   outline: none !important;
 }
+
+/* A row that scrolls sideways runs out to the edge of what holds it (the screen, a panel), its first and last items in
+   line with the page's margin (the owner, 2026-10-26: some stopped short of the edge, with hard ends). --bleed: the
+   side padding of the box it sits in. */
+.bleed {
+  margin-inline: calc(-1 * var(--bleed, 16px));
+  padding-inline: var(--bleed, 16px);
+  scroll-padding-inline: var(--bleed, 16px);
+}

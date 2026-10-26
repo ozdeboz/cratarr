@@ -369,8 +369,9 @@
 
   /* The page answers to its own width (beside the player or not): a container, as Crates. */
   main {
+    --bleed: clamp(12px, 2vw, 32px);
     position: relative;
-    padding: 14px clamp(12px, 2vw, 32px) 48px;
+    padding: 14px var(--bleed) 48px;
     container-type: inline-size;
   }
 

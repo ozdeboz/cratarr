@@ -30,6 +30,23 @@
     pageAsked.section = section;
     viewOver(artistSubject('cratarr', name));
   }
+  // The carousel: which card is in front as it is swiped; a chip brings its card.
+  let row = $state<HTMLElement>();
+  function settle() {
+    if (!row) return;
+    const mid = row.scrollLeft + row.clientWidth / 2;
+    let best = 0;
+    let gap = Infinity;
+    for (const el of row.querySelectorAll<HTMLElement>('.slide')) {
+      const d = Math.abs(el.offsetLeft + el.offsetWidth / 2 - mid);
+      if (d < gap) [gap, best] = [d, Number(el.dataset.at)];
+    }
+    open = best;
+  }
+  function goTo(i: number) {
+    open = i;
+    row?.querySelector<HTMLElement>(`.slide[data-at="${i}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  }
   const picture = (x: ExploredArtist) => (x.photo ? artistPhotoUrl(x.id) : albumCoverUrl('cratarr', x.albums[0]));
 </script>
 
@@ -37,34 +54,42 @@
   <section aria-label="Artists to explore">
     <SectionHead title="Artists to explore" />
     <div class="wrap">
-      <article class="card">
-        <div class="wash" aria-hidden="true"><img src={picture(a)} alt="" /></div>
-        <div class="top">
-          <button class="who" onclick={() => viewOver(artistSubject('cratarr', a.name))}>
-            {#if a.photo}<img class="face" src={artistPhotoUrl(a.id)} alt="" />{/if}
-            <span><b>{a.name}</b><small>{a.albums.length === 1 ? '1 album' : `${a.albums.length} albums`}</small></span>
-          </button>
-          <!-- On a phone a fanned stack beside the name (C4); wider, a 2×2 grid beside the text (C). -->
-          <button class="fan" aria-label={`Albums by ${a.name}`} onclick={() => openAt(a.name, 'albums')}>
-            {#each a.albums.slice(0, 3).reverse() as id (id)}<img src={albumCoverUrl('cratarr', id)} alt="" />{/each}
-          </button>
-        </div>
-        {#if a.bio}
-          <button
-            class="bio"
-            onclick={() => openAt(a.name, 'about')}>{a.bio}</button
-          >
-        {/if}
-        <ul class="grid">
-          {#each a.albums as id (id)}
-            <li><button onclick={() => viewOver(albumSubject('cratarr', id))} aria-label="Open album"><img src={albumCoverUrl('cratarr', id)} alt="" /></button></li>
-          {/each}
-        </ul>
-        {#if a.bio}<small class="credit">TheAudioDB</small>{/if}
-      </article>
-      <div class="chips">
+      <!-- A carousel (the owner, 2026-10-26): every artist's card in one row, swiped through, the next one peeking in;
+           the chips under it say which and take it there. -->
+      <div class="cards bleed" bind:this={row} onscroll={settle}>
         {#each artists as x, i (x.id)}
-          {#if i !== open}<button class="chip" onclick={() => (open = i)}><img src={picture(x)} alt="" />{x.name}</button>{/if}
+          <div class="slide" data-at={i}>
+            <article class="card">
+              <div class="wash" aria-hidden="true"><img src={picture(x)} alt="" /></div>
+              <div class="top">
+                <button class="who" onclick={() => viewOver(artistSubject('cratarr', x.name))}>
+                  {#if x.photo}<img class="face" src={artistPhotoUrl(x.id)} alt="" />{/if}
+                  <span><b>{x.name}</b><small>{x.albums.length === 1 ? '1 album' : `${x.albums.length} albums`}</small></span>
+                </button>
+                <!-- On a phone a fanned stack beside the name (C4); wider, a 2×2 grid beside the text (C). -->
+                <button class="fan" aria-label={`Albums by ${x.name}`} onclick={() => openAt(x.name, 'albums')}>
+                  {#each x.albums.slice(0, 3).reverse() as id (id)}<img src={albumCoverUrl('cratarr', id)} alt="" />{/each}
+                </button>
+              </div>
+              {#if x.bio}
+                <button
+                  class="bio"
+                  onclick={() => openAt(x.name, 'about')}>{x.bio}</button
+                >
+              {/if}
+              <ul class="grid">
+                {#each x.albums as id (id)}
+                  <li><button onclick={() => viewOver(albumSubject('cratarr', id))} aria-label="Open album"><img src={albumCoverUrl('cratarr', id)} alt="" /></button></li>
+                {/each}
+              </ul>
+              {#if x.bio}<small class="credit">TheAudioDB</small>{/if}
+            </article>
+          </div>
+        {/each}
+      </div>
+      <div class="chips bleed">
+        {#each artists as x, i (x.id)}
+          <button class="chip" class:on={i === open} aria-current={i === open || undefined} onclick={() => goTo(i)}><img src={picture(x)} alt="" loading="lazy" />{x.name}</button>
         {/each}
       </div>
     </div>
@@ -73,8 +98,37 @@
 
 <style>
   .wrap {
-    container-type: inline-size;
+    --bleed: 16px;
     padding: 0 16px;
+  }
+
+  /* One card a screen, the next peeking in; each card its own container (its wide layout from its own width). */
+  .cards {
+    display: flex;
+    gap: 12px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+  }
+
+  .cards::-webkit-scrollbar {
+    display: none;
+  }
+
+  .slide {
+    flex: 0 0 min(88%, 640px);
+    container-type: inline-size;
+    scroll-snap-align: center;
+  }
+
+  .slide > .card {
+    height: 100%;
+    box-sizing: border-box;
+  }
+
+  .chip.on {
+    border-color: var(--accent);
   }
 
   /* The card, washed in the picture's colour and darkened enough that its text always reads. */

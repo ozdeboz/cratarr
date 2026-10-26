@@ -122,7 +122,7 @@
 {#if gaps.length}
   <section aria-label="Discography gaps">
     <SectionHead title="Discography gaps" />
-    <div class="row">
+    <div class="row bleed">
       {#each gaps as a (a.key)}
         <div class="album-box">
           <button class="album" onclick={() => onopen(a)} use:longpress={() => onmenu(a)}>
@@ -148,7 +148,7 @@
         {@const fan = ownAlbums(name)}
         {@const wash = photos[name] ? discoverArtistPhotoUrl(name) : (fan[0] ?? null)}
         <!-- Wider than the page (the owner, 2026-10-26): it scrolls sideways, never leaving empty room. -->
-        <div class="around-scroll">
+        <div class="around-scroll bleed">
         <div class="masonry" style={`--cols: ${grid.cols}; --rows: ${grid.rows};`}>
           <!-- The seed's own tile (the owner, 2026-10-25), as an artist to explore's card: glass washed in its photo (else
                its first album), its round photo at the top of the left half, its words at the foot of it, a fan of its
@@ -235,7 +235,7 @@
 {#if sec.fresh.length}
   <section aria-label="New from artists you have">
     <SectionHead title="New from artists you have" />
-    <div class="row">
+    <div class="row bleed">
       {#each sec.fresh as a (a.key)}
         <div class="album-box">
           <button class="album" onclick={() => onopen(a)} use:longpress={() => onmenu(a)}>
