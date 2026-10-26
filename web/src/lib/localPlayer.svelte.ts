@@ -376,6 +376,9 @@ async function appendTrack(index: number, from: number, gen: number) {
     let length: number | null = null;
     const told = Number(res.headers.get('x-duration-ms')) / 1000 || null;
     const segment: Segment = { index, start, length: null, told };
+    /** An MP3's encoder delay: its LAME header's, else as the stream says it (Cratarr's own MP3 form has no header and
+     *  sends x-pre-skip, a5 0.9.8). */
+    const delayOf = (h: Mp3Head) => h.delay || Number(res.headers.get('x-pre-skip')) || 0;
     const place = async (rate: number, skip: number, samples: number | null) => {
       if (!sb) {
         sb = ms!.addSourceBuffer(kind);
@@ -449,7 +452,7 @@ async function appendTrack(index: number, from: number, gen: number) {
           continue;
         }
         if (h === 'invalid') throw new Error(`${t.name} is not a playable MP3.`);
-        await place(h.rate, h.delay, h.samples);
+        await place(h.rate, delayOf(h), h.samples);
         chunk = joined.subarray(h.at);
       }
       await appendBytes(chunk, gen, ctl.signal);
@@ -457,7 +460,7 @@ async function appendTrack(index: number, from: number, gen: number) {
     if (!placed && head.length) {
       const h = mp3Head(head);
       if (h && h !== 'invalid') {
-        await place(h.rate, h.delay, h.samples);
+        await place(h.rate, delayOf(h), h.samples);
         await appendBytes(head.subarray(h.at), gen, ctl.signal);
       }
     }
