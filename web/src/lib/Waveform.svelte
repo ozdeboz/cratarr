@@ -99,9 +99,11 @@
     if (moving) raf = requestAnimationFrame(step);
     else if (w === 'line' && gap.every((g) => g === 0)) onflat?.();
   }
-  /** Each piece may start a little after the one to its left. */
+  /** Each piece may start a little after the one to its left. Where a wave is still running, the pieces it has not
+   *  reached keep their turn in it (it goes on to the right, toward what they should now be), and those it passed start
+   *  a new wave from the left alongside it (the owner, 2026-10-26). */
   function stagger(t: number) {
-    for (let i = 0; i < n; i++) from[i] = t + (i / n) * SPREAD_MS;
+    for (let i = 0; i < n; i++) if (from[i] <= t) from[i] = t + (i / n) * SPREAD_MS;
   }
 
   // As many pieces as fit: (again) where they should be, at once.
