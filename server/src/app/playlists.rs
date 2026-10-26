@@ -231,6 +231,30 @@ pub struct DugAlbum {
     pub last_played: Option<i64>,
 }
 
+/// The one similarity's library over these files and playlists, made once and shared (0.9.7: each of Home's
+/// requests made its own over every file, three at a time on each Home, and the sim went past 768 MB). Made again
+/// when the files (the crates' facts, read again) or the playlists' members change.
+fn shared_alike(files: &Arc<Vec<crates::Facts>>, membership: &HashMap<String, Vec<String>>) -> Arc<crates::Alike> {
+    use std::hash::{Hash, Hasher};
+    static KEPT: std::sync::Mutex<Option<(usize, u64, Arc<crates::Alike>)>> = std::sync::Mutex::new(None);
+    let mut members: Vec<(&String, &Vec<String>)> = membership.iter().collect();
+    members.sort_unstable_by(|a, b| a.0.cmp(b.0));
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    members.hash(&mut h);
+    let key = (Arc::as_ptr(files) as usize, h.finish());
+    let mut kept = KEPT.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some((p, m, a)) = kept.as_ref()
+        && (*p, *m) == key
+    {
+        return a.clone();
+    }
+    // The one before let go first: two at once over every file is what the limit cannot hold.
+    *kept = None;
+    let made = Arc::new(crates::Alike::of(files, membership));
+    *kept = Some((key.0, key.1, made.clone()));
+    made
+}
+
 pub(super) struct CrateLibrary {
     pub(super) source: String,
     /// Every library's files (`Catalogue::crate_facts`); `files()` leaves out those switched off.
@@ -241,8 +265,9 @@ pub(super) struct CrateLibrary {
     favourites: Option<HashSet<String>>,
     /// The lines of the viewer's favourite albums (decision 0024, amended 2026-10-19), when asked for.
     favourite_albums: Option<HashSet<String>>,
-    /// The library as the one similarity sees it, made when a Sounds like first asks (`crates::Alike`).
-    alike: std::sync::OnceLock<crates::Alike>,
+    /// The library as the one similarity sees it, made when a Sounds like first asks (`crates::Alike`), shared by
+    /// every request over the same files and playlists (`shared_alike`).
+    alike: std::sync::OnceLock<Arc<crates::Alike>>,
     /// What the viewer did with each line (plays, last played, rating: the crates' listener conditions); `None` when
     /// no one asks (Home Assistant, voice).
     uses: Option<HashMap<String, crates::Use>>,
@@ -253,7 +278,7 @@ pub(super) struct CrateLibrary {
 impl CrateLibrary {
     /// The library as the one similarity sees it (`crates::Alike`): every file, any library, with its playlists.
     pub(super) fn alike(&self) -> &crates::Alike {
-        self.alike.get_or_init(|| crates::Alike::of(&self.files, &self.membership))
+        self.alike.get_or_init(|| shared_alike(&self.files, &self.membership))
     }
 
     /// The viewer's Similar by.
