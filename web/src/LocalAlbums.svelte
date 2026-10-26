@@ -80,7 +80,9 @@
 <style>
   /* As wide as the page, as the Library. */
   main {
-    padding: 6px clamp(12px, 2vw, 32px) 48px;
+    /* Its side gutter, which Flow's covers reach past to the page's edges (lib/AlbumShelf). */
+    --gutter: clamp(12px, 2vw, 32px);
+    padding: 6px var(--gutter) 48px;
   }
 
   .empty {

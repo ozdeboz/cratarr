@@ -16,6 +16,7 @@
   import type { Matched } from './search';
   import Cover from './Cover.svelte';
   import CoverFlow from './CoverFlow.svelte';
+  import { backdropUrl } from './backdrop.svelte';
   import { addedOn, albumPlay, loadAlbumUses, playAlbums, playListedAlbum, quality, tracksOfAlbums, useOf, weak } from './albums.svelte';
   import { download, inApp } from './app.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
@@ -219,6 +220,27 @@
   /** What the coverflow leaves unused over its covers: the stage and the name move up by half, so they sit together in
    *  the middle of the room. */
   let flowSpare = $state(0);
+  /** One's own picture behind the whole page in Flow (the owner, 2026-10-26: "should cover the entire page always"),
+   *  not only behind the covers: fixed under the top bar, as wide as the page (beside a sidebar or a player, the page's
+   *  own part). */
+  const flowWall = $derived(prefs.albumLayout === 'flow' && !!backdropUrl());
+  function besidePage(el: HTMLElement) {
+    const page = el.parentElement?.closest('.page') as HTMLElement | null;
+    if (!page) return;
+    const place = () => {
+      const r = page.getBoundingClientRect();
+      el.style.left = `${r.left}px`;
+      el.style.width = `${r.width}px`;
+    };
+    place();
+    const watch = new ResizeObserver(place);
+    watch.observe(page);
+    addEventListener('resize', place);
+    return () => {
+      watch.disconnect();
+      removeEventListener('resize', place);
+    };
+  }
   /** Room kept for the mini-player at the window's foot, there or not (the owner, 2026-10-23: assume it). */
   const MINI = 96;
   function fill(node: HTMLElement) {
@@ -432,7 +454,8 @@
              album named under it; a tap on it views it (in select mode ticks it, a ticked one highlighted), one
              beside it comes to the front. -->
         {@const front = albums[flowAt[s.id] ?? 0]}
-        <div class="flow" style:transform="translateY({-flowSpare / 2}px)">
+        {#if flowWall}<div class="flow-wall" {@attach besidePage} aria-hidden="true"></div>{/if}
+        <div class="flow" class:on-wall={flowWall} style:transform="translateY({-flowSpare / 2}px)">
           <div class="stage" {@attach fill} style:height="{stageHeight}px">
             <CoverFlow
               covers={albums.map((a) => albumCoverUrl(s.id, a.id))}
@@ -880,14 +903,31 @@
     padding: 4px 0 12px;
   }
 
-  /* One's own picture behind every flow, under a veil (Settings › Appearance; the owner, 2026-10-26). */
-  /* Behind the covers only: the front album's name stays on the page, legible in either theme. */
-  :global(:root[data-flow-photo]) .stage {
+  /* One's own picture behind every flow, under a veil (Settings › Appearance; the owner, 2026-10-26): behind the whole
+     page here, under the top bar, the front album's name light on it in either theme. */
+  .flow-wall {
+    position: fixed;
+    top: calc(var(--top-h, 0px) + env(safe-area-inset-top));
+    bottom: 0;
+    z-index: -1;
     background:
-      linear-gradient(to bottom, rgb(0 0 0 / 0.35), rgb(0 0 0 / 0.55)),
+      linear-gradient(to bottom, rgb(0 0 0 / 0.35), rgb(0 0 0 / 0.6)),
       var(--flow-photo) center 20% / cover no-repeat,
       var(--surface);
-    border-radius: 12px;
+    pointer-events: none;
+  }
+
+  /* On it, the covers and their side fades reach the page's edges (the owner, 2026-10-26), past the page's gutter. */
+  .flow.on-wall .stage {
+    margin-inline: calc(-1 * var(--gutter, 0px));
+  }
+
+  .flow.on-wall .caption .title {
+    color: #fff;
+  }
+
+  .flow.on-wall .caption .by {
+    color: rgb(255 255 255 / 0.75);
   }
 
   .stage {
