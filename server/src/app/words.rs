@@ -89,6 +89,14 @@ const FLOOR: f32 = 0.15;
 /// An artist's words count for each of their albums at this share.
 const ARTIST_SHARE: f32 = 0.5;
 
+/// An album's words of each kind kept, at most: its strongest.
+fn most_of(kind: &str) -> usize {
+    match kind {
+        "genre" | "mood" => 3,
+        _ => 5,
+    }
+}
+
 /// How far a source's word is trusted: the files and the household's own words the most.
 fn trust(source: &str, raw_kind: &str) -> f32 {
     match (source, raw_kind) {
@@ -188,6 +196,15 @@ pub fn merge(said: &[Said]) -> Merged {
     }
     for words in albums.values_mut() {
         words.sort_by(|a, b| b.weight.total_cmp(&a.weight).then_with(|| a.word.cmp(&b.word)));
+        // The strongest of each kind only (0.9.7): every file carries its album's words in the crates' facts, which are
+        // held several times over (the radio, the similarity library, search); a long tail of passing tags cost the
+        // sim about 90 MB at half the harvest, and said little.
+        let mut kept: HashMap<&'static str, usize> = HashMap::new();
+        words.retain(|w| {
+            let n = kept.entry(w.kind).or_default();
+            *n += 1;
+            *n <= most_of(w.kind)
+        });
     }
     Merged { albums }
 }
@@ -337,6 +354,15 @@ mod tests {
         assert!(a.contains(&("Downtempo", "style")), "curated, so a style however Last.fm calls it: {a:?}");
         assert!(a.contains(&("melancholic", "mood")) && a.contains(&("seen at the park", "tag")), "{a:?}");
         assert!(a.iter().any(|(w, k)| w.eq_ignore_ascii_case("shoegaze") && *k == "genre"), "a file's genre stays a genre: {a:?}");
+    }
+
+    #[test]
+    fn an_album_keeps_its_strongest_words_of_each_kind() {
+        let tags: Vec<Said> = (0..9).map(|i| said("a", "lastfm", &format!("tag {i}"), "tag", 0.9 - i as f32 * 0.05)).collect();
+        let m = merge(&tags);
+        let a = m.albums.get("a").unwrap();
+        assert_eq!(a.len(), 5, "five tags at most");
+        assert_eq!(a[0].word, "tag 0", "the strongest first");
     }
 
     #[test]
