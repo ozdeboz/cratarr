@@ -41,6 +41,14 @@ object Net {
         (context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager).isActiveNetworkMetered
 
     private fun ours(prefs: Prefs, url: String) = Prefs.originOf(url)?.let { it in prefs.origins() } == true
+
+    /** Whether [url]'s address refused this session within [REFUSED_MS] (0.9.7: the page says the local address did,
+     *  as the app goes by the public one meanwhile). */
+    fun refused(url: String): Boolean {
+        val origin = Prefs.originOf(url) ?: return false
+        val (was, at) = refusals[origin] ?: return false
+        return was == session(url) && SystemClock.elapsedRealtime() - at < REFUSED_MS
+    }
     private fun session(url: String) = cookie(url).orEmpty()
 
     /** The WebView's cookies for [url] (its session, once signed in there); null without any, or without a WebView. */
