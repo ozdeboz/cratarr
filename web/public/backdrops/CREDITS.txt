@@ -8,3 +8,7 @@ wall        Tim Mossholder      https://unsplash.com/photos/opeF-ObCG0A
 lamp        engin akyurt        https://unsplash.com/photos/-yPnoLNc_Go
 flowers     Juli Kosolapova     https://unsplash.com/photos/COUZB0613Ns
 mountains   Marek Piwnicki      https://unsplash.com/photos/-_OuVFhN5BU
+leaf        Yousef Espanioly    https://unsplash.com/photos/hbQeCpo-Cp0
+yellow      Danielle Suijkerbuijk https://unsplash.com/photos/YUMDBd6wFME
+amplifier   Chris DUNN          https://unsplash.com/photos/WpeP9CMZVpM
+records     james chan          https://unsplash.com/photos/zk-a1QqWcjo
