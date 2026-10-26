@@ -95,11 +95,18 @@
   // The backdrop list: the current blurred cover, and while it fades in, the one before it.
   let backdrops = $state<{ key: number; src: string }[]>([]);
   let backdropKey = 0;
+  const BACKDROP_FADE_MS = 1000;
   $effect(() => {
     const s = src;
     untrack(() => {
       if (!s) backdrops = [];
-      else if (backdrops.at(-1)?.src !== s) backdrops = [{ key: ++backdropKey, src: s }];
+      else if (backdrops.at(-1)?.src !== s) {
+        // The one before stays under it until it is covered (the owner, 2026-10-26: it went at once; an outro of the
+        // list's only item did not hold it), then goes.
+        const key = ++backdropKey;
+        backdrops = [...backdrops.slice(-1), { key, src: s }];
+        setTimeout(() => (backdrops = backdrops.filter((b) => b.key >= key)), reducedMotion() ? 0 : BACKDROP_FADE_MS);
+      }
     });
   });
   // Finamp's cover: a hard cut when the image is there at once, which it always is here (remote.svelte.ts shows a
@@ -396,7 +403,7 @@
   <!-- The blurred cover: a new one fades in over the old one in a second (Finamp's background), the old one staying
        until it is covered. -->
   {#each backdrops as b (b.key)}
-    <img class="backdrop" src={b.src} alt="" aria-hidden="true" in:fade={{ duration: reducedMotion() ? 0 : 1000, easing: linear }} out:fade={{ duration: 0, delay: reducedMotion() ? 0 : 1000 }} />
+    <img class="backdrop" src={b.src} alt="" aria-hidden="true" in:fade={{ duration: reducedMotion() ? 0 : BACKDROP_FADE_MS, easing: linear }} />
   {/each}
   <div class="veil"></div>
   <header
@@ -475,7 +482,7 @@
       <i class="sp a"></i>
       <div class="track">
         {#if np}
-          <div class="title">{np.name}</div>
+          <div class="title"><span>{np.name}</span></div>
           <div class="sub">
             {#if np.artist}<button class="artist" disabled={!by} onclick={() => by && goToArtist(np.source, by)}
                 ><span>{np.artist}</span>{#if byFavorite}<i class="liked" role="img" aria-label="Favourite"><Icon name="heart" size={14} /></i>{/if}</button
@@ -484,7 +491,7 @@
           </div>
         {:else if isLocal() || live.view}
           <!-- Another player's: said once its state was read, not before the first poll (the owner, 2026-10-24). -->
-          <div class="title idle">Nothing is playing</div>
+          <div class="title idle"><span>Nothing is playing</span></div>
         {/if}
       </div>
       {#if np}
@@ -971,15 +978,25 @@
     filter: blur(14px) saturate(1.2);
   }
 
+  /* Always two lines' room, a one-line title in their middle (the owner, 2026-10-26: no layout shift from track to
+     track). */
   .title {
+    display: flex;
+    align-items: center;
+    height: 2.5em;
+    font-size: 1.6rem;
+    font-weight: 650;
+    line-height: 1.25;
+  }
+
+  .title > span {
     display: -webkit-box;
+    flex: 1;
+    min-width: 0;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
     line-clamp: 2;
     overflow: hidden;
-    font-size: 1.6rem;
-    font-weight: 650;
-    line-height: 1.25;
   }
 
   .title.idle {
@@ -1346,6 +1363,10 @@
 
 
   header.drop-title .title {
+    height: 1.25em;
+  }
+
+  header.drop-title .title > span {
     display: block;
     text-overflow: ellipsis;
     white-space: nowrap;

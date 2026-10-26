@@ -90,8 +90,9 @@ async function analyse(key: string, url: string) {
   return scaled(rms);
 }
 
-/** How often each track's waveform found the server busy. */
+/** How often each track's waveform found the server busy; the server busy, already set to be asked again. */
 const busyTries = new Map<string, number>();
+const BUSY_AGAIN = new Error('busy');
 
 /** Reads a track's waveform, once; a Bandcamp preview's is worked out here. The server busy, asked again a little later
  *  (lib/analysisAsks), not taken as none. */
@@ -115,16 +116,19 @@ export function loadWaveform(source: string, id: string) {
         const tries = (busyTries.get(key) ?? 0) + 1;
         if (r.status === BUSY && tries < TRIES) {
           busyTries.set(key, tries);
-          setTimeout(() => loadWaveform(source, id), AGAIN_MS);
-          throw new Error('busy');
+          setTimeout(() => {
+            asked.delete(key);
+            loadWaveform(source, id);
+          }, AGAIN_MS);
+          throw BUSY_AGAIN;
         }
         return r.ok ? readAll(r, (share) => (loading[key] = share)) : null;
       })
       .then(
         (b) => (waves[key] = b && b.byteLength ? b : null),
-        () => {
-          // Asked again the next time it shows.
-          asked.delete(key);
+        (e) => {
+          // Asked again the next time it shows, not before AGAIN_MS (it showed four times a second, the page unreachable).
+          if (e !== BUSY_AGAIN) setTimeout(() => asked.delete(key), AGAIN_MS);
         },
       )
       .finally(() => delete loading[key]);

@@ -101,13 +101,15 @@ export function loadSpectrum(source: string, id: string, duration: number) {
         spectra[key] = s;
       },
       (e) => {
-        // Asked again the next time it shows; the server busy, by itself a little later too.
-        asked.delete(key);
+        // Asked again the next time it shows after AGAIN_MS; the server busy, by itself then too.
         const tries = (busyTries.get(key) ?? 0) + 1;
-        if (e instanceof Busy && tries < TRIES) {
-          busyTries.set(key, tries);
-          setTimeout(() => loadSpectrum(source, id, duration), AGAIN_MS);
-        }
+        setTimeout(() => {
+          asked.delete(key);
+          if (e instanceof Busy && tries < TRIES) {
+            busyTries.set(key, tries);
+            loadSpectrum(source, id, duration);
+          }
+        }, AGAIN_MS);
       },
     );
 }
