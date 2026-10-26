@@ -26,7 +26,8 @@
   import BandGlass from './BandGlass.svelte';
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { ramping } from './ramping.svelte';
-  import { local, restoreUpcoming, setRepeat, shuffleUpcoming } from './localPlayer.svelte';
+  import { appInfo, inApp } from './app.svelte';
+  import { local, restoreUpcoming, setRepeat, shuffleUpcoming, windUpMs } from './localPlayer.svelte';
   import QueueMenu from './QueueMenu.svelte';
   import { playingCrateOuts } from './crates.svelte';
   import { localMode } from './deviceMusic.svelte';
@@ -70,6 +71,16 @@
   });
   const memberCount = $derived(shownPlaylists().filter((p) => p.member).length);
   const src = $derived(shownCover());
+  /** Start and stop on for this device's player: a start winds up (the play button's fill stays empty while paused). */
+  const armed = $derived(isLocal() && (inApp ? appInfo.startStop.mode : prefs.startStop.mode) !== 'off');
+  /** A ramp of this device's player under way, its way. */
+  const ramp = $derived(isLocal() ? ramping.dir : null);
+  /** Paused with Start and stop on: how much of the wind-up the fill already shows, from where it would start (as it
+   *  is held while seeking too): near the track's start the wind-up is shorter (lib/localPlayer windUpMs). */
+  const pre = $derived.by(() => {
+    const ss = inApp ? appInfo.startStop : prefs.startStop;
+    return ss.ms ? 1 - windUpMs(ss.ms, ss.mode, pos) / ss.ms : 1;
+  });
   // A new cover slow to come (the owner, 2026-10-26): after COVER_WAIT_MS the old one fades to dark and the ring fades
   // in over it; the new one takes its place at once when it is in.
   const COVER_WAIT_MS = 300;
@@ -510,9 +521,18 @@
               <button class="shuffle" aria-label="Shuffle the rest of the queue" onclick={shuffleOnce}><Icon name="shuffle" size={22} /></button>
             {/if}
             <button aria-label="Previous track" onclick={() => send('previous')}><Icon name="previous" size={24} /></button>
-            <!-- Winding down (Start and stop), its fill drains from the top over the ramp (the owner, 2026-10-26). -->
-            <button class="main" class:draining={isLocal() && ramping.dir === 'out'} aria-label={paused() ? 'Play' : 'Pause'} onclick={() => send('play-pause')}
-              >{#if isLocal() && ramping.dir === 'out'}{#key ramping.at}<span class="drain" style:animation-duration="{ramping.ms}ms"></span>{/key}{/if}<Icon
+            <!-- Its fill (the owner, 2026-10-26), inside a border of the same colour: winding down (Start and stop) it drains
+                 from the top over the ramp; paused with Start and stop on it stays empty (a start winds up); winding up it
+                 fills from the bottom over the ramp, the way it went. -->
+            <button class="main" aria-label={paused() ? 'Play' : 'Pause'} onclick={() => send('play-pause')}
+              >{#key `${ramp}:${ramping.at}`}<span
+                  class="fillbg"
+                  class:drain={ramp === 'out'}
+                  class:fillup={ramp === 'in'}
+                  class:empty={ramp === null && armed && paused()}
+                  style:--pre={ramp === 'in' ? 1 - ramping.ms / Math.max(1, ramping.full) : armed && paused() ? pre : 0}
+                  style:animation-duration={ramp ? `${ramping.ms}ms` : null}
+                ></span>{/key}<Icon
                 name={paused() ? 'play' : 'pause'}
                 size={32}
               /></button
@@ -1104,29 +1124,39 @@
   /* Play/pause in Finamp's shape: a rounded square (a quarter of its size as radius), tinted with the text colour,
      its icon lifted by a soft shadow. Previous and next are plain icons. */
   .transport button.main {
+    position: relative;
     width: 62px;
     height: 62px;
     border-radius: 16px;
-    background: color-mix(in srgb, var(--text) 15%, transparent);
-  }
-
-  .transport button.main.draining {
-    position: relative;
     background: transparent;
+    /* Its border, the fill's colour: there when the fill is not. */
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--text) 15%, transparent);
   }
 
-  .transport button.main.draining :global(svg) {
+  .transport button.main :global(svg) {
     position: relative;
   }
 
-  .drain {
+  .fillbg {
     position: absolute;
     inset: 0;
     border-radius: inherit;
     background: color-mix(in srgb, var(--text) 15%, transparent);
-    /* Evenly over the ramp's time: what is left of it. */
-    animation: drain linear forwards;
     pointer-events: none;
+  }
+
+  /* Paused with Start and stop on: empty, but for the part of the wind-up there is no track for. */
+  .fillbg.empty {
+    clip-path: inset(calc((1 - var(--pre, 0)) * 100%) 0 0 0);
+  }
+
+  /* Evenly over the ramp's time: draining from the top, or filling from the bottom. */
+  .fillbg.drain {
+    animation: drain linear forwards;
+  }
+
+  .fillbg.fillup {
+    animation: fillup linear forwards;
   }
 
   @keyframes drain {
@@ -1138,8 +1168,18 @@
     }
   }
 
+  @keyframes fillup {
+    from {
+      clip-path: inset(calc((1 - var(--pre, 0)) * 100%) 0 0 0);
+    }
+    to {
+      clip-path: inset(0 0 0 0);
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
-    .drain {
+    .fillbg.drain,
+    .fillbg.fillup {
       animation-timing-function: steps(4, end);
     }
   }

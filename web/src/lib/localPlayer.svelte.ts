@@ -1603,7 +1603,8 @@ async function rampOut(): Promise<void> {
 /** Plays, winding up from still (or silence); not while a ramp is under way. */
 function rampIn() {
   if (!audio || committed !== null) return;
-  const { mode, ms } = prefs.startStop;
+  const { mode } = prefs.startStop;
+  let { ms } = prefs.startStop;
   // From a track's start it plays at once, always (the owner, 2026-10-26): there is nothing to wind up from.
   if (mode === 'off' || (where()?.offset ?? 0) < FROM_START) {
     unramp();
@@ -1616,12 +1617,16 @@ function rampIn() {
   // way up): it starts that much early, within the track and what is loaded.
   const saved = audio.currentTime;
   const w = where(saved);
-  const start = Math.max(w ? w.seg.start : 0, saved - (ms / 1000) * (mode === 'fade' ? 1 : RAMP_LOW + ((1 - RAMP_LOW) * 2) / 3));
+  // No longer than there is track before it (the owner, 2026-10-26: a 3 s fade 1 s in is a 1 s fade).
+  const pace = mode === 'fade' ? 1 : RAMP_LOW + ((1 - RAMP_LOW) * 2) / 3;
+  const full = ms;
+  ms = windUpMs(ms, mode, w ? w.offset : 0);
+  const start = Math.max(w ? w.seg.start : 0, saved - (ms / 1000) * pace);
   heldAt = saved;
   if (inBuffer(start)) audio.currentTime = start;
   const set = rampSet(mode);
   set(mode === 'fade' ? 0 : RAMP_LOW);
-  rampBegins('in', ms);
+  rampBegins('in', ms, full);
   void audio.play().catch(() => {});
   void ramp(mode === 'fade' ? 0 : RAMP_LOW, 1, ms, set, mode === 'fade' ? easeInOut : easeOut).then(() => {
     rampEnds();
@@ -1674,6 +1679,14 @@ function inBuffer(t: number) {
 }
 /** Within this much of a track's start (s), play is never ramped. */
 const FROM_START = 0.5;
+/** How long a wind-up from `offset` s into the track takes: its set `ms`, but no longer than the track before it
+ *  allows (at a vinyl's pace, two thirds of full speed on average); none from the very start (the play button shows
+ *  this before it starts, lib/NowPlaying). */
+export function windUpMs(ms: number, mode: 'off' | 'vinyl' | 'fade', offset: number): number {
+  if (mode === 'off' || offset < FROM_START) return 0;
+  const pace = mode === 'fade' ? 1 : RAMP_LOW + ((1 - RAMP_LOW) * 2) / 3;
+  return Math.min(ms, (offset / pace) * 1000);
+}
 /** Cratarr's track as this player keeps it. */
 function trackOf(t: Record<string, unknown>): LocalTrack | null {
   if (typeof t.source !== 'string' || typeof t.id !== 'string') return null;
