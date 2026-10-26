@@ -259,6 +259,7 @@ mod tests {
     #[test]
     fn non_ascii_values_split_safely() {
         let r = Rules::default();
-        assert_eq!(r.values("artist", &s(&["Ålborg/Ødegård"])), s(&["Ålborg", "Ødegård"]));
+        assert_eq!(r.values("artist", &s(&["Ålborg / Ødegård"])), s(&["Ålborg", "Ødegård"]));
+        assert_eq!(r.values("genre", &s(&["Ålborg/Ødegård"])), s(&["Ålborg", "Ødegård"]), "unspaced, at a character boundary");
     }
 }
