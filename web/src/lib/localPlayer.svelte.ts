@@ -1659,9 +1659,12 @@ async function skipRamped(go: () => void) {
   if (committed !== null) return;
   if (s.mode === 'off' || !s.skips || !audio || audio.paused || handed()) return go();
   committed = false;
+  // The counter stays where it was pressed until the change (as the app does).
+  heldAt = audio.currentTime;
   try {
     await rampOut();
   } finally {
+    heldAt = null;
     committed = null;
   }
   unramp();
