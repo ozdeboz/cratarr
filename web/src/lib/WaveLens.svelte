@@ -6,7 +6,9 @@
   // the point. Its centre keeps 10 px inside the player; a stem runs from the point up to it, a white line crosses the
   // waveform at the point, and the time where it will land sits above it in a small tag. Geometry as claude-5f's mock
   // (lens-real.png, gen5.py): 130 px, its bottom edge 36 px above the waveform's middle. `now` (0..1): where it plays,
-  // a line in the lens's text colour when it is within it (the owner, 2026-10-24: something to aim for).
+  // a line in the lens's text colour when it is within it (the owner, 2026-10-24: something to aim for). What it shows is
+  // always centred on the point, the lens kept inside the player or not (the owner, 2026-10-26: the point never leaves
+  // its centre; at the ends the waveform stops short of its edge).
   import { bars } from './waveforms.svelte';
 
   let {
@@ -50,7 +52,7 @@
 <span class="pin" style:left="{x - 1}px" style:top="{middle - waveHeight / 2}px" style:height="{waveHeight}px" aria-hidden="true"></span>
 <span class="stem" style:left="{x - 1}px" style:top="{top + D - 2}px" style:height="{LIFT - D / 2 + 2}px" aria-hidden="true"></span>
 <span class="lens" class:paused style:left="{c - D / 2}px" style:top="{top}px" aria-hidden="true">
-  <span class="inner" style:left="{D / 2 - c * ZOOM}px" style:top="{(D - INNER) / 2}px" style:width="{width * ZOOM}px" style:height="{INNER}px">
+  <span class="inner" style:left="{D / 2 - x * ZOOM}px" style:top="{(D - INNER) / 2}px" style:width="{width * ZOOM}px" style:height="{INNER}px">
     {#each [false, true] as played (played)}
       <svg class:played viewBox="0 0 {fine.length} 100" preserveAspectRatio="none" style:clip-path={played ? `inset(0 ${(1 - point) * 100}% 0 0)` : undefined}>
         {#each fine as v, i (i)}
@@ -60,8 +62,8 @@
       </svg>
     {/each}
   </span>
-  <span class="mark" style:left="{D / 2 + (x - c) * ZOOM - 1}px"></span>
-  {#if now !== null && Math.abs((now * width - c) * ZOOM) < D / 2 - 4}<span class="mark now" style:left="{D / 2 + (now * width - c) * ZOOM - 1}px"></span>{/if}
+  <span class="mark" style:left="{D / 2 - 1}px"></span>
+  {#if now !== null && Math.abs((now * width - x) * ZOOM) < D / 2 - 4}<span class="mark now" style:left="{D / 2 + (now * width - x) * ZOOM - 1}px"></span>{/if}
 </span>
 <span class="tag" style:left="{c}px" style:top="{top - 26}px">{time}</span>
 
