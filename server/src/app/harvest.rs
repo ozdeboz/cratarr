@@ -123,7 +123,7 @@ async fn round() -> Result<()> {
 }
 
 /// The batch of `subjects` due at a source: those never asked, in the library's order, then those asked longest ago.
-async fn due<'a, T>(served: &std::sync::Arc<crate::serve::Serve>, source: &'static str, subjects: impl Iterator<Item = (String, &'a T)>, again: i64) -> Result<Vec<(String, &'a T)>> {
+async fn due<'a, T: 'a>(served: &std::sync::Arc<crate::serve::Serve>, source: &'static str, subjects: impl Iterator<Item = (String, &'a T)>, again: i64) -> Result<Vec<(String, &'a T)>> {
     let ud = served.userdata.clone();
     let asked: HashMap<String, i64> = tokio::task::spawn_blocking(move || ud.words_asked_at(source)).await??;
     let now = super::moment::now_secs();

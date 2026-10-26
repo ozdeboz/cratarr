@@ -384,6 +384,7 @@ impl App {
         let s = served.clone();
         let ruled = tokio::task::spawn_blocking(move || super::fixes::ruled_albums(&s)).await??;
         if !ruled.is_empty() {
+            let count = ruled.len() as u64;
             let s = served.clone();
             let items = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Item>> {
                 let mut items = Vec::new();
@@ -395,7 +396,6 @@ impl App {
                 Ok(items)
             })
             .await??;
-            let count = ruled.len() as u64;
             let mut f = finding("library", "library:rules", Level::Info, count, n(count, "album a rule names otherwise", "albums a rule names otherwise"));
             f.items = items;
             out.push(f);

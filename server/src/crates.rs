@@ -821,7 +821,7 @@ pub struct World<'a> {
     pub now: i64,
 }
 
-const AXES: [(&str, &str, Kind); 20] = [
+const AXES: [(&str, &str, Kind); 21] = [
     ("favourite", "Favourite", Kind::YesNo),
     ("favourite_album", "Favourite album", Kind::YesNo),
     ("playlist", "In playlist", Kind::Membership),

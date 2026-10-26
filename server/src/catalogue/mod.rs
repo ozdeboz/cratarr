@@ -891,7 +891,7 @@ impl Catalogue {
         }
         // Each file with its album's words (0.9.7): genres, styles, moods and tags from every source.
         if let Some(s) = &served
-            && let (Ok(merged), Ok(albums)) = (crate::app::words::merged(s), s.library.song_albums())
+            && let (Ok(merged), Ok(albums)) = (crate::app::words::merged(s), s.library.song_album_map())
         {
             for f in &mut facts {
                 if let Some(words) = f.track.and_then(|t| albums.get(&crate::serve::ids::song(t))).and_then(|a| merged.albums.get(a)) {
