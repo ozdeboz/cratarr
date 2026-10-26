@@ -1398,6 +1398,18 @@
     border-bottom: 0;
   }
 
+  /* Its glass carried on past the window's foot: Safari on an iPhone shows the page under its own bar there, below
+     ours (the owner, 2026-10-27: an empty band of the page under the bar). */
+  .bar.bottom::after {
+    content: '';
+    position: absolute;
+    inset: 100% 0 auto;
+    height: 50vh;
+    background: inherit;
+    backdrop-filter: inherit;
+    pointer-events: none;
+  }
+
   /* Scrolled away (Display's Hide when scrolling): off its edge. */
   .bar.away {
     transform: translateY(-100%);

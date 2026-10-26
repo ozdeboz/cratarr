@@ -18,7 +18,7 @@ import { playback } from './deviceLog';
 import { cue } from './queueCue.svelte';
 import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
-import { getTrackGain, playerCommand, radioNext, type TrackGain } from './api';
+import { albumCoverUrl, getTrackGain, playerCommand, radioNext, type TrackGain } from './api';
 import { prefs } from './prefs.svelte';
 import { ramping, rampBegins, rampEnds } from './ramping.svelte';
 import { asksSignIn, toSignIn } from './reach.svelte';
@@ -809,12 +809,40 @@ function showOnLockScreen() {
   if (!('mediaSession' in navigator)) return;
   const t = local.queue[local.index];
   if (!t) return;
-  navigator.mediaSession.metadata = new MediaMetadata({
-    title: t.name,
-    artist: t.artist ?? '',
-    album: t.album ?? '',
-    artwork: [{ src: `/api/cover/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}` }],
-  });
+  lockScreenActions();
+  // The album's cover as the page shows it (in the browser's cache already), else the track's; given again once it is
+  // in, as iOS keeps a blank square for artwork that was not there yet when given (the owner's iPhone, 2026-10-27).
+  const src = new URL(t.album_id ? albumCoverUrl(t.source, t.album_id) : `/api/cover/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}`, location.href).href;
+  const give = () => {
+    if (local.queue[local.index] !== t) return;
+    navigator.mediaSession.metadata = new MediaMetadata({ title: t.name, artist: t.artist ?? '', album: t.album ?? '', artwork: [{ src }] });
+  };
+  give();
+  const img = new Image();
+  img.onload = give;
+  img.src = src;
+}
+
+/** What the lock screen's buttons do. Next and previous, not iOS's ±10 s that it shows unless seeking back and forth
+ *  are said to be none (the owner's iPhone, 2026-10-27); given again with each track, as WebKit may drop them. */
+function lockScreenActions() {
+  const ms_ = navigator.mediaSession;
+  ms_.setActionHandler('play', () => rampIn());
+  ms_.setActionHandler('pause', () => void pauseRamped());
+  ms_.setActionHandler('nexttrack', () => next());
+  ms_.setActionHandler('previoustrack', () => previous());
+  for (const a of ['seekbackward', 'seekforward'] as const) {
+    try {
+      ms_.setActionHandler(a, null);
+    } catch {
+      /* not known here */
+    }
+  }
+  try {
+    ms_.setActionHandler('seekto', (d) => d.seekTime !== undefined && seek(d.seekTime));
+  } catch {
+    /* older browsers */
+  }
 }
 
 /** The engine's audio element, for measuring (tools/gapless-lab, web/engine-lab.html); never for playback control. */
@@ -2073,15 +2101,4 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
   }
 }
 
-if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-  const ms_ = navigator.mediaSession;
-  ms_.setActionHandler('play', () => rampIn());
-  ms_.setActionHandler('pause', () => void pauseRamped());
-  ms_.setActionHandler('nexttrack', () => next());
-  ms_.setActionHandler('previoustrack', () => previous());
-  try {
-    ms_.setActionHandler('seekto', (d) => d.seekTime !== undefined && seek(d.seekTime));
-  } catch {
-    /* older browsers */
-  }
-}
+if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) lockScreenActions();

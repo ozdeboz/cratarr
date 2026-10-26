@@ -104,9 +104,15 @@
     padding: 0 16px 16px;
   }
 
+  /* The sheet's one slider, as wide as the sheet (the owner's iPhone, 2026-10-27: a short one under its name). */
+  .count :global(.control) {
+    flex: 1 1 14em;
+  }
+
   .count input {
-    width: 11em;
-    max-width: 100%;
+    flex: 1;
+    width: auto;
+    min-width: 0;
     accent-color: var(--accent);
   }
 
