@@ -50,9 +50,10 @@ export class Seek {
     });
   }
 
-  /** What the bar and the time show (seconds). */
+  /** What the bar and the time show (seconds): over Cancel, where it plays (let go there, that is what stays; the
+   *  owner, 2026-10-26: the waveform answers the Cancel button). */
   get pos() {
-    return this.snapped ? this.now() : (this.held ?? this.sought ?? this.now());
+    return this.snapped || this.overCancel ? this.now() : (this.held ?? this.sought ?? this.now());
   }
 
   /** Held at `secs`, `away` px above or below the bar: on the playing position (snapped) or not. */

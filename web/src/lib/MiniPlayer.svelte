@@ -171,6 +171,7 @@
     class="mini"
     class:dragging
     class:arming
+    class:grabbing
     style:--art-accent={art.accent ?? 'var(--accent)'}
     style:--share={share}
     style:transform="translateX({dx}px)"
@@ -329,6 +330,21 @@
   .mini.arming .body > :global(*) {
     opacity: 0;
     transition: opacity 850ms linear 150ms;
+  }
+
+  /* Held, the waveform's lens stands over the bar, outside it (the owner, 2026-10-26: it was cut off): nothing is
+     clipped, the cover and the bar keeping the rounded corners themselves. */
+  .mini.grabbing {
+    overflow: visible;
+  }
+
+  .mini.grabbing .cover-wrap {
+    overflow: hidden;
+    border-radius: 12px 0 0 12px;
+  }
+
+  .mini.grabbing .body {
+    border-radius: 0 12px 12px 0;
   }
 
   /* The waveform alone across the bar while it is held (lib/SeekWave), clear of the cover. */

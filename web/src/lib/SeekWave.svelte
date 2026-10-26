@@ -47,7 +47,7 @@
   /** Drawn as a waveform: one that shows something, or one still loading (its line). */
   const waveShown = $derived(shaped || (bins === undefined && loading !== null));
   const pos = $derived(seek.pos);
-  const nowMark = $derived(seek.held !== null && seek.lensOn && !seek.snapped && shaped && dur ? seek.now() / dur : null);
+  const nowMark = $derived(seek.held !== null && seek.lensOn && !seek.snapped && !seek.overCancel && shaped && dur ? seek.now() / dur : null);
   /** Where the Cancel button stands: above the waveform's middle. */
   let cancelX = $state(0);
 
@@ -109,6 +109,7 @@
   class="seek"
   class:can={canSeek}
   class:held={seek.held !== null}
+  class:cancelling={seek.overCancel}
   class:paused
   class:estimated
   bind:this={el}
@@ -132,7 +133,7 @@
   {/if}
   <!-- The plain bar's handle (no lens there, the owner 2026-10-25); over a waveform, while held, the lens instead. -->
   {#if canSeek && !shaped}<span class="thumb" style:left="{dur ? (pos / dur) * 100 : 0}%"></span>{/if}
-  {#if bins && shaped && seek.lens && seek.lensOn && seek.held !== null && dur}
+  {#if bins && shaped && seek.lens && seek.lensOn && seek.held !== null && !seek.overCancel && dur}
     <WaveLens {bins} point={pos / dur} now={nowMark} {...seek.lens} time={clockText(pos)} {paused} />
   {/if}
 </div>
@@ -178,6 +179,12 @@
 
   .seek.held .thumb {
     transform: scale(1.3);
+  }
+
+  /* Over Cancel: back where it plays, dimmed, no lens: let go, nothing changes. */
+  .seek.cancelling {
+    opacity: 0.45;
+    transition: opacity 120ms ease-out;
   }
 
   .bar {
