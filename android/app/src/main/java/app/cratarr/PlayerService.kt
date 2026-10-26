@@ -108,7 +108,8 @@ class PlayerService : MediaSessionService() {
         notifications = getSystemService(NotificationManager::class.java)
         val music = AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build()
         sync = SyncPlay(this, prefs)
-        player = ExoPlayer.Builder(this, sync.renderers(this))
+        // Speed on Android's own output (0.9.6, Start and stop's Vinyl): changed smoothly and at once.
+        player = ExoPlayer.Builder(this, sync.renderers(this).setEnableAudioTrackPlaybackParams(true))
             .setAudioAttributes(music, true)
             .setHandleAudioBecomingNoisy(true)
             // A wake lock and a Wi-Fi lock while it plays: the screen off stops neither the music nor its download.
@@ -132,7 +133,7 @@ class PlayerService : MediaSessionService() {
         // headset's or the system's shuffle shuffles what is to come once, and the player never plays shuffled, so it
         // says it is not. Cratarr's queue is shuffled by Cratarr (Play On's `shuffle`, which sends the new order back);
         // local mode's here, the playing track staying where it is.
-        startStop = StartStop(player, prefs) { sync.leader != null }
+        startStop = StartStop(player, prefs, { link?.applyVolume() }, { sync.leader != null }, { sync.bufferMs })
         sessionPlayer = object : ForwardingPlayer(player) {
             // The lock screen's, the notification's, a headset's and the page's play, pause and stop, ramped (0.9.6).
             override fun play() = startStop.play { super.play() }
