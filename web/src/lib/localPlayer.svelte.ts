@@ -103,8 +103,7 @@ export const local = $state({
 
 const MP4 = 'audio/mp4; codecs="flac"';
 const OPUS = 'audio/mp4; codecs="opus"';
-/** AAC in MP4 (a5, 0.9.8, `?as=aac`): lossless for a browser that takes neither FLAC nor Opus in MP4 (Safari on iOS,
- *  the owner's iPhone 2026-10-26: "cannot play FLAC here"). */
+/** AAC in MP4: asked of the browser for the log only (Cratarr makes no AAC: its encoder's licence; ALAC and MP3 instead). */
 const AAC = 'audio/mp4; codecs="mp4a.40.2"';
 const MPEG = 'audio/mpeg';
 /** Keep this much ahead in the stream before fetching the next track (s). */
@@ -131,15 +130,46 @@ export { isPhone };
 /** Lossless tracks come as Opus: on a phone that plays it, unless it keeps lossless (Settings › This browser). About a
  *  sixth of the data, and far less for the phone to fetch and hold. */
 const asOpus = () => isPhone && !prefs.phoneLossless && !!Source?.isTypeSupported(OPUS);
-/** The form a lossless track is asked in: Opus on a phone (above); where this browser takes no FLAC in MP4, Opus if it
- *  takes that, else AAC; else as it is. */
-/** The smaller copy this browser plays: Opus where taken, else AAC; null where neither. */
-export const playsSmaller = (): 'opus' | 'aac' | null => (Source?.isTypeSupported(OPUS) ? 'opus' : Source?.isTypeSupported(AAC) ? 'aac' : null);
-export function losslessAs(): 'opus' | 'aac' | null {
-  if (asOpus()) return 'opus';
-  if (Source && !Source.isTypeSupported(MP4)) return Source.isTypeSupported(OPUS) ? 'opus' : Source.isTypeSupported(AAC) ? 'aac' : null;
-  return null;
+/** The forms a lossless track can be asked in, the browser's best first (the owner, 2026-10-26: bet on the shape, the
+ *  browser picks): Opus first on a phone that keeps no lossless (above); the original where FLAC in MP4 is taken; Opus;
+ *  ALAC in MP4; MP3 (a5's ?as=alac, ?as=mp3, made for iOS, whose player takes neither FLAC nor Opus in MP4). A lossy
+ *  track comes as it is whatever is asked. */
+type Form = 'original' | 'opus' | 'alac' | 'mp3';
+const ALAC = 'audio/mp4; codecs="alac"';
+function losslessForms(): Form[] {
+  if (!Source) return ['original'];
+  const out: Form[] = [];
+  if (asOpus()) out.push('opus');
+  if (Source.isTypeSupported(MP4)) out.push('original');
+  if (Source.isTypeSupported(OPUS) && !out.includes('opus')) out.push('opus');
+  if (Source.isTypeSupported(ALAC)) out.push('alac');
+  if (Source.isTypeSupported(MPEG)) out.push('mp3');
+  return out.length ? out : ['original'];
 }
+/** A track's form after a fallback: how many places down the list it went (one a time, on a stall with nothing in or
+ *  the element's error; logged). */
+const demoted = new Map<string, number>();
+const formOf = (t: { source: string; id: string }): Form => {
+  const forms = losslessForms();
+  return forms[Math.min(demoted.get(`${t.source}/${t.id}`) ?? 0, forms.length - 1)];
+};
+/** One place down for this track, when there is one: whether it went. */
+function demote(t: { source: string; id: string }, why: string): boolean {
+  const key = `${t.source}/${t.id}`;
+  const forms = losslessForms();
+  const at = demoted.get(key) ?? 0;
+  if (at + 1 >= forms.length) return false;
+  demoted.set(key, at + 1);
+  playback('warn', 'form fallback', { track: t.id, from: forms[at], to: forms[at + 1], why });
+  return true;
+}
+/** The form a lossless track is asked in here, null for the original (lib/offline asks the same). */
+export function losslessAs(): Exclude<Form, 'original'> | null {
+  const f = losslessForms()[0];
+  return f === 'original' ? null : f;
+}
+/** The smaller copy this browser plays: Opus where taken; null where not. */
+export const playsSmaller = (): 'opus' | null => (Source?.isTypeSupported(OPUS) ? 'opus' : null);
 // What this browser's player takes, once per page in its log (the iPhone's tracks that would not play, 2026-10-26).
 if (Source)
   playback('info', 'formats', {
@@ -312,8 +342,8 @@ async function appendTrack(index: number, from: number, gen: number) {
   try {
     const query = new URLSearchParams();
     if (from > 0) query.set('from_ms', String(Math.floor(from * 1000)));
-    const form = losslessAs();
-    if (form) query.set('as', form);
+    const form = formOf(t);
+    if (form !== 'original') query.set('as', form);
     const res = await fetch(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}${query.toString() ? `?${query}` : ''}`, {
       signal: ctl.signal,
     });
@@ -328,9 +358,16 @@ async function appendTrack(index: number, from: number, gen: number) {
       throw new Error(`${t.name || 'A track'}: ${text || 'it could not be loaded.'}`);
     }
     const type = res.headers.get('content-type') ?? '';
-    const kind = !type.startsWith('audio/mp4') ? MPEG : type.includes('opus') ? OPUS : type.includes('mp4a') || type.includes('aac') ? AAC : MP4;
+    const kind = !type.startsWith('audio/mp4') ? MPEG : type.includes('opus') ? OPUS : type.includes('alac') ? ALAC : type.includes('mp4a') || type.includes('aac') ? AAC : MP4;
     playback('info', 'stream', { track: t.id, source: t.source, status: res.status, type, kind, supported: !!Source?.isTypeSupported(kind), from, managed: !!Managed });
-    if (!Source?.isTypeSupported(kind)) throw new Error(`${t.name}: this browser cannot play ${kind === MP4 ? 'FLAC' : kind === OPUS ? 'Opus' : kind === AAC ? 'AAC' : 'MP3'} here.`);
+    if (!Source?.isTypeSupported(kind)) {
+      // The next form down, where there is one: asked again at once.
+      if (demote(t, `not taken: ${kind}`) && gen === generation) {
+        ctl.abort();
+        return appendTrack(index, from, gen);
+      }
+      throw new Error(`${t.name}: this browser cannot play ${kind === MP4 ? 'FLAC' : kind === OPUS ? 'Opus' : kind === ALAC ? 'ALAC' : kind === AAC ? 'AAC' : 'MP3'} here.`);
+    }
     const reader = res.body!.getReader();
     // The track's sample 0 goes to `start` in the stream (before the stream's 0 when starting mid-track).
     const start = streamEnd - from;
@@ -737,8 +774,21 @@ function watchSource(m: MediaSource) {
 // stalls as warnings, its waits as notes.
 if (audio) {
   const el = audio;
-  el.addEventListener('error', () => playback('warn', 'element error', { code: el.error?.code ?? null, message: el.error?.message ?? '', index: local.index }));
-  el.addEventListener('stalled', () => playback('warn', 'stalled', { index: local.index, at: Math.round(el.currentTime * 10) / 10, buffered: el.buffered.length ? Math.round(el.buffered.end(el.buffered.length - 1) * 10) / 10 : 0 }));
+  // A track the browser said it takes but plays nothing of (the element's error, or stalled with nothing in): once
+  // more, in the next form down (the owner, 2026-10-26: the browser picks, and a wrong yes costs a moment, not silence).
+  const fallBack = (why: string) => {
+    const t = local.queue[local.index];
+    if (t && !handed() && demote(t, why)) void fresh(local.index, local.position, !local.paused);
+  };
+  el.addEventListener('error', () => {
+    playback('warn', 'element error', { code: el.error?.code ?? null, message: el.error?.message ?? '', index: local.index });
+    fallBack(`element error ${el.error?.code ?? ''}`);
+  });
+  el.addEventListener('stalled', () => {
+    const buffered = el.buffered.length ? Math.round(el.buffered.end(el.buffered.length - 1) * 10) / 10 : 0;
+    playback('warn', 'stalled', { index: local.index, at: Math.round(el.currentTime * 10) / 10, buffered });
+    if (buffered === 0) fallBack('stalled with nothing in');
+  });
   el.addEventListener('waiting', () => playback('info', 'waiting', { index: local.index, at: Math.round(el.currentTime * 10) / 10 }));
   el.addEventListener('playing', () => playback('info', 'playing', { index: local.index, track: local.queue[local.index]?.id ?? null }));
 }

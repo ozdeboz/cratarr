@@ -65,12 +65,9 @@ const post = async <T>(path: string, body: unknown): Promise<T> => {
 };
 /** The form asked of Cratarr: the smaller copy this browser plays (Opus, else AAC) when Sync's Quality says so, else
  *  the original where this browser plays it (where it does not, the smaller copy all the same). */
-function chosen(): 'opus' | 'original' {
-  // AAC is not made yet (a5, 0.9.8: its encoder's licence; ALAC or MP3 instead once the iPhone's formats are known):
-  // the original meanwhile.
-  const small = playsSmaller();
-  if (prefs.offlineQuality === 'smaller' && small === 'opus') return 'opus';
-  return losslessAs() === 'opus' ? 'opus' : 'original';
+function chosen(): 'opus' | 'alac' | 'mp3' | 'original' {
+  if (prefs.offlineQuality === 'smaller' && playsSmaller() === 'opus') return 'opus';
+  return losslessAs() ?? 'original';
 }
 const form = () => ({ as: 'stream', form: chosen(), opus: chosen() === 'opus' });
 
