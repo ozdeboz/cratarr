@@ -379,7 +379,18 @@ impl Library {
     fn originals_print(&self) -> String {
         let o = self.originals.lock().unwrap_or_else(|p| p.into_inner());
         let g = self.extra_genres.lock().unwrap_or_else(|p| p.into_inner());
-        format!("{}/{} genres {}/{}", o.len(), o.values().fold(0u64, |a, v| a.wrapping_add(u64::from(*v))), g.len(), g.values().map(Vec::len).sum::<usize>())
+        // The release types too (0.9.6): without them here, types that came after a build never built the library
+        // again (seen on the sim, 2026-10-26: 21 kept, none shown).
+        let t = self.release_types.lock().unwrap_or_else(|p| p.into_inner());
+        format!(
+            "{}/{} genres {}/{} types {}/{}",
+            o.len(),
+            o.values().fold(0u64, |a, v| a.wrapping_add(u64::from(*v))),
+            g.len(),
+            g.values().map(Vec::len).sum::<usize>(),
+            t.len(),
+            t.values().map(|v| usize::from(v.0.is_some()) + v.1.len()).sum::<usize>()
+        )
     }
 
     /// A summary of the added dates, part of what the library was built from.
@@ -1088,6 +1099,16 @@ mod tests {
             [("Mir".into(), Some(2011), Some(2011)), ("Odd".into(), Some(2005), Some(2009)), ("Skylon".into(), Some(2008), Some(2008))],
             "the files' original date first; MusicBrainz's where they have none; never later than the release's"
         );
+        // Release types that come after a build build it again (0.9.6: on the sim they never showed).
+        let before = lib.originals_print();
+        lib.set_release_types([("mb:rel-odd".into(), (Some("ep".into()), vec!["live".into()]))].into());
+        assert_ne!(lib.originals_print(), before, "new types change what the library was built from (`change`)");
+        lib.build(&folders(), &Rules::default()).unwrap();
+        let t: (Option<String>, Option<String>, String) = lib
+            .db()
+            .query_row("SELECT release_type, type_from, secondary FROM albums WHERE name = 'Odd'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        assert_eq!(t, (Some("ep".into()), Some("musicbrainz".into()), "live".into()));
     }
 
     #[test]

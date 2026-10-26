@@ -141,7 +141,20 @@ fn name_of(key: &str) -> &'static str {
 }
 
 fn n(count: u64, one: &str, many: &str) -> String {
-    format!("{count} {}", if count == 1 { one } else { many })
+    format!("{} {}", thousands(count), if count == 1 { one } else { many })
+}
+
+/// A count with its thousands apart, as the page shows numbers ("22,729").
+fn thousands(count: u64) -> String {
+    let digits = count.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// A check's answer: its findings, or the one that says it could not look.
@@ -438,7 +451,7 @@ impl App {
         if tracks == 0 || heard >= tracks {
             return Ok(Vec::new());
         }
-        let mut f = finding("analysis", "analysis:audiomuse", Level::Info, heard, format!("{heard} of {tracks} tracks analysed"));
+        let mut f = finding("analysis", "analysis:audiomuse", Level::Info, heard, format!("{} of {} tracks analysed", thousands(heard), thousands(tracks)));
         f.of = Some(tracks);
         // The album folders with the most tracks not heard yet.
         let mut by: HashMap<&str, (u64, u64)> = HashMap::new();
@@ -595,6 +608,11 @@ fn check_server(at: i64) -> anyhow::Result<Vec<Finding>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counts_are_grouped_by_thousands() {
+        assert_eq!((thousands(7), thousands(2264), thousands(31263), thousands(1_000_000)), ("7".into(), "2,264".into(), "31,263".into(), "1,000,000".into()));
+    }
 
     #[test]
     fn every_finding_has_a_short_name() {

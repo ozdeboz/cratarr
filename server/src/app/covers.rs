@@ -191,7 +191,10 @@ async fn archive(
             && let Ok(v) = r.json::<serde_json::Value>().await
         {
             for i in v["images"].as_array().into_iter().flatten() {
-                let Some(url) = i["image"].as_str().map(|u| u.replace("http://", "https://")) else { continue };
+                // Its 1200 px JPEG where the Archive has one: the original upload can be a PNG of many MB, and every
+                // track carries the cover (seen on the sim, 2026-10-26: 8 MB in each track).
+                let picked = i["thumbnails"]["1200"].as_str().or(i["thumbnails"]["large"].as_str()).or(i["image"].as_str());
+                let Some(url) = picked.map(|u| u.replace("http://", "https://")) else { continue };
                 let types: Vec<&str> = i["types"].as_array().into_iter().flatten().filter_map(|t| t.as_str()).collect();
                 out.push(Candidate { url, width: None, height: None, from: "coverartarchive", what: if types.is_empty() { "Image".into() } else { types.join(" · ") } });
             }
