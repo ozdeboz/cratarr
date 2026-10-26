@@ -45,6 +45,8 @@ export const COLUMNS: Record<ColumnKind, readonly Column[]> = {
 };
 
 /** What a row keeps for itself before any column: its cover, its title at a readable width, its time and its menu. */
+/** The Library's Tracks' columns: the ones its server lists give values for (a5's /api/library/tracks). */
+export const LIBRARY_TRACK_COLUMNS: readonly string[] = ['album', 'plays', 'added', 'year'];
 const OWN: Record<ColumnKind, number> = { tracks: 60 + 280 + 52 + 40 + 40, albums: 48 + 280 + 40 + 30, playlists: 240 + 52 + 40 + 30, artists: 48 + 240 + 30 };
 /** Between two columns. */
 export const COLUMN_GAP = 16;

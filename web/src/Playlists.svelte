@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { playlistLayout } from './lib/layouts';
   import { askIfMany } from './lib/many.svelte';
   import { plural } from './lib/insights.svelte';
   import ListHead from './lib/ListHead.svelte';
@@ -126,7 +127,8 @@
 
   // The table (decision 0042): a playlist a line, its facts in columns, as many as the page's width allows in the
   // owner's order (View). The facts are asked for while the table shows, again when the playlists change.
-  const table = $derived(prefs.playlistLayout === 'table');
+  /** As chosen in View, as it can be here (lib/layouts: chips on a phone's screen). */
+  const table = $derived(playlistLayout() === 'table');
   const cols = $derived(table ? fit('playlists', gridWidth) : []);
   let stats = $state<Record<string, PlaylistStats>>({});
   const listsKey = $derived(shownPlaylists().map((p) => `${p.id}:${p.count}`).join('|'));

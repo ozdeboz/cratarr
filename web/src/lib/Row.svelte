@@ -1,6 +1,8 @@
 <script module lang="ts">
   /** One column's value in a row (decision 0042); in a list's head, its name, a tap to order by it. */
   /** `warn`: a value that is a problem (a lossy album's bitrate), in the danger colour. */
+  /** A head's name that orders the list: on while it does. */
+  export type HeadSort = { on: boolean; onclick: () => void };
   export type Cell = { id: string; text: string; width: number; end?: boolean; grow?: boolean; warn?: boolean; onclick?: () => void; on?: boolean };
 </script>
 
@@ -48,6 +50,7 @@
     attachMain,
     cells,
     head = false,
+    sorts,
   }: {
     size: 'small' | 'medium' | 'large' | 'xl';
     title: string;
@@ -85,6 +88,9 @@
     cells?: readonly Cell[];
     /** The list's head: its column names over its rows, muted. */
     head?: boolean;
+    /** In a head, the title's and the count's names as columns that order the list too (the owner, 2026-10-26: the
+     *  leftmost column sorts as the others do). */
+    sorts?: { title?: HeadSort; count?: HeadSort };
   } = $props();
 
   const tag = $derived(as ?? (onclick ? 'button' : 'div'));
@@ -133,7 +139,10 @@
 {#snippet inside()}
   {#if lead}<span class="lead">{@render lead()}</span>{/if}
   <span class="text">
-    <span class="line"><span class="title">{title}</span>{@render badges?.()}</span>
+    <span class="line"
+      >{#if head && sorts?.title}<button type="button" class="title cell" class:on={sorts.title.on} onclick={sorts.title.onclick}>{title}</button
+        >{:else}<span class="title">{title}</span>{/if}{@render badges?.()}</span
+    >
     {#if typeof sub === 'string'}<span class="sub">{sub}</span>{:else if sub}<span class="sub">{@render sub()}</span>{/if}
   </span>
   {#if cells?.length}
@@ -147,7 +156,10 @@
       {/each}
     </span>
   {/if}
-  {#if count !== undefined || meta}<span class="meta">{#if count !== undefined}<span class="n">{count}</span>{/if}{@render meta?.()}</span>{/if}
+  {#if count !== undefined || meta}<span class="meta"
+      >{#if count !== undefined}{#if head && sorts?.count}<button type="button" class="n cell end" class:on={sorts.count.on} onclick={sorts.count.onclick}>{count}</button
+          >{:else}<span class="n">{count}</span>{/if}{/if}{@render meta?.()}</span
+    >{/if}
 {/snippet}
 
 <style>

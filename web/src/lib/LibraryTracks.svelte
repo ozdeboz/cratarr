@@ -3,20 +3,21 @@
   // own tracks, from the server a page at a time (a5's /api/library/tracks; the next as the list's end comes near), in
   // the header's order, the page's search and the libraries switched off asked of the server; rows or the table (the
   // Library's View), the table's columns as wide as the list allows (decision 0042). A tap plays from that track, the
-  // tracks loaded so far the queue (500 at most); as Grid or Flow too (the owner, 2026-10-26: the Library's View, as the
-  // albums'), Flow fetching the next page as its front nears the end; a cover views its album; a long-press the track's menu (lib/TrackMenu);
+  // tracks loaded so far the queue (500 at most); as Flow too (the owner, 2026-10-26: the Library's View, as the albums';
+  // not Covers), Flow fetching the next page as its front nears the end; a cover views its album; a long-press the track's menu (lib/TrackMenu);
   // Select as the albums' (the ticked ones to the selection's menu).
   import { albumCoverUrl, libraryTracks, type LibraryTrack } from './api';
-  import { fit } from './columns.svelte';
+  import { fit, LIBRARY_TRACK_COLUMNS } from './columns.svelte';
+  import ViewSheet from './ViewSheet.svelte';
   import Cover from './Cover.svelte';
   import FlowStage from './FlowStage.svelte';
-  import Tile from './Tile.svelte';
+  import { libraryLayout } from './layouts';
   import { addedOn } from './albums.svelte';
   import { hiddenLibraries } from './listFilter.svelte';
   import ListHead from './ListHead.svelte';
   import PageLoading from './PageLoading.svelte';
   import { albumSubject, viewPlaylist } from './panel.svelte';
-  import { ALBUM_WIDTHS, howMany, pageView, TRACK_ORDERS } from './pageView.svelte';
+  import { howMany, pageView, TRACK_ORDERS } from './pageView.svelte';
   import { playCollection } from './play.svelte';
   import { prefs } from './prefs.svelte';
   import Row, { type Cell } from './Row.svelte';
@@ -78,11 +79,12 @@
     return () => io.disconnect();
   });
 
-  const table = $derived(prefs.albumLayout === 'table');
+  /** As chosen in View, as it can be here (lib/layouts). */
+  const layout = $derived(libraryLayout('tracks'));
+  const table = $derived(layout === 'table');
   let width = $state(0);
   // The track lists' columns that the server lists (decision 0042).
-  const KNOWN = ['album', 'plays', 'added', 'year'];
-  const cols = $derived(table ? fit('tracks', width, (id) => KNOWN.includes(id)) : []);
+  const cols = $derived(table ? fit('tracks', width, (id) => LIBRARY_TRACK_COLUMNS.includes(id)) : []);
   const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
   function cellText(t: LibraryTrack, id: string) {
     if (id === 'album') return t.album ?? '';
@@ -93,6 +95,19 @@
   }
   const cellsOf = (t: LibraryTrack): Cell[] => cols.map((c) => ({ ...c, text: cellText(t, c.id) }));
   const ORDER_OF: Record<string, typeof prefs.libraryTrackOrder> = { album: 'album', plays: 'plays', added: 'added', year: 'year' };
+  /** A tap on a name: ordered by it; again, the other way round. Plays and Added start most and newest first. */
+  function orderBy(o: typeof prefs.libraryTrackOrder) {
+    if (prefs.libraryTrackOrder === o) prefs.libraryTrackDown = !prefs.libraryTrackDown;
+    else ((prefs.libraryTrackOrder = o), (prefs.libraryTrackDown = o === 'plays' || o === 'added'));
+  }
+  const headSorts = $derived({
+    title: { on: prefs.libraryTrackOrder === 'title', onclick: () => orderBy('title') },
+    count: { on: prefs.libraryTrackOrder === 'duration', onclick: () => orderBy('duration') },
+  });
+  /** A long press on the column names: the View sheet, where the columns are chosen and ordered (the owner,
+   *  2026-10-26). */
+  let columnsOpen = $state(false);
+  const headPress = fromAction(longpress, () => () => (columnsOpen = true));
   const headCells = $derived<Cell[]>(
     cols.map((c) => {
       const o = ORDER_OF[c.id];
@@ -100,10 +115,7 @@
         ...c,
         text: c.label,
         on: prefs.libraryTrackOrder === o,
-        onclick: () => {
-          if (prefs.libraryTrackOrder === o) prefs.libraryTrackDown = !prefs.libraryTrackDown;
-          else ((prefs.libraryTrackOrder = o), (prefs.libraryTrackDown = o === 'plays' || o === 'added'));
-        },
+        onclick: () => orderBy(o),
       };
     }),
   );
@@ -164,7 +176,7 @@
       selecting={!!selecting}
       onselect={() => (selecting = selecting ? null : new Set())}
     />
-    {#if prefs.albumLayout === 'flow'}
+    {#if layout === 'flow'}
       <FlowStage
         covers={items.map((t) => albumCoverUrl('cratarr', t.album_id))}
         marked={selecting ? items.map((t) => selecting!.has(t.id)) : undefined}
@@ -178,35 +190,9 @@
         onname={() => flowFront && viewAlbum(flowFront)}
         onplay={() => flowFront && play(flowFront)}
       />
-    {:else if prefs.albumLayout === 'grid'}
-      <ul class="grid" style:--min="{ALBUM_WIDTHS.grid[prefs.albumZoom] ?? 170}px">
-        {#each items as t (t.id)}
-          {@const on = !!selecting?.has(t.id)}
-          <li>
-            <Tile
-              title={t.title}
-              sub={t.artist ?? ''}
-              label={selecting ? `${on ? 'Untick' : 'Tick'} ${t.title}` : `Play ${t.title}`}
-              active={on}
-              onclick={() => (selecting ? tick(t) : play(t))}
-              attach={press(t)}
-            >
-              {#snippet image()}<Cover src={albumCoverUrl('cratarr', t.album_id)} />{/snippet}
-              {#snippet action()}
-                {#if selecting}
-                  <button class="icon tick" class:on role="checkbox" aria-checked={on} aria-label="Select {t.title}" onclick={() => tick(t)}
-                    ><Icon name={on ? 'circleCheck' : 'circle'} size={24} /></button
-                  >
-                {/if}
-              {/snippet}
-            </Tile>
-          </li>
-        {/each}
-      </ul>
-      <div class="end" bind:this={end} aria-hidden="true"></div>
     {:else}
     {#if cols.length}
-      <Row size="large" as="div" head title="Title" cells={headCells} count="Length">
+      <Row size="large" as="div" head title="Title" cells={headCells} count="Length" sorts={headSorts} attach={headPress}>
         {#snippet front()}<span class="cover-space"></span>{/snippet}
         <!-- The rows' slot for Select's tick, kept here too: the headings over their columns. -->
         {#snippet action()}<span></span>{/snippet}
@@ -266,6 +252,7 @@
 {#if selectSheet}
   <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />
 {/if}
+{#if columnsOpen}<ViewSheet page="library" kind="tracks" onclose={() => (columnsOpen = false)} />{/if}
 {#if menuOf}
   <TrackMenu track={menuOf} onclose={() => (menuOf = null)} />
 {/if}
@@ -283,15 +270,6 @@
     min-width: 0;
     content-visibility: auto;
     contain-intrinsic-size: auto 64px;
-  }
-
-  /* Grid: as the albums' tiles. */
-  ul.grid {
-    grid-template-columns: repeat(auto-fill, minmax(var(--min), 1fr));
-  }
-
-  ul.grid li {
-    contain-intrinsic-size: auto 240px;
   }
 
   /* The table (decision 0042): one track a line, the lines touching. */

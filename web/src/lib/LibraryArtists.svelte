@@ -7,8 +7,10 @@
   import { panelBeside } from './glass.svelte';
   import { albumCoverUrl, type ShelfSource } from './api';
   import { fit } from './columns.svelte';
+  import ViewSheet from './ViewSheet.svelte';
   import Cover from './Cover.svelte';
   import FlowStage from './FlowStage.svelte';
+  import { libraryLayout } from './layouts';
   import Tile from './Tile.svelte';
   import { playCollection } from './play.svelte';
   import { plural } from './insights.svelte';
@@ -87,7 +89,9 @@
   let menuOf = $state<Artist | null>(null);
   const press = (a: Artist) => fromAction(longpress, () => () => (selecting ? (selectSheet = true) : (menuOf = a)));
 
-  const table = $derived(prefs.albumLayout === 'table');
+  /** As chosen in View, as it can be here (lib/layouts). */
+  const layout = $derived(libraryLayout('artists'));
+  const table = $derived(layout === 'table');
   const view = (a: Artist) => (leaveSearch(false), viewPlaylist(artistSubject(a.source, a.name)));
   /** Flow: the front artist, by its place in the list. */
   let flowAt = $state(0);
@@ -106,6 +110,19 @@
   let width = $state(0);
   const cols = $derived(table ? fit('artists', width) : []);
   const cellsOf = (a: Artist): Cell[] => cols.map((c) => ({ ...c, text: (c.id === 'albums' ? a.albums : a.tracks).toLocaleString() }));
+  const headSorts = $derived({
+    title: {
+      on: prefs.libraryArtistOrder === 'name',
+      onclick: () => {
+        if (prefs.libraryArtistOrder === 'name') prefs.libraryArtistDown = !prefs.libraryArtistDown;
+        else ((prefs.libraryArtistOrder = 'name'), (prefs.libraryArtistDown = false));
+      },
+    },
+  });
+  /** A long press on the column names: the View sheet, where the columns are chosen and ordered (the owner,
+   *  2026-10-26). */
+  let columnsOpen = $state(false);
+  const headPress = fromAction(longpress, () => () => (columnsOpen = true));
   // The column names, a tap on one ordering by it (most first), again the other way round.
   const headCells = $derived<Cell[]>(
     cols.map((c) => {
@@ -135,7 +152,7 @@
       selecting={!!selecting}
       onselect={() => (selecting = selecting ? null : new Set())}
     />
-    {#if prefs.albumLayout === 'flow'}
+    {#if layout === 'flow'}
       <FlowStage
         covers={shown.map((a) => a.cover)}
         marked={selecting ? shown.map((a) => selecting!.has(keyOf(a))) : undefined}
@@ -148,7 +165,7 @@
         canPlay={!starting}
         playing={starting}
       />
-    {:else if prefs.albumLayout === 'grid'}
+    {:else if layout === 'grid'}
       <ul class="grid" style:--min="{ALBUM_WIDTHS.grid[prefs.albumZoom] ?? 170}px">
         {#each shown as a (a.source + a.name)}
           {@const on = !!selecting?.has(keyOf(a))}
@@ -175,7 +192,7 @@
       </ul>
     {:else}
     {#if cols.length}
-      <Row size="large" as="div" head title="Name" cells={headCells}>
+      <Row size="large" as="div" head title="Name" cells={headCells} sorts={headSorts} attach={headPress}>
         {#snippet front()}<span class="face-space"></span>{/snippet}
         <!-- The rows' slot for Select's tick, kept here too: the headings over their columns. -->
         {#snippet action()}<span></span>{/snippet}
@@ -228,6 +245,7 @@
 {#if selectSheet}
   <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />
 {/if}
+{#if columnsOpen}<ViewSheet page="library" kind="artists" onclose={() => (columnsOpen = false)} />{/if}
 {#if menuOf}
   {@const m = menuOf}
   <ArtistRowMenu source={m.source} name={m.name} cover={m.cover} onclose={() => (menuOf = null)} />

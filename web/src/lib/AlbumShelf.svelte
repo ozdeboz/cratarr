@@ -16,6 +16,8 @@
   import type { Matched } from './search';
   import Cover from './Cover.svelte';
   import FlowStage from './FlowStage.svelte';
+  import { libraryLayout } from './layouts';
+  import ViewSheet from './ViewSheet.svelte';
   import { addedOn, albumPlay, loadAlbumUses, playAlbums, playListedAlbum, quality, tracksOfAlbums, useOf, weak } from './albums.svelte';
   import { download, inApp } from './app.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
@@ -78,11 +80,13 @@
 
   // Only what is near is made (lib/nearBlocks). Each server's albums are cut into blocks of whole grid rows, each its
   // own grid, so the columns line up from block to block.
-  const table = $derived(prefs.albumLayout === 'table');
+  /** As chosen in View, as it can be here (lib/layouts: no table on a phone's screen). */
+  const layout = $derived(libraryLayout('albums'));
+  const table = $derived(layout === 'table');
   // A table's lines touch, as a table's do.
   const GAP = $derived(table ? 0 : 10);
   const ROWS_PER_BLOCK = 8;
-  const minPx = $derived(table ? width : ALBUM_WIDTHS[prefs.albumLayout][prefs.albumZoom]);
+  const minPx = $derived(table ? width : ALBUM_WIDTHS[layout][prefs.albumZoom]);
   const cols = $derived(table ? 1 : Math.max(1, Math.floor((width + GAP) / (minPx + GAP))));
   const perBlock = $derived(cols * ROWS_PER_BLOCK);
   // An album's library as a dot in its colour (decision 0034): none for the primary (Music), and none while only one
@@ -105,14 +109,14 @@
   const rowHeight = $derived.by(() => {
     let h = 0;
     let n = 0;
-    const tail = `:${perBlock}:${prefs.albumLayout}:`;
+    const tail = `:${perBlock}:${layout}:`;
     for (const [key, height] of Object.entries(blocks.heights)) {
       if (!key.includes(tail) || !blocks.rowsOf[key]) continue;
       h += height - (blocks.rowsOf[key] - 1) * GAP;
       n += blocks.rowsOf[key];
     }
     if (n) return h / n;
-    return prefs.albumLayout === 'grid' ? (width - GAP * (cols - 1)) / cols + 64 : table ? 64 : 90;
+    return layout === 'grid' ? (width - GAP * (cols - 1)) / cols + 64 : table ? 64 : 90;
   });
   const estimate = (n: number) => {
     const rows = Math.ceil(n / cols);
@@ -182,6 +186,7 @@
       played: (x, y) => (use(x).played ?? 0) - (use(y).played ?? 0),
       rating: (x, y) => use(x).rating - use(y).rating || use(x).plays - use(y).plays,
       quality: (x, y) => qualityOf(x) - qualityOf(y) || byArtist(x, y) || byTitle(x, y),
+      tracks: (x, y) => x.tracks - y.tracks || byArtist(x, y) || byTitle(x, y),
     };
   };
   const found = $derived(
@@ -234,7 +239,20 @@
   // The table's columns (decision 0042): as many as the list's width allows, in the owner's order (View).
   const tableCols = $derived(table ? fit('albums', width) : []);
   // The ones that order the list, by the order they stand for; Plays, dates and Rating start most and newest first.
-  const ORDER_OF: Partial<Record<string, CollectionOrder>> = { year: 'year', added: 'added', plays: 'plays', lastPlayed: 'played', rating: 'rating' };
+  const ORDER_OF: Partial<Record<string, CollectionOrder>> = { year: 'year', tracks: 'tracks', added: 'added', plays: 'plays', lastPlayed: 'played', rating: 'rating', format: 'quality' };
+  /** A tap on a name: ordered by it; again, the other way round. All but Year and Title start most and newest first. */
+  function orderBy(o: CollectionOrder) {
+    if (order === o) down = !down;
+    else {
+      order = o;
+      down = o !== 'year' && o !== 'title';
+    }
+  }
+  const headSorts = $derived({ title: { on: order === 'title', onclick: () => orderBy('title') } });
+  /** A long press on the column names: the View sheet, where the columns are chosen and ordered (the owner,
+   *  2026-10-26). */
+  let columnsOpen = $state(false);
+  const headPress = fromAction(longpress, () => () => (columnsOpen = true));
   // How you used them, read while a column shows it.
   $effect(() => {
     if (!tableCols.some((c) => c.id === 'plays' || c.id === 'lastPlayed' || c.id === 'rating')) return;
@@ -260,15 +278,7 @@
         ...c,
         text: c.label,
         on: !!o && o === order,
-        onclick: o
-          ? () => {
-              if (order === o) down = !down;
-              else {
-                order = o;
-                down = o !== 'year';
-              }
-            }
-          : undefined,
+        onclick: o ? () => orderBy(o) : undefined,
       };
     }),
   );
@@ -400,12 +410,12 @@
       />
       {#if tableCols.length}
         <!-- The table's column names, a row of the same shape so they line up; a tap on one orders by it. -->
-        <Row size="large" as="div" head title="Title" cells={headCells}>
+        <Row size="large" as="div" head title="Title" cells={headCells} sorts={headSorts} attach={headPress}>
           {#snippet front()}<span class="cover-space"></span>{/snippet}
           {#snippet action()}<span></span>{/snippet}
         </Row>
       {/if}
-      {#if prefs.albumLayout === 'flow'}
+      {#if layout === 'flow'}
         <!-- Flow (the owner, 2026-10-23: digging through the albums): the list in its order as a coverflow, the front
              album named under it; a tap on it views it (in select mode ticks it, a ticked one highlighted), one
              beside it comes to the front. -->
@@ -423,18 +433,18 @@
           playing={!!front && albumPlay.starting === front.id}
         />
       {:else}
-      {#each blocksOf(albums) as block, bi (`${s.id}:${perBlock}:${prefs.albumLayout}:${bi}`)}
-        {@const key = `${s.id}:${perBlock}:${prefs.albumLayout}:${bi}`}
+      {#each blocksOf(albums) as block, bi (`${s.id}:${perBlock}:${layout}:${bi}`)}
+        {@const key = `${s.id}:${perBlock}:${layout}:${bi}`}
         {@const made = blocks.made(key, bi === 0)}
         <div class="block" {@attach blocks.watch(key, Math.ceil(block.length / cols))} style:height={made ? null : `${blocks.heights[key] ?? estimate(block.length)}px`}>
           {#if made}
-      <ul class={prefs.albumLayout} style:--min="{minPx}px">
+      <ul class={layout} style:--min="{minPx}px">
         {#each block as a (a.id)}
           {@const here = playing?.album_id === a.id}
           {@const viewed = panelBeside() && panel.viewed === albumSubject(s.id, a.id)}
           {@const on = !!selecting && selecting.has(keyOf(s, a))}
           <li class:playing={here} class:ticked={on}>
-            {#if prefs.albumLayout === 'grid'}
+            {#if layout === 'grid'}
               <Tile
                 title={a.title}
                 dot={dotOf(s, a)}
@@ -587,6 +597,7 @@
   <SelectionMenu title={several.title} tracks={several.tracks} onclose={() => ((several = null), (selecting = null))} />
 {/if}
 
+{#if columnsOpen}<ViewSheet page="library" kind="albums" onclose={() => (columnsOpen = false)} />{/if}
 {#if selectSheet}
   <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />
 {/if}

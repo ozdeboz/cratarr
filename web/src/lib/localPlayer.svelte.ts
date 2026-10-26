@@ -21,6 +21,7 @@ import { getTrackGain, playerCommand, radioNext, type TrackGain } from './api';
 import { prefs } from './prefs.svelte';
 import { ramping, rampBegins, rampEnds } from './ramping.svelte';
 import { asksSignIn, toSignIn } from './reach.svelte';
+import { isPhone } from './device';
 
 export type LocalTrack = {
   /** Its entry in a player's queue (decision 0033), once Cratarr or the app has given it one. */
@@ -119,9 +120,7 @@ const Managed = typeof window === 'undefined' ? undefined : (window as unknown a
 const Source = Managed ?? (typeof MediaSource === 'undefined' ? undefined : MediaSource);
 /** Whether this browser can play here at all (FLAC or MP3 in its stream), or the app plays for it. */
 export const canPlayHere = inApp || (!!Source && (Source.isTypeSupported(MP4) || Source.isTypeSupported(MPEG)));
-/** A phone: touch first, its screen's short side under 600 px (a tablet keeps lossless). */
-export const isPhone =
-  typeof window !== 'undefined' && matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 600;
+export { isPhone };
 /** Lossless tracks come as Opus: on a phone that plays it, unless it keeps lossless (Settings › This browser). About a
  *  sixth of the data, and far less for the phone to fetch and hold. */
 const asOpus = () => isPhone && !prefs.phoneLossless && !!Source?.isTypeSupported(OPUS);

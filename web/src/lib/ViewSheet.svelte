@@ -17,16 +17,20 @@
   // and the size, for albums rows, covers or a table and the size, a track list's columns. Not its order or direction,
   // which only its list's header sets (decision 0060).
   import ColumnOrder from './ColumnOrder.svelte';
-  import { COLUMNS, fit } from './columns.svelte';
+  import { COLUMNS, fit, LIBRARY_TRACK_COLUMNS } from './columns.svelte';
   import MenuSheet from './MenuSheet.svelte';
-  import { ALBUM_LAYOUTS, ALBUM_WIDTHS, DATES, PLAYLIST_LAYOUTS, PLAYLIST_WIDTHS, pageView } from './pageView.svelte';
+  import { ALBUM_WIDTHS, DATES, PLAYLIST_WIDTHS, pageView } from './pageView.svelte';
+  import { libraryLayout, libraryLayouts, playlistLayout, playlistLayouts, type LibraryList } from './layouts';
   import { prefs } from './prefs.svelte';
   import Seg from './Seg.svelte';
   import SettingRow from './SettingRow.svelte';
   import SizeControl from './SizeControl.svelte';
 
-  // `order`: the panel list's own order instead of a page's (`page` null).
-  let { page = null, order = null, onclose }: { page?: string | null; order?: ListOrder | null; onclose: () => void } = $props();
+  // `order`: the panel list's own order instead of a page's (`page` null). The Library's columns are its list's: its
+  // albums', artists' or tracks' (`kind`, else by its view).
+  let { page = null, order = null, kind, onclose }: { page?: string | null; order?: ListOrder | null; kind?: LibraryList; onclose: () => void } = $props();
+  const listKind = $derived<LibraryList>(kind ?? (page === 'library' && prefs.libraryView === 'artists' ? 'artists' : page === 'library' && prefs.libraryView === 'tracks' ? 'tracks' : 'albums'));
+  const offered = $derived(listKind === 'tracks' ? LIBRARY_TRACK_COLUMNS : COLUMNS[listKind].map((c) => c.id));
 </script>
 
 <MenuSheet label="View" icon="sliders" title="View" {onclose}>
@@ -34,8 +38,8 @@
     {#if order}
       {#if order.columns?.shown.length}<ColumnOrder {...order.columns} />{/if}
     {:else if page === 'playlists'}
-      <SettingRow card label="Layout"><Seg label="Layout" options={PLAYLIST_LAYOUTS} bind:value={prefs.playlistLayout} /></SettingRow>
-      {#if prefs.playlistLayout === 'table'}
+      <SettingRow card label="Layout"><Seg label="Layout" options={playlistLayouts()} bind:value={playlistLayout, (v) => (prefs.playlistLayout = v)} /></SettingRow>
+      {#if playlistLayout() === 'table'}
         <ColumnOrder kind="playlists" shown={fit('playlists', pageView.width).map((c) => c.id)} offered={COLUMNS.playlists.map((c) => c.id)} />
       {:else}
         <SettingRow card label="Size"><SizeControl widths={PLAYLIST_WIDTHS} width={pageView.width} bind:value={prefs.zoom} /></SettingRow>
@@ -47,12 +51,12 @@
 </MenuSheet>
 
 {#snippet albums()}
-  <SettingRow card label="Layout"><Seg label="Layout" options={ALBUM_LAYOUTS} bind:value={prefs.albumLayout} /></SettingRow>
-  {#if prefs.albumLayout === 'table'}
+  <SettingRow card label="Layout"><Seg label="Layout" options={libraryLayouts(listKind)} bind:value={() => libraryLayout(listKind), (v) => (prefs.albumLayout = v)} /></SettingRow>
+  {#if libraryLayout(listKind) === 'table'}
     <!-- A table has no sizes; its columns, as many as the page has room for, in the order dragged here (decision 0042). -->
-    <ColumnOrder kind="albums" shown={fit('albums', pageView.width).map((c) => c.id)} offered={COLUMNS.albums.map((c) => c.id)} />
+    <ColumnOrder kind={listKind} shown={fit(listKind, pageView.width, (id) => offered.includes(id)).map((c) => c.id)} {offered} />
   {:else}
-    <SettingRow card label="Size"><SizeControl widths={ALBUM_WIDTHS[prefs.albumLayout]} width={pageView.width} bind:value={prefs.albumZoom} /></SettingRow>
+    <SettingRow card label="Size"><SizeControl widths={ALBUM_WIDTHS[libraryLayout(listKind)]} width={pageView.width} bind:value={prefs.albumZoom} /></SettingRow>
   {/if}
   <SettingRow card label="Dates"><Seg label="Dates" options={DATES} bind:value={prefs.relativeDates} /></SettingRow>
 {/snippet}
