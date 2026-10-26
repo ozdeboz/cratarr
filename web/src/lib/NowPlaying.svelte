@@ -1135,8 +1135,8 @@
     height: 62px;
     border-radius: 16px;
     background: transparent;
-    /* Its border, the fill's colour: there when the fill is not. */
-    box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--text) 15%, transparent);
+    /* Its border, the fill's colour, outside it (the owner, 2026-10-26: border and fill never overlap). */
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--text) 15%, transparent);
   }
 
   .transport button.main :global(svg) {
