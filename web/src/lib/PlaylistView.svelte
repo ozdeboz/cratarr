@@ -515,9 +515,10 @@ ${r.album_artist ?? r.artist ?? ''}`;
     return out.length >= 4 ? out : out.slice(0, 1);
   });
   /** A crate's albums to flip through in its header (lib/CoverFlow; the owner, 2026-10-23): its rows' albums as loaded,
-   *  each once. */
+   *  each once. A playlist's too where its header is too wide for its cover (the owner, 2026-10-26: the same rule as an
+   *  album's single cover, less than 90% of it shown). */
   const flowCovers = $derived.by(() => {
-    if (!crate || crateEditing) return [];
+    if (crateEditing || !(crate || (kind === 'playlist' && heroWide))) return [];
     // One cover an album (the owner, 2026-10-23: duplicates consolidated): by its name and album artist in any case (the
     // same album in Music and in Incoming, or without its id), and no cover twice.
     const seen = new Set<string>();

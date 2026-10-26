@@ -18,7 +18,7 @@
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs, SEEK_STEP, type CoverTouch, type SwipeDown, type SwipeSide, type SwipeUp } from './prefs.svelte';
-  import { art, clockText, coverComing, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite, playPause, rampBusy, shownPaused } from './remote.svelte';
+  import { art, clockText, coverComing, coverFailed, coverLate, coverSrc, shownCover, duration, favorite, paused, pending, playing, position, seekTo, send, toggleFavorite, playPause, rampBusy, shownPaused } from './remote.svelte';
   import SeekWave from './SeekWave.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import { Seek } from './seekState.svelte';
@@ -460,7 +460,7 @@
          controls, actions); in landscape side by side. Sizes from lib/playerLayout.ts. -->
     <div class="album" class:waiting={coverSlow} style:width={layout ? `${layout.album.width}px` : null} style:height={layout ? `${layout.album.height}px` : null}>
       <!-- the stand-in only when there is no cover to load (lib/Cover), not while one loads -->
-      {#if np && (src || !coverSrc())}
+      {#if np && (src || !coverSrc() || coverLate())}
         {#key src}
           <button
             class="cover-btn"

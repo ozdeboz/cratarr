@@ -123,8 +123,10 @@
 <!-- A server that cannot search (before 0.9.3) or did not answer: nothing more than the page's own. -->
 
 <style>
+  /* The pages' own side gutter (the owner: too little room on the left), outside any page's <main>. */
   .global {
     margin-top: 4px;
+    padding: 0 clamp(12px, 2vw, 32px);
   }
 
   .rows {

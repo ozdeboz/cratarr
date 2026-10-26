@@ -38,14 +38,17 @@ export const coverFailed = (src: string) => (failed[src] = true);
 
 // The cover shown: a new one takes the old one's place only once it is loaded and decoded, so a track change never
 // shows a frame without a cover, and the same picture at another track's address shows no change at all. A cover
-// that fails is skipped (`coverSrc` offers the next candidate).
-const shown = $state<{ src: string | null; coming: string | null }>({ src: null, coming: null });
+// that fails is skipped (`coverSrc` offers the next candidate). One that has not come in COVER_GIVE_UP_MS gives way to
+// the stand-in (the owner, 2026-10-26: no Retry), and still takes its place if it comes after all.
+const COVER_GIVE_UP_MS = 10_000;
+const shown = $state<{ src: string | null; coming: string | null; late: boolean }>({ src: null, coming: null, late: false });
 $effect.root(() => {
   $effect(() => {
     const want = coverSrc();
     if (!want) {
       shown.src = null;
       shown.coming = null;
+      shown.late = false;
       return;
     }
     if (want === untrack(() => shown.src)) return void (shown.coming = null);
@@ -54,15 +57,21 @@ $effect.root(() => {
     const img = new Image();
     img.src = want;
     img.decode().then(
-      () => current && ((shown.src = want), (shown.coming = null)),
+      () => current && ((shown.src = want), (shown.coming = null), (shown.late = false)),
       () => current && ((shown.coming = null), coverFailed(want)),
     );
-    return () => (current = false);
+    const late = setTimeout(() => current && shown.coming === want && ((shown.src = null), (shown.coming = null), (shown.late = true)), COVER_GIVE_UP_MS);
+    return () => {
+      current = false;
+      clearTimeout(late);
+    };
   });
 });
 export const shownCover = () => shown.src;
 /** Another cover is on its way (the old one still shown meanwhile). */
 export const coverComing = () => shown.coming !== null;
+/** The cover did not come in time: the stand-in shows meanwhile. */
+export const coverLate = () => shown.late;
 
 // The clock: between polls the position runs locally. It is re-anchored to the server only when the server disagrees
 // with it (track, pause state, or more than 1.5 s off: a seek or drift), so it moves smoothly.
