@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -200,7 +200,7 @@ pub async fn kept_or_find(served: &std::sync::Arc<crate::serve::Serve>, albums: 
     let wanted = albums.clone();
     let kept = tokio::task::spawn_blocking(move || ud.album_matches(&wanted)).await??;
     let now = super::moment::now_secs();
-    let due: Vec<String> = albums.iter().filter(|a| kept.get(a).is_none_or(|(at, _)| now - at >= AGAIN)).cloned().collect();
+    let due: Vec<String> = albums.iter().filter(|a| kept.get(a.as_str()).is_none_or(|(at, _)| now - at >= AGAIN)).cloned().collect();
     if !due.is_empty()
         && let Some(account) = served.current_user()
     {

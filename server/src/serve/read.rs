@@ -223,7 +223,7 @@ pub struct Hit {
 
 /// The FTS5 query for the words, each with the index terms it meets with typos (0.9.7, `search::typo_terms`): the
 /// terms of the songs', albums' and artists' indexes that begin with its first letter.
-fn fts_query(db: &Connection, words: &[String]) -> Result<Option<String>> {
+fn typo_fts_query(db: &Connection, words: &[String]) -> Result<Option<String>> {
     let mut typo = Vec::with_capacity(words.len());
     for w in words {
         let Some(first) = w.chars().next().filter(|_| crate::search::typo_budget(w) > 0) else {
@@ -518,7 +518,7 @@ impl Library {
     /// `crate::search::words` reads a query.
     pub fn find(&self, words: &[String], limit: usize) -> Result<Found> {
         let db = self.db();
-        let Some(fq) = fts_query(&db, words)? else { return Ok(Found::default()) };
+        let Some(fq) = typo_fts_query(&db, words)? else { return Ok(Found::default()) };
         let lim = limit as i64;
         // More asked of the index than are shown (0.9.7): ranked here (`search::rank`, a direct hit first) before the
         // cut, so one found by its artist or album cannot push one named by the words out of the first `limit`.
@@ -636,7 +636,7 @@ impl Library {
     /// finds playlists and crates by (decision 0072, deep).
     pub fn songs_naming(&self, words: &[String], cap: usize) -> Result<Vec<(String, String, String, String)>> {
         let db = self.db();
-        let Some(fq) = fts_query(&db, words)? else { return Ok(Vec::new()) };
+        let Some(fq) = typo_fts_query(&db, words)? else { return Ok(Vec::new()) };
         let mut st = db.prepare_cached(
             "SELECT s.id, s.title, coalesce(s.artist, ''), s.album FROM songs_fts f JOIN songs s ON s.n = f.rowid WHERE songs_fts MATCH ?1 LIMIT ?2",
         )?;
@@ -742,7 +742,7 @@ impl Library {
     }
 
     /// Each song's album (0.9.7: a file's words are its album's).
-    pub fn song_albums(&self) -> Result<HashMap<String, String>> {
+    pub fn song_album_map(&self) -> Result<HashMap<String, String>> {
         let db = self.db();
         let mut st = db.prepare("SELECT id, album_id FROM songs")?;
         let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
@@ -820,7 +820,7 @@ impl Library {
     /// without any), but those in the catalogue folders `off` (libraries switched off); in no order.
     pub fn track_rows(&self, words: &[String], off: &[i64]) -> Result<Vec<TrackRow>> {
         let db = self.db();
-        let rows: Vec<TrackRow> = match fts_query(&db, words)? {
+        let rows: Vec<TrackRow> = match typo_fts_query(&db, words)? {
             Some(fq) => {
                 let mut st = db.prepare_cached(&format!("SELECT {TRACK_ROW_COLS} FROM songs_fts f JOIN songs s ON s.n = f.rowid WHERE songs_fts MATCH ?1"))?;
                 st.query_map([fq], track_row)?.collect::<rusqlite::Result<_>>()?

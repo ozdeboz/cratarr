@@ -302,7 +302,7 @@ pub fn search_index(serve: &crate::serve::Serve, cat: &crate::catalogue::Catalog
     {
         return Ok(i.clone());
     }
-    let made = Arc::new(index(&facts, &serve.library.song_albums()?));
+    let made = Arc::new(index(&facts, &serve.library.song_album_map()?));
     *INDEX.lock().unwrap_or_else(|e| e.into_inner()) = Some((of.0, of.1, made.clone()));
     Ok(made)
 }
