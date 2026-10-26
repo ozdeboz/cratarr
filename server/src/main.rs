@@ -288,7 +288,9 @@ async fn main() -> Result<()> {
         } => {}
     }
     kept_log.flush();
-    Ok(())
+    // Gone now, not when the runtime's blocking work (a catalogue pass, an import) has finished: that held a restart
+    // asked from Settings for a minute and a half (0.9.6). What is written is written; the databases commit as they go.
+    std::process::exit(0)
 }
 
 /// A restart asked from Settings (0.9.6): Cratarr stops as `docker stop` stops it, and Docker's restart policy brings it

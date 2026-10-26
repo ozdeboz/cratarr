@@ -122,6 +122,9 @@ CREATE TABLE IF NOT EXISTS original_years (release TEXT PRIMARY KEY, year INTEGE
 -- secondary types (joined by U+001F), by `mb:<MusicBrainz release>` (its release group's) or `dc:<album id>` (Discogs'
 -- format descriptions), and when it was asked.
 CREATE TABLE IF NOT EXISTS release_types (key TEXT PRIMARY KEY, primary_type TEXT, secondary TEXT NOT NULL, at INTEGER NOT NULL) WITHOUT ROWID;
+-- The albums a renumber look matched to a release (0.9.6): their gaps are tracks the library does not hold, not wrong
+-- numbers (Health leaves them out), and when.
+CREATE TABLE IF NOT EXISTS renumber_matched (album TEXT PRIMARY KEY, at INTEGER NOT NULL) WITHOUT ROWID;
 -- A release group's cover for albums not in the library (0.9.5): the Cover Art Archive's, else Discogs' (none: neither
 -- has one), and when it was looked for.
 CREATE TABLE IF NOT EXISTS rg_covers (rg TEXT PRIMARY KEY, url TEXT, at INTEGER NOT NULL) WITHOUT ROWID;
@@ -1769,6 +1772,20 @@ impl UserData {
             }
         }
         tx.commit()?;
+        Ok(())
+    }
+
+    /// The albums a renumber look matched to a release (0.9.6).
+    pub fn renumber_matched(&self) -> Result<std::collections::HashSet<String>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT album FROM renumber_matched")?;
+        let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// An album a renumber look matched to a release.
+    pub fn set_renumber_matched(&self, album: &str, at: i64) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO renumber_matched (album, at) VALUES (?1, ?2)", params![album, at])?;
         Ok(())
     }
 
