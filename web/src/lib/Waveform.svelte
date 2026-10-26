@@ -2,81 +2,155 @@
   // The seekbar's waveform (decision 0035): the track's loudness along it as bars, what has played in the accent
   // (`progress`, 0..1), the rest muted. As many bars as fit at 3 px each. The seek bar around it takes the pointer.
   // `now` (0..1): where it plays while the handle is held elsewhere, a thin line (the owner, 2026-10-24).
-  // While it loads (`bins` null; the owner, 2026-10-26: no pop from line to waveform): the plain bar's line, which gets
-  // the bars' gaps from the left as far as it has loaded (`loading`, 0..1: a progress bar of its own), each piece where
-  // its bar will stand and as wide; once in, the pieces grow up and down into the bars.
-  // Each layer is one path (the owner, 2026-10-26: hundreds of shapes, each animated, ran poorly), redrawn per frame
-  // only while the bars grow.
+  //
+  // Every change of it moves (the owner, 2026-10-26: "ultra smooth waveforms throughout any transition"): each piece
+  // of it goes toward what it should be, the leftmost first (each SPREAD_MS / n after the one before), and turns around
+  // from wherever it is when that changes. A piece is the plain bar's line (its gap closed), slim (its gap open, the
+  // quietest bar's height) or a bar (slim and risen to its height); it rises only with its gap open, and closes its gap
+  // only once it is down. So:
+  //   - `want` 'wait' (its waveform loading): the bars stay; the line gets its gaps as far as it has loaded
+  //     (`loading`, 0..1: a progress bar of its own), pieces with their gaps already keep them;
+  //   - 'wave': into the bars (`bins`); from another track's straight to this one's, each bar up or down (the owner,
+  //     2026-10-26: no need to go back to zero);
+  //   - 'line' (none): down, then the gaps close into the line; `onflat` once all of it is the line.
+  // One path per layer, redrawn per frame only while something moves (hundreds of animated shapes ran poorly).
   import { untrack } from 'svelte';
   import { reducedMotion } from './motion';
   import { bars } from './waveforms.svelte';
 
   let {
     bins,
+    want,
     progress,
     paused = false,
     now = null,
     loading = null,
-  }: { bins: Uint8Array | null; progress: number; paused?: boolean; now?: number | null; loading?: number | null } = $props();
+    onflat,
+  }: {
+    bins: Uint8Array | null;
+    want: 'wave' | 'wait' | 'line';
+    progress: number;
+    paused?: boolean;
+    now?: number | null;
+    loading?: number | null;
+    onflat?: () => void;
+  } = $props();
 
-  // The flow (the owner, 2026-10-26): a front runs along the line, left to right. Behind it each piece opens its gap and
-  // slims to the thinnest bar's height (the line is thicker than the quietest bars), over RAMP pieces; then each bar
-  // grows to its height HOLD_MS after it slimmed: the two waves run together across it, one after the other per piece. While
-  // it loads, the front stands as far as it has loaded (a progress bar); once in, it runs on to the end in CUT_MS.
-  const CUT_MS = 420;
-  /** After its own slimming, how soon a bar grows: the growth's wave follows the slimming's at its speed, a little
-   *  behind, so across the waveform the two run together (the owner, 2026-10-26), each piece one after the other. */
-  const HOLD_MS = 40;
-  const GROW_MS = 320;
+  /** One piece's gap opening or closing; the tallest bar's rise or fall; the last piece's start after the first's. */
+  const GAP_MS = 160;
+  const RISE_MS = 320;
+  const SPREAD_MS = 420;
   /** The quietest bar's height, which the pieces slim to. */
   const LOW = 6;
-  const ALL = CUT_MS + HOLD_MS + GROW_MS;
+
   let width = $state(0);
   let height = $state(28);
   const n = $derived(Math.max(16, Math.min(512, Math.floor(width / 3))));
-  const shown = $derived(bins ? bars(bins, n) : null);
   const done = $derived(Math.min(1, Math.max(0, progress)));
   /** The plain bar's line (4 px), in the drawing's units. */
   const line = $derived((100 * 4) / Math.max(4, height));
-  /** How many pieces the slimming takes behind the front. */
-  const ramp = $derived(Math.max(4, Math.round(n * 0.06)));
-  // How long since the waveform came in (ms): all done at once where it was in from the start.
-  let grown = $state(untrack(() => (bins ? ALL : 0)));
-  /** Where the front stood when it came in (pieces). */
-  let frontAt = $state(0);
-  $effect(() => {
-    if (!bins) return void (grown = 0);
-    if (untrack(() => grown) >= ALL) return;
-    if (untrack(() => grown) === 0) frontAt = untrack(() => Math.min(1, Math.max(0, loading ?? 0)) * n);
-    if (reducedMotion()) return void (grown = ALL);
-    const start = performance.now();
-    let r = 0;
-    const step = (t: number) => {
-      grown = Math.min(ALL, t - start);
-      if (grown < ALL) r = requestAnimationFrame(step);
-    };
-    r = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(r);
-  });
-  /** The front (pieces): as far as it has loaded; once in, running on past the end. */
-  const front = $derived(
-    shown ? (grown >= ALL ? n + ramp : frontAt + (n + ramp - frontAt) * Math.min(1, grown / CUT_MS)) : Math.min(1, Math.max(0, loading ?? 0)) * n,
-  );
-  /** When piece `i` is slimmed, ms after it came in: behind the front as it runs on; those slimmed already while it
-   *  loaded take their turns over the time the front spent on them, left to right. */
-  const slimAt = (i: number) =>
-    i + ramp <= frontAt ? (i / n) * CUT_MS : ((i + ramp - frontAt) / Math.max(1, n + ramp - frontAt)) * CUT_MS;
-  const f = (x: number) => Math.round(x * 100) / 100;
-  /** Every piece as one path: in the line (full width, the line's height), slimming behind the front, growing. */
-  const d = $derived.by(() => {
-    let s = '';
+  /** Each bar's rise above the quietest, for the waveform shown. */
+  const heights = $derived(bins ? bars(bins, n).map((v) => Math.max(LOW, v * 100) - LOW) : null);
+
+  // Where each piece is (not reactive: drawn on `frame`), and when it may start moving.
+  let gap = new Float32Array(0);
+  let rise = new Float32Array(0);
+  let from = new Float64Array(0);
+  let frame = $state(0);
+
+  const gapWanted = (i: number, w: typeof want) =>
+    w === 'wave' ? 1 : w === 'line' ? 0 : gap[i] > 0 || i < Math.min(1, Math.max(0, loading ?? 0)) * n ? 1 : 0;
+  // Waiting for the next waveform, the bars stay as they are (its heights not known yet; the owner, 2026-10-26: as the
+  // cover stays until the next one is in), then go straight to it, or back into the line where there is none.
+  const riseWanted = (i: number, w: typeof want) => (w === 'wave' && heights ? (heights[i] ?? 0) : w === 'wait' ? rise[i] : 0);
+
+  let raf = 0;
+  let last = 0;
+  function run() {
+    if (raf) return;
+    last = performance.now();
+    raf = requestAnimationFrame(step);
+  }
+  function step(t: number) {
+    raf = 0;
+    const dt = Math.min(64, t - last);
+    last = t;
+    const w = want;
+    let moving = false;
     for (let i = 0; i < n; i++) {
-      const g = Math.min(1, Math.max(0, (front - i) / ramp));
-      let h = line + (LOW - line) * g;
-      if (shown && g >= 1) {
-        const own = Math.min(1, Math.max(0, (grown - slimAt(i) - HOLD_MS) / GROW_MS));
-        h = LOW + (Math.max(LOW, shown[i] * 100) - LOW) * (1 - (1 - own) ** 2);
+      if (t < from[i]) {
+        moving = true;
+        continue;
       }
+      const tr = riseWanted(i, w);
+      const tg = gapWanted(i, w);
+      if (rise[i] > tr) {
+        rise[i] = Math.max(tr, rise[i] - (dt * 100) / RISE_MS);
+        moving = true;
+      } else if (gap[i] !== tg) {
+        gap[i] = tg > gap[i] ? Math.min(tg, gap[i] + dt / GAP_MS) : Math.max(tg, gap[i] - dt / GAP_MS);
+        moving = true;
+      } else if (rise[i] < tr && gap[i] >= 1) {
+        rise[i] = Math.min(tr, rise[i] + (dt * 100) / RISE_MS);
+        moving = true;
+      }
+    }
+    frame++;
+    if (moving) raf = requestAnimationFrame(step);
+    else if (w === 'line' && gap.every((g) => g === 0)) onflat?.();
+  }
+  /** Each piece may start a little after the one to its left. */
+  function stagger(t: number) {
+    for (let i = 0; i < n; i++) from[i] = t + (i / n) * SPREAD_MS;
+  }
+
+  // As many pieces as fit: (again) where they should be, at once.
+  $effect(() => {
+    const count = n;
+    untrack(() => {
+      gap = new Float32Array(count);
+      rise = new Float32Array(count);
+      from = new Float64Array(count);
+      for (let i = 0; i < count; i++) {
+        gap[i] = gapWanted(i, want);
+        rise[i] = riseWanted(i, want);
+      }
+      frame++;
+    });
+  });
+  // What it should be changed (another track, its waveform in, none): every piece on its way, the leftmost first.
+  $effect(() => {
+    void want;
+    void bins;
+    untrack(() => {
+      if (reducedMotion()) {
+        for (let i = 0; i < n; i++) {
+          gap[i] = gapWanted(i, want);
+          rise[i] = riseWanted(i, want);
+        }
+        frame++;
+        if (want === 'line') onflat?.();
+        return;
+      }
+      stagger(performance.now());
+      run();
+    });
+  });
+  // More of it loaded: the gaps run on with it (no waiting for their turn).
+  $effect(() => {
+    void loading;
+    untrack(run);
+  });
+  $effect(() => () => cancelAnimationFrame(raf));
+
+  const f = (x: number) => Math.round(x * 100) / 100;
+  /** Every piece as one path: in the line (full width, the line's height), slim, or risen. */
+  const d = $derived.by(() => {
+    void frame;
+    let s = '';
+    for (let i = 0; i < gap.length; i++) {
+      const g = gap[i];
+      const h = line + (LOW - line) * g + rise[i];
       const w = 1 - 0.3 * g;
       s += `M${f(i + (1 - w) / 2)} ${f((100 - h) / 2)}h${f(w)}v${f(h)}h${f(-w)}z`;
     }

@@ -44,8 +44,14 @@
    *  line). It decides the handle or the lens and the white line; while held, as it was when the finger went down. */
   const shapedNow = $derived(!!bins && bins.some((v) => v > 0));
   const shaped = $derived(seek.shapedHeld ?? shapedNow);
-  /** Drawn as a waveform: one that shows something, or one still loading (its line). */
-  const waveShown = $derived(shaped || (bins === undefined && loading !== null));
+  /** What the waveform should be (lib/Waveform): its bars, its line getting its gaps while it loads, or the line. */
+  const want = $derived<'wave' | 'wait' | 'line'>(shaped ? 'wave' : bins === undefined && loading !== null ? 'wait' : 'line');
+  /** Drawn as a waveform until it has gone back into the line (none for this track): then the plain bar. */
+  let keepWave = $state(false);
+  $effect(() => {
+    if (want !== 'line') keepWave = true;
+  });
+  const waveShown = $derived(keepWave || want !== 'line');
   const pos = $derived(seek.pos);
   const nowMark = $derived(seek.held !== null && seek.lensOn && !seek.snapped && !seek.overCancel && shaped && dur ? seek.now() / dur : null);
   /** Where the Cancel button stands: above the waveform's middle. */
@@ -127,7 +133,7 @@
   onkeydown={key}
 >
   {#if waveShown}
-    <Waveform bins={shaped ? (bins ?? null) : null} {loading} progress={dur ? pos / dur : 0} {paused} now={nowMark} />
+    <Waveform bins={shaped ? (bins ?? null) : null} {want} {loading} progress={dur ? pos / dur : 0} {paused} now={nowMark} onflat={() => (keepWave = false)} />
   {:else}
     <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
   {/if}
