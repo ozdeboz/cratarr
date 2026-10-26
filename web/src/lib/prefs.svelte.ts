@@ -164,8 +164,8 @@ export type Prefs = {
   homeGreetingCapital: boolean;
   /** One's own header picture (Appearance) replaces Home's weather sky too, besides being every flow's backdrop. */
   flowPictureOnHome: boolean;
-  /** Behind every flow (the owner, 2026-10-26): the grey canvas, one of Cratarr's photos (public/backdrops), or one's own picture. */
-  flowBackdrop: 'grey' | 'wall' | 'lamp' | 'flowers' | 'leaf' | 'yellow' | 'amplifier' | 'records' | 'checks' | 'clock' | 'planks' | 'own';
+  /** Behind every flow (the owner, 2026-10-26): one of Cratarr's photos (public/backdrops), or one's own picture. */
+  flowBackdrop: 'wall' | 'flowers' | 'leaf' | 'mellow' | 'records' | 'checks' | 'mosaic' | 'planks' | 'own';
   /** One's own crates on Home (Settings › Home, 0.9.3; the owner, 2026-10-25): each a section of its own, a shelf of its
    *  albums, ordered and switched in Home's sections list. */
   homeCrates: boolean;
@@ -402,7 +402,7 @@ export const DEFAULTS: Prefs = {
   homeGreeting: true,
   homeGreetingCapital: false,
   flowPictureOnHome: false,
-  flowBackdrop: 'grey',
+  flowBackdrop: 'wall',
   homeCrates: false,
   levelling: true,
   startStop: { mode: 'off', ms: 800, skips: false, rewind: false },
@@ -497,7 +497,10 @@ function read(): Prefs {
       if (typeof saved.homeGreeting === 'boolean') p.homeGreeting = saved.homeGreeting;
       if (typeof saved.homeGreetingCapital === 'boolean') p.homeGreetingCapital = saved.homeGreetingCapital;
       if (typeof saved.flowPictureOnHome === 'boolean') p.flowPictureOnHome = saved.flowPictureOnHome;
-      if (['grey', 'wall', 'lamp', 'flowers', 'leaf', 'yellow', 'amplifier', 'records', 'checks', 'clock', 'planks', 'own'].includes(saved.flowBackdrop as string)) p.flowBackdrop = saved.flowBackdrop as Prefs['flowBackdrop'];
+      // Renamed on 2026-10-26 (the owner): Clock is Mosaic, Yellow is Mellow; the ones taken away (Grey, Lamp, Amplifier)
+      // fall back to the default.
+      const backdrop = ({ clock: 'mosaic', yellow: 'mellow' } as Record<string, string>)[saved.flowBackdrop as string] ?? saved.flowBackdrop;
+      if (['wall', 'flowers', 'leaf', 'mellow', 'records', 'checks', 'mosaic', 'planks', 'own'].includes(backdrop as string)) p.flowBackdrop = backdrop as Prefs['flowBackdrop'];
       if (typeof saved.homeCrates === 'boolean') p.homeCrates = saved.homeCrates;
       if (Array.isArray(saved.profileRows)) p.profileRows = saved.profileRows.filter((x: unknown): x is ProfileRow => PROFILE_ROWS.some((r) => r.id === x));
       if (Array.isArray(saved.homeParts) && saved.homeParts.join(',') !== HOME_BEFORE)

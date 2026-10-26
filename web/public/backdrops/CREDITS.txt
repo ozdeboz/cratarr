@@ -5,12 +5,10 @@ These photos are not under Cratarr's licence (AGPL-3.0-or-later). They are from 
 credit; the photos may not be compiled to replicate a similar or competing service. Thank you to the photographers:
 
 wall        Tim Mossholder      https://unsplash.com/photos/opeF-ObCG0A
-lamp        engin akyurt        https://unsplash.com/photos/-yPnoLNc_Go
 flowers     Juli Kosolapova     https://unsplash.com/photos/COUZB0613Ns
 leaf        Yousef Espanioly    https://unsplash.com/photos/hbQeCpo-Cp0
-yellow      Danielle Suijkerbuijk https://unsplash.com/photos/YUMDBd6wFME
-amplifier   Chris DUNN          https://unsplash.com/photos/WpeP9CMZVpM
+mellow      Danielle Suijkerbuijk https://unsplash.com/photos/YUMDBd6wFME
 records     james chan          https://unsplash.com/photos/zk-a1QqWcjo
 checks      Simon Takatomi      https://unsplash.com/photos/6Tqg0wro_vI
-clock       Adrien Antal        https://unsplash.com/photos/zSAOhFU1hh4
+mosaic      Adrien Antal        https://unsplash.com/photos/zSAOhFU1hh4
 planks      Aedrian Salazar     https://unsplash.com/photos/752S2X6tot8

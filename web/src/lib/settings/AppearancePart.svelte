@@ -8,6 +8,7 @@
   import { prefs } from '../prefs.svelte';
   import AppearancePicker from './AppearancePicker.svelte';
   import BackdropPicker from './BackdropPicker.svelte';
+  import { DEFAULT_BACKDROP } from '../backdrop.svelte';
   import Group from './Group.svelte';
   import Item from './Item.svelte';
   import { offerReset } from './reset.svelte';
@@ -22,16 +23,16 @@
       prefs.homeGreeting = true;
       prefs.homeGreetingCapital = false;
       void removeLocalPicture(HOME_HEADER);
-      prefs.flowBackdrop = 'grey';
+      prefs.flowBackdrop = DEFAULT_BACKDROP;
       prefs.flowPictureOnHome = false;
     },
   );
 
   let busy = $state(false);
-  /** One's own picture gone: the grey canvas again where it stood behind the flows. */
+  /** One's own picture gone: the default photo again where it stood behind the flows. */
   function dropOwn() {
     void removeLocalPicture(HOME_HEADER);
-    if (prefs.flowBackdrop === 'own') prefs.flowBackdrop = 'grey';
+    if (prefs.flowBackdrop === 'own') prefs.flowBackdrop = DEFAULT_BACKDROP;
   }
   async function pick(e: Event) {
     const input = e.currentTarget as HTMLInputElement;
@@ -80,8 +81,8 @@
   {/if}
 </Group>
 
-<!-- Behind every flow (crates', a wide album header's, the Library's Flow, Discover's; the owner, 2026-10-26): the grey
-     canvas, Cratarr's photos or one's own; Home's sky too only when asked. -->
+<!-- Behind every flow (crates', a wide album header's, the Library's Flow, Discover's; the owner, 2026-10-26): Cratarr's
+     photos or one's own; Home's sky too only when asked. -->
 <Group title="Behind the flows">
   <BackdropPicker />
   <Item name="Your picture" line={localCovers[HOME_HEADER] ? 'On this device' : 'One of your own, kept on this device'}>
@@ -90,9 +91,7 @@
       {#if localCovers[HOME_HEADER]}<button onclick={dropOwn}>Remove</button>{/if}
     </span>
   </Item>
-  {#if prefs.flowBackdrop !== 'grey'}
-    <Item name="Also on Home" line="In place of the weather's sky" toggle={{ checked: prefs.flowPictureOnHome, onchange: (on) => (prefs.flowPictureOnHome = on) }} />
-  {/if}
+  <Item name="Also on Home" line="In place of the weather's sky" toggle={{ checked: prefs.flowPictureOnHome, onchange: (on) => (prefs.flowPictureOnHome = on) }} />
 </Group>
 
 <style>
