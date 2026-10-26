@@ -191,7 +191,7 @@ if (port) {
     if (m.type === 'target' && typeof m.target === 'string') appInfo.target = m.target;
     // The app's player ramping (Start and stop): the play/pause button shows it.
     if (m.type === 'ramp') {
-      if ((m.dir === 'out' || m.dir === 'in') && typeof m.ms === 'number') rampBegins(m.dir, m.ms);
+      if ((m.dir === 'out' || m.dir === 'in') && typeof m.ms === 'number') rampBegins(m.dir, m.ms, typeof m.full === 'number' ? m.full : m.ms);
       else rampEnds();
     }
     if (m.type === 'network-test') {
