@@ -4,7 +4,7 @@
 # (the default target) copies it as built, from BuildKit's cache: nothing is compiled twice for one commit. The tools are
 # pinned (tag and digest), so a commit builds the same web and the same binary every time. `CARGO_BUILD_JOBS` limits
 # the compile on a machine short of memory (`--build-arg CARGO_BUILD_JOBS=1`); unset, every core.
-FROM node:22.23.3-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS web
+FROM node:24.22.1-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS web
 WORKDIR /app/web
 RUN corepack enable
 COPY web/package.json web/pnpm-lock.yaml ./
