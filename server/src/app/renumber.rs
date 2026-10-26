@@ -134,7 +134,7 @@ fn titled(t: &str) -> [String; 2] {
     [super::import::loose(t), super::import::loose(base)]
 }
 
-fn same_title(a: &str, b: &str) -> bool {
+pub(super) fn same_title(a: &str, b: &str) -> bool {
     let (x, y) = (titled(a), titled(b));
     !x[0].is_empty() && (x[0] == y[0] || (!x[1].is_empty() && x[1] == y[1]))
 }

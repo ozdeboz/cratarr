@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS words (
   PRIMARY KEY (subject, source, word)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS words_asked (subject TEXT NOT NULL, source TEXT NOT NULL, at INTEGER NOT NULL, ok INTEGER NOT NULL,
   PRIMARY KEY (subject, source)) WITHOUT ROWID;
+-- An album's match with a MusicBrainz release (0.9.7, app::matching; JSON, none where none was found), and when.
+CREATE TABLE IF NOT EXISTS album_matches (album TEXT PRIMARY KEY, at INTEGER NOT NULL, found TEXT) WITHOUT ROWID;
 ";
 
 /// A word as a source said it.
@@ -64,6 +66,24 @@ impl UserData {
         let mut st = db.prepare("SELECT subject, source, word, kind, weight FROM words")?;
         let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// These albums' matches as kept: when each was looked for, and what was found (JSON; none: nothing).
+    pub fn album_matches(&self, albums: &[String]) -> Result<std::collections::HashMap<String, (i64, Option<String>)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT at, found FROM album_matches WHERE album = ?1")?;
+        let mut out = std::collections::HashMap::new();
+        for a in albums {
+            if let Some(row) = st.query_map([a], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?)))?.next() {
+                out.insert(a.clone(), row?);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn set_album_match(&self, album: &str, found: Option<&str>, at: i64) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO album_matches (album, at, found) VALUES (?1, ?2, ?3)", params![album, at, found])?;
+        Ok(())
     }
 
     /// A cheap summary of the words and the album tags as kept: it changes when either does.

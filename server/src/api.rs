@@ -4478,7 +4478,9 @@ struct FixesOf {
 async fn health_fixes(State(app): State<Arc<App>>, Query(q): Query<FixesOf>) -> Result<Json<serde_json::Value>, ApiError> {
     let fixes = crate::app::fixes::of_finding(&app, &q.finding).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     let certain = fixes.iter().filter(|f| f.certainty == "certain").count();
-    Ok(Json(json!({ "fixes": fixes, "certain": certain })))
+    // Album artist and MusicBrainz ids come from matches made in a task (`match`): the page asks again as it runs.
+    let matching = crate::serve::instance().and_then(|s| s.current_user()).is_some_and(|a| crate::app::matching::running(&a));
+    Ok(Json(json!({ "fixes": fixes, "certain": certain, "matching": matching })))
 }
 
 /// Fixes to apply: these (`ids`), or every certain one of a finding (`certain`: its key).

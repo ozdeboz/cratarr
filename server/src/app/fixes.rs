@@ -5,7 +5,8 @@
 //!
 //! - **Year**: MusicBrainz's first release date of the album's release (the original years kept, `originals`).
 //! - **Genre**: the album's strongest genre among the library's words (`app::words`); certain where two sources say it.
-//! - The others (album artist, MusicBrainz ids) come from a match with MusicBrainz's releases (`app::matching`).
+//! - **Album artist, MusicBrainz ids**: from a match with MusicBrainz's releases (`app::matching`), certain where every
+//!   track is within 2 s and has its title.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -177,16 +178,23 @@ pub async fn of_finding(app: &super::App, key: &str) -> Result<Vec<Fix>> {
     let music = app.library.folders().music;
     let folders = app.library.catalogue().folders();
     let music = music.and_then(|m| folders.iter().position(|f| f == Path::new(&m))).map(|i| i as i64);
-    let (s, key) = (served.clone(), key.to_string());
-    let mut fixes = tokio::task::spawn_blocking(move || -> Result<Vec<Fix>> {
+    let (s, k) = (served.clone(), key.to_string());
+    // Year and genre from what is kept; album artist and MusicBrainz ids from a match (`matching`), its albums here.
+    let (mut fixes, to_match) = tokio::task::spawn_blocking(move || -> Result<(Vec<Fix>, Vec<String>)> {
         let lacking: Vec<crate::serve::library::Lacks> = s.library.lacking()?.into_iter().filter(|r| music.is_none_or(|m| r.folder == m)).collect();
-        match key.as_str() {
-            "library:year" => year_fixes(&s, lacking.iter().filter(|r| r.year).map(|r| r.id.as_str())),
-            "library:genre" => genre_fixes(&s, lacking.iter().filter(|r| r.genre).map(|r| r.id.as_str())),
-            _ => Ok(Vec::new()),
-        }
+        let ids = |pick: fn(&crate::serve::library::Lacks) -> bool| lacking.iter().filter(|r| pick(r)).map(|r| r.id.clone()).collect::<Vec<_>>();
+        Ok(match k.as_str() {
+            "library:year" => (year_fixes(&s, lacking.iter().filter(|r| r.year).map(|r| r.id.as_str()))?, Vec::new()),
+            "library:genre" => (genre_fixes(&s, lacking.iter().filter(|r| r.genre).map(|r| r.id.as_str()))?, Vec::new()),
+            "library:album-artist" => (Vec::new(), ids(|r| r.album_artist)),
+            "library:musicbrainz" => (Vec::new(), ids(|r| r.musicbrainz)),
+            _ => (Vec::new(), Vec::new()),
+        })
     })
     .await??;
+    if !to_match.is_empty() {
+        fixes.extend(super::matching::fixes(&served, key, to_match).await?);
+    }
     fixes.sort_by(|a, b| (a.certainty != "certain").cmp(&(b.certainty != "certain")).then_with(|| a.id.cmp(&b.id)));
     Ok(fixes)
 }

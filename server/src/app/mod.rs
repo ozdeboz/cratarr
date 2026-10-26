@@ -43,6 +43,7 @@ pub mod around;
 pub mod words;
 pub mod harvest;
 pub mod fixes;
+pub mod matching;
 pub mod lastfm;
 pub mod listening;
 pub mod scrobble;
