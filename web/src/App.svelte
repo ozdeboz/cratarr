@@ -38,6 +38,7 @@
   import { startWith, togglePlay } from './lib/localPlayer.svelte';
   import NowPlaying from './lib/NowPlaying.svelte';
   import SheetArea from './lib/SheetArea.svelte';
+  import Hold from './lib/Hold.svelte';
   import MiniPlayer from './lib/MiniPlayer.svelte';
   import TopPill from './lib/TopPill.svelte';
   import InsightsPanel from './lib/InsightsPanel.svelte';
@@ -927,7 +928,10 @@
       <!-- The mini-player floats over the panel's end too: its lists leave room for it (--mini-h). -->
       <aside class="player-side" class:whole={split} aria-label={playerInPanel ? 'Player' : settingsShown ? 'Settings' : healthShown ? 'Health' : insightsShown ? 'Insights' : requestsShown ? 'Requests' : downloadsShown ? 'Downloads' : 'Playlist'} style:--mini-h={`${miniTop ? 0 : miniSpace}px`} bind:this={sideEl}>
         <SheetArea area={() => sideEl}>
+          <!-- One commit (lib/Hold): what the panel showed stays until the item opened is ready. -->
+          <Hold key={panel.viewed}>
           {#if visualsBeside}<Visuals docked onclose={() => (visuals.open = false)} />{:else if playerInPanel}<NowPlaying place="side" />{:else if split && panel.viewed === null}<!-- Its part comes in a moment. -->{:else if settingsShown}<SettingsPanel section={settingsShown} beside={settingsSplit} />{:else if healthShown}<HealthPanel problem={healthShown} beside={healthSplit} />{:else if insightsShown}<InsightsPanel view={insightsShown} beside={insightsSplit} />{:else if requestsShown}<RequestsPanel list={requestsShown} beside={requestsSplit} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} beside={downloadsSplit} />{:else}<PlaylistView />{/if}
+          </Hold>
         </SheetArea>
       </aside>
     {/if}
@@ -935,7 +939,7 @@
 
   {#if playlistLayer}
     <div class="playlist-layer" class:under-bar={underBar} role="dialog" aria-label="Playlist" style:--mini-h={`${(miniTop ? 0 : miniSpace) + (navBottom ? topBar : 0)}px`} transition:fade={{ duration: reducedMotion() ? 0 : 200 }}>
-      {#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else if requestsShown}<RequestsPanel list={requestsShown} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} />{:else}<PlaylistView full />{/if}
+      <Hold key={panel.viewed}>{#if settingsShown}<SettingsPanel section={settingsShown} />{:else if healthShown}<HealthPanel problem={healthShown} />{:else if insightsShown}<InsightsPanel view={insightsShown} />{:else if requestsShown}<RequestsPanel list={requestsShown} />{:else if downloadsShown}<DownloadsPanel list={downloadsShown} />{:else}<PlaylistView full />{/if}</Hold>
     </div>
   {/if}
   {#if mini}

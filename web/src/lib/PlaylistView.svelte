@@ -1,6 +1,7 @@
 <script lang="ts">
   import { askIfMany, fewAtATime } from './many.svelte';
   import { untrack } from 'svelte';
+  import { holdUntil } from './holdPlace.svelte';
   // A viewed playlist (decision 0023), in the panel beside the page or in its own layer, styled as Finamp's playlist
   // screen (lib/components/AlbumScreen) in less room: a bar with ✕ and the menu; the covers beside the name, "N tracks
   // (length)" and the genres; Play, Shuffle, Play next and Add to queue as icons over labels; what Insights knows of it
@@ -380,6 +381,7 @@
         shownFor = key;
         error = null;
         rows = r.rows;
+        rowsFor = want;
         source = r.source;
         total = r.total;
         listGenres = r.genres;
@@ -387,10 +389,25 @@
         if (r.source !== DEVICE && r.source !== BANDCAMP && r.source !== DISCOVER) loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : []))).then(() => want === id && (rowFavsIn = true));
       },
       (e) => {
-        if (want === id) error = e instanceof Error ? e.message : 'Unexpected error';
+        if (want !== id) return;
+        error = e instanceof Error ? e.message : 'Unexpected error';
+        rowsFor = want;
       },
     );
   });
+  /** The item the rows (or their error) are of. */
+  let rowsFor = $state('');
+  // One commit (lib/holdPlace; the owner, 2026-10-26, "All together"): the panel keeps what it showed until this item's
+  // picture, header and rows are in; Similar and what else is asked for later may follow.
+  holdUntil(
+    () => id,
+    () =>
+      !id ||
+      multi ||
+      crateEditing ||
+      creating ||
+      (rowsFor === id && (error !== null || (!heroPending && (!album || albumHead !== null) && (!artist || artistHead !== null)))),
+  );
 
   // The covers: the playlist's first albums, four as a mosaic (decision 0021).
   let covers = $state<string[]>([]);
