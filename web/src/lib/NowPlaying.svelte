@@ -24,6 +24,7 @@
   import { tuneOf } from './bandTune.svelte';
   import BandGlass from './BandGlass.svelte';
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
+  import { ramping } from './ramping.svelte';
   import { local, restoreUpcoming, setRepeat, shuffleUpcoming } from './localPlayer.svelte';
   import QueueMenu from './QueueMenu.svelte';
   import { playingCrateOuts } from './crates.svelte';
@@ -126,9 +127,15 @@
   /** The seek bar's width (px) while held. */
   let seekWidth = 0;
   const pos = $derived(snapped ? position() : (held ?? sought ?? position()));
+  /** The lens and the white line come only after LENS_AFTER ms held (the owner, 2026-10-26): a tap shows only where it
+   *  goes, in the waveform's colours. */
+  const LENS_AFTER = 100;
+  let lensOn = $state(false);
+  let lensTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => () => clearTimeout(lensTimer));
   /** Where it plays, 0..1, while the handle is held elsewhere over a waveform (a white line there); the plain bar has
    *  none (the owner, 2026-10-25: no white lines without a waveform). */
-  const nowMark = $derived(held !== null && !snapped && shaped && dur ? position() / dur : null);
+  const nowMark = $derived(held !== null && lensOn && !snapped && shaped && dur ? position() / dur : null);
   /** Held at `secs`, `away` px above or below the bar: on the playing position (snapped) or not. */
   function hold(secs: number, away = 0) {
     const near = !!dur && seekWidth > 0 && away <= SNAP_AWAY_PX && (Math.abs(secs - position()) / dur) * seekWidth <= SNAP_PX;
@@ -152,6 +159,9 @@
     if (!canSeek) return;
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
+    clearTimeout(lensTimer);
+    lensOn = false;
+    lensTimer = setTimeout(() => (lensOn = true), LENS_AFTER);
     shapedHeld = shapedNow;
     seekWidth = el.getBoundingClientRect().width;
     hold(at(e, el));
@@ -174,6 +184,8 @@
     release(at(e, el));
   }
   function letGo() {
+    clearTimeout(lensTimer);
+    lensOn = false;
     held = null;
     snapped = false;
     shapedHeld = null;
@@ -609,7 +621,7 @@
                 <!-- The plain bar's handle (no lens there, the owner 2026-10-25); over a waveform, while held, the lens
                      instead (where it is going). -->
                 {#if canSeek && !shaped}<span class="thumb" style:left="{dur ? (pos / dur) * 100 : 0}%"></span>{/if}
-                {#if wave && shaped && lens && held !== null && dur}
+                {#if wave && shaped && lens && lensOn && held !== null && dur}
                   <WaveLens bins={wave} point={pos / dur} now={nowMark} {...lens} time={clockText(pos)} paused={np.progress.paused} />
                 {/if}
               </div>
@@ -623,8 +635,12 @@
               <button class="shuffle" aria-label="Shuffle the rest of the queue" onclick={shuffleOnce}><Icon name="shuffle" size={22} /></button>
             {/if}
             <button aria-label="Previous track" onclick={() => send('previous')}><Icon name="previous" size={24} /></button>
-            <button class="main" aria-label={paused() ? 'Play' : 'Pause'} onclick={() => send('play-pause')}
-              ><Icon name={paused() ? 'play' : 'pause'} size={32} /></button
+            <!-- Winding down (Start and stop), its fill drains from the top over the ramp (the owner, 2026-10-26). -->
+            <button class="main" class:draining={isLocal() && ramping.dir === 'out'} aria-label={paused() ? 'Play' : 'Pause'} onclick={() => send('play-pause')}
+              >{#if isLocal() && ramping.dir === 'out'}{#key ramping.at}<span class="drain" style:animation-duration="{ramping.ms}ms"></span>{/key}{/if}<Icon
+                name={paused() ? 'play' : 'pause'}
+                size={32}
+              /></button
             >
             <button aria-label="Next track" onclick={() => send('next')}><Icon name="next" size={24} /></button>
             {#if isLocal()}
@@ -1240,6 +1256,40 @@
     height: 62px;
     border-radius: 16px;
     background: color-mix(in srgb, var(--text) 15%, transparent);
+  }
+
+  .transport button.main.draining {
+    position: relative;
+    background: transparent;
+  }
+
+  .transport button.main.draining :global(svg) {
+    position: relative;
+  }
+
+  .drain {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: color-mix(in srgb, var(--text) 15%, transparent);
+    /* Evenly over the ramp's time: what is left of it. */
+    animation: drain linear forwards;
+    pointer-events: none;
+  }
+
+  @keyframes drain {
+    from {
+      clip-path: inset(0 0 0 0);
+    }
+    to {
+      clip-path: inset(100% 0 0 0);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .drain {
+      animation-timing-function: steps(4, end);
+    }
   }
 
   .transport button.main :global(svg) {

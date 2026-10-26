@@ -1,5 +1,6 @@
 import type { StartStop } from './prefs.svelte';
 import type { AudioOutput } from './api';
+import { rampBegins, rampEnds } from './ramping.svelte';
 
 // The Android app (decision 0031): on the server's own pages inside it, `window.CratarrApp` carries JSON messages both
 // ways (android/README.md). There the music plays in the app itself; the page is its face (localPlayer.svelte.ts).
@@ -183,6 +184,11 @@ if (port) {
     }
     // Where the controls point changed, in the app (decision 0062): the page shows it.
     if (m.type === 'target' && typeof m.target === 'string') appInfo.target = m.target;
+    // The app's player ramping (Start and stop): the play/pause button shows it.
+    if (m.type === 'ramp') {
+      if ((m.dir === 'out' || m.dir === 'in') && typeof m.ms === 'number') rampBegins(m.dir, m.ms);
+      else rampEnds();
+    }
     if (m.type === 'network-test') {
       networkTest.local = typeof m.local === 'boolean' ? m.local : null;
       networkTest.public = typeof m.public === 'boolean' ? m.public : null;

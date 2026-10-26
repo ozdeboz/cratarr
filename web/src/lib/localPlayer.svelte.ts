@@ -19,6 +19,7 @@ import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
 import { getTrackGain, playerCommand, radioNext, type TrackGain } from './api';
 import { prefs } from './prefs.svelte';
+import { rampBegins, rampEnds } from './ramping.svelte';
 import { asksSignIn, toSignIn } from './reach.svelte';
 
 export type LocalTrack = {
@@ -467,9 +468,8 @@ function purged() {
 }
 
 /** Which segment the stream is in now, and how far into its track. */
-function where(): { seg: Segment; offset: number } | null {
+function where(t = audio?.currentTime ?? 0): { seg: Segment; offset: number } | null {
   if (!audio) return null;
-  const t = audio.currentTime;
   for (let i = segments.length - 1; i >= 0; i--) {
     const s = segments[i];
     if (t >= s.start - 0.001) return { seg: s, offset: t - s.start };
@@ -485,7 +485,7 @@ function tick() {
   if (!audio || local.index < 0 || handed()) return;
   // A ramp under way has committed to where it goes (lib's Start and stop): that is what shows, everywhere.
   local.paused = committed ?? audio.paused;
-  const w = where();
+  const w = where(heldAt ?? audio.currentTime);
   if (w) {
     if (w.seg.index !== local.index) {
       // Repeat one: the stream went on to the next track by itself; back to the start of this one. (Next and previous
@@ -1546,17 +1546,25 @@ let rampToken = 0;
  *  and pause wait (the owner, 2026-10-26: a press during a ramp is not taken, rather than starting it over with a hard
  *  edge). Null: no ramp. */
 let committed: boolean | null = null;
+/** Where the counter stays while a ramp sounds (stream time): a pause holds the moment it was pressed, and play holds
+ *  that moment while it winds up from a little before it, so full speed and volume come back where they were left (the
+ *  owner, 2026-10-26). Null: where it plays. */
+let heldAt: number | null = null;
 /** The slowest a browser plays (Chrome and Firefox take 1/16). */
 const RAMP_LOW = 0.07;
 const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
-function ramp(from: number, to: number, ms: number, set: (v: number) => void): Promise<boolean> {
+// A vinyl's speed: slow to leave full speed and quick at the still end winding down, the reverse winding up. Eased in
+// and out, it was a third of full speed two thirds of the way and sounded stopped there (the owner, 2026-10-26).
+const easeIn = (t: number) => t * t;
+const easeOut = (t: number) => 1 - (1 - t) ** 2;
+function ramp(from: number, to: number, ms: number, set: (v: number) => void, ease = easeInOut): Promise<boolean> {
   const token = ++rampToken;
   const t0 = performance.now();
   return new Promise((done) => {
     const step = () => {
       if (token !== rampToken) return done(false);
       const t = Math.min(1, (performance.now() - t0) / ms);
-      set(from + (to - from) * easeInOut(t));
+      set(from + (to - from) * ease(t));
       if (t < 1) setTimeout(step, 16);
       else done(true);
     };
@@ -1589,23 +1597,39 @@ const rampSet = (mode: 'vinyl' | 'fade') => (v: number) => {
 async function rampOut(): Promise<void> {
   const { mode, ms } = prefs.startStop;
   if (mode === 'off' || !audio || audio.paused) return;
-  await ramp(1, mode === 'fade' ? 0 : RAMP_LOW, ms, rampSet(mode));
+  rampBegins('out', ms);
+  try {
+    await ramp(1, mode === 'fade' ? 0 : RAMP_LOW, ms, rampSet(mode), mode === 'fade' ? easeInOut : easeIn);
+  } finally {
+    rampEnds();
+  }
 }
 /** Plays, winding up from still (or silence); not while a ramp is under way. */
 function rampIn() {
   if (!audio || committed !== null) return;
   const { mode, ms } = prefs.startStop;
-  if (mode === 'off') {
+  // From a track's start it plays at once, always (the owner, 2026-10-26): there is nothing to wind up from.
+  if (mode === 'off' || (where()?.offset ?? 0) < FROM_START) {
     unramp();
     void audio.play().catch(() => {});
     return;
   }
   committed = false;
   local.paused = false;
+  // The track time the wind-up takes (at full speed for a fade; a vinyl's speed, eased out, averages two thirds of the
+  // way up): it starts that much early, within the track and what is loaded.
+  const saved = audio.currentTime;
+  const w = where(saved);
+  const start = Math.max(w ? w.seg.start : 0, saved - (ms / 1000) * (mode === 'fade' ? 1 : RAMP_LOW + ((1 - RAMP_LOW) * 2) / 3));
+  heldAt = saved;
+  if (inBuffer(start)) audio.currentTime = start;
   const set = rampSet(mode);
   set(mode === 'fade' ? 0 : RAMP_LOW);
+  rampBegins('in', ms);
   void audio.play().catch(() => {});
-  void ramp(mode === 'fade' ? 0 : RAMP_LOW, 1, ms, set).then(() => {
+  void ramp(mode === 'fade' ? 0 : RAMP_LOW, 1, ms, set, mode === 'fade' ? easeInOut : easeOut).then(() => {
+    rampEnds();
+    heldAt = null;
     unramp();
     committed = null;
   });
@@ -1616,15 +1640,20 @@ async function pauseRamped() {
   if (prefs.startStop.mode === 'off' || audio.paused) return void audio.pause();
   committed = true;
   local.paused = true;
+  // The moment it was pressed: the counter stays there while the end sounds, and it rests there after.
+  heldAt = audio.currentTime;
   try {
     await rampOut();
     audio?.pause();
+    if (audio && inBuffer(heldAt)) audio.currentTime = heldAt;
   } finally {
+    heldAt = null;
     unramp();
     committed = null;
   }
 }
-/** For next and previous (where the device asks it): out, then on to `go`, then in. */
+/** For next and previous (where the device asks it): out only, and only then on to `go` (the track, its cover), which
+ *  starts as it is, at full speed and volume (the owner, 2026-10-26: no wind-up on a skip). */
 async function skipRamped(go: () => void) {
   const s = prefs.startStop;
   if (committed !== null) return;
@@ -1635,20 +1664,25 @@ async function skipRamped(go: () => void) {
   } finally {
     committed = null;
   }
+  unramp();
   go();
-  rampIn();
 }
+/** Whether stream time `t` is loaded. */
+function inBuffer(t: number) {
+  if (!audio) return false;
+  for (let i = 0; i < audio.buffered.length; i++) if (t >= audio.buffered.start(i) && t <= audio.buffered.end(i)) return true;
+  return false;
+}
+const REWIND_STEP_MS = 300;
+/** Within this much of a track's start (s), play is never ramped. */
+const FROM_START = 0.5;
 /** Tape rewind: back to the track's start, scrubbing, pitched up; false where it cannot (nothing loaded there). */
 async function rewindTape(): Promise<boolean> {
   if (!audio || audio.paused) return false;
   const w = where();
   const base = w ? w.seg.start : 0;
   const from = audio.currentTime - base;
-  const loaded = (t: number) => {
-    for (let i = 0; i < audio!.buffered.length; i++) if (t >= audio!.buffered.start(i) && t <= audio!.buffered.end(i)) return true;
-    return false;
-  };
-  if (from <= 0 || !loaded(base) || committed !== null) return false;
+  if (from <= 0 || !inBuffer(base) || committed !== null) return false;
   committed = false;
   const ms = Math.min(12_000, 4 * prefs.startStop.ms);
   const token = ++rampToken;
@@ -1661,7 +1695,8 @@ async function rewindTape(): Promise<boolean> {
     const t = Math.min(1, (performance.now() - t0) / ms);
     audio.currentTime = base + from * (1 - easeInOut(t));
     if (t >= 1) break;
-    await new Promise((r) => setTimeout(r, 90));
+    // Each step heard before the next: seeking again sooner re-buffers without a sound (a5, in the app, 2026-10-26).
+    await new Promise((r) => setTimeout(r, REWIND_STEP_MS));
   }
   if (token === rampToken) audio.currentTime = base;
   unramp();
