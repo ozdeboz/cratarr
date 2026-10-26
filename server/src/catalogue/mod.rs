@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS files (
   folder INTEGER NOT NULL, rel TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL,
   state INTEGER NOT NULL DEFAULT 0, format TEXT, bitrate INTEGER, duration_ms INTEGER, error TEXT,
   PRIMARY KEY (folder, rel)) WITHOUT ROWID;
+-- The cover files beside the audio (0.9.7), as the last walk found them: one changed builds the library again, so its
+-- album's cover stamp moves.
+CREATE TABLE IF NOT EXISTS cover_files (
+  folder INTEGER NOT NULL, rel TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL,
+  PRIMARY KEY (folder, rel)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS tags (
   folder INTEGER NOT NULL, rel TEXT NOT NULL, n INTEGER NOT NULL, raw TEXT NOT NULL, name TEXT, value TEXT NOT NULL,
   PRIMARY KEY (folder, rel, n)) WITHOUT ROWID;
@@ -582,9 +587,9 @@ impl Catalogue {
     pub fn walk_all(&self) -> Vec<String> {
         let mut problems = Vec::new();
         for (id, folder) in self.folders().into_iter().enumerate() {
-            match walk::walk(&folder) {
-                Ok((found, skipped)) => {
-                    if let Err(e) = self.record_walk(id as i64, &found) {
+            match walk::walk_with_covers(&folder) {
+                Ok((found, covers, skipped)) => {
+                    if let Err(e) = self.record_walk(id as i64, &found).and_then(|()| self.record_covers(id as i64, &covers)) {
                         problems.push(format!("{}: {e:#}", folder.display()));
                     }
                     if skipped > 0 {
@@ -632,6 +637,29 @@ impl Catalogue {
         for rel in known.iter().filter(|(r, k)| !k.2 && !present.contains(r.as_str())).map(|(r, _)| r) {
             tx.execute("UPDATE files SET gone_at = ?3 WHERE folder = ?1 AND rel = ?2", params![folder, rel, now])?;
             tx.execute("DELETE FROM source_ids WHERE folder = ?1 AND rel = ?2", params![folder, rel])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The folder's cover files as the walk found them, written only where they differ from what was kept (a pass that
+    /// finds them as they were changes nothing). Blocking.
+    fn record_covers(&self, folder: i64, found: &[walk::Found]) -> Result<()> {
+        let mut db = self.db();
+        let kept: HashMap<String, (i64, i64)> = {
+            let mut st = db.prepare_cached("SELECT rel, size, mtime FROM cover_files WHERE folder = ?1")?;
+            st.query_map([folder], |r| Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?))))?.collect::<rusqlite::Result<_>>()?
+        };
+        let now: HashMap<&str, (i64, i64)> = found.iter().map(|f| (f.rel.as_str(), (f.size as i64, f.mtime))).collect();
+        if now.len() == kept.len() && now.iter().all(|(rel, v)| kept.get(*rel) == Some(v)) {
+            return Ok(());
+        }
+        let tx = db.transaction()?;
+        for rel in kept.keys().filter(|rel| !now.contains_key(rel.as_str())) {
+            tx.execute("DELETE FROM cover_files WHERE folder = ?1 AND rel = ?2", params![folder, rel])?;
+        }
+        for (rel, (size, mtime)) in now.iter().filter(|(rel, v)| kept.get(**rel) != Some(*v)) {
+            tx.execute("INSERT OR REPLACE INTO cover_files (folder, rel, size, mtime) VALUES (?1, ?2, ?3, ?4)", params![folder, rel, size, mtime])?;
         }
         tx.commit()?;
         Ok(())
@@ -2423,9 +2451,12 @@ pub fn served_fingerprint(db: &Connection) -> Result<String> {
         [],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
     )?;
+    // A cover file changed, came or went (0.9.7) builds it again too: its album's stamp moves.
+    let (covers, cover_size, cover_mtime): (i64, f64, f64) =
+        db.query_row("SELECT count(*), total(size), total(mtime) FROM cover_files", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
     // New analyses build the library again too (their gains and tempi are the songs').
     let (analysed, at): (i64, f64) = db.query_row("SELECT count(*), total(analysed_at) FROM analysis", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
-    Ok(format!("{n}/{size}/{mtime}/{tracks}/{folders}/{read} analysis {analysed}/{at}"))
+    Ok(format!("{n}/{size}/{mtime}/{tracks}/{folders}/{read} covers {covers}/{cover_size}/{cover_mtime} analysis {analysed}/{at}"))
 }
 
 #[cfg(test)]
@@ -2648,6 +2679,37 @@ mod tests {
         // Read again as it is now: the same size and time, but read, so built again with its new tags.
         cat.db().execute("UPDATE files SET state = ?1 WHERE rel = ?2", params![READ, one]).unwrap();
         assert_ne!(cat.served_fingerprint().unwrap(), pending, "its new tags are the library's to build");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_cover_file_changed_on_disk_builds_once_and_an_embedded_cover_adds_nothing() {
+        let d = music();
+        // The other album's cover is inside its files only: no file beside them.
+        std::fs::create_dir_all(d.join("C - D (2021)")).unwrap();
+        std::fs::write(d.join("C - D (2021)/01 Three.mp3"), b"its cover inside").unwrap();
+        std::fs::write(d.join("A - B (2020)/cover.jpg"), b"a picture").unwrap();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        let kept: i64 = cat.db().query_row("SELECT count(*) FROM cover_files", [], |r| r.get(0)).unwrap();
+        assert_eq!(kept, 1, "the cover beside A - B; none for the embedded one");
+        let first = cat.served_fingerprint().unwrap();
+        cat.walk_all();
+        assert_eq!(cat.served_fingerprint().unwrap(), first, "as it was: no change");
+        // Touched only (the same picture, another time): one change, not one each pass.
+        let f = std::fs::File::options().write(true).open(d.join("A - B (2020)/cover.jpg")).unwrap();
+        f.set_modified(std::time::SystemTime::now() + Duration::from_secs(60)).unwrap();
+        drop(f);
+        cat.walk_all();
+        let touched = cat.served_fingerprint().unwrap();
+        assert_ne!(touched, first, "the library builds, the stamp moves");
+        cat.walk_all();
+        assert_eq!(cat.served_fingerprint().unwrap(), touched, "counted once");
+        // Gone: a change again.
+        std::fs::remove_file(d.join("A - B (2020)/cover.jpg")).unwrap();
+        cat.walk_all();
+        assert_ne!(cat.served_fingerprint().unwrap(), touched);
         std::fs::remove_dir_all(&d).ok();
     }
 
