@@ -100,6 +100,13 @@
     seek.letGo();
     onend?.();
   }
+  // The finger lost (the system took it, or this control was replaced while held): let go, never held for good.
+  function lost() {
+    if (seek.held !== null) cancel();
+  }
+  $effect(() => () => {
+    if (seek.held !== null) seek.letGo();
+  });
   function key(e: KeyboardEvent) {
     if (!canSeek || !dur) return;
     const now = seek.now();
@@ -130,6 +137,7 @@
   onpointermove={move}
   onpointerup={up}
   onpointercancel={cancel}
+  onlostpointercapture={lost}
   onkeydown={key}
 >
   {#if waveShown}
