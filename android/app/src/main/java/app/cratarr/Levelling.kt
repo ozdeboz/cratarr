@@ -54,12 +54,14 @@ object Levelling {
         }
         val key = "${track.optString("source")}/${track.optString("id")}"
         val albumWise = inAlbumOrder(context, player)
-        val want = "$key:$albumWise"
+        // A track not measured (0.9.8, the page's This device › Player): typical, or left as it is.
+        val unknownDb = if (Prefs(context).levelUnknown == Prefs.LEVEL_UNTOUCHED) 0.0 else UNKNOWN_DB
+        val want = "$key:$albumWise:$unknownDb"
         if (want == following) return
         following = want
         val known = gains.get(key)
         if (known != null) {
-            set(known, albumWise, apply)
+            set(known, albumWise, unknownDb, apply)
             return
         }
         val base = server?.trimEnd('/') ?: return
@@ -68,17 +70,17 @@ object Levelling {
             main.post {
                 if (g != null) gains.put(key, g)
                 // Still that track.
-                if (following == want) set(g ?: JSONObject(), albumWise, apply)
+                if (following == want) set(g ?: JSONObject(), albumWise, unknownDb, apply)
             }
         }
     }
 
-    private fun set(g: JSONObject, albumWise: Boolean, apply: () -> Unit) {
+    private fun set(g: JSONObject, albumWise: Boolean, unknownDb: Double, apply: () -> Unit) {
         // The dB Cratarr says to turn it down by (0.9.8: the rule kept on the server, the page shows the same); a
-        // track not measured gets a typical one.
+        // track not measured gets the device's choice.
         fun down(key: String) = if (g.isNull(key)) Double.NaN else g.optDouble(key, Double.NaN)
         val db = (if (albumWise) down("albumDown") else Double.NaN).takeUnless { it.isNaN() }
-            ?: down("trackDown").takeUnless { it.isNaN() } ?: UNKNOWN_DB
+            ?: down("trackDown").takeUnless { it.isNaN() } ?: unknownDb
         val f = min(10.0.pow(db / 20.0), 1.0).toFloat()
         if (f != factor) {
             factor = f

@@ -465,6 +465,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 message.optString("downloadQuality").takeIf { it.isNotEmpty() }?.let { prefs.downloadQuality = it }
                 if (message.has("levelling")) prefs.levelling = message.optBoolean("levelling")
+                message.optString("levelUnknown").takeIf { it.isNotEmpty() }?.let { prefs.levelUnknown = it }
                 // Start and stop (0.9.6): the page's This device setting, kept here for the app's own player.
                 message.optJSONObject("startStop")?.let { s ->
                     prefs.startStopMode = s.optString("mode", Prefs.START_STOP_OFF)
@@ -613,6 +614,7 @@ class MainActivity : AppCompatActivity() {
         .put("syncBudgetGb", prefs.syncBudgetGb)
         .put("syncOnlyCharging", prefs.syncOnlyCharging)
         .put("levelling", prefs.levelling)
+        .put("levelUnknown", prefs.levelUnknown)
         .put(
             "startStop",
             JSONObject()

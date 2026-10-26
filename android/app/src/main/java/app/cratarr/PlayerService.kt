@@ -95,7 +95,7 @@ class PlayerService : MediaSessionService() {
         if (key == Prefs.SERVER_URL || key == Prefs.LOCAL_URL || key == Prefs.PREFER_LOCAL || key == Prefs.SESSION_MARK) Reach.checkSoon(this)
         // Another server or name: Cratarr says the group again once connected.
         if ((key == Prefs.SERVER_URL || key == Prefs.LOCAL_URL || key == Prefs.PLAYER_NAME) && sync.leader != null) sync.group(null, null, 0, sync.bufferMs, "")
-        if (key == Prefs.LEVELLING) link?.levellingChanged()
+        if (key == Prefs.LEVELLING || key == Prefs.LEVEL_UNKNOWN) link?.levellingChanged()
         if (key == Prefs.TARGET) showTarget()
         if (key == Prefs.OUTPUT_CHOICE || key == Prefs.OUTPUT_ORDERED || key == Prefs.OUTPUT_KNOWN) applyOutput()
         if (key == Prefs.SLEEP) {
