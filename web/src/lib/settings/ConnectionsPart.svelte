@@ -78,12 +78,20 @@
   const MB_MORE =
     "Asked without a key, at its own pace: original years and release types for albums with a MusicBrainz release, Find more music, artists' links and Renumber's track order.";
   let mb = $state<MusicBrainzStatus | null>(null);
+  // Asked again a few times when it did not answer (a busy server), so the row never just stays away; a server without
+  // the call (missingCall) has none.
+  let mbTries = 0;
+  let mbRetry: ReturnType<typeof setTimeout> | undefined;
   const loadMb = () =>
     getMusicBrainz().then(
       (m) => (mb = m),
-      () => (mb = null),
+      (e) => {
+        mb = null;
+        if (!missingCall(e) && ++mbTries < 4) mbRetry = setTimeout(loadMb, 5000);
+      },
     );
   loadMb();
+  $effect(() => () => clearTimeout(mbRetry));
   /** Its last answer failed: an error later than the last answer. */
   const mbFailing = $derived(!!mb?.last_error && (mb.last_ok === null || mb.last_error.at > mb.last_ok));
   const mbLine = $derived(
