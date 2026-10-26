@@ -7,6 +7,7 @@
   import { matchesSearch } from './pageView.svelte';
   import { getDiscover, getDiscoverExcluded, getDiscoverMissing, type Count, type DiscoverView, type Insights, type Layered } from './api';
   import Icon from './Icon.svelte';
+  import PageLoading from './PageLoading.svelte';
   import { plural } from './insights.svelte';
   import { prefs } from './prefs.svelte';
 
@@ -268,7 +269,7 @@
   {#if discError}
     <p class="formats" role="alert">{discError}</p>
   {:else if !disc}
-    <p class="formats">Reading Discover…</p>
+    <PageLoading />
   {:else if !found.length}
     <p class="formats">Discover has found nothing yet: <a href="#/discover">look on its page</a>.</p>
   {:else}

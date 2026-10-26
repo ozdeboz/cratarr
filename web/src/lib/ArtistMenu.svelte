@@ -161,17 +161,7 @@
           {@const on = isKept('artist', source, name)}
           <MenuEntry icon="download" label="Sync to this device" switched={on} onclick={() => setKept('artist', source, name, !on, name)} />
         {/if}
-        {#if tracks.length}<MenuEntry icon="export" label="Export…" onclick={() => (exporting = true)} />{/if}
-        <MenuEntry icon="share" label="Share" onclick={shareIt} />
-      </MenuGroup>
-      <MenuGroup>
-        <MenuEntry icon="search" label="Web search" onclick={webSearch} />
-      </MenuGroup>
-      <MenuGroup>
-        <MenuEntry icon="image" label="Change picture on this device" onclick={() => picker?.click()} />
-        {#if ownPicture}<MenuEntry icon="imageOff" label="Use their album cover" onclick={dropPicture} />{/if}
-      </MenuGroup>
-      <MenuGroup>
+        <!-- Beside what put them there (the owner, 2026-10-26: removing was out of sight, last in the menu). -->
         {#if kept.length}
           {@const keptIds = kept.map((t) => t.download.id)}
           <MenuEntry
@@ -184,6 +174,15 @@
             }}
           />
         {/if}
+        {#if tracks.length}<MenuEntry icon="export" label="Export…" onclick={() => (exporting = true)} />{/if}
+        <MenuEntry icon="share" label="Share" onclick={shareIt} />
+      </MenuGroup>
+      <MenuGroup>
+        <MenuEntry icon="search" label="Web search" onclick={webSearch} />
+      </MenuGroup>
+      <MenuGroup>
+        <MenuEntry icon="image" label="Change picture on this device" onclick={() => picker?.click()} />
+        {#if ownPicture}<MenuEntry icon="imageOff" label="Use their album cover" onclick={dropPicture} />{/if}
       </MenuGroup>
       <input class="picker" type="file" accept="image/*" bind:this={picker} onchange={chosen} />
     </MenuCards>

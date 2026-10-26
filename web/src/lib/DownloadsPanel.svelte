@@ -13,7 +13,7 @@
   import { albumCoverUrl, crateImageUrl } from './api';
   import { albumSubject, artistSubject, closePlaylist, SETTINGS, upToPage, viewPlaylist } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
-  import { appInfo, download, downloads } from './app.svelte';
+  import { appInfo, download, downloads, removeDownloads } from './app.svelte';
   import { library } from './albums.svelte';
   import { DOWNLOADS_LISTS, goTo, onceAlbums, WAITS, type DownloadsList, type OnceAlbum } from './downloadsLists.svelte';
   import Icon from './Icon.svelte';
@@ -21,6 +21,8 @@
   import { matchesSearch } from './pageView.svelte';
   import PageLoading from './PageLoading.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
+  import SelectBar from './SelectBar.svelte';
+  import SelectSheet from './SelectSheet.svelte';
   import TopPill from './TopPill.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -107,9 +109,38 @@
   }
   // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): handed over,
   // its own bar not drawn, its list under the glass.
+  // --- Select (the owner, 2026-10-26: no way to remove downloads in sight): many at once, as Requests' lists ---
+  let selecting = $state<Set<string> | null>(null);
+  let selectSheet = $state(false);
+  const onceKey = (g: OnceAlbum) => `${g.source}/${g.id}`;
+  const shownKeys = $derived(list === 'synced' ? synced.map((i) => i.key) : list === 'once' ? once.map(onceKey) : []);
+  const ticked = $derived(selecting ? shownKeys.filter((k) => selecting!.has(k)) : []);
+  function tick(k: string) {
+    if (!selecting) return;
+    const s = new Set(selecting);
+    if (s.has(k)) s.delete(k);
+    else s.add(k);
+    selecting = s;
+  }
+  function selectWhich(which: 'all' | 'none' | 'others') {
+    selecting = new Set(which === 'all' ? shownKeys : which === 'none' ? [] : shownKeys.filter((k) => !selecting?.has(k)));
+  }
+  // Another list: Select ends.
+  $effect(() => {
+    void list;
+    selecting = null;
+  });
+  /** The ticked ones off this device: synced ones stop syncing (which takes their files), once ones are removed. */
+  function removeTicked() {
+    const on = new Set(ticked);
+    if (list === 'synced') for (const i of synced) if (on.has(i.key)) setKept(i.kind, i.source, i.id, false, i.name);
+    if (list === 'once') removeDownloads(once.filter((g) => on.has(onceKey(g))).flatMap((g) => g.tracks.map((t) => t.download.id)));
+    selecting = null;
+  }
+
   const handed = $derived(glass.one && !beside);
   const pill = () => (!beside ? { device: false, filter: false, view: false, search: 'downloads' } : null);
-  handGlass(() => handed, { left: glassLeft, pill });
+  handGlass(() => handed, { left: glassLeft, pill, extra: glassExtra });
 </script>
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->
@@ -118,11 +149,27 @@
   <Crumbs trail={beside ? [] : [{ label: 'Downloads', go: () => upToPage('#/downloads') }]} here={L.label} />
 {/snippet}
 
+{#snippet glassExtra()}
+  {#if shownKeys.length}
+    <span class="navpill"
+      ><button aria-label="Select" title="Select" aria-pressed={!!selecting} onclick={() => (selecting = selecting ? null : new Set())}><Icon name="listChecks" size={22} /></button></span
+    >
+  {/if}
+{/snippet}
+
+{#snippet tickOf(k: string, name: string)}
+  {@const on = !!selecting?.has(k)}
+  <button class="tick" class:on role="checkbox" aria-checked={on} aria-label={`Select ${name}`} onclick={() => tick(k)}
+    ><Icon name={on ? 'circleCheck' : 'circle'} size={24} /></button
+  >
+{/snippet}
+
 <div class="view" class:handed>
   {#if !handed}
     <div class="bar" class:beside>
       {@render glassLeft()}
       {#if pill()}<TopPill {...pill()!} />{/if}
+      {@render glassExtra()}
     </div>
   {/if}
   <div class="scroll" class:away={handed && everywhere()}>
@@ -146,14 +193,20 @@
     {:else if list === 'synced'}
       <Group>
         {#each synced as i (i.key)}
-          <ReleaseRow
-            cover={keptPicture(i)}
-            title={i.name}
-            line={keptLine(i)}
-            tone={i.state === 'error' || i.failed > 0 ? 'bad' : null}
-            fill={keptFill(i)}
-            onclick={() => (menu = keptMenu(i))}
-          />
+          {#if selecting}
+            <ReleaseRow cover={keptPicture(i)} title={i.name} line={keptLine(i)} tone={i.state === 'error' || i.failed > 0 ? 'bad' : null}
+              >{@render tickOf(i.key, i.name)}</ReleaseRow
+            >
+          {:else}
+            <ReleaseRow
+              cover={keptPicture(i)}
+              title={i.name}
+              line={keptLine(i)}
+              tone={i.state === 'error' || i.failed > 0 ? 'bad' : null}
+              fill={keptFill(i)}
+              onclick={() => (menu = keptMenu(i))}
+            />
+          {/if}
         {:else}
           <Item name="Nothing synced" line="Sync to this device from an album's, a playlist's, a crate's or an artist's menu." />
         {/each}
@@ -162,6 +215,11 @@
       <Group>
         {#each once as g (`${g.source}/${g.id}`)}
           {@const l = albumLine(g)}
+          {#if selecting}
+            <ReleaseRow cover={albumCoverUrl(g.source, g.id)} title={titleOf(g)} line={l.text} tone={l.bad ? 'bad' : null}
+              >{@render tickOf(onceKey(g), titleOf(g))}</ReleaseRow
+            >
+          {:else}
           <ReleaseRow
             cover={albumCoverUrl(g.source, g.id)}
             title={titleOf(g)}
@@ -180,6 +238,7 @@
                 synced: false,
               })}
           />
+          {/if}
         {:else}
           <Item name="Nothing downloaded once" />
         {/each}
@@ -189,6 +248,21 @@
     {#if handed && everywhere()}<GlobalResults />{/if}
   </div>
 </div>
+
+{#if selecting}
+  <SelectBar
+    label={list === 'synced' ? 'Selected synced items' : 'Selected albums'}
+    count="{ticked.length}/{shownKeys.length}"
+    onclose={() => (selecting = null)}
+    every={{ all: !!shownKeys.length && ticked.length === shownKeys.length, onall: () => selectWhich('all'), onnone: () => selectWhich('none') }}
+  >
+    <button aria-label="Select which" title="Select…" onclick={() => (selectSheet = true)}><Icon name="listChecks" size={24} /></button>
+    <button aria-label="Remove from this device" title="Remove from this device" disabled={!ticked.length} onclick={removeTicked}><Icon name="trash" size={24} /></button>
+  </SelectBar>
+{/if}
+{#if selectSheet}
+  <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />
+{/if}
 
 {#if menu}
   {@const m = menu}
@@ -279,5 +353,27 @@
   .view.handed .scroll {
     padding-top: calc(var(--bar-room, 0px) + var(--mini-top, 0px) + var(--glass-top) + 16px);
     padding-bottom: calc(var(--mini-h, 0px) + var(--glass-bottom) + 16px);
+  }
+
+  .navpill button[aria-pressed='true'] {
+    color: var(--accent);
+  }
+
+  /* A row's tick in Select (as Requests' lists). */
+  .tick {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .tick.on {
+    color: var(--accent);
   }
 </style>

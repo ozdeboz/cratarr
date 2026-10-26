@@ -78,6 +78,7 @@
   import { DEVICE } from './deviceMusic.svelte';
   import MenuCards from './MenuCards.svelte';
   import DownloadEntry from './DownloadEntry.svelte';
+  import MarkLoader from './MarkLoader.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
   import PlaylistsStep from './PlaylistsStep.svelte';
@@ -552,7 +553,7 @@
   {:else if ask === 'move'}
     <div class="form">
       {#if !keep}
-        <p class="ask">Working out the names…</p>
+        <div class="loading"><MarkLoader size={40} /></div>
       {:else if keep.refused?.kind === 'needs_year'}
         <p class="ask">The tags don't say when {a.title} came out. Which year?</p>
         <input class="year" inputmode="numeric" maxlength="4" placeholder="Year" aria-label="Release year" bind:value={year} oninput={tryYear} />
@@ -575,7 +576,7 @@
   {:else if ask === 'replace'}
     <div class="form">
       {#if !swap}
-        <p class="ask">Pairing the tracks…</p>
+        <div class="loading"><MarkLoader size={40} /></div>
       {:else if swap.refused?.kind === 'needs_year'}
         <p class="ask">The tags don't say when {a.title} came out. Which year?</p>
         <input class="year" inputmode="numeric" maxlength="4" placeholder="Year" aria-label="Release year" bind:value={year} oninput={tryYear} />
@@ -703,6 +704,19 @@
           {@const on = isKept('album', source, a.id)}
           <MenuEntry icon="download" label="Sync to this device" switched={on} onclick={() => setKept('album', source, a.id, !on, a.title)} />
         {/if}
+        <!-- Beside what put them there (the owner, 2026-10-26: removing was out of sight, last in the menu). -->
+        {#if kept.length}
+          {@const ids = kept.map((t) => t.download.id)}
+          <MenuEntry
+            icon="trash"
+            label="Remove from this device"
+            danger
+            onclick={() => {
+              onclose();
+              removeDownloads(ids);
+            }}
+          />
+        {/if}
         {#if tracks?.length}<MenuEntry icon="export" label="Export…" onclick={() => (exporting = true)} />{/if}
         <MenuEntry icon="share" label="Share" onclick={shareIt} />
       </MenuGroup>
@@ -734,18 +748,6 @@
       {/if}
       <!-- Remove, last. -->
       <MenuGroup>
-        {#if kept.length}
-          {@const ids = kept.map((t) => t.download.id)}
-          <MenuEntry
-            icon="trash"
-            label="Remove from this device"
-            danger
-            onclick={() => {
-              onclose();
-              removeDownloads(ids);
-            }}
-          />
-        {/if}
         {#if me.admin && offer && offer.job === null && offer.deletable}<MenuEntry icon="trash" label="Delete album" danger onclick={() => (ask = 'delete')} />{/if}
       </MenuGroup>
       <input class="picker" type="file" accept="image/*" bind:this={picker} onchange={chosen} />
@@ -899,5 +901,12 @@
   .look-line {
     color: var(--accent-ink);
     font-size: 0.8rem;
+  }
+
+  /* A question's answer being worked out: the loading sign, small (as the track menu's). */
+  .loading {
+    display: grid;
+    place-items: center;
+    padding: 16px 0;
   }
 </style>

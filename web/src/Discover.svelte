@@ -283,7 +283,8 @@
       {#each view.found?.notes ?? [] as note (note)}<p class="note">{note}</p>{/each}
     {/if}
     {#if !albums.length}
-      {#if !looking}<p class="note">{kept.length ? 'None of them match.' : view.found ? 'Nothing new to suggest right now.' : 'Looking for albums you might like…'}</p>{/if}
+      <!-- Nothing found yet: the shared loading sign, not words of its own (the owner, 2026-10-26). -->
+      {#if !looking}{#if kept.length || view.found}<p class="note">{kept.length ? 'None of them match.' : 'Nothing new to suggest right now.'}</p>{:else}<PageLoading />{/if}{/if}
     {:else}
       {#if me.admin && !view.lidarr}
         <p class="note">Want needs Lidarr: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>
