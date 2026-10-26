@@ -33,7 +33,9 @@ let reading: Promise<void> | null = null;
 /** Reads it (`fresh`: past the service worker's copy); one read at a time. */
 export function readLibrary(fresh: boolean): Promise<void> {
   reading ??= getAlbums(prefs.source || undefined, fresh)
-    .then((v) => void (library.view = v))
+    .then((v) => {
+      library.view = v;
+    })
     .finally(() => (reading = null));
   return reading;
 }

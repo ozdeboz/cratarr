@@ -20,6 +20,7 @@
     marked,
     enter = false,
     bleed = 0,
+    fade = true,
   }: {
     /** Come in when shown (Home's featured flow; the owner, 2026-10-26): from both edges towards the middle, the outer
      *  covers first, the front one last. */
@@ -30,6 +31,9 @@
     /** How far below its place it may still draw (the covers' lower edges and shadows, the owner 2026-10-26: no hard
      *  edge under them), the covers laid out as if it did not. */
     bleed?: number;
+    /** Its sides fading out (the owner, 2026-10-23); none where the picture behind it reaches the screen's edges (the
+     *  owner, 2026-10-26). */
+    fade?: boolean;
     /** Room kept free along the top (a header's buttons) and over the foot (the fade under its action bar). */
     top?: number;
     foot?: number;
@@ -49,6 +53,9 @@
   let size = $state(0);
   let height = $state(0);
   const measured = $derived(size > 0 && height > 0);
+  /** The covers whose picture is in: each shows (its frame and shadow too) only then (the owner, 2026-10-26: shadows
+   *  before the covers), fading in. */
+  const ready = $state<Record<string, true>>({});
   // Its room changing later (a page settling, a window resized) moves them at once too, not sliding.
   let settled = $state(false);
   $effect(() => {
@@ -245,6 +252,7 @@
   bind:this={root}
   bind:clientWidth={size}
   bind:clientHeight={height}
+  class:fade
   style:bottom={bleed ? `${-bleed}px` : null}
   style:perspective="{620 * front.u}px"
   role="listbox"
@@ -268,10 +276,10 @@
       style:height="{c.w}px"
       style:transform={entering && c.key !== Math.round(pos) ? `translateX(${(c.key < pos ? -1 : 1) * size}px) ${c.t}` : c.t}
       style:filter="brightness({c.f})"
-      style:opacity={entering ? 0 : c.o}
+      style:opacity={entering || !ready[c.src] ? 0 : c.o}
       style:transition-duration={entered ? null : `${ENTER_MS}ms`}
       style:transition-delay={entered ? null : `${Math.max(0, front.sides + 1 - Math.abs(c.key - Math.round(pos))) * STAGGER_MS}ms`}
-      style:z-index={c.z}><Cover src={c.src} lazy={false} /></span
+      style:z-index={c.z}><Cover src={c.src} lazy={false} onready={() => (ready[c.src] = true)} /></span
     >
   {/each}
 </div>
@@ -281,13 +289,16 @@
     position: absolute;
     inset: 0;
     overflow: hidden;
-    /* Its sides fade out (the owner, 2026-10-23: proper fades, no hard cut-offs). */
-    --edge: min(12%, 96px);
-    -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--edge), #000 calc(100% - var(--edge)), transparent);
-    mask-image: linear-gradient(to right, transparent, #000 var(--edge), #000 calc(100% - var(--edge)), transparent);
     touch-action: pan-y;
     user-select: none;
     cursor: grab;
+  }
+
+  /* Its sides fade out (the owner, 2026-10-23: proper fades, no hard cut-offs). */
+  .flow.fade {
+    --edge: min(12%, 96px);
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--edge), #000 calc(100% - var(--edge)), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 var(--edge), #000 calc(100% - var(--edge)), transparent);
   }
 
   .rec {
