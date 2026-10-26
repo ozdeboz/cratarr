@@ -1,17 +1,20 @@
 <script lang="ts">
   // The Library's Artists (the owner, 2026-10-25: "in the same style as the album list with a beautiful table"): the
   // libraries' albums by their artists, with the albums' header (its order, how many, Select's room) and their two
-  // layouts, rows or the table (the Library's View); in the table their columns as wide as the list allows (decision
-  // 0042). The page's search filters them by name. A tap views the artist in the panel, as an album's artist does; a
+  // layouts, as the albums' (the Library's View; the owner, 2026-10-26: Grid and Flow too); in the table their columns as
+  // wide as the list allows (decision 0042). The page's search filters them by name. A tap views the artist in the panel, as an album's artist does; a
   // long-press their menu (lib/ArtistRowMenu); Select as the albums' (their tracks to the selection's menu).
   import { panelBeside } from './glass.svelte';
   import { albumCoverUrl, type ShelfSource } from './api';
   import { fit } from './columns.svelte';
   import Cover from './Cover.svelte';
+  import FlowStage from './FlowStage.svelte';
+  import Tile from './Tile.svelte';
+  import { playCollection } from './play.svelte';
   import { plural } from './insights.svelte';
   import ListHead from './ListHead.svelte';
   import { artistSubject, panel, viewPlaylist } from './panel.svelte';
-  import { ARTIST_ORDERS, howMany, matchesSearch } from './pageView.svelte';
+  import { ALBUM_WIDTHS, ARTIST_ORDERS, howMany, matchesSearch } from './pageView.svelte';
   import { leaveSearch } from './globalSearch.svelte';
   import { prefs } from './prefs.svelte';
   import Row, { type Cell } from './Row.svelte';
@@ -85,6 +88,21 @@
   const press = (a: Artist) => fromAction(longpress, () => () => (selecting ? (selectSheet = true) : (menuOf = a)));
 
   const table = $derived(prefs.albumLayout === 'table');
+  const view = (a: Artist) => (leaveSearch(false), viewPlaylist(artistSubject(a.source, a.name)));
+  /** Flow: the front artist, by its place in the list. */
+  let flowAt = $state(0);
+  const flowFront = $derived(shown[Math.min(flowAt, shown.length - 1)] ?? null);
+  let starting = $state(false);
+  async function playArtist(a: Artist) {
+    starting = true;
+    try {
+      await playCollection({ kind: 'artist', source: a.source, name: a.name }, 'play', a.name);
+    } catch (e) {
+      toast.fail(e, 'Could not start playing');
+    } finally {
+      starting = false;
+    }
+  }
   let width = $state(0);
   const cols = $derived(table ? fit('artists', width) : []);
   const cellsOf = (a: Artist): Cell[] => cols.map((c) => ({ ...c, text: (c.id === 'albums' ? a.albums : a.tracks).toLocaleString() }));
@@ -117,6 +135,45 @@
       selecting={!!selecting}
       onselect={() => (selecting = selecting ? null : new Set())}
     />
+    {#if prefs.albumLayout === 'flow'}
+      <FlowStage
+        covers={shown.map((a) => a.cover)}
+        marked={selecting ? shown.map((a) => selecting!.has(keyOf(a))) : undefined}
+        front={flowFront ? { title: flowFront.name, by: `${plural(flowFront.albums, 'album')} · ${plural(flowFront.tracks, 'track')}` } : null}
+        onopen={(i) => (selecting ? tick(shown[i]) : view(shown[i]))}
+        onfront={(i) => (flowAt = i)}
+        onmenu={(i) => (selecting ? (selectSheet = true) : (menuOf = shown[i]))}
+        onname={() => flowFront && view(flowFront)}
+        onplay={() => flowFront && playArtist(flowFront)}
+        canPlay={!starting}
+        playing={starting}
+      />
+    {:else if prefs.albumLayout === 'grid'}
+      <ul class="grid" style:--min="{ALBUM_WIDTHS.grid[prefs.albumZoom] ?? 170}px">
+        {#each shown as a (a.source + a.name)}
+          {@const on = !!selecting?.has(keyOf(a))}
+          <li>
+            <Tile
+              title={a.name}
+              sub={`${plural(a.albums, 'album')} · ${plural(a.tracks, 'track')}`}
+              label={selecting ? `${on ? 'Untick' : 'Tick'} ${a.name}` : `View ${a.name}`}
+              active={(panelBeside() && panel.viewed === artistSubject(a.source, a.name)) || on}
+              onclick={() => (selecting ? tick(a) : view(a))}
+              attach={press(a)}
+            >
+              {#snippet image()}<span class="face round"><Cover src={a.cover} /></span>{/snippet}
+              {#snippet action()}
+                {#if selecting}
+                  <button class="icon tick" class:on role="checkbox" aria-checked={on} aria-label="Select {a.name}" onclick={() => tick(a)}
+                    ><Icon name={on ? 'circleCheck' : 'circle'} size={24} /></button
+                  >
+                {/if}
+              {/snippet}
+            </Tile>
+          </li>
+        {/each}
+      </ul>
+    {:else}
     {#if cols.length}
       <Row size="large" as="div" head title="Name" cells={headCells}>
         {#snippet front()}<span class="face-space"></span>{/snippet}
@@ -134,7 +191,7 @@
             cells={cols.length ? cellsOf(a) : undefined}
             label={selecting ? `${selecting.has(keyOf(a)) ? 'Untick' : 'Tick'} ${a.name}` : `View ${a.name}`}
             active={(panelBeside() && panel.viewed === artistSubject(a.source, a.name)) || !!selecting?.has(keyOf(a))}
-            onclick={() => (selecting ? tick(a) : (leaveSearch(false), viewPlaylist(artistSubject(a.source, a.name))))}
+            onclick={() => (selecting ? tick(a) : view(a))}
             attach={press(a)}
           >
             {#snippet front()}<span class="face"><Cover src={a.cover} /></span>{/snippet}
@@ -150,6 +207,7 @@
         </li>
       {/each}
     </ul>
+    {/if}
   {/if}
 </div>
 
@@ -206,6 +264,31 @@
     min-width: 0;
     content-visibility: auto;
     contain-intrinsic-size: auto 80px;
+  }
+
+  /* Grid: as the albums' tiles, each artist's face round in its square. */
+  ul.grid {
+    grid-template-columns: repeat(auto-fill, minmax(var(--min), 1fr));
+  }
+
+  ul.grid li {
+    contain-intrinsic-size: auto 240px;
+  }
+
+  .face.round {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1;
+  }
+
+  ul.grid .tick {
+    background: color-mix(in srgb, var(--surface) 80%, transparent);
+    color: var(--text);
+  }
+
+  ul.grid .tick.on {
+    background: var(--accent);
+    color: var(--accent-text);
   }
 
   /* The table (decision 0042): one artist a line, the lines touching, a smaller face in front. */

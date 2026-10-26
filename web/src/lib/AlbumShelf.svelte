@@ -15,8 +15,7 @@
   import { plural } from './insights.svelte';
   import type { Matched } from './search';
   import Cover from './Cover.svelte';
-  import CoverFlow from './CoverFlow.svelte';
-  import { backdropUrl } from './backdrop.svelte';
+  import FlowStage from './FlowStage.svelte';
   import { addedOn, albumPlay, loadAlbumUses, playAlbums, playListedAlbum, quality, tracksOfAlbums, useOf, weak } from './albums.svelte';
   import { download, inApp } from './app.svelte';
   import { isFavorite, loadAlbumFavorites, setFavorite } from './favourites.svelte';
@@ -213,49 +212,6 @@
   };
   /** Flow: each server's front album, by its place in its list. */
   let flowAt = $state<Record<string, number>>({});
-  /** Flow's stage fills the page down to the mini-player's place, leaving room for the album's name
-   *  and buttons under it (the owner, 2026-10-23: the space used). */
-  const CAPTION = 116;
-  let stageHeight = $state(420);
-  /** What the coverflow leaves unused over its covers: the stage and the name move up by half, so they sit together in
-   *  the middle of the room. */
-  let flowSpare = $state(0);
-  /** One's own picture behind the whole page in Flow (the owner, 2026-10-26: "should cover the entire page always"),
-   *  not only behind the covers: fixed under the top bar, as wide as the page (beside a sidebar or a player, the page's
-   *  own part). */
-  const flowWall = $derived(prefs.albumLayout === 'flow' && !!backdropUrl());
-  function besidePage(el: HTMLElement) {
-    const page = el.parentElement?.closest('.page') as HTMLElement | null;
-    if (!page) return;
-    const place = () => {
-      const r = page.getBoundingClientRect();
-      el.style.left = `${r.left}px`;
-      el.style.width = `${r.width}px`;
-    };
-    place();
-    const watch = new ResizeObserver(place);
-    watch.observe(page);
-    addEventListener('resize', place);
-    return () => {
-      watch.disconnect();
-      removeEventListener('resize', place);
-    };
-  }
-  /** Room kept for the mini-player at the window's foot, there or not (the owner, 2026-10-23: assume it). */
-  const MINI = 96;
-  function fill(node: HTMLElement) {
-    const measure = () => {
-      const bottom = window.innerHeight - MINI;
-      stageHeight = Math.max(260, Math.round(bottom - node.getBoundingClientRect().top - CAPTION));
-    };
-    measure();
-    const later = setTimeout(measure, 300);
-    addEventListener('resize', measure);
-    return () => {
-      clearTimeout(later);
-      removeEventListener('resize', measure);
-    };
-  }
   // A tile shows its title and artist; the value the list is ordered by, when it is neither, is a pill over the cover's
   // upper left corner (decided 2026-10-16).
   const axisOf = (s: ShelfSource, a: ListedAlbum) => {
@@ -454,35 +410,18 @@
              album named under it; a tap on it views it (in select mode ticks it, a ticked one highlighted), one
              beside it comes to the front. -->
         {@const front = albums[flowAt[s.id] ?? 0]}
-        {#if flowWall}<div class="flow-wall" {@attach besidePage} aria-hidden="true"></div>{/if}
-        <div class="flow" class:on-wall={flowWall} style:transform="translateY({-flowSpare / 2}px)">
-          <div class="stage" {@attach fill} style:height="{stageHeight}px">
-            <CoverFlow
-              covers={albums.map((a) => albumCoverUrl(s.id, a.id))}
-              top={12}
-              foot={12}
-              onopen={(i) => (selecting ? tick(s, albums[i]) : view(s.id, albums[i]))}
-              marked={selecting ? albums.map((a) => selecting!.has(keyOf(s, a))) : undefined}
-              onfront={(i) => (flowAt[s.id] = i)}
-              onspare={(px) => (flowSpare = px)}
-              onmenu={(i, rect) => (selecting ? (selectSheet = true) : openMenu(s, albums[i], rect))}
-            />
-          </div>
-          {#if front}
-            <div class="caption">
-              <button class="named" onclick={() => view(s.id, front)}>
-                <span class="title">{front.title}</span>
-                <span class="by">{[front.artist ?? 'Unknown artist', front.year].filter(Boolean).join(' · ')}</span>
-              </button>
-              <div class="acts">
-                <button class="main" disabled={albumPlay.starting !== null} aria-busy={albumPlay.starting === front.id} onclick={() => playOf(s, front)}
-                  ><Icon name="play" size={18} />Play</button
-                >
-                <button onclick={() => view(s.id, front)}>Open</button>
-              </div>
-            </div>
-          {/if}
-        </div>
+        <FlowStage
+          covers={albums.map((a) => albumCoverUrl(s.id, a.id))}
+          marked={selecting ? albums.map((a) => selecting!.has(keyOf(s, a))) : undefined}
+          front={front ? { title: front.title, by: [front.artist ?? 'Unknown artist', front.year].filter(Boolean).join(' · ') } : null}
+          onopen={(i) => (selecting ? tick(s, albums[i]) : view(s.id, albums[i]))}
+          onfront={(i) => (flowAt[s.id] = i)}
+          onmenu={(i, rect) => (selecting ? (selectSheet = true) : openMenu(s, albums[i], rect))}
+          onname={() => front && view(s.id, front)}
+          onplay={() => front && playOf(s, front)}
+          canPlay={albumPlay.starting === null}
+          playing={!!front && albumPlay.starting === front.id}
+        />
       {:else}
       {#each blocksOf(albums) as block, bi (`${s.id}:${perBlock}:${prefs.albumLayout}:${bi}`)}
         {@const key = `${s.id}:${perBlock}:${prefs.albumLayout}:${bi}`}
@@ -898,103 +837,4 @@
     opacity: 0.6;
   }
 
-  /* Flow: the coverflow as tall as the page allows, the front album's name under it. */
-  .flow {
-    padding: 4px 0 12px;
-  }
-
-  /* One's own picture behind every flow, under a veil (Settings › Appearance; the owner, 2026-10-26): behind the whole
-     page here, under the top bar, the front album's name light on it in either theme. */
-  .flow-wall {
-    position: fixed;
-    top: calc(var(--top-h, 0px) + env(safe-area-inset-top));
-    bottom: 0;
-    z-index: -1;
-    background:
-      linear-gradient(to bottom, rgb(0 0 0 / 0.35), rgb(0 0 0 / 0.6)),
-      var(--flow-photo) center 20% / cover no-repeat,
-      var(--surface);
-    pointer-events: none;
-  }
-
-  /* On it, the covers and their side fades reach the page's edges (the owner, 2026-10-26), past the page's gutter. */
-  .flow.on-wall .stage {
-    margin-inline: calc(-1 * var(--gutter, 0px));
-  }
-
-  .flow.on-wall .caption .title {
-    color: #fff;
-  }
-
-  .flow.on-wall .caption .by {
-    color: rgb(255 255 255 / 0.75);
-  }
-
-  .stage {
-    position: relative;
-  }
-
-  /* The front album: its name large, who and when under it, then Play and Open as Home's buttons. */
-  .caption {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-    padding: 4px 16px 0;
-  }
-
-  .acts {
-    display: flex;
-    gap: 8px;
-  }
-
-  .acts button {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 18px;
-    border: 0;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--text) 10%, transparent);
-    color: var(--text);
-    font: inherit;
-    cursor: pointer;
-  }
-
-  .acts button.main {
-    background: var(--accent);
-    color: var(--accent-text);
-  }
-
-  .acts button:disabled {
-    opacity: 0.6;
-  }
-
-  .named {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    min-width: 0;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: inherit;
-    font: inherit;
-    text-align: center;
-    cursor: pointer;
-  }
-
-  .named .title {
-    max-width: 80vw;
-    overflow: hidden;
-    font-size: 1.35rem;
-    font-weight: 700;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .named .by {
-    color: var(--muted);
-    font-size: 0.9rem;
-  }
 </style>

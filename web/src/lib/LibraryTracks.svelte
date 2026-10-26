@@ -3,17 +3,20 @@
   // own tracks, from the server a page at a time (a5's /api/library/tracks; the next as the list's end comes near), in
   // the header's order, the page's search and the libraries switched off asked of the server; rows or the table (the
   // Library's View), the table's columns as wide as the list allows (decision 0042). A tap plays from that track, the
-  // tracks loaded so far the queue (500 at most); a cover views its album; a long-press the track's menu (lib/TrackMenu);
+  // tracks loaded so far the queue (500 at most); as Grid or Flow too (the owner, 2026-10-26: the Library's View, as the
+  // albums'), Flow fetching the next page as its front nears the end; a cover views its album; a long-press the track's menu (lib/TrackMenu);
   // Select as the albums' (the ticked ones to the selection's menu).
   import { albumCoverUrl, libraryTracks, type LibraryTrack } from './api';
   import { fit } from './columns.svelte';
   import Cover from './Cover.svelte';
+  import FlowStage from './FlowStage.svelte';
+  import Tile from './Tile.svelte';
   import { addedOn } from './albums.svelte';
   import { hiddenLibraries } from './listFilter.svelte';
   import ListHead from './ListHead.svelte';
   import PageLoading from './PageLoading.svelte';
   import { albumSubject, viewPlaylist } from './panel.svelte';
-  import { howMany, pageView, TRACK_ORDERS } from './pageView.svelte';
+  import { ALBUM_WIDTHS, howMany, pageView, TRACK_ORDERS } from './pageView.svelte';
   import { playCollection } from './play.svelte';
   import { prefs } from './prefs.svelte';
   import Row, { type Cell } from './Row.svelte';
@@ -127,6 +130,14 @@
       selecting ? (selectSheet = true) : (menuOf = { source: 'cratarr', id: t.id, name: t.title, artist: t.artist, album: t.album, album_id: t.album_id }),
     );
 
+  const viewAlbum = (t: LibraryTrack) => viewPlaylist(albumSubject('cratarr', t.album_id));
+  /** Flow: the front track, by its place; the next page asked for as it nears the end. */
+  let flowAt = $state(0);
+  const flowFront = $derived(items[Math.min(flowAt, items.length - 1)] ?? null);
+  function flowTo(i: number) {
+    flowAt = i;
+    if (total !== null && items.length < total && i > items.length - 40) void more();
+  }
   async function play(t: LibraryTrack) {
     navigator.vibrate?.(8);
     try {
@@ -153,6 +164,47 @@
       selecting={!!selecting}
       onselect={() => (selecting = selecting ? null : new Set())}
     />
+    {#if prefs.albumLayout === 'flow'}
+      <FlowStage
+        covers={items.map((t) => albumCoverUrl('cratarr', t.album_id))}
+        marked={selecting ? items.map((t) => selecting!.has(t.id)) : undefined}
+        front={flowFront ? { title: flowFront.title, by: [flowFront.artist, flowFront.album].filter(Boolean).join(' · ') } : null}
+        onopen={(i) => (selecting ? tick(items[i]) : viewAlbum(items[i]))}
+        onfront={flowTo}
+        onmenu={(i) =>
+          selecting
+            ? (selectSheet = true)
+            : (menuOf = { source: 'cratarr', id: items[i].id, name: items[i].title, artist: items[i].artist, album: items[i].album, album_id: items[i].album_id })}
+        onname={() => flowFront && viewAlbum(flowFront)}
+        onplay={() => flowFront && play(flowFront)}
+      />
+    {:else if prefs.albumLayout === 'grid'}
+      <ul class="grid" style:--min="{ALBUM_WIDTHS.grid[prefs.albumZoom] ?? 170}px">
+        {#each items as t (t.id)}
+          {@const on = !!selecting?.has(t.id)}
+          <li>
+            <Tile
+              title={t.title}
+              sub={t.artist ?? ''}
+              label={selecting ? `${on ? 'Untick' : 'Tick'} ${t.title}` : `Play ${t.title}`}
+              active={on}
+              onclick={() => (selecting ? tick(t) : play(t))}
+              attach={press(t)}
+            >
+              {#snippet image()}<Cover src={albumCoverUrl('cratarr', t.album_id)} />{/snippet}
+              {#snippet action()}
+                {#if selecting}
+                  <button class="icon tick" class:on role="checkbox" aria-checked={on} aria-label="Select {t.title}" onclick={() => tick(t)}
+                    ><Icon name={on ? 'circleCheck' : 'circle'} size={24} /></button
+                  >
+                {/if}
+              {/snippet}
+            </Tile>
+          </li>
+        {/each}
+      </ul>
+      <div class="end" bind:this={end} aria-hidden="true"></div>
+    {:else}
     {#if cols.length}
       <Row size="large" as="div" head title="Title" cells={headCells} count="Length">
         {#snippet front()}<span class="cover-space"></span>{/snippet}
@@ -192,6 +244,7 @@
       {/each}
     </ul>
     <div class="end" bind:this={end} aria-hidden="true"></div>
+    {/if}
   {/if}
 </div>
 
@@ -230,6 +283,15 @@
     min-width: 0;
     content-visibility: auto;
     contain-intrinsic-size: auto 64px;
+  }
+
+  /* Grid: as the albums' tiles. */
+  ul.grid {
+    grid-template-columns: repeat(auto-fill, minmax(var(--min), 1fr));
+  }
+
+  ul.grid li {
+    contain-intrinsic-size: auto 240px;
   }
 
   /* The table (decision 0042): one track a line, the lines touching. */
