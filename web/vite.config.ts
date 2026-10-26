@@ -11,10 +11,14 @@ const precacheList = (): Plugin => ({
   },
 });
 
-// `pnpm dev` proxies the API to a locally running Cratarr server.
+// `pnpm dev` proxies the API to a locally running Cratarr server, and its sign-in and sign-out pages (the server's own:
+// an app pointed at the dev server signs in there, 2026-10-26).
+const server = process.env.CRATARR_URL ?? 'http://127.0.0.1:8080';
 export default defineConfig({
   plugins: [svelte(), precacheList()],
   server: {
-    proxy: { '/api': process.env.CRATARR_URL ?? 'http://127.0.0.1:8080' },
+    // The Host as the browser sent it: the server takes a form post only from its own address (its sign-in's same-origin
+    // check), which a rewritten Host to its own port made another site.
+    proxy: Object.fromEntries(['/api', '/signin', '/signout'].map((p) => [p, { target: server, changeOrigin: false }])),
   },
 });

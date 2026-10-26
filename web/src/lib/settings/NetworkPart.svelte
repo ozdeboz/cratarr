@@ -65,7 +65,13 @@
       />
       <!-- Only while it is used (as Finamp shows a setting's deeper ones only while they apply); kept while off. -->
       {#if appInfo.preferLocal}
-        <Item name="Local network address" line={appInfo.localAddress || 'Not set'} wrap onclick={() => (editing = 'local')} />
+        <Item
+          name="Local network address"
+          line={appInfo.localAddress ? (appInfo.localRefused ? `${appInfo.localAddress} · refused the sign-in` : appInfo.localAddress) : 'Not set'}
+          tone={appInfo.localRefused ? 'bad' : null}
+          wrap
+          onclick={() => (editing = 'local')}
+        />
       {/if}
       <Item name="Active address" line={appInfo.inUse ?? ''} wrap />
       <Item name="Test both connections">

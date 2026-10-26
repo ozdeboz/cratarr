@@ -26,6 +26,8 @@ export const appInfo = $state({
    *  address in use. `addresses`: the app knows two (an app from before knew one, its `server`). */
   publicAddress: null as string | null,
   localAddress: null as string | null,
+  /** The local network address refused this app's sign-in a moment ago (a5, 0.9.7): the app goes by the public one. */
+  localRefused: false,
   preferLocal: false,
   inUse: null as string | null,
   addresses: false,
@@ -158,6 +160,7 @@ if (port) {
       appInfo.publicAddress = typeof m.public === 'string' ? m.public : typeof m.server === 'string' ? m.server : null;
       appInfo.localAddress = typeof m.local === 'string' && m.local ? m.local : null;
       appInfo.preferLocal = m.preferLocal === true;
+      appInfo.localRefused = m.localRefused === true;
       appInfo.inUse = typeof m.inUse === 'string' && m.inUse ? m.inUse : appInfo.publicAddress;
       appInfo.refused = typeof m.refused === 'string' && m.refused ? m.refused : null;
       appInfo.stayReady = m.stayReady === true;
@@ -179,7 +182,9 @@ if (port) {
       if (typeof m.target === 'string') appInfo.target = m.target;
       // An app that keeps the target but has none yet: the page's last choice, once (decision 0062).
       else if (m.target === null && appInfo.target === null) seedTarget?.();
-      appInfo.local = m.local === true;
+      // Local mode on (decision 0052): `localMode` (0.9.7); before it `local`, which the address of the same name was lost
+      // under (the owner's phone, 2026-10-26: Local network address "Not set").
+      appInfo.local = m.localMode === true || m.local === true;
       appInfo.deviceMusic = m.deviceMusic === 'granted' || m.deviceMusic === 'denied' ? m.deviceMusic : 'unasked';
     }
     // Where the controls point changed, in the app (decision 0062): the page shows it.
