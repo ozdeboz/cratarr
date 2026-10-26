@@ -3,7 +3,7 @@
 import { untrack } from 'svelte';
 import { ApiError, coverUrl, albumCoverUrl, playerCommand, setFavorite, setTrackFavorite, transport, type NowPlaying, type Transport, type Upcoming } from './api';
 import { expect, expectFailed, live, refresh } from './live.svelte';
-import { local, jump as localJump, next as localNext, previous as localPrevious, togglePlay as localToggle, seek as localSeek } from './localPlayer.svelte';
+import { local, jump as localJump, next as localNext, previous as localPrevious, togglePlay as localToggle, seek as localSeek, sought } from './localPlayer.svelte';
 import { isLocal, localNowPlaying, localState, tookLocal } from './output.svelte';
 import { setFavorite as setRowFavorite } from './favourites.svelte';
 import { on } from './events.svelte';
@@ -109,28 +109,56 @@ function running(): number {
   return d ? Math.min(p, d) : p;
 }
 // Through a Start and stop ramp the position stands still (the owner, 2026-10-26: it stops hard as a stop begins, and
-// starts hard once a start is at full speed): where it was as the ramp began, until it ends.
+// starts hard once a start is at full speed): where it was as the ramp began, until it ends. After a stop it rests
+// there (the owner, 2026-10-26: "where the waveform stops there is where it should always remain until the user presses
+// play again"): not where the wind-down's tail took the player, nor what it reports meanwhile, until it plays again
+// (its wind-up held too), a seek moves it or another track plays.
 const frozen = $state({ on: false, pos: 0 });
+/** The rest after a stop: on which track, at how many seeks, and whether the player has said paused yet. */
+let rest: { id: string | null; seeks: number; paused: boolean } | null = null;
+/** How long a stop's rest waits for the player's word that it paused (a press it never acted on lets go then). */
+const REST_WAIT_MS = 2000;
+function letGo() {
+  rest = null;
+  frozen.on = false;
+}
 $effect.root(() => {
   $effect(() => {
-    const on = isLocal() && ramping.dir !== null;
+    const dir = isLocal() ? ramping.dir : null;
     void ramping.at;
+    const id = playing()?.id ?? null;
+    const still = paused();
+    const seeks = sought.n;
     untrack(() => {
-      if (on) frozen.pos = frozen.on ? frozen.pos : running();
-      frozen.on = on;
+      if (dir !== null) {
+        if (!frozen.on) frozen.pos = running();
+        frozen.on = true;
+        // Once per stop: a seek during it (counted after) lets go when it ends.
+        if (dir === 'out' && !rest) rest = { id, seeks, paused: false };
+        return;
+      }
+      if (!rest || rest.id !== id || rest.seeks !== seeks) return letGo();
+      if (still) rest.paused = true;
+      // Playing again from the rest (a wind-up ended, or none was needed): it runs from here.
+      else if (rest.paused) return letGo();
+      else {
+        const r = rest;
+        setTimeout(() => rest === r && !r.paused && letGo(), REST_WAIT_MS);
+      }
     });
   });
 });
 // Never a small step back (the owner, 2026-10-26: "the jumping back should never happen"): a player's report a little
 // behind the page's own reckoning, or a pause settling where the press was, holds the position until it is passed.
-// Seeks, restarts and other tracks (more than STEP_BACK back, or another track) show at once.
+// Seeks, restarts and other tracks (more than STEP_BACK back, a seek asked here, or another track) show at once.
 const STEP_BACK = 1.5;
-let lastShown: { id: string | null; pos: number } = { id: null, pos: 0 };
+let lastShown: { id: string | null; pos: number; seeks: number } = { id: null, pos: 0, seeks: 0 };
 export function position(): number {
   const p = frozen.on ? frozen.pos : running();
   const id = playing()?.id ?? null;
-  if (id === lastShown.id && p < lastShown.pos && lastShown.pos - p < STEP_BACK) return lastShown.pos;
-  lastShown = { id, pos: p };
+  const seeks = sought.n;
+  if (id === lastShown.id && seeks === lastShown.seeks && p < lastShown.pos && lastShown.pos - p < STEP_BACK) return lastShown.pos;
+  lastShown = { id, pos: p, seeks };
   return p;
 }
 export const paused = (): boolean => playing()?.progress?.paused ?? false;

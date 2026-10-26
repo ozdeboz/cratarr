@@ -36,7 +36,9 @@
     onflat?: () => void;
   } = $props();
 
-  /** One piece's gap opening or closing; the tallest bar's rise or fall; the last piece's start after the first's. */
+  /** One piece's gap opening or closing; its rise or fall, however far (the owner, 2026-10-26: the pieces' movement
+   *  left to right purely in turn; at one speed a tall bar finished after the short ones to its right); the last
+   *  piece's start after the first's. */
   const GAP_MS = 160;
   const RISE_MS = 320;
   const SPREAD_MS = 420;
@@ -56,6 +58,9 @@
   let gap = new Float32Array(0);
   let rise = new Float32Array(0);
   let from = new Float64Array(0);
+  /** Each piece's rise or fall under way: toward what, and how far it had to go from where it turned. */
+  let aim = new Float32Array(0);
+  let span = new Float32Array(0);
   let frame = $state(0);
 
   const gapWanted = (i: number, w: typeof want) =>
@@ -84,14 +89,21 @@
       }
       const tr = riseWanted(i, w);
       const tg = gapWanted(i, w);
+      // Down first where it must close its gap, else toward its height.
+      const goal = rise[i] > tr || gap[i] === tg || gap[i] >= 1 ? tr : 0;
+      if (aim[i] !== goal) {
+        aim[i] = goal;
+        span[i] = Math.abs(goal - rise[i]);
+      }
+      const by = (Math.max(span[i], 1) * dt) / RISE_MS;
       if (rise[i] > tr) {
-        rise[i] = Math.max(tr, rise[i] - (dt * 100) / RISE_MS);
+        rise[i] = Math.max(tr, rise[i] - by);
         moving = true;
       } else if (gap[i] !== tg) {
         gap[i] = tg > gap[i] ? Math.min(tg, gap[i] + dt / GAP_MS) : Math.max(tg, gap[i] - dt / GAP_MS);
         moving = true;
       } else if (rise[i] < tr && gap[i] >= 1) {
-        rise[i] = Math.min(tr, rise[i] + (dt * 100) / RISE_MS);
+        rise[i] = Math.min(tr, rise[i] + by);
         moving = true;
       }
     }
@@ -113,6 +125,8 @@
       gap = new Float32Array(count);
       rise = new Float32Array(count);
       from = new Float64Array(count);
+      aim = new Float32Array(count);
+      span = new Float32Array(count);
       for (let i = 0; i < count; i++) {
         gap[i] = gapWanted(i, want);
         rise[i] = riseWanted(i, want);

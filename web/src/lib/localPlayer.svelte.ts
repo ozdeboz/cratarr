@@ -19,7 +19,7 @@ import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
 import { getTrackGain, playerCommand, radioNext, type TrackGain } from './api';
 import { prefs } from './prefs.svelte';
-import { rampBegins, rampEnds } from './ramping.svelte';
+import { ramping, rampBegins, rampEnds } from './ramping.svelte';
 import { asksSignIn, toSignIn } from './reach.svelte';
 
 export type LocalTrack = {
@@ -828,15 +828,21 @@ function hand(op: string, args: Record<string, unknown> = {}) {
  *  second: counted on from the playing player's last report, or read from this page's own audio. */
 export function positionNow(): number {
   if (!handed()) return where()?.offset ?? local.position;
-  const p = (reported.positionMs + (local.paused ? 0 : performance.now() - reported.at)) / 1000;
+  const p = (reported.positionMs + sinceReport()) / 1000;
   return local.duration ? Math.min(p, local.duration) : p;
+}
+/** How far the app's player has played since its last report (ms). Not through its Start and stop ramps (the owner,
+ *  2026-10-26: no jump as one ends): it reports the press's place meanwhile and plays on from there once it ends. */
+function sinceReport(): number {
+  if (local.paused || ramping.dir !== null) return 0;
+  return performance.now() - Math.max(reported.at, ramping.ended);
 }
 
 if (inApp) onApp('player', (m) => driven === null && reportedBy(m as Parameters<typeof reportedBy>[0]));
 if (typeof window !== 'undefined') {
   setInterval(() => {
-    if (!handed() || local.paused || local.index < 0) return;
-    const p = (reported.positionMs + performance.now() - reported.at) / 1000;
+    if (!handed() || local.paused || local.index < 0 || ramping.dir !== null) return;
+    const p = (reported.positionMs + sinceReport()) / 1000;
     local.position = local.duration ? Math.min(p, local.duration) : p;
   }, 250);
 }
@@ -1345,8 +1351,11 @@ export function previous() {
   if (local.position > RESTART_AFTER) seek(0); else void skipRamped(() => jump(Math.max(0, local.index - 1)));
 }
 
+/** Seeks asked of this device's player, counted (lib/remote: a paused position rests where it was pressed until one). */
+export const sought = $state({ n: 0 });
 /** To `secs` into the playing track: within what is loaded, else a fresh stream from there. */
 export function seek(secs: number) {
+  sought.n++;
   if (handed()) {
     local.position = secs;
     reported = { positionMs: secs * 1000, at: performance.now() };

@@ -1,7 +1,7 @@
 /** A start/stop ramp of this device's player under way (lib/localPlayer's Start and stop, or the app's own, which tells
  *  the page): the play/pause button drains its fill top to bottom over a ramp out (the owner, 2026-10-26). `at`: when it
  *  began (a new ramp starts the drain over). */
-export const ramping = $state({ dir: null as 'out' | 'in' | null, ms: 0, at: 0, full: 0 });
+export const ramping = $state({ dir: null as 'out' | 'in' | null, ms: 0, at: 0, full: 0, ended: 0 });
 
 /** `full`: the ramp's set length, where this one is shorter (a wind-up near the track's start, the owner 2026-10-26:
  *  only as long as there is track before it): the button's fill starts that much of the way. */
@@ -27,4 +27,8 @@ export function rampPressed(dir: 'out' | 'in', ms: number, full = ms) {
   }, ms + 1500);
 }
 
-export const rampEnds = () => void (ramping.dir = null);
+/** `ended`: when the last one ended (lib/localPlayer counts the app's position on from there, not through it). */
+export function rampEnds() {
+  if (ramping.dir !== null) ramping.ended = performance.now();
+  ramping.dir = null;
+}
