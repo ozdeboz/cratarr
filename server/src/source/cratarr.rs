@@ -135,6 +135,17 @@ struct CratarrSource {
 }
 
 /// The player Cratarr follows, by name (any online one when none has anything loaded).
+/// Player `name` where it is known, else the followed one (0.9.8: carry-on resumes on the player it stopped).
+fn player_or_followed(name: Option<&str>) -> Result<(Arc<PlayOn>, String)> {
+    if let Some(n) = name
+        && let Some(on) = PlayOn::instance()
+        && on.get(n).is_some()
+    {
+        return Ok((on, n.to_string()));
+    }
+    followed()
+}
+
 fn followed() -> Result<(Arc<PlayOn>, String)> {
     let on = PlayOn::instance().context("Play On is not running")?;
     let name = on.followed().map(|p| p.name).context("no Cratarr player is connected")?;
@@ -247,8 +258,18 @@ impl Source for CratarrSource {
     // --- What plays and the commands: Cratarr's own players (Play On, decision 0031), the one it follows. ---
 
     fn now_playing(&self) -> Fut<'_, Option<super::Playing>> {
+        self.now_playing_on(None)
+    }
+
+    fn now_playing_on<'a>(&'a self, player: Option<&'a str>) -> Fut<'a, Option<super::Playing>> {
         Box::pin(async move {
-            let Some(p) = PlayOn::instance().and_then(|on| on.followed()) else { return Ok(None) };
+            let Some(on) = PlayOn::instance() else { return Ok(None) };
+            let Some(p) = (match player {
+                Some(n) => on.get(n),
+                None => on.followed(),
+            }) else {
+                return Ok(None);
+            };
             let queue = p.queue.clone().unwrap_or_default();
             let Ok(at) = usize::try_from(p.index) else { return Ok(None) };
             let Some(here) = queue.get(at) else { return Ok(None) };
@@ -295,8 +316,12 @@ impl Source for CratarrSource {
     }
 
     fn transport<'a>(&'a self, command: super::Transport) -> Fut<'a, String> {
+        self.transport_on(command, None)
+    }
+
+    fn transport_on<'a>(&'a self, command: super::Transport, player: Option<&'a str>) -> Fut<'a, String> {
         Box::pin(async move {
-            let (on, name) = followed()?;
+            let (on, name) = player_or_followed(player)?;
             let c = match command {
                 super::Transport::Previous => Command::Previous,
                 super::Transport::PlayPause => Command::Toggle,
@@ -324,8 +349,12 @@ impl Source for CratarrSource {
     }
 
     fn play_from<'a>(&'a self, ids: &'a [String], start_secs: f64) -> Fut<'a, String> {
+        self.play_from_on(ids, start_secs, None)
+    }
+
+    fn play_from_on<'a>(&'a self, ids: &'a [String], start_secs: f64, player: Option<&'a str>) -> Fut<'a, String> {
         Box::pin(async move {
-            let (on, name) = followed()?;
+            let (on, name) = player_or_followed(player)?;
             let c = Command::play(queue_tracks(ids), 0, (start_secs * 1000.0) as u64);
             on.command(&name, c).await.map_err(|e| anyhow::anyhow!("{e}"))?;
             Ok(name)

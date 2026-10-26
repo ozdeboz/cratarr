@@ -35,6 +35,9 @@ pub(super) struct Playing {
     duration_secs: Option<f64>,
     /// The album's tracks from this one on, in album order, as known after the move.
     rest: Vec<i64>,
+    /// The player it plays on, as the source named it: stopped, looked at and carried on on, whichever is followed by
+    /// then (0.9.8: stopped on the Salon tablet, it went on on Bedroom).
+    player: Option<String>,
 }
 
 fn now() -> f64 {
@@ -49,7 +52,7 @@ impl IncomingService {
         if p.paused {
             return;
         }
-        match s.transport(crate::source::Transport::Stop).await {
+        match s.transport_on(crate::source::Transport::Stop, p.player.as_deref()).await {
             Ok(player) => {
                 p.at_secs += now() - p.read_at;
                 p.read_at = now();
@@ -78,6 +81,7 @@ impl IncomingService {
                 read_at: now(),
                 duration_secs: progress.and_then(|g| g.duration_secs),
                 rest: order[at..].to_vec(),
+                player: p.player.clone(),
             });
         }
         None
@@ -136,7 +140,7 @@ async fn follow(lib: &Arc<Library>, p: &Playing) {
             // Cratarr's own tracks keep their ids (0.9.6: waiting for a new one flagged it as stuck, its player stopped).
             let own = p.source == crate::source::cratarr::KIND.id;
             let new = id_after(&c, &p.source, p.track).filter(|n| own || *n != p.old_item);
-            if let Ok(Some(now_playing)) = s.now_playing().await {
+            if let Ok(Some(now_playing)) = s.now_playing_on(p.player.as_deref()).await {
                 let id = now_playing.track.id;
                 if !own && Some(&id) == new.as_ref() {
                     return; // the server knows it again
@@ -158,7 +162,7 @@ async fn follow(lib: &Arc<Library>, p: &Playing) {
                 return;
             }
             // A track that was paused comes back playing: it was stopped for the move, or paused by hand.
-            match s.play_from(&ids, position).await {
+            match s.play_from_on(&ids, position, p.player.as_deref()).await {
                 Ok(player) => tracing::info!("carried on on {player} with the moved album, {position:.0} s in"),
                 Err(e) => tracing::warn!("{}: could not carry on with the moved album: {e:#}", p.source),
             }
