@@ -3104,7 +3104,7 @@ mod tests {
     }
 
     #[test]
-    fn crate_facts_are_kept_until_the_catalogue_changes() {
+    fn crate_facts_are_kept_until_the_catalogue_changes_and_a_while_has_passed() {
         let d = music();
         let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
         cat.walk_all();
@@ -3112,7 +3112,12 @@ mod tests {
         assert!(!first.is_empty());
         assert!(Arc::ptr_eq(&first, &cat.crate_facts().unwrap()), "nothing changed: the same facts");
         cat.record_links("jellyfin", "lib", &[("t1".into(), 0, first[0].rel.clone())], 100).unwrap();
-        assert!(!Arc::ptr_eq(&first, &cat.crate_facts().unwrap()), "a change: read again");
+        assert!(Arc::ptr_eq(&first, &cat.crate_facts().unwrap()), "a change just after: still the same (0.9.7)");
+        // As if read longer ago than FACTS_EVERY.
+        if let Some(k) = cat.facts.lock().unwrap().as_mut() {
+            k.at = std::time::Instant::now() - FACTS_EVERY - Duration::from_secs(1);
+        }
+        assert!(!Arc::ptr_eq(&first, &cat.crate_facts().unwrap()), "a change a while after: read again");
         std::fs::remove_dir_all(&d).ok();
     }
 
