@@ -4,8 +4,8 @@
   // `now` (0..1): where it plays while the handle is held elsewhere, a thin line (the owner, 2026-10-24).
   //
   // Every change of it moves (the owner, 2026-10-26: "ultra smooth waveforms throughout any transition"): each piece
-  // of it goes toward what it should be, the leftmost first (each SPREAD_MS / n after the one before), and turns around
-  // from wherever it is when that changes. A piece is the plain bar's line (its gap closed), slim (its gap open, the
+  // of it goes toward what it should be, each goal a front from the left (each piece SPREAD_MS / n after the one
+  // before), and turns around from wherever it is when a newer front reaches it. A piece is the plain bar's line (its gap closed), slim (its gap open, the
   // quietest bar's height) or a bar (slim and risen to its height); it rises only with its gap open, and closes its gap
   // only once it is down. So:
   //   - `want` 'wait' (its waveform loading): the bars shrink to slim pieces (the owner, 2026-10-26: shrinking is the
@@ -55,20 +55,34 @@
   /** Each bar's rise above the quietest, for the waveform shown. */
   const heights = $derived(bins ? bars(bins, n).map((v) => Math.max(LOW, v * 100) - LOW) : null);
 
-  // Where each piece is (not reactive: drawn on `frame`), and when it may start moving.
+  // Where each piece is (not reactive: drawn on `frame`).
   let gap = new Float32Array(0);
   let rise = new Float32Array(0);
-  let from = new Float64Array(0);
   /** Each piece's rise or fall under way: toward what, and how far it had to go from where it turned. */
   let aim = new Float32Array(0);
   let span = new Float32Array(0);
   let frame = $state(0);
 
+  // Every goal runs from left to right on its own (the owner, 2026-10-26: "every new intention should run from left to
+  // right purely"): a front that reaches each piece SPREAD_MS / n after the one to its left; a piece goes for the goal
+  // of the newest front that has reached it, the pieces to the right of a front still for the one before. A goal starts
+  // GOAL_DELAY_MS after it is asked for, one asked for meanwhile in its place (a waveform in within that time: no
+  // goal toward the wait first).
+  type Goal = { at: number; w: typeof want; heights: number[] | null };
+  let goals: Goal[] = [];
+  const GOAL_DELAY_MS = 100;
+  let pending = 0;
+  function goalOf(i: number, t: number): Goal {
+    const lag = (i / n) * SPREAD_MS;
+    for (let k = goals.length - 1; k > 0; k--) if (t >= goals[k].at + lag) return goals[k];
+    return goals[0];
+  }
+
   const gapWanted = (i: number, w: typeof want) =>
     w === 'wave' ? 1 : w === 'line' ? 0 : gap[i] > 0 || i < Math.min(1, Math.max(0, loading ?? 0)) * n ? 1 : 0;
   // Waiting for the next waveform, the bars shrink (its heights not known yet; the owner, 2026-10-26), then rise to it,
   // or close back into the line where there is none.
-  const riseWanted = (i: number, w: typeof want) => (w === 'wave' && heights ? (heights[i] ?? 0) : 0);
+  const riseWanted = (i: number, g: Goal) => (g.w === 'wave' && g.heights ? (g.heights[i] ?? 0) : 0);
 
   let raf = 0;
   let last = 0;
@@ -81,15 +95,15 @@
     raf = 0;
     const dt = Math.min(64, t - last);
     last = t;
-    const w = want;
-    let moving = false;
+    // The fronts that have passed every piece: only the newest of them still counts.
+    let k = goals.length - 1;
+    while (k > 0 && t < goals[k].at + SPREAD_MS) k--;
+    if (k > 0) goals = goals.slice(k);
+    let moving = goals.length > 1;
     for (let i = 0; i < n; i++) {
-      if (t < from[i]) {
-        moving = true;
-        continue;
-      }
-      const tr = riseWanted(i, w);
-      const tg = gapWanted(i, w);
+      const g = goalOf(i, t);
+      const tr = riseWanted(i, g);
+      const tg = gapWanted(i, g.w);
       // Down first where it must close its gap, else toward its height.
       const goal = rise[i] > tr || gap[i] === tg || gap[i] >= 1 ? tr : 0;
       if (aim[i] !== goal) {
@@ -110,13 +124,7 @@
     }
     frame++;
     if (moving) raf = requestAnimationFrame(step);
-    else if (w === 'line' && gap.every((g) => g === 0)) onflat?.();
-  }
-  /** Each piece may start a little after the one to its left. Where a wave is still running, the pieces it has not
-   *  reached keep their turn in it (it goes on to the right, toward what they should now be), and those it passed start
-   *  a new wave from the left alongside it (the owner, 2026-10-26). */
-  function stagger(t: number) {
-    for (let i = 0; i < n; i++) if (from[i] <= t) from[i] = t + (i / n) * SPREAD_MS;
+    else if (goals[0].w === 'line' && gap.every((g) => g === 0)) onflat?.();
   }
 
   // As many pieces as fit: (again) where they should be, at once.
@@ -125,32 +133,39 @@
     untrack(() => {
       gap = new Float32Array(count);
       rise = new Float32Array(count);
-      from = new Float64Array(count);
       aim = new Float32Array(count);
       span = new Float32Array(count);
+      goals = [{ at: -Infinity, w: want, heights }];
       for (let i = 0; i < count; i++) {
         gap[i] = gapWanted(i, want);
-        rise[i] = riseWanted(i, want);
+        rise[i] = riseWanted(i, goals[0]);
       }
       frame++;
     });
   });
-  // What it should be changed (another track, its waveform in, none): every piece on its way, the leftmost first.
+  // What it should be changed (another track, its waveform in, none): a new front from the left, a moment later.
   $effect(() => {
     void want;
-    void bins;
+    void heights;
     untrack(() => {
+      clearTimeout(pending);
       if (reducedMotion()) {
+        goals = [{ at: -Infinity, w: want, heights }];
         for (let i = 0; i < n; i++) {
           gap[i] = gapWanted(i, want);
-          rise[i] = riseWanted(i, want);
+          rise[i] = riseWanted(i, goals[0]);
         }
         frame++;
         if (want === 'line') onflat?.();
         return;
       }
-      stagger(performance.now());
-      run();
+      pending = window.setTimeout(() => {
+        const g = goals.at(-1);
+        // The same goal again (it was asked for and taken back within the delay): no new front.
+        if (g && g.w === want && g.heights === heights) return;
+        goals = [...goals, { at: performance.now(), w: want, heights }];
+        run();
+      }, GOAL_DELAY_MS);
     });
   });
   // More of it loaded: the gaps run on with it (no waiting for their turn).
@@ -158,7 +173,10 @@
     void loading;
     untrack(run);
   });
-  $effect(() => () => cancelAnimationFrame(raf));
+  $effect(() => () => {
+    cancelAnimationFrame(raf);
+    clearTimeout(pending);
+  });
 
   const f = (x: number) => Math.round(x * 100) / 100;
   /** Every piece as one path: in the line (full width, the line's height), slim, or risen. */
