@@ -147,7 +147,12 @@ pub fn mp3(input: &Path, from_ms: u64, head: impl FnOnce(Head), mut out: impl Wr
     b.set_quality(Quality::NearBest).map_err(|e| anyhow!("LAME: {e:?}"))?;
     b.set_to_write_vbr_tag(false).map_err(|e| anyhow!("LAME: {e:?}"))?;
     let mut lame = b.build().map_err(|e| anyhow!("LAME: {e:?}"))?;
-    let mut hs: Head = vec![("content-type".into(), "audio/mpeg".into()), ("x-sample-rate".into(), rate.to_string())];
+    let mut hs: Head = vec![
+        ("content-type".into(), "audio/mpeg".into()),
+        ("x-sample-rate".into(), rate.to_string()),
+        // What a LAME header's encoder delay would say (the page trims by it as by one).
+        ("x-pre-skip".into(), lame_delay(rate, channels).to_string()),
+    ];
     if let Some(t) = total {
         hs.push(("x-duration-ms".into(), (t * 1000 / u64::from(rate)).to_string()));
     }
@@ -180,6 +185,26 @@ pub fn mp3(input: &Path, from_ms: u64, head: impl FnOnce(Head), mut out: impl Wr
     out.write_all(&encoded)?;
     out.flush()?;
     Ok(true)
+}
+
+/// LAME's encoder delay at these settings (samples), as its Info header would carry it: asked of LAME itself, set up
+/// as the stream's encoder is (the crate keeps its own encoder's handle to itself).
+fn lame_delay(rate: u32, channels: usize) -> i32 {
+    use mp3lame_encoder::ffi;
+    // SAFETY: a handle of LAME's own making, set up, asked and closed here; null is checked.
+    unsafe {
+        let gf = ffi::lame_init();
+        if gf.is_null() {
+            return 0;
+        }
+        ffi::lame_set_in_samplerate(gf, rate as _);
+        ffi::lame_set_num_channels(gf, channels as _);
+        ffi::lame_set_brate(gf, 320);
+        ffi::lame_set_quality(gf, 2);
+        let delay = if ffi::lame_init_params(gf) >= 0 { ffi::lame_get_encoder_delay(gf) } else { 0 };
+        ffi::lame_close(gf);
+        delay
+    }
 }
 
 #[cfg(test)]
@@ -216,7 +241,10 @@ mod tests {
         let mut said = None;
         let mut out = Vec::new();
         assert!(mp3(&p, 0, |h| said = Some(h), &mut out).unwrap());
-        assert!(said.unwrap().contains(&("x-duration-ms".to_string(), "2000".to_string())));
+        let said = said.unwrap();
+        assert!(said.contains(&("x-duration-ms".to_string(), "2000".to_string())));
+        let delay: i32 = said.iter().find(|(k, _)| k == "x-pre-skip").unwrap().1.parse().unwrap();
+        assert!((500..1200).contains(&delay), "LAME's own encoder delay: {delay}");
         assert_eq!(out[0], 0xff, "a frame's sync, no tag before it");
         assert_eq!(out[1] & 0xe0, 0xe0);
         // About 320 kb/s for two seconds.

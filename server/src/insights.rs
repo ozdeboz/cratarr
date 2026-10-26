@@ -50,6 +50,22 @@ pub struct Point {
     /// How concentrated its genres are, 0..1: high for a well defined playlist (one style), low for a grab-bag.
     /// `None` without genre tags.
     pub focus: Option<f64>,
+    /// Each genre's share of its tracks' genres, summing to 1 (0.9.8: the Map's genre territories), the rules' aliases
+    /// and merges applied; those under [`LEAST_SHARE`] left out. Plain shares, not the characteristic weights `genres`
+    /// is chosen by: a genre every playlist has still covers its ground.
+    pub shares: BTreeMap<String, f64>,
+}
+
+/// A genre's least share of a playlist that is told (the page draws a territory from 0.25).
+pub const LEAST_SHARE: f64 = 0.05;
+
+/// A profile's shares of its total, those under [`LEAST_SHARE`] left out, to three places.
+fn shares_of(profile: &HashMap<String, f64>) -> BTreeMap<String, f64> {
+    let total: f64 = profile.values().sum();
+    if total <= 0.0 {
+        return BTreeMap::new();
+    }
+    profile.iter().map(|(g, n)| (g.clone(), n / total)).filter(|(_, s)| *s >= LEAST_SHARE).map(|(g, s)| (g, (s * 1000.0).round() / 1000.0)).collect()
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
@@ -368,7 +384,9 @@ pub fn proximity(rows: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<Str
             })
             .collect()
     };
-    let genres = tf_idf(profile("genre"));
+    let counts = profile("genre");
+    let shares: Vec<BTreeMap<String, f64>> = counts.iter().map(shares_of).collect();
+    let genres = tf_idf(counts);
     let artists = tf_idf(profile("artist"));
     // Compared without what only one playlist has: it can match nothing and would only lower that playlist's
     // closeness to every other (a reggae playlist alone with Ska and Rocksteady looked unlike everything).
@@ -382,6 +400,7 @@ pub fn proximity(rows: &[TrackRow], rules: &Rules, playlists: &[(String, Vec<Str
             tracks: tracks[i].len(),
             genres: strongest(&genres[i], NAMED_GENRES),
             focus: focus(&genres[i]),
+            shares: shares[i].clone(),
         })
         .collect();
     let mut links = Vec::new();
@@ -717,6 +736,15 @@ mod tests {
         assert!(link(0, 2).is_none() && link(1, 2).is_none(), "only Electronic in common: not close");
         assert_eq!(p.playlists[0].genres, vec!["Dub Techno".to_string()]);
         assert_eq!(p.playlists[0].focus, Some(1.0), "one distinctive genre");
+        // Shares are plain: Electronic, in every playlist, still covers half of Deep's ground.
+        assert_eq!(p.playlists[0].shares, BTreeMap::from([("Dub Techno".to_string(), 0.5), ("Electronic".to_string(), 0.5)]));
+    }
+
+    #[test]
+    fn a_small_share_is_not_told() {
+        let profile = HashMap::from([("House".to_string(), 30.0), ("Techno".to_string(), 9.0), ("Polka".to_string(), 1.0)]);
+        assert_eq!(shares_of(&profile), BTreeMap::from([("House".to_string(), 0.75), ("Techno".to_string(), 0.225)]), "Polka's 0.025 left out");
+        assert!(shares_of(&HashMap::new()).is_empty());
     }
 
     #[test]
