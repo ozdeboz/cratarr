@@ -198,6 +198,9 @@ pub enum Form {
     Opus { lossy_too: bool },
     /// FLAC in fragmented MP4.
     Flac,
+    /// ALAC in fragmented MP4, and MP3 (`stream_forms`: for a browser that takes neither FLAC nor Opus in MP4).
+    Alac,
+    Mp3,
 }
 
 /// A kept stream form's name: its file as it is now and the form.
@@ -240,6 +243,15 @@ fn make_stream(path: &Path, form: Form, mut out: impl Write) -> anyhow::Result<O
                 hs.push(("x-total-samples".to_string(), total.to_string()));
             }
             Ok(Some(hs))
+        }
+        Form::Alac | Form::Mp3 => {
+            let mut said = None;
+            let made = if form == Form::Alac {
+                crate::stream_forms::alac_mp4(path, 0, |h| said = Some(h), &mut out)?
+            } else {
+                crate::stream_forms::mp3(path, 0, |h| said = Some(h), &mut out)?
+            };
+            Ok(if made { said } else { None })
         }
     }
 }

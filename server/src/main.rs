@@ -46,6 +46,7 @@ mod slskd;
 mod snapcast;
 mod source;
 mod stream;
+mod stream_forms;
 mod sync_state;
 mod voice;
 mod web;

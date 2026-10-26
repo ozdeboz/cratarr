@@ -2076,7 +2076,8 @@ struct StreamFrom {
     /// Start at the frame holding this moment (milliseconds; FLAC and Opus), for seeking.
     #[serde(default)]
     from_ms: u64,
-    /// `opus`: a lossless track as Opus (a phone's stream, the owner 2026-10-24); a lossy one comes as it is.
+    /// `opus`: a lossless track as Opus (a phone's stream, the owner 2026-10-24); `alac` or `mp3` (0.9.8): for a browser
+    /// that takes neither FLAC nor Opus in MP4. A lossy one comes as it is.
     #[serde(default, rename = "as")]
     as_: Option<String>,
     /// The stream from its start kept whole (0.9.8, the installed web app's offline play): a length and ranges, the
@@ -2265,7 +2266,8 @@ struct OfflineTracks {
     as_: Option<String>,
     #[serde(default)]
     opus: bool,
-    /// The stream's form (0.9.8 page): "opus", "original", or "aac" (not made yet: such tracks say so); over `opus`.
+    /// The stream's form (0.9.8 page): "opus", "alac", "mp3", "original", or "aac" (not made: such tracks say so);
+    /// over `opus`.
     #[serde(default)]
     form: Option<String>,
 }
@@ -2275,8 +2277,8 @@ struct OfflineTracks {
 enum OfflineAs {
     /// The file (`/api/file`), lossless as its Opus copy where `opus`.
     File { opus: bool },
-    /// The browser player's stream kept whole, lossless as Opus where `opus`.
-    Stream { opus: bool },
+    /// The browser player's stream kept whole, lossless in the form asked for.
+    Stream(Lossless),
     /// A form Cratarr does not make (yet): each track says so.
     Unmade(&'static str),
 }
@@ -2285,11 +2287,12 @@ impl OfflineTracks {
     fn form(&self) -> OfflineAs {
         match self.as_.as_deref() {
             Some("stream") => match self.form.as_deref() {
-                Some("opus") => OfflineAs::Stream { opus: true },
-                Some("original") => OfflineAs::Stream { opus: false },
-                Some("aac") => OfflineAs::Unmade("AAC is not made yet."),
-                Some(_) => OfflineAs::Unmade("That form is not made."),
-                None => OfflineAs::Stream { opus: self.opus },
+                Some("aac") => OfflineAs::Unmade("AAC is not made: ask for ALAC or MP3."),
+                Some(f) => match Lossless::of(Some(f)) {
+                    Some(l) => OfflineAs::Stream(l),
+                    None => OfflineAs::Unmade("That form is not made."),
+                },
+                None => OfflineAs::Stream(if self.opus { Lossless::Opus } else { Lossless::Original }),
             },
             Some("original") => OfflineAs::File { opus: false },
             _ => OfflineAs::File { opus: true },
@@ -2317,9 +2320,9 @@ async fn offline_file(app: &App, t: &TrackRefOf, form: OfflineAs) -> serde_json:
     let opus = match form {
         OfflineAs::Unmade(why) => return json!({ "source": t.source, "id": t.id, "offline": false, "error": why }),
         OfflineAs::File { opus } => opus,
-        OfflineAs::Stream { opus } => {
-            let url = format!("/api/stream/{}/{}?whole=1{}", form_urlencoded_segment(&t.source), form_urlencoded_segment(&t.id), if opus { "&as=opus" } else { "" });
-            let Some(sf) = stream_form(&path, kind, opus).await else {
+        OfflineAs::Stream(wanted) => {
+            let url = format!("/api/stream/{}/{}?whole=1{}", form_urlencoded_segment(&t.source), form_urlencoded_segment(&t.id), wanted.query());
+            let Some(sf) = stream_form(&path, kind, wanted).await else {
                 // An MP3 streams as it is.
                 let bytes = tokio::fs::metadata(&path).await.ok().map(|m| m.len());
                 return json!({ "source": t.source, "id": t.id, "offline": true, "file": { "url": url, "type": "audio/mpeg", "as": "stream", "ready": true, "bytes": bytes } });
@@ -2331,7 +2334,12 @@ async fn offline_file(app: &App, t: &TrackRefOf, form: OfflineAs) -> serde_json:
             let Some(kept) = kept else {
                 return json!({ "source": t.source, "id": t.id, "offline": false, "error": "Cratarr cannot keep this track." });
             };
-            let kind = if matches!(sf, crate::opus_copies::Form::Opus { .. }) { "audio/mp4; codecs=\"opus\"" } else { "audio/mp4" };
+            let kind = match sf {
+                crate::opus_copies::Form::Opus { .. } => "audio/mp4; codecs=\"opus\"",
+                crate::opus_copies::Form::Alac => "audio/mp4; codecs=\"alac\"",
+                crate::opus_copies::Form::Mp3 => "audio/mpeg",
+                crate::opus_copies::Form::Flac => "audio/mp4",
+            };
             return json!({ "source": t.source, "id": t.id, "offline": true, "file": { "url": url, "type": kind, "as": "stream", "ready": kept.is_some(), "bytes": kept } });
         }
     };
@@ -2498,12 +2506,18 @@ async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, S
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
     if q.whole == Some(1) {
-        return whole_stream(&app, path, kind, duration_ms, q.as_.as_deref() == Some("opus"), &headers).await;
+        return whole_stream(&app, path, kind, duration_ms, Lossless::of(q.as_.as_deref()).unwrap_or(Lossless::Original), &headers).await;
     }
     if q.as_.as_deref() == Some("opus")
         && let Some(opus) = opus_stream(path.clone(), q.from_ms, false).await
     {
         return opus;
+    }
+    // ALAC or MP3 for a browser that takes neither FLAC nor Opus in MP4 (0.9.8); a lossy file comes as it is.
+    if let Some(l @ (Lossless::Alac | Lossless::Mp3)) = Lossless::of(q.as_.as_deref())
+        && let Some(r) = lossless_as(path.clone(), q.from_ms, l == Lossless::Mp3).await
+    {
+        return r;
     }
     let Some(kind) = kind else {
         // Neither FLAC nor MP3 (ALAC, AAC, WAV, AIFF, Ogg Vorbis): decoded here and sent as Opus, which every browser's
@@ -2587,15 +2601,55 @@ async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, S
     (headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response()
 }
 
-/// The form `/api/stream` sends a track in from its start, for keeping whole (0.9.8): Opus where asked and lossless,
-/// FLAC as fragmented MP4, MP3 as it is (`None`), anything else as Opus.
-async fn stream_form(path: &std::path::Path, kind: Option<crate::stream::Kind>, opus: bool) -> Option<crate::opus_copies::Form> {
+/// The form a lossless track is asked for in (`as`): as it is, or Opus, ALAC or MP3 (0.9.8: the page picks by what the
+/// browser's media source takes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lossless {
+    Original,
+    Opus,
+    Alac,
+    Mp3,
+}
+
+impl Lossless {
+    fn of(s: Option<&str>) -> Option<Self> {
+        Some(match s {
+            None | Some("original") => Self::Original,
+            Some("opus") => Self::Opus,
+            Some("alac") => Self::Alac,
+            Some("mp3") => Self::Mp3,
+            Some(_) => return None,
+        })
+    }
+
+    /// Its part of a stream's address.
+    fn query(self) -> &'static str {
+        match self {
+            Self::Original => "",
+            Self::Opus => "&as=opus",
+            Self::Alac => "&as=alac",
+            Self::Mp3 => "&as=mp3",
+        }
+    }
+}
+
+/// The form `/api/stream` sends a track in from its start, for keeping whole (0.9.8): a lossless one in the form asked
+/// for, FLAC as fragmented MP4, MP3 as it is (`None`), anything else as Opus.
+async fn stream_form(path: &std::path::Path, kind: Option<crate::stream::Kind>, wanted: Lossless) -> Option<crate::opus_copies::Form> {
     use crate::opus_copies::Form;
     use crate::stream::Kind;
     let p = path.to_path_buf();
     let lossless = || async move { tokio::task::spawn_blocking(move || crate::convert::Source::open(&p).ok().flatten().is_some()).await.unwrap_or(false) };
-    if opus && lossless().await {
-        return Some(Form::Opus { lossy_too: false });
+    let made = match wanted {
+        Lossless::Original => None,
+        Lossless::Opus => Some(Form::Opus { lossy_too: false }),
+        Lossless::Alac => Some(Form::Alac),
+        Lossless::Mp3 => Some(Form::Mp3),
+    };
+    if let Some(form) = made
+        && lossless().await
+    {
+        return Some(form);
     }
     match kind {
         Some(Kind::Flac) => Some(Form::Flac),
@@ -2605,8 +2659,8 @@ async fn stream_form(path: &std::path::Path, kind: Option<crate::stream::Kind>, 
 }
 
 /// The stream kept whole (`?whole=1`): the kept form with its headers, length and ranges; an MP3 as its file.
-async fn whole_stream(app: &App, path: std::path::PathBuf, kind: Option<crate::stream::Kind>, duration_ms: Option<u64>, opus: bool, headers: &HeaderMap) -> Response {
-    let Some(form) = stream_form(&path, kind, opus).await else {
+async fn whole_stream(app: &App, path: std::path::PathBuf, kind: Option<crate::stream::Kind>, duration_ms: Option<u64>, wanted: Lossless, headers: &HeaderMap) -> Response {
+    let Some(form) = stream_form(&path, kind, wanted).await else {
         let mut r = crate::serve::files::serve_file(&path, headers, false).await;
         r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/mpeg"));
         if let Some(ms) = duration_ms {
@@ -2621,6 +2675,38 @@ async fn whole_stream(app: &App, path: std::path::PathBuf, kind: Option<crate::s
         Some(r) => r,
         None => (StatusCode::CONFLICT, Json(json!({ "error": "Not ready yet." }))).into_response(),
     }
+}
+
+/// A lossless track as ALAC in fragmented MP4, or as MP3 (`stream_forms`), made as it is sent from `from_ms`; `None`
+/// when it is not lossless (it streams as it is). The headers place it, as the forms say.
+async fn lossless_as(path: std::path::PathBuf, from_ms: u64, mp3: bool) -> Option<Response> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(2);
+    let (said, heard) = tokio::sync::oneshot::channel::<crate::stream_forms::Head>();
+    tokio::task::spawn_blocking(move || {
+        let failed = tx.clone();
+        let out = ChannelWriter { tx, buf: Vec::with_capacity(ChannelWriter::PIECE) };
+        let told = |h| {
+            let _ = said.send(h);
+        };
+        let made = if mp3 { crate::stream_forms::mp3(&path, from_ms, told, out) } else { crate::stream_forms::alac_mp4(&path, from_ms, told, out) };
+        if let Err(e) = made {
+            // A closed body: the page stopped reading (a skip, a seek).
+            let stopped = e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe);
+            if !stopped {
+                tracing::warn!("{} stream of {}: {e:#}", if mp3 { "MP3" } else { "ALAC" }, path.display());
+                let _ = failed.blocking_send(Err(std::io::Error::other(format!("{e:#}"))));
+            }
+        }
+    });
+    let head = heard.await.ok()?;
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    for (k, v) in head {
+        if let (Ok(k), Ok(v)) = (header::HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(&v)) {
+            headers.insert(k, v);
+        }
+    }
+    Some((headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response())
 }
 
 /// A track as Opus in fragmented MP4, made as it is sent: a lossless one for a phone's stream, and with `lossy_too` one
