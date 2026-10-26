@@ -5,6 +5,7 @@
   // not there yet: the rest; all there: no row (Remove from this device stays last in the menu).
   import { askDownloads, download, downloads, inApp, type Downloadable } from './app.svelte';
   import MenuEntry from './MenuEntry.svelte';
+  import { plural } from './insights.svelte';
 
   let { tracks }: { tracks: Downloadable[] } = $props();
 
@@ -38,12 +39,12 @@
 
 {#if inApp && tracks.length}
   {#if coming}
-    <MenuEntry icon="arrowDownToLine" label={`Downloading ${done} of ${tracks.length}`} progress={progress} onclick={() => {}} />
+    <MenuEntry icon="arrowDownToLine" label={`Downloading ${done} of ${plural(tracks.length, 'track')}`} progress={progress} onclick={() => {}} />
   {:else if failed.length}
-    <MenuEntry icon="arrowDownToLine" label={`Retry ${failed.length} failed`} onclick={() => get([...failed, ...missing])} />
+    <MenuEntry icon="arrowDownToLine" label={`Retry ${plural(failed.length, 'failed track')}`} onclick={() => get([...failed, ...missing])} />
   {:else if missing.length === tracks.length}
     <MenuEntry icon="arrowDownToLine" label="Download once" onclick={() => get(tracks)} />
   {:else if missing.length}
-    <MenuEntry icon="arrowDownToLine" label={`Download the other ${missing.length} once`} onclick={() => get(missing)} />
+    <MenuEntry icon="arrowDownToLine" label={`Download the other ${plural(missing.length, 'track')} once`} onclick={() => get(missing)} />
   {/if}
 {/if}

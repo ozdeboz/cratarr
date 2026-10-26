@@ -55,11 +55,10 @@
   const handed = $derived(glass.one && !beside);
   const pill = () => (!beside && !item ? { device: false, filter: false, view: false, search: 'health' } : null);
   handGlass(() => handed, { left: glassLeft, pill });
-  // The levels over a problem: Health (not beside its list, which names it) and the problem's domain.
-  const top = $derived([
-    ...(beside ? [] : [{ label: 'Health', go: () => upToPage('#/health') }]),
-    ...(p ? [{ label: p.domain, go: beside ? undefined : () => upToPage('#/health') }] : []),
-  ]);
+  // The levels over a problem: Health (not beside its list, which names it). Not the problem's domain: no level of its
+  // own (it led to Health too), and often the problem's name again (the owner, 2026-10-26: "Health › Analysis ›
+  // Analysis").
+  const top = $derived(beside ? [] : [{ label: 'Health', go: () => upToPage('#/health') }]);
 </script>
 
 <!-- This panel's glass: its own bar's parts, or App's on a phone (lib/glass). -->

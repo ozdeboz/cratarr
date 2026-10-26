@@ -134,8 +134,10 @@
           name={`${tracks.length.toLocaleString()} ${tracks.length === 1 ? 'track' : 'tracks'}`}
           line={`${kept.budget ? `${downloadedSize(used)} of ${downloadedSize(kept.budget)}` : downloadedSize(used)} · ${quality}`}
           progress={kept.budget ? Math.min(1, used / kept.budget) : null}
-          onclick={() => viewPlaylist(`${SETTINGS}sync`)}
         />
+        <!-- Where its room and quality are set: a row of its own, saying so (the owner, 2026-10-26: the bar's row did not
+             make clear it went there). -->
+        <Item name="Sync settings" onclick={() => viewPlaylist(`${SETTINGS}sync`)} />
         {#if waiting}<Item lead="warn" name={kept.waiting ? WAITS[kept.waiting] : `${waiting} waiting`} />{/if}
         {#if failed.length}
           <Item lead="bad" name={`${failed.length} failed`}><button class="retry" onclick={retry}>Retry</button></Item>

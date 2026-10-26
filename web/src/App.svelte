@@ -271,9 +271,12 @@
   // Same breakpoint as the CSS: from 1024 px the sidebar shows; below it the bar of pages along the top.
   const wide = window.matchMedia('(min-width: 1024px)');
   let phone = $state(!wide.matches);
-  // One glass on a phone (lib/glass): the panel on top hands its parts to the page's row.
+  // One glass on a phone (lib/glass): the panel on top hands its parts to the page's row. Wide again (a window made
+  // wider; the owner, 2026-10-26: the tablet showed the album panel's glass twice), whatever was handed goes back, even
+  // where the panel that handed it did not take it back itself.
   $effect(() => {
     glass.one = phone;
+    if (!phone) glass.panel = null;
   });
   $effect(() => {
     const on = () => (phone = !wide.matches);
@@ -464,7 +467,7 @@
   // top, just don't hide these glass panels"; neither the page's room nor the glass goes as it opens).
   const pageRow = $derived(pageHasRow);
   // The panel on top's glass, handed over on a phone (lib/glass): the row shows it over the panel's layer.
-  const handedNow = $derived(playlistLayer ? glass.panel : null);
+  const handedNow = $derived(playlistLayer && phone ? glass.panel : null);
   // A row that goes slides up whole (a row along the bottom, down), out under the bar, still showing what it held, and
   // only then leaves (the owner, 2026-10-25: not its icons folding one by one, leaving a flat glass). The panel's glass
   // it held is kept for the slide.
@@ -491,7 +494,8 @@
     }, reducedMotion() ? 0 : ROW_SLIDE);
     return () => clearTimeout(t);
   });
-  const handed = $derived(handedNow ?? (rowAway ? keptGlass : null));
+  // Not kept for the slide once wide: the panel draws its own glass at once.
+  const handed = $derived(handedNow ?? (rowAway && phone ? keptGlass : null));
   /** The layer under the top bar (an index page's panel) or over all of it (a playlist's, an album's, an artist's). */
   const underBar = $derived(phone && !!panelPage && !!(settingsShown || healthShown || insightsShown || requestsShown || downloadsShown));
   /** An index page and its panel share the row's place: going one level deeper (or back) changes what the glass holds,

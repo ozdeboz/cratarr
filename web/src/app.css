@@ -83,6 +83,14 @@
 
 * {
   box-sizing: border-box;
+  /* No scroll bars (the owner, 2026-10-26: "I don't want these scroll bars at all"): a phone's never show, and a
+     desktop's drew two beside an open panel. Where a bar is meant (the queue's, the visuals' panel), its own rule draws
+     it. */
+  scrollbar-width: none;
+}
+
+*::-webkit-scrollbar {
+  display: none;
 }
 
 html,
