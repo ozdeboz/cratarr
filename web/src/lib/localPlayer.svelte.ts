@@ -1568,9 +1568,12 @@ function unramp() {
   }
   applyVolume();
 }
+/** A fade's loudness as heard: even in decibels (−60 dB at its quiet end, silence at 0), not in amplitude, which
+ *  sounds loud and then drops at the end (the owner, 2026-10-26, of the app's first try). */
+const heard = (v: number) => (v <= 0 ? 0 : v >= 1 ? 1 : 10 ** (3 * (v - 1)));
 const rampSet = (mode: 'vinyl' | 'fade') => (v: number) => {
   if (mode === 'fade') {
-    rampGain = v;
+    rampGain = heard(v);
     applyVolume();
   } else if (audio) {
     audio.preservesPitch = false;
