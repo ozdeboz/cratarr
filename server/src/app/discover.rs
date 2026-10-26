@@ -62,11 +62,11 @@ const VARIOUS_ARTISTS: &str = "89ad4ac3-39f7-470e-963a-56509c546377";
 /// Of the account's own most played artists (Cratarr's plays), how many seed Last.fm's artists like them.
 const OWN_SEEDS: usize = 25;
 /// The masonry's artists (0.9.2; the owner: "more tiles should come from a5's related artists"): for this many seeds
-/// (those the most suggestions came from), this many of their related artists new to the library, an album each.
-const RELATED_SEEDS: usize = 3;
-/// 36 (0.9.6, the owner: the masonry always runs past the edge, and a refresh brings other artists): the page draws
-/// some and rotates through the rest.
-const RELATED_PER_SEED: usize = 36;
+/// (those the most suggestions came from, then the most played), this many of their related artists new to the library,
+/// an album each. Nine (0.9.7, the owner: a refresh brought "99% the same"): the page shows three groups at a time and a
+/// refresh steps to the next three; sixteen each run a group past the screen's edge.
+const RELATED_SEEDS: usize = 9;
+const RELATED_PER_SEED: usize = 16;
 /// ListenBrainz's fresh releases: of the last this many days (90, the owner 2026-10-25: the row "New from artists you
 /// have" had 3 with 30).
 const FRESH_DAYS: &str = "90";
@@ -715,8 +715,11 @@ fn masonry_seeds(candidates: &[Candidate], artists: &[OwnArtist]) -> Vec<(String
     let mut ranked: Vec<(String, usize)> = count.into_iter().collect();
     ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     let mut seeds: Vec<(String, String)> = ranked.into_iter().filter_map(|(name, _)| Some((mbid_of(&name)?, name))).map(|(m, n)| (n, m)).collect();
-    if seeds.is_empty() {
-        seeds = artists.iter().filter(|a| a.plays > 0).filter_map(|a| Some((a.name.clone(), a.mbid.clone()?))).collect();
+    // Fewer than wanted (or none without Last.fm): the most played after them, so each refresh has seeds of its own.
+    for (name, mbid) in artists.iter().filter(|a| a.plays > 0).filter_map(|a| Some((a.name.clone(), a.mbid.clone()?))) {
+        if !seeds.iter().any(|(n, _)| loose(n) == loose(&name)) {
+            seeds.push((name, mbid));
+        }
     }
     seeds.truncate(RELATED_SEEDS);
     seeds
@@ -1951,6 +1954,11 @@ mod tests {
         let cands = vec![lastfm("Bonobo"), lastfm("Bonobo"), lastfm("Air"), lastfm("moby")];
         assert_eq!(masonry_seeds(&cands, &artists), vec![("Bonobo".to_string(), "m-bon".to_string()), ("Air".to_string(), "m-air".to_string())], "most first; one without an id left out");
         assert_eq!(masonry_seeds(&[], &artists).len(), 2, "without Last.fm, the most played with an id");
+        assert_eq!(
+            masonry_seeds(&[lastfm("Bonobo")], &artists),
+            vec![("Bonobo".to_string(), "m-bon".to_string()), ("Air".to_string(), "m-air".to_string())],
+            "Last.fm's seeds first, the most played after them"
+        );
     }
 
     #[test]
