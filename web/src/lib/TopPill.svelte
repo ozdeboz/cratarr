@@ -287,7 +287,8 @@
         ><Icon name="funnel" size={22} />{#if filters}<span class="badge">{filters}</span>{/if}</button
       >{/if}
     {#if view && (page || order?.columns?.shown.length || onview) && !searching && !(showing && page && pageView.action)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (onview ? onview() : (viewOpen = true))} transition:paced|global><Icon name="sliders" size={22} /></button>{/if}
-    {#if device}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)} transition:paced|global><Icon name="speaker" size={22} /></button>{/if}
+    <!-- Where it plays gives way to the open field too, as the rest (the owner, 2026-10-26). -->
+    {#if device && !searching}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)} transition:paced|global><Icon name="speaker" size={22} /></button>{/if}
     {#if page && pageView.action && !searching}
       {@const a = pageView.action}
       <button class="action" aria-label={a.label} title={a.label} onclick={() => act(a)} use:longpress={() => hold(a)} transition:paced|global

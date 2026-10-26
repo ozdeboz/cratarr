@@ -373,18 +373,22 @@
   });
   // The title beside back gives way to the open search where it would be cut to a few letters or less (the owner,
   // 2026-10-25): measured as the field slides open (200 ms, after a page change 100 ms later), and as the window
-  // changes; a title that fits beside the open field stays as it is.
+  // changes; a title that fits beside the open field stays as it is. Library's view (its picker is never cut: the
+  // field's glass slides over it) gives way the same where the two glasses would meet (the owner, 2026-10-26).
   let leadEl = $state<HTMLElement>();
   let titleAway = $state(false);
   $effect(() => {
     if (!pageView.searchOpen) return void (titleAway = false);
     const measure = () => {
       if (!leadEl || titleAway) return;
-      const parts = [...leadEl.querySelectorAll<HTMLElement>('.page-name, .crumbs .up, .crumbs .here, .title')];
+      const parts = [...leadEl.querySelectorAll<HTMLElement>('.page-name, .crumbs .up, .crumbs .here, .title, .views')];
       const cut = parts.reduce((n, e) => n + Math.max(0, e.scrollWidth - e.clientWidth), 0);
       const room = parts.reduce((n, e) => n + e.clientWidth, 0);
       // More than a few letters cut (about three, or a third of it: "Req…"), or no room at all.
-      titleAway = parts.length > 0 && (cut > 36 || room < 48 || room < 0.7 * (room + cut));
+      // Its content's edge, not its glass's: a narrowed glass lets the picker run out under the field.
+      const edge = Math.max(leadEl.getBoundingClientRect().right, ...parts.map((e) => e.getBoundingClientRect().left + e.scrollWidth));
+      const met = !!rightEl && edge > rightEl.getBoundingClientRect().left - 4;
+      titleAway = parts.length > 0 && (met || cut > 36 || room < 48 || room < 0.7 * (room + cut));
     };
     const ts = [150, 350, 600].map((ms) => window.setTimeout(measure, ms));
     addEventListener('resize', measure);
@@ -1165,7 +1169,7 @@
   }
 
   /* The search open with no room for the title: only the round button, its thin glass gone with the title. */
-  .lead.title-away :global(:is(.page-name, .crumbs, .title)) {
+  .lead.title-away :global(:is(.page-name, .crumbs, .title, .views)) {
     display: none;
   }
 
