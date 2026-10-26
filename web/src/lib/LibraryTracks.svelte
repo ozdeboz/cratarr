@@ -156,6 +156,8 @@
     {#if cols.length}
       <Row size="large" as="div" head title="Title" cells={headCells} count="Length">
         {#snippet front()}<span class="cover-space"></span>{/snippet}
+        <!-- The rows' slot for Select's tick, kept here too: the headings over their columns. -->
+        {#snippet action()}<span></span>{/snippet}
       </Row>
     {/if}
     <ul class:table>
