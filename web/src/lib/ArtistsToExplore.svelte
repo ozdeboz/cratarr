@@ -33,7 +33,9 @@
   // The carousel: which card is in front as it is swiped; a chip brings its card.
   let row = $state<HTMLElement>();
   function settle() {
+    clearTimeout(resting);
     if (!row) return;
+    if (chosen) return void (chosen = false);
     const mid = row.scrollLeft + row.clientWidth / 2;
     let best = 0;
     let gap = Infinity;
@@ -43,8 +45,18 @@
     }
     open = best;
   }
+  // Committed once, when the row comes to rest (the owner, 2026-10-26: the chip's highlight went back and forth as the
+  // cards passed); a chip's own scroll keeps its choice. Without scrollend, a moment after the last scroll.
+  let resting: ReturnType<typeof setTimeout> | undefined;
+  let chosen = false;
+  function scrolled() {
+    clearTimeout(resting);
+    resting = setTimeout(settle, 160);
+  }
+  $effect(() => () => clearTimeout(resting));
   function goTo(i: number) {
     open = i;
+    chosen = true;
     row?.querySelector<HTMLElement>(`.slide[data-at="${i}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
   }
   const picture = (x: ExploredArtist) => (x.photo ? artistPhotoUrl(x.id) : albumCoverUrl('cratarr', x.albums[0]));
@@ -56,7 +68,7 @@
     <div class="wrap">
       <!-- A carousel (the owner, 2026-10-26): every artist's card in one row, swiped through, the next one peeking in;
            the chips under it say which and take it there. -->
-      <div class="cards bleed" bind:this={row} onscroll={settle}>
+      <div class="cards bleed" bind:this={row} onscroll={scrolled} onscrollend={settle}>
         {#each artists as x, i (x.id)}
           <div class="slide" data-at={i}>
             <article class="card">
