@@ -1,3 +1,9 @@
+<script lang="ts" module>
+  /** The last flow's measures: the next one (Albums to Artists, the owner 2026-10-26: it shifted) starts from them, not
+   *  from a guess. */
+  const last = { stage: 420, spare: 0 };
+</script>
+
 <script lang="ts">
   // A Library list as Flow (the owner, 2026-10-23: digging through the albums; its artists and tracks too, 2026-10-26):
   // the coverflow as tall as the page allows, the front one named under it with Play and Open. A tap on the front cover
@@ -42,10 +48,10 @@
   const CAPTION = 116;
   /** Room kept for the mini-player at the window's foot, there or not (the owner, 2026-10-23: assume it). */
   const MINI = 96;
-  let stageHeight = $state(420);
+  let stageHeight = $state(last.stage);
   /** What the coverflow leaves unused over its covers: the stage and the name move up by half (taking that room with
    *  them, no scroll left under them), so they sit together in the middle of the room. */
-  let spare = $state(0);
+  let spare = $state(last.spare);
   const wall = $derived(!!backdropUrl());
 
   const px = (el: Element | null, side: string) => (el ? parseFloat(getComputedStyle(el).getPropertyValue(side)) || 0 : 0);
@@ -59,7 +65,7 @@
         const flow = node.parentElement;
         const caption = flow?.querySelector('.caption')?.getBoundingClientRect().height || CAPTION;
         const under = px(flow, 'padding-bottom') + px(node.closest('main'), 'padding-bottom') + Math.max(MINI, px(node.closest('.page'), 'padding-bottom'));
-        stageHeight = Math.max(260, Math.floor(window.innerHeight - top - caption - under));
+        stageHeight = last.stage = Math.max(260, Math.floor(window.innerHeight - top - caption - under));
       });
     measure();
     const later = setTimeout(measure, 300);
@@ -92,7 +98,7 @@
 {#if wall}<div class="wall flow-wall" {@attach besidePage} aria-hidden="true"></div>{/if}
 <div class="flow" class:on-wall={wall} style:margin-top="{-spare / 2}px">
   <div class="stage" {@attach fill} style:height="{stageHeight}px">
-    <CoverFlow {covers} top={12} foot={12} bleed={48} fade={false} {onopen} {marked} {onfront} onspare={(px) => (spare = px)} {onmenu} />
+    <CoverFlow {covers} top={12} foot={12} bleed={48} fade={false} {onopen} {marked} {onfront} onspare={(px) => (spare = last.spare = px)} {onmenu} />
   </div>
   {#if front}
     <div class="caption">

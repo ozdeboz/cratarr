@@ -38,7 +38,8 @@
 {#if src && !failed[src]}
   <img class="cover" {src} alt="" loading={lazy ? 'lazy' : 'eager'} decoding="async" draggable="false" onerror={fail} onload={() => onready?.()} />
 {:else}
-  <span class="cover standin" aria-hidden="true"><Mark fill="currentColor" /></span>
+  <!-- Its stand-in is ready at once: one known to fail, or none to load (a flow shows it then, the owner 2026-10-26). -->
+  <span class="cover standin" aria-hidden="true" {@attach () => onready?.()}><Mark fill="currentColor" /></span>
 {/if}
 
 <style>
