@@ -1,7 +1,9 @@
 <script lang="ts">
   // The queue's menu (decision 0058; the owner, 2026-10-23): the Queue sheet's ⋮ beside its search, and a long-press on
-  // the full player's Queue button. Shuffle as its large action (once: a queue always has an order, Undo puts the order
-  // before back); then Save as playlist; Export…; Queues… (the switcher); Clear the queue last (with its Undo).
+  // the full player's Queue button. Shuffle at its header's end (the owner, 2026-10-26: beside Repeat once that moves
+  // here; once: a queue always has an order, Undo puts the order before back), and under the name what the queue is
+  // made of: how many of its tracks Radio put in and how many Autoplay serves; then Save as playlist; Export…; Queues…
+  // (the switcher); Clear the queue last (with its Undo).
   import MenuSheet from './MenuSheet.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuGroup from './MenuGroup.svelte';
@@ -21,9 +23,10 @@
   const here = $derived(isLocal());
   const name = $derived((here ? local.from : null) ?? 'Queue');
   // What it holds from the playing track on: this page's own, or what the server's player said.
-  const tracks = $derived(
-    here ? local.queue.slice(Math.max(0, local.index)).map((t) => ({ source: t.source, id: t.id })) : np ? [np, ...np.upcoming].map((t) => ({ source: np.source, id: t.id })) : [],
-  );
+  const listed = $derived(here ? local.queue.slice(Math.max(0, local.index)) : np ? [np, ...np.upcoming] : []);
+  const tracks = $derived(listed.map((t) => ({ source: 'source' in t ? t.source : np!.source, id: t.id })));
+  const fromRadio = $derived(listed.filter((t) => 'lane' in t && t.lane === 'radio').length);
+  const fromAutoplay = $derived(listed.filter((t) => 'lane' in t && t.lane === 'autoplay').length);
   const upcoming = $derived(here ? local.queue.length - local.index - 1 : (np?.upcoming.length ?? 0));
 
   let step = $state<'menu' | 'export'>('menu');
@@ -52,8 +55,8 @@
     {onclose}
     icon="list"
     title={name}
-    chips={[plural(tracks.length, 'track')]}
-    actions={step === 'menu' && here ? [{ icon: 'shuffle', label: 'Shuffle', disabled: upcoming < 2, onclick: shuffle }] : []}
+    chips={[plural(tracks.length, 'track'), ...(fromRadio ? [`${fromRadio} from Radio`] : []), ...(fromAutoplay ? [`${fromAutoplay} from Autoplay`] : [])]}
+    end={step === 'menu' && here ? { icon: 'shuffle', label: 'Shuffle', disabled: upcoming < 2, onclick: shuffle } : null}
     onback={step === 'menu' ? null : () => (step = 'menu')}
     {step}
   >
