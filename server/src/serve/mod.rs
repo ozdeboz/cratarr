@@ -343,6 +343,11 @@ impl Serve {
         }
     }
 
+    /// The tag rules as last read (Settings › Libraries; their aliases name the harvested words too, 0.9.7).
+    pub fn rules(&self) -> Rules {
+        self.rules.read().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
     /// Every album's cover stamp (0.9.7): the page puts it on each cover's address, which may then be kept for good.
     pub fn cover_stamps(&self) -> Arc<std::collections::HashMap<String, String>> {
         if let Some(s) = self.stamps.read().unwrap_or_else(|p| p.into_inner()).as_ref() {

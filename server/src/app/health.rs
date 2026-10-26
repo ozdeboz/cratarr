@@ -127,6 +127,7 @@ fn name_of(key: &str) -> &'static str {
         "library:track-numbers" => "Track numbers",
         "library:musicbrainz" => "Missing MusicBrainz ids",
         "library:incomplete" => "Albums missing tracks",
+        "library:rules" => "Named otherwise by a rule",
         "incoming:upgrades" => "Quality replacements",
         "incoming:duplicates" => "Duplicates",
         "incoming:failed" => "Failed conversions",
@@ -379,6 +380,26 @@ impl App {
             .collect();
         let mut out = library(&rows.into_iter().filter(|r| music.is_none_or(|m| r.folder == m)).collect::<Vec<_>>(), &off);
         out.extend(self.check_incomplete(&served, music).await?);
+        // Albums whose files a rule names otherwise (0.9.7): their fix writes the rules' names into the files.
+        let s = served.clone();
+        let ruled = tokio::task::spawn_blocking(move || super::fixes::ruled_albums(&s)).await??;
+        if !ruled.is_empty() {
+            let s = served.clone();
+            let items = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Item>> {
+                let mut items = Vec::new();
+                for a in ruled.iter().take(ITEMS) {
+                    if let Some((_, _, _, artist, name)) = s.library.album_place(a)? {
+                        items.push(Item { title: name, line: Some(artist), album: Some((crate::source::cratarr::KIND.id.to_string(), a.clone())), ..Item::default() });
+                    }
+                }
+                Ok(items)
+            })
+            .await??;
+            let count = ruled.len() as u64;
+            let mut f = finding("library", "library:rules", Level::Info, count, n(count, "album a rule names otherwise", "albums a rule names otherwise"));
+            f.items = items;
+            out.push(f);
+        }
         Ok(out)
     }
 

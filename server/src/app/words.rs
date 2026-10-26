@@ -210,6 +210,7 @@ pub fn merged(serve: &crate::serve::Serve) -> Result<Arc<Merged>> {
         return Ok(m.clone());
     }
     let mut said = Vec::new();
+    let rules = serve.rules();
     // The library's albums: their ids under their Music-form id (the user data's subjects), by artist.
     let albums = serve.library.album_word_inputs()?;
     let mut by_base: HashMap<&str, Vec<String>> = HashMap::new();
@@ -228,6 +229,8 @@ pub fn merged(serve: &crate::serve::Serve) -> Result<Arc<Merged>> {
             _ => continue,
         };
         let Some(held) = held else { continue };
+        // Named as the rules name genres (their aliases and merges, 0.9.7).
+        let word = crate::catalogue::normalise::aliased(&word, &rules.genre_aliases);
         said.push(Said { albums: held.clone(), source, word, raw_kind, weight: weight as f32 * share });
     }
     for (base, tag) in serve.userdata.all_album_tags()? {

@@ -725,6 +725,22 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The albums these files (catalogue folder, path) are in, each once (0.9.7: the rules' fixes).
+    pub fn albums_of_files(&self, files: &[(i64, String)]) -> Result<Vec<String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT album_id FROM songs WHERE folder = ?1 AND rel = ?2")?;
+        let mut out: Vec<String> = Vec::new();
+        for (folder, rel) in files {
+            if let Some(a) = st.query_map(rusqlite::params![folder, rel], |r| r.get::<_, String>(0))?.next() {
+                let a = a?;
+                if !out.contains(&a) {
+                    out.push(a);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Each song's album (0.9.7: a file's words are its album's).
     pub fn song_albums(&self) -> Result<HashMap<String, String>> {
         let db = self.db();

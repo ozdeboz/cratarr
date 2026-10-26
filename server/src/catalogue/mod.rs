@@ -670,6 +670,17 @@ impl Catalogue {
         Ok(())
     }
 
+    /// Every present file's values of these named tags: (folder, path, name, value). Blocking.
+    pub fn tag_values(&self, names: &[&str]) -> Result<Vec<(i64, String, String, String)>> {
+        let db = self.db();
+        let list = names.iter().map(|n| format!("'{}'", n.replace('\'', ""))).collect::<Vec<_>>().join(", ");
+        let mut st = db.prepare(&format!(
+            "SELECT t.folder, t.rel, t.name, t.value FROM tags t JOIN files f ON f.folder = t.folder AND f.rel = t.rel WHERE {PRESENT_F} AND t.name IN ({list})"
+        ))?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Read the tags of up to `n` files waiting for it. Returns how many were handled. Blocking.
     pub fn read_tags_batch(&self, n: usize) -> Result<usize> {
         let todo: Vec<(i64, String)> = {

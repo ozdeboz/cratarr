@@ -23,7 +23,8 @@ pub struct Fix {
     /// `<field>:<album>`: the same fix keeps its id while it stands.
     pub id: String,
     pub album: String,
-    /// What it sets: year, genre, albumartist, musicbrainz, cover (its `to` the picture's address).
+    /// What it sets: year, genre, albumartist, musicbrainz, cover (its `to` the picture's address), rule (a genre or
+    /// an artist the rules name otherwise: `from` → `to`).
     pub field: &'static str,
     /// What the album has now (none: nothing).
     pub from: Option<String>,
@@ -214,6 +215,7 @@ pub async fn of_finding(app: &super::App, key: &str) -> Result<Vec<Fix>> {
             "library:genre" => (genre_fixes(&s, lacking.iter().filter(|r| r.genre).map(|r| r.id.as_str()))?, Vec::new()),
             "library:album-artist" => (Vec::new(), ids(|r| r.album_artist)),
             "library:musicbrainz" => (Vec::new(), ids(|r| r.musicbrainz)),
+            "library:rules" => (ruled_albums(&s)?.iter().filter_map(|a| rule_fix(&s, a).transpose()).collect::<Result<Vec<_>>>()?, Vec::new()),
             _ => (Vec::new(), Vec::new()),
         })
     })
@@ -272,6 +274,76 @@ fn genre_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'
     Ok(out)
 }
 
+/// The albums whose files' genres or artists a rule names otherwise (0.9.7): the files' tags as the catalogue read
+/// them, held against the rules' aliases. None without aliases.
+pub fn ruled_albums(served: &crate::serve::Serve) -> Result<Vec<String>> {
+    let rules = served.rules();
+    if rules.genre_aliases.is_empty() && rules.artist_aliases.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cat = served.catalogue();
+    let mut places = Vec::new();
+    for (folder, rel, name, value) in cat.tag_values(&["genre", "artist", "albumartist"])? {
+        let aliases = if name == "genre" { &rules.genre_aliases } else { &rules.artist_aliases };
+        let seps = if name == "genre" { &rules.genre_separators } else { &rules.artist_separators };
+        let keep = if name == "genre" { &rules.genre_keep } else { &rules.artist_keep };
+        if crate::catalogue::normalise::split(&value, seps, keep).iter().any(|v| crate::catalogue::normalise::aliased(v, aliases) != v.trim()) {
+            places.push((folder, rel));
+        }
+    }
+    served.library.albums_of_files(&places)
+}
+
+/// An album's rule fix: its tracks' genres and artists as the rules name them, where any differs (each value split as
+/// the rules split it, aliased, written joined by "; "); certain, the rules being the administrator's own.
+fn rule_fix(served: &crate::serve::Serve, album: &str) -> Result<Option<Fix>> {
+    let rules = served.rules();
+    if rules.genre_aliases.is_empty() && rules.artist_aliases.is_empty() {
+        return Ok(None);
+    }
+    let fields: [(&'static str, &[crate::catalogue::normalise::Alias], &[String], &[String]); 3] = [
+        ("genre", &rules.genre_aliases, &rules.genre_separators, &rules.genre_keep),
+        ("artist", &rules.artist_aliases, &rules.artist_separators, &rules.artist_keep),
+        ("albumartist", &rules.artist_aliases, &rules.artist_separators, &rules.artist_keep),
+    ];
+    let names: Vec<&str> = fields.iter().map(|f| f.0).collect();
+    let (mut writes, mut said) = (Vec::new(), Vec::<String>::new());
+    for path in track_paths(album)? {
+        let now = values(&path, &names)?;
+        let mut set = Vec::new();
+        for ((name, aliases, seps, keep), value) in fields.iter().zip(now) {
+            let Some(value) = value else { continue };
+            let parts = crate::catalogue::normalise::split(&value, seps, keep);
+            let named: Vec<String> = parts.iter().map(|p| crate::catalogue::normalise::aliased(p, aliases)).collect();
+            if named.iter().zip(&parts).any(|(n, p)| n != p.trim()) {
+                for (n, p) in named.iter().zip(&parts).filter(|(n, p)| *n != p.trim()) {
+                    let line = format!("{} → {n}", p.trim());
+                    if !said.contains(&line) {
+                        said.push(line);
+                    }
+                }
+                set.push((*name, Some(crate::catalogue::normalise::dedupe(named).join("; "))));
+            }
+        }
+        if !set.is_empty() {
+            writes.push((path, set));
+        }
+    }
+    let Some((first, rest)) = said.split_first() else { return Ok(None) };
+    let (from, to) = first.split_once(" → ").map(|(f, t)| (f.to_string(), t.to_string())).unwrap_or_default();
+    Ok(Some(Fix {
+        id: format!("rule:{album}"),
+        album: album.to_string(),
+        field: "rule",
+        from: Some(from),
+        to,
+        source: "Rule".into(),
+        certainty: "certain",
+        why: if rest.is_empty() { format!("Rule: {first}") } else { format!("Rules: {first}, {}", rest.join(", ")) },
+        writes,
+    }))
+}
+
 /// Sources as said: "MusicBrainz", "MusicBrainz and Discogs", "MusicBrainz, Discogs and Last.fm".
 fn names(sources: &[String]) -> String {
     let shown: Vec<&str> = sources
@@ -315,7 +387,7 @@ pub async fn of_album(_app: &super::App, album: &str) -> Result<(Vec<Fix>, bool)
     let (s, a) = (served.clone(), album.to_string());
     let (mut fixes, lacks) = tokio::task::spawn_blocking(move || -> Result<(Vec<Fix>, Option<crate::serve::library::Lacks>)> {
         let Some(l) = s.library.lacking()?.into_iter().find(|r| r.id == a) else { return Ok((Vec::new(), None)) };
-        let mut out = Vec::new();
+        let mut out: Vec<Fix> = rule_fix(&s, &a)?.into_iter().collect();
         if l.year {
             out.extend(year_fixes(&s, std::iter::once(a.as_str()))?);
         }
