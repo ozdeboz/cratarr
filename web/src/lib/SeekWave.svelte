@@ -55,6 +55,17 @@
   });
   const waveShown = $derived(keepWave || want !== 'line');
   const pos = $derived(seek.pos);
+  /** Shown as paused: from the moment a stop ramp begins, playing from the moment a start ramp begins (the owner,
+   *  2026-10-26: the colour goes with the ramp, whenever the player says it paused). */
+  // After a ramp, its way holds until the player says the same (an app reporting the pause a moment late: no flash).
+  let after = $state<'out' | 'in' | null>(null);
+  $effect(() => {
+    if (isLocal() && ramping.dir) after = ramping.dir;
+  });
+  $effect(() => {
+    if ((after === 'out' && paused) || (after === 'in' && !paused)) after = null;
+  });
+  const grey = $derived(isLocal() && ramping.dir ? ramping.dir === 'out' : after ? after === 'out' : paused);
   const nowMark = $derived(seek.held !== null && seek.lensOn && !seek.snapped && !seek.overCancel && shaped && dur ? seek.now() / dur : null);
   /** Where the Cancel button stands: above the waveform's middle, measured whenever it shows (never left at 0). */
   let cancelX = $state(0);
@@ -128,7 +139,7 @@
   class:can={canSeek}
   class:held={seek.held !== null}
   class:cancelling={seek.overCancel}
-  class:paused
+  class:paused={grey}
   class:estimated
   style:--ramp-ms={isLocal() && ramping.dir ? `${ramping.ms}ms` : '0ms'}
   bind:this={el}
@@ -147,7 +158,7 @@
   onkeydown={key}
 >
   {#if waveShown}
-    <Waveform bins={shaped ? (bins ?? null) : null} {want} {loading} progress={dur ? pos / dur : 0} {paused} now={nowMark} onflat={() => (keepWave = false)} />
+    <Waveform bins={shaped ? (bins ?? null) : null} {want} {loading} progress={dur ? pos / dur : 0} paused={grey} now={nowMark} onflat={() => (keepWave = false)} />
   {:else}
     <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
   {/if}

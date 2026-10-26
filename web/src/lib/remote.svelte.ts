@@ -8,6 +8,7 @@ import { isLocal, localNowPlaying, localState, tookLocal } from './output.svelte
 import { setFavorite as setRowFavorite } from './favourites.svelte';
 import { on } from './events.svelte';
 import { toast } from './toast.svelte';
+import { ramping } from './ramping.svelte';
 import { playOn } from './playOn.svelte';
 
 /** What plays where the output is: the server's player, or this browser (decision 0022). */
@@ -96,13 +97,29 @@ $effect.root(() => {
 });
 
 export const duration = (): number | null => playing()?.progress?.duration_secs ?? null;
-export function position(): number {
+function running(): number {
   if (isLocal()) return local.position;
   const a = clock.anchor;
   if (!a) return 0;
   const p = a.paused ? a.pos : a.pos + Math.max(0, clock.tick - a.at) / 1000;
   const d = duration();
   return d ? Math.min(p, d) : p;
+}
+// Through a Start and stop ramp the position stands still (the owner, 2026-10-26: it stops hard as a stop begins, and
+// starts hard once a start is at full speed): where it was as the ramp began, until it ends.
+const frozen = $state({ on: false, pos: 0 });
+$effect.root(() => {
+  $effect(() => {
+    const on = isLocal() && ramping.dir !== null;
+    void ramping.at;
+    untrack(() => {
+      if (on) frozen.pos = frozen.on ? frozen.pos : running();
+      frozen.on = on;
+    });
+  });
+});
+export function position(): number {
+  return frozen.on ? frozen.pos : running();
 }
 export const paused = (): boolean => playing()?.progress?.paused ?? false;
 
