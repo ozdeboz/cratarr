@@ -2485,6 +2485,9 @@ struct ReplaceBody {
     year: Option<String>,
     #[serde(default)]
     cover: Option<String>,
+    /// Replace and carry over (0.9.7): the album's MusicBrainz ids and numbers written into the new copy first.
+    #[serde(default)]
+    carry: bool,
 }
 
 async fn replace_incoming(
@@ -2498,7 +2501,7 @@ async fn replace_incoming(
         Some("new") => false,
         Some(_) => return Err(ToggleError::Refused("cover is keep or new".into()).into()),
     };
-    Ok(Json(app.incoming.replace(&source, &album, b.year.as_deref(), keep).await?))
+    Ok(Json(app.incoming.replace(&source, &album, b.year.as_deref(), keep, b.carry).await?))
 }
 
 /// Albums waiting for their hi-res files to be converted before Keep or Replace, and those just finished.

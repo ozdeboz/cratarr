@@ -50,18 +50,20 @@ fn item_key(name: &str) -> Option<lofty::tag::ItemKey> {
         "musicbrainz_albumartistid" => ItemKey::MusicBrainzReleaseArtistId,
         "musicbrainz_artistid" => ItemKey::MusicBrainzArtistId,
         "musicbrainz_trackid" => ItemKey::MusicBrainzRecordingId,
+        "tracknumber" => ItemKey::TrackNumber,
+        "discnumber" => ItemKey::DiscNumber,
         _ => return None,
     })
 }
 
 /// A track's tag values by name, as the tag reader reads them (the first of each).
-fn values(track: &Path, names: &[&str]) -> Result<Vec<Option<String>>> {
+pub(crate) fn values(track: &Path, names: &[&str]) -> Result<Vec<Option<String>>> {
     let (tags, _) = crate::catalogue::tags::read(track)?;
     Ok(names.iter().map(|n| tags.items.iter().find(|(_, name, _)| *name == Some(*n)).map(|(_, _, v)| v.clone())).collect())
 }
 
 /// Writes these values into a track (none: removes the tag), read back from the checked copy before it replaces it.
-fn write(track: &Path, set: &[(&'static str, Option<String>)]) -> Result<()> {
+pub(crate) fn write(track: &Path, set: &[(&'static str, Option<String>)]) -> Result<()> {
     let names: Vec<&str> = set.iter().map(|(n, _)| *n).collect();
     let keys: Vec<(lofty::tag::ItemKey, Option<String>)> =
         set.iter().map(|(n, v)| Ok((item_key(n).with_context(|| format!("no tag {n}"))?, v.clone()))).collect::<Result<_>>()?;
@@ -179,8 +181,19 @@ pub async fn undo(token: &str) -> Result<()> {
 
 /// A tag name as `item_key` knows it.
 fn static_name(n: &str) -> Option<&'static str> {
-    ["date", "genre", "albumartist", "musicbrainz_albumid", "musicbrainz_releasegroupid", "musicbrainz_albumartistid", "musicbrainz_artistid", "musicbrainz_trackid"]
-        .into_iter()
+    [
+        "date",
+        "genre",
+        "albumartist",
+        "musicbrainz_albumid",
+        "musicbrainz_releasegroupid",
+        "musicbrainz_albumartistid",
+        "musicbrainz_artistid",
+        "musicbrainz_trackid",
+        "tracknumber",
+        "discnumber",
+    ]
+    .into_iter()
         .find(|k| *k == n)
 }
 

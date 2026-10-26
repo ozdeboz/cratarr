@@ -32,7 +32,136 @@ pub struct ReplacePreview {
     pub acquisition: bool,
     /// Both covers, side by side for the choice (0.9.5): the album's in Music and the new copy's.
     pub covers: ReplaceCovers,
+    /// How the new copy's tags differ from the album's in Music, the differences only (0.9.7, the owner): album-wide
+    /// once (`track` none), else by track.
+    pub diff: Vec<TagDiff>,
+    /// What the new copy lacks that the album had ("Year", "MusicBrainz ids", "4 fewer tags").
+    pub lost: Vec<String>,
+    /// What "Replace and carry over" brings into the new copy, and what follows the album by itself.
+    pub carry: Vec<String>,
 }
+
+/// A tag the new copy has otherwise (0.9.7).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TagDiff {
+    /// The new file's name; none where every track differs alike (the album's year, genre, artist).
+    pub track: Option<String>,
+    pub field: String,
+    pub old: Option<String>,
+    pub new: Option<String>,
+}
+
+/// The tags Replace shows the differences of.
+const COMPARED: [&str; 13] = [
+    "title",
+    "artist",
+    "album",
+    "albumartist",
+    "date",
+    "originaldate",
+    "genre",
+    "tracknumber",
+    "discnumber",
+    "musicbrainz_albumid",
+    "musicbrainz_releasegroupid",
+    "musicbrainz_trackid",
+    "musicbrainz_albumartistid",
+];
+/// What Cratarr knows of the album that carries over into the new copy: its MusicBrainz ids, and its numbers (as
+/// Renumber may have set them).
+const CARRIED: [&str; 7] =
+    ["musicbrainz_albumid", "musicbrainz_releasegroupid", "musicbrainz_albumartistid", "musicbrainz_trackid", "musicbrainz_artistid", "tracknumber", "discnumber"];
+
+type Named = std::collections::BTreeMap<String, String>;
+
+/// A file's named tags, the first value of each.
+fn named(path: &std::path::Path) -> Named {
+    let Ok((tags, _)) = crate::catalogue::tags::read(path) else { return Named::default() };
+    let mut out = Named::new();
+    for (_, name, value) in tags.items {
+        if let Some(n) = name {
+            out.entry(n.to_string()).or_insert(value);
+        }
+    }
+    out
+}
+
+/// The differences of each pair (the old file in Music, the new one in Incoming), what the new copy loses, and what
+/// carrying over brings. Blocking: it reads every file's tags.
+fn compare(pairs: &[(PathBuf, PathBuf)], keep_cover: bool) -> (Vec<TagDiff>, Vec<String>, Vec<String>) {
+    let read: Vec<(String, Named, Named)> =
+        pairs.iter().map(|(o, n)| (n.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(), named(o), named(n))).collect();
+    let mut diff = Vec::new();
+    for field in COMPARED {
+        let differs: Vec<(&String, Option<&String>, Option<&String>)> =
+            read.iter().map(|(f, o, n)| (f, o.get(field), n.get(field))).filter(|(_, o, n)| o.map(|v| v.trim()) != n.map(|v| v.trim())).collect();
+        if differs.is_empty() {
+            continue;
+        }
+        // Every track the same change: once, for the album.
+        if differs.len() == read.len() && differs.iter().all(|d| (d.1, d.2) == (differs[0].1, differs[0].2)) {
+            diff.push(TagDiff { track: None, field: field.into(), old: differs[0].1.cloned(), new: differs[0].2.cloned() });
+        } else {
+            diff.extend(differs.into_iter().map(|(f, o, n)| TagDiff { track: Some(f.clone()), field: field.into(), old: o.cloned(), new: n.cloned() }));
+        }
+    }
+    let lacks = |field: &str| read.iter().any(|(_, o, n)| o.contains_key(field) && !n.contains_key(field));
+    let mut lost = Vec::new();
+    let said: [(&[&str], &str); 5] = [
+        (&["date", "originaldate"], "Year"),
+        (&["genre"], "Genre"),
+        (&["albumartist"], "Album artist"),
+        (&["musicbrainz_albumid", "musicbrainz_trackid", "musicbrainz_releasegroupid"], "MusicBrainz ids"),
+        (&["tracknumber"], "Track numbers"),
+    ];
+    for (fields, name) in said {
+        if fields.iter().any(|f| lacks(f)) {
+            lost.push(name.to_string());
+        }
+    }
+    let (had, has) = read.iter().fold((0, 0), |(a, b), (_, o, n)| (a + o.len(), b + n.len()));
+    if has < had {
+        lost.push(format!("{} fewer tags", had - has));
+    }
+    let differs_in = |fields: &[&str]| read.iter().any(|(_, o, n)| fields.iter().any(|f| o.contains_key(*f) && o.get(*f) != n.get(*f)));
+    let mut carry = Vec::new();
+    if differs_in(&CARRIED[..5]) {
+        carry.push("MusicBrainz ids".to_string());
+    }
+    if differs_in(&CARRIED[5..]) {
+        carry.push("Track numbers".to_string());
+    }
+    if keep_cover {
+        carry.push("Cover".to_string());
+    }
+    // These follow the album by its id, whatever the files say.
+    carry.extend(["Release type", "Album tags"].map(String::from));
+    (diff, lost, carry)
+}
+
+/// Carries what Cratarr knows of the album into the new copy before Replace (0.9.7, "Replace and carry over"): each new
+/// file gets its old one's MusicBrainz ids and numbers where they differ. The new copy is changed where it lies, so an
+/// Undo of Replace brings it back to Incoming as it was carried. Never stops Replace: what could not be written is
+/// logged.
+fn carry_over(pairs: &[(PathBuf, PathBuf)]) {
+    for (old, new) in pairs {
+        let (o, n) = (named(old), named(new));
+        let set: Vec<(&'static str, Option<String>)> =
+            CARRIED.iter().filter(|f| o.contains_key(**f) && o.get(**f) != n.get(**f)).map(|f| (*f, o.get(*f).cloned())).collect();
+        if set.is_empty() {
+            continue;
+        }
+        if let Err(e) = crate::app::fixes::write(new, &set) {
+            tracing::warn!("replace: {} not carried over: {e:#}", new.display());
+        }
+    }
+}
+
+/// Each old track in Music with the new file taking it over, as paths.
+fn pairs_of(music: &std::path::Path, old_dir: &str, at: &Located, plan: &ReplacePlan) -> Vec<(PathBuf, PathBuf)> {
+    plan.takes_over.iter().map(|(o, n)| (music.join(old_dir).join(o), at.root.join(&at.dir.dir).join(n))).collect()
+}
+
 
 /// The two covers Replace chooses between (0.9.5): `keep` the one in Music, or take the `new` copy's.
 #[derive(Debug, Default, Serialize)]
@@ -216,18 +345,26 @@ impl IncomingService {
         let old = verdicts(std::slice::from_ref(&at.album), &library, &incoming).remove(&at.album.id).map(|v| v.library).unwrap_or_default();
         let convert = self.to_convert(&at).await.len();
         let acquisition = self.acquisition().is_some();
+        let music = PathBuf::from(self.lib.music().unwrap_or_default());
         Ok(match self.plan_replace(&at, year).await? {
-            Ok(p) => ReplacePreview {
-                covers: covers_of(source_id, album_id, &p.old_dir),
-                title: at.album.title,
-                old: p.old_dir,
-                folder: Some(p.plan.folder),
-                tracks: p.plan.takes_over.len(),
-                added: p.plan.added,
-                refused: None,
-                convert,
-                acquisition,
-            },
+            Ok(p) => {
+                let pairs = pairs_of(&music, &p.old_dir, &at, &p.plan);
+                let (diff, lost, carry) = tokio::task::spawn_blocking(move || compare(&pairs, true)).await.unwrap_or_default();
+                ReplacePreview {
+                    covers: covers_of(source_id, album_id, &p.old_dir),
+                    title: at.album.title,
+                    old: p.old_dir,
+                    folder: Some(p.plan.folder),
+                    tracks: p.plan.takes_over.len(),
+                    added: p.plan.added,
+                    refused: None,
+                    convert,
+                    acquisition,
+                    diff,
+                    lost,
+                    carry,
+                }
+            }
             Err(r) => ReplacePreview {
                 covers: covers_of(source_id, album_id, &old),
                 title: at.album.title,
@@ -238,6 +375,9 @@ impl IncomingService {
                 refused: Some(r),
                 convert,
                 acquisition,
+                diff: Vec::new(),
+                lost: Vec::new(),
+                carry: Vec::new(),
             },
         })
     }
@@ -247,7 +387,7 @@ impl IncomingService {
     /// named per the library's template, each taking over its old track's id. Lidarr stops fetching the album and the
     /// old tracks' play data goes to the new server items (handlers). Undo puts it all back.
     /// Hi-res files are converted first, in the queue: the plan is checked now, so a refusal shows at once.
-    pub async fn replace(&self, source_id: &str, album_id: &str, year: Option<&str>, keep: bool) -> Result<KeepResult, ToggleError> {
+    pub async fn replace(&self, source_id: &str, album_id: &str, year: Option<&str>, keep: bool, carry: bool) -> Result<KeepResult, ToggleError> {
         self.refuse_if_queued(album_id)?;
         let at = self.locate(source_id, album_id).await?;
         let planned = self.plan_replace(&at, year).await?.map_err(refused)?;
@@ -261,6 +401,13 @@ impl IncomingService {
             let (old, new) = (music.join(&planned.old_dir), at.root.join(&at.dir.dir));
             if let Err(e) = tokio::task::spawn_blocking(move || keep_cover(&old, &new)).await {
                 tracing::warn!("covers: {e}");
+            }
+        }
+        // What Cratarr knows of the album carried into the new copy (0.9.7, "Replace and carry over").
+        if carry {
+            let pairs = pairs_of(&music, &planned.old_dir, &at, &planned.plan);
+            if let Err(e) = tokio::task::spawn_blocking(move || carry_over(&pairs)).await {
+                tracing::warn!("replace: {e}");
             }
         }
         let convert = self.to_convert(&at).await;
