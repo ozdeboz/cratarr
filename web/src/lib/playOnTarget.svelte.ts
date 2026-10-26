@@ -97,6 +97,9 @@ function setTabName(name: string) {
 
 /** A name no other player has (a second Chrome on Android is "Chrome on Android 2"), kept from then on. */
 function nameToUse(): string {
+  // A stored name grown by a page from before freeName counted from the root ("Safari on iOS 2 2 2 2 2 2 2", the owner's
+  // iPhone, 2026-10-26): its numbers off, then the first free one again.
+  if (/( \d+){2,}$/.test(prefs.browserName)) prefs.browserName = freeName(unnumbered(prefs.browserName), playOn.players);
   if (!prefs.browserName) prefs.browserName = freeName(defaultBrowserName(), playOn.players);
   const t = tabName.value;
   return t && t.base === prefs.browserName ? t.name : prefs.browserName;
