@@ -1,4 +1,5 @@
 <script lang="ts">
+  import StartStopSheet from './StartStopSheet.svelte';
   // The queue (decisions 0019, 0022), as Finamp's queue sheet (lib/components/PlayerScreen/queue_list.dart): a sheet
   // over the player on the blurred cover, a grab handle and "Queue"; then the previous tracks (folded, this device
   // only: the server's player reports only what comes next), the playing track as a card that fills as it plays
@@ -208,6 +209,8 @@
     setTimeout(() => removeUpcoming(i), reducedMotion() ? 0 : 200);
     return 'away' as const;
   };
+  /** A long press on the play button: Start and stop's controls (lib/StartStopSheet; the owner, 2026-10-26). */
+  let startStopOpen = $state(false);
 </script>
 
 <!-- A row's cover; held, its track plays until the finger lifts (lib/preview.svelte.ts), ringed meanwhile. -->
@@ -312,7 +315,7 @@
       <!-- The playing track: a long-press or right-click is its menu, as every row's (decision 0023). -->
       <div class="now" style:--done={dur ? Math.min(1, pos / dur) : 0} use:longpress={() => rowMenu(asTrack(np, np.source), null)}>
         <span class="done" aria-hidden="true"></span>
-        <button class="ncover" aria-label={shownPaused() ? 'Play' : 'Pause'} aria-disabled={rampBusy()} onclick={playPause}>
+        <button class="ncover" aria-label={shownPaused() ? 'Play' : 'Pause'} aria-disabled={rampBusy()} onclick={playPause} use:longpress={() => (startStopOpen = true)}>
           <!-- the stand-in only when there is no cover to load (lib/Cover), not while one loads -->
           {#if src || !coverSrc()}<Cover {src} lazy={false} />{/if}
           <span class="pp"><Icon name={shownPaused() ? 'play' : 'pause'} size={32} /></span>
@@ -435,6 +438,8 @@
 {#if switching}
   <QueuesSheet onclose={() => (switching = false)} />
 {/if}
+
+{#if startStopOpen}<StartStopSheet onclose={() => (startStopOpen = false)} />{/if}
 
 <style>
   .qback {

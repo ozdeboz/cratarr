@@ -1353,6 +1353,12 @@ export function seek(secs: number) {
     return hand('seek', { positionMs: Math.round(secs * 1000) });
   }
   if (!audio) return;
+  // During a Start and stop ramp the seek wins at once (the owner, 2026-10-26), with no gap added before it.
+  if (committed !== null) return void overrideRamp(secs);
+  jumpTo(secs);
+}
+function jumpTo(secs: number) {
+  if (!audio) return;
   const w = where();
   const target = w ? w.seg.start + secs : secs;
   for (let i = 0; i < audio.buffered.length; i++) {
@@ -1542,6 +1548,8 @@ let rampToken = 0;
  *  and pause wait (the owner, 2026-10-26: a press during a ramp is not taken, rather than starting it over with a hard
  *  edge). Null: no ramp. */
 let committed: boolean | null = null;
+/** Each ramp's run; a seek cutting one short (overrideRamp) moves it on, and that ramp's own ending then does nothing. */
+let run = 0;
 /** Where the counter stays while a ramp sounds (stream time): a pause holds the moment it was pressed, and play holds
  *  that moment while it winds up from a little before it, so full speed and volume come back where they were left (the
  *  owner, 2026-10-26). Null: where it plays. */
@@ -1628,7 +1636,9 @@ function rampIn() {
   set(mode === 'fade' ? 0 : RAMP_LOW);
   rampBegins('in', ms, full);
   void audio.play().catch(() => {});
+  const mine = ++run;
   void ramp(mode === 'fade' ? 0 : RAMP_LOW, 1, ms, set, mode === 'fade' ? easeInOut : easeOut).then(() => {
+    if (mine !== run) return;
     rampEnds();
     heldAt = null;
     unramp();
@@ -1643,14 +1653,18 @@ async function pauseRamped() {
   local.paused = true;
   // The moment it was pressed: the counter stays there while the end sounds, and it rests there after.
   heldAt = audio.currentTime;
+  const mine = ++run;
   try {
     await rampOut();
+    if (mine !== run) return;
     audio?.pause();
     if (audio && inBuffer(heldAt)) audio.currentTime = heldAt;
   } finally {
-    heldAt = null;
-    unramp();
-    committed = null;
+    if (mine === run) {
+      heldAt = null;
+      unramp();
+      committed = null;
+    }
   }
 }
 /** For next and previous (where the device asks it): out only, and only then on to `go` (the track, its cover), which
@@ -1662,14 +1676,71 @@ async function skipRamped(go: () => void) {
   committed = false;
   // The counter stays where it was pressed until the change (as the app does).
   heldAt = audio.currentTime;
+  const mine = ++run;
   try {
     await rampOut();
   } finally {
-    heldAt = null;
-    committed = null;
+    if (mine === run) {
+      heldAt = null;
+      committed = null;
+    }
   }
+  if (mine !== run) return;
   unramp();
   go();
+}
+/** A seek during a ramp: the ramp stops where it is. Winding up, it jumps at once and comes to full speed and volume
+ *  over SETTLE_MS after the jump (no gap before it, no click); winding down, it stops (an 8 ms fade, no click) and rests
+ *  at the new place. */
+const SETTLE_MS = 30;
+async function overrideRamp(secs: number) {
+  if (!audio) return;
+  const pausing = committed === true;
+  run++;
+  rampToken++;
+  rampEnds();
+  heldAt = null;
+  committed = null;
+  if (pausing) {
+    await gainTo(0, 8);
+    audio.pause();
+    unramp();
+    jumpTo(secs);
+    return;
+  }
+  const rate = audio.playbackRate;
+  jumpTo(secs);
+  const t0 = performance.now();
+  const g0 = rampGain;
+  await new Promise<void>((done) => {
+    const step = () => {
+      const t = Math.min(1, (performance.now() - t0) / SETTLE_MS);
+      if (audio) {
+        audio.playbackRate = rate + (1 - rate) * t;
+        rampGain = g0 + (1 - g0) * t;
+        applyVolume();
+      }
+      if (t < 1) setTimeout(step, 5);
+      else done();
+    };
+    step();
+  });
+  unramp();
+}
+/** The ramp's gain to `to` over `ms`. */
+function gainTo(to: number, ms: number): Promise<void> {
+  const g0 = rampGain;
+  const t0 = performance.now();
+  return new Promise((done) => {
+    const step = () => {
+      const t = Math.min(1, (performance.now() - t0) / ms);
+      rampGain = g0 + (to - g0) * t;
+      applyVolume();
+      if (t < 1) setTimeout(step, 2);
+      else done();
+    };
+    step();
+  });
 }
 /** Whether stream time `t` is loaded. */
 function inBuffer(t: number) {

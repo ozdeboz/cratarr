@@ -1,4 +1,5 @@
 <script lang="ts">
+  import StartStopSheet from './StartStopSheet.svelte';
   // The mini-player along the bottom (decision 0018), as Finamp's now-playing bar: a floating bar with the cover and
   // play/pause on it, the title (scrolling when it does not fit), artist and time, and the heart. The whole bar fills
   // from the left as the track plays, in the cover's colour. Tap or swipe up: the full player (beside the page when
@@ -165,6 +166,8 @@
     dx = 0;
   }
 
+  /** A long press on the play button: Start and stop's controls (lib/StartStopSheet; the owner, 2026-10-26). */
+  let startStopOpen = $state(false);
 </script>
 
 {#if np}
@@ -192,7 +195,7 @@
       {#if src || !coverSrc()}
         {#key src}<Cover {src} lazy={false} onfail={coverFailed} />{/key}
       {/if}
-      <button class="own play" aria-label={shownPaused() ? 'Play' : 'Pause'} aria-disabled={rampBusy()} onclick={playPause}
+      <button class="own play" aria-label={shownPaused() ? 'Play' : 'Pause'} aria-disabled={rampBusy()} onclick={playPause} use:longpress={() => (startStopOpen = true)}
         ><Icon name={shownPaused() ? 'play' : 'pause'} size={32} /></button
       >
     </div>
@@ -255,6 +258,8 @@
     onclose={() => (heartMenu = false)}
   />
 {/if}
+
+{#if startStopOpen}<StartStopSheet onclose={() => (startStopOpen = false)} />{/if}
 
 <style>
   /* Finamp's bar: 64 px high, 12 px from the edges, corners 12 px, a soft shadow; the cover square at the start. */
