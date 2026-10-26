@@ -43,7 +43,7 @@ pub const CONTEXT: &str = "lastfm";
 const SOURCE: &str = "lastfm";
 
 /// A scrobble, or a loved track (with when it was loved).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Scrobble {
     pub at: i64,
     pub artist: String,
@@ -169,8 +169,19 @@ fn scrobble(i: Item) -> Option<Scrobble> {
     })
 }
 
-/// Every page of `method` for `user` (from `from` on, where given), read into scrobbles; `step` says how far.
-async fn read(method: &str, user: &str, auth: &Auth, from: Option<i64>, step: &str, progress: &Progress) -> Result<Vec<Scrobble>> {
+/// Every page of `method` for `user` (from `from` on and up to `to`, where given), read into scrobbles; `step` says how
+/// far. With a spool, each page is kept in it as it comes (0.9.7: an import that stops resumes from there).
+#[allow(clippy::too_many_arguments)]
+async fn read(
+    method: &str,
+    user: &str,
+    auth: &Auth,
+    from: Option<i64>,
+    to: Option<i64>,
+    step: &str,
+    progress: &Progress,
+    mut spool: Option<&mut super::resume::Spool<Scrobble>>,
+) -> Result<Vec<Scrobble>> {
     let http = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
     let mut out = Vec::new();
     let mut page = 1usize;
@@ -183,6 +194,9 @@ async fn read(method: &str, user: &str, auth: &Auth, from: Option<i64>, step: &s
         q.insert("page", page.to_string());
         if let Some(f) = from {
             q.insert("from", f.to_string());
+        }
+        if let Some(t) = to {
+            q.insert("to", t.to_string());
         }
         if let Some((session, secret)) = &auth.signed {
             q.insert("sk", session.clone());
@@ -231,7 +245,11 @@ async fn read(method: &str, user: &str, auth: &Auth, from: Option<i64>, step: &s
             serde_json::from_str::<Recent>(&body).context("Last.fm's answer could not be read")?.recenttracks
         };
         let pages: usize = list.attr.total_pages.parse().unwrap_or(1);
-        out.extend(list.track.into_iter().filter_map(scrobble));
+        let got: Vec<Scrobble> = list.track.into_iter().filter_map(scrobble).collect();
+        if let Some(s) = spool.as_deref_mut() {
+            s.add(got.iter().cloned())?;
+        }
+        out.extend(got);
         progress(step, out.len() as u64, list.attr.total.parse().ok());
         if page >= pages {
             return Ok(out);
@@ -370,7 +388,7 @@ fn wanted(loved: &[Scrobble], found: impl Fn(&Scrobble) -> bool) -> Vec<Wanted> 
 }
 
 /// `user`'s scrobbles and loves: as read within the hour plus what came since, or read now.
-async fn scrobbles_and_loves(account: &str, user: &str, auth: &Auth, progress: &Progress) -> Result<(Vec<Scrobble>, Vec<Scrobble>)> {
+async fn scrobbles_and_loves(dir: &Path, account: &str, user: &str, auth: &Auth, progress: &Progress) -> Result<(Vec<Scrobble>, Vec<Scrobble>)> {
     let id = (account.to_string(), user.to_lowercase());
     let before = {
         let mut k = kept().lock().unwrap_or_else(|e| e.into_inner());
@@ -380,14 +398,28 @@ async fn scrobbles_and_loves(account: &str, user: &str, auth: &Auth, progress: &
     let (scrobbles, loved) = match before {
         Some((mut scrobbles, loved)) => {
             let newest = scrobbles.iter().map(|s| s.at).max();
-            let mut new = read("user.getrecenttracks", user, auth, newest.map(|n| n + 1), "Reading new scrobbles", progress).await?;
+            let mut new = read("user.getrecenttracks", user, auth, newest.map(|n| n + 1), None, "Reading new scrobbles", progress, None).await?;
             new.retain(|s| newest.is_none_or(|n| s.at > n));
             new.append(&mut scrobbles);
             (new, loved)
         }
         None => {
-            let scrobbles = read("user.getrecenttracks", user, auth, None, "Reading scrobbles", progress).await?;
-            let loved = read("user.getlovedtracks", user, auth, None, "Reading loved tracks", progress).await?;
+            // A read stopped before goes on where it stopped (its spool), after the scrobbles made since; a whole one
+            // takes the spool away.
+            let mut spool = super::resume::Spool::<Scrobble>::open(dir, SOURCE, account, user);
+            let scrobbles = match (spool.items.iter().map(|s| s.at).max(), spool.items.iter().map(|s| s.at).min()) {
+                (Some(newest), Some(oldest)) => {
+                    let mut new = read("user.getrecenttracks", user, auth, Some(newest + 1), None, "Reading new scrobbles", progress, None).await?;
+                    new.retain(|s| s.at > newest);
+                    read("user.getrecenttracks", user, auth, None, Some(oldest - 1), "Reading scrobbles on from where the last import stopped", progress, Some(&mut spool))
+                        .await?;
+                    new.extend(spool.items.iter().filter(|s| s.at <= newest).cloned());
+                    new
+                }
+                _ => read("user.getrecenttracks", user, auth, None, None, "Reading scrobbles", progress, Some(&mut spool)).await?,
+            };
+            spool.finish();
+            let loved = read("user.getlovedtracks", user, auth, None, None, "Reading loved tracks", progress, None).await?;
             (scrobbles, loved)
         }
     };
@@ -398,7 +430,27 @@ async fn scrobbles_and_loves(account: &str, user: &str, auth: &Auth, progress: &
 /// Reads Last.fm and does the work, writing nothing for a preview. Blocking parts run apart.
 async fn run(serve: &Arc<crate::serve::Serve>, account: &str, user: &str, auth: &Auth, choice: Choice, preview: bool, progress: &Progress) -> Result<Imported> {
     let dir = serve.data_dir.clone().context("the history needs Cratarr's data folder")?;
-    let (scrobbles, loved) = scrobbles_and_loves(account, user, auth, progress).await?;
+    let (scrobbles, loved) = match scrobbles_and_loves(Path::new(&dir), account, user, auth, progress).await {
+        Ok(read) => read,
+        // Stopped part of the way (0.9.7): the scrobbles read so far go in now (an import, not a preview), and the next
+        // import goes on from where this one stopped.
+        Err(e) => {
+            let spool = super::resume::Spool::<Scrobble>::open(Path::new(&dir), SOURCE, account, user);
+            if preview || !choice.scrobbles || spool.items.is_empty() {
+                return Err(e);
+            }
+            let n = spool.items.len();
+            let partial = (spool.items, Vec::new());
+            let (serve, account) = (serve.clone(), account.to_string());
+            tokio::task::spawn_blocking(move || -> Result<Tally> {
+                let songs = Matcher::read(&Path::new(&dir).join("library.sqlite"))?;
+                let listens: Vec<Listened> = partial.0.iter().map(|s| Listened { track: track(s), at: s.at, event: event(s) }).collect();
+                into_history(&serve, &songs, &account, CONTEXT, "Last.fm", &listens, false)
+            })
+            .await??;
+            return Err(e.context(format!("the {n} scrobbles read before it stopped are in; the next import goes on from where it stopped")));
+        }
+    };
     progress("Matching", 0, None);
     // The loved tracks' albums: from the scrobbles (`fill_albums`); then, for those still without one and not in the
     // library, from Last.fm's track info. An album found also matches the library's track by album and title, under
