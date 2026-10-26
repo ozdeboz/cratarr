@@ -2200,8 +2200,13 @@ export type LibraryTrack = {
   favorite: boolean;
   format?: string | null;
   bitrate?: number | null;
+  /** Its tempo, its album's artist and when the asking account last played it (epoch s; a5, 0.9.7): left out where
+   *  unknown. */
+  bpm?: number;
+  album_artist?: string;
+  last_played?: number;
 };
-export type LibraryTrackOrder = 'title' | 'artist' | 'album' | 'added' | 'year' | 'plays' | 'duration';
+export type LibraryTrackOrder = 'title' | 'artist' | 'album' | 'added' | 'year' | 'plays' | 'duration' | 'tempo' | 'albumArtist' | 'lastPlayed';
 /** A page of the library's tracks: the words (as the search reads them), the order, the libraries switched off. */
 export const libraryTracks = (p: { q?: string; order: LibraryTrackOrder; down: boolean; offset: number; limit: number; without?: string[] }) => {
   const u = new URLSearchParams({ order: p.order, down: String(p.down), offset: String(p.offset), limit: String(p.limit) });

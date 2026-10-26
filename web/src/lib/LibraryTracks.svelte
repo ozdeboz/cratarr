@@ -91,14 +91,18 @@
     if (id === 'plays') return t.plays ? t.plays.toLocaleString() : '';
     if (id === 'added') return t.added ? addedOn(t.added) : '';
     if (id === 'year') return t.year ? String(t.year) : '';
+    if (id === 'tempo') return t.bpm ? String(t.bpm) : '';
+    if (id === 'lastPlayed') return t.last_played ? addedOn(t.last_played) : '';
+    if (id === 'albumArtist') return t.album_artist ?? '';
     return '';
   }
   const cellsOf = (t: LibraryTrack): Cell[] => cols.map((c) => ({ ...c, text: cellText(t, c.id) }));
-  const ORDER_OF: Record<string, typeof prefs.libraryTrackOrder> = { album: 'album', plays: 'plays', added: 'added', year: 'year' };
-  /** A tap on a name: ordered by it; again, the other way round. Plays and Added start most and newest first. */
+  const ORDER_OF: Record<string, typeof prefs.libraryTrackOrder> = { album: 'album', plays: 'plays', added: 'added', year: 'year', tempo: 'tempo', lastPlayed: 'lastPlayed', albumArtist: 'albumArtist' };
+  /** A tap on a name: ordered by it; again, the other way round. Plays, Added and Last played start most and newest
+   *  first. */
   function orderBy(o: typeof prefs.libraryTrackOrder) {
     if (prefs.libraryTrackOrder === o) prefs.libraryTrackDown = !prefs.libraryTrackDown;
-    else ((prefs.libraryTrackOrder = o), (prefs.libraryTrackDown = o === 'plays' || o === 'added'));
+    else ((prefs.libraryTrackOrder = o), (prefs.libraryTrackDown = o === 'plays' || o === 'added' || o === 'lastPlayed'));
   }
   const headSorts = $derived({
     title: { on: prefs.libraryTrackOrder === 'title', onclick: () => orderBy('title') },

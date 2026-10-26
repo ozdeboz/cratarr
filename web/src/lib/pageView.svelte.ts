@@ -60,7 +60,7 @@ export const ARTIST_ORDERS: OrderField<'name' | 'albums' | 'tracks'>[] = [
   { value: 'albums', label: 'Albums', most: true },
   { value: 'tracks', label: 'Tracks', most: true },
 ];
-export const TRACK_ORDERS: OrderField<'title' | 'artist' | 'album' | 'added' | 'year' | 'plays' | 'duration'>[] = [
+export const TRACK_ORDERS: OrderField<'title' | 'artist' | 'album' | 'added' | 'year' | 'plays' | 'duration' | 'tempo' | 'albumArtist' | 'lastPlayed'>[] = [
   { value: 'album', label: 'Album' },
   { value: 'title', label: 'Title' },
   { value: 'artist', label: 'Artist' },
@@ -68,6 +68,9 @@ export const TRACK_ORDERS: OrderField<'title' | 'artist' | 'album' | 'added' | '
   { value: 'added', label: 'Added' },
   { value: 'plays', label: 'Plays', most: true },
   { value: 'duration', label: 'Length' },
+  { value: 'tempo', label: 'Tempo' },
+  { value: 'albumArtist', label: 'Album artist' },
+  { value: 'lastPlayed', label: 'Last played', most: true },
 ];
 /** The orders by how you used the albums (lib/albums albumUses): read when chosen. */
 export const USE_ORDERS: readonly CollectionOrder[] = ['plays', 'played', 'rating'];

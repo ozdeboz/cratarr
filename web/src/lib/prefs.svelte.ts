@@ -103,7 +103,7 @@ export type Prefs = {
   /** The Library's Artists' and Tracks' orders, as its albums' (libraryOrder). */
   libraryArtistOrder: 'name' | 'albums' | 'tracks';
   libraryArtistDown: boolean;
-  libraryTrackOrder: 'title' | 'artist' | 'album' | 'added' | 'year' | 'plays' | 'duration';
+  libraryTrackOrder: 'title' | 'artist' | 'album' | 'added' | 'year' | 'plays' | 'duration' | 'tempo' | 'albumArtist' | 'lastPlayed';
   libraryTrackDown: boolean;
   /** This device's animations (Display, the owner 2026-10-25): off, as the system's reduced motion (lib/motion). */
   animations: boolean;
@@ -462,7 +462,7 @@ function read(): Prefs {
       if (['last', 'albums', 'artists', 'tracks'].includes(saved.libraryOpens)) p.libraryOpens = saved.libraryOpens;
       if (['name', 'albums', 'tracks'].includes(saved.libraryArtistOrder)) p.libraryArtistOrder = saved.libraryArtistOrder;
       if (typeof saved.libraryArtistDown === 'boolean') p.libraryArtistDown = saved.libraryArtistDown;
-      if (['title', 'artist', 'album', 'added', 'year', 'plays', 'duration'].includes(saved.libraryTrackOrder)) p.libraryTrackOrder = saved.libraryTrackOrder;
+      if (['title', 'artist', 'album', 'added', 'year', 'plays', 'duration', 'tempo', 'albumArtist', 'lastPlayed'].includes(saved.libraryTrackOrder)) p.libraryTrackOrder = saved.libraryTrackOrder;
       if (typeof saved.libraryTrackDown === 'boolean') p.libraryTrackDown = saved.libraryTrackDown;
       if (saved.navAt === 'top' || saved.navAt === 'bottom') p.navAt = saved.navAt;
       if (typeof saved.navHides === 'boolean') p.navHides = saved.navHides;
