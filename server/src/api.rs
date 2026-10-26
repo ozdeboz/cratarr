@@ -40,6 +40,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/players/{name}/state", axum::routing::put(player_state))
         .route("/api/players/{name}/sample", post(player_sample))
         .route("/api/players/{name}/delay", axum::routing::put(player_delay))
+        .route("/api/players/{name}/shared", axum::routing::put(player_shared))
         .route("/api/groups/{leader}/listen.wav", get(group_listen))
         .route("/api/groups/{leader}/listen.pcm", get(group_frames))
         .route("/api/time", get(time_now))
@@ -417,9 +418,10 @@ async fn player_log_add(State(app): State<Arc<App>>, Path(name): Path<String>, J
     Ok(Json(json!({ "last": last })))
 }
 
-/// A player of the request's own, or one not known yet (decision 0051): another's is as if there were none.
+/// A player of the request's own, or one not known yet (decision 0051): another's is as if there were none; one shared
+/// with everyone (0.9.8) is played on but its log stays its owner's.
 fn own_player(app: &App, name: &str) -> Result<(), ApiError> {
-    Ok(app.play_on.reached(name)?)
+    Ok(app.play_on.owned(name)?)
 }
 
 /// An id from outside is taken only as a short plain token: it goes into logs and headers.
@@ -4770,6 +4772,16 @@ async fn put_discogs_keys(Json(b): Json<DiscogsKeys>) -> Result<Json<serde_json:
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     get_discogs_keys().await
+}
+
+#[derive(Deserialize)]
+struct Shared {
+    shared: bool,
+}
+
+/// A device shared with everyone on this Cratarr, or not (0.9.8): its owner's, or an administrator's, to set.
+async fn player_shared(State(app): State<Arc<App>>, Path(name): Path<String>, Json(b): Json<Shared>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!({ "shared": app.play_on.set_shared(&name, b.shared)? })))
 }
 
 // ---- Server settings that were the environment's only (0.9.8)
