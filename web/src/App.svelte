@@ -779,6 +779,13 @@
   const slots = $derived(Math.max(BAR_SLOTS, Math.floor(barWidth / BAR_SLOT_PX)));
   const bar = $derived(ALL.length <= BAR_SLOTS ? ALL : MAIN.slice(0, Math.min(MAIN.length, slots - 1)));
   const overflow = $derived(ALL.filter((p) => !bar.includes(p)));
+  /** More's columns: at most the bar's own, its rows evenly filled (the owner, 2026-10-26: six pages on a phone are two
+   *  rows of three, not five and one). */
+  const moreCols = $derived.by(() => {
+    const most = Math.max(1, bar.length + 1);
+    const rows = Math.ceil(overflow.length / most);
+    return Math.max(1, Math.ceil(overflow.length / Math.max(1, rows)));
+  });
   const overflowActive = $derived(overflow.some((p) => p.id === page));
 </script>
 
@@ -933,7 +940,7 @@
         id="more-pages"
         role="group"
         aria-label="More pages"
-        style:--cols={Math.max(1, Math.min(overflow.length, bar.length + 1))}
+        style:--cols={moreCols}
         transition:slide|global={{ duration: reducedMotion() ? 0 : SHEET_IN, easing: decelerate }}
       >
         {#each overflow as p (p.id)}
