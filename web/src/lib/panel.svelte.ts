@@ -243,6 +243,9 @@ export function backToTracks() {
  *  but never over what is opened while on them: an artist from the player stays (the owner, 2026-10-24: it closed the
  *  player and opened nothing). */
 export const openedHere = () => panel.viewed !== null && panel.viewed !== panel.arrived;
+/** `subject` is being opened: asked for, while the panel still holds what it showed (lib/Hold). Its cover shows the
+ *  loading sign over it, dimmed (the owner, 2026-10-27). */
+export const opening = (subject: string) => panel.viewed === subject && panel.shown !== subject;
 
 /** Home, as the navigation's Home is (a step of its own: Back comes back to what was open); from a full-screen panel,
  *  over the navigation (the owner, 2026-10-24). */

@@ -11,7 +11,15 @@
   import { HOLD, type HoldPlace } from './holdPlace.svelte';
   import MarkLoader from './MarkLoader.svelte';
 
-  let { key, shown = $bindable(), children }: { key: unknown; shown?: unknown; children: Snippet } = $props();
+  // `seeThrough`: opening, the place is not there at all until its content is ready (the phone's panel over the page):
+  // what was tapped shows the loading sign meanwhile (lib/panel `opening`); after HOLD_MAX_MS the place's background
+  // with the sign.
+  let {
+    key,
+    shown = $bindable(),
+    seeThrough = false,
+    children,
+  }: { key: unknown; shown?: unknown; seeThrough?: boolean; children: Snippet } = $props();
 
   const HOLD_SIGN_MS = 300;
   const HOLD_MAX_MS = 3000;
@@ -120,8 +128,13 @@
     }, HOLD_SIGN_MS);
   }
 
+  /** A see-through opening's place, hidden until then. */
+  let away: HTMLElement | null = null;
+
   function dropPicture() {
     clearTimeout(signTimer);
+    if (away) away.style.visibility = '';
+    away = null;
     if (sign) void unmount(sign);
     sign = null;
     picture?.remove();
@@ -155,12 +168,22 @@
   /** A hold begins: the picture of what shows (none yet: the place's background), until ready or HOLD_MAX_MS. */
   function begin(opening = false) {
     const r = ++round;
-    takePicture(opening);
+    if (opening && seeThrough && box?.parentElement) {
+      away = box.parentElement;
+      away.style.visibility = 'hidden';
+    } else takePicture(opening);
     holding = true;
     clearTimeout(maxTimer);
     clearTimeout(giveUpTimer);
     maxTimer = setTimeout(() => {
-      if (r !== round || !picture) return;
+      if (r !== round) return;
+      if (away) {
+        away.style.visibility = '';
+        away = null;
+        takePicture(true);
+        return;
+      }
+      if (!picture) return;
       // The background and the sign, no longer what was there.
       for (const c of [...picture.children]) if (!c.classList.contains('hold-sign')) c.remove();
     }, HOLD_MAX_MS);
