@@ -117,7 +117,7 @@ pub async fn apply(fixes: Vec<Fix>) -> Result<(Vec<String>, Vec<(String, String)
     for c in covers {
         match super::covers::set(&c.album, &c.to).await {
             Ok(t) => tokens.push(t),
-            Err(e) => failed.push((c.id, format!("{e:#}"))),
+            Err(e) => failed.push((c.id, super::plain(format!("{e:#}")))),
         }
     }
     let (token, more) = tokio::task::spawn_blocking(move || -> Result<(String, Vec<(String, String)>)> {
@@ -133,7 +133,7 @@ pub async fn apply(fixes: Vec<Fix>) -> Result<(Vec<String>, Vec<(String, String)
                 let was = match values(track, &names) {
                     Ok(v) => v,
                     Err(e) => {
-                        failed.push((fix.id.clone(), format!("{}: {e:#}", track.display())));
+                        failed.push((fix.id.clone(), super::plain(format!("{}: {e:#}", track.display()))));
                         continue;
                     }
                 };
@@ -142,7 +142,7 @@ pub async fn apply(fixes: Vec<Fix>) -> Result<(Vec<String>, Vec<(String, String)
                 std::fs::write(&file, serde_json::to_vec(&before)?)?;
                 match write(track, set) {
                     Ok(()) => written.push(track.clone()),
-                    Err(e) => failed.push((fix.id.clone(), format!("{}: {e:#}", track.display()))),
+                    Err(e) => failed.push((fix.id.clone(), super::plain(format!("{}: {e:#}", track.display())))),
                 }
             }
         }

@@ -38,7 +38,7 @@ pub fn router(serve: Arc<Serve>) -> Router {
 }
 
 fn fail(status: StatusCode, message: impl Into<String>) -> Response {
-    (status, axum::Json(json!({ "error": message.into() }))).into_response()
+    (status, axum::Json(json!({ "error": crate::app::plain(message.into()) }))).into_response()
 }
 
 fn failed(e: impl std::fmt::Display) -> Response {

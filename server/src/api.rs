@@ -2710,7 +2710,7 @@ impl ManyPlaylists {
 
 /// One playlist an action on several could not do, and why.
 fn refusal(id: &str, e: &ToggleError) -> serde_json::Value {
-    json!({ "id": id, "error": e.to_string() })
+    json!({ "id": id, "error": crate::app::plain(e.to_string()) })
 }
 
 /// Several playlists favourited, or not (`on`), each as its own heart (decision 0023): those done, those not and why.
@@ -4644,7 +4644,7 @@ impl IntoResponse for ApiError {
         if matches!(self.0, ToggleError::Upstream(_)) {
             tracing::error!("{:#}", self.0);
         }
-        let mut body = json!({ "error": self.0.to_string() });
+        let mut body = json!({ "error": crate::app::plain(self.0.to_string()) });
         // The device takes another name (decision 0051).
         if matches!(self.0, ToggleError::NameTaken(_)) {
             body["taken"] = true.into();
