@@ -71,6 +71,12 @@ class StartStop(
     /** Whether a ramp runs: presses wait for its end. */
     val busy: Boolean get() = committed != null
 
+    /** The ramp under way (`in`, `out`; none), where it is (0 still, 1 playing), and a pause's own stop, waiting for
+     *  its ramp's end: what a seek in the middle of one needs (`seek`). */
+    private var running: String? = null
+    private var level = 1f
+    private var stopping: (() -> Unit)? = null
+
     private fun commit(to: Boolean?) {
         if (committed == to) return
         committed = to
@@ -78,8 +84,9 @@ class StartStop(
     }
 
     /** A ramp's direction told to the page (the play button draws it): `out`, `in`, or none at its end. */
-    private fun ramping(dir: String?, ms: Long) {
-        rampListener?.invoke(dir, ms)
+    private fun ramping(dir: String?, ms: Long, full: Long = ms) {
+        running = dir
+        rampListener?.invoke(dir, ms, full)
     }
 
     private fun note(what: String, vararg fields: Pair<String, Any?>) =
@@ -100,9 +107,13 @@ class StartStop(
         else -> { t -> 1 - (1 - t) * (1 - t) }
     }
 
-    /** How much earlier a play starts so it is at full where it left off: the ramp's length at its mean speed. */
-    private fun lead(mode: String): Long =
-        (prefs.startStopMs * if (mode == Prefs.START_STOP_VINYL) LOW + (1f - LOW) * 2f / 3f else 1f).toLong()
+    /** A ramp's mean speed as a share of full: Vinyl's spin-up runs slower than the music, a fade at full speed. */
+    private fun pace(mode: String): Float = if (mode == Prefs.START_STOP_VINYL) LOW + (1f - LOW) * 2f / 3f else 1f
+
+    /** How long a wind-up from [at] (ms into the track) is: as set, but only as long as there is track before it to
+     *  start early on (0.9.7, the owner: a 3 s fade from 1 s in is a 1 s one); none from its very start. */
+    private fun windUp(mode: String, at: Long): Long =
+        if (at < FROM_START_MS) 0L else min(prefs.startStopMs, (at / pace(mode)).toLong())
 
     private fun ramp(from: Float, to: Float, ms: Long, set: (Float) -> Unit, curve: (Float) -> Float, done: (Boolean) -> Unit) {
         val mine = ++token
@@ -111,7 +122,8 @@ class StartStop(
             override fun run() {
                 if (mine != token) return done(false)
                 val t = ((SystemClock.elapsedRealtime() - t0).toFloat() / ms).coerceIn(0f, 1f)
-                set(from + (to - from) * curve(t))
+                level = from + (to - from) * curve(t)
+                set(level)
                 if (t < 1f) main.postDelayed(this, STEP_MS) else done(true)
             }
         }
@@ -139,6 +151,8 @@ class StartStop(
     fun reset() {
         token++
         heldPosition = null
+        stopping = null
+        level = 1f
         if (committed != null) ramping(null, 0)
         commit(null)
         Fader.target = 1f
@@ -156,7 +170,8 @@ class StartStop(
         val m = mode()
         val at = player.currentPosition
         // From a track's start: at once, always.
-        if (m == Prefs.START_STOP_OFF || player.isPlaying || at < FROM_START_MS) {
+        val ms = windUp(m, at)
+        if (m == Prefs.START_STOP_OFF || player.isPlaying || ms <= 0L) {
             reset()
             start()
             return
@@ -165,13 +180,14 @@ class StartStop(
         // Silent before the first sound: no plop.
         set(0f)
         if (grouped()) Fader.snap()
-        // Earlier by the ramp's lead, the position shown where it left off until it is there.
+        // Earlier by the ramp's lead (never before the track's start), the position shown where it left off until it is
+        // there; the page told how long it is of the length set, so its button fills from where that leaves it.
         heldPosition = at
-        player.seekTo((at - lead(m)).coerceAtLeast(0))
+        player.seekTo((at - (ms * pace(m)).toLong()).coerceAtLeast(0))
         commit(true)
-        ramping("in", prefs.startStopMs)
+        ramping("in", ms, prefs.startStopMs)
         start()
-        ramp(0f, 1f, prefs.startStopMs, set, curve(m, down = false)) { whole -> if (whole) reset() }
+        ramp(0f, 1f, ms, set, curve(m, down = false)) { whole -> if (whole) reset() }
     }
 
     /** Pauses or stops ([stop]), winding down first: once what was wound down has been heard. */
@@ -187,6 +203,7 @@ class StartStop(
         // Where it was pressed: shown meanwhile, and where it rests once paused.
         val at = player.currentPosition
         heldPosition = at
+        stopping = stop
         commit(false)
         ramping("out", prefs.startStopMs)
         val mine = token + 1
@@ -201,6 +218,38 @@ class StartStop(
                     reset()
                 }
             }, tail)
+        }
+    }
+
+    /**
+     * A seek ([go]) in the middle of a ramp wins at once, with no gap added and no click (0.9.7, the owner; as the web's
+     * player): during a wind-up (or a skip's wind-down), the jump at once, then speed and volume from where the ramp was
+     * to full over [SETTLE_MS]; during a pause's wind-down, [SILENCE_MS] to silence, paused, resting where it was sent.
+     * Either way the ramp ends now and the position is no longer held. Without a ramp, a seek as ever.
+     */
+    fun seek(go: () -> Unit) {
+        val dir = running
+        if (!busy || dir == null) return go()
+        val m = mode()
+        val set = setter(m)
+        val from = level
+        val stop = stopping
+        heldPosition = null
+        stopping = null
+        ramping(null, 0)
+        commit(null)
+        if (dir == "out" && stop != null) {
+            note("seek", "during" to "pause")
+            ramp(from, 0f, SILENCE_MS, set, { it }) { whole ->
+                if (!whole) return@ramp
+                stop()
+                go()
+                reset()
+            }
+        } else {
+            note("seek", "during" to dir)
+            go()
+            ramp(from, 1f, SETTLE_MS, set, { it }) { whole -> if (whole) reset() }
         }
     }
 
@@ -226,9 +275,10 @@ class StartStop(
     }
 
     companion object {
-        /** Told when a ramp starts (`out`, `in`, with its length) and ends (none): the page's player draws it. */
+        /** Told when a ramp starts (`out`, `in`, with its length and the length set) and ends (none): the page's player
+         *  draws it. */
         @Volatile
-        var rampListener: ((String?, Long) -> Unit)? = null
+        var rampListener: ((String?, Long, Long) -> Unit)? = null
 
         /** The volume's share now (1: none), on the player's volume: `PlayOnLink.applyVolume` multiplies it in. */
         @Volatile
@@ -236,6 +286,10 @@ class StartStop(
 
         /** Perceptual loudness: 0 silent, 1 full, −60 dB at the quiet end and even in decibels between. */
         fun loudness(v: Float): Float = if (v <= 0f) 0f else 10f.pow(3f * (min(1f, v) - 1f))
+
+        /** A seek in a wind-up: speed and volume back to full over this; in a pause's wind-down: silent over this. */
+        private const val SETTLE_MS = 30L
+        private const val SILENCE_MS = 8L
 
         /** A play this near a track's start never ramps (the owner, 2026-10-26). */
         private const val FROM_START_MS = 500L

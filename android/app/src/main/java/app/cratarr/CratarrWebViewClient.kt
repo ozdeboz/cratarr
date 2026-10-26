@@ -66,6 +66,10 @@ class CratarrWebViewClient(
     override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
         if (!request.isForMainFrame) return
         Log.w(TAG, "HTTP ${errorResponse.statusCode} for ${request.url}")
+        // The sign-in page's own answers (0.9.7: a wrong password is 401, a sign-in from another site 403), each a page
+        // that says why: the page's to show, never covered by the app's "cannot reach".
+        val path = request.url.path.orEmpty()
+        if ((path == "/signin" || path == "/signout") && errorResponse.mimeType.orEmpty().startsWith("text/html")) return
         onError("HTTP ${errorResponse.statusCode}")
     }
 

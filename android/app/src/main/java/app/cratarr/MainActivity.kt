@@ -602,6 +602,9 @@ class MainActivity : AppCompatActivity() {
         .put("server", prefs.publicAddress ?: "")
         .put("public", prefs.publicAddress ?: "")
         .put("local", prefs.localAddress ?: "")
+        // The local address refused the sign-in a while ago (0.9.7: its server does not know this session), so the
+        // app goes by the public one meanwhile: the page says so.
+        .put("localRefused", prefs.localAddress?.let { Net.refused(it) } ?: false)
         .put("preferLocal", prefs.preferLocal)
         .put("inUse", prefs.serverUrl ?: "")
         .put("batteryAllowed", getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName))
@@ -624,8 +627,9 @@ class MainActivity : AppCompatActivity() {
         // set yet (an app from before it): null, and the page says its last choice once.
         .put("target", if (prefs.hasTarget) prefs.target else org.json.JSONObject.NULL)
         .put("deviceMusic", DeviceMusic.state(this))
-        // Local mode is there (a folder on, Android's permission given): the switch shows.
-        .put("local", DeviceMusic.on(this))
+        // Local mode is there (a folder on, Android's permission given): the switch shows. `localMode` (0.9.7): as
+        // `local` it overwrote the local address above, and the page never had it.
+        .put("localMode", DeviceMusic.on(this))
         .toString()
 
     /** The kept items' progress (decision 0038), read off the main thread, to the page; changes close together go as one. */

@@ -63,8 +63,9 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
 
     init {
         // A ramp's direction to the page (0.9.6): its play button draws it.
-        StartStop.rampListener = { dir, ms ->
-            send(JSONObject().put("type", "ramp").put("dir", dir ?: JSONObject.NULL).put("ms", ms).toString())
+        // A wind-up shortened near a track's start (0.9.7) says so: `ms` its length, `full` the length set.
+        StartStop.rampListener = { dir, ms, full ->
+            send(JSONObject().put("type", "ramp").put("dir", dir ?: JSONObject.NULL).put("ms", ms).put("full", full).toString())
         }
     }
 
