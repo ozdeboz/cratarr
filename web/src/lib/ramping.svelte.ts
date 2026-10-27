@@ -1,7 +1,7 @@
 /** A start/stop ramp of this device's player under way (lib/localPlayer's Start and stop, or the app's own, which tells
  *  the page): the play/pause button drains its fill top to bottom over a ramp out (the owner, 2026-10-26). `at`: when it
  *  began (a new ramp starts the drain over). */
-export const ramping = $state({ dir: null as 'out' | 'in' | null, ms: 0, at: 0, full: 0, ended: 0 });
+export const ramping = $state({ dir: null as 'out' | 'in' | null, ms: 0, at: 0, full: 0, ended: 0, effect: true });
 /** A tape rewind sounds on this device's player (the page's own, lib/localPlayer, or the app's, as it reports it):
  *  the shown position goes back with it (lib/remote), and it is never a ramp of play or pause (the button's fill). */
 export const rewindNow = $state({ on: false });
@@ -11,7 +11,11 @@ export const tapeDir = $state({ want: 'R' as 'L' | 'R', state: 'forward' as 'for
 
 /** `full`: the ramp's set length, where this one is shorter (a wind-up near the track's start, the owner 2026-10-26:
  *  only as long as there is track before it): the button's fill starts that much of the way. */
-export function rampBegins(dir: 'out' | 'in', ms: number, full = ms) {
+/** `effect`: a Start and stop effect (play, pause, stop, a skip), whose way the play button's fill and the waveform's
+ *  colour follow; not one of the tape's own (a hold's stop before it winds, a turn of the direction knob, the wind-up
+ *  after a wind: the owner, 2026-10-27, only an effect that stops the music greys it). */
+export function rampBegins(dir: 'out' | 'in', ms: number, full = ms, effect = true) {
+  ramping.effect = effect;
   // The player's word for a ramp the press began a moment ago (lib/remote playPause): its length, not a new start.
   const same = ramping.dir === dir && performance.now() - ramping.at < CONFIRM_MS;
   ramping.dir = dir;

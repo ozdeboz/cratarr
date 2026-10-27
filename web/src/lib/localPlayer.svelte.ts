@@ -572,8 +572,9 @@ let lastShown = -1;
 function tick() {
   // Played elsewhere (another of Cratarr's players): this page's own, idle audio says nothing about it.
   if (!audio || local.index < 0 || handed()) return;
-  // A ramp under way has committed to where it goes (lib's Start and stop): that is what shows, everywhere.
-  local.paused = committed ?? audio.paused;
+  // A ramp under way has committed to where it goes (lib's Start and stop): that is what shows, everywhere; the tape's
+  // own stop (quiet) shows playing.
+  local.paused = quietPause ? false : (committed ?? audio.paused);
   const w = where(heldAt ?? audio.currentTime);
   if (w && rewinding) local.position = rewindPos ?? local.position;
   else if (w) {
@@ -989,7 +990,7 @@ function hand(op: string, args: Record<string, unknown> = {}) {
     op === 'queue'
       ? { command: 'play', tracks: args.tracks, index: args.index, position_ms: args.positionMs, ...(args.name ? { name: args.name } : {}) }
       : op === 'seek'
-        ? { command: 'seek', position_ms: args.positionMs }
+        ? { command: 'seek', position_ms: args.positionMs, ...(args.wind ? { wind: true } : {}) }
         : op === 'play'
           ? { command: 'resume' }
           : op === 'sleep'
@@ -1548,12 +1549,16 @@ export function previous() {
 /** Seeks asked of this device's player, counted (lib/remote: a paused position rests where it was pressed until one). */
 export const sought = $state({ n: 0 });
 /** To `secs` into the playing track: within what is loaded, else a fresh stream from there. */
-export function seek(secs: number) {
+/** `wind`: wound there whatever this device's own setting (another device asked it to, over Play On). */
+export function seek(secs: number, wind?: boolean) {
   sought.n++;
+  const winds = wind ?? (prefs.startStop.rewind && prefs.startStop.wind.seekWinds);
   if (handed()) {
+    // Winding there where this device winds seeks (the owner, 2026-10-27: over Play On too): the player is asked to.
+    const wound = winds && !local.paused && Math.abs(secs - local.position) > 2;
     local.position = secs;
     reported = { positionMs: secs * 1000, at: performance.now() };
-    return hand('seek', { positionMs: Math.round(secs * 1000) });
+    return hand('seek', { positionMs: Math.round(secs * 1000), ...(wound ? { wind: true } : {}) });
   }
   if (!audio) return;
   // During a tape's rewind: it ends, and the track plays from there.
@@ -1568,8 +1573,7 @@ export function seek(secs: number) {
   // During a Start and stop ramp the seek wins at once (the owner, 2026-10-26), with no gap added before it.
   if (committed !== null) return void overrideRamp(secs);
   // Seeking winds the tape there where the device asks it (the owner, 2026-10-27): playing, more than a moment away.
-  const ss = prefs.startStop;
-  if (ss.rewind && ss.wind.seekWinds && !audio.paused && Math.abs(secs - (where()?.offset ?? secs)) > 2 && startWind(secs, 1)) return;
+  if (winds && !audio.paused && Math.abs(secs - (where()?.offset ?? secs)) > 2 && startWind(secs, 1)) return;
   jumpTo(secs);
 }
 function jumpTo(secs: number) {
@@ -1769,6 +1773,20 @@ let rampAt = 1;
 /** A turn of the direction knob's own ramp (a tape slows to a stop before it can go the other way, whatever Start and
  *  stop says): as a vinyl, over Start and stop's ramp where that is a vinyl's, else the wind's brake or spin-up. */
 let turnRamp: { mode: 'vinyl'; ms: number } | null = null;
+/** A ramp the tape makes for itself (a hold's stop before it winds, a knob's turn, the wind-up after a wind): not a
+ *  Start and stop effect, so the player still shows playing through it (lib/ramping `effect`). */
+let quiet = false;
+/** The quiet pause under way: shown as playing. */
+let quietPause = false;
+/** Runs `go` quietly (a ramp reads it as it begins). */
+function quietly<T>(go: () => T): T {
+  quiet = true;
+  try {
+    return go();
+  } finally {
+    queueMicrotask(() => (quiet = false));
+  }
+}
 /** Start and stop as a ramp now uses it: a turn's own, else the device's. */
 const ss = (): StartStop => (turnRamp ? { ...prefs.startStop, ...turnRamp } : prefs.startStop);
 /** Each ramp's run; a seek cutting one short (overrideRamp) moves it on, and that ramp's own ending then does nothing. */
@@ -1834,7 +1852,7 @@ async function rampOut(share = 1): Promise<void> {
   // (a raised cosine on the speed, as a wind brakes); a fade's is the ramp's.
   const full = mode === 'vinyl' ? ss().wind.releaseMs : ss().ms;
   const ms = full * share;
-  rampBegins('out', ms, full);
+  rampBegins('out', ms, full, !quiet);
   const at = ramping.at;
   try {
     await ramp(levelAt(mode, share), mode === 'fade' ? 0 : RAMP_LOW, ms, rampSet(mode), mode === 'fade' ? easeInOut : brakeCurve);
@@ -1877,7 +1895,7 @@ function rampIn(early?: { ms: number; lead: number }) {
   }
   const set = rampSet(mode);
   set(mode === 'fade' ? 0 : RAMP_LOW);
-  rampBegins('in', ms, full);
+  rampBegins('in', ms, full, !quiet);
   void audio.play().catch(refused);
   const mine = ++run;
   void ramp(mode === 'fade' ? 0 : RAMP_LOW, 1, ms, set, mode === 'fade' ? easeInOut : easeOut).then(() => {
@@ -1899,7 +1917,8 @@ function turnUp() {
   local.paused = false;
   heldAt = null;
   const ms = ss().ms * (1 - share);
-  rampBegins('in', ms, ss().ms);
+  rampBegins('in', ms, ss().ms, !quietPause);
+  quietPause = false;
   const mine = ++run;
   void ramp(levelAt(mode, share), 1, ms, rampSet(mode), mode === 'fade' ? easeInOut : easeOut).then(() => {
     if (mine !== run) return;
@@ -1930,7 +1949,8 @@ async function pauseRamped() {
   }
   const share = turning ? Math.max(0, Math.min(1, rampAt)) : 1;
   committed = true;
-  local.paused = true;
+  quietPause = quiet;
+  local.paused = !quiet;
   // The moment it was pressed: the counter stays there while the end sounds, and it rests there after.
   if (!turning || heldAt === null) heldAt = audio.currentTime;
   const mine = ++run;
@@ -1944,6 +1964,7 @@ async function pauseRamped() {
       heldAt = null;
       unramp();
       committed = null;
+      quietPause = false;
     }
   }
 }
@@ -2196,15 +2217,18 @@ function playOnAt(index: number, secs: number) {
   void fresh(index, secs, false);
   // A turn's own ramp kept for the wind-up once the stream is in.
   const turn = turnRamp;
+  const still = quiet;
   audio.addEventListener(
     'canplay',
     () => {
       if (gen !== generation) return;
       turnRamp = turn;
+      quiet = still;
       try {
         rampIn();
       } finally {
         turnRamp = null;
+        quiet = false;
       }
     },
     { once: true },
@@ -2316,7 +2340,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       return turned(() => playOnAt(index, at));
     }
     if (dir > 0 && pos >= end - 0.5) return jump(index + 1);
-    playOnAt(index, index === seg.index ? pos : Math.max(0, Math.min(pos, end - 1.5)));
+    quietly(() => playOnAt(index, index === seg.index ? pos : Math.max(0, Math.min(pos, end - 1.5))));
   };
   // A flown one braked: the track's own player takes over where it got to, at the speed it got down to, and comes down
   // to 1× (the owner, 2026-10-27: no stop on the way); its stream there first where it is not loaded yet, the wind
@@ -2459,7 +2483,7 @@ export async function windHold(dir: 'back' | 'forward') {
   if (h.dir > 0 && !audio.paused && committed === null && tapeDir.want === 'R') return fly(h);
   // Fetched now, loading while the pause winds down (it rests where it was pressed: the wind's start is known now).
   const armed = armWind(h.dir);
-  if (!audio.paused) await pauseRamped();
+  if (!audio.paused) await quietly(() => pauseRamped());
   if (holding !== h) return disarm(armed);
   if (h.released) {
     disarm(armed);
@@ -2638,9 +2662,11 @@ function brakeBackwards(after: 'play' | 'pause') {
 function turned<T>(go: () => T): T {
   const s = prefs.startStop;
   turnRamp = { mode: 'vinyl', ms: s.mode === 'vinyl' ? s.ms : Math.max(s.wind.attackMs, s.wind.releaseMs) };
+  quiet = true;
   try {
     return go();
   } finally {
+    queueMicrotask(() => (quiet = false));
     // A ramp reads it as it begins; one that runs on keeps what it began with.
     queueMicrotask(() => (turnRamp = null));
   }
@@ -2775,7 +2801,7 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
       previous();
       return false;
     case 'seek':
-      if (typeof m.position_ms === 'number') seek(m.position_ms / 1000);
+      if (typeof m.position_ms === 'number') seek(m.position_ms / 1000, m.wind === true ? true : undefined);
       return false;
     case 'repeat':
       if (m.mode === 'off' || m.mode === 'one' || m.mode === 'all') setRepeat(m.mode);
