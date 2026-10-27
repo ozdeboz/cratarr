@@ -148,7 +148,7 @@ class PlayerService : MediaSessionService() {
         // headset's or the system's shuffle shuffles what is to come once, and the player never plays shuffled, so it
         // says it is not. Cratarr's queue is shuffled by Cratarr (Play On's `shuffle`, which sends the new order back);
         // local mode's here, the playing track staying where it is.
-        startStop = StartStop(player, prefs, { link?.applyVolume() }, { sync.leader != null }, { sync.bufferMs }, ::startStopChanged) { what, fields ->
+        startStop = StartStop(this, player, prefs, { link?.applyVolume() }, { sync.leader != null }, { sync.bufferMs }, ::startStopChanged, ::rewindUrl) { what, fields ->
             LinkLog.add(this, "info", "startstop", what, *fields)
         }
         sessionPlayer = object : ForwardingPlayer(player) {
@@ -195,7 +195,8 @@ class PlayerService : MediaSessionService() {
             override fun seekToPreviousMediaItem() = startStop.skip { super.seekToPreviousMediaItem() }
 
             override fun seekToPrevious() {
-                startStop.skip { if (!Repeat.previous(this@PlayerService, player)) super.seekToPrevious() }
+                val restart = { startStop.skip { if (!Repeat.previous(this@PlayerService, player)) super.seekToPrevious() } }
+                if (!startStop.rewind(RESTART_AFTER_MS, restart)) restart()
             }
 
             override fun setShuffleModeEnabled(shuffleModeEnabled: Boolean) {
@@ -571,6 +572,7 @@ class PlayerService : MediaSessionService() {
         link?.stop()
         link = null
         session?.release()
+        startStop.release()
         player.release()
         remote.release()
         session = null
@@ -627,6 +629,15 @@ class PlayerService : MediaSessionService() {
         return found.buildUpon()
             .setMediaMetadata(item.mediaMetadata.buildUpon().setArtworkUri(Uri.parse("$server/api/cover/${item.mediaId}")).build())
             .build()
+    }
+
+    /** Tape rewind's clip of the playing track (0.9.9): Cratarr's, from [fromMs] back to its start in [ms]; none for a
+     *  track of the device's own or a Bandcamp preview, which Cratarr keeps no file of. */
+    private fun rewindUrl(fromMs: Long, ms: Long): String? {
+        val item = player.currentMediaItem ?: return null
+        val server = prefs.serverUrl?.trimEnd('/') ?: return null
+        if (DeviceMusic.located(item) != null || item.mediaId.startsWith("bandcamp/")) return null
+        return "$server/api/stream/${item.mediaId}/rewind?from_ms=$fromMs&ms=$ms"
     }
 
     /** Local mode's shuffle, once: what is to come after the playing track, mixed. */

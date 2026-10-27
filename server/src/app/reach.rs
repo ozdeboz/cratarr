@@ -44,6 +44,8 @@ pub fn name_of(url: &reqwest::Url) -> Option<&'static str> {
         "theaudiodb"
     } else if is("wikidata.org") || is("wikimedia.org") || is("wikipedia.org") {
         "wikimedia"
+    } else if is("spotify.com") || is("scdn.co") || is("spotifycdn.com") {
+        "spotify"
     } else {
         return None;
     })
@@ -60,6 +62,7 @@ pub fn label(name: &str) -> &'static str {
         "bandcamp" => "Bandcamp",
         "theaudiodb" => "TheAudioDB",
         "wikimedia" => "Wikimedia",
+        "spotify" => "Spotify",
         _ => "A connection",
     }
 }

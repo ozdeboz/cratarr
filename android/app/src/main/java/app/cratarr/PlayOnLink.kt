@@ -445,7 +445,10 @@ class PlayOnLink(
                 }
             }
             "next" -> service.startStop.skip { p.seekToNextMediaItem() }
-            "previous" -> service.startStop.skip { if (!Repeat.previous(service, p)) p.seekToPrevious() }
+            "previous" -> {
+                val restart = { service.startStop.skip { if (!Repeat.previous(service, p)) p.seekToPrevious() } }
+                if (!service.startStop.rewind(PlayerService.RESTART_AFTER_MS, restart)) restart()
+            }
             "repeat" -> Repeat.set(service, p, m.optString("mode"), service::located)
             "sleep" -> Sleep.set(service, m, "at_ms", "end_of_track")
             // Sync play (decision 0037): the group this player plays in, by its leader (none: alone).

@@ -38,6 +38,7 @@ mod playlist_merge;
 mod ports;
 mod playlists;
 mod retag;
+mod rewind;
 mod search;
 mod serve;
 mod settings;

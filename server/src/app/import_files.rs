@@ -7,6 +7,8 @@
 //!   track, date).
 //! - **Playlists:** `.m3u` and `.m3u8` (each entry's `#EXTINF` "Artist - Title", else its path's folders and file name),
 //!   `.xspf` (creator, title, album, length), and Exportify's CSV of a Spotify playlist.
+//! - **Spotify's library** (decision 0073): the account data zip's `YourLibrary.json` and `Playlist*.json` (or those
+//!   files alone), as the account's Spotify lists (`app::spotify::export`), beside its streaming history.
 
 use std::io::Read as _;
 use std::path::Path;
@@ -44,6 +46,8 @@ pub enum Read {
     History { from: &'static str, listens: Vec<Listen> },
     /// A playlist, with the name it gives itself (else its file's).
     Playlist { name: String, entries: Vec<Entry> },
+    /// Spotify's data export: its streaming history's listens, and its library as the account's Spotify lists.
+    Spotify { listens: Vec<Listen>, library: Option<super::spotify::Lists> },
 }
 
 /// What a file brought (or would bring): listens into the history, or a playlist (its name, its undo token).
@@ -52,6 +56,8 @@ pub enum Read {
 pub enum Brought {
     History { from: &'static str, tally: Tally },
     Playlist { name: String, tally: Tally, undo: Option<String> },
+    /// Spotify's data export (0073): the listens (none: the file held none, or the history is off) and the lists.
+    Spotify { history: Option<Tally>, library: Option<super::spotify::Brought> },
 }
 
 /// The history's context for listens from a file of `from`.
@@ -69,24 +75,28 @@ pub async fn import(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, acc
     let (s, account2) = (serve.clone(), account.to_string());
     let songs = tokio::task::spawn_blocking(move || Matcher::read(&Path::new(&dir).join("library.sqlite"))).await??;
     match read {
+        Read::Spotify { listens, library } => {
+            // Its play history off (0.9.5): the library still, the listens not.
+            let history = if listens.is_empty() || (!preview && !serve.userdata.tracking(account)) {
+                None
+            } else {
+                Some(tokio::task::spawn_blocking(move || into_history(&s, &songs, &account2, &context("spotify"), "Spotify", &listened("spotify", &listens), preview)).await??)
+            };
+            let library = match library {
+                Some(lists) => {
+                    let (account, file) = (account.to_string(), name.to_string());
+                    Some(tokio::task::spawn_blocking(move || super::spotify::take_export(&account, &file, lists, preview)).await??)
+                }
+                None => None,
+            };
+            Ok(Brought::Spotify { history, library })
+        }
         // Its play history off (0.9.5): no listens are brought in either.
         Read::History { .. } if !preview && !serve.userdata.tracking(account) => {
             anyhow::bail!("Play history is off for this account (Settings › Tracking).")
         }
         Read::History { from, listens } => {
-            let tally = tokio::task::spawn_blocking(move || {
-                let ctx = context(from);
-                let items: Vec<Listened> = listens
-                    .iter()
-                    .map(|l| Listened {
-                        track: Track { recording: l.recording.as_deref(), artist: &l.artist, title: &l.title, album: l.album.as_deref(), length_secs: l.length_secs },
-                        at: l.at,
-                        event: format!("{ctx}:{}:{}:{}", l.at, key(&l.artist), key(&l.title)),
-                    })
-                    .collect();
-                into_history(&s, &songs, &account2, &ctx, from_name(from), &items, preview)
-            })
-            .await??;
+            let tally = tokio::task::spawn_blocking(move || into_history(&s, &songs, &account2, &context(from), from_name(from), &listened(from, &listens), preview)).await??;
             Ok(Brought::History { from, tally })
         }
         Read::Playlist { name, entries } => {
@@ -117,6 +127,19 @@ pub async fn import(app: &Arc<super::App>, serve: &Arc<crate::serve::Serve>, acc
     }
 }
 
+/// Listens as the history takes them, each with its event id (the same listen from a file again is the same).
+fn listened<'a>(from: &str, listens: &'a [Listen]) -> Vec<Listened<'a>> {
+    let ctx = context(from);
+    listens
+        .iter()
+        .map(|l| Listened {
+            track: Track { recording: l.recording.as_deref(), artist: &l.artist, title: &l.title, album: l.album.as_deref(), length_secs: l.length_secs },
+            at: l.at,
+            event: format!("{ctx}:{}:{}:{}", l.at, key(&l.artist), key(&l.title)),
+        })
+        .collect()
+}
+
 fn from_name(from: &str) -> &'static str {
     match from {
         "spotify" => "Spotify",
@@ -131,6 +154,9 @@ pub fn read(name: &str, bytes: &[u8]) -> Result<Read> {
     let stem = name.rsplit(['/', '\\']).next().unwrap_or(name);
     let stem = stem.rsplit_once('.').map_or(stem, |(s, _)| s).to_string();
     if lower.ends_with(".zip") || bytes.starts_with(b"PK\x03\x04") {
+        if let Some(spotify) = spotify_zip(bytes)? {
+            return Ok(spotify);
+        }
         return Ok(Read::History { from: "listenbrainz", listens: listenbrainz_zip(bytes)? });
     }
     let text = String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes)).into_owned();
@@ -160,6 +186,12 @@ pub fn read(name: &str, bytes: &[u8]) -> Result<Read> {
             return Ok(Read::History { from: "spotify", listens: all.iter().filter_map(spotify_account).collect() });
         }
         return Ok(Read::History { from: "listenbrainz", listens: all.iter().filter_map(listenbrainz).collect() });
+    }
+    if t.starts_with('{')
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(t)
+        && super::spotify::export::looks_like(&v)
+    {
+        return Ok(Read::Spotify { listens: Vec::new(), library: super::spotify::export::lists(&[v]) });
     }
     if t.starts_with('{') {
         // JSON lines: ListenBrainz's.
@@ -221,6 +253,54 @@ fn listenbrainz_zip(bytes: &[u8]) -> Result<Vec<Listen>> {
         }
     }
     Ok(out)
+}
+
+/// A zip's files, unpacked: (name, content).
+fn unzip(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>> {
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).context("not a zip file Cratarr can read")?;
+    let mut out = Vec::new();
+    for i in 0..zip.len() {
+        let mut f = zip.by_index_raw(i)?;
+        let name = f.name().to_string();
+        let deflated = f.compression() == zip::CompressionMethod::DEFLATE;
+        let mut raw = Vec::new();
+        f.read_to_end(&mut raw)?;
+        let data = if deflated {
+            let mut d = Vec::new();
+            flate2::read::DeflateDecoder::new(&raw[..]).read_to_end(&mut d).context("a file in the zip could not be unpacked")?;
+            d
+        } else {
+            raw
+        };
+        out.push((name, data));
+    }
+    Ok(out)
+}
+
+/// Spotify's data export as a zip (0073): its library files and its streaming history; `None` for another zip.
+fn spotify_zip(bytes: &[u8]) -> Result<Option<Read>> {
+    let files = unzip(bytes)?;
+    let base = |n: &str| n.rsplit(['/', '\\']).next().unwrap_or(n).to_lowercase();
+    let history = |n: &str| {
+        let b = base(n);
+        b.ends_with(".json") && (b.starts_with("streaminghistory") || b.starts_with("streaming_history") || b.starts_with("endsong"))
+    };
+    if !files.iter().any(|(n, _)| super::spotify::export::is_library(n) || history(n)) {
+        return Ok(None);
+    }
+    let (mut listens, mut library) = (Vec::new(), Vec::new());
+    for (name, data) in &files {
+        let text = String::from_utf8_lossy(data.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(data)).into_owned();
+        if super::spotify::export::is_library(name) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                library.push(v);
+            }
+        } else if history(name) {
+            let all: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap_or_default();
+            listens.extend(all.iter().filter_map(|v| if v.get("ts").is_some() { spotify_extended(v) } else { spotify_account(v) }));
+        }
+    }
+    Ok(Some(Read::Spotify { listens, library: super::spotify::export::lists(&library) }))
 }
 
 /// Spotify counts a play from 30 seconds on.

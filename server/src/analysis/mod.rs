@@ -28,9 +28,10 @@ use serde::{Deserialize, Serialize};
 use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::probe::Hint;
-use symphonia::core::formats::{FormatOptions, FormatReader, TrackType};
+use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
 use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
+use symphonia::core::units::Timestamp;
 
 /// The algorithm's version: a result of another version is worked out again.
 pub const VERSION: u32 = 1;
@@ -330,6 +331,69 @@ pub fn walk(path: &Path, mut each: impl FnMut(&[Vec<f32>], u32, usize)) -> Resul
         bail!("no sound in {}", path.display());
     }
     Ok(w)
+}
+
+/// A file's sound read from any frame (0.9.9, Tape rewind): opened as the analysis opens it (an MP3 behind a large
+/// ID3v2 tag too), moved to a frame, then decoded a packet at a time.
+pub(crate) struct Reading(Opened);
+
+impl Reading {
+    pub(crate) fn open(path: &Path) -> Result<Self> {
+        open(path).map(Self)
+    }
+
+    pub(crate) fn rate(&self) -> u32 {
+        self.0.rate
+    }
+
+    pub(crate) fn channels(&self) -> usize {
+        self.0.channels
+    }
+
+    /// Moves to the packet holding `frame`; returns the frame that packet starts at, where decoding continues.
+    pub(crate) fn seek(&mut self, frame: u64) -> Result<u64> {
+        let o = &mut self.0;
+        // Packets' times are in the track's time base; most are 1 / the rate.
+        let (numer, denom) = o.time_base.map_or((1, u64::from(o.rate)), |(n, d)| (u64::from(n), u64::from(d)));
+        let ts = frame * denom / (numer * u64::from(o.rate));
+        let to = o.reader.seek(SeekMode::Accurate, SeekTo::Timestamp { ts: Timestamp::from(ts as i64), track_id: o.track })?;
+        o.decoder.reset();
+        Ok(u64::try_from(to.actual_ts.get()).unwrap_or(0) * numer * u64::from(o.rate) / denom)
+    }
+
+    /// The next packet's sound (planar, -1..1) in `planes`; false at the end. A damaged packet is skipped, as the
+    /// analysis skips it.
+    pub(crate) fn next(&mut self, planes: &mut Vec<Vec<f32>>) -> Result<bool> {
+        let o = &mut self.0;
+        loop {
+            let packet = match o.reader.next_packet() {
+                Ok(Some(p)) => p,
+                Ok(None) => return Ok(false),
+                Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(false),
+                Err(e) => return Err(anyhow!("reading: {e}")),
+            };
+            if packet.track_id != o.track {
+                continue;
+            }
+            let decoded = match o.decoder.decode(&packet) {
+                Ok(d) => d,
+                Err(SymphoniaError::DecodeError(_)) => continue,
+                Err(e) => return Err(anyhow!("decoding: {e}")),
+            };
+            let n = decoded.frames();
+            if n == 0 {
+                continue;
+            }
+            decoded.copy_to_vecs_planar::<f32>(planes);
+            if planes.len() != o.channels {
+                bail!("the channel count changed mid-stream");
+            }
+            for p in planes.iter_mut() {
+                p.truncate(n);
+            }
+            return Ok(true);
+        }
+    }
 }
 
 /// Whether a track of these genres is counted slow.
