@@ -212,21 +212,21 @@
     void frame;
     return draw(false);
   });
-  const ghost = $derived.by(() => {
+  /** The track as made: the base, in the unplayed tint, always (the owner, 2026-10-27). */
+  const made = $derived.by(() => {
     void frame;
-    return scale.some((v) => v < 0.97) ? draw(true) : '';
+    return draw(true);
   });
 </script>
 
 <div class="wave" class:paused bind:clientWidth={width} bind:clientHeight={height} aria-hidden="true">
-  <!-- Levelled: the track as made in the unplayed tint, its tips beyond what the playing colour reaches that tint too
-       (the owner, 2026-10-27); the unplayed layer as heard then not drawn over it (no darker double tint). -->
-  {#if ghost}<svg class="ghost" viewBox="0 0 {n} 100" preserveAspectRatio="none"><path d={ghost} /></svg>{/if}
-  {#each ghost ? [true] : [false, true] as played (played)}
-    <svg class:played viewBox="0 0 {n} 100" preserveAspectRatio="none" style:clip-path={played ? `inset(0 ${(1 - done) * 100}% 0 0)` : undefined}>
-      <path {d} />
-    </svg>
-  {/each}
+  <!-- The track as made, in the unplayed tint; over it, as far as it has played, the track as heard in the playing
+       colour (the owner, 2026-10-27): levelled, what the colour does not reach keeps the unplayed tint, and levelling
+       switched off the colour grows into it while those tips shrink to nothing; ahead of the playhead it never moves. -->
+  <svg viewBox="0 0 {n} 100" preserveAspectRatio="none"><path d={made} /></svg>
+  <svg class="played" viewBox="0 0 {n} 100" preserveAspectRatio="none" style:clip-path={`inset(0 ${(1 - done) * 100}% 0 0)`}>
+    <path {d} />
+  </svg>
   {#if now !== null}<span class="now" style:left="{Math.min(1, Math.max(0, now)) * 100}%"></span>{/if}
 </div>
 
@@ -242,11 +242,6 @@
     inset: 0;
     width: 100%;
     height: 100%;
-    fill: color-mix(in srgb, var(--text) 22%, transparent);
-  }
-
-  /* The track as made, behind the track as heard: the unplayed tint, so what levelling took off reads as unplayed. */
-  svg.ghost {
     fill: color-mix(in srgb, var(--text) 22%, transparent);
   }
 
