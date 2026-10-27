@@ -2856,6 +2856,9 @@ struct WindAsk {
     /// `1`: the wind's plan alone, as JSON, no sound (a page's player cannot read the stream's headers).
     #[serde(default)]
     map: Option<u8>,
+    /// `1` with `fit_ms`: a flying wind to a point (`wind::Fit::fly`), its rate resting on the track's own speed.
+    #[serde(default)]
+    fly: Option<u8>,
 }
 
 /// Winding (decision 0074): the track from `from_ms` backwards or forwards at a constant speed, as 16-bit WAV made as
@@ -2891,7 +2894,9 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
         _ => return refused("dir is back or forward."),
     };
     let fit = match (q.fit_ms, q.attack_ms, q.release_ms, q.piece_ms) {
-        (Some(ms), attack, release, piece) => Some(Fit { ms, attack_ms: attack.unwrap_or(0), release_ms: release.unwrap_or(0), piece_ms: piece.unwrap_or(350) }),
+        (Some(ms), attack, release, piece) => {
+            Some(Fit { ms, attack_ms: attack.unwrap_or(0), release_ms: release.unwrap_or(0), piece_ms: piece.unwrap_or(350), fly: q.fly == Some(1) })
+        }
         (None, ..) => None,
     };
     let accel = q.accel_s.filter(|p| p.is_finite() && *p > 0.0).map(|p| crate::wind::Accel { period_s: p.clamp(0.2, 30.0), max: q.max.filter(|m| m.is_finite()).unwrap_or(64.0).clamp(1.0, 64.0) });

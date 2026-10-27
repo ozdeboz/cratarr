@@ -18,13 +18,16 @@ pub enum Dir {
     Forward,
 }
 
-/// A condensed wind: its wall length and the player's envelope on it (milliseconds), and the pieces' length.
+/// A condensed wind: its wall length and the player's envelope on it (milliseconds), and the pieces' length. `fly`:
+/// the player's rate rests on a floor where the wind sounds at the track's own speed (1 / its speed), so it takes over
+/// from the track and hands back to it moving (0.9.14, the owner: a seek forward need not stop first).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Fit {
     pub ms: u64,
     pub attack_ms: u64,
     pub release_ms: u64,
     pub piece_ms: u64,
+    pub fly: bool,
 }
 
 /// What a player asks.
@@ -195,15 +198,26 @@ impl Wind {
         let d = (fit.ms.clamp(SHORTEST_FIT_MS, LONGEST_FIT_MS) as f64 * per_ms) as usize;
         let (a, r) = ((fit.attack_ms as f64 * per_ms) as usize, (fit.release_ms as f64 * per_ms) as usize);
         // The stream the player consumes over its wall length, its envelope's area.
-        let clip: f64 = (0..d).map(|i| envelope(i, d, a, r)).sum();
+        let area: f64 = (0..d).map(|i| envelope(i, d, a, r)).sum();
+        // Flying: the envelope on its floor f (the track's own speed, `k` track frames a stream frame, over the wind's
+        // `v`): f·D + (1 − f)·area. Only where it winds faster than the track plays and further than it would play.
+        let k = f64::from(rate) / f64::from(out_rate);
+        let fly = fit.fly && v > k && distance > k * d as f64 && area > 0.0;
+        let clip = if fly { k / v * d as f64 + (1.0 - k / v) * area } else { area };
         w.frames = clip.round().max(1.0) as usize;
-        let n = w.frames;
-        if v * n as f64 >= distance {
-            v = distance / n as f64;
+        if v * w.frames as f64 >= distance {
+            // Not cut: slower than asked, just fast enough. Flying, the speed whose stream on its floor is the way:
+            // distance = k·D + (v − k)·area.
+            v = if fly { k + (distance - k * d as f64) / area } else { distance / w.frames as f64 };
             w.v = v;
+            if fly {
+                w.frames = (distance / v).round().max(1.0) as usize;
+            }
+            let n = w.frames;
             w.pieces = vec![Piece { from: 0, to: n, top: x, fade_in: None, fade_out: None, own: (0, n) }];
             return Ok(w);
         }
+        let n = w.frames;
         // Cut: pieces of the clip spread evenly over the way, the first from X, the last ending on T.
         let piece = (fit.piece_ms as f64 * per_ms).max(1.0);
         let k = ((n as f64 / piece).round() as usize).max(2);
@@ -500,7 +514,7 @@ mod tests {
 
     #[test]
     fn a_tap_fits_its_length_with_the_players_envelope() {
-        let fit = Fit { ms: 2_000, attack_ms: 300, release_ms: 200, piece_ms: 350 };
+        let fit = Fit { ms: 2_000, attack_ms: 300, release_ms: 200, piece_ms: 350, fly: false };
         // Three minutes back: the stream is the envelope's area (2 s less half of 0.5 s), cut into pieces ending on 0:00.
         let w = Wind::new(44_100, 2, Some(240_000), Ask { fit: Some(fit), ..ask(Dir::Back, 180_000, 6.0) }).unwrap();
         assert!((w.frames as f64 / 44_100.0 - 1.75).abs() < 0.01, "{}", w.frames);
@@ -516,6 +530,30 @@ mod tests {
         let short = Fit { ms: 400, ..fit };
         let w = Wind::new(44_100, 2, Some(240_000), Ask { fit: Some(short), ..ask(Dir::Back, 180_000, 6.0) }).unwrap();
         assert!(w.frames < 44_100 / 5, "{}", w.frames);
+    }
+
+    #[test]
+    fn a_flying_tap_rests_on_the_tracks_own_speed() {
+        let fit = Fit { ms: 2_000, attack_ms: 300, release_ms: 200, piece_ms: 350, fly: true };
+        // A minute on at 16×: cut, the stream the envelope on its floor of 1/16 (2 s / 16 + 15/16 of 1.75 s).
+        let w = Wind::new(44_100, 2, Some(240_000), Ask { to_ms: Some(70_000), fit: Some(fit), ..ask(Dir::Forward, 10_000, 16.0) }).unwrap();
+        assert!((w.frames as f64 / 44_100.0 - (2.0 / 16.0 + 15.0 / 16.0 * 1.75)).abs() < 0.01, "{}", w.frames);
+        assert!(w.pieces.len() > 1);
+        assert!((w.speed() - 16.0).abs() < 1e-9);
+        // 20 s on: not cut; the speed whose stream on its floor (1/v) covers the way: 1 + (20 − 2) / 1.75.
+        let w = Wind::new(44_100, 2, Some(240_000), Ask { to_ms: Some(30_000), fit: Some(fit), ..ask(Dir::Forward, 10_000, 16.0) }).unwrap();
+        assert_eq!(w.pieces.len(), 1);
+        let v = 1.0 + 18.0 / 1.75;
+        assert!((w.speed() - v).abs() < 0.01, "{}", w.speed());
+        let floor = 1.0 / w.speed();
+        let consumed = 2.0 * floor + (1.0 - floor) * 1.75;
+        assert!((w.frames as f64 / 44_100.0 - consumed).abs() < 0.01, "{} {consumed}", w.frames);
+        let map = w.map();
+        assert_eq!(map[0], (0, 10_000));
+        assert!(map.last().unwrap().1.abs_diff(30_000) <= 2, "{map:?}");
+        // Without `fly` nothing changes: as before.
+        let plain = Wind::new(44_100, 2, Some(240_000), Ask { to_ms: Some(30_000), fit: Some(Fit { fly: false, ..fit }), ..ask(Dir::Forward, 10_000, 16.0) }).unwrap();
+        assert!((plain.speed() - 20.0 / 1.75).abs() < 0.01, "{}", plain.speed());
     }
 
     #[test]
