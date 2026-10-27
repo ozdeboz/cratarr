@@ -3,13 +3,16 @@
   // playlist, the panel's ⋮, or the ⋮ for the ticked ones (one or several). A sheet as Finamp's track menu: the
   // playlist on its card (a mosaic of its first albums' covers; for several, their covers and "3 playlists"), Play,
   // Shuffle, Play next and Add to queue as the large actions (several: one playlist after another, each track once),
-  // then View, the favourite, Pin, Export… and Sync… (they show the panel on that tab), Spoken as… and Rename (one
-  // playlist only), and Delete (one Undo for all), each done inside the sheet. Since several users (decision 0051): one's
-  // own playlist can be shared with the other users; another user's shared one shows whose it is, and is copied rather
-  // than changed (nor repaired); Sync… is the administrators'.
+  // then View, the favourite, Pin, Download once and Sync to this device (in the app: all their tracks, each once; each
+  // of them), Export… and Sync… (they show the panel on that tab), Spoken as… and Rename (one playlist only), and Delete
+  // (one Undo for all), each done inside the sheet. Since several users (decision 0051): one's own playlist can be
+  // shared with the other users; another user's shared one shows whose it is, and is copied rather than changed (nor
+  // repaired); Sync… is the administrators'. Ticked with others' (the owner, 2026-10-27: what one has, several have):
+  // Copy to my playlists copies the others' (one Undo), Repair…, Sync… and Delete take one's own.
   // Success shows where it happens (the header, the list); what can be undone says so in a toast, to offer Undo
   // (decision 0026).
-  import { batchDelete, missingCall } from './api';
+  import { batchDelete, batchRows, missingCall, playlistRows, type PlaylistRow } from './api';
+  import { inApp } from './app.svelte';
   import { trackSteps } from './progress.svelte';
   import { linkTo, share } from './share';
   import { untrack } from 'svelte';
@@ -50,10 +53,10 @@
     onclose: () => void;
     onrenamed?: (from: string, to: string) => void;
     ondeleted?: (id: string) => void;
-    /** Its tracks onto the phone (the app's Downloads); given only in the app, for one playlist whose rows are known. */
-    /** Its tracks, for Download once (one playlist, in the app). */
+    /** Its tracks, for Download once (in the app, by an opener that has its rows: one playlist viewed); else asked for. */
     downloadable?: Downloadable[] | null;
-    /** The server its tracks are kept from (Keep on this device, decision 0038): given in the app, for one playlist. */
+    /** The server its tracks are kept from (Sync to this device, decision 0038), given with `downloadable`; else as the
+     *  rows asked for say. */
     keepFrom?: string | null;
   } = $props();
 
@@ -111,9 +114,9 @@
   }
 
   /** View, Export… and Sync…: the panel shows these playlists, on that tab (decision 0025). */
-  function viewTab(tab: Tab) {
-    if (tab === 'tracks') viewSelection([...ids]);
-    else openTab([...ids], tab);
+  function viewTab(tab: Tab, which = ids) {
+    if (tab === 'tracks') viewSelection([...which]);
+    else openTab([...which], tab);
     onclose();
   }
   let nameField = $state('');
@@ -154,6 +157,55 @@
 
   // Another user's among them: only its owner changes it.
   const others = $derived(playlists.some((x) => x.mine === false));
+  /** One's own of them (Repair…, Sync…, Delete) and the others' (Copy to my playlists). */
+  const own = $derived(playlists.filter((x) => x.mine !== false));
+  const theirs = $derived(playlists.filter((x) => x.mine === false));
+  const ownIds = $derived(own.map((x) => x.id));
+
+  // In the app, where the opener has not their rows (several, the Playlists page): asked for once (one call where the
+  // server has it, a5 0.9.4), for Download once (all their tracks, each once) and Sync to this device (each from its
+  // own server).
+  let asked = $state<{ id: string; source: string; rows: PlaylistRow[] }[] | null>(null);
+  const idsKey = $derived(ids.join('\n'));
+  $effect(() => {
+    if (!inApp || downloadable) return;
+    const want = idsKey.split('\n');
+    const from = prefs.source || undefined;
+    let gone = false;
+    batchRows(want, from)
+      .then((r) => r.playlists.flatMap((x) => ('rows' in x ? [x] : [])))
+      .catch((e) => {
+        if (!missingCall(e)) throw e;
+        return Promise.all(want.map((id) => playlistRows(id, from).then((x) => ({ id, ...x }))));
+      })
+      .then(
+        (l) => void (!gone && (asked = l)),
+        () => {},
+      );
+    return () => (gone = true);
+  });
+  const tracksToGet = $derived.by((): Downloadable[] | null => {
+    if (downloadable) return downloadable;
+    if (!asked) return null;
+    const seen = new Set<string>();
+    return asked.flatMap((p) =>
+      p.rows.flatMap((r) => {
+        const k = `${p.source}/${r.id}`;
+        if (!r.id || r.missing || seen.has(k)) return [];
+        seen.add(k);
+        return [{ source: p.source, id: r.id, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: r.album_id ?? null }];
+      }),
+    );
+  });
+  /** Each playlist and the server it is kept from. */
+  const keepable = $derived(
+    !inApp
+      ? []
+      : one && keepFrom
+        ? [{ p: one, from: keepFrom }]
+        : (asked ?? []).flatMap((a) => playlists.filter((p) => p.id === a.id).map((p) => ({ p, from: a.source }))),
+  );
+  const allKept = $derived(keepable.length > 0 && keepable.every((k) => isKept('playlist', k.from, k.p.id)));
 
   // Shared with the other users: every one of them, ticked several too (the owner, 2026-10-27: it was one's alone).
   const shareable = $derived(!others && playlists.every((x) => x.shared !== undefined));
@@ -169,12 +221,18 @@
     }
   }
 
-  async function copy(id: string) {
+  /** The others' ticked ones into one's own playlists, one Undo for them all. */
+  async function copy(list: string[]) {
     if (working) return;
     working = true;
+    const made: string[] = [];
+    const tokens: (string | null)[] = [];
     try {
-      const { playlist, undo } = await copyPlaylist(id);
-      withUndo(`Copied to ${playlist}.`, [undo], { after: (undone) => (undone ? followDelete(playlist) : followCreate(playlist)) });
+      for (const id of list) {
+        const { playlist, undo } = await copyPlaylist(id);
+        made.push(playlist);
+        tokens.push(undo);
+      }
       onclose();
     } catch (e) {
       fail(e, 'Something went wrong');
@@ -182,6 +240,10 @@
       working = false;
       refresh();
     }
+    if (!made.length) return;
+    withUndo(made.length === 1 ? `Copied to ${made[0]}.` : `Copied ${made.length} playlists.`, tokens, {
+      after: (undone) => made.forEach(undone ? followDelete : followCreate),
+    });
   }
 
   function pin() {
@@ -210,7 +272,7 @@
   async function remove() {
     if (working) return;
     working = true;
-    const list = playlists.map((x) => ({ id: x.id, name: x.name }));
+    const list = own.map((x) => ({ id: x.id, name: x.name }));
     const gone: string[] = [];
     const tokens: (string | null)[] = [];
     try {
@@ -294,18 +356,23 @@
       </MenuGroup>
       <MenuGroup>
         <MenuEntry icon="pin" label={allPinned ? 'Unpin' : 'Pin to top'} onclick={pin} />
-        {#if one && one.mine === false}
-          {@const id = one.id}
-          <MenuEntry icon="copyCheck" label="Copy to my playlists" busy={working} disabled={working} onclick={() => copy(id)} />
+        {#if theirs.length}
+          <MenuEntry icon="copyCheck" label="Copy to my playlists" busy={working} disabled={working} onclick={() => copy(theirs.map((x) => x.id))} />
         {/if}
       </MenuGroup>
       <MenuGroup>
-        {#if downloadable}<DownloadEntry tracks={downloadable} />{/if}
-        {#if one && keepFrom}
-          {@const from = keepFrom}
-          {@const p = one}
-          {@const on = isKept('playlist', from, p.id)}
-          <MenuEntry icon="download" label="Sync to this device" switched={on} onclick={() => setKept('playlist', from, p.id, !on, p.name)} />
+        {#if tracksToGet}<DownloadEntry tracks={tracksToGet} />{/if}
+        {#if keepable.length && keepable.length === n}
+          <!-- All of them on, or all off when all are. -->
+          <MenuEntry
+            icon="download"
+            label="Sync to this device"
+            switched={allKept}
+            onclick={() => {
+              const on = !allKept;
+              for (const k of keepable) setKept('playlist', k.from, k.p.id, on, k.p.name);
+            }}
+          />
         {/if}
         <MenuEntry icon="export" label="Export…" onclick={() => (mode = 'export')} />
         {#if one}
@@ -349,14 +416,15 @@
             }}
           />
         {/if}
-        {#if !others}
-          <MenuEntry icon="repairs" label="Repair…" onclick={() => viewTab('repair')} />
-          {#if me.admin}<MenuEntry icon="link" label="Sync…" onclick={() => viewTab('sync')} />{/if}
+        {#if own.length}
+          <!-- With others' ticked: one's own only. -->
+          <MenuEntry icon="repairs" label="Repair…" onclick={() => viewTab('repair', ownIds)} />
+          {#if me.admin}<MenuEntry icon="link" label="Sync…" onclick={() => viewTab('sync', ownIds)} />{/if}
         {/if}
       </MenuGroup>
       <MenuGroup>
-        {#if !others}
-          <MenuEntry icon="trash" label={one ? 'Delete playlist' : `Delete ${ids.length} playlists`} danger onclick={() => (mode = 'delete')} />
+        {#if own.length}
+          <MenuEntry icon="trash" label={others ? `Delete ${own.length} of mine` : one ? 'Delete playlist' : `Delete ${n} playlists`} danger onclick={() => (mode = 'delete')} />
         {/if}
       </MenuGroup>
     </MenuCards>
@@ -388,8 +456,8 @@
     </form>
   {:else}
     <div class="form">
-      <p class="ask">Delete {title}? You can undo this right after.</p>
-      <button class="danger solid" disabled={working} aria-busy={working} onclick={remove}>{one ? 'Delete playlist' : `Delete ${n} playlists`}</button>
+      <p class="ask">Delete {own.length === 1 ? own[0].name : `${own.length} playlists`}? You can undo this right after.</p>
+      <button class="danger solid" disabled={working || !own.length} aria-busy={working} onclick={remove}>{own.length === 1 ? 'Delete playlist' : `Delete ${own.length} playlists`}</button>
     </div>
   {/if}
 </MenuSheet>
