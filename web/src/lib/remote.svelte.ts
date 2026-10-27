@@ -162,12 +162,16 @@ function letGo() {
 }
 $effect.root(() => {
   $effect(() => {
-    const dir = isLocal() ? ramping.dir : null;
+    // Start and stop's effects only (the owner, 2026-10-27): the tape's own stops and winds never hold the position.
+    const dir = isLocal() && ramping.effect ? ramping.dir : null;
     void ramping.at;
     const id = playing()?.id ?? null;
     const still = paused();
     const seeks = sought.n;
+    const winding = rewindNow.on || rewindNow.asked;
     untrack(() => {
+      // A wind asked or under way: where it is, from the first moment, whatever rest there was.
+      if (winding) return letGo();
       if (dir !== null) {
         if (!frozen.on) frozen.pos = running();
         frozen.on = true;

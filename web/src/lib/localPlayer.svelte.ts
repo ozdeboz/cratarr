@@ -2326,6 +2326,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
   const say = (what: string, fields: Record<string, unknown> = {}, lvl: 'info' | 'warn' = 'info') =>
     playback(lvl, `wind ${what}`, { t: Math.round(performance.now() - t0), clip: Math.round(clip.currentTime * 1000), ...fields });
   rewinding = w;
+  quietPause = false;
   windAsked(true);
   // A cut one's plan beside its sound (decision 0075: a press during it lands where the sound is; a server before 0.9.13
   // has none, and its counter's line stands in).
@@ -2519,8 +2520,12 @@ export async function windHold(dir: 'back' | 'forward') {
   // brakes to rest where it is, a pause's brake runs out; then the hold, from there.
   if ((rewinding && !rewinding.reverse) || committed === true) {
     await settle();
-    if (holding !== h) return;
-    if (h.released) return void (holding = null);
+    if (holding !== h) return void (quietPause = false);
+    if (h.released) {
+      quietPause = false;
+      local.paused = !!audio?.paused;
+      return void (holding = null);
+    }
   }
   if (rewinding) return void (holding = null);
   // Forwards while playing forwards: no stop (the owner, 2026-10-27).
@@ -2579,6 +2584,8 @@ function fly(h: { dir: 1 | -1; released: boolean }, tries = 0, pre: Armed | null
  *  (a cut one keeps its counter where it was), a pause's brake runs out. Resolves once nothing runs. */
 async function settle() {
   const w = rewinding;
+  // The tape's own rest between two actions: shown playing (no grey, no fill) until the next takes over.
+  quietPause = true;
   if (w && !w.reverse && w.at !== null) {
     holding = null;
     w.after = 'pause';
@@ -2666,7 +2673,7 @@ function restAt(index: number, secs: number) {
   local.index = index;
   local.duration = lengthOf(index) ?? local.duration;
   local.position = secs;
-  local.paused = true;
+  local.paused = !quietPause;
 }
 /**
  * Any press during a wind takes it over (the owner, 2026-10-27), where the counter shows it: a pause rests there; a
@@ -2765,9 +2772,13 @@ async function stepTape() {
   if (!audio || local.index < 0) return;
   const playingNow = !local.paused;
   // A wind under way (not the knob's own) comes to rest first, then the knob's way (anything interrupts anything).
-  if (tapeDir.state === 'forward' && rewinding && !rewinding.reverse) {
+  if (tapeDir.state === 'forward' && tapeDir.want === 'L' && rewinding && !rewinding.reverse) {
     await settle();
-    if (tapeDir.want === 'L') return void backwards();
+    if (tapeDir.want === 'L' && backwards()) return;
+    // Turned back meanwhile, or nothing to play backwards: on forwards from the rest, quietly.
+    quietPause = false;
+    const at = where();
+    if (at) quietly(() => playOnAt(at.seg.index, at.offset));
     return;
   }
   if (tapeDir.state === 'forward' && tapeDir.want === 'L' && playingNow && !rewinding) {
