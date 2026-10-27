@@ -300,31 +300,40 @@ class Prefs(context: Context) {
             p.edit().putBoolean(START_STOP_REWIND, value).apply()
         }
 
-    /** Tape rewind's sound (the owner, 2026-10-27; the server's `rewind::Shape`): its length (ms), its cruising speed
-     *  (× the track's), each piece's length (ms), and the share spinning up and braking take. */
-    var rewindMs: Long
-        get() = p.getLong(REWIND_MS, 2_500L).coerceIn(1_000L, 8_000L)
-        set(value) {
-            p.edit().putLong(REWIND_MS, value.coerceIn(1_000L, 8_000L)).apply()
-        }
+    /** Winding (decision 0074; the page's `startStop.wind`): a tap's seconds per minute wound, the speed limit (×), the
+     *  spin-up and the brake (ms), each piece of a cut tap (ms), how much quieter it winds (dB), whether a seek winds,
+     *  and at a track's edge: stop, or wind on through the queue. */
+    var windRatio: Float
+        get() = p.getFloat(WIND_RATIO, 1f).coerceIn(0.5f, 2f)
+        set(value) = p.edit().putFloat(WIND_RATIO, value.coerceIn(0.5f, 2f)).apply()
 
-    var rewindSpeed: Float
-        get() = p.getFloat(REWIND_SPEED, 6f).coerceIn(2f, 16f)
-        set(value) {
-            p.edit().putFloat(REWIND_SPEED, value.coerceIn(2f, 16f)).apply()
-        }
+    var windSpeed: Float
+        get() = p.getFloat(WIND_SPEED, 8f).coerceIn(2f, 16f)
+        set(value) = p.edit().putFloat(WIND_SPEED, value.coerceIn(2f, 16f)).apply()
 
-    var rewindPiece: Long
-        get() = p.getLong(REWIND_PIECE, 350L).coerceIn(100L, 1_000L)
-        set(value) {
-            p.edit().putLong(REWIND_PIECE, value.coerceIn(100L, 1_000L)).apply()
-        }
+    var windAttackMs: Long
+        get() = p.getLong(WIND_ATTACK, 400L).coerceIn(100L, 1_500L)
+        set(value) = p.edit().putLong(WIND_ATTACK, value.coerceIn(100L, 1_500L)).apply()
 
-    var rewindRamp: Float
-        get() = p.getFloat(REWIND_RAMP, 0.2f).coerceIn(0.05f, 0.4f)
-        set(value) {
-            p.edit().putFloat(REWIND_RAMP, value.coerceIn(0.05f, 0.4f)).apply()
-        }
+    var windReleaseMs: Long
+        get() = p.getLong(WIND_RELEASE, 250L).coerceIn(100L, 1_500L)
+        set(value) = p.edit().putLong(WIND_RELEASE, value.coerceIn(100L, 1_500L)).apply()
+
+    var windPieceMs: Long
+        get() = p.getLong(WIND_PIECE, 350L).coerceIn(100L, 1_000L)
+        set(value) = p.edit().putLong(WIND_PIECE, value.coerceIn(100L, 1_000L)).apply()
+
+    var windGainDb: Float
+        get() = p.getFloat(WIND_GAIN, -12f).coerceIn(-24f, 0f)
+        set(value) = p.edit().putFloat(WIND_GAIN, value.coerceIn(-24f, 0f)).apply()
+
+    var windSeeks: Boolean
+        get() = p.getBoolean(WIND_SEEKS, false)
+        set(value) = p.edit().putBoolean(WIND_SEEKS, value).apply()
+
+    var windEdges: String
+        get() = if (p.getString(WIND_EDGES, "stop") == "queue") "queue" else "stop"
+        set(value) = p.edit().putString(WIND_EDGES, if (value == "queue") "queue" else "stop").apply()
 
     /** Ignore favourites (SkipFavourites): Radio's inserts and Autoplay's picks leave the hearted tracks out. */
     var skipFavourites: Boolean
@@ -402,10 +411,14 @@ class Prefs(context: Context) {
         const val START_STOP_MS = "start_stop_ms"
         const val START_STOP_SKIPS = "start_stop_skips"
         const val START_STOP_REWIND = "start_stop_rewind"
-        const val REWIND_MS = "rewind_ms"
-        const val REWIND_SPEED = "rewind_speed"
-        const val REWIND_PIECE = "rewind_piece"
-        const val REWIND_RAMP = "rewind_ramp"
+        const val WIND_RATIO = "wind_ratio"
+        const val WIND_SPEED = "wind_speed"
+        const val WIND_ATTACK = "wind_attack_ms"
+        const val WIND_RELEASE = "wind_release_ms"
+        const val WIND_PIECE = "wind_piece_ms"
+        const val WIND_GAIN = "wind_gain_db"
+        const val WIND_SEEKS = "wind_seeks"
+        const val WIND_EDGES = "wind_edges"
         const val START_STOP_OFF = "off"
         const val START_STOP_VINYL = "vinyl"
         const val START_STOP_FADE = "fade"

@@ -148,7 +148,7 @@ class PlayerService : MediaSessionService() {
         // headset's or the system's shuffle shuffles what is to come once, and the player never plays shuffled, so it
         // says it is not. Cratarr's queue is shuffled by Cratarr (Play On's `shuffle`, which sends the new order back);
         // local mode's here, the playing track staying where it is.
-        startStop = StartStop(this, player, prefs, { link?.applyVolume() }, { sync.leader != null }, { sync.bufferMs }, ::startStopChanged, ::rewindUrl) { what, fields ->
+        startStop = StartStop(this, player, prefs, { link?.applyVolume() }, { sync.leader != null }, { sync.bufferMs }, ::startStopChanged, ::windUrl) { what, fields ->
             LinkLog.add(this, "info", "startstop", what, *fields)
         }
         sessionPlayer = object : ForwardingPlayer(player) {
@@ -184,7 +184,8 @@ class PlayerService : MediaSessionService() {
             override fun stop() = startStop.pause { super.stop() }
 
             // A seek in the middle of a Start and stop ramp ends it at once (0.9.7, `StartStop.seek`).
-            override fun seekTo(positionMs: Long) = startStop.seek { super.seekTo(positionMs) }
+            // Where seeking winds the tape (decision 0074), wound there.
+            override fun seekTo(positionMs: Long) = startStop.seekTo(positionMs) { super.seekTo(positionMs) }
 
             override fun seekTo(mediaItemIndex: Int, positionMs: Long) = startStop.seek { super.seekTo(mediaItemIndex, positionMs) }
 
@@ -631,14 +632,17 @@ class PlayerService : MediaSessionService() {
             .build()
     }
 
-    /** Tape rewind's clip of the playing track (0.9.9): Cratarr's, from [fromMs] back to its start, as this device's
-     *  four controls shape it; none for a track of the device's own or a Bandcamp preview, which Cratarr keeps no file of. */
-    private fun rewindUrl(fromMs: Long): String? {
+    /** The playing track's wind stream (decision 0074): Cratarr's, from [fromMs], to [toMs] or the edge, condensed to
+     *  [fitMs] or open-ended, back or forward, as this device's winding is set; none for a track of the device's own or a
+     *  Bandcamp preview, which Cratarr keeps no file of. */
+    private fun windUrl(fromMs: Long, toMs: Long?, fitMs: Long?, back: Boolean): String? {
         val item = player.currentMediaItem ?: return null
         val server = prefs.serverUrl?.trimEnd('/') ?: return null
         if (DeviceMusic.located(item) != null || item.mediaId.startsWith("bandcamp/")) return null
-        return "$server/api/stream/${item.mediaId}/rewind?from_ms=$fromMs&ms=${prefs.rewindMs}&speed=${prefs.rewindSpeed}" +
-            "&piece_ms=${prefs.rewindPiece}&ramp=${prefs.rewindRamp}"
+        val to = toMs?.let { "&to_ms=$it" } ?: ""
+        val fit = fitMs?.let { "&fit_ms=$it&attack_ms=${prefs.windAttackMs}&release_ms=${prefs.windReleaseMs}&piece_ms=${prefs.windPieceMs}" } ?: ""
+        return "$server/api/stream/${item.mediaId}/wind?from_ms=$fromMs&dir=${if (back) "back" else "forward"}&speed=${prefs.windSpeed}" +
+            "&gain_db=${prefs.windGainDb}$to$fit"
     }
 
     /** Local mode's shuffle, once: what is to come after the playing track, mixed. */

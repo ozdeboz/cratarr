@@ -360,7 +360,7 @@ class PlayOnLink(
         if (prefs.mode == Prefs.MODE_DEVICE) {
             when (m.optString("command")) {
                 "play" -> service.switchMode(Prefs.MODE_CRATARR, "play from Cratarr")
-                "pause", "resume", "toggle", "next", "previous", "sleep", "seek", "volume", "duck", "unduck", "announce" -> {}
+                "pause", "resume", "toggle", "next", "previous", "sleep", "seek", "volume", "duck", "unduck", "announce", "wind" -> {}
                 "group" -> if (!m.isNull("leader")) return report()
                 "stop" -> {
                     release()
@@ -462,7 +462,16 @@ class PlayOnLink(
             "radio" -> Radio.command(service, p, m)
             "autoplay" -> Autoplay.command(service, p, m)
             "skip_favourites" -> SkipFavourites.set(service, p, m.optBoolean("on"))
-            "seek" -> p.seekTo(m.optLong("position_ms", p.currentPosition))
+            "seek" -> m.optLong("position_ms", p.currentPosition).let { to -> service.startStop.seekTo(to) { p.seekTo(to) } }
+            // Previous or Next held (decision 0074): wound while held; where it cannot wind, a press as ever.
+            "wind" -> {
+                val back = m.optString("dir") != "forward"
+                if (m.optString("phase") == "stop") {
+                    service.startStop.windStop()
+                } else if (!service.startStop.windStart(back)) {
+                    if (back) service.startStop.skip { if (!Repeat.previous(service, p)) p.seekToPrevious() } else service.startStop.skip { p.seekToNextMediaItem() }
+                }
+            }
             "volume" -> setVolume(m.optInt("level", 100))
             "duck" -> {
                 ducked = true
