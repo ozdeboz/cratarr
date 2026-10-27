@@ -175,10 +175,20 @@ if (port) {
       appInfo.levelling = m.levelling !== false;
       appInfo.levelUnknown = m.levelUnknown === 'untouched' ? 'untouched' : 'typical';
       {
-        // An app that does not know fast-forward's own curve yet (before it stores `windFwd`) says none: the one set
-        // here stays (the owner's tablet, 2026-10-27: its sliders snapped back to the defaults).
+        // What an app from before the Tape page does not keep (its motions, the tape's mechanics) stays as set here,
+        // never snapping back to the defaults (the owner's tablet, 2026-10-27).
         const told = (m.startStop ?? {}) as Partial<StartStop>;
-        appInfo.startStop = startStopOf({ ...told, windFwd: told.windFwd ?? appInfo.startStop.windFwd });
+        const was = appInfo.startStop;
+        appInfo.startStop = startStopOf({
+          ...told,
+          tape: told.tape ?? was.tape,
+          back: told.back ?? was.back,
+          fwd: told.fwd ?? was.fwd,
+          holdBack: told.holdBack ?? was.holdBack,
+          holdFwd: told.holdFwd ?? was.holdFwd,
+          seekWinds: told.seekWinds ?? was.seekWinds,
+          edges: told.edges ?? was.edges,
+        });
       }
       appInfo.outputs = Array.isArray(m.outputs) ? (m.outputs as AppOutput[]).filter((o) => typeof o?.id === 'string') : [];
       appInfo.output = typeof m.output === 'string' && appInfo.outputs.some((o) => o.id === m.output) ? m.output : null;

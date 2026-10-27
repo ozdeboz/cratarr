@@ -1,16 +1,15 @@
 <script lang="ts">
-  // A long press on a play button (the owner, 2026-10-26: its controls at hand, not the button's word): Start and stop,
-  // the same rows as This device's Playing (lib/settings/StartStopItems).
+  // A long press on a play button (the owner, 2026-10-26: its controls at hand, not the button's word): the tape, its
+  // groups as This device's Tape page has them (lib/settings/TapeItems).
   import MenuSheet from './MenuSheet.svelte';
-  import Group from './settings/Group.svelte';
-  import StartStopItems from './settings/StartStopItems.svelte';
+  import TapeItems from './settings/TapeItems.svelte';
 
   let { onclose }: { onclose: () => void } = $props();
 </script>
 
-<MenuSheet label="Start and stop" title="Start and stop" {onclose}>
+<MenuSheet label="Tape" title="Tape" {onclose}>
   <div class="rows">
-    <Group><StartStopItems /></Group>
+    <TapeItems />
   </div>
 </MenuSheet>
 
