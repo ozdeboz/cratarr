@@ -66,7 +66,7 @@ All are the signed-in account's own; `status` is `in`, `partly`, `missing` or `r
   at, error, albums, tracks, playlists, artists } }`
 - `PUT /api/spotify/client` (administrators): `{ client_id }`; empty removes it.
 - `POST /api/spotify/connect`: `{ url }`, Spotify's consent page to open. `GET /api/spotify/callback?code&state`
-  keeps the sign-in, then sends the browser back to the Library's Spotify source (`/library?source=spotify`), with
+  keeps the sign-in, then sends the browser back to the Library's Spotify source (`/#/library?source=spotify`; the page routes by hash), with
   `&spotify_error=…` when it failed.
 - `DELETE /api/spotify`: disconnects.
 - `POST /api/spotify/sync`: reads it again now; answers at once with the state.
