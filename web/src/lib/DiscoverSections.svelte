@@ -12,7 +12,7 @@
   import Cover from './Cover.svelte';
   import CoverPlay from './CoverPlay.svelte';
   import CoverBusy from './CoverBusy.svelte';
-  import { bandcampFailed } from './bandcampFound.svelte';
+  import { bandcampFailed, bandcampPlay, playArtistOnBandcamp } from './bandcampFound.svelte';
   import CoverStatus from './CoverStatus.svelte';
   import CoverFlow from './CoverFlow.svelte';
   import { goToArtist } from './albums.svelte';
@@ -194,11 +194,14 @@
   </section>
 {/if}
 
-<!-- New to you (the owner, 2026-10-25): the new artists' pictures as a flow (Home's, lib/CoverFlow), the front one's
-     name and how many albums they have released under it; below, their biography with their album as a card to its right. -->
+<!-- New to you (the owner, 2026-10-25; laid out anew 2026-10-27, mock B): the new artists' pictures as a flow (Home's,
+     lib/CoverFlow), a picture opening its artist; over the flow's foot the front one's name, their studio albums and
+     Listen (all they have on Bandcamp, lib/bandcampFound); below, a short piece of their biography with their album to
+     its right. -->
 {#if sec.newArtists.length}
   {@const n = sec.newArtists[Math.min(front, sec.newArtists.length - 1)]}
   {@const a = n.items[0]}
+  {@const listenKey = `artist:${n.artist}`}
   <section aria-label="New to you">
     <SectionHead title="New to you" />
     <div class="artist-flow" {@attach () => untrack(() => flowOpened('discover:new'))}>
@@ -207,21 +210,30 @@
         top={0}
         foot={40}
         onfront={(i) => (front = i)}
-        onopen={(i) => onopen(sec.newArtists[i].items[0])}
+        onopen={(i) => goToArtist(DISCOVER, sec.newArtists[i].artist)}
         onmenu={(i) => onmenu(sec.newArtists[i].items[0])}
       />
+      <div class="artist-over">
+        <div class="artist-name">
+          <button class="title" onclick={() => goToArtist(DISCOVER, n.artist)}>{n.artist}</button>
+          <!-- Their studio albums (the owner, 2026-10-25: "the golden standard"), as the look counted. -->
+          {#if a.artist_albums}<span class="by">{a.artist_albums} studio {a.artist_albums === 1 ? 'album' : 'albums'}</span>{/if}
+        </div>
+        <button
+          class="play"
+          disabled={bandcampPlay.key === listenKey}
+          aria-busy={bandcampPlay.key === listenKey}
+          onclick={() => playArtistOnBandcamp(listenKey, n.artist, a.bandcamp ?? null)}><Icon name="play" size={18} />Listen</button
+        >
+      </div>
     </div>
-    <div class="artist-caption">
-      <button class="title" onclick={() => goToArtist(DISCOVER, n.artist)}>{n.artist}</button>
-      <!-- Their studio albums (the owner, 2026-10-25: "the golden standard"), as the look counted. -->
-      {#if a.artist_albums}<span class="by">{a.artist_albums} studio {a.artist_albums === 1 ? 'album' : 'albums'}</span>{/if}
-      {#if bio?.name === n.artist && bio.credit}<a class="photo-credit" href={bio.credit.url} target="_blank" rel="noopener noreferrer">Photo: {bio.credit.author} · {bio.credit.licence}</a>{/if}
-    </div>
-    <!-- Their biography, their album to its right with why it is here under it (the owner, 2026-10-25). -->
+    {#if bandcampFailed[listenKey]}<p class="artist-failed">{bandcampFailed[listenKey]}</p>{/if}
     <div class="artist-about">
-      {#if bio?.name === n.artist && bio.text}<p>{bio.text}</p>{/if}
+      <div class="about-text">
+        {#if bio?.name === n.artist && bio.text}<p>{bio.text}</p>{/if}
+        {#if bio?.name === n.artist && bio.credit}<a class="photo-credit" href={bio.credit.url} target="_blank" rel="noopener noreferrer">Photo: {bio.credit.author} · {bio.credit.licence}</a>{/if}
+      </div>
       <div class="album-col">
-        {#if a.why.length}<small class="why">{a.why.join('. ')}</small>{/if}
         <div class="album-box">
           <button class="album" onclick={() => onopen(a)} use:longpress={() => onmenu(a)}>
             <span class="art big"><Cover src={a.cover} /></span>
@@ -230,6 +242,7 @@
           </button>
           <CoverStatus mark={status(a)} problem={problemOf(a)} onproblem={() => onproblem(a, 'request')} />{#if a.bandcamp}<CoverPlay bandcamp label={a.album} busy={previewing === a.key} problem={bandcampFailed[a.key] ?? null} onplay={() => onplay(a)} onproblem={() => onproblem(a, 'play')} />{/if}
         </div>
+        {#if a.why.length}<small class="why">{a.why.join('. ')}</small>{/if}
       </div>
     </div>
   </section>
@@ -719,8 +732,8 @@
 
 
 
-  /* New to you: the pictures as a flow (as Home's), the front one's name under it, then their biography beside their
-     album's card. */
+  /* New to you: the pictures as a flow (as Home's), the front one's name and Listen over its foot, then a piece of their
+     biography beside their album's card. */
   .artist-flow {
     position: relative;
     height: calc(clamp(180px, 26vw, 260px) + 40px);
@@ -735,44 +748,71 @@
     border-radius: 12px;
   }
 
-  /* Over the flow's foot: above it (the flow is positioned, and with one's own picture behind it that picture hid the
-     name; the tablet, 2026-10-27). */
-  .artist-caption {
-    position: relative;
-    z-index: 1;
+  /* Over the flow's foot (mock B, the owner 2026-10-27): the front artist's name as a title and Listen, on a shade so
+     they read over the pictures. */
+  .artist-over {
+    position: absolute;
+    inset: auto 0 0;
+    z-index: 2;
     display: flex;
-    flex-direction: column;
-    align-items: center;
-    margin-top: -24px;
-    text-align: center;
+    gap: 12px;
+    align-items: flex-end;
+    justify-content: space-between;
+    padding: 48px 18px 14px;
+    border-radius: 0 0 12px 12px;
+    background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--bg) 80%, transparent));
+    pointer-events: none;
   }
 
-  .artist-caption .title,
-  .artist-caption .by {
-    height: 1.4em;
+  .artist-over > * {
+    pointer-events: auto;
+  }
+
+  .artist-name {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .artist-name .title,
+  .artist-name .by {
     max-width: 100%;
     overflow: hidden;
-    line-height: 1.4;
+    line-height: 1.3;
+    text-align: left;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .artist-caption .title {
+  .artist-name .title {
     padding: 0;
     border: 0;
     background: none;
-    color: inherit;
+    color: var(--text);
     font: inherit;
-    font-weight: 500;
+    font-size: 1.35rem;
+    font-weight: 600;
     cursor: pointer;
   }
 
-  .artist-caption .by {
-    color: var(--muted);
+  .artist-name .by {
+    color: color-mix(in srgb, var(--text) 75%, transparent);
     font-size: 0.9rem;
   }
 
+  .artist-over .play {
+    flex: none;
+  }
+
+  .artist-failed {
+    margin: 8px 0 0;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
   .photo-credit {
+    display: inline-block;
+    margin-top: 6px;
     color: var(--muted);
     font-size: 11px;
     text-decoration: none;
@@ -782,22 +822,31 @@
     display: flex;
     gap: 20px;
     align-items: flex-start;
-    margin-top: 18px;
+    margin-top: 16px;
+  }
+
+  .about-text {
+    flex: 1;
+    min-width: 0;
   }
 
   .artist-about .why {
-    margin-bottom: 6px;
+    margin-top: 6px;
     color: var(--muted);
     white-space: normal;
   }
 
+  /* A piece of their biography, not all of it (the owner, 2026-10-27): its first four lines. */
   .artist-about p {
-    flex: 1;
-    min-width: 0;
+    display: -webkit-box;
     margin: 0;
+    overflow: hidden;
     color: var(--muted);
     font-size: 14px;
     line-height: 1.55;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+    line-clamp: 4;
   }
 
   /* The fresh releases: a row. */

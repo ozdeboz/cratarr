@@ -1868,6 +1868,12 @@ export const getRelatedArtists = (name: string) =>
   quietly<{ artists: RelatedArtist[]; looking: boolean }>(`/api/artists/related?name=${encodeURIComponent(name)}`);
 export const previewBandcamp = (url: string) =>
   request<{ album: string; artist: string; url: string; tracks: LocalTrack[] }>(`/api/preview/bandcamp?url=${encodeURIComponent(url)}`);
+/** Everything an artist has on Bandcamp to hear as previews (New to you's Listen; the owner, 2026-10-27): their own
+ *  page's releases, newest first; none where nothing was found. */
+export const previewBandcampArtist = (name: string) =>
+  request<{ artist: string; page: string | null; albums: { album: string; url: string; year?: number; tracks: LocalTrack[] }[] }>(
+    `/api/preview/bandcamp/artist?name=${encodeURIComponent(name)}`,
+  );
 
 /** A ListenBrainz user's listens into the asking account's history (decisions 0064 and 0067), as a task. */
 /** The ListenBrainz user the account imported from last (kept on the server). */
