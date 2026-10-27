@@ -40,6 +40,14 @@ export const fixesOf = (finding: string, album: string) => healthFixes[finding]?
 export async function apply(which: { ids: string[] } | { certain: string }, finding: string, what: string): Promise<boolean> {
   try {
     const r = await applyFixes(which);
+    // What was written leaves the finding's list at once; Health and the finding are read again behind it (the report
+    // takes ~20 s on the NAS, a5 2026-10-27: an album fixed looked unfixed until then).
+    const known = finding ? healthFixes[finding] : undefined;
+    if (known && r.applied) {
+      const failed = new Set(r.failed.map((f) => f.id));
+      const asked = 'ids' in which ? new Set(which.ids) : null;
+      known.fixes = known.fixes.filter((f) => failed.has(f.id) || !(asked ? asked.has(f.id) : f.certainty === 'certain'));
+    }
     const after = () => (loadHealth(), finding && readFixes(finding));
     if (r.applied) withUndo(r.failed.length ? `${what}; ${r.failed.length} failed.` : `${what}.`, r.undo, { after });
     else toast.fail(null, r.failed[0]?.why ?? 'Nothing was changed');
