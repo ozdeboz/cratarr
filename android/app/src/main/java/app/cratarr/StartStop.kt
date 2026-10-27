@@ -137,6 +137,8 @@ class StartStop(
             val t = tape ?: return
             if (!rewinding) return
             heldPosition = rewoundTo(t.currentPosition)
+            rewoundAt = heldPosition
+            rewindListener?.invoke()
             // Its pace against the clock, once a second.
             if (tapeTicks++ % 4 == 0) step("clip pace", "clip_ms" to t.currentPosition, "buffered_ms" to t.bufferedPosition)
             changed()
@@ -256,7 +258,7 @@ class StartStop(
         heldPosition = null
         stopping = null
         level = 1f
-        if (committed != null) ramping(null, 0)
+        if (committed != null && running != null) ramping(null, 0)
         commit(null)
         Fader.target = 1f
         if (gain != 1f) {
@@ -430,7 +432,7 @@ class StartStop(
                 if (state == Player.STATE_READY && !tapeStarted) {
                     tapeStarted = true
                     main.removeCallbacks(tapeLate)
-                    ramping("out", ms)
+                    // No ramp told to the page: the play button's fill moves for play and pause only (the owner).
                     player.pause()
                     player.seekTo(0)
                     t.play()
@@ -480,6 +482,10 @@ class StartStop(
         tapeRestart = null
         main.removeCallbacks(tapeLate)
         main.removeCallbacks(tapeTick)
+        if (rewoundAt != null) {
+            rewoundAt = null
+            rewindListener?.invoke()
+        }
         tape?.let {
             it.removeListener(l)
             it.stop()
@@ -500,6 +506,15 @@ class StartStop(
          *  draws it. */
         @Volatile
         var rampListener: ((String?, Long, Long) -> Unit)? = null
+
+        /** Where Tape rewind's way back is now (ms into the track) while its clip sounds; null otherwise. The app's page
+         *  shows it (`PagePlayer`), told each step by [rewindListener] and once more when it ends. */
+        @Volatile
+        var rewoundAt: Long? = null
+            private set
+
+        @Volatile
+        var rewindListener: (() -> Unit)? = null
 
         /** The volume's share now (1: none), on the player's volume: `PlayOnLink.applyVolume` multiplies it in. */
         @Volatile

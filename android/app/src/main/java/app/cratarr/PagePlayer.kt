@@ -67,6 +67,8 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
         StartStop.rampListener = { dir, ms, full ->
             send(JSONObject().put("type", "ramp").put("dir", dir ?: JSONObject.NULL).put("ms", ms).put("full", full).toString())
         }
+        // Tape rewind (0.9.11): its way back reported each step, and once more when the track plays from the start.
+        StartStop.rewindListener = { report() }
     }
 
     fun handle(m: JSONObject) {
@@ -195,7 +197,9 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             .put("type", "player")
             .put("mode", Prefs(context).mode)
             .put("index", if (c.mediaItemCount == 0) -1 else c.currentMediaItemIndex)
-            .put("positionMs", c.currentPosition)
+            .put("positionMs", StartStop.rewoundAt ?: c.currentPosition)
+            // Going back with Tape rewind's clip: shown as it comes, nothing counted on meanwhile.
+            .put("rewinding", StartStop.rewoundAt != null)
             .put("durationMs", if (c.duration == C.TIME_UNSET) -1 else c.duration)
             .put("paused", !c.playWhenReady || c.playbackState == Player.STATE_ENDED)
             .put("error", c.playerError?.let(::describe) ?: JSONObject.NULL)
