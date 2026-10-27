@@ -213,6 +213,10 @@ pub struct Report {
     /// from the report. Apps from before leave it out.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rewinding: bool,
+    /// Asked to play from rest and not sounding yet (0.9.14, the owner: the waveform shows the truth, grey until it
+    /// sounds). The tape's own stops and starts are not this. Apps from before leave it out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub starting: bool,
     /// The direction knob as set (0.9.12): `L` backwards, `R` (or left out) forwards.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction: Option<String>,
@@ -662,6 +666,8 @@ pub struct PlayerView {
     pub held: Option<String>,
     /// Tape rewind under way (0.9.10): `position_ms` goes back to the start, reported as it goes, not counted on.
     pub rewinding: bool,
+    /// Asked to play from rest and not sounding yet, as the player says (0.9.14).
+    pub starting: bool,
     /// The direction knob as the player says (0.9.12): `L` or `R`.
     pub direction: &'static str,
     /// Level the volume as the player says (0.9.12): on, how an unmeasured track is taken, what it turns down by now.
@@ -1025,6 +1031,7 @@ impl Entry {
             announce: r.announce.clone(),
             held: r.held.clone(),
             rewinding: r.rewinding,
+            starting: r.starting,
             direction: if r.direction.as_deref() == Some("L") { "L" } else { "R" },
             levelling: r.levelling.unwrap_or(false),
             level_unknown: r.level_unknown.clone(),

@@ -299,6 +299,7 @@ impl Source for CratarrSource {
                     paused: !p.playing,
                     estimated: false,
                     rewinding: p.rewinding,
+                    starting: p.starting,
                 }),
                 player: Some(p.name.clone()),
                 started_at: None,
