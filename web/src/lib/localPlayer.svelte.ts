@@ -717,6 +717,10 @@ let told: { seg: Segment | undefined; level: number; next: number | null; at: nu
 /** A change within a playing track glides (about 0.15 s): a step there could click. Elsewhere (a new track, a seek,
  *  before any sound) the sound jumps anyway, and it is a step. */
 const GLIDE = 0.05;
+/** Levelling switched on or off: the playing track turns to its new level over a second, never at once (the owner,
+ *  2026-10-27: the switch's hard edges). */
+const SWITCH_S = 1;
+let switched = false;
 
 /** The playing track's level now, the next one's from where it starts in the stream. Only what changed is told
  *  again: cancelling a glide under way would jump back. */
@@ -742,7 +746,9 @@ function levelSchedule() {
         p.cancelScheduledValues(t);
         p.setValueAtTime(p.value, t);
       }
-      p.setTargetAtTime(f, t, GLIDE);
+      // The switch: even in decibels over a second (an exponential ramp), else the short glide of a late gain.
+      if (switched && p.value > 0 && f > 0) p.exponentialRampToValueAtTime(f, t + SWITCH_S);
+      else p.setTargetAtTime(f, t, GLIDE);
     } else {
       p.cancelScheduledValues(t);
       p.setValueAtTime(f, t);
@@ -751,6 +757,7 @@ function levelSchedule() {
     // Only the next step moved (it comes, goes, or the clocks drifted apart): what lies ahead, again.
     p.cancelScheduledValues(t + 0.001);
   } else return;
+  switched = false;
   if (nf !== null) p.setValueAtTime(nf, at);
   told = { seg: cur, level: f, next: nf, at };
 }
@@ -758,6 +765,7 @@ function levelSchedule() {
 /** Levelling on or off for this browser's player, the playing track too. */
 export function setLevelling(on: boolean) {
   prefs.levelling = on;
+  switched = true;
   if (!on) local.levelDb = 0;
   // The switch is a press: an audio context can start now.
   if (audio && !audio.paused) levelRoute();
