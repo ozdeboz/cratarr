@@ -93,6 +93,41 @@ class StartStop(
     private var tapeMs = 1L
     private var tapeRamp = 0.2f
 
+    /** When Previous was pressed (elapsed realtime): every step of a rewind is logged in ms since (0.9.11, the owner: a
+     *  rewind took far longer than its clip; where the time goes). The track's player watched meanwhile. */
+    private var tapeT0 = 0L
+    private var tapeTicks = 0
+    private var trackWatch: Player.Listener? = null
+
+    private fun step(what: String, vararg fields: Pair<String, Any?>) =
+        note("rewind", "step" to what, "ms" to SystemClock.elapsedRealtime() - tapeT0, *fields)
+
+    private fun stateName(s: Int) = when (s) {
+        Player.STATE_IDLE -> "idle"
+        Player.STATE_BUFFERING -> "buffering"
+        Player.STATE_READY -> "ready"
+        Player.STATE_ENDED -> "ended"
+        else -> "$s"
+    }
+
+    /** The track's player through a rewind and until it plays again from the start (then let go). */
+    private fun watchTrack() {
+        trackWatch?.let(player::removeListener)
+        val w = object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) = step("track ${stateName(state)}", "at_ms" to player.currentPosition)
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                step(if (isPlaying) "track playing" else "track not playing", "at_ms" to player.currentPosition)
+                if (isPlaying && tapeListener == null) {
+                    player.removeListener(this)
+                    if (trackWatch === this) trackWatch = null
+                }
+            }
+        }
+        trackWatch = w
+        player.addListener(w)
+    }
+
     /** Tape rewind's clip sounds now: the position shown goes back to the start with it (0.9.10). */
     val rewinding: Boolean get() = tapeListener != null && tapeStarted
 
@@ -102,6 +137,8 @@ class StartStop(
             val t = tape ?: return
             if (!rewinding) return
             heldPosition = rewoundTo(t.currentPosition)
+            // Its pace against the clock, once a second.
+            if (tapeTicks++ % 4 == 0) step("clip pace", "clip_ms" to t.currentPosition, "buffered_ms" to t.bufferedPosition)
             changed()
             main.postDelayed(this, REWIND_TICK_MS)
         }
@@ -125,7 +162,7 @@ class StartStop(
     }
     private val tapeLate = Runnable {
         if (tapeListener != null && !tapeStarted) {
-            note("rewind", "failed" to "late")
+            step("clip late")
             rewound()
         }
     }
@@ -372,6 +409,10 @@ class StartStop(
         if (from <= restartAfterMs) return false
         val ms = prefs.rewindMs
         val url = rewindUrl(from) ?: return false
+        tapeT0 = SystemClock.elapsedRealtime()
+        tapeTicks = 0
+        step("pressed", "from_ms" to from, "clip_ms" to ms, "url" to url.substringAfter("/api/stream/"))
+        watchTrack()
         tapeFrom = from
         tapeMs = ms.coerceAtLeast(1L)
         tapeRamp = prefs.rewindRamp
@@ -385,6 +426,7 @@ class StartStop(
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 if (tapeListener !== this) return
+                step("clip ${stateName(state)}", "clip_ms" to t.currentPosition, "length_ms" to t.duration.takeIf { it > 0 })
                 if (state == Player.STATE_READY && !tapeStarted) {
                     tapeStarted = true
                     main.removeCallbacks(tapeLate)
@@ -398,9 +440,14 @@ class StartStop(
                 }
             }
 
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (tapeListener !== this) return
+                step(if (isPlaying) "clip playing" else "clip not playing", "clip_ms" to t.currentPosition)
+            }
+
             override fun onPlayerError(error: PlaybackException) {
                 if (tapeListener !== this) return
-                note("rewind", "failed" to error.errorCodeName)
+                step("clip failed", "error" to error.errorCodeName, "why" to error.message)
                 rewound()
             }
         }
@@ -412,6 +459,7 @@ class StartStop(
         t.setMediaItem(MediaItem.fromUri(url))
         t.playWhenReady = false
         t.prepare()
+        step("clip prepared")
         main.postDelayed(tapeLate, REWIND_WAIT_MS)
         return true
     }
@@ -420,6 +468,7 @@ class StartStop(
     private fun rewound() {
         val restart = tapeRestart
         val started = stopTape()
+        step(if (started) "track from its start" else "track restarted as ever", "track_state" to stateName(player.playbackState), "at_ms" to player.currentPosition)
         reset()
         if (started) player.play() else restart?.invoke()
     }

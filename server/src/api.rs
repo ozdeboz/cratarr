@@ -2745,20 +2745,29 @@ const REWIND_TURN: std::time::Duration = std::time::Duration::from_secs(2);
 /// made as it is sent. 404 for a track Cratarr does not keep the file of; 503 while another decode holds the turn: the
 /// player then starts the track over without it.
 async fn stream_rewind(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<RewindFrom>) -> Response {
+    // Each step timed from the request (0.9.11, the owner: a rewind took far longer than its clip; where it goes).
+    let asked = std::time::Instant::now();
+    let since = move || asked.elapsed().as_millis() as u64;
+    let what = format!("{source}/{id}");
     let cat = app.library.catalogue();
     let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten();
     let Some((path, _, duration_ms)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
+    let located = since();
     let Some(turn) = crate::app::analysis_pass::heavy_turn(REWIND_TURN).await else {
+        tracing::warn!(target: "rewind", track = %what, located, waited = since() - located, "the decode's turn did not come: not rendered");
         return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "Another track is being decoded." }))).into_response();
     };
+    let turned = since();
     let from_ms = duration_ms.map_or(q.from_ms, |d| q.from_ms.min(d));
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<axum::body::Bytes, std::io::Error>>();
     let (said, heard) = tokio::sync::oneshot::channel();
+    let what2 = what.clone();
     tokio::task::spawn_blocking(move || {
         let _turn = turn;
         let _job = crate::memwatch::job(format!("tape rewind: {}", path.display()));
+        let what = what2;
         let mut sound = match crate::analysis::Reading::open(&path) {
             Ok(s) => s,
             Err(e) => {
@@ -2769,12 +2778,24 @@ async fn stream_rewind(State(app): State<Arc<App>>, Path((source, id)): Path<(St
         let d = crate::rewind::Shape::default();
         let shape = crate::rewind::Shape { ms: q.ms.unwrap_or(d.ms), speed: q.speed.unwrap_or(d.speed), piece_ms: q.piece_ms.unwrap_or(d.piece_ms), ramp: q.ramp.unwrap_or(d.ramp) };
         let rewind = crate::rewind::Rewind::new(sound.rate(), sound.channels(), from_ms, shape);
+        let opened = since();
         let _ = said.send(Ok(rewind.bytes()));
         // The whole clip is a few MB at most: made as fast as it goes, the turn not held while the player reads.
-        if let Err(e) = rewind.render(&mut sound, |b| tx.send(Ok(b.into())).is_ok()) {
+        let (mut first, mut blocks) = (None, 0u32);
+        let rendered = rewind.render(&mut sound, |b| {
+            // The header goes first; the first block of sound after it.
+            if blocks == 1 {
+                first = Some(since());
+            }
+            blocks += 1;
+            tx.send(Ok(b.into())).is_ok()
+        });
+        if let Err(e) = rendered {
             tracing::warn!("tape rewind of {}: {e:#}", path.display());
             let _ = tx.send(Err(std::io::Error::other(format!("{e:#}"))));
         }
+        tracing::info!(target: "rewind", track = %what, from_ms, ms = shape.ms, speed = shape.speed, piece_ms = shape.piece_ms, ramp = shape.ramp,
+            located, turn_wait = turned - located, opened, first_block = first, rendered = since(), blocks, "rendered (ms since the request)");
     });
     let bytes = match heard.await {
         Ok(Ok(n)) => n,
@@ -2785,7 +2806,18 @@ async fn stream_rewind(State(app): State<Arc<App>>, Path((source, id)): Path<(St
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/wav"));
     headers.insert(header::CONTENT_LENGTH, HeaderValue::from(bytes));
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    (headers, axum::body::Body::from_stream(tokio_stream::wrappers::UnboundedReceiverStream::new(rx))).into_response()
+    // When the player has taken the last of it (handed to the connection): how fast it reads.
+    let mut taken = 0u64;
+    let body = tokio_stream::StreamExt::map(tokio_stream::wrappers::UnboundedReceiverStream::new(rx), move |chunk| {
+        if let Ok(b) = &chunk {
+            taken += b.len() as u64;
+            if taken == bytes {
+                tracing::info!(target: "rewind", track = %what, bytes, taken_at = since(), "taken (ms since the request)");
+            }
+        }
+        chunk
+    });
+    (headers, axum::body::Body::from_stream(body)).into_response()
 }
 
 /// A track as Opus in fragmented MP4, made as it is sent: a lossless one for a phone's stream, and with `lossy_too` one
