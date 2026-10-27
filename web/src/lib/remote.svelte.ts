@@ -115,9 +115,11 @@ $effect.root(() => {
     }
     const now = performance.now();
     const a = untrack(() => clock.anchor);
+    // A tape's rewind: each report as it comes, nothing run on between them.
+    const still = p.paused || !!p.rewinding;
     const predicted = a ? a.pos + (a.paused ? 0 : (now - a.at) / 1000) : 0;
-    if (!a || a.id !== np.id || a.paused !== p.paused || Math.abs(predicted - p.position_secs) > 1.5) {
-      clock.anchor = { id: np.id, pos: p.position_secs, at: now, paused: p.paused };
+    if (!a || a.id !== np.id || a.paused !== still || p.rewinding || Math.abs(predicted - p.position_secs) > 1.5) {
+      clock.anchor = { id: np.id, pos: p.position_secs, at: now, paused: still };
     }
   });
   $effect(() => {
@@ -194,7 +196,7 @@ export function position(): number {
   const id = playing()?.id ?? null;
   const seeks = sought.n;
   // A tape's rewind on this device goes back on purpose: shown as it goes.
-  const back = isLocal() && rewindNow.on;
+  const back = isLocal() ? rewindNow.on : !!playing()?.progress?.rewinding;
   if (!back && id === lastShown.id && seeks === lastShown.seeks && p < lastShown.pos && lastShown.pos - p < STEP_BACK) return lastShown.pos;
   lastShown = { id, pos: p, seeks };
   return p;

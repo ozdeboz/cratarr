@@ -1994,10 +1994,11 @@ const REWIND_STEP_MS = 50;
 /** The rewind's own fetch of the track's start: it does not end the rewind. */
 let rewindFetch = false;
 /** The share of the way back the clip has come at `t` (0 to 1) as the counter shows it: its speed rising over the
- *  spin-up's share `f`, flat, falling over the brake's, taken as straight (a5's curve is eased; near enough for a
- *  counter). The cuts are glided over: the counter keeps the overall pace. */
+ *  spin-up's share `f` on a raised cosine, flat, falling over the brake's (a5's curve, the app's counter too). The cuts
+ *  are glided over: the counter keeps the overall pace. */
 function rewound(t: number, f: number) {
-  const a = t < f ? (t * t) / (2 * f) : t < 1 - f ? f / 2 + (t - f) : 1 - f - (1 - t) ** 2 / (2 * f);
+  const ramp = (u: number) => u / 2 - (f / (2 * Math.PI)) * Math.sin((Math.PI * u) / f);
+  const a = t < f ? ramp(t) : t < 1 - f ? f / 2 + (t - f) : 1 - f - ramp(1 - t);
   return Math.min(1, Math.max(0, a / (1 - f)));
 }
 /** The clip as loud as the track: the page's volume and the track's level. */
