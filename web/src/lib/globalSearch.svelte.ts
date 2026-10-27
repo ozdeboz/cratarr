@@ -2,7 +2,7 @@
 // while any search is on, so its count shows beside the page's before it is looked at; and which the page or panel
 // shows, its own results or everywhere's (the globe beside the search, lib/TopPill). The library's kinds and what is not in it from the
 // server, the pages and Settings' parts from the browser (lib/everywhere).
-import { search, type SearchKind, type ServerSearch } from './api';
+import { search, searchBeyond, type BeyondAlbum, type SearchKind, type ServerSearch } from './api';
 import { pageView } from './pageView.svelte';
 import { isSpotifyView } from './libraryViews';
 import { prefs } from './prefs.svelte';
@@ -24,8 +24,13 @@ const LIBRARY: { kind: SearchKind; label: string }[] = [
   { kind: 'mood', label: 'Moods' },
   { kind: 'tag', label: 'Tags' },
 ];
+/** Known elsewhere (decision 0076): what Cratarr keeps of music not in the library (0.9.13's server adds the last
+ *  three; one before it leaves them out). */
 const ELSEWHERE: { kind: SearchKind; label: string }[] = [
-  { kind: 'missing', label: 'Not in your library' },
+  { kind: 'missing', label: 'Missing from your artists' },
+  { kind: 'spotify', label: 'On your Spotify' },
+  { kind: 'suggested', label: 'Suggested' },
+  { kind: 'requested', label: 'Requested' },
   { kind: 'excluded', label: 'Left out by Discover' },
 ];
 /** The kinds a page shows itself: left out of its everywhere (lib/GlobalResults); the Library's by what it shows. */
@@ -55,7 +60,17 @@ export const globalSearch = $state({
   found: null as { q: string; r: ServerSearch } | null,
   /** Asked again after something changed what it finds (an exclusion taken back). */
   again: 0,
+  /** Beyond (decision 0076): what MusicBrainz (and Discogs, 0.9.13's server) find for the settled words. */
+  beyond: null as { q: string; albums: BeyondAlbum[] } | null,
+  /** Show all (decision 0076): the one kind shown whole, as far as it has come. */
+  all: null as string | null,
+  allFound: null as { q: string; kind: string; items: Found[]; total: number; done: boolean } | null,
 });
+
+/** Beyond is asked once the words settle (decision 0076: about half a second, three letters at least), each query's
+ *  answer kept, so typing back and forth asks nothing again. */
+const BEYOND_MS = 500;
+const beyondKept = new Map<string, BeyondAlbum[]>();
 
 $effect.root(() => {
   // Asked a moment after the words stop changing; nothing for no words. No words: back to the page's own.
@@ -79,7 +94,69 @@ $effect.root(() => {
       clearTimeout(t);
     };
   });
+  $effect(() => {
+    const q = pageView.query.trim();
+    if (q.replace(/\s/g, '').length < 3) return void (globalSearch.beyond = null);
+    const kept = beyondKept.get(q.toLowerCase());
+    if (kept) return void (globalSearch.beyond = { q, albums: kept });
+    let gone = false;
+    const t = setTimeout(() => {
+      searchBeyond(q).then(
+        ({ albums }) => {
+          beyondKept.set(q.toLowerCase(), albums);
+          if (!gone) globalSearch.beyond = { q, albums };
+        },
+        () => {},
+      );
+    }, BEYOND_MS);
+    return () => {
+      gone = true;
+      clearTimeout(t);
+    };
+  });
+  // Show all: the kind's first page, again for new words.
+  $effect(() => {
+    const kind = globalSearch.all;
+    const q = pageView.query.trim();
+    if (!kind || !q) return void (globalSearch.allFound = null);
+    void loadAll(q, kind, true);
+  });
 });
+
+/** How many a Show all asks for at a time. */
+const PAGE = 50;
+/** Show all's next page (the first, `fresh`): the server's kinds by offset, the browser's whole at once. */
+export async function loadAll(q: string, kind: string, fresh = false) {
+  const was = globalSearch.allFound;
+  if (!fresh && (!was || was.q !== q || was.kind !== kind || was.done)) return;
+  const have = fresh ? [] : was!.items;
+  const provider = provided().find((p) => p.kind === kind);
+  if (provider) {
+    const items = provider.find(words(q)).sort((a, b) => b.score - a.score) as Found[];
+    globalSearch.allFound = { q, kind, items, total: items.length, done: true };
+    return;
+  }
+  try {
+    const r = await search(q, [kind as SearchKind], PAGE, have.length);
+    const g = r.groups[kind as SearchKind];
+    const page = (g?.items ?? []) as Found[];
+    const now = globalSearch.allFound;
+    if (!fresh && (now?.q !== q || now.kind !== kind)) return;
+    // A server that pages not (before 0.9.13) answers the first page again: nothing more then.
+    const repeat = !!have.length && !!page.length && have.some((x) => x.subject === page[0].subject && x.track === page[0].track);
+    const items = repeat ? have : [...have, ...page];
+    const total = g?.total ?? items.length;
+    globalSearch.allFound = { q, kind, items, total, done: repeat || !page.length || items.length >= total };
+  } catch {
+    if (globalSearch.allFound) globalSearch.allFound.done = true;
+  }
+}
+/** Opens a group whole (Show all), a step of the history so back returns to every group. */
+export function showAll(kind: string) {
+  history.pushState({ ...(history.state ?? {}), searchAll: kind }, '');
+  globalSearch.all = kind;
+}
+if (typeof window !== 'undefined') addEventListener('popstate', () => (globalSearch.all = (history.state?.searchAll as string | undefined) ?? null));
 
 /** Everywhere's groups but the kinds the page already shows (`except`): the server's library kinds, the browser's
  *  (pages, Settings), then what is not in the library. Read reactively. */
@@ -114,8 +191,31 @@ export function globalGroups(except: readonly string[]): FoundGroup[] {
       })
       .sort((a, b) => byRelevance(a.best, b.best))
       .map((x) => x.g);
-  return [...ranked([...server(LIBRARY), ...here]), ...ranked(server(ELSEWHERE))];
+  // Beyond (decision 0076): last, each album once, none the library or what Cratarr knows already has.
+  const known = new Set(
+    [...server(LIBRARY), ...server(ELSEWHERE)].flatMap((g) => g.items.flatMap((it) => [it.subject.replace(/^(missing|excluded):/, ''), `${(it.artist ?? it.sub ?? '').toLowerCase()}|${it.title.toLowerCase()}`])),
+  );
+  const b = globalSearch.beyond?.q === q ? globalSearch.beyond.albums : [];
+  const beyond: Found[] = b
+    .filter((a) => !a.have && !(a.release_group && known.has(a.release_group)) && !known.has(`${a.artist.toLowerCase()}|${a.title.toLowerCase()}`))
+    .map((a) => ({
+      kind: 'beyond',
+      subject: `beyond:${a.release_group ?? a.discogs ?? `${a.artist}|${a.title}`}`,
+      title: a.title,
+      artist: a.artist,
+      sub: [a.artist, a.year, a.sources.map((x) => (x === 'discogs' ? 'Discogs' : 'MusicBrainz')).join(' · ')].filter(Boolean).join(' · '),
+      cover: a.cover,
+      bandcamp: a.bandcamp ?? null,
+      request: a.request ?? null,
+      score: 0,
+      matched: [],
+    }));
+  const beyondGroup: FoundGroup[] = beyond.length && !except.includes('beyond') ? [{ kind: 'beyond', label: 'Beyond', items: beyond.slice(0, EACH), total: beyond.length }] : [];
+  return [...ranked([...server(LIBRARY), ...here]), ...ranked(server(ELSEWHERE)), ...beyondGroup];
 }
+/** Beyond's albums as asked (to open one: its release group, its year). */
+export const beyondAlbum = (subject: string) =>
+  globalSearch.beyond?.albums.find((a) => `beyond:${a.release_group ?? a.discogs ?? `${a.artist}|${a.title}`}` === subject) ?? null;
 
 /** Whether the server has answered these words (else everywhere's count and its "nothing" wait). */
 export const globalAsked = () => globalSearch.found?.q === pageView.query.trim();

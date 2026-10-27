@@ -20,7 +20,7 @@
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs, SEEK_STEP, type CoverTouch, type SwipeDown, type SwipeSide, type SwipeUp } from './prefs.svelte';
-  import { art, clockText, coverComing, coverFailed, coverLate, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampBusy, shownPaused, wind } from './remote.svelte';
+  import { art, clockText, coverComing, coverFailed, coverLate, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampBusy, shownPaused, wind, windTouch } from './remote.svelte';
   import SeekWave from './SeekWave.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import { Seek } from './seekState.svelte';
@@ -325,7 +325,10 @@
   /** Holding Previous or Next winds the tape (decision 0074), where winding is on here; another of Cratarr's players
    *  decides for itself. */
   const winds = $derived(isLocal() ? (inApp ? appInfo.startStop : prefs.startStop).rewind : !!np?.player);
-  const windHold = (dir: 'back' | 'forward'): Hold => (winds ? { onhold: () => wind(dir, 'start'), onrelease: () => wind(dir, 'stop') } : null);
+  const windHold = (dir: 'back' | 'forward'): Hold =>
+    winds
+      ? { onhold: () => wind(dir, 'start'), onrelease: () => wind(dir, 'stop'), onpress: () => windTouch(dir, true), oncancel: () => windTouch(dir, false) }
+      : null;
 
   /** What a swipe left or right on the cover was chosen to do: a track on or back, or a seek. */
   function side(what: SwipeSide) {

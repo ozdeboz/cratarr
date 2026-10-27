@@ -2,21 +2,21 @@
   // Global search's results (decision 0072): a group per kind but the kind the page already shows (`except`), a few
   // of each, why each is there; the server's (the library, what is not in it) and the browser's (pages, Settings'
   // parts; lib/everywhere), as lib/globalSearch holds them. Shown as the page's or the panel's Everywhere (the owner,
-  // 2026-10-25: the globe beside the search, lib/TopPill), or as Home's own. Nothing found anywhere: one
-  // button, Find more music, which closes the search and looks the words up on MusicBrainz (the Find page).
+  // 2026-10-25: the globe beside the search, lib/TopPill), or as Home's own. Three tiers (decision 0076): the library,
+  // what is known elsewhere, Beyond (MusicBrainz, and Discogs with 0.9.13's server) asked once the words settle; each
+  // group's heading opens it whole (Show all), Beyond's the Find page. Nothing anywhere: Find more music.
   import { takeBackExcluded } from './api';
   import Cover from './Cover.svelte';
   import CoverStatus from './CoverStatus.svelte';
   import CoverBusy from './CoverBusy.svelte';
   import ElsewhereAlbum from './ElsewhereAlbum.svelte';
-  import { globalAsked, globalGroups, globalSearch, leaveSearch, rememberSearch } from './globalSearch.svelte';
+  import { beyondAlbum, globalAsked, globalGroups, globalSearch, leaveSearch, loadAll, rememberSearch, showAll } from './globalSearch.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import Row from './Row.svelte';
   import SectionHead from './SectionHead.svelte';
-  import { artistSubject, viewOver } from './panel.svelte';
+  import { viewOver } from './panel.svelte';
   import { libraryDot } from './albums.svelte';
-  import type { FoundGroup } from './globalSearch.svelte';
   import { pageView } from './pageView.svelte';
   import type { SearchResult } from './search';
   import { toast } from './toast.svelte';
@@ -27,19 +27,6 @@
   const q = $derived(pageView.query.trim());
   const groups = $derived(globalGroups(except));
   const asked = $derived(globalAsked());
-  /** Where a group's heading leads (its ›; the owner, 2026-10-25: "Tracks (N)" and an arrow to the artist's tracks):
-   *  a group found all by one artist's name, to that artist's tracks or page. */
-  function moreOf(g: FoundGroup): (() => void) | undefined {
-    if (g.kind !== 'track' && g.kind !== 'album') return undefined;
-    const by = g.items.map((it) => it.matched.find((m) => m.on === 'artist')?.text);
-    const one = by[0];
-    if (!one || by.some((a) => a !== one)) return undefined;
-    return () => {
-      rememberSearch();
-      pageView.query = '';
-      viewOver(artistSubject('cratarr', one, g.kind === 'track'));
-    };
-  }
   // An album's or a track's library, as a dot before its title, as the Library's lists show it (0.9.5): from its
   // album's subject (`album:<source>/<id>`), the Library's list knowing which library each is in.
   function dotOf(it: SearchResult) {
@@ -61,6 +48,7 @@
   // found deep keeps the words, so it opens narrowed to them as the page's own deep find does (decision 0072), its own
   // results, not everywhere's, in the panel.
   const DEEP_KINDS = ['album', 'artist', 'playlist', 'crate'];
+  const KNOWN = ['spotify', 'suggested', 'requested'];
   const deep = (it: SearchResult) => DEEP_KINDS.includes(it.kind) && it.matched.some((m) => m.on !== 'name');
   function open(it: SearchResult) {
     leaveSearch(deep(it));
@@ -68,6 +56,15 @@
     else if (it.kind === 'missing')
       void elsewhere?.open({ release_group: it.subject.slice('missing:'.length), title: it.title, artist: it.artist ?? '', year: null, cover: it.cover ?? null, bandcamp: it.bandcamp });
     else if (it.kind === 'excluded') leftOut = it;
+    else if (KNOWN.includes(it.kind)) {
+      // Known elsewhere: opened as a missing album is, by its release group where its subject carries one.
+      const rg = /^[a-z]+:([0-9a-f-]{36})$/.exec(it.subject)?.[1] ?? null;
+      void elsewhere?.open({ release_group: rg, title: it.title, artist: it.artist ?? '', year: null, cover: it.cover ?? null, bandcamp: it.bandcamp });
+    }
+    else if (it.kind === 'beyond') {
+      const a = beyondAlbum(it.subject);
+      if (a) void elsewhere?.open({ release_group: a.release_group ?? null, title: a.title, artist: a.artist, year: a.year, cover: a.cover, bandcamp: a.bandcamp ?? null, discogs_url: a.discogs_url ?? null });
+    }
     else viewOver(it.subject);
   }
   async function takeBack(it: SearchResult) {
@@ -80,6 +77,14 @@
     }
   }
 
+  /** Show all's end in sight: its next page. */
+  function nearEnd(more: () => void) {
+    return (el: Element) => {
+      const io = new IntersectionObserver((es) => es.some((e) => e.isIntersecting) && more(), { rootMargin: '400px' });
+      io.observe(el);
+      return () => io.disconnect();
+    };
+  }
   /** Nothing anywhere: the search closed, the words looked up on MusicBrainz. */
   function findMore() {
     const words = q;
@@ -88,22 +93,41 @@
   }
 </script>
 
-{#if q && (groups.length || asked)}
+{#snippet found(it: SearchResult & { track?: string })}
+  <li>
+    <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)}>
+      {#snippet front()}{#if it.kind !== 'setting' && !it.kind.startsWith('page:')}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /><CoverStatus mark={it.request} small />{#if (it.kind === 'missing' && finding === it.subject.slice('missing:'.length)) || (it.kind === 'beyond' && finding === it.subject.slice('beyond:'.length))}<CoverBusy small />{/if}</span>{/if}{/snippet}
+      {#snippet badges()}{@const dot = dotOf(it)}{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{/snippet}
+      {#snippet sub()}{it.sub ?? ''}{#if it.known?.length}<span class="why">{it.sub ? ' · ' : ''}{it.known.join(' · ')}</span>{:else if why(it.matched)}<span class="why">{it.sub ? ' · ' : ''}{why(it.matched)}</span>{/if}{/snippet}
+    </Row>
+  </li>
+{/snippet}
+
+{#if q && globalSearch.all}
+  <!-- Show all (decision 0076): one kind whole, more as it scrolls; back returns to every group. -->
+  {@const kind = globalSearch.all}
+  {@const all = globalSearch.allFound}
+  {@const label = groups.find((g) => g.kind === kind)?.label ?? ''}
+  <section class="global" aria-label={label}>
+    <SectionHead title={all ? `${label} (${all.total.toLocaleString()})` : label} />
+    <ul class="rows">
+      {#each all?.items ?? [] as it (it.subject + (it.track ?? ''))}{@render found(it)}{/each}
+      {#if all && !all.done}<li class="more" {@attach nearEnd(() => loadAll(all.q, all.kind))}></li>{/if}
+    </ul>
+  </section>
+{:else if q && (groups.length || asked)}
   <section class="global" aria-label="Everywhere">
     {#if groups.length}
       {#each groups as g (g.kind)}
-        <SectionHead title={`${g.label} (${g.total.toLocaleString()})`} onmore={moreOf(g)} />
+        <!-- Its heading opens it whole (decision 0076: every group's results, shown all); Beyond's, Find more music. -->
+        <SectionHead title={`${g.label} (${g.total.toLocaleString()})`} onmore={g.kind === 'beyond' ? findMore : () => showAll(g.kind)} />
         <ul class="rows">
-          {#each g.items as it (it.subject + (it.track ?? ''))}
-            <li>
-              <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)}>
-                {#snippet front()}{#if it.kind !== 'setting' && !it.kind.startsWith('page:')}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /><CoverStatus mark={it.request} small />{#if it.kind === 'missing' && finding === it.subject.slice('missing:'.length)}<CoverBusy small />{/if}</span>{/if}{/snippet}
-                {#snippet badges()}{@const dot = dotOf(it)}{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{/snippet}
-                {#snippet sub()}{it.sub ?? ''}{#if why(it.matched)}<span class="why">{it.sub ? ' · ' : ''}{why(it.matched)}</span>{/if}{/snippet}
-              </Row>
-            </li>
-          {/each}
+          {#each g.items as it (it.subject + (it.track ?? ''))}{@render found(it)}{/each}
         </ul>
+        <!-- Discogs' data shown with its attribution (its terms; 0076). -->
+        {#if g.kind === 'beyond' && globalSearch.beyond?.albums.some((a) => a.sources.includes('discogs'))}
+          <p class="credit">Data from <a href="https://www.discogs.com" target="_blank" rel="noopener noreferrer">Discogs</a></p>
+        {/if}
       {/each}
     {:else if asked}
       <div class="none">
@@ -158,6 +182,16 @@
 
   .why {
     color: var(--accent-ink);
+  }
+
+  .credit {
+    margin: 0 0 8px 16px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .credit a {
+    color: inherit;
   }
 
   .none {

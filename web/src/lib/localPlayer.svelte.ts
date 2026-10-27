@@ -18,9 +18,9 @@ import { playback } from './deviceLog';
 import { cue } from './queueCue.svelte';
 import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
-import { albumCoverUrl, getTrackGain, playerCommand, radioNext, type TrackGain } from './api';
+import { albumCoverUrl, getTrackGain, playerCommand, radioNext, windMap, type TrackGain } from './api';
 import { prefs } from './prefs.svelte';
-import { ramping, rampBegins, rampEnds, rewindNow, tapeDir } from './ramping.svelte';
+import { ramping, rampBegins, rampEnds, rewindNow, tapeDir, windAsked } from './ramping.svelte';
 import { asksSignIn, toSignIn } from './reach.svelte';
 import { consumed, rate, tapMs } from './windShape';
 import { BANDCAMP } from './bandcampPreview';
@@ -943,7 +943,10 @@ export function reportedBy(m: {
   reported = { positionMs: Number(m.positionMs) || 0, at: performance.now() };
   local.position = reported.positionMs / 1000;
   // The app's tape rewind (a5): its position going back as it reports it, shown as it goes (lib/remote).
-  if (typeof m.rewinding === 'boolean') rewindNow.on = m.rewinding;
+  if (typeof m.rewinding === 'boolean') {
+    if (m.rewinding) windAsked(false);
+    rewindNow.on = m.rewinding;
+  }
   // Its direction knob, as it stands there.
   if (m.direction === 'L' || m.direction === 'R') tapeDir.want = m.direction;
 }
@@ -1556,9 +1559,14 @@ export function seek(secs: number, wind?: boolean) {
   if (handed()) {
     // Winding there where this device winds seeks (the owner, 2026-10-27: over Play On too): the player is asked to.
     const wound = winds && !local.paused && Math.abs(secs - local.position) > 2;
+    if (wound) {
+      // It winds there: the counter goes with its reports, not to the place.
+      windAsked(true);
+      return hand('seek', { positionMs: Math.round(secs * 1000), wind: true });
+    }
     local.position = secs;
     reported = { positionMs: secs * 1000, at: performance.now() };
-    return hand('seek', { positionMs: Math.round(secs * 1000), ...(wound ? { wind: true } : {}) });
+    return hand('seek', { positionMs: Math.round(secs * 1000) });
   }
   if (!audio) return;
   // During a tape's rewind: it ends, and the track plays from there.
@@ -2114,6 +2122,8 @@ type Winding = {
   brakeFrom: number;
   /** A held one's stream ran out: at the track's edge. */
   edge: boolean;
+  /** A cut one's plan (a5's map=1), where it has come: where in the track each moment of its sound is. */
+  map: [number, number, number][] | null;
   /** Its stream's speed at its start, and whether it gets faster (a hold's, WIND_ACCEL_S); flown: taken over from play
    *  at 1× and handed back moving. */
   v0: number;
@@ -2137,6 +2147,13 @@ export { rewindNow };
 let rewindFetch = false;
 /** A hold under way (its press), before and while it winds: let go, it plays on. */
 let holding: { dir: 1 | -1; released: boolean } | null = null;
+/** Whether a track can be wound: the server renders the wind stream from its own files, so not a Bandcamp preview nor
+ *  the device's own music (the owner, 2026-10-27: there it degrades gracefully, keeping what it can). */
+export const windable = (t: { source: string } | null | undefined) => !!t && t.source !== BANDCAMP && t.source !== DEVICE;
+/** A hold on a track that cannot be wound: Next speeds the track's own player up (to PLAIN_TOP×, its pitch following),
+ *  Previous does nothing while held and is a plain Previous when let go (as the app does). */
+const PLAIN_TOP = 4;
+let plainHold: { dir: 1 | -1; speeding: boolean } | null = null;
 /** The wind as loud as the track: the page's volume and the track's level (the wind volume is the stream's own). */
 function clipVolume() {
   if (rewinding && audio) rewinding.clip.volume = Math.min(1, audio.volume * (level ? (told?.level ?? 1) : 1));
@@ -2165,6 +2182,8 @@ function vAt(w: Winding, s: number): number {
 }
 /** How far through the track(s) the stream has come at `s` seconds into it (s): an accelerating one's integral. */
 function distance(w: Winding, s: number): number {
+  // A cut one settled (its plan dropped, settle): it stays where it was while it brakes.
+  if (w.v0 === 0) return 0;
   if (!w.accel || w.v0 >= WIND_TOP) return w.v0 * s;
   const A = WIND_ACCEL_S;
   const top = A * Math.log2(WIND_TOP / w.v0);
@@ -2280,7 +2299,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
   if (!audio || committed !== null || rewinding) return false;
   const here = where();
   const t = here && local.queue[here.seg.index];
-  if (!here || !t) return false;
+  if (!here || !t || !windable(t)) return false;
   const { seg } = here;
   let from = here.offset;
   if (to !== null && Math.abs(to - from) < 0.5) return false;
@@ -2294,18 +2313,27 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
   const through = use ? use.through : to === null && wind.edges === 'queue' ? throughOf(seg.index, dir) : [];
   // A hold winds ever faster; the knob's backwards and a tap or a seek keep their speed.
   const accel = to === null && !reverse;
-  const clip = use?.clip ?? windClip(windUrl(t, use?.from ?? from, to, dir, D, through, wind, accel));
+  const url = use ? null : windUrl(t, from, to, dir, D, through, wind, accel);
+  const clip = use?.clip ?? windClip(url!);
   if (use) from = use.from;
   const v0 = use?.v0 ?? wind.speed;
   // Flown: it sounds at the track's own speed from its first moment.
   if (fly) clip.playbackRate = 1 / v0;
-  const w: Winding = { clip, seg, from, to, dir, D, wind, v0, accel, fly, reverse, after: 'play', at: null, brake: null, brakeFrom: 1, edge: false, through, shown: seg.index, timer: undefined };
+  const w: Winding = { clip, seg, from, to, dir, D, wind, map: null, v0, accel, fly, reverse, after: 'play', at: null, brake: null, brakeFrom: 1, edge: false, through, shown: seg.index, timer: undefined };
   const mine = () => rewinding === w;
   // Every step timed from the press, in the playback log (the owner, 2026-10-27: find any delay at the deepest level).
   const t0 = performance.now();
   const say = (what: string, fields: Record<string, unknown> = {}, lvl: 'info' | 'warn' = 'info') =>
     playback(lvl, `wind ${what}`, { t: Math.round(performance.now() - t0), clip: Math.round(clip.currentTime * 1000), ...fields });
   rewinding = w;
+  windAsked(true);
+  // A cut one's plan beside its sound (decision 0075: a press during it lands where the sound is; a server before 0.9.13
+  // has none, and its counter's line stands in).
+  if (to !== null && url)
+    windMap(url).then(
+      (m) => mine() && Array.isArray(m?.map) && (w.map = m.map),
+      () => {},
+    );
   // The counter where it was pressed from the press on, never where the track waits (the owner, 2026-10-27: the
   // waveform jumped to 0 before winding down).
   rewindPos = from;
@@ -2331,6 +2359,8 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
     say('arrived', { index, at: Math.round(pos * 1000), after: w.after });
     endRewind();
     const end = lengthOf(index) ?? Infinity;
+    // Settled for something that comes after it (a hold, the knob: settle): resting there, quietly.
+    if (!reverse && w.after === 'pause') return restAt(index, Math.max(0, Math.min(pos, end - 0.5)));
     // Played backwards and stopped (a pause, the track's edge, the knob back to R): the tape rests there, or plays on
     // forwards from there (the knob's turn).
     if (reverse) {
@@ -2396,6 +2426,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       w.at = performance.now();
       say('playing');
       rewindNow.on = true;
+      windAsked(false);
       w.timer = setInterval(() => {
         if (!mine()) return clearInterval(w.timer);
         const now = performance.now();
@@ -2426,7 +2457,9 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
     'ended',
     () => {
       if (!mine()) return;
-      if (to !== null) return arrive({ index: seg.index, pos: to });
+      if (w.to !== null) return arrive({ index: seg.index, pos: w.to });
+      // Settled (its plan dropped): where its counter stands.
+      if (w.v0 === 0) return arrive(windPlace(w, performance.now()));
       // Held to the edge (the track's, or the last one's it wound on through): it rests there until let go.
       const { index } = windPlace(w, performance.now());
       const edge = { index, pos: dir < 0 ? 0 : (lengthOf(index) ?? rewindPos ?? w.from) };
@@ -2467,6 +2500,7 @@ function endRewind() {
   rewinding = null;
   rewindPos = null;
   rewindNow.on = false;
+  windAsked(false);
   committed = null;
   w.clip.pause();
   w.clip.removeAttribute('src');
@@ -2476,13 +2510,23 @@ function endRewind() {
  *  `windRelease` (the owner, 2026-10-27). The app's player and one of Cratarr's players do it themselves. */
 export async function windHold(dir: 'back' | 'forward') {
   if (handed()) return hand('wind', { dir, phase: 'start' });
-  if (!audio || local.index < 0 || holding || rewinding) return;
+  if (!audio || local.index < 0 || holding) return;
+  // A track that cannot be wound (Bandcamp's, the device's): what can be kept.
+  if (!windable(local.queue[local.index])) return startPlainHold(dir === 'back' ? -1 : 1);
   const h: { dir: 1 | -1; released: boolean } = { dir: dir === 'back' ? -1 : 1, released: false };
   holding = h;
+  // Anything under way gives way to it (decision 0075: anything interrupts anything): a wind (not the knob's backwards)
+  // brakes to rest where it is, a pause's brake runs out; then the hold, from there.
+  if ((rewinding && !rewinding.reverse) || committed === true) {
+    await settle();
+    if (holding !== h) return;
+    if (h.released) return void (holding = null);
+  }
+  if (rewinding) return void (holding = null);
   // Forwards while playing forwards: no stop (the owner, 2026-10-27).
-  if (h.dir > 0 && !audio.paused && committed === null && tapeDir.want === 'R') return fly(h);
-  // Fetched now, loading while the pause winds down (it rests where it was pressed: the wind's start is known now).
-  const armed = armWind(h.dir);
+  if (h.dir > 0 && !audio.paused && committed === null && tapeDir.want === 'R') return fly(h, 0, takeArmed(1));
+  // Fetched at the touch (pre-armed) or now, loading while the pause winds down (it rests where the hold began).
+  const armed = takeArmed(h.dir, true) ?? armWind(h.dir);
   if (!audio.paused) await quietly(() => pauseRamped());
   if (holding !== h) return disarm(armed);
   if (h.released) {
@@ -2499,8 +2543,8 @@ export async function windHold(dir: 'back' | 'forward') {
 /** A forward hold while playing: its stream asked from a moment ahead, taken over as the track reaches that moment
  *  (once it is loaded), at 1×. Let go before: nothing changed. Not loaded in time: asked again further on, twice, then
  *  the stopping way. */
-function fly(h: { dir: 1 | -1; released: boolean }, tries = 0) {
-  const armed = armWind(1, FLY_LEAD * (tries + 1), FLY_SPEED);
+function fly(h: { dir: 1 | -1; released: boolean }, tries = 0, pre: Armed | null = null) {
+  const armed = pre ?? armWind(1, FLY_LEAD * (tries + 1), FLY_SPEED);
   if (!armed) return void (holding = null);
   const watch = () => {
     if (holding !== h || h.released) {
@@ -2531,11 +2575,83 @@ function fly(h: { dir: 1 | -1; released: boolean }, tries = 0) {
   };
   requestAnimationFrame(watch);
 }
-/** Where a wind under way has got, as the counter shows it: that is where a press during it lands. */
+/** Brings what runs to rest where it is, quietly (decision 0075: a new action takes over from there): a wind brakes
+ *  (a cut one keeps its counter where it was), a pause's brake runs out. Resolves once nothing runs. */
+async function settle() {
+  const w = rewinding;
+  if (w && !w.reverse && w.at !== null) {
+    holding = null;
+    w.after = 'pause';
+    if (w.brake === null) {
+      const now = performance.now();
+      if (w.to !== null) {
+        // A cut one's plan dropped: from here a plain brake, from where its sound is.
+        const at = soundPlace(w, now);
+        w.to = null;
+        w.accel = false;
+        w.fly = false;
+        w.from = at.pos;
+        w.v0 = 0;
+      }
+      w.brakeFrom = windRate(w, now);
+      w.brake = now;
+    }
+  } else if (w && !w.reverse) {
+    // Not sounding yet: dropped, resting where it was.
+    endRewind();
+    restAt(w.seg.index, w.from);
+  }
+  for (let i = 0; i < 200 && ((rewinding && !rewinding.reverse) || committed === true); i++) await new Promise((r) => setTimeout(r, 25));
+}
+/** A hold's stream asked at the touch (the owner, 2026-10-27: no wait once it is a hold), for where the hold will start
+ *  from: HOLD_S on, as the track plays meanwhile (a forward one also FLY_LEAD further, to be taken over in flight). */
+const HOLD_S = 0.35;
+let prearmed: { dir: 1 | -1; armed: Armed; at: number } | null = null;
+export function windArm(dir: 'back' | 'forward') {
+  if (handed() || !audio || local.index < 0 || rewinding || committed !== null) return;
+  windDisarm();
+  const d: 1 | -1 = dir === 'back' ? -1 : 1;
+  const playingNow = !audio.paused;
+  const lead = playingNow ? HOLD_S + (d > 0 ? FLY_LEAD : 0) : 0;
+  const armed = armWind(d, lead, d > 0 && playingNow ? FLY_SPEED : prefs.startStop.wind.speed);
+  if (armed) prearmed = { dir: d, armed, at: performance.now() };
+}
+/** The touch was a tap after all: its stream dropped. */
+export function windDisarm() {
+  if (prearmed) disarm(prearmed.armed);
+  prearmed = null;
+}
+/** The pre-armed stream for a hold in `dir`, where it still fits (the same track, not passed yet). `stopping`: the hold
+ *  stops first, resting where it began: the stream must start there. */
+function takeArmed(dir: 1 | -1, stopping = false): Armed | null {
+  const p = prearmed;
+  prearmed = null;
+  if (!p) return null;
+  const here = where();
+  const fits = p.dir === dir && here && here.seg.index === p.armed.index && performance.now() - p.at < 2000 && (stopping ? Math.abs(here.offset - p.armed.from) < 0.25 : p.armed.from > here.offset + 0.05);
+  if (fits) return p.armed;
+  disarm(p.armed);
+  return null;
+}
+/** Where a wind's sound is now, by its plan where it has one (a cut one: the counter glides over the cuts, the sound
+ *  does not), else as its counter shows it. */
+function soundPlace(w: Winding, now: number): { index: number; pos: number } {
+  const m = w.map;
+  if (!m?.length || w.to === null || w.at === null) return windPlace(w, now);
+  const t = w.clip.currentTime * 1000;
+  let k = 0;
+  while (k + 1 < m.length && m[k + 1][0] <= t) k++;
+  const [s0, , p0] = m[k];
+  const next = m[k + 1];
+  // Within a piece: on between its ends; at its end (a cut: the next entry starts the next piece), there.
+  const pos = next && next[0] > s0 ? p0 + ((next[2] - p0) * (t - s0)) / (next[0] - s0) : p0;
+  return { index: w.seg.index, pos: Math.max(0, pos / 1000) };
+}
+/** Where a wind under way has got: where its sound is, which is where a press during it lands. */
 function windNow(w: Winding): { index: number; pos: number } {
   if (w.at === null) return { index: w.seg.index, pos: w.from };
   if (w.edge) return { index: w.shown, pos: rewindPos ?? w.from };
-  return windPlace(w, performance.now());
+  return soundPlace(w, performance.now());
 }
 /** Rests paused at `secs` into queue track `index`. */
 function restAt(index: number, secs: number) {
@@ -2591,6 +2707,7 @@ function windTakeover(press: 'pause' | 'play' | 'next' | 'previous') {
 /** Holding ended: a held wind brakes and plays on from where it got to. */
 export function windRelease(dir: 'back' | 'forward') {
   if (handed()) return hand('wind', { dir, phase: 'stop' });
+  if (plainHold) return endPlainHold();
   const h = holding;
   if (!h) return;
   h.released = true;
@@ -2604,6 +2721,26 @@ export function windRelease(dir: 'back' | 'forward') {
   w.brake = now;
 }
 
+/** A hold where nothing can be wound: Next while playing speeds the track up on its own player (Start and stop's vinyl
+ *  ramp, the wind's spin-up), back to 1× on the brake when let go; anything else waits for the release. */
+function startPlainHold(dir: 1 | -1) {
+  if (!audio) return;
+  const speeding = dir > 0 && !audio.paused && committed === null;
+  plainHold = { dir, speeding };
+  if (!speeding) return;
+  playback('info', 'wind plain', { track: local.queue[local.index]?.id ?? null, dir });
+  audio.preservesPitch = false;
+  void ramp(1, PLAIN_TOP, prefs.startStop.wind.attackMs, (v) => audio && (audio.playbackRate = v), brakeCurve);
+}
+function endPlainHold() {
+  const p = plainHold;
+  plainHold = null;
+  if (!p || !audio) return;
+  if (!p.speeding) return p.dir < 0 ? previous() : next();
+  const from = audio.playbackRate;
+  void ramp(from, 1, prefs.startStop.wind.releaseMs, (v) => audio && (audio.playbackRate = v), brakeCurve).then((done) => done && unramp());
+}
+
 // --- The direction knob (the tape deck's; the owner, 2026-10-27) ---
 // R plays forwards on the track's own player, L backwards at 1× on the wind stream; the two never sound together, and
 // the tape changes direction only from a stop, as a deck does: turned while playing it slows to a stop (a vinyl's ramp,
@@ -2615,6 +2752,7 @@ export function windRelease(dir: 'back' | 'forward') {
 /** Turns the direction knob (lib/TapeDeck): here, or on the app's player or the one driven, which turns itself (its
  *  report confirms it). */
 export function turnTape(want: 'L' | 'R') {
+  if (!handed() && want === 'L' && !windable(local.queue[local.index])) return;
   if (handed()) {
     tapeDir.want = want;
     return hand('direction', { dir: want });
@@ -2626,6 +2764,12 @@ export function turnTape(want: 'L' | 'R') {
 async function stepTape() {
   if (!audio || local.index < 0) return;
   const playingNow = !local.paused;
+  // A wind under way (not the knob's own) comes to rest first, then the knob's way (anything interrupts anything).
+  if (tapeDir.state === 'forward' && rewinding && !rewinding.reverse) {
+    await settle();
+    if (tapeDir.want === 'L') return void backwards();
+    return;
+  }
   if (tapeDir.state === 'forward' && tapeDir.want === 'L' && playingNow && !rewinding) {
     tapeDir.state = 'stopping';
     await turned(() => pauseRamped());

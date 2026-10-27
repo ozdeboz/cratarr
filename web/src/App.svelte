@@ -545,11 +545,21 @@
   const leadFade = $derived(reducedMotion() || (phone && !!panelPage && (underBar || !playlistLayer)) ? 0 : 150);
   /** The one pill's settings: the panel's where it handed them, else the page's. */
   const pagePillShown = $derived(pagePill || ['settings', 'discover', 'insights', 'health', 'requests', 'home', 'find'].includes(page));
+  /** The left glass holds something of its own (Home's Find everything goes to the pill's side then). */
+  const leadTaken = $derived(!!handed || navAt > 0 || backHome || (!!panelPage && phone) || page === 'library');
   const pillNow = $derived(
     handed
       ? handed.pill()
       : pagePillShown
-        ? { page: page, view: hasView(page) && !(page === LIBRARY.id && inSpotify()), device: pagePill && pillDevice, filter: (pagePill && !page.startsWith('local-') && page !== 'downloads') || page === 'discover', action: pageView.action }
+        ? {
+            page: page,
+            view: hasView(page) && !(page === LIBRARY.id && inSpotify()),
+            device: pagePill && pillDevice,
+            filter: (pagePill && !page.startsWith('local-') && page !== 'downloads') || page === 'discover',
+            action: pageView.action,
+            // Home's Find everything on the pill's side where its own glass on the left is taken (the owner, 2026-10-27).
+            find: page === 'home' && leadTaken,
+          }
         : null,
   );
   // One glass of a row that stays, emptied (the owner, 2026-10-25: "it should indeed slide away"): as the row does, up
@@ -557,6 +567,40 @@
   // goes at once (Search's icons' folding unseen under it).
   let rightEl = $state<HTMLElement>();
   const leadHas = $derived(!!handed || navAt > 0 || backHome || (!!panelPage && phone) || page === 'library');
+  /** Home's Find everything flowing into the pill (its copy merging): the button itself away meanwhile. */
+  let findMerging = $state(false);
+  /** Home's Find everything, on its own glass on the left (the owner, 2026-10-27): a tap merges it into the pill like
+   *  liquid glass, its front flowing into the pill's side, its back drawn after it, into the magnifier, as the search
+   *  opens there. A copy of it flows; the button itself is away until the search closes again. */
+  function mergeFind(btn: HTMLElement) {
+    const into = rightEl?.querySelector('.pill button') ?? rightEl;
+    const pill = rightEl?.getBoundingClientRect();
+    if (reducedMotion() || !into || !pill) return void pageView.findAsked++;
+    const b = btn.getBoundingClientRect();
+    const m = into.getBoundingClientRect();
+    const drop = btn.cloneNode(true) as HTMLElement;
+    Object.assign(drop.style, { position: 'fixed', top: `${b.top}px`, left: `${b.left}px`, width: `${b.width}px`, height: `${b.height}px`, margin: '0', zIndex: '60', pointerEvents: 'none', boxSizing: 'border-box' });
+    document.body.appendChild(drop);
+    findMerging = true;
+    const MS = 460;
+    // Stretched: its front reaching into the pill's round side, its back only starting to follow.
+    const reach = pill.left + 22;
+    const back = b.left + (reach - b.left) * 0.35;
+    const a = drop.animate(
+      [
+        { left: `${b.left}px`, width: `${b.width}px`, opacity: 1 },
+        { left: `${back}px`, width: `${reach - back}px`, opacity: 1, offset: 0.45 },
+        { left: `${m.left}px`, width: `${m.width}px`, opacity: 0 },
+      ],
+      { duration: MS, easing: 'cubic-bezier(0.45, 0, 0.2, 1)', fill: 'forwards' },
+    );
+    // The search opens as the drop reaches the pill.
+    setTimeout(() => pageView.findAsked++, MS * 0.45);
+    a.onfinish = a.oncancel = () => {
+      drop.remove();
+      findMerging = false;
+    };
+  }
   const rightHas = $derived(!!(pillNow || handed?.extra));
   let had = { lead: false, right: false };
   // Before the page changes, while the glass still shows what it held.
@@ -1022,6 +1066,11 @@
           {#if panelPage && phone}<h1 class="page-name">{panelPage.label}</h1>{/if}
           <!-- The Library's view, on the glass's extension as a control page's name (the owner, 2026-10-25). -->
           {#if page === 'library'}<LibraryViewPicker />{/if}
+          <!-- Home's Find everything on its own thin glass, where the left glass is otherwise empty (the owner, 2026-10-27);
+               away while the search is open or it flows into the pill. -->
+          {#if page === 'home' && !leadTaken && !pageView.searchOpen && !findMerging}
+            <button class="find-ext" onclick={(e) => mergeFind(e.currentTarget)} in:fade={{ duration: 200 }}><Icon name="search" size={20} /><span>Find everything</span></button>
+          {/if}
         </span>
       {/if}
   {/snippet}
@@ -1233,6 +1282,27 @@
     box-shadow: none;
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
+  }
+
+  /* Home's Find everything: the title's thin glass, as tall as the pill with its band. */
+  .find-ext {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 48px;
+    padding: 0 18px 0 14px;
+    border: 0;
+    border-radius: 26px;
+    background: color-mix(in srgb, var(--float-bg) 45%, transparent);
+    -webkit-backdrop-filter: blur(10px) saturate(1.3);
+    backdrop-filter: blur(10px) saturate(1.3);
+    box-shadow: 0 2px 10px rgb(0 0 0 / 0.18);
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    cursor: pointer;
   }
 
   .lead.title-away :global(.navpill) {

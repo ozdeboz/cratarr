@@ -4,7 +4,8 @@
 
 const HOLD_MS = 350;
 
-export type Hold = { onhold: () => void; onrelease: () => void } | null;
+/** `onpress`: the touch began (a hold's stream asked already, lib/localPlayer windArm); `oncancel`: it was a tap. */
+export type Hold = { onhold: () => void; onrelease: () => void; onpress?: () => void; oncancel?: () => void } | null;
 
 export function holdWind(node: HTMLElement, hold: Hold) {
   let now = hold;
@@ -16,6 +17,7 @@ export function holdWind(node: HTMLElement, hold: Hold) {
     held = false;
     node.setPointerCapture?.(e.pointerId);
     const h = now;
+    h.onpress?.();
     timer = setTimeout(() => {
       timer = undefined;
       held = true;
@@ -24,9 +26,11 @@ export function holdWind(node: HTMLElement, hold: Hold) {
     }, HOLD_MS);
   }
   function up() {
+    const waiting = timer !== undefined;
     clearTimeout(timer);
     timer = undefined;
     if (held) now?.onrelease();
+    else if (waiting) now?.oncancel?.();
   }
   function click(e: MouseEvent) {
     if (!held) return;

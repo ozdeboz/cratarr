@@ -27,6 +27,7 @@
     device = true,
     order = null,
     tempos = null,
+    find = false,
     filter = true,
     kind = null,
     counted = null,
@@ -48,6 +49,8 @@
     /** The panel list's tempos, for its filter's tempo selector (decision 0041). */
     tempos?: readonly (number | null | undefined)[] | null;
     /** The filter's button; not on local mode's pages (decision 0052), which have only their search. */
+    /** Home's Find everything, beside the pill (its own glass on the left taken). */
+    find?: boolean;
     filter?: boolean;
     /** In the panel: the kind of list it shows, whose filter is remembered (decision 0060). */
     kind?: PanelKind | null;
@@ -76,6 +79,13 @@
   $effect(() => {
     if (searching && !quiet) field?.focus();
     quiet = false;
+  });
+  // Opened from outside (Home's Find everything, its glass merged into this one: App).
+  let findSeen = untrack(() => pageView.findAsked);
+  $effect(() => {
+    if (pageView.findAsked === findSeen) return;
+    findSeen = pageView.findAsked;
+    untrack(() => (searching = true));
   });
   $effect(() => {
     // The field, or the work's progress unfolded: either takes the row's room (App's title gives way where it must).
@@ -230,6 +240,13 @@
 </script>
 
 <span class="pill-row" class:wide={showing}>
+  <!-- Home's Find everything where its own glass on the left is taken (the owner, 2026-10-27): a thin glass grown
+       leftwards out of the pill, as the globe; a tap opens the search, the glass folding into the pill. -->
+  {#if find && words && !searching && !globeShown}
+    <span class="globe find" transition:paced|global>
+      <button class="find-button" onclick={() => (searching = true)}><Icon name="search" size={20} /><span>Find everything</span></button>
+    </span>
+  {/if}
   {#if globeShown}
     <span class="globe" transition:paced|global>
       <button
@@ -336,6 +353,19 @@
     -webkit-backdrop-filter: blur(10px) saturate(1.3);
     backdrop-filter: blur(10px) saturate(1.3);
     box-shadow: 0 2px 10px rgb(0 0 0 / 0.18);
+  }
+
+  /* Find everything: words beside its magnifier, as a button with a label. */
+  .find-button {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: auto;
+    padding: 0 10px 0 8px;
+    border-radius: 22px;
+    font: inherit;
+    font-size: 14px;
+    white-space: nowrap;
   }
 
   /* Everywhere's shown: lit. */
