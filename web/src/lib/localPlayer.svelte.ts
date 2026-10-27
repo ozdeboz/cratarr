@@ -896,6 +896,23 @@ export function emptyHere() {
 
 /** The last report: the position then (ms), and when it came; the position in between is counted on here. */
 let reported = { positionMs: 0, at: 0 };
+/** A wind on the player driven (the app's, another's): between two of its reports the counter glides from where it is
+ *  shown to the place last reported, over the reports' interval (the owner, 2026-10-27: no steps at a wind's speed),
+ *  a report behind the sound, never past it (no guessing ahead through a brake). */
+let glide: { from: number; to: number; at: number; span: number } | null = null;
+let glideFrame = 0;
+function gliding() {
+  if (glideFrame) return;
+  const step = () => {
+    glideFrame = 0;
+    const g = glide;
+    if (!g || !handed()) return;
+    const u = Math.min(1, (performance.now() - g.at) / g.span);
+    local.position = g.from + (g.to - g.from) * u;
+    glideFrame = requestAnimationFrame(step);
+  };
+  glideFrame = requestAnimationFrame(step);
+}
 const sameQueue = (a: LocalTrack[], b: LocalTrack[]) =>
   a.length === b.length && a.every((t, i) => t.source === b[i].source && t.id === b[i].id && t.entry === b[i].entry);
 
@@ -941,8 +958,16 @@ export function reportedBy(m: {
   local.error = typeof m.error === 'string' ? m.error : null;
   // The app's own level (a5, 0.9.8): what it applies now; 0 when it levels nothing or says nothing.
   local.levelDb = typeof m.levelDb === 'number' && m.levelDb < 0 ? m.levelDb : 0;
-  reported = { positionMs: Number(m.positionMs) || 0, at: performance.now() };
-  local.position = reported.positionMs / 1000;
+  const now = performance.now();
+  const pos = (Number(m.positionMs) || 0) / 1000;
+  if (m.rewinding === true) {
+    glide = { from: local.position, to: pos, at: now, span: Math.min(1000, Math.max(100, now - reported.at)) };
+    gliding();
+  } else {
+    glide = null;
+    local.position = pos;
+  }
+  reported = { positionMs: pos * 1000, at: now };
   // The app's tape rewind (a5): its position going back as it reports it, shown as it goes (lib/remote).
   if (typeof m.rewinding === 'boolean') {
     if (m.rewinding) windAsked(false);
@@ -1009,6 +1034,7 @@ function hand(op: string, args: Record<string, unknown> = {}) {
  *  second: counted on from the playing player's last report, or read from this page's own audio. */
 export function positionNow(): number {
   if (!handed()) return rewindPos ?? where()?.offset ?? local.position;
+  if (glide) return local.position;
   const p = (reported.positionMs + sinceReport()) / 1000;
   return local.duration ? Math.min(p, local.duration) : p;
 }
