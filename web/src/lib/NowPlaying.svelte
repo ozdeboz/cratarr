@@ -1352,8 +1352,11 @@
     color: var(--art-accent);
   }
 
+  /* Capped, so centred in its wider box by its margins (pinned to the box's left, it sat off the icon; the owner's
+     tablet, 2026-10-27). */
   .act.device small {
     max-width: 88px;
+    margin-inline: auto;
     overflow: hidden;
     text-overflow: ellipsis;
   }
