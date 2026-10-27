@@ -202,16 +202,17 @@ export function position(): number {
   return p;
 }
 export const paused = (): boolean => playing()?.progress?.paused ?? false;
-/** A Start and stop ramp under way on this device's player: the play button is inert until it ends (the owner,
- *  2026-10-26). */
+/** A Start and stop ramp under way on this device's player. The page's own turns round at a press (0075's first step,
+ *  the owner 2026-10-27); the app's play button stays inert until its ramp ends, until the app turns too (0.9.13). */
 export const rampBusy = () => isLocal() && ramping.dir !== null;
+const rampInert = () => rampBusy() && inApp;
 /** Paused as the play button shows it: from the press on, the way the ramp goes. */
 export const shownPaused = (): boolean => (rampBusy() ? ramping.dir === 'out' : paused());
-/** The play button: play or pause, not while a ramp runs. */
+/** The play button: play or pause; during the page's own ramp, that ramp turned round. */
 export function playPause() {
-  if (rampBusy()) return;
+  if (rampInert()) return;
   const ss = inApp ? appInfo.startStop : prefs.startStop;
-  if (isLocal() && ss.mode !== 'off') {
+  if (isLocal() && ss.mode !== 'off' && !rampBusy()) {
     if (!paused()) rampPressed('out', ss.ms);
     else {
       const ms = windUpMs(ss.ms, ss.mode, position(), inApp ? 0.25 : undefined);

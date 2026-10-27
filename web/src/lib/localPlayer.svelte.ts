@@ -1489,6 +1489,9 @@ export function togglePlay(plain = false) {
     atOnce();
     return void (audio.paused ? audio.play().catch(() => {}) : audio.pause());
   }
+  // A ramp under way turns round (the audio still sounds while it winds down).
+  if (committed === true) return turnUp();
+  if (committed === false && ramping.dir === 'in') return void pauseRamped();
   if (audio.paused) rampIn();
   else void pauseRamped();
 }
@@ -1740,10 +1743,12 @@ function applyVolume() {
 // next and previous ramp). Stepped by time, not by frames, so a hidden page still gets there.
 let rampGain = 1;
 let rampToken = 0;
-/** What a ramp under way has committed to (paused or playing), shown at once on every device; until it is done, play
- *  and pause wait (the owner, 2026-10-26: a press during a ramp is not taken, rather than starting it over with a hard
- *  edge). Null: no ramp. */
+/** What a ramp under way has committed to (paused or playing), shown at once on every device. A press of play or pause
+ *  during one turns it round from where it has got to, without a hard edge (decision 0075's first step, the owner
+ *  2026-10-27; it waited before). Null: no ramp. */
 let committed: boolean | null = null;
+/** How far up the ramp under way has got (0: still or silent, 1: full speed and volume), where a press turns it. */
+let rampAt = 1;
 /** Each ramp's run; a seek cutting one short (overrideRamp) moves it on, and that ramp's own ending then does nothing. */
 let run = 0;
 /** Where the counter stays while a ramp sounds (stream time): a pause holds the moment it was pressed, and play holds
@@ -1785,6 +1790,7 @@ function unramp() {
  *  sounds loud and then drops at the end (the owner, 2026-10-26, of the app's first try). */
 const heard = (v: number) => (v <= 0 ? 0 : v >= 1 ? 1 : 10 ** (3 * (v - 1)));
 const rampSet = (mode: 'vinyl' | 'fade') => (v: number) => {
+  rampAt = mode === 'fade' ? v : (v - RAMP_LOW) / (1 - RAMP_LOW);
   if (mode === 'fade') {
     rampGain = heard(v);
     applyVolume();
@@ -1793,21 +1799,29 @@ const rampSet = (mode: 'vinyl' | 'fade') => (v: number) => {
     audio.playbackRate = Math.max(RAMP_LOW, v);
   }
 };
-/** Winds down what plays (nothing to do when it is at once, or not playing). */
-async function rampOut(): Promise<void> {
-  const { mode, ms } = prefs.startStop;
+/** The ramp's value for a share of the way up (a vinyl's speed, a fade's level). */
+const levelAt = (mode: 'vinyl' | 'fade', share: number) => (mode === 'fade' ? share : RAMP_LOW + (1 - RAMP_LOW) * share);
+/** Winds down what plays (nothing to do when it is at once, or not playing), from `share` of the way up (a wind-up
+ *  turned round part way: only that much of the ramp is left). */
+async function rampOut(share = 1): Promise<void> {
+  const { mode } = prefs.startStop;
   if (mode === 'off' || !audio || audio.paused) return;
-  rampBegins('out', ms);
+  const ms = prefs.startStop.ms * share;
+  rampBegins('out', ms, prefs.startStop.ms);
+  const at = ramping.at;
   try {
-    await ramp(1, mode === 'fade' ? 0 : RAMP_LOW, ms, rampSet(mode), mode === 'fade' ? easeInOut : easeIn);
+    await ramp(levelAt(mode, share), mode === 'fade' ? 0 : RAMP_LOW, ms, rampSet(mode), mode === 'fade' ? easeInOut : easeIn);
   } finally {
-    rampEnds();
+    // Not where another ramp took over (a press turning it round): that one's.
+    if (ramping.at === at) rampEnds();
   }
 }
 /** Plays, winding up from still (or silence); not while a ramp is under way. `early`: a stream begun that much (`lead`
  *  s) before the point it winds up to, over `ms` (playInto). */
 function rampIn(early?: { ms: number; lead: number }) {
-  if (!audio || committed !== null) return;
+  if (!audio) return;
+  if (committed === true) return turnUp();
+  if (committed !== null) return;
   const { mode } = prefs.startStop;
   let { ms } = prefs.startStop;
   // From a track's start it plays at once, always (the owner, 2026-10-26): there is nothing to wind up from.
@@ -1847,6 +1861,26 @@ function rampIn(early?: { ms: number; lead: number }) {
     committed = null;
   });
 }
+/** A wind-down turned round by play (the owner, 2026-10-27): back up from where it has got to, over what is left of the
+ *  ramp, playing on from where it sounds (the counter goes with it from the press). */
+function turnUp() {
+  if (!audio || committed !== true) return;
+  const { mode } = prefs.startStop;
+  if (mode === 'off') return atOnce();
+  const share = Math.max(0, Math.min(1, rampAt));
+  committed = false;
+  local.paused = false;
+  heldAt = null;
+  const ms = prefs.startStop.ms * (1 - share);
+  rampBegins('in', ms, prefs.startStop.ms);
+  const mine = ++run;
+  void ramp(levelAt(mode, share), 1, ms, rampSet(mode), mode === 'fade' ? easeInOut : easeOut).then(() => {
+    if (mine !== run) return;
+    rampEnds();
+    unramp();
+    committed = null;
+  });
+}
 /** Whatever ramp runs ends here, at full speed and volume (a switch between devices has no effects; the owner,
  *  2026-10-27). */
 function atOnce() {
@@ -1854,19 +1888,27 @@ function atOnce() {
   ++run;
   heldAt = null;
   unramp();
+  rampEnds();
   committed = null;
 }
-/** Pauses, winding down first; paused at once as far as anyone sees, and nothing takes it back meanwhile. */
+/** Pauses, winding down first; paused at once as far as anyone sees. During a wind-up it turns round from where that
+ *  has got to, resting where the wind-up was going (the counter never left it). Play meanwhile turns it up again. */
 async function pauseRamped() {
-  if (!audio || committed !== null) return;
-  if (prefs.startStop.mode === 'off' || audio.paused) return void audio.pause();
+  if (!audio || committed === true) return;
+  const turning = committed === false && ramping.dir === 'in';
+  if (committed !== null && !turning) return;
+  if (prefs.startStop.mode === 'off' || audio.paused) {
+    atOnce();
+    return void audio?.pause();
+  }
+  const share = turning ? Math.max(0, Math.min(1, rampAt)) : 1;
   committed = true;
   local.paused = true;
   // The moment it was pressed: the counter stays there while the end sounds, and it rests there after.
-  heldAt = audio.currentTime;
+  if (!turning || heldAt === null) heldAt = audio.currentTime;
   const mine = ++run;
   try {
-    await rampOut();
+    await rampOut(share);
     if (mine !== run) return;
     audio?.pause();
     if (audio && inBuffer(heldAt)) audio.currentTime = heldAt;
@@ -1882,6 +1924,11 @@ async function pauseRamped() {
  *  starts as it is, at full speed and volume (the owner, 2026-10-26: no wind-up on a skip). */
 async function skipRamped(go: () => void) {
   const s = prefs.startStop;
+  // During a play or pause ramp: on at once (anything interrupts anything, the owner 2026-10-27).
+  if (committed !== null && !rewinding) {
+    atOnce();
+    return go();
+  }
   if (committed !== null) return;
   if (s.mode === 'off' || !s.skips || !audio || audio.paused || handed()) return go();
   committed = false;

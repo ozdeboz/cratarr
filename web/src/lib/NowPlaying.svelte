@@ -579,7 +579,7 @@
             <!-- Its fill (the owner, 2026-10-26), inside a border of the same colour: winding down (Start and stop) it drains
                  from the top over the ramp; paused with Start and stop on it stays empty (a start winds up); winding up it
                  fills from the bottom over the ramp, the way it went. -->
-            <button class="main" aria-label={shownPaused() ? 'Play' : 'Pause'} aria-disabled={rampBusy()} onclick={playPause} use:longpress={() => (startStopOpen = true)}
+            <button class="main" aria-label={shownPaused() ? 'Play' : 'Pause'} aria-disabled={rampBusy() && inApp} onclick={playPause} use:longpress={() => (startStopOpen = true)}
               >{#key `${ramp}:${ramping.at}`}<span
                   class="fillbg"
                   class:drain={ramp === 'out'}
