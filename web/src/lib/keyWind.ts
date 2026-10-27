@@ -12,7 +12,8 @@ const HOLD_MS = 350;
 function takesArrows(t: EventTarget | null): boolean {
   if (!(t instanceof Element)) return false;
   if (t.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return true;
-  return !!t.closest('[role="slider"], [role="listbox"], [role="menu"], [role="dialog"], [role="tablist"], [role="radiogroup"], [role="grid"]');
+  // A modal sheet's own (the full player, a dialog too but not a modal one, keeps them for the transport).
+  return !!t.closest('[role="slider"], [role="listbox"], [role="menu"], [aria-modal="true"], [role="tablist"], [role="radiogroup"], [role="grid"]');
 }
 /** Whether holding winds where the music plays (as the player's buttons: lib/NowPlaying). */
 const winds = () => (isLocal() ? (inApp ? appInfo.startStop : prefs.startStop).rewind : !!playing()?.player);
@@ -25,7 +26,7 @@ export function installKeyWind(): () => void {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
     if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || takesArrows(e.target) || !playing()) return;
     // A sheet or a dialog open: its own.
-    if (document.querySelector('[role="dialog"], dialog[open]')) return;
+    if (document.querySelector('[aria-modal="true"], dialog[open]')) return;
     e.preventDefault();
     // The key's own repeats while held: one press.
     if (e.repeat || down) return;
