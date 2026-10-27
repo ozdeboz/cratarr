@@ -214,7 +214,8 @@
   });
   /** A territory tapped: its playlists highlighted (the rest dim); again, or the background, none. */
   let land = $state<string | null>(null);
-  const landMembers = $derived(lands.find((l) => l.genre === land)?.members ?? null);
+  // A territory tapped, else the genre shown alone (the legend's tap; the owner, 2026-10-27: the others dimmed).
+  const landMembers = $derived(lands.find((l) => l.genre === (land ?? solo))?.members ?? null);
 
   const dim = (i: number) => (landMembers ? !landMembers.has(i) : selected !== null && i !== selected && !neighbours.has(i));
   const labelled = (i: number) =>
