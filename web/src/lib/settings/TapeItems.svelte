@@ -73,12 +73,12 @@
     holdBack: { title: 'Holding back', tunings: HOLD_TUNINGS, starts: startsOf(HOLD) },
     holdFwd: { title: 'Holding forward', tunings: HOLD_TUNINGS, starts: startsOf(HOLD) },
   };
-  let open = $state<Part | 'windup' | null>(null);
+  let open = $state<Part | 'start' | 'stop' | null>(null);
   /** A slider being dragged: already in its sheet's graph. */
   let drag = $state<{ key: string; v: number } | null>(null);
   /** The settings as the open sheet shows them, a drag included. */
   const shown = $derived.by((): StartStop => {
-    if (!drag || !open || open === 'windup') return ss;
+    if (!drag || !open || open === 'start' || open === 'stop') return ss;
     return { ...ss, [open]: { ...ss[open], [drag.key]: drag.v } };
   });
   const valueOf = (part: Part, key: string) => (shown[part] as unknown as Record<string, number>)[key];
@@ -105,16 +105,13 @@
   </SettingRow>
 {/snippet}
 
-<Group title="Start and stop" more="Play and pause as a turntable (Vinyl: the speed, the pitch following) or fading in and out (Fade). A pause's Vinyl slows down with the tape's Brake. A track running into the next stays seamless.">
+<Group title="Start and stop" more="Play and pause as a turntable (Vinyl: the speed, the pitch following) or fading in and out (Fade), over their own times: Start as play winds up, Stop as pause winds down. A track running into the next stays seamless.">
   <Item name="Effect" experimental><Seg label="Effect" options={MODES} bind:value={() => ss.mode, (v) => setSS({ mode: v })} /></Item>
   {#if ss.mode !== 'off'}
-    <Item name="Wind-up" value={sec(ss.ms)} onclick={() => (open = 'windup')} />
+    <Item name="Start" value={sec(ss.ms)} onclick={() => (open = 'start')} />
+    <Item name="Stop" value={sec(ss.stopMs)} onclick={() => (open = 'stop')} />
     <Item name="Also for next and previous" toggle={{ checked: ss.skips, onchange: (on) => setSS({ skips: on }) }} />
   {/if}
-</Group>
-
-<Group title="The tape" more="How the tape moves, in every motion alike: how fast it gets going and stops, how loud it is while it winds, how quickly a hold gets faster, and the pieces a long wind to a point is cut into.">
-  {#each TAPE_TUNINGS as t (t.key)}<Item name={t.label} value={t.text(ss.tape[t.key as keyof typeof ss.tape])} onclick={() => (open = 'tape')} />{/each}
 </Group>
 
 <Group title="Winding">
@@ -140,6 +137,14 @@
   {/if}
 </Group>
 
+<!-- The tape's mechanics, every motion's alike (and the deck's direction knob's), only while it winds (the owner,
+     2026-10-27: they do nothing otherwise). -->
+{#if ss.rewind}
+  <Group title="The tape" more="How the tape moves, in every motion alike: how fast it gets going and how it brakes, how loud it is while it winds, how quickly a hold gets faster, and the pieces a long wind to a point is cut into.">
+    {#each TAPE_TUNINGS as t (t.key)}<Item name={t.label} value={t.text(ss.tape[t.key as keyof typeof ss.tape])} onclick={() => (open = 'tape')} />{/each}
+  </Group>
+{/if}
+
 <!-- This page's showing (prefs, never the app's): the player's row under the title a tape deck, while an effect runs or
      always (the owner, 2026-10-27). -->
 <Group title="Tape deck">
@@ -150,10 +155,12 @@
   >
 </Group>
 
-{#if open === 'windup'}
-  <MenuSheet label="Wind-up" title="Wind-up" chips={[MODES.find((m) => m.value === ss.mode)?.label ?? '']} onclose={() => (open = null)}>
+{#if open === 'start' || open === 'stop'}
+  {@const key = open === 'start' ? 'ms' : 'stopMs'}
+  {@const label = open === 'start' ? 'Start' : 'Stop'}
+  <MenuSheet {label} title={label} chips={[MODES.find((m) => m.value === ss.mode)?.label ?? '']} onclose={() => ((open = null), (drag = null))}>
     <div class="sheet">
-      {@render slider({ key: 'ms', label: 'Wind-up', range: { ...RAMP_MS, step: 100 }, text: sec }, drag?.key === 'ms' ? drag.v : ss.ms, (v) => setSS({ ms: v }))}
+      {@render slider({ key, label, range: { ...RAMP_MS, step: 100 }, text: sec }, drag?.key === key ? drag.v : ss[key], (v) => setSS({ [key]: v }))}
     </div>
   </MenuSheet>
 {:else if open}

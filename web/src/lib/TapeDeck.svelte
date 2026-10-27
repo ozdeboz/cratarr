@@ -136,7 +136,12 @@
    *  (the owner, 2026-10-27: the deck's proportions unchanged). */
   const KNOB = { x: 160, y: 36, r: 3.2 };
   /** The knob where a player can turn: this page's own, the app's, one driven (not Kodi, which plays as told). */
-  const turnable = $derived(isLocal() && playOn.players.find((p) => p.name === drivenName())?.kind !== 'kodi');
+  const turnable = $derived(
+    isLocal() &&
+      playOn.players.find((p) => p.name === drivenName())?.kind !== 'kodi' &&
+      // Part of the tape engine: only while Tape winding is on (the owner, 2026-10-27).
+      (inApp ? appInfo.startStop : prefs.startStop).rewind,
+  );
   /** Nothing to play backwards from (a Bandcamp preview, the device's own music): the knob dimmed, still. */
   const stuck = $derived(!windable(playing()));
   /** The knob drawn as the visuals' knobs are (lib/visuals/PatchKnob: a cap in a faint arc, its value an arc in the

@@ -40,12 +40,14 @@ export const HOLD = {
   top: { min: 8, max: 64, step: 4, start: 64 },
 } as const;
 
-/** `mode`, `ms`: Start and stop's effect and its wind-up; `skips`: it for next and previous too; `rewind`: Previous and
+/** `mode`, `ms`, `stopMs`: Start and stop's effect, its start (the wind-up) and its stop (the wind-down; its own, the
+ *  tape's Brake being the tape's only: the owner, 2026-10-27); `skips`: it for next and previous too; `rewind`: Previous and
  *  Next wind the tape; `seekWinds`: a seek winds there instead of jumping; `edges`: holding past a track's edge stops,
  *  or winds on through the queue. No older settings carried over (the owner: everyone from the defaults). */
 export type StartStop = {
   mode: 'off' | 'vinyl' | 'fade';
   ms: number;
+  stopMs: number;
   skips: boolean;
   rewind: boolean;
   tape: TapeMech;
@@ -71,6 +73,7 @@ export function startStopOf(x: Partial<StartStop>): StartStop {
   return {
     mode: x.mode === 'vinyl' || x.mode === 'fade' ? x.mode : 'off',
     ms: typeof x.ms === 'number' ? Math.min(RAMP_MS.max, Math.max(RAMP_MS.min, x.ms)) : 800,
+    stopMs: typeof x.stopMs === 'number' ? Math.min(RAMP_MS.max, Math.max(RAMP_MS.min, x.stopMs)) : 800,
     skips: x.skips === true,
     rewind: x.rewind === true,
     tape: kept(x.tape, TAPE),

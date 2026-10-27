@@ -1897,7 +1897,7 @@ let committed: boolean | null = null;
 let rampAt = 1;
 /** A turn of the direction knob's own ramp (a tape slows to a stop before it can go the other way, whatever Start and
  *  stop says): as a vinyl, over Start and stop's ramp where that is a vinyl's, else the wind's brake or spin-up. */
-let turnRamp: { mode: 'vinyl'; ms: number } | null = null;
+let turnRamp: { mode: 'vinyl'; ms: number; stopMs: number } | null = null;
 /** A ramp the tape makes for itself (a hold's stop before it winds, a knob's turn, the wind-up after a wind): not a
  *  Start and stop effect, so the player still shows playing through it (lib/ramping `effect`). */
 let quiet = false;
@@ -1978,8 +1978,9 @@ async function rampOut(share = 1): Promise<void> {
   if (mode === 'off' || !audio || audio.paused) return;
   // A vinyl's wind-down is the deck's one brake (the owner, 2026-10-27): Tape winding's Brake, its length and its curve
   // (a raised cosine on the speed, as a wind brakes); a fade's is the ramp's.
-  // Playing forwards: fast-forward's brake (backwards, lib's knob, brakes on rewind's).
-  const full = mode === 'vinyl' ? ss().tape.brakeMs : ss().ms;
+  // Start and stop's own stop (a pause, a skip's wind-down); a turn of the tape's (a hold's stop, the knob) the tape's
+  // Brake (turnRamp's).
+  const full = ss().stopMs;
   const ms = full * share;
   rampBegins('out', ms, full, !quiet);
   const at = ramping.at;
@@ -3065,7 +3066,8 @@ function brakeBackwards(after: 'play' | 'pause') {
 /** Runs `go` with the turn's own ramp (a vinyl's, Start and stop's length where it is one, else the wind's). */
 function turned<T>(go: () => T): T {
   const s = prefs.startStop;
-  turnRamp = { mode: 'vinyl', ms: s.mode === 'vinyl' ? s.ms : s.tape.attackMs };
+  // The tape's own: its spin-up and its Brake (not Start and stop's, which are the effect's).
+  turnRamp = { mode: 'vinyl', ms: s.tape.attackMs, stopMs: s.tape.brakeMs };
   quiet = true;
   try {
     return go();

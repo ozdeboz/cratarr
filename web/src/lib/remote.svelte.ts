@@ -217,7 +217,7 @@ export function playPause() {
   if (rampInert()) return;
   const ss = inApp ? appInfo.startStop : prefs.startStop;
   if (isLocal() && ss.mode !== 'off' && !rampBusy()) {
-    if (!paused()) rampPressed('out', ss.ms);
+    if (!paused()) rampPressed('out', ss.stopMs);
     else {
       const ms = windUpMs(ss.ms, ss.mode, position(), inApp ? 0.25 : undefined);
       if (ms > 0) rampPressed('in', ms, ss.ms);
