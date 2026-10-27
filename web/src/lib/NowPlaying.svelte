@@ -59,6 +59,29 @@
   // stop ramp or a rewind; kept DECK_HOLD_MS after the last of them ends (the owner, 2026-10-27: the fade only after the
   // last event), a new one starting the count again; then the row back over a second's fade. Or always, where asked.
   const DECK_HOLD_MS = 5000;
+  /** The room the deck has over the row it takes the place of (the owner's tablet, 2026-10-27: in a tight player the gaps
+   *  shrink to 4 px and it spilled over the artist's line and the waveform): from under the artist's line to above the
+   *  waveform, measured, the deck centred in it and scaled to it (lib/TapeDeck `room`). */
+  let subEl = $state<HTMLElement>();
+  let progressEl = $state<HTMLElement>();
+  let underEl = $state<HTMLElement>();
+  let deckRoom = $state<{ top: number; h: number } | null>(null);
+  $effect(() => {
+    if (!deckShown || !underEl || !subEl || !progressEl) return void (deckRoom = null);
+    const under = underEl;
+    const measure = () => {
+      if (!subEl || !progressEl) return;
+      const top = subEl.getBoundingClientRect().bottom + 4;
+      const bottom = progressEl.getBoundingClientRect().top - 4;
+      const u = under.getBoundingClientRect();
+      deckRoom = bottom > top ? { top: top - u.top, h: bottom - top } : null;
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(under);
+    ro.observe(progressEl);
+    return () => ro.disconnect();
+  });
   const effecting = $derived(ramping.dir !== null || (isLocal() ? rewindNow.on : !!np?.progress?.rewinding));
   let deckShown = $state(false);
   $effect(() => {
@@ -516,7 +539,7 @@
       <div class="track">
         {#if np}
           <div class="title"><span>{np.name}</span></div>
-          <div class="sub">
+          <div class="sub" bind:this={subEl}>
             {#if np.artist}<button class="artist" disabled={!by} onclick={() => by && goToArtist(np.source, by)}
                 ><span>{np.artist}</span>{#if byFavorite}<i class="liked" role="img" aria-label="Favourite"><Icon name="heart" size={14} /></i>{/if}</button
               >{/if}{#if np.artist && np.album}<span class="dot">·</span>{/if}{#if np.album && np.album_id}<button class="album-name" onclick={toAlbum}>{np.album}</button
@@ -533,7 +556,7 @@
           <!-- The row under the title (the owner, 2026-10-19): the info button (the cover's overview, as a circle on the
                cover) and the facts the user picked in Settings → Display, in short; with none picked, Add leads there.
                Hidden in Settings; none for the device's own music (local mode: nothing known of it). -->
-          <div class="under">
+          <div class="under" bind:this={underEl}>
           {#if prefs.playerRow && np.source !== 'device'}
             <div class="facts" class:decked={deckShown}>
               <button class="info" class:on={overview} aria-label="About this track" aria-pressed={overview} title="About this track" onclick={() => (overview = !overview)}
@@ -543,10 +566,18 @@
               {#if !prefs.playerFacts.length}<button class="fact add" onclick={toRowSettings}><Icon name="plus" size={14} /><span>Add</span></button>{/if}
             </div>
           {/if}
-          {#if deckShown}<div class="deck-row" class:over={prefs.playerRow && np.source !== 'device'} in:fade={{ duration: 150 }} out:fade={{ duration: 1000 }}><TapeDeck /></div>{/if}
+          {#if deckShown}<div
+              class="deck-row"
+              class:over={prefs.playerRow && np.source !== 'device'}
+              style:top={deckRoom ? `${deckRoom.top}px` : null}
+              style:height={deckRoom ? `${deckRoom.h}px` : null}
+              in:fade={{ duration: 150 }}
+              out:fade={{ duration: 1000 }}><TapeDeck room={deckRoom?.h ?? null} /></div
+            >{/if}
           </div>
           {#if np.progress}
             <div
+              bind:this={progressEl}
               class="progress"
               class:paused={np.progress.paused}
               class:estimated={np.progress.estimated}
@@ -949,6 +980,13 @@
     right: 0;
     left: 0;
     transform: translateY(-50%);
+  }
+
+  /* Measured: the room between the artist's line and the waveform, the deck centred in it. */
+  .deck-row.over[style*='height'] {
+    display: flex;
+    align-items: center;
+    transform: none;
   }
 
   .under > * {

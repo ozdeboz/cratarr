@@ -38,8 +38,12 @@
   /** The head's box around its two hills. */
   const HEAD_BOX = { x: HEAD.x - HEAD.half - 1, y: HEAD.y - HEAD.gap - HEAD.height - 1, w: 2 * HEAD.half + 2, h: 2 * (HEAD.gap + HEAD.height) + 2 };
 
+  /** `room`: the height it may take (px), where the row it stands in has less than its own (lib/NowPlaying). */
+  let { room = null }: { room?: number | null } = $props();
   let width = $state(W);
-  const scale = $derived(Math.min(1, width / W));
+  // Scaled down to the width and the height it has, its proportions kept (the owner's tablet, 2026-10-27: in a tight
+  // player it spilled over the artist's line and the waveform).
+  const scale = $derived(Math.max(0.4, Math.min(1, width / W, room ? room / H : 1)));
 
   let tape: SVGPathElement;
   let packL: SVGCircleElement;
@@ -151,7 +155,7 @@
   const box = (x: number, y: number, half: number) => `left:${x - half}px;top:${y - half}px;width:${2 * half}px;height:${2 * half}px`;
 </script>
 
-<div class="deck" bind:clientWidth={width} {@attach run}>
+<div class="deck" style:height="{H * scale}px" bind:clientWidth={width} {@attach run}>
   <div class="stage" style:transform="translate(-50%, -50%) scale({scale})">
     <svg class="still" viewBox="0 0 {W} {H}" width={W} height={H} aria-hidden="true">
       <path class="tape" bind:this={tape} />
