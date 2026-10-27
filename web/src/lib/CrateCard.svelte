@@ -3,13 +3,16 @@
   // else a mosaic of its albums' covers), its name, how many tracks and how long, its top genres, how many of its
   // tracks were never played and how many came this week, and along its foot how much of it was played (explored).
   // Its favourites setting shows as the small heart after the count, as on the panel's toggle; its favourite albums
-  // setting as the small disc beside it, as on its toggle (decision 0024, amended 2026-10-19). A tap views it;
-  // its picture shuffles it (the owner, 2026-10-19: "a play button on the crates, which automatically plays it with
-  // shuffle"): wherever a cover plays, its icon is in the cover's lower right corner (decided 2026-10-16), here
-  // Shuffle's, which is what it does. A long-press or a right-click on the rest opens its menu (decision 0058).
+  // setting as the small disc beside it, as on its toggle (decision 0024, amended 2026-10-19). A tap views it, its
+  // picture too, and it dims with the ring while it opens, when that takes long; Shuffle in its picture's upper right
+  // corner alone plays it, shuffled (the owner, 2026-10-27: as every cover, lib/CoverPlay and lib/CoverWait; 2026-10-19:
+  // "a play button on the crates, which automatically plays it with shuffle"). A long-press or a right-click opens its
+  // menu (decision 0058).
   import type { Crate } from './api';
   import Cover, { mosaicOf } from './Cover.svelte';
-  import { crateArt, FAVOURITE_ALBUMS, FAVOURITES, favouriteAlbumsOf, favouritesOf, shuffleCrate } from './crates.svelte';
+  import CoverPlay from './CoverPlay.svelte';
+  import CoverWait from './CoverWait.svelte';
+  import { CRATE, crateArt, FAVOURITE_ALBUMS, FAVOURITES, favouriteAlbumsOf, favouritesOf, shuffleCrate } from './crates.svelte';
   import { toast } from './toast.svelte';
   import { longpress } from './longpress';
   import Icon from './Icon.svelte';
@@ -45,11 +48,11 @@
 </script>
 
 <div class="card" class:active>
-  <button class="art" class:mosaic={art.length === 4} aria-label="Shuffle {c.name}" title="Shuffle" disabled={starting} aria-busy={starting} onclick={shuffle}>
-    {#each art as src, i (i)}<Cover {src} />{:else}<Cover src={null} />{/each}
-    <span class="corner" aria-hidden="true"><Icon name="shuffle" size={14} /></span>
-  </button>
   <button class="view" {onclick} aria-label="View {c.name}" use:longpress={() => onmenu?.()}>
+  <span class="art" class:mosaic={art.length === 4}>
+    {#each art as src, i (i)}<Cover {src} />{:else}<Cover src={null} />{/each}
+    <CoverWait subject={CRATE + c.id} />
+  </span>
   <span class="text">
     <span class="name">{c.name}</span>
     <span class="line">
@@ -66,6 +69,7 @@
     {/if}
   </span>
   </button>
+  <span class="shuffle-at"><CoverPlay shuffle label={c.name} busy={starting} onplay={shuffle} /></span>
   {#if explored !== null}
     <span class="explored" role="img" aria-label="{Math.round(explored * 100)}% played"><span style:width="{explored * 100}%"></span></span>
   {/if}
@@ -76,7 +80,6 @@
     position: relative;
     display: flex;
     align-items: stretch;
-    gap: 14px;
     width: 100%;
     min-height: 120px;
     padding: 0 12px 0 0;
@@ -99,6 +102,7 @@
   .view {
     display: flex;
     flex: 1;
+    gap: 14px;
     min-width: 0;
     padding: 0;
     border: 0;
@@ -109,30 +113,19 @@
     cursor: pointer;
   }
 
-  /* Its picture shuffles it: Shuffle's icon on the corner, as a playing cover has its play icon. */
-  .art {
-    position: relative;
-    padding: 0;
-    border: 0;
-    cursor: pointer;
-  }
-
-  .art:disabled {
-    cursor: default;
-  }
-
-  .corner {
+  /* Shuffle over its picture's upper right corner (a button cannot hold another): a box as large as the picture,
+     letting the taps through to it but on Shuffle. */
+  .shuffle-at {
     position: absolute;
-    right: 6px;
-    bottom: 6px;
-    display: grid;
-    place-items: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: var(--accent);
-    color: var(--accent-text);
-    box-shadow: 0 1px 4px rgb(0 0 0 / 0.4);
+    top: 0;
+    left: 0;
+    width: 120px;
+    aspect-ratio: 1;
+    pointer-events: none;
+  }
+
+  .shuffle-at :global(.cover-play) {
+    pointer-events: auto;
   }
 
   /* Viewed in the panel: a border only, as a playlist's chip; on the card's edge over everything in it, the covers and
@@ -148,6 +141,7 @@
   }
 
   .art {
+    position: relative;
     flex: none;
     display: grid;
     width: 120px;
