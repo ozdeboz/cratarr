@@ -5053,10 +5053,10 @@ async fn apply_fixes(State(app): State<Arc<App>>, Json(b): Json<ApplyFixes>) -> 
     if fixes.is_empty() {
         return Err(ToggleError::Refused("Nothing to fix: look again".into()).into());
     }
-    let n = fixes.len();
-    let (tokens, failed) = crate::app::fixes::apply(fixes).await.map_err(refused)?;
+    // Written whole only (0.9.8: `applied` counted those tried, and said a fix was in when it had failed).
+    let (tokens, written, failed) = crate::app::fixes::apply_all(fixes).await.map_err(refused)?;
     let failed: Vec<serde_json::Value> = failed.into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect();
-    Ok(Json(json!({ "undo": tokens, "applied": n, "failed": failed })))
+    Ok(Json(json!({ "undo": tokens, "applied": written, "failed": failed })))
 }
 
 /// An arrival's intake (0.9.7): every fix the album would get before it is kept (year, genre, album artist,

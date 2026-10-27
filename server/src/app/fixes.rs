@@ -157,6 +157,22 @@ pub async fn apply(fixes: Vec<Fix>) -> Result<(Vec<String>, Vec<(String, String)
     Ok((tokens, failed))
 }
 
+/// Applies fixes as `apply`, in a task of its own (0.9.8: a page that stops waiting, a phone gone to sleep, does not cut
+/// it off half-way), and a line in the log. The undo tokens, how many fixes were written whole, and those not with why.
+pub async fn apply_all(fixes: Vec<Fix>) -> Result<(Vec<String>, usize, Vec<(String, String)>)> {
+    let started = std::time::Instant::now();
+    let done: Vec<(String, String, &'static str)> = fixes.iter().map(|f| (f.id.clone(), f.album.clone(), f.field)).collect();
+    let (tokens, failed) = tokio::spawn(apply(fixes)).await??;
+    let mut written = 0;
+    for (id, ..) in &done {
+        if !failed.iter().any(|(f, _)| f == id) {
+            written += 1;
+        }
+    }
+    tracing::info!(target: "library", fixes = done.len(), written, failed = failed.len(), ms = started.elapsed().as_millis() as u64, "fixes applied");
+    Ok((tokens, written, failed))
+}
+
 /// Undoes fixes (`f…`): each track's values as they were. Safe to repeat.
 pub async fn undo(token: &str) -> Result<()> {
     let id = token.strip_prefix(UNDO).filter(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_digit())).context("Not a fix's undo")?.to_string();
@@ -377,7 +393,9 @@ pub async fn by_ids(app: &super::App, ids: &[String]) -> Result<Vec<Fix>> {
     }
     let mut out = Vec::new();
     for (album, wanted) in albums {
-        out.extend(of_album(app, album).await?.0.into_iter().filter(|f| wanted.contains(&&f.id)));
+        // Only the fields asked for (0.9.8: a genre's apply worked out the album's cover candidates and match too).
+        let fields: Vec<&str> = wanted.iter().filter_map(|id| id.split_once(':').map(|(f, _)| f)).collect();
+        out.extend(of_album_only(app, album, Some(&fields)).await?.0.into_iter().filter(|f| wanted.contains(&&f.id)));
     }
     Ok(out)
 }
@@ -385,29 +403,37 @@ pub async fn by_ids(app: &super::App, ids: &[String]) -> Result<Vec<Fix>> {
 /// Every fix one album has (0.9.7, Incoming's intake: what an arrival would get before it is kept), wherever it is: a
 /// year, a genre, the album artist and MusicBrainz ids from a match, a cover where it has none (the first the cover
 /// look finds; certain from the Cover Art Archive). And whether its match is still being looked for.
-pub async fn of_album(_app: &super::App, album: &str) -> Result<(Vec<Fix>, bool)> {
+pub async fn of_album(app: &super::App, album: &str) -> Result<(Vec<Fix>, bool)> {
+    of_album_only(app, album, None).await
+}
+
+/// `of_album`, only the fields named (`year`, `genre`, `rule`, `albumartist`, `musicbrainz`, `cover`); all of them for
+/// none.
+async fn of_album_only(_app: &super::App, album: &str, fields: Option<&[&str]>) -> Result<(Vec<Fix>, bool)> {
+    let wants = |f: &str| fields.is_none_or(|fs| fs.contains(&f));
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     let (s, a) = (served.clone(), album.to_string());
+    let (rule, year, genre) = (wants("rule"), wants("year"), wants("genre"));
     let (mut fixes, lacks) = tokio::task::spawn_blocking(move || -> Result<(Vec<Fix>, Option<crate::serve::library::Lacks>)> {
-        let Some(l) = s.library.lacking()?.into_iter().find(|r| r.id == a) else { return Ok((Vec::new(), None)) };
-        let mut out: Vec<Fix> = rule_fix(&s, &a)?.into_iter().collect();
-        if l.year {
+        let Some(l) = s.library.lacks_of(&a)? else { return Ok((Vec::new(), None)) };
+        let mut out: Vec<Fix> = if rule { rule_fix(&s, &a)?.into_iter().collect() } else { Vec::new() };
+        if year && l.year {
             out.extend(year_fixes(&s, std::iter::once(a.as_str()))?);
         }
-        if l.genre {
+        if genre && l.genre {
             out.extend(genre_fixes(&s, std::iter::once(a.as_str()))?);
         }
         Ok((out, Some(l)))
     })
     .await??;
     let Some(l) = lacks else { return Ok((fixes, false)) };
-    if l.album_artist {
+    if wants("albumartist") && l.album_artist {
         fixes.extend(super::matching::fixes(&served, "library:album-artist", vec![album.to_string()]).await?);
     }
-    if l.musicbrainz {
+    if wants("musicbrainz") && l.musicbrainz {
         fixes.extend(super::matching::fixes(&served, "library:musicbrainz", vec![album.to_string()]).await?);
     }
-    if l.cover
+    if wants("cover") && l.cover
         && let Ok(found) = super::covers::candidates(album).await
         && let Some(c) = found.candidates.first()
     {

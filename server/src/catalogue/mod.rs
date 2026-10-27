@@ -1359,6 +1359,16 @@ impl Catalogue {
         served_rows(&self.db(), folder)
     }
 
+    /// The served rows of the files right in `dir` of `folder` (0.9.8: the library builds just those again).
+    pub fn served_rows_in(&self, folder: i64, dir: &str) -> Result<Vec<ServedRow>> {
+        served_rows_in(&self.db(), folder, Some(dir))
+    }
+
+    /// Each folder's cover files as a print (`cover_prints`).
+    pub fn cover_prints(&self) -> Result<HashMap<(i64, String), String>> {
+        cover_prints(&self.db())
+    }
+
     /// A read-only connection of its own to the catalogue's file, for long reads that must not hold up the catalogue
     /// (WAL lets it read beside the writer). `None` for a catalogue in memory.
     pub fn reader(&self) -> Option<Connection> {
@@ -2267,14 +2277,35 @@ pub async fn run(cat: Arc<Catalogue>, sources: impl Fn() -> Vec<(String, Arc<dyn
 const LENGTH_SLACK_MS: u64 = 1_500;
 
 pub fn served_rows(db: &Connection, folder: i64) -> Result<Vec<ServedRow>> {
+    served_rows_in(db, folder, None)
+}
+
+/// A file's folder within its library folder ("" at its top).
+pub fn dir_of(rel: &str) -> &str {
+    rel.rsplit_once('/').map_or("", |(d, _)| d)
+}
+
+/// The range of `rel`s under `dir` (its files and deeper), for a query on the index: `dir/` up to `dir0` ('0' follows
+/// '/'). None for the top, which holds everything.
+fn rel_range(dir: Option<&str>) -> Option<(String, String)> {
+    dir.filter(|d| !d.is_empty()).map(|d| (format!("{d}/"), format!("{d}0")))
+}
+
+/// `served_rows`, of the files right in `dir` only where given (0.9.8: the library builds again just the albums
+/// Cratarr wrote to, `Library::update_dirs`).
+pub fn served_rows_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result<Vec<ServedRow>> {
+    let range = rel_range(dir);
+    let (lo, hi) = range.clone().unzip();
+    let within = |col: &str| if range.is_some() { format!(" AND {col} >= ?2 AND {col} < ?3") } else { " AND ?2 IS NULL AND ?3 IS NULL".to_string() };
     let mut rows: Vec<ServedRow> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
     let mut st = db.prepare(&format!(
         "SELECT f.rel, f.track, t.born, f.format, f.bitrate, f.duration_ms, f.size, f.mtime
-         FROM files f LEFT JOIN tracks t ON t.id = f.track WHERE f.folder = ?1 AND {PRESENT} AND {}",
-        served("f.")
+         FROM files f LEFT JOIN tracks t ON t.id = f.track WHERE f.folder = ?1 AND {PRESENT} AND {}{}",
+        served("f."),
+        within("f.rel")
     ))?;
-    let files = st.query_map(params![folder], |r| {
+    let files = st.query_map(params![folder, lo, hi], |r| {
         Ok(ServedRow {
             rel: r.get(0)?,
             track: r.get(1)?,
@@ -2290,16 +2321,21 @@ pub fn served_rows(db: &Connection, folder: i64) -> Result<Vec<ServedRow>> {
     })?;
     for f in files {
         let f = f?;
+        // Right in the folder asked for, not deeper.
+        if dir.is_some_and(|d| dir_of(&f.rel) != d) {
+            continue;
+        }
         index.insert(f.rel.clone(), rows.len());
         rows.push(f);
     }
     // Their analyses, while the files are as they were then, and their albums' gains (decision 0035).
-    let albums = album_gains(db, folder)?;
-    let mut st = db.prepare(
+    let albums = album_gains_in(db, folder, dir)?;
+    let mut st = db.prepare(&format!(
         "SELECT a.rel, a.track_gain_db, a.track_peak, a.bpm, a.duration_secs, a.complete FROM analysis a
-         JOIN files f ON f.folder = a.folder AND f.rel = a.rel WHERE a.folder = ?1 AND a.size = f.size AND a.mtime = f.mtime",
-    )?;
-    let found = st.query_map(params![folder], |r| {
+         JOIN files f ON f.folder = a.folder AND f.rel = a.rel WHERE a.folder = ?1 AND a.size = f.size AND a.mtime = f.mtime{}",
+        within("a.rel")
+    ))?;
+    let found = st.query_map(params![folder, lo, hi], |r| {
         Ok((
             r.get::<_, String>(0)?,
             r.get::<_, Option<f64>>(1)?,
@@ -2333,8 +2369,8 @@ pub fn served_rows(db: &Connection, folder: i64) -> Result<Vec<ServedRow>> {
         rows[i].analysis = Some(RowAnalysis { track_gain_db: gain as f32, track_peak: peak as f32, bpm: bpm.map(|b| b as f32), album: albums.get(dir).copied() });
     }
     let names = ServedRow::TAGS.map(|n| format!("'{n}'")).join(", ");
-    let mut st = db.prepare(&format!("SELECT rel, name, value FROM tags WHERE folder = ?1 AND name IN ({names}) ORDER BY rel, n"))?;
-    let tags = st.query_map(params![folder], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+    let mut st = db.prepare(&format!("SELECT rel, name, value FROM tags WHERE folder = ?1 AND name IN ({names}){} ORDER BY rel, n", within("rel")))?;
+    let tags = st.query_map(params![folder, lo, hi], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
     for t in tags {
         let (rel, name, value) = t?;
         if let Some(&i) = index.get(&rel) {
@@ -2479,15 +2515,23 @@ fn analysis_row_at(r: &rusqlite::Row, at: usize) -> rusqlite::Result<crate::anal
 /// counts it), from their tracks' analyses (`analysis::album_gain` over their loudness blocks): only where every track
 /// of the directory has one, so a half-analysed album has none yet. Any connection to the catalogue's file.
 pub fn album_gains(db: &Connection, folder: i64) -> Result<HashMap<String, (f32, f32)>> {
+    album_gains_in(db, folder, None)
+}
+
+/// `album_gains`, of the albums right in `dir` only where given.
+fn album_gains_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result<HashMap<String, (f32, f32)>> {
+    let range = rel_range(dir);
+    let (lo, hi) = range.clone().unzip();
+    let within = if range.is_some() { " AND f.rel >= ?2 AND f.rel < ?3" } else { " AND ?2 IS NULL AND ?3 IS NULL" };
     let mut st = db.prepare(&format!(
         "SELECT f.rel, {ANALYSIS_COLS} FROM files f
            LEFT JOIN analysis a ON a.folder = f.folder AND a.rel = f.rel AND a.size = f.size AND a.mtime = f.mtime
            {SHAPE_JOIN}
-         WHERE {PRESENT_F} AND f.folder = ?1 AND {}",
+         WHERE {PRESENT_F} AND f.folder = ?1 AND {}{within}",
         served("f.")
     ))?;
     let mut dirs: HashMap<String, Option<Vec<crate::analysis::Analysis>>> = HashMap::new();
-    let rows = st.query_map(params![folder], |r| {
+    let rows = st.query_map(params![folder, lo, hi], |r| {
         let rel: String = r.get(0)?;
         // The version: NULL where the file has no analysis (the LEFT JOIN).
         let has: Option<i64> = r.get(1)?;
@@ -2495,8 +2539,11 @@ pub fn album_gains(db: &Connection, folder: i64) -> Result<HashMap<String, (f32,
     })?;
     for row in rows {
         let (rel, a) = row?;
-        let dir = rel.rsplit_once('/').map_or("", |(d, _)| d).to_string();
-        let entry = dirs.entry(dir).or_insert_with(|| Some(Vec::new()));
+        let in_dir = dir_of(&rel);
+        if dir.is_some_and(|d| in_dir != d) {
+            continue;
+        }
+        let entry = dirs.entry(in_dir.to_string()).or_insert_with(|| Some(Vec::new()));
         match (entry.as_mut(), a) {
             // A track whose analysis covers only part of it: as a track without one (decision 0035, 2026-10-17).
             (Some(_), Some(a)) if a.complete == Some(false) => *entry = None,
@@ -2514,6 +2561,21 @@ pub fn album_gains(db: &Connection, folder: i64) -> Result<HashMap<String, (f32,
             crate::analysis::album_gain(&refs).map(|g| (dir, g))
         })
         .collect())
+}
+
+/// The cover files of each folder of a library folder (0.9.8), as a print: an album built again when its folder's
+/// cover files change (`Library`, an album's `src`).
+pub fn cover_prints(db: &Connection) -> Result<HashMap<(i64, String), String>> {
+    let mut st = db.prepare("SELECT folder, rel, size, mtime FROM cover_files ORDER BY folder, rel")?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?)))?;
+    let mut out: HashMap<(i64, String), String> = HashMap::new();
+    for row in rows {
+        let (folder, rel, size, mtime) = row?;
+        let name = rel.rsplit('/').next().unwrap_or(&rel).to_string();
+        let p = out.entry((folder, dir_of(&rel).to_string())).or_default();
+        p.push_str(&format!("{name}:{size}:{mtime};"));
+    }
+    Ok(out)
 }
 
 /// See `Catalogue::served_fingerprint`; any connection to the catalogue's file.
