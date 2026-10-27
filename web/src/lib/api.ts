@@ -1965,6 +1965,8 @@ export const albumView = (source: string, album: string) =>
 export type ArtistView = {
   source: string;
   name: string;
+  /** Their MusicBrainz id, where Cratarr's own library knows it (0.9.8: Discogs found by it, surely). */
+  mbid?: string;
   albums: ListedAlbum[];
   appears_on: ListedAlbum[];
   rows: PlaylistRow[];

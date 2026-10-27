@@ -196,7 +196,7 @@
   /** A crate, an album or an artist: tracks without a playlist's file (no tabs, no editing, no statistics). */
   const plain = $derived(!!crate || !!album || !!artist || crateEditing || creating);
   /** What the artist's answer says besides their tracks: their albums, what they appear on, the heart. */
-  let artistHead = $state<(Pick<ArtistView, 'albums' | 'appears_on' | 'favorite'> & { studio?: number | null }) | null>(null);
+  let artistHead = $state<(Pick<ArtistView, 'albums' | 'appears_on' | 'favorite' | 'mbid'> & { studio?: number | null }) | null>(null);
   /** What the album's tracks say of it: its name, artist and year; its files' format and weakest bitrate. */
   // The album's library, as a dot before its details (0.9.3): which copy this is, beside its year.
   const albumDot = $derived(album ? libraryDot(album.source, { id: album.id }) : null);
@@ -367,7 +367,7 @@
         : ar
           ? (ar.source === DEVICE ? Promise.resolve(deviceArtistView(ar.name)) : fromDiscover(ar.source) ? discoverArtistView(ar.name) : artistView(ar.source, ar.name)).then((r) => {
               if (want === id) {
-                artistHead = { albums: r.albums, appears_on: r.appears_on, favorite: r.favorite, studio: (r as { studio?: number | null }).studio };
+                artistHead = { albums: r.albums, appears_on: r.appears_on, favorite: r.favorite, mbid: (r as { mbid?: string }).mbid, studio: (r as { studio?: number | null }).studio };
                 // Their picture: their newest album's cover (Symfonium's, without an artist's photo); one from Discover's
                 // albums are Bandcamp's.
                 const first = r.albums[0] ?? r.appears_on[0];
@@ -2039,6 +2039,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         source={fromDiscover(artist.source) ? DISCOVER : artist.source}
         albumSource={fromDiscover(artist.source) ? BANDCAMP : artist.source}
         name={artist.name}
+        mbid={artistHead.mbid ?? null}
         searching={own}
         albums={artistHead.albums}
         appearsOn={artistHead.appears_on}

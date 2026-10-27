@@ -22,6 +22,7 @@
     source,
     albumSource = source,
     name,
+    mbid = null,
     albums,
     appearsOn,
     top,
@@ -34,6 +35,8 @@
     /** Where the albums open (an artist from Discover: Bandcamp's). */
     albumSource?: string;
     name: string;
+    /** Their MusicBrainz id, where known: Discogs is found by it. */
+    mbid?: string | null;
     albums: ListedAlbum[];
     appearsOn: ListedAlbum[];
     top?: Snippet;
@@ -118,11 +121,11 @@
   // real name, members, the groups they are in, the names they also go by, and their page. Cratarr's own library only.
   let discogs = $state<ArtistDiscogs | null>(null);
   $effect(() => {
-    const [s, n] = [source, name];
+    const [s, n, m] = [source, name, mbid];
     discogs = null;
     if (s !== 'cratarr') return;
     let gone = false;
-    getArtistDiscogs(n).then(
+    getArtistDiscogs(n, m).then(
       (d) => !gone && (discogs = d),
       () => {},
     );
