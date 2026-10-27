@@ -36,7 +36,9 @@ The track's own player for forwards at up to 1× (a browser's MSE stream, gaples
 stream's for everything at speed or backwards. A change between them happens only at speed zero, which is silent, so it
 is unheard; the one resting is kept armed at the playhead (the track buffered where the wind will land, the wind stream
 asked for from where the track is as soon as a wind may come: a press on Previous or Next, a drag), so a change never
-waits. Below a player's slowest speed (a browser's 1/16) the gain carries the last of a ramp down to silence. The page
+waits. Forwards and backwards are different things at the core (the owner), and the split follows that; winding
+forwards at speed rides the wind stream too, as the server renders speed without the browser's aliasing, but a wind
+always begins from a pause and ends braked to a stop, so every change still happens at zero. Below a player's slowest speed (a browser's 1/16) the gain carries the last of a ramp down to silence. The page
 reads the wind stream itself (fetch into MSE, not an audio element), so its map, and with it the playhead across cuts,
 is known at every moment. Cheaper than one read head over decoded sound (no ~100 MB of decoded track on a tablet),
 and the same to the ear; an AudioWorklet read head stays the fallback if a change at zero ever proves audible.
