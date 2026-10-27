@@ -6,7 +6,8 @@
   // as it syncs. Downloaded once: the albums of the one-time copies, filling as they come. A release is a release row
   // (lib/ReleaseRow); a tap opens its menu (the owner, 2026-10-24: not the item itself): an album's own, a playlist's or
   // a crate's own; an artist (or what is not known well enough for its own menu) a short one: Go to it, Stop syncing.
-  // The pill's search narrows the two lists.
+  // The pill's search narrows the two lists. Select: the ticked ones played, queued or removed from this device (the
+  // owner, 2026-10-27: what one has, several have).
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
@@ -14,6 +15,10 @@
   import { albumSubject, artistSubject, closePlaylist, SETTINGS, upToPage, viewPlaylist } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
   import { appInfo, download, downloads, removeDownloads } from './app.svelte';
+  import type { Collection } from './api';
+  import { plural } from './insights.svelte';
+  import { playCollection } from './play.svelte';
+  import { toast } from './toast.svelte';
   import { library } from './albums.svelte';
   import { DOWNLOADS_LISTS, goTo, onceAlbums, WAITS, type DownloadsList, type OnceAlbum } from './downloadsLists.svelte';
   import Icon from './Icon.svelte';
@@ -137,6 +142,29 @@
     if (list === 'once') removeDownloads(once.filter((g) => on.has(onceKey(g))).flatMap((g) => g.tracks.map((t) => t.download.id)));
     selecting = null;
   }
+  /** The ticked ones played or added to the queue, one after another: a synced item as its own Play plays it, a
+   *  one-time copy's album its downloaded tracks. */
+  async function playTicked(how: 'play' | 'last') {
+    const on = new Set(ticked);
+    const whats: { what: Collection; name: string }[] = [];
+    if (list === 'synced')
+      for (const i of synced.filter((x) => on.has(x.key)))
+        whats.push({
+          what: i.kind === 'album' ? { kind: 'album', source: i.source, id: i.id } : i.kind === 'artist' ? { kind: 'artist', source: i.source, name: i.id } : { kind: i.kind, id: i.id },
+          name: i.name,
+        });
+    if (list === 'once')
+      for (const g of once.filter((x) => on.has(onceKey(x)))) whats.push({ what: { kind: 'tracks', source: g.source, ids: g.tracks.map((t) => t.id) }, name: titleOf(g) });
+    if (!whats.length) return;
+    navigator.vibrate?.(8);
+    selecting = null;
+    const name = whats.length === 1 ? whats[0].name : plural(whats.length, list === 'once' ? 'album' : 'item');
+    try {
+      for (const [n, w] of whats.entries()) await playCollection(w.what, n ? 'last' : how, name);
+    } catch (e) {
+      toast.fail(e, 'Could not start playing');
+    }
+  }
 
   const handed = $derived(glass.one && !beside);
   const pill = () => (!beside ? { device: false, filter: false, view: false, search: 'downloads' } : null);
@@ -257,6 +285,8 @@
     every={{ all: !!shownKeys.length && ticked.length === shownKeys.length, onall: () => selectWhich('all'), onnone: () => selectWhich('none') }}
   >
     <button aria-label="Select which" title="Select…" onclick={() => (selectSheet = true)}><Icon name="listChecks" size={24} /></button>
+    <button aria-label="Play" title="Play" disabled={!ticked.length} onclick={() => playTicked('play')}><Icon name="play" size={24} /></button>
+    <button aria-label="Add to queue" title="Add to queue" disabled={!ticked.length} onclick={() => playTicked('last')}><Icon name="listAdd" size={24} /></button>
     <button aria-label="Remove from this device" title="Remove from this device" disabled={!ticked.length} onclick={removeTicked}><Icon name="trash" size={24} /></button>
   </SelectBar>
 {/if}

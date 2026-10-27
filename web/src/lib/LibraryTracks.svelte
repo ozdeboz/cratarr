@@ -5,8 +5,10 @@
   // Library's View), the table's columns as wide as the list allows (decision 0042). A tap plays from that track, the
   // tracks loaded so far the queue (500 at most); rows or the table only (the owner, 2026-10-26: no Covers or Flow for
   // tracks); a cover views its album; a long-press the track's menu (lib/TrackMenu);
-  // Select as the albums' (the ticked ones to the selection's menu).
-  import { albumCoverUrl, libraryTracks, type LibraryTrack } from './api';
+  // Select as the albums' (the ticked ones' heart, as a playlist's select bar has it, and the selection's menu).
+  import { albumCoverUrl, libraryTracks, setTrackFavorite, type LibraryTrack } from './api';
+  import { askIfMany, fewAtATime } from './many.svelte';
+  import { setFavorite } from './favourites.svelte';
   import { fit, LIBRARY_TRACK_COLUMNS } from './columns.svelte';
   import ViewSheet from './ViewSheet.svelte';
   import Cover from './Cover.svelte';
@@ -137,6 +139,27 @@
     const ids = items.map((t) => t.id);
     selecting = new Set(which === 'all' ? ids : which === 'none' ? [] : ids.filter((id) => !selecting?.has(id)));
   }
+  /** The heart on the ticked tracks (the owner, 2026-10-27: what one has, several have): all favourites, or none when
+   *  all already are, as a playlist's select bar (lib/PlaylistView). Shown at once, back on a refusal; many ask first. */
+  const tickedFav = $derived(ticked.length > 0 && ticked.every((t) => t.favorite));
+  function favouriteTicked() {
+    const list = ticked;
+    const on = !tickedFav;
+    const n = plural(list.length, 'track');
+    askIfMany(list.length, { title: on ? `Favourite ${n}?` : `Unfavourite ${n}?`, label: on ? `Favourite ${n}` : `Unfavourite ${n}`, icon: 'heart' }, async () => {
+      navigator.vibrate?.(8);
+      const was = new Map(list.map((t) => [t.id, t.favorite]));
+      const show = (t: LibraryTrack, fav: boolean) => {
+        t.favorite = fav;
+        setFavorite('cratarr', t.id, fav);
+      };
+      for (const t of list) show(t, on);
+      selecting = null;
+      const failed = await fewAtATime(list, (t) => setTrackFavorite('cratarr', t.id, on));
+      for (const t of failed) show(t, was.get(t.id) ?? !on);
+      if (failed.length) toast.fail(null, "The favourites didn't all change");
+    });
+  }
   const asTrack = (t: LibraryTrack): LocalTrack => ({ source: 'cratarr', id: t.id, name: t.title, artist: t.artist, album: t.album, album_id: t.album_id, duration_secs: t.duration });
   let several = $state<LocalTrack[] | null>(null);
   let menuOf = $state<MenuTrack | null>(null);
@@ -222,6 +245,7 @@
     place="page"
     every={{ all: !!items.length && ticked.length === items.length, onall: () => selectWhich('all'), onnone: () => selectWhich('none') }}
   >
+    <button class:fav={tickedFav} aria-pressed={tickedFav} aria-label="Favourite" title="Favourite" disabled={!ticked.length} onclick={favouriteTicked}><Icon name="heart" size={24} /></button>
     <button aria-label="Menu of the ticked tracks" title="More" disabled={!ticked.length} onclick={() => (several = ticked.map(asTrack))}><Icon name="moreVert" size={24} /></button>
   </SelectBar>
 {/if}

@@ -3,14 +3,16 @@
   // Settings; the lists in panels): opened from the page's index, beside it on a roomy window (no ✕ there), over it on a
   // phone. Its bar: where it is (Requests › Your requests). Waiting for an answer (those who answer requests): each
   // answered from its row's menu, or many at once in the select mode every list has (the bar's icon starts it). Your
-  // requests: each with where it stands, a waiting one taken back from its menu. Monitor (the owner, 2026-10-26: not Lidarr's name, so another downloader fits): what it
+  // requests: each with where it stands, a waiting one taken back from its menu, or many at once in Select (the owner,
+  // 2026-10-27: what one has, several have). Monitor (the owner, 2026-10-26: not Lidarr's name, so another downloader fits): what it
   // fetches now (how far), then what it watches for and has not found yet.
-  import { askIfMany } from './many.svelte';
+  import { askIfMany, fewAtATime } from './many.svelte';
+  import { toast } from './toast.svelte';
   import { plural } from './insights.svelte';
   import { glass, handGlass } from './glass.svelte';
   import GlobalResults from './GlobalResults.svelte';
   import { everywhere } from './globalSearch.svelte';
-  import type { AlbumRequest, WatchedAlbum } from './api';
+  import { cancelRequest, type AlbumRequest, type WatchedAlbum } from './api';
   import Icon from './Icon.svelte';
   import { me } from './me.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -95,14 +97,16 @@
     askIfMany(ids.length, { title: `Approve ${n}?`, label: `Approve ${n}`, icon: 'check' }, go);
   }
 
-  // --- Select (everyone's waiting ones) ---
+  // --- Select (everyone's waiting ones; one's own that can be taken back) ---
   let selecting = $state<Set<number> | null>(null);
   let selectSheet = $state(false);
   // The pill's search (the owner, 2026-10-25): a request whose album, artist or asker holds every word.
   const found = (r: AlbumRequest) => matchesSearch(r.album, r.artist, r.user);
   const waiting = $derived((view?.waiting ?? []).filter(found));
   const mine = $derived((view?.mine ?? []).filter(found));
-  const ticked = $derived(selecting ? waiting.filter((r) => selecting!.has(r.id)).map((r) => r.id) : []);
+  /** What Select can tick in this list. */
+  const selectable = $derived(list === 'waiting' ? waiting : list === 'mine' ? mine.filter(canTakeBack) : []);
+  const ticked = $derived(selecting ? selectable.filter((r) => selecting!.has(r.id)).map((r) => r.id) : []);
   function tick(id: number) {
     if (!selecting) return;
     const s = new Set(selecting);
@@ -111,13 +115,24 @@
     selecting = s;
   }
   function selectWhich(which: 'all' | 'none' | 'others') {
-    const all = waiting.map((r) => r.id);
+    const all = selectable.map((r) => r.id);
     selecting = new Set(which === 'all' ? all : which === 'none' ? [] : all.filter((i) => !selecting?.has(i)));
   }
   $effect(() => {
     void list;
     selecting = null;
   });
+  /** The ticked ones of one's own taken back, as one is from its menu; many ask first (lib/many). */
+  function takeBackTicked() {
+    const ids = [...ticked];
+    const n = plural(ids.length, 'request');
+    askIfMany(ids.length, { title: `Take back ${n}?`, label: `Take back ${n}`, icon: 'undo' }, async () => {
+      selecting = null;
+      const failed = await fewAtATime(ids, cancelRequest);
+      if (failed.length) toast.fail(null, failed.length === ids.length ? 'Could not take them back' : "Not all were taken back");
+      loadRequests();
+    });
+  }
   // On a phone this panel's glass is App's (lib/glass, the owner 2026-10-25: one glass, page's and panel's): handed over,
   // its own bar not drawn, its list under the glass.
   const handed = $derived(glass.one && !beside);
@@ -131,7 +146,7 @@
   <Crumbs trail={beside ? [] : [{ label: 'Requests', go: () => upToPage('#/requests') }]} here={L.name} />
 {/snippet}
 {#snippet glassExtra()}
-  {#if list === 'waiting' && waiting.length}
+  {#if selectable.length}
     <span class="navpill"
       ><button aria-label="Select" title="Select" aria-pressed={!!selecting} onclick={() => (selecting = selecting ? null : new Set())}><Icon name="listChecks" size={22} /></button></span
     >
@@ -170,7 +185,7 @@
       </Group>
     {:else if list === 'mine'}
       <Group>
-        {#each mine as r (r.id)}{@render row(r, false, false)}{:else}
+        {#each mine as r (r.id)}{@render row(r, false, canTakeBack(r))}{:else}
           <Item name="None yet" line="Want an album in Discover to ask for it." onclick={() => (location.hash = '#/discover')} />
         {/each}
       </Group>
@@ -194,10 +209,14 @@
 </div>
 
 {#if selecting}
-  <SelectBar label="Selected requests" count="{ticked.length}/{waiting.length}" onclose={() => (selecting = null)} every={{ all: !!waiting.length && ticked.length === waiting.length, onall: () => selectWhich('all'), onnone: () => selectWhich('none') }}>
+  <SelectBar label="Selected requests" count="{ticked.length}/{selectable.length}" onclose={() => (selecting = null)} every={{ all: !!selectable.length && ticked.length === selectable.length, onall: () => selectWhich('all'), onnone: () => selectWhich('none') }}>
     <button aria-label="Select which" title="Select…" onclick={() => (selectSheet = true)}><Icon name="listChecks" size={24} /></button>
-    <button aria-label="Approve" title="Approve" disabled={!ticked.length} onclick={() => answer(ticked, true)}><Icon name="check" size={24} /></button>
-    <button aria-label="Decline" title="Decline" disabled={!ticked.length} onclick={() => (declining = ticked)}><Icon name="ban" size={24} /></button>
+    {#if list === 'mine'}
+      <button aria-label="Take back" title="Take back" disabled={!ticked.length} onclick={takeBackTicked}><Icon name="undo" size={24} /></button>
+    {:else}
+      <button aria-label="Approve" title="Approve" disabled={!ticked.length} onclick={() => answer(ticked, true)}><Icon name="check" size={24} /></button>
+      <button aria-label="Decline" title="Decline" disabled={!ticked.length} onclick={() => (declining = ticked)}><Icon name="ban" size={24} /></button>
+    {/if}
   </SelectBar>
 {/if}
 {#if selectSheet}

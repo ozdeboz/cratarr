@@ -112,6 +112,8 @@
   import CrateMenu from './CrateMenu.svelte';
   import SubjectMenu from './SubjectMenu.svelte';
   import SelectionMenu from './SelectionMenu.svelte';
+  import MenuEntry from './MenuEntry.svelte';
+  import MenuGroup from './MenuGroup.svelte';
   import { pickOf, playCollection } from './play.svelte';
   import { addedOn, artistPictureId, goToArtist, library, libraryDot, mainArtist, readLibrary } from './albums.svelte';
   import AlbumAbout from './AlbumAbout.svelte';
@@ -926,8 +928,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   let crateMenuOpen = $state(false);
   /** A badge's menu (decision 0058: a genre badge, a related playlist: what its tap opens, by its subject). */
   let badgeMenu = $state<string | null>(null);
-  /** The ticked tracks' menu (the select bar's ⋮, lib/SelectionMenu). */
-  let tickedMenu = $state<LocalTrack[] | null>(null);
+  /** The ticked tracks' menu (the select bar's ⋮, lib/SelectionMenu): their rows, for its Remove from and Exclude from. */
+  let tickedMenu = $state.raw<{ rows: PlaylistRow[]; tracks: LocalTrack[] } | null>(null);
   /** The menu opens at its entries, or at Delete's confirmation (the edit bar's trash). */
   let menuStart = $state<'menu' | 'delete'>('menu');
   /** `outs`: its list's Remove from (one's own playlist) or Exclude from (a crate: the track, its album). */
@@ -1267,11 +1269,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /** A swipe left on a row of `list` (a playlist's id; the crate viewed): null where it takes nothing out. */
   function outOf(r: PlaylistRow, list: string): (() => 'away') | null {
     const c = crate;
-    if (c) return r.id && !r.missing ? () => outOfCrate(c, r) : null;
+    if (c) return r.id && !r.missing ? () => outOfCrate(c, [r]) : null;
     if (album || artist) return null;
     const pl = shownPlaylists().find((x) => x.id === list);
     if (!pl || pl.mine === false || (multi ? !(list in sections) : list !== id)) return null;
-    return () => outOfPlaylist(list, r);
+    return () => outOfPlaylist(list, [r]);
   }
   /** How many tracks and albums the crate viewed excludes, and their sheet. */
   // A playlist's suggestions crate (lib/SuggestedTracks) is not among one's crates: its count of what was turned down
@@ -1327,7 +1329,23 @@ ${r.album_artist ?? r.artist ?? ''}`;
     const name = crateName(c);
     return [
       { label: `Exclude from ${name}`, icon: 'crateOut', run: () => void out() },
-      ...(r.album_id ? [{ label: `Exclude album from ${name}`, icon: 'crateOut' as const, run: () => albumOutOfCrate(c, r) }] : []),
+      ...(r.album_id ? [{ label: `Exclude album from ${name}`, icon: 'crateOut' as const, run: () => albumOutOfCrate(c, [r]) }] : []),
+    ];
+  }
+  /** The ticked rows' Remove from and Exclude from, in the select bar's ⋮ (the owner, 2026-10-27: what one has, several
+   *  have): where each row's own menu has them, all at once. Many ask first (lib/many). */
+  function tickedOuts(rs: PlaylistRow[]): { label: string; icon: IconName; run: () => void }[] {
+    if (!rs.length || !rs.every((r) => outOf(r, title))) return [];
+    const [c, list, n] = [crate, title, plural(rs.length, 'track')];
+    const asked = (what: string, icon: IconName, run: () => void) => () => askIfMany(rs.length, { title: `${what}?`, label: what, icon }, run);
+    if (!c) return [{ label: `Remove from ${list}`, icon: 'listRemove', run: asked(`Remove ${n} from ${list}`, 'listRemove', () => void outOfPlaylist(list, rs)) }];
+    const name = crateName(c);
+    const albums = new Set(rs.flatMap((r) => (r.album_id ? [r.album_id] : []))).size;
+    return [
+      { label: `Exclude from ${name}`, icon: 'crateOut', run: asked(`Exclude ${n} from ${name}`, 'crateOut', () => void outOfCrate(c, rs)) },
+      ...(albums
+        ? [{ label: albums === 1 ? `Exclude album from ${name}` : `Exclude albums from ${name}`, icon: 'crateOut' as const, run: () => albumOutOfCrate(c, rs) }]
+        : []),
     ];
   }
   /** The row leaves the list as it slides out (the list is keyed by place, so the next takes its row). */
@@ -1338,20 +1356,21 @@ ${r.album_artist ?? r.artist ?? ''}`;
       else if (rows) rows = rows.filter((x) => x !== r);
     }, 200);
   }
-  function outOfCrate(c: string, r: PlaylistRow) {
-    dropShown(id, r);
-    leaveOut(c, source, { ids: [r.id!] }).catch((e) => {
+  /** Rows out of the crate (a swipe's one, or the ticked ones: one call, one Undo). */
+  function outOfCrate(c: string, rs: PlaylistRow[]) {
+    for (const r of rs) dropShown(id, r);
+    leaveOut(c, source, { ids: rs.map((r) => r.id!) }).catch((e) => {
       toast.fail(e, "It wasn't excluded");
       saved++;
     });
     return 'away' as const;
   }
-  /** The row's whole album out of the crate (the owner: "exclude album from crate"): its rows leave the list. */
-  function albumOutOfCrate(c: string, r: PlaylistRow) {
-    const a = r.album_id;
-    if (!a) return;
-    for (const x of rows?.filter((x) => x.album_id === a) ?? []) dropShown(id, x);
-    leaveOut(c, source, { albums: [a] }).catch((e) => {
+  /** The rows' whole albums out of the crate (the owner: "exclude album from crate"): their rows leave the list. */
+  function albumOutOfCrate(c: string, rs: PlaylistRow[]) {
+    const albums = [...new Set(rs.flatMap((r) => (r.album_id ? [r.album_id] : [])))];
+    if (!albums.length) return;
+    for (const x of rows?.filter((x) => !!x.album_id && albums.includes(x.album_id)) ?? []) dropShown(id, x);
+    leaveOut(c, source, { albums }).catch((e) => {
       toast.fail(e, "It wasn't excluded");
       saved++;
     });
@@ -1361,14 +1380,15 @@ ${r.album_artist ?? r.artist ?? ''}`;
   const leaving: Record<string, PlaylistRow[]> = {};
   let outs = 0;
   let outChain: Promise<unknown> = Promise.resolve();
-  function outOfPlaylist(list: string, r: PlaylistRow) {
+  /** A swipe's row, or the ticked ones (one save, one Undo). */
+  function outOfPlaylist(list: string, rs: PlaylistRow[]) {
     const s = sections[list];
     const before = leaving[list] ?? (multi ? (s && 'rows' in s ? s.rows : null) : rows);
     if (!before) return 'away' as const;
-    const after = before.filter((x) => x !== r);
+    const after = before.filter((x) => !rs.includes(x));
     leaving[list] = after;
     outs++;
-    dropShown(list, r);
+    for (const r of rs) dropShown(list, r);
     outChain = outChain
       .then(async () => {
         const { undo } = await editPlaylist(
@@ -2112,8 +2132,9 @@ ${r.album_artist ?? r.artist ?? ''}`;
         <button class="icon" class:fav={tickedFav} aria-pressed={tickedFav} aria-label="Favourite" title="Favourite" disabled={!ticked.length} onclick={favouriteTicked}
           ><Icon name="heart" size={24} /></button
         >
-        <!-- The menu of what is ticked, at the far right (decision 0058: Add to playlist, Download, Export…). -->
-        <button class="icon" aria-label="Menu of the ticked tracks" title="More" disabled={!ticked.length} onclick={() => (tickedMenu = tracksOf(ticked))}
+        <!-- The menu of what is ticked, at the far right (decision 0058: Add to playlist, Download, Export…; Remove from
+             or Exclude from where the rows' own menus have them). -->
+        <button class="icon" aria-label="Menu of the ticked tracks" title="More" disabled={!ticked.length} onclick={() => (tickedMenu = { rows: ticked, tracks: tracksOf(ticked) })}
           ><Icon name="moreVert" size={24} /></button
         >
     </SelectBar>
@@ -2277,7 +2298,26 @@ ${r.album_artist ?? r.artist ?? ''}`;
   <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />
 {/if}
 {#if tickedMenu}
-  <SelectionMenu title={plural(tickedMenu.length, 'track')} tracks={tickedMenu} onclose={() => ((tickedMenu = null), (selecting = null))} />
+  {@const away = tickedOuts(tickedMenu.rows)}
+  <SelectionMenu title={plural(tickedMenu.tracks.length, 'track')} tracks={tickedMenu.tracks} onclose={() => ((tickedMenu = null), (selecting = null))}>
+    {#snippet extra(close)}
+      {#if away.length}
+        <MenuGroup>
+          {#each away as o (o.label)}
+            <MenuEntry
+              icon={o.icon}
+              label={o.label}
+              danger
+              onclick={() => {
+                close();
+                o.run();
+              }}
+            />
+          {/each}
+        </MenuGroup>
+      {/if}
+    {/snippet}
+  </SelectionMenu>
 {/if}
 {#if badgeMenu}
   <SubjectMenu subject={badgeMenu} onclose={() => (badgeMenu = null)} />

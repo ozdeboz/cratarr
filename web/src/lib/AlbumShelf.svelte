@@ -5,7 +5,7 @@
   // menu (lib/AlbumMenu, the page's: `onmenu`). Select (decided 2026-10-16, as the panel's track lists and
   // Playlists): the list header's icon or a long-press ticks albums, a tap then ticks too, and the select bar
   // (lib/SelectBar) plays, puts next, queues, favours or downloads the ticked ones, one album after another, or opens
-  // the menu of one (a tile's menu is this way).
+  // the menu of one (a tile's menu is this way); several, their menu with what one album's has (lib/SeveralAlbums).
   import CoverPlay from './CoverPlay.svelte';
   import CoverWait from './CoverWait.svelte';
   import { NearBlocks } from './nearBlocks.svelte';
@@ -26,6 +26,8 @@
   import SelectBar from './SelectBar.svelte';
   import { toast } from './toast.svelte';
   import SelectionMenu from './SelectionMenu.svelte';
+  import SeveralAlbums, { type Ask } from './SeveralAlbums.svelte';
+  import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import { playCollection } from './play.svelte';
   import { DEVICE } from './deviceMusic.svelte';
   import type { LocalTrack } from './localPlayer.svelte';
@@ -378,8 +380,12 @@
   }
 
   /** The one ticked album's menu (a tile's menu is this way). */
-  // The select bar's ⋮ (decision 0058): one album, its own menu; several, the menu of their tracks (lib/SelectionMenu).
-  let several = $state<{ title: string; tracks: LocalTrack[] } | null>(null);
+  // The select bar's ⋮ (decision 0058): one album, its own menu; several, the menu of their tracks (lib/SelectionMenu)
+  // with what one album's menu has besides (the owner, 2026-10-27: what one has, several have; lib/SeveralAlbums), the
+  // ticked ones kept with it.
+  let several = $state<{ title: string; tracks: LocalTrack[]; list: { s: ShelfSource; a: ListedAlbum }[] } | null>(null);
+  /** Delete's or Move's question for several, once their menu has closed. */
+  let asking = $state<Ask | null>(null);
   async function menuOfTicked(e: MouseEvent) {
     const x = ticked[0];
     if (!x) return;
@@ -389,8 +395,9 @@
       return openMenu(x.s, x.a, anchor);
     }
     const list = ticked.map((t) => ({ source: t.s.id, a: t.a }));
+    const kept = [...ticked];
     try {
-      several = { title: `${list.length} albums`, tracks: await tracksOfAlbums(list) };
+      several = { title: `${list.length} albums`, tracks: await tracksOfAlbums(list), list: kept };
     } catch (err) {
       toast.fail(err, "Their tracks couldn't be read");
     }
@@ -602,8 +609,22 @@
   <CoverPlay label={a.title} album={a.id} {small} busy={albumPlay.starting === a.id} disabled={albumPlay.starting !== null} onplay={() => playOf(s, a)} />
 {/snippet}
 
+{#snippet severalExtra(close: () => void)}
+  {#if several}<SeveralAlbums list={several.list} tracks={several.tracks} {close} onask={(q) => (asking = q)} />{/if}
+{/snippet}
+
 {#if several}
-  <SelectionMenu title={several.title} tracks={several.tracks} onclose={() => ((several = null), (selecting = null))} />
+  <SelectionMenu
+    title={several.title}
+    tracks={several.tracks}
+    chips={[plural(several.list.length, 'album')]}
+    extra={severalExtra}
+    onclose={() => ((several = null), (selecting = null))}
+  />
+{/if}
+{#if asking}
+  {@const q = asking}
+  <ConfirmSheet title={q.title} text={q.text} label={q.label} icon={q.icon} onconfirm={q.go} onclose={() => (asking = null)} />
 {/if}
 
 {#if columnsOpen}<ViewSheet page="library" kind="albums" onclose={() => (columnsOpen = false)} />{/if}

@@ -3,9 +3,17 @@
   // libraries' albums by their artists, with the albums' header (its order, how many, Select's room) and their two
   // layouts, as the albums' (the Library's View; the owner, 2026-10-26: Grid and Flow too); in the table their columns as
   // wide as the list allows (decision 0042). The page's search filters them by name. A tap views the artist in the panel, as an album's artist does; a
-  // long-press their menu (lib/ArtistRowMenu); Select as the albums' (their tracks to the selection's menu).
+  // long-press their menu (lib/ArtistRowMenu); Select as the albums' (their hearts on the select bar, their tracks to the
+  // selection's menu, with Sync to this device and Remove from this device as one artist's menu has them; the owner,
+  // 2026-10-27: what one has, several have).
   import { panelBeside } from './glass.svelte';
-  import { albumCoverUrl, type ShelfSource } from './api';
+  import { albumCoverUrl, artistFavorite, setArtistFavorite, type ShelfSource } from './api';
+  import { downloads, inApp, removeDownloads } from './app.svelte';
+  import { isKept, setKept } from './kept.svelte';
+  import { askIfMany, fewAtATime, MANY } from './many.svelte';
+  import MenuEntry from './MenuEntry.svelte';
+  import MenuGroup from './MenuGroup.svelte';
+  import { untrack } from 'svelte';
   import { fit } from './columns.svelte';
   import ViewSheet from './ViewSheet.svelte';
   import Cover from './Cover.svelte';
@@ -76,16 +84,65 @@
     const keys = shown.map(keyOf);
     selecting = new Set(which === 'all' ? keys : which === 'none' ? [] : keys.filter((k) => !selecting?.has(k)));
   }
-  // The ticked artists' tracks, album by album, for the selection's menu.
-  let several = $state<{ title: string; tracks: LocalTrack[] } | null>(null);
+  // The ticked artists' tracks, album by album, for the selection's menu; the artists kept with them.
+  let several = $state<{ title: string; tracks: LocalTrack[]; list: Artist[] } | null>(null);
   async function menuOfTicked() {
     if (!ticked.length) return;
+    const list = [...ticked];
     try {
-      several = { title: plural(ticked.length, 'artist'), tracks: await tracksOfAlbums(ticked.flatMap((a) => a.list.map((x) => ({ source: a.source, a: x })))) };
+      several = { title: plural(list.length, 'artist'), tracks: await tracksOfAlbums(list.flatMap((a) => a.list.map((x) => ({ source: a.source, a: x })))), list };
     } catch (err) {
       toast.fail(err, "Their tracks couldn't be read");
     }
   }
+  // Their hearts (the select bar's, as the albums'): each ticked one's asked as it is ticked, while no more than MANY
+  // are (one call each; past that the heart favours them all); null where the server keeps none. Asked again each time a
+  // selection starts.
+  let favs = $state<Record<string, boolean | null>>({});
+  const asked = new Set<string>();
+  const choosing = $derived(selecting !== null);
+  $effect(() => {
+    void choosing;
+    untrack(() => (asked.clear(), (favs = {})));
+  });
+  $effect(() => {
+    if (ticked.length > MANY) return;
+    for (const a of ticked) {
+      const k = keyOf(a);
+      if (asked.has(k)) continue;
+      asked.add(k);
+      artistFavorite(a.source, a.name).then(
+        (r) => (favs[k] = r.favorite),
+        () => asked.delete(k),
+      );
+    }
+  });
+  const tickedFav = $derived(ticked.length > 0 && ticked.every((a) => favs[keyOf(a)] === true));
+  const noHearts = $derived(ticked.length > 0 && ticked.every((a) => favs[keyOf(a)] === null));
+  /** The heart on the ticked artists: all favourites, or none when all already are; shown at once, back on a refusal.
+   *  Many ask first (lib/many), the selection kept on Cancel. */
+  function favouriteTicked() {
+    const list = [...ticked];
+    const on = !tickedFav;
+    const n = plural(list.length, 'artist');
+    askIfMany(list.length, { title: on ? `Favourite ${n}?` : `Unfavourite ${n}?`, label: on ? `Favourite ${n}` : `Unfavourite ${n}`, icon: 'heart' }, async () => {
+      navigator.vibrate?.(8);
+      selecting = null;
+      const failed = await fewAtATime(list, (a) => setArtistFavorite(a.source, a.name, on));
+      if (failed.length) toast.fail(null, "The favourites didn't all change");
+    });
+  }
+  // Sync to this device (decision 0038), on for all or off when all are; their tracks kept here, Remove from this device.
+  const allKept = (list: Artist[]) => list.length > 0 && list.every((a) => isKept('artist', a.source, a.name));
+  function syncAll(list: Artist[]) {
+    const on = !allKept(list);
+    for (const a of list) if (isKept('artist', a.source, a.name) !== on) setKept('artist', a.source, a.name, on, a.name);
+  }
+  const severalKept = $derived.by(() => {
+    if (!inApp || !several) return [];
+    const ids = new Set(several.tracks.map((t) => `${t.source}/${t.id}`));
+    return downloads.tracks.filter((t) => ids.has(`${t.source}/${t.id}`)).map((t) => t.download.id);
+  });
   let menuOf = $state<Artist | null>(null);
   const press = (a: Artist) => fromAction(longpress, () => () => (selecting ? (selectSheet = true) : (menuOf = a)));
 
@@ -247,11 +304,34 @@
     place="page"
     every={{ all: !!shown.length && ticked.length === shown.length, onall: () => selectWhich('all'), onnone: () => selectWhich('none') }}
   >
+    {#if !noHearts}
+      <button class:fav={tickedFav} aria-pressed={tickedFav} aria-label="Favourite" title="Favourite" disabled={!ticked.length} onclick={favouriteTicked}
+        ><Icon name="heart" size={24} /></button
+      >
+    {/if}
     <button aria-label="Menu of the ticked artists" title="More" disabled={!ticked.length} onclick={menuOfTicked}><Icon name="moreVert" size={24} /></button>
   </SelectBar>
 {/if}
+{#snippet severalExtra(close: () => void)}
+  {#if several}
+    {@const list = several.list}
+    <MenuGroup>
+      {#if inApp}<MenuEntry icon="download" label="Sync to this device" switched={allKept(list)} onclick={() => syncAll(list)} />{/if}
+      {#if severalKept.length}
+        {@const ids = severalKept}
+        <MenuEntry icon="trash" label="Remove from this device" danger onclick={() => (close(), removeDownloads(ids))} />
+      {/if}
+    </MenuGroup>
+  {/if}
+{/snippet}
 {#if several}
-  <SelectionMenu title={several.title} tracks={several.tracks} onclose={() => ((several = null), (selecting = null))} />
+  <SelectionMenu
+    title={several.title}
+    tracks={several.tracks}
+    chips={[plural(several.list.length, 'artist')]}
+    extra={severalExtra}
+    onclose={() => ((several = null), (selecting = null))}
+  />
 {/if}
 {#if selectSheet}
   <SelectSheet onall={() => selectWhich('all')} onnone={() => selectWhich('none')} onothers={() => selectWhich('others')} onclose={() => (selectSheet = false)} />
