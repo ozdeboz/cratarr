@@ -7,7 +7,8 @@
   import { appInfo, inApp, setDevice } from '../app.svelte';
   import MenuSheet from '../MenuSheet.svelte';
   import { panSafe } from '../panSafe';
-  import { prefs, RAMP_MS, WIND, type StartStop, type Wind } from '../prefs.svelte';
+  import { CURVE_START, prefs, RAMP_MS, WIND, type StartStop, type Wind, type WindCurve } from '../prefs.svelte';
+  import MenuEntry from '../MenuEntry.svelte';
   import Seg from '../Seg.svelte';
   import SettingRow from '../SettingRow.svelte';
   import Item from './Item.svelte';
@@ -26,7 +27,7 @@
   const STARTSTOP_MORE =
     "Vinyl: play speeds up from still over the ramp's time, and pause slows down to still with Tape winding's Brake, the pitch following, as a turntable. Fade: they fade in and out over the ramp's time. A track running into the next stays seamless.";
   const WIND_MORE =
-    "Previous and Next wind the tape. A tap winds back to the track's start, as a tape spinning up, running and braking; where the way is long, it is cut into short pieces. Holding Previous or Next pauses, then winds back or forward for as long as you hold, and plays on from where you let go.";
+    "Previous and Next wind the tape. A tap of Previous winds back to the track's start, a tap of Next on to its end and then the next track, as a tape spinning up, running and braking; where the way is long, it is cut into short pieces. Holding Previous or Next winds back or forward for as long as you hold, ever faster, and plays on from where you let go. Rewind and fast-forward each have their own curve.";
   const SEC = (v: number) => `${(v / 1000).toFixed(2).replace(/\.?0+$/, '')} s`;
   /** Winding's tunings (the owner, 2026-10-27): an envelope on the tape's speed, each a slider under its graph. */
   const TUNINGS: { key: keyof typeof WIND; label: string; text: (v: number) => string }[] = [
@@ -42,6 +43,12 @@
     { value: 'queue', label: 'Through the queue' },
   ];
   let rewindOpen = $state(false);
+  /** Which direction's curve the sheet shows (the owner, 2026-10-27: each to one's taste). */
+  let side = $state<'back' | 'fwd'>('back');
+  const SIDES: { value: 'back' | 'fwd'; label: string }[] = [
+    { value: 'back', label: 'Rewind' },
+    { value: 'fwd', label: 'Fast-forward' },
+  ];
   let tuning = $state<{ key: keyof typeof WIND; value: number } | null>(null);
   const ss = $derived(inApp ? appInfo.startStop : prefs.startStop);
   function setSS(change: Partial<StartStop>) {
@@ -52,8 +59,11 @@
     } else prefs.startStop = next;
   }
   const setWind = (change: Partial<Wind>) => setSS({ wind: { ...ss.wind, ...change } });
-  /** The wind as the sheet shows it: a slider being dragged already in its graph. */
-  const shown = $derived(tuning ? { ...ss.wind, [tuning.key]: tuning.value } : ss.wind);
+  /** The direction shown's curve set (rewind's in `wind`, fast-forward's in `windFwd`). */
+  const setCurve = (change: Partial<WindCurve>) => (side === 'back' ? setWind(change) : setSS({ windFwd: { ...ss.windFwd, ...change } }));
+  /** The wind as the sheet shows it: the direction's, a slider being dragged already in its graph. */
+  const curve = $derived(side === 'back' ? ss.wind : { ...ss.wind, ...ss.windFwd });
+  const shown = $derived(tuning ? { ...curve, [tuning.key]: tuning.value } : curve);
   let rampOpen = $state(false);
   let rampDrag = $state<number | null>(null);
 </script>
@@ -85,7 +95,8 @@
 {#if rewindOpen}
   <MenuSheet label="Tape winding" title="Tape winding" onclose={() => (rewindOpen = false)}>
     <div class="ramp">
-      <WindGraph wind={shown} />
+      <div class="side"><Seg label="Direction" options={SIDES} bind:value={side} /></div>
+      <WindGraph wind={shown} dir={side} />
       {#each TUNINGS as t (t.key)}
         {@const r = WIND[t.key]}
         {@const v = shown[t.key]}
@@ -100,7 +111,7 @@
             aria-label={t.label}
             oninput={(e) => (tuning = { key: t.key, value: Number(e.currentTarget.value) })}
             onchange={(e) => {
-              setWind({ [t.key]: Number(e.currentTarget.value) });
+              setCurve({ [t.key]: Number(e.currentTarget.value) });
               tuning = null;
             }}
           />
@@ -108,6 +119,7 @@
         </SettingRow>
       {/each}
     </div>
+    <MenuEntry icon="undo" label="Reset to defaults" onclick={() => setCurve(CURVE_START)} />
   </MenuSheet>
 {/if}
 {#if rampOpen}
@@ -150,6 +162,10 @@
     width: auto;
     min-width: 0;
     accent-color: var(--accent);
+  }
+
+  .side {
+    margin: 4px 0 8px;
   }
 
   .ramp output {

@@ -7,10 +7,13 @@
   import { clockText } from '../remote.svelte';
   import { rate, tapPlan } from '../windShape';
 
-  let { wind }: { wind: Wind } = $props();
+  /** `dir`: rewind's (from where it plays back to the start) or fast-forward's (on to the end). */
+  let { wind, dir = 'back' }: { wind: Wind; dir?: 'back' | 'fwd' } = $props();
 
   const W = 320, H = 96, L = 10, R = 10, T = 20, B = 22;
-  const from = $derived(playing() && duration() ? Math.max(1, position()) : 200);
+  const at = $derived(playing() && duration() ? Math.max(1, position()) : 200);
+  /** How far a tap winds: back to the start, or on to the end. */
+  const from = $derived(dir === 'back' ? at : Math.max(1, (playing() && duration() ? (duration() ?? 0) : 320) - at));
   const plan = $derived(tapPlan(wind, from));
   const xs = (t: number) => L + (t / plan.D) * (W - L - R);
   const ys = (h: number) => T + (1 - h) * (H - T - B);
@@ -31,8 +34,8 @@
   const secs = (ms: number) => `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
 </script>
 
-<svg class="graph" viewBox="0 0 {W} {H}" role="img" aria-label="A rewind from {clockText(from)} takes {secs(plan.D)}">
-  <text class="head" x={L} y="12">From {clockText(from)}: <tspan class="strong">{secs(plan.D)}</tspan></text>
+<svg class="graph" viewBox="0 0 {W} {H}" role="img" aria-label="{dir === 'back' ? 'A rewind' : 'A fast-forward'} from {clockText(at)} takes {secs(plan.D)}">
+  <text class="head" x={L} y="12">{dir === 'back' ? `From ${clockText(at)} to the start` : `From ${clockText(at)} to the end`}: <tspan class="strong">{secs(plan.D)}</tspan></text>
   <text class="note" x={W - R} y="12" text-anchor="end">{plan.cut ? `${plan.pieces} ${plan.pieces === 1 ? 'piece' : 'pieces'}` : 'no cuts'}</text>
   <line class="base" x1={L} y1={ys(0)} x2={W - R} y2={ys(0)} />
   <line class="limit" x1={L} y1={ys(1)} x2={W - R} y2={ys(1)} />

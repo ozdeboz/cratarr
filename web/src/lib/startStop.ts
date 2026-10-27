@@ -15,6 +15,9 @@ export type Wind = {
   seekWinds: boolean;
   edges: 'stop' | 'queue';
 };
+/** A direction's own envelope (the owner, 2026-10-27: rewind and fast-forward each to one's taste; `wind` holds
+ *  rewind's, `windFwd` fast-forward's; seeking and the edges are the two's alike). */
+export type WindCurve = Pick<Wind, 'ratio' | 'speed' | 'attackMs' | 'releaseMs' | 'pieceMs' | 'gainDb'>;
 /** A tap's longest (holding has no end but the edge). */
 export const WIND_CAP_MS = 12_000;
 /** Each tuning's range, step and starting value. */
@@ -35,6 +38,7 @@ export type StartStop = {
   skips: boolean;
   rewind: boolean;
   wind: Wind;
+  windFwd: WindCurve;
 };
 export const RAMP_MS = { min: 200, max: 3000 };
 type Range = { min: number; max: number; start: number };
@@ -47,8 +51,24 @@ export function startStopOf(x: Partial<StartStop>): StartStop {
     skips: x.skips === true,
     rewind: x.rewind === true,
     wind: windOf(x.wind),
+    windFwd: curveOf(x.windFwd),
   };
 }
+
+/** A direction's envelope as kept: what is missing or out of range at its start. */
+export function curveOf(x: Partial<WindCurve> | undefined): WindCurve {
+  const w = x ?? {};
+  return {
+    ratio: within(w.ratio, WIND.ratio),
+    speed: within(w.speed, WIND.speed),
+    attackMs: within(w.attackMs, WIND.attackMs),
+    releaseMs: within(w.releaseMs, WIND.releaseMs),
+    pieceMs: within(w.pieceMs, WIND.pieceMs),
+    gainDb: within(w.gainDb, WIND.gainDb),
+  };
+}
+/** Every tuning at its start (Reset to defaults). */
+export const CURVE_START: WindCurve = curveOf(undefined);
 
 /** Winding's tunings as kept: what is missing or out of range at its start. */
 export function windOf(x: Partial<Wind> | undefined): Wind {

@@ -356,7 +356,7 @@ export const SWIPES_DOWN: { value: SwipeDown; label: string }[] = [
 ];
 
 /** The ramp's bounds (ms): a fifth of a second to three. */
-export { RAMP_MS, startStopOf, WIND, WIND_CAP_MS, windOf, type StartStop, type Wind } from './startStop';
+export { CURVE_START, curveOf, RAMP_MS, startStopOf, WIND, WIND_CAP_MS, windOf, type StartStop, type Wind, type WindCurve } from './startStop';
 import { startStopOf, type StartStop } from './startStop';
 export type FilterCondition = Condition & { enabled?: boolean; quantifier?: 'any' | 'all' };
 
