@@ -108,6 +108,56 @@ fn note_limits(h: &reqwest::header::HeaderMap) {
     }
 }
 
+/// A master Discogs' search finds for free words (0076, Beyond): its id, title and artist (its "Artist - Title" split,
+/// the artist's "(2)" taken off), year, picture, and its page on Discogs (shown with "Data from Discogs").
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct FoundMaster {
+    pub id: u64,
+    pub title: String,
+    pub artist: String,
+    pub year: Option<i32>,
+    pub cover: Option<String>,
+    pub url: String,
+}
+
+/// Discogs' masters for the words, a page of `limit` from `offset` (the key's search: none without it); kept a few
+/// minutes per query, so typing back and forth asks nothing again.
+pub async fn search_masters(q: &str, limit: usize, offset: usize) -> Result<Vec<FoundMaster>> {
+    type Kept = std::collections::HashMap<String, (std::time::Instant, Vec<FoundMaster>)>;
+    static KEPT: std::sync::OnceLock<std::sync::Mutex<Kept>> = std::sync::OnceLock::new();
+    let q = q.trim();
+    if q.is_empty() || saved().await.is_none() {
+        return Ok(Vec::new());
+    }
+    let limit = limit.clamp(1, 50);
+    let page = offset / limit + 1;
+    let key = format!("{}|{limit}|{page}", super::import::key(q));
+    let kept = KEPT.get_or_init(Default::default);
+    if let Some((at, found)) = kept.lock().unwrap_or_else(|p| p.into_inner()).get(&key).cloned()
+        && at.elapsed() < Duration::from_secs(600)
+    {
+        return Ok(found);
+    }
+    let mut u = reqwest::Url::parse("https://x/database/search")?;
+    u.query_pairs_mut().append_pair("type", "master").append_pair("q", q).append_pair("per_page", &limit.to_string()).append_pair("page", &page.to_string());
+    let Some(v) = get(&format!("/database/search?{}", u.query().unwrap_or_default())).await? else { return Ok(Vec::new()) };
+    let found: Vec<FoundMaster> = v["results"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| {
+            let id = r["id"].as_u64()?;
+            let whole = r["title"].as_str()?;
+            let (artist, title) = whole.split_once(" - ").unwrap_or(("", whole));
+            let cover = r["cover_image"].as_str().or(r["thumb"].as_str()).filter(|c| !c.is_empty() && !c.contains("spacer.gif")).map(str::to_string);
+            let url = r["uri"].as_str().map_or_else(|| format!("https://www.discogs.com/master/{id}"), |p| format!("https://www.discogs.com{p}"));
+            Some(FoundMaster { id, title: title.trim().to_string(), artist: clean_name(artist.trim()), year: r["year"].as_str().and_then(|y| y.parse().ok()), cover, url })
+        })
+        .collect();
+    kept.lock().unwrap_or_else(|p| p.into_inner()).insert(key, (std::time::Instant::now(), found.clone()));
+    Ok(found)
+}
+
 /// One GET of Discogs' API (`path` with its query), paced; none where Discogs has no such thing.
 async fn get(path: &str) -> Result<Option<Value>> {
     // Switched off (0.9.6): Discogs is asked nothing; as if it had nothing.

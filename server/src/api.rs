@@ -156,6 +156,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/artists/about", get(artist_about))
         .route("/api/artists/related", get(artist_related))
         .route("/api/search", get(search_all))
+        .route("/api/search/beyond", get(search_beyond))
         .route("/api/artists/picks", get(artist_picks))
         .route("/api/crates/fits", get(crate_fits))
         .route("/api/home/heard", post(home_heard))
@@ -2851,6 +2852,9 @@ struct WindAsk {
     accel_s: Option<f64>,
     #[serde(default)]
     max: Option<f64>,
+    /// `1`: the wind's plan alone, as JSON, no sound (a page's player cannot read the stream's headers).
+    #[serde(default)]
+    map: Option<u8>,
 }
 
 /// Winding (decision 0074): the track from `from_ms` backwards or forwards at a constant speed, as 16-bit WAV made as
@@ -2906,6 +2910,28 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
     })
     .await
     .unwrap_or_default();
+    // The plan alone (0.9.13, `map=1`): where each moment of the stream stands in the queue's tracks, its speed and length;
+    // read from the files' headers, nothing decoded.
+    if q.map == Some(1) {
+        let plan = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
+            let first = crate::analysis::Reading::open(&path)?;
+            let mut tracks = vec![(first.rate(), first.channels(), duration_ms)];
+            for (p, d) in &joins {
+                let Ok(s) = crate::analysis::Reading::open(p) else { break };
+                tracks.push((s.rate(), s.channels(), *d));
+            }
+            let winds = if tracks.len() > 1 { crate::wind::chain(&tracks, ask)? } else { vec![Wind::new(tracks[0].0, tracks[0].1, duration_ms, ask)?] };
+            let map: Vec<serde_json::Value> = crate::wind::chain_map(&winds).into_iter().map(|(c, i, t)| json!([c, i, t])).collect();
+            let length: f64 = winds.iter().map(Wind::ms).sum();
+            Ok(json!({ "map": map, "speed": winds[0].speed(), "length_ms": length.round() as u64 }))
+        })
+        .await;
+        return match plan {
+            Ok(Ok(v)) => Json(v).into_response(),
+            Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("{e:#}") }))).into_response(),
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+    }
     let Some(turn) = crate::app::analysis_pass::heavy_turn(REWIND_TURN).await else {
         tracing::warn!(target: "rewind", track = %what, waited = since(), "wind: the decode's turn did not come");
         return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "Another track is being decoded." }))).into_response();
@@ -4907,18 +4933,77 @@ async fn artist_about(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) 
 struct SearchQuery {
     #[serde(default)]
     q: String,
-    /// Which kinds, comma-separated (album, artist, track, genre, playlist, crate); all when none.
+    /// Which kinds, comma-separated (album, artist, track, genre, playlist, crate; missing, requested, spotify,
+    /// suggested, excluded); all when none.
     #[serde(default)]
     kinds: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
+    /// Show all (0076): a page of one kind from here.
+    #[serde(default)]
+    offset: Option<usize>,
 }
 
 /// One search, answered by kind and merged (decision 0072): `{ q, groups: { kind: { total, items } }, top }`.
 async fn search_all(State(app): State<Arc<App>>, Query(s): Query<SearchQuery>) -> Result<Json<crate::app::search::Answer>, ApiError> {
     let kinds: Vec<String> = s.kinds.unwrap_or_default().split(',').map(str::trim).filter(|k| !k.is_empty()).map(str::to_string).collect();
-    let answer = crate::app::search::search(&app, &s.q, &kinds, s.limit.unwrap_or(crate::app::search::LIMIT)).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let answer = crate::app::search::search(&app, &s.q, &kinds, s.limit.unwrap_or(crate::app::search::LIMIT), s.offset.unwrap_or(0))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(answer))
+}
+
+/// Beyond the library (0076, the unindexed universe): MusicBrainz's albums and Discogs' masters for the words, together,
+/// one album once (by its artist and title), each with where it was found; what the library has marked `have`, what
+/// is asked for its request. MusicBrainz's artists beside. A page of `limit` from `offset`; kept per query.
+async fn search_beyond(State(app): State<Arc<App>>, Query(s): Query<SearchQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let (limit, offset) = (s.limit.unwrap_or(20).clamp(1, 50), s.offset.unwrap_or(0).min(500));
+    let q = s.q.trim().to_string();
+    if crate::search::words(&q).is_empty() {
+        return Ok(Json(json!({ "q": q, "albums": [], "artists": [] })));
+    }
+    let (mb, discogs) = tokio::join!(
+        crate::app::discover::musicbrainz_search(&serve, app.library.catalogue(), &q, (offset + limit).min(100)),
+        crate::app::discogs::search_masters(&q, limit, offset)
+    );
+    let (mb_albums, artists) = mb.unwrap_or_default();
+    let discogs = discogs.unwrap_or_default();
+    let library = tokio::task::spawn_blocking(crate::app::spotify::library).await.ok().and_then(Result::ok);
+    let marks = request_marks(&app, &serve).await;
+    let key = |artist: &str, title: &str| format!("{}|{}", crate::app::import::key(artist), crate::app::import::key(title));
+    let mut order: Vec<String> = Vec::new();
+    let mut by: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    for a in mb_albums.into_iter().skip(offset).take(limit) {
+        let k = key(&a.artist, &a.title);
+        if by.contains_key(&k) {
+            continue;
+        }
+        order.push(k.clone());
+        by.insert(
+            k,
+            json!({ "title": a.title, "artist": a.artist, "year": a.year, "cover": a.cover, "release_group": a.release_group, "discogs": null,
+                "discogs_url": null, "sources": ["musicbrainz"], "have": a.have, "request": marks.as_deref().and_then(|m| crate::app::requests::mark_of(m, Some(&a.release_group), &a.artist, &a.title)) }),
+        );
+    }
+    for d in discogs {
+        let k = key(&d.artist, &d.title);
+        if let Some(found) = by.get_mut(&k) {
+            found["sources"] = json!(["musicbrainz", "discogs"]);
+            found["discogs"] = json!(d.id);
+            found["discogs_url"] = json!(d.url);
+            continue;
+        }
+        let have = library.as_ref().is_some_and(|l| l.has_album(&d.title, &d.artist));
+        order.push(k.clone());
+        by.insert(
+            k,
+            json!({ "title": d.title, "artist": d.artist, "year": d.year, "cover": d.cover, "release_group": null, "discogs": d.id,
+                "discogs_url": d.url, "sources": ["discogs"], "have": have, "request": marks.as_deref().and_then(|m| crate::app::requests::mark_of(m, None, &d.artist, &d.title)) }),
+        );
+    }
+    let albums: Vec<serde_json::Value> = order.into_iter().filter_map(|k| by.remove(&k)).collect();
+    Ok(Json(json!({ "q": q, "albums": albums, "artists": if offset == 0 { json!(artists) } else { json!([]) } })))
 }
 
 /// Related artists to explore on an artist's page (0.9.2, app::related), by the artist's name: as last looked up, and

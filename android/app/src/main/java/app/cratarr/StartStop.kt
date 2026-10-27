@@ -221,6 +221,12 @@ class StartStop(
      *  the wind stream, R forwards. Turned while playing, the tape brakes to a stop (the deck's one brake), then spins up
      *  the other way; paused, it only sets which way the next play goes. */
     fun setDirection(left: Boolean) {
+        // Where nothing can be wound (a Bandcamp preview, the device's own music) the knob stays at R, the page told so.
+        if (left && windUrl(player.currentPosition, null, null, true, null, 1f, 0f, false) == null) {
+            note("direction", "to" to "L", "refused" to "cannot wind here")
+            changed()
+            return
+        }
         val want = if (left) "L" else "R"
         note("direction", "to" to want, "from" to deckDirection, "playing" to player.isPlaying, "reverse" to tapeReverse)
         if (want == deckDirection) return
@@ -661,7 +667,14 @@ class StartStop(
         // Through the queue where the device says so: on into the tracks in the way, landing in whichever it reached.
         val way = if (prefs.windEdges == "queue") windWay(back) else emptyList()
         val speed = if (flying) FLY_SPEED else prefs.windSpeed
-        val url = windUrl(from, null, null, back, way.joinToString(",") { it.first }.ifEmpty { null }, speed, prefs.windGainDb, true) ?: return false.also { holdPlain = plain }
+        val url = windUrl(from, null, null, back, way.joinToString(",") { it.first }.ifEmpty { null }, speed, prefs.windGainDb, true)
+        if (url == null) {
+            // A track that cannot wind (a Bandcamp preview, the device's own music; the owner, 2026-10-27: "gracefully
+            // degrading, keeping whatever we can"): a held Next while playing speeds the track itself up to [FAST]×, the
+            // pitch following, and lets it back down on letting go; a held Previous is a plain one on letting go.
+            if (!back && player.isPlaying) return true.also { fastStart() }
+            return false.also { holdPlain = plain }
+        }
         val go = {
             wind(hold = true, from = from, to = edge, url = url, restart = { play { player.play() } }, chain = way.map { it.second }, flying = flying, speed = speed) { k, at ->
                 if (k == 0) player.seekTo(at) else player.seekTo((player.currentMediaItemIndex + if (back) -k else k).coerceIn(0, player.mediaItemCount - 1), at)
@@ -674,8 +687,49 @@ class StartStop(
         return true
     }
 
+    /** A held Next on a track that cannot wind: its own speed up to [FAST]× over the spin-up, eased, the pitch following;
+     *  let go ([windStop]), back down to 1× over the brake. */
+    private var fastAt = 0L
+    private var fastReleased = 0L
+    private var fastFrom = 1f
+    private var fastSpeed = 1f
+    private val fastStep = object : Runnable {
+        override fun run() {
+            if (fastAt == 0L) return
+            val now = SystemClock.elapsedRealtime()
+            fastSpeed = if (fastReleased == 0L) {
+                1f + (FAST - 1f) * eased(now - fastAt, prefs.windAttackMs)
+            } else {
+                val left = prefs.windReleaseMs - (now - fastReleased)
+                if (left <= 0) {
+                    fastAt = 0L
+                    player.playbackParameters = PlaybackParameters.DEFAULT
+                    return
+                }
+                1f + (fastFrom - 1f) * eased(left, prefs.windReleaseMs)
+            }
+            player.playbackParameters = PlaybackParameters(fastSpeed, fastSpeed)
+            main.postDelayed(this, STEP_MS)
+        }
+    }
+
+    private fun fastStart() {
+        note("wind", "phase" to "fast", "speed" to FAST)
+        fastAt = SystemClock.elapsedRealtime()
+        fastReleased = 0L
+        fastSpeed = 1f
+        main.removeCallbacks(fastStep)
+        main.post(fastStep)
+    }
+
     /** A hold let go: the brake from the rate it has got to; a wind not sounding yet is dropped, the track playing on. */
     fun windStop() {
+        if (fastAt != 0L && fastReleased == 0L) {
+            note("wind", "phase" to "stop", "fast" to fastSpeed)
+            fastReleased = SystemClock.elapsedRealtime()
+            fastFrom = fastSpeed
+            return
+        }
         note("wind", "phase" to "stop", "winding" to (tapeListener != null), "started" to tapeStarted, "plain" to (holdPlain != null))
         holdPlain?.let {
             holdPlain = null
@@ -887,6 +941,8 @@ class StartStop(
         private const val FLY_SPEED = 1f / LOW
         /** It starts this far ahead of where it was pressed: where the track will be when its stream sounds. */
         private const val FLY_AHEAD_MS = 500L
+        /** A held Next on a track that cannot wind speeds it up to this (the page's own, 0.9.13). */
+        private const val FAST = 4f
         /** A seek nearer than this jumps, winding or not. */
         private const val SEEK_WIND_LEAST_MS = 2_000L
         /** How often the position shown is told on while the clip sounds. */

@@ -14,7 +14,7 @@ use serde::Serialize;
 use crate::search::{closeness, words};
 
 /// What a search may find, and how much each kind weighs in `top`.
-const KINDS: [(&str, f32); 11] = [
+const KINDS: [(&str, f32); 14] = [
     ("artist", 1.0),
     ("album", 0.95),
     ("playlist", 0.9),
@@ -25,9 +25,17 @@ const KINDS: [(&str, f32); 11] = [
     ("style", 0.68),
     ("mood", 0.66),
     ("tag", 0.64),
+    // What Cratarr knows of outside the library (0076, the indexed universe), surest first.
     ("missing", 0.6),
+    ("requested", 0.58),
+    ("spotify", 0.56),
+    ("suggested", 0.54),
     ("excluded", 0.5),
 ];
+/// The known-elsewhere kinds in the order an album shown in several is kept in the first (its reasons gathered there).
+const KNOWN: [&str; 5] = ["missing", "requested", "spotify", "suggested", "excluded"];
+/// Most a page of one kind (Show all) reaches into it.
+const DEEPEST: usize = 2000;
 /// Each group's most, unless asked for fewer (`limit`), and `top`'s.
 pub const LIMIT: usize = 20;
 const TOP: usize = 8;
@@ -93,6 +101,10 @@ pub struct Item {
     /// A missing album's open request (0.9.5): wanted, or coming and how far.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request: Option<super::requests::Mark>,
+    /// Why Cratarr knows an album not in the library (0076, the indexed universe): "Missing from <artist>", "On your
+    /// Spotify", "Suggested", "Requested"; one album once, its reasons together.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub known: Vec<String>,
     pub score: f32,
     pub matched: Vec<Matched>,
 }
@@ -189,6 +201,7 @@ fn missing_items(list: &[crate::app::discover::MissingOf], w: &[String], marks: 
             Some(Item {
                 kind: "missing",
                 subject: format!("missing:{}", m.release_group),
+                known: vec![format!("Missing from {}", m.artist)],
                 title: m.title.clone(),
                 sub: [Some(m.artist.clone()), m.year.map(|y| y.to_string())].into_iter().flatten().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "),
                 cover: Some(m.cover.clone()),
@@ -223,6 +236,7 @@ fn excluded_items(albums: &[crate::app::discover::Excluded], artists: &[crate::a
                 track: None,
                 artist: Some(x.artist.clone()),
                 bandcamp: None,
+                known: Vec::new(),
                 request: None,
                 score: matched_rank(close, &matched, w, i, n),
                 matched,
@@ -237,6 +251,7 @@ fn excluded_items(albums: &[crate::app::discover::Excluded], artists: &[crate::a
             track: None,
             artist: Some(a.artist.clone()),
             bandcamp: None,
+            known: Vec::new(),
             request: None,
             score: score(&a.artist, w, i, n),
             matched: matched_name(&a.artist),
@@ -244,6 +259,32 @@ fn excluded_items(albums: &[crate::app::discover::Excluded], artists: &[crate::a
         .collect();
     out.sort_by(|a, b| b.score.total_cmp(&a.score));
     out
+}
+
+/// An album outside the library from one of the known-elsewhere lists, as search shows it.
+fn known_item(kind: &'static str, id: String, title: &str, artist: &str, year: Option<i32>, cover: Option<String>, why: &str, w: &[String], at: usize, of: usize) -> Option<Item> {
+    let (close, matched) = album_match(title, artist, w)?;
+    Some(Item {
+        kind,
+        subject: format!("{kind}:{id}"),
+        title: title.to_string(),
+        sub: [Some(artist.to_string()), year.map(|y| y.to_string())].into_iter().flatten().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "),
+        cover,
+        track: None,
+        artist: Some(artist.to_string()),
+        bandcamp: None,
+        request: None,
+        known: vec![why.to_string()],
+        score: matched_rank(close, &matched, w, at, of),
+        matched,
+    })
+}
+
+/// What one album is, across the known-elsewhere lists: its release group where one is known, else its names.
+fn album_key(i: &Item) -> String {
+    let id = i.subject.split_once(':').map_or("", |(_, id)| id);
+    let uuid = id.len() == 36 && id.chars().filter(|c| *c == '-').count() == 4;
+    if uuid { id.to_string() } else { format!("{}|{}", crate::app::import::key(i.artist.as_deref().unwrap_or_default()), crate::app::import::key(&i.title)) }
 }
 
 /// Every missing album of the library's artists, kept a minute (`MISSING_KEEP`): the same for every account.
@@ -277,7 +318,7 @@ async fn crate_members(app: &super::App) -> anyhow::Result<Members> {
 }
 
 /// Answers a query for the asking account (its playlists and crates): every kind asked for (`kinds`, all when empty).
-pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -> anyhow::Result<Answer> {
+pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, offset: usize) -> anyhow::Result<Answer> {
     let w = words(q);
     let mut answer = Answer { q: q.to_string(), ..Answer::default() };
     if w.is_empty() {
@@ -285,6 +326,9 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
     }
     let wants = |k: &str| kinds.is_empty() || kinds.iter().any(|x| x == k);
     let limit = limit.clamp(1, 100);
+    // Show all (0076): a page of one kind from `offset`; the library asked for as far as that page reaches.
+    let offset = offset.min(DEEPEST);
+    let reach = (offset + limit).min(DEEPEST);
     let mut groups: BTreeMap<&'static str, Vec<Item>> = BTreeMap::new();
     // How many each kind matches in all, where the library shows fewer (`limit`); the rest count what they hold.
     let mut totals: HashMap<&'static str, usize> = HashMap::new();
@@ -292,7 +336,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
         && let Some(served) = crate::serve::instance()
     {
         let (lib, words_) = (served.library.clone(), w.clone());
-        let found = tokio::task::spawn_blocking(move || lib.find(&words_, limit)).await??;
+        let found = tokio::task::spawn_blocking(move || lib.find(&words_, reach)).await??;
         let t = found.totals;
         totals.extend([("album", t.albums), ("artist", t.artists), ("track", t.tracks), ("genre", t.genres)]);
         let n = found.albums.len();
@@ -311,6 +355,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                     track: None,
                     artist: None,
                     bandcamp: None,
+                    known: Vec::new(),
                     request: None,
                     score: score(&a.name, &w, i, n),
                     matched: matched(h),
@@ -336,6 +381,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                     track: None,
                     artist: None,
                     bandcamp: None,
+                    known: Vec::new(),
                     request: None,
                     score: score(&a.name, &w, i, n),
                     matched: matched(h),
@@ -358,6 +404,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                     track: Some(t.id.clone()),
                     artist: None,
                     bandcamp: None,
+                    known: Vec::new(),
                     request: None,
                     score: score(&t.title, &w, i, n),
                     matched: if crate::search::matches(&t.title, &w) { matched_name(&t.title) } else { vec![Matched { on: "artist", text: t.artist.clone(), count: None }] },
@@ -383,6 +430,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                     track: None,
                     artist: None,
                     bandcamp: None,
+                    known: Vec::new(),
                     request: None,
                     score: score(g, &w, i, n),
                     matched: matched_name(g),
@@ -418,6 +466,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                                 track: None,
                                 artist: None,
                                 bandcamp: None,
+                                known: Vec::new(),
                                 request: None,
                                 score: score(word, &w, i, n),
                                 matched: vec![Matched { on: kind, text: word.clone(), count: None }],
@@ -454,6 +503,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
                 track: None,
                 artist: None,
                 bandcamp: None,
+                known: Vec::new(),
                 request: None,
                 score,
                 matched,
@@ -479,7 +529,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
             } else {
                 continue;
             };
-            found.push(Item { kind: "crate", subject: format!("crate:{id}"), sub: String::new(), cover: None, track: None, artist: None, bandcamp: None, request: None, score, matched, title: name });
+            found.push(Item { kind: "crate", subject: format!("crate:{id}"), sub: String::new(), cover: None, track: None, artist: None, bandcamp: None, request: None, known: Vec::new(), score, matched, title: name });
         }
         found.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.title.cmp(&b.title)));
         groups.insert("crate", found);
@@ -497,6 +547,83 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
             let (albums, artists) = tokio::task::spawn_blocking(move || crate::app::discover::exclusions(&s, &account)).await??;
             groups.insert("excluded", excluded_items(&albums, &artists, &w));
         }
+        // The rest of the indexed universe (0076): the account's requests, its Spotify lists, Discover's suggestions.
+        if let Some(account) = served.current_user()
+            && (wants("requested") || wants("spotify") || wants("suggested"))
+        {
+            let marks = super::requests::marks(app, &served).await.ok();
+            if wants("requested") {
+                let (s, a) = (served.clone(), account.clone());
+                let open: Vec<crate::userdata::Request> = tokio::task::spawn_blocking(move || s.userdata.requests(Some(&a), None, 1000))
+                    .await??
+                    .into_iter()
+                    .filter(|r| r.status == super::requests::PENDING || r.status == super::requests::APPROVED)
+                    .collect();
+                let n = open.len();
+                let items = open
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, r)| known_item("requested", r.release_group.clone().unwrap_or_else(|| r.id.to_string()), &r.album, &r.artist, r.year, r.cover.clone(), "Requested", &w, i, n))
+                    .collect();
+                groups.insert("requested", items);
+            }
+            if wants("spotify") {
+                let a = account.clone();
+                let albums = tokio::task::spawn_blocking(move || super::spotify::albums(&a, None, None)).await?.unwrap_or_default();
+                let albums: Vec<_> = albums.into_iter().filter(|x| x.status != super::spotify::marks::IN).collect();
+                let n = albums.len();
+                let items = albums
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, x)| {
+                        let mut item = known_item("spotify", x.release_group.clone().unwrap_or_else(|| x.id.clone()), &x.title, &x.artist, x.year, x.cover.clone(), "On your Spotify", &w, i, n)?;
+                        item.request = marks.as_deref().and_then(|k| super::requests::mark_of(k, x.release_group.as_deref(), &x.artist, &x.title));
+                        Some(item)
+                    })
+                    .collect();
+                groups.insert("spotify", items);
+            }
+            if wants("suggested") {
+                let (s, a) = (served.clone(), account.clone());
+                let found = tokio::task::spawn_blocking(move || crate::app::discover::kept(&s, &a)).await?.ok().flatten();
+                let albums = found.map(|f| f.albums).unwrap_or_default();
+                let n = albums.len();
+                let items = albums
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, x)| {
+                        let mut item = known_item("suggested", x.release_group.clone().unwrap_or_else(|| x.key.clone()), &x.album, &x.artist, x.year, x.cover.clone(), "Suggested", &w, i, n)?;
+                        item.bandcamp = x.bandcamp.clone();
+                        item.request = marks.as_deref().and_then(|k| super::requests::mark_of(k, x.release_group.as_deref(), &x.artist, &x.album));
+                        Some(item)
+                    })
+                    .collect();
+                groups.insert("suggested", items);
+            }
+        }
+    }
+    // One album once outside the library, in the first known-elsewhere kind that has it, its reasons gathered there.
+    let mut first: HashMap<String, (&'static str, usize)> = HashMap::new();
+    for kind in KNOWN {
+        let Some(items) = groups.remove(kind) else { continue };
+        let mut kept: Vec<Item> = Vec::new();
+        for item in items {
+            let key = album_key(&item);
+            if let Some((k, at)) = first.get(&key).copied() {
+                let into = if k == kind { kept.get_mut(at) } else { groups.get_mut(k).and_then(|g| g.get_mut(at)) };
+                if let Some(into) = into {
+                    for why in item.known {
+                        if !into.known.contains(&why) {
+                            into.known.push(why);
+                        }
+                    }
+                }
+                continue;
+            }
+            first.insert(key, (kind, kept.len()));
+            kept.push(item);
+        }
+        groups.insert(kind, kept);
     }
     // Each group as asked for; `top` the best of all, weighed by kind.
     let mut top: Vec<Item> = Vec::new();
@@ -504,8 +631,10 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize) -
         let Some(mut items) = groups.remove(kind) else { continue };
         let total = totals.get(kind).copied().unwrap_or(0).max(items.len());
         items.sort_by(|a, b| b.score.total_cmp(&a.score));
+        // A page from `offset` (Show all); `top` only on the first.
+        items.drain(..offset.min(items.len()));
         items.truncate(limit);
-        top.extend(items.iter().take(TOP).cloned().map(|mut i| {
+        top.extend(items.iter().take(if offset == 0 { TOP } else { 0 }).cloned().map(|mut i| {
             i.score *= weight;
             i
         }));
