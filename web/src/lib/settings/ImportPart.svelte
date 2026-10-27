@@ -304,8 +304,9 @@
     if (d.kind === 'spotify') {
       // Spotify's account data (0073): its library for the Library's Spotify views, and its listens where it has them.
       const l = d.library;
-      const library = `Spotify library · ${n(l.albums)} albums, ${n(l.tracks)} tracks, ${n(l.playlists)} playlists, ${n(l.artists)} artists · ${n(l.missing)} missing here`;
-      return d.history ? `${library} · history · ${tallyLine(d.history, filesPreviewed)}` : library;
+      const library = l ? `Spotify library · ${n(l.albums)} albums, ${n(l.tracks)} tracks, ${n(l.playlists)} playlists, ${n(l.artists)} artists · ${n(l.missing)} missing here` : null;
+      const history = d.history ? `Spotify history · ${tallyLine(d.history, filesPreviewed)}` : null;
+      return [library, history].filter(Boolean).join(' · ') || 'Nothing of Spotify in it';
     }
     return d.kind === 'history'
       ? `${FROM_NAMES[d.from]} history · ${tallyLine(d.tally, filesPreviewed)}`

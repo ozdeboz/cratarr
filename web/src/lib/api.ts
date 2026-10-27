@@ -1898,7 +1898,7 @@ export type FileBrought =
   | {
       kind: 'spotify';
       history: ImportTally | null;
-      library: { albums: number; tracks: number; playlists: number; artists: number; in: number; partly: number; missing: number };
+      library: { albums: number; tracks: number; playlists: number; artists: number; in: number; partly: number; missing: number } | null;
     };
 export const importFile = (file: File, preview: boolean) =>
   request<Started>(`/api/import/file?${new URLSearchParams({ name: file.name, preview: String(preview) })}`, { method: 'POST', body: file });
