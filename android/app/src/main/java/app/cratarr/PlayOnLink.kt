@@ -744,6 +744,8 @@ class PlayOnLink(
             .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
             // A ramp under way says where it is going (0.9.6, StartStop): a pause is paused at once.
             .put("playing", service.startStop.committed ?: (p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE))
+            // Tape rewind (0.9.10): the position goes back to the start as the clip sounds; Cratarr does not count it on.
+            .put("rewinding", service.startStop.rewinding)
             .put("volume", volume())
             .put("ducked", ducked)
             .put("announce", announcing?.json() ?: JSONObject.NULL)

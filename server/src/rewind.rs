@@ -2,8 +2,10 @@
 //! that both players play as it is, then the track from its start. Here, not in the players: they do not keep the sound
 //! they played (the page keeps 30 s behind), and one renderer serves both.
 //!
-//! The speed follows an eased curve: spinning up over the first quarter, flat, braking over the last quarter, its area
-//! the distance rewound, so the clip lasts exactly as asked and ends exactly at 0:00. Faster than the sound's own rate
+//! The speed follows an eased curve (`Shape`, the owner's four controls since 0.9.10): spinning up, cruising at a middle
+//! speed, braking, so the clip lasts exactly as asked and ends exactly at 0:00. Where the cruise would not get back in
+//! time, it is cut: pieces of it heard, spread evenly over the track between, each jump crossfaded; where it would get
+//! back sooner, it cruises slower, never faster than asked and never cut when it need not be. Faster than the sound's own rate
 //! the treble would fold back down (aliasing): each moment is read from a pyramid of half-band levels, each half the rate
 //! of the one below, at the level its speed needs (two blended, so a change of level is not heard), built only as far as
 //! the block's fastest moment needs. Rendered in blocks from the moment backwards: the first, a short window before the
@@ -13,11 +15,11 @@ use std::f64::consts::PI;
 
 use anyhow::Result;
 
-/// The clip's length is held to this (milliseconds): the players ask for 4 × the start/stop ramp, at most 12 s.
+/// The clip's length is held to this (milliseconds).
 const SHORTEST_MS: u64 = 200;
 const LONGEST_MS: u64 = 12_000;
-/// Spinning up, and braking, each take this share of the clip.
-const EASE: f64 = 0.25;
+/// A jump between two pieces, crossfaded over this long (seconds, equal power): no click.
+const XFADE: f64 = 0.015;
 /// The first block (seconds of the clip): sent at once.
 const FIRST: f64 = 0.1;
 /// Each later block.
@@ -55,7 +57,36 @@ impl Sound for crate::analysis::Reading {
     }
 }
 
-/// One clip: from where, how long, in what format.
+/// How a clip sounds (the owner, 2026-10-27: shorter, at a middle speed, pieces cut out; four controls): its length
+/// (milliseconds), its cruising speed (× the track's), the length of each piece heard while cruising (milliseconds of
+/// the clip), and the share of the clip spinning up takes, and braking.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shape {
+    pub ms: u64,
+    pub speed: f64,
+    pub piece_ms: u64,
+    pub ramp: f64,
+}
+
+impl Default for Shape {
+    fn default() -> Self {
+        Self { ms: 2_500, speed: 6.0, piece_ms: 350, ramp: 0.2 }
+    }
+}
+
+impl Shape {
+    /// Held to what sounds like a tape (and to what a player of 0.9.9, asking 4 × its ramp, may ask).
+    pub fn held(self) -> Self {
+        Self {
+            ms: self.ms.clamp(SHORTEST_MS, LONGEST_MS),
+            speed: if self.speed.is_finite() { self.speed.clamp(2.0, 16.0) } else { 6.0 },
+            piece_ms: self.piece_ms.clamp(100, 1_000),
+            ramp: if self.ramp.is_finite() { self.ramp.clamp(0.05, 0.4) } else { 0.2 },
+        }
+    }
+}
+
+/// One clip: from where, how, in what format.
 pub struct Rewind {
     /// The sound's rate, and the clip's: the sound's up to 48 kHz, else 44.1 or 48 kHz as its family.
     rate: u32,
@@ -66,10 +97,35 @@ pub struct Rewind {
     from: f64,
     /// Its length (frames of the clip).
     frames: usize,
+    shape: Shape,
+    /// The cruising speed (frames of the track a frame of the clip), and whether the clip is cut (`cruise`).
+    v: f64,
+    cut: bool,
+}
+
+/// A stretch of the clip heard as one backward run of the track: its frames (with the crossfades' overlap), where the
+/// track is at its first, and where it fades in and out (equal power) into the runs beside it.
+#[derive(Debug, Clone, PartialEq)]
+struct Run {
+    from: usize,
+    to: usize,
+    top: f64,
+    fade_in: Option<(usize, usize)>,
+    fade_out: Option<(usize, usize)>,
+}
+
+impl Run {
+    fn gain(&self, i: usize) -> f64 {
+        let ease = |(a, b): (usize, usize), up: bool| {
+            let t = ((i as f64 + 0.5 - a as f64) / (b - a) as f64).clamp(0.0, 1.0);
+            if up { (t * PI / 2.0).sin() } else { (t * PI / 2.0).cos() }
+        };
+        self.fade_in.map_or(1.0, |w| if i < w.1 { ease(w, true) } else { 1.0 }) * self.fade_out.map_or(1.0, |w| if i >= w.0 { ease(w, false) } else { 1.0 })
+    }
 }
 
 impl Rewind {
-    pub fn new(rate: u32, channels: usize, from_ms: u64, ms: u64) -> Self {
+    pub fn new(rate: u32, channels: usize, from_ms: u64, shape: Shape) -> Self {
         let out_rate = if rate <= 48_000 {
             rate
         } else if rate % 44_100 == 0 {
@@ -77,14 +133,19 @@ impl Rewind {
         } else {
             48_000
         };
-        let ms = ms.clamp(SHORTEST_MS, LONGEST_MS);
-        Self {
+        let shape = shape.held();
+        let mut r = Self {
             rate,
             out_rate,
             channels: channels.clamp(1, 2),
             from: from_ms as f64 * f64::from(rate) / 1000.0,
-            frames: (ms * u64::from(out_rate) / 1000) as usize,
-        }
+            frames: (shape.ms * u64::from(out_rate) / 1000) as usize,
+            shape,
+            v: 0.0,
+            cut: false,
+        };
+        (r.v, r.cut) = r.cruise();
+        r
     }
 
     /// The whole WAV's length (bytes).
@@ -114,11 +175,84 @@ impl Rewind {
         h
     }
 
-    /// The curve's height at clip frame `i` (0..1); `scale` makes its area the distance.
-    fn shape(&self, i: usize) -> f64 {
-        let u = (i as f64 + 0.5) / self.frames as f64;
-        let e = u.min(1.0 - u) / EASE;
-        if e >= 1.0 { 1.0 } else { (1.0 - (PI * e).cos()) / 2.0 }
+    /// Spinning up and braking (frames of the clip each).
+    fn ramp(&self) -> usize {
+        ((self.shape.ramp * self.frames as f64).round() as usize).clamp(1, self.frames / 2)
+    }
+
+    /// The curve's height at clip frame `i` (0..1): eased up, flat, eased down.
+    fn height(&self, i: usize) -> f64 {
+        let r = self.ramp() as f64;
+        let e = (i as f64 + 0.5).min(self.frames as f64 - i as f64 - 0.5) / r;
+        if e >= 1.0 { 1.0 } else { (1.0 - (PI * e.max(0.0)).cos()) / 2.0 }
+    }
+
+    /// The cruising speed (frames of the track a frame of the clip), and whether the clip is cut: at the speed asked
+    /// it would not get back to the start in time. Not cut, the speed is lowered so that it gets there exactly.
+    fn cruise(&self) -> (f64, bool) {
+        let asked = self.shape.speed * f64::from(self.rate) / f64::from(self.out_rate);
+        let area: f64 = (0..self.frames).map(|i| self.height(i)).sum();
+        if area <= 0.0 {
+            return (0.0, false);
+        }
+        if asked * area >= self.from { (self.from / area, false) } else { (asked, true) }
+    }
+
+    /// How fast the track goes at clip frame `i`.
+    fn speed(&self, i: usize) -> f64 {
+        self.v * self.height(i)
+    }
+
+    /// The runs the clip is made of: one, or (cut) the first spinning up into the first piece, the pieces spread evenly
+    /// over the track between, the last braking into 0:00; each jump crossfaded.
+    fn runs(&self) -> Vec<Run> {
+        let (v, cut) = (self.v, self.cut);
+        let n = self.frames;
+        if !cut {
+            return vec![Run { from: 0, to: n, top: self.from, fade_in: None, fade_out: None }];
+        }
+        let r = self.ramp();
+        let cruise = n - 2 * r;
+        let piece = (self.shape.piece_ms as f64 * f64::from(self.out_rate) / 1000.0).max(1.0);
+        let k = ((cruise as f64 / piece).round() as usize).max(1);
+        let edge = |i: usize| r + (i * cruise + k / 2) / k;
+        // Where the track is when the cruise begins, and where it must be when the brake begins.
+        let top = self.from - (0..r).map(|i| self.speed(i)).sum::<f64>();
+        let bottom: f64 = (n - r..n).map(|i| self.speed(i)).sum();
+        let covered = |a: usize, b: usize| v * (b - a) as f64;
+        // Each piece's own top: the first's where the spin-up left the track, the last's so that it ends where the brake
+        // begins (one piece: the brake its own run), the rest evenly between.
+        let tops: Vec<f64> = if k == 1 {
+            vec![top]
+        } else {
+            let last = bottom + covered(edge(k - 1), edge(k));
+            (0..k).map(|i| top - (top - last) * i as f64 / (k - 1) as f64).collect()
+        };
+        let mut runs: Vec<(usize, usize, f64)> = (0..k).map(|i| (edge(i), edge(i + 1), tops[i])).collect();
+        runs[0].0 = 0;
+        runs[0].2 = self.from;
+        if k == 1 {
+            runs.push((n - r, n, bottom));
+        } else {
+            runs[k - 1].1 = n;
+        }
+        let half = ((XFADE * f64::from(self.out_rate) / 2.0) as usize).max(1);
+        let last = runs.len() - 1;
+        runs.iter()
+            .enumerate()
+            .map(|(j, &(a, b, top))| {
+                let from = if j == 0 { a } else { a.saturating_sub(half) };
+                // Before its own first frame it is where the track was a little later.
+                let top = top + (from..a).map(|i| self.speed(i)).sum::<f64>();
+                Run {
+                    from,
+                    to: if j == last { b } else { (b + half).min(n) },
+                    top,
+                    fade_in: (j > 0).then_some((from, a + half)),
+                    fade_out: (j < last).then_some((b.saturating_sub(half), (b + half).min(n))),
+                }
+            })
+            .collect()
     }
 
     /// The WAV, header first, a block at a time to `send`; one that answers false (the player stopped reading) ends it.
@@ -126,36 +260,49 @@ impl Rewind {
         if !send(self.header()) {
             return Ok(());
         }
-        let total: f64 = (0..self.frames).map(|i| self.shape(i)).sum();
-        let scale = if total > 0.0 { self.from / total } else { 0.0 };
+        let runs = self.runs();
+        let mut out = vec![vec![0f32; self.frames]; self.channels];
         let fade = ((FADE * f64::from(self.out_rate)) as usize).max(1);
         let span = SPAN * f64::from(self.rate);
         let mut dither = crate::convert::Tpdf::new();
-        let (mut i, mut gone) = (0, 0.0);
-        while i < self.frames {
-            // Where each frame of the block reads the sound, and how fast it moves there (frames of the sound a frame).
-            let most = (((if i == 0 { FIRST } else { BLOCK }) * f64::from(self.out_rate)) as usize).max(1);
-            let (start, here) = (i, self.from - gone);
-            let (mut at, mut speed) = (Vec::with_capacity(most), Vec::with_capacity(most));
-            while i < self.frames && i - start < most && here - (self.from - gone) < span {
-                let s = self.shape(i) * scale;
-                at.push(self.from - gone);
-                speed.push(s);
-                gone += s;
-                i += 1;
-            }
-            let block = self.block(sound, &at, &speed)?;
-            let mut bytes = Vec::with_capacity(at.len() * self.channels * 2);
-            for j in 0..at.len() {
-                let edge = (start + j).min(self.frames - 1 - (start + j));
-                let gain = if edge < fade { (1.0 - (PI * (edge as f64 + 0.5) / fade as f64).cos()) / 2.0 } else { 1.0 };
-                for c in &block {
-                    let v = f64::from(c[j]) * gain * 32767.0 + dither.next();
-                    bytes.extend_from_slice(&(v.round().clamp(-32768.0, 32767.0) as i16).to_le_bytes());
+        let mut sent = 0;
+        for (j, run) in runs.iter().enumerate() {
+            let (mut i, mut at) = (run.from, run.top);
+            while i < run.to {
+                // Where each frame of the block reads the track, and how fast it moves there.
+                let most = (((if i == 0 { FIRST } else { BLOCK }) * f64::from(self.out_rate)) as usize).max(1);
+                let (start, here) = (i, at);
+                let (mut ats, mut speeds) = (Vec::with_capacity(most), Vec::with_capacity(most));
+                while i < run.to && i - start < most && here - at < span {
+                    let s = self.speed(i);
+                    ats.push(at.max(0.0));
+                    speeds.push(s);
+                    at -= s;
+                    i += 1;
                 }
-            }
-            if !send(bytes) {
-                return Ok(());
+                let block = self.block(sound, &ats, &speeds)?;
+                for (c, b) in out.iter_mut().zip(&block) {
+                    for (k, v) in b.iter().enumerate() {
+                        c[start + k] += (f64::from(*v) * run.gain(start + k)) as f32;
+                    }
+                }
+                // What no later run adds to is ready.
+                let ready = runs.get(j + 1).map_or(i, |next| i.min(next.from));
+                if ready > sent {
+                    let mut bytes = Vec::with_capacity((ready - sent) * self.channels * 2);
+                    for f in sent..ready {
+                        let edge = f.min(self.frames - 1 - f);
+                        let gain = if edge < fade { (1.0 - (PI * (edge as f64 + 0.5) / fade as f64).cos()) / 2.0 } else { 1.0 };
+                        for c in &out {
+                            let v = f64::from(c[f]) * gain * 32767.0 + dither.next();
+                            bytes.extend_from_slice(&(v.round().clamp(-32768.0, 32767.0) as i16).to_le_bytes());
+                        }
+                    }
+                    sent = ready;
+                    if !send(bytes) {
+                        return Ok(());
+                    }
+                }
             }
         }
         Ok(())
@@ -294,30 +441,63 @@ mod tests {
         (x.iter().map(|v| v * v).sum::<f64>() / x.len() as f64).sqrt()
     }
 
+    fn shaped(ms: u64, speed: f64) -> Shape {
+        Shape { ms, speed, ..Shape::default() }
+    }
+
     #[test]
-    fn the_clip_lasts_as_asked_and_its_curve_covers_the_whole_way_back() {
-        let r = Rewind::new(44_100, 2, 30_000, 2_000);
+    fn the_clip_lasts_as_asked() {
+        let r = Rewind::new(44_100, 2, 30_000, shaped(2_000, 6.0));
         let (wav, _) = clip(&r, &mut Tone { hz: 440.0, secs: 60.0 });
         assert_eq!(wav.len() as u64, r.bytes());
         assert_eq!(r.bytes(), 44 + 2 * 44_100 * 2 * 2);
-        assert_eq!(&wav[..4], b"RIFF");
-        assert_eq!(&wav[36..40], b"data");
-        // Still at both ends, its area the distance.
-        assert!(r.shape(0) < 1e-4 && r.shape(r.frames - 1) < 1e-4);
-        assert_eq!(r.shape(r.frames / 2), 1.0);
-        let area: f64 = (0..r.frames).map(|i| r.shape(i)).sum::<f64>() / r.frames as f64;
-        assert!((area - (1.0 - EASE)).abs() < 1e-3, "{area}");
+        assert_eq!((&wav[..4], &wav[36..40]), (&b"RIFF"[..], &b"data"[..]));
         // Asked for longer than the longest: the longest; and a 96 kHz file comes as 48 kHz.
-        assert_eq!(Rewind::new(96_000, 2, 30_000, 60_000).bytes(), 44 + 12 * 48_000 * 2 * 2);
+        assert_eq!(Rewind::new(96_000, 2, 30_000, shaped(60_000, 6.0)).bytes(), 44 + 12 * 48_000 * 2 * 2);
+    }
+
+    #[test]
+    fn a_short_way_back_is_not_cut_and_goes_slower_than_asked() {
+        // 3 s back in 2.5 s at 6 × would overshoot: one run, about 1.5 ×, its area exactly the way back.
+        let r = Rewind::new(44_100, 2, 3_000, Shape::default());
+        assert!(!r.cut);
+        assert_eq!(r.runs().len(), 1);
+        assert!((r.v - 1.5).abs() < 0.01, "{}", r.v);
+        let back: f64 = (0..r.frames).map(|i| r.speed(i)).sum();
+        assert!((back - r.from).abs() < 1.0, "{back} of {}", r.from);
+        assert!(r.speed(0) < 1e-3 && r.speed(r.frames - 1) < 1e-3, "still at both ends");
+    }
+
+    #[test]
+    fn a_long_way_back_is_cut_into_pieces_spread_over_it() {
+        // Three minutes back: at 6 × only 12 s are heard, in four pieces of about 350 ms.
+        let r = Rewind::new(44_100, 2, 180_000, Shape::default());
+        assert!(r.cut);
+        let runs = r.runs();
+        assert_eq!(runs.len(), 4);
+        assert_eq!((runs[0].from, runs[0].top, runs[3].to), (0, r.from, r.frames));
+        // The last run brakes into 0:00.
+        let last = &runs[3];
+        let end = last.top - (last.from..last.to).map(|i| r.speed(i)).sum::<f64>();
+        assert!(end.abs() < 1.0, "ends at {end}");
+        // The pieces stand evenly apart, going back.
+        let gaps: Vec<f64> = runs.windows(2).skip(1).map(|w| w[0].top - w[1].top).collect();
+        assert!(gaps.windows(2).all(|g| (g[0] - g[1]).abs() < 2.0), "{gaps:?}");
+        // At a jump the two runs' gains keep the power.
+        let (a, b) = (&runs[1], &runs[2]);
+        for i in b.from..a.to {
+            let p = a.gain(i).powi(2) + b.gain(i).powi(2);
+            assert!((p - 1.0).abs() < 1e-6, "{i}: {p}");
+        }
     }
 
     #[test]
     fn rewinding_fast_does_not_fold_the_treble_down() {
-        // A minute back in 2 s: 40 × at full speed, so 15 kHz goes far past hearing and 40 Hz becomes 1.6 kHz.
-        let r = Rewind::new(44_100, 2, 60_000, 2_000);
+        // Two minutes back in 2 s at 16 ×: 15 kHz goes far past hearing, 40 Hz becomes 640 Hz.
+        let r = Rewind::new(44_100, 2, 120_000, shaped(2_000, 16.0));
         let middle = |x: &[f64]| x[x.len() * 2 / 5..x.len() * 3 / 5].to_vec();
-        let (_, treble) = clip(&r, &mut Tone { hz: 15_000.0, secs: 90.0 });
-        let (_, bass) = clip(&r, &mut Tone { hz: 40.0, secs: 90.0 });
+        let (_, treble) = clip(&r, &mut Tone { hz: 15_000.0, secs: 150.0 });
+        let (_, bass) = clip(&r, &mut Tone { hz: 40.0, secs: 150.0 });
         assert!(rms(&middle(&treble)) < 0.005, "treble folded down: {}", rms(&middle(&treble)));
         assert!(rms(&middle(&bass)) > 0.3, "the bass lost: {}", rms(&middle(&bass)));
     }

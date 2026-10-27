@@ -59,9 +59,9 @@ class StartStop(
     private val groupDelayMs: () -> Long,
     /** What the controls show changed ([committed] set or let go): told to the session and to Cratarr. */
     private val changed: () -> Unit,
-    /** Tape rewind's clip of the playing track, from a moment (ms) back to its start in a length (ms); none for a track
-     *  Cratarr has no file of. */
-    private val rewindUrl: (Long, Long) -> String?,
+    /** Tape rewind's clip of the playing track, from a moment (ms) back to its start, as the device's controls shape it;
+     *  none for a track Cratarr has no file of. */
+    private val rewindUrl: (Long) -> String?,
     /** The app's own log (LinkLog): what each press did, to follow a device's report. */
     private val log: (String, Array<Pair<String, Any?>>) -> Unit,
 ) {
@@ -87,6 +87,42 @@ class StartStop(
     private var tapeListener: Player.Listener? = null
     private var tapeStarted = false
     private var tapeRestart: (() -> Unit)? = null
+    /** Where the clip began (ms into the track), how long it is, and the share spinning up and braking take: the way
+     *  back the position shown follows. */
+    private var tapeFrom = 0L
+    private var tapeMs = 1L
+    private var tapeRamp = 0.2f
+
+    /** Tape rewind's clip sounds now: the position shown goes back to the start with it (0.9.10). */
+    val rewinding: Boolean get() = tapeListener != null && tapeStarted
+
+    /** The position shown while the clip sounds, told on as it goes back. */
+    private val tapeTick = object : Runnable {
+        override fun run() {
+            val t = tape ?: return
+            if (!rewinding) return
+            heldPosition = rewoundTo(t.currentPosition)
+            changed()
+            main.postDelayed(this, REWIND_TICK_MS)
+        }
+    }
+
+    /**
+     * Where the way back is [clipMs] into the clip, at its overall pace (the server's speed curve: eased up over the
+     * ramp's share, flat, eased down; its cuts left out, the owner 2026-10-27): the curve's area so far over the whole.
+     */
+    private fun rewoundTo(clipMs: Long): Long {
+        val f = tapeRamp.toDouble()
+        val u = (clipMs.toDouble() / tapeMs).coerceIn(0.0, 1.0)
+        val eased = { x: Double -> (x - f / Math.PI * kotlin.math.sin(Math.PI * x / f)) / 2 }
+        val whole = 1 - f
+        val area = when {
+            u <= f -> eased(u)
+            u <= 1 - f -> f / 2 + (u - f)
+            else -> whole - eased(1 - u)
+        }
+        return (tapeFrom * (1 - area / whole)).toLong().coerceAtLeast(0L)
+    }
     private val tapeLate = Runnable {
         if (tapeListener != null && !tapeStarted) {
             note("rewind", "failed" to "late")
@@ -334,8 +370,11 @@ class StartStop(
         if (!prefs.startStopRewind || grouped() || !player.isPlaying) return false
         val from = player.currentPosition
         if (from <= restartAfterMs) return false
-        val ms = minOf(REWIND_MOST_MS, 4 * prefs.startStopMs)
-        val url = rewindUrl(from, ms) ?: return false
+        val ms = prefs.rewindMs
+        val url = rewindUrl(from) ?: return false
+        tapeFrom = from
+        tapeMs = ms.coerceAtLeast(1L)
+        tapeRamp = prefs.rewindRamp
         heldPosition = from
         commit(true)
         val t = tape ?: ExoPlayer.Builder(context)
@@ -353,6 +392,7 @@ class StartStop(
                     player.pause()
                     player.seekTo(0)
                     t.play()
+                    main.post(tapeTick)
                 } else if (state == Player.STATE_ENDED) {
                     rewound()
                 }
@@ -390,6 +430,7 @@ class StartStop(
         tapeListener = null
         tapeRestart = null
         main.removeCallbacks(tapeLate)
+        main.removeCallbacks(tapeTick)
         tape?.let {
             it.removeListener(l)
             it.stop()
@@ -432,9 +473,10 @@ class StartStop(
         private const val VINYL_SOUND = 0.35f
         private const val STEP_MS = 16L
         private const val GROUP_MARGIN_MS = 250L
-        private const val REWIND_MOST_MS = 12_000L
         /** A clip not ready by then: the track restarts as ever. */
         private const val REWIND_WAIT_MS = 1_500L
+        /** How often the position shown is told on while the clip sounds. */
+        private const val REWIND_TICK_MS = 250L
     }
 }
 

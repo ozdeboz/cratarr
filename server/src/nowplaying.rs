@@ -51,6 +51,8 @@ pub struct Progress {
     /// True when no player session reports this track, so the position is "time since it started" from the
     /// activity log: right unless it was paused or seeked.
     pub estimated: bool,
+    /// Tape rewind under way on the player (0.9.10): the position goes back to the start as reported, not run on.
+    pub rewinding: bool,
 }
 
 const TICKS_PER_SEC: f64 = 10_000_000.0;
@@ -86,6 +88,7 @@ pub fn progress(
             duration_secs,
             paused: ps.is_paused.unwrap_or(false),
             estimated: false,
+            rewinding: false,
         });
     }
     let other_music = sessions.iter().any(|s| {
@@ -99,7 +102,7 @@ pub fn progress(
     if duration_secs.is_some_and(|d| elapsed > d) {
         return None;
     }
-    Some(Progress { position_secs: clamp(elapsed), duration_secs, paused: false, estimated: true })
+    Some(Progress { position_secs: clamp(elapsed), duration_secs, paused: false, estimated: true, rewinding: false })
 }
 
 /// True when the log has any audio playback entries at all (so its verdict, even "stopped", is meaningful).
@@ -234,7 +237,7 @@ mod tests {
     fn the_matching_session_gives_the_position() {
         let s = vec![sess("Web", "other", 50_000_000, false), sess("Finamp", "a", 1_234_000_000, true)];
         let p = progress("a", Some(3_240_000_000), &s, finamp, Some(0), 1_000).unwrap();
-        assert_eq!(p, Progress { position_secs: 123.4, duration_secs: Some(324.0), paused: true, estimated: false });
+        assert_eq!(p, Progress { position_secs: 123.4, duration_secs: Some(324.0), paused: true, estimated: false, rewinding: false });
     }
 
     #[test]
@@ -252,7 +255,7 @@ mod tests {
     #[test]
     fn with_no_session_reporting_music_the_start_time_gives_an_estimate() {
         let p = progress("a", Some(3_000_000_000), &[], finamp, Some(1_000), 1_090).unwrap();
-        assert_eq!(p, Progress { position_secs: 90.0, duration_secs: Some(300.0), paused: false, estimated: true });
+        assert_eq!(p, Progress { position_secs: 90.0, duration_secs: Some(300.0), paused: false, estimated: true, rewinding: false });
     }
 
     #[test]

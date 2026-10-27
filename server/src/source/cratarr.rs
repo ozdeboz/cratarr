@@ -298,6 +298,7 @@ impl Source for CratarrSource {
                     duration_secs: p.duration_ms.map(|d| d as f64 / 1000.0),
                     paused: !p.playing,
                     estimated: false,
+                    rewinding: p.rewinding,
                 }),
                 player: Some(p.name.clone()),
                 started_at: None,

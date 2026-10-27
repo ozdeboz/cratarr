@@ -631,13 +631,14 @@ class PlayerService : MediaSessionService() {
             .build()
     }
 
-    /** Tape rewind's clip of the playing track (0.9.9): Cratarr's, from [fromMs] back to its start in [ms]; none for a
-     *  track of the device's own or a Bandcamp preview, which Cratarr keeps no file of. */
-    private fun rewindUrl(fromMs: Long, ms: Long): String? {
+    /** Tape rewind's clip of the playing track (0.9.9): Cratarr's, from [fromMs] back to its start, as this device's
+     *  four controls shape it; none for a track of the device's own or a Bandcamp preview, which Cratarr keeps no file of. */
+    private fun rewindUrl(fromMs: Long): String? {
         val item = player.currentMediaItem ?: return null
         val server = prefs.serverUrl?.trimEnd('/') ?: return null
         if (DeviceMusic.located(item) != null || item.mediaId.startsWith("bandcamp/")) return null
-        return "$server/api/stream/${item.mediaId}/rewind?from_ms=$fromMs&ms=$ms"
+        return "$server/api/stream/${item.mediaId}/rewind?from_ms=$fromMs&ms=${prefs.rewindMs}&speed=${prefs.rewindSpeed}" +
+            "&piece_ms=${prefs.rewindPiece}&ramp=${prefs.rewindRamp}"
     }
 
     /** Local mode's shuffle, once: what is to come after the playing track, mixed. */

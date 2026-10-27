@@ -2727,11 +2727,15 @@ async fn lossless_as(path: std::path::PathBuf, from_ms: u64, mp3: bool) -> Optio
     Some((headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response())
 }
 
-/// Where Tape rewind starts, and how long it lasts (milliseconds; 4 × the start/stop ramp, at most 12 s).
+/// Where Tape rewind starts, and how it sounds (`rewind::Shape`, the device's four controls; each left out as it is
+/// out of the box): its length (ms), its cruising speed, each piece's length (ms), the share spinning up and braking take.
 #[derive(Deserialize)]
 struct RewindFrom {
     from_ms: u64,
-    ms: u64,
+    ms: Option<u64>,
+    speed: Option<f64>,
+    piece_ms: Option<u64>,
+    ramp: Option<f64>,
 }
 
 /// How long Tape rewind waits for another decode to end before the player starts the track over without it.
@@ -2762,7 +2766,9 @@ async fn stream_rewind(State(app): State<Arc<App>>, Path((source, id)): Path<(St
                 return;
             }
         };
-        let rewind = crate::rewind::Rewind::new(sound.rate(), sound.channels(), from_ms, q.ms);
+        let d = crate::rewind::Shape::default();
+        let shape = crate::rewind::Shape { ms: q.ms.unwrap_or(d.ms), speed: q.speed.unwrap_or(d.speed), piece_ms: q.piece_ms.unwrap_or(d.piece_ms), ramp: q.ramp.unwrap_or(d.ramp) };
+        let rewind = crate::rewind::Rewind::new(sound.rate(), sound.channels(), from_ms, shape);
         let _ = said.send(Ok(rewind.bytes()));
         // The whole clip is a few MB at most: made as fast as it goes, the turn not held while the player reads.
         if let Err(e) = rewind.render(&mut sound, |b| tx.send(Ok(b.into())).is_ok()) {

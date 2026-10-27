@@ -300,6 +300,32 @@ class Prefs(context: Context) {
             p.edit().putBoolean(START_STOP_REWIND, value).apply()
         }
 
+    /** Tape rewind's sound (the owner, 2026-10-27; the server's `rewind::Shape`): its length (ms), its cruising speed
+     *  (× the track's), each piece's length (ms), and the share spinning up and braking take. */
+    var rewindMs: Long
+        get() = p.getLong(REWIND_MS, 2_500L).coerceIn(1_000L, 8_000L)
+        set(value) {
+            p.edit().putLong(REWIND_MS, value.coerceIn(1_000L, 8_000L)).apply()
+        }
+
+    var rewindSpeed: Float
+        get() = p.getFloat(REWIND_SPEED, 6f).coerceIn(2f, 16f)
+        set(value) {
+            p.edit().putFloat(REWIND_SPEED, value.coerceIn(2f, 16f)).apply()
+        }
+
+    var rewindPiece: Long
+        get() = p.getLong(REWIND_PIECE, 350L).coerceIn(100L, 1_000L)
+        set(value) {
+            p.edit().putLong(REWIND_PIECE, value.coerceIn(100L, 1_000L)).apply()
+        }
+
+    var rewindRamp: Float
+        get() = p.getFloat(REWIND_RAMP, 0.2f).coerceIn(0.05f, 0.4f)
+        set(value) {
+            p.edit().putFloat(REWIND_RAMP, value.coerceIn(0.05f, 0.4f)).apply()
+        }
+
     /** Ignore favourites (SkipFavourites): Radio's inserts and Autoplay's picks leave the hearted tracks out. */
     var skipFavourites: Boolean
         get() = p.getBoolean(SKIP_FAVOURITES, false)
@@ -376,6 +402,10 @@ class Prefs(context: Context) {
         const val START_STOP_MS = "start_stop_ms"
         const val START_STOP_SKIPS = "start_stop_skips"
         const val START_STOP_REWIND = "start_stop_rewind"
+        const val REWIND_MS = "rewind_ms"
+        const val REWIND_SPEED = "rewind_speed"
+        const val REWIND_PIECE = "rewind_piece"
+        const val REWIND_RAMP = "rewind_ramp"
         const val START_STOP_OFF = "off"
         const val START_STOP_VINYL = "vinyl"
         const val START_STOP_FADE = "fade"

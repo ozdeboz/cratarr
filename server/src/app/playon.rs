@@ -209,6 +209,10 @@ pub struct Report {
     /// out or null: nothing holds it back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held: Option<String>,
+    /// Tape rewind under way (0.9.10): `position_ms` goes back to the start as the clip plays, so it is not counted on
+    /// from the report. Apps from before leave it out.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rewinding: bool,
     /// `device` while the app plays the device's own music (decision 0052, local mode): the rest of this report is that
     /// player's, and Cratarr's queue is left as it was. Left out: Cratarr's music, as ever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -622,6 +626,8 @@ pub struct PlayerView {
     pub announce: Option<Announcing>,
     /// Why it does not play what it was told to, as it says (its device would not let it); none: nothing holds it.
     pub held: Option<String>,
+    /// Tape rewind under way (0.9.10): `position_ms` goes back to the start, reported as it goes, not counted on.
+    pub rewinding: bool,
     /// Where its sound goes now, as its app says (decision 0033, amended 2026-10-19); none where it does not say.
     pub output: Option<Output>,
     pub queue_length: usize,
@@ -909,7 +915,7 @@ impl Entry {
         }
         let r = &self.report;
         let mut position_ms = r.position_ms;
-        if r.playing && on {
+        if r.playing && on && !r.rewinding {
             position_ms += self.at.elapsed().as_millis() as u64;
             if let Some(d) = r.duration_ms {
                 position_ms = position_ms.min(d);
@@ -978,6 +984,7 @@ impl Entry {
             ducked: r.ducked,
             announce: r.announce.clone(),
             held: r.held.clone(),
+            rewinding: r.rewinding,
             output: r.output.clone(),
             queue_length: self.queue.tracks.len(),
             repeat: self.queue.repeat,
@@ -1905,10 +1912,11 @@ impl PlayOn {
         {
             super::listening::started(&user, name, &t.id);
         }
-        // A position that moves on as counted is no news; a jump (a seek) is.
+        // A position that moves on as counted is no news; a jump (a seek) is, and so is each step of Tape rewind's way
+        // back (0.9.10), which is not counted on.
         let jumped = before.position_ms.abs_diff(after.position_ms) > 2_000;
         let still = |v: &PlayerView| PlayerView { position_ms: 0, position_at: 0, seen: 0, ..v.clone() };
-        if still(&before) != still(&after) || jumped {
+        if still(&before) != still(&after) || jumped || after.rewinding {
             self.changed();
         }
         Ok(())
