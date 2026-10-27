@@ -20,7 +20,7 @@
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs, SEEK_STEP, type CoverTouch, type SwipeDown, type SwipeSide, type SwipeUp } from './prefs.svelte';
-  import { art, clockText, coverComing, coverFailed, coverLate, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampBusy, shownPaused } from './remote.svelte';
+  import { art, clockText, coverComing, coverFailed, coverLate, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampBusy, shownPaused, wind } from './remote.svelte';
   import SeekWave from './SeekWave.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import { Seek } from './seekState.svelte';
@@ -31,6 +31,7 @@
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { ramping } from './ramping.svelte';
   import { appInfo, inApp } from './app.svelte';
+  import { holdWind, type Hold } from './holdWind';
   import { local, rewindNow, windUpMs } from './localPlayer.svelte';
   import TapeDeck from './TapeDeck.svelte';
   import QueueMenu from './QueueMenu.svelte';
@@ -320,6 +321,11 @@
     };
   });
 
+  /** Holding Previous or Next winds the tape (decision 0074), where winding is on here; another of Cratarr's players
+   *  decides for itself. */
+  const winds = $derived(isLocal() ? (inApp ? appInfo.startStop : prefs.startStop).rewind : !!np?.player);
+  const windHold = (dir: 'back' | 'forward'): Hold => (winds ? { onhold: () => wind(dir, 'start'), onrelease: () => wind(dir, 'stop') } : null);
+
   /** What a swipe left or right on the cover was chosen to do: a track on or back, or a seek. */
   function side(what: SwipeSide) {
     if (what === 'next' || what === 'previous') return send(what);
@@ -569,7 +575,7 @@
                   >{/if}</button
               >
             {/if}
-            <button aria-label="Previous track" onclick={() => send('previous')}><Icon name="previous" size={24} /></button>
+            <button aria-label="Previous track" onclick={() => send('previous')} use:holdWind={windHold('back')}><Icon name="previous" size={24} /></button>
             <!-- Its fill (the owner, 2026-10-26), inside a border of the same colour: winding down (Start and stop) it drains
                  from the top over the ramp; paused with Start and stop on it stays empty (a start winds up); winding up it
                  fills from the bottom over the ramp, the way it went. -->
@@ -586,7 +592,7 @@
                 size={32}
               /></button
             >
-            <button aria-label="Next track" onclick={() => send('next')}><Icon name="next" size={24} /></button>
+            <button aria-label="Next track" onclick={() => send('next')} use:holdWind={windHold('forward')}><Icon name="next" size={24} /></button>
             <!-- Repeat is in the queue's sheet (a long press on Queue; the owner, 2026-10-26, 0.9.8): its place kept, so
                  play stays in the middle. -->
             {#if isLocal()}<span class="spot" aria-hidden="true"></span>{/if}

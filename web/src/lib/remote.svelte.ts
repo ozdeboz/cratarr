@@ -3,7 +3,7 @@
 import { untrack } from 'svelte';
 import { ApiError, coverUrl, albumCoverUrl, playerCommand, setFavorite, setTrackFavorite, transport, type NowPlaying, type Transport, type Upcoming } from './api';
 import { expect, expectFailed, live, refresh } from './live.svelte';
-import { local, jump as localJump, next as localNext, previous as localPrevious, rewindNow, togglePlay as localToggle, seek as localSeek, sought } from './localPlayer.svelte';
+import { local, jump as localJump, next as localNext, previous as localPrevious, rewindNow, togglePlay as localToggle, seek as localSeek, sought, windHold, windRelease } from './localPlayer.svelte';
 import { isLocal, localNowPlaying, localState, tookLocal } from './output.svelte';
 import { setFavorite as setRowFavorite } from './favourites.svelte';
 import { on } from './events.svelte';
@@ -289,6 +289,17 @@ export async function send(command: Transport) {
   } catch (e) {
     expectFailed(e instanceof ApiError && !e.generic ? e.message : "The player didn't respond");
   }
+}
+
+/** Holding Previous (`back`) or Next (`forward`): winds the tape (decision 0074), here (or the app's or the driven
+ *  player, lib/localPlayer), or on one of Cratarr's players through the server, which does the rest. */
+export function wind(dir: 'back' | 'forward', phase: 'start' | 'stop') {
+  if (isLocal()) return void (phase === 'start' ? windHold(dir) : windRelease(dir));
+  const np = playing();
+  if (!np?.player || !playOn.players.some((p) => p.name === np.player)) return;
+  playerCommand(np.player, { command: 'wind', dir, phase }).catch((e) =>
+    expectFailed(e instanceof ApiError && !e.generic ? e.message : "The player didn't respond"),
+  );
 }
 
 /** Plays upcoming track `i` (the queue view's tap): within the local stream, or the server's player jumps. */
