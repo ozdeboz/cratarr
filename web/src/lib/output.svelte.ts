@@ -383,7 +383,7 @@ export const hasMusic = () => current() !== null;
 export async function joinTo(output: typeof prefs.output) {
   if (output === prefs.output) return;
   if (isLocal()) {
-    if (local.index >= 0 && !local.paused) togglePlay();
+    if (local.index >= 0 && !local.paused) togglePlay(true);
   } else {
     const np = live.view?.now_playing ?? null;
     if (np && !np.progress?.paused) {

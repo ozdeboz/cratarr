@@ -1474,12 +1474,17 @@ function cutFrom(at: number) {
   })();
 }
 
-export function togglePlay() {
+/** Plays or pauses; `plain`: with no Start and stop (a switch between devices; the owner, 2026-10-27). */
+export function togglePlay(plain = false) {
   if (handed()) {
     local.paused = !local.paused;
-    return hand('toggle');
+    return hand('toggle', plain ? { plain: true } : {});
   }
   if (!audio) return;
+  if (plain) {
+    atOnce();
+    return void (audio.paused ? audio.play().catch(() => {}) : audio.pause());
+  }
   if (audio.paused) rampIn();
   else void pauseRamped();
 }
@@ -1833,40 +1838,14 @@ function rampIn(early?: { ms: number; lead: number }) {
     committed = null;
   });
 }
-/** A queue played from `from` s into track `index`, as Cratarr asks (a move's carry-on, 0.9.8): winding up into that
- *  point as play does (the stream begun early by the wind-up's lead), at once from a track's start or with Start and
- *  stop off. */
-function playInto(index: number, from: number) {
-  const { mode } = prefs.startStop;
-  const ms = windUpMs(prefs.startStop.ms, mode, from);
-  if (ms <= 0 || !audio) return void fresh(index, from, true);
-  const lead = (ms / 1000) * paceOf(mode);
-  void fresh(index, from - lead, false);
-  const gen = generation;
-  // The counter where it is asked for meanwhile, not the lead's early start.
-  local.position = from;
-  local.paused = false;
-  audio.addEventListener('canplay', () => gen === generation && rampIn({ ms, lead }), { once: true });
-}
-/** Stops as Cratarr asks (a move's hold, a handover elsewhere; 0.9.8): winding down first, as a pause does; a ramp
- *  under way is waited out first, never dropped (the owner, 2026-10-26). */
-async function stopRamped() {
-  while (committed !== null) await new Promise((r) => setTimeout(r, 50));
-  if (!audio || prefs.startStop.mode === 'off' || audio.paused) return void stop();
-  committed = true;
-  local.paused = true;
-  heldAt = audio.currentTime;
-  const mine = ++run;
-  try {
-    await rampOut();
-  } finally {
-    if (mine === run) {
-      heldAt = null;
-      unramp();
-      committed = null;
-    }
-  }
-  stop();
+/** Whatever ramp runs ends here, at full speed and volume (a switch between devices has no effects; the owner,
+ *  2026-10-27). */
+function atOnce() {
+  if (committed === null) return;
+  ++run;
+  heldAt = null;
+  unramp();
+  committed = null;
 }
 /** Pauses, winding down first; paused at once as far as anyone sees, and nothing takes it back meanwhile. */
 async function pauseRamped() {
@@ -2193,8 +2172,9 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
       local.from = typeof m.queue_name === 'string' ? m.queue_name : null;
       keepLocal(left, typeof m.queue_id === 'string' ? m.queue_id : newQueueId());
       const from = (typeof m.position_ms === 'number' ? m.position_ms : 0) / 1000;
-      if (m.paused === true) void fresh(index, from, false);
-      else playInto(index, from);
+      // A move between players (or a start here from elsewhere): at once, no Start and stop (the owner, 2026-10-27:
+      // switching devices bypasses every effect).
+      void fresh(index, from, m.paused !== true);
       fill();
       return m.paused !== true;
     }
@@ -2240,7 +2220,8 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
       togglePlay();
       return !audio.paused;
     case 'stop':
-      void stopRamped();
+      atOnce();
+      stop();
       return false;
     case 'next':
       next();
