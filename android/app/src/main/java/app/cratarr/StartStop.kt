@@ -1,16 +1,22 @@
 package app.cratarr
 
+import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import androidx.annotation.OptIn
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.max
@@ -22,8 +28,8 @@ import kotlin.math.pow
  * (lib/localPlayer): Vinyl ramps the speed, the pitch following, as a turntable spins up and down; Fade the volume.
  * Over the device's ramp, eased. Natural track ends stay gapless: only play, pause and stop ramp, and next and previous
  * where the device asks: out only, the track changing at the end of it and the next one starting as it is (the owner,
- * 2026-10-26). Tape rewind waits until it is real reverse play (the owner, 2026-10-26: hidden until then; the stepped
- * seeks were not it), so Previous restarts a track as it always did.
+ * 2026-10-26). Tape rewind (0.9.9): Previous restarting a track plays it backwards to its start, as a tape rewinds, four
+ * times the ramp: a clip Cratarr renders (`/api/stream/{source}/{id}/rewind`), on a small player of its own ([rewind]).
  *
  * Where it acts (the owner tried the first build, 2026-10-26: Vinyl broke into one odd speed, Fade ended early and
  * dropped, and came in with a plop): the speed on Android's own output (AudioTrack's playback rate, changed smoothly
@@ -42,6 +48,7 @@ import kotlin.math.pow
  * while its sound winds down.
  */
 class StartStop(
+    private val context: Context,
     private val player: ExoPlayer,
     private val prefs: Prefs,
     /** The player's volume worked out again ([gain] is part of it). */
@@ -52,6 +59,9 @@ class StartStop(
     private val groupDelayMs: () -> Long,
     /** What the controls show changed ([committed] set or let go): told to the session and to Cratarr. */
     private val changed: () -> Unit,
+    /** Tape rewind's clip of the playing track, from a moment (ms) back to its start in a length (ms); none for a track
+     *  Cratarr has no file of. */
+    private val rewindUrl: (Long, Long) -> String?,
     /** The app's own log (LinkLog): what each press did, to follow a device's report. */
     private val log: (String, Array<Pair<String, Any?>>) -> Unit,
 ) {
@@ -68,8 +78,21 @@ class StartStop(
     var heldPosition: Long? = null
         private set
 
-    /** Whether a ramp runs: presses wait for its end. */
+    /** Whether a ramp (or Tape rewind) runs: presses wait for its end. */
     val busy: Boolean get() = committed != null
+
+    /** Tape rewind's player, made the first time; its clip's listener while one plays or is coming, whether it has
+     *  started (the track then waits at its start), and what restarts the track as ever. */
+    private var tape: ExoPlayer? = null
+    private var tapeListener: Player.Listener? = null
+    private var tapeStarted = false
+    private var tapeRestart: (() -> Unit)? = null
+    private val tapeLate = Runnable {
+        if (tapeListener != null && !tapeStarted) {
+            note("rewind", "failed" to "late")
+            rewound()
+        }
+    }
 
     /** The ramp under way (`in`, `out`; none), where it is (0 still, 1 playing), and a pause's own stop, waiting for
      *  its ramp's end: what a seek in the middle of one needs (`seek`). */
@@ -152,6 +175,7 @@ class StartStop(
 
     /** Back to plain playing: full speed, its own pitch, full volume; a ramp under way stopped. */
     fun reset() {
+        stopTape()
         token++
         val next = after
         after = null
@@ -242,6 +266,15 @@ class StartStop(
      * Either way the ramp ends now and the position is no longer held. Without a ramp, a seek as ever.
      */
     fun seek(go: () -> Unit) {
+        // During Tape rewind: the clip stops, the track goes where it was sent and plays on.
+        if (tapeListener != null) {
+            note("seek", "during" to "rewind")
+            val started = stopTape()
+            reset()
+            go()
+            if (started) player.play()
+            return
+        }
         val dir = running
         if (!busy || dir == null) return go()
         val m = mode()
@@ -288,6 +321,90 @@ class StartStop(
         }
     }
 
+    /**
+     * Tape rewind: Previous that restarts the track plays it backwards to its start, then the track from there; false
+     * where it does not (off, not playing, in a group, early in the track, where Previous goes to the one before, or a
+     * track Cratarr has no file of). The clip plays on a player of its own, asking no focus (the track's player holds
+     * it), while the track waits at its start, paused and buffered; one not ready within [REWIND_WAIT_MS], or failing,
+     * and the track restarts as ever ([restart]).
+     */
+    fun rewind(restartAfterMs: Long, restart: () -> Unit): Boolean {
+        note("rewind", "busy" to busy, "rewind" to prefs.startStopRewind, "at_ms" to player.currentPosition)
+        if (busy) return true
+        if (!prefs.startStopRewind || grouped() || !player.isPlaying) return false
+        val from = player.currentPosition
+        if (from <= restartAfterMs) return false
+        val ms = minOf(REWIND_MOST_MS, 4 * prefs.startStopMs)
+        val url = rewindUrl(from, ms) ?: return false
+        heldPosition = from
+        commit(true)
+        val t = tape ?: ExoPlayer.Builder(context)
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), false)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, Downloads.http(context))))
+            .build()
+            .also { tape = it }
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (tapeListener !== this) return
+                if (state == Player.STATE_READY && !tapeStarted) {
+                    tapeStarted = true
+                    main.removeCallbacks(tapeLate)
+                    ramping("out", ms)
+                    player.pause()
+                    player.seekTo(0)
+                    t.play()
+                } else if (state == Player.STATE_ENDED) {
+                    rewound()
+                }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                if (tapeListener !== this) return
+                note("rewind", "failed" to error.errorCodeName)
+                rewound()
+            }
+        }
+        tapeListener = listener
+        tapeStarted = false
+        tapeRestart = restart
+        t.addListener(listener)
+        t.volume = player.volume
+        t.setMediaItem(MediaItem.fromUri(url))
+        t.playWhenReady = false
+        t.prepare()
+        main.postDelayed(tapeLate, REWIND_WAIT_MS)
+        return true
+    }
+
+    /** Tape rewind over (its clip ended, failed or came too late): the track from its start. */
+    private fun rewound() {
+        val restart = tapeRestart
+        val started = stopTape()
+        reset()
+        if (started) player.play() else restart?.invoke()
+    }
+
+    /** Stops Tape rewind's clip, if one plays or is coming; whether it had started. */
+    private fun stopTape(): Boolean {
+        val l = tapeListener ?: return false
+        tapeListener = null
+        tapeRestart = null
+        main.removeCallbacks(tapeLate)
+        tape?.let {
+            it.removeListener(l)
+            it.stop()
+            it.clearMediaItems()
+        }
+        return tapeStarted.also { tapeStarted = false }
+    }
+
+    /** Tape rewind's player let go (the service ends). */
+    fun release() {
+        stopTape()
+        tape?.release()
+        tape = null
+    }
+
     companion object {
         /** Told when a ramp starts (`out`, `in`, with its length and the length set) and ends (none): the page's player
          *  draws it. */
@@ -315,6 +432,9 @@ class StartStop(
         private const val VINYL_SOUND = 0.35f
         private const val STEP_MS = 16L
         private const val GROUP_MARGIN_MS = 250L
+        private const val REWIND_MOST_MS = 12_000L
+        /** A clip not ready by then: the track restarts as ever. */
+        private const val REWIND_WAIT_MS = 1_500L
     }
 }
 

@@ -152,13 +152,18 @@ class MainActivity : AppCompatActivity() {
     private var openAt: String? = null
 
     /** Where an intent asks the page to open: `#/settings` for the Settings shortcut; for `cratarr://connected/<service>`
-     *  (the way back from a sign-in, with what went wrong as `scrobble`), that connection's page in Settings. */
+     *  (the way back from a sign-in, with what went wrong as `scrobble`), that connection's page in Settings; Spotify's
+     *  (0.9.9, decision 0073) is the account's own, what went wrong as `spotify_error`. */
     private fun openAtOf(intent: Intent?): String? {
         if (intent == null) return null
         if (intent.getBooleanExtra(EXTRA_SETTINGS, false)) return "#/settings"
         val data = intent.data ?: return null
         if (data.scheme != "cratarr" || data.host != "connected") return null
         val service = data.pathSegments.firstOrNull()?.takeIf { it.matches(Regex("[a-z]+")) } ?: return null
+        if (service == "spotify") {
+            val why = data.getQueryParameter("spotify_error")?.let { "&spotify_error=" + Uri.encode(it) } ?: ""
+            return "#/settings?view=settings%3Aaccount%2Fspotify$why"
+        }
         val why = data.getQueryParameter("scrobble")?.let { "&scrobble=" + Uri.encode(it) } ?: ""
         return "#/settings?view=settings%3Aconnections%2F$service$why"
     }
