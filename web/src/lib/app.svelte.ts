@@ -175,7 +175,10 @@ if (port) {
       appInfo.levelling = m.levelling !== false;
       appInfo.levelUnknown = m.levelUnknown === 'untouched' ? 'untouched' : 'typical';
       {
-        appInfo.startStop = startStopOf((m.startStop ?? {}) as Partial<StartStop>);
+        // An app that does not know fast-forward's own curve yet (before it stores `windFwd`) says none: the one set
+        // here stays (the owner's tablet, 2026-10-27: its sliders snapped back to the defaults).
+        const told = (m.startStop ?? {}) as Partial<StartStop>;
+        appInfo.startStop = startStopOf({ ...told, windFwd: told.windFwd ?? appInfo.startStop.windFwd });
       }
       appInfo.outputs = Array.isArray(m.outputs) ? (m.outputs as AppOutput[]).filter((o) => typeof o?.id === 'string') : [];
       appInfo.output = typeof m.output === 'string' && appInfo.outputs.some((o) => o.id === m.output) ? m.output : null;
