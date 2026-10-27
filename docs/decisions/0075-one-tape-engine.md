@@ -30,17 +30,22 @@ speed (and a curve to reach it); the engine moves there from the speed it has no
 - A condensed wind (0074's cuts) is a plan the engine follows; an interruption drops the rest of the plan and goes on
   from the real position.
 
-**Web (first):** one read head in Web Audio (an AudioWorklet) over decoded sound, at any signed speed, as a DJ deck's.
-A decoded window around the playhead (about ±30 s) serves Start and stop, short reverses and scrubbing; the server's
-wind stream serves long winds, joined at a moment of zero speed (fetched ahead, so the join never waits). Borrowed
-where it can be (xwax and Mixxx solved the read head; GPL-3 is compatible, decision on licences).
+**Two heads, one engine (the owner, 2026-10-27: "it is physically impossible to go forward and backward at the same
+time"):** the engine owns the playhead and the speed; it sounds through two players that take turns, never together.
+The track's own player for forwards at up to 1× (a browser's MSE stream, gapless and levelled as now), the wind
+stream's for everything at speed or backwards. A change between them happens only at speed zero, which is silent, so it
+is unheard; the one resting is kept armed at the playhead (the track buffered where the wind will land, the wind stream
+asked for from where the track is as soon as a wind may come: a press on Previous or Next, a drag), so a change never
+waits. Below a player's slowest speed (a browser's 1/16) the gain carries the last of a ramp down to silence. The page
+reads the wind stream itself (fetch into MSE, not an audio element), so its map, and with it the playhead across cuts,
+is known at every moment. Cheaper than one read head over decoded sound (no ~100 MB of decoded track on a tablet),
+and the same to the ear; an AudioWorklet read head stays the fallback if a change at zero ever proves audible.
 
-**App (after):** the same model, the engine writing to AudioTrack with its own speed and resampling (ExoPlayer plays
-forwards only); a5's.
+**App (after):** the same model, two heads under one engine (ExoPlayer forwards, the wind stream at speed), a5's.
 
 ## Consequences
 
 - No more "a ramp is waited out": every special case between the two players goes.
-- Memory: a decoded window, not whole tracks (a 5-minute track decoded is ~100 MB, too much for the tablet).
+- Memory: as now (two streaming players), nothing decoded whole.
 - The page reads the wind stream itself (fetch, not an audio element), so its map is known.
 - Levelling, groups (0037) and the lock screen act on the engine, so on everything it plays.
