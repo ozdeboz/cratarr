@@ -574,7 +574,7 @@
                 title="Level the volume"
                 aria-haspopup="dialog"
                 onclick={() => (levelOpen = true)}
-                use:longpress={() => (prefs.levelInWave = !prefs.levelInWave)}
+                use:longpress={() => (prefs.waveLevel = prefs.waveLevel === 'file' ? prefs.waveLevelLast : 'file')}
                 ><Icon name="audioLines" size={22} />{#if playingLevelOn()}<span class="fill" style:--down={levelShare(local.levelDb)} aria-hidden="true"
                     ><Icon name="audioLines" size={22} /></span
                   >{/if}</button

@@ -27,6 +27,7 @@
     now = null,
     loading = null,
     heard = 1,
+    output = false,
     onflat,
   }: {
     bins: Uint8Array | null;
@@ -38,6 +39,8 @@
     /** As heard (the owner, 2026-10-26, 0.9.8: levelling you can see): the bars scaled by the level the player applies
      *  (0..1), the original heights a ghost behind them. */
     heard?: number;
+    /** As the output (Level the volume › Waveform): the whole lowered to what is heard, not only the playing colour. */
+    output?: boolean;
     onflat?: () => void;
   } = $props();
 
@@ -223,7 +226,7 @@
   <!-- The track as made, in the unplayed tint; over it, as far as it has played, the track as heard in the playing
        colour (the owner, 2026-10-27): levelled, what the colour does not reach keeps the unplayed tint, and levelling
        switched off the colour grows into it while those tips shrink to nothing; ahead of the playhead it never moves. -->
-  <svg viewBox="0 0 {n} 100" preserveAspectRatio="none"><path d={made} /></svg>
+  <svg viewBox="0 0 {n} 100" preserveAspectRatio="none"><path d={output ? d : made} /></svg>
   <svg class="played" viewBox="0 0 {n} 100" preserveAspectRatio="none" style:clip-path={`inset(0 ${(1 - done) * 100}% 0 0)`}>
     <path {d} />
   </svg>
