@@ -173,6 +173,7 @@
   import Cover, { coverBroke, coverBroken, mosaicOf } from './Cover.svelte';
   import PageLoading from './PageLoading.svelte';
   import type { PlayMode } from './api';
+  import { flowOpened } from './backdrop.svelte';
 
   const id = $derived(panel.viewed ?? '');
   /** New playlist: edit mode with no playlist yet (no tracks, no file); Save makes it. */
@@ -570,6 +571,11 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /** A flow cover's album, its menu open (a long-press or a right-click on it). */
   let flowMenu = $state<{ id: string; title: string; artist: string | null } | null>(null);
   const flowing = $derived(flowShown.length >= 3);
+  // A crate's flow opening: Shuffle's next (Settings › Appearance).
+  $effect(() => {
+    const of = id;
+    if (flowing && of) untrack(() => flowOpened(of));
+  });
   // One cover in a header too wide for it (the owner, 2026-10-26): the square fills the width up to 60% of the window's
   // height, so a wide panel shows only a band of it. Where less than 90% of it would show, the flow's canvas instead,
   // the cover whole in the middle (lib/CoverFlow, one cover alone).
@@ -2913,18 +2919,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
     background: var(--bg);
   }
 
-  /* A crate's coverflow: a light canvas, a slight gradient down it, the whole header; the fade only under the action bar,
-     so the front cover can use the height (lib/CoverFlow keeps it above). */
-  .hero.flowing {
-    background: linear-gradient(to bottom, color-mix(in srgb, var(--text) 24%, var(--surface)), color-mix(in srgb, var(--text) 11%, var(--surface)));
-  }
-
-  /* One's own picture behind every flow, under a veil (Settings › Appearance; the owner, 2026-10-26). */
+  /* The photo behind every flow, under a veil (Settings › Appearance; the owner, 2026-10-26), once it is in (App); till
+     then the page's own ground, never a grey canvas (the owner, 2026-10-27). A crate's coverflow takes the whole header;
+     the fade only under the action bar, so the front cover can use the height (lib/CoverFlow keeps it above). */
   :global(:root[data-flow-photo]) .hero.flowing {
     background:
       linear-gradient(to bottom, rgb(0 0 0 / 0.35), rgb(0 0 0 / 0.55)),
       var(--flow-photo) center 20% / cover no-repeat,
-      var(--surface);
+      var(--bg);
   }
 
   .hero.flowing::after {

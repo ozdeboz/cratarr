@@ -3,6 +3,7 @@
 
 import { inApp, toApp } from './app.svelte';
 import { LIST_WIDTHS } from './pageView.svelte';
+import { isSpotifyView, type SpotifyView } from './libraryViews';
 import type { Condition } from './api';
 import { FACTS, type FactId } from './facts';
 
@@ -92,11 +93,15 @@ function savedTunes(saved: Record<string, unknown>): Prefs['playerBandsTunes'] {
 }
 
 export type Theme = 'auto' | 'light' | 'dark';
+/** What can stand behind the flows: Cratarr's photos (lib/backdrop names them) and one's own picture. */
+export const FLOW_BACKDROPS = ['wall', 'flowers', 'leaf', 'pastel', 'records', 'checks', 'mosaic', 'planks', 'amplifier', 'agave', 'rack', 'speakers', 'radios', 'own'] as const;
+export type FlowBackdrop = (typeof FLOW_BACKDROPS)[number];
 
 export type Prefs = {
   theme: Theme;
-  /** What the Library shows (the switch beside back; the owner, 2026-10-25): its albums, or their artists. */
-  libraryView: 'albums' | 'artists' | 'tracks';
+  /** What the Library shows (the switch beside back; the owner, 2026-10-25): its albums, or their artists; or one of
+   *  the account's Spotify lists (decision 0073, lib/spotify). */
+  libraryView: 'albums' | 'artists' | 'tracks' | SpotifyView;
   /** Which view the Library opens on (Settings › Content; the owner, 2026-10-25): the one it was left on, or always
    *  the same. */
   libraryOpens: 'last' | 'albums' | 'artists' | 'tracks';
@@ -165,7 +170,19 @@ export type Prefs = {
   /** One's own header picture (Appearance) replaces Home's weather sky too, besides being every flow's backdrop. */
   flowPictureOnHome: boolean;
   /** Behind every flow (the owner, 2026-10-26): one of Cratarr's photos (public/backdrops), or one's own picture. */
-  flowBackdrop: 'wall' | 'flowers' | 'leaf' | 'mellow' | 'records' | 'checks' | 'mosaic' | 'planks' | 'amplifier' | 'own';
+  flowBackdrop: FlowBackdrop;
+  /** The playing cover's colour (the owner, 2026-10-27: the user's to choose, each place apart): on the floating
+   *  controls' glass, on the mini-player, and as the full player's blurred background. Off: Cratarr's own. */
+  coverColourGlass: boolean;
+  coverColourMini: boolean;
+  coverColourPlayer: boolean;
+  /** Shuffle (the owner, 2026-10-27): the ticked ones take turns behind the flows, in place of the one chosen. */
+  flowShuffle: boolean;
+  /** The ones ticked for Shuffle. */
+  flowShuffled: FlowBackdrop[];
+  /** When Shuffle takes another (the owner, 2026-10-27: the user's to say): each flow that opens, each flow its own
+   *  (always the same one for the same flow), each start, or every few minutes. */
+  flowShuffleWhen: 'flow' | 'seeded' | 'start' | 'timed';
   /** One's own crates on Home (Settings › Home, 0.9.3; the owner, 2026-10-25): each a section of its own, a shelf of its
    *  albums, ordered and switched in Home's sections list. */
   homeCrates: boolean;
@@ -181,8 +198,8 @@ export type Prefs = {
   offlineQuality: 'smaller' | 'original';
   /** How play and pause start and stop (Settings › This device; the owner, 2026-10-25): at once, as a turntable (the
    *  speed, and the pitch with it) or fading; over `startStopMs`; for next and previous too (`startStopSkips`). `rewind`:
-   *  Tape rewind, kept but hidden and unused until it plays the track backwards (the owner, 2026-10-26). The app keeps
-   *  its own. */
+   *  Tape rewind: Previous restarting a track plays it backwards to its start, as a tape (the server's clip, four times
+   *  the ramp). The app keeps its own. */
   startStop: StartStop;
   /** What the player's four swipes do (Settings › Player; the owner, 2026-10-26): up and down, on its left half and on
    *  its right. */
@@ -409,6 +426,12 @@ export const DEFAULTS: Prefs = {
   homeGreeting: true,
   homeGreetingCapital: false,
   flowPictureOnHome: false,
+  coverColourGlass: true,
+  coverColourMini: true,
+  coverColourPlayer: true,
+  flowShuffle: false,
+  flowShuffled: [...FLOW_BACKDROPS.filter((b) => b !== 'own')],
+  flowShuffleWhen: 'flow',
   flowBackdrop: 'wall',
   homeCrates: false,
   levelling: true,
@@ -468,7 +491,7 @@ function read(): Prefs {
       if (typeof saved.animations === 'boolean') p.animations = saved.animations;
       if (typeof saved.crumbsWhole === 'boolean') p.crumbsWhole = saved.crumbsWhole;
       if (typeof saved.modeSwitchInBar === 'boolean') p.modeSwitchInBar = saved.modeSwitchInBar;
-      if (['albums', 'artists', 'tracks'].includes(saved.libraryView)) p.libraryView = saved.libraryView;
+      if (['albums', 'artists', 'tracks'].includes(saved.libraryView) || isSpotifyView(saved.libraryView)) p.libraryView = saved.libraryView;
       if (['last', 'albums', 'artists', 'tracks'].includes(saved.libraryOpens)) p.libraryOpens = saved.libraryOpens;
       if (['name', 'albums', 'tracks'].includes(saved.libraryArtistOrder)) p.libraryArtistOrder = saved.libraryArtistOrder;
       if (typeof saved.libraryArtistDown === 'boolean') p.libraryArtistDown = saved.libraryArtistDown;
@@ -507,10 +530,17 @@ function read(): Prefs {
       if (typeof saved.homeGreeting === 'boolean') p.homeGreeting = saved.homeGreeting;
       if (typeof saved.homeGreetingCapital === 'boolean') p.homeGreetingCapital = saved.homeGreetingCapital;
       if (typeof saved.flowPictureOnHome === 'boolean') p.flowPictureOnHome = saved.flowPictureOnHome;
-      // Renamed on 2026-10-26 (the owner): Clock is Mosaic, Yellow is Mellow; the ones taken away (Grey, Lamp) fall back
-      // to the default.
-      const backdrop = ({ clock: 'mosaic', yellow: 'mellow' } as Record<string, string>)[saved.flowBackdrop as string] ?? saved.flowBackdrop;
-      if (['wall', 'flowers', 'leaf', 'mellow', 'records', 'checks', 'mosaic', 'planks', 'amplifier', 'own'].includes(backdrop as string)) p.flowBackdrop = backdrop as Prefs['flowBackdrop'];
+      // Renamed on 2026-10-26 (the owner): Clock is Mosaic, Yellow is Mellow; Mellow is Pastel since 2026-10-27 (another
+      // photo); the ones taken away (Grey, Lamp) fall back to the default.
+      const backdrop = ({ clock: 'mosaic', yellow: 'pastel', mellow: 'pastel' } as Record<string, string>)[saved.flowBackdrop as string] ?? saved.flowBackdrop;
+      if (FLOW_BACKDROPS.includes(backdrop as FlowBackdrop)) p.flowBackdrop = backdrop as FlowBackdrop;
+      if (typeof saved.flowShuffle === 'boolean') p.flowShuffle = saved.flowShuffle;
+      for (const k of ['coverColourGlass', 'coverColourMini', 'coverColourPlayer'] as const) if (typeof saved[k] === 'boolean') p[k] = saved[k];
+      if (Array.isArray(saved.flowShuffled)) {
+        const ticked = saved.flowShuffled.filter((b: unknown): b is FlowBackdrop => FLOW_BACKDROPS.includes(b as FlowBackdrop));
+        if (ticked.length) p.flowShuffled = ticked;
+      }
+      if (['flow', 'seeded', 'start', 'timed'].includes(saved.flowShuffleWhen)) p.flowShuffleWhen = saved.flowShuffleWhen;
       if (typeof saved.homeCrates === 'boolean') p.homeCrates = saved.homeCrates;
       if (Array.isArray(saved.profileRows)) p.profileRows = saved.profileRows.filter((x: unknown): x is ProfileRow => PROFILE_ROWS.some((r) => r.id === x));
       if (Array.isArray(saved.homeParts) && saved.homeParts.join(',') !== HOME_BEFORE)

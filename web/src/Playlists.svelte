@@ -181,9 +181,6 @@
       endSelect();
     });
   }
-
-  // The playlists the panel shows (lib/Hold): the ones asked for once they show there, the one shown until then.
-  const openInPanel = $derived(panel.shown === panel.viewed ? panel.selection : panel.shown ? [panel.shown] : []);
 </script>
 
 <main>
@@ -231,7 +228,7 @@
               .filter(Boolean)
               .join(' ')}
             strong={p.member}
-            active={select.on ? select.picked.includes(p.id) : openInPanel.includes(p.id)}
+            active={select.on ? select.picked.includes(p.id) : panel.selection.includes(p.id)}
             label={select.on ? `${select.picked.includes(p.id) ? 'Untick' : 'Tick'} ${p.name}` : `View ${p.name}`}
             onclick={() => (select.on ? tick(p.id) : viewPlaylist(p.id))}
             attach={fromAction(longpress, () => () => {

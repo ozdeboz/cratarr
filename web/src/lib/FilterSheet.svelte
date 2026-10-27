@@ -23,6 +23,7 @@
   import { prefs, type PanelKind } from './prefs.svelte';
   import { known, libraryShown, noChoice, remember, showLibrary } from './sources.svelte';
   import { toast } from './toast.svelte';
+  import { inSpotify, SPOTIFY_FILTER } from './spotify.svelte';
 
   // `page`: the page it was opened on, whose filter it shows; null in the panel, which says its `kind` of list (and
   // gives its `tempos` for the Tempo condition's spread, decision 0041). `counted`: how many the filter lets through.
@@ -40,7 +41,8 @@
     onclose: () => void;
   } = $props();
 
-  const list = $derived(page ?? kind ?? '');
+  // The Library's Spotify lists filter as their own kind (lib/spotify).
+  const list = $derived(page === 'library' && inSpotify() ? SPOTIFY_FILTER : (page ?? kind ?? ''));
   // Conditions on the lists whose items the server knows the facts of: the Library's albums, Playlists, and the
   // panel's track lists; Any or All where the items hold tracks (decision 0061). Crates have none (decision 0060).
   const CONDITIONED = ['library', 'playlists', 'playlist', 'crate', 'album', 'artist'];

@@ -65,7 +65,7 @@
     <ul class="grid">
       {#each sorted as c (c.id)}
         <li>
-          <CrateCard crate={c} active={panelBeside() && (panel.shown === CRATE + c.id || panel.shown === EDIT_CRATE + c.id)} onclick={() => viewPlaylist(CRATE + c.id)} onmenu={() => (menuFor = c.id)} why={deepOf(c.id)} />
+          <CrateCard crate={c} active={panelBeside() && (panel.viewed === CRATE + c.id || panel.viewed === EDIT_CRATE + c.id)} onclick={() => viewPlaylist(CRATE + c.id)} onmenu={() => (menuFor = c.id)} why={deepOf(c.id)} />
         </li>
       {/each}
     </ul>

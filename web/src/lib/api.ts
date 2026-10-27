@@ -1890,10 +1890,16 @@ export const previewLastFm = (user: string, key?: string, what?: LastFmWhat) => 
 export const undoLastFm = (user: string) =>
   request<{ scrobbles: number; unstarred: number }>('/api/history/lastfm', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user }) });
 /** What a file brought or would bring (decision 0067, step 4): listens into the history (`from` the kind of export), or
- *  a playlist made of the tracks found (its name, and its undo token once made). */
+ *  a playlist made of the tracks found (its name, and its undo token once made); or Spotify's account data (0073): its
+ *  listens, where it has them, and its library's snapshot, with how much of it is here. */
 export type FileBrought =
   | { kind: 'history'; from: 'listenbrainz' | 'spotify' | 'lastfm'; tally: ImportTally }
-  | { kind: 'playlist'; name: string; tally: ImportTally; undo: string | null };
+  | { kind: 'playlist'; name: string; tally: ImportTally; undo: string | null }
+  | {
+      kind: 'spotify';
+      history: ImportTally | null;
+      library: { albums: number; tracks: number; playlists: number; artists: number; in: number; partly: number; missing: number };
+    };
 export const importFile = (file: File, preview: boolean) =>
   request<Started>(`/api/import/file?${new URLSearchParams({ name: file.name, preview: String(preview) })}`, { method: 'POST', body: file });
 /** The listens imported from files of one kind out of the asking account's history again: how many. */
@@ -2338,3 +2344,65 @@ export const uploadAlbumCover = (source: string, album: string, file: Blob) =>
 
 /** The account's play history deleted, and what was learned from it (a5, 0.9.5): how many plays went. */
 export const deleteHistory = () => request<{ removed: number }>('/api/me/history', { method: 'DELETE' });
+
+// --- Spotify (decision 0073): the signed-in account's Spotify library, from its export or its own live connection ---
+/** Where an item of it stands here: in the library, some of it, none, or asked for (0070). */
+export type SpotifyStatus = 'in' | 'partly' | 'missing' | 'requested';
+/** What the account's Spotify lists came from: its own app's live connection (`live`, Premium), the export it uploaded
+ *  (`imported`); `shown`: which the lists are now (live wins), null while it has none. */
+export type SpotifyState = {
+  client_id: string | null;
+  live: { user: string; name: string; since: number; sync: { state: 'idle' | 'running' | 'failed'; at: number | null; error: string | null } } | null;
+  imported: { at: number; file: string } | null;
+  shown: 'live' | 'imported' | null;
+  counts: { albums: number; tracks: number; playlists: number; artists: number };
+};
+export type SpotifyAlbum = {
+  id: string;
+  title: string;
+  artist: string;
+  year: number | null;
+  cover: string | null;
+  added_at: number | null;
+  status: SpotifyStatus;
+  /** Its tracks here, of how many. */
+  have: number;
+  of: number;
+  /** The library's album, where it has it (or some of it). */
+  album: { source: string; id: string } | null;
+  release_group: string | null;
+  request: AlbumRequest | null;
+  preview: { source: 'bandcamp'; id: string } | null;
+};
+export type SpotifyTrack = {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  length_ms: number | null;
+  added_at: number | null;
+  status: SpotifyStatus;
+  /** The library's track, where it has it. */
+  track: { source: string; id: string } | null;
+  /** Its album's. */
+  release_group: string | null;
+  request: AlbumRequest | null;
+};
+export type SpotifyPlaylist = { id: string; name: string; owner: string | null; collaborative: boolean; cover: string | null; of: number; have: number; status: SpotifyStatus };
+export type SpotifyArtist = { id: string; name: string; photo: string | null; status: SpotifyStatus; have: number; artist: { id: string } | null };
+export const getSpotify = () => request<SpotifyState>('/api/spotify');
+/** The account's own Spotify app (its Client ID); empty forgets it, and disconnects. */
+export const setSpotifyClient = (client_id: string) =>
+  request<void>('/api/spotify/client', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ client_id }) });
+/** Spotify's consent page, which comes back to `callback` (in the app, on to the app). */
+export const connectSpotify = (callback: string, app: boolean) => post<{ url: string }>('/api/spotify/connect', { callback, app });
+/** The live connection forgotten; an uploaded export's lists show again. */
+export const disconnectSpotify = () => request<void>('/api/spotify', { method: 'DELETE' });
+export const syncSpotify = () => post<SpotifyState>('/api/spotify/sync', {});
+/** The uploaded export's lists forgotten (its listens stay, undone in Import). */
+export const forgetSpotifyImport = () => request<void>('/api/spotify/import', { method: 'DELETE' });
+export const getSpotifyAlbums = () => request<{ albums: SpotifyAlbum[] }>('/api/spotify/albums');
+export const getSpotifyTracks = () => request<{ tracks: SpotifyTrack[] }>('/api/spotify/tracks');
+export const getSpotifyPlaylists = () => request<{ playlists: SpotifyPlaylist[] }>('/api/spotify/playlists');
+export const getSpotifyPlaylist = (id: string) => request<SpotifyPlaylist & { tracks: SpotifyTrack[] }>(`/api/spotify/playlists/${encodeURIComponent(id)}`);
+export const getSpotifyArtists = () => request<{ artists: SpotifyArtist[] }>('/api/spotify/artists');

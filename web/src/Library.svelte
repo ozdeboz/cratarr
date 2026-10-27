@@ -22,8 +22,15 @@
   import { libraryShown } from './lib/sources.svelte';
   import { untrack } from 'svelte';
   import { me } from './lib/me.svelte';
+  import SpotifyLibrary from './lib/SpotifyLibrary.svelte';
+  import { inSpotify, loadSpotify, spotify } from './lib/spotify.svelte';
+  import { isSpotifyView } from './lib/libraryViews';
   // Opened on the view Settings says, unless that is the one it was left on (the owner, 2026-10-25).
   if (prefs.libraryOpens !== 'last') prefs.libraryView = prefs.libraryOpens;
+  // A Spotify list left on, and the account has none any more (disconnected, the export forgotten): its albums.
+  loadSpotify().then(() => {
+    if (inSpotify() && spotify.state && !spotify.state.shown) prefs.libraryView = 'albums';
+  });
 
   let error = $state<string | null>(null);
   const sources = $derived<AlbumsSource[] | null>(library.view?.sources ?? null);
@@ -168,7 +175,10 @@
 </script>
 
 <main>
-  {#if error}
+  <!-- One of the account's Spotify lists (decision 0073), while it has them; none any more: its albums again. -->
+  {#if inSpotify() && isSpotifyView(prefs.libraryView)}
+    <SpotifyLibrary view={prefs.libraryView} />
+  {:else if error}
     <p class="error" role="alert">{error}</p>
   {:else if shown === null}
     <PageLoading />

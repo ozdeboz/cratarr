@@ -3,6 +3,8 @@
   // its address bar, the app's under Network; the owner, 2026-10-24); their password: a Cratarr account's own (0051, amended 2026-10-19; it is its OpenSubsonic one too), or for a
   // directory's account its own password for OpenSubsonic apps (whose sign-in needs the password itself, which a
   // directory never gives); their devices (each plays only on its own) and their sign-ins, each to end. Acts at once.
+  // Their Spotify (decision 0073; the owner, 2026-10-27: each connects here): a row opening its own page
+  // (`thing`: `spotify`, lib/settings/SpotifyPart).
   import { changeOwnPassword, endMySession, removable, removeMyDevice, setAppPassword, type OwnDevice, type UserSession } from '../api';
   import { loadMe, me } from '../me.svelte';
   import { toast } from '../toast.svelte';
@@ -11,6 +13,16 @@
   import Item from './Item.svelte';
   import ValueSheet from './ValueSheet.svelte';
   import { when } from './when';
+  import { openThing } from '../panel.svelte';
+  import { loadSpotify, spotify } from '../spotify.svelte';
+  import SpotifyPart from './SpotifyPart.svelte';
+
+  let { thing = null }: { thing?: string | null } = $props();
+  loadSpotify(true);
+  const sp = $derived(spotify.state);
+  const spotifyLine = $derived(
+    !sp ? null : sp.live ? `Connected as ${sp.live.name}` : sp.imported ? 'From your export' : sp.client_id ? 'Not connected' : 'Not set up',
+  );
 
   let setting = $state(false);
   async function savePassword(password: string) {
@@ -63,6 +75,9 @@
   }
 </script>
 
+{#if thing === 'spotify'}
+  <SpotifyPart />
+{:else}
 <Group>
   {#if me.name}<Item name={me.name} line={me.admin ? 'Administrator' : 'User'} />{:else}<Item name={me.admin ? 'Administrator' : 'User'} />{/if}
   {#if me.name && me.directory === false}
@@ -75,6 +90,10 @@
       onclick={() => (setting = true)}
     />
   {/if}
+</Group>
+
+<Group>
+  <Item name="Spotify" line={spotifyLine} onclick={() => openThing('account', 'spotify')} />
 </Group>
 
 {#if me.devices?.length}
@@ -100,6 +119,8 @@
       </Item>
     {/each}
   </Group>
+{/if}
+
 {/if}
 
 {#if changing}

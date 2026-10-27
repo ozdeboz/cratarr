@@ -408,10 +408,12 @@
 
 <div class="player" class:in-sidebar={place === 'side'} style:--art-accent={art.accent ?? 'var(--accent)'}>
   <!-- The blurred cover: a new one fades in over the old one in a second (Finamp's background), the old one staying
-       until it is covered. -->
-  {#each backdrops as b (b.key)}
-    <img class="backdrop" src={b.src} alt="" aria-hidden="true" in:fade={{ duration: reducedMotion() ? 0 : BACKDROP_FADE_MS, easing: linear }} />
-  {/each}
+       until it is covered. Unless the user said not (Settings › Appearance › Cover colours): the page's own ground. -->
+  {#if prefs.coverColourPlayer}
+    {#each backdrops as b (b.key)}
+      <img class="backdrop" src={b.src} alt="" aria-hidden="true" in:fade={{ duration: reducedMotion() ? 0 : BACKDROP_FADE_MS, easing: linear }} />
+    {/each}
+  {/if}
   <div class="veil"></div>
   <header
     class:landscape={layout?.landscape}

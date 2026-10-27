@@ -1,12 +1,11 @@
 <script lang="ts">
   // A place that shows one thing at a time (the panel, the page), switching in one commit (lib/holdPlace.svelte): when `key`
-  // changes, a still picture of what it showed is laid over it (the same elements, copied, scrolled as they were) while
-  // the new content gets ready unseen beneath; once what it shows is ready (holdUntil), its pictures are in and the
-  // whole of it shows at once. Nothing claimed: at once, as before. After HOLD_SIGN_MS the shared loading sign shows over
-  // the picture; after HOLD_MAX_MS what was there gives way to the place's background with the sign (a page before kept
-  // that long says nothing true any more), the new content still showing whole once ready; after HOLD_GIVE_UP_MS as it
-  // is. A place opening (the app starting, the phone's panel coming up) holds its first content too, over its own empty
-  // background. `shown`: the key whose content shows (what a page marks as open follows it, not the key asked for).
+  // changes, what it showed goes at once (the owner, 2026-10-27: never old content on navigation, always responsive):
+  // the place's own background is laid over it, the shared loading sign on it after HOLD_SIGN_MS, while the new content
+  // gets ready unseen beneath; once what it shows is ready (holdUntil), its pictures are in and the whole of it shows at
+  // once (what comes from elsewhere may follow). Nothing claimed: at once, as before. After HOLD_GIVE_UP_MS as it is. A
+  // place opening (the app starting, the phone's panel coming up) holds its first content the same way. `shown`: the key
+  // whose content shows (what a page marks as open follows it, not the key asked for).
   import { mount, setContext, tick, unmount, untrack, type Snippet } from 'svelte';
   import { HOLD, type HoldPlace } from './holdPlace.svelte';
   import MarkLoader from './MarkLoader.svelte';
@@ -21,7 +20,9 @@
     children,
   }: { key: unknown; shown?: unknown; seeThrough?: boolean; children: Snippet } = $props();
 
-  const HOLD_SIGN_MS = 300;
+  /** The sign a moment after (a page there at once shows no flash of it). */
+  const HOLD_SIGN_MS = 100;
+  /** How long a see-through place opening stays away before its background and the sign show. */
   const HOLD_MAX_MS = 3000;
   const HOLD_GIVE_UP_MS = 10000;
   /** How long the new content's big pictures may take to be drawn, once it is ready; the small ones (a row's) may follow. */
@@ -29,7 +30,7 @@
   const BIG_PICTURE = 96 * 96;
 
   let box: HTMLElement;
-  /** What is not ready yet, this hold's (HOLD_MAX_MS lets them all go). */
+  /** What is not ready yet, this hold's (HOLD_GIVE_UP_MS lets them all go). */
   const claims = new Set<object>();
   let holding = $state(false);
   let picture: HTMLElement | null = null;
@@ -50,41 +51,16 @@
   };
   setContext(HOLD, place);
 
-  /** A still copy of what shows now, laid over the place (once per hold: a key changing again keeps the first);
-   *  `blank`, opening: the place's background only (what is there is the new content). */
-  function takePicture(blank = false) {
+  /** The place's own background laid over it (once per hold: a key changing again keeps the first): the frame's
+   *  element alone, without what is in it. */
+  function takePicture() {
     if (picture || !box) return;
     const frame = box.parentElement;
     if (!frame) return;
     const r = frame.getBoundingClientRect();
     if (!r.width || !r.height) return;
     const p = frame.cloneNode(false) as HTMLElement;
-    // Down to the foot of what can be seen only (a crate's hundreds of rows below it cost a still tap, a5's lab); read
-    // before anything is added, so nothing is laid out again meanwhile.
-    const foot = Math.min(r.bottom, innerHeight);
-    const scrolled: [HTMLElement, number, number][] = [];
-    const drawings: [HTMLCanvasElement, HTMLCanvasElement][] = [];
-    const copy = (from: Node, into: Node) => {
-      for (const n of from.childNodes) {
-        if (!(n instanceof Element)) {
-          into.appendChild(n.cloneNode(false));
-          continue;
-        }
-        if (n instanceof SVGElement || n.getBoundingClientRect().top >= foot) {
-          if (!(n instanceof SVGElement)) continue;
-          into.appendChild(n.cloneNode(true));
-          continue;
-        }
-        const c = n.cloneNode(false) as Element;
-        into.appendChild(c);
-        if (n.scrollTop || n.scrollLeft) scrolled.push([c as HTMLElement, n.scrollTop, n.scrollLeft]);
-        if (n instanceof HTMLCanvasElement) drawings.push([n, c as HTMLCanvasElement]);
-        copy(n, c);
-      }
-    };
-    if (!blank) copy(box, p);
     p.removeAttribute('id');
-    for (const e of p.querySelectorAll('[id]')) e.removeAttribute('id');
     p.setAttribute('aria-hidden', 'true');
     p.inert = true;
     Object.assign(p.style, {
@@ -102,18 +78,6 @@
     const z = getComputedStyle(frame).zIndex;
     if (z !== 'auto') p.style.zIndex = z;
     frame.after(p);
-    // Scrolled as it was, its drawings copied (a copy's canvas starts blank).
-    for (const [e, top, left] of scrolled) {
-      e.scrollTop = top;
-      e.scrollLeft = left;
-    }
-    for (const [from, to] of drawings) {
-      try {
-        to.getContext('2d')?.drawImage(from, 0, 0);
-      } catch {
-        /* a drawing that cannot be copied stays blank */
-      }
-    }
     picture = p;
     signTimer = setTimeout(() => {
       if (picture !== p) return;
@@ -165,27 +129,22 @@
     dropPicture();
   }
 
-  /** A hold begins: the picture of what shows (none yet: the place's background), until ready or HOLD_MAX_MS. */
+  /** A hold begins: the place's background over it, the sign on it, until ready. */
   function begin(opening = false) {
     const r = ++round;
     if (opening && seeThrough && box?.parentElement) {
       away = box.parentElement;
       away.style.visibility = 'hidden';
-    } else takePicture(opening);
+    } else takePicture();
     holding = true;
     clearTimeout(maxTimer);
     clearTimeout(giveUpTimer);
     maxTimer = setTimeout(() => {
       if (r !== round) return;
-      if (away) {
-        away.style.visibility = '';
-        away = null;
-        takePicture(true);
-        return;
-      }
-      if (!picture) return;
-      // The background and the sign, no longer what was there.
-      for (const c of [...picture.children]) if (!c.classList.contains('hold-sign')) c.remove();
+      if (!away) return;
+      away.style.visibility = '';
+      away = null;
+      takePicture();
     }, HOLD_MAX_MS);
     giveUpTimer = setTimeout(() => {
       if (r !== round) return;

@@ -14,7 +14,7 @@
   import CoverFlow from './CoverFlow.svelte';
   import Icon from './Icon.svelte';
   import CoverFacts, { type CoverFact } from './CoverFacts.svelte';
-  import { backdropUrl } from './backdrop.svelte';
+  import { backdropUrl, flowOpened } from './backdrop.svelte';
 
   let {
     covers,
@@ -28,8 +28,11 @@
     playing = false,
     canPlay = true,
     details = null,
+    seed,
   }: {
     covers: string[];
+    /** What names this flow, for Shuffle's photo of its own (lib/backdrop). */
+    seed: string;
     /** The ticked ones, by their place (Select). */
     marked?: boolean[];
     /** The front one's name and who or what under it. */
@@ -57,6 +60,11 @@
    *  them, no scroll left under them), so they sit together in the middle of the room. */
   let spare = $state(last.spare);
   const wall = $derived(!!backdropUrl());
+  // Shuffle's next on opening (Settings › Appearance).
+  $effect(() => {
+    const s = seed;
+    untrack(() => flowOpened(s));
+  });
   /** Details on: the front one's facts over its cover, until another comes to the front. */
   let showing = $state(false);
   function toFront(i: number) {
@@ -137,11 +145,16 @@
     top: calc(var(--top-h, 0px) + env(safe-area-inset-top));
     bottom: 0;
     z-index: -1;
+    background: var(--bg);
+    pointer-events: none;
+  }
+
+  /* The photo under its veil once it is in (App); till then the page's own ground. */
+  :global(:root[data-flow-photo]) .wall {
     background:
       linear-gradient(to bottom, rgb(0 0 0 / 0.35), rgb(0 0 0 / 0.6)),
       var(--flow-photo) center 20% / cover no-repeat,
-      var(--surface);
-    pointer-events: none;
+      var(--bg);
   }
 
   /* The body's own background painted over it (behind the page, it is under the body): while it shows, the body lets
@@ -230,11 +243,11 @@
     font-size: 0.9rem;
   }
 
-  .flow.on-wall .named .title {
+  :global(:root[data-flow-photo]) .flow.on-wall .named .title {
     color: #fff;
   }
 
-  .flow.on-wall .named .by {
+  :global(:root[data-flow-photo]) .flow.on-wall .named .by {
     color: rgb(255 255 255 / 0.75);
   }
 </style>

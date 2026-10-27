@@ -161,6 +161,12 @@ export const SWITCHES: Record<string, ListSwitch[]> = {
   ],
   // In the panel a playlist's only (the owner, 2026-10-24): not an album's, a crate's or an artist's.
   playlist: TRACK_SWITCHES,
+  // The Library's Spotify lists (decision 0073; the owner, 2026-10-27): everything shows, marked; what to leave out.
+  spotify: [
+    { key: 'no-in', label: 'In the library', section: 'Leave out' },
+    { key: 'no-partly', label: 'Partly here', section: 'Leave out' },
+    { key: 'no-requested', label: 'Requested', section: 'Leave out' },
+  ],
   // The built-in crates (Home's and Unlisted, 0.9.3) hidden on asking (the owner, 2026-10-25).
   crates: [{ key: 'no-built-in', label: 'Hide built-in crates' }],
   // Discover (the owner, 2026-10-24): its sources, each on unless left out; and the artists to leave out.

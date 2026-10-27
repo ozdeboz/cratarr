@@ -230,7 +230,7 @@
         <h2 id="settings-g{g}">{group.title}</h2>
         <div class="list">
           {#each group.parts as c (c.id)}
-            {@const open = panelBeside() && settingsOf(panel.shown) === c.id}
+            {@const open = panelBeside() && settingsOf(panel.viewed) === c.id}
             {@const f = found(c.id, c.title)}
             {@const l = f?.rows.length ? f.rows.slice(0, 4).join(' · ') : line(c.id)}
             <button class="row" class:open aria-pressed={open} onclick={() => viewPlaylist(SETTINGS + c.id)}>

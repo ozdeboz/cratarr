@@ -446,6 +446,7 @@
              beside it comes to the front. -->
         {@const front = albums[flowAt[s.id] ?? 0]}
         <FlowStage
+          seed="albums:{s.id}"
           covers={albums.map((a) => albumCoverUrl(s.id, a.id))}
           marked={selecting ? albums.map((a) => selecting!.has(keyOf(s, a))) : undefined}
           front={front ? { title: front.title, by: [front.artist ?? 'Unknown artist', front.year].filter(Boolean).join(' · ') } : null}
@@ -467,7 +468,7 @@
       <ul class={layout} style:--min="{minPx}px">
         {#each block as a (a.id)}
           {@const here = playing?.album_id === a.id}
-          {@const viewed = panelBeside() && panel.shown === albumSubject(s.id, a.id)}
+          {@const viewed = panelBeside() && panel.viewed === albumSubject(s.id, a.id)}
           {@const on = !!selecting && selecting.has(keyOf(s, a))}
           <li class:playing={here} class:ticked={on}>
             {#if layout === 'grid'}
