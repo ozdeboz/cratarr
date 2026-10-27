@@ -27,6 +27,7 @@
     now = null,
     loading = null,
     heard = 1,
+    heardKnown = true,
     output = false,
     onflat,
   }: {
@@ -41,6 +42,9 @@
     heard?: number;
     /** As the output (Level the volume › Waveform): the whole lowered to what is heard, not only the playing colour. */
     output?: boolean;
+    /** Whether `heard` is the track's own level, not a guess while its gain comes: a goal waits for it (up to
+     *  LEVEL_WAIT_MS), so the waveform never shows the guess and then the level (the owner, 2026-10-28). */
+    heardKnown?: boolean;
     onflat?: () => void;
   } = $props();
 
@@ -81,6 +85,7 @@
   type Goal = { at: number; w: typeof want; heights: number[] | null; heard: number };
   let goals: Goal[] = [];
   const GOAL_DELAY_MS = 100;
+  const LEVEL_WAIT_MS = 3000;
   let pending = 0;
   function goalOf(i: number, t: number): Goal {
     const lag = (i / n) * SPREAD_MS;
@@ -165,6 +170,7 @@
     void want;
     void heights;
     void heard;
+    const known = heardKnown;
     untrack(() => {
       clearTimeout(pending);
       if (reducedMotion()) {
@@ -184,7 +190,7 @@
         if (g && g.w === want && g.heights === heights && Math.abs(g.heard - heard) < 0.01) return;
         goals = [...goals, { at: performance.now(), w: want, heights, heard }];
         run();
-      }, GOAL_DELAY_MS);
+      }, known ? GOAL_DELAY_MS : LEVEL_WAIT_MS);
     });
   });
   // More of it loaded: the gaps run on with it (no waiting for their turn).

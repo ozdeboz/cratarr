@@ -60,6 +60,8 @@
   /** As heard: this device's player's level (0..1), the waveform's bars scaled by it (lib/Waveform `heard`), where Level
    *  the volume says to show it. */
   const heard = $derived(isLocal() && prefs.waveLevel !== 'file' ? 10 ** (local.levelDb / 20) : 1);
+  /** The level shown is the track's own (not a guess while its gain comes). */
+  const heardKnown = $derived(!isLocal() || prefs.waveLevel === 'file' || local.levelKnown);
   /** Shown as paused: from the moment a stop ramp begins, playing from the moment a start ramp begins (the owner,
    *  2026-10-26: the colour goes with the ramp, whenever the player says it paused). */
   // After a ramp, its way holds until the player says the same (an app reporting the pause a moment late: no flash).
@@ -173,7 +175,7 @@
   onkeydown={key}
 >
   {#if waveShown}
-    <Waveform bins={shaped ? (bins ?? null) : null} {want} {loading} progress={dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
+    <Waveform bins={shaped ? (bins ?? null) : null} {want} {loading} progress={dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
   {:else}
     <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
   {/if}

@@ -88,6 +88,9 @@ export const local = $state({
   /** How far the playing track is turned down (dB, 0 or less): the level the player applies (this page's, or the app's
    *  `levelDb`); 0 with levelling off. The player's Level button and waveform show it (the owner, 2026-10-26). */
   levelDb: 0,
+  /** Whether `levelDb` is the playing track's own level, not the guess for one not known yet (its gain still coming):
+   *  the waveform waits for it before it shows the level (the owner, 2026-10-28: Output undone at Next). */
+  levelKnown: true,
   /** What comes of the album or playlist plays shuffled (the player's shuffle switch). */
   shuffled: false,
   /** Repeat (decision 0033, amended): off, one (the playing track), all (the album or playlist). */
@@ -868,6 +871,7 @@ function levelSchedule() {
   const next = segments.find((s) => s.start > now);
   const f = cur ? segmentLevel(cur) : prefs.levelling ? unknownLevel() : 1;
   local.levelDb = f > 0 && f < 1 ? Math.round(20 * Math.log10(f) * 10) / 10 : 0;
+  local.levelKnown = !prefs.levelling || (!!cur && cur.level !== undefined);
   // Paused: the stream's clock stands still while the context's runs on, so no next step is set.
   const nf = next && !audio.paused ? segmentLevel(next) : null;
   const at = next ? t + (next.start - now) : 0;
