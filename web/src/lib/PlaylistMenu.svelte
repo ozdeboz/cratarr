@@ -155,9 +155,12 @@
   // Another user's among them: only its owner changes it.
   const others = $derived(playlists.some((x) => x.mine === false));
 
-  async function setShared(id: string, on: boolean) {
+  // Shared with the other users: every one of them, ticked several too (the owner, 2026-10-27: it was one's alone).
+  const shareable = $derived(!others && playlists.every((x) => x.shared !== undefined));
+  const allShared = $derived(playlists.every((x) => x.shared));
+  async function setShared(ids: string[], on: boolean) {
     try {
-      await setPlaylistShared(id, on);
+      for (const id of ids) await setPlaylistShared(id, on);
       onclose();
     } catch (e) {
       fail(e, 'Something went wrong');
@@ -319,9 +322,8 @@
           />
         {/if}
         <!-- Sharing needs the permission to share; one shared before can always be unshared. -->
-        {#if one && one.mine !== false && one.shared !== undefined && (me.permissions.share || one.shared)}
-          {@const p = one}
-          <MenuEntry icon="users" label="Shared with other users" switched={!!p.shared} onclick={() => setShared(p.id, !p.shared)} />
+        {#if shareable && (me.permissions.share || allShared)}
+          <MenuEntry icon="users" label="Shared with other users" switched={allShared} onclick={() => setShared(ids, !allShared)} />
         {/if}
       </MenuGroup>
       <MenuGroup>
