@@ -1976,8 +1976,10 @@ function paceOf(mode: 'off' | 'vinyl' | 'fade', low = RAMP_LOW): number {
 }
 // --- Tape rewind (Settings › This device; the owner, 2026-10-26: the track played backwards, as a tape) ---
 // Previous restarting a track: the server's clip of it played backwards from here to its start (a5's
-// /api/stream/…/rewind: on a tape's curve, spinning up and braking, four times the ramp, at most 12 s), on a second
-// player; once that sounds, the track waits paused at its start, and at the clip's end it plays from there, at once.
+// /api/stream/…/rewind, as its tunings say: spinning up, cruising at its speed, its middle cut into heard pieces where
+// the way is long, braking; the owner 2026-10-27), on a second player; once that sounds, the track waits paused at its
+// start, and at the clip's end it plays from there, at once. The counter and the waveform go back with it smoothly,
+// across the cuts (the owner: interpolated between the positions).
 // Not sounding in REWIND_WAIT_MS, or failing first: the track's start plainly. While it sounds, play, pause, next and
 // previous wait (as during a ramp); a seek ends it and goes there; another queue or track ends it.
 const REWIND_WAIT_MS = 1500;
@@ -1985,13 +1987,18 @@ const REWIND_WAIT_MS = 1500;
 let rewinding: HTMLAudioElement | null = null;
 /** Where the counter stands while it sounds (s into the track). */
 let rewindPos: number | null = null;
+/** A rewind sounds on this device: the shown position goes back with it (lib/remote). */
+export const rewindNow = $state({ on: false });
+/** How often the counter follows it (the tick's four times a second is too coarse to see it go back). */
+const REWIND_STEP_MS = 50;
 /** The rewind's own fetch of the track's start: it does not end the rewind. */
 let rewindFetch = false;
-/** The share of the way back the clip has come at `t` (0 to 1) as the counter shows it: its speed rising over the first
- *  quarter, flat, falling over the last, taken as straight (a5's curve is eased; near enough for a counter). */
-function rewound(t: number) {
-  const a = t < 0.25 ? 2 * t * t : t < 0.75 ? 0.125 + (t - 0.25) : 0.75 - 2 * (1 - t) ** 2;
-  return Math.min(1, Math.max(0, a / 0.75));
+/** The share of the way back the clip has come at `t` (0 to 1) as the counter shows it: its speed rising over the
+ *  spin-up's share `f`, flat, falling over the brake's, taken as straight (a5's curve is eased; near enough for a
+ *  counter). The cuts are glided over: the counter keeps the overall pace. */
+function rewound(t: number, f: number) {
+  const a = t < f ? (t * t) / (2 * f) : t < 1 - f ? f / 2 + (t - f) : 1 - f - (1 - t) ** 2 / (2 * f);
+  return Math.min(1, Math.max(0, a / (1 - f)));
 }
 /** The clip as loud as the track: the page's volume and the track's level. */
 function clipVolume() {
@@ -2004,14 +2011,16 @@ function rewindTape(): boolean {
   const t = w && local.queue[w.seg.index];
   if (!w || !t || w.offset <= 0) return false;
   const { seg, offset: from } = w;
-  const ms = Math.min(12_000, 4 * prefs.startStop.ms);
-  const clip = (rewinding = new Audio(
-    `/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}/rewind?from_ms=${Math.floor(from * 1000)}&ms=${ms}`,
-  ));
+  const ss = prefs.startStop;
+  const ms = ss.rewindMs;
+  const ramp = ss.rewindRamp;
+  const ask = new URLSearchParams({ from_ms: String(Math.floor(from * 1000)), ms: String(ms), speed: String(ss.rewindSpeed), piece_ms: String(ss.rewindPiece), ramp: String(ramp) });
+  const clip = (rewinding = new Audio(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}/rewind?${ask}`));
   clipVolume();
   committed = false;
   local.paused = false;
   let sounding = false;
+  let follow: ReturnType<typeof setInterval> | undefined;
   const mine = () => rewinding === clip;
   // Not sounding yet: its start plainly (the track still plays where it was).
   const plain = () => {
@@ -2036,6 +2045,12 @@ function rewindTape(): boolean {
       sounding = true;
       clearTimeout(late);
       rewindPos = from;
+      rewindNow.on = true;
+      follow = setInterval(() => {
+        if (!mine()) return clearInterval(follow);
+        rewindPos = from * (1 - rewound((clip.currentTime * 1000) / ms, ramp));
+        local.position = rewindPos;
+      }, REWIND_STEP_MS);
       audio.pause();
       if (inBuffer(seg.start)) audio.currentTime = seg.start;
       else {
@@ -2046,9 +2061,6 @@ function rewindTape(): boolean {
     },
     { once: true },
   );
-  clip.addEventListener('timeupdate', () => {
-    if (mine() && sounding) rewindPos = from * (1 - rewound((clip.currentTime * 1000) / ms));
-  });
   clip.addEventListener('ended', () => mine() && fromStart(), { once: true });
   clip.addEventListener('error', () => mine() && (sounding ? fromStart() : plain()), { once: true });
   clip.play().catch(() => mine() && !sounding && plain());
@@ -2060,6 +2072,7 @@ function endRewind() {
   if (!clip) return;
   rewinding = null;
   rewindPos = null;
+  rewindNow.on = false;
   committed = null;
   clip.pause();
   clip.removeAttribute('src');

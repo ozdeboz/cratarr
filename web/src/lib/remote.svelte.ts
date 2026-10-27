@@ -3,7 +3,7 @@
 import { untrack } from 'svelte';
 import { ApiError, coverUrl, albumCoverUrl, playerCommand, setFavorite, setTrackFavorite, transport, type NowPlaying, type Transport, type Upcoming } from './api';
 import { expect, expectFailed, live, refresh } from './live.svelte';
-import { local, jump as localJump, next as localNext, previous as localPrevious, togglePlay as localToggle, seek as localSeek, sought } from './localPlayer.svelte';
+import { local, jump as localJump, next as localNext, previous as localPrevious, rewindNow, togglePlay as localToggle, seek as localSeek, sought } from './localPlayer.svelte';
 import { isLocal, localNowPlaying, localState, tookLocal } from './output.svelte';
 import { setFavorite as setRowFavorite } from './favourites.svelte';
 import { on } from './events.svelte';
@@ -193,7 +193,9 @@ export function position(): number {
   const p = frozen.on ? frozen.pos : running();
   const id = playing()?.id ?? null;
   const seeks = sought.n;
-  if (id === lastShown.id && seeks === lastShown.seeks && p < lastShown.pos && lastShown.pos - p < STEP_BACK) return lastShown.pos;
+  // A tape's rewind on this device goes back on purpose: shown as it goes.
+  const back = isLocal() && rewindNow.on;
+  if (!back && id === lastShown.id && seeks === lastShown.seeks && p < lastShown.pos && lastShown.pos - p < STEP_BACK) return lastShown.pos;
   lastShown = { id, pos: p, seeks };
   return p;
 }

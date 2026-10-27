@@ -1,4 +1,4 @@
-import type { StartStop } from './prefs.svelte';
+import { startStopOf, type StartStop } from './startStop';
 import type { AudioOutput } from './api';
 import { rampBegins, rampEnds } from './ramping.svelte';
 
@@ -47,7 +47,7 @@ export const appInfo = $state({
   /** Levelling (decision 0035): the app's player plays every track about as loud as the next. */
   levelling: true,
   levelUnknown: 'typical' as 'typical' | 'untouched',
-  startStop: { mode: 'off', ms: 800, skips: false, rewind: false } as StartStop,
+  startStop: startStopOf({}),
   /** Where this device can sound now (decision 0033, amended 2026-10-19: the Play On sheet chooses), and the one
    *  chosen; null: Android's own choice (Automatic), as again whenever an output comes or goes. */
   outputs: [] as AppOutput[],
@@ -175,8 +175,7 @@ if (port) {
       appInfo.levelling = m.levelling !== false;
       appInfo.levelUnknown = m.levelUnknown === 'untouched' ? 'untouched' : 'typical';
       {
-        const x = (m.startStop ?? {}) as Partial<StartStop>;
-        appInfo.startStop = { mode: x.mode === 'vinyl' || x.mode === 'fade' ? x.mode : 'off', ms: typeof x.ms === 'number' ? x.ms : 800, skips: x.skips === true, rewind: x.rewind === true };
+        appInfo.startStop = startStopOf((m.startStop ?? {}) as Partial<StartStop>);
       }
       appInfo.outputs = Array.isArray(m.outputs) ? (m.outputs as AppOutput[]).filter((o) => typeof o?.id === 'string') : [];
       appInfo.output = typeof m.output === 'string' && appInfo.outputs.some((o) => o.id === m.output) ? m.output : null;

@@ -198,8 +198,8 @@ export type Prefs = {
   offlineQuality: 'smaller' | 'original';
   /** How play and pause start and stop (Settings › This device; the owner, 2026-10-25): at once, as a turntable (the
    *  speed, and the pitch with it) or fading; over `startStopMs`; for next and previous too (`startStopSkips`). `rewind`:
-   *  Tape rewind: Previous restarting a track plays it backwards to its start, as a tape (the server's clip, four times
-   *  the ramp). The app keeps its own. */
+   *  Tape rewind: Previous restarting a track plays it backwards to its start, as a tape (the server's clip, as long and
+   *  as fast as its tunings say). The app keeps its own. */
   startStop: StartStop;
   /** What the player's four swipes do (Settings › Player; the owner, 2026-10-26): up and down, on its left half and on
    *  its right. */
@@ -346,9 +346,10 @@ export const SWIPES_DOWN: { value: SwipeDown; label: string }[] = [
   { value: 'close', label: 'Close the player' },
   { value: 'visuals', label: 'Visuals' },
 ];
-export type StartStop = { mode: 'off' | 'vinyl' | 'fade'; ms: number; skips: boolean; rewind: boolean };
+
 /** The ramp's bounds (ms): a fifth of a second to three. */
-export const RAMP_MS = { min: 200, max: 3000 };
+export { RAMP_MS, REWIND, startStopOf, type StartStop } from './startStop';
+import { startStopOf, type StartStop } from './startStop';
 export type FilterCondition = Condition & { enabled?: boolean; quantifier?: 'any' | 'all' };
 
 /** A list profile's rows (lib/ListProfile), in its order: the server's number keys and the word rows. */
@@ -437,7 +438,7 @@ export const DEFAULTS: Prefs = {
   levelling: true,
   levelUnknown: 'typical',
   offlineQuality: 'smaller',
-  startStop: { mode: 'off', ms: 800, skips: false, rewind: false },
+  startStop: startStopOf({}),
   playerSwipes: { ...SWIPES_DEFAULT },
   phoneLossless: false,
   browserName: '',
@@ -573,13 +574,7 @@ function read(): Prefs {
   };
       }
       if (saved.startStop && typeof saved.startStop === 'object') {
-        const x = saved.startStop;
-        p.startStop = {
-          mode: ['off', 'vinyl', 'fade'].includes(x.mode) ? x.mode : 'off',
-          ms: typeof x.ms === 'number' ? Math.min(RAMP_MS.max, Math.max(RAMP_MS.min, x.ms)) : 800,
-          skips: x.skips === true,
-          rewind: x.rewind === true,
-        };
+        p.startStop = startStopOf(saved.startStop);
       }
       if (typeof saved.phoneLossless === 'boolean') p.phoneLossless = saved.phoneLossless;
       if (typeof saved.browserName === 'string') p.browserName = saved.browserName;
