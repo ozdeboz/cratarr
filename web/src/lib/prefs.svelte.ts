@@ -196,9 +196,9 @@ export type Prefs = {
   /** The player's waveform as heard, its bars lowered by the levelling (the owner, 2026-10-27: a switch under Level the
    *  volume); off, as the file is. This page's showing only. */
   levelInWave: boolean;
-  /** During an effect (a Start and stop ramp, a rewind) the full player's row under the title gives way to a tape deck
-   *  (lib/TapeDeck; the owner, 2026-10-27). This page's showing only. */
-  tapeDeck: boolean;
+  /** The full player's row under the title as a tape deck (lib/TapeDeck; the owner, 2026-10-27): never, during an
+   *  effect (a Start and stop ramp, a rewind), or always. This page's showing only. */
+  tapeDeck: 'off' | 'effects' | 'always';
   /** The installed page's downloads (0.9.8, lib/offline): smaller copies (Opus, or AAC where Opus is not played) or
    *  the originals (the owner, 2026-10-26: Opus in the options too). */
   offlineQuality: 'smaller' | 'original';
@@ -446,7 +446,7 @@ export const DEFAULTS: Prefs = {
   levelling: true,
   levelUnknown: 'typical',
   levelInWave: true,
-  tapeDeck: true,
+  tapeDeck: 'effects',
   offlineQuality: 'smaller',
   startStop: startStopOf({}),
   playerSwipes: { ...SWIPES_DEFAULT },
@@ -567,7 +567,9 @@ function read(): Prefs {
       if (typeof saved.levelling === 'boolean') p.levelling = saved.levelling;
       if (saved.levelUnknown === 'typical' || saved.levelUnknown === 'untouched') p.levelUnknown = saved.levelUnknown;
       if (typeof saved.levelInWave === 'boolean') p.levelInWave = saved.levelInWave;
-      if (typeof saved.tapeDeck === 'boolean') p.tapeDeck = saved.tapeDeck;
+      if (saved.tapeDeck === 'off' || saved.tapeDeck === 'effects' || saved.tapeDeck === 'always') p.tapeDeck = saved.tapeDeck;
+      // Its first form, a switch: on was during effects.
+      else if (typeof saved.tapeDeck === 'boolean') p.tapeDeck = saved.tapeDeck ? 'effects' : 'off';
       if (saved.offlineQuality === 'smaller' || saved.offlineQuality === 'original') p.offlineQuality = saved.offlineQuality;
       if (saved.playerSwipes && typeof saved.playerSwipes === 'object') {
         const w = saved.playerSwipes;

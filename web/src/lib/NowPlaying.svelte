@@ -55,13 +55,14 @@
   // As shown: the new track's words with its cover, one commit (lib/remote shownPlaying).
   const np = $derived(shownPlaying());
   // The tape deck in the row under the title while an effect runs (lib/TapeDeck; the owner, 2026-10-27): a Start and
-  // stop ramp or a rewind; shown at least DECK_MIN_MS, then the row back over a second's fade.
+  // stop ramp or a rewind; shown at least DECK_MIN_MS, then the row back over a second's fade. Or always, where asked.
   const DECK_MIN_MS = 5000;
   const effecting = $derived(ramping.dir !== null || (isLocal() ? rewindNow.on : !!np?.progress?.rewinding));
   let deckShown = $state(false);
   let deckSince = 0;
   $effect(() => {
-    if (!prefs.tapeDeck) return void (deckShown = false);
+    if (prefs.tapeDeck === 'off') return void (deckShown = false);
+    if (prefs.tapeDeck === 'always') return void (deckShown = true);
     if (effecting) {
       if (!untrack(() => deckShown)) {
         deckShown = true;
@@ -531,7 +532,7 @@
                Hidden in Settings; none for the device's own music (local mode: nothing known of it). -->
           <div class="under">
           {#if prefs.playerRow && np.source !== 'device'}
-            <div class="facts" class:away={deckShown}>
+            <div class="facts" class:decked={deckShown}>
               <button class="info" class:on={overview} aria-label="About this track" aria-pressed={overview} title="About this track" onclick={() => (overview = !overview)}
                 use:longpress={() => (detailsOpen = true)}><Icon name="info" size={18} /></button
               >
@@ -539,7 +540,7 @@
               {#if !prefs.playerFacts.length}<button class="fact add" onclick={toRowSettings}><Icon name="plus" size={14} /><span>Add</span></button>{/if}
             </div>
           {/if}
-          {#if deckShown}<div class="deck-row" in:fade={{ duration: 150 }} out:fade={{ duration: 1000 }}><TapeDeck /></div>{/if}
+          {#if deckShown}<div class="deck-row" class:over={prefs.playerRow && np.source !== 'device'} in:fade={{ duration: 150 }} out:fade={{ duration: 1000 }}><TapeDeck /></div>{/if}
           </div>
           {#if np.progress}
             <div
@@ -931,15 +932,27 @@
 
   /* The row and the tape deck in one place: the deck over the row while an effect runs, the row back as it fades. */
   .under {
+    position: relative;
     display: grid;
     align-items: center;
+  }
+
+  /* Over the row it takes the row's place without its height (the owner, 2026-10-27: no layout shift): centred on it,
+     reaching into the room above and below. */
+  .deck-row.over {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    left: 0;
+    transform: translateY(-50%);
   }
 
   .under > * {
     grid-area: 1 / 1;
   }
 
-  .facts.away {
+  /* Kept in its place, unseen (not `.away`: app.css hides the children of that, and the row would collapse). */
+  .facts.decked {
     opacity: 0;
     pointer-events: none;
   }

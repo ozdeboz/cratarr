@@ -84,7 +84,7 @@
   }
 </script>
 
-<svg class="deck" viewBox="0 -3 320 47" aria-hidden="true" {@attach run}>
+<svg class="deck" viewBox="0 0 320 43" aria-hidden="true" {@attach run}>
   <path class="tape" bind:this={tape} />
   {#each [REEL_L, REEL_R] as c, i (i)}
     <g transform="translate({c[0]} {c[1]})">
@@ -113,7 +113,7 @@
     display: block;
     width: 100%;
     max-width: 380px;
-    height: 47px;
+    height: 43px;
     margin: 0 auto;
   }
 
