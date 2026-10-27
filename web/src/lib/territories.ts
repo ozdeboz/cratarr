@@ -2,8 +2,9 @@
 // drawn around the playlists where it makes up much of the music, like a political map, so islands, holes and enclaves
 // come out by themselves. The geometry is the accepted mock-up's (territories/geo.py): every playlist with at least
 // SHARE of a genre adds a Gaussian bump (SIGMA wide) to that genre's field on a STEP grid, and the territory is the field's
-// LEVEL contour (marching squares), its loops smoothed (closed Catmull-Rom). Six genres at most: the ones with most share
-// among the playlists shown (the Map's filters, the owner).
+// LEVEL contour (marching squares), its loops smoothed (closed Catmull-Rom). Which genres: the ones ticked in the Map's
+// Genres sheet (the owner, 2026-10-27: up to MAX_GENRES), at first the TERRITORIES with most share among the playlists
+// shown (the Map's filters).
 
 const STEP = 4;
 const SIGMA = 30;
@@ -12,6 +13,10 @@ const SIGMA = 30;
 const SHARE = 0.1;
 const LEVEL = 0.5;
 export const TERRITORIES = 6;
+export const MAX_GENRES = 12;
+/** The territories' colours, by a genre's place among those ticked: the Map's groups' nine (Tableau 10 without its grey),
+ *  then three lighter ones. Twelve are not told apart by colour alone: each territory's name along its borders is. */
+export const GENRE_PALETTE = ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#a0cbe8', '#ffbe7d', '#8cd17d'];
 
 /** `edges`: its outer borders, its name written along each, inside (the owner, 2026-10-27: once more for each
  *  NAME_EVERY of border, so a large area carries it more often): the border going clockwise (`d`, the territory on its
@@ -40,15 +45,21 @@ export function sharesOf(p: { genres: string[]; shares?: Record<string, number> 
   return Object.fromEntries(p.genres.map((g) => [g, 1 / n]));
 }
 
-/** The genres drawn: most share among the playlists where it counts (SHARE or more), at most TERRITORIES. */
-export function topGenres(shares: Record<string, number>[]): string[] {
-  const sum = new Map<string, number>();
-  for (const s of shares) for (const [g, v] of Object.entries(s)) if (v >= SHARE) sum.set(g, (sum.get(g) ?? 0) + v);
-  return [...sum]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, TERRITORIES)
-    .map(([g]) => g);
+/** Every genre that has a territory to draw, most share first (among the playlists where it counts, SHARE or more),
+ *  and in how many playlists it counts. */
+export function genreRanking(shares: Record<string, number>[]): { genre: string; playlists: number }[] {
+  const sum = new Map<string, { share: number; playlists: number }>();
+  for (const s of shares)
+    for (const [g, v] of Object.entries(s))
+      if (v >= SHARE) {
+        const t = sum.get(g) ?? { share: 0, playlists: 0 };
+        sum.set(g, { share: t.share + v, playlists: t.playlists + 1 });
+      }
+  return [...sum].sort((a, b) => b[1].share - a[1].share || a[0].localeCompare(b[0])).map(([genre, t]) => ({ genre, playlists: t.playlists }));
 }
+
+/** The genres drawn until some are ticked: the TERRITORIES with most share. */
+export const topGenres = (shares: Record<string, number>[]): string[] => genreRanking(shares).slice(0, TERRITORIES).map((g) => g.genre);
 
 /** Each genre's territory around the points (the graph's own coordinates). */
 export function territories(points: Pt[], shares: Record<string, number>[], genres: string[], avoid: Box[] = []): Territory[] {

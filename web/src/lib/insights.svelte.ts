@@ -92,4 +92,8 @@ class InsightsStore {
 
 export const insights = new InsightsStore();
 
+/** The Map over everything (the owner, 2026-10-27: the one Insights panel with a full screen): its panel's bar turns it
+ *  on, the Map's own corner off. */
+export const mapFull = $state({ on: false });
+
 export const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString()} ${n === 1 ? one : many}`;

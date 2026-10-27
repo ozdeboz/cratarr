@@ -296,7 +296,8 @@
     {#if view && (page || order?.columns?.shown.length || onview) && !searching && !(showing && page && pageAction)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (onview ? onview() : (viewOpen = true))} transition:paced|global><Icon name="sliders" size={22} /></button>{/if}
     <!-- Where it plays gives way to the open field too, as the rest (the owner, 2026-10-26). -->
     {#if device && !searching}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)} transition:paced|global><Icon name="speaker" size={22} /></button>{/if}
-    {#if page && pageAction && !searching}
+    <!-- A page's own button; a panel's where it hands one (the Map's Full screen, lib/InsightsPanel). -->
+    {#if (page || action) && pageAction && !searching}
       {@const a = pageAction}
       <button class="action" aria-label={a.label} title={a.label} onclick={() => act(a)} use:longpress={() => hold(a)} transition:paced|global
         ><Icon name={a.icon} size={22} />{#if a.progress != null}<ProgressRing progress={a.progress} size={38} />{/if}</button

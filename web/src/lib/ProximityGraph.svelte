@@ -2,9 +2,9 @@
   // Playlists as points, drawn close when they are alike (Insights → Related). What is measured and which links are
   // drawn is in proximity.ts; d3-force only computes positions and Svelte draws the SVG. The points never move (the
   // owner, 2026-10-26: "just no node movement"): the layout is worked out to rest at once, and again when a signal
-  // changes, then fitted to the box; panning and pinch-zoom stay. With `showTerritories` (lib/territories) the six genres
-  // with most share among the playlists shown are drawn as areas under them, the points then neutral; `solo` shows one;
-  // a tap inside one highlights its playlists.
+  // changes, then fitted to the box; panning and pinch-zoom stay. `territories` (lib/territories): the genres drawn as
+  // areas under them, each in its colour (the Map's Genres sheet), the points then neutral; `solo` shows one; a tap
+  // inside one highlights its playlists.
   import { untrack } from 'svelte';
   import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY, type Simulation } from 'd3-force';
   import { select } from 'd3-selection';
@@ -12,7 +12,7 @@
   import type { Proximity, Signal } from './api';
   import { longpress } from './longpress';
   import { GROUP_NEIGHBOURS, GROUP_RESOLUTION, backbone, communities, nearest, rankers, spread, weigh } from './proximity';
-  import { NAME_SIZE, sharesOf, territories, topGenres, type Territory } from './territories';
+  import { NAME_SIZE, sharesOf, territories, type Territory } from './territories';
 
   let {
     data,
@@ -20,9 +20,9 @@
     selected = $bindable(null),
     groups = $bindable([]),
     onmenu,
-    showTerritories = false,
+    territories: drawnGenres = [],
     solo = null,
-    genres = $bindable([]),
+
   }: {
     data: Proximity;
     signals: Record<Signal, boolean>;
@@ -32,11 +32,12 @@
     /** Long-press or right-click on a point: open that playlist's menu. */
     onmenu?: (i: number, anchor: DOMRect) => void;
     /** Genre territories drawn (the Map's switch). */
-    showTerritories?: boolean;
+    /** The genres drawn as territories, and their colours. */
+    territories?: { genre: string; colour: string }[];
     /** The one territory shown (the legend's tap); null: all. */
     solo?: string | null;
     /** The territories' genres and colours as drawn, for the legend. */
-    genres?: { genre: string; colour: string }[];
+
   } = $props();
 
   type Node = { i: number; r: number; x?: number; y?: number; vx?: number; vy?: number };
@@ -192,10 +193,10 @@
     return nodes.map((p) => [p.x ?? 0, p.y ?? 0] as const);
   });
 
-  // The territories (lib/territories): the six genres with most share among the playlists shown, in the groups'
-  // palette's order, on the layout as drawn.
+  // The territories (lib/territories): the genres given, on the layout as drawn.
   const shares = $derived(data.playlists.map((p) => sharesOf(p)));
-  const top = $derived(showTerritories ? topGenres(shares) : []);
+  const showTerritories = $derived(drawnGenres.length > 0);
+  const top = $derived(drawnGenres.map((g) => g.genre));
   // The names along the borders keep clear of the points and of the playlists' names shown at rest (the owner,
   // 2026-10-27), as drawn below: a name centred over its point, 11 high.
   const nameBoxes = $derived([
@@ -208,10 +209,7 @@
     }),
   ]);
   const lands = $derived<Territory[]>(showTerritories ? territories(pos, shares, top, nameBoxes) : []);
-  const tint = (k: number) => PALETTE[k % PALETTE.length];
-  $effect(() => {
-    genres = top.map((genre, k) => ({ genre, colour: tint(k) }));
-  });
+  const tint = (k: number) => drawnGenres[k]?.colour ?? 'var(--muted)';
   /** A territory tapped: its playlists highlighted (the rest dim); again, or the background, none. */
   let land = $state<string | null>(null);
   // A territory tapped, else the genre shown alone (the legend's tap; the owner, 2026-10-27: the others dimmed).

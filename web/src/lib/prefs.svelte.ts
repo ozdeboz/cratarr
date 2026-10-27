@@ -236,6 +236,8 @@ export type Prefs = {
   signals: { tracks: boolean; genre: boolean; artists: boolean };
   /** Genre territories on Insights' Map (the owner, 2026-10-24: a switch, off until turned on). */
   mapTerritories: boolean;
+  /** The genres the Map's territories show, in the order ticked (their colours follow it); null: the most shared six. */
+  mapGenres: string[] | null;
   /** The player's width when it shows beside the page (decision 0018). */
   playerWidth: number;
   /** Wide windows show the player beside the page (true) or the mini-player with the player over the page (false,
@@ -459,6 +461,7 @@ export const DEFAULTS: Prefs = {
   profileSources: { favourites: true, playlists: true, plays: true, skipped: true, excluded: true },
   signals: { tracks: true, genre: true, artists: true },
   mapTerritories: false,
+  mapGenres: null,
   playerWidth: 400,
   sidebar: true,
   navFolded: false,
@@ -618,6 +621,7 @@ function read(): Prefs {
       if (saved.profileSources && typeof saved.profileSources === 'object')
         for (const k of Object.keys(p.profileSources) as (keyof typeof p.profileSources)[]) if (typeof saved.profileSources[k] === 'boolean') p.profileSources[k] = saved.profileSources[k];
       if (typeof saved.mapTerritories === 'boolean') p.mapTerritories = saved.mapTerritories;
+      if (Array.isArray(saved.mapGenres) && saved.mapGenres.every((g: unknown) => typeof g === 'string')) p.mapGenres = saved.mapGenres;
       if (saved.signals && typeof saved.signals === 'object') {
         for (const k of ['tracks', 'genre', 'artists'] as const) {
           if (typeof saved.signals[k] === 'boolean') p.signals[k] = saved.signals[k];
