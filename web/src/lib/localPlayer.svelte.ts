@@ -2017,6 +2017,10 @@ function rampIn(early?: { ms: number; lead: number }) {
   if (early) {
     ms = early.ms;
     heldAt = saved + early.lead;
+  } else if (quiet) {
+    // The tape's own (after a turn, a wind): it spins up from where it stands, as a tape does, nothing heard twice (the
+    // owner, 2026-10-27: a direction change sounded wrong; the effect's way starts early to be at full speed there).
+    ms = windUpMs(ms, mode, w ? w.offset : 0);
   } else {
     ms = windUpMs(ms, mode, w ? w.offset : 0);
     const start = Math.max(w ? w.seg.start : 0, saved - (ms / 1000) * pace);
@@ -2084,12 +2088,16 @@ async function pauseRamped() {
   local.paused = !quiet;
   // The moment it was pressed: the counter stays there while the end sounds, and it rests there after.
   if (!turning || heldAt === null) heldAt = audio.currentTime;
+  // The tape's own stop: its counter goes with the tape to where it stands (only an effect's pause holds the press's).
+  if (quietPause) heldAt = null;
   const mine = ++run;
   try {
     await rampOut(share);
     if (mine !== run) return;
     audio?.pause();
-    if (audio && inBuffer(heldAt)) audio.currentTime = heldAt;
+    // A pause rests where it was pressed (the effect's way); the tape's own stop (a turn, a hold's) where the tape came
+    // to stand, so what follows goes on from the very place the sound ended.
+    if (audio && !quietPause && inBuffer(heldAt)) audio.currentTime = heldAt;
     // Next kept from the brake: from the standstill, the next track starts up.
     if (nextAfterPause && local.index + 1 < local.queue.length) jump(local.index + 1);
   } finally {
