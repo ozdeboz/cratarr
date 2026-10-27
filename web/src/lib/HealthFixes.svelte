@@ -1,9 +1,11 @@
 <script lang="ts">
   // An album's fixes on Health's third level (0.9.7; the owner, 2026-10-26: Cratarr proposes, an administrator
   // approves): each field as it is and as it would be, where that comes from and why, a likely one said so; then Apply
-  // writes them into the files (Undo puts the old values back), as Renumber's Fix does (lib/HealthRenumber).
+  // writes them into the files (Undo puts the old values back), as Renumber's Fix does (lib/HealthRenumber). A genre's
+  // genres are picked (lib/GenrePick); those picked are written as its genres.
   import type { Fix } from './api';
   import { apply, FIELD_LABEL, fixesOf, healthFixes, readFixes } from './fixes.svelte';
+  import GenrePick from './GenrePick.svelte';
   import Icon from './Icon.svelte';
   import { me } from './me.svelte';
   import PageLoading from './PageLoading.svelte';
@@ -16,13 +18,19 @@
   const matching = $derived(!!healthFixes[finding]?.matching);
   let working = $state(false);
 
+  // The genres picked, per fix (none touched: its strongest).
+  let picked = $state<Record<string, string[]>>({});
+  const pickedOf = (f: Fix) => picked[f.id] ?? [f.to];
+  const nonePicked = $derived(mine.some((f) => f.candidates?.length && !pickedOf(f).length));
+
   /** A value as it reads: a cover's address is its picture, an empty one a dash. */
   const shown = (f: Fix, v: string | null) => (v === null || v === '' ? '–' : v);
 
   async function fix() {
     if (working || !mine.length) return;
     working = true;
-    if (await apply({ ids: mine.map((f) => f.id) }, finding, `Fixed ${title}`)) ongone();
+    const chosen = Object.fromEntries(mine.filter((f) => f.candidates?.length).map((f) => [f.id, pickedOf(f)]));
+    if (await apply({ ids: mine.map((f) => f.id), chosen }, finding, `Fixed ${title}`)) ongone();
     working = false;
   }
 </script>
@@ -38,6 +46,8 @@
         <span class="field">{FIELD_LABEL[f.field]}{#if f.certainty === 'likely'}<span class="likely"> · likely</span>{/if}</span>
         {#if f.field === 'cover'}
           <img class="pic" src={f.to} alt="" />
+        {:else if f.candidates?.length}
+          <GenrePick fix={f} bind:picked={() => pickedOf(f), (v) => (picked[f.id] = v)} />
         {:else}
           <span class="change"><span class="now">{shown(f, f.from)}</span><Icon name="arrowRight" size={14} /><b>{shown(f, f.to)}</b></span>
         {/if}
@@ -46,7 +56,7 @@
     {/each}
   </ul>
   {#if me.admin}
-    <button class="act" disabled={working} aria-busy={working} onclick={fix}>{mine.length === 1 ? 'Apply' : `Apply ${mine.length}`}</button>
+    <button class="act" disabled={working || nonePicked} aria-busy={working} onclick={fix}>{mine.length === 1 ? 'Apply' : `Apply ${mine.length}`}</button>
   {/if}
 {/if}
 

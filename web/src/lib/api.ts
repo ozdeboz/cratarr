@@ -1644,6 +1644,9 @@ export type Fix = {
   source: string;
   certainty: 'certain' | 'likely';
   why: string;
+  /** A genre fix's every genre and style found, strongest first (0.9.8, Discogs with the rest): several may be
+   *  chosen; `to` is the strongest. */
+  candidates?: { word: string; kind: 'genre' | 'style'; source: string; certainty: 'certain' | 'likely' }[];
 };
 export type Fixes = { fixes: Fix[]; certain: number; matching?: boolean };
 /** A Health finding's fixes, for every album of it (certain ones first); `matching`: MusicBrainz is still being asked
@@ -1652,8 +1655,38 @@ export const getFixes = (finding: string) => request<Fixes>(`/api/health/fixes?f
 /** An album's fixes wherever it is (Incoming's intake check, or Music). */
 export const getIntake = (source: string, album: string) => request<Fixes>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/intake`);
 /** Applies fixes (by id, or every certain one of a finding): what was applied, what failed and why, and Undo. */
-export const applyFixes = (which: { ids: string[] } | { certain: string }) =>
+export const applyFixes = (which: ({ ids: string[] } | { certain: string }) & { chosen?: Record<string, string[]> }) =>
   post<{ undo: string[]; applied: number; failed: { id: string; why: string }[] }>('/api/health/fixes/apply', which);
+/** What Discogs says of an album (0.9.8): its labels and catalogue numbers, credits (`tracks`: the positions as Discogs
+ *  writes them; none for the whole release), genres and styles, and its page; `{}` where Discogs has none. */
+export type AlbumDiscogs = {
+  master?: number;
+  release?: number;
+  year?: number;
+  genres?: string[];
+  styles?: string[];
+  labels?: { name: string; catno?: string }[];
+  credits?: { name: string; role: string; tracks?: string }[];
+  url?: string;
+};
+export const getAlbumDiscogs = (source: string, album: string) =>
+  quietly<AlbumDiscogs>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/discogs`);
+/** What Discogs says of an artist (0.9.8): their profile (plain text), real name, aliases and spellings, members and
+ *  the groups they are in, and their page; `{}` where it has none (by the MusicBrainz id when given, else an exact name). */
+export type ArtistDiscogs = {
+  id?: number;
+  name?: string;
+  real_name?: string;
+  profile?: string;
+  aliases?: string[];
+  variations?: string[];
+  members?: { name: string; active: boolean }[];
+  groups?: { name: string; active: boolean }[];
+  urls?: string[];
+  url?: string;
+};
+export const getArtistDiscogs = (name: string, mbid?: string | null) =>
+  quietly<ArtistDiscogs>(`/api/artists/discogs?name=${encodeURIComponent(name)}${mbid ? `&mbid=${encodeURIComponent(mbid)}` : ''}`);
 /** A track as the server describes it (decision 0033, amended: the queue holds identities, Cratarr describes them; a5,
  *  0.9.6): `found` false for one it does not know (its name empty); `favorite` the signed-in account's, null for none. */
 export type DescribedTrack = {

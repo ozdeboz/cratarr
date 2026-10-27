@@ -7,7 +7,7 @@
   import ProblemSheet from './ProblemSheet.svelte';
   import type { Snippet } from 'svelte';
   import { tick } from 'svelte';
-  import { getArtistAbout, getArtistMissing, getDiscoverArtist, type ListedAlbum, type MissingAlbum, type PhotoCredit } from './api';
+  import { getArtistAbout, getArtistDiscogs, getArtistMissing, getDiscoverArtist, type ArtistDiscogs, type ListedAlbum, type MissingAlbum, type PhotoCredit } from './api';
   import { cameFrom, DISCOVER } from './discoverArtist';
   import { pageAsked } from './artistAbout.svelte';
   import AlbumCard from './AlbumCard.svelte';
@@ -113,6 +113,34 @@
   let finding = $state<string | null>(null);
   let asked = $state<string[]>([]);
   let aboutEl = $state<HTMLElement>();
+
+  // Discogs (0.9.8, the owner: "Yes to all"): their profile where TheAudioDB has none, and who they are there: their
+  // real name, members, the groups they are in, the names they also go by, and their page. Cratarr's own library only.
+  let discogs = $state<ArtistDiscogs | null>(null);
+  $effect(() => {
+    const [s, n] = [source, name];
+    discogs = null;
+    if (s !== 'cratarr') return;
+    let gone = false;
+    getArtistDiscogs(n).then(
+      (d) => !gone && (discogs = d),
+      () => {},
+    );
+    return () => (gone = true);
+  });
+  const bio = $derived(about?.bio || discogs?.profile || null);
+  const bioFrom = $derived(about?.bio ? 'TheAudioDB' : discogs?.profile ? 'Discogs' : null);
+  /** Who they are on Discogs, each a line of names (a former member or group muted). */
+  const facts = $derived.by(() => {
+    const d = discogs;
+    if (!d) return [];
+    const out: { label: string; names: { name: string; past: boolean }[] }[] = [];
+    if (d.real_name && d.real_name !== name) out.push({ label: 'Real name', names: [{ name: d.real_name, past: false }] });
+    if (d.members?.length) out.push({ label: 'Members', names: d.members.map((m) => ({ name: m.name, past: !m.active })) });
+    if (d.groups?.length) out.push({ label: 'In', names: d.groups.map((m) => ({ name: m.name, past: !m.active })) });
+    if (d.aliases?.length) out.push({ label: 'Also as', names: d.aliases.map((a) => ({ name: a, past: false })) });
+    return out;
+  });
   // Asked for from Home's fanned albums: Albums in view (once the page above it has its height).
   let albumsEl = $state<HTMLElement>();
   $effect(() => {
@@ -131,17 +159,29 @@
   </ul>
 {/snippet}
 
-{#if about && (searching ? !!about.bio && hit(about.bio) : !!(about.bio || about.photo_credit))}
+{#if searching ? !!bio && hit(bio) : !!(bio || about?.photo_credit || facts.length || discogs?.url)}
   <section aria-label="About" bind:this={aboutEl}>
     <SectionHead title="About" />
     <div class="about">
-      {#if about.bio}
-        <button class="bio" class:whole={whole || searching} onclick={() => (whole = !whole)} aria-expanded={whole || searching}>{about.bio}</button>
+      {#if bio}
+        <button class="bio" class:whole={whole || searching} onclick={() => (whole = !whole)} aria-expanded={whole || searching}>{bio}</button>
       {/if}
     </div>
-    {#if about.bio}<small class="credit">TheAudioDB</small>{/if}
+    {#if bioFrom}<small class="credit">{bioFrom}</small>{/if}
     <!-- A free photo's credit, as its licence asks (Wikimedia Commons', 0.9.3). -->
-    {#if about.photo_credit}<small class="credit"><a href={about.photo_credit.url} target="_blank" rel="noopener noreferrer">Photo: {about.photo_credit.author} · {about.photo_credit.licence}</a></small>{/if}
+    {#if about?.photo_credit}<small class="credit"><a href={about.photo_credit.url} target="_blank" rel="noopener noreferrer">Photo: {about.photo_credit.author} · {about.photo_credit.licence}</a></small>{/if}
+    {#if !searching && (facts.length || discogs?.url)}
+      <div class="facts">
+        {#each facts as f (f.label)}
+          <h3>{f.label}</h3>
+          <p class="chips">{#each f.names as x (x.name)}<span class="chip" class:past={x.past}>{x.name}</span>{/each}</p>
+        {/each}
+        {#if discogs?.url}
+          <h3>Elsewhere</h3>
+          <p class="chips"><a class="chip" href={discogs.url} target="_blank" rel="noopener noreferrer">Discogs</a></p>
+        {/if}
+      </div>
+    {/if}
   </section>
 {/if}
 <!-- On a wide panel the albums and the artist's profile side by side, the profile all open (the owner, 2026-10-23); on
@@ -200,7 +240,7 @@
 {/if}
 <ElsewhereAlbum bind:this={elsewhere} bind:finding bind:asked />
 {#if playProblem}{@const x = playProblem}<ProblemSheet title={x.title} text={x.text} retry={x.retry} onclose={() => (playProblem = null)} />{/if}
-{#if searching && !albumsShown.length && !appearsShown.length && !top && !(about?.bio && hit(about.bio))}
+{#if searching && !albumsShown.length && !appearsShown.length && !top && !(bio && hit(bio))}
   <p class="empty">Nothing of {name}'s matches.</p>
 {:else if !albums.length && !appearsOn.length && !top}
   <p class="empty">Nothing by {name} on this server.</p>
@@ -268,6 +308,43 @@
 
   .bio.whole {
     display: block;
+  }
+
+  /* Who they are on Discogs: as an album's About writes its facts (lib/AlbumAbout). */
+  .facts {
+    padding: 0 16px;
+  }
+
+  .facts h3 {
+    margin: 14px 0 8px;
+    color: var(--muted);
+    font-size: 17px;
+    font-weight: 400;
+  }
+
+  .facts .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 0;
+    padding-left: 8px;
+  }
+
+  .facts .chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 32px;
+    padding: 0 12px;
+    box-sizing: border-box;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: inherit;
+    font-size: 14px;
+    text-decoration: none;
+  }
+
+  .facts .chip.past {
+    color: var(--muted);
   }
 
   .credit {

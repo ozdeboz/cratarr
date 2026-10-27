@@ -37,7 +37,7 @@ export function readFixes(finding: string) {
 export const fixesOf = (finding: string, album: string) => healthFixes[finding]?.fixes.filter((f) => f.album === album) ?? [];
 
 /** Applies fixes, says what came of it (with Undo), and reads Health and the finding's fixes again. */
-export async function apply(which: { ids: string[] } | { certain: string }, finding: string, what: string): Promise<boolean> {
+export async function apply(which: ({ ids: string[] } | { certain: string }) & { chosen?: Record<string, string[]> }, finding: string, what: string): Promise<boolean> {
   try {
     const r = await applyFixes(which);
     // What was written leaves the finding's list at once; Health and the finding are read again behind it (the report

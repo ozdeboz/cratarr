@@ -3,6 +3,9 @@
   // genre), year, when it was last played and added (date and time, as Symfonium writes them), and where it comes
   // from: the server and its library. What is not known is left out; Last played says Never when it never was. Its
   // rating (decided 2026-10-16) as five stars, the same as its menu's: a tap rates, where its server keeps ratings.
+  // A library album's Discogs (0.9.8, the owner: "Yes to all"): its labels with their catalogue numbers, its credits
+  // by role, its styles beside its genres, and its page among Elsewhere; asked once (Discogs keeps a pace: they come
+  // in a moment the first time).
   import { albumRatings, loadAlbumRating, rateAlbum } from './albums.svelte';
   import { CRATE, GENRE, viewGenre } from './crates.svelte';
   import { longpress } from './longpress';
@@ -10,6 +13,7 @@
   import RatingStars from './RatingStars.svelte';
   import Icon from './Icon.svelte';
   import SectionHead from './SectionHead.svelte';
+  import { getAlbumDiscogs, type AlbumDiscogs } from './api';
 
   let {
     source,
@@ -40,6 +44,30 @@
   });
   const rating = $derived(albumRatings[`${source}/${album}`] ?? null);
 
+  let discogs = $state<AlbumDiscogs | null>(null);
+  $effect(() => {
+    const [s, a] = [source, album];
+    discogs = null;
+    if (more) return;
+    let gone = false;
+    getAlbumDiscogs(s, a).then(
+      (d) => !gone && (discogs = d),
+      () => {},
+    );
+    return () => (gone = true);
+  });
+  /** Discogs' styles not among the genres already shown. */
+  const styles = $derived((discogs?.styles ?? []).filter((x) => !genres.some((g) => g.toLowerCase() === x.toLowerCase())));
+  /** Its credits by role, in Discogs' order: "Producer: A, B"; a part of the release says which ("Mixed By (A2): C"). */
+  const credits = $derived.by(() => {
+    const by = new Map<string, string[]>();
+    for (const c of discogs?.credits ?? []) {
+      const role = c.tracks ? `${c.role} (${c.tracks})` : c.role;
+      by.set(role, [...(by.get(role) ?? []), c.name]);
+    }
+    return [...by].map(([role, names]) => `${role}: ${names.join(', ')}`).join('\n');
+  });
+
   const two = (n: number) => String(n).padStart(2, '0');
   /** 2026-10-16 14:05:09, this device's time. */
   const when = (secs: number) => {
@@ -59,6 +87,10 @@
       {#each genres as g (g)}<button class="chip" onclick={() => viewGenre(g)} use:longpress={() => (menuOf = CRATE + GENRE + g)}>{g}</button>{/each}
     </p>
   {/if}
+  {#if styles.length}
+    <h3>Styles</h3>
+    <p class="chips">{#each styles as g (g)}<span class="chip">{g}</span>{/each}</p>
+  {/if}
   {#if more?.tags?.length}
     <h3>Tags</h3>
     <p class="chips">{#each more.tags as t (t)}<span class="chip">{t}</span>{/each}</p>
@@ -73,6 +105,9 @@
   {#if more?.label}
     <h3>Label</h3>
     <p>{more.label}</p>
+  {:else if discogs?.labels?.length}
+    <h3>{discogs.labels.length === 1 ? 'Label' : 'Labels'}</h3>
+    <p class="words">{discogs.labels.map((l) => (l.catno && l.catno.toLowerCase() !== 'none' ? `${l.name} · ${l.catno}` : l.name)).join('\n')}</p>
   {/if}
   {#if more?.listeners}
     <h3>Listeners</h3>
@@ -85,10 +120,16 @@
   {#if more?.credits}
     <h3>Credits</h3>
     <p class="words">{more.credits}</p>
+  {:else if credits}
+    <h3>Credits</h3>
+    <p class="words">{credits}</p>
   {/if}
   {#if more?.links?.length}
     <h3>Elsewhere</h3>
     <p class="chips">{#each more.links as l (l.url)}<a class="chip" href={l.url} target="_blank" rel="noopener noreferrer">{l.name}</a>{/each}</p>
+  {:else if discogs?.url}
+    <h3>Elsewhere</h3>
+    <p class="chips"><a class="chip" href={discogs.url} target="_blank" rel="noopener noreferrer">Discogs</a></p>
   {/if}
   {#if rating !== null}
     <h3>Rating</h3>
