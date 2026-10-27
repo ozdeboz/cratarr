@@ -62,6 +62,11 @@ function portrait(width: number, height: number, measure: Measure): Fit {
     if (measure(false, level, controlsWidth) < target) break;
     level += 1;
   }
+  // The facts row (where the tape deck stands while it shows) gives way only where the controls would not fit even
+  // beside the smallest cover (the owner, 2026-10-27: it went in a sliver of widths just before landscape, for some 55 px
+  // more cover, and the deck then lay over the artist's line and the waveform); there the cover keeps the step below.
+  const keep = STEPS.indexOf('facts');
+  if (level > keep && measure(false, keep, controlsWidth) < height - MIN_COVER) level = keep;
   const natural = measure(false, level, controlsWidth);
   const desired = height - maxAlbum * (1 - (MIN_PADDING / 100) * 2);
   const padded = Math.max(natural, desired);
