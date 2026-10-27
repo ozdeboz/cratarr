@@ -205,6 +205,7 @@ async function report(withQueue = false) {
     direction: tapeDir.want,
     level_unknown: prefs.levelUnknown,
     level_db: local.levelDb,
+    starting: local.starting,
     link: {
       failed,
       address: location.origin,

@@ -93,6 +93,8 @@ export type Progress = {
   rewinding?: boolean;
   duration_secs: number | null;
   paused: boolean;
+  /** Asked to play from rest and not sounding yet (a5's `starting`, 2026-10-28): still, as the waveform shows it. */
+  starting?: boolean;
   /** No player reports this track; the position is time since it started (wrong after a pause or seek). */
   estimated: boolean;
 };

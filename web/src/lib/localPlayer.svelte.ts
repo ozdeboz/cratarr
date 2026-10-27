@@ -1099,6 +1099,7 @@ export function reportedBy(m: {
   levelDb?: unknown;
   rewinding?: unknown;
   direction?: unknown;
+  starting?: unknown;
 }) {
   if (m.repeat === 'off' || m.repeat === 'one' || m.repeat === 'all') local.repeat = m.repeat;
   // Left out: not said (a report of the queue alone); null: none.
@@ -1123,6 +1124,8 @@ export function reportedBy(m: {
   local.error = typeof m.error === 'string' ? m.error : null;
   // The app's own level (a5, 0.9.8): what it applies now; 0 when it levels nothing or says nothing.
   local.levelDb = typeof m.levelDb === 'number' && m.levelDb < 0 ? m.levelDb : 0;
+  // Asked to play and not sounding yet (a5's app, 2026-10-28); an app from before says nothing: not starting.
+  if (m.starting !== undefined) local.starting = m.starting === true;
   const now = performance.now();
   const pos = (Number(m.positionMs) || 0) / 1000;
   if (m.rewinding === true) {

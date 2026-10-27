@@ -76,7 +76,7 @@ export function localNowPlaying(): NowPlaying | null {
     album: t.album,
     album_id: t.album_id,
     addable: localState.view?.addable ?? t.addable ?? true,
-    progress: { position_secs: local.position, duration_secs: local.duration, paused: local.paused, estimated: false },
+    progress: { position_secs: local.position, duration_secs: local.duration, paused: local.paused, starting: local.starting, estimated: false },
     player: outputName(),
     favorite: localState.view?.favorite ?? null,
     // As the heart, the chips stay until the new track's arrive (no row coming and going between tracks).
