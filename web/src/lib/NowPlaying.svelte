@@ -31,7 +31,8 @@
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { ramping } from './ramping.svelte';
   import { appInfo, inApp } from './app.svelte';
-  import { local, windUpMs } from './localPlayer.svelte';
+  import { local, rewindNow, windUpMs } from './localPlayer.svelte';
+  import TapeDeck from './TapeDeck.svelte';
   import QueueMenu from './QueueMenu.svelte';
   import { playingCrateOuts } from './crates.svelte';
   import { localMode } from './deviceMusic.svelte';
@@ -53,6 +54,25 @@
 
   // As shown: the new track's words with its cover, one commit (lib/remote shownPlaying).
   const np = $derived(shownPlaying());
+  // The tape deck in the row under the title while an effect runs (lib/TapeDeck; the owner, 2026-10-27): a Start and
+  // stop ramp or a rewind; shown at least DECK_MIN_MS, then the row back over a second's fade.
+  const DECK_MIN_MS = 5000;
+  const effecting = $derived(ramping.dir !== null || (isLocal() ? rewindNow.on : !!np?.progress?.rewinding));
+  let deckShown = $state(false);
+  let deckSince = 0;
+  $effect(() => {
+    if (!prefs.tapeDeck) return void (deckShown = false);
+    if (effecting) {
+      if (!untrack(() => deckShown)) {
+        deckShown = true;
+        deckSince = performance.now();
+      }
+      return;
+    }
+    if (!untrack(() => deckShown)) return;
+    const t = setTimeout(() => (deckShown = false), Math.max(0, DECK_MIN_MS - (performance.now() - deckSince)));
+    return () => clearTimeout(t);
+  });
 
   // The artist as a chip (the owner, 2026-10-17): it opens their panel, the player closing (lib/albums goToArtist); a
   // "feat." credit goes to the main artist, as the track menu's Go to artist. A favourite artist's chip has a heart.
@@ -509,8 +529,9 @@
           <!-- The row under the title (the owner, 2026-10-19): the info button (the cover's overview, as a circle on the
                cover) and the facts the user picked in Settings → Display, in short; with none picked, Add leads there.
                Hidden in Settings; none for the device's own music (local mode: nothing known of it). -->
+          <div class="under">
           {#if prefs.playerRow && np.source !== 'device'}
-            <div class="facts">
+            <div class="facts" class:away={deckShown}>
               <button class="info" class:on={overview} aria-label="About this track" aria-pressed={overview} title="About this track" onclick={() => (overview = !overview)}
                 use:longpress={() => (detailsOpen = true)}><Icon name="info" size={18} /></button
               >
@@ -518,6 +539,8 @@
               {#if !prefs.playerFacts.length}<button class="fact add" onclick={toRowSettings}><Icon name="plus" size={14} /><span>Add</span></button>{/if}
             </div>
           {/if}
+          {#if deckShown}<div class="deck-row" in:fade={{ duration: 150 }} out:fade={{ duration: 1000 }}><TapeDeck /></div>{/if}
+          </div>
           {#if np.progress}
             <div
               class="progress"
@@ -903,6 +926,22 @@
     gap: 6px;
     overflow-x: auto;
     scrollbar-width: none;
+    transition: opacity 1s;
+  }
+
+  /* The row and the tape deck in one place: the deck over the row while an effect runs, the row back as it fades. */
+  .under {
+    display: grid;
+    align-items: center;
+  }
+
+  .under > * {
+    grid-area: 1 / 1;
+  }
+
+  .facts.away {
+    opacity: 0;
+    pointer-events: none;
   }
 
   .facts > :first-child {

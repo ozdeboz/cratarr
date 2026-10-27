@@ -1,6 +1,6 @@
 import { startStopOf, type StartStop } from './startStop';
 import type { AudioOutput } from './api';
-import { rampBegins, rampEnds } from './ramping.svelte';
+import { rampBegins, rampEnds, rewindNow } from './ramping.svelte';
 
 // The Android app (decision 0031): on the server's own pages inside it, `window.CratarrApp` carries JSON messages both
 // ways (android/README.md). There the music plays in the app itself; the page is its face (localPlayer.svelte.ts).
@@ -192,8 +192,9 @@ if (port) {
     }
     // Where the controls point changed, in the app (decision 0062): the page shows it.
     if (m.type === 'target' && typeof m.target === 'string') appInfo.target = m.target;
-    // The app's player ramping (Start and stop): the play/pause button shows it.
-    if (m.type === 'ramp') {
+    // The app's player ramping (Start and stop): the play/pause button shows it; never a tape rewind's own speeding
+    // up and slowing down (the owner, 2026-10-27: the button fills and empties for play and pause only).
+    if (m.type === 'ramp' && !rewindNow.on) {
       if ((m.dir === 'out' || m.dir === 'in') && typeof m.ms === 'number') rampBegins(m.dir, m.ms, typeof m.full === 'number' ? m.full : m.ms);
       else rampEnds();
     }

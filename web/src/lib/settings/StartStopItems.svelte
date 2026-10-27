@@ -48,6 +48,12 @@
   <Item name="Also for next and previous" toggle={{ checked: ss.skips, onchange: (on) => setSS({ skips: on }) }} />
 {/if}
 <Item name="Tape rewind" more={REWIND_MORE} experimental toggle={{ checked: ss.rewind, onchange: (on) => setSS({ rewind: on }) }} />
+<!-- This page's showing (prefs, never the app's): the player's row under the title a tape deck while an effect runs. -->
+<Item
+  name="Tape deck during effects"
+  more="While play or pause ramps, or a rewind runs, the player shows a tape deck where its info row is: its reels turn at the playing speed, its head lights on each bar's first beat."
+  toggle={{ checked: prefs.tapeDeck, onchange: (on) => (prefs.tapeDeck = on) }}
+/>
 {#if ss.rewind}
   <Item name="Rewind" value={`${TUNINGS[0].text(ss.rewindMs)} · ${TUNINGS[1].text(ss.rewindSpeed)}`} onclick={() => (rewindOpen = true)} />
 {/if}

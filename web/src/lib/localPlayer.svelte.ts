@@ -20,7 +20,7 @@ import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
 import { albumCoverUrl, getTrackGain, playerCommand, radioNext, type TrackGain } from './api';
 import { prefs } from './prefs.svelte';
-import { ramping, rampBegins, rampEnds } from './ramping.svelte';
+import { ramping, rampBegins, rampEnds, rewindNow } from './ramping.svelte';
 import { asksSignIn, toSignIn } from './reach.svelte';
 import { isPhone } from './device';
 
@@ -895,6 +895,7 @@ export function reportedBy(m: {
   skipFavourites?: unknown;
   autoplay?: unknown;
   levelDb?: unknown;
+  rewinding?: unknown;
 }) {
   if (m.repeat === 'off' || m.repeat === 'one' || m.repeat === 'all') local.repeat = m.repeat;
   // Left out: not said (a report of the queue alone); null: none.
@@ -921,6 +922,8 @@ export function reportedBy(m: {
   local.levelDb = typeof m.levelDb === 'number' && m.levelDb < 0 ? m.levelDb : 0;
   reported = { positionMs: Number(m.positionMs) || 0, at: performance.now() };
   local.position = reported.positionMs / 1000;
+  // The app's tape rewind (a5): its position going back as it reports it, shown as it goes (lib/remote).
+  if (typeof m.rewinding === 'boolean') rewindNow.on = m.rewinding;
 }
 
 function sleepOf(s: unknown): Sleep | null {
@@ -984,14 +987,15 @@ export function positionNow(): number {
 /** How far the app's player has played since its last report (ms). Not through its Start and stop ramps (the owner,
  *  2026-10-26: no jump as one ends): it reports the press's place meanwhile and plays on from there once it ends. */
 function sinceReport(): number {
-  if (local.paused || ramping.dir !== null) return 0;
+  // A rewind goes back: nothing counted on between its reports.
+  if (local.paused || ramping.dir !== null || rewindNow.on) return 0;
   return performance.now() - Math.max(reported.at, ramping.ended);
 }
 
 if (inApp) onApp('player', (m) => driven === null && reportedBy(m as Parameters<typeof reportedBy>[0]));
 if (typeof window !== 'undefined') {
   setInterval(() => {
-    if (!handed() || local.paused || local.index < 0 || ramping.dir !== null) return;
+    if (!handed() || local.paused || local.index < 0 || ramping.dir !== null || rewindNow.on) return;
     const p = (reported.positionMs + sinceReport()) / 1000;
     local.position = local.duration ? Math.min(p, local.duration) : p;
   }, 250);
@@ -1987,8 +1991,7 @@ const REWIND_WAIT_MS = 1500;
 let rewinding: HTMLAudioElement | null = null;
 /** Where the counter stands while it sounds (s into the track). */
 let rewindPos: number | null = null;
-/** A rewind sounds on this device: the shown position goes back with it (lib/remote). */
-export const rewindNow = $state({ on: false });
+export { rewindNow };
 /** How often the counter follows it (the tick's four times a second is too coarse to see it go back). */
 const REWIND_STEP_MS = 50;
 /** The rewind's own fetch of the track's start: it does not end the rewind. */
