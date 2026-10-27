@@ -47,6 +47,7 @@
   import LabelTip from './lib/LabelTip.svelte';
   import { installLabels } from './lib/labels.svelte';
   import { hasView, pageView } from './lib/pageView.svelte';
+  import { inSpotify } from './lib/spotify.svelte';
   import { art, playing } from './lib/remote.svelte';
   import { fade, fly, slide } from 'svelte/transition';
   import { linear, quadInOut } from 'svelte/easing';
@@ -548,7 +549,7 @@
     handed
       ? handed.pill()
       : pagePillShown
-        ? { page: page, view: hasView(page), device: pagePill && pillDevice, filter: (pagePill && !page.startsWith('local-') && page !== 'downloads') || page === 'discover', action: pageView.action }
+        ? { page: page, view: hasView(page) && !(page === LIBRARY.id && inSpotify()), device: pagePill && pillDevice, filter: (pagePill && !page.startsWith('local-') && page !== 'downloads') || page === 'discover', action: pageView.action }
         : null,
   );
   // One glass of a row that stays, emptied (the owner, 2026-10-25: "it should indeed slide away"): as the row does, up

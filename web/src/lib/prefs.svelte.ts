@@ -3,6 +3,7 @@
 
 import { inApp, toApp } from './app.svelte';
 import { LIST_WIDTHS } from './pageView.svelte';
+import { isSpotifyView, type SpotifyView } from './libraryViews';
 import type { Condition } from './api';
 import { FACTS, type FactId } from './facts';
 
@@ -98,8 +99,9 @@ export type FlowBackdrop = (typeof FLOW_BACKDROPS)[number];
 
 export type Prefs = {
   theme: Theme;
-  /** What the Library shows (the switch beside back; the owner, 2026-10-25): its albums, or their artists. */
-  libraryView: 'albums' | 'artists' | 'tracks';
+  /** What the Library shows (the switch beside back; the owner, 2026-10-25): its albums, or their artists; or one of
+   *  the account's Spotify lists (decision 0073, lib/spotify). */
+  libraryView: 'albums' | 'artists' | 'tracks' | SpotifyView;
   /** Which view the Library opens on (Settings › Content; the owner, 2026-10-25): the one it was left on, or always
    *  the same. */
   libraryOpens: 'last' | 'albums' | 'artists' | 'tracks';
@@ -489,7 +491,7 @@ function read(): Prefs {
       if (typeof saved.animations === 'boolean') p.animations = saved.animations;
       if (typeof saved.crumbsWhole === 'boolean') p.crumbsWhole = saved.crumbsWhole;
       if (typeof saved.modeSwitchInBar === 'boolean') p.modeSwitchInBar = saved.modeSwitchInBar;
-      if (['albums', 'artists', 'tracks'].includes(saved.libraryView)) p.libraryView = saved.libraryView;
+      if (['albums', 'artists', 'tracks'].includes(saved.libraryView) || isSpotifyView(saved.libraryView)) p.libraryView = saved.libraryView;
       if (['last', 'albums', 'artists', 'tracks'].includes(saved.libraryOpens)) p.libraryOpens = saved.libraryOpens;
       if (['name', 'albums', 'tracks'].includes(saved.libraryArtistOrder)) p.libraryArtistOrder = saved.libraryArtistOrder;
       if (typeof saved.libraryArtistDown === 'boolean') p.libraryArtistDown = saved.libraryArtistDown;

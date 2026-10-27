@@ -1,11 +1,16 @@
 <script lang="ts">
   // What the Library shows, on the glass beside back (the owner, 2026-10-25): only the view shown ("Albums ▾"); a tap
   // grows the glass downwards with every view, the one shown ticked; a choice (or a tap elsewhere, or Esc) folds it.
+  // Under them the account's Spotify lists, once it has them (decision 0073; the owner, 2026-10-27: in this menu).
   import GlassMenu from './GlassMenu.svelte';
   import Icon from './Icon.svelte';
   import { prefs } from './prefs.svelte';
 
-  import { LIBRARY_VIEWS as VIEWS } from './libraryViews';
+  import { LIBRARY_VIEWS as VIEWS, SPOTIFY_VIEWS } from './libraryViews';
+  import { loadSpotify, spotify } from './spotify.svelte';
+
+  loadSpotify();
+  const hasSpotify = $derived(!!spotify.state?.shown);
   let open = $state(false);
   let el = $state<HTMLElement>();
   // Under the button, in the glass menu (lib/GlassMenu).
@@ -14,9 +19,10 @@
     const r = el?.getBoundingClientRect();
     if (r) at = { top: r.bottom + 8, left: r.left - 12, minWidth: r.width + 30 };
   }
-  const shown = $derived(VIEWS.find((v) => v.value === prefs.libraryView) ?? VIEWS[0]);
+  const ofSpotify = $derived(SPOTIFY_VIEWS.find((v) => v.value === prefs.libraryView));
+  const shown = $derived(ofSpotify ? { label: `Spotify ${ofSpotify.label.toLowerCase()}` } : (VIEWS.find((v) => v.value === prefs.libraryView) ?? VIEWS[0]));
 
-  function choose(v: (typeof VIEWS)[number]['value']) {
+  function choose(v: typeof prefs.libraryView) {
     prefs.libraryView = v;
     open = false;
   }
@@ -33,6 +39,14 @@
           >{v.label}{#if v.value === prefs.libraryView}<Icon name="check" size={18} />{/if}</button
         >
       {/each}
+      {#if hasSpotify}
+        <span class="group" role="presentation">Spotify</span>
+        {#each SPOTIFY_VIEWS as v (v.value)}
+          <button class="option" role="option" aria-selected={v.value === prefs.libraryView} aria-label="Spotify {v.label.toLowerCase()}" onclick={() => choose(v.value)}
+            >{v.label}{#if v.value === prefs.libraryView}<Icon name="check" size={18} />{/if}</button
+          >
+        {/each}
+      {/if}
     </GlassMenu>
   {/if}
 </span>
@@ -68,5 +82,16 @@
 
   .open .shown :global(svg) {
     transform: rotate(180deg);
+  }
+
+  /* Spotify's lists under the Library's own, named once, as a menu's group. */
+  .group {
+    display: block;
+    margin-top: 6px;
+    padding: 8px 12px 2px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.8rem;
+    font-weight: 600;
   }
 </style>

@@ -4,6 +4,7 @@
 // server, the pages and Settings' parts from the browser (lib/everywhere).
 import { search, type SearchKind, type ServerSearch } from './api';
 import { pageView } from './pageView.svelte';
+import { isSpotifyView } from './libraryViews';
 import { prefs } from './prefs.svelte';
 import { byRelevance, provided, relevance, words, type SearchResult } from './search';
 
@@ -29,7 +30,11 @@ const ELSEWHERE: { kind: SearchKind; label: string }[] = [
 ];
 /** The kinds a page shows itself: left out of its everywhere (lib/GlobalResults); the Library's by what it shows. */
 export const pageKinds = (page: string): string[] =>
-  page === 'library' && prefs.libraryView !== 'albums' ? [prefs.libraryView === 'artists' ? 'artist' : 'track'] : (PAGE_KINDS[page] ?? []);
+  page === 'library' && isSpotifyView(prefs.libraryView)
+    ? []
+    : page === 'library' && prefs.libraryView !== 'albums'
+      ? [prefs.libraryView === 'artists' ? 'artist' : 'track']
+      : (PAGE_KINDS[page] ?? []);
 const PAGE_KINDS: Record<string, string[]> = {
   library: ['album'],
   playlists: ['playlist'],

@@ -1,8 +1,11 @@
 <script lang="ts" module>
   // An album not in the library, found by a search (Find more music's MusicBrainz, the global search's missing albums;
   // decision 0072): opened, it is looked for on Bandcamp and shown in the panel to hear; not there, its menu: Want it,
-  // or look on MusicBrainz or YouTube. One place for both, so they act the same.
-  export type Elsewhere = { release_group: string; title: string; artist: string; year: number | null; cover: string | null; have?: boolean; bandcamp?: string | null };
+  // or look on MusicBrainz or YouTube. One place for both, so they act the same. A Spotify album not yet found on
+  // MusicBrainz (decision 0073) has no release group: it goes by its names (`elsewhereKey`), with no MusicBrainz link.
+  export type Elsewhere = { release_group: string | null; title: string; artist: string; year: number | null; cover: string | null; have?: boolean; bandcamp?: string | null };
+  /** What it is known by while looked for and once asked for. */
+  export const elsewhereKey = (a: Pick<Elsewhere, 'release_group' | 'artist' | 'title'>) => a.release_group ?? `${a.artist}|${a.title}`;
 </script>
 
 <script lang="ts">
@@ -27,13 +30,13 @@
 
   /** Opens it: on Bandcamp in the panel (a page known at once, lib/bandcampFound), else its menu. */
   export async function open(a: Elsewhere) {
-    const known = bandcampOf(a.release_group, a.bandcamp);
+    const known = a.release_group ? bandcampOf(a.release_group, a.bandcamp) : (a.bandcamp ?? null);
     if (known) return viewOver(albumSubject(BANDCAMP, albumIdOf(known)));
-    finding = a.release_group;
+    finding = elsewhereKey(a);
     try {
-      const { page } = await findOnBandcamp(a.artist, a.title, a.release_group);
+      const { page } = await findOnBandcamp(a.artist, a.title, a.release_group ?? undefined);
       if (page) {
-        rememberBandcamp(a.release_group, page);
+        if (a.release_group) rememberBandcamp(a.release_group, page);
         viewOver(albumSubject(BANDCAMP, albumIdOf(page)));
       } else menuFor = a;
     } catch {
@@ -45,8 +48,8 @@
   async function want(a: Elsewhere) {
     menuFor = null;
     try {
-      const { request } = await wantAlbum({ release_group: a.release_group, artist: a.artist, album: a.title, year: a.year, cover: a.cover });
-      asked = [...asked, a.release_group];
+      const { request } = await wantAlbum({ release_group: a.release_group ?? undefined, artist: a.artist, album: a.title, year: a.year, cover: a.cover });
+      asked = [...asked, elsewhereKey(a)];
       if (request.fetched?.startsWith('Not handed over')) toast.show({ text: request.fetched, tone: 'error' });
     } catch (e) {
       toast.fail(e, 'Could not ask for it');
@@ -61,14 +64,14 @@
       <MenuGroup label="Discover">
         {#if a.have}
           <MenuEntry icon="disc" label="In your library" disabled onclick={() => {}} />
-        {:else if asked.includes(a.release_group)}
+        {:else if asked.includes(elsewhereKey(a))}
           <MenuEntry icon="inbox" label="Requested" onclick={() => ((menuFor = null), (location.hash = '#/requests'))} />
         {:else}
           <MenuEntry icon="circlePlus" label="Want" onclick={() => want(a)} />
         {/if}
       </MenuGroup>
       <MenuGroup>
-        <MenuEntry icon="externalLink" label="MusicBrainz" onclick={() => ((link = { url: `https://musicbrainz.org/release-group/${a.release_group}`, name: 'MusicBrainz' }), (menuFor = null))} />
+        {#if a.release_group}<MenuEntry icon="externalLink" label="MusicBrainz" onclick={() => ((link = { url: `https://musicbrainz.org/release-group/${a.release_group}`, name: 'MusicBrainz' }), (menuFor = null))} />{/if}
         <MenuEntry icon="search" label="Search YouTube" onclick={() => ((link = { url: `https://www.youtube.com/results?search_query=${encodeURIComponent(`${a.artist} ${a.title}`)}`, name: 'YouTube' }), (menuFor = null))} />
       </MenuGroup>
     </MenuCards>

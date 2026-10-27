@@ -151,7 +151,7 @@
     {:else if section === 'player'}
       <PlayerPart />
     {:else if section === 'account'}
-      <AccountPart />
+      <AccountPart {thing} />
     {:else if section === 'content'}
       <ContentPart />
     {:else if section === 'taste'}

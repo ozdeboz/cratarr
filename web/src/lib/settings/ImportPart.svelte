@@ -49,7 +49,7 @@
   const LASTFM = 'lastfm';
   const FILES = 'files';
   const FILES_MORE =
-    "A listening history exported elsewhere goes into your history: ListenBrainz's export (its .zip), Spotify's (the JSON files of your extended streaming history, or of your account data; plays under 30 seconds left out) or Last.fm's as export tools write it (CSV: artist, album, track, date). A playlist becomes a new playlist of the tracks found: .m3u, .m3u8, .xspf, or Exportify's CSV of a Spotify playlist.\n\nPreview first; nothing of the file is kept.";
+    "A listening history exported elsewhere goes into your history: ListenBrainz's export (its .zip), Spotify's (the JSON files of your extended streaming history, or of your account data; plays under 30 seconds left out) or Last.fm's as export tools write it (CSV: artist, album, track, date). A playlist becomes a new playlist of the tracks found: .m3u, .m3u8, .xspf, or Exportify's CSV of a Spotify playlist. Spotify's account data (its .zip) also brings your Spotify library, to see in the Library what of it is here.\n\nPreview first; nothing else of the file is kept.";
   const FROM_NAMES = { listenbrainz: 'ListenBrainz', spotify: 'Spotify', lastfm: 'Last.fm' } as const;
   const FM_MORE =
     "Your Last.fm scrobbles into your listening history (for your taste and your week, not the play counts), and your loved tracks as favourites. A scrobble already in your history from elsewhere is not added twice; run again, it brings only what is new.\n\nLast.fm asks every app for an API key: make one at last.fm/api/account/create (any name will do) and give it here once. With Last.fm connected under Connections, its sign-in is used instead, which also reads a history you keep private.\n\nIt runs on the server: leave the page, and its result waits here for an hour. An Import right after a Preview reads only what is new.";
@@ -301,10 +301,18 @@
   const fileLine = (r: FileRun) => {
     if (r.error || !r.done) return r.error ?? '';
     const d = r.done;
+    if (d.kind === 'spotify') {
+      // Spotify's account data (0073): its library for the Library's Spotify views, and its listens where it has them.
+      const l = d.library;
+      const library = `Spotify library · ${n(l.albums)} albums, ${n(l.tracks)} tracks, ${n(l.playlists)} playlists, ${n(l.artists)} artists · ${n(l.missing)} missing here`;
+      return d.history ? `${library} · history · ${tallyLine(d.history, filesPreviewed)}` : library;
+    }
     return d.kind === 'history'
       ? `${FROM_NAMES[d.from]} history · ${tallyLine(d.tally, filesPreviewed)}`
       : `Playlist ${filesPreviewed ? 'would be' : ''} "${d.name}" · ${n(d.tally.found)} of ${n(d.tally.items)} tracks found`;
   };
+  /** A file's listens or playlist tracks counted (Spotify's account data: its listens, where it has them). */
+  const tallyOf = (d: FileBrought | null) => (!d ? null : d.kind === 'spotify' ? d.history : d.tally);
   async function undoPlaylist(r: FileRun) {
     if (r.done?.kind !== 'playlist' || !r.done.undo) return;
     try {
@@ -518,8 +526,8 @@
         </Item>
       {/each}
     </Group>
-    {#each fileRuns.filter((r) => r.done?.tally.missing.length) as r (r.file)}
-      {@const t = r.done!.tally}
+    {#each fileRuns.filter((r) => tallyOf(r.done)?.missing.length) as r (r.file)}
+      {@const t = tallyOf(r.done)!}
       <Group title={`Not in your library: ${r.file}`}>
         {#each t.missing.slice(0, 20) as m (`${m.artist}|${m.title}`)}
           <Item name={m.title} line={`${m.artist} · ${n(m.count)}`} />
