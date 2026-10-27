@@ -76,7 +76,7 @@ app, or from Spotify's data export; Cratarr says per item what it has of it, and
 
 ## Endpoints
 
-All are the signed-in account's own; `status` is `in`, `partly`, `missing` or `requested`.
+All are the signed-in account's own; `status` is `in`, `partly`, `missing` or `requested`. Times (`since`, `at`, `added_at`) are epoch seconds.
 
 - `GET /api/spotify`: the state.
   `{ client_id: string | null, live: { user, name, since, sync: { state: "idle"|"running"|"failed", at, error } } |
