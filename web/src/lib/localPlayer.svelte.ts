@@ -2041,6 +2041,33 @@ const easeIn = (t: number) => t * t;
 const easeOut = (t: number) => 1 - (1 - t) ** 2;
 /** The deck's brake, the same for a pause and a wind (the owner, 2026-10-27): its speed on a raised cosine. */
 const brakeCurve = (t: number) => (1 - Math.cos(Math.PI * t)) / 2;
+/** The curves a Start and stop ramp goes by, up and down (a vinyl's speed, a fade's level): the ramps and the
+ *  predictions of where they bring the tape read the same ones. */
+const UP = { vinyl: easeOut, fade: easeInOut };
+const DOWN = { vinyl: brakeCurve, fade: easeInOut };
+const means = new Map<(t: number) => number, number>();
+/** A curve's mean over its way (0..1), measured once from the curve itself. */
+function meanOf(curve: (t: number) => number): number {
+  let m = means.get(curve);
+  if (m === undefined) {
+    const N = 512;
+    m = 0;
+    for (let i = 0; i < N; i++) m += curve((i + 0.5) / N) / N;
+    means.set(curve, m);
+  }
+  return m;
+}
+/** The track time a speed ramp on `curve` from `from`x to `to`x covers over `ms` (s). Every prediction of where the
+ *  tape will be is this (a wind-up's early start before the press, where a stop will stand), so it holds whatever the
+ *  curve (the owner, 2026-10-28: one curve prediction for all). */
+const rampSpan = (curve: (t: number) => number, from: number, to: number, ms: number) => (ms / 1000) * (from + (to - from) * meanOf(curve));
+/** The track time a Start and stop ramp covers over `ms` (s): a fade at full speed throughout; a vinyl's speed on its
+ *  own curve, up from its slowest or down to it. */
+function spanOf(mode: 'off' | 'vinyl' | 'fade', way: 'in' | 'out', ms: number, low = RAMP_LOW): number {
+  if (mode === 'off') return 0;
+  if (mode === 'fade') return ms / 1000;
+  return way === 'in' ? rampSpan(UP.vinyl, low, 1, ms) : rampSpan(DOWN.vinyl, 1, low, ms);
+}
 function ramp(from: number, to: number, ms: number, set: (v: number) => void, ease = easeInOut): Promise<boolean> {
   const token = ++rampToken;
   const t0 = performance.now();
@@ -2094,7 +2121,7 @@ async function rampOut(share = 1): Promise<void> {
   rampBegins('out', ms, full, !tape.quiet);
   const at = ramping.at;
   try {
-    await ramp(levelAt(mode, share), mode === 'fade' ? 0 : RAMP_LOW, ms, rampSet(mode), mode === 'fade' ? easeInOut : brakeCurve);
+    await ramp(levelAt(mode, share), mode === 'fade' ? 0 : RAMP_LOW, ms, rampSet(mode), DOWN[mode]);
   } finally {
     // Not where another ramp took over (a press turning it round): that one's.
     if (ramping.at === at) rampEnds();
@@ -2116,12 +2143,11 @@ function rampIn(early?: { ms: number; lead: number }) {
   }
   tape.committed = false;
   local.paused = false;
-  // The track time the wind-up takes (at full speed for a fade; a vinyl's speed, eased out, averages two thirds of the
-  // way up): it starts that much early, within the track and what is loaded.
+  // The track time the wind-up takes (spanOf, from its own curve): it starts that much early, so it is at full speed at
+  // the press, within the track and what is loaded.
   const saved = audio.currentTime;
   const w = where(saved);
   // No longer than there is track before it (the owner, 2026-10-26: a 3 s fade 1 s in is a 1 s fade).
-  const pace = paceOf(mode);
   const full = ms;
   if (early) {
     ms = early.ms;
@@ -2132,7 +2158,7 @@ function rampIn(early?: { ms: number; lead: number }) {
     ms = windUpMs(ms, mode, w ? w.offset : 0);
   } else {
     ms = windUpMs(ms, mode, w ? w.offset : 0);
-    const start = Math.max(w ? w.seg.start : 0, saved - (ms / 1000) * pace);
+    const start = Math.max(w ? w.seg.start : 0, saved - spanOf(mode, 'in', ms));
     tape.heldAt = saved;
     if (inBuffer(start)) audio.currentTime = start;
   }
@@ -2148,7 +2174,7 @@ function rampIn(early?: { ms: number; lead: number }) {
   }
   void audio.play().catch(refused);
   const mine = ++run;
-  void ramp(mode === 'fade' ? 0 : RAMP_LOW, 1, ms, set, mode === 'fade' ? easeInOut : easeOut).then(() => {
+  void ramp(mode === 'fade' ? 0 : RAMP_LOW, 1, ms, set, UP[mode]).then(() => {
     if (mine !== run) return;
     rampEnds();
     tape.heldAt = null;
@@ -2171,7 +2197,7 @@ function turnUp() {
   rampBegins('in', ms, ss().ms, !tape.quietPause);
   tape.quietPause = false;
   const mine = ++run;
-  void ramp(levelAt(mode, share), 1, ms, rampSet(mode), mode === 'fade' ? easeInOut : easeOut).then(() => {
+  void ramp(levelAt(mode, share), 1, ms, rampSet(mode), UP[mode]).then(() => {
     if (mine !== run) return;
     rampEnds();
     unramp();
@@ -2330,11 +2356,7 @@ const FROM_START = 0.5;
  *  this before it starts, lib/NowPlaying). */
 export function windUpMs(ms: number, mode: 'off' | 'vinyl' | 'fade', offset: number, low = RAMP_LOW): number {
   if (mode === 'off' || offset < FROM_START) return 0;
-  return Math.min(ms, (offset / paceOf(mode, low)) * 1000);
-}
-/** Track seconds per second while winding (full speed for a fade; a vinyl's, eased, two thirds of the way up). */
-function paceOf(mode: 'off' | 'vinyl' | 'fade', low = RAMP_LOW): number {
-  return mode === 'vinyl' ? low + ((1 - low) * 2) / 3 : 1;
+  return Math.min(ms, (offset / spanOf(mode, 'in', 1000, low)) * 1000);
 }
 // --- Winding (decision 0074; the owner, 2026-10-27) ---
 // The tape wound back or forward on the server's wind stream (/api/stream/…/wind: the track played that way at the
@@ -2530,14 +2552,13 @@ const PREP_LEAD_S = 0.5;
 const PREP_REACH_S = 10;
 /** How long a handover waits for its stream to come in before fetching it again (ms). */
 const PREP_WAIT_MS = 4000;
-/** The track time a brake on a raised cosine from `from`x to `to`x the track's speed covers over `ms` (s). */
-const brakeSpan = (ms: number, from = 1, to = 0) => ((ms / 1000) * (from + to)) / 2;
 /** Where the track's own player will stand once the tape's own stop has braked it from full speed, `after` s from now
  *  (a hold's: its touch's HOLD_S; the knob's: now). */
 function standOf(after = 0): { index: number; pos: number } | null {
   const here = where();
   if (!here || !audio) return null;
-  const run = audio.paused ? 0 : after + brakeSpan(prefs.startStop.tape.brakeMs, 1, RAMP_LOW);
+  // The tape's own stop: a vinyl's brake over the tape's Brake (turned).
+  const run = audio.paused ? 0 : after + spanOf('vinyl', 'out', prefs.startStop.tape.brakeMs);
   return { index: here.seg.index, pos: here.offset + run };
 }
 /** Whether the stream being fetched covers `pos` s into queue track `index` (it is coming: wait for it). */
