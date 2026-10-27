@@ -11,6 +11,7 @@
 //   in one step (the owner, 2026-10-25: the takeover atomic); never there (refused, another track), back after 3 s.
 // - Let go over the Cancel button (the owner, 2026-10-26), nothing is sought.
 import { untrack } from 'svelte';
+import { rewindNow } from './ramping.svelte';
 
 const SNAP_PX = 12;
 const SNAP_AWAY_PX = 40;
@@ -53,6 +54,8 @@ export class Seek {
   /** What the bar and the time show (seconds): over Cancel, where it plays (let go there, that is what stays; the
    *  owner, 2026-10-26: the waveform answers the Cancel button). */
   get pos() {
+    // A seek that winds: where the wind is, from the moment it is asked (the owner, 2026-10-27), never the place it goes.
+    if (this.held === null && (rewindNow.on || rewindNow.asked)) return this.now();
     return this.snapped || this.overCancel ? this.now() : (this.held ?? this.sought ?? this.now());
   }
 

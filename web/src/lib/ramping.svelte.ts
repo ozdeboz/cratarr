@@ -4,7 +4,15 @@
 export const ramping = $state({ dir: null as 'out' | 'in' | null, ms: 0, at: 0, full: 0, ended: 0, effect: true });
 /** A tape rewind sounds on this device's player (the page's own, lib/localPlayer, or the app's, as it reports it):
  *  the shown position goes back with it (lib/remote), and it is never a ramp of play or pause (the button's fill). */
-export const rewindNow = $state({ on: false });
+export const rewindNow = $state({ on: false, asked: false });
+/** A wind asked for and not sounding yet (a seek that winds, here or on the player driven): the waveform already goes
+ *  with it, never to where it goes (the owner, 2026-10-27: the waveform in sync with the seek). */
+let askedTimer: ReturnType<typeof setTimeout> | undefined;
+export function windAsked(on: boolean) {
+  rewindNow.asked = on;
+  clearTimeout(askedTimer);
+  if (on) askedTimer = setTimeout(() => (rewindNow.asked = false), 3000);
+}
 /** The tape deck's direction knob (the owner, 2026-10-27): `want`, where it is set (R forwards, L backwards); `state`,
  *  what the tape does about it (lib/localPlayer's turning: it slows to a stop before it can go the other way). */
 export const tapeDir = $state({ want: 'R' as 'L' | 'R', state: 'forward' as 'forward' | 'stopping' | 'backward' | 'returning' });
