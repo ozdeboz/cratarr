@@ -221,6 +221,11 @@ pub fn run(cat: Arc<Catalogue>) {
 /// The one decode at a time (see the top). A turn moves into the blocking work and ends with it.
 static HEAVY: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 
+/// The decode's turn for work elsewhere (Tape rewind), waited for at most `within`; moved into the work, as here.
+pub(crate) async fn heavy_turn(within: Duration) -> Option<tokio::sync::SemaphorePermit<'static>> {
+    tokio::time::timeout(within, HEAVY.acquire()).await.ok()?.ok()
+}
+
 /// A file's waveform in three bands (`analysis::band_wave`): as kept, or worked out now and kept, the first time a
 /// track plays. `None`: the file cannot be decoded, or it took too long (`DECODE`; it is still kept when it comes).
 pub async fn band_wave(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<BandWave> {

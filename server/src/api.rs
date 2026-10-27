@@ -24,6 +24,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/events/players", get(players_events))
         .route("/api/cover/{source}/{id}", get(cover))
         .route("/api/stream/{source}/{id}", get(stream))
+        .route("/api/stream/{source}/{id}/rewind", get(stream_rewind))
         .route("/api/file/{source}/{id}", get(file))
         .route("/api/track/{source}/{id}/gain", get(track_gain))
         .route("/api/offline", post(offline_facts))
@@ -2712,6 +2713,61 @@ async fn lossless_as(path: std::path::PathBuf, from_ms: u64, mp3: bool) -> Optio
         }
     }
     Some((headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response())
+}
+
+/// Where Tape rewind starts, and how long it lasts (milliseconds; 4 × the start/stop ramp, at most 12 s).
+#[derive(Deserialize)]
+struct RewindFrom {
+    from_ms: u64,
+    ms: u64,
+}
+
+/// How long Tape rewind waits for another decode to end before the player starts the track over without it.
+const REWIND_TURN: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Tape rewind (0.9.9, `rewind`): the track heard backwards from `from_ms` to its start in exactly `ms`, as 16-bit WAV
+/// made as it is sent. 404 for a track Cratarr does not keep the file of; 503 while another decode holds the turn: the
+/// player then starts the track over without it.
+async fn stream_rewind(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<RewindFrom>) -> Response {
+    let cat = app.library.catalogue();
+    let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten();
+    let Some((path, _, duration_ms)) = found else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
+    };
+    let Some(turn) = crate::app::analysis_pass::heavy_turn(REWIND_TURN).await else {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "Another track is being decoded." }))).into_response();
+    };
+    let from_ms = duration_ms.map_or(q.from_ms, |d| q.from_ms.min(d));
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Result<axum::body::Bytes, std::io::Error>>();
+    let (said, heard) = tokio::sync::oneshot::channel();
+    tokio::task::spawn_blocking(move || {
+        let _turn = turn;
+        let _job = crate::memwatch::job(format!("tape rewind: {}", path.display()));
+        let mut sound = match crate::analysis::Reading::open(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = said.send(Err(format!("{e:#}")));
+                return;
+            }
+        };
+        let rewind = crate::rewind::Rewind::new(sound.rate(), sound.channels(), from_ms, q.ms);
+        let _ = said.send(Ok(rewind.bytes()));
+        // The whole clip is a few MB at most: made as fast as it goes, the turn not held while the player reads.
+        if let Err(e) = rewind.render(&mut sound, |b| tx.send(Ok(b.into())).is_ok()) {
+            tracing::warn!("tape rewind of {}: {e:#}", path.display());
+            let _ = tx.send(Err(std::io::Error::other(format!("{e:#}"))));
+        }
+    });
+    let bytes = match heard.await {
+        Ok(Ok(n)) => n,
+        Ok(Err(e)) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "error": e }))).into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/wav"));
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(bytes));
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    (headers, axum::body::Body::from_stream(tokio_stream::wrappers::UnboundedReceiverStream::new(rx))).into_response()
 }
 
 /// A track as Opus in fragmented MP4, made as it is sent: a lossless one for a phone's stream, and with `lossy_too` one

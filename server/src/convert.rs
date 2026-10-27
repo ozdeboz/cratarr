@@ -138,10 +138,10 @@ pub fn quantise(x: f32, dither: f64) -> (i32, bool) {
 /// TPDF dither: the difference of two uniform values, so triangular over ±1 step (the least that makes the error
 /// independent of the signal, without noise shaping). A small xorshift generator, seeded fixed: the same input
 /// converts to the same bytes.
-struct Tpdf(u64);
+pub(crate) struct Tpdf(u64);
 
 impl Tpdf {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Tpdf(0x9E37_79B9_7F4A_7C15)
     }
 
@@ -154,7 +154,7 @@ impl Tpdf {
         (x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
     }
 
-    fn next(&mut self) -> f64 {
+    pub(crate) fn next(&mut self) -> f64 {
         self.uniform() - self.uniform()
     }
 }
