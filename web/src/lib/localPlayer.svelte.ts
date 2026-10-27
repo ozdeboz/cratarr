@@ -574,6 +574,7 @@ function tick() {
   if (!audio || local.index < 0 || handed()) return;
   // A ramp under way has committed to where it goes (lib's Start and stop): that is what shows, everywhere; the tape's
   // own stop (quiet) shows playing.
+  if (quietPause && committed === null && !rewinding && performance.now() > quietUntil) quietPause = false;
   local.paused = quietPause ? false : (committed ?? audio.paused);
   const w = where(heldAt ?? audio.currentTime);
   if (w && rewinding) local.position = rewindPos ?? local.position;
@@ -945,6 +946,8 @@ export function reportedBy(m: {
   // The app's tape rewind (a5): its position going back as it reports it, shown as it goes (lib/remote).
   if (typeof m.rewinding === 'boolean') {
     if (m.rewinding) windAsked(false);
+    // Its wind ended: where it landed is a place of its own (lib/remote: no hold against the last place shown).
+    else if (rewindNow.on) sought.n++;
     rewindNow.on = m.rewinding;
   }
   // Its direction knob, as it stands there.
@@ -1569,6 +1572,19 @@ export function seek(secs: number, wind?: boolean) {
     return hand('seek', { positionMs: Math.round(secs * 1000) });
   }
   if (!audio) return;
+  // Played backwards (the knob at L): backwards on from the place sought, the knob as it is.
+  if (rewinding?.reverse) {
+    const index = rewinding.shown;
+    endRewind();
+    quietPause = true;
+    restAt(index, secs);
+    if (!backwards()) {
+      quietPause = false;
+      Object.assign(tapeDir, { want: 'R', state: 'forward' });
+      void audio.play().catch(refused);
+    }
+    return;
+  }
   // During a tape's rewind: it ends, and the track plays from there.
   if (rewinding) {
     endRewind();
@@ -1786,6 +1802,9 @@ let turnRamp: { mode: 'vinyl'; ms: number } | null = null;
 let quiet = false;
 /** The quiet pause under way: shown as playing. */
 let quietPause = false;
+/** Until when the tape's own rest may stand between two of its actions (settle): past it, or with nothing of the tape's
+ *  running, the tick shows what is (a rest never held as playing by mistake). */
+let quietUntil = 0;
 /** Runs `go` quietly (a ramp reads it as it begins). */
 function quietly<T>(go: () => T): T {
   quiet = true;
@@ -2105,6 +2124,8 @@ const FLY_LEAD = 0.5;
 /** A flown hold let go: once braked, the track's own player takes over at the speed the wind got down to, and comes
  *  down to 1× over LAND_MS. */
 const LAND_MS = 300;
+/** How long a flown hold's hand-back waits for the track's stream there before landing the plain way. */
+const LAND_WAIT_MS = 3000;
 type Winding = {
   clip: HTMLAudioElement;
   seg: Segment;
@@ -2380,12 +2401,17 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
   const land = (place: { index: number; pos: number }) => {
     if (landing || !audio) return;
     landing = true;
+    let waited = 0;
     const go = () => {
       if (!mine() || !audio) return;
       const at = windPlace(w, performance.now());
       const speed = Math.min(16, vAt(w, clip.currentTime) * clip.playbackRate);
       const tw = where();
-      if (!(tw && tw.seg.index === at.index && inBuffer(tw.seg.start + at.pos))) return void setTimeout(go, 50);
+      if (!(tw && tw.seg.index === at.index && inBuffer(tw.seg.start + at.pos))) {
+        // The track's stream not in after LAND_WAIT_MS: on from there as any wind lands (the wind-up's own way).
+        if ((waited += 50) >= LAND_WAIT_MS) return arrive(at);
+        return void setTimeout(go, 50);
+      }
       say('landed', { index: at.index, at: Math.round(at.pos * 1000), speed: Math.round(speed * 100) / 100 });
       audio.currentTime = tw.seg.start + at.pos;
       endRewind();
@@ -2497,6 +2523,8 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
 function endRewind() {
   const w = rewinding;
   if (!w) return;
+  // Where it lands is a place of its own, as a seek's (lib/remote: no hold against the last place shown).
+  sought.n++;
   clearInterval(w.timer);
   rewinding = null;
   rewindPos = null;
@@ -2543,6 +2571,7 @@ export async function windHold(dir: 'back' | 'forward') {
   if (!startWind(null, h.dir, armed)) {
     disarm(armed);
     holding = null;
+    quietPause = false;
   }
 }
 /** A forward hold while playing: its stream asked from a moment ahead, taken over as the track reaches that moment
@@ -2586,6 +2615,7 @@ async function settle() {
   const w = rewinding;
   // The tape's own rest between two actions: shown playing (no grey, no fill) until the next takes over.
   quietPause = true;
+  quietUntil = performance.now() + 6000;
   if (w && !w.reverse && w.at !== null) {
     holding = null;
     w.after = 'pause';
