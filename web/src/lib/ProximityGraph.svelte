@@ -165,16 +165,28 @@
     return () => select(svg!).on('.zoom', null);
   });
 
-  /** Each layout, once worked out: zoomed so every point is in view. */
+  /** The box's size the view was last fitted to. */
+  let fitted = { w: 0, h: 0, lands: false };
+  /** Each layout, once worked out, and the box resized (full screen, a turned tablet, the page's height measured):
+   *  zoomed so every point is in view (the owner, 2026-10-27: it stayed fitted to the size it first had). */
   function fit() {
     if (!svg || !zoomer) return;
+    fitted = { w: width, h: height, lands: showTerritories };
     const xs = nodes.map((p) => p.x ?? 0);
     const ys = nodes.map((p) => p.y ?? 0);
     const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
-    const k = Math.min(width / (x1 - x0 + 60), height / (y1 - y0 + 60), 2.5);
+    // Room around the points; with the territories, for their areas too (a single point's reaches about 45 out).
+    const room = showTerritories ? 150 : 60;
+    const k = Math.min(width / (x1 - x0 + room), height / (y1 - y0 + room), 2.5);
     const t = zoomIdentity.scale(k).translate(-(x0 + x1) / 2, -(y0 + y1) / 2);
     select(svg).call(zoomer.transform, t);
   }
+
+  $effect(() => {
+    const [w, h, lands] = [width, height, showTerritories];
+    if (!frame || (Math.abs(w - fitted.w) < 2 && Math.abs(h - fitted.h) < 2 && lands === fitted.lands)) return;
+    untrack(fit);
+  });
 
   const neighbours = $derived.by(() => {
     const s = new Set<number>();
