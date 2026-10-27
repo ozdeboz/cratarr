@@ -2030,6 +2030,13 @@ function rampIn(early?: { ms: number; lead: number }) {
   const set = rampSet(mode);
   set(mode === 'fade' ? 0 : RAMP_LOW);
   rampBegins('in', ms, full, !quiet);
+  if (quiet) playback('info', 'tape on', { index: local.index, at: Math.round((where()?.offset ?? 0) * 1000) });
+  // A vinyl's start at its slowest, faded in over its first moment (no plop); a fade starts silent anyway.
+  if (mode === 'vinyl') {
+    rampGain = 0;
+    applyVolume();
+    void gainTo(1, DECLICK_MS);
+  }
   void audio.play().catch(refused);
   const mine = ++run;
   void ramp(mode === 'fade' ? 0 : RAMP_LOW, 1, ms, set, mode === 'fade' ? easeInOut : easeOut).then(() => {
@@ -2094,10 +2101,14 @@ async function pauseRamped() {
   try {
     await rampOut(share);
     if (mine !== run) return;
+    // Never stopped at once at the brake's slowest (a plop, the owner's tablet 2026-10-27): its last moment faded.
+    await gainTo(0, DECLICK_MS);
+    if (mine !== run) return;
     audio?.pause();
+    if (quietPause) playback('info', 'tape stood', { index: local.index, at: Math.round((where()?.offset ?? 0) * 1000) });
     // A pause rests where it was pressed (the effect's way); the tape's own stop (a turn, a hold's) where the tape came
     // to stand, so what follows goes on from the very place the sound ended.
-    if (audio && !quietPause && inBuffer(heldAt)) audio.currentTime = heldAt;
+    if (audio && !quietPause && heldAt !== null && inBuffer(heldAt)) audio.currentTime = heldAt;
     // Next kept from the brake: from the standstill, the next track starts up.
     if (nextAfterPause && local.index + 1 < local.queue.length) jump(local.index + 1);
   } finally {
@@ -2176,6 +2187,8 @@ async function overrideRamp(secs: number) {
   });
   unramp();
 }
+/** How long a sound's very start and end are faded (ms): never a step, so never a plop. */
+const DECLICK_MS = 15;
 /** The ramp's gain to `to` over `ms`. */
 function gainTo(to: number, ms: number): Promise<void> {
   const g0 = rampGain;
@@ -2255,6 +2268,8 @@ type Winding = {
   brakeFrom: number;
   /** A held one's stream ran out: at the track's edge. */
   edge: boolean;
+  /** Its sound's fade (0..1): in as it starts, out as it ends (no plop). */
+  fade: number;
   /** A cut one's plan (a5's map=1), where it has come: where in the track each moment of its sound is; and the speed its
    *  stream runs at (a flown one's floor: 1 over it). */
   map: [number, number, number][] | null;
@@ -2294,7 +2309,21 @@ const PLAIN_TOP = 4;
 let plainHold: { dir: 1 | -1; speeding: boolean } | null = null;
 /** The wind as loud as the track: the page's volume and the track's level (the wind volume is the stream's own). */
 function clipVolume() {
-  if (rewinding && audio) rewinding.clip.volume = Math.min(1, audio.volume * (level ? (told?.level ?? 1) : 1));
+  if (!rewinding || !audio) return;
+  // The page's volume and the track's level (not the track's own ramp, which stands still meanwhile), times its own fade.
+  const page = (pageVolume.level / 100) * (pageVolume.ducked ? DUCKED : 1);
+  rewinding.clip.volume = Math.max(0, Math.min(1, page * (level ? (told?.level ?? 1) : 1) * rewinding.fade));
+}
+/** A wind's sound faded in from silence over DECLICK_MS (no plop as it starts). */
+function fadeIn(w: Winding) {
+  const t0 = performance.now();
+  const step = () => {
+    if (rewinding !== w) return;
+    w.fade = Math.min(1, (performance.now() - t0) / DECLICK_MS);
+    clipVolume();
+    if (w.fade < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 /** A queue place's length, where known (s). */
 const lengthOf = (i: number) => local.queue[i]?.duration_secs ?? null;
@@ -2543,7 +2572,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
   const v0 = use?.v0 ?? wind.speed;
   // Flown: it sounds at the track's own speed from its first moment (a wind to a point: its floor as made).
   if (fly) clip.playbackRate = use?.floor ?? 1 / v0;
-  const w: Winding = { clip, seg, from, to, dir, D, wind, map: null, mapSpeed: use?.floor ? 1 / use.floor : null, v0, accel, accelS: hold.doublingS, top: hold.top, fly, reverse, after: 'play', at: null, brake: null, brakeFrom: 1, edge: false, through, shown: seg.index, timer: undefined };
+  const w: Winding = { clip, seg, from, to, dir, D, wind, fade: 0, map: null, mapSpeed: use?.floor ? 1 / use.floor : null, v0, accel, accelS: hold.doublingS, top: hold.top, fly, reverse, after: 'play', at: null, brake: null, brakeFrom: 1, edge: false, through, shown: seg.index, timer: undefined };
   const mine = () => rewinding === w;
   // Every step timed from the press, in the playback log (the owner, 2026-10-27: find any delay at the deepest level).
   const t0 = performance.now();
@@ -2673,6 +2702,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       clearTimeout(late);
       w.at = performance.now();
       say('playing');
+      fadeIn(w);
       rewindNow.on = true;
       windAsked(false);
       w.timer = setInterval(() => {
@@ -2752,9 +2782,19 @@ function endRewind() {
   rewindNow.on = false;
   windAsked(false);
   committed = null;
-  w.clip.pause();
-  w.clip.removeAttribute('src');
-  w.clip.load();
+  // Its last moment faded out before it stops (no plop), what follows already starting meanwhile.
+  const clip = w.clip;
+  const from = clip.volume;
+  const t0 = performance.now();
+  const out = () => {
+    const u = Math.min(1, (performance.now() - t0) / DECLICK_MS);
+    clip.volume = from * (1 - u);
+    if (u < 1) return void requestAnimationFrame(out);
+    clip.pause();
+    clip.removeAttribute('src');
+    clip.load();
+  };
+  requestAnimationFrame(out);
 }
 /** Holding Previous (`back`) or Next (`forward`) began: winds that way, after pausing as a pause does, until
  *  `windRelease` (the owner, 2026-10-27). The app's player and one of Cratarr's players do it themselves. */
