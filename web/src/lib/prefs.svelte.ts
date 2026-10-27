@@ -196,8 +196,8 @@ export type Prefs = {
   offlineQuality: 'smaller' | 'original';
   /** How play and pause start and stop (Settings › This device; the owner, 2026-10-25): at once, as a turntable (the
    *  speed, and the pitch with it) or fading; over `startStopMs`; for next and previous too (`startStopSkips`). `rewind`:
-   *  Tape rewind, kept but hidden and unused until it plays the track backwards (the owner, 2026-10-26). The app keeps
-   *  its own. */
+   *  Tape rewind: Previous restarting a track plays it backwards to its start, as a tape (the server's clip, four times
+   *  the ramp). The app keeps its own. */
   startStop: StartStop;
   /** What the player's four swipes do (Settings › Player; the owner, 2026-10-26): up and down, on its left half and on
    *  its right. */
