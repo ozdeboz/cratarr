@@ -65,6 +65,9 @@
   /** Each piece's rise or fall under way: toward what, and how far it had to go from where it turned. */
   let aim = new Float32Array(0);
   let span = new Float32Array(0);
+  /** Each piece's scale as heard (the level), going to its goal's with the front as its rise does (the owner,
+   *  2026-10-27: levelling switched is another goal of the waveform's, not a jump of the whole). */
+  let scale = new Float32Array(0);
   let frame = $state(0);
 
   // Every goal runs from left to right on its own (the owner, 2026-10-26: "every new intention should run from left to
@@ -72,7 +75,7 @@
   // of the newest front that has reached it, the pieces to the right of a front still for the one before. A goal starts
   // GOAL_DELAY_MS after it is asked for, one asked for meanwhile in its place (a waveform in within that time: no
   // goal toward the wait first).
-  type Goal = { at: number; w: typeof want; heights: number[] | null };
+  type Goal = { at: number; w: typeof want; heights: number[] | null; heard: number };
   let goals: Goal[] = [];
   const GOAL_DELAY_MS = 100;
   let pending = 0;
@@ -106,6 +109,12 @@
     let moving = goals.length > 1;
     for (let i = 0; i < n; i++) {
       const g = goalOf(i, t);
+      // Its level: toward the goal's, as fast as a full rise.
+      if (scale[i] !== g.heard) {
+        const by = dt / RISE_MS;
+        scale[i] = g.heard > scale[i] ? Math.min(g.heard, scale[i] + by) : Math.max(g.heard, scale[i] - by);
+        moving = true;
+      }
       const tr = riseWanted(i, g);
       const tg = gapWanted(i, g.w);
       // Down first where it must close its gap, else toward its height.
@@ -139,7 +148,8 @@
       rise = new Float32Array(count);
       aim = new Float32Array(count);
       span = new Float32Array(count);
-      goals = [{ at: -Infinity, w: want, heights }];
+      scale = new Float32Array(count).fill(heard);
+      goals = [{ at: -Infinity, w: want, heights, heard }];
       for (let i = 0; i < count; i++) {
         gap[i] = gapWanted(i, want);
         rise[i] = riseWanted(i, goals[0]);
@@ -151,10 +161,12 @@
   $effect(() => {
     void want;
     void heights;
+    void heard;
     untrack(() => {
       clearTimeout(pending);
       if (reducedMotion()) {
-        goals = [{ at: -Infinity, w: want, heights }];
+        goals = [{ at: -Infinity, w: want, heights, heard }];
+        scale.fill(heard);
         for (let i = 0; i < n; i++) {
           gap[i] = gapWanted(i, want);
           rise[i] = riseWanted(i, goals[0]);
@@ -166,8 +178,8 @@
       pending = window.setTimeout(() => {
         const g = goals.at(-1);
         // The same goal again (it was asked for and taken back within the delay): no new front.
-        if (g && g.w === want && g.heights === heights) return;
-        goals = [...goals, { at: performance.now(), w: want, heights }];
+        if (g && g.w === want && g.heights === heights && Math.abs(g.heard - heard) < 0.01) return;
+        goals = [...goals, { at: performance.now(), w: want, heights, heard }];
         run();
       }, GOAL_DELAY_MS);
     });
@@ -184,26 +196,25 @@
 
   const f = (x: number) => Math.round(x * 100) / 100;
   /** Every piece as one path: in the line (full width, the line's height), slim, or risen. */
-  /** The pieces drawn with their rise scaled by `scale`: as heard (the level) or as made (1, the ghost). */
-  const draw = (scale: number) => {
+  /** The pieces drawn with their rise as heard (each piece's level) or as made (`made`: the ghost). */
+  const draw = (made: boolean) => {
     let s = '';
     for (let i = 0; i < gap.length; i++) {
       const g = gap[i];
-      const h = line + (LOW - line) * g + rise[i] * scale;
+      const h = line + (LOW - line) * g + rise[i] * (made ? 1 : (scale[i] ?? 1));
       const w = 1 - 0.3 * g;
       s += `M${f(i + (1 - w) / 2)} ${f((100 - h) / 2)}h${f(w)}v${f(h)}h${f(-w)}z`;
     }
     return s;
   };
-  /** Levelled visibly: its scale a step from 1 (a fraction of a dB shows nothing). */
-  const levelled = $derived(heard < 0.97);
+  /** Levelled visibly somewhere: a piece's scale a step from 1 (a fraction of a dB shows nothing). */
   const d = $derived.by(() => {
     void frame;
-    return draw(levelled ? heard : 1);
+    return draw(false);
   });
   const ghost = $derived.by(() => {
     void frame;
-    return levelled ? draw(1) : '';
+    return scale.some((v) => v < 0.97) ? draw(true) : '';
   });
 </script>
 
