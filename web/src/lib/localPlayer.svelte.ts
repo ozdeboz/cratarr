@@ -1311,6 +1311,8 @@ const LOW = 3;
 let filling = false;
 /** Next pressed on the last track while Autoplay fetches: on into its first pick once it is in. */
 let nextWhenFilled = false;
+/** Next pressed while a pause brakes: the next track, started up once the tape stands still (play meanwhile drops it). */
+let nextAfterPause = false;
 /** The own tracks Radio has asked inserts for (by entry, or place and id): one ask per track. */
 const insertedFor = new Set<string>();
 
@@ -1606,9 +1608,10 @@ export function next() {
   // The app's player or one driven: its own Next (its wind-down, its fast-forward), never a jump to a track, which it
   // takes plainly (a5, 2026-10-27: the tablet's Next had no wind-down).
   if (handed()) return hand('next');
-  // While a brake runs (a skip's wind-down, a pause's): Next is not taken, silently (the owner, 2026-10-27: one tap, one
-  // skip).
-  if (committed !== null && ramping.dir === 'out' && !rewinding) return;
+  // A wind-down is never cut short: the tape comes to its standstill first (the owner, 2026-10-27). A skip's own takes no
+  // second Next (one tap, one skip); a pause's keeps it, and the next track starts up once the tape stands still.
+  if (committed === false && ramping.dir === 'out' && !rewinding) return;
+  if (committed === true && ramping.dir === 'out' && !rewinding) return void (nextAfterPause = true);
   if (rewinding) return windTakeover('next');
   // The last track, Autoplay on: on into its picks once they are in (asked now if not yet).
   if (local.index >= local.queue.length - 1 && local.autoplay) {
@@ -2035,6 +2038,7 @@ function rampIn(early?: { ms: number; lead: number }) {
  *  ramp, playing on from where it sounds (the counter goes with it from the press). */
 function turnUp() {
   if (!audio || committed !== true) return;
+  nextAfterPause = false;
   const { mode } = ss();
   if (mode === 'off') return atOnce();
   const share = Math.max(0, Math.min(1, rampAt));
@@ -2084,7 +2088,10 @@ async function pauseRamped() {
     if (mine !== run) return;
     audio?.pause();
     if (audio && inBuffer(heldAt)) audio.currentTime = heldAt;
+    // Next kept from the brake: from the standstill, the next track starts up.
+    if (nextAfterPause && local.index + 1 < local.queue.length) jump(local.index + 1);
   } finally {
+    nextAfterPause = false;
     if (mine === run) {
       heldAt = null;
       unramp();
