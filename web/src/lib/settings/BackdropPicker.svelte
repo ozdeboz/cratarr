@@ -2,8 +2,9 @@
   // What stands behind every flow (the owner, 2026-10-26: photos to pick, no grey canvas), as the theme's pictures
   // (lib/settings/AppearancePicker): small pictures in a row, a round tick under the one shown. Cratarr's photos
   // (lib/backdrop), and one's own picture once there is one (chosen under it, Your picture). With Shuffle on (the owner,
-  // 2026-10-27) the round ticks are boxes: the ticked ones take turns; at least one stays ticked.
-  import { BACKDROPS, backdropPhoto } from '../backdrop.svelte';
+  // 2026-10-27) the round ticks are boxes: the ticked ones take turns; at least one stays ticked; the one there now has
+  // the accent's frame.
+  import { BACKDROPS, backdropPhoto, shuffleNow } from '../backdrop.svelte';
   import { HOME_HEADER, localCovers } from '../localCovers.svelte';
   import { prefs, type FlowBackdrop } from '../prefs.svelte';
 
@@ -26,6 +27,7 @@
       type="button"
       class="look"
       class:on
+      class:now={prefs.flowShuffle && shuffleNow() === c.value}
       role={prefs.flowShuffle ? 'checkbox' : 'radio'}
       aria-checked={on}
       onclick={() => (prefs.flowShuffle ? tick(c.value) : (prefs.flowBackdrop = c.value))}
@@ -68,7 +70,8 @@
     background: center 20% / cover no-repeat;
   }
 
-  .look.on .picture {
+  .looks:not(.shuffle) .look.on .picture,
+  .look.now .picture {
     border-color: var(--accent);
   }
 

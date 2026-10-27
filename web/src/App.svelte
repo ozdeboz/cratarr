@@ -1,6 +1,6 @@
 <script lang="ts">
   import { installed } from './lib/offline.svelte';
-  import { backdropUrl, nextBackdrop, SHUFFLE_EVERY_MS, shuffleStale } from './lib/backdrop.svelte';
+  import { backdropUrl, nextBackdrop, SHUFFLE_EVERY_MS, shuffleStale, shuffleTurns } from './lib/backdrop.svelte';
   import Playlists from './Playlists.svelte';
   import LinkSheet from './lib/LinkSheet.svelte';
   import Discover from './Discover.svelte';
@@ -284,8 +284,9 @@
   });
   $effect(() => {
     if (!prefs.flowShuffle || prefs.flowShuffleWhen !== 'timed') return;
-    const t = setInterval(nextBackdrop, SHUFFLE_EVERY_MS);
-    return () => clearInterval(t);
+    shuffleTurns();
+    const t = setTimeout(nextBackdrop, SHUFFLE_EVERY_MS);
+    return () => clearTimeout(t);
   });
   $effect(() => {
     const pic = backdropUrl();

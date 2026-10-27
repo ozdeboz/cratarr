@@ -29,7 +29,7 @@ export const backdropPhoto = (name: string) => new URL(`backdrops/${name}.jpg`, 
 export const SHUFFLE_EVERY_MS = 5 * 60_000;
 
 /** Shuffle's turn (the owner, 2026-10-27): the ticked one standing there now; null till the first is drawn. */
-const shuffled = $state<{ now: FlowBackdrop | null }>({ now: null });
+const shuffled = $state<{ now: FlowBackdrop | null; turns: number }>({ now: null, turns: 0 });
 
 /** What Shuffle may take: the ticked ones there are (one's own only while there is one). */
 const shuffleable = () => prefs.flowShuffled.filter((b) => b !== 'own' || localCovers[HOME_HEADER]);
@@ -41,7 +41,11 @@ export function nextBackdrop() {
   const all = shuffleable();
   const others = all.length > 1 ? all.filter((b) => b !== shuffled.now) : all;
   shuffled.now = others.length ? others[Math.floor(Math.random() * others.length)] : null;
+  shuffled.turns++;
 }
+
+/** How many turns Shuffle has taken: App's timer starts over at each (Next in Appearance too). */
+export const shuffleTurns = () => shuffled.turns;
 
 // A start draws the first.
 nextBackdrop();
@@ -58,6 +62,9 @@ export function flowOpened(seed: string) {
     if (all.length) shuffled.now = all[Math.abs(h) % all.length];
   }
 }
+
+/** The ticked one standing there now (Shuffle on), for the picker to mark. */
+export const shuffleNow = () => (prefs.flowShuffle && !shuffleStale() ? shuffled.now : null);
 
 /** Shuffle's turn no longer one it may take (Shuffle just on, that one unticked, one's own picture gone): App draws
  *  another. */

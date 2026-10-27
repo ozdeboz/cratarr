@@ -8,7 +8,7 @@
   import { prefs } from '../prefs.svelte';
   import AppearancePicker from './AppearancePicker.svelte';
   import BackdropPicker from './BackdropPicker.svelte';
-  import { DEFAULT_BACKDROP } from '../backdrop.svelte';
+  import { BACKDROPS, DEFAULT_BACKDROP, nextBackdrop, shuffleNow } from '../backdrop.svelte';
   import Group from './Group.svelte';
   import ChoiceSheet from './ChoiceSheet.svelte';
   import Item from './Item.svelte';
@@ -108,6 +108,13 @@
   {#if prefs.flowShuffle}
     <div transition:slide={{ duration: 160 }}>
       <Item name="Another one" value={SHUFFLE_WHEN.find((o) => o.value === prefs.flowShuffleWhen)?.label ?? null} onclick={() => (whenOpen = true)} />
+      <!-- While one stands everywhere (till the next start, or the timer), the user can take the next one now (the owner,
+           2026-10-27). -->
+      {#if prefs.flowShuffleWhen === 'start' || prefs.flowShuffleWhen === 'timed'}
+        <Item name="Now" line={BACKDROPS.find((b) => b.value === shuffleNow())?.label ?? (shuffleNow() === 'own' ? 'Yours' : null)}>
+          <span class="pick"><button onclick={nextBackdrop}>Next</button></span>
+        </Item>
+      {/if}
     </div>
   {/if}
   <Item name="Your picture" line={localCovers[HOME_HEADER] ? 'On this device' : 'One of your own, kept on this device'}>
