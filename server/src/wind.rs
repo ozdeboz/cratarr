@@ -10,7 +10,7 @@ use std::f64::consts::PI;
 
 use anyhow::{Result, bail};
 
-use crate::rewind::{BLOCK, FADE, FIRST, SPAN, Sound, XFADE, read_block, wav_header};
+use crate::rewind::{BLOCK, FADE, FIRST, SPAN, Sound, XFADE, read_block};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dir {
@@ -90,13 +90,22 @@ pub struct Wind {
 
 impl Wind {
     pub fn new(rate: u32, channels: usize, duration_ms: Option<u64>, ask: Ask) -> Result<Self> {
-        let out_rate = if rate <= 48_000 {
+        Self::joined(rate, channels, duration_ms, ask, None)
+    }
+
+    /// As `new`, its rate and channels those of the stream it joins (`Some`): winding on through the queue, every track
+    /// in the one stream, whatever its own.
+    pub fn joined(rate: u32, channels: usize, duration_ms: Option<u64>, ask: Ask, stream: Option<(u32, usize)>) -> Result<Self> {
+        let out_rate = if let Some((r, _)) = stream {
+            r
+        } else if rate <= 48_000 {
             rate
         } else if rate % 44_100 == 0 {
             44_100
         } else {
             48_000
         };
+        let channels = stream.map_or(channels, |(_, c)| c);
         let speed = if ask.speed.is_finite() { ask.speed.clamp(1.0, 16.0) } else { 6.0 };
         let edge = match ask.dir {
             Dir::Back => 0,
@@ -161,9 +170,25 @@ impl Wind {
         Ok(w)
     }
 
-    /// The whole WAV's length (bytes).
+    /// The whole WAV's length (bytes): one track alone (the endpoint sums a chain's parts).
+    #[cfg(test)]
     pub fn bytes(&self) -> u64 {
-        44 + self.frames as u64 * self.channels as u64 * 2
+        44 + self.data()
+    }
+
+    /// Its sound's length (bytes), without the header.
+    pub fn data(&self) -> u64 {
+        self.frames as u64 * self.channels as u64 * 2
+    }
+
+    /// Its length (ms of the stream).
+    pub fn ms(&self) -> f64 {
+        self.frames as f64 * 1000.0 / f64::from(self.out_rate)
+    }
+
+    /// The stream's rate and channels, for the tracks that join it.
+    pub fn stream(&self) -> (u32, usize) {
+        (self.out_rate, self.channels)
     }
 
     /// The speed it winds at (× the track's): lower than asked where a condensed wind got there sooner.
@@ -187,10 +212,16 @@ impl Wind {
 
     /// The WAV, header first, a block at a time to `send`; one that answers false (the player stopped reading: a hold
     /// let go) ends it. Only what the crossfades still need is kept, however long the wind.
+    #[cfg(test)]
     pub fn render(&self, sound: &mut dyn Sound, mut send: impl FnMut(Vec<u8>) -> bool) -> Result<()> {
-        if !send(wav_header(self.out_rate, self.channels, self.bytes() - 44)) {
+        if !send(crate::rewind::wav_header(self.out_rate, self.channels, self.data())) {
             return Ok(());
         }
+        self.sound(sound, send).map(|_| ())
+    }
+
+    /// Its sound without the header (a track joining a stream); whether the player is still reading.
+    pub fn sound(&self, sound: &mut dyn Sound, mut send: impl FnMut(Vec<u8>) -> bool) -> Result<bool> {
         let fade = ((FADE * f64::from(self.out_rate)) as usize).max(1);
         let span = SPAN * f64::from(self.rate);
         let mut dither = crate::convert::Tpdf::new();
@@ -235,13 +266,41 @@ impl Wind {
                     }
                     sent = ready;
                     if !send(bytes) {
-                        return Ok(());
+                        return Ok(false);
                     }
                 }
             }
         }
-        Ok(())
+        Ok(true)
     }
+}
+
+/// Winding on through the queue (0074, the queue as one tape): this track's wind to its edge, then each track in the
+/// way, nearest first, wound whole (back: from its end; forward: from its start), at the same speed and gain, in one
+/// stream. Each join stands exactly at a track's length as the catalogue reads it. `tracks`: each one's rate, channels
+/// and length (ms); the chain ends before the first whose length is not known.
+pub fn chain(tracks: &[(u32, usize, Option<u64>)], ask: Ask) -> Result<Vec<Wind>> {
+    let Some(&(rate, channels, duration)) = tracks.first() else { bail!("nothing to wind") };
+    let first = Wind::new(rate, channels, duration, Ask { fit: None, to_ms: None, ..ask })?;
+    let stream = first.stream();
+    let mut out = vec![first];
+    for &(rate, channels, duration) in &tracks[1..] {
+        let Some(d) = duration.filter(|d| *d > 0) else { break };
+        let from_ms = if ask.dir == Dir::Back { d } else { 0 };
+        out.push(Wind::joined(rate, channels, Some(d), Ask { from_ms, to_ms: None, fit: None, ..ask }, Some(stream))?);
+    }
+    Ok(out)
+}
+
+/// A chain's map: knots (stream ms, which track, track ms), each track's own after the ones before it.
+pub fn chain_map(winds: &[Wind]) -> Vec<(u64, usize, u64)> {
+    let mut at = 0.0;
+    let mut out = Vec::new();
+    for (i, w) in winds.iter().enumerate() {
+        out.extend(w.map().into_iter().map(|(c, t)| ((at + c as f64).round() as u64, i, t)));
+        at += w.ms();
+    }
+    out
 }
 
 #[cfg(test)]
@@ -307,6 +366,25 @@ mod tests {
         let short = Fit { ms: 400, ..fit };
         let w = Wind::new(44_100, 2, Some(240_000), Ask { fit: Some(short), ..ask(Dir::Back, 180_000, 6.0) }).unwrap();
         assert!(w.frames < 44_100 / 5, "{}", w.frames);
+    }
+
+    #[test]
+    fn a_hold_winds_on_through_the_queue_joining_at_each_tracks_length() {
+        // Back from 10 s at 2 ×: 5 s to this track's start, then the one before (30 s) whole from its end, 15 s more; the
+        // one before that has no known length and ends the chain.
+        let winds = chain(&[(44_100, 2, Some(60_000)), (48_000, 1, Some(30_000)), (44_100, 2, None)], ask(Dir::Back, 10_000, 2.0)).unwrap();
+        assert_eq!(winds.len(), 2);
+        assert_eq!(winds[1].stream(), (44_100, 2), "one stream, whatever the track's own");
+        assert_eq!(chain_map(&winds), vec![(0, 0, 10_000), (5_000, 0, 0), (5_000, 1, 30_000), (20_000, 1, 0)]);
+        // The sound joins without a gap: the whole stream as long as its parts.
+        let mut wav = Vec::new();
+        let (a, b) = (&winds[0], &winds[1]);
+        assert!(a.render(&mut Tone { hz: 440.0, secs: 60.0 }, |x| { wav.extend_from_slice(&x); true }).is_ok());
+        assert!(b.sound(&mut Tone { hz: 440.0, secs: 30.0 }, |x| { wav.extend_from_slice(&x); true }).unwrap());
+        assert_eq!(wav.len() as u64, a.bytes() + b.data());
+        // Forward: each from its start.
+        let winds = chain(&[(44_100, 2, Some(60_000)), (44_100, 2, Some(20_000))], ask(Dir::Forward, 50_000, 4.0)).unwrap();
+        assert_eq!(chain_map(&winds), vec![(0, 0, 50_000), (2_500, 0, 60_000), (2_500, 1, 0), (7_500, 1, 20_000)]);
     }
 
     #[test]

@@ -2862,8 +2862,18 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
     if q.as_.as_deref().is_some_and(|f| f != "wav") {
         return refused("Only WAV winds yet.");
     }
-    if q.through.as_deref().is_some_and(|t| !t.is_empty()) {
-        return refused("Winding through the queue is not there yet.");
+    // Winding on through the queue (0074): the tracks in the way, nearest first (`source:id` or `source/id`), at most 8;
+    // a hold only, to this track's edge.
+    let through: Vec<(String, String)> = q
+        .through
+        .as_deref()
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|t| t.trim().split_once([':', '/']).map(|(s, i)| (s.to_string(), i.to_string())))
+        .take(8)
+        .collect();
+    if !through.is_empty() && (q.fit_ms.is_some() || q.to_ms.is_some()) {
+        return refused("Only a hold winds on through the queue.");
     }
     let dir = match q.dir.as_str() {
         "back" => Dir::Back,
@@ -2880,6 +2890,16 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
     let Some((path, _, duration_ms)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
+    // The tracks in the way Cratarr has the files of; the first it has not (a preview, another server's) ends the chain.
+    let cat = app.library.catalogue();
+    let joins: Vec<(std::path::PathBuf, Option<u64>)> = tokio::task::spawn_blocking(move || {
+        through
+            .iter()
+            .map_while(|(s, i)| (s != crate::bandcamp::SOURCE).then(|| crate::stream::locate(&cat, s, i)).flatten().map(|(p, _, d)| (p, d)))
+            .collect()
+    })
+    .await
+    .unwrap_or_default();
     let Some(turn) = crate::app::analysis_pass::heavy_turn(REWIND_TURN).await else {
         tracing::warn!(target: "rewind", track = %what, waited = since(), "wind: the decode's turn did not come");
         return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "Another track is being decoded." }))).into_response();
@@ -2891,33 +2911,55 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
     tokio::task::spawn_blocking(move || {
         let _turn = turn;
         let _job = crate::memwatch::job(format!("wind: {}", path.display()));
-        let mut sound = match crate::analysis::Reading::open(&path) {
+        let sound = match crate::analysis::Reading::open(&path) {
             Ok(s) => s,
             Err(e) => {
                 let _ = said.send(Err((StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}"))));
                 return;
             }
         };
-        let wind = match Wind::new(sound.rate(), sound.channels(), duration_ms, ask) {
+        // The tracks it winds on into, opened; one that will not open ends the chain there.
+        let mut sounds = vec![sound];
+        let mut tracks = vec![(sounds[0].rate(), sounds[0].channels(), duration_ms)];
+        for (p, d) in &joins {
+            let Ok(s) = crate::analysis::Reading::open(p) else { break };
+            tracks.push((s.rate(), s.channels(), *d));
+            sounds.push(s);
+        }
+        let winds = if tracks.len() > 1 { crate::wind::chain(&tracks, ask) } else { Wind::new(tracks[0].0, tracks[0].1, duration_ms, ask).map(|w| vec![w]) };
+        let winds = match winds {
             Ok(w) => w,
             Err(e) => {
                 let _ = said.send(Err((StatusCode::BAD_REQUEST, format!("{e:#}"))));
                 return;
             }
         };
-        let map: Vec<serde_json::Value> = wind.map().into_iter().map(|(c, t)| json!([c, 0, t])).collect();
-        let _ = said.send(Ok((wind.bytes(), wind.speed(), serde_json::Value::Array(map).to_string())));
+        let map: Vec<serde_json::Value> = crate::wind::chain_map(&winds).into_iter().map(|(c, i, t)| json!([c, i, t])).collect();
+        let data: u64 = winds.iter().map(Wind::data).sum();
+        let (rate, channels) = winds[0].stream();
+        let _ = said.send(Ok((44 + data, winds[0].speed(), serde_json::Value::Array(map).to_string())));
         let mut blocks = 0u32;
-        let rendered = wind.render(&mut sound, |b| {
+        let mut send = |b: Vec<u8>| {
             blocks += 1;
             tx.blocking_send(Ok(b.into())).is_ok()
-        });
+        };
+        let rendered = (|| -> anyhow::Result<()> {
+            if !send(crate::rewind::wav_header(rate, channels, data)) {
+                return Ok(());
+            }
+            for (w, s) in winds.iter().zip(sounds.iter_mut()) {
+                if !w.sound(s, &mut send)? {
+                    break;
+                }
+            }
+            Ok(())
+        })();
         if let Err(e) = rendered {
             tracing::warn!("wind of {}: {e:#}", path.display());
             let _ = tx.blocking_send(Err(std::io::Error::other(format!("{e:#}"))));
         }
         tracing::info!(target: "rewind", track = %what2, from_ms = ask.from_ms, to_ms = ?ask.to_ms, dir = ?ask.dir, speed = ask.speed, fit = ?ask.fit,
-            blocks, ended = since(), "wind (ms since the request)");
+            tracks = winds.len(), blocks, ended = since(), "wind (ms since the request)");
     });
     let (bytes, speed, map) = match heard.await {
         Ok(Ok(h)) => h,
