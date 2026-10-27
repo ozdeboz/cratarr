@@ -111,6 +111,8 @@ class StartStop(
     private var tapeReleased = 0L
     private var tapeReleaseFrom = 1f
     private var tapeRate = 0f
+    /** A hold that could not wind: the plain press its letting go makes instead. */
+    private var holdPlain: (() -> Unit)? = null
 
     /** When Previous was pressed (elapsed realtime): every step of a rewind is logged in ms since (0.9.11, the owner: a
      *  rewind took far longer than its clip; where the time goes). The track's player watched meanwhile. */
@@ -481,13 +483,17 @@ class StartStop(
      * forward as long as held, to the edge at the latest; let go ([windStop]), braked, then on from where it got with
      * the wind-up. False where it cannot wind (in a group, a track Cratarr has no file of): the caller skips as ever.
      */
-    fun windStart(back: Boolean): Boolean {
-        note("wind", "phase" to "start", "back" to back, "busy" to busy)
-        if (busy || grouped() || tapeListener != null) return busy
+    fun windStart(back: Boolean, plain: () -> Unit): Boolean {
+        note("wind", "phase" to "start", "back" to back, "busy" to busy, "on" to prefs.startStopRewind)
+        holdPlain = null
+        if (busy || tapeListener != null) return busy
+        // Winding off here, in a group, a track Cratarr has no file of: nothing now, a plain press on letting go (a page
+        // driving this player offers the hold whatever this device says).
+        if (!prefs.startStopRewind || grouped()) return false.also { holdPlain = plain }
         val from = player.currentPosition
-        val edge = if (back) 0L else player.duration.takeIf { it > 0 } ?: return false
-        if (from == edge) return false
-        val url = windUrl(from, null, null, back) ?: return false
+        val edge = if (back) 0L else player.duration.takeIf { it > 0 } ?: return false.also { holdPlain = plain }
+        if (from == edge) return false.also { holdPlain = plain }
+        val url = windUrl(from, null, null, back) ?: return false.also { holdPlain = plain }
         val go = { wind(hold = true, from = from, to = edge, url = url, restart = { play { player.play() } }) { at -> player.seekTo(at); play { player.play() } } }
         // After the pause's own end (it rests where it was pressed, then lets go of its ramp).
         if (player.isPlaying) pause { player.pause(); main.post { go() } } else go()
@@ -496,7 +502,12 @@ class StartStop(
 
     /** A hold let go: the brake from the rate it has got to; a wind not sounding yet is dropped, the track playing on. */
     fun windStop() {
-        note("wind", "phase" to "stop", "winding" to (tapeListener != null), "started" to tapeStarted)
+        note("wind", "phase" to "stop", "winding" to (tapeListener != null), "started" to tapeStarted, "plain" to (holdPlain != null))
+        holdPlain?.let {
+            holdPlain = null
+            it()
+            return
+        }
         if (!tapeHold || tapeListener == null) return
         if (!tapeStarted) {
             tapeRestart = null

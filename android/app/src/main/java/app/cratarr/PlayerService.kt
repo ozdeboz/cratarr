@@ -592,6 +592,7 @@ class PlayerService : MediaSessionService() {
                 .add(SessionCommand(COMMAND_MODE, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_TARGET, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_SKIP, Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_WIND, Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller).setAvailableSessionCommands(commands).build()
         }
@@ -608,6 +609,16 @@ class PlayerService : MediaSessionService() {
                 // The page's next and previous (0.9.6): through Start and stop, the page showing the change once it is
                 // made (a controller's own next shows the next track at once, before a ramp out).
                 COMMAND_SKIP -> if (args.getString("dir") == "previous") sessionPlayer.seekToPrevious() else sessionPlayer.seekToNextMediaItem()
+                // The page's Previous or Next held (decision 0074), as Play On's `wind`: where it cannot wind, a plain press
+                // on letting go.
+                COMMAND_WIND -> {
+                    val back = args.getString("dir") != "forward"
+                    if (args.getString("phase") == "stop") {
+                        startStop.windStop()
+                    } else {
+                        startStop.windStart(back) { if (back) sessionPlayer.seekToPrevious() else sessionPlayer.seekToNextMediaItem() }
+                    }
+                }
                 else -> return super.onCustomCommand(session, controller, customCommand, args)
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -668,6 +679,7 @@ class PlayerService : MediaSessionService() {
         /** The page asks where the controls point (decision 0062): `to`, self, player:<name> or server. */
         const val COMMAND_TARGET = "cratarr.TARGET"
         const val COMMAND_SKIP = "cratarr.SKIP"
+        const val COMMAND_WIND = "cratarr.WIND"
 
         /** Started, and ready (or let go) as Stay ready says. Called while the app is in front, where both are allowed. */
         fun ready(context: Context) {

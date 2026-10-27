@@ -484,8 +484,10 @@ class PlayOnLink(
                 val back = m.optString("dir") != "forward"
                 if (m.optString("phase") == "stop") {
                     service.startStop.windStop()
-                } else if (!service.startStop.windStart(back)) {
-                    if (back) service.startStop.skip { if (!Repeat.previous(service, p)) p.seekToPrevious() } else service.startStop.skip { p.seekToNextMediaItem() }
+                } else {
+                    service.startStop.windStart(back) {
+                        if (back) service.startStop.skip { if (!Repeat.previous(service, p)) p.seekToPrevious() } else service.startStop.skip { p.seekToNextMediaItem() }
+                    }
                 }
             }
             "volume" -> setVolume(m.optInt("level", 100))

@@ -121,6 +121,14 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             // Through the service (0.9.6, Start and stop): the change shows once it is made, after a ramp out.
             "next" -> skip("next")
             "previous" -> skip("previous")
+            // Previous or Next held (decision 0074): wound while held, through the service as Play On's `wind`.
+            "wind" -> controller.sendCustomCommand(
+                SessionCommand(PlayerService.COMMAND_WIND, Bundle.EMPTY),
+                Bundle().apply {
+                    putString("dir", m.optString("dir"))
+                    putString("phase", m.optString("phase"))
+                },
+            )
             // Its items are located by the service when they reach it.
             "repeat" -> Repeat.set(context, c, m.optString("mode")) { it }
             // Kept by the service (Sleep); the change reaches the page as a report.
