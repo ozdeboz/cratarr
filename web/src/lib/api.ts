@@ -1996,6 +1996,8 @@ export type BeyondAlbum = {
   cover: string | null;
   release_group?: string | null;
   discogs?: string | null;
+  /** Its page on Discogs, where Discogs found it: Discogs' data is shown with its attribution (its terms). */
+  discogs_url?: string | null;
   sources: ('musicbrainz' | 'discogs')[];
   bandcamp?: string | null;
   request?: RequestMark | null;
@@ -2003,16 +2005,27 @@ export type BeyondAlbum = {
 };
 /** Beyond's albums for the words (decision 0076): the server's own merged search where it has it (0.9.13), else
  *  MusicBrainz's alone, as Find more music asks it. */
-export async function searchBeyond(q: string, limit = 20): Promise<BeyondAlbum[]> {
+export type BeyondFound = { albums: BeyondAlbum[]; artists: MusicBrainzFound['artists'] };
+export async function searchBeyond(q: string, limit = 20, offset = 0): Promise<BeyondFound> {
   try {
-    const r = await request<{ albums: BeyondAlbum[] }>(`/api/search/beyond?${new URLSearchParams({ q, limit: String(limit) })}`);
-    return r.albums;
+    const r = await request<{ albums: BeyondAlbum[]; artists?: MusicBrainzFound['artists'] }>(
+      `/api/search/beyond?${new URLSearchParams({ q, limit: String(limit), ...(offset ? { offset: String(offset) } : {}) })}`,
+    );
+    return { albums: r.albums, artists: r.artists ?? [] };
   } catch (e) {
     if (!(e instanceof ApiError && e.status === 404)) throw e;
   }
+  // A server before 0.9.13: MusicBrainz's alone, one page.
+  if (offset) return { albums: [], artists: [] };
   const r = await musicBrainzSearch(q, limit);
-  return r.albums.map((a) => ({ title: a.title, artist: a.artist, year: a.year, cover: a.cover, release_group: a.release_group, sources: ['musicbrainz'], request: a.request ?? null, have: a.have }));
+  return {
+    albums: r.albums.map((a) => ({ title: a.title, artist: a.artist, year: a.year, cover: a.cover, release_group: a.release_group, sources: ['musicbrainz'], request: a.request ?? null, have: a.have })),
+    artists: r.artists,
+  };
 }
+/** A wind's plan, without its sound (a5's map=1): where in the track(s) each moment of its stream is. */
+export const windMap = (url: string) =>
+  quietly<{ map: [number, number, number][]; speed: number; length_ms: number }>(`${url}${url.includes('?') ? '&' : '?'}map=1`);
 export const albumView = (source: string, album: string) =>
   quietly<AlbumView>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`);
 /** An artist as their panel shows them (decided 2026-10-16, as Symfonium's), by name as the albums credit them: their

@@ -102,7 +102,7 @@ $effect.root(() => {
     let gone = false;
     const t = setTimeout(() => {
       searchBeyond(q).then(
-        (albums) => {
+        ({ albums }) => {
           beyondKept.set(q.toLowerCase(), albums);
           if (!gone) globalSearch.beyond = { q, albums };
         },

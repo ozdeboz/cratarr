@@ -63,7 +63,7 @@
     }
     else if (it.kind === 'beyond') {
       const a = beyondAlbum(it.subject);
-      if (a) void elsewhere?.open({ release_group: a.release_group ?? null, title: a.title, artist: a.artist, year: a.year, cover: a.cover, bandcamp: a.bandcamp ?? null });
+      if (a) void elsewhere?.open({ release_group: a.release_group ?? null, title: a.title, artist: a.artist, year: a.year, cover: a.cover, bandcamp: a.bandcamp ?? null, discogs_url: a.discogs_url ?? null });
     }
     else viewOver(it.subject);
   }
@@ -124,6 +124,10 @@
         <ul class="rows">
           {#each g.items as it (it.subject + (it.track ?? ''))}{@render found(it)}{/each}
         </ul>
+        <!-- Discogs' data shown with its attribution (its terms; 0076). -->
+        {#if g.kind === 'beyond' && globalSearch.beyond?.albums.some((a) => a.sources.includes('discogs'))}
+          <p class="credit">Data from <a href="https://www.discogs.com" target="_blank" rel="noopener noreferrer">Discogs</a></p>
+        {/if}
       {/each}
     {:else if asked}
       <div class="none">
@@ -178,6 +182,16 @@
 
   .why {
     color: var(--accent-ink);
+  }
+
+  .credit {
+    margin: 0 0 8px 16px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .credit a {
+    color: inherit;
   }
 
   .none {
