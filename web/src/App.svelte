@@ -1,6 +1,6 @@
 <script lang="ts">
   import { installed } from './lib/offline.svelte';
-  import { backdropUrl } from './lib/backdrop.svelte';
+  import { backdropUrl, nextBackdrop, SHUFFLE_EVERY_MS, shuffleStale } from './lib/backdrop.svelte';
   import Playlists from './Playlists.svelte';
   import LinkSheet from './lib/LinkSheet.svelte';
   import Discover from './Discover.svelte';
@@ -278,6 +278,15 @@
   // One's own header picture (Settings › Appearance) behind every flow (the owner, 2026-10-26): one variable for the
   // page, each flow's canvas drawing it under a veil (--flow-photo; none without one). Only once it is in: until then
   // (and should it not come) the flows stand on the page's own ground, never a grey veil (the owner, 2026-10-27).
+  // Shuffle (Settings › Appearance): another ticked one when the one there may no longer stand, and on its timer.
+  $effect.pre(() => {
+    if (shuffleStale()) nextBackdrop();
+  });
+  $effect(() => {
+    if (!prefs.flowShuffle || prefs.flowShuffleWhen !== 'timed') return;
+    const t = setInterval(nextBackdrop, SHUFFLE_EVERY_MS);
+    return () => clearInterval(t);
+  });
   $effect(() => {
     const pic = backdropUrl();
     const root = document.documentElement;

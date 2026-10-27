@@ -446,6 +446,7 @@
              beside it comes to the front. -->
         {@const front = albums[flowAt[s.id] ?? 0]}
         <FlowStage
+          seed="albums:{s.id}"
           covers={albums.map((a) => albumCoverUrl(s.id, a.id))}
           marked={selecting ? albums.map((a) => selecting!.has(keyOf(s, a))) : undefined}
           front={front ? { title: front.title, by: [front.artist ?? 'Unknown artist', front.year].filter(Boolean).join(' · ') } : null}

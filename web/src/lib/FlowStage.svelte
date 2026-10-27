@@ -14,7 +14,7 @@
   import CoverFlow from './CoverFlow.svelte';
   import Icon from './Icon.svelte';
   import CoverFacts, { type CoverFact } from './CoverFacts.svelte';
-  import { backdropUrl } from './backdrop.svelte';
+  import { backdropUrl, flowOpened } from './backdrop.svelte';
 
   let {
     covers,
@@ -28,8 +28,11 @@
     playing = false,
     canPlay = true,
     details = null,
+    seed,
   }: {
     covers: string[];
+    /** What names this flow, for Shuffle's photo of its own (lib/backdrop). */
+    seed: string;
     /** The ticked ones, by their place (Select). */
     marked?: boolean[];
     /** The front one's name and who or what under it. */
@@ -57,6 +60,11 @@
    *  them, no scroll left under them), so they sit together in the middle of the room. */
   let spare = $state(last.spare);
   const wall = $derived(!!backdropUrl());
+  // Shuffle's next on opening (Settings › Appearance).
+  $effect(() => {
+    const s = seed;
+    untrack(() => flowOpened(s));
+  });
   /** Details on: the front one's facts over its cover, until another comes to the front. */
   let showing = $state(false);
   function toFront(i: number) {

@@ -212,6 +212,7 @@
     />
     {#if layout === 'flow'}
       <FlowStage
+        seed="artists"
         covers={shown.map((a) => a.cover)}
         marked={selecting ? shown.map((a) => selecting!.has(keyOf(a))) : undefined}
         front={flowFront ? { title: flowFront.name, by: `${plural(flowFront.albums, 'album')} · ${plural(flowFront.tracks, 'track')}` } : null}

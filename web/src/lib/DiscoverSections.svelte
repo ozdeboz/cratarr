@@ -7,6 +7,7 @@
   // menu (`onmenu`), as Home's albums; Play hears it on Bandcamp in Cratarr's own player (`onplay`).
   import { untrack } from 'svelte';
   import { albumCoverUrl, discoverArtistPhotoUrl, getDiscoverArtist, type DiscoverAlbum, type RequestMark } from './api';
+  import { flowOpened } from './backdrop.svelte';
   import { library } from './albums.svelte';
   import Cover from './Cover.svelte';
   import CoverPlay from './CoverPlay.svelte';
@@ -200,7 +201,7 @@
   {@const a = n.items[0]}
   <section aria-label="New to you">
     <SectionHead title="New to you" />
-    <div class="artist-flow">
+    <div class="artist-flow" {@attach () => untrack(() => flowOpened('discover:new'))}>
       <CoverFlow
         covers={sec.newArtists.map((x) => discoverArtistPhotoUrl(x.artist))}
         top={0}
