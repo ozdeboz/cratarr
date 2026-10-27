@@ -558,8 +558,6 @@
             device: pagePill && pillDevice,
             filter: (pagePill && !page.startsWith('local-') && page !== 'downloads') || page === 'discover',
             action: pageView.action,
-            // Home's Find everything, beside the pill (the owner, 2026-10-27; a glass of its own on the left was not).
-            find: page === 'home',
           }
         : null,
   );
