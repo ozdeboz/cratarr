@@ -2,7 +2,8 @@
 
 - Status: accepted (the owner, 2026-10-27: "global search should first look through our library, then through the
   indexed universe, and then through the unindexed universe"; MusicBrainz and Discogs "both together beyond your
-  library"; Find more music one step earlier, automatically; "a good 9.13 feature")
+  library"; Find more music one step earlier, automatically; "a good 9.13 feature"; and every group's results shown
+  whole: "there is no way to show all of the categories sub-results")
 - Date: 2026-10-27
 - Release: 0.9.13
 - Builds on: 0072 (one search, structured), 0.9.3's Find more music, 0069 (Discover), 0070 (requests), 0071 (Bandcamp
@@ -40,14 +41,19 @@ through what is connected; and the **unindexed universe**, what only a live sear
 - **Opened as a missing album is** (lib/ElsewhereAlbum): Bandcamp's preview where found, else the menu with Want and
   the source's page. Want requests it by its MusicBrainz release group where known (a Discogs find mapped through
   MusicBrainz), else by name.
-- **Find more music** stays as Beyond's "See all": the full list, Discogs now beside MusicBrainz.
+- **Every group shows all it found:** a group shows its first few, its total beside its name, and "Show all" opens
+  that kind alone, the whole list in the same order, more as it scrolls (paged by the server). The library's groups,
+  the known-elsewhere kinds and Beyond alike.
+- **Find more music** becomes Beyond's "Show all": the full list, Discogs now beside MusicBrainz.
 - Discogs' terms: its data is shown with its attribution.
 
 ## Endpoints (sketch, fixed when built)
 
-- `GET /api/search?q=&kinds=&limit=` gains the known-elsewhere kinds (`spotify`, `suggested`, `requested`, beside
+- `GET /api/search?q=&kinds=&limit=&offset=`: `offset` pages one kind's whole list ("Show all": `kinds` one kind,
+  `limit` a page, `offset` where the page before ended; the group's `total` says how many there are). It gains the
+  known-elsewhere kinds (`spotify`, `suggested`, `requested`, beside
   `missing` and `excluded`), each item with `known: [why…]`.
-- `GET /api/search/beyond?q=&limit=` → `{ q, albums: [{ title, artist, year, cover, release_group?, discogs?,
+- `GET /api/search/beyond?q=&limit=&offset=` → `{ q, albums: [{ title, artist, year, cover, release_group?, discogs?,
   sources: ["musicbrainz"|"discogs"], bandcamp?, request? }], artists: [...] }`: asked by the page once the words settle;
   cached per query.
 
