@@ -8,7 +8,9 @@
 //! must exist. Every exchange has a short timeout. While the directory cannot be reached (no connection, no answer in
 //! time; not when it refuses Cratarr's service account, which fails closed), a sign-in it accepted in the last 30 days
 //! still works through a slow hash of its password (Argon2id, owner-only file); a refusal by the directory
-//! deletes that hash at once, so a password changed or a user removed there stops working here too.
+//! deletes that hash at once, so a password changed or a user removed there stops working here too. The name may be
+//! the user's address (`mail`) too; the hash is kept by directory name only, so while the directory is away only that
+//! name signs in.
 //!
 //! An empty password is refused before any exchange (a bind with one is an anonymous bind, which succeeds), and so is
 //! a name with control characters. Names and group go into the search filter escaped (RFC 4515). Plain LDAP is
@@ -129,11 +131,16 @@ pub fn escape(value: &str) -> String {
     out
 }
 
-/// The search for one user: the name in its attribute, and the group when one is set.
+/// The search for one user: the name in its attribute or as their address (`mail`; 0.9.8, the owner: "Both should be
+/// accepted", as Jellyfin's LDAP plugin takes either), and the group when one is set.
 fn filter(attribute: &str, name: &str, group: &str) -> String {
-    let user = format!("({attribute}={})", escape(name));
+    let name = escape(name);
+    let user = if attribute.eq_ignore_ascii_case(MAIL) { format!("({attribute}={name})") } else { format!("(|({attribute}={name})({MAIL}={name}))") };
     if group.trim().is_empty() { user } else { format!("(&{user}(memberOf={}))", escape(group.trim())) }
 }
+
+/// The address attribute a sign-in name is also looked up in.
+const MAIL: &str = "mail";
 
 /// The one form a name's kept hash is filed under: directories match names regardless of case, so a refusal for
 /// "OSKAR" must delete what an earlier sign-in kept for "oskar".
@@ -448,7 +455,7 @@ async fn ask(config: &Config, name: &str, password: &str) -> Answer {
             Ok(Some((dn, spelled))) => {
                 // Whether an administrator, asked as the service account, before binding as the user (who may not
                 // search).
-                let admin = match member(&mut ldap, config, name, &config.admin_group).await {
+                let admin = match member(&mut ldap, config, &spelled, &config.admin_group).await {
                     Ok(admin) => admin,
                     Err(why) => {
                         tracing::warn!(target: "signin", reason = %why.why(), "directory not usable");
@@ -532,8 +539,14 @@ mod tests {
         assert_eq!(escape("nul\0"), r"nul\00");
         assert_eq!(escape("José"), "José");
         // A name that tries to widen the search finds only itself.
-        assert_eq!(filter("uid", "*)(uid=*", ""), r"(uid=\2a\29\28uid=\2a)");
-        assert_eq!(filter("uid", "oskar", "cn=music,ou=groups,dc=example,dc=com"), "(&(uid=oskar)(memberOf=cn=music,ou=groups,dc=example,dc=com))");
+        assert_eq!(filter("uid", "*)(uid=*", ""), r"(|(uid=\2a\29\28uid=\2a)(mail=\2a\29\28uid=\2a))");
+        assert_eq!(
+            filter("uid", "oskar", "cn=music,ou=groups,dc=example,dc=com"),
+            "(&(|(uid=oskar)(mail=oskar))(memberOf=cn=music,ou=groups,dc=example,dc=com))"
+        );
+        // The address signs in as well; an attribute that is the address already is asked once.
+        assert_eq!(filter("uid", "elva@example.com", ""), "(|(uid=elva@example.com)(mail=elva@example.com))");
+        assert_eq!(filter("mail", "elva@example.com", ""), "(mail=elva@example.com)");
     }
 
     #[test]
