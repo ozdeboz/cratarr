@@ -9,7 +9,6 @@
   import MenuSheet from '../MenuSheet.svelte';
   import { panSafe } from '../panSafe';
   import { HOLD, POINT, POINT_FWD, prefs, RAMP_MS, startsOf, TAPE, type StartStop } from '../prefs.svelte';
-  import Seg from '../Seg.svelte';
   import SettingRow from '../SettingRow.svelte';
   import { holdWind, pointWind } from '../startStop';
   import Group from './Group.svelte';
@@ -17,20 +16,34 @@
   import Item from './Item.svelte';
   import WindGraph from './WindGraph.svelte';
 
-  const MODES: { value: StartStop['mode']; label: string }[] = [
-    { value: 'off', label: 'Off' },
-    { value: 'vinyl', label: 'Vinyl' },
-    { value: 'fade', label: 'Fade' },
+  // Each choice a row showing it, opening a sheet of its options (the owner, 2026-10-27: no pills here, they took two
+  // rows on a phone).
+  type Option = { value: string; label: string; line: string };
+  const MODES: Option[] = [
+    { value: 'off', label: 'Off', line: 'Play and pause at once' },
+    { value: 'vinyl', label: 'Vinyl', line: 'As a turntable: the speed, the pitch following' },
+    { value: 'fade', label: 'Fade', line: 'Fading in and out' },
   ];
-  const DECK: { value: 'off' | 'effects' | 'always'; label: string }[] = [
-    { value: 'off', label: 'Off' },
-    { value: 'effects', label: 'Effects' },
-    { value: 'always', label: 'Always' },
+  const EDGES: Option[] = [
+    { value: 'stop', label: 'Stop', line: "At the track's start or end" },
+    { value: 'queue', label: 'Continue', line: 'On into the track before or after it in the queue' },
   ];
-  const EDGES: { value: StartStop['edges']; label: string }[] = [
-    { value: 'stop', label: 'Stop' },
-    { value: 'queue', label: 'Through the queue' },
+  const ANIMATION: Option[] = [
+    { value: 'off', label: 'Off', line: 'The info row' },
+    { value: 'effects', label: 'Effects', line: 'While play or pause ramps or the tape winds' },
+    { value: 'always', label: 'Always', line: 'In place of the info row' },
   ];
+  const CHOICES: Record<'effect' | 'edges' | 'animation', { title: string; options: Option[]; value: () => string; set: (v: string) => void }> = {
+    effect: { title: 'Effect', options: MODES, value: () => ss.mode, set: (v) => setSS({ mode: v as StartStop['mode'] }) },
+    edges: { title: 'Track boundary', options: EDGES, value: () => ss.edges, set: (v) => setSS({ edges: v as StartStop['edges'] }) },
+    animation: { title: 'Animation', options: ANIMATION, value: () => prefs.tapeDeck, set: (v) => (prefs.tapeDeck = v as typeof prefs.tapeDeck) },
+  };
+  let choosing = $state<keyof typeof CHOICES | null>(null);
+  const chosen = (k: keyof typeof CHOICES) => CHOICES[k].options.find((o) => o.value === CHOICES[k].value())?.label ?? '';
+  /** A motion's row, short (its name never wraps): seconds a minute and its limit, or a hold's speeds. */
+  const num = (v: number) => v.toFixed(2).replace(/\.?0+$/, '');
+  const pointShort = (p: { ratio: number; speed: number }) => `${num(p.ratio)} s · ${num(p.speed)}×`;
+  const holdShort = (h: { start: number; top: number }) => `${num(h.start)}→${num(h.top)}×`;
 
   const ss = $derived(inApp ? appInfo.startStop : prefs.startStop);
   function setSS(change: Partial<StartStop>) {
@@ -106,7 +119,7 @@
 {/snippet}
 
 <Group title="Start and stop" more="Play and pause as a turntable (Vinyl: the speed, the pitch following) or fading in and out (Fade), over their own times: Start as play winds up, Stop as pause winds down. A track running into the next stays seamless.">
-  <Item name="Effect" experimental><Seg label="Effect" options={MODES} bind:value={() => ss.mode, (v) => setSS({ mode: v })} /></Item>
+  <Item name="Effect" experimental value={chosen('effect')} onclick={() => (choosing = 'effect')} />
   {#if ss.mode !== 'off'}
     <Item name="Start" value={sec(ss.ms)} onclick={() => (open = 'start')} />
     <Item name="Stop" value={sec(ss.stopMs)} onclick={() => (open = 'stop')} />
@@ -122,18 +135,16 @@
     toggle={{ checked: ss.rewind, onchange: (on) => setSS({ rewind: on }) }}
   />
   {#if ss.rewind}
-    <Item name="Back to a point" line="Previous, a seek back" value={`${perMin(ss.back.ratio)} · ${times(ss.back.speed)}`} onclick={() => (open = 'back')} />
-    <Item name="Forward to a point" line="Next, a seek forward" value={`${perMin(ss.fwd.ratio)} · ${times(ss.fwd.speed)}`} onclick={() => (open = 'fwd')} />
-    <Item name="Holding back" value={`${times(ss.holdBack.start)} → ${times(ss.holdBack.top)}`} onclick={() => (open = 'holdBack')} />
-    <Item name="Holding forward" value={`${times(ss.holdFwd.start)} → ${times(ss.holdFwd.top)}`} onclick={() => (open = 'holdFwd')} />
+    <Item name="Back to a point" line="Previous, a seek back" value={pointShort(ss.back)} onclick={() => (open = 'back')} />
+    <Item name="Forward to a point" line="Next, a seek forward" value={pointShort(ss.fwd)} onclick={() => (open = 'fwd')} />
+    <Item name="Holding back" value={holdShort(ss.holdBack)} onclick={() => (open = 'holdBack')} />
+    <Item name="Holding forward" value={holdShort(ss.holdFwd)} onclick={() => (open = 'holdFwd')} />
     <Item
       name="Seeking winds the tape"
       more="A seek, on the waveform or the clock, winds there instead of jumping, taking as long as a wind to a point would."
       toggle={{ checked: ss.seekWinds, onchange: (on) => setSS({ seekWinds: on }) }}
     />
-    <Item name="At a track's edge" more="Holding past the start or end of a track: stop there, or wind on into the track before or after it in the queue."
-      ><Seg label="At a track's edge" options={EDGES} bind:value={() => ss.edges, (v) => setSS({ edges: v })} /></Item
-    >
+    <Item name="Track boundary" value={chosen('edges')} onclick={() => (choosing = 'edges')} />
   {/if}
 </Group>
 
@@ -146,15 +157,28 @@
 {/if}
 
 <!-- This page's showing (prefs, never the app's): the player's row under the title a tape deck, while an effect runs or
-     always (the owner, 2026-10-27). -->
-<Group title="Tape deck">
+     always (the owner, 2026-10-27; the section "Player", its row "Animation", 2026-10-28). -->
+<Group title="Player">
   <Item
-    name="Tape deck"
+    name="Animation"
     more="The player shows a tape deck where its info row is: its reels turn at the playing speed, slowing for a pause and racing back for a rewind; its head lights on each bar's first beat. During effects: while play or pause ramps or the tape winds, then the row again."
-    ><Seg label="Tape deck" options={DECK} bind:value={() => prefs.tapeDeck, (v) => (prefs.tapeDeck = v)} /></Item
-  >
+    value={chosen('animation')}
+    onclick={() => (choosing = 'animation')}
+  />
 </Group>
 
+{#if choosing}
+  {@const c = CHOICES[choosing]}
+  <MenuSheet label={c.title} title={c.title} onclose={() => (choosing = null)}>
+    {#each c.options as o (o.value)}<MenuEntry
+        label={o.label}
+        sub={o.line}
+        checked={c.value() === o.value}
+        plus={false}
+        onclick={() => (c.set(o.value), (choosing = null))}
+      />{/each}
+  </MenuSheet>
+{/if}
 {#if open === 'start' || open === 'stop'}
   {@const key = open === 'start' ? 'ms' : 'stopMs'}
   {@const label = open === 'start' ? 'Start' : 'Stop'}
