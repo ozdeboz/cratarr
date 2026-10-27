@@ -75,7 +75,9 @@
     let frame = 0;
     let last = performance.now();
     const tick = (now: number) => {
-      draw(now, Math.min(50, now - last) / 1000);
+      // The real time since the last frame (a tablet skips frames: a shorter step would turn the reels slower for
+      // it, a stutter); only a long sleep (a hidden page) is not made up.
+      draw(now, Math.min(250, now - last) / 1000);
       last = now;
       frame = requestAnimationFrame(tick);
     };
