@@ -462,7 +462,11 @@ class PlayOnLink(
                 p.stop()
                 p.clearMediaItems()
             }
-            "next" -> service.startStop.skip { p.seekToNextMediaItem() }
+            // Next as the app's own: fast-forward to the end where winding is on, else a skip.
+            "next" -> {
+                val jump = { p.seekToNextMediaItem() }
+                if (!service.startStop.fastForward(jump)) service.startStop.skip(jump)
+            }
             "previous" -> {
                 val restart = { service.startStop.skip { if (!Repeat.previous(service, p)) p.seekToPrevious() } }
                 if (!service.startStop.rewind(PlayerService.RESTART_AFTER_MS, restart)) restart()

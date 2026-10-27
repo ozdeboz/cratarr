@@ -636,7 +636,9 @@ class StartStop(
             player.play()
             return
         }
-        if (busy) return
+        // During a wind-down (a skip's, a pause's brake) Next and Previous are not taken, from anywhere (the owner: one
+        // tap, one skip).
+        if (busy) return note("skip ignored", "ramp" to running)
         val m = mode()
         if (m == Prefs.START_STOP_OFF || !prefs.startStopSkips || !player.isPlaying || grouped()) {
             reset()
@@ -713,6 +715,7 @@ class StartStop(
     fun fastForward(jump: () -> Unit): Boolean {
         if (tapeReverse) return false
         note("fast forward", "busy" to busy, "on" to prefs.startStopRewind, "at_ms" to player.currentPosition)
+        // During a wind-down: not taken (as [skip]).
         if (busy) return true
         if (!prefs.startStopRewind || !player.isPlaying || !player.hasNextMediaItem()) return false
         val end = player.duration.takeIf { it > 0 } ?: return false
