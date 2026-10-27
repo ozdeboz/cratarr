@@ -2105,6 +2105,10 @@ struct StreamFrom {
     /// same bytes and headers; a conflict while it is still being made (`offline/prepare` says when it is ready).
     #[serde(default)]
     whole: Option<u8>,
+    /// `1`: an MP3 starts near `from_ms` too, at a frame boundary, `x-start-ms` saying that frame's time (0.9.14; asked
+    /// for, as a page that does not read the header would place the sound at 0).
+    #[serde(default)]
+    mp3_from: Option<u8>,
 }
 
 /// A track's audio for the local player (decision 0022): FLAC as fragmented MP4, MP3 as it is, read from Cratarr's own
@@ -2591,12 +2595,22 @@ async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, S
             if let Some(ms) = duration_ms {
                 headers.insert("x-duration-ms", HeaderValue::from(ms));
             }
+            // From its first frame (0.9.8: an ID3v2 tag with a large cover held the sound back by seconds on a phone's
+            // connection); its LAME header frame comes first, as the page trims by it. Asked to start later
+            // (`mp3_from`): at the frame near that moment, its time said, not after every byte before it.
+            let (p, from) = (path.clone(), (q.mp3_from == Some(1) && q.from_ms > 0).then_some(q.from_ms));
+            let (skip, start) = tokio::task::spawn_blocking(move || {
+                let skip = crate::analysis::after_id3(&p);
+                (skip, from.and_then(|ms| crate::stream::mp3_from(&p, skip, ms)))
+            })
+            .await
+            .unwrap_or((0, None));
+            let skip = start.map_or(skip, |(byte, ms)| {
+                headers.insert("x-start-ms", HeaderValue::from(ms));
+                byte
+            });
             tokio::spawn(async move {
                 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-                // From its first frame (0.9.8: an ID3v2 tag with a large cover held the sound back by seconds on a
-                // phone's connection); its LAME header frame comes first, as the page trims by it.
-                let p = path.clone();
-                let skip = tokio::task::spawn_blocking(move || crate::analysis::after_id3(&p)).await.unwrap_or(0);
                 let Ok(mut file) = tokio::fs::File::open(&path).await else { return };
                 if skip > 0 && file.seek(std::io::SeekFrom::Start(skip)).await.is_err() {
                     return;

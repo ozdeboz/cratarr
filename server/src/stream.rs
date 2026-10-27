@@ -4,7 +4,8 @@
 //!   segment (`ftyp`, `moov` with an `fLaC` sample entry carrying the file's STREAMINFO in `dfLa`), then fragments of
 //!   about a second (`moof` + `mdat`), each holding the FLAC frames exactly as they are in the file. symphonia reads
 //!   the frames one at a time, so memory stays at about one fragment (production runs within 64 MB).
-//! - **MP3** goes to the stream as it is; the page trims it by its LAME header.
+//! - **MP3** goes to the stream as it is; the page trims it by its LAME header. Asked to start later (`mp3_from`), it
+//!   starts at a frame boundary near that moment and says that frame's time.
 //!
 //! The FLAC-in-ISOBMFF layout follows the "Encapsulation of FLAC in ISO Base Media File Format" specification
 //! (xiph.org); the boxes follow ISO/IEC 14496-12.
@@ -242,6 +243,66 @@ pub(crate) fn fragment(sequence: u32, base: u64, samples: &[(u32, u32)], data: &
     out
 }
 
+/// An MP3 frame header's length (bytes), samples, and sample rate; `None` where it is not a Layer III header.
+fn mp3_frame(h: [u8; 4]) -> Option<(u64, u64, u64)> {
+    const V1: [u64; 15] = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
+    const V2: [u64; 15] = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+    if h[0] != 0xFF || h[1] & 0xE0 != 0xE0 {
+        return None;
+    }
+    // Version: 3 MPEG-1, 2 MPEG-2, 0 MPEG-2.5 (1 reserved); layer 1 is Layer III.
+    let (version, layer) = ((h[1] >> 3) & 3, (h[1] >> 1) & 3);
+    let (bi, si, pad) = (usize::from(h[2] >> 4), usize::from((h[2] >> 2) & 3), u64::from((h[2] >> 1) & 1));
+    if version == 1 || layer != 1 || bi == 0 || bi == 15 || si == 3 {
+        return None;
+    }
+    let kbps = if version == 3 { V1[bi] } else { V2[bi] };
+    let rate = [44_100, 48_000, 32_000][si] >> if version == 3 { 0 } else if version == 2 { 1 } else { 2 };
+    let samples = if version == 3 { 1152 } else { 576 };
+    Some((samples / 8 * 1000 * kbps / rate + pad, samples, rate))
+}
+
+/// Where an MP3's stream starts to hold `from_ms` (0.9.14): the byte its frame begins at, a frame earlier for the bit
+/// reservoir the first one may draw on, and that frame's time on the track's gapless timeline (ms; its LAME header's
+/// encoder delay taken off). Walks the frame headers from the first, after its ID3v2 tag (`skip` bytes): a few
+/// milliseconds for minutes of sound, read from the disk once. Its info frame (Xing/Info, no sound of its own) is
+/// left out. `None` where the frames cannot be followed: the stream then starts at the file's start, as it always did.
+/// A landing mid-track no longer waits for every byte before it (the owner's tablet, 2026-10-28: 7 MB, over a second).
+pub fn mp3_from(path: &Path, skip: u64, from_ms: u64) -> Option<(u64, u64)> {
+    use std::io::{BufReader, Read, Seek, SeekFrom};
+    let mut f = BufReader::with_capacity(64 * 1024, File::open(path).ok()?);
+    f.seek(SeekFrom::Start(skip)).ok()?;
+    let (mut at, mut samples, mut delay) = (skip, 0u64, 0u64);
+    let mut first = true;
+    let mut before: Option<(u64, u64)> = None;
+    loop {
+        let mut h = [0u8; 4];
+        f.read_exact(&mut h).ok()?;
+        let (len, spf, rate) = mp3_frame(h)?;
+        let mut body = vec![0u8; usize::try_from(len.checked_sub(4)?).ok()?];
+        f.read_exact(&mut body).ok()?;
+        if std::mem::take(&mut first) {
+            let has = |tag: &[u8]| body.windows(tag.len()).position(|w| w == tag);
+            if has(b"Xing").or_else(|| has(b"Info")).is_some() {
+                // Its encoder delay: 12 bits, 21 bytes into the LAME tag.
+                if let Some(l) = has(b"LAME").filter(|l| l + 23 <= body.len()) {
+                    delay = (u64::from(body[l + 21]) << 4) | (u64::from(body[l + 22]) >> 4);
+                }
+                at += len;
+                continue;
+            }
+        }
+        let wanted = from_ms * rate / 1000 + delay;
+        if wanted < samples + spf {
+            let (byte, s) = before.unwrap_or((at, samples));
+            return Some((byte, s.saturating_sub(delay) * 1000 / rate));
+        }
+        before = Some((at, samples));
+        samples += spf;
+        at += len;
+    }
+}
+
 /// How a track reaches the page's stream.
 pub enum Kind {
     /// Repackaged into fragmented MP4 ([`FlacToMp4`]).
@@ -281,6 +342,58 @@ fn full(kind: &[u8; 4], version: u8, flags: u32, body: &[u8]) -> Vec<u8> {
     b.extend(&flags.to_be_bytes()[1..]);
     b.extend_from_slice(body);
     boxed(kind, &b)
+}
+
+#[cfg(test)]
+mod mp3_tests {
+    use super::*;
+
+    /// An MP3 of CBR MPEG-1 Layer III frames at 128 kb/s, 44.1 kHz (417 bytes, 418 padded): an ID3v2 tag, a LAME info
+    /// frame (delay 576), then `n` silent frames, every third padded.
+    fn file(n: usize, name: &str) -> (std::path::PathBuf, Vec<u64>) {
+        let mut b = Vec::new();
+        b.extend_from_slice(b"ID3\x04\x00\x00\x00\x00\x00\x0a");
+        b.extend_from_slice(&[0u8; 10]);
+        let frame = |pad: bool| {
+            let mut f = vec![0xFF, 0xFB, 0x90 | if pad { 2 } else { 0 }, 0x64];
+            f.resize(if pad { 418 } else { 417 }, 0);
+            f
+        };
+        let mut info = frame(false);
+        info[36..40].copy_from_slice(b"Info");
+        info[120..124].copy_from_slice(b"LAME");
+        // 21 bytes in: 576 (0x240) as 12 bits, then the padding's 12.
+        info[141] = 0x24;
+        info[142] = 0x00;
+        b.extend_from_slice(&info);
+        let mut starts = Vec::new();
+        for i in 0..n {
+            starts.push(b.len() as u64);
+            b.extend_from_slice(&frame(i % 3 == 2));
+        }
+        let path = std::env::temp_dir().join(format!("cratarr-mp3-{}-{name}.mp3", std::process::id()));
+        std::fs::write(&path, &b).unwrap();
+        (path, starts)
+    }
+
+    #[test]
+    fn a_later_start_begins_a_frame_before_the_one_holding_it() {
+        let (t, starts) = file(400, "frames");
+        let skip = crate::analysis::after_id3(&t);
+        assert_eq!(skip, 20);
+        // 5 s on the gapless timeline is sample 220,500 + the delay of 576: in frame 191 (from 220,032); a frame before.
+        let (byte, ms) = mp3_from(&t, skip, 5_000).unwrap();
+        assert_eq!(byte, starts[190]);
+        assert_eq!(ms, (190 * 1152 - 576) * 1000 / 44_100);
+        // At the start: the first sound frame, the info frame left out.
+        assert_eq!(mp3_from(&t, skip, 0).unwrap(), (starts[0], 0));
+        // Past the end, or no frames to follow: none (the stream starts at the file's start).
+        assert_eq!(mp3_from(&t, skip, 60_000), None);
+        let junk = std::env::temp_dir().join(format!("cratarr-mp3-{}-junk.mp3", std::process::id()));
+        std::fs::write(&junk, [0u8; 4096]).unwrap();
+        assert_eq!(mp3_from(&junk, 0, 1_000), None);
+        let _ = (std::fs::remove_file(&t), std::fs::remove_file(&junk));
+    }
 }
 
 #[cfg(test)]
