@@ -227,6 +227,8 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             .put("direction", StartStop.deckDirection)
             .put("durationMs", if (c.duration == C.TIME_UNSET) -1 else c.duration)
             .put("paused", !c.playWhenReady || c.playbackState == Player.STATE_ENDED)
+            // A play from rest not sounding yet (0.9.14, as Play On's `starting`).
+            .put("starting", StartStop.starting)
             .put("error", c.playerError?.let(::describe) ?: JSONObject.NULL)
             .put("repeat", Repeat.mode(context))
             .put("sleep", Sleep.json(context, "atMs", "endOfTrack"))
