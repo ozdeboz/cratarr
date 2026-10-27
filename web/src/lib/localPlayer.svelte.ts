@@ -477,7 +477,12 @@ async function appendTrack(index: number, from: number, gen: number) {
   let placedSegment = null as Segment | null; // set inside place(), which TypeScript does not follow
   try {
     const query = new URLSearchParams();
-    if (from > 0) query.set('from_ms', String(Math.floor(from * 1000)));
+    // An MP3 asked from its frame there, not whole from its top (a5, 662527cb: mp3_from=1; the server says where it
+    // starts, x-start-ms). A server before it ignores the flag and sends it whole, as before.
+    if (from > 0) {
+      query.set('from_ms', String(Math.floor(from * 1000)));
+      query.set('mp3_from', '1');
+    }
     const form = formOf(t);
     if (form !== 'original') query.set('as', form);
     const res = await fetch(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}${query.toString() ? `?${query}` : ''}`, {
@@ -515,6 +520,11 @@ async function appendTrack(index: number, from: number, gen: number) {
     /** An MP3's encoder delay: its LAME header's, else as the stream says it (Cratarr's own MP3 form has no header and
      *  sends x-pre-skip, a5 0.9.8). */
     const delayOf = (h: Mp3Head) => h.delay || Number(res.headers.get('x-pre-skip')) || 0;
+    /** An MP3 sent from a frame mid-track (mp3_from): that frame's first sample's time in the track (s), its encoder's
+     *  delay already taken off; null where it came whole. Then no delay of its own to skip, its length the told one. */
+    const startHeader = res.headers.get('x-start-ms');
+    const sentFrom = kind === MPEG && startHeader !== null && Number.isFinite(Number(startHeader)) ? Number(startHeader) / 1000 : null;
+    const placeMp3 = (h: Mp3Head) => place(h.rate, sentFrom !== null ? 0 : delayOf(h), sentFrom !== null ? null : h.samples);
     const place = async (rate: number, skip: number, samples: number | null) => {
       if (!sb) {
         sb = ms!.addSourceBuffer(kind);
@@ -558,11 +568,13 @@ async function appendTrack(index: number, from: number, gen: number) {
       // seek) keeps its offset below 0 and the window cuts what lies before (the tablet, 2026-10-27: resumed at 2:24, it
       // played from the top while its clock ran 2:24 ahead, to 3:20 of a 2:38 track); Cratarr's own MP3 form (it sends
       // x-pre-skip) is made from the place asked, its first frame there.
-      const made = kind === MPEG && res.headers.has('x-pre-skip') ? from : 0;
+      // An MP3 sent from its frame there (mp3_from): its first sample where that frame lies in the track, the window
+      // cutting the frame or two before the place asked.
+      const made = kind !== MPEG ? 0 : sentFrom !== null ? sentFrom : res.headers.has('x-pre-skip') ? from : 0;
       const offset = start + made - skip / rate;
       sb.timestampOffset = kind === MPEG ? Math.max(Math.min(0, start + made), offset) : offset;
       if (kind === MPEG)
-        playback('info', 'mp3 placed', { index, rate, skip, offset: Math.round(offset * 1000) / 1000, set: Math.round(sb.timestampOffset * 1000) / 1000, from: sb.appendWindowStart, to: Number.isFinite(sb.appendWindowEnd) ? Math.round(sb.appendWindowEnd * 10) / 10 : null });
+        playback('info', 'mp3 placed', { index, rate, skip, sentFrom, offset: Math.round(offset * 1000) / 1000, set: Math.round(sb.timestampOffset * 1000) / 1000, from: sb.appendWindowStart, to: Number.isFinite(sb.appendWindowEnd) ? Math.round(sb.appendWindowEnd * 10) / 10 : null });
       segment.length = length;
       segments.push(segment);
       placedSegment = segment;
@@ -593,7 +605,7 @@ async function appendTrack(index: number, from: number, gen: number) {
           continue;
         }
         if (h === 'invalid') throw new Error(`${t.name} is not a playable MP3.`);
-        await place(h.rate, delayOf(h), h.samples);
+        await placeMp3(h);
         chunk = joined.subarray(h.at);
       }
       await appendBytes(chunk, gen, ctl.signal);
@@ -601,7 +613,7 @@ async function appendTrack(index: number, from: number, gen: number) {
     if (!placed && head.length) {
       const h = mp3Head(head);
       if (h && h !== 'invalid') {
-        await place(h.rate, delayOf(h), h.samples);
+        await placeMp3(h);
         await appendBytes(head.subarray(h.at), gen, ctl.signal);
       }
     }
