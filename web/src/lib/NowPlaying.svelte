@@ -2,7 +2,7 @@
   import DetailsSheet from './DetailsSheet.svelte';
   import StartStopSheet from './StartStopSheet.svelte';
   import LevelSheet from './LevelSheet.svelte';
-  import { levelOn, levelShare } from './level.svelte';
+  import { levelShare, playingLevelOn } from './level.svelte';
   // The full player (decision 0018): over the page (`overlay`, opened from the mini-player) or beside it (`side`, the
   // shell's sidebar on wide windows). It shows the cover, the track, the controls, the progress, the favourite and
   // how many playlists hold the track, laid out by lib/playerLayout.ts, on the blurred cover in its colours.
@@ -565,13 +565,13 @@
             {#if isLocal()}
               <button
                 class="level"
-                class:on={levelOn()}
-                aria-label={levelOn() ? 'Level the volume: on' : 'Level the volume: off'}
+                class:on={playingLevelOn()}
+                aria-label={playingLevelOn() ? 'Level the volume: on' : 'Level the volume: off'}
                 title="Level the volume"
                 aria-haspopup="dialog"
                 onclick={() => (levelOpen = true)}
                 use:longpress={() => (prefs.levelInWave = !prefs.levelInWave)}
-                ><Icon name="audioLines" size={22} />{#if levelOn()}<span class="fill" style:--down={levelShare(local.levelDb)} aria-hidden="true"
+                ><Icon name="audioLines" size={22} />{#if playingLevelOn()}<span class="fill" style:--down={levelShare(local.levelDb)} aria-hidden="true"
                     ><Icon name="audioLines" size={22} /></span
                   >{/if}</button
               >

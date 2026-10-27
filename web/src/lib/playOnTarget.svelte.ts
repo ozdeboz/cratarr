@@ -199,6 +199,10 @@ async function report(withQueue = false) {
     rewinding: rewindNow.on,
     volume: pageVolume.level,
     ducked: pageVolume.ducked,
+    // Level the volume, as another device driving this one sets and shows it (the owner, 2026-10-27).
+    levelling: prefs.levelling,
+    level_unknown: prefs.levelUnknown,
+    level_db: local.levelDb,
     link: {
       failed,
       address: location.origin,
@@ -368,7 +372,7 @@ if (typeof window !== 'undefined' && !inApp) {
     });
     // Every change reported at once.
     $effect(() => {
-      void [local.index, local.paused, local.queue, local.repeat, local.radio, local.autoplay, local.skipFavourites, pageVolume.level, pageVolume.ducked, sleep(), prefs.output, listening.playing];
+      void [local.index, local.paused, local.queue, local.repeat, local.radio, local.autoplay, local.skipFavourites, pageVolume.level, pageVolume.ducked, sleep(), prefs.output, listening.playing, prefs.levelling, prefs.levelUnknown, local.levelDb];
       if (target.connected) reportSoon();
     });
     // Sound has started: no need to ask for the tap any more.

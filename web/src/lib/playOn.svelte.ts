@@ -136,6 +136,8 @@ function take(players: PlayOnPlayer[]) {
     radioCount: p.radio_count,
     skipFavourites: p.skip_favourites,
     autoplay: p.autoplay ?? null,
+    // How far it turns the playing track down: the Level button's fill and the waveform, as it hears it.
+    levelDb: p.level_db ?? 0,
   });
   if (p.queue_version !== shownVersion) {
     const version = p.queue_version;
