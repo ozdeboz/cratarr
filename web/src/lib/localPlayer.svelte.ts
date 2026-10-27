@@ -914,6 +914,7 @@ export function reportedBy(m: {
   autoplay?: unknown;
   levelDb?: unknown;
   rewinding?: unknown;
+  direction?: unknown;
 }) {
   if (m.repeat === 'off' || m.repeat === 'one' || m.repeat === 'all') local.repeat = m.repeat;
   // Left out: not said (a report of the queue alone); null: none.
@@ -942,6 +943,8 @@ export function reportedBy(m: {
   local.position = reported.positionMs / 1000;
   // The app's tape rewind (a5): its position going back as it reports it, shown as it goes (lib/remote).
   if (typeof m.rewinding === 'boolean') rewindNow.on = m.rewinding;
+  // Its direction knob, as it stands there.
+  if (m.direction === 'L' || m.direction === 'R') tapeDir.want = m.direction;
 }
 
 function sleepOf(s: unknown): Sleep | null {
@@ -1781,6 +1784,8 @@ const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 
 // and out, it was a third of full speed two thirds of the way and sounded stopped there (the owner, 2026-10-26).
 const easeIn = (t: number) => t * t;
 const easeOut = (t: number) => 1 - (1 - t) ** 2;
+/** The deck's brake, the same for a pause and a wind (the owner, 2026-10-27): its speed on a raised cosine. */
+const brakeCurve = (t: number) => (1 - Math.cos(Math.PI * t)) / 2;
 function ramp(from: number, to: number, ms: number, set: (v: number) => void, ease = easeInOut): Promise<boolean> {
   const token = ++rampToken;
   const t0 = performance.now();
@@ -1825,11 +1830,14 @@ const levelAt = (mode: 'vinyl' | 'fade', share: number) => (mode === 'fade' ? sh
 async function rampOut(share = 1): Promise<void> {
   const { mode } = ss();
   if (mode === 'off' || !audio || audio.paused) return;
-  const ms = ss().ms * share;
-  rampBegins('out', ms, ss().ms);
+  // A vinyl's wind-down is the deck's one brake (the owner, 2026-10-27): Tape winding's Brake, its length and its curve
+  // (a raised cosine on the speed, as a wind brakes); a fade's is the ramp's.
+  const full = mode === 'vinyl' ? ss().wind.releaseMs : ss().ms;
+  const ms = full * share;
+  rampBegins('out', ms, full);
   const at = ramping.at;
   try {
-    await ramp(levelAt(mode, share), mode === 'fade' ? 0 : RAMP_LOW, ms, rampSet(mode), mode === 'fade' ? easeInOut : easeIn);
+    await ramp(levelAt(mode, share), mode === 'fade' ? 0 : RAMP_LOW, ms, rampSet(mode), mode === 'fade' ? easeInOut : brakeCurve);
   } finally {
     // Not where another ramp took over (a press turning it round): that one's.
     if (ramping.at === at) rampEnds();
@@ -2470,9 +2478,13 @@ export function windRelease(dir: 'back' | 'forward') {
 // when the one before has come to rest, and only then reading the knob again, so a knob turned back and forth however
 // fast always ends in its last place, never in two at once. Paused, the knob only sets the way the next play goes.
 // Another track or queue (a skip, a new queue, a jump) plays forwards: the knob goes back to R.
-/** Turns the direction knob (lib/TapeDeck). */
+/** Turns the direction knob (lib/TapeDeck): here, or on the app's player or the one driven, which turns itself (its
+ *  report confirms it). */
 export function turnTape(want: 'L' | 'R') {
-  if (handed()) return hand('direction', { dir: want });
+  if (handed()) {
+    tapeDir.want = want;
+    return hand('direction', { dir: want });
+  }
   tapeDir.want = want;
   void stepTape();
 }
@@ -2675,6 +2687,10 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
       return false;
     case 'skip_favourites':
       setSkipFavourites(m.on === true);
+      return false;
+    // The tape deck's direction knob turned from another device (the owner, 2026-10-27).
+    case 'direction':
+      if (m.dir === 'L' || m.dir === 'R') turnTape(m.dir);
       return false;
     // Level the volume set from another device (the owner, 2026-10-27): on or off, and what an unmeasured track gets.
     case 'level':

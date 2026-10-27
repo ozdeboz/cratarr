@@ -138,6 +138,7 @@ function take(players: PlayOnPlayer[]) {
     autoplay: p.autoplay ?? null,
     // How far it turns the playing track down: the Level button's fill and the waveform, as it hears it.
     levelDb: p.level_db ?? 0,
+    direction: p.direction ?? 'R',
   });
   if (p.queue_version !== shownVersion) {
     const version = p.queue_version;

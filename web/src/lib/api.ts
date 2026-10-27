@@ -192,6 +192,8 @@ export type PlayOnPlayer = {
   /** Level the volume on it (decision 0035 over Play On; the owner, 2026-10-27): on or off, what a track not measured
    *  yet gets, and how far it turns the playing track down now (dB, 0 or less). Players from before leave them out. */
   levelling?: boolean;
+  /** Its tape deck's direction knob (the owner, 2026-10-27): R forwards, L backwards; left out: R. */
+  direction?: 'L' | 'R';
   level_unknown?: 'typical' | 'untouched';
   level_db?: number;
   queue_length: number;
