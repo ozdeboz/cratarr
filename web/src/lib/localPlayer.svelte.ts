@@ -23,6 +23,8 @@ import { prefs } from './prefs.svelte';
 import { ramping, rampBegins, rampEnds, rewindNow } from './ramping.svelte';
 import { asksSignIn, toSignIn } from './reach.svelte';
 import { consumed, rate, tapMs } from './windShape';
+import { BANDCAMP } from './bandcampPreview';
+import { DEVICE } from './deviceMusic.svelte';
 import type { Wind } from './startStop';
 import { isPhone } from './device';
 
@@ -573,7 +575,8 @@ function tick() {
   // A ramp under way has committed to where it goes (lib's Start and stop): that is what shows, everywhere.
   local.paused = committed ?? audio.paused;
   const w = where(heldAt ?? audio.currentTime);
-  if (w) {
+  if (w && rewinding) local.position = rewindPos ?? local.position;
+  else if (w) {
     if (w.seg.index !== local.index) {
       // Repeat one: the stream went on to the next track by itself; back to the start of this one. (Next and previous
       // set the index themselves, so they still move on.)
@@ -1536,6 +1539,8 @@ export function seek(secs: number) {
   // During a tape's rewind: it ends, and the track plays from there.
   if (rewinding) {
     endRewind();
+    // Wound into another track of the queue: that one, from there.
+    if (where()?.seg.index !== local.index) return void fresh(local.index, secs, true);
     jumpTo(secs);
     if (audio.paused) void audio.play().catch(refused);
     return;
@@ -1973,7 +1978,8 @@ function paceOf(mode: 'off' | 'vinyl' | 'fade', low = RAMP_LOW): number {
 // over the attack, braked over the release, the pitch following. A tap of Previous winds back to the track's start,
 // condensed to its length (cut into heard pieces where the way is long), and so does a seek where seeking winds the
 // tape; holding Previous or Next pauses (Start and stop as a pause), winds for as long as it is held, stops at the
-// track's edge, and on release brakes and plays on from where it got to, winding up. The counter and the waveform go
+// track's edge or winds on through the queue (At a track's edge), and on release brakes and plays on from where it got
+// to, winding up. The counter and the waveform go
 // with it: a condensed wind along the straight line from where it began to where it goes, as far as its envelope has
 // come; a held one at the speed limit's pace, as far as its stream has played. Not sounding in WIND_WAIT_MS, or failing
 // first: a tap or a seek goes there plainly, a hold plays on where it was. Nothing of it counts as listening (the wind
@@ -2001,6 +2007,10 @@ type Winding = {
   brakeFrom: number;
   /** A held one's stream ran out: at the track's edge. */
   edge: boolean;
+  /** A held one wound on through the queue (At a track's edge): the queue places after this track's edge, in winding
+   *  order (the stream joins them seamlessly, at the same speed), and the one it shows now. */
+  through: number[];
+  shown: number;
   timer: ReturnType<typeof setInterval> | undefined;
 };
 /** The wind sounding, or about to; null: none. */
@@ -2016,16 +2026,44 @@ let holding: { dir: 1 | -1; released: boolean } | null = null;
 function clipVolume() {
   if (rewinding && audio) rewinding.clip.volume = Math.min(1, audio.volume * (level ? (told?.level ?? 1) : 1));
 }
-/** Where a wind has got to (s into the track), as the counter shows it. */
-function windPos(w: Winding, now: number): number {
-  if (w.at === null) return w.from;
+/** A queue place's length, where known (s). */
+const lengthOf = (i: number) => local.queue[i]?.duration_secs ?? null;
+/** The queue places a held wind may go on through, past the track's edge, in winding order: up to WIND_THROUGH,
+ *  stopping at one the server cannot wind (a Bandcamp preview, the device's own music) or whose length is unknown (the
+ *  counter goes by lengths: the page cannot read the stream's map). */
+const WIND_THROUGH = 8;
+function throughOf(index: number, dir: 1 | -1): number[] {
+  const out: number[] = [];
+  for (let i = index + dir; i >= 0 && i < local.queue.length && out.length < WIND_THROUGH; i += dir) {
+    const t = local.queue[i];
+    if (t.source === BANDCAMP || t.source === DEVICE || !lengthOf(i)) break;
+    out.push(i);
+  }
+  return out;
+}
+/** Where a wind has got to: the queue place and the seconds into it, as the counter shows it. A held one has gone the
+ *  speed limit's pace times the stream it has played: within its track, then on through the queue (back: each from its
+ *  end; forward: each from its start), resting at the last one's edge. */
+function windPlace(w: Winding, now: number): { index: number; pos: number } {
+  const index = w.seg.index;
+  if (w.at === null) return { index, pos: w.from };
   if (w.to !== null) {
     const C = consumed(w.wind, w.D, w.D);
     const share = C > 0 ? Math.min(1, consumed(w.wind, w.D, now - w.at) / C) : 1;
-    return w.from + (w.to - w.from) * share;
+    return { index, pos: w.from + (w.to - w.from) * share };
   }
-  const end = local.queue[w.seg.index]?.duration_secs ?? Infinity;
-  return Math.min(end, Math.max(0, w.from + w.dir * w.wind.speed * w.clip.currentTime));
+  const end = lengthOf(index) ?? Infinity;
+  const d = w.wind.speed * w.clip.currentTime;
+  const room = w.dir < 0 ? w.from : end - w.from;
+  if (d <= room || !w.through.length) return { index, pos: Math.min(end, Math.max(0, w.from + w.dir * d)) };
+  let rest = d - room;
+  for (const i of w.through) {
+    const len = lengthOf(i) ?? 0;
+    if (rest <= len) return { index: i, pos: w.dir < 0 ? len - rest : rest };
+    rest -= len;
+  }
+  const last = w.through[w.through.length - 1];
+  return { index: last, pos: w.dir < 0 ? 0 : (lengthOf(last) ?? 0) };
 }
 /** A wind's speed now (× the stream's): its envelope. */
 function windRate(w: Winding, now: number): number {
@@ -2065,10 +2103,12 @@ function startWind(to: number | null, dir: 1 | -1): boolean {
   const ask = new URLSearchParams({ from_ms: String(Math.floor(from * 1000)), dir: dir < 0 ? 'back' : 'forward', speed: String(wind.speed), gain_db: String(wind.gainDb) });
   if (to !== null)
     for (const [k, v] of Object.entries({ to_ms: Math.floor(to * 1000), fit_ms: D, attack_ms: wind.attackMs, release_ms: wind.releaseMs, piece_ms: wind.pieceMs })) ask.set(k, String(v));
+  const through = to === null && wind.edges === 'queue' ? throughOf(seg.index, dir) : [];
+  if (through.length) ask.set('through', through.map((i) => `${local.queue[i].source}:${local.queue[i].id}`).join(','));
   const clip = new Audio(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}/wind?${ask}`);
   clip.preservesPitch = false;
   clip.playbackRate = RATE_LOW;
-  const w: Winding = { clip, seg, from, to, dir, D, wind, at: null, brake: null, brakeFrom: 1, edge: false, timer: undefined };
+  const w: Winding = { clip, seg, from, to, dir, D, wind, at: null, brake: null, brakeFrom: 1, edge: false, through, shown: seg.index, timer: undefined };
   const mine = () => rewinding === w;
   // Every step timed from the press, in the playback log (the owner, 2026-10-27: find any delay at the deepest level).
   const t0 = performance.now();
@@ -2079,7 +2119,7 @@ function startWind(to: number | null, dir: 1 | -1): boolean {
   // waveform jumped to 0 before winding down).
   rewindPos = from;
   local.position = from;
-  say('asked', { track: t.id, from: Math.round(from * 1000), to: to === null ? null : Math.round(to * 1000), D, speed: wind.speed });
+  say('asked', { track: t.id, from: Math.round(from * 1000), to: to === null ? null : Math.round(to * 1000), D, speed: wind.speed, through: through.length });
   for (const ev of ['loadedmetadata', 'canplay', 'waiting', 'stalled'])
     clip.addEventListener(ev, () => mine() && say(ev, { readyState: clip.readyState }, ev === 'waiting' || ev === 'stalled' ? 'warn' : 'info'));
   clipVolume();
@@ -2092,13 +2132,25 @@ function startWind(to: number | null, dir: 1 | -1): boolean {
     if (to !== null) return seek(to);
     playOnAt(seg.index, from);
   };
-  // Got there: on from there, winding up; past a track's end, the next.
-  const arrive = (at: number) => {
-    say('arrived', { at: Math.round(at * 1000) });
+  // Got there: on from there, winding up; past a track's end, the next. In a track wound into, short of its last
+  // moment (a fresh stream from its very end would start it from the top).
+  const arrive = ({ index, pos }: { index: number; pos: number }) => {
+    say('arrived', { index, at: Math.round(pos * 1000) });
     endRewind();
-    const end = local.queue[seg.index]?.duration_secs ?? Infinity;
-    if (dir > 0 && at >= end - 0.5) return jump(seg.index + 1);
-    playOnAt(seg.index, at);
+    const end = lengthOf(index) ?? Infinity;
+    if (dir > 0 && pos >= end - 0.5) return jump(index + 1);
+    playOnAt(index, index === seg.index ? pos : Math.max(0, Math.min(pos, end - 1.5)));
+  };
+  // The counter (and, wound into another track of the queue, the track shown: never heard, so never counted).
+  const show = ({ index, pos }: { index: number; pos: number }) => {
+    if (index !== w.shown) {
+      say('crossed', { index, pos: Math.round(pos * 1000) });
+      w.shown = index;
+      local.index = index;
+      local.duration = lengthOf(index);
+    }
+    rewindPos = pos;
+    local.position = pos;
   };
   const late = setTimeout(() => {
     if (!mine() || w.at !== null) return;
@@ -2117,10 +2169,10 @@ function startWind(to: number | null, dir: 1 | -1): boolean {
         if (!mine()) return clearInterval(w.timer);
         const now = performance.now();
         if (!w.edge) clip.playbackRate = windRate(w, now);
-        rewindPos = windPos(w, now);
-        local.position = rewindPos;
+        const place = w.edge ? { index: w.shown, pos: rewindPos ?? w.from } : windPlace(w, now);
+        show(place);
         // A held one braked to its end: on from where it got to.
-        if (w.brake !== null && (w.edge || now - w.brake >= w.wind.releaseMs)) arrive(rewindPos);
+        if (w.brake !== null && (w.edge || now - w.brake >= w.wind.releaseMs)) arrive(place);
       }, WIND_STEP_MS);
       if (!audio.paused) audio.pause();
       // A condensed one's end waits loaded (the counter stays the wind's meanwhile).
@@ -2140,13 +2192,14 @@ function startWind(to: number | null, dir: 1 | -1): boolean {
     'ended',
     () => {
       if (!mine()) return;
-      if (to !== null) return arrive(to);
-      // Held to the track's edge: it rests there until let go.
+      if (to !== null) return arrive({ index: seg.index, pos: to });
+      // Held to the edge (the track's, or the last one's it wound on through): it rests there until let go.
+      const { index } = windPlace(w, performance.now());
+      const edge = { index, pos: dir < 0 ? 0 : (lengthOf(index) ?? rewindPos ?? w.from) };
+      show(edge);
       w.edge = true;
-      rewindPos = dir < 0 ? 0 : (local.queue[seg.index]?.duration_secs ?? windPos(w, performance.now()));
-      local.position = rewindPos;
-      say('at the edge');
-      if (w.brake !== null || !holding) arrive(rewindPos);
+      say('at the edge', { index });
+      if (w.brake !== null || !holding) arrive(edge);
     },
     { once: true },
   );
@@ -2155,7 +2208,7 @@ function startWind(to: number | null, dir: 1 | -1): boolean {
     () => {
       if (!mine()) return;
       say('error', { code: clip.error?.code ?? null, message: clip.error?.message ?? '' }, 'warn');
-      if (w.at !== null) arrive(windPos(w, performance.now()));
+      if (w.at !== null) arrive(windPlace(w, performance.now()));
       else plain();
     },
     { once: true },
