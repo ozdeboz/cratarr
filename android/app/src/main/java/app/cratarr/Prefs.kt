@@ -300,33 +300,87 @@ class Prefs(context: Context) {
             p.edit().putBoolean(START_STOP_REWIND, value).apply()
         }
 
-    /** Winding (decision 0074; the page's `startStop.wind`): a tap's seconds per minute wound, the speed limit (×), the
-     *  spin-up and the brake (ms), each piece of a cut tap (ms), how much quieter it winds (dB), whether a seek winds,
-     *  and at a track's edge: stop, or wind on through the queue. */
-    var windRatio: Float
-        get() = p.getFloat(WIND_RATIO, 1f).coerceIn(0.5f, 2f)
-        set(value) = p.edit().putFloat(WIND_RATIO, value.coerceIn(0.5f, 2f)).apply()
+    /**
+     * A motion as the players use it (the page's lib/startStop pointWind, holdWind): a wind to a point's length (seconds
+     * per minute wound), its speed limit or a hold's starting speed (×), the spin-up and the brake (ms), each piece of a
+     * cut wind (ms), how much quieter it winds (dB); a hold's doubling time (s) and top speed (×). Made from the Tape
+     * page's settings, never kept.
+     */
+    data class Wind(
+        val ratio: Float,
+        val speed: Float,
+        val attackMs: Long,
+        val releaseMs: Long,
+        val pieceMs: Long,
+        val gainDb: Float,
+        val doublingS: Float,
+        val top: Float,
+    )
 
-    var windSpeed: Float
-        get() = p.getFloat(WIND_SPEED, 8f).coerceIn(2f, 16f)
-        set(value) = p.edit().putFloat(WIND_SPEED, value.coerceIn(2f, 16f)).apply()
+    /** A setting's range and starting value. */
+    private class Range(val min: Float, val max: Float, val start: Float)
 
-    var windAttackMs: Long
-        get() = p.getLong(WIND_ATTACK, 400L).coerceIn(100L, 1_500L)
-        set(value) = p.edit().putLong(WIND_ATTACK, value.coerceIn(100L, 1_500L)).apply()
+    /** The tape's mechanics, alike for every motion; a wind to a point back and forward (duration, speed limit); a hold
+     *  back and forward (starting and top speed). */
+    private fun tapeSetting(group: String, name: String): Float {
+        val r = TAPE_SETTINGS.getValue(group).getValue(name)
+        return p.getFloat("tape.$group.$name", r.start).coerceIn(r.min, r.max)
+    }
 
-    var windReleaseMs: Long
-        get() = p.getLong(WIND_RELEASE, 250L).coerceIn(100L, 1_500L)
-        set(value) = p.edit().putLong(WIND_RELEASE, value.coerceIn(100L, 1_500L)).apply()
+    /** The tape's one brake (a Vinyl pause's too). */
+    val tapeBrakeMs: Long get() = tapeSetting("tape", "brakeMs").toLong()
 
-    var windPieceMs: Long
-        get() = p.getLong(WIND_PIECE, 350L).coerceIn(100L, 1_000L)
-        set(value) = p.edit().putLong(WIND_PIECE, value.coerceIn(100L, 1_000L)).apply()
+    /** The tape's spin-up. */
+    val tapeAttackMs: Long get() = tapeSetting("tape", "attackMs").toLong()
 
-    var windGainDb: Float
-        get() = p.getFloat(WIND_GAIN, -12f).coerceIn(-24f, 0f)
-        set(value) = p.edit().putFloat(WIND_GAIN, value.coerceIn(-24f, 0f)).apply()
+    /** A wind to a point that way (Previous to the start, Next to the end, a seek that winds). */
+    fun pointWind(back: Boolean): Wind {
+        val way = if (back) "back" else "fwd"
+        val speed = tapeSetting(way, "speed")
+        return Wind(
+            ratio = tapeSetting(way, "ratio"),
+            speed = speed,
+            attackMs = tapeAttackMs,
+            releaseMs = tapeBrakeMs,
+            pieceMs = tapeSetting("tape", "pieceMs").toLong(),
+            gainDb = tapeSetting("tape", "gainDb"),
+            doublingS = tapeSetting("tape", "doublingS"),
+            top = speed,
+        )
+    }
 
+    /** A hold that way (Previous or Next held): from its starting speed, doubling as the tape does, to its top. */
+    fun holdWind(back: Boolean): Wind {
+        val hold = if (back) "holdBack" else "holdFwd"
+        val start = tapeSetting(hold, "start")
+        return pointWind(back).copy(speed = start, top = maxOf(tapeSetting(hold, "top"), start))
+    }
+
+    /** The Tape page's settings as it sends them (`startStop.tape`, `back`, `fwd`, `holdBack`, `holdFwd`): each kept
+     *  as it is where left out. */
+    fun setTape(startStop: org.json.JSONObject) {
+        val e = p.edit()
+        for ((group, names) in TAPE_SETTINGS) {
+            val o = startStop.optJSONObject(group) ?: continue
+            for ((name, r) in names) if (o.has(name)) e.putFloat("tape.$group.$name", o.optDouble(name, r.start.toDouble()).toFloat().coerceIn(r.min, r.max))
+        }
+        e.apply()
+    }
+
+    /** The same, as the page reads it, into [startStop]. */
+    fun putTape(startStop: org.json.JSONObject): org.json.JSONObject {
+        for ((group, names) in TAPE_SETTINGS) {
+            val o = org.json.JSONObject()
+            for (name in names.keys) {
+                val v = tapeSetting(group, name)
+                if (name.endsWith("Ms")) o.put(name, v.toLong()) else o.put(name, v.toDouble())
+            }
+            startStop.put(group, o)
+        }
+        return startStop
+    }
+
+    /** Whether a seek winds, and at a track's edge: stop, or wind on through the queue (`startStop.seekWinds`, `edges`). */
     var windSeeks: Boolean
         get() = p.getBoolean(WIND_SEEKS, false)
         set(value) = p.edit().putBoolean(WIND_SEEKS, value).apply()
@@ -411,13 +465,23 @@ class Prefs(context: Context) {
         const val START_STOP_MS = "start_stop_ms"
         const val START_STOP_SKIPS = "start_stop_skips"
         const val START_STOP_REWIND = "start_stop_rewind"
-        const val WIND_RATIO = "wind_ratio"
-        const val WIND_SPEED = "wind_speed"
-        const val WIND_ATTACK = "wind_attack_ms"
-        const val WIND_RELEASE = "wind_release_ms"
-        const val WIND_PIECE = "wind_piece_ms"
-        const val WIND_GAIN = "wind_gain_db"
         const val WIND_SEEKS = "wind_seeks"
+
+        /** The Tape page's settings (the owner, 2026-10-27): each one's range and start, as the page's lib/startStop. */
+        private val TAPE_SETTINGS: Map<String, Map<String, Range>> = mapOf(
+            "tape" to mapOf(
+                "attackMs" to Range(100f, 1500f, 400f),
+                "brakeMs" to Range(100f, 1500f, 250f),
+                "gainDb" to Range(-24f, 0f, -12f),
+                "doublingS" to Range(0.5f, 5f, 1.5f),
+                "pieceMs" to Range(100f, 1000f, 350f),
+            ),
+            "back" to mapOf("ratio" to Range(0.5f, 2f, 1f), "speed" to Range(2f, 16f, 8f)),
+            // Forward to a point: its duration reaching down to a quarter.
+            "fwd" to mapOf("ratio" to Range(0.25f, 2f, 1f), "speed" to Range(2f, 16f, 8f)),
+            "holdBack" to mapOf("start" to Range(2f, 16f, 8f), "top" to Range(8f, 64f, 64f)),
+            "holdFwd" to mapOf("start" to Range(2f, 16f, 8f), "top" to Range(8f, 64f, 64f)),
+        )
         const val WIND_EDGES = "wind_edges"
         const val START_STOP_OFF = "off"
         const val START_STOP_VINYL = "vinyl"

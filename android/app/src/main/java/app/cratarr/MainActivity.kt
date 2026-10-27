@@ -477,17 +477,11 @@ class MainActivity : AppCompatActivity() {
                     prefs.startStopMs = s.optLong("ms", 800L)
                     prefs.startStopSkips = s.optBoolean("skips")
                     prefs.startStopRewind = s.optBoolean("rewind")
-                    // Winding (decision 0074): each kept as it is when the page leaves it out.
-                    s.optJSONObject("wind")?.let { w ->
-                        if (w.has("ratio")) prefs.windRatio = w.optDouble("ratio", 1.0).toFloat()
-                        if (w.has("speed")) prefs.windSpeed = w.optDouble("speed", 8.0).toFloat()
-                        if (w.has("attackMs")) prefs.windAttackMs = w.optLong("attackMs", 400L)
-                        if (w.has("releaseMs")) prefs.windReleaseMs = w.optLong("releaseMs", 250L)
-                        if (w.has("pieceMs")) prefs.windPieceMs = w.optLong("pieceMs", 350L)
-                        if (w.has("gainDb")) prefs.windGainDb = w.optDouble("gainDb", -12.0).toFloat()
-                        if (w.has("seekWinds")) prefs.windSeeks = w.optBoolean("seekWinds")
-                        if (w.has("edges")) prefs.windEdges = w.optString("edges", "stop")
-                    }
+                    // The Tape page (decision 0074): the tape's mechanics and its four motions, each kept as it is when the
+                    // page leaves it out.
+                    prefs.setTape(s)
+                    if (s.has("seekWinds")) prefs.windSeeks = s.optBoolean("seekWinds")
+                    if (s.has("edges")) prefs.windEdges = s.optString("edges", "stop")
                 }
                 if (message.has("downloadOverMobile") || message.has("syncOnlyCharging")) {
                     if (message.has("downloadOverMobile")) prefs.downloadOverMobile = message.optBoolean("downloadOverMobile")
@@ -633,23 +627,15 @@ class MainActivity : AppCompatActivity() {
         .put("levelUnknown", prefs.levelUnknown)
         .put(
             "startStop",
-            JSONObject()
-                .put("mode", prefs.startStopMode)
-                .put("ms", prefs.startStopMs)
-                .put("skips", prefs.startStopSkips)
-                .put("rewind", prefs.startStopRewind)
-                .put(
-                    "wind",
-                    JSONObject()
-                        .put("ratio", prefs.windRatio.toDouble())
-                        .put("speed", prefs.windSpeed.toDouble())
-                        .put("attackMs", prefs.windAttackMs)
-                        .put("releaseMs", prefs.windReleaseMs)
-                        .put("pieceMs", prefs.windPieceMs)
-                        .put("gainDb", prefs.windGainDb.toDouble())
-                        .put("seekWinds", prefs.windSeeks)
-                        .put("edges", prefs.windEdges),
-                ),
+            prefs.putTape(
+                JSONObject()
+                    .put("mode", prefs.startStopMode)
+                    .put("ms", prefs.startStopMs)
+                    .put("skips", prefs.startStopSkips)
+                    .put("rewind", prefs.startStopRewind)
+                    .put("seekWinds", prefs.windSeeks)
+                    .put("edges", prefs.windEdges),
+            ),
         )
         // Local mode (decision 0052): which music plays, and whether Android lets the app read the device's.
         .put("mode", prefs.mode)
