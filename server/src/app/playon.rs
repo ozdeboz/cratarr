@@ -216,6 +216,14 @@ pub struct Report {
     /// The direction knob as set (0.9.12): `L` backwards, `R` (or left out) forwards.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction: Option<String>,
+    /// Level the volume as the player has it (0.9.12): on, how a track not measured is taken, and what it turns the
+    /// playing track down by now (dB, 0 or less). Players from before leave them out: off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub levelling: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level_unknown: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level_db: Option<f64>,
     /// `device` while the app plays the device's own music (decision 0052, local mode): the rest of this report is that
     /// player's, and Cratarr's queue is left as it was. Left out: Cratarr's music, as ever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -529,6 +537,14 @@ pub enum Command {
     Direction {
         dir: String,
     },
+    /// Level the volume (0.8/0.9.8), set from a page driving the player (0.9.12): on or off, and how a track not
+    /// measured is taken (`typical`, `untouched`). The player eases into its new level over a second.
+    Level {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unknown: Option<String>,
+    },
     /// To `position_ms`, or `percent` (0 to 100) of the track, or `by_ms` on from where it is now (back below 0: the
     /// visuals' double and triple taps). What reaches the player is always `position_ms`.
     Seek {
@@ -538,6 +554,10 @@ pub enum Command {
         percent: Option<f64>,
         #[serde(default, skip_serializing)]
         by_ms: Option<i64>,
+        /// Wound there (decision 0074) whatever the player's own setting, where it plays and it is more than a moment
+        /// away (0.9.12: a page driving it with its seek winding on).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        wind: bool,
     },
     /// 0 to 100.
     Volume { level: u8 },
@@ -644,6 +664,10 @@ pub struct PlayerView {
     pub rewinding: bool,
     /// The direction knob as the player says (0.9.12): `L` or `R`.
     pub direction: &'static str,
+    /// Level the volume as the player says (0.9.12): on, how an unmeasured track is taken, what it turns down by now.
+    pub levelling: bool,
+    pub level_unknown: Option<String>,
+    pub level_db: Option<f64>,
     /// Where its sound goes now, as its app says (decision 0033, amended 2026-10-19); none where it does not say.
     pub output: Option<Output>,
     pub queue_length: usize,
@@ -1002,6 +1026,9 @@ impl Entry {
             held: r.held.clone(),
             rewinding: r.rewinding,
             direction: if r.direction.as_deref() == Some("L") { "L" } else { "R" },
+            levelling: r.levelling.unwrap_or(false),
+            level_unknown: r.level_unknown.clone(),
+            level_db: r.level_db,
             output: r.output.clone(),
             queue_length: self.queue.tracks.len(),
             repeat: self.queue.repeat,
@@ -1990,7 +2017,7 @@ impl PlayOn {
             match command {
                 Command::Pause | Command::Resume | Command::Toggle | Command::Next | Command::Previous | Command::Volume { .. } => command,
                 // Device music cannot be rendered: a hold there is a plain skip (0074's fallback), the player's to do.
-                Command::Wind { .. } | Command::Direction { .. } => command,
+                Command::Wind { .. } | Command::Direction { .. } | Command::Level { .. } => command,
                 Command::Duck | Command::Unduck | Command::Sleep { .. } | Command::Seek { .. } | Command::Sample { .. } => command,
                 Command::Announce { .. } => command,
                 Command::Play { .. } | Command::Queue { .. } | Command::QueueRename { .. } | Command::QueueDelete { .. } => command,
@@ -2074,14 +2101,14 @@ impl PlayOn {
                 }
                 Command::Add { from: PlayFrom::default(), tracks: self.named(tracks).await, at, after, how }
             }
-            Command::Seek { position_ms: None, percent: Some(p), .. } => {
+            Command::Seek { position_ms: None, percent: Some(p), wind, .. } => {
                 let duration = self.entries().get(name).and_then(|e| e.report.duration_ms);
                 let Some(d) = duration else { return Err(ToggleError::Refused("The track's length is not known yet.".into())) };
-                Command::Seek { position_ms: Some((d as f64 * p.clamp(0.0, 100.0) / 100.0) as u64), percent: None, by_ms: None }
+                Command::Seek { position_ms: Some((d as f64 * p.clamp(0.0, 100.0) / 100.0) as u64), percent: None, by_ms: None, wind }
             }
             // On or back from where it is now (as Cratarr reckons it: its last report moved on), never past the start,
             // and short of the end by a second (a seek past it would skip the track).
-            Command::Seek { position_ms: None, percent: None, by_ms: Some(by) } => {
+            Command::Seek { position_ms: None, percent: None, by_ms: Some(by), wind } => {
                 let (now, duration) = match self.entries().get(name) {
                     Some(e) => (e.position_now(), e.report.duration_ms),
                     None => return Err(ToggleError::Refused(format!("No player is called {name}."))),
@@ -2090,9 +2117,9 @@ impl PlayOn {
                 if let Some(d) = duration {
                     to = to.min(d.saturating_sub(1000));
                 }
-                Command::Seek { position_ms: Some(to), percent: None, by_ms: None }
+                Command::Seek { position_ms: Some(to), percent: None, by_ms: None, wind }
             }
-            Command::Seek { position_ms: None, percent: None, by_ms: None } => return Err(ToggleError::Refused("Seek where?".into())),
+            Command::Seek { position_ms: None, percent: None, by_ms: None, .. } => return Err(ToggleError::Refused("Seek where?".into())),
             Command::Announce { url, id } => {
                 if url.trim().is_empty() {
                     return Err(ToggleError::Refused("Announce what? Give the clip's url.".into()));
@@ -3012,7 +3039,7 @@ mod tests {
         let c: Command = serde_json::from_str(r#"{"command":"play","album":"al-x"}"#).unwrap();
         assert!(matches!(c, Command::Play { from: PlayFrom { album: Some(a), favourites: false, .. }, .. } if a == "al-x"));
         let c: Command = serde_json::from_str(r#"{"command":"seek","percent":50}"#).unwrap();
-        assert_eq!(c, Command::Seek { position_ms: None, percent: Some(50.0), by_ms: None });
+        assert_eq!(c, Command::Seek { position_ms: None, percent: Some(50.0), by_ms: None, wind: false });
         assert_eq!(serde_json::from_str::<Command>(r#"{"command":"duck"}"#).unwrap(), Command::Duck);
         // The announce channel (0.9): a clip by url, its id the caller's or none (Cratarr gives one).
         assert_eq!(
@@ -3040,7 +3067,7 @@ mod tests {
         // To the player: tracks, never the playlist's name or the shuffle wish.
         let to_player = Command::play(vec![], 2, 5);
         assert_eq!(serde_json::to_string(&to_player).unwrap(), r#"{"command":"play","tracks":[],"index":2,"position_ms":5}"#);
-        assert_eq!(serde_json::to_string(&Command::Seek { position_ms: Some(9), percent: None, by_ms: None }).unwrap(), r#"{"command":"seek","position_ms":9}"#);
+        assert_eq!(serde_json::to_string(&Command::Seek { position_ms: Some(9), percent: None, by_ms: None, wind: false }).unwrap(), r#"{"command":"seek","position_ms":9}"#);
         // The sleep timer: a time, the end of the track, or null to clear it; passed on as it came.
         let c: Command = serde_json::from_str(r#"{"command":"sleep","at_ms":1760000000000}"#).unwrap();
         assert_eq!(c, Command::Sleep { at_ms: Some(1_760_000_000_000), end_of_track: false });
@@ -3194,7 +3221,7 @@ mod tests {
         said(&mut tablet);
         p.report("tablet", Report { index: 0, position_ms: 60_000, duration_ms: Some(200_000), playing: false, ..Report::default() }).unwrap();
         let sought = |c: &mut Commands| told(c).iter().filter(|m| m["command"] == "seek").filter_map(|m| m["position_ms"].as_u64()).last();
-        let by = |ms: i64| Command::Seek { position_ms: None, percent: None, by_ms: Some(ms) };
+        let by = |ms: i64| Command::Seek { position_ms: None, percent: None, by_ms: Some(ms), wind: false };
         p.command("tablet", by(10_000)).await.unwrap();
         assert_eq!(sought(&mut tablet), Some(70_000), "on from where it is");
         p.command("tablet", by(-90_000)).await.unwrap();

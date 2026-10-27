@@ -791,7 +791,7 @@ mod tests {
         assert_eq!(d.queue.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(), vec!["tr-3", "tr-2", "tr-9"]);
 
         d.run(Command::Pause).await.unwrap();
-        d.run(Command::Seek { position_ms: Some(90_000), percent: None, by_ms: None }).await.unwrap();
+        d.run(Command::Seek { position_ms: Some(90_000), percent: None, by_ms: None, wind: false }).await.unwrap();
         let calls = kodi.lock().unwrap().calls.clone();
         let seek = calls.iter().rev().find(|(m, _)| m == "Player.Seek").unwrap();
         assert_eq!(seek.1["value"]["time"], json!({ "hours": 0, "minutes": 1, "seconds": 30, "milliseconds": 0 }));
@@ -864,7 +864,7 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(3)).await;
         d.now = d.read().await.unwrap();
         step("next", &d);
-        d.run(Command::Seek { position_ms: Some(60_000), percent: None, by_ms: None }).await.unwrap();
+        d.run(Command::Seek { position_ms: Some(60_000), percent: None, by_ms: None, wind: false }).await.unwrap();
         tokio::time::sleep(Duration::from_secs(2)).await;
         d.now = d.read().await.unwrap();
         step("seek to 60 s", &d);

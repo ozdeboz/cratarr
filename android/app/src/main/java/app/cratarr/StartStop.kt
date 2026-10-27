@@ -121,6 +121,8 @@ class StartStop(
     /** The knob's backwards play under way (a wind at 1×, loud as the track, no rise), and what follows its brake:
      *  `forward` (the knob back at R: on with the wind-up) or `rest` (a pause: paused where it got). */
     private var tapeReverse = false
+    /** A ramp of the tape's own (a stop before a wind, a knob turn, the wind-up after): shown as playing, no ramp told. */
+    private var quietRamp = false
     private var reverseNext = "rest"
     /** A hold that could not wind: the plain press its letting go makes instead. */
     private var holdPlain: (() -> Unit)? = null
@@ -225,10 +227,42 @@ class StartStop(
         deckDirection = want
         changed()
         if (left) {
-            if (player.isPlaying && tapeListener == null && !busy) pause { player.pause(); main.post { playBack() } }
+            if (player.isPlaying && tapeListener == null && !busy) quietStop { if (!playBack()) play(true) { player.play() } }
         } else if (tapeReverse && tapeListener != null) {
             reverseNext = "forward"
             windStop()
+        }
+    }
+
+    /**
+     * A stop of the tape's own (0.9.12, the owner: "quiet stops"): before a hold winds from play, and a knob turned while
+     * playing. Wound down as a pause is (the deck's one brake), but shown as playing throughout and told to no page; then
+     * [then], the music paused where it was.
+     */
+    private fun quietStop(then: () -> Unit) {
+        val m = mode()
+        if (m == Prefs.START_STOP_OFF || !player.isPlaying) {
+            player.pause()
+            then()
+            return
+        }
+        val at = player.currentPosition
+        heldPosition = at
+        quietRamp = true
+        commit(true)
+        ramping("out", downMs(m))
+        val mine = token + 1
+        ramp(1f, 0f, downMs(m), setter(m), curve(m, down = true)) { whole ->
+            if (!whole || token != mine) return@ramp
+            player.pause()
+            if (player.playbackState != Player.STATE_IDLE && player.mediaItemCount > 0) player.seekTo(at)
+            // Full speed and volume for what comes next, the music paused meanwhile.
+            running = null
+            gain = 1f
+            volume()
+            Fader.target = 1f
+            if (player.playbackParameters != PlaybackParameters.DEFAULT) player.playbackParameters = PlaybackParameters.DEFAULT
+            then()
         }
     }
 
@@ -256,7 +290,7 @@ class StartStop(
         reverseNext = "rest"
         wind(hold = true, from = from, to = 0L, url = url, restart = null, chain = way.map { it.second }, speed = 1f, reverse = true) { k, at ->
             if (k == 0) player.seekTo(at) else player.seekTo((player.currentMediaItemIndex - k).coerceAtLeast(0), at)
-            if (reverseNext == "forward") play { player.play() }
+            if (reverseNext == "forward") play(true) { player.play() }
         }
         return true
     }
@@ -319,6 +353,8 @@ class StartStop(
     /** A ramp's direction told to the page (the play button draws it): `out`, `in`, or none at its end. */
     private fun ramping(dir: String?, ms: Long, full: Long = ms) {
         running = dir
+        // The tape's own stops and starts tell the page nothing: its play button moves for play and pause only.
+        if (quietRamp) return
         rampListener?.invoke(dir, ms, full)
     }
 
@@ -387,6 +423,7 @@ class StartStop(
     /** Back to plain playing: full speed, its own pitch, full volume; a ramp under way stopped. */
     fun reset() {
         stopTape()
+        quietRamp = false
         token++
         val next = after
         after = null
@@ -405,7 +442,10 @@ class StartStop(
     }
 
     /** Plays ([start]), winding up from still and silent. */
-    fun play(start: () -> Unit) {
+    fun play(start: () -> Unit) = play(false, start)
+
+    /** As [play]; [quiet]: the tape's own wind-up after a wind, shown as playing throughout and told to no page. */
+    fun play(quiet: Boolean, start: () -> Unit) {
         note("play", "busy" to busy, "direction" to deckDirection)
         // The knob at L: playing is backwards (0.9.12).
         if (deckDirection == "L" && tapeListener == null && !player.isPlaying && playBack()) return
@@ -431,6 +471,7 @@ class StartStop(
         // there; the page told how long it is of the length set, so its button fills from where that leaves it.
         heldPosition = at
         player.seekTo((at - (ms * pace(m)).toLong()).coerceAtLeast(0))
+        quietRamp = quiet
         commit(true)
         ramping("in", ms, prefs.startStopMs)
         start()
@@ -585,11 +626,12 @@ class StartStop(
      * A seek where seeking winds the tape (decision 0074): wound there, condensed, then on from there as it is; a jump as
      * ever otherwise (off, not playing, in a group, a short way, a ramp under way, a track Cratarr has no file of).
      */
-    fun seekTo(target: Long, go: () -> Unit) {
+    fun seekTo(target: Long, wind: Boolean = false, go: () -> Unit) {
         val from = player.currentPosition
         // Each seek's way, to follow a device's report (the owner: "seek to wind does not yet work").
-        note("seek", "to_ms" to target, "from_ms" to from, "winds" to prefs.windSeeks, "busy" to busy, "playing" to player.isPlaying)
-        if (prefs.windSeeks && !busy && player.isPlaying && !grouped() && kotlin.math.abs(target - from) > SEEK_WIND_LEAST_MS) {
+        note("seek", "to_ms" to target, "from_ms" to from, "winds" to prefs.windSeeks, "asked" to wind, "busy" to busy, "playing" to player.isPlaying)
+        // `wind`: a page driving this player asks it (its own seek winding on), whatever this device's setting.
+        if ((prefs.windSeeks || wind) && !busy && player.isPlaying && !grouped() && kotlin.math.abs(target - from) > SEEK_WIND_LEAST_MS) {
             val url = windUrl(from, target, tapMs(target - from), target < from, null, prefs.windSpeed, prefs.windGainDb, false)
             if (url != null) {
                 wind(hold = false, from = from, to = target, url = url, restart = go) { _, _ -> player.play() }
@@ -623,12 +665,12 @@ class StartStop(
         val go = {
             wind(hold = true, from = from, to = edge, url = url, restart = { play { player.play() } }, chain = way.map { it.second }, flying = flying, speed = speed) { k, at ->
                 if (k == 0) player.seekTo(at) else player.seekTo((player.currentMediaItemIndex + if (back) -k else k).coerceIn(0, player.mediaItemCount - 1), at)
-                // A flying one hands back while still moving; one from still winds up as a play does.
-                if (flying) player.play() else play { player.play() }
+                // A flying one hands back while still moving; one from still winds up, quietly (the tape's own).
+                if (flying) player.play() else play(true) { player.play() }
             }
         }
-        // Back, or from a pause: after the pause's own end (it rests where it was pressed, then lets go of its ramp).
-        if (player.isPlaying && !flying) pause { player.pause(); main.post { go() } } else go()
+        // Back from play: the tape's own quiet stop first (shown as playing); from a pause at once.
+        if (player.isPlaying && !flying) quietStop { go() } else go()
         return true
     }
 
@@ -692,7 +734,8 @@ class StartStop(
         heldPosition = from
         // A tap and a flying hold show playing throughout; a hold from still shows the pause it began with (the play
         // button's fill moves for play and pause only, the owner).
-        commit(!hold || flying || reverse)
+        // Every wind shows playing (the tape's own stops are quiet, the owner).
+        commit(true)
         val t = tape ?: ExoPlayer.Builder(context, DefaultRenderersFactory(context).setEnableAudioTrackPlaybackParams(true))
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), false)
             .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, Downloads.http(context))))

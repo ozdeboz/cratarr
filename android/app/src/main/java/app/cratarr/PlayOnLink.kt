@@ -360,7 +360,7 @@ class PlayOnLink(
         if (prefs.mode == Prefs.MODE_DEVICE) {
             when (m.optString("command")) {
                 "play" -> service.switchMode(Prefs.MODE_CRATARR, "play from Cratarr")
-                "pause", "resume", "toggle", "next", "previous", "sleep", "seek", "volume", "duck", "unduck", "announce", "wind", "direction" -> {}
+                "pause", "resume", "toggle", "next", "previous", "sleep", "seek", "volume", "duck", "unduck", "announce", "wind", "direction", "level" -> {}
                 "group" -> if (!m.isNull("leader")) return report()
                 "stop" -> {
                     release()
@@ -480,7 +480,13 @@ class PlayOnLink(
             "radio" -> Radio.command(service, p, m)
             "autoplay" -> Autoplay.command(service, p, m)
             "skip_favourites" -> SkipFavourites.set(service, p, m.optBoolean("on"))
-            "seek" -> m.optLong("position_ms", p.currentPosition).let { to -> service.startStop.seekTo(to) { p.seekTo(to) } }
+            // `wind`: a page driving this player with its seek winding on; wound there whatever this device says.
+            "seek" -> m.optLong("position_ms", p.currentPosition).let { to -> service.startStop.seekTo(to, m.optBoolean("wind")) { p.seekTo(to) } }
+            // Level the volume set from a page driving this player (0.9.12), eased as its own switch is.
+            "level" -> {
+                if (m.has("on")) prefs.levelling = m.optBoolean("on")
+                m.optString("unknown").takeIf { it == Prefs.LEVEL_TYPICAL || it == Prefs.LEVEL_UNTOUCHED }?.let { prefs.levelUnknown = it }
+            }
             // Previous or Next held (decision 0074): wound while held; where it cannot wind, a press as ever.
             // The tape deck's direction knob (0.9.12).
             "direction" -> service.startStop.setDirection(m.optString("dir") == "L")
@@ -728,7 +734,7 @@ class PlayOnLink(
     }
 
     /** The levelling setting changed: the playing track levelled again (or not). */
-    fun levellingChanged() = Levelling.follow(service, player, prefs.serverUrl, ::applyVolume)
+    fun levellingChanged() = Levelling.follow(service, player, prefs.serverUrl, ::applyVolume, ramp = true)
 
     override fun onEvents(player: Player, events: Player.Events) {
         if (events.contains(Player.EVENT_TIMELINE_CHANGED)) queueSent = false
@@ -784,6 +790,10 @@ class PlayOnLink(
             // Tape rewind (0.9.10): the position goes back to the start as the clip sounds; Cratarr does not count it on.
             .put("rewinding", service.startStop.rewinding)
             .put("direction", StartStop.deckDirection)
+            // Level the volume as set here (0.9.12): a page driving this player shows and sets it.
+            .put("levelling", prefs.levelling)
+            .put("level_unknown", prefs.levelUnknown)
+            .put("level_db", Levelling.appliedDb)
             .put("volume", volume())
             .put("ducked", ducked)
             .put("announce", announcing?.json() ?: JSONObject.NULL)

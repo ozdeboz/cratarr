@@ -143,7 +143,15 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             "radio" -> if (!local) Radio.command(context, c, m)
             "autoplay" -> if (!local) Autoplay.command(context, c, m)
             "skip_favourites" -> if (!local) SkipFavourites.set(context, c, m.optBoolean("on"))
-            "seek" -> c.seekTo(m.optLong("positionMs"))
+            // `wind`: the page's own seek winding (0.9.12), wound there whatever this device says.
+            "seek" -> if (m.optBoolean("wind")) {
+                controller.sendCustomCommand(
+                    SessionCommand(PlayerService.COMMAND_SEEK_WIND, Bundle.EMPTY),
+                    Bundle().apply { putLong("positionMs", m.optLong("positionMs")) },
+                )
+            } else {
+                c.seekTo(m.optLong("positionMs"))
+            }
             "preview" -> preview(m.optJSONObject("track"), m.optLong("positionMs"))
             "preview-end" -> previewEnd()
             "play" -> play()

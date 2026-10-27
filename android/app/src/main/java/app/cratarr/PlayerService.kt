@@ -610,6 +610,7 @@ class PlayerService : MediaSessionService() {
                 .add(SessionCommand(COMMAND_SKIP, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_WIND, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_DIRECTION, Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_SEEK_WIND, Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller).setAvailableSessionCommands(commands).build()
         }
@@ -670,6 +671,8 @@ class PlayerService : MediaSessionService() {
                 // on letting go.
                 // The page's tape deck direction knob (0.9.12).
                 COMMAND_DIRECTION -> startStop.setDirection(args.getString("dir") == "L")
+                // The page's seek with winding asked for (0.9.12).
+                COMMAND_SEEK_WIND -> args.getLong("positionMs").let { to -> startStop.seekTo(to, true) { player.seekTo(to) } }
                 COMMAND_WIND -> {
                     val back = args.getString("dir") != "forward"
                     if (args.getString("phase") == "stop") {
@@ -759,6 +762,7 @@ class PlayerService : MediaSessionService() {
         const val COMMAND_SKIP = "cratarr.SKIP"
         const val COMMAND_WIND = "cratarr.WIND"
         const val COMMAND_DIRECTION = "cratarr.DIRECTION"
+        const val COMMAND_SEEK_WIND = "cratarr.SEEK_WIND"
         /** A previous or next key held this long is a hold: it winds. */
         private const val HOLD_MS = 400L
 
