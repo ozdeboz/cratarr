@@ -28,12 +28,17 @@ Spotify's Web API as of 2026-10 (checked on developer.spotify.com, 2026-10-27):
 **Each Cratarr account connects its own Spotify once; Cratarr keeps that account's Spotify library, says per item what
 it has of it, and lets it be asked for or played.**
 
-- **Connection, per account (0051):** the server holds the account's Spotify sign-in (its refresh token, in the data
-  folder, never logged nor sent to a page); every device signed in to the account sees it. Connecting opens Spotify's
-  consent page; Spotify sends the browser back to Cratarr's own address (`/api/spotify/callback`), which keeps the
-  sign-in for the account that started it. Disconnecting forgets the sign-in and the lists.
-- **The install's own app:** an administrator enters the Client ID in Settings (a row with the redirect address to
-  list in Spotify's dashboard, and that its 5 users are added there). No Client ID, no Spotify.
+- **Connection, per account (0051), in Settings › Account › Spotify** (a page of its own: Connect, connected as, last
+  read, Refresh, Disconnect): the server holds the account's Spotify sign-in (its refresh token, in the data folder,
+  never logged nor sent to a page); every device signed in to the account sees it. Connecting opens Spotify's consent
+  page (in the Android app, in the browser); Spotify sends the browser back to Cratarr's own HTTPS address
+  (`/api/spotify/callback`; the page gives it, as Last.fm's sign-in does, since only the page knows the address it is
+  on), which keeps the sign-in for the account that started it and returns to that page (the app's by
+  `cratarr://connected/spotify`). Disconnecting forgets the sign-in and the lists.
+- **The install's own app, in Settings › Connections › Spotify (administrators):** the Client ID, with the redirect
+  address to list in Spotify's dashboard (the HTTPS one: Spotify refuses plain http but for loopback), and that its 5
+  users are added there. The app's owner (Premium) need not be an administrator of Cratarr: a household member can
+  make it and hand over the Client ID. No Client ID, no Spotify.
 - **What is read (all four):** saved albums, saved tracks, one's own and collaborative playlists with their tracks,
   followed artists. Scopes: `user-library-read`, `playlist-read-private`, `playlist-read-collaborative`,
   `user-follow-read`, and for Connect `user-read-playback-state`, `user-modify-playback-state`.
@@ -41,11 +46,10 @@ it has of it, and lets it be asked for or played.**
   at a time, paced and backing off on 429 as Spotify says (`Retry-After`). Kept per account in `spotify.sqlite`.
 - **What Cratarr has of it, per item:** *in the library*, *partly* (an album or playlist some of whose tracks are
   here), *missing*, or *requested* (0070, with the request's own status). Matched in this order:
-  1. ISRC (tracks) and UPC (albums) against the library's own: the catalogue reads `ISRC` and `BARCODE` from the tags
-     it reads anyway;
-  2. through MusicBrainz: the ISRC to recordings, the UPC to a release, so to the release group and recordings the
-     library knows (paced, as the other MusicBrainz work; answers kept);
-  3. by name, as 0067's matcher does for the Exportify CSV.
+  1. through MusicBrainz: the ISRC to recordings, the UPC to a release and so its release group, matched against the
+     recording and release group ids the library's tags carry (paced, as the other MusicBrainz work; answers kept);
+  2. by name, as 0067's matcher does for the Exportify CSV: at once, until MusicBrainz has answered.
+  Reading `ISRC` and `BARCODE` from the files' own tags can come later, if MusicBrainz leaves too much to names.
   A followed artist is *in the library* when the library has any of their albums.
 - **Request:** the existing flow (0070, `POST /api/requests/want`) with the album's names, its release group when
   matched, and its cover; the marks as Discover's (0069).
@@ -55,18 +59,21 @@ it has of it, and lets it be asked for or played.**
   - otherwise handed to Spotify through Connect: on the account's Spotify app or speaker of choice, Premium needed. The
     sound stays in Spotify. **Never Spotify's sound through Cratarr's player.**
 - **Where:** a source in the Library beside the others: its shelves and flows (albums, tracks, playlists, artists)
-  with the cover marks. No page of its own.
+  with the cover marks, in the view menu once the account is connected; covered and missing narrowed by the Filter
+  sheet's own switches (everything shows, marked, out of the box). No page of its own.
 
 ## Endpoints
 
 All are the signed-in account's own; `status` is `in`, `partly`, `missing` or `requested`.
 
 - `GET /api/spotify`: the state.
-  `{ client_id_set, redirect_uri, connected: { user, name, since } | null, sync: { state: "idle"|"running"|"failed",
+  `{ client_id_set, connected: { user, name, since } | null, sync: { state: "idle"|"running"|"failed",
   at, error, albums, tracks, playlists, artists } }`
 - `PUT /api/spotify/client` (administrators): `{ client_id }`; empty removes it.
-- `POST /api/spotify/connect`: `{ url }`, Spotify's consent page to open. `GET /api/spotify/callback?code&state`
-  keeps the sign-in, then sends the browser back to the Library's Spotify source (`/#/library?source=spotify`; the page routes by hash), with
+- `POST /api/spotify/connect`: `{ callback, app }` (`callback`: the page's `location.origin + "/api/spotify/callback"`;
+  `app`: begun in the Android app) → `{ url }`, Spotify's consent page to open. `GET /api/spotify/callback?code&state`
+  (open to anyone, found by its one-time `state`) keeps the sign-in, then sends the browser back to Settings › Account ›
+  Spotify (`/#/settings?view=settings%3Aaccount%2Fspotify`; in the app `cratarr://connected/spotify`), with
   `&spotify_error=…` when it failed.
 - `DELETE /api/spotify`: disconnects.
 - `POST /api/spotify/sync`: reads it again now; answers at once with the state.
