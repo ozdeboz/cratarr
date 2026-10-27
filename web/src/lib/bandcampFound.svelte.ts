@@ -43,14 +43,15 @@ export async function playOnBandcamp(key: string, page: string, title: string) {
 }
 
 /** Everything an artist has on Bandcamp as one queue of previews, newest first (New to you's Listen; the owner,
- *  2026-10-27); where the server cannot list an artist's (an older one), the album shown (`page`) alone. */
-export async function playArtistOnBandcamp(key: string, artist: string, page: string | null) {
+ *  2026-10-27), from their own page where known (`own`); where the server cannot list an artist's (an older one), the
+ *  album shown (`page`) alone. */
+export async function playArtistOnBandcamp(key: string, artist: string, own: string | null, page: string | null) {
   if (!isLocal()) return toast.show({ text: 'A preview plays on this device or on a Cratarr player.', tone: 'error' });
   bandcampPlay.key = key;
   try {
     let tracks: LocalTrack[] = [];
     try {
-      tracks = (await previewBandcampArtist(artist)).albums.flatMap((a) => a.tracks);
+      tracks = (await previewBandcampArtist(artist, own)).albums.flatMap((a) => a.tracks);
     } catch (e) {
       if (!(e instanceof ApiError && e.status === 404) || !page) throw e;
     }

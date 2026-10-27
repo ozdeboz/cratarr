@@ -219,12 +219,15 @@
           <!-- Their studio albums (the owner, 2026-10-25: "the golden standard"), as the look counted. -->
           {#if a.artist_albums}<span class="by">{a.artist_albums} studio {a.artist_albums === 1 ? 'album' : 'albums'}</span>{/if}
         </div>
-        <button
-          class="play"
-          disabled={bandcampPlay.key === listenKey}
-          aria-busy={bandcampPlay.key === listenKey}
-          onclick={() => playArtistOnBandcamp(listenKey, n.artist, a.bandcamp ?? null)}><Icon name="play" size={18} />Listen</button
-        >
+        {#if n.items.some((s) => s.artist_on_bandcamp || s.bandcamp)}
+          <button
+            class="play"
+            disabled={bandcampPlay.key === listenKey}
+            aria-busy={bandcampPlay.key === listenKey}
+            onclick={() => playArtistOnBandcamp(listenKey, n.artist, n.items.find((s) => s.artist_bandcamp)?.artist_bandcamp ?? null, a.bandcamp ?? null)}
+            ><Icon name="play" size={18} />Listen</button
+          >
+        {/if}
       </div>
     </div>
     {#if bandcampFailed[listenKey]}<p class="artist-failed">{bandcampFailed[listenKey]}</p>{/if}

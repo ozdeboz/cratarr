@@ -1731,6 +1731,10 @@ export type DiscoverAlbum = {
   artist_photo?: boolean;
   /** How many albums the artist new to the library has released, where the look found out (New to you). */
   artist_albums?: number;
+  /** A new artist's own page on Bandcamp (from MusicBrainz, read with the picture), and whether they have anything
+   *  there at all (that page, or an album of theirs found there): New to you's order and Listen (a5, 2026-10-27). */
+  artist_bandcamp?: string | null;
+  artist_on_bandcamp?: boolean;
   /** What MusicBrainz calls it (album, EP, single…), its genres, length, track count; Last.fm's listeners (0.9). */
   kind?: string | null;
   genres?: string[];
@@ -1870,9 +1874,9 @@ export const previewBandcamp = (url: string) =>
   request<{ album: string; artist: string; url: string; tracks: LocalTrack[] }>(`/api/preview/bandcamp?url=${encodeURIComponent(url)}`);
 /** Everything an artist has on Bandcamp to hear as previews (New to you's Listen; the owner, 2026-10-27): their own
  *  page's releases, newest first; none where nothing was found. */
-export const previewBandcampArtist = (name: string) =>
-  request<{ artist: string; page: string | null; albums: { album: string; url: string; year?: number; tracks: LocalTrack[] }[] }>(
-    `/api/preview/bandcamp/artist?name=${encodeURIComponent(name)}`,
+export const previewBandcampArtist = (name: string, page?: string | null) =>
+  request<{ artist: string; page: string | null; albums: { album: string; url: string; year: number | null; tracks: LocalTrack[] }[] }>(
+    `/api/preview/bandcamp/artist?${new URLSearchParams({ name, ...(page ? { page } : {}) })}`,
   );
 
 /** A ListenBrainz user's listens into the asking account's history (decisions 0064 and 0067), as a task. */
