@@ -1606,6 +1606,9 @@ export function next() {
   // The app's player or one driven: its own Next (its wind-down, its fast-forward), never a jump to a track, which it
   // takes plainly (a5, 2026-10-27: the tablet's Next had no wind-down).
   if (handed()) return hand('next');
+  // While a brake runs (a skip's wind-down, a pause's): Next is not taken, silently (the owner, 2026-10-27: one tap, one
+  // skip).
+  if (committed !== null && ramping.dir === 'out' && !rewinding) return;
   if (rewinding) return windTakeover('next');
   // The last track, Autoplay on: on into its picks once they are in (asked now if not yet).
   if (local.index >= local.queue.length - 1 && local.autoplay) {
