@@ -2,7 +2,7 @@
   import DetailsSheet from './DetailsSheet.svelte';
   import StartStopSheet from './StartStopSheet.svelte';
   import LevelSheet from './LevelSheet.svelte';
-  import { levelOn, levelShare, setLevelOn } from './level.svelte';
+  import { levelOn, levelShare } from './level.svelte';
   // The full player (decision 0018): over the page (`overlay`, opened from the mini-player) or beside it (`side`, the
   // shell's sidebar on wide windows). It shows the cover, the track, the controls, the progress, the favourite and
   // how many playlists hold the track, laid out by lib/playerLayout.ts, on the blurred cover in its colours.
@@ -560,16 +560,17 @@
           <div class="transport" role="group" aria-label="Player controls">
             <!-- Level, left of previous, where the page holds the queue (the owner, 2026-10-26, 0.9.8: in Shuffle's place;
                  Shuffle is in the queue's sheet): on, it fills from the bottom by how far the playing track is turned down
-                 (shown, never a number); a tap switches it, a long press opens its sheet. -->
+                 (shown, never a number). A tap opens its sheet, where it is switched (the owner, 2026-10-27: not by a
+                 tap); a long press shows or hides the levelling in the waveform. -->
             {#if isLocal()}
               <button
                 class="level"
                 class:on={levelOn()}
-                aria-pressed={levelOn()}
-                aria-label="Level the volume"
+                aria-label={levelOn() ? 'Level the volume: on' : 'Level the volume: off'}
                 title="Level the volume"
-                onclick={() => setLevelOn(!levelOn())}
-                use:longpress={() => (levelOpen = true)}
+                aria-haspopup="dialog"
+                onclick={() => (levelOpen = true)}
+                use:longpress={() => (prefs.levelInWave = !prefs.levelInWave)}
                 ><Icon name="audioLines" size={22} />{#if levelOn()}<span class="fill" style:--down={levelShare(local.levelDb)} aria-hidden="true"
                     ><Icon name="audioLines" size={22} /></span
                   >{/if}</button
