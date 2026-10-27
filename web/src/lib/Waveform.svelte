@@ -219,8 +219,10 @@
 </script>
 
 <div class="wave" class:paused bind:clientWidth={width} bind:clientHeight={height} aria-hidden="true">
+  <!-- Levelled: the track as made in the unplayed tint, its tips beyond what the playing colour reaches that tint too
+       (the owner, 2026-10-27); the unplayed layer as heard then not drawn over it (no darker double tint). -->
   {#if ghost}<svg class="ghost" viewBox="0 0 {n} 100" preserveAspectRatio="none"><path d={ghost} /></svg>{/if}
-  {#each [false, true] as played (played)}
+  {#each ghost ? [true] : [false, true] as played (played)}
     <svg class:played viewBox="0 0 {n} 100" preserveAspectRatio="none" style:clip-path={played ? `inset(0 ${(1 - done) * 100}% 0 0)` : undefined}>
       <path {d} />
     </svg>
@@ -243,12 +245,9 @@
     fill: color-mix(in srgb, var(--text) 22%, transparent);
   }
 
-  /* The track as made, behind the track as heard: a faint outline of what levelling took off. */
+  /* The track as made, behind the track as heard: the unplayed tint, so what levelling took off reads as unplayed. */
   svg.ghost {
-    fill: none;
-    stroke: color-mix(in srgb, var(--text) 28%, transparent);
-    stroke-width: 0.6;
-    vector-effect: non-scaling-stroke;
+    fill: color-mix(in srgb, var(--text) 22%, transparent);
   }
 
   svg.played {
