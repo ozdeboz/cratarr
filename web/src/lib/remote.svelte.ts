@@ -209,7 +209,9 @@ export const paused = (): boolean => playing()?.progress?.paused ?? false;
 /** A Start and stop ramp under way on this device's player. The page's own turns round at a press (0075's first step,
  *  the owner 2026-10-27); the app's play button stays inert until its ramp ends, until the app turns too (0.9.13). */
 export const rampBusy = () => isLocal() && ramping.dir !== null;
-const rampInert = () => rampBusy() && inApp;
+/** The play button inert: only through the app's own Start and stop effect (the page's turns round at a press; the
+ *  tape's own stops never show). */
+export const rampInert = () => rampBusy() && inApp && ramping.effect;
 /** Paused as the play button shows it: from the press on, the way the ramp goes. */
 // A Start and stop effect only (the owner, 2026-10-27): the tape's own stops (a turn of the knob, a hold's) never show on
 // the play button.
