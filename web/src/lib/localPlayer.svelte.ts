@@ -2415,7 +2415,7 @@ function windClip(url: string): HTMLAudioElement {
 }
 /** A hold's wind fetched at its press (the owner, 2026-10-27: no wait after the wind-down): its player, from where, the
  *  queue places it goes on through, and which track. */
-type Armed = { clip: HTMLAudioElement; from: number; through: number[]; index: number; v0: number; D?: number; url?: string };
+type Armed = { clip: HTMLAudioElement; from: number; through: number[]; index: number; v0: number; D?: number; url?: string; floor?: number };
 /** `lead`, `speed`: a flown hold's, from that far ahead at that speed. */
 function armWind(dir: 1 | -1, lead = 0, speed = holdFor(dir).speed): Armed | null {
   const here = where();
@@ -2466,6 +2466,19 @@ function flyTo(to: number, tries = 0): boolean {
     if (w.offset >= armed.from - 0.02) {
       if (armed.clip.readyState >= 3) {
         pointArmed = null;
+        // Its floor from the stream as made (a5's way, the app's too): f = (length − area) / (D − area). A server that
+        // made it from still (before fly=1) gives about none: then the stopping way.
+        const D = armed.D ?? 0;
+        const area = consumed(windFor(1), D, D);
+        const len = armed.clip.duration * 1000;
+        const f = Number.isFinite(len) && D > area ? (len - area) / (D - area) : 0;
+        if (f < 0.05) {
+          disarm(armed);
+          windAsked(false);
+          if (!startWind(to, 1)) jumpTo(to);
+          return;
+        }
+        armed.floor = Math.min(1, f);
         if (!startWind(to, 1, armed, false, true)) {
           disarm(armed);
           windAsked(false);
@@ -2519,9 +2532,9 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
   const clip = use?.clip ?? windClip(url!);
   if (use) from = use.from;
   const v0 = use?.v0 ?? wind.speed;
-  // Flown: it sounds at the track's own speed from its first moment.
-  if (fly) clip.playbackRate = 1 / v0;
-  const w: Winding = { clip, seg, from, to, dir, D, wind, map: null, mapSpeed: null, v0, accel, accelS: hold.doublingS, top: hold.top, fly, reverse, after: 'play', at: null, brake: null, brakeFrom: 1, edge: false, through, shown: seg.index, timer: undefined };
+  // Flown: it sounds at the track's own speed from its first moment (a wind to a point: its floor as made).
+  if (fly) clip.playbackRate = use?.floor ?? 1 / v0;
+  const w: Winding = { clip, seg, from, to, dir, D, wind, map: null, mapSpeed: use?.floor ? 1 / use.floor : null, v0, accel, accelS: hold.doublingS, top: hold.top, fly, reverse, after: 'play', at: null, brake: null, brakeFrom: 1, edge: false, through, shown: seg.index, timer: undefined };
   const mine = () => rewinding === w;
   // Every step timed from the press, in the playback log (the owner, 2026-10-27: find any delay at the deepest level).
   const t0 = performance.now();
