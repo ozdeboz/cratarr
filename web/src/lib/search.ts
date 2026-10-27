@@ -15,6 +15,9 @@ export type SearchResult = {
   bandcamp?: string | null;
   /** An album not in the library, asked for: where it stands (lib/CoverStatus). */
   request?: import('./api').RequestMark | null;
+  /** Known elsewhere (decision 0076): why Cratarr knows it (on your Spotify, missing from an artist you have,
+   *  suggested, requested). */
+  known?: string[];
   score: number;
   matched: Matched[];
 };

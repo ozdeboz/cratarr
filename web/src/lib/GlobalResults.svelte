@@ -48,6 +48,7 @@
   // found deep keeps the words, so it opens narrowed to them as the page's own deep find does (decision 0072), its own
   // results, not everywhere's, in the panel.
   const DEEP_KINDS = ['album', 'artist', 'playlist', 'crate'];
+  const KNOWN = ['spotify', 'suggested', 'requested'];
   const deep = (it: SearchResult) => DEEP_KINDS.includes(it.kind) && it.matched.some((m) => m.on !== 'name');
   function open(it: SearchResult) {
     leaveSearch(deep(it));
@@ -55,6 +56,11 @@
     else if (it.kind === 'missing')
       void elsewhere?.open({ release_group: it.subject.slice('missing:'.length), title: it.title, artist: it.artist ?? '', year: null, cover: it.cover ?? null, bandcamp: it.bandcamp });
     else if (it.kind === 'excluded') leftOut = it;
+    else if (KNOWN.includes(it.kind)) {
+      // Known elsewhere: opened as a missing album is, by its release group where its subject carries one.
+      const rg = /^[a-z]+:([0-9a-f-]{36})$/.exec(it.subject)?.[1] ?? null;
+      void elsewhere?.open({ release_group: rg, title: it.title, artist: it.artist ?? '', year: null, cover: it.cover ?? null, bandcamp: it.bandcamp });
+    }
     else if (it.kind === 'beyond') {
       const a = beyondAlbum(it.subject);
       if (a) void elsewhere?.open({ release_group: a.release_group ?? null, title: a.title, artist: a.artist, year: a.year, cover: a.cover, bandcamp: a.bandcamp ?? null });
@@ -92,7 +98,7 @@
     <Row size="large" title={it.title} label={`Open ${it.title}`} onclick={() => open(it)}>
       {#snippet front()}{#if it.kind !== 'setting' && !it.kind.startsWith('page:')}<span class="art" class:round={it.kind === 'artist'}><Cover src={it.cover ?? null} /><CoverStatus mark={it.request} small />{#if (it.kind === 'missing' && finding === it.subject.slice('missing:'.length)) || (it.kind === 'beyond' && finding === it.subject.slice('beyond:'.length))}<CoverBusy small />{/if}</span>{/if}{/snippet}
       {#snippet badges()}{@const dot = dotOf(it)}{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{/snippet}
-      {#snippet sub()}{it.sub ?? ''}{#if why(it.matched)}<span class="why">{it.sub ? ' · ' : ''}{why(it.matched)}</span>{/if}{/snippet}
+      {#snippet sub()}{it.sub ?? ''}{#if it.known?.length}<span class="why">{it.sub ? ' · ' : ''}{it.known.join(' · ')}</span>{:else if why(it.matched)}<span class="why">{it.sub ? ' · ' : ''}{why(it.matched)}</span>{/if}{/snippet}
     </Row>
   </li>
 {/snippet}

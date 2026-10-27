@@ -24,8 +24,13 @@ const LIBRARY: { kind: SearchKind; label: string }[] = [
   { kind: 'mood', label: 'Moods' },
   { kind: 'tag', label: 'Tags' },
 ];
+/** Known elsewhere (decision 0076): what Cratarr keeps of music not in the library (0.9.13's server adds the last
+ *  three; one before it leaves them out). */
 const ELSEWHERE: { kind: SearchKind; label: string }[] = [
   { kind: 'missing', label: 'Not in your library' },
+  { kind: 'spotify', label: 'On your Spotify' },
+  { kind: 'suggested', label: 'Suggested' },
+  { kind: 'requested', label: 'Requested' },
   { kind: 'excluded', label: 'Left out by Discover' },
 ];
 /** The kinds a page shows itself: left out of its everywhere (lib/GlobalResults); the Library's by what it shows. */

@@ -1967,7 +1967,7 @@ export type AlbumView = {
  *  item in lib/search's shape; a track's subject is its album's, the track itself in `track`. */
 /** What the server's search finds: the library's kinds, the account's playlists and crates, and what is not in the
  *  library (decision 0072, 7): albums missing from its artists, and what Discover leaves out. */
-export type SearchKind = 'album' | 'artist' | 'track' | 'genre' | 'style' | 'mood' | 'tag' | 'playlist' | 'crate' | 'missing' | 'excluded';
+export type SearchKind = 'album' | 'artist' | 'track' | 'genre' | 'style' | 'mood' | 'tag' | 'playlist' | 'crate' | 'missing' | 'excluded' | 'spotify' | 'suggested' | 'requested';
 export type ServerSearch = {
   q: string;
   groups: Partial<Record<SearchKind, { total: number; items: (SearchResult & { track?: string })[] }>>;
