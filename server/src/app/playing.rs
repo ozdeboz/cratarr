@@ -361,6 +361,10 @@ impl PlayingService {
     /// own library's (a track of a server no longer on, by the file the catalogue links it to); another server's
     /// counts there as before, unlogged.
     pub async fn hear(&self, e: &super::plays::PlayEvent) -> Result<(), ToggleError> {
+        // Never a play (decision 0071): answered as taken, so the player does not send it again.
+        if crate::bandcamp::is_preview(&e.track) {
+            return Ok(());
+        }
         let own = if e.source == crate::source::cratarr::KIND.id {
             Some(e.track.clone())
         } else {
@@ -369,6 +373,12 @@ impl PlayingService {
             if gone { tokio::task::spawn_blocking(move || cat.track_of_source(&src, &item)).await.ok().flatten().map(crate::serve::ids::song) } else { None }
         };
         let Some(song) = own else {
+            // A server switched off or removed, its track not linked to a file of Cratarr's own: nowhere to count it,
+            // now or later, so taken. Only a server that is on but away leaves a play for later.
+            if !self.lib.live().iter().any(|a| a.cfg.id == e.source && a.cfg.enabled) {
+                tracing::debug!("a play of {}/{} is dropped: its server is off", e.source, e.track);
+                return Ok(());
+            }
             // Another server's track: only a play that counts reaches it.
             return if e.counts.unwrap_or(true) { self.count_play_at(&e.source, &e.track, Some(e.at / 1000)).await } else { Ok(()) };
         };
@@ -808,5 +818,31 @@ impl PlayingService {
             Some(entry) => resolve(std::path::Path::new(&music), &entry, if_none_match).await,
             None => Outcome::NotFound,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn play(source: &str, track: &str) -> super::super::plays::PlayEvent {
+        serde_json::from_value(serde_json::json!({ "id": "p", "source": source, "track": track, "at": 1_792_000_000_000_i64 })).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_play_that_can_never_count_is_taken_and_one_of_a_server_away_is_left_for_later() {
+        let d = std::env::temp_dir().join(format!("cratarr-hear-{}", std::process::id()));
+        std::fs::create_dir_all(d.join(crate::playlists::PLAYLIST_DIR)).unwrap();
+        let source = |id: &str, enabled| crate::settings::SourceConfig { id: id.into(), kind: "jellyfin".into(), enabled, libraries: Default::default(), values: Default::default() };
+        let lib = super::super::Library::new(None, Some(d.to_string_lossy().into_owned()), vec![source("old", false), source("away", true)], Default::default(), None).await.unwrap();
+        let journal = Arc::new(crate::journal::Journal::open(None).unwrap());
+        let state = crate::sync_state::SyncState::open(None).unwrap();
+        let sync = Arc::new(super::super::sync::SyncService::new(lib.clone(), state, journal.clone()));
+        let playing = PlayingService::new(lib.clone(), Arc::new(PlaylistService::new(lib, sync, journal)));
+        assert!(playing.hear(&play(crate::bandcamp::SOURCE, &crate::bandcamp::track_id("https://a.bandcamp.com/album/b", 1))).await.is_ok(), "a preview");
+        assert!(playing.hear(&play("old", "3d5336410f0c2dbfca17dd0dbc334d23")).await.is_ok(), "a server switched off");
+        assert!(playing.hear(&play("gone", "3d5336410f0c2dbfca17dd0dbc334d23")).await.is_ok(), "a server removed");
+        assert!(playing.hear(&play("away", "3d5336410f0c2dbfca17dd0dbc334d23")).await.is_err(), "a server on but away");
+        std::fs::remove_dir_all(&d).ok();
     }
 }
