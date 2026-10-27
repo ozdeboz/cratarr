@@ -14,6 +14,7 @@
   import Group from './Group.svelte';
   import HoldGraph from './HoldGraph.svelte';
   import Item from './Item.svelte';
+  import { resetWithUndo } from './OrderReset.svelte';
   import WindGraph from './WindGraph.svelte';
 
   // Each choice a row showing it, opening a sheet of its options (the owner, 2026-10-27: no pills here, they took two
@@ -96,6 +97,15 @@
   });
   const valueOf = (part: Part, key: string) => (shown[part] as unknown as Record<string, number>)[key];
   const setPart = (part: Part, change: Record<string, number>) => setSS({ [part]: { ...ss[part], ...change } } as Partial<StartStop>);
+  /** A sheet's settings back to their defaults, as every reset is (its header's reset, dimmed at them; Undo in the toast). */
+  const atStarts = (part: Part) => Object.entries(PARTS[part].starts).every(([k, v]) => valueOf(part, k) === v);
+  function resetPart(part: Part) {
+    const was = { ...(ss[part] as unknown as Record<string, number>) };
+    resetWithUndo(PARTS[part].title, () => {
+      setPart(part, PARTS[part].starts);
+      return () => setPart(part, was);
+    });
+  }
 </script>
 
 {#snippet slider(t: Tuning, value: number, set: (v: number) => void)}
@@ -190,13 +200,17 @@
 {:else if open}
   {@const part = open}
   {@const p = PARTS[part]}
-  <MenuSheet label={p.title} title={p.title} onclose={() => ((open = null), (drag = null))}>
+  <MenuSheet
+    label={p.title}
+    title={p.title}
+    end={{ icon: 'reset', label: `Reset ${p.title.toLowerCase()}`, disabled: atStarts(part), onclick: () => resetPart(part) }}
+    onclose={() => ((open = null), (drag = null))}
+  >
     <div class="sheet">
       {#if part === 'back' || part === 'fwd'}<WindGraph wind={pointWind(shown, part === 'fwd' ? 1 : -1)} dir={part} />{/if}
       {#if part === 'holdBack' || part === 'holdFwd'}<HoldGraph hold={holdWind(shown, part === 'holdFwd' ? 1 : -1)} />{/if}
       {#each p.tunings as t (t.key)}{@render slider(t, valueOf(part, t.key), (v) => setPart(part, { [t.key]: v }))}{/each}
     </div>
-    <MenuEntry icon="undo" label="Reset to defaults" onclick={() => setPart(part, p.starts)} />
   </MenuSheet>
 {/if}
 
