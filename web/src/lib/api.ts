@@ -1973,9 +1973,37 @@ export type ServerSearch = {
   groups: Partial<Record<SearchKind, { total: number; items: (SearchResult & { track?: string })[] }>>;
   top: (SearchResult & { track?: string })[];
 };
-/** Searches the server: `kinds` only (all where none), `limit` a kind (20; 100 at most). */
-export const search = (q: string, kinds: SearchKind[] = [], limit = 20) =>
-  quietly<ServerSearch>(`/api/search?${new URLSearchParams({ q, ...(kinds.length ? { kinds: kinds.join(',') } : {}), limit: String(limit) })}`);
+/** Searches the server: `kinds` only (all where none), `limit` a kind (20; 100 at most), from `offset` on (a Show all's
+ *  next page, decision 0076; a server before 0.9.13 answers from the start again). */
+export const search = (q: string, kinds: SearchKind[] = [], limit = 20, offset = 0) =>
+  quietly<ServerSearch>(
+    `/api/search?${new URLSearchParams({ q, ...(kinds.length ? { kinds: kinds.join(',') } : {}), limit: String(limit), ...(offset ? { offset: String(offset) } : {}) })}`,
+  );
+/** An album found beyond what Cratarr knows (decision 0076): MusicBrainz's and Discogs' live search, merged; where. */
+export type BeyondAlbum = {
+  title: string;
+  artist: string;
+  year: number | null;
+  cover: string | null;
+  release_group?: string | null;
+  discogs?: string | null;
+  sources: ('musicbrainz' | 'discogs')[];
+  bandcamp?: string | null;
+  request?: RequestMark | null;
+  have?: boolean;
+};
+/** Beyond's albums for the words (decision 0076): the server's own merged search where it has it (0.9.13), else
+ *  MusicBrainz's alone, as Find more music asks it. */
+export async function searchBeyond(q: string, limit = 20): Promise<BeyondAlbum[]> {
+  try {
+    const r = await request<{ albums: BeyondAlbum[] }>(`/api/search/beyond?${new URLSearchParams({ q, limit: String(limit) })}`);
+    return r.albums;
+  } catch (e) {
+    if (!(e instanceof ApiError && e.status === 404)) throw e;
+  }
+  const r = await musicBrainzSearch(q, limit);
+  return r.albums.map((a) => ({ title: a.title, artist: a.artist, year: a.year, cover: a.cover, release_group: a.release_group, sources: ['musicbrainz'], request: a.request ?? null, have: a.have }));
+}
 export const albumView = (source: string, album: string) =>
   quietly<AlbumView>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}`);
 /** An artist as their panel shows them (decided 2026-10-16, as Symfonium's), by name as the albums credit them: their
