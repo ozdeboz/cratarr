@@ -8,6 +8,7 @@
   import Icon from './Icon.svelte';
   import { local } from './localPlayer.svelte';
   import { isLocal } from './output.svelte';
+  import { prefs } from './prefs.svelte';
   import { ramping } from './ramping.svelte';
   import { portal } from './portal';
   import { clockText } from './remote.svelte';
@@ -56,8 +57,9 @@
   });
   const waveShown = $derived(keepWave || want !== 'line');
   const pos = $derived(seek.pos);
-  /** As heard: this device's player's level (0..1), the waveform's bars scaled by it (lib/Waveform `heard`). */
-  const heard = $derived(isLocal() ? 10 ** (local.levelDb / 20) : 1);
+  /** As heard: this device's player's level (0..1), the waveform's bars scaled by it (lib/Waveform `heard`), where Level
+   *  the volume says to show it. */
+  const heard = $derived(isLocal() && prefs.levelInWave ? 10 ** (local.levelDb / 20) : 1);
   /** Shown as paused: from the moment a stop ramp begins, playing from the moment a start ramp begins (the owner,
    *  2026-10-26: the colour goes with the ramp, whenever the player says it paused). */
   // After a ramp, its way holds until the player says the same (an app reporting the pause a moment late: no flash).

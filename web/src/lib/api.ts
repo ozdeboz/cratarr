@@ -89,6 +89,8 @@ export type Upcoming = {
 
 export type Progress = {
   position_secs: number;
+  /** Its player plays a tape's rewind (Tape rewind, a5's app): the position goes back as reported, not run on. */
+  rewinding?: boolean;
   duration_secs: number | null;
   paused: boolean;
   /** No player reports this track; the position is time since it started (wrong after a pause or seek). */
