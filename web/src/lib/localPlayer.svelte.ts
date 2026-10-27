@@ -2676,6 +2676,11 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
     case 'skip_favourites':
       setSkipFavourites(m.on === true);
       return false;
+    // Level the volume set from another device (the owner, 2026-10-27): on or off, and what an unmeasured track gets.
+    case 'level':
+      if (typeof m.on === 'boolean') setLevelling(m.on);
+      if (m.unknown === 'typical' || m.unknown === 'untouched') prefs.levelUnknown = m.unknown;
+      return false;
     case 'volume':
       pageVolume.level = Math.min(100, Math.max(0, typeof m.level === 'number' ? m.level : 100));
       applyVolume();
