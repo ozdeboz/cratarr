@@ -14,3 +14,6 @@ mosaic      Adrien Antal        https://unsplash.com/photos/zSAOhFU1hh4
 planks      Tim Mossholder      https://unsplash.com/photos/n9cuJ6N8etE
 amplifier   Goh Rhy Yan         https://unsplash.com/photos/6a3Ml_MGA5E
 agave       Chris Barbalis      https://unsplash.com/photos/Q_0l2J_dUkE
+rack        Jeremy Lanfranchi   https://unsplash.com/photos/2Lc5qrZdmxc
+speakers    SJ Objio            https://unsplash.com/photos/sIVI8tWLyGo
+radios      Mert Toker          https://unsplash.com/photos/AwhZiUwh_WM
