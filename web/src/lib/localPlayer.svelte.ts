@@ -1621,7 +1621,7 @@ export function next() {
   if (!handed() && prefs.startStop.rewind && audio && !audio.paused && committed === null) {
     const end = lengthOf(local.index);
     const at = where()?.offset ?? 0;
-    if (end && end - at > 2 && startWind(end, 1)) return;
+    if (end && end - at > 2 && (flyTo(end) || startWind(end, 1))) return;
   }
   void skipRamped(() => jump(local.index + 1));
 }
@@ -1697,7 +1697,8 @@ export function seek(secs: number, wind?: boolean) {
   // During a Start and stop ramp the seek wins at once (the owner, 2026-10-26), with no gap added before it.
   if (committed !== null) return void overrideRamp(secs);
   // Seeking winds the tape there where the device asks it (the owner, 2026-10-27): playing, more than a moment away.
-  if (winds && !audio.paused && Math.abs(secs - (where()?.offset ?? secs)) > 2 && startWind(secs, 1)) return;
+  const here = where()?.offset ?? secs;
+  if (winds && !audio.paused && Math.abs(secs - here) > 2 && ((secs > here && flyTo(secs)) || startWind(secs, 1))) return;
   jumpTo(secs);
 }
 function jumpTo(secs: number) {
@@ -2245,8 +2246,10 @@ type Winding = {
   brakeFrom: number;
   /** A held one's stream ran out: at the track's edge. */
   edge: boolean;
-  /** A cut one's plan (a5's map=1), where it has come: where in the track each moment of its sound is. */
+  /** A cut one's plan (a5's map=1), where it has come: where in the track each moment of its sound is; and the speed its
+   *  stream runs at (a flown one's floor: 1 over it). */
   map: [number, number, number][] | null;
+  mapSpeed: number | null;
   /** A hold's getting faster (the tape's Acceleration, its Top speed; the server renders it, a5's accel_s and max). */
   accelS: number;
   top: number;
@@ -2320,8 +2323,10 @@ function windPlace(w: Winding, now: number): { index: number; pos: number } {
   const index = w.seg.index;
   if (w.at === null) return { index, pos: w.from };
   if (w.to !== null) {
-    const C = consumed(w.wind, w.D, w.D);
-    const share = C > 0 ? Math.min(1, consumed(w.wind, w.D, now - w.at) / C) : 1;
+    const f = w.fly ? 1 / (w.mapSpeed ?? w.v0) : 0;
+    const el = Math.min(w.D, now - w.at);
+    const C = f * w.D + (1 - f) * consumed(w.wind, w.D, w.D);
+    const share = C > 0 ? Math.min(1, (f * el + (1 - f) * consumed(w.wind, w.D, el)) / C) : 1;
     return { index, pos: w.from + (w.to - w.from) * share };
   }
   const end = lengthOf(index) ?? Infinity;
@@ -2349,7 +2354,11 @@ function windRate(w: Winding, now: number): number {
   let r: number;
   // A flown one: from the track's own speed up, and braked down to the slowest the stream may play at now.
   const floor = w.fly ? (w.brake === null ? 1 / w.v0 : Math.max(RATE_LOW, 1 / vAt(w, w.clip.currentTime))) : 0;
-  if (w.to !== null) r = rate(w.wind, w.D, t);
+  if (w.to !== null) {
+    // A flown one never below the track's own speed (its stream's speed floored, fly=1).
+    const f = w.fly ? 1 / (w.mapSpeed ?? w.v0) : 0;
+    r = f + (1 - f) * rate(w.wind, w.D, t);
+  }
   else if (w.brake !== null) r = floor + ((w.brakeFrom - floor) * (1 + Math.cos(Math.PI * Math.min(1, (now - w.brake) / w.wind.releaseMs)))) / 2;
   else r = t >= w.wind.attackMs ? 1 : floor + ((1 - floor) * (1 - Math.cos((Math.PI * t) / w.wind.attackMs))) / 2;
   return Math.max(RATE_LOW, Math.min(1, r));
@@ -2406,7 +2415,7 @@ function windClip(url: string): HTMLAudioElement {
 }
 /** A hold's wind fetched at its press (the owner, 2026-10-27: no wait after the wind-down): its player, from where, the
  *  queue places it goes on through, and which track. */
-type Armed = { clip: HTMLAudioElement; from: number; through: number[]; index: number; v0: number };
+type Armed = { clip: HTMLAudioElement; from: number; through: number[]; index: number; v0: number; D?: number; url?: string };
 /** `lead`, `speed`: a flown hold's, from that far ahead at that speed. */
 function armWind(dir: 1 | -1, lead = 0, speed = holdFor(dir).speed): Armed | null {
   const here = where();
@@ -2417,6 +2426,65 @@ function armWind(dir: 1 | -1, lead = 0, speed = holdFor(dir).speed): Armed | nul
   const hold = holdFor(dir);
   const wind = { ...hold, speed };
   return { clip: windClip(windUrl(t, from, null, dir, 0, through, wind, { accelS: hold.doublingS, top: hold.top })), from, through, index: here.seg.index, v0: speed };
+}
+/** A forward wind to `to` while playing, asked from `lead` s ahead (its stream's speed floored at 1×: fly=1, a5). */
+function armPoint(to: number, lead: number): Armed | null {
+  const here = where();
+  const t = here && local.queue[here.seg.index];
+  if (!here || !t || !windable(t)) return null;
+  const from = here.offset + lead;
+  if (to - from < 2) return null;
+  const wind = windFor(1);
+  const D = Math.round(tapMs(wind, to - from));
+  const url = `${windUrl(t, from, to, 1, D, [], wind, null)}&fly=1`;
+  return { clip: windClip(url), from, through: [], index: here.seg.index, v0: wind.speed, D, url };
+}
+/** The forward wind to a point being armed (a newer one replaces it). */
+let pointArmed: Armed | null = null;
+/** A forward wind to a point while playing (a seek forward, Next's fast-forward): no stop on the way (the owner,
+ *  2026-10-27: it went down to 0 and up again, where it can stay at 1×). Its stream asked from a moment ahead, taken over
+ *  as the track reaches that moment at its own speed, sped up and slowed back to it, and the track handed back moving at
+ *  the place. False where it cannot (the caller winds the stopping way). */
+function flyTo(to: number, tries = 0): boolean {
+  if (!audio || audio.paused || committed !== null || rewinding) return false;
+  if (pointArmed) disarm(pointArmed);
+  const armed = armPoint(to, FLY_LEAD * (tries + 1));
+  if (!armed) return false;
+  pointArmed = armed;
+  windAsked(true);
+  const giveUp = () => {
+    disarm(armed);
+    if (pointArmed === armed) pointArmed = null;
+  };
+  const watch = () => {
+    if (pointArmed !== armed) return;
+    const w = where();
+    if (!audio || audio.paused || !w || w.seg.index !== armed.index || rewinding || committed !== null) {
+      giveUp();
+      return windAsked(false);
+    }
+    if (w.offset >= armed.from - 0.02) {
+      if (armed.clip.readyState >= 3) {
+        pointArmed = null;
+        if (!startWind(to, 1, armed, false, true)) {
+          disarm(armed);
+          windAsked(false);
+          jumpTo(to);
+        }
+        return;
+      }
+      if (w.offset > armed.from + 0.25) {
+        giveUp();
+        if (tries < 2 && flyTo(to, tries + 1)) return;
+        windAsked(false);
+        if (!startWind(to, 1)) jumpTo(to);
+        return;
+      }
+    }
+    requestAnimationFrame(watch);
+  };
+  requestAnimationFrame(watch);
+  return true;
 }
 /** An armed wind not wound after all (let go during the pause, or the track changed). */
 function disarm(a: Armed | null) {
@@ -2440,7 +2508,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
   // A hold's own speeds; a wind to a point its own; the knob's backwards at 1×, as loud as the music.
   const hold = holdFor(dir);
   const wind: Wind = reverse ? { ...holdFor(-1), speed: 1, gainDb: 0 } : to === null ? hold : windFor(dir);
-  const D = to === null ? 0 : Math.round(tapMs(wind, to - from));
+  const D = to === null ? 0 : (armed?.D ?? Math.round(tapMs(wind, to - from)));
   // A hold's stream fetched at its press (`armed`), from where the pause rests: loaded while it wound down.
   const use = armed && armed.index === seg.index ? armed : null;
   if (armed && !use) disarm(armed);
@@ -2453,7 +2521,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
   const v0 = use?.v0 ?? wind.speed;
   // Flown: it sounds at the track's own speed from its first moment.
   if (fly) clip.playbackRate = 1 / v0;
-  const w: Winding = { clip, seg, from, to, dir, D, wind, map: null, v0, accel, accelS: hold.doublingS, top: hold.top, fly, reverse, after: 'play', at: null, brake: null, brakeFrom: 1, edge: false, through, shown: seg.index, timer: undefined };
+  const w: Winding = { clip, seg, from, to, dir, D, wind, map: null, mapSpeed: null, v0, accel, accelS: hold.doublingS, top: hold.top, fly, reverse, after: 'play', at: null, brake: null, brakeFrom: 1, edge: false, through, shown: seg.index, timer: undefined };
   const mine = () => rewinding === w;
   // Every step timed from the press, in the playback log (the owner, 2026-10-27: find any delay at the deepest level).
   const t0 = performance.now();
@@ -2464,9 +2532,14 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
   windAsked(true);
   // A cut one's plan beside its sound (decision 0075: a press during it lands where the sound is; a server before 0.9.13
   // has none, and its counter's line stands in).
-  if (to !== null && url)
-    windMap(url).then(
-      (m) => mine() && Array.isArray(m?.map) && (w.map = m.map),
+  const mapUrl = url ?? use?.url ?? null;
+  if (to !== null && mapUrl)
+    windMap(mapUrl).then(
+      (m) => {
+        if (!mine()) return;
+        if (Array.isArray(m?.map)) w.map = m.map;
+        if (typeof m?.speed === 'number' && m.speed > 0) w.mapSpeed = m.speed;
+      },
       () => {},
     );
   // The counter where it was pressed from the press on, never where the track waits (the owner, 2026-10-27: the
@@ -2505,6 +2578,17 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       return turned(() => playOnAt(index, at));
     }
     if (dir > 0 && pos >= end - 0.5) return jump(index + 1);
+    // Flown to a point: the track at its own speed from there at once, moving (no stop, no wind-up).
+    if (w.fly && w.to !== null && audio) {
+      const tw = where();
+      if (tw && tw.seg.index === index && inBuffer(tw.seg.start + pos)) {
+        audio.currentTime = tw.seg.start + pos;
+        local.position = pos;
+        unramp();
+        return void audio.play().catch(refused);
+      }
+      return void fresh(index, pos, true);
+    }
     quietly(() => playOnAt(index, index === seg.index ? pos : Math.max(0, Math.min(pos, end - 1.5))));
   };
   // A flown one braked: the track's own player takes over where it got to, at the speed it got down to, and comes down
