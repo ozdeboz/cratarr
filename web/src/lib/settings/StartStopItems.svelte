@@ -17,6 +17,11 @@
     { value: 'vinyl', label: 'Vinyl' },
     { value: 'fade', label: 'Fade' },
   ];
+  const DECK: { value: 'off' | 'effects' | 'always'; label: string }[] = [
+    { value: 'off', label: 'Off' },
+    { value: 'effects', label: 'Effects' },
+    { value: 'always', label: 'Always' },
+  ];
   const STARTSTOP_MORE =
     "Vinyl: play and pause speed up from still and slow down to still, the pitch following, as a turntable. Fade: they fade in and out. Over the ramp's time. A track running into the next stays seamless.";
   const REWIND_MORE =
@@ -48,12 +53,13 @@
   <Item name="Also for next and previous" toggle={{ checked: ss.skips, onchange: (on) => setSS({ skips: on }) }} />
 {/if}
 <Item name="Tape rewind" more={REWIND_MORE} experimental toggle={{ checked: ss.rewind, onchange: (on) => setSS({ rewind: on }) }} />
-<!-- This page's showing (prefs, never the app's): the player's row under the title a tape deck while an effect runs. -->
+<!-- This page's showing (prefs, never the app's): the player's row under the title a tape deck, while an effect runs or
+     always (the owner, 2026-10-27). -->
 <Item
-  name="Tape deck during effects"
-  more="While play or pause ramps, or a rewind runs, the player shows a tape deck where its info row is: its reels turn at the playing speed, its head lights on each bar's first beat."
-  toggle={{ checked: prefs.tapeDeck, onchange: (on) => (prefs.tapeDeck = on) }}
-/>
+  name="Tape deck"
+  more="The player shows a tape deck where its info row is: its reels turn at the playing speed, slowing for a pause and racing back for a rewind; its head lights on each bar's first beat. During effects: while play or pause ramps or a rewind runs, then the row again."
+  ><Seg label="Tape deck" options={DECK} bind:value={() => prefs.tapeDeck, (v) => (prefs.tapeDeck = v)} /></Item
+>
 {#if ss.rewind}
   <Item name="Rewind" value={`${TUNINGS[0].text(ss.rewindMs)} · ${TUNINGS[1].text(ss.rewindSpeed)}`} onclick={() => (rewindOpen = true)} />
 {/if}

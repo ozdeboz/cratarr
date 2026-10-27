@@ -55,23 +55,16 @@
   // As shown: the new track's words with its cover, one commit (lib/remote shownPlaying).
   const np = $derived(shownPlaying());
   // The tape deck in the row under the title while an effect runs (lib/TapeDeck; the owner, 2026-10-27): a Start and
-  // stop ramp or a rewind; shown at least DECK_MIN_MS, then the row back over a second's fade. Or always, where asked.
-  const DECK_MIN_MS = 5000;
+  // stop ramp or a rewind; kept DECK_HOLD_MS after the last of them ends (the owner, 2026-10-27: the fade only after the
+  // last event), a new one starting the count again; then the row back over a second's fade. Or always, where asked.
+  const DECK_HOLD_MS = 5000;
   const effecting = $derived(ramping.dir !== null || (isLocal() ? rewindNow.on : !!np?.progress?.rewinding));
   let deckShown = $state(false);
-  let deckSince = 0;
   $effect(() => {
     if (prefs.tapeDeck === 'off') return void (deckShown = false);
-    if (prefs.tapeDeck === 'always') return void (deckShown = true);
-    if (effecting) {
-      if (!untrack(() => deckShown)) {
-        deckShown = true;
-        deckSince = performance.now();
-      }
-      return;
-    }
+    if (prefs.tapeDeck === 'always' || effecting) return void (deckShown = true);
     if (!untrack(() => deckShown)) return;
-    const t = setTimeout(() => (deckShown = false), Math.max(0, DECK_MIN_MS - (performance.now() - deckSince)));
+    const t = setTimeout(() => (deckShown = false), DECK_HOLD_MS);
     return () => clearTimeout(t);
   });
 
