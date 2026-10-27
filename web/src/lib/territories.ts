@@ -7,7 +7,9 @@
 
 const STEP = 4;
 const SIGMA = 30;
-const SHARE = 0.25;
+/** A playlist counts toward a genre from this share of its music (the owner, 2026-10-27: 0.25 left 64 of 72 playlists
+ *  in no territory, their genres spread over about five each; at 0.10, 62 are in one or more). */
+const SHARE = 0.1;
 const LEVEL = 0.5;
 export const TERRITORIES = 6;
 
