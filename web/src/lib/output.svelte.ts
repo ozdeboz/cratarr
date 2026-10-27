@@ -26,6 +26,7 @@ import { untrack } from 'svelte';
 import { live, refresh, untilNewTrack } from './live.svelte';
 import { canPlayHere, keptHere, local, playQueue, enqueue, stop, togglePlay, type LocalTrack } from './localPlayer.svelte';
 import { inApp } from './app.svelte';
+import { rewindNow } from './ramping.svelte';
 import { drivenName, follow, outputName, playOn, pointAt } from './playOn.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
@@ -223,6 +224,9 @@ $effect.root(() => {
       hearing = null;
       return;
     }
+    // Winding is no listening (decision 0074), forward or back, nor are the tracks a wind passes through the queue: the
+    // hearing waits until it plays on, where it landed.
+    if (rewindNow.on) return;
     if (hearing && hearing.at !== at) {
       if (!hearing.counted && hearing.heard >= 1) tell(hearing, t ? 'skipped' : 'stopped', false);
       hearing = null;
@@ -383,7 +387,7 @@ export const hasMusic = () => current() !== null;
 export async function joinTo(output: typeof prefs.output) {
   if (output === prefs.output) return;
   if (isLocal()) {
-    if (local.index >= 0 && !local.paused) togglePlay();
+    if (local.index >= 0 && !local.paused) togglePlay(true);
   } else {
     const np = live.view?.now_playing ?? null;
     if (np && !np.progress?.paused) {

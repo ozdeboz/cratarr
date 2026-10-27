@@ -17,6 +17,8 @@ export type Suggested = {
   bandcamp?: string;
   /** Its artist, new to the library, has a picture (New to you shows only those). */
   artist_photo?: boolean;
+  /** Its new artist has anything on Bandcamp (New to you puts those first). */
+  artist_on_bandcamp?: boolean;
   /** How alike it is to each artist played it was found from (Last.fm's match, 0 to 1), where known. */
   alike?: { seed: string; value: number }[];
 };
@@ -172,10 +174,15 @@ export function sections<S extends Suggested>(
   // first that plays first; those without one stay among the cards.
   const newBy = new Map<string, S[]>();
   for (const s of playableFirst(all)) if (free(s) && s.new_artist && s.artist_photo) newBy.set(s.artist, [...(newBy.get(s.artist) ?? []), s]);
-  const newArtists = [...newBy.entries()].slice(0, limits.newArtists).map(([artist, items]) => {
-    items.forEach(take);
-    return { artist, items };
-  });
+  // Those with anything on Bandcamp first, to Listen to (the owner, 2026-10-27: the others deprioritised, not dropped).
+  const onBandcamp = (items: S[]) => items.some((s) => s.artist_on_bandcamp || s.bandcamp);
+  const newArtists = [...newBy.entries()]
+    .sort((a, b) => Number(onBandcamp(b[1])) - Number(onBandcamp(a[1])))
+    .slice(0, limits.newArtists)
+    .map(([artist, items]) => {
+      items.forEach(take);
+      return { artist, items };
+    });
 
   // The Weekly Exploration as it came.
   const weekly = playableFirst(all.filter((s) => free(s) && s.why.includes(WEEKLY)));

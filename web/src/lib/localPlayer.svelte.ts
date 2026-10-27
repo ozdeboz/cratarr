@@ -20,8 +20,12 @@ import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
 import { albumCoverUrl, getTrackGain, playerCommand, radioNext, type TrackGain } from './api';
 import { prefs } from './prefs.svelte';
-import { ramping, rampBegins, rampEnds } from './ramping.svelte';
+import { ramping, rampBegins, rampEnds, rewindNow, tapeDir } from './ramping.svelte';
 import { asksSignIn, toSignIn } from './reach.svelte';
+import { consumed, rate, tapMs } from './windShape';
+import { BANDCAMP } from './bandcampPreview';
+import { DEVICE } from './deviceMusic.svelte';
+import type { StartStop, Wind } from './startStop';
 import { isPhone } from './device';
 
 export type LocalTrack = {
@@ -418,8 +422,13 @@ async function appendTrack(index: number, from: number, gen: number) {
       // iPhone's four MP3s that stalled all carry a LAME/Info header (a delay), the one that played none; iOS's
       // ManagedMediaSource may not take a negative offset in sequence mode. From 0 there (a few ms of the encoder's
       // silence at a fresh stream's start; joins between tracks keep their gapless trim), and what was set in the log.
-      const offset = start - skip / rate;
-      sb.timestampOffset = kind === MPEG ? Math.max(0, offset) : offset;
+      // Only the delay is let go. A track's own MP3 comes whole from its first frame, so a start mid-track (a resume, a
+      // seek) keeps its offset below 0 and the window cuts what lies before (the tablet, 2026-10-27: resumed at 2:24, it
+      // played from the top while its clock ran 2:24 ahead, to 3:20 of a 2:38 track); Cratarr's own MP3 form (it sends
+      // x-pre-skip) is made from the place asked, its first frame there.
+      const made = kind === MPEG && res.headers.has('x-pre-skip') ? from : 0;
+      const offset = start + made - skip / rate;
+      sb.timestampOffset = kind === MPEG ? Math.max(Math.min(0, start + made), offset) : offset;
       if (kind === MPEG)
         playback('info', 'mp3 placed', { index, rate, skip, offset: Math.round(offset * 1000) / 1000, set: Math.round(sb.timestampOffset * 1000) / 1000, from: sb.appendWindowStart, to: Number.isFinite(sb.appendWindowEnd) ? Math.round(sb.appendWindowEnd * 10) / 10 : null });
       segment.length = length;
@@ -566,7 +575,8 @@ function tick() {
   // A ramp under way has committed to where it goes (lib's Start and stop): that is what shows, everywhere.
   local.paused = committed ?? audio.paused;
   const w = where(heldAt ?? audio.currentTime);
-  if (w) {
+  if (w && rewinding) local.position = rewindPos ?? local.position;
+  else if (w) {
     if (w.seg.index !== local.index) {
       // Repeat one: the stream went on to the next track by itself; back to the start of this one. (Next and previous
       // set the index themselves, so they still move on.)
@@ -895,6 +905,7 @@ export function reportedBy(m: {
   skipFavourites?: unknown;
   autoplay?: unknown;
   levelDb?: unknown;
+  rewinding?: unknown;
 }) {
   if (m.repeat === 'off' || m.repeat === 'one' || m.repeat === 'all') local.repeat = m.repeat;
   // Left out: not said (a report of the queue alone); null: none.
@@ -921,6 +932,8 @@ export function reportedBy(m: {
   local.levelDb = typeof m.levelDb === 'number' && m.levelDb < 0 ? m.levelDb : 0;
   reported = { positionMs: Number(m.positionMs) || 0, at: performance.now() };
   local.position = reported.positionMs / 1000;
+  // The app's tape rewind (a5): its position going back as it reports it, shown as it goes (lib/remote).
+  if (typeof m.rewinding === 'boolean') rewindNow.on = m.rewinding;
 }
 
 function sleepOf(s: unknown): Sleep | null {
@@ -977,21 +990,22 @@ function hand(op: string, args: Record<string, unknown> = {}) {
 /** The position now, to the frame (the visuals' beats, decision 0046), where `local.position` moves four times a
  *  second: counted on from the playing player's last report, or read from this page's own audio. */
 export function positionNow(): number {
-  if (!handed()) return where()?.offset ?? local.position;
+  if (!handed()) return rewindPos ?? where()?.offset ?? local.position;
   const p = (reported.positionMs + sinceReport()) / 1000;
   return local.duration ? Math.min(p, local.duration) : p;
 }
 /** How far the app's player has played since its last report (ms). Not through its Start and stop ramps (the owner,
  *  2026-10-26: no jump as one ends): it reports the press's place meanwhile and plays on from there once it ends. */
 function sinceReport(): number {
-  if (local.paused || ramping.dir !== null) return 0;
+  // A rewind goes back: nothing counted on between its reports.
+  if (local.paused || ramping.dir !== null || rewindNow.on) return 0;
   return performance.now() - Math.max(reported.at, ramping.ended);
 }
 
 if (inApp) onApp('player', (m) => driven === null && reportedBy(m as Parameters<typeof reportedBy>[0]));
 if (typeof window !== 'undefined') {
   setInterval(() => {
-    if (!handed() || local.paused || local.index < 0 || ramping.dir !== null) return;
+    if (!handed() || local.paused || local.index < 0 || ramping.dir !== null || rewindNow.on) return;
     const p = (reported.positionMs + sinceReport()) / 1000;
     local.position = local.duration ? Math.min(p, local.duration) : p;
   }, 250);
@@ -1362,6 +1376,7 @@ export function playQueue(tracks: LocalTrack[], index = 0, from: string | null =
     if (anew) handArm();
     return;
   }
+  tapeForwards();
   keepLocal(left, newQueueId());
   fresh(index, position);
   fill();
@@ -1464,12 +1479,24 @@ function cutFrom(at: number) {
   })();
 }
 
-export function togglePlay() {
+/** Plays or pauses; `plain`: with no Start and stop (a switch between devices; the owner, 2026-10-27). */
+export function togglePlay(plain = false) {
   if (handed()) {
     local.paused = !local.paused;
-    return hand('toggle');
+    return hand('toggle', plain ? { plain: true } : {});
   }
   if (!audio) return;
+  // The direction knob at L, or playing backwards: its way.
+  if (tapePress()) return;
+  // During a wind it shows playing: a toggle pauses it where the counter is (the owner, 2026-10-27).
+  if (rewinding) return windTakeover('pause');
+  if (plain) {
+    atOnce();
+    return void (audio.paused ? audio.play().catch(() => {}) : audio.pause());
+  }
+  // A ramp under way turns round (the audio still sounds while it winds down).
+  if (committed === true) return turnUp();
+  if (committed === false && ramping.dir === 'in') return void pauseRamped();
   if (audio.paused) rampIn();
   else void pauseRamped();
 }
@@ -1482,6 +1509,7 @@ export function jump(index: number) {
     return hand('jump', { index, ...(entry ? { entry } : {}) });
   }
   if (!audio || index < 0 || index >= local.queue.length) return;
+  tapeForwards();
   endRewind();
   const seg = segments.find((s) => s.index === index);
   if (seg && audio.buffered.length && seg.start >= audio.buffered.start(0)) {
@@ -1493,16 +1521,16 @@ export function jump(index: number) {
   }
 }
 
-export const next = () => void skipRamped(() => jump(local.index + 1));
+export const next = () => (rewinding ? windTakeover('next') : void skipRamped(() => jump(local.index + 1)));
 
 export function previous() {
   if (handed()) return hand('previous');
-  if (rewinding) return;
+  if (rewinding) return windTakeover('previous');
   // Repeat all: previous on the first track goes to the last.
   if (local.repeat === 'all' && local.index === 0 && local.position <= RESTART_AFTER && local.queue.length > 1) return void skipRamped(() => jump(local.queue.length - 1));
   if (local.position > RESTART_AFTER) {
     // Its start again: a tape's rewind where the device asks it.
-    if (!(prefs.startStop.rewind && rewindTape())) seek(0);
+    if (!(prefs.startStop.rewind && startWind(0, -1))) seek(0);
   } else void skipRamped(() => jump(Math.max(0, local.index - 1)));
 }
 
@@ -1520,12 +1548,17 @@ export function seek(secs: number) {
   // During a tape's rewind: it ends, and the track plays from there.
   if (rewinding) {
     endRewind();
+    // Wound into another track of the queue: that one, from there.
+    if (where()?.seg.index !== local.index) return void fresh(local.index, secs, true);
     jumpTo(secs);
     if (audio.paused) void audio.play().catch(refused);
     return;
   }
   // During a Start and stop ramp the seek wins at once (the owner, 2026-10-26), with no gap added before it.
   if (committed !== null) return void overrideRamp(secs);
+  // Seeking winds the tape there where the device asks it (the owner, 2026-10-27): playing, more than a moment away.
+  const ss = prefs.startStop;
+  if (ss.rewind && ss.wind.seekWinds && !audio.paused && Math.abs(secs - (where()?.offset ?? secs)) > 2 && startWind(secs, 1)) return;
   jumpTo(secs);
 }
 function jumpTo(secs: number) {
@@ -1716,10 +1749,17 @@ function applyVolume() {
 // next and previous ramp). Stepped by time, not by frames, so a hidden page still gets there.
 let rampGain = 1;
 let rampToken = 0;
-/** What a ramp under way has committed to (paused or playing), shown at once on every device; until it is done, play
- *  and pause wait (the owner, 2026-10-26: a press during a ramp is not taken, rather than starting it over with a hard
- *  edge). Null: no ramp. */
+/** What a ramp under way has committed to (paused or playing), shown at once on every device. A press of play or pause
+ *  during one turns it round from where it has got to, without a hard edge (decision 0075's first step, the owner
+ *  2026-10-27; it waited before). Null: no ramp. */
 let committed: boolean | null = null;
+/** How far up the ramp under way has got (0: still or silent, 1: full speed and volume), where a press turns it. */
+let rampAt = 1;
+/** A turn of the direction knob's own ramp (a tape slows to a stop before it can go the other way, whatever Start and
+ *  stop says): as a vinyl, over Start and stop's ramp where that is a vinyl's, else the wind's brake or spin-up. */
+let turnRamp: { mode: 'vinyl'; ms: number } | null = null;
+/** Start and stop as a ramp now uses it: a turn's own, else the device's. */
+const ss = (): StartStop => (turnRamp ? { ...prefs.startStop, ...turnRamp } : prefs.startStop);
 /** Each ramp's run; a seek cutting one short (overrideRamp) moves it on, and that ramp's own ending then does nothing. */
 let run = 0;
 /** Where the counter stays while a ramp sounds (stream time): a pause holds the moment it was pressed, and play holds
@@ -1761,6 +1801,7 @@ function unramp() {
  *  sounds loud and then drops at the end (the owner, 2026-10-26, of the app's first try). */
 const heard = (v: number) => (v <= 0 ? 0 : v >= 1 ? 1 : 10 ** (3 * (v - 1)));
 const rampSet = (mode: 'vinyl' | 'fade') => (v: number) => {
+  rampAt = mode === 'fade' ? v : (v - RAMP_LOW) / (1 - RAMP_LOW);
   if (mode === 'fade') {
     rampGain = heard(v);
     applyVolume();
@@ -1769,23 +1810,31 @@ const rampSet = (mode: 'vinyl' | 'fade') => (v: number) => {
     audio.playbackRate = Math.max(RAMP_LOW, v);
   }
 };
-/** Winds down what plays (nothing to do when it is at once, or not playing). */
-async function rampOut(): Promise<void> {
-  const { mode, ms } = prefs.startStop;
+/** The ramp's value for a share of the way up (a vinyl's speed, a fade's level). */
+const levelAt = (mode: 'vinyl' | 'fade', share: number) => (mode === 'fade' ? share : RAMP_LOW + (1 - RAMP_LOW) * share);
+/** Winds down what plays (nothing to do when it is at once, or not playing), from `share` of the way up (a wind-up
+ *  turned round part way: only that much of the ramp is left). */
+async function rampOut(share = 1): Promise<void> {
+  const { mode } = ss();
   if (mode === 'off' || !audio || audio.paused) return;
-  rampBegins('out', ms);
+  const ms = ss().ms * share;
+  rampBegins('out', ms, ss().ms);
+  const at = ramping.at;
   try {
-    await ramp(1, mode === 'fade' ? 0 : RAMP_LOW, ms, rampSet(mode), mode === 'fade' ? easeInOut : easeIn);
+    await ramp(levelAt(mode, share), mode === 'fade' ? 0 : RAMP_LOW, ms, rampSet(mode), mode === 'fade' ? easeInOut : easeIn);
   } finally {
-    rampEnds();
+    // Not where another ramp took over (a press turning it round): that one's.
+    if (ramping.at === at) rampEnds();
   }
 }
 /** Plays, winding up from still (or silence); not while a ramp is under way. `early`: a stream begun that much (`lead`
  *  s) before the point it winds up to, over `ms` (playInto). */
 function rampIn(early?: { ms: number; lead: number }) {
-  if (!audio || committed !== null) return;
-  const { mode } = prefs.startStop;
-  let { ms } = prefs.startStop;
+  if (!audio) return;
+  if (committed === true) return turnUp();
+  if (committed !== null) return;
+  const { mode } = ss();
+  let { ms } = ss();
   // From a track's start it plays at once, always (the owner, 2026-10-26): there is nothing to wind up from.
   if (mode === 'off' || (!early && (where()?.offset ?? 0) < FROM_START)) {
     unramp();
@@ -1823,52 +1872,54 @@ function rampIn(early?: { ms: number; lead: number }) {
     committed = null;
   });
 }
-/** A queue played from `from` s into track `index`, as Cratarr asks (a move's carry-on, 0.9.8): winding up into that
- *  point as play does (the stream begun early by the wind-up's lead), at once from a track's start or with Start and
- *  stop off. */
-function playInto(index: number, from: number) {
-  const { mode } = prefs.startStop;
-  const ms = windUpMs(prefs.startStop.ms, mode, from);
-  if (ms <= 0 || !audio) return void fresh(index, from, true);
-  const lead = (ms / 1000) * paceOf(mode);
-  void fresh(index, from - lead, false);
-  const gen = generation;
-  // The counter where it is asked for meanwhile, not the lead's early start.
-  local.position = from;
+/** A wind-down turned round by play (the owner, 2026-10-27): back up from where it has got to, over what is left of the
+ *  ramp, playing on from where it sounds (the counter goes with it from the press). */
+function turnUp() {
+  if (!audio || committed !== true) return;
+  const { mode } = ss();
+  if (mode === 'off') return atOnce();
+  const share = Math.max(0, Math.min(1, rampAt));
+  committed = false;
   local.paused = false;
-  audio.addEventListener('canplay', () => gen === generation && rampIn({ ms, lead }), { once: true });
-}
-/** Stops as Cratarr asks (a move's hold, a handover elsewhere; 0.9.8): winding down first, as a pause does; a ramp
- *  under way is waited out first, never dropped (the owner, 2026-10-26). */
-async function stopRamped() {
-  while (committed !== null) await new Promise((r) => setTimeout(r, 50));
-  if (!audio || prefs.startStop.mode === 'off' || audio.paused) return void stop();
-  committed = true;
-  local.paused = true;
-  heldAt = audio.currentTime;
+  heldAt = null;
+  const ms = ss().ms * (1 - share);
+  rampBegins('in', ms, ss().ms);
   const mine = ++run;
-  try {
-    await rampOut();
-  } finally {
-    if (mine === run) {
-      heldAt = null;
-      unramp();
-      committed = null;
-    }
-  }
-  stop();
+  void ramp(levelAt(mode, share), 1, ms, rampSet(mode), mode === 'fade' ? easeInOut : easeOut).then(() => {
+    if (mine !== run) return;
+    rampEnds();
+    unramp();
+    committed = null;
+  });
 }
-/** Pauses, winding down first; paused at once as far as anyone sees, and nothing takes it back meanwhile. */
+/** Whatever ramp runs ends here, at full speed and volume (a switch between devices has no effects; the owner,
+ *  2026-10-27). */
+function atOnce() {
+  if (committed === null) return;
+  ++run;
+  heldAt = null;
+  unramp();
+  rampEnds();
+  committed = null;
+}
+/** Pauses, winding down first; paused at once as far as anyone sees. During a wind-up it turns round from where that
+ *  has got to, resting where the wind-up was going (the counter never left it). Play meanwhile turns it up again. */
 async function pauseRamped() {
-  if (!audio || committed !== null) return;
-  if (prefs.startStop.mode === 'off' || audio.paused) return void audio.pause();
+  if (!audio || committed === true) return;
+  const turning = committed === false && ramping.dir === 'in';
+  if (committed !== null && !turning) return;
+  if (ss().mode === 'off' || audio.paused) {
+    atOnce();
+    return void audio?.pause();
+  }
+  const share = turning ? Math.max(0, Math.min(1, rampAt)) : 1;
   committed = true;
   local.paused = true;
   // The moment it was pressed: the counter stays there while the end sounds, and it rests there after.
-  heldAt = audio.currentTime;
+  if (!turning || heldAt === null) heldAt = audio.currentTime;
   const mine = ++run;
   try {
-    await rampOut();
+    await rampOut(share);
     if (mine !== run) return;
     audio?.pause();
     if (audio && inBuffer(heldAt)) audio.currentTime = heldAt;
@@ -1883,7 +1934,12 @@ async function pauseRamped() {
 /** For next and previous (where the device asks it): out only, and only then on to `go` (the track, its cover), which
  *  starts as it is, at full speed and volume (the owner, 2026-10-26: no wind-up on a skip). */
 async function skipRamped(go: () => void) {
-  const s = prefs.startStop;
+  const s = ss();
+  // During a play or pause ramp: on at once (anything interrupts anything, the owner 2026-10-27).
+  if (committed !== null && !rewinding) {
+    atOnce();
+    return go();
+  }
   if (committed !== null) return;
   if (s.mode === 'off' || !s.skips || !audio || audio.paused || handed()) return go();
   committed = false;
@@ -1974,141 +2030,308 @@ export function windUpMs(ms: number, mode: 'off' | 'vinyl' | 'fade', offset: num
 function paceOf(mode: 'off' | 'vinyl' | 'fade', low = RAMP_LOW): number {
   return mode === 'vinyl' ? low + ((1 - low) * 2) / 3 : 1;
 }
-// --- Tape rewind (Settings › This device; the owner, 2026-10-26: the track played backwards, as a tape) ---
-// Previous restarting a track: the server's clip of it played backwards from here to its start (a5's
-// /api/stream/…/rewind, as its tunings say: spinning up, cruising at its speed, its middle cut into heard pieces where
-// the way is long, braking; the owner 2026-10-27), on a second player; once that sounds, the track waits paused at its
-// start, and at the clip's end it plays from there, at once. The counter and the waveform go back with it smoothly,
-// across the cuts (the owner: interpolated between the positions).
-// Not sounding in REWIND_WAIT_MS, or failing first: the track's start plainly. While it sounds, play, pause, next and
-// previous wait (as during a ramp); a seek ends it and goes there; another queue or track ends it.
-const REWIND_WAIT_MS = 1500;
-/** The clip sounding, or about to; null: none. */
-let rewinding: HTMLAudioElement | null = null;
+// --- Winding (decision 0074; the owner, 2026-10-27) ---
+// The tape wound back or forward on the server's wind stream (/api/stream/…/wind: the track played that way at the
+// speed limit, quieter by the wind volume), on a second player whose own speed is the envelope (lib/windShape): spun up
+// over the attack, braked over the release, the pitch following. A tap of Previous winds back to the track's start,
+// condensed to its length (cut into heard pieces where the way is long), and so does a seek where seeking winds the
+// tape; holding Previous or Next pauses (Start and stop as a pause) while its stream is already fetched, winds for as
+// long as it is held, stops at the track's edge or winds on through the queue (At a track's edge), and on release
+// brakes and plays on from where it got to, winding up. The counter and the waveform go
+// with it: a condensed wind along the straight line from where it began to where it goes, as far as its envelope has
+// come; a held one at the speed limit's pace, as far as its stream has played. Not sounding in WIND_WAIT_MS, or failing
+// first: a tap or a seek goes there plainly, a hold plays on where it was. Nothing of it counts as listening (the wind
+// stream is no play). Any press takes it over where the counter shows it (`windTakeover`); a seek ends it and goes
+// there; another queue or track ends it.
+const WIND_WAIT_MS = 1500;
+/** How often its speed and the counter follow it (the tick's four times a second is too coarse to see it go). */
+const WIND_STEP_MS = 40;
+/** The slowest a browser plays (Chrome's floor): a spin-up starts there and a brake ends there. */
+const RATE_LOW = 0.0625;
+type Winding = {
+  clip: HTMLAudioElement;
+  seg: Segment;
+  /** Where it began and where it goes (s into the track); `to` null: held, open-ended. */
+  from: number;
+  to: number | null;
+  dir: 1 | -1;
+  /** A condensed wind's length (ms). */
+  D: number;
+  wind: Wind;
+  /** When it began to sound (performance.now()), and when its brake began (a held one, let go). */
+  at: number | null;
+  brake: number | null;
+  /** Its speed as the brake began. */
+  brakeFrom: number;
+  /** A held one's stream ran out: at the track's edge. */
+  edge: boolean;
+  /** Played backwards at 1× by the direction knob (as loud as the music), not a wind; and what follows its brake. */
+  reverse: boolean;
+  after: 'play' | 'pause';
+  /** A held one wound on through the queue (At a track's edge): the queue places after this track's edge, in winding
+   *  order (the stream joins them seamlessly, at the same speed), and the one it shows now. */
+  through: number[];
+  shown: number;
+  timer: ReturnType<typeof setInterval> | undefined;
+};
+/** The wind sounding, or about to; null: none. */
+let rewinding: Winding | null = null;
 /** Where the counter stands while it sounds (s into the track). */
 let rewindPos: number | null = null;
-/** A rewind sounds on this device: the shown position goes back with it (lib/remote). */
-export const rewindNow = $state({ on: false });
-/** How often the counter follows it (the tick's four times a second is too coarse to see it go back). */
-const REWIND_STEP_MS = 50;
-/** The rewind's own fetch of the track's start: it does not end the rewind. */
+export { rewindNow };
+/** The wind's own fetch of where it goes: it does not end the wind. */
 let rewindFetch = false;
-/** The share of the way back the clip has come at `t` (0 to 1) as the counter shows it: its speed rising over the
- *  spin-up's share `f` on a raised cosine, flat, falling over the brake's (a5's curve, the app's counter too). The cuts
- *  are glided over: the counter keeps the overall pace. */
-function rewound(t: number, f: number) {
-  const ramp = (u: number) => u / 2 - (f / (2 * Math.PI)) * Math.sin((Math.PI * u) / f);
-  const a = t < f ? ramp(t) : t < 1 - f ? f / 2 + (t - f) : 1 - f - ramp(1 - t);
-  return Math.min(1, Math.max(0, a / (1 - f)));
-}
-/** The clip as loud as the track: the page's volume and the track's level. */
+/** A hold under way (its press), before and while it winds: let go, it plays on. */
+let holding: { dir: 1 | -1; released: boolean } | null = null;
+/** The wind as loud as the track: the page's volume and the track's level (the wind volume is the stream's own). */
 function clipVolume() {
-  if (rewinding && audio) rewinding.volume = Math.min(1, audio.volume * (level ? (told?.level ?? 1) : 1));
+  if (rewinding && audio) rewinding.clip.volume = Math.min(1, audio.volume * (level ? (told?.level ?? 1) : 1));
 }
-/** Rewinds the track playing to its start; false where it cannot (paused, a ramp under way, at its start). */
-function rewindTape(): boolean {
-  if (!audio || audio.paused || committed !== null || rewinding) return false;
+/** A queue place's length, where known (s). */
+const lengthOf = (i: number) => local.queue[i]?.duration_secs ?? null;
+/** The queue places a held wind may go on through, past the track's edge, in winding order: up to WIND_THROUGH,
+ *  stopping at one the server cannot wind (a Bandcamp preview, the device's own music) or whose length is unknown (the
+ *  counter goes by lengths: the page cannot read the stream's map). */
+const WIND_THROUGH = 8;
+function throughOf(index: number, dir: 1 | -1): number[] {
+  const out: number[] = [];
+  for (let i = index + dir; i >= 0 && i < local.queue.length && out.length < WIND_THROUGH; i += dir) {
+    const t = local.queue[i];
+    if (t.source === BANDCAMP || t.source === DEVICE || !lengthOf(i)) break;
+    out.push(i);
+  }
+  return out;
+}
+/** Where a wind has got to: the queue place and the seconds into it, as the counter shows it. A held one has gone the
+ *  speed limit's pace times the stream it has played: within its track, then on through the queue (back: each from its
+ *  end; forward: each from its start), resting at the last one's edge. */
+function windPlace(w: Winding, now: number): { index: number; pos: number } {
+  const index = w.seg.index;
+  if (w.at === null) return { index, pos: w.from };
+  if (w.to !== null) {
+    const C = consumed(w.wind, w.D, w.D);
+    const share = C > 0 ? Math.min(1, consumed(w.wind, w.D, now - w.at) / C) : 1;
+    return { index, pos: w.from + (w.to - w.from) * share };
+  }
+  const end = lengthOf(index) ?? Infinity;
+  const d = w.wind.speed * w.clip.currentTime;
+  const room = w.dir < 0 ? w.from : end - w.from;
+  if (d <= room || !w.through.length) return { index, pos: Math.min(end, Math.max(0, w.from + w.dir * d)) };
+  let rest = d - room;
+  for (const i of w.through) {
+    const len = lengthOf(i) ?? 0;
+    if (rest <= len) return { index: i, pos: w.dir < 0 ? len - rest : rest };
+    rest -= len;
+  }
+  const last = w.through[w.through.length - 1];
+  return { index: last, pos: w.dir < 0 ? 0 : (lengthOf(last) ?? 0) };
+}
+/** A wind's speed now (× the stream's): its envelope. */
+function windRate(w: Winding, now: number): number {
+  if (w.at === null) return RATE_LOW;
+  const t = now - w.at;
+  let r: number;
+  if (w.to !== null) r = rate(w.wind, w.D, t);
+  else if (w.brake !== null) r = (w.brakeFrom * (1 + Math.cos(Math.PI * Math.min(1, (now - w.brake) / w.wind.releaseMs)))) / 2;
+  else r = t >= w.wind.attackMs ? 1 : (1 - Math.cos((Math.PI * t) / w.wind.attackMs)) / 2;
+  return Math.max(RATE_LOW, Math.min(1, r));
+}
+/** Plays on at `secs` into queue track `index`, winding up as play does (at once from a track's start). */
+function playOnAt(index: number, secs: number) {
+  if (!audio) return;
   const w = where();
-  const t = w && local.queue[w.seg.index];
-  if (!w || !t || w.offset <= 0) return false;
-  const { seg, offset: from } = w;
-  const ss = prefs.startStop;
-  const ms = ss.rewindMs;
-  const ramp = ss.rewindRamp;
-  const ask = new URLSearchParams({ from_ms: String(Math.floor(from * 1000)), ms: String(ms), speed: String(ss.rewindSpeed), piece_ms: String(ss.rewindPiece), ramp: String(ramp) });
-  // Every step timed from the press, in the playback log (the owner, 2026-10-27: a rewind took far longer than its
-  // length; find where at the deepest level): the clip's own events, how far it has played against the clock, the
-  // track waiting at its start, and the whole of it at the end.
-  const t0 = performance.now();
-  const since = () => Math.round(performance.now() - t0);
-  const say = (what: string, fields: Record<string, unknown> = {}, level: 'info' | 'warn' = 'info') =>
-    playback(level, `rewind ${what}`, { t: since(), clip: Math.round(clip.currentTime * 1000), ...fields });
-  const clip = (rewinding = new Audio(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}/rewind?${ask}`));
-  say('asked', { track: t.id, from: Math.round(from * 1000), ms, speed: ss.rewindSpeed, piece: ss.rewindPiece, ramp, startLoaded: inBuffer(seg.start) });
-  for (const ev of ['loadstart', 'loadedmetadata', 'canplay', 'canplaythrough', 'waiting', 'stalled', 'suspend', 'pause'])
-    clip.addEventListener(ev, () => mine() && say(ev, { readyState: clip.readyState, buffered: clip.buffered.length ? Math.round(clip.buffered.end(clip.buffered.length - 1) * 1000) : 0 }, ev === 'waiting' || ev === 'stalled' ? 'warn' : 'info'));
-  let playedAt = 0;
-  let lastSecond = 0;
-  clipVolume();
-  committed = false;
-  local.paused = false;
-  let sounding = false;
-  let follow: ReturnType<typeof setInterval> | undefined;
-  const mine = () => rewinding === clip;
-  // Not sounding yet: its start plainly (the track still plays where it was).
-  const plain = () => {
-    endRewind();
-    seek(0);
-  };
-  // At its start, playing: where it waits loaded, else afresh.
-  const fromStart = () => {
-    say('clip done', { clipMs: Math.round((performance.now() - playedAt) || 0), asked: ms });
-    endRewind();
-    if (!audio) return;
-    const w = where();
-    const back = audio;
-    // The track sounding again: the whole rewind, press to sound (a warning where it took much longer than asked).
-    back.addEventListener(
-      'playing',
-      () => {
-        const total = since();
-        playback(total > ms + 1500 ? 'warn' : 'info', 'rewind whole', { t: total, asked: ms, clipFromPress: Math.round(playedAt - t0) });
-      },
-      { once: true },
-    );
-    if (w?.seg.index === seg.index && inBuffer(w.seg.start)) {
-      say('track from its start, loaded');
-      audio.currentTime = w.seg.start;
-      void audio.play().catch(refused);
-    } else {
-      say('track from its start, fetched afresh', {}, 'warn');
-      void fresh(seg.index, 0, true);
-    }
-  };
-  const late = setTimeout(() => {
-    if (!mine() || sounding) return;
-    say('not sounding in time: plain restart', { readyState: clip.readyState }, 'warn');
-    plain();
-  }, REWIND_WAIT_MS);
-  clip.addEventListener(
-    'playing',
+  if (w && w.seg.index === index && inBuffer(w.seg.start + secs)) {
+    audio.currentTime = w.seg.start + secs;
+    local.position = secs;
+    return rampIn();
+  }
+  const gen = generation + 1;
+  void fresh(index, secs, false);
+  // A turn's own ramp kept for the wind-up once the stream is in.
+  const turn = turnRamp;
+  audio.addEventListener(
+    'canplay',
     () => {
-      if (!mine() || !audio) return;
-      sounding = true;
-      clearTimeout(late);
-      playedAt = performance.now();
-      say('playing');
-      rewindPos = from;
-      rewindNow.on = true;
-      follow = setInterval(() => {
-        if (!mine()) return clearInterval(follow);
-        rewindPos = from * (1 - rewound((clip.currentTime * 1000) / ms, ramp));
-        local.position = rewindPos;
-        // Once a second: how far the clip has played against the clock since it began to sound.
-        const wall = performance.now() - playedAt;
-        if (wall >= (lastSecond + 1) * 1000) {
-          lastSecond = Math.floor(wall / 1000);
-          say('progress', { wall: Math.round(wall), buffered: clip.buffered.length ? Math.round(clip.buffered.end(clip.buffered.length - 1) * 1000) : 0, readyState: clip.readyState });
-        }
-      }, REWIND_STEP_MS);
-      audio.pause();
-      if (inBuffer(seg.start)) audio.currentTime = seg.start;
-      else {
-        say('track start fetched afresh');
-        rewindFetch = true;
-        void fresh(seg.index, 0, false);
-        rewindFetch = false;
+      if (gen !== generation) return;
+      turnRamp = turn;
+      try {
+        rampIn();
+      } finally {
+        turnRamp = null;
       }
     },
     { once: true },
   );
-  clip.addEventListener('ended', () => mine() && fromStart(), { once: true });
+}
+/** A wind's stream address: from `from`, `dir`, condensed to `to` over `D` ms (a tap, a seek) or held (`to` null), on
+ *  through the queue places `through`. */
+function windUrl(t: LocalTrack, from: number, to: number | null, dir: 1 | -1, D: number, through: number[], wind: Wind = prefs.startStop.wind): string {
+  const ask = new URLSearchParams({ from_ms: String(Math.floor(from * 1000)), dir: dir < 0 ? 'back' : 'forward', speed: String(wind.speed), gain_db: String(wind.gainDb) });
+  if (to !== null)
+    for (const [k, v] of Object.entries({ to_ms: Math.floor(to * 1000), fit_ms: D, attack_ms: wind.attackMs, release_ms: wind.releaseMs, piece_ms: wind.pieceMs })) ask.set(k, String(v));
+  if (through.length) ask.set('through', through.map((i) => `${local.queue[i].source}:${local.queue[i].id}`).join(','));
+  return `/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}/wind?${ask}`;
+}
+/** A wind's player for `url`, loading at once, at the slowest rate, its pitch following its speed. */
+function windClip(url: string): HTMLAudioElement {
+  const clip = new Audio();
+  clip.preload = 'auto';
+  clip.preservesPitch = false;
+  clip.playbackRate = RATE_LOW;
+  clip.src = url;
+  clip.load();
+  return clip;
+}
+/** A hold's wind fetched at its press (the owner, 2026-10-27: no wait after the wind-down): its player, from where, the
+ *  queue places it goes on through, and which track. */
+type Armed = { clip: HTMLAudioElement; from: number; through: number[]; index: number };
+function armWind(dir: 1 | -1): Armed | null {
+  const here = where();
+  const t = here && local.queue[here.seg.index];
+  if (!here || !t || t.source === BANDCAMP || t.source === DEVICE) return null;
+  const through = prefs.startStop.wind.edges === 'queue' ? throughOf(here.seg.index, dir) : [];
+  return { clip: windClip(windUrl(t, here.offset, null, dir, 0, through)), from: here.offset, through, index: here.seg.index };
+}
+/** An armed wind not wound after all (let go during the pause, or the track changed). */
+function disarm(a: Armed | null) {
+  if (!a) return;
+  a.clip.removeAttribute('src');
+  a.clip.load();
+}
+
+/** Starts a wind of the track playing, from where it is: to `to` condensed (a tap, a seek), or held (`to` null) in
+ *  `dir`. False where it cannot (nothing there, a ramp or a wind under way, nowhere to go). */
+function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, reverse = false): boolean {
+  if (!audio || committed !== null || rewinding) return false;
+  const here = where();
+  const t = here && local.queue[here.seg.index];
+  if (!here || !t) return false;
+  const { seg } = here;
+  let from = here.offset;
+  if (to !== null && Math.abs(to - from) < 0.5) return false;
+  if (to !== null) dir = to < from ? -1 : 1;
+  // Played backwards (the knob): at 1×, as loud as the music; the wind's spin-up and brake.
+  const wind = reverse ? { ...prefs.startStop.wind, speed: 1, gainDb: 0 } : prefs.startStop.wind;
+  const D = to === null ? 0 : Math.round(tapMs(wind, to - from));
+  // A hold's stream fetched at its press (`armed`), from where the pause rests: loaded while it wound down.
+  const use = armed && armed.index === seg.index ? armed : null;
+  if (armed && !use) disarm(armed);
+  const through = use ? use.through : to === null && wind.edges === 'queue' ? throughOf(seg.index, dir) : [];
+  const clip = use?.clip ?? windClip(windUrl(t, use?.from ?? from, to, dir, D, through, wind));
+  if (use) from = use.from;
+  const w: Winding = { clip, seg, from, to, dir, D, wind, reverse, after: 'play', at: null, brake: null, brakeFrom: 1, edge: false, through, shown: seg.index, timer: undefined };
+  const mine = () => rewinding === w;
+  // Every step timed from the press, in the playback log (the owner, 2026-10-27: find any delay at the deepest level).
+  const t0 = performance.now();
+  const say = (what: string, fields: Record<string, unknown> = {}, lvl: 'info' | 'warn' = 'info') =>
+    playback(lvl, `wind ${what}`, { t: Math.round(performance.now() - t0), clip: Math.round(clip.currentTime * 1000), ...fields });
+  rewinding = w;
+  // The counter where it was pressed from the press on, never where the track waits (the owner, 2026-10-27: the
+  // waveform jumped to 0 before winding down).
+  rewindPos = from;
+  local.position = from;
+  say('asked', { track: t.id, from: Math.round(from * 1000), to: to === null ? null : Math.round(to * 1000), D, speed: wind.speed, through: through.length });
+  for (const ev of ['loadedmetadata', 'canplay', 'waiting', 'stalled'])
+    clip.addEventListener(ev, () => mine() && say(ev, { readyState: clip.readyState }, ev === 'waiting' || ev === 'stalled' ? 'warn' : 'info'));
+  clipVolume();
+  committed = false;
+  local.paused = false;
+  // Not sounding: there plainly (a tap, a seek), or on where it was (a hold).
+  const plain = () => {
+    endRewind();
+    holding = null;
+    if (to !== null) return seek(to);
+    // The knob's backwards could not start: forwards again, the knob too.
+    if (reverse) Object.assign(tapeDir, { want: 'R', state: 'forward' });
+    playOnAt(seg.index, from);
+  };
+  // Got there: on from there, winding up; past a track's end, the next. In a track wound into, short of its last
+  // moment (a fresh stream from its very end would start it from the top).
+  const arrive = ({ index, pos }: { index: number; pos: number }) => {
+    say('arrived', { index, at: Math.round(pos * 1000), after: w.after });
+    endRewind();
+    const end = lengthOf(index) ?? Infinity;
+    // Played backwards and stopped (a pause, the track's edge, the knob back to R): the tape rests there, or plays on
+    // forwards from there (the knob's turn).
+    if (reverse) {
+      const at = Math.max(0, Math.min(pos, end - 1.5));
+      tapeDir.state = 'forward';
+      if (w.after === 'pause') return restAt(index, at);
+      return turned(() => playOnAt(index, at));
+    }
+    if (dir > 0 && pos >= end - 0.5) return jump(index + 1);
+    playOnAt(index, index === seg.index ? pos : Math.max(0, Math.min(pos, end - 1.5)));
+  };
+  // The counter (and, wound into another track of the queue, the track shown: never heard, so never counted).
+  const show = ({ index, pos }: { index: number; pos: number }) => {
+    if (index !== w.shown) {
+      say('crossed', { index, pos: Math.round(pos * 1000) });
+      w.shown = index;
+      local.index = index;
+      local.duration = lengthOf(index);
+    }
+    rewindPos = pos;
+    local.position = pos;
+  };
+  const late = setTimeout(() => {
+    if (!mine() || w.at !== null) return;
+    say('not sounding in time: plainly', { readyState: clip.readyState }, 'warn');
+    plain();
+  }, WIND_WAIT_MS);
+  clip.addEventListener(
+    'playing',
+    () => {
+      if (!mine() || !audio) return;
+      clearTimeout(late);
+      w.at = performance.now();
+      say('playing');
+      rewindNow.on = true;
+      w.timer = setInterval(() => {
+        if (!mine()) return clearInterval(w.timer);
+        const now = performance.now();
+        if (!w.edge) clip.playbackRate = windRate(w, now);
+        const place = w.edge ? { index: w.shown, pos: rewindPos ?? w.from } : windPlace(w, now);
+        show(place);
+        // A held one braked to its end: on from where it got to.
+        if (w.brake !== null && (w.edge || now - w.brake >= w.wind.releaseMs)) arrive(place);
+      }, WIND_STEP_MS);
+      if (!audio.paused) audio.pause();
+      // A condensed one's end waits loaded (the counter stays the wind's meanwhile).
+      if (to !== null) {
+        const tw = where();
+        if (!(tw && tw.seg.index === seg.index && inBuffer(tw.seg.start + to))) {
+          rewindFetch = true;
+          void fresh(seg.index, to, false);
+          rewindFetch = false;
+          local.position = rewindPos ?? from;
+        }
+      }
+    },
+    { once: true },
+  );
+  clip.addEventListener(
+    'ended',
+    () => {
+      if (!mine()) return;
+      if (to !== null) return arrive({ index: seg.index, pos: to });
+      // Held to the edge (the track's, or the last one's it wound on through): it rests there until let go.
+      const { index } = windPlace(w, performance.now());
+      const edge = { index, pos: dir < 0 ? 0 : (lengthOf(index) ?? rewindPos ?? w.from) };
+      show(edge);
+      w.edge = true;
+      say('at the edge', { index });
+      // Played backwards to the start: it stops there, paused (the knob stays where it is).
+      if (reverse) w.after = 'pause';
+      if (w.brake !== null || !holding) arrive(edge);
+    },
+    { once: true },
+  );
   clip.addEventListener(
     'error',
     () => {
       if (!mine()) return;
-      say('clip error', { code: clip.error?.code ?? null, message: clip.error?.message ?? '' }, 'warn');
-      if (sounding) fromStart();
+      say('error', { code: clip.error?.code ?? null, message: clip.error?.message ?? '' }, 'warn');
+      if (w.at !== null) arrive(windPlace(w, performance.now()));
       else plain();
     },
     { once: true },
@@ -2117,23 +2340,202 @@ function rewindTape(): boolean {
     .play()
     .then(() => say('play() accepted'))
     .catch((e) => {
-      if (!mine() || sounding) return;
+      if (!mine() || w.at !== null) return;
       say('play() refused', { error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) }, 'warn');
       plain();
     });
   return true;
 }
-/** Ends a rewind under way (nothing where none is). */
+/** Ends a wind under way (nothing where none is). */
 function endRewind() {
-  const clip = rewinding;
-  if (!clip) return;
+  const w = rewinding;
+  if (!w) return;
+  clearInterval(w.timer);
   rewinding = null;
   rewindPos = null;
   rewindNow.on = false;
   committed = null;
-  clip.pause();
-  clip.removeAttribute('src');
-  clip.load();
+  w.clip.pause();
+  w.clip.removeAttribute('src');
+  w.clip.load();
+}
+/** Holding Previous (`back`) or Next (`forward`) began: winds that way, after pausing as a pause does, until
+ *  `windRelease` (the owner, 2026-10-27). The app's player and one of Cratarr's players do it themselves. */
+export async function windHold(dir: 'back' | 'forward') {
+  if (handed()) return hand('wind', { dir, phase: 'start' });
+  if (!audio || local.index < 0 || holding || rewinding) return;
+  const h: { dir: 1 | -1; released: boolean } = { dir: dir === 'back' ? -1 : 1, released: false };
+  holding = h;
+  // Fetched now, loading while the pause winds down (it rests where it was pressed: the wind's start is known now).
+  const armed = armWind(h.dir);
+  if (!audio.paused) await pauseRamped();
+  if (holding !== h) return disarm(armed);
+  if (h.released) {
+    disarm(armed);
+    holding = null;
+    const w = where();
+    return void (w && playOnAt(w.seg.index, w.offset));
+  }
+  if (!startWind(null, h.dir, armed)) {
+    disarm(armed);
+    holding = null;
+  }
+}
+/** Where a wind under way has got, as the counter shows it: that is where a press during it lands. */
+function windNow(w: Winding): { index: number; pos: number } {
+  if (w.at === null) return { index: w.seg.index, pos: w.from };
+  if (w.edge) return { index: w.shown, pos: rewindPos ?? w.from };
+  return windPlace(w, performance.now());
+}
+/** Rests paused at `secs` into queue track `index`. */
+function restAt(index: number, secs: number) {
+  if (!audio) return;
+  const w = where();
+  if (w && w.seg.index === index && inBuffer(w.seg.start + secs)) {
+    audio.currentTime = w.seg.start + secs;
+    if (!audio.paused) audio.pause();
+  } else {
+    void fresh(index, secs, false);
+  }
+  local.index = index;
+  local.duration = lengthOf(index) ?? local.duration;
+  local.position = secs;
+  local.paused = true;
+}
+/**
+ * Any press during a wind takes it over (the owner, 2026-10-27), where the counter shows it: a pause rests there; a
+ * play brakes a held one as letting go does and plays on from where it gets (a condensed one plays on from there at
+ * once); next and previous skip from there.
+ */
+function windTakeover(press: 'pause' | 'play' | 'next' | 'previous') {
+  const w = rewinding;
+  if (!w) return;
+  // Played backwards (the knob): a pause brakes it to rest, a play leaves it playing.
+  if (w.reverse && (press === 'pause' || press === 'play')) {
+    if (press === 'pause' && tapeDir.state === 'backward') {
+      tapeDir.state = 'returning';
+      brakeBackwards('pause');
+    }
+    return;
+  }
+  if (press === 'play' && w.to === null && w.at !== null && !w.edge) {
+    holding = null;
+    if (w.brake === null) {
+      const now = performance.now();
+      w.brakeFrom = windRate(w, now);
+      w.brake = now;
+    }
+    return;
+  }
+  const { index, pos } = windNow(w);
+  endRewind();
+  holding = null;
+  if (press === 'pause') return restAt(index, pos);
+  if (press === 'play') return playOnAt(index, pos);
+  if (press === 'next') return jump(index + 1);
+  // Previous from where it landed: its own start again past the restart point, else the track before.
+  if (pos > RESTART_AFTER) return playOnAt(index, 0);
+  jump(Math.max(0, index - 1));
+}
+
+/** Holding ended: a held wind brakes and plays on from where it got to. */
+export function windRelease(dir: 'back' | 'forward') {
+  if (handed()) return hand('wind', { dir, phase: 'stop' });
+  const h = holding;
+  if (!h) return;
+  h.released = true;
+  const w = rewinding;
+  if (!w) return;
+  holding = null;
+  // Not sounding yet: its wait's fallback plays on.
+  if (w.at === null) return;
+  const now = performance.now();
+  w.brakeFrom = w.edge ? RATE_LOW : windRate(w, now);
+  w.brake = now;
+}
+
+// --- The direction knob (the tape deck's; the owner, 2026-10-27) ---
+// R plays forwards on the track's own player, L backwards at 1× on the wind stream; the two never sound together, and
+// the tape changes direction only from a stop, as a deck does: turned while playing it slows to a stop (a vinyl's ramp,
+// whatever Start and stop says), then goes the other way, spinning up. The knob says what is wanted (tapeDir.want); the
+// tape's state (tapeDir.state) moves only along forward → stopping → backward → returning → forward, each step taken
+// when the one before has come to rest, and only then reading the knob again, so a knob turned back and forth however
+// fast always ends in its last place, never in two at once. Paused, the knob only sets the way the next play goes.
+// Another track or queue (a skip, a new queue, a jump) plays forwards: the knob goes back to R.
+/** Turns the direction knob (lib/TapeDeck). */
+export function turnTape(want: 'L' | 'R') {
+  if (handed()) return hand('direction', { dir: want });
+  tapeDir.want = want;
+  void stepTape();
+}
+/** Plays as the knob says once still, or turns it round: the state machine's one step. */
+async function stepTape() {
+  if (!audio || local.index < 0) return;
+  const playingNow = !local.paused;
+  if (tapeDir.state === 'forward' && tapeDir.want === 'L' && playingNow && !rewinding) {
+    tapeDir.state = 'stopping';
+    await turned(() => pauseRamped());
+    if (tapeDir.state !== 'stopping') return;
+    tapeDir.state = 'forward';
+    if (tapeDir.want === 'L') return void backwards();
+    // Turned back meanwhile: forwards again, spinning up.
+    const w = where();
+    if (w) turned(() => playOnAt(w.seg.index, w.offset));
+    return;
+  }
+  if (tapeDir.state === 'backward' && tapeDir.want === 'R') {
+    tapeDir.state = 'returning';
+    brakeBackwards('play');
+  }
+}
+/** Plays backwards from where it rests (the knob at L, play pressed or the stop reached). */
+function backwards(): boolean {
+  if (!startWind(null, -1, null, true)) return false;
+  tapeDir.state = 'backward';
+  return true;
+}
+/** Brakes playing backwards to a stop, then `after`: on forwards, or resting there. */
+function brakeBackwards(after: 'play' | 'pause') {
+  const w = rewinding;
+  if (!w?.reverse) return;
+  w.after = after;
+  if (w.at === null) return void (tapeDir.state = 'forward');
+  const now = performance.now();
+  w.brakeFrom = w.edge ? RATE_LOW : windRate(w, now);
+  w.brake = now;
+}
+/** Runs `go` with the turn's own ramp (a vinyl's, Start and stop's length where it is one, else the wind's). */
+function turned<T>(go: () => T): T {
+  const s = prefs.startStop;
+  turnRamp = { mode: 'vinyl', ms: s.mode === 'vinyl' ? s.ms : Math.max(s.wind.attackMs, s.wind.releaseMs) };
+  try {
+    return go();
+  } finally {
+    // A ramp reads it as it begins; one that runs on keeps what it began with.
+    queueMicrotask(() => (turnRamp = null));
+  }
+}
+/** Play and pause with the knob at L: backwards from rest, or braking to rest. True where it took the press. */
+function tapePress(): boolean {
+  // Mid-turn (slowing to its stop, or back from playing backwards): the turn finishes first.
+  if (tapeDir.state === 'stopping' || tapeDir.state === 'returning') return true;
+  if (rewinding?.reverse) {
+    if (tapeDir.state === 'backward') {
+      tapeDir.state = 'returning';
+      brakeBackwards('pause');
+    }
+    return true;
+  }
+  if (tapeDir.want === 'L' && tapeDir.state === 'forward' && audio?.paused && committed === null) {
+    backwards();
+    return true;
+  }
+  return false;
+}
+/** Another track or queue plays forwards: the knob back to R, playing backwards ended. */
+function tapeForwards() {
+  if (rewinding?.reverse) endRewind();
+  Object.assign(tapeDir, { want: 'R', state: 'forward' });
 }
 
 /** Cratarr's track as this player keeps it. */
@@ -2183,8 +2585,9 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
       local.from = typeof m.queue_name === 'string' ? m.queue_name : null;
       keepLocal(left, typeof m.queue_id === 'string' ? m.queue_id : newQueueId());
       const from = (typeof m.position_ms === 'number' ? m.position_ms : 0) / 1000;
-      if (m.paused === true) void fresh(index, from, false);
-      else playInto(index, from);
+      // A move between players (or a start here from elsewhere): at once, no Start and stop (the owner, 2026-10-27:
+      // switching devices bypasses every effect).
+      void fresh(index, from, m.paused !== true);
       fill();
       return m.paused !== true;
     }
@@ -2221,16 +2624,19 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
       return at >= 0;
     }
     case 'pause':
-      void pauseRamped();
+      if (rewinding) windTakeover('pause');
+      else void pauseRamped();
       return false;
     case 'resume':
-      rampIn();
+      if (rewinding) windTakeover('play');
+      else rampIn();
       return true;
     case 'toggle':
       togglePlay();
       return !audio.paused;
     case 'stop':
-      void stopRamped();
+      atOnce();
+      stop();
       return false;
     case 'next':
       next();

@@ -20,7 +20,7 @@
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs, SEEK_STEP, type CoverTouch, type SwipeDown, type SwipeSide, type SwipeUp } from './prefs.svelte';
-  import { art, clockText, coverComing, coverFailed, coverLate, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampBusy, shownPaused } from './remote.svelte';
+  import { art, clockText, coverComing, coverFailed, coverLate, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampBusy, shownPaused, wind } from './remote.svelte';
   import SeekWave from './SeekWave.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import { Seek } from './seekState.svelte';
@@ -31,7 +31,9 @@
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { ramping } from './ramping.svelte';
   import { appInfo, inApp } from './app.svelte';
-  import { local, windUpMs } from './localPlayer.svelte';
+  import { holdWind, type Hold } from './holdWind';
+  import { local, rewindNow, windUpMs } from './localPlayer.svelte';
+  import TapeDeck from './TapeDeck.svelte';
   import QueueMenu from './QueueMenu.svelte';
   import { playingCrateOuts } from './crates.svelte';
   import { localMode } from './deviceMusic.svelte';
@@ -53,6 +55,19 @@
 
   // As shown: the new track's words with its cover, one commit (lib/remote shownPlaying).
   const np = $derived(shownPlaying());
+  // The tape deck in the row under the title while an effect runs (lib/TapeDeck; the owner, 2026-10-27): a Start and
+  // stop ramp or a rewind; kept DECK_HOLD_MS after the last of them ends (the owner, 2026-10-27: the fade only after the
+  // last event), a new one starting the count again; then the row back over a second's fade. Or always, where asked.
+  const DECK_HOLD_MS = 5000;
+  const effecting = $derived(ramping.dir !== null || (isLocal() ? rewindNow.on : !!np?.progress?.rewinding));
+  let deckShown = $state(false);
+  $effect(() => {
+    if (prefs.tapeDeck === 'off') return void (deckShown = false);
+    if (prefs.tapeDeck === 'always' || effecting) return void (deckShown = true);
+    if (!untrack(() => deckShown)) return;
+    const t = setTimeout(() => (deckShown = false), DECK_HOLD_MS);
+    return () => clearTimeout(t);
+  });
 
   // The artist as a chip (the owner, 2026-10-17): it opens their panel, the player closing (lib/albums goToArtist); a
   // "feat." credit goes to the main artist, as the track menu's Go to artist. A favourite artist's chip has a heart.
@@ -306,6 +321,11 @@
     };
   });
 
+  /** Holding Previous or Next winds the tape (decision 0074), where winding is on here; another of Cratarr's players
+   *  decides for itself. */
+  const winds = $derived(isLocal() ? (inApp ? appInfo.startStop : prefs.startStop).rewind : !!np?.player);
+  const windHold = (dir: 'back' | 'forward'): Hold => (winds ? { onhold: () => wind(dir, 'start'), onrelease: () => wind(dir, 'stop') } : null);
+
   /** What a swipe left or right on the cover was chosen to do: a track on or back, or a seek. */
   function side(what: SwipeSide) {
     if (what === 'next' || what === 'previous') return send(what);
@@ -509,8 +529,9 @@
           <!-- The row under the title (the owner, 2026-10-19): the info button (the cover's overview, as a circle on the
                cover) and the facts the user picked in Settings → Display, in short; with none picked, Add leads there.
                Hidden in Settings; none for the device's own music (local mode: nothing known of it). -->
+          <div class="under">
           {#if prefs.playerRow && np.source !== 'device'}
-            <div class="facts">
+            <div class="facts" class:decked={deckShown}>
               <button class="info" class:on={overview} aria-label="About this track" aria-pressed={overview} title="About this track" onclick={() => (overview = !overview)}
                 use:longpress={() => (detailsOpen = true)}><Icon name="info" size={18} /></button
               >
@@ -518,6 +539,8 @@
               {#if !prefs.playerFacts.length}<button class="fact add" onclick={toRowSettings}><Icon name="plus" size={14} /><span>Add</span></button>{/if}
             </div>
           {/if}
+          {#if deckShown}<div class="deck-row" class:over={prefs.playerRow && np.source !== 'device'} in:fade={{ duration: 150 }} out:fade={{ duration: 1000 }}><TapeDeck /></div>{/if}
+          </div>
           {#if np.progress}
             <div
               class="progress"
@@ -552,11 +575,11 @@
                   >{/if}</button
               >
             {/if}
-            <button aria-label="Previous track" onclick={() => send('previous')}><Icon name="previous" size={24} /></button>
+            <button aria-label="Previous track" onclick={() => send('previous')} use:holdWind={windHold('back')}><Icon name="previous" size={24} /></button>
             <!-- Its fill (the owner, 2026-10-26), inside a border of the same colour: winding down (Start and stop) it drains
                  from the top over the ramp; paused with Start and stop on it stays empty (a start winds up); winding up it
                  fills from the bottom over the ramp, the way it went. -->
-            <button class="main" aria-label={shownPaused() ? 'Play' : 'Pause'} aria-disabled={rampBusy()} onclick={playPause} use:longpress={() => (startStopOpen = true)}
+            <button class="main" aria-label={shownPaused() ? 'Play' : 'Pause'} aria-disabled={rampBusy() && inApp} onclick={playPause} use:longpress={() => (startStopOpen = true)}
               >{#key `${ramp}:${ramping.at}`}<span
                   class="fillbg"
                   class:drain={ramp === 'out'}
@@ -569,7 +592,7 @@
                 size={32}
               /></button
             >
-            <button aria-label="Next track" onclick={() => send('next')}><Icon name="next" size={24} /></button>
+            <button aria-label="Next track" onclick={() => send('next')} use:holdWind={windHold('forward')}><Icon name="next" size={24} /></button>
             <!-- Repeat is in the queue's sheet (a long press on Queue; the owner, 2026-10-26, 0.9.8): its place kept, so
                  play stays in the middle. -->
             {#if isLocal()}<span class="spot" aria-hidden="true"></span>{/if}
@@ -903,6 +926,34 @@
     gap: 6px;
     overflow-x: auto;
     scrollbar-width: none;
+    transition: opacity 1s;
+  }
+
+  /* The row and the tape deck in one place: the deck over the row while an effect runs, the row back as it fades. */
+  .under {
+    position: relative;
+    display: grid;
+    align-items: center;
+  }
+
+  /* Over the row it takes the row's place without its height (the owner, 2026-10-27: no layout shift): centred on it,
+     reaching into the room above and below. */
+  .deck-row.over {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    left: 0;
+    transform: translateY(-50%);
+  }
+
+  .under > * {
+    grid-area: 1 / 1;
+  }
+
+  /* Kept in its place, unseen (not `.away`: app.css hides the children of that, and the row would collapse). */
+  .facts.decked {
+    opacity: 0;
+    pointer-events: none;
   }
 
   .facts > :first-child {
@@ -1307,8 +1358,11 @@
     color: var(--art-accent);
   }
 
+  /* Capped, so centred in its wider box by its margins (pinned to the box's left, it sat off the icon; the owner's
+     tablet, 2026-10-27). */
   .act.device small {
     max-width: 88px;
+    margin-inline: auto;
     overflow: hidden;
     text-overflow: ellipsis;
   }

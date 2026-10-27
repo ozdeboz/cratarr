@@ -3,7 +3,7 @@
 import { untrack } from 'svelte';
 import { ApiError, coverUrl, albumCoverUrl, playerCommand, setFavorite, setTrackFavorite, transport, type NowPlaying, type Transport, type Upcoming } from './api';
 import { expect, expectFailed, live, refresh } from './live.svelte';
-import { local, jump as localJump, next as localNext, previous as localPrevious, rewindNow, togglePlay as localToggle, seek as localSeek, sought } from './localPlayer.svelte';
+import { local, jump as localJump, next as localNext, previous as localPrevious, rewindNow, togglePlay as localToggle, seek as localSeek, sought, windHold, windRelease } from './localPlayer.svelte';
 import { isLocal, localNowPlaying, localState, tookLocal } from './output.svelte';
 import { setFavorite as setRowFavorite } from './favourites.svelte';
 import { on } from './events.svelte';
@@ -202,16 +202,17 @@ export function position(): number {
   return p;
 }
 export const paused = (): boolean => playing()?.progress?.paused ?? false;
-/** A Start and stop ramp under way on this device's player: the play button is inert until it ends (the owner,
- *  2026-10-26). */
+/** A Start and stop ramp under way on this device's player. The page's own turns round at a press (0075's first step,
+ *  the owner 2026-10-27); the app's play button stays inert until its ramp ends, until the app turns too (0.9.13). */
 export const rampBusy = () => isLocal() && ramping.dir !== null;
+const rampInert = () => rampBusy() && inApp;
 /** Paused as the play button shows it: from the press on, the way the ramp goes. */
 export const shownPaused = (): boolean => (rampBusy() ? ramping.dir === 'out' : paused());
-/** The play button: play or pause, not while a ramp runs. */
+/** The play button: play or pause; during the page's own ramp, that ramp turned round. */
 export function playPause() {
-  if (rampBusy()) return;
+  if (rampInert()) return;
   const ss = inApp ? appInfo.startStop : prefs.startStop;
-  if (isLocal() && ss.mode !== 'off') {
+  if (isLocal() && ss.mode !== 'off' && !rampBusy()) {
     if (!paused()) rampPressed('out', ss.ms);
     else {
       const ms = windUpMs(ss.ms, ss.mode, position(), inApp ? 0.25 : undefined);
@@ -289,6 +290,17 @@ export async function send(command: Transport) {
   } catch (e) {
     expectFailed(e instanceof ApiError && !e.generic ? e.message : "The player didn't respond");
   }
+}
+
+/** Holding Previous (`back`) or Next (`forward`): winds the tape (decision 0074), here (or the app's or the driven
+ *  player, lib/localPlayer), or on one of Cratarr's players through the server, which does the rest. */
+export function wind(dir: 'back' | 'forward', phase: 'start' | 'stop') {
+  if (isLocal()) return void (phase === 'start' ? windHold(dir) : windRelease(dir));
+  const np = playing();
+  if (!np?.player || !playOn.players.some((p) => p.name === np.player)) return;
+  playerCommand(np.player, { command: 'wind', dir, phase }).catch((e) =>
+    expectFailed(e instanceof ApiError && !e.generic ? e.message : "The player didn't respond"),
+  );
 }
 
 /** Plays upcoming track `i` (the queue view's tap): within the local stream, or the server's player jumps. */
