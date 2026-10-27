@@ -900,6 +900,27 @@ let reported = { positionMs: 0, at: 0 };
  *  shown to the place last reported, over the reports' interval (the owner, 2026-10-27: no steps at a wind's speed),
  *  a report behind the sound, never past it (no guessing ahead through a brake). */
 let glide: { from: number; to: number; at: number; span: number } | null = null;
+/** A hold sent to the player driven (the app's, another's), from its press until its wind has landed (a moment after
+ *  the player says it no longer winds, or HELD_GRACE_MS after the release without one): a hold is no pause, so a pause
+ *  it reports meanwhile (its hand-overs) is not shown (the owner, 2026-10-27: the play button flashed). */
+let heldThere = false;
+let heldTimer: ReturnType<typeof setTimeout> | undefined;
+const HELD_GRACE_MS = 600;
+/** Let go: until the player says its wind has landed (a moment after), at most WIND_LAND_MS. */
+const WIND_LAND_MS = 6000;
+let heldLetGo = false;
+function holdThere(on: boolean) {
+  clearTimeout(heldTimer);
+  heldLetGo = !on;
+  if (on) heldThere = true;
+  else heldTimer = setTimeout(() => (heldThere = false), WIND_LAND_MS);
+}
+/** The player says it no longer winds: after a let-go hold, the hold is over a moment later. */
+function heldLanded() {
+  if (!heldThere || !heldLetGo) return;
+  clearTimeout(heldTimer);
+  heldTimer = setTimeout(() => (heldThere = false), HELD_GRACE_MS);
+}
 let glideFrame = 0;
 function gliding() {
   if (glideFrame) return;
@@ -953,7 +974,7 @@ export function reportedBy(m: {
     local.shuffled = looksShuffled(local.queue, typeof m.index === 'number' ? m.index : -1);
   }
   local.index = typeof m.index === 'number' ? m.index : -1;
-  local.paused = m.paused !== false;
+  local.paused = m.paused !== false && !heldThere;
   local.duration = typeof m.durationMs === 'number' && m.durationMs > 0 ? m.durationMs / 1000 : null;
   local.error = typeof m.error === 'string' ? m.error : null;
   // The app's own level (a5, 0.9.8): what it applies now; 0 when it levels nothing or says nothing.
@@ -971,8 +992,11 @@ export function reportedBy(m: {
   // The app's tape rewind (a5): its position going back as it reports it, shown as it goes (lib/remote).
   if (typeof m.rewinding === 'boolean') {
     if (m.rewinding) windAsked(false);
-    // Its wind ended: where it landed is a place of its own (lib/remote: no hold against the last place shown).
-    else if (rewindNow.on) sought.n++;
+    else {
+      heldLanded();
+      // Its wind ended: where it landed is a place of its own (lib/remote: no hold against the last place shown).
+      if (rewindNow.on) sought.n++;
+    }
     rewindNow.on = m.rewinding;
   }
   // Its direction knob, as it stands there.
@@ -2581,7 +2605,10 @@ function endRewind() {
 /** Holding Previous (`back`) or Next (`forward`) began: winds that way, after pausing as a pause does, until
  *  `windRelease` (the owner, 2026-10-27). The app's player and one of Cratarr's players do it themselves. */
 export async function windHold(dir: 'back' | 'forward') {
-  if (handed()) return hand('wind', { dir, phase: 'start' });
+  if (handed()) {
+    holdThere(true);
+    return hand('wind', { dir, phase: 'start' });
+  }
   if (!audio || local.index < 0 || holding) return;
   // A track that cannot be wound (Bandcamp's, the device's): what can be kept.
   if (!windable(local.queue[local.index])) return startPlainHold(dir === 'back' ? -1 : 1);
@@ -2603,7 +2630,8 @@ export async function windHold(dir: 'back' | 'forward') {
   if (h.dir > 0 && !audio.paused && committed === null && tapeDir.want === 'R') return fly(h, 0, takeArmed(1));
   // Fetched at the touch (pre-armed) or now, loading while the pause winds down (it rests where the hold began).
   const armed = takeArmed(h.dir, true) ?? armWind(h.dir);
-  if (!audio.paused) await quietly(() => pauseRamped());
+  // The tape's own stop: braked as the tape brakes, whatever Start and stop's effect (no fade, no cut: it is no pause).
+  if (!audio.paused) await turned(() => pauseRamped());
   if (holding !== h) return disarm(armed);
   if (h.released) {
     disarm(armed);
@@ -2786,7 +2814,10 @@ function windTakeover(press: 'pause' | 'play' | 'next' | 'previous') {
 
 /** Holding ended: a held wind brakes and plays on from where it got to. */
 export function windRelease(dir: 'back' | 'forward') {
-  if (handed()) return hand('wind', { dir, phase: 'stop' });
+  if (handed()) {
+    holdThere(false);
+    return hand('wind', { dir, phase: 'stop' });
+  }
   if (plainHold) return endPlainHold();
   const h = holding;
   if (!h) return;
