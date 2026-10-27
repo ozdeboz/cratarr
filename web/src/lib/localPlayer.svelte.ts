@@ -1592,6 +1592,9 @@ export function jump(index: number) {
 /** Next: the track wound on to its end, as Previous winds it back to its start (the owner, 2026-10-27: skip the
  *  mirror of rewind), then the next from its start; plainly where the device does not wind, or nothing can be. */
 export function next() {
+  // The app's player or one driven: its own Next (its wind-down, its fast-forward), never a jump to a track, which it
+  // takes plainly (a5, 2026-10-27: the tablet's Next had no wind-down).
+  if (handed()) return hand('next');
   if (rewinding) return windTakeover('next');
   if (!handed() && prefs.startStop.rewind && audio && !audio.paused && committed === null) {
     const end = lengthOf(local.index);
