@@ -211,7 +211,9 @@ export const paused = (): boolean => playing()?.progress?.paused ?? false;
 export const rampBusy = () => isLocal() && ramping.dir !== null;
 const rampInert = () => rampBusy() && inApp;
 /** Paused as the play button shows it: from the press on, the way the ramp goes. */
-export const shownPaused = (): boolean => (rampBusy() ? ramping.dir === 'out' : paused());
+// A Start and stop effect only (the owner, 2026-10-27): the tape's own stops (a turn of the knob, a hold's) never show on
+// the play button.
+export const shownPaused = (): boolean => (rampBusy() && ramping.effect ? ramping.dir === 'out' : paused());
 /** The play button: play or pause; during the page's own ramp, that ramp turned round. */
 export function playPause() {
   if (rampInert()) return;
