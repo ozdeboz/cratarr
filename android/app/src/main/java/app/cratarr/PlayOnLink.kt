@@ -393,9 +393,12 @@ class PlayOnLink(
                 }
                 // A queue given back after the app came back without one waits for a play.
                 release()
+                // A play from Cratarr (a move's carry-on, a queue taken up) starts at once: switching devices bypasses every
+                // play effect (the owner, 2026-10-27): no wind-up, no wind under way.
                 if (m.optBoolean("paused")) p.pause() else {
                     asked()
-                    service.startStop.play { p.play() }
+                    service.startStop.reset()
+                    p.play()
                 }
             }
             // Edits name entries (decision 0033); by place only when the entry is not found here.
@@ -436,13 +439,26 @@ class PlayOnLink(
                 service.startStop.pause { p.pause() }
             }
             "resume" -> play()
-            "toggle" -> if (p.playWhenReady && p.playbackState != Player.STATE_ENDED) service.startStop.pause { p.pause() } else play()
+            // `plain`: a page driving this player while it switches devices: at once, as a stop (the owner, 2026-10-27).
+            "toggle" -> {
+                val plain = m.optBoolean("plain")
+                if (p.playWhenReady && p.playbackState != Player.STATE_ENDED) {
+                    if (plain) {
+                        service.startStop.reset()
+                        p.pause()
+                    } else {
+                        service.startStop.pause { p.pause() }
+                    }
+                } else {
+                    play(plain = plain)
+                }
+            }
+            // A move's hold: stopped at once, no wind-down (switching devices bypasses every play effect, the owner).
             "stop" -> {
                 release()
-                service.startStop.pause {
-                    p.stop()
-                    p.clearMediaItems()
-                }
+                service.startStop.reset()
+                p.stop()
+                p.clearMediaItems()
             }
             "next" -> service.startStop.skip { p.seekToNextMediaItem() }
             "previous" -> {
@@ -554,12 +570,18 @@ class PlayOnLink(
     private fun placed(m: JSONObject, entry: String, place: String): Int =
         m.optString(entry, null)?.let { placeOf(player, it) }?.takeIf { it >= 0 } ?: m.optInt(place, -1)
 
-    private fun play(again: Boolean = false) {
+    /** Plays: wound up as the device's Start and stop says, or ([plain]) at once. */
+    private fun play(again: Boolean = false, plain: Boolean = false) {
         val p = player
         if (p.playbackState == Player.STATE_IDLE) p.prepare()
         if (p.playbackState == Player.STATE_ENDED) p.seekTo(p.currentMediaItemIndex, 0)
         asked(again)
-        service.startStop.play { p.play() }
+        if (plain) {
+            service.startStop.reset()
+            p.play()
+        } else {
+            service.startStop.play { p.play() }
+        }
     }
 
     // --- a start Android refuses ---
