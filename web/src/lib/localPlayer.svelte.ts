@@ -18,7 +18,7 @@ import { playback } from './deviceLog';
 import { cue } from './queueCue.svelte';
 import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
-import { albumCoverUrl, getTrackGain, playerCommand, radioNext, type TrackGain } from './api';
+import { albumCoverUrl, getTrackGain, playerCommand, radioNext, windMap, type TrackGain } from './api';
 import { prefs } from './prefs.svelte';
 import { ramping, rampBegins, rampEnds, rewindNow, tapeDir, windAsked } from './ramping.svelte';
 import { asksSignIn, toSignIn } from './reach.svelte';
@@ -2122,6 +2122,8 @@ type Winding = {
   brakeFrom: number;
   /** A held one's stream ran out: at the track's edge. */
   edge: boolean;
+  /** A cut one's plan (a5's map=1), where it has come: where in the track each moment of its sound is. */
+  map: [number, number, number][] | null;
   /** Its stream's speed at its start, and whether it gets faster (a hold's, WIND_ACCEL_S); flown: taken over from play
    *  at 1× and handed back moving. */
   v0: number;
@@ -2311,12 +2313,13 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
   const through = use ? use.through : to === null && wind.edges === 'queue' ? throughOf(seg.index, dir) : [];
   // A hold winds ever faster; the knob's backwards and a tap or a seek keep their speed.
   const accel = to === null && !reverse;
-  const clip = use?.clip ?? windClip(windUrl(t, use?.from ?? from, to, dir, D, through, wind, accel));
+  const url = use ? null : windUrl(t, from, to, dir, D, through, wind, accel);
+  const clip = use?.clip ?? windClip(url!);
   if (use) from = use.from;
   const v0 = use?.v0 ?? wind.speed;
   // Flown: it sounds at the track's own speed from its first moment.
   if (fly) clip.playbackRate = 1 / v0;
-  const w: Winding = { clip, seg, from, to, dir, D, wind, v0, accel, fly, reverse, after: 'play', at: null, brake: null, brakeFrom: 1, edge: false, through, shown: seg.index, timer: undefined };
+  const w: Winding = { clip, seg, from, to, dir, D, wind, map: null, v0, accel, fly, reverse, after: 'play', at: null, brake: null, brakeFrom: 1, edge: false, through, shown: seg.index, timer: undefined };
   const mine = () => rewinding === w;
   // Every step timed from the press, in the playback log (the owner, 2026-10-27: find any delay at the deepest level).
   const t0 = performance.now();
@@ -2324,6 +2327,13 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
     playback(lvl, `wind ${what}`, { t: Math.round(performance.now() - t0), clip: Math.round(clip.currentTime * 1000), ...fields });
   rewinding = w;
   windAsked(true);
+  // A cut one's plan beside its sound (decision 0075: a press during it lands where the sound is; a server before 0.9.13
+  // has none, and its counter's line stands in).
+  if (to !== null && url)
+    windMap(url).then(
+      (m) => mine() && Array.isArray(m?.map) && (w.map = m.map),
+      () => {},
+    );
   // The counter where it was pressed from the press on, never where the track waits (the owner, 2026-10-27: the
   // waveform jumped to 0 before winding down).
   rewindPos = from;
@@ -2575,8 +2585,8 @@ async function settle() {
     if (w.brake === null) {
       const now = performance.now();
       if (w.to !== null) {
-        // A cut one's plan dropped: from here a plain brake, its counter kept where it is.
-        const at = windPlace(w, now);
+        // A cut one's plan dropped: from here a plain brake, from where its sound is.
+        const at = soundPlace(w, now);
         w.to = null;
         w.accel = false;
         w.fly = false;
@@ -2623,11 +2633,25 @@ function takeArmed(dir: 1 | -1, stopping = false): Armed | null {
   disarm(p.armed);
   return null;
 }
-/** Where a wind under way has got, as the counter shows it: that is where a press during it lands. */
+/** Where a wind's sound is now, by its plan where it has one (a cut one: the counter glides over the cuts, the sound
+ *  does not), else as its counter shows it. */
+function soundPlace(w: Winding, now: number): { index: number; pos: number } {
+  const m = w.map;
+  if (!m?.length || w.to === null || w.at === null) return windPlace(w, now);
+  const t = w.clip.currentTime * 1000;
+  let k = 0;
+  while (k + 1 < m.length && m[k + 1][0] <= t) k++;
+  const [s0, , p0] = m[k];
+  const next = m[k + 1];
+  // Within a piece: on between its ends; at its end (a cut: the next entry starts the next piece), there.
+  const pos = next && next[0] > s0 ? p0 + ((next[2] - p0) * (t - s0)) / (next[0] - s0) : p0;
+  return { index: w.seg.index, pos: Math.max(0, pos / 1000) };
+}
+/** Where a wind under way has got: where its sound is, which is where a press during it lands. */
 function windNow(w: Winding): { index: number; pos: number } {
   if (w.at === null) return { index: w.seg.index, pos: w.from };
   if (w.edge) return { index: w.shown, pos: rewindPos ?? w.from };
-  return windPlace(w, performance.now());
+  return soundPlace(w, performance.now());
 }
 /** Rests paused at `secs` into queue track `index`. */
 function restAt(index: number, secs: number) {
