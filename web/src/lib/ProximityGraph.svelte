@@ -2,9 +2,9 @@
   // Playlists as points, drawn close when they are alike (Insights → Related). What is measured and which links are
   // drawn is in proximity.ts; d3-force only computes positions and Svelte draws the SVG. The points never move (the
   // owner, 2026-10-26: "just no node movement"): the layout is worked out to rest at once, and again when a signal
-  // changes, then fitted to the box; panning and pinch-zoom stay. With `showTerritories` (lib/territories) the six genres
-  // with most share among the playlists shown are drawn as areas under them, the points then neutral; `solo` shows one;
-  // a tap inside one highlights its playlists.
+  // changes, then fitted to the box; panning and pinch-zoom stay. `territories` (lib/territories): the genres drawn as
+  // areas under them, each in its colour (the Map's Genres sheet), the points then neutral; `solo` shows one; a tap
+  // inside one highlights its playlists.
   import { untrack } from 'svelte';
   import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY, type Simulation } from 'd3-force';
   import { select } from 'd3-selection';
@@ -12,7 +12,7 @@
   import type { Proximity, Signal } from './api';
   import { longpress } from './longpress';
   import { GROUP_NEIGHBOURS, GROUP_RESOLUTION, backbone, communities, nearest, rankers, spread, weigh } from './proximity';
-  import { sharesOf, territories, topGenres, type Territory } from './territories';
+  import { NAME_SIZE, sharesOf, territories, type Territory } from './territories';
 
   let {
     data,
@@ -20,9 +20,9 @@
     selected = $bindable(null),
     groups = $bindable([]),
     onmenu,
-    showTerritories = false,
+    territories: drawnGenres = [],
     solo = null,
-    genres = $bindable([]),
+
   }: {
     data: Proximity;
     signals: Record<Signal, boolean>;
@@ -32,11 +32,12 @@
     /** Long-press or right-click on a point: open that playlist's menu. */
     onmenu?: (i: number, anchor: DOMRect) => void;
     /** Genre territories drawn (the Map's switch). */
-    showTerritories?: boolean;
+    /** The genres drawn as territories, and their colours. */
+    territories?: { genre: string; colour: string }[];
     /** The one territory shown (the legend's tap); null: all. */
     solo?: string | null;
     /** The territories' genres and colours as drawn, for the legend. */
-    genres?: { genre: string; colour: string }[];
+
   } = $props();
 
   type Node = { i: number; r: number; x?: number; y?: number; vx?: number; vy?: number };
@@ -164,16 +165,28 @@
     return () => select(svg!).on('.zoom', null);
   });
 
-  /** Each layout, once worked out: zoomed so every point is in view. */
+  /** The box's size the view was last fitted to. */
+  let fitted = { w: 0, h: 0, lands: false };
+  /** Each layout, once worked out, and the box resized (full screen, a turned tablet, the page's height measured):
+   *  zoomed so every point is in view (the owner, 2026-10-27: it stayed fitted to the size it first had). */
   function fit() {
     if (!svg || !zoomer) return;
+    fitted = { w: width, h: height, lands: showTerritories };
     const xs = nodes.map((p) => p.x ?? 0);
     const ys = nodes.map((p) => p.y ?? 0);
     const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
-    const k = Math.min(width / (x1 - x0 + 60), height / (y1 - y0 + 60), 2.5);
+    // Room around the points; with the territories, for their areas too (a single point's reaches about 45 out).
+    const room = showTerritories ? 150 : 60;
+    const k = Math.min(width / (x1 - x0 + room), height / (y1 - y0 + room), 2.5);
     const t = zoomIdentity.scale(k).translate(-(x0 + x1) / 2, -(y0 + y1) / 2);
     select(svg).call(zoomer.transform, t);
   }
+
+  $effect(() => {
+    const [w, h, lands] = [width, height, showTerritories];
+    if (!frame || (Math.abs(w - fitted.w) < 2 && Math.abs(h - fitted.h) < 2 && lands === fitted.lands)) return;
+    untrack(fit);
+  });
 
   const neighbours = $derived.by(() => {
     const s = new Set<number>();
@@ -192,18 +205,27 @@
     return nodes.map((p) => [p.x ?? 0, p.y ?? 0] as const);
   });
 
-  // The territories (lib/territories): the six genres with most share among the playlists shown, in the groups'
-  // palette's order, on the layout as drawn.
+  // The territories (lib/territories): the genres given, on the layout as drawn.
   const shares = $derived(data.playlists.map((p) => sharesOf(p)));
-  const top = $derived(showTerritories ? topGenres(shares) : []);
-  const lands = $derived<Territory[]>(showTerritories ? territories(pos, shares, top) : []);
-  const tint = (k: number) => PALETTE[k % PALETTE.length];
-  $effect(() => {
-    genres = top.map((genre, k) => ({ genre, colour: tint(k) }));
-  });
+  const showTerritories = $derived(drawnGenres.length > 0);
+  const top = $derived(drawnGenres.map((g) => g.genre));
+  // The names along the borders keep clear of the points and of the playlists' names shown at rest (the owner,
+  // 2026-10-27), as drawn below: a name centred over its point, 11 high.
+  const nameBoxes = $derived([
+    ...nodes.map((p, i) => [pos[i][0] - p.r, pos[i][1] - p.r, pos[i][0] + p.r, pos[i][1] + p.r] as const),
+    ...[...hubs].map((i) => {
+      const [x, y] = pos[i];
+      const w = data.playlists[i].name.length * 11 * 0.6;
+      const base = y - nodes[i].r - 4;
+      return [x - w / 2, base - 11, x + w / 2, base + 2] as const;
+    }),
+  ]);
+  const lands = $derived<Territory[]>(showTerritories ? territories(pos, shares, top, nameBoxes) : []);
+  const tint = (k: number) => drawnGenres[k]?.colour ?? 'var(--muted)';
   /** A territory tapped: its playlists highlighted (the rest dim); again, or the background, none. */
   let land = $state<string | null>(null);
-  const landMembers = $derived(lands.find((l) => l.genre === land)?.members ?? null);
+  // A territory tapped, else the genre shown alone (the legend's tap; the owner, 2026-10-27: the others dimmed).
+  const landMembers = $derived(lands.find((l) => l.genre === (land ?? solo))?.members ?? null);
 
   const dim = (i: number) => (landMembers ? !landMembers.has(i) : selected !== null && i !== selected && !neighbours.has(i));
   const labelled = (i: number) =>
@@ -272,9 +294,26 @@
           {/if}
         </g>
       {/each}
+      <!-- Each territory's name along the inside of its outer borders, at half a playlist's name (the owner,
+           2026-10-27: tiny, alongside the border, not across). -->
       {#each lands as l, k (l.genre)}
         {#if !solo || solo === l.genre}
-          <text class="land-name" x={l.label.x} y={l.label.y} style:--tint={tint(k)} style:font-size={`${13 / Math.sqrt(view.k)}px`}>{l.genre}</text>
+          {#each l.edges as edge, e (e)}
+            {@const id = `land-edge-${k}-${e}`}
+            <path {id} d={edge.d} fill="none" stroke="none" />
+            <path id={`${id}-back`} d={edge.back} fill="none" stroke="none" />
+            {#each edge.names as name, m (m)}
+              <!-- Clockwise the inside is under the line; the other way round, above it. -->
+              <text
+                class="land-name"
+                class:flip={name.flip}
+                style:--tint={tint(k)}
+                style:font-size={`${NAME_SIZE / Math.sqrt(view.k)}px`}
+                dy={`${(name.flip ? -1.5 : 1.5) / Math.sqrt(view.k)}px`}
+                ><textPath href={name.flip ? `#${id}-back` : `#${id}`} startOffset={`${(name.flip ? 1 - name.at : name.at) * 100}%`}>{l.genre}</textPath></text
+              >
+            {/each}
+          {/each}
         {/if}
       {/each}
     </g>
@@ -314,16 +353,19 @@
     fill-opacity: 0.3;
   }
 
+  /* Along the border, on its inside: the border goes clockwise, so below the line is inside. */
   .land-name {
     fill: var(--tint);
-    font-weight: 700;
-    text-anchor: middle;
-    dominant-baseline: middle;
-    paint-order: stroke;
-    stroke: var(--surface);
-    stroke-width: 3px;
-    stroke-linejoin: round;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    dominant-baseline: hanging;
     pointer-events: none;
+  }
+
+  /* Along the border the other way round: ending where the clockwise one would start, above the line. */
+  .land-name.flip {
+    dominant-baseline: auto;
+    text-anchor: end;
   }
 
   .link {

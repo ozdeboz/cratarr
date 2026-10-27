@@ -1,11 +1,16 @@
 <script lang="ts">
   // Insights' Map (decision 0023; in the panel since 0.8, lib/InsightsPanel): the playlists as a graph, the closest
   // joined. A point selected shows its closest; View opens it over the map (back returns here); a long press its menu.
-  // As tall as its page leaves it, nothing below it and nothing to scroll (the owner, 2026-10-26). Genres (a switch in
-  // its corner, off until turned on) draws the genre territories (lib/territories), their legend beside it: a tap on a
-  // genre shows only its territory, again all.
+  // As tall as its page leaves it, nothing below it and nothing to scroll (the owner, 2026-10-26). Genres, in its bottom left
+  // corner, opens its sheet (the owner, 2026-10-27: not on the map all the time): the territories on or off
+  // (lib/territories), which genres they show (ticked, up to MAX_GENRES, each its colour), and one shown alone. Full
+  // screen (its panel's bar) lays it over everything; its corner, Esc or the browser's own leaving ends it.
   import { type Signal } from './api';
-  import { insights, plural } from './insights.svelte';
+  import { insights, mapFull, plural } from './insights.svelte';
+  import { GENRE_PALETTE, genreRanking, MAX_GENRES, sharesOf, TERRITORIES } from './territories';
+  import ChoiceSheet from './settings/ChoiceSheet.svelte';
+  import Group from './settings/Group.svelte';
+  import Item from './settings/Item.svelte';
   import { live } from './live.svelte';
   import Icon from './Icon.svelte';
   import MenuSheet from './MenuSheet.svelte';
@@ -51,12 +56,47 @@
   ];
   const anyOn = $derived(SIGNALS.some((s) => prefs.signals[s.id]));
 
-  // The territories' legend, as the graph drew them; the one shown alone.
-  let territoryGenres = $state<{ genre: string; colour: string }[]>([]);
+  // The territories: every genre there is one of (most share first), those ticked (at first the most shared six), each
+  // in its colour by its place among them; and the one shown alone.
+  const ranking = $derived(shown ? genreRanking(shown.playlists.map((p) => sharesOf(p))) : []);
+  const ticked = $derived(prefs.mapGenres ?? ranking.slice(0, TERRITORIES).map((g) => g.genre));
+  const colourOf = (genre: string) => GENRE_PALETTE[ticked.indexOf(genre) % GENRE_PALETTE.length];
+  const drawn = $derived(
+    prefs.mapTerritories ? ticked.filter((g) => ranking.some((r) => r.genre === g)).map((genre) => ({ genre, colour: colourOf(genre) })) : [],
+  );
+  function tick(genre: string, on: boolean) {
+    const now = ticked.filter((g) => g !== genre);
+    prefs.mapGenres = on ? [...now, genre].slice(0, MAX_GENRES) : now;
+    if (!on && solo === genre) solo = null;
+  }
   let solo = $state<string | null>(null);
   $effect(() => {
     if (!prefs.mapTerritories) solo = null;
   });
+  let genresOpen = $state(false);
+  let choosingSolo = $state(false);
+
+  // Full screen: over everything here, and the browser's own where it has one (as the player's, lib/NowPlaying).
+  const canFullscreen = typeof document !== 'undefined' && !!document.fullscreenEnabled && typeof document.documentElement.requestFullscreen === 'function';
+  $effect(() => {
+    if (!mapFull.on) return;
+    if (canFullscreen && !document.fullscreenElement) document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+    let entered = false;
+    const changed = () => {
+      if (document.fullscreenElement) entered = true;
+      else if (entered) mapFull.on = false;
+    };
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && (mapFull.on = false);
+    document.addEventListener('fullscreenchange', changed);
+    addEventListener('keydown', esc);
+    return () => {
+      document.removeEventListener('fullscreenchange', changed);
+      removeEventListener('keydown', esc);
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    };
+  });
+  // Left with the Map (another view, the panel closed): no longer over everything.
+  $effect(() => () => (mapFull.on = false));
 
   // The page's height left for the map: from its top to its scroller's foot, then less by whatever would still scroll.
   let mapH = $state<number | null>(null);
@@ -105,7 +145,7 @@
   {:else if !anyOn}
     <p class="empty">Turn on at least one of shared tracks, genre or artists.</p>
   {:else}
-    <div class="stage" {@attach fill} style:--map-h={mapH ? `${mapH}px` : null}>
+    <div class="stage" class:full={mapFull.on} {@attach fill} style:--map-h={mapFull.on ? '100dvh' : mapH ? `${mapH}px` : null}>
       <div class="box">
         {#key insights.removed.join('/')}
           <ProximityGraph
@@ -113,8 +153,7 @@
             signals={prefs.signals}
             bind:selected
             bind:groups
-            bind:genres={territoryGenres}
-            showTerritories={prefs.mapTerritories}
+            territories={drawn}
             {solo}
             onmenu={(i, anchor) => (menu = { name: shown.playlists[i].name, anchor })}
           />
@@ -124,19 +163,13 @@
         {/if}
         <!-- The legend explains the graph: always at hand, in the graph's corner. -->
         <button class="corner legend-btn" onclick={() => (legendOpen = true)}><Icon name="info" size={18} /><span>Legend</span></button>
-        <!-- Genres: the territories on or off; on, their genres, a tap showing one alone. -->
-        <div class="lands">
-          <button class="corner-left" class:on={prefs.mapTerritories} aria-pressed={prefs.mapTerritories} onclick={() => (prefs.mapTerritories = !prefs.mapTerritories)}
-            ><Icon name="globe" size={18} /><span>Genres</span></button
-          >
-          {#if prefs.mapTerritories}
-            {#each territoryGenres as g (g.genre)}
-              <button class="chip" class:off={solo !== null && solo !== g.genre} aria-pressed={solo === g.genre} onclick={() => (solo = solo === g.genre ? null : g.genre)}
-                ><i style:background={g.colour}></i>{g.genre}</button
-              >
-            {/each}
-          {/if}
-        </div>
+        <!-- Genres, bottom left: its sheet (lit while the territories show). -->
+        <button class="corner genres-btn" class:on={prefs.mapTerritories} onclick={() => (genresOpen = true)}
+          ><Icon name="globe" size={18} /><span>{solo ?? 'Genres'}</span></button
+        >
+        {#if mapFull.on}
+          <button class="corner exit-full" aria-label="Leave full screen" title="Leave full screen" onclick={() => (mapFull.on = false)}><Icon name="exitFullscreen" size={18} /></button>
+        {/if}
       </div>
     </div>
   {/if}
@@ -147,6 +180,40 @@
     playlists={[menuPlaylist(menu.name)]}
     onclose={() => (menu = null)}
     ondeleted={() => (selected = null)}
+  />
+{/if}
+
+{#if genresOpen}
+  <MenuSheet label="Genres" title="Genres" onclose={() => (genresOpen = false)}>
+    <div class="rows">
+      <Group>
+        <Item name="Show on the map" toggle={{ checked: prefs.mapTerritories, onchange: (on) => (prefs.mapTerritories = on) }} />
+        {#if prefs.mapTerritories}
+          <Item name="Shown" value={solo ?? 'All ticked'} onclick={() => (choosingSolo = true)} />
+        {/if}
+      </Group>
+      <Group title="Genres" more={`Up to ${MAX_GENRES}, each in its own colour; its name runs along its borders. A playlist counts toward a genre from a tenth of its music.`}>
+        {#each ranking as g (g.genre)}
+          {@const on = ticked.includes(g.genre)}
+          <Item
+            name={g.genre}
+            line={plural(g.playlists, 'playlist')}
+            swatch={on ? colourOf(g.genre) : null}
+            disabled={!on && ticked.length >= MAX_GENRES}
+            toggle={{ checked: on, onchange: (v) => tick(g.genre, v) }}
+          />
+        {/each}
+      </Group>
+    </div>
+  </MenuSheet>
+{/if}
+{#if choosingSolo}
+  <ChoiceSheet
+    title="Shown"
+    options={[{ value: '', label: 'All ticked' }, ...drawn.map((g) => ({ value: g.genre, label: g.genre }))]}
+    value={solo ?? ''}
+    onchange={(v) => (solo = v || null)}
+    onclose={() => (choosingSolo = false)}
   />
 {/if}
 
@@ -221,61 +288,45 @@
     bottom: 10px;
   }
 
-  /* Genres, top left, and on, its genres under it. */
-  .lands {
-    position: absolute;
-    top: 10px;
+  /* Genres, bottom left; lit while the territories show. */
+  .corner.genres-btn {
+    top: auto;
+    right: auto;
+    bottom: 10px;
     left: 10px;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 6px;
     max-width: 45%;
   }
 
-  .corner-left {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 40px;
-    padding: 0 12px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    font-weight: 600;
-  }
-
-  .corner-left.on {
+  .corner.genres-btn.on {
     border-color: var(--accent);
   }
 
-  .chip {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 30px;
-    max-width: 100%;
+  .corner.exit-full {
+    right: auto;
+    left: 10px;
     padding: 0 10px;
+  }
+
+  /* Full screen: over everything, the whole window. */
+  .stage.full {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
     background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    font-size: 0.85rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
-  .chip i {
-    flex: none;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
+  .stage.full .box {
+    width: 100%;
   }
 
-  .chip.off {
-    opacity: 0.45;
+  .stage.full :global(.wrap) {
+    border: 0;
+    border-radius: 0;
   }
 
+  .rows {
+    padding: 0 16px 16px;
+  }
 
   .corner span {
     overflow: hidden;

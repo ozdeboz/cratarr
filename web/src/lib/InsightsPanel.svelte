@@ -14,7 +14,7 @@
   import { insightsFilter, insightsView } from './insightsControls.svelte';
   import TopPill from './TopPill.svelte';
   import { INSIGHTS_VIEWS, showView, type InsightsView } from './insightsViews';
-  import { insights } from './insights.svelte';
+  import { insights, mapFull } from './insights.svelte';
   import PageLoading from './PageLoading.svelte';
   import { closePlaylist, INSIGHTS, upToPage, viewPlaylist } from './panel.svelte';
   import Crumbs from './Crumbs.svelte';
@@ -37,7 +37,7 @@
   // its own bar not drawn, its view under the glass.
   const handed = $derived(glass.one && !beside);
   const pill = () =>
-    filters.length || views.length || !beside
+    filters.length || views.length || !beside || view === 'map'
       ? {
           device: false,
           filter: filters.length > 0,
@@ -46,6 +46,8 @@
           onfilter: () => (sheet = 'filter'),
           onview: () => (sheet = 'view'),
           search: beside ? null : 'insights',
+          // The Map alone has a full screen (the owner, 2026-10-27).
+          action: view === 'map' ? { icon: 'fullscreen' as const, label: 'Full screen', run: () => (mapFull.on = true) } : null,
         }
       : null;
   handGlass(() => handed, { left: glassLeft, pill });
