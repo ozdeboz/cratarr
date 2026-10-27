@@ -428,6 +428,8 @@
   let levelOpen = $state(false);
   /** A long press on the info button: the facts beside it (lib/DetailsSheet; the owner, 2026-10-26). */
   let detailsOpen = $state(false);
+  /** The Level button's long press: the waveform's three ways in turn, as its sheet lists them (the owner, 2026-10-28). */
+  const WAVE_CYCLE = ['file', 'difference', 'output'] as const;
 </script>
 
 <div class="player" class:in-sidebar={place === 'side'} style:--art-accent={art.accent ?? 'var(--accent)'}>
@@ -574,7 +576,7 @@
                 title="Level the volume"
                 aria-haspopup="dialog"
                 onclick={() => (levelOpen = true)}
-                use:longpress={() => (prefs.waveLevel = prefs.waveLevel === 'file' ? prefs.waveLevelLast : 'file')}
+                use:longpress={() => (prefs.waveLevel = WAVE_CYCLE[(WAVE_CYCLE.indexOf(prefs.waveLevel) + 1) % WAVE_CYCLE.length])}
                 ><Icon name="audioLines" size={22} />{#if playingLevelOn()}<span class="fill" style:--down={levelShare(local.levelDb)} aria-hidden="true"
                     ><Icon name="audioLines" size={22} /></span
                   >{/if}</button

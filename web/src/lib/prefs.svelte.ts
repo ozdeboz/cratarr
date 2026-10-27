@@ -195,10 +195,8 @@ export type Prefs = {
   levelUnknown: 'typical' | 'untouched';
   /** The player's waveform and the levelling (the owner, 2026-10-27, Level the volume › Waveform): as on file (none of
    *  it), the difference (the track as made, the playing colour only as high as heard), or the output (the track as
-   *  heard, lowered whole). `waveLevelLast`: the last of the two that show it (the Level button's long press switches
-   *  between it and On file). This page's showing only. */
+   *  heard, lowered whole); the Level button's long press goes through the three in turn. This page's showing only. */
   waveLevel: 'file' | 'difference' | 'output';
-  waveLevelLast: 'difference' | 'output';
   /** The full player's row under the title as a tape deck (lib/TapeDeck; the owner, 2026-10-27): never, during an
    *  effect (a Start and stop ramp, a rewind), or always. This page's showing only. */
   tapeDeck: 'off' | 'effects' | 'always';
@@ -449,7 +447,6 @@ export const DEFAULTS: Prefs = {
   levelling: true,
   levelUnknown: 'typical',
   waveLevel: 'difference',
-  waveLevelLast: 'difference',
   tapeDeck: 'effects',
   offlineQuality: 'smaller',
   startStop: startStopOf({}),
@@ -572,7 +569,6 @@ function read(): Prefs {
       if (saved.levelUnknown === 'typical' || saved.levelUnknown === 'untouched') p.levelUnknown = saved.levelUnknown;
       if (saved.waveLevel === 'file' || saved.waveLevel === 'difference' || saved.waveLevel === 'output') p.waveLevel = saved.waveLevel;
       else if ((saved as { levelInWave?: unknown }).levelInWave === false) p.waveLevel = 'file';
-      if (saved.waveLevelLast === 'difference' || saved.waveLevelLast === 'output') p.waveLevelLast = saved.waveLevelLast;
       if (saved.tapeDeck === 'off' || saved.tapeDeck === 'effects' || saved.tapeDeck === 'always') p.tapeDeck = saved.tapeDeck;
       // Its first form, a switch: on was during effects.
       else if (typeof saved.tapeDeck === 'boolean') p.tapeDeck = saved.tapeDeck ? 'effects' : 'off';

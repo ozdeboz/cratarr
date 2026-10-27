@@ -30,7 +30,6 @@
   let waveOpen = $state(false);
   function chooseWave(v: 'file' | 'difference' | 'output') {
     prefs.waveLevel = v;
-    if (v !== 'file') prefs.waveLevelLast = v;
     waveOpen = false;
   }
 </script>
