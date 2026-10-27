@@ -12,7 +12,7 @@ import { describing } from './described.svelte';
 import { getPlayers } from './api';
 import { me } from './me.svelte';
 import { inApp } from './app.svelte';
-import { canPlayHere, local, pageVolume, playOnCommand, stop } from './localPlayer.svelte';
+import { canPlayHere, local, pageVolume, playOnCommand, rewindNow, stop } from './localPlayer.svelte';
 import { followGroup, leaveGroup, listening } from './groupListen.svelte';
 import { playOn, drivenName, hereAgain } from './playOn.svelte';
 import { prefs } from './prefs.svelte';
@@ -195,6 +195,8 @@ async function report(withQueue = false) {
     position_ms: idle ? 0 : Math.round(local.position * 1000),
     duration_ms: !idle && local.duration ? Math.round(local.duration * 1000) : null,
     playing: listening.leader !== null ? listening.playing : !idle && local.index >= 0 && !local.paused,
+    // Winding (decision 0074): its position goes back and forth, and none of it is listening (the server counts none).
+    rewinding: rewindNow.on,
     volume: pageVolume.level,
     ducked: pageVolume.ducked,
     link: {
