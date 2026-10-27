@@ -45,7 +45,7 @@
     <section class="group" aria-label="Requests">
       <div class="list">
         {#each lists as l (l.id)}
-          {@const open = panelBeside() && requestsOf(panel.shown) === l.id}
+          {@const open = panelBeside() && requestsOf(panel.viewed) === l.id}
           {@const said = line(l.id)}
           <button class="row" class:open aria-pressed={open} onclick={() => viewPlaylist(REQUESTS + l.id)}>
             <Icon name={l.icon} size={24} />

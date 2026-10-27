@@ -243,7 +243,7 @@
               title={a.name}
               sub={`${plural(a.albums, 'album')} · ${plural(a.tracks, 'track')}`}
               label={selecting ? `${on ? 'Untick' : 'Tick'} ${a.name}` : `View ${a.name}`}
-              active={(panelBeside() && panel.shown === artistSubject(a.source, a.name)) || on}
+              active={(panelBeside() && panel.viewed === artistSubject(a.source, a.name)) || on}
               onclick={() => (selecting ? tick(a) : view(a))}
               attach={press(a)}
             >
@@ -276,7 +276,7 @@
             sub={table && cols.length ? undefined : `${plural(a.albums, 'album')} · ${plural(a.tracks, 'track')}`}
             cells={cols.length ? cellsOf(a) : undefined}
             label={selecting ? `${selecting.has(keyOf(a)) ? 'Untick' : 'Tick'} ${a.name}` : `View ${a.name}`}
-            active={(panelBeside() && panel.shown === artistSubject(a.source, a.name)) || !!selecting?.has(keyOf(a))}
+            active={(panelBeside() && panel.viewed === artistSubject(a.source, a.name)) || !!selecting?.has(keyOf(a))}
             onclick={() => (selecting ? tick(a) : view(a))}
             attach={press(a)}
           >
