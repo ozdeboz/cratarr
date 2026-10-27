@@ -2953,8 +2953,10 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
             if !send(crate::rewind::wav_header(rate, channels, data)) {
                 return Ok(());
             }
+            // One shaper for the whole stream: a rising hold sounds alike across the queue's joins.
+            let mut shaper = crate::wind::Shaper::new(channels);
             for (w, s) in winds.iter().zip(sounds.iter_mut()) {
-                if !w.sound(s, &mut send)? {
+                if !w.sound(s, &mut shaper, &mut send)? {
                     break;
                 }
             }

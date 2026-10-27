@@ -188,7 +188,10 @@ class PlayerService : MediaSessionService() {
             // Where seeking winds the tape (decision 0074), wound there.
             override fun seekTo(positionMs: Long) = startStop.seekTo(positionMs) { super.seekTo(positionMs) }
 
-            override fun seekTo(mediaItemIndex: Int, positionMs: Long) = startStop.seek { super.seekTo(mediaItemIndex, positionMs) }
+            // Within the playing track (as a controller may send a seek), winding as the other; another track jumps.
+            override fun seekTo(mediaItemIndex: Int, positionMs: Long) =
+                if (mediaItemIndex == player.currentMediaItemIndex) startStop.seekTo(positionMs) { super.seekTo(mediaItemIndex, positionMs) }
+                else startStop.seek { super.seekTo(mediaItemIndex, positionMs) }
 
             override fun seekToNext() = startStop.skip { super.seekToNext() }
 

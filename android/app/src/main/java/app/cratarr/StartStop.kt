@@ -587,6 +587,8 @@ class StartStop(
      */
     fun seekTo(target: Long, go: () -> Unit) {
         val from = player.currentPosition
+        // Each seek's way, to follow a device's report (the owner: "seek to wind does not yet work").
+        note("seek", "to_ms" to target, "from_ms" to from, "winds" to prefs.windSeeks, "busy" to busy, "playing" to player.isPlaying)
         if (prefs.windSeeks && !busy && player.isPlaying && !grouped() && kotlin.math.abs(target - from) > SEEK_WIND_LEAST_MS) {
             val url = windUrl(from, target, tapMs(target - from), target < from, null, prefs.windSpeed, prefs.windGainDb, false)
             if (url != null) {

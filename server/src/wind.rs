@@ -288,11 +288,11 @@ impl Wind {
         if !send(crate::rewind::wav_header(self.out_rate, self.channels, self.data())) {
             return Ok(());
         }
-        self.sound(sound, send).map(|_| ())
+        self.sound(sound, &mut Shaper::new(self.channels), send).map(|_| ())
     }
 
     /// Its sound without the header (a track joining a stream); whether the player is still reading.
-    pub fn sound(&self, sound: &mut dyn Sound, mut send: impl FnMut(Vec<u8>) -> bool) -> Result<bool> {
+    pub fn sound(&self, sound: &mut dyn Sound, shaper: &mut Shaper, mut send: impl FnMut(Vec<u8>) -> bool) -> Result<bool> {
         let fade = ((FADE * f64::from(self.out_rate)) as usize).max(1);
         let span = SPAN * f64::from(self.rate);
         let mut dither = crate::convert::Tpdf::new();
@@ -324,12 +324,18 @@ impl Wind {
                 // What no later piece adds to is ready.
                 let ready = self.pieces.get(j + 1).map_or(i, |next| i.min(next.from));
                 if ready > sent {
+                    // A rising hold keeps its sound as it speeds up (`Shaper`).
+                    let mut chunk: Vec<Vec<f64>> = pending.iter().map(|c| c[..ready - sent].iter().map(|v| f64::from(*v)).collect()).collect();
+                    if self.accel.is_some() {
+                        let speed = self.step((sent + ready) / 2) * f64::from(self.out_rate) / f64::from(self.rate);
+                        shaper.shape(&mut chunk, speed, f64::from(self.out_rate));
+                    }
                     let mut bytes = Vec::with_capacity((ready - sent) * self.channels * 2);
                     for f in sent..ready {
                         let edge = f.min(self.frames - 1 - f);
                         let g = if edge < fade { (1.0 - (PI * (edge as f64 + 0.5) / fade as f64).cos()) / 2.0 } else { 1.0 };
-                        for c in &pending {
-                            let v = f64::from(c[f - sent]) * g * 32767.0 + dither.next();
+                        for c in &chunk {
+                            let v = c[f - sent] * g * 32767.0 + dither.next();
                             bytes.extend_from_slice(&(v.round().clamp(-32768.0, 32767.0) as i16).to_le_bytes());
                         }
                     }
@@ -344,6 +350,75 @@ impl Wind {
             }
         }
         Ok(true)
+    }
+}
+
+/// A rising hold's sound kept as it speeds up (0.9.12, the owner: "I don't want the sound effect to be drastically
+/// different"): faster, a wind's music rises in pitch, brighter and harsher, and its loudness drifts. Above 8× a
+/// low-pass whose corner falls as the speed rises (20 kHz × 8 / speed, never below 2.5 kHz) keeps it the same whoosh;
+/// a leveller holds it as loud as its first half second (±6 dB at most, eased over each block, so it never pumps).
+/// One for the whole stream, on through the queue's joins.
+pub struct Shaper {
+    /// Each channel's filter memory (x₁, x₂, y₁, y₂).
+    memory: Vec<[f64; 4]>,
+    /// The first half second's loudness (its mean square while it is heard), once known.
+    reference: Option<f64>,
+    heard: (f64, usize),
+    gain: f64,
+}
+
+/// How long the loudness it keeps is heard for (stream seconds), and how far it may move it.
+const SHAPER_REFERENCE_S: f64 = 0.5;
+const SHAPER_MOST: f64 = 2.0;
+
+impl Shaper {
+    pub fn new(channels: usize) -> Self {
+        Self { memory: vec![[0.0; 4]; channels], reference: None, heard: (0.0, 0), gain: 1.0 }
+    }
+
+    /// Shapes one chunk (planar) heard at `speed` ×, the stream at `rate`.
+    fn shape(&mut self, chunk: &mut [Vec<f64>], speed: f64, rate: f64) {
+        let n = chunk.first().map_or(0, Vec::len);
+        if n == 0 {
+            return;
+        }
+        // The low-pass (RBJ's, Q 0.707), its corner for this chunk's speed.
+        if speed > 8.0 {
+            let fc = (20_000.0 * 8.0 / speed).max(2_500.0).min(0.45 * rate);
+            let w = 2.0 * PI * fc / rate;
+            let (cw, alpha) = (w.cos(), w.sin() / (2.0 * std::f64::consts::FRAC_1_SQRT_2));
+            let a0 = 1.0 + alpha;
+            let (b0, b1, a1, a2) = ((1.0 - cw) / 2.0 / a0, (1.0 - cw) / a0, -2.0 * cw / a0, (1.0 - alpha) / a0);
+            for (c, m) in chunk.iter_mut().zip(self.memory.iter_mut()) {
+                for x in c.iter_mut() {
+                    let y = b0 * *x + b1 * m[0] + b0 * m[1] - a1 * m[2] - a2 * m[3];
+                    (m[1], m[0], m[3], m[2]) = (m[0], *x, m[2], y);
+                    *x = y;
+                }
+            }
+        }
+        // The leveller: as loud as the first half second.
+        let square = chunk.iter().flat_map(|c| c.iter()).map(|x| x * x).sum::<f64>() / (n * chunk.len()) as f64;
+        let reference = match self.reference {
+            Some(r) => r,
+            None => {
+                self.heard = (self.heard.0 + square * n as f64, self.heard.1 + n);
+                if (self.heard.1 as f64) < SHAPER_REFERENCE_S * rate {
+                    return;
+                }
+                let r = self.heard.0 / self.heard.1 as f64;
+                self.reference = Some(r);
+                r
+            }
+        };
+        let want = if square > 1e-10 && reference > 1e-10 { (reference / square).sqrt().clamp(1.0 / SHAPER_MOST, SHAPER_MOST) } else { self.gain };
+        let (from, to) = (self.gain, self.gain + (want - self.gain) * 0.5);
+        for c in chunk.iter_mut() {
+            for (i, x) in c.iter_mut().enumerate() {
+                *x *= from + (to - from) * (i as f64 + 0.5) / n as f64;
+            }
+        }
+        self.gain = to;
     }
 }
 
@@ -455,7 +530,7 @@ mod tests {
         let mut wav = Vec::new();
         let (a, b) = (&winds[0], &winds[1]);
         assert!(a.render(&mut Tone { hz: 440.0, secs: 60.0 }, |x| { wav.extend_from_slice(&x); true }).is_ok());
-        assert!(b.sound(&mut Tone { hz: 440.0, secs: 30.0 }, |x| { wav.extend_from_slice(&x); true }).unwrap());
+        assert!(b.sound(&mut Tone { hz: 440.0, secs: 30.0 }, &mut Shaper::new(2), |x| { wav.extend_from_slice(&x); true }).unwrap());
         assert_eq!(wav.len() as u64, a.bytes() + b.data());
         // Forward: each from its start.
         let winds = chain(&[(44_100, 2, Some(60_000)), (44_100, 2, Some(20_000))], ask(Dir::Forward, 50_000, 4.0)).unwrap();
@@ -484,6 +559,34 @@ mod tests {
         let winds = chain(&[(44_100, 2, Some(600_000)), (44_100, 2, Some(300_000))], Ask { accel: Some(a), ..ask(Dir::Back, 10_000, 8.0) }).unwrap();
         let t1 = winds[0].ms() / 1000.0;
         assert!((winds[1].ms() / 1000.0 - (a.when(8.0, 310.0) - t1)).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_rising_hold_keeps_its_loudness_and_tames_its_treble() {
+        // A steady tone sped up: its loudness held near the first half second's, never more than the leveller allows.
+        let mut s = Shaper::new(1);
+        let quiet: Vec<f64> = (0..44_100).map(|i| 0.1 * (2.0 * PI * 100.0 * f64::from(i) / 44_100.0).sin()).collect();
+        let mut first = vec![quiet.clone()];
+        s.shape(&mut first, 4.0, 44_100.0);
+        let loud: Vec<f64> = quiet.iter().map(|x| x * 4.0).collect();
+        let rms = |x: &[f64]| (x.iter().map(|v| v * v).sum::<f64>() / x.len() as f64).sqrt();
+        let mut after = rms(&quiet) * 4.0;
+        for _ in 0..8 {
+            let mut c = vec![loud[..11_025].to_vec()];
+            s.shape(&mut c, 4.0, 44_100.0);
+            after = rms(&c[0]);
+        }
+        assert!((after / rms(&quiet) - 2.0).abs() < 0.1, "held down by its most: {}", after / rms(&quiet));
+        // At 64 × the treble goes: a 10 kHz tone well down, a 500 Hz one kept.
+        let tone = |hz: f64| -> Vec<f64> { (0..44_100).map(|i| 0.5 * (2.0 * PI * hz * f64::from(i) / 44_100.0).sin()).collect() };
+        let through = |hz: f64| {
+            let mut s = Shaper::new(1);
+            let mut c = vec![tone(hz)];
+            s.shape(&mut c, 64.0, 44_100.0);
+            rms(&c[0][22_050..]) / rms(&tone(hz)[22_050..])
+        };
+        assert!(through(10_000.0) < 0.15, "{}", through(10_000.0));
+        assert!(through(500.0) > 0.9, "{}", through(500.0));
     }
 
     #[test]
