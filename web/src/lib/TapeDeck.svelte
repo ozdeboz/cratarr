@@ -1,29 +1,51 @@
 <script lang="ts">
   // The tape deck in the player's row under the title, while an effect runs (lib/NowPlaying; the owner, 2026-10-27):
   // its reels and wheels turn at the playing speed (a Vinyl ramp's speed, a rewind's backwards), its packs follow the
-  // place in the track (lib/tapeDeck), and its head lights on each bar's first beat (lib/visuals/downbeat). Drawn a
-  // frame at a time, straight onto its elements.
+  // place in the track (lib/tapeDeck), and its head lights on each bar's first beat (lib/visuals/downbeat).
+  // What turns turns on the compositor (the tablet's Brave, 2026-10-27: SVG drawn anew each frame ran at ~31 fps with
+  // hitches of 50–80 ms, the reels visibly stuttering through a ramp): each turning part is its own small layer over the
+  // still drawing, an endless turn whose rate alone is changed, and only when the speed has moved; the packs and the
+  // tape four times a second; the head's light an opacity.
   import { appInfo, inApp } from './app.svelte';
   import { rewindNow } from './localPlayer.svelte';
   import { isLocal } from './output.svelte';
   import { prefs } from './prefs.svelte';
   import { ramping } from './ramping.svelte';
   import { duration, playing, position, shownPaused } from './remote.svelte';
-  import { hill, HUB, MAXR, packs, REEL_L, REEL_R, tapePath, WHEELS } from './tapeDeck';
+  import { hill, HEAD, HUB, MAXR, packs, REEL_L, REEL_R, tapePath, WHEELS } from './tapeDeck';
   import { downbeatAt } from './visuals/downbeat';
 
   /** Radians a second a wheel of radius 1 turns at 1× (as the mock looked right). */
   const TURN = 2.4 * Math.PI * 12;
   /** The fastest the picture turns, whatever the tape does (past it the spokes would strobe). */
   const MOST = 16;
+  /** The drawing's own size (its viewBox): drawn at this size, scaled down only where the row is narrower. */
+  const W = 320;
+  const H = 43;
+  /** A turn's length at rate 1 (ms): a part's rate is then its turns a second. */
+  const TURN_MS = 1000;
+  /** Where every turn starts: far enough in that turning backwards never runs out of turns (a whole number of them). */
+  const FAR_IN = 1e9;
+  /** How often the turning's rate may change (ms), and by how much it must have (a share of it). */
+  const RATE_EVERY = 50;
+  const RATE_STEP = 0.02;
+  /** How often the packs and the tape follow the place in the track (ms). */
+  const PLACE_EVERY = 250;
+  /** The spokes' and the notches' boxes: half a side. */
+  const SPOKES = HUB + 4;
+  /** The head's box around its two hills. */
+  const HEAD_BOX = { x: HEAD.x - HEAD.half - 1, y: HEAD.y - HEAD.gap - HEAD.height - 1, w: 2 * HEAD.half + 2, h: 2 * (HEAD.gap + HEAD.height) + 2 };
+
+  let width = $state(W);
+  const scale = $derived(Math.min(1, width / W));
 
   let tape: SVGPathElement;
   let packL: SVGCircleElement;
   let packR: SVGCircleElement;
-  let spokesL: SVGGElement;
-  let spokesR: SVGGElement;
-  let notches: SVGLineElement[] = [];
-  let hills: SVGPathElement[] = [];
+  let spokesL: HTMLDivElement;
+  let spokesR: HTMLDivElement;
+  let notches: HTMLDivElement[] = [];
+  let lit: HTMLDivElement;
 
   /** The tape's speed now (× the track's; negative: backwards). */
   let speed = 0;
@@ -46,77 +68,155 @@
     return shownPaused() ? 0 : 1;
   }
 
-  const angles = { l: 0, r: 0, w: WHEELS.map(() => 0) };
-  function draw(now: number, dt: number) {
-    const np = playing();
-    const pos = position();
-    const dur = duration();
-    speed = speedNow(now, pos);
-    const v = Math.max(-MOST, Math.min(MOST, speed));
-    const place = dur ? Math.min(0.98, Math.max(0.02, pos / dur)) : 0.5;
-    const [rl, rr] = packs(place);
-    packL.setAttribute('r', rl.toFixed(2));
-    packR.setAttribute('r', rr.toFixed(2));
-    tape.setAttribute('d', tapePath(place));
-    angles.l += (v * TURN * dt) / rl;
-    angles.r += (v * TURN * dt) / rr;
-    spokesL.setAttribute('transform', `rotate(${(angles.l * 180) / Math.PI})`);
-    spokesR.setAttribute('transform', `rotate(${(angles.r * 180) / Math.PI})`);
-    WHEELS.forEach((w, i) => {
-      angles.w[i] += (v * TURN * dt) / w.r;
-      notches[i]?.setAttribute('transform', `rotate(${(angles.w[i] * 180) / Math.PI})`);
+  function run(_: HTMLDivElement) {
+    let radii = packs(0.5);
+    /** Each turning part, its radius (a reel's pack changes with the place) and its endless turn. */
+    const parts = [
+      { el: spokesL, r: () => radii[0] },
+      { el: spokesR, r: () => radii[1] },
+      ...WHEELS.map((w, i) => ({ el: notches[i], r: () => w.r })),
+    ].map((p) => {
+      const turn = p.el.animate([{ transform: 'rotate(0turn)' }, { transform: 'rotate(1turn)' }], { duration: TURN_MS, iterations: Infinity });
+      turn.currentTime = FAR_IN;
+      turn.playbackRate = 0;
+      return { ...p, turn };
     });
-    // The head: lit on the downbeat, in the accent.
-    const lit = np ? downbeatAt(np.source, np.id, pos) : 0;
-    for (const h of hills) h.style.setProperty('--lit', `${Math.round(lit * 85)}%`);
-  }
-
-  function run(_: SVGSVGElement) {
+    /** The speed the parts turn at now, and since when. */
+    let shown = 0;
+    let shownAt = -Infinity;
+    const turnAt = (v: number) => {
+      for (const p of parts) p.turn.updatePlaybackRate((v * TURN) / p.r() / (2 * Math.PI));
+      shown = v;
+    };
+    let placedAt = -Infinity;
+    let litShown = -1;
     let frame = 0;
-    let last = performance.now();
     const tick = (now: number) => {
-      // The real time since the last frame (a tablet skips frames: a shorter step would turn the reels slower for
-      // it, a stutter); only a long sleep (a hidden page) is not made up.
-      draw(now, Math.min(250, now - last) / 1000);
-      last = now;
+      const np = playing();
+      const pos = position();
+      speed = speedNow(now, pos);
+      const v = Math.max(-MOST, Math.min(MOST, speed));
+      if (now - placedAt >= PLACE_EVERY) {
+        placedAt = now;
+        const dur = duration();
+        const place = dur ? Math.min(0.98, Math.max(0.02, pos / dur)) : 0.5;
+        radii = packs(place);
+        packL.setAttribute('r', radii[0].toFixed(2));
+        packR.setAttribute('r', radii[1].toFixed(2));
+        tape.setAttribute('d', tapePath(place));
+        // The reels turn at their packs' new radii.
+        turnAt(shown);
+      }
+      // Still and moving told at once; otherwise only a real change, at most every RATE_EVERY.
+      if ((v === 0) !== (shown === 0) || (now - shownAt >= RATE_EVERY && Math.abs(v - shown) > RATE_STEP * Math.max(Math.abs(shown), 0.05))) {
+        shownAt = now;
+        turnAt(v);
+      }
+      // The head: lit on the downbeat, in the accent.
+      const l = Math.round((np ? downbeatAt(np.source, np.id, pos) : 0) * 100) / 100;
+      if (l !== litShown) {
+        litShown = l;
+        lit.style.opacity = String(l);
+      }
       frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      for (const p of parts) p.turn.cancel();
+    };
   }
+
+  /** A layer's box over the drawing: around (x, y), `half` either side. */
+  const box = (x: number, y: number, half: number) => `left:${x - half}px;top:${y - half}px;width:${2 * half}px;height:${2 * half}px`;
 </script>
 
-<svg class="deck" viewBox="0 0 320 43" aria-hidden="true" {@attach run}>
-  <path class="tape" bind:this={tape} />
-  {#each [REEL_L, REEL_R] as c, i (i)}
-    <g transform="translate({c[0]} {c[1]})">
-      <circle class="rim" r={MAXR + 1} />
-      {#if i === 0}<circle class="pack" bind:this={packL} r={MAXR} />{:else}<circle class="pack" bind:this={packR} r={MAXR} />{/if}
-      <circle class="hub" r={HUB} />
+<div class="deck" aria-hidden="true" bind:clientWidth={width} {@attach run}>
+  <div class="stage" style:transform="translate(-50%, -50%) scale({scale})">
+    <svg class="still" viewBox="0 0 {W} {H}" width={W} height={H}>
+      <path class="tape" bind:this={tape} />
+      {#each [REEL_L, REEL_R] as c, i (i)}
+        <g transform="translate({c[0]} {c[1]})">
+          <circle class="rim" r={MAXR + 1} />
+          {#if i === 0}<circle class="pack" bind:this={packL} r={MAXR} />{:else}<circle class="pack" bind:this={packR} r={MAXR} />{/if}
+          <circle class="hub" r={HUB} />
+        </g>
+      {/each}
+      {#each WHEELS as w, i (i)}
+        <circle class="wheel" cx={w.c[0]} cy={w.c[1]} r={w.r} />
+      {/each}
+      <path class="hill" d={hill(-1)} />
+      <path class="hill" d={hill(1)} />
+    </svg>
+    {#each [REEL_L, REEL_R] as c, i (i)}
+      {@const spokes = [0, 1, 2].map((k) => [Math.cos((k * 2 * Math.PI) / 3) * (HUB + 3), Math.sin((k * 2 * Math.PI) / 3) * (HUB + 3)])}
       {#if i === 0}
-        <g bind:this={spokesL}>{#each [0, 1, 2] as k (k)}<line class="spoke" x2={Math.cos((k * 2 * Math.PI) / 3) * (HUB + 3)} y2={Math.sin((k * 2 * Math.PI) / 3) * (HUB + 3)} />{/each}</g>
+        <div class="turns" style={box(c[0], c[1], SPOKES)} bind:this={spokesL}>
+          <svg viewBox="{-SPOKES} {-SPOKES} {2 * SPOKES} {2 * SPOKES}">{#each spokes as [x, y], k (k)}<line class="spoke" x2={x} y2={y} />{/each}</svg>
+        </div>
       {:else}
-        <g bind:this={spokesR}>{#each [0, 1, 2] as k (k)}<line class="spoke" x2={Math.cos((k * 2 * Math.PI) / 3) * (HUB + 3)} y2={Math.sin((k * 2 * Math.PI) / 3) * (HUB + 3)} />{/each}</g>
+        <div class="turns" style={box(c[0], c[1], SPOKES)} bind:this={spokesR}>
+          <svg viewBox="{-SPOKES} {-SPOKES} {2 * SPOKES} {2 * SPOKES}">{#each spokes as [x, y], k (k)}<line class="spoke" x2={x} y2={y} />{/each}</svg>
+        </div>
       {/if}
-    </g>
-  {/each}
-  {#each WHEELS as w, i (i)}
-    <g transform="translate({w.c[0]} {w.c[1]})">
-      <circle class="wheel" r={w.r} />
-      <line class="notch" bind:this={notches[i]} x2={w.r - 0.6} />
-    </g>
-  {/each}
-  <path class="hill" bind:this={hills[0]} d={hill(-1)} />
-  <path class="hill" bind:this={hills[1]} d={hill(1)} />
-</svg>
+    {/each}
+    {#each WHEELS as w, i (i)}
+      <div class="turns" style={box(w.c[0], w.c[1], w.r)} bind:this={notches[i]}>
+        <svg viewBox="{-w.r} {-w.r} {2 * w.r} {2 * w.r}"><line class="notch" x2={w.r - 0.6} /></svg>
+      </div>
+    {/each}
+    <!-- The head lit: its hills in the accent over the unlit ones, as bright as the downbeat. -->
+    <div class="lit" style="left:{HEAD_BOX.x}px;top:{HEAD_BOX.y}px;width:{HEAD_BOX.w}px;height:{HEAD_BOX.h}px" bind:this={lit}>
+      <svg viewBox="{HEAD_BOX.x} {HEAD_BOX.y} {HEAD_BOX.w} {HEAD_BOX.h}">
+        <path class="hill on" d={hill(-1)} />
+        <path class="hill on" d={hill(1)} />
+      </svg>
+    </div>
+  </div>
+</div>
 
 <style>
   .deck {
-    display: block;
+    position: relative;
     width: 100%;
     max-width: 380px;
     height: 43px;
     margin: 0 auto;
+  }
+
+  /* The drawing at its own size, centred, scaled down only in a narrower row (as the SVG's own fit did). */
+  .stage {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 320px;
+    height: 43px;
+  }
+
+  .still {
+    display: block;
+  }
+
+  .turns,
+  .lit {
+    position: absolute;
+  }
+
+  .turns {
+    will-change: transform;
+  }
+
+  .lit {
+    opacity: 0;
+    will-change: opacity;
+  }
+
+  .turns svg,
+  .lit svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
   }
 
   .tape {
@@ -164,12 +264,17 @@
     stroke-linecap: round;
   }
 
-  /* The head's two hills, lit in the waveform's colour on each bar's first beat. */
+  /* The head's two hills, lit in the waveform's colour on each bar's first beat: the lit pair's opacity is the light,
+     the same mix as the colours' own (85% of the accent at full). */
   .hill {
-    --lit: 0%;
-    fill: color-mix(in srgb, var(--art-accent, var(--accent)) var(--lit), var(--surface));
-    stroke: color-mix(in srgb, var(--art-accent, var(--accent)) var(--lit), var(--muted));
+    fill: var(--surface);
+    stroke: var(--muted);
     stroke-width: 1.1;
     stroke-linejoin: round;
+  }
+
+  .hill.on {
+    fill: color-mix(in srgb, var(--art-accent, var(--accent)) 85%, var(--surface));
+    stroke: color-mix(in srgb, var(--art-accent, var(--accent)) 85%, var(--muted));
   }
 </style>
