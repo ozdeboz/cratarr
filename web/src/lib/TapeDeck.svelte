@@ -130,10 +130,11 @@
     stroke-opacity: 0.35;
   }
 
+  /* The packs in the waveform's colour (the cover's, as its played part; the owner, 2026-10-27). */
   .pack {
-    fill: var(--accent);
+    fill: var(--art-accent, var(--accent));
     fill-opacity: 0.22;
-    stroke: var(--accent);
+    stroke: var(--art-accent, var(--accent));
     stroke-opacity: 0.6;
   }
 
@@ -161,11 +162,11 @@
     stroke-linecap: round;
   }
 
-  /* The head's two hills, lit in the accent on each bar's first beat. */
+  /* The head's two hills, lit in the waveform's colour on each bar's first beat. */
   .hill {
     --lit: 0%;
-    fill: color-mix(in srgb, var(--accent) var(--lit), var(--surface));
-    stroke: color-mix(in srgb, var(--accent) var(--lit), var(--muted));
+    fill: color-mix(in srgb, var(--art-accent, var(--accent)) var(--lit), var(--surface));
+    stroke: color-mix(in srgb, var(--art-accent, var(--accent)) var(--lit), var(--muted));
     stroke-width: 1.1;
     stroke-linejoin: round;
   }
