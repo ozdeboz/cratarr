@@ -76,6 +76,9 @@ export const local = $state({
   /** The playing track's index in `queue`; -1 when nothing is loaded. */
   index: -1,
   paused: true,
+  /** Asked to play from rest and not sounding yet (its stream still coming): not yet playing, as the waveform shows it
+   *  (the owner, 2026-10-28: only Start and stop shows the intention ahead of the truth). */
+  starting: false,
   /** Seconds into the playing track. */
   position: 0,
   /** The playing track's length (s), when known. */
@@ -653,6 +656,8 @@ async function fresh(index: number, from = 0, play = true) {
   const url = URL.createObjectURL(ms);
   audio.src = url;
   playback('info', 'fresh', { index, track: local.queue[index]?.id ?? null, from: Math.round(from * 10) / 10, play });
+  // From rest (not a track run into while playing on, nor the tape's own handover): not playing until it sounds.
+  if (play && local.paused && !tape.rewindFetch) local.starting = true;
   watchSource(ms);
   if (play) audio.play().catch(refused);
   await new Promise((r) => ms!.addEventListener('sourceopen', r, { once: true }));
@@ -942,7 +947,11 @@ if (audio) {
     if (buffered === 0) fallBack('stalled with nothing in');
   });
   el.addEventListener('waiting', () => playback('info', 'waiting', { index: local.index, at: Math.round(el.currentTime * 10) / 10 }));
-  el.addEventListener('playing', () => playback('info', 'playing', { index: local.index, track: local.queue[local.index]?.id ?? null }));
+  el.addEventListener('playing', () => {
+    local.starting = false;
+    playback('info', 'playing', { index: local.index, track: local.queue[local.index]?.id ?? null });
+  });
+  el.addEventListener('pause', () => (local.starting = false));
 }
 
 if (audio) {

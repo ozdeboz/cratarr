@@ -206,6 +206,10 @@ export function position(): number {
   return p;
 }
 export const paused = (): boolean => playing()?.progress?.paused ?? false;
+/** Still, as the waveform's colour shows it: paused, or asked to play and not sounding yet (this page's player). The
+ *  truth, never the intention: only a Start and stop ramp (lib/SeekWave) runs ahead of it. */
+export const waveStill = (progress: { paused?: boolean } | null | undefined = playing()?.progress): boolean =>
+  (progress?.paused ?? false) || (isLocal() && local.starting);
 /** A Start and stop ramp under way on this device's player. The page's own turns round at a press (0075's first step,
  *  the owner 2026-10-27); the app's play button stays inert until its ramp ends, until the app turns too (0.9.13). */
 export const rampBusy = () => isLocal() && ramping.dir !== null;

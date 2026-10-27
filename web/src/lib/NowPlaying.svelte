@@ -20,7 +20,7 @@
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs, SEEK_STEP, type CoverTouch, type SwipeDown, type SwipeSide, type SwipeUp } from './prefs.svelte';
-  import { art, clockText, coverComing, coverFailed, coverLate, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampBusy, rampInert, shownPaused, wind, windTouch, hasNext } from './remote.svelte';
+  import { art, clockText, coverComing, coverFailed, coverLate, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampBusy, rampInert, shownPaused, wind, windTouch, hasNext, waveStill } from './remote.svelte';
   import SeekWave from './SeekWave.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import { Seek } from './seekState.svelte';
@@ -557,7 +557,7 @@
                   : undefined}
             >
               <span class="t">{np.progress.estimated ? '≈' : ''}{clockText(pos)}</span>
-              <SeekWave {seek} bins={wave} loading={np ? waveLoading(np.source, np.id) : null} {dur} {canSeek} paused={np.progress.paused} estimated={np.progress.estimated} room={head} />
+              <SeekWave {seek} bins={wave} loading={np ? waveLoading(np.source, np.id) : null} {dur} {canSeek} paused={waveStill(np.progress)} estimated={np.progress.estimated} room={head} />
               <span class="t">{dur ? clockText(dur) : '–:––'}</span>
             </div>
           {/if}

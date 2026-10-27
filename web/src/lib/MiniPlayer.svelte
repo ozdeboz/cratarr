@@ -25,7 +25,7 @@
   import { panel } from './panel.svelte';
   import { prefs } from './prefs.svelte';
   import Cover from './Cover.svelte';
-  import { art, clockText, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampInert, shownPaused } from './remote.svelte';
+  import { art, clockText, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampInert, shownPaused, waveStill } from './remote.svelte';
   import { isLocal } from './output.svelte';
   import SeekWave from './SeekWave.svelte';
   import { Seek } from './seekState.svelte';
@@ -204,7 +204,7 @@
       {#if grabbing}
         <!-- The waveform alone while it is held (lib/SeekWave), the rest of the bar back once let go. -->
         <div class="grab">
-          <SeekWave bind:this={seekWave} {seek} bins={wave} loading={waveLoading(np.source, np.id)} {dur} {canSeek} paused={paused()} room={el} onend={() => (grabbing = false)} />
+          <SeekWave bind:this={seekWave} {seek} bins={wave} loading={waveLoading(np.source, np.id)} {dur} {canSeek} paused={waveStill()} room={el} onend={() => (grabbing = false)} />
         </div>
       {:else}
       <div class="fill" aria-hidden="true"></div>
