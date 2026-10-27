@@ -2514,6 +2514,7 @@ fn analysis_row_at(r: &rusqlite::Row, at: usize) -> rusqlite::Result<crate::anal
 /// The albums' gain and peak in a folder, by album directory (an album is a folder of files, as the served library
 /// counts it), from their tracks' analyses (`analysis::album_gain` over their loudness blocks): only where every track
 /// of the directory has one, so a half-analysed album has none yet. Any connection to the catalogue's file.
+#[cfg(test)]
 pub fn album_gains(db: &Connection, folder: i64) -> Result<HashMap<String, (f32, f32)>> {
     album_gains_in(db, folder, None)
 }

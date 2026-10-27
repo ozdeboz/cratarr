@@ -605,7 +605,7 @@ fn place_track(s: &crate::serve::Serve, wanted: &Wanted, staged: &Path) -> Resul
     // Hi-res is made CD's 16 bit / 44.1 kHz as Incoming's are (decision 0013).
     let source = if crate::convert::needs_conversion(staged)?.is_some() {
         let cd = staged.with_extension("cd.flac");
-        crate::convert::to_cd_flac(staged, &cd)?;
+        crate::convert::to_cd_flac_told(staged, &cd, |_| {})?;
         cd
     } else {
         staged.to_path_buf()
