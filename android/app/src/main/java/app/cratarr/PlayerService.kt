@@ -16,6 +16,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.view.KeyEvent
 import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.net.Uri
@@ -148,7 +149,7 @@ class PlayerService : MediaSessionService() {
         // headset's or the system's shuffle shuffles what is to come once, and the player never plays shuffled, so it
         // says it is not. Cratarr's queue is shuffled by Cratarr (Play On's `shuffle`, which sends the new order back);
         // local mode's here, the playing track staying where it is.
-        startStop = StartStop(this, player, prefs, { link?.applyVolume() }, { sync.leader != null }, { sync.bufferMs }, ::startStopChanged, ::rewindUrl) { what, fields ->
+        startStop = StartStop(this, player, prefs, { link?.applyVolume() }, { sync.leader != null }, { sync.bufferMs }, ::startStopChanged, ::windUrl, ::windWay) { what, fields ->
             LinkLog.add(this, "info", "startstop", what, *fields)
         }
         sessionPlayer = object : ForwardingPlayer(player) {
@@ -184,7 +185,8 @@ class PlayerService : MediaSessionService() {
             override fun stop() = startStop.pause { super.stop() }
 
             // A seek in the middle of a Start and stop ramp ends it at once (0.9.7, `StartStop.seek`).
-            override fun seekTo(positionMs: Long) = startStop.seek { super.seekTo(positionMs) }
+            // Where seeking winds the tape (decision 0074), wound there.
+            override fun seekTo(positionMs: Long) = startStop.seekTo(positionMs) { super.seekTo(positionMs) }
 
             override fun seekTo(mediaItemIndex: Int, positionMs: Long) = startStop.seek { super.seekTo(mediaItemIndex, positionMs) }
 
@@ -445,6 +447,8 @@ class PlayerService : MediaSessionService() {
          */
         private inner class Hearing(val track: JSONObject, val atMs: Long) {
             var heardMs = 0L
+            /** What winding passed over (decision 0074: no wind counts as listening): the place less this is heard. */
+            var offsetMs = 0L
             var lengthMs = 0L
             var counted = false
         }
@@ -465,9 +469,15 @@ class PlayerService : MediaSessionService() {
                 val h = hearing
                 val d = player.duration
                 if (h != null) {
-                    h.heardMs = maxOf(h.heardMs, player.currentPosition)
+                    // A wind landed: heard carries on from what was heard, not from where it landed.
+                    StartStop.landed?.let { at ->
+                        StartStop.landed = null
+                        h.offsetMs = at - h.heardMs
+                    }
+                    val heard = player.currentPosition - h.offsetMs
+                    h.heardMs = maxOf(h.heardMs, heard)
                     if (d > 0) h.lengthMs = d
-                    if (!h.counted && d > 0 && player.currentPosition >= d * Plays.PLAYED_AT) {
+                    if (!h.counted && d > 0 && heard >= d * Plays.PLAYED_AT) {
                         h.counted = true
                         Plays.heard(this@PlayerService, h.track, h.atMs, "finished", true, h.heardMs, h.lengthMs)
                     }
@@ -581,6 +591,10 @@ class PlayerService : MediaSessionService() {
 
     /** Tracks arrive by their id only; the file and the cover come from the server. The app's own page may switch the
      *  mode ([COMMAND_MODE], `mode`). */
+    /** A media key down and not let go yet (its hold waiting [HOLD_MS]), and whether it has become a hold. */
+    private var keyDown: Runnable? = null
+    private var keyHeld = false
+
     private inner class Callback : MediaSession.Callback {
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
             if (controller.packageName != packageName) return super.onConnect(session, controller)
@@ -591,8 +605,49 @@ class PlayerService : MediaSessionService() {
                 .add(SessionCommand(COMMAND_MODE, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_TARGET, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_SKIP, Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_WIND, Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller).setAvailableSessionCommands(commands).build()
+        }
+
+        /**
+         * A media key held (decision 0074; the owner, 2026-10-27): rewind and fast forward held, and previous and next held
+         * past [HOLD_MS] (a headset's, a car's, Bluetooth's), wind while held and brake on letting go; a short press of
+         * previous or next stays a press. Other keys as ever.
+         */
+        override fun onMediaButtonEvent(session: MediaSession, controllerInfo: MediaSession.ControllerInfo, intent: Intent): Boolean {
+            @Suppress("DEPRECATION")
+            val e = intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT) ?: return false
+            val code = e.keyCode
+            val wind = code == KeyEvent.KEYCODE_MEDIA_REWIND || code == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+            if (!wind && code != KeyEvent.KEYCODE_MEDIA_PREVIOUS && code != KeyEvent.KEYCODE_MEDIA_NEXT) return false
+            val back = code == KeyEvent.KEYCODE_MEDIA_REWIND || code == KeyEvent.KEYCODE_MEDIA_PREVIOUS
+            val press = { if (back) sessionPlayer.seekToPrevious() else sessionPlayer.seekToNextMediaItem() }
+            val holdNow = { keyHeld = true; startStop.windStart(back) { press() } }
+            when (e.action) {
+                KeyEvent.ACTION_DOWN -> when {
+                    e.repeatCount == 0 && wind -> holdNow()
+                    e.repeatCount == 0 -> {
+                        keyDown = Runnable { holdNow() }.also { main.postDelayed(it, HOLD_MS) }
+                    }
+                    !keyHeld -> {
+                        keyDown?.let(main::removeCallbacks)
+                        keyDown = null
+                        holdNow()
+                    }
+                }
+                KeyEvent.ACTION_UP -> {
+                    keyDown?.let(main::removeCallbacks)
+                    keyDown = null
+                    if (keyHeld) {
+                        keyHeld = false
+                        startStop.windStop()
+                    } else if (!wind) {
+                        press()
+                    }
+                }
+            }
+            return true
         }
 
         override fun onCustomCommand(
@@ -607,6 +662,16 @@ class PlayerService : MediaSessionService() {
                 // The page's next and previous (0.9.6): through Start and stop, the page showing the change once it is
                 // made (a controller's own next shows the next track at once, before a ramp out).
                 COMMAND_SKIP -> if (args.getString("dir") == "previous") sessionPlayer.seekToPrevious() else sessionPlayer.seekToNextMediaItem()
+                // The page's Previous or Next held (decision 0074), as Play On's `wind`: where it cannot wind, a plain press
+                // on letting go.
+                COMMAND_WIND -> {
+                    val back = args.getString("dir") != "forward"
+                    if (args.getString("phase") == "stop") {
+                        startStop.windStop()
+                    } else {
+                        startStop.windStart(back) { if (back) sessionPlayer.seekToPrevious() else sessionPlayer.seekToNextMediaItem() }
+                    }
+                }
                 else -> return super.onCustomCommand(session, controller, customCommand, args)
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -631,14 +696,34 @@ class PlayerService : MediaSessionService() {
             .build()
     }
 
-    /** Tape rewind's clip of the playing track (0.9.9): Cratarr's, from [fromMs] back to its start, as this device's
-     *  four controls shape it; none for a track of the device's own or a Bandcamp preview, which Cratarr keeps no file of. */
-    private fun rewindUrl(fromMs: Long): String? {
+    /** The playing track's wind stream (decision 0074): Cratarr's, from [fromMs], to [toMs] or the edge, condensed to
+     *  [fitMs] or open-ended, back or forward, as this device's winding is set; none for a track of the device's own or a
+     *  Bandcamp preview, which Cratarr keeps no file of. */
+    private fun windUrl(fromMs: Long, toMs: Long?, fitMs: Long?, back: Boolean, through: String?): String? {
         val item = player.currentMediaItem ?: return null
         val server = prefs.serverUrl?.trimEnd('/') ?: return null
         if (DeviceMusic.located(item) != null || item.mediaId.startsWith("bandcamp/")) return null
-        return "$server/api/stream/${item.mediaId}/rewind?from_ms=$fromMs&ms=${prefs.rewindMs}&speed=${prefs.rewindSpeed}" +
-            "&piece_ms=${prefs.rewindPiece}&ramp=${prefs.rewindRamp}"
+        val to = toMs?.let { "&to_ms=$it" } ?: ""
+        val fit = fitMs?.let { "&fit_ms=$it&attack_ms=${prefs.windAttackMs}&release_ms=${prefs.windReleaseMs}&piece_ms=${prefs.windPieceMs}" } ?: ""
+        val on = through?.let { "&through=" + Uri.encode(it, ",/:") } ?: ""
+        return "$server/api/stream/${item.mediaId}/wind?from_ms=$fromMs&dir=${if (back) "back" else "forward"}&speed=${prefs.windSpeed}" +
+            "&gain_db=${prefs.windGainDb}$to$fit$on"
+    }
+
+    /** The queue's tracks in a hold's way (decision 0074, through the queue): back the ones before this, forward the ones
+     *  after, nearest first, at most 8, as far as Cratarr has their files and knows their length (as the server stops). */
+    private fun windWay(back: Boolean): List<Pair<String, Long>> {
+        val i = player.currentMediaItemIndex
+        val places = if (back) (i - 1 downTo 0) else (i + 1 until player.mediaItemCount)
+        val out = mutableListOf<Pair<String, Long>>()
+        for (j in places) {
+            if (out.size >= 8) break
+            val item = player.getMediaItemAt(j)
+            if (DeviceMusic.located(item) != null || item.mediaId.startsWith("bandcamp/")) break
+            val ms = trackOf(item)?.optDouble("duration_secs", 0.0)?.takeIf { it > 0 }?.let { (it * 1000).toLong() } ?: break
+            out += item.mediaId to ms
+        }
+        return out
     }
 
     /** Local mode's shuffle, once: what is to come after the playing track, mixed. */
@@ -664,6 +749,9 @@ class PlayerService : MediaSessionService() {
         /** The page asks where the controls point (decision 0062): `to`, self, player:<name> or server. */
         const val COMMAND_TARGET = "cratarr.TARGET"
         const val COMMAND_SKIP = "cratarr.SKIP"
+        const val COMMAND_WIND = "cratarr.WIND"
+        /** A previous or next key held this long is a hold: it winds. */
+        private const val HOLD_MS = 400L
 
         /** Started, and ready (or let go) as Stay ready says. Called while the app is in front, where both are allowed. */
         fun ready(context: Context) {

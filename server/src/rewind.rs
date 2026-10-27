@@ -19,13 +19,13 @@ use anyhow::Result;
 const SHORTEST_MS: u64 = 200;
 const LONGEST_MS: u64 = 12_000;
 /// A jump between two pieces, crossfaded over this long (seconds, equal power): no click.
-const XFADE: f64 = 0.015;
+pub(crate) const XFADE: f64 = 0.015;
 /// The first block (seconds of the clip): sent at once.
-const FIRST: f64 = 0.1;
+pub(crate) const FIRST: f64 = 0.1;
 /// Each later block.
-const BLOCK: f64 = 0.25;
+pub(crate) const BLOCK: f64 = 0.25;
 /// At most this much of the track is decoded for one block (seconds), however fast it rewinds there.
-const SPAN: f64 = 8.0;
+pub(crate) const SPAN: f64 = 8.0;
 /// The pyramid's levels above the sound itself: up to 4096 × its speed.
 const LEVELS: usize = 12;
 /// The half-band filter's reach each side (63 taps).
@@ -33,7 +33,7 @@ const HALF: usize = 31;
 /// Decoded before a block's own room (frames): an MP3's first frame after a seek may come out wrong.
 const PREROLL: f64 = 4096.0;
 /// Faded in and out (seconds): no click where the track stops and the clip starts.
-const FADE: f64 = 0.005;
+pub(crate) const FADE: f64 = 0.005;
 
 /// What a clip is rendered from: a file (`analysis::Reading`), or in the tests a tone.
 pub trait Sound {
@@ -158,21 +158,7 @@ impl Rewind {
     }
 
     fn header(&self) -> Vec<u8> {
-        let (data, ch) = (self.data() as u32, self.channels as u16);
-        let mut h = Vec::with_capacity(44);
-        h.extend_from_slice(b"RIFF");
-        h.extend_from_slice(&(36 + data).to_le_bytes());
-        h.extend_from_slice(b"WAVEfmt ");
-        h.extend_from_slice(&16u32.to_le_bytes());
-        h.extend_from_slice(&1u16.to_le_bytes());
-        h.extend_from_slice(&ch.to_le_bytes());
-        h.extend_from_slice(&self.out_rate.to_le_bytes());
-        h.extend_from_slice(&(self.out_rate * u32::from(ch) * 2).to_le_bytes());
-        h.extend_from_slice(&(ch * 2).to_le_bytes());
-        h.extend_from_slice(&16u16.to_le_bytes());
-        h.extend_from_slice(b"data");
-        h.extend_from_slice(&data.to_le_bytes());
-        h
+        wav_header(self.out_rate, self.channels, self.data())
     }
 
     /// Spinning up and braking (frames of the clip each).
@@ -280,7 +266,7 @@ impl Rewind {
                     at -= s;
                     i += 1;
                 }
-                let block = self.block(sound, &ats, &speeds)?;
+                let block = read_block(sound, self.channels, &ats, &speeds)?;
                 for (c, b) in out.iter_mut().zip(&block) {
                     for (k, v) in b.iter().enumerate() {
                         c[start + k] += (f64::from(*v) * run.gain(start + k)) as f32;
@@ -307,41 +293,60 @@ impl Rewind {
         }
         Ok(())
     }
+}
 
-    /// One block (planar, the clip's channels): the sound under it decoded with room for the filters, its levels built
-    /// as far as its fastest frame needs, each frame read at its own.
-    fn block(&self, sound: &mut dyn Sound, at: &[f64], speed: &[f64]) -> Result<Vec<Vec<f32>>> {
-        // A speed's place in the pyramid: level ⌊λ⌋, blended with the next by its fraction.
-        let level = |s: f64| s.max(1.0).log2().min(LEVELS as f64);
-        let top = speed.iter().map(|&s| level(s).ceil() as usize).max().unwrap_or(0);
-        let room = (HALF + 4) as f64 * f64::from(1u32 << top);
-        let lo = at.iter().copied().fold(f64::INFINITY, f64::min);
-        let hi = at.iter().copied().fold(0.0, f64::max);
-        let (first, planes) = sound.read((lo - room - PREROLL).max(0.0) as u64, (hi + room).ceil() as u64)?;
-        let mut levels = vec![Level { base: first as i64, planes: planes.into_iter().take(self.channels).collect() }];
-        while levels.len() <= top {
-            let half = levels[levels.len() - 1].half();
-            levels.push(half);
-        }
-        let mut out = vec![Vec::with_capacity(at.len()); levels[0].planes.len()];
-        for (&p, &s) in at.iter().zip(speed) {
-            let l = level(s);
-            let k = l.floor() as usize;
-            let g = l - k as f64;
-            for (c, o) in out.iter_mut().enumerate() {
-                let mut v = levels[k].at(c, p / f64::from(1u32 << k));
-                if g > 0.0 {
-                    v = v * (1.0 - g) + levels[k + 1].at(c, p / f64::from(1u32 << (k + 1))) * g;
-                }
-                o.push(v as f32);
-            }
-        }
-        // A file with fewer channels than its header said: the clip's channels still.
-        while out.len() < self.channels {
-            out.push(out.first().cloned().unwrap_or_else(|| vec![0.0; at.len()]));
-        }
-        Ok(out)
+/// One block (planar, the clip's channels): the sound under it decoded with room for the filters, its levels built
+/// as far as its fastest frame needs, each frame read at its own.
+pub fn read_block(sound: &mut dyn Sound, channels: usize, at: &[f64], speed: &[f64]) -> Result<Vec<Vec<f32>>> {
+    // A speed's place in the pyramid: level ⌊λ⌋, blended with the next by its fraction.
+    let level = |s: f64| s.max(1.0).log2().min(LEVELS as f64);
+    let top = speed.iter().map(|&s| level(s).ceil() as usize).max().unwrap_or(0);
+    let room = (HALF + 4) as f64 * f64::from(1u32 << top);
+    let lo = at.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = at.iter().copied().fold(0.0, f64::max);
+    let (first, planes) = sound.read((lo - room - PREROLL).max(0.0) as u64, (hi + room).ceil() as u64)?;
+    let mut levels = vec![Level { base: first as i64, planes: planes.into_iter().take(channels).collect() }];
+    while levels.len() <= top {
+        let half = levels[levels.len() - 1].half();
+        levels.push(half);
     }
+    let mut out = vec![Vec::with_capacity(at.len()); levels[0].planes.len()];
+    for (&p, &s) in at.iter().zip(speed) {
+        let l = level(s);
+        let k = l.floor() as usize;
+        let g = l - k as f64;
+        for (c, o) in out.iter_mut().enumerate() {
+            let mut v = levels[k].at(c, p / f64::from(1u32 << k));
+            if g > 0.0 {
+                v = v * (1.0 - g) + levels[k + 1].at(c, p / f64::from(1u32 << (k + 1))) * g;
+            }
+            o.push(v as f32);
+        }
+    }
+    // A file with fewer channels than its header said: the clip's channels still.
+    while out.len() < channels {
+        out.push(out.first().cloned().unwrap_or_else(|| vec![0.0; at.len()]));
+    }
+    Ok(out)
+}
+
+/// A 16-bit PCM WAV's header for `data` bytes of sound.
+pub fn wav_header(rate: u32, channels: usize, data: u64) -> Vec<u8> {
+    let (data, ch) = (data as u32, channels as u16);
+    let mut h = Vec::with_capacity(44);
+    h.extend_from_slice(b"RIFF");
+    h.extend_from_slice(&(36 + data).to_le_bytes());
+    h.extend_from_slice(b"WAVEfmt ");
+    h.extend_from_slice(&16u32.to_le_bytes());
+    h.extend_from_slice(&1u16.to_le_bytes());
+    h.extend_from_slice(&ch.to_le_bytes());
+    h.extend_from_slice(&rate.to_le_bytes());
+    h.extend_from_slice(&(rate * u32::from(ch) * 2).to_le_bytes());
+    h.extend_from_slice(&(ch * 2).to_le_bytes());
+    h.extend_from_slice(&16u16.to_le_bytes());
+    h.extend_from_slice(b"data");
+    h.extend_from_slice(&data.to_le_bytes());
+    h
 }
 
 /// One level of the pyramid: sample `j` stands at frame `j × 2^level` of the sound; `base` is the first one's `j`.

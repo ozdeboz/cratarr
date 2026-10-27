@@ -25,6 +25,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/cover/{source}/{id}", get(cover))
         .route("/api/stream/{source}/{id}", get(stream))
         .route("/api/stream/{source}/{id}/rewind", get(stream_rewind))
+        .route("/api/stream/{source}/{id}/wind", get(stream_wind))
         .route("/api/file/{source}/{id}", get(file))
         .route("/api/track/{source}/{id}/gain", get(track_gain))
         .route("/api/offline", post(offline_facts))
@@ -191,6 +192,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/discover/artist/photo", get(discover_artist_photo))
         .route("/api/discover/artist/albums", get(discover_artist_albums))
         .route("/api/preview/bandcamp", get(preview_bandcamp))
+        .route("/api/preview/bandcamp/artist", get(preview_bandcamp_artist))
         .route("/api/requests", get(requests))
         .route("/api/spotify", get(spotify_state).delete(spotify_disconnect))
         .route("/api/spotify/client", put(spotify_client))
@@ -2820,6 +2822,164 @@ async fn stream_rewind(State(app): State<Arc<App>>, Path((source, id)): Path<(St
     (headers, axum::body::Body::from_stream(body)).into_response()
 }
 
+/// A wind (decision 0074): from where, which way, how fast, how much quieter; to where (none: the edge); condensed to a
+/// wall length with the player's envelope (all four of `fit_ms`, `attack_ms`, `release_ms`, `piece_ms`), else open-ended.
+#[derive(Deserialize)]
+struct WindAsk {
+    from_ms: u64,
+    dir: String,
+    #[serde(default)]
+    speed: Option<f64>,
+    #[serde(default)]
+    gain_db: Option<f64>,
+    #[serde(default)]
+    to_ms: Option<u64>,
+    #[serde(default)]
+    fit_ms: Option<u64>,
+    #[serde(default)]
+    attack_ms: Option<u64>,
+    #[serde(default)]
+    release_ms: Option<u64>,
+    #[serde(default)]
+    piece_ms: Option<u64>,
+    #[serde(default, rename = "as")]
+    as_: Option<String>,
+    #[serde(default)]
+    through: Option<String>,
+}
+
+/// Winding (decision 0074): the track from `from_ms` backwards or forwards at a constant speed, as 16-bit WAV made as
+/// the player reads it (a hold lasts as long as it reads). Its headers place it: `x-wind-speed` (lower than asked where
+/// a condensed wind got there sooner), `x-wind-dir`, and `x-wind-map`, knots `[[stream_ms, track, track_ms], …]`, linear
+/// between, a cut two knots at one moment. 404 where it cannot be rendered (the player jumps), 503 while another decode
+/// holds the turn, 400 for what is not there yet (another form than WAV, winding through the queue).
+async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<WindAsk>) -> Response {
+    use crate::wind::{Ask, Dir, Fit, Wind};
+    let asked = std::time::Instant::now();
+    let since = move || asked.elapsed().as_millis() as u64;
+    let what = format!("{source}/{id}");
+    let refused = |why: &str| (StatusCode::BAD_REQUEST, Json(json!({ "error": why }))).into_response();
+    if q.as_.as_deref().is_some_and(|f| f != "wav") {
+        return refused("Only WAV winds yet.");
+    }
+    // Winding on through the queue (0074): the tracks in the way, nearest first (`source:id` or `source/id`), at most 8;
+    // a hold only, to this track's edge.
+    let through: Vec<(String, String)> = q
+        .through
+        .as_deref()
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|t| t.trim().split_once([':', '/']).map(|(s, i)| (s.to_string(), i.to_string())))
+        .take(8)
+        .collect();
+    if !through.is_empty() && (q.fit_ms.is_some() || q.to_ms.is_some()) {
+        return refused("Only a hold winds on through the queue.");
+    }
+    let dir = match q.dir.as_str() {
+        "back" => Dir::Back,
+        "forward" => Dir::Forward,
+        _ => return refused("dir is back or forward."),
+    };
+    let fit = match (q.fit_ms, q.attack_ms, q.release_ms, q.piece_ms) {
+        (Some(ms), attack, release, piece) => Some(Fit { ms, attack_ms: attack.unwrap_or(0), release_ms: release.unwrap_or(0), piece_ms: piece.unwrap_or(350) }),
+        (None, ..) => None,
+    };
+    let ask = Ask { dir, from_ms: q.from_ms, to_ms: q.to_ms, speed: q.speed.unwrap_or(6.0), gain_db: q.gain_db.unwrap_or(-12.0), fit };
+    let cat = app.library.catalogue();
+    let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten();
+    let Some((path, _, duration_ms)) = found else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
+    };
+    // The tracks in the way Cratarr has the files of; the first it has not (a preview, another server's) ends the chain.
+    let cat = app.library.catalogue();
+    let joins: Vec<(std::path::PathBuf, Option<u64>)> = tokio::task::spawn_blocking(move || {
+        through
+            .iter()
+            .map_while(|(s, i)| (s != crate::bandcamp::SOURCE).then(|| crate::stream::locate(&cat, s, i)).flatten().map(|(p, _, d)| (p, d)))
+            .collect()
+    })
+    .await
+    .unwrap_or_default();
+    let Some(turn) = crate::app::analysis_pass::heavy_turn(REWIND_TURN).await else {
+        tracing::warn!(target: "rewind", track = %what, waited = since(), "wind: the decode's turn did not come");
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "Another track is being decoded." }))).into_response();
+    };
+    // Paced by the player's reading: a hold may last minutes, and only a few blocks wait for it at a time.
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(16);
+    let (said, heard) = tokio::sync::oneshot::channel();
+    let what2 = what.clone();
+    tokio::task::spawn_blocking(move || {
+        let _turn = turn;
+        let _job = crate::memwatch::job(format!("wind: {}", path.display()));
+        let sound = match crate::analysis::Reading::open(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = said.send(Err((StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}"))));
+                return;
+            }
+        };
+        // The tracks it winds on into, opened; one that will not open ends the chain there.
+        let mut sounds = vec![sound];
+        let mut tracks = vec![(sounds[0].rate(), sounds[0].channels(), duration_ms)];
+        for (p, d) in &joins {
+            let Ok(s) = crate::analysis::Reading::open(p) else { break };
+            tracks.push((s.rate(), s.channels(), *d));
+            sounds.push(s);
+        }
+        let winds = if tracks.len() > 1 { crate::wind::chain(&tracks, ask) } else { Wind::new(tracks[0].0, tracks[0].1, duration_ms, ask).map(|w| vec![w]) };
+        let winds = match winds {
+            Ok(w) => w,
+            Err(e) => {
+                let _ = said.send(Err((StatusCode::BAD_REQUEST, format!("{e:#}"))));
+                return;
+            }
+        };
+        let map: Vec<serde_json::Value> = crate::wind::chain_map(&winds).into_iter().map(|(c, i, t)| json!([c, i, t])).collect();
+        let data: u64 = winds.iter().map(Wind::data).sum();
+        let (rate, channels) = winds[0].stream();
+        let _ = said.send(Ok((44 + data, winds[0].speed(), serde_json::Value::Array(map).to_string())));
+        let mut blocks = 0u32;
+        let mut send = |b: Vec<u8>| {
+            blocks += 1;
+            tx.blocking_send(Ok(b.into())).is_ok()
+        };
+        let rendered = (|| -> anyhow::Result<()> {
+            if !send(crate::rewind::wav_header(rate, channels, data)) {
+                return Ok(());
+            }
+            for (w, s) in winds.iter().zip(sounds.iter_mut()) {
+                if !w.sound(s, &mut send)? {
+                    break;
+                }
+            }
+            Ok(())
+        })();
+        if let Err(e) = rendered {
+            tracing::warn!("wind of {}: {e:#}", path.display());
+            let _ = tx.blocking_send(Err(std::io::Error::other(format!("{e:#}"))));
+        }
+        tracing::info!(target: "rewind", track = %what2, from_ms = ask.from_ms, to_ms = ?ask.to_ms, dir = ?ask.dir, speed = ask.speed, fit = ?ask.fit,
+            tracks = winds.len(), blocks, ended = since(), "wind (ms since the request)");
+    });
+    let (bytes, speed, map) = match heard.await {
+        Ok(Ok(h)) => h,
+        Ok(Err((status, e))) => return (status, Json(json!({ "error": e }))).into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/wav"));
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(bytes));
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert("x-wind-dir", HeaderValue::from_static(if q.dir == "back" { "back" } else { "forward" }));
+    if let Ok(v) = HeaderValue::from_str(&format!("{speed:.4}")) {
+        headers.insert("x-wind-speed", v);
+    }
+    if let Ok(v) = HeaderValue::from_str(&map) {
+        headers.insert("x-wind-map", v);
+    }
+    (headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response()
+}
+
 /// A track as Opus in fragmented MP4, made as it is sent: a lossless one for a phone's stream, and with `lossy_too` one
 /// the browser cannot take as it is. `None` when it makes none (a lossy file for a phone streams as it is). The headers
 /// place it: 48 kHz, the encoder's delay (`x-pre-skip`) and the track's length.
@@ -3822,9 +3982,17 @@ struct BandcampOf {
 /// streamed and its cover shown through Cratarr's own addresses.
 async fn preview_bandcamp(Query(q): Query<BandcampOf>) -> Result<Json<serde_json::Value>, ApiError> {
     let a = crate::bandcamp::Bandcamp::get().album(&q.url).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let tracks = preview_tracks(&a);
+    if tracks.is_empty() {
+        return Err(ToggleError::Refused("None of its tracks can be heard on Bandcamp.".into()).into());
+    }
+    Ok(Json(json!({ "album": a.title, "artist": a.artist, "url": a.url, "tracks": tracks })))
+}
+
+/// A Bandcamp album's tracks that can be heard, as players hold them (`QueueTrack`): previews (decision 0071).
+fn preview_tracks(a: &crate::bandcamp::Album) -> Vec<crate::app::QueueTrack> {
     let album_id = crate::bandcamp::track_id(&a.url, 0);
-    let tracks: Vec<crate::app::QueueTrack> = a
-        .tracks
+    a.tracks
         .iter()
         .filter(|t| t.stream.is_some())
         .map(|t| crate::app::QueueTrack {
@@ -3838,11 +4006,55 @@ async fn preview_bandcamp(Query(q): Query<BandcampOf>) -> Result<Json<serde_json
             n: Some(t.n),
             ..Default::default()
         })
-        .collect();
-    if tracks.is_empty() {
-        return Err(ToggleError::Refused("None of its tracks can be heard on Bandcamp.".into()).into());
+        .collect()
+}
+
+#[derive(Deserialize)]
+struct BandcampArtistOf {
+    name: String,
+    #[serde(default)]
+    mbid: Option<String>,
+    /// Their own Bandcamp page where Discover found it (`artist_bandcamp`).
+    #[serde(default)]
+    page: Option<String>,
+}
+
+/// An artist's releases on Bandcamp kept a while, by name: Bandcamp is asked once for them.
+static BANDCAMP_ARTISTS: std::sync::Mutex<Option<std::collections::HashMap<String, (std::time::Instant, serde_json::Value)>>> = std::sync::Mutex::new(None);
+/// How long they are kept.
+const BANDCAMP_ARTIST_FOR: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
+/// The most of an artist's releases one Listen plays.
+const BANDCAMP_ARTIST_RELEASES: usize = 10;
+
+/// Everything an artist has on Bandcamp to play as previews (New to you's Listen, the owner 2026-10-27): their own
+/// page, its releases newest first (at most 10), each as `/api/preview/bandcamp` gives it. None found: no albums.
+async fn preview_bandcamp_artist(Query(q): Query<BandcampArtistOf>) -> Result<Json<serde_json::Value>, ApiError> {
+    let key = crate::app::import::key(q.name.trim());
+    {
+        let kept = BANDCAMP_ARTISTS.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((at, v)) = kept.as_ref().and_then(|k| k.get(&key))
+            && at.elapsed() < BANDCAMP_ARTIST_FOR
+        {
+            return Ok(Json(v.clone()));
+        }
     }
-    Ok(Json(json!({ "album": a.title, "artist": a.artist, "url": a.url, "tracks": tracks })))
+    let (page, releases) = crate::app::discover::bandcamp_artist(q.name.trim(), q.mbid.as_deref(), q.page.as_deref())
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let bc = crate::bandcamp::Bandcamp::get();
+    let mut albums = Vec::new();
+    for (_, url) in releases.into_iter().take(BANDCAMP_ARTIST_RELEASES) {
+        let Ok(a) = bc.album(&url).await else { continue };
+        let tracks = preview_tracks(&a);
+        if tracks.is_empty() {
+            continue;
+        }
+        let year = a.released.as_deref().and_then(|d| d.get(..4)).and_then(|y| y.parse::<i32>().ok());
+        albums.push(json!({ "album": a.title, "url": a.url, "year": year, "tracks": tracks }));
+    }
+    let v = json!({ "artist": q.name.trim(), "page": page, "albums": albums });
+    BANDCAMP_ARTISTS.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(Default::default).insert(key, (std::time::Instant::now(), v.clone()));
+    Ok(Json(v))
 }
 
 /// A preview's track relayed from Bandcamp as it is sent (nothing kept): its status, length and ranges as Bandcamp

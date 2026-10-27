@@ -477,11 +477,17 @@ class MainActivity : AppCompatActivity() {
                     prefs.startStopMs = s.optLong("ms", 800L)
                     prefs.startStopSkips = s.optBoolean("skips")
                     prefs.startStopRewind = s.optBoolean("rewind")
-                    // Tape rewind's four controls (the owner, 2026-10-27): each kept as it is when the page leaves it out.
-                    if (s.has("rewindMs")) prefs.rewindMs = s.optLong("rewindMs", 2_500L)
-                    if (s.has("rewindSpeed")) prefs.rewindSpeed = s.optDouble("rewindSpeed", 6.0).toFloat()
-                    if (s.has("rewindPiece")) prefs.rewindPiece = s.optLong("rewindPiece", 350L)
-                    if (s.has("rewindRamp")) prefs.rewindRamp = s.optDouble("rewindRamp", 0.2).toFloat()
+                    // Winding (decision 0074): each kept as it is when the page leaves it out.
+                    s.optJSONObject("wind")?.let { w ->
+                        if (w.has("ratio")) prefs.windRatio = w.optDouble("ratio", 1.0).toFloat()
+                        if (w.has("speed")) prefs.windSpeed = w.optDouble("speed", 8.0).toFloat()
+                        if (w.has("attackMs")) prefs.windAttackMs = w.optLong("attackMs", 400L)
+                        if (w.has("releaseMs")) prefs.windReleaseMs = w.optLong("releaseMs", 250L)
+                        if (w.has("pieceMs")) prefs.windPieceMs = w.optLong("pieceMs", 350L)
+                        if (w.has("gainDb")) prefs.windGainDb = w.optDouble("gainDb", -12.0).toFloat()
+                        if (w.has("seekWinds")) prefs.windSeeks = w.optBoolean("seekWinds")
+                        if (w.has("edges")) prefs.windEdges = w.optString("edges", "stop")
+                    }
                 }
                 if (message.has("downloadOverMobile") || message.has("syncOnlyCharging")) {
                     if (message.has("downloadOverMobile")) prefs.downloadOverMobile = message.optBoolean("downloadOverMobile")
@@ -632,10 +638,18 @@ class MainActivity : AppCompatActivity() {
                 .put("ms", prefs.startStopMs)
                 .put("skips", prefs.startStopSkips)
                 .put("rewind", prefs.startStopRewind)
-                .put("rewindMs", prefs.rewindMs)
-                .put("rewindSpeed", prefs.rewindSpeed.toDouble())
-                .put("rewindPiece", prefs.rewindPiece)
-                .put("rewindRamp", prefs.rewindRamp.toDouble()),
+                .put(
+                    "wind",
+                    JSONObject()
+                        .put("ratio", prefs.windRatio.toDouble())
+                        .put("speed", prefs.windSpeed.toDouble())
+                        .put("attackMs", prefs.windAttackMs)
+                        .put("releaseMs", prefs.windReleaseMs)
+                        .put("pieceMs", prefs.windPieceMs)
+                        .put("gainDb", prefs.windGainDb.toDouble())
+                        .put("seekWinds", prefs.windSeeks)
+                        .put("edges", prefs.windEdges),
+                ),
         )
         // Local mode (decision 0052): which music plays, and whether Android lets the app read the device's.
         .put("mode", prefs.mode)

@@ -229,6 +229,16 @@ impl Bandcamp {
         Ok(parse_autocomplete(&resp.text().await?))
     }
 
+    /// Bandcamp's search box asked for artists: (name, their page), its first answers.
+    pub async fn search_artist(&self, name: &str) -> Result<Vec<(String, String)>> {
+        let body = serde_json::json!({ "search_text": name, "search_filter": "b", "full_page": false, "fan_id": null });
+        let resp = self.send(self.http.post("https://bandcamp.com/api/bcsearch_public_api/1/autocomplete_elastic").json(&body)).await?;
+        if !resp.status().is_success() {
+            bail!("Bandcamp answered {}", resp.status());
+        }
+        Ok(parse_artists(&resp.text().await?))
+    }
+
     /// An artist's releases on their own page (`/music`): (title, album page).
     pub async fn releases(&self, artist_page: &str) -> Result<Vec<(String, String)>> {
         let base = page(artist_page).context("Not a page on Bandcamp")?;
@@ -271,6 +281,38 @@ pub fn parse_autocomplete(json: &str) -> Vec<(String, String, String)> {
         .into_iter()
         .filter(|f| f.kind == "a")
         .filter_map(|f| Some((f.name, f.band_name, album_page(&f.item_url_path)?)))
+        .collect()
+}
+
+/// Bandcamp's search box's answers for artists: (name, their page).
+pub fn parse_artists(json: &str) -> Vec<(String, String)> {
+    #[derive(Deserialize)]
+    struct Auto {
+        #[serde(default)]
+        results: Vec<Band>,
+    }
+    #[derive(Deserialize)]
+    struct Band {
+        #[serde(rename = "type", default)]
+        kind: String,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        item_url_path: String,
+        #[serde(default)]
+        item_url_root: String,
+    }
+    #[derive(Deserialize)]
+    struct Answer {
+        auto: Option<Auto>,
+    }
+    let Ok(a) = serde_json::from_str::<Answer>(json) else { return Vec::new() };
+    a.auto
+        .map(|x| x.results)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|b| b.kind == "b")
+        .filter_map(|b| Some((b.name, page(&b.item_url_path).or_else(|| page(&b.item_url_root))?)))
         .collect()
 }
 
@@ -631,6 +673,18 @@ mod tests {
         assert_eq!(r.len(), 2, "albums on Bandcamp only");
         assert_eq!(r[0], ("Dive".into(), "Tycho".into(), "https://tycho.bandcamp.com/album/dive".into()));
         assert!(parse_autocomplete("<html>challenge</html>").is_empty());
+    }
+
+    #[test]
+    fn the_search_box_finds_artists_by_their_own_page() {
+        let json = r#"{"auto":{"results":[
+            {"type":"a","name":"Dive","band_name":"Tycho","item_url_path":"https://tycho.bandcamp.com/album/dive"},
+            {"type":"b","name":"Tycho","band_name":"Tycho","item_url_path":"https://tycho.bandcamp.com"},
+            {"type":"b","name":"Elsewhere","item_url_path":"https://elsewhere.example"}]}}"#;
+        let found = parse_artists(json);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "Tycho");
+        assert!(found[0].1.starts_with("https://tycho.bandcamp.com"));
     }
 
     #[test]

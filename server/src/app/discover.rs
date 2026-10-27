@@ -105,6 +105,13 @@ pub struct Suggestion {
     /// discographies count them), read with the picture (0.9.2, the owner: under each new artist's picture).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artist_albums: Option<u32>,
+    /// Its artist new to the library's own Bandcamp page, as MusicBrainz keeps it (read with the picture), and whether
+    /// the artist plays on Bandcamp at all: that page, or any of their albums found there (the owner, 2026-10-27: New to
+    /// you puts those first; the others lower, not left out, and without Listen).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist_bandcamp: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub artist_on_bandcamp: bool,
     /// What MusicBrainz calls it (Album, EP, Single…), as ListenBrainz gives it (0069 amended: the card shows as much
     /// as is known).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -815,6 +822,8 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
                     bandcamp: c.bandcamp.clone(),
                     artist_photo: false,
                     artist_albums: None,
+                    artist_bandcamp: None,
+                    artist_on_bandcamp: false,
                     kind: c.kind.clone(),
                     genres: c.genres.clone(),
                     length_secs: None,
@@ -1010,6 +1019,34 @@ async fn bandcamp_page(http: &reqwest::Client, urls: &[String], artists: &[Strin
     let found = bc.search(artist, album).await.unwrap_or_default();
     tokio::time::sleep(MB_PAUSE).await;
     found.into_iter().find(|(t, a, _)| same(t, album) && same(a, artist)).map(|(_, _, url)| url)
+}
+
+/// An artist's own page on Bandcamp among the addresses MusicBrainz keeps for them (not Bandcamp's own site).
+fn own_bandcamp(urls: &[String]) -> Option<String> {
+    urls.iter()
+        .filter_map(|u| crate::bandcamp::page(u))
+        .find(|p| reqwest::Url::parse(p).ok().and_then(|u| u.host_str().map(|h| h != "bandcamp.com")).unwrap_or(false))
+}
+
+/// An artist's own Bandcamp page and their releases there, newest first (New to you's Listen, the owner 2026-10-27):
+/// the page given (Discover's `artist_bandcamp`), else MusicBrainz's for them, else Bandcamp's search box where the name
+/// is the same; none found, none.
+pub async fn bandcamp_artist(name: &str, mbid: Option<&str>, given: Option<&str>) -> Result<(Option<String>, Vec<(String, String)>)> {
+    let http = http()?;
+    let bc = crate::bandcamp::Bandcamp::get();
+    let mut page = given.and_then(|g| own_bandcamp(&[g.to_string()]));
+    if page.is_none()
+        && let Some(id) = mbid.filter(|m| !m.is_empty())
+    {
+        page = own_bandcamp(&mb_artist_urls(&http, id).await.unwrap_or_default());
+        tokio::time::sleep(MB_PAUSE).await;
+    }
+    if page.is_none() {
+        page = bc.search_artist(name).await.unwrap_or_default().into_iter().find(|(n, _)| same(n, name)).map(|(_, p)| p);
+    }
+    let Some(page) = page else { return Ok((None, Vec::new())) };
+    let releases = bc.releases(&page).await.unwrap_or_default();
+    Ok((Some(page), releases))
 }
 
 /// The artist MusicBrainz is sure a name is (its search's score 95 or more, the name the same as the matcher reads
@@ -1298,17 +1335,25 @@ pub async fn look(
                 tokio::time::sleep(MB_PAUSE).await;
             }
             let photo = store.get_or_read(name, None).await.is_some_and(|info| info.photo.is_some());
-            // How many albums they have released: their MusicBrainz id by name (a sure match only), their albums.
-            let mut released = None;
+            // How many albums they have released: their MusicBrainz id by name (a sure match only), their albums; and
+            // their own Bandcamp page, as MusicBrainz keeps it.
+            let (mut released, mut own) = (None, None);
             if let Ok(Some(mbid)) = mb_artist_by_name(&http, name).await {
                 tokio::time::sleep(MB_PAUSE).await;
                 released = studio_albums(&http, &mbid).await.ok();
+                tokio::time::sleep(MB_PAUSE).await;
+                own = own_bandcamp(&mb_artist_urls(&http, &mbid).await.unwrap_or_default());
             }
             tokio::time::sleep(MB_PAUSE).await;
             for s in albums.iter_mut().filter(|s| &s.artist == name) {
-                (s.artist_photo, s.artist_albums) = (photo, released);
+                (s.artist_photo, s.artist_albums, s.artist_bandcamp) = (photo, released, own.clone());
             }
         }
+    }
+    // Whether each new artist plays on Bandcamp at all: their own page, or any of their albums found there.
+    let playing: HashSet<String> = albums.iter().filter(|s| s.new_artist && (s.bandcamp.is_some() || s.artist_bandcamp.is_some())).map(|s| s.artist_key.clone()).collect();
+    for s in albums.iter_mut().filter(|s| s.new_artist) {
+        s.artist_on_bandcamp = playing.contains(&s.artist_key);
     }
     let found = Found { at, albums, notes };
     keep_found(serve, account, &found).await?;

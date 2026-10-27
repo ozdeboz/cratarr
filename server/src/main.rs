@@ -39,6 +39,7 @@ mod ports;
 mod playlists;
 mod retag;
 mod rewind;
+mod wind;
 mod search;
 mod serve;
 mod settings;
