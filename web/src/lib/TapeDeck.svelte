@@ -65,7 +65,8 @@
     if (ramping.dir) {
       if (mode !== 'vinyl') return 1;
       const u = Math.min(1, Math.max(0, (now - ramping.at) / Math.max(1, ramping.ms)));
-      return ramping.dir === 'out' ? 1 - u * u : 1 - (1 - u) ** 2;
+      // Down on the deck's one brake (a raised cosine, as lib/localPlayer's), up as the wind-up eases out.
+      return ramping.dir === 'out' ? (1 + Math.cos(Math.PI * u)) / 2 : 1 - (1 - u) ** 2;
     }
     return shownPaused() ? 0 : 1;
   }

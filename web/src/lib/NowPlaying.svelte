@@ -94,7 +94,8 @@
   /** Start and stop on for this device's player: a start winds up (the play button's fill stays empty while paused). */
   const armed = $derived(isLocal() && (inApp ? appInfo.startStop.mode : prefs.startStop.mode) !== 'off');
   /** A ramp of this device's player under way, its way. */
-  const ramp = $derived(isLocal() ? ramping.dir : null);
+  // The fill follows play and pause only, never the tape's own stops (the owner, 2026-10-27).
+  const ramp = $derived(isLocal() && ramping.effect ? ramping.dir : null);
   /** Paused with Start and stop on: how much of the wind-up the fill already shows, from where it would start (as it
    *  is held while seeking too): near the track's start the wind-up is shorter (lib/localPlayer windUpMs). */
   const pre = $derived.by(() => {

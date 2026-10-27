@@ -139,6 +139,8 @@ function take(players: PlayOnPlayer[]) {
     // How far it turns the playing track down: the Level button's fill and the waveform, as it hears it.
     levelDb: p.level_db ?? 0,
     direction: p.direction ?? 'R',
+    // Winding there: the waveform follows its position as it reports it (the owner, 2026-10-27).
+    rewinding: p.rewinding ?? false,
   });
   if (p.queue_version !== shownVersion) {
     const version = p.queue_version;
