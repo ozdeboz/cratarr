@@ -192,6 +192,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/discover/artist/photo", get(discover_artist_photo))
         .route("/api/discover/artist/albums", get(discover_artist_albums))
         .route("/api/preview/bandcamp", get(preview_bandcamp))
+        .route("/api/preview/bandcamp/artist", get(preview_bandcamp_artist))
         .route("/api/requests", get(requests))
         .route("/api/spotify", get(spotify_state).delete(spotify_disconnect))
         .route("/api/spotify/client", put(spotify_client))
@@ -3939,9 +3940,17 @@ struct BandcampOf {
 /// streamed and its cover shown through Cratarr's own addresses.
 async fn preview_bandcamp(Query(q): Query<BandcampOf>) -> Result<Json<serde_json::Value>, ApiError> {
     let a = crate::bandcamp::Bandcamp::get().album(&q.url).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let tracks = preview_tracks(&a);
+    if tracks.is_empty() {
+        return Err(ToggleError::Refused("None of its tracks can be heard on Bandcamp.".into()).into());
+    }
+    Ok(Json(json!({ "album": a.title, "artist": a.artist, "url": a.url, "tracks": tracks })))
+}
+
+/// A Bandcamp album's tracks that can be heard, as players hold them (`QueueTrack`): previews (decision 0071).
+fn preview_tracks(a: &crate::bandcamp::Album) -> Vec<crate::app::QueueTrack> {
     let album_id = crate::bandcamp::track_id(&a.url, 0);
-    let tracks: Vec<crate::app::QueueTrack> = a
-        .tracks
+    a.tracks
         .iter()
         .filter(|t| t.stream.is_some())
         .map(|t| crate::app::QueueTrack {
@@ -3955,11 +3964,55 @@ async fn preview_bandcamp(Query(q): Query<BandcampOf>) -> Result<Json<serde_json
             n: Some(t.n),
             ..Default::default()
         })
-        .collect();
-    if tracks.is_empty() {
-        return Err(ToggleError::Refused("None of its tracks can be heard on Bandcamp.".into()).into());
+        .collect()
+}
+
+#[derive(Deserialize)]
+struct BandcampArtistOf {
+    name: String,
+    #[serde(default)]
+    mbid: Option<String>,
+    /// Their own Bandcamp page where Discover found it (`artist_bandcamp`).
+    #[serde(default)]
+    page: Option<String>,
+}
+
+/// An artist's releases on Bandcamp kept a while, by name: Bandcamp is asked once for them.
+static BANDCAMP_ARTISTS: std::sync::Mutex<Option<std::collections::HashMap<String, (std::time::Instant, serde_json::Value)>>> = std::sync::Mutex::new(None);
+/// How long they are kept.
+const BANDCAMP_ARTIST_FOR: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
+/// The most of an artist's releases one Listen plays.
+const BANDCAMP_ARTIST_RELEASES: usize = 10;
+
+/// Everything an artist has on Bandcamp to play as previews (New to you's Listen, the owner 2026-10-27): their own
+/// page, its releases newest first (at most 10), each as `/api/preview/bandcamp` gives it. None found: no albums.
+async fn preview_bandcamp_artist(Query(q): Query<BandcampArtistOf>) -> Result<Json<serde_json::Value>, ApiError> {
+    let key = crate::app::import::key(q.name.trim());
+    {
+        let kept = BANDCAMP_ARTISTS.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((at, v)) = kept.as_ref().and_then(|k| k.get(&key))
+            && at.elapsed() < BANDCAMP_ARTIST_FOR
+        {
+            return Ok(Json(v.clone()));
+        }
     }
-    Ok(Json(json!({ "album": a.title, "artist": a.artist, "url": a.url, "tracks": tracks })))
+    let (page, releases) = crate::app::discover::bandcamp_artist(q.name.trim(), q.mbid.as_deref(), q.page.as_deref())
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let bc = crate::bandcamp::Bandcamp::get();
+    let mut albums = Vec::new();
+    for (_, url) in releases.into_iter().take(BANDCAMP_ARTIST_RELEASES) {
+        let Ok(a) = bc.album(&url).await else { continue };
+        let tracks = preview_tracks(&a);
+        if tracks.is_empty() {
+            continue;
+        }
+        let year = a.released.as_deref().and_then(|d| d.get(..4)).and_then(|y| y.parse::<i32>().ok());
+        albums.push(json!({ "album": a.title, "url": a.url, "year": year, "tracks": tracks }));
+    }
+    let v = json!({ "artist": q.name.trim(), "page": page, "albums": albums });
+    BANDCAMP_ARTISTS.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(Default::default).insert(key, (std::time::Instant::now(), v.clone()));
+    Ok(Json(v))
 }
 
 /// A preview's track relayed from Bandcamp as it is sent (nothing kept): its status, length and ranges as Bandcamp
