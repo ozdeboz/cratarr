@@ -205,8 +205,6 @@ export const pageView = $state({
   counted: null as { shown: number; total: number; pending?: boolean } | null,
   /** The pill's search field is open (App's title gives way when it leaves no room, lib/TopPill). */
   searchOpen: false,
-  /** Asked to open the pill's search from outside it (Home's Find everything, App), counted. */
-  findAsked: 0,
   /** The page's own button at the pill's end (usePageAction), while it shows. */
   action: null as PageAction | null,
 });

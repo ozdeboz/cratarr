@@ -49,7 +49,7 @@
     /** The panel list's tempos, for its filter's tempo selector (decision 0041). */
     tempos?: readonly (number | null | undefined)[] | null;
     /** The filter's button; not on local mode's pages (decision 0052), which have only their search. */
-    /** Home's Find everything, beside the pill (its own glass on the left taken). */
+    /** Home's Find everything, beside the pill. */
     find?: boolean;
     filter?: boolean;
     /** In the panel: the kind of list it shows, whose filter is remembered (decision 0060). */
@@ -80,13 +80,7 @@
     if (searching && !quiet) field?.focus();
     quiet = false;
   });
-  // Opened from outside (Home's Find everything, its glass merged into this one: App).
-  let findSeen = untrack(() => pageView.findAsked);
-  $effect(() => {
-    if (pageView.findAsked === findSeen) return;
-    findSeen = pageView.findAsked;
-    untrack(() => (searching = true));
-  });
+
   $effect(() => {
     // The field, or the work's progress unfolded: either takes the row's room (App's title gives way where it must).
     pageView.searchOpen = searching || showing;
@@ -240,8 +234,8 @@
 </script>
 
 <span class="pill-row" class:wide={showing}>
-  <!-- Home's Find everything where its own glass on the left is taken (the owner, 2026-10-27): a thin glass grown
-       leftwards out of the pill, as the globe; a tap opens the search, the glass folding into the pill. -->
+  <!-- Home's Find everything (the owner, 2026-10-27): a thin glass grown leftwards out of the pill, as the globe; a tap
+       opens the search, the glass folding into the pill. -->
   {#if find && words && !searching && !globeShown}
     <span class="globe find" transition:paced|global>
       <button class="find-button" onclick={() => (searching = true)}><Icon name="search" size={20} /><span>Find everything</span></button>
