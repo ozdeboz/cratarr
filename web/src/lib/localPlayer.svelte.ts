@@ -2016,7 +2016,19 @@ function rewindTape(): boolean {
   const ms = ss.rewindMs;
   const ramp = ss.rewindRamp;
   const ask = new URLSearchParams({ from_ms: String(Math.floor(from * 1000)), ms: String(ms), speed: String(ss.rewindSpeed), piece_ms: String(ss.rewindPiece), ramp: String(ramp) });
+  // Every step timed from the press, in the playback log (the owner, 2026-10-27: a rewind took far longer than its
+  // length; find where at the deepest level): the clip's own events, how far it has played against the clock, the
+  // track waiting at its start, and the whole of it at the end.
+  const t0 = performance.now();
+  const since = () => Math.round(performance.now() - t0);
+  const say = (what: string, fields: Record<string, unknown> = {}, level: 'info' | 'warn' = 'info') =>
+    playback(level, `rewind ${what}`, { t: since(), clip: Math.round(clip.currentTime * 1000), ...fields });
   const clip = (rewinding = new Audio(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}/rewind?${ask}`));
+  say('asked', { track: t.id, from: Math.round(from * 1000), ms, speed: ss.rewindSpeed, piece: ss.rewindPiece, ramp, startLoaded: inBuffer(seg.start) });
+  for (const ev of ['loadstart', 'loadedmetadata', 'canplay', 'canplaythrough', 'waiting', 'stalled', 'suspend', 'pause'])
+    clip.addEventListener(ev, () => mine() && say(ev, { readyState: clip.readyState, buffered: clip.buffered.length ? Math.round(clip.buffered.end(clip.buffered.length - 1) * 1000) : 0 }, ev === 'waiting' || ev === 'stalled' ? 'warn' : 'info'));
+  let playedAt = 0;
+  let lastSecond = 0;
   clipVolume();
   committed = false;
   local.paused = false;
@@ -2030,31 +2042,59 @@ function rewindTape(): boolean {
   };
   // At its start, playing: where it waits loaded, else afresh.
   const fromStart = () => {
+    say('clip done', { clipMs: Math.round((performance.now() - playedAt) || 0), asked: ms });
     endRewind();
     if (!audio) return;
     const w = where();
+    const back = audio;
+    // The track sounding again: the whole rewind, press to sound (a warning where it took much longer than asked).
+    back.addEventListener(
+      'playing',
+      () => {
+        const total = since();
+        playback(total > ms + 1500 ? 'warn' : 'info', 'rewind whole', { t: total, asked: ms, clipFromPress: Math.round(playedAt - t0) });
+      },
+      { once: true },
+    );
     if (w?.seg.index === seg.index && inBuffer(w.seg.start)) {
+      say('track from its start, loaded');
       audio.currentTime = w.seg.start;
       void audio.play().catch(refused);
-    } else void fresh(seg.index, 0, true);
+    } else {
+      say('track from its start, fetched afresh', {}, 'warn');
+      void fresh(seg.index, 0, true);
+    }
   };
-  const late = setTimeout(() => mine() && !sounding && plain(), REWIND_WAIT_MS);
+  const late = setTimeout(() => {
+    if (!mine() || sounding) return;
+    say('not sounding in time: plain restart', { readyState: clip.readyState }, 'warn');
+    plain();
+  }, REWIND_WAIT_MS);
   clip.addEventListener(
     'playing',
     () => {
       if (!mine() || !audio) return;
       sounding = true;
       clearTimeout(late);
+      playedAt = performance.now();
+      say('playing');
       rewindPos = from;
       rewindNow.on = true;
       follow = setInterval(() => {
         if (!mine()) return clearInterval(follow);
         rewindPos = from * (1 - rewound((clip.currentTime * 1000) / ms, ramp));
         local.position = rewindPos;
+        // Once a second: how far the clip has played against the clock since it began to sound.
+        const wall = performance.now() - playedAt;
+        if (wall >= (lastSecond + 1) * 1000) {
+          lastSecond = Math.floor(wall / 1000);
+          say('progress', { wall: Math.round(wall), buffered: clip.buffered.length ? Math.round(clip.buffered.end(clip.buffered.length - 1) * 1000) : 0, readyState: clip.readyState });
+        }
       }, REWIND_STEP_MS);
       audio.pause();
       if (inBuffer(seg.start)) audio.currentTime = seg.start;
       else {
+        say('track start fetched afresh');
         rewindFetch = true;
         void fresh(seg.index, 0, false);
         rewindFetch = false;
@@ -2063,8 +2103,24 @@ function rewindTape(): boolean {
     { once: true },
   );
   clip.addEventListener('ended', () => mine() && fromStart(), { once: true });
-  clip.addEventListener('error', () => mine() && (sounding ? fromStart() : plain()), { once: true });
-  clip.play().catch(() => mine() && !sounding && plain());
+  clip.addEventListener(
+    'error',
+    () => {
+      if (!mine()) return;
+      say('clip error', { code: clip.error?.code ?? null, message: clip.error?.message ?? '' }, 'warn');
+      if (sounding) fromStart();
+      else plain();
+    },
+    { once: true },
+  );
+  clip
+    .play()
+    .then(() => say('play() accepted'))
+    .catch((e) => {
+      if (!mine() || sounding) return;
+      say('play() refused', { error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) }, 'warn');
+      plain();
+    });
   return true;
 }
 /** Ends a rewind under way (nothing where none is). */
