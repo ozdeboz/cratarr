@@ -192,6 +192,18 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/discover/artist/albums", get(discover_artist_albums))
         .route("/api/preview/bandcamp", get(preview_bandcamp))
         .route("/api/requests", get(requests))
+        .route("/api/spotify", get(spotify_state).delete(spotify_disconnect))
+        .route("/api/spotify/client", put(spotify_client))
+        .route("/api/spotify/connect", post(spotify_connect))
+        .route("/api/spotify/callback", get(spotify_callback))
+        .route("/api/spotify/sync", post(spotify_sync))
+        .route("/api/spotify/import", delete(spotify_forget_import))
+        .route("/api/spotify/albums", get(spotify_albums))
+        .route("/api/spotify/tracks", get(spotify_tracks))
+        .route("/api/spotify/playlists", get(spotify_playlists))
+        .route("/api/spotify/playlists/{id}", get(spotify_playlist))
+        .route("/api/spotify/artists", get(spotify_artists))
+        .route("/api/spotify/cover/{kind}/{id}", get(spotify_cover))
         .route("/api/requests/watching", get(requests_watching))
         .route("/api/requests/decide", post(requests_decide))
         .route("/api/requests/{id}/cancel", post(requests_cancel))
@@ -4023,6 +4035,153 @@ async fn scrobble_lastfm_callback(Path(code): Path<String>, Query(q): Query<Last
         }
         Err(e) => back(Some(format!("{e:#}"))),
     }
+}
+
+// ---- Spotify (decision 0073) ----
+
+/// The signed-in account, for Spotify: its lists are its own.
+fn spotify_account() -> Result<String, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    Ok(serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: Spotify is an account's own.".into()))?)
+}
+
+/// Blocking Spotify work for the account, its failure one short line.
+async fn spotify_blocking<T: Send + 'static>(work: impl FnOnce(String) -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
+    let account = spotify_account()?;
+    tokio::task::spawn_blocking(move || work(account))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")).into())
+}
+
+/// The account's Spotify: its app, the live connection, the export, which lists show and how many.
+async fn spotify_state() -> Result<Json<crate::app::spotify::State>, ApiError> {
+    Ok(Json(spotify_blocking(|a| crate::app::spotify::state(&a)).await?))
+}
+
+#[derive(Deserialize)]
+struct SpotifyClient {
+    #[serde(default)]
+    client_id: String,
+}
+
+/// The account's own Spotify app (its Client ID); empty removes it, and a new one disconnects.
+async fn spotify_client(Json(b): Json<SpotifyClient>) -> Result<Json<crate::app::spotify::State>, ApiError> {
+    Ok(Json(spotify_blocking(move |a| crate::app::spotify::set_client(&a, &b.client_id).and_then(|()| crate::app::spotify::state(&a))).await?))
+}
+
+#[derive(Deserialize)]
+struct SpotifyConnect {
+    /// Where Spotify comes back to: the page's own address's `/api/spotify/callback`, as listed on the app.
+    callback: String,
+    /// Begun in the Android app: the way back ends in the app.
+    #[serde(default)]
+    app: bool,
+}
+
+/// Where to send the browser to sign in to Spotify with the account's own app.
+async fn spotify_connect(Json(b): Json<SpotifyConnect>) -> Result<Json<serde_json::Value>, ApiError> {
+    let url = spotify_blocking(move |a| crate::app::spotify::connect(&a, &b.callback, b.app)).await?;
+    Ok(Json(json!({ "url": url })))
+}
+
+#[derive(Deserialize)]
+struct SpotifyBack {
+    state: String,
+    code: Option<String>,
+    error: Option<String>,
+}
+
+/// Spotify's way back from a sign-in: kept for the account that began it, then the browser back to its Spotify page
+/// (the app's by its own link), with what went wrong.
+async fn spotify_callback(Query(q): Query<SpotifyBack>) -> Response {
+    let (app, why) = crate::app::spotify::come_back(&q.state, q.code.as_deref(), q.error.as_deref()).await;
+    let why = why.map(|w| format!("spotify_error={}", urlencoding_lite(&w)));
+    if app {
+        let to = format!("cratarr://connected/spotify{}", why.map(|w| format!("?{w}")).unwrap_or_default());
+        let page = format!(
+            "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width\"><meta http-equiv=refresh content=\"0;url={to}\"><title>Cratarr</title><p style=\"font:16px system-ui;margin:2em\"><a href=\"{to}\">Back to Cratarr</a>"
+        );
+        return ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], page).into_response();
+    }
+    let to = format!("/#/settings?view=settings%3Aaccount%2Fspotify{}", why.map(|w| format!("&{w}")).unwrap_or_default());
+    axum::response::Redirect::to(&to).into_response()
+}
+
+/// Disconnects the account's Spotify (the export's lists stay).
+async fn spotify_disconnect() -> Result<Json<crate::app::spotify::State>, ApiError> {
+    Ok(Json(spotify_blocking(|a| crate::app::spotify::disconnect(&a).and_then(|()| crate::app::spotify::state(&a))).await?))
+}
+
+/// Reads the account's live lists again now; answers at once.
+async fn spotify_sync() -> Result<Json<crate::app::spotify::State>, ApiError> {
+    let account = spotify_account()?;
+    tokio::spawn(crate::app::spotify::read_live(account.clone()));
+    // The read marks itself running at once; a moment for it to.
+    tokio::task::yield_now().await;
+    Ok(Json(spotify_blocking(|a| crate::app::spotify::state(&a)).await?))
+}
+
+/// Forgets the lists the account's Spotify export brought (its listens stay).
+async fn spotify_forget_import() -> Result<Json<crate::app::spotify::State>, ApiError> {
+    Ok(Json(spotify_blocking(|a| crate::app::spotify::forget_export(&a).and_then(|_| crate::app::spotify::state(&a))).await?))
+}
+
+#[derive(Deserialize, Default)]
+struct SpotifyFilter {
+    status: Option<String>,
+    q: Option<String>,
+}
+
+async fn spotify_albums(Query(f): Query<SpotifyFilter>) -> Result<Json<serde_json::Value>, ApiError> {
+    let albums = spotify_blocking(move |a| crate::app::spotify::albums(&a, f.status.as_deref(), f.q.as_deref())).await?;
+    Ok(Json(json!({ "albums": albums })))
+}
+
+async fn spotify_tracks(Query(f): Query<SpotifyFilter>) -> Result<Json<serde_json::Value>, ApiError> {
+    let tracks = spotify_blocking(move |a| crate::app::spotify::tracks(&a, f.status.as_deref(), f.q.as_deref())).await?;
+    Ok(Json(json!({ "tracks": tracks })))
+}
+
+async fn spotify_playlists() -> Result<Json<serde_json::Value>, ApiError> {
+    let playlists = spotify_blocking(|a| crate::app::spotify::playlists(&a)).await?;
+    Ok(Json(json!({ "playlists": playlists })))
+}
+
+async fn spotify_playlist(Path(id): Path<String>) -> Result<Response, ApiError> {
+    match spotify_blocking(move |a| crate::app::spotify::playlist(&a, &id)).await? {
+        Some(p) => Ok(Json(p).into_response()),
+        None => Ok((StatusCode::NOT_FOUND, Json(json!({ "error": "That playlist is not in your Spotify lists." }))).into_response()),
+    }
+}
+
+async fn spotify_artists(Query(f): Query<SpotifyFilter>) -> Result<Json<serde_json::Value>, ApiError> {
+    let artists = spotify_blocking(move |a| crate::app::spotify::artists(&a, f.status.as_deref())).await?;
+    Ok(Json(json!({ "artists": artists })))
+}
+
+/// An item's picture: Spotify's (or Cover Art Archive's) relayed, or Cratarr's own cover of the album it matched.
+async fn spotify_cover(Path((kind, id)): Path<(String, String)>) -> Result<Response, ApiError> {
+    use crate::app::reach::Sent;
+    use crate::app::spotify::Picture;
+    let picture = spotify_blocking(move |a| crate::app::spotify::picture(&a, &kind, &id)).await?;
+    let url = match picture {
+        None => return Ok(StatusCode::NOT_FOUND.into_response()),
+        Some(Picture::Own(source, album)) => {
+            let to = format!("/api/cover/{}/{}", urlencoding_lite(&source), urlencoding_lite(&album));
+            return Ok(axum::response::Redirect::to(&to).into_response());
+        }
+        Some(Picture::Remote(url)) if crate::app::spotify::relayable(&url) => url,
+        Some(Picture::Remote(_)) => return Ok(StatusCode::NOT_FOUND.into_response()),
+    };
+    let http = crate::app::spotify::web::http().map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let Ok(r) = http.get(&url).sent().await else { return Ok(StatusCode::BAD_GATEWAY.into_response()) };
+    if !r.status().is_success() {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    }
+    let kind = r.headers().get(header::CONTENT_TYPE).cloned().unwrap_or(HeaderValue::from_static("image/jpeg"));
+    let Ok(bytes) = r.bytes().await else { return Ok(StatusCode::BAD_GATEWAY.into_response()) };
+    Ok(([(header::CONTENT_TYPE, kind), (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=86400"))], bytes).into_response())
 }
 
 /// A short text safe in a page address.

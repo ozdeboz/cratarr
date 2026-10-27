@@ -59,6 +59,7 @@ pub mod refind;
 pub mod related;
 pub mod search;
 pub mod requests;
+pub mod spotify;
 pub mod radio;
 pub mod similar;
 pub mod taste;
@@ -195,6 +196,8 @@ impl App {
         discogs::start();
         // The library's words (0.9.7): MusicBrainz, Discogs and Last.fm asked in the background.
         harvest::start();
+        // Spotify's lists (0073): read again every 6 hours, MusicBrainz asked about them.
+        spotify::start(cfg.data_dir.as_deref());
         // Cratarr's own library (0032) built anew (a first start, a new layout): what was read from it while it was
         // empty is read again.
         if let Some(served) = crate::serve::instance() {
