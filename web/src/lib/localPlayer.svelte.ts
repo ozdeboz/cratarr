@@ -1603,6 +1603,21 @@ export function next() {
 
 export function previous() {
   if (handed()) return hand('previous');
+  // A second Previous while the first one's rewind runs: the track before (the owner, 2026-10-27: a double tap), its
+  // rewind braking first where Start and stop is asked for next and previous too, else at once.
+  const w = rewinding;
+  if (w && !w.reverse && w.to === 0 && w.dir < 0) {
+    const before = () => {
+      quietPause = false;
+      jump(Math.max(0, local.index - 1));
+    };
+    const s = prefs.startStop;
+    if (w.at === null || s.mode === 'off' || !s.skips) {
+      endRewind();
+      return before();
+    }
+    return void settle().then(before);
+  }
   if (rewinding) return windTakeover('previous');
   // Repeat all: previous on the first track goes to the last.
   if (local.repeat === 'all' && local.index === 0 && local.position <= RESTART_AFTER && local.queue.length > 1) return void skipRamped(() => jump(local.queue.length - 1));
