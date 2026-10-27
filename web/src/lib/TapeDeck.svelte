@@ -10,7 +10,8 @@
   import { rewindNow } from './localPlayer.svelte';
   import { isLocal } from './output.svelte';
   import { prefs } from './prefs.svelte';
-  import { ramping } from './ramping.svelte';
+  import { ramping, tapeDir } from './ramping.svelte';
+  import { turnTape } from './localPlayer.svelte';
   import { duration, playing, position, shownPaused } from './remote.svelte';
   import { hill, HEAD, HUB, MAXR, packs, REEL_L, REEL_R, tapePath, WHEELS } from './tapeDeck';
   import { downbeatAt } from './visuals/downbeat';
@@ -127,13 +128,16 @@
     };
   }
 
+  /** The direction knob, under the head between the inner wheels: its centre and size, and its L and R either side, tiny
+   *  (the owner, 2026-10-27: the deck's proportions unchanged). */
+  const KNOB = { x: 160, y: 36, r: 3.2 };
   /** A layer's box over the drawing: around (x, y), `half` either side. */
   const box = (x: number, y: number, half: number) => `left:${x - half}px;top:${y - half}px;width:${2 * half}px;height:${2 * half}px`;
 </script>
 
-<div class="deck" aria-hidden="true" bind:clientWidth={width} {@attach run}>
+<div class="deck" bind:clientWidth={width} {@attach run}>
   <div class="stage" style:transform="translate(-50%, -50%) scale({scale})">
-    <svg class="still" viewBox="0 0 {W} {H}" width={W} height={H}>
+    <svg class="still" viewBox="0 0 {W} {H}" width={W} height={H} aria-hidden="true">
       <path class="tape" bind:this={tape} />
       {#each [REEL_L, REEL_R] as c, i (i)}
         <g transform="translate({c[0]} {c[1]})">
@@ -147,7 +151,22 @@
       {/each}
       <path class="hill" d={hill(-1)} />
       <path class="hill" d={hill(1)} />
+      <text class="side" class:on={tapeDir.want === 'L'} x={KNOB.x - 7.5} y={KNOB.y + 1.5} text-anchor="middle">L</text>
+      <text class="side" class:on={tapeDir.want === 'R'} x={KNOB.x + 7.5} y={KNOB.y + 1.5} text-anchor="middle">R</text>
     </svg>
+    <!-- The direction knob (the owner, 2026-10-27): R forwards, L backwards; turned while playing, the tape slows to a
+         stop before it goes the other way (lib/localPlayer turnTape). -->
+    <button
+      class="knob"
+      role="switch"
+      aria-checked={tapeDir.want === 'L'}
+      aria-label="Play backwards"
+      style="left:{KNOB.x - 6}px;top:{KNOB.y - 6}px"
+      onclick={() => turnTape(tapeDir.want === 'L' ? 'R' : 'L')}
+      ><svg viewBox="-6 -6 12 12" aria-hidden="true"
+        ><circle class="knob-body" r={KNOB.r} /><line class="knob-mark" class:left={tapeDir.want === 'L'} y1={-0.6} y2={-KNOB.r + 0.5} /></svg
+      ></button
+    >
     {#each [REEL_L, REEL_R] as c, i (i)}
       {@const spokes = [0, 1, 2].map((k) => [Math.cos((k * 2 * Math.PI) / 3) * (HUB + 3), Math.sin((k * 2 * Math.PI) / 3) * (HUB + 3)])}
       {#if i === 0}
@@ -195,6 +214,66 @@
 
   .still {
     display: block;
+  }
+
+  .turns,
+  .lit {
+    pointer-events: none;
+  }
+
+  /* The knob: a small round with its mark, turned a quarter either way; its box larger than it, for a finger. */
+  .knob {
+    position: absolute;
+    z-index: 1;
+    width: 12px;
+    height: 12px;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+  }
+
+  .knob svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+
+  .knob::before {
+    position: absolute;
+    inset: -8px -14px;
+    content: '';
+  }
+
+  .knob-body {
+    fill: var(--surface);
+    stroke: var(--muted);
+    stroke-width: 0.9;
+  }
+
+  .knob-mark {
+    stroke: var(--text);
+    stroke-width: 1;
+    stroke-linecap: round;
+    transform: rotate(40deg);
+    transition: transform 150ms ease-out;
+  }
+
+  .knob-mark.left {
+    transform: rotate(-40deg);
+  }
+
+  .side {
+    fill: var(--muted);
+    font-size: 4px;
+    font-weight: 600;
+    opacity: 0.7;
+  }
+
+  .side.on {
+    fill: var(--text);
+    opacity: 1;
   }
 
   .turns,
