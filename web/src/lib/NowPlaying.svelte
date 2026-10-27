@@ -591,6 +591,7 @@
                   class:fillup={ramp === 'in'}
                   class:empty={ramp === null && armed && paused()}
                   style:--pre={ramp === 'in' ? 1 - ramping.ms / Math.max(1, ramping.full) : armed && paused() ? pre : 0}
+                  style:--from={ramp === 'out' ? Math.min(1, ramping.ms / Math.max(1, ramping.full)) : 1}
                   style:animation-duration={ramp ? `${ramping.ms}ms` : null}
                 ></span>{/key}<Icon
                 name={shownPaused() ? 'play' : 'pause'}
@@ -1272,9 +1273,10 @@
     animation: fillup linear forwards;
   }
 
+  /* From as full as the ramp it turned round had got (a pause during a wind-up: only what is left of the ramp). */
   @keyframes drain {
     from {
-      clip-path: inset(0 0 0 0);
+      clip-path: inset(calc((1 - var(--from, 1)) * 100%) 0 0 0);
     }
     to {
       clip-path: inset(100% 0 0 0);
