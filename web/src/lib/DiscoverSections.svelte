@@ -730,7 +730,7 @@
     background:
       linear-gradient(to bottom, rgb(0 0 0 / 0.35), rgb(0 0 0 / 0.55)),
       var(--flow-photo) center 20% / cover no-repeat,
-      var(--surface);
+      var(--bg);
     border-radius: 12px;
   }
 

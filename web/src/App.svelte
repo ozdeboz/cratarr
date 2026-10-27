@@ -276,11 +276,24 @@
     if (me.name) navigator.serviceWorker?.controller?.postMessage({ type: 'account', name: me.name });
   });
   // One's own header picture (Settings › Appearance) behind every flow (the owner, 2026-10-26): one variable for the
-  // page, each flow's canvas drawing it under a veil (--flow-photo; none without one).
+  // page, each flow's canvas drawing it under a veil (--flow-photo; none without one). Only once it is in: until then
+  // (and should it not come) the flows stand on the page's own ground, never a grey veil (the owner, 2026-10-27).
   $effect(() => {
     const pic = backdropUrl();
-    document.documentElement.style.setProperty('--flow-photo', pic ? `url("${pic}")` : 'none');
-    document.documentElement.toggleAttribute('data-flow-photo', !!pic);
+    const root = document.documentElement;
+    const show = (on: boolean) => {
+      root.style.setProperty('--flow-photo', on ? `url("${pic}")` : 'none');
+      root.toggleAttribute('data-flow-photo', on);
+    };
+    if (!pic) return show(false);
+    let gone = false;
+    const img = new Image();
+    img.src = pic;
+    img.decode().then(
+      () => !gone && show(true),
+      () => !gone && show(false),
+    );
+    return () => (gone = true);
   });
   // Same breakpoint as the CSS: from 1024 px the sidebar shows; below it the bar of pages along the top.
   const wide = window.matchMedia('(min-width: 1024px)');
