@@ -1205,6 +1205,23 @@ pub async fn look(
         }
         Err(e) => tracing::info!("discover: ListenBrainz's facts of the albums could not be read: {e:#}"),
     }
+    // Discogs' genres and styles where ListenBrainz gave fewer than a card shows (0.9.8), kept a while per release group.
+    if let Some(served) = crate::serve::instance() {
+        for s in albums.iter_mut().filter(|s| s.genres.len() < GENRES) {
+            let Some(group) = s.release_group.clone() else { continue };
+            match super::discogs_facts::release_group(&served, &group).await {
+                Ok(Some(f)) => {
+                    for g in f.genres.into_iter().chain(f.styles) {
+                        if s.genres.len() < GENRES && !s.genres.iter().any(|x| x.eq_ignore_ascii_case(&g)) {
+                            s.genres.push(g);
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => tracing::debug!("discover: Discogs on {group}: {e:#}"),
+            }
+        }
+    }
     // Where the look before found each on Bandcamp, kept from the start and not looked up again (the owner, 2026-10-25:
     // the pick of the day, which plays, went while a sync ran, until the pages were found again; and Bandcamp is asked
     // less).

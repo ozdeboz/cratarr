@@ -243,6 +243,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/health/fixes/apply", post(apply_fixes))
             .route("/api/albums/{source}/{album}/intake", get(album_intake))
             .route("/api/albums/{source}/{album}/release", get(album_release))
+            .route("/api/albums/{source}/{album}/discogs", get(album_discogs))
+            .route("/api/artists/discogs", get(artist_discogs))
             .route("/api/track-search", post(start_track_search))
             .route("/api/track-search/{id}", get(track_search))
             .route("/api/track-search/{id}/fetch", post(start_track_fetch))
@@ -4814,6 +4816,32 @@ async fn put_runtime(State(app): State<Arc<App>>, Json(c): Json<crate::app::runt
     get_runtime().await
 }
 
+// ---- Discogs' facts (0.9.8)
+
+/// An album's facts on Discogs: its master's genres, styles and year, its main release's labels and catalogue numbers
+/// and its credits, its page; `{}` where Discogs has none. Asked now where not kept.
+async fn album_discogs(Path((source, album)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+    own_album(&source)?;
+    let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let facts = crate::app::discogs_facts::album(&served, &album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(facts.map_or(json!({}), |f| serde_json::to_value(f).unwrap_or_default())))
+}
+
+#[derive(Deserialize)]
+struct ArtistAsked {
+    name: String,
+    #[serde(default)]
+    mbid: Option<String>,
+}
+
+/// An artist's facts on Discogs: profile (plain), real name, aliases, name variations, members and groups, links, page;
+/// `{}` where Discogs has none.
+async fn artist_discogs(Query(q): Query<ArtistAsked>) -> Result<Json<serde_json::Value>, ApiError> {
+    let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let facts = crate::app::discogs_facts::artist(&served, &q.name, q.mbid.as_deref()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(facts.map_or(json!({}), |f| serde_json::to_value(f).unwrap_or_default())))
+}
+
 // ---- Single-track replacement (0.9.8)
 
 /// The album's MusicBrainz release, each track with the file that holds it (none: missing).
@@ -5041,6 +5069,9 @@ struct ApplyFixes {
     ids: Vec<String>,
     #[serde(default)]
     certain: Option<String>,
+    /// Genre fixes' chosen genres (0.9.8), by fix id: written as several genres.
+    #[serde(default)]
+    chosen: std::collections::HashMap<String, Vec<String>>,
 }
 
 /// Fixes written into the files (0.9.7, an administrator's tap): `{undo: [token], applied, failed: [{id, why}]}`.
@@ -5050,6 +5081,8 @@ async fn apply_fixes(State(app): State<Arc<App>>, Json(b): Json<ApplyFixes>) -> 
         Some(finding) => crate::app::fixes::of_finding(&app, finding).await.map_err(refused)?.into_iter().filter(|f| f.certainty == "certain").collect(),
         None => crate::app::fixes::by_ids(&app, &b.ids).await.map_err(refused)?,
     };
+    let mut fixes = fixes;
+    crate::app::fixes::choose(&mut fixes, &b.chosen).map_err(refused)?;
     if fixes.is_empty() {
         return Err(ToggleError::Refused("Nothing to fix: look again".into()).into());
     }

@@ -37,6 +37,51 @@ pub struct Fix {
     /// What each track's tags get (the page has no need of it).
     #[serde(skip)]
     pub writes: Vec<(PathBuf, Vec<(&'static str, Option<String>)>)>,
+    /// A genre fix's choices (0.9.8, the owner: "the option to use multiple found genres"): every genre and style found
+    /// for the album, each with its sources; the administrator ticks several (`choose`). `to` is the strongest.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<Choice>,
+}
+
+/// One genre or style a genre fix offers.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Choice {
+    pub word: String,
+    /// genre or style, as the sources have it.
+    pub kind: &'static str,
+    /// Its sources as said ("Discogs and Last.fm").
+    pub source: String,
+    /// certain where two sources or more say it.
+    pub certainty: &'static str,
+}
+
+/// The genres chosen for genre fixes (by fix id), each among what the fix offers: written as several genres ("; "
+/// between them, as the rules split them). A fix chosen for that is not a genre fix, or offered none of them, refused.
+pub fn choose(fixes: &mut [Fix], chosen: &HashMap<String, Vec<String>>) -> Result<()> {
+    for (id, words) in chosen {
+        let Some(fix) = fixes.iter_mut().find(|f| &f.id == id) else { continue };
+        if fix.field != "genre" {
+            bail!("Only a genre fix takes chosen genres");
+        }
+        let mut picked: Vec<String> = Vec::new();
+        for w in words {
+            let found = fix.candidates.iter().map(|c| c.word.as_str()).chain(std::iter::once(fix.to.as_str())).find(|c| c.eq_ignore_ascii_case(w.trim()));
+            if let Some(c) = found
+                && !picked.iter().any(|p| p.eq_ignore_ascii_case(c))
+            {
+                picked.push(c.to_string());
+            }
+        }
+        if picked.is_empty() {
+            bail!("None of those genres was found for it");
+        }
+        let to = picked.join("; ");
+        for (_, set) in fix.writes.iter_mut() {
+            *set = vec![("genre", Some(to.clone()))];
+        }
+        fix.to = to;
+    }
+    Ok(())
 }
 
 /// The tags a fix may write, by their names as the tag reader names them.
@@ -239,6 +284,16 @@ pub async fn of_finding(app: &super::App, key: &str) -> Result<Vec<Fix>> {
     if !to_match.is_empty() {
         fixes.extend(super::matching::fixes(&served, key, to_match).await?);
     }
+    // Missing genres and years: their albums asked of Discogs in the background, a round at a time (0.9.8); what it
+    // says shows the next time the fixes are read.
+    if matches!(key, "library:genre" | "library:year") {
+        let (s, k, have) = (served.clone(), key.to_string(), fixes.iter().map(|f| f.album.clone()).collect::<std::collections::HashSet<_>>());
+        let lacking = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+            Ok(s.library.lacking()?.into_iter().filter(|l| if k == "library:genre" { l.genre } else { l.year }).map(|l| l.id).filter(|a| !have.contains(a)).collect())
+        })
+        .await??;
+        super::discogs_facts::fill(served.clone(), lacking);
+    }
     fixes.sort_by(|a, b| (a.certainty != "certain").cmp(&(b.certainty != "certain")).then_with(|| a.id.cmp(&b.id)));
     Ok(fixes)
 }
@@ -248,8 +303,15 @@ fn year_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'a
     let years = served.userdata.original_years()?;
     let mut out = Vec::new();
     for album in albums {
-        let Some((_, _, Some(release), _, _)) = served.library.album_place(album)? else { continue };
-        let Some(year) = years.get(&release) else { continue };
+        let Some((_, _, release, _, _)) = served.library.album_place(album)? else { continue };
+        // MusicBrainz's first release date, else Discogs' master's year (0.9.8).
+        let (year, source, certainty, why) = match release.as_ref().and_then(|r| years.get(r)) {
+            Some(y) => (*y, "MusicBrainz", "certain", "Its release's first release date on MusicBrainz"),
+            None => match super::discogs_facts::album_kept(served, album)?.and_then(|f| f.year) {
+                Some(y) => (y, "Discogs", "likely", "Its master's year on Discogs"),
+                None => continue,
+            },
+        };
         let paths = track_paths(album)?;
         out.push(Fix {
             id: format!("year:{album}"),
@@ -257,10 +319,11 @@ fn year_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'a
             field: "year",
             from: None,
             to: year.to_string(),
-            source: "MusicBrainz".into(),
-            certainty: "certain",
-            why: "Its release's first release date on MusicBrainz".into(),
+            source: source.into(),
+            certainty,
+            why: why.into(),
             writes: paths.into_iter().map(|p| (p, vec![("date", Some(year.to_string()))])).collect(),
+            candidates: Vec::new(),
         });
     }
     Ok(out)
@@ -272,9 +335,15 @@ fn genre_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'
     let merged = super::words::merged(served)?;
     let mut out = Vec::new();
     for album in albums {
-        let Some(best) = merged.albums.get(album).and_then(|w| w.iter().find(|w| w.kind == "genre")) else { continue };
+        let Some(found) = merged.albums.get(album) else { continue };
+        let Some(best) = found.iter().find(|w| w.kind == "genre") else { continue };
         let paths = track_paths(album)?;
         let sources = names(&best.sources);
+        let candidates: Vec<Choice> = found
+            .iter()
+            .filter(|w| matches!(w.kind, "genre" | "style"))
+            .map(|w| Choice { word: w.word.clone(), kind: w.kind, source: names(&w.sources), certainty: if w.sources.len() >= 2 { "certain" } else { "likely" } })
+            .collect();
         out.push(Fix {
             id: format!("genre:{album}"),
             album: album.to_string(),
@@ -285,6 +354,7 @@ fn genre_fixes<'a>(served: &crate::serve::Serve, albums: impl Iterator<Item = &'
             certainty: if best.sources.len() >= 2 { "certain" } else { "likely" },
             why: format!("The genre {sources} give it most"),
             writes: paths.into_iter().map(|p| (p, vec![("genre", Some(best.word.clone()))])).collect(),
+            candidates,
         });
     }
     Ok(out)
@@ -360,6 +430,7 @@ fn rule_fix(served: &crate::serve::Serve, album: &str) -> Result<Option<Fix>> {
         certainty: "certain",
         why: if rest.is_empty() { format!("Rule: {first}") } else { format!("Rules: {first}, {}", rest.join(", ")) },
         writes,
+        candidates: Vec::new(),
     }))
 }
 
@@ -414,8 +485,17 @@ async fn of_album_only(_app: &super::App, album: &str, fields: Option<&[&str]>) 
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     let (s, a) = (served.clone(), album.to_string());
     let (rule, year, genre) = (wants("rule"), wants("year"), wants("genre"));
+    let lacks = tokio::task::spawn_blocking(move || s.library.lacks_of(&a)).await??;
+    // Discogs' genres, styles and year for it, where it lacks one (0.9.8: asked now, not only by the background pass).
+    if let Some(l) = &lacks
+        && ((genre && l.genre) || (year && l.year))
+        && let Err(e) = super::discogs_facts::album(&served, album).await
+    {
+        tracing::debug!("discogs: {album}: {e:#}");
+    }
+    let (s, a) = (served.clone(), album.to_string());
     let (mut fixes, lacks) = tokio::task::spawn_blocking(move || -> Result<(Vec<Fix>, Option<crate::serve::library::Lacks>)> {
-        let Some(l) = s.library.lacks_of(&a)? else { return Ok((Vec::new(), None)) };
+        let Some(l) = lacks else { return Ok((Vec::new(), None)) };
         let mut out: Vec<Fix> = if rule { rule_fix(&s, &a)?.into_iter().collect() } else { Vec::new() };
         if year && l.year {
             out.extend(year_fixes(&s, std::iter::once(a.as_str()))?);
@@ -448,6 +528,7 @@ async fn of_album_only(_app: &super::App, album: &str, fields: Option<&[&str]>) 
             certainty: if c.from == "coverartarchive" { "certain" } else { "likely" },
             why: format!("{}{size}", c.what),
             writes: Vec::new(),
+            candidates: Vec::new(),
         });
     }
     let matching = served.current_user().is_some_and(|a| super::matching::running(&a));
@@ -457,6 +538,32 @@ async fn of_album_only(_app: &super::App, album: &str, fields: Option<&[&str]>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn several_found_genres_may_be_chosen_and_only_those() {
+        let choice = |w: &str| Choice { word: w.into(), kind: "genre", source: "Discogs".into(), certainty: "likely" };
+        let fix = || Fix {
+            id: "genre:al-1".into(),
+            album: "al-1".into(),
+            field: "genre",
+            from: None,
+            to: "House".into(),
+            source: "Last.fm".into(),
+            certainty: "likely",
+            why: String::new(),
+            writes: vec![(PathBuf::from("/m/01.flac"), vec![("genre", Some("House".into()))])],
+            candidates: vec![choice("House"), choice("Deep House"), choice("Electronic")],
+        };
+        let mut fixes = vec![fix()];
+        choose(&mut fixes, &HashMap::from([("genre:al-1".to_string(), vec!["electronic".to_string(), "Deep House".to_string(), "Deep House".to_string()])])).unwrap();
+        assert_eq!(fixes[0].to, "Electronic; Deep House", "as found, once each, in the order chosen");
+        assert_eq!(fixes[0].writes[0].1, vec![("genre", Some("Electronic; Deep House".to_string()))]);
+        let mut fixes = vec![fix()];
+        assert!(choose(&mut fixes, &HashMap::from([("genre:al-1".to_string(), vec!["Polka".to_string()])])).is_err(), "not one it found");
+        let mut fixes = vec![fix()];
+        choose(&mut fixes, &HashMap::new()).unwrap();
+        assert_eq!(fixes[0].to, "House", "none chosen: the strongest");
+    }
 
     #[test]
     fn sources_are_said_as_a_list() {
