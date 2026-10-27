@@ -169,6 +169,11 @@ export type Prefs = {
   flowPictureOnHome: boolean;
   /** Behind every flow (the owner, 2026-10-26): one of Cratarr's photos (public/backdrops), or one's own picture. */
   flowBackdrop: FlowBackdrop;
+  /** The playing cover's colour (the owner, 2026-10-27: the user's to choose, each place apart): on the floating
+   *  controls' glass, on the mini-player, and as the full player's blurred background. Off: Cratarr's own. */
+  coverColourGlass: boolean;
+  coverColourMini: boolean;
+  coverColourPlayer: boolean;
   /** Shuffle (the owner, 2026-10-27): the ticked ones take turns behind the flows, in place of the one chosen. */
   flowShuffle: boolean;
   /** The ones ticked for Shuffle. */
@@ -419,6 +424,9 @@ export const DEFAULTS: Prefs = {
   homeGreeting: true,
   homeGreetingCapital: false,
   flowPictureOnHome: false,
+  coverColourGlass: true,
+  coverColourMini: true,
+  coverColourPlayer: true,
   flowShuffle: false,
   flowShuffled: [...FLOW_BACKDROPS.filter((b) => b !== 'own')],
   flowShuffleWhen: 'flow',
@@ -525,6 +533,7 @@ function read(): Prefs {
       const backdrop = ({ clock: 'mosaic', yellow: 'pastel', mellow: 'pastel' } as Record<string, string>)[saved.flowBackdrop as string] ?? saved.flowBackdrop;
       if (FLOW_BACKDROPS.includes(backdrop as FlowBackdrop)) p.flowBackdrop = backdrop as FlowBackdrop;
       if (typeof saved.flowShuffle === 'boolean') p.flowShuffle = saved.flowShuffle;
+      for (const k of ['coverColourGlass', 'coverColourMini', 'coverColourPlayer'] as const) if (typeof saved[k] === 'boolean') p[k] = saved[k];
       if (Array.isArray(saved.flowShuffled)) {
         const ticked = saved.flowShuffled.filter((b: unknown): b is FlowBackdrop => FLOW_BACKDROPS.includes(b as FlowBackdrop));
         if (ticked.length) p.flowShuffled = ticked;

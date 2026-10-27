@@ -27,6 +27,7 @@
       prefs.flowBackdrop = DEFAULT_BACKDROP;
       prefs.flowPictureOnHome = false;
       prefs.flowShuffle = false;
+      prefs.coverColourGlass = prefs.coverColourMini = prefs.coverColourPlayer = true;
     },
   );
 
@@ -89,6 +90,13 @@
       <Item name="Capital first letter" line="Of your name, in the greeting" toggle={{ checked: prefs.homeGreetingCapital, onchange: (on) => (prefs.homeGreetingCapital = on) }} />
     </div>
   {/if}
+</Group>
+
+<!-- The playing cover's colour, each place apart (the owner, 2026-10-27): off, Cratarr's own there. -->
+<Group title="Cover colours">
+  <Item name="Control glass" toggle={{ checked: prefs.coverColourGlass, onchange: (on) => (prefs.coverColourGlass = on) }} />
+  <Item name="Mini player" toggle={{ checked: prefs.coverColourMini, onchange: (on) => (prefs.coverColourMini = on) }} />
+  <Item name="Full player background" toggle={{ checked: prefs.coverColourPlayer, onchange: (on) => (prefs.coverColourPlayer = on) }} />
 </Group>
 
 <!-- Behind every flow (crates', a wide album header's, the Library's Flow, Discover's; the owner, 2026-10-26): Cratarr's

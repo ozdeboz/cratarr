@@ -177,7 +177,7 @@
     class:dragging
     class:arming
     class:grabbing
-    style:--art-accent={art.accent ?? 'var(--accent)'}
+    style:--art-accent={(prefs.coverColourMini && art.accent) || 'var(--accent)'}
     style:--share={share}
     style:transform="translateX({dx}px)"
     bind:this={el}

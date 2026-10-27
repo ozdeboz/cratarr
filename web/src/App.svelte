@@ -649,9 +649,10 @@
     root.setProperty('--glass-top', phone && leadBottom && rightBottom ? '0px' : 'var(--glass-room)');
     root.setProperty('--glass-bottom', leadBottom || rightBottom ? 'var(--glass-room)' : '0px');
   });
-  // The playing cover's colour, for the floating controls' surface (app.css --float-bg): the mini-player's.
+  // The playing cover's colour, for the floating controls' surface (app.css --float-bg): the mini-player's. Unless the
+  // user said not (Settings › Appearance › Cover colours): Cratarr's own then, as with nothing playing.
   $effect(() => {
-    document.documentElement.style.setProperty('--now-accent', art.accent ?? 'var(--accent)');
+    document.documentElement.style.setProperty('--now-accent', (prefs.coverColourGlass && art.accent) || 'var(--accent)');
   });
   // The window's height as it is shown (--app-h), for the columns that are as tall as the window: an installed app on
   // Android counts more than the visible window in 100dvh (the sidebar's end went under the screen's edge, 2026-10-14).
