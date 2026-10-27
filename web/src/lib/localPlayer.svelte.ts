@@ -2048,7 +2048,8 @@ async function skipRamped(go: () => void) {
   heldAt = audio.currentTime;
   const mine = ++run;
   try {
-    await rampOut();
+    // Not a stop of the music (it plays on, the next): no grey, no drained button (the owner, 2026-10-27).
+    await quietly(() => rampOut());
   } finally {
     if (mine === run) {
       heldAt = null;

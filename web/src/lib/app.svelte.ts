@@ -198,7 +198,8 @@ if (port) {
     // The app's player ramping (Start and stop): the play/pause button shows it; never a tape rewind's own speeding
     // up and slowing down (the owner, 2026-10-27: the button fills and empties for play and pause only).
     if (m.type === 'ramp' && !rewindNow.on) {
-      if ((m.dir === 'out' || m.dir === 'in') && typeof m.ms === 'number') rampBegins(m.dir, m.ms, typeof m.full === 'number' ? m.full : m.ms);
+      // `effect: false`: the app's own ramp that stops no music (a skip's wind-down): no grey, no drained button.
+      if ((m.dir === 'out' || m.dir === 'in') && typeof m.ms === 'number') rampBegins(m.dir, m.ms, typeof m.full === 'number' ? m.full : m.ms, m.effect !== false);
       else rampEnds();
     }
     if (m.type === 'network-test') {

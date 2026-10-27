@@ -64,11 +64,20 @@
    *  2026-10-26: the colour goes with the ramp, whenever the player says it paused). */
   // After a ramp, its way holds until the player says the same (an app reporting the pause a moment late: no flash).
   let after = $state<'out' | 'in' | null>(null);
+  /** How long after its ramp the colour waits for the player to say it paused or plays. */
+  const AFTER_WAIT_MS = 2500;
   $effect(() => {
     if (isLocal() && ramping.dir && ramping.effect) after = ramping.dir;
   });
   $effect(() => {
     if ((after === 'out' && paused) || (after === 'in' && !paused)) after = null;
+  });
+  // Its ramp over and the player never said the same (a wind-down that went on to the next track, not a pause; the
+  // owner's tablet, 2026-10-27: it stayed grey while it played): what the player says, a moment later.
+  $effect(() => {
+    if (!after || ramping.dir) return;
+    const t = setTimeout(() => (after = null), AFTER_WAIT_MS);
+    return () => clearTimeout(t);
   });
   // Only an effect that stops the music greys it (the owner, 2026-10-27), not the tape's own stops (lib/ramping).
   const grey = $derived(isLocal() && ramping.dir && ramping.effect ? ramping.dir === 'out' : after ? after === 'out' : paused);

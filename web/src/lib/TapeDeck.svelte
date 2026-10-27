@@ -77,7 +77,9 @@
     const parts = [
       { el: spokesL, r: () => radii[0] },
       { el: spokesR, r: () => radii[1] },
-      ...WHEELS.map((w, i) => ({ el: notches[i], r: () => w.r })),
+      // A wheel turns the way the tape goes round it: the inner two, the tape over their other side, the other way (the
+      // owner, 2026-10-27: they turned against it).
+      ...WHEELS.map((w, i) => ({ el: notches[i], r: () => w.r, sense: -w.s })),
     ].map((p) => {
       const turn = p.el.animate([{ transform: 'rotate(0turn)' }, { transform: 'rotate(1turn)' }], { duration: TURN_MS, iterations: Infinity });
       turn.currentTime = FAR_IN;
@@ -88,7 +90,7 @@
     let shown = 0;
     let shownAt = -Infinity;
     const turnAt = (v: number) => {
-      for (const p of parts) p.turn.updatePlaybackRate((v * TURN) / p.r() / (2 * Math.PI));
+      for (const p of parts) p.turn.updatePlaybackRate(((v * TURN) / p.r() / (2 * Math.PI)) * ('sense' in p ? (p.sense as number) : 1));
       shown = v;
     };
     let placedAt = -Infinity;
