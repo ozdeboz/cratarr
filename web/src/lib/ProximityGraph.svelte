@@ -5,6 +5,7 @@
   // changes, then fitted to the box; panning and pinch-zoom stay. With `showTerritories` (lib/territories) the six genres
   // with most share among the playlists shown are drawn as areas under them, the points then neutral; `solo` shows one;
   // a tap inside one highlights its playlists.
+  import { untrack } from 'svelte';
   import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY, type Simulation } from 'd3-force';
   import { select } from 'd3-selection';
   import { zoom, zoomIdentity, type ZoomBehavior, type ZoomTransform } from 'd3-zoom';
@@ -147,7 +148,9 @@
     // To rest at once, unseen (no gliding), then drawn and fitted.
     sim.alpha(1);
     for (let t = 0; t < 400 && sim.alpha() > sim.alphaMin(); t++) sim.tick();
-    frame++;
+    // Not read here: `frame++` reads it too, and this effect ran again on its own bump, without end (0.9.8's Map hung
+    // the page, the owner 2026-10-27).
+    untrack(() => frame++);
     queueMicrotask(fit);
   });
 
