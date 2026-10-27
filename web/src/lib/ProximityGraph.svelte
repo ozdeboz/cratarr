@@ -12,7 +12,7 @@
   import type { Proximity, Signal } from './api';
   import { longpress } from './longpress';
   import { GROUP_NEIGHBOURS, GROUP_RESOLUTION, backbone, communities, nearest, rankers, spread, weigh } from './proximity';
-  import { sharesOf, territories, topGenres, type Territory } from './territories';
+  import { NAME_SIZE, sharesOf, territories, topGenres, type Territory } from './territories';
 
   let {
     data,
@@ -196,7 +196,18 @@
   // palette's order, on the layout as drawn.
   const shares = $derived(data.playlists.map((p) => sharesOf(p)));
   const top = $derived(showTerritories ? topGenres(shares) : []);
-  const lands = $derived<Territory[]>(showTerritories ? territories(pos, shares, top) : []);
+  // The names along the borders keep clear of the points and of the playlists' names shown at rest (the owner,
+  // 2026-10-27), as drawn below: a name centred over its point, 11 high.
+  const nameBoxes = $derived([
+    ...nodes.map((p, i) => [pos[i][0] - p.r, pos[i][1] - p.r, pos[i][0] + p.r, pos[i][1] + p.r] as const),
+    ...[...hubs].map((i) => {
+      const [x, y] = pos[i];
+      const w = data.playlists[i].name.length * 11 * 0.6;
+      const base = y - nodes[i].r - 4;
+      return [x - w / 2, base - 11, x + w / 2, base + 2] as const;
+    }),
+  ]);
+  const lands = $derived<Territory[]>(showTerritories ? territories(pos, shares, top, nameBoxes) : []);
   const tint = (k: number) => PALETTE[k % PALETTE.length];
   $effect(() => {
     genres = top.map((genre, k) => ({ genre, colour: tint(k) }));
@@ -272,9 +283,26 @@
           {/if}
         </g>
       {/each}
+      <!-- Each territory's name along the inside of its outer borders, at half a playlist's name (the owner,
+           2026-10-27: tiny, alongside the border, not across). -->
       {#each lands as l, k (l.genre)}
         {#if !solo || solo === l.genre}
-          <text class="land-name" x={l.label.x} y={l.label.y} style:--tint={tint(k)} style:font-size={`${13 / Math.sqrt(view.k)}px`}>{l.genre}</text>
+          {#each l.edges as edge, e (e)}
+            {@const id = `land-edge-${k}-${e}`}
+            <path {id} d={edge.d} fill="none" stroke="none" />
+            <path id={`${id}-back`} d={edge.back} fill="none" stroke="none" />
+            {#each edge.names as name, m (m)}
+              <!-- Clockwise the inside is under the line; the other way round, above it. -->
+              <text
+                class="land-name"
+                class:flip={name.flip}
+                style:--tint={tint(k)}
+                style:font-size={`${NAME_SIZE / Math.sqrt(view.k)}px`}
+                dy={`${(name.flip ? -1.5 : 1.5) / Math.sqrt(view.k)}px`}
+                ><textPath href={name.flip ? `#${id}-back` : `#${id}`} startOffset={`${(name.flip ? 1 - name.at : name.at) * 100}%`}>{l.genre}</textPath></text
+              >
+            {/each}
+          {/each}
         {/if}
       {/each}
     </g>
@@ -314,16 +342,19 @@
     fill-opacity: 0.3;
   }
 
+  /* Along the border, on its inside: the border goes clockwise, so below the line is inside. */
   .land-name {
     fill: var(--tint);
-    font-weight: 700;
-    text-anchor: middle;
-    dominant-baseline: middle;
-    paint-order: stroke;
-    stroke: var(--surface);
-    stroke-width: 3px;
-    stroke-linejoin: round;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    dominant-baseline: hanging;
     pointer-events: none;
+  }
+
+  /* Along the border the other way round: ending where the clockwise one would start, above the line. */
+  .land-name.flip {
+    dominant-baseline: auto;
+    text-anchor: end;
   }
 
   .link {
