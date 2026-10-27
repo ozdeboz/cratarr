@@ -38,6 +38,43 @@ pub struct Ask {
     pub speed: f64,
     pub gain_db: f64,
     pub fit: Option<Fit>,
+    /// A hold that speeds up as it goes (0.9.12, the owner: "doubling every 1.5 s, up to 64×"): open-ended only.
+    pub accel: Option<Accel>,
+}
+
+/// A hold's speed at stream time t (seconds): min(max, speed × 2^(t / period)); its way so far, the integral of that.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Accel {
+    pub period_s: f64,
+    pub max: f64,
+}
+
+impl Accel {
+    /// When it reaches its top speed (stream seconds) from `base`.
+    fn top_at(&self, base: f64) -> f64 {
+        (self.period_s * (self.max.max(base) / base).log2()).max(0.0)
+    }
+
+    /// How far it has gone by stream time `t` (seconds of track), from `base`.
+    pub fn gone(&self, base: f64, t: f64) -> f64 {
+        let p = self.period_s;
+        let ts = self.top_at(base);
+        let up = |t: f64| base * p / std::f64::consts::LN_2 * (2f64.powf(t / p) - 1.0);
+        if t <= ts { up(t) } else { up(ts) + self.max.max(base) * (t - ts) }
+    }
+
+    /// When it has gone `d` (seconds of track), from `base`.
+    pub fn when(&self, base: f64, d: f64) -> f64 {
+        let p = self.period_s;
+        let ts = self.top_at(base);
+        let at_top = self.gone(base, ts);
+        if d <= at_top { p * (1.0 + d * std::f64::consts::LN_2 / (base * p)).log2() } else { ts + (d - at_top) / self.max.max(base) }
+    }
+
+    /// Its speed at stream time `t` (×).
+    fn speed(&self, base: f64, t: f64) -> f64 {
+        (base * 2f64.powf(t / self.period_s)).min(self.max.max(base))
+    }
 }
 
 /// A condensed wind is at most this long (a tap's and a seek's cap, the owner).
@@ -86,6 +123,12 @@ pub struct Wind {
     v: f64,
     pieces: Vec<Piece>,
     gain: f64,
+    /// An accelerating hold: its rise, the speed it starts from (×), the stream time gone before it (seconds), and
+    /// where it begins and ends (ms), which its map says.
+    accel: Option<Accel>,
+    base: f64,
+    t0: f64,
+    ends: Option<(u64, u64)>,
 }
 
 impl Wind {
@@ -96,6 +139,12 @@ impl Wind {
     /// As `new`, its rate and channels those of the stream it joins (`Some`): winding on through the queue, every track
     /// in the one stream, whatever its own.
     pub fn joined(rate: u32, channels: usize, duration_ms: Option<u64>, ask: Ask, stream: Option<(u32, usize)>) -> Result<Self> {
+        Self::joined_at(rate, channels, duration_ms, ask, stream, 0.0)
+    }
+
+    /// As `joined`, an accelerating hold's stream time `t0` (seconds) already gone before it (the tracks before it in
+    /// the chain): its speed carries on from there.
+    fn joined_at(rate: u32, channels: usize, duration_ms: Option<u64>, ask: Ask, stream: Option<(u32, usize)>, t0: f64) -> Result<Self> {
         let out_rate = if let Some((r, _)) = stream {
             r
         } else if rate <= 48_000 {
@@ -126,7 +175,17 @@ impl Wind {
         let distance = (t - x).abs();
         let mut v = speed * f64::from(rate) / f64::from(out_rate);
         let per_ms = f64::from(out_rate) / 1000.0;
-        let mut w = Wind { rate, out_rate, channels: channels.clamp(1, 2), sign, frames: 0, v, pieces: Vec::new(), gain: 10f64.powf(ask.gain_db.clamp(-48.0, 0.0) / 20.0) };
+        let accel = ask.accel.filter(|_| ask.fit.is_none());
+        let mut w = Wind { rate, out_rate, channels: channels.clamp(1, 2), sign, frames: 0, v, pieces: Vec::new(), gain: 10f64.powf(ask.gain_db.clamp(-48.0, 0.0) / 20.0), accel, base: speed, t0, ends: None };
+        if let Some(a) = accel {
+            // As long as it takes at its rising speed: from stream time t0 to where the way is gone.
+            let secs = distance / f64::from(rate);
+            let end = a.when(speed, a.gone(speed, t0) + secs);
+            w.frames = ((end - t0) * f64::from(out_rate)).ceil().max(1.0) as usize;
+            w.pieces = vec![Piece { from: 0, to: w.frames, top: x, fade_in: None, fade_out: None, own: (0, w.frames) }];
+            w.ends = Some((from_ms, to_ms));
+            return Ok(w);
+        }
         let Some(fit) = ask.fit else {
             // Open-ended: as long as the way at the speed asked.
             w.frames = (distance / v).ceil().max(1.0) as usize;
@@ -170,6 +229,14 @@ impl Wind {
         Ok(w)
     }
 
+    /// Frames of the track a frame of the stream, at stream frame `i`: steady, or an accelerating hold's speed then.
+    fn step(&self, i: usize) -> f64 {
+        match self.accel {
+            None => self.v,
+            Some(a) => a.speed(self.base, self.t0 + (i as f64 + 0.5) / f64::from(self.out_rate)) * f64::from(self.rate) / f64::from(self.out_rate),
+        }
+    }
+
     /// The whole WAV's length (bytes): one track alone (the endpoint sums a chain's parts).
     #[cfg(test)]
     pub fn bytes(&self) -> u64 {
@@ -199,6 +266,10 @@ impl Wind {
     /// Where each piece of the stream stands in the track: knots (stream ms, track ms), linear between; a cut is two
     /// knots at one stream moment.
     pub fn map(&self) -> Vec<(u64, u64)> {
+        // An accelerating hold: its ends (the way between, its formula: `Accel::gone`).
+        if let Some((from, to)) = self.ends {
+            return vec![(0, from), ((self.frames as f64 * 1000.0 / f64::from(self.out_rate)).round() as u64, to)];
+        }
         let ms = |frames: f64, rate: u32| (frames * 1000.0 / f64::from(rate)).round().max(0.0) as u64;
         self.pieces
             .iter()
@@ -236,8 +307,9 @@ impl Wind {
                 let (mut ats, mut speeds) = (Vec::with_capacity(most), Vec::with_capacity(most));
                 while i < p.to && i - start < most && (at - here).abs() < span {
                     ats.push(at.max(0.0));
-                    speeds.push(self.v);
-                    at += self.sign * self.v;
+                    let v = self.step(i);
+                    speeds.push(v);
+                    at += self.sign * v;
                     i += 1;
                 }
                 let block = read_block(sound, self.channels, &ats, &speeds)?;
@@ -283,11 +355,14 @@ pub fn chain(tracks: &[(u32, usize, Option<u64>)], ask: Ask) -> Result<Vec<Wind>
     let Some(&(rate, channels, duration)) = tracks.first() else { bail!("nothing to wind") };
     let first = Wind::new(rate, channels, duration, Ask { fit: None, to_ms: None, ..ask })?;
     let stream = first.stream();
+    let mut t0 = first.ms() / 1000.0;
     let mut out = vec![first];
     for &(rate, channels, duration) in &tracks[1..] {
         let Some(d) = duration.filter(|d| *d > 0) else { break };
         let from_ms = if ask.dir == Dir::Back { d } else { 0 };
-        out.push(Wind::joined(rate, channels, Some(d), Ask { from_ms, to_ms: None, fit: None, ..ask }, Some(stream))?);
+        let w = Wind::joined_at(rate, channels, Some(d), Ask { from_ms, to_ms: None, fit: None, ..ask }, Some(stream), t0)?;
+        t0 += w.ms() / 1000.0;
+        out.push(w);
     }
     Ok(out)
 }
@@ -321,7 +396,7 @@ mod tests {
     }
 
     fn ask(dir: Dir, from_ms: u64, speed: f64) -> Ask {
-        Ask { dir, from_ms, to_ms: None, speed, gain_db: 0.0, fit: None }
+        Ask { dir, from_ms, to_ms: None, speed, gain_db: 0.0, fit: None, accel: None }
     }
 
     fn wav(w: &Wind, sound: &mut dyn Sound) -> Vec<u8> {
@@ -385,6 +460,30 @@ mod tests {
         // Forward: each from its start.
         let winds = chain(&[(44_100, 2, Some(60_000)), (44_100, 2, Some(20_000))], ask(Dir::Forward, 50_000, 4.0)).unwrap();
         assert_eq!(chain_map(&winds), vec![(0, 0, 50_000), (2_500, 0, 60_000), (2_500, 1, 0), (7_500, 1, 20_000)]);
+    }
+
+    #[test]
+    fn a_hold_speeds_up_doubling_to_its_top_and_on_through_the_queue() {
+        let a = Accel { period_s: 1.5, max: 64.0 };
+        // From 8 ×: 64 × after three doublings (4.5 s); the way and its inverse agree.
+        assert!((a.top_at(8.0) - 4.5).abs() < 1e-9);
+        for t in [0.5, 3.0, 4.5, 9.0] {
+            assert!((a.when(8.0, a.gone(8.0, t)) - t).abs() < 1e-6, "{t}");
+        }
+        // Five minutes back from 300 s at 8 × doubling every 1.5 s: far shorter than at a steady 8 × (37.5 s).
+        let w = Wind::new(44_100, 2, Some(600_000), Ask { accel: Some(a), ..ask(Dir::Back, 300_000, 8.0) }).unwrap();
+        let secs = w.ms() / 1000.0;
+        assert!((secs - a.when(8.0, 300.0)).abs() < 0.01, "{secs}");
+        assert!(secs < 10.0, "{secs}");
+        assert_eq!(w.map(), vec![(0, 300_000), ((secs * 1000.0).round() as u64, 0)]);
+        // It sounds through, faster as it goes (the pyramid's higher levels), and as long as asked.
+        let mut wav = Vec::new();
+        w.render(&mut Tone { hz: 40.0, secs: 600.0 }, |b| { wav.extend_from_slice(&b); true }).unwrap();
+        assert_eq!(wav.len() as u64, w.bytes());
+        // Through the queue the speed carries on: the next track at the speed the first ended with.
+        let winds = chain(&[(44_100, 2, Some(600_000)), (44_100, 2, Some(300_000))], Ask { accel: Some(a), ..ask(Dir::Back, 10_000, 8.0) }).unwrap();
+        let t1 = winds[0].ms() / 1000.0;
+        assert!((winds[1].ms() / 1000.0 - (a.when(8.0, 310.0) - t1)).abs() < 0.01);
     }
 
     #[test]

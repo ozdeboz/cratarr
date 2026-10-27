@@ -2846,6 +2846,11 @@ struct WindAsk {
     as_: Option<String>,
     #[serde(default)]
     through: Option<String>,
+    /// A hold that speeds up (0.9.12): its speed doubles every `accel_s` seconds of the stream, up to `max` (64 at most).
+    #[serde(default)]
+    accel_s: Option<f64>,
+    #[serde(default)]
+    max: Option<f64>,
 }
 
 /// Winding (decision 0074): the track from `from_ms` backwards or forwards at a constant speed, as 16-bit WAV made as
@@ -2884,7 +2889,8 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
         (Some(ms), attack, release, piece) => Some(Fit { ms, attack_ms: attack.unwrap_or(0), release_ms: release.unwrap_or(0), piece_ms: piece.unwrap_or(350) }),
         (None, ..) => None,
     };
-    let ask = Ask { dir, from_ms: q.from_ms, to_ms: q.to_ms, speed: q.speed.unwrap_or(6.0), gain_db: q.gain_db.unwrap_or(-12.0), fit };
+    let accel = q.accel_s.filter(|p| p.is_finite() && *p > 0.0).map(|p| crate::wind::Accel { period_s: p.clamp(0.2, 30.0), max: q.max.filter(|m| m.is_finite()).unwrap_or(64.0).clamp(1.0, 64.0) });
+    let ask = Ask { dir, from_ms: q.from_ms, to_ms: q.to_ms, speed: q.speed.unwrap_or(6.0), gain_db: q.gain_db.unwrap_or(-12.0), fit, accel };
     let cat = app.library.catalogue();
     let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten();
     let Some((path, _, duration_ms)) = found else {

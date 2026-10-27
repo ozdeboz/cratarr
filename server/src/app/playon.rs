@@ -213,6 +213,9 @@ pub struct Report {
     /// from the report. Apps from before leave it out.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub rewinding: bool,
+    /// The direction knob as set (0.9.12): `L` backwards, `R` (or left out) forwards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
     /// `device` while the app plays the device's own music (decision 0052, local mode): the rest of this report is that
     /// player's, and Cratarr's queue is left as it was. Left out: Cratarr's music, as ever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -521,6 +524,11 @@ pub enum Command {
         dir: String,
         phase: String,
     },
+    /// The tape deck's direction knob (0.9.12): `L` plays backwards at 1× on the wind stream, `R` forwards; turned while
+    /// playing, the tape slows to a stop first. The player keeps it and reports it.
+    Direction {
+        dir: String,
+    },
     /// To `position_ms`, or `percent` (0 to 100) of the track, or `by_ms` on from where it is now (back below 0: the
     /// visuals' double and triple taps). What reaches the player is always `position_ms`.
     Seek {
@@ -634,6 +642,8 @@ pub struct PlayerView {
     pub held: Option<String>,
     /// Tape rewind under way (0.9.10): `position_ms` goes back to the start, reported as it goes, not counted on.
     pub rewinding: bool,
+    /// The direction knob as the player says (0.9.12): `L` or `R`.
+    pub direction: &'static str,
     /// Where its sound goes now, as its app says (decision 0033, amended 2026-10-19); none where it does not say.
     pub output: Option<Output>,
     pub queue_length: usize,
@@ -991,6 +1001,7 @@ impl Entry {
             announce: r.announce.clone(),
             held: r.held.clone(),
             rewinding: r.rewinding,
+            direction: if r.direction.as_deref() == Some("L") { "L" } else { "R" },
             output: r.output.clone(),
             queue_length: self.queue.tracks.len(),
             repeat: self.queue.repeat,
@@ -1979,7 +1990,7 @@ impl PlayOn {
             match command {
                 Command::Pause | Command::Resume | Command::Toggle | Command::Next | Command::Previous | Command::Volume { .. } => command,
                 // Device music cannot be rendered: a hold there is a plain skip (0074's fallback), the player's to do.
-                Command::Wind { .. } => command,
+                Command::Wind { .. } | Command::Direction { .. } => command,
                 Command::Duck | Command::Unduck | Command::Sleep { .. } | Command::Seek { .. } | Command::Sample { .. } => command,
                 Command::Announce { .. } => command,
                 Command::Play { .. } | Command::Queue { .. } | Command::QueueRename { .. } | Command::QueueDelete { .. } => command,

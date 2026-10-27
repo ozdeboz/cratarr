@@ -121,6 +121,11 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             // Through the service (0.9.6, Start and stop): the change shows once it is made, after a ramp out.
             "next" -> skip("next")
             "previous" -> skip("previous")
+            // The tape deck's direction knob (0.9.12), through the service.
+            "direction" -> controller.sendCustomCommand(
+                SessionCommand(PlayerService.COMMAND_DIRECTION, Bundle.EMPTY),
+                Bundle().apply { putString("dir", m.optString("dir")) },
+            )
             // Previous or Next held (decision 0074): wound while held, through the service as Play On's `wind`.
             "wind" -> controller.sendCustomCommand(
                 SessionCommand(PlayerService.COMMAND_WIND, Bundle.EMPTY),
@@ -208,6 +213,7 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             .put("positionMs", StartStop.rewoundAt ?: c.currentPosition)
             // Going back with Tape rewind's clip: shown as it comes, nothing counted on meanwhile.
             .put("rewinding", StartStop.rewoundAt != null)
+            .put("direction", StartStop.deckDirection)
             .put("durationMs", if (c.duration == C.TIME_UNSET) -1 else c.duration)
             .put("paused", !c.playWhenReady || c.playbackState == Player.STATE_ENDED)
             .put("error", c.playerError?.let(::describe) ?: JSONObject.NULL)

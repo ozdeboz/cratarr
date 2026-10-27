@@ -360,7 +360,7 @@ class PlayOnLink(
         if (prefs.mode == Prefs.MODE_DEVICE) {
             when (m.optString("command")) {
                 "play" -> service.switchMode(Prefs.MODE_CRATARR, "play from Cratarr")
-                "pause", "resume", "toggle", "next", "previous", "sleep", "seek", "volume", "duck", "unduck", "announce", "wind" -> {}
+                "pause", "resume", "toggle", "next", "previous", "sleep", "seek", "volume", "duck", "unduck", "announce", "wind", "direction" -> {}
                 "group" -> if (!m.isNull("leader")) return report()
                 "stop" -> {
                     release()
@@ -395,6 +395,7 @@ class PlayOnLink(
                 release()
                 // A play from Cratarr (a move's carry-on, a queue taken up) starts at once: switching devices bypasses every
                 // play effect (the owner, 2026-10-27): no wind-up, no wind under way.
+                service.startStop.forwards()
                 if (m.optBoolean("paused")) p.pause() else {
                     asked()
                     service.startStop.reset()
@@ -430,6 +431,7 @@ class PlayOnLink(
                 p.replaceMediaItems(from, p.mediaItemCount, items)
             }
             "jump" -> placed(m, "entry", "index").takeIf { it in 0 until p.mediaItemCount }?.let {
+                service.startStop.forwards()
                 p.seekTo(it, 0)
                 play()
             }
@@ -480,6 +482,8 @@ class PlayOnLink(
             "skip_favourites" -> SkipFavourites.set(service, p, m.optBoolean("on"))
             "seek" -> m.optLong("position_ms", p.currentPosition).let { to -> service.startStop.seekTo(to) { p.seekTo(to) } }
             // Previous or Next held (decision 0074): wound while held; where it cannot wind, a press as ever.
+            // The tape deck's direction knob (0.9.12).
+            "direction" -> service.startStop.setDirection(m.optString("dir") == "L")
             "wind" -> {
                 val back = m.optString("dir") != "forward"
                 if (m.optString("phase") == "stop") {
@@ -779,6 +783,7 @@ class PlayOnLink(
             .put("playing", service.startStop.committed ?: (p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE))
             // Tape rewind (0.9.10): the position goes back to the start as the clip sounds; Cratarr does not count it on.
             .put("rewinding", service.startStop.rewinding)
+            .put("direction", StartStop.deckDirection)
             .put("volume", volume())
             .put("ducked", ducked)
             .put("announce", announcing?.json() ?: JSONObject.NULL)

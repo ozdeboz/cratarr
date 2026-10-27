@@ -606,6 +606,7 @@ class PlayerService : MediaSessionService() {
                 .add(SessionCommand(COMMAND_TARGET, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_SKIP, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_WIND, Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_DIRECTION, Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller).setAvailableSessionCommands(commands).build()
         }
@@ -664,6 +665,8 @@ class PlayerService : MediaSessionService() {
                 COMMAND_SKIP -> if (args.getString("dir") == "previous") sessionPlayer.seekToPrevious() else sessionPlayer.seekToNextMediaItem()
                 // The page's Previous or Next held (decision 0074), as Play On's `wind`: where it cannot wind, a plain press
                 // on letting go.
+                // The page's tape deck direction knob (0.9.12).
+                COMMAND_DIRECTION -> startStop.setDirection(args.getString("dir") == "L")
                 COMMAND_WIND -> {
                     val back = args.getString("dir") != "forward"
                     if (args.getString("phase") == "stop") {
@@ -699,15 +702,17 @@ class PlayerService : MediaSessionService() {
     /** The playing track's wind stream (decision 0074): Cratarr's, from [fromMs], to [toMs] or the edge, condensed to
      *  [fitMs] or open-ended, back or forward, as this device's winding is set; none for a track of the device's own or a
      *  Bandcamp preview, which Cratarr keeps no file of. */
-    private fun windUrl(fromMs: Long, toMs: Long?, fitMs: Long?, back: Boolean, through: String?): String? {
+    private fun windUrl(fromMs: Long, toMs: Long?, fitMs: Long?, back: Boolean, through: String?, speed: Float, gainDb: Float, rise: Boolean): String? {
         val item = player.currentMediaItem ?: return null
         val server = prefs.serverUrl?.trimEnd('/') ?: return null
         if (DeviceMusic.located(item) != null || item.mediaId.startsWith("bandcamp/")) return null
         val to = toMs?.let { "&to_ms=$it" } ?: ""
         val fit = fitMs?.let { "&fit_ms=$it&attack_ms=${prefs.windAttackMs}&release_ms=${prefs.windReleaseMs}&piece_ms=${prefs.windPieceMs}" } ?: ""
         val on = through?.let { "&through=" + Uri.encode(it, ",/:") } ?: ""
-        return "$server/api/stream/${item.mediaId}/wind?from_ms=$fromMs&dir=${if (back) "back" else "forward"}&speed=${prefs.windSpeed}" +
-            "&gain_db=${prefs.windGainDb}$to$fit$on"
+        // A hold speeds up as it goes (0.9.12): doubling every 1.5 s of its stream, up to 64×.
+        val accel = if (rise) "&accel_s=1.5&max=64" else ""
+        return "$server/api/stream/${item.mediaId}/wind?from_ms=$fromMs&dir=${if (back) "back" else "forward"}&speed=$speed" +
+            "&gain_db=$gainDb$to$fit$on$accel"
     }
 
     /** The queue's tracks in a hold's way (decision 0074, through the queue): back the ones before this, forward the ones
@@ -750,6 +755,7 @@ class PlayerService : MediaSessionService() {
         const val COMMAND_TARGET = "cratarr.TARGET"
         const val COMMAND_SKIP = "cratarr.SKIP"
         const val COMMAND_WIND = "cratarr.WIND"
+        const val COMMAND_DIRECTION = "cratarr.DIRECTION"
         /** A previous or next key held this long is a hold: it winds. */
         private const val HOLD_MS = 400L
 
