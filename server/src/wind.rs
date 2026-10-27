@@ -1,0 +1,323 @@
+//! Winding (decision 0074): the track from a moment, backwards or forwards, at a constant speed, as a tape deck winds;
+//! anti-aliased as Tape rewind is (`rewind::read_block`, its half-band pyramid). The envelope is each player's own: its
+//! vinyl ramp from still to 1 and back, never above 1×, on this stream. Open-ended (a hold: until the player stops
+//! reading, or the edge), or condensed to a wall length with that envelope in mind (a tap, a winding seek): where the
+//! speed would not get there in time the middle is cut into pieces spread evenly over the way, each jump crossfaded;
+//! where it would get there sooner the speed is lowered. Quieter than the music by the device's wind volume. The map
+//! (`map`) says where each moment of the stream stands in the track.
+
+use std::f64::consts::PI;
+
+use anyhow::{Result, bail};
+
+use crate::rewind::{BLOCK, FADE, FIRST, SPAN, Sound, XFADE, read_block, wav_header};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dir {
+    Back,
+    Forward,
+}
+
+/// A condensed wind: its wall length and the player's envelope on it (milliseconds), and the pieces' length.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fit {
+    pub ms: u64,
+    pub attack_ms: u64,
+    pub release_ms: u64,
+    pub piece_ms: u64,
+}
+
+/// What a player asks.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ask {
+    pub dir: Dir,
+    pub from_ms: u64,
+    /// Where it ends: the track's edge when none (0:00 back, its end forward).
+    pub to_ms: Option<u64>,
+    /// The sustain level (× the track's speed).
+    pub speed: f64,
+    pub gain_db: f64,
+    pub fit: Option<Fit>,
+}
+
+/// A condensed wind is at most this long (a tap's and a seek's cap, the owner).
+const LONGEST_FIT_MS: u64 = 12_000;
+const SHORTEST_FIT_MS: u64 = 200;
+
+/// One stretch of the stream: its frames with the crossfades' overlap, where the track is at its first, its fades; and
+/// its own frames without the overlap, for the map.
+#[derive(Debug, Clone, PartialEq)]
+struct Piece {
+    from: usize,
+    to: usize,
+    top: f64,
+    fade_in: Option<(usize, usize)>,
+    fade_out: Option<(usize, usize)>,
+    own: (usize, usize),
+}
+
+impl Piece {
+    fn gain(&self, i: usize) -> f64 {
+        let ease = |(a, b): (usize, usize), up: bool| {
+            let t = ((i as f64 + 0.5 - a as f64) / (b - a) as f64).clamp(0.0, 1.0);
+            if up { (t * PI / 2.0).sin() } else { (t * PI / 2.0).cos() }
+        };
+        self.fade_in.map_or(1.0, |w| if i < w.1 { ease(w, true) } else { 1.0 }) * self.fade_out.map_or(1.0, |w| if i >= w.0 { ease(w, false) } else { 1.0 })
+    }
+}
+
+/// The player's envelope at wall frame `i` of `d`: raised-cosine up over `a`, down over `r`; a wind too short for both
+/// peaks lower (the release starts from wherever the attack had got to).
+fn envelope(i: usize, d: usize, a: usize, r: usize) -> f64 {
+    let ramp = |x: f64, len: usize| if len == 0 { 1.0 } else { (1.0 - (PI * (x / len as f64).clamp(0.0, 1.0)).cos()) / 2.0 };
+    let t = i as f64 + 0.5;
+    ramp(t, a).min(ramp(d as f64 - t, r))
+}
+
+pub struct Wind {
+    rate: u32,
+    out_rate: u32,
+    channels: usize,
+    /// −1 back, +1 forward.
+    sign: f64,
+    /// The stream's length (frames of the stream, the clip time a player consumes).
+    frames: usize,
+    /// Frames of the track a frame of the stream.
+    v: f64,
+    pieces: Vec<Piece>,
+    gain: f64,
+}
+
+impl Wind {
+    pub fn new(rate: u32, channels: usize, duration_ms: Option<u64>, ask: Ask) -> Result<Self> {
+        let out_rate = if rate <= 48_000 {
+            rate
+        } else if rate % 44_100 == 0 {
+            44_100
+        } else {
+            48_000
+        };
+        let speed = if ask.speed.is_finite() { ask.speed.clamp(1.0, 16.0) } else { 6.0 };
+        let edge = match ask.dir {
+            Dir::Back => 0,
+            Dir::Forward => match duration_ms {
+                Some(d) => d,
+                None => bail!("the track's length is not known: it cannot be wound forward"),
+            },
+        };
+        let from_ms = duration_ms.map_or(ask.from_ms, |d| ask.from_ms.min(d));
+        let to_ms = ask.to_ms.unwrap_or(edge);
+        let to_ms = duration_ms.map_or(to_ms, |d| to_ms.min(d));
+        let sign = if ask.dir == Dir::Back { -1.0 } else { 1.0 };
+        if (to_ms as f64 - from_ms as f64) * sign <= 0.0 {
+            bail!("nothing to wind: the end is not that way");
+        }
+        let at = |ms: u64| ms as f64 * f64::from(rate) / 1000.0;
+        let (x, t) = (at(from_ms), at(to_ms));
+        let distance = (t - x).abs();
+        let mut v = speed * f64::from(rate) / f64::from(out_rate);
+        let per_ms = f64::from(out_rate) / 1000.0;
+        let mut w = Wind { rate, out_rate, channels: channels.clamp(1, 2), sign, frames: 0, v, pieces: Vec::new(), gain: 10f64.powf(ask.gain_db.clamp(-48.0, 0.0) / 20.0) };
+        let Some(fit) = ask.fit else {
+            // Open-ended: as long as the way at the speed asked.
+            w.frames = (distance / v).ceil().max(1.0) as usize;
+            w.pieces = vec![Piece { from: 0, to: w.frames, top: x, fade_in: None, fade_out: None, own: (0, w.frames) }];
+            return Ok(w);
+        };
+        let d = (fit.ms.clamp(SHORTEST_FIT_MS, LONGEST_FIT_MS) as f64 * per_ms) as usize;
+        let (a, r) = ((fit.attack_ms as f64 * per_ms) as usize, (fit.release_ms as f64 * per_ms) as usize);
+        // The stream the player consumes over its wall length, its envelope's area.
+        let clip: f64 = (0..d).map(|i| envelope(i, d, a, r)).sum();
+        w.frames = clip.round().max(1.0) as usize;
+        let n = w.frames;
+        if v * n as f64 >= distance {
+            v = distance / n as f64;
+            w.v = v;
+            w.pieces = vec![Piece { from: 0, to: n, top: x, fade_in: None, fade_out: None, own: (0, n) }];
+            return Ok(w);
+        }
+        // Cut: pieces of the clip spread evenly over the way, the first from X, the last ending on T.
+        let piece = (fit.piece_ms as f64 * per_ms).max(1.0);
+        let k = ((n as f64 / piece).round() as usize).max(2);
+        let edge = |i: usize| (i * n + k / 2) / k;
+        let last_top = t - sign * v * (edge(k) - edge(k - 1)) as f64;
+        let half = ((XFADE * f64::from(out_rate) / 2.0) as usize).max(1);
+        w.pieces = (0..k)
+            .map(|i| {
+                let (s, e) = (edge(i), edge(i + 1));
+                let top = x + (last_top - x) * i as f64 / (k - 1) as f64;
+                let from = if i == 0 { s } else { s.saturating_sub(half) };
+                Piece {
+                    from,
+                    to: if i == k - 1 { e } else { (e + half).min(n) },
+                    // Before its own first frame it is where the track was a little earlier in the wind.
+                    top: top - sign * v * (s - from) as f64,
+                    fade_in: (i > 0).then_some((from, s + half)),
+                    fade_out: (i < k - 1).then_some((e.saturating_sub(half), (e + half).min(n))),
+                    own: (s, e),
+                }
+            })
+            .collect();
+        Ok(w)
+    }
+
+    /// The whole WAV's length (bytes).
+    pub fn bytes(&self) -> u64 {
+        44 + self.frames as u64 * self.channels as u64 * 2
+    }
+
+    /// The speed it winds at (× the track's): lower than asked where a condensed wind got there sooner.
+    pub fn speed(&self) -> f64 {
+        self.v * f64::from(self.out_rate) / f64::from(self.rate)
+    }
+
+    /// Where each piece of the stream stands in the track: knots (stream ms, track ms), linear between; a cut is two
+    /// knots at one stream moment.
+    pub fn map(&self) -> Vec<(u64, u64)> {
+        let ms = |frames: f64, rate: u32| (frames * 1000.0 / f64::from(rate)).round().max(0.0) as u64;
+        self.pieces
+            .iter()
+            .flat_map(|p| {
+                let top = p.top + self.sign * self.v * (p.own.0 - p.from) as f64;
+                let end = top + self.sign * self.v * (p.own.1 - p.own.0) as f64;
+                [(ms(p.own.0 as f64, self.out_rate), ms(top, self.rate)), (ms(p.own.1 as f64, self.out_rate), ms(end, self.rate))]
+            })
+            .collect()
+    }
+
+    /// The WAV, header first, a block at a time to `send`; one that answers false (the player stopped reading: a hold
+    /// let go) ends it. Only what the crossfades still need is kept, however long the wind.
+    pub fn render(&self, sound: &mut dyn Sound, mut send: impl FnMut(Vec<u8>) -> bool) -> Result<()> {
+        if !send(wav_header(self.out_rate, self.channels, self.bytes() - 44)) {
+            return Ok(());
+        }
+        let fade = ((FADE * f64::from(self.out_rate)) as usize).max(1);
+        let span = SPAN * f64::from(self.rate);
+        let mut dither = crate::convert::Tpdf::new();
+        // The frames not sent yet, from `sent` on.
+        let mut pending: Vec<Vec<f32>> = vec![Vec::new(); self.channels];
+        let mut sent = 0;
+        for (j, p) in self.pieces.iter().enumerate() {
+            let (mut i, mut at) = (p.from, p.top);
+            while i < p.to {
+                let most = (((if i == 0 { FIRST } else { BLOCK }) * f64::from(self.out_rate)) as usize).max(1);
+                let (start, here) = (i, at);
+                let (mut ats, mut speeds) = (Vec::with_capacity(most), Vec::with_capacity(most));
+                while i < p.to && i - start < most && (at - here).abs() < span {
+                    ats.push(at.max(0.0));
+                    speeds.push(self.v);
+                    at += self.sign * self.v;
+                    i += 1;
+                }
+                let block = read_block(sound, self.channels, &ats, &speeds)?;
+                for (c, b) in pending.iter_mut().zip(&block) {
+                    if c.len() < i - sent {
+                        c.resize(i - sent, 0.0);
+                    }
+                    for (k, v) in b.iter().enumerate() {
+                        c[start + k - sent] += (f64::from(*v) * p.gain(start + k) * self.gain) as f32;
+                    }
+                }
+                // What no later piece adds to is ready.
+                let ready = self.pieces.get(j + 1).map_or(i, |next| i.min(next.from));
+                if ready > sent {
+                    let mut bytes = Vec::with_capacity((ready - sent) * self.channels * 2);
+                    for f in sent..ready {
+                        let edge = f.min(self.frames - 1 - f);
+                        let g = if edge < fade { (1.0 - (PI * (edge as f64 + 0.5) / fade as f64).cos()) / 2.0 } else { 1.0 };
+                        for c in &pending {
+                            let v = f64::from(c[f - sent]) * g * 32767.0 + dither.next();
+                            bytes.extend_from_slice(&(v.round().clamp(-32768.0, 32767.0) as i16).to_le_bytes());
+                        }
+                    }
+                    for c in pending.iter_mut() {
+                        c.drain(..ready - sent);
+                    }
+                    sent = ready;
+                    if !send(bytes) {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Tone {
+        hz: f64,
+        secs: f64,
+    }
+
+    impl Sound for Tone {
+        fn read(&mut self, from: u64, to: u64) -> Result<(u64, Vec<Vec<f32>>)> {
+            let to = to.min((self.secs * 44_100.0) as u64);
+            let one: Vec<f32> = (from..to).map(|i| (0.5 * (2.0 * PI * self.hz * i as f64 / 44_100.0).sin()) as f32).collect();
+            Ok((from, vec![one.clone(), one]))
+        }
+    }
+
+    fn ask(dir: Dir, from_ms: u64, speed: f64) -> Ask {
+        Ask { dir, from_ms, to_ms: None, speed, gain_db: 0.0, fit: None }
+    }
+
+    fn wav(w: &Wind, sound: &mut dyn Sound) -> Vec<u8> {
+        let mut out = Vec::new();
+        w.render(sound, |b| {
+            out.extend_from_slice(&b);
+            true
+        })
+        .unwrap();
+        out
+    }
+
+    #[test]
+    fn a_hold_winds_to_the_edge_at_its_speed_either_way() {
+        // Ten seconds back at 2 ×: five seconds of stream, from 10 s to 0.
+        let w = Wind::new(44_100, 2, Some(60_000), ask(Dir::Back, 10_000, 2.0)).unwrap();
+        assert_eq!(w.frames, 5 * 44_100);
+        assert_eq!(w.map(), vec![(0, 10_000), (5_000, 0)]);
+        assert_eq!(wav(&w, &mut Tone { hz: 440.0, secs: 60.0 }).len() as u64, w.bytes());
+        // Forward from 10 s to a seek's target at 40 s, at 4 ×: 7.5 s.
+        let w = Wind::new(44_100, 2, Some(60_000), Ask { to_ms: Some(40_000), ..ask(Dir::Forward, 10_000, 4.0) }).unwrap();
+        assert_eq!(w.map(), vec![(0, 10_000), (7_500, 40_000)]);
+        // Nothing that way.
+        assert!(Wind::new(44_100, 2, Some(60_000), Ask { to_ms: Some(5_000), ..ask(Dir::Forward, 10_000, 4.0) }).is_err());
+    }
+
+    #[test]
+    fn a_tap_fits_its_length_with_the_players_envelope() {
+        let fit = Fit { ms: 2_000, attack_ms: 300, release_ms: 200, piece_ms: 350 };
+        // Three minutes back: the stream is the envelope's area (2 s less half of 0.5 s), cut into pieces ending on 0:00.
+        let w = Wind::new(44_100, 2, Some(240_000), Ask { fit: Some(fit), ..ask(Dir::Back, 180_000, 6.0) }).unwrap();
+        assert!((w.frames as f64 / 44_100.0 - 1.75).abs() < 0.01, "{}", w.frames);
+        assert_eq!(w.pieces.len(), 5);
+        let map = w.map();
+        assert_eq!((map[0].1, map.last().unwrap().1), (180_000, 0));
+        assert!((w.speed() - 6.0).abs() < 1e-9);
+        // Five seconds back: not cut, slower than asked.
+        let w = Wind::new(44_100, 2, Some(240_000), Ask { fit: Some(fit), ..ask(Dir::Back, 5_000, 6.0) }).unwrap();
+        assert_eq!(w.pieces.len(), 1);
+        assert!((w.speed() - 5.0 / 1.75).abs() < 0.01, "{}", w.speed());
+        // Shorter than its attack and release: it peaks lower, so it consumes less.
+        let short = Fit { ms: 400, ..fit };
+        let w = Wind::new(44_100, 2, Some(240_000), Ask { fit: Some(short), ..ask(Dir::Back, 180_000, 6.0) }).unwrap();
+        assert!(w.frames < 44_100 / 5, "{}", w.frames);
+    }
+
+    #[test]
+    fn it_winds_quieter_by_the_wind_volume() {
+        let rms = |b: &[u8]| {
+            let s: Vec<f64> = b[44..].chunks_exact(4).map(|f| f64::from(i16::from_le_bytes([f[0], f[1]])) / 32768.0).collect();
+            (s.iter().map(|v| v * v).sum::<f64>() / s.len() as f64).sqrt()
+        };
+        let loud = Wind::new(44_100, 2, Some(60_000), ask(Dir::Back, 4_000, 1.0)).unwrap();
+        let quiet = Wind::new(44_100, 2, Some(60_000), Ask { gain_db: -12.0, ..ask(Dir::Back, 4_000, 1.0) }).unwrap();
+        let (l, q) = (rms(&wav(&loud, &mut Tone { hz: 200.0, secs: 60.0 })), rms(&wav(&quiet, &mut Tone { hz: 200.0, secs: 60.0 })));
+        assert!((q / l - 0.251).abs() < 0.01, "{}", q / l);
+    }
+}

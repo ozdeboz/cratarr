@@ -75,7 +75,8 @@ half-band pyramid); each player adds the envelope, its own vinyl ramp, never abo
   - Headers: `x-wind-speed`, `x-wind-dir`; condensed, `x-wind-map`: knots `[[clip_ms, track, track_ms], …]`, linear
     between, a cut two knots at one `clip_ms`; the counters' smooth pace is the straight line from X to T in c.
   - 404 where it cannot be rendered (the player jumps); 503 while another decode holds the turn past a moment.
-- `POST /api/players/{name}/wind` `{ dir: "back"|"forward", phase: "start"|"stop" }`: a hold on another player.
+- A hold on another player: `POST /api/players/{name}/command` `{ "command": "wind", "dir": "back"|"forward",
+  "phase": "start"|"stop" }` (Play On's commands, as Next and Previous).
 - The device settings travel with Start and stop's (`startStop.wind`: `ratio`, `speed`, `attackMs`, `releaseMs`,
   `pieceMs`, `gainDb`, `seekWinds`, `edges`: `"stop"|"queue"`), replacing 0.9.10's four Tape rewind controls.
 - `GET /api/stream/{source}/{id}/rewind` stays for players before this, its shape held as 0.9.10's.

@@ -25,6 +25,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/cover/{source}/{id}", get(cover))
         .route("/api/stream/{source}/{id}", get(stream))
         .route("/api/stream/{source}/{id}/rewind", get(stream_rewind))
+        .route("/api/stream/{source}/{id}/wind", get(stream_wind))
         .route("/api/file/{source}/{id}", get(file))
         .route("/api/track/{source}/{id}/gain", get(track_gain))
         .route("/api/offline", post(offline_facts))
@@ -2818,6 +2819,122 @@ async fn stream_rewind(State(app): State<Arc<App>>, Path((source, id)): Path<(St
         chunk
     });
     (headers, axum::body::Body::from_stream(body)).into_response()
+}
+
+/// A wind (decision 0074): from where, which way, how fast, how much quieter; to where (none: the edge); condensed to a
+/// wall length with the player's envelope (all four of `fit_ms`, `attack_ms`, `release_ms`, `piece_ms`), else open-ended.
+#[derive(Deserialize)]
+struct WindAsk {
+    from_ms: u64,
+    dir: String,
+    #[serde(default)]
+    speed: Option<f64>,
+    #[serde(default)]
+    gain_db: Option<f64>,
+    #[serde(default)]
+    to_ms: Option<u64>,
+    #[serde(default)]
+    fit_ms: Option<u64>,
+    #[serde(default)]
+    attack_ms: Option<u64>,
+    #[serde(default)]
+    release_ms: Option<u64>,
+    #[serde(default)]
+    piece_ms: Option<u64>,
+    #[serde(default, rename = "as")]
+    as_: Option<String>,
+    #[serde(default)]
+    through: Option<String>,
+}
+
+/// Winding (decision 0074): the track from `from_ms` backwards or forwards at a constant speed, as 16-bit WAV made as
+/// the player reads it (a hold lasts as long as it reads). Its headers place it: `x-wind-speed` (lower than asked where
+/// a condensed wind got there sooner), `x-wind-dir`, and `x-wind-map`, knots `[[stream_ms, track, track_ms], …]`, linear
+/// between, a cut two knots at one moment. 404 where it cannot be rendered (the player jumps), 503 while another decode
+/// holds the turn, 400 for what is not there yet (another form than WAV, winding through the queue).
+async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<WindAsk>) -> Response {
+    use crate::wind::{Ask, Dir, Fit, Wind};
+    let asked = std::time::Instant::now();
+    let since = move || asked.elapsed().as_millis() as u64;
+    let what = format!("{source}/{id}");
+    let refused = |why: &str| (StatusCode::BAD_REQUEST, Json(json!({ "error": why }))).into_response();
+    if q.as_.as_deref().is_some_and(|f| f != "wav") {
+        return refused("Only WAV winds yet.");
+    }
+    if q.through.as_deref().is_some_and(|t| !t.is_empty()) {
+        return refused("Winding through the queue is not there yet.");
+    }
+    let dir = match q.dir.as_str() {
+        "back" => Dir::Back,
+        "forward" => Dir::Forward,
+        _ => return refused("dir is back or forward."),
+    };
+    let fit = match (q.fit_ms, q.attack_ms, q.release_ms, q.piece_ms) {
+        (Some(ms), attack, release, piece) => Some(Fit { ms, attack_ms: attack.unwrap_or(0), release_ms: release.unwrap_or(0), piece_ms: piece.unwrap_or(350) }),
+        (None, ..) => None,
+    };
+    let ask = Ask { dir, from_ms: q.from_ms, to_ms: q.to_ms, speed: q.speed.unwrap_or(6.0), gain_db: q.gain_db.unwrap_or(-12.0), fit };
+    let cat = app.library.catalogue();
+    let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten();
+    let Some((path, _, duration_ms)) = found else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
+    };
+    let Some(turn) = crate::app::analysis_pass::heavy_turn(REWIND_TURN).await else {
+        tracing::warn!(target: "rewind", track = %what, waited = since(), "wind: the decode's turn did not come");
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "Another track is being decoded." }))).into_response();
+    };
+    // Paced by the player's reading: a hold may last minutes, and only a few blocks wait for it at a time.
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(16);
+    let (said, heard) = tokio::sync::oneshot::channel();
+    let what2 = what.clone();
+    tokio::task::spawn_blocking(move || {
+        let _turn = turn;
+        let _job = crate::memwatch::job(format!("wind: {}", path.display()));
+        let mut sound = match crate::analysis::Reading::open(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = said.send(Err((StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}"))));
+                return;
+            }
+        };
+        let wind = match Wind::new(sound.rate(), sound.channels(), duration_ms, ask) {
+            Ok(w) => w,
+            Err(e) => {
+                let _ = said.send(Err((StatusCode::BAD_REQUEST, format!("{e:#}"))));
+                return;
+            }
+        };
+        let map: Vec<serde_json::Value> = wind.map().into_iter().map(|(c, t)| json!([c, 0, t])).collect();
+        let _ = said.send(Ok((wind.bytes(), wind.speed(), serde_json::Value::Array(map).to_string())));
+        let mut blocks = 0u32;
+        let rendered = wind.render(&mut sound, |b| {
+            blocks += 1;
+            tx.blocking_send(Ok(b.into())).is_ok()
+        });
+        if let Err(e) = rendered {
+            tracing::warn!("wind of {}: {e:#}", path.display());
+            let _ = tx.blocking_send(Err(std::io::Error::other(format!("{e:#}"))));
+        }
+        tracing::info!(target: "rewind", track = %what2, from_ms = ask.from_ms, to_ms = ?ask.to_ms, dir = ?ask.dir, speed = ask.speed, fit = ?ask.fit,
+            blocks, ended = since(), "wind (ms since the request)");
+    });
+    let (bytes, speed, map) = match heard.await {
+        Ok(Ok(h)) => h,
+        Ok(Err((status, e))) => return (status, Json(json!({ "error": e }))).into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/wav"));
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(bytes));
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert("x-wind-dir", HeaderValue::from_static(if q.dir == "back" { "back" } else { "forward" }));
+    if let Ok(v) = HeaderValue::from_str(&format!("{speed:.4}")) {
+        headers.insert("x-wind-speed", v);
+    }
+    if let Ok(v) = HeaderValue::from_str(&map) {
+        headers.insert("x-wind-map", v);
+    }
+    (headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response()
 }
 
 /// A track as Opus in fragmented MP4, made as it is sent: a lossless one for a phone's stream, and with `lossy_too` one

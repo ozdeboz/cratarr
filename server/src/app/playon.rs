@@ -515,6 +515,12 @@ pub enum Command {
     Stop,
     Next,
     Previous,
+    /// Previous or Next held (decision 0074): `start` pauses with the device's Start and stop, then winds `back` or
+    /// `forward` (its own envelope, the server's wind stream) while held; `stop` brakes and plays on from there.
+    Wind {
+        dir: String,
+        phase: String,
+    },
     /// To `position_ms`, or `percent` (0 to 100) of the track, or `by_ms` on from where it is now (back below 0: the
     /// visuals' double and triple taps). What reaches the player is always `position_ms`.
     Seek {
@@ -1972,6 +1978,8 @@ impl PlayOn {
         let command = if self.entries().get(name).is_some_and(|e| e.device.is_some()) {
             match command {
                 Command::Pause | Command::Resume | Command::Toggle | Command::Next | Command::Previous | Command::Volume { .. } => command,
+                // Device music cannot be rendered: a hold there is a plain skip (0074's fallback), the player's to do.
+                Command::Wind { .. } => command,
                 Command::Duck | Command::Unduck | Command::Sleep { .. } | Command::Seek { .. } | Command::Sample { .. } => command,
                 Command::Announce { .. } => command,
                 Command::Play { .. } | Command::Queue { .. } | Command::QueueRename { .. } | Command::QueueDelete { .. } => command,
