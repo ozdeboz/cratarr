@@ -62,7 +62,9 @@ class StartStop(
     private val changed: () -> Unit,
     /** The wind stream of the playing track (decision 0074): from a moment (ms), to one or to the edge (null), condensed
      *  to a length (ms) or open-ended (null), back or forward; none for a track Cratarr has no file of. */
-    private val windUrl: (Long, Long?, Long?, Boolean) -> String?,
+    private val windUrl: (Long, Long?, Long?, Boolean, String?) -> String?,
+    /** The queue's tracks in a hold's way, nearest first (id, length in ms), where it winds on through the queue. */
+    private val windWay: (Boolean) -> List<Pair<String, Long>>,
     /** The app's own log (LinkLog): what each press did, to follow a device's report. */
     private val log: (String, Array<Pair<String, Any?>>) -> Unit,
 ) {
@@ -95,7 +97,9 @@ class StartStop(
     private var tapeStarted = false
     /** What a wind that never sounded does instead (the plain jump); what follows one that did, from where it got. */
     private var tapeRestart: (() -> Unit)? = null
-    private var tapeThen: ((Long) -> Unit)? = null
+    private var tapeThen: ((Int, Long) -> Unit)? = null
+    /** The lengths of the tracks a hold winds on into (through the queue), nearest first. */
+    private var tapeChain: List<Long> = emptyList()
     private var tapeHold = false
     private var tapeFrom = 0L
     private var tapeTo = 0L
@@ -206,6 +210,20 @@ class StartStop(
         val whole = t.duration.takeIf { it > 0 }
         val gone = if (!tapeHold && whole != null) (kotlin.math.abs(tapeTo - tapeFrom) * played.toDouble() / whole).toLong() else (played * tapeSpeed).toLong()
         return (tapeFrom + tapeSign * gone).coerceIn(min(tapeFrom, tapeTo), max(tapeFrom, tapeTo))
+    }
+
+    /** Where a hold let go has got: which track (0 this one, then the ones it wound on into) and where in it. */
+    private fun landing(): Pair<Int, Long> {
+        val played = (tape?.currentPosition ?: 0L).coerceAtLeast(0L)
+        var left = (played * tapeSpeed).toLong()
+        val first = kotlin.math.abs(tapeTo - tapeFrom)
+        if (left <= first || tapeChain.isEmpty()) return 0 to (tapeFrom + tapeSign * min(left, first))
+        left -= first
+        tapeChain.forEachIndexed { i, d ->
+            if (left <= d) return (i + 1) to (if (tapeSign < 0) d - left else left)
+            left -= d
+        }
+        return tapeChain.size to (if (tapeSign < 0) 0L else tapeChain.last())
     }
 
     private val tapeLate = Runnable {
@@ -457,8 +475,8 @@ class StartStop(
         if (!prefs.startStopRewind || grouped() || !player.isPlaying) return false
         val from = player.currentPosition
         if (from <= restartAfterMs) return false
-        val url = windUrl(from, 0L, tapMs(from), true) ?: return false
-        wind(hold = false, from = from, to = 0L, url = url, restart = restart) { player.play() }
+        val url = windUrl(from, 0L, tapMs(from), true, null) ?: return false
+        wind(hold = false, from = from, to = 0L, url = url, restart = restart) { _, _ -> player.play() }
         return true
     }
 
@@ -469,9 +487,9 @@ class StartStop(
     fun seekTo(target: Long, go: () -> Unit) {
         val from = player.currentPosition
         if (prefs.windSeeks && !busy && player.isPlaying && !grouped() && kotlin.math.abs(target - from) > SEEK_WIND_LEAST_MS) {
-            val url = windUrl(from, target, tapMs(target - from), target < from)
+            val url = windUrl(from, target, tapMs(target - from), target < from, null)
             if (url != null) {
-                wind(hold = false, from = from, to = target, url = url, restart = go) { player.play() }
+                wind(hold = false, from = from, to = target, url = url, restart = go) { _, _ -> player.play() }
                 return
             }
         }
@@ -493,8 +511,15 @@ class StartStop(
         val from = player.currentPosition
         val edge = if (back) 0L else player.duration.takeIf { it > 0 } ?: return false.also { holdPlain = plain }
         if (from == edge) return false.also { holdPlain = plain }
-        val url = windUrl(from, null, null, back) ?: return false.also { holdPlain = plain }
-        val go = { wind(hold = true, from = from, to = edge, url = url, restart = { play { player.play() } }) { at -> player.seekTo(at); play { player.play() } } }
+        // Through the queue where the device says so: on into the tracks in the way, landing in whichever it reached.
+        val way = if (prefs.windEdges == "queue") windWay(back) else emptyList()
+        val url = windUrl(from, null, null, back, way.joinToString(",") { it.first }.ifEmpty { null }) ?: return false.also { holdPlain = plain }
+        val go = {
+            wind(hold = true, from = from, to = edge, url = url, restart = { play { player.play() } }, chain = way.map { it.second }) { k, at ->
+                if (k == 0) player.seekTo(at) else player.seekTo((player.currentMediaItemIndex + if (back) -k else k).coerceIn(0, player.mediaItemCount - 1), at)
+                play { player.play() }
+            }
+        }
         // After the pause's own end (it rests where it was pressed, then lets go of its ramp).
         if (player.isPlaying) pause { player.pause(); main.post { go() } } else go()
         return true
@@ -523,12 +548,13 @@ class StartStop(
 
     /** A wind begun: its stream prepared on the tape's player; once it can sound, the track waits, paused (a tap's at
      *  where it lands, buffered), and the wind plays under its envelope. */
-    private fun wind(hold: Boolean, from: Long, to: Long, url: String, restart: (() -> Unit)?, then: (Long) -> Unit) {
+    private fun wind(hold: Boolean, from: Long, to: Long, url: String, restart: (() -> Unit)?, chain: List<Long> = emptyList(), then: (Int, Long) -> Unit) {
         tapeT0 = SystemClock.elapsedRealtime()
         tapeTicks = 0
         step("pressed", "hold" to hold, "from_ms" to from, "to_ms" to to, "url" to url.substringAfter("/api/stream/"))
         watchTrack()
         tapeHold = hold
+        tapeChain = chain
         tapeFrom = from
         tapeTo = to
         tapeSign = if (to < from) -1 else 1
@@ -599,11 +625,13 @@ class StartStop(
     private fun wound() {
         val restart = tapeRestart
         val then = tapeThen
-        val place = if (tapeHold) reached() else tapeTo
+        val (track, place) = if (tapeHold) landing() else 0 to tapeTo
         val started = stopTape()
-        step(if (started) "track on from where the wind got" else "plain jump", "at_ms" to place, "track_state" to stateName(player.playbackState))
+        step(if (started) "track on from where the wind got" else "plain jump", "track" to track, "at_ms" to place, "track_state" to stateName(player.playbackState))
         reset()
-        if (started) then?.invoke(place) else restart?.invoke()
+        // No wind counts as listening (0074): where it landed is not heard (the player's count takes it from here).
+        if (started) landed = place
+        if (started) then?.invoke(track, place) else restart?.invoke()
     }
 
     /** Stops the wind, if one plays or is coming; whether it had sounded. */
@@ -649,6 +677,11 @@ class StartStop(
 
         @Volatile
         var rewindListener: (() -> Unit)? = null
+
+        /** Where the last wind landed (ms into the track it landed in), until the player's count has taken it: what the
+         *  wind passed over is not heard (decision 0074). */
+        @Volatile
+        var landed: Long? = null
 
         /** The volume's share now (1: none), on the player's volume: `PlayOnLink.applyVolume` multiplies it in. */
         @Volatile
