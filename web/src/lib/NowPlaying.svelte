@@ -2,7 +2,7 @@
   import DetailsSheet from './DetailsSheet.svelte';
   import StartStopSheet from './StartStopSheet.svelte';
   import LevelSheet from './LevelSheet.svelte';
-  import { levelOn, levelShare, setLevelOn } from './level.svelte';
+  import { levelShare, playingLevelOn } from './level.svelte';
   // The full player (decision 0018): over the page (`overlay`, opened from the mini-player) or beside it (`side`, the
   // shell's sidebar on wide windows). It shows the cover, the track, the controls, the progress, the favourite and
   // how many playlists hold the track, laid out by lib/playerLayout.ts, on the blurred cover in its colours.
@@ -94,7 +94,8 @@
   /** Start and stop on for this device's player: a start winds up (the play button's fill stays empty while paused). */
   const armed = $derived(isLocal() && (inApp ? appInfo.startStop.mode : prefs.startStop.mode) !== 'off');
   /** A ramp of this device's player under way, its way. */
-  const ramp = $derived(isLocal() ? ramping.dir : null);
+  // The fill follows play and pause only, never the tape's own stops (the owner, 2026-10-27).
+  const ramp = $derived(isLocal() && ramping.effect ? ramping.dir : null);
   /** Paused with Start and stop on: how much of the wind-up the fill already shows, from where it would start (as it
    *  is held while seeking too): near the track's start the wind-up is shorter (lib/localPlayer windUpMs). */
   const pre = $derived.by(() => {
@@ -560,17 +561,18 @@
           <div class="transport" role="group" aria-label="Player controls">
             <!-- Level, left of previous, where the page holds the queue (the owner, 2026-10-26, 0.9.8: in Shuffle's place;
                  Shuffle is in the queue's sheet): on, it fills from the bottom by how far the playing track is turned down
-                 (shown, never a number); a tap switches it, a long press opens its sheet. -->
+                 (shown, never a number). A tap opens its sheet, where it is switched (the owner, 2026-10-27: not by a
+                 tap); a long press shows or hides the levelling in the waveform. -->
             {#if isLocal()}
               <button
                 class="level"
-                class:on={levelOn()}
-                aria-pressed={levelOn()}
-                aria-label="Level the volume"
+                class:on={playingLevelOn()}
+                aria-label={playingLevelOn() ? 'Level the volume: on' : 'Level the volume: off'}
                 title="Level the volume"
-                onclick={() => setLevelOn(!levelOn())}
-                use:longpress={() => (levelOpen = true)}
-                ><Icon name="audioLines" size={22} />{#if levelOn()}<span class="fill" style:--down={levelShare(local.levelDb)} aria-hidden="true"
+                aria-haspopup="dialog"
+                onclick={() => (levelOpen = true)}
+                use:longpress={() => (prefs.levelInWave = !prefs.levelInWave)}
+                ><Icon name="audioLines" size={22} />{#if playingLevelOn()}<span class="fill" style:--down={levelShare(local.levelDb)} aria-hidden="true"
                     ><Icon name="audioLines" size={22} /></span
                   >{/if}</button
               >

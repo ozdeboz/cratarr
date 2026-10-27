@@ -12,6 +12,7 @@
   import { prefs } from './prefs.svelte';
   import { ramping, tapeDir } from './ramping.svelte';
   import { turnTape } from './localPlayer.svelte';
+  import { drivenName, playOn } from './playOn.svelte';
   import { duration, playing, position, shownPaused } from './remote.svelte';
   import { hill, HEAD, HUB, MAXR, packs, REEL_L, REEL_R, tapePath, WHEELS } from './tapeDeck';
   import { downbeatAt } from './visuals/downbeat';
@@ -64,7 +65,8 @@
     if (ramping.dir) {
       if (mode !== 'vinyl') return 1;
       const u = Math.min(1, Math.max(0, (now - ramping.at) / Math.max(1, ramping.ms)));
-      return ramping.dir === 'out' ? 1 - u * u : 1 - (1 - u) ** 2;
+      // Down on the deck's one brake (a raised cosine, as lib/localPlayer's), up as the wind-up eases out.
+      return ramping.dir === 'out' ? (1 + Math.cos(Math.PI * u)) / 2 : 1 - (1 - u) ** 2;
     }
     return shownPaused() ? 0 : 1;
   }
@@ -131,6 +133,18 @@
   /** The direction knob, under the head between the inner wheels: its centre and size, and its L and R either side, tiny
    *  (the owner, 2026-10-27: the deck's proportions unchanged). */
   const KNOB = { x: 160, y: 36, r: 3.2 };
+  /** The knob where a player can turn: this page's own, the app's, one driven (not Kodi, which plays as told). */
+  const turnable = $derived(isLocal() && playOn.players.find((p) => p.name === drivenName())?.kind !== 'kodi');
+  /** The knob drawn as the visuals' knobs are (lib/visuals/PatchKnob: a cap in a faint arc, its value an arc in the
+   *  accent; the owner, 2026-10-27: one knob language): its arc over the top, the side it is turned to lit. */
+  const SWEEP = 50;
+  const ARC_R = KNOB.r + 0.6;
+  const at = (deg: number) => [Math.sin((deg * Math.PI) / 180) * ARC_R, -Math.cos((deg * Math.PI) / 180) * ARC_R];
+  const arc = (from: number, to: number) => {
+    const [x0, y0] = at(from);
+    const [x1, y1] = at(to);
+    return `M${x0.toFixed(2)} ${y0.toFixed(2)}A${ARC_R} ${ARC_R} 0 0 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+  };
   /** A layer's box over the drawing: around (x, y), `half` either side. */
   const box = (x: number, y: number, half: number) => `left:${x - half}px;top:${y - half}px;width:${2 * half}px;height:${2 * half}px`;
 </script>
@@ -151,12 +165,12 @@
       {/each}
       <path class="hill" d={hill(-1)} />
       <path class="hill" d={hill(1)} />
-      <text class="side" class:on={tapeDir.want === 'L'} x={KNOB.x - 7.5} y={KNOB.y + 1.5} text-anchor="middle">L</text>
-      <text class="side" class:on={tapeDir.want === 'R'} x={KNOB.x + 7.5} y={KNOB.y + 1.5} text-anchor="middle">R</text>
+      {#if turnable}<text class="side" class:on={tapeDir.want === 'L'} x={KNOB.x - 6.5} y={KNOB.y + 3.6} text-anchor="end">L</text>
+      <text class="side" class:on={tapeDir.want === 'R'} x={KNOB.x + 6.5} y={KNOB.y + 3.6} text-anchor="start">R</text>{/if}
     </svg>
     <!-- The direction knob (the owner, 2026-10-27): R forwards, L backwards; turned while playing, the tape slows to a
          stop before it goes the other way (lib/localPlayer turnTape). -->
-    <button
+    {#if turnable}<button
       class="knob"
       role="switch"
       aria-checked={tapeDir.want === 'L'}
@@ -164,9 +178,12 @@
       style="left:{KNOB.x - 6}px;top:{KNOB.y - 6}px"
       onclick={() => turnTape(tapeDir.want === 'L' ? 'R' : 'L')}
       ><svg viewBox="-6 -6 12 12" aria-hidden="true"
-        ><circle class="knob-body" r={KNOB.r} /><line class="knob-mark" class:left={tapeDir.want === 'L'} y1={-0.6} y2={-KNOB.r + 0.5} /></svg
+        ><path class="knob-track" d={arc(-SWEEP, SWEEP)} /><path class="knob-value" d={tapeDir.want === 'L' ? arc(-SWEEP, 0) : arc(0, SWEEP)} /><circle
+          class="knob-cap"
+          r={KNOB.r - 1.2}
+        /></svg
       ></button
-    >
+    >{/if}
     {#each [REEL_L, REEL_R] as c, i (i)}
       {@const spokes = [0, 1, 2].map((k) => [Math.cos((k * 2 * Math.PI) / 3) * (HUB + 3), Math.sin((k * 2 * Math.PI) / 3) * (HUB + 3)])}
       {#if i === 0}
@@ -246,27 +263,30 @@
     content: '';
   }
 
-  .knob-body {
-    fill: var(--surface);
-    stroke: var(--muted);
+  .knob-track,
+  .knob-value {
+    fill: none;
     stroke-width: 0.9;
-  }
-
-  .knob-mark {
-    stroke: var(--text);
-    stroke-width: 1;
     stroke-linecap: round;
-    transform: rotate(40deg);
-    transition: transform 150ms ease-out;
   }
 
-  .knob-mark.left {
-    transform: rotate(-40deg);
+  .knob-track {
+    stroke: color-mix(in srgb, var(--text) 16%, transparent);
   }
 
+  /* The side it is turned to, in the waveform's colour as the reels are. */
+  .knob-value {
+    stroke: var(--art-accent, var(--accent));
+  }
+
+  .knob-cap {
+    fill: var(--border);
+  }
+
+  /* Two and a half times the first (the owner, 2026-10-27), clear of the knob either side. */
   .side {
     fill: var(--muted);
-    font-size: 4px;
+    font-size: 10px;
     font-weight: 600;
     opacity: 0.7;
   }

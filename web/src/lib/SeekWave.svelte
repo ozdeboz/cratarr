@@ -65,12 +65,13 @@
   // After a ramp, its way holds until the player says the same (an app reporting the pause a moment late: no flash).
   let after = $state<'out' | 'in' | null>(null);
   $effect(() => {
-    if (isLocal() && ramping.dir) after = ramping.dir;
+    if (isLocal() && ramping.dir && ramping.effect) after = ramping.dir;
   });
   $effect(() => {
     if ((after === 'out' && paused) || (after === 'in' && !paused)) after = null;
   });
-  const grey = $derived(isLocal() && ramping.dir ? ramping.dir === 'out' : after ? after === 'out' : paused);
+  // Only an effect that stops the music greys it (the owner, 2026-10-27), not the tape's own stops (lib/ramping).
+  const grey = $derived(isLocal() && ramping.dir && ramping.effect ? ramping.dir === 'out' : after ? after === 'out' : paused);
   const nowMark = $derived(seek.held !== null && seek.lensOn && !seek.snapped && !seek.overCancel && shaped && dur ? seek.now() / dur : null);
   /** Where the Cancel button stands: above the waveform's middle, measured whenever it shows (never left at 0). */
   let cancelX = $state(0);
