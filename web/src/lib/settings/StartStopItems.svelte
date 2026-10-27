@@ -7,7 +7,7 @@
   import { appInfo, inApp, setDevice } from '../app.svelte';
   import MenuSheet from '../MenuSheet.svelte';
   import { panSafe } from '../panSafe';
-  import { CURVE_START, prefs, RAMP_MS, WIND, type StartStop, type Wind, type WindCurve } from '../prefs.svelte';
+  import { CURVE_START, prefs, RAMP_MS, WIND, WIND_FWD, type StartStop, type Wind, type WindCurve } from '../prefs.svelte';
   import MenuEntry from '../MenuEntry.svelte';
   import Seg from '../Seg.svelte';
   import SettingRow from '../SettingRow.svelte';
@@ -31,7 +31,7 @@
   const SEC = (v: number) => `${(v / 1000).toFixed(2).replace(/\.?0+$/, '')} s`;
   /** Winding's tunings (the owner, 2026-10-27): an envelope on the tape's speed, each a slider under its graph. */
   const TUNINGS: { key: keyof typeof WIND; label: string; text: (v: number) => string }[] = [
-    { key: 'ratio', label: 'Duration', text: (v) => `${v.toFixed(1)} s a minute` },
+    { key: 'ratio', label: 'Duration', text: (v) => `${v.toFixed(2).replace(/0$/, '')} s a minute` },
     { key: 'speed', label: 'Speed limit', text: (v) => `${v}×` },
     { key: 'attackMs', label: 'Spin-up', text: SEC },
     { key: 'releaseMs', label: 'Brake', text: SEC },
@@ -98,7 +98,7 @@
       <div class="side"><Seg label="Direction" options={SIDES} bind:value={side} /></div>
       <WindGraph wind={shown} dir={side} />
       {#each TUNINGS as t (t.key)}
-        {@const r = WIND[t.key]}
+        {@const r = (side === 'back' ? WIND : WIND_FWD)[t.key]}
         {@const v = shown[t.key]}
         <SettingRow label={t.label}>
           <input

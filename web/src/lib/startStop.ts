@@ -29,6 +29,8 @@ export const WIND = {
   pieceMs: { min: 100, max: 1000, step: 50, start: 350 },
   gainDb: { min: -24, max: 0, step: 1, start: -12 },
 } as const;
+/** Fast-forward's ranges: as rewind's, its duration reaching down to half (the owner, 2026-10-27). */
+export const WIND_FWD = { ...WIND, ratio: { ...WIND.ratio, min: 0.25 } } as const;
 
 /** `rewind`: Previous and Next wind the tape (a tap to the track's start, a hold for as long as held); `wind`: how.
  *  0.9.10's tunings are gone, not carried over: everyone starts from winding's (the owner, 2026-10-27). */
@@ -59,7 +61,7 @@ export function startStopOf(x: Partial<StartStop>): StartStop {
 export function curveOf(x: Partial<WindCurve> | undefined): WindCurve {
   const w = x ?? {};
   return {
-    ratio: within(w.ratio, WIND.ratio),
+    ratio: within(w.ratio, WIND_FWD.ratio),
     speed: within(w.speed, WIND.speed),
     attackMs: within(w.attackMs, WIND.attackMs),
     releaseMs: within(w.releaseMs, WIND.releaseMs),
