@@ -15,7 +15,6 @@ import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import java.nio.ByteBuffer
@@ -65,6 +64,9 @@ class StartStop(
     private val windUrl: (Long, Long?, Long?, Boolean, String?, Float, Float, Boolean) -> String?,
     /** The queue's tracks in a hold's way, nearest first (id, length in ms), where it winds on through the queue. */
     private val windWay: (Boolean) -> List<Pair<String, Long>>,
+    /** Sync play: leading a group, speed and volume act on the sound sent on, and the tape's sound is the group's while
+     *  it winds (the owner, 2026-10-27: "Sync groups don't wind together. Make it so."). */
+    private val sync: SyncPlay,
     /** The app's own log (LinkLog): what each press did, to follow a device's report. */
     private val log: (String, Array<Pair<String, Any?>>) -> Unit,
 ) {
@@ -188,10 +190,38 @@ class StartStop(
             if (!rewinding) return
             val r = envelope(SystemClock.elapsedRealtime()) ?: return wound()
             tapeRate = r
-            val speed = max(r, LOW)
-            t.playbackParameters = PlaybackParameters(speed, speed)
-            t.volume = tapeVolume * min(1f, r / LOW)
+            tapeAt(max(r, LOW), min(1f, r / LOW))
             main.postDelayed(this, STEP_MS)
+        }
+    }
+
+    /**
+     * The wind's speed (the pitch following) and its share of the track's volume (0..1): on Android's output; leading a
+     * group, on the sound itself, which goes on to the group before the output (silent here: the leader hears the group).
+     */
+    private fun tapeAt(speed: Float, share: Float) {
+        val t = tape ?: return
+        if (grouped()) {
+            sync.tapeSpeed.rate = speed
+            sync.tapeSpeed.gain = share
+            if (t.playbackParameters != PlaybackParameters.DEFAULT) t.playbackParameters = PlaybackParameters.DEFAULT
+            if (t.volume != 0f) t.volume = 0f
+        } else {
+            sync.tapeSpeed.rate = 1f
+            sync.tapeSpeed.gain = 1f
+            t.playbackParameters = PlaybackParameters(speed, speed)
+            t.volume = tapeVolume * share
+        }
+    }
+
+    /** The track's speed, the pitch following: as [tapeAt], on the sound itself leading a group. */
+    private fun trackAt(speed: Float) {
+        if (grouped()) {
+            sync.trackSpeed.rate = speed
+            if (player.playbackParameters != PlaybackParameters.DEFAULT) player.playbackParameters = PlaybackParameters.DEFAULT
+        } else {
+            sync.trackSpeed.rate = 1f
+            if (player.playbackParameters.speed != speed) player.playbackParameters = PlaybackParameters(speed, speed)
         }
     }
 
@@ -248,6 +278,8 @@ class StartStop(
     private fun quietStop(then: () -> Unit) {
         val m = mode()
         if (m == Prefs.START_STOP_OFF || !player.isPlaying) {
+            // A group hears no break: the tape takes over from here (or the track again).
+            sync.source.feed(null)
             player.pause()
             then()
             return
@@ -260,6 +292,7 @@ class StartStop(
         val mine = token + 1
         ramp(1f, 0f, downMs(m), setter(m), curve(m, down = true)) { whole ->
             if (!whole || token != mine) return@ramp
+            sync.source.feed(null)
             player.pause()
             if (player.playbackState != Player.STATE_IDLE && player.mediaItemCount > 0) player.seekTo(at)
             // Full speed and volume for what comes next, the music paused meanwhile.
@@ -267,7 +300,7 @@ class StartStop(
             gain = 1f
             volume()
             Fader.target = 1f
-            if (player.playbackParameters != PlaybackParameters.DEFAULT) player.playbackParameters = PlaybackParameters.DEFAULT
+            trackAt(1f)
             then()
         }
     }
@@ -288,7 +321,7 @@ class StartStop(
     /** Plays backwards from where it is (the knob at L): a wind at 1×, as loud as the track, spun up from still; false
      *  where it cannot (a track Cratarr has no file of, at the start already, in a group). */
     private fun playBack(): Boolean {
-        if (grouped() || tapeListener != null) return false
+        if (tapeListener != null) return false
         val from = player.currentPosition
         if (from <= 0L) return false
         val way = if (prefs.windEdges == "queue") windWay(true) else emptyList()
@@ -369,7 +402,8 @@ class StartStop(
 
     private fun mode(): String {
         val m = prefs.startStopMode
-        return if (grouped() && m == Prefs.START_STOP_VINYL) Prefs.START_STOP_OFF else m
+        // Vinyl in a group too, its speed on the sound sent on ([trackAt]).
+        return m
     }
 
     private fun ease(t: Float) = if (t < 0.5f) 2 * t * t else 1 - (-2 * t + 2) * (-2 * t + 2) / 2
@@ -419,10 +453,14 @@ class StartStop(
         // Vinyl: the speed with the pitch, from nearly still; the sound comes up over the first part of a spin-up and
         // goes over the last part of a spin-down, as a record's does.
         else -> { v ->
-            val s = LOW + (1f - LOW) * v
-            player.playbackParameters = PlaybackParameters(s, s)
-            gain = loudness(min(1f, v / VINYL_SOUND))
-            volume()
+            trackAt(LOW + (1f - LOW) * v)
+            val loud = loudness(min(1f, v / VINYL_SOUND))
+            if (grouped()) {
+                Fader.target = loud
+            } else {
+                gain = loud
+                volume()
+            }
         }
     }
 
@@ -444,7 +482,7 @@ class StartStop(
             gain = 1f
             volume()
         }
-        if (player.playbackParameters != PlaybackParameters.DEFAULT) player.playbackParameters = PlaybackParameters.DEFAULT
+        trackAt(1f)
     }
 
     /** Plays ([start]), winding up from still and silent. */
@@ -620,7 +658,7 @@ class StartStop(
         }
         note("rewind", "busy" to busy, "rewind" to prefs.startStopRewind, "at_ms" to player.currentPosition)
         if (busy) return true
-        if (!prefs.startStopRewind || grouped() || !player.isPlaying) return false
+        if (!prefs.startStopRewind || !player.isPlaying) return false
         val from = player.currentPosition
         if (from <= restartAfterMs) return false
         val url = windUrl(from, 0L, tapMs(from), true, null, prefs.windSpeed, prefs.windGainDb, false) ?: return false
@@ -637,7 +675,7 @@ class StartStop(
         // Each seek's way, to follow a device's report (the owner: "seek to wind does not yet work").
         note("seek", "to_ms" to target, "from_ms" to from, "winds" to prefs.windSeeks, "asked" to wind, "busy" to busy, "playing" to player.isPlaying)
         // `wind`: a page driving this player asks it (its own seek winding on), whatever this device's setting.
-        if ((prefs.windSeeks || wind) && !busy && player.isPlaying && !grouped() && kotlin.math.abs(target - from) > SEEK_WIND_LEAST_MS) {
+        if ((prefs.windSeeks || wind) && !busy && player.isPlaying && kotlin.math.abs(target - from) > SEEK_WIND_LEAST_MS) {
             val url = windUrl(from, target, tapMs(target - from), target < from, null, prefs.windSpeed, prefs.windGainDb, false)
             if (url != null) {
                 wind(hold = false, from = from, to = target, url = url, restart = go) { _, _ -> player.play() }
@@ -658,7 +696,7 @@ class StartStop(
         if (busy || tapeListener != null) return busy
         // Winding off here, in a group, a track Cratarr has no file of: nothing now, a plain press on letting go (a page
         // driving this player offers the hold whatever this device says).
-        if (!prefs.startStopRewind || grouped()) return false.also { holdPlain = plain }
+        if (!prefs.startStopRewind) return false.also { holdPlain = plain }
         // Forward while playing: flies off (no stop first) from a moment ahead, where the track will be when it sounds.
         val flying = !back && player.isPlaying
         val from = player.currentPosition + if (flying) FLY_AHEAD_MS else 0L
@@ -703,12 +741,12 @@ class StartStop(
                 val left = prefs.windReleaseMs - (now - fastReleased)
                 if (left <= 0) {
                     fastAt = 0L
-                    player.playbackParameters = PlaybackParameters.DEFAULT
+                    trackAt(1f)
                     return
                 }
                 1f + (fastFrom - 1f) * eased(left, prefs.windReleaseMs)
             }
-            player.playbackParameters = PlaybackParameters(fastSpeed, fastSpeed)
+            trackAt(fastSpeed)
             main.postDelayed(this, STEP_MS)
         }
     }
@@ -790,7 +828,7 @@ class StartStop(
         // button's fill moves for play and pause only, the owner).
         // Every wind shows playing (the tape's own stops are quiet, the owner).
         commit(true)
-        val t = tape ?: ExoPlayer.Builder(context, DefaultRenderersFactory(context).setEnableAudioTrackPlaybackParams(true))
+        val t = tape ?: ExoPlayer.Builder(context, sync.tapeRenderers(context))
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), false)
             .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, Downloads.http(context))))
             .build()
@@ -802,12 +840,13 @@ class StartStop(
                 if (state == Player.STATE_READY && !tapeStarted) {
                     tapeStarted = true
                     main.removeCallbacks(tapeLate)
+                    // A group hears the wind from here, on from the track's sound, no break.
+                    sync.source.feed(SyncPlay.Source.Feed.TAPE)
                     player.pause()
                     if (!tapeHold) player.seekTo(tapeTo)
                     tapeSounded = SystemClock.elapsedRealtime()
-                    t.playbackParameters = PlaybackParameters(LOW, LOW)
                     // A flying one sounds at once, as loud as the track; one from still comes up out of silence.
-                    t.volume = if (tapeFlying) tapeVolume else 0f
+                    tapeAt(LOW, if (tapeFlying) 1f else 0f)
                     t.play()
                     main.post(tapeEnvelope)
                     main.post(tapeTick)
@@ -833,6 +872,8 @@ class StartStop(
         tapeRestart = restart
         tapeThen = then
         t.addListener(listener)
+        // As it starts already: what it plays before it sounds goes to a group as it will be heard.
+        tapeAt(LOW, if (flying) 1f else 0f)
         t.setMediaItem(MediaItem.fromUri(url))
         t.playWhenReady = false
         t.prepare()
@@ -846,6 +887,9 @@ class StartStop(
         val restart = tapeRestart
         val then = tapeThen
         val (track, place) = if (tapeHold) landing() else 0 to tapeTo
+        // A group hears the track come back after the wind, no break between (the track takes over as it plays). One
+        // that never sounded hands nothing over: the track may still be playing, its jump a plain one.
+        if (tapeStarted) sync.source.feed(null)
         val started = stopTape()
         step(if (started) "track on from where the wind got" else "plain jump", "track" to track, "at_ms" to place, "track_state" to stateName(player.playbackState))
         reset()
@@ -873,6 +917,8 @@ class StartStop(
             it.clearMediaItems()
             it.playbackParameters = PlaybackParameters.DEFAULT
         }
+        sync.tapeSpeed.rate = 1f
+        sync.tapeSpeed.gain = 1f
         tapeReverse = false
         return tapeStarted.also { tapeStarted = false }
     }

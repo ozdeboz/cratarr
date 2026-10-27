@@ -46,6 +46,10 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
     val source = Source()
     val silencer = Silencer()
     val fader = Fader()
+    /** Speed and volume on the track's sound itself while it leads (a held Next's speed-up, Vinyl): sent on with it. */
+    val trackSpeed = Varispeed()
+    /** The same on the tape's (a wind's envelope): the tape's player is made with [tapeRenderers]. */
+    val tapeSpeed = Varispeed()
     /** The announce channel's mix-in (lib Announcer): first in the chain, so a group hears what its leader announces. */
     val announcer = Announcer.Mixer().also { Announcer.mixer = it }
     private val snapclient = Snapclient(context)
@@ -78,18 +82,18 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
                 .setEnableFloatOutput(enableFloatOutput)
                 .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                 // Start and stop's fade first (0.9.6, `StartStop`): a group hears its leader's fade.
-                .setAudioProcessors(arrayOf<AudioProcessor>(fader, announcer, TeeAudioProcessor(source), TeeAudioProcessor(LiveSound), silencer))
+                .setAudioProcessors(arrayOf<AudioProcessor>(fader, announcer, trackSpeed, TeeAudioProcessor(source.track), TeeAudioProcessor(LiveSound), silencer))
                 .build()
             // A seek, a jump or a stop: the sound breaks off here, in order with what was played before it.
-            return object : ForwardingAudioSink(sink) {
+            return object : Paced(sink, trackSpeed) {
                 override fun flush() {
-                    source.brk()
+                    source.track.brk()
                     LiveSound.clear()
                     super.flush()
                 }
 
                 override fun reset() {
-                    source.brk()
+                    source.track.brk()
                     LiveSound.clear()
                     super.reset()
                 }
@@ -104,6 +108,62 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
                     if (it != AudioSink.CURRENT_POSITION_NOT_SET && LiveSound.listener != null) LiveSound.heard(it - if (leads) bufferMs * 1000 else 0)
                 }
             }
+        }
+    }
+
+    /**
+     * The tape's player's audio path (winding, decision 0074): its speed and volume on the sound itself while it leads
+     * ([tapeSpeed]), then its sound to the group's, taking over from the track's (and back) without a break: a group
+     * winds with its leader. Its own speaker is silent then (its volume, `StartStop`).
+     */
+    fun tapeRenderers(context: Context) = object : DefaultRenderersFactory(context) {
+        override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioTrackPlaybackParams: Boolean): AudioSink {
+            val sink = DefaultAudioSink.Builder(context)
+                .setEnableFloatOutput(enableFloatOutput)
+                .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                .setAudioProcessors(arrayOf<AudioProcessor>(tapeSpeed, TeeAudioProcessor(source.tape)))
+                .build()
+            return object : Paced(sink, tapeSpeed) {
+                override fun flush() {
+                    source.tape.brk()
+                    super.flush()
+                }
+
+                override fun reset() {
+                    source.tape.brk()
+                    super.reset()
+                }
+            }
+        }
+    }.setEnableAudioTrackPlaybackParams(true)
+
+    /**
+     * A sink whose place follows [speed]: Android's output counts the sound it played, which, read faster or slower,
+     * is more or less of the track. From the first sound after each flush.
+     */
+    private open class Paced(sink: AudioSink, private val speed: Varispeed) : ForwardingAudioSink(sink) {
+        @Volatile private var start = C.TIME_UNSET
+
+        override fun flush() {
+            start = C.TIME_UNSET
+            super.flush()
+        }
+
+        override fun reset() {
+            start = C.TIME_UNSET
+            super.reset()
+        }
+
+        override fun handleBuffer(buffer: ByteBuffer, presentationTimeUs: Long, encodedAccessUnitCount: Int): Boolean {
+            if (start == C.TIME_UNSET) start = maxOf(0L, presentationTimeUs)
+            return super.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+        }
+
+        override fun getCurrentPositionUs(sourceEnded: Boolean): Long {
+            val p = super.getCurrentPositionUs(sourceEnded)
+            val s = start
+            if (p == AudioSink.CURRENT_POSITION_NOT_SET || s == C.TIME_UNSET || p < s) return p
+            return s + speed.mediaUs(p - s)
         }
     }
 
@@ -155,13 +215,15 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
     override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
         val p = player ?: return
         // Paused while leading: back to where the group was heard, so it goes on from there (the seek also breaks the
-        // sound off, so the group falls silent at once).
-        if (!playWhenReady && leads && reason != Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM) back(p)
+        // sound off, so the group falls silent at once). Not when the tape takes over (a wind): the group winds on.
+        if (!playWhenReady && leads && source.feeding == Source.Feed.TRACK && reason != Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM) back(p)
     }
 
     override fun onIsPlayingChanged(isPlaying: Boolean) {
         // Played here while following: it plays alone again.
         if (isPlaying && follows) leave()
+        // The track plays: its sound is the group's again (after a wind, from where it landed).
+        if (isPlaying) source.feed(Source.Feed.TRACK)
     }
 
     /** Out of the group, at Cratarr too. */
@@ -218,17 +280,94 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
     /**
      * The leader's sound to Cratarr, as its player plays it: tapped after decoding and gapless trimming, as 16-bit PCM,
      * on a connection of its own to Cratarr's Snapcast port. Cratarr stamps it as it comes.
+     *
+     * Two players sound it (winding, decision 0074): the track's, and the tape's while a wind sounds. One feeds it at a
+     * time ([feeding]); between them (a hand-over) neither, and neither's stop then is a break: the group hears the
+     * track wind down, the wind, and the track come back, one sound. What one player plays while the other feeds it
+     * (filling its output, paused) waits, and goes first when it takes over, as it is heard then.
      */
-    class Source : TeeAudioProcessor.AudioBufferSink {
+    class Source {
+        /** Whose sound the group hears. */
+        enum class Feed { TRACK, TAPE }
+
         @Volatile private var active = false
         @Volatile private var target: Triple<String, Int, String>? = null
         private val queue = LinkedBlockingQueue<ByteArray>(QUEUE_MAX)
         private var thread: Thread? = null
         @Volatile private var socket: Socket? = null
 
-        /** The format as the player plays: rate, channels, encoding (playback thread). */
-        @Volatile private var format: Triple<Int, Int, Int>? = null
+        /** The format last sent on. */
         private var sentFormat: Pair<Int, Int>? = null
+
+        /** Whose sound goes on now; null during a hand-over. */
+        @Volatile
+        var feeding: Feed? = Feed.TRACK
+            private set
+
+        val track = Tap(Feed.TRACK)
+        val tape = Tap(Feed.TAPE)
+
+        /** One player's sound. */
+        inner class Tap(private val who: Feed) : TeeAudioProcessor.AudioBufferSink {
+            /** The format as its player plays: rate, channels, encoding (its playback thread). */
+            @Volatile var format: Triple<Int, Int, Int>? = null
+                private set
+
+            /** Played while it does not feed the group: its format and chunks, oldest first. */
+            val waiting = ArrayDeque<Pair<Pair<Int, Int>, ByteArray>>()
+
+            override fun flush(sampleRateHz: Int, channelCount: Int, encoding: Int) {
+                format = Triple(sampleRateHz, channelCount, encoding)
+            }
+
+            override fun handleBuffer(buffer: ByteBuffer) {
+                if (!active) return
+                val (rate, channels, encoding) = format ?: return
+                val pcm = toPcm16(buffer.order(ByteOrder.nativeOrder()), encoding) ?: return
+                // In chunks of 20 ms at most, so Cratarr can take back what was still to come at a break.
+                val step = (rate / 50).coerceAtLeast(1) * channels * 2
+                val f = rate to channels
+                synchronized(this@Source) {
+                    var at = 0
+                    while (at < pcm.size) {
+                        val n = minOf(step, pcm.size - at)
+                        val m = message(WIRE_CHUNK, chunk(pcm, at, n))
+                        if (feeding == who) {
+                            onward(f, m)
+                        } else {
+                            waiting.addLast(f to m)
+                            while (waiting.size > WAITING_MAX) waiting.removeFirst()
+                        }
+                        at += n
+                    }
+                }
+            }
+
+            /** Its sound broke off (its player's flush): the group's too where it feeds it; what waited goes either way. */
+            fun brk() {
+                synchronized(this@Source) {
+                    waiting.clear()
+                    if (active && feeding == who) offer(message(BREAK, ByteArray(0)))
+                }
+            }
+        }
+
+        /**
+         * Whose sound the group hears from now ([who]; null: a hand-over, neither). What the one taking over played
+         * meanwhile goes first; nothing breaks.
+         */
+        @Synchronized
+        fun feed(who: Feed?) {
+            if (feeding == who) return
+            feeding = who
+            val tap = when (who) {
+                Feed.TRACK -> track
+                Feed.TAPE -> tape
+                null -> return
+            }
+            if (active) tap.waiting.forEach { (f, m) -> onward(f, m) }
+            tap.waiting.clear()
+        }
 
         @Synchronized
         fun start(host: String, port: Int, name: String) {
@@ -238,6 +377,9 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
             target = t
             queue.clear()
             sentFormat = null
+            feeding = Feed.TRACK
+            track.waiting.clear()
+            tape.waiting.clear()
             active = true
             thread = Thread({ send(t) }, "cratarr-group-source").apply { isDaemon = true; start() }
         }
@@ -254,31 +396,13 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
             }
         }
 
-        /** The sound broke off (playback thread). */
-        fun brk() {
-            if (active) offer(message(BREAK, ByteArray(0)))
-        }
-
-        override fun flush(sampleRateHz: Int, channelCount: Int, encoding: Int) {
-            format = Triple(sampleRateHz, channelCount, encoding)
-        }
-
-        override fun handleBuffer(buffer: ByteBuffer) {
-            if (!active) return
-            val (rate, channels, encoding) = format ?: return
-            val pcm = toPcm16(buffer.order(ByteOrder.nativeOrder()), encoding) ?: return
-            if (sentFormat != rate to channels) {
-                sentFormat = rate to channels
-                offer(message(CODEC_HEADER, codecHeader(rate, channels)))
+        /** A chunk on, its format first where it changed (under the lock). */
+        private fun onward(f: Pair<Int, Int>, m: ByteArray) {
+            if (sentFormat != f) {
+                sentFormat = f
+                offer(message(CODEC_HEADER, codecHeader(f.first, f.second)))
             }
-            // In chunks of 20 ms at most, so Cratarr can take back what was still to come at a break.
-            val step = (rate / 50).coerceAtLeast(1) * channels * 2
-            var at = 0
-            while (at < pcm.size) {
-                val n = minOf(step, pcm.size - at)
-                offer(message(WIRE_CHUNK, chunk(pcm, at, n)))
-                at += n
-            }
+            offer(m)
         }
 
         private fun offer(m: ByteArray) {
@@ -303,7 +427,7 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
                         out.write(message(SOURCE, json(JSONObject().put("player", name.substringAfter(':')).put("secret", secret))))
                         // Afresh: the format first, then what plays from now on.
                         queue.clear()
-                        format?.let { (rate, channels, _) -> out.write(message(CODEC_HEADER, codecHeader(rate, channels))) }
+                        (if (feeding == Feed.TAPE) tape else track).format?.let { (rate, channels, _) -> out.write(message(CODEC_HEADER, codecHeader(rate, channels))) }
                         out.flush()
                         Log.i(TAG, "sending the group's sound to $host:$port")
                         while (active && target == t) {
@@ -328,6 +452,8 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
         private companion object {
             /** About 10 s of sound in 20 ms chunks. */
             const val QUEUE_MAX = 500
+            /** About 3 s: what a paused player fills its output with, and more. */
+            const val WAITING_MAX = 150
 
             /** 16-bit little-endian PCM of what the player plays; null for an encoding it does not take. */
             fun toPcm16(b: ByteBuffer, encoding: Int): ByteArray? {

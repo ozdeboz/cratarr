@@ -574,6 +574,37 @@ mod tests {
         assert!(!*s.muted.borrow());
     }
 
+    /// A group winds with its leader (decision 0074): the leader's track winds down, its tape takes over, and the track
+    /// comes back, sent as one sound with no break between. Every chunk follows on from the one before, the group never
+    /// silenced, whether the tape sounds within the stall window or later.
+    #[test]
+    fn a_wind_hands_over_without_a_break() {
+        let s = Stream::new(1000);
+        s.take_over(1, 0);
+        s.codec(1, F, 0);
+        // The track plays (a burst filling the leader's output first, then in time).
+        for i in 0..25 {
+            s.push(1, &[0; CHUNK], 10_000_000 + (i / 5) * 20_000);
+        }
+        // Its quiet stop is over; the tape sounds 300 ms later (its stream asked for and ready): laid on end to end.
+        for i in 0..50 {
+            s.push(1, &[0; CHUNK], 10_400_000 + i * 20_000);
+        }
+        // The brake over, the track comes back 400 ms later, still in time.
+        for i in 0..25 {
+            s.push(1, &[0; CHUNK], 11_800_000 + i * 20_000);
+        }
+        let out = s.release(20_000_000);
+        let st = stamps(&out);
+        assert_eq!(st.len(), 100);
+        assert!(st.windows(2).all(|w| w[1] - w[0] == 20_000), "one sound, chunk after chunk: {st:?}");
+        assert!(!*s.muted.borrow(), "a wind is not a break");
+        // A tape slow to sound (a cold stream): stamped as it comes, the group not silenced meanwhile.
+        s.push(1, &[0; CHUNK], 30_000_000);
+        assert_eq!(stamps(&s.release(30_000_000)), vec![30_000_000]);
+        assert!(!*s.muted.borrow());
+    }
+
     #[test]
     fn a_stall_is_stamped_anew_and_a_new_format_waits_for_the_old_sound_to_play() {
         let s = Stream::new(1000);
