@@ -22,6 +22,7 @@ import { albumCoverUrl, getTrackGain, playerCommand, radioNext, type TrackGain }
 import { prefs } from './prefs.svelte';
 import { ramping, rampBegins, rampEnds, rewindNow } from './ramping.svelte';
 import { asksSignIn, toSignIn } from './reach.svelte';
+import { tapMs } from './windShape';
 import { isPhone } from './device';
 
 export type LocalTrack = {
@@ -2015,10 +2016,11 @@ function rewindTape(): boolean {
   const t = w && local.queue[w.seg.index];
   if (!w || !t || w.offset <= 0) return false;
   const { seg, offset: from } = w;
-  const ss = prefs.startStop;
-  const ms = ss.rewindMs;
-  const ramp = ss.rewindRamp;
-  const ask = new URLSearchParams({ from_ms: String(Math.floor(from * 1000)), ms: String(ms), speed: String(ss.rewindSpeed), piece_ms: String(ss.rewindPiece), ramp: String(ramp) });
+  // Winding's tunings on 0.9.10's clip, until the player winds on the server's wind stream (0074).
+  const wind = prefs.startStop.wind;
+  const ms = Math.round(tapMs(wind, from));
+  const ramp = Math.min(0.4, Math.max(0.05, (wind.attackMs + wind.releaseMs) / 2 / ms));
+  const ask = new URLSearchParams({ from_ms: String(Math.floor(from * 1000)), ms: String(ms), speed: String(wind.speed), piece_ms: String(wind.pieceMs), ramp: String(ramp) });
   // Every step timed from the press, in the playback log (the owner, 2026-10-27: a rewind took far longer than its
   // length; find where at the deepest level): the clip's own events, how far it has played against the clock, the
   // track waiting at its start, and the whole of it at the end.
@@ -2027,7 +2029,7 @@ function rewindTape(): boolean {
   const say = (what: string, fields: Record<string, unknown> = {}, level: 'info' | 'warn' = 'info') =>
     playback(level, `rewind ${what}`, { t: since(), clip: Math.round(clip.currentTime * 1000), ...fields });
   const clip = (rewinding = new Audio(`/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}/rewind?${ask}`));
-  say('asked', { track: t.id, from: Math.round(from * 1000), ms, speed: ss.rewindSpeed, piece: ss.rewindPiece, ramp, startLoaded: inBuffer(seg.start) });
+  say('asked', { track: t.id, from: Math.round(from * 1000), ms, speed: wind.speed, piece: wind.pieceMs, ramp, startLoaded: inBuffer(seg.start) });
   for (const ev of ['loadstart', 'loadedmetadata', 'canplay', 'canplaythrough', 'waiting', 'stalled', 'suspend', 'pause'])
     clip.addEventListener(ev, () => mine() && say(ev, { readyState: clip.readyState, buffered: clip.buffered.length ? Math.round(clip.buffered.end(clip.buffered.length - 1) * 1000) : 0 }, ev === 'waiting' || ev === 'stalled' ? 'warn' : 'info'));
   let playedAt = 0;
