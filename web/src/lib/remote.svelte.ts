@@ -310,6 +310,14 @@ export function wind(dir: 'back' | 'forward', phase: 'start' | 'stop') {
 /** A touch on Previous or Next that may become a hold: this player's wind asked already; dropped if it was a tap. */
 export const windTouch = (dir: 'back' | 'forward', on: boolean) => isLocal() && (on ? windArm(dir) : windDisarm());
 
+/** Whether anything can follow what plays (Next dimmed where nothing can; the owner, 2026-10-27): a next track, or
+ *  Autoplay, Radio or repeat to make one; elsewhere, what the player says is to come. */
+export function hasNext(): boolean {
+  if (isLocal()) return local.index < local.queue.length - 1 || !!local.autoplay || local.radio || local.repeat !== 'off';
+  const np = playing();
+  return !np || (np.upcoming?.length ?? 1) > 0;
+}
+
 /** Plays upcoming track `i` (the queue view's tap): within the local stream, or the server's player jumps. */
 export async function playUpcoming(i: number) {
   if (isLocal()) return localJump(local.index + 1 + i);

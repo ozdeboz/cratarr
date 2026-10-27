@@ -1309,6 +1309,8 @@ export async function startRadio(seed: string[], from: string | null, within: st
 const BATCH = 5;
 const LOW = 3;
 let filling = false;
+/** Next pressed on the last track while Autoplay fetches: on into its first pick once it is in. */
+let nextWhenFilled = false;
 /** The own tracks Radio has asked inserts for (by entry, or place and id): one ask per track. */
 const insertedFor = new Set<string>();
 
@@ -1367,9 +1369,16 @@ function fillAutoplay() {
       // Still on as asked, still here: appended after everything, so the stream goes on into them.
       if (!local.autoplay || handed() || !tracks.length || local.skipFavourites !== ask.skip_favourites) return;
       local.queue = [...local.queue, ...(tracks as LocalTrack[])];
+      if (nextWhenFilled) {
+        nextWhenFilled = false;
+        next();
+      }
     })
     .catch((e) => (local.error = e instanceof Error ? e.message : String(e)))
-    .finally(() => (filling = false));
+    .finally(() => {
+      filling = false;
+      nextWhenFilled = false;
+    });
 }
 
 /** Under repeat all, while the last track plays here: the next round of the album or playlist after it (decision 0033,
@@ -1587,6 +1596,8 @@ export function jump(index: number) {
   } else {
     fresh(index, 0, true);
   }
+  // Autoplay and Radio as after any change of track (the owner's tablet, 2026-10-27: skipping drained the queue).
+  fill();
 }
 
 /** Next: the track wound on to its end, as Previous winds it back to its start (the owner, 2026-10-27: skip the
@@ -1596,6 +1607,11 @@ export function next() {
   // takes plainly (a5, 2026-10-27: the tablet's Next had no wind-down).
   if (handed()) return hand('next');
   if (rewinding) return windTakeover('next');
+  // The last track, Autoplay on: on into its picks once they are in (asked now if not yet).
+  if (local.index >= local.queue.length - 1 && local.autoplay) {
+    nextWhenFilled = true;
+    return fill();
+  }
   if (!handed() && prefs.startStop.rewind && audio && !audio.paused && committed === null) {
     const end = lengthOf(local.index);
     const at = where()?.offset ?? 0;

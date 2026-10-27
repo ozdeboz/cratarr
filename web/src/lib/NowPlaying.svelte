@@ -20,7 +20,7 @@
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs, SEEK_STEP, type CoverTouch, type SwipeDown, type SwipeSide, type SwipeUp } from './prefs.svelte';
-  import { art, clockText, coverComing, coverFailed, coverLate, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampBusy, shownPaused, wind, windTouch } from './remote.svelte';
+  import { art, clockText, coverComing, coverFailed, coverLate, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampBusy, shownPaused, wind, windTouch, hasNext } from './remote.svelte';
   import SeekWave from './SeekWave.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import { Seek } from './seekState.svelte';
@@ -597,7 +597,8 @@
                 size={32}
               /></button
             >
-            <button aria-label="Next track" onclick={() => send('next')} use:holdWind={windHold('forward')}><Icon name="next" size={24} /></button>
+            <!-- Dimmed where nothing can follow (no next track, no Autoplay, Radio or repeat to make one). -->
+            <button aria-label="Next track" disabled={!hasNext()} onclick={() => send('next')} use:holdWind={hasNext() ? windHold('forward') : null}><Icon name="next" size={24} /></button>
             <!-- Repeat is in the queue's sheet (a long press on Queue; the owner, 2026-10-26, 0.9.8): its place kept, so
                  play stays in the middle. -->
             {#if isLocal()}<span class="spot" aria-hidden="true"></span>{/if}
