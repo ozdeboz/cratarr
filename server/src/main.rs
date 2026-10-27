@@ -1,3 +1,4 @@
+mod acoustid;
 mod albums;
 // Decision 0035's core; the pass that uses it (claude-5f) comes next.
 #[allow(dead_code)]
@@ -41,9 +42,11 @@ mod search;
 mod serve;
 mod settings;
 mod similarity;
+mod slskd;
 mod snapcast;
 mod source;
 mod stream;
+mod stream_forms;
 mod sync_state;
 mod voice;
 mod web;
@@ -148,6 +151,7 @@ async fn main() -> Result<()> {
 
     let env = |k: &str| std::env::var(k).ok();
     let cfg = config::Config::from_lookup(env)?;
+    // Until Settings' saved values are read (`app::runtime`, once the library is open): the environment's.
     serve::proxy::set(cfg.proxies.clone());
     let kept_log = diagnostics::start_global(cfg.data_dir.as_deref().map(|d| std::path::Path::new(d).join("diagnostics.sqlite")).as_deref(), pending)
         .context("cannot start the diagnostics log")?;
@@ -196,9 +200,11 @@ async fn main() -> Result<()> {
     let served = serve::Serve::open(data_dir.as_deref().map(std::path::Path::new), tag_rules, &env)
         .context("cannot open the OpenSubsonic library")?;
     serve::set_instance(served.clone());
-    let (snapcast_bind, snapcast_host) = (cfg.snapcast_bind.clone(), cfg.snapcast_host.clone());
+    // The environment's server settings, with what Settings saved over them (0.9.8).
+    let runtime = app::runtime::start(app::runtime::Seed::from_env(&env), Some(&served.userdata), &cfg.bind);
+    let (snapcast_bind, snapcast_host) = (cfg.snapcast_bind.clone(), runtime.snapcast_host.clone());
     // Cratarr on the local network, as a Kodi streams from it: the host players reach Snapcast on, and Cratarr's port.
-    let lan_base = snapcast_host.clone().map(|h| format!("http://{h}:{}", cfg.bind.rsplit(':').next().unwrap_or("8080")));
+    let lan_base = app::runtime::lan_base(&runtime);
     let app = app::App::new(cfg, saved, origin).await.context("cannot open the catalogue")?;
     app.play_on.set_lan_base(lan_base);
     // Sync play (decision 0037): groups' sound on Snapcast's protocol; Cratarr runs on without it if the port is taken.
@@ -226,7 +232,7 @@ async fn main() -> Result<()> {
 
     // Decision 0035: the NAS keeps the analysis up to date (after the ThinkBook's first pass, or all of it).
     memwatch::start();
-    app::analysis_pass::run(app.library.catalogue(), app::analysis_pass::Mode::from_env(env("CRATARR_ANALYSIS").as_deref()), app::analysis_pass::hears_beats(env("CRATARR_BEAT_THIS").as_deref()));
+    app::analysis_pass::run(app.library.catalogue());
     // The visuals' signals for the next tracks in each queue, before they play (decision 0046, amended).
     app::analysis_pass::look_ahead(app.library.catalogue(), app.play_on.clone());
 

@@ -19,6 +19,9 @@ CREATE TABLE IF NOT EXISTS album_matches (album TEXT PRIMARY KEY, at INTEGER NOT
 -- An album held against its release group's releases (0.9.7, app::incomplete): what it misses (JSON; none: whole, or
 -- no release holds it), and when.
 CREATE TABLE IF NOT EXISTS album_complete (album TEXT PRIMARY KEY, at INTEGER NOT NULL, found TEXT) WITHOUT ROWID;
+-- What Discogs says of a subject beyond its words (0.9.8, app::discogs_facts): an album's (`album:<its Music-form id>`),
+-- an artist's (`artist:<name key>`), a release group's (`rg:<id>`); JSON, none where Discogs has nothing; and when.
+CREATE TABLE IF NOT EXISTS discogs_facts (subject TEXT PRIMARY KEY, at INTEGER NOT NULL, facts TEXT) WITHOUT ROWID;
 ";
 
 /// A word as a source said it.
@@ -31,6 +34,17 @@ pub struct RawWord {
 }
 
 impl UserData {
+    /// What Discogs said of a subject (`app::discogs_facts`), and when; none where it was never asked.
+    pub fn discogs_facts(&self, subject: &str) -> Result<Option<(i64, Option<String>)>> {
+        use rusqlite::OptionalExtension;
+        Ok(self.db().query_row("SELECT at, facts FROM discogs_facts WHERE subject = ?1", [subject], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
+    }
+
+    pub fn set_discogs_facts(&self, subject: &str, facts: Option<&str>, at: i64) -> Result<()> {
+        self.db().execute("INSERT OR REPLACE INTO discogs_facts (subject, at, facts) VALUES (?1, ?2, ?3)", params![subject, at, facts])?;
+        Ok(())
+    }
+
     /// What a source says of a subject now, in place of what it said before; noted as asked (`ok`: it answered).
     pub fn set_words(&self, subject: &str, source: &str, words: &[RawWord], ok: bool, at: i64) -> Result<()> {
         let mut db = self.db();

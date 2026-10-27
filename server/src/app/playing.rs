@@ -83,6 +83,9 @@ pub struct ArtistView {
     pub rows: Vec<super::playlists::PlaylistRow>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub favorite: Option<bool>,
+    /// Their MusicBrainz id, where Cratarr's own library knows it (0.9.8: Discogs' profile by MusicBrainz's link).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mbid: Option<String>,
 }
 
 /// An album as its view in the panel shows it (decision 0023): what its tracks say of it, and its tracks in play order
@@ -723,7 +726,14 @@ impl PlayingService {
                 row.bpm = f.bpm;
             }
         }
-        Ok(ArtistView { source: source_id.to_string(), name: name.to_string(), albums: w.albums, appears_on: w.appears_on, rows, favorite: w.favorite })
+        let mbid = match crate::serve::instance() {
+            Some(served) if source_id == crate::source::cratarr::KIND.id => {
+                let n = name.to_string();
+                tokio::task::spawn_blocking(move || served.library.artist_by_name(&n)).await.ok().and_then(Result::ok).flatten().and_then(|(_, m)| m)
+            }
+            _ => None,
+        };
+        Ok(ArtistView { source: source_id.to_string(), name: name.to_string(), albums: w.albums, appears_on: w.appears_on, rows, favorite: w.favorite, mbid })
     }
 
     /// Makes an artist a favourite or not (the artist panel's heart).

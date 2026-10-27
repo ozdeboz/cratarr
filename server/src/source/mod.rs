@@ -405,6 +405,13 @@ pub trait Source: Send + Sync {
     /// What is playing now, following the player chosen in the settings when the plugin has that notion.
     fn now_playing(&self) -> Fut<'_, Option<Playing>>;
 
+    /// What plays on `player` (as `Playing::player` named it); without one, or on a source with no such notion, as
+    /// `now_playing`. Carry-on (0.9.8) asks the player it stopped, not whichever is followed by then.
+    fn now_playing_on<'a>(&'a self, player: Option<&'a str>) -> Fut<'a, Option<Playing>> {
+        let _ = player;
+        self.now_playing()
+    }
+
     /// One track by the id this source gave it.
     fn track<'a>(&'a self, id: &'a str) -> Fut<'a, Track>;
 
@@ -667,6 +674,12 @@ pub trait Source: Send + Sync {
         Box::pin(async { anyhow::bail!("this server cannot control its players") })
     }
 
+    /// `transport` on `player`; without one, or on a source with no such notion, as `transport`.
+    fn transport_on<'a>(&'a self, command: Transport, player: Option<&'a str>) -> Fut<'a, String> {
+        let _ = player;
+        self.transport(command)
+    }
+
     fn play_tracks<'a>(&'a self, _ids: &'a [String], _how: PlayHow) -> Fut<'a, String> {
         Box::pin(async { anyhow::bail!("this server cannot play music") })
     }
@@ -675,6 +688,12 @@ pub trait Source: Send + Sync {
     /// where a moved file was). Returns the player's label.
     fn play_from<'a>(&'a self, _ids: &'a [String], _start_secs: f64) -> Fut<'a, String> {
         Box::pin(async { anyhow::bail!("this server cannot play music from a position") })
+    }
+
+    /// `play_from` on `player`; without one, or on a source with no such notion, as `play_from`.
+    fn play_from_on<'a>(&'a self, ids: &'a [String], start_secs: f64, player: Option<&'a str>) -> Fut<'a, String> {
+        let _ = player;
+        self.play_from(ids, start_secs)
     }
 
     /// Optional: an album's cover image (content type, bytes). Lets Cratarr show covers of music outside the playlist

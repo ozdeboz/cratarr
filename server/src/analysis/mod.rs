@@ -222,7 +222,7 @@ impl MediaSource for After {
 }
 
 /// Where the audio starts after an ID3v2 tag (its header's syncsafe size, and a footer when flagged); 0 without one.
-fn after_id3(path: &Path) -> u64 {
+pub(crate) fn after_id3(path: &Path) -> u64 {
     let mut h = [0u8; 10];
     let Ok(mut f) = File::open(path) else { return 0 };
     if f.read_exact(&mut h).is_err() || &h[..3] != b"ID3" {
@@ -277,6 +277,59 @@ fn open(path: &Path) -> Result<Opened> {
             open_from(path, start).map_err(|e2| anyhow!("{e:#}; after the ID3 tag too: {e2:#}"))
         }
     }
+}
+
+/// A file's sound decoded whole, as a gate looks at it (0.9.8, single-track replacement): its rate, channels and
+/// length, and how many frames would not decode.
+pub struct Walked {
+    pub rate: u32,
+    pub channels: usize,
+    pub frames: u64,
+    pub damaged: u32,
+}
+
+/// Decodes every packet of the file, handing each one's sound (planar, -1..1) to `each`; a damaged frame is counted
+/// and skipped, as the analysis skips it.
+pub fn walk(path: &Path, mut each: impl FnMut(&[Vec<f32>], u32, usize)) -> Result<Walked> {
+    let mut o = open(path)?;
+    let mut w = Walked { rate: o.rate, channels: o.channels, frames: 0, damaged: 0 };
+    let mut scratch: Vec<Vec<f32>> = Vec::new();
+    loop {
+        let packet = match o.reader.next_packet() {
+            Ok(Some(p)) => p,
+            Ok(None) => break,
+            Err(SymphoniaError::IoError(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(anyhow!("reading {}: {e}", path.display())),
+        };
+        if packet.track_id != o.track {
+            continue;
+        }
+        let decoded = match o.decoder.decode(&packet) {
+            Ok(d) => d,
+            Err(SymphoniaError::DecodeError(_)) => {
+                w.damaged += 1;
+                continue;
+            }
+            Err(e) => return Err(anyhow!("decoding {}: {e}", path.display())),
+        };
+        let n = decoded.frames();
+        if n == 0 {
+            continue;
+        }
+        decoded.copy_to_vecs_planar::<f32>(&mut scratch);
+        if scratch.len() != w.channels {
+            bail!("the channel count changed mid-stream");
+        }
+        for p in scratch.iter_mut() {
+            p.truncate(n);
+        }
+        each(&scratch, w.rate, w.channels);
+        w.frames += n as u64;
+    }
+    if w.frames == 0 {
+        bail!("no sound in {}", path.display());
+    }
+    Ok(w)
 }
 
 /// Whether a track of these genres is counted slow.

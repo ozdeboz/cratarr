@@ -85,6 +85,8 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
     let mut starred = crate::serve::instance().map(|s| s.userdata.subscribe_starred());
     // Albums' covers as they change (0.9.7): their new stamps.
     let mut covers = crate::serve::instance().map(|s| s.subscribe_covers());
+    // Single-track replacement's downloads as they go (0.9.8).
+    let mut fetches = super::track_fetch::subscribe();
     let app = app.clone();
     tokio::spawn(crate::serve::who::carried(async move {
         // Whose tasks this page is told of (`app::tasks`): the account it is signed in as.
@@ -165,6 +167,14 @@ pub fn connect(app: &Arc<App>, follow: Option<String>) -> tokio::sync::mpsc::Rec
                 },
                 r = players.recv() => match r {
                     Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => send_players().await,
+                    Err(broadcast::error::RecvError::Closed) => false,
+                },
+                r = fetches.recv() => match r {
+                    Ok(t) if crate::serve::access::administering() => match Message::of("fetch", &t) {
+                        Some(m) => out.send(m).await.is_ok(),
+                        None => true,
+                    },
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => true,
                     Err(broadcast::error::RecvError::Closed) => false,
                 },
                 r = async {

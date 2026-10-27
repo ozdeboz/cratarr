@@ -90,6 +90,58 @@ pub fn restore(folder: &Path, token: &str) -> Result<String> {
     Ok(rel.to_string())
 }
 
+/// Move one track `folder/rel` into the trash (0.9.8: a track replaced by single-track replacement, or one it added and
+/// Undo takes away); its token, as `trash`'s.
+pub fn trash_file(folder: &Path, rel: &str, now_epoch: i64) -> Result<String> {
+    let rel_path = checked(rel)?;
+    let src = folder.join(&rel_path);
+    let token = token(now_epoch, rel);
+    let dest = folder.join(TRASH_DIR).join(&token);
+    if !src.exists() && dest.is_file() {
+        return Ok(token);
+    }
+    if !src.is_file() {
+        bail!("{rel} is not there any more");
+    }
+    if dest.exists() {
+        bail!("already in the trash: {token}");
+    }
+    crate::moves::create_dirs_like_parent(dest.parent().context("trash path has no parent")?)?;
+    std::fs::rename(&src, &dest).with_context(|| format!("moving {rel} to the trash"))?;
+    Ok(token)
+}
+
+/// Put a trashed track back where it was; its path relative to the folder.
+pub fn restore_file(folder: &Path, token: &str) -> Result<String> {
+    let (stamp, rel) = token.split_once('/').context("not an undo token")?;
+    if stamp.is_empty() || !stamp.bytes().all(|b| b.is_ascii_digit()) {
+        bail!("not an undo token");
+    }
+    let rel_path = checked(rel)?;
+    let src = folder.join(TRASH_DIR).join(stamp).join(&rel_path);
+    let dest = folder.join(&rel_path);
+    if !src.exists() && dest.is_file() {
+        return Ok(rel.to_string());
+    }
+    if !src.is_file() {
+        bail!("{rel} is no longer in the trash");
+    }
+    if dest.exists() {
+        bail!("{rel} exists again; not overwriting it");
+    }
+    crate::moves::create_dirs_like_parent(dest.parent().context("track path has no parent")?)?;
+    std::fs::rename(&src, &dest).with_context(|| format!("restoring {rel}"))?;
+    let mut d = src.parent().map(Path::to_path_buf);
+    let stop = folder.join(TRASH_DIR);
+    while let Some(dir) = d {
+        if dir == stop || std::fs::remove_dir(&dir).is_err() {
+            break;
+        }
+        d = dir.parent().map(Path::to_path_buf);
+    }
+    Ok(rel.to_string())
+}
+
 /// Empty trash older than `keep_days`. Returns how many deletions were removed for good.
 pub fn purge(folder: &Path, now_epoch: i64, keep_days: u32) -> Result<usize> {
     let trash = folder.join(TRASH_DIR);

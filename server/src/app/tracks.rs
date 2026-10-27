@@ -52,20 +52,26 @@ pub async fn list(app: &super::App, q: &str, order: &str, down: bool, without: &
     tokio::task::spawn_blocking(move || -> Result<(Vec<TrackRow>, usize)> {
         let mut rows = served.library.track_rows(&words, &off)?;
         if let Some(user) = user {
-            let used = served.userdata.used(&user, crate::userdata::Kind::Song)?;
-            let starred: HashSet<String> = served.userdata.starred(&user, crate::userdata::Kind::Song)?.into_iter().collect();
-            for r in &mut rows {
-                let u = used.get(&r.id);
-                r.plays = u.map_or(0, |a| a.play_count);
-                r.last_played = u.and_then(|a| a.play_date);
-                r.favorite = starred.contains(&r.id);
-            }
+            of_account(&served, &user, &mut rows)?;
         }
         sort(&mut rows, &order, down);
         let total = rows.len();
         Ok((rows.into_iter().skip(offset).take(limit.clamp(1, MOST)).collect(), total))
     })
     .await?
+}
+
+/// The account's plays, when it last played and its favourites, on the rows. Blocking.
+pub fn of_account(served: &crate::serve::Serve, user: &str, rows: &mut [TrackRow]) -> Result<()> {
+    let used = served.userdata.used(user, crate::userdata::Kind::Song)?;
+    let starred: HashSet<String> = served.userdata.starred(user, crate::userdata::Kind::Song)?.into_iter().collect();
+    for r in rows {
+        let u = used.get(&r.id);
+        r.plays = u.map_or(0, |a| a.play_count);
+        r.last_played = u.and_then(|a| a.play_date);
+        r.favorite = starred.contains(&r.id);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

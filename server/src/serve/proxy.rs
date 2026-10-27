@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 use std::net::IpAddr;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, RwLock};
 
 use axum::http::HeaderMap;
 use ipnet::IpNet;
@@ -17,7 +17,8 @@ use ipnet::IpNet;
 /// The headers a proxy sets for the client.
 const FORWARDED: [&str; 5] = ["x-forwarded-for", "x-forwarded-proto", "x-forwarded-host", "x-forwarded-uri", "x-forwarded-method"];
 
-static PROXIES: OnceLock<Option<Vec<IpNet>>> = OnceLock::new();
+/// The proxies named (none: local peers only); Settings may change them while Cratarr runs (0.9.8, `app::runtime`).
+static PROXIES: RwLock<Option<Vec<IpNet>>> = RwLock::new(None);
 /// The peers already written down.
 static NOTED: Mutex<Option<HashSet<IpAddr>>> = Mutex::new(None);
 
@@ -36,12 +37,12 @@ pub fn parse(text: Option<&str>) -> Option<Vec<IpNet>> {
     )
 }
 
-/// Set once, at the start.
+/// At the start, and whenever Settings changes them.
 pub fn set(proxies: Option<Vec<IpNet>>) {
     if let Some(p) = &proxies {
         tracing::info!(target: "server", proxies = %p.iter().map(ToString::to_string).collect::<Vec<_>>().join(", "), "forwarded headers believed from these only");
     }
-    let _ = PROXIES.set(proxies);
+    *PROXIES.write().unwrap_or_else(|p| p.into_inner()) = proxies;
 }
 
 fn first_time(peer: IpAddr) -> bool {
@@ -73,7 +74,8 @@ pub fn screen(headers: &mut HeaderMap, peer: Option<IpAddr>) {
     if !headers.contains_key("x-forwarded-for") {
         return;
     }
-    let proxies = PROXIES.get().and_then(|p| p.as_deref());
+    let named = PROXIES.read().unwrap_or_else(|p| p.into_inner());
+    let proxies = named.as_deref();
     if believed(proxies, peer) {
         if proxies.is_none() && first_time(peer) {
             tracing::info!(target: "server", peer = %peer, "forwarded by a proxy: CRATARR_PROXIES may name it");

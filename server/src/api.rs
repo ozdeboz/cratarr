@@ -26,6 +26,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/stream/{source}/{id}", get(stream))
         .route("/api/file/{source}/{id}", get(file))
         .route("/api/track/{source}/{id}/gain", get(track_gain))
+        .route("/api/offline", post(offline_facts))
+        .route("/api/offline/prepare", post(offline_prepare))
         .route("/api/players", get(players))
         .route("/api/groups/{group}/visuals", get(group_visuals).put(put_group_visuals))
         .route("/api/visuals/snapshots", get(visual_snapshots).post(add_visual_snapshot))
@@ -38,6 +40,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/players/{name}/state", axum::routing::put(player_state))
         .route("/api/players/{name}/sample", post(player_sample))
         .route("/api/players/{name}/delay", axum::routing::put(player_delay))
+        .route("/api/players/{name}/shared", axum::routing::put(player_shared))
         .route("/api/groups/{leader}/listen.wav", get(group_listen))
         .route("/api/groups/{leader}/listen.pcm", get(group_frames))
         .route("/api/time", get(time_now))
@@ -239,6 +242,17 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/health/fixes", get(health_fixes))
             .route("/api/health/fixes/apply", post(apply_fixes))
             .route("/api/albums/{source}/{album}/intake", get(album_intake))
+            .route("/api/albums/{source}/{album}/release", get(album_release))
+            .route("/api/albums/{source}/{album}/discogs", get(album_discogs))
+            .route("/api/artists/discogs", get(artist_discogs))
+            .route("/api/track-search", post(start_track_search))
+            .route("/api/track-search/{id}", get(track_search))
+            .route("/api/track-search/{id}/fetch", post(start_track_fetch))
+            .route("/api/track-fetch/{id}", get(track_fetch).delete(drop_track_fetch))
+            .route("/api/track-fetch/{id}/add", post(add_fetched_track))
+            .route("/api/settings/slskd", get(get_slskd).put(put_slskd))
+            .route("/api/settings/server-runtime", get(get_runtime).put(put_runtime))
+            .route("/api/settings/acoustid", get(get_acoustid).put(put_acoustid))
             .route("/api/settings/naming", get(naming))
             .route("/api/catalogue", get(catalogue_status))
             .route("/api/health/report", get(health_report))
@@ -406,9 +420,10 @@ async fn player_log_add(State(app): State<Arc<App>>, Path(name): Path<String>, J
     Ok(Json(json!({ "last": last })))
 }
 
-/// A player of the request's own, or one not known yet (decision 0051): another's is as if there were none.
+/// A player of the request's own, or one not known yet (decision 0051): another's is as if there were none; one shared
+/// with everyone (0.9.8) is played on but its log stays its owner's.
 fn own_player(app: &App, name: &str) -> Result<(), ApiError> {
-    Ok(app.play_on.reached(name)?)
+    Ok(app.play_on.owned(name)?)
 }
 
 /// An id from outside is taken only as a short plain token: it goes into logs and headers.
@@ -776,7 +791,25 @@ async fn track_gain(State(app): State<Arc<App>>, Path((source, id)): Path<(Strin
     let gain = replay_gain_of(&app, &source, &id).await;
     // Short-lived: an analysis comes, and the gain with it.
     let cache = (header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=600"));
-    ([cache], Json(gain.map_or(json!({}), |g| serde_json::to_value(g).unwrap_or_default()))).into_response()
+    ([cache], Json(gain_view(gain.as_ref()))).into_response()
+}
+
+/// A track's gains as the page and the app read them, with what levelling turns it down by (0.9.8: shown on the page,
+/// applied by the app and the browser), by track and by album; null where the gain is not known (the page's choice for
+/// unmeasured tracks decides).
+fn gain_view(gain: Option<&crate::serve::api::ReplayGain>) -> serde_json::Value {
+    let mut v = gain.map_or(json!({}), |g| serde_json::to_value(g).unwrap_or_default());
+    v["trackDown"] = json!(gain.and_then(|g| turned_down(g.track_gain, g.track_peak)));
+    v["albumDown"] = json!(gain.and_then(|g| turned_down(g.album_gain.or(g.track_gain), g.album_peak.or(g.track_peak))));
+    v
+}
+
+/// Levelling's rule (decision 0035): the gain, never past the peak (no clipping) and never up: the dB a track is turned
+/// down by (0 or less); none without a gain.
+fn turned_down(gain: Option<f64>, peak: Option<f64>) -> Option<f64> {
+    let gain = gain?;
+    let room = peak.filter(|p| *p > 0.0).map_or(f64::INFINITY, |p| -20.0 * p.log10());
+    Some((gain.min(room).min(0.0) * 100.0).round() / 100.0)
 }
 
 /// A track as Cratarr's library serves it: its gains and tempo from its analysis, else from its file's tags.
@@ -2048,9 +2081,14 @@ struct StreamFrom {
     /// Start at the frame holding this moment (milliseconds; FLAC and Opus), for seeking.
     #[serde(default)]
     from_ms: u64,
-    /// `opus`: a lossless track as Opus (a phone's stream, the owner 2026-10-24); a lossy one comes as it is.
+    /// `opus`: a lossless track as Opus (a phone's stream, the owner 2026-10-24); `alac` or `mp3` (0.9.8): for a browser
+    /// that takes neither FLAC nor Opus in MP4. A lossy one comes as it is.
     #[serde(default, rename = "as")]
     as_: Option<String>,
+    /// The stream from its start kept whole (0.9.8, the installed web app's offline play): a length and ranges, the
+    /// same bytes and headers; a conflict while it is still being made (`offline/prepare` says when it is ready).
+    #[serde(default)]
+    whole: Option<u8>,
 }
 
 /// A track's audio for the local player (decision 0022): FLAC as fragmented MP4, MP3 as it is, read from Cratarr's own
@@ -2206,7 +2244,7 @@ async fn file(State(app): State<Arc<App>>, Path((source, id)): Path<(String, Str
     if q.as_.as_deref() == Some("opus") {
         let gain = replay_gain_of(&app, &source_id.0, &source_id.1).await;
         let copy = match &app.opus_copies {
-            Some(copies) => copies.serve(path.clone(), gain.map_or((None, None), |g| (g.track_gain, g.album_gain)), &headers).await,
+            Some(copies) => copies.serve(path.clone(), copy_gains(gain.as_ref()), &headers).await,
             None => opus_copy(path.clone(), gain).await,
         };
         if let Some(copy) = copy {
@@ -2214,6 +2252,187 @@ async fn file(State(app): State<Arc<App>>, Path((source, id)): Path<(String, Str
         }
     }
     crate::serve::files::serve_file(&path, &headers, false).await
+}
+
+/// The gains written into a track's Opus copy (its name says them: the same gains, the same copy).
+fn copy_gains(g: Option<&crate::serve::api::ReplayGain>) -> (Option<f64>, Option<f64>) {
+    g.map_or((None, None), |g| (g.track_gain, g.album_gain))
+}
+
+/// The most tracks one offline call takes (an album, a playlist).
+const OFFLINE_MOST: usize = 500;
+
+#[derive(Deserialize)]
+struct OfflineTracks {
+    tracks: Vec<TrackRefOf>,
+    /// "opus" (the default: lossless as its Opus copy, the rest as it is), "original", or "stream": the form the
+    /// browser player streams (`/api/stream`), kept whole (`?whole=1`), with `opus` for a lossless track as Opus.
+    #[serde(default, rename = "as")]
+    as_: Option<String>,
+    #[serde(default)]
+    opus: bool,
+    /// The stream's form (0.9.8 page): "opus", "alac", "mp3", "original", or "aac" (not made: such tracks say so);
+    /// over `opus`.
+    #[serde(default)]
+    form: Option<String>,
+}
+
+/// What form an offline call asks for.
+#[derive(Clone, Copy)]
+enum OfflineAs {
+    /// The file (`/api/file`), lossless as its Opus copy where `opus`.
+    File { opus: bool },
+    /// The browser player's stream kept whole, lossless in the form asked for.
+    Stream(Lossless),
+    /// A form Cratarr does not make (yet): each track says so.
+    Unmade(&'static str),
+}
+
+impl OfflineTracks {
+    fn form(&self) -> OfflineAs {
+        match self.as_.as_deref() {
+            Some("stream") => match self.form.as_deref() {
+                Some("aac") => OfflineAs::Unmade("AAC is not made: ask for ALAC or MP3."),
+                Some(f) => match Lossless::of(Some(f)) {
+                    Some(l) => OfflineAs::Stream(l),
+                    None => OfflineAs::Unmade("That form is not made."),
+                },
+                None => OfflineAs::Stream(if self.opus { Lossless::Opus } else { Lossless::Original }),
+            },
+            Some("original") => OfflineAs::File { opus: false },
+            _ => OfflineAs::File { opus: true },
+        }
+    }
+}
+
+#[derive(Deserialize, Clone)]
+struct TrackRefOf {
+    source: String,
+    id: String,
+}
+
+/// A track's file as a device keeps it for offline play: where to fetch it, as what, and whether it is ready (a copy
+/// being made has no length yet: the device waits for it).
+async fn offline_file(app: &App, t: &TrackRefOf, form: OfflineAs) -> serde_json::Value {
+    if t.source == crate::bandcamp::SOURCE {
+        return json!({ "source": t.source, "id": t.id, "offline": false });
+    }
+    let cat = app.library.catalogue();
+    let (source, id) = (t.source.clone(), t.id.clone());
+    let Some((path, kind, _)) = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten() else {
+        return json!({ "source": t.source, "id": t.id, "offline": false, "error": "That track is not in the library." });
+    };
+    let opus = match form {
+        OfflineAs::Unmade(why) => return json!({ "source": t.source, "id": t.id, "offline": false, "error": why }),
+        OfflineAs::File { opus } => opus,
+        OfflineAs::Stream(wanted) => {
+            let url = format!("/api/stream/{}/{}?whole=1{}", form_urlencoded_segment(&t.source), form_urlencoded_segment(&t.id), wanted.query());
+            let Some(sf) = stream_form(&path, kind, wanted).await else {
+                // An MP3 streams as it is.
+                let bytes = tokio::fs::metadata(&path).await.ok().map(|m| m.len());
+                return json!({ "source": t.source, "id": t.id, "offline": true, "file": { "url": url, "type": "audio/mpeg", "as": "stream", "ready": true, "bytes": bytes } });
+            };
+            let kept = match &app.opus_copies {
+                Some(copies) => copies.prepare_stream(path, sf).await,
+                None => None,
+            };
+            let Some(kept) = kept else {
+                return json!({ "source": t.source, "id": t.id, "offline": false, "error": "Cratarr cannot keep this track." });
+            };
+            let kind = match sf {
+                crate::opus_copies::Form::Opus { .. } => "audio/mp4; codecs=\"opus\"",
+                crate::opus_copies::Form::Alac => "audio/mp4; codecs=\"alac\"",
+                crate::opus_copies::Form::Mp3 => "audio/mpeg",
+                crate::opus_copies::Form::Flac => "audio/mp4",
+            };
+            return json!({ "source": t.source, "id": t.id, "offline": true, "file": { "url": url, "type": kind, "as": "stream", "ready": kept.is_some(), "bytes": kept } });
+        }
+    };
+    let base = format!("/api/file/{}/{}", form_urlencoded_segment(&t.source), form_urlencoded_segment(&t.id));
+    if opus && let Some(copies) = &app.opus_copies {
+        let gain = replay_gain_of(app, &t.source, &t.id).await;
+        if let Some(kept) = copies.prepare(path.clone(), copy_gains(gain.as_ref())).await {
+            return json!({ "source": t.source, "id": t.id, "offline": true, "file": {
+                "url": format!("{base}?as=opus"), "type": "audio/ogg", "as": "opus", "ready": kept.is_some(), "bytes": kept,
+            }});
+        }
+    }
+    let bytes = tokio::fs::metadata(&path).await.ok().map(|m| m.len());
+    let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
+    let kind = match ext.as_str() {
+        "flac" => "audio/flac",
+        "mp3" => "audio/mpeg",
+        "m4a" | "alac" | "aac" => "audio/mp4",
+        "ogg" | "opus" => "audio/ogg",
+        "wav" => "audio/wav",
+        _ => "application/octet-stream",
+    };
+    json!({ "source": t.source, "id": t.id, "offline": true, "file": { "url": base, "type": kind, "as": "original", "ready": true, "bytes": bytes } })
+}
+
+/// A path segment, percent-encoded.
+fn form_urlencoded_segment(s: &str) -> String {
+    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+/// Offline play (0.9.8, the installed web app): the tracks' files readied, each with where to fetch it and whether it
+/// is ready yet; asked again until all are.
+async fn offline_prepare(State(app): State<Arc<App>>, Json(b): Json<OfflineTracks>) -> Result<Json<serde_json::Value>, ApiError> {
+    if b.tracks.len() > OFFLINE_MOST {
+        return Err(ToggleError::Refused(format!("At most {OFFLINE_MOST} tracks at once.")).into());
+    }
+    let form = b.form();
+    let mut out = Vec::with_capacity(b.tracks.len());
+    for t in &b.tracks {
+        out.push(offline_file(&app, t, form).await);
+    }
+    Ok(Json(json!({ "tracks": out })))
+}
+
+/// Offline play's facts (0.9.8): each track's row (as the Tracks list has it, with the account's plays), its gains and
+/// what levelling turns it down by, its cover's and waveform's addresses (fetched and kept as they are), and its file
+/// (as `offline/prepare` gives it).
+async fn offline_facts(State(app): State<Arc<App>>, Json(b): Json<OfflineTracks>) -> Result<Json<serde_json::Value>, ApiError> {
+    if b.tracks.len() > OFFLINE_MOST {
+        return Err(ToggleError::Refused(format!("At most {OFFLINE_MOST} tracks at once.")).into());
+    }
+    let form = b.form();
+    let own: Vec<String> = b.tracks.iter().filter(|t| t.source == crate::source::cratarr::KIND.id).map(|t| t.id.clone()).collect();
+    let (rows, stamps) = match crate::serve::instance() {
+        Some(served) => tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let mut rows = served.library.track_rows_by_id(&own)?;
+            if let Some(user) = served.current_user() {
+                crate::app::tracks::of_account(&served, &user, &mut rows)?;
+            }
+            Ok((rows, served.cover_stamps()))
+        })
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?,
+        None => (Vec::new(), Arc::default()),
+    };
+    let rows: std::collections::HashMap<String, crate::serve::read::TrackRow> = rows.into_iter().map(|r| (r.id.clone(), r)).collect();
+    let mut out = Vec::with_capacity(b.tracks.len());
+    for t in &b.tracks {
+        let mut v = offline_file(&app, t, form).await;
+        if v["offline"] != json!(true) {
+            out.push(v);
+            continue;
+        }
+        let (s, i) = (form_urlencoded_segment(&t.source), form_urlencoded_segment(&t.id));
+        let row = rows.get(&t.id).filter(|_| t.source == crate::source::cratarr::KIND.id);
+        if let Some(r) = row {
+            v["track"] = serde_json::to_value(r).unwrap_or_default();
+            let stamp = stamps.get(&r.album_id).map(|p| format!("?v={p}")).unwrap_or_default();
+            v["cover"] = format!("/api/albums/{s}/{}/cover{stamp}", form_urlencoded_segment(&r.album_id)).into();
+        } else {
+            v["cover"] = format!("/api/cover/{s}/{i}").into();
+        }
+        v["gain"] = gain_view(replay_gain_of(&app, &t.source, &t.id).await.as_ref());
+        v["waveform"] = format!("/api/track/{s}/{i}/waveform").into();
+        out.push(v);
+    }
+    Ok(Json(json!({ "tracks": out })))
 }
 
 /// A lossless file as Ogg Opus, made as it is sent (no length, no ranges: downloads take it whole). `None` for a file
@@ -2279,7 +2498,7 @@ impl std::io::Write for ChannelWriter {
     }
 }
 
-async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<StreamFrom>) -> Response {
+async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>, Query(q): Query<StreamFrom>, headers: HeaderMap) -> Response {
     use crate::stream::{FlacToMp4, Kind};
     if source == crate::bandcamp::SOURCE {
         // Its MP3 as it is; a moment to start at, as the place in the file it is at (128 kb/s throughout).
@@ -2291,10 +2510,19 @@ async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, S
     let Some((path, kind, duration_ms)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
+    if q.whole == Some(1) {
+        return whole_stream(&app, path, kind, duration_ms, Lossless::of(q.as_.as_deref()).unwrap_or(Lossless::Original), &headers).await;
+    }
     if q.as_.as_deref() == Some("opus")
         && let Some(opus) = opus_stream(path.clone(), q.from_ms, false).await
     {
         return opus;
+    }
+    // ALAC or MP3 for a browser that takes neither FLAC nor Opus in MP4 (0.9.8); a lossy file comes as it is.
+    if let Some(l @ (Lossless::Alac | Lossless::Mp3)) = Lossless::of(q.as_.as_deref())
+        && let Some(r) = lossless_as(path.clone(), q.from_ms, l == Lossless::Mp3).await
+    {
+        return r;
     }
     let Some(kind) = kind else {
         // Neither FLAC nor MP3 (ALAC, AAC, WAV, AIFF, Ogg Vorbis): decoded here and sent as Opus, which every browser's
@@ -2348,8 +2576,15 @@ async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, S
                 headers.insert("x-duration-ms", HeaderValue::from(ms));
             }
             tokio::spawn(async move {
-                use tokio::io::AsyncReadExt;
+                use tokio::io::{AsyncReadExt, AsyncSeekExt};
+                // From its first frame (0.9.8: an ID3v2 tag with a large cover held the sound back by seconds on a
+                // phone's connection); its LAME header frame comes first, as the page trims by it.
+                let p = path.clone();
+                let skip = tokio::task::spawn_blocking(move || crate::analysis::after_id3(&p)).await.unwrap_or(0);
                 let Ok(mut file) = tokio::fs::File::open(&path).await else { return };
+                if skip > 0 && file.seek(std::io::SeekFrom::Start(skip)).await.is_err() {
+                    return;
+                }
                 let mut buf = vec![0u8; 64 * 1024];
                 loop {
                     match file.read(&mut buf).await {
@@ -2369,6 +2604,114 @@ async fn stream(State(app): State<Arc<App>>, Path((source, id)): Path<(String, S
         }
     }
     (headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response()
+}
+
+/// The form a lossless track is asked for in (`as`): as it is, or Opus, ALAC or MP3 (0.9.8: the page picks by what the
+/// browser's media source takes).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lossless {
+    Original,
+    Opus,
+    Alac,
+    Mp3,
+}
+
+impl Lossless {
+    fn of(s: Option<&str>) -> Option<Self> {
+        Some(match s {
+            None | Some("original") => Self::Original,
+            Some("opus") => Self::Opus,
+            Some("alac") => Self::Alac,
+            Some("mp3") => Self::Mp3,
+            Some(_) => return None,
+        })
+    }
+
+    /// Its part of a stream's address.
+    fn query(self) -> &'static str {
+        match self {
+            Self::Original => "",
+            Self::Opus => "&as=opus",
+            Self::Alac => "&as=alac",
+            Self::Mp3 => "&as=mp3",
+        }
+    }
+}
+
+/// The form `/api/stream` sends a track in from its start, for keeping whole (0.9.8): a lossless one in the form asked
+/// for, FLAC as fragmented MP4, MP3 as it is (`None`), anything else as Opus.
+async fn stream_form(path: &std::path::Path, kind: Option<crate::stream::Kind>, wanted: Lossless) -> Option<crate::opus_copies::Form> {
+    use crate::opus_copies::Form;
+    use crate::stream::Kind;
+    let p = path.to_path_buf();
+    let lossless = || async move { tokio::task::spawn_blocking(move || crate::convert::Source::open(&p).ok().flatten().is_some()).await.unwrap_or(false) };
+    let made = match wanted {
+        Lossless::Original => None,
+        Lossless::Opus => Some(Form::Opus { lossy_too: false }),
+        Lossless::Alac => Some(Form::Alac),
+        Lossless::Mp3 => Some(Form::Mp3),
+    };
+    if let Some(form) = made
+        && lossless().await
+    {
+        return Some(form);
+    }
+    match kind {
+        Some(Kind::Flac) => Some(Form::Flac),
+        Some(Kind::Mp3) => None,
+        None => Some(Form::Opus { lossy_too: true }),
+    }
+}
+
+/// The stream kept whole (`?whole=1`): the kept form with its headers, length and ranges; an MP3 as its file.
+async fn whole_stream(app: &App, path: std::path::PathBuf, kind: Option<crate::stream::Kind>, duration_ms: Option<u64>, wanted: Lossless, headers: &HeaderMap) -> Response {
+    let Some(form) = stream_form(&path, kind, wanted).await else {
+        let mut r = crate::serve::files::serve_file(&path, headers, false).await;
+        r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("audio/mpeg"));
+        if let Some(ms) = duration_ms {
+            r.headers_mut().insert("x-duration-ms", HeaderValue::from(ms));
+        }
+        return r;
+    };
+    let Some(copies) = &app.opus_copies else {
+        return (StatusCode::CONFLICT, Json(json!({ "error": "Cratarr keeps no copies without its data folder." }))).into_response();
+    };
+    match copies.serve_stream(path, form, headers).await {
+        Some(r) => r,
+        None => (StatusCode::CONFLICT, Json(json!({ "error": "Not ready yet." }))).into_response(),
+    }
+}
+
+/// A lossless track as ALAC in fragmented MP4, or as MP3 (`stream_forms`), made as it is sent from `from_ms`; `None`
+/// when it is not lossless (it streams as it is). The headers place it, as the forms say.
+async fn lossless_as(path: std::path::PathBuf, from_ms: u64, mp3: bool) -> Option<Response> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(2);
+    let (said, heard) = tokio::sync::oneshot::channel::<crate::stream_forms::Head>();
+    tokio::task::spawn_blocking(move || {
+        let failed = tx.clone();
+        let out = ChannelWriter { tx, buf: Vec::with_capacity(ChannelWriter::PIECE) };
+        let told = |h| {
+            let _ = said.send(h);
+        };
+        let made = if mp3 { crate::stream_forms::mp3(&path, from_ms, told, out) } else { crate::stream_forms::alac_mp4(&path, from_ms, told, out) };
+        if let Err(e) = made {
+            // A closed body: the page stopped reading (a skip, a seek).
+            let stopped = e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::BrokenPipe);
+            if !stopped {
+                tracing::warn!("{} stream of {}: {e:#}", if mp3 { "MP3" } else { "ALAC" }, path.display());
+                let _ = failed.blocking_send(Err(std::io::Error::other(format!("{e:#}"))));
+            }
+        }
+    });
+    let head = heard.await.ok()?;
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    for (k, v) in head {
+        if let (Ok(k), Ok(v)) = (header::HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(&v)) {
+            headers.insert(k, v);
+        }
+    }
+    Some((headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response())
 }
 
 /// A track as Opus in fragmented MP4, made as it is sent: a lossless one for a phone's stream, and with `lossy_too` one
@@ -2710,7 +3053,7 @@ impl ManyPlaylists {
 
 /// One playlist an action on several could not do, and why.
 fn refusal(id: &str, e: &ToggleError) -> serde_json::Value {
-    json!({ "id": id, "error": e.to_string() })
+    json!({ "id": id, "error": crate::app::plain(e.to_string()) })
 }
 
 /// Several playlists favourited, or not (`on`), each as its own heart (decision 0023): those done, those not and why.
@@ -2808,6 +3151,8 @@ async fn undo(State(app): State<Arc<App>>, Json(req): Json<UndoRequest>) -> Resu
             crate::app::renumber::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         } else if token.starts_with(crate::app::fixes::UNDO) {
             crate::app::fixes::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+        } else if token.starts_with(crate::app::track_fetch::UNDO) {
+            crate::app::track_fetch::undo(token).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
         } else {
             restored.push(app.incoming.undo(token).await?);
         }
@@ -4431,6 +4776,236 @@ async fn put_discogs_keys(Json(b): Json<DiscogsKeys>) -> Result<Json<serde_json:
     get_discogs_keys().await
 }
 
+#[derive(Deserialize)]
+struct Shared {
+    shared: bool,
+}
+
+/// A device shared with everyone on this Cratarr, or not (0.9.8): its owner's, or an administrator's, to set.
+async fn player_shared(State(app): State<Arc<App>>, Path(name): Path<String>, Json(b): Json<Shared>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(Json(json!({ "shared": app.play_on.set_shared(&name, b.shared)? })))
+}
+
+// ---- Server settings that were the environment's only (0.9.8)
+
+/// The proxies believed, the analysis pass, Beat this! and sync play's host, with what the environment set.
+async fn get_runtime() -> Result<Json<crate::app::runtime::View>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let ud = serve.userdata.clone();
+    Ok(Json(
+        tokio::task::spawn_blocking(move || crate::app::runtime::view(&ud))
+            .await
+            .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+            .map_err(|e| ToggleError::Refused(format!("{e:#}")))?,
+    ))
+}
+
+/// Saved and in force at once (sync play's host for the players asking from now on).
+async fn put_runtime(State(app): State<Arc<App>>, Json(c): Json<crate::app::runtime::Change>) -> Result<Json<crate::app::runtime::View>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let ud = serve.userdata.clone();
+    let host_changed = c.snapcast_host.is_some();
+    let r = tokio::task::spawn_blocking(move || crate::app::runtime::save(&ud, &c))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(ToggleError::Refused)?;
+    if host_changed {
+        app.play_on.set_sync_host(r.snapcast_host.clone());
+        app.play_on.set_lan_base(crate::app::runtime::lan_base(&r));
+    }
+    get_runtime().await
+}
+
+// ---- Discogs' facts (0.9.8)
+
+/// An album's facts on Discogs: its master's genres, styles and year, its main release's labels and catalogue numbers
+/// and its credits, its page; `{}` where Discogs has none. Asked now where not kept.
+async fn album_discogs(Path((source, album)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+    own_album(&source)?;
+    let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let facts = crate::app::discogs_facts::album(&served, &album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(facts.map_or(json!({}), |f| serde_json::to_value(f).unwrap_or_default())))
+}
+
+#[derive(Deserialize)]
+struct ArtistAsked {
+    name: String,
+    #[serde(default)]
+    mbid: Option<String>,
+}
+
+/// An artist's facts on Discogs: profile (plain), real name, aliases, name variations, members and groups, links, page;
+/// `{}` where Discogs has none.
+async fn artist_discogs(Query(q): Query<ArtistAsked>) -> Result<Json<serde_json::Value>, ApiError> {
+    let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let facts = crate::app::discogs_facts::artist(&served, &q.name, q.mbid.as_deref()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(facts.map_or(json!({}), |f| serde_json::to_value(f).unwrap_or_default())))
+}
+
+// ---- Single-track replacement (0.9.8)
+
+/// The album's MusicBrainz release, each track with the file that holds it (none: missing).
+async fn album_release(Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::track_fetch::ReleaseView>, ApiError> {
+    own_album(&source)?;
+    Ok(Json(crate::app::track_fetch::release(&album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+#[derive(Deserialize)]
+struct TrackRef {
+    source: String,
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct TrackSearch {
+    album: TrackRef,
+    recording: String,
+    #[serde(default)]
+    replace: Option<TrackRef>,
+}
+
+/// One slskd search for one of the release's tracks (never bulk).
+async fn start_track_search(Json(b): Json<TrackSearch>) -> Result<Json<serde_json::Value>, ApiError> {
+    own_album(&b.album.source)?;
+    if b.replace.as_ref().is_some_and(|r| r.source != b.album.source) {
+        return Err(ToggleError::Refused("The track to replace is not on that album.".into()).into());
+    }
+    let id = crate::app::track_fetch::search(&b.album.id, &b.recording, b.replace.map(|r| r.id)).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "id": id })))
+}
+
+async fn track_search(Path(id): Path<String>) -> Result<Json<crate::app::track_fetch::SearchView>, ApiError> {
+    Ok(Json(crate::app::track_fetch::search_view(&id).ok_or_else(|| ToggleError::Refused("That search is gone; search again.".into()))?))
+}
+
+#[derive(Deserialize)]
+struct FetchOne {
+    candidate: usize,
+}
+
+/// One of a search's files fetched and checked.
+async fn start_track_fetch(Path(id): Path<String>, Json(b): Json<FetchOne>) -> Result<Json<serde_json::Value>, ApiError> {
+    let fetch = crate::app::track_fetch::fetch(&id, b.candidate).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "id": fetch })))
+}
+
+async fn track_fetch(Path(id): Path<String>) -> Result<Json<crate::app::track_fetch::FetchView>, ApiError> {
+    Ok(Json(crate::app::track_fetch::fetch_view(&id).ok_or_else(|| ToggleError::Refused("That download is gone.".into()))?))
+}
+
+async fn drop_track_fetch(Path(id): Path<String>) -> StatusCode {
+    tokio::task::spawn_blocking(move || crate::app::track_fetch::drop_fetch(&id)).await.ok();
+    StatusCode::NO_CONTENT
+}
+
+/// A checked track into its album; Undo takes it out again (and puts back the one it replaced).
+async fn add_fetched_track(Path(id): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
+    let token = crate::app::track_fetch::add(&id).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "undo": [token] })))
+}
+
+/// slskd as set (never its key) and whether it answers: its version, or why not.
+async fn get_slskd() -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let ud = serve.userdata.clone();
+    let (url, key, folder) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        use crate::app::track_fetch::{SLSKD_FOLDER, SLSKD_KEY, SLSKD_URL};
+        Ok((ud.import_choice(SLSKD_URL)?.unwrap_or_default(), ud.import_choice(SLSKD_KEY)?.unwrap_or_default(), ud.import_choice(SLSKD_FOLDER)?.unwrap_or_default()))
+    })
+    .await
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    let enabled = crate::app::switches::is_on(crate::app::switches::SLSKD);
+    let mut out = json!({ "url": url, "set": !key.is_empty(), "folder": folder, "enabled": enabled });
+    if enabled && !url.is_empty() && !key.is_empty() {
+        match crate::slskd::Slskd::new(&url, &key) {
+            Ok(s) => match s.version().await {
+                Ok(v) => out["version"] = v.into(),
+                Err(e) => out["error"] = format!("{e:#}").into(),
+            },
+            Err(e) => out["error"] = format!("{e:#}").into(),
+        }
+        if !folder.is_empty() && !std::path::Path::new(&folder).is_dir() {
+            out["error"] = format!("{folder} is not a folder Cratarr can see").into();
+        }
+    }
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+struct SlskdChoices {
+    #[serde(default)]
+    url: Option<String>,
+    /// A new key (empty: taken away); absent: kept.
+    #[serde(default)]
+    key: Option<String>,
+    #[serde(default)]
+    folder: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+/// slskd's address, key and completed-downloads folder saved; switched on or off.
+async fn put_slskd(Json(b): Json<SlskdChoices>) -> Result<Json<serde_json::Value>, ApiError> {
+    if let Some(url) = &b.url
+        && !url.trim().is_empty()
+        && !(url.trim().starts_with("http://") || url.trim().starts_with("https://"))
+    {
+        return Err(ToggleError::Refused("slskd's address starts with http:// or https://.".into()).into());
+    }
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let ud = serve.userdata.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        use crate::app::track_fetch::{SLSKD_FOLDER, SLSKD_KEY, SLSKD_URL};
+        for (k, v) in [(SLSKD_URL, b.url), (SLSKD_KEY, b.key), (SLSKD_FOLDER, b.folder)] {
+            if let Some(v) = v {
+                ud.set_import_choice(k, v.trim())?;
+            }
+        }
+        if let Some(on) = b.enabled {
+            crate::app::switches::set_on(crate::app::switches::SLSKD, on)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+    .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    get_slskd().await
+}
+
+/// Whether the server's AcoustID key is saved (never it).
+async fn get_acoustid() -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let ud = serve.userdata.clone();
+    let set = tokio::task::spawn_blocking(move || crate::app::track_fetch::acoustid_key(&ud))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .is_some();
+    Ok(Json(json!({ "set": set })))
+}
+
+#[derive(Deserialize)]
+struct AcoustidKey {
+    /// A new key (empty: taken away).
+    key: String,
+}
+
+/// The server's AcoustID application key saved (the owner registers the application).
+async fn put_acoustid(Json(b): Json<AcoustidKey>) -> Result<Json<serde_json::Value>, ApiError> {
+    let key = b.key.trim().to_string();
+    if !key.is_empty() && (!(4..=64).contains(&key.len()) || !key.chars().all(|c| c.is_ascii_alphanumeric())) {
+        return Err(ToggleError::Refused("An AcoustID key is letters and digits.".into()).into());
+    }
+    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let ud = serve.userdata.clone();
+    tokio::task::spawn_blocking(move || ud.set_import_choice(crate::app::track_fetch::ACOUSTID_KEY, &key))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    get_acoustid().await
+}
+
 /// Change cover (0.9.5): only for Cratarr's own library's albums, whose files Cratarr holds.
 fn own_album(source: &str) -> Result<(), ApiError> {
     if source != crate::source::cratarr::KIND.id {
@@ -4494,6 +5069,9 @@ struct ApplyFixes {
     ids: Vec<String>,
     #[serde(default)]
     certain: Option<String>,
+    /// Genre fixes' chosen genres (0.9.8), by fix id: written as several genres.
+    #[serde(default)]
+    chosen: std::collections::HashMap<String, Vec<String>>,
 }
 
 /// Fixes written into the files (0.9.7, an administrator's tap): `{undo: [token], applied, failed: [{id, why}]}`.
@@ -4503,13 +5081,15 @@ async fn apply_fixes(State(app): State<Arc<App>>, Json(b): Json<ApplyFixes>) -> 
         Some(finding) => crate::app::fixes::of_finding(&app, finding).await.map_err(refused)?.into_iter().filter(|f| f.certainty == "certain").collect(),
         None => crate::app::fixes::by_ids(&app, &b.ids).await.map_err(refused)?,
     };
+    let mut fixes = fixes;
+    crate::app::fixes::choose(&mut fixes, &b.chosen).map_err(refused)?;
     if fixes.is_empty() {
         return Err(ToggleError::Refused("Nothing to fix: look again".into()).into());
     }
-    let n = fixes.len();
-    let (tokens, failed) = crate::app::fixes::apply(fixes).await.map_err(refused)?;
+    // Written whole only (0.9.8: `applied` counted those tried, and said a fix was in when it had failed).
+    let (tokens, written, failed) = crate::app::fixes::apply_all(fixes).await.map_err(refused)?;
     let failed: Vec<serde_json::Value> = failed.into_iter().map(|(id, why)| json!({ "id": id, "why": why })).collect();
-    Ok(Json(json!({ "undo": tokens, "applied": n, "failed": failed })))
+    Ok(Json(json!({ "undo": tokens, "applied": written, "failed": failed })))
 }
 
 /// An arrival's intake (0.9.7): every fix the album would get before it is kept (year, genre, album artist,
@@ -4644,7 +5224,7 @@ impl IntoResponse for ApiError {
         if matches!(self.0, ToggleError::Upstream(_)) {
             tracing::error!("{:#}", self.0);
         }
-        let mut body = json!({ "error": self.0.to_string() });
+        let mut body = json!({ "error": crate::app::plain(self.0.to_string()) });
         // The device takes another name (decision 0051).
         if matches!(self.0, ToggleError::NameTaken(_)) {
             body["taken"] = true.into();
@@ -4659,6 +5239,16 @@ mod tests {
 
     /// axum refuses to start on a path and method routed twice (0.8.3 did, on `/bands`, and never came up); no test
     /// builds the whole router, so this reads the table here instead: one route a line, its methods on it.
+    #[test]
+    fn levelling_only_turns_down_and_never_past_the_peak() {
+        use super::turned_down;
+        assert_eq!(turned_down(Some(-6.5), Some(0.9)), Some(-6.5));
+        assert_eq!(turned_down(Some(3.0), Some(0.5)), Some(0.0), "never up");
+        assert_eq!(turned_down(Some(-1.0), Some(1.2)), Some(-1.58), "never past the peak");
+        assert_eq!(turned_down(None, Some(0.9)), None, "not known");
+        assert_eq!(turned_down(Some(-4.0), None), Some(-4.0));
+    }
+
     #[test]
     fn no_path_and_method_is_routed_twice() {
         let mut seen = std::collections::HashSet::new();

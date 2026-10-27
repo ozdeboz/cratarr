@@ -661,6 +661,14 @@ pub struct PlayerView {
     /// It has been in a group (`PlayOnSettings::grouped`).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub grouped: bool,
+    /// Shared with everyone on this Cratarr (0.9.8).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
+    /// The asking account's own (its settings theirs to change); a shared one of another's is not. Its owner's name
+    /// beside it when it is not.
+    pub mine: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     /// `app` (the Android app) or `kodi` (a Kodi Cratarr drives): what it can do (a Kodi joins no group).
     pub kind: &'static str,
     /// The whole queue, for one player asked for by name.
@@ -757,6 +765,9 @@ struct Entry {
     page: Option<String>,
     /// The account it is a device of (decision 0051): only they play on it. None: from before accounts, the owner's.
     owner: Option<String>,
+    /// Shared with everyone on this Cratarr (0.9.8, the owner): others see it and Play On to it as its owner does; its
+    /// settings, log and removal stay its owner's (and administrators').
+    shared: bool,
     /// What it shows the sync server it is (decision 0051), told it with its group; new with each start of Cratarr.
     secret: String,
     /// Its queues left behind, newest first (decision 0033, amended: queue history); a browser keeps its own.
@@ -810,6 +821,7 @@ impl Entry {
             kind: PlayerKind::App,
             page: None,
             owner: None,
+            shared: false,
             secret: new_secret(),
             kept: Vec::new(),
             kept_version: 0,
@@ -986,6 +998,10 @@ impl Entry {
             group: self.leader.clone(),
             delay_ms: 0,
             grouped: false,
+            // Whose it is: set for the asking account (`whose_view`).
+            shared: false,
+            mine: true,
+            owner: None,
             kind: self.kind.name(),
             track,
             queue: with_queue.then(|| self.queue.tracks.clone()),
@@ -1039,6 +1055,11 @@ fn belongs_to(e: &Entry, user: &str, first: Option<&str>) -> bool {
     e.owner.as_deref().or(first) == Some(user)
 }
 
+/// Whether `user` sees the player and plays on it: theirs, or shared with everyone (0.9.8).
+fn reaches(e: &Entry, user: &str, first: Option<&str>) -> bool {
+    e.shared || belongs_to(e, user, first)
+}
+
 /// The player `name` for whose it is to be: made theirs when new; another account's is refused (a name is one
 /// player's, and one plays on one's own devices only).
 fn claim<'a>(entries: &'a mut HashMap<String, Entry>, name: &str, whose: Option<&str>) -> Result<&'a mut Entry, ToggleError> {
@@ -1071,6 +1092,15 @@ fn generic_name(name: &str) -> bool {
 
 /// A player as seen: a player of a group that does not lead it shows what the group plays, with its own name, reach
 /// and volume (decision 0037).
+/// A view with whose it is for `user` (`None`: no accounts, everyone's own): `mine`, `shared`, and its owner where
+/// it is another's.
+fn whose_view(mut v: PlayerView, e: &Entry, user: Option<&str>, first: Option<&str>) -> PlayerView {
+    v.shared = e.shared;
+    v.mine = user.is_none_or(|u| belongs_to(e, u, first));
+    v.owner = (!v.mine).then(|| e.owner.clone().or_else(|| first.map(str::to_string))).flatten();
+    v
+}
+
 fn view_in(entries: &HashMap<String, Entry>, name: &str, with_queue: bool) -> Option<PlayerView> {
     let e = entries.get(name)?;
     let own = e.view(name, with_queue);
@@ -1138,6 +1168,8 @@ struct Saved {
     playing: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     owner: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    shared: bool,
     /// Its queues left behind (decision 0033, amended).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     kept: Vec<Kept>,
@@ -1219,6 +1251,7 @@ impl PlayOn {
                     (e.queue.id, e.queue.name) = (super::queue::new_entry(), name_of(&e.queue.tracks));
                 }
                 e.owner = s.owner;
+                e.shared = s.shared;
                 e.kept = s.kept;
                 (name, e)
             })
@@ -1464,7 +1497,7 @@ impl PlayOn {
                     .map(|(n, e)| {
                         let v = e.view(n, false);
                         let (queue, owner, kept) = (e.queue.clone(), e.owner.clone(), e.kept.clone());
-                        (n.clone(), Saved { queue, entry: v.current_entry_id, position_ms: v.position_ms, playing: v.playing, owner, kept })
+                        (n.clone(), Saved { queue, entry: v.current_entry_id, position_ms: v.position_ms, playing: v.playing, owner, shared: e.shared, kept })
                     })
                     .collect();
                 drop(me);
@@ -1498,15 +1531,15 @@ impl PlayOn {
         self.list_for(whose().as_deref())
     }
 
-    /// `user`'s players (`None`: every one).
+    /// `user`'s players and those shared with everyone (`None`: every one).
     pub fn list_for(&self, user: Option<&str>) -> Vec<PlayerView> {
         self.expire_generic();
         let first = first_owner();
         let entries = self.entries();
         let mut out: Vec<PlayerView> = entries
             .iter()
-            .filter(|(_, e)| user.is_none_or(|u| belongs_to(e, u, first.as_deref())))
-            .filter_map(|(n, _)| view_in(&entries, n, false))
+            .filter(|(_, e)| user.is_none_or(|u| reaches(e, u, first.as_deref())))
+            .filter_map(|(n, e)| Some(whose_view(view_in(&entries, n, false)?, e, user, first.as_deref())))
             .collect();
         drop(entries);
         let PlayOnSettings { delays, grouped, .. } = self.settings();
@@ -1519,14 +1552,50 @@ impl PlayOn {
         out
     }
 
-    /// Whether the running request reaches player `name` (`whose`): else it is as if there were none.
+    /// Whether the running request reaches player `name` (`whose`): its own, or one shared with everyone (0.9.8);
+    /// else it is as if there were none. What Play On does on it, it may do.
     pub fn reached(&self, name: &str) -> Result<(), ToggleError> {
         let Some(user) = whose() else { return Ok(()) };
         let first = first_owner();
         match self.entries().get(name) {
-            Some(e) if !belongs_to(e, &user, first.as_deref()) => Err(ToggleError::Refused(format!("No player is called {name}."))),
+            Some(e) if !reaches(e, &user, first.as_deref()) => Err(ToggleError::Refused(format!("No player is called {name}."))),
             _ => Ok(()),
         }
+    }
+
+    /// Whether player `name` is the running request's own, or the request an administrator's: its settings, its log
+    /// and its sharing are theirs only. A shared one of another's is refused as one not theirs (it is seen, so it says
+    /// so); one not seen at all, as if there were none.
+    pub fn owned(&self, name: &str) -> Result<(), ToggleError> {
+        let Some(user) = whose() else { return Ok(()) };
+        if crate::serve::access::administering() {
+            return Ok(());
+        }
+        let first = first_owner();
+        match self.entries().get(name) {
+            Some(e) if belongs_to(e, &user, first.as_deref()) => Ok(()),
+            Some(e) if e.shared => Err(ToggleError::Forbidden(format!("{name} is another user's: only they change it."))),
+            Some(_) => Err(ToggleError::Refused(format!("No player is called {name}."))),
+            None => Ok(()),
+        }
+    }
+
+    /// Shares player `name` with everyone on this Cratarr, or stops (0.9.8): its owner's, or an administrator's, to do.
+    pub fn set_shared(&self, name: &str, shared: bool) -> Result<bool, ToggleError> {
+        valid_name(name)?;
+        self.owned(name)?;
+        {
+            let mut entries = self.entries();
+            let Some(e) = entries.get_mut(name) else { return Err(ToggleError::Refused(format!("No player is called {name}."))) };
+            if e.shared == shared {
+                return Ok(shared);
+            }
+            e.shared = shared;
+        }
+        tracing::info!(target: "playon", player = name, shared, "sharing changed");
+        self.save.notify_one();
+        self.changed();
+        Ok(shared)
     }
 
     /// Forgets `user`'s player `name` (decision 0051: one's devices, removed): not while it is connected, nor a Kodi
@@ -1579,7 +1648,9 @@ impl PlayOn {
 
     pub fn get(&self, name: &str) -> Option<PlayerView> {
         self.reached(name).ok()?;
-        let mut v = view_in(&self.entries(), name, true)?;
+        let entries = self.entries();
+        let mut v = whose_view(view_in(&entries, name, true)?, entries.get(name)?, whose().as_deref(), first_owner().as_deref());
+        drop(entries);
         super::describe::fill_view(&mut v);
         Some(PlayerView { delay_ms: self.delay_of(name), ..v })
     }
@@ -2385,6 +2456,13 @@ impl PlayOn {
         *self.sync_play.lock().unwrap_or_else(|p| p.into_inner()) = Some((port, buffer_ms, host));
     }
 
+    /// The host players reach sync play on, changed in Settings (0.9.8): the same port, the new host.
+    pub fn set_sync_host(&self, host: Option<String>) {
+        if let Some(s) = self.sync_play.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+            s.2 = host;
+        }
+    }
+
     fn sync_play(&self) -> Option<(u16, u32, Option<String>)> {
         self.sync_play.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
@@ -2678,7 +2756,7 @@ impl PlayOn {
     /// there is one.
     pub async fn set_delay(&self, name: &str, ms: u16) -> Result<u16, ToggleError> {
         valid_name(name)?;
-        self.reached(name)?;
+        self.owned(name)?;
         // A Kodi's delay is its own buffering too: up to the group's whole buffer.
         let kodi = self.entries().get(name).is_some_and(|e| e.kind == PlayerKind::Kodi);
         let ms = ms.min(if kodi { crate::snapcast::BUFFER_MS as u16 } else { MAX_DELAY_MS });
@@ -3039,6 +3117,13 @@ mod tests {
         assert!(!p.forget("Tablet", "ann").unwrap(), "not hers");
         assert!(p.forget("Tablet", "bob").unwrap());
         assert_eq!(names(None), ["Phone"]);
+
+        // Shared with everyone (0.9.8): bob sees ann's Phone, marked hers; he still cannot remove it.
+        p.entries().get_mut("Phone").unwrap().shared = true;
+        let seen = p.list_for(Some("bob"));
+        assert_eq!(seen.iter().map(|v| (v.name.as_str(), v.mine, v.shared, v.owner.as_deref())).collect::<Vec<_>>(), [("Phone", false, true, Some("ann"))]);
+        assert!(p.list_for(Some("ann"))[0].mine);
+        assert!(!p.forget("Phone", "bob").unwrap(), "removing stays hers");
     }
 
     #[tokio::test]

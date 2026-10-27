@@ -313,7 +313,16 @@ impl Serve {
         if change == library::Change::None {
             return Ok(false);
         }
-        self.library.build_from(self.catalogue(), &rules, &print)?;
+        let (whole, folders) = self.library.build_from(self.catalogue(), &rules, &print)?;
+        let why = if change == library::Change::Analyses { "new analyses" } else { "files, tags or rules changed" };
+        self.built_now(why, whole, folders, change == library::Change::Songs)?;
+        Ok(true)
+    }
+
+    /// After the library was built (whole, or `folders` of it): when, the plays and stars that follow songs to new ids, a
+    /// line in the log; with changed songs, the catalogue links the built-in source's ids and those who keep its covers'
+    /// stamps are told; and those who wait on a build. Blocking.
+    fn built_now(&self, why: &str, whole: bool, folders: usize, songs_changed: bool) -> Result<()> {
         let at = now();
         *self.built_at.write().unwrap_or_else(|p| p.into_inner()) = at;
         let moved = self.userdata.follow_pids(&self.library.pids()?)?;
@@ -321,16 +330,19 @@ impl Serve {
             tracing::info!(target: "library", moved, "plays and stars followed songs to new ids");
         }
         let (songs, albums, artists) = self.library.counts()?;
-        let why = if change == library::Change::Analyses { "new analyses" } else { "files, tags or rules changed" };
-        tracing::info!(target: "library", why, songs, albums, artists, "library built");
+        if whole {
+            tracing::info!(target: "library", why, songs, albums, artists, "library built");
+        } else {
+            tracing::info!(target: "library", why, folders, songs, albums, artists, "library built again where it changed");
+        }
         // The built-in Cratarr source's ids are this library's: have the catalogue link them now (new analyses change no
         // id, and a poke is a full pass of the folders), and tell those who keep what it listed.
-        if change == library::Change::Songs {
+        if songs_changed {
             self.catalogue().poke();
             self.covers_built();
         }
         self.built.send_replace(at);
-        Ok(true)
+        Ok(())
     }
 
     /// Files Cratarr wrote itself (0.9.7: Renumber, a cover, a tempo), read again now, and the library built from them
@@ -340,6 +352,17 @@ impl Serve {
         if let Err(e) = self.catalogue().reread(paths) {
             tracing::warn!(target: "library", reason = %format!("{e:#}"), "written files not read again at once");
             self.catalogue().poke();
+            return;
+        }
+        // Their albums built again at once (0.9.8): they show in a moment, not after a whole build.
+        match self.library.update_files(self.catalogue(), &self.rules(), paths) {
+            Ok(0) => {}
+            Ok(folders) => {
+                if let Err(e) = self.built_now("Cratarr wrote to them", false, folders, true) {
+                    tracing::warn!(target: "library", reason = %format!("{e:#}"), "after building written albums again");
+                }
+            }
+            Err(e) => tracing::warn!(target: "library", reason = %format!("{e:#}"), "written albums not built again at once: the next check builds them"),
         }
     }
 

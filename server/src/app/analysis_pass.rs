@@ -59,11 +59,19 @@ pub fn hears_beats(v: Option<&str>) -> bool {
     v.is_some_and(|v| matches!(v.trim().to_lowercase().as_str(), "on" | "1" | "true" | "yes"))
 }
 
-/// Runs the pass in the background for as long as Cratarr runs.
-pub fn run(cat: Arc<Catalogue>, mode: Mode, hear_beats: bool) {
-    if mode == Mode::Off {
-        tracing::info!("analysis: the NAS's pass is off (CRATARR_ANALYSIS=off)");
-        return;
+/// A rest with nothing to do, cut short when Settings changes the pass (`app::runtime`).
+async fn rest_idle() {
+    tokio::select! {
+        () = tokio::time::sleep(IDLE) => {}
+        () = super::runtime::CHANGED.notified() => {}
+    }
+}
+
+/// Runs the pass in the background for as long as Cratarr runs; its mode and Beat this! as Settings has them now
+/// (`app::runtime`, 0.9.8: the environment's until saved), looked at each round.
+pub fn run(cat: Arc<Catalogue>) {
+    if super::runtime::now().analysis == Mode::Off {
+        tracing::info!("analysis: the pass is off (Settings, or CRATARR_ANALYSIS=off)");
     }
     tokio::spawn(async move {
         tokio::time::sleep(FIRST_LOOK).await;
@@ -74,6 +82,12 @@ pub fn run(cat: Arc<Catalogue>, mode: Mode, hear_beats: bool) {
         let mut unbanded: HashSet<(i64, String, u64, i64)> = HashSet::new();
         let mut waiting_said = false;
         loop {
+            let settings = super::runtime::now();
+            let (mode, hear_beats) = (settings.analysis, settings.beat_this);
+            if mode == Mode::Off {
+                rest_idle().await;
+                continue;
+            }
             let c = cat.clone();
             let counts = tokio::task::spawn_blocking(move || c.analysis_counts()).await.ok().and_then(|r| r.ok());
             if mode == Mode::Keep && counts.is_some_and(|(done, all)| all > 0 && done * 100 < all * STARTED_AT) {
@@ -82,7 +96,7 @@ pub fn run(cat: Arc<Catalogue>, mode: Mode, hear_beats: bool) {
                     tracing::info!("analysis: {done} of {all} files analysed; the NAS keeps up once the first pass is imported (or set CRATARR_ANALYSIS=all)");
                     waiting_said = true;
                 }
-                tokio::time::sleep(IDLE).await;
+                rest_idle().await;
                 continue;
             }
             let c = cat.clone();
@@ -113,7 +127,7 @@ pub fn run(cat: Arc<Catalogue>, mode: Mode, hear_beats: bool) {
                         .into_iter()
                         .find(|(f, r, _, s, m)| !unbanded.contains(&(*f, r.clone(), *s, *m)));
                     let Some((folder, rel, path, size, mtime)) = next else {
-                        tokio::time::sleep(IDLE).await;
+                        rest_idle().await;
                         continue;
                     };
                     let turn = HEAVY.acquire().await.expect("the turn is never closed");

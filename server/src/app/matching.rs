@@ -249,6 +249,7 @@ pub async fn fixes(served: &std::sync::Arc<crate::serve::Serve>, finding: &str, 
                     certainty,
                     why: m.why.clone(),
                     writes: tracks.iter().map(|t| (t.path.clone(), vec![("albumartist", Some(m.artist.clone()))])).collect(),
+                    candidates: Vec::new(),
                 },
                 "library:musicbrainz" => Fix {
                     id: format!("musicbrainz:{album}"),
@@ -275,6 +276,7 @@ pub async fn fixes(served: &std::sync::Arc<crate::serve::Serve>, finding: &str, 
                             ))
                         })
                         .collect(),
+                    candidates: Vec::new(),
                 },
                 _ => continue,
             };

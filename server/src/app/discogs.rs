@@ -451,3 +451,239 @@ mod tests {
         assert_eq!(i[0].width, Some(600));
     }
 }
+
+// ---- What Discogs says of an album, an artist, a release group (0.9.8, the owner: "Missing genres also do not yet get
+// Discogs info because there is a lot more there"; labels, catalogue numbers, credits, artist profiles).
+
+/// An album's facts on Discogs: its master's genres, styles and year, and its main release's labels with their
+/// catalogue numbers and its credits.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AlbumFacts {
+    pub master: Option<u64>,
+    pub release: Option<u64>,
+    pub year: Option<u32>,
+    pub genres: Vec<String>,
+    pub styles: Vec<String>,
+    pub labels: Vec<Label>,
+    pub credits: Vec<Credit>,
+    /// Its page on Discogs (the master's, else the release's).
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Label {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catno: Option<String>,
+}
+
+/// Who did what on a release (`role`: "Producer", "Mastered By"…), on which tracks where not all ("A1 to A3").
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Credit {
+    pub name: String,
+    pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tracks: Option<String>,
+}
+
+/// An artist on Discogs: the profile, plain; other names; members of a group, and the groups of a member.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ArtistFacts {
+    pub id: u64,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub real_name: Option<String>,
+    pub profile: String,
+    pub aliases: Vec<String>,
+    pub variations: Vec<String>,
+    pub members: Vec<Member>,
+    pub groups: Vec<Member>,
+    pub urls: Vec<String>,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Member {
+    pub name: String,
+    pub active: bool,
+}
+
+/// A name as Discogs writes one, without its "(2)" for a second artist of the same name.
+pub fn clean_name(name: &str) -> String {
+    let n = name.trim();
+    match n.rsplit_once(" (") {
+        Some((base, rest)) if rest.strip_suffix(')').is_some_and(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit())) => base.trim().to_string(),
+        _ => n.to_string(),
+    }
+}
+
+/// Discogs' text markup made plain: `[a=Name]` and `[l=Label]` as their names, `[url=…]text[/url]` as its text, styles
+/// (`[b]`, `[i]`, `[u]`) and links by number alone (`[a123]`, `[r456]`) left out.
+pub fn plain_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(open) = rest.find('[') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find(']') else {
+            out.push_str(&rest[open..]);
+            rest = "";
+            break;
+        };
+        let tag = &after[..close];
+        rest = &after[close + 1..];
+        if let Some(name) = tag.strip_prefix("a=").or_else(|| tag.strip_prefix("l=")).or_else(|| tag.strip_prefix("g=")) {
+            out.push_str(&clean_name(name));
+        }
+        // Anything else ([b], [/url], [url=…], [a123], [r456]…): nothing of its own; a link's text is what follows it.
+    }
+    out.push_str(rest);
+    out.lines().map(str::trim_end).collect::<Vec<_>>().join("\n").trim().to_string()
+}
+
+fn credits_of(v: &Value) -> Vec<Credit> {
+    let one = |c: &Value, tracks: Option<String>| -> Option<Credit> {
+        let name = c["anv"].as_str().filter(|a| !a.is_empty()).or(c["name"].as_str())?;
+        let role = c["role"].as_str().unwrap_or_default().trim();
+        (!role.is_empty()).then(|| Credit { name: clean_name(name), role: role.to_string(), tracks: tracks.filter(|t| !t.is_empty()) })
+    };
+    let mut out: Vec<Credit> = v["extraartists"].as_array().into_iter().flatten().filter_map(|c| one(c, c["tracks"].as_str().map(str::to_string))).collect();
+    for t in v["tracklist"].as_array().into_iter().flatten() {
+        let at = t["position"].as_str().map(str::to_string);
+        for c in t["extraartists"].as_array().into_iter().flatten() {
+            if let Some(credit) = one(c, at.clone()) {
+                out.push(credit);
+            }
+        }
+    }
+    out
+}
+
+fn labels_of(v: &Value) -> Vec<Label> {
+    let mut out: Vec<Label> = Vec::new();
+    for l in v["labels"].as_array().into_iter().flatten() {
+        let Some(name) = l["name"].as_str() else { continue };
+        let catno = l["catno"].as_str().map(str::trim).filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("none")).map(str::to_string);
+        let label = Label { name: clean_name(name), catno };
+        if !out.contains(&label) {
+            out.push(label);
+        }
+    }
+    out
+}
+
+/// An album's facts: its master (MusicBrainz's link from its release group, else Discogs' search), and the master's
+/// main release. None where Discogs has no master for it.
+pub async fn album_facts(release_group: Option<&str>, artist: &str, title: &str) -> Result<Option<AlbumFacts>> {
+    let Some(id) = master_of(release_group, artist, title).await? else { return Ok(None) };
+    let Some(v) = get(&format!("/masters/{id}")).await? else { return Ok(None) };
+    let mut facts = AlbumFacts {
+        master: Some(id),
+        release: v["main_release"].as_u64(),
+        year: v["year"].as_u64().filter(|y| *y > 0).map(|y| y as u32),
+        genres: strings(&v["genres"]),
+        styles: strings(&v["styles"]),
+        url: v["uri"].as_str().map(str::to_string),
+        ..AlbumFacts::default()
+    };
+    if let Some(release) = facts.release
+        && let Some(r) = get(&format!("/releases/{release}")).await?
+    {
+        facts.labels = labels_of(&r);
+        facts.credits = credits_of(&r);
+        if facts.year.is_none() {
+            facts.year = r["year"].as_u64().filter(|y| *y > 0).map(|y| y as u32);
+        }
+    }
+    Ok(Some(facts))
+}
+
+/// A release group's genres, styles and year (Discover's suggestions): its master's, by MusicBrainz's link alone.
+pub async fn release_group_facts(release_group: &str) -> Result<Option<AlbumFacts>> {
+    if !is_mbid(release_group) {
+        return Ok(None);
+    }
+    let Some(id) = master_of(Some(release_group), "", "").await? else { return Ok(None) };
+    Ok(master(id).await?.map(|m| AlbumFacts { master: Some(id), release: m.main_release, genres: m.genres, styles: m.styles, ..AlbumFacts::default() }))
+}
+
+/// An artist's facts: by MusicBrainz's link from their id, else Discogs' search by name (the key's; an exact name
+/// only).
+pub async fn artist_facts(mbid: Option<&str>, name: &str) -> Result<Option<ArtistFacts>> {
+    let mut id = match mbid {
+        Some(m) => id_in(&mb_links("artist", m).await?, "artist"),
+        None => None,
+    };
+    if id.is_none() && !name.trim().is_empty() && saved().await.is_some() {
+        let mut q = reqwest::Url::parse("https://x/database/search")?;
+        q.query_pairs_mut().append_pair("type", "artist").append_pair("q", name).append_pair("per_page", "5");
+        if let Some(v) = get(&format!("/database/search?{}", q.query().unwrap_or_default())).await? {
+            let want = super::import::loose(name);
+            id = v["results"].as_array().into_iter().flatten().find(|r| r["title"].as_str().is_some_and(|t| super::import::loose(&clean_name(t)) == want)).and_then(|r| r["id"].as_u64());
+        }
+    }
+    let Some(id) = id else { return Ok(None) };
+    let Some(v) = get(&format!("/artists/{id}")).await? else { return Ok(None) };
+    Ok(Some(artist_of(id, &v)))
+}
+
+fn artist_of(id: u64, v: &Value) -> ArtistFacts {
+    let people = |k: &str| -> Vec<Member> {
+        v[k].as_array().into_iter().flatten().filter_map(|m| Some(Member { name: clean_name(m["name"].as_str()?), active: m["active"].as_bool().unwrap_or(true) })).collect()
+    };
+    ArtistFacts {
+        id,
+        name: clean_name(v["name"].as_str().unwrap_or_default()),
+        real_name: v["realname"].as_str().map(plain_text).filter(|r| !r.is_empty()),
+        profile: plain_text(v["profile"].as_str().unwrap_or_default()),
+        aliases: v["aliases"].as_array().into_iter().flatten().filter_map(|a| a["name"].as_str().map(clean_name)).collect(),
+        variations: strings(&v["namevariations"]),
+        members: people("members"),
+        groups: people("groups"),
+        urls: strings(&v["urls"]),
+        url: v["uri"].as_str().map_or_else(|| format!("https://www.discogs.com/artist/{id}"), str::to_string),
+    }
+}
+
+#[cfg(test)]
+mod facts_tests {
+    use super::*;
+
+    #[test]
+    fn discogs_markup_and_names_are_made_plain() {
+        assert_eq!(clean_name("Jon Hopkins (2)"), "Jon Hopkins");
+        assert_eq!(clean_name("The Orb (UK)"), "The Orb (UK)");
+        assert_eq!(
+            plain_text("[b]Swedish[/b] producer, one half of [a=Studio (3)] with [a123456]. Released on [l=Kompakt]. See [url=https://x.y]his site[/url]."),
+            "Swedish producer, one half of Studio with . Released on Kompakt. See his site."
+        );
+    }
+
+    #[test]
+    fn a_release_gives_its_labels_and_credits() {
+        let v = serde_json::json!({
+            "labels": [{ "name": "Studio Barnhus", "catno": "BARN 042" }, { "name": "Studio Barnhus", "catno": "BARN 042" }, { "name": "Self Released", "catno": "none" }],
+            "extraartists": [{ "name": "Axel Boman", "anv": "", "role": "Producer", "tracks": "" }, { "name": "Mandy Parnell (2)", "role": "Mastered By" }],
+            "tracklist": [{ "position": "A2", "extraartists": [{ "name": "Kornél Kovács", "anv": "Kornél", "role": "Vocals" }] }]
+        });
+        assert_eq!(labels_of(&v), [Label { name: "Studio Barnhus".into(), catno: Some("BARN 042".into()) }, Label { name: "Self Released".into(), catno: None }]);
+        let c = credits_of(&v);
+        assert_eq!(c[0], Credit { name: "Axel Boman".into(), role: "Producer".into(), tracks: None });
+        assert_eq!(c[1].name, "Mandy Parnell");
+        assert_eq!(c[2], Credit { name: "Kornél".into(), role: "Vocals".into(), tracks: Some("A2".into()) });
+    }
+
+    #[test]
+    fn an_artist_gives_profile_names_and_members() {
+        let v = serde_json::json!({
+            "name": "Studio (3)", "realname": "", "profile": "Swedish duo of [a=Dan Lissvik] and Rasmus Hägg.",
+            "aliases": [{ "name": "Studio Barnhus (2)" }], "namevariations": ["Studio Sweden"],
+            "members": [{ "name": "Dan Lissvik", "active": true }, { "name": "Rasmus Hägg", "active": false }],
+            "urls": ["https://studio.example"], "uri": "https://www.discogs.com/artist/1-Studio"
+        });
+        let a = artist_of(1, &v);
+        assert_eq!((a.name.as_str(), a.real_name.as_deref(), a.profile.as_str()), ("Studio", None, "Swedish duo of Dan Lissvik and Rasmus Hägg."));
+        assert_eq!(a.aliases, ["Studio Barnhus"]);
+        assert_eq!(a.members[1], Member { name: "Rasmus Hägg".into(), active: false });
+    }
+}

@@ -45,6 +45,9 @@ pub mod harvest;
 pub mod fixes;
 pub mod matching;
 pub mod incomplete;
+pub mod track_fetch;
+pub mod runtime;
+pub mod discogs_facts;
 pub mod resume;
 pub mod lastfm;
 pub mod listening;
@@ -83,7 +86,7 @@ use serde::Serialize;
 
 pub use albums::AlbumsView;
 pub use collection::{CollectionService, CollectionView};
-pub use error::ToggleError;
+pub use error::{ToggleError, plain};
 pub use incoming::{AlbumFate, DeleteResult, IncomingService, IncomingView, JobView, KeepPreview, KeepResult, LidarrView, ReplacePreview};
 pub use insights::InsightsService;
 pub use library::{Library, SourceTab};
