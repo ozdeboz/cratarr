@@ -24,7 +24,7 @@
     { value: 'always', label: 'Always' },
   ];
   const STARTSTOP_MORE =
-    "Vinyl: play and pause speed up from still and slow down to still, the pitch following, as a turntable. Fade: they fade in and out. Over the ramp's time. A track running into the next stays seamless.";
+    "Vinyl: play speeds up from still over the ramp's time, and pause slows down to still with Tape winding's Brake, the pitch following, as a turntable. Fade: they fade in and out over the ramp's time. A track running into the next stays seamless.";
   const WIND_MORE =
     "Previous and Next wind the tape. A tap winds back to the track's start, as a tape spinning up, running and braking; where the way is long, it is cut into short pieces. Holding Previous or Next pauses, then winds back or forward for as long as you hold, and plays on from where you let go.";
   const SEC = (v: number) => `${(v / 1000).toFixed(2).replace(/\.?0+$/, '')} s`;

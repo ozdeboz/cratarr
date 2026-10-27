@@ -12,6 +12,7 @@
   import { prefs } from './prefs.svelte';
   import { ramping, tapeDir } from './ramping.svelte';
   import { turnTape } from './localPlayer.svelte';
+  import { drivenName, playOn } from './playOn.svelte';
   import { duration, playing, position, shownPaused } from './remote.svelte';
   import { hill, HEAD, HUB, MAXR, packs, REEL_L, REEL_R, tapePath, WHEELS } from './tapeDeck';
   import { downbeatAt } from './visuals/downbeat';
@@ -131,6 +132,8 @@
   /** The direction knob, under the head between the inner wheels: its centre and size, and its L and R either side, tiny
    *  (the owner, 2026-10-27: the deck's proportions unchanged). */
   const KNOB = { x: 160, y: 36, r: 3.2 };
+  /** The knob where a player can turn: this page's own, the app's, one driven (not Kodi, which plays as told). */
+  const turnable = $derived(isLocal() && playOn.players.find((p) => p.name === drivenName())?.kind !== 'kodi');
   /** The knob drawn as the visuals' knobs are (lib/visuals/PatchKnob: a cap in a faint arc, its value an arc in the
    *  accent; the owner, 2026-10-27: one knob language): its arc over the top, the side it is turned to lit. */
   const SWEEP = 50;
@@ -161,12 +164,12 @@
       {/each}
       <path class="hill" d={hill(-1)} />
       <path class="hill" d={hill(1)} />
-      <text class="side" class:on={tapeDir.want === 'L'} x={KNOB.x - 7.5} y={KNOB.y + 1.5} text-anchor="middle">L</text>
-      <text class="side" class:on={tapeDir.want === 'R'} x={KNOB.x + 7.5} y={KNOB.y + 1.5} text-anchor="middle">R</text>
+      {#if turnable}<text class="side" class:on={tapeDir.want === 'L'} x={KNOB.x - 6.5} y={KNOB.y + 3.6} text-anchor="end">L</text>
+      <text class="side" class:on={tapeDir.want === 'R'} x={KNOB.x + 6.5} y={KNOB.y + 3.6} text-anchor="start">R</text>{/if}
     </svg>
     <!-- The direction knob (the owner, 2026-10-27): R forwards, L backwards; turned while playing, the tape slows to a
          stop before it goes the other way (lib/localPlayer turnTape). -->
-    <button
+    {#if turnable}<button
       class="knob"
       role="switch"
       aria-checked={tapeDir.want === 'L'}
@@ -179,7 +182,7 @@
           r={KNOB.r - 1.2}
         /></svg
       ></button
-    >
+    >{/if}
     {#each [REEL_L, REEL_R] as c, i (i)}
       {@const spokes = [0, 1, 2].map((k) => [Math.cos((k * 2 * Math.PI) / 3) * (HUB + 3), Math.sin((k * 2 * Math.PI) / 3) * (HUB + 3)])}
       {#if i === 0}
@@ -279,9 +282,10 @@
     fill: var(--border);
   }
 
+  /* Two and a half times the first (the owner, 2026-10-27), clear of the knob either side. */
   .side {
     fill: var(--muted);
-    font-size: 4px;
+    font-size: 10px;
     font-weight: 600;
     opacity: 0.7;
   }
