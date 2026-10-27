@@ -266,6 +266,14 @@ class Prefs(context: Context) {
             p.edit().putBoolean(LEVELLING, value).apply()
         }
 
+    /** A track levelling has no measure of (0.9.8): [LEVEL_TYPICAL] (turned down as a modern master needs) or
+     *  [LEVEL_UNTOUCHED]. */
+    var levelUnknown: String
+        get() = p.getString(LEVEL_UNKNOWN, null)?.takeIf { it == LEVEL_UNTOUCHED } ?: LEVEL_TYPICAL
+        set(value) {
+            p.edit().putString(LEVEL_UNKNOWN, if (value == LEVEL_UNTOUCHED) LEVEL_UNTOUCHED else LEVEL_TYPICAL).apply()
+        }
+
     /** Start and stop (0.9.6, Settings › This device; `StartStop`): off, vinyl or fade; over this long; for next and
      *  previous too; Tape rewind on Previous restarting a track. */
     var startStopMode: String
@@ -361,6 +369,9 @@ class Prefs(context: Context) {
         const val RADIO_COUNT = "radio_count"
         const val SKIP_FAVOURITES = "skip_favourites"
         const val LEVELLING = "levelling"
+        const val LEVEL_UNKNOWN = "level_unknown"
+        const val LEVEL_TYPICAL = "typical"
+        const val LEVEL_UNTOUCHED = "untouched"
         const val START_STOP_MODE = "start_stop_mode"
         const val START_STOP_MS = "start_stop_ms"
         const val START_STOP_SKIPS = "start_stop_skips"

@@ -76,6 +76,9 @@ class StartStop(
     private var running: String? = null
     private var level = 1f
     private var stopping: (() -> Unit)? = null
+    /** A press the other way that came during a ramp (0.9.8: a remote stop during a wind-up was dropped, the old file
+     *  playing on): run once the ramp is over, as a press then would. */
+    private var after: (() -> Unit)? = null
 
     private fun commit(to: Boolean?) {
         if (committed == to) return
@@ -150,6 +153,9 @@ class StartStop(
     /** Back to plain playing: full speed, its own pitch, full volume; a ramp under way stopped. */
     fun reset() {
         token++
+        val next = after
+        after = null
+        next?.let { main.post(it) }
         heldPosition = null
         stopping = null
         level = 1f
@@ -166,7 +172,11 @@ class StartStop(
     /** Plays ([start]), winding up from still and silent. */
     fun play(start: () -> Unit) {
         note("play", "busy" to busy)
-        if (busy) return
+        if (busy) {
+            // During a wind-down: played once it is over; during a wind-up, it plays already.
+            if (committed == false) after = { play(start) }
+            return
+        }
         val m = mode()
         val at = player.currentPosition
         // From a track's start: at once, always.
@@ -193,7 +203,11 @@ class StartStop(
     /** Pauses or stops ([stop]), winding down first: once what was wound down has been heard. */
     fun pause(stop: () -> Unit) {
         note("pause", "busy" to busy)
-        if (busy) return
+        if (busy) {
+            // During a wind-up: wound down once it is over; during a wind-down, it stops already.
+            if (committed == true) after = { pause(stop) }
+            return
+        }
         val m = mode()
         if (m == Prefs.START_STOP_OFF || !player.isPlaying) {
             reset()
