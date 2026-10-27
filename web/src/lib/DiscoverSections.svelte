@@ -735,7 +735,11 @@
     border-radius: 12px;
   }
 
+  /* Over the flow's foot: above it (the flow is positioned, and with one's own picture behind it that picture hid the
+     name; the tablet, 2026-10-27). */
   .artist-caption {
+    position: relative;
+    z-index: 1;
     display: flex;
     flex-direction: column;
     align-items: center;

@@ -419,8 +419,13 @@ async function appendTrack(index: number, from: number, gen: number) {
       // iPhone's four MP3s that stalled all carry a LAME/Info header (a delay), the one that played none; iOS's
       // ManagedMediaSource may not take a negative offset in sequence mode. From 0 there (a few ms of the encoder's
       // silence at a fresh stream's start; joins between tracks keep their gapless trim), and what was set in the log.
-      const offset = start - skip / rate;
-      sb.timestampOffset = kind === MPEG ? Math.max(0, offset) : offset;
+      // Only the delay is let go. A track's own MP3 comes whole from its first frame, so a start mid-track (a resume, a
+      // seek) keeps its offset below 0 and the window cuts what lies before (the tablet, 2026-10-27: resumed at 2:24, it
+      // played from the top while its clock ran 2:24 ahead, to 3:20 of a 2:38 track); Cratarr's own MP3 form (it sends
+      // x-pre-skip) is made from the place asked, its first frame there.
+      const made = kind === MPEG && res.headers.has('x-pre-skip') ? from : 0;
+      const offset = start + made - skip / rate;
+      sb.timestampOffset = kind === MPEG ? Math.max(Math.min(0, start + made), offset) : offset;
       if (kind === MPEG)
         playback('info', 'mp3 placed', { index, rate, skip, offset: Math.round(offset * 1000) / 1000, set: Math.round(sb.timestampOffset * 1000) / 1000, from: sb.appendWindowStart, to: Number.isFinite(sb.appendWindowEnd) ? Math.round(sb.appendWindowEnd * 10) / 10 : null });
       segment.length = length;
