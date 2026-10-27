@@ -27,7 +27,7 @@ const LIBRARY: { kind: SearchKind; label: string }[] = [
 /** Known elsewhere (decision 0076): what Cratarr keeps of music not in the library (0.9.13's server adds the last
  *  three; one before it leaves them out). */
 const ELSEWHERE: { kind: SearchKind; label: string }[] = [
-  { kind: 'missing', label: 'Not in your library' },
+  { kind: 'missing', label: 'Missing from your artists' },
   { kind: 'spotify', label: 'On your Spotify' },
   { kind: 'suggested', label: 'Suggested' },
   { kind: 'requested', label: 'Requested' },
@@ -210,7 +210,7 @@ export function globalGroups(except: readonly string[]): FoundGroup[] {
       score: 0,
       matched: [],
     }));
-  const beyondGroup: FoundGroup[] = beyond.length && !except.includes('beyond') ? [{ kind: 'beyond', label: 'Beyond your library', items: beyond.slice(0, EACH), total: beyond.length }] : [];
+  const beyondGroup: FoundGroup[] = beyond.length && !except.includes('beyond') ? [{ kind: 'beyond', label: 'Beyond', items: beyond.slice(0, EACH), total: beyond.length }] : [];
   return [...ranked([...server(LIBRARY), ...here]), ...ranked(server(ELSEWHERE)), ...beyondGroup];
 }
 /** Beyond's albums as asked (to open one: its release group, its year). */
