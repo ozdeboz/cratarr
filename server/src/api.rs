@@ -2741,7 +2741,8 @@ struct RewindFrom {
     ramp: Option<f64>,
 }
 
-/// How long Tape rewind waits for another decode to end before the player starts the track over without it.
+/// How long Tape rewind and a wind wait for a turn ([`crate::app::analysis_pass::wind_turn`]) before the player goes on
+/// without them.
 const REWIND_TURN: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Tape rewind (0.9.9, `rewind`): the track heard backwards from `from_ms` to its start in exactly `ms`, as 16-bit WAV
@@ -2758,9 +2759,9 @@ async fn stream_rewind(State(app): State<Arc<App>>, Path((source, id)): Path<(St
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
     let located = since();
-    let Some(turn) = crate::app::analysis_pass::heavy_turn(REWIND_TURN).await else {
-        tracing::warn!(target: "rewind", track = %what, located, waited = since() - located, "the decode's turn did not come: not rendered");
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "Another track is being decoded." }))).into_response();
+    let Some(turn) = crate::app::analysis_pass::wind_turn(REWIND_TURN).await else {
+        tracing::warn!(target: "rewind", track = %what, located, waited = since() - located, "the wind's turn did not come: not rendered");
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "Other winds hold the turns." }))).into_response();
     };
     let turned = since();
     let from_ms = duration_ms.map_or(q.from_ms, |d| q.from_ms.min(d));
@@ -2932,10 +2933,12 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
             Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         };
     }
-    let Some(turn) = crate::app::analysis_pass::heavy_turn(REWIND_TURN).await else {
-        tracing::warn!(target: "rewind", track = %what, waited = since(), "wind: the decode's turn did not come");
-        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "Another track is being decoded." }))).into_response();
+    let Some(turn) = crate::app::analysis_pass::wind_turn(REWIND_TURN).await else {
+        tracing::warn!(target: "rewind", track = %what, waited = since(), "wind: the wind's turn did not come");
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "Other winds hold the turns." }))).into_response();
     };
+    // When its turn came, and when its first sound went (the app gives a wind 1.5 s to sound).
+    let turned = since();
     // Paced by the player's reading: a hold may last minutes, and only a few blocks wait for it at a time.
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(16);
     let (said, heard) = tokio::sync::oneshot::channel();
@@ -2971,8 +2974,12 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
         let (rate, channels) = winds[0].stream();
         let _ = said.send(Ok((44 + data, winds[0].speed(), serde_json::Value::Array(map).to_string())));
         let mut blocks = 0u32;
+        let mut first: Option<u64> = None;
         let mut send = |b: Vec<u8>| {
             blocks += 1;
+            if blocks == 2 {
+                first = Some(since());
+            }
             tx.blocking_send(Ok(b.into())).is_ok()
         };
         let rendered = (|| -> anyhow::Result<()> {
@@ -2993,7 +3000,7 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
             let _ = tx.blocking_send(Err(std::io::Error::other(format!("{e:#}"))));
         }
         tracing::info!(target: "rewind", track = %what2, from_ms = ask.from_ms, to_ms = ?ask.to_ms, dir = ?ask.dir, speed = ask.speed, fit = ?ask.fit,
-            tracks = winds.len(), blocks, ended = since(), "wind (ms since the request)");
+            tracks = winds.len(), blocks, turned, first, ended = since(), "wind (ms since the request)");
     });
     let (bytes, speed, map) = match heard.await {
         Ok(Ok(h)) => h,

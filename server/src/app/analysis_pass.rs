@@ -221,9 +221,16 @@ pub fn run(cat: Arc<Catalogue>) {
 /// The one decode at a time (see the top). A turn moves into the blocking work and ends with it.
 static HEAVY: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 
-/// The decode's turn for work elsewhere (Tape rewind), waited for at most `within`; moved into the work, as here.
-pub(crate) async fn heavy_turn(within: Duration) -> Option<tokio::sync::SemaphorePermit<'static>> {
-    tokio::time::timeout(within, HEAVY.acquire()).await.ok()?.ok()
+/// Winding's own turns (Tape rewind, a wind, decision 0074), apart from [`HEAVY`]: a wind decodes a few seconds of a
+/// file at a time (a few MB), so it never waits behind a whole file's decode, which takes about half a gigabyte for a
+/// moment, nor holds one up for as long as a hold lasts (the owner, 2026-10-27: a hold back just after a track began
+/// stopped the track and never wound; the track's analysis held the one turn for up to 10 s). Two, so a new hold need
+/// not wait for the last one's stream to be let go.
+static WINDS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+/// A wind's turn, waited for at most `within`; moved into the work, as a decode's.
+pub(crate) async fn wind_turn(within: Duration) -> Option<tokio::sync::SemaphorePermit<'static>> {
+    tokio::time::timeout(within, WINDS.acquire()).await.ok()?.ok()
 }
 
 /// A file's waveform in three bands (`analysis::band_wave`): as kept, or worked out now and kept, the first time a
