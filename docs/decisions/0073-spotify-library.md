@@ -95,10 +95,12 @@ All are the signed-in account's own; `status` is `in`, `partly`, `missing` or `r
   `DELETE /api/spotify/import` forgets the export's lists (the listens stay, undone as before by
   `DELETE /api/import/file?from=spotify`).
 - `GET /api/spotify/albums?status=&q=`: `{ albums: [ { id, title, artist, year, cover, added_at, status, have, of,
-  album: { source, id } | null, request: Request | null, preview: { source: "bandcamp", id } | null } ] }` (`year`,
-  `cover`, `added_at` null where an export does not say).
-- `GET /api/spotify/tracks?status=&q=`: `{ tracks: [ { id, title, artist, album, length_ms, added_at, status,
-  track: { source, id } | null, request: Request | null } ] }` (`request`: the album's).
+  release_group: string | null, album: { source, id } | null, request: Request | null, preview: { source: "bandcamp",
+  id } | null } ] }` (`year`, `cover`, `added_at` null where an export does not say; `release_group` once MusicBrainz
+  has found it: a missing album opens as any other missing album, and Want passes it on).
+- `GET /api/spotify/tracks?status=&q=`: `{ tracks: [ { id, title, artist, album, release_group: string | null,
+  length_ms, added_at, status, track: { source, id } | null, request: Request | null } ] }` (`album`: its name;
+  `release_group` and `request`: its album's).
 - `GET /api/spotify/playlists`: `{ playlists: [ { id, name, owner, collaborative, cover, of, have, status } ] }`;
   `GET /api/spotify/playlists/{id}`: the same with `tracks` as above, in the playlist's order. An export's playlists
   have no Spotify id: theirs is made from their name.
