@@ -3,7 +3,7 @@
 import { untrack } from 'svelte';
 import { ApiError, coverUrl, albumCoverUrl, playerCommand, setFavorite, setTrackFavorite, transport, type NowPlaying, type Transport, type Upcoming } from './api';
 import { expect, expectFailed, live, refresh } from './live.svelte';
-import { local, jump as localJump, next as localNext, previous as localPrevious, rewindNow, togglePlay as localToggle, seek as localSeek, sought, windHold, windRelease } from './localPlayer.svelte';
+import { local, jump as localJump, next as localNext, previous as localPrevious, rewindNow, togglePlay as localToggle, seek as localSeek, sought, windArm, windDisarm, windHold, windRelease } from './localPlayer.svelte';
 import { isLocal, localNowPlaying, localState, tookLocal } from './output.svelte';
 import { setFavorite as setRowFavorite } from './favourites.svelte';
 import { on } from './events.svelte';
@@ -302,6 +302,9 @@ export function wind(dir: 'back' | 'forward', phase: 'start' | 'stop') {
     expectFailed(e instanceof ApiError && !e.generic ? e.message : "The player didn't respond"),
   );
 }
+
+/** A touch on Previous or Next that may become a hold: this player's wind asked already; dropped if it was a tap. */
+export const windTouch = (dir: 'back' | 'forward', on: boolean) => isLocal() && (on ? windArm(dir) : windDisarm());
 
 /** Plays upcoming track `i` (the queue view's tap): within the local stream, or the server's player jumps. */
 export async function playUpcoming(i: number) {
