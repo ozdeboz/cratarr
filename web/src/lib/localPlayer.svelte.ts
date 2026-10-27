@@ -241,6 +241,8 @@ const tape = {
   pointArmed: null as Armed | null,
   /** A hold's stream asked at the touch, for where the hold will start from. */
   prearmed: null as { dir: 1 | -1; armed: Armed; at: number } | null,
+  /** The knob's backwards stream asked at its turn, from where the brake will stand (no wait after the stop). */
+  turnArmed: null as Armed | null,
   /** Next pressed while a pause brakes: the next track, started up once the tape stands still. */
   nextAfterPause: false,
   /** Next pressed on the last track while Autoplay fetches: on into its first pick once it is in. */
@@ -257,7 +259,9 @@ const tape = {
 function resetTape() {
   if (tape.pointArmed) disarm(tape.pointArmed);
   if (tape.prearmed) disarm(tape.prearmed.armed);
+  disarm(tape.turnArmed);
   Object.assign(tape, {
+    turnArmed: null,
     pointArmed: null,
     prearmed: null,
     holding: null,
@@ -2485,12 +2489,17 @@ function windRate(w: Winding, now: number): number {
   else r = t >= w.wind.attackMs ? 1 : floor + ((1 - floor) * (1 - Math.cos((Math.PI * t) / w.wind.attackMs))) / 2;
   return Math.max(RATE_LOW, Math.min(1, r));
 }
+/** How close counts as the place itself (s): no seek for less. */
+const SAME_PLACE_S = 0.03;
+/** The track time a brake from full speed covers (s): its raised cosine averages half way, a vinyl's to its slowest. */
+const brakeSpan = (ms: number, low = 0) => ((ms / 1000) * (1 + low)) / 2;
 /** Plays on at `secs` into queue track `index`, winding up as play does (at once from a track's start). */
 function playOnAt(index: number, secs: number) {
   if (!audio) return;
   const w = where();
   if (w && w.seg.index === index && inBuffer(w.seg.start + secs)) {
-    audio.currentTime = w.seg.start + secs;
+    // Already there within a few ms (sought ahead, brakeBackwards): no seek, so it starts at once (each seek waits).
+    if (Math.abs(audio.currentTime - (w.seg.start + secs)) > SAME_PLACE_S) audio.currentTime = w.seg.start + secs;
     local.position = secs;
     return rampIn();
   }
@@ -3162,10 +3171,17 @@ async function stepTape() {
   }
   if (tapeDir.state === 'forward' && tapeDir.want === 'L' && playingNow && !tape.rewinding) {
     tapeDir.state = 'stopping';
+    // Its stream asked now, from where the brake will stand, loaded while it brakes (measured on the owner's tablet,
+    // 2026-10-28: asked at the stop, 135–180 ms of silence before backwards).
+    disarm(tape.turnArmed);
+    tape.turnArmed = armBackwards(brakeSpan(prefs.startStop.tape.brakeMs, RAMP_LOW));
     await turned(() => pauseRamped());
-    if (tapeDir.state !== 'stopping') return;
+    const armed = tape.turnArmed;
+    tape.turnArmed = null;
+    if (tapeDir.state !== 'stopping') return void disarm(armed);
     tapeDir.state = 'forward';
-    if (tapeDir.want === 'L') return void backwards();
+    if (tapeDir.want === 'L') return void backwards(armed);
+    disarm(armed);
     // Turned back meanwhile: forwards again, spinning up.
     const w = where();
     if (w) turned(() => playOnAt(w.seg.index, w.offset));
@@ -3176,9 +3192,25 @@ async function stepTape() {
     brakeBackwards('play');
   }
 }
-/** Plays backwards from where it rests (the knob at L, play pressed or the stop reached). */
-function backwards(): boolean {
-  if (!startWind(null, -1, null, true)) return false;
+/** The knob's backwards stream (at 1×, as loud as the music), from `lead` s ahead of where it plays. */
+function armBackwards(lead: number): Armed | null {
+  const here = where();
+  const t = here && local.queue[here.seg.index];
+  if (!here || !t || !windable(t)) return null;
+  const through = prefs.startStop.edges === 'queue' ? throughOf(here.seg.index, -1) : [];
+  const from = here.offset + lead;
+  const wind = { ...holdFor(-1), speed: 1, gainDb: 0 };
+  return { clip: windClip(windUrl(t, from, null, -1, 0, through, wind, null)), from, through, index: here.seg.index, v0: 1 };
+}
+/** Plays backwards from where it rests (the knob at L, play pressed or the stop reached); `armed`: its stream asked at
+ *  the turn, taken where the tape stood where it was meant to. */
+function backwards(armed: Armed | null = null): boolean {
+  const here = where();
+  if (armed && (!here || here.seg.index !== armed.index || Math.abs(here.offset - armed.from) > SAME_PLACE_S * 2)) {
+    disarm(armed);
+    armed = null;
+  }
+  if (!startWind(null, -1, armed, true)) return false;
   tapeDir.state = 'backward';
   return true;
 }
@@ -3191,6 +3223,13 @@ function brakeBackwards(after: 'play' | 'pause') {
   const now = performance.now();
   w.brakeFrom = w.edge ? RATE_LOW : windRate(w, now);
   w.brake = now;
+  // On forwards after it: the track sought now to where the brake will land, so it starts there at once (measured,
+  // 2026-10-28: sought at the landing, 40–170 ms of silence).
+  if (after !== 'play' || !audio || !audio.paused) return;
+  const land = windPlace(w, now);
+  const tw = where();
+  const at = land.pos - brakeSpan(w.wind.releaseMs) * w.brakeFrom;
+  if (tw && tw.seg.index === land.index && at > 0 && inBuffer(tw.seg.start + at)) audio.currentTime = tw.seg.start + at;
 }
 /** Runs `go` with the turn's own ramp (a vinyl's, Start and stop's length where it is one, else the wind's). */
 function turned<T>(go: () => T): T {
