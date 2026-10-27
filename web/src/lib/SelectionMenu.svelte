@@ -2,7 +2,9 @@
   // The menu of what is ticked (decision 0058: a selection is an object, its menu the same as one's; the select bars'
   // ⋮ at their far right): several tracks, or several albums' tracks. Play, Shuffle, Play next and Add to queue as the
   // large actions (the server's choice of them, 500 at most: lib/play); then Add to playlist; Download (in the app),
-  // Export…; Adjust BPM (administrators: lib/TempoStep).
+  // Export…; Adjust BPM (administrators: lib/TempoStep). `extra`: what the list's own items have besides their tracks
+  // (several albums' Sync, Delete…; the owner, 2026-10-27: what one has, several have), its groups after the shared
+  // ones, given the menu's close; `chips`: what is ticked, said as the list says it ("5 albums").
   import MenuSheet from './MenuSheet.svelte';
   import MenuCards from './MenuCards.svelte';
   import MenuGroup from './MenuGroup.svelte';
@@ -17,8 +19,15 @@
   import { plural } from './insights.svelte';
   import { toast } from './toast.svelte';
   import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
+  import type { Snippet } from 'svelte';
 
-  let { title, tracks, onclose }: { title: string; tracks: LocalTrack[]; onclose: () => void } = $props();
+  let {
+    title,
+    tracks,
+    chips = null,
+    extra,
+    onclose,
+  }: { title: string; tracks: LocalTrack[]; chips?: string[] | null; extra?: Snippet<[() => void]>; onclose: () => void } = $props();
 
   const source = $derived(tracks[0]?.source ?? '');
   const ids = $derived(tracks.map((t) => t.id));
@@ -55,7 +64,7 @@
   label={title}
   {onclose}
   {title}
-  chips={[plural(tracks.length, 'track')]}
+  chips={chips ?? [plural(tracks.length, 'track')]}
   actions={exporting || tempo || step !== 'menu'
     ? []
     : [
@@ -81,6 +90,7 @@
         <DownloadEntry {tracks} />
         <MenuEntry icon="export" label="Export…" onclick={() => (exporting = true)} />
       </MenuGroup>
+      {@render extra?.(onclose)}
       {#if me.admin && source !== 'device'}
         <MenuGroup>
           <MenuEntry icon="gauge" label="Adjust BPM" onclick={() => (tempo = true)} />
