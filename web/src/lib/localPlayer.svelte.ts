@@ -2301,10 +2301,14 @@ function gainTo(to: number, ms: number): Promise<void> {
     step();
   });
 }
+/** How far before a loaded range's start still counts as in it (s): a stream's first audio begins a hair after its
+ *  place (an MP3's first frame), and a seek there plays from it (measured 2026-10-28: a wind's landing at 0 read as not
+ *  loaded, fetched again, 1.4 s of silence). */
+const BUFFER_SLACK_S = 0.1;
 /** Whether stream time `t` is loaded. */
 function inBuffer(t: number) {
   if (!audio) return false;
-  for (let i = 0; i < audio.buffered.length; i++) if (t >= audio.buffered.start(i) && t <= audio.buffered.end(i)) return true;
+  for (let i = 0; i < audio.buffered.length; i++) if (t >= audio.buffered.start(i) - BUFFER_SLACK_S && t <= audio.buffered.end(i)) return true;
   return false;
 }
 /** Within this much of a track's start (s), play is never ramped. */
@@ -2503,8 +2507,15 @@ function playOnAt(index: number, secs: number) {
     local.position = secs;
     return rampIn();
   }
-  const gen = generation + 1;
-  void fresh(index, secs, false);
+  // Its stream already begins there, still coming in (a condensed wind's end, fetched while it winds): waited for, not
+  // fetched again.
+  const coming = w && w.seg.index === index && Math.abs(w.seg.start + secs) < 0.25;
+  if (coming && audio.readyState >= 3) {
+    local.position = secs;
+    return rampIn();
+  }
+  const gen = coming ? generation : generation + 1;
+  if (!coming) void fresh(index, secs, false);
   // A turn's own ramp kept for the wind-up once the stream is in.
   const turn = tape.turnRamp;
   const still = tape.quiet;
