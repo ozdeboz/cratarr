@@ -18,6 +18,7 @@
   import Waveform from './Waveform.svelte';
   import WaveLens from './WaveLens.svelte';
   import { loadWaveform, waveformOf } from './waveforms.svelte';
+  import { playback } from './deviceLog';
 
   let {
     seek,
@@ -61,7 +62,6 @@
   $effect(() => {
     if (want !== 'line') keepWave = true;
   });
-  const waveShown = $derived(keepWave || want !== 'line');
   const pos = $derived(seek.pos);
   /** As heard: this device's player's level (0..1), the waveform's bars scaled by it (lib/Waveform `heard`), where Level
    *  the volume says to show it. */
@@ -238,7 +238,7 @@
   $effect(() => {
     for (const t of wideTracks ?? []) {
       const q = local.queue[t.i];
-      if (q && t.i !== local.index) loadWaveform(q.source, q.id);
+      if (q) loadWaveform(q.source, q.id);
     }
   });
   /** Which tracks those are: the strip is made again only when they change (not each frame the view eases). */
@@ -246,7 +246,7 @@
   /** The tracks' waveforms end to end (each against its own loudest, at one resolution along the queue). */
   const wideBins = $derived.by(() => {
     const key = wideSet;
-    if (!key || !bins || !dur) return null;
+    if (!key || !dur) return null;
     const ts = key.split(',').map((k) => {
       const [i, start, d] = k.split(':').map(Number);
       return { i, start, d };
@@ -257,7 +257,7 @@
     const per = Math.min(8, 4096 / total);
     const parts = ts.map((t) => {
       const q = local.queue[t.i];
-      const own = t.i === local.index ? bins : q ? waveformOf(q.source, q.id) : null;
+      const own = t.i === local.index && bins ? bins : q ? waveformOf(q.source, q.id) : null;
       const m = Math.max(1, Math.round(t.d * per));
       const out = new Uint8Array(m);
       if (own && own.length) {
@@ -294,6 +294,25 @@
       cur1: at(dur),
       marks: s.marks.map(at),
     };
+  });
+  /** What it shows: a continuous hold's strip a waveform throughout, whatever the playing track's own is doing. */
+  const shownWant = $derived<'wave' | 'wait' | 'line'>(wideStrip ? 'wave' : want);
+  const waveShown = $derived(!!wideStrip || keepWave || want !== 'line');
+  // A continuous hold's window lost before its release: said in the playback log, with why.
+  let wideLost = false;
+  $effect(() => {
+    const should = zoomOn && prefs.startStop.edges === 'queue';
+    const lost = should && !wideStrip;
+    if (lost && !wideLost)
+      playback('warn', 'hold window lost', {
+        index: local.index,
+        dur,
+        target: !!wideTarget,
+        wide: !!wide,
+        tracks: wideTracks?.length ?? null,
+        strip: !!wideBins,
+      });
+    wideLost = lost;
   });
   const view = $derived.by(() => {
     if (zoomShare >= 0.999 || zoomAnchor === null || !dur) return null;
@@ -418,7 +437,7 @@
   onkeydown={key}
 >
   {#if waveShown}
-    <Waveform bins={shaped ? (bins ?? null) : null} want={wideStrip ? 'wave' : want} {loading} progress={dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} view={wideStrip ? null : view} wide={wideStrip} {track} left={isLocal() ? (local.left?.share ?? null) : null} back={isLocal() && ((holdNow.on && holdNow.dir < 0) || tapeDir.state === 'backward' || deckNow.back)} ahead={isLocal() && prefs.waveLevel === 'difference'} landing={aimMark} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
+    <Waveform bins={shaped ? (bins ?? null) : null} want={shownWant} {loading} progress={dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} view={wideStrip ? null : view} wide={wideStrip} {track} left={isLocal() ? (local.left?.share ?? null) : null} back={isLocal() && ((holdNow.on && holdNow.dir < 0) || tapeDir.state === 'backward' || deckNow.back)} ahead={isLocal() && prefs.waveLevel === 'difference'} landing={aimMark} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
   {:else}
     <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
   {/if}
