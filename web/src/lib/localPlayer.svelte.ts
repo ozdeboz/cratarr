@@ -671,7 +671,10 @@ async function fresh(index: number, from = 0, play = true) {
   const gen = ++generation;
   streamFrom = { index, from };
   fetching?.abort();
-  appending = false;
+  // Its own track's append is under way from here (its source opening first): the tick appends no other meanwhile. A
+  // wind readying this stream keeps the counter on the track it winds (prepare), which made the tick append this one a
+  // second time into the same buffer (the owner's tablet, 2026-10-28: "still processing an 'appendBuffer'").
+  appending = true;
   segments = [];
   streamEnd = 0;
   lastAppended = index - 1;
@@ -2612,7 +2615,7 @@ const lengthOf = (i: number) => local.queue[i]?.duration_secs ?? null;
 /** The queue places a held wind may go on through, past the track's edge, in winding order: up to WIND_THROUGH,
  *  stopping at one the server cannot wind (a Bandcamp preview, the device's own music) or whose length is unknown (the
  *  counter goes by lengths: the page cannot read the stream's map). */
-const WIND_THROUGH = 8;
+const WIND_THROUGH = 64;
 function throughOf(index: number, dir: 1 | -1): number[] {
   const out: number[] = [];
   for (let i = index + dir; i >= 0 && i < local.queue.length && out.length < WIND_THROUGH; i += dir) {
@@ -3579,24 +3582,33 @@ function aim(at: { index: number; pos: number } | null) {
     aimCheck();
   }
 }
-/** Let go: the look-ahead's line as last painted against where the tape is once it plays at its own speed again (the
- *  owner, 2026-10-28), logged as `aim vs resume`; given up after AIM_CHECK_MS. */
+/** Let go: the look-ahead's line as last painted against where the tape lands (the owner, 2026-10-28): forwards where
+ *  it plays at its own speed again, backwards where it stands (its aim the stand, the owner the same day), logged as
+ *  `aim vs resume`; given up after AIM_CHECK_MS, or when another hold begins. */
 const AIM_CHECK_MS = 12000;
 let aimFrame = 0;
 function aimCheck() {
   cancelAnimationFrame(aimFrame);
   const from = performance.now();
+  const back = holdNow.dir < 0;
   const step = () => {
     const now = performance.now();
     const t = local.queue[local.index];
-    const atOne = handed()
-      ? deckSpeed(now) === 1 && !rewindNow.on
-      : !tape.rewinding && !!audio && !audio.paused && Math.abs(audio.playbackRate - 1) < 0.001 && ramping.dir === null;
+    // Another hold: this one's check is over.
+    if (tape.holding && !tape.holding.released && now - from > 100) return;
+    const atOne = back
+      ? handed()
+        ? deckSpeed(now) === 0 || deckSpeed(now) === 1
+        : !tape.rewinding
+      : handed()
+        ? deckSpeed(now) === 1 && !rewindNow.on
+        : !tape.rewinding && !!audio && !audio.paused && Math.abs(audio.playbackRate - 1) < 0.001 && ramping.dir === null;
     if (atOne) {
       const resumed = positionNow();
       const track = t ? `${t.source}/${t.id}` : null;
       const aimed = aimPainted.pos;
       playback('info', 'aim vs resume', {
+        way: back ? 'back: stand' : 'forward: 1x',
         aimed: aimed === null ? null : Math.round(aimed * 1000),
         resumed: Math.round(resumed * 1000),
         off_ms: aimed === null || aimPainted.track !== track ? null : Math.round((resumed - aimed) * 1000),
