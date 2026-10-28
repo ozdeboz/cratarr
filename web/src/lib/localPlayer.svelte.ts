@@ -256,6 +256,8 @@ const tape = {
   nextAfterPause: false,
   /** Next pressed on the last track while Autoplay fetches: on into its first pick once it is in. */
   nextWhenFilled: false,
+  /** A hold's speed held back by the finger dragged down (0: none; 1: down to its starting speed): its wish. */
+  dragWant: 0,
   /** A hold sent to the player driven, from its press until its wind has landed: its reported pauses not shown. */
   heldThere: false,
   heldLetGo: false,
@@ -278,6 +280,7 @@ function resetTape() {
     plainHold: null,
     nextAfterPause: false,
     nextWhenFilled: false,
+    dragWant: 0,
     quiet: false,
     quietPause: false,
     quietUntil: 0,
@@ -2484,6 +2487,8 @@ type Winding = {
   handFrom: number | null;
   /** A hold's brake handed over to the backwards player: the speed it takes over at (× its 1× stream), braking at once. */
   startAt: number | null;
+  /** The finger's drag as it is followed (smoothed): the hold's speed held back toward its starting speed by it. */
+  drag: number;
   /** Played backwards at 1× by the direction knob (as loud as the music), not a wind; and what follows its brake. */
   reverse: boolean;
   after: 'play' | 'pause';
@@ -2599,6 +2604,12 @@ function windRate(w: Winding, now: number): number {
   }
   else if (w.brake !== null) r = floor + ((w.brakeFrom - floor) * (1 + Math.cos(Math.PI * Math.min(1, (now - w.brake) / w.wind.releaseMs)))) / 2;
   else r = t >= w.wind.attackMs ? 1 : floor + ((1 - floor) * (1 - Math.cos((Math.PI * t) / w.wind.attackMs))) / 2;
+  // Held back by the finger (a hold, not yet let go): geometrically, at most down to the hold's starting speed (the owner,
+  // 2026-10-28: its own 1× within reach would undo the winding).
+  if (w.drag > 0 && w.to === null && !w.reverse && w.brake === null) {
+    const v = vAt(w, w.clip.currentTime);
+    r *= (Math.min(v, holdFor(w.dir).speed) / v) ** w.drag;
+  }
   // The backwards player's stream is the track at 1×: it may play faster (a hold's brake handed over).
   return Math.max(RATE_LOW, Math.min(w.reverse ? RATE_TOP : 1, r));
 }
@@ -2861,7 +2872,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
   if (fly) clip.playbackRate = use?.floor ?? 1 / v0;
   // Handed a hold's brake: at the hold's speed from its first moment.
   if (startAt !== null) clip.playbackRate = Math.min(RATE_TOP, startAt);
-  const w: Winding = { clip, seg, from, to, dir, D, wind, fade: 0, map: null, mapSpeed: use?.floor ? 1 / use.floor : null, v0, accel, accelS: hold.doublingS, top: hold.top, fly, handing: false, handArmed: null, handFrom: null, startAt, reverse, after: 'play', at: null, brake: null, brakeFrom: 1, edge: false, through, shown: seg.index, timer: undefined };
+  const w: Winding = { clip, seg, from, to, dir, D, wind, fade: 0, map: null, mapSpeed: use?.floor ? 1 / use.floor : null, v0, accel, accelS: hold.doublingS, top: hold.top, fly, handing: false, handArmed: null, handFrom: null, startAt, drag: 0, reverse, after: 'play', at: null, brake: null, brakeFrom: 1, edge: false, through, shown: seg.index, timer: undefined };
   const mine = () => tape.rewinding === w;
   // Every step timed from the press, in the playback log (the owner, 2026-10-27: find any delay at the deepest level).
   const t0 = performance.now();
@@ -3043,6 +3054,8 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       w.timer = setInterval(() => {
         if (!mine()) return clearInterval(w.timer);
         const now = performance.now();
+        // The finger's drag followed smoothly while held.
+        if (tape.holding) w.drag += (tape.dragWant - w.drag) * (1 - Math.exp(-WIND_STEP_MS / 120));
         if (!w.edge) clip.playbackRate = windRate(w, now);
         const place = w.edge ? { index: w.shown, pos: tape.rewindPos ?? w.from } : windPlace(w, now);
         show(place);
@@ -3161,6 +3174,7 @@ export async function windHold(dir: 'back' | 'forward') {
   // A track that cannot be wound (Bandcamp's, the device's): what can be kept.
   if (!windable(local.queue[local.index])) return startPlainHold(dir === 'back' ? -1 : 1);
   const h: { dir: 1 | -1; released: boolean } = { dir: dir === 'back' ? -1 : 1, released: false };
+  tape.dragWant = 0;
   tape.holding = h;
   // Anything under way gives way to it (decision 0075: anything interrupts anything): a wind (not the knob's backwards)
   // brakes to rest where it is, a pause's brake runs out; then the hold, from there.
@@ -3357,6 +3371,11 @@ function windTakeover(press: 'pause' | 'play' | 'next' | 'previous') {
   jump(Math.max(0, index - 1));
 }
 
+/** Holding, the finger dragged down (0..1): the hold's speed held back by it, to aim where it lands (the owner,
+ *  2026-10-28). This page's player only. */
+export function windDrag(share: number) {
+  tape.dragWant = Math.min(1, Math.max(0, share));
+}
 /** Holding ended: a held wind brakes and plays on from where it got to. */
 export function windRelease(dir: 'back' | 'forward') {
   if (handed()) {

@@ -32,7 +32,7 @@
   import { ramping } from './ramping.svelte';
   import { appInfo, inApp } from './app.svelte';
   import { holdWind, holdsHere, type Hold } from './holdWind';
-  import { local, rewindNow, windUpMs } from './localPlayer.svelte';
+  import { local, rewindNow, windDrag, windUpMs } from './localPlayer.svelte';
   import TapeDeck from './TapeDeck.svelte';
   import QueueMenu from './QueueMenu.svelte';
   import { playingCrateOuts } from './crates.svelte';
@@ -326,7 +326,14 @@
    *  motion on its own); another of Cratarr's players decides for itself. */
   const windHold = (dir: 'back' | 'forward'): Hold =>
     holdsHere(dir, np?.player)
-      ? { onhold: () => wind(dir, 'start'), onrelease: () => wind(dir, 'stop'), onpress: () => windTouch(dir, true), oncancel: () => windTouch(dir, false) }
+      ? {
+          onhold: () => wind(dir, 'start'),
+          onrelease: () => wind(dir, 'stop'),
+          onpress: () => windTouch(dir, true),
+          oncancel: () => windTouch(dir, false),
+          // Dragged down: held back, to aim (this page's player; the app's and one driven hold for themselves).
+          ondrag: isLocal() && !inApp ? windDrag : undefined,
+        }
       : null;
 
   /** What a swipe left or right on the cover was chosen to do: a track on or back, or a seek. */
