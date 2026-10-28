@@ -103,11 +103,9 @@
       lastDone = p;
     });
   });
-  /** The track before's colour, as the next one's front reaches each piece, shrinks to its middle over this long (the
-   *  owner, 2026-10-28: not gone at once). */
-  const OLD_SHRINK_MS = 320;
-  /** How much of a piece's colour of the track before is left (1: all, 0: none), at `t`. */
-  const oldLeft = (i: number, t: number) => (changed || oldFrontAt === null ? 1 : Math.min(1, Math.max(0, 1 - (t - (oldFrontAt + (i / n) * SPREAD_MS)) / OLD_SHRINK_MS)));
+  /** The track before's colour, as the next one's front reaches each piece, fades into the unplayed tint over this long,
+   *  the pieces keeping their size (the owner, 2026-10-28: a colour going, left to right, not a shrinking). */
+  const OLD_FADE_MS = 320;
   /** How far the next track's front has come (0..1): the pieces past it still show the track before. */
   const oldFrom = $derived.by(() => {
     void frame;
@@ -217,7 +215,7 @@
       }
     }
     // The track before's colour still shrinking somewhere.
-    if (oldFrontAt !== null && t < oldFrontAt + SPREAD_MS + OLD_SHRINK_MS) moving = true;
+    if (oldFrontAt !== null && t < oldFrontAt + SPREAD_MS + OLD_FADE_MS) moving = true;
     frame++;
     if (moving) raf = requestAnimationFrame(step);
     else if (goals[0].w === 'line' && gap.every((g) => g === 0)) onflat?.();
@@ -317,22 +315,16 @@
     }
     return s;
   };
-  /** The track before's colour: its played pieces as drawn, each shrunk to its middle by what is left of it. */
-  const oldPlayed = $derived.by(() => {
+  /** The track before's colour, a mask over its played pieces: gone left of where the next one's front came
+   *  OLD_FADE_MS ago, whole right of the front, fading in between (each piece OLD_FADE_MS from its front on). Null: gone. */
+  const oldMask = $derived.by(() => {
     void frame;
-    if (oldFrontAt === -Infinity) return '';
-    const t = performance.now();
-    let s = '';
-    const upTo = Math.min(gap.length, Math.ceil(oldDone * gap.length));
-    for (let i = 0; i < upTo; i++) {
-      const k = oldLeft(i, t);
-      if (k <= 0) continue;
-      const g = gap[i];
-      const h = (line + (LOW - line) * g + rise[i] * (scale[i] ?? 1)) * k;
-      const w = 1 - 0.3 * g;
-      s += `M${f(i + (1 - w) / 2)} ${f((100 - h) / 2)}h${f(w)}v${f(h)}h${f(-w)}z`;
-    }
-    return s;
+    if (oldFrontAt === -Infinity || oldDone <= 0) return null;
+    if (changed || oldFrontAt === null) return 'none';
+    const e = performance.now() - oldFrontAt;
+    const from = (e - OLD_FADE_MS) / SPREAD_MS;
+    if (from >= oldDone) return null;
+    return `linear-gradient(to right, transparent ${f(from * 100)}%, #000 ${f((e / SPREAD_MS) * 100)}%)`;
   });
   /** Levelled visibly somewhere: a piece's scale a step from 1 (a fraction of a dB shows nothing). */
   const d = $derived.by(() => {
@@ -355,9 +347,16 @@
     <path {d} />
   </svg>
   <!-- The track before, where its pieces still stand: as far as it was played. -->
-  {#if oldPlayed}
-    <svg class="played" viewBox="0 0 {n} 100" preserveAspectRatio="none" style:clip-path={`inset(0 ${(1 - oldDone) * 100}% 0 0)`}>
-      <path d={oldPlayed} />
+  {#if oldMask}
+    <svg
+      class="played"
+      viewBox="0 0 {n} 100"
+      preserveAspectRatio="none"
+      style:clip-path={`inset(0 ${(1 - oldDone) * 100}% 0 0)`}
+      style:mask-image={oldMask}
+      style:-webkit-mask-image={oldMask}
+    >
+      <path {d} />
     </svg>
   {/if}
   <!-- What is heard next: ahead of the playhead (Difference), or to where a hold let go now would land (over the played
