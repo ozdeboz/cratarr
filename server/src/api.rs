@@ -2877,6 +2877,16 @@ struct WindAsk {
     /// it was.
     #[serde(default)]
     flight_max: Option<f64>,
+    /// A let-go's brake (0.9.14-3, `wind::Brake`): from `brake_v0` × to `brake_to` × over `brake_ms`, the stream from
+    /// `brake_at_ms` into it, heard at most at `max` (pieces of `piece_ms` above), ending at its aim. Played at 1×.
+    #[serde(default)]
+    brake_v0: Option<f64>,
+    #[serde(default)]
+    brake_to: Option<f64>,
+    #[serde(default)]
+    brake_ms: Option<u64>,
+    #[serde(default)]
+    brake_at_ms: Option<u64>,
 }
 
 /// The most tracks a hold winds on into past its own (0.9.14-2; 8 before: a hold back stopped at the start of the
@@ -2926,10 +2936,27 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
     let accel = q.accel_s.filter(|p| p.is_finite() && *p > 0.0).map(|p| {
         let max = q.max.filter(|m| m.is_finite()).unwrap_or(64.0).clamp(1.0, 64.0);
         match flight.filter(|f| *f > max) {
-            Some(f) => crate::wind::Accel { period_s: p.clamp(0.2, 30.0), max: f.min(1024.0), audio: Some((max, q.piece_ms.unwrap_or(350).clamp(50, 2_000))) },
-            None => crate::wind::Accel { period_s: p.clamp(0.2, 30.0), max, audio: None },
+            Some(f) => crate::wind::Accel { period_s: p.clamp(0.2, 30.0), max: f.min(1024.0), audio: Some((max, q.piece_ms.unwrap_or(350).clamp(50, 2_000))), brake: None },
+            None => crate::wind::Accel { period_s: p.clamp(0.2, 30.0), max, audio: None, brake: None },
         }
     });
+    // A let-go's brake (0.9.14-3): the plan's curve carried by the stream, heard at most at `max`.
+    let brake = match (q.brake_v0.filter(|v| v.is_finite() && *v > 0.0), q.brake_ms.filter(|ms| *ms > 0)) {
+        (Some(v0), Some(ms)) => {
+            let to = q.brake_to.filter(|t| t.is_finite()).unwrap_or(0.0).clamp(0.0, v0);
+            let heard = q.max.filter(|m| m.is_finite()).unwrap_or(16.0).clamp(1.0, 64.0);
+            let secs = ms.min(10_000) as f64 / 1000.0;
+            let at = (q.brake_at_ms.unwrap_or(0) as f64 / 1000.0).min(secs);
+            Some(crate::wind::Accel {
+                period_s: 1.0,
+                max: v0.min(1024.0),
+                audio: (v0 > heard).then(|| (heard, q.piece_ms.unwrap_or(350).clamp(50, 2_000))),
+                brake: Some(crate::wind::Brake { v0: v0.min(1024.0), to, secs, at }),
+            })
+        }
+        _ => None,
+    };
+    let accel = brake.or(accel);
     let ask = Ask { dir, from_ms: q.from_ms, to_ms: q.to_ms, speed: q.speed.unwrap_or(6.0), gain_db: q.gain_db.unwrap_or(-12.0), fit, accel };
     let cat = app.library.catalogue();
     let found = tokio::task::spawn_blocking(move || crate::stream::locate(&cat, &source, &id)).await.ok().flatten();
@@ -2964,7 +2991,7 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
             // A flight honoured says so here too (0.9.14): a page's player cannot read the stream's headers.
             Ok(Ok(v)) => {
                 let mut r = Json(v).into_response();
-                if let Some(f) = accel.filter(|a| a.audio.is_some()).map(|a| a.max)
+                if let Some(f) = accel.filter(|a| a.audio.is_some() && a.brake.is_none()).map(|a| a.max)
                     && let Ok(h) = HeaderValue::from_str(&f.to_string())
                 {
                     r.headers_mut().insert("x-flight-max", h);
@@ -3073,7 +3100,7 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
     headers.insert(header::CONTENT_LENGTH, HeaderValue::from(bytes));
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert("x-wind-dir", HeaderValue::from_static(if q.dir == "back" { "back" } else { "forward" }));
-    if let Some(f) = accel.filter(|a| a.audio.is_some()).map(|a| a.max)
+    if let Some(f) = accel.filter(|a| a.audio.is_some() && a.brake.is_none()).map(|a| a.max)
         && let Ok(v) = HeaderValue::from_str(&f.to_string())
     {
         headers.insert("x-flight-max", v);

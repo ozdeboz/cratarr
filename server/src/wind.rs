@@ -54,6 +54,46 @@ pub struct Accel {
     /// pieces of this many ms each from where the flight has got, the way between jumped over; `max` is then the
     /// flight's top. None: heard as it goes, up to `max`.
     pub audio: Option<(f64, u64)>,
+    /// A let-go's brake instead of a rise (0.9.14-3): the stream carries the plan's own curve, played at 1×.
+    pub brake: Option<Brake>,
+}
+
+/// A let-go's one plan (the app's and the page's, 2026-10-28; the owner: let the stream carry the motion): from `v0` ×
+/// to `to` × over `secs`, a raised cosine, its stream beginning `at` seconds into it; past its end, `to` ×. A device
+/// plays it at 1×, so its speed is the stream's, whatever the device's own output reaches.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Brake {
+    pub v0: f64,
+    pub to: f64,
+    pub secs: f64,
+    pub at: f64,
+}
+
+impl Brake {
+    /// Its speed `s` seconds into it (×).
+    fn v(&self, s: f64) -> f64 {
+        if s >= self.secs { self.to } else { self.to + (self.v0 - self.to) * (1.0 + (PI * s / self.secs).cos()) / 2.0 }
+    }
+
+    /// Its way from its start to `s` seconds into it (seconds of track).
+    fn w(&self, s: f64) -> f64 {
+        let s1 = s.clamp(0.0, self.secs);
+        self.to * s1 + (self.v0 - self.to) * (s1 / 2.0 + self.secs / (2.0 * PI) * (PI * s1 / self.secs).sin()) + self.to * (s - self.secs).max(0.0)
+    }
+
+    /// Where its stream ends (stream seconds): at the brake's end, the aim.
+    pub fn end(&self) -> f64 {
+        (self.secs - self.at).max(0.0)
+    }
+
+    /// When (stream seconds) it slows below `top` ×; none where it never is above it.
+    fn below(&self, top: f64) -> Option<f64> {
+        if self.v(self.at) <= top {
+            return None;
+        }
+        let k = ((top - self.to) / (self.v0 - self.to)).clamp(0.0, 1.0);
+        Some(self.secs / PI * (2.0 * k - 1.0).acos() - self.at)
+    }
 }
 
 impl Accel {
@@ -64,6 +104,9 @@ impl Accel {
 
     /// How far it has gone by stream time `t` (seconds of track), from `base`.
     pub fn gone(&self, base: f64, t: f64) -> f64 {
+        if let Some(b) = self.brake {
+            return b.w(b.at + t) - b.w(b.at);
+        }
         let p = self.period_s;
         let ts = self.top_at(base);
         let up = |t: f64| base * p / std::f64::consts::LN_2 * (2f64.powf(t / p) - 1.0);
@@ -72,6 +115,19 @@ impl Accel {
 
     /// When it has gone `d` (seconds of track), from `base`.
     pub fn when(&self, base: f64, d: f64) -> f64 {
+        if let Some(b) = self.brake {
+            // Its way only grows, so halved down to it; one braking to still goes no further than its end.
+            let end = b.end();
+            if d >= self.gone(base, end) {
+                return if b.to > 0.0 { end + (d - self.gone(base, end)) / b.to } else { end };
+            }
+            let (mut lo, mut hi) = (0.0, end);
+            for _ in 0..60 {
+                let mid = (lo + hi) / 2.0;
+                if self.gone(base, mid) < d { lo = mid } else { hi = mid }
+            }
+            return (lo + hi) / 2.0;
+        }
         let p = self.period_s;
         let ts = self.top_at(base);
         let at_top = self.gone(base, ts);
@@ -80,7 +136,19 @@ impl Accel {
 
     /// Its speed at stream time `t` (×).
     fn speed(&self, base: f64, t: f64) -> f64 {
+        if let Some(b) = self.brake {
+            return b.v(b.at + t);
+        }
         (base * 2f64.powf(t / self.period_s)).min(self.max.max(base))
+    }
+
+    /// Where it is above its audio top, pieces (stream seconds): a rise from where it passes it on; a brake until it
+    /// slows below it. None where it never is.
+    fn above(&self, base: f64, top: f64) -> Option<(f64, f64)> {
+        match self.brake {
+            Some(b) => b.below(top).map(|e| (-b.at, e)),
+            None => (self.max > top).then(|| ((self.period_s * (top / base).log2()).max(0.0), f64::INFINITY)),
+        }
     }
 }
 
@@ -91,22 +159,27 @@ impl Accel {
 #[allow(clippy::too_many_arguments)]
 fn flight_pieces(a: &Accel, base: f64, t0: f64, x: f64, sign: f64, rate: f64, out: f64, frames: usize) -> Vec<Piece> {
     let whole = vec![Piece { from: 0, to: frames, top: x, fade_in: None, fade_out: None, own: (0, frames) }];
-    let Some((top, piece_ms)) = a.audio.filter(|(top, _)| a.max > *top) else { return whole };
-    // When it passes its audio top (stream time), and so where the grid of cuts begins, in this track's frames.
-    let cross = (a.period_s * (top / base).log2()).max(0.0);
+    let Some((top, piece_ms)) = a.audio else { return whole };
+    // Where it is above its audio top (stream time), and so where the grid of cuts runs, in this track's frames; past
+    // a brake's slowing below it, one piece heard as it goes.
+    let Some((cross, until)) = a.above(base, top) else { return whole };
     let grid = (cross - t0) * out;
+    let last = ((until - t0) * out).min(frames as f64);
     let step = (piece_ms as f64 / 1000.0 * out).max(1.0);
     let mut starts = vec![0usize];
     let mut k = if grid > 0.0 { 0.0 } else { (-grid / step).ceil() };
     loop {
         let s = (grid + k * step).round();
-        if s >= frames as f64 {
+        if s >= last {
             break;
         }
         if s > 0.0 {
             starts.push(s as usize);
         }
         k += 1.0;
+    }
+    if last > 0.0 && last < frames as f64 && starts.last().is_some_and(|s| (*s as f64) < last.round()) {
+        starts.push(last.round() as usize);
     }
     if starts.len() == 1 {
         return whole;
@@ -131,6 +204,9 @@ fn flight_pieces(a: &Accel, base: f64, t0: f64, x: f64, sign: f64, rate: f64, ou
         })
         .collect()
 }
+
+/// Below this speed (×) a wind fades with it (`Wind::still`).
+const STILL_BELOW: f64 = 0.25;
 
 /// A condensed wind is at most this long (a tap's and a seek's cap, the owner).
 const LONGEST_FIT_MS: u64 = 12_000;
@@ -235,7 +311,15 @@ impl Wind {
         if let Some(a) = accel {
             // As long as it takes at its rising speed: from stream time t0 to where the way is gone.
             let secs = distance / f64::from(rate);
-            let end = a.when(speed, a.gone(speed, t0) + secs);
+            let mut end = a.when(speed, a.gone(speed, t0) + secs);
+            let mut to_ms = to_ms;
+            // A brake ends at its aim, in this track or a later one.
+            if let Some(b) = a.brake
+                && end > b.end()
+            {
+                end = b.end();
+                to_ms = (from_ms as f64 + sign * (a.gone(speed, end) - a.gone(speed, t0)) * 1000.0).round().max(0.0) as u64;
+            }
             w.frames = ((end - t0) * f64::from(out_rate)).ceil().max(1.0) as usize;
             w.pieces = flight_pieces(&a, speed, t0, x, sign, f64::from(rate), f64::from(out_rate), w.frames);
             w.ends = Some((from_ms, to_ms));
@@ -339,6 +423,12 @@ impl Wind {
         }
     }
 
+    /// Below a quarter of the track's own speed it fades with its speed (a brake to still: what a tape does as it
+    /// stops, no click at the end); `v` track frames a stream frame.
+    fn still(&self, v: f64) -> f64 {
+        (v * f64::from(self.out_rate) / f64::from(self.rate) / STILL_BELOW).min(1.0)
+    }
+
     /// Its length (ms of the stream).
     pub fn ms(&self) -> f64 {
         self.frames as f64 * 1000.0 / f64::from(self.out_rate)
@@ -409,7 +499,7 @@ impl Wind {
                         c.resize(i - sent, 0.0);
                     }
                     for (k, v) in b.iter().enumerate() {
-                        c[start + k - sent] += (f64::from(*v) * p.gain(start + k) * self.gain) as f32;
+                        c[start + k - sent] += (f64::from(*v) * p.gain(start + k) * self.gain * self.still(speeds[k])) as f32;
                     }
                 }
                 // What no later piece adds to is ready.
@@ -524,6 +614,10 @@ pub fn chain(tracks: &[(u32, usize, Option<u64>)], ask: Ask) -> Result<Vec<Wind>
     let mut t0 = first.ms() / 1000.0;
     let mut out = vec![first];
     for &(rate, channels, duration) in &tracks[1..] {
+        // A brake's stream ends at its aim: no track past it.
+        if ask.accel.and_then(|a| a.brake).is_some_and(|b| t0 >= b.end() - 1e-9) {
+            break;
+        }
         let Some(d) = duration.filter(|d| *d > 0) else { break };
         let from_ms = if ask.dir == Dir::Back { d } else { 0 };
         let w = Wind::joined_at(rate, channels, Some(d), Ask { from_ms, to_ms: None, fit: None, ..ask }, Some(stream), t0)?;
@@ -656,7 +750,7 @@ mod tests {
     fn a_chain_planned_at_the_streams_rate_is_the_one_its_tracks_own_rates_make() {
         // Up to 64 tracks a hold (0.9.14-2), each read only as it is reached: planned at the stream's rate, then made
         // again at its own; the same length and map as planned from the start at its own, and all of it sounds.
-        for accel in [None, Some(Accel { period_s: 1.5, max: 64.0, audio: None })] {
+        for accel in [None, Some(Accel { period_s: 1.5, max: 64.0, audio: None, brake: None })] {
             let a = Ask { accel, ..ask(Dir::Back, 10_000, 2.0) };
             let own = chain(&[(44_100, 2, Some(60_000)), (48_000, 1, Some(30_000))], a).unwrap();
             let planned = chain(&[(44_100, 2, Some(60_000)), (44_100, 2, Some(30_000))], a).unwrap();
@@ -678,7 +772,7 @@ mod tests {
 
     #[test]
     fn a_hold_speeds_up_doubling_to_its_top_and_on_through_the_queue() {
-        let a = Accel { period_s: 1.5, max: 64.0, audio: None };
+        let a = Accel { period_s: 1.5, max: 64.0, audio: None, brake: None };
         // From 8 ×: 64 × after three doublings (4.5 s); the way and its inverse agree.
         assert!((a.top_at(8.0) - 4.5).abs() < 1e-9);
         for t in [0.5, 3.0, 4.5, 9.0] {
@@ -700,11 +794,78 @@ mod tests {
         assert!((winds[1].ms() / 1000.0 - (a.when(8.0, 310.0) - t1)).abs() < 0.01);
     }
 
+    fn brake(v0: f64, to: f64, at: f64) -> Accel {
+        Accel { period_s: 1.0, max: v0, audio: (v0 > 16.0).then_some((16.0, 350)), brake: Some(Brake { v0, to, secs: 1.5, at }) }
+    }
+
+    #[test]
+    fn a_brake_is_a_raised_cosine_from_its_speed_to_its_end_speed() {
+        let b = Brake { v0: 64.0, to: 1.0, secs: 1.5, at: 0.0 };
+        assert!((b.v(0.0) - 64.0).abs() < 1e-9 && (b.v(1.5) - 1.0).abs() < 1e-9 && (b.v(9.0) - 1.0).abs() < 1e-9);
+        // Its way: the mean of its ends over its length.
+        assert!((b.w(1.5) - 32.5 * 1.5).abs() < 1e-9);
+        let below = b.below(16.0).unwrap();
+        assert!((b.v(below) - 16.0).abs() < 1e-9, "{below}");
+        // Its stream from 0.3 s in: gone and when undo each other.
+        let a = brake(64.0, 1.0, 0.3);
+        for t in [0.0, 0.2, 0.7, 1.1] {
+            assert!((a.when(4.0, a.gone(4.0, t)) - t).abs() < 1e-6, "{t}");
+        }
+    }
+
+    #[test]
+    fn a_brake_stream_carries_the_plan_to_its_aim_played_at_one() {
+        // Let go at 64×, 0.3 s of the brake gone before its stream begins: 1.2 s of stream, from 100 s to the aim.
+        let a = brake(64.0, 1.0, 0.3);
+        let ask = Ask { accel: Some(a), ..ask(Dir::Forward, 100_000, 4.0) };
+        let w = Wind::new(44_100, 2, Some(600_000), ask).unwrap();
+        assert!((w.ms() - 1_200.0).abs() < 1.0, "{}", w.ms());
+        let b = a.brake.unwrap();
+        let aim = 100_000.0 + (b.w(1.5) - b.w(0.3)) * 1000.0;
+        assert_eq!(w.map(), vec![(0, 100_000), (1_200, aim.round() as u64)]);
+        // Heard in pieces until it slows below the audio top, then as it goes.
+        let below = b.below(16.0).unwrap();
+        let cut = (below * 44_100.0).round() as usize;
+        assert!(w.pieces.len() > 2);
+        assert_eq!(w.pieces.last().unwrap().own, (cut, w.frames));
+        let mut out = Vec::new();
+        assert!(w.render(&mut Tone { hz: 440.0, secs: 600.0 }, |x| { out.extend_from_slice(&x); true }).is_ok());
+        assert_eq!(out.len() as u64, w.bytes());
+    }
+
+    #[test]
+    fn a_brake_to_still_fades_as_it_stops() {
+        // Back from 30 s at 8× to still: loud while it moves, silent at its end.
+        let ask = Ask { accel: Some(brake(8.0, 0.0, 0.0)), ..ask(Dir::Back, 30_000, 4.0) };
+        let w = Wind::new(44_100, 2, Some(60_000), ask).unwrap();
+        let mut out = Vec::new();
+        assert!(w.render(&mut Tone { hz: 440.0, secs: 60.0 }, |x| { out.extend_from_slice(&x); true }).is_ok());
+        let level = |from: usize, to: usize| {
+            let s: Vec<i16> = out[44 + from * 4..44 + to * 4].chunks(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
+            s.iter().map(|v| f64::from(*v).abs()).fold(0.0, f64::max)
+        };
+        let n = w.frames;
+        assert!(level(n / 4, n / 4 + 2_000) > 1_000.0);
+        assert!(level(n - 200, n) < 200.0, "{}", level(n - 200, n));
+    }
+
+    #[test]
+    fn a_brake_goes_on_into_the_next_track_and_ends_at_its_aim() {
+        // Let go at 16× a second before a 60 s track's end: (16 + 1) / 2 × 1.5 s = 12.75 s of way, 11.75 s into the next.
+        let ask = Ask { accel: Some(brake(16.0, 1.0, 0.0)), ..ask(Dir::Forward, 59_000, 4.0) };
+        let winds = chain(&[(44_100, 2, Some(60_000)), (44_100, 2, Some(120_000)), (44_100, 2, Some(30_000))], ask).unwrap();
+        assert_eq!(winds.len(), 2, "no track past its aim");
+        let map = chain_map(&winds);
+        let (end, track, at) = *map.last().unwrap();
+        assert_eq!((end, track), (1_500, 1));
+        assert!((at as i64 - 11_750).abs() <= 1, "{at}");
+    }
+
     #[test]
     fn a_flight_goes_on_past_what_is_heard_in_pieces() {
         // Heard at most at 16 ×, flying on to 128 ×, 350 ms pieces: 8 × reaches 16 × after one doubling (1.5 s).
-        let flight = Accel { period_s: 1.5, max: 128.0, audio: Some((16.0, 350)) };
-        let heard = Accel { period_s: 1.5, max: 16.0, audio: None };
+        let flight = Accel { period_s: 1.5, max: 128.0, audio: Some((16.0, 350)), brake: None };
+        let heard = Accel { period_s: 1.5, max: 16.0, audio: None, brake: None };
         let w = Wind::new(44_100, 2, Some(1_200_000), Ask { accel: Some(flight), ..ask(Dir::Back, 1_000_000, 8.0) }).unwrap();
         let plain = Wind::new(44_100, 2, Some(1_200_000), Ask { accel: Some(heard), ..ask(Dir::Back, 1_000_000, 8.0) }).unwrap();
         // Sooner at the edge than at a steady 16 ×, as long as its flight's way says.
