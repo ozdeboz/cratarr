@@ -37,6 +37,9 @@ export const MOTION = { toStart: POINT, seekBack: POINT, holdBack: HOLD, toEnd: 
 export const POINT_SPEED = 8;
 export const HOLD_START = 4;
 export const HOLD_TOP = 16;
+/** A hold's true speed at most (×): past its heard top it goes on getting faster by cutting, heard in pieces at that
+ *  top (a5's flight_max; the owner, 2026-10-28: top speed is the heard speed, not the flight's). */
+export const FLIGHT_TOP = 128;
 /** How long each heard piece of a wind cut short is (ms; the owner, 2026-10-28: no setting, a good default). */
 export const PIECE_MS = 350;
 
