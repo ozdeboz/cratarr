@@ -84,6 +84,10 @@ pub struct Item {
     pub release_group: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request: Option<super::requests::Mark>,
+    /// The track it is about (0.9.14, `files:short-*`): its song id, for replacing it on its own (the album's single
+    /// track replacement).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track: Option<String>,
 }
 
 /// At most this many files an item names.
@@ -91,6 +95,37 @@ const FILES: usize = 30;
 
 /// At most this many items a finding lists.
 const ITEMS: usize = 100;
+
+/// A track's sound may end this much before its given length unnoticed (ms; a page's slack for MP3 headers that
+/// disagree a little).
+const SHORT_SLACK_MS: i64 = 1_500;
+
+/// Why a file's sound ends `heard` ms in, before its given length: what it says of itself (`check_short`).
+fn short_cause(path: &std::path::Path, heard: i64) -> &'static str {
+    let mp3 = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("mp3"));
+    if !mp3 {
+        return "files:sound-breaks";
+    }
+    let Some(info) = crate::stream::mp3_info(path) else { return "files:sound-breaks" };
+    let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    // Its info frame tells of more bytes than the file holds after its tag (a few KB of slack for a trailing tag).
+    if info.bytes.is_some_and(|b| b > size.saturating_sub(info.start) + 16 * 1024) {
+        return "files:cut-short";
+    }
+    match info.length_ms() {
+        // Its own length is what was heard: Cratarr read another.
+        Some(ms) if (ms as i64 - heard).abs() <= SHORT_SLACK_MS => "files:length-misread",
+        // It tells of more than there is: frames missing.
+        Some(_) => "files:cut-short",
+        None => "files:length-guessed",
+    }
+}
+
+/// A length as a clock: m:ss, or h:mm:ss.
+fn clock(ms: i64) -> String {
+    let s = ms.max(0) / 1000;
+    if s >= 3600 { format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60) } else { format!("{}:{:02}", s / 60, s % 60) }
+}
 
 #[derive(Debug, Serialize)]
 pub struct Report {
@@ -120,6 +155,10 @@ fn name_of(key: &str) -> &'static str {
         "files:damaged_tag" => "Damaged tags",
         "files:no_tags" => "Untagged files",
         "files:no_length" => "Files without a length",
+        "files:length-misread" => "Lengths read wrong",
+        "files:length-guessed" => "Lengths guessed",
+        "files:cut-short" => "Cut-off files",
+        "files:sound-breaks" => "Sound breaking off",
         "library:cover" => "Missing covers",
         "library:year" => "Missing years",
         "library:genre" => "Missing genres",
@@ -362,7 +401,61 @@ impl App {
     async fn check_files(&self) -> anyhow::Result<Vec<Finding>> {
         let c = self.library.catalogue();
         let status = tokio::task::spawn_blocking(move || c.status()).await??;
-        Ok(files(&status.issues))
+        let mut out = files(&status.issues);
+        out.extend(self.check_short().await?);
+        Ok(out)
+    }
+
+    /// Tracks whose sound ends before the length they give (0.9.14, the owner: different causes, different fixes, offer
+    /// all): a player asked past their sound's end fails. By cause, from what each file says of itself:
+    /// - **read wrong**: its MP3 info frame gives its true length; Cratarr read another (read again);
+    /// - **guessed**: an MP3 without an info frame, its length guessed from its first frame's bitrate (its sound whole);
+    /// - **cut off**: its info frame tells of more frames or bytes than the file holds (its sound missing: replace it,
+    ///   or play it to its end);
+    /// - **breaking off**: any other (a FLAC's damaged frames, decoding stopped): replace it, or play it to where it
+    ///   breaks off.
+    async fn check_short(&self) -> anyhow::Result<Vec<Finding>> {
+        let c = self.library.catalogue();
+        let served = crate::serve::instance();
+        let found = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(&'static str, Item, i64)>> {
+            let mut out = Vec::new();
+            for (folder, rel, path, given, heard) in c.shorter_than_heard(SHORT_SLACK_MS)? {
+                let cause = short_cause(&path, heard);
+                let song = served.as_ref().and_then(|s| s.library.song_at(folder, &rel).ok().flatten());
+                let (dir, file) = rel.rsplit_once('/').unwrap_or(("", rel.as_str()));
+                let item = Item {
+                    title: song.as_ref().map_or_else(|| file.to_string(), |s| s.2.clone()),
+                    line: Some(format!("Sounds {} of {} · {dir}", clock(heard), clock(given))),
+                    album: song.as_ref().map(|s| (crate::source::cratarr::KIND.id.to_string(), s.1.clone())),
+                    track: song.map(|s| s.0),
+                    files: vec![file.to_string()],
+                    ..Item::default()
+                };
+                out.push((cause, item, given - heard));
+            }
+            Ok(out)
+        })
+        .await??;
+        let mut out = Vec::new();
+        for (key, level, one, many, detail) in [
+            ("files:length-misread", Level::Warning, "track's length is read wrong", "tracks' lengths are read wrong", "Their files give their true length; Cratarr read another. Read them again."),
+            ("files:length-guessed", Level::Warning, "track's length is guessed", "tracks' lengths are guessed", "Their files do not give their length, so it was guessed; their sound is whole. Write their true length into them."),
+            ("files:cut-short", Level::Critical, "file is cut off", "files are cut off", "Their files hold less than they say: the end of their sound is missing. Replace them, or play them to where they end."),
+            ("files:sound-breaks", Level::Critical, "track's sound breaks off", "tracks' sound breaks off", "Their sound cannot be decoded to its end (damaged). Replace them, or play them to where they break off."),
+        ] {
+            let mut items: Vec<(Item, i64)> = found.iter().filter(|(c, ..)| *c == key).map(|(_, i, short)| (i.clone(), *short)).collect();
+            if items.is_empty() {
+                continue;
+            }
+            items.sort_by(|a, b| b.1.cmp(&a.1));
+            let count = items.len() as u64;
+            let mut f = finding("files", key, level, count, n(count, one, many));
+            f.detail = Some(detail.to_string());
+            f.open = Some(Open { page: "health", switch: None, thing: None });
+            f.items = items.into_iter().take(ITEMS).map(|(i, _)| i).collect();
+            out.push(f);
+        }
+        Ok(out)
     }
 
     /// Music's albums lacking what the library requires (the owner, 2026-10-24): Incoming's are marked there instead.

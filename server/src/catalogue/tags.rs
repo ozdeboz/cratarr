@@ -108,6 +108,19 @@ fn by_raw_key(raw: &str) -> Option<&'static str> {
 /// mode tells a damaged field (seen: a TIPL frame with a broken UTF-16 byte-order mark, which the normal mode gives
 /// up the whole file for) from a file that cannot be read at all.
 pub fn read(path: &Path) -> Result<(FileTags, Option<(Issue, String)>)> {
+    read_tags(path).map(|(mut t, issue)| {
+        // An MP3's length from its own info frame where it has one (0.9.14): lofty missed some, reading them as a
+        // constant bitrate of their info frame's (32 kb/s: ten times their length).
+        if t.format.as_deref() == Some("MP3")
+            && let Some(ms) = crate::stream::mp3_info(path).and_then(|i| i.length_ms())
+        {
+            t.duration_ms = Some(ms);
+        }
+        (t, issue)
+    })
+}
+
+fn read_tags(path: &Path) -> Result<(FileTags, Option<(Issue, String)>)> {
     match read_with(path, ParsingMode::BestAttempt) {
         Ok(t) => {
             let issue = if t.items.is_empty() {

@@ -262,6 +262,55 @@ fn mp3_frame(h: [u8; 4]) -> Option<(u64, u64, u64)> {
     Some((samples / 8 * 1000 * kbps / rate + pad, samples, rate))
 }
 
+/// What an MP3's first frame says of the whole (its Xing/Info frame, where it has one): its frame count and its bytes,
+/// each where given; the sample rate and samples a frame; and where its sound begins (after its ID3v2 tag).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mp3Info {
+    pub start: u64,
+    pub rate: u64,
+    pub samples: u64,
+    /// None: no info frame (a constant bitrate's, or a variable one whose length can only be guessed).
+    pub frames: Option<u64>,
+    pub bytes: Option<u64>,
+    pub has_info: bool,
+}
+
+impl Mp3Info {
+    /// The length its info frame gives (ms).
+    pub fn length_ms(&self) -> Option<u64> {
+        self.frames.map(|f| f * self.samples * 1000 / self.rate)
+    }
+}
+
+/// Reads an MP3's first frame (0.9.14): its info frame found anywhere in it, as encoders place it (lofty looks at one
+/// place only, and read some files as ten times their length: Night Lights, 2026-10-28).
+pub fn mp3_info(path: &Path) -> Option<Mp3Info> {
+    use std::io::{Read, Seek, SeekFrom};
+    let start = crate::analysis::after_id3(path);
+    let mut f = File::open(path).ok()?;
+    f.seek(SeekFrom::Start(start)).ok()?;
+    let mut h = [0u8; 4];
+    f.read_exact(&mut h).ok()?;
+    let (len, samples, rate) = mp3_frame(h)?;
+    let mut body = vec![0u8; usize::try_from(len.checked_sub(4)?).ok()?];
+    f.read_exact(&mut body).ok()?;
+    let at = body.windows(4).position(|w| w == b"Xing" || w == b"Info");
+    let (mut frames, mut bytes) = (None, None);
+    if let Some(k) = at.filter(|k| k + 8 <= body.len()) {
+        let word = |i: usize| body.get(i..i + 4).map(|b| u64::from(u32::from_be_bytes([b[0], b[1], b[2], b[3]])));
+        let flags = word(k + 4)?;
+        let mut p = k + 8;
+        if flags & 1 != 0 {
+            frames = word(p).filter(|n| *n > 0);
+            p += 4;
+        }
+        if flags & 2 != 0 {
+            bytes = word(p).filter(|n| *n > 0);
+        }
+    }
+    Some(Mp3Info { start, rate, samples, frames, bytes, has_info: at.is_some() })
+}
+
 /// Where an MP3's stream starts to hold `from_ms` (0.9.14): the byte its frame begins at, a frame earlier for the bit
 /// reservoir the first one may draw on, and that frame's time on the track's gapless timeline (ms; its LAME header's
 /// encoder delay taken off). Walks the frame headers from the first, after its ID3v2 tag (`skip` bytes): a few

@@ -1674,6 +1674,28 @@ impl Catalogue {
     }
 
     /// A file's length as read from it (milliseconds), when known.
+    /// Files whose sound, as the analysis decoded it whole, ends more than `slack_ms` before the length they give
+    /// (0.9.14, Health): worst first, with their folder, path, given length and heard length (ms).
+    pub fn shorter_than_heard(&self, slack_ms: i64) -> Result<Vec<(i64, String, PathBuf, i64, i64)>> {
+        let folders = self.folders();
+        let db = self.db();
+        let mut st = db.prepare(&format!(
+            "SELECT f.folder, f.rel, f.duration_ms, CAST(a.duration_secs * 1000 AS INTEGER) AS heard FROM analysis a
+             JOIN files f ON f.folder = a.folder AND f.rel = a.rel AND f.size = a.size
+             WHERE {PRESENT_F} AND f.duration_ms > 0 AND a.duration_secs > 0 AND f.duration_ms - heard > ?1
+             ORDER BY f.duration_ms - heard DESC"
+        ))?;
+        let rows = st.query_map([slack_ms], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (folder, rel, given, heard) = row?;
+            if let Some(dir) = usize::try_from(folder).ok().and_then(|i| folders.get(i)) {
+                out.push((folder, rel.clone(), dir.join(&rel), given, heard));
+            }
+        }
+        Ok(out)
+    }
+
     pub fn duration_of(&self, folder: i64, rel: &str) -> Option<u64> {
         self.db()
             .query_row(&format!("SELECT duration_ms FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"), params![folder, rel], |r| {

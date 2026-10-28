@@ -702,6 +702,13 @@ impl Library {
     /// An album's place: its catalogue folder and folder in it, its MusicBrainz release, artist and name (0.9.5: its
     /// cover changed by hand).
     #[allow(clippy::type_complexity)]
+    /// The song a file is (0.9.14, Health's items): its id, its album's, and its title.
+    pub fn song_at(&self, folder: i64, rel: &str) -> Result<Option<(String, String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT id, album_id, title FROM songs WHERE folder = ?1 AND rel = ?2")?;
+        Ok(st.query_map(rusqlite::params![folder, rel], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.next().transpose()?)
+    }
+
     pub fn album_place(&self, id: &str) -> Result<Option<(i64, String, Option<String>, String, String)>> {
         let db = self.db();
         let mut st = db.prepare_cached("SELECT folder, dir, mbid, artist, name FROM albums WHERE id = ?1")?;
