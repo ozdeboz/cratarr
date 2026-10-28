@@ -8,7 +8,7 @@ import { isLocal, localNowPlaying, localState, tookLocal } from './output.svelte
 import { setFavorite as setRowFavorite } from './favourites.svelte';
 import { on } from './events.svelte';
 import { toast } from './toast.svelte';
-import { ramping, rampPressed } from './ramping.svelte';
+import { ramping, rampPressed, rampTurned } from './ramping.svelte';
 import { appInfo, inApp } from './app.svelte';
 import { prefs } from './prefs.svelte';
 import { windUpMs } from './localPlayer.svelte';
@@ -216,9 +216,9 @@ export const waveStill = (progress: { paused?: boolean; starting?: boolean } | n
 /** A Start and stop ramp under way on this device's player. The page's own turns round at a press (0075's first step,
  *  the owner 2026-10-27); the app's play button stays inert until its ramp ends, until the app turns too (0.9.13). */
 export const rampBusy = () => isLocal() && ramping.dir !== null;
-/** The play button inert: only through the app's own Start and stop effect (the page's turns round at a press; the
- *  tape's own stops never show). */
-export const rampInert = () => rampBusy() && inApp && ramping.effect;
+/** The play button inert: only through the app's own Start and stop effect, in an app that does not turn it round (the
+ *  page's turns round at a press, an app's from 0.9.15 too; the tape's own stops never show). */
+export const rampInert = () => rampBusy() && inApp && ramping.effect && !appInfo.turnsRound;
 /** Paused as the play button shows it: from the press on, the way the ramp goes. */
 // A Start and stop effect only (the owner, 2026-10-27): the tape's own stops (a turn of the knob, a hold's) never show on
 // the play button.
@@ -227,7 +227,9 @@ export const shownPaused = (): boolean => (rampBusy() && ramping.effect ? rampin
 export function playPause() {
   if (rampInert()) return;
   const ss = inApp ? appInfo.startStop : prefs.startStop;
-  if (isLocal() && ss.mode !== 'off' && !rampBusy()) {
+  // The app's ramp turned round at the press, from the fill shown (the page's own turns itself: lib/localPlayer).
+  if (isLocal() && ss.mode !== 'off' && rampBusy() && inApp && ramping.effect) rampTurned(ss.stopMs, ss.ms);
+  else if (isLocal() && ss.mode !== 'off' && !rampBusy()) {
     if (!paused()) rampPressed('out', ss.stopMs);
     else {
       const ms = windUpMs(ss.ms, ss.mode, position(), inApp ? 0.25 : undefined);

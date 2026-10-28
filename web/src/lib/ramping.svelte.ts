@@ -52,6 +52,27 @@ export function rampPressed(dir: 'out' | 'in', ms: number, full = ms) {
   }, ms + 1500);
 }
 
+/** The play button's fill now (0 empty … 1 full) as a ramp under way draws it (lib/NowPlaying: evenly over its time);
+ *  null with none under way. */
+export function shownFill(now = performance.now()): number | null {
+  if (!ramping.dir) return null;
+  const u = Math.min(1, Math.max(0, (now - ramping.at) / Math.max(1, ramping.ms)));
+  if (ramping.dir === 'in') {
+    const pre = 1 - ramping.ms / Math.max(1, ramping.full);
+    return pre + (1 - pre) * u;
+  }
+  return Math.min(1, ramping.ms / Math.max(1, ramping.full)) * (1 - u);
+}
+/** A press during the app's ramp turns it round from the fill shown (the owner, 2026-10-28): a start's into a stop from
+ *  as full as it got, over that share of the stop (`stopMs`); a stop's into a start over the share left (`startMs`).
+ *  The app's own word for the turned ramp, a moment later, refines its length, not its start (rampBegins). */
+export function rampTurned(stopMs: number, startMs: number) {
+  const f = shownFill();
+  if (f === null) return;
+  if (ramping.dir === 'in') rampPressed('out', stopMs * f, stopMs);
+  else rampPressed('in', startMs * (1 - f), startMs);
+}
+
 /** `ended`: when the last one ended (lib/localPlayer counts the app's position on from there, not through it). */
 export function rampEnds() {
   if (ramping.dir !== null) ramping.ended = performance.now();
