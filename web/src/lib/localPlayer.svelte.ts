@@ -25,7 +25,7 @@ import { asksSignIn, toSignIn } from './reach.svelte';
 import { consumed, rate, tapMs } from './windShape';
 import { BANDCAMP } from './bandcampPreview';
 import { DEVICE } from './deviceMusic.svelte';
-import { holdWind, pointWind, type HoldWind, type StartStop, type Wind } from './startStop';
+import { holdWind, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
 import { isPhone } from './device';
 
 export type LocalTrack = {
@@ -1765,10 +1765,10 @@ export function next() {
     tape.nextWhenFilled = true;
     return fill();
   }
-  if (!handed() && prefs.startStop.rewind && audio && !audio.paused && tape.committed === null) {
+  if (!handed() && windsOn('toEnd') && audio && !audio.paused && tape.committed === null) {
     const end = lengthOf(local.index);
     const at = where()?.offset ?? 0;
-    if (end && end - at > 2 && (flyTo(end) || startWind(end, 1))) return;
+    if (end && end - at > 2 && (flyTo(end, 'toEnd') || startWind(end, 1, null, false, false, 'toEnd'))) return;
   }
   void skipRamped(() => jump(local.index + 1));
 }
@@ -1795,7 +1795,8 @@ export function previous() {
   if (local.repeat === 'all' && local.index === 0 && local.position <= RESTART_AFTER && local.queue.length > 1) return void skipRamped(() => jump(local.queue.length - 1));
   if (local.position > RESTART_AFTER) {
     // Its start again: a tape's rewind where the device asks it.
-    if (!(prefs.startStop.rewind && startWind(0, -1))) seek(0);
+    // Off: there plainly (never a seek's wind instead).
+    if (!(windsOn('toStart') && startWind(0, -1, null, false, false, 'toStart'))) seek(0, false);
   } else void skipRamped(() => jump(Math.max(0, local.index - 1)));
 }
 
@@ -1805,7 +1806,9 @@ export const sought = $state({ n: 0 });
 /** `wind`: wound there whatever this device's own setting (another device asked it to, over Play On). */
 export function seek(secs: number, wind?: boolean) {
   sought.n++;
-  const winds = wind ?? (prefs.startStop.rewind && prefs.startStop.seekWinds);
+  // A seek back or forward, each its own motion (the owner, 2026-10-28).
+  const motion: PointMotion = secs < local.position ? 'seekBack' : 'seekFwd';
+  const winds = wind ?? windsOn(motion);
   if (handed()) {
     // Winding there where this device winds seeks (the owner, 2026-10-27: over Play On too): the player is asked to.
     const wound = winds && !local.paused && Math.abs(secs - local.position) > 2;
@@ -1845,7 +1848,8 @@ export function seek(secs: number, wind?: boolean) {
   if (tape.committed !== null) return void overrideRamp(secs);
   // Seeking winds the tape there where the device asks it (the owner, 2026-10-27): playing, more than a moment away.
   const here = where()?.offset ?? secs;
-  if (winds && !audio.paused && Math.abs(secs - here) > 2 && ((secs > here && flyTo(secs)) || startWind(secs, 1))) return;
+  const way: PointMotion = secs < here ? 'seekBack' : 'seekFwd';
+  if (winds && !audio.paused && Math.abs(secs - here) > 2 && ((secs > here && flyTo(secs, way)) || startWind(secs, 1, null, false, false, way))) return;
   jumpTo(secs);
 }
 function jumpTo(secs: number) {
@@ -2534,7 +2538,9 @@ function placeAt(w: Winding, s: number): { index: number; pos: number } {
 }
 /** The envelope a wind that way goes by: rewind's, or fast-forward's own (the owner, 2026-10-27), seeking's and the
  *  edges' choices the two's alike. */
-const windFor = (dir: 1 | -1): Wind => pointWind(prefs.startStop, dir);
+const windFor = (m: PointMotion): Wind => pointWind(prefs.startStop, m);
+/** Whether a motion winds here (winding on, the motion not off: the owner, 2026-10-28). */
+const windsOn = (m: Motion) => windsBy(prefs.startStop, m);
 /** A hold that way: its own starting and top speed, the tape's spin-up, brake, volume and acceleration. */
 const holdFor = (dir: 1 | -1): HoldWind => holdWind(prefs.startStop, dir);
 /** A wind's speed now (× the stream's): its envelope. */
@@ -2698,13 +2704,13 @@ function armWind(dir: 1 | -1, lead = 0, speed = holdFor(dir).speed): Armed | nul
   return { clip: windClip(windUrl(t, from, null, dir, 0, through, wind, { accelS: hold.doublingS, top: hold.top })), from, through, index: here.seg.index, v0: speed };
 }
 /** A forward wind to `to` while playing, asked from `lead` s ahead (its stream's speed floored at 1×: fly=1, a5). */
-function armPoint(to: number, lead: number): Armed | null {
+function armPoint(to: number, lead: number, motion: PointMotion): Armed | null {
   const here = where();
   const t = here && local.queue[here.seg.index];
   if (!here || !t || !windable(t)) return null;
   const from = here.offset + lead;
   if (to - from < 2) return null;
-  const wind = windFor(1);
+  const wind = windFor(motion);
   const D = Math.round(tapMs(wind, to - from));
   const url = `${windUrl(t, from, to, 1, D, [], wind, null)}&fly=1`;
   return { clip: windClip(url), from, through: [], index: here.seg.index, v0: wind.speed, D, url };
@@ -2713,10 +2719,10 @@ function armPoint(to: number, lead: number): Armed | null {
  *  2026-10-27: it went down to 0 and up again, where it can stay at 1×). Its stream asked from a moment ahead, taken over
  *  as the track reaches that moment at its own speed, sped up and slowed back to it, and the track handed back moving at
  *  the place. False where it cannot (the caller winds the stopping way). */
-function flyTo(to: number, tries = 0): boolean {
+function flyTo(to: number, motion: PointMotion, tries = 0): boolean {
   if (!audio || audio.paused || tape.committed !== null || tape.rewinding) return false;
   if (tape.pointArmed) disarm(tape.pointArmed);
-  const armed = armPoint(to, FLY_LEAD * (tries + 1));
+  const armed = armPoint(to, FLY_LEAD * (tries + 1), motion);
   if (!armed) return false;
   tape.pointArmed = armed;
   windAsked(true);
@@ -2737,17 +2743,17 @@ function flyTo(to: number, tries = 0): boolean {
         // Its floor from the stream as made (a5's way, the app's too): f = (length − area) / (D − area). A server that
         // made it from still (before fly=1) gives about none: then the stopping way.
         const D = armed.D ?? 0;
-        const area = consumed(windFor(1), D, D);
+        const area = consumed(windFor(motion), D, D);
         const len = armed.clip.duration * 1000;
         const f = Number.isFinite(len) && D > area ? (len - area) / (D - area) : 0;
         if (f < 0.05) {
           disarm(armed);
           windAsked(false);
-          if (!startWind(to, 1)) jumpTo(to);
+          if (!startWind(to, 1, null, false, false, motion)) jumpTo(to);
           return;
         }
         armed.floor = Math.min(1, f);
-        if (!startWind(to, 1, armed, false, true)) {
+        if (!startWind(to, 1, armed, false, true, motion)) {
           disarm(armed);
           windAsked(false);
           jumpTo(to);
@@ -2756,9 +2762,9 @@ function flyTo(to: number, tries = 0): boolean {
       }
       if (w.offset > armed.from + 0.25) {
         giveUp();
-        if (tries < 2 && flyTo(to, tries + 1)) return;
+        if (tries < 2 && flyTo(to, motion, tries + 1)) return;
         windAsked(false);
-        if (!startWind(to, 1)) jumpTo(to);
+        if (!startWind(to, 1, null, false, false, motion)) jumpTo(to);
         return;
       }
     }
@@ -2776,7 +2782,7 @@ function disarm(a: Armed | null) {
 
 /** Starts a wind of the track playing, from where it is: to `to` condensed (a tap, a seek), or held (`to` null) in
  *  `dir`. False where it cannot (nothing there, a ramp or a wind under way, nowhere to go). */
-function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, reverse = false, fly = false): boolean {
+function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, reverse = false, fly = false, motion: PointMotion | null = null): boolean {
   if (!audio || tape.committed !== null || tape.rewinding) return false;
   const here = where();
   const t = here && local.queue[here.seg.index];
@@ -2788,7 +2794,8 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
   // Played backwards (the knob): at 1×, as loud as the music; the wind's spin-up and brake.
   // A hold's own speeds; a wind to a point its own; the knob's backwards at 1×, as loud as the music.
   const hold = holdFor(dir);
-  const wind: Wind = reverse ? { ...holdFor(-1), speed: 1, gainDb: 0 } : to === null ? hold : windFor(dir);
+  // A wind to a point: its own motion's (a seek's where none is said).
+  const wind: Wind = reverse ? { ...holdFor(-1), speed: 1, gainDb: 0 } : to === null ? hold : windFor(motion ?? (dir < 0 ? 'seekBack' : 'seekFwd'));
   const D = to === null ? 0 : (armed?.D ?? Math.round(tapMs(wind, to - from)));
   // A hold's stream fetched at its press (`armed`), from where the pause rests: loaded while it wound down.
   // An armed one only where it begins where the tape stands (flown: met in flight, by its own watch).
@@ -3023,6 +3030,8 @@ export async function windHold(dir: 'back' | 'forward') {
     return hand('wind', { dir, phase: 'start' });
   }
   if (!audio || local.index < 0 || tape.holding) return;
+  // That hold off (the owner, 2026-10-28): nothing while held, the press stays a tap.
+  if (!windsOn(dir === 'back' ? 'holdBack' : 'holdFwd')) return;
   // A track that cannot be wound (Bandcamp's, the device's): what can be kept.
   if (!windable(local.queue[local.index])) return startPlainHold(dir === 'back' ? -1 : 1);
   const h: { dir: 1 | -1; released: boolean } = { dir: dir === 'back' ? -1 : 1, released: false };
@@ -3130,6 +3139,7 @@ async function settle() {
 const HOLD_S = 0.35;
 export function windArm(dir: 'back' | 'forward') {
   if (handed() || !audio || local.index < 0 || tape.rewinding || tape.committed !== null) return;
+  if (!windsOn(dir === 'back' ? 'holdBack' : 'holdFwd')) return;
   windDisarm();
   const d: 1 | -1 = dir === 'back' ? -1 : 1;
   const playingNow = !audio.paused;

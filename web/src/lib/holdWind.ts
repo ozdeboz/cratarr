@@ -5,7 +5,19 @@
 // goes no further than the button (the player's swipes never see it), and any other finger's press or click is
 // swallowed wherever it lands.
 
+import { appInfo, inApp } from './app.svelte';
+import { isLocal } from './output.svelte';
+import { prefs } from './prefs.svelte';
+import { windsBy } from './startStop';
+
 const HOLD_MS = 350;
+
+/** Whether holding Previous (`back`) or Next (`forward`) winds where the music plays: this device's that hold not off
+ *  (the owner, 2026-10-28: each motion on its own), another of Cratarr's players deciding for itself (`player`). */
+export function holdsHere(dir: 'back' | 'forward', player: unknown): boolean {
+  if (!isLocal()) return !!player;
+  return windsBy(inApp ? appInfo.startStop : prefs.startStop, dir === 'back' ? 'holdBack' : 'holdFwd');
+}
 
 /** `onpress`: the touch began (a hold's stream asked already, lib/localPlayer windArm); `oncancel`: it was a tap. */
 export type Hold = { onhold: () => void; onrelease: () => void; onpress?: () => void; oncancel?: () => void } | null;

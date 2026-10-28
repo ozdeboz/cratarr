@@ -182,11 +182,7 @@ if (port) {
         appInfo.startStop = startStopOf({
           ...told,
           tape: told.tape ?? was.tape,
-          back: told.back ?? was.back,
-          fwd: told.fwd ?? was.fwd,
-          holdBack: told.holdBack ?? was.holdBack,
-          holdFwd: told.holdFwd ?? was.holdFwd,
-          seekWinds: told.seekWinds ?? was.seekWinds,
+          motions: told.motions ?? was.motions,
           edges: told.edges ?? was.edges,
         });
       }

@@ -31,7 +31,7 @@
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { ramping } from './ramping.svelte';
   import { appInfo, inApp } from './app.svelte';
-  import { holdWind, type Hold } from './holdWind';
+  import { holdWind, holdsHere, type Hold } from './holdWind';
   import { local, rewindNow, windUpMs } from './localPlayer.svelte';
   import TapeDeck from './TapeDeck.svelte';
   import QueueMenu from './QueueMenu.svelte';
@@ -322,11 +322,10 @@
     };
   });
 
-  /** Holding Previous or Next winds the tape (decision 0074), where winding is on here; another of Cratarr's players
-   *  decides for itself. */
-  const winds = $derived(isLocal() ? (inApp ? appInfo.startStop : prefs.startStop).rewind : !!np?.player);
+  /** Holding Previous or Next winds the tape (decision 0074), where that hold is on here (the owner, 2026-10-28: each
+   *  motion on its own); another of Cratarr's players decides for itself. */
   const windHold = (dir: 'back' | 'forward'): Hold =>
-    winds
+    holdsHere(dir, np?.player)
       ? { onhold: () => wind(dir, 'start'), onrelease: () => wind(dir, 'stop'), onpress: () => windTouch(dir, true), oncancel: () => windTouch(dir, false) }
       : null;
 

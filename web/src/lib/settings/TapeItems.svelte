@@ -1,16 +1,16 @@
 <script lang="ts">
-  // The tape (the owner, 2026-10-27: one page, in order, not "Start and stop" only): Start and stop's effect; the tape's
-  // own mechanics, every motion's alike; its four motions, two settings each (back and forward to a point, holding back
-  // and forward); the tape deck. The same groups in This device (lib/settings/DevicePart, its Tape row) and in the sheet
-  // a long press on the play button opens (lib/StartStopSheet). The browser's own (prefs), or the app's player's (told
-  // to the app, as Level the volume).
+  // The tape (the owner, 2026-10-27: one page, in order, not "Start and stop" only): Start and stop's effect; winding's
+  // six motions, each on its own with one setting, its lowest Off (the owner, 2026-10-28: back to start, seek back, hold
+  // back, and the same forward); the tape's own mechanics, every motion's alike; the player's animation. The same groups
+  // in This device (lib/settings/DevicePart, its Tape row) and in the sheet a long press on the play button opens
+  // (lib/StartStopSheet). The browser's own (prefs), or the app's player's (told to the app, as Level the volume).
   import { appInfo, inApp, setDevice } from '../app.svelte';
   import MenuEntry from '../MenuEntry.svelte';
   import MenuSheet from '../MenuSheet.svelte';
   import { panSafe } from '../panSafe';
-  import { HOLD, POINT, POINT_FWD, prefs, RAMP_MS, startsOf, TAPE, type StartStop } from '../prefs.svelte';
+  import { MOTION, prefs, RAMP_MS, startsOf, TAPE, type Motion, type StartStop } from '../prefs.svelte';
   import SettingRow from '../SettingRow.svelte';
-  import { holdWind, pointWind } from '../startStop';
+  import { holdWind, pointWind, type PointMotion } from '../startStop';
   import Group from './Group.svelte';
   import HoldGraph from './HoldGraph.svelte';
   import Item from './Item.svelte';
@@ -41,10 +41,18 @@
   };
   let choosing = $state<keyof typeof CHOICES | null>(null);
   const chosen = (k: keyof typeof CHOICES) => CHOICES[k].options.find((o) => o.value === CHOICES[k].value())?.label ?? '';
-  /** A motion's row, short (its name never wraps): seconds a minute and its limit, or a hold's speeds. */
-  const num = (v: number) => v.toFixed(2).replace(/\.?0+$/, '');
-  const pointShort = (p: { ratio: number; speed: number }) => `${num(p.ratio)} s · ${num(p.speed)}×`;
-  const holdShort = (h: { start: number; top: number }) => `${num(h.start)}→${num(h.top)}×`;
+
+  /** The six motions, in order: back, then forward; each a wind to a point or a hold. */
+  const MOTIONS: { m: Motion; name: string; line: string }[] = [
+    { m: 'toStart', name: 'Back to start', line: 'Previous' },
+    { m: 'seekBack', name: 'Seek back', line: 'The waveform, the clock' },
+    { m: 'holdBack', name: 'Holding back', line: 'Previous, held' },
+    { m: 'toEnd', name: 'Forward to end', line: 'Next' },
+    { m: 'seekFwd', name: 'Seek forward', line: 'The waveform, the clock' },
+    { m: 'holdFwd', name: 'Holding forward', line: 'Next, held' },
+  ];
+  const isHold = (m: Motion) => m === 'holdBack' || m === 'holdFwd';
+  const backwards = (m: Motion) => m === 'toStart' || m === 'seekBack' || m === 'holdBack';
 
   const ss = $derived(inApp ? appInfo.startStop : prefs.startStop);
   function setSS(change: Partial<StartStop>) {
@@ -55,11 +63,11 @@
     } else prefs.startStop = next;
   }
 
-  const sec = (ms: number) => `${(ms / 1000).toFixed(2).replace(/\.?0+$/, '')} s`;
-  const times = (v: number) => `${v}×`;
-  const perMin = (v: number) => `${v.toFixed(2).replace(/\.?0+$/, '')} s a minute`;
+  const num = (v: number) => v.toFixed(2).replace(/\.?0+$/, '');
+  const sec = (ms: number) => `${num(ms / 1000)} s`;
   const db = (v: number) => (v === 0 ? 'as played' : `${v} dB`);
-  const doubling = (v: number) => `×2 every ${v.toFixed(2).replace(/\.?0+$/, '')} s`;
+  /** A motion's value: a wind to a point's seconds a minute wound, a hold's seconds to its top speed; its lowest Off. */
+  const motionText = (m: Motion, long: boolean) => (v: number) => (v === 0 ? 'Off' : isHold(m) ? `${num(v)} s` : long ? `${num(v)} s a minute` : `${num(v)} s/min`);
 
   /** A setting of a group (its key in it), with its range and how it reads. */
   type Tuning = { key: string; label: string; range: { min: number; max: number; step: number }; text: (v: number) => string };
@@ -67,42 +75,35 @@
     { key: 'attackMs', label: 'Spin-up', range: TAPE.attackMs, text: sec },
     { key: 'brakeMs', label: 'Brake', range: TAPE.brakeMs, text: sec },
     { key: 'gainDb', label: 'Wind volume', range: TAPE.gainDb, text: db },
-    { key: 'doublingS', label: 'Acceleration', range: TAPE.doublingS, text: doubling },
     { key: 'pieceMs', label: 'Piece length', range: TAPE.pieceMs, text: sec },
   ];
-  const pointTunings = (fwd: boolean): Tuning[] => [
-    { key: 'ratio', label: 'Duration', range: fwd ? POINT_FWD.ratio : POINT.ratio, text: perMin },
-    { key: 'speed', label: 'Speed limit', range: POINT.speed, text: times },
-  ];
-  const HOLD_TUNINGS: Tuning[] = [
-    { key: 'start', label: 'Starting speed', range: HOLD.start, text: times },
-    { key: 'top', label: 'Top speed', range: HOLD.top, text: times },
-  ];
-  /** The sheets, each a group of the settings: the wind-up, the tape's mechanics, a motion. */
-  type Part = 'tape' | 'back' | 'fwd' | 'holdBack' | 'holdFwd';
-  const PARTS: Record<Part, { title: string; tunings: Tuning[]; starts: Record<string, number> }> = {
-    tape: { title: 'The tape', tunings: TAPE_TUNINGS, starts: startsOf(TAPE) },
-    back: { title: 'Back to a point', tunings: pointTunings(false), starts: startsOf(POINT) },
-    fwd: { title: 'Forward to a point', tunings: pointTunings(true), starts: startsOf(POINT_FWD) },
-    holdBack: { title: 'Holding back', tunings: HOLD_TUNINGS, starts: startsOf(HOLD) },
-    holdFwd: { title: 'Holding forward', tunings: HOLD_TUNINGS, starts: startsOf(HOLD) },
-  };
+  /** The sheets: the tape's mechanics, or one motion (its one setting). */
+  type Part = 'tape' | Motion;
+  const titleOf = (p: Part) => (p === 'tape' ? 'The tape' : MOTIONS.find((x) => x.m === p)!.name);
+  const tuningsOf = (p: Part): Tuning[] =>
+    p === 'tape' ? TAPE_TUNINGS : [{ key: p, label: isHold(p) ? 'Time to top speed' : 'Duration', range: MOTION[p], text: motionText(p, true) }];
+  const startsOfPart = (p: Part): Record<string, number> => (p === 'tape' ? startsOf(TAPE) : { [p]: MOTION[p].start });
+  /** A part's settings in `s`, and `s` with some changed. */
+  const groupOf = (s: StartStop, p: Part): Record<string, number> => (p === 'tape' ? s.tape : s.motions);
+  const changed = (s: StartStop, p: Part, change: Record<string, number>): StartStop =>
+    p === 'tape' ? { ...s, tape: { ...s.tape, ...change } } : { ...s, motions: { ...s.motions, ...change } };
+
   let open = $state<Part | 'start' | 'stop' | null>(null);
   /** A slider being dragged: already in its sheet's graph. */
   let drag = $state<{ key: string; v: number } | null>(null);
   /** The settings as the open sheet shows them, a drag included. */
   const shown = $derived.by((): StartStop => {
     if (!drag || !open || open === 'start' || open === 'stop') return ss;
-    return { ...ss, [open]: { ...ss[open], [drag.key]: drag.v } };
+    return changed(ss, open, { [drag.key]: drag.v });
   });
-  const valueOf = (part: Part, key: string) => (shown[part] as unknown as Record<string, number>)[key];
-  const setPart = (part: Part, change: Record<string, number>) => setSS({ [part]: { ...ss[part], ...change } } as Partial<StartStop>);
+  const valueOf = (part: Part, key: string) => groupOf(shown, part)[key];
+  const setPart = (part: Part, change: Record<string, number>) => setSS(changed(ss, part, change));
   /** A sheet's settings back to their defaults, as every reset is (its header's reset, dimmed at them; Undo in the toast). */
-  const atStarts = (part: Part) => Object.entries(PARTS[part].starts).every(([k, v]) => valueOf(part, k) === v);
+  const atStarts = (part: Part) => Object.entries(startsOfPart(part)).every(([k, v]) => valueOf(part, k) === v);
   function resetPart(part: Part) {
-    const was = { ...(ss[part] as unknown as Record<string, number>) };
-    resetWithUndo(PARTS[part].title, () => {
-      setPart(part, PARTS[part].starts);
+    const was = Object.fromEntries(Object.keys(startsOfPart(part)).map((k) => [k, groupOf(ss, part)[k]]));
+    resetWithUndo(titleOf(part), () => {
+      setPart(part, startsOfPart(part));
       return () => setPart(part, was);
     });
   }
@@ -141,19 +142,11 @@
   <Item
     name="Tape winding"
     experimental
-    more="Previous and Next wind the tape: a tap back to the track's start or on to its end, a hold for as long as you hold, ever faster; then it plays on. Each motion has its own speed."
+    more="Previous, Next and a seek wind the tape: back to the track's start or on to its end, to the place sought, or for as long as you hold, ever faster; then it plays on. Each motion has its own setting; at its lowest it is off, and goes the plain way."
     toggle={{ checked: ss.rewind, onchange: (on) => setSS({ rewind: on }) }}
   />
   {#if ss.rewind}
-    <Item name="Back to a point" line="Previous, a seek back" value={pointShort(ss.back)} onclick={() => (open = 'back')} />
-    <Item name="Forward to a point" line="Next, a seek forward" value={pointShort(ss.fwd)} onclick={() => (open = 'fwd')} />
-    <Item name="Holding back" value={holdShort(ss.holdBack)} onclick={() => (open = 'holdBack')} />
-    <Item name="Holding forward" value={holdShort(ss.holdFwd)} onclick={() => (open = 'holdFwd')} />
-    <Item
-      name="Seeking winds the tape"
-      more="A seek, on the waveform or the clock, winds there instead of jumping, taking as long as a wind to a point would."
-      toggle={{ checked: ss.seekWinds, onchange: (on) => setSS({ seekWinds: on }) }}
-    />
+    {#each MOTIONS as x (x.m)}<Item name={x.name} line={x.line} value={motionText(x.m, false)(ss.motions[x.m])} onclick={() => (open = x.m)} />{/each}
     <Item name="Track boundary" value={chosen('edges')} onclick={() => (choosing = 'edges')} />
   {/if}
 </Group>
@@ -161,7 +154,7 @@
 <!-- The tape's mechanics, every motion's alike (and the deck's direction knob's), only while it winds (the owner,
      2026-10-27: they do nothing otherwise). -->
 {#if ss.rewind}
-  <Group title="The tape" more="How the tape moves, in every motion alike: how fast it gets going and how it brakes, how loud it is while it winds, how quickly a hold gets faster, and the pieces a long wind to a point is cut into.">
+  <Group title="The tape" more="How the tape moves, in every motion alike: how fast it gets going and how it brakes, how loud it is while it winds, and the pieces a long wind to a point is cut into.">
     {#each TAPE_TUNINGS as t (t.key)}<Item name={t.label} value={t.text(ss.tape[t.key as keyof typeof ss.tape])} onclick={() => (open = 'tape')} />{/each}
   </Group>
 {/if}
@@ -199,17 +192,19 @@
   </MenuSheet>
 {:else if open}
   {@const part = open}
-  {@const p = PARTS[part]}
+  {@const title = titleOf(part)}
   <MenuSheet
-    label={p.title}
-    title={p.title}
-    end={{ icon: 'reset', label: `Reset ${p.title.toLowerCase()}`, disabled: atStarts(part), onclick: () => resetPart(part) }}
+    label={title}
+    {title}
+    end={{ icon: 'reset', label: `Reset ${title.toLowerCase()}`, disabled: atStarts(part), onclick: () => resetPart(part) }}
     onclose={() => ((open = null), (drag = null))}
   >
     <div class="sheet">
-      {#if part === 'back' || part === 'fwd'}<WindGraph wind={pointWind(shown, part === 'fwd' ? 1 : -1)} dir={part} />{/if}
-      {#if part === 'holdBack' || part === 'holdFwd'}<HoldGraph hold={holdWind(shown, part === 'holdFwd' ? 1 : -1)} />{/if}
-      {#each p.tunings as t (t.key)}{@render slider(t, valueOf(part, t.key), (v) => setPart(part, { [t.key]: v }))}{/each}
+      {#if part !== 'tape' && shown.motions[part] > 0}
+        {#if isHold(part)}<HoldGraph hold={holdWind(shown, backwards(part) ? -1 : 1)} />
+        {:else}<WindGraph wind={pointWind(shown, part as PointMotion)} dir={backwards(part) ? 'back' : 'fwd'} />{/if}
+      {/if}
+      {#each tuningsOf(part) as t (t.key)}{@render slider(t, valueOf(part, t.key), (v) => setPart(part, { [t.key]: v }))}{/each}
     </div>
   </MenuSheet>
 {/if}

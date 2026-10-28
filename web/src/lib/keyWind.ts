@@ -4,6 +4,7 @@
 import { appInfo, inApp } from './app.svelte';
 import { isLocal } from './output.svelte';
 import { prefs } from './prefs.svelte';
+import { holdsHere } from './holdWind';
 import { playing, send, wind, windTouch } from './remote.svelte';
 
 const HOLD_MS = 350;
@@ -15,8 +16,8 @@ function takesArrows(t: EventTarget | null): boolean {
   // A modal sheet's own (the full player, a dialog too but not a modal one, keeps them for the transport).
   return !!t.closest('[role="slider"], [role="listbox"], [role="menu"], [aria-modal="true"], [role="tablist"], [role="radiogroup"], [role="grid"]');
 }
-/** Whether holding winds where the music plays (as the player's buttons: lib/NowPlaying). */
-const winds = () => (isLocal() ? (inApp ? appInfo.startStop : prefs.startStop).rewind : !!playing()?.player);
+/** Whether holding that way winds where the music plays (as the player's buttons: lib/holdWind). */
+const winds = (dir: 'back' | 'forward') => holdsHere(dir, playing()?.player);
 
 type Down = { dir: 'back' | 'forward'; timer: ReturnType<typeof setTimeout> | undefined; held: boolean };
 
@@ -33,7 +34,7 @@ export function installKeyWind(): () => void {
     const dir = e.key === 'ArrowLeft' ? 'back' : 'forward';
     const d: Down = { dir, timer: undefined, held: false };
     down = d;
-    if (!winds()) return;
+    if (!winds(dir)) return;
     windTouch(dir, true);
     d.timer = setTimeout(() => {
       d.timer = undefined;
@@ -47,7 +48,7 @@ export function installKeyWind(): () => void {
     down = null;
     clearTimeout(d.timer);
     if (d.held) return wind(d.dir, 'stop');
-    if (winds()) windTouch(d.dir, false);
+    if (winds(d.dir)) windTouch(d.dir, false);
     void send(d.dir === 'back' ? 'previous' : 'next');
   };
   // Focus lost while held (another window): let go.
@@ -57,7 +58,7 @@ export function installKeyWind(): () => void {
     down = null;
     clearTimeout(d.timer);
     if (d.held) wind(d.dir, 'stop');
-    else if (winds()) windTouch(d.dir, false);
+    else if (winds(d.dir)) windTouch(d.dir, false);
   };
   addEventListener('keydown', press);
   addEventListener('keyup', lift);

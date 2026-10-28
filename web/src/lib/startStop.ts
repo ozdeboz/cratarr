@@ -1,7 +1,7 @@
 // The tape's settings (Settings › This device › Tape; lib/prefs, the app's too, lib/app): kept apart from both, as each
-// imports the other. Start and stop, the tape's own mechanics, and its four motions (the owner, 2026-10-27: two
-// settings per motion, the rest shared): back and forward to a point (Previous to the start, Next to the end, a seek
-// that winds), and holding back and forward (Previous or Next, ← or →, held).
+// imports the other. Start and stop, the tape's own mechanics, and its six motions (the owner, 2026-10-28: each on its
+// own, one setting each, its bottom Off): back to the start (Previous), a seek back, holding back; forward to the end
+// (Next), a seek forward, holding forward (Previous or Next, ← or →, held).
 
 /** A motion's envelope as the players use it (lib/windShape, lib/localPlayer): `ratio`, a wind to a point's length,
  *  seconds per minute wound (at most WIND_CAP_MS); `speed`, its speed limit or a hold's starting speed (×);
@@ -11,13 +11,13 @@ export type Wind = { ratio: number; speed: number; attackMs: number; releaseMs: 
 /** A hold's envelope: also how it gets faster (doubling every `doublingS` seconds of its stream) and how fast at most. */
 export type HoldWind = Wind & { doublingS: number; top: number };
 
-/** The tape's mechanics, every motion's alike: spin-up, the one brake (a Vinyl pause's too), the wind volume, how a hold
- *  gets faster, how a cut wind's pieces are. */
-export type TapeMech = { attackMs: number; brakeMs: number; gainDb: number; doublingS: number; pieceMs: number };
-/** A wind to a point: how long it takes (s per minute wound) and how fast it may go (×). */
-export type PointCurve = { ratio: number; speed: number };
-/** A hold: how fast it starts and how fast it may get (×). */
-export type HoldCurve = { start: number; top: number };
+/** The tape's mechanics, every motion's alike: spin-up, the one brake (a Vinyl pause's too), the wind volume, how a cut
+ *  wind's pieces are. */
+export type TapeMech = { attackMs: number; brakeMs: number; gainDb: number; pieceMs: number };
+/** The winds to a point: Previous's back to the start, Next's on to the end, a seek back or forward. */
+export type PointMotion = 'toStart' | 'seekBack' | 'toEnd' | 'seekFwd';
+export type HoldMotion = 'holdBack' | 'holdFwd';
+export type Motion = PointMotion | HoldMotion;
 
 /** A wind to a point's longest (holding has no end but the edge). */
 export const WIND_CAP_MS = 12_000;
@@ -26,24 +26,23 @@ export const TAPE = {
   attackMs: { min: 100, max: 1500, step: 50, start: 400 },
   brakeMs: { min: 100, max: 1500, step: 50, start: 250 },
   gainDb: { min: -24, max: 0, step: 1, start: -12 },
-  doublingS: { min: 0.5, max: 5, step: 0.25, start: 1.5 },
   pieceMs: { min: 100, max: 1000, step: 50, start: 350 },
 } as const;
-export const POINT = {
-  ratio: { min: 0.5, max: 2, step: 0.1, start: 1 },
-  speed: { min: 2, max: 16, step: 0.5, start: 8 },
-} as const;
-/** Forward to a point: its duration reaching down to half (the owner, 2026-10-27). */
-export const POINT_FWD = { ...POINT, ratio: { min: 0.25, max: 2, step: 0.05, start: 1 } } as const;
-export const HOLD = {
-  start: { min: 2, max: 16, step: 0.5, start: 8 },
-  top: { min: 8, max: 64, step: 4, start: 64 },
-} as const;
+const POINT = { min: 0, max: 2, step: 0.05, start: 1 } as const;
+const HOLD = { min: 0, max: 12, step: 0.5, start: 4.5 } as const;
+/** Each motion's one setting, 0: off (the plain way: a jump, a seek, no hold). A wind to a point's duration (s per
+ *  minute wound); a hold's time to its top speed (s, its spin-up in it). */
+export const MOTION = { toStart: POINT, seekBack: POINT, holdBack: HOLD, toEnd: POINT, seekFwd: POINT, holdFwd: HOLD } as const;
+/** What is no longer set (the owner, 2026-10-28: good defaults): a wind to a point's speed limit, a hold's starting
+ *  and top speed. */
+export const POINT_SPEED = 8;
+export const HOLD_START = 8;
+export const HOLD_TOP = 64;
 
 /** `mode`, `ms`, `stopMs`: Start and stop's effect, its start (the wind-up) and its stop (the wind-down; its own, the
- *  tape's Brake being the tape's only: the owner, 2026-10-27); `skips`: it for next and previous too; `rewind`: Previous and
- *  Next wind the tape; `seekWinds`: a seek winds there instead of jumping; `edges`: holding past a track's edge stops,
- *  or winds on through the queue. No older settings carried over (the owner: everyone from the defaults). */
+ *  tape's Brake being the tape's only: the owner, 2026-10-27); `skips`: it for next and previous too; `rewind`: the tape
+ *  winds at all; `motions`: each motion's setting (0: off); `edges`: holding past a track's edge stops, or winds on
+ *  through the queue. No older settings carried over (the owner: everyone from the defaults). */
 export type StartStop = {
   mode: 'off' | 'vinyl' | 'fade';
   ms: number;
@@ -51,11 +50,7 @@ export type StartStop = {
   skips: boolean;
   rewind: boolean;
   tape: TapeMech;
-  back: PointCurve;
-  fwd: PointCurve;
-  holdBack: HoldCurve;
-  holdFwd: HoldCurve;
-  seekWinds: boolean;
+  motions: Record<Motion, number>;
   edges: 'stop' | 'queue';
 };
 export const RAMP_MS = { min: 200, max: 3000 };
@@ -66,7 +61,7 @@ function kept<R extends Record<string, Range>>(x: unknown, ranges: R): { [K in k
   const o = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>;
   return Object.fromEntries(Object.entries(ranges).map(([k, r]) => [k, within(o[k], r)])) as { [K in keyof R]: number };
 }
-/** The starting values of `ranges` (Reset to defaults). */
+/** The starting values of `ranges` (a reset). */
 export const startsOf = <R extends Record<string, Range>>(ranges: R) => kept(undefined, ranges);
 /** A Start and stop as kept (here, or told by the app). */
 export function startStopOf(x: Partial<StartStop>): StartStop {
@@ -77,22 +72,21 @@ export function startStopOf(x: Partial<StartStop>): StartStop {
     skips: x.skips === true,
     rewind: x.rewind === true,
     tape: kept(x.tape, TAPE),
-    back: kept(x.back, POINT),
-    fwd: kept(x.fwd, POINT_FWD),
-    holdBack: kept(x.holdBack, HOLD),
-    holdFwd: kept(x.holdFwd, HOLD),
-    seekWinds: x.seekWinds === true,
+    motions: kept(x.motions, MOTION),
     edges: x.edges === 'queue' ? 'queue' : 'stop',
   };
 }
 
-/** A wind to a point that way, as the players use it. */
-export function pointWind(s: StartStop, dir: 1 | -1): Wind {
-  const p = dir > 0 ? s.fwd : s.back;
-  return { ratio: p.ratio, speed: p.speed, attackMs: s.tape.attackMs, releaseMs: s.tape.brakeMs, pieceMs: s.tape.pieceMs, gainDb: s.tape.gainDb };
+/** Whether a motion winds the tape: winding on, and it not off. */
+export const windsBy = (s: StartStop, m: Motion) => s.rewind && s.motions[m] > 0;
+/** A wind to a point, as the players use it. */
+export function pointWind(s: StartStop, m: PointMotion): Wind {
+  return { ratio: s.motions[m], speed: POINT_SPEED, attackMs: s.tape.attackMs, releaseMs: s.tape.brakeMs, pieceMs: s.tape.pieceMs, gainDb: s.tape.gainDb };
 }
-/** A hold that way, as the players use it. */
+/** A hold that way, as the players use it: from HOLD_START, doubling to HOLD_TOP in its time to top speed (after its
+ *  spin-up). Off, it still gives the tape's mechanics (the direction knob's spin-up and brake). */
 export function holdWind(s: StartStop, dir: 1 | -1): HoldWind {
-  const h = dir > 0 ? s.holdFwd : s.holdBack;
-  return { ...pointWind(s, dir), speed: h.start, top: Math.max(h.top, h.start), doublingS: s.tape.doublingS };
+  const t = s.motions[dir > 0 ? 'holdFwd' : 'holdBack'];
+  const doubling = Math.max(0.05, t - s.tape.attackMs / 1000) / Math.log2(HOLD_TOP / HOLD_START);
+  return { ...pointWind(s, dir > 0 ? 'toEnd' : 'toStart'), speed: HOLD_START, top: HOLD_TOP, doublingS: t > 0 ? doubling : 1.5 };
 }
