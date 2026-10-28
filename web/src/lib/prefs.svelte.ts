@@ -94,7 +94,7 @@ function savedTunes(saved: Record<string, unknown>): Prefs['playerBandsTunes'] {
 
 export type Theme = 'auto' | 'light' | 'dark';
 /** What can stand behind the flows: Cratarr's photos (lib/backdrop names them) and one's own picture. */
-export const FLOW_BACKDROPS = ['wall', 'flowers', 'leaf', 'pastel', 'records', 'checks', 'mosaic', 'planks', 'amplifier', 'agave', 'rack', 'speakers', 'radios', 'own'] as const;
+export const FLOW_BACKDROPS = ['wall', 'flowers', 'leaf', 'pastel', 'records', 'checks', 'mosaic', 'planks', 'amplifier', 'agave', 'rack', 'speakers', 'radios', 'stickers', 'textile', 'succulents', 'own'] as const;
 export type FlowBackdrop = (typeof FLOW_BACKDROPS)[number];
 
 export type Prefs = {

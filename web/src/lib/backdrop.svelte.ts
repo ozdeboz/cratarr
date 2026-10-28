@@ -10,7 +10,8 @@ export const BACKDROPS = [
   { value: 'leaf', label: 'Leaf' },
   { value: 'pastel', label: 'Pastel' },
   { value: 'records', label: 'Records' },
-  { value: 'checks', label: 'Checks' },
+  // The owner, 2026-10-28: Grill (its value stays, so who chose it keeps it).
+  { value: 'checks', label: 'Grill' },
   { value: 'mosaic', label: 'Mosaic' },
   { value: 'planks', label: 'Planks' },
   { value: 'amplifier', label: 'Amplifier' },
@@ -18,6 +19,9 @@ export const BACKDROPS = [
   { value: 'rack', label: 'Rack' },
   { value: 'speakers', label: 'Speakers' },
   { value: 'radios', label: 'Radios' },
+  { value: 'stickers', label: 'Stickers' },
+  { value: 'textile', label: 'Textile' },
+  { value: 'succulents', label: 'Succulents' },
 ] as const;
 /** What stands there until another is chosen (the owner, 2026-10-26: no grey canvas any more). */
 export const DEFAULT_BACKDROP = 'wall';

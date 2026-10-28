@@ -17,3 +17,6 @@ agave       Chris Barbalis      https://unsplash.com/photos/Q_0l2J_dUkE
 rack        Jeremy Lanfranchi   https://unsplash.com/photos/2Lc5qrZdmxc
 speakers    SJ Objio            https://unsplash.com/photos/sIVI8tWLyGo
 radios      Mert Toker          https://unsplash.com/photos/AwhZiUwh_WM
+stickers    Max van den Oetelaar  https://unsplash.com/photos/uymG7UVPXpI
+textile     Annie Spratt        https://unsplash.com/photos/Z5VMR-7s4JY
+succulents  Maria Orlova        https://unsplash.com/photos/x3Z_YxnUh54
