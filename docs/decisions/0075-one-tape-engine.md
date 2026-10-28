@@ -51,3 +51,22 @@ and the same to the ear; an AudioWorklet read head stays the fallback if a chang
 - Memory: as now (two streaming players), nothing decoded whole.
 - The page reads the wind stream itself (fetch, not an audio element), so its map is known.
 - Levelling, groups (0037) and the lock screen act on the engine, so on everything it plays.
+
+## The app's engine (2026-10-28)
+
+The owner, on the tablet (0.9.14-1): the waveform and the tape deck moved in strides through every wind, reverse play at
+1× included; a hold wound to the queue's end landed past its last track's end and the page counted on; "These symptoms
+are of an impure machine". Asked where the machine was not pure, the owner chose all three: the player's course logged,
+the curve over the bridge, and this engine in the app.
+
+- **One truth, `StartStop.deck()`** (`Deck`): the queue's track, the place in it, the speed (track ms per ms, signed) and
+  how fast it changes (per second), from the head that sounds: the wind's stream through its map, or the track's player.
+  The page, Cratarr's report and the session all read it. Start and stop's held place is the one lie; the tape's own
+  stops and starts (and a play taking over a pause) show the truth.
+- **The curve over the bridge:** the `player` report carries `speedX` and `accelX`; the page draws each frame from
+  place + v·t + ½·a·t², told afresh every 100 ms while the deck moves other than playing on as it is.
+- **Landings by the files as they are:** a wind lands by its map (Cratarr's lengths), counted from the track it began
+  in, then settled on the player's own lengths (`Deck.settle`); wound forwards to the queue's end it rests there,
+  stopped.
+- **Anything interrupts anything:** a pause during any wind brakes it from its rate and rests where it got; a press the
+  other way during a ramp turns it from the level it has reached (`turn`); nothing waits for a ramp's end.

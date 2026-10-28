@@ -182,10 +182,17 @@ class PlayerService : MediaSessionService() {
 
             override fun isPlaying() = startStop.committed ?: super.isPlaying()
 
-            // Held through a ramp (0.9.6): where the press was.
-            override fun getCurrentPosition() = startStop.heldPosition ?: super.getCurrentPosition()
+            // The deck's one truth (decision 0075): Start and stop's held place through its ramps, a wind's place as it
+            // winds (in the track the session shows; one wound on into another shows the one it began in).
+            override fun getCurrentPosition() = shownPosition() ?: super.getCurrentPosition()
 
-            override fun getContentPosition() = startStop.heldPosition ?: super.getContentPosition()
+            override fun getContentPosition() = shownPosition() ?: super.getContentPosition()
+
+            private fun shownPosition(): Long? {
+                if (!StartStop.winding) return startStop.heldPosition
+                val d = startStop.deck()
+                return if (d.index == super.getCurrentMediaItemIndex()) d.ms else null
+            }
 
             // The lock screen's, the notification's, a headset's and the page's play, pause and stop, ramped (0.9.6).
             override fun play() = startStop.play { super.play() }

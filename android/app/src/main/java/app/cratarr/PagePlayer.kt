@@ -9,6 +9,7 @@ import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -70,8 +71,8 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             if (dir != null) m.put("effect", stops)
             send(m.toString())
         }
-        // Tape rewind (0.9.11): its way back reported each step, and once more when the track plays from the start.
-        StartStop.rewindListener = { report() }
+        // The deck as it moves (0075): told each step of a wind or the tape's own ramp, and once more as it stops.
+        StartStop.deckListener = { report() }
     }
 
     fun handle(m: JSONObject) {
@@ -217,15 +218,22 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
     /** What plays now; with the queue on request (the page said hello) and whenever it changed. */
     fun report(withQueue: Boolean = false) {
         val c = controller
+        // The deck's one truth (decision 0075): where it is, across the queue, and how it moves; the page counts on
+        // from it each frame (place + speedX·t + ½·accelX·t², t in seconds). Without the service: the controller's.
+        val deck = StartStop.deckNow?.invoke()?.takeIf { c.mediaItemCount > 0 }
+        val index = deck?.index ?: if (c.mediaItemCount == 0) -1 else c.currentMediaItemIndex
+        val length = lengthOf(c, index)
         val out = JSONObject()
             .put("type", "player")
             .put("mode", Prefs(context).mode)
-            .put("index", if (c.mediaItemCount == 0) -1 else c.currentMediaItemIndex)
-            .put("positionMs", StartStop.rewoundAt ?: c.currentPosition)
-            // Going back with Tape rewind's clip: shown as it comes, nothing counted on meanwhile.
-            .put("rewinding", StartStop.rewoundAt != null)
+            .put("index", index)
+            .put("positionMs", deck?.ms ?: c.currentPosition)
+            .put("speedX", deck?.speed ?: if (c.isPlaying) c.playbackParameters.speed.toDouble() else 0.0)
+            .put("accelX", deck?.accel ?: 0.0)
+            // The place is a wind's (its stream sounds).
+            .put("rewinding", StartStop.winding)
             .put("direction", StartStop.deckDirection)
-            .put("durationMs", if (c.duration == C.TIME_UNSET) -1 else c.duration)
+            .put("durationMs", length)
             .put("paused", !c.playWhenReady || c.playbackState == Player.STATE_ENDED)
             // A play from rest not sounding yet (0.9.14, as Play On's `starting`).
             .put("starting", StartStop.starting)
@@ -241,6 +249,14 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             .put("levelDb", Levelling.appliedDb)
         if (withQueue) out.put("queue", queueOf(c))
         send(out.toString())
+    }
+
+    /** How long the queue's track [index] is (ms), as its file is; -1 unknown. */
+    private fun lengthOf(c: Player, index: Int): Long {
+        if (index == c.currentMediaItemIndex) return if (c.duration == C.TIME_UNSET) -1 else c.duration
+        val tl = c.currentTimeline
+        if (index < 0 || index >= tl.windowCount) return -1
+        return tl.getWindow(index, Timeline.Window()).durationMs.takeIf { it != C.TIME_UNSET } ?: -1
     }
 
     override fun onEvents(player: Player, events: Player.Events) {

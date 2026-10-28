@@ -775,9 +775,13 @@ class PlayOnLink(
         val base = base() ?: return
         val p = player
         if (prefs.mode == Prefs.MODE_DEVICE) return reportDevice(base)
+        // The deck's one truth (decision 0075): a wind's place across the queue; otherwise the player's, where a group
+        // hears it, or Start and stop's held place.
+        val deck = service.startStop.deck()
+        val index = if (p.mediaItemCount == 0) -1 else if (StartStop.winding) deck.index else p.currentMediaItemIndex
         val out = JSONObject()
-            .put("index", if (p.mediaItemCount == 0) -1 else p.currentMediaItemIndex)
-            .put("entry", p.currentMediaItem?.let(::entryOf) ?: JSONObject.NULL)
+            .put("index", index)
+            .put("entry", (if (index >= 0) p.getMediaItemAt(index) else null)?.let(::entryOf) ?: JSONObject.NULL)
             .put("version", if (version >= 0) version else JSONObject.NULL)
             .put("repeat", Repeat.mode(service))
             .put("sleep", Sleep.json(service, "at_ms", "end_of_track"))
@@ -787,8 +791,11 @@ class PlayOnLink(
             .put("skip_favourites", SkipFavourites.on(service))
             .put("autoplay", Autoplay.json(service))
             // Leading a group, where it is heard: a buffer behind this player.
-            .put("position_ms", (service.startStop.heldPosition ?: sync.heardPosition(p)).coerceAtLeast(0))
+            .put("position_ms", (if (StartStop.winding) deck.ms else service.startStop.heldPosition ?: sync.heardPosition(p)).coerceAtLeast(0))
             .put("duration_ms", if (p.duration == C.TIME_UNSET) JSONObject.NULL else p.duration)
+            // How it moves (0075): track ms per ms, signed, and its change per second; a page counts on from them.
+            .put("speed_x", deck.speed)
+            .put("accel_x", deck.accel)
             // A ramp under way says where it is going (0.9.6, StartStop): a pause is paused at once.
             .put("playing", service.startStop.committed ?: (p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE))
             // Tape rewind (0.9.10): the position goes back to the start as the clip sounds; Cratarr does not count it on.
