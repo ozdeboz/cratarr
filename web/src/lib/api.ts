@@ -1372,6 +1372,8 @@ export type HealthItem = {
   missing?: string[];
   release_group?: string;
   request?: RequestMark | null;
+  /** A track's own (a5, 2026-10-28: a file cut off or breaking off): its song id in `album`, for a better copy of it. */
+  track?: string;
 };
 /** Every domain's findings, worst first, the most recent first among equals; when each domain was checked. */
 export const getHealthReport = () => request<{ findings: HealthFinding[]; checked: Record<string, number> }>('/api/health/report');

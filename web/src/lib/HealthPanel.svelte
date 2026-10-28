@@ -22,6 +22,7 @@
   import { apply, FIXABLE, healthFixes, readFixes } from './fixes.svelte';
   import ConfirmSheet from './settings/ConfirmSheet.svelte';
   import AlbumMenu from './AlbumMenu.svelte';
+  import ReplaceTrackSheet from './ReplaceTrackSheet.svelte';
   import { me } from './me.svelte';
   import ReleaseRow from './ReleaseRow.svelte';
   import { matchesSearch } from './pageView.svelte';
@@ -51,6 +52,8 @@
   /** Where an item's page sends on: its album, its playlist. */
   /** The album whose Change cover is open (Health's albums without a cover). */
   let coverOf = $state<string | null>(null);
+  /** The track whose better copy is being found (a file cut off or breaking off). */
+  let betterOf = $state<string | null>(null);
   const onward = (x: HealthItem) =>
     x.album ? { label: 'Open the album', go: () => viewOver(albumSubject(x.album![0], x.album![1])) } : x.playlist ? { label: 'Open the playlist', go: () => openTab([x.playlist!], 'tracks') } : null;
   const since = (t: number) => new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
@@ -135,6 +138,13 @@
         <button class="act" onclick={() => (coverOf = item.album![1])}>Change cover<Icon name="chevronRight" size={18} /></button>
         {#if coverOf === item.album[1]}
           <AlbumMenu source="cratarr" album={{ id: item.album[1], title: item.title, artist: null }} start="cover" onclose={() => ((coverOf = null), loadHealth())} />
+        {/if}
+      {/if}
+      <!-- A track's file cut off or breaking off (a5, 2026-10-28): a better copy of it, as the track's menu finds one. -->
+      {#if item.track && item.album && me.admin}
+        <button class="act" onclick={() => (betterOf = item.track!)}>Find a better copy<Icon name="chevronRight" size={18} /></button>
+        {#if betterOf === item.track}
+          <ReplaceTrackSheet source={item.album[0]} album={{ id: item.album[1], title: '' }} replace={{ source: item.album[0], id: item.track }} onclose={() => ((betterOf = null), loadHealth())} />
         {/if}
       {/if}
       {#if EVENTS[problem]}<HealthEvents {...EVENTS[problem]} value={item.title} />{/if}
