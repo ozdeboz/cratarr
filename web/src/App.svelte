@@ -733,7 +733,7 @@
   // its downloads (decision 0033, step 4), unless it was opened on a page or a view of its own.
   let openedAway = false;
   $effect(() => {
-    if (!inApp || openedAway || reach.answered || !reach.away) return;
+    if (!inApp || openedAway || reach.answered || !reach.away || localMode()) return;
     if (!downloads.known) return askDownloads();
     openedAway = true;
     if (downloads.tracks.length && (page === HOME.id || page === PLAYLISTS.id) && !location.hash.replace(/^#\/?/, '')) {
@@ -803,7 +803,7 @@
   $effect(() => {
     serverConnection.value = connection;
   });
-  const MAIN: Page[] = $derived(localMode() ? LOCAL : [HOME, LIBRARY, CRATES, PLAYLISTS, DISCOVER]);
+  const MAIN: Page[] = $derived(localMode() ? [HOME, ...LOCAL] : [HOME, LIBRARY, CRATES, PLAYLISTS, DISCOVER]);
   // Apart, at the bottom of the sidebar: Insights beside Health, then Settings.
   // Health is the library's, so its administrators' (decision 0051). In Local mode, Settings only.
   const mayRequest = $derived(me.admin || me.permissions.request || me.permissions.manage_requests);
@@ -813,14 +813,14 @@
   // The global search finds the pages shown and their parts, and Settings' (lib/everywhere).
   provideEverywhere(() => [...MAIN, ...APART]);
   // A switch of the mode (decision 0052) goes to the first page of the mode it went to, unless the page is one both
-  // have (Settings).
+  // have (Settings, Home: local mode's its own, lib/localHome).
   $effect(() => {
     const local = localMode();
     // No visuals in local mode (the owner: "In local mode, the visuals feature is not supported").
     if (local) untrack(() => (visuals.open = false));
     const p = untrack(() => page);
-    if (p === 'settings') return;
-    if (local && !p.startsWith('local-')) location.hash = LOCAL_ALBUMS.href;
+    if (p === 'settings' || p === HOME.id) return;
+    if (local && !p.startsWith('local-')) location.hash = HOME.href;
     else if (!local && p.startsWith('local-')) location.hash = LIBRARY.href;
   });
   const ALL = $derived([...MAIN, ...APART]);
@@ -940,7 +940,8 @@
     {:else if page === 'requests'}
       <Requests />
     {:else if page === 'home'}
-      <Home />
+      <!-- Local mode's Home is its own (lib/localHome): a switch of the mode opens it anew. -->
+      {#key localMode()}<Home />{/key}
     {:else if page === 'find'}
       <Find />
     {:else}

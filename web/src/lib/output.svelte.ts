@@ -4,6 +4,7 @@
 // presented as a now-playing view like the server's. Switching moves the music: the queue and the position go to the
 // other side, which plays from there, and the side that played stops.
 import { away, pickHere } from './away.svelte';
+import { DEVICE, deviceAlbumView } from './deviceMusic.svelte';
 import {
   albumView,
   handover,
@@ -342,7 +343,8 @@ export async function playAlbumHere(source: string, album: string, title?: strin
     playQueue(got.tracks, 0, title ?? null);
     return true;
   }
-  const r = await albumView(source, album);
+  // The device's own (local mode, decision 0052): its album as the app lists it.
+  const r = source === DEVICE ? deviceAlbumView(album) : await albumView(source, album);
   if (!r.rows.length) throw new Error('That album has no tracks.');
   playQueue(
     r.rows.map((x) => ({ source: r.source, id: x.id!, name: x.name ?? x.file, artist: x.artist, album: x.album, album_id: album, duration_secs: x.duration_secs })),

@@ -16,6 +16,7 @@
   import { albumPlay, libraryDot, playListedAlbum } from './albums.svelte';
   import CoverPlay from './CoverPlay.svelte';
   import { albumAway } from './away.svelte';
+  import { DEVICE } from './deviceMusic.svelte';
   import CoverWait from './CoverWait.svelte';
 
   let {
@@ -56,7 +57,7 @@
   class:gone
   onclick={() => (onopen ? onopen() : viewOver(albumSubject(source, album.id)))}
   aria-label="{onopen ? 'Open' : 'View'} {album.title}"
-  use:longpress={() => !onopen && (menu = true)}
+  use:longpress={() => !onopen && source !== DEVICE && (menu = true)}
 >
   <span class="cover"
     ><Cover src={cover === undefined ? albumCoverUrl(source, album.id) : cover} /><CoverStatus mark={request ?? album.request} />{#if busy}<CoverBusy />{/if}<CoverWait

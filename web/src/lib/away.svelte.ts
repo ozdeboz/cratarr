@@ -5,6 +5,7 @@
 // those tracks on the device alone, in their order or mixed.
 import { ApiError, albumView, artistView, crateRows, playlistRows, type Picked, type Picking, type PlayHow, type PlaylistRow } from './api';
 import { downloads, inApp, onApp } from './app.svelte';
+import { DEVICE } from './deviceMusic.svelte';
 import { offline } from './offline.svelte';
 import { reach, unreached } from './reach.svelte';
 
@@ -38,11 +39,11 @@ const onDevice = $derived.by(() => {
 /** Out of reach: only what is on the device plays. */
 export const away = () => reach.away;
 /** A track is on this device. */
-export const here = (source: string, id: string | null | undefined) => !!id && onDevice.tracks.has(`${source}/${id}`);
+export const here = (source: string, id: string | null | undefined) => !!id && (source === DEVICE || onDevice.tracks.has(`${source}/${id}`));
 /** How many of an album's tracks are on this device. */
 export const albumHere = (source: string, album: string) => onDevice.albums.get(`${source}/${album}`) ?? 0;
 /** Out of reach, and none of the album on the device: it cannot play (its card dimmed, its Play gone). */
-export const albumAway = (source: string, album: string) => reach.away && albumHere(source, album) === 0;
+export const albumAway = (source: string, album: string) => reach.away && source !== DEVICE && albumHere(source, album) === 0;
 /** Out of reach, and none of these tracks on the device. */
 export const rowsAway = (source: string, ids: (string | null | undefined)[]) => reach.away && !ids.some((id) => here(source, id));
 

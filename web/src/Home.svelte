@@ -36,7 +36,7 @@
   import ArtistsToExplore from './lib/ArtistsToExplore.svelte';
   import HomeStatus from './lib/HomeStatus.svelte';
   import { CRATE, LIKE, viewGenre, viewLike } from './lib/crates.svelte';
-  import { DEVICE } from './lib/deviceMusic.svelte';
+  import { device, DEVICE, localMode } from './lib/deviceMusic.svelte';
   import { startRadio } from './lib/localPlayer.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { hiddenLibraries } from './lib/listFilter.svelte';
@@ -52,8 +52,14 @@
   import PageLoading from './lib/PageLoading.svelte';
   import { holdUntil } from './lib/holdPlace.svelte';
   import { toast } from './lib/toast.svelte';
+  import { albumAway, away, here, rowsAway } from './lib/away.svelte';
+  import { askDevicePlays, backHere, devicePlays, LOCAL_PARTS, newestHere, playHereAlbums } from './lib/localHome.svelte';
 
   const WEEK = `${LIKE}week`;
+  const NEWEST_HERE = 'Newest on this device';
+  /** Local mode (lib/localHome): the device's own Home, nothing asked of Cratarr. */
+  const local = localMode();
+  if (local) askDevicePlays();
 
   onMount(() => {
     if (!library.view) void readLibrary(false);
@@ -62,12 +68,15 @@
 
   // New for you (the owner, 2026-10-23): the server's (app::home): every used library's newest albums, those heard 5% or
   // more of and those without a cover left out.
-  let newest = $state<{ source: string; a: ListedAlbum }[]>([]);
-  let newestIn = $state(false);
+  let serverNewest = $state<{ source: string; a: ListedAlbum }[]>([]);
+  let serverNewestIn = $state(false);
+  const newest = $derived(local ? newestHere().map((a) => ({ source: DEVICE, a })) : serverNewest);
+  const newestIn = $derived(local ? device.tracks !== null : serverNewestIn);
   onMount(() => {
+    if (local) return;
     getHomeNew().then(
-      (r) => ((newest = r.albums.map(({ source, ...a }) => ({ source, a }))), (newestIn = true)),
-      () => (newestIn = true),
+      (r) => ((serverNewest = r.albums.map(({ source, ...a }) => ({ source, a }))), (serverNewestIn = true)),
+      () => (serverNewestIn = true),
     );
   });
   /** The section on top's Play (the owner, 2026-10-24): all of it, from the album in front (those before it stay before
@@ -78,6 +87,7 @@
     if (!front) return;
     if (lead === 'past') return playPast('play', dug?.past.find((t) => t.album_id === front.id)?.id);
     const albums = heroAlbums.filter((a) => a.source === front.source);
+    if (front.source === DEVICE) return playHereAlbums(albums.map((a) => a.id), front.id, leadTitle);
     starting = true;
     try {
       const views = await Promise.all(albums.map((a) => albumView(a.source, a.id).catch(() => null)));
@@ -101,6 +111,7 @@
   let week = $state<HomeWeek | null>(null);
   let weekIn = $state(false);
   onMount(() => {
+    if (local) return void (weekIn = true);
     getHomeWeek(prefs.source || undefined, hiddenLibraries()).then(
       (r) => ((week = r.week), (weekIn = true)),
       () => ((week = null), (weekIn = true)),
@@ -127,6 +138,7 @@
   let moment = $state<Moment | null>(null);
   let momentIn = $state(false);
   onMount(() => {
+    if (local) return void (momentIn = true);
     getMoment(prefs.source || undefined, hiddenLibraries()).then(
       (m) => ((moment = m), (momentIn = true)),
       () => ((moment = null), (momentIn = true)),
@@ -165,13 +177,16 @@
 
   // Jump back in: the server's (app::home): the albums and playlists played last and this player's queues left, a queue
   // that is an album's tracks shown as that album; asked again when the queues change.
-  let back = $state<HomeBack[]>([]);
-  let backIn = $state(false);
+  let serverBack = $state<HomeBack[]>([]);
+  let serverBackIn = $state(false);
+  const back = $derived(local ? backHere() : serverBack);
+  const backIn = $derived(local ? device.tracks !== null && devicePlays.known : serverBackIn);
   $effect(() => {
+    if (local) return;
     void queuesVersion();
     getHomeBack(queuesPlayer()).then(
-      (r) => ((back = r.items), (backIn = true)),
-      () => (backIn = true),
+      (r) => ((serverBack = r.items), (serverBackIn = true)),
+      () => (serverBackIn = true),
     );
   });
   /** A queue's icon by where it came from, as the queue switcher has it (lib/QueuesSheet). */
@@ -180,6 +195,7 @@
   let dug = $state<Digging | null>(null);
   let dugIn = $state(false);
   onMount(() => {
+    if (local) return void (dugIn = true);
     getDigging(prefs.source || undefined, hiddenLibraries()).then(
       (d) => ((dug = d), (dugIn = true)),
       () => ((dug = null), (dugIn = true)),
@@ -221,14 +237,14 @@
   let favAlbumIds = $state<string[] | null>(null);
   let favRows = $state<PlaylistRow[] | null>(null);
   $effect(() => {
-    if (!order.includes('favAlbums') || favAlbumIds) return;
+    if (local || !order.includes('favAlbums') || favAlbumIds) return;
     getFavoriteAlbums('cratarr').then(
       (ids) => (favAlbumIds = ids),
       () => (favAlbumIds = []),
     );
   });
   $effect(() => {
-    if (!order.includes('favTracks') || favRows) return;
+    if (local || !order.includes('favTracks') || favRows) return;
     getFavoriteTracks().then(
       (r) => (favRows = r.rows.filter((x) => x.id && !x.missing)),
       () => (favRows = []),
@@ -251,6 +267,11 @@
     }
   }
 
+  // Out of reach (lib/away; the owner, 2026-10-28): Home as last seen, what is not on this device dimmed, and what
+  // cannot play without Cratarr (a radio, a section none of whose tracks are here) without its Play.
+  const pastAway = $derived(!!dug && rowsAway('cratarr', dug.past.map((t) => t.id)));
+  const favAway = $derived(!!favRows && rowsAway('cratarr', favRows.map((t) => t.id)));
+
   // Progressive loading (the owner, 2026-10-23: "the first component should show first and the second, instead of
   // scattered"): a section shows once its answer is in and every one above it has shown (or come back empty), top to
   // bottom; one slow answer holds those under it no longer than PATIENCE, then each shows as it comes.
@@ -264,7 +285,7 @@
   });
   type Part = HomePart;
   /** Its sections switched on, in the user's order (Settings › Home); one's own crates while Your crates on Home is on. */
-  const order = $derived(prefs.homeParts.filter((p) => !p.startsWith(CRATE_PART) || prefs.homeCrates));
+  const order = $derived(prefs.homeParts.filter((p) => (local ? LOCAL_PARTS.includes(p) : !p.startsWith(CRATE_PART) || prefs.homeCrates)));
 
   // One's own crates on Home (0.9.3; the owner, 2026-10-25): each a shelf of its albums, as New for you's, its › the
   // crate; read once a visit, its first albums in the crate's order (`null`: nothing to show).
@@ -401,7 +422,8 @@
   /** The header's words and albums, after its picture. */
   const heroReady = $derived(skyIn && turn(lead) && heroAlbums.length > 0);
 
-  const TITLES: Partial<Record<Part, string>> = { newest: 'New for you', past: 'Blast from the past', graves: 'Grave digging', favAlbums: 'Favourite albums' };
+  const TITLES: Partial<Record<Part, string>> = { newest: local ? NEWEST_HERE : 'New for you', past: 'Blast from the past', graves: 'Grave digging', favAlbums: 'Favourite albums' };
+  const heroAway = $derived(away() && heroAlbums.every((a) => albumAway(a.source, a.id)));
   const leadTitle = $derived(lead === 'moment' ? (moment?.name ?? '') : (TITLES[lead] ?? ''));
   /** The album in front of the flow, named under it. */
   const frontAlbum = $derived(heroAlbums[Math.min(momentFront, heroAlbums.length - 1)]);
@@ -427,6 +449,7 @@
   let playlistMenu = $state<string | null>(null);
   let queuesOpen = $state(false);
   function menuFor(b: HomeBack) {
+    if (b.kind === 'album' && b.source === DEVICE) return;
     if (b.kind === 'album') albumMenu = { source: b.source, id: b.id, title: b.title, artist: b.by };
     else if (b.kind === 'playlist') playlistMenu = b.id;
     else queuesOpen = true;
@@ -484,7 +507,7 @@
           foot={SHADOW}
           onopen={(i) => viewOver(albumSubject(heroAlbums[i].source, heroAlbums[i].id))}
           onfront={(i) => (momentFront = i)}
-          onmenu={(i) => (albumMenu = { ...heroAlbums[i] })}
+          onmenu={(i) => heroAlbums[i].source !== DEVICE && (albumMenu = { ...heroAlbums[i] })}
         />{/if}
       </div>
       <div class="caption">
@@ -492,15 +515,15 @@
           <button
             class="name"
             onclick={() => viewOver(albumSubject(frontAlbum.source, frontAlbum.id))}
-            use:longpress={() => (albumMenu = { ...frontAlbum })}
+            use:longpress={() => frontAlbum.source !== DEVICE && (albumMenu = { ...frontAlbum })}
           >
             <span class="title">{frontAlbum.title}</span>
             <span class="by">{frontAlbum.artist ?? ''}</span>
           </button>
         {/if}
         {#if lead === 'moment'}
-          <button class="radio" disabled={starting} onclick={momentRadio}><Icon name="radioTower" size={18} />Radio</button>
-        {:else}
+          {#if !away()}<button class="radio" disabled={starting} onclick={momentRadio}><Icon name="radioTower" size={18} />Radio</button>{/if}
+        {:else if lead === 'past' ? !pastAway : !heroAway}
           <button class="radio" disabled={starting} onclick={playFeatured}><Icon name="play" size={18} />Play</button>
         {/if}
       </div>
@@ -541,7 +564,7 @@
 {#snippet newestPart()}
   {#if turn('newest') && newest.length}
     <section aria-label="New for you">
-      <SectionHead title="New for you" onmore={() => viewPlaylist(CRATE + 'home:new')} />
+      <SectionHead title={local ? NEWEST_HERE : 'New for you'} onmore={() => (local ? (location.hash = '#/local/albums') : viewPlaylist(CRATE + 'home:new'))} />
       <ul class="shelf">
         {#each newest as n (n.source + n.a.id)}
           <li><AlbumCard source={n.source} album={n.a} lines={[n.a.artist ?? '', `added ${addedOn(n.a.added!)}`]} /></li>
@@ -578,7 +601,7 @@
       <ul class="back">
         {#each back as b (b.kind + b.id)}
           <li>
-            <button onclick={() => open(b)} use:longpress={() => menuFor(b)}>
+            <button class:gone={b.kind === 'album' && albumAway(b.source, b.id)} onclick={() => open(b)} use:longpress={() => menuFor(b)}>
               {#if b.kind === 'album'}
                 <span class="cover"><Cover src={albumCoverUrl(b.source, b.id)} /></span>
               {:else}
@@ -599,13 +622,14 @@
 {#snippet pastPart()}
   {#if turn('past') && dug?.past.length}
     <section aria-label="Blast from the past">
-      <SectionHead title="Blast from the past" onplay={() => playPast('play')} busy={starting} />
+      <SectionHead title="Blast from the past" onplay={pastAway ? undefined : () => playPast('play')} busy={starting} />
       <ul class="back">
         {#each pastAlbums as t (t.id)}
           <li>
             <!-- A tap opens its album, as every card does (the owner, 2026-10-25: it played at once, with no play to be
                  seen); the section's Play plays them, the long-press is the track's menu. -->
             <button
+              class:gone={away() && !here('cratarr', t.id)}
               onclick={() => viewOver(albumSubject('cratarr', t.album_id))}
               use:longpress={() => (trackMenu = { source: 'cratarr', id: t.id, name: t.name, artist: t.artist, album: t.album, album_id: t.album_id })}
             >
@@ -661,12 +685,13 @@
 {#snippet favTracksPart()}
   {#if turn('favTracks') && favRows?.length}
     <section aria-label="Favourite tracks">
-      <SectionHead title="Favourite tracks" onplay={() => playFavourites()} busy={starting} />
+      <SectionHead title="Favourite tracks" onplay={favAway ? undefined : () => playFavourites()} busy={starting} />
       <ul class="back">
         {#each favRows.slice(0, 12) as t (t.id)}
           <li>
             <!-- As Blast from the past's: a tap opens its album, the section's Play plays them, a long-press its menu. -->
             <button
+              class:gone={away() && !here('cratarr', t.id)}
               onclick={() => t.album_id && viewOver(albumSubject('cratarr', t.album_id))}
               use:longpress={() => (trackMenu = { source: 'cratarr', id: t.id!, name: t.name ?? t.file, artist: t.artist, album: t.album, album_id: t.album_id ?? null })}
             >
@@ -962,6 +987,11 @@
     font: inherit;
     text-align: start;
     cursor: pointer;
+  }
+
+  /* Out of reach and not on this device (lib/away), as an album's card. */
+  .back button.gone {
+    opacity: 0.45;
   }
 
   .back .cover {

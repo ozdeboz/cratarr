@@ -14,6 +14,7 @@
     onchange,
     fold = null,
     lead = null,
+    unavailable = null,
   }: {
     /** All of them, in the order offered. */
     items: readonly { id: T; label: string }[];
@@ -29,7 +30,11 @@
      *  the owner the same day); one that may not is never dragged above the line, and the first stays unless the next
      *  may take it. */
     lead?: { may: (id: T) => boolean; label: string } | null;
+    /** Those not to be had here (Home's in local mode, the owner 2026-10-24): greyed, `note` under their name, their
+     *  switch showing the choice kept for them, neither switched nor dragged. */
+    unavailable?: { has: (id: T) => boolean; note: string } | null;
   } = $props();
+  const na = (id: T) => !!unavailable?.has(id);
 
   /** Those on, the fold line among them (null). */
   const entries = $derived<(T | null)[]>(fold ? [...on.slice(0, fold.at), null, ...on.slice(fold.at)] : [...on]);
@@ -66,7 +71,9 @@
 
 {#snippet shownName(id: T)}
   <span
-    >{label(id)}{#if lead?.may(id)}<span class="may" title={lead.label} aria-label={lead.label}><Icon name="sparkles" size={16} /></span>{/if}</span
+    >{label(id)}{#if lead?.may(id)}<span class="may" title={lead.label} aria-label={lead.label}><Icon name="sparkles" size={16} /></span>{/if}{#if na(id)}<span
+        class="note">{unavailable?.note}</span
+      >{/if}</span
   >
 {/snippet}
 
@@ -77,23 +84,23 @@
         <!-- The fold line, as the profile draws it (lib/ListProfile): above it stays, below it folds. -->
         <span class="row fold"><span class="pill"><Icon name="chevronUp" size={14} />Fold</span></span>
       {:else}
-        <button class="row" role="switch" aria-checked="true" onclick={() => flip(id)}
+        <button class="row" class:na={na(id)} role="switch" aria-checked="true" disabled={na(id)} onclick={() => flip(id)}
           >{@render shownName(id)}<SwitchTrack on={true} /></button
         >
       {/if}
-      <button
+      {#if id !== null && na(id)}<span class="grip-room" aria-hidden="true"></span>{:else}<button
         class="grip"
         aria-label={id === null ? 'Drag the fold line' : `Drag ${label(id)} to reorder`}
         onpointerdown={(e) => reorder.down(e, i)}
         onpointermove={reorder.move}
         onpointerup={reorder.end}
         onpointercancel={reorder.end}><Icon name="order" size={22} /></button
-      >
+      >{/if}
     </li>
   {/each}
   {#each off as id (id)}
     <li>
-      <button class="row" role="switch" aria-checked="false" onclick={() => flip(id)}>{@render shownName(id)}<SwitchTrack on={false} /></button>
+      <button class="row" class:na={na(id)} role="switch" aria-checked="false" disabled={na(id)} onclick={() => flip(id)}>{@render shownName(id)}<SwitchTrack on={false} /></button>
       <span class="grip-room" aria-hidden="true"></span>
     </li>
   {/each}
@@ -151,6 +158,18 @@
     font: inherit;
     text-align: left;
     cursor: pointer;
+  }
+
+  /* Not to be had here: greyed, its note under its name. */
+  .row.na {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .note {
+    display: block;
+    color: var(--muted);
+    font-size: 0.8rem;
   }
 
   /* The fold line: a rule with its pill on it. */

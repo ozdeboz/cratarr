@@ -12,6 +12,8 @@
   import { LIBRARY_VIEWS } from '../libraryViews';
   import Item from './Item.svelte';
   import OrderList from './OrderList.svelte';
+  import { localMode } from '../deviceMusic.svelte';
+  import { LOCAL_PARTS } from '../localHome.svelte';
   import { offerReset } from './reset.svelte';
 
   offerReset(
@@ -75,7 +77,14 @@
     />
   {/snippet}
   <Item name="Your crates on Home" toggle={{ checked: prefs.homeCrates, onchange: (on) => void setHomeCrates(on) }} />
-  <OrderList {items} on={onParts} label="Home's sections" onchange={setParts} lead={{ may: (id) => FLOW_PARTS.includes(id), label: 'Can be featured on top' }} />
+  <OrderList
+    {items}
+    on={onParts}
+    label="Home's sections"
+    onchange={setParts}
+    lead={{ may: (id) => FLOW_PARTS.includes(id), label: 'Can be featured on top' }}
+    unavailable={localMode() ? { has: (id) => !LOCAL_PARTS.includes(id), note: 'Needs your server' } : null}
+  />
 </Group>
 
 <!-- The Library: the view it opens on (the owner, 2026-10-25): the one it was left on, or always the same. -->
