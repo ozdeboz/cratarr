@@ -434,7 +434,7 @@
   });
   // What is shown changes the controls' height (a long title, a progress bar or none). As one value: `np` is
   // new at every report, and laying out again at each would be many times a second.
-  const shown = $derived(JSON.stringify([np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.playerRow, rowFacts.length, prefs.playerBands !== 'off']));
+  const shown = $derived(JSON.stringify([np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.playerRow, rowFacts.length, prefs.playerBands !== 'off', prefs.tapeDeck !== 'off']));
   $effect(() => {
     void shown;
     untrack(() => requestAnimationFrame(relayout));
@@ -552,7 +552,7 @@
           <!-- The row under the title (the owner, 2026-10-19): the info button (the cover's overview, as a circle on the
                cover) and the facts the user picked in Settings → Display, in short; with none picked, Add leads there.
                Hidden in Settings; none for the device's own music (local mode: nothing known of it). -->
-          <div class="under">
+          <div class="under" class:deckroom={prefs.tapeDeck !== 'off'}>
           {#if prefs.playerRow && np.source !== 'device'}
             <div class="facts" class:decked={deckShown}>
               <button class="info" class:on={overview} aria-label="About this track" aria-pressed={overview} title="About this track" onclick={() => (overview = !overview)}
@@ -974,6 +974,13 @@
 
   .under > * {
     grid-area: 1 / 1;
+  }
+
+  /* Where the deck can show, the row keeps its height always (the owner's tablet, 2026-10-28: a one-line row of 26 px,
+     the deck 43 over it, lay on the artist's line and the waveform): never a shift as it comes, and the layout measures
+     it, the cover giving way. */
+  .under.deckroom {
+    min-height: 43px;
   }
 
   /* Kept in its place, unseen (not `.away`: app.css hides the children of that, and the row would collapse). */
