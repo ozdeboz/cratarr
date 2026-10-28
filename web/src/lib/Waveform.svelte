@@ -72,7 +72,7 @@
   /** Each bar's rise above the quietest, for the waveform shown. */
   const heights = $derived(bins ? bars(bins, n).map((v) => Math.max(LOW, v * 100) - LOW) : null);
   /** The view's, zoomed: the same pieces, the stretch remapped onto them. */
-  const zoomed = $derived(bins && view && want === 'wave' ? barsIn(bins, n, view.from, view.to).map((v) => Math.max(LOW, v * 100) - LOW) : null);
+  const zoomed = $derived(bins && view && want === 'wave' ? barsIn(bins, n, view.from, view.to, 1 - (view.to - view.from)).map((v) => Math.max(LOW, v * 100) - LOW) : null);
 
   // Where each piece is (not reactive: drawn on `frame`).
   let gap = new Float32Array(0);

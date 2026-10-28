@@ -139,9 +139,19 @@ export const waveformOf = (source: string, id: string): Uint8Array | null | unde
 
 /** The bins as `n` bars, 0..1 each: the loudest bin of each stretch, against the track's loudest (its shape, however
  *  loud it was mastered). */
-/** The bars of the stretch `from`..`to` (0..1 of the track) on `n` pieces, scaled as the whole track's are (its loudest
- *  1): a zoom remapped onto the same pieces (the owner, 2026-10-28). Finer than the bins: between the two nearest. */
-export function barsIn(bins: Uint8Array, n: number, from: number, to: number): number[] {
+/** The bars of the stretch `from`..`to` (0..1 of the track) on `n` pieces: a zoom remapped onto the same pieces (the
+ *  owner, 2026-10-28). Finer than the bins: between the two nearest. Scaled as the whole track's are (its loudest 1),
+ *  and by `contrast` (0..1) toward the stretch's own range, its quietest at the floor and its loudest at the ceiling,
+ *  so where the playhead is reads at a glance. */
+export function barsIn(bins: Uint8Array, n: number, from: number, to: number, contrast = 0): number[] {
+  const plain = barsPlainIn(bins, n, from, to);
+  if (contrast <= 0) return plain;
+  const lo = Math.min(...plain);
+  const hi = Math.max(...plain);
+  if (hi - lo < 1e-3) return plain;
+  return plain.map((v) => v + ((v - lo) / (hi - lo) - v) * contrast);
+}
+function barsPlainIn(bins: Uint8Array, n: number, from: number, to: number): number[] {
   let top = 1;
   for (let j = 0; j < bins.length; j++) top = Math.max(top, bins[j]);
   const L = bins.length;
