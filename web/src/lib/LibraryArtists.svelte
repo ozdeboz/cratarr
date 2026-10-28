@@ -7,7 +7,7 @@
   // selection's menu, with Sync to this device and Remove from this device as one artist's menu has them; the owner,
   // 2026-10-27: what one has, several have).
   import { panelBeside } from './glass.svelte';
-  import { albumCoverUrl, artistFavorite, setArtistFavorite, type ShelfSource } from './api';
+  import { albumCoverUrl, artistFavorite, type ShelfSource } from './api';
   import { downloads, inApp, removeDownloads } from './app.svelte';
   import { isKept, setKept } from './kept.svelte';
   import { askIfMany, fewAtATime, MANY } from './many.svelte';
@@ -24,7 +24,9 @@
   import { plural } from './insights.svelte';
   import ListHead from './ListHead.svelte';
   import { artistSubject, panel, viewPlaylist } from './panel.svelte';
-  import { ALBUM_WIDTHS, ARTIST_ORDERS, howMany, matchesSearch } from './pageView.svelte';
+  import { ALBUM_WIDTHS, ARTIST_ORDERS, howMany, matchesSearch, pageView } from './pageView.svelte';
+  import { useOf } from './albums.svelte';
+  import { isFavoriteArtist, setArtistHeart } from './favourites.svelte';
   import { leaveSearch } from './globalSearch.svelte';
   import { prefs } from './prefs.svelte';
   import Row, { type Cell } from './Row.svelte';
@@ -41,12 +43,21 @@
   import { fromAction } from 'svelte/attachments';
   import { toast } from './toast.svelte';
 
-  let { sources }: { sources: ShelfSource[] } = $props();
+  /** `sources`: the albums that pass the Library's filter as an album does (4 stars and up, its conditions); `all`: every
+   *  album, for the artists before the filter and whether one was ever played. `favourites`, `unplayed`: the filter's
+   *  switches, the artist's own here (a favourite artist; none of their albums played). */
+  let {
+    sources,
+    all,
+    favourites = false,
+    unplayed = false,
+    pending = false,
+  }: { sources: ShelfSource[]; all: ShelfSource[]; favourites?: boolean; unplayed?: boolean; pending?: boolean } = $props();
 
   type Artist = { source: string; name: string; albums: number; tracks: number; cover: string; list: ListedAlbum[] };
-  const artists = $derived.by(() => {
+  const artistsOf = (list: ShelfSource[]) => {
     const by = new Map<string, Artist>();
-    for (const s of sources)
+    for (const s of list)
       for (const a of s.albums) {
         if (a.library && !libraryShown(s.id, a.library)) continue;
         for (const name of a.artists?.length ? a.artists : a.artist ? [a.artist] : []) {
@@ -59,6 +70,22 @@
         }
       }
     return [...by.values()];
+  };
+  const keyIn = (source: string, name: string) => `${source}\u0000${name.toLocaleLowerCase()}`;
+  /** The artists any of whose albums was played. */
+  const played = $derived.by(() => {
+    if (!unplayed) return null;
+    const out = new Set<string>();
+    for (const a of artistsOf(all)) if (a.list.some((x) => useOf(a.source, x.id).plays > 0 || !!useOf(a.source, x.id).played)) out.add(keyIn(a.source, a.name));
+    return out;
+  });
+  const artists = $derived(
+    artistsOf(sources).filter((a) => (!favourites || isFavoriteArtist(a.source, a.name)) && (!played || !played.has(keyIn(a.source, a.name)))),
+  );
+  // How many the filter lets through, of how many (the Filter sheet's count), before the search, as the albums'.
+  $effect(() => {
+    pageView.counted = { shown: artists.length, total: artistsOf(all).length, pending };
+    return () => (pageView.counted = null);
   });
   const byName = (x: Artist, y: Artist) => x.name.localeCompare(y.name, undefined, { sensitivity: 'base', numeric: true });
   // As every search reads (lib/search, decision 0072); in the header's order, either way round.
@@ -128,7 +155,7 @@
     askIfMany(list.length, { title: on ? `Favourite ${n}?` : `Unfavourite ${n}?`, label: on ? `Favourite ${n}` : `Unfavourite ${n}`, icon: 'heart' }, async () => {
       navigator.vibrate?.(8);
       selecting = null;
-      const failed = await fewAtATime(list, (a) => setArtistFavorite(a.source, a.name, on));
+      const failed = await fewAtATime(list, (a) => setArtistHeart(a.source, a.name, on));
       if (failed.length) toast.fail(null, "The favourites didn't all change");
     });
   }

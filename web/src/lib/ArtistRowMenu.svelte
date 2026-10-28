@@ -1,7 +1,8 @@
 <script lang="ts">
   // An artist's menu from a list's row (the Library's Artists, its long-press; the owner, 2026-10-25: as the albums'):
   // the artist panel's own menu (lib/ArtistMenu), its tracks and heart read when it opens.
-  import { artistView, setArtistFavorite, type ArtistView } from './api';
+  import { artistView, type ArtistView } from './api';
+  import { setArtistHeart } from './favourites.svelte';
   import ArtistMenu from './ArtistMenu.svelte';
   import type { LocalTrack } from './localPlayer.svelte';
   import { playCollection } from './play.svelte';
@@ -26,7 +27,7 @@
     const on = !favorite;
     favorite = on;
     try {
-      await setArtistFavorite(source, name, on);
+      await setArtistHeart(source, name, on);
     } catch (e) {
       favorite = !on;
       toast.fail(e, "The favourite didn't change");

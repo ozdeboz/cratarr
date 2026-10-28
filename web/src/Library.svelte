@@ -16,7 +16,7 @@
   import { toast } from './lib/toast.svelte';
   import { jobs } from './lib/jobs.svelte';
   import { on, stream } from './lib/events.svelte';
-  import { albumFavoritesKnown, isFavorite, loadAlbumFavorites } from './lib/favourites.svelte';
+  import { albumFavoritesKnown, artistFavoritesKnown, isFavorite, loadAlbumFavorites, loadArtistFavorites } from './lib/favourites.svelte';
   import { pageView } from './lib/pageView.svelte';
   import { passing, switchOn } from './lib/listFilter.svelte';
   import { libraryShown } from './lib/sources.svelte';
@@ -131,7 +131,10 @@
 
   // The filter's own switches (Favourites only, Not played yet, 4 stars and up), remembered as the Library's (decision
   // 0060). Lossless only, Upgrades waiting and Duplicates waiting are none (the owner, 2026-10-24); one left on from
-  // before goes by nothing.
+  // before goes by nothing. One filter for the three views, each by its own items (the owner, 2026-10-28: "whole and
+  // complete"): the albums here; the artists by theirs (lib/LibraryArtists: a favourite artist, never played, with an
+  // album that passes the rest); the tracks by the server's (lib/LibraryTracks).
+  const view = $derived(prefs.libraryView);
   const fav = $derived(switchOn('library', 'favourites'));
   const unplayed = $derived(switchOn('library', 'unplayed'));
   const top = $derived(switchOn('library', 'topRated'));
@@ -142,9 +145,12 @@
   });
   // Favourites only asks each server again (an app may have changed a star meanwhile); one that cannot tell says so.
   $effect(() => {
-    if (!fav) return;
+    if (!fav || view === 'tracks') return;
+    const artists = view === 'artists';
     for (const s of untrack(() => sources ?? []))
-      loadAlbumFavorites(s.id).then((ok) => ok || toast.show({ text: `${s.label} can't list favourite albums`, tone: 'error' }));
+      (artists ? loadArtistFavorites(s.id) : loadAlbumFavorites(s.id)).then(
+        (ok) => ok || toast.show({ text: `${s.label} can't list favourite ${artists ? 'artists' : 'albums'}`, tone: 'error' }),
+      );
   });
   // Its conditions (decision 0061): the server says which albums pass, any or all of their tracks.
   const pass = passing(() => 'library', () => ({ list: { kind: 'library' }, source: prefs.source || undefined }));
@@ -152,13 +158,21 @@
     const keys = pass.keys;
     // What a filter goes by not in yet: loading, not the albums unfiltered or none (the owner, 2026-10-23).
     const unknown = (has: (source: string) => boolean) => !!sources?.some((s) => !has(s.id));
-    if ((fav && unknown(albumFavoritesKnown)) || ((unplayed || top) && unknown(albumUsesKnown)) || (pass.pending && !keys)) return null;
-    if (!sources || !(fav || unplayed || top || keys)) return sources;
+    // The tracks' view: the server filters them (lib/LibraryTracks).
+    if (view === 'tracks') return sources;
+    const artists = view === 'artists';
+    if ((fav && unknown(artists ? artistFavoritesKnown : albumFavoritesKnown)) || ((unplayed || top) && unknown(albumUsesKnown)) || (pass.pending && !keys))
+      return null;
+    // The artists' view: the albums that pass what an album has (4 stars and up, the conditions); a favourite artist
+    // and one never played are the artist's own (lib/LibraryArtists).
+    const albumFav = fav && !artists;
+    const albumUnplayed = unplayed && !artists;
+    if (!sources || !(albumFav || albumUnplayed || top || keys)) return sources;
     const keep = (s: ShelfSource, a: ListedAlbum) => {
       const u = useOf(s.id, a.id);
       return (
-        (!fav || isFavorite(s.id, a.id)) &&
-        (!unplayed || (u.plays === 0 && !u.played)) &&
+        (!albumFav || isFavorite(s.id, a.id)) &&
+        (!albumUnplayed || (u.plays === 0 && !u.played)) &&
         (!top || u.rating >= 4) &&
         (!keys || keys.has(a.id))
       );
@@ -167,7 +181,9 @@
   });
   // How many albums the filter lets through, of how many (the Filter sheet's count): of the libraries switched on, as
   // the shelf shows them (it said 605 of 2,861 with Music switched off).
+  // The albums' (the artists and the tracks count their own).
   $effect(() => {
+    if (view === 'artists' || view === 'tracks') return;
     const count = (l: ShelfSource[] | null) => (l ?? []).reduce((n, s) => n + s.albums.filter((a) => !a.library || libraryShown(s.id, a.library)).length, 0);
     pageView.counted = sources ? { shown: count(shown), total: count(sources), pending: pass.pending } : null;
     return () => (pageView.counted = null);
@@ -186,7 +202,7 @@
     <p class="empty">No server with a Music or Incoming library is connected.</p>
   {:else}
     <!-- Its artists instead (the switch beside back, App): the albums' artists. -->
-    {#if prefs.libraryView === 'artists'}<LibraryArtists sources={shown} />{:else if prefs.libraryView === 'tracks'}<LibraryTracks />{:else}
+    {#if prefs.libraryView === 'artists'}<LibraryArtists sources={shown} all={sources ?? []} favourites={fav} {unplayed} pending={pass.pending} />{:else if prefs.libraryView === 'tracks'}<LibraryTracks />{:else}
     <AlbumShelf sources={shown} empty="No albums." onmenu={openMenu} bind:order={prefs.libraryOrder} bind:down={prefs.libraryDown}>
       {#snippet extra(s: ShelfSource, a: ListedAlbum)}
         {#if jobs.of(s.id, a.id)}
