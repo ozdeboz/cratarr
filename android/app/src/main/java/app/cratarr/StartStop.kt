@@ -80,7 +80,7 @@ class StartStop(
 
     init {
         deckNow = { deck() }
-        landingNow = { landingAhead() }
+        landingNow = { aim() }
     }
 
     /** The rules found broken at the last look: one broken at two looks running is healed (a moment's state between
@@ -1212,6 +1212,7 @@ class StartStop(
         tapeChain = chain
         tapeIndex = player.currentMediaItemIndex
         tapeStop = null
+        tapeAim = null
         tapeFrom = from
         tapeTo = to
         tapeSign = if (to < from) -1 else 1
@@ -1389,8 +1390,31 @@ class StartStop(
      */
     private fun prepareLanding() {
         val w = landingAhead() ?: return
+        tapeAim = aimOf(w)
         player.seekTo(w.index, (w.ms - PREP_LEAD_MS).coerceAtLeast(0L))
-        step("landing readied", "track" to w.index, "at_ms" to w.ms)
+        step("landing readied", "track" to w.index, "at_ms" to w.ms, "aim_ms" to tapeAim?.ms)
+    }
+
+    /** Where a hold let go aims, fixed as it was let go (the page keeps its line there until the tape is there). */
+    private var tapeAim: Deck.Walk? = null
+
+    /**
+     * A hold's aim (the owner, 2026-10-28, through 632): forwards where it plays at 1× again, backwards (and a pause)
+     * where it stands. Held: where letting go now would aim; let go: the aim as it was let go, until the tape is there
+     * (landed, and its wind-up from still over).
+     */
+    fun aim(now: Long = SystemClock.elapsedRealtime()): Deck.Walk? {
+        val a = tapeAim ?: return landingAhead(now)?.let(::aimOf)
+        return a.takeIf { tapeListener != null || (quietRamp && running == "in") }
+    }
+
+    /** The aim of a landing [w]: a flying one hands back at the track's own speed there; one from still forwards spins up
+     *  from its stand (no early start), 1× where its wind-up has carried it; backwards, a pause, the queue's end: the stand. */
+    private fun aimOf(w: Deck.Walk): Deck.Walk {
+        if (tapeSign < 0 || tapeReverse || tapeFlying || tapeStop != null || w.edge) return w
+        val m = Prefs.START_STOP_VINYL
+        val up = windUp(m, w.ms, prefs.tapeAttackMs)
+        return Deck.walk(lengths(), w.index, w.ms, (up * pace(m)).toLong()).let { Deck.Walk(it.index, it.ms, false) }
     }
 
     /**
@@ -1483,7 +1507,7 @@ class StartStop(
         var deckNow: (() -> Deck)? = null
             private set
 
-        /** Where a hold lands if let go now, or where its brake lands it ([landingAhead]); null otherwise. */
+        /** A hold's aim ([aim]): where letting go now aims, or the aim it was let go with; null otherwise. */
         @Volatile
         var landingNow: (() -> Deck.Walk?)? = null
             private set

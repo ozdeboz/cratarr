@@ -232,7 +232,8 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             .put("accelX", deck?.accel ?: 0.0)
             // The place is a wind's (its stream sounds).
             .put("rewinding", StartStop.winding)
-            // A hold's landing (the page's look-ahead, 632): where letting go now lands it, or where its brake will.
+            // A hold's aim (the page's look-ahead, 632): forwards where it plays at 1× again, backwards where it stands;
+            // held, where letting go now aims; let go, the aim it was let go with.
             .put("landing", StartStop.landingNow?.invoke()?.let { JSONObject().put("index", it.index).put("positionMs", it.ms) } ?: JSONObject.NULL)
             .put("direction", StartStop.deckDirection)
             .put("durationMs", length)
