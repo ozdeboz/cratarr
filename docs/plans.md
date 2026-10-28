@@ -35,6 +35,11 @@ kind of adapters Cratarr's own sources use (0005).
     in a mode of its own, as local mode (0052) is. It works where only the phone reaches that server. It loses what
     local mode loses: Play On handover, Cratarr's history, crates, analysis, Home Assistant. It also needs library
     views that are not the server's pages.
+- The owner's lean (2026-10-28, after "what fundamentally blocks one combined library?"): **different modes**, each
+  server its own mode beside Cratarr's and Local, never mixed. That avoids matching one album across servers, mixing
+  each server's user data, and queues holding tracks the next player cannot reach. Still open: whether a mode goes
+  through Cratarr's server (shape A, with its queues, Play On, history and Home Assistant) or only through the app
+  (shape B).
 - Open either way:
   - Whose favourites and plays they are: Cratarr's user data, the other server's stars mirrored (as Jellyfin's), or
     both.
