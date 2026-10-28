@@ -576,7 +576,7 @@
                   : undefined}
             >
               <span class="t">{np.progress.estimated ? '≈' : ''}{clockText(pos)}</span>
-              <SeekWave {seek} bins={wave} loading={np ? waveLoading(np.source, np.id) : null} {dur} {canSeek} paused={waveStill(np.progress)} estimated={np.progress.estimated} room={head} />
+              <SeekWave {seek} bins={wave} loading={np ? waveLoading(np.source, np.id) : null} {dur} {canSeek} paused={waveStill(np.progress)} estimated={np.progress.estimated} room={head} track={np ? `${np.source}/${np.id}` : null} />
               <span class="t">{dur ? clockText(dur) : '–:––'}</span>
             </div>
           {/if}

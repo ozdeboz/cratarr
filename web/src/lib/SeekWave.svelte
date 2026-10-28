@@ -27,6 +27,7 @@
     paused = false,
     estimated = false,
     room,
+    track = null,
     onend,
   }: {
     seek: Seek;
@@ -40,6 +41,8 @@
     estimated?: boolean;
     /** The player's edges, for the lens. */
     room?: HTMLElement;
+    /** Which track it shows (source/id): its waveform's pieces coloured by the track each shows. */
+    track?: string | null;
     /** Let go (sought or not). */
     onend?: () => void;
   } = $props();
@@ -232,7 +235,7 @@
   onkeydown={key}
 >
   {#if waveShown}
-    <Waveform bins={shaped ? (bins ?? null) : null} {want} {loading} progress={dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} {view} ahead={isLocal() && prefs.waveLevel === 'difference'} landing={holdNow.landing !== null && dur && (holdNow.dir > 0 ? pos < holdNow.landing : pos > holdNow.landing) ? holdNow.landing / dur : null} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
+    <Waveform bins={shaped ? (bins ?? null) : null} {want} {loading} progress={dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} {view} {track} left={isLocal() ? (local.left?.share ?? null) : null} ahead={isLocal() && prefs.waveLevel === 'difference'} landing={holdNow.landing !== null && dur && (holdNow.dir > 0 ? pos < holdNow.landing : pos > holdNow.landing) ? holdNow.landing / dur : null} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
   {:else}
     <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
   {/if}

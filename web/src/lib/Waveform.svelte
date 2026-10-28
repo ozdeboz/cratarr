@@ -32,6 +32,8 @@
     view = null,
     ahead = false,
     landing = null,
+    track = null,
+    left = null,
     onflat,
   }: {
     bins: Uint8Array | null;
@@ -56,6 +58,11 @@
     ahead?: boolean;
     /** A hold's landing if let go now (0..1 of the track): that tint between the playhead and it, and only there. */
     landing?: number | null;
+    /** Which track it shows; `left`: how much of the one before was played when it was left (else its last shown). The
+     *  pieces still showing the track before, until the next one's front has reached them, keep that colour (the owner,
+     *  2026-10-28: Next's wind to the end left its ends looking unplayed). */
+    track?: string | null;
+    left?: number | null;
     onflat?: () => void;
   } = $props();
 
@@ -74,6 +81,35 @@
   /** Where a place of the track (0..1) is drawn: within the view. */
   const shownAt = (x: number) => (view ? (x - view.from) / Math.max(1e-6, view.to - view.from) : x);
   const done = $derived(Math.min(1, Math.max(0, shownAt(progress))));
+  // The track before: how far it was played, and since when the next one's front runs (null: not yet begun).
+  let shownTrack: string | null = null;
+  let lastDone = 0;
+  let oldDone = $state(0);
+  let changed = false;
+  let oldFrontAt = $state<number | null>(null);
+  $effect(() => {
+    const k = track;
+    const p = done;
+    const l = left;
+    untrack(() => {
+      if (k !== shownTrack) {
+        if (shownTrack !== null) {
+          oldDone = l ?? lastDone;
+          changed = true;
+          oldFrontAt = null;
+        }
+        shownTrack = k;
+      }
+      lastDone = p;
+    });
+  });
+  /** How far the next track's front has come (0..1): the pieces past it still show the track before. */
+  const oldFrom = $derived.by(() => {
+    void frame;
+    if (changed) return 0;
+    if (oldFrontAt === null) return 1;
+    return Math.min(1, (performance.now() - oldFrontAt) / SPREAD_MS);
+  });
   /** The in-between tint's stretch (shown 0..1): to a hold's landing either way, else (Difference) all that is ahead. */
   const band = $derived.by((): [number, number] | null => {
     const clamp = (x: number) => Math.min(1, Math.max(0, x));
@@ -206,6 +242,8 @@
     untrack(() => {
       clearTimeout(pending);
       if (reducedMotion()) {
+        changed = false;
+        oldFrontAt = -Infinity;
         goals = [{ at: -Infinity, w: want, heights, heard }];
         scale.fill(heard);
         for (let i = 0; i < n; i++) {
@@ -218,9 +256,18 @@
       }
       pending = window.setTimeout(() => {
         const g = goals.at(-1);
-        // The same goal again (it was asked for and taken back within the delay): no new front.
-        if (g && g.w === want && g.heights === heights && Math.abs(g.heard - heard) < 0.01) return;
+        // The same goal again (it was asked for and taken back within the delay): no new front (nor a track before).
+        if (g && g.w === want && g.heights === heights && Math.abs(g.heard - heard) < 0.01) {
+          changed = false;
+          oldFrontAt = -Infinity;
+          return;
+        }
         goals = [...goals, { at: performance.now(), w: want, heights, heard }];
+        // The next track's first goal: its front from here.
+        if (changed) {
+          changed = false;
+          oldFrontAt = goals.at(-1)!.at;
+        }
         run();
       }, known ? GOAL_DELAY_MS : LEVEL_WAIT_MS);
     });
@@ -280,9 +327,15 @@
        colour (the owner, 2026-10-27): levelled, what the colour does not reach keeps the unplayed tint, and levelling
        switched off the colour grows into it while those tips shrink to nothing; ahead of the playhead it never moves. -->
   <svg viewBox="0 0 {n} 100" preserveAspectRatio="none"><path d={output ? d : made} /></svg>
-  <svg class="played" viewBox="0 0 {n} 100" preserveAspectRatio="none" style:clip-path={`inset(0 ${(1 - done) * 100}% 0 0)`}>
+  <svg class="played" viewBox="0 0 {n} 100" preserveAspectRatio="none" style:clip-path={`inset(0 ${(1 - Math.min(done, oldFrom)) * 100}% 0 0)`}>
     <path {d} />
   </svg>
+  <!-- The track before, where its pieces still stand: as far as it was played. -->
+  {#if oldFrom < 1 && oldDone > oldFrom}
+    <svg class="played" viewBox="0 0 {n} 100" preserveAspectRatio="none" style:clip-path={`inset(0 ${(1 - oldDone) * 100}% 0 ${oldFrom * 100}%)`}>
+      <path {d} />
+    </svg>
+  {/if}
   <!-- What is heard next: ahead of the playhead (Difference), or to where a hold let go now would land (over the played
        colour too, going back). -->
   {#if band && band[1] > band[0]}

@@ -77,6 +77,9 @@ export const local = $state({
   /** The playing track's index in `queue`; -1 when nothing is loaded. */
   index: -1,
   paused: true,
+  /** The track left last, and how much of it was played then (0..1; wound to its end: 1): its waveform, still shown
+   *  while the next one's comes in, keeps that colour (the owner, 2026-10-28: its ends looked unplayed). */
+  left: null as { index: number; share: number } | null,
   /** Asked to play from rest and not sounding yet (its stream still coming): not yet playing, as the waveform shows it
    *  (the owner, 2026-10-28: only Start and stop shows the intention ahead of the truth). */
   starting: false,
@@ -1747,6 +1750,8 @@ export function jump(index: number) {
     return hand('jump', { index, ...(entry ? { entry } : {}) });
   }
   if (!audio || index < 0 || index >= local.queue.length) return;
+  const was = lengthOf(local.index) ?? local.duration;
+  if (local.index >= 0 && local.index !== index) local.left = { index: local.index, share: was ? Math.min(1, Math.max(0, local.position / was)) : 0 };
   // On from playing (a fast-forward's landing, a skip): the moment its stream takes is the tape's own, shown playing,
   // never as a stop (the owner, 2026-10-28: the next track's waveform came in grey).
   const onFromPlaying = !local.paused || !!tape.rewinding;
@@ -2955,7 +2960,11 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       if (w.after === 'pause') return restAt(index, at);
       return turned(() => playOnAt(index, at));
     }
-    if (dir > 0 && pos >= end - 0.5) return jump(index + 1);
+    // Wound to its end: played to its end, then the next.
+    if (dir > 0 && pos >= end - 0.5) {
+      local.position = Number.isFinite(end) ? end : pos;
+      return jump(index + 1);
+    }
     // Flown to a point: the track at its own speed from there at once, moving (no stop, no wind-up).
     if (w.fly && w.to !== null && audio)
       return whenThere(index, pos, () => {
