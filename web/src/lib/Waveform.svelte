@@ -34,6 +34,7 @@
     landing = null,
     track = null,
     left = null,
+    back = false,
     onflat,
   }: {
     bins: Uint8Array | null;
@@ -63,6 +64,9 @@
      *  2026-10-28: Next's wind to the end left its ends looking unplayed). */
     track?: string | null;
     left?: number | null;
+    /** Playing backwards (the knob, a hold back): a track change's colours run from the right instead (the owner,
+     *  2026-10-28: the colouring goes the way it plays; the pieces' own fronts still from the left). */
+    back?: boolean;
     onflat?: () => void;
   } = $props();
 
@@ -87,6 +91,8 @@
   let oldDone = $state(0);
   let changed = false;
   let oldFrontAt = $state<number | null>(null);
+  /** The way the last track change's colours run: from the right where it was playing backwards then. */
+  let fromRight = $state(false);
   $effect(() => {
     const k = track;
     const p = done;
@@ -94,6 +100,7 @@
     untrack(() => {
       if (k !== shownTrack) {
         if (shownTrack !== null) {
+          fromRight = back;
           oldDone = l ?? lastDone;
           changed = true;
           oldFrontAt = null;
@@ -324,7 +331,7 @@
     const e = performance.now() - oldFrontAt;
     const from = (e - OLD_FADE_MS) / SPREAD_MS;
     if (from >= oldDone) return null;
-    return `linear-gradient(to right, transparent ${f(from * 100)}%, #000 ${f((e / SPREAD_MS) * 100)}%)`;
+    return `linear-gradient(to ${fromRight ? 'left' : 'right'}, transparent ${f(from * 100)}%, #000 ${f((e / SPREAD_MS) * 100)}%)`;
   });
   /** Levelled visibly somewhere: a piece's scale a step from 1 (a fraction of a dB shows nothing). */
   const d = $derived.by(() => {
@@ -343,7 +350,7 @@
        colour (the owner, 2026-10-27): levelled, what the colour does not reach keeps the unplayed tint, and levelling
        switched off the colour grows into it while those tips shrink to nothing; ahead of the playhead it never moves. -->
   <svg viewBox="0 0 {n} 100" preserveAspectRatio="none"><path d={output ? d : made} /></svg>
-  <svg class="played" viewBox="0 0 {n} 100" preserveAspectRatio="none" style:clip-path={`inset(0 ${(1 - Math.min(done, oldFrom)) * 100}% 0 0)`}>
+  <svg class="played" viewBox="0 0 {n} 100" preserveAspectRatio="none" style:clip-path={fromRight ? `inset(0 ${(1 - done) * 100}% 0 ${Math.min(1, 1 - oldFrom) * 100}%)` : `inset(0 ${(1 - Math.min(done, oldFrom)) * 100}% 0 0)`}>
     <path {d} />
   </svg>
   <!-- The track before, where its pieces still stand: as far as it was played. -->
