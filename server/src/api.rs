@@ -2955,11 +2955,20 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
             let winds = if tracks.len() > 1 { crate::wind::chain(&tracks, ask)? } else { vec![Wind::new(tracks[0].0, tracks[0].1, duration_ms, ask)?] };
             let map: Vec<serde_json::Value> = crate::wind::chain_map(&winds).into_iter().map(|(c, i, t)| json!([c, i, t])).collect();
             let length: f64 = winds.iter().map(Wind::ms).sum();
-            Ok(json!({ "map": map, "speed": winds[0].speed(), "length_ms": length.round() as u64 }))
+            Ok(json!({ "map": map, "speed": winds[0].speed(), "length_ms": length.round() as u64, "flight_max": ask.accel.and_then(|a| a.audio.map(|_| a.max)) }))
         })
         .await;
         return match plan {
-            Ok(Ok(v)) => Json(v).into_response(),
+            // A flight honoured says so here too (0.9.14): a page's player cannot read the stream's headers.
+            Ok(Ok(v)) => {
+                let mut r = Json(v).into_response();
+                if let Some(f) = accel.filter(|a| a.audio.is_some()).map(|a| a.max)
+                    && let Ok(h) = HeaderValue::from_str(&f.to_string())
+                {
+                    r.headers_mut().insert("x-flight-max", h);
+                }
+                r
+            }
             Ok(Err(e)) => (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("{e:#}") }))).into_response(),
             Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         };
