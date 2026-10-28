@@ -624,6 +624,10 @@ async function appendTrack(index: number, from: number, gen: number) {
     if (segment.length === null && sb && sb.buffered.length) segment.length = sb.buffered.end(sb.buffered.length - 1) - start;
     // Never back from where it stood (the tablet, 2026-10-28: resumed at 6:10 of a 6:10 track, none of it was in, and
     // every track after it was placed at -6:10 and failed): a track with nothing past the place asked is passed over.
+    const passedOver = start + (segment.length ?? 0) <= streamEnd;
+    if (passedOver)
+      // Which it was: a place asked at its very end (the page's), or a file shorter than its length says (the library's).
+      playback('warn', 'track passed over', { index, track: t.id, from: Math.round(from * 10) / 10, told, why: told !== null && from >= told - 1 ? 'asked at its end' : 'shorter than told' });
     streamEnd = Math.max(streamEnd, start + (segment.length ?? 0));
     lastAppended = index;
     if (index === local.queue.length - 1 && ms?.readyState === 'open') {
