@@ -32,10 +32,11 @@ const HOLD = { min: 0, max: 12, step: 0.5, start: 4.5 } as const;
  *  minute wound); a hold's time to its top speed (s, its spin-up in it). */
 export const MOTION = { toStart: POINT, seekBack: POINT, holdBack: HOLD, toEnd: POINT, seekFwd: POINT, holdFwd: HOLD } as const;
 /** What is no longer set (the owner, 2026-10-28: good defaults): a wind to a point's speed limit, a hold's starting
- *  and top speed. */
+ *  and top speed. A hold's top is the fastest a browser plays a track (16x), so letting go hands the tape back to the
+ *  track's own player at once, at the speed it has, never a cut-over (the owner, 2026-10-28). */
 export const POINT_SPEED = 8;
-export const HOLD_START = 8;
-export const HOLD_TOP = 64;
+export const HOLD_START = 4;
+export const HOLD_TOP = 16;
 /** How long each heard piece of a wind cut short is (ms; the owner, 2026-10-28: no setting, a good default). */
 export const PIECE_MS = 350;
 
