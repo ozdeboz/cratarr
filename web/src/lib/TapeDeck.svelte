@@ -144,16 +144,9 @@
   );
   /** Nothing to play backwards from (a Bandcamp preview, the device's own music): the knob dimmed, still. */
   const stuck = $derived(!windable(playing()));
-  /** The knob drawn as the visuals' knobs are (lib/visuals/PatchKnob: a cap in a faint arc, its value an arc in the
-   *  accent; the owner, 2026-10-27: one knob language): its arc over the top, the side it is turned to lit. */
+  /** The knob as a machine's (the owner, 2026-10-28: a chicken-head): a tapering bright pointer over a dark skirt,
+   *  turned SWEEP degrees to the side it is at; its direction reads even at its true size. */
   const SWEEP = 50;
-  const ARC_R = KNOB.r + 0.6;
-  const at = (deg: number) => [Math.sin((deg * Math.PI) / 180) * ARC_R, -Math.cos((deg * Math.PI) / 180) * ARC_R];
-  const arc = (from: number, to: number) => {
-    const [x0, y0] = at(from);
-    const [x1, y1] = at(to);
-    return `M${x0.toFixed(2)} ${y0.toFixed(2)}A${ARC_R} ${ARC_R} 0 0 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
-  };
   /** A layer's box over the drawing: around (x, y), `half` either side. */
   const box = (x: number, y: number, half: number) => `left:${x - half}px;top:${y - half}px;width:${2 * half}px;height:${2 * half}px`;
 </script>
@@ -189,10 +182,12 @@
       style="left:{KNOB.x - 6}px;top:{KNOB.y - 6}px"
       onclick={() => turnTape(tapeDir.want === 'L' ? 'R' : 'L')}
       ><svg viewBox="-6 -6 12 12" aria-hidden="true"
-        ><path class="knob-track" d={arc(-SWEEP, SWEEP)} /><path class="knob-value" d={tapeDir.want === 'L' ? arc(-SWEEP, 0) : arc(0, SWEEP)} /><circle
-          class="knob-cap"
-          r={KNOB.r - 1.2}
-        /></svg
+        ><g class="knob-turn" style:transform="rotate({tapeDir.want === 'L' ? -SWEEP : SWEEP}deg)"
+          ><circle class="knob-skirt" r={KNOB.r + 1.1} /><path class="knob-pointer" d="M-1.15 3.3 L1.15 3.3 L0.55 -4.6 L-0.55 -4.6 Z" /><circle
+            class="knob-pointer"
+            r="1.25"
+          /><path class="knob-index" d="M0 -4.2 L0 -1.9" /></g
+        ></svg
       ></button
     >{/if}
     {#each [REEL_L, REEL_R] as c, i (i)}
@@ -279,24 +274,35 @@
     content: '';
   }
 
-  .knob-track,
-  .knob-value {
+  /* The chicken-head turns about its centre to the side it is at. */
+  .knob-turn {
+    transform-box: fill-box;
+    transform-origin: center;
+    transition: transform 320ms cubic-bezier(0.3, 0.8, 0.25, 1);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .knob-turn {
+      transition: none;
+    }
+  }
+
+  /* A dark skirt, a bright pointer over it with its hub, a dark line along the pointer's tip. */
+  .knob-skirt {
+    fill: color-mix(in srgb, var(--text) 7%, var(--surface));
+    stroke: color-mix(in srgb, var(--text) 22%, transparent);
+    stroke-width: 0.35;
+  }
+
+  .knob-pointer {
+    fill: color-mix(in srgb, var(--text) 82%, var(--surface));
+  }
+
+  .knob-index {
     fill: none;
-    stroke-width: 0.9;
+    stroke: var(--surface);
+    stroke-width: 0.45;
     stroke-linecap: round;
-  }
-
-  .knob-track {
-    stroke: color-mix(in srgb, var(--text) 16%, transparent);
-  }
-
-  /* The side it is turned to, in the waveform's colour as the reels are. */
-  .knob-value {
-    stroke: var(--art-accent, var(--accent));
-  }
-
-  .knob-cap {
-    fill: var(--border);
   }
 
   /* Two and a half times the first (the owner, 2026-10-27), clear of the knob either side. */
