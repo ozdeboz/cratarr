@@ -80,6 +80,7 @@ class StartStop(
 
     init {
         deckNow = { deck() }
+        landingNow = { landingAhead() }
     }
 
     /** The rules found broken at the last look: one broken at two looks running is healed (a moment's state between
@@ -1387,18 +1388,32 @@ class StartStop(
      * sought only at the landing, ~175 ms).
      */
     private fun prepareLanding() {
-        val t = tape ?: return
-        val n = 64
-        var sum = 0.0
-        for (i in 0 until n) {
-            val e = (1 + kotlin.math.cos(Math.PI * (i + 0.5) / n)) / 2
-            val r = tapeFloorOf() + (tapeReleaseFrom - tapeFloorOf()) * e
-            sum += if (tapeFlying) r else max(r.toFloat(), LOW).toDouble()
-        }
-        val played = t.currentPosition.coerceAtLeast(0L) + (tapeRelease * sum / n).toLong()
-        val w = landingAt(played)
+        val w = landingAhead() ?: return
         player.seekTo(w.index, (w.ms - PREP_LEAD_MS).coerceAtLeast(0L))
         step("landing readied", "track" to w.index, "at_ms" to w.ms)
+    }
+
+    /**
+     * The one prediction of a hold's landing: where its brake under way lands it, or, still held, where letting go
+     * [now] would: the stream the rest of the brake plays (its rate over what is left of it) added to where it has got,
+     * through its map, across the queue. Null but for a hold that sounds. The page's look-ahead (`landing`, 632) and
+     * the track readied before the landing ([prepareLanding]) read it.
+     */
+    fun landingAhead(now: Long = SystemClock.elapsedRealtime()): Deck.Walk? {
+        val t = tape ?: return null
+        if (!tapeHold || tapeListener == null || !tapeStarted) return null
+        val released = tapeReleased != 0L
+        val from = if (released) tapeReleaseFrom else tapeRate
+        val end = (if (released) tapeReleased else now) + tapeRelease
+        val span = (end - now).coerceAtLeast(0L)
+        val floor = tapeFloorOf()
+        val n = 64
+        var ahead = 0.0
+        for (i in 0 until n) {
+            val at = now + span * (i + 0.5) / n
+            ahead += streamRate(floor + (from - floor) * eased((end - at).toLong(), tapeRelease)) * span / n
+        }
+        return landingAt(t.currentPosition.coerceAtLeast(0L) + ahead.toLong())
     }
 
     /** A hold's lowest rate under its envelope: a flying one's floor, else still. */
@@ -1452,6 +1467,7 @@ class StartStop(
         tape?.release()
         tape = null
         deckNow = null
+        landingNow = null
         main.removeCallbacks(checks)
     }
 
@@ -1465,6 +1481,11 @@ class StartStop(
          *  service runs. Read on the main thread. */
         @Volatile
         var deckNow: (() -> Deck)? = null
+            private set
+
+        /** Where a hold lands if let go now, or where its brake lands it ([landingAhead]); null otherwise. */
+        @Volatile
+        var landingNow: (() -> Deck.Walk?)? = null
             private set
 
         /** Whether the deck's place is a wind's (its stream sounds): reported as `rewinding`. */

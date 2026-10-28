@@ -21,8 +21,8 @@ android {
         applicationId = "app.cratarr"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionName = "0.9.14-2"
-        versionCode = 19
+        versionName = "0.9.14-3"
+        versionCode = 20
     }
 
     signingConfigs {
