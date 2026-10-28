@@ -82,6 +82,46 @@ class StartStop(
         deckNow = { deck() }
     }
 
+    /** The rules found broken at the last look: one broken at two looks running is healed (a moment's state between
+     *  two steps is not). */
+    private var broken = emptySet<String>()
+
+    /**
+     * The machine's rules, looked at each [CHECK_MS] (as the page's checkTape, 2026-10-28: "nothing checks itself"): one
+     * broken twice running is written down as "tape broke" and healed.
+     */
+    private val checks = object : Runnable {
+        override fun run() {
+            val now = mutableMapOf<String, () -> Unit>()
+            val winds = tapeListener != null
+            val ramps = rampFn != null || running != null
+            // A commitment with nothing under way: every control would wait for nothing.
+            if (committed != null && !winds && !ramps && stopping == null) now["a commitment with nothing under way"] = {
+                commit(null)
+                changed()
+            }
+            // A place held with no ramp: the deck would stand still while the track plays.
+            if (heldPosition != null && committed == null && !winds) now["a place held with no ramp"] = { heldPosition = null }
+            // Both heads sounding at once (0075: one sounds, the other waits).
+            if (winds && tapeStarted && player.isPlaying) now["both heads sounding"] = { player.pause() }
+            // The track's own speed left off 1× with nothing turning it (the tablet's session said 0.9999992).
+            if (!winds && !ramps && fastAt == 0L && player.isPlaying && trackSpeed() != 1.0) now["the track's speed left at ${trackSpeed()}"] = { trackAt(1f) }
+            // The page's "winding" not the deck's.
+            if (winding != rewinding) now["winding told wrong"] = { winding = rewinding }
+            for ((rule, heal) in now) {
+                if (rule !in broken) continue
+                note("tape broke", "rule" to rule, "at_ms" to player.currentPosition)
+                heal()
+            }
+            broken = now.keys - broken
+            main.postDelayed(this, CHECK_MS)
+        }
+    }
+
+    init {
+        main.postDelayed(checks, CHECK_MS)
+    }
+
     /** While a ramp runs: whether it ends playing (true) or paused (false); null while none runs. */
     @Volatile
     var committed: Boolean? = null
@@ -1412,6 +1452,7 @@ class StartStop(
         tape?.release()
         tape = null
         deckNow = null
+        main.removeCallbacks(checks)
     }
 
     companion object {
@@ -1495,6 +1536,8 @@ class StartStop(
         /** How often the page is told the deck while it moves (it draws every frame from the place, speed and change),
          *  how many such ticks to one telling of the session and Cratarr, and to a second. */
         private const val DECK_TICK_MS = 100L
+        /** How often the machine's rules are looked at ([checks]). */
+        private const val CHECK_MS = 1_000L
         private const val CHANGED_EVERY = 3
         private const val TICKS_A_SECOND = 10
         /** The deck's change of speed is the speed this much later, less the speed now. */
