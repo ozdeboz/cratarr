@@ -106,6 +106,8 @@
     const p = done;
     const l = left;
     untrack(() => {
+      // Through a wide view (a continuous hold) the tracks run on as one: no track change.
+      if (k !== shownTrack && wide) shownTrack = k;
       if (k !== shownTrack) {
         if (shownTrack !== null) {
           fromRight = back;
@@ -261,6 +263,8 @@
     const known = heardKnown;
     untrack(() => {
       clearTimeout(pending);
+      // A wide view's bars are its own (the zoom's goal below); another track's coming in is no goal of its own.
+      if (wide) return;
       if (reducedMotion()) {
         changed = false;
         oldFrontAt = -Infinity;

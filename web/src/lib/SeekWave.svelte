@@ -162,15 +162,21 @@
     const d = local.queue[index]?.duration_secs;
     return d ? x - (d - secs) : null;
   }
+  // A continuous hold runs on the strip throughout (the owner, 2026-10-28: its zoom moves on through a track change, no
+  // track change of its own; only the cover and the background change as the next track plays): its window in s along
+  // the queue, the hold's zoom (the playhead where it was on the bar as it began), or the look-ahead's in another track.
   const wideTarget = $derived.by((): { a: number; b: number } | null => {
-    if (!zoomOn || prefs.startStop.edges !== 'queue') return null;
+    if (!zoomOn || prefs.startStop.edges !== 'queue' || !dur) return null;
     const li = holdNow.landingIndex;
     const l = holdNow.landing;
-    if (li === null || l === null || li === local.index) return null;
-    const A = along(li, l);
-    if (A === null) return null;
-    const G = Math.abs(A - pos);
-    return A > pos ? { a: pos - G / 4, b: A + G } : { a: A - G, b: pos + G / 4 };
+    const A = li !== null && l !== null && li !== local.index ? along(li, l) : null;
+    if (A !== null) {
+      const G = Math.abs(A - pos);
+      return A > pos ? { a: pos - G / 4, b: A + G } : { a: A - G, b: pos + G / 4 };
+    }
+    const W = Math.min(dur, Math.max(ZOOM_MIN_S, holdNow.speed * ZOOM_S));
+    const a = pos - (zoomAnchor ?? 0.5) * W;
+    return { a, b: a + W };
   });
   /** The wide view as shown, eased toward its target and back to the track's own view; null: none. */
   let wide = $state<{ a: number; b: number } | null>(null);
@@ -213,6 +219,8 @@
   const wideTracks = $derived.by(() => {
     if (!wide || !dur) return null;
     const out: { i: number; start: number; d: number }[] = [{ i: local.index, start: 0, d: dur }];
+    // Not along the queue: this track alone.
+    if (prefs.startStop.edges !== 'queue') return out;
     for (let i = local.index - 1, s = 0; i >= 0 && s > wide.a; i--) {
       const d = local.queue[i]?.duration_secs;
       if (!d) break;
@@ -234,7 +242,7 @@
     }
   });
   /** Which tracks those are: the strip is made again only when they change (not each frame the view eases). */
-  const wideSet = $derived(wideTracks && wideTracks.length > 1 ? wideTracks.map((t) => `${t.i}:${t.start}:${t.d}`).join(',') : null);
+  const wideSet = $derived(wideTracks ? wideTracks.map((t) => `${t.i}:${t.start}:${t.d}`).join(',') : null);
   /** The tracks' waveforms end to end (each against its own loudest, at one resolution along the queue). */
   const wideBins = $derived.by(() => {
     const key = wideSet;
@@ -410,7 +418,7 @@
   onkeydown={key}
 >
   {#if waveShown}
-    <Waveform bins={shaped ? (bins ?? null) : null} {want} {loading} progress={dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} view={wideStrip ? null : view} wide={wideStrip} {track} left={isLocal() ? (local.left?.share ?? null) : null} back={isLocal() && ((holdNow.on && holdNow.dir < 0) || tapeDir.state === 'backward' || deckNow.back)} ahead={isLocal() && prefs.waveLevel === 'difference'} landing={aimMark} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
+    <Waveform bins={shaped ? (bins ?? null) : null} want={wideStrip ? 'wave' : want} {loading} progress={dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} view={wideStrip ? null : view} wide={wideStrip} {track} left={isLocal() ? (local.left?.share ?? null) : null} back={isLocal() && ((holdNow.on && holdNow.dir < 0) || tapeDir.state === 'backward' || deckNow.back)} ahead={isLocal() && prefs.waveLevel === 'difference'} landing={aimMark} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
   {:else}
     <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
   {/if}
