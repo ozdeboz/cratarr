@@ -42,13 +42,14 @@
   let choosing = $state<keyof typeof CHOICES | null>(null);
   const chosen = (k: keyof typeof CHOICES) => CHOICES[k].options.find((o) => o.value === CHOICES[k].value())?.label ?? '';
 
-  /** The six motions, in order: back, then forward; each a wind to a point or a hold. */
+  /** The six motions, in pairs, back then forward (the owner, 2026-10-28): to the start and the end, the seeks, the
+   *  holds. */
   const MOTIONS: { m: Motion; name: string; line: string }[] = [
     { m: 'toStart', name: 'Back to start', line: 'Previous' },
-    { m: 'seekBack', name: 'Seek back', line: 'The waveform, the clock' },
-    { m: 'holdBack', name: 'Holding back', line: 'Previous, held' },
     { m: 'toEnd', name: 'Forward to end', line: 'Next' },
+    { m: 'seekBack', name: 'Seek back', line: 'The waveform, the clock' },
     { m: 'seekFwd', name: 'Seek forward', line: 'The waveform, the clock' },
+    { m: 'holdBack', name: 'Holding back', line: 'Previous, held' },
     { m: 'holdFwd', name: 'Holding forward', line: 'Next, held' },
   ];
   const isHold = (m: Motion) => m === 'holdBack' || m === 'holdFwd';
@@ -63,19 +64,29 @@
     } else prefs.startStop = next;
   }
 
-  const num = (v: number) => v.toFixed(2).replace(/\.?0+$/, '');
-  const sec = (ms: number) => `${num(ms / 1000)} s`;
+  // Every value with as many decimals as its step has, always (the owner, 2026-10-28: 0.25 then 0.3 moved the slider's
+  // readout while it was held).
+  const places = (step: number) => (String(step).split('.')[1] ?? '').length;
+  /** Seconds from ms, at `step` ms. */
+  const sec = (step: number) => (ms: number) => `${(ms / 1000).toFixed(places(step / 1000))} s`;
   const db = (v: number) => (v === 0 ? 'as played' : `${v} dB`);
   /** A motion's value: a wind to a point's seconds a minute wound, a hold's seconds to its top speed; its lowest Off. */
-  const motionText = (m: Motion, long: boolean) => (v: number) => (v === 0 ? 'Off' : isHold(m) ? `${num(v)} s` : long ? `${num(v)} s a minute` : `${num(v)} s/min`);
+  const motionText = (m: Motion, long: boolean) => (v: number) => {
+    if (v === 0) return 'Off';
+    const n = v.toFixed(places(MOTION[m].step));
+    return isHold(m) ? `${n} s` : long ? `${n} s a minute` : `${n} s/min`;
+  };
+  /** The readout's width: its widest value, so it never moves while the slider is held. */
+  const widest = (t: Tuning) =>
+    Math.max(...[t.range.min, t.range.min + t.range.step, t.range.max].map((v) => t.text(v).length));
 
   /** A setting of a group (its key in it), with its range and how it reads. */
   type Tuning = { key: string; label: string; range: { min: number; max: number; step: number }; text: (v: number) => string };
   const TAPE_TUNINGS: Tuning[] = [
-    { key: 'attackMs', label: 'Spin-up', range: TAPE.attackMs, text: sec },
-    { key: 'brakeMs', label: 'Brake', range: TAPE.brakeMs, text: sec },
+    { key: 'attackMs', label: 'Spin-up', range: TAPE.attackMs, text: sec(TAPE.attackMs.step) },
+    { key: 'brakeMs', label: 'Brake', range: TAPE.brakeMs, text: sec(TAPE.brakeMs.step) },
     { key: 'gainDb', label: 'Wind volume', range: TAPE.gainDb, text: db },
-    { key: 'pieceMs', label: 'Piece length', range: TAPE.pieceMs, text: sec },
+    { key: 'pieceMs', label: 'Piece length', range: TAPE.pieceMs, text: sec(TAPE.pieceMs.step) },
   ];
   /** The sheets: the tape's mechanics, or one motion (its one setting). */
   type Part = 'tape' | Motion;
@@ -125,15 +136,15 @@
         drag = null;
       }}
     />
-    <output>{t.text(value)}</output>
+    <output style:min-width="{widest(t)}ch">{t.text(value)}</output>
   </SettingRow>
 {/snippet}
 
 <Group title="Start and stop" more="Play and pause as a turntable (Vinyl: the speed, the pitch following) or fading in and out (Fade), over their own times: Start as play winds up, Stop as pause winds down. A track running into the next stays seamless.">
   <Item name="Effect" experimental value={chosen('effect')} onclick={() => (choosing = 'effect')} />
   {#if ss.mode !== 'off'}
-    <Item name="Start" value={sec(ss.ms)} onclick={() => (open = 'start')} />
-    <Item name="Stop" value={sec(ss.stopMs)} onclick={() => (open = 'stop')} />
+    <Item name="Start" value={sec(100)(ss.ms)} onclick={() => (open = 'start')} />
+    <Item name="Stop" value={sec(100)(ss.stopMs)} onclick={() => (open = 'stop')} />
     <Item name="Also for next and previous" toggle={{ checked: ss.skips, onchange: (on) => setSS({ skips: on }) }} />
   {/if}
 </Group>
@@ -187,7 +198,7 @@
   {@const label = open === 'start' ? 'Start' : 'Stop'}
   <MenuSheet {label} title={label} chips={[MODES.find((m) => m.value === ss.mode)?.label ?? '']} onclose={() => ((open = null), (drag = null))}>
     <div class="sheet">
-      {@render slider({ key, label, range: { ...RAMP_MS, step: 100 }, text: sec }, drag?.key === key ? drag.v : ss[key], (v) => setSS({ [key]: v }))}
+      {@render slider({ key, label, range: { ...RAMP_MS, step: 100 }, text: sec(100) }, drag?.key === key ? drag.v : ss[key], (v) => setSS({ [key]: v }))}
     </div>
   </MenuSheet>
 {:else if open}
@@ -200,9 +211,14 @@
     onclose={() => ((open = null), (drag = null))}
   >
     <div class="sheet">
-      {#if part !== 'tape' && shown.motions[part] > 0}
-        {#if isHold(part)}<HoldGraph hold={holdWind(shown, backwards(part) ? -1 : 1)} />
-        {:else}<WindGraph wind={pointWind(shown, part as PointMotion)} dir={backwards(part) ? 'back' : 'fwd'} />{/if}
+      {#if part !== 'tape'}
+        <!-- Off: the motion as it would be at its default, dimmed (the owner, 2026-10-28: dimmed, not gone). -->
+        {@const off = shown.motions[part] === 0}
+        {@const drawn = off ? changed(shown, part, { [part]: MOTION[part].start }) : shown}
+        <div class="graph" class:off>
+          {#if isHold(part)}<HoldGraph hold={holdWind(drawn, backwards(part) ? -1 : 1)} />
+          {:else}<WindGraph wind={pointWind(drawn, part as PointMotion)} dir={backwards(part) ? 'back' : 'fwd'} />{/if}
+        </div>
       {/if}
       {#each tuningsOf(part) as t (t.key)}{@render slider(t, valueOf(part, t.key), (v) => setPart(part, { [t.key]: v }))}{/each}
     </div>
@@ -224,6 +240,10 @@
     width: auto;
     min-width: 0;
     accent-color: var(--accent);
+  }
+
+  .graph.off {
+    opacity: 0.35;
   }
 
   .sheet output {

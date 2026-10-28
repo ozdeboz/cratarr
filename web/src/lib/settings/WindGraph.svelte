@@ -36,10 +36,12 @@
 
 <svg class="graph" viewBox="0 0 {W} {H}" role="img" aria-label="{dir === 'back' ? 'A rewind' : 'A fast-forward'} from {clockText(at)} takes {secs(plan.D)}">
   <text class="head" x={L} y="12">{dir === 'back' ? `From ${clockText(at)} to the start` : `From ${clockText(at)} to the end`}: <tspan class="strong">{secs(plan.D)}</tspan></text>
-  <text class="note" x={W - R} y="12" text-anchor="end">{plan.cut ? `${plan.pieces} ${plan.pieces === 1 ? 'piece' : 'pieces'}` : 'no cuts'}</text>
+  <!-- Its top speed at the header's end, the dashed line under it; whether it skips (a cut one: heard in short pieces,
+       the rest jumped over) between spin-up and brake: a count of pieces said nothing to a listener (2026-10-28). -->
+  <text class="note" x={W - R} y="12" text-anchor="end">top {wind.speed}×</text>
   <line class="base" x1={L} y1={ys(0)} x2={W - R} y2={ys(0)} />
   <line class="limit" x1={L} y1={ys(1)} x2={W - R} y2={ys(1)} />
-  <text class="note" x={W - R} y={ys(1) - 4} text-anchor="end">limit {wind.speed}×</text>
+  <text class="note" x={W / 2} y={H - 6} text-anchor="middle">{plan.cut && plan.pieces > 1 ? 'skips through' : 'plays through'}</text>
   <path class="area" d="{curve}L{xs(plan.D)} {ys(0)}L{xs(0)} {ys(0)}Z" />
   <path class="line" d={curve} />
   {#each ticks as x, i (i)}<line class="tick" x1={x} y1={ys(0) - 5} x2={x} y2={ys(0) + 1} />{/each}
