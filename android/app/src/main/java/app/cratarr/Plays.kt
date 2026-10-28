@@ -18,12 +18,18 @@ import java.util.concurrent.Executors
 object Plays {
     private const val TAG = "CratarrPlays"
     private const val PENDING = "plays_pending"
+    private const val PLAYED_HERE = "plays_device"
+    /** The device music's plays kept here, the latest tracks. */
+    private const val PLAYED_HERE_MOST = 200
     /** A track counts as played this far through. */
     const val PLAYED_AT = 0.9
     /** Plays not told after this long are given up. */
     private const val KEEP_MS = 30L * 24 * 3600 * 1000
 
     private val sender = Executors.newSingleThreadExecutor()
+
+    /** Told (on the player's thread) when the device music played here changed. */
+    @Volatile var onPlayedHere: (() -> Unit)? = null
 
     /**
      * A track heard (as the page describes it), started at `atMs`: how it ended (`finished`, `skipped`, `stopped`),
@@ -47,8 +53,31 @@ object Plays {
         if (lengthMs > 0) play.put("length_secs", lengthMs / 1000.0)
         prefs.queueId.takeIf { it.isNotEmpty() }?.let { play.put("context", "queue:$it") }
         save(context, load(context).apply { add(play) })
+        if (source == DeviceMusic.SOURCE && counts) playedHere(context, id, atMs)
         tell(context)
     }
+
+    /**
+     * Played here (0.9.15, local mode's Home; the owner, 2026-10-28: "the best PWA offline support possible"): the
+     * device music this device played, kept here, as Cratarr cannot know it offline, and the app plays with the page
+     * closed (in the background, Android Auto). Each track once: when last played, and how often.
+     */
+    @Synchronized
+    private fun playedHere(context: Context, id: String, atMs: Long) {
+        val all = loadArray(context, PLAYED_HERE)
+        val was = all.firstOrNull { it.optString("id") == id }
+        val count = (was?.optInt("count") ?: 0) + 1
+        val now = all.filter { it !== was }.toMutableList()
+        now.add(JSONObject().put("id", id).put("at", atMs).put("count", count))
+        val kept = now.sortedByDescending { it.optLong("at") }.take(PLAYED_HERE_MOST)
+        Prefs.shared(context).edit().putString(PLAYED_HERE, JSONArray(kept).toString()).apply()
+        onPlayedHere?.invoke()
+    }
+
+    /** The page's `device-plays` message: the device music played here, the latest first. */
+    @Synchronized
+    fun playedHere(context: Context): JSONObject =
+        JSONObject().put("type", "device-plays").put("plays", JSONArray(loadArray(context, PLAYED_HERE)))
 
     /** Tells Cratarr the plays not told yet; those it answers for are forgotten. */
     fun tell(context: Context) {
@@ -89,8 +118,10 @@ object Plays {
         }
     }
 
-    private fun load(context: Context): MutableList<JSONObject> {
-        val raw = Prefs.shared(context).getString(PENDING, null) ?: return mutableListOf()
+    private fun load(context: Context): MutableList<JSONObject> = loadArray(context, PENDING)
+
+    private fun loadArray(context: Context, key: String): MutableList<JSONObject> {
+        val raw = Prefs.shared(context).getString(key, null) ?: return mutableListOf()
         return try {
             val a = JSONArray(raw)
             (0 until a.length()).mapNotNull(a::optJSONObject).toMutableList()

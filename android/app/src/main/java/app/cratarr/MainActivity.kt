@@ -52,9 +52,11 @@ import androidx.webkit.ScriptHandler
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -246,12 +248,16 @@ class MainActivity : AppCompatActivity() {
         Reach.watch(this)
         // An output coming or going: the page's device sheet shows the outputs there are now.
         outputs = Output.Watch(this) { page?.postMessage(appMessage()) }
+        // The network as it changes (0.9.15): the page knows it is out of reach without waiting for an answer.
+        network = NetState.Watch(this) { page?.postMessage(it.toString()) }
+        Plays.onPlayedHere = { runOnUiThread { page?.postMessage(Plays.playedHere(this).toString()) } }
         // The device's music changed (decision 0052): the page asks for it again when it shows it.
         contentResolver.registerContentObserver(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, true, deviceMusicChanged)
     }
 
     /** Watches the outputs while the page is shown (decision 0033, amended 2026-10-19). */
     private var outputs: Output.Watch? = null
+    private var network: NetState.Watch? = null
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
@@ -271,9 +277,15 @@ class MainActivity : AppCompatActivity() {
         page?.postMessage(appMessage())
         when {
             prefs.serverUrl == null -> askForAddress()
-            // The first page: from the address that answers.
+            // The first page: from the address that answers, looked for a moment at most (0.9.15: no wait out of
+            // reach); without a network, at once. An answer later from the other address moves the page there.
             shown == null -> lifecycleScope.launch {
-                withContext(Dispatchers.IO) { Reach.check(this@MainActivity) }
+                if (NetState.connected(this@MainActivity)) {
+                    val looking = lifecycleScope.async(Dispatchers.IO) { Reach.check(this@MainActivity) }
+                    withTimeoutOrNull(FIRST_LOOK_MS) { looking.await() }
+                } else {
+                    Reach.checkSoon(this@MainActivity)
+                }
                 prefs.serverUrl?.let { if (it != shown) show(it) }
             }
             else -> {
@@ -287,6 +299,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         LiveSound.listener = null
         outputs?.stop()
+        network?.stop()
+        Plays.onPlayedHere = null
         contentResolver.unregisterContentObserver(deviceMusicChanged)
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(inUseChanged)
         Prefs.shared(this).unregisterOnSharedPreferenceChangeListener(modeChanged)
@@ -374,9 +388,14 @@ class MainActivity : AppCompatActivity() {
                 liveWanted = false
                 live()
                 reply.postMessage(appMessage())
+                // The network as it is, and the device music played here (0.9.15, offline).
+                reply.postMessage(NetState.now(this).toString())
+                reply.postMessage(Plays.playedHere(this).toString())
                 player?.report(withQueue = true)
                 followSession()
             }
+            "network" -> reply.postMessage(NetState.now(this).toString())
+            "device-plays" -> reply.postMessage(Plays.playedHere(this).toString())
             "player" -> player?.handle(message) ?: waiting.add(message)
             // Where this device's controls point (decision 0062): asked of the player service, which decides and
             // tells the page (modeChanged). Started for it while the app is in front.
@@ -802,5 +821,7 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         const val TAG = "Cratarr"
         const val EXTRA_SETTINGS = "cratarr.SETTINGS"
+        /** The first page waits this long at most for the address that answers (the local one answers in 1.5 s). */
+        const val FIRST_LOOK_MS = 2_000L
     }
 }

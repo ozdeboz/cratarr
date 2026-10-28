@@ -16,6 +16,7 @@ mod db;
 mod diagnostics;
 mod export;
 mod folders;
+mod idempotent;
 mod incoming;
 mod insights;
 mod journal;
@@ -277,6 +278,8 @@ async fn main() -> Result<()> {
     // Each request's id around all of it, the sign-in layer's refusals too (decision 0045).
     let routes = api::router(app.clone())
         .merge(serve::routes::router(served.clone()))
+        // A change sent again with its key (a page's offline changes) made once, inside the access check (whose it is).
+        .layer(axum::middleware::from_fn(idempotent::once))
         .layer(axum::middleware::from_fn_with_state(served, serve::access::require))
         .layer(axum::middleware::from_fn(api::request_ids));
     // Stopped (docker stop's SIGTERM, or Ctrl-C): no new requests, the players told why their connections end, and
