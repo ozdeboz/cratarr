@@ -21,6 +21,25 @@ kind of adapters Cratarr's own sources use (0005).
     handed over to another player, and its plays are not counted where the rest are.
   - Crates, playlists and analysis (0024, 0002, 0035) work on what the server catalogues. An external track would have
     no tempo, loudness or waveform unless the phone analysed it.
+- What is new about it (2026-10-28): Cratarr's server already reads Jellyfin and Subsonic sources (0005, 0032), but
+  those name files Cratarr sees on its own disks. An external library is music Cratarr cannot see as files, such as a
+  friend's Navidrome, or one's own Jellyfin in another house.
+- Two shapes (the owner, 2026-10-28: "just exploring for now", nothing chosen):
+  - **A. Through Cratarr's server.** The other server is a remote source. The server reads its catalogue through its
+    API and relays its streams (Subsonic `stream`, Jellyfin's universal audio). Everything that needs the server keeps
+    working: mixed queues, Play On, Home Assistant, the history and scrobbles, crates over its tags, downloads, Radio
+    and Autoplay. Waveforms, tempo and loudness could come from streaming each track once (opt-in, it costs bandwidth).
+    The cost is two trips for the music (the other server to the NAS, then to the device), which matters on mobile data
+    away from home. It keeps the thin-client model ("server first").
+  - **B. In the app directly** (the plan as first written). The app has its own adapters and a sign-in per server,
+    in a mode of its own, as local mode (0052) is. It works where only the phone reaches that server. It loses what
+    local mode loses: Play On handover, Cratarr's history, crates, analysis, Home Assistant. It also needs library
+    views that are not the server's pages.
+- Open either way:
+  - Whose favourites and plays they are: Cratarr's user data, the other server's stars mirrored (as Jellyfin's), or
+    both.
+  - Playlists are `.m3u` files of paths: an external track needs an entry form of its own.
+  - Tags: only what the other server's API gives (genres, year, sometimes BPM).
 
 ## Local library
 
