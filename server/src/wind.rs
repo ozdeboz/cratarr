@@ -50,6 +50,10 @@ pub struct Ask {
 pub struct Accel {
     pub period_s: f64,
     pub max: f64,
+    /// Flying past what is heard (0.9.14, `flight_max`; the owner: pure): heard at most at this speed, and past it in
+    /// pieces of this many ms each from where the flight has got, the way between jumped over; `max` is then the
+    /// flight's top. None: heard as it goes, up to `max`.
+    pub audio: Option<(f64, u64)>,
 }
 
 impl Accel {
@@ -78,6 +82,54 @@ impl Accel {
     fn speed(&self, base: f64, t: f64) -> f64 {
         (base * 2f64.powf(t / self.period_s)).min(self.max.max(base))
     }
+}
+
+/// A hold's pieces (`frames` of its stream, from stream time `t0`, the track at `x`): one as it goes; flying past its
+/// audio top, continuous up to it, then a piece every `piece` ms of the stream on one grid from that moment (on
+/// through the queue's joins), each from where the flight has got (`Accel::gone`), heard at the audio top, crossfaded
+/// at each cut as a condensed wind's.
+#[allow(clippy::too_many_arguments)]
+fn flight_pieces(a: &Accel, base: f64, t0: f64, x: f64, sign: f64, rate: f64, out: f64, frames: usize) -> Vec<Piece> {
+    let whole = vec![Piece { from: 0, to: frames, top: x, fade_in: None, fade_out: None, own: (0, frames) }];
+    let Some((top, piece_ms)) = a.audio.filter(|(top, _)| a.max > *top) else { return whole };
+    // When it passes its audio top (stream time), and so where the grid of cuts begins, in this track's frames.
+    let cross = (a.period_s * (top / base).log2()).max(0.0);
+    let grid = (cross - t0) * out;
+    let step = (piece_ms as f64 / 1000.0 * out).max(1.0);
+    let mut starts = vec![0usize];
+    let mut k = if grid > 0.0 { 0.0 } else { (-grid / step).ceil() };
+    loop {
+        let s = (grid + k * step).round();
+        if s >= frames as f64 {
+            break;
+        }
+        if s > 0.0 {
+            starts.push(s as usize);
+        }
+        k += 1.0;
+    }
+    if starts.len() == 1 {
+        return whole;
+    }
+    let half = ((XFADE * out / 2.0) as usize).max(1);
+    let heard = top * rate / out;
+    let place = |s: usize| x + sign * (a.gone(base, t0 + s as f64 / out) - a.gone(base, t0)) * rate;
+    let n = starts.len();
+    (0..n)
+        .map(|j| {
+            let (s, e) = (starts[j], if j + 1 < n { starts[j + 1] } else { frames });
+            let from = if j == 0 { s } else { s.saturating_sub(half) };
+            Piece {
+                from,
+                to: if j + 1 == n { e } else { (e + half).min(frames) },
+                // Before its own first frame it is where the heard tape would have been, at the audio top.
+                top: place(s) - sign * heard * (s - from) as f64,
+                fade_in: (j > 0).then_some((from, s + half)),
+                fade_out: (j + 1 < n).then_some((e.saturating_sub(half), (e + half).min(frames))),
+                own: (s, e),
+            }
+        })
+        .collect()
 }
 
 /// A condensed wind is at most this long (a tap's and a seek's cap, the owner).
@@ -185,7 +237,7 @@ impl Wind {
             let secs = distance / f64::from(rate);
             let end = a.when(speed, a.gone(speed, t0) + secs);
             w.frames = ((end - t0) * f64::from(out_rate)).ceil().max(1.0) as usize;
-            w.pieces = vec![Piece { from: 0, to: w.frames, top: x, fade_in: None, fade_out: None, own: (0, w.frames) }];
+            w.pieces = flight_pieces(&a, speed, t0, x, sign, f64::from(rate), f64::from(out_rate), w.frames);
             w.ends = Some((from_ms, to_ms));
             return Ok(w);
         }
@@ -247,7 +299,11 @@ impl Wind {
     fn step(&self, i: usize) -> f64 {
         match self.accel {
             None => self.v,
-            Some(a) => a.speed(self.base, self.t0 + (i as f64 + 0.5) / f64::from(self.out_rate)) * f64::from(self.rate) / f64::from(self.out_rate),
+            // Flying past its audio top: heard at that top, its pieces placed by the flight.
+            Some(a) => {
+                let v = a.speed(self.base, self.t0 + (i as f64 + 0.5) / f64::from(self.out_rate));
+                a.audio.map_or(v, |(top, _)| v.min(top)) * f64::from(self.rate) / f64::from(self.out_rate)
+            }
         }
     }
 
@@ -577,7 +633,7 @@ mod tests {
 
     #[test]
     fn a_hold_speeds_up_doubling_to_its_top_and_on_through_the_queue() {
-        let a = Accel { period_s: 1.5, max: 64.0 };
+        let a = Accel { period_s: 1.5, max: 64.0, audio: None };
         // From 8 ×: 64 × after three doublings (4.5 s); the way and its inverse agree.
         assert!((a.top_at(8.0) - 4.5).abs() < 1e-9);
         for t in [0.5, 3.0, 4.5, 9.0] {
@@ -597,6 +653,36 @@ mod tests {
         let winds = chain(&[(44_100, 2, Some(600_000)), (44_100, 2, Some(300_000))], Ask { accel: Some(a), ..ask(Dir::Back, 10_000, 8.0) }).unwrap();
         let t1 = winds[0].ms() / 1000.0;
         assert!((winds[1].ms() / 1000.0 - (a.when(8.0, 310.0) - t1)).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_flight_goes_on_past_what_is_heard_in_pieces() {
+        // Heard at most at 16 ×, flying on to 128 ×, 350 ms pieces: 8 × reaches 16 × after one doubling (1.5 s).
+        let flight = Accel { period_s: 1.5, max: 128.0, audio: Some((16.0, 350)) };
+        let heard = Accel { period_s: 1.5, max: 16.0, audio: None };
+        let w = Wind::new(44_100, 2, Some(1_200_000), Ask { accel: Some(flight), ..ask(Dir::Back, 1_000_000, 8.0) }).unwrap();
+        let plain = Wind::new(44_100, 2, Some(1_200_000), Ask { accel: Some(heard), ..ask(Dir::Back, 1_000_000, 8.0) }).unwrap();
+        // Sooner at the edge than at a steady 16 ×, as long as its flight's way says.
+        assert!(w.ms() < plain.ms() / 2.0, "{} {}", w.ms(), plain.ms());
+        assert!((w.ms() / 1000.0 - flight.when(8.0, 1000.0)).abs() < 0.01);
+        // Continuous up to 1.5 s, then a piece every 350 ms, each from where the flight has got.
+        let p = &w.pieces;
+        assert!(p.len() > 10);
+        assert_eq!(p[0].own, (0, (1.5 * 44_100.0_f64).round() as usize));
+        for q in &p[1..p.len() - 1] {
+            assert_eq!(q.own.1 - q.own.0, (0.35 * 44_100.0_f64).round() as usize, "{q:?}");
+            let half = (XFADE * 44_100.0 / 2.0) as usize;
+            let at_own = q.top - 16.0 * (q.own.0 - q.from) as f64;
+            let flown = 1_000.0 * 44_100.0 - flight.gone(8.0, q.own.0 as f64 / 44_100.0) * 44_100.0;
+            assert!((at_own - flown).abs() < 2.0, "{at_own} {flown} {half}");
+        }
+        // Heard no faster than 16 ×.
+        assert!((w.step(w.frames - 1) - 16.0).abs() < 1e-9);
+        // Without a flight beyond what is heard, as before: one piece.
+        assert_eq!(plain.pieces.len(), 1);
+        let mut wav = Vec::new();
+        w.render(&mut Tone { hz: 40.0, secs: 1_200.0 }, |b| { wav.extend_from_slice(&b); true }).unwrap();
+        assert_eq!(wav.len() as u64, w.bytes());
     }
 
     #[test]
