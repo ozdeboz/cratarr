@@ -984,7 +984,8 @@ class StartStop(
         tapeAttack = way.attackMs
         tapeRelease = way.releaseMs
         tapeDoublingS = way.doublingS.toDouble()
-        tapeTop = way.top.toDouble()
+        // A hold's way follows its flight (on to [Prefs.FLIGHT_TOP]); the knob's backwards play does not rise.
+        tapeTop = if (hold && !reverse) Prefs.FLIGHT_TOP.toDouble() else way.top.toDouble()
         tapeJump = jump
         tapeJumped = false
         tapeWaits = waits

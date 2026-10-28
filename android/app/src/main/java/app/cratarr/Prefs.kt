@@ -505,6 +505,9 @@ class Prefs(context: Context) {
         /** A hold's starting and top speed (the page's, 2026-10-28: from 4× to 16×, a browser's fastest). */
         const val HOLD_START = 4f
         const val HOLD_TOP = 16f
+        /** How fast a hold flies at most (the page's FLIGHT_TOP): heard at [HOLD_TOP] at most, past it in pieces of
+         *  [PIECE_MS], each from where the flight has got (the server's `flight_max`). */
+        const val FLIGHT_TOP = 128f
         const val WIND_EDGES = "wind_edges"
         const val START_STOP_OFF = "off"
         const val START_STOP_VINYL = "vinyl"

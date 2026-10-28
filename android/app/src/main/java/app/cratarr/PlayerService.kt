@@ -737,7 +737,8 @@ class PlayerService : MediaSessionService() {
         val fit = fitMs?.let { "&fit_ms=$it&attack_ms=${w.attackMs}&release_ms=${w.releaseMs}&piece_ms=${w.pieceMs}" } ?: ""
         val on = through?.let { "&through=" + Uri.encode(it, ",/:") } ?: ""
         // A hold speeds up as it goes (0.9.12): doubling as the tape is set, up to its top.
-        val accel = if (rise) "&accel_s=${w.doublingS}&max=${w.top}" else ""
+        // Flying on past what is heard (0.9.14): heard at most at its top, on to the flight's in pieces.
+        val accel = if (rise) "&accel_s=${w.doublingS}&max=${w.top}&flight_max=${Prefs.FLIGHT_TOP}&piece_ms=${w.pieceMs}" else ""
         return "$server/api/stream/${item.mediaId}/wind?from_ms=$fromMs&dir=${if (back) "back" else "forward"}&speed=$speed" +
             "&gain_db=$gainDb$to$fit$on$accel"
     }
