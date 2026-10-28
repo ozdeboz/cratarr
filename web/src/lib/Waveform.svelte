@@ -30,6 +30,8 @@
     heardKnown = true,
     output = false,
     view = null,
+    ahead = false,
+    landing = null,
     onflat,
   }: {
     bins: Uint8Array | null;
@@ -49,6 +51,11 @@
     /** A stretch of the track shown (0..1, `from` to `to`), its bars remapped onto the same pieces: a hold's zoom on the
      *  playhead (lib/SeekWave). Its goal reaches every piece at once (the owner, 2026-10-28: a non-staggered goal). */
     view?: { from: number; to: number } | null;
+    /** Difference (Level the volume › Waveform): the heard part ahead of the playhead in its own tint, between the
+     *  paused playing colour and the rest (the owner, 2026-10-28). */
+    ahead?: boolean;
+    /** A hold's landing if let go now (0..1 of the track): that tint between the playhead and it, and only there. */
+    landing?: number | null;
     onflat?: () => void;
   } = $props();
 
@@ -67,6 +74,15 @@
   /** Where a place of the track (0..1) is drawn: within the view. */
   const shownAt = (x: number) => (view ? (x - view.from) / Math.max(1e-6, view.to - view.from) : x);
   const done = $derived(Math.min(1, Math.max(0, shownAt(progress))));
+  /** The in-between tint's stretch (shown 0..1): to a hold's landing either way, else (Difference) all that is ahead. */
+  const band = $derived.by((): [number, number] | null => {
+    const clamp = (x: number) => Math.min(1, Math.max(0, x));
+    if (landing !== null) {
+      const l = clamp(shownAt(landing));
+      return l >= done ? [done, l] : [l, done];
+    }
+    return ahead ? [done, 1] : null;
+  });
   /** The plain bar's line (4 px), in the drawing's units. */
   const line = $derived((100 * 4) / Math.max(4, height));
   /** Each bar's rise above the quietest, for the waveform shown. */
@@ -259,6 +275,13 @@
   <svg class="played" viewBox="0 0 {n} 100" preserveAspectRatio="none" style:clip-path={`inset(0 ${(1 - done) * 100}% 0 0)`}>
     <path {d} />
   </svg>
+  <!-- What is heard next: ahead of the playhead (Difference), or to where a hold let go now would land (over the played
+       colour too, going back). -->
+  {#if band && band[1] > band[0]}
+    <svg class="ahead" viewBox="0 0 {n} 100" preserveAspectRatio="none" style:clip-path={`inset(0 ${(1 - band[1]) * 100}% 0 ${band[0] * 100}%)`}>
+      <path {d} />
+    </svg>
+  {/if}
   {#if now !== null}<span class="now" style:left="{Math.min(1, Math.max(0, shownAt(now))) * 100}%"></span>{/if}
 </div>
 
@@ -275,6 +298,11 @@
     width: 100%;
     height: 100%;
     fill: color-mix(in srgb, var(--text) 22%, transparent);
+  }
+
+  /* Between the paused playing colour and the rest (the owner, 2026-10-28). */
+  svg.ahead {
+    fill: color-mix(in srgb, var(--muted) 50%, color-mix(in srgb, var(--text) 22%, transparent));
   }
 
   svg.played {

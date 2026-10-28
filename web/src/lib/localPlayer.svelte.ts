@@ -3008,6 +3008,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
         if (w.to === null && (!w.reverse || w.startAt !== null)) {
           holdNow.on = true;
           holdNow.speed = w.edge ? 0 : vAt(w, clip.currentTime) * clip.playbackRate;
+          holdNow.landing = tape.holding && !w.edge && place.index === w.shown ? letGoLanding(w, place.pos) : null;
         }
         // A forward hold let go: to the track's own player, moving.
         if (w.handing && !w.edge) {
@@ -3080,6 +3081,7 @@ function endRewind() {
   if (w.handArmed) disarm(w.handArmed);
   w.handArmed = null;
   holdNow.on = false;
+  holdNow.landing = null;
   // Where it lands is a place of its own, as a seek's (lib/remote: no hold against the last place shown).
   sought.n++;
   clearInterval(w.timer);
@@ -3326,6 +3328,15 @@ export function windRelease(dir: 'back' | 'forward') {
   tape.holding = null;
   // Not sounding yet: its wait's fallback plays on.
   letGo(w);
+}
+/** Where a hold let go now would land, the way letGo lets it go: the tape on to the stream readied ahead of it, then
+ *  the brake on the other head (forwards to the track's own speed, backwards to a stand), s into the track. */
+function letGoLanding(w: Winding, pos: number): number {
+  const v = Math.min(TRACK_TOP, vAt(w, w.clip.currentTime) * w.clip.playbackRate);
+  const brake = prefs.startStop.tape.brakeMs;
+  const end = lengthOf(w.shown) ?? Infinity;
+  const at = w.dir > 0 ? pos + v * PREP_AHEAD_S + rampSpan(brakeCurve, v, 1, brake) : pos - v * PREP_AHEAD_S - rampSpan(brakeCurve, v, RATE_LOW, brake);
+  return Math.max(0, Math.min(end, at));
 }
 /** A held wind let go to play on: forwards, handed back to the track's own player at its speed (readied a moment ahead,
  *  the tape winding on until it is in); backwards (the track plays no other way), braked on the wind and spun up. */
