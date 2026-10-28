@@ -163,7 +163,7 @@ class PlayerService : MediaSessionService() {
         // headset's or the system's shuffle shuffles what is to come once, and the player never plays shuffled, so it
         // says it is not. Cratarr's queue is shuffled by Cratarr (Play On's `shuffle`, which sends the new order back);
         // local mode's here, the playing track staying where it is.
-        startStop = StartStop(this, player, prefs, { link?.applyVolume() }, { sync.leader != null }, { sync.bufferMs }, ::startStopChanged, ::windUrl, ::windWay, sync) { what, fields ->
+        startStop = StartStop(this, player, prefs, { link?.applyVolume() }, { sync.leader != null }, { sync.bufferMs }, ::startStopChanged, ::windUrl, ::windWay, ::brakeUrl, sync) { what, fields ->
             LinkLog.add(this, "info", "startstop", what, *fields)
         }
         sessionPlayer = object : ForwardingPlayer(player) {
@@ -787,6 +787,22 @@ class PlayerService : MediaSessionService() {
         val accel = if (rise) "&accel_s=${w.doublingS}&max=${w.top}&flight_max=${Prefs.FLIGHT_TOP}&piece_ms=${w.pieceMs}" else ""
         return "$server/api/stream/${item.mediaId}/wind?from_ms=$fromMs&dir=${if (back) "back" else "forward"}&speed=$speed" +
             "&gain_db=$gainDb$to$fit$on$accel"
+    }
+
+    /**
+     * A let-go's brake stream (0.9.14-3, the server's `wind::Brake`): the queue's track [index] from [fromMs], back or
+     * forward, on through [through] to its stand, the plan from [v0] × to [to] × over [ms], the stream from [atMs] into
+     * it; heard at most at the hold's top, in its pieces above it, as loud as the hold.
+     */
+    private fun brakeUrl(index: Int, fromMs: Long, back: Boolean, through: String?, v0: Double, to: Double, ms: Long, atMs: Long): String? {
+        if (index !in 0 until player.mediaItemCount) return null
+        val item = player.getMediaItemAt(index)
+        val server = prefs.serverUrl?.trimEnd('/') ?: return null
+        if (DeviceMusic.located(item) != null || item.mediaId.startsWith("bandcamp/")) return null
+        val w = prefs.holdWind(back)
+        val on = through?.let { "&through=" + Uri.encode(it, ",/:") } ?: ""
+        return "$server/api/stream/${item.mediaId}/wind?from_ms=$fromMs&dir=${if (back) "back" else "forward"}&speed=${w.speed}" +
+            "&gain_db=${w.gainDb}&brake_v0=$v0&brake_to=$to&brake_ms=$ms&brake_at_ms=$atMs&max=${w.top}&piece_ms=${w.pieceMs}$on"
     }
 
     /** The queue's tracks in a hold's way (decision 0074, through the queue): back the ones before this, forward the ones

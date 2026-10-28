@@ -69,6 +69,10 @@ class StartStop(
     private val windUrl: (Long, Long?, Long?, Boolean, String?, Float, Float, Boolean) -> String?,
     /** The queue's tracks in a hold's way, nearest first (id, length in ms), where it winds on through the queue. */
     private val windWay: (Boolean) -> List<Pair<String, Long>>,
+    /** A let-go's brake stream (0.9.14-3, the plan carried by the stream): the queue's track at an index, from a place,
+     *  back or not, the tracks on to its stand, its plan (from ×, to ×, its length, how far into it the stream begins);
+     *  none where it cannot (as [windUrl]). */
+    private val brakeUrl: (Int, Long, Boolean, String?, Double, Double, Long, Long) -> String?,
     /** Sync play: leading a group, speed and volume act on the sound sent on, and the tape's sound is the group's while
      *  it winds (the owner, 2026-10-27: "Sync groups don't wind together. Make it so."). */
     private val sync: SyncPlay,
@@ -303,7 +307,24 @@ class StartStop(
         override fun run() {
             val t = tape ?: return
             if (!rewinding) return
-            val r = envelope(SystemClock.elapsedRealtime()) ?: return wound()
+            val now = SystemClock.elapsedRealtime()
+            plan?.let { p ->
+                val gone = now - p.t0
+                // At its end the tape is where the plan says, whatever the heads' clocks did.
+                if (gone >= p.brakeMs) return wound()
+                // Until the brake stream carries it: the wind at the plan's speed, steered onto its place (its way
+                // against the wind's own over [STEER_MS]), faded below the quarter its output reaches.
+                if (!brakeSounding) {
+                    val played = t.currentPosition.coerceAtLeast(0L)
+                    val want = p.v(gone) + (p.way(gone) - (holdGone(played) - planGone0)) / STEER_MS
+                    val r = (want / slope(played)).toFloat().coerceAtLeast(0f)
+                    tapeRate = r
+                    tapeAt(max(r, LOW), min(1f, r / LOW))
+                }
+                main.postDelayed(this, STEP_MS)
+                return
+            }
+            val r = envelope(now) ?: return wound()
             tapeRate = r
             // Flying, never below the track's own speed and as loud as the track; from still, faded in below the lowest.
             if (tapeFlying) tapeAt(r, 1f) else tapeAt(max(r, LOW), min(1f, r / LOW))
@@ -554,6 +575,12 @@ class StartStop(
      */
     fun deck(now: Long = SystemClock.elapsedRealtime()): Deck {
         val t = tape
+        // A hold let go: its plan, what every head follows.
+        plan?.takeIf { tapeListener != null }?.let { p ->
+            val gone = (now - p.t0).coerceIn(0L, p.brakeMs)
+            val w = planAt(p, gone)
+            return Deck(w.index, w.ms, p.sign * p.v(gone), p.sign * p.accel(gone), w.edge)
+        }
         if (t != null && tapeListener != null && tapeStarted) {
             val played = t.currentPosition.coerceAtLeast(0L)
             val w = if (tapeHold) landingAt(played) else Deck.Walk(tapeIndex, reached(), false)
@@ -1070,7 +1097,7 @@ class StartStop(
                 wind(hold = true, from = at, to = edge, url = u, restart = { play { player.play() } }, chain = way.map { it.second }, flying = flying, speed = speed, waits = waits) { i, land ->
                     player.seekTo(i, land)
                     // A flying one hands back while still moving; one from still winds up, quietly (the tape's own).
-                    if (flying) landPlay { player.play() } else play(true) { player.play() }
+                    if (flying && !landsStill) landPlay { player.play() } else play(true) { player.play() }
                 }
             }
         }
@@ -1152,7 +1179,7 @@ class StartStop(
         if (tapeReleased != 0L) return
         tapeReleased = SystemClock.elapsedRealtime()
         tapeReleaseFrom = tapeRate
-        prepareLanding()
+        letGo()
     }
 
     /**
@@ -1171,12 +1198,14 @@ class StartStop(
         }
         tapeStop = stop
         commit(false)
+        // A hold let go already: its plan rests at its stand, no spin-up.
+        plan?.let { tapeAim = planAt(it, it.brakeMs) }
         if (tapeReleased != 0L) return
         tapeReleased = SystemClock.elapsedRealtime()
         tapeReleaseFrom = tapeRate
         // Down to still, not to the track's own speed.
         tapeFlying = false
-        if (tapeHold) prepareLanding()
+        if (tapeHold) letGo()
     }
 
     /** A wind begun: its stream prepared on the tape's player; once it can sound, the track waits, paused (a tap's at
@@ -1213,6 +1242,7 @@ class StartStop(
         tapeIndex = player.currentMediaItemIndex
         tapeStop = null
         tapeAim = null
+        landsStill = false
         tapeFrom = from
         tapeTo = to
         tapeSign = if (to < from) -1 else 1
@@ -1254,8 +1284,8 @@ class StartStop(
                 } else if (state == Player.STATE_READY && !tapeStarted) {
                     sound()
                 } else if (state == Player.STATE_ENDED) {
-                    // A tap's stream played out; a hold at the edge.
-                    wound()
+                    // A tap's stream played out; a hold at the edge (a plan lands at its own end, whatever the heads do).
+                    if (plan == null) wound()
                 }
             }
 
@@ -1295,7 +1325,9 @@ class StartStop(
         // Where it got, in the queue as its files are (the deck's one place): a hold's through its map; Next's
         // fast-forward at the next track's start (on there already where it was readied); a wind to a point braked on
         // its way (a pause) where its stream got; else where it was sent.
+        val planned = plan
         val got = when {
+            planned != null -> planAt(planned, planned.brakeMs).let { Deck.settle(lengths(), it.index, it.ms) }
             tapeHold -> landing()
             jumped -> Deck.Walk(player.currentMediaItemIndex, 0L, false)
             tapeReleased != 0L -> Deck.Walk(tapeIndex, reached(), false)
@@ -1383,20 +1415,105 @@ class StartStop(
         return (prefs.tapeBrakeMs * (LOW + (1 - LOW) * (1 - mean))).toLong()
     }
 
-    /**
-     * Where a hold let go will land, the stream its brake plays on (its rate over the brake) added to where it has got:
-     * the track readied there now, from [PREP_LEAD_MS] before it, so the landing finds it loaded (2026-10-28: it was
-     * sought only at the landing, ~175 ms).
-     */
-    private fun prepareLanding() {
-        val w = landingAhead() ?: return
-        tapeAim = aimOf(w)
-        player.seekTo(w.index, (w.ms - PREP_LEAD_MS).coerceAtLeast(0L))
-        step("landing readied", "track" to w.index, "at_ms" to w.ms, "aim_ms" to tapeAim?.ms)
-    }
-
     /** Where a hold let go aims, fixed as it was let go (the page keeps its line there until the tape is there). */
     private var tapeAim: Deck.Walk? = null
+
+    /** A let-go's one plan ([Plan]): what shows, what every head follows, where it lands; null until a hold is let go. */
+    private var plan: Plan? = null
+    /** Where the wind's own stream had got (ms of track along its way) as it was let go. */
+    private var planGone0 = 0.0
+    /** A hold let go comes to still, then spins up (the owner, 2026-10-28), a flying one too. */
+    private var landsStill = false
+    /** The brake stream's own player (made the first time), its listener, and whether it carries the plan now. */
+    private var brakeHead: ExoPlayer? = null
+    private var brakeListener: Player.Listener? = null
+    private var brakeSounding = false
+
+    /** Where the plan [p] has the deck [t] ms after it was let go, through the queue. */
+    private fun planAt(p: Plan, t: Long): Deck.Walk = Deck.walk(lengths(), p.index, p.ms, (p.sign * p.way(t)).toLong())
+
+    /**
+     * A hold let go (or braked by a pause): one plan from where the deck is, at its speed, down to still over the Brake
+     * (632's page the same; the owner: forwards too, then the spin-up). What shows is the plan's place; the track is
+     * readied at its stand; the wind follows it as far as its own rate reaches, and where that is not far enough (a
+     * fast stream can sound no slower than a quarter of its speed) Cratarr's brake stream takes over at [BRAKE_LEAD_MS],
+     * played at 1× (the owner: "let the stream carry the motion").
+     */
+    private fun letGo() {
+        val t = tape ?: return
+        val now = SystemClock.elapsedRealtime()
+        val d = deck(now)
+        val p = Plan(now, d.index, d.ms, tapeSign, kotlin.math.abs(d.speed), 0.0, tapeRelease)
+        plan = p
+        planGone0 = holdGone(t.currentPosition.coerceAtLeast(0L)).toDouble()
+        tapeFlying = false
+        landsStill = true
+        val stand = planAt(p, p.brakeMs)
+        tapeAim = aimOf(stand)
+        player.seekTo(stand.index, stand.ms)
+        step("let go", "v0" to p.v0, "track" to stand.index, "stand_ms" to stand.ms, "aim_ms" to tapeAim?.ms)
+        if (!grouped() && slope(t.currentPosition.coerceAtLeast(0L)) * LOW > 1.0 && p.brakeMs > BRAKE_LEAD_MS + 200) askBrake(p)
+    }
+
+    /** Cratarr's brake stream for [p], from where the plan will be at [BRAKE_LEAD_MS]: readied, silent, until then. */
+    private fun askBrake(p: Plan) {
+        val from = planAt(p, BRAKE_LEAD_MS)
+        val stand = planAt(p, p.brakeMs)
+        val through = if (stand.index == from.index) null else generateSequence(from.index + p.sign) { it + p.sign }
+            .takeWhile { if (p.sign > 0) it <= stand.index else it >= stand.index }
+            .joinToString(",") { player.getMediaItemAt(it).mediaId }
+        val url = brakeUrl(from.index, from.ms, p.sign < 0, through, p.v0, p.to, p.brakeMs, BRAKE_LEAD_MS) ?: return
+        val b = brakeHead ?: ExoPlayer.Builder(context)
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), false)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, Downloads.http(context))))
+            .build()
+            .also { brakeHead = it }
+        val l = object : Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                if (brakeListener !== this || state != Player.STATE_READY || brakeSounding) return
+                val wait = p.t0 + BRAKE_LEAD_MS - SystemClock.elapsedRealtime()
+                step("brake ready", "early_ms" to wait)
+                main.removeCallbacks(brakeGo)
+                main.postDelayed(brakeGo, wait.coerceAtLeast(0L))
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (brakeListener !== this || !isPlaying) return
+                // Sounding: the wind's own goes (at a fast wind's piece cut), the brake stream carries the plan on.
+                tape?.volume = 0f
+                tape?.pause()
+                step("brake took over", "plan_ms" to SystemClock.elapsedRealtime() - p.t0)
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                if (brakeListener !== this) return
+                step("brake failed", "error" to error.errorCodeName)
+                brakeSounding = false
+            }
+        }
+        brakeListener?.let(b::removeListener)
+        brakeListener = l
+        b.addListener(l)
+        b.volume = 0f
+        b.setMediaItem(MediaItem.fromUri(url))
+        b.playWhenReady = false
+        b.prepare()
+        step("brake asked", "track" to from.index, "from_ms" to from.ms)
+    }
+
+    /** The brake stream sounds from where the plan is now: at [BRAKE_LEAD_MS], or later inside what it has (too near the
+     *  plan's end, the wind carries on alone). */
+    private val brakeGo = Runnable {
+        val p = plan ?: return@Runnable
+        val b = brakeHead ?: return@Runnable
+        if (tapeListener == null || brakeSounding) return@Runnable
+        val late = SystemClock.elapsedRealtime() - p.t0 - BRAKE_LEAD_MS
+        if (late > p.brakeMs - BRAKE_LEAD_MS - BRAKE_LEAST_MS) return@Runnable step("brake too late", "late_ms" to late)
+        if (late > 0) b.seekTo(late)
+        b.volume = tapeVolume
+        brakeSounding = true
+        b.play()
+    }
 
     /**
      * A hold's aim (the owner, 2026-10-28, through 632): forwards where it plays at 1× again, backwards (and a pause)
@@ -1420,8 +1537,8 @@ class StartStop(
     /**
      * The one prediction of a hold's landing: where its brake under way lands it, or, still held, where letting go
      * [now] would: the stream the rest of the brake plays (its rate over what is left of it) added to where it has got,
-     * through its map, across the queue. Null but for a hold that sounds. The page's look-ahead (`landing`, 632) and
-     * the track readied before the landing ([prepareLanding]) read it.
+     * through its map, across the queue. Null but for a hold that sounds. The page's look-ahead while a hold is held
+     * (`landing`, 632) reads it; let go, the hold's [Plan] is the one prediction.
      */
     fun landingAhead(now: Long = SystemClock.elapsedRealtime()): Deck.Walk? {
         val t = tape ?: return null
@@ -1456,6 +1573,15 @@ class StartStop(
     private fun stopTape(): Boolean {
         val l = tapeListener ?: return false
         tapeListener = null
+        plan = null
+        brakeSounding = false
+        main.removeCallbacks(brakeGo)
+        brakeHead?.let { b ->
+            brakeListener?.let(b::removeListener)
+            b.stop()
+            b.clearMediaItems()
+        }
+        brakeListener = null
         tapeRestart = null
         tapeThen = null
         tapeJump = null
@@ -1490,6 +1616,8 @@ class StartStop(
         stopTape()
         tape?.release()
         tape = null
+        brakeHead?.release()
+        brakeHead = null
         deckNow = null
         landingNow = null
         main.removeCallbacks(checks)
@@ -1566,10 +1694,8 @@ class StartStop(
         private const val FLY_SPEED = 1f / LOW
         /** It starts this far ahead of where it was pressed: where the track will be when its stream sounds. */
         private const val FLY_AHEAD_MS = 500L
-        /** An armed wind is taken only if it begins this near where the track stands; the track readied this far before
-         *  a predicted landing (the page's, 2026-10-28). */
+        /** An armed wind is taken only if it begins this near where the track stands (the page's, 2026-10-28). */
         private const val ARM_NEAR_MS = 100L
-        private const val PREP_LEAD_MS = 500L
         /** A flying wind to a point's floor below this: its stream was fitted from still (an older server). */
         private const val FLY_FLOOR_LEAST = 0.03f
         /** A held Next on a track that cannot wind speeds it up to this (the page's own, 0.9.13). */
@@ -1581,6 +1707,12 @@ class StartStop(
         /** How often the page is told the deck while it moves (it draws every frame from the place, speed and change),
          *  how many such ticks to one telling of the session and Cratarr, and to a second. */
         private const val DECK_TICK_MS = 100L
+        /** A let-go's brake stream sounds this long after it (asked at once; Cratarr's first sound comes in ~100-350 ms),
+         *  and not at all with less than this left of the plan. */
+        private const val BRAKE_LEAD_MS = 500L
+        private const val BRAKE_LEAST_MS = 150L
+        /** A head off the plan's place is brought back onto it over this long (ms). */
+        private const val STEER_MS = 150.0
         /** How often the machine's rules are looked at ([checks]). */
         private const val CHECK_MS = 1_000L
         private const val CHANGED_EVERY = 3

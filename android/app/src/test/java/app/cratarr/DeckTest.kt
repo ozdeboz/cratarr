@@ -29,6 +29,19 @@ class DeckTest {
     }
 
     @Test
+    fun a_plan_brakes_on_a_raised_cosine_its_way_the_mean_of_its_ends() {
+        val p = Plan(t0 = 0L, index = 0, ms = 0L, sign = 1, v0 = 64.0, to = 0.0, brakeMs = 1_500L)
+        assertEquals(64.0, p.v(0L), 1e-9)
+        assertEquals(32.0, p.v(750L), 1e-9)
+        assertEquals(0.0, p.v(1_500L), 1e-9)
+        assertEquals(32.0 * 1_500.0, p.way(1_500L), 1e-6)
+        assertEquals(32.0 * 1_500.0, p.way(9_000L), 1e-6)
+        // Its change: steepest halfway, the speed's slope there.
+        assertEquals(-64.0 * Math.PI / 3.0, p.accel(750L), 1e-6)
+        assertEquals((p.v(751L) - p.v(749L)) / 2.0 * 1000.0, p.accel(750L), 0.01)
+    }
+
+    @Test
     fun a_landing_past_a_tracks_real_end_is_the_next_tracks_start_or_the_queues_end() {
         // The tablet, 2026-10-28: Cratarr's map said 234.0 s, the file decodes to 233.586 s.
         assertEquals(Deck.Walk(2, 233_586L, true), Deck.settle(queue, 2, 234_000L))

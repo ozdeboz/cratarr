@@ -55,3 +55,28 @@ data class Deck(val index: Int, val ms: Long, val speed: Double, val accel: Doub
     /** A place in the queue; [edge]: at one of its ends, where a wind stops. */
     data class Walk(val index: Int, val ms: Long, val edge: Boolean)
 }
+
+/**
+ * A let-go's one plan (632's page has the same; the owner, 2026-10-28: the stream carries the motion, and forwards too
+ * it brakes to still, then spins up): from where it was let go ([index], [ms]) at [v0] ×, [sign] its way, down to [to] ×
+ * over [brakeMs], a raised cosine; [t0] elapsed realtime. What shows is its place; every head follows it; at its end the
+ * tape is where it says.
+ */
+data class Plan(val t0: Long, val index: Int, val ms: Long, val sign: Int, val v0: Double, val to: Double, val brakeMs: Long) {
+    /** Its speed [t] ms after it was let go (×). */
+    fun v(t: Long): Double {
+        if (t >= brakeMs) return to
+        return to + (v0 - to) * (1 + kotlin.math.cos(Math.PI * t.coerceAtLeast(0L) / brakeMs)) / 2
+    }
+
+    /** Its way by [t] ms after it was let go (ms of track). */
+    fun way(t: Long): Double {
+        val whole = brakeMs.toDouble()
+        val s = t.coerceIn(0L, brakeMs).toDouble()
+        return to * s + (v0 - to) * (s / 2 + whole / (2 * Math.PI) * kotlin.math.sin(Math.PI * s / whole)) + to * (t - brakeMs).coerceAtLeast(0L)
+    }
+
+    /** How fast its speed changes [t] ms after it was let go (× a second). */
+    fun accel(t: Long): Double =
+        if (t < 0 || t >= brakeMs) 0.0 else -(v0 - to) * Math.PI / (2.0 * brakeMs) * kotlin.math.sin(Math.PI * t / brakeMs) * 1000.0
+}
