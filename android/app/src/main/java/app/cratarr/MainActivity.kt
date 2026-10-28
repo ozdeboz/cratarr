@@ -620,6 +620,9 @@ class MainActivity : AppCompatActivity() {
         .put("type", "app")
         .put("refused", refused ?: "")
         .put("version", BuildConfig.VERSION_NAME)
+        // A press the other way during a Start and stop ramp turns it round from where it is (0075); the page's play
+        // button is live during one only for an app that does.
+        .put("turnsRound", true)
         .put("player", prefs.playerName)
         // Its outputs, and the one chosen (null: Automatic); `output` in Play On's reports is the one that plays.
         .put("outputs", org.json.JSONArray(Output.all(this)))

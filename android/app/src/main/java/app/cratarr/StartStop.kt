@@ -646,14 +646,15 @@ class StartStop(
     /** While a wind lands: its state told once it is settled ([wound]). */
     private var unsaid = false
 
-    /** A ramp's direction told to the page (the play button draws it): `out`, `in`, or none at its end. */
-    private fun ramping(dir: String?, ms: Long, full: Long = ms) {
+    /** A ramp's direction told to the page (the play button draws it): `out`, `in`, or none at its end; [from]: the
+     *  level it starts at (0 still, 1 playing), a turned ramp's where it was turned. */
+    private fun ramping(dir: String?, ms: Long, full: Long = ms, from: Float = if (dir == "in") 0f else 1f) {
         running = dir
         // The tape's own stops and starts tell the page nothing: its play button moves for play and pause only.
         if (quietRamp) return
         // Whether it ends with the music stopped (a pause's, a stop's): the page greys its waveform and drains its play
         // button for those alone, not for a skip's wind-down or a wind-up.
-        rampListener?.invoke(dir, ms, full, committed == false)
+        rampListener?.invoke(dir, ms, full, committed == false, from)
     }
 
     private fun note(what: String, vararg fields: Pair<String, Any?>) =
@@ -859,7 +860,7 @@ class StartStop(
             stopping = null
             commit(true)
             val ms = (prefs.startStopMs * (1f - from)).toLong().coerceAtLeast(SETTLE_MS)
-            ramping("in", ms, prefs.startStopMs)
+            ramping("in", ms, prefs.startStopMs, from)
             ramp(from, 1f, ms, setter(m), curve(m, down = false)) { whole -> if (whole) reset() }
             return
         }
@@ -869,7 +870,7 @@ class StartStop(
         stopping = stop
         commit(false)
         val ms = (downMs(m) * from).toLong().coerceAtLeast(SETTLE_MS)
-        ramping("out", ms, downMs(m))
+        ramping("out", ms, downMs(m), from)
         val mine = token + 1
         ramp(from, 0f, ms, setter(m), curve(m, down = true)) { whole ->
             if (!whole || token != mine) return@ramp
@@ -1615,7 +1616,7 @@ class StartStop(
         /** Told when a ramp starts (`out`, `in`, with its length, the length set, and whether it ends stopped) and ends
          *  (none): the page's player draws it. */
         @Volatile
-        var rampListener: ((String?, Long, Long, Boolean) -> Unit)? = null
+        var rampListener: ((String?, Long, Long, Boolean, Float) -> Unit)? = null
 
         /** The deck now (decision 0075, [deck]): what the page, Cratarr and the session show; null while no player
          *  service runs. Read on the main thread. */

@@ -66,8 +66,11 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
         // A ramp's direction to the page (0.9.6): its play button draws it.
         // A wind-up shortened near a track's start (0.9.7) says so: `ms` its length, `full` the length set.
         // `effect`: whether it ends with the music stopped (a skip's wind-down does not: no grey, no drain).
-        StartStop.rampListener = { dir, ms, full, stops ->
+        // `from` (0.9.15): the level it starts at, 0 still to 1 playing; a ramp turned round (a press the other way
+        // during it, 0075) starts where it was turned, over `ms` = `full` × the share left.
+        StartStop.rampListener = { dir, ms, full, stops, from ->
             val m = JSONObject().put("type", "ramp").put("dir", dir ?: JSONObject.NULL).put("ms", ms).put("full", full)
+                .put("from", from.toDouble())
             if (dir != null) m.put("effect", stops)
             send(m.toString())
         }
