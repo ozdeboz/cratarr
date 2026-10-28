@@ -57,8 +57,8 @@ data class Deck(val index: Int, val ms: Long, val speed: Double, val accel: Doub
 }
 
 /**
- * A let-go's one plan (632's page has the same; the owner, 2026-10-28: the stream carries the motion, and forwards too
- * it brakes to still, then spins up): from where it was let go ([index], [ms]) at [v0] ×, [sign] its way, down to [to] ×
+ * A let-go's one plan (632's page has the same; the owner, 2026-10-28: the stream carries the motion; forwards it brakes
+ * to 1×, backwards to still): from where it was let go ([index], [ms]) at [v0] ×, [sign] its way, down to [to] ×
  * over [brakeMs], a raised cosine; [t0] elapsed realtime. What shows is its place; every head follows it; at its end the
  * tape is where it says.
  */
