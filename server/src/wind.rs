@@ -318,6 +318,27 @@ impl Wind {
         self.frames as u64 * self.channels as u64 * 2
     }
 
+    /// The same wind on a track whose own rate is `rate` (0.9.14-2: a chain is planned at the stream's rate, each track
+    /// read only as the wind reaches it): its length, pieces and map in the stream as they were, its places in the track
+    /// at that rate. A hold's length is the way's seconds over its speed, whatever the track's rate.
+    pub fn at_rate(&self, rate: u32) -> Wind {
+        let k = f64::from(rate) / f64::from(self.rate);
+        Wind {
+            rate,
+            out_rate: self.out_rate,
+            channels: self.channels,
+            sign: self.sign,
+            frames: self.frames,
+            v: self.v * k,
+            pieces: self.pieces.iter().map(|p| Piece { top: p.top * k, ..p.clone() }).collect(),
+            gain: self.gain,
+            accel: self.accel,
+            base: self.base,
+            t0: self.t0,
+            ends: self.ends,
+        }
+    }
+
     /// Its length (ms of the stream).
     pub fn ms(&self) -> f64 {
         self.frames as f64 * 1000.0 / f64::from(self.out_rate)
@@ -629,6 +650,30 @@ mod tests {
         // Forward: each from its start.
         let winds = chain(&[(44_100, 2, Some(60_000)), (44_100, 2, Some(20_000))], ask(Dir::Forward, 50_000, 4.0)).unwrap();
         assert_eq!(chain_map(&winds), vec![(0, 0, 50_000), (2_500, 0, 60_000), (2_500, 1, 0), (7_500, 1, 20_000)]);
+    }
+
+    #[test]
+    fn a_chain_planned_at_the_streams_rate_is_the_one_its_tracks_own_rates_make() {
+        // Up to 64 tracks a hold (0.9.14-2), each read only as it is reached: planned at the stream's rate, then made
+        // again at its own; the same length and map as planned from the start at its own, and all of it sounds.
+        for accel in [None, Some(Accel { period_s: 1.5, max: 64.0, audio: None })] {
+            let a = Ask { accel, ..ask(Dir::Back, 10_000, 2.0) };
+            let own = chain(&[(44_100, 2, Some(60_000)), (48_000, 1, Some(30_000))], a).unwrap();
+            let planned = chain(&[(44_100, 2, Some(60_000)), (44_100, 2, Some(30_000))], a).unwrap();
+            let made = planned[1].at_rate(48_000);
+            assert_eq!(made.data(), own[1].data());
+            assert_eq!(made.map(), own[1].map());
+            let sound = |w: &Wind| {
+                let mut out = Vec::new();
+                w.sound(&mut Tone { hz: 440.0, secs: 30.0 }, &mut Shaper::new(2), |x| {
+                    out.extend_from_slice(&x);
+                    true
+                })
+                .unwrap();
+                out
+            };
+            assert_eq!(sound(&made).len() as u64, own[1].data());
+        }
     }
 
     #[test]

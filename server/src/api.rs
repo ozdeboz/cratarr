@@ -2879,6 +2879,10 @@ struct WindAsk {
     flight_max: Option<f64>,
 }
 
+/// The most tracks a hold winds on into past its own (0.9.14-2; 8 before: a hold back stopped at the start of the
+/// eighth track before). Each is opened only as the wind reaches it.
+const WIND_THROUGH: usize = 64;
+
 /// Winding (decision 0074): the track from `from_ms` backwards or forwards at a constant speed, as 16-bit WAV made as
 /// the player reads it (a hold lasts as long as it reads). Its headers place it: `x-wind-speed` (lower than asked where
 /// a condensed wind got there sooner), `x-wind-dir`, and `x-wind-map`, knots `[[stream_ms, track, track_ms], …]`, linear
@@ -2893,15 +2897,15 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
     if q.as_.as_deref().is_some_and(|f| f != "wav") {
         return refused("Only WAV winds yet.");
     }
-    // Winding on through the queue (0074): the tracks in the way, nearest first (`source:id` or `source/id`), at most 8;
-    // a hold only, to this track's edge.
+    // Winding on through the queue (0074): the tracks in the way, nearest first (`source:id` or `source/id`), at most
+    // [WIND_THROUGH]; a hold only, to this track's edge.
     let through: Vec<(String, String)> = q
         .through
         .as_deref()
         .unwrap_or_default()
         .split(',')
         .filter_map(|t| t.trim().split_once([':', '/']).map(|(s, i)| (s.to_string(), i.to_string())))
-        .take(8)
+        .take(WIND_THROUGH)
         .collect();
     if !through.is_empty() && (q.fit_ms.is_some() || q.to_ms.is_some()) {
         return refused("Only a hold winds on through the queue.");
@@ -2947,11 +2951,9 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
     if q.map == Some(1) {
         let plan = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
             let first = crate::analysis::Reading::open(&path)?;
+            // The tracks in the way planned at the stream's rate (their own does not change the plan, `Wind::at_rate`).
             let mut tracks = vec![(first.rate(), first.channels(), duration_ms)];
-            for (p, d) in &joins {
-                let Ok(s) = crate::analysis::Reading::open(p) else { break };
-                tracks.push((s.rate(), s.channels(), *d));
-            }
+            tracks.extend(joins.iter().map(|(_, d)| (first.rate(), first.channels(), *d)));
             let winds = if tracks.len() > 1 { crate::wind::chain(&tracks, ask)? } else { vec![Wind::new(tracks[0].0, tracks[0].1, duration_ms, ask)?] };
             let map: Vec<serde_json::Value> = crate::wind::chain_map(&winds).into_iter().map(|(c, i, t)| json!([c, i, t])).collect();
             let length: f64 = winds.iter().map(Wind::ms).sum();
@@ -2993,14 +2995,11 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
                 return;
             }
         };
-        // The tracks it winds on into, opened; one that will not open ends the chain there.
-        let mut sounds = vec![sound];
-        let mut tracks = vec![(sounds[0].rate(), sounds[0].channels(), duration_ms)];
-        for (p, d) in &joins {
-            let Ok(s) = crate::analysis::Reading::open(p) else { break };
-            tracks.push((s.rate(), s.channels(), *d));
-            sounds.push(s);
-        }
+        // The tracks it winds on into (0.9.14-2, up to [WIND_THROUGH]): planned at the stream's rate, each opened only as
+        // the wind reaches it, at its own (`Wind::at_rate`); never all at once.
+        let mut tracks = vec![(sound.rate(), sound.channels(), duration_ms)];
+        tracks.extend(joins.iter().map(|(_, d)| (sound.rate(), sound.channels(), *d)));
+        let mut own = Some(sound);
         let winds = if tracks.len() > 1 { crate::wind::chain(&tracks, ask) } else { Wind::new(tracks[0].0, tracks[0].1, duration_ms, ask).map(|w| vec![w]) };
         let winds = match winds {
             Ok(w) => w,
@@ -3028,8 +3027,30 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
             }
             // One shaper for the whole stream: a rising hold sounds alike across the queue's joins.
             let mut shaper = crate::wind::Shaper::new(channels);
-            for (w, s) in winds.iter().zip(sounds.iter_mut()) {
-                if !w.sound(s, &mut shaper, &mut send)? {
+            for (i, w) in winds.iter().enumerate() {
+                let (mut s, w) = match own.take() {
+                    Some(s) => (s, None),
+                    None => match crate::analysis::Reading::open(&joins[i - 1].0) {
+                        Ok(s) => {
+                            let r = s.rate();
+                            (s, Some(w.at_rate(r)))
+                        }
+                        // One that will not open now: silence for its way, so the stream stays as long as its map says.
+                        Err(e) => {
+                            tracing::warn!("wind: {} not opened: {e:#}", joins[i - 1].0.display());
+                            let mut left = w.data() as usize;
+                            while left > 0 {
+                                let n = left.min(64 * 1024);
+                                if !send(vec![0; n]) {
+                                    return Ok(());
+                                }
+                                left -= n;
+                            }
+                            continue;
+                        }
+                    },
+                };
+                if !w.as_ref().unwrap_or(&winds[i]).sound(&mut s, &mut shaper, &mut send)? {
                     break;
                 }
             }

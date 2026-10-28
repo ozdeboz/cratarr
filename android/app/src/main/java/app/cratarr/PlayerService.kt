@@ -790,13 +790,14 @@ class PlayerService : MediaSessionService() {
     }
 
     /** The queue's tracks in a hold's way (decision 0074, through the queue): back the ones before this, forward the ones
-     *  after, nearest first, at most 8, as far as Cratarr has their files and knows their length (as the server stops). */
+     *  after, nearest first, at most [WIND_THROUGH], as far as Cratarr has their files and knows their length (as the
+     *  server stops). */
     private fun windWay(back: Boolean): List<Pair<String, Long>> {
         val i = player.currentMediaItemIndex
         val places = if (back) (i - 1 downTo 0) else (i + 1 until player.mediaItemCount)
         val out = mutableListOf<Pair<String, Long>>()
         for (j in places) {
-            if (out.size >= 8) break
+            if (out.size >= WIND_THROUGH) break
             val item = player.getMediaItemAt(j)
             if (DeviceMusic.located(item) != null || item.mediaId.startsWith("bandcamp/")) break
             val ms = trackOf(item)?.optDouble("duration_secs", 0.0)?.takeIf { it > 0 }?.let { (it * 1000).toLong() } ?: break
@@ -823,6 +824,9 @@ class PlayerService : MediaSessionService() {
         /** Playing on this far past a track's length is written down ([Course]), looked at this often. */
         private const val PAST_END_MS = 1_000L
         private const val PAST_CHECK_MS = 2_000L
+        /** The most tracks a hold winds on into past its own: the server's (0.9.14-2; 8 before, a hold back stopped at
+         *  the eighth track's start). */
+        private const val WIND_THROUGH = 64
         private const val READY_CHANNEL = "ready"
         private const val GROUP_NOTIFICATION = 8
         private const val ACTION_READY = "cratarr.READY"
