@@ -374,6 +374,9 @@
     </svg>
   {/if}
   {#if now !== null}<span class="now" style:left="{Math.min(1, Math.max(0, shownAt(now))) * 100}%"></span>{/if}
+  <!-- The look-ahead: where a hold let go now lands, the same white line (the owner, 2026-10-28: its tint alone is hard to
+       see on a thin waveform). -->
+  {#if landing !== null}<span class="now" style:left="{Math.min(1, Math.max(0, shownAt(landing))) * 100}%"></span>{/if}
 </div>
 
 <style>

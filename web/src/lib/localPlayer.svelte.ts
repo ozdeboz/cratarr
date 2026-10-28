@@ -20,7 +20,7 @@ import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
 import { albumCoverUrl, getTrackGain, playerCommand, radioNext, windMap, type TrackGain } from './api';
 import { prefs } from './prefs.svelte';
-import { holdNow, ramping, rampBegins, rampEnds, rewindNow, tapeDir, windAsked } from './ramping.svelte';
+import { aimPainted, holdNow, ramping, rampBegins, rampEnds, rewindNow, tapeDir, windAsked } from './ramping.svelte';
 import { asksSignIn, toSignIn } from './reach.svelte';
 import { consumed, rate, tapMs } from './windShape';
 import { BANDCAMP } from './bandcampPreview';
@@ -3501,7 +3501,42 @@ let aimTimer: ReturnType<typeof setTimeout> | undefined;
 function aim(at: number | null) {
   clearTimeout(aimTimer);
   holdNow.landing = at;
-  if (at !== null) aimTimer = setTimeout(() => (holdNow.landing = null), AIM_KEEP_MS);
+  if (at !== null) {
+    aimTimer = setTimeout(() => (holdNow.landing = null), AIM_KEEP_MS);
+    aimCheck();
+  }
+}
+/** Let go: the look-ahead's line as last painted against where the tape is once it plays at its own speed again (the
+ *  owner, 2026-10-28), logged as `aim vs resume`; given up after AIM_CHECK_MS. */
+const AIM_CHECK_MS = 12000;
+let aimFrame = 0;
+function aimCheck() {
+  cancelAnimationFrame(aimFrame);
+  const from = performance.now();
+  const step = () => {
+    const now = performance.now();
+    const t = local.queue[local.index];
+    const atOne = handed()
+      ? deckSpeed(now) === 1 && !rewindNow.on
+      : !tape.rewinding && !!audio && !audio.paused && Math.abs(audio.playbackRate - 1) < 0.001 && ramping.dir === null;
+    if (atOne) {
+      const resumed = positionNow();
+      const track = t ? `${t.source}/${t.id}` : null;
+      const aimed = aimPainted.pos;
+      playback('info', 'aim vs resume', {
+        aimed: aimed === null ? null : Math.round(aimed * 1000),
+        resumed: Math.round(resumed * 1000),
+        off_ms: aimed === null || aimPainted.track !== track ? null : Math.round((resumed - aimed) * 1000),
+        same_track: aimPainted.track === track,
+        painted_ms_ago: Math.round(now - aimPainted.at),
+        after_ms: Math.round(now - from),
+      });
+      return;
+    }
+    if (now - from < AIM_CHECK_MS) aimFrame = requestAnimationFrame(step);
+    else playback('info', 'aim vs resume: never at its own speed', { after_ms: AIM_CHECK_MS });
+  };
+  aimFrame = requestAnimationFrame(step);
 }
 /** A held wind let go to play on: forwards, handed back to the track's own player at its speed (readied a moment ahead,
  *  the tape winding on until it is in); backwards (the track plays no other way), braked on the wind and spun up. */

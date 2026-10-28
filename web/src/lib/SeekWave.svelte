@@ -10,7 +10,7 @@
   import { deckNow, local } from './localPlayer.svelte';
   import { isLocal } from './output.svelte';
   import { prefs } from './prefs.svelte';
-  import { holdNow, ramping, tapeDir } from './ramping.svelte';
+  import { aimPainted, holdNow, ramping, tapeDir } from './ramping.svelte';
   import { reducedMotion } from './motion';
   import { portal } from './portal';
   import { clockText } from './remote.svelte';
@@ -141,6 +141,16 @@
     const from = Math.min(1 - zoomShare, Math.max(0, p - zoomAnchor * zoomShare));
     return { from, to: from + zoomShare };
   });
+  /** The look-ahead shown (0..1 of the track): a hold's landing, ahead of the playhead the way it goes. */
+  const aimMark = $derived(holdNow.landing !== null && dur && (holdNow.dir > 0 ? pos < holdNow.landing : pos > holdNow.landing) ? holdNow.landing / dur : null);
+  // Its line as painted (after the frame's update), for lib/localPlayer's check against where the tape plays on.
+  $effect(() => {
+    const m = aimMark;
+    if (m === null || !dur) return;
+    aimPainted.pos = m * dur;
+    aimPainted.track = track;
+    aimPainted.at = performance.now();
+  });
   const nowMark = $derived(seek.held !== null && seek.lensOn && !seek.snapped && !seek.overCancel && shaped && dur ? seek.now() / dur : null);
   /** Where the Cancel button stands: above the waveform's middle, measured whenever it shows (never left at 0). */
   let cancelX = $state(0);
@@ -235,7 +245,7 @@
   onkeydown={key}
 >
   {#if waveShown}
-    <Waveform bins={shaped ? (bins ?? null) : null} {want} {loading} progress={dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} {view} {track} left={isLocal() ? (local.left?.share ?? null) : null} back={isLocal() && ((holdNow.on && holdNow.dir < 0) || tapeDir.state === 'backward' || deckNow.back)} ahead={isLocal() && prefs.waveLevel === 'difference'} landing={holdNow.landing !== null && dur && (holdNow.dir > 0 ? pos < holdNow.landing : pos > holdNow.landing) ? holdNow.landing / dur : null} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
+    <Waveform bins={shaped ? (bins ?? null) : null} {want} {loading} progress={dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} {view} {track} left={isLocal() ? (local.left?.share ?? null) : null} back={isLocal() && ((holdNow.on && holdNow.dir < 0) || tapeDir.state === 'backward' || deckNow.back)} ahead={isLocal() && prefs.waveLevel === 'difference'} landing={aimMark} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
   {:else}
     <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
   {/if}

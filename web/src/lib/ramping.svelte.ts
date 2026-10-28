@@ -9,6 +9,9 @@ export const rewindNow = $state({ on: false, asked: false });
  *  waveform zooms on the playhead by it (lib/SeekWave; the owner, 2026-10-28). `landing`: while held, where letting go
  *  now would bring the tape back to its own speed (forwards) or to a stand (backwards), s into the track shown. */
 export const holdNow = $state({ on: false, speed: 0, top: 16, landing: null as number | null, dir: 1 as 1 | -1 });
+/** The look-ahead's line as last painted (lib/SeekWave): s into which track, and when; lib/localPlayer compares it with
+ *  where the tape plays on at its own speed (the owner, 2026-10-28: the instrumentation for the aim). */
+export const aimPainted = { pos: null as number | null, track: null as string | null, at: 0 };
 /** A wind asked for and not sounding yet (a seek that winds, here or on the player driven): the waveform already goes
  *  with it, never to where it goes (the owner, 2026-10-27: the waveform in sync with the seek). */
 let askedTimer: ReturnType<typeof setTimeout> | undefined;
