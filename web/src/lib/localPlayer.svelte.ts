@@ -2532,23 +2532,51 @@ const TRACK_TOP = RATE_TOP;
 const PREP_AHEAD_S = 0.8;
 /** A forward hold let go: the track's stream readied where the brake will have got to this far into it (s). */
 const HAND_FETCH_S = 0.3;
-/** A let-go curve's speed at `now` (×): from v0 to `to` on a raised cosine over `ms` from b0. */
-/** A hold let go: its brake from `v0`× to `to`× begun at `b0`; `d0`: the stream's way so far then (lib distance), `D`:
- *  the way the brake goes (s of track), `aim`: where it lands, as the look-ahead shows it; `k`: its steering. */
-type LetGo = { v0: number; to: number; b0: number; d0: number; D: number; aim: { index: number; pos: number }; k: number };
-/** The brake's speed now, steered to land where the look-ahead shows (the owner, 2026-10-28: the aim the truth): the
- *  curve's own, its part above `to` scaled by how much way is left against how much the curve has left (`done`: the
- *  way gone since let go). Rate changes come late in a browser (about 0.1 s on Android) and its timers too, so a curve
- *  run blind went up to 1.9× its way; steered, the lag is made up as it goes. */
-function steered(c: LetGo, now: number, ms: number, done: number): number {
-  const nominal = curveSpeed(c, now, ms);
-  const T = ms / 1000;
-  const tau = Math.min(T, Math.max(0, (now - c.b0) / 1000));
-  const base = c.to * (T - tau);
-  const left = brakeTravel(c.v0, ms, T, c.to) - brakeTravel(c.v0, ms, tau, c.to) - base;
-  // Near its end the curve has hardly any way left to scale: the steering as it last was.
-  if (left > 0.02 * Math.max(1, c.v0) * T) c.k = Math.min(3, Math.max(0, (c.D - done - base) / left));
-  return c.to + (nominal - c.to) * c.k;
+/** A place in the queue: which track, s into it. */
+type Place = { index: number; pos: number };
+/** A hold let go: its one plan (the owner, 2026-10-28: "make it pure"). From `start`, at `v0`× braking to `to`× on one
+ *  raised cosine over `ms` from `b0`, along the queue places `order` the way `dir` goes, `D` s of track, to `aim`, the
+ *  look-ahead. What shows meanwhile is the plan's place; each head that sounds (the wind, the track's player, the
+ *  backwards player) plays at the plan's speed, put right by how far it is from the plan's place (planSpeed); every
+ *  handover takes place at the plan's place; the brake ends at its aim. A browser's late rate changes (about 0.1 s) and
+ *  its clock's jumps under load (the tablet's: 7 s of track at once at 128×) then never move where it lands. */
+type LetGo = { v0: number; to: number; b0: number; ms: number; start: Place; order: number[]; dir: 1 | -1; D: number; aim: Place };
+/** How fast a head is put back on the plan: what it is off, made up over this long. */
+const PLAN_CATCH_S = 0.15;
+/** `d` s on from `place` the way `dir` goes along the queue places `order`, past a track's edge into the next. */
+function along(order: number[], dir: 1 | -1, place: Place, d: number): Place {
+  let k = order.indexOf(place.index);
+  let { index, pos } = place;
+  for (;;) {
+    const len = lengthOf(index) ?? Infinity;
+    const room = dir < 0 ? pos : len - pos;
+    if (d <= room || k < 0 || k + 1 >= order.length) return { index, pos: Math.max(0, Math.min(len, pos + dir * Math.min(d, room))) };
+    d -= room;
+    index = order[++k];
+    pos = dir < 0 ? (lengthOf(index) ?? 0) : 0;
+  }
+}
+/** How far a plan's way has come from its start to `place` (s of track; null: a place off its way). */
+function wayTo(c: LetGo, place: Place): number | null {
+  if (place.index === c.start.index) return (place.pos - c.start.pos) * c.dir;
+  const a = c.order.indexOf(c.start.index);
+  const b = c.order.indexOf(place.index);
+  if (a < 0 || b < a) return null;
+  const len = (i: number) => lengthOf(c.order[i]) ?? 0;
+  let d = c.dir > 0 ? len(a) - c.start.pos : c.start.pos;
+  for (let i = a + 1; i < b; i++) d += len(i);
+  return d + (c.dir > 0 ? place.pos : len(b) - place.pos);
+}
+/** The plan's place at `now`. */
+const planAt = (c: LetGo, now: number): Place => along(c.order, c.dir, c.start, brakeTravel(c.v0, c.ms, Math.max(0, (now - c.b0) / 1000), c.to));
+/** The speed a head at `place` plays at now (×, the track's): the plan's, and what it is off the plan's place made up
+ *  over PLAN_CATCH_S; never backwards. */
+function planSpeed(c: LetGo, now: number, place: Place): number {
+  const v = curveSpeed(c, now, c.ms);
+  const got = wayTo(c, place);
+  if (got === null) return v;
+  const want = brakeTravel(c.v0, c.ms, Math.min(c.ms / 1000, Math.max(0, (now - c.b0) / 1000)), c.to);
+  return Math.max(0, v + (want - got) / PLAN_CATCH_S);
 }
 const curveSpeed = (c: { v0: number; to: number; b0: number }, now: number, ms: number) =>
   c.to + ((c.v0 - c.to) * (1 + Math.cos(Math.PI * Math.min(1, Math.max(0, (now - c.b0) / ms))))) / 2;
@@ -2725,14 +2753,8 @@ function windRate(w: Winding, now: number): number {
     r = f + (1 - f) * rate(w.wind, w.D, t);
   }
   // Let go: the curve's speed, played at its stream's own (the hold's: its flight speed; the backwards player's: 1×).
-  else if (w.letGo) {
-    const c = w.letGo;
-    // The backwards player's (a hold's brake handed to it): by the way left to the aim where it stands, at 1× stream.
-    if (w.reverse) {
-      const at = windPlace(w, now);
-      r = at.index === c.aim.index ? steered(c, now, w.wind.releaseMs, c.D - (c.aim.pos - at.pos) * w.dir) : curveSpeed(c, now, w.wind.releaseMs);
-    } else r = steered(c, now, w.wind.releaseMs, distance(w, w.clip.currentTime) - c.d0) / vAt(w, w.clip.currentTime);
-  }
+  // Let go: the plan's speed where it stands (the backwards player's stream is the track at 1×; a hold's, its own speed).
+  else if (w.letGo) r = planSpeed(w.letGo, now, windPlace(w, now)) / (w.reverse ? 1 : vAt(w, w.clip.currentTime));
   else if (w.brake !== null) r = floor + ((w.brakeFrom - floor) * (1 + Math.cos(Math.PI * Math.min(1, (now - w.brake) / w.wind.releaseMs)))) / 2;
   else r = t >= w.wind.attackMs ? 1 : floor + ((1 - floor) * (1 - Math.cos((Math.PI * t) / w.wind.attackMs))) / 2;
   // Held back by the finger (a hold, not yet let go): geometrically, at most down to the hold's starting speed (the owner,
@@ -3098,7 +3120,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
     handWaited += WIND_STEP_MS;
     const now = performance.now();
     const c = w.letGo;
-    const ran = !c || now - c.b0 >= w.wind.releaseMs;
+    const ran = !c || now - c.b0 >= c.ms;
     if (place.index !== a.index || place.pos < a.from - 0.25 || handWaited > LAND_WAIT_MS || ran) {
       // Missed (not in, passed, or the curve run out): the wind brakes on to its stand.
       say('hand-back missed', { at: Math.round(place.pos * 1000), armed: Math.round(a.from * 1000), ready: a.clip.readyState });
@@ -3107,9 +3129,8 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       w.handing = false;
       return;
     }
-    // By place, at the speed it plays now (its steered brake's): the tape at the armed place takes it over (the
-    // owner's tablet, 2026-10-28: the curve's own speed still above the top there, so it never handed over).
-    const speed = Math.min(TRACK_TOP, vAt(w, clip.currentTime) * clip.playbackRate);
+    // The plan at the armed place: the backwards player takes it over there, at the plan's speed.
+    const speed = Math.min(TRACK_TOP, curveSpeed(c, now, c.ms));
     if (place.pos > a.from + 0.02 || a.clip.readyState < 3) return;
     say('handed back', { index: a.index, at: Math.round(a.from * 1000), speed: Math.round(speed * 100) / 100 });
     w.handArmed = null;
@@ -3131,12 +3152,10 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       if (!mine() || !audio) return;
       const now = performance.now();
       const c = w.letGo;
-      // A let-go curve: the track takes it over only once it is within the track's reach.
-      // The wind's speed as played (its steered brake's), handed over as it is.
-      const real = vAt(w, clip.currentTime) * clip.playbackRate;
-      if (c && real > TRACK_TOP) return void setTimeout(go, 16);
-      const at = windPlace(w, now);
-      const speed = Math.min(TRACK_TOP, real);
+      // Let go: the track takes it over once the plan is within the track's reach, at the plan's place and speed.
+      if (c && curveSpeed(c, now, c.ms) > TRACK_TOP) return void setTimeout(go, 16);
+      const at = c ? planAt(c, now) : windPlace(w, now);
+      const speed = Math.min(TRACK_TOP, c ? curveSpeed(c, now, c.ms) : vAt(w, clip.currentTime) * clip.playbackRate);
       const tw = where();
       // Only where the track is loaded there is it taken over moving; else (a hold wound on through many tracks, its
       // track not in) it lands there at once, as any wind does, never sounding on while the place moves away (the owner,
@@ -3144,7 +3163,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       if (!(tw && tw.seg.index === at.index && inBuffer(tw.seg.start + at.pos))) {
         waited += 50;
         // Its curve run out with the track not in: it lands there (the track spins up once in), never winding on past.
-        if (c && now - c.b0 >= w.wind.releaseMs) return arrive(at);
+        if (c && now - c.b0 >= c.ms) return arrive(at);
         // Its stream readied ahead and the tape not there yet, or coming in: worth the wait.
         const coming = comingFor(at.index, at.pos) || (!!streamFrom && streamFrom.index === at.index && at.pos < streamFrom.from);
         // Not yet in the track it lands in (readied there, the curve on its way): the wait goes on.
@@ -3170,17 +3189,15 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       };
       // A hold let go: the brake that began on the wind goes on on the track, on its own curve, to its end.
       if (c) {
-        const T = w.wind.releaseMs;
         const token = ++rampToken;
         const on = () => {
           if (token !== rampToken || !audio) return;
           const t = performance.now();
-          // Steered on to the aim: the way left to it where the track stands, as far as the curve has left.
+          // The plan's speed where the track stands, at least its own.
           const here = where();
-          const left = here && here.seg.index === c.aim.index ? (c.aim.pos - here.offset) * w.dir : null;
-          const v = left === null ? curveSpeed(c, t, T) : steered(c, t, T, c.D - left);
+          const v = here ? planSpeed(c, t, { index: here.seg.index, pos: here.offset }) : curveSpeed(c, t, c.ms);
           audio.playbackRate = Math.min(TRACK_TOP, Math.max(1, v));
-          if (t - c.b0 >= T) return back();
+          if (t - c.b0 >= c.ms) return back();
           setTimeout(on, 16);
         };
         return on();
@@ -3233,15 +3250,15 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
           const c = w.letGo;
           playback('info', 'brake step', {
             ms: Math.round(now - c.b0),
-            curve: Math.round(curveSpeed(c, now, w.wind.releaseMs) * 10) / 10,
-            k: Math.round(c.k * 100) / 100,
+            curve: Math.round(curveSpeed(c, now, c.ms) * 10) / 10,
             rate: Math.round(clip.playbackRate * 1000) / 1000,
-            v: Math.round(vAt(w, clip.currentTime) * 10) / 10,
-            done: Math.round((distance(w, clip.currentTime) - c.d0) * 10) / 10,
+            plan: Math.round(brakeTravel(c.v0, c.ms, Math.min(c.ms / 1000, (now - c.b0) / 1000), c.to) * 10) / 10,
+            wind: Math.round((wayTo(c, windPlace(w, now)) ?? NaN) * 10) / 10,
             D: Math.round(c.D * 10) / 10,
           });
         }
-        const place = w.edge ? { index: w.shown, pos: tape.rewindPos ?? w.from } : windPlace(w, now);
+        // Let go: the plan's place (the heads are put on it; where it hands over and ends).
+        const place = w.edge ? { index: w.shown, pos: tape.rewindPos ?? w.from } : w.letGo ? planAt(w.letGo, now) : windPlace(w, now);
         show(place);
         // A hold (not the knob's playing backwards, but a hold's brake handed to the backwards player): its speed.
         if (w.to === null && (!w.reverse || w.startAt !== null)) {
@@ -3263,9 +3280,8 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
           else handBack(place);
         }
         // A held one braked to its end: on from where it got to (a flown one moving, where it plays on).
-        // Let go and come to its aim (or past it: the stream's clock gets ahead under load, the owner's tablet
-        // 2026-10-28), it stops there, not creeping on at the slowest it may play for the rest of its brake.
-        else if (w.brake !== null && (w.edge || now - w.brake >= w.wind.releaseMs || (w.letGo !== null && w.dir < 0 && !w.reverse && !w.handArmed && distance(w, clip.currentTime) - w.letGo.d0 >= w.letGo.D))) {
+        // Let go, the plan's end is its aim: there it stands (backwards) or plays on.
+        else if (w.brake !== null && (w.edge || now - w.brake >= w.wind.releaseMs)) {
           if (w.fly && !w.edge && w.after === 'play') land(place);
           else arrive(place);
         }
@@ -3587,26 +3603,14 @@ export function windRelease(dir: 'back' | 'forward') {
 /** Where a hold let go now would land, the way letGo lets it go: the tape on to the stream readied ahead of it, then
  *  the brake on the other head (forwards to the track's own speed, backwards to a stand), s into the track. */
 function letGoLanding(w: Winding, place: { index: number; pos: number }): { index: number; pos: number } {
-  // Braked at once either way: the curve's distance alone, from the speed it flies at (forwards to 1×, back to a stand).
+  // Braked at once either way: the plan's way, from the speed it flies at (forwards to 1×, back to a stand).
   const v = vAt(w, w.clip.currentTime) * w.clip.playbackRate;
-  const brake = prefs.startStop.tape.brakeMs;
-  return onThrough(w, place, rampSpan(brakeCurve, v, w.dir > 0 ? 1 : 0, brake));
+  const ms = w.wind.releaseMs;
+  return onThrough(w, place, brakeTravel(v, ms, ms / 1000, w.dir > 0 ? 1 : 0));
 }
 /** `d` s on from `place` the way a held wind goes: past its track's edge on through the queue places it winds through
  *  (the owner, 2026-10-28: a brake past the track's end landed in the next one, the look-ahead stuck at the end). */
-function onThrough(w: Winding, place: { index: number; pos: number }, d: number): { index: number; pos: number } {
-  const order = [w.seg.index, ...w.through];
-  let k = order.indexOf(place.index);
-  let { index, pos } = place;
-  for (;;) {
-    const len = lengthOf(index) ?? Infinity;
-    const room = w.dir < 0 ? pos : len - pos;
-    if (d <= room || k < 0 || k + 1 >= order.length) return { index, pos: Math.max(0, Math.min(len, pos + w.dir * Math.min(d, room))) };
-    d -= room;
-    index = order[++k];
-    pos = w.dir < 0 ? (lengthOf(index) ?? 0) : 0;
-  }
-}
+const onThrough = (w: Winding, place: Place, d: number): Place => along([w.seg.index, ...w.through], w.dir, place, d);
 /** Let go: the look-ahead kept where it aimed until the tape is there (the owner, 2026-10-28), at most AIM_KEEP_MS. */
 const AIM_KEEP_MS = 4000;
 let aimTimer: ReturnType<typeof setTimeout> | undefined;
@@ -3677,7 +3681,7 @@ function letGo(w: Winding) {
   const landing = letGoLanding(w, here);
   aim(landing);
   playback('info', 'let go', { index: here.index, at: Math.round(here.pos * 1000), speed: Math.round(speed * 100) / 100, landing_index: landing.index, landing: Math.round(landing.pos * 1000) });
-  w.letGo = { v0: speed, to, b0: now, d0: distance(w, w.clip.currentTime), D: brakeTravel(speed, T, T / 1000, to), aim: landing, k: 1 };
+  w.letGo = { v0: speed, to, b0: now, ms: T, start: here, order: [w.seg.index, ...w.through], dir: w.dir, D: brakeTravel(speed, T, T / 1000, to), aim: landing };
   w.brakeFrom = 1;
   w.brake = now;
   const ready = Math.max(HAND_FETCH_S, withinReach(speed, T, to));
