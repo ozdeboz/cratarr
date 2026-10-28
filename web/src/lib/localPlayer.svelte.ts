@@ -1159,6 +1159,7 @@ export function reportedBy(m: {
   starting?: unknown;
   speedX?: unknown;
   accelX?: unknown;
+  landing?: unknown;
 }) {
   if (m.repeat === 'off' || m.repeat === 'one' || m.repeat === 'all') local.repeat = m.repeat;
   // Left out: not said (a report of the queue alone); null: none.
@@ -1215,6 +1216,40 @@ export function reportedBy(m: {
   }
   // Its direction knob, as it stands there.
   if (m.direction === 'L' || m.direction === 'R') tapeDir.want = m.direction;
+  if (m.landing !== undefined) appLanding(m.landing);
+}
+/** The app's hold (a5, 0.9.14-4): where it lands, held or let go (null once there): the look-ahead, the hold's zoom
+ *  and the aim's check, as for this page's own. Held while it winds faster than it plays; let go once it brakes. */
+let appHolding = false;
+function appLanding(l: unknown) {
+  const at = l && typeof l === 'object' ? (l as Record<string, unknown>) : null;
+  const ok = at && typeof at.index === 'number' && typeof at.positionMs === 'number';
+  if (!ok) {
+    if (!appHolding) return;
+    appHolding = false;
+    // There: the line as last painted against where the deck is.
+    const t = local.queue[local.index];
+    playback('info', 'aim vs resume', {
+      way: holdNow.dir < 0 ? 'back: stand' : 'forward: 1x',
+      app: true,
+      aimed: aimPainted.pos === null ? null : Math.round(aimPainted.pos * 1000),
+      resumed: Math.round(positionNow() * 1000),
+      off_ms: aimPainted.pos === null || aimPainted.track !== (t ? `${t.source}/${t.id}` : null) ? null : Math.round((positionNow() - aimPainted.pos) * 1000),
+    });
+    Object.assign(holdNow, { on: false, held: false, landing: null, landingIndex: null, speed: 0 });
+    return;
+  }
+  const index = at.index as number;
+  const pos = (at.positionMs as number) / 1000;
+  const v = deck?.v ?? 0;
+  appHolding = true;
+  holdNow.on = true;
+  holdNow.landing = pos;
+  holdNow.landingIndex = index;
+  holdNow.speed = Math.abs(v);
+  holdNow.dir = index > local.index || (index === local.index && pos > local.position) ? 1 : -1;
+  // Held: still getting faster (or at its top); let go, it brakes.
+  holdNow.held = (deck?.a ?? 0) >= 0 && Math.abs(v) > 1;
 }
 
 function sleepOf(s: unknown): Sleep | null {
@@ -3213,6 +3248,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
           holdNow.on = true;
           holdNow.speed = w.edge ? 0 : vAt(w, clip.currentTime) * clip.playbackRate;
           if (tape.holding) holdNow.dir = w.dir;
+          holdNow.held = !!tape.holding && !tape.holding.released;
           holdNow.top = w.top;
           // Held: where letting go now would land; let go, it stays where it aimed (aim) until the tape is there.
           if (tape.holding && !w.edge) {
@@ -3294,6 +3330,7 @@ function endRewind() {
   if (w.handArmed) disarm(w.handArmed);
   w.handArmed = null;
   holdNow.on = false;
+  holdNow.held = false;
   // Where it lands is a place of its own, as a seek's (lib/remote: no hold against the last place shown).
   sought.n++;
   clearInterval(w.timer);
