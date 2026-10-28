@@ -98,10 +98,10 @@ const ITEMS: usize = 100;
 
 /// A track's sound may end this much before its given length unnoticed (ms; a page's slack for MP3 headers that
 /// disagree a little).
-const SHORT_SLACK_MS: i64 = 1_500;
+pub(crate) const SHORT_SLACK_MS: i64 = 1_500;
 
 /// Why a file's sound ends `heard` ms in, before its given length: what it says of itself (`check_short`).
-fn short_cause(path: &std::path::Path, heard: i64) -> &'static str {
+pub(crate) fn short_cause(path: &std::path::Path, heard: i64) -> &'static str {
     let mp3 = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("mp3"));
     if !mp3 {
         return "files:sound-breaks";
@@ -122,7 +122,7 @@ fn short_cause(path: &std::path::Path, heard: i64) -> &'static str {
 }
 
 /// A length as a clock: m:ss, or h:mm:ss.
-fn clock(ms: i64) -> String {
+pub(crate) fn clock(ms: i64) -> String {
     let s = ms.max(0) / 1000;
     if s >= 3600 { format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60) } else { format!("{}:{:02}", s / 60, s % 60) }
 }

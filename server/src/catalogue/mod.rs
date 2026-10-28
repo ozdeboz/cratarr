@@ -1674,6 +1674,21 @@ impl Catalogue {
     }
 
     /// A file's length as read from it (milliseconds), when known.
+    /// How long a file's sound is as the analysis decoded it whole (ms), where it has (0.9.14, Health's fixes).
+    pub fn heard_ms(&self, folder: i64, rel: &str) -> Option<i64> {
+        self.db()
+            .query_row(
+                "SELECT CAST(a.duration_secs * 1000 AS INTEGER) FROM analysis a JOIN files f ON f.folder = a.folder AND f.rel = a.rel AND f.size = a.size
+                 WHERE a.folder = ?1 AND a.rel = ?2",
+                params![folder, rel],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .filter(|ms| *ms > 0)
+    }
+
     /// Files whose sound, as the analysis decoded it whole, ends more than `slack_ms` before the length they give
     /// (0.9.14, Health): worst first, with their folder, path, given length and heard length (ms).
     pub fn shorter_than_heard(&self, slack_ms: i64) -> Result<Vec<(i64, String, PathBuf, i64, i64)>> {

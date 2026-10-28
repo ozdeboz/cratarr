@@ -702,6 +702,13 @@ impl Library {
     /// An album's place: its catalogue folder and folder in it, its MusicBrainz release, artist and name (0.9.5: its
     /// cover changed by hand).
     #[allow(clippy::type_complexity)]
+    /// A song's file and album (0.9.14, Health's fixes): its folder, its path in it, its album's id and its title.
+    pub fn song_file(&self, id: &str) -> Result<Option<(i64, String, String, String)>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT folder, rel, album_id, title FROM songs WHERE id = ?1")?;
+        Ok(st.query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.next().transpose()?)
+    }
+
     /// The song a file is (0.9.14, Health's items): its id, its album's, and its title.
     pub fn song_at(&self, folder: i64, rel: &str) -> Result<Option<(String, String, String)>> {
         let db = self.db();

@@ -273,6 +273,12 @@ pub struct Mp3Info {
     pub frames: Option<u64>,
     pub bytes: Option<u64>,
     pub has_info: bool,
+    /// Where in the file its info frame's frame count and byte count are (to set them; Health's fixes).
+    pub frames_at: Option<u64>,
+    pub bytes_at: Option<u64>,
+    /// Its first frame's header and length (the info frame where it has one).
+    pub header: [u8; 4],
+    pub first_len: u64,
 }
 
 impl Mp3Info {
@@ -295,20 +301,52 @@ pub fn mp3_info(path: &Path) -> Option<Mp3Info> {
     let mut body = vec![0u8; usize::try_from(len.checked_sub(4)?).ok()?];
     f.read_exact(&mut body).ok()?;
     let at = body.windows(4).position(|w| w == b"Xing" || w == b"Info");
-    let (mut frames, mut bytes) = (None, None);
+    let (mut frames, mut bytes, mut frames_at, mut bytes_at) = (None, None, None, None);
     if let Some(k) = at.filter(|k| k + 8 <= body.len()) {
         let word = |i: usize| body.get(i..i + 4).map(|b| u64::from(u32::from_be_bytes([b[0], b[1], b[2], b[3]])));
         let flags = word(k + 4)?;
         let mut p = k + 8;
+        // Offsets in the file: the body starts after the 4-byte header.
         if flags & 1 != 0 {
             frames = word(p).filter(|n| *n > 0);
+            frames_at = Some(start + 4 + p as u64);
             p += 4;
         }
         if flags & 2 != 0 {
             bytes = word(p).filter(|n| *n > 0);
+            bytes_at = Some(start + 4 + p as u64);
         }
     }
-    Some(Mp3Info { start, rate, samples, frames, bytes, has_info: at.is_some() })
+    Some(Mp3Info { start, rate, samples, frames, bytes, has_info: at.is_some(), frames_at, bytes_at, header: h, first_len: len })
+}
+
+/// An MP3's sound as its frames run (0.9.14, Health's fixes): where its first sound frame is (after the info frame
+/// where there is one), how many whole frames follow one another to where they stop (its end, or where the file is
+/// cut), and where that is. Reads the whole file's headers once.
+pub fn mp3_walk(path: &Path) -> Option<(u64, u64, u64)> {
+    use std::io::{BufReader, Read, Seek, SeekFrom};
+    let info = mp3_info(path)?;
+    let size = std::fs::metadata(path).ok()?.len();
+    let first = if info.has_info { info.start + info.first_len } else { info.start };
+    let mut f = BufReader::with_capacity(64 * 1024, File::open(path).ok()?);
+    f.seek(SeekFrom::Start(first)).ok()?;
+    let (mut at, mut frames) = (first, 0u64);
+    loop {
+        let mut h = [0u8; 4];
+        if f.read_exact(&mut h).is_err() {
+            break;
+        }
+        let Some((len, ..)) = mp3_frame(h) else { break };
+        if at + len > size {
+            break;
+        }
+        frames += 1;
+        at += len;
+        if f.seek_relative(i64::try_from(len).ok()? - 4).is_err() {
+            break;
+        }
+    }
+    Some((first, frames, at))
 }
 
 /// Where an MP3's stream starts to hold `from_ms` (0.9.14): the byte its frame begins at, a frame earlier for the bit

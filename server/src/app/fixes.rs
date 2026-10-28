@@ -139,6 +139,9 @@ pub(crate) fn write(track: &Path, set: &[(&'static str, Option<String>)]) -> Res
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Before {
     tracks: Vec<(PathBuf, Vec<(String, Option<String>)>)>,
+    /// Files written whole (0.9.14, a length's fixes: `length_fixes`): each with its original's copy.
+    #[serde(default)]
+    files: Vec<(PathBuf, PathBuf)>,
 }
 
 fn undo_file(id: &str) -> Result<PathBuf> {
@@ -191,6 +194,20 @@ pub async fn apply(fixes: Vec<Fix>) -> Result<(Vec<String>, Vec<(String, String)
                 }
             }
         }
+        // A length's fixes (0.9.14): a file read again, or its length written into it, its original kept first.
+        let backups = file.with_extension("");
+        for (n, fix) in fixes.iter().filter(|f| super::length_fixes::FIELDS.contains(&f.field)).enumerate() {
+            match super::length_fixes::apply(fix, &backups, n) {
+                Ok((path, kept)) => {
+                    if let Some(kept) = kept {
+                        before.files.push((path.clone(), kept));
+                        std::fs::write(&file, serde_json::to_vec(&before)?)?;
+                    }
+                    written.push(path);
+                }
+                Err(e) => failed.push((fix.id.clone(), super::plain(format!("{e:#}")))),
+            }
+        }
         if let Some(served) = crate::serve::instance() {
             served.reread(&written);
         }
@@ -225,6 +242,13 @@ pub async fn undo(token: &str) -> Result<()> {
         let file = undo_file(&id)?;
         let before: Before = serde_json::from_slice(&std::fs::read(&file).context("Those fixes can no longer be undone")?)?;
         let mut back = Vec::new();
+        // Files written whole: their originals back, in place.
+        for (path, kept) in &before.files {
+            match std::fs::copy(kept, path) {
+                Ok(_) => back.push(path.clone()),
+                Err(e) => tracing::warn!("fixes: {} not given back: {e:#}", path.display()),
+            }
+        }
         for (track, was) in &before.tracks {
             let set: Vec<(&'static str, Option<String>)> = was.iter().filter_map(|(n, v)| Some((static_name(n)?, v.clone()))).collect();
             match write(track, &set) {
@@ -233,6 +257,7 @@ pub async fn undo(token: &str) -> Result<()> {
             }
         }
         std::fs::remove_file(&file).ok();
+        std::fs::remove_dir_all(file.with_extension("")).ok();
         if let Some(served) = crate::serve::instance() {
             served.reread(&back);
         }
@@ -262,6 +287,11 @@ fn static_name(n: &str) -> Option<&'static str> {
 /// The fixes of a finding (`library:year`, `library:genre`, `library:album-artist`, `library:musicbrainz`), for each of
 /// its albums that has one, the certain first. Blocking parts apart.
 pub async fn of_finding(app: &super::App, key: &str) -> Result<Vec<Fix>> {
+    // Tracks shorter than their length (0.9.14): a fix a track.
+    if key.starts_with("files:") {
+        let k = key.to_string();
+        return tokio::task::spawn_blocking(move || super::length_fixes::of_finding(&k)).await?;
+    }
     let served = crate::serve::instance().context("Cratarr's own library is not open")?;
     let music = app.library.folders().music;
     let folders = app.library.catalogue().folders();
@@ -458,11 +488,20 @@ fn names(sources: &[String]) -> String {
 /// not as it was shown), in Music or in Incoming.
 pub async fn by_ids(app: &super::App, ids: &[String]) -> Result<Vec<Fix>> {
     let mut albums: HashMap<&str, Vec<&String>> = HashMap::new();
+    let mut out = Vec::new();
     for id in ids {
-        let (_, album) = id.split_once(':').with_context(|| format!("Not a fix: {id}"))?;
+        let (field, album) = id.split_once(':').with_context(|| format!("Not a fix: {id}"))?;
+        // A length's (0.9.14): by its song, worked out again now.
+        if super::length_fixes::FIELDS.contains(&field) {
+            let served = crate::serve::instance().context("Cratarr's own library is not open")?;
+            let (f, s) = (field.to_string(), album.to_string());
+            if let Some(fix) = tokio::task::spawn_blocking(move || super::length_fixes::fix(&served, &f, &s)).await?? {
+                out.push(fix);
+            }
+            continue;
+        }
         albums.entry(album).or_default().push(id);
     }
-    let mut out = Vec::new();
     for (album, wanted) in albums {
         // Only the fields asked for (0.9.8: a genre's apply worked out the album's cover candidates and match too).
         let fields: Vec<&str> = wanted.iter().filter_map(|id| id.split_once(':').map(|(f, _)| f)).collect();
