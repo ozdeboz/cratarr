@@ -356,7 +356,7 @@ class Prefs(context: Context) {
             speed = POINT_SPEED,
             attackMs = tapeAttackMs,
             releaseMs = tapeBrakeMs,
-            pieceMs = tapeSetting("tape", "pieceMs").toLong(),
+            pieceMs = PIECE_MS,
             gainDb = tapeSetting("tape", "gainDb"),
             doublingS = 1.5f,
             top = POINT_SPEED,
@@ -484,7 +484,6 @@ class Prefs(context: Context) {
                 "attackMs" to Range(100f, 1500f, 400f),
                 "brakeMs" to Range(100f, 1500f, 250f),
                 "gainDb" to Range(-24f, 0f, -12f),
-                "pieceMs" to Range(100f, 1000f, 350f),
             ),
             // Six motions, one setting each, 0: off (2026-10-28).
             "motions" to mapOf(
@@ -500,6 +499,8 @@ class Prefs(context: Context) {
         /** What is no longer set (the owner, 2026-10-28: good defaults): a wind to a point's speed limit, a hold's
          *  starting and top speed. */
         const val POINT_SPEED = 8f
+        /** A wind cut short is heard in pieces this long (ms; 2026-10-28, no longer a setting). */
+        const val PIECE_MS = 350L
         const val HOLD_START = 8f
         const val HOLD_TOP = 64f
         const val WIND_EDGES = "wind_edges"
