@@ -48,8 +48,8 @@
   const MOTIONS: { m: Motion; name: string; line: string }[] = [
     { m: 'toStart', name: 'Back to start', line: 'Previous' },
     { m: 'toEnd', name: 'Forward to end', line: 'Next' },
-    { m: 'seekBack', name: 'Seek back', line: 'The waveform, the clock' },
-    { m: 'seekFwd', name: 'Seek forward', line: 'The waveform, the clock' },
+    { m: 'seekBack', name: 'Seek back', line: 'The waveform, a swipe on the cover' },
+    { m: 'seekFwd', name: 'Seek forward', line: 'The waveform, a swipe on the cover' },
     { m: 'holdBack', name: 'Holding back', line: 'Previous, held' },
     { m: 'holdFwd', name: 'Holding forward', line: 'Next, held' },
   ];
