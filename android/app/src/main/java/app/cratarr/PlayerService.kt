@@ -150,6 +150,7 @@ class PlayerService : MediaSessionService() {
             .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(this, Downloads.playback(this))).setLoadErrorHandlingPolicy(Patience()))
             .build()
         player.addListener(Keeper(player))
+        player.addListener(Course(player))
         sync.attach(player)
         sync.onChange = { main.post(::groupChanged) }
         Repeat.apply(this, player)
@@ -447,6 +448,44 @@ class PlayerService : MediaSessionService() {
         LinkLog.add(this, "info", "playon", "app swiped away")
         // The app swiped away: music that plays goes on, and so does a player that stays ready; otherwise it goes.
         if (!prefs.stayReady && prefs.driven == null && (!player.playWhenReady || player.mediaItemCount == 0)) stopSelf()
+    }
+
+    /**
+     * The player's own course written down (2026-10-28, the tablet: a track played 160 s past its end, and a hold landed
+     * past the queue's last track's end, neither in the log): each change of track and why, its end, and playing on past
+     * a track's length (once a track).
+     */
+    private inner class Course(private val player: ExoPlayer) : Player.Listener {
+        private var pastTold = -1
+
+        private fun log(level: String, what: String, vararg fields: Pair<String, Any?>) =
+            LinkLog.add(this@PlayerService, level, "player", what, "index" to player.currentMediaItemIndex, "at_ms" to player.currentPosition, *fields)
+
+        private val check = object : Runnable {
+            override fun run() {
+                val d = player.duration
+                val i = player.currentMediaItemIndex
+                if (player.isPlaying && d != C.TIME_UNSET && player.currentPosition > d + PAST_END_MS && pastTold != i) {
+                    pastTold = i
+                    log("warn", "past its end", "length_ms" to d, "count" to player.mediaItemCount, "state" to player.playbackState)
+                }
+                main.removeCallbacks(this)
+                if (player.isPlaying) main.postDelayed(this, PAST_CHECK_MS)
+            }
+        }
+
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            pastTold = -1
+            log("info", "track changed", "reason" to reason, "count" to player.mediaItemCount, "length_ms" to player.duration.takeIf { it != C.TIME_UNSET })
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            if (playbackState == Player.STATE_ENDED) log("info", "ended", "count" to player.mediaItemCount, "length_ms" to player.duration.takeIf { it != C.TIME_UNSET })
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (isPlaying) check.run()
+        }
     }
 
     /**
@@ -774,6 +813,9 @@ class PlayerService : MediaSessionService() {
         private const val AGAIN_MS = 15_000L
         /** How often the playing track is looked at for counting. */
         private const val COUNT_EVERY_MS = 5_000L
+        /** Playing on this far past a track's length is written down ([Course]), looked at this often. */
+        private const val PAST_END_MS = 1_000L
+        private const val PAST_CHECK_MS = 2_000L
         private const val READY_CHANNEL = "ready"
         private const val GROUP_NOTIFICATION = 8
         private const val ACTION_READY = "cratarr.READY"
