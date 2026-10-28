@@ -1,9 +1,9 @@
 <script lang="ts">
   // A place that shows one thing at a time (the panel, the page), switching in one commit (lib/holdPlace.svelte): when `key`
   // changes, what it showed goes at once (the owner, 2026-10-27: never old content on navigation, always responsive):
-  // the place's own background is laid over it, the shared loading sign on it after HOLD_SIGN_MS, while the new content
-  // gets ready unseen beneath; once what it shows is ready (holdUntil), its pictures are in and the whole of it shows at
-  // once (what comes from elsewhere may follow). Nothing claimed: at once, as before. After HOLD_GIVE_UP_MS as it is. A
+  // the new content gets ready unseen, the place's own background showing meanwhile, the shared loading sign over it
+  // after HOLD_SIGN_MS; once what it shows is ready (holdUntil), its pictures are in and the whole of it shows at once
+  // (what comes from elsewhere may follow). Nothing claimed: at once, as before. After HOLD_GIVE_UP_MS as it is. A
   // place opening (the app starting, the phone's panel coming up) holds its first content the same way. `shown`: the key
   // whose content shows (what a page marks as open follows it, not the key asked for).
   import { mount, setContext, tick, unmount, untrack, type Snippet } from 'svelte';
@@ -11,8 +11,8 @@
   import MarkLoader from './MarkLoader.svelte';
 
   // `seeThrough`: opening, the place is not there at all until its content is ready (the phone's panel over the page):
-  // what was tapped shows the loading sign meanwhile (lib/panel `opening`); after HOLD_MAX_MS the place's background
-  // with the sign.
+  // what was tapped shows the loading sign meanwhile (lib/panel `opening`); after HOLD_MAX_MS the place, empty, with the
+  // sign.
   let {
     key,
     shown = $bindable(),
@@ -33,7 +33,8 @@
   /** What is not ready yet, this hold's (HOLD_GIVE_UP_MS lets them all go). */
   const claims = new Set<object>();
   let holding = $state(false);
-  let picture: HTMLElement | null = null;
+  /** Where the sign shows: over the place, nothing of its own (no copy of anything, the owner 2026-10-27). */
+  let signAt: HTMLElement | null = null;
   let sign: ReturnType<typeof mount> | null = null;
   let signTimer: ReturnType<typeof setTimeout> | undefined;
   let maxTimer: ReturnType<typeof setTimeout> | undefined;
@@ -51,43 +52,24 @@
   };
   setContext(HOLD, place);
 
-  /** The place's own background laid over it (once per hold: a key changing again keeps the first): the frame's
-   *  element alone, without what is in it. */
-  function takePicture() {
-    if (picture || !box) return;
-    const frame = box.parentElement;
-    if (!frame) return;
-    const r = frame.getBoundingClientRect();
-    if (!r.width || !r.height) return;
-    const p = frame.cloneNode(false) as HTMLElement;
-    p.removeAttribute('id');
-    p.setAttribute('aria-hidden', 'true');
-    p.inert = true;
-    Object.assign(p.style, {
-      position: 'fixed',
-      left: `${r.left}px`,
-      top: `${r.top}px`,
-      width: `${r.width}px`,
-      height: `${r.height}px`,
-      margin: '0',
-      pointerEvents: 'none',
-      visibility: 'visible',
-    });
-    p.classList.add('hold-picture');
-    // On the place's own layer, after it: over it (a page is lifted above what is behind it).
-    const z = getComputedStyle(frame).zIndex;
-    if (z !== 'auto') p.style.zIndex = z;
-    frame.after(p);
-    picture = p;
+  /** The loading sign after HOLD_SIGN_MS, in the middle of what can be seen of the place (once per hold). */
+  function showSign() {
+    if (signAt || signTimer || !box) return;
     signTimer = setTimeout(() => {
-      if (picture !== p) return;
+      signTimer = undefined;
+      const frame = box?.parentElement;
+      const r = frame?.getBoundingClientRect();
+      if (!holding || !frame || !r?.width || !r.height) return;
+      const top = Math.max(r.top, 0);
       const at = document.createElement('div');
       at.className = 'hold-sign';
-      // In the middle of what can be seen of the place (a page may reach far past the window).
-      const top = Math.max(0, -r.top);
-      at.style.top = `${top}px`;
-      at.style.height = `${Math.max(0, Math.min(r.height, innerHeight - r.top) - top)}px`;
-      p.appendChild(at);
+      at.setAttribute('aria-hidden', 'true');
+      Object.assign(at.style, { left: `${r.left}px`, width: `${r.width}px`, top: `${top}px`, height: `${Math.max(0, Math.min(r.bottom, innerHeight) - top)}px` });
+      // On the place's own layer (a page is lifted above what is behind it).
+      const z = getComputedStyle(frame).zIndex;
+      if (z !== 'auto') at.style.zIndex = z;
+      frame.after(at);
+      signAt = at;
       sign = mount(MarkLoader, { target: at, props: { size: 40 } });
     }, HOLD_SIGN_MS);
   }
@@ -95,14 +77,15 @@
   /** A see-through opening's place, hidden until then. */
   let away: HTMLElement | null = null;
 
-  function dropPicture() {
+  function dropSign() {
     clearTimeout(signTimer);
+    signTimer = undefined;
     if (away) away.style.visibility = '';
     away = null;
     if (sign) void unmount(sign);
     sign = null;
-    picture?.remove();
-    picture = null;
+    signAt?.remove();
+    signAt = null;
   }
 
   /** The new content's pictures in the place's view, drawn (or PICTURE_MS). */
@@ -126,17 +109,17 @@
     clearTimeout(giveUpTimer);
     holding = false;
     shown = key;
-    dropPicture();
+    dropSign();
   }
 
-  /** A hold begins: the place's background over it, the sign on it, until ready. */
+  /** A hold begins: the place empty but for its background, the sign on it, until ready. */
   function begin(opening = false) {
     const r = ++round;
+    holding = true;
     if (opening && seeThrough && box?.parentElement) {
       away = box.parentElement;
       away.style.visibility = 'hidden';
-    } else takePicture();
-    holding = true;
+    } else showSign();
     clearTimeout(maxTimer);
     clearTimeout(giveUpTimer);
     maxTimer = setTimeout(() => {
@@ -144,7 +127,7 @@
       if (!away) return;
       away.style.visibility = '';
       away = null;
-      takePicture();
+      showSign();
     }, HOLD_MAX_MS);
     giveUpTimer = setTimeout(() => {
       if (r !== round) return;
@@ -170,7 +153,7 @@
   $effect(() => () => {
     clearTimeout(maxTimer);
     clearTimeout(giveUpTimer);
-    dropPicture();
+    dropSign();
   });
 </script>
 
@@ -181,15 +164,13 @@
     display: contents;
   }
 
-  /* Beneath the picture, getting ready unseen (laid out, its pictures loading). */
+  /* Getting ready unseen (laid out, its pictures loading); the place's own background shows meanwhile. */
   .holding {
     visibility: hidden;
   }
 
-  :global(.hold-picture .hold-sign) {
-    position: absolute;
-    left: 0;
-    right: 0;
+  :global(.hold-sign) {
+    position: fixed;
     display: grid;
     place-items: center;
     pointer-events: none;

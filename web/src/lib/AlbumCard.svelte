@@ -15,6 +15,8 @@
   import { albumSubject, viewOver } from './panel.svelte';
   import { albumPlay, libraryDot, playListedAlbum } from './albums.svelte';
   import CoverPlay from './CoverPlay.svelte';
+  import { albumAway } from './away.svelte';
+  import { DEVICE } from './deviceMusic.svelte';
   import CoverWait from './CoverWait.svelte';
 
   let {
@@ -43,6 +45,8 @@
   const dot = $derived(libraryDot(source, album));
   /** The library's album: it plays from its cover, and opens in the panel. */
   const own = $derived(!onopen && cover === undefined && source !== BANDCAMP);
+  /** Out of reach, none of it on this device (lib/away): dimmed, no Play; it still opens, as last seen. */
+  const gone = $derived(own && albumAway(source, album.id));
 </script>
 
 {#if menu && source === BANDCAMP}<BandcampAlbumMenu album={{ id: album.id, title: album.title, artist: album.artist ?? null }} onclose={() => (menu = false)} />
@@ -50,9 +54,10 @@
 <div class="card-box">
 <button
   class="card"
+  class:gone
   onclick={() => (onopen ? onopen() : viewOver(albumSubject(source, album.id)))}
   aria-label="{onopen ? 'Open' : 'View'} {album.title}"
-  use:longpress={() => !onopen && (menu = true)}
+  use:longpress={() => !onopen && source !== DEVICE && (menu = true)}
 >
   <span class="cover"
     ><Cover src={cover === undefined ? albumCoverUrl(source, album.id) : cover} /><CoverStatus mark={request ?? album.request} />{#if busy}<CoverBusy />{/if}<CoverWait
@@ -62,7 +67,7 @@
   <span class="title">{#if dot}<i class="dot" style:background={dot.colour} role="img" aria-label={dot.name}></i>{/if}{album.title}</span>
   {#if lines}{#each lines.filter(Boolean) as l, i (i)}<span class="year">{l}</span>{/each}{:else if album.year}<span class="year">{album.year}</span>{/if}
 </button>
-{#if own}<CoverPlay label={album.title} album={album.id} busy={albumPlay.starting === album.id} disabled={albumPlay.starting !== null} onplay={() => playListedAlbum(source, album)} />{/if}
+{#if own && !gone}<CoverPlay label={album.title} album={album.id} busy={albumPlay.starting === album.id} disabled={albumPlay.starting !== null} onplay={() => playListedAlbum(source, album)} />{/if}
 </div>
 
 <style>
@@ -108,6 +113,11 @@
     overflow: hidden;
     margin-bottom: 6px;
     border-radius: 8px;
+  }
+
+  /* Out of reach and not on this device: it cannot play (as a panel's rows, lib/PlaylistView). */
+  .card.gone {
+    opacity: 0.45;
   }
 
   .title,

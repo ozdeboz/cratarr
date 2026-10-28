@@ -34,6 +34,8 @@
     landing = null,
     track = null,
     left = null,
+    back = false,
+    wide = null,
     onflat,
   }: {
     bins: Uint8Array | null;
@@ -63,6 +65,13 @@
      *  2026-10-28: Next's wind to the end left its ends looking unplayed). */
     track?: string | null;
     left?: number | null;
+    /** Playing backwards (the knob, a hold back): a track change's colours run from the right instead (the owner,
+     *  2026-10-28: the colouring goes the way it plays; the pieces' own fronts still from the left). */
+    back?: boolean;
+    /** The tracks around this one end to end (lib/SeekWave's wide view: a hold's look-ahead in another track): their
+     *  bars (0..255 each), the stretch shown (`from`..`to`), this track's place in it (`cur0`..`cur1`) and the
+     *  boundaries between them (`marks`), all 0..1 of the whole. Places given in this track are drawn where it stands. */
+    wide?: { bins: Uint8Array; from: number; to: number; cur0: number; cur1: number; marks: number[] } | null;
     onflat?: () => void;
   } = $props();
 
@@ -79,7 +88,10 @@
   let height = $state(28);
   const n = $derived(Math.max(16, Math.min(512, Math.floor(width / 3))));
   /** Where a place of the track (0..1) is drawn: within the view. */
-  const shownAt = (x: number) => (view ? (x - view.from) / Math.max(1e-6, view.to - view.from) : x);
+  const shownAt = (x: number) => {
+    if (wide) return (wide.cur0 + x * (wide.cur1 - wide.cur0) - wide.from) / Math.max(1e-6, wide.to - wide.from);
+    return view ? (x - view.from) / Math.max(1e-6, view.to - view.from) : x;
+  };
   const done = $derived(Math.min(1, Math.max(0, shownAt(progress))));
   // The track before: how far it was played, and since when the next one's front runs (null: not yet begun).
   let shownTrack: string | null = null;
@@ -87,13 +99,18 @@
   let oldDone = $state(0);
   let changed = false;
   let oldFrontAt = $state<number | null>(null);
+  /** The way the last track change's colours run: from the right where it was playing backwards then. */
+  let fromRight = $state(false);
   $effect(() => {
     const k = track;
     const p = done;
     const l = left;
     untrack(() => {
+      // Through a wide view (a continuous hold) the tracks run on as one: no track change.
+      if (k !== shownTrack && wide) shownTrack = k;
       if (k !== shownTrack) {
         if (shownTrack !== null) {
+          fromRight = back;
           oldDone = l ?? lastDone;
           changed = true;
           oldFrontAt = null;
@@ -103,11 +120,9 @@
       lastDone = p;
     });
   });
-  /** The track before's colour, as the next one's front reaches each piece, shrinks to its middle over this long (the
-   *  owner, 2026-10-28: not gone at once). */
-  const OLD_SHRINK_MS = 320;
-  /** How much of a piece's colour of the track before is left (1: all, 0: none), at `t`. */
-  const oldLeft = (i: number, t: number) => (changed || oldFrontAt === null ? 1 : Math.min(1, Math.max(0, 1 - (t - (oldFrontAt + (i / n) * SPREAD_MS)) / OLD_SHRINK_MS)));
+  /** The track before's colour, as the next one's front reaches each piece, fades into the unplayed tint over this long,
+   *  the pieces keeping their size (the owner, 2026-10-28: a colour going, left to right, not a shrinking). */
+  const OLD_FADE_MS = 320;
   /** How far the next track's front has come (0..1): the pieces past it still show the track before. */
   const oldFrom = $derived.by(() => {
     void frame;
@@ -130,7 +145,7 @@
   const heights = $derived(bins ? bars(bins, n).map((v) => Math.max(LOW, v * 100) - LOW) : null);
   /** The view's, zoomed: the same pieces, the stretch remapped onto them, in its own range from a quarter zoomed in on
    *  (the owner, 2026-10-28: its lows lower and its highs higher; none only as it comes back to the whole). */
-  const zoomed = $derived(bins && view && want === 'wave' ? barsIn(bins, n, view.from, view.to, Math.min(1, (1 - (view.to - view.from)) * 4)).map((v) => Math.max(LOW, v * 100) - LOW) : null);
+  const zoomed = $derived(wide && want === 'wave' ? barsIn(wide.bins, n, wide.from, wide.to).map((v) => Math.max(LOW, v * 100) - LOW) : bins && view && want === 'wave' ? barsIn(bins, n, view.from, view.to, Math.min(1, (1 - (view.to - view.from)) * 4)).map((v) => Math.max(LOW, v * 100) - LOW) : null);
 
   // Where each piece is (not reactive: drawn on `frame`).
   let gap = new Float32Array(0);
@@ -217,7 +232,7 @@
       }
     }
     // The track before's colour still shrinking somewhere.
-    if (oldFrontAt !== null && t < oldFrontAt + SPREAD_MS + OLD_SHRINK_MS) moving = true;
+    if (oldFrontAt !== null && t < oldFrontAt + SPREAD_MS + OLD_FADE_MS) moving = true;
     frame++;
     if (moving) raf = requestAnimationFrame(step);
     else if (goals[0].w === 'line' && gap.every((g) => g === 0)) onflat?.();
@@ -248,6 +263,8 @@
     const known = heardKnown;
     untrack(() => {
       clearTimeout(pending);
+      // A wide view's bars are its own (the zoom's goal below); another track's coming in is no goal of its own.
+      if (wide) return;
       if (reducedMotion()) {
         changed = false;
         oldFrontAt = -Infinity;
@@ -317,22 +334,17 @@
     }
     return s;
   };
-  /** The track before's colour: its played pieces as drawn, each shrunk to its middle by what is left of it. */
-  const oldPlayed = $derived.by(() => {
+  /** The track before's colour, a mask over its played pieces: gone left of where the next one's front came
+   *  OLD_FADE_MS ago, whole right of the front, fading in between (each piece OLD_FADE_MS from its front on). Null: gone. */
+  const oldMask = $derived.by(() => {
     void frame;
-    if (oldFrontAt === -Infinity) return '';
-    const t = performance.now();
-    let s = '';
-    const upTo = Math.min(gap.length, Math.ceil(oldDone * gap.length));
-    for (let i = 0; i < upTo; i++) {
-      const k = oldLeft(i, t);
-      if (k <= 0) continue;
-      const g = gap[i];
-      const h = (line + (LOW - line) * g + rise[i] * (scale[i] ?? 1)) * k;
-      const w = 1 - 0.3 * g;
-      s += `M${f(i + (1 - w) / 2)} ${f((100 - h) / 2)}h${f(w)}v${f(h)}h${f(-w)}z`;
-    }
-    return s;
+    // A wide view runs on through the tracks as one: no change of track to colour.
+    if (wide || oldFrontAt === -Infinity || oldDone <= 0) return null;
+    if (changed || oldFrontAt === null) return 'none';
+    const e = performance.now() - oldFrontAt;
+    const from = (e - OLD_FADE_MS) / SPREAD_MS;
+    if (from >= oldDone) return null;
+    return `linear-gradient(to ${fromRight ? 'left' : 'right'}, transparent ${f(from * 100)}%, #000 ${f((e / SPREAD_MS) * 100)}%)`;
   });
   /** Levelled visibly somewhere: a piece's scale a step from 1 (a fraction of a dB shows nothing). */
   const d = $derived.by(() => {
@@ -351,13 +363,20 @@
        colour (the owner, 2026-10-27): levelled, what the colour does not reach keeps the unplayed tint, and levelling
        switched off the colour grows into it while those tips shrink to nothing; ahead of the playhead it never moves. -->
   <svg viewBox="0 0 {n} 100" preserveAspectRatio="none"><path d={output ? d : made} /></svg>
-  <svg class="played" viewBox="0 0 {n} 100" preserveAspectRatio="none" style:clip-path={`inset(0 ${(1 - Math.min(done, oldFrom)) * 100}% 0 0)`}>
+  <svg class="played" viewBox="0 0 {n} 100" preserveAspectRatio="none" style:clip-path={wide ? `inset(0 ${(1 - done) * 100}% 0 0)` : fromRight ? `inset(0 ${(1 - done) * 100}% 0 ${Math.min(1, 1 - oldFrom) * 100}%)` : `inset(0 ${(1 - Math.min(done, oldFrom)) * 100}% 0 0)`}>
     <path {d} />
   </svg>
   <!-- The track before, where its pieces still stand: as far as it was played. -->
-  {#if oldPlayed}
-    <svg class="played" viewBox="0 0 {n} 100" preserveAspectRatio="none" style:clip-path={`inset(0 ${(1 - oldDone) * 100}% 0 0)`}>
-      <path d={oldPlayed} />
+  {#if oldMask}
+    <svg
+      class="played"
+      viewBox="0 0 {n} 100"
+      preserveAspectRatio="none"
+      style:clip-path={`inset(0 ${(1 - oldDone) * 100}% 0 0)`}
+      style:mask-image={oldMask}
+      style:-webkit-mask-image={oldMask}
+    >
+      <path {d} />
     </svg>
   {/if}
   <!-- What is heard next: ahead of the playhead (Difference), or to where a hold let go now would land (over the played
@@ -367,7 +386,17 @@
       <path {d} />
     </svg>
   {/if}
+  <!-- The boundaries between the tracks in a wide view: a tick below each. -->
+  {#if wide}
+    {#each wide.marks as m (m)}
+      {@const x = (m - wide.from) / Math.max(1e-6, wide.to - wide.from)}
+      {#if x > 0 && x < 1}<span class="edge" style:left="{x * 100}%"></span>{/if}
+    {/each}
+  {/if}
   {#if now !== null}<span class="now" style:left="{Math.min(1, Math.max(0, shownAt(now))) * 100}%"></span>{/if}
+  <!-- The look-ahead: where a hold let go now lands, the same white line (the owner, 2026-10-28: its tint alone is hard to
+       see on a thin waveform). -->
+  {#if landing !== null}<span class="now" style:left="{Math.min(1, Math.max(0, shownAt(landing))) * 100}%"></span>{/if}
 </div>
 
 <style>
@@ -398,6 +427,17 @@
 
   .paused svg.played {
     fill: var(--muted);
+  }
+
+  /* A boundary between two tracks in a wide view (lib/SeekWave): a small tick below the waveform. */
+  .edge {
+    position: absolute;
+    bottom: -6px;
+    width: 2px;
+    height: 4px;
+    margin-left: -1px;
+    border-radius: 1px;
+    background: var(--muted);
   }
 
   .now {

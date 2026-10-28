@@ -15,6 +15,18 @@ const COVERS = 'cratarr-covers';
 // sign-in, sound) are never kept.
 const DATA = 'cratarr-data';
 const KEPT_AFTER_MS = 4000;
+// Known to be out of reach (the owner, 2026-10-28: no 4 s wait each time): no network, the page saying so (lib/reach,
+// the app's network report), or a read here that did not reach Cratarr. Then a read waits only this long for the
+// network (Cratarr back: its answer, fresh) before its last copy; with no network at all, not at all. The first read
+// that reaches Cratarr again ends it, and the pages are told.
+const KEPT_AWAY_MS = 400;
+let away = false;
+function setAway(on) {
+  if (away === on) return;
+  away = on;
+  if (!on) self.clients.matchAll().then((all) => all.forEach((c) => c.postMessage({ type: 'reached' })));
+}
+const keptAfter = () => (self.navigator.onLine === false ? 0 : away ? KEPT_AWAY_MS : KEPT_AFTER_MS);
 const KEPT = /^\/api\/(?:(?:albums|playlists|crates|artists|home|library|discover|insights|history|favorites|excluded|me|requests|visuals)(?:\/|$)|covers\/stamps$|cover\/|track\/[^/]+\/[^/]+\/waveform$)/;
 const NEVER = /^\/api\/(events|players|player|state|tasks|auth|health|status|time|stream|file|preview|catalogue|diagnostics|search)/;
 const ALBUM_COVER = /^\/api\/albums\/[^/]+\/[^/]+\/cover$/;
@@ -99,9 +111,12 @@ function keptRead(event, req) {
   const net = fetch(req).then(
     (r) => {
       if (r.ok) event.waitUntil(keep(req, r).catch(() => {}));
+      // Cratarr's own answer (the proxy's refusal or its empty 5xx are not).
+      if (r.ok || r.status === 401 || r.status === 404 || (r.status < 500 && r.status !== 403)) setAway(false);
+      else setAway(true);
       return r;
     },
-    () => null,
+    () => (setAway(true), null),
   );
   event.waitUntil(net);
   return new Promise((resolve) => {
@@ -109,8 +124,12 @@ function keptRead(event, req) {
     const give = (r) => !done && ((done = true), resolve(r));
     const timer = setTimeout(async () => {
       const k = await keptCopy(req);
-      if (k) give(k);
-    }, KEPT_AFTER_MS);
+      if (k) {
+        // Waited the whole while: not answering is out of reach too.
+        if (!away && self.navigator.onLine !== false) setAway(true);
+        give(k);
+      }
+    }, keptAfter());
     net.then(async (r) => {
       clearTimeout(timer);
       if (r && (r.ok || r.status === 401 || r.status === 404 || (r.status < 500 && r.status !== 403))) return give(r);
@@ -119,6 +138,11 @@ function keptRead(event, req) {
     });
   });
 }
+
+// The page's word on reach (lib/reach): out of reach, or Cratarr answered it.
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'reach' && typeof event.data.away === 'boolean') setAway(event.data.away);
+});
 
 // The account whose copies are kept: another one signing in, the last one's go.
 self.addEventListener('message', (event) => {

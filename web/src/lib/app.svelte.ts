@@ -20,6 +20,8 @@ export const onSeedTarget = (f: () => void) => (seedTarget = f);
 
 export const appInfo = $state({
   version: null as string | null,
+  /** The app turns a Start and stop ramp round at a press mid-way (0.9.15); before, its button waited for the end. */
+  turnsRound: false,
   /** This player's name, as Home Assistant and the other players see it. */
   player: null as string | null,
   /** Network (after Finamp's): the public address; the local network address, used while preferred and answering; the
@@ -191,6 +193,8 @@ if (port) {
       appInfo.ordered = m.ordered === true;
       appInfo.known = Array.isArray(m.known) ? (m.known as AppOutput[]).filter((o) => typeof o?.id === 'string') : [];
       appInfo.mode = m.mode === 'device' ? 'device' : 'cratarr';
+      // A Start and stop ramp turned round at a press mid-way (0.9.15): its play button live through it.
+      appInfo.turnsRound = m.turnsRound === true;
       if (typeof m.target === 'string') appInfo.target = m.target;
       // An app that keeps the target but has none yet: the page's last choice, once (decision 0062).
       else if (m.target === null && appInfo.target === null) seedTarget?.();
