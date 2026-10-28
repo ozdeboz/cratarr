@@ -8,10 +8,9 @@
   // (lens-real.png, gen5.py): 130 px, its bottom edge 36 px above the waveform's middle. `now` (0..1): where it plays,
   // a line in the lens's text colour when it is within it (the owner, 2026-10-24: something to aim for). What it shows is
   // always centred on the point, the lens kept inside the player or not (the owner, 2026-10-26: the point never leaves
-  // its centre; at the ends the waveform stops short of its edge). It zooms by the finger (the owner, 2026-10-28): 3x
-  // finer while it drags fast, easing in to 12x as it slows and while it holds still; the same bars across it always,
-  // the stretch under it remapped onto them (as the waveform's hold zoom, lib/Waveform), so nothing pops.
-  import { untrack } from 'svelte';
+  // its centre; at the ends the waveform stops short of its edge). `zoom`: how much finer than the waveform, by the finger
+  // (lib/seekState, the owner 2026-10-28); the same bars across it always, the stretch under it remapped onto them (as
+  // the waveform's hold zoom, lib/Waveform), so nothing pops.
   import { barsIn } from './waveforms.svelte';
 
   let {
@@ -25,6 +24,7 @@
     time,
     paused = false,
     now = null,
+    zoom = 3,
   }: {
     bins: Uint8Array;
     /** 0..1 along the waveform. */
@@ -39,6 +39,7 @@
     time: string;
     paused?: boolean;
     now?: number | null;
+    zoom?: number;
   } = $props();
 
   const D = 130;
@@ -46,47 +47,6 @@
   const LIFT = D / 2 + 36;
   /** The bars across the lens: one per 3 px of it. */
   const N = Math.round(D / 3);
-  /** How much finer than the waveform: dragging fast, held still; the finger's speed (px/s) at which it is least. */
-  const Z_MIN = 3;
-  const Z_MAX = 12;
-  const FAST_PX_S = 300;
-  /** Easing in (slowing down) and out (speeding up), ms. */
-  const IN_MS = 450;
-  const OUT_MS = 200;
-  let zoom = $state(Z_MIN);
-  // The finger's speed along the waveform, smoothed; still once it has not moved for a moment.
-  let speed = 0;
-  let lastPoint: number | null = null;
-  let lastAt = 0;
-  let movedAt = 0;
-  $effect(() => {
-    const p = point;
-    untrack(() => {
-      const t = performance.now();
-      if (lastPoint !== null) {
-        const dt = Math.max(1, t - lastAt);
-        const v = (Math.abs(p - lastPoint) * width * 1000) / dt;
-        speed += (v - speed) * (1 - Math.exp(-dt / 120));
-      }
-      lastPoint = p;
-      lastAt = t;
-      movedAt = t;
-    });
-  });
-  $effect(() => {
-    let raf = 0;
-    let last = performance.now();
-    const step = (t: number) => {
-      const dt = t - last;
-      last = t;
-      if (t - movedAt > 60) speed *= Math.exp(-dt / 120);
-      const target = Z_MIN + (Z_MAX - Z_MIN) * Math.max(0, 1 - speed / FAST_PX_S);
-      zoom += (target - zoom) * (1 - Math.exp(-dt / (target > zoom ? IN_MS : OUT_MS)));
-      raf = requestAnimationFrame(step);
-    };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
-  });
   /** From the point to the lens's edge, along the track (0..1). */
   const half = $derived(D / 2 / Math.max(1, width * zoom));
   /** The stretch under the lens on its bars; where each bar is in the track (none drawn past an end). */

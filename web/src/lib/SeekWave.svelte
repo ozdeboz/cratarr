@@ -171,7 +171,9 @@
       seek.lens = null;
       return;
     }
-    seek.end(seek.at(e.clientX, el));
+    // Where it is held (the lens's fine moves), not straight under the finger.
+    seek.moveTo(e.clientX, el, awayFrom(e, el));
+    seek.end();
     onend?.();
   }
   function cancel() {
@@ -229,7 +231,7 @@
        on Next between two known waveforms). -->
   {#if canSeek && !waveShown}<span class="thumb" style:left="{dur ? (pos / dur) * 100 : 0}%"></span>{/if}
   {#if bins && shaped && seek.lens && seek.lensOn && seek.held !== null && !seek.overCancel && dur}
-    <WaveLens {bins} point={pos / dur} now={nowMark} {...seek.lens} time={clockText(pos)} {paused} />
+    <WaveLens {bins} point={pos / dur} now={nowMark} {...seek.lens} time={clockText(pos)} {paused} zoom={seek.lensZoom} />
   {/if}
 </div>
 {#if seek.held !== null && seek.lensOn}
