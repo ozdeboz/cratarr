@@ -733,11 +733,11 @@ class PlayerService : MediaSessionService() {
         val server = prefs.serverUrl?.trimEnd('/') ?: return null
         if (DeviceMusic.located(item) != null || item.mediaId.startsWith("bandcamp/")) return null
         val to = toMs?.let { "&to_ms=$it" } ?: ""
-        val w = prefs.pointWind(back)
+        val w = prefs.holdWind(back)
         val fit = fitMs?.let { "&fit_ms=$it&attack_ms=${w.attackMs}&release_ms=${w.releaseMs}&piece_ms=${w.pieceMs}" } ?: ""
         val on = through?.let { "&through=" + Uri.encode(it, ",/:") } ?: ""
         // A hold speeds up as it goes (0.9.12): doubling as the tape is set, up to its top.
-        val accel = if (rise) prefs.holdWind(back).let { "&accel_s=${it.doublingS}&max=${it.top}" } else ""
+        val accel = if (rise) "&accel_s=${w.doublingS}&max=${w.top}" else ""
         return "$server/api/stream/${item.mediaId}/wind?from_ms=$fromMs&dir=${if (back) "back" else "forward"}&speed=$speed" +
             "&gain_db=$gainDb$to$fit$on$accel"
     }

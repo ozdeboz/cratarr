@@ -475,12 +475,12 @@ class MainActivity : AppCompatActivity() {
                 message.optJSONObject("startStop")?.let { s ->
                     prefs.startStopMode = s.optString("mode", Prefs.START_STOP_OFF)
                     prefs.startStopMs = s.optLong("ms", 800L)
+                    if (s.has("stopMs")) prefs.startStopStopMs = s.optLong("stopMs", 800L)
                     prefs.startStopSkips = s.optBoolean("skips")
                     prefs.startStopRewind = s.optBoolean("rewind")
                     // The Tape page (decision 0074): the tape's mechanics and its four motions, each kept as it is when the
                     // page leaves it out.
                     prefs.setTape(s)
-                    if (s.has("seekWinds")) prefs.windSeeks = s.optBoolean("seekWinds")
                     if (s.has("edges")) prefs.windEdges = s.optString("edges", "stop")
                 }
                 if (message.has("downloadOverMobile") || message.has("syncOnlyCharging")) {
@@ -631,9 +631,9 @@ class MainActivity : AppCompatActivity() {
                 JSONObject()
                     .put("mode", prefs.startStopMode)
                     .put("ms", prefs.startStopMs)
+                    .put("stopMs", prefs.startStopStopMs)
                     .put("skips", prefs.startStopSkips)
                     .put("rewind", prefs.startStopRewind)
-                    .put("seekWinds", prefs.windSeeks)
                     .put("edges", prefs.windEdges),
             ),
         )

@@ -335,9 +335,11 @@ class StartStop(
         heldPosition = at
         quietRamp = true
         commit(true)
-        ramping("out", downMs(m))
+        // The tape's Brake (Start and stop's own stop is for a pause and a skip).
+        val brake = prefs.tapeBrakeMs
+        ramping("out", brake)
         val mine = token + 1
-        ramp(1f, 0f, downMs(m), setter(m), curve(m, down = true)) { whole ->
+        ramp(1f, 0f, brake, setter(m), curve(m, down = true)) { whole ->
             if (!whole || token != mine) return@ramp
             sync.source.feed(null)
             player.pause()
@@ -471,15 +473,15 @@ class StartStop(
     }
 
     /** A wind-down's length: Vinyl's is the deck's one brake (Tape winding's Brake, the owner); Fade's as set. */
-    private fun downMs(mode: String): Long = if (mode == Prefs.START_STOP_VINYL) prefs.tapeBrakeMs else prefs.startStopMs
+    private fun downMs(@Suppress("UNUSED_PARAMETER") mode: String): Long = prefs.startStopStopMs
 
     /** A ramp's mean speed as a share of full: Vinyl's spin-up runs slower than the music, a fade at full speed. */
     private fun pace(mode: String): Float = if (mode == Prefs.START_STOP_VINYL) LOW + (1f - LOW) * 2f / 3f else 1f
 
     /** How long a wind-up from [at] (ms into the track) is: as set, but only as long as there is track before it to
      *  start early on (0.9.7, the owner: a 3 s fade from 1 s in is a 1 s one); none from its very start. */
-    private fun windUp(mode: String, at: Long): Long =
-        if (at < FROM_START_MS) 0L else min(prefs.startStopMs, (at / pace(mode)).toLong())
+    private fun windUp(mode: String, at: Long, full: Long = prefs.startStopMs): Long =
+        if (at < FROM_START_MS) 0L else min(full, (at / pace(mode)).toLong())
 
     private fun ramp(from: Float, to: Float, ms: Long, set: (Float) -> Unit, curve: (Float) -> Float, done: (Boolean) -> Unit) {
         val mine = ++token
@@ -551,10 +553,12 @@ class StartStop(
             if (committed == false) after = { play(start) }
             return
         }
-        val m = mode()
+        // The tape's own wind-up (after a wind, the knob back at R) is its spin-up, as a vinyl's; a play's as set.
+        val m = if (quiet) Prefs.START_STOP_VINYL else mode()
+        val full = if (quiet) prefs.tapeAttackMs else prefs.startStopMs
         val at = player.currentPosition
         // From a track's start: at once, always.
-        val ms = windUp(m, at)
+        val ms = windUp(m, at, full)
         if (m == Prefs.START_STOP_OFF || player.isPlaying || ms <= 0L) {
             reset()
             start()
@@ -570,7 +574,7 @@ class StartStop(
         player.seekTo((at - (ms * pace(m)).toLong()).coerceAtLeast(0))
         quietRamp = quiet
         commit(true)
-        ramping("in", ms, prefs.startStopMs)
+        ramping("in", ms, full)
         start()
         ramp(0f, 1f, ms, set, curve(m, down = false)) { whole -> if (whole) reset() }
     }
@@ -696,8 +700,8 @@ class StartStop(
 
     /** A tap's length for winding [distance] ms of track (back where negative): its way's seconds per minute, 12 s at
      *  most. */
-    private fun tapMs(distance: Long): Long =
-        (prefs.pointWind(distance < 0).ratio * kotlin.math.abs(distance) / 60f).toLong().coerceIn(200L, WIND_CAP_MS)
+    private fun tapMs(distance: Long, motion: String): Long =
+        (prefs.pointWind(motion).ratio * kotlin.math.abs(distance) / 60f).toLong().coerceIn(200L, WIND_CAP_MS)
 
     /**
      * Tape rewind: Previous that restarts the track winds it back to its start, then plays it from there as it is; false
@@ -735,12 +739,13 @@ class StartStop(
             return true
         }
         if (busy) return true
-        if (!prefs.startStopRewind || !player.isPlaying) return false
+        // Back to the start off: Previous goes there plainly.
+        if (!prefs.windsBy("toStart") || !player.isPlaying) return false
         val from = player.currentPosition
         if (from <= restartAfterMs) return false
-        val w = prefs.pointWind(back = true)
-        val url = windUrl(from, 0L, tapMs(-from), true, null, w.speed, w.gainDb, false) ?: return false
-        wind(hold = false, from = from, to = 0L, url = url, restart = restart) { _, _ -> player.play() }
+        val w = prefs.pointWind("toStart")
+        val url = windUrl(from, 0L, tapMs(-from, "toStart"), true, null, w.speed, w.gainDb, false) ?: return false
+        wind(hold = false, from = from, to = 0L, url = url, restart = restart, motion = "toStart") { _, _ -> player.play() }
         tapePrevious = true
         return true
     }
@@ -755,15 +760,16 @@ class StartStop(
         note("fast forward", "busy" to busy, "on" to prefs.startStopRewind, "at_ms" to player.currentPosition)
         // During a wind-down: not taken (as [skip]).
         if (busy) return true
-        if (!prefs.startStopRewind || !player.isPlaying || !player.hasNextMediaItem()) return false
+        // On to the end off: Next skips plainly (Start and stop's skip wind-down as set).
+        if (!prefs.windsBy("toEnd") || !player.isPlaying || !player.hasNextMediaItem()) return false
         val end = player.duration.takeIf { it > 0 } ?: return false
         // It flies (0.9.14): from a moment ahead, where the track will be when its stream sounds, never stopping first.
         val from = player.currentPosition + FLY_AHEAD_MS
         if (end - from <= SEEK_WIND_LEAST_MS) return false
-        val w = prefs.pointWind(back = false)
-        val url = windUrl(from, end, tapMs(end - from), false, null, w.speed, w.gainDb, false)?.let { "$it&fly=1" } ?: return false
+        val w = prefs.pointWind("toEnd")
+        val url = windUrl(from, end, tapMs(end - from, "toEnd"), false, null, w.speed, w.gainDb, false)?.let { "$it&fly=1" } ?: return false
         // Never sounding: the plain jump, still playing.
-        wind(hold = false, from = from, to = end, url = url, restart = jump, flying = true, jump = jump) { _, _ ->
+        wind(hold = false, from = from, to = end, url = url, restart = jump, flying = true, jump = jump, motion = "toEnd") { _, _ ->
             jump()
             player.play()
         }
@@ -777,17 +783,19 @@ class StartStop(
     fun seekTo(target: Long, wind: Boolean = false, go: () -> Unit) {
         val from = player.currentPosition
         // Each seek's way, to follow a device's report (the owner: "seek to wind does not yet work").
-        note("seek", "to_ms" to target, "from_ms" to from, "winds" to prefs.windSeeks, "asked" to wind, "busy" to busy, "playing" to player.isPlaying)
-        // `wind`: a page driving this player asks it (its own seek winding on), whatever this device's setting.
-        if ((prefs.windSeeks || wind) && !busy && player.isPlaying && kotlin.math.abs(target - from) > SEEK_WIND_LEAST_MS) {
+        // A seek back or forward by where it goes: its own motion.
+        val motion = if (target < from) "seekBack" else "seekFwd"
+        note("seek", "to_ms" to target, "from_ms" to from, "winds" to prefs.windsBy(motion), "asked" to wind, "busy" to busy, "playing" to player.isPlaying)
+        // `wind`: a page driving this player asks it (its device's own motion on), whatever this device's setting.
+        if ((prefs.windsBy(motion) || wind) && !busy && player.isPlaying && kotlin.math.abs(target - from) > SEEK_WIND_LEAST_MS) {
             // Forward it flies (0.9.14, the owner): from where the track will be when its stream sounds, taking over and
             // handing back at the track's own speed. Back it stops first (the way turns).
             val fly = target > from + FLY_AHEAD_MS + SEEK_WIND_LEAST_MS
             val start = if (fly) from + FLY_AHEAD_MS else from
-            val w = prefs.pointWind(target < from)
-            val url = windUrl(start, target, tapMs(target - start), target < from, null, w.speed, w.gainDb, false)?.let { if (fly) "$it&fly=1" else it }
+            val w = prefs.pointWind(motion)
+            val url = windUrl(start, target, tapMs(target - start, motion), target < from, null, w.speed, w.gainDb, false)?.let { if (fly) "$it&fly=1" else it }
             if (url != null) {
-                wind(hold = false, from = start, to = target, url = url, restart = go, flying = fly) { _, _ -> player.play() }
+                wind(hold = false, from = start, to = target, url = url, restart = go, flying = fly, motion = motion) { _, _ -> player.play() }
                 return
             }
         }
@@ -805,7 +813,8 @@ class StartStop(
         if (busy || tapeListener != null) return busy
         // Winding off here, in a group, a track Cratarr has no file of: nothing now, a plain press on letting go (a page
         // driving this player offers the hold whatever this device says).
-        if (!prefs.startStopRewind) return false.also { holdPlain = plain }
+        // Holding that way off: the press stays a tap (a plain one on letting go), the held Next's speed-up too.
+        if (!prefs.windsBy(if (back) "holdBack" else "holdFwd")) return false.also { holdPlain = plain }
         // Forward while playing: flies off (no stop first) from a moment ahead, where the track will be when it sounds.
         val flying = !back && player.isPlaying
         val from = player.currentPosition + if (flying) FLY_AHEAD_MS else 0L
@@ -910,7 +919,9 @@ class StartStop(
         restart: (() -> Unit)?,
         chain: List<Long> = emptyList(),
         flying: Boolean = false,
-        speed: Float = prefs.pointWind(to < from).speed,
+        speed: Float = Prefs.POINT_SPEED,
+        /** A wind to a point's motion (its duration); none for a hold. */
+        motion: String = if (to < from) "toStart" else "toEnd",
         reverse: Boolean = false,
         /** A tap that lands in the next track (Next's fast-forward): the track goes there as it lands. */
         jump: (() -> Unit)? = null,
@@ -930,7 +941,7 @@ class StartStop(
         tapeFrom = from
         tapeTo = to
         tapeSign = if (to < from) -1 else 1
-        tapeMs = if (hold) 0L else tapMs(to - from)
+        tapeMs = if (hold) 0L else tapMs(to - from, motion)
         tapeSpeed = speed.coerceIn(1f, 16f)
         // The tape's spin-up and its one brake; a hold's way of getting faster.
         val way = prefs.holdWind(to < from)

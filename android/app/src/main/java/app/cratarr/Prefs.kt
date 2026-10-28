@@ -288,6 +288,13 @@ class Prefs(context: Context) {
             p.edit().putLong(START_STOP_MS, value.coerceIn(200L, 3000L)).apply()
         }
 
+    /** Start and stop's stop: a pause's wind-down and a skip's (2026-10-27: its own; the tape's Brake is the tape's). */
+    var startStopStopMs: Long
+        get() = p.getLong(START_STOP_STOP_MS, 800L).coerceIn(200L, 3000L)
+        set(value) {
+            p.edit().putLong(START_STOP_STOP_MS, value.coerceIn(200L, 3000L)).apply()
+        }
+
     var startStopSkips: Boolean
         get() = p.getBoolean(START_STOP_SKIPS, false)
         set(value) {
@@ -333,27 +340,35 @@ class Prefs(context: Context) {
     /** The tape's spin-up. */
     val tapeAttackMs: Long get() = tapeSetting("tape", "attackMs").toLong()
 
-    /** A wind to a point that way (Previous to the start, Next to the end, a seek that winds). */
-    fun pointWind(back: Boolean): Wind {
-        val way = if (back) "back" else "fwd"
-        val speed = tapeSetting(way, "speed")
+    /** A motion's one setting (the page's `startStop.motions`, 2026-10-28): a wind to a point's duration (s per minute
+     *  wound) or a hold's time to its top speed (s); 0: off. */
+    fun motion(name: String): Float = tapeSetting("motions", name)
+
+    /** Whether a motion winds the tape: winding on, and it not off. */
+    fun windsBy(name: String): Boolean = startStopRewind && motion(name) > 0f
+
+    /** A wind to a point (`toStart` Previous, `toEnd` Next, `seekBack`, `seekFwd`): its duration as set (1 where it is
+     *  off but asked for, a page's own seek), at [POINT_SPEED] at most, with the tape's mechanics. */
+    fun pointWind(name: String): Wind {
+        val ratio = motion(name).takeIf { it > 0f } ?: 1f
         return Wind(
-            ratio = tapeSetting(way, "ratio"),
-            speed = speed,
+            ratio = ratio,
+            speed = POINT_SPEED,
             attackMs = tapeAttackMs,
             releaseMs = tapeBrakeMs,
             pieceMs = tapeSetting("tape", "pieceMs").toLong(),
             gainDb = tapeSetting("tape", "gainDb"),
-            doublingS = tapeSetting("tape", "doublingS"),
-            top = speed,
+            doublingS = 1.5f,
+            top = POINT_SPEED,
         )
     }
 
-    /** A hold that way (Previous or Next held): from its starting speed, doubling as the tape does, to its top. */
+    /** A hold that way: from [HOLD_START], doubling to [HOLD_TOP] in its time to top speed after its spin-up. Off, it
+     *  still gives the tape's mechanics (the knob's spin-up and brake). */
     fun holdWind(back: Boolean): Wind {
-        val hold = if (back) "holdBack" else "holdFwd"
-        val start = tapeSetting(hold, "start")
-        return pointWind(back).copy(speed = start, top = maxOf(tapeSetting(hold, "top"), start))
+        val t = motion(if (back) "holdBack" else "holdFwd")
+        val doubling = if (t > 0f) maxOf(0.05f, t - tapeAttackMs / 1000f) / kotlin.math.log2(HOLD_TOP / HOLD_START) else 1.5f
+        return pointWind(if (back) "toStart" else "toEnd").copy(speed = HOLD_START, top = HOLD_TOP, doublingS = doubling)
     }
 
     /** The Tape page's settings as it sends them (`startStop.tape`, `back`, `fwd`, `holdBack`, `holdFwd`): each kept
@@ -380,11 +395,7 @@ class Prefs(context: Context) {
         return startStop
     }
 
-    /** Whether a seek winds, and at a track's edge: stop, or wind on through the queue (`startStop.seekWinds`, `edges`). */
-    var windSeeks: Boolean
-        get() = p.getBoolean(WIND_SEEKS, false)
-        set(value) = p.edit().putBoolean(WIND_SEEKS, value).apply()
-
+    /** At a track's edge, holding: stop, or wind on through the queue (`startStop.edges`). */
     var windEdges: String
         get() = if (p.getString(WIND_EDGES, "stop") == "queue") "queue" else "stop"
         set(value) = p.edit().putString(WIND_EDGES, if (value == "queue") "queue" else "stop").apply()
@@ -463,9 +474,9 @@ class Prefs(context: Context) {
         const val LEVEL_UNTOUCHED = "untouched"
         const val START_STOP_MODE = "start_stop_mode"
         const val START_STOP_MS = "start_stop_ms"
+        const val START_STOP_STOP_MS = "start_stop_stop_ms"
         const val START_STOP_SKIPS = "start_stop_skips"
         const val START_STOP_REWIND = "start_stop_rewind"
-        const val WIND_SEEKS = "wind_seeks"
 
         /** The Tape page's settings (the owner, 2026-10-27): each one's range and start, as the page's lib/startStop. */
         private val TAPE_SETTINGS: Map<String, Map<String, Range>> = mapOf(
@@ -473,15 +484,24 @@ class Prefs(context: Context) {
                 "attackMs" to Range(100f, 1500f, 400f),
                 "brakeMs" to Range(100f, 1500f, 250f),
                 "gainDb" to Range(-24f, 0f, -12f),
-                "doublingS" to Range(0.5f, 5f, 1.5f),
                 "pieceMs" to Range(100f, 1000f, 350f),
             ),
-            "back" to mapOf("ratio" to Range(0.5f, 2f, 1f), "speed" to Range(2f, 16f, 8f)),
-            // Forward to a point: its duration reaching down to a quarter.
-            "fwd" to mapOf("ratio" to Range(0.25f, 2f, 1f), "speed" to Range(2f, 16f, 8f)),
-            "holdBack" to mapOf("start" to Range(2f, 16f, 8f), "top" to Range(8f, 64f, 64f)),
-            "holdFwd" to mapOf("start" to Range(2f, 16f, 8f), "top" to Range(8f, 64f, 64f)),
+            // Six motions, one setting each, 0: off (2026-10-28).
+            "motions" to mapOf(
+                "toStart" to Range(0f, 2f, 1f),
+                "seekBack" to Range(0f, 2f, 1f),
+                "holdBack" to Range(0f, 12f, 4.5f),
+                "toEnd" to Range(0f, 2f, 1f),
+                "seekFwd" to Range(0f, 2f, 1f),
+                "holdFwd" to Range(0f, 12f, 4.5f),
+            ),
         )
+
+        /** What is no longer set (the owner, 2026-10-28: good defaults): a wind to a point's speed limit, a hold's
+         *  starting and top speed. */
+        const val POINT_SPEED = 8f
+        const val HOLD_START = 8f
+        const val HOLD_TOP = 64f
         const val WIND_EDGES = "wind_edges"
         const val START_STOP_OFF = "off"
         const val START_STOP_VINYL = "vinyl"
