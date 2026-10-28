@@ -1051,6 +1051,7 @@ const handed = () => inApp || driven !== null;
 export function drive(name: string | null) {
   driven = name;
   // The next player's own, from its first report.
+  deck = null;
   local.sleep = null;
   reported = { positionMs: 0, at: performance.now() };
 }
@@ -1066,6 +1067,42 @@ export function emptyHere() {
 
 /** The last report: the position then (ms), and when it came; the position in between is counted on here. */
 let reported = { positionMs: 0, at: 0 };
+/** The app's deck as it last said (a5, 0.9.14-2): its place then (s), when, its speed (track s per s, signed) and how
+ *  fast that changes (per s). The place each moment follows from them, not from the reports' 250 ms steps (the owner,
+ *  2026-10-28: the waveform and the deck moved in strides through a wind); a report corrects it. Null: an app from
+ *  before, counted on as it was. */
+let deck: { pos: number; at: number; v: number; a: number } | null = null;
+/** Whether the app's deck goes backwards now (lib/SeekWave: a track change's colours from the right). */
+export const deckNow = $state({ back: false });
+/** The deck's place now: its last report carried on by its speed and acceleration, never past a stand (its speed
+ *  coming to 0), within the track. */
+function deckPlace(d: NonNullable<typeof deck>, now = performance.now()): number {
+  let t = Math.max(0, (now - d.at) / 1000);
+  // Slowing to a stand: it stands there, not going back the other way.
+  if (d.a !== 0 && d.v !== 0 && Math.sign(d.a) !== Math.sign(d.v)) t = Math.min(t, -d.v / d.a);
+  const p = d.pos + d.v * t + 0.5 * d.a * t * t;
+  return Math.max(0, local.duration ? Math.min(p, local.duration) : p);
+}
+/** The app's deck's speed now (× the track's, signed), from its last report; null: not said (here, or an older app). */
+export function deckSpeed(now = performance.now()): number | null {
+  const d = deck;
+  if (!d || !handed()) return null;
+  const v = d.v + d.a * Math.max(0, (now - d.at) / 1000);
+  return d.v !== 0 && Math.sign(v) !== Math.sign(d.v) ? 0 : v;
+}
+let deckFrame = 0;
+/** The deck moving other than playing on at its own speed: its place each frame (at 1× the counting on is enough). */
+function deckMoves() {
+  if (deckFrame) return;
+  const step = () => {
+    deckFrame = 0;
+    const d = deck;
+    if (!d || !handed() || (d.v === 1 && d.a === 0) || (d.v === 0 && d.a === 0)) return;
+    local.position = deckPlace(d);
+    deckFrame = requestAnimationFrame(step);
+  };
+  deckFrame = requestAnimationFrame(step);
+}
 let heldTimer: ReturnType<typeof setTimeout> | undefined;
 const HELD_GRACE_MS = 600;
 /** Let go: until the player says its wind has landed (a moment after), at most WIND_LAND_MS. */
@@ -1117,6 +1154,8 @@ export function reportedBy(m: {
   rewinding?: unknown;
   direction?: unknown;
   starting?: unknown;
+  speedX?: unknown;
+  accelX?: unknown;
 }) {
   if (m.repeat === 'off' || m.repeat === 'one' || m.repeat === 'all') local.repeat = m.repeat;
   // Left out: not said (a report of the queue alone); null: none.
@@ -1145,10 +1184,18 @@ export function reportedBy(m: {
   if (m.starting !== undefined) local.starting = m.starting === true;
   const now = performance.now();
   const pos = (Number(m.positionMs) || 0) / 1000;
-  if (m.rewinding === true) {
+  if (typeof m.speedX === 'number' && Number.isFinite(m.speedX)) {
+    deck = { pos, at: now, v: m.speedX, a: typeof m.accelX === 'number' && Number.isFinite(m.accelX) ? m.accelX : 0 };
+    deckNow.back = deck.v < 0;
+    tape.glide = null;
+    local.position = deckPlace(deck, now);
+    deckMoves();
+  } else if (m.rewinding === true) {
+    deck = null;
     tape.glide = { from: local.position, to: pos, at: now, span: Math.min(1000, Math.max(100, now - reported.at)) };
     gliding();
   } else {
+    deck = null;
     tape.glide = null;
     local.position = pos;
   }
@@ -1222,6 +1269,7 @@ function hand(op: string, args: Record<string, unknown> = {}) {
  *  second: counted on from the playing player's last report, or read from this page's own audio. */
 export function positionNow(): number {
   if (!handed()) return tape.rewindPos ?? where()?.offset ?? local.position;
+  if (deck) return deckPlace(deck);
   if (tape.glide) return local.position;
   const p = (reported.positionMs + sinceReport()) / 1000;
   return local.duration ? Math.min(p, local.duration) : p;
@@ -1237,7 +1285,10 @@ function sinceReport(): number {
 if (inApp) onApp('player', (m) => driven === null && reportedBy(m as Parameters<typeof reportedBy>[0]));
 if (typeof window !== 'undefined') {
   setInterval(() => {
-    if (!handed() || local.paused || local.index < 0 || ramping.dir !== null || rewindNow.on) return;
+    if (!handed() || local.index < 0) return;
+    // The app's deck: where its speed has brought it (still, it stands).
+    if (deck) return void (local.position = deckPlace(deck));
+    if (local.paused || ramping.dir !== null || rewindNow.on) return;
     const p = (reported.positionMs + sinceReport()) / 1000;
     local.position = local.duration ? Math.min(p, local.duration) : p;
   }, 250);

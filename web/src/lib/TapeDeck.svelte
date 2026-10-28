@@ -11,7 +11,7 @@
   import { isLocal } from './output.svelte';
   import { prefs } from './prefs.svelte';
   import { ramping, tapeDir } from './ramping.svelte';
-  import { turnTape, windable } from './localPlayer.svelte';
+  import { deckSpeed, turnTape, windable } from './localPlayer.svelte';
   import { drivenName, playOn } from './playOn.svelte';
   import { duration, playing, position, shownPaused } from './remote.svelte';
   import { hill, HEAD, HUB, MAXR, packs, REEL_L, REEL_R, tapePath, WHEELS } from './tapeDeck';
@@ -61,6 +61,9 @@
     const moved = lastPos === null ? 0 : (pos - lastPos) / dt;
     lastPos = pos;
     lastAt = now;
+    // The app's deck says its speed (a5, 0.9.14-2): that, as it is.
+    const said = isLocal() ? deckSpeed(now) : null;
+    if (said !== null) return said;
     if (rewinding) return speed * 0.85 + moved * 0.15;
     if (ramping.dir) {
       if (mode !== 'vinyl') return 1;
