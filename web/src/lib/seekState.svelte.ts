@@ -25,8 +25,9 @@ const LENS_AFTER = 100;
 export const LENS_Z_MIN = 3;
 const LENS_Z_MAX = 24;
 const LENS_FAST_PX_S = 300;
-/** Held this long before it zooms in at all; easing in (slowing down) and out (speeding up), ms. */
-const LENS_ZOOM_AFTER = 750;
+/** Held this long before it zooms in at all (the owner, 2026-10-28: most seeks are done within 2 s); easing in (slowing
+ *  down) and out (speeding up), ms. */
+const LENS_ZOOM_AFTER = 2000;
 const LENS_IN_MS = 450;
 const LENS_OUT_MS = 200;
 
