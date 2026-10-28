@@ -5,11 +5,13 @@
   // player seeks (lib/seekState's Seek holds all of that). While held, a big Cancel at the top of the screen, straight
   // above the waveform's middle: let go over it, nothing is sought (the owner, 2026-10-26).
   // `grab(e)`: the mini player's long press hands the pointer here, held from where it is.
+  import { untrack } from 'svelte';
   import Icon from './Icon.svelte';
   import { local } from './localPlayer.svelte';
   import { isLocal } from './output.svelte';
   import { prefs } from './prefs.svelte';
-  import { ramping } from './ramping.svelte';
+  import { holdNow, ramping } from './ramping.svelte';
+  import { reducedMotion } from './motion';
   import { portal } from './portal';
   import { clockText } from './remote.svelte';
   import type { Seek } from './seekState.svelte';
@@ -83,6 +85,44 @@
   });
   // Only an effect that stops the music greys it (the owner, 2026-10-27), not the tape's own stops (lib/ramping).
   const grey = $derived(isLocal() && ramping.dir && ramping.effect ? ramping.dir === 'out' : after ? after === 'out' : paused);
+  // A hold's zoom on the playhead (the owner, 2026-10-28): the stretch the tape covers in ZOOM_S at its speed, at least
+  // ZOOM_MIN_S, at most the whole: in as it winds up, out again as it gets faster, back to the whole when it ends; eased.
+  // The playhead keeps the place it had on the bar when the hold began, the track sliding under it.
+  const ZOOM_S = 15;
+  const ZOOM_MIN_S = 20;
+  const ZOOM_EASE_MS = 250;
+  let zoomShare = $state(1);
+  let zoomAnchor = $state<number | null>(null);
+  const zoomOn = $derived(holdNow.on && isLocal() && !reducedMotion());
+  // Started and stopped by the hold alone (its frames move it, never restart it).
+  $effect(() => {
+    const on = zoomOn;
+    return untrack(() => {
+      if (!on && zoomShare >= 0.999) return;
+      if (on && zoomAnchor === null) zoomAnchor = dur ? Math.min(1, Math.max(0, pos / dur)) : null;
+      let raf = 0;
+      let last = performance.now();
+      const step = (t: number) => {
+        const target = zoomOn && dur ? Math.min(1, Math.max(ZOOM_MIN_S, holdNow.speed * ZOOM_S) / dur) : 1;
+        zoomShare += (target - zoomShare) * (1 - Math.exp(-(t - last) / ZOOM_EASE_MS));
+        last = t;
+        if (!zoomOn && zoomShare > 0.999) {
+          zoomShare = 1;
+          zoomAnchor = null;
+          return;
+        }
+        raf = requestAnimationFrame(step);
+      };
+      raf = requestAnimationFrame(step);
+      return () => cancelAnimationFrame(raf);
+    });
+  });
+  const view = $derived.by(() => {
+    if (zoomShare >= 0.999 || zoomAnchor === null || !dur) return null;
+    const p = Math.min(1, Math.max(0, pos / dur));
+    const from = Math.min(1 - zoomShare, Math.max(0, p - zoomAnchor * zoomShare));
+    return { from, to: from + zoomShare };
+  });
   const nowMark = $derived(seek.held !== null && seek.lensOn && !seek.snapped && !seek.overCancel && shaped && dur ? seek.now() / dur : null);
   /** Where the Cancel button stands: above the waveform's middle, measured whenever it shows (never left at 0). */
   let cancelX = $state(0);
@@ -175,7 +215,7 @@
   onkeydown={key}
 >
   {#if waveShown}
-    <Waveform bins={shaped ? (bins ?? null) : null} {want} {loading} progress={dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
+    <Waveform bins={shaped ? (bins ?? null) : null} {want} {loading} progress={dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} {view} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
   {:else}
     <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
   {/if}

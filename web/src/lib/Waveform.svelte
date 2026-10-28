@@ -17,7 +17,7 @@
   // One path per layer, redrawn per frame only while something moves (hundreds of animated shapes ran poorly).
   import { untrack } from 'svelte';
   import { reducedMotion } from './motion';
-  import { bars } from './waveforms.svelte';
+  import { bars, barsIn } from './waveforms.svelte';
 
   let {
     bins,
@@ -29,6 +29,7 @@
     heard = 1,
     heardKnown = true,
     output = false,
+    view = null,
     onflat,
   }: {
     bins: Uint8Array | null;
@@ -45,6 +46,9 @@
     /** Whether `heard` is the track's own level, not a guess while its gain comes: a goal waits for it (up to
      *  LEVEL_WAIT_MS), so the waveform never shows the guess and then the level (the owner, 2026-10-28). */
     heardKnown?: boolean;
+    /** A stretch of the track shown (0..1, `from` to `to`), its bars remapped onto the same pieces: a hold's zoom on the
+     *  playhead (lib/SeekWave). Its goal reaches every piece at once (the owner, 2026-10-28: a non-staggered goal). */
+    view?: { from: number; to: number } | null;
     onflat?: () => void;
   } = $props();
 
@@ -60,11 +64,15 @@
   let width = $state(0);
   let height = $state(28);
   const n = $derived(Math.max(16, Math.min(512, Math.floor(width / 3))));
-  const done = $derived(Math.min(1, Math.max(0, progress)));
+  /** Where a place of the track (0..1) is drawn: within the view. */
+  const shownAt = (x: number) => (view ? (x - view.from) / Math.max(1e-6, view.to - view.from) : x);
+  const done = $derived(Math.min(1, Math.max(0, shownAt(progress))));
   /** The plain bar's line (4 px), in the drawing's units. */
   const line = $derived((100 * 4) / Math.max(4, height));
   /** Each bar's rise above the quietest, for the waveform shown. */
   const heights = $derived(bins ? bars(bins, n).map((v) => Math.max(LOW, v * 100) - LOW) : null);
+  /** The view's, zoomed: the same pieces, the stretch remapped onto them. */
+  const zoomed = $derived(bins && view && want === 'wave' ? barsIn(bins, n, view.from, view.to).map((v) => Math.max(LOW, v * 100) - LOW) : null);
 
   // Where each piece is (not reactive: drawn on `frame`).
   let gap = new Float32Array(0);
@@ -82,14 +90,14 @@
   // of the newest front that has reached it, the pieces to the right of a front still for the one before. A goal starts
   // GOAL_DELAY_MS after it is asked for, one asked for meanwhile in its place (a waveform in within that time: no
   // goal toward the wait first).
-  type Goal = { at: number; w: typeof want; heights: number[] | null; heard: number };
+  /** `flat`: reaching every piece at once (a zoom), not a front from the left. */
+  type Goal = { at: number; w: typeof want; heights: number[] | null; heard: number; flat?: boolean };
   let goals: Goal[] = [];
   const GOAL_DELAY_MS = 100;
   const LEVEL_WAIT_MS = 3000;
   let pending = 0;
   function goalOf(i: number, t: number): Goal {
-    const lag = (i / n) * SPREAD_MS;
-    for (let k = goals.length - 1; k > 0; k--) if (t >= goals[k].at + lag) return goals[k];
+    for (let k = goals.length - 1; k > 0; k--) if (t >= goals[k].at + (goals[k].flat ? 0 : (i / n) * SPREAD_MS)) return goals[k];
     return goals[0];
   }
 
@@ -112,7 +120,7 @@
     last = t;
     // The fronts that have passed every piece: only the newest of them still counts.
     let k = goals.length - 1;
-    while (k > 0 && t < goals[k].at + SPREAD_MS) k--;
+    while (k > 0 && t < goals[k].at + (goals[k].flat ? 0 : SPREAD_MS)) k--;
     if (k > 0) goals = goals.slice(k);
     let moving = goals.length > 1;
     for (let i = 0; i < n; i++) {
@@ -193,6 +201,21 @@
       }, known ? GOAL_DELAY_MS : LEVEL_WAIT_MS);
     });
   });
+  // Zoomed (a hold): every piece at once toward the stretch shown, the goal kept up to date as it slides and scales; back
+  // to the whole at once when it ends.
+  $effect(() => {
+    const z = zoomed;
+    untrack(() => {
+      const top = goals.at(-1);
+      if (!top) return;
+      if (z) {
+        if (top.flat && top.heights !== heights) top.heights = z;
+        else goals = [...goals, { at: performance.now(), w: 'wave', heights: z, heard: top.heard, flat: true }];
+      } else if (top.flat && top.heights !== heights) goals = [...goals, { at: performance.now(), w: want, heights, heard: top.heard, flat: true }];
+      else return;
+      run();
+    });
+  });
   // More of it loaded: the gaps run on with it (no waiting for their turn).
   $effect(() => {
     void loading;
@@ -236,7 +259,7 @@
   <svg class="played" viewBox="0 0 {n} 100" preserveAspectRatio="none" style:clip-path={`inset(0 ${(1 - done) * 100}% 0 0)`}>
     <path {d} />
   </svg>
-  {#if now !== null}<span class="now" style:left="{Math.min(1, Math.max(0, now)) * 100}%"></span>{/if}
+  {#if now !== null}<span class="now" style:left="{Math.min(1, Math.max(0, shownAt(now))) * 100}%"></span>{/if}
 </div>
 
 <style>

@@ -20,7 +20,7 @@ import { defaults, defaultsKnown, type Choices } from './mySettings.svelte';
 import { inApp, onApp, toApp } from './app.svelte';
 import { albumCoverUrl, getTrackGain, playerCommand, radioNext, windMap, type TrackGain } from './api';
 import { prefs } from './prefs.svelte';
-import { ramping, rampBegins, rampEnds, rewindNow, tapeDir, windAsked } from './ramping.svelte';
+import { holdNow, ramping, rampBegins, rampEnds, rewindNow, tapeDir, windAsked } from './ramping.svelte';
 import { asksSignIn, toSignIn } from './reach.svelte';
 import { consumed, rate, tapMs } from './windShape';
 import { BANDCAMP } from './bandcampPreview';
@@ -3004,6 +3004,11 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
         if (!w.edge) clip.playbackRate = windRate(w, now);
         const place = w.edge ? { index: w.shown, pos: tape.rewindPos ?? w.from } : windPlace(w, now);
         show(place);
+        // A hold (not the knob's playing backwards, but a hold's brake handed to the backwards player): its speed.
+        if (w.to === null && (!w.reverse || w.startAt !== null)) {
+          holdNow.on = true;
+          holdNow.speed = w.edge ? 0 : vAt(w, clip.currentTime) * clip.playbackRate;
+        }
         // A forward hold let go: to the track's own player, moving.
         if (w.handing && !w.edge) {
           if (w.dir > 0) land(place);
@@ -3074,6 +3079,7 @@ function endRewind() {
   if (!w) return;
   if (w.handArmed) disarm(w.handArmed);
   w.handArmed = null;
+  holdNow.on = false;
   // Where it lands is a place of its own, as a seek's (lib/remote: no hold against the last place shown).
   sought.n++;
   clearInterval(w.timer);

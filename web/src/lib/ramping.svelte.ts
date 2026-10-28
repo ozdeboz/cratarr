@@ -5,6 +5,9 @@ export const ramping = $state({ dir: null as 'out' | 'in' | null, ms: 0, at: 0, 
 /** A tape rewind sounds on this device's player (the page's own, lib/localPlayer, or the app's, as it reports it):
  *  the shown position goes back with it (lib/remote), and it is never a ramp of play or pause (the button's fill). */
 export const rewindNow = $state({ on: false, asked: false });
+/** A hold under way on this page's player (its brake let go included) and the tape's speed now (× the track's): the
+ *  waveform zooms on the playhead by it (lib/SeekWave; the owner, 2026-10-28). */
+export const holdNow = $state({ on: false, speed: 0 });
 /** A wind asked for and not sounding yet (a seek that winds, here or on the player driven): the waveform already goes
  *  with it, never to where it goes (the owner, 2026-10-27: the waveform in sync with the seek). */
 let askedTimer: ReturnType<typeof setTimeout> | undefined;
