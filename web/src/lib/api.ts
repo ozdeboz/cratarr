@@ -1653,7 +1653,9 @@ export const renumber = (album: string, tracks: { id: string; disc: number; trac
 export type Fix = {
   id: string;
   album: string;
-  field: 'year' | 'genre' | 'albumartist' | 'musicbrainz' | 'cover' | 'rule';
+  /** `reread`, `length`, `trim`: a track's length (a5, 2026-10-28: read again; written into its MP3; set to the sound it
+   *  holds), its id `<field>:<song id>`. */
+  field: 'year' | 'genre' | 'albumartist' | 'musicbrainz' | 'cover' | 'rule' | 'reread' | 'length' | 'trim';
   from: string | null;
   to: string;
   source: string;

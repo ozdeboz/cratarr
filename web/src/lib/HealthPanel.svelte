@@ -132,7 +132,7 @@
       <!-- Track numbers off (unnumbered ones too): renumbered as a release has them (lib/HealthRenumber). -->
       {#if problem === 'library:track-numbers' && item.album?.[0] === 'cratarr'}<HealthRenumber album={item.album[1]} title={item.title} ongone={() => backFromStep(HEALTH + problem)} />{/if}
       <!-- Year, genre, album artist, MusicBrainz release, a rule's names: the fix proposed, Apply (lib/HealthFixes). -->
-      {#if fixable && item.album?.[0] === 'cratarr'}<HealthFixes finding={problem} album={item.album[1]} title={item.title} ongone={() => backFromStep(HEALTH + problem)} />{/if}
+      {#if fixable && item.album?.[0] === 'cratarr'}<HealthFixes finding={problem} album={item.album[1]} track={item.track ?? null} title={item.title} ongone={() => backFromStep(HEALTH + problem)} />{/if}
       <!-- No cover: Change cover, straight on its choices (Upload and an address in its corner). -->
       {#if problem === 'library:cover' && item.album?.[0] === 'cratarr' && me.admin}
         <button class="act" onclick={() => (coverOf = item.album![1])}>Change cover<Icon name="chevronRight" size={18} /></button>
