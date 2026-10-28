@@ -3069,8 +3069,10 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       w.handing = false;
       return;
     }
-    const speed = curveSpeed(c, now, w.wind.releaseMs);
-    if (place.pos > a.from + 0.02 || a.clip.readyState < 3 || speed > TRACK_TOP) return;
+    // By place, at the speed it plays now (its steered brake's): the tape at the armed place takes it over (the
+    // owner's tablet, 2026-10-28: the curve's own speed still above the top there, so it never handed over).
+    const speed = Math.min(TRACK_TOP, vAt(w, clip.currentTime) * clip.playbackRate);
+    if (place.pos > a.from + 0.02 || a.clip.readyState < 3) return;
     say('handed back', { index: a.index, at: Math.round(a.from * 1000), speed: Math.round(speed * 100) / 100 });
     w.handArmed = null;
     endRewind();
@@ -3188,6 +3190,19 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
         // The finger's drag followed smoothly while held.
         if (tape.holding) w.drag += (tape.dragWant - w.drag) * (1 - Math.exp(-WIND_STEP_MS / 120));
         if (!w.edge) clip.playbackRate = windRate(w, now);
+        // A let-go brake, step by step (the owner, 2026-10-28: not all holds land where the look-ahead said).
+        if (w.letGo && !w.edge && !w.reverse) {
+          const c = w.letGo;
+          playback('info', 'brake step', {
+            ms: Math.round(now - c.b0),
+            curve: Math.round(curveSpeed(c, now, w.wind.releaseMs) * 10) / 10,
+            k: Math.round(c.k * 100) / 100,
+            rate: Math.round(clip.playbackRate * 1000) / 1000,
+            v: Math.round(vAt(w, clip.currentTime) * 10) / 10,
+            done: Math.round((distance(w, clip.currentTime) - c.d0) * 10) / 10,
+            D: Math.round(c.D * 10) / 10,
+          });
+        }
         const place = w.edge ? { index: w.shown, pos: tape.rewindPos ?? w.from } : windPlace(w, now);
         show(place);
         // A hold (not the knob's playing backwards, but a hold's brake handed to the backwards player): its speed.
@@ -3209,7 +3224,9 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
           else handBack(place);
         }
         // A held one braked to its end: on from where it got to (a flown one moving, where it plays on).
-        else if (w.brake !== null && (w.edge || now - w.brake >= w.wind.releaseMs)) {
+        // Let go and come to its aim (or past it: the stream's clock gets ahead under load, the owner's tablet
+        // 2026-10-28), it stops there, not creeping on at the slowest it may play for the rest of its brake.
+        else if (w.brake !== null && (w.edge || now - w.brake >= w.wind.releaseMs || (w.letGo !== null && w.dir < 0 && !w.reverse && !w.handArmed && distance(w, clip.currentTime) - w.letGo.d0 >= w.letGo.D))) {
           if (w.fly && !w.edge && w.after === 'play') land(place);
           else arrive(place);
         }
