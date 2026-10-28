@@ -363,12 +363,13 @@ class Prefs(context: Context) {
         )
     }
 
-    /** A hold that way: from [HOLD_START], doubling to [HOLD_TOP] in its time to top speed after its spin-up. Off, it
-     *  still gives the tape's mechanics (the knob's spin-up and brake). */
-    fun holdWind(back: Boolean): Wind {
+    /** A hold that way: from [HOLD_START] (at most half its top), doubling to [HOLD_TOP] in its time to top speed after
+     *  its spin-up (the page's holdWind). Off, it still gives the tape's mechanics (the knob's spin-up and brake). */
+    fun holdWind(back: Boolean, top: Float = HOLD_TOP): Wind {
         val t = motion(if (back) "holdBack" else "holdFwd")
-        val doubling = if (t > 0f) maxOf(0.05f, t - tapeAttackMs / 1000f) / kotlin.math.log2(HOLD_TOP / HOLD_START) else 1.5f
-        return pointWind(if (back) "toStart" else "toEnd").copy(speed = HOLD_START, top = HOLD_TOP, doublingS = doubling)
+        val start = minOf(HOLD_START, top / 2f)
+        val doubling = if (t > 0f) maxOf(0.05f, t - tapeAttackMs / 1000f) / kotlin.math.log2(top / start) else 1.5f
+        return pointWind(if (back) "toStart" else "toEnd").copy(speed = start, top = top, doublingS = doubling)
     }
 
     /** The Tape page's settings as it sends them (`startStop.tape`, `back`, `fwd`, `holdBack`, `holdFwd`): each kept
@@ -501,8 +502,9 @@ class Prefs(context: Context) {
         const val POINT_SPEED = 8f
         /** A wind cut short is heard in pieces this long (ms; 2026-10-28, no longer a setting). */
         const val PIECE_MS = 350L
-        const val HOLD_START = 8f
-        const val HOLD_TOP = 64f
+        /** A hold's starting and top speed (the page's, 2026-10-28: from 4× to 16×, a browser's fastest). */
+        const val HOLD_START = 4f
+        const val HOLD_TOP = 16f
         const val WIND_EDGES = "wind_edges"
         const val START_STOP_OFF = "off"
         const val START_STOP_VINYL = "vinyl"
