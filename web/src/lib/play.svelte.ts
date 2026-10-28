@@ -2,7 +2,8 @@
 // collection, at most 500 tracks, so every surface (a card, a panel, a menu) plays the same. Here (this browser, or one
 // of Cratarr's players the page drives: the page holds the queue) the page queues the tracks the server chose; on a
 // media server's player the server queues them itself.
-import { pickCollection, type Collection, type CrateLook, type Picking, type PlayHow } from './api';
+import { ApiError, UNREACHED, pickCollection, type Collection, type CrateLook, type Picked, type Picking, type PlayHow } from './api';
+import { away, pickHere } from './away.svelte';
 import { hiddenLibraries } from './listFilter.svelte';
 import { crates } from './crates.svelte';
 import { refresh, untilNewTrack } from './live.svelte';
@@ -24,6 +25,17 @@ function shown(what: Collection, look: CrateLook = {}): Picking {
   };
 }
 
+/** The server's pick; out of reach (lib/away), what is on this device of it, picked here as the server would. */
+async function pickHereOr(what: Picking, how: PlayHow, from: string | undefined, source: string | undefined): Promise<Picked> {
+  if (away()) return pickHere(what, how, from, source);
+  try {
+    return await pickCollection(what, how, { from, source });
+  } catch (e) {
+    if (e instanceof ApiError && e.message === UNREACHED) return pickHere(what, how, from, source);
+    throw e;
+  }
+}
+
 /** The tracks the server picks of `what`, without playing them (a radio's seed). */
 export const pickOf = (what: Collection, how: PlayHow, source = prefs.source || undefined) => pickCollection(shown(what), how, { source });
 
@@ -32,7 +44,7 @@ export const pickOf = (what: Collection, how: PlayHow, source = prefs.source || 
 export async function playCollection(what: Collection, how: PlayHow, name: string, from?: string, look?: CrateLook): Promise<void> {
   const source = prefs.source || undefined;
   if (isLocal()) {
-    const got = await pickCollection(shown(what, look), how, { from, source });
+    const got = await pickHereOr(shown(what, look), how, from, source);
     if (how === 'next' || how === 'last') return enqueue(got.tracks, how);
     return playQueue(got.tracks, got.index, name);
   }

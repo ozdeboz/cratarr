@@ -115,6 +115,7 @@
   import MenuEntry from './MenuEntry.svelte';
   import MenuGroup from './MenuGroup.svelte';
   import { pickOf, playCollection } from './play.svelte';
+  import { away, here } from './away.svelte';
   import { addedOn, artistPictureId, goToArtist, library, libraryDot, mainArtist, readLibrary } from './albums.svelte';
   import AlbumAbout from './AlbumAbout.svelte';
   import AlbumMore from './AlbumMore.svelte';
@@ -130,8 +131,7 @@
   import { insights, plural } from './insights.svelte';
   import { refresh } from './live.svelte';
   import { enqueue, startRadio, type LocalTrack } from './localPlayer.svelte';
-  import { downloads, inApp } from './app.svelte';
-  import { reach } from './reach.svelte';
+  import { inApp } from './app.svelte';
   import { isKept, setKept } from './kept.svelte';
   import { longpress } from './longpress';
   import { isLocal, playlistsKnown, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
@@ -598,9 +598,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /** Edit mode: there is a picture of its own to remove (as saved, or picked). */
   const ownImage = $derived(crateImage ? crateImage !== 'remove' : !!crates.list?.find((c) => c.id === builder?.id)?.image);
 
-  /** Offline (lib/reach), a track that cannot play: not kept on this device (the owner, 2026-10-26: dimmed). */
-  const awayDim = (r: PlaylistRow, src: string) =>
-    reach.away && !(inApp && downloads.tracks.some((t) => t.id === r.id && t.source === src && t.download.state === 'done'));
+  /** Offline (lib/reach), a track that cannot play: not on this device (the owner, 2026-10-26: dimmed; lib/away). */
+  const awayDim = (r: PlaylistRow, src: string) => away() && !here(src, r.id);
   const length = $derived(rows ? rows.reduce((a, r) => a + (r.duration_secs ?? 0), 0) : 0);
   const playable = $derived(rows ? rows.filter((r) => r.id && !r.missing) : []);
 

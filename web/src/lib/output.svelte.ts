@@ -3,6 +3,7 @@
 // which the page drives as it drives the local player. The player shows each the same way: the queue the page holds is
 // presented as a now-playing view like the server's. Switching moves the music: the queue and the position go to the
 // other side, which plays from there, and the side that played stops.
+import { away, pickHere } from './away.svelte';
 import {
   albumView,
   handover,
@@ -335,6 +336,12 @@ export async function playPlaylistFrom(name: string, source: string, tracks: Loc
  *  Incoming) the server says with each track's state. */
 export async function playAlbumHere(source: string, album: string, title?: string): Promise<boolean> {
   if (!isLocal()) return false;
+  // Out of reach (lib/away): its tracks on this device alone.
+  if (away()) {
+    const got = await pickHere({ kind: 'album', source, id: album }, 'play', undefined, source);
+    playQueue(got.tracks, 0, title ?? null);
+    return true;
+  }
   const r = await albumView(source, album);
   if (!r.rows.length) throw new Error('That album has no tracks.');
   playQueue(
