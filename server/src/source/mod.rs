@@ -580,6 +580,13 @@ pub trait Source: Send + Sync {
         Box::pin(async { anyhow::bail!("this server cannot list favourite albums") })
     }
 
+    /// Optional: every artist the account the source plays for has as a favourite, by name as its library names them
+    /// (0.9.15-1, the owner: the Library's filter "whole and complete": Artists' Favourites only). A server that cannot
+    /// list them says so.
+    fn favorite_artists(&self) -> Fut<'_, Vec<String>> {
+        Box::pin(async { anyhow::bail!("this server cannot list favourite artists") })
+    }
+
     /// Optional: the account's rating of an album, 0 (none) to 5, as Subsonic apps give it; `None`: the server keeps no
     /// ratings (the menu then offers none).
     fn album_rating<'a>(&'a self, _album: &'a str) -> Fut<'a, Option<u8>> {

@@ -593,6 +593,12 @@ impl PlayingService {
         s.favorite_albums().await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
     }
 
+    /// The favourite artists of a connected server, by name: Artists' Favourites only (0.9.15-1).
+    pub async fn favorite_artists(&self, source_id: &str) -> Result<Vec<String>, ToggleError> {
+        let (_, s) = self.source(source_id)?;
+        s.favorite_artists().await.map_err(|e| ToggleError::CannotPlay(format!("{e:#}")))
+    }
+
     /// How the owner used each album of a connected server (plays, last played, rating): the Library's orders and
     /// filters.
     pub async fn album_uses(&self, source_id: &str) -> Result<std::collections::BTreeMap<String, source::AlbumUse>, ToggleError> {
