@@ -204,6 +204,19 @@ impl Subsonic {
         Ok(self.call::<Option<Starred>>("getStarred2", &[], "starred2").await?.unwrap_or_default().album.into_iter().map(|a| a.id).collect())
     }
 
+    async fn starred_artists(&self) -> Result<Vec<String>> {
+        #[derive(Deserialize)]
+        struct Artist {
+            name: String,
+        }
+        #[derive(Deserialize, Default)]
+        struct Starred {
+            #[serde(default)]
+            artist: Vec<Artist>,
+        }
+        Ok(self.call::<Option<Starred>>("getStarred2", &[], "starred2").await?.unwrap_or_default().artist.into_iter().map(|a| a.name).collect())
+    }
+
     async fn playlists(&self) -> Result<Vec<PlaylistHead>> {
         #[derive(Deserialize, Default)]
         struct Playlists {
@@ -778,6 +791,10 @@ impl Source for SubsonicSource {
 
     fn favorite_albums(&self) -> Fut<'_, Vec<String>> {
         Box::pin(self.api.starred_albums())
+    }
+
+    fn favorite_artists(&self) -> Fut<'_, Vec<String>> {
+        Box::pin(self.api.starred_artists())
     }
 
     fn set_album_favorite<'a>(&'a self, album: &'a str, on: bool) -> Fut<'a, bool> {

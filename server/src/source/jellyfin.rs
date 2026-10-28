@@ -760,6 +760,14 @@ impl Source for JellyfinSource {
         })
     }
 
+    fn favorite_artists(&self) -> Fut<'_, Vec<String>> {
+        Box::pin(async move {
+            let sessions = self.jf.sessions().await.unwrap_or_default();
+            let user = self.account_for(&sessions, "").await?;
+            self.jf.favorite_artists(&user).await
+        })
+    }
+
     fn playlist_favorites(&self) -> Fut<'_, BTreeMap<String, bool>> {
         Box::pin(async move {
             let sessions = self.jf.sessions().await.unwrap_or_default();

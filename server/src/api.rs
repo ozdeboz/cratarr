@@ -64,6 +64,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/history/listening", get(history_listening))
         .route("/api/favorites/{source}", post(favorites))
         .route("/api/favorites/{source}/albums", get(favorite_albums))
+        .route("/api/favorites/{source}/artists", get(favorite_artists))
         .route("/api/favorites/{source}/tracks", get(favorite_tracks))
         .route("/api/queue/add", post(queue_add))
         .route("/api/queue/jump", post(queue_jump))
@@ -1411,6 +1412,11 @@ async fn favorite_albums(State(app): State<Arc<App>>, Path(source): Path<String>
     Ok(Json(app.playing.favorite_albums(&source).await?))
 }
 
+/// The favourite artists of a connected server, by name (0.9.15-1): the Library's Artists, Favourites only.
+async fn favorite_artists(State(app): State<Arc<App>>, Path(source): Path<String>) -> Result<Json<Vec<String>>, ApiError> {
+    Ok(Json(app.playing.favorite_artists(&source).await?))
+}
+
 /// Which of these tracks (ids on that server) are favourites: the hearts on a list's rows (decision 0023).
 #[derive(Deserialize)]
 struct Ids {
@@ -1696,6 +1702,15 @@ fn attachment(name: &str) -> String {
 struct TracksQuery {
     #[serde(default)]
     q: String,
+    /// The Library's filter (0.9.15-1): its switches, and its conditions as JSON (a crate's, decision 0061).
+    #[serde(default)]
+    favourites: bool,
+    #[serde(default)]
+    unplayed: bool,
+    #[serde(default)]
+    top_rated: bool,
+    #[serde(default)]
+    filter: Option<String>,
     #[serde(default)]
     order: Option<String>,
     #[serde(default)]
@@ -1711,10 +1726,13 @@ struct TracksQuery {
 /// from the libraries switched on (`without=<source>/<library>`, as for crates); with how many in all.
 async fn library_tracks(State(app): State<Arc<App>>, Query(t): Query<TracksQuery>, RawQuery(raw): RawQuery) -> Result<Json<serde_json::Value>, ApiError> {
     let without = without_of(raw.as_deref());
-    let (items, total) = crate::app::tracks::list(&app, &t.q, t.order.as_deref().unwrap_or("album"), t.down, &without, t.offset, t.limit.unwrap_or(100))
-        .await
-        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    Ok(Json(json!({ "items": items, "total": total, "offset": t.offset })))
+    let conditions = match t.filter.as_deref().filter(|f| !f.trim().is_empty()) {
+        Some(f) => serde_json::from_str(f).map_err(|e| ToggleError::Refused(format!("That filter cannot be read: {e}.")))?,
+        None => Vec::new(),
+    };
+    let narrow = crate::app::tracks::Narrow { favourites: t.favourites, unplayed: t.unplayed, top_rated: t.top_rated, conditions };
+    let listed = crate::app::tracks::list(&app, &t.q, t.order.as_deref().unwrap_or("album"), t.down, &without, narrow, t.offset, t.limit.unwrap_or(100)).await?;
+    Ok(Json(json!({ "items": listed.rows, "total": listed.total, "all": listed.all, "offset": t.offset })))
 }
 
 /// The libraries a crate leaves out (decision 0024, amended 2026-10-23: a crate draws from every library switched on):

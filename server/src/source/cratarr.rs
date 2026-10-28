@@ -698,6 +698,17 @@ impl Source for CratarrSource {
         })
     }
 
+    // An artist's star is the one a Subsonic app gives it (`star?artistId=`), its id made from its name: the names of
+    // those the library has.
+    fn favorite_artists(&self) -> Fut<'_, Vec<String>> {
+        Box::pin(async move {
+            let s = server()?;
+            let o = owner(&s)?;
+            let ids = s.userdata.starred(&o, Item::Artist)?;
+            tokio::task::spawn_blocking(move || Ok(ids.iter().filter_map(|id| s.library.artist(id).ok().flatten()).map(|a| a.name).collect())).await?
+        })
+    }
+
     // An album's rating is the one a Subsonic app gives it (`setRating`).
     fn album_rating<'a>(&'a self, album: &'a str) -> Fut<'a, Option<u8>> {
         Box::pin(async move {

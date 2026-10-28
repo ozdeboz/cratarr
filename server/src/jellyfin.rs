@@ -92,6 +92,12 @@ struct IdOnly {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
+struct NameOnly {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
 struct ListedAlbumItem {
     id: String,
     name: Option<String>,
@@ -887,6 +893,14 @@ impl Jellyfin {
     /// `user`'s favourite albums (their ids).
     pub async fn favorite_albums(&self, user: &str) -> Result<Vec<String>> {
         self.favorite_items(user, "MusicAlbum").await
+    }
+
+    /// `user`'s favourite artists, by name (Jellyfin's artists are the album artists and the tracks' artists both).
+    pub async fn favorite_artists(&self, user: &str) -> Result<Vec<String>> {
+        anyhow::ensure!(crate::covers::valid_item_id(user), "not a user id");
+        let page: ItemsPage<NameOnly> =
+            self.get(&format!("/Artists?UserId={user}&Filters=IsFavorite&SortBy=SortName&EnableImages=false&EnableUserData=false&Fields=")).await?;
+        Ok(page.items.into_iter().map(|i| i.name).collect())
     }
 
     async fn favorite_items(&self, user: &str, kind: &str) -> Result<Vec<String>> {
