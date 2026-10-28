@@ -40,6 +40,22 @@ kind of adapters Cratarr's own sources use (0005).
   each server's user data, and queues holding tracks the next player cannot reach. Still open: whether a mode goes
   through Cratarr's server (shape A, with its queues, Play On, history and Home Assistant) or only through the app
   (shape B).
+- Many servers, each its own mode (the owner, 2026-10-28): "possibly 2 Cratarr servers, 1 Jellyfin and also 1 local
+  (never more than 1 local)", each separate.
+  - The app holds the list, with a sign-in per server, and the mode switcher shows it (as Cratarr / Local now).
+  - A Cratarr server's mode is that server's own pages, with its queues, Play On, history and Home Assistant. Each is
+    its own origin, so their kept copies and storage never mix.
+  - One queue per mode, and one mode sounds at a time: switching pauses the other, as Local does. Downloads are kept
+    per server.
+  - Catches:
+    - A Jellyfin has no Cratarr pages. Its mode needs the app's own copy of the page with an adapter (shape B), which
+      also lets the app work with no Cratarr server at all.
+    - Two Cratarr servers may run different versions: the app's bridge must hold with either.
+    - Settings split: the device's own (output, Start and stop, the tape, levelling) shared; Home, appearance per
+      server.
+    - The app is a Play On player on each Cratarr server: a play started from one switches to its mode.
+    - Android Auto browses the current mode, or offers the modes as top folders.
+    - The installed PWA stays one server's: it cannot switch origins or read the device's files.
 - Open either way:
   - Whose favourites and plays they are: Cratarr's user data, the other server's stars mirrored (as Jellyfin's), or
     both.
