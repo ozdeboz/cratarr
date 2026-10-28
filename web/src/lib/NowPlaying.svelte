@@ -980,7 +980,8 @@
      the deck 43 over it, lay on the artist's line and the waveform): never a shift as it comes, and the layout measures
      it, the cover giving way. */
   .under.deckroom {
-    min-height: 43px;
+    /* The deck's 43 px, and a little air above and below it (the small gaps give way first on a short screen). */
+    min-height: 49px;
   }
 
   /* Kept in its place, unseen (not `.away`: app.css hides the children of that, and the row would collapse). */
