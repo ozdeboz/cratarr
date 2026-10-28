@@ -11,9 +11,8 @@ export type Wind = { ratio: number; speed: number; attackMs: number; releaseMs: 
 /** A hold's envelope: also how it gets faster (doubling every `doublingS` seconds of its stream) and how fast at most. */
 export type HoldWind = Wind & { doublingS: number; top: number };
 
-/** The tape's mechanics, every motion's alike: spin-up, the one brake (a Vinyl pause's too), the wind volume, how a cut
- *  wind's pieces are. */
-export type TapeMech = { attackMs: number; brakeMs: number; gainDb: number; pieceMs: number };
+/** The tape's mechanics, every motion's alike: spin-up, the one brake (a Vinyl pause's too), the wind volume. */
+export type TapeMech = { attackMs: number; brakeMs: number; gainDb: number };
 /** The winds to a point: Previous's back to the start, Next's on to the end, a seek back or forward. */
 export type PointMotion = 'toStart' | 'seekBack' | 'toEnd' | 'seekFwd';
 export type HoldMotion = 'holdBack' | 'holdFwd';
@@ -26,7 +25,6 @@ export const TAPE = {
   attackMs: { min: 100, max: 1500, step: 50, start: 400 },
   brakeMs: { min: 100, max: 1500, step: 50, start: 250 },
   gainDb: { min: -24, max: 0, step: 1, start: -12 },
-  pieceMs: { min: 100, max: 1000, step: 50, start: 350 },
 } as const;
 const POINT = { min: 0, max: 2, step: 0.05, start: 1 } as const;
 const HOLD = { min: 0, max: 12, step: 0.5, start: 4.5 } as const;
@@ -38,6 +36,8 @@ export const MOTION = { toStart: POINT, seekBack: POINT, holdBack: HOLD, toEnd: 
 export const POINT_SPEED = 8;
 export const HOLD_START = 8;
 export const HOLD_TOP = 64;
+/** How long each heard piece of a wind cut short is (ms; the owner, 2026-10-28: no setting, a good default). */
+export const PIECE_MS = 350;
 
 /** `mode`, `ms`, `stopMs`: Start and stop's effect, its start (the wind-up) and its stop (the wind-down; its own, the
  *  tape's Brake being the tape's only: the owner, 2026-10-27); `skips`: it for next and previous too; `rewind`: the tape
@@ -81,7 +81,7 @@ export function startStopOf(x: Partial<StartStop>): StartStop {
 export const windsBy = (s: StartStop, m: Motion) => s.rewind && s.motions[m] > 0;
 /** A wind to a point, as the players use it. */
 export function pointWind(s: StartStop, m: PointMotion): Wind {
-  return { ratio: s.motions[m], speed: POINT_SPEED, attackMs: s.tape.attackMs, releaseMs: s.tape.brakeMs, pieceMs: s.tape.pieceMs, gainDb: s.tape.gainDb };
+  return { ratio: s.motions[m], speed: POINT_SPEED, attackMs: s.tape.attackMs, releaseMs: s.tape.brakeMs, pieceMs: PIECE_MS, gainDb: s.tape.gainDb };
 }
 /** A hold that way, as the players use it: from HOLD_START, doubling to HOLD_TOP in its time to top speed (after its
  *  spin-up). Off, it still gives the tape's mechanics (the direction knob's spin-up and brake). */

@@ -86,7 +86,6 @@
     { key: 'attackMs', label: 'Spin-up', range: TAPE.attackMs, text: sec(TAPE.attackMs.step) },
     { key: 'brakeMs', label: 'Brake', range: TAPE.brakeMs, text: sec(TAPE.brakeMs.step) },
     { key: 'gainDb', label: 'Wind volume', range: TAPE.gainDb, text: db },
-    { key: 'pieceMs', label: 'Piece length', range: TAPE.pieceMs, text: sec(TAPE.pieceMs.step) },
   ];
   /** The sheets: the tape's mechanics, or one motion (its one setting). */
   type Part = 'tape' | Motion;
@@ -165,7 +164,7 @@
 <!-- The tape's mechanics, every motion's alike (and the deck's direction knob's), only while it winds (the owner,
      2026-10-27: they do nothing otherwise). -->
 {#if ss.rewind}
-  <Group title="The tape" more="How the tape moves, in every motion alike: how fast it gets going and how it brakes, how loud it is while it winds, and the pieces a long wind to a point is cut into.">
+  <Group title="The tape" more="How the tape moves, in every motion alike: how fast it gets going and how it brakes, and how loud it is while it winds.">
     {#each TAPE_TUNINGS as t (t.key)}<Item name={t.label} value={t.text(ss.tape[t.key as keyof typeof ss.tape])} onclick={() => (open = 'tape')} />{/each}
   </Group>
 {/if}
