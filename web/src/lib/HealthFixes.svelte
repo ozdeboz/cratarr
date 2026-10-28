@@ -10,11 +10,12 @@
   import { me } from './me.svelte';
   import PageLoading from './PageLoading.svelte';
 
-  let { finding, album, title, ongone }: { finding: string; album: string; title: string; ongone: () => void } = $props();
+  /** `track`: one track's (a length's fix), not the whole album's. */
+  let { finding, album, track = null, title, ongone }: { finding: string; album: string; track?: string | null; title: string; ongone: () => void } = $props();
 
   $effect(() => readFixes(finding));
   const known = $derived(!!healthFixes[finding]);
-  const mine = $derived(fixesOf(finding, album));
+  const mine = $derived(fixesOf(finding, album).filter((f) => !track || f.id.endsWith(`:${track}`)));
   const matching = $derived(!!healthFixes[finding]?.matching);
   let working = $state(false);
 

@@ -21,7 +21,7 @@
   import Item from './Item.svelte';
   import { offerReset } from './reset.svelte';
   import ValueSheet from './ValueSheet.svelte';
-  import StartStopItems from './StartStopItems.svelte';
+  import StartStopSheet from '../StartStopSheet.svelte';
 
   offerReset(
     () => (inApp ? 'Stay ready back to off.' : null),
@@ -39,6 +39,7 @@
     if (inApp) setDevice({ player: v });
     else prefs.browserName = v;
   }
+  let tapeOpen = $state(false);
 </script>
 
 <Group title="Playing">
@@ -46,8 +47,10 @@
   <Item name="Where music plays" value={outputName()} onclick={() => (where = true)} />
   <!-- Level the volume (lib/settings/LevelItems: the same rows as the Level button's long press). -->
   <LevelItems />
-  <!-- Start and stop (lib/settings/StartStopItems: the same rows as the play button's long press). -->
-  <StartStopItems />
+  <!-- The tape (the owner, 2026-10-27: one page in order): Start and stop, the tape, its four motions, the deck, on its
+       own page (lib/StartStopSheet, as the play button's long press opens it). -->
+  {@const tape = inApp ? appInfo.startStop : prefs.startStop}
+  <Item name="Tape" value={[tape.mode === 'off' ? 'No effect' : tape.mode === 'vinyl' ? 'Vinyl' : 'Fade', tape.rewind ? 'winding' : null].filter(Boolean).join(' · ')} onclick={() => (tapeOpen = true)} />
   {#if !inApp && isPhone}
     <Item
       name="Lossless"
@@ -111,4 +114,4 @@
 {#if naming}
   <ValueSheet title="Player name" value={name} placeholder={inApp ? '' : defaultBrowserName()} allowEmpty={false} onsave={rename} onclose={() => (naming = false)} />
 {/if}
-
+{#if tapeOpen}<StartStopSheet onclose={() => (tapeOpen = false)} />{/if}

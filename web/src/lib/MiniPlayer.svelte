@@ -25,7 +25,7 @@
   import { panel } from './panel.svelte';
   import { prefs } from './prefs.svelte';
   import Cover from './Cover.svelte';
-  import { art, clockText, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampBusy, shownPaused } from './remote.svelte';
+  import { art, clockText, coverFailed, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampInert, shownPaused, waveStill, playingKey } from './remote.svelte';
   import { isLocal } from './output.svelte';
   import SeekWave from './SeekWave.svelte';
   import { Seek } from './seekState.svelte';
@@ -196,7 +196,7 @@
       {#if src || !coverSrc()}
         {#key src}<Cover {src} lazy={false} onfail={coverFailed} />{/key}
       {/if}
-      <button class="own play" aria-label={shownPaused() ? 'Play' : 'Pause'} aria-disabled={rampBusy()} onclick={playPause} use:longpress={() => (startStopOpen = true)}
+      <button class="own play" aria-label={shownPaused() ? 'Play' : 'Pause'} aria-disabled={rampInert()} onclick={playPause} use:longpress={() => (startStopOpen = true)}
         ><Icon name={shownPaused() ? 'play' : 'pause'} size={32} /></button
       >
     </div>
@@ -204,7 +204,7 @@
       {#if grabbing}
         <!-- The waveform alone while it is held (lib/SeekWave), the rest of the bar back once let go. -->
         <div class="grab">
-          <SeekWave bind:this={seekWave} {seek} bins={wave} loading={waveLoading(np.source, np.id)} {dur} {canSeek} paused={paused()} room={el} onend={() => (grabbing = false)} />
+          <SeekWave bind:this={seekWave} {seek} bins={wave} loading={waveLoading(np.source, np.id)} {dur} {canSeek} paused={waveStill()} room={el} track={playingKey(playing())} onend={() => (grabbing = false)} />
         </div>
       {:else}
       <div class="fill" aria-hidden="true"></div>

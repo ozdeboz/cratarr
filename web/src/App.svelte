@@ -46,6 +46,7 @@
   import Mark from './lib/Mark.svelte';
   import LabelTip from './lib/LabelTip.svelte';
   import { installLabels } from './lib/labels.svelte';
+  import { installKeyWind } from './lib/keyWind';
   import { hasView, pageView } from './lib/pageView.svelte';
   import { inSpotify } from './lib/spotify.svelte';
   import { art, playing } from './lib/remote.svelte';
@@ -396,6 +397,8 @@
   const pagePill = $derived(PLAYABLE.includes(page));
   // An icon button's label on a long-press or right-click, everywhere (lib/labels).
   $effect(installLabels);
+  // ← and → as Previous and Next, held to wind (lib/keyWind).
+  $effect(installKeyWind);
   // A link to another site asks first, Open or Copy link (lib/LinkSheet; the owner, 2026-10-24), wherever it is.
   let outLink = $state<{ url: string; name: string } | null>(null);
   $effect(() => {
@@ -555,8 +558,6 @@
             device: pagePill && pillDevice,
             filter: (pagePill && !page.startsWith('local-') && page !== 'downloads') || page === 'discover',
             action: pageView.action,
-            // Home's Find everything, beside the pill (the owner, 2026-10-27; a glass of its own on the left was not).
-            find: page === 'home',
           }
         : null,
   );

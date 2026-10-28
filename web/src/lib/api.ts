@@ -93,6 +93,8 @@ export type Progress = {
   rewinding?: boolean;
   duration_secs: number | null;
   paused: boolean;
+  /** Asked to play from rest and not sounding yet (a5's `starting`, 2026-10-28): still, as the waveform shows it. */
+  starting?: boolean;
   /** No player reports this track; the position is time since it started (wrong after a pause or seek). */
   estimated: boolean;
 };
@@ -1370,6 +1372,8 @@ export type HealthItem = {
   missing?: string[];
   release_group?: string;
   request?: RequestMark | null;
+  /** A track's own (a5, 2026-10-28: a file cut off or breaking off): its song id in `album`, for a better copy of it. */
+  track?: string;
 };
 /** Every domain's findings, worst first, the most recent first among equals; when each domain was checked. */
 export const getHealthReport = () => request<{ findings: HealthFinding[]; checked: Record<string, number> }>('/api/health/report');
@@ -1649,7 +1653,9 @@ export const renumber = (album: string, tracks: { id: string; disc: number; trac
 export type Fix = {
   id: string;
   album: string;
-  field: 'year' | 'genre' | 'albumartist' | 'musicbrainz' | 'cover' | 'rule';
+  /** `reread`, `length`, `trim`: a track's length (a5, 2026-10-28: read again; written into its MP3; set to the sound it
+   *  holds), its id `<field>:<song id>`. */
+  field: 'year' | 'genre' | 'albumartist' | 'musicbrainz' | 'cover' | 'rule' | 'reread' | 'length' | 'trim';
   from: string | null;
   to: string;
   source: string;

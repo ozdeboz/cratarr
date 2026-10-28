@@ -20,7 +20,7 @@
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs, SEEK_STEP, type CoverTouch, type SwipeDown, type SwipeSide, type SwipeUp } from './prefs.svelte';
-  import { art, clockText, coverComing, coverFailed, coverLate, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampBusy, shownPaused, wind, windTouch } from './remote.svelte';
+  import { art, clockText, coverComing, coverFailed, coverLate, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampBusy, rampInert, shownPaused, wind, windTouch, hasNext, waveStill, playingKey } from './remote.svelte';
   import SeekWave from './SeekWave.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import { Seek } from './seekState.svelte';
@@ -31,8 +31,8 @@
   import { isLocal, playsHere, shownPlaylists } from './output.svelte';
   import { ramping } from './ramping.svelte';
   import { appInfo, inApp } from './app.svelte';
-  import { holdWind, type Hold } from './holdWind';
-  import { local, rewindNow, windUpMs } from './localPlayer.svelte';
+  import { holdWind, holdsHere, type Hold } from './holdWind';
+  import { local, rewindNow, windDrag, windUpMs } from './localPlayer.svelte';
   import TapeDeck from './TapeDeck.svelte';
   import QueueMenu from './QueueMenu.svelte';
   import { playingCrateOuts } from './crates.svelte';
@@ -322,12 +322,18 @@
     };
   });
 
-  /** Holding Previous or Next winds the tape (decision 0074), where winding is on here; another of Cratarr's players
-   *  decides for itself. */
-  const winds = $derived(isLocal() ? (inApp ? appInfo.startStop : prefs.startStop).rewind : !!np?.player);
+  /** Holding Previous or Next winds the tape (decision 0074), where that hold is on here (the owner, 2026-10-28: each
+   *  motion on its own); another of Cratarr's players decides for itself. */
   const windHold = (dir: 'back' | 'forward'): Hold =>
-    winds
-      ? { onhold: () => wind(dir, 'start'), onrelease: () => wind(dir, 'stop'), onpress: () => windTouch(dir, true), oncancel: () => windTouch(dir, false) }
+    holdsHere(dir, np?.player)
+      ? {
+          onhold: () => wind(dir, 'start'),
+          onrelease: () => wind(dir, 'stop'),
+          onpress: () => windTouch(dir, true),
+          oncancel: () => windTouch(dir, false),
+          // Dragged down: held back, to aim (this page's player; the app's and one driven hold for themselves).
+          ondrag: isLocal() && !inApp ? windDrag : undefined,
+        }
       : null;
 
   /** What a swipe left or right on the cover was chosen to do: a track on or back, or a seek. */
@@ -388,13 +394,23 @@
     const el = head;
     const box = controls;
     if (!el || !box) return;
-    const cs = getComputedStyle(el);
-    const width = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-    const height = el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-    if (width <= 0 || height <= 0) return;
     // Measuring sets the classes and the box's width directly (its height free) and puts them back afterwards; the
     // state then sets the outcome.
     const before = { cls: el.className, width: box.style.width, height: box.style.height };
+    // Each orientation's room with its own padding (landscape's differs), whichever is shown now.
+    const space = (landscape: boolean) => {
+      el.classList.toggle('landscape', landscape);
+      const cs = getComputedStyle(el);
+      return {
+        width: el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+        height: el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom),
+      };
+    };
+    const room = space(false);
+    if (room.width <= 0 || room.height <= 0) {
+      el.className = before.cls;
+      return;
+    }
     const measure = (landscape: boolean, level: number, controlsWidth: number) => {
       el.classList.toggle('landscape', landscape);
       STEPS.forEach((step, i) => el.classList.toggle(`drop-${step}`, level > i));
@@ -402,7 +418,7 @@
       box.style.height = 'auto';
       return box.getBoundingClientRect().height;
     };
-    const next = fit(width, height, measure);
+    const next = fit(space, measure);
     el.className = before.cls;
     box.style.width = before.width;
     box.style.height = before.height;
@@ -412,12 +428,13 @@
   $effect(() => {
     if (!head) return;
     const ro = new ResizeObserver(() => relayout());
-    ro.observe(head);
+    // Its outer size only: the padding its own layout sets is no resize.
+    ro.observe(head, { box: 'border-box' });
     return () => ro.disconnect();
   });
   // What is shown changes the controls' height (a long title, a progress bar or none). As one value: `np` is
   // new at every report, and laying out again at each would be many times a second.
-  const shown = $derived(JSON.stringify([np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.playerRow, rowFacts.length, prefs.playerBands !== 'off']));
+  const shown = $derived(JSON.stringify([np?.id, np?.name, np?.artist, np?.album, np?.player, !!np?.progress, prefs.playerRow, rowFacts.length, prefs.playerBands !== 'off', prefs.tapeDeck !== 'off']));
   $effect(() => {
     void shown;
     untrack(() => requestAnimationFrame(relayout));
@@ -428,6 +445,8 @@
   let levelOpen = $state(false);
   /** A long press on the info button: the facts beside it (lib/DetailsSheet; the owner, 2026-10-26). */
   let detailsOpen = $state(false);
+  /** The Level button's long press: the waveform's three ways in turn, as its sheet lists them (the owner, 2026-10-28). */
+  const WAVE_CYCLE = ['file', 'difference', 'output'] as const;
 </script>
 
 <div class="player" class:in-sidebar={place === 'side'} style:--art-accent={art.accent ?? 'var(--accent)'}>
@@ -533,7 +552,7 @@
           <!-- The row under the title (the owner, 2026-10-19): the info button (the cover's overview, as a circle on the
                cover) and the facts the user picked in Settings → Display, in short; with none picked, Add leads there.
                Hidden in Settings; none for the device's own music (local mode: nothing known of it). -->
-          <div class="under">
+          <div class="under" class:deckroom={prefs.tapeDeck !== 'off'}>
           {#if prefs.playerRow && np.source !== 'device'}
             <div class="facts" class:decked={deckShown}>
               <button class="info" class:on={overview} aria-label="About this track" aria-pressed={overview} title="About this track" onclick={() => (overview = !overview)}
@@ -557,7 +576,7 @@
                   : undefined}
             >
               <span class="t">{np.progress.estimated ? '≈' : ''}{clockText(pos)}</span>
-              <SeekWave {seek} bins={wave} loading={np ? waveLoading(np.source, np.id) : null} {dur} {canSeek} paused={np.progress.paused} estimated={np.progress.estimated} room={head} />
+              <SeekWave {seek} bins={wave} loading={np ? waveLoading(np.source, np.id) : null} {dur} {canSeek} paused={waveStill(np.progress)} estimated={np.progress.estimated} room={head} track={playingKey(playing())} />
               <span class="t">{dur ? clockText(dur) : '–:––'}</span>
             </div>
           {/if}
@@ -574,7 +593,7 @@
                 title="Level the volume"
                 aria-haspopup="dialog"
                 onclick={() => (levelOpen = true)}
-                use:longpress={() => (prefs.levelInWave = !prefs.levelInWave)}
+                use:longpress={() => (prefs.waveLevel = WAVE_CYCLE[(WAVE_CYCLE.indexOf(prefs.waveLevel) + 1) % WAVE_CYCLE.length])}
                 ><Icon name="audioLines" size={22} />{#if playingLevelOn()}<span class="fill" style:--down={levelShare(local.levelDb)} aria-hidden="true"
                     ><Icon name="audioLines" size={22} /></span
                   >{/if}</button
@@ -584,20 +603,22 @@
             <!-- Its fill (the owner, 2026-10-26), inside a border of the same colour: winding down (Start and stop) it drains
                  from the top over the ramp; paused with Start and stop on it stays empty (a start winds up); winding up it
                  fills from the bottom over the ramp, the way it went. -->
-            <button class="main" aria-label={shownPaused() ? 'Play' : 'Pause'} aria-disabled={rampBusy() && inApp} onclick={playPause} use:longpress={() => (startStopOpen = true)}
+            <button class="main" aria-label={shownPaused() ? 'Play' : 'Pause'} aria-disabled={rampInert()} onclick={playPause} use:longpress={() => (startStopOpen = true)}
               >{#key `${ramp}:${ramping.at}`}<span
                   class="fillbg"
                   class:drain={ramp === 'out'}
                   class:fillup={ramp === 'in'}
                   class:empty={ramp === null && armed && paused()}
                   style:--pre={ramp === 'in' ? 1 - ramping.ms / Math.max(1, ramping.full) : armed && paused() ? pre : 0}
+                  style:--from={ramp === 'out' ? Math.min(1, ramping.ms / Math.max(1, ramping.full)) : 1}
                   style:animation-duration={ramp ? `${ramping.ms}ms` : null}
                 ></span>{/key}<Icon
                 name={shownPaused() ? 'play' : 'pause'}
                 size={32}
               /></button
             >
-            <button aria-label="Next track" onclick={() => send('next')} use:holdWind={windHold('forward')}><Icon name="next" size={24} /></button>
+            <!-- Dimmed where nothing can follow (no next track, no Autoplay, Radio or repeat to make one). -->
+            <button aria-label="Next track" disabled={!hasNext()} onclick={() => send('next')} use:holdWind={hasNext() ? windHold('forward') : null}><Icon name="next" size={24} /></button>
             <!-- Repeat is in the queue's sheet (a long press on Queue; the owner, 2026-10-26, 0.9.8): its place kept, so
                  play stays in the middle. -->
             {#if isLocal()}<span class="spot" aria-hidden="true"></span>{/if}
@@ -955,6 +976,14 @@
     grid-area: 1 / 1;
   }
 
+  /* Where the deck can show, the row keeps its height always (the owner's tablet, 2026-10-28: a one-line row of 26 px,
+     the deck 43 over it, lay on the artist's line and the waveform): never a shift as it comes, and the layout measures
+     it, the cover giving way. */
+  .under.deckroom {
+    /* The deck's 43 px, and a little air above and below it (the small gaps give way first on a short screen). */
+    min-height: 49px;
+  }
+
   /* Kept in its place, unseen (not `.away`: app.css hides the children of that, and the row would collapse). */
   .facts.decked {
     opacity: 0;
@@ -1271,9 +1300,10 @@
     animation: fillup linear forwards;
   }
 
+  /* From as full as the ramp it turned round had got (a pause during a wind-up: only what is left of the ramp). */
   @keyframes drain {
     from {
-      clip-path: inset(0 0 0 0);
+      clip-path: inset(calc((1 - var(--from, 1)) * 100%) 0 0 0);
     }
     to {
       clip-path: inset(100% 0 0 0);

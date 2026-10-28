@@ -8,8 +8,10 @@
   // (lens-real.png, gen5.py): 130 px, its bottom edge 36 px above the waveform's middle. `now` (0..1): where it plays,
   // a line in the lens's text colour when it is within it (the owner, 2026-10-24: something to aim for). What it shows is
   // always centred on the point, the lens kept inside the player or not (the owner, 2026-10-26: the point never leaves
-  // its centre; at the ends the waveform stops short of its edge).
-  import { bars } from './waveforms.svelte';
+  // its centre; at the ends the waveform stops short of its edge). `zoom`: how much finer than the waveform, by the finger
+  // (lib/seekState, the owner 2026-10-28); the same bars across it always, the stretch under it remapped onto them (as
+  // the waveform's hold zoom, lib/Waveform), so nothing pops.
+  import { barsIn } from './waveforms.svelte';
 
   let {
     bins,
@@ -22,6 +24,7 @@
     time,
     paused = false,
     now = null,
+    zoom = 3,
   }: {
     bins: Uint8Array;
     /** 0..1 along the waveform. */
@@ -36,14 +39,19 @@
     time: string;
     paused?: boolean;
     now?: number | null;
+    zoom?: number;
   } = $props();
 
   const D = 130;
-  const ZOOM = 3;
   const INNER = 0.78 * D;
   const LIFT = D / 2 + 36;
-  // A bar per 3 px of the waveform drawn three times as wide: a bar per px of the waveform.
-  const fine = $derived(bars(bins, Math.max(16, Math.min(bins.length * 4, Math.round(width)))));
+  /** The bars across the lens: one per 3 px of it. */
+  const N = Math.round(D / 3);
+  /** From the point to the lens's edge, along the track (0..1). */
+  const half = $derived(D / 2 / Math.max(1, width * zoom));
+  /** The stretch under the lens on its bars; where each bar is in the track (none drawn past an end). */
+  const fine = $derived(barsIn(bins, N, point - half, point + half));
+  const placeOf = (i: number) => point - half + ((i + 0.5) / N) * 2 * half;
   const x = $derived(point * width);
   const c = $derived(Math.min(Math.max(x, min), Math.max(min, max)));
   const top = $derived(middle - LIFT - D / 2);
@@ -52,18 +60,21 @@
 <span class="pin" style:left="{x - 1}px" style:top="{middle - waveHeight / 2}px" style:height="{waveHeight}px" aria-hidden="true"></span>
 <span class="stem" style:left="{x - 1}px" style:top="{top + D - 2}px" style:height="{LIFT - D / 2 + 2}px" aria-hidden="true"></span>
 <span class="lens" class:paused style:left="{c - D / 2}px" style:top="{top}px" aria-hidden="true">
-  <span class="inner" style:left="{D / 2 - x * ZOOM}px" style:top="{(D - INNER) / 2}px" style:width="{width * ZOOM}px" style:height="{INNER}px">
+  <span class="inner" style:left="0px" style:top="{(D - INNER) / 2}px" style:width="{D}px" style:height="{INNER}px">
     {#each [false, true] as played (played)}
-      <svg class:played viewBox="0 0 {fine.length} 100" preserveAspectRatio="none" style:clip-path={played ? `inset(0 ${(1 - point) * 100}% 0 0)` : undefined}>
+      <svg class:played viewBox="0 0 {N} 100" preserveAspectRatio="none" style:clip-path={played ? 'inset(0 50% 0 0)' : undefined}>
         {#each fine as v, i (i)}
-          {@const h = Math.max(6, v * 100)}
-          <rect x={i + 0.15} y={(100 - h) / 2} width="0.7" height={h} rx="0.35" />
+          {@const at = placeOf(i)}
+          {#if at >= 0 && at <= 1}
+            {@const h = Math.max(6, v * 100)}
+            <rect x={i + 0.15} y={(100 - h) / 2} width="0.7" height={h} rx="0.35" />
+          {/if}
         {/each}
       </svg>
     {/each}
   </span>
   <span class="mark" style:left="{D / 2 - 1}px"></span>
-  {#if now !== null && Math.abs((now * width - x) * ZOOM) < D / 2 - 4}<span class="mark now" style:left="{D / 2 + (now * width - x) * ZOOM - 1}px"></span>{/if}
+  {#if now !== null && Math.abs((now * width - x) * zoom) < D / 2 - 4}<span class="mark now" style:left="{D / 2 + (now * width - x) * zoom - 1}px"></span>{/if}
 </span>
 <span class="tag" style:left="{c}px" style:top="{top - 26}px">{time}</span>
 

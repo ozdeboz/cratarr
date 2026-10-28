@@ -8,7 +8,18 @@ import { toast } from './toast.svelte';
 import { withUndo } from './undo.svelte';
 
 /** The findings with fixes. */
-export const FIXABLE = new Set(['library:year', 'library:genre', 'library:album-artist', 'library:musicbrainz', 'library:rules']);
+export const FIXABLE = new Set([
+  'library:year',
+  'library:genre',
+  'library:album-artist',
+  'library:musicbrainz',
+  'library:rules',
+  // A track's length (a5, 2026-10-28): read wrong, guessed, cut off, breaking off.
+  'files:length-misread',
+  'files:length-guessed',
+  'files:cut-short',
+  'files:sound-breaks',
+]);
 export const FIELD_LABEL: Record<Fix['field'], string> = {
   year: 'Year',
   genre: 'Genre',
@@ -16,6 +27,9 @@ export const FIELD_LABEL: Record<Fix['field'], string> = {
   musicbrainz: 'MusicBrainz release',
   cover: 'Cover',
   rule: 'Named by a rule',
+  reread: 'Read again',
+  length: 'Write its length',
+  trim: 'Play to its end',
 };
 
 export const healthFixes = $state<Record<string, Fixes>>({});

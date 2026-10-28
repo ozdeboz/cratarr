@@ -93,6 +93,9 @@ $effect.root(() => {
     return () => clearTimeout(t);
   });
 });
+/** The track whose progress the players show (the one playing, not the one still named while its cover comes): what a
+ *  waveform's colour belongs to (lib/Waveform `track`; the owner, 2026-10-28: keyed on the named one, it flipped). */
+export const playingKey = (np: NowPlaying | null) => (np ? `${np.source}/${np.id}` : null);
 /** What plays, as the players show it: the track before while the new one's cover comes (at most TEXT_WAIT_MS). Its
  *  progress is the playing track's own once it shows. */
 export const shownPlaying = (): NowPlaying | null => {
@@ -162,12 +165,16 @@ function letGo() {
 }
 $effect.root(() => {
   $effect(() => {
-    const dir = isLocal() ? ramping.dir : null;
+    // Start and stop's effects only (the owner, 2026-10-27): the tape's own stops and winds never hold the position.
+    const dir = isLocal() && ramping.effect ? ramping.dir : null;
     void ramping.at;
     const id = playing()?.id ?? null;
     const still = paused();
     const seeks = sought.n;
+    const winding = rewindNow.on || rewindNow.asked;
     untrack(() => {
+      // A wind asked or under way: where it is, from the first moment, whatever rest there was.
+      if (winding) return letGo();
       if (dir !== null) {
         if (!frozen.on) frozen.pos = running();
         frozen.on = true;
@@ -202,18 +209,26 @@ export function position(): number {
   return p;
 }
 export const paused = (): boolean => playing()?.progress?.paused ?? false;
+/** Still, as the waveform's colour shows it: paused, or asked to play and not sounding yet (this page's player). The
+ *  truth, never the intention: only a Start and stop ramp (lib/SeekWave) runs ahead of it. */
+export const waveStill = (progress: { paused?: boolean; starting?: boolean } | null | undefined = playing()?.progress): boolean =>
+  (progress?.paused ?? false) || progress?.starting === true;
 /** A Start and stop ramp under way on this device's player. The page's own turns round at a press (0075's first step,
  *  the owner 2026-10-27); the app's play button stays inert until its ramp ends, until the app turns too (0.9.13). */
 export const rampBusy = () => isLocal() && ramping.dir !== null;
-const rampInert = () => rampBusy() && inApp;
+/** The play button inert: only through the app's own Start and stop effect (the page's turns round at a press; the
+ *  tape's own stops never show). */
+export const rampInert = () => rampBusy() && inApp && ramping.effect;
 /** Paused as the play button shows it: from the press on, the way the ramp goes. */
-export const shownPaused = (): boolean => (rampBusy() ? ramping.dir === 'out' : paused());
+// A Start and stop effect only (the owner, 2026-10-27): the tape's own stops (a turn of the knob, a hold's) never show on
+// the play button.
+export const shownPaused = (): boolean => (rampBusy() && ramping.effect ? ramping.dir === 'out' : paused());
 /** The play button: play or pause; during the page's own ramp, that ramp turned round. */
 export function playPause() {
   if (rampInert()) return;
   const ss = inApp ? appInfo.startStop : prefs.startStop;
   if (isLocal() && ss.mode !== 'off' && !rampBusy()) {
-    if (!paused()) rampPressed('out', ss.ms);
+    if (!paused()) rampPressed('out', ss.stopMs);
     else {
       const ms = windUpMs(ss.ms, ss.mode, position(), inApp ? 0.25 : undefined);
       if (ms > 0) rampPressed('in', ms, ss.ms);
@@ -305,6 +320,14 @@ export function wind(dir: 'back' | 'forward', phase: 'start' | 'stop') {
 
 /** A touch on Previous or Next that may become a hold: this player's wind asked already; dropped if it was a tap. */
 export const windTouch = (dir: 'back' | 'forward', on: boolean) => isLocal() && (on ? windArm(dir) : windDisarm());
+
+/** Whether anything can follow what plays (Next dimmed where nothing can; the owner, 2026-10-27): a next track, or
+ *  Autoplay, Radio or repeat to make one; elsewhere, what the player says is to come. */
+export function hasNext(): boolean {
+  if (isLocal()) return local.index < local.queue.length - 1 || !!local.autoplay || local.radio || local.repeat !== 'off';
+  const np = playing();
+  return !np || (np.upcoming?.length ?? 1) > 0;
+}
 
 /** Plays upcoming track `i` (the queue view's tap): within the local stream, or the server's player jumps. */
 export async function playUpcoming(i: number) {

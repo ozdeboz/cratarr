@@ -1,19 +1,79 @@
 // Holding Previous or Next winds the tape (decision 0074; the owner, 2026-10-27): a press kept past HOLD_MS starts
 // `onhold`, letting go (or leaving the button) `onrelease`, and the tap that ends a hold is swallowed; a shorter press
 // is the button's own tap. Null: the button is only tapped (winding off). Its label's long-press (lib/labels) gives way.
+// From the press until it is let go, the press is the player's only gesture (the owner, 2026-10-28): its own pointer
+// goes no further than the button (the player's swipes never see it), and any other finger's press or click is
+// swallowed wherever it lands.
+
+import { appInfo, inApp } from './app.svelte';
+import { isLocal } from './output.svelte';
+import { prefs } from './prefs.svelte';
+import { windsBy } from './startStop';
 
 const HOLD_MS = 350;
 
-/** `onpress`: the touch began (a hold's stream asked already, lib/localPlayer windArm); `oncancel`: it was a tap. */
-export type Hold = { onhold: () => void; onrelease: () => void; onpress?: () => void; oncancel?: () => void } | null;
+/** Whether holding Previous (`back`) or Next (`forward`) winds where the music plays: this device's that hold not off
+ *  (the owner, 2026-10-28: each motion on its own), another of Cratarr's players deciding for itself (`player`). */
+export function holdsHere(dir: 'back' | 'forward', player: unknown): boolean {
+  if (!isLocal()) return !!player;
+  return windsBy(inApp ? appInfo.startStop : prefs.startStop, dir === 'back' ? 'holdBack' : 'holdFwd');
+}
+
+/** `onpress`: the touch began (a hold's stream asked already, lib/localPlayer windArm); `oncancel`: it was a tap;
+ *  `ondrag`: while held, how far the finger is dragged down (0..1), the hold's speed held back by it. */
+export type Hold = { onhold: () => void; onrelease: () => void; onpress?: () => void; oncancel?: () => void; ondrag?: (share: number) => void } | null;
+/** The finger dragged down while holding (the owner, 2026-10-28: to aim the look-ahead): from DRAG_FROM_PX it holds the
+ *  hold back, all the way (to its starting speed) at DRAG_FULL_PX. */
+const DRAG_FROM_PX = 12;
+const DRAG_FULL_PX = 150;
 
 export function holdWind(node: HTMLElement, hold: Hold) {
   let now = hold;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let held = false;
+  /** The press under way: its pointer; null when none; where it went down. */
+  let pressing: number | null = null;
+  let downY = 0;
+
+  /** Another finger, or the press's own moves, while pressed: none of it reaches anything else. */
+  function fence(e: PointerEvent) {
+    if (pressing === null) return;
+    if (e.pointerId === pressing) {
+      if (e.type === 'pointermove') {
+        e.stopPropagation();
+        if (held) now?.ondrag?.(Math.min(1, Math.max(0, (e.clientY - downY - DRAG_FROM_PX) / (DRAG_FULL_PX - DRAG_FROM_PX))));
+      }
+      // Let go elsewhere (no pointer capture): the press ends all the same.
+      else if (e.type !== 'pointerdown' && !node.contains(e.target as Node)) up(e);
+      return;
+    }
+    e.stopImmediatePropagation();
+    e.preventDefault();
+  }
+  function fenceClick(e: MouseEvent) {
+    if (pressing === null || node.contains(e.target as Node)) return;
+    e.stopImmediatePropagation();
+    e.preventDefault();
+  }
+  function lock(id: number) {
+    pressing = id;
+    for (const t of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'] as const) addEventListener(t, fence, true);
+    addEventListener('click', fenceClick, true);
+  }
+  function unlock() {
+    if (pressing === null) return;
+    pressing = null;
+    for (const t of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel'] as const) removeEventListener(t, fence, true);
+    // The click a press's own release makes comes after it: the fence on clicks lifts once that has passed.
+    setTimeout(() => pressing === null && removeEventListener('click', fenceClick, true), 0);
+  }
 
   function down(e: PointerEvent) {
-    if (!now || e.button > 0) return;
+    if (!now || e.button > 0 || pressing !== null) return;
+    // The player's own gestures (its swipes on the cover and the head) never see this press.
+    e.stopPropagation();
+    lock(e.pointerId);
+    downY = e.clientY;
     held = false;
     node.setPointerCapture?.(e.pointerId);
     const h = now;
@@ -25,7 +85,10 @@ export function holdWind(node: HTMLElement, hold: Hold) {
       h.onhold();
     }, HOLD_MS);
   }
-  function up() {
+  function up(e: PointerEvent) {
+    if (e.pointerId !== pressing) return;
+    e.stopPropagation();
+    unlock();
     const waiting = timer !== undefined;
     clearTimeout(timer);
     timer = undefined;
@@ -61,6 +124,8 @@ export function holdWind(node: HTMLElement, hold: Hold) {
     destroy() {
       if (held) now?.onrelease();
       clearTimeout(timer);
+      unlock();
+      removeEventListener('click', fenceClick, true);
       node.removeAttribute('data-longpress');
       node.removeEventListener('pointerdown', down);
       node.removeEventListener('pointerup', up);

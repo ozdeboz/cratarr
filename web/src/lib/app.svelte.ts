@@ -175,7 +175,16 @@ if (port) {
       appInfo.levelling = m.levelling !== false;
       appInfo.levelUnknown = m.levelUnknown === 'untouched' ? 'untouched' : 'typical';
       {
-        appInfo.startStop = startStopOf((m.startStop ?? {}) as Partial<StartStop>);
+        // What an app from before the Tape page does not keep (its motions, the tape's mechanics) stays as set here,
+        // never snapping back to the defaults (the owner's tablet, 2026-10-27).
+        const told = (m.startStop ?? {}) as Partial<StartStop>;
+        const was = appInfo.startStop;
+        appInfo.startStop = startStopOf({
+          ...told,
+          tape: told.tape ?? was.tape,
+          motions: told.motions ?? was.motions,
+          edges: told.edges ?? was.edges,
+        });
       }
       appInfo.outputs = Array.isArray(m.outputs) ? (m.outputs as AppOutput[]).filter((o) => typeof o?.id === 'string') : [];
       appInfo.output = typeof m.output === 'string' && appInfo.outputs.some((o) => o.id === m.output) ? m.output : null;
@@ -195,7 +204,8 @@ if (port) {
     // The app's player ramping (Start and stop): the play/pause button shows it; never a tape rewind's own speeding
     // up and slowing down (the owner, 2026-10-27: the button fills and empties for play and pause only).
     if (m.type === 'ramp' && !rewindNow.on) {
-      if ((m.dir === 'out' || m.dir === 'in') && typeof m.ms === 'number') rampBegins(m.dir, m.ms, typeof m.full === 'number' ? m.full : m.ms);
+      // `effect: false`: the app's own ramp that stops no music (a skip's wind-down): no grey, no drained button.
+      if ((m.dir === 'out' || m.dir === 'in') && typeof m.ms === 'number') rampBegins(m.dir, m.ms, typeof m.full === 'number' ? m.full : m.ms, m.effect !== false);
       else rampEnds();
     }
     if (m.type === 'network-test') {

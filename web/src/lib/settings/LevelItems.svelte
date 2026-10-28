@@ -7,6 +7,8 @@
   import { prefs } from '../prefs.svelte';
   import Seg from '../Seg.svelte';
   import Item from './Item.svelte';
+  import MenuEntry from '../MenuEntry.svelte';
+  import MenuSheet from '../MenuSheet.svelte';
 
   /** `playing`: the player that plays (the player's Level sheet: a driven player, a group), else this device's own
    *  (This device's settings). */
@@ -19,6 +21,17 @@
     { value: 'typical', label: 'Typical' },
     { value: 'untouched', label: 'As is' },
   ];
+  /** The player's waveform and the levelling (the owner, 2026-10-27): a sheet of three. */
+  const WAVES: { value: 'file' | 'difference' | 'output'; label: string; line: string }[] = [
+    { value: 'file', label: 'On file', line: 'The track as made; the levelling not shown' },
+    { value: 'difference', label: 'Difference', line: 'As made, the playing colour only as high as you hear it' },
+    { value: 'output', label: 'Output', line: 'As you hear it: the whole lowered' },
+  ];
+  let waveOpen = $state(false);
+  function chooseWave(v: 'file' | 'difference' | 'output') {
+    prefs.waveLevel = v;
+    waveOpen = false;
+  }
 </script>
 
 <Item
@@ -33,9 +46,11 @@
     more={"A track Cratarr has not measured yet: turned down as a typical track is, or played as it is until it has been."}
     ><Seg label="Not measured yet" options={UNKNOWN} bind:value={() => unknown, setUnknown} /></Item
   >
-  <Item
-    name="Show in the waveform"
-    more="The player's waveform as you hear it: a track turned down shows lower."
-    toggle={{ checked: prefs.levelInWave, onchange: (v) => (prefs.levelInWave = v) }}
-  />
+  <Item name="Waveform" value={WAVES.find((w) => w.value === prefs.waveLevel)?.label ?? ''} onclick={() => (waveOpen = true)} />
+{/if}
+
+{#if waveOpen}
+  <MenuSheet label="Waveform" title="Waveform" onclose={() => (waveOpen = false)}>
+    {#each WAVES as w (w.value)}<MenuEntry icon="audioLines" label={w.label} sub={w.line} checked={prefs.waveLevel === w.value} plus={false} onclick={() => chooseWave(w.value)} />{/each}
+  </MenuSheet>
 {/if}

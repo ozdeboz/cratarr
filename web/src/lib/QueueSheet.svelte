@@ -43,7 +43,7 @@
   import { player } from './live.svelte';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './motion';
   import { isLocal, shownPlaylists } from './output.svelte';
-  import { clockText, coverSrc, duration, favorite, paused, pending, playUpcoming, playing, position, send, toggleFavorite, playPause, rampBusy, shownPaused } from './remote.svelte';
+  import { clockText, coverSrc, duration, favorite, paused, pending, playUpcoming, playing, position, send, toggleFavorite, playPause, rampInert, shownPaused } from './remote.svelte';
   import { toast } from './toast.svelte';
 
   /** `screen`: over the whole window, as the other sheets (opened from the mini-player, the owner 2026-10-25: it was
@@ -315,7 +315,7 @@
       <!-- The playing track: a long-press or right-click is its menu, as every row's (decision 0023). -->
       <div class="now" style:--done={dur ? Math.min(1, pos / dur) : 0} use:longpress={() => rowMenu(asTrack(np, np.source), null)}>
         <span class="done" aria-hidden="true"></span>
-        <button class="ncover" aria-label={shownPaused() ? 'Play' : 'Pause'} aria-disabled={rampBusy()} onclick={playPause} use:longpress={() => (startStopOpen = true)}>
+        <button class="ncover" aria-label={shownPaused() ? 'Play' : 'Pause'} aria-disabled={rampInert()} onclick={playPause} use:longpress={() => (startStopOpen = true)}>
           <!-- the stand-in only when there is no cover to load (lib/Cover), not while one loads -->
           {#if src || !coverSrc()}<Cover {src} lazy={false} />{/if}
           <span class="pp"><Icon name={shownPaused() ? 'play' : 'pause'} size={32} /></span>
