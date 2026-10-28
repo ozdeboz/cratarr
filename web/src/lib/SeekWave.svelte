@@ -222,7 +222,7 @@
   onkeydown={key}
 >
   {#if waveShown}
-    <Waveform bins={shaped ? (bins ?? null) : null} {want} {loading} progress={dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} {view} ahead={isLocal() && prefs.waveLevel === 'difference'} landing={holdNow.on && holdNow.landing !== null && dur ? holdNow.landing / dur : null} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
+    <Waveform bins={shaped ? (bins ?? null) : null} {want} {loading} progress={dur ? pos / dur : 0} paused={grey} now={nowMark} {heard} {heardKnown} {view} ahead={isLocal() && prefs.waveLevel === 'difference'} landing={holdNow.landing !== null && dur && (holdNow.dir > 0 ? pos < holdNow.landing : pos > holdNow.landing) ? holdNow.landing / dur : null} output={prefs.waveLevel === 'output'} onflat={() => (keepWave = false)} />
   {:else}
     <div class="bar"><div class="fill" style:transform="scaleX({dur ? pos / dur : 0})"></div></div>
   {/if}

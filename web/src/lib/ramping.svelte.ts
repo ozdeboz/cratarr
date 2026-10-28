@@ -8,7 +8,7 @@ export const rewindNow = $state({ on: false, asked: false });
 /** A hold under way on this page's player (its brake let go included) and the tape's speed now (× the track's): the
  *  waveform zooms on the playhead by it (lib/SeekWave; the owner, 2026-10-28). `landing`: while held, where letting go
  *  now would bring the tape back to its own speed (forwards) or to a stand (backwards), s into the track shown. */
-export const holdNow = $state({ on: false, speed: 0, landing: null as number | null });
+export const holdNow = $state({ on: false, speed: 0, landing: null as number | null, dir: 1 as 1 | -1 });
 /** A wind asked for and not sounding yet (a seek that winds, here or on the player driven): the waveform already goes
  *  with it, never to where it goes (the owner, 2026-10-27: the waveform in sync with the seek). */
 let askedTimer: ReturnType<typeof setTimeout> | undefined;
