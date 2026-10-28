@@ -76,8 +76,10 @@ tower = { version = "0.5", default-features = false, features = ["util"] }
 
 [profile.release]
 opt-level = "s"
-lto = true
-codegen-units = 1
+# Thin link-time optimisation over 16 units (2026-10-28, the owner: builds took 20 minutes): whole-program LTO in one
+# unit re-optimised everything on each release; this keeps most of its gain at a fraction of the time.
+lto = "thin"
+codegen-units = 16
 strip = true
 panic = "abort"
 
