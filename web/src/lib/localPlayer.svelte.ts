@@ -3051,6 +3051,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
           holdNow.on = true;
           holdNow.speed = w.edge ? 0 : vAt(w, clip.currentTime) * clip.playbackRate;
           if (tape.holding) holdNow.dir = w.dir;
+          holdNow.top = Math.min(TRACK_TOP, w.top);
           // Held: where letting go now would land; let go, it stays where it aimed (aim) until the tape is there.
           if (tape.holding && !w.edge && place.index === w.shown) holdNow.landing = letGoLanding(w, place.pos);
         }

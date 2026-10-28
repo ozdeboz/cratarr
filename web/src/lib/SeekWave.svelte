@@ -93,6 +93,8 @@
   const ZOOM_EASE_MS = 250;
   /** Out (back toward the whole) slower, for the eye to follow where it is (the owner, 2026-10-28). */
   const ZOOM_OUT_MS = 700;
+  /** At its top speed this long, the whole track shows (the owner, 2026-10-28). */
+  const ZOOM_TOP_MS = 1500;
   /** Let go, the zoom stays this long before it eases back to the whole (the owner, 2026-10-28). */
   const ZOOM_KEEP_MS = 2000;
   let zoomShare = $state(1);
@@ -107,8 +109,12 @@
       let raf = 0;
       let last = performance.now();
       const offAt = on ? null : last;
+      let topSince: number | null = null;
       const step = (t: number) => {
-        const target = zoomOn && dur ? Math.min(1, Math.max(ZOOM_MIN_S, holdNow.speed * ZOOM_S) / dur) : offAt !== null && t - offAt < ZOOM_KEEP_MS ? zoomShare : 1;
+        // At its top speed a while: out to the whole.
+        topSince = zoomOn && holdNow.speed >= holdNow.top * 0.97 ? (topSince ?? t) : null;
+        const atTop = topSince !== null && t - topSince >= ZOOM_TOP_MS;
+        const target = zoomOn && dur ? (atTop ? 1 : Math.min(1, Math.max(ZOOM_MIN_S, holdNow.speed * ZOOM_S) / dur)) : offAt !== null && t - offAt < ZOOM_KEEP_MS ? zoomShare : 1;
         zoomShare += (target - zoomShare) * (1 - Math.exp(-(t - last) / (target > zoomShare ? ZOOM_OUT_MS : ZOOM_EASE_MS)));
         last = t;
         if (!zoomOn && zoomShare > 0.999) {
