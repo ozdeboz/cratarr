@@ -509,6 +509,10 @@
   const pageHasRow = $derived(
     !playlistLayer && (phone || navAt > 0 || backHome || pagePill || page === 'settings' || page === 'insights' || page === 'discover'),
   );
+  /** The room at the page's top as the page shown has it (lib/Hold: the page before stays until the new one is ready;
+   *  the owner, 2026-10-28: its room changing under it made the content jump). */
+  const rowOf = (p: string) => !playlistLayer && (phone || navAt > 0 || p !== 'home');
+  const shownHasRow = $derived(rowOf(shownPage));
   // Kept under the player over everything, which covers it (the owner, 2026-10-25: "since the full screen player is on
   // top, just don't hide these glass panels"; neither the page's room nor the glass goes as it opens).
   const pageRow = $derived(pageHasRow);
@@ -556,7 +560,8 @@
         ? {
             page: page,
             view: hasView(page) && !(page === LIBRARY.id && inSpotify()),
-            device: pagePill && pillDevice,
+            // Home's too (the owner, 2026-10-28: the device with nothing playing, as every page with the pill).
+            device: (pagePill || page === 'home') && pillDevice,
             filter: (pagePill && !page.startsWith('local-') && page !== 'downloads') || page === 'discover',
             action: pageView.action,
           }
@@ -567,6 +572,8 @@
   // goes at once (Search's icons' folding unseen under it).
   let rightEl = $state<HTMLElement>();
   const leadHas = $derived(!!handed || navAt > 0 || backHome || (!!panelPage && phone) || page === 'library');
+  /** The same for the page shown (its room at the top, above). */
+  const shownLeadHas = $derived(!!handed || navAt > 0 || shownPage !== 'home' || (!!panelPage && phone));
   const rightHas = $derived(!!(pillNow || handed?.extra));
   let had = { lead: false, right: false };
   // Before the page changes, while the glass still shows what it held.
@@ -654,7 +661,7 @@
     root.setProperty('--bottom-now', `${down + (navBottom ? shown : 0)}px`);
     // No room kept above the page where the left glass is empty (the owner, 2026-10-27): the page starts at the top, the
     // pill floating over its right.
-    root.setProperty('--glass-top', (phone && leadBottom && rightBottom) || !leadHas ? '0px' : 'var(--glass-room)');
+    root.setProperty('--glass-top', (phone && leadBottom && rightBottom) || !shownLeadHas ? '0px' : 'var(--glass-room)');
     root.setProperty('--glass-bottom', leadBottom || rightBottom ? 'var(--glass-room)' : '0px');
   });
   // The playing cover's colour, for the floating controls' surface (app.css --float-bg): the mini-player's. Unless the
@@ -908,7 +915,7 @@
   <div class="content" class:with-side={sidebar} style:--player-w="{sideWidth}px" bind:this={contentEl}>
     <!-- Its room under the glass kept while a panel covers it on a phone (the owner, 2026-10-25: opening a list on Requests
          shifted the page up under the coming panel). -->
-    <div class="page" class:under-row={pageHasRow || (phone && playlistLayer)} class:away={everywhereShown} bind:this={pageEl}>
+    <div class="page" class:under-row={shownHasRow || (phone && playlistLayer)} class:away={everywhereShown} bind:this={pageEl}>
     <SheetArea area={() => pageEl}>
     <!-- One commit (lib/Hold; the owner, 2026-10-26, "Old page stays, then switch"): the page before stays until the new
          one is ready, and the bar's highlight moves with it. -->

@@ -14,7 +14,7 @@
   import Cover from './Cover.svelte';
   import { libraryLayout } from './layouts';
   import { addedOn } from './albums.svelte';
-  import { hiddenLibraries } from './listFilter.svelte';
+  import { conditionsFor, hiddenLibraries, switchOn } from './listFilter.svelte';
   import ListHead from './ListHead.svelte';
   import PageLoading from './PageLoading.svelte';
   import { albumSubject, viewPlaylist } from './panel.svelte';
@@ -36,17 +36,30 @@
   const PAGE = 200;
   let items = $state<LibraryTrack[]>([]);
   let total = $state<number | null>(null);
+  /** How many before the filter (a server from before it says none: then as many as pass). */
+  let all = $state<number | null>(null);
+  // The Library's filter on the tracks themselves (the owner, 2026-10-28: "whole and complete"): its switches and its
+  // conditions, the server's to apply before it pages them.
+  const filter = $derived({
+    favourites: switchOn('library', 'favourites'),
+    unplayed: switchOn('library', 'unplayed'),
+    topRated: switchOn('library', 'topRated'),
+    filter: conditionsFor('library'),
+  });
+  let filtering = $state(false);
   let error = $state<string | null>(null);
   let loading = false;
   /** What the list was asked for: another order, words or libraries start it again. */
-  const asked = $derived(JSON.stringify([pageView.query.trim(), prefs.libraryTrackOrder, prefs.libraryTrackDown, hiddenLibraries() ?? []]));
+  const asked = $derived(JSON.stringify([pageView.query.trim(), prefs.libraryTrackOrder, prefs.libraryTrackDown, hiddenLibraries() ?? [], filter]));
   let gen = 0;
   async function more(reset = false) {
     if (loading && !reset) return;
     const mine = reset ? ++gen : gen;
     loading = true;
+    if (reset) filtering = true;
     try {
       const r = await libraryTracks({
+        ...filter,
         q: pageView.query.trim() || undefined,
         order: prefs.libraryTrackOrder,
         down: prefs.libraryTrackDown,
@@ -57,13 +70,19 @@
       if (mine !== gen) return;
       items = reset ? r.items : [...items, ...r.items];
       total = r.total;
+      all = r.all ?? r.total;
       error = null;
     } catch (e) {
       if (mine === gen) error = e instanceof Error ? e.message : 'The tracks could not be listed';
     } finally {
-      if (mine === gen) loading = false;
+      if (mine === gen) loading = filtering = false;
     }
   }
+  // How many the filter lets through, of how many (the Filter sheet's count), as the albums'.
+  $effect(() => {
+    pageView.counted = total === null ? null : { shown: total, total: all ?? total, pending: filtering };
+    return () => (pageView.counted = null);
+  });
   // Asked again a moment after the words (or the order) stop changing.
   $effect(() => {
     void asked;

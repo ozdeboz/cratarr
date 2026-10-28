@@ -2,7 +2,7 @@
 // list, and the long-press that flips one. Shared by the queue sheet and the playlist view.
 import { batchFavorite, missingCall } from './api';
 import { trackSteps } from './progress.svelte';
-import { getFavoriteAlbums, getFavorites, getPlaylistFavorites, setPlaylistFavorite, setTrackFavorite } from './api';
+import { getFavoriteAlbums, getFavoriteArtists, getFavorites, setArtistFavorite, getPlaylistFavorites, setPlaylistFavorite, setTrackFavorite } from './api';
 import { on } from './events.svelte';
 import { prefs } from './prefs.svelte';
 import { toast } from './toast.svelte';
@@ -58,6 +58,37 @@ export function loadAlbumFavorites(source: string, ids: string[] = []): Promise<
     if (ok) for (const id of ids) favs[k(source, id)] = albumLists[source].has(id);
     return ok;
   });
+}
+
+// Artists' hearts: a server's whole list at once, by name (the Library's Artists, Favourites only; the owner,
+// 2026-10-28: the filter whole on every view). Not known (not asked, or the server cannot tell): null.
+const artistLists = $state<Record<string, Set<string> | null>>({});
+const artistAsks: Record<string, Promise<boolean>> = {};
+const artistKey = (name: string) => name.toLocaleLowerCase();
+/** Whether a server's favourite artists have been asked for (answered or not). */
+export const artistFavoritesKnown = (source: string) => source === 'device' || source in artistLists;
+export const isFavoriteArtist = (source: string, name: string) => !!artistLists[source]?.has(artistKey(name));
+/** Asks for a server's favourite artists, once at a time; false when it cannot tell. */
+export function loadArtistFavorites(source: string): Promise<boolean> {
+  if (source === 'device') return Promise.resolve(false);
+  artistAsks[source] ??= getFavoriteArtists(source)
+    .then((list) => ((artistLists[source] = new Set(list.map(artistKey))), true))
+    .catch(() => ((artistLists[source] = null), false))
+    .finally(() => delete artistAsks[source]);
+  return artistAsks[source];
+}
+
+/** An artist's heart set: on the server, then in the list here (a Favourites only filter follows it at once). */
+export async function setArtistHeart(source: string, name: string, on: boolean) {
+  const r = await setArtistFavorite(source, name, on);
+  const l = artistLists[source];
+  if (l) {
+    const now = new Set(l);
+    if (r.favorite) now.add(artistKey(name));
+    else now.delete(artistKey(name));
+    artistLists[source] = now;
+  }
+  return r;
 }
 
 // Playlists' hearts (Finamp's, decision 0023): which playlists are favourites, asked for once; a change shows at once.

@@ -1569,6 +1569,8 @@ export const getFavorites = (source: string, ids: string[]) =>
 
 /** The favourite albums of a server (their ids): the Library's Favourites only and the albums' hearts. */
 export const getFavoriteAlbums = (source: string) => quietly<string[]>(`/api/favorites/${encodeURIComponent(source)}/albums`);
+/** A server's favourite artists, by name (the Library's Artists, Favourites only). */
+export const getFavoriteArtists = (source: string) => quietly<string[]>(`/api/favorites/${encodeURIComponent(source)}/artists`);
 /** Cratarr's own favourite tracks as rows (Home's Favourite tracks), at most 100. */
 export const getFavoriteTracks = () => quietly<{ source: string; rows: PlaylistRow[] }>('/api/favorites/cratarr/tracks');
 
@@ -2387,12 +2389,29 @@ export type LibraryTrack = {
   last_played?: number;
 };
 export type LibraryTrackOrder = 'title' | 'artist' | 'album' | 'added' | 'year' | 'plays' | 'duration' | 'tempo' | 'albumArtist' | 'lastPlayed';
-/** A page of the library's tracks: the words (as the search reads them), the order, the libraries switched off. */
-export const libraryTracks = (p: { q?: string; order: LibraryTrackOrder; down: boolean; offset: number; limit: number; without?: string[] }) => {
+/** A page of the library's tracks: the words (as the search reads them), the order, the libraries switched off, and
+ *  the Library's filter on the tracks themselves (its switches, its conditions, decision 0061). `total`: how many pass,
+ *  `all`: how many before the filter. */
+export const libraryTracks = (p: {
+  q?: string;
+  order: LibraryTrackOrder;
+  down: boolean;
+  offset: number;
+  limit: number;
+  without?: string[];
+  favourites?: boolean;
+  unplayed?: boolean;
+  topRated?: boolean;
+  filter?: Condition[];
+}) => {
   const u = new URLSearchParams({ order: p.order, down: String(p.down), offset: String(p.offset), limit: String(p.limit) });
   if (p.q) u.set('q', p.q);
   for (const w of p.without ?? []) u.append('without', w);
-  return quietly<{ items: LibraryTrack[]; total: number; offset: number }>(`/api/library/tracks?${u}`);
+  if (p.favourites) u.set('favourites', 'true');
+  if (p.unplayed) u.set('unplayed', 'true');
+  if (p.topRated) u.set('top_rated', 'true');
+  if (p.filter?.length) u.set('filter', JSON.stringify(p.filter));
+  return quietly<{ items: LibraryTrack[]; total: number; all?: number; offset: number }>(`/api/library/tracks?${u}`);
 };
 
 /** Several albums' tracks in one call (a5, 0.9.4): in the albums' order, each album's in its play order; one that can't

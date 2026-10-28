@@ -26,7 +26,6 @@
     artistFavorite,
     artistView,
     type ArtistView,
-    setArtistFavorite,
     coverUrl,
     crateRows,
     filterList,
@@ -103,7 +102,7 @@
   import { Reorder } from './reorder.svelte';
   import { followCreate, followDelete, followRename, renameEverywhere } from './follow.svelte';
   import { undos, withUndo } from './undo.svelte';
-  import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setFavorite, setPlaylistFavorites } from './favourites.svelte';
+  import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setArtistHeart, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import { untilAudible } from './audible.svelte';
@@ -1132,7 +1131,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     const on = !h.favorite;
     h.favorite = on;
     try {
-      await setArtistFavorite(artist.source, artist.name, on);
+      await setArtistHeart(artist.source, artist.name, on);
     } catch (e) {
       h.favorite = !on;
       toast.fail(e, "The favourite didn't change");
