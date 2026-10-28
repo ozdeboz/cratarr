@@ -8,7 +8,7 @@ export const rewindNow = $state({ on: false, asked: false });
 /** A hold under way on this page's player (its brake let go included) and the tape's speed now (× the track's): the
  *  waveform zooms on the playhead by it (lib/SeekWave; the owner, 2026-10-28). `landing`: while held, where letting go
  *  now would bring the tape back to its own speed (forwards) or to a stand (backwards), s into the track shown. */
-export const holdNow = $state({ on: false, speed: 0, top: 16, landing: null as number | null, dir: 1 as 1 | -1 });
+export const holdNow = $state({ on: false, speed: 0, top: 16, landing: null as number | null, landingIndex: null as number | null, dir: 1 as 1 | -1 });
 /** The look-ahead's line as last painted (lib/SeekWave): s into which track, and when; lib/localPlayer compares it with
  *  where the tape plays on at its own speed (the owner, 2026-10-28: the instrumentation for the aim). */
 export const aimPainted = { pos: null as number | null, track: null as string | null, at: 0 };

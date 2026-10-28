@@ -141,14 +141,22 @@
     const from = Math.min(1 - zoomShare, Math.max(0, p - zoomAnchor * zoomShare));
     return { from, to: from + zoomShare };
   });
-  /** The look-ahead shown (0..1 of the track): a hold's landing, ahead of the playhead the way it goes. */
-  const aimMark = $derived(holdNow.landing !== null && dur && (holdNow.dir > 0 ? pos < holdNow.landing : pos > holdNow.landing) ? holdNow.landing / dur : null);
-  // Its line as painted (after the frame's update), for lib/localPlayer's check against where the tape plays on.
+  /** The look-ahead shown (0..1 of the track): a hold's landing, ahead of the playhead the way it goes; in a track
+   *  further on through the queue, at this one's edge that way, until the tape is in that track (the owner, 2026-10-28:
+   *  the line stood at the end, and on the next track at the last one's place). */
+  const aimMark = $derived.by(() => {
+    const l = holdNow.landing;
+    if (l === null || !dur || !isLocal()) return null;
+    const at = holdNow.landingIndex;
+    if (at !== null && at !== local.index) return (holdNow.dir > 0 ? at > local.index : at < local.index) ? (holdNow.dir > 0 ? 1 : 0) : null;
+    return (holdNow.dir > 0 ? pos < l : pos > l) ? l / dur : null;
+  });
+  // Its place as painted (after the frame's update), for lib/localPlayer's check against where the tape plays on.
   $effect(() => {
-    const m = aimMark;
-    if (m === null || !dur) return;
-    aimPainted.pos = m * dur;
-    aimPainted.track = track;
+    if (aimMark === null) return;
+    const t = holdNow.landingIndex !== null ? local.queue[holdNow.landingIndex] : null;
+    aimPainted.pos = holdNow.landing;
+    aimPainted.track = t ? `${t.source}/${t.id}` : track;
     aimPainted.at = performance.now();
   });
   const nowMark = $derived(seek.held !== null && seek.lensOn && !seek.snapped && !seek.overCancel && shaped && dur ? seek.now() / dur : null);
