@@ -1,4 +1,5 @@
 import { track } from './progress.svelte';
+import { keepForLater, later as laterWaits, laterKey, sendLater } from './later.svelte';
 import { cue } from './queueCue.svelte';
 import type { SearchResult } from './search';
 import { coverStamps } from './coverStamps.svelte';
@@ -166,6 +167,32 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
+
+/** A change that waits for Cratarr while it is out of reach (lib/later): tried now with its replay key; not reached,
+ *  kept in order and sent when Cratarr answers again, `answer` standing for Cratarr's meanwhile. While others wait, it
+ *  waits behind them. */
+async function later<T>(path: string, init: RequestInit, answer: () => T): Promise<T> {
+  const key = laterKey();
+  const headers = new Headers(init.headers);
+  headers.set('Idempotency-Key', key);
+  const keep = () => {
+    keepForLater({ key, method: init.method ?? 'POST', path, body: typeof init.body === 'string' ? init.body : null, type: headers.get('Content-Type') });
+    return answer();
+  };
+  if (laterWaits.list.length) {
+    const kept = keep();
+    void sendLater();
+    return kept;
+  }
+  try {
+    return await fetchJson<T>(path, { ...init, headers });
+  } catch (e) {
+    if (e instanceof ApiError && e.message === UNREACHED) return keep();
+    throw e;
+  }
+}
+const laterJson = <T>(path: string, body: unknown, answer: () => T, method = 'POST') =>
+  later<T>(path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, answer);
 
 /** `source`: follow that source; absent: whichever started playing most recently. */
 const follow = (source?: string) => (source ? `?source=${encodeURIComponent(source)}` : '');
@@ -655,13 +682,10 @@ export const crateLeftOut = (id: string, source?: string) =>
   quietly<{ source: string; rows: PlaylistRow[]; albums?: ExcludedAlbum[] }>(`/api/crates/${encodeURIComponent(id)}/left-out${follow(source)}`);
 /** Global exclusions (the owner: "every automatic pick"): out of every crate, and never picked by Radio, Autoplay or a
  *  shuffle of the library or the favourites; still played when chosen. Journaled as a crate's are. */
-export const excludeTracks = (source: string, ids: string[]) => post<{ excluded: number } & Undo>('/api/excluded', { source, ids });
+export const excludeTracks = (source: string, ids: string[]) =>
+  laterJson<{ excluded: number } & Undo>('/api/excluded', { source, ids }, () => ({ excluded: ids.length, undo: null }));
 export const includeTracks = (source: string, ids: string[]) =>
-  request<{ excluded: number } & Undo>('/api/excluded', {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ source, ids }),
-  });
+  laterJson<{ excluded: number } & Undo>('/api/excluded', { source, ids }, () => ({ excluded: 0, undo: null }), 'DELETE');
 export const excludedRows = (source?: string) => quietly<{ source: string; excluded: number; rows: PlaylistRow[] }>(`/api/excluded${follow(source)}`);
 export const jumpTo = (id: string, source?: string) => post<{ player: string }>(`/api/queue/jump${follow(source)}`, { id });
 /** `ids`: the queue to make it from (the local player's); without, the server's player's queue. `repeats`: a track
@@ -819,7 +843,11 @@ export const removeRepeats = (id: string) =>
 
 /** Add tracks (ids on `source`, in order) at a playlist's end, whether or not it holds them already: Add again. */
 export const appendTracks = (id: string, source: string, ids: string[]) =>
-  post<{ playlist: string; added: number } & Undo>(`/api/playlists/${encodeURIComponent(id)}/append`, { source, ids });
+  laterJson<{ playlist: string; added: number } & Undo>(`/api/playlists/${encodeURIComponent(id)}/append`, { source, ids }, () => ({
+    playlist: id,
+    added: ids.length,
+    undo: null,
+  }));
 
 export const playlistRows = (id: string, source?: string) =>
   quietly<{ source: string; rows: PlaylistRow[] }>(
@@ -844,7 +872,7 @@ export const similarCrates = (id: string) => quietly<Alike[]>(`/api/crates/${enc
 export const playlistCovers = (id: string) =>
   quietly<{ source: string; album_id: string }[]>(`/api/playlists/${encodeURIComponent(id)}/covers`);
 export const renamePlaylist = (id: string, to: string) =>
-  post<{ playlist: string } & Undo>(`/api/playlists/${encodeURIComponent(id)}/rename`, { to });
+  laterJson<{ playlist: string } & Undo>(`/api/playlists/${encodeURIComponent(id)}/rename`, { to }, () => ({ playlist: to, undo: null }));
 export const deletePlaylist = (id: string) =>
   request<{ deleted: string } & Undo>(`/api/playlists/${encodeURIComponent(id)}`, { method: 'DELETE' });
 /** Shares one's own playlist with the other users, or stops (decision 0051): they see it, play it and copy it. */
@@ -1445,7 +1473,7 @@ export const playAlbum = (source: string, album: string) =>
   request<{ player: string }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/play`, { method: 'POST' });
 /** Make an album a favourite or not (the album panel's heart). */
 export const setAlbumFavorite = (source: string, album: string, on: boolean) =>
-  request<{ favorite: boolean }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/favorite?on=${on}`, { method: 'POST' });
+  later<{ favorite: boolean }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/favorite?on=${on}`, { method: 'POST' }, () => ({ favorite: on }));
 /** The album's cover as the server has it (no picture chosen on this device, no reading again). */
 export const serverCoverUrl = (source: string, album: string) =>
   source === 'device'
@@ -1472,7 +1500,7 @@ export const getAlbumUses = (source: string) => quietly<Record<string, AlbumUse>
 export const getAlbumRating = (source: string, album: string) =>
   quietly<{ rating: number | null }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/rating`);
 export const setAlbumRating = (source: string, album: string, stars: number) =>
-  request<{ rating: number }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/rating?stars=${stars}`, { method: 'POST' });
+  later<{ rating: number }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/rating?stars=${stars}`, { method: 'POST' }, () => ({ rating: stars }));
 
 export type Transport = 'previous' | 'play-pause' | 'next' | 'stop';
 
@@ -1489,7 +1517,12 @@ export const trackDetails = (source: string, id: string) =>
  *  server's player's. `favorite` null: not known. */
 export type TrackState = { addable: boolean; album_id: string | null; favorite: boolean | null; playlists: Playlist[]; info: TrackInfo | null };
 
-export const trackState = (source: string, id: string) => quietly<TrackState>(`${trackPath(source, id)}/playlists`);
+export const trackState = (source: string, id: string) => quietly<TrackState>(`${trackPath(source, id)}/playlists`).then((s) => knownState(source, id, s));
+/** Each track's state as last told, for a change kept for later to answer with (lib/later). */
+const trackStates = new Map<string, TrackState>();
+const knownState = (source: string, id: string, s: TrackState) => (trackStates.set(`${source}/${id}`, s), s);
+const stateOf = (source: string, id: string): TrackState =>
+  trackStates.get(`${source}/${id}`) ?? { addable: false, album_id: null, favorite: null, playlists: [], info: null };
 
 /** A track's file as it is (the track menu's Details): where it lies (`path` within `folder`), its audio, its size,
  *  when it was changed and came in (epoch s), and every tag in the file's order. */
@@ -1515,10 +1548,15 @@ export const trackFile = (source: string, id: string) => quietly<TrackFile>(`${t
 
 /** Put the track in the playlist or take it out (the state wanted, as `setMember`). */
 export const setTrackMember = (source: string, id: string, playlistId: string, member: boolean) =>
-  quietly<TrackState>(`${trackPath(source, id)}/playlists/${encodeURIComponent(playlistId)}?member=${member}`, { method: 'POST' });
+  later<TrackState>(`${trackPath(source, id)}/playlists/${encodeURIComponent(playlistId)}?member=${member}`, { method: 'POST' }, () => {
+    const s = stateOf(source, id);
+    return { ...s, playlists: s.playlists.map((p) => (p.id === playlistId ? { ...p, member } : p)) };
+  }).then((s) => knownState(source, id, s));
 
 export const setTrackFavorite = (source: string, id: string, on: boolean) =>
-  quietly<TrackState>(`${trackPath(source, id)}/favorite?on=${on}`, { method: 'POST' });
+  later<TrackState>(`${trackPath(source, id)}/favorite?on=${on}`, { method: 'POST' }, () => ({ ...stateOf(source, id), favorite: on })).then((s) =>
+    knownState(source, id, s),
+  );
 
 /** Which of these tracks (ids on `source`) are favourites, in one request: the hearts on a list's rows (decision 0023).
  *  Tracks the server cannot tell about are left out. */
@@ -1540,7 +1578,7 @@ export const getPlaylistFavorites = (source?: string) => quietly<Record<string, 
 export const setPlaylistFavorite = (id: string, on: boolean, source?: string) => {
   const q = new URLSearchParams({ on: String(on) });
   if (source) q.set('source', source);
-  return quietly<{ playlist: string; favorite: boolean }>(`/api/playlists/${encodeURIComponent(id)}/favorite?${q}`, { method: 'POST' });
+  return later<{ playlist: string; favorite: boolean }>(`/api/playlists/${encodeURIComponent(id)}/favorite?${q}`, { method: 'POST' }, () => ({ playlist: id, favorite: on }));
 };
 
 /** The local player played most of the track: one play counts in the media server (decision 0022). */
@@ -2053,7 +2091,7 @@ export const artistView = (source: string, name: string) =>
 export const artistFavorite = (source: string, name: string) =>
   quietly<{ favorite: boolean | null }>(`/api/artists/${encodeURIComponent(source)}/favorite?name=${encodeURIComponent(name)}`);
 export const setArtistFavorite = (source: string, name: string, on: boolean) =>
-  request<{ favorite: boolean }>(`/api/artists/${encodeURIComponent(source)}/favorite?name=${encodeURIComponent(name)}&on=${on}`, { method: 'POST' });
+  later<{ favorite: boolean }>(`/api/artists/${encodeURIComponent(source)}/favorite?name=${encodeURIComponent(name)}&on=${on}`, { method: 'POST' }, () => ({ favorite: on }));
 /** Where an album of Cratarr's own library was left (Resume): a track and a position, from the bookmarks apps keep
  *  (decision 0030); `track` null when there is none. */
 export const albumResume = (album: string) =>

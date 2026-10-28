@@ -24,11 +24,15 @@ function tell(away: boolean) {
   navigator.serviceWorker?.controller?.postMessage({ type: 'reach', away });
 }
 
+/** Called each time Cratarr answers (lib/later sends what waited). */
+export const whenReached = new Set<() => void>();
+
 export function reached() {
   reach.away = false;
   reach.answered = true;
   reach.kept = false;
   tell(false);
+  for (const f of whenReached) f();
 }
 /** An answer from its last copy (the service worker's X-Cratarr-Kept): out of reach, shown as last seen. */
 export function keptAnswer() {

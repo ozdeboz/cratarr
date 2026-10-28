@@ -26,6 +26,7 @@
   import './lib/keyboard.svelte';
   import './lib/described.svelte';
   import { kept } from './lib/kept.svelte';
+  import { later } from './lib/later.svelte';
   import { reach } from './lib/reach.svelte';
   import { keepCoversAway } from './lib/coversAway.svelte';
   import Visuals from './lib/visuals/Visuals.svelte';
@@ -791,7 +792,7 @@
 
   const connection = $derived(
     statusFailed
-      ? { ok: false, text: reach.kept ? 'Offline · as last seen' : 'Cratarr server unreachable' }
+      ? { ok: false, text: (reach.kept ? 'Offline · as last seen' : 'Cratarr server unreachable') + (later.list.length ? ` · ${later.list.length} to send` : '') }
       : !status
         ? null
         : status.connected
