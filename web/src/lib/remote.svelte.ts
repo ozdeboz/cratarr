@@ -93,6 +93,9 @@ $effect.root(() => {
     return () => clearTimeout(t);
   });
 });
+/** The track whose progress the players show (the one playing, not the one still named while its cover comes): what a
+ *  waveform's colour belongs to (lib/Waveform `track`; the owner, 2026-10-28: keyed on the named one, it flipped). */
+export const playingKey = (np: NowPlaying | null) => (np ? `${np.source}/${np.id}` : null);
 /** What plays, as the players show it: the track before while the new one's cover comes (at most TEXT_WAIT_MS). Its
  *  progress is the playing track's own once it shows. */
 export const shownPlaying = (): NowPlaying | null => {
