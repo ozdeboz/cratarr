@@ -3348,7 +3348,10 @@ function letGoLanding(w: Winding, pos: number): number {
   const v = Math.min(TRACK_TOP, vAt(w, w.clip.currentTime) * w.clip.playbackRate);
   const brake = prefs.startStop.tape.brakeMs;
   const end = lengthOf(w.shown) ?? Infinity;
-  const at = w.dir > 0 ? pos + v * PREP_AHEAD_S + rampSpan(brakeCurve, v, 1, brake) : pos - v * PREP_AHEAD_S - rampSpan(brakeCurve, v, RATE_LOW, brake);
+  // Forwards where the track has it in already, taken over at once (prepare seeks there); else the stream readied ahead.
+  const seg = segmentOf(w.shown);
+  const lead = w.dir > 0 && seg && inBuffer(seg.start + pos) ? 0 : v * PREP_AHEAD_S;
+  const at = w.dir > 0 ? pos + lead + rampSpan(brakeCurve, v, 1, brake) : pos - lead - rampSpan(brakeCurve, v, RATE_LOW, brake);
   return Math.max(0, Math.min(end, at));
 }
 /** A held wind let go to play on: forwards, handed back to the track's own player at its speed (readied a moment ahead,
