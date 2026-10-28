@@ -973,6 +973,8 @@ if (audio) {
   el.addEventListener('waiting', () => playback('info', 'waiting', { index: local.index, at: Math.round(el.currentTime * 10) / 10 }));
   el.addEventListener('playing', () => {
     local.starting = false;
+    // Sounding: no rest of the tape's to show any more.
+    if (tape.committed === null && !tape.rewinding) tape.quietPause = false;
     playback('info', 'playing', { index: local.index, track: local.queue[local.index]?.id ?? null });
   });
   el.addEventListener('pause', () => (local.starting = false));
@@ -1741,10 +1743,17 @@ export function jump(index: number) {
     return hand('jump', { index, ...(entry ? { entry } : {}) });
   }
   if (!audio || index < 0 || index >= local.queue.length) return;
+  // On from playing (a fast-forward's landing, a skip): the moment its stream takes is the tape's own, shown playing,
+  // never as a stop (the owner, 2026-10-28: the next track's waveform came in grey).
+  const onFromPlaying = !local.paused || !!tape.rewinding;
   tapeForwards();
   endRewind();
   atOnce();
   resetTape();
+  if (onFromPlaying) {
+    tape.quietPause = true;
+    tape.quietUntil = performance.now() + PREP_WAIT_MS;
+  }
   const seg = segments.find((s) => s.index === index);
   if (seg && audio.buffered.length && seg.start >= audio.buffered.start(0)) {
     audio.currentTime = seg.start;
