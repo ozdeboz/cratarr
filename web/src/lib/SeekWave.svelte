@@ -91,6 +91,8 @@
   const ZOOM_S = 15;
   const ZOOM_MIN_S = 20;
   const ZOOM_EASE_MS = 250;
+  /** Let go, the zoom stays this long before it eases back to the whole (the owner, 2026-10-28). */
+  const ZOOM_KEEP_MS = 2000;
   let zoomShare = $state(1);
   let zoomAnchor = $state<number | null>(null);
   const zoomOn = $derived(holdNow.on && isLocal() && !reducedMotion());
@@ -102,8 +104,9 @@
       if (on && zoomAnchor === null) zoomAnchor = dur ? Math.min(1, Math.max(0, pos / dur)) : null;
       let raf = 0;
       let last = performance.now();
+      const offAt = on ? null : last;
       const step = (t: number) => {
-        const target = zoomOn && dur ? Math.min(1, Math.max(ZOOM_MIN_S, holdNow.speed * ZOOM_S) / dur) : 1;
+        const target = zoomOn && dur ? Math.min(1, Math.max(ZOOM_MIN_S, holdNow.speed * ZOOM_S) / dur) : offAt !== null && t - offAt < ZOOM_KEEP_MS ? zoomShare : 1;
         zoomShare += (target - zoomShare) * (1 - Math.exp(-(t - last) / ZOOM_EASE_MS));
         last = t;
         if (!zoomOn && zoomShare > 0.999) {

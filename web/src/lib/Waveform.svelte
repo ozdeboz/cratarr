@@ -87,8 +87,9 @@
   const line = $derived((100 * 4) / Math.max(4, height));
   /** Each bar's rise above the quietest, for the waveform shown. */
   const heights = $derived(bins ? bars(bins, n).map((v) => Math.max(LOW, v * 100) - LOW) : null);
-  /** The view's, zoomed: the same pieces, the stretch remapped onto them. */
-  const zoomed = $derived(bins && view && want === 'wave' ? barsIn(bins, n, view.from, view.to, 1 - (view.to - view.from)).map((v) => Math.max(LOW, v * 100) - LOW) : null);
+  /** The view's, zoomed: the same pieces, the stretch remapped onto them, in its own range from a quarter zoomed in on
+   *  (the owner, 2026-10-28: its lows lower and its highs higher; none only as it comes back to the whole). */
+  const zoomed = $derived(bins && view && want === 'wave' ? barsIn(bins, n, view.from, view.to, Math.min(1, (1 - (view.to - view.from)) * 4)).map((v) => Math.max(LOW, v * 100) - LOW) : null);
 
   // Where each piece is (not reactive: drawn on `frame`).
   let gap = new Float32Array(0);
