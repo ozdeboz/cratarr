@@ -25,7 +25,8 @@ import { asksSignIn, toSignIn } from './reach.svelte';
 import { consumed, rate, tapMs } from './windShape';
 import { BANDCAMP } from './bandcampPreview';
 import { DEVICE } from './deviceMusic.svelte';
-import { holdWind, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
+import { RATE_FLOOR, RATE_TOP } from './rates';
+import { HOLD_TOP, holdWind, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
 import { isPhone } from './device';
 
 export type LocalTrack = {
@@ -2066,8 +2067,8 @@ function quietly<T>(go: () => T): T {
 const ss = (): StartStop => (tape.turnRamp ? { ...prefs.startStop, ...tape.turnRamp } : prefs.startStop);
 /** Each ramp's run; a seek cutting one short (overrideRamp) moves it on, and that ramp's own ending then does nothing. */
 let run = 0;
-/** The slowest a browser plays (Chrome and Firefox take 1/16). */
-const RAMP_LOW = 0.07;
+/** A ramp's slowest: a little above the slowest the browser plays with sound (lib/rates). */
+const RAMP_LOW = Math.max(0.07, RATE_FLOOR);
 const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
 // A vinyl's speed: slow to leave full speed and quick at the still end winding down, the reverse winding up. Eased in
 // and out, it was a third of full speed two thirds of the way and sounded stopped there (the owner, 2026-10-26).
@@ -2408,8 +2409,8 @@ export function windUpMs(ms: number, mode: 'off' | 'vinyl' | 'fade', offset: num
 const WIND_WAIT_MS = 1500;
 /** How often its speed and the counter follow it (the tick's four times a second is too coarse to see it go). */
 const WIND_STEP_MS = 40;
-/** The slowest a browser plays (Chrome's floor): a spin-up starts there and a brake ends there. */
-const RATE_LOW = 0.0625;
+/** The slowest the browser plays with sound (lib/rates): a spin-up starts there and a brake ends there. */
+const RATE_LOW = RATE_FLOOR;
 /** A forward hold while playing flies (the owner, 2026-10-27: no stop on the way): its stream from FLY_LEAD s ahead at
  *  FLY_SPEED×, played at 1/FLY_SPEED, so it takes over at exactly the track's own speed and spins up from there (as the
  *  app does, a5). */
@@ -2418,7 +2419,7 @@ const FLY_LEAD = 0.5;
 /** The fastest a browser plays a track (×): a forward hold let go is handed back to the track's own player at its speed
  *  (never above this: HOLD_TOP), which then brakes to 1× on the tape's Brake; the whole brake is the track, its own
  *  sound (the owner, 2026-10-28: the wind's stream sounded faded as it slowed, its highs lost at speed). */
-const TRACK_TOP = 16;
+const TRACK_TOP = RATE_TOP;
 /** A forward hold let go: the track's stream readied this long ahead of the tape (s at its speed), and taken over as the
  *  tape reaches it, the wind sounding on meanwhile. */
 const PREP_AHEAD_S = 0.8;
@@ -2559,7 +2560,7 @@ const windFor = (m: PointMotion): Wind => pointWind(prefs.startStop, m);
 /** Whether a motion winds here (winding on, the motion not off: the owner, 2026-10-28). */
 const windsOn = (m: Motion) => windsBy(prefs.startStop, m);
 /** A hold that way: its own starting and top speed, the tape's spin-up, brake, volume and acceleration. */
-const holdFor = (dir: 1 | -1): HoldWind => holdWind(prefs.startStop, dir);
+const holdFor = (dir: 1 | -1): HoldWind => holdWind(prefs.startStop, dir, Math.min(HOLD_TOP, RATE_TOP));
 /** A wind's speed now (× the stream's): its envelope. */
 function windRate(w: Winding, now: number): number {
   if (w.at === null) return RATE_LOW;
@@ -2909,7 +2910,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
     const go = () => {
       if (!mine() || !audio) return;
       const at = windPlace(w, performance.now());
-      const speed = Math.min(16, vAt(w, clip.currentTime) * clip.playbackRate);
+      const speed = Math.min(TRACK_TOP, vAt(w, clip.currentTime) * clip.playbackRate);
       const tw = where();
       // Only where the track is loaded there is it taken over moving; else (a hold wound on through many tracks, its
       // track not in) it lands there at once, as any wind does, never sounding on while the place moves away (the owner,

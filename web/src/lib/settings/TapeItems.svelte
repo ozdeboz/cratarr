@@ -10,7 +10,8 @@
   import { panSafe } from '../panSafe';
   import { MOTION, prefs, RAMP_MS, startsOf, TAPE, type Motion, type StartStop } from '../prefs.svelte';
   import SettingRow from '../SettingRow.svelte';
-  import { holdWind, pointWind, type PointMotion } from '../startStop';
+  import { RATE_TOP } from '../rates';
+  import { HOLD_TOP, holdWind, pointWind, type PointMotion } from '../startStop';
   import Group from './Group.svelte';
   import HoldGraph from './HoldGraph.svelte';
   import Item from './Item.svelte';
@@ -215,7 +216,7 @@
         {@const off = shown.motions[part] === 0}
         {@const drawn = off ? changed(shown, part, { [part]: MOTION[part].start }) : shown}
         <div class="graph" class:off>
-          {#if isHold(part)}<HoldGraph hold={holdWind(drawn, backwards(part) ? -1 : 1)} />
+          {#if isHold(part)}<HoldGraph hold={holdWind(drawn, backwards(part) ? -1 : 1, inApp ? HOLD_TOP : Math.min(HOLD_TOP, RATE_TOP))} />
           {:else}<WindGraph wind={pointWind(drawn, part as PointMotion)} dir={backwards(part) ? 'back' : 'fwd'} />{/if}
         </div>
       {/if}

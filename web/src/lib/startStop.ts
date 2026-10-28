@@ -86,8 +86,10 @@ export function pointWind(s: StartStop, m: PointMotion): Wind {
 }
 /** A hold that way, as the players use it: from HOLD_START, doubling to HOLD_TOP in its time to top speed (after its
  *  spin-up). Off, it still gives the tape's mechanics (the direction knob's spin-up and brake). */
-export function holdWind(s: StartStop, dir: 1 | -1): HoldWind {
+export function holdWind(s: StartStop, dir: 1 | -1, top = HOLD_TOP): HoldWind {
   const t = s.motions[dir > 0 ? 'holdFwd' : 'holdBack'];
-  const doubling = Math.max(0.05, t - s.tape.attackMs / 1000) / Math.log2(HOLD_TOP / HOLD_START);
-  return { ...pointWind(s, dir > 0 ? 'toEnd' : 'toStart'), speed: HOLD_START, top: HOLD_TOP, doublingS: t > 0 ? doubling : 1.5 };
+  // Where the player plays slower at most (a browser's: lib/rates), it starts lower too, so it still gets faster.
+  const start = Math.min(HOLD_START, top / 2);
+  const doubling = Math.max(0.05, t - s.tape.attackMs / 1000) / Math.log2(top / start);
+  return { ...pointWind(s, dir > 0 ? 'toEnd' : 'toStart'), speed: start, top, doublingS: t > 0 ? doubling : 1.5 };
 }
