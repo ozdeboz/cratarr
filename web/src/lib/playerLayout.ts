@@ -102,12 +102,18 @@ function landscape(width: number, height: number, measure: Measure): Fit {
   return { landscape: true, level, cover, album, controls: { width: controlsWidth, height: Math.round(Math.max(internalHeight(height, natural), tall)) } };
 }
 
-/** Lays the player out in a box of `width` × `height`. On the web Finamp picks the orientation that gives the larger
- *  cover, from an estimate of the controls (halfway between all shown and all dropped). */
-export function fit(width: number, height: number, measure: Measure): Fit {
-  const estimate = (measure(false, 0, Math.min(width, PORTRAIT_MAX)) + measure(false, STEPS.length, Math.min(width, PORTRAIT_MAX))) / 2;
-  const landscapeWidth = Math.max(CONTROLS_MIN_WIDTH, width / 2);
-  const landscapeAlbum = Math.min(width - landscapeWidth, height);
-  const portraitAlbum = Math.min(width, height - estimate);
-  return landscapeAlbum > portraitAlbum ? landscape(width, height, measure) : portrait(width, height, measure);
+/** The room each orientation has (its own padding off): asked of both, never of the one shown, so the choice never
+ *  depends on what is shown (the tablet, 2026-10-28: each read the other's padding and chose the other, every frame). */
+type Space = (landscape: boolean) => { width: number; height: number };
+
+/** Lays the player out in the room `space` gives. On the web Finamp picks the orientation that gives the larger cover,
+ *  from an estimate of the controls (halfway between all shown and all dropped). */
+export function fit(space: Space, measure: Measure): Fit {
+  const p = space(false);
+  const l = space(true);
+  const estimate = (measure(false, 0, Math.min(p.width, PORTRAIT_MAX)) + measure(false, STEPS.length, Math.min(p.width, PORTRAIT_MAX))) / 2;
+  const landscapeWidth = Math.max(CONTROLS_MIN_WIDTH, l.width / 2);
+  const landscapeAlbum = Math.min(l.width - landscapeWidth, l.height);
+  const portraitAlbum = Math.min(p.width, p.height - estimate);
+  return landscapeAlbum > portraitAlbum ? landscape(l.width, l.height, measure) : portrait(p.width, p.height, measure);
 }

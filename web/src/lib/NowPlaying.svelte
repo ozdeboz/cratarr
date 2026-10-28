@@ -387,13 +387,23 @@
     const el = head;
     const box = controls;
     if (!el || !box) return;
-    const cs = getComputedStyle(el);
-    const width = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-    const height = el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-    if (width <= 0 || height <= 0) return;
     // Measuring sets the classes and the box's width directly (its height free) and puts them back afterwards; the
     // state then sets the outcome.
     const before = { cls: el.className, width: box.style.width, height: box.style.height };
+    // Each orientation's room with its own padding (landscape's differs), whichever is shown now.
+    const space = (landscape: boolean) => {
+      el.classList.toggle('landscape', landscape);
+      const cs = getComputedStyle(el);
+      return {
+        width: el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+        height: el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom),
+      };
+    };
+    const room = space(false);
+    if (room.width <= 0 || room.height <= 0) {
+      el.className = before.cls;
+      return;
+    }
     const measure = (landscape: boolean, level: number, controlsWidth: number) => {
       el.classList.toggle('landscape', landscape);
       STEPS.forEach((step, i) => el.classList.toggle(`drop-${step}`, level > i));
@@ -401,7 +411,7 @@
       box.style.height = 'auto';
       return box.getBoundingClientRect().height;
     };
-    const next = fit(width, height, measure);
+    const next = fit(space, measure);
     el.className = before.cls;
     box.style.width = before.width;
     box.style.height = before.height;
@@ -411,7 +421,8 @@
   $effect(() => {
     if (!head) return;
     const ro = new ResizeObserver(() => relayout());
-    ro.observe(head);
+    // Its outer size only: the padding its own layout sets is no resize.
+    ro.observe(head, { box: 'border-box' });
     return () => ro.disconnect();
   });
   // What is shown changes the controls' height (a long title, a progress bar or none). As one value: `np` is

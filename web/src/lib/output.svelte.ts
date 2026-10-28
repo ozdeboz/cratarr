@@ -64,8 +64,23 @@ addEventListener('beforeunload', (e) => {
   e.returnValue = '';
 });
 
-/** The local queue's playing track as a now-playing view (the shape the player shows). */
-export function localNowPlaying(): NowPlaying | null {
+/** What comes after the playing track, as the player shows it: made once per change of the queue or its place, not
+ *  at every read (the tablet, 2026-10-28: every read of the player mapped the rest of a 273-track queue, many times a
+ *  frame). */
+const upcomingLocal = $derived(
+  local.queue.slice(local.index + 1).map((u) => ({
+    id: u.id,
+    name: u.name || '…',
+    artist: u.artist,
+    album: u.album,
+    album_id: u.album_id,
+    addable: u.addable ?? true,
+    duration_secs: u.duration_secs ?? null,
+    lane: u.lane,
+  })),
+);
+/** The local queue's playing track as a now-playing view (the shape the player shows), made once per change. */
+const nowLocal = $derived.by((): NowPlaying | null => {
   const t = local.queue[local.index];
   if (!t) return null;
   return {
@@ -81,18 +96,10 @@ export function localNowPlaying(): NowPlaying | null {
     favorite: localState.view?.favorite ?? null,
     // As the heart, the chips stay until the new track's arrive (no row coming and going between tracks).
     info: localState.view?.info ?? null,
-    upcoming: local.queue.slice(local.index + 1).map((u) => ({
-      id: u.id,
-      name: u.name || '…',
-      artist: u.artist,
-      album: u.album,
-      album_id: u.album_id,
-      addable: u.addable ?? true,
-      duration_secs: u.duration_secs ?? null,
-      lane: u.lane,
-    })),
+    upcoming: upcomingLocal,
   };
-}
+});
+export const localNowPlaying = (): NowPlaying | null => nowLocal;
 
 // The local track's playlists and favourite: the server's state covers only its own player's track, so they are
 // asked for this one (on each new track, and when the playlists change).

@@ -1749,6 +1749,10 @@ export function jump(index: number) {
     audio.currentTime = seg.start;
     local.index = index;
     if (audio.paused) audio.play().catch(refused);
+  } else if (comingFor(index, 0)) {
+    // Readied already (a fast-forward's landing, lib's handover): played once it is in, never fetched again.
+    Object.assign(local, { index, position: 0 });
+    whenThere(index, 0, () => audio && audio.paused && void audio.play().catch(refused));
   } else {
     fresh(index, 0, true);
   }
@@ -2593,6 +2597,8 @@ function standOf(after = 0): { index: number; pos: number } | null {
   const run = audio.paused ? 0 : after + spanOf('vinyl', 'out', prefs.startStop.tape.brakeMs);
   return { index: here.seg.index, pos: here.offset + run };
 }
+/** Queue track `index`'s place in the stream (the latest placed, where it was placed again). */
+const segmentOf = (index: number) => [...segments].reverse().find((s) => s.index === index);
 /** Whether the stream being fetched covers `pos` s into queue track `index` (it is coming: wait for it). */
 const comingFor = (index: number, pos: number) =>
   !!streamFrom && streamFrom.index === index && pos >= streamFrom.from - BUFFER_SLACK_S && pos < streamFrom.from + PREP_REACH_S;
@@ -2601,9 +2607,10 @@ const comingFor = (index: number, pos: number) =>
  *  meanwhile keeps its counter. */
 function prepare(place: { index: number; pos: number }, lead = PREP_LEAD_S) {
   if (!audio || !audio.paused) return;
-  const tw = where();
-  if (tw && tw.seg.index === place.index && inBuffer(tw.seg.start + place.pos)) {
-    audio.currentTime = tw.seg.start + place.pos;
+  // Already in the stream (the track playing, or one after it already appended): sought there.
+  const seg = segmentOf(place.index);
+  if (seg && inBuffer(seg.start + place.pos)) {
+    audio.currentTime = seg.start + place.pos;
     return;
   }
   if (comingFor(place.index, place.pos)) return;
@@ -2618,10 +2625,10 @@ function prepare(place: { index: number; pos: number }, lead = PREP_LEAD_S) {
 function whenThere(index: number, secs: number, go: () => void) {
   if (!audio) return;
   const ready = () => {
-    const tw = where();
-    if (!audio || !tw || tw.seg.index !== index || !inBuffer(tw.seg.start + secs)) return false;
+    const seg = segmentOf(index);
+    if (!audio || !seg || !inBuffer(seg.start + secs)) return false;
     // Already there within a few ms (prepared): no seek, so it starts at once (each seek waits).
-    if (Math.abs(audio.currentTime - (tw.seg.start + secs)) > SAME_PLACE_S) audio.currentTime = tw.seg.start + secs;
+    if (Math.abs(audio.currentTime - (seg.start + secs)) > SAME_PLACE_S) audio.currentTime = seg.start + secs;
     local.position = secs;
     return true;
   };
@@ -2958,7 +2965,13 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       }, WIND_STEP_MS);
       if (!audio.paused) audio.pause();
       // A condensed one's end waits loaded (the counter stays the wind's meanwhile).
-      if (to !== null) prepare({ index: seg.index, pos: to }, 0);
+      // Its landing readied: the place, or for a wind on to the track's end the next track's start (it goes on there).
+      if (to !== null) {
+        const end = lengthOf(seg.index) ?? Infinity;
+        if (dir > 0 && to >= end - 0.5) {
+          if (seg.index + 1 < local.queue.length) prepare({ index: seg.index + 1, pos: 0 }, 0);
+        } else prepare({ index: seg.index, pos: to }, 0);
+      }
     },
     { once: true },
   );
