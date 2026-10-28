@@ -65,6 +65,19 @@ class PlayerService : MediaSessionService() {
     /** Who listens to the session's player (the session itself): told when a ramp commits to a state. */
     private val sessionListeners = java.util.concurrent.CopyOnWriteArraySet<Player.Listener>()
 
+    /**
+     * The track's own pauses and plays as the session shows them: what a ramp (or a wind) has committed to while one
+     * runs. A hold pauses the track under it (the owner, 2026-10-27: "the play pause button flashes"), and the lock
+     * screen, the notification and the page heard that pause before; they see playing throughout.
+     */
+    private inner class Shown(private val l: Player.Listener) : Player.Listener by l {
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) = l.onPlayWhenReadyChanged(startStop.committed ?: playWhenReady, reason)
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) = l.onIsPlayingChanged(startStop.committed ?: isPlaying)
+    }
+
+    private val shown = java.util.concurrent.ConcurrentHashMap<Player.Listener, Shown>()
+
     /** A ramp committed to playing or paused, or let go: the session (lock screen, notification, the page) and Cratarr
      *  hear the state it shows. */
     private fun startStopChanged() {
@@ -149,19 +162,19 @@ class PlayerService : MediaSessionService() {
         // headset's or the system's shuffle shuffles what is to come once, and the player never plays shuffled, so it
         // says it is not. Cratarr's queue is shuffled by Cratarr (Play On's `shuffle`, which sends the new order back);
         // local mode's here, the playing track staying where it is.
-        startStop = StartStop(this, player, prefs, { link?.applyVolume() }, { sync.leader != null }, { sync.bufferMs }, ::startStopChanged, ::windUrl, ::windWay) { what, fields ->
+        startStop = StartStop(this, player, prefs, { link?.applyVolume() }, { sync.leader != null }, { sync.bufferMs }, ::startStopChanged, ::windUrl, ::windWay, sync) { what, fields ->
             LinkLog.add(this, "info", "startstop", what, *fields)
         }
         sessionPlayer = object : ForwardingPlayer(player) {
             // A ramp under way shows where it is going (0.9.6): the session's listeners told when that changes.
             override fun addListener(listener: Player.Listener) {
                 sessionListeners.add(listener)
-                super.addListener(listener)
+                super.addListener(shown.getOrPut(listener) { Shown(listener) })
             }
 
             override fun removeListener(listener: Player.Listener) {
                 sessionListeners.remove(listener)
-                super.removeListener(listener)
+                shown.remove(listener)?.let { super.removeListener(it) }
             }
 
             override fun getPlayWhenReady() = startStop.committed ?: super.getPlayWhenReady()
@@ -193,9 +206,16 @@ class PlayerService : MediaSessionService() {
                 if (mediaItemIndex == player.currentMediaItemIndex) startStop.seekTo(positionMs) { super.seekTo(mediaItemIndex, positionMs) }
                 else startStop.seek { super.seekTo(mediaItemIndex, positionMs) }
 
-            override fun seekToNext() = startStop.skip { super.seekToNext() }
+            // Next winds on to the track's end first where winding is on (0.9.14, the mirror of Previous's rewind).
+            override fun seekToNext() {
+                val jump = { super.seekToNext() }
+                if (!startStop.fastForward(jump)) startStop.skip(jump)
+            }
 
-            override fun seekToNextMediaItem() = startStop.skip { super.seekToNextMediaItem() }
+            override fun seekToNextMediaItem() {
+                val jump = { super.seekToNextMediaItem() }
+                if (!startStop.fastForward(jump)) startStop.skip(jump)
+            }
 
             override fun seekToPreviousMediaItem() = startStop.skip { super.seekToPreviousMediaItem() }
 
@@ -713,10 +733,12 @@ class PlayerService : MediaSessionService() {
         val server = prefs.serverUrl?.trimEnd('/') ?: return null
         if (DeviceMusic.located(item) != null || item.mediaId.startsWith("bandcamp/")) return null
         val to = toMs?.let { "&to_ms=$it" } ?: ""
-        val fit = fitMs?.let { "&fit_ms=$it&attack_ms=${prefs.windAttackMs}&release_ms=${prefs.windReleaseMs}&piece_ms=${prefs.windPieceMs}" } ?: ""
+        val w = prefs.holdWind(back)
+        val fit = fitMs?.let { "&fit_ms=$it&attack_ms=${w.attackMs}&release_ms=${w.releaseMs}&piece_ms=${w.pieceMs}" } ?: ""
         val on = through?.let { "&through=" + Uri.encode(it, ",/:") } ?: ""
-        // A hold speeds up as it goes (0.9.12): doubling every 1.5 s of its stream, up to 64×.
-        val accel = if (rise) "&accel_s=1.5&max=64" else ""
+        // A hold speeds up as it goes (0.9.12): doubling as the tape is set, up to its top.
+        // Flying on past what is heard (0.9.14): heard at most at its top, on to the flight's in pieces.
+        val accel = if (rise) "&accel_s=${w.doublingS}&max=${w.top}&flight_max=${Prefs.FLIGHT_TOP}&piece_ms=${w.pieceMs}" else ""
         return "$server/api/stream/${item.mediaId}/wind?from_ms=$fromMs&dir=${if (back) "back" else "forward"}&speed=$speed" +
             "&gain_db=$gainDb$to$fit$on$accel"
     }

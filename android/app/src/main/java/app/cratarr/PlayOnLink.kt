@@ -462,7 +462,11 @@ class PlayOnLink(
                 p.stop()
                 p.clearMediaItems()
             }
-            "next" -> service.startStop.skip { p.seekToNextMediaItem() }
+            // Next as the app's own: fast-forward to the end where winding is on, else a skip.
+            "next" -> {
+                val jump = { p.seekToNextMediaItem() }
+                if (!service.startStop.fastForward(jump)) service.startStop.skip(jump)
+            }
             "previous" -> {
                 val restart = { service.startStop.skip { if (!Repeat.previous(service, p)) p.seekToPrevious() } }
                 if (!service.startStop.rewind(PlayerService.RESTART_AFTER_MS, restart)) restart()
@@ -789,6 +793,8 @@ class PlayOnLink(
             .put("playing", service.startStop.committed ?: (p.playWhenReady && p.playbackState != Player.STATE_ENDED && p.playbackState != Player.STATE_IDLE))
             // Tape rewind (0.9.10): the position goes back to the start as the clip sounds; Cratarr does not count it on.
             .put("rewinding", service.startStop.rewinding)
+            // A play from rest not sounding yet (0.9.14): the page's waveform grey until it does.
+            .put("starting", StartStop.starting)
             .put("direction", StartStop.deckDirection)
             // Level the volume as set here (0.9.12): a page driving this player shows and sets it.
             .put("levelling", prefs.levelling)
