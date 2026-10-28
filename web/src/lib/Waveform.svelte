@@ -150,6 +150,13 @@
       }
       const tr = riseWanted(i, g);
       const tg = gapWanted(i, g.w);
+      // A zoom: each bar at once where the stretch puts it (the zoom's own easing is its motion; a bar easing on top of it
+      // drifted from the playhead, the owner 2026-10-28: the focal point the playhead).
+      if (g.flat && gap[i] >= 1 && tg >= 1) {
+        rise[i] = aim[i] = tr;
+        span[i] = 0;
+        continue;
+      }
       // Down first where it must close its gap, else toward its height.
       const goal = rise[i] > tr || gap[i] === tg || gap[i] >= 1 ? tr : 0;
       if (aim[i] !== goal) {

@@ -105,7 +105,11 @@
     const on = zoomOn;
     return untrack(() => {
       if (!on && zoomShare >= 0.999) return;
-      if (on && zoomAnchor === null) zoomAnchor = dur ? Math.min(1, Math.max(0, pos / dur)) : null;
+      // A hold's start: the playhead's place on the bar as it is now (in the zoom still shown, if one is), held there.
+      if (on && dur) {
+        const p = Math.min(1, Math.max(0, pos / dur));
+        zoomAnchor = view ? Math.min(1, Math.max(0, (p - view.from) / Math.max(1e-6, view.to - view.from))) : p;
+      }
       let raf = 0;
       let last = performance.now();
       const offAt = on ? null : last;
