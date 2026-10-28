@@ -42,7 +42,8 @@ kind of adapters Cratarr's own sources use (0005).
   (shape B).
 - Many servers, each its own mode (the owner, 2026-10-28): "possibly 2 Cratarr servers, 1 Jellyfin and also 1 local
   (never more than 1 local)", each separate.
-  - The app holds the list, with a sign-in per server, and the mode switcher shows it (as Cratarr / Local now).
+  - The app holds the list, with a sign-in per server, and the mode switcher shows it (as Cratarr / Local now):
+    in that example four entries, switched between as the two are now.
   - A Cratarr server's mode is that server's own pages, with its queues, Play On, history and Home Assistant. Each is
     its own origin, so their kept copies and storage never mix.
   - One queue per mode, and one mode sounds at a time: switching pauses the other, as Local does. Downloads are kept
