@@ -33,14 +33,18 @@ class VarispeedTest {
         (10_000 * sin(2 * PI * 440 * (from + it / channels) / rate)).toInt().toShort()
     }
 
-    /** One buffer in, what came out. */
+    /** One buffer in, as a pipeline gives it (again until it is all taken), what came out. */
     private fun run(v: Varispeed, sound: ShortArray): ShortArray {
         val inb = ByteBuffer.allocateDirect(sound.size * 2).order(ByteOrder.LITTLE_ENDIAN)
         sound.forEach { inb.putShort(it) }
         inb.flip()
-        v.queueInput(inb)
-        val out = v.output.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-        return ShortArray(out.remaining()).also { out.get(it) }
+        val got = ArrayList<Short>()
+        do {
+            v.queueInput(inb)
+            val out = v.output.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+            while (out.hasRemaining()) got.add(out.get())
+        } while (inb.hasRemaining())
+        return got.toShortArray()
     }
 
     @Test

@@ -110,18 +110,23 @@ class Varispeed : BaseAudioProcessor() {
             mark()
             return
         }
-        // Held, then what came: read at the speed, a frame at a time.
-        val need = (heldFrames + inFrames) * channels
+        // Held, then as much of what came as [CHUNK_MS] of sound at the speed asked reads (the rest is left for the next
+        // call): slow, one buffer made seconds of sound at once, and a speed change waited for all of it to play
+        // (2026-10-28, the tablet: Next's flying wind took three times its length).
+        val rateNow = format.sampleRate.coerceAtLeast(1)
+        val chunk = max(1, rateNow * CHUNK_MS / 1000)
+        val wanted = (max(speed, rate.coerceIn(LEAST, MOST)) * chunk).toInt() + 4
+        val take = min(inFrames, max(1, wanted - (heldFrames - floor(at).toInt())))
+        val need = (heldFrames + take) * channels
         if (held.size < need) held = held.copyOf(max(need, held.size * 2))
         val sound = inputBuffer.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
         for (i in heldFrames * channels until need) held[i] = sound.get().toFloat()
-        inputBuffer.position(inputBuffer.limit())
-        heldFrames += inFrames
-        val rateNow = format.sampleRate.coerceAtLeast(1)
+        inputBuffer.position(inputBuffer.position() + take * 2 * channels)
+        heldFrames += take
         val follow = (1 - exp(-1000.0 / (rateNow * FOLLOW_MS))).toFloat()
         val step = 1f / max(1, rateNow * SMOOTH_MS / 1000)
-        // At most what the slowest speed makes of it.
-        val most = ((heldFrames - at) / LEAST + 2).toInt() * channels
+        // At most a chunk's worth.
+        val most = min(((heldFrames - at) / LEAST + 2).toInt(), chunk) * channels
         val out = replaceOutputBuffer(most * 2).order(ByteOrder.LITTLE_ENDIAN)
         var made = 0
         val goal = rate.coerceIn(LEAST, MOST)
@@ -201,6 +206,8 @@ class Varispeed : BaseAudioProcessor() {
     }
 
     companion object {
+        /** At most this much sound (ms) is made a call: a speed change acts within it. */
+        private const val CHUNK_MS = 20
         /** The speed's change followed over this (ms): never a step. */
         private const val FOLLOW_MS = 10.0
         private const val SMOOTH_MS = 20

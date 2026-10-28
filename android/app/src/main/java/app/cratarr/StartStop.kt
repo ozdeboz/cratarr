@@ -282,7 +282,9 @@ class StartStop(
         val up = eased(t, tapeAttack)
         // A flying one starts and ends on its floor: the track's own speed on its stream.
         val floor = if (tapeFlying) tapeFloor else 0f
-        if (!tapeHold) return floor + (1f - floor) * min(up, eased(tapeMs - t, tapeRelease))
+        // A wind to a point lands as its envelope ends, whatever of its stream is left (2026-10-28, the tablet: Back to
+        // the start sat at rate 0 by its clip's end until the player gave up, 9 s).
+        if (!tapeHold) return if (t > tapeMs + TAP_GRACE_MS) null else floor + (1f - floor) * min(up, eased(tapeMs - t, tapeRelease))
         if (tapeReleased == 0L) return floor + (1f - floor) * up
         val left = tapeRelease - (now - tapeReleased)
         if (left <= 0) return null
@@ -370,6 +372,24 @@ class StartStop(
             trackAt(1f)
             then()
         }
+    }
+
+    /**
+     * The knob at L as a play starts (a wind landing, a play from rest): backwards from here; where it cannot (at the
+     * start already, a track Cratarr has no file of), the knob back at R and told. True where it played backwards.
+     */
+    private fun knobBack(): Boolean {
+        if (playBack()) return true
+        note("direction", "to" to "R", "why" to "backwards could not start")
+        deckDirection = "R"
+        changed()
+        return false
+    }
+
+    /** A wind's landing plays on ([start]), or backwards where the knob was turned to L meanwhile. */
+    private fun landPlay(start: () -> Unit) {
+        if (deckDirection == "L" && knobBack()) return
+        start()
     }
 
     /** Back to forwards, the knob at R, any backwards play dropped (another track, a new queue, a seek). */
@@ -566,7 +586,8 @@ class StartStop(
     fun play(quiet: Boolean, start: () -> Unit) {
         note("play", "busy" to busy, "direction" to deckDirection)
         // The knob at L: playing is backwards (0.9.12).
-        if (deckDirection == "L" && tapeListener == null && !player.isPlaying && playBack()) return
+        // The knob at L: playing is backwards; where that cannot start, forwards, the knob too (the truth).
+        if (deckDirection == "L" && tapeListener == null && !player.isPlaying && knobBack()) return
         if (busy) {
             // During a wind-down: played once it is over; during a wind-up, it plays already.
             if (committed == false) after = { play(start) }
@@ -764,7 +785,7 @@ class StartStop(
         if (from <= restartAfterMs) return false
         val w = prefs.pointWind("toStart")
         val url = windUrl(from, 0L, tapMs(-from, "toStart"), true, null, w.speed, w.gainDb, false) ?: return false
-        wind(hold = false, from = from, to = 0L, url = url, restart = restart, motion = "toStart") { _, _ -> player.play() }
+        wind(hold = false, from = from, to = 0L, url = url, restart = restart, motion = "toStart") { _, _ -> landPlay { player.play() } }
         tapePrevious = true
         return true
     }
@@ -790,7 +811,7 @@ class StartStop(
         // Never sounding: the plain jump, still playing.
         wind(hold = false, from = from, to = end, url = url, restart = jump, flying = true, jump = jump, motion = "toEnd") { _, _ ->
             jump()
-            player.play()
+            landPlay { player.play() }
         }
         return true
     }
@@ -814,7 +835,7 @@ class StartStop(
             val w = prefs.pointWind(motion)
             val url = windUrl(start, target, tapMs(target - start, motion), target < from, null, w.speed, w.gainDb, false)?.let { if (fly) "$it&fly=1" else it }
             if (url != null) {
-                wind(hold = false, from = start, to = target, url = url, restart = go, flying = fly, motion = motion) { _, _ -> player.play() }
+                wind(hold = false, from = start, to = target, url = url, restart = go, flying = fly, motion = motion) { _, _ -> landPlay { player.play() } }
                 return
             }
         }
@@ -858,7 +879,7 @@ class StartStop(
                 wind(hold = true, from = at, to = edge, url = u, restart = { play { player.play() } }, chain = way.map { it.second }, flying = flying, speed = speed, waits = waits) { k, land ->
                     if (k == 0) player.seekTo(land) else player.seekTo((player.currentMediaItemIndex + if (back) -k else k).coerceIn(0, player.mediaItemCount - 1), land)
                     // A flying one hands back while still moving; one from still winds up, quietly (the tape's own).
-                    if (flying) player.play() else play(true) { player.play() }
+                    if (flying) landPlay { player.play() } else play(true) { player.play() }
                 }
             }
         }
@@ -1263,6 +1284,8 @@ class StartStop(
         private const val FLY_FLOOR_LEAST = 0.03f
         /** A held Next on a track that cannot wind speeds it up to this (the page's own, 0.9.13). */
         private const val FAST = 4f
+        /** A wind to a point lands this long after its envelope ends at the latest (its stream's last bit let go). */
+        private const val TAP_GRACE_MS = 250L
         /** A seek nearer than this jumps, winding or not. */
         private const val SEEK_WIND_LEAST_MS = 2_000L
         /** How often the position shown is told on while the clip sounds. */
