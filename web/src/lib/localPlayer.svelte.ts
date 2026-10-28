@@ -559,7 +559,8 @@ async function appendTrack(index: number, from: number, gen: number) {
       if (kind === MPEG && length !== null && told !== null && Math.abs(length - told) > 1.5) length = null;
       sb.appendWindowEnd = Infinity;
       sb.appendWindowStart = Math.max(0, streamEnd);
-      if (length !== null) sb.appendWindowEnd = start + length;
+      // Never before its start (a place asked at or past its end: nothing of it plays, and what follows goes on).
+      if (length !== null) sb.appendWindowEnd = Math.max(sb.appendWindowStart + 0.001, start + length);
       // At a stream's start an MP3's encoder delay would put its offset below 0. Lead (a5's measure, 2026-10-26): the
       // iPhone's four MP3s that stalled all carry a LAME/Info header (a delay), the one that played none; iOS's
       // ManagedMediaSource may not take a negative offset in sequence mode. From 0 there (a few ms of the encoder's
@@ -621,7 +622,9 @@ async function appendTrack(index: number, from: number, gen: number) {
     if (gen !== generation || ctl.signal.aborted) return;
     // A length the header did not give: what the stream now holds.
     if (segment.length === null && sb && sb.buffered.length) segment.length = sb.buffered.end(sb.buffered.length - 1) - start;
-    streamEnd = start + (segment.length ?? 0);
+    // Never back from where it stood (the tablet, 2026-10-28: resumed at 6:10 of a 6:10 track, none of it was in, and
+    // every track after it was placed at -6:10 and failed): a track with nothing past the place asked is passed over.
+    streamEnd = Math.max(streamEnd, start + (segment.length ?? 0));
     lastAppended = index;
     if (index === local.queue.length - 1 && ms?.readyState === 'open') {
       await waitUpdate();
