@@ -2948,6 +2948,15 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       // track not in) it lands there at once, as any wind does, never sounding on while the place moves away (the owner,
       // 2026-10-27: a hold over many tracks stuck speeding).
       if (!(tw && tw.seg.index === at.index && inBuffer(tw.seg.start + at.pos))) {
+        // At the place readied for it and not in yet (a slow stream): braked on the wind from here, so it lands where its
+        // landing was shown (the owner's tablet, 2026-10-28: it wound on 10 s past it, then stopped); the track takes
+        // over where it stands once in.
+        if (w.handing && streamFrom && streamFrom.index === at.index && at.pos >= streamFrom.from - 0.05) {
+          say('readied place reached before its stream: braked here', { at: Math.round(at.pos * 1000) });
+          w.handing = false;
+          landing = false;
+          return brakeWind(w);
+        }
         waited += 50;
         // Its stream readied ahead and the tape not there yet, or coming in: worth the wait.
         const coming = comingFor(at.index, at.pos) || (!!streamFrom && streamFrom.index === at.index && at.pos < streamFrom.from);
@@ -2961,7 +2970,11 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       audio.preservesPitch = false;
       audio.playbackRate = speed;
       void audio.play().catch(refused);
-      void ramp(speed, 1, prefs.startStop.tape.brakeMs, (v) => audio && (audio.playbackRate = v), brakeCurve).then((done) => done && unramp());
+      void ramp(speed, 1, prefs.startStop.tape.brakeMs, (v) => audio && (audio.playbackRate = v), brakeCurve).then((done) => {
+        if (!done) return;
+        unramp();
+        playback('info', 'back at its own speed', { index: at.index, at: Math.round((where()?.offset ?? 0) * 1000) });
+      });
     };
     if (!w.handing) prepare(place);
     go();
@@ -3352,12 +3365,14 @@ function letGo(w: Winding) {
     if (!armed) return brakeWind(w);
     w.handing = true;
     w.handArmed = armed;
+    playback('info', 'let go', { at: Math.round(here.pos * 1000), speed: Math.round(speed * 100) / 100, landing: Math.round(letGoLanding(w, here.pos) * 1000) });
     return;
   }
   const here = windPlace(w, performance.now());
   const speed = Math.min(TRACK_TOP, vAt(w, w.clip.currentTime) * w.clip.playbackRate);
   const end = lengthOf(here.index) ?? Infinity;
   w.handing = true;
+  playback('info', 'let go', { at: Math.round(here.pos * 1000), speed: Math.round(speed * 100) / 100, landing: Math.round(letGoLanding(w, here.pos) * 1000) });
   prepare({ index: here.index, pos: Math.min(end - 1, here.pos + speed * PREP_AHEAD_S) }, 0);
 }
 
