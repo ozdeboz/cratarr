@@ -1,0 +1,21 @@
+{
+  "about": "Whether a filter row asks anything yet: the page's lib/filterRow complete() and the server's crates.rs Condition::complete() both read this. A row that is not complete filters nothing (it is skipped, not sent, not counted). Any of none asks nothing, but a playlist's (in any playlist); a range open at both ends asks nothing; a like with no seeds asks nothing. Not and Any or All change nothing about it.",
+  "complete": [
+    { "condition": { "axis": "type", "not": false, "value": { "kind": "any_of", "values": [] } }, "complete": false },
+    { "condition": { "axis": "type", "not": true, "value": { "kind": "any_of", "values": [] } }, "complete": false },
+    { "condition": { "axis": "genre", "not": false, "value": { "kind": "any_of", "values": [] }, "quantifier": "all" }, "complete": false },
+    { "condition": { "axis": "type", "not": false, "value": { "kind": "any_of", "values": ["Album"] } }, "complete": true },
+    { "condition": { "axis": "type", "not": true, "value": { "kind": "any_of", "values": ["Album", "EP"] } }, "complete": true },
+    { "condition": { "axis": "playlist", "not": false, "value": { "kind": "any_of", "values": [] } }, "complete": true },
+    { "condition": { "axis": "playlist", "not": true, "value": { "kind": "any_of", "values": [] } }, "complete": true },
+    { "condition": { "axis": "year", "not": false, "value": { "kind": "range", "min": null, "max": null } }, "complete": false },
+    { "condition": { "axis": "plays", "not": true, "value": { "kind": "range", "min": null, "max": null }, "quantifier": "all" }, "complete": false },
+    { "condition": { "axis": "year", "not": false, "value": { "kind": "range", "min": 1990, "max": null } }, "complete": true },
+    { "condition": { "axis": "year", "not": false, "value": { "kind": "range", "min": null, "max": 2000 } }, "complete": true },
+    { "condition": { "axis": "plays", "not": false, "value": { "kind": "range", "min": 0, "max": 0 } }, "complete": true },
+    { "condition": { "axis": "like", "not": false, "value": { "kind": "like", "of": [], "count": 20 } }, "complete": false },
+    { "condition": { "axis": "like", "not": false, "value": { "kind": "like", "of": ["tr-1"], "count": 20 } }, "complete": true },
+    { "condition": { "axis": "favourite", "not": false, "value": { "kind": "yes" } }, "complete": true },
+    { "condition": { "axis": "favourite_album", "not": true, "value": { "kind": "yes" } }, "complete": true }
+  ]
+}
