@@ -8,6 +8,7 @@
 // Read from the device's own settings: Quality, FPS, Brightness (`device`). Everything else is the patch's.
 
 import { coverUrl } from '../api';
+import { reducedMotion } from '../motion';
 import { playing } from '../remote.svelte';
 import { wavesMotion, zoomsMotion } from './aspects';
 import { chainNow } from './chain-params';
@@ -391,6 +392,8 @@ export class VisualsLoop {
       const stepped = stepEngine(engine, flat, host.types, m, read, dt, {
         now,
         fluidFull: FLUID_FULL,
+        // The device's reduced motion (Settings, or the system's), read each frame as the chrome's fades read it.
+        still: reducedMotion(),
         meters: meterValues,
         aspect: renderer ? renderer.width / Math.max(1, renderer.height) : undefined,
         fluidFlow: renderer?.fluidFlow(),

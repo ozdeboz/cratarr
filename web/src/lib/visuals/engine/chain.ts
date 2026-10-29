@@ -70,12 +70,13 @@ export type FlameNow = { turn: number; rates: number[]; shape: number[]; parts: 
 
 /** One frame of a Flame, `dt` seconds on: its parts (their turning, evolution, presence, steps on their band's hits) and
  *  lights, from what its knobs give (`at`: a part aspect's, the whole track's, or with band `band`'s own added), the
- *  Clock's rate, its continuity and evolution per band, the Accent's setting, the sidechains' levers. */
+ *  Clock's rate, its continuity and evolution per band, the Accent's setting, the sidechains' levers. `still`: reduced
+ *  motion, as aspects.ts had it (decision 0057: kept on purpose): every part steady, its morph slower, its lights half. */
 export function stepFlame(
   st: FlameState,
   m: Music,
   at: (knob: FlameKnob, band: number | null) => number,
-  x: { clock: number; continuity: readonly number[]; evolution: readonly number[]; accent: number },
+  x: { clock: number; continuity: readonly number[]; evolution: readonly number[]; accent: number; still?: boolean },
   dt: number,
   L: Levers,
 ): FlameNow {
@@ -87,7 +88,7 @@ export function stepFlame(
   const parts: Part[] = [];
   for (let i = 0; i < PARTS; i++) {
     const k = Math.floor((i * BANDS) / PARTS);
-    const c = x.continuity[k];
+    const c = x.still ? 1 : x.continuity[k];
     const wants = [at('shape', k), at('hue', k) * L.hue, at('spread', k)];
     const rate = x.clock * 2 * at('rotation', k);
     st.rates[i] = rate;
@@ -116,12 +117,12 @@ export function stepFlame(
     parts.push({
       turn: st.turned[i],
       size: 0.94 + 0.12 * grown,
-      morph: 0.35 * grown,
+      morph: (x.still ? 0.15 : 0.35) * grown,
       hue,
       spread: 2 ** clamp(spread, -2, 2),
       weight: 2 ** (1.5 * st.presence[i]),
     });
-    hits.push(clamp(stepAccent(st.lights[i], clamp(at('lights', k), -1, 3), follow2, x.accent, L.swing), -1, 3));
+    hits.push(clamp(stepAccent(st.lights[i], clamp(at('lights', k), -1, 3) * (x.still ? 0.5 : 1), follow2, x.accent, L.swing), -1, 3));
   }
   return { turn: st.turn, rates: st.rates, shape: shapes, parts, hits };
 }

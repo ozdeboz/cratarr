@@ -86,7 +86,7 @@ test('the one engine over the cables of a v2 patch gives what the routes gave', 
   const { CHAINS, chainRoutes } = await import('../src/lib/visuals/chains.ts');
   // Every column's scale off 1 (folded into the cables' amounts by toV2, 0057 §7e): Size above all, which is no base.
   const scaled = { ...settings, shape: 1.4, rotation: 0.6, lights: 1.3, glow: 0.7, size: 0.55, saturation: 1.2, trails: 0.8, presence: 1.5, waves: 0.65 } as typeof settings;
-  const variants: [string, typeof settings, boolean][] = [['the Cratarr chain', settings, false], ['every scale off 1', scaled, false]];
+  const variants: [string, typeof settings, boolean][] = [['the Cratarr chain', settings, false], ['every scale off 1', scaled, false], ['reduced motion (0057: kept on purpose)', settings, true]];
   for (const c of CHAINS) if (!c.extra.cables.length && !c.extra.modulators.length) variants.push([c.id, { ...settings, ...(c.settings ?? {}), routes: chainRoutes(c) } as typeof settings, false]);
   let worst = 0;
   for (const id of TRACKS) {
