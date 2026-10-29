@@ -1,6 +1,7 @@
 // What the compose step's walk (nodes/walker.ts) draws with besides its own modules (decision 0056 step 4; 0057 step
 // 3): the picture modules it runs from patch.ts's (a layer's engines, the fluid in the loop), a source's audio
 // inputs, the Mix in one pass and the picture's own loop as one pass (MilkDrop's feedback).
+import { WARP_GLSL } from './loopmods';
 import type { FrameInfo, PictureModule } from './patch';
 import { SOURCE_TYPES } from './sources/index';
 import { portsOf, type PortRef } from './ports';
@@ -63,10 +64,11 @@ ${each(layer)}
 }`;
 }
 
-// The picture's own loop: the last picture read where the Warp moves it from (about the middle: zoomed, turned,
-// drifted, stretched, wobbled), kept by the Keep's share, and the new picture over it: the brighter of the two, so the
-// trails fade as they are kept and never build past the picture itself (our layers are whole pictures each frame,
-// not MilkDrop's few lines; added up they would run to white).
+// The picture's own loop: the last picture read where the Warp moves it from (about its centre: zoomed and turned,
+// alike or by place as its grid says, stretched, wobbled, drifted: loopmods.ts WARP_GLSL), kept by the Keep's share,
+// and the new picture over it: the brighter of the two, so the trails fade as they are kept and never build past the
+// picture itself (our layers are whole pictures each frame, not MilkDrop's few lines; added up they would run to
+// white).
 export const LOOP = `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -74,19 +76,11 @@ out vec4 outColor;
 uniform sampler2D uNow;
 uniform sampler2D uLast;
 uniform float uAspect;
-uniform float uZoom;
-uniform float uTurn;
 uniform vec2 uDrift;
-uniform float uStretch;
-uniform vec3 uWobble;
 uniform float uKeep;
+${WARP_GLSL}
 void main() {
-  vec2 p = (vUv - 0.5) * vec2(uAspect, 1.0);
-  p /= uZoom;
-  float c = cos(uTurn), s = sin(uTurn);
-  p = vec2(c * p.x - s * p.y, s * p.x + c * p.y);
-  p *= vec2(1.0 / uStretch, uStretch);
-  p += uWobble.x * vec2(sin(p.y * uWobble.y + uWobble.z), cos(p.x * uWobble.y - uWobble.z));
+  vec2 p = warpFrom((vUv - 0.5) * vec2(uAspect, 1.0));
   vec2 uv = p / vec2(uAspect, 1.0) + 0.5 - uDrift;
   vec3 last = textureLod(uLast, uv, 0.0).rgb;
   vec3 now = texture(uNow, vUv).rgb;

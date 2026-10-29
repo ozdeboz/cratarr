@@ -10,7 +10,7 @@ import type { FrameInfo, PictureModule } from '../patch';
 import { done, program } from '../sources/gl';
 import { WAVE_BEND } from '../fluid';
 import { FIELD_GLSL, GIANT_GLSL } from '../field';
-import { keptPerSecond } from '../loopmods';
+import { keptPerSecond, WARP_GLSL, WarpClock, warpFrame, warpUniforms } from '../loopmods';
 import { inverse, toScreen, transformOf } from '../transform';
 import { none } from './shared';
 
@@ -52,7 +52,15 @@ float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 `;
 
 /** Each module's fragment shader body (after HEAD), and its uniforms from its knobs. */
-const PASSES: Record<string, { glsl: string; uniforms: (k: Record<string, number>, frame: FrameInfo, w: number, h: number) => Record<string, number | [number, number] | [number, number, number] | [number, number, number, number]> }> = {
+const PASSES: Record<
+  string,
+  {
+    glsl: string;
+    /** It runs the Warp's clocks (loopmods.ts WarpClock), a frame at a time, and is given them. */
+    clock?: true;
+    uniforms: (k: Record<string, number>, frame: FrameInfo, w: number, h: number, clock?: WarpClock) => Record<string, number | [number, number] | [number, number, number] | [number, number, number, number]>;
+  }
+> = {
   // Each pixel read where the Transform brought it from (its map back), mirrored past the edges as the shapes read.
   transform: {
     glsl: `uniform vec4 uBack;
@@ -183,34 +191,21 @@ void main() {
     uniforms: (k) => ({ uSaturation: Math.max(0, 1 + (k.saturation ?? 0)) }),
   },
   // Warp and Keep on their own (the picture's own loop as modules: compose.ts draws the usual loop in one pass): the
-  // picture read where the Warp moves it from about the middle (a second's worth at full: half again larger or
-  // smaller, half a turn, a fifth of the picture across), and kept by the Keep's share.
+  // picture read where the Warp moves it from about its centre, alike or by place as its grid says (loopmods.ts
+  // WARP_GLSL: a second's worth at full, half again larger or smaller, half a turn, a fifth of the picture across), and
+  // kept by the Keep's share.
   warp: {
-    glsl: `uniform float uZoom;
-uniform float uTurn;
-uniform vec2 uDrift;
-uniform float uStretch;
-uniform vec3 uWobble;
+    glsl: `uniform vec2 uDrift;
+${WARP_GLSL}
 void main() {
   float aspect = uAspect.y / uAspect.x;
-  vec2 p = (vUv - 0.5) * vec2(aspect, 1.0);
-  p /= uZoom;
-  float c = cos(uTurn), s = sin(uTurn);
-  p = vec2(c * p.x - s * p.y, s * p.x + c * p.y);
-  p *= vec2(1.0 / uStretch, uStretch);
-  p += uWobble.x * vec2(sin(p.y * uWobble.y + uWobble.z), cos(p.x * uWobble.y - uWobble.z));
+  vec2 p = warpFrom((vUv - 0.5) * vec2(aspect, 1.0));
   o = textureLod(uIn, p / vec2(aspect, 1.0) + 0.5 - uDrift, 0.0);
 }`,
-    uniforms: (k, frame) => {
-      const a = k.amount ?? 0;
-      const dt = frame.dt;
-      return {
-        uZoom: Math.exp(0.4 * a * (k.zoom ?? 0) * dt),
-        uTurn: Math.PI * a * (k.turn ?? 0) * dt,
-        uDrift: [0.2 * a * (k.driftX ?? 0) * dt, 0.2 * a * (k.driftY ?? 0) * dt],
-        uStretch: Math.exp(0.2 * a * (k.stretch ?? 0) * dt),
-        uWobble: [0.02 * a * (k.wobble ?? 0) * Math.min(1, dt * 30), 4 + 20 * (k.wobbleSize ?? 0.5), frame.time * 1.7],
-      };
+    clock: true,
+    uniforms: (k, frame, w, h, clock) => {
+      const f = warpFrame([k], frame.dt, w / h, frame.time, clock ?? { petal: 0, ring: 0 });
+      return { ...warpUniforms(f), uDrift: f.drift };
     },
   },
   keep: {
@@ -235,8 +230,11 @@ export function createNode(type: string, gl: WebGL2RenderingContext): ModuleNode
     return locs.get(n)!;
   };
   const vao = gl.createVertexArray()!;
+  // Its own clocks (a Warp's petals and rings), run on by each frame it draws.
+  const clock = pass.clock ? new WarpClock() : undefined;
   return {
     draw(gl, inputs, out, width, height, knobs, frame) {
+      clock?.run(knobs, frame.dt);
       gl.bindFramebuffer(gl.FRAMEBUFFER, out);
       gl.viewport(0, 0, width, height);
       gl.disable(gl.BLEND);
@@ -250,7 +248,7 @@ export function createNode(type: string, gl: WebGL2RenderingContext): ModuleNode
       gl.uniform1i(at('uBy'), 1);
       gl.uniform2f(at('uAspect'), Math.min(1, height / width), Math.min(1, width / height));
       gl.uniform2f(at('uPx'), 1 / width, 1 / height);
-      for (const [n, v] of Object.entries(pass.uniforms(knobs, frame, width, height))) {
+      for (const [n, v] of Object.entries(pass.uniforms(knobs, frame, width, height, clock))) {
         if (typeof v === 'number') gl.uniform1f(at(n), v);
         else if (v.length === 2) gl.uniform2f(at(n), v[0], v[1]);
         else if (v.length === 3) gl.uniform3f(at(n), v[0], v[1], v[2]);
