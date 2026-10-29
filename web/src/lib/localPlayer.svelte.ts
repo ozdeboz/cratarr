@@ -29,6 +29,8 @@ import { DEVICE } from './deviceMusic.svelte';
 import { RATE_FLOOR, RATE_TOP } from './rates';
 import { brakeLengthMs, FLIGHT_TOP, HOLD_TOP, holdWind, PIECE_MS, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
 import { isPhone } from './device';
+import { shuffled } from './shuffle';
+import { toast } from './toast.svelte';
 
 export type LocalTrack = {
   /** Its entry in a player's queue (decision 0033), once Cratarr or the app has given it one. */
@@ -131,8 +133,9 @@ const LEAD = 60;
 const SLICE = 256 * 1024;
 /** Drop played audio older than this behind the playing position (s). */
 const BEHIND = 30;
-/** Previous restarts the track after this many seconds (Finamp: 5). */
-const RESTART_AFTER = 5;
+/** Previous restarts the track after this many seconds (Finamp: 5): every player's rule, the app's and Kodi's (the
+ *  server's) too, so the remote predicts with it as well. */
+export const RESTART_AFTER = 5;
 
 // The stream this browser offers: MediaSource, or on iPhone and iPad (Safari 17.1 on) only ManagedMediaSource, which
 // works the same but lets the browser say when to fetch (startstreaming, endstreaming) and drop buffered audio itself
@@ -1335,7 +1338,9 @@ function hand(op: string, args: Record<string, unknown> = {}) {
           : op === 'sleep'
             ? { command: 'sleep', at_ms: args.atMs, ...(args.endOfTrack ? { end_of_track: true } : {}) }
             : { command: op, ...args };
-  playerCommand(driven, command).catch((e) => (local.error = e instanceof Error ? e.message : String(e)));
+  // A failed command is a toast of its own: `local.error` is the playing track's, and the player's next report clears it
+  // (the architecture audit, 2026-10-29: the toast went within a second).
+  playerCommand(driven, command).catch((e) => toast.fail(e, "The player didn't take it"));
 }
 
 /** The position now, to the frame (the visuals' beats, decision 0046), where `local.position` moves four times a
@@ -1379,16 +1384,6 @@ export function addedAhead(queue: LocalTrack[], index: number): LocalTrack[] {
 /** The album's or playlist's own order kept on its tracks (`n`), for turning shuffle off later. */
 const numbered = (tracks: LocalTrack[]) => tracks.map((t, i) => (t.lane || t.n !== undefined ? t : { ...t, n: i }));
 
-/** In a random order (Fisher-Yates). */
-function shuffledCopy<T>(items: T[]): T[] {
-  const a = [...items];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
 /** What comes of the album or playlist in its own order again, from the playing track on; those from before it last,
  *  so nothing is lost. Tracks without a place keep theirs, at the end. */
 function inOrder(rest: LocalTrack[], from: number): LocalTrack[] {
@@ -1428,7 +1423,7 @@ export function setShuffle(on: boolean) {
   const own = rest.filter((t) => !t.lane);
   const others = rest.filter((t) => t.lane && t.lane !== 'autoplay');
   const tail = rest.filter((t) => t.lane === 'autoplay');
-  replaceUpcoming([...ahead, ...after.slice(0, run), ...(on ? shuffledCopy(own) : inOrder(own, reached(local.queue, local.index))), ...others, ...tail]);
+  replaceUpcoming([...ahead, ...after.slice(0, run), ...(on ? shuffled(own) : inOrder(own, reached(local.queue, local.index))), ...others, ...tail]);
 }
 
 /** Shuffle, once (the owner, 2026-10-23: a queue always has an order; shuffle is an action, not a state): what comes of
@@ -1448,7 +1443,7 @@ export function shuffleUpcoming(): LocalTrack[] | null {
   const others = rest.filter((t) => t.lane && t.lane !== 'autoplay');
   const tail = rest.filter((t) => t.lane === 'autoplay');
   local.shuffled = false;
-  replaceUpcoming([...ahead, ...after.slice(0, run), ...shuffledCopy(own), ...others, ...tail]);
+  replaceUpcoming([...ahead, ...after.slice(0, run), ...shuffled(own), ...others, ...tail]);
   return before;
 }
 
@@ -1679,7 +1674,7 @@ function nextRound() {
     : local.queue.filter((t, i, all) => !t.lane && all.findIndex((x) => x.source === t.source && x.id === t.id) === i);
   if (!round.length) return;
   if (local.shuffled) {
-    round = shuffledCopy(round);
+    round = shuffled(round);
     const last = local.queue[local.index];
     if (round.length > 1 && round[0].source === last.source && round[0].id === last.id) round.push(round.shift()!);
   }
@@ -1713,7 +1708,7 @@ export function playQueue(tracks: LocalTrack[], index = 0, from: string | null =
   // its own.
   const left = handed() ? null : standing();
   tracks = numbered(tracks);
-  if (shuffle) [tracks, index, position] = [shuffledCopy(tracks), 0, 0];
+  if (shuffle) [tracks, index, position] = [shuffled(tracks), 0, 0];
   // A queue moved here whole keeps its shuffle.
   local.shuffled = shuffle || looksShuffled(tracks, index);
   // Something new turns repeat one off; repeat all stays (decision 0033, amended).
@@ -4025,6 +4020,17 @@ export function playOnCommand(m: Record<string, unknown>): boolean {
     case 'direction':
       if (m.dir === 'L' || m.dir === 'R') turnTape(m.dir);
       return false;
+    // Previous or Next held on another device (decision 0074): wound here as a hold here is. Where this player's hold is
+    // off, the press is the plain skip it would be, as the app does (the architecture audit, 2026-10-29: this case was
+    // missing, so a hold sent to a page's player was dropped).
+    case 'wind': {
+      const dir = m.dir === 'forward' ? 'forward' : 'back';
+      if (m.phase === 'stop') windRelease(dir);
+      else if (windsOn(dir === 'back' ? 'holdBack' : 'holdFwd')) void windHold(dir);
+      else if (dir === 'back') previous();
+      else next();
+      return false;
+    }
     // Level the volume set from another device (the owner, 2026-10-27): on or off, and what an unmeasured track gets.
     case 'level':
       if (typeof m.on === 'boolean') setLevelling(m.on);

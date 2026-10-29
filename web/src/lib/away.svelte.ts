@@ -8,6 +8,7 @@ import { downloads, inApp, onApp } from './app.svelte';
 import { DEVICE } from './deviceMusic.svelte';
 import { offline } from './offline.svelte';
 import { reach, unreached } from './reach.svelte';
+import { shuffled } from './shuffle';
 
 export const NOT_HERE = 'Not on this device';
 
@@ -46,16 +47,6 @@ export const albumHere = (source: string, album: string) => onDevice.albums.get(
 export const albumAway = (source: string, album: string) => reach.away && source !== DEVICE && albumHere(source, album) === 0;
 /** Out of reach, and none of these tracks on the device. */
 export const rowsAway = (source: string, ids: (string | null | undefined)[]) => reach.away && !ids.some((id) => here(source, id));
-
-/** Fisher–Yates. */
-function mixed<T>(list: T[]): T[] {
-  const out = [...list];
-  for (let i = out.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [out[i], out[j]] = [out[j], out[i]];
-  }
-  return out;
-}
 
 /** The collection's rows as last read (its kept copy, the server out of reach), with their source. */
 async function rowsOf(what: Picking, source: string | undefined): Promise<{ source: string; rows: PlaylistRow[] } | null> {
@@ -113,7 +104,7 @@ export async function pickHere(what: Picking, how: PlayHow, from: string | undef
     tracks = pick.map((t, n) => ({ ...t, n }));
   }
   if (!tracks.length) throw new ApiError(NOT_HERE);
-  if (how === 'shuffle') return { source: tracks[0].source, tracks: mixed(tracks), index: 0, total: tracks.length };
+  if (how === 'shuffle') return { source: tracks[0].source, tracks: shuffled(tracks), index: 0, total: tracks.length };
   const at = from ? Math.max(0, tracks.findIndex((t) => t.id === from)) : 0;
   return { source: tracks[0].source, tracks, index: at, total: tracks.length };
 }

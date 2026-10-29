@@ -1,7 +1,7 @@
 # Contributing
 
-Cratarr is a Rust server, a Svelte web app built into it, and a thin Android app. This is how to build it, check a
-change, and propose one.
+Cratarr is a Rust server, a Svelte web app built into it, an Android app that plays natively around that page, and a
+desktop app (Electron) around the same page. This is how to build it, check a change, and propose one.
 
 ## Building and running
 
@@ -15,15 +15,18 @@ change, and propose one.
   in an otherwise empty image.
 - **Android app** (`android/`): see [android/README.md](android/README.md#building) (Android Studio's JDK and the
   Android SDK, then `./gradlew assembleDebug`).
+- **Desktop app** (`desktop/`): see [desktop/README.md](desktop/README.md) (Node 22, `npm ci`, then `npm run dist`).
 
 ## Before a change goes in
 
 - **Server**: `cargo check` and `cargo test` in `server/`: the whole suite, not only the part changed, and no new
   warnings. Both, because a test build can compile what a real build cannot (a method kept for tests only, used in
   the server).
-- **Web**: `pnpm check` in `web/` (svelte-check, no errors or warnings), and the change looked at in a browser, at a
-  phone's width too where it shows there (`pnpm check:phone` checks that no page scrolls sideways at 390 px).
-- **Android**: `./gradlew assembleDebug` builds.
+- **Web**: `pnpm check` in `web/` (svelte-check, no errors or warnings) and `pnpm test`, and the change looked at in a
+  browser, at a phone's width too where it shows there (`pnpm check:phone` checks that no page scrolls sideways at
+  390 px).
+- **Android**: `./gradlew testDebugUnitTest assembleDebug` passes and builds.
+- **Desktop**: `npm run check` in `desktop/` (no address of one house in the build).
 - **Decisions**: choices that shape the product or its data are written down first in
   [docs/decisions](docs/decisions) (`NNNN-slug.md`: status, date, context, decision, consequences), and a later change
   to one is a dated amendment to it. Bigger ideas that are not decided yet go in [docs/plans.md](docs/plans.md).
@@ -44,11 +47,12 @@ change, and propose one.
 ## How the repository is kept
 
 - `main` is what was released, and moves only at a release.
-- Work happens on branches named for it. They come together on a development branch, where the pieces are checked
-  together and run on a real install before they are released; a working branch takes the development branch back in
-  whenever it needs what landed there. A pull request against `main` is brought onto the development branch the same
-  way.
-- A release is the development branch, checked as a whole, brought onto `main` (a fast-forward) with the version in
-  `server/Cargo.toml` and `web/package.json` raised, and tagged `vX.Y.Z`. The tag builds the image for amd64 and arm64
+- Work happens on branches named for it, each from `trunk`, the development branch, which holds all of Cratarr: the
+  server, the web app, the Android and desktop apps and the docs. A branch comes back with a merge, never as a copy of
+  its files, so the history tells what is where; there the pieces are checked together and run on a real install
+  before they are released, and a working branch takes `trunk` back in whenever it needs what landed there. A pull
+  request against `main` is brought onto `trunk` the same way.
+- A release is `trunk`, checked as a whole, with the version raised in one commit (`server/Cargo.toml` and its lock,
+  `web/package.json`, the Android and desktop apps), tagged `vX.Y.Z` and brought onto `main` (a fast-forward). The tag builds the image for amd64 and arm64
   and makes the GitHub release ([.github/workflows/release.yml](.github/workflows/release.yml)), so what runs can always
   be found again. Builds before 0.8 were tagged `preview-N`.
