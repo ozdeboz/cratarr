@@ -19,7 +19,7 @@ import { LivePatch } from './engine/live-patch';
 import { randomize, randomizeCables, randomizeMacros, scopeNamed, type Randomized, type Scope } from './engine/randomize';
 import { settingsOfPatch } from './engine/settings-view';
 import { FREE, holding, leversOf, STANDING, type Levers } from './engine/sidechain';
-import { between, coloured, evolved, flameOf, measuring, partsAt, PRESET_KEYS, seedOf, type ColourMode, type Flame, type Preset } from './flame';
+import { seedOf } from './flame';
 import type { FrameStats, MeterValues } from './meters';
 import { musicNow, stopMusic } from './music.svelte';
 import { newNormalState, signalsFor } from './normal';
@@ -41,9 +41,6 @@ const ANOTHER_MS = 1500;
 const MIN_POINTS = 1 << 14;
 /** How many seeds the dice try against the track before taking the least over its limits. */
 const TRIES = 8;
-const SHAPING = PRESET_KEYS.filter((k) => k !== 'spread' && k !== 'purity');
-const BY_DEGREES = new Set<string>(['detail', 'twist', 'warp', 'hue', 'lightness', 'vividness']);
-const modeOf = (family: number): ColourMode => (family >= 5 ? 'fire' : family >= 4 ? 'cover' : 'rainbow');
 
 /** A module of a patch by its flattened id (`show/curve`: the Show device's Curve), devices opened. */
 function moduleAt(p: PatchV2, id: string) {
@@ -174,22 +171,14 @@ export class VisualsLoop {
     let meterValues: MeterValues | undefined;
     let meteredAt = 0;
 
-    // The flame: blended from (`from`) to the look's (`to`); `shown` the last drawn. The look as the Flame's knobs
-    // make it, made anew when they change; a change blends in as `nextBlend` asks (a new track's look, the dice), else
-    // over a second and a half, one dragged by degrees at once.
-    let from: Flame | null = null;
-    let to: Flame | null = null;
-    let shown: Flame | null = null;
-    let blendStart = 0;
-    let blendMs = BLEND_MS;
+    // The Flame's look, framing and place on the screen are its node's (engine/flame-node.ts); the loop gives it what
+    // only the page has: the cover's colours (fetched here once its Colours want them) and how long this frame's change
+    // glides, as its cause asks (a new track's look, the dice, a step moved on: `nextBlend`).
     let nextBlend: number | null = null;
     let lookCame: FrameStats['look'] = null;
-    let base: Flame | null = null;
-    let made: Record<string, number> | null = null;
-    let madeColours = '';
     let cover: { key: string; colours: PaletteColour[] | null } | null = null;
+    let wantsCover = false;
     let coverPicture: { key: string; image: HTMLImageElement | null } | null = null;
-    let fire = 0;
     let key: string | null | undefined;
     let looked = false;
 
@@ -277,11 +266,6 @@ export class VisualsLoop {
       return best ?? { values, cables };
     };
 
-    // The fluid's pushes: where the Flame's parts are on the screen, measured four times a second while it flows.
-    let partsWhere: ([number, number] | null)[] = [];
-    // Where the Flame is (its outputs), as last measured.
-    let flameFrame: { x: number; y: number; size: number; coverage: number } | null = null;
-    let partsMeasured = 0;
     let passes = Math.min(ceilingOf(how.quality, devicePixels()).steps, pace?.passes ?? Infinity);
     let last = performance.now();
     let drawnAt = 0;
@@ -299,9 +283,6 @@ export class VisualsLoop {
     let settlingFrames = 0;
     let steppedUp = 0;
     let steppedDown = 0;
-    let frame: { center: [number, number]; size: number; coverage: number } | null = null;
-    let measured = 0;
-    let measure: ReturnType<typeof measuring> | null = null;
     let counted = { since: performance.now(), frames: 0 };
     let fps = 0;
     let reported = 0;
@@ -338,14 +319,7 @@ export class VisualsLoop {
       // The patch: as the engine runs it, its values eased where a roll moves them; as settings for the picture's side.
       const patch = host.store.patch;
       const flat = live.update(patch);
-      const flatTypes = new Map(flat.modules.map((x) => [x.id, x.type]));
       const flameId = flat.modules.find((x) => x.type === 'flame')?.id;
-      // The Flame's parts as seeds where its Points are cabled into Streamlines (measured then as for the Fluid's pushes).
-      const flameSeeding = !!flameId && flat.cables.some((c) => c.from.module === flameId && c.from.port === 'points' && (flatTypes.get(c.to.module) === 'streamlines' || (flatTypes.get(c.to.module) === 'grid' && c.to.port === 'at')));
-      const flameSeeds = () => {
-        const aspect = renderer ? renderer.width / Math.max(1, renderer.height) : 16 / 9;
-        return partsWhere.filter((q): q is [number, number] => !!q).map(([px, py]) => (aspect > 1 ? { x: (2 * px - 1) * aspect, y: 2 * py - 1 } : { x: 2 * px - 1, y: (2 * py - 1) / aspect }));
-      };
       ease(flat, now);
       if (patch !== storeSeen || easing) {
         storeSeen = patch;
@@ -387,10 +361,9 @@ export class VisualsLoop {
         }
       }
 
-      // The colours: the cover's asked for as a track starts, where they are wanted.
-      const mode = modeOf(how.family);
+      // The cover's colours, asked for as a track starts, where the Flame's Colours want them (Cover).
       const playingNow = playing();
-      if (mode === 'cover' && playingNow && m.key && cover?.key !== m.key) {
+      if (wantsCover && playingNow && m.key && cover?.key !== m.key) {
         const want = m.key;
         cover = { key: want, colours: null };
         coverPalette(coverUrl(playingNow)).then(
@@ -400,7 +373,6 @@ export class VisualsLoop {
           () => {},
         );
       }
-      const covered = mode === 'cover' && cover?.key === m.key ? cover.colours : null;
       // The cover as a picture, where the Music's reaches the Screen or is observed.
       if (renderer.wantsCover && playingNow && m.key && coverPicture?.key !== m.key) {
         const want = m.key;
@@ -412,24 +384,7 @@ export class VisualsLoop {
           () => {},
         );
       }
-      fire += ((mode === 'fire' ? 1 : 0) - fire) * Math.min(1, dt / 1.5);
-      const lookOf = (k: string) => (how as unknown as Record<string, number>)[k];
-      const colours = `${mode}/${covered ? m.key : ''}`;
-      const changed = !made ? SHAPING : SHAPING.filter((k) => made![k] !== lookOf(k));
-      if (changed.length || colours !== madeColours) {
-        if (changed.length) base = flameOf(Object.fromEntries(PRESET_KEYS.map((k) => [k, lookOf(k)])) as Preset, false);
-        const coverCame = !changed.length && madeColours.startsWith('cover/') && colours.startsWith('cover/') && from;
-        const blend = nextBlend ?? (changed.every((k) => BY_DEGREES.has(k)) && colours === madeColours ? 0 : coverCame ? null : ANOTHER_MS);
-        if (blend && shown) {
-          from = shown;
-          blendStart = now;
-          blendMs = blend;
-        }
-        made = Object.fromEntries(SHAPING.map((k) => [k, lookOf(k)]));
-        madeColours = colours;
-        to = coloured(base!, mode, covered);
-        if (!from) shown = to;
-      }
+      const glide = nextBlend;
       nextBlend = null;
 
       // The engine over the patch, its sidechains keyed by the meters; the Flame's parts its points.
@@ -460,7 +415,16 @@ export class VisualsLoop {
         renderer!.resize(bw, bh);
         return [w, h, resized, top];
       };
-      const stepped = stepEngine(engine, flat, host.types, m, read, how, dt, { now, fluidFull: FLUID_FULL, meters: meterValues, flamePoints: partsWhere, flameFrame, aspect: renderer ? renderer.width / Math.max(1, renderer.height) : undefined, fluidFlow: renderer?.fluidFlow() });
+      const stepped = stepEngine(engine, flat, host.types, m, read, how, dt, {
+        now,
+        fluidFull: FLUID_FULL,
+        meters: meterValues,
+        aspect: renderer ? renderer.width / Math.max(1, renderer.height) : undefined,
+        fluidFlow: renderer?.fluidFlow(),
+        view: { cover: { key: m.key ?? null, colours: cover?.key === m.key ? cover.colours : null }, glide },
+      });
+      const fv = flameId ? stepped.flames[flameId] : undefined;
+      wantsCover = fv?.mode === 'cover';
       // The sidechains act only through their cables (toV2's holds, in sight); what they hold back is read off the
       // Duckers' outputs for the page's mark, nothing else.
       const sidechains = leversOf(stepped.outputs);
@@ -474,8 +438,8 @@ export class VisualsLoop {
         params: (id) => stepped.params[id],
         fields: (id) => stepped.fields[id],
         // A Grid's points, or the Flame's parts where they are on the screen (in the Grid's frame: centred, the short side
-        // -1..1), for Streamlines' seeds.
-        points: (id) => stepped.points[id] ?? (id === flameId ? flameSeeds() : undefined),
+        // -1..1), for Streamlines' seeds: the engine's.
+        points: (id) => stepped.points[id],
         cover: () => (coverPicture?.key === m.key ? coverPicture.image : null),
       };
       // A snapshot's thumbnail (picture()), from the frame just drawn.
@@ -522,77 +486,15 @@ export class VisualsLoop {
         lookCame = 'next';
       }
 
-      if (!to) return;
-      const k = from ? Math.min(1, (now - blendStart) / blendMs) : 1;
-      shown = from && k < 1 ? between(from, to, k * k * (3 - 2 * k)) : to;
-      if (k >= 1) from = null;
-      const drawnFlame = evolved(shown, fl.parts, lookOf('purity'), how.spread);
-      if (!measure && now - measured > 500) {
-        measured = now;
-        measure = frame ? measuring(drawnFlame) : measuring(drawnFlame, 6000, 6000);
-      }
-      const measuredNow = measure?.next();
-      if (measuredNow?.done) {
-        measure = null;
-        const seen = measuredNow.value;
-        if (seen) {
-          if (!frame) frame = seen;
-          else {
-            const kk = 1 - Math.exp(-0.5 / 1.5);
-            frame = {
-              center: [frame.center[0] + (seen.center[0] - frame.center[0]) * kk, frame.center[1] + (seen.center[1] - frame.center[1]) * kk],
-              size: Math.exp(Math.log(frame.size) + (Math.log(seen.size) - Math.log(frame.size)) * kk),
-              coverage: frame.coverage + (seen.coverage - frame.coverage) * kk,
-            };
-          }
-        }
-      }
-      // The Flame framed as far as its Fit (step 7): centred and sized to the view as its points fall, at 1; where they
-      // fall, at 0. A patch from before the knob: framed unless a Transform took the Flame's light (it framed it then).
-      const fitSet = flat.modules.find((x) => x.id === flameId)?.knobs.fit;
-      const transformed = fitSet === undefined && flat.cables.some((c) => c.from.module === flameId && c.from.port === 'light' && flatTypes.get(c.to.module) === 'transform');
-      const fitting = transformed ? 0 : Math.min(1, Math.max(0, stepped.knobs[flameId!]?.fit ?? fitSet ?? 1));
-      const cam =
-        frame && fitting > 0
-          ? {
-              ...drawnFlame,
-              center: [drawnFlame.center[0] + (frame.center[0] - drawnFlame.center[0]) * fitting, drawnFlame.center[1] + (frame.center[1] - drawnFlame.center[1]) * fitting] as [number, number],
-              size: Math.exp(Math.log(drawnFlame.size) + (Math.log(frame.size) - Math.log(drawnFlame.size)) * fitting),
-            }
-          : drawnFlame;
-      renderer.setFlame(cam);
-      // Where the Flame is on the screen and how much it covers (its outputs, the Transform's units), as measured.
-      if (frame) {
-        const k = d.scale / cam.size;
-        flameFrame = { x: (frame.center[0] - cam.center[0]) * k, y: (frame.center[1] - cam.center[1]) * k, size: frame.size * k, coverage: frame.coverage };
-      }
+      // The Flame as its node made it this frame: its look blended, framed as far as its Fit.
+      if (!fv) return;
+      renderer.setFlame(fv.camera);
 
       const [w, h, resized, top] = sized();
 
       // The fluid, stirred: its pushes at what reaches its `at` (the Flame's parts by default), each worth what the
       // patch's cables into Stir, Flow and Swirl give it.
       const fluidNow = d.fluid;
-      if ((fluidNow > 0 || flameSeeding) && now - partsMeasured > 250) {
-        partsMeasured = now;
-        const cam = frame ?? drawnFlame;
-        const aspect = w / h;
-        const cos = Math.cos(fl.turn);
-        const sin = Math.sin(fl.turn);
-        // In place: the engine took this list as the Flame's points.
-        partsWhere.length = 0;
-        for (const p of partsAt(drawnFlame)) {
-          if (!p) {
-            partsWhere.push(null);
-            continue;
-          }
-          let x = ((p[0] - cam.center[0]) * d.scale) / cam.size;
-          let y = ((p[1] - cam.center[1]) * d.scale) / cam.size;
-          [x, y] = [cos * x - sin * y, sin * x + cos * y];
-          if (aspect > 1) x /= aspect;
-          else y *= aspect;
-          partsWhere.push([x * 0.5 + 0.5, y * 0.5 + 0.5]);
-        }
-      }
       const fluidAt = Object.entries(stepped.pointsAt)[0]?.[1];
       const beatNow = m.playing ? m.beat : null;
       // The Show's Bend's own waves (step 5).
@@ -603,7 +505,7 @@ export class VisualsLoop {
         t: now / 1000,
         dt,
         amount: fluidNow,
-        parts: (fluidAt ?? partsWhere) as ([number, number] | null)[],
+        parts: (fluidAt ?? fv.parts) as ([number, number] | null)[],
         turns: fl.rates,
         lights: fl.hits,
         level: d.bands.map((v) => v[B.level]),
@@ -623,7 +525,7 @@ export class VisualsLoop {
 
       renderer.frame(
         passes,
-        chainNow(d, { how, levers, ceiling: device.brightness, coverage: null, fire, position: m.position, beat: beatNow, forces: stirred.forces, flow: stirred.flow, dt, speed: how.speed }),
+        chainNow(d, { how, levers, ceiling: device.brightness, coverage: null, fire: fv.fire, position: m.position, beat: beatNow, forces: stirred.forces, flow: stirred.flow, dt, speed: how.speed }),
         w,
         h,
         inputs,

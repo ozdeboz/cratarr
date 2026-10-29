@@ -19,6 +19,8 @@ import { COLUMN_OFFSETS, ENGINE_MODULES, MOST_POINTS, RANDOMIZE_SCOPES, READINGS
 import { A, AMOUNT_ASPECTS, ASPECTS, B, BAND_SIGNALS, KNOB_ASPECTS, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, given as columnsFor, type Aspect, type Given } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
 import { newFlame, stepFlame, type FlameNow, type FlameState } from './chain';
+import { newFlameNode, stepFlameNode, type FlameNodeState, type FlameView } from './flame-node';
+import type { PaletteColour } from '../palette';
 import { newDucker, stepDucker, type DuckerState } from './compressor';
 import { newClockTriggers, stepClockTriggers, type ClockTriggerState, type ClockTriggers } from './clock';
 import { gridOf, type Grid, type GridPoint } from './grid';
@@ -121,6 +123,8 @@ export type EngineState = {
   accents: Record<string, AccentState>;
   /** Each Flame's own state (its node's, step 5), by module. */
   flames: Record<string, FlameState>;
+  /** Each Flame's look, framing and place on the screen (flame-node.ts), where the engine runs with a view. */
+  flameNodes: Record<string, FlameNodeState>;
   /** Each Field's time run on. */
   fieldPhases: Record<string, number>;
   modulators: Record<string, { type: string; run: Modulator }>;
@@ -158,6 +162,7 @@ export function newEngine(): EngineState {
     }),
     accents: {},
     flames: {},
+    flameNodes: {},
     fieldPhases: {},
     modulators: {},
     values: {},
@@ -207,6 +212,8 @@ export type EngineFrame = {
   /** The Dice whose trigger rose this frame (0057 §7f): each one's seed and scope, for the page to randomize the patch
    *  with (randomize.ts: over frames, as one undoable change through the store). */
   dice: DiceRoll[];
+  /** What each Flame draws with this frame (flame-node.ts: its look, framed), where the engine runs with a view. */
+  flames: Record<string, FlameView>;
 };
 
 /** A chain module's node values (EngineFrame.params), by its type. */
@@ -254,6 +261,11 @@ export type EngineOptions = {
   flameFrame?: { x: number; y: number; size: number; coverage: number } | null;
   /** The picture's width over its height (where a Flame's parts are, in a Grid's frame). */
   aspect?: number;
+  /** Run with a view (the page's frame loop): each Flame's look, framing and place on the screen worked out by its node
+   *  (flame-node.ts), from the playing track's cover colours as the page has them and how long this frame's change of
+   *  look glides (a new track's, the dice's, a step's; null: as a knob's). Its parts and outputs are then its own, not
+   *  `flamePoints` and `flameFrame` (a lab's or a test's, without a view). */
+  view?: { cover: { key: string | null; colours: PaletteColour[] | null }; glide: number | null };
   /** The Fluid's flow where a Grid drifting on it is (the frame's units a second), as the renderer last read it back. */
   fluidFlow?: (x: number, y: number) => [number, number];
 };
@@ -277,6 +289,9 @@ type Plan = {
   /** The first module of each type (the engine's own are one a patch). */
   first: Map<string, Module>;
   flame: Module | undefined;
+  /** Whether something reads a Flame's parts on the screen: a Fluid (its pushes, normalled to them), a cable from its
+   *  points (a Grid's or Streamlines' seeds). */
+  readsFlameParts: boolean;
   /** The chain's path (beside its Flame). */
   at: string;
   gateOf: Map<string, CableV2>;
@@ -459,6 +474,7 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
     moduleOf,
     first,
     flame,
+    readsFlameParts: p.modules.some((x) => x.type === 'fluid') || p.cables.some((c) => typeOf.get(c.from.module) === 'flame' && c.from.port === 'points'),
     at: flame ? flame.id.slice(0, flame.id.lastIndexOf('/') + 1) : '',
     gateOf,
     into,
@@ -638,7 +654,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     // A VCA's or a Merge's output, as it is (a Merge's one channel whichever is asked); a Ducker's too.
     if (PROCESSORS.has(type)) return channelsOf(f.module)[channelled(type, f.module) ? (f.channel ?? 0) : 0];
     if (type === 'meter') return opts.meters ? finite(METER_OF[f.port]?.(opts.meters)) : 0;
-    if (type === 'flame' && (f.port === 'x' || f.port === 'y' || f.port === 'size' || f.port === 'coverage')) return finite(opts.flameFrame?.[f.port]);
+    if (type === 'flame' && (f.port === 'x' || f.port === 'y' || f.port === 'size' || f.port === 'coverage')) return finite(flameFrameOf(f.module)?.[f.port]);
     if (type === 'screen' && f.port === 'guard') return guard;
     if (type === 'adsr') {
       const gate = gateOf.get(f.module);
@@ -1016,6 +1032,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   // Each chain module's node values from its own knobs (step 5): what aspects.ts made of the chain's columns, its
   // Accent's courses its own.
   const params: Record<string, NodeParams> = {};
+  const flames: Record<string, FlameView> = {};
   const follow = courseStep(step, held.swing);
   const accented = (id: string, knob: string, v: number, by = 1) => stepAccent((st.accents[`${id}|${knob}`] ??= newAccent()), v, follow, chainSettings.flash, held.swing, by);
   for (const { own } of plan.owns) {
@@ -1023,7 +1040,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     const x = moduleOf.get(own.id);
     if (own.type === 'tonemap') {
       // Its Auto exposure: as bright however much of the view the Flame covers (against a third of it), as far as the knob.
-      const coverage = opts.flameFrame?.coverage;
+      const coverage = flameFrameOf(flameModule?.id)?.coverage;
       const auto = coverage === undefined ? 1 : clamp(0.33 / Math.max(0.05, coverage), 0.4, 1.5);
       params[own.id] = { flash: (x ? finite(x.knobs.level, 1) * gainOf(own.id, 'level') : env.glow) * clamp(accented(own.id, 'glow', 1 + 0.5 * k.glow), 0.15, 3), exposure: 1 + (auto - 1) * finite(k.exposure, 1) };
     }
@@ -1041,11 +1058,31 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
       const continuity = Array.from({ length: BANDS }, (_, b) => knobOf(x, CONTINUITY_AT[b], s.continuity[b]));
       const evolution = Array.from({ length: BANDS }, (_, b) => knobOf(x, EVOLUTION_AT[b], s.evolution[b]));
       const flame = stepFlame((st.flames[own.id] ??= newFlame()), m, (knob, band) => (band === null ? k[knob] : k[`${knob}.${band}`]), { clock, continuity, evolution, accent: chainSettings.flash }, step, held);
-      params[own.id] = { scale: clamp(accented(own.id, 'zoom', 0.5 + 0.5 * k.zoom, held.size), 0.25, 1.4), flame };
+      const scale = clamp(accented(own.id, 'zoom', 0.5 + 0.5 * k.zoom, held.size), 0.25, 1.4);
+      params[own.id] = { scale, flame };
+      if (opts.view && x) {
+        // Framed as far as its Fit; a patch from before the knob framed unless a Transform took its light.
+        const fitSet = x.knobs.fit;
+        const transformed = fitSet === undefined && p.cables.some((c) => c.from.module === own.id && c.from.port === 'light' && typeOf.get(c.to.module) === 'transform');
+        const defaults = types[x.type]?.knobs;
+        flames[own.id] = stepFlameNode((st.flameNodes[own.id] ??= newFlameNode()), {
+          base: (knob) => baseOf(x, knob, defaults?.find((d) => d.id === knob)?.default ?? 0),
+          fit: transformed ? 0 : finite(k.fit, finite(fitSet, 1)),
+          now: flame,
+          scale,
+          at: opts.now,
+          dt: step,
+          cover: opts.view.cover,
+          glide: opts.view.glide,
+          aspect: finite(opts.aspect, 16 / 9),
+          readsParts: plan.readsFlameParts,
+        });
+      }
     }
   }
   for (const id of Object.keys(st.accents)) if (!moduleOf.has(id.slice(0, id.indexOf('|')))) delete st.accents[id];
   for (const id of Object.keys(st.flames)) if (!moduleOf.has(id)) delete st.flames[id];
+  for (const id of Object.keys(st.flameNodes)) if (!moduleOf.has(id)) delete st.flameNodes[id];
 
   // The frame's summary as the meters, the precheck and the labs read it (aspects.ts's AspectsNow): the Cratarr device's
   // modules' own values, each column what its module's is; none without a Flame. A view of the modules, not an engine.
@@ -1125,17 +1162,22 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   // What reaches each Fluid's `at`: the points output cabled into it (a Flame's, a Grid's), else the Flame's (its normal).
   const pointsOf = (r: PortRef): readonly (Point | null)[] | null => {
     const type = typeOf.get(r.module);
-    if (type === 'flame' && r.port === 'points') return opts.flamePoints ?? null;
+    if (type === 'flame' && r.port === 'points') return flamePointsOf(r.module);
     if (type === 'grid' && r.port === 'points') return (st.grids[r.module]?.grid.points ?? []).map((q): Point => [q.x * 0.5 + 0.5, q.y * 0.5 + 0.5]);
     return null;
   };
   const pointsAt: Record<string, readonly (Point | null)[]> = {};
   for (const x of plan.fluids) {
     const cabled = plan.intoOf.get(x.id)?.get('at')?.[0];
-    const got = cabled ? pointsOf(cabled.from) : flameModule ? (opts.flamePoints ?? null) : null;
+    const got = cabled ? pointsOf(cabled.from) : flameModule ? flamePointsOf(flameModule.id) : null;
     if (got) pointsAt[`${x.id}.at`] = got;
   }
-  return { aspects, knobs, params, outputs, macros, nexts, fields, points, pointsAt, dice };
+  // A Flame's points in a Grid's frame (Streamlines' seeds, Instance's): its parts on the screen, where it has a view.
+  for (const id of Object.keys(flames)) {
+    const seeds = gridAt({ module: id, port: 'points' });
+    if (seeds) points[id] = seeds;
+  }
+  return { aspects, knobs, params, outputs, macros, nexts, fields, points, pointsAt, dice, flames };
 
   /** A module's knobs as its macros and cables move them. */
   /** A knob's base as its macros set it, along its taper (an exponential knob's geometrically: 0057's Wild). */
@@ -1146,6 +1188,15 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     }
     return base;
   }
+  /** A Flame's parts on the screen and its outputs: its node's, as last found, where the engine runs with a view; else
+   *  as the caller gives them (a lab, a test). */
+  function flamePointsOf(id: string | undefined): readonly (Point | null)[] | null {
+    if (opts.view) return (id && st.flameNodes[id]?.parts.length ? st.flameNodes[id].parts : null) ?? null;
+    return opts.flamePoints ?? null;
+  }
+  function flameFrameOf(id: string | undefined) {
+    return opts.view ? (id ? st.flameNodes[id]?.frame : null) : opts.flameFrame;
+  }
   /** An engine module's knob's base: as set, its macros' (the Ducker's threshold under Wild). */
   function baseOf(x: Module, id: string, or: number) {
     return macroed(x.id, (types[x.type] ?? ENGINE_TYPES[x.type])?.knobs.find((k) => k.id === id) ?? ({ id } as Knob), finite(x.knobs[id], or));
@@ -1154,9 +1205,10 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   /** What a Grid's At takes: a Flame's parts where they are on the screen, in the Grid's frame (centred, the short side
    *  -1..1); none for anything else. */
   function gridAt(from: PortRef | undefined): GridPoint[] | null {
-    if (!from || typeOf.get(from.module) !== 'flame' || from.port !== 'points' || !opts.flamePoints) return null;
+    const parts = from && typeOf.get(from.module) === 'flame' && from.port === 'points' ? flamePointsOf(from.module) : null;
+    if (!parts) return null;
     const a = finite(opts.aspect, 16 / 9);
-    return opts.flamePoints.filter((q): q is Point => !!q).map(([px, py]) => (a > 1 ? { x: (2 * px - 1) * a, y: 2 * py - 1 } : { x: 2 * px - 1, y: (2 * py - 1) / a }));
+    return parts.filter((q): q is Point => !!q).map(([px, py]) => (a > 1 ? { x: (2 * px - 1) * a, y: 2 * py - 1 } : { x: 2 * px - 1, y: (2 * py - 1) / a }));
   }
 
   /** A module's step knobs its type declares, past its columns' moments. */
