@@ -93,6 +93,8 @@ class PlayerService : MediaSessionService() {
     private lateinit var sessionPlayer: Player
     /** The player the screen drives, as the session shows it meanwhile (the owner, 2026-10-23). */
     private lateinit var remote: RemotePlayer
+    /** The player's commands: Play On's and the page's, one way in. */
+    private lateinit var commands: PlayerCommands
 
     /** The server's address or the player's name changed: Play On connects again with them. A sleep timer set: kept. */
     private val prefsChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -239,6 +241,7 @@ class PlayerService : MediaSessionService() {
 
             override fun getShuffleModeEnabled() = false
         }
+        commands = PlayerCommands(this, player, sessionPlayer, prefs, startStop) { link }
         val open = PendingIntent.getActivity(
             this,
             0,
@@ -262,7 +265,7 @@ class PlayerService : MediaSessionService() {
         if (prefs.mode == Prefs.MODE_DEVICE) {
             if (DeviceMusic.on(this)) restore(prefs.savedQueue(Prefs.MODE_DEVICE)) else prefs.mode = Prefs.MODE_CRATARR
         }
-        link = PlayOnLink(this, player, prefs, sync).also { it.start() }
+        link = PlayOnLink(this, player, prefs, sync, commands).also { it.start() }
         Ready.ensure(this, "service started")
         applyOutput()
         Reach.watch(this)
@@ -673,10 +676,7 @@ class PlayerService : MediaSessionService() {
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
                 .add(SessionCommand(COMMAND_MODE, Bundle.EMPTY))
                 .add(SessionCommand(COMMAND_TARGET, Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_SKIP, Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_WIND, Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_DIRECTION, Bundle.EMPTY))
-                .add(SessionCommand(COMMAND_SEEK_WIND, Bundle.EMPTY))
+                .add(SessionCommand(COMMAND_RUN, Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller).setAvailableSessionCommands(commands).build()
         }
@@ -730,23 +730,8 @@ class PlayerService : MediaSessionService() {
             when (customCommand.customAction) {
                 COMMAND_MODE -> switchMode(args.getString("mode").orEmpty(), "page")
                 COMMAND_TARGET -> pointAt(args.getString("to").orEmpty(), "the page asked")
-                // The page's next and previous (0.9.6): through Start and stop, the page showing the change once it is
-                // made (a controller's own next shows the next track at once, before a ramp out).
-                COMMAND_SKIP -> if (args.getString("dir") == "previous") sessionPlayer.seekToPrevious() else sessionPlayer.seekToNextMediaItem()
-                // The page's Previous or Next held (decision 0074), as Play On's `wind`: where it cannot wind, a plain press
-                // on letting go.
-                // The page's tape deck direction knob (0.9.12).
-                COMMAND_DIRECTION -> startStop.setDirection(args.getString("dir") == "L")
-                // The page's seek with winding asked for (0.9.12).
-                COMMAND_SEEK_WIND -> args.getLong("positionMs").let { to -> startStop.seekTo(to, true) { player.seekTo(to) } }
-                COMMAND_WIND -> {
-                    val back = args.getString("dir") != "forward"
-                    if (args.getString("phase") == "stop") {
-                        startStop.windStop()
-                    } else {
-                        startStop.windStart(back) { if (back) sessionPlayer.seekToPrevious() else sessionPlayer.seekToNextMediaItem() }
-                    }
-                }
+                // The page's player commands, as Play On's (the page's own way where the two differ).
+                COMMAND_RUN -> runFromPage(args.getString("command"))
                 else -> return super.onCustomCommand(session, controller, customCommand, args)
             }
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
@@ -757,6 +742,17 @@ class PlayerService : MediaSessionService() {
             controller: MediaSession.ControllerInfo,
             mediaItems: MutableList<MediaItem>,
         ): ListenableFuture<MutableList<MediaItem>> = Futures.immediateFuture(mediaItems.map(::located).toMutableList())
+    }
+
+    /** A command from the page's own player (PagePlayer, [COMMAND_RUN]): Cratarr's shape, run as Play On's are. */
+    private fun runFromPage(json: String?) {
+        val m = try {
+            JSONObject(json.orEmpty())
+        } catch (e: JSONException) {
+            Log.w(TAG, "a page command that cannot be read: $json")
+            return
+        }
+        if (!commands.run(m, PlayerCommands.From.PAGE)) Log.w(TAG, "a page command this app does not know: $json")
     }
 
     /** A track's item with its file (a download's, else `/api/file/{source}/{id}`) and its cover from the server; the
@@ -850,10 +846,8 @@ class PlayerService : MediaSessionService() {
         const val COMMAND_MODE = "cratarr.MODE"
         /** The page asks where the controls point (decision 0062): `to`, self, player:<name> or server. */
         const val COMMAND_TARGET = "cratarr.TARGET"
-        const val COMMAND_SKIP = "cratarr.SKIP"
-        const val COMMAND_WIND = "cratarr.WIND"
-        const val COMMAND_DIRECTION = "cratarr.DIRECTION"
-        const val COMMAND_SEEK_WIND = "cratarr.SEEK_WIND"
+        /** The page's player commands (PagePlayer): `command`, one of Cratarr's player commands as JSON ([PlayerCommands]). */
+        const val COMMAND_RUN = "cratarr.RUN"
         /** A previous or next key held this long is a hold: it winds. */
         private const val HOLD_MS = 400L
 

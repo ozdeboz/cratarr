@@ -21,11 +21,12 @@ import org.json.JSONObject
 
 /**
  * Between the page's local player and the app's own (decision 0031, amended). The page's calls (`{"type": "player",
- * "op": …}`) become the player's; what the player does goes back to the page as `{"type": "player", "index",
- * "positionMs", "durationMs", "paused", "error", "queue"?}`. The queue's tracks are the page's own (source, id, name,
- * artist, album, album_id), kept with each media item, so a queue the player changed itself (Play On) reaches the page
- * as it is. Local mode (decision 0052) plays through the same calls, with the device's own tracks (`source` device);
- * its reports say which mode's queue they are (`mode`).
+ * "op": …}`) become the player's commands, in Cratarr's own shape ([PageCommand]), run in the service as Play On's are
+ * ([PlayerService.COMMAND_RUN], [PlayerCommands]); what the player does goes back to the page as `{"type": "player",
+ * "index", "positionMs", "durationMs", "paused", "error", "queue"?}`. The queue's tracks are the page's own (source, id,
+ * name, artist, album, album_id), kept with each media item, so a queue the player changed itself (Play On) reaches the
+ * page as it is. Local mode (decision 0052) plays through the same calls, with the device's own tracks (`source`
+ * device); its reports say which mode's queue they are (`mode`).
  */
 @OptIn(UnstableApi::class)
 class PagePlayer(private val context: Context, private val controller: MediaController, private val send: (String) -> Unit) : Player.Listener {
@@ -59,8 +60,9 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
         Prefs.shared(context).unregisterOnSharedPreferenceChangeListener(sleepChanged)
     }
 
-    private fun skip(dir: String) {
-        controller.sendCustomCommand(SessionCommand(PlayerService.COMMAND_SKIP, Bundle.EMPTY), Bundle().apply { putString("dir", dir) })
+    /** A command (Cratarr's shape) to the service, which runs it as the page's ([PlayerCommands]). */
+    private fun run(command: JSONObject) {
+        controller.sendCustomCommand(SessionCommand(PlayerService.COMMAND_RUN, Bundle.EMPTY), Bundle().apply { putString("command", command.toString()) })
     }
 
     init {
@@ -86,90 +88,25 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             it.add(m)
             return
         }
-        val c = controller
-        val mode = Prefs(context).mode
-        val local = mode == Prefs.MODE_DEVICE
+        // The page's own: local mode (decision 0052) on or off, from the app's switch (Android's permission given), and
+        // hold-to-preview.
         when (m.optString("op")) {
-            // Local mode (decision 0052) on or off, from the app's switch (Android's permission given).
-            "mode" -> switchMode(m.optString("mode"), null)
-            "queue" -> {
-                // A play of the other mode's music is that mode again (Android's permission given), never both in one.
-                val want = modeOf(m.optJSONArray("tracks")) ?: mode
-                if (want != mode) {
-                    if (want == Prefs.MODE_DEVICE && !DeviceMusic.on(context)) return
-                    if (!m.optBoolean("switched")) switchMode(want, JSONObject(m.toString()).put("switched", true))
-                    return
-                }
-                // A new play turns repeat one off; whether it comes shuffled counts for repeat all's next rounds.
-                Repeat.newPlay(context, c)
-                Prefs(context).shuffled = m.optBoolean("shuffled")
-                // Another queue, started here (decision 0033, amended): its own id and the play's name; Cratarr keeps the
-                // one before. Local mode's is its own.
-                if (!local) {
-                    Autoplay.newPlay(context, m.optJSONArray("tracks"))
-                    Prefs(context).newQueue(m.optString("name"))
-                }
-                c.setMediaItems(mediaItems(only(m.optJSONArray("tracks"), mode)), m.optInt("index", 0), m.optLong("positionMs", 0))
-                c.prepare()
-                c.playWhenReady = m.optBoolean("play", true)
-            }
-            "add" -> c.addMediaItems(m.optInt("at", c.mediaItemCount), mediaItems(only(m.optJSONArray("tracks"), mode)))
-            "move" -> c.moveMediaItem(m.optInt("from"), m.optInt("to"))
-            "remove" -> c.removeMediaItem(m.optInt("index"))
-            // Everything after the playing track replaced (the shuffle switch); the playing track plays on.
-            "upcoming" -> {
-                if (m.has("shuffled")) Prefs(context).shuffled = m.optBoolean("shuffled")
-                val from = (c.currentMediaItemIndex + 1).coerceAtMost(c.mediaItemCount)
-                c.replaceMediaItems(from, c.mediaItemCount, mediaItems(only(m.optJSONArray("tracks"), mode)))
-            }
-            "jump" -> {
-                c.seekTo(m.optInt("index"), 0)
-                play()
-            }
-            // Through the service (0.9.6, Start and stop): the change shows once it is made, after a ramp out.
-            "next" -> skip("next")
-            "previous" -> skip("previous")
-            // The tape deck's direction knob (0.9.12), through the service.
-            "direction" -> controller.sendCustomCommand(
-                SessionCommand(PlayerService.COMMAND_DIRECTION, Bundle.EMPTY),
-                Bundle().apply { putString("dir", m.optString("dir")) },
-            )
-            // Previous or Next held (decision 0074): wound while held, through the service as Play On's `wind`.
-            "wind" -> controller.sendCustomCommand(
-                SessionCommand(PlayerService.COMMAND_WIND, Bundle.EMPTY),
-                Bundle().apply {
-                    putString("dir", m.optString("dir"))
-                    putString("phase", m.optString("phase"))
-                },
-            )
-            // Its items are located by the service when they reach it.
-            "repeat" -> Repeat.set(context, c, m.optString("mode")) { it }
-            // Kept by the service (Sleep); the change reaches the page as a report.
-            "sleep" -> Sleep.set(context, m, "atMs", "endOfTrack")
-            // Kept and filled by the service (Radio); the change reaches the page as a report.
-            // Cratarr's alone: not for the device's own music.
-            "radio" -> if (!local) Radio.command(context, c, m)
-            "autoplay" -> if (!local) Autoplay.command(context, c, m)
-            "skip_favourites" -> if (!local) SkipFavourites.set(context, c, m.optBoolean("on"))
-            // `wind`: the page's own seek winding (0.9.12), wound there whatever this device says.
-            "seek" -> if (m.optBoolean("wind")) {
-                controller.sendCustomCommand(
-                    SessionCommand(PlayerService.COMMAND_SEEK_WIND, Bundle.EMPTY),
-                    Bundle().apply { putLong("positionMs", m.optLong("positionMs")) },
-                )
-            } else {
-                c.seekTo(m.optLong("positionMs"))
-            }
-            "preview" -> preview(m.optJSONObject("track"), m.optLong("positionMs"))
-            "preview-end" -> previewEnd()
-            "play" -> play()
-            "pause" -> c.pause()
-            "toggle" -> if (c.playWhenReady && c.playbackState != Player.STATE_ENDED) c.pause() else play()
-            "stop" -> {
-                c.stop()
-                c.clearMediaItems()
+            "mode" -> return switchMode(m.optString("mode"), null)
+            "preview" -> return preview(m.optJSONObject("track"), m.optLong("positionMs"))
+            "preview-end" -> return previewEnd()
+        }
+        val command = PageCommand.of(m) ?: return
+        if (command.optString("command") == "play") {
+            // A play of the other mode's music is that mode again (Android's permission given), never both in one.
+            val mode = Prefs(context).mode
+            val want = modeOf(command.optJSONArray("tracks")) ?: mode
+            if (want != mode) {
+                if (want == Prefs.MODE_DEVICE && !DeviceMusic.on(context)) return
+                if (!m.optBoolean("switched")) switchMode(want, JSONObject(m.toString()).put("switched", true))
+                return
             }
         }
+        run(command)
     }
 
     /**
@@ -208,15 +145,8 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
     /** The finger lifted: the music goes on where it was. */
     private fun previewEnd() {
         previewer?.stop()
-        if (resumeAfter) play()
+        if (resumeAfter) run(JSONObject().put("command", "resume"))
         resumeAfter = false
-    }
-
-    private fun play() {
-        val c = controller
-        if (c.playbackState == Player.STATE_IDLE) c.prepare()
-        if (c.playbackState == Player.STATE_ENDED) c.seekTo(c.currentMediaItemIndex, 0)
-        c.play()
     }
 
     /** What plays now; with the queue on request (the page said hello) and whenever it changed. */
@@ -290,18 +220,63 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
         return if (t.optString("source") == DeviceMusic.SOURCE) Prefs.MODE_DEVICE else Prefs.MODE_CRATARR
     }
 
-    /** Only the tracks of [mode]: never both in one queue. */
-    private fun only(tracks: JSONArray?, mode: String): JSONArray {
-        val out = JSONArray()
-        for (i in 0 until (tracks?.length() ?: 0)) {
-            val t = tracks?.optJSONObject(i) ?: continue
-            if ((t.optString("source") == DeviceMusic.SOURCE) == (mode == Prefs.MODE_DEVICE)) out.put(t)
-        }
-        return out
-    }
-
     private fun describe(e: PlaybackException): String {
         val name = controller.currentMediaItem?.mediaMetadata?.title ?: "A track"
         return "$name: it could not be played (${e.errorCodeName})."
+    }
+}
+
+/**
+ * The page's player calls (`{"type": "player", "op": …}`, camelCase) as the commands Cratarr sends a player (its
+ * `Command`, snake_case), which the app's player runs one way ([PlayerCommands]): `queue` is `play` (its `positionMs`,
+ * `play` and `shuffled` as `position_ms`, `paused` and `shuffle`, its `name` kept), `play` is `resume`, and `seek`'s
+ * `positionMs` and `sleep`'s `atMs` and `endOfTrack` are snake_case; the rest go by their own name and fields. A message
+ * that is a command already (`command`) goes as it is. Null for the page's own (`mode`, `preview`, `preview-end`) and
+ * anything else.
+ */
+object PageCommand {
+    /** The calls that are commands of the same name, with the same fields. */
+    private val SAME = setOf(
+        "add", "move", "remove", "upcoming", "jump", "next", "previous", "pause", "toggle", "stop",
+        "repeat", "radio", "autoplay", "skip_favourites", "direction", "wind",
+    )
+
+    fun of(m: JSONObject): JSONObject? {
+        val out = JSONObject(m.toString())
+        out.remove("type")
+        // The mark of a play that waited for a mode switch (PagePlayer), not the command's.
+        out.remove("switched")
+        if (m.has("command")) return out
+        val op = m.optString("op")
+        out.remove("op")
+        val command = when (op) {
+            in SAME -> op
+            "queue" -> {
+                out.remove("play")
+                out.put("paused", !m.optBoolean("play", true))
+                rename(out, "positionMs", "position_ms")
+                rename(out, "shuffled", "shuffle")
+                "play"
+            }
+            "play" -> "resume"
+            "seek" -> {
+                rename(out, "positionMs", "position_ms")
+                "seek"
+            }
+            "sleep" -> {
+                rename(out, "atMs", "at_ms")
+                rename(out, "endOfTrack", "end_of_track")
+                "sleep"
+            }
+            else -> return null
+        }
+        return out.put("command", command)
+    }
+
+    /** Field [from] as [to], its value as it is (a null too). */
+    private fun rename(o: JSONObject, from: String, to: String) {
+        if (!o.has(from)) return
+        o.put(to, o.get(from))
+        o.remove(from)
     }
 }

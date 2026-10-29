@@ -137,4 +137,5 @@ dependencies {
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.work.runtime)
     testImplementation(libs.junit)
+    testImplementation(libs.org.json)
 }
