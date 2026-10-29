@@ -415,8 +415,10 @@ async fn this_session(State(serve): State<Arc<Serve>>, headers: HeaderMap) -> Re
 /// `GET /api/auth/sessions`: the signed-in devices (Settings → Authentication), this one marked.
 async fn sessions(State(serve): State<Arc<Serve>>, headers: HeaderMap) -> Response {
     let current = session_of(&serve, &headers).map(|s| s.id);
-    // An administrator sees every account's sign-ins; a user, their own (decision 0051).
-    let mine = |user: &str| serve.current_is_admin() || serve.current_user().as_deref() == Some(user);
+    // An administrator sees every account's sign-ins; a user, their own (decision 0051). An administrator signed in,
+    // not one of their keys or a Subsonic login (access.rs: a key acts for them but changes nothing of the server's; the
+    // audit, 2026-10-29: a Read or Control key of an administrator listed every account's sign-ins).
+    let mine = |user: &str| super::access::administering() || serve.current_user().as_deref() == Some(user);
     match serve.sessions.list(now()) {
         Ok(list) => {
             let list: Vec<_> = list
@@ -435,8 +437,8 @@ async fn sessions(State(serve): State<Arc<Serve>>, headers: HeaderMap) -> Respon
 
 /// `DELETE /api/auth/sessions/{id}`: signs that device out.
 async fn sign_out_device(State(serve): State<Arc<Serve>>, Path(id): Path<String>) -> Response {
-    // An administrator ends anyone's sign-in; a user, their own (decision 0051).
-    if !serve.current_is_admin() {
+    // An administrator signed in ends anyone's sign-in; a user, or an administrator's key, their own (decision 0051).
+    if !super::access::administering() {
         let theirs = serve.sessions.list(now()).ok().and_then(|l| l.into_iter().find(|s| s.id == id)).map(|s| s.user);
         if theirs.is_some() && theirs != serve.current_user() {
             return (StatusCode::NOT_FOUND, axum::Json(json!({ "error": "No such session." }))).into_response();

@@ -206,13 +206,6 @@ impl Serve {
         }
     }
 
-    /// Whether the running request is an administrator's (as `current_user`: the owner while signing in is off).
-    pub fn current_is_admin(&self) -> bool {
-        match who::current() {
-            Some(w) => w.admin,
-            None => !self.sign_in_required(),
-        }
-    }
 
     /// Whether every request needs a sign-in now (decision 0043): when switched on, and once there is an account to
     /// sign in with.

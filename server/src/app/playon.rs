@@ -217,6 +217,13 @@ pub struct Report {
     /// sounds). The tape's own stops and starts are not this. Apps from before leave it out.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub starting: bool,
+    /// How it moves (0075): track ms per ms, signed, and how fast that changes a second; a page following it counts on
+    /// from them, as the app's own page does (the audit, 2026-10-29: the app sent them and they were dropped here).
+    /// Players from before leave them out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accel_x: Option<f64>,
     /// The direction knob as set (0.9.12): `L` backwards, `R` (or left out) forwards.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction: Option<String>,
