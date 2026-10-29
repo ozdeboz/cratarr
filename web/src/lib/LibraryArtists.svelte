@@ -405,7 +405,7 @@
 
   /* Grid: as the albums' tiles, each artist's face round in its square. */
   ul.grid {
-    grid-template-columns: repeat(auto-fill, minmax(var(--min), 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(var(--min), 100%), 1fr));
   }
 
   ul.grid li {
