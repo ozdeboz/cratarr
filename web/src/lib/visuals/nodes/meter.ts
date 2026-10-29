@@ -2,7 +2,7 @@
 // tiles (flashmeter.ts: two or more frames late, never stalling); with the frame's own numbers (the parts' turning,
 // shapes and colours, the looks) meters.ts measures from them what the frame did: its flashes, motion, churn, zoom
 // pumping, looks a minute. Its values (MeterValues) are what the engine's Meter module gives the next frame (the
-// Compressors' keys, the Screen's flash guard: claude-5f's).
+// Compressors' keys, the Screen's flash guard).
 import { FlashMeter } from '../flashmeter';
 import { Meters, type FrameStats, type MeterValues, type Tiles } from '../meters';
 

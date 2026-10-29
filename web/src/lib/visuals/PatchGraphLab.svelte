@@ -43,7 +43,7 @@
   let screenH = $state(typeof innerHeight === 'number' ? innerHeight : 800);
   const sheetH = $derived(query.has('sheet') ? Math.round(screenH * 0.4) : 0);
 
-  // A knob dragged into the empty: "New ▸ LFO / ADSR" (the app's is claude-5f's SourcePicker): the module where it was
+  // A knob dragged into the empty: "New ▸ LFO / ADSR" (the app's is the SourcePicker): the module where it was
   // let go, cabled into the knob, one step.
   let picking = $state<{ r: PickRequest; at: XY } | null>(null);
   function onpick(r: PickRequest, where: XY) {

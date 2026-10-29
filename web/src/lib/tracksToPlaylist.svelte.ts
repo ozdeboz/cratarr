@@ -116,7 +116,7 @@ export class TracksToPlaylist {
     step('lists');
     this.adding = p.id;
     try {
-      // One call where the server has it (a5, 0.9.4); else one by one, the bar at the top saying how far it is.
+      // One call where the server has it (0.9.4); else one by one, the bar at the top saying how far it is.
       const ids = this.ids();
       if (await hasBatches()) {
         const want = ids.filter((id) => !(this.states[id] && !this.states[id].addable));

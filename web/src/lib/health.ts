@@ -7,7 +7,7 @@ import { setSwitch } from './listFilter.svelte';
 /** Each domain's name and icon, in the Health page's order. */
 export const DOMAINS: Record<string, { name: string; icon: IconName }> = {
   servers: { name: 'Servers', icon: 'wifi' },
-  // The services Cratarr asks (a5, 0.9.6): each one failing (the owner, 2026-10-26: every connection's problems).
+  // The services Cratarr asks (0.9.6): each one failing (the owner, 2026-10-26: every connection's problems).
   connections: { name: 'Connections', icon: 'server' },
   library: { name: 'Library', icon: 'library' },
   incoming: { name: 'Incoming', icon: 'arrowDown' },

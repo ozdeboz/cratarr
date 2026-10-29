@@ -565,7 +565,7 @@ export function saggingPath(a: XY, b: XY, tension = CABLE_TENSION): [path: strin
 /** What a drag from a knob into the empty asks for (PatchGraph `onpick`): a source for that knob. */
 export type PickRequest = { from: 'knob'; module: string[]; knob: string };
 
-// withModulator is Visuals.svelte's (its v1 cables) until a5 mounts the store there; it goes with step 6 (S5).
+// withModulator is Visuals.svelte's (its v1 cables) until the store is mounted there; it goes with step 6 (S5).
 
 /** The Clock's beat as a cable takes it today (Music's beat: what the Clock's Beat output is until it has its own). */
 export const CLOCK_BEAT: SignalRef = { signal: 'beat' };

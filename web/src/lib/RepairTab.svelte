@@ -42,7 +42,7 @@
     const want = [...ids];
     try {
       const r = await getRepairs();
-      // One call where the server has it (a5, 0.9.4); else each playlist's, the bar saying how far.
+      // One call where the server has it (0.9.4); else each playlist's, the bar saying how far.
       const rows = await batchRows(want, prefs.source || undefined)
         .then((r) => r.playlists.map((x) => [x.id, 'rows' in x ? x.rows : []] as const))
         .catch((e) => {

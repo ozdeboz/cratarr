@@ -1,6 +1,6 @@
-// The app's deck as this page draws it (a5's reports, 0.9.14-2; the owner, 2026-10-29: a held wind's picture went in
+// The app's deck as this page draws it (reports, 0.9.14-2; the owner, 2026-10-29: a held wind's picture went in
 // strides, its sound smooth). A report says the deck's place, its speed (track s per s, signed) and how fast that
-// changes, and from a5/purity 3032a237 on, when the deck was read (`deckAtMs`: ms of the app's elapsedRealtime, an epoch
+// changes, and from 0.9.15-2 on, when the deck was read (`deckAtMs`: ms of the app's elapsedRealtime, an epoch
 // of its own). The place each moment is counted on from when the deck was read; a report's correction fades in over
 // EASE_MS instead of jumping (at 128× a report's few ms of travel are seconds of track); a gap past what the speed
 // explains (a seek, a stall) or another track's place is taken at once.

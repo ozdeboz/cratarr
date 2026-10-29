@@ -211,7 +211,7 @@ export type EngineFrame = {
   /** Each Field's flow now (field.ts): its scale and how far its time has run (Speed integrated, so a turned knob
    *  never jumps it). */
   fields: Record<string, { scale: number; phase: number }>;
-  /** Each Grid's points (its `points` output, for Instance: claude-632's compositor). */
+  /** Each Grid's points (its `points` output, for Instance: the compositor). */
   points: Record<string, GridPoint[]>;
   /** What reaches each points input (`module.port`: a Fluid's `at`, where it pushes): what is cabled into it (a Flame's
    *  points, a Grid's), else what it is normalled to (the Flame's points). For the compositor, which runs the sim. */
@@ -777,7 +777,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
       const poly = (type === 'music' && BAND_PORTS.has(readingOf(c.from.port).signal)) || (type === 'adsr' && !trackAdsr(c.from.module, typeOf, into)) || (type === 'vca' ? plan.polyphonic.has(c.from.module) : CHANNELLED.has(type));
       return poly ? Array.from({ length: CHANNELS }, (_, ch) => ({ ...c, from: { ...c.from, channel: ch } })) : [c];
     });
-  // The Screen's flash guard (WCAG 2.3.1; claude-632's limiter on the output, step 3): fixed, keyed by the flashes the
+  // The Screen's flash guard (WCAG 2.3.1; the limiter on the output, step 3): fixed, keyed by the flashes the
   // last frame made, a tenth at most held back; no knob in it.
   const guard =
     plan.first.has('screen') && opts.meters

@@ -3,7 +3,7 @@
   // has heard everything): what one has said one does not want, in one place. Excluded everywhere (decision 0024,
   // amended: out of every crate and every automatic pick), then each crate that leaves tracks out by hand; each opens
   // its own page here (`thing`: `everywhere`, or `crate:<id>`) with the list to put back (lib/ExcludedList). Then each
-  // ranked crate's Not for (a5's fit models, GET /api/crates/fits): what it avoids and its rules, in its sheet
+  // ranked crate's Not for (fit models, GET /api/crates/fits): what it avoids and its rules, in its sheet
   // (lib/NotForSheet). Radio and Autoplay are their own part since 0.9.5 (lib/settings/RadioPart).
   // First the profile as it is built (the owner, 2026-10-25: "one place to adjust it"): what it is built from, each
   // switched as Insights' Profile switches them (the same choice), how much of it AudioMuse has heard, and the profile

@@ -38,15 +38,15 @@ export const POINT_SPEED = 8;
 export const HOLD_START = 4;
 export const HOLD_TOP = 16;
 /** A hold's true speed at most (×): past its heard top it goes on getting faster by cutting, heard in pieces at that
- *  top (a5's flight_max; the owner, 2026-10-28: top speed is the heard speed, not the flight's). */
+ *  top (flight_max; the owner, 2026-10-28: top speed is the heard speed, not the flight's). */
 export const FLIGHT_TOP = 128;
 /** How long each heard piece of a wind cut short is (ms; the owner, 2026-10-28: no setting, a good default). */
 export const PIECE_MS = 350;
 /** A held wind's brake, let go or paused (the owner, 2026-10-29: "our fixed duration brake is really kind of weird.
  *  When spinning down from high speeds, braking takes longer"): constant deceleration, DECEL_X × a second at its mean,
  *  from its speed `v0` to its end's `to` (1× forwards, a stand backwards or paused); the Brake as set is its shortest,
- *  a slow wind's as before. Its shape stays the raised cosine. The app's Plan.lengthMs is the same rule (a5,
- *  0.9.15-2); taps, seeks and the tape's own stop keep the Brake. */
+ *  a slow wind's as before. Its shape stays the raised cosine. The app's Plan.lengthMs is the same rule
+ *  (0.9.15-2); taps, seeks and the tape's own stop keep the Brake. */
 export const DECEL_X = 64;
 export const brakeLengthMs = (v0: number, to: number, brakeMs: number) => Math.max(brakeMs, Math.round((Math.abs(Math.abs(v0) - to) / DECEL_X) * 1000));
 

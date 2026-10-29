@@ -1,4 +1,4 @@
-// The visuals shared by a sync play group (decision 0046, amended; the server keeps each group's settings: claude-5f's
+// The visuals shared by a sync play group (decision 0046, amended; the server keeps each group's settings:
 // /api/groups/{group}/visuals). Everything that shapes the picture is shared, so a slider moved on one device moves on
 // all of them: the look (its colours among it) and its pins, intensity, flash, speed, the grain and haze, the routes and
 // each band's times. What each device can afford (Quality, frame rate) and its brightness (a bright room, a dark one)

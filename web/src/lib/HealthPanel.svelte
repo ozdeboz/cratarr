@@ -140,7 +140,7 @@
           <AlbumMenu source="cratarr" album={{ id: item.album[1], title: item.title, artist: null }} start="cover" onclose={() => ((coverOf = null), loadHealth())} />
         {/if}
       {/if}
-      <!-- A track's file cut off or breaking off (a5, 2026-10-28): a better copy of it, as the track's menu finds one. -->
+      <!-- A track's file cut off or breaking off (2026-10-28): a better copy of it, as the track's menu finds one. -->
       {#if item.track && item.album && me.admin}
         <button class="act" onclick={() => (betterOf = item.track!)}>Find a better copy<Icon name="chevronRight" size={18} /></button>
         {#if betterOf === item.track}

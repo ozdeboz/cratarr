@@ -1,4 +1,4 @@
-// The Fluid's Fire (fluid.ts fireOf; 0.9.18, the owner via the house session's fire-e, 2026-10-29): Lift, Open walls and
+// The Fluid's Fire (fluid.ts fireOf; 0.9.18, the owner via fire-e, 2026-10-29): Lift, Open walls and
 // Cooling, each in its range; at none of them the fluid steps as it always did (six iterations, 0.8 of the pressure
 // kept), so a rack without them looks as before: npm test.
 import { test } from 'node:test';

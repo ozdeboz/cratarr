@@ -14,7 +14,7 @@ export const FIXABLE = new Set([
   'library:album-artist',
   'library:musicbrainz',
   'library:rules',
-  // A track's length (a5, 2026-10-28): read wrong, guessed, cut off, breaking off.
+  // A track's length (2026-10-28): read wrong, guessed, cut off, breaking off.
   'files:length-misread',
   'files:length-guessed',
   'files:cut-short',
@@ -55,7 +55,7 @@ export async function apply(which: ({ ids: string[] } | { certain: string }) & {
   try {
     const r = await applyFixes(which);
     // What was written leaves the finding's list at once; Health and the finding are read again behind it (the report
-    // takes ~20 s on the NAS, a5 2026-10-27: an album fixed looked unfixed until then).
+    // takes ~20 s on the NAS, 2026-10-27: an album fixed looked unfixed until then).
     const known = finding ? healthFixes[finding] : undefined;
     if (known && r.applied) {
       const failed = new Set(r.failed.map((f) => f.id));

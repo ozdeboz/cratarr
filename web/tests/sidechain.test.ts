@@ -1,5 +1,5 @@
 // Standard sidechaining (engine/sidechain.ts, decision 0057) against the levers it replaces (governor.ts), by outcome
-// (agreed with a5 and the owner: a ducker cannot follow the old bang-bang integrator frame for frame): over the
+// (agreed with the owner: a ducker cannot follow the old bang-bang integrator frame for frame): over the
 // recorded tracks, closed loop (the frame drawn, metered as the precheck meters it, the levers back into the next
 // frame), each meter is over its budget no longer than before, the hold-back on average no deeper (the flash guard
 // apart: it is safety, and stricter), and a strobe is held down at once and for as long as the rule says.

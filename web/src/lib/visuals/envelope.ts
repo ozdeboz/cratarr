@@ -1,4 +1,4 @@
-// Each band's Envelope (65, decision 0050, claude-5f's definition the owner agreed): how present the band's sound is now.
+// Each band's Envelope (65, decision 0050, the definition the owner agreed): how present the band's sound is now.
 // Pure, so the visuals and the precheck (both stepping music.svelte.ts's `musicOf` state) follow it alike.
 
 import { B } from './routes';

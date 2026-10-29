@@ -2,7 +2,7 @@
 // Cratarr needs, in Settings, in our patterns): the proxies whose forwarded address is believed (Authentication), the
 // analysis here and Beat This! (Libraries), the address players reach playing in step on (Devices). Settings wins once
 // saved; `from_env` says which the environment still sets. One read for the three parts; each change saved at once.
-// (a5's GET/PUT /api/settings/server-runtime, administrators'.)
+// (GET/PUT /api/settings/server-runtime, administrators'.)
 
 export type ServerRuntime = {
   proxies: string[];

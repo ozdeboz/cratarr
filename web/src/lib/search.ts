@@ -11,7 +11,7 @@ export type SearchResult = {
   cover?: string | null;
   /** The artist, where a result needs it apart from its line (an album not in the library: to look it up). */
   artist?: string | null;
-  /** An album not in the library: its page on Bandcamp, where an open found it (a5, 0.9.5). */
+  /** An album not in the library: its page on Bandcamp, where an open found it (0.9.5). */
   bandcamp?: string | null;
   /** An album not in the library, asked for: where it stands (lib/CoverStatus). */
   request?: import('./api').RequestMark | null;

@@ -90,11 +90,11 @@ export type Upcoming = {
 
 export type Progress = {
   position_secs: number;
-  /** Its player plays a tape's rewind (Tape rewind, a5's app): the position goes back as reported, not run on. */
+  /** Its player plays a tape's rewind (Tape rewind, the app): the position goes back as reported, not run on. */
   rewinding?: boolean;
   duration_secs: number | null;
   paused: boolean;
-  /** Asked to play from rest and not sounding yet (a5's `starting`, 2026-10-28): still, as the waveform shows it. */
+  /** Asked to play from rest and not sounding yet (`starting`, 2026-10-28): still, as the waveform shows it. */
   starting?: boolean;
   /** No player reports this track; the position is time since it started (wrong after a pause or seek). */
   estimated: boolean;
@@ -327,7 +327,7 @@ export const getLogLevels = () => quietly<LogLevels>('/api/diagnostics/levels');
 export const setLogLevels = (areas: Record<string, string>, hours: number) =>
   request<LogLevels>('/api/diagnostics/levels', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ areas, hours }) });
 /** A track's ReplayGain (decision 0035): gains in dB, peaks linear; what is not known is left out. */
-/** `trackDown`/`albumDown` (a5, 0.9.8): the dB the player turns the track down by, track- or album-wise (0 or less;
+/** `trackDown`/`albumDown` (0.9.8): the dB the player turns the track down by, track- or album-wise (0 or less;
  *  null where its gain is not known, the device's choice then applies). Older servers say only the gains and peaks. */
 export type TrackGain = { trackGain?: number; albumGain?: number; trackPeak?: number; albumPeak?: number; trackDown?: number | null; albumDown?: number | null };
 export const getTrackGain = (source: string, id: string) => quietly<TrackGain>(`/api/track/${encodeURIComponent(source)}/${encodeURIComponent(id)}/gain`);
@@ -747,7 +747,7 @@ export const radioNext = (ask: {
   skip_favourites?: boolean;
 }) =>
   post<{ tracks: QueueTrack[] }>('/api/radio/next', ask).then(({ tracks }) => ({
-    // Bandcamp's (Discover's suggestions, a5 0.9.5): previews, never in a playlist (decision 0071).
+    // Bandcamp's (Discover's suggestions, 0.9.5): previews, never in a playlist (decision 0071).
     tracks: tracks.map((t) => (t.source === 'bandcamp' ? { ...t, addable: false } : t)),
   }));
 
@@ -1148,7 +1148,7 @@ export const removeMyDevice = (id: string) => request<void>(`/api/me/devices/${e
 /** The server's version and when it started, for everyone (the rest of its settings are its administrators'). */
 /** About Cratarr: its version, since when it runs, its licence (SPDX) and where its source is. */
 export const getAbout = () => quietly<{ version: string; started: number; licence?: string; source?: string }>('/api/about');
-/** Cratarr restarted (a5, 0.9.6; its administrators'): it answers, then stops as `docker stop` stops it, and Docker's
+/** Cratarr restarted (0.9.6; its administrators'): it answers, then stops as `docker stop` stops it, and Docker's
  *  restart policy starts it again. */
 export const restartServer = () => post<{ restarting: boolean }>('/api/server/restart', {});
 /** Whether the server answers at all (its health), as a restart waits for it to be back. */
@@ -1275,22 +1275,22 @@ export type LidarrDraft = {
 export const getLidarrOptions = () => quietly<{ quality: [number, string][]; metadata: [number, string][]; roots: string[] }>('/api/settings/lidarr/options');
 /** The server's own Last.fm key for Discover (artists like each account's own most played, decision 0069 amended): in
  *  use, and saved here (else the container's LASTFM_API_KEY gives it). The key itself is never sent. */
-/** `set`: in use (false while switched off); `saved`: a key kept; `enabled`: switched on (a5, 0.9.6). */
+/** `set`: in use (false while switched off); `saved`: a key kept; `enabled`: switched on (0.9.6). */
 export const getLastfmServerKey = () => quietly<{ set: boolean; saved: boolean; enabled?: boolean }>('/api/settings/lastfm');
-/** Switched on or off, the key kept (a5, 0.9.6: off, no Discover artists from it). */
+/** Switched on or off, the key kept (0.9.6: off, no Discover artists from it). */
 export const setLastfmEnabled = (enabled: boolean) => putJson('/api/settings/lastfm', { enabled });
 /** The server's own Last.fm key saved at once; an empty one takes it away. */
 export const setLastfmServerKey = (key: string) => putJson('/api/settings/lastfm', { key });
-/** The server's Discogs app (0.9.5, a5): set or not, and the requests a minute Discogs last allowed. The secret is never
+/** The server's Discogs app (0.9.5): set or not, and the requests a minute Discogs last allowed. The secret is never
  *  sent back; both empty take it away. */
 export type DiscogsSetting = { set: boolean; per_minute: number | null; enabled?: boolean };
 export const getDiscogs = () => quietly<DiscogsSetting>('/api/settings/discogs');
 export const setDiscogs = (key: string, secret: string) =>
   request<DiscogsSetting>('/api/settings/discogs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, secret }) });
-/** Switched on or off, the keys kept (a5, 0.9.6: off, Discogs is asked nothing). */
+/** Switched on or off, the keys kept (0.9.6: off, Discogs is asked nothing). */
 export const setDiscogsEnabled = (enabled: boolean) =>
   request<DiscogsSetting>('/api/settings/discogs', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
-/** The server's slskd, Soulseek (a5, 0.9.8: single-track replacement): its address, its API key kept or not (`set`; the
+/** The server's slskd, Soulseek (0.9.8: single-track replacement): its address, its API key kept or not (`set`; the
  *  key is never sent back), the folder its completed downloads are in as Cratarr sees them, and what it answered: its
  *  version, or what is wrong. */
 export type SlskdSetting = { url: string; set: boolean; folder: string; enabled: boolean; version?: string; error?: string };
@@ -1298,16 +1298,16 @@ export const getSlskd = () => quietly<SlskdSetting>('/api/settings/slskd');
 /** Saved at once; without a key the kept one stays, an empty address takes it away. */
 export const setSlskd = (s: { url: string; key?: string; folder: string }) =>
   request<SlskdSetting>('/api/settings/slskd', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) });
-/** Switched on or off, the key kept (a5, 0.9.8: off, slskd is asked nothing). */
+/** Switched on or off, the key kept (0.9.8: off, slskd is asked nothing). */
 export const setSlskdEnabled = (enabled: boolean) =>
   request<SlskdSetting>('/api/settings/slskd', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
-/** The server's AcoustID key (a5, 0.9.8: single-track replacement fingerprints what it fetched): set or not, never sent
+/** The server's AcoustID key (0.9.8: single-track replacement fingerprints what it fetched): set or not, never sent
  *  back; an empty one takes it away. */
 export type AcoustidSetting = { set: boolean };
 export const getAcoustid = () => quietly<AcoustidSetting>('/api/settings/acoustid');
 export const setAcoustid = (key: string) =>
   request<AcoustidSetting>('/api/settings/acoustid', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key }) });
-/** How Cratarr's MusicBrainz questions stand (a5, 0.9.6; administrators'): when it last answered or failed (since the
+/** How Cratarr's MusicBrainz questions stand (0.9.6; administrators'): when it last answered or failed (since the
  *  server started), its pace, each background pass (how many of the albums with a release it has asked about). */
 export type MusicBrainzStatus = {
   enabled: boolean;
@@ -1377,7 +1377,7 @@ export const getAlbumDuplicates = () => request<{ groups: AlbumGroup[] }>('/api/
 export type HealthFinding = {
   domain: string;
   key: string;
-  /** Its short name, the panel's breadcrumb ("Quality replacements"; a5, 0.9.6); a server before it has none. */
+  /** Its short name, the panel's breadcrumb ("Quality replacements"; 0.9.6); a server before it has none. */
   name?: string;
   /** What it is, in a sentence ("11 better copies wait to replace Music"): its card's, and the panel's top. */
   title: string;
@@ -1386,7 +1386,7 @@ export type HealthFinding = {
   of?: number;
   level: 'critical' | 'warning' | 'info';
   since: number;
-  /** Where it is dealt with; `thing`: a connection's own page in Settings (a5, 0.9.6: lastfm, discogs, musicbrainz). */
+  /** Where it is dealt with; `thing`: a connection's own page in Settings (0.9.6: lastfm, discogs, musicbrainz). */
   open?: { page: string; switch?: string; thing?: string };
   /** What it is about, one by one: an album (server, id) or a playlist opens where it is. */
   items?: HealthItem[];
@@ -1403,7 +1403,7 @@ export type HealthItem = {
   missing?: string[];
   release_group?: string;
   request?: RequestMark | null;
-  /** A track's own (a5, 2026-10-28: a file cut off or breaking off): its song id in `album`, for a better copy of it. */
+  /** A track's own (2026-10-28: a file cut off or breaking off): its song id in `album`, for a better copy of it. */
   track?: string;
 };
 /** Every domain's findings, worst first, the most recent first among equals; when each domain was checked. */
@@ -1676,7 +1676,7 @@ export type Task = {
 };
 type Started = { task: Task };
 export const getTasks = () => quietly<{ tasks: Task[] }>('/api/tasks');
-/** An album's numbers as a release has them (a5, 0.9.6; Health's track numbers): where from, whether its discs stay
+/** An album's numbers as a release has them (0.9.6; Health's track numbers): where from, whether its discs stay
  *  (a CD's, a CD-sized digital release's) or run on as one (vinyl, cassette), each track now and after. */
 export type Renumbering = {
   from: 'musicbrainz' | 'discogs' | 'files';
@@ -1696,7 +1696,7 @@ export const renumber = (album: string, tracks: { id: string; disc: number; trac
 export type Fix = {
   id: string;
   album: string;
-  /** `reread`, `length`, `trim`: a track's length (a5, 2026-10-28: read again; written into its MP3; set to the sound it
+  /** `reread`, `length`, `trim`: a track's length (2026-10-28: read again; written into its MP3; set to the sound it
    *  holds), its id `<field>:<song id>`. */
   field: 'year' | 'genre' | 'albumartist' | 'musicbrainz' | 'cover' | 'rule' | 'reread' | 'length' | 'trim';
   from: string | null;
@@ -1747,7 +1747,7 @@ export type ArtistDiscogs = {
 };
 export const getArtistDiscogs = (name: string, mbid?: string | null) =>
   quietly<ArtistDiscogs>(`/api/artists/discogs?name=${encodeURIComponent(name)}${mbid ? `&mbid=${encodeURIComponent(mbid)}` : ''}`);
-/** A track as the server describes it (decision 0033, amended: the queue holds identities, Cratarr describes them; a5,
+/** A track as the server describes it (decision 0033, amended: the queue holds identities, Cratarr describes them;
  *  0.9.6): `found` false for one it does not know (its name empty); `favorite` the signed-in account's, null for none. */
 export type DescribedTrack = {
   source: string;
@@ -1763,7 +1763,7 @@ export type DescribedTrack = {
 };
 /** At most 500 at a time, in the order asked. */
 export const describeTracks = (tracks: { source: string; id: string }[]) => post<{ tracks: DescribedTrack[] }>('/api/tracks/describe', { tracks });
-/** Stops one of the account's tasks (a5, 0.9.6: Change cover's look, once a cover is chosen). */
+/** Stops one of the account's tasks (0.9.6: Change cover's look, once a cover is chosen). */
 export const stopTask = (id: number) => request<unknown>(`/api/tasks/${id}`, { method: 'DELETE' });
 
 /** An album Discover suggests (decision 0069): outside the library, with why (one reason a source). */
@@ -1790,7 +1790,7 @@ export type DiscoverAlbum = {
   /** How many albums the artist new to the library has released, where the look found out (New to you). */
   artist_albums?: number;
   /** A new artist's own page on Bandcamp (from MusicBrainz, read with the picture), and whether they have anything
-   *  there at all (that page, or an album of theirs found there): New to you's order and Listen (a5, 2026-10-27). */
+   *  there at all (that page, or an album of theirs found there): New to you's order and Listen (2026-10-27). */
   artist_bandcamp?: string | null;
   artist_on_bandcamp?: boolean;
   /** What MusicBrainz calls it (album, EP, single…), its genres, length, track count; Last.fm's listeners (0.9). */
@@ -1837,7 +1837,7 @@ export const wantDiscover = (key: string) => post<{ request: AlbumRequest }>('/a
 
 /** An album's own state beside its request's (decision 0070). */
 /** Where an album not in the library that was asked for stands (the owner, 2026-10-25; lib/CoverStatus): wanted, or
- *  downloading (`done`, 0 to 1). The server's, on what it lists (a5, 0.9.5); none once it is in the library. */
+ *  downloading (`done`, 0 to 1). The server's, on what it lists (0.9.5); none once it is in the library. */
 export type RequestMark = { state: 'wanted' | 'downloading'; done?: number | null };
 export type RequestedAlbum =
   | { state: 'requested' | 'looking' | 'in_incoming' | 'in_library' | 'unknown' }
@@ -1898,14 +1898,14 @@ export type MissingAlbum = {
   year: number | null;
   kind: string | null;
   cover: string | null;
-  /** Its page on Bandcamp, where an open found it (the server keeps a find a month; a5, 0.9.5). */
+  /** Its page on Bandcamp, where an open found it (the server keeps a find a month; 0.9.5). */
   bandcamp?: string | null;
   request?: RequestMark | null;
 };
 /** Every album missing from the library's artists read so far (`artists`: how many), newest first. */
 export const getDiscoverMissing = () => quietly<{ albums: MissingAlbum[]; artists: number }>('/api/discover/missing');
 /** One artist's missing albums (their page). */
-/** `release_group`: one of theirs, so an artist the library lacks is found by it on MusicBrainz (a5, 0.9.6); `mbid`
+/** `release_group`: one of theirs, so an artist the library lacks is found by it on MusicBrainz (0.9.6); `mbid`
  *  the artist's own. */
 export const getArtistMissing = (name: string, hint: { release_group?: string | null; mbid?: string | null } = {}) => {
   const q = new URLSearchParams({ name });
@@ -2084,7 +2084,7 @@ export async function searchBeyond(q: string, limit = 20, offset = 0): Promise<B
     artists: r.artists,
   };
 }
-/** A wind's plan, without its sound (a5's map=1): where in the track(s) each moment of its stream is. */
+/** A wind's plan, without its sound (map=1): where in the track(s) each moment of its stream is. */
 export const windMap = (url: string) =>
   quietly<{ map: [number, number, number][]; speed: number; length_ms: number }>(`${url}${url.includes('?') ? '&' : '?'}map=1`);
 export const albumView = (source: string, album: string) =>
@@ -2161,7 +2161,7 @@ export type ReplacePreview = {
   convert: number;
   /** Whether a Lidarr is set to be told to stop fetching it; without one it may fetch the album again. */
   acquisition: boolean;
-  /** The album's cover in Music and the new copy's (a5, 0.9.5), for Replace's keep-or-new. */
+  /** The album's cover in Music and the new copy's (0.9.5), for Replace's keep-or-new. */
   covers?: { current: string | null; new: string | null };
   /** How the new copy's tags differ from the album's (0.9.7): only the differences, a change the same on every track
    *  once (`track` null). */
@@ -2251,7 +2251,7 @@ export const getListening = (period: Listening['period'], source?: string, witho
   return request<Listening>(`/api/history/listening${crateQuery(q, source, { without })}`);
 };
 
-/** The listener's taste and what they avoid, from the one similarity (app/taste.rs, a5): Listening's Profile. */
+/** The listener's taste and what they avoid, from the one similarity (app/taste.rs): Listening's Profile. */
 export type ProfileWord = { name: string; w: number };
 /** `lo` and `hi`: the library's own range (its 2nd and 98th percentiles), the axis. */
 export type ProfileNumber = { name: string; unit: 'value' | 'share'; mid: number; spread: number; lo: number; hi: number };
@@ -2315,7 +2315,7 @@ export type Insights = {
 /** Playlists as points and how close each two are, by three signals (0..1 each). */
 export type Proximity = {
   /** `focus`: how concentrated its genres are, 0..1 (null without genre tags). */
-  /** `shares` (a5, 0.9.8): each genre's share of its tracks' genres (the rules' aliases applied, 0.05 and up), for the
+  /** `shares` (0.9.8): each genre's share of its tracks' genres (the rules' aliases applied, 0.05 and up), for the
    *  Map's genre territories. */
   playlists: { name: string; tracks: number; genres: string[]; focus: number | null; shares?: Record<string, number> }[];
   links: {
@@ -2379,7 +2379,7 @@ export const saveOverVisualsSnapshot = (id: string, settings: Record<string, unk
   });
 export const deleteVisualsSnapshot = (id: string) => request<void>(`/api/visuals/snapshots/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
-/** One of Cratarr's own tracks as the Library's Tracks lists them (a5, 0.9.4: GET /api/library/tracks). */
+/** One of Cratarr's own tracks as the Library's Tracks lists them (0.9.4: GET /api/library/tracks). */
 export type LibraryTrack = {
   id: string;
   title: string;
@@ -2397,7 +2397,7 @@ export type LibraryTrack = {
   favorite: boolean;
   format?: string | null;
   bitrate?: number | null;
-  /** Its tempo, its album's artist and when the asking account last played it (epoch s; a5, 0.9.7): left out where
+  /** Its tempo, its album's artist and when the asking account last played it (epoch s; 0.9.7): left out where
    *  unknown. */
   bpm?: number;
   album_artist?: string;
@@ -2429,7 +2429,7 @@ export const libraryTracks = (p: {
   return quietly<{ items: LibraryTrack[]; total: number; all?: number; offset: number }>(`/api/library/tracks?${u}`);
 };
 
-/** Several albums' tracks in one call (a5, 0.9.4): in the albums' order, each album's in its play order; one that can't
+/** Several albums' tracks in one call (0.9.4): in the albums' order, each album's in its play order; one that can't
  *  be read left out. Counted for the progress bar. */
 export const albumsTracks = (albums: { source: string; id: string }[]) =>
   request<{ tracks: { source: string; id: string; name: string; artist?: string | null; album?: string | null; album_id: string; duration_secs?: number | null }[] }>(
@@ -2437,7 +2437,7 @@ export const albumsTracks = (albums: { source: string; id: string }[]) =>
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ albums }) },
   );
 
-/** Whether the server has 0.9.4's calls for many at once (a5: its library tracks list answers), asked once: a call it
+/** Whether the server has 0.9.4's calls for many at once (its library tracks list answers), asked once: a call it
  *  already had with a new meaning (append's only_new) is used only then. */
 let newer: Promise<boolean> | null = null;
 export const hasBatches = () =>
@@ -2445,11 +2445,11 @@ export const hasBatches = () =>
     () => true,
     (e) => !(e instanceof ApiError && (e.status === 404 || e.status === 405)),
   ));
-/** Those of `ids` a playlist does not hold yet, added in one call (a5, 0.9.4). */
+/** Those of `ids` a playlist does not hold yet, added in one call (0.9.4). */
 export const appendNew = (id: string, source: string, ids: string[]) =>
   post<{ playlist: string; added: number } & Undo>(`/api/playlists/${encodeURIComponent(id)}/append`, { source, ids, only_new: true });
 type Batch = { failed: { id: string; error: string }[] };
-/** Several playlists at once (a5, 0.9.4): favourites, deleted (their undo tokens), shared or not, their rows. */
+/** Several playlists at once (0.9.4): favourites, deleted (their undo tokens), shared or not, their rows. */
 export const batchFavorite = (ids: string[], on: boolean, source?: string) => post<Batch & { done: string[] }>('/api/batch/playlists/favorite', { ids, on, source });
 export const batchDelete = (ids: string[]) => post<Batch & { deleted: string[]; undo: string[] }>('/api/batch/playlists/delete', { ids });
 export const batchLink = (ids: string[], on: boolean, target?: string) => post<Batch & { done: string[] }>('/api/batch/playlists/link', { ids, on, target });
@@ -2458,14 +2458,14 @@ export const batchRows = (ids: string[], source?: string) =>
 /** A call the server does not have (one before 0.9.4): the caller goes one by one instead. */
 export const missingCall = (e: unknown) => e instanceof ApiError && (e.status === 404 || e.status === 405);
 
-/** An album's covers to choose from (0.9.5, a5; the owner: "the option to control covers of albums when I'm not happy
+/** An album's covers to choose from (0.9.5; the owner: "the option to control covers of albums when I'm not happy
  *  with one"): its own, and Discogs' (its master's and releases') and the Cover Art Archive's, each with its size and
  *  what it is ("Master", "CD · Germany · 2012", "Front"). Albums whose files Cratarr holds. */
 export type CoverChoice = { url: string; width: number | null; height: number | null; from?: 'discogs' | 'coverartarchive'; what?: string };
 export const getAlbumCovers = (source: string, album: string) =>
   request<{ current: CoverChoice | null; candidates: CoverChoice[] }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`);
 /** One of them as the album's cover, inside every file and beside them; its undo token. */
-/** Change cover's look as a task (a5, 0.9.6; kind `covers:<album>`), its steps per source (MusicBrainz, the Cover Art
+/** Change cover's look as a task (0.9.6; kind `covers:<album>`), its steps per source (MusicBrainz, the Cover Art
  *  Archive, Discogs), its result the same as getAlbumCovers'. One already running for the album is given back. */
 export const lookAlbumCovers = (source: string, album: string) =>
   post<Started>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers/look`, {});
@@ -2473,7 +2473,7 @@ export const setAlbumCover = (source: string, album: string, url: string) =>
   post<{ undo: string[] }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`, { url });
 /** A picture of one's own as the album's cover, for everyone (its administrators', the owner 2026-10-25): written as a
  *  chosen cover is, inside the files and beside them; Undo puts the old one back. JPEG, PNG or WebP, kept as sent, at
- *  most COVER_MAX (a FLAC's picture holds 16 MiB, and every track carries it; a5). */
+ *  most COVER_MAX (a FLAC's picture holds 16 MiB, and every track carries it). */
 export const COVER_MAX = 12 * 1024 * 1024;
 export const uploadAlbumCover = (source: string, album: string, file: Blob) =>
   request<{ undo: string[] }>(`/api/albums/${encodeURIComponent(source)}/${encodeURIComponent(album)}/covers`, {
@@ -2482,7 +2482,7 @@ export const uploadAlbumCover = (source: string, album: string, file: Blob) =>
     body: file,
   });
 
-/** The account's play history deleted, and what was learned from it (a5, 0.9.5): how many plays went. */
+/** The account's play history deleted, and what was learned from it (0.9.5): how many plays went. */
 export const deleteHistory = () => request<{ removed: number }>('/api/me/history', { method: 'DELETE' });
 
 // --- Spotify (decision 0073): the signed-in account's Spotify library, from its export or its own live connection ---

@@ -1,5 +1,5 @@
 // The v1 → v2 conversion (v2.ts, decision 0057 step 1): today's chain and extras as modules and cables, by the
-// contract with claude-5f's engine: npm test.
+// contract with the new engine: npm test.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 

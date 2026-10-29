@@ -14,7 +14,7 @@ import { defaultRoutes, routeKey } from './routes';
 import type { VisualSettings } from './settings.svelte';
 
 /** The settings a chain may set: how the frame behaves, the loop's and finish's levels, and whether the flame is drawn
- *  (`flameLayer`, its layer's amount: a5's, 0 from scratch); never the look. */
+ *  (`flameLayer`, its layer's amount, 0 from scratch); never the look. */
 export type ChainSettings = Partial<
   Pick<
     VisualSettings,

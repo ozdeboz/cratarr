@@ -1,6 +1,6 @@
 // The Clock's trigger outputs (decision 0057 §4b): Beat, Bar and Phrase from the Music's beats, each through a clock
 // divider/multiplier (÷4 … ×4, the ratio knob of VCV Rack's clock modules, Impromptu's Clocked among them). Pure: a
-// state and a step a frame, so the engine (graph.ts, claude-5f) wires it and the tests step it over recorded tracks.
+// state and a step a frame, so the engine (graph.ts) wires it and the tests step it over recorded tracks.
 //
 // - A beat is a new beat index (Music.beat); the first frame seen gives none, as graph.ts's `onBeat` has it.
 // - A bar is a beat that starts its bar: the downbeat signal on at that beat (music-core.ts puts it there only for a

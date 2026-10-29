@@ -1,5 +1,5 @@
 // The v1 → v2 conversion (decision 0057, step 1): today's settings and extras as a patch of modules and cables between
-// typed ports, once, for the one engine. The value side follows the contract agreed with claude-5f, so the engine on
+// typed ports, once, for the one engine. The value side follows the contract agreed for the engine, so the engine on
 // a converted patch gives what aspects.ts gives on the settings:
 //
 // 1. Today's chain keeps its module ids (flame, show, fluid, tunnel, dive, trails; the effects their modules') and its
@@ -17,7 +17,7 @@
 // 7. The extras' modules come as they are; their cables from Music's or a modulator's port.
 //
 // The picture side's wiring (which picture goes into which, and the modules it needs: the Screen, the Feedbacks, the
-// Mixes) is claude-632's (step 3): `pictureWiring`, none until theirs lands.
+// Mixes) is the picture graph's (step 3): `pictureWiring`, none until it lands.
 
 import { effectOfType, slotsAsEffects } from './effect-modules';
 import { endOf, type RouteValue } from './curves';
@@ -71,7 +71,7 @@ function extraFrom(c: Cable): Wire['from'] {
   };
 }
 
-/** The picture side's cables for a patch (claude-632's, step 3); none until theirs is in. */
+/** The picture side's cables for a patch (step 3); none until the picture graph is in. */
 export type Wiring = { modules: Module[]; cables: CableV2[] };
 export let pictureWiring: (p: Patch) => Wiring = () => ({ modules: [], cables: [] });
 export function setPictureWiring(f: (p: Patch) => Wiring) {
@@ -121,7 +121,7 @@ export function flatten(p: PatchV2): PatchV2 {
  *  picture), an output from one. Inputs and outputs apart, as one name may be both. */
 type Behind = { in: Map<string, PortRef[]>; out: Map<string, PortRef[]> };
 
-/** `p` flattened, and where its devices' exposed ports lead, through nested ones (claude-632's fix). */
+/** `p` flattened, and where its devices' exposed ports lead, through nested ones (fix). */
 /** Knob values into a patch by flattened module id (`show/curve`: the Show device's Curve), devices opened; a knob
  *  pinned at its level (`<module>.<knob>`, a band's six by theirs) left as it is, whatever moves it (a step's Next, a
  *  new track's look, the dice). The one way the visuals' own changes are written. */
@@ -254,7 +254,7 @@ function opened(p: PatchV2): { patch: PatchV2; behind: Behind } {
   return { patch: { ...p, modules, cables, pins, macros }, behind };
 }
 
-/** The bands' hits through an ADSR (claude-5f's mapping of today's Linger): `adsr` for the hits, `adsr-drums` for the
+/** The bands' hits through an ADSR (mapping of today's Linger): `adsr` for the hits, `adsr-drums` for the
  *  percussive hits, made where a cable needs one; release a band its lighting time, attack 0.04 s, no decay or
  *  sustain, a hit starting from the higher of the two (as today's lights). */
 const ADSR_OF: Record<string, string> = { hits: 'adsr', percussiveHits: 'adsr-drums' };
@@ -272,7 +272,7 @@ function scaled(v: RouteValue, s: number): RouteValue {
 }
 
 /** The column scales (a knob that also scaled every cable into it) folded into each cable's own amount (0057 §7e item 2;
- *  claude-5f's shape): by column knob, the setting that scales it. The fluid's stir, flow and swirl are scaled where
+ *  the shape): by column knob, the setting that scales it. The fluid's stir, flow and swirl are scaled where
  *  it stirs, not here. */
 const SCALE_OF = new Map(
   (Object.entries(COLUMN_SCALES) as [string, string][]).filter(([a]) => a !== 'stir' && a !== 'flow' && a !== 'swirl').map(([a, key]) => [ASPECT_KNOB[a as keyof typeof ASPECT_KNOB].join('.'), key]),
@@ -282,7 +282,7 @@ const SCALE_OF = new Map(
 const ASPECT_AT = new Map((Object.entries(ASPECT_KNOB) as [Aspect, [string, string]][]).map(([a, [m, k]]) => [`${m}.${k}`, a]));
 const LEVEL_KNOBS = new Set([...ASPECT_AT].filter(([, a]) => LEVEL_ASPECTS.includes(a)).map(([k]) => k));
 
-/** Cables only add (0057 §7e items 1, 3, 4; claude-5f's shapes, proved frame by frame over the recorded tracks):
+/** Cables only add (0057 §7e items 1, 3, 4; the shapes, proved frame by frame over the recorded tracks):
  *  - a level column's cables each into a VCA's cv (its peak taken off, by the Loudness's out or its own depth), the
  *    VCAs in series, the bands' first and through a Merge (geometric mean), the last into the knob's gain;
  *  - a moment column's cables into a Merge (largest), then a Beat gate, then the step's next;
@@ -355,7 +355,7 @@ function cablesAdd(modules: Module[], cables: Wire[]): { modules: Module[]; cabl
   return { modules: [...modules, ...added], cables: out };
 }
 
-/** The sidechain in sight (0057 §7e; claude-5f's wiring, proved against today's levers): a Meter on the picture, a
+/** The sidechain in sight (0057 §7e; the wiring, proved against today's levers): a Meter on the picture, a
  *  Ducker a kind keyed by it (its threshold the limit as learned and frozen, × Wild's factor, × the music's activity
  *  through a VCA from the Loudness's level), each into the gain of what that kind of busyness moves; the Screen's flash
  *  guard into the Accent's gain. */
@@ -372,7 +372,7 @@ const SIDECHAIN: readonly { kind: string; meter: Budgeted; into: readonly [strin
 function sidechained(modules: Module[], cables: Wire[], wild: number, limits: Partial<Record<Budgeted, number>>, holds = false): { modules: Module[]; cables: Wire[]; macro?: Macro } {
   const one = (id: string, from: Wire['from'], to: Wire['to'], value = 1): Wire => ({ id, from, to, value, mode: 'swing', depth: null });
   const out = { modules: [...modules, { id: 'meter', type: 'meter', knobs: {} }], cables: [...cables] };
-  // The Screen is the picture wiring's (claude-632's `screen`); its guard cabled from here.
+  // The Screen is the picture wiring's (`screen`); its guard cabled from here.
   out.cables.push(one('guard', { module: 'screen', port: 'guard' }, { module: 'accent', port: 'accent:gain' }));
   const wildFactor = 2 ** (2 * (wild - 0.5));
   // Wild, a macro on the five thresholds (the owner): along the threshold's exponential taper from half to twice
@@ -584,7 +584,7 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
     newtrack.push({ id: NEWTRACK, type: 'adsr', knobs });
     cables.push({ id: `${NEWTRACK}-gate`, from: { module: 'music', port: 'newtrack', reference: 'absolute' }, to: { module: NEWTRACK, port: 'gate' }, value: 1, mode: 'swing', depth: null });
   }
-  // Pausing dims in sight (0057 §7e item 6, claude-5f's): 1 − playing, followed over half a second, lowers Tone map's
+  // Pausing dims in sight (0057 §7e item 6): 1 − playing, followed over half a second, lowers Tone map's
   // Level gain by up to 0.45 (0.55 paused, 1 playing), starting at 1 as the visuals open.
   const pause: Module[] = [
     { id: 'pause-invert', type: 'vca', knobs: { gain: 1 } },

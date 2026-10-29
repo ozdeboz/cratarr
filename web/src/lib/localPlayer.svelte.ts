@@ -150,7 +150,7 @@ export { isPhone };
 const asOpus = () => isPhone && !prefs.phoneLossless && !!Source?.isTypeSupported(OPUS);
 /** The forms a lossless track can be asked in, the browser's best first (the owner, 2026-10-26: bet on the shape, the
  *  browser picks): Opus first on a phone that keeps no lossless (above); the original where FLAC in MP4 is taken; Opus;
- *  ALAC in MP4; MP3 (a5's ?as=alac, ?as=mp3, made for iOS, whose player takes neither FLAC nor Opus in MP4). A lossy
+ *  ALAC in MP4; MP3 (?as=alac, ?as=mp3, made for iOS, whose player takes neither FLAC nor Opus in MP4). A lossy
  *  track comes as it is whatever is asked. */
 type Form = 'original' | 'opus' | 'alac' | 'mp3';
 const ALAC = 'audio/mp4; codecs="alac"';
@@ -489,7 +489,7 @@ async function appendTrack(index: number, from: number, gen: number) {
   let placedSegment = null as Segment | null; // set inside place(), which TypeScript does not follow
   try {
     const query = new URLSearchParams();
-    // An MP3 asked from its frame there, not whole from its top (a5, 662527cb: mp3_from=1; the server says where it
+    // An MP3 asked from its frame there, not whole from its top (662527cb: mp3_from=1; the server says where it
     // starts, x-start-ms). A server before it ignores the flag and sends it whole, as before.
     if (from > 0) {
       query.set('from_ms', String(Math.floor(from * 1000)));
@@ -530,7 +530,7 @@ async function appendTrack(index: number, from: number, gen: number) {
     const told = Number(res.headers.get('x-duration-ms')) / 1000 || null;
     const segment: Segment = { index, start, length: null, told };
     /** An MP3's encoder delay: its LAME header's, else as the stream says it (Cratarr's own MP3 form has no header and
-     *  sends x-pre-skip, a5 0.9.8). */
+     *  sends x-pre-skip, 0.9.8). */
     const delayOf = (h: Mp3Head) => h.delay || Number(res.headers.get('x-pre-skip')) || 0;
     /** An MP3 sent from a frame mid-track (mp3_from): that frame's first sample's time in the track (s), its encoder's
      *  delay already taken off; null where it came whole. Then no delay of its own to skip, its length the told one. */
@@ -573,7 +573,7 @@ async function appendTrack(index: number, from: number, gen: number) {
       sb.appendWindowStart = Math.max(0, streamEnd);
       // Never before its start (a place asked at or past its end: nothing of it plays, and what follows goes on).
       if (length !== null) sb.appendWindowEnd = Math.max(sb.appendWindowStart + 0.001, start + length);
-      // At a stream's start an MP3's encoder delay would put its offset below 0. Lead (a5's measure, 2026-10-26): the
+      // At a stream's start an MP3's encoder delay would put its offset below 0. Lead (measure, 2026-10-26): the
       // iPhone's four MP3s that stalled all carry a LAME/Info header (a delay), the one that played none; iOS's
       // ManagedMediaSource may not take a negative offset in sequence mode. From 0 there (a few ms of the encoder's
       // silence at a fresh stream's start; joins between tracks keep their gapless trim), and what was set in the log.
@@ -863,7 +863,7 @@ function levelOf(index: number): number | null {
   if (!g) return null;
   const sameAlbum = (j: number) => !!t.album_id && local.queue[j]?.album_id === t.album_id && !local.queue[j]?.lane;
   const albumWise = !local.shuffled && (sameAlbum(index - 1) || sameAlbum(index + 1));
-  // The server's own rule where it says it (a5, 0.9.8: one rule, here and in the app); not measured (null): as a
+  // The server's own rule where it says it (0.9.8: one rule, here and in the app); not measured (null): as a
   // typical track, or as it is (Level's sheet).
   const down = albumWise && g.albumDown !== undefined ? g.albumDown : g.trackDown;
   if (down !== undefined) return down === null ? unknownLevel() : Math.min(1, 10 ** (down / 20));
@@ -1078,7 +1078,7 @@ export function emptyHere() {
 
 /** The last report: the position then (ms), and when it came; the position in between is counted on here. */
 let reported = { positionMs: 0, at: 0 };
-/** The app's deck as it last said (a5, 0.9.14-2): its place then (s), when it was read, its speed (track s per s,
+/** The app's deck as it last said (0.9.14-2): its place then (s), when it was read, its speed (track s per s,
  *  signed) and how fast that changes (per s). The place each moment follows from them, not from the reports' 250 ms steps
  *  (the owner, 2026-10-28: the waveform and the deck moved in strides through a wind); a report's correction fades in
  *  (lib/deckCourse; the owner, 2026-10-29: still strides). Null: an app from before, counted on as it was. */
@@ -1173,7 +1173,7 @@ export function reportedBy(m: {
   starting?: unknown;
   speedX?: unknown;
   accelX?: unknown;
-  /** When the deck was read: ms of the app's elapsedRealtime (a5/purity 3032a237); an app from before says nothing. */
+  /** When the deck was read: ms of the app's elapsedRealtime (0.9.15-2); an app from before says nothing. */
   deckAtMs?: unknown;
   landing?: unknown;
 }) {
@@ -1199,9 +1199,9 @@ export function reportedBy(m: {
   local.paused = m.paused !== false && !tape.heldThere;
   local.duration = typeof m.durationMs === 'number' && m.durationMs > 0 ? m.durationMs / 1000 : null;
   local.error = typeof m.error === 'string' ? m.error : null;
-  // The app's own level (a5, 0.9.8): what it applies now; 0 when it levels nothing or says nothing.
+  // The app's own level (0.9.8): what it applies now; 0 when it levels nothing or says nothing.
   local.levelDb = typeof m.levelDb === 'number' && m.levelDb < 0 ? m.levelDb : 0;
-  // Asked to play and not sounding yet (a5's app, 2026-10-28); an app from before says nothing: not starting.
+  // Asked to play and not sounding yet (app, 2026-10-28); an app from before says nothing: not starting.
   if (m.starting !== undefined) local.starting = m.starting === true;
   const now = performance.now();
   const pos = (Number(m.positionMs) || 0) / 1000;
@@ -1226,7 +1226,7 @@ export function reportedBy(m: {
     local.position = pos;
   }
   reported = { positionMs: pos * 1000, at: now };
-  // The app's tape rewind (a5): its position going back as it reports it, shown as it goes (lib/remote).
+  // The app's tape rewind: its position going back as it reports it, shown as it goes (lib/remote).
   if (typeof m.rewinding === 'boolean') {
     if (m.rewinding) windAsked(false);
     else {
@@ -1240,7 +1240,7 @@ export function reportedBy(m: {
   if (m.direction === 'L' || m.direction === 'R') tapeDir.want = m.direction;
   if (m.landing !== undefined) appLanding(m.landing);
 }
-/** The app's hold (a5, 0.9.14-4): where it lands, held or let go (null once there): the look-ahead, the hold's zoom
+/** The app's hold (0.9.14-4): where it lands, held or let go (null once there): the look-ahead, the hold's zoom
  *  and the aim's check, as for this page's own. Held while it winds faster than it plays; let go once it brakes. */
 let appHolding = false;
 /** The app's look-ahead between its reports: where it lands moves as its deck does, so it is carried along with the
@@ -1282,7 +1282,7 @@ function appLanding(l: unknown) {
   holdNow.landing = landingPlace(now);
   holdNow.landingIndex = index;
   holdNow.speed = Math.abs(v);
-  // The app's top speed, for the zoom's "at its top" (lib/SeekWave): its holds fly to FLIGHT_TOP (a5), not this page's
+  // The app's top speed, for the zoom's "at its top" (lib/SeekWave): its holds fly to FLIGHT_TOP, not this page's
   // HOLD_TOP (the owner, 2026-10-29: the zoom went back to the whole as the app passed 16×); its own word where it says.
   holdNow.top = typeof at.topX === 'number' && at.topX > 1 ? at.topX : FLIGHT_TOP;
   holdNow.dir = index > local.index || (index === local.index && pos > local.position) ? 1 : -1;
@@ -1902,7 +1902,7 @@ export function jump(index: number) {
  *  mirror of rewind), then the next from its start; plainly where the device does not wind, or nothing can be. */
 export function next() {
   // The app's player or one driven: its own Next (its wind-down, its fast-forward), never a jump to a track, which it
-  // takes plainly (a5, 2026-10-27: the tablet's Next had no wind-down).
+  // takes plainly (2026-10-27: the tablet's Next had no wind-down).
   if (handed()) return hand('next');
   // A wind-down is never cut short: the tape comes to its standstill first (the owner, 2026-10-27). A skip's own takes no
   // second Next (one tap, one skip); a pause's keeps it, and the next track starts up once the tape stands still.
@@ -2550,7 +2550,7 @@ const WIND_STEP_MS = 40;
 const RATE_LOW = RATE_FLOOR;
 /** A forward hold while playing flies (the owner, 2026-10-27: no stop on the way): its stream from FLY_LEAD s ahead at
  *  FLY_SPEED×, played at 1/FLY_SPEED, so it takes over at exactly the track's own speed and spins up from there (as the
- *  app does, a5). */
+ *  app does). */
 const FLY_SPEED = 4;
 const FLY_LEAD = 0.5;
 /** The fastest a browser plays a track (×): a forward hold let go is handed back to the track's own player at its speed
@@ -2647,11 +2647,11 @@ type Winding = {
   edge: boolean;
   /** Its sound's fade (0..1): in as it starts, out as it ends (no plop). */
   fade: number;
-  /** A cut one's plan (a5's map=1), where it has come: where in the track each moment of its sound is; and the speed its
+  /** A cut one's plan (map=1), where it has come: where in the track each moment of its sound is; and the speed its
    *  stream runs at (a flown one's floor: 1 over it). */
   map: [number, number, number][] | null;
   mapSpeed: number | null;
-  /** A hold's getting faster (the tape's Acceleration, its Top speed; the server renders it, a5's accel_s and max). */
+  /** A hold's getting faster (the tape's Acceleration, its Top speed; the server renders it, the accel_s and max). */
   accelS: number;
   top: number;
   /** Its stream's speed at its start, and whether it gets faster (a hold's); flown: taken over from play
@@ -2921,7 +2921,7 @@ function playOnAt(index: number, secs: number) {
  *  through the queue places `through`. */
 function windUrl(t: LocalTrack, from: number, to: number | null, dir: 1 | -1, D: number, through: number[], wind: Wind, accel: { accelS: number; top: number } | null = null): string {
   const ask = new URLSearchParams({ from_ms: String(Math.floor(from * 1000)), dir: dir < 0 ? 'back' : 'forward', speed: String(wind.speed), gain_db: String(wind.gainDb) });
-  // A hold: getting faster to its heard top, and past it by cutting to its flight top (a5's flight_max).
+  // A hold: getting faster to its heard top, and past it by cutting to its flight top (flight_max).
   if (accel) for (const [k, v] of Object.entries({ accel_s: accel.accelS, max: accel.top, flight_max: FLIGHT_TOP, piece_ms: PIECE_MS })) ask.set(k, String(v));
   if (to !== null)
     for (const [k, v] of Object.entries({ to_ms: Math.floor(to * 1000), fit_ms: D, attack_ms: wind.attackMs, release_ms: wind.releaseMs, piece_ms: wind.pieceMs })) ask.set(k, String(v));
@@ -2953,7 +2953,7 @@ function armWind(dir: 1 | -1, lead = 0, speed = holdFor(dir).speed): Armed | nul
   const url = windUrl(t, from, null, dir, 0, through, wind, { accelS: hold.doublingS, top: hold.top });
   return { clip: windClip(url), from, through, index: here.seg.index, v0: speed, url };
 }
-/** A forward wind to `to` while playing, asked from `lead` s ahead (its stream's speed floored at 1×: fly=1, a5). */
+/** A forward wind to `to` while playing, asked from `lead` s ahead (its stream's speed floored at 1×: fly=1). */
 function armPoint(to: number, lead: number, motion: PointMotion): Armed | null {
   const here = where();
   const t = here && local.queue[here.seg.index];
@@ -2990,7 +2990,7 @@ function flyTo(to: number, motion: PointMotion, tries = 0): boolean {
     if (w.offset >= armed.from - 0.02) {
       if (armed.clip.readyState >= 3) {
         tape.pointArmed = null;
-        // Its floor from the stream as made (a5's way, the app's too): f = (length − area) / (D − area). A server that
+        // Its floor from the stream as made (way, the app's too): f = (length − area) / (D − area). A server that
         // made it from still (before fly=1) gives about none: then the stopping way.
         const D = armed.D ?? 0;
         const area = consumed(windFor(motion), D, D);
