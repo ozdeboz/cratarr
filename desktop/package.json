@@ -1,0 +1,59 @@
+{
+  "name": "cratarr-desktop",
+  "productName": "Cratarr",
+  "version": "0.9.9",
+  "description": "Cratarr's pages in a window of their own: a player that starts at login and keeps playing.",
+  "homepage": "https://github.com/ozdeboz/cratarr",
+  "license": "AGPL-3.0-or-later",
+  "author": {
+    "name": "ozdeboz",
+    "email": "9620260+ozdeboz@users.noreply.github.com"
+  },
+  "private": true,
+  "main": "main.js",
+  "desktopName": "cratarr.desktop",
+  "scripts": {
+    "icons": "node copy-icons.js",
+    "start": "npm run icons && electron .",
+    "dist": "npm run icons && electron-builder --linux AppImage deb --publish never"
+  },
+  "build": {
+    "appId": "org.cratarr.desktop",
+    "productName": "Cratarr",
+    "files": [
+      "main.js",
+      "preload.js",
+      "setup.html",
+      "icons/**"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "linux": {
+      "executableName": "cratarr",
+      "syncDesktopName": true,
+      "icon": "icons/icon-512.png",
+      "category": "AudioVideo",
+      "synopsis": "Cratarr's pages in a window of their own"
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libgbm1",
+        "libasound2t64 | libasound2"
+      ]
+    }
+  },
+  "devDependencies": {
+    "electron": "45.1.0",
+    "electron-builder": "26.18.0"
+  }
+}

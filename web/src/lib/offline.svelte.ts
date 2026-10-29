@@ -5,6 +5,7 @@
 // list of what it holds. The service worker (public/sw.js) answers the player's stream request for a kept track from
 // that copy, whatever position it asks for: the player cuts what lies before it (its append window). Only where the page
 // is installed (a browser tab's storage is for the browser to drop), and never Bandcamp's previews (relays).
+import { desktop } from './desktop';
 import { losslessAs, playsSmaller } from './localPlayer.svelte';
 import { prefs } from './prefs.svelte';
 
@@ -31,10 +32,12 @@ export type Fetching = { state: 'waiting' | 'downloading' | 'failed'; percent?: 
 
 export const offline = $state({ kept: {} as Record<string, KeptTrack>, fetching: {} as Record<string, Fetching> });
 
-/** Installed (on a home screen, or as an app window): where this page keeps tracks. */
+/** Installed (on a home screen, as an app window, or in the desktop app): where this page keeps tracks. */
 export const installed =
   typeof window !== 'undefined' &&
-  (matchMedia('(display-mode: standalone)').matches || (navigator as Navigator & { standalone?: boolean }).standalone === true);
+  (matchMedia('(display-mode: standalone)').matches ||
+    (navigator as Navigator & { standalone?: boolean }).standalone === true ||
+    !!desktop);
 export const keyOf = (t: { source: string; id: string }) => `${t.source}/${t.id}`;
 /** The stream's address as the service worker finds it: the track alone, whatever form or position is asked. */
 export const streamKey = (t: { source: string; id: string }) => `/api/stream/${encodeURIComponent(t.source)}/${encodeURIComponent(t.id)}`;

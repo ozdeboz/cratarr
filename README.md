@@ -14,7 +14,7 @@ plain `.m3u` files beside your music.
 
 ## Try it
 
-Each release on GitHub has a ready image (amd64 and arm64) and the Android app.
+Each release on GitHub has a ready image (amd64 and arm64), the Android app and the desktop app for Linux.
 
 ```sh
 mkdir -p ~/cratarr
@@ -30,14 +30,17 @@ Until that first account exists, anyone who reaches the server can make it, and 
 run). Make it before the server can be reached from outside your home.
 
 For the Android app, install the APK from the latest [release](https://github.com/ozdeboz/cratarr/releases) and give
-it your server's address.
+it your server's address. For the desktop app on Ubuntu, Linux Mint or Debian, install the `.deb` from the same release
+(or run its AppImage) and give it the address too ([desktop/README.md](desktop/README.md)).
 
 ## What it does
 
 **Listen**
 - The web app plays by itself, and over HTTPS installs as an app. The Android app plays on the phone, stays reachable
   with the screen locked, and keeps music for offline use ([0031](docs/decisions/0031-android-app-and-play-on.md),
-  [0038](docs/decisions/0038-kept-on-this-device.md)).
+  [0038](docs/decisions/0038-kept-on-this-device.md)). The desktop app shows the web app in a window of its own that
+  starts at login and keeps playing with the window closed, so a computer stays a player
+  ([0078](docs/decisions/0078-a-desktop-app.md)).
 - **Play On**: any of Cratarr's players (a browser, a phone, a Kodi box) is controlled from any other. Cratarr holds
   every queue, so music moves from one player to another where it was, and several players can play one queue in step
   ([0033](docs/decisions/0033-cratarr-holds-the-queues.md), [0037](docs/decisions/0037-sync-play.md)).

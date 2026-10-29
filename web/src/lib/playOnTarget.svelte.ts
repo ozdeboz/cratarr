@@ -9,6 +9,7 @@
 // looked at again; playing, it stays. No sync play in a browser: it joins no group.
 import { lastSeq, logLines, note, sendSoonWith } from './deviceLog';
 import { describing } from './described.svelte';
+import { desktop } from './desktop';
 import { getPlayers } from './api';
 import { me } from './me.svelte';
 import { inApp } from './app.svelte';
@@ -28,8 +29,10 @@ const RETRY_MS = 5_000;
 
 export const target = $state({ connected: false, tapToPlay: false });
 
-/** This browser's name as a player: the one set, else its browser and system ("Chrome on Android"). */
+/** This browser's name as a player: the one set, else its browser and system ("Chrome on Android"); in the desktop app,
+ *  the computer's name. */
 export function defaultBrowserName(): string {
+  if (desktop?.name) return desktop.name;
   const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
   const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
   const os = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Windows/.test(ua) ? 'Windows' : /Mac OS X/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : '';

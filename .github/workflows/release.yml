@@ -1,6 +1,7 @@
 # A release: a version tag (v0.8.3) on main builds the image for amd64 and arm64, each on its own kind of machine
-# (no emulation: Rust under QEMU takes hours), pushes both under one name to ghcr.io, and makes the GitHub release.
-# The Android app joins the release once its release key is kept in the repository's secrets.
+# (no emulation: Rust under QEMU takes hours), pushes both under one name to ghcr.io, and makes the GitHub release,
+# with the desktop app's Linux packages (decision 0078). The Android app joins the release once its release key is
+# kept in the repository's secrets.
 name: Release
 
 on:
@@ -103,3 +104,37 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "Cratarr ${GITHUB_REF_NAME#v}" --generate-notes
+
+  # The desktop app's packages join the release made above; a failed build leaves the release as it is.
+  desktop:
+    needs: release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      # A hotfix's tag (v0.9.15-1) is a semver prerelease, which the .deb would carry as 0.9.15~1, below 0.9.15: it is
+      # built as 0.9.15 with the hotfix's number as the .deb's revision (0.9.15-1, above 0.9.15), its files named after
+      # the tag.
+      - name: The AppImage and the .deb, at the release's version
+        working-directory: desktop
+        run: |
+          npm ci
+          v="${GITHUB_REF_NAME#v}"
+          base="${v%%-*}"
+          npm version --no-git-tag-version --allow-same-version "$base"
+          args=()
+          if [ "$v" != "$base" ]; then
+            args=(-c.buildNumber="${v#*-}" -c.appImage.artifactName="Cratarr-$v.AppImage" -c.deb.artifactName="cratarr-desktop_${v}_amd64.deb")
+          fi
+          npm run dist -- "${args[@]}"
+      - name: Added to the release
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" dist/*.AppImage dist/*.deb
