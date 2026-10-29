@@ -69,3 +69,20 @@ As Ableton's Racks: macros per rack, racks nested, the dice rolling macros only.
 - **The long press keeps the eleven scopes** (the owner: "Keep the 11 scopes"), beside the face.
 - **No check against the track** (the owner: "No"): its eight tries and its second way of making the picture go; a
   macro's range and the Calm, live, keep a roll within bounds.
+
+## Built (2026-10-29, 632/visuals-purity; nothing seen on a device yet)
+
+1. A device's macros work: flatten lifts them (`<device>/macro:<id>`, a cable into one reaching its node); a macro maps
+   its level's knobs and its devices' macros, the inner set by the outer. A macro reaching past a device's edge is
+   moved into that device's macro of its name, mapped whole (macro-levels.ts): the rack's Wild maps Calm's Wild now.
+2. A mapped knob shows its macro and the value it sets (µMAP's arc in the graph, the macro's name in the panel), never
+   a dead slider.
+3. The dice roll the face (every level's macros, pinned and mapped ones kept), surveyed where the look moves; a macro
+   roll glides unless it maps a step; no check against the track. A kept rack: its new-track Dice on the face (rev 1).
+4. The shipped face: the look's seven over the Flame (ranges as a track's look was drawn, through where the knobs
+   are) beside Effects and the behaviour four; a kept rack gains them (rev 2).
+5. A knob a macro owns rolls through its owner (a module's Randomize, the long press's scopes).
+6. Macros made and changed in the panel: + New macro, a macro's page (value, pin, what it maps and each range, Map a
+   knob, Remove), a knob's What moves it (its macro, Map it to one). Nothing jumps as a knob is mapped or let go.
+
+Left: Map to macro from a knob's long press in the graph (the panel's What moves it has it); a macro's name changed.
