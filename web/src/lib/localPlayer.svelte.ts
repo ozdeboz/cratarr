@@ -1262,6 +1262,9 @@ function appLanding(l: unknown) {
   holdNow.landing = pos;
   holdNow.landingIndex = index;
   holdNow.speed = Math.abs(v);
+  // The app's top speed, for the zoom's "at its top" (lib/SeekWave): its holds fly to FLIGHT_TOP (a5), not this page's
+  // HOLD_TOP (the owner, 2026-10-29: the zoom went back to the whole as the app passed 16×); its own word where it says.
+  holdNow.top = typeof at.topX === 'number' && at.topX > 1 ? at.topX : FLIGHT_TOP;
   holdNow.dir = index > local.index || (index === local.index && pos > local.position) ? 1 : -1;
   // Held: still getting faster (or at its top); let go, it brakes.
   holdNow.held = (deck?.a ?? 0) >= 0 && Math.abs(v) > 1;

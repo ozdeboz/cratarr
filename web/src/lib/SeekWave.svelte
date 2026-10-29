@@ -7,6 +7,7 @@
   // `grab(e)`: the mini player's long press hands the pointer here, held from where it is.
   import { untrack } from 'svelte';
   import Icon from './Icon.svelte';
+  import { appInfo, inApp } from './app.svelte';
   import { deckNow, local } from './localPlayer.svelte';
   import { isLocal } from './output.svelte';
   import { prefs } from './prefs.svelte';
@@ -173,9 +174,12 @@
   // as much again beyond it.
   /** The playhead's place in the window (0..1). */
   const anchorOf = () => Math.min(0.9, Math.max(0.1, zoomAnchor ?? 0.5));
+  /** Whether a hold winds on through the queue: Start and stop's as the player that winds has it, the app's in the app
+   *  (the owner, 2026-10-29: the zoom's other tracks and their boundaries never showed there). */
+  const throughQueue = $derived((inApp ? appInfo.startStop : prefs.startStop).edges === 'queue');
   const wideTarget = $derived.by((): { W: number } | null => {
     // Until it is let go (the owner, 2026-10-28): then back to this track's own view.
-    if (!zoomOn || !holdNow.held || prefs.startStop.edges !== 'queue' || !hereLen) return null;
+    if (!zoomOn || !holdNow.held || !throughQueue || !hereLen) return null;
     let W = Math.min(hereLen, Math.max(ZOOM_MIN_S, holdNow.speed * ZOOM_S));
     const li = holdNow.landingIndex;
     const l = holdNow.landing;
@@ -238,7 +242,7 @@
     if (!wide || !hereLen) return null;
     const out: { i: number; start: number; d: number }[] = [{ i: local.index, start: 0, d: hereLen }];
     // Not along the queue: this track alone.
-    if (prefs.startStop.edges !== 'queue') return out;
+    if (!throughQueue) return out;
     for (let i = local.index - 1, s = 0; i >= 0 && s > wide.a; i--) {
       const d = local.queue[i]?.duration_secs;
       if (!d) break;
@@ -320,7 +324,7 @@
   // A continuous hold's window lost before its release: said in the playback log, with why.
   let wideLost = false;
   $effect(() => {
-    const should = zoomOn && holdNow.held && prefs.startStop.edges === 'queue';
+    const should = zoomOn && holdNow.held && throughQueue;
     const lost = should && !wideStrip;
     if (lost && !wideLost)
       playback('warn', 'hold window lost', {
