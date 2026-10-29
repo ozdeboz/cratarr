@@ -192,6 +192,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/discover/hide", post(discover_hide))
         .route("/api/discover/artist", get(discover_artist))
         .route("/api/discover/artist/photo", get(discover_artist_photo))
+        .route("/api/discover/artist/{name}/not", post(discover_artist_not))
         .route("/api/discover/artist/albums", get(discover_artist_albums))
         .route("/api/preview/bandcamp", get(preview_bandcamp))
         .route("/api/preview/bandcamp/artist", get(preview_bandcamp_artist))
@@ -4309,6 +4310,17 @@ async fn requests_cancel(State(app): State<Arc<App>>, Path(id): Path<i64>) -> Re
 async fn discover_no(Json(b): Json<DiscoverKey>) -> Result<Json<serde_json::Value>, ApiError> {
     let (serve, account) = discoverer()?;
     let undo = tokio::task::spawn_blocking(move || crate::app::discover::not_interested(&serve, &account, &b.key))
+        .await
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
+        .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "undo": undo })))
+}
+
+/// Not interested in an artist (the owner, 2026-10-29): they and every record of theirs leave Discover for good. Its
+/// undo token.
+async fn discover_artist_not(Path(name): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = discoverer()?;
+    let undo = tokio::task::spawn_blocking(move || crate::app::discover::artist_not_interested(&serve, &account, &name))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;

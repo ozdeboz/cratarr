@@ -1170,7 +1170,7 @@ impl UserData {
         let db = self.db();
         let mut st = db.prepare_cached(
             "SELECT album, artist, answer, at, name, artist_name, year, cover FROM discover_answer
-             WHERE user = ?1 AND answer IN ('no', 'hidden') ORDER BY at DESC",
+             WHERE user = ?1 AND answer IN ('no', 'hidden', 'artist') ORDER BY at DESC",
         )?;
         let rows = st.query_map([user], |r| {
             Ok(Answer {
@@ -1189,7 +1189,7 @@ impl UserData {
 
     /// Every Not interested for an artist taken back: they are suggested again.
     pub fn unanswer_discover_artist(&self, user: &str, artist: &str) -> Result<()> {
-        self.db().execute("DELETE FROM discover_answer WHERE user = ?1 AND artist = ?2 AND answer = 'no'", params![user, artist])?;
+        self.db().execute("DELETE FROM discover_answer WHERE user = ?1 AND artist = ?2 AND answer IN ('no', 'artist')", params![user, artist])?;
         Ok(())
     }
 
@@ -1207,12 +1207,14 @@ impl UserData {
         Ok(())
     }
 
-    /// The albums `user` answered (their keys), and the artists twice said no to (theirs).
+    /// The albums `user` answered (their keys), and the artists twice said no to, or said no to as artists (theirs).
     pub fn discover_answered(&self, user: &str) -> Result<(std::collections::HashSet<String>, std::collections::HashSet<String>)> {
         let db = self.db();
         let mut st = db.prepare_cached("SELECT album FROM discover_answer WHERE user = ?1")?;
         let albums = st.query_map([user], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
-        let mut st = db.prepare_cached("SELECT artist FROM discover_answer WHERE user = ?1 AND answer = 'no' GROUP BY artist HAVING count(*) >= 2")?;
+        let mut st = db.prepare_cached(
+            "SELECT artist FROM discover_answer WHERE user = ?1 AND answer IN ('no', 'artist') GROUP BY artist HAVING count(*) >= 2 OR max(answer = 'artist') = 1",
+        )?;
         let artists = st.query_map([user], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
         Ok((albums, artists))
     }
@@ -2263,6 +2265,18 @@ mod tests {
         assert!(u.discover_answered("you").unwrap().0.is_empty(), "each account its own");
         u.set_discover_found("me", 5, "{}").unwrap();
         assert_eq!(u.discover_found("me").unwrap(), Some((5, "{}".into())));
+    }
+
+    #[test]
+    fn discover_leaves_out_an_artist_said_no_to_as_an_artist_at_once() {
+        let u = UserData::open(None).unwrap();
+        u.answer_discover("me", "artist:air", "air", "artist").unwrap();
+        let (albums, artists) = u.discover_answered("me").unwrap();
+        assert!(artists.contains("air"), "once is enough");
+        assert!(albums.contains("artist:air"));
+        assert_eq!(u.discover_exclusions("me").unwrap().len(), 1, "listed with the exclusions");
+        u.unanswer_discover_artist("me", "air").unwrap();
+        assert!(u.discover_answered("me").unwrap().1.is_empty(), "taken back");
     }
 
     #[test]
