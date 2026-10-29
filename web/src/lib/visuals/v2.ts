@@ -27,7 +27,7 @@ import { DEFAULT_LIMITS, type Budgeted } from './budget';
 import { BUSY } from './engine/sidechain';
 import { slotKnobOf, slotOf } from './engine/effect-slots';
 import { ASPECT_KNOB, cratarrPatch, modulesOf, type Cable, type Macro, type Module, type ModuleType, type Patch } from './patch';
-import { isDevice, READINGS, SHOW_PARTS, type CableV2, type Device, type PatchV2, type PortRef } from './ports';
+import { isDevice, RANDOMIZE_SCOPES, READINGS, SHOW_PARTS, type CableV2, type Device, type PatchV2, type PortRef } from './ports';
 import { extraType } from './registry';
 import { modulatorOf } from './modulators/modulators';
 import { makeDevice } from './device-make';
@@ -176,6 +176,31 @@ export function macroAsSet(p: PatchV2, x: Macro, seen: Set<string> = new Set([x.
         return t.from + (t.to - t.from) * Math.min(1, Math.max(0, macroAsSet(p, y, seen)));
       }
   return x.value;
+}
+
+/** Macro values into a patch by their node's id as the engine runs it (the rack's by its id, a device's
+ *  `<device>/macro:<id>`); one pinned at its level (`macro:<id>`) left as it is. The one way a roll's macros are written. */
+export function applyMacros(p: PatchV2, values: Record<string, number>) {
+  for (const [key, v] of Object.entries(values)) {
+    const cut = key.lastIndexOf('/macro:');
+    const path = cut < 0 ? [] : key.slice(0, cut).split('/');
+    const id = cut < 0 ? key : key.slice(cut + '/macro:'.length);
+    let list: { id: string; value: number }[] = p.macros;
+    let pins = p.pins;
+    let level: PatchV2 | null = p;
+    for (const step of path) {
+      const d: Module | undefined = level?.modules.find((m) => m.id === step);
+      level = d && isDevice(d) ? d.patch : null;
+      if (!level || !d || !isDevice(d)) {
+        list = [];
+        break;
+      }
+      list = d.macros;
+      pins = d.patch.pins;
+    }
+    const x = list.find((y) => y.id === id);
+    if (x && !pins.includes(`macro:${id}`)) x.value = Math.min(1, Math.max(0, v));
+  }
 }
 
 /** A device's pin as the flattened patch names it: a module's, a cable's or a knob's under the device's path (a
@@ -334,7 +359,7 @@ function cablesAdd(modules: Module[], cables: Wire[]): { modules: Module[]; cabl
  *  through a VCA from the Loudness's level), each into the gain of what that kind of busyness moves; the Screen's flash
  *  guard into the Accent's gain. */
 /** A Ducker's threshold over the limit it holds its kind to (toV2's margin: Wild at ½ gives exactly the limit × 1.5). */
-export const THRESHOLD_OVER_LIMIT = 1.5;
+const THRESHOLD_OVER_LIMIT = 1.5;
 const SIDECHAIN: readonly { kind: string; meter: Budgeted; into: readonly [string, string] | null }[] = [
   { kind: 'motion', meter: 'motion', into: ['clock', 'speed'] },
   { kind: 'shape', meter: 'shapeChurn', into: ['flame', 'evolution'] },
@@ -343,8 +368,6 @@ const SIDECHAIN: readonly { kind: string; meter: Budgeted; into: readonly [strin
   // The moments' Gates (null): their gaps stretched.
   { kind: 'looks', meter: 'looksPerMinute', into: null },
 ];
-/** The budget each of the Meter's outputs keys a Ducker for (its kind's). */
-export const METER_BUDGET: Readonly<Record<string, Budgeted>> = Object.fromEntries(SIDECHAIN.map((x) => [x.kind, x.meter]));
 function sidechained(modules: Module[], cables: Wire[], wild: number, limits: Partial<Record<Budgeted, number>>, holds = false): { modules: Module[]; cables: Wire[]; macro?: Macro } {
   const one = (id: string, from: Wire['from'], to: Wire['to'], value = 1): Wire => ({ id, from, to, value, mode: 'swing', depth: null });
   const out = { modules: [...modules, { id: 'meter', type: 'meter', knobs: {} }], cables: [...cables] };
@@ -578,7 +601,8 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
   const dice: Module[] = [];
   if (endOf(s.routes[routeKey('track', null, 'look')] ?? 0) !== 0) {
     // How much of the look a new track rolls anew: the route's amount (−100 %: all of it).
-    dice.push({ id: 'dice', type: 'dice', knobs: { scope: 0, reach: Math.min(1, Math.abs(endOf(s.routes[routeKey('track', null, 'look')] ?? 0))) } });
+    // The face it rolls (0077: the dice play the face): every macro of every level.
+    dice.push({ id: 'dice', type: 'dice', knobs: { scope: RANDOMIZE_SCOPES.indexOf('macros'), reach: Math.min(1, Math.abs(endOf(s.routes[routeKey('track', null, 'look')] ?? 0))) } });
     cables.push(
       { id: 'dice-trigger', from: { module: 'music', port: 'newtrack', reference: 'absolute' }, to: { module: 'dice', port: 'trigger' }, value: 1, mode: 'swing', depth: null },
       { id: 'dice-seed', from: { module: 'music', port: 'seed', reference: 'absolute' }, to: { module: 'dice', port: 'seed' }, value: 1, mode: 'swing', depth: null },

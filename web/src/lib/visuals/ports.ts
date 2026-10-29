@@ -690,7 +690,8 @@ export type CableV2 = {
   depth?: PortRef | null;
 };
 
-export type PatchV2 = { v: 2; modules: Module[]; cables: CableV2[]; macros: Macro[]; pins: string[] };
+/** `rev`: the model changes it has been brought through (upgrade.ts), none before 0077. */
+export type PatchV2 = { v: 2; modules: Module[]; cables: CableV2[]; macros: Macro[]; pins: string[]; rev?: number };
 
 /** The blends a Mix input takes (0056's, as a step knob per input). */
 // Appended only: a saved Mix keeps its modes by their place (Subtract, 0057 §4: a picture less another, its high-pass

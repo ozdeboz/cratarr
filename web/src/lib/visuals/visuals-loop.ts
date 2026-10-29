@@ -10,12 +10,11 @@
 import { coverUrl } from '../api';
 import { playing } from '../remote.svelte';
 import { wavesMotion, zoomsMotion } from './aspects';
-import { beatsOf } from './beats';
 import { chainNow } from './chain-params';
 import { settingsReport } from './effects';
 import { newEngine, stepEngine, type EngineFrame } from './engine/graph';
 import { LivePatch } from './engine/live-patch';
-import { rollOf, type DiceCheck, type Roll, type Rolled } from './engine/dice';
+import { rollOf, type Roll, type Rolled } from './engine/dice';
 import type { Randomized } from './engine/randomize';
 import { effectSlotsOf } from './engine/settings-view';
 import { FREE, holding, leversOf, type Levers } from './engine/sidechain';
@@ -31,8 +30,7 @@ import { FlameRenderer, type PictureInputs } from './render';
 import { A, T } from './routes';
 import { BANDS, FLUID_FULL, type VisualSettings } from './settings.svelte';
 import type { EffectSettings } from './effects';
-import { signalsOf } from './signals';
-import { applyKnobs, asSet } from './v2';
+import { applyKnobs, applyMacros, asSet } from './v2';
 
 /** A new track's look blends in over this long; one the dice made, quicker (Visuals.svelte's). */
 const BLEND_MS = 6000;
@@ -96,13 +94,13 @@ export class VisualsLoop {
 
   /** A roll of the dice (the panel's): over `scope` (everything, a category, the cables; or these modules: a module's
    *  own Randomize), a fresh seed, checked against the track, an edit (one undo step). */
-  roll(scope: Roll = 'everything') {
+  roll(scope: Roll = 'macros') {
     this.#rollWanted = { scope, seed: null, edit: 'dice' };
   }
 
   /** The playing track's own look again (its seed, everything not pinned), as a new track rolls it; an edit. */
   resetToSeed() {
-    this.#rollWanted = { scope: 'everything', seed: -1, edit: 'reset' };
+    this.#rollWanted = { scope: 'macros', seed: -1, edit: 'reset' };
   }
 
   /** The middle of the picture at 16:9, 160 x 90, as a JPEG (a snapshot's thumbnail), from the next frame drawn. */
@@ -165,7 +163,7 @@ export class VisualsLoop {
 
     // Values moving in after a roll or a new track's look (the one morph, 0057): each knob from where it was to where
     // the roll put it, over the blend; a step at once, and the Flame's look as a flame blends (`from` → `to`).
-    let easing: { from: Randomized; to: Randomized; start: number; ms: number } | null = null;
+    let easing: { from: Randomized; to: Randomized; macrosFrom: Record<string, number>; macrosTo: Record<string, number>; start: number; ms: number } | null = null;
     const ease = (flat: PatchV2, now: number) => {
       if (!easing) return;
       const k = Math.min(1, (now - easing.start) / easing.ms);
@@ -177,6 +175,11 @@ export class VisualsLoop {
           const was = easing.from[id]?.[knob];
           if (typeof was === 'number' && typeof v === 'number') m.knobs[knob] = was + (v - was) * s;
         }
+      }
+      for (const [id, v] of Object.entries(easing.macrosTo)) {
+        const x = flat.macros.find((y) => y.id === id);
+        const was = easing.macrosFrom[id];
+        if (x && typeof was === 'number') x.value = was + (v - was) * s;
       }
       if (k >= 1) easing = null;
     };
@@ -195,29 +198,39 @@ export class VisualsLoop {
         fromValues[id] = Object.fromEntries(eased.map((k) => [k, m.knobs[k]]));
         toValues[id] = Object.fromEntries(eased.map((k) => [k, knobs[k]]));
       }
+      // A macro's value glides in the one morph (0077), unless it maps a step (Form, Symmetry, a Lens, Colours: a choice
+      // changes at once, the Flame's own glide carrying its look over).
+      const mapsStep = (x: { targets: { module: string; knob: string }[] }, depth = 0): boolean =>
+        x.targets.some((t) => {
+          const inner = t.knob === 'value' ? flat.macros.find((y) => y.id === t.module) : undefined;
+          if (inner) return depth < 4 && mapsStep(inner, depth + 1);
+          const type = flat.modules.find((m) => m.id === t.module)?.type ?? '';
+          return host.types[type]?.knobs.find((k) => k.id === t.knob.replace(/\.\d+$/, ''))?.kind === 'step';
+        });
+      const macrosFrom: Record<string, number> = {};
+      const macrosTo: Record<string, number> = {};
+      for (const [id, v] of Object.entries(macros)) {
+        const x = flat.macros.find((y) => y.id === id);
+        if (!x || mapsStep(x)) continue;
+        macrosFrom[id] = x.value;
+        macrosTo[id] = v;
+      }
       const f = (p: PatchV2) => {
         applyKnobs(p, values);
         for (const c of p.cables) if (c.id in cables) c.value = cables[c.id];
-        for (const x of p.macros) if (x.id in macros) x.value = macros[x.id];
+        applyMacros(p, macros);
       };
       // A roll (the dice's, a reset) is one undo step of its own: never merged with the one before, however soon after.
       if (edit) host.store.change(f, null);
       else host.store.perform(f);
-      if (ms > 0) easing = { from: fromValues, to: toValues, start: now, ms };
+      if (ms > 0) easing = { from: fromValues, to: toValues, macrosFrom, macrosTo, start: now, ms };
     };
 
-    // A roll being worked out, over frames (the flame's survey yields; engine/dice.ts): a new track's (the patch's Dice:
-    // a performance) or the dice's (tried against the track, an edit).
+    // A roll being worked out, over frames (the Flame's survey yields; engine/dice.ts): a new track's (the patch's Dice:
+    // a performance) or the dice's (an edit).
     let rolling: Generator<void, Rolled> | null = null;
     let rollingAs: { edit: string | null; ms: number } = { edit: null, ms: BLEND_MS };
-    /** The track the dice are checked against: its signals and beats as the page has them, and where in it. */
-    const checkOf = (check: { key: string; position: number } | null): DiceCheck | null => {
-      if (!check) return null;
-      const [source, id] = [check.key.slice(0, check.key.indexOf('/')), check.key.slice(check.key.indexOf('/') + 1)];
-      const signals = signalsOf(source, id);
-      return signals ? { signals, beats: beatsOf(source, id) ?? null, position: check.position } : null;
-    };
-    const rollFor = (seed: number, roll: Roll, check: { key: string; position: number } | null, reach = 1) => rollOf(host.store.patch, host.types, host.device(), seed, roll, checkOf(check), reach);
+    const rollFor = (seed: number, roll: Roll, reach = 1) => rollOf(host.store.patch, host.types, seed, roll, reach);
 
     let passes = Math.min(ceilingOf(host.device().quality, devicePixels()).steps, pace?.passes ?? Infinity);
     let last = performance.now();
@@ -306,7 +319,7 @@ export class VisualsLoop {
         // Reset to seed: the track's own, unchecked (a new track's look is not checked either); the dice: a fresh one.
         const reset = want.seed === -1;
         const seed = reset ? seedOf(m.key ?? 'cratarr') : Math.floor(Math.random() * 0x100000000);
-        rolling = rollFor(seed, want.scope, reset || !m.key ? null : { key: m.key, position: m.position });
+        rolling = rollFor(seed, want.scope);
         rollingAs = { edit: want.edit, ms: reset ? BLEND_MS : ANOTHER_MS };
         lookCame = reset ? 'track' : 'dice';
       }
@@ -424,7 +437,7 @@ export class VisualsLoop {
       // undo step of its own (the owner: the track may change what is on, Undo brings back the look before it).
       for (const r of stepped.dice) {
         if (rolling) break;
-        rolling = rollFor(r.seed, r.scope, null, r.reach);
+        rolling = rollFor(r.seed, r.scope, r.reach);
         // The first look shows at once; each next one blends in over a new track's time.
         rollingAs = { edit: looked ? 'track' : null, ms: looked ? BLEND_MS : 0 };
         looked = true;

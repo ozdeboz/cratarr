@@ -231,17 +231,39 @@ function scaled(c: Curve, from: number, to: number): Curve {
   return from !== 0 ? { ...c, h1: [c.h1[0], c.h1[1] * k], h2: [c.h2[0], c.h2[1] * k], h: to } : { h1: [1 / 3, to / 3], h2: [2 / 3, (2 * to) / 3], h: to, ...(c.walks ? { walks: true } : {}) };
 }
 
-/** The Macros roll (the owner: the dice within a rack's chosen ranges): each of the rack's macros a new value, drawn over
- *  0..1 from its own stream of the seed, as far as `reach` takes it from where it is; what is pinned (`macro:<id>`) kept. */
-export function randomizeMacros(p: PatchV2, opts: { seed: number; reach?: number }): Record<string, number> {
+/** The Macros roll (0077: the dice play the face, within the ranges its maker chose): every macro of every level a new
+ *  value, drawn over 0..1 from its own stream of the seed, as far as `reach` takes it from where it is; one pinned at its
+ *  level (`macro:<id>`) kept, and one a macro one level up maps (its owner rolls). Keyed by the macro's node as the
+ *  engine runs it (the rack's by its id, a device's `<device>/macro:<id>`). `at`: a device's path, its face alone (its
+ *  own Randomize). */
+export function randomizeMacros(p: PatchV2, opts: { seed: number; reach?: number; at?: readonly string[] }): Record<string, number> {
   const reach = clamp(finite(opts.reach, 1), 0, 1);
-  const pinned = new Set(p.pins);
   const out: Record<string, number> = {};
-  for (const x of p.macros) {
-    if (pinned.has(`macro:${x.id}`)) continue;
-    const now = clamp(finite(x.value, 0.5), 0, 1);
-    const drawn = randomFrom(seedOf(`${opts.seed}/macro/${x.id}`))();
-    out[x.id] = now + (drawn - now) * reach;
+  const roll = (key: string, value: number) => {
+    const now = clamp(finite(value, 0.5), 0, 1);
+    const drawn = randomFrom(seedOf(`${opts.seed}/macro/${key}`))();
+    out[key] = now + (drawn - now) * reach;
+  };
+  const level = (macros: readonly { id: string; value: number; targets: readonly { module: string; knob: string }[] }[], pins: readonly string[], modules: readonly Module[], path: string[], owned: ReadonlySet<string>) => {
+    for (const x of macros) if (!pins.includes(`macro:${x.id}`) && !owned.has(x.id)) roll(path.length ? `${path.join('/')}/macro:${x.id}` : x.id, x.value);
+    for (const m of modules) {
+      if (!isDevice(m)) continue;
+      const mapped = new Set(macros.flatMap((x) => x.targets.filter((t) => t.module === m.id && t.knob.startsWith('macro:')).map((t) => t.knob.slice('macro:'.length))));
+      level(m.macros, m.patch.pins, m.patch.modules, [...path, m.id], mapped);
+    }
+  };
+  if (!opts.at?.length) {
+    level(p.macros, p.pins, p.modules, [], new Set());
+    return out;
   }
+  // A device's own face: from where it sits.
+  let modules = p.modules;
+  let found: Module | undefined;
+  for (const step of opts.at) {
+    found = modules.find((m) => m.id === step);
+    if (!found || !isDevice(found)) return out;
+    modules = found.patch.modules;
+  }
+  if (found && isDevice(found)) level(found.macros, found.patch.pins, found.patch.modules, [...opts.at], new Set());
   return out;
 }
