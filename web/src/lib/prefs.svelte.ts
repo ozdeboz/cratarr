@@ -3,7 +3,7 @@
 
 import { inApp, toApp } from './app.svelte';
 import { LIST_WIDTHS } from './pageView.svelte';
-import { isSpotifyView, type SpotifyView } from './libraryViews';
+import { isDiscoverMode, isSpotifyView, type DiscoverMode } from './discoverModes';
 import type { Condition } from './api';
 import { FACTS, type FactId } from './facts';
 
@@ -99,17 +99,10 @@ export type FlowBackdrop = (typeof FLOW_BACKDROPS)[number];
 
 export type Prefs = {
   theme: Theme;
-  /** What the Library shows (the switch beside back; the owner, 2026-10-25): its albums, or their artists; or one of
-   *  the account's Spotify lists (decision 0073, lib/spotify). */
-  libraryView: 'albums' | 'artists' | 'tracks' | SpotifyView;
-  /** Which view the Library opens on (Settings › Content; the owner, 2026-10-25): the one it was left on, or always
-   *  the same. */
-  libraryOpens: 'last' | 'albums' | 'artists' | 'tracks';
-  /** The Library's Artists' and Tracks' orders, as its albums' (libraryOrder). */
-  libraryArtistOrder: 'name' | 'albums' | 'tracks';
-  libraryArtistDown: boolean;
-  libraryTrackOrder: 'title' | 'artist' | 'album' | 'added' | 'year' | 'plays' | 'duration' | 'tempo' | 'albumArtist' | 'lastPlayed';
-  libraryTrackDown: boolean;
+  /** What Discover shows (the picker beside back, lib/DiscoverPicker; the owner, 2026-10-29): Fresh, Alike, Gaps or New
+   *  artists, or one of the account's Spotify lists (decision 0073, lib/spotify; the Library's before). The Library is
+   *  its records alone (the owner, 2026-10-29: its Artists and Tracks went). */
+  discoverMode: DiscoverMode;
   /** This device's animations (Display, the owner 2026-10-25): off, as the system's reduced motion (lib/motion). */
   animations: boolean;
   /** Panels' breadcrumbs whole, scrolled to where one is, rather than cut short (lib/Crumbs; a tap on a cut title, the
@@ -405,12 +398,7 @@ export const DEFAULTS: Prefs = {
   animations: true,
   crumbsWhole: true,
   modeSwitchInBar: false,
-  libraryView: 'albums',
-  libraryOpens: 'last',
-  libraryArtistOrder: 'name',
-  libraryArtistDown: false,
-  libraryTrackOrder: 'album',
-  libraryTrackDown: false,
+  discoverMode: 'fresh',
   navAt: 'top',
   navHides: false,
   navHidesOnItem: true,
@@ -504,12 +492,9 @@ function read(): Prefs {
       if (typeof saved.animations === 'boolean') p.animations = saved.animations;
       if (typeof saved.crumbsWhole === 'boolean') p.crumbsWhole = saved.crumbsWhole;
       if (typeof saved.modeSwitchInBar === 'boolean') p.modeSwitchInBar = saved.modeSwitchInBar;
-      if (['albums', 'artists', 'tracks'].includes(saved.libraryView) || isSpotifyView(saved.libraryView)) p.libraryView = saved.libraryView;
-      if (['last', 'albums', 'artists', 'tracks'].includes(saved.libraryOpens)) p.libraryOpens = saved.libraryOpens;
-      if (['name', 'albums', 'tracks'].includes(saved.libraryArtistOrder)) p.libraryArtistOrder = saved.libraryArtistOrder;
-      if (typeof saved.libraryArtistDown === 'boolean') p.libraryArtistDown = saved.libraryArtistDown;
-      if (['title', 'artist', 'album', 'added', 'year', 'plays', 'duration', 'tempo', 'albumArtist', 'lastPlayed'].includes(saved.libraryTrackOrder)) p.libraryTrackOrder = saved.libraryTrackOrder;
-      if (typeof saved.libraryTrackDown === 'boolean') p.libraryTrackDown = saved.libraryTrackDown;
+      if (isDiscoverMode(saved.discoverMode)) p.discoverMode = saved.discoverMode;
+      // A Spotify list left on in the Library before it moved: on in Discover.
+      else if (isSpotifyView(saved.libraryView)) p.discoverMode = saved.libraryView;
       if (saved.navAt === 'top' || saved.navAt === 'bottom') p.navAt = saved.navAt;
       if (typeof saved.navHides === 'boolean') p.navHides = saved.navHides;
       if (typeof saved.navHidesOnItem === 'boolean') p.navHidesOnItem = saved.navHidesOnItem;

@@ -27,9 +27,9 @@
   import SizeControl from './SizeControl.svelte';
 
   // `order`: the panel list's own order instead of a page's (`page` null). The Library's columns are its list's: its
-  // albums', artists' or tracks' (`kind`, else by its view).
+  // records' (`kind`: a list of the device's, lib/layouts).
   let { page = null, order = null, kind, onclose }: { page?: string | null; order?: ListOrder | null; kind?: LibraryList; onclose: () => void } = $props();
-  const listKind = $derived<LibraryList>(kind ?? (page === 'library' && prefs.libraryView === 'artists' ? 'artists' : page === 'library' && prefs.libraryView === 'tracks' ? 'tracks' : 'albums'));
+  const listKind = $derived<LibraryList>(kind ?? 'albums');
   const offered = $derived(listKind === 'tracks' ? LIBRARY_TRACK_COLUMNS : COLUMNS[listKind].map((c) => c.id));
 </script>
 

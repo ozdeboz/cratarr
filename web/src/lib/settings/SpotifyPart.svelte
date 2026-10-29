@@ -50,9 +50,9 @@
     return s.at ? `Read ${when(s.at)}` : null;
   });
 
-  function showInLibrary() {
-    prefs.libraryView = 'spotify-albums';
-    location.hash = '#/library';
+  function showInDiscover() {
+    prefs.discoverMode = 'spotify-albums';
+    location.hash = '#/discover';
   }
 
   let typing = $state(false);
@@ -110,7 +110,7 @@
     line={sp?.shown === 'live' ? 'From your live connection' : sp?.shown === 'imported' ? 'From your export' : 'Upload your export, or connect'}
     wrap
   />
-  {#if sp?.shown}<Item name="Show in the Library" onclick={showInLibrary} />{/if}
+  {#if sp?.shown}<Item name="Show in Discover" onclick={showInDiscover} />{/if}
   {#if error}<Item lead="bad" name={error} wrap />{/if}
 </Group>
 

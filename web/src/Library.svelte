@@ -3,9 +3,9 @@
   // (lib/AlbumShelf), read at once (GET /api/albums). Which libraries show is the filter's library switches. An album's
   // facts show with it: its library as a dot in that library's colour (none for Music, and only while more than one
   // shows), an Incoming album's conversion, or how it relates to Music (an upgrade, a duplicate). Its menu
-  // (lib/LibrarySheet) moves it into another library, replaces the album in Music it upgrades, or deletes it.
-  import LibraryArtists from './lib/LibraryArtists.svelte';
-  import LibraryTracks from './lib/LibraryTracks.svelte';
+  // (lib/LibrarySheet) moves it into another library, replaces the album in Music it upgrades, or deletes it. Its
+  // records only (the owner, 2026-10-29: Artists and Tracks went, crates being the way to tracks); which kind beside
+  // back (lib/RecordsPicker).
   import { ApiError, type AlbumsSource, type ListedAlbum, type ShelfSource } from './lib/api';
   import AlbumShelf from './lib/AlbumShelf.svelte';
   import Meter from './lib/Meter.svelte';
@@ -21,18 +21,6 @@
   import { libraryShown } from './lib/sources.svelte';
   import { untrack } from 'svelte';
   import { me } from './lib/me.svelte';
-  import SpotifyLibrary from './lib/SpotifyLibrary.svelte';
-  import { inSpotify, loadSpotify, spotify } from './lib/spotify.svelte';
-  import { isSpotifyView, libraryViewOf } from './lib/libraryViews';
-  // Opened on the page its address names (`#/library/tracks`, the navigation's); else on the view Settings says,
-  // unless that is the one it was left on (the owner, 2026-10-25).
-  const asked = libraryViewOf(location.hash);
-  if (asked) prefs.libraryView = asked;
-  else if (prefs.libraryOpens !== 'last') prefs.libraryView = prefs.libraryOpens;
-  // A Spotify list left on, and the account has none any more (disconnected, the export forgotten): its albums.
-  loadSpotify().then(() => {
-    if (inSpotify() && spotify.state && !spotify.state.shown) prefs.libraryView = 'albums';
-  });
 
   let error = $state<string | null>(null);
   const sources = $derived<AlbumsSource[] | null>(library.view?.sources ?? null);
@@ -132,19 +120,11 @@
   const lacksOf = (shelf: ShelfSource, a: ListedAlbum) => sources?.find((x) => x.id === shelf.id)?.lacks?.[a.id] ?? [];
 
   // The filter (decisions 0060 and 0061): its own switches (Favourites only, Unplayed only, 4 stars and up) and its
-  // conditions, remembered as the Library's; one left on from before goes by nothing. One filter for the three views,
-  // each by its own items (the owner, 2026-10-28: "whole and complete"), and one engine: the server, which holds what
-  // each switch means (the owner, 2026-10-29), says which albums pass, or which artists (an artist hearted, never played,
-  // with an album that passes the rest); the tracks it pages filtered (lib/LibraryTracks).
-  const view = $derived(prefs.libraryView);
-  const pass = passing(
-    () => 'library',
-    () => (view === 'tracks' ? null : { list: { kind: view === 'artists' ? 'artists' : 'library' }, source: prefs.source || undefined }),
-  );
+  // conditions (the kind beside back is its Type row), remembered as the Library's; one left on from before goes by
+  // nothing. One engine: the server, which holds what each switch means (the owner, 2026-10-29), says which records pass.
+  const pass = passing(() => 'library', () => ({ list: { kind: 'library' }, source: prefs.source || undefined }));
   const shown = $derived.by<ShelfSource[] | null>(() => {
     const keys = pass.keys;
-    // The tracks' view: the server filters them (lib/LibraryTracks); the artists' by their keys (lib/LibraryArtists).
-    if (view === 'tracks' || view === 'artists') return sources;
     // What a filter goes by not in yet: loading, not the albums unfiltered or none (the owner, 2026-10-23).
     if (pass.pending && !keys) return null;
     if (!sources || !keys) return sources;
@@ -152,9 +132,7 @@
   });
   // How many albums the filter lets through, of how many (the Filter sheet's count): of the libraries switched on, as
   // the shelf shows them (it said 605 of 2,861 with Music switched off).
-  // The albums' (the artists and the tracks count their own).
   $effect(() => {
-    if (view === 'artists' || view === 'tracks') return;
     const count = (l: ShelfSource[] | null) => (l ?? []).reduce((n, s) => n + s.albums.filter((a) => !a.library || libraryShown(s.id, a.library)).length, 0);
     pageView.counted = sources ? { shown: count(shown), total: count(sources), pending: pass.pending } : null;
     return () => (pageView.counted = null);
@@ -162,18 +140,13 @@
 </script>
 
 <main>
-  <!-- One of the account's Spotify lists (decision 0073), while it has them; none any more: its albums again. -->
-  {#if inSpotify() && isSpotifyView(prefs.libraryView)}
-    <SpotifyLibrary view={prefs.libraryView} />
-  {:else if error}
+  {#if error}
     <p class="error" role="alert">{error}</p>
   {:else if shown === null}
     <PageLoading />
   {:else if shown.length === 0}
     <p class="empty">No server with a Music or Incoming library is connected.</p>
   {:else}
-    <!-- Its artists instead (the switch beside back, App): the albums' artists. -->
-    {#if prefs.libraryView === 'artists'}<LibraryArtists all={sources ?? []} keys={pass.keys} pending={pass.pending} />{:else if prefs.libraryView === 'tracks'}<LibraryTracks />{:else}
     <AlbumShelf sources={shown} empty="No albums." onmenu={openMenu} bind:order={prefs.libraryOrder} bind:down={prefs.libraryDown}>
       {#snippet extra(s: ShelfSource, a: ListedAlbum)}
         {#if jobs.of(s.id, a.id)}
@@ -192,7 +165,6 @@
         {#if me.admin && lacksOf(s, a).length}<span class="lacks">Missing {lacksOf(s, a).join(', ')}</span>{/if}
       {/snippet}
     </AlbumShelf>
-    {/if}
   {/if}
 </main>
 

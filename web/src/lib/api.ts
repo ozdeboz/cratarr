@@ -1799,11 +1799,21 @@ export type DiscoverAlbum = {
   length_secs?: number | null;
   track_count?: number | null;
   listeners?: number | null;
+  /** Discover's mode it is in (the owner, 2026-10-29): the reason that fits it best, `score` that fit (0 to 1). */
+  mode?: 'fresh' | 'alike' | 'gaps' | 'artists';
+  score?: number;
+  /** When it came out ("YYYY-MM-DD" or "YYYY-MM"), where known: Fresh's order. */
+  released?: string;
+  /** How often the account played its artist, an artist the library has: Gaps' order. */
+  artist_plays?: number;
 };
+/** An artist the library does not have (Discover's New artists): why, how well they fit, their records that fit best
+ *  (keys of `found.albums`, the best first). */
+export type DiscoverArtist = { name: string; artist_key: string; photo?: string; why: string[]; score: number; records: string[] };
 /** Discover's page: the suggestions as last found (none before the first look), which services it asks, and whether
  *  Want can fetch through Lidarr. */
 export type DiscoverView = {
-  found: { at: number; albums: DiscoverAlbum[]; notes: string[] } | null;
+  found: { at: number; albums: DiscoverAlbum[]; artists?: DiscoverArtist[]; notes: string[] } | null;
   services: { listenbrainz: boolean; lastfm: boolean };
   lidarr: boolean;
   /** Each card's request, by its key, if it was asked for (decision 0070). */
@@ -1868,6 +1878,8 @@ export const decideRequests = (ids: number[], approve: boolean, reason: string |
 export const cancelRequest = (id: number) => post<void>(`/api/requests/${id}/cancel`, {});
 /** Not interested: never again, its artist held against it (twice, and they are left out). Its undo token. */
 export const notDiscover = (key: string) => post<{ undo: string }>('/api/discover/no', { key });
+/** Not interested in an artist (the owner, 2026-10-29): they and their records leave every mode of Discover for good. */
+export const notDiscoverArtist = (name: string) => post<{ undo: string }>(`/api/discover/artist/${encodeURIComponent(name)}/not`, {});
 /** Hidden: gone from the list, its artist not held against it (unlike Not interested). Its undo token. */
 export const hideDiscover = (key: string) => post<{ undo: string }>('/api/discover/hide', { key });
 /** A Bandcamp album's tracks to play as a preview (decision 0071), as players hold them; never a play. */

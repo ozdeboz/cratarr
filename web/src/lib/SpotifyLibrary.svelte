@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The account's Spotify lists in the Library (decision 0073; the owner, 2026-10-27: to see what of it is here and ask
+  // The account's Spotify lists in Discover (decision 0073; the Library's before 2026-10-29; the owner, 2026-10-27: to see what of it is here and ask
   // for what is not, no playing on Spotify): its albums, tracks, playlists or followed artists, as the view menu says,
   // each saying whether it is here, partly, missing or asked for; the Filter leaves out what it is told, the search
   // narrows them. What is here is the library's own: an album's cover plays it and a tap opens it (lib/AlbumCard), a
@@ -28,7 +28,7 @@
   import CoverPlay from './CoverPlay.svelte';
   import { DISCOVER } from './discoverArtist';
   import ElsewhereAlbum, { elsewhereKey, type Elsewhere } from './ElsewhereAlbum.svelte';
-  import type { SpotifyView } from './libraryViews';
+  import type { SpotifyView } from './discoverModes';
   import type { LocalTrack } from './localPlayer.svelte';
   import { playPlaylistFrom } from './output.svelte';
   import PageLoading from './PageLoading.svelte';

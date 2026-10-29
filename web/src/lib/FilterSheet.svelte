@@ -42,8 +42,8 @@
     onclose: () => void;
   } = $props();
 
-  // The Library's Spotify lists filter as their own kind (lib/spotify).
-  const list = $derived(page === 'library' && inSpotify() ? SPOTIFY_FILTER : (page ?? kind ?? ''));
+  // Discover's Spotify lists filter as their own kind (lib/spotify).
+  const list = $derived(page === 'discover' && inSpotify() ? SPOTIFY_FILTER : (page ?? kind ?? ''));
   // Conditions on the lists whose items the server knows the facts of: the Library's albums, Playlists, and a
   // playlist's tracks in the panel (the panel's only list with a filter, lib/PlaylistView); Any or All where the items
   // hold tracks (decision 0061). Crates have none (decision 0060).
