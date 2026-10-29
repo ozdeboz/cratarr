@@ -21,6 +21,7 @@ import { inApp, onApp, toApp } from './app.svelte';
 import { albumCoverUrl, getTrackGain, playerCommand, radioNext, windMap, type TrackGain } from './api';
 import { prefs } from './prefs.svelte';
 import { aimPainted, holdNow, ramping, rampBegins, rampEnds, rewindNow, tapeDir, windAsked } from './ramping.svelte';
+import { easeInto, easing, readAt, shownAt, type Course, type Ease } from './deckCourse';
 import { asksSignIn, toSignIn } from './reach.svelte';
 import { consumed, rate, tapMs } from './windShape';
 import { BANDCAMP } from './bandcampPreview';
@@ -1053,8 +1054,10 @@ const handed = () => inApp || driven !== null;
  *  then that player's, as it reports it (`reported`). */
 export function drive(name: string | null) {
   driven = name;
-  // The next player's own, from its first report.
+  // The next player's own, from its first report, on its own clock.
   deck = null;
+  eased = null;
+  clockGaps = [];
   local.sleep = null;
   reported = { positionMs: 0, at: performance.now() };
 }
@@ -1070,20 +1073,20 @@ export function emptyHere() {
 
 /** The last report: the position then (ms), and when it came; the position in between is counted on here. */
 let reported = { positionMs: 0, at: 0 };
-/** The app's deck as it last said (a5, 0.9.14-2): its place then (s), when, its speed (track s per s, signed) and how
- *  fast that changes (per s). The place each moment follows from them, not from the reports' 250 ms steps (the owner,
- *  2026-10-28: the waveform and the deck moved in strides through a wind); a report corrects it. Null: an app from
- *  before, counted on as it was. */
-let deck: { pos: number; at: number; v: number; a: number } | null = null;
+/** The app's deck as it last said (a5, 0.9.14-2): its place then (s), when it was read, its speed (track s per s,
+ *  signed) and how fast that changes (per s). The place each moment follows from them, not from the reports' 250 ms steps
+ *  (the owner, 2026-10-28: the waveform and the deck moved in strides through a wind); a report's correction fades in
+ *  (lib/deckCourse; the owner, 2026-10-29: still strides). Null: an app from before, counted on as it was. */
+let deck: Course | null = null;
+/** A report's correction still fading in, and the two clocks' differences the deck's read time is taken from (one
+ *  player's: begun anew with each). */
+let eased: Ease | null = null;
+let clockGaps: number[] = [];
 /** Whether the app's deck goes backwards now (lib/SeekWave: a track change's colours from the right). */
 export const deckNow = $state({ back: false });
-/** The deck's place now: its last report carried on by its speed and acceleration, never past a stand (its speed
- *  coming to 0), within the track. */
-function deckPlace(d: NonNullable<typeof deck>, now = performance.now()): number {
-  let t = Math.max(0, (now - d.at) / 1000);
-  // Slowing to a stand: it stands there, not going back the other way.
-  if (d.a !== 0 && d.v !== 0 && Math.sign(d.a) !== Math.sign(d.v)) t = Math.min(t, -d.v / d.a);
-  const p = d.pos + d.v * t + 0.5 * d.a * t * t;
+/** The deck's place now, as shown: its course (never past a stand), a correction fading in, within the track. */
+function deckPlace(d: Course, now = performance.now()): number {
+  const p = shownAt(d, eased, now);
   return Math.max(0, local.duration ? Math.min(p, local.duration) : p);
 }
 /** The app's deck's speed now (× the track's, signed), from its last report; null: not said (here, or an older app). */
@@ -1094,13 +1097,15 @@ export function deckSpeed(now = performance.now()): number | null {
   return d.v !== 0 && Math.sign(v) !== Math.sign(d.v) ? 0 : v;
 }
 let deckFrame = 0;
-/** The deck moving other than playing on at its own speed: its place each frame (at 1× the counting on is enough). */
+/** The deck moving other than playing on at its own speed, or a correction fading in: its place each frame (at 1× the
+ *  counting on is enough). */
 function deckMoves() {
   if (deckFrame) return;
   const step = () => {
     deckFrame = 0;
     const d = deck;
-    if (!d || !handed() || (d.v === 1 && d.a === 0) || (d.v === 0 && d.a === 0)) return;
+    const steady = !!d && ((d.v === 1 && d.a === 0) || (d.v === 0 && d.a === 0)) && !easing(eased, performance.now());
+    if (!d || !handed() || steady) return;
     local.position = deckPlace(d);
     deckFrame = requestAnimationFrame(step);
   };
@@ -1135,6 +1140,8 @@ function gliding() {
   };
   glideFrame = requestAnimationFrame(step);
 }
+/** A queue's track as itself (its entry too), or null. */
+const trackKey = (t: LocalTrack | undefined) => (t ? `${t.source}/${t.id}/${t.entry ?? ''}` : null);
 const sameQueue = (a: LocalTrack[], b: LocalTrack[]) =>
   a.length === b.length && a.every((t, i) => t.source === b[i].source && t.id === b[i].id && t.entry === b[i].entry);
 
@@ -1159,8 +1166,11 @@ export function reportedBy(m: {
   starting?: unknown;
   speedX?: unknown;
   accelX?: unknown;
+  /** When the deck was read: ms of the app's elapsedRealtime (a5/purity 3032a237); an app from before says nothing. */
+  deckAtMs?: unknown;
   landing?: unknown;
 }) {
+  const trackBefore = trackKey(local.queue[local.index]);
   if (m.repeat === 'off' || m.repeat === 'one' || m.repeat === 'all') local.repeat = m.repeat;
   // Left out: not said (a report of the queue alone); null: none.
   if (m.sleep !== undefined) local.sleep = sleepOf(m.sleep);
@@ -1189,17 +1199,22 @@ export function reportedBy(m: {
   const now = performance.now();
   const pos = (Number(m.positionMs) || 0) / 1000;
   if (typeof m.speedX === 'number' && Number.isFinite(m.speedX)) {
-    deck = { pos, at: now, v: m.speedX, a: typeof m.accelX === 'number' && Number.isFinite(m.accelX) ? m.accelX : 0 };
+    // The place shown until now: the new course's correction fades in from it, on the same track (lib/deckCourse).
+    const before = deck ? deckPlace(deck, now) : null;
+    deck = { pos, at: readAt(clockGaps, m.deckAtMs, now), v: m.speedX, a: typeof m.accelX === 'number' && Number.isFinite(m.accelX) ? m.accelX : 0 };
+    eased = easeInto(before, deck, now, trackKey(local.queue[local.index]) === trackBefore);
     deckNow.back = deck.v < 0;
     tape.glide = null;
     local.position = deckPlace(deck, now);
     deckMoves();
   } else if (m.rewinding === true) {
     deck = null;
+    eased = null;
     tape.glide = { from: local.position, to: pos, at: now, span: Math.min(1000, Math.max(100, now - reported.at)) };
     gliding();
   } else {
     deck = null;
+    eased = null;
     tape.glide = null;
     local.position = pos;
   }
