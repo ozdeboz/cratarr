@@ -23,6 +23,7 @@
   let last = { x: 0, y: 0 };
   let fine: { raw: number; x: number; y0: number } | null = null;
   function startFine(at: { x: number; y: number }) {
+    if (knob.macro) return;
     fine = { raw: knob.value, x: at.x, y0: at.y };
     onfine?.({ value: knob.value, speed: 1, at: { x: at.x, y: at.y } });
   }
@@ -56,7 +57,8 @@
 
   function down(e: PointerEvent) {
     last = { x: e.clientX, y: e.clientY };
-    if (e.button !== 0) return;
+    // A macro's (0077): it turns with its macro, not by hand.
+    if (e.button !== 0 || knob.macro) return;
     e.stopPropagation();
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
     drag = { y: e.clientY, value: knob.value, moved: false };
@@ -83,6 +85,7 @@
     if (fine && !drag) endFine();
   }
   const nudge = (dir: number) => {
+    if (knob.macro) return;
     const v = turned(knob, knob.value, 0) + (knob.kind === 'step' ? dir : (dir * (knob.max - knob.min)) / 100);
     const next = Math.min(knob.max, Math.max(knob.min, v));
     if (next !== knob.value) onturn(next);
@@ -126,6 +129,8 @@
     <path d={arc(0, 1, r - 2)} class="track" />
     {#if knob.at > 0}<path d={arc(0, knob.at, r - 2)} class="value" />{/if}
     {#if knob.ring}<path d={arc(knob.ring[0], knob.ring[1], r + 2.5)} class="ring" />{/if}
+    <!-- Mapped (0077, µMAP's marker): its macro's range round the dial. -->
+    {#if knob.macro}<path d={arc(Math.min(...knob.macro.span), Math.max(...knob.macro.span), r + 2.5)} class="mapped"><title>{knob.label} ← {knob.macro.label}</title></path>{/if}
     {#each knob.channels ?? [] as ch (ch.id)}
       {@const a = A0 + SWEEP * ch.at}
       <line x1={c + (r - 4.5) * Math.cos(a)} y1={c + (r - 4.5) * Math.sin(a)} x2={c + (r - 0.5) * Math.cos(a)} y2={c + (r - 0.5) * Math.sin(a)} class="tick" />
@@ -138,6 +143,13 @@
 </div>
 
 <style>
+  .mapped {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+
   .knob {
     display: grid;
     justify-items: center;

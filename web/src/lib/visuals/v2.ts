@@ -154,6 +154,19 @@ export function asSet(p: PatchV2, m: Module | undefined, knob: string, types?: R
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }
 
+/** The macro mapping a flattened module's knob (0077: one a knob) or a device's macro (its node's `value`): its name,
+ *  its range, and the value as it sets it. */
+export function mappingOf(p: PatchV2, id: string, knob: string, types?: Record<string, ModuleType>): { label: string; from: number; to: number; value: number } | undefined {
+  for (const x of p.macros)
+    for (const t of x.targets)
+      if (t.module === id && t.knob === knob) {
+        const inner = knob === 'value' ? p.macros.find((y) => y.id === id) : undefined;
+        const value = inner ? macroAsSet(p, inner) : asSet(p, p.modules.find((y) => y.id === id), knob, types);
+        return value === undefined ? undefined : { label: x.label, from: t.from, to: t.to, value };
+      }
+  return undefined;
+}
+
 /** A flattened patch's macro's value as set: its own, or as the macro one level up that maps it sets it. */
 export function macroAsSet(p: PatchV2, x: Macro, seen: Set<string> = new Set([x.id])): number {
   for (const y of p.macros)

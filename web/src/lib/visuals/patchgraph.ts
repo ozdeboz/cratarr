@@ -17,6 +17,7 @@ import { signalOf } from './music-signals';
 import { areaParts, faceHeight as partsHeight, faceOf, type FacePart, type Thumbs } from './face/face';
 import { freeCableId, newCable, type Cables } from './cable-actions';
 import { makeDevice, unmakeDevice, type MacroPick } from './device-make';
+import { flatten, macroNode, mappingOf } from './v2';
 
 export type Side = 'left' | 'right' | 'top' | 'bottom';
 export type XY = { x: number; y: number };
@@ -36,6 +37,9 @@ export type KnobView = {
   pinned?: boolean;
   /** A step's choices by name (Knob `options`). */
   options?: readonly string[];
+  /** The macro that maps it (0077: one a knob; the µMAP marker): its name and its range's ends on the dial (0..1). Its
+   *  value is as the macro sets it; it does not turn by hand. */
+  macro?: { label: string; span: [number, number] };
   /** A polyphonic knob drawn as one (0057 §4b: a band's six): each channel's knob id, value and place in the range; the
    *  knob's own `value` and `at` their mean. */
   channels?: { id: string; value: number; at: number }[];
@@ -323,7 +327,14 @@ const isNext = (port: string) => port.endsWith(':next') || port.endsWith(':gain'
 export function knobViews(
   m: Module,
   t: ModuleType,
-  o: { open: ReadonlySet<string>; room: number; cabled: (knob: string) => boolean; cablesInto: (knob: string) => (Pick<Cable, 'value'> & { mode?: Cable['mode'] })[] },
+  o: {
+    open: ReadonlySet<string>;
+    room: number;
+    cabled: (knob: string) => boolean;
+    cablesInto: (knob: string) => (Pick<Cable, 'value'> & { mode?: Cable['mode'] })[];
+    /** The macro mapping a knob of it, if one does (v2.ts mappingOf). */
+    mapped?: (knob: string) => { label: string; from: number; to: number; value: number } | undefined;
+  },
 ): { knobs: KnobView[]; hidden: number } {
   const flat = t.knobs.filter((k) => !k.device);
   const byId = new Map(flat.map((k) => [k.id, k]));
@@ -356,16 +367,21 @@ export function knobViews(
       ...(hasGain(k) ? { gain: true, ...(o.cabled(gainPort(k.id)) ? { gainOn: true } : {}) } : {}),
     };
     const named = k.options ? { options: k.options } : {};
+    const macroOf = (g: { label: string; from: number; to: number } | undefined) => (g ? { macro: { label: g.label, span: [atOf(k, g.from), atOf(k, g.to)] as [number, number] } } : {});
     if (!k.channels) {
-      const value = m.knobs[k.id] ?? k.default;
-      return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), ...named, ...beside };
+      const g = o.mapped?.(k.id);
+      const value = g ? g.value : (m.knobs[k.id] ?? k.default);
+      return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), ...named, ...beside, ...macroOf(g) };
     }
+    let first: ReturnType<NonNullable<typeof o.mapped>>;
     const channels = channelKnobs(k).map((x) => {
-      const value = m.knobs[x.id] ?? m.knobs[k.id] ?? x.default;
+      const g = o.mapped?.(x.id);
+      first ??= g;
+      const value = g ? g.value : (m.knobs[x.id] ?? m.knobs[k.id] ?? x.default);
       return { id: x.id, value, at: atOf(k, value) };
     });
     const value = channels.reduce((a, c) => a + c.value, 0) / channels.length;
-    return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), channels, ...named, ...beside };
+    return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), channels, ...named, ...beside, ...macroOf(first) };
   });
   return { knobs, hidden: all.length - shown.length };
 }
@@ -744,6 +760,9 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
   const top = patchAt(patch, at);
   if (!top) return { nodes, edges };
   const portsFor = portsOfModule(types);
+  // The patch as the engine runs it, for what a macro sets (0077): a node's flattened id is its path from the top.
+  const flat = flatten(patch);
+  const flatId = (id: string) => (at.length ? `${at.join('/')}/${id}` : id);
   const data = new Map<string, ModuleData>();
 
   /** A module's node data at a level (`into`: that level's cables by `module.port`). */
@@ -781,14 +800,17 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
       }
       for (const x of m.macros) {
         knobIds.add(macroKnob(x.id));
-        knobs.push({ id: macroKnob(x.id), label: x.label, value: x.value, min: 0, max: 1, kind: 'level', at: clamp01(x.value), ring: ringOf(clamp01(x.value), cablesInto(macroKnob(x.id))) });
+        // Mapped by a macro one level up (0077): as that sets it, marked so.
+        const g = mappingOf(flat, macroNode(flatId(id), x.id), 'value');
+        const value = g ? g.value : x.value;
+        knobs.push({ id: macroKnob(x.id), label: x.label, value, min: 0, max: 1, kind: 'level', at: clamp01(value), ring: ringOf(clamp01(value), cablesInto(macroKnob(x.id))), ...(g ? { macro: { label: g.label, span: [clamp01(g.from), clamp01(g.to)] as [number, number] } } : {}) });
       }
     } else {
       const t = types[m.type] ?? { type: m.type, label: m.type, place, knobs: [] };
       label = moduleName(m, level, types);
       place = t.place;
       knobIds = new Set([...t.knobs, ...polyKnobs(t).knobs].map((k) => k.id));
-      const shown = knobViews({ ...m, id }, t, { open, room: modulator ? 0 : SHOWN, cabled, cablesInto });
+      const shown = knobViews({ ...m, id }, t, { open, room: modulator ? 0 : SHOWN, cabled, cablesInto, mapped: (knob) => mappingOf(flat, flatId(id), knob, types) });
       knobs = shown.knobs.map((k) => (level.pins.includes(`${m.id}.${k.id}`) ? { ...k, pinned: true } : k));
       hidden = shown.hidden;
     }

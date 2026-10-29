@@ -62,3 +62,20 @@ test('moved one level down again, a patch is as it was', () => {
   const once = JSON.stringify(p);
   assert.equal(JSON.stringify(macrosOneLevel(p)), once);
 });
+
+test('a mapped knob shows its macro and the value it sets, in the graph as in the panel (knobViews)', async () => {
+  const { graphOfV2 } = await import('../src/lib/visuals/patchgraph.ts');
+  const p = toV2({ ...structuredClone(DEFAULTS), intensity: 0.8 });
+  const g = graphOfV2({ patch: p, types, open: new Set(['envelope']) });
+  const env = g.nodes.find((n) => n.id === 'envelope')!.data as { knobs: { id: string; value: number; macro?: { label: string } }[] };
+  const k = env.knobs.find((x) => x.id === 'intensity')!;
+  assert.equal(k.macro?.label, 'Intensity');
+  const flat = flatten(p);
+  assert.equal(k.value, asSet(flat, flat.modules.find((m) => m.id === 'envelope'), 'intensity', types));
+  // Inside Calm: its own Wild mapped by the rack's.
+  const inCalm = graphOfV2({ patch: p, types, at: ['calm'], open: new Set(['duck-motion']) });
+  const duck = inCalm.nodes.find((n) => n.id === 'duck-motion')!.data as { knobs: { id: string; macro?: { label: string } }[] };
+  assert.equal(duck.knobs.find((x) => x.id === 'threshold')?.macro?.label, 'Wild');
+  const top = g.nodes.find((n) => n.id === 'calm')!.data as { knobs: { id: string; macro?: { label: string } }[] };
+  assert.equal(top.knobs.find((x) => x.id === 'macro:wild')?.macro?.label, 'Wild');
+});

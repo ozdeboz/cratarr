@@ -29,6 +29,7 @@
   import { byCategory, CATEGORIES, CATEGORY_LABEL, deviceCategory, portsFrom, type Category } from './rack';
   import { DEVICES } from './devices';
   import { RANGES, saveVisualSettings, visualSettings as s } from './settings.svelte';
+  import { flatten, macroNode, mappingOf } from './v2';
   import type { Module } from './patch';
   import type { V2Type } from './v2-types';
 
@@ -155,13 +156,25 @@
   const percent = (v: number) => `${Math.round(v * 100)}%`;
   /** A module's knobs as the graph draws them (patchgraph.ts knobViews): a band's six as one, at their mean; a step
    *  with its choices' names. */
-  const knobsOf = (level: PatchV2, m: Module, t: V2Type | undefined): KnobView[] =>
-    t ? knobViews(m, t, { open: new Set(), room: Infinity, cabled: (k) => cablesInto(level, m.id, k).length > 0, cablesInto: (k) => cablesInto(level, m.id, k) }).knobs : [];
+  const knobsOf = (level: PatchV2, m: Module, t: V2Type | undefined, at?: string[]): KnobView[] =>
+    t
+      ? knobViews(m, t, {
+          open: new Set(),
+          room: Infinity,
+          cabled: (k) => cablesInto(level, m.id, k).length > 0,
+          cablesInto: (k) => cablesInto(level, m.id, k),
+          mapped: at ? (k) => mappingOf(flat, at.join('/'), k, types) : undefined,
+        }).knobs
+      : [];
+  /** The patch as the engine runs it: what a macro sets (0077), by a module's path from the top. */
+  const flat = $derived(flatten(patch));
   /** A module's knob by its path and id, as drawn. */
   function knobAt(at: string[], id: string): KnobView | undefined {
     const f = moduleAt(at);
-    return f ? knobsOf(f.level, f.m, types[f.m.type]).find((k) => k.id === id) : undefined;
+    return f ? knobsOf(f.level, f.m, types[f.m.type], at).find((k) => k.id === id) : undefined;
   }
+  /** The level a module or a device's macro is in, its macros there: its device's page, or the rack's (the top). */
+  const goLevel = (at: string[]) => (at.length > 1 ? (path = [`m|${at.slice(0, -1).join('/')}`]) : (path = []));
   // The inputs that are no knob's: a picture, light, points, a flow, sound, a trigger, a value of its own.
   function ownInputs(level: PatchV2, m: Module, t: V2Type | undefined): Port[] {
     const knobs = knobsOf(level, m, t);
@@ -330,7 +343,14 @@
   {@const n = cablesInto(level, m.id, k.id).length}
   {@const pin = `${m.id}.${k.id}`}
   <div class="knob">
-    {#if k.kind === 'step' && k.options && isSwitch(k)}
+    {#if k.macro}
+      <!-- Its macro's (0077: one a knob): as the macro sets it, named; a tap goes to the macro's level. -->
+      <div class="row pinnable">
+        <span>{k.label}</span>
+        <button class="choice open" onclick={() => goLevel(at)}><span>{k.macro.label} · {knobText(k, k.value)}</span><Icon name="chevronRight" size={16} /></button>
+        {@render pinButton(level, at.slice(0, -1), pin, k.label)}
+      </div>
+    {:else if k.kind === 'step' && k.options && isSwitch(k)}
       <!-- A yes or a no: a switch (the choices' rule, the owner 2026-10-25). -->
       <div class="row pinnable">
         <span>{k.label}</span>
@@ -381,13 +401,14 @@
   {/if}
 
   {#if !path.length}
-    {#if patch.macros.some((m) => (m as { on?: string }).on === 'rack')}
+    {#if patch.macros.length}
+      <!-- The rack's face (0077): its macros, every one. -->
       <div class="rows">
-        <h3>Rack</h3>
-        {#each patch.macros.filter((m) => (m as { on?: string }).on === 'rack') as x (x.id)}
-          {@const v = (x as { value: number }).value}
+        <h3>Macros</h3>
+        {#each patch.macros as x (x.id)}
+          {@const v = x.value}
           <label class="row">
-            <span>{(x as { label: string }).label}</span>
+            <span>{x.label}</span>
             <input type="range" use:panSafe min="0" max="1" step="0.01" value={v} oninput={(e) => edit({ kind: 'macro', scope: [], id: x.id, value: Number(e.currentTarget.value) })} />
             <output>{percent(v)}</output>
           </label>
@@ -462,11 +483,20 @@
           <div class="rows">
             <h3>Macros</h3>
             {#each d.macros as x (x.id)}
-              <label class="row">
-                <span>{x.label}</span>
-                <input type="range" use:panSafe min="0" max="1" step="0.01" value={x.value} oninput={(e) => edit({ kind: 'knob', module: at, knob: `macro:${x.id}`, value: Number(e.currentTarget.value) })} />
-                <output>{percent(x.value)}</output>
-              </label>
+              {@const g = mappingOf(flat, macroNode(at.join('/'), x.id), 'value')}
+              {#if g}
+                <!-- Mapped by its level's macro (0077: one level down): as that sets it; a tap goes there. -->
+                <div class="row">
+                  <span>{x.label}</span>
+                  <button class="choice open" onclick={() => goLevel(at)}><span>{g.label} · {percent(g.value)}</span><Icon name="chevronRight" size={16} /></button>
+                </div>
+              {:else}
+                <label class="row">
+                  <span>{x.label}</span>
+                  <input type="range" use:panSafe min="0" max="1" step="0.01" value={x.value} oninput={(e) => edit({ kind: 'knob', module: at, knob: `macro:${x.id}`, value: Number(e.currentTarget.value) })} />
+                  <output>{percent(x.value)}</output>
+                </label>
+              {/if}
             {/each}
           </div>
         {/if}
@@ -493,7 +523,7 @@
         {#if face.length}
           <div class="rows face"><Face parts={face} {live} path={at.join('/')} knobs={m.knobs} width={300} /></div>
         {/if}
-        {@const knobs = knobsOf(level, m, t)}
+        {@const knobs = knobsOf(level, m, t, at)}
         {#if knobs.length}
           <div class="rows">
             <div class="head">
