@@ -62,9 +62,10 @@ pub struct Listing {
     pub fetcher: bool,
 }
 
-/// What the signed-in account may do with requests: its permissions, an administrator's all.
+/// What the signed-in account may do with requests: its permissions, an administrator's all (signed in as one, not
+/// through one of their keys: access.rs `administering`).
 pub fn rights(serve: &Serve) -> Permissions {
-    if serve.current_is_admin() {
+    if crate::serve::access::administering() {
         return Permissions::all();
     }
     serve.current_user().and_then(|n| serve.users.get(&n)).map(|u| u.permissions).unwrap_or_default()

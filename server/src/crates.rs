@@ -1071,6 +1071,17 @@ fn has_value(c: &Condition, f: &Facts, w: &World) -> bool {
         "favourite" => w.favourites.is_some(),
         "favourite_album" => w.favourite_albums.is_some(),
         "playlist" | LEFT_OUT => true,
+        // How it was used, where that is read: every track has a count and a last play (never: longer ago than any).
+        // These seven had none (2026-10-29, the Filter sheet's audit): All on them matched nothing, and All negated
+        // everything.
+        "plays" | "played" => w.uses.is_some(),
+        // Stars only where some were given: All goes by the rated tracks, as All on a genre goes by the tagged ones.
+        "rating" => w.uses.is_some_and(|u| u.get(&f.rel).is_some_and(|u| u.rating.is_some())),
+        "added" => f.born.is_some(),
+        "artist" => !f.artists.is_empty(),
+        "length" => f.length.is_some(),
+        "quality" => f.quality.is_some(),
+        "key" => f.key.is_some(),
         "genre" => !f.genres.is_empty(),
         "type" => !f.release_types.is_empty(),
         "year" => f.year.is_some(),
@@ -2175,6 +2186,48 @@ mod tests {
         let one: Vec<Vec<Facts>> = items.iter().flatten().map(|f| vec![f.clone()]).collect();
         for not in [false, true] {
             assert_eq!(passing(&one, &[rock(Quantifier::Any, not)]), passing(&one, &[rock(Quantifier::All, not)]));
+        }
+    }
+
+    #[test]
+    fn every_axis_a_track_can_have_a_value_on_counts_for_all() {
+        // A track with every fact: each axis says it has a value, so All goes by it (the audit, 2026-10-29: seven axes
+        // said none, so All matched nothing and All negated everything).
+        let full = Facts {
+            rel: "a/1".into(),
+            born: Some(1),
+            genres: vec!["Rock".into()],
+            year: Some(1985.0),
+            bpm: Some(120.0),
+            energy: Some(50.0),
+            danceability: Some(50.0),
+            moods: vec!["happy".into()],
+            styles: vec!["Synth".into()],
+            tags: vec!["tag".into()],
+            sound: Some(Arc::from(vec![0.0_f32; 4].into_boxed_slice())),
+            artists: vec!["X".into()],
+            length: Some(240.0),
+            quality: Some("lossless".into()),
+            key: Some("C".into()),
+            release_types: vec!["Album".into()],
+            ..Facts::default()
+        };
+        let uses: HashMap<String, Use> = [("a/1".to_string(), Use { plays: 2, last: Some(1), rating: Some(4) })].into();
+        let (membership, favourites, albums) = (HashMap::new(), HashSet::new(), HashSet::new());
+        let w = World { membership: &membership, favourites: Some(&favourites), favourite_albums: Some(&albums), uses: Some(&uses), now: 10 };
+        for (axis, _, kind) in AXES {
+            if matches!(kind, Kind::Like) {
+                continue;
+            }
+            let c = Condition::new(axis.to_string(), false, Value::Yes);
+            assert!(has_value(&c, &full, &w), "{axis}: a track with every fact has a value on it");
+        }
+        // And All by them: an album of such tracks is all of a range that holds them all, not none of it.
+        let album = [&full, &full];
+        for (axis, value) in [("plays", Value::Range { min: Some(1.0), max: None }), ("length", Value::Range { min: Some(1.0), max: None }), ("artist", Value::AnyOf { values: vec!["x".into()] }), ("quality", Value::AnyOf { values: vec!["lossless".into()] }), ("key", Value::AnyOf { values: vec!["c".into()] })] {
+            let all = |not: bool| Condition { quantifier: Quantifier::All, ..Condition::new(axis, not, value.clone()) };
+            assert!(passes(&album, &[all(false)], &w), "{axis}: all of its tracks");
+            assert!(!passes(&album, &[all(true)], &w), "{axis}: negated, not");
         }
     }
 
