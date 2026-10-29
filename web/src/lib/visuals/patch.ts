@@ -50,7 +50,8 @@ export type Place = 'source' | 'module' | 'loop' | 'finish' | 'frame' | 'modulat
 export type ModuleType = { type: string; label: string; place: Place; knobs: Knob[]; inputs?: string[] };
 
 /** A module in a patch: its type and its knobs' values (the state). */
-export type Module = { id: string; type: string; knobs: Record<string, number> };
+/** `label`: its own name, where its type's says too little (a device's; a VCA in Loudness Follow by the row it follows). */
+export type Module = { id: string; type: string; knobs: Record<string, number>; label?: string };
 
 /** A signal as a cable takes it: the music's (a band's, or the whole track's), against which reference its 1 =
  *  typical is measured (0056; this track by default), fast or slow. `value`: read that value as the signal's would

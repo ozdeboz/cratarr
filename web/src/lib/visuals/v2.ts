@@ -31,6 +31,8 @@ import { isDevice, READINGS, SHOW_PARTS, type CableV2, type Device, type PatchV2
 import { extraType } from './registry';
 import { modulatorOf } from './modulators/modulators';
 import { makeDevice } from './device-make';
+import { namedDevices } from './device-names';
+import { v2TypeRecord } from './v2-types';
 import { EFFECTS } from './effects';
 import { effectType } from './effect-modules';
 
@@ -576,5 +578,5 @@ function packed(p: PatchV2): PatchV2 {
   makeDevice(p, ids((m) => m.id.startsWith('pause-')), { id: 'pause', label: 'Pause Dim' });
   makeDevice(p, ids((m) => m.id.startsWith('follow-')), { id: 'loudness-follow', label: 'Loudness Follow' });
   makeDevice(p, ids((m) => m.type === 'adsr' && m.id !== NEWTRACK), { id: 'hit-lights', label: 'Hit Lights' });
-  return p;
+  return namedDevices(p, v2TypeRecord());
 }

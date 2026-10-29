@@ -8,6 +8,8 @@ import { canRedo, canUndo, change as changed, newStore, redo as redone, replace 
 import type { PatchV2 } from './ports';
 import { visualSettings, type VisualSettings } from './settings.svelte';
 import { toV2 } from './v2';
+import { namedDevices } from './device-names';
+import { v2TypeRecord } from './v2-types';
 // The picture side of the conversion (toV2's layers, loops and finish as cables).
 import './picture-wiring';
 
@@ -28,7 +30,8 @@ export function patchFrom(kept: unknown): PatchV2 | null {
 function load(): PatchV2 {
   try {
     const kept = patchFrom(JSON.parse(localStorage.getItem(PATCH_KEY) ?? 'null'));
-    if (kept) return kept;
+    // Kept before its devices were named by what they carry (device-names.ts): named as it comes.
+    if (kept) return namedDevices(kept, v2TypeRecord());
   } catch {
     // None kept, or none readable: made from the settings.
   }
@@ -80,7 +83,7 @@ export const visualsPatch = {
   },
   /** A patch from elsewhere (a preset, a snapshot, the phone driving this device): the patch now, one undo step. */
   replace(p: PatchV2) {
-    set(replaced(store, p));
+    set(replaced(store, namedDevices($state.snapshot(p) as PatchV2, v2TypeRecord())));
   },
   undo() {
     set(undone(store));

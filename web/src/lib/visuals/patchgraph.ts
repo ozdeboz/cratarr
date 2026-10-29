@@ -11,7 +11,7 @@
 import { endOf, type RouteValue } from './curves';
 import type { Cable, Knob, Module, ModuleType, Place, SignalRef } from './patch';
 import { ENGINES } from './effects';
-import { cyclesClosed, FEEDBACK, fits, isDevice, polyKnobs, portsOf, type CableV2, type Device, type ExposedPort, type PatchV2, type Polymorphic, type Port, type PortRef, type PortType, type Ports } from './ports';
+import { cyclesClosed, FEEDBACK, fits, isDevice, polyKnobs, portsOf, portsOfModule, type CableV2, type Device, type ExposedPort, type PatchV2, type Polymorphic, type Port, type PortRef, type PortType, type Ports } from './ports';
 import { byCategory, CATEGORIES, CATEGORY_LABEL, categoryOf, type Category } from './rack';
 import { signalOf } from './music-signals';
 import { areaParts, faceHeight as partsHeight, faceOf, type FacePart, type Thumbs } from './face/face';
@@ -271,6 +271,16 @@ export function labelOf(t: Pick<ModuleType, 'type' | 'label'>): string {
 }
 /** Names the graph gives ahead of their types (0057 §7e: the course-and-swing filter is Accent; "flash" is the Screen's). */
 const RENAMED: Record<string, string> = { flash: 'Accent' };
+/** A module's name, as the panel and the graph both give it: its own (a device's; one its device's maker gave it,
+ *  device-names.ts), else its type's, numbered where its level has more than one of that type unnamed. */
+export function moduleName(m: Module, level: Pick<PatchV2, 'modules'>, types: Record<string, ModuleType>): string {
+  if (m.label) return m.label;
+  if (isDevice(m)) return 'Device';
+  const t = types[m.type];
+  const base = t ? labelOf(t) : m.type;
+  const same = level.modules.filter((x) => x.type === m.type && !x.label);
+  return same.length > 1 ? `${base} ${same.indexOf(m) + 1}` : base;
+}
 
 /** A cable's amount as its label shows it: a swing signed, a level as a share. */
 /** A v2 cable (0057 §7e item 10) has no mode: it adds, a swing. */
@@ -604,32 +614,6 @@ export function crumbsOf(p: PatchV2, at: readonly string[]): string[] {
   return out;
 }
 
-/** A module's ports: its type's, or a device's from what it exposes (each exposed port the type of the one behind it,
- *  through nested devices; a channel of a bundle as one). */
-export function portsOfModule(types: Record<string, ModuleType>): (m: Module) => Ports | null {
-  const self = (m: Module): Ports | null => {
-    if (!isDevice(m)) {
-      const t = types[m.type];
-      return t ? portsOf(t) : null;
-    }
-    const behind = (e: ExposedPort, dir: 'in' | 'out'): Port | undefined => {
-      const inner = m.patch.modules.find((x) => x.id === e.module);
-      return inner ? self(inner)?.[dir].find((x) => x.id === e.port) : undefined;
-    };
-    const exposed = (e: ExposedPort, dir: 'in' | 'out', or: PortType): Port => {
-      const b = behind(e, dir);
-      return {
-        id: e.as,
-        label: e.label,
-        type: b?.type ?? or,
-        ...(b?.channels && e.channel === undefined ? { channels: b.channels } : {}),
-        ...(b?.polymorphic ? { polymorphic: b.polymorphic } : {}),
-      };
-    };
-    return { in: m.inputs.map((e) => exposed(e, 'in', 'value')), out: m.outputs.map((e) => exposed(e, 'out', 'picture')) };
-  };
-  return self;
-}
 
 /** The knob behind a device's exposed input, where it is one (through nested devices): the knob and its value. */
 function knobBehind(d: Device, as: string, types: Record<string, ModuleType>): { knob: Knob; value: number } | null {
@@ -801,7 +785,7 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
       }
     } else {
       const t = types[m.type] ?? { type: m.type, label: m.type, place, knobs: [] };
-      label = labelOf(t);
+      label = moduleName(m, level, types);
       place = t.place;
       knobIds = new Set([...t.knobs, ...polyKnobs(t).knobs].map((k) => k.id));
       const shown = knobViews({ ...m, id }, t, { open, room: modulator ? 0 : SHOWN, cabled, cablesInto });

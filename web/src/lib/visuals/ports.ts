@@ -769,3 +769,32 @@ export type DeviceMacro = { id: string; label: string; value: number; targets: {
 export type Device = Module & { type: 'device'; label: string; patch: PatchV2; inputs: ExposedPort[]; outputs: ExposedPort[]; macros: DeviceMacro[] };
 
 export const isDevice = (m: Module): m is Device => m.type === 'device';
+
+/** A module's ports, the one way every view and the engine's helpers find them: its type's, or a device's from what it
+ *  exposes (each exposed port the type of the one behind it, through nested devices; a channel of a bundle as one; an
+ *  input led to several inside, a fan-out, once). */
+export function portsOfModule(types: Record<string, ModuleType>): (m: Module) => Ports | null {
+  const self = (m: Module): Ports | null => {
+    if (!isDevice(m)) {
+      const t = types[m.type];
+      return t ? portsOf(t) : null;
+    }
+    const behind = (e: ExposedPort, dir: 'in' | 'out'): Port | undefined => {
+      const inner = m.patch.modules.find((x) => x.id === e.module);
+      return inner ? self(inner)?.[dir].find((x) => x.id === e.port) : undefined;
+    };
+    const exposed = (e: ExposedPort, dir: 'in' | 'out', or: PortType): Port => {
+      const b = behind(e, dir);
+      return {
+        id: e.as,
+        label: e.label,
+        type: b?.type ?? or,
+        ...(b?.channels && e.channel === undefined ? { channels: b.channels } : {}),
+        ...(b?.polymorphic ? { polymorphic: b.polymorphic } : {}),
+      };
+    };
+    const once = (list: ExposedPort[]) => list.filter((e, i) => list.findIndex((x) => x.as === e.as) === i);
+    return { in: once(m.inputs).map((e) => exposed(e, 'in', 'value')), out: once(m.outputs).map((e) => exposed(e, 'out', 'picture')) };
+  };
+  return self;
+}

@@ -24,7 +24,7 @@
   import type { LiveFrame } from './faces';
   import { curveOf, valueOf as kept, type Curve } from './curves';
   import { panelKey, type PanelEdit } from './patch-edits';
-  import { categoryPin, knobText, knobViews, labelOf, patchAt, polyTurned, typesOf, type KnobView } from './patchgraph';
+  import { categoryPin, knobText, knobViews, labelOf, moduleName, patchAt, polyTurned, typesOf, type KnobView } from './patchgraph';
   import { fits, isDevice, type CableV2, type Device, type PatchV2, type Port, type PortRef } from './ports';
   import { byCategory, CATEGORIES, CATEGORY_LABEL, deviceCategory, portsFrom, type Category } from './rack';
   import { DEVICES } from './devices';
@@ -89,14 +89,8 @@
     const m = level?.modules.find((x) => x.id === at[at.length - 1]);
     return level && m ? { scope, level, m } : null;
   }
-  /** A module's name: a device's own, else its type's, numbered where its level has more than one. */
-  function nameOf(m: Module, level: PatchV2): string {
-    if (isDevice(m)) return (m as Device).label ?? 'Device';
-    const t = types[m.type];
-    const base = t ? labelOf(t) : m.type;
-    const same = level.modules.filter((x) => x.type === m.type);
-    return same.length > 1 ? `${base} ${same.indexOf(m) + 1}` : base;
-  }
+  /** A module's name, as the graph gives it (patchgraph.ts moduleName). */
+  const nameOf = (m: Module, level: PatchV2) => moduleName(m, level, types);
   const portName = (m: Module, port: string, dir: 'in' | 'out') => portsOf(m)?.[dir].find((p) => p.id === port)?.label ?? port;
   function endName(level: PatchV2, r: PortRef, dir: 'in' | 'out'): string {
     const m = level.modules.find((x) => x.id === r.module);
