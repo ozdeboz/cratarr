@@ -49,3 +49,5 @@ The `.deb` depends on electron-builder's list plus what Electron needs that it l
   questions.
 - `setup.html`: the address page, the app's one page of its own.
 - `copy-icons.js`: the web app's icons, copied in.
+- `after-pack.js`: before packing, the app's files writable by their owner alone. Electron's own come out of its archive
+  writable by anyone, and a package installs them as they are.

@@ -99,12 +99,15 @@ function setTabName(name: string) {
   tabName.value = t;
 }
 
-/** A name no other player has (a second Chrome on Android is "Chrome on Android 2"), kept from then on. */
+/** A name no other player has (a second Chrome on Android is "Chrome on Android 2"), kept from then on; in the desktop
+ *  app the computer's name as it is. */
 function nameToUse(): string {
   // A stored name grown by a page from before freeName counted from the root ("Safari on iOS 2 2 2 2 2 2 2", the owner's
   // iPhone, 2026-10-26): its numbers off, then the first free one again.
   if (/( \d+){2,}$/.test(prefs.browserName)) prefs.browserName = freeName(unnumbered(prefs.browserName), playOn.players);
-  if (!prefs.browserName) prefs.browserName = freeName(defaultBrowserName(), playOn.players);
+  // The desktop app is the computer's own player: a player of this account by its name is taken over, not numbered past
+  // (the owner, 2026-10-29: the app replaces the ThinkPad's browser player, its name kept for Home Assistant's rules).
+  if (!prefs.browserName) prefs.browserName = desktop?.name ? desktop.name : freeName(defaultBrowserName(), playOn.players);
   const t = tabName.value;
   return t && t.base === prefs.browserName ? t.name : prefs.browserName;
 }
