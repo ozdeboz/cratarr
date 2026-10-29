@@ -21,6 +21,9 @@ import { BANDS, type VisualSettings } from '../settings.svelte';
 import { newFlame, stepFlame, type FlameNow, type FlameState } from './chain';
 import { newFlameNode, stepFlameNode, type FlameNodeState, type FlameView } from './flame-node';
 import type { PaletteColour } from '../palette';
+import type { Flow, Force } from '../fluid';
+import { newStirring, stir, type Stirring } from '../stirring';
+import { fluidGains } from './fluid-gains';
 import { newDucker, stepDucker, type DuckerState } from './compressor';
 import { newClockTriggers, stepClockTriggers, type ClockTriggerState, type ClockTriggers } from './clock';
 import { gridOf, type Grid, type GridPoint } from './grid';
@@ -125,6 +128,8 @@ export type EngineState = {
   flames: Record<string, FlameState>;
   /** Each Flame's look, framing and place on the screen (flame-node.ts), where the engine runs with a view. */
   flameNodes: Record<string, FlameNodeState>;
+  /** The Fluid's stirring (stirring.ts): its kicks under way, the hits and beats it last kicked for. */
+  stirring: Stirring;
   /** Each Field's time run on. */
   fieldPhases: Record<string, number>;
   modulators: Record<string, { type: string; run: Modulator }>;
@@ -163,6 +168,7 @@ export function newEngine(): EngineState {
     accents: {},
     flames: {},
     flameNodes: {},
+    stirring: newStirring(),
     fieldPhases: {},
     modulators: {},
     values: {},
@@ -214,6 +220,8 @@ export type EngineFrame = {
   dice: DiceRoll[];
   /** What each Flame draws with this frame (flame-node.ts: its look, framed), where the engine runs with a view. */
   flames: Record<string, FlameView>;
+  /** The Cratarr device's Fluid stirred this frame (its pushes and its flow, for the light loop), with a view. */
+  fluid: { forces: Force[]; flow: Flow } | null;
 };
 
 /** A chain module's node values (EngineFrame.params), by its type. */
@@ -1172,12 +1180,46 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     const got = cabled ? pointsOf(cabled.from) : flameModule ? flamePointsOf(flameModule.id) : null;
     if (got) pointsAt[`${x.id}.at`] = got;
   }
+  // The Cratarr device's Fluid stirred (stirring.ts; the frame loop's until 2026-10-29): its pushes at what reaches its
+  // At (the Flame's parts by default), kicked by the bands' hits, the beats, downbeats and sections, each worth its own
+  // Stir, Flow and Swirl (their macros in) times what the cables into them give.
+  let fluid: EngineFrame['fluid'] = null;
+  if (opts.view && aspects && flameModule) {
+    const fluidOwn = moduleOf.get(at + 'fluid');
+    const fl = params[flameModule.id]?.flame;
+    const bend = ofType('bend');
+    const waves = bend ? (params[bend.id]?.waves ?? aspects.given[A.waves]) : aspects.given[A.waves];
+    const gains = fluidGains(p);
+    const beat = m.playing ? m.beat : null;
+    const own = (aspect: 'stir' | 'flow' | 'swirl') => (fluidOwn ? baseOf(fluidOwn, aspect, s[aspect]) : s[aspect]);
+    fluid = stir(st.stirring, {
+      t: opts.now / 1000,
+      dt: step,
+      amount: aspects.fluid,
+      parts: ((fluidOwn && pointsAt[`${fluidOwn.id}.at`]) ?? flamePointsOf(flameModule.id) ?? []) as ([number, number] | null)[],
+      turns: fl?.rates ?? [],
+      lights: fl?.hits ?? [],
+      level: aspects.bands.map((v) => v[B.level]),
+      continuity: Array.from({ length: BANDS }, (_, b) => baseOf(flameModule, CONTINUITY_AT[b], s.continuity[b])),
+      hits: m.playing && m.hits ? m.hits.map((hh) => (hh.index < 0 ? null : { index: hh.index, strength: hh.weight, nextIn: hh.nextIn })) : [],
+      beat: beat ? { ...beat, nextIn: beat.length - beat.since } : null,
+      downbeat: aspects.track[T.downbeat],
+      section: aspects.track[T.section],
+      loudness: aspects.lit,
+      swell: aspects.track[T.swell],
+      bps: m.bps,
+      waves,
+      position: m.position,
+      center: [0.5, 0.5],
+      gain: (signal, band, aspect, x) => own(aspect as 'stir' | 'flow' | 'swirl') * gains(signal, band, aspect as 'stir', x),
+    });
+  }
   // A Flame's points in a Grid's frame (Streamlines' seeds, Instance's): its parts on the screen, where it has a view.
   for (const id of Object.keys(flames)) {
     const seeds = gridAt({ module: id, port: 'points' });
     if (seeds) points[id] = seeds;
   }
-  return { aspects, knobs, params, outputs, macros, nexts, fields, points, pointsAt, dice, flames };
+  return { aspects, knobs, params, outputs, macros, nexts, fields, points, pointsAt, dice, flames, fluid };
 
   /** A module's knobs as its macros and cables move them. */
   /** A knob's base as its macros set it, along its taper (an exponential knob's geometrically: 0057's Wild). */

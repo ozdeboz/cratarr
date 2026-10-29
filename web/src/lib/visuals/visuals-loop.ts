@@ -13,7 +13,6 @@ import { wavesMotion, zoomsMotion } from './aspects';
 import { beatsOf } from './beats';
 import { chainNow } from './chain-params';
 import { settingsReport } from './effects';
-import { fluidGains } from './engine/fluid-gains';
 import { newEngine, stepEngine, type EngineFrame } from './engine/graph';
 import { LivePatch } from './engine/live-patch';
 import { randomize, randomizeCables, randomizeMacros, scopeNamed, type Randomized, type Scope } from './engine/randomize';
@@ -29,10 +28,9 @@ import { isDevice, RANDOMIZE_SCOPES, type PatchV2 } from './ports';
 import { precheckingPatch, type Checked } from './precheck';
 import { ceilingOf } from './quality';
 import { FlameRenderer, type PictureInputs } from './render';
-import { A, B, T } from './routes';
+import { A, T } from './routes';
 import { FLUID_FULL, type VisualSettings } from './settings.svelte';
 import { signalsOf } from './signals';
-import { newStirring, stir } from './stirring';
 
 /** A new track's look blends in over this long; one the dice made, quicker (Visuals.svelte's). */
 const BLEND_MS = 6000;
@@ -167,7 +165,6 @@ export class VisualsLoop {
     let how = host.device();
     const engine = newEngine();
     const normal = newNormalState();
-    const stirring = newStirring();
     let meterValues: MeterValues | undefined;
     let meteredAt = 0;
 
@@ -492,36 +489,11 @@ export class VisualsLoop {
 
       const [w, h, resized, top] = sized();
 
-      // The fluid, stirred: its pushes at what reaches its `at` (the Flame's parts by default), each worth what the
-      // patch's cables into Stir, Flow and Swirl give it.
-      const fluidNow = d.fluid;
-      const fluidAt = Object.entries(stepped.pointsAt)[0]?.[1];
+      // The Fluid's stirring is its own (the engine's, stirred with the frame); the Show's Bend's waves for the meters.
       const beatNow = m.playing ? m.beat : null;
-      // The Show's Bend's own waves (step 5).
       const bendId = flat.modules.find((x) => x.type === 'bend')?.id;
       const wavesNow = (bendId ? (stepped.params[bendId]?.waves ?? d.given[A.waves]) : d.given[A.waves]) * levers.pace;
-      const gains = fluidGains(flat);
-      const stirred = stir(stirring, {
-        t: now / 1000,
-        dt,
-        amount: fluidNow,
-        parts: (fluidAt ?? fv.parts) as ([number, number] | null)[],
-        turns: fl.rates,
-        lights: fl.hits,
-        level: d.bands.map((v) => v[B.level]),
-        continuity: how.continuity,
-        hits: m.playing && m.hits ? m.hits.map((hh) => (hh.index < 0 ? null : { index: hh.index, strength: hh.weight, nextIn: hh.nextIn })) : [],
-        beat: beatNow ? { ...beatNow, nextIn: beatNow.length - beatNow.since } : null,
-        downbeat: d.track[T.downbeat],
-        section: d.track[T.section],
-        loudness: d.lit,
-        swell: d.track[T.swell],
-        bps: m.bps,
-        waves: wavesNow,
-        position: m.position,
-        center: [0.5, 0.5],
-        gain: (signal, band, aspect, x) => (how as unknown as Record<string, number>)[aspect] * gains(signal, band, aspect as 'stir', x),
-      });
+      const stirred = stepped.fluid ?? { forces: [], flow: { energy: 0, swirl: 0 } };
 
       renderer.frame(
         passes,

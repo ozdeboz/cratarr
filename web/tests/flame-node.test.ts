@@ -14,11 +14,12 @@ const types = v2TypeRecord();
 const NO_COVER = { key: null, colours: null };
 
 /** The default rack run `frames` frames from `at` seconds, with a view; `change` turns its Flame's knobs at a frame. */
-function run(frames: number, o: { change?: { frame: number; knobs: Record<string, number>; glide?: number } } = {}) {
+function run(frames: number, o: { change?: { frame: number; knobs: Record<string, number>; glide?: number }; fluid?: number } = {}) {
   const t = track(TRACKS[0]);
   const music = newMusicState();
   const p = flatten(toV2(structuredClone(DEFAULTS)));
   const flame = p.modules.find((x) => x.type === 'flame')!;
+  if (o.fluid !== undefined) p.modules.find((x) => x.type === 'fluid')!.knobs.fluid = o.fluid;
   const st = newEngine();
   const out = [];
   for (let k = 0; k < frames; k++) {
@@ -76,4 +77,11 @@ test('framed as far as its Fit, measured over frames; its outputs and its parts 
   assert.ok(v.parts.length > 0 && v.parts.some((q) => q && q[0] >= 0 && q[0] <= 1));
   const fluid = Object.keys(last.pointsAt).find((k) => k.endsWith('.at'))!;
   assert.deepEqual(last.pointsAt[fluid], v.parts);
+});
+
+test("the Fluid stirred by the engine: its pushes and flow, from its own Stir, Flow and Swirl", () => {
+  const { out } = run(90, { fluid: 0.8 });
+  const last = out[out.length - 1];
+  assert.ok(last.fluid && Array.isArray(last.fluid.forces) && Number.isFinite(last.fluid.flow.energy));
+  assert.ok(out.some((f) => (f.fluid?.forces.length ?? 0) > 0), 'kicked at least once over three seconds of a track');
 });
