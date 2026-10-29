@@ -356,11 +356,12 @@ class MainActivity : AppCompatActivity() {
                 callback.onReceiveValue(null)
             }
         }
-        // `window.CratarrApp`, on Cratarr's pages only.
+        // `window.CratarrApp`, on Cratarr's pages only: the local address's over plain http only while it answers as
+        // this app's Cratarr on this network (Reach.trusts).
         if (origins.isNotEmpty() && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-            WebViewCompat.addWebMessageListener(view, "CratarrApp", origins) { _, message, _, isMainFrame, reply ->
+            WebViewCompat.addWebMessageListener(view, "CratarrApp", origins) { _, message, sourceOrigin, isMainFrame, reply ->
                 val data = message.data
-                if (isMainFrame && data != null) onPageMessage(data, reply)
+                if (isMainFrame && data != null && Reach.trusts(this, sourceOrigin.toString())) onPageMessage(data, reply)
             }
         }
         frame.addView(view, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
