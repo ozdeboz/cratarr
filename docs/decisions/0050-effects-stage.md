@@ -4,7 +4,7 @@
   and X going 65"; "maybe the whole touch interaction should be deferred to 66, since we have sufficient for 65"; on the
   open questions: "Yes, agree with the softness slider and the square or hex lattice working in the fluid only. Now,
   we'd probably do best by putting this under the looks section with the looks dice. I don't care about old snapshots.
-  And yes, sync the group properly in 65, all at once"). claude-5f's sections below (the envelope, Haze and Quality), filled in, are agreed too (the owner,
+  And yes, sync the group properly in 65, all at once"). The sections below on the envelope, Haze and Quality, filled in, are agreed too (the owner,
   2026-10-18: "Agree").
 - Date: 2026-10-18
 - Builds on: 0046 (the visuals, their routes and settings), 0047 (the fluid), 0048 (the randomisation and its limits);
@@ -15,7 +15,7 @@
 64 and 64.1 made the visuals follow the music by routes with curves, walk under their set values, and stay watchable
 by measured limits. Three things the owner asked for next were queued for 65, in this order:
 
-1. **Band envelopes** (the owner, through claude-5f): each band's part lit and present by the sound itself, the attack
+1. **Band envelopes** (the owner): each band's part lit and present by the sound itself, the attack
    on its hit, then following the band's level while the sound holds. A struck drum flares; a pad glows.
 2. **Fewer sliders**: the owner said yes to one Quality in place of Points, Steps and Resolution (FPS stays), one Haze
    in place of Floor and Depth, and Family folded into Colours; no to joining Symmetry and Mirror; later for per-band
@@ -33,13 +33,13 @@ Touch, the first layer one could play by hand, was planned with the stage. The o
 
 ### Band envelopes and Presence
 
-claude-5f makes the envelope (from the hits and the band's level: an attack, a hold while the sound holds, a release),
-its signal row, and its limits in the precheck. claude-a5 makes Presence in the drawing: a band's part weighs in the
+The envelope comes from the hits and the band's level (an attack, a hold while the sound holds, a release), with its
+signal row and its limits in the precheck. Presence is in the drawing: a band's part weighs in the
 chaos game (its transform's share of the points) by a new **Presence** route column, so a part can come and go with its
 sound, not only light up. Lighting is renamed **Linger** (how long a part's light rings on). The fifth band, Presence until now, is renamed **Upper mid** so the
 column alone has the name (the owner chose it over renaming the column).
 
-**The envelope** (claude-5f): each band's own, 0 to 1, a new band signal row **Envelope** that any route can take
+**The envelope**: each band's own, 0 to 1, a new band signal row **Envelope** that any route can take
 (by default each band's Envelope into its Presence at 100%; Hits into Lights stays as it is). Followed each frame, the
 same in the visuals and in the precheck (one pure step in music.svelte.ts's family, so the governor measures what is
 shown):
@@ -69,7 +69,7 @@ Nothing old is converted (the owner: "I don't care about old snapshots"): a snap
 group's shared ones from before 65 load as they are, without their Points, Steps, Resolution, Floor, Depth and Family
 (Quality and Haze at their defaults) and without routes into Floor or Depth. Loading one must still never fail.
 
-**Haze** (claude-5f) is Depth and Floor on one axis, 0 exactly today's defaults (Floor 0, Depth 50 %: gamma 3):
+**Haze** is Depth and Floor on one axis, 0 exactly today's defaults (Floor 0, Depth 50 %: gamma 3):
 
 - **Up to +100 %, more haze**: the gamma rises from 3 to 6 (Depth's top today), lifting the faint mist and grain
   around the flame; no floor.
@@ -82,7 +82,7 @@ group's shared ones from before 65 load as they are, without their Points, Steps
   as the sound says, never past what is set, either side. Smoothing stays its own slider. The two ends are to be looked
   at on the lab's screenshots (phone and tablet) before 65 ships: the −100 % floor in particular.
 
-**Quality** (claude-5f) is one ceiling, 0 to 100 %, on the same ladder the device's pace walks (steps, resolution,
+**Quality** is one ceiling, 0 to 100 %, on the same ladder the device's pace walks (steps, resolution,
 points), so the two never disagree; **60 % is exactly today's defaults** (2^19 points, 3 steps, the screen's default
 resolution of about a megapixel):
 
@@ -112,8 +112,8 @@ lights, noise.
 **The cost.** With no effect, nothing changes: the show pass draws to the screen as today. With an effect, the show
 pass draws into a picture at the buffer's size (at most 0.6 megapixels), and the picture slot draws that onto the
 screen. The screen is still drawn once at full size, so the extra cost is one pass at the buffer's size. Before any
-effect is designed, claude-5f measures what that pass and a chain of five cost on the tablet (Mali G52) and the phone
-(Mali G615).
+effect is designed, what that pass and a chain of five cost is measured on the tablet (Mali G52) and the phone (Mali
+G615).
 
 **In the look** (the owner: "under the looks section with the looks dice"). The chain is a setting of the look: in the
 panel's Look group, pinnable like the look's other settings, and drawn by Another look (the stars) with the rest of a
@@ -127,8 +127,8 @@ meters (motion, shape and colour churn, zoom pumping) are counted from what the 
 effect reports what it adds (a turning kaleidoscope adds motion, a cycling colorama adds colour churn), so the governor
 can hold an effect back as it holds the flame back. The precheck (which draws no picture) runs the same reports.
 
-**Who does what** (agreed in 64): claude-a5 builds the stage, the compiler and the reports' plumbing; claude-5f ports
-the effects, measures the devices, and writes the help texts and the effects' limits.
+**The work** (agreed in 64): the stage, the compiler and the reports' plumbing; the effects ported, the devices
+measured, the help texts and the effects' limits.
 
 ### Facets
 
@@ -164,7 +164,7 @@ lab); a new section may turn their way.
 
 ### Infinite zoom: the tunnel and the dive
 
-The owner tried both on the ThinkBook's preview (branch a5/zoom-preview, fc71f300: render.ts, fluid.ts and a page over
+The owner tried both on the ThinkBook's preview (fc71f300: render.ts, fluid.ts and a page over
 a made-up track) and wants both: "Basically, yes, I want both, so this is serious version 65 material."
 
 - **The tunnel**: the light kept from frame to frame is read a little nearer the middle each frame, so it streams
@@ -225,7 +225,7 @@ a made-up track) and wants both: "Basically, yes, I want both, so this is seriou
 - **The fifth band is Upper mid**, so the Presence column alone has the name (the owner chose it).
 - **The Envelope** (envelope.ts, pure and tested) is the last band signal, into each band's Presence at 100 % by
   default; Lighting is labelled **Linger** (its key stays `lighting`).
-- **The effects:** fifteen. Kaleid and Posterize (claude-a5's reference ports), ten more after Hydra (Repeat, Pixelate,
+- **The effects:** fifteen. Kaleid and Posterize (the reference ports), ten more after Hydra (Repeat, Pixelate,
   Colorama, Hue, Ripple, Stream, Echo, Rotate, Scroll, Saturate), and three after EYESY's modes (the owner: "for effects
   check out EYESY"): Magnify, Rings and Interference, the ideas only, our own shaders (its repository has no licence).
 - **Held to the limits, three gaps closed:** the meters did not see Presence (a part's weight moves the points between
@@ -252,7 +252,7 @@ a made-up track) and wants both: "Basically, yes, I want both, so this is seriou
   Saturate, Posterize); the loop takes one of seven shapes. Each chosen effect has **its own controls**, one or two (the
   owner: "one or two of the most relevant controls per chosen subeffect"), at their middle as made. Picture effects
   hear **the beat** (`fx_beat`: where in the beat and the bar, how strong); Pulse, Burst and Halo fire on it.
-- **The governor reaches all of it** (claude-5f's audit, the owner: "Agree! Fix it"; then "no shortcuts no
+- **The governor reaches all of it** (an audit; the owner: "Agree! Fix it"; then "no shortcuts no
   concessions"). Every meter's lever now reaches what the meter counts:
   - each effect's amount is held by the flash rule's swing and by the lever of every meter its report counts toward
     (effects.ts `heldBack`), so an effect is held as the flame is, not the flame in its place;
@@ -269,12 +269,12 @@ a made-up track) and wants both: "Basically, yes, I want both, so this is seriou
   drawn look's effects are drawn within the room left above that at the quietest passage's budget (budget.ts
   `DRAWN_ROOM`; flame.ts). Recalibrated on the final code (506 runs): Standard over drawn looks peaks where the flame
   does (motion 0.466, pumping 0.351), none over a limit; 83 of 440 recipes refused (motion 79: the zooms they roll).
-- **The Mali review** (the showcase session's, read-only, against our gotchas) found two that would have shown only on
+- **The Mali review** (read-only, against our gotchas) found two that would have shown only on
   the devices: pow of a negative in Burst and Halo (NaN, the whole picture blank between beats) and the loop's effects
   running on the track's time (spinning faster through a track, compounding per frame); both fixed, with the review's
   smaller ones. Each effect place runs its own clock, so a change of amount never jumps an angle. The pace no longer
   steps down for the hitch of a new effect program (on the PC each change had cost about 25 s at a lower quality).
-- **Measured on the PC** (Edge, CPU slowed four times; the showcase session's script): the stage 0.29 ms of GPU to
+- **Measured on the PC** (Edge, CPU slowed four times): the stage 0.29 ms of GPU to
   exist, 0.41 with three effects; the loop's read-back 0.86; the fluid's light carrying a loop effect and Facets 0.56;
   frames held at 55 fps but for a loop effect's few doubled frames. **On the devices still to come:** neither the
   tablet nor the phone was reachable; the same script runs there when they are.

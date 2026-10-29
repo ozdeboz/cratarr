@@ -1,6 +1,6 @@
 # 0074: Winding: the track heard backwards and forwards at speed, as a tape deck winds
 
-- Status: accepted (the owner, 2026-10-27, through claude-632: reverse play as close to normal play as possible; one
+- Status: accepted (the owner, 2026-10-27: reverse play as close to normal play as possible; one
   standard way to shorten long audio, cutting and crossfading; Start and stop's vinyl and fade in reverse too; holding
   Previous and Next as a deck's REW and FF; seeking may wind; one set of controls; 12 s at most for a tap, a hold as
   long as it is held; the queue as one tape where chosen; other players and groups; hardware long presses; quieter

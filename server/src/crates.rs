@@ -169,7 +169,7 @@ pub fn lines_crate(id: &str, name: &str, lines: Vec<String>) -> CrateDef {
 
 pub const LIKE: &str = "like:";
 /// The seed of "Sounds like your week" (`like:week[@<count>]`): the songs the asking account played in the last 7
-/// days, the closest not among them (a5 for the owner, 2026-10-23; for 75's Home).
+/// days, the closest not among them (the owner, 2026-10-23; for 75's Home).
 pub const WEEK: &str = "week";
 /// How far back "your week" reaches (s).
 pub const WEEK_SECS: i64 = 7 * 24 * 3600;
@@ -1404,7 +1404,7 @@ fn sound_groups(seed: &[usize], lib: &Library) -> Vec<Vec<usize>> {
     groups
 }
 
-/// A Sounds like crate's own order, closest first (a5 for the owner, 2026-10-23; it was newest first, as every crate's):
+/// A Sounds like crate's own order, closest first (the owner, 2026-10-23; it was newest first, as every crate's):
 /// `lines` (selected) in the order of its first Sounds like that is on, as `resolved` ranked it. Others as they were.
 pub fn closest_first(lines: &mut [String], resolved: &[Condition]) {
     let ranked = resolved.iter().find_map(|c| match &c.value {

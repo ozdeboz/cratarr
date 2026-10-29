@@ -70,7 +70,7 @@ As Ableton's Racks: macros per rack, racks nested, the dice rolling macros only.
 - **No check against the track** (the owner: "No"): its eight tries and its second way of making the picture go; a
   macro's range and the Calm, live, keep a roll within bounds.
 
-## Built (2026-10-29, 632/visuals-purity; nothing seen on a device yet)
+## Built (2026-10-29; nothing seen on a device yet)
 
 1. A device's macros work: flatten lifts them (`<device>/macro:<id>`, a cable into one reaching its node); a macro maps
    its level's knobs and its devices' macros, the inner set by the outer. A macro reaching past a device's edge is

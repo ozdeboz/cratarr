@@ -2197,7 +2197,7 @@ impl PlaylistService {
     }
 
     /// Every ranked crate whose fit holds anything (what was turned down for it, rules, dismissals), the asking
-    /// account's, for Settings' Musical taste (claude-632's, 76): each with its name, what it avoids (the traits
+    /// account's, for Settings' Musical taste (76): each with its name, what it avoids (the traits
     /// learned, those dismissed left out), its rules and how many were turned down. A crate that no longer resolves (a
     /// playlist gone) is left out.
     pub async fn crate_fits(&self) -> Result<Vec<FitSummary>, ToggleError> {

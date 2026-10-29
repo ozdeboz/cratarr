@@ -12,8 +12,8 @@ danceability (`other_features`, all 0 until CLAP has heard the track; CLAP turne
 October), and a 200-number "sounds like" vector. Its `track_server_map` matches each of its items to Cratarr's own
 track id (`tr-…`, by fingerprint), so a join is exact.
 
-The owner (in a5's session): "Yes, import them": energy, key, the style tags and the similarity; then CLAP's moods
-and danceability too. In this session: AudioMuse "does not move to the NAS"; and, asked how the data travels: a file
+The owner: "Yes, import them": energy, key, the style tags and the similarity; then CLAP's moods
+and danceability too. Also: AudioMuse "does not move to the NAS"; and, asked how the data travels: a file
 over SSH every half hour.
 
 ## Decision
@@ -29,7 +29,7 @@ over SSH every half hour.
 - **What shows**: a track's details carry `energy` (0..1), `key` ("D minor"), `style` (the top five tags with scores),
   `mood` (CLAP's that stand out, 0.3 and up, danceable apart), `danceability` (0..1), each null where AudioMuse has
   none (CLAP's two while all its scores are 0); and the listener's `play_count` and `last_played`. The page calls the
-  tags Style and keeps Mood for CLAP's (a5's cover overview).
+  tags Style and keeps Mood for CLAP's (the cover overview).
 - **Crates** select on all four (the owner): Mood (CLAP's moods as values), Energy and Danceability (0–100%
   ranges), Style (the tags as values).
 - **Similarity**: "sounds like" is a sixth signal of the radio's closeness (Similar songs, Radio's inserts, Autoplay's

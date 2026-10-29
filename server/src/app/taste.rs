@@ -1,4 +1,4 @@
-//! A listener's taste (the owner, 2026-10-23: Insights › Listening › Profile; claude-632 owns the page): what they
+//! A listener's taste (the owner, 2026-10-23: Insights › Listening › Profile): what they
 //! like, from their favourites, the playlists they made and what they played, and what they do not, from the tracks
 //! they excluded and the ones they skipped. Two profiles of the one similarity (`similarity::Profile::of_weighted`),
 //! "taste" and "avoid", over the library as `crates::Alike` sees it. The taste's words are net of the avoided ones';

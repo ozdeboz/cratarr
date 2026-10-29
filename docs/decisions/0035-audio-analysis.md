@@ -29,7 +29,7 @@ What it costs:
 - On the NAS that is roughly 0.5–1.5 s per track, or 4–10 CPU-hours for about 30,000 tracks. Reading every file once
   takes 1.5–2 hours.
 - Working out the values from decoded audio costs little next to decoding it.
-- **Cratarr's decoder cannot read most of the library yet** (claude-5f, 2026-10-16). Music holds 23,521 MP3 and 982
+- **Cratarr's decoder cannot read most of the library yet** (2026-10-16). Music holds 23,521 MP3 and 982
   FLAC files, but symphonia is built with `flac`, `wav`, `aiff`, `pcm`, `isomp4` and `alac` only: the converter never
   needed MP3. The FFmpeg figures above are mostly MP3 320, so they must be measured again with symphonia's MP3
   decoder on the NAS (N95) before "overnight" is promised.
@@ -243,13 +243,13 @@ a speed-up, and the NAS's own pass is the fallback when the ThinkBook is not at 
 - The ThinkBook does the one-time pass (the NAS overnight when it cannot), then the NAS a little work per new track.
 - The seekbar, a populated BPM axis in crates, and levelling come with no work on the phone.
 - **Offline:** the app fetches each download's waveform with it and keeps it in its store, or the seekbar would be
-  blank in airplane mode (claude-5f).
-- **Order** (claude-5f): the 0034 server half, then the radio (0036), then this, unless the owner reorders.
+  blank in airplane mode.
+- **Order**: the 0034 server half, then the radio (0036), then this, unless the owner reorders.
 - **Work split:**
-  - claude-5f: the pass, the table and the endpoint (catalogue);
-  - claude-5f: the seekbars (the web player's NowPlaying, the app), the players' levelling, the Opus copies' gain
+  - the pass, the table and the endpoint (catalogue);
+  - the seekbars (the web player's NowPlaying, the app), the players' levelling, the Opus copies' gain
     tags;
-  - claude-a5: the OpenSubsonic fields (`bpm`, `replayGain`), and reading the files' gain tags into the catalogue.
+  - the OpenSubsonic fields (`bpm`, `replayGain`), and reading the files' gain tags into the catalogue.
 
 ## Amendment, 2026-10-17: whether a decode was whole
 

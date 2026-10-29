@@ -69,9 +69,8 @@ Options not taken:
 
 ## Follow-ups
 
-- A directory (LLDAP, the owner's set-up with Home Assistant's session, 2026-10-17): asked first at `Serve::sign_in`,
+- A directory (LLDAP, the owner's set-up, 2026-10-17): asked first at `Serve::sign_in`,
   Cratarr's own account the fallback; a successful bind could refresh a local verifier so the fallback works while the
-  directory is down (no runtime dependency, 0030). Subsonic logins stay Cratarr's own accounts or API keys. To design
-  with the sessions that own the server's account code and the proxy.
+  directory is down (no runtime dependency, 0030). Subsonic logins stay Cratarr's own accounts or API keys.
 - The proxy's stopgap for the old app (a 503 to it away from home) goes once the app with this sign-in is on the
   owner's devices.

@@ -40,7 +40,7 @@ features is weird"; and, asked whether a local queue goes away: no, each mode ke
 - The app holds two queues; the server only ever holds Cratarr's.
 - Bringing such a file into the library (Incoming) stays a separate step for later.
 - Work: the app (the mode, MediaStore, covers, the local queue, its reports), the page (local mode's views and the
-  switch, a5), the server (a player in local mode: its reports leave Cratarr's queue alone, control commands pass,
+  switch), the server (a player in local mode: its reports leave Cratarr's queue alone, control commands pass,
   queue edits are refused, a play takes it back).
 
 ## As built (the app and the server, 2026-10-19)

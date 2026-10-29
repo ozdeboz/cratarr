@@ -272,7 +272,7 @@ need our own build of its player. The report's `output` stays what actually play
 
 ## Amendment (2026-10-19): Automatic in the owner's order
 
-The owner (relayed by a5): Automatic should follow an order the user drags, "but we need a toggle where we can also
+The owner: Automatic should follow an order the user drags, "but we need a toggle where we can also
 turn off the override. When override is turned off the Android order comes back and the drag bars remove." The app
 keeps every output it has seen, there or not, in the owner's order (new ones at the end), and tells the page with
 `known: [{id, type, name}]` beside `outputs` (those there now) and `ordered` (the toggle, off by default).

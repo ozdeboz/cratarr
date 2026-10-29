@@ -123,7 +123,7 @@ between the player's reports was moved on with the frame clock and set back at e
 
 The owner, after the beats: "I want you to couple transients in different frequency bands to different colors. I also
 want you to couple the loudness of the different frequency bands to evolutionary parameters of their respective
-colors." Then, in claude-5f's session: "Include a button to change the current set of parameters, like a random next
+colors." Then: "Include a button to change the current set of parameters, like a random next
 visualization switch."
 
 **The bands** (decision 0035, amended the same day): the server hears each track in three bands, low (below 150 Hz:
@@ -170,7 +170,7 @@ seed over 1.5 s; another press, another one; the next track brings back its own.
 
 ## Amendment, 2026-10-17: as intense as the music is loud
 
-The owner (in claude-5f's session): "I also want the overall show to be proportional to the overall loudness. Do you
+The owner: "I also want the overall show to be proportional to the overall loudness. Do you
 think we've sufficiently implemented that now? Probably not. So fix it in the next version." It was not: the loudness
 (the waveform, against the track's own loudest moment) set only the brightness, between 60 % and 110 %; silence still
 showed at 60 %, a quiet track looked as intense as a loud one, and the bands, each against its own loudest, kept a soft
@@ -195,7 +195,7 @@ is never applied above full); a loud master at -9 LUFS at all unlevelled, 78 % l
 
 ## Amendment, 2026-10-17: the settings panel, and what a frame costs
 
-The owner (in claude-5f's session): "I want a set of sliders to modify the visualization in real time. Especially
+The owner: "I want a set of sliders to modify the visualization in real time. Especially
 important are a few sliders with which we can tune down the compute that is required"; then "some performance problems,
 and I'm currently running it on a laptop with a powerful GPU. And I want sliders, not presets. Make the controls look
 standard. And on top of the sliders that you already proposed, I also want to have a slider for maximum brightness."
@@ -284,7 +284,7 @@ scrolls; each band its own group: Lighting, Evolution, Continuity.
 
 ## Amendment, 2026-10-18: flares, specks and colours
 
-Three problems the owner saw (with claude-5f): "seemingly at random big flares fill the entire screen, on some
+Three problems the owner saw: "seemingly at random big flares fill the entire screen, on some
 patterns"; "less congruence between the colours and the bands than I would wish, another slider maybe"; black specks
 appearing after playing a while on the MSI (GTX 1650), "maybe since 56", never on the tablet.
 
@@ -327,7 +327,7 @@ as Chrome draws on the MSI; three minutes each in 16-bit and 32-bit buffers, bot
 
 ## Amendment, 2026-10-18: more kinds of flame, Spread, Symmetry and Mirror
 
-The owner (with claude-5f) wanted more variety than three transforms of a few favoured variations, with half of them
+The owner wanted more variety than three transforms of a few favoured variations, with half of them
 symmetric and one palette recipe, and settings for what makes a flame's "centres" (its vortices): their spread and
 symmetry.
 
@@ -357,13 +357,13 @@ are kept in 16-bit floats beside 32-bit colours (they are only ever weighed agai
 learnt the display's frame interval from every frame: a device behind on all of them calls back as slowly as it draws,
 which made every frame look on time; it now learns it from quick frames only.
 
-The page's own audio is offered to the live analysis (claude-5f's live.ts) through the levelling's route
+The page's own audio is offered to the live analysis (live.ts) through the levelling's route
 (`audioTap` in localPlayer): an element can feed only one, so the route is made at no change of level where levelling
 is off; never in Safari or while another player plays.
 
 ## Amendment, 2026-10-18: routes, every signal on every aspect
 
-The owner (with claude-5f): "For each aspect of the music we can get a signal for, I want to be able to control its
+The owner: "For each aspect of the music we can get a signal for, I want to be able to control its
 effect on each of the main aspects of the visualization", all of them but stems; amounts from -100 to +100 %, today's
 look as the defaults, standard controls, live, kept on the device, a Reset.
 
@@ -404,7 +404,7 @@ as they are; the panel's own Reset puts back everything. Kept on the device with
 there are; a 0 kept turns a default off).
 
 **Until the server has a track's signals,** where the page plays it, the bands come from the sound as it plays
-(claude-5f's live.ts, on the levelling's route): level, flux and hits; the rest wait for the server. Where neither (the
+(live.ts, on the levelling's route): level, flux and hits; the rest wait for the server. Where neither (the
 app, another player), each band stands at half its level with no hits, and the parts step on the beats, as before.
 
 **Measured** (the real component in a lab page over a made-up format 3 track, 120 BPM, sections every six seconds, on
@@ -423,7 +423,7 @@ rest) since six parts came in: each has its own now.
 
 The owner after preview 59: "I have a hard time controlling flashiness. Fix that please. One global slider could help
 too?", then "addition to rainbow gradient, I want to have the option for two other color modes, namely album cover and
-fire", and the grain controls claude-5f offered; "put it all in and ship it".
+fire", and the grain controls that were offered; "put it all in and ship it".
 
 **Flash** (0 to 200 %, 100 % the look before): each quickly changing aspect (each part's Lights, the Glow, Size and
 Saturation) is its slow course (the value followed twice over 0.3 s) and Flash's share of its swing about that course.
@@ -447,7 +447,7 @@ on whatever the routes give, not on the default routes alone. Flashes were hard 
 - **Depth:** the display's gamma, 1.5 to 6 (3, as before, at 50 %): higher lifts more of the faint detail.
 
 **Colours** (Rainbow, Cover, Fire): Rainbow is the seed's own (the four families). Cover gives the bands the playing
-track's cover's six colours (claude-5f's palette.ts: k-means in OKLab, each pixel weighted by its chroma), darkest to
+track's cover's six colours (palette.ts: k-means in OKLab, each pixel weighted by its chroma), darkest to
 the sub and lightest to the air, their lightness brought into 0.58 to 0.86 and their chroma raised a third (up to
 0.26), since on black and through each other they went pale; asked for as the track starts (the next one's too), they
 join the track's blend, and the seed's own stand in where there is no cover. Fire runs the bands from a deep red at
@@ -471,7 +471,7 @@ columns fit a 390 px phone.
 ## Amendment, 2026-10-18: the look is the sliders, a track's preset sets them
 
 The owner: "I'd like our seed, whether random or not, to be a preset on the sliders, instead of the sliders being an
-operation on the seed", and (with claude-5f) three dials for the form rather than one number, and pins.
+operation on the seed", and three dials for the form rather than one number, and pins.
 
 **The look's settings are the flame:** Form, Detail, Twist, Warp, Symmetry, Mirror, Lens, Spread, Family, Hue,
 Lightness, Vividness and Purity. The flame is made from them alone, so moving one moves what is shown and nothing about
@@ -512,7 +512,7 @@ Spread 250 %, Purity 100 %) came in pinned. The look's rows fit a 390 px phone.
 The owner: "the visualizations should be shared between the sync play group so that controlling it in one place
 controls it in another", and "I want to be able to save a current snapshot and recall it". Their choices, of the
 options put to them: everything that shapes the picture is shared; a joining device adopts the group's settings; a
-snapshot holds all of it, on the server; recalling one pins what it sets. (The server's side is claude-5f's.)
+snapshot holds all of it, on the server; recalling one pins what it sets.
 
 **Shared:** the look and its pins, Colours, Intensity, Flash, Speed, the grain, the routes and each band's times. Each
 device keeps its own Points, Steps, Resolution, FPS (what it can afford) and Brightness (its room). The group's settings
@@ -563,7 +563,7 @@ display"; and "it should save all of the sliders".
   Steps, Resolution, FPS, Brightness). Recalled, those come back on the device that recalls it only, never sent to the
   group. Snapshots carry their form (`v`): 1, the shared settings (63's, which leave the device's own as they are);
   2, every slider. Standard holds production's for the five, Resolution and FPS each device's own default.
-- The pictures are the server's (claude-5f's): a snapshot's optional `picture`, a JPEG or PNG data URL of at most
+- The pictures are the server's: a snapshot's optional `picture`, a JPEG or PNG data URL of at most
   48 KB, never part of the settings (so never sent to a group).
 
 Measured (the lab page, a stand-in server): the sheet opened over the visuals and read the saved ones; Save sent 32
@@ -571,7 +571,7 @@ settings (v 2) and a 4.8 KB picture as "Lab · 11:45", its name then edited in p
 Points on this device only (nothing of the five sent to the group); one from 63 left Points as they were; Standard gave
 Points 19, Steps 3, Resolution and FPS the device's own, Brightness 100 %, nothing pinned; held, one was deleted.
 
-The snapshots on the server (claude-5f's): kept by Cratarr in the user data (`visual_snapshot`), per user (the first
+The snapshots on the server: kept by Cratarr in the user data (`visual_snapshot`), per user (the first
 administrator's, as Cratarr's own calls act on), newest first: `GET/POST /api/visuals/snapshots`,
 `PATCH/DELETE /api/visuals/snapshots/{id}`, each `{ id, name, settings, created, picture? }`. The settings are the page's
 JSON, opaque to the server (with the page's `v`), at most 64 KB; names 1 to 200 characters; a PATCH renames, re-pictures
@@ -583,7 +583,7 @@ or both. Standard is the page's, not stored.
   walk proportionally instead of randomizing", "So random direction proportional distance"). The column's routes walk
   the look's smooth settings (Detail, Twist, Warp, Hue, Lightness, Vividness, Spread, Purity, those not pinned) in a
   direction drawn anew each bar from the track and the bar's number (every device of a group walks alike), as far as the
-  routed signal reaches, within reach of where the track set them; below 0 they walk back (drift.ts, claude-5f's). The
+  routed signal reaches, within reach of where the track set them; below 0 they walk back (drift.ts). The
   choices (Form, Symmetry, Mirror, Lens, Family) do not walk. Ten steps a second, none with reduced motion; not saved,
   not sent. Routes kept into Reseed are Drift's.
 - **The Track row** (the owner: "Yes, I want it in 64"): a whole-track signal, all of it as a track starts (the visuals
@@ -623,9 +623,9 @@ went back once. Taps: "+10 s", "+30 s", "+60 s", "−10 s", "−90 s" as asked, 
   the attenuators", then "The other sliders are simply limits"). For the four levels, Smoothing, Floor, Depth and
   Fluid, the slider is the most there is, and each route into one is a condition for reaching it: the value is the
   slider times every route's factor, each between 0 and 1, so it never passes the slider nor goes below 0, in any order
-  (claude-5f's proposal, the owner: "Awesome, so this is feasible"). A route's factor is 1 − e · (its curve's highest
+  (a proposal; the owner: "Awesome, so this is feasible"). A route's factor is 1 − e · (its curve's highest
   point − its curve now), e the loudness envelope (quiet, the slider as before); a band signal's six factors combine
-  by their geometric mean, as one condition (claude-a5's). Flash and Speed already limit their columns' swing and pace.
+  by their geometric mean, as one condition. Flash and Speed already limit their columns' swing and pace.
 - **Each route a curve** (the owner: "Instead of the slider, I'm looking for a curve setting", then "the curves are
   only for … the matrix routes", "every route", "one graph for either positive or negative … The color can auto adjust
   based on the value selected"). A cubic from 0 at no signal through two handles to an end at full signal, from −100 %
@@ -637,7 +637,7 @@ went back once. Taps: "+10 s", "+30 s", "+60 s", "−10 s", "−90 s" as asked, 
   behind the curve, dimmer, where the signal has been over the last 30 s of music, mirrored about the middle line like
   a waveform (the owner, after three sketches: "this gives us the best way to tune the curve to the signal"). Shaped
   squares carry a small curve mark.
-- **Behaviour** (the owner, in claude-a5's session; "We should get a header for the behavior section"): Intensity, Flash,
+- **Behaviour** (the owner: "We should get a header for the behavior section"): Intensity, Flash,
   Speed, Smoothing, Floor, Depth and Fluid under a header of their own; each pins by moving it as the Look's do (the
   dice leave a pinned one; a recall pins them; Standard and Reset let go).
 - **Look and Behaviour in place of Drift** (the owner: "instead of having drift as a target, we should have looks and
@@ -648,7 +648,7 @@ went back once. Taps: "+10 s", "+30 s", "+60 s", "−10 s", "−90 s" as asked, 
 - **Routes that walk** (the owner: "behavior should also affect those matrix routes that subscribe to it … by limiting
   the fill of cells vertically", "as an attenuating walk"): a route's Walk switch (off by default) puts it on the same
   walk; its square fills only as far as it is.
-- **Pins in the matrix** (the owner, in claude-a5's session): shaping a square pins its route (a whole column could be
+- **Pins in the matrix** (the owner): shaping a square pins its route (a whole column could be
   pinned too, until 64.2). The dice leave pinned routes and columns as they are; a pinned route still walks if its switch is on. A
   folded corner marks a pinned square.
 - **The dice keep the Track row**: a roll put in the recipe's routes whole, and recipes have none, so since 64 a new

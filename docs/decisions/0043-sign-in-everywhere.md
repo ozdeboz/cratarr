@@ -45,7 +45,7 @@ proxy's question, which only answers whether a request may pass); `/rest` (the S
 and, while Cratarr has no account at all, everything (there is nothing to sign in with: the first account is made on
 its page, and from then on the requirement holds). No address is trusted, the NAS's own included.
 
-**What calls Cratarr today** (the Home Assistant session's survey, 2026-10-17): Home Assistant, 13 `rest_command`s
+**What calls Cratarr today** (a survey, 2026-10-17): Home Assistant, 13 `rest_command`s
 (players and their commands, playlists by name, albums and their tags and review, Incoming, tracks and their
 favourite) every few minutes and on demand, and its health sensor each minute; Kodi through its links; the apps;
 Docker's health check; one-off analysis imports run on the NAS (`/api/analysis/import`), which get a key of their
@@ -77,13 +77,12 @@ its first account made on the page.
 - Kodi's links stop working a day after they were handed out: a long queue is handed out again as it plays.
 - Settings → Authentication grows: API keys under the signed-in devices.
 
-## Who builds what
+## The work
 
-- Cratarr's side (the requirement for every route, API keys, signed links, the page, the app): claude-5f; the
-  requirement wraps the whole router in one place, so the OpenSubsonic routes (claude-a5's) are covered without
-  changing them, `/rest` excepted.
+- Cratarr's side: the requirement for every route, API keys, signed links, the page, the app. The requirement wraps
+  the whole router in one place, so the OpenSubsonic routes are covered without changing them, `/rest` excepted.
 - Home Assistant's calls with the key (a header on each `rest_command`, the key in its secrets), and the proxy, if it
-  changes: the Home Assistant session. The analysis imports' key: claude-a5.
+  changes. The analysis imports' key.
 - The devices list's naming and times (asked for the same night): with this, in the same pass.
 
 ## Amendment (2026-10-17): sessions.sqlite is backed up

@@ -61,7 +61,7 @@ markup. All remembered.
 
 **Listening** has two sections in the pill's second row (the owner, 2026-10-23): History and Profile.
 
-**Profile** is the listener's taste as Cratarr reads it, from the one similarity (a5's `GET /api/history/profile`):
+**Profile** is the listener's taste as Cratarr reads it, from the one similarity (`GET /api/history/profile`):
 what built it (favourites, tracks in playlists, played; skipped and excluded apart), then per genre, artist, style
 and playlist what there is more of (netted) and less of; the sound's numbers as where the taste sits on the library's
 own range, less of under it; the moods compared with the library (a bar either way from its middle).
@@ -75,7 +75,7 @@ own range, less of under it; the moods compared with the library (a bar either w
 - **the top artists, albums and tracks** of the period, with how often.
 
 Until the log reaches back, each shows what there is; nothing is made up. The log is filled from ListenBrainz, which
-Jellyfin's ListenBrainz plugin scrobbled to (Jellyfin keeps no history of its own; 0064 amended by a5).
+Jellyfin's ListenBrainz plugin scrobbled to (Jellyfin keeps no history of its own; 0064 amended).
 
 **Map** is the graph as it is, its filters in the panel.
 

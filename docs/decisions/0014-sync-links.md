@@ -9,7 +9,7 @@
 ## Context
 
 0012 made every playlist the owner's private Jellyfin playlist at once, with one switch for the whole server. The
-owner decided on 2026-10-12, with both sessions, that this is a per-playlist choice:
+owner decided on 2026-10-12 that this is a per-playlist choice:
 
 - A playlist can be *global*, visible to everyone, or *user-bound*: one account's own playlist.
 - Syncing is a link per playlist to a target, with its own direction, conflict rule and status.

@@ -1,6 +1,6 @@
 # 0034: One Library page, and moving albums between libraries
 
-- Status: accepted (the owner's answers and claude-5f's review, 2026-10-16)
+- Status: accepted (the owner's answers and a review, 2026-10-16)
 - Date: 2026-10-16
 - Builds on: 0009 (library uses), 0013 (Keep and Replace), 0028 (Collection and one album list), 0032 (Cratarr is its
   own source)
@@ -102,7 +102,7 @@ gets one from a small palette until the user picks. The primary library has none
 - The colour is kept with the library's settings on the server (settings.json, beside its use and naming template),
   so every browser and app shows the same one.
 
-**The server** (claude-5f's side; the shapes are a sketch for the build):
+**The server** (the shapes are a sketch for the build):
 
 - `GET /api/albums` lists the followed server's albums of its used libraries, each with its library and facts.
   - It takes Collection's cap (100,000; Incoming's list stops at 1,000), or pages, so Music is never cut off.
@@ -125,7 +125,7 @@ what converts, and more.
 1. **Any direction:** "yes anyway, since it's generic". An album moves from any used library to any other of the
    same server, Music back into Incoming included. The target's policies decide what happens on the way in.
 
-## One Music folder, as today (review by claude-5f, 2026-10-16)
+## One Music folder, as today (review, 2026-10-16)
 
 The server has exactly one Music folder: the catalogue's folder 0. Every folder from 1 on is Incoming. Hanging on that:
 
@@ -155,10 +155,10 @@ Home Assistant's promote ("into Music") stays unambiguous.
   but an app that cached the album id holds a stale one.
 - Settings → Libraries gains each library's format policy and, for a non-primary library, its colour.
 - Work split:
-  - web (claude-a5): the Library page, facts and dots on every album, Move and Delete (with the primary's extra step)
+  - web: the Library page, facts and dots on every album, Move and Delete (with the primary's extra step)
     in the menus and the select bar (several albums at once go through the queue one by one), the colour picker in
     Settings → Libraries, and the redirects;
-  - server (claude-5f): one list endpoint with facts against every library, move and replace with the target's
+  - server: one list endpoint with facts against every library, move and replace with the target's
     policies, delete from any library, the format policy and colour settings, and HA's calls on the new move.
 
 ## Amendment (2026-10-16, as built): each library keeps its own trash

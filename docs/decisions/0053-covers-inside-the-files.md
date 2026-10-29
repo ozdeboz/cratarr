@@ -32,7 +32,7 @@ picture inside (all of one album, restored from the backup in July).
   1000 px JPEG, so the copy stays small.
 - **Where there is none at all** (a file from elsewhere, as the owner's own on the phone): the page shows a stand-in,
   never a broken image: Cratarr's record mark, faint, on a quiet tile (the owner chose it over a tile coloured per
-  album; one look everywhere: `lib/Cover`, built by a5).
+  album; one look everywhere: `lib/Cover`).
 
 ## Consequences
 

@@ -166,7 +166,7 @@ icon is the crate with a cross where its handle is (the owner chose it from thre
   over it). Each put back, or Put all back, with Undo again. The global ones were first a line at the top of the
   Library page; the owner moved them (2026-10-19, for 70: "It takes up a lot of real estate"; "the filter sheet is a
   pretty good idea, actually"; "it would open its own exclusion sheet from the filter sheet"), not into Settings →
-  Account, claude-5f's recommendation.
+  Account, as a review had recommended.
 
 ## Amendment (2026-10-19): excluded from a crate, and everywhere (the server's part)
 

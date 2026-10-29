@@ -1,6 +1,6 @@
 mod acoustid;
 mod albums;
-// Decision 0035's core; the pass that uses it (claude-5f) comes next.
+// Decision 0035's core; the pass that uses it comes next.
 #[allow(dead_code)]
 mod analysis;
 mod bandcamp;

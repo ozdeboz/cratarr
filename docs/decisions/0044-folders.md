@@ -43,9 +43,9 @@ Errors are one short line; no other prose.
 - Problems (read-only, missing, a full disk) show before an action fails.
 - The libraries' ids stay their paths, so uses, policies and everything kept by library carry over.
 
-## Who builds what
+## The work
 
 - Cratarr's own source listing the chosen folders and offering the found ones as suggestions (`source/cratarr.rs`'s
-  library methods): claude-a5.
+  library methods).
 - The browser, the folders' status (free space, writable, tracks), the settings and their one-time carry-over, the
-  path mappings, and the page: claude-5f.
+  path mappings, and the page.

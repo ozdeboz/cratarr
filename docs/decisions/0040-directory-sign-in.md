@@ -1,6 +1,6 @@
 # 0040: A directory (LDAP) asked first at sign-in
 
-- Status: accepted (the owner, 2026-10-17: "get to work"; designed with claude-5f and claude-a5)
+- Status: accepted (the owner, 2026-10-17: "get to work")
 - Date: 2026-10-17
 - Builds on: 0030 (Cratarr's accounts; a directory as a source, never a service Cratarr needs while it runs), 0039 (the
   sign-in page, its one place where an account is checked)
@@ -22,7 +22,7 @@ directory never gives out.
   Directory), a group the user must be a member of (optional), the read-only service account the lookup binds as, the
   path of the file holding its password, and directory names that sign in as a differently named account. Nothing is
   assumed: no install's values in the code. The password file is read at each use, never kept, logged or shown: the
-  page sees only "set", "not set" or "unreadable". The page cannot set them (claude-5f's review): whoever reaches
+  page sees only "set", "not set" or "unreadable". The page cannot set them (a review): whoever reaches
   Settings (anyone on the home network) could otherwise point the address at a server of theirs and the password file
   at any file Cratarr can read (its own accounts' passwords), and receive it at the next sign-in; or name a directory of
   their own that accepts anything, mapped to the owner's account. Setting and testing from the page come back behind
@@ -43,7 +43,7 @@ directory never gives out.
   deletes that name's hash at once, so a password changed or a user removed there stops working here too; a change of address, base or group
   deletes them all. This keeps 0030: Cratarr never needs the directory to let its owner in. **A directory that answers but refuses
   Cratarr** (the service account refused, its password file unreadable, the search refused) is a misconfiguration or
-  the service account disabled on purpose: then no kept hash stands in (fail closed; claude-5f's review), though none
+  the service account disabled on purpose: then no kept hash stands in (fail closed, after a review), though none
   is deleted, and Cratarr's own accounts still sign in.
 - **The answer** is the same for an unknown name, a wrong password and the directory being down; the sign-in throttle
   (0039) stays in front of it all.
