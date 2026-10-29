@@ -23,7 +23,7 @@
   import { untrack } from 'svelte';
   import type { LiveFrame } from './faces';
   import { curveOf, valueOf as kept, type Curve } from './curves';
-  import { panelKey, type PanelEdit } from './patch-edits';
+  import { faceAt, freeMacro, panelKey, type PanelEdit } from './patch-edits';
   import { categoryPin, knobText, knobViews, labelOf, moduleName, patchAt, polyTurned, typesOf, type KnobView } from './patchgraph';
   import { fits, isDevice, type CableV2, type Device, type PatchV2, type Port, type PortRef } from './ports';
   import { byCategory, CATEGORIES, CATEGORY_LABEL, deviceCategory, portsFrom, type Category } from './rack';
@@ -119,6 +119,8 @@
     }
     if (kind === 'from' || kind === 'to') return { at: [...pathOf(a), b], last: kind === 'from' ? 'From' : 'To' };
     if (kind === 'k') return { at: pathOf(a), last: knobAt(pathOf(a), b)?.label ?? b };
+    if (kind === 'x' || kind === 'xt' || kind === 'xmap') return { at: pathOf(a), last: faceAt(patch, pathOf(a))?.macros.find((y) => y.id === b)?.label ?? b };
+    if (kind === 'xpick') return { at: pathOf(a), last: 'Macro' };
     return null;
   }
   const crumbs = $derived.by((): { label: string; page: string | null }[] => {
@@ -172,6 +174,30 @@
   function knobAt(at: string[], id: string): KnobView | undefined {
     const f = moduleAt(at);
     return f ? knobsOf(f.level, f.m, types[f.m.type], at).find((k) => k.id === id) : undefined;
+  }
+  /** A macro's target named: its module's knob, or a device's macro. */
+  function targetName(level: PatchV2, t: { module: string; knob: string }): string {
+    const m = level.modules.find((y) => y.id === t.module);
+    if (!m) return t.module;
+    if (isDevice(m) && t.knob.startsWith('macro:')) return `${nameOf(m, level)} · ${m.macros.find((y) => y.id === t.knob.slice('macro:'.length))?.label ?? t.knob}`;
+    return `${nameOf(m, level)} · ${types[m.type]?.knobs.find((k) => k.id === t.knob)?.label ?? t.knob}`;
+  }
+  /** What a target's range is in: its knob (a device's macro: a share). */
+  function targetKnob(level: PatchV2, t: { module: string; knob: string }): Pick<KnobView, 'kind' | 'min' | 'max' | 'options'> {
+    const m = level.modules.find((y) => y.id === t.module);
+    const k = m && !isDevice(m) ? types[m.type]?.knobs.find((y) => y.id === t.knob) : undefined;
+    return k ? { kind: k.kind, min: k.min, max: k.max, ...(k.options ? { options: k.options } : {}) } : { kind: 'level', min: 0, max: 1 };
+  }
+  /** The macro at a level that maps a knob (0077: one a knob). */
+  const ownerAt = (macros: readonly { id: string; label: string; targets: readonly { module: string; knob: string }[] }[], module: string, knob: string) =>
+    macros.find((y) => y.targets.some((t) => t.module === module && t.knob === knob));
+  /** A new macro at a level, its page opened. */
+  function newMacro(scope: string[]) {
+    const face = faceAt(patch, scope);
+    if (!face) return;
+    const n = freeMacro(face.macros);
+    edit({ kind: 'newMacro', scope, id: n.id, label: n.label });
+    go(`x|${scope.join('/')}|${n.id}`);
   }
   /** The level a module or a device's macro is in, its macros there: its device's page, or the rack's (the top). */
   const goLevel = (at: string[]) => (at.length > 1 ? (path = [`m|${at.slice(0, -1).join('/')}`]) : (path = []));
@@ -243,6 +269,10 @@
       return at ? portName(at.m, b, 'in') : b;
     }
     if (kind === 'k') return knobAt(pathOf(a), b)?.label ?? b;
+    if (kind === 'x') return faceAt(patch, pathOf(a))?.macros.find((y) => y.id === b)?.label ?? b;
+    if (kind === 'xt') return 'Range';
+    if (kind === 'xmap') return 'Map a knob';
+    if (kind === 'xpick') return 'Macro';
     if (kind === 'c') return 'Cable';
     if (kind === 'from') return 'From';
     if (kind === 'out') {
@@ -407,13 +437,21 @@
         <h3>Macros</h3>
         {#each patch.macros as x (x.id)}
           {@const v = x.value}
-          <label class="row">
-            <span>{x.label}</span>
-            <input type="range" use:panSafe min="0" max="1" step="0.01" value={v} oninput={(e) => edit({ kind: 'macro', scope: [], id: x.id, value: Number(e.currentTarget.value) })} />
-            <output>{percent(v)}</output>
-          </label>
+          <div class="knob">
+            <label class="row">
+              <span>{x.label}</span>
+              <input type="range" use:panSafe min="0" max="1" step="0.01" value={v} oninput={(e) => edit({ kind: 'macro', scope: [], id: x.id, value: Number(e.currentTarget.value) })} />
+              <output>{percent(v)}</output>
+            </label>
+            <button class="moves" class:on={x.targets.length > 0} aria-label="{x.label}: what it maps" onclick={() => go(`x||${x.id}`)}
+              >{#if x.targets.length}<span>{x.targets.length}</span>{/if}<Icon name="chevronRight" size={16} /></button
+            >
+          </div>
         {/each}
+        {#if !selecting}<button class="go add" onclick={() => newMacro([])}><span class="name">+ New macro</span></button>{/if}
       </div>
+    {:else}
+      <div class="rows"><button class="go add" onclick={() => newMacro([])}><span class="name">+ New macro</span></button></div>
     {/if}
     <div class="rows">
       <h3>Preset</h3>
@@ -479,11 +517,11 @@
       {@const t = types[m.type]}
       {#if isDevice(m)}
         {@const d = m as Device}
-        {#if d.macros.length}
-          <div class="rows">
-            <h3>Macros</h3>
-            {#each d.macros as x (x.id)}
-              {@const g = mappingOf(flat, macroNode(at.join('/'), x.id), 'value')}
+        <div class="rows">
+          <h3>Macros</h3>
+          {#each d.macros as x (x.id)}
+            {@const g = mappingOf(flat, macroNode(at.join('/'), x.id), 'value')}
+            <div class="knob">
               {#if g}
                 <!-- Mapped by its level's macro (0077: one level down): as that sets it; a tap goes there. -->
                 <div class="row">
@@ -497,9 +535,13 @@
                   <output>{percent(x.value)}</output>
                 </label>
               {/if}
-            {/each}
-          </div>
-        {/if}
+              <button class="moves" class:on={x.targets.length > 0} aria-label="{x.label}: what it maps" onclick={() => go(`x|${at.join('/')}|${x.id}`)}
+                >{#if x.targets.length}<span>{x.targets.length}</span>{/if}<Icon name="chevronRight" size={16} /></button
+              >
+            </div>
+          {/each}
+          <button class="go add" onclick={() => newMacro(at)}><span class="name">+ New macro</span></button>
+        </div>
         <div class="rows">
           <div class="head">
             <h3>In it</h3>
@@ -571,6 +613,13 @@
     {@const found = moduleAt(at)}
     {#if found}
       {@const { scope, level, m } = found}
+      {#if !isDevice(m) && types[m.type]?.knobs.some((k) => k.id === port)}
+        <!-- What moves it: its macro (0077: one a knob), then its cables. -->
+        {@const owner = ownerAt(faceAt(patch, scope)?.macros ?? [], m.id, port)}
+        <div class="rows">
+          {#if owner}{@render goRow('Macro', owner.label, `x|${scope.join('/')}|${owner.id}`)}{:else}{@render goRow('Macro', 'None: map it to one', `xpick|${at.join('/')}|${port}`)}{/if}
+        </div>
+      {/if}
       {#if selecting === 'cables'}
         <div class="rows">
           {#each cablesInto(level, m.id, port) as c (c.id)}
@@ -589,6 +638,126 @@
           onadd={() => go(`from|${scope.join('/')}|${m.id}|${port}`)}
         />
       {/if}
+    {/if}
+  {:else if parts(here)[0] === 'x'}
+    <!-- A macro (0077): its value, kept through the dice by its pin, what it maps (each to its range), Remove. -->
+    {@const [, sc, id] = parts(here)}
+    {@const scope = pathOf(sc)}
+    {@const face = faceAt(patch, scope)}
+    {@const x = face?.macros.find((y) => y.id === id)}
+    {#if face && x}
+      {@const g = scope.length ? mappingOf(flat, macroNode(scope.join('/'), x.id), 'value') : undefined}
+      <div class="rows">
+        <div class="head">
+          <h3>{x.label}</h3>
+          {@render pinButton(face.level, scope, `macro:${x.id}`, x.label)}
+        </div>
+        {#if g}
+          <div class="row">
+            <span>Value</span>
+            <button class="choice open" onclick={() => goLevel(scope)}><span>{g.label} · {percent(g.value)}</span><Icon name="chevronRight" size={16} /></button>
+          </div>
+        {:else}
+          <label class="row">
+            <span>Value</span>
+            <input type="range" use:panSafe min="0" max="1" step="0.01" value={x.value} oninput={(e) => edit({ kind: 'macro', scope, id: x.id, value: Number(e.currentTarget.value) })} />
+            <output>{percent(x.value)}</output>
+          </label>
+        {/if}
+      </div>
+      <div class="rows">
+        <h3>Maps</h3>
+        {#each x.targets as t (`${t.module}.${t.knob}`)}
+          {@const k = targetKnob(face.level, t)}
+          {@render goRow(targetName(face.level, t), `${knobText(k, t.from)} – ${knobText(k, t.to)}`, `xt|${sc}|${id}|${t.module}|${t.knob}`)}
+        {/each}
+        <button class="go add" onclick={() => go(`xmap|${sc}|${id}`)}><span class="name">+ Map a knob</span></button>
+      </div>
+      <div class="rows">
+        <button class="go danger" onclick={() => (edit({ kind: 'removeMacro', scope, id: x.id }), back())}><span class="name">Remove macro</span></button>
+      </div>
+    {/if}
+  {:else if parts(here)[0] === 'xt'}
+    <!-- A knob a macro maps: the range it moves it over, from the macro's least to its most; Let go. -->
+    {@const [, sc, id, module, knob] = parts(here)}
+    {@const scope = pathOf(sc)}
+    {@const face = faceAt(patch, scope)}
+    {@const t = face?.macros.find((y) => y.id === id)?.targets.find((u) => u.module === module && u.knob === knob)}
+    {#if face && t}
+      {@const k = targetKnob(face.level, t)}
+      {@const lo = Math.min(k.min, t.from, t.to)}
+      {@const hi = Math.max(k.max, t.from, t.to)}
+      {@const step = k.kind === 'step' ? 1 : (k.max - k.min) / 100}
+      <div class="rows">
+        <h3>{targetName(face.level, t)}</h3>
+        <label class="row">
+          <span>From</span>
+          <input type="range" use:panSafe min={lo} max={hi} {step} value={t.from} oninput={(e) => edit({ kind: 'macroRange', scope, id, module, knob, from: Number(e.currentTarget.value) })} />
+          <output>{knobText(k, t.from)}</output>
+        </label>
+        <label class="row">
+          <span>To</span>
+          <input type="range" use:panSafe min={lo} max={hi} {step} value={t.to} oninput={(e) => edit({ kind: 'macroRange', scope, id, module, knob, to: Number(e.currentTarget.value) })} />
+          <output>{knobText(k, t.to)}</output>
+        </label>
+      </div>
+      <div class="rows">
+        <button class="go danger" onclick={() => (edit({ kind: 'unmapKnob', scope, id, module, knob }), back())}><span class="name">Let go</span></button>
+      </div>
+    {/if}
+  {:else if parts(here)[0] === 'xmap'}
+    <!-- A knob of the macro's level mapped to it (one a knob: one another macro has, it takes over), or a device's macro. -->
+    {@const [, sc, id] = parts(here)}
+    {@const scope = pathOf(sc)}
+    {@const face = faceAt(patch, scope)}
+    {#if face}
+      <div class="rows">
+        {#each face.level.modules as m (m.id)}
+          {#if isDevice(m)}
+            {#each m.macros as y (y.id)}
+              {@const owner = ownerAt(face.macros, m.id, `macro:${y.id}`)}
+              {#if owner?.id !== id}
+                <button class="go" onclick={() => (edit({ kind: 'mapKnob', scope, id, module: m.id, knob: `macro:${y.id}` }), back())}
+                  ><span class="name">{nameOf(m, face.level)} · {y.label}{#if owner}<small>{owner.label}'s now</small>{/if}</span></button
+                >
+              {/if}
+            {/each}
+          {:else}
+            {@const t = types[m.type]}
+            {#each t ? knobsOf(face.level, m, t).filter((k) => !k.channels) : [] as k (k.id)}
+              {@const owner = ownerAt(face.macros, m.id, k.id)}
+              {#if owner?.id !== id}
+                <button class="go" onclick={() => (edit({ kind: 'mapKnob', scope, id, module: m.id, knob: k.id }), back())}
+                  ><span class="name">{nameOf(m, face.level)} · {k.label}{#if owner}<small>{owner.label}'s now</small>{/if}</span></button
+                >
+              {/if}
+            {/each}
+          {/if}
+        {/each}
+      </div>
+    {/if}
+  {:else if parts(here)[0] === 'xpick'}
+    <!-- A knob mapped to one of its level's macros, or to a new one. -->
+    {@const [, a, knob] = parts(here)}
+    {@const at = pathOf(a)}
+    {@const scope = at.slice(0, -1)}
+    {@const module = at[at.length - 1]}
+    {@const face = faceAt(patch, scope)}
+    {#if face}
+      <div class="rows">
+        {#each face.macros as y (y.id)}
+          <button class="go" onclick={() => (edit({ kind: 'mapKnob', scope, id: y.id, module, knob }), back())}><span class="name">{y.label}</span></button>
+        {/each}
+        <button
+          class="go add"
+          onclick={() => {
+            const n = freeMacro(face.macros);
+            edit({ kind: 'newMacro', scope, id: n.id, label: n.label });
+            edit({ kind: 'mapKnob', scope, id: n.id, module, knob });
+            path = [...path.slice(0, -1), `x|${scope.join('/')}|${n.id}`];
+          }}><span class="name">+ New macro</span></button
+        >
+      </div>
     {/if}
   {:else if parts(here)[0] === 'out'}
     <!-- An output's cables: a tap follows one to its module; its amount opens the cable; "+ Add" cables it anew. -->
