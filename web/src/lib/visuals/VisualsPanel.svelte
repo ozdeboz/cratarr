@@ -10,6 +10,9 @@
   // cable to its module, "+ Add" cables it somewhere new); Randomize, Remove.
   import { panSafe } from '../panSafe';
   import Icon from '../Icon.svelte';
+  import Seg from '../Seg.svelte';
+  import SwitchTrack from '../SwitchTrack.svelte';
+  import ChoiceSheet from '../settings/ChoiceSheet.svelte';
   import { longpress } from '../longpress';
   import { held } from './held.svelte';
   import CurveEditor from './CurveEditor.svelte';
@@ -21,7 +24,7 @@
   import type { LiveFrame } from './faces';
   import { curveOf, valueOf as kept, type Curve } from './curves';
   import { panelKey, type PanelEdit } from './patch-edits';
-  import { categoryPin, labelOf, patchAt, typesOf } from './patchgraph';
+  import { categoryPin, knobText, knobViews, labelOf, patchAt, polyTurned, typesOf, type KnobView } from './patchgraph';
   import { fits, isDevice, type CableV2, type Device, type PatchV2, type Port, type PortRef } from './ports';
   import { byCategory, CATEGORIES, CATEGORY_LABEL, deviceCategory, portsFrom, type Category } from './rack';
   import { DEVICES } from './devices';
@@ -73,7 +76,8 @@
 
   // Pages are named `kind|…` (ids hold dots and slashes): `m|a/b` a module at its path, `in|a/b|port` the cables into a
   // port, `c|scope|id` a cable, `from|scope|module|port` a source for a new cable, `move|end|scope|id` a cable's end
-  // moved, `depth|scope|id` what scales it, `add|scope|category` a module added, and `presets`, `cables`, `device`.
+  // moved, `depth|scope|id` what scales it, `add|scope|category` a module added, `k|a/b|knob` a band knob's six, and
+  // `presets`, `cables`, `device`.
   const parts = (page: string) => page.split('|');
   const pathOf = (s: string) => (s ? s.split('/') : []);
 
@@ -119,6 +123,7 @@
       return { at, last: f ? portName(f.m, b, kind) : b };
     }
     if (kind === 'from' || kind === 'to') return { at: [...pathOf(a), b], last: kind === 'from' ? 'From' : 'To' };
+    if (kind === 'k') return { at: pathOf(a), last: knobAt(pathOf(a), b)?.label ?? b };
     return null;
   }
   const crumbs = $derived.by((): { label: string; page: string | null }[] => {
@@ -154,11 +159,30 @@
   const pinned = (level: PatchV2, pin: string) => level.pins.includes(pin);
 
   const percent = (v: number) => `${Math.round(v * 100)}%`;
-  const knobText = (k: { kind: string; min: number; max: number }, v: number) =>
-    k.kind === 'step' ? `${Math.round(v)}` : k.min === 0 && k.max === 1 ? percent(v) : k.min === -1 && k.max === 1 ? `${v > 0 ? '+' : ''}${Math.round(v * 100)}%` : v.toFixed(2);
+  /** A module's knobs as the graph draws them (patchgraph.ts knobViews): a band's six as one, at their mean; a step
+   *  with its choices' names. */
+  const knobsOf = (level: PatchV2, m: Module, t: V2Type | undefined): KnobView[] =>
+    t ? knobViews(m, t, { open: new Set(), room: Infinity, cabled: (k) => cablesInto(level, m.id, k).length > 0, cablesInto: (k) => cablesInto(level, m.id, k) }).knobs : [];
+  /** A module's knob by its path and id, as drawn. */
+  function knobAt(at: string[], id: string): KnobView | undefined {
+    const f = moduleAt(at);
+    return f ? knobsOf(f.level, f.m, types[f.m.type]).find((k) => k.id === id) : undefined;
+  }
   // The inputs that are no knob's: a picture, light, points, a flow, sound, a trigger, a value of its own.
-  const ownInputs = (m: Module, t: V2Type | undefined): Port[] =>
-    (portsOf(m)?.in ?? []).filter((p) => !t?.knobs.some((k) => k.id === p.id) && !p.id.endsWith(':gain') && !p.id.endsWith(':next'));
+  function ownInputs(level: PatchV2, m: Module, t: V2Type | undefined): Port[] {
+    const knobs = knobsOf(level, m, t);
+    return (portsOf(m)?.in ?? []).filter((p) => !knobs.some((k) => k.id === p.id) && !p.id.endsWith(':gain') && !p.id.endsWith(':next'));
+  }
+  /** A knob turned: one edit, or a band's six each moved as far (the graph's polyTurned), one undo step either way. */
+  function turnKnob(at: string[], k: KnobView, value: number) {
+    if (!k.channels) return edit({ kind: 'knob', module: at, knob: k.id, value });
+    const key = `knob:${at.join('/')}.${k.id}`;
+    for (const c of polyTurned(k, value)) onedit({ kind: 'knob', module: at, knob: c.id, value: c.value }, key);
+  }
+  /** A step that is a yes or a no (its choices Off and On): a switch. */
+  const isSwitch = (k: KnobView) => k.options?.length === 2 && k.options[0] === 'Off';
+  /** The step whose choices are open in a sheet. */
+  let choosing = $state<{ at: string[]; k: KnobView } | null>(null);
 
   // ---- A new cable's source, a moved end, what scales it: the ports at its level that fit -------------------------
   function candidates(level: PatchV2, want: Port, dir: 'out' | 'in'): { ref: PortRef; label: string }[] {
@@ -211,6 +235,7 @@
       const at = moduleAt(pathOf(a));
       return at ? portName(at.m, b, 'in') : b;
     }
+    if (kind === 'k') return knobAt(pathOf(a), b)?.label ?? b;
     if (kind === 'c') return 'Cable';
     if (kind === 'from') return 'From';
     if (kind === 'out') {
@@ -285,7 +310,7 @@
 {/snippet}
 
 {#snippet portRows(at: string[], level: PatchV2, m: Module, t: V2Type | undefined)}
-{@const inputs = ownInputs(m, t)}
+{@const inputs = ownInputs(level, m, t)}
 {#if inputs.length}
   <div class="rows">
     <h3>Inputs</h3>
@@ -307,18 +332,46 @@
 {/if}
 {/snippet}
 
-{#snippet knobRow(at: string[], level: PatchV2, m: Module, k: V2Type['knobs'][number])}
-  {@const v = m.knobs[k.id] ?? k.default}
+{#snippet knobRow(at: string[], level: PatchV2, m: Module, k: KnobView)}
   {@const n = cablesInto(level, m.id, k.id).length}
+  {@const pin = `${m.id}.${k.id}`}
   <div class="knob">
-    <label class="row pinnable">
-      <span>{k.label}</span>
-      <input type="range" use:panSafe min={k.min} max={k.max} step={k.kind === 'step' ? 1 : (k.max - k.min) / 100} value={v} oninput={(e) => edit({ kind: 'knob', module: at, knob: k.id, value: Number(e.currentTarget.value) })} />
-      <output>{knobText(k, v)}</output>
-      {@render pinButton(level, at.slice(0, -1), `${m.id}.${k.id}`, k.label)}
-    </label>
-    <button class="moves" class:on={n > 0} aria-label="What moves {k.label}{n ? ` (${n})` : ''}" use:held={'moves'} onclick={() => go(`in|${at.join('/')}|${k.id}`)}
-      >{#if n}<span>{n}</span>{/if}<Icon name="chevronRight" size={16} /></button
+    {#if k.kind === 'step' && k.options && isSwitch(k)}
+      <!-- A yes or a no: a switch (the choices' rule, the owner 2026-10-25). -->
+      <div class="row pinnable">
+        <span>{k.label}</span>
+        <button class="toggle" role="switch" aria-checked={k.value > k.min} aria-label={k.label} onclick={() => edit({ kind: 'knob', module: at, knob: k.id, value: k.value > k.min ? k.min : k.max })}><SwitchTrack on={k.value > k.min} /></button>
+        {@render pinButton(level, at.slice(0, -1), pin, k.label)}
+      </div>
+    {:else if k.kind === 'step' && k.options && k.options.length <= 3}
+      <!-- Two or three: a slim track beside its name. -->
+      <div class="row pinnable">
+        <span>{k.label}</span>
+        <span class="choice"><Seg label={k.label} options={k.options.map((o, i) => ({ value: String(k.min + i), label: o }))} bind:value={() => String(Math.round(k.value)), (x) => edit({ kind: 'knob', module: at, knob: k.id, value: Number(x) })} /></span>
+        {@render pinButton(level, at.slice(0, -1), pin, k.label)}
+      </div>
+    {:else if k.kind === 'step' && k.options}
+      <!-- More: the row says the choice; a tap opens them in a sheet. -->
+      <div class="row pinnable">
+        <span>{k.label}</span>
+        <button class="choice open" onclick={() => (choosing = { at, k })}><span>{knobText(k, k.value)}</span><Icon name="chevronRight" size={16} /></button>
+        {@render pinButton(level, at.slice(0, -1), pin, k.label)}
+      </div>
+    {:else}
+      <!-- A value; a band's six at their mean, each moved as far (its page has a slider a band). -->
+      <label class="row pinnable">
+        <span>{k.label}</span>
+        <input type="range" use:panSafe min={k.min} max={k.max} step={k.kind === 'step' ? 1 : (k.max - k.min) / 100} value={k.value} oninput={(e) => turnKnob(at, k, Number(e.currentTarget.value))} />
+        <output>{knobText(k, k.value)}</output>
+        {@render pinButton(level, at.slice(0, -1), pin, k.label)}
+      </label>
+    {/if}
+    <button
+      class="moves"
+      class:on={n > 0}
+      aria-label="{k.channels ? `${k.label}: its bands and what moves it` : `What moves ${k.label}`}{n ? ` (${n})` : ''}"
+      use:held={'moves'}
+      onclick={() => go(`${k.channels ? 'k' : 'in'}|${at.join('/')}|${k.id}`)}>{#if n}<span>{n}</span>{/if}<Icon name="chevronRight" size={16} /></button
     >
   </div>
 {/snippet}
@@ -446,7 +499,7 @@
         {#if face.length}
           <div class="rows face"><Face parts={face} {live} path={at.join('/')} knobs={m.knobs} width={300} /></div>
         {/if}
-        {@const knobs = (t?.knobs ?? []).filter((k) => !k.device)}
+        {@const knobs = knobsOf(level, m, t)}
         {#if knobs.length}
           <div class="rows">
             <div class="head">
@@ -462,6 +515,31 @@
           {#if m.type !== 'screen'}<button class="go danger" onclick={() => (edit({ kind: 'removeModule', scope, id: m.id }), back())}><span class="name">Remove</span></button>{/if}
         </div>
       {/if}
+    {/if}
+  {:else if parts(here)[0] === 'k'}
+    <!-- A band's six (a polyphonic knob, 0057 §4b): a slider a band; what moves it under them. -->
+    {@const [, a, id] = parts(here)}
+    {@const at = pathOf(a)}
+    {@const found = moduleAt(at)}
+    {@const k = knobAt(at, id)}
+    {#if found && k?.channels}
+      {@const n = cablesInto(found.level, found.m.id, k.id).length}
+      <div class="rows">
+        <div class="head">
+          <h3>Bands</h3>
+          {@render pinButton(found.level, found.scope, `${found.m.id}.${k.id}`, k.label)}
+        </div>
+        {#each k.channels as c, ch (c.id)}
+          <label class="row">
+            <span>{BAND_ROWS[ch] ?? `${ch + 1}`}</span>
+            <input type="range" use:panSafe min={k.min} max={k.max} step={k.kind === 'step' ? 1 : (k.max - k.min) / 100} value={c.value} oninput={(e) => edit({ kind: 'knob', module: at, knob: c.id, value: Number(e.currentTarget.value) })} />
+            <output>{knobText(k, c.value)}</output>
+          </label>
+        {/each}
+      </div>
+      <div class="rows">
+        {@render goRow('What moves it', n ? `${n} ${n === 1 ? 'cable' : 'cables'}` : 'Nothing', `in|${a}|${k.id}`)}
+      </div>
     {/if}
   {:else if parts(here)[0] === 'in'}
     {@const [, a, port] = parts(here)}
@@ -625,6 +703,16 @@
       {#if picked.length === 1}<button onclick={openPicked}>{selecting === 'modules' ? 'Open' : 'Reroute'}</button>{/if}
       <button onclick={endSelect}>Done</button>
     </div>
+  {/if}
+  {#if choosing}
+    {@const { at, k } = choosing}
+    <ChoiceSheet
+      title={k.label}
+      options={(k.options ?? []).map((o, i) => ({ value: String(k.min + i), label: o }))}
+      value={String(Math.round(k.value))}
+      onchange={(x) => edit({ kind: 'knob', module: at, knob: k.id, value: Number(x) })}
+      onclose={() => (choosing = null)}
+    />
   {/if}
 </div>
 
@@ -845,6 +933,40 @@
     min-width: 0;
     margin: 0;
     accent-color: var(--accent);
+  }
+
+  .row .toggle,
+  .row .choice {
+    grid-column: 2 / 4;
+    justify-self: end;
+    min-width: 0;
+  }
+
+  .toggle {
+    display: flex;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+  }
+
+  .choice.open {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    max-width: 100%;
+    padding: 4px 0 4px 8px;
+    border: 0;
+    background: none;
+    color: rgb(255 255 255 / 0.75);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .choice.open span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .row output {

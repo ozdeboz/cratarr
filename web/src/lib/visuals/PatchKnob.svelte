@@ -10,7 +10,7 @@
   // graph shows the lens (`onfine`); let go and it closes. The value goes out through `onturn` as it moves (the store
   // keeps a knob's turns as one step).
   import { longpress } from '../longpress';
-  import { fineSpeed, fineStep, turned, type KnobView } from './patchgraph';
+  import { fineSpeed, fineStep, knobText, turned, type KnobView } from './patchgraph';
 
   let {
     knob,
@@ -52,7 +52,7 @@
   }
 
   let drag: { y: number; value: number; moved: boolean } | null = $state(null);
-  const shown = $derived(knob.kind === 'step' ? String(Math.round(knob.value)) : Math.abs(knob.value) >= 10 ? knob.value.toFixed(0) : knob.value.toFixed(2));
+  const shown = $derived(knobText(knob, knob.value));
 
   function down(e: PointerEvent) {
     last = { x: e.clientX, y: e.clientY };

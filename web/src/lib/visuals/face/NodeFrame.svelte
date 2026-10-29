@@ -100,7 +100,7 @@
     <div class="knobs">
       {#each data.knobs as k (k.id)}
         <div class="kw">
-          <Knob knob={k} onturn={(v) => turn(k, v)} ontap={() => graph.openKnob(id, k.id)} onfine={(f) => graph.fine(f && { ...f, node: id, knob: k.id, label: k.label, min: k.min, max: k.max, kind: k.kind })} />
+          <Knob knob={k} onturn={(v) => turn(k, v)} ontap={() => graph.openKnob(id, k.id)} onfine={(f) => graph.fine(f && { ...f, node: id, knob: k.id, label: k.label, min: k.min, max: k.max, kind: k.kind, options: k.options })} />
           <Handle type="target" id={knobHandle(k.id)} position={Position.Bottom} class="jack in-mod t-value" style={knobJack} />
           {#if k.next}<Handle type="target" id={knobHandle(nextPort(k.id))} position={Position.Left} class={['jack in-mod t-trigger next', !k.nextOn && 'quiet']} style="top: 6px; left: 2px" />{/if}
           {#if k.gain}<Handle type="target" id={knobHandle(gainPort(k.id))} position={Position.Right} class={['jack in-mod t-value next', !k.gainOn && 'quiet']} style="top: 6px; right: 2px" />{/if}

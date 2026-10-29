@@ -9,7 +9,7 @@
 // The count morphs too (the last one fading in as the ring makes room). No shapes at the count's neutral, or the
 // opacity's.
 import type { FrameInfo, Knob, ModuleType, PictureModule } from '../patch';
-import { IRREGULAR, SDF_SIZE, regularOutline, sdfGrid } from '../shape-set';
+import { IRREGULAR, SDF_SIZE, SHAPE_LABEL, regularOutline, sdfGrid } from '../shape-set';
 import { MOST_SHAPES, SHAPE_FLOATS, TAU, shapeLayout, sidesOf, type ShapeClocks } from './geometry';
 import { Mesh, QUAD, done, program, target } from './gl';
 import { knob, values } from './knob';
@@ -51,7 +51,7 @@ export const IRREGULAR_SHAPES: ModuleType = {
   type: 'irregular',
   label: 'Irregular shapes',
   place: 'source',
-  knobs: [...COUNT, { ...knob('shape', 'Shape', 0, IRREGULAR.length - 1, 0), kind: 'step' }, ...LAYOUT, knob('additive', 'Additive', 0, 1, 1)],
+  knobs: [...COUNT, { ...knob('shape', 'Shape', 0, IRREGULAR.length - 1, 0), kind: 'step', options: IRREGULAR.map((n) => SHAPE_LABEL[n]) }, ...LAYOUT, knob('additive', 'Additive', 0, 1, 1)],
 };
 
 /** The corners of Regular shapes' shapes this frame (as `shapeLayout` lays them, in its units), into `out` as x, y

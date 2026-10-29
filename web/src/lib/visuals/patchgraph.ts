@@ -34,6 +34,8 @@ export type KnobView = {
   ring: [number, number] | null;
   /** Pinned (0057: `<module>.<knob>` in its level's pins): Randomize and a new track leave it. */
   pinned?: boolean;
+  /** A step's choices by name (Knob `options`). */
+  options?: readonly string[];
   /** A polyphonic knob drawn as one (0057 §4b: a band's six): each channel's knob id, value and place in the range; the
    *  knob's own `value` and `at` their mean. */
   channels?: { id: string; value: number; at: number }[];
@@ -343,16 +345,17 @@ export function knobViews(
       ...(hasNext(k) ? { next: true, ...(o.cabled(nextPort(k.id)) ? { nextOn: true } : {}) } : {}),
       ...(hasGain(k) ? { gain: true, ...(o.cabled(gainPort(k.id)) ? { gainOn: true } : {}) } : {}),
     };
+    const named = k.options ? { options: k.options } : {};
     if (!k.channels) {
       const value = m.knobs[k.id] ?? k.default;
-      return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), ...beside };
+      return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), ...named, ...beside };
     }
     const channels = channelKnobs(k).map((x) => {
       const value = m.knobs[x.id] ?? m.knobs[k.id] ?? x.default;
       return { id: x.id, value, at: atOf(k, value) };
     });
     const value = channels.reduce((a, c) => a + c.value, 0) / channels.length;
-    return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), channels, ...beside };
+    return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), channels, ...named, ...beside };
   });
   return { knobs, hidden: all.length - shown.length };
 }
@@ -477,14 +480,24 @@ export function fineStep(k: Pick<KnobView, 'min' | 'max' | 'kind'>, raw: number,
   return { raw: r, value: k.kind === 'step' ? Math.round(r) : r };
 }
 /** A knob's value as the fine adjust shows it: a step's whole number, else as many places as tell it apart. */
-export function fineText(k: Pick<KnobView, 'kind' | 'min' | 'max'>, value: number): string {
-  if (k.kind === 'step') return String(Math.round(value));
+export function fineText(k: Pick<KnobView, 'kind' | 'min' | 'max' | 'options'>, value: number): string {
+  if (k.kind === 'step') return stepText(k, value);
   const span = Math.abs(k.max - k.min);
   return value.toFixed(span >= 100 ? 0 : span >= 10 ? 1 : span >= 1 ? 3 : 4);
 }
-/** A fine adjust under way: the knob (its node and id, name, range, kind), its value, its speed, where it was held (the
- *  window's coordinates). */
-export type Fine = { node: string; knob: string; label: string; min: number; max: number; kind: Knob['kind']; value: number; speed: number; at: XY };
+/** A step's value as its choice's name, else its number. */
+const stepText = (k: Pick<KnobView, 'min' | 'options'>, value: number) => k.options?.[Math.round(value) - k.min] ?? String(Math.round(value));
+/** A knob's value in words, as the panel's rows and the graph's dial say it: a step's choice by its name, a share as a
+ *  percent, a swing about nothing signed, else its number. */
+export function knobText(k: Pick<KnobView, 'kind' | 'min' | 'max' | 'options'>, value: number): string {
+  if (k.kind === 'step') return stepText(k, value);
+  if (k.min === 0 && k.max === 1) return `${Math.round(value * 100)}%`;
+  if (k.min === -1 && k.max === 1) return `${value > 0 ? '+' : ''}${Math.round(value * 100)}%`;
+  return Math.abs(value) >= 10 ? value.toFixed(0) : value.toFixed(2);
+}
+/** A fine adjust under way: the knob (its node and id, name, range, kind, choices), its value, its speed, where it was
+ *  held (the window's coordinates). */
+export type Fine = { node: string; knob: string; label: string; min: number; max: number; kind: Knob['kind']; options?: readonly string[]; value: number; speed: number; at: XY };
 
 /** A knob's value after a drag of `dy` pixels up (a whole range over `span`), a step's whole. */
 export function turned(k: Pick<KnobView, 'min' | 'max' | 'kind'>, value: number, dy: number, span = 160): number {

@@ -31,6 +31,9 @@ export type Knob = {
   taper?: 'exp';
   /** Never rolled by Randomize (VCV's randomizeEnabled off): a choice of how, not a value. */
   randomize?: false;
+  /** A step's choices by name, the first for its least step: what the panel and the graph say in place of its number
+   *  (a yes or a no a switch, two or three a track, more a sheet). */
+  options?: readonly string[];
 };
 
 /** Where a module can sit: a layer's source, a module on a layer (or after the blend), a loop (a layer's own, or the
