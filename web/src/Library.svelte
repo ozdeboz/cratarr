@@ -10,15 +10,14 @@
   import AlbumShelf from './lib/AlbumShelf.svelte';
   import Meter from './lib/Meter.svelte';
   import AlbumMenu, { offerIn, type AlbumOffer } from './lib/AlbumMenu.svelte';
-  import { albumUsesKnown, library, loadAlbumUses, readLibrary, useOf } from './lib/albums.svelte';
+  import { library, readLibrary } from './lib/albums.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { prefs } from './lib/prefs.svelte';
   import { toast } from './lib/toast.svelte';
   import { jobs } from './lib/jobs.svelte';
   import { on, stream } from './lib/events.svelte';
-  import { albumFavoritesKnown, artistFavoritesKnown, isFavorite, loadAlbumFavorites, loadArtistFavorites } from './lib/favourites.svelte';
   import { pageView } from './lib/pageView.svelte';
-  import { passing, switchOn } from './lib/listFilter.svelte';
+  import { passing } from './lib/listFilter.svelte';
   import { libraryShown } from './lib/sources.svelte';
   import { untrack } from 'svelte';
   import { me } from './lib/me.svelte';
@@ -129,55 +128,24 @@
   /** What an Incoming album lacks of what the library requires, to see before Keep (the owner, 2026-10-24). */
   const lacksOf = (shelf: ShelfSource, a: ListedAlbum) => sources?.find((x) => x.id === shelf.id)?.lacks?.[a.id] ?? [];
 
-  // The filter's own switches (Favourites only, Unplayed only, 4 stars and up), remembered as the Library's (decision
-  // 0060). Lossless only, Upgrades waiting and Duplicates waiting are none (the owner, 2026-10-24); one left on from
-  // before goes by nothing. One filter for the three views, each by its own items (the owner, 2026-10-28: "whole and
-  // complete"): the albums here; the artists by theirs (lib/LibraryArtists: a favourite artist, never played, with an
-  // album that passes the rest); the tracks by the server's (lib/LibraryTracks).
+  // The filter (decisions 0060 and 0061): its own switches (Favourites only, Unplayed only, 4 stars and up) and its
+  // conditions, remembered as the Library's; one left on from before goes by nothing. One filter for the three views,
+  // each by its own items (the owner, 2026-10-28: "whole and complete"), and one engine: the server, which holds what
+  // each switch means (the owner, 2026-10-29), says which albums pass, or which artists (an artist hearted, never played,
+  // with an album that passes the rest); the tracks it pages filtered (lib/LibraryTracks).
   const view = $derived(prefs.libraryView);
-  const fav = $derived(switchOn('library', 'favourites'));
-  const unplayed = $derived(switchOn('library', 'unplayed'));
-  const top = $derived(switchOn('library', 'topRated'));
-  // Unplayed only and 4 stars and up read how you used the albums, again each time one is switched on.
-  $effect(() => {
-    if (!unplayed && !top) return;
-    for (const s of untrack(() => sources ?? [])) loadAlbumUses(s.id);
-  });
-  // Favourites only asks each server again (an app may have changed a star meanwhile); one that cannot tell says so.
-  $effect(() => {
-    if (!fav || view === 'tracks') return;
-    const artists = view === 'artists';
-    for (const s of untrack(() => sources ?? []))
-      (artists ? loadArtistFavorites(s.id) : loadAlbumFavorites(s.id)).then(
-        (ok) => ok || toast.show({ text: `${s.label} can't list favourite ${artists ? 'artists' : 'albums'}`, tone: 'error' }),
-      );
-  });
-  // Its conditions (decision 0061): the server says which albums pass, any or all of their tracks.
-  const pass = passing(() => 'library', () => ({ list: { kind: 'library' }, source: prefs.source || undefined }));
+  const pass = passing(
+    () => 'library',
+    () => (view === 'tracks' ? null : { list: { kind: view === 'artists' ? 'artists' : 'library' }, source: prefs.source || undefined }),
+  );
   const shown = $derived.by<ShelfSource[] | null>(() => {
     const keys = pass.keys;
+    // The tracks' view: the server filters them (lib/LibraryTracks); the artists' by their keys (lib/LibraryArtists).
+    if (view === 'tracks' || view === 'artists') return sources;
     // What a filter goes by not in yet: loading, not the albums unfiltered or none (the owner, 2026-10-23).
-    const unknown = (has: (source: string) => boolean) => !!sources?.some((s) => !has(s.id));
-    // The tracks' view: the server filters them (lib/LibraryTracks).
-    if (view === 'tracks') return sources;
-    const artists = view === 'artists';
-    if ((fav && unknown(artists ? artistFavoritesKnown : albumFavoritesKnown)) || ((unplayed || top) && unknown(albumUsesKnown)) || (pass.pending && !keys))
-      return null;
-    // The artists' view: the albums that pass what an album has (4 stars and up, the conditions); a favourite artist
-    // and one never played are the artist's own (lib/LibraryArtists).
-    const albumFav = fav && !artists;
-    const albumUnplayed = unplayed && !artists;
-    if (!sources || !(albumFav || albumUnplayed || top || keys)) return sources;
-    const keep = (s: ShelfSource, a: ListedAlbum) => {
-      const u = useOf(s.id, a.id);
-      return (
-        (!albumFav || isFavorite(s.id, a.id)) &&
-        (!albumUnplayed || (u.plays === 0 && !u.played)) &&
-        (!top || u.rating >= 4) &&
-        (!keys || keys.has(a.id))
-      );
-    };
-    return sources.map((s) => ({ ...s, albums: s.albums.filter((a) => keep(s, a)) }));
+    if (pass.pending && !keys) return null;
+    if (!sources || !keys) return sources;
+    return sources.map((s) => ({ ...s, albums: s.albums.filter((a) => keys.has(a.id)) }));
   });
   // How many albums the filter lets through, of how many (the Filter sheet's count): of the libraries switched on, as
   // the shelf shows them (it said 605 of 2,861 with Music switched off).
@@ -202,7 +170,7 @@
     <p class="empty">No server with a Music or Incoming library is connected.</p>
   {:else}
     <!-- Its artists instead (the switch beside back, App): the albums' artists. -->
-    {#if prefs.libraryView === 'artists'}<LibraryArtists sources={shown} all={sources ?? []} favourites={fav} {unplayed} pending={pass.pending} />{:else if prefs.libraryView === 'tracks'}<LibraryTracks />{:else}
+    {#if prefs.libraryView === 'artists'}<LibraryArtists all={sources ?? []} keys={pass.keys} pending={pass.pending} />{:else if prefs.libraryView === 'tracks'}<LibraryTracks />{:else}
     <AlbumShelf sources={shown} empty="No albums." onmenu={openMenu} bind:order={prefs.libraryOrder} bind:down={prefs.libraryDown}>
       {#snippet extra(s: ShelfSource, a: ListedAlbum)}
         {#if jobs.of(s.id, a.id)}

@@ -528,21 +528,22 @@ export const previewCrate = (conditions: Condition[], limit: number, source?: st
     body: JSON.stringify({ conditions, ...(look.without?.length ? { without: look.without } : {}) }),
   });
 };
-/** The list in view a filter is on (decision 0061): the Library's albums (on `source`), the playlists, a playlist's,
- *  a crate's, an album's or an artist's tracks. */
+/** The list in view a filter is on (decision 0061): the Library's albums (on `source`) or its artists, the playlists,
+ *  a playlist's, a crate's, an album's or an artist's tracks. */
 export type FilterList =
   | { kind: 'library' }
+  | { kind: 'artists' }
   | { kind: 'playlists' }
   | { kind: 'playlist'; id: string }
   | { kind: 'crate'; id: string; favourites?: CrateFavourites; favourite_albums?: CrateFavourites }
   | { kind: 'album'; source: string; id: string }
   | { kind: 'artist'; source: string; name: string };
-/** What passes: `keys` of the items that do (an album's id, a playlist's id, a track row's `entry`; empty for a crate,
- *  whose rows come filtered: CrateLook.filter), how many of how many, and the list's axes (values with `counts`, most
- *  common first; ranges' span) and tempo spread, over all its items. */
+/** What passes: `keys` of the items that do (an album's id, an artist's `source\0name`, a playlist's id, a track row's
+ *  `entry`; empty for a crate, whose rows come filtered: CrateLook.filter), how many of how many, and the list's axes
+ *  (values with `counts`, most common first; ranges' span) and tempo spread, over all its items. */
 export type Filtered = {
   source: string;
-  items: 'albums' | 'playlists' | 'tracks';
+  items: 'albums' | 'artists' | 'playlists' | 'tracks';
   keys: string[];
   passed: number;
   total: number;
@@ -563,12 +564,14 @@ export type ListProfileData = {
   numbers: { key: 'tempo' | 'energy' | 'danceability' | 'year'; lo: number; hi: number; bins: number[]; q1: number; mid: number; q3: number; one?: number }[];
   moods: { name: string; lift: number }[];
 };
-/** A filter on the list in view: `without`, the libraries switched off (the Library's albums and a crate's tracks). */
-export const filterList = (list: FilterList, conditions: Condition[], source?: string, without?: string[]) =>
+/** A filter on the list in view: its conditions and its own switches that are on (lib/pageView SWITCHES: the server
+ *  holds what each means, the owner, 2026-10-29: one filter, one engine); `without`, the libraries switched off (the
+ *  Library's albums and artists, and a crate's tracks). */
+export const filterList = (list: FilterList, conditions: Condition[], source?: string, without?: string[], switches?: string[]) =>
   quietly<Filtered>(`/api/filter${follow(source)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ list, conditions, ...(without?.length ? { without } : {}) }),
+    body: JSON.stringify({ list, conditions, ...(switches?.length ? { switches } : {}), ...(without?.length ? { without } : {}) }),
   });
 export const getCrates = (source?: string, without?: string[]) => quietly<Crate[]>(`/api/crates${crateQuery(new URLSearchParams(), source, { without })}`);
 /** A page of a crate's rows (newest first) and the crate's size. */

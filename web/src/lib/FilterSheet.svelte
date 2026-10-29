@@ -81,7 +81,7 @@
   $effect(() => {
     if (!conditioned) return;
     const at = inView[list];
-    const without = at && (at.list.kind === 'library' || at.list.kind === 'crate') ? hiddenLibraries() : undefined;
+    const without = at && (at.list.kind === 'library' || at.list.kind === 'artists' || at.list.kind === 'crate') ? hiddenLibraries() : undefined;
     const whole = () => getCrateAxes(prefs.source || undefined, hiddenLibraries());
     (at ? filterList(at.list, [], at.source, without).then((f) => f.axes, whole) : whole()).then(
       (a) => (axes = a),

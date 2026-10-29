@@ -13,3 +13,14 @@ test('every row of the shared fixture asks what the server says it asks', () => 
   assert.ok(cases.length >= 10);
   for (const c of cases) assert.equal(complete(c.condition), c.complete, JSON.stringify(c.condition));
 });
+
+test('a changed row is a new row; on and Any are said by leaving them out', async () => {
+  const { changed } = await import('../src/lib/filterRow.ts');
+  const row = { axis: 'type', not: false, value: { kind: 'any_of', values: ['Album'] }, enabled: false, quantifier: 'all' } as Parameters<typeof complete>[0];
+  const notted = changed(row, { not: true });
+  assert.notEqual(notted, row);
+  assert.equal(row.not, false, 'the old row stays as it was');
+  assert.deepEqual(notted, { axis: 'type', not: true, value: { kind: 'any_of', values: ['Album'] }, enabled: false, quantifier: 'all' });
+  assert.deepEqual(changed(row, { enabled: undefined, quantifier: undefined }), { axis: 'type', not: false, value: { kind: 'any_of', values: ['Album'] } });
+  assert.deepEqual(changed(row, { quantifier: 'any' }), { axis: 'type', not: false, value: { kind: 'any_of', values: ['Album'] }, enabled: false });
+});

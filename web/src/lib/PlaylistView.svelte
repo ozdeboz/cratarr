@@ -158,7 +158,7 @@
   import SelectBar from './SelectBar.svelte';
   import { work } from './panelWork.svelte';
   import { prefs, type ListSort, type PanelKind } from './prefs.svelte';
-  import { filtersOn, hiddenLibraries, inView, passing, switchOn } from './listFilter.svelte';
+  import { filtersOn, hiddenLibraries, inView, passing } from './listFilter.svelte';
   import { matchesSearch, pageView, trackOrders, type TrackOrder } from './pageView.svelte';
   import { words } from './search';
   import { clockText, paused, playing } from './remote.svelte';
@@ -325,8 +325,6 @@
   let source = $state('');
   let error = $state<string | null>(null);
   let shownFor = '';
-  /** The rows' hearts are in: until then the Favourites switch shows the list loading, not empty. */
-  let rowFavsIn = $state(false);
   /** Bumped after a save: the rows are asked for again (a reorder changes no count), as after an undo or redo. */
   let saved = $state(0);
   $effect(() => {
@@ -389,8 +387,7 @@
         source = r.source;
         total = r.total;
         listGenres = r.genres;
-        rowFavsIn = r.source === DEVICE || r.source === BANDCAMP || r.source === DISCOVER;
-        if (r.source !== DEVICE && r.source !== BANDCAMP && r.source !== DISCOVER) loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : []))).then(() => want === id && (rowFavsIn = true));
+        if (r.source !== DEVICE && r.source !== BANDCAMP && r.source !== DISCOVER) loadFavorites(r.source, r.rows.flatMap((x) => (x.id ? [x.id] : [])));
       },
       (e) => {
         if (want !== id) return;
@@ -658,29 +655,25 @@ ${r.album_artist ?? r.artist ?? ''}`;
     set: setSort,
     columns: { kind: 'tracks' as const, shown: cols.map((c) => c.id), offered: sortFields.map((f) => f.value) },
   });
-  // The list's filter, remembered per kind of list (decisions 0060 and 0061): its switches here; its conditions the
-  // server's (any of what it knows of a track: genre, mood, tempo, …), which says which rows pass. A crate's rows come
+  // The list's filter, remembered per kind of list (decisions 0060 and 0061): its switches (Favourites only, Unplayed
+  // only, Hide missing tracks) and its conditions (any of what the server knows of a track: genre, mood, tempo, …),
+  // both the server's, which says which rows pass (the owner, 2026-10-29: one filter, one engine). A crate's rows come
   // filtered and ordered by the server, as they are paged, from the libraries switched on.
   // A playlist's only (the owner, 2026-10-24): an album is too short and alike to filter, a crate is a filter already,
   // an artist's lists are theirs; a filter left on there from before goes by nothing.
   const filterable = $derived(kind === 'playlist');
-  const filterOn = (key: string) => filterable && switchOn(kind, key);
   // A Home shelf's crate shows what Home showed, of every library, whatever is switched off (the owner, 2026-10-24).
   const crateLook = $derived<CrateLook>({ without: homeCrate(crate) ? undefined : hiddenLibraries(), filter: undefined, order: sortKey, down: sortDown });
   const lookKey = $derived(JSON.stringify(crateLook));
   const pass = passing(() => kind, () =>
     filterable && !crate && !album && !artist && p && !multi ? { list: { kind: 'playlist', id: p.id }, source: prefs.source || undefined } : null,
   );
-  const keeps = (r: PlaylistRow) =>
-    (!filterOn('missing') || (!!r.id && !r.missing)) &&
-    (!filterOn('favourites') || (!!r.id && isFavorite(source, r.id))) &&
-    (!filterOn('unplayed') || !r.play_count) &&
-    (!pass.keys || pass.keys.has(r.entry));
+  const keeps = (r: PlaylistRow) => !pass.keys || pass.keys.has(r.entry);
   const ordered = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
   /** The rows as the list shows them, each with its place in the subject (`i`). */
   const shown = $derived.by(() => {
     // What a filter goes by not in yet: loading, not the rows unfiltered or none (the owner, 2026-10-23).
-    if (!rows || (filterOn('favourites') && !rowFavsIn) || (pass.pending && !pass.keys)) return null;
+    if (!rows || (pass.pending && !pass.keys)) return null;
     // The page's search narrows what its panel shows too (the owner, 2026-10-25: the page finds, the panel shows the
     // item narrowed to the same words): a track whose title, artist or album holds every word.
     const list = rows.map((r, i) => ({ r, i })).filter((x) => keeps(x.r) && matchesSearch(x.r.name ?? x.r.file, x.r.artist, x.r.album));

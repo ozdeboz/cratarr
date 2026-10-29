@@ -25,8 +25,7 @@
   import ListHead from './ListHead.svelte';
   import { artistSubject, panel, viewPlaylist } from './panel.svelte';
   import { ALBUM_WIDTHS, ARTIST_ORDERS, howMany, matchesSearch, pageView } from './pageView.svelte';
-  import { useOf } from './albums.svelte';
-  import { isFavoriteArtist, setArtistHeart } from './favourites.svelte';
+  import { setArtistHeart } from './favourites.svelte';
   import { leaveSearch } from './globalSearch.svelte';
   import { prefs } from './prefs.svelte';
   import Row, { type Cell } from './Row.svelte';
@@ -43,16 +42,14 @@
   import { fromAction } from 'svelte/attachments';
   import { toast } from './toast.svelte';
 
-  /** `sources`: the albums that pass the Library's filter as an album does (4 stars and up, its conditions); `all`: every
-   *  album, for the artists before the filter and whether one was ever played. `favourites`, `unplayed`: the filter's
-   *  switches, the artist's own here (a favourite artist; none of their albums played). */
+  /** `all`: every album, whose artists these are; `keys`: the artists the Library's filter lets through, as the server
+   *  says (`source\0name`, the name in lower case: an artist hearted, never played, with an album that passes the rest;
+   *  the owner, 2026-10-29: one filter, one engine), null while it lets everyone through. */
   let {
-    sources,
     all,
-    favourites = false,
-    unplayed = false,
+    keys = null,
     pending = false,
-  }: { sources: ShelfSource[]; all: ShelfSource[]; favourites?: boolean; unplayed?: boolean; pending?: boolean } = $props();
+  }: { all: ShelfSource[]; keys?: Set<string> | null; pending?: boolean } = $props();
 
   type Artist = { source: string; name: string; albums: number; tracks: number; cover: string; list: ListedAlbum[] };
   const artistsOf = (list: ShelfSource[]) => {
@@ -72,19 +69,11 @@
     return [...by.values()];
   };
   const keyIn = (source: string, name: string) => `${source}\u0000${name.toLocaleLowerCase()}`;
-  /** The artists any of whose albums was played. */
-  const played = $derived.by(() => {
-    if (!unplayed) return null;
-    const out = new Set<string>();
-    for (const a of artistsOf(all)) if (a.list.some((x) => useOf(a.source, x.id).plays > 0 || !!useOf(a.source, x.id).played)) out.add(keyIn(a.source, a.name));
-    return out;
-  });
-  const artists = $derived(
-    artistsOf(sources).filter((a) => (!favourites || isFavoriteArtist(a.source, a.name)) && (!played || !played.has(keyIn(a.source, a.name)))),
-  );
+  const everyone = $derived(artistsOf(all));
+  const artists = $derived(keys ? everyone.filter((a) => keys.has(keyIn(a.source, a.name))) : everyone);
   // How many the filter lets through, of how many (the Filter sheet's count), before the search, as the albums'.
   $effect(() => {
-    pageView.counted = { shown: artists.length, total: artistsOf(all).length, pending };
+    pageView.counted = { shown: artists.length, total: everyone.length, pending };
     return () => (pageView.counted = null);
   });
   const byName = (x: Artist, y: Artist) => x.name.localeCompare(y.name, undefined, { sensitivity: 'base', numeric: true });

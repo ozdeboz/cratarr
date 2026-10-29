@@ -24,17 +24,22 @@
   import { hiddenLibraries } from './listFilter.svelte';
   import TempoRange from './TempoRange.svelte';
   import { WORD_AXES, wordShown } from './facts';
+  import { changed } from './filterRow';
 
   let {
-    condition = $bindable(),
+    condition,
     axis,
     known = true,
     items = null,
     open = $bindable(false),
     bpms = null,
+    onchange,
     onremove,
   }: {
     condition: FilterCondition;
+    /** A change: a new condition in its place, never this one changed (the owner, 2026-10-29: edits made in place went
+     *  unseen by the lists, so Not or a chip never asked the server again). */
+    onchange: (next: FilterCondition) => void;
     axis: ListAxis | undefined;
     /** The axes have been read: until then no name and no summary, not the raw key ("bpm") and "none chosen" before
      *  "Tempo · 80–105 BPM" (the owner, 2026-10-24). */
@@ -49,6 +54,8 @@
   } = $props();
 
   const on = $derived(condition.enabled !== false);
+  /** This condition with `patch`, a new one in its place (lib/filterRow). */
+  const change = (patch: Partial<FilterCondition>) => onchange(changed(condition, patch));
   const label = $derived(axis?.label ?? (known ? condition.axis : ''));
   const QUANTIFIERS = [
     { value: 'any' as const, label: 'any' },
@@ -119,7 +126,7 @@
   function toggle(v: string) {
     if (condition.value.kind !== 'any_of') return;
     const vs = condition.value.values;
-    condition.value = { kind: 'any_of', values: vs.includes(v) ? vs.filter((x) => x !== v) : [...vs, v] };
+    change({ value: { kind: 'any_of', values: vs.includes(v) ? vs.filter((x) => x !== v) : [...vs, v] } });
   }
   const num = (s: string) => (s.trim() === '' || Number.isNaN(Number(s)) ? null : Number(s));
   // Tempo's spread sets the range in 5-BPM bands; the whole scale is no range.
@@ -134,7 +141,7 @@
       <span class="label">{label}</span>
       {#if known}<span class="sum" class:not={condition.not}>· {summary}</span>{/if}
     </button>
-    <Switch hideLabel label="Apply {label}" checked={on} onchange={(v) => (condition.enabled = v ? undefined : false)} />
+    <Switch hideLabel label="Apply {label}" checked={on} onchange={(v) => change({ enabled: v ? undefined : false })} />
     <button class="chev" aria-label={open ? 'Fold' : 'Unfold'} onclick={() => (open = !open)}><Icon name={open ? 'chevronUp' : 'chevronDown'} size={20} /></button>
   </div>
   {#if open}
@@ -151,7 +158,7 @@
       {:else if condition.value.kind === 'like'}
         {@const l = condition.value}
         <!-- How many: the curve of how alike the closest are, cut where the crate ends. -->
-        {#if curve?.length}<div class="near"><LikeCurve {curve} count={l.count} onpreview={(n) => (dragged = n)} onchange={(n) => (condition.value = { ...l, count: n })} /></div>{/if}
+        {#if curve?.length}<div class="near"><LikeCurve {curve} count={l.count} onpreview={(n) => (dragged = n)} onchange={(n) => change({ value: { ...l, count: n } })} /></div>{/if}
       {:else if axis && condition.value.kind === 'range'}
         {@const r = condition.value}
         {#if axis.bins?.length && axis.min !== null && axis.max !== null && axis.max > axis.min}
@@ -163,20 +170,20 @@
             value={{ min: r.min, max: r.max }}
             {label}
             ends={ENDS[axis.key] ?? [`${Math.floor(axis.min)}`, `${Math.ceil(axis.max)}${unit(axis.key)}`]}
-            onchange={(v) => (condition.value = { kind: 'range', ...v })}
+            onchange={(v) => change({ value: { kind: 'range', ...v } })}
           />
         {:else if axis.key === 'bpm' && bpms}
-          <TempoRange {bpms} bind:value={() => tempoRange, (v) => (condition.value = { kind: 'range', min: v?.[0] ?? null, max: v?.[1] ?? null })} />
+          <TempoRange {bpms} bind:value={() => tempoRange, (v) => change({ value: { kind: 'range', min: v?.[0] ?? null, max: v?.[1] ?? null } })} />
         {:else}
           <div class="range">
-            <input type="number" inputmode="decimal" aria-label="From" placeholder={axis.min === null ? 'from' : String(Math.floor(axis.min))} value={r.min ?? ''} oninput={(e) => (condition.value = { ...r, min: num(e.currentTarget.value) })} />
+            <input type="number" inputmode="decimal" aria-label="From" placeholder={axis.min === null ? 'from' : String(Math.floor(axis.min))} value={r.min ?? ''} oninput={(e) => change({ value: { ...r, min: num(e.currentTarget.value) } })} />
             <span>–</span>
-            <input type="number" inputmode="decimal" aria-label="To" placeholder={axis.max === null ? 'to' : String(Math.ceil(axis.max))} value={r.max ?? ''} oninput={(e) => (condition.value = { ...r, max: num(e.currentTarget.value) })} />
+            <input type="number" inputmode="decimal" aria-label="To" placeholder={axis.max === null ? 'to' : String(Math.ceil(axis.max))} value={r.max ?? ''} oninput={(e) => change({ value: { ...r, max: num(e.currentTarget.value) } })} />
           </div>
         {/if}
       {/if}
       <div class="foot">
-        <button class="notpill" aria-pressed={condition.not} onclick={() => (condition.not = !condition.not)}>Not</button>
+        <button class="notpill" aria-pressed={condition.not} onclick={() => change({ not: !condition.not })}>Not</button>
         <button class="remove" onclick={onremove}>Remove</button>
       </div>
       {#if tested}
@@ -184,7 +191,7 @@
           Matching
           <span class="seg" role="radiogroup" aria-label="Any or all tracks">
             {#each QUANTIFIERS as q (q.value)}
-              <button role="radio" aria-checked={quantifier === q.value} onclick={() => (condition.quantifier = q.value === 'any' ? undefined : q.value)}>{q.label}</button>
+              <button role="radio" aria-checked={quantifier === q.value} onclick={() => change({ quantifier: q.value === 'any' ? undefined : q.value })}>{q.label}</button>
             {/each}
           </span>
           tracks in each {items}

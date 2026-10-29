@@ -34,10 +34,12 @@ export function resetFilter(kind: string) {
 /** A kind of list's conditions that apply: not muted, and saying what they ask (lib/filterRow). */
 export const activeConditions = (kind: string) => filterOf(kind).conditions.filter((c) => c.enabled !== false && complete(c));
 
+/** A kind of list's own switches that are on, of those it still offers: one left on from before (Lossless only, say)
+ *  is no filter now. */
+export const switchesOn = (kind: string) => filterOf(kind).on.filter((k) => (SWITCHES[kind] ?? []).some((w) => w.key === k));
+
 /** How many filters a kind of list has on (the funnel's count): its conditions that apply and its switches on. */
-// Only the switches the list still offers: one left on from before (Lossless only, say) is no filter now.
-export const filtersOn = (kind: string) =>
-  activeConditions(kind).length + filterOf(kind).on.filter((k) => (SWITCHES[kind] ?? []).some((w) => w.key === k)).length;
+export const filtersOn = (kind: string) => activeConditions(kind).length + switchesOn(kind).length;
 
 /** The libraries switched off in the filter (`source/library`), for the server's crates (decision 0024, amended
  *  2026-10-23: a crate fills from every library switched on); none: undefined. */
@@ -53,10 +55,12 @@ export function conditionsFor(kind: string): Condition[] | undefined {
  *  their counts; set by the list while it shows. */
 export const inView = $state<Record<string, { list: FilterList; source?: string } | undefined>>({});
 
-/** The keys of a list's items (of the kind `kindOf` says) its conditions let through (lib/api filterList), asked again 300 ms after they change;
- *  null while there are none (a failed ask keeps the last answer, and says so). `pending`: conditions apply and
- *  their answer is on its way; the last answer for the same list stays meanwhile, and before the first a list shows
- *  as loading rather than unfiltered (the owner, 2026-10-23: nothing shown that something else then replaces). */
+/** The keys of a list's items (of the kind `kindOf` says) its filter lets through: its conditions and its own switches,
+ *  one question to the server, which holds what each switch means (lib/api filterList; the owner, 2026-10-29: one
+ *  filter, one engine, so no list filters a switch itself), asked again 300 ms after they change; null while none apply
+ *  (a failed ask keeps the last answer, and says so). `pending`: they apply and their answer is on its way; the last
+ *  answer for the same list stays meanwhile, and before the first a list shows as loading rather than unfiltered (the
+ *  owner, 2026-10-23: nothing shown that something else then replaces). */
 export function passing(kindOf: () => string, get: () => { list: FilterList; source?: string } | null): { keys: Set<string> | null; pending: boolean } {
   const out = $state<{ keys: Set<string> | null; pending: boolean }>({ keys: null, pending: false });
   let of = '';
@@ -64,12 +68,13 @@ export function passing(kindOf: () => string, get: () => { list: FilterList; sou
     const kind = kindOf();
     const at = get();
     inView[kind] = at ?? undefined;
-    // A copy, read whole here: a condition's card changes it in place (its Not, its values, its range, Any or All), and
-    // only what this effect reads asks again (the owner, 2026-10-29: Not, then a chip, never asked the server again).
-    const conditions = $state.snapshot(conditionsFor(kind));
-    const without = at?.list.kind === 'library' ? hiddenLibraries() : undefined;
+    // A plain copy to send, read whole: a row's every field asks again (a card hands back a new row, lib/ConditionCard;
+    // the owner, 2026-10-29: Not, then a chip, never asked the server again while rows were changed in place).
+    const conditions = $state.snapshot(conditionsFor(kind)) ?? [];
+    const switches = switchesOn(kind);
+    const without = at && (at.list.kind === 'library' || at.list.kind === 'artists') ? hiddenLibraries() : undefined;
     // A crate's rows come filtered (CrateLook.filter): its answer has no keys.
-    if (!at || !conditions || at.list.kind === 'crate') {
+    if (!at || (!conditions.length && !switches.length) || at.list.kind === 'crate') {
       out.keys = null;
       out.pending = false;
       of = '';
@@ -84,7 +89,7 @@ export function passing(kindOf: () => string, get: () => { list: FilterList; sou
     out.pending = true;
     let gone = false;
     const t = setTimeout(() => {
-      filterList(at.list, conditions, at.source, without).then(
+      filterList(at.list, conditions, at.source, without, switches).then(
         (f) => {
           if (gone) return;
           out.keys = new Set(f.keys);
