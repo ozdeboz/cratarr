@@ -1,26 +1,15 @@
 // A filter row asks nothing until it says what (lib/filterRow `complete`; the owner, 2026-10-29: a new Type row with
-// no value chosen emptied the Library, "0 of 2,972"): a choice of none, but a playlist's, and a range open at both ends
-// filter nothing.
+// no value chosen emptied the Library, "0 of 2,972"). The cases are the server's too: crates.rs Condition::complete()
+// reads the same fixture, so the page and the server skip the same rows.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 const { complete } = await import('../src/lib/filterRow.ts');
+type Case = { condition: Parameters<typeof complete>[0]; complete: boolean };
+const { complete: cases } = JSON.parse(readFileSync(new URL('./fixtures/conditions.json', import.meta.url), 'utf8')) as { complete: Case[] };
 
-const row = (axis: string, value: object) => ({ axis, not: false, value }) as Parameters<typeof complete>[0];
-
-test('a row with nothing chosen asks nothing yet', () => {
-  assert.equal(complete(row('type', { kind: 'any_of', values: [] })), false);
-  assert.equal(complete(row('year', { kind: 'range', min: null, max: null })), false);
-  assert.equal(complete(row('sound', { kind: 'like', of: [], count: 20 })), false);
-});
-
-test('a row that says what it asks filters', () => {
-  assert.equal(complete(row('type', { kind: 'any_of', values: ['Album'] })), true);
-  assert.equal(complete(row('year', { kind: 'range', min: 1990, max: null })), true);
-  assert.equal(complete(row('year', { kind: 'range', min: null, max: 2000 })), true);
-  assert.equal(complete(row('favourite', { kind: 'yes' })), true);
-});
-
-test('a playlist row with none chosen is "in any playlist"', () => {
-  assert.equal(complete(row('playlist', { kind: 'any_of', values: [] })), true);
+test('every row of the shared fixture asks what the server says it asks', () => {
+  assert.ok(cases.length >= 10);
+  for (const c of cases) assert.equal(complete(c.condition), c.complete, JSON.stringify(c.condition));
 });
