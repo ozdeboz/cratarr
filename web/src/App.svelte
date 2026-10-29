@@ -816,7 +816,7 @@
   $effect(() => {
     serverConnection.value = connection;
   });
-  const MAIN: Page[] = $derived(localMode() ? [HOME, ...LOCAL] : [HOME, LIBRARY, CRATES, PLAYLISTS, DISCOVER]);
+  const MAIN: Page[] = $derived(localMode() ? [HOME, ...LOCAL] : [HOME, CRATES, PLAYLISTS, LIBRARY, DISCOVER]);
   // The sidebar's direct links under Library and Discover (the owner, 2026-10-29): what each one's picker beside back
   // offers, folded away with the sidebar; Spotify's lists as one, to the first of them.
   loadSpotify();

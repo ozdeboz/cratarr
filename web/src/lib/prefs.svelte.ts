@@ -271,6 +271,9 @@ export type Prefs = {
   playlistDown: boolean;
   /** The Playlists page as chips or as a table (decision 0042). */
   playlistLayout: 'chips' | 'table';
+  /** The Playlists page in Quick add (0.9.18; the owner, 2026-10-29): each playlist's circle adds or takes out the
+   *  playing track; in Normal the playlists only open. */
+  playlistQuickAdd: boolean;
   crateOrder: CrateOrder;
   crateDown: boolean;
   /** The panel's track lists' order, per kind of list (decision 0060). */
@@ -477,6 +480,7 @@ export const DEFAULTS: Prefs = {
   playlistOrder: 'name',
   playlistDown: false,
   playlistLayout: 'chips',
+  playlistQuickAdd: false,
   crateOrder: 'own',
   crateDown: false,
   panelSorts: {},
@@ -510,6 +514,7 @@ function read(): Prefs {
       if (COLLECTION_ORDERS.includes(saved.downloadsOrder)) p.downloadsOrder = saved.downloadsOrder;
       if (PLAYLIST_ORDERS.includes(saved.playlistOrder)) p.playlistOrder = saved.playlistOrder;
       if (saved.playlistLayout === 'chips' || saved.playlistLayout === 'table') p.playlistLayout = saved.playlistLayout;
+      if (typeof saved.playlistQuickAdd === 'boolean') p.playlistQuickAdd = saved.playlistQuickAdd;
       if (PLAYLIST_ORDERS.includes(saved.listOrder) && saved.listOrder !== 'missing') p.listOrder = saved.listOrder;
       if (typeof saved.listDown === 'boolean') p.listDown = saved.listDown;
       // Before the list header: "✓ first" was the playlists' only other order.

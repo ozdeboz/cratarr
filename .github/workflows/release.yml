@@ -129,6 +129,7 @@ jobs:
         env:
           CRATARR_HOUSE_PATTERNS: ${{ secrets.CRATARR_HOUSE_PATTERNS }}
         run: |
+          umask 022
           npm ci
           v="${GITHUB_REF_NAME#v}"
           base="${v%%-*}"
