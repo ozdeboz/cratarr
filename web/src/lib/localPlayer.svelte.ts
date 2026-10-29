@@ -1058,6 +1058,8 @@ export function drive(name: string | null) {
   deck = null;
   eased = null;
   clockGaps = [];
+  landingCourse = null;
+  landingEase = null;
   local.sleep = null;
   reported = { positionMs: 0, at: performance.now() };
 }
@@ -1107,6 +1109,8 @@ function deckMoves() {
     const steady = !!d && ((d.v === 1 && d.a === 0) || (d.v === 0 && d.a === 0)) && !easing(eased, performance.now());
     if (!d || !handed() || steady) return;
     local.position = deckPlace(d);
+    // The app's look-ahead goes with it, frame by frame.
+    if (appHolding && landingCourse) holdNow.landing = landingPlace();
     deckFrame = requestAnimationFrame(step);
   };
   deckFrame = requestAnimationFrame(step);
@@ -1236,6 +1240,12 @@ export function reportedBy(m: {
 /** The app's hold (a5, 0.9.14-4): where it lands, held or let go (null once there): the look-ahead, the hold's zoom
  *  and the aim's check, as for this page's own. Held while it winds faster than it plays; let go once it brakes. */
 let appHolding = false;
+/** The app's look-ahead between its reports: where it lands moves as its deck does, so it is carried along with the
+ *  deck, each report's correction faded in (lib/deckCourse; the owner, 2026-10-29: it trembled against the playhead
+ *  counted on smoothly, standing still between reports and then jumping). */
+let landingCourse: Course | null = null;
+let landingEase: Ease | null = null;
+const landingPlace = (now = performance.now()) => (landingCourse ? Math.max(0, shownAt(landingCourse, landingEase, now)) : null);
 function appLanding(l: unknown) {
   const at = l && typeof l === 'object' ? (l as Record<string, unknown>) : null;
   const ok = at && typeof at.index === 'number' && typeof at.positionMs === 'number';
@@ -1252,14 +1262,21 @@ function appLanding(l: unknown) {
       off_ms: aimPainted.pos === null || aimPainted.track !== (t ? `${t.source}/${t.id}` : null) ? null : Math.round((positionNow() - aimPainted.pos) * 1000),
     });
     Object.assign(holdNow, { on: false, held: false, landing: null, landingIndex: null, speed: 0 });
+    landingCourse = null;
+    landingEase = null;
     return;
   }
   const index = at.index as number;
   const pos = (at.positionMs as number) / 1000;
   const v = deck?.v ?? 0;
+  // Read with the deck, in the same report: from when the deck was read, at its speed.
+  const now = performance.now();
+  const before = landingCourse && holdNow.landingIndex === index ? landingPlace(now) : null;
+  landingCourse = { pos, at: deck?.at ?? now, v, a: deck?.a ?? 0 };
+  landingEase = easeInto(before, landingCourse, now, true);
   appHolding = true;
   holdNow.on = true;
-  holdNow.landing = pos;
+  holdNow.landing = landingPlace(now);
   holdNow.landingIndex = index;
   holdNow.speed = Math.abs(v);
   // The app's top speed, for the zoom's "at its top" (lib/SeekWave): its holds fly to FLIGHT_TOP (a5), not this page's
