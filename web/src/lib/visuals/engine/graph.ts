@@ -257,6 +257,10 @@ export type DiceRoll = { module: string; seed: number; scope: (typeof RANDOMIZE_
 export type EngineOptions = {
   now: number;
   fluidFull: number;
+  /** Reduced motion, the device's (decision 0057: kept on purpose; the architecture audit, 2026-10-29, found it
+   *  dropped): as aspects.ts had it, a quarter of the turning, the beats', downbeats' and sections' share halved, the
+   *  Flame's parts steady with a slower morph and half the lights, and no moments. */
+  still?: boolean;
   levers?: Levers;
   /** Each walking cable's factor now, by its id (1: as set). */
   walk?: Record<string, number>;
@@ -613,6 +617,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   const env = stepEnvelope(st.envelope, m.intensity, m.playing, chainSettings.intensity, step, knobOf(loud, 'attack', 0.2), knobOf(loud, 'release', 0.2));
   const raw = st.signals;
   raw.set(m.track);
+  if (opts.still) for (const s of HALVED) raw[T[s as keyof typeof T]] *= 0.5;
   raw[T.loudness] = env.level;
   // A new track (0057 §7f, Music's `newtrack`: a trigger the frame it starts, the visuals opening on one too) and its
   // seed (Music's `seed`: the same for the same track, 0..1, as flame.ts seedOf has it).
@@ -917,8 +922,9 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   const macroOf = (x: Macro) => (x.id in macros ? macros[x.id] : finite(st.macros[x.id], clamp(finite(x.value), 0, 1)));
   const nexts: NextRequest[] = [];
   /** A step's Next fired: on to its next step, round past its last to its first (a pinned one stays as the store has
-   *  it: the visuals' own changes never move a pinned knob). */
+   *  it: the visuals' own changes never move a pinned knob). None with reduced motion (its "no moments"). */
   const nextOf = (module: string, id: string, k?: Pick<Knob, 'min' | 'max' | 'default'>) => {
+    if (opts.still) return;
     const v = Math.round(finite(moduleOf.get(module)?.knobs[id], k?.default ?? 0));
     nexts.push({ module, knob: id, to: k && v + 1 > k.max ? k.min : v + 1 });
   };
@@ -1038,7 +1044,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     swing: L.swing * gainOf(ofType('accent')?.id ?? 'accent', 'accent'),
     evolution: L.evolution / Math.max(0.01, gainOf(flameModule?.id ?? 'flame', 'evolution')),
   };
-  const clock = stepClock(st.clock, m.bps, m.playing, chainSettings.speed, held.pace, step);
+  const clock = stepClock(st.clock, m.bps, m.playing, chainSettings.speed * (opts.still ? 0.25 : 1), held.pace, step);
   // The picture's level: the Tone map's Level knob as its gain input holds it (the pause's dimming, wired), where the
   // patch has the Tone map; else the Envelope's glow (today's).
   const tonemap = p.modules.find((x) => x.type === 'tonemap');
@@ -1080,7 +1086,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     else if (own.type === 'flame') {
       const continuity = Array.from({ length: BANDS }, (_, b) => knobOf(x, CONTINUITY_AT[b], unset(x, 'flame', CONTINUITY_AT[b])));
       const evolution = Array.from({ length: BANDS }, (_, b) => knobOf(x, EVOLUTION_AT[b], unset(x, 'flame', EVOLUTION_AT[b])));
-      const flame = stepFlame((st.flames[own.id] ??= newFlame()), m, (knob, band) => (band === null ? k[knob] : k[`${knob}.${band}`]), { clock, continuity, evolution, accent: chainSettings.flash }, step, held);
+      const flame = stepFlame((st.flames[own.id] ??= newFlame()), m, (knob, band) => (band === null ? k[knob] : k[`${knob}.${band}`]), { clock, continuity, evolution, accent: chainSettings.flash, still: opts.still }, step, held);
       const scale = clamp(accented(own.id, 'zoom', 0.5 + 0.5 * k.zoom, held.size), 0.25, 1.4);
       params[own.id] = { scale, flame };
       if (opts.view && x) {
