@@ -17,6 +17,7 @@ export const moduleHelp: Record<string, string> = {
   shapes: 'Polygons and stars on a ring, outlined or filled, each spinning as the ring turns; their sides and depth morph.',
   irregular: 'A heart, the Cratarr mark, an arrow or another shape on a ring, outlined or filled, in white light.',
   noise: 'Clouds of noise over the whole picture, in white light; at its finest scale, moving, film grain.',
+  gradient: 'Light by place: out from a centre, round it, across or up, blended; into a Displace, a motion field.',
   waves: 'The sound’s waveform drawn as a line, a circle or spokes (without live sound, the bands’ levels).',
 
   // Effects.
@@ -140,6 +141,19 @@ export const portHelp: Record<string, Record<string, string>> = {
     hueSpread: 'How far the colour moves round the wheel from shape to shape.',
     saturation: SATURATION,
     additive: 'From covering what is under it (0) to adding its light to it (1).',
+  },
+  gradient: {
+    amount: 'How bright it is; none at 0.',
+    distance: 'Light growing out from the centre to the edge; below 0 the other way.',
+    round: 'Light round the centre, in petals; below 0 the other way.',
+    roundCount: 'How many petals round the centre; between two whole numbers the next one fades in.',
+    across: 'Light growing from left to right; below 0 the other way.',
+    up: 'Light growing from the bottom up; below 0 the other way.',
+    centreX: 'Where its centre is, across: the middle at 0.',
+    centreY: 'Where its centre is, up or down: the middle at 0.',
+    turn: 'Turns it about its centre.',
+    repeat: 'Bands of it, this many; at 0 the plain field, the bands fading in up to 1.',
+    speed: 'How fast the bands move, a second; below 0 the other way.',
   },
   noise: {
     amount: 'How bright it is; none at 0.',
@@ -301,7 +315,14 @@ export const portHelp: Record<string, Record<string, string>> = {
   glow: { glow: 'How much halo.' },
   tint: { tint: 'How much of the other picture’s colours.', by: 'The picture whose colours it takes.' },
   mask: { amount: 'How strongly it masks.', invert: 'Let through where the other is dark instead.', by: 'The picture that decides where.' },
-  displace: { amount: 'How far it pushes.', scale: 'How fine the pushing is.', mode: 'By the other’s brightness, or by its red and green.', by: 'The picture that pushes.' },
+  displace: {
+    amount: 'How far it pushes.',
+    scale: 'How fine the pushing is.',
+    mode: 'By the other’s brightness, or by its red and green.',
+    by: 'The picture that pushes.',
+    zoom: 'Zooms it about the middle by the other’s brightness: in where light, out where dark.',
+    turn: 'Turns it about the middle by the other’s brightness: one way where light, the other where dark.',
+  },
   threshold: { threshold: 'The brightness under which it goes black.', softness: 'How soft the edge is.' },
   transform: {
     in: 'Light or a picture; out the same, moved.',

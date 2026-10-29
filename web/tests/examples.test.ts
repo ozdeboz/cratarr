@@ -59,10 +59,10 @@ for (const x of EXAMPLES) {
     assert.ok(stagesOf(c), 'drawn in its order');
     assert.ok(c.order.some((n) => n.id === 'mix'), 'its picture reaches the Screen');
     const knobs = (id: string) => byId.get(id)?.knobs ?? {};
-    // A loop of Warps and Keeps only is drawn in one pass (compose.ts LOOP); one with anything else in it (a Fold) module
-    // by module, its Feedback in the order.
-    const foldInLoop = p.cables.some((x) => x.from.module === 'feedback' && byId.get(x.to.module)?.type === 'fold');
-    if (!foldInLoop) assert.equal(loopsOf(c.order, knobs).size, 1, 'its loop drawn in one pass (compose.ts LOOP)');
+    // A loop of Warps and Keeps only is drawn in one pass (compose.ts LOOP); one with anything else in it (a Fold, a
+    // Displace) module by module, its Feedback in the order.
+    const onePass = p.cables.filter((x) => x.from.module === 'feedback').every((x) => ['warp', 'keep'].includes(byId.get(x.to.module)?.type ?? ''));
+    if (onePass) assert.equal(loopsOf(c.order, knobs).size, 1, 'its loop drawn in one pass (compose.ts LOOP)');
     else assert.ok(c.order.some((n) => n.type === 'feedback'), 'its loop drawn module by module');
     // As a kept patch made current (upgrade.ts), it is the same rack.
     const up = upgraded(structuredClone(p), RECORD);

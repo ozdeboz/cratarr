@@ -143,6 +143,20 @@ export const EXAMPLES: readonly Example[] = [
       ],
     };
   }),
+  rack('gradient-field', 'Example · A field from a gradient', 'A gradient’s light pushes the loop: out from the middle, round in petals.', (c) => {
+    const s = sound(c, { radius: 0.25 });
+    const l = loop(c, [m('push', 'displace', { amount: 0.4, scale: 0.6, zoom: 0.3, turn: 0.2 }), keep(0.88, 0.7)]);
+    return {
+      modules: [...io(), ...s.modules, ...l.modules, m('field', 'gradient', { distance: 0.6, round: 0.5, roundCount: 3, repeat: 1.5, speed: 0.1 })],
+      // The gradient pushes what the loop carries: along its light's rise, and zoomed and turned by it.
+      cables: [...s.cables, ...l.cables, c('field', 'picture', 'push', 'by')],
+      macros: [
+        macro('petals', 'Petals', 0.25, [{ module: 'field', knob: 'roundCount', from: 0, to: 12 }]),
+        macro('push', 'Push', 0.4, [{ module: 'push', knob: 'amount', from: 0, to: 1 }]),
+        macro('swirl', 'Swirl', 0.6, [{ module: 'push', knob: 'turn', from: -1, to: 1 }]),
+      ],
+    };
+  }),
   rack('grid-cells', 'Example · Kaleidoscope grid', 'A hexagonal grid, each cell its own kaleidoscope of the sound.', (c) => {
     const s = sound(c, { radius: 0.3, amplitude: 0.5 });
     const l = loop(c, [m('warp', 'warp', { amount: 1, zoom: 0.06, turnEdge: 0.15 }), keep(0.85, 0.6)]);

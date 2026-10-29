@@ -113,7 +113,19 @@ void main() {
     glsl: `uniform float uAmount;
 uniform float uScale;
 uniform float uMode;
+uniform vec2 uZoomTurn;
 void main() {
+  vec2 uv = vUv;
+  // Zoomed and turned about the middle by \`by\`'s brightness here (Hydra's modulateScale and modulateRotate): its middle
+  // grey none, white up to half again larger and a quarter turn, black the other way.
+  if (uZoomTurn != vec2(0.0)) {
+    float b = luma(texture(uBy, vUv).rgb) - 0.5;
+    float aspect = uAspect.y / uAspect.x;
+    vec2 p = (uv - 0.5) * vec2(aspect, 1.0) * exp(-0.8 * uZoomTurn.x * b);
+    float a = 3.14159265 * uZoomTurn.y * b;
+    float c = cos(a), s = sin(a);
+    uv = vec2(c * p.x - s * p.y, s * p.x + c * p.y) / vec2(aspect, 1.0) + 0.5;
+  }
   vec2 d;
   if (uMode > 0.5) d = texture(uBy, vUv).rg * 2.0 - 1.0;
   else {
@@ -123,9 +135,9 @@ void main() {
              luma(texture(uBy, vUv + vec2(0.0, e.y)).rgb) - luma(texture(uBy, vUv - vec2(0.0, e.y)).rgb));
     d = clamp(d * 4.0, -1.0, 1.0);
   }
-  o = textureLod(uIn, vUv + uAmount * 0.05 * d * uAspect, 0.0);
+  o = textureLod(uIn, uv + uAmount * 0.05 * d * uAspect, 0.0);
 }`,
-    uniforms: (k) => ({ uAmount: k.amount ?? 0, uScale: k.scale ?? 0.5, uMode: k.mode ?? 0 }),
+    uniforms: (k) => ({ uAmount: k.amount ?? 0, uScale: k.scale ?? 0.5, uMode: k.mode ?? 0, uZoomTurn: [k.zoom ?? 0, k.turn ?? 0] }),
   },
   threshold: {
     glsl: `uniform float uThreshold;

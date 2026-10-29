@@ -524,7 +524,15 @@ export const DISPLACE = declared(
   'displace',
   'Displace',
   'module',
-  [knob('amount', 'Amount', 0, 1, 0.3, 'level'), knob('scale', 'Scale', 0, 1, 0.5), choices(knob('mode', 'Mode', 0, 1, 0, 'step'), ['Brightness', 'Red and green'])],
+  [
+    knob('amount', 'Amount', 0, 1, 0.3, 'level'),
+    knob('scale', 'Scale', 0, 1, 0.5),
+    choices(knob('mode', 'Mode', 0, 1, 0, 'step'), ['Brightness', 'Red and green']),
+    // Hydra's modulateScale and modulateRotate (the owner, 2026-10-29: continuous controls): the picture zoomed and
+    // turned about the middle by `by`'s brightness there, none where it is at its middle grey; both glide, none at 0.
+    knob('zoom', 'Zoom by it', -1, 1, 0),
+    knob('turn', 'Turn by it', -1, 1, 0),
+  ],
   [PICTURE_IN, BY],
   [PICTURE_OUT],
 );
