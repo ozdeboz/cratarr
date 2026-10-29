@@ -145,13 +145,13 @@ export function trackOrders(kind: PanelKind): OrderField<TrackOrder>[] {
 export type ListSwitch = { key: string; label: string; incoming?: true; invert?: true; section?: string };
 const TRACK_SWITCHES: ListSwitch[] = [
   { key: 'favourites', label: 'Favourites only' },
-  { key: 'unplayed', label: 'Not played yet' },
+  { key: 'unplayed', label: 'Unplayed only' },
   { key: 'missing', label: 'Hide missing tracks' },
 ];
 export const SWITCHES: Record<string, ListSwitch[]> = {
   library: [
     { key: 'favourites', label: 'Favourites only' },
-    { key: 'unplayed', label: 'Not played yet' },
+    { key: 'unplayed', label: 'Unplayed only' },
     { key: 'topRated', label: '4 stars and up' },
     // Not Lossless only, Upgrades waiting or Duplicates waiting (the owner, 2026-10-24: not filter options).
   ],

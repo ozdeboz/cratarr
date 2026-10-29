@@ -645,10 +645,11 @@
     color: var(--danger-ink);
   }
 
-  /* In columns, as the playlist chips are (lib/zoom.ts). */
+  /* In columns, as the playlist chips are (lib/zoom.ts). A size wider than the room there is takes the room: the
+     largest rows (680 px) scrolled a tablet in portrait sideways (the owner, 2026-10-29). */
   ul {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(var(--min), 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(var(--min), 100%), 1fr));
     gap: 10px;
     margin: 0;
     padding: 0;

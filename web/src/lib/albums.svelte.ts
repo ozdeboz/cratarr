@@ -184,14 +184,14 @@ function hasArtist(name: string): boolean {
 }
 
 // How the owner used the albums (decided 2026-10-16): plays, last played and rating, per server, for the Library's
-// orders (Plays, Last played, Rating) and filters (Not played yet, 4 stars and up). Read when one of those is chosen,
+// orders (Plays, Last played, Rating) and filters (Unplayed only, 4 stars and up). Read when one of those is chosen,
 // and again each time (plays change).
 export const albumUses = $state<Record<string, Record<string, AlbumUse>>>({});
 const NOT_USED: AlbumUse = { plays: 0, rating: 0 };
 export const useOf = (source: string, id: string): AlbumUse => albumUses[source]?.[id] ?? NOT_USED;
 /** The servers whose plays and ratings could not be read: their filters go by none rather than wait. */
 const usesRefused = $state<Record<string, boolean>>({});
-/** Known (read, refused, or none to read): until then Not played yet and 4 stars and up wait. */
+/** Known (read, refused, or none to read): until then Unplayed only and 4 stars and up wait. */
 export const albumUsesKnown = (source: string) => source === 'device' || !!albumUses[source] || !!usesRefused[source];
 export async function loadAlbumUses(source: string) {
   // The device's own music (local mode, decision 0052) is none of Cratarr's: no plays to ask about.
