@@ -188,7 +188,8 @@ type FaceKeys = { input: string; reduction: string; in: string[] };
 const faceKeys = (id: string): FaceKeys => ({ input: `${id}.in`, reduction: `${id}.reduction`, in: Array.from({ length: CHANNELS }, (_, ch) => `${id}.in.${ch}`) });
 
 /** A step knob to move on (its module flattened). */
-export type NextRequest = { module: string; knob: string };
+/** A step whose Next fired this frame (0057 §7e), and the step it moves on to (past its last, its first). */
+export type NextRequest = { module: string; knob: string; to: number };
 
 export type EngineFrame = {
   /** What the picture is drawn with this frame (today's renderer's input, until step 3's modules take knob values); null
@@ -908,6 +909,12 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   const macros: Record<string, number> = {};
   const macroOf = (x: Macro) => (x.id in macros ? macros[x.id] : finite(st.macros[x.id], clamp(finite(x.value), 0, 1)));
   const nexts: NextRequest[] = [];
+  /** A step's Next fired: on to its next step, round past its last to its first (a pinned one stays as the store has
+   *  it: the visuals' own changes never move a pinned knob). */
+  const nextOf = (module: string, id: string, k?: Pick<Knob, 'min' | 'max' | 'default'>) => {
+    const v = Math.round(finite(moduleOf.get(module)?.knobs[id], k?.default ?? 0));
+    nexts.push({ module, knob: id, to: k && v + 1 > k.max ? k.min : v + 1 });
+  };
   const modulesNow = plan.modulesNow;
 
   // The macros and the modulators, in the order their cables (and a modulator's macros) need.
@@ -1342,7 +1349,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     for (const [id, a] of own.columns) {
       // A moment (a Flame's family, form…) moves on as its Next fires.
       if (IS_MOMENT[a]) {
-        if (fired(own.id, id)) nexts.push({ module: own.id, knob: id });
+        if (fired(own.id, id)) nextOf(own.id, id, declared?.find((x) => x.id === id));
         continue;
       }
       if (IS_LEVEL[a]) {
@@ -1376,7 +1383,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   function moved(module: string, k: Knob, base: number, cables: CableV2[]): number {
     // A step moves on only as a trigger fires its Next (0057 §7e), to its next step; its cables move nothing.
     if (k.kind === 'step') {
-      if (fired(module, k.id)) nexts.push({ module, knob: k.id });
+      if (fired(module, k.id)) nextOf(module, k.id, k);
       return clamp(base, k.min, k.max);
     }
     base = k.time ? base / Math.max(0.01, gainOf(module, k.id)) : base * gainOf(module, k.id);

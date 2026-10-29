@@ -40,23 +40,29 @@ const MIN_POINTS = 1 << 14;
 /** How many seeds the dice try against the track before taking the least over its limits. */
 const TRIES = 8;
 
-/** A module of a patch by its flattened id (`show/curve`: the Show device's Curve), devices opened. */
+/** A module of a patch by its flattened id (`show/curve`: the Show device's Curve), devices opened, and its level. */
 function moduleAt(p: PatchV2, id: string) {
   const path = id.split('/');
-  let modules = p.modules;
+  let level = p;
   for (const step of path.slice(0, -1)) {
-    const d = modules.find((m) => m.id === step);
+    const d = level.modules.find((m) => m.id === step);
     if (!d || !isDevice(d)) return undefined;
-    modules = d.patch.modules;
+    level = d.patch;
   }
-  return modules.find((m) => m.id === path[path.length - 1]);
+  const m = level.modules.find((x) => x.id === path[path.length - 1]);
+  return m ? { m, level } : undefined;
 }
 
-/** New knob values into a patch, by flattened module id. */
+/** New knob values into a patch, by flattened module id; a knob pinned at its level (`<module>.<knob>`, a band's six
+ *  by theirs) is left as it is, whatever moves it (a step's Next, a new track's look, the dice). */
 function applyKnobs(p: PatchV2, values: Randomized) {
   for (const [id, knobs] of Object.entries(values)) {
-    const m = moduleAt(p, id);
-    if (m) Object.assign(m.knobs, knobs);
+    const at = moduleAt(p, id);
+    if (!at) continue;
+    for (const [k, v] of Object.entries(knobs)) {
+      const pinned = at.level.pins.includes(`${at.m.id}.${k}`) || at.level.pins.includes(`${at.m.id}.${k.replace(/\.\d+$/, '')}`);
+      if (!pinned) at.m.knobs[k] = v;
+    }
   }
 }
 
@@ -467,16 +473,10 @@ export class VisualsLoop {
         looked = true;
         lookCame = 'track';
       }
-      // Each step whose Next a trigger fired (0057 §7e: a Gate's, in sight): its next step, a performance. The rack as
-      // it is: an effect is a module, not a step, so nothing here swaps one.
+      // Each step whose Next a trigger fired (0057 §7e: a Gate's, in sight), on to the step the engine gives it: into
+      // the store as a performance. The rack as it is: an effect is a module, not a step, so nothing here swaps one.
       const moved: Randomized = {};
-      for (const r of stepped.nexts) {
-        const mod = flat.modules.find((x) => x.id === r.module);
-        const knob = mod && host.types[mod.type]?.knobs.find((k) => k.id === r.knob);
-        if (!mod || !knob || patch.pins.includes(`${r.module}.${r.knob}`)) continue;
-        const v = Math.round(mod.knobs[r.knob] ?? knob.default);
-        (moved[r.module] ??= {})[r.knob] = v + 1 > knob.max ? knob.min : v + 1;
-      }
+      for (const r of stepped.nexts) (moved[r.module] ??= {})[r.knob] = r.to;
       if (Object.keys(moved).length) {
         apply(moved, {}, 0, null, now);
         nextBlend = ANOTHER_MS;

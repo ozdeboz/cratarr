@@ -120,9 +120,15 @@ export function flatten(p: PatchV2): PatchV2 {
 type Behind = { in: Map<string, PortRef[]>; out: Map<string, PortRef[]> };
 
 /** `p` flattened, and where its devices' exposed ports lead, through nested ones (claude-632's fix). */
+/** A device's pin as the flattened patch names it: a module's, a cable's or a knob's under the device's path (a
+ *  category's and a scope's hold at their own level only). */
+const pinAt = (device: string, pin: string): string[] =>
+  pin.startsWith('module:') ? [`module:${device}/${pin.slice(7)}`] : pin.startsWith('cable:') ? [`cable:${device}/${pin.slice(6)}`] : /^[^:]+\.[^:]+$/.test(pin) ? [`${device}/${pin}`] : [];
+
 function opened(p: PatchV2): { patch: PatchV2; behind: Behind } {
   const modules: Module[] = [];
   const cables: CableV2[] = [];
+  const pins = [...p.pins];
   const behind: Behind = { in: new Map(), out: new Map() };
   for (const m of p.modules) {
     if (!isDevice(m)) {
@@ -132,6 +138,7 @@ function opened(p: PatchV2): { patch: PatchV2; behind: Behind } {
     const inner = opened(m.patch);
     const at = (id: string) => `${m.id}/${id}`;
     modules.push(...inner.patch.modules.map((x) => ({ ...x, id: at(x.id) })));
+    pins.push(...inner.patch.pins.flatMap((x) => pinAt(m.id, x)));
     cables.push(...inner.patch.cables.map((c) => ({ ...c, id: at(c.id), from: { ...c.from, module: at(c.from.module) }, to: { ...c.to, module: at(c.to.module) } })));
     for (const [dir, list] of [['in', m.inputs], ['out', m.outputs]] as const)
       for (const e of list) {
@@ -145,7 +152,7 @@ function opened(p: PatchV2): { patch: PatchV2; behind: Behind } {
     const from = lead(c.from, 'out')[0];
     for (const [i, t] of lead(c.to, 'in').entries()) cables.push({ ...c, ...(i ? { id: `${c.id}~${i}` } : {}), from, to: t });
   }
-  return { patch: { ...p, modules, cables }, behind };
+  return { patch: { ...p, modules, cables, pins }, behind };
 }
 
 /** The bands' hits through an ADSR (claude-5f's mapping of today's Linger): `adsr` for the hits, `adsr-drums` for the
