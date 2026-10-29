@@ -534,7 +534,7 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
 
 /** One frame. `read`: the music's signals on 1 = typical (normal.ts signalsFor), for cables that read them so; `s`: the
  *  chain's knobs as settings (until the chain's modules hold their own). */
-export function stepEngine(st: EngineState, given: PatchV2, types: Record<string, ModuleType>, m: Music, read: (ref: SignalRef) => number, s: VisualSettings, dt: number, opts: EngineOptions): EngineFrame {
+export function stepEngine(st: EngineState, given: PatchV2, types: Record<string, ModuleType>, m: Music, read: (ref: SignalRef) => number, dt: number, opts: EngineOptions): EngineFrame {
   // A Music signal module is Music's port of its signal (music-signals.ts).
   const p = musicView(given);
   const L = opts.levers ?? OPEN;
@@ -555,8 +555,15 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   const ofType = (type: string) => plan.first.get(type);
   const inChain = (rel: string) => moduleOf.get(at + rel);
   const knobOf = (x: Module | undefined, knob: string, or: number) => finite(x?.knobs[knob], or);
-  /** The chain's settings from its modules' knobs (the patch is the truth, 0057 Phase B); a knob a patch has no module
-   *  for, as the settings had it. */
+  /** What a knob gives where the patch has no value for it: its type's default on a module it has; where it has no such
+   *  module, its neutral, so it does nothing (what the rack shows is what runs, never a setting kept from before the
+   *  switch: the owner, 2026-10-29); 0 for a type unknown. */
+  const unset = (x: Module | undefined, type: string, knob: string) => {
+    const k = (types[type] ?? ENGINE_TYPES[type])?.knobs.find((d) => d.id === knob);
+    return (x ? k?.default : k?.neutral) ?? 0;
+  };
+  /** The chain's settings from its modules' knobs (the patch is the truth, 0057 Phase B; a knob it has no value for:
+   *  `unset`). */
   // Intensity, Flash and Speed are the rack's macros on these knobs (0057: the Whole frame gone): as last frame left them.
   const macroedKnob = (x: Module | undefined, knob: string, or: number) => {
     let base = knobOf(x, knob, or);
@@ -564,20 +571,19 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     return base;
   };
   const chainSettings = {
-    lighting: s.lighting,
-    flash: macroedKnob(ofType('accent'), 'accent', s.flash),
-    speed: macroedKnob(ofType('clock'), 'speed', s.speed),
-    intensity: macroedKnob(ofType('envelope'), 'intensity', s.intensity),
-    continuity: s.continuity.map((v, k) => knobOf(flameModule, CONTINUITY_AT[k], v)),
-    evolution: s.evolution.map((v, k) => knobOf(flameModule, EVOLUTION_AT[k], v)),
-    fluid: knobOf(inChain('fluid'), 'fluid', s.fluid),
-    facets: knobOf(inChain('fluid'), 'facets', s.facets),
-    tunnel: knobOf(inChain('tunnel'), 'tunnel', s.tunnel),
-    dive: knobOf(inChain('dive'), 'dive', s.dive),
+    flash: macroedKnob(ofType('accent'), 'accent', unset(ofType('accent'), 'accent', 'accent')),
+    speed: macroedKnob(ofType('clock'), 'speed', unset(ofType('clock'), 'clock', 'speed')),
+    intensity: macroedKnob(ofType('envelope'), 'intensity', unset(ofType('envelope'), 'envelope', 'intensity')),
+    continuity: CONTINUITY_AT.slice(0, BANDS).map((id) => knobOf(flameModule, id, unset(flameModule, 'flame', id))),
+    evolution: EVOLUTION_AT.slice(0, BANDS).map((id) => knobOf(flameModule, id, unset(flameModule, 'flame', id))),
+    fluid: knobOf(inChain('fluid'), 'fluid', unset(inChain('fluid'), 'fluid', 'fluid')),
+    facets: knobOf(inChain('fluid'), 'facets', unset(inChain('fluid'), 'fluid', 'facets')),
+    tunnel: knobOf(inChain('tunnel'), 'tunnel', unset(inChain('tunnel'), 'tunnel', 'tunnel')),
+    dive: knobOf(inChain('dive'), 'dive', unset(inChain('dive'), 'dive', 'dive')),
     // Effects: the rack's macro on the effects' Amounts (folded into them: 1) where the Whole frame is gone.
-    effects: knobOf(inChain('frame'), 'effects', inChain('frame') ? s.effects : 1),
-    smoothing: knobOf(inChain('show/blur'), 'smoothing', s.smoothing),
-    haze: knobOf(inChain('show/curve'), 'haze', s.haze),
+    effects: knobOf(inChain('frame'), 'effects', inChain('frame') ? unset(inChain('frame'), 'frame', 'effects') : 1),
+    smoothing: knobOf(inChain('show/blur'), 'smoothing', unset(inChain('show/blur'), 'blur', 'smoothing')),
+    haze: knobOf(inChain('show/curve'), 'haze', unset(inChain('show/curve'), 'curve', 'haze')),
   } as VisualSettings;
   // How a Music row is read (its `reference.<signal>` knob: 0057 §7e, a cable no longer says); unset, as normal.ts
   // reads it by default.
@@ -1070,8 +1076,8 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     } else if (own.type === 'tunnel') params[own.id] = { tunnel: k.tunnel };
     else if (own.type === 'dive') params[own.id] = { dive: k.dive };
     else if (own.type === 'flame') {
-      const continuity = Array.from({ length: BANDS }, (_, b) => knobOf(x, CONTINUITY_AT[b], s.continuity[b]));
-      const evolution = Array.from({ length: BANDS }, (_, b) => knobOf(x, EVOLUTION_AT[b], s.evolution[b]));
+      const continuity = Array.from({ length: BANDS }, (_, b) => knobOf(x, CONTINUITY_AT[b], unset(x, 'flame', CONTINUITY_AT[b])));
+      const evolution = Array.from({ length: BANDS }, (_, b) => knobOf(x, EVOLUTION_AT[b], unset(x, 'flame', EVOLUTION_AT[b])));
       const flame = stepFlame((st.flames[own.id] ??= newFlame()), m, (knob, band) => (band === null ? k[knob] : k[`${knob}.${band}`]), { clock, continuity, evolution, accent: chainSettings.flash }, step, held);
       const scale = clamp(accented(own.id, 'zoom', 0.5 + 0.5 * k.zoom, held.size), 0.25, 1.4);
       params[own.id] = { scale, flame };
@@ -1198,7 +1204,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     const waves = bend ? (params[bend.id]?.waves ?? aspects.given[A.waves]) : aspects.given[A.waves];
     const gains = fluidGains(p);
     const beat = m.playing ? m.beat : null;
-    const own = (aspect: 'stir' | 'flow' | 'swirl') => (fluidOwn ? baseOf(fluidOwn, aspect, s[aspect]) : s[aspect]);
+    const own = (aspect: 'stir' | 'flow' | 'swirl') => (fluidOwn ? baseOf(fluidOwn, aspect, unset(fluidOwn, 'fluid', aspect)) : unset(undefined, 'fluid', aspect));
     fluid = stir(st.stirring, {
       t: opts.now / 1000,
       dt: step,
@@ -1207,7 +1213,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
       turns: fl?.rates ?? [],
       lights: fl?.hits ?? [],
       level: aspects.bands.map((v) => v[B.level]),
-      continuity: Array.from({ length: BANDS }, (_, b) => baseOf(flameModule, CONTINUITY_AT[b], s.continuity[b])),
+      continuity: Array.from({ length: BANDS }, (_, b) => baseOf(flameModule, CONTINUITY_AT[b], unset(flameModule, 'flame', CONTINUITY_AT[b]))),
       hits: m.playing && m.hits ? m.hits.map((hh) => (hh.index < 0 ? null : { index: hh.index, strength: hh.weight, nextIn: hh.nextIn })) : [],
       beat: beat ? { ...beat, nextIn: beat.length - beat.since } : null,
       downbeat: aspects.track[T.downbeat],
@@ -1296,8 +1302,8 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     const curve = of('curve', 'show/curve');
     const blur = of('blur', 'show/blur');
     const fluidOwn = of('fluid', 'fluid');
-    const fluid = fluidOwn?.fluid ?? opts.fluidFull * clamp(s.fluid, 0, 1);
-    const haze = curve?.gamma !== undefined ? { gamma: curve.gamma, floor: curve.floor ?? 0 } : hazeOf(clamp(s.haze, -1, 1));
+    const fluid = fluidOwn?.fluid ?? opts.fluidFull * clamp(chainSettings.fluid, 0, 1);
+    const haze = curve?.gamma !== undefined ? { gamma: curve.gamma, floor: curve.floor ?? 0 } : hazeOf(clamp(chainSettings.haze, -1, 1));
     const moments = Object.fromEntries(MOMENT_ASPECTS.map((a) => [a, false])) as Record<(typeof MOMENT_ASPECTS)[number], boolean>;
     for (const r of nexts) {
       const own = ownOf.get(r.module);
@@ -1323,15 +1329,15 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
       gamma: haze.gamma,
       flash: tone?.flash ?? glow * clamp(accented(`${flameModule!.id}|chain`, 'glow', 1), 0.15, 3),
       saturation: sat?.saturation ?? clamp(accented(`${flameModule!.id}|chain`, 'saturation', 0.35), 0, 1.25),
-      smoothing: blur?.smoothing ?? 12 * clamp(s.smoothing, 0, 1) ** 2,
+      smoothing: blur?.smoothing ?? 12 * clamp(chainSettings.smoothing, 0, 1) ** 2,
       floor: haze.floor,
       levels: { fluid: level[A.fluid], smoothing: level[A.smoothing], haze: level[A.haze], tunnel: level[A.tunnel], dive: level[A.dive] },
       fluid,
       warp: fluidOwn?.warp ?? 0.12 * fluid,
-      tunnel: of('tunnel', 'tunnel')?.tunnel ?? clamp(s.tunnel, 0, 1),
-      effects: clamp(knobOf(inChain('frame'), 'effects', inChain('frame') ? s.effects : 1) * level[A.effects], 0, 1),
-      facets: fluidOwn?.facets ?? clamp(s.facets, 0, 1),
-      dive: of('dive', 'dive')?.dive ?? clamp(s.dive, 0, 1),
+      tunnel: of('tunnel', 'tunnel')?.tunnel ?? clamp(chainSettings.tunnel, 0, 1),
+      effects: clamp(chainSettings.effects * level[A.effects], 0, 1),
+      facets: fluidOwn?.facets ?? clamp(chainSettings.facets, 0, 1),
+      dive: of('dive', 'dive')?.dive ?? clamp(chainSettings.dive, 0, 1),
       look: walk('look'),
       behaviour: walk('behaviour'),
       nexts: moments,

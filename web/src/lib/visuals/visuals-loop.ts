@@ -363,7 +363,7 @@ export class VisualsLoop {
         renderer!.resize(bw, bh);
         return [w, h, resized, top];
       };
-      const stepped = stepEngine(engine, flat, host.types, m, read, how, dt, {
+      const stepped = stepEngine(engine, flat, host.types, m, read, dt, {
         now,
         fluidFull: FLUID_FULL,
         meters: meterValues,

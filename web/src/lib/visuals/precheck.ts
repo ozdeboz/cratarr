@@ -152,7 +152,7 @@ function* checking(patch: PatchV2, settings: VisualSettings, signals: Signals, b
     if (k > 0 && k % SLICE === 0) yield;
     const t = from + k * dt;
     const m = musicOf(signals, beats, t, true, { state, at: t * 1000, lighting: settings.lighting });
-    const a = stepEngine(engine, patch, {}, m, signalsFor(normal, m, t * 1000), settings, dt, { now: t * 1000, fluidFull: FLUID_FULL }).aspects;
+    const a = stepEngine(engine, patch, {}, m, signalsFor(normal, m, t * 1000), dt, { now: t * 1000, fluidFull: FLUID_FULL }).aspects;
     if (!a) break;
     measure(meters, a, k * dt, settings, divePerRate);
     if (k * dt < SETTLE_S) continue;

@@ -49,7 +49,7 @@ const over = (convert: (p: PatchV2) => PatchV2): Engine => {
         from = s;
         p = convert(flatten(toV2(s, { follow: false })));
       }
-      return stepEngine(st, p!, {}, m, () => 0, s, dt, opts).aspects;
+      return stepEngine(st, p!, {}, m, () => 0, dt, opts).aspects;
     },
   };
 };

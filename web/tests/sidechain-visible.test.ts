@@ -110,7 +110,7 @@ test("open loop: each Ducker gives the lever today's sidechaining gives, the Scr
     for (let k = 0; k < FRAMES; k++) {
       const at = 20 + k * DT;
       const m = musicOf(t.signals, t.beats, at, true, { state: music2, at: at * 1000, lighting: busy.lighting });
-      const f = stepEngine(eng, p, {}, m, () => 0, busy, DT, { still: false, now: at * 1000, fluidFull: FLUID_FULL, meters: seen[k] });
+      const f = stepEngine(eng, p, {}, m, () => 0, DT, { still: false, now: at * 1000, fluidFull: FLUID_FULL, meters: seen[k] });
       const want = stepSidechain(ref, seen[k], { dt: DT, limits: STANDING, wild: busy.wild, activity, budgets: true });
       const got = leversOf(f.outputs);
       for (const lever of Object.keys(want) as (keyof Levers)[]) {
@@ -168,7 +168,7 @@ test('closed loop: the visible sidechains keep the picture within its budgets as
     const p = flatten(toV2(busy));
     const eng = newEngine();
     const after = outcome(t, (m, at, meters) => {
-      const f = stepEngine(eng, p, {}, m, () => 0, busy, DT, { still: false, now: at * 1000, fluidFull: FLUID_FULL, meters });
+      const f = stepEngine(eng, p, {}, m, () => 0, DT, { still: false, now: at * 1000, fluidFull: FLUID_FULL, meters });
       return { a: f.aspects, levers: leversOf(f.outputs) };
     });
     for (const key of BUDGETED) {

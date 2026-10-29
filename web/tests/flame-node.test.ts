@@ -30,7 +30,7 @@ function run(frames: number, o: { change?: { frame: number; knobs: Record<string
       glide = o.change.glide ?? null;
     }
     const m = musicOf(t.signals, t.beats, at, true, { state: music, at: at * 1000, lighting: DEFAULTS.lighting });
-    out.push(stepEngine(st, p, types, m, () => 0, DEFAULTS, 1 / 30, { now: at * 1000, fluidFull: FLUID_FULL, aspect: 16 / 9, view: { cover: NO_COVER, glide } }));
+    out.push(stepEngine(st, p, types, m, () => 0, 1 / 30, { now: at * 1000, fluidFull: FLUID_FULL, aspect: 16 / 9, view: { cover: NO_COVER, glide } }));
   }
   return { out, flame, st };
 }
@@ -42,7 +42,7 @@ test('the Flame draws from its own knobs with a view, and none without one', () 
   assert.equal(v.mode, 'rainbow');
   const t = track(TRACKS[0]);
   const m = musicOf(t.signals, t.beats, 20, true, { state: newMusicState(), at: 20000, lighting: DEFAULTS.lighting });
-  const blind = stepEngine(newEngine(), flatten(toV2(structuredClone(DEFAULTS))), types, m, () => 0, DEFAULTS, 1 / 30, { now: 20000, fluidFull: FLUID_FULL });
+  const blind = stepEngine(newEngine(), flatten(toV2(structuredClone(DEFAULTS))), types, m, () => 0, 1 / 30, { now: 20000, fluidFull: FLUID_FULL });
   assert.deepEqual(blind.flames, {});
 });
 
@@ -84,4 +84,17 @@ test("the Fluid stirred by the engine: its pushes and flow, from its own Stir, F
   const last = out[out.length - 1];
   assert.ok(last.fluid && Array.isArray(last.fluid.forces) && Number.isFinite(last.fluid.flow.energy));
   assert.ok(out.some((f) => (f.fluid?.forces.length ?? 0) > 0), 'kicked at least once over three seconds of a track');
+});
+
+test('a module taken out of the rack does nothing, whatever the settings from before the switch said', () => {
+  const t = track(TRACKS[0]);
+  const m = musicOf(t.signals, t.beats, 20, true, { state: newMusicState(), at: 20000, lighting: DEFAULTS.lighting });
+  const p = flatten(toV2(structuredClone(DEFAULTS)));
+  p.modules = p.modules.filter((x) => x.type !== 'fluid' && x.type !== 'tunnel' && x.type !== 'dive');
+  p.cables = p.cables.filter((c) => p.modules.some((x) => x.id === c.from.module) && p.modules.some((x) => x.id === c.to.module));
+  const old = { ...structuredClone(DEFAULTS), fluid: 0.8, tunnel: 0.6, dive: 0.5 };
+  const f = stepEngine(newEngine(), p, types, m, () => 0, 1 / 30, { now: 20000, fluidFull: FLUID_FULL });
+  assert.equal(f.aspects!.fluid, 0);
+  assert.equal(f.aspects!.tunnel, 0);
+  assert.equal(f.aspects!.dive, 0);
 });
