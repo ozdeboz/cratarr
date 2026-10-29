@@ -31,7 +31,7 @@ import { isDevice, READINGS, SHOW_PARTS, type CableV2, type Device, type PatchV2
 import { extraType } from './registry';
 import { modulatorOf } from './modulators/modulators';
 import { makeDevice } from './device-make';
-import { namedDevices } from './device-names';
+import { namedDevices, RACK_NAMES } from './device-names';
 import { v2TypeRecord } from './v2-types';
 import { EFFECTS } from './effects';
 import { effectType } from './effect-modules';
@@ -448,7 +448,7 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
   const rackMacros: Macro[] = (Object.entries(MOVED) as [string, [string, string]][]).map(([setting, [module, knob]]) => {
     const [lo, hi] = RANGES[setting as keyof typeof RANGES];
     const v = (s as unknown as Record<string, number>)[setting];
-    return { id: setting, on: 'rack', label: setting[0].toUpperCase() + setting.slice(1), value: Math.min(1, Math.max(0, (v - lo) / (hi - lo))), targets: [{ module, knob, from: lo, to: hi }] };
+    return { id: setting, on: 'rack', label: RACK_NAMES[setting] ?? setting[0].toUpperCase() + setting.slice(1), value: Math.min(1, Math.max(0, (v - lo) / (hi - lo))), targets: [{ module, knob, from: lo, to: hi }] };
   });
   if (frame) modules.splice(modules.indexOf(frame), 1);
   // Show as a device (0057 §6): its modules in the order that draws today's picture, each with the knob it took; its

@@ -6,13 +6,17 @@
 // - Calm: each Ducker by the busyness it holds (its key, its output), its threshold's VCA beside it; the loudness one
 //   input to them all;
 // - Pause Dim: its input Playing, its output Dim, its parts by their part;
-// - Show: its knobs' inputs by the knob (Waves, Smoothing …), not by the module behind them.
+// - Show: its knobs' inputs by the knob (Waves, Smoothing …), not by the module behind them;
+// and the rack's macros by their names (Accent, not Flash: 0057 §7e item 9).
 // Pure, in place. A patch named again is as it was, so a kept one is named as it is loaded (visuals-patch.svelte.ts).
 
 import type { ModuleType } from './patch';
 import { isDevice, portsOfModule, SHOW_PARTS, type Device, type PatchV2, type PortRef } from './ports';
 
 const BANDS = ['Sub', 'Bass', 'Low mid', 'Mid', 'Upper mid', 'Air'];
+/** The rack's macros by name where the setting's says otherwise (0057 §7e item 9: Accent, not Flash, so "flash" is only
+ *  the Screen's flash guard). */
+export const RACK_NAMES: Readonly<Record<string, string>> = { flash: 'Accent' };
 
 type Types = Record<string, ModuleType>;
 
@@ -109,5 +113,6 @@ const NAMERS: Record<string, (p: PatchV2, d: Device, types: Types) => void> = { 
 /** `p`'s shipped devices named by what they carry (in place), and `p`. */
 export function namedDevices(p: PatchV2, types: Types): PatchV2 {
   for (const m of p.modules) if (isDevice(m)) NAMERS[m.id]?.(p, m, types);
+  for (const x of p.macros) if (RACK_NAMES[x.id] && x.on === 'rack') x.label = RACK_NAMES[x.id];
   return p;
 }

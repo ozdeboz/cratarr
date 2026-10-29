@@ -47,3 +47,11 @@ test('named again, a patch is as it was (a kept one is named as it loads)', () =
   const once = JSON.stringify(p);
   assert.equal(JSON.stringify(namedDevices(p, types)), once);
 });
+
+test('the rack macro on the Accent is Accent, not Flash; a kept one named so as it loads', () => {
+  const p = toV2(DEFAULTS);
+  assert.equal(p.macros.find((x) => x.id === 'flash')?.label, 'Accent');
+  const kept = structuredClone(p);
+  kept.macros.find((x) => x.id === 'flash')!.label = 'Flash';
+  assert.equal(namedDevices(kept, types).macros.find((x) => x.id === 'flash')?.label, 'Accent');
+});
