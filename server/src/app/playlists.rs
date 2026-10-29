@@ -98,7 +98,8 @@ async fn like_crate(id: &str, item: &str, count: usize) -> Result<CrateDef, Togg
 }
 
 /// What a user did with each line (the crates' Play count, Last played and Rating): the songs' plays and last plays,
-/// and their albums' stars, by the files' lines. Blocking.
+/// and their stars: a song's own, else its album's (the filter API, 2026-10-29: one Rating, as the Library's tracks'
+/// 4 stars and up reads it), by the files' lines. Blocking.
 fn uses_of(user: &str, files: &[crates::Facts]) -> anyhow::Result<HashMap<String, crates::Use>> {
     let Some(serve) = crate::serve::instance() else { return Ok(HashMap::new()) };
     let line_of: HashMap<i64, &str> = files.iter().filter_map(|f| Some((f.track?, f.rel.as_str()))).collect();
@@ -110,11 +111,14 @@ fn uses_of(user: &str, files: &[crates::Facts]) -> anyhow::Result<HashMap<String
             (u.plays, u.last) = (plays, last);
         }
     }
-    let rated: HashMap<String, u8> = serve.userdata.used(user, crate::userdata::Kind::Album)?.into_iter().filter(|(_, a)| a.rating > 0).map(|(id, a)| (id, a.rating)).collect();
-    if !rated.is_empty() {
+    let stars = |kind| -> anyhow::Result<HashMap<String, u8>> {
+        Ok(serve.userdata.used(user, kind)?.into_iter().filter(|(_, a)| a.rating > 0).map(|(id, a)| (id, a.rating)).collect())
+    };
+    let (own, rated) = (stars(crate::userdata::Kind::Song)?, stars(crate::userdata::Kind::Album)?);
+    if !own.is_empty() || !rated.is_empty() {
         for (song, album) in serve.library.song_albums()? {
-            if let (Some(&r), Some(l)) = (rated.get(&album), line(&song)) {
-                out.entry(l.to_string()).or_default().rating = Some(r);
+            if let (Some(r), Some(l)) = (own.get(&song).or_else(|| rated.get(&album)), line(&song)) {
+                out.entry(l.to_string()).or_default().rating = Some(*r);
             }
         }
     }

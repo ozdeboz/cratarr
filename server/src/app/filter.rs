@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use super::{App, ToggleError};
-use crate::crates::{self, Facts};
+use crate::crates::{self, Condition, Facts, Use, Value};
 
 /// What the list in view is.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -18,6 +18,9 @@ use crate::crates::{self, Facts};
 pub enum List {
     /// The Library's albums on the server asked for, of the libraries switched on (`without`).
     Library,
+    /// The Library's artists (the filter API, 2026-10-29): each album artist of the libraries switched on, with the
+    /// albums they are an artist of.
+    Artists,
     /// The Playlists page's list: the account's own playlists and those shared with it.
     Playlists,
     /// A playlist's tracks.
@@ -44,6 +47,30 @@ pub struct Request {
     /// a playlist, an album, an artist and the playlists are what they hold.
     #[serde(default)]
     pub without: Vec<String>,
+    /// The list's own switches that are on, as the page's SWITCHES has them (`switches_of`); one the list has not is
+    /// refused.
+    #[serde(default)]
+    pub switches: Vec<String>,
+}
+
+/// The switches each list has, as the page's SWITCHES (lib/pageView) has them, each with one meaning (the filter API,
+/// 2026-10-29: worked out here per list, beside its conditions, not by the page):
+/// - the albums: Favourites only, the album hearted; Unplayed only, no track of it played; 4 stars and up, the album's
+///   own stars;
+/// - the artists: Favourites only, the artist hearted; Unplayed only, no track of theirs played; 4 stars and up, as
+///   their conditions, one of their albums;
+/// - the playlists: Favourites only, the playlist hearted; Mine only, the account's own;
+/// - a playlist's tracks: Favourites only, the track hearted; Unplayed only, the track never played; Hide missing
+///   tracks, rows without a file left out.
+///
+/// Played is the plays log's, the asking account's (`uses_of`), everywhere.
+pub fn switches_of(list: &List) -> &'static [&'static str] {
+    match list {
+        List::Library | List::Artists => &["favourites", "unplayed", "topRated"],
+        List::Playlists => &["favourites", "mine"],
+        List::Playlist { .. } => &["favourites", "unplayed", "missing"],
+        List::Crate { .. } | List::Album { .. } | List::Artist { .. } => &[],
+    }
 }
 
 /// What a list's items are.
@@ -51,6 +78,7 @@ pub struct Request {
 #[serde(rename_all = "lowercase")]
 pub enum Items {
     Albums,
+    Artists,
     Playlists,
     Tracks,
 }
@@ -81,6 +109,19 @@ pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Fi
     if let Some(c) = r.conditions.iter().find(|c| !crates::is_axis(&c.axis)) {
         return Err(ToggleError::Refused(format!("Unknown axis: {}.", c.axis)));
     }
+    let known = switches_of(&r.list);
+    if let Some(k) = r.switches.iter().find(|k| !known.contains(&k.as_str())) {
+        return Err(ToggleError::Refused(format!("Unknown switch: {k}.")));
+    }
+    let on = |k: &str| r.switches.iter().any(|s| s == k);
+    // Rows that ask nothing yet are left out: not sent on, not read for (Condition::complete).
+    let asked: Vec<Condition> = r.conditions.iter().filter(|c| c.complete()).cloned().collect();
+    // A switch on hearts asks for them to be read, as a condition on them would: an album's, a track's.
+    let hearts = match &r.list {
+        List::Library if on("favourites") => Some(Condition::new("favourite_album", false, Value::Yes)),
+        List::Playlist { .. } if on("favourites") => Some(Condition::new("favourite", false, Value::Yes)),
+        _ => None,
+    };
     let want = match &r.list {
         List::Album { source, .. } | List::Artist { source, .. } => Some(source.as_str()),
         _ => want,
@@ -93,19 +134,42 @@ pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Fi
         }
         _ => Vec::new(),
     };
-    let all: Vec<crates::Condition> = shown.iter().chain(&r.conditions).cloned().collect();
-    let drawn = matches!(r.list, List::Library | List::Crate { .. });
+    let all: Vec<Condition> = shown.iter().chain(&asked).chain(hearts.iter()).cloned().collect();
+    let drawn = matches!(r.list, List::Library | List::Artists | List::Crate { .. });
     let lib = app.playlists.crate_library_for(&all, want, if drawn { &r.without } else { &[] }).await?;
     let by_line: HashMap<&str, &Facts> = lib.files().map(|f| (f.rel.as_str(), f)).collect();
     let none = Facts::default();
-    let one = |key: String, line: Option<&str>| (key, vec![facts_of(&by_line, &none, line)]);
-    let (items, grouped): (Items, Vec<(String, Vec<&Facts>)>) = match &r.list {
+    let uses = lib.uses();
+    let one = |key: String, line: Option<&str>| Item::of(key, vec![facts_of(&by_line, &none, line)], true);
+    // A heart's switch is its condition (read above): the album's for an album, the track's for a track.
+    let w = lib.world();
+    let conditions: Vec<Condition> = lib.resolved(&asked).into_iter().chain(hearts.clone()).collect();
+    let (items, grouped): (Items, Vec<Item>) = match &r.list {
         List::Crate { .. } => (Items::Tracks, lib.select(&shown).iter().map(|l| one(String::new(), Some(l.as_str()))).collect()),
-        List::Playlist { id } => (Items::Tracks, app.playlists.entries(id).await?.into_iter().map(|l| one(l.clone(), Some(l.as_str()))).collect()),
+        List::Playlist { id } => {
+            let rows = app.playlists.entries(id).await?;
+            let row = |l: &String| {
+                let f = facts_of(&by_line, &none, Some(l.as_str()));
+                Item::of(l.clone(), vec![f], (!on("unplayed") || never_played(f, uses)) && (!on("missing") || !f.rel.is_empty()))
+            };
+            (Items::Tracks, rows.iter().map(row).collect())
+        }
         List::Playlists => {
             let lists = app.playlists.snapshot().await?;
+            let hearted: Option<std::collections::HashSet<String>> = match on("favourites") {
+                true => Some(app.playlists.favorites(Some(&lib.source)).await?.into_iter().filter(|(_, on)| *on).map(|(n, _)| n).collect()),
+                false => None,
+            };
+            let mine: Option<std::collections::HashSet<String>> = match on("mine") {
+                true => Some(app.playlists.own_playlist_names().await?.into_iter().collect()),
+                false => None,
+            };
             let of = |lines: &[String]| lines.iter().map(|l| facts_of(&by_line, &none, Some(l.as_str()))).collect();
-            (Items::Playlists, lists.into_iter().map(|(id, lines, _)| (id, of(&lines))).collect())
+            let item = |(id, lines, _): (String, Vec<String>, usize)| {
+                let ok = hearted.as_ref().is_none_or(|h| h.contains(&id)) && mine.as_ref().is_none_or(|m| m.contains(&id));
+                Item::of(id, of(&lines), ok)
+            };
+            (Items::Playlists, lists.into_iter().map(item).collect())
         }
         List::Album { source, id } => {
             let rows = app.playing.album_view(source, id).await?.rows;
@@ -115,8 +179,8 @@ pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Fi
             let rows = app.playing.artist_view(source, name).await?.rows;
             (Items::Tracks, row_lines(app, source, rows).await.into_iter().map(|(e, l)| one(e, l.as_deref())).collect())
         }
-        List::Library => {
-            let albums = library_albums(app, &lib.source, &r.without).await;
+        List::Library | List::Artists => {
+            let listed = library_albums(app, &lib.source, &r.without).await;
             // Cratarr's own albums by their own tracks, wherever their files are (2026-10-29, the owner's "Stellar -
             // Tunnel": two copies in two artists' folders, so the album's folder was the library's root, and the
             // filter found none of its files and left it out of every answer, negated ones too).
@@ -126,18 +190,33 @@ pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Fi
             for f in lib.files() {
                 by_dir.entry(f.rel.rsplit_once('/').map_or("", |(d, _)| d)).or_default().push(f);
             }
-            let tracks_of = |id: &str, dir: Option<String>| match own.get(id) {
+            let tracks_of = |a: &Listed| match own.get(&a.id) {
                 Some(files) => files.clone(),
-                None => dir.and_then(|d| by_dir.get(d.as_str()).cloned()).unwrap_or_default(),
+                None => a.dir.as_ref().and_then(|d| by_dir.get(d.as_str()).cloned()).unwrap_or_default(),
             };
-            (Items::Albums, albums.into_iter().map(|(id, dir)| (id.clone(), tracks_of(&id, dir))).collect())
+            // 4 stars and up: the album's own stars, as the account sees the album.
+            let stars = match on("topRated") {
+                true => Some(app.playing.album_uses(&lib.source).await.map_err(|_| ToggleError::CannotPlay("The albums' stars could not be read.".into()))?),
+                false => None,
+            };
+            let rated = |id: &str| stars.as_ref().is_none_or(|s| s.get(id).is_some_and(|u| u.rating >= TOP_RATED));
+            let albums: Vec<AlbumItem> = listed.iter().map(|a| AlbumItem { id: a.id.clone(), artists: a.artists.clone(), tracks: tracks_of(a), rated: rated(&a.id) }).collect();
+            if matches!(r.list, List::Library) {
+                let unplayed = on("unplayed");
+                (Items::Albums, albums.iter().map(|a| Item::of(a.id.clone(), a.tracks.clone(), a.rated && (!unplayed || a.tracks.iter().all(|f| never_played(f, uses))))).collect())
+            } else {
+                let hearted: Option<std::collections::HashSet<String>> = match on("favourites") {
+                    true => Some(app.playing.favorite_artists(&lib.source).await?.iter().map(|n| n.to_lowercase()).collect()),
+                    false => None,
+                };
+                let looks = ArtistLook { conditions: &conditions, world: &w, uses, hearted: hearted.as_ref(), unplayed: on("unplayed") };
+                (Items::Artists, artists_of(&lib.source, &albums, &looks))
+            }
         }
     };
-    let w = lib.world();
-    let conditions = lib.resolved(&r.conditions);
-    let keys: Vec<String> = grouped.iter().filter(|(_, t)| crates::passes(t, &conditions, &w)).map(|(k, _)| k.clone()).collect();
-    let passed = keys.len();
-    let tracks: Vec<&[&Facts]> = grouped.iter().map(|(_, t)| t.as_slice()).collect();
+    let keys: Vec<String> = grouped.iter().filter(|i| i.passes(&conditions, &w)).flat_map(|i| i.keys.iter().cloned()).collect();
+    let passed = grouped.iter().filter(|i| i.passes(&conditions, &w)).count();
+    let tracks: Vec<&[&Facts]> = grouped.iter().map(|i| i.tracks.as_slice()).collect();
     let axes = crates::list_axes(&tracks, &app.playlists.own_playlist_names().await?, Some(lib.membership()), lib.uses());
     let tempo = crates::tempo_bands(tracks.iter().flat_map(|t| t.iter().map(|f| f.bpm)));
     let profile = (items == Items::Tracks).then(|| {
@@ -185,9 +264,17 @@ async fn row_lines(app: &Arc<App>, source: &str, rows: Vec<super::playlists::Pla
     rows.into_iter().map(|r| r.entry).zip(lines.into_iter().chain(std::iter::repeat(None))).collect()
 }
 
+/// An album of the Library as listed: its id, its folder's line (none where the server's path for it is not known),
+/// its album artists (as the page's Artists view takes them: its artists, else its artist).
+struct Listed {
+    id: String,
+    dir: Option<String>,
+    artists: Vec<String>,
+}
+
 /// The Library's albums on a server, of the libraries not switched off (as the Library page shows them), each with
-/// the line of its folder, as its files' lines begin (none where the server's path for it is not known).
-async fn library_albums(app: &Arc<App>, source: &str, without: &[String]) -> Vec<(String, Option<String>)> {
+/// the line of its folder, as its files' lines begin, and its album artists.
+async fn library_albums(app: &Arc<App>, source: &str, without: &[String]) -> Vec<Listed> {
     let view = app.albums(Some(source)).await;
     let Some(s) = view.sources.into_iter().find(|s| s.id == source) else { return Vec::new() };
     let roots = app.library.connected().into_iter().find(|(a, _)| a.cfg.id == source).map(|(a, _)| a.placement.roots.clone()).unwrap_or_default();
@@ -198,7 +285,85 @@ async fn library_albums(app: &Arc<App>, source: &str, without: &[String]) -> Vec
         .filter(|a| a.library.as_ref().is_none_or(|l| !without.contains(&format!("{source}/{l}"))))
         .map(|a| {
             let dir = a.path.as_deref().and_then(|p| folder_of(&roots, &folders, p)).and_then(|(i, rel)| cat.line_of(i, &rel));
-            (a.id, dir)
+            let artists = if a.artists.is_empty() { a.artist.into_iter().collect() } else { a.artists };
+            Listed { id: a.id, dir, artists }
+        })
+        .collect()
+}
+
+/// 4 stars and up.
+const TOP_RATED: u8 = 4;
+
+/// An item of a list: the keys it is answered by (an artist by every spelling of their name), its tracks (what its
+/// axes count), whether its switches hold, and whether that is its whole answer (an artist, judged by their albums).
+struct Item<'a> {
+    keys: Vec<String>,
+    tracks: Vec<&'a Facts>,
+    switches: bool,
+    judged: bool,
+}
+
+impl<'a> Item<'a> {
+    fn of(key: String, tracks: Vec<&'a Facts>, switches: bool) -> Self {
+        Self { keys: vec![key], tracks, switches, judged: false }
+    }
+
+    /// Whether it passes: its switches, and the conditions over its tracks (an artist's were judged album by album).
+    fn passes(&self, conditions: &[Condition], w: &crates::World) -> bool {
+        self.switches && (self.judged || crates::passes(&self.tracks, conditions, w))
+    }
+}
+
+/// A track never played by the asking account (the plays log's: `uses_of`); with no account, nothing is known played.
+fn never_played(f: &Facts, uses: Option<&HashMap<String, Use>>) -> bool {
+    uses.is_none_or(|u| u.get(&f.rel).is_none_or(|u| u.plays == 0 && u.last.is_none()))
+}
+
+/// An album as the Artists view weighs it: its id, its album artists, its tracks, and whether its own stars pass 4
+/// stars and up (or that switch is off).
+struct AlbumItem<'a> {
+    id: String,
+    artists: Vec<String>,
+    tracks: Vec<&'a Facts>,
+    rated: bool,
+}
+
+/// How the Artists view looks: the conditions and their world (an album's), the plays log, the hearted artists (lower
+/// case; none: Favourites only is off), Unplayed only.
+struct ArtistLook<'a, 'w> {
+    conditions: &'a [Condition],
+    world: &'a crates::World<'w>,
+    uses: Option<&'a HashMap<String, Use>>,
+    hearted: Option<&'a std::collections::HashSet<String>>,
+    unplayed: bool,
+}
+
+/// The Library's artists from its albums (each album counts for each of its album artists): an artist (by name, in any
+/// case) passes when one of their albums passes the conditions and 4 stars and up, they are hearted (Favourites only)
+/// and none of their tracks was played (Unplayed only) (the page's meaning before, here now). Keyed
+/// `{source}\u{0}{name in lower case}`, as the page's LibraryArtists keys them.
+fn artists_of<'a>(source: &str, albums: &[AlbumItem<'a>], look: &ArtistLook) -> Vec<Item<'a>> {
+    let mut order: Vec<String> = Vec::new();
+    let mut by: HashMap<String, (Vec<&'a Facts>, bool)> = HashMap::new();
+    for a in albums {
+        let passes = a.rated && crates::passes(&a.tracks, look.conditions, look.world);
+        for name in &a.artists {
+            let low = name.to_lowercase();
+            let e = by.entry(low.clone()).or_insert_with(|| {
+                order.push(low.clone());
+                (Vec::new(), false)
+            });
+            e.0.extend(a.tracks.iter().copied());
+            e.1 |= passes;
+        }
+    }
+    order
+        .into_iter()
+        .map(|low| {
+            let (tracks, passes) = by.remove(&low).unwrap_or_default();
+            let hearted = look.hearted.is_none_or(|h| h.contains(&low));
+            let unplayed = !look.unplayed || tracks.iter().all(|f| never_played(f, look.uses));
+            Item { keys: vec![format!("{source}\u{0}{low}")], tracks, switches: passes && hearted && unplayed, judged: true }
         })
         .collect()
 }
@@ -226,6 +391,58 @@ fn folder_of(roots: &[crate::placement::FolderRoot], folders: &[std::path::PathB
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_list_takes_only_its_own_switches() {
+        assert_eq!(switches_of(&List::Library), ["favourites", "unplayed", "topRated"]);
+        assert_eq!(switches_of(&List::Artists), ["favourites", "unplayed", "topRated"]);
+        assert_eq!(switches_of(&List::Playlists), ["favourites", "mine"]);
+        assert_eq!(switches_of(&List::Playlist { id: "x".into() }), ["favourites", "unplayed", "missing"]);
+        assert!(switches_of(&List::Crate { id: "c".into(), favourites: None, favourite_albums: None }).is_empty());
+        let r: Request = serde_json::from_value(serde_json::json!({ "list": { "kind": "artists" }, "switches": ["unplayed"] })).unwrap();
+        assert_eq!((r.list, r.switches), (List::Artists, vec!["unplayed".to_string()]));
+    }
+
+    #[test]
+    fn never_played_is_the_plays_logs() {
+        let f = Facts { rel: "a/1".into(), ..Facts::default() };
+        let mut uses: HashMap<String, Use> = HashMap::new();
+        assert!(never_played(&f, None), "no account: nothing known played");
+        assert!(never_played(&f, Some(&uses)), "no entry: never played");
+        uses.insert("a/1".into(), Use { plays: 0, last: Some(5), rating: None });
+        assert!(!never_played(&f, Some(&uses)), "a last play counts, whatever the count says");
+        uses.insert("a/1".into(), Use { plays: 2, last: None, rating: None });
+        assert!(!never_played(&f, Some(&uses)));
+    }
+
+    #[test]
+    fn an_artist_passes_by_one_of_their_albums_and_their_own_switches() {
+        let t = |rel: &str, genre: &str| Facts { rel: rel.into(), genres: vec![genre.into()], ..Facts::default() };
+        let (rock, jazz, more) = (t("x/1", "Rock"), t("y/1", "Jazz"), t("z/1", "Jazz"));
+        fn album<'a>(id: &str, artists: &[&str], tracks: Vec<&'a Facts>, rated: bool) -> AlbumItem<'a> {
+            AlbumItem { id: id.into(), artists: artists.iter().map(|a| a.to_string()).collect(), tracks, rated }
+        }
+        // X has a rock album; Y (also spelt "y") two jazz ones; Z is on the rock one too.
+        let albums = [album("al-1", &["X", "Z"], vec![&rock], true), album("al-2", &["Y"], vec![&jazz], true), album("al-3", &["y"], vec![&more], false)];
+        let (membership, favourites) = (HashMap::new(), std::collections::HashSet::new());
+        let w = crates::World { membership: &membership, favourites: Some(&favourites), favourite_albums: None, uses: None, now: 0 };
+        let rock_only = [Condition::new("genre", false, Value::AnyOf { values: vec!["rock".into()] })];
+        let keys = |items: Vec<Item>, conditions: &[Condition]| items.iter().filter(|i| i.passes(conditions, &w)).flat_map(|i| i.keys.clone()).collect::<Vec<_>>();
+        let look = ArtistLook { conditions: &rock_only, world: &w, uses: None, hearted: None, unplayed: false };
+        assert_eq!(keys(artists_of("cratarr", &albums, &look), &rock_only), ["cratarr\u{0}x", "cratarr\u{0}z"]);
+        let look = ArtistLook { conditions: &[], world: &w, uses: None, hearted: None, unplayed: false };
+        let all = artists_of("cratarr", &albums, &look);
+        assert_eq!(all.len(), 3, "three artists, Y in either spelling once");
+        assert_eq!(keys(all, &[]), ["cratarr\u{0}x", "cratarr\u{0}z", "cratarr\u{0}y"], "keyed by the name in lower case");
+        // Favourites only: the artist hearted, in any case.
+        let hearted: std::collections::HashSet<String> = ["y".to_string()].into();
+        let look = ArtistLook { conditions: &[], world: &w, uses: None, hearted: Some(&hearted), unplayed: false };
+        assert_eq!(keys(artists_of("cratarr", &albums, &look), &[]), ["cratarr\u{0}y"]);
+        // Unplayed only: none of their tracks played.
+        let uses: HashMap<String, Use> = [("x/1".to_string(), Use { plays: 1, last: Some(1), rating: None })].into();
+        let look = ArtistLook { conditions: &[], world: &w, uses: Some(&uses), hearted: None, unplayed: true };
+        assert_eq!(keys(artists_of("cratarr", &albums, &look), &[]), ["cratarr\u{0}y"], "X and Z share the played album");
+    }
 
     #[test]
     fn an_albums_files_are_its_tracks_wherever_they_are() {

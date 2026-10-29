@@ -35,6 +35,19 @@ impl Condition {
     pub fn new(axis: impl Into<String>, not: bool, value: Value) -> Self {
         Self { axis: axis.into(), not, value, enabled: true, quantifier: Quantifier::Any }
     }
+
+    /// Whether it asks anything yet (the filter API, 2026-10-29: one meaning with the page's `complete`, both reading
+    /// web/tests/fixtures/conditions.json): any of none asks nothing, but a playlist's (in any playlist); a range open at
+    /// both ends asks nothing; a like with no seeds asks nothing. Not, Any and All change nothing about it. A row that
+    /// asks nothing filters nothing: it is left out, as a muted one is.
+    pub fn complete(&self) -> bool {
+        match &self.value {
+            Value::AnyOf { values } => !values.is_empty() || self.axis == "playlist",
+            Value::Range { min, max } => min.is_some() || max.is_some(),
+            Value::Like { of, .. } => !of.is_empty(),
+            _ => true,
+        }
+    }
 }
 
 fn on() -> bool {
@@ -1119,10 +1132,10 @@ fn item_holds(c: &Condition, tracks: &[&Facts], w: &World) -> bool {
     }
 }
 
-/// Whether an item passes the conditions (decision 0061): every one that is on (a muted one is ignored), each with
-/// its quantifier over the item's tracks. No condition on: every item passes.
+/// Whether an item passes the conditions (decision 0061): every one that is on and asks something (a muted one, or
+/// one not finished, is ignored), each with its quantifier over the item's tracks. None: every item passes.
 pub fn passes(tracks: &[&Facts], conditions: &[Condition], w: &World) -> bool {
-    conditions.iter().filter(|c| c.enabled).all(|c| item_holds(c, tracks, w))
+    conditions.iter().filter(|c| c.enabled && c.complete()).all(|c| item_holds(c, tracks, w))
 }
 
 /// The conditions with each Sounds like worked out once, not for every file: its closest `count` among `among` (the
@@ -2229,6 +2242,28 @@ mod tests {
             assert!(passes(&album, &[all(false)], &w), "{axis}: all of its tracks");
             assert!(!passes(&album, &[all(true)], &w), "{axis}: negated, not");
         }
+    }
+
+    #[test]
+    fn a_row_asks_something_as_the_page_reads_it() {
+        // The one fixture both suites read (the page's lib/filterRow `complete`).
+        let f: serde_json::Value = serde_json::from_str(include_str!("../../web/tests/fixtures/conditions.json")).unwrap();
+        let cases = f["complete"].as_array().unwrap();
+        assert!(cases.len() >= 16);
+        for case in cases {
+            let c: Condition = serde_json::from_value(case["condition"].clone()).unwrap();
+            assert_eq!(c.complete(), case["complete"].as_bool().unwrap(), "{case}");
+        }
+    }
+
+    #[test]
+    fn a_row_that_asks_nothing_filters_nothing() {
+        let items = albums();
+        let none = Condition::new("genre", false, Value::AnyOf { values: vec![] });
+        let open = Condition::new("energy", true, Value::Range { min: None, max: None });
+        assert_eq!(passing(&items, &[none.clone()]), [0, 1, 2], "any of none: not yet asked");
+        assert_eq!(passing(&items, &[Condition { not: true, ..none }]), [0, 1, 2]);
+        assert_eq!(passing(&items, &[open]), [0, 1, 2], "a range open at both ends: not yet asked");
     }
 
     #[test]
