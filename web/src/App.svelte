@@ -10,8 +10,6 @@
   import Home from './Home.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import LocalAlbums from './LocalAlbums.svelte';
-  import LocalArtists from './LocalArtists.svelte';
-  import LocalTracks from './LocalTracks.svelte';
   import ModeSwitcher from './lib/ModeSwitcher.svelte';
   import { localMode, switchable } from './lib/deviceMusic.svelte';
   import { serverConnection } from './lib/connection.svelte';
@@ -56,8 +54,10 @@
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './lib/motion';
   import { glass } from './lib/glass.svelte';
   import GlobalResults from './lib/GlobalResults.svelte';
-  import AlbumTypePicker from './lib/AlbumTypePicker.svelte';
-  import { libraryHref, libraryPages, libraryViewOf } from './lib/libraryViews';
+  import RecordsPicker from './lib/RecordsPicker.svelte';
+  import DiscoverPicker from './lib/DiscoverPicker.svelte';
+  import { chooseKind, kindNow, RECORD_KINDS } from './lib/recordKinds';
+  import { DISCOVER_MODES, SPOTIFY_VIEWS, type DiscoverMode } from './lib/discoverModes';
   import { globalSearch, pageKinds } from './lib/globalSearch.svelte';
   import { provideEverywhere } from './lib/everywhere.svelte';
   import Find from './Find.svelte';
@@ -110,11 +110,10 @@
   const PANEL_PAGES: Page[] = [REQUESTS, DOWNLOADS, INSIGHTS, HEALTH, SETTINGS];
   /** The kind a page already shows, left out of the global results under it (decision 0072). */
   const panelPage = $derived(PANEL_PAGES.find((p) => p.id === page) ?? null);
-  // Local mode's (decision 0052): the device's own music, and the menu shows only these (and Settings).
-  const LOCAL_ALBUMS: Page = { id: 'local-albums', href: '#/local/albums', label: 'Albums', icon: 'disc' };
-  const LOCAL_ARTISTS: Page = { id: 'local-artists', href: '#/local/artists', label: 'Artists', icon: 'users' };
-  const LOCAL_TRACKS: Page = { id: 'local-tracks', href: '#/local/tracks', label: 'Tracks', icon: 'music' };
-  const LOCAL = [LOCAL_ALBUMS, LOCAL_ARTISTS, LOCAL_TRACKS];
+  // Local mode's (decision 0052): the device's own music, and the menu shows only these (and Settings). Its records
+  // alone, as the Library's (the owner, 2026-10-29: one rule for both modes; its Artists and Tracks went).
+  const LOCAL_ALBUMS: Page = { id: 'local-albums', href: '#/local/albums', label: 'Records', icon: 'disc' };
+  const LOCAL = [LOCAL_ALBUMS];
   /** Find more music (0.9.3): the words looked up on MusicBrainz, reached from a search that found nothing anywhere. */
   const FIND: Page = { id: 'find', href: '#/find', label: 'Find more music', icon: 'search' };
 
@@ -133,8 +132,8 @@
       return LIBRARY.id;
     }
     if (!h) return HOME.id;
-    // One of the Library's pages (`#/library/tracks`): the Library, showing it (lib/libraryViews).
-    if (libraryViewOf(h)) return LIBRARY.id;
+    // 0.9.16's addresses of the Library's pages (`#/library/tracks`): the Library, its one page now.
+    if (h.startsWith(`${LIBRARY.href}/`)) return LIBRARY.id;
     return [HOME, HEALTH, SETTINGS, LIBRARY, INSIGHTS, CRATES, DISCOVER, REQUESTS, DOWNLOADS, FIND, ...LOCAL].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
   };
   let page = $state(fromHash());
@@ -347,7 +346,7 @@
   // has a step before this one; on the right, on a page with something to play, the pill (lib/TopPill): the filter
   // always, the page's View, and where it plays when nothing else leads there (no mini-player, no player beside the
   // page). The page starts under the row, so at rest nothing lies under it.
-  const PLAYABLE = ['playlists', 'crates', 'library', 'downloads', 'local-albums', 'local-artists', 'local-tracks'];
+  const PLAYABLE = ['playlists', 'crates', 'library', 'downloads', 'local-albums'];
   // A part of the settings in the panel (lib/SettingsPanel), when the panel shows one.
   const settingsShown = $derived(SECTIONS.find((x) => x.id === settingsOf(panel.viewed))?.id ?? (null as SettingsSection | null));
   // What the panel showed when this page was entered (panel.arrived, see openedHere).
@@ -565,7 +564,7 @@
       : pagePillShown
         ? {
             page: page,
-            view: hasView(page) && !(page === LIBRARY.id && inSpotify()),
+            view: hasView(page),
             // Home's too (the owner, 2026-10-28: the device with nothing playing, as every page with the pill).
             device: (pagePill || page === 'home') && pillDevice,
             filter: (pagePill && !page.startsWith('local-') && page !== 'downloads') || page === 'discover',
@@ -732,8 +731,6 @@
   $effect(() =>
     followAddress(() => {
       page = fromHash();
-      const view = libraryViewOf(location.hash);
-      if (view) prefs.libraryView = view;
       moreOpen = false;
     }),
   );
@@ -820,6 +817,19 @@
     serverConnection.value = connection;
   });
   const MAIN: Page[] = $derived(localMode() ? [HOME, ...LOCAL] : [HOME, LIBRARY, CRATES, PLAYLISTS, DISCOVER]);
+  // The sidebar's direct links under Library and Discover (the owner, 2026-10-29): what each one's picker beside back
+  // offers, folded away with the sidebar; Spotify's lists as one, to the first of them.
+  loadSpotify();
+  type Sub = { id: string; label: string; on: boolean; pick: () => void };
+  const kindShown = $derived(kindNow());
+  const librarySubs = $derived<Sub[]>(RECORD_KINDS.map((k) => ({ id: k.id, label: k.label, on: kindShown === k.id, pick: () => chooseKind(k.id) })));
+  const discoverSubs = $derived<Sub[]>([
+    ...DISCOVER_MODES.map((m) => ({ id: m.value, label: m.label, on: prefs.discoverMode === m.value, pick: () => (prefs.discoverMode = m.value) })),
+    ...(spotify.state?.shown
+      ? [{ id: 'spotify', label: 'Spotify', on: inSpotify(), pick: () => (prefs.discoverMode = inSpotify() ? prefs.discoverMode : (SPOTIFY_VIEWS[0].value as DiscoverMode)) }]
+      : []),
+  ]);
+  const subsOf = (id: string): Sub[] => (id === LIBRARY.id ? librarySubs : id === DISCOVER.id ? discoverSubs : []);
   // Apart, at the bottom of the sidebar: Insights beside Health, then Settings.
   // Health is the library's, so its administrators' (decision 0051). In Local mode, Settings only.
   const mayRequest = $derived(me.admin || me.permissions.request || me.permissions.manage_requests);
@@ -855,12 +865,6 @@
     return () => removeEventListener('resize', on);
   });
   const slots = $derived(Math.max(BAR_SLOTS, Math.floor(barWidth / BAR_SLOT_PX)));
-  // The Library's pages (the owner, 2026-10-29: its views as subpages): under Library in the sidebar, which folds them
-  // away with itself; in the bar a second row of tabs while the Library shows, its own tab named for the page shown.
-  loadSpotify();
-  const libPages = $derived(libraryPages(!!spotify.state?.shown));
-  const libLabel = $derived(libPages.find((v) => v.value === prefs.libraryView)?.label ?? LIBRARY.label);
-  const tabLabel = (p: Page) => (p.id === LIBRARY.id && page === LIBRARY.id ? libLabel : p.label);
   const bar = $derived(ALL.length <= BAR_SLOTS ? ALL : MAIN.slice(0, Math.min(MAIN.length, slots - 1)));
   const overflow = $derived(ALL.filter((p) => !bar.includes(p)));
   /** More's columns: at most the bar's own, its rows evenly filled (the owner, 2026-10-26: six pages on a phone are two
@@ -903,14 +907,13 @@
 
       <nav aria-label="Pages">
         {#each MAIN as p (p.id)}
-          {@const within = p.id === LIBRARY.id && page === p.id}
-          <a href={keepViewed(p.href)} class:within aria-current={page === p.id && !within ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}
+          <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}
             ><Icon name={p.icon} /><span class="label">{p.label}</span>{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a
           >
-          {#if p.id === LIBRARY.id}
-            <div class="subs" role="group" aria-label="Library pages">
-              {#each libPages as v (v.value)}
-                <a class="sub" href={keepViewed(libraryHref(v.value))} aria-current={within && prefs.libraryView === v.value ? 'page' : undefined} onclick={() => (peek = false)}>{v.label}</a>
+          {#if subsOf(p.id).length}
+            <div class="subs" role="group" aria-label="{p.label} shows">
+              {#each subsOf(p.id) as s (s.id)}
+                <a class="sub" href={keepViewed(p.href)} aria-current={page === p.id && s.on ? 'true' : undefined} onclick={() => ((peek = false), s.pick())}>{s.label}</a>
               {/each}
             </div>
           {/if}
@@ -955,10 +958,6 @@
       <Library />
     {:else if page === 'local-albums'}
       <LocalAlbums />
-    {:else if page === 'local-artists'}
-      <LocalArtists />
-    {:else if page === 'local-tracks'}
-      <LocalTracks />
     {:else if status && !status.music && me.admin}
       <p class="no-music">No Music library is set. Choose one in Settings → Libraries.</p>
     {:else if page === 'insights'}
@@ -1031,17 +1030,6 @@
       }}><Icon name="play" size={20} />Tap to play</button
     >
   {/if}
-  {#snippet libraryTabs()}
-    <!-- The Library's pages (the owner, 2026-10-29), while it shows: More's row of tabs, by name, under the bar's own
-         (along the bottom: over them). More open takes the room instead. -->
-    {#if page === LIBRARY.id && !moreOpen}
-      <div class="more-tabs sub-tabs" role="group" aria-label="Library pages" style:--cols={libPages.length}>
-        {#each libPages as v (v.value)}
-          <a href={libraryHref(v.value)} aria-current={prefs.libraryView === v.value ? 'page' : undefined}>{v.label}</a>
-        {/each}
-      </div>
-    {/if}
-  {/snippet}
   {#snippet morePages()}
     <!-- More (the owner, 2026-10-26): the bar itself grows, full width, and the other pages are its tabs there, in
          columns under (along the bottom: over) the bar's own, as they are drawn. -->
@@ -1056,7 +1044,7 @@
       >
         {#each overflow as p (p.id)}
           <a href={p.href} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => barTap(e, p.id)}
-            ><span class="icon"><Icon name={p.icon} />{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{tabLabel(p)}</span></a
+            ><span class="icon"><Icon name={p.icon} />{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{p.label}</span></a
           >
         {/each}
       </div>
@@ -1073,9 +1061,9 @@
           <!-- Wherever the bar of pages is along the top (under 1024 px, as the CSS; the owner, 2026-10-25): from there the
                sidebar of pages names it. -->
           {#if panelPage && phone}<h1 class="page-name">{panelPage.label}</h1>{/if}
-          <!-- On the Albums page, what kind of release it shows, on the glass's extension as a control page's name (the
-               owner, 2026-10-29: the view picker's place, the pages now the navigation's). -->
-          {#if page === 'library' && prefs.libraryView === 'albums'}<AlbumTypePicker />{/if}
+          <!-- What the page shows, on the glass's extension as a control page's name (the owner, 2026-10-25): the
+               Library's kind of record, Discover's mode (the owner, 2026-10-29). -->
+          {#if page === 'library'}<RecordsPicker />{:else if page === 'discover'}<DiscoverPicker />{/if}
         </span>
       {/if}
   {/snippet}
@@ -1131,11 +1119,11 @@
     <!-- The mode switcher's slim row over the tabs (decision 0052, mock C), with a local folder on; under them when the bar
          is along the bottom (the owner, 2026-10-25), the tabs nearest the page either way. -->
     {#if switchInBar && !navBottom}<div class="slim"><ModeSwitcher slim {connection} /></div>{/if}
-    {#if navBottom}{@render morePages()}{@render libraryTabs()}{/if}
+    {#if navBottom}{@render morePages()}{/if}
     <div class="tabs">
     {#each bar as p (p.id)}
       <a href={p.href} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => barTap(e, p.id)}
-        ><span class="icon"><Icon name={p.icon} />{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{tabLabel(p)}</span></a
+        ><span class="icon"><Icon name={p.icon} />{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{p.label}</span></a
       >
     {/each}
     {#if overflow.length}
@@ -1147,7 +1135,7 @@
       >
     {/if}
     </div>
-    {#if !navBottom}{@render morePages()}{@render libraryTabs()}{/if}
+    {#if !navBottom}{@render morePages()}{/if}
     {#if switchInBar && navBottom}<div class="slim"><ModeSwitcher slim up {connection} /></div>{/if}
   </nav>
 </div>
@@ -1547,13 +1535,6 @@
     width: 100%;
   }
 
-  /* The Library's pages (the owner, 2026-10-29): More's row, by name alone, so slimmer. */
-  .bar .sub-tabs a {
-    min-height: 34px;
-    justify-content: center;
-    font-size: 13px;
-  }
-
   .bar .slim {
     padding: 0 4px 4px;
   }
@@ -1650,8 +1631,8 @@
     font-weight: 600;
   }
 
-  /* The Library's pages under it (the owner, 2026-10-29), in line with its name; the Library itself, while one of
-     them shows, in bold rather than lit (the page shown is). */
+  /* The direct links under Library and Discover (the owner, 2026-10-29), in line with their page's name; the one its
+     picker shows in the accent's ink, the page itself lit above it. */
   .sidebar nav .subs {
     display: grid;
     gap: 2px;
@@ -1659,12 +1640,13 @@
   }
 
   .sidebar nav a.sub {
-    min-height: 36px;
+    min-height: 34px;
     padding-left: 48px;
     font-size: 14px;
   }
 
-  .sidebar nav a.within {
+  .sidebar nav a.sub[aria-current='true'] {
+    color: var(--accent-ink);
     font-weight: 600;
   }
 

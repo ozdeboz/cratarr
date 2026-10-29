@@ -1,9 +1,9 @@
 // The signed-in account's Spotify library (decision 0073; the owner, 2026-10-27: to see what of it is here and ask for
 // what is not; no playing on Spotify): from the export it uploaded (Import, anyone) or its own app's live connection
-// (Account › Spotify, Premium). Its state, read once and again on asking; the Library's Spotify views (its view menu's
+// (Account › Spotify, Premium). Its state, read once and again on asking; Discover's Spotify views (its picker's
 // group, shown once it has lists) and the Filter's switches for them.
 import { getSpotify, type SpotifyState, type SpotifyStatus } from './api';
-import { isSpotifyView } from './libraryViews';
+import { isSpotifyView } from './discoverModes';
 import { switchOn } from './listFilter.svelte';
 import { prefs } from './prefs.svelte';
 
@@ -20,8 +20,8 @@ export function loadSpotify(fresh = false): Promise<void> {
   return asking;
 }
 
-/** The Library shows one of Spotify's lists now. */
-export const inSpotify = () => isSpotifyView(prefs.libraryView);
+/** Discover shows one of Spotify's lists now (the Library's before 2026-10-29). */
+export const inSpotify = () => isSpotifyView(prefs.discoverMode);
 /** The Filter's kind of list for them (lib/pageView SWITCHES). */
 export const SPOTIFY_FILTER = 'spotify';
 

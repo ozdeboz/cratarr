@@ -251,11 +251,7 @@ export const searchFor = (page: string) =>
         ? 'Search everything'
       : page === 'find'
         ? 'Search MusicBrainz'
-      : page === 'local-artists'
-        ? 'Filter artists'
-        : page === 'local-tracks'
-          ? 'Filter tracks'
-          : null;
+        : null;
 
 /** The pages whose view settings the View sheet holds. */
 export const hasView = (page: string) => ['playlists', 'library'].includes(page);

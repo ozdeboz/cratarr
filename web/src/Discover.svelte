@@ -7,9 +7,10 @@
   // comes back). Everything known of it is on its card (the owner, 2026-10-24: what it is, its genres, length and track
   // count, why, whether the artist is new, its listeners, its request); every action in its menu, opened by a tap. Looked up again once a day as a task, its progress in
   // the pill (ui-conventions, A page's work in its pill); Look again there asks again now. Without a service connected,
-  // a line says what one would add.
+  // a line says what one would add. In modes (the owner, 2026-10-29), picked beside back (lib/DiscoverPicker): Fresh,
+  // Alike, Gaps and New artists, each suggestion in the one whose reason fits it best, and the account's Spotify lists.
   import ProblemSheet from './lib/ProblemSheet.svelte';
-  import { getAround, getDiscover, hideDiscover, nextAround, notDiscover, refreshDiscover, wantDiscover, type AlbumRequest, type AroundView, type DiscoverAlbum, type DiscoverView } from './lib/api';
+  import { getDiscover, hideDiscover, notDiscover, notDiscoverArtist, refreshDiscover, wantDiscover, type AlbumRequest, type DiscoverAlbum, type DiscoverView } from './lib/api';
   import Cover from './lib/Cover.svelte';
   import CoverPlay from './lib/CoverPlay.svelte';
   import CoverStatus from './lib/CoverStatus.svelte';
@@ -20,12 +21,13 @@
   import MenuGroup from './lib/MenuGroup.svelte';
   import MenuSheet from './lib/MenuSheet.svelte';
   import LinkSheet from './lib/LinkSheet.svelte';
-  import { goToArtist, library, readLibrary } from './lib/albums.svelte';
+  import { goToArtist } from './lib/albums.svelte';
   import { DISCOVER } from './lib/discoverArtist';
-  import DiscoverSections from './lib/DiscoverSections.svelte';
-  import { sections } from './lib/discoverSections';
   import { NearBlocks } from './lib/nearBlocks.svelte';
-  import { mine, skipPick } from './lib/mySettings.svelte';
+  import { inModeOrder, isSpotifyView, modeOf, type ReasonMode } from './lib/discoverModes';
+  import { prefs } from './lib/prefs.svelte';
+  import SpotifyLibrary from './lib/SpotifyLibrary.svelte';
+  import { inSpotify, loadSpotify, spotify } from './lib/spotify.svelte';
   import SectionHead from './lib/SectionHead.svelte';
   import { withUndo } from './lib/undo.svelte';
   import { longpress } from './lib/longpress';
@@ -123,69 +125,41 @@
     !(switchOn('discover', 'no-unplayable') && !a.bandcamp) &&
     // Monitored: wanted in Lidarr already, or a request waiting or approved (the owner, 2026-10-26).
     !(switchOn('discover', 'no-monitored') && (!!a.request || askedFor(a.key)));
-  const kept = $derived((view?.found?.albums ?? []).filter((a) => !gone.includes(a.key)));
-  // The page in sections (0069 amended 2026-10-25): what the filter and the search let through, sorted into the pick,
-  // the discography gaps, the masonry, the new artists, the fresh releases and the Weekly
-  // Exploration; the rest stays the cards.
-  const albums = $derived(
-    kept.filter((a) => passes(a) && matchesSearch(a.album, a.artist, a.kind, a.year?.toString(), ...(a.genres ?? []), ...a.why, ...(a.sources ?? []))),
-  );
-  // The masonry's columns: as many 136 px places (6 px apart) as the page is wide, less the room between two artists'
-  // grids (lib/masonry, the owner 2026-10-25: responsive to any width), three at least.
-  let pageWidth = $state(0);
-  const aroundCols = $derived(Math.max(3, Math.floor((pageWidth + 6 - 24) / 142)));
-  // No pick of the day moved on from (its menu's Next pick), or already asked for: monitored in Lidarr or a request
-  // waiting or approved (the owner, 2026-10-26).
+  /** Asked for already: monitored in Lidarr, or a request waiting or approved. */
   const askedFor = (key: string) => {
     const r = view?.requests?.[key];
     return !!r && (r.status === 'pending' || r.status === 'approved');
   };
-  // Around artists you play from the server (0.9.7): its three artists and their related artists' albums; a Refresh
-  // goes on to the next three (the owner, 2026-10-26: not the same artists reshuffled). The group shown is always a
-  // whole one: one still being made is asked for again, the one before staying until it is in (one change, at once).
-  // Null: none yet, or a server before 0.9.7 (`aroundOld`: the masonry from Discover's own list, refreshed by turning).
-  let around = $state<AroundView | null>(null);
-  let aroundOld = $state(false);
-  let aroundBusy = $state(false);
-  let aroundWait: ReturnType<typeof setTimeout> | undefined;
-  async function askAround(next = false) {
-    clearTimeout(aroundWait);
-    try {
-      const a = next ? await nextAround() : await getAround();
-      if (a.making) {
-        aroundWait = setTimeout(() => void askAround(), 2000);
-        return;
-      }
-      around = a;
-    } catch {
-      aroundOld = !around;
-    }
-    aroundBusy = false;
-  }
-  $effect(() => {
-    void askAround();
-    return () => clearTimeout(aroundWait);
+  const kept = $derived((view?.found?.albums ?? []).filter((a) => !gone.includes(a.key)));
+  // What the filter and the search let through, then by mode (below).
+  const albums = $derived(
+    kept.filter((a) => passes(a) && matchesSearch(a.album, a.artist, a.kind, a.year?.toString(), ...(a.genres ?? []), ...a.why, ...(a.sources ?? []))),
+  );
+  let pageWidth = $state(0);
+  // Its mode (the picker beside back, lib/DiscoverPicker; the owner, 2026-10-29): each suggestion in the one whose reason
+  // fits it best, in that mode's order. New artists are the artists themselves, each with their records that fit best.
+  const spotifyView = $derived(isSpotifyView(prefs.discoverMode) ? prefs.discoverMode : null);
+  const mode = $derived<ReasonMode>(inSpotify() ? 'fresh' : (prefs.discoverMode as ReasonMode));
+  const inMode = (a: DiscoverAlbum) => modeOf(a) === mode;
+  const cards = $derived(mode === 'artists' ? [] : inModeOrder(mode, albums.filter(inMode)));
+  /** New artists: the server's, each with their records (those that pass); from a server before it, the new artists'
+   *  records by artist, the best fit first. */
+  const artists = $derived.by(() => {
+    if (mode !== 'artists') return [];
+    const shown = new Map(albums.filter(inMode).map((a) => [a.key, a]));
+    const given = view?.found?.artists;
+    if (given)
+      return given
+        .map((x) => ({ name: x.name, why: x.why, records: x.records.flatMap((k) => (shown.has(k) ? [shown.get(k)!] : [])) }))
+        .filter((x) => x.records.length);
+    const by = new Map<string, DiscoverAlbum[]>();
+    for (const a of inModeOrder('artists', [...shown.values()])) (by.get(a.artist) ?? by.set(a.artist, []).get(a.artist)!).push(a);
+    return [...by].map(([name, records]) => ({ name, why: [] as string[], records }));
   });
-  function refreshAround() {
-    if (aroundOld) return void aroundRound++;
-    if (aroundBusy) return;
-    aroundBusy = true;
-    void askAround(true);
-  }
-  /** The old server's refreshes: each on to other suggestions of the same artists. */
-  let aroundRound = $state(0);
-  // Its albums as the page's other cards are: not hidden, through the filter and the search.
-  const aroundShown = $derived(
-    around
-      ? {
-          seeds: around.seeds,
-          albums: around.albums.filter((a) => !gone.includes(a.key) && passes(a) && matchesSearch(a.album, a.artist, a.kind, a.year?.toString(), ...(a.genres ?? []), ...a.why)),
-        }
-      : null,
-  );
-  const sec = $derived(
-    sections(albums, { aroundCols, aroundRound }, (s) => mine.pickSkip.includes(s.key) || !!s.request || askedFor(s.key), aroundOld ? null : (aroundShown ?? { seeds: [], albums: [] })),
-  );
+  // A Spotify list left on, and the account has none any more (disconnected, the export forgotten): Fresh.
+  loadSpotify().then(() => {
+    if (inSpotify() && spotify.state && !spotify.state.shown) prefs.discoverMode = 'fresh';
+  });
   // More for you made as it comes near (lib/nearBlocks, as the Library's albums; the owner, 2026-10-25): blocks of six
   // whole rows of its grid (cards of 340 px at least, 12 px apart).
   const blocks = new NearBlocks();
@@ -193,20 +167,13 @@
   const restCols = $derived(Math.max(1, Math.floor((pageWidth + 12) / 352)));
   const restBlocks = $derived.by(() => {
     const n = restCols * 6;
-    const out: (typeof sec.rest)[] = [];
-    for (let i = 0; i < sec.rest.length; i += n) out.push(sec.rest.slice(i, i + n));
+    const out: (typeof cards)[] = [];
+    for (let i = 0; i < cards.length; i += n) out.push(cards.slice(i, i + n));
     return out;
-  });
-  // How many albums the library has of each artist, by name (the owner, 2026-10-25: on the "Because you play" tile).
-  if (!library.view) readLibrary(false).catch(() => {});
-  const ownedBy = $derived.by(() => {
-    const n = new Map<string, number>();
-    for (const src of library.view?.sources ?? []) for (const a of src.albums) if (a.artist) n.set(a.artist.toLowerCase(), (n.get(a.artist.toLowerCase()) ?? 0) + 1);
-    return n;
   });
   // How many the filter lets through, of how many (the Filter sheet's count).
   $effect(() => {
-    pageView.counted = view?.found ? { shown: kept.filter(passes).length, total: kept.length } : null;
+    pageView.counted = view?.found ? { shown: kept.filter((a) => inMode(a) && passes(a)).length, total: kept.filter(inMode).length } : null;
     return () => (pageView.counted = null);
   });
   async function want(a: DiscoverAlbum) {
@@ -282,6 +249,24 @@
   // A link to another site asks first, Open or Copy link, as every such link does (lib/LinkSheet).
   let link = $state<{ url: string; name: string } | null>(null);
 
+  /** Not interested in an artist new to the library (the owner, 2026-10-29): they and their records leave every mode
+   *  for good; Undo in its toast brings them back. */
+  async function noArtist(a: DiscoverAlbum) {
+    const theirs = kept.filter((x) => x.artist === a.artist).map((x) => x.key);
+    gone = [...gone, ...theirs];
+    try {
+      const { undo } = await notDiscoverArtist(a.artist);
+      withUndo(`Not interested in ${a.artist}.`, [undo], {
+        after: (undone) => {
+          gone = undone ? gone.filter((k) => !theirs.includes(k)) : [...gone, ...theirs];
+          if (undone) load();
+        },
+      });
+    } catch (e) {
+      gone = gone.filter((k) => !theirs.includes(k));
+      toast.fail(e, 'Could not leave them out');
+    }
+  }
   /** Not interested (`no`: its artist held against it, twice and they are left out) or Hide (nothing said of it); Undo
    *  in its toast brings it back (the one undo, decision 0026). */
   async function no(a: DiscoverAlbum, hide = false) {
@@ -307,9 +292,35 @@
   {/if}
 {/snippet}
 
+{#snippet card(a: DiscoverAlbum)}
+  {@const r = view?.requests?.[a.key]}
+  <li class="card">
+    <!-- A tap anywhere on the card opens its menu (the owner, 2026-10-24: every action in a menu), but on its
+         pills, which are its links (each through the Open/Copy sheet, as every link to another site). -->
+    <button class="open" aria-label={`${a.album} by ${a.artist}`} onclick={() => tap(a)} use:longpress={() => (opened = a)}></button>
+    <!-- Cratarr's own cover: a picture that does not load is its stand-in, and the suggestion stays. -->
+    <span class="cover"><Cover src={a.cover} /><CoverStatus mark={a.request ?? markOf(r)} problem={problemOf(a)} onproblem={() => onproblem(a, 'request')} />{#if a.bandcamp}<CoverPlay bandcamp label={a.album} busy={previewing === a.key} problem={bandcampFailed[a.key] ?? null} onplay={() => preview(a)} onproblem={() => onproblem(a, 'play')} />{/if}</span>
+    <span class="text">
+        <b>{a.album}</b>
+        <span class="by">{a.artist}{a.year ? ` · ${a.year}` : ''}{#if a.new_artist}<span class="new">New to you</span>{/if}</span>
+        {#if facts(a)}<small class="facts">{facts(a)}</small>{/if}
+        {#if a.genres?.length}<span class="tags">{#each a.genres as g (g)}<span class="tag">{g}</span>{/each}</span>{/if}
+        {#each a.why as w (w)}<small class="why">{w}</small>{/each}
+        {#if pages(a).length}
+          <span class="tags">{#each pages(a) as l (l.url)}<a class="tag link" href={l.url} target="_blank" rel="noopener noreferrer">{l.name}</a>{/each}</span>
+        {/if}
+        {#if r && asked(r)}
+          <small class="asked" class:bad={r.status === 'declined' || r.fetched?.startsWith('Not handed over')}>{asked(r)}</small>
+        {/if}
+    </span>
+  </li>
+{/snippet}
+
 <main>
   <div class="measure" bind:clientWidth={pageWidth}></div>
-  {#if error && !view}
+  {#if spotifyView}
+    <SpotifyLibrary view={spotifyView} />
+  {:else if error && !view}
     <Notice text={error} />
   {:else if !view}
     <!-- Waiting for the list: a look running says how far it is under the loader too, never only in the pill (the
@@ -332,8 +343,14 @@
       {#if me.admin && !view.lidarr}
         <p class="note">Want needs Lidarr: <a href="#/settings?view=settings%3Aconnections%2Flidarr">connect it</a>.</p>
       {/if}
-      <DiscoverSections {sec} {facts} owned={(name) => ownedBy.get(name.toLowerCase()) ?? 0} onopen={tap} onmenu={(a) => (opened = a)} onplay={preview} {previewing} {problemOf} {onproblem} onaroundrefresh={refreshAround} aroundbusy={aroundBusy} status={(a) => a.request ?? markOf(view?.requests?.[a.key])} />
-      {#if sec.rest.length}<SectionHead title="More for you" />{/if}
+      {#if mode === 'artists' ? !artists.length : !cards.length}<p class="note">None of them match.</p>{/if}
+      {#each artists as x (x.name)}
+        <SectionHead title={x.name} />
+        {#each x.why as w (w)}<p class="why-artist">{w}</p>{/each}
+        <ul class="grid">
+          {#each x.records as a (a.key)}{@render card(a)}{/each}
+        </ul>
+      {/each}
       {#each restBlocks as block, bi (`${restCols}:${bi}`)}
       {@const key = `${restCols}:${bi}`}
       {@const made = blocks.made(key, bi === 0)}
@@ -341,27 +358,7 @@
       {#if made}
       <ul class="grid">
         {#each block as a (a.key)}
-          {@const r = view.requests?.[a.key]}
-          <li class="card">
-            <!-- A tap anywhere on the card opens its menu (the owner, 2026-10-24: every action in a menu), but on its
-                 pills, which are its links (each through the Open/Copy sheet, as every link to another site). -->
-            <button class="open" aria-label={`${a.album} by ${a.artist}`} onclick={() => tap(a)} use:longpress={() => (opened = a)}></button>
-            <!-- Cratarr's own cover: a picture that does not load is its stand-in, and the suggestion stays. -->
-            <span class="cover"><Cover src={a.cover} /><CoverStatus mark={a.request ?? markOf(r)} problem={problemOf(a)} onproblem={() => onproblem(a, 'request')} />{#if a.bandcamp}<CoverPlay bandcamp label={a.album} busy={previewing === a.key} problem={bandcampFailed[a.key] ?? null} onplay={() => preview(a)} onproblem={() => onproblem(a, 'play')} />{/if}</span>
-            <span class="text">
-                <b>{a.album}</b>
-                <span class="by">{a.artist}{a.year ? ` · ${a.year}` : ''}{#if a.new_artist}<span class="new">New to you</span>{/if}</span>
-                {#if facts(a)}<small class="facts">{facts(a)}</small>{/if}
-                {#if a.genres?.length}<span class="tags">{#each a.genres as g (g)}<span class="tag">{g}</span>{/each}</span>{/if}
-                {#each a.why as w (w)}<small class="why">{w}</small>{/each}
-                {#if pages(a).length}
-                  <span class="tags">{#each pages(a) as l (l.url)}<a class="tag link" href={l.url} target="_blank" rel="noopener noreferrer">{l.name}</a>{/each}</span>
-                {/if}
-                {#if r && asked(r)}
-                  <small class="asked" class:bad={r.status === 'declined' || r.fetched?.startsWith('Not handed over')}>{asked(r)}</small>
-                {/if}
-            </span>
-          </li>
+          {@render card(a)}
         {/each}
       </ul>
       {/if}
@@ -391,10 +388,9 @@
         {:else}
           <MenuEntry icon="circlePlus" label="Want" disabled={!canWant || asking === a.key} busy={asking === a.key} onclick={act(() => want(a))} />
         {/if}
-        <!-- The pick of the day: on to the next that plays (the owner, 2026-10-25), with the approval's entries. -->
-        {#if sec.pick?.key === a.key}<MenuEntry icon="refresh" label="Next pick" onclick={act(() => skipPick(a.key))} />{/if}
         <MenuEntry icon="eyeOff" label="Hide" onclick={act(() => no(a, true))} />
         <MenuEntry icon="thumbsDown" label="Not interested" onclick={act(() => no(a))} />
+        {#if a.new_artist}<MenuEntry icon="ban" label="Not interested in {a.artist}" onclick={act(() => noArtist(a))} />{/if}
       </MenuGroup>
       <MenuGroup>
         {#each a.links as l (l.url)}<MenuEntry icon="externalLink" label={l.name} onclick={act(() => (link = l))} />{/each}
@@ -406,6 +402,12 @@
 {#if link}{@const l = link}<LinkSheet url={l.url} name={l.name} onclose={() => (link = null)} />{/if}
 
 <style>
+  .why-artist {
+    margin: -6px 0 10px;
+    color: var(--muted);
+    font-size: 0.85rem;
+  }
+
   /* The page's width, for the masonry. */
   .measure {
     height: 0;

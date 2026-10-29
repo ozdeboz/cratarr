@@ -107,7 +107,7 @@
   });
   // A filter leaves something out of what shows: its conditions and switches, counted on the funnel (the list stays
   // clean, decision 0061), or a library switched off (remembered, so it is said here by the funnel's light).
-  const list = $derived(page === 'library' && inSpotify() ? SPOTIFY_FILTER : (page ?? kind ?? ''));
+  const list = $derived(page === 'discover' && inSpotify() ? SPOTIFY_FILTER : (page ?? kind ?? ''));
   const filters = $derived(list ? filtersOn(list) : 0);
   const filtering = $derived(filters > 0 || (!!page && pageView.narrowed));
   function clear() {
