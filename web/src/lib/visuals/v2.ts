@@ -120,6 +120,24 @@ export function flatten(p: PatchV2): PatchV2 {
 type Behind = { in: Map<string, PortRef[]>; out: Map<string, PortRef[]> };
 
 /** `p` flattened, and where its devices' exposed ports lead, through nested ones (claude-632's fix). */
+/** Knob values into a patch by flattened module id (`show/curve`: the Show device's Curve), devices opened; a knob
+ *  pinned at its level (`<module>.<knob>`, a band's six by theirs) left as it is, whatever moves it (a step's Next, a
+ *  new track's look, the dice). The one way the visuals' own changes are written. */
+export function applyKnobs(p: PatchV2, values: Record<string, Record<string, number>>) {
+  for (const [id, knobs] of Object.entries(values)) {
+    const path = id.split('/');
+    let level: PatchV2 | null = p;
+    for (const step of path.slice(0, -1)) {
+      const d: Module | undefined = level.modules.find((m) => m.id === step);
+      level = d && isDevice(d) ? d.patch : null;
+      if (!level) break;
+    }
+    const m = level?.modules.find((x) => x.id === path[path.length - 1]);
+    if (!level || !m) continue;
+    for (const [k, v] of Object.entries(knobs)) if (!level.pins.includes(`${m.id}.${k}`) && !level.pins.includes(`${m.id}.${k.replace(/\.\d+$/, '')}`)) m.knobs[k] = v;
+  }
+}
+
 /** A device's pin as the flattened patch names it: a module's, a cable's or a knob's under the device's path (a
  *  category's and a scope's hold at their own level only). */
 const pinAt = (device: string, pin: string): string[] =>
@@ -260,6 +278,8 @@ function cablesAdd(modules: Module[], cables: Wire[]): { modules: Module[]; cabl
  *  Ducker a kind keyed by it (its threshold the limit as learned and frozen, × Wild's factor, × the music's activity
  *  through a VCA from the Loudness's level), each into the gain of what that kind of busyness moves; the Screen's flash
  *  guard into the Accent's gain. */
+/** A Ducker's threshold over the limit it holds its kind to (toV2's margin: Wild at ½ gives exactly the limit × 1.5). */
+export const THRESHOLD_OVER_LIMIT = 1.5;
 const SIDECHAIN: readonly { kind: string; meter: Budgeted; into: readonly [string, string] | null }[] = [
   { kind: 'motion', meter: 'motion', into: ['clock', 'speed'] },
   { kind: 'shape', meter: 'shapeChurn', into: ['flame', 'evolution'] },
@@ -268,6 +288,8 @@ const SIDECHAIN: readonly { kind: string; meter: Budgeted; into: readonly [strin
   // The moments' Gates (null): their gaps stretched.
   { kind: 'looks', meter: 'looksPerMinute', into: null },
 ];
+/** The budget each of the Meter's outputs keys a Ducker for (its kind's). */
+export const METER_BUDGET: Readonly<Record<string, Budgeted>> = Object.fromEntries(SIDECHAIN.map((x) => [x.kind, x.meter]));
 function sidechained(modules: Module[], cables: Wire[], wild: number, limits: Partial<Record<Budgeted, number>>, holds = false): { modules: Module[]; cables: Wire[]; macro?: Macro } {
   const one = (id: string, from: Wire['from'], to: Wire['to'], value = 1): Wire => ({ id, from, to, value, mode: 'swing', depth: null });
   const out = { modules: [...modules, { id: 'meter', type: 'meter', knobs: {} }], cables: [...cables] };
@@ -280,8 +302,8 @@ function sidechained(modules: Module[], cables: Wire[], wild: number, limits: Pa
   for (const { kind, meter, into } of SIDECHAIN) {
     const id = `duck-${kind}`;
     const limit = limits[meter] ?? DEFAULT_LIMITS[meter];
-    macro.targets.push({ module: id, knob: 'threshold', from: limit * 1.5 * 0.5, to: limit * 1.5 * 2 });
-    out.modules.push({ id, type: 'ducker', knobs: { threshold: limit * wildFactor * 1.5, depth: Math.abs(20 * Math.log10(BUSY[meter].most)), attack: 1 / 0.7, hold: 0, release: 10 / 3, hysteresis: 0.8 } });
+    macro.targets.push({ module: id, knob: 'threshold', from: limit * THRESHOLD_OVER_LIMIT * 0.5, to: limit * THRESHOLD_OVER_LIMIT * 2 });
+    out.modules.push({ id, type: 'ducker', knobs: { threshold: limit * wildFactor * THRESHOLD_OVER_LIMIT, depth: Math.abs(20 * Math.log10(BUSY[meter].most)), attack: 1 / 0.7, hold: 0, release: 10 / 3, hysteresis: 0.8 } });
     out.cables.push(one(`${id}-key`, { module: 'meter', port: kind }, { module: id, port: 'key' }));
     out.modules.push({ id: `${id}-activity`, type: 'vca', knobs: { gain: 1 / 3 } });
     out.cables.push(one(`${id}-loudness`, { module: 'envelope', port: 'level' }, { module: `${id}-activity`, port: 'cv' }, 2 / 3));

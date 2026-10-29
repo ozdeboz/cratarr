@@ -15,56 +15,30 @@ import { chainNow } from './chain-params';
 import { settingsReport } from './effects';
 import { newEngine, stepEngine, type EngineFrame } from './engine/graph';
 import { LivePatch } from './engine/live-patch';
-import { randomize, randomizeCables, randomizeMacros, scopeNamed, type Randomized, type Scope } from './engine/randomize';
+import { rollOf, type DiceCheck, type Roll, type Rolled } from './engine/dice';
+import type { Randomized } from './engine/randomize';
 import { settingsOfPatch } from './engine/settings-view';
-import { FREE, holding, leversOf, STANDING, type Levers } from './engine/sidechain';
+import { FREE, holding, leversOf, type Levers } from './engine/sidechain';
 import { seedOf } from './flame';
 import type { FrameStats, MeterValues } from './meters';
 import { musicNow, stopMusic } from './music.svelte';
 import { newNormalState, signalsFor } from './normal';
 import { coverImage, coverPalette, type PaletteColour } from './palette';
 import type { ModuleType, SignalRef } from './patch';
-import { isDevice, RANDOMIZE_SCOPES, type PatchV2 } from './ports';
-import { precheckingPatch, type Checked } from './precheck';
+import type { PatchV2 } from './ports';
 import { ceilingOf } from './quality';
 import { FlameRenderer, type PictureInputs } from './render';
 import { A, T } from './routes';
 import { FLUID_FULL, type VisualSettings } from './settings.svelte';
 import { signalsOf } from './signals';
+import { applyKnobs } from './v2';
 
 /** A new track's look blends in over this long; one the dice made, quicker (Visuals.svelte's). */
 const BLEND_MS = 6000;
 const ANOTHER_MS = 1500;
 /** The fewest points the device's own pace steps down to. */
 const MIN_POINTS = 1 << 14;
-/** How many seeds the dice try against the track before taking the least over its limits. */
-const TRIES = 8;
 
-/** A module of a patch by its flattened id (`show/curve`: the Show device's Curve), devices opened, and its level. */
-function moduleAt(p: PatchV2, id: string) {
-  const path = id.split('/');
-  let level = p;
-  for (const step of path.slice(0, -1)) {
-    const d = level.modules.find((m) => m.id === step);
-    if (!d || !isDevice(d)) return undefined;
-    level = d.patch;
-  }
-  const m = level.modules.find((x) => x.id === path[path.length - 1]);
-  return m ? { m, level } : undefined;
-}
-
-/** New knob values into a patch, by flattened module id; a knob pinned at its level (`<module>.<knob>`, a band's six
- *  by theirs) is left as it is, whatever moves it (a step's Next, a new track's look, the dice). */
-function applyKnobs(p: PatchV2, values: Randomized) {
-  for (const [id, knobs] of Object.entries(values)) {
-    const at = moduleAt(p, id);
-    if (!at) continue;
-    for (const [k, v] of Object.entries(knobs)) {
-      const pinned = at.level.pins.includes(`${at.m.id}.${k}`) || at.level.pins.includes(`${at.m.id}.${k.replace(/\.\d+$/, '')}`);
-      if (!pinned) at.m.knobs[k] = v;
-    }
-  }
-}
 
 
 
@@ -86,8 +60,7 @@ function keepPace(p: Pace) {
   }
 }
 
-/** What a roll reaches: a scope of RANDOMIZE_SCOPES, or modules by id (a module's own Randomize). */
-export type Roll = (typeof RANDOMIZE_SCOPES)[number] | { module: string[] };
+export type { Roll } from './engine/dice';
 
 /** What the loop is given. */
 export type LoopHost = {
@@ -228,46 +201,18 @@ export class VisualsLoop {
       if (ms > 0) easing = { from: fromValues, to: toValues, start: now, ms };
     };
 
-    // A roll being worked out, over frames (the flame's survey yields): a new track's (the patch's Dice: a performance)
-    // or the dice's (tried against the track, an edit).
-    let rolling: Generator<void, { values: Randomized; cables: Record<string, PatchV2['cables'][number]['value']>; macros?: Record<string, number> }> | null = null;
+    // A roll being worked out, over frames (the flame's survey yields; engine/dice.ts): a new track's (the patch's Dice:
+    // a performance) or the dice's (tried against the track, an edit).
+    let rolling: Generator<void, Rolled> | null = null;
     let rollingAs: { edit: string | null; ms: number } = { edit: null, ms: BLEND_MS };
-    const rollOf = function* (seed: number, roll: Roll, check: { key: string; position: number } | null, reach = 1) {
-      const patch = host.store.patch;
-      const scope = typeof roll === 'string' ? roll : null;
-      const ids = typeof roll === 'string' ? null : new Set(roll.module);
-      // The scopes pinned (`scope:<name>`, the dice's column): kept by every roll, whatever its scope.
-      const held = patch.pins.filter((x) => x.startsWith('scope:')).map((x) => x.slice('scope:'.length));
-      const heldScopes = held.map((x) => scopeNamed(x, host.types)).filter((x): x is Scope => !!x);
-      const asked: Scope | null = scope ? scopeNamed(scope, host.types) : (m) => ids!.has(m.id);
-      const knobsScope: Scope | null = asked && heldScopes.length ? (m, k) => asked(m, k) && !heldScopes.some((h) => h(m, k)) : asked;
-      const withCables = (scope === 'everything' || scope === 'cables' || scope === 'response') && !held.includes('cables') && !held.includes('response');
-      const values: Randomized = knobsScope ? yield* randomize(patch, host.types, { seed, scope: knobsScope, reach }) : {};
-      const cables = withCables ? randomizeCables(patch, host.types, { seed, reach }) : {};
-      // Macros: the rack's own ranges, so no check against the track.
-      if (scope === 'macros') return { values, cables, macros: held.includes('macros') ? {} : randomizeMacros(patch, { seed, reach }) };
-      if (!check) return { values, cables };
-      // The dice: this seed and the next ones, each checked against the track (its sidechains taken out), the first
-      // within the limits taken, else the least over them.
+    /** The track the dice are checked against: its signals and beats as the page has them, and where in it. */
+    const checkOf = (check: { key: string; position: number } | null): DiceCheck | null => {
+      if (!check) return null;
       const [source, id] = [check.key.slice(0, check.key.indexOf('/')), check.key.slice(check.key.indexOf('/') + 1)];
       const signals = signalsOf(source, id);
-      if (!signals) return { values, cables };
-      const wild = host.store.patch.macros.find((x) => x.id === 'wild')?.value ?? 0.5;
-      const limits = Object.fromEntries(Object.entries(STANDING).map(([k, v]) => [k, v * 2 ** (2 * (wild - 0.5))]));
-      let best: { values: Randomized; cables: typeof cables; by: number } | null = null;
-      for (let t = 0; t < TRIES; t++) {
-        const tryValues: Randomized = t === 0 ? values : knobsScope ? yield* randomize(patch, host.types, { seed: seed + t, scope: knobsScope, reach }) : {};
-        const tryCables = t === 0 ? cables : withCables ? randomizeCables(patch, host.types, { seed: seed + t, reach }) : {};
-        const candidate = structuredClone(patch);
-        applyKnobs(candidate, tryValues);
-        for (const c of candidate.cables) if (c.id in tryCables) c.value = tryCables[c.id];
-        const checked: Checked = yield* precheckingPatch(candidate, how, signals, beatsOf(source, id) ?? null, check.position, limits);
-        if (checked.ok) return { values: tryValues, cables: tryCables };
-        const by = checked.over.reduce((sum, m) => sum + ((checked.worst as Record<string, number>)[m] ?? 0) / ((limits as Record<string, number>)[m] ?? 1), 0);
-        if (!best || by < best.by) best = { values: tryValues, cables: tryCables, by };
-      }
-      return best ?? { values, cables };
+      return signals ? { signals, beats: beatsOf(source, id) ?? null, position: check.position } : null;
     };
+    const rollFor = (seed: number, roll: Roll, check: { key: string; position: number } | null, reach = 1) => rollOf(host.store.patch, host.types, how, seed, roll, checkOf(check), reach);
 
     let passes = Math.min(ceilingOf(how.quality, devicePixels()).steps, pace?.passes ?? Infinity);
     let last = performance.now();
@@ -349,7 +294,7 @@ export class VisualsLoop {
         // Reset to seed: the track's own, unchecked (a new track's look is not checked either); the dice: a fresh one.
         const reset = want.seed === -1;
         const seed = reset ? seedOf(m.key ?? 'cratarr') : Math.floor(Math.random() * 0x100000000);
-        rolling = rollOf(seed, want.scope, reset || !m.key ? null : { key: m.key, position: m.position });
+        rolling = rollFor(seed, want.scope, reset || !m.key ? null : { key: m.key, position: m.position });
         rollingAs = { edit: want.edit, ms: reset ? BLEND_MS : ANOTHER_MS };
         lookCame = reset ? 'track' : 'dice';
       }
@@ -467,7 +412,7 @@ export class VisualsLoop {
       // undo step of its own (the owner: the track may change what is on, Undo brings back the look before it).
       for (const r of stepped.dice) {
         if (rolling) break;
-        rolling = rollOf(r.seed, r.scope, null, r.reach);
+        rolling = rollFor(r.seed, r.scope, null, r.reach);
         // The first look shows at once; each next one blends in over a new track's time.
         rollingAs = { edit: looked ? 'track' : null, ms: looked ? BLEND_MS : 0 };
         looked = true;
