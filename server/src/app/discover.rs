@@ -131,8 +131,96 @@ pub struct Suggestion {
     /// masonry places it by these (0.9.2, the owner with claude-632). Only Last.fm's suggestions have them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alike: Vec<Alike>,
-    #[serde(skip)]
+    /// When it came out, as closely as its source says ("YYYY-MM-DD", "YYYY-MM" or "YYYY"): Fresh reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub released: Option<String>,
+    /// How well it fits each of Discover's reasons, 0 to 1, as its sources found it (`Fits`).
+    #[serde(default, skip_serializing_if = "Fits::is_empty")]
+    pub fits: Fits,
+    /// The account's plays of its artist, where the library has the artist (Gaps' order).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist_plays: Option<u32>,
+    /// Its mode, the reason that fits it best, worked out as it is read (`modes`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<Mode>,
+    /// The look's own rank as it is kept; as it is read, its mode's fit (`modes`).
+    #[serde(default)]
     pub score: f64,
+}
+
+/// Discover's modes (the owner, 2026-10-29, with claude-632): each suggestion shows once, in the mode whose reason
+/// fits it best ("by how well it fits", not a fixed order). Fresh: anyone's records out in the last three months that
+/// fit; Alike: records of any age that fit; Gaps: missing from the library's artists' albums; Artists: artists new to
+/// the library, with their records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    Fresh,
+    Gaps,
+    Artists,
+    Alike,
+}
+
+impl Mode {
+    /// The reason a source gives: the discographies a gap; Last.fm's and the related artists an artist like the
+    /// account's; ListenBrainz's fresh releases a new record; its recommendations and Weekly Exploration, a record alike.
+    fn of_source(source: &str) -> Self {
+        match source {
+            "discography" => Self::Gaps,
+            "lastfm" | "related" => Self::Artists,
+            "fresh" => Self::Fresh,
+            _ => Self::Alike,
+        }
+    }
+}
+
+/// How well a suggestion fits each reason, 0 to 1 (a source's own score: how much the account plays the artist, how
+/// alike the artist is, how sure ListenBrainz is). One scale for all, so the reasons can be weighed against each other.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct Fits {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fresh: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alike: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gaps: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artists: Option<f64>,
+}
+
+impl Fits {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    fn slot(&mut self, m: Mode) -> &mut Option<f64> {
+        match m {
+            Mode::Fresh => &mut self.fresh,
+            Mode::Alike => &mut self.alike,
+            Mode::Gaps => &mut self.gaps,
+            Mode::Artists => &mut self.artists,
+        }
+    }
+
+    /// A reason found again: kept at its best fit.
+    fn raise(&mut self, m: Mode, fit: f64) {
+        let f = fit.clamp(0.0, 1.0);
+        let s = self.slot(m);
+        *s = Some(s.map_or(f, |x| x.max(f)));
+    }
+}
+
+/// An artist new to the library as the Artists mode shows them: who, why, and their records in that mode (their keys,
+/// the best fit first).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewArtist {
+    pub name: String,
+    pub artist_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub photo: Option<String>,
+    pub why: Vec<String>,
+    pub score: f64,
+    pub records: Vec<String>,
 }
 
 /// How alike a suggestion's artist is to one of the account's artists (`seed`).
@@ -154,6 +242,9 @@ pub struct Found {
     pub at: i64,
     pub albums: Vec<Suggestion>,
     pub notes: Vec<String>,
+    /// The Artists mode's artists, worked out as it is read (`modes`); never kept.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Vec::is_empty")]
+    pub artists: Vec<NewArtist>,
 }
 
 /// Whose services: the ListenBrainz user, the Last.fm user and how to ask Last.fm; and the server's own Last.fm key,
@@ -177,6 +268,8 @@ pub struct Candidate {
     /// What it is and its genres, where its source says (MusicBrainz's discographies, the fresh releases).
     pub kind: Option<String>,
     pub genres: Vec<String>,
+    /// When it came out, where its source says.
+    pub released: Option<String>,
     /// How alike its artist is to each artist it was found from, where its source says (Last.fm, the related artists).
     pub alike: Vec<Alike>,
     /// Its album page on Bandcamp, where its source found one (the related artists).
@@ -479,6 +572,9 @@ struct Group {
     year: Option<i32>,
     #[serde(default)]
     genres: Vec<String>,
+    /// Its first release's date, as MusicBrainz writes it (kept from 0.9.17; older ones have none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    date: Option<String>,
 }
 
 /// An artist the library has, with how much the account plays them.
@@ -582,6 +678,7 @@ async fn mb_discography(http: &reqwest::Client, artist: &str, today: &str) -> Re
                 genres: genres.into_iter().take(GENRES).map(|x| x.name).collect(),
                 id: g.id,
                 title: g.title,
+                date: Some(g.first),
             }
         })
         .collect())
@@ -629,8 +726,7 @@ async fn from_discographies(serve: &Arc<crate::serve::Serve>, http: &reqwest::Cl
     let mut out = Vec::new();
     for a in artists {
         let Some((_, groups)) = a.mbid.as_ref().and_then(|m| kept.get(m)) else { continue };
-        // Played: from 0.4 to 0.9 by how much; never played, below every played artist's.
-        let score = if a.plays > 0 { 0.4 + 0.5 * f64::from(a.plays) / most } else { 0.2 };
+        let score = played_fit(a.plays, most);
         for g in groups {
             out.push(Candidate {
                 album: g.title.clone(),
@@ -640,6 +736,7 @@ async fn from_discographies(serve: &Arc<crate::serve::Serve>, http: &reqwest::Cl
                 cover: Some(format!("/api/covers/release-group/{}", g.id)),
                 kind: g.kind.clone(),
                 genres: g.genres.clone(),
+                released: g.date.clone(),
                 source: "discography",
                 why: format!("Missing from {}'s albums", a.name),
                 score,
@@ -698,6 +795,7 @@ pub(super) async fn from_related(serve: &Arc<crate::serve::Serve>, http: &reqwes
                         cover: Some(format!("/api/covers/release-group/{}", g.id)),
                         kind: g.kind.clone(),
                         genres: g.genres.clone(),
+                        released: g.date.clone(),
                         ..base
                     });
                 }
@@ -733,6 +831,7 @@ async fn from_fresh(http: &reqwest::Client, user: &str) -> Result<Vec<Candidate>
             Some(Candidate {
                 album: r["release_name"].as_str()?.to_string(),
                 year: r["release_date"].as_str().and_then(|d| d.get(..4)?.parse().ok()),
+                released: r["release_date"].as_str().filter(|d| !d.is_empty()).map(str::to_string),
                 cover: Some(format!("/api/covers/release-group/{rg}")),
                 kind: r["release_group_primary_type"].as_str().map(str::to_string),
                 source: "fresh",
@@ -830,6 +929,10 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
                     track_count: None,
                     listeners: None,
                     alike: Vec::new(),
+                    released: c.released.clone(),
+                    fits: Fits::default(),
+                    artist_plays: None,
+                    mode: None,
                     score: 0.0,
                 },
                 HashSet::new(),
@@ -864,6 +967,10 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
         if s.bandcamp.is_none() {
             s.bandcamp = c.bandcamp.clone();
         }
+        if s.released.is_none() {
+            s.released = c.released.clone();
+        }
+        s.fits.raise(Mode::of_source(c.source), c.score);
         // Each seed once, at its strongest; the most alike first.
         for a in &c.alike {
             match s.alike.iter_mut().find(|x| x.seed == a.seed) {
@@ -879,6 +986,114 @@ pub fn one_list(candidates: Vec<Candidate>, have: &dyn Fn(&Candidate) -> bool, a
     out.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.artist.cmp(&b.artist)));
     out.truncate(MOST);
     out
+}
+
+/// How well an artist's record fits by how much the account plays them: from 0.4 to 0.9 by how much (the most played
+/// `most`); never played, below every played artist's.
+fn played_fit(plays: u32, most: f64) -> f64 {
+    if plays > 0 { 0.4 + 0.5 * f64::from(plays) / most.max(1.0) } else { 0.2 }
+}
+
+/// Each suggestion by an artist the library has: the account's plays of them (Gaps' order), and a new record of theirs
+/// fits Fresh as much as they are played, as a gap in their albums would (`plays` by the artist's key).
+fn weigh(albums: &mut [Suggestion], plays: &HashMap<String, u32>) {
+    let most = f64::from(plays.values().copied().max().unwrap_or(0));
+    for s in albums {
+        let Some(&p) = plays.get(&s.artist_key) else { continue };
+        s.artist_plays = Some(p);
+        if s.fits.fresh.is_some() {
+            s.fits.fresh = Some(played_fit(p, most));
+        }
+    }
+}
+
+/// How many days back a record counts as fresh (the owner, 2026-10-29: "the last 3 months").
+const FRESH_MODE_DAYS: i64 = 90;
+/// How many of an artist's records the Artists mode lists.
+const ARTIST_RECORDS: usize = 6;
+
+/// Whether a record came out on or after `since` ("YYYY-MM-DD"): a date of only a year never does, a month's when it is
+/// the month after `since`'s or later.
+fn out_since(released: Option<&str>, since: &str) -> bool {
+    released.is_some_and(|r| r.len() >= 7 && r >= since)
+}
+
+/// What a suggestion kept before its reasons' fits were (0.9.16 and older) is taken to fit: by its sources and reasons.
+fn fits_of_old(s: &Suggestion) -> Fits {
+    let mut f = Fits::default();
+    for w in &s.why {
+        let m = if w.starts_with("New from ") {
+            Mode::Fresh
+        } else if w.starts_with("Missing from ") {
+            Mode::Gaps
+        } else if w.starts_with("Like ") {
+            Mode::Artists
+        } else {
+            Mode::Alike
+        };
+        f.raise(m, 0.5);
+    }
+    if f.is_empty() {
+        f.raise(if s.new_artist { Mode::Artists } else { Mode::Alike }, 0.5);
+    }
+    f
+}
+
+/// Each suggestion's mode and score (its mode's fit), and the Artists mode's artists, as of `since` (the first day
+/// still fresh): every reason it has is weighed by its fit, and one out since then also fits Fresh as well as it fits
+/// at all (anyone's new records that fit, the owner). The best fit wins; even, the narrower reason: Fresh, then Gaps,
+/// then Artists, then Alike.
+pub fn modes(found: &mut Found, since: &str) {
+    for s in &mut found.albums {
+        let mut f = if s.fits.is_empty() { fits_of_old(s) } else { s.fits };
+        if out_since(s.released.as_deref(), since) {
+            let best = [f.fresh, f.alike, f.gaps, f.artists].into_iter().flatten().fold(0.0, f64::max);
+            f.raise(Mode::Fresh, best);
+        } else {
+            f.fresh = None;
+        }
+        let order = [Mode::Fresh, Mode::Gaps, Mode::Artists, Mode::Alike];
+        let (mode, fit) = order.into_iter().filter_map(|m| (*f.slot(m)).map(|x| (m, x))).fold(None, |best: Option<(Mode, f64)>, (m, x)| match best {
+            Some((_, b)) if b >= x => best,
+            _ => Some((m, x)),
+        }).unwrap_or((Mode::Alike, 0.0));
+        s.mode = Some(mode);
+        s.score = fit;
+    }
+    let mut by: HashMap<String, NewArtist> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    for s in found.albums.iter().filter(|s| s.mode == Some(Mode::Artists)) {
+        let a = by.entry(s.artist_key.clone()).or_insert_with(|| {
+            order.push(s.artist_key.clone());
+            NewArtist { name: s.artist.clone(), artist_key: s.artist_key.clone(), photo: None, why: Vec::new(), score: 0.0, records: Vec::new() }
+        });
+        if a.photo.is_none() && s.artist_photo {
+            let mut u = reqwest::Url::parse("http://cratarr/api/discover/artist/photo").expect("a fixed URL");
+            u.query_pairs_mut().append_pair("name", &s.artist);
+            a.photo = Some(format!("{}?{}", u.path(), u.query().unwrap_or_default()));
+        }
+        for w in &s.why {
+            if !a.why.contains(w) {
+                a.why.push(w.clone());
+            }
+        }
+        a.score = a.score.max(s.score);
+        a.records.push(s.key.clone());
+    }
+    let score: HashMap<&str, f64> = found.albums.iter().map(|s| (s.key.as_str(), s.score)).collect();
+    let mut artists: Vec<NewArtist> = order.into_iter().filter_map(|k| by.remove(&k)).collect();
+    for a in &mut artists {
+        a.records.sort_by(|x, y| score.get(y.as_str()).copied().unwrap_or(0.0).total_cmp(&score.get(x.as_str()).copied().unwrap_or(0.0)));
+        a.records.truncate(ARTIST_RECORDS);
+    }
+    artists.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.name.cmp(&b.name)));
+    found.artists = artists;
+}
+
+/// The first day still fresh today (`FRESH_MODE_DAYS` back, UTC).
+fn fresh_since() -> String {
+    let (y, m, d) = super::history::civil(super::moment::now_secs().div_euclid(86_400) - FRESH_MODE_DAYS);
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 /// Where an album can be heard elsewhere beyond the services that named it (the owner, 2026-10-24: "Bandcamp and
@@ -1224,6 +1439,7 @@ pub async fn look(
     let (ud, a) = (serve.userdata.clone(), account.to_string());
     let (answered, no_artists) = tokio::task::spawn_blocking(move || ud.discover_answered(&a)).await??;
     let mut albums = one_list(candidates, &|c: &Candidate| have.has(c), &have.known, &answered, &no_artists);
+    weigh(&mut albums, &artists.iter().map(|a| (loose(&a.name), a.plays)).collect());
     // What each is and its genres, from ListenBrainz in a few calls, so the cards show them from the first.
     progress("Reading what each album is", 0, None);
     let groups: Vec<String> = albums.iter().filter(|s| s.kind.is_none() || s.genres.is_empty()).filter_map(|s| s.release_group.clone()).collect();
@@ -1276,13 +1492,13 @@ pub async fn look(
     // Shown the moment they are known (the owner, 2026-10-24, 0.9): kept now, so the page lists them while the rest is
     // looked up behind them, and kept again as it fills in (the page reads them again as this step moves on).
     let at = super::moment::now_secs();
-    keep_found(serve, account, &Found { at, albums: albums.clone(), notes: notes.clone() }).await?;
+    keep_found(serve, account, &Found { at, albums: albums.clone(), notes: notes.clone(), ..Found::default() }).await?;
     // Where to hear each: its Bandcamp and YouTube pages as MusicBrainz knows them, else a search there; and its album
     // page on Bandcamp, found further where MusicBrainz has none (decision 0071), to play it from.
     let total = albums.len() as u64;
     for i in 0..albums.len() {
         if i > 0 && i % KEEP_EVERY == 0 {
-            keep_found(serve, account, &Found { at, albums: albums.clone(), notes: notes.clone() }).await?;
+            keep_found(serve, account, &Found { at, albums: albums.clone(), notes: notes.clone(), ..Found::default() }).await?;
         }
         let s = &mut albums[i];
         progress(LISTEN_STEP, i as u64, Some(total));
@@ -1355,7 +1571,7 @@ pub async fn look(
     for s in albums.iter_mut().filter(|s| s.new_artist) {
         s.artist_on_bandcamp = playing.contains(&s.artist_key);
     }
-    let found = Found { at, albums, notes };
+    let found = Found { at, albums, notes, ..Found::default() };
     keep_found(serve, account, &found).await?;
     // Its covers fetched ahead and kept (0.9.5), so the page shows them at once.
     super::cover_cache::warm(found.albums.iter().filter_map(|s| s.cover.clone()).collect());
@@ -1615,6 +1831,7 @@ pub fn exclusions(serve: &crate::serve::Serve, account: &str) -> Result<(Vec<Exc
         .and_then(|(_, json)| serde_json::from_str::<Found>(&json).ok())
         .map(|f| f.albums.into_iter().map(|s| (s.key.clone(), s)).collect())
         .unwrap_or_default();
+    let (artist_rows, rows): (Vec<_>, Vec<_>) = rows.into_iter().partition(|r| r.answer == ARTIST_ANSWER);
     let albums: Vec<Excluded> = rows
         .iter()
         .map(|r| {
@@ -1642,6 +1859,12 @@ pub fn exclusions(serve: &crate::serve::Serve, account: &str) -> Result<(Vec<Exc
     }
     let mut artists: Vec<LeftOutArtist> =
         by_artist.into_iter().filter(|(_, (n, _, _))| *n >= 2).map(|(k, (_, at, name))| LeftOutArtist { artist: name, key: k.to_string(), at }).collect();
+    // Said no to as an artist: once, with the name it was said to.
+    for r in artist_rows {
+        if !artists.iter().any(|a| a.key == r.artist_key) {
+            artists.push(LeftOutArtist { artist: r.artist.clone().unwrap_or_else(|| r.artist_key.clone()), key: r.artist_key.clone(), at: r.at });
+        }
+    }
     artists.sort_by(|a, b| b.at.cmp(&a.at));
     Ok((albums, artists))
 }
@@ -1790,6 +2013,7 @@ pub fn kept(serve: &crate::serve::Serve, account: &str) -> Result<Option<Found>>
             *w = short.to_string();
         }
     }
+    modes(&mut found, &fresh_since());
     Ok(Some(found))
 }
 
@@ -1866,6 +2090,21 @@ pub fn not_interested(serve: &crate::serve::Serve, account: &str, key: &str) -> 
     answer(serve, account, key, "no")
 }
 
+/// What an artist's Not interested is kept as: an answer of its own, keyed by the artist.
+const ARTIST_ANSWER: &str = "artist";
+const ARTIST_KEY: &str = "artist:";
+
+/// Not interested in an artist (the owner, 2026-10-29): they and every record of theirs leave Discover for good, in
+/// every mode, as two albums' Not interested does. `name` as the page shows it. Its undo token.
+pub fn artist_not_interested(serve: &crate::serve::Serve, account: &str, name: &str) -> Result<String> {
+    let artist = loose(name.trim());
+    anyhow::ensure!(!artist.is_empty(), "Which artist?");
+    let key = format!("{ARTIST_KEY}{artist}");
+    serve.userdata.answer_discover(account, &key, &artist, ARTIST_ANSWER)?;
+    serve.userdata.name_discover_answer(account, &key, name.trim(), name.trim(), None, None)?;
+    Ok(format!("{UNDO}{ARTIST_ANSWER}:{key}"))
+}
+
 /// A suggestion of the account's by its key: the look's, else Around's (0.9.7).
 pub fn suggestion(serve: &crate::serve::Serve, account: &str, key: &str) -> Result<Option<Suggestion>> {
     if let Some(s) = kept(serve, account)?.and_then(|f| f.albums.into_iter().find(|s| s.key == key)) {
@@ -1895,10 +2134,14 @@ pub fn undo(serve: &crate::serve::Serve, account: &str, token: &str) -> Result<S
         _ => anyhow::bail!("Not Discover's undo"),
     };
     let (answer, key) = rest.split_once(':').context("Not Discover's undo")?;
-    anyhow::ensure!(answer == "no" || answer == "hidden", "Not Discover's undo");
+    anyhow::ensure!(answer == "no" || answer == "hidden" || answer == ARTIST_ANSWER, "Not Discover's undo");
     if back {
         serve.userdata.unanswer_discover(account, key)?;
         Ok(format!("{REDO}{answer}:{key}"))
+    } else if answer == ARTIST_ANSWER {
+        let artist = key.strip_prefix(ARTIST_KEY).context("Not Discover's undo")?;
+        serve.userdata.answer_discover(account, key, artist, ARTIST_ANSWER)?;
+        Ok(format!("{UNDO}{answer}:{key}"))
     } else {
         self::answer(serve, account, key, answer)
     }
@@ -1925,6 +2168,128 @@ mod tests {
 
     fn c(album: &str, artist: &str, rg: Option<&str>, source: &'static str, why: &str, score: f64) -> Candidate {
         Candidate { album: album.into(), artist: artist.into(), release_group: rg.map(Into::into), source, why: why.into(), score, ..Candidate::default() }
+    }
+
+    /// One list of `candidates`, nothing had or answered.
+    fn listed(candidates: Vec<Candidate>) -> Vec<Suggestion> {
+        one_list(candidates, &|_: &Candidate| false, &HashSet::new(), &HashSet::new(), &HashSet::new())
+    }
+
+    fn mode_of<'a>(found: &'a Found, album: &str) -> (Option<Mode>, f64) {
+        let s = found.albums.iter().find(|s| s.album == album).unwrap();
+        (s.mode, s.score)
+    }
+
+    #[test]
+    fn each_source_fits_its_own_reason() {
+        let list = listed(vec![
+            c("Gap", "Mine", Some("rg-g"), "discography", "Missing from Mine's albums", 0.7),
+            c("Gap", "Mine", Some("rg-g"), "listenbrainz", "Recommended by ListenBrainz", 0.4),
+            c("Like", "Theirs", Some("rg-l"), "lastfm", "Like Mine", 0.9),
+            c("Like", "Theirs", Some("rg-l"), "related", "Like Mine", 0.95),
+            c("New", "Mine", Some("rg-n"), "fresh", "New from Mine", 0.8),
+        ]);
+        let fits = |a: &str| list.iter().find(|s| s.album == a).unwrap().fits;
+        assert_eq!(fits("Gap"), Fits { gaps: Some(0.7), alike: Some(0.4), ..Fits::default() });
+        assert_eq!(fits("Like"), Fits { artists: Some(0.95), ..Fits::default() }, "the best of one reason kept");
+        assert_eq!(fits("New"), Fits { fresh: Some(0.8), ..Fits::default() });
+    }
+
+    #[test]
+    fn the_reason_that_fits_best_is_the_mode() {
+        let fresh = Candidate { released: Some("2026-10-01".into()), ..c("Out now", "Theirs", Some("rg-o"), "listenbrainz", "Recommended by ListenBrainz", 0.3) };
+        let old = Candidate { released: Some("2026-01-01".into()), ..c("Out long ago", "Theirs", Some("rg-x"), "listenbrainz", "Recommended by ListenBrainz", 0.3) };
+        let mut found = Found {
+            albums: listed(vec![
+                c("Gap wins", "Mine", Some("rg-g"), "discography", "Missing from Mine's albums", 0.7),
+                c("Gap wins", "Mine", Some("rg-g"), "listenbrainz", "Recommended by ListenBrainz", 0.5),
+                c("Alike wins", "Mine", Some("rg-a"), "discography", "Missing from Mine's albums", 0.3),
+                c("Alike wins", "Mine", Some("rg-a"), "listenbrainz", "Recommended by ListenBrainz", 0.9),
+                c("Even", "New one", Some("rg-e"), "related", "Like Mine", 0.6),
+                c("Even", "New one", Some("rg-e"), "listenbrainz", "Recommended by ListenBrainz", 0.6),
+                fresh,
+                old,
+            ]),
+            ..Found::default()
+        };
+        modes(&mut found, "2026-08-01");
+        assert_eq!(mode_of(&found, "Gap wins"), (Some(Mode::Gaps), 0.7));
+        assert_eq!(mode_of(&found, "Alike wins"), (Some(Mode::Alike), 0.9));
+        assert_eq!(mode_of(&found, "Even"), (Some(Mode::Artists), 0.6), "even: the narrower reason");
+        assert_eq!(mode_of(&found, "Out now"), (Some(Mode::Fresh), 0.3), "out in the last three months: fresh, as well as it fits");
+        assert_eq!(mode_of(&found, "Out long ago"), (Some(Mode::Alike), 0.3));
+    }
+
+    #[test]
+    fn a_fresh_source_out_of_date_is_not_fresh() {
+        let mut found = Found {
+            albums: listed(vec![Candidate { released: Some("2025-12-01".into()), ..c("Was new", "Mine", Some("rg-w"), "fresh", "New from Mine", 0.8) }]),
+            ..Found::default()
+        };
+        modes(&mut found, "2026-08-01");
+        assert_eq!(mode_of(&found, "Was new").0, Some(Mode::Alike), "a reason it no longer has is no mode");
+    }
+
+    #[test]
+    fn a_date_is_fresh_only_as_far_as_it_says() {
+        assert!(out_since(Some("2026-08-01"), "2026-08-01"));
+        assert!(out_since(Some("2026-09"), "2026-08-15"));
+        assert!(!out_since(Some("2026-08"), "2026-08-15"), "a month that began before");
+        assert!(!out_since(Some("2026"), "2026-01-01"), "a year alone never");
+        assert!(!out_since(None, "2026-01-01"));
+    }
+
+    #[test]
+    fn the_artists_mode_lists_each_artist_once_with_their_records_best_first() {
+        let mut found = Found {
+            albums: listed(vec![
+                c("First", "New one", Some("rg-1"), "related", "Like Mine", 0.5),
+                c("Second", "New one", Some("rg-2"), "lastfm", "Like Yours", 0.9),
+                c("Other", "Another", Some("rg-3"), "related", "Like Mine", 0.7),
+                c("Gap", "Mine", Some("rg-4"), "discography", "Missing from Mine's albums", 0.6),
+            ]),
+            ..Found::default()
+        };
+        found.albums.iter_mut().find(|s| s.album == "First").unwrap().artist_photo = true;
+        modes(&mut found, "2026-08-01");
+        let names: Vec<&str> = found.artists.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["New one", "Another"], "the best fit first");
+        let one = &found.artists[0];
+        assert_eq!(one.records, ["rg-2", "rg-1"]);
+        assert_eq!(one.why, ["Like Mine", "Like Yours"]);
+        assert_eq!(one.score, 0.9);
+        assert_eq!(one.photo.as_deref(), Some("/api/discover/artist/photo?name=New+one"));
+        assert!(found.artists[1].photo.is_none());
+    }
+
+    #[test]
+    fn a_look_kept_before_the_fits_gets_its_mode_from_its_reasons() {
+        let s = |why: &str, new_artist: bool| Suggestion { why: vec![why.into()], new_artist, ..listed(vec![c("A", "B", Some("rg"), "listenbrainz", "x", 0.5)]).remove(0) };
+        let mut found = Found { albums: vec![], ..Found::default() };
+        for (album, why, new) in [("g", "Missing from B's albums", false), ("f", "New from B", false), ("l", "Like C", true), ("r", "Recommended by ListenBrainz", true)] {
+            let mut x = s(why, new);
+            x.album = album.into();
+            x.key = album.into();
+            x.fits = Fits::default();
+            found.albums.push(x);
+        }
+        modes(&mut found, "2026-08-01");
+        let m: Vec<Option<Mode>> = found.albums.iter().map(|s| s.mode).collect();
+        assert_eq!(m, [Some(Mode::Gaps), Some(Mode::Alike), Some(Mode::Artists), Some(Mode::Alike)], "New from without a date is not fresh");
+    }
+
+    #[test]
+    fn plays_weigh_the_gaps_and_the_fresh() {
+        let mut list = listed(vec![
+            c("Gap", "Mine", Some("rg-g"), "discography", "Missing from Mine's albums", 0.9),
+            c("New", "Mine", Some("rg-n"), "fresh", "New from Mine", 0.8),
+            c("Theirs", "Theirs", Some("rg-t"), "fresh", "New from Theirs", 0.8),
+        ]);
+        weigh(&mut list, &HashMap::from([("mine".to_string(), 10), ("most".to_string(), 20)]));
+        let of = |a: &str| list.iter().find(|s| s.album == a).unwrap().clone();
+        assert_eq!(of("Gap").artist_plays, Some(10));
+        assert!((of("New").fits.fresh.unwrap() - 0.65).abs() < 1e-9, "a new record fits as much as its artist is played");
+        assert_eq!((of("Theirs").artist_plays, of("Theirs").fits.fresh), (None, Some(0.8)), "an artist the library has not: as found");
     }
 
     #[test]
