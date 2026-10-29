@@ -1,8 +1,9 @@
 # Cratarr for the desktop
 
 A thin app around Cratarr's pages, so a computer can be a Cratarr player that starts at login and keeps playing with
-its window closed (decision [0078](../docs/decisions/0078-a-desktop-app.md)). Linux first: a `.deb` for Ubuntu, Linux
-Mint and Debian, and an AppImage for the rest.
+its window closed (decision [0078](../docs/decisions/0078-a-desktop-app.md)). On Linux it comes as a `.deb` for Ubuntu,
+Linux Mint and Debian, from an APT repository so it updates with the system; on Windows as an installer that updates
+itself.
 
 ## What it does
 
@@ -19,10 +20,37 @@ Mint and Debian, and an AppImage for the rest.
 
 ## Installing
 
-- `.deb`: `sudo apt install ./cratarr-desktop_<version>_amd64.deb`, then Cratarr in the menu (or `cratarr`).
-- AppImage: `chmod +x Cratarr-<version>.AppImage`, then run it.
+Ubuntu, Linux Mint, Debian: from the APT repository, so the Update Manager (or `apt upgrade`) brings each release.
 
-Both are in each [release](https://github.com/ozdeboz/cratarr/releases).
+```sh
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://ozdeboz.github.io/cratarr/apt/cratarr-archive-keyring.gpg | sudo tee /etc/apt/keyrings/cratarr.gpg > /dev/null
+echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/cratarr.gpg] https://ozdeboz.github.io/cratarr/apt stable main" | sudo tee /etc/apt/sources.list.d/cratarr.list
+sudo apt update && sudo apt install cratarr-desktop
+```
+
+Windows: `Cratarr-Setup-<version>.exe` from the latest [release](https://github.com/ozdeboz/cratarr/releases). It
+updates itself from the releases. It is not signed yet, so Windows asks once before it runs.
+
+Each release's `SHA256SUMS` holds its files' checksums.
+
+## Releasing
+
+A version tag builds the app with the rest of the release (`.github/workflows/release.yml`): the `.deb` and the
+installer join the GitHub release, the APT repository on GitHub Pages is made anew, and `SHA256SUMS` comes last. Each
+is built at the release's version, so apt and the updater see every release as newer. A hotfix's tag (`v0.9.15-1`)
+is built as 0.9.15 with the hotfix's number as its build number: the `.deb`'s revision (`0.9.15-1`, which apt sees
+above 0.9.15; built as the tag says, it would carry `0.9.15~1`, below it) and Windows' file version.
+
+Once, before the first release:
+
+1. The APT repository's signing key: `desktop/make-apt-key.sh`, run on your own computer with gpg and gh signed in as
+   the repository's owner. It sets the secret `APT_SIGNING_KEY`, writes a backup to keep in your password manager, and
+   shows the key's fingerprint, which the repository's page shows too.
+2. GitHub Pages: Settings → Pages → Source: GitHub Actions; then Settings → Environments → github-pages → let tags
+   `v*` deploy.
+3. If you like, the secret `CRATARR_HOUSE_PATTERNS`: your own host names and domains, as comma-separated regular
+   expressions, which the build's check refuses too.
 
 ## Building
 
@@ -31,23 +59,25 @@ Node 22 and npm (not pnpm: pnpm 10 skips Electron's download).
 ```sh
 cd desktop
 npm ci
-npm start       # runs it; the web app's icons are copied in first
-npm run dist    # on Linux: dist/Cratarr-<version>.AppImage and dist/cratarr-desktop_<version>_amd64.deb
+npm start           # runs it; the web app's icons are copied in first
+npm run dist        # on Linux: dist/cratarr-desktop_<version>_amd64.deb
+npm run dist:win    # on Windows: dist/Cratarr-Setup-<version>.exe, with latest.yml and its blockmap for the updater
+npm run check       # the check each build runs first: no private IP address or home-network host name in the app
 ```
-
-The release workflow builds both at the release's version and attaches them to the GitHub release. A hotfix's tag
-(`v0.9.15-1`) is built as 0.9.15 with the hotfix's number as the `.deb`'s revision (`0.9.15-1`), so apt sees it above
-0.9.15; built as the tag says, the `.deb` would carry `0.9.15~1`, below it.
 
 The `.deb` depends on electron-builder's list plus what Electron needs that it leaves out: the sound library
 (`libasound2t64` from Ubuntu 24.04, `libasound2` before) and `libgbm1`.
 
 ## Files
 
-- `main.js`: the window, the tray and the menus, Start at login, the server's address.
+- `main.js`: the window, the tray and the menus, Start at login, the server's address, Windows' updates.
 - `preload.js`: `window.CratarrDesktop` for the page (the app's version, the computer's name); the address page's two
   questions.
 - `setup.html`: the address page, the app's one page of its own.
 - `copy-icons.js`: the web app's icons, copied in.
 - `after-pack.js`: before packing, the app's files writable by their owner alone. Electron's own come out of its archive
   writable by anyone, and a package installs them as they are.
+- `check-no-house.js`: the check before each build; a house's own names come from `CRATARR_HOUSE_PATTERNS`, so they
+  never sit in this repository.
+- `apt-repo.sh`: the APT repository from a `.deb`, signed, as the release workflow deploys it to GitHub Pages.
+- `make-apt-key.sh`: the repository's signing key, made once by its owner.

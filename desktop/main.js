@@ -36,7 +36,7 @@ function writeSettings(change) {
   fs.writeFileSync(SETTINGS, JSON.stringify(next, null, 2));
 }
 
-/** An address as typed ("192.168.178.5:8081", "cratarr.example.org", "https://…/home") as an origin, or null. */
+/** An address as typed ("192.0.2.10:8081", "cratarr.example.org", "https://…/home") as an origin, or null. */
 function originOf(address) {
   const typed = String(address ?? '').trim();
   if (!typed) return null;
@@ -213,6 +213,16 @@ function createWindow() {
   else win.loadFile(path.join(__dirname, 'setup.html'));
 }
 
+/** Windows: the app updates itself from Cratarr's GitHub releases (electron-updater; the owner, 2026-10-29), looking at
+ *  start and every six hours, the update put in place when the app next quits. On Linux apt does it (the APT
+ *  repository). */
+function updates() {
+  const { autoUpdater } = require('electron-updater');
+  const look = () => autoUpdater.checkForUpdatesAndNotify().catch(() => {});
+  look();
+  setInterval(look, 6 * 3600_000);
+}
+
 // The setup page's two questions; only it may ask them.
 const fromSetup = (event) => event.senderFrame?.url.startsWith('file:') ?? false;
 ipcMain.handle('server', (event) => (fromSetup(event) ? (origin ?? settings.server ?? null) : null));
@@ -247,6 +257,7 @@ if (first) {
     tray.on('click', show);
     menus();
     createWindow();
+    if (process.platform === 'win32' && app.isPackaged) updates();
   });
   // Without a tray (a desktop that has none), closing the window ends it.
   app.on('window-all-closed', () => app.quit());

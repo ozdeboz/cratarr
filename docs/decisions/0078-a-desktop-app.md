@@ -25,7 +25,8 @@ porting the Android app's player: a big job.
 ## Decision
 
 **A thin desktop app (Electron), as the Android app began: it shows the server's own pages in a window of its own,
-and the page plays as in a browser. Linux first, as an AppImage and a .deb.**
+and the page plays as in a browser. Linux first, as a .deb from an APT repository; Windows as an installer that
+updates itself.**
 
 - Nothing of the web app is built in. The pages come from the server, so the app follows each server's version.
 - The server's address is asked once, on the app's one page of its own; the health check (`/api/health`, open to
@@ -44,7 +45,25 @@ and the page plays as in a browser. Linux first, as an AppImage and a .deb.**
   This browser, no `CratarrApp` bridge, the page's own player.
 - The window is the server's alone: another site's link opens in the computer's browser. The page may copy, go
   fullscreen, keep the screen on and choose a speaker; nothing else (no camera, microphone or location).
-- The release workflow builds both packages at the release's version and attaches them to the GitHub release.
+
+## Distribution
+
+The owner, 2026-10-29 (through the ThinkPad's session): conventional open-source workflows only, nothing of the house's
+own.
+
+- One GitHub Release per version tag, built by GitHub Actions for every platform: the `.deb`, the Windows installer,
+  the Android app, and `SHA256SUMS` of them all.
+- Linux: a signed APT repository on GitHub Pages, so Mint and Ubuntu update through apt and the Update Manager. It holds
+  the latest release's `.deb`, the Release file signed with a key kept as an Actions secret, and the key's public half
+  beside it.
+- Windows: electron-updater, from the GitHub releases; unsigned for now.
+- Keys are Actions secrets; the owner keeps their backups in a password manager. The APT key is made by the owner
+  (`desktop/make-apt-key.sh`), so no one else sees it.
+- Every build carries the release's version, so apt and the updater see each release as newer. A hotfix's tag
+  (v0.9.15-1) is built at its base version with the hotfix's number as the build number. That number is the `.deb`'s
+  revision (0.9.15-1, above 0.9.15), where semver's prerelease would have made it 0.9.15~1, below.
+- No hard-coded IP address or other house-specific endpoint in a build: the check before each build refuses private
+  IPv4 addresses and home-network host names; a house's own names come from a secret, never this repository.
 
 ## Consequences
 

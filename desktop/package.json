@@ -15,7 +15,9 @@
   "scripts": {
     "icons": "node copy-icons.js",
     "start": "npm run icons && electron .",
-    "dist": "npm run icons && electron-builder --linux AppImage deb --publish never"
+    "check": "node check-no-house.js",
+    "dist": "npm run icons && npm run check && electron-builder --linux deb --publish never",
+    "dist:win": "npm run icons && npm run check && electron-builder --win nsis --publish never"
   },
   "build": {
     "appId": "org.cratarr.desktop",
@@ -29,6 +31,20 @@
     ],
     "directories": {
       "output": "dist"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "ozdeboz",
+        "repo": "cratarr",
+        "releaseType": "release"
+      }
+    ],
+    "win": {
+      "icon": "icons/icon-512.png"
+    },
+    "nsis": {
+      "artifactName": "Cratarr-Setup-${version}.${ext}"
     },
     "linux": {
       "executableName": "cratarr",
@@ -56,5 +72,8 @@
   "devDependencies": {
     "electron": "45.1.0",
     "electron-builder": "26.18.0"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.11"
   }
 }

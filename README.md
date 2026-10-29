@@ -14,7 +14,8 @@ plain `.m3u` files beside your music.
 
 ## Try it
 
-Each release on GitHub has a ready image (amd64 and arm64), the Android app and the desktop app for Linux.
+Each release on GitHub has a ready image (amd64 and arm64), the Android app, the desktop app for Linux and Windows,
+and `SHA256SUMS` of them all.
 
 ```sh
 mkdir -p ~/cratarr
@@ -30,8 +31,8 @@ Until that first account exists, anyone who reaches the server can make it, and 
 run). Make it before the server can be reached from outside your home.
 
 For the Android app, install the APK from the latest [release](https://github.com/ozdeboz/cratarr/releases) and give
-it your server's address. For the desktop app on Ubuntu, Linux Mint or Debian, install the `.deb` from the same release
-(or run its AppImage) and give it the address too ([desktop/README.md](desktop/README.md)).
+it your server's address. For the desktop app, add its APT repository on Ubuntu, Linux Mint or Debian, or run the
+Windows installer from the same release, and give it the address too ([desktop/README.md](desktop/README.md)).
 
 ## What it does
 
