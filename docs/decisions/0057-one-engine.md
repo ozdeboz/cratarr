@@ -623,6 +623,37 @@ page; a tap solos it, its signal full screen in place of the Screen's (TouchDesi
 - A module whose morph is bringing it back (target above neutral) keeps running while it is at neutral, so the flame
   coming back from blend 0 has its light already gathered, as today.
 
+### Purity (the owner, 2026-10-29)
+
+The owner: "the lack of logic is in the UI of the panel". The panel shows the engine's model, so the model is fixed and
+the panel follows. The owner chose all four steps, in order (branch 632/visuals-purity):
+
+1. **Model.**
+   - A step knob names its choices (Knob `options`). The panel shows a yes or a no as a switch, two or three as a
+     slim track, more in a sheet.
+   - The panel's knobs are the graph's (`knobViews`): a band's six as one knob, with a slider a band on its page.
+   - A shipped device's ports and modules are named by what they carry (device-names.ts), its loudness one input led
+     to them all.
+   - One `portsOfModule` and one `moduleName` serve every view.
+2. **Hidden work into modules.**
+   - The Flame's look, colours, Fit and place on the screen are its own (engine/flame-node.ts); its second morph is
+     gone.
+   - The Fluid's stirring is the engine's.
+   - A step's Next is the engine's; a pinned knob is held where values are written (`applyKnobs`).
+   - The dice live in engine/dice.ts, their limits the Calm's (not a macro by its id).
+   - The engine reads no settings: a module the rack lacks does nothing. The frame loop reads no settings view.
+3. **Truthful ports, §7e's leftovers.**
+   - Done: the rack's Flash is Accent.
+   - Left:
+     - Curve's Haze as gamma and black level (item 7);
+     - the Meter measuring what is cabled into it (it reads the screen);
+     - the renderer's fixed ids (`layers`, `light-feedback`).
+4. **The player's band glass on the one clock** (lib/trackPlace, the visuals' Music's): one curve for both its
+   engines.
+
+Tried and left out: one polyphonic VCA a source in Loudness Follow. The engine decides a VCA's channels from a list of
+signals rather than its port's channels, so the picture changed.
+
 ## Consequences
 
 - One mental model: what the graph shows is what runs. Hidden control is a bug.

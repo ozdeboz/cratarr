@@ -24,6 +24,11 @@
     !sp ? null : sp.live ? `Connected as ${sp.live.name}` : sp.imported ? 'From your export' : sp.client_id ? 'Not connected' : 'Not set up',
   );
 
+  // This device's own Sign out, with who is signed in (the owner, 2026-10-29: where one looks for it): only where the
+  // page came with a sign-in of its own (an API key's or the app's address alone has none to end).
+  let signOutForm = $state<HTMLFormElement | null>(null);
+  const signedInHere = $derived(!!me.sessions?.some((s) => s.current));
+
   let setting = $state(false);
   async function savePassword(password: string) {
     try {
@@ -90,7 +95,10 @@
       onclick={() => (setting = true)}
     />
   {/if}
+  {#if signedInHere}<Item name="Sign out" kind="danger" onclick={() => signOutForm?.requestSubmit()} />{/if}
 </Group>
+<!-- Signing out clears this browser's cookie too. -->
+<form method="post" action="/signout" bind:this={signOutForm} hidden></form>
 
 <Group>
   <Item name="Spotify" line={spotifyLine} onclick={() => openThing('account', 'spotify')} />
@@ -110,12 +118,7 @@
   <Group title="Signed in">
     {#each me.sessions as s (s.id)}
       <Item name={s.device} line={s.current ? 'This device' : when(s.last_used)}>
-        {#if s.current}
-          <!-- Signing out here clears this browser's cookie too. -->
-          <form method="post" action="/signout"><button>Sign out</button></form>
-        {:else}
-          <button onclick={() => end(s)}>Sign out</button>
-        {/if}
+        {#if !s.current}<button onclick={() => end(s)}>Sign out</button>{/if}
       </Item>
     {/each}
   </Group>

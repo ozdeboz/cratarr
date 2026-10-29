@@ -21,6 +21,49 @@ kind of adapters Cratarr's own sources use (0005).
     handed over to another player, and its plays are not counted where the rest are.
   - Crates, playlists and analysis (0024, 0002, 0035) work on what the server catalogues. An external track would have
     no tempo, loudness or waveform unless the phone analysed it.
+- What is new about it (2026-10-28): Cratarr's server already reads Jellyfin and Subsonic sources (0005, 0032), but
+  those name files Cratarr sees on its own disks. An external library is music Cratarr cannot see as files, such as a
+  friend's Navidrome, or one's own Jellyfin in another house.
+- Two shapes (the owner, 2026-10-28: "just exploring for now", nothing chosen):
+  - **A. Through Cratarr's server.** The other server is a remote source. The server reads its catalogue through its
+    API and relays its streams (Subsonic `stream`, Jellyfin's universal audio). Everything that needs the server keeps
+    working: mixed queues, Play On, Home Assistant, the history and scrobbles, crates over its tags, downloads, Radio
+    and Autoplay. Waveforms, tempo and loudness could come from streaming each track once (opt-in, it costs bandwidth).
+    The cost is two trips for the music (the other server to the NAS, then to the device), which matters on mobile data
+    away from home. It keeps the thin-client model ("server first").
+  - **B. In the app directly** (the plan as first written). The app has its own adapters and a sign-in per server,
+    in a mode of its own, as local mode (0052) is. It works where only the phone reaches that server. It loses what
+    local mode loses: Play On handover, Cratarr's history, crates, analysis, Home Assistant. It also needs library
+    views that are not the server's pages.
+- Settled (the owner, 2026-10-28): "because of our heavy feature set, we will offer extra servers only as modes". No
+  combined library across servers, ever: each extra server is a mode of its own.
+- The owner's lean before that (the same day, after "what fundamentally blocks one combined library?"): **different modes**, each
+  server its own mode beside Cratarr's and Local, never mixed. That avoids matching one album across servers, mixing
+  each server's user data, and queues holding tracks the next player cannot reach. Still open: whether a mode goes
+  through Cratarr's server (shape A, with its queues, Play On, history and Home Assistant) or only through the app
+  (shape B).
+- Many servers, each its own mode (the owner, 2026-10-28): "possibly 2 Cratarr servers, 1 Jellyfin and also 1 local
+  (never more than 1 local)", each separate.
+  - The app holds the list, with a sign-in per server, and the mode switcher shows it (as Cratarr / Local now):
+    in that example four entries, switched between as the two are now.
+  - A Cratarr server's mode is that server's own pages, with its queues, Play On, history and Home Assistant. Each is
+    its own origin, so their kept copies and storage never mix.
+  - One queue per mode, and one mode sounds at a time: switching pauses the other, as Local does. Downloads are kept
+    per server.
+  - Catches:
+    - A Jellyfin has no Cratarr pages. Its mode needs the app's own copy of the page with an adapter (shape B), which
+      also lets the app work with no Cratarr server at all.
+    - Two Cratarr servers may run different versions: the app's bridge must hold with either.
+    - Settings split: the device's own (output, Start and stop, the tape, levelling) shared; Home, appearance per
+      server.
+    - The app is a Play On player on each Cratarr server: a play started from one switches to its mode.
+    - Android Auto browses the current mode, or offers the modes as top folders.
+    - The installed PWA stays one server's: it cannot switch origins or read the device's files.
+- Open either way:
+  - Whose favourites and plays they are: Cratarr's user data, the other server's stars mirrored (as Jellyfin's), or
+    both.
+  - Playlists are `.m3u` files of paths: an external track needs an entry form of its own.
+  - Tags: only what the other server's API gives (genres, year, sometimes BPM).
 
 ## Local library
 
