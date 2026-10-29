@@ -1,5 +1,7 @@
 package app.cratarr
 
+import kotlin.math.max
+
 /**
  * The tape engine's one truth (decision 0075, the app; the owner, 2026-10-28: "we do really need the robust, pure fix"):
  * where the deck is (which track of the queue, where in it) and how it moves now (its speed in track ms per ms, signed,
@@ -79,4 +81,15 @@ data class Plan(val t0: Long, val index: Int, val ms: Long, val sign: Int, val v
     /** How fast its speed changes [t] ms after it was let go (× a second). */
     fun accel(t: Long): Double =
         if (t < 0 || t >= brakeMs) 0.0 else -(v0 - to) * Math.PI / (2.0 * brakeMs) * kotlin.math.sin(Math.PI * t / brakeMs) * 1000.0
+
+    companion object {
+        /** A brake's mean deceleration (× a second; the owner, 2026-10-29: "When spinning down from high speeds,
+         *  braking things longer", constant deceleration): 128× stops in 2 s, 32× in 0.5 s. */
+        const val DECEL_X = 64.0
+
+        /** How long a brake from [v0] to [to] lasts (ms): at [DECEL_X], never shorter than the Brake as set
+         *  ([brakeMs]), which a slow one keeps (632's page: the same). */
+        fun lengthMs(v0: Double, to: Double, brakeMs: Long): Long =
+            max(brakeMs, kotlin.math.round(kotlin.math.abs(v0 - to) / DECEL_X * 1000.0).toLong())
+    }
 }

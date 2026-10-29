@@ -1451,11 +1451,12 @@ class StartStop(
     private var brakeSounding = false
 
     /** The plan letting go now makes: from the deck's place at its speed, forwards to 1× ([moving]: not a pause), else
-     *  to still. */
+     *  to still, over as long as its speed takes to come down ([Plan.lengthMs]). */
     private fun planNow(now: Long, moving: Boolean): Plan {
         val d = deck(now)
         val to = if (moving && tapeSign > 0 && !tapeReverse) 1.0 else 0.0
-        return Plan(now, d.index, d.ms, tapeSign, kotlin.math.abs(d.speed), to, tapeRelease)
+        val v0 = kotlin.math.abs(d.speed)
+        return Plan(now, d.index, d.ms, tapeSign, v0, to, Plan.lengthMs(v0, to, tapeRelease))
     }
 
     /** Where the plan [p] has the deck [t] ms after it was let go, through the queue. */
