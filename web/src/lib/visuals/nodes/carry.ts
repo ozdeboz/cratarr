@@ -91,9 +91,9 @@ export class Carry {
   }
 
   /** The light kept from the last frame into this one (bound, blending on), `since` seconds on: faded where it was;
-   *  read nearer the middle (the tunnel) or by the loop's effect; or carried along the fluid's flow. The fluid drawn
-   *  with, if any. */
-  draw(light: Light, look: CarryParams, since: number, loop: LoopNow | null): Fluid | null {
+   *  read nearer the middle (the tunnel) or by the loop's effect; or carried along the fluid's flow, its Lift reading the
+   *  light at `heatK` (nodes/show.ts densityScale). The fluid drawn with, if any. */
+  draw(light: Light, look: CarryParams, since: number, loop: LoopNow | null, heatK = 0): Fluid | null {
     const gl = this.gl;
     const follow = (shown: number, to: number) => shown + (to - shown) * (1 - Math.exp(-since / (to > shown ? FLUID_RISE : FLUID_FALL)));
     this.fluidShown = follow(this.fluidShown, Math.max(0, look.fluid));
@@ -106,7 +106,7 @@ export class Carry {
         this.madeAt = this.now();
       }
       fluid.push(look.forces);
-      fluid.step(look.dt, look.flow);
+      fluid.step(look.dt, look.flow, look.flow.lift && light.acc ? { light: light.acc, k: heatK } : null);
       const other = 1 - light.cur;
       fluid.advect({ acc: light.acc!, bandsA: light.bands!, bandsB: light.bandsB! }, light.fbos[other], look.keep, light.width, light.height, this.tunnelZoom(look.tunnel, since), loop ? { key: String(loop.id), glsl: loopFunction(loop.id, FLOW_IN_LIGHT), ...loop } : undefined, look.facets);
       light.cur = other;

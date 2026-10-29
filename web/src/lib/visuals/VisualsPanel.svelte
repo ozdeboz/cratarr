@@ -32,6 +32,7 @@
   import { flatten, macroNode, mappingOf } from './v2';
   import type { Module } from './patch';
   import type { V2Type } from './v2-types';
+  import { LIBRARY_GROUPS, type LibraryGroup } from './library';
 
   let {
     patch,
@@ -51,7 +52,8 @@
     types: Record<string, V2Type>;
     /** An edit, and the store's key for it (a knob dragged: one undo step). */
     onedit: (e: PanelEdit, key: string | null) => void;
-    presets: readonly { id: string; label: string; line: string }[];
+    /** The snapshot library (library.ts), each under its group's heading. */
+    presets: readonly { id: string; label: string; line: string; group?: LibraryGroup }[];
     /** The preset the patch was last set to, if any. */
     preset?: string | null;
     onpreset: (id: string) => void;
@@ -487,9 +489,12 @@
       {@render goRow('This device', 'Quality, frame rate, brightness', 'device')}
     </div>
   {:else if here === 'presets'}
-    <div class="rows">
-      {#each presets as p (p.id)}<button class="go" class:on={preset === p.id} onclick={() => (onpreset(p.id), (path = []))}><span class="name">{p.label}<small>{p.line}</small></span></button>{/each}
-    </div>
+    {#each LIBRARY_GROUPS.map((g) => ({ ...g, list: presets.filter((p) => (p.group ?? 'saved') === g.id) })).filter((g) => g.list.length) as g (g.id)}
+      <h3>{g.label}</h3>
+      <div class="rows">
+        {#each g.list as p (p.id)}<button class="go" class:on={preset === p.id} onclick={() => (onpreset(p.id), (path = []))}><span class="name">{p.label}<small>{p.line}</small></span></button>{/each}
+      </div>
+    {/each}
   {:else if here === 'device'}
     <div class="rows">
       {#each DEVICE_ROWS as r (r.key)}

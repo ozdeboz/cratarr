@@ -116,6 +116,15 @@ void main() {
   o = vec4(clamp(shown, 0.0, 1.0) * uCeiling, 1.0);
 }`;
 
+/** The light's density on the display's scale (the show's k2): the points held at a time (each frame's `ready`, `passes`
+ *  steps, kept 1/(1 − keep) frames), their mean per pixel, at the light's precision and the exposure. The Fluid's Lift
+ *  reads its heat on the same scale (fluid.ts Heat). */
+export function densityScale(light: Pick<Light, 'width' | 'height' | 'precision'>, ready: number, passes: number, keep: number, exposure: number): number {
+  const held = (Math.max(1, ready) * passes) / Math.max(0.02, 1 - keep);
+  const perPixel = held / (light.width * light.height);
+  return ((light.precision === 8 ? 255 : 4) * exposure) / perPixel;
+}
+
 export class Show {
   private gl: WebGL2RenderingContext;
   private show: WebGLProgram;
@@ -139,10 +148,8 @@ export class Show {
     gl.bindTexture(gl.TEXTURE_2D, light.acc);
     gl.uniform1i(this.u(this.show, 'uAcc'), 0);
     gl.uniform2f(this.u(this.show, 'uView'), viewWidth, viewHeight);
-    const held = (Math.max(1, points.ready) * passes) / Math.max(0.02, 1 - look.keep);
-    const perPixel = held / (light.width * light.height);
     gl.uniform1f(this.u(this.show, 'uK1'), look.brightness);
-    gl.uniform1f(this.u(this.show, 'uK2'), ((light.precision === 8 ? 255 : 4) * look.exposure) / perPixel);
+    gl.uniform1f(this.u(this.show, 'uK2'), densityScale(light, points.ready, passes, look.keep, look.exposure));
     gl.uniform1f(this.u(this.show, 'uGamma'), look.gamma);
     gl.uniform1f(this.u(this.show, 'uVibrancy'), look.vibrancy);
     gl.uniform1f(this.u(this.show, 'uZoom'), look.zoom);

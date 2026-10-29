@@ -24,12 +24,13 @@ test('there are examples, each with an id of its own that no snapshot can have',
   for (const x of EXAMPLES) {
     assert.match(x.id, /^example:[a-z-]+$/);
     assert.equal(exampleOf(x.id), x);
-    assert.match(x.label, /^Example · /);
+    assert.doesNotMatch(x.label, /^Example/, 'under the library’s Examples: no prefix');
     assert.match(x.line, /\.$/, 'its line a sentence');
   }
 });
 
-for (const x of EXAMPLES) {
+// The technique racks; Fire is the Cratarr device (below).
+for (const x of EXAMPLES.filter((e) => !e.patch.modules.some((m) => m.type === 'flame'))) {
   test(`${x.label}: known modules, cables that fit, the Screen reached, the loop in one pass`, () => {
     const p = x.patch;
     const ports = portsOfModule(RECORD);
@@ -71,3 +72,19 @@ for (const x of EXAMPLES) {
     assert.equal(up.modules.length, p.modules.length);
   });
 }
+
+test('Fire: the Cratarr device in the Fire colours, its Fluid on, open, lifting and cooling, no flashes', () => {
+  const x = exampleOf('example:fire');
+  assert.ok(x, 'in the library');
+  const flame = x.patch.modules.find((m) => m.type === 'flame');
+  const fluid = x.patch.modules.find((m) => m.type === 'fluid');
+  assert.equal(flame?.knobs.family, 5, 'the Fire colours');
+  assert.ok((fluid?.knobs.fluid ?? 0) > 0, 'its Fluid on');
+  assert.deepEqual([fluid?.knobs.lift, fluid?.knobs.open, fluid?.knobs.cooling], [2, 1, 3]);
+  assert.equal(x.patch.modules.find((m) => m.type === 'accent')?.knobs.accent, 0, 'no flashes');
+  const fluidType = cratarrTypes(RANGES, DEFAULTS).find((t) => t.type === 'fluid')!;
+  for (const k of ['lift', 'open', 'cooling']) assert.ok(fluidType.knobs.some((d: { id: string }) => d.id === k), `the Fluid has ${k}`);
+  // As a kept patch made current (upgrade.ts), its Fire stays.
+  const up = upgraded(structuredClone(x.patch), RECORD);
+  assert.equal(up.modules.find((m) => m.type === 'fluid')?.knobs.open, 1);
+});

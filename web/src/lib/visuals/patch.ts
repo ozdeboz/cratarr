@@ -6,6 +6,7 @@
 import { ASPECTS, BAND_SIGNALS, isRoute, routeKey, TRACK_SIGNALS, type Aspect } from './routes';
 import { curveFrom, valueOf as keptValue, type RouteValue } from './curves';
 import type { VisualSettings } from './settings.svelte';
+import { COOLING_MOST, LIFT_MOST } from './fluid';
 
 /** A knob: its range, its neutral (where its module does nothing) and its default. A level is a share its cables let
  *  through under its setting; a swing moves about it; a step changes only while its module is at neutral (0056's
@@ -294,6 +295,13 @@ export function cratarrTypes(ranges: Record<string, [number, number]>, defaults:
   // Fit (step 7): how far the Flame frames itself, centred and sized to the view as its points fall (1, as it always
   // did; 0, where they fall). Not the dice's: a roll would lose the flame off the screen.
   add('flame', { ...knob('fit', 'Fit', [0, 1], 1, 'level', 0), randomize: false });
+  // Fire (0.9.18; the owner via the house session's fire-e, 2026-10-29: in the Fluid, not a module of its own): Lift,
+  // how hard the densest light rises by itself (heights a second, each second); Open walls, the floor and top from
+  // sealed to open; Cooling, how fast the light burns out as it climbs (fluid.ts Flow). At 0, the Fluid as it was. Not
+  // the dice's: a roll would open a box that was built sealed.
+  add('fluid', { ...knob('lift', 'Lift', [0, LIFT_MOST], 0, 'level', 0), randomize: false });
+  add('fluid', { ...knob('open', 'Open walls', [0, 1], 0, 'level', 0), randomize: false });
+  add('fluid', { ...knob('cooling', 'Cooling', [0, COOLING_MOST], 0, 'level', 0), randomize: false });
   const type = (id: string, label: string, place: Place): ModuleType => ({ type: id, label, place, knobs: byModule.get(id) ?? [] });
   return [
     type('frame', 'Whole frame', 'frame'),
