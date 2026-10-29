@@ -33,7 +33,7 @@ const MOST_BEATS = 16;
  *  the bars a phrase. Choices of how, not values: Randomize leaves them. */
 export const CLOCK_TRIGGER_KNOBS: Knob[] = [
   ...(['beat', 'bar', 'phrase'] as const).map(
-    (id): Knob => ({ id: `${id}Ratio`, label: `${id[0].toUpperCase()}${id.slice(1)} ÷×`, min: 0, max: RATIOS.length - 1, neutral: UNIT_RATIO, default: UNIT_RATIO, kind: 'step', randomize: false }),
+    (id): Knob => ({ id: `${id}Ratio`, label: `${id[0].toUpperCase()}${id.slice(1)} ÷×`, min: 0, max: RATIOS.length - 1, neutral: UNIT_RATIO, default: UNIT_RATIO, kind: 'step', randomize: false, options: RATIOS.map((r) => (r < 1 ? `÷${Math.round(1 / r)}` : `×${r}`)) }),
   ),
   { id: 'phraseBars', label: 'Bars a phrase', min: 4, max: 8, neutral: 4, default: 4, kind: 'step', randomize: false },
 ];

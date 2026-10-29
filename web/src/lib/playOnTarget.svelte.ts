@@ -9,6 +9,7 @@
 // looked at again; playing, it stays. No sync play in a browser: it joins no group.
 import { lastSeq, logLines, note, sendSoonWith } from './deviceLog';
 import { describing } from './described.svelte';
+import { desktop } from './desktop';
 import { getPlayers } from './api';
 import { me } from './me.svelte';
 import { inApp } from './app.svelte';
@@ -28,8 +29,10 @@ const RETRY_MS = 5_000;
 
 export const target = $state({ connected: false, tapToPlay: false });
 
-/** This browser's name as a player: the one set, else its browser and system ("Chrome on Android"). */
+/** This browser's name as a player: the one set, else its browser and system ("Chrome on Android"); in the desktop app,
+ *  the computer's name. */
 export function defaultBrowserName(): string {
+  if (desktop?.name) return desktop.name;
   const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
   const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
   const os = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Windows/.test(ua) ? 'Windows' : /Mac OS X/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : '';
@@ -96,12 +99,15 @@ function setTabName(name: string) {
   tabName.value = t;
 }
 
-/** A name no other player has (a second Chrome on Android is "Chrome on Android 2"), kept from then on. */
+/** A name no other player has (a second Chrome on Android is "Chrome on Android 2"), kept from then on; in the desktop
+ *  app the computer's name as it is. */
 function nameToUse(): string {
   // A stored name grown by a page from before freeName counted from the root ("Safari on iOS 2 2 2 2 2 2 2", the owner's
   // iPhone, 2026-10-26): its numbers off, then the first free one again.
   if (/( \d+){2,}$/.test(prefs.browserName)) prefs.browserName = freeName(unnumbered(prefs.browserName), playOn.players);
-  if (!prefs.browserName) prefs.browserName = freeName(defaultBrowserName(), playOn.players);
+  // The desktop app is the computer's own player: a player of this account by its name is taken over, not numbered past
+  // (the owner, 2026-10-29: the app replaces the ThinkPad's browser player, its name kept for Home Assistant's rules).
+  if (!prefs.browserName) prefs.browserName = desktop?.name ? desktop.name : freeName(defaultBrowserName(), playOn.players);
   const t = tabName.value;
   return t && t.base === prefs.browserName ? t.name : prefs.browserName;
 }

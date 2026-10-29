@@ -42,6 +42,17 @@ class DeckTest {
     }
 
     @Test
+    fun a_brake_takes_longer_from_a_higher_speed_never_shorter_than_the_brake_set() {
+        assertEquals(2_000L, Plan.lengthMs(129.0, 1.0, 250L))
+        assertEquals(500L, Plan.lengthMs(33.0, 1.0, 250L))
+        // Slow: the Brake as set.
+        assertEquals(250L, Plan.lengthMs(8.0, 1.0, 250L))
+        assertEquals(400L, Plan.lengthMs(1.0, 0.0, 400L))
+        // Backwards, to still.
+        assertEquals(1_000L, Plan.lengthMs(64.0, 0.0, 250L))
+    }
+
+    @Test
     fun a_landing_past_a_tracks_real_end_is_the_next_tracks_start_or_the_queues_end() {
         // The tablet, 2026-10-28: Cratarr's map said 234.0 s, the file decodes to 233.586 s.
         assertEquals(Deck.Walk(2, 233_586L, true), Deck.settle(queue, 2, 234_000L))

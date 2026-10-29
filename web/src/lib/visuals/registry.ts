@@ -19,7 +19,7 @@ export const ENGINE_TYPES: ModuleType[] = ENGINES.map((e) => ({
   label: e.label,
   place: 'module',
   knobs: [
-    knob('effect', 'Effect', 1, ENGINE_EFFECTS[e.key].length, 1, 'step', 1),
+    { ...knob('effect', 'Effect', 1, ENGINE_EFFECTS[e.key].length, 1, 'step', 1), options: ENGINE_EFFECTS[e.key].map((x) => x.name[0].toUpperCase() + x.name.slice(1)) },
     knob('amount', 'Amount', 0, 1, 1, 'level', 0),
     knob('k1', 'Control 1', 0, 1, 0.5, 'swing', 0.5),
     knob('k2', 'Control 2', 0, 1, 0.5, 'swing', 0.5),

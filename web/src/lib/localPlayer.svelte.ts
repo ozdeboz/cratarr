@@ -21,12 +21,13 @@ import { inApp, onApp, toApp } from './app.svelte';
 import { albumCoverUrl, getTrackGain, playerCommand, radioNext, windMap, type TrackGain } from './api';
 import { prefs } from './prefs.svelte';
 import { aimPainted, holdNow, ramping, rampBegins, rampEnds, rewindNow, tapeDir, windAsked } from './ramping.svelte';
+import { easeInto, easing, readAt, shownAt, type Course, type Ease } from './deckCourse';
 import { asksSignIn, toSignIn } from './reach.svelte';
 import { consumed, rate, tapMs } from './windShape';
 import { BANDCAMP } from './bandcampPreview';
 import { DEVICE } from './deviceMusic.svelte';
 import { RATE_FLOOR, RATE_TOP } from './rates';
-import { FLIGHT_TOP, HOLD_TOP, holdWind, PIECE_MS, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
+import { brakeLengthMs, FLIGHT_TOP, HOLD_TOP, holdWind, PIECE_MS, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
 import { isPhone } from './device';
 
 export type LocalTrack = {
@@ -1053,8 +1054,12 @@ const handed = () => inApp || driven !== null;
  *  then that player's, as it reports it (`reported`). */
 export function drive(name: string | null) {
   driven = name;
-  // The next player's own, from its first report.
+  // The next player's own, from its first report, on its own clock.
   deck = null;
+  eased = null;
+  clockGaps = [];
+  landingCourse = null;
+  landingEase = null;
   local.sleep = null;
   reported = { positionMs: 0, at: performance.now() };
 }
@@ -1070,20 +1075,20 @@ export function emptyHere() {
 
 /** The last report: the position then (ms), and when it came; the position in between is counted on here. */
 let reported = { positionMs: 0, at: 0 };
-/** The app's deck as it last said (a5, 0.9.14-2): its place then (s), when, its speed (track s per s, signed) and how
- *  fast that changes (per s). The place each moment follows from them, not from the reports' 250 ms steps (the owner,
- *  2026-10-28: the waveform and the deck moved in strides through a wind); a report corrects it. Null: an app from
- *  before, counted on as it was. */
-let deck: { pos: number; at: number; v: number; a: number } | null = null;
+/** The app's deck as it last said (a5, 0.9.14-2): its place then (s), when it was read, its speed (track s per s,
+ *  signed) and how fast that changes (per s). The place each moment follows from them, not from the reports' 250 ms steps
+ *  (the owner, 2026-10-28: the waveform and the deck moved in strides through a wind); a report's correction fades in
+ *  (lib/deckCourse; the owner, 2026-10-29: still strides). Null: an app from before, counted on as it was. */
+let deck: Course | null = null;
+/** A report's correction still fading in, and the two clocks' differences the deck's read time is taken from (one
+ *  player's: begun anew with each). */
+let eased: Ease | null = null;
+let clockGaps: number[] = [];
 /** Whether the app's deck goes backwards now (lib/SeekWave: a track change's colours from the right). */
 export const deckNow = $state({ back: false });
-/** The deck's place now: its last report carried on by its speed and acceleration, never past a stand (its speed
- *  coming to 0), within the track. */
-function deckPlace(d: NonNullable<typeof deck>, now = performance.now()): number {
-  let t = Math.max(0, (now - d.at) / 1000);
-  // Slowing to a stand: it stands there, not going back the other way.
-  if (d.a !== 0 && d.v !== 0 && Math.sign(d.a) !== Math.sign(d.v)) t = Math.min(t, -d.v / d.a);
-  const p = d.pos + d.v * t + 0.5 * d.a * t * t;
+/** The deck's place now, as shown: its course (never past a stand), a correction fading in, within the track. */
+function deckPlace(d: Course, now = performance.now()): number {
+  const p = shownAt(d, eased, now);
   return Math.max(0, local.duration ? Math.min(p, local.duration) : p);
 }
 /** The app's deck's speed now (× the track's, signed), from its last report; null: not said (here, or an older app). */
@@ -1094,14 +1099,18 @@ export function deckSpeed(now = performance.now()): number | null {
   return d.v !== 0 && Math.sign(v) !== Math.sign(d.v) ? 0 : v;
 }
 let deckFrame = 0;
-/** The deck moving other than playing on at its own speed: its place each frame (at 1× the counting on is enough). */
+/** The deck moving other than playing on at its own speed, or a correction fading in: its place each frame (at 1× the
+ *  counting on is enough). */
 function deckMoves() {
   if (deckFrame) return;
   const step = () => {
     deckFrame = 0;
     const d = deck;
-    if (!d || !handed() || (d.v === 1 && d.a === 0) || (d.v === 0 && d.a === 0)) return;
+    const steady = !!d && ((d.v === 1 && d.a === 0) || (d.v === 0 && d.a === 0)) && !easing(eased, performance.now());
+    if (!d || !handed() || steady) return;
     local.position = deckPlace(d);
+    // The app's look-ahead goes with it, frame by frame.
+    if (appHolding && landingCourse) holdNow.landing = landingPlace();
     deckFrame = requestAnimationFrame(step);
   };
   deckFrame = requestAnimationFrame(step);
@@ -1135,6 +1144,8 @@ function gliding() {
   };
   glideFrame = requestAnimationFrame(step);
 }
+/** A queue's track as itself (its entry too), or null. */
+const trackKey = (t: LocalTrack | undefined) => (t ? `${t.source}/${t.id}/${t.entry ?? ''}` : null);
 const sameQueue = (a: LocalTrack[], b: LocalTrack[]) =>
   a.length === b.length && a.every((t, i) => t.source === b[i].source && t.id === b[i].id && t.entry === b[i].entry);
 
@@ -1159,8 +1170,11 @@ export function reportedBy(m: {
   starting?: unknown;
   speedX?: unknown;
   accelX?: unknown;
+  /** When the deck was read: ms of the app's elapsedRealtime (a5/purity 3032a237); an app from before says nothing. */
+  deckAtMs?: unknown;
   landing?: unknown;
 }) {
+  const trackBefore = trackKey(local.queue[local.index]);
   if (m.repeat === 'off' || m.repeat === 'one' || m.repeat === 'all') local.repeat = m.repeat;
   // Left out: not said (a report of the queue alone); null: none.
   if (m.sleep !== undefined) local.sleep = sleepOf(m.sleep);
@@ -1189,17 +1203,22 @@ export function reportedBy(m: {
   const now = performance.now();
   const pos = (Number(m.positionMs) || 0) / 1000;
   if (typeof m.speedX === 'number' && Number.isFinite(m.speedX)) {
-    deck = { pos, at: now, v: m.speedX, a: typeof m.accelX === 'number' && Number.isFinite(m.accelX) ? m.accelX : 0 };
+    // The place shown until now: the new course's correction fades in from it, on the same track (lib/deckCourse).
+    const before = deck ? deckPlace(deck, now) : null;
+    deck = { pos, at: readAt(clockGaps, m.deckAtMs, now), v: m.speedX, a: typeof m.accelX === 'number' && Number.isFinite(m.accelX) ? m.accelX : 0 };
+    eased = easeInto(before, deck, now, trackKey(local.queue[local.index]) === trackBefore);
     deckNow.back = deck.v < 0;
     tape.glide = null;
     local.position = deckPlace(deck, now);
     deckMoves();
   } else if (m.rewinding === true) {
     deck = null;
+    eased = null;
     tape.glide = { from: local.position, to: pos, at: now, span: Math.min(1000, Math.max(100, now - reported.at)) };
     gliding();
   } else {
     deck = null;
+    eased = null;
     tape.glide = null;
     local.position = pos;
   }
@@ -1221,6 +1240,12 @@ export function reportedBy(m: {
 /** The app's hold (a5, 0.9.14-4): where it lands, held or let go (null once there): the look-ahead, the hold's zoom
  *  and the aim's check, as for this page's own. Held while it winds faster than it plays; let go once it brakes. */
 let appHolding = false;
+/** The app's look-ahead between its reports: where it lands moves as its deck does, so it is carried along with the
+ *  deck, each report's correction faded in (lib/deckCourse; the owner, 2026-10-29: it trembled against the playhead
+ *  counted on smoothly, standing still between reports and then jumping). */
+let landingCourse: Course | null = null;
+let landingEase: Ease | null = null;
+const landingPlace = (now = performance.now()) => (landingCourse ? Math.max(0, shownAt(landingCourse, landingEase, now)) : null);
 function appLanding(l: unknown) {
   const at = l && typeof l === 'object' ? (l as Record<string, unknown>) : null;
   const ok = at && typeof at.index === 'number' && typeof at.positionMs === 'number';
@@ -1237,16 +1262,26 @@ function appLanding(l: unknown) {
       off_ms: aimPainted.pos === null || aimPainted.track !== (t ? `${t.source}/${t.id}` : null) ? null : Math.round((positionNow() - aimPainted.pos) * 1000),
     });
     Object.assign(holdNow, { on: false, held: false, landing: null, landingIndex: null, speed: 0 });
+    landingCourse = null;
+    landingEase = null;
     return;
   }
   const index = at.index as number;
   const pos = (at.positionMs as number) / 1000;
   const v = deck?.v ?? 0;
+  // Read with the deck, in the same report: from when the deck was read, at its speed.
+  const now = performance.now();
+  const before = landingCourse && holdNow.landingIndex === index ? landingPlace(now) : null;
+  landingCourse = { pos, at: deck?.at ?? now, v, a: deck?.a ?? 0 };
+  landingEase = easeInto(before, landingCourse, now, true);
   appHolding = true;
   holdNow.on = true;
-  holdNow.landing = pos;
+  holdNow.landing = landingPlace(now);
   holdNow.landingIndex = index;
   holdNow.speed = Math.abs(v);
+  // The app's top speed, for the zoom's "at its top" (lib/SeekWave): its holds fly to FLIGHT_TOP (a5), not this page's
+  // HOLD_TOP (the owner, 2026-10-29: the zoom went back to the whole as the app passed 16×); its own word where it says.
+  holdNow.top = typeof at.topX === 'number' && at.topX > 1 ? at.topX : FLIGHT_TOP;
   holdNow.dir = index > local.index || (index === local.index && pos > local.position) ? 1 : -1;
   // Held: still getting faster (or at its top); let go, it brakes.
   holdNow.held = (deck?.a ?? 0) >= 0 && Math.abs(v) > 1;
@@ -2610,6 +2645,9 @@ type Winding = {
   brake: number | null;
   /** Its speed as the brake began. */
   brakeFrom: number;
+  /** Its plain brake's length (ms): a held one's from its speed (startStop's brakeLengthMs), else the Brake as set
+   *  (null); a let-go's is its plan's. */
+  brakeMs: number | null;
   /** A held one's stream ran out: at the track's edge. */
   edge: boolean;
   /** Its sound's fade (0..1): in as it starts, out as it ends (no plop). */
@@ -2755,7 +2793,7 @@ function windRate(w: Winding, now: number): number {
   // Let go: the curve's speed, played at its stream's own (the hold's: its flight speed; the backwards player's: 1×).
   // Let go: the plan's speed where it stands (the backwards player's stream is the track at 1×; a hold's, its own speed).
   else if (w.letGo) r = planSpeed(w.letGo, now, windPlace(w, now)) / (w.reverse ? 1 : vAt(w, w.clip.currentTime));
-  else if (w.brake !== null) r = floor + ((w.brakeFrom - floor) * (1 + Math.cos(Math.PI * Math.min(1, (now - w.brake) / w.wind.releaseMs)))) / 2;
+  else if (w.brake !== null) r = floor + ((w.brakeFrom - floor) * (1 + Math.cos(Math.PI * Math.min(1, (now - w.brake) / brakeLength(w))))) / 2;
   else r = t >= w.wind.attackMs ? 1 : floor + ((1 - floor) * (1 - Math.cos((Math.PI * t) / w.wind.attackMs))) / 2;
   // Held back by the finger (a hold, not yet let go): geometrically, at most down to the hold's starting speed (the owner,
   // 2026-10-28: its own 1× within reach would undo the winding).
@@ -2862,19 +2900,24 @@ function whenThere(index: number, secs: number, go: () => void) {
 function landingOf(w: Winding, now = performance.now()): { index: number; pos: number } {
   if (w.at === null || w.edge || w.brake === null) return windNow(w);
   if (w.to !== null) return { index: w.seg.index, pos: w.to };
-  const end = w.brake + w.wind.releaseMs;
+  const end = w.brake + brakeLength(w);
   let s = w.clip.currentTime;
   for (let t = now; t < end; t += 10) s += (windRate(w, t) * Math.min(10, end - t)) / 1000;
   return placeAt(w, s);
 }
-/** Brakes a held wind from now (let go, play pressed, settled, the knob back), its landing prepared at once. */
+/** Brakes a held wind from now (let go, play pressed, settled, the knob back), its landing prepared at once. A hold's
+ *  brake as long as its speed asks (constant deceleration, to 1× flown forwards, else to a stand); a tap's, a seek's,
+ *  the edge's and the 1× reverse's the Brake as set. */
 function brakeWind(w: Winding) {
   if (w.brake !== null || w.at === null) return;
   const now = performance.now();
   w.brakeFrom = w.edge ? RATE_LOW : windRate(w, now);
+  w.brakeMs = w.to === null && !w.edge && !w.reverse ? brakeLengthMs(vAt(w, w.clip.currentTime) * w.clip.playbackRate, w.fly ? 1 : 0, w.wind.releaseMs) : null;
   w.brake = now;
   prepare(landingOf(w, now));
 }
+/** How long a wind's brake runs (ms): a let-go's plan's, else its own (brakeWind's), else the Brake as set. */
+const brakeLength = (w: Winding) => w.letGo?.ms ?? w.brakeMs ?? w.wind.releaseMs;
 /** Plays on at `secs` into queue track `index`, winding up as play does (at once from a track's start). */
 function playOnAt(index: number, secs: number) {
   whenThere(index, secs, () => rampIn());
@@ -3027,7 +3070,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
   if (fly) clip.playbackRate = use?.floor ?? 1 / v0;
   // Handed a hold's brake: at the hold's speed from its first moment.
   if (startAt !== null) clip.playbackRate = Math.min(RATE_TOP, startAt);
-  const w: Winding = { clip, seg, from, to, dir, D, wind, fade: 0, map: null, mapSpeed: use?.floor ? 1 / use.floor : null, v0, accel, accelS: hold.doublingS, top: hold.top, fly, handing: false, handArmed: null, letGo: null, startAt, drag: 0, reverse, after: 'play', at: null, brake: null, brakeFrom: 1, edge: false, through, shown: seg.index, timer: undefined };
+  const w: Winding = { clip, seg, from, to, dir, D, wind, fade: 0, map: null, mapSpeed: use?.floor ? 1 / use.floor : null, v0, accel, accelS: hold.doublingS, top: hold.top, fly, handing: false, handArmed: null, letGo: null, startAt, drag: 0, reverse, after: 'play', at: null, brake: null, brakeFrom: 1, brakeMs: null, edge: false, through, shown: seg.index, timer: undefined };
   const mine = () => tape.rewinding === w;
   // Every step timed from the press, in the playback log (the owner, 2026-10-27: find any delay at the deepest level).
   const t0 = performance.now();
@@ -3281,7 +3324,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
         }
         // A held one braked to its end: on from where it got to (a flown one moving, where it plays on).
         // Let go, the plan's end is its aim: there it stands (backwards) or plays on.
-        else if (w.brake !== null && (w.edge || now - w.brake >= w.wind.releaseMs)) {
+        else if (w.brake !== null && (w.edge || now - w.brake >= brakeLength(w))) {
           if (w.fly && !w.edge && w.after === 'play') land(place);
           else arrive(place);
         }
@@ -3603,10 +3646,12 @@ export function windRelease(dir: 'back' | 'forward') {
 /** Where a hold let go now would land, the way letGo lets it go: the tape on to the stream readied ahead of it, then
  *  the brake on the other head (forwards to the track's own speed, backwards to a stand), s into the track. */
 function letGoLanding(w: Winding, place: { index: number; pos: number }): { index: number; pos: number } {
-  // Braked at once either way: the plan's way, from the speed it flies at (forwards to 1×, back to a stand).
+  // Braked at once either way: the plan's way, from the speed it flies at (forwards to 1×, back to a stand), as long as
+  // that speed asks (constant deceleration).
   const v = vAt(w, w.clip.currentTime) * w.clip.playbackRate;
-  const ms = w.wind.releaseMs;
-  return onThrough(w, place, brakeTravel(v, ms, ms / 1000, w.dir > 0 ? 1 : 0));
+  const to = w.dir > 0 ? 1 : 0;
+  const ms = brakeLengthMs(v, to, w.wind.releaseMs);
+  return onThrough(w, place, brakeTravel(v, ms, ms / 1000, to));
 }
 /** `d` s on from `place` the way a held wind goes: past its track's edge on through the queue places it winds through
  *  (the owner, 2026-10-28: a brake past the track's end landed in the next one, the look-ahead stuck at the end). */
@@ -3676,8 +3721,9 @@ function letGo(w: Winding) {
   const now = performance.now();
   const here = windPlace(w, now);
   const speed = vAt(w, w.clip.currentTime) * w.clip.playbackRate;
-  const T = w.wind.releaseMs;
   const to = w.dir > 0 ? 1 : 0;
+  // As long as its speed asks: constant deceleration, the Brake as set its shortest (the owner, 2026-10-29).
+  const T = brakeLengthMs(speed, to, w.wind.releaseMs);
   const landing = letGoLanding(w, here);
   aim(landing);
   playback('info', 'let go', { index: here.index, at: Math.round(here.pos * 1000), speed: Math.round(speed * 100) / 100, landing_index: landing.index, landing: Math.round(landing.pos * 1000) });

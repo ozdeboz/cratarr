@@ -156,7 +156,7 @@ test("Dice: rolls as its trigger rises, seeded by its seed input (Music's: the t
     const at = 20 + k / 30;
     const key = k < 40 ? 'subsonic/tr-10329' : 'subsonic/tr-8934';
     const m = { ...musicOf(t.signals, t.beats, at, true, { state: music, at: at * 1000, lighting: DEFAULTS.lighting }), key };
-    const f = stepEngine(st, p, {}, m, () => 0, DEFAULTS, 1 / 30, { still: false, now: at * 1000, fluidFull: FLUID_FULL });
+    const f = stepEngine(st, p, {}, m, () => 0, 1 / 30, { still: false, now: at * 1000, fluidFull: FLUID_FULL });
     for (const r of f.dice) rolls.push({ k, seed: r.seed, scope: r.scope, done: f.outputs['look.done'] });
   }
   assert.deepEqual(rolls, [

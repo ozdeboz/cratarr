@@ -10,60 +10,34 @@
 import { coverUrl } from '../api';
 import { playing } from '../remote.svelte';
 import { wavesMotion, zoomsMotion } from './aspects';
-import { beatsOf } from './beats';
 import { chainNow } from './chain-params';
 import { settingsReport } from './effects';
-import { fluidGains } from './engine/fluid-gains';
 import { newEngine, stepEngine, type EngineFrame } from './engine/graph';
 import { LivePatch } from './engine/live-patch';
-import { randomize, randomizeCables, randomizeMacros, scopeNamed, type Randomized, type Scope } from './engine/randomize';
-import { settingsOfPatch } from './engine/settings-view';
-import { FREE, holding, leversOf, STANDING, type Levers } from './engine/sidechain';
-import { between, coloured, evolved, flameOf, measuring, partsAt, PRESET_KEYS, seedOf, type ColourMode, type Flame, type Preset } from './flame';
+import { rollOf, type Roll, type Rolled } from './engine/dice';
+import type { Randomized } from './engine/randomize';
+import { effectSlotsOf } from './engine/settings-view';
+import { FREE, holding, leversOf, type Levers } from './engine/sidechain';
+import { seedOf } from './flame';
 import type { FrameStats, MeterValues } from './meters';
 import { musicNow, stopMusic } from './music.svelte';
 import { newNormalState, signalsFor } from './normal';
 import { coverImage, coverPalette, type PaletteColour } from './palette';
 import type { ModuleType, SignalRef } from './patch';
-import { isDevice, RANDOMIZE_SCOPES, type PatchV2 } from './ports';
-import { precheckingPatch, type Checked } from './precheck';
+import type { PatchV2 } from './ports';
 import { ceilingOf } from './quality';
 import { FlameRenderer, type PictureInputs } from './render';
-import { A, B, T } from './routes';
-import { FLUID_FULL, type VisualSettings } from './settings.svelte';
-import { signalsOf } from './signals';
-import { newStirring, stir } from './stirring';
+import { A, T } from './routes';
+import { BANDS, FLUID_FULL, type VisualSettings } from './settings.svelte';
+import type { EffectSettings } from './effects';
+import { applyKnobs, applyMacros, asSet } from './v2';
 
 /** A new track's look blends in over this long; one the dice made, quicker (Visuals.svelte's). */
 const BLEND_MS = 6000;
 const ANOTHER_MS = 1500;
 /** The fewest points the device's own pace steps down to. */
 const MIN_POINTS = 1 << 14;
-/** How many seeds the dice try against the track before taking the least over its limits. */
-const TRIES = 8;
-const SHAPING = PRESET_KEYS.filter((k) => k !== 'spread' && k !== 'purity');
-const BY_DEGREES = new Set<string>(['detail', 'twist', 'warp', 'hue', 'lightness', 'vividness']);
-const modeOf = (family: number): ColourMode => (family >= 5 ? 'fire' : family >= 4 ? 'cover' : 'rainbow');
 
-/** A module of a patch by its flattened id (`show/curve`: the Show device's Curve), devices opened. */
-function moduleAt(p: PatchV2, id: string) {
-  const path = id.split('/');
-  let modules = p.modules;
-  for (const step of path.slice(0, -1)) {
-    const d = modules.find((m) => m.id === step);
-    if (!d || !isDevice(d)) return undefined;
-    modules = d.patch.modules;
-  }
-  return modules.find((m) => m.id === path[path.length - 1]);
-}
-
-/** New knob values into a patch, by flattened module id. */
-function applyKnobs(p: PatchV2, values: Randomized) {
-  for (const [id, knobs] of Object.entries(values)) {
-    const m = moduleAt(p, id);
-    if (m) Object.assign(m.knobs, knobs);
-  }
-}
 
 
 
@@ -85,8 +59,7 @@ function keepPace(p: Pace) {
   }
 }
 
-/** What a roll reaches: a scope of RANDOMIZE_SCOPES, or modules by id (a module's own Randomize). */
-export type Roll = (typeof RANDOMIZE_SCOPES)[number] | { module: string[] };
+export type { Roll } from './engine/dice';
 
 /** What the loop is given. */
 export type LoopHost = {
@@ -121,13 +94,13 @@ export class VisualsLoop {
 
   /** A roll of the dice (the panel's): over `scope` (everything, a category, the cables; or these modules: a module's
    *  own Randomize), a fresh seed, checked against the track, an edit (one undo step). */
-  roll(scope: Roll = 'everything') {
+  roll(scope: Roll = 'macros') {
     this.#rollWanted = { scope, seed: null, edit: 'dice' };
   }
 
   /** The playing track's own look again (its seed, everything not pinned), as a new track rolls it; an edit. */
   resetToSeed() {
-    this.#rollWanted = { scope: 'everything', seed: -1, edit: 'reset' };
+    this.#rollWanted = { scope: 'macros', seed: -1, edit: 'reset' };
   }
 
   /** The middle of the picture at 16:9, 160 x 90, as a JPEG (a snapshot's thumbnail), from the next frame drawn. */
@@ -167,35 +140,30 @@ export class VisualsLoop {
     const live = new LivePatch();
     let rebuildsSeen = -1;
     let storeSeen: PatchV2 | null = null;
-    let how = host.device();
+    // What the old side of the light loop and the meters still read of the patch (the effects' slots, the Fluid's
+    // Lattice, the Clock's Speed) and Music's Hold, each from its module's knobs as set: worked out as the patch changes.
+    let slots: EffectSettings & { lattice: number } = { ...effectSlotsOf(host.store.patch), lattice: 0 };
+    let speed = 1;
+    let lighting: number[] = [];
     const engine = newEngine();
     const normal = newNormalState();
-    const stirring = newStirring();
     let meterValues: MeterValues | undefined;
     let meteredAt = 0;
 
-    // The flame: blended from (`from`) to the look's (`to`); `shown` the last drawn. The look as the Flame's knobs
-    // make it, made anew when they change; a change blends in as `nextBlend` asks (a new track's look, the dice), else
-    // over a second and a half, one dragged by degrees at once.
-    let from: Flame | null = null;
-    let to: Flame | null = null;
-    let shown: Flame | null = null;
-    let blendStart = 0;
-    let blendMs = BLEND_MS;
+    // The Flame's look, framing and place on the screen are its node's (engine/flame-node.ts); the loop gives it what
+    // only the page has: the cover's colours (fetched here once its Colours want them) and how long this frame's change
+    // glides, as its cause asks (a new track's look, the dice, a step moved on: `nextBlend`).
     let nextBlend: number | null = null;
     let lookCame: FrameStats['look'] = null;
-    let base: Flame | null = null;
-    let made: Record<string, number> | null = null;
-    let madeColours = '';
     let cover: { key: string; colours: PaletteColour[] | null } | null = null;
+    let wantsCover = false;
     let coverPicture: { key: string; image: HTMLImageElement | null } | null = null;
-    let fire = 0;
     let key: string | null | undefined;
     let looked = false;
 
     // Values moving in after a roll or a new track's look (the one morph, 0057): each knob from where it was to where
     // the roll put it, over the blend; a step at once, and the Flame's look as a flame blends (`from` → `to`).
-    let easing: { from: Randomized; to: Randomized; start: number; ms: number } | null = null;
+    let easing: { from: Randomized; to: Randomized; macrosFrom: Record<string, number>; macrosTo: Record<string, number>; start: number; ms: number } | null = null;
     const ease = (flat: PatchV2, now: number) => {
       if (!easing) return;
       const k = Math.min(1, (now - easing.start) / easing.ms);
@@ -207,6 +175,11 @@ export class VisualsLoop {
           const was = easing.from[id]?.[knob];
           if (typeof was === 'number' && typeof v === 'number') m.knobs[knob] = was + (v - was) * s;
         }
+      }
+      for (const [id, v] of Object.entries(easing.macrosTo)) {
+        const x = flat.macros.find((y) => y.id === id);
+        const was = easing.macrosFrom[id];
+        if (x && typeof was === 'number') x.value = was + (v - was) * s;
       }
       if (k >= 1) easing = null;
     };
@@ -225,64 +198,41 @@ export class VisualsLoop {
         fromValues[id] = Object.fromEntries(eased.map((k) => [k, m.knobs[k]]));
         toValues[id] = Object.fromEntries(eased.map((k) => [k, knobs[k]]));
       }
+      // A macro's value glides in the one morph (0077), unless it maps a step (Form, Symmetry, a Lens, Colours: a choice
+      // changes at once, the Flame's own glide carrying its look over).
+      const mapsStep = (x: { targets: { module: string; knob: string }[] }, depth = 0): boolean =>
+        x.targets.some((t) => {
+          const inner = t.knob === 'value' ? flat.macros.find((y) => y.id === t.module) : undefined;
+          if (inner) return depth < 4 && mapsStep(inner, depth + 1);
+          const type = flat.modules.find((m) => m.id === t.module)?.type ?? '';
+          return host.types[type]?.knobs.find((k) => k.id === t.knob.replace(/\.\d+$/, ''))?.kind === 'step';
+        });
+      const macrosFrom: Record<string, number> = {};
+      const macrosTo: Record<string, number> = {};
+      for (const [id, v] of Object.entries(macros)) {
+        const x = flat.macros.find((y) => y.id === id);
+        if (!x || mapsStep(x)) continue;
+        macrosFrom[id] = x.value;
+        macrosTo[id] = v;
+      }
       const f = (p: PatchV2) => {
         applyKnobs(p, values);
         for (const c of p.cables) if (c.id in cables) c.value = cables[c.id];
-        for (const x of p.macros) if (x.id in macros) x.value = macros[x.id];
+        applyMacros(p, macros);
       };
       // A roll (the dice's, a reset) is one undo step of its own: never merged with the one before, however soon after.
       if (edit) host.store.change(f, null);
       else host.store.perform(f);
-      if (ms > 0) easing = { from: fromValues, to: toValues, start: now, ms };
+      if (ms > 0) easing = { from: fromValues, to: toValues, macrosFrom, macrosTo, start: now, ms };
     };
 
-    // A roll being worked out, over frames (the flame's survey yields): a new track's (the patch's Dice: a performance)
-    // or the dice's (tried against the track, an edit).
-    let rolling: Generator<void, { values: Randomized; cables: Record<string, PatchV2['cables'][number]['value']>; macros?: Record<string, number> }> | null = null;
+    // A roll being worked out, over frames (the Flame's survey yields; engine/dice.ts): a new track's (the patch's Dice:
+    // a performance) or the dice's (an edit).
+    let rolling: Generator<void, Rolled> | null = null;
     let rollingAs: { edit: string | null; ms: number } = { edit: null, ms: BLEND_MS };
-    const rollOf = function* (seed: number, roll: Roll, check: { key: string; position: number } | null, reach = 1) {
-      const patch = host.store.patch;
-      const scope = typeof roll === 'string' ? roll : null;
-      const ids = typeof roll === 'string' ? null : new Set(roll.module);
-      // The scopes pinned (`scope:<name>`, the dice's column): kept by every roll, whatever its scope.
-      const held = patch.pins.filter((x) => x.startsWith('scope:')).map((x) => x.slice('scope:'.length));
-      const heldScopes = held.map((x) => scopeNamed(x, host.types)).filter((x): x is Scope => !!x);
-      const asked: Scope | null = scope ? scopeNamed(scope, host.types) : (m) => ids!.has(m.id);
-      const knobsScope: Scope | null = asked && heldScopes.length ? (m, k) => asked(m, k) && !heldScopes.some((h) => h(m, k)) : asked;
-      const withCables = (scope === 'everything' || scope === 'cables' || scope === 'response') && !held.includes('cables') && !held.includes('response');
-      const values: Randomized = knobsScope ? yield* randomize(patch, host.types, { seed, scope: knobsScope, reach }) : {};
-      const cables = withCables ? randomizeCables(patch, host.types, { seed, reach }) : {};
-      // Macros: the rack's own ranges, so no check against the track.
-      if (scope === 'macros') return { values, cables, macros: held.includes('macros') ? {} : randomizeMacros(patch, { seed, reach }) };
-      if (!check) return { values, cables };
-      // The dice: this seed and the next ones, each checked against the track (its sidechains taken out), the first
-      // within the limits taken, else the least over them.
-      const [source, id] = [check.key.slice(0, check.key.indexOf('/')), check.key.slice(check.key.indexOf('/') + 1)];
-      const signals = signalsOf(source, id);
-      if (!signals) return { values, cables };
-      const wild = host.store.patch.macros.find((x) => x.id === 'wild')?.value ?? 0.5;
-      const limits = Object.fromEntries(Object.entries(STANDING).map(([k, v]) => [k, v * 2 ** (2 * (wild - 0.5))]));
-      let best: { values: Randomized; cables: typeof cables; by: number } | null = null;
-      for (let t = 0; t < TRIES; t++) {
-        const tryValues: Randomized = t === 0 ? values : knobsScope ? yield* randomize(patch, host.types, { seed: seed + t, scope: knobsScope, reach }) : {};
-        const tryCables = t === 0 ? cables : withCables ? randomizeCables(patch, host.types, { seed: seed + t, reach }) : {};
-        const candidate = structuredClone(patch);
-        applyKnobs(candidate, tryValues);
-        for (const c of candidate.cables) if (c.id in tryCables) c.value = tryCables[c.id];
-        const checked: Checked = yield* precheckingPatch(candidate, how, signals, beatsOf(source, id) ?? null, check.position, limits);
-        if (checked.ok) return { values: tryValues, cables: tryCables };
-        const by = checked.over.reduce((sum, m) => sum + ((checked.worst as Record<string, number>)[m] ?? 0) / ((limits as Record<string, number>)[m] ?? 1), 0);
-        if (!best || by < best.by) best = { values: tryValues, cables: tryCables, by };
-      }
-      return best ?? { values, cables };
-    };
+    const rollFor = (seed: number, roll: Roll, reach = 1) => rollOf(host.store.patch, host.types, seed, roll, reach);
 
-    // The fluid's pushes: where the Flame's parts are on the screen, measured four times a second while it flows.
-    let partsWhere: ([number, number] | null)[] = [];
-    // Where the Flame is (its outputs), as last measured.
-    let flameFrame: { x: number; y: number; size: number; coverage: number } | null = null;
-    let partsMeasured = 0;
-    let passes = Math.min(ceilingOf(how.quality, devicePixels()).steps, pace?.passes ?? Infinity);
+    let passes = Math.min(ceilingOf(host.device().quality, devicePixels()).steps, pace?.passes ?? Infinity);
     let last = performance.now();
     let drawnAt = 0;
     let refresh = 1000 / 60;
@@ -299,9 +249,6 @@ export class VisualsLoop {
     let settlingFrames = 0;
     let steppedUp = 0;
     let steppedDown = 0;
-    let frame: { center: [number, number]; size: number; coverage: number } | null = null;
-    let measured = 0;
-    let measure: ReturnType<typeof measuring> | null = null;
     let counted = { since: performance.now(), frames: 0 };
     let fps = 0;
     let reported = 0;
@@ -338,18 +285,18 @@ export class VisualsLoop {
       // The patch: as the engine runs it, its values eased where a roll moves them; as settings for the picture's side.
       const patch = host.store.patch;
       const flat = live.update(patch);
-      const flatTypes = new Map(flat.modules.map((x) => [x.id, x.type]));
       const flameId = flat.modules.find((x) => x.type === 'flame')?.id;
-      // The Flame's parts as seeds where its Points are cabled into Streamlines (measured then as for the Fluid's pushes).
-      const flameSeeding = !!flameId && flat.cables.some((c) => c.from.module === flameId && c.from.port === 'points' && (flatTypes.get(c.to.module) === 'streamlines' || (flatTypes.get(c.to.module) === 'grid' && c.to.port === 'at')));
-      const flameSeeds = () => {
-        const aspect = renderer ? renderer.width / Math.max(1, renderer.height) : 16 / 9;
-        return partsWhere.filter((q): q is [number, number] => !!q).map(([px, py]) => (aspect > 1 ? { x: (2 * px - 1) * aspect, y: 2 * py - 1 } : { x: 2 * px - 1, y: (2 * py - 1) / aspect }));
-      };
       ease(flat, now);
       if (patch !== storeSeen || easing) {
         storeSeen = patch;
-        how = { ...settingsOfPatch(flat, device), quality: device.quality, fps: device.fps, brightness: device.brightness };
+        const ofType = (type: string) => flat.modules.find((x) => x.type === type);
+        const fluid = ofType('fluid');
+        const clock = ofType('clock');
+        const music = ofType('music');
+        const kind = (type: string, knob: string) => host.types[type]?.knobs.find((k) => k.id === knob);
+        slots = { ...effectSlotsOf(flat), lattice: asSet(flat, fluid, 'lattice', host.types) ?? 0 };
+        speed = asSet(flat, clock, 'speed', host.types) ?? kind('clock', 'speed')?.default ?? 1;
+        lighting = Array.from({ length: BANDS }, (_, b) => asSet(flat, music, `hold.${b}`, host.types) ?? kind('music', 'hold')?.default ?? 0.15);
       }
       if (live.rebuilds !== rebuildsSeen) {
         rebuildsSeen = live.rebuilds;
@@ -363,7 +310,7 @@ export class VisualsLoop {
         }
       }
 
-      const m = musicNow(now, how.lighting, flat.modules.some((x) => x.type === 'waves'));
+      const m = musicNow(now, lighting, flat.modules.some((x) => x.type === 'waves'));
       key = m.key;
       // The dice the owner tapped: a roll over its scope, checked against the track, as an edit.
       if (this.#rollWanted && !rolling) {
@@ -372,7 +319,7 @@ export class VisualsLoop {
         // Reset to seed: the track's own, unchecked (a new track's look is not checked either); the dice: a fresh one.
         const reset = want.seed === -1;
         const seed = reset ? seedOf(m.key ?? 'cratarr') : Math.floor(Math.random() * 0x100000000);
-        rolling = rollOf(seed, want.scope, reset || !m.key ? null : { key: m.key, position: m.position });
+        rolling = rollFor(seed, want.scope);
         rollingAs = { edit: want.edit, ms: reset ? BLEND_MS : ANOTHER_MS };
         lookCame = reset ? 'track' : 'dice';
       }
@@ -387,10 +334,9 @@ export class VisualsLoop {
         }
       }
 
-      // The colours: the cover's asked for as a track starts, where they are wanted.
-      const mode = modeOf(how.family);
+      // The cover's colours, asked for as a track starts, where the Flame's Colours want them (Cover).
       const playingNow = playing();
-      if (mode === 'cover' && playingNow && m.key && cover?.key !== m.key) {
+      if (wantsCover && playingNow && m.key && cover?.key !== m.key) {
         const want = m.key;
         cover = { key: want, colours: null };
         coverPalette(coverUrl(playingNow)).then(
@@ -400,7 +346,6 @@ export class VisualsLoop {
           () => {},
         );
       }
-      const covered = mode === 'cover' && cover?.key === m.key ? cover.colours : null;
       // The cover as a picture, where the Music's reaches the Screen or is observed.
       if (renderer.wantsCover && playingNow && m.key && coverPicture?.key !== m.key) {
         const want = m.key;
@@ -412,24 +357,7 @@ export class VisualsLoop {
           () => {},
         );
       }
-      fire += ((mode === 'fire' ? 1 : 0) - fire) * Math.min(1, dt / 1.5);
-      const lookOf = (k: string) => (how as unknown as Record<string, number>)[k];
-      const colours = `${mode}/${covered ? m.key : ''}`;
-      const changed = !made ? SHAPING : SHAPING.filter((k) => made![k] !== lookOf(k));
-      if (changed.length || colours !== madeColours) {
-        if (changed.length) base = flameOf(Object.fromEntries(PRESET_KEYS.map((k) => [k, lookOf(k)])) as Preset, false);
-        const coverCame = !changed.length && madeColours.startsWith('cover/') && colours.startsWith('cover/') && from;
-        const blend = nextBlend ?? (changed.every((k) => BY_DEGREES.has(k)) && colours === madeColours ? 0 : coverCame ? null : ANOTHER_MS);
-        if (blend && shown) {
-          from = shown;
-          blendStart = now;
-          blendMs = blend;
-        }
-        made = Object.fromEntries(SHAPING.map((k) => [k, lookOf(k)]));
-        madeColours = colours;
-        to = coloured(base!, mode, covered);
-        if (!from) shown = to;
-      }
+      const glide = nextBlend;
       nextBlend = null;
 
       // The engine over the patch, its sidechains keyed by the meters; the Flame's parts its points.
@@ -460,7 +388,16 @@ export class VisualsLoop {
         renderer!.resize(bw, bh);
         return [w, h, resized, top];
       };
-      const stepped = stepEngine(engine, flat, host.types, m, read, how, dt, { now, fluidFull: FLUID_FULL, meters: meterValues, flamePoints: partsWhere, flameFrame, aspect: renderer ? renderer.width / Math.max(1, renderer.height) : undefined, fluidFlow: renderer?.fluidFlow() });
+      const stepped = stepEngine(engine, flat, host.types, m, read, dt, {
+        now,
+        fluidFull: FLUID_FULL,
+        meters: meterValues,
+        aspect: renderer ? renderer.width / Math.max(1, renderer.height) : undefined,
+        fluidFlow: renderer?.fluidFlow(),
+        view: { cover: { key: m.key ?? null, colours: cover?.key === m.key ? cover.colours : null }, glide },
+      });
+      const fv = flameId ? stepped.flames[flameId] : undefined;
+      wantsCover = fv?.mode === 'cover';
       // The sidechains act only through their cables (toV2's holds, in sight); what they hold back is read off the
       // Duckers' outputs for the page's mark, nothing else.
       const sidechains = leversOf(stepped.outputs);
@@ -474,8 +411,8 @@ export class VisualsLoop {
         params: (id) => stepped.params[id],
         fields: (id) => stepped.fields[id],
         // A Grid's points, or the Flame's parts where they are on the screen (in the Grid's frame: centred, the short side
-        // -1..1), for Streamlines' seeds.
-        points: (id) => stepped.points[id] ?? (id === flameId ? flameSeeds() : undefined),
+        // -1..1), for Streamlines' seeds: the engine's.
+        points: (id) => stepped.points[id],
         cover: () => (coverPicture?.key === m.key ? coverPicture.image : null),
       };
       // A snapshot's thumbnail (picture()), from the frame just drawn.
@@ -500,130 +437,37 @@ export class VisualsLoop {
       // undo step of its own (the owner: the track may change what is on, Undo brings back the look before it).
       for (const r of stepped.dice) {
         if (rolling) break;
-        rolling = rollOf(r.seed, r.scope, null, r.reach);
+        rolling = rollFor(r.seed, r.scope, r.reach);
         // The first look shows at once; each next one blends in over a new track's time.
         rollingAs = { edit: looked ? 'track' : null, ms: looked ? BLEND_MS : 0 };
         looked = true;
         lookCame = 'track';
       }
-      // Each step whose Next a trigger fired (0057 §7e: a Gate's, in sight): its next step, a performance. The rack as
-      // it is: an effect is a module, not a step, so nothing here swaps one.
+      // Each step whose Next a trigger fired (0057 §7e: a Gate's, in sight), on to the step the engine gives it: into
+      // the store as a performance. The rack as it is: an effect is a module, not a step, so nothing here swaps one.
       const moved: Randomized = {};
-      for (const r of stepped.nexts) {
-        const mod = flat.modules.find((x) => x.id === r.module);
-        const knob = mod && host.types[mod.type]?.knobs.find((k) => k.id === r.knob);
-        if (!mod || !knob || patch.pins.includes(`${r.module}.${r.knob}`)) continue;
-        const v = Math.round(mod.knobs[r.knob] ?? knob.default);
-        (moved[r.module] ??= {})[r.knob] = v + 1 > knob.max ? knob.min : v + 1;
-      }
+      for (const r of stepped.nexts) (moved[r.module] ??= {})[r.knob] = r.to;
       if (Object.keys(moved).length) {
         apply(moved, {}, 0, null, now);
         nextBlend = ANOTHER_MS;
         lookCame = 'next';
       }
 
-      if (!to) return;
-      const k = from ? Math.min(1, (now - blendStart) / blendMs) : 1;
-      shown = from && k < 1 ? between(from, to, k * k * (3 - 2 * k)) : to;
-      if (k >= 1) from = null;
-      const drawnFlame = evolved(shown, fl.parts, lookOf('purity'), how.spread);
-      if (!measure && now - measured > 500) {
-        measured = now;
-        measure = frame ? measuring(drawnFlame) : measuring(drawnFlame, 6000, 6000);
-      }
-      const measuredNow = measure?.next();
-      if (measuredNow?.done) {
-        measure = null;
-        const seen = measuredNow.value;
-        if (seen) {
-          if (!frame) frame = seen;
-          else {
-            const kk = 1 - Math.exp(-0.5 / 1.5);
-            frame = {
-              center: [frame.center[0] + (seen.center[0] - frame.center[0]) * kk, frame.center[1] + (seen.center[1] - frame.center[1]) * kk],
-              size: Math.exp(Math.log(frame.size) + (Math.log(seen.size) - Math.log(frame.size)) * kk),
-              coverage: frame.coverage + (seen.coverage - frame.coverage) * kk,
-            };
-          }
-        }
-      }
-      // The Flame framed as far as its Fit (step 7): centred and sized to the view as its points fall, at 1; where they
-      // fall, at 0. A patch from before the knob: framed unless a Transform took the Flame's light (it framed it then).
-      const fitSet = flat.modules.find((x) => x.id === flameId)?.knobs.fit;
-      const transformed = fitSet === undefined && flat.cables.some((c) => c.from.module === flameId && c.from.port === 'light' && flatTypes.get(c.to.module) === 'transform');
-      const fitting = transformed ? 0 : Math.min(1, Math.max(0, stepped.knobs[flameId!]?.fit ?? fitSet ?? 1));
-      const cam =
-        frame && fitting > 0
-          ? {
-              ...drawnFlame,
-              center: [drawnFlame.center[0] + (frame.center[0] - drawnFlame.center[0]) * fitting, drawnFlame.center[1] + (frame.center[1] - drawnFlame.center[1]) * fitting] as [number, number],
-              size: Math.exp(Math.log(drawnFlame.size) + (Math.log(frame.size) - Math.log(drawnFlame.size)) * fitting),
-            }
-          : drawnFlame;
-      renderer.setFlame(cam);
-      // Where the Flame is on the screen and how much it covers (its outputs, the Transform's units), as measured.
-      if (frame) {
-        const k = d.scale / cam.size;
-        flameFrame = { x: (frame.center[0] - cam.center[0]) * k, y: (frame.center[1] - cam.center[1]) * k, size: frame.size * k, coverage: frame.coverage };
-      }
+      // The Flame as its node made it this frame: its look blended, framed as far as its Fit.
+      if (!fv) return;
+      renderer.setFlame(fv.camera);
 
       const [w, h, resized, top] = sized();
 
-      // The fluid, stirred: its pushes at what reaches its `at` (the Flame's parts by default), each worth what the
-      // patch's cables into Stir, Flow and Swirl give it.
-      const fluidNow = d.fluid;
-      if ((fluidNow > 0 || flameSeeding) && now - partsMeasured > 250) {
-        partsMeasured = now;
-        const cam = frame ?? drawnFlame;
-        const aspect = w / h;
-        const cos = Math.cos(fl.turn);
-        const sin = Math.sin(fl.turn);
-        // In place: the engine took this list as the Flame's points.
-        partsWhere.length = 0;
-        for (const p of partsAt(drawnFlame)) {
-          if (!p) {
-            partsWhere.push(null);
-            continue;
-          }
-          let x = ((p[0] - cam.center[0]) * d.scale) / cam.size;
-          let y = ((p[1] - cam.center[1]) * d.scale) / cam.size;
-          [x, y] = [cos * x - sin * y, sin * x + cos * y];
-          if (aspect > 1) x /= aspect;
-          else y *= aspect;
-          partsWhere.push([x * 0.5 + 0.5, y * 0.5 + 0.5]);
-        }
-      }
-      const fluidAt = Object.entries(stepped.pointsAt)[0]?.[1];
+      // The Fluid's stirring is its own (the engine's, stirred with the frame); the Show's Bend's waves for the meters.
       const beatNow = m.playing ? m.beat : null;
-      // The Show's Bend's own waves (step 5).
       const bendId = flat.modules.find((x) => x.type === 'bend')?.id;
       const wavesNow = (bendId ? (stepped.params[bendId]?.waves ?? d.given[A.waves]) : d.given[A.waves]) * levers.pace;
-      const gains = fluidGains(flat);
-      const stirred = stir(stirring, {
-        t: now / 1000,
-        dt,
-        amount: fluidNow,
-        parts: (fluidAt ?? partsWhere) as ([number, number] | null)[],
-        turns: fl.rates,
-        lights: fl.hits,
-        level: d.bands.map((v) => v[B.level]),
-        continuity: how.continuity,
-        hits: m.playing && m.hits ? m.hits.map((hh) => (hh.index < 0 ? null : { index: hh.index, strength: hh.weight, nextIn: hh.nextIn })) : [],
-        beat: beatNow ? { ...beatNow, nextIn: beatNow.length - beatNow.since } : null,
-        downbeat: d.track[T.downbeat],
-        section: d.track[T.section],
-        loudness: d.lit,
-        swell: d.track[T.swell],
-        bps: m.bps,
-        waves: wavesNow,
-        position: m.position,
-        center: [0.5, 0.5],
-        gain: (signal, band, aspect, x) => (how as unknown as Record<string, number>)[aspect] * gains(signal, band, aspect as 'stir', x),
-      });
+      const stirred = stepped.fluid ?? { forces: [], flow: { energy: 0, swirl: 0 } };
 
       renderer.frame(
         passes,
-        chainNow(d, { how, levers, ceiling: device.brightness, coverage: null, fire, position: m.position, beat: beatNow, forces: stirred.forces, flow: stirred.flow, dt, speed: how.speed }),
+        chainNow(d, { how: slots, levers, ceiling: device.brightness, coverage: null, fire: fv.fire, position: m.position, beat: beatNow, forces: stirred.forces, flow: stirred.flow, dt, speed }),
         w,
         h,
         inputs,
@@ -632,7 +476,7 @@ export class VisualsLoop {
       const stats: Omit<FrameStats, 'tiles'> = {
         t: now / 1000,
         extra: (() => {
-          const fx = settingsReport(how, d.effects, levers, d.routed);
+          const fx = settingsReport(slots, d.effects, levers, d.routed);
           const zooms = zoomsMotion(d.tunnel * levers.pace, d.dive * levers.pace);
           return { ...fx, motion: (fx.motion ?? 0) + wavesMotion(wavesNow, d.fluid) + zooms };
         })(),

@@ -11,12 +11,13 @@
 import { endOf, type RouteValue } from './curves';
 import type { Cable, Knob, Module, ModuleType, Place, SignalRef } from './patch';
 import { ENGINES } from './effects';
-import { cyclesClosed, FEEDBACK, fits, isDevice, polyKnobs, portsOf, type CableV2, type Device, type ExposedPort, type PatchV2, type Polymorphic, type Port, type PortRef, type PortType, type Ports } from './ports';
+import { cyclesClosed, FEEDBACK, fits, isDevice, polyKnobs, portsOf, portsOfModule, type CableV2, type Device, type ExposedPort, type PatchV2, type Polymorphic, type Port, type PortRef, type PortType, type Ports } from './ports';
 import { byCategory, CATEGORIES, CATEGORY_LABEL, categoryOf, type Category } from './rack';
 import { signalOf } from './music-signals';
 import { areaParts, faceHeight as partsHeight, faceOf, type FacePart, type Thumbs } from './face/face';
 import { freeCableId, newCable, type Cables } from './cable-actions';
 import { makeDevice, unmakeDevice, type MacroPick } from './device-make';
+import { flatten, macroNode, mappingOf } from './v2';
 
 export type Side = 'left' | 'right' | 'top' | 'bottom';
 export type XY = { x: number; y: number };
@@ -34,6 +35,11 @@ export type KnobView = {
   ring: [number, number] | null;
   /** Pinned (0057: `<module>.<knob>` in its level's pins): Randomize and a new track leave it. */
   pinned?: boolean;
+  /** A step's choices by name (Knob `options`). */
+  options?: readonly string[];
+  /** The macro that maps it (0077: one a knob; the µMAP marker): its name and its range's ends on the dial (0..1). Its
+   *  value is as the macro sets it; it does not turn by hand. */
+  macro?: { label: string; span: [number, number] };
   /** A polyphonic knob drawn as one (0057 §4b: a band's six): each channel's knob id, value and place in the range; the
    *  knob's own `value` and `at` their mean. */
   channels?: { id: string; value: number; at: number }[];
@@ -269,6 +275,16 @@ export function labelOf(t: Pick<ModuleType, 'type' | 'label'>): string {
 }
 /** Names the graph gives ahead of their types (0057 §7e: the course-and-swing filter is Accent; "flash" is the Screen's). */
 const RENAMED: Record<string, string> = { flash: 'Accent' };
+/** A module's name, as the panel and the graph both give it: its own (a device's; one its device's maker gave it,
+ *  device-names.ts), else its type's, numbered where its level has more than one of that type unnamed. */
+export function moduleName(m: Module, level: Pick<PatchV2, 'modules'>, types: Record<string, ModuleType>): string {
+  if (m.label) return m.label;
+  if (isDevice(m)) return 'Device';
+  const t = types[m.type];
+  const base = t ? labelOf(t) : m.type;
+  const same = level.modules.filter((x) => x.type === m.type && !x.label);
+  return same.length > 1 ? `${base} ${same.indexOf(m) + 1}` : base;
+}
 
 /** A cable's amount as its label shows it: a swing signed, a level as a share. */
 /** A v2 cable (0057 §7e item 10) has no mode: it adds, a swing. */
@@ -311,7 +327,14 @@ const isNext = (port: string) => port.endsWith(':next') || port.endsWith(':gain'
 export function knobViews(
   m: Module,
   t: ModuleType,
-  o: { open: ReadonlySet<string>; room: number; cabled: (knob: string) => boolean; cablesInto: (knob: string) => (Pick<Cable, 'value'> & { mode?: Cable['mode'] })[] },
+  o: {
+    open: ReadonlySet<string>;
+    room: number;
+    cabled: (knob: string) => boolean;
+    cablesInto: (knob: string) => (Pick<Cable, 'value'> & { mode?: Cable['mode'] })[];
+    /** The macro mapping a knob of it, if one does (v2.ts mappingOf). */
+    mapped?: (knob: string) => { label: string; from: number; to: number; value: number } | undefined;
+  },
 ): { knobs: KnobView[]; hidden: number } {
   const flat = t.knobs.filter((k) => !k.device);
   const byId = new Map(flat.map((k) => [k.id, k]));
@@ -343,16 +366,22 @@ export function knobViews(
       ...(hasNext(k) ? { next: true, ...(o.cabled(nextPort(k.id)) ? { nextOn: true } : {}) } : {}),
       ...(hasGain(k) ? { gain: true, ...(o.cabled(gainPort(k.id)) ? { gainOn: true } : {}) } : {}),
     };
+    const named = k.options ? { options: k.options } : {};
+    const macroOf = (g: { label: string; from: number; to: number } | undefined) => (g ? { macro: { label: g.label, span: [atOf(k, g.from), atOf(k, g.to)] as [number, number] } } : {});
     if (!k.channels) {
-      const value = m.knobs[k.id] ?? k.default;
-      return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), ...beside };
+      const g = o.mapped?.(k.id);
+      const value = g ? g.value : (m.knobs[k.id] ?? k.default);
+      return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), ...named, ...beside, ...macroOf(g) };
     }
+    let first: ReturnType<NonNullable<typeof o.mapped>>;
     const channels = channelKnobs(k).map((x) => {
-      const value = m.knobs[x.id] ?? m.knobs[k.id] ?? x.default;
+      const g = o.mapped?.(x.id);
+      first ??= g;
+      const value = g ? g.value : (m.knobs[x.id] ?? m.knobs[k.id] ?? x.default);
       return { id: x.id, value, at: atOf(k, value) };
     });
     const value = channels.reduce((a, c) => a + c.value, 0) / channels.length;
-    return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), channels, ...beside };
+    return { id: k.id, label: k.label, value, min: k.min, max: k.max, kind: k.kind, at: atOf(k, value), ring: ring(atOf(k, value)), channels, ...named, ...beside, ...macroOf(first) };
   });
   return { knobs, hidden: all.length - shown.length };
 }
@@ -477,14 +506,24 @@ export function fineStep(k: Pick<KnobView, 'min' | 'max' | 'kind'>, raw: number,
   return { raw: r, value: k.kind === 'step' ? Math.round(r) : r };
 }
 /** A knob's value as the fine adjust shows it: a step's whole number, else as many places as tell it apart. */
-export function fineText(k: Pick<KnobView, 'kind' | 'min' | 'max'>, value: number): string {
-  if (k.kind === 'step') return String(Math.round(value));
+export function fineText(k: Pick<KnobView, 'kind' | 'min' | 'max' | 'options'>, value: number): string {
+  if (k.kind === 'step') return stepText(k, value);
   const span = Math.abs(k.max - k.min);
   return value.toFixed(span >= 100 ? 0 : span >= 10 ? 1 : span >= 1 ? 3 : 4);
 }
-/** A fine adjust under way: the knob (its node and id, name, range, kind), its value, its speed, where it was held (the
- *  window's coordinates). */
-export type Fine = { node: string; knob: string; label: string; min: number; max: number; kind: Knob['kind']; value: number; speed: number; at: XY };
+/** A step's value as its choice's name, else its number. */
+const stepText = (k: Pick<KnobView, 'min' | 'options'>, value: number) => k.options?.[Math.round(value) - k.min] ?? String(Math.round(value));
+/** A knob's value in words, as the panel's rows and the graph's dial say it: a step's choice by its name, a share as a
+ *  percent, a swing about nothing signed, else its number. */
+export function knobText(k: Pick<KnobView, 'kind' | 'min' | 'max' | 'options'>, value: number): string {
+  if (k.kind === 'step') return stepText(k, value);
+  if (k.min === 0 && k.max === 1) return `${Math.round(value * 100)}%`;
+  if (k.min === -1 && k.max === 1) return `${value > 0 ? '+' : ''}${Math.round(value * 100)}%`;
+  return Math.abs(value) >= 10 ? value.toFixed(0) : value.toFixed(2);
+}
+/** A fine adjust under way: the knob (its node and id, name, range, kind, choices), its value, its speed, where it was
+ *  held (the window's coordinates). */
+export type Fine = { node: string; knob: string; label: string; min: number; max: number; kind: Knob['kind']; options?: readonly string[]; value: number; speed: number; at: XY };
 
 /** A knob's value after a drag of `dy` pixels up (a whole range over `span`), a step's whole. */
 export function turned(k: Pick<KnobView, 'min' | 'max' | 'kind'>, value: number, dy: number, span = 160): number {
@@ -591,32 +630,6 @@ export function crumbsOf(p: PatchV2, at: readonly string[]): string[] {
   return out;
 }
 
-/** A module's ports: its type's, or a device's from what it exposes (each exposed port the type of the one behind it,
- *  through nested devices; a channel of a bundle as one). */
-export function portsOfModule(types: Record<string, ModuleType>): (m: Module) => Ports | null {
-  const self = (m: Module): Ports | null => {
-    if (!isDevice(m)) {
-      const t = types[m.type];
-      return t ? portsOf(t) : null;
-    }
-    const behind = (e: ExposedPort, dir: 'in' | 'out'): Port | undefined => {
-      const inner = m.patch.modules.find((x) => x.id === e.module);
-      return inner ? self(inner)?.[dir].find((x) => x.id === e.port) : undefined;
-    };
-    const exposed = (e: ExposedPort, dir: 'in' | 'out', or: PortType): Port => {
-      const b = behind(e, dir);
-      return {
-        id: e.as,
-        label: e.label,
-        type: b?.type ?? or,
-        ...(b?.channels && e.channel === undefined ? { channels: b.channels } : {}),
-        ...(b?.polymorphic ? { polymorphic: b.polymorphic } : {}),
-      };
-    };
-    return { in: m.inputs.map((e) => exposed(e, 'in', 'value')), out: m.outputs.map((e) => exposed(e, 'out', 'picture')) };
-  };
-  return self;
-}
 
 /** The knob behind a device's exposed input, where it is one (through nested devices): the knob and its value. */
 function knobBehind(d: Device, as: string, types: Record<string, ModuleType>): { knob: Knob; value: number } | null {
@@ -747,6 +760,9 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
   const top = patchAt(patch, at);
   if (!top) return { nodes, edges };
   const portsFor = portsOfModule(types);
+  // The patch as the engine runs it, for what a macro sets (0077): a node's flattened id is its path from the top.
+  const flat = flatten(patch);
+  const flatId = (id: string) => (at.length ? `${at.join('/')}/${id}` : id);
   const data = new Map<string, ModuleData>();
 
   /** A module's node data at a level (`into`: that level's cables by `module.port`). */
@@ -784,14 +800,17 @@ function layoutV2({ patch, types, at = [], open = new Set(), positions = {}, siz
       }
       for (const x of m.macros) {
         knobIds.add(macroKnob(x.id));
-        knobs.push({ id: macroKnob(x.id), label: x.label, value: x.value, min: 0, max: 1, kind: 'level', at: clamp01(x.value), ring: ringOf(clamp01(x.value), cablesInto(macroKnob(x.id))) });
+        // Mapped by a macro one level up (0077): as that sets it, marked so.
+        const g = mappingOf(flat, macroNode(flatId(id), x.id), 'value');
+        const value = g ? g.value : x.value;
+        knobs.push({ id: macroKnob(x.id), label: x.label, value, min: 0, max: 1, kind: 'level', at: clamp01(value), ring: ringOf(clamp01(value), cablesInto(macroKnob(x.id))), ...(g ? { macro: { label: g.label, span: [clamp01(g.from), clamp01(g.to)] as [number, number] } } : {}) });
       }
     } else {
       const t = types[m.type] ?? { type: m.type, label: m.type, place, knobs: [] };
-      label = labelOf(t);
+      label = moduleName(m, level, types);
       place = t.place;
       knobIds = new Set([...t.knobs, ...polyKnobs(t).knobs].map((k) => k.id));
-      const shown = knobViews({ ...m, id }, t, { open, room: modulator ? 0 : SHOWN, cabled, cablesInto });
+      const shown = knobViews({ ...m, id }, t, { open, room: modulator ? 0 : SHOWN, cabled, cablesInto, mapped: (knob) => mappingOf(flat, flatId(id), knob, types) });
       knobs = shown.knobs.map((k) => (level.pins.includes(`${m.id}.${k.id}`) ? { ...k, pinned: true } : k));
       hidden = shown.hidden;
     }

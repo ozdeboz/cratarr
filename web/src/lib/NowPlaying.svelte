@@ -20,6 +20,7 @@
   import { sleep, sleepLeft } from './sleep.svelte';
   import { fit, STEPS, type Fit } from './playerLayout';
   import { prefs, SEEK_STEP, type CoverTouch, type SwipeDown, type SwipeSide, type SwipeUp } from './prefs.svelte';
+  import { placeNow } from './trackPlace.svelte';
   import { art, clockText, coverComing, coverFailed, coverLate, coverSrc, shownCover, duration, favorite, paused, pending, playing, shownPlaying, position, seekTo, send, toggleFavorite, playPause, rampBusy, rampInert, shownPaused, wind, windTouch, hasNext, waveStill, playingKey } from './remote.svelte';
   import SeekWave from './SeekWave.svelte';
   import ProgressRing from './ProgressRing.svelte';
@@ -682,7 +683,7 @@
         <button class="bands" aria-label="Player visualisation" onclick={() => (bandsOpen = true)}>
           <BandGlass
             spectrum={spectrum ?? SILENT}
-            progress={dur ? pos / dur : 0}
+            clock={placeNow}
             duration={dur ?? 0}
             paused={!!np.progress?.paused}
             look={prefs.playerBands}

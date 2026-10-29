@@ -192,6 +192,8 @@ class StartStop(
     private var tapeReleased = 0L
     private var tapeReleaseFrom = 1f
     private var tapeRate = 0f
+    /** The speed the wind's stream plays at now, as last set ([tapeAt]): what its heard place counts on at. */
+    private var tapeSounds = 1f
     /** A forward hold begun while playing (0.9.12, the owner): it does not stop first but flies off at the track's own
      *  speed, its stream at [FLY_SPEED] played at its lowest rate, and lets go at that rate back into the track. */
     private var tapeFlying = false
@@ -285,7 +287,7 @@ class StartStop(
             if (!moving) return
             if (rewinding) {
                 // Its pace against the clock, once a second.
-                tape?.let { t -> if (tapeTicks % TICKS_A_SECOND == 0) step("clip pace", "clip_ms" to t.currentPosition, "buffered_ms" to t.bufferedPosition, "rate" to tapeRate) }
+                tape?.let { t -> if (tapeTicks % TICKS_A_SECOND == 0) step("clip pace", "clip_ms" to t.currentPosition, "heard_ms" to sync.tapeHeardMs(SystemClock.elapsedRealtime())?.toLong(), "buffered_ms" to t.bufferedPosition, "rate" to tapeRate) }
                 if (tapeTicks % CHANGED_EVERY == 0) changed()
                 tapeTicks++
             }
@@ -315,7 +317,7 @@ class StartStop(
                 // Until the brake stream carries it: the wind at the plan's speed, steered onto its place (its way
                 // against the wind's own over [STEER_MS]), faded below the quarter its output reaches.
                 if (!brakeSounding) {
-                    val played = t.currentPosition.coerceAtLeast(0L)
+                    val played = tapePlayed(t, now)
                     val want = p.v(gone) + (p.way(gone) - (holdGone(played) - planGone0)) / STEER_MS
                     val r = (want / slope(played)).toFloat().coerceAtLeast(0f)
                     tapeRate = r
@@ -338,6 +340,7 @@ class StartStop(
      */
     private fun tapeAt(speed: Float, share: Float) {
         val t = tape ?: return
+        tapeSounds = speed
         if (grouped() || tapeInChain) {
             sync.tapeSpeed.rate = speed
             sync.tapeSpeed.gain = share
@@ -526,14 +529,27 @@ class StartStop(
      *  over), a hold at the speed it winds. */
     private fun reached(): Long {
         val t = tape ?: return tapeFrom
-        val played = t.currentPosition.coerceAtLeast(0L)
+        val played = tapePlayed(t)
         val whole = t.duration.takeIf { it > 0 }
         val gone = if (!tapeHold && whole != null) (kotlin.math.abs(tapeTo - tapeFrom) * played.toDouble() / whole).toLong() else holdGone(played)
         return (tapeFrom + tapeSign * gone).coerceIn(min(tapeFrom, tapeTo), max(tapeFrom, tapeTo))
     }
 
     /** Where a hold has got: the queue's track (counted from the one it began in) and where in it, as the files are. */
-    private fun landing(): Deck.Walk = landingAt((tape?.currentPosition ?: 0L).coerceAtLeast(0L))
+    private fun landing(): Deck.Walk = landingAt(tape?.let { tapePlayed(it) } ?: 0L)
+
+    /**
+     * Where the wind's stream is (ms into it) [now]: as its sound is heard, counted on to now. Its player's own place
+     * moves only once a second (2026-10-29, the tablet: a held wind's place stood still for a second, then leapt, up to
+     * 128 s at 128×, and the page's waveform rocked back and forth); before its first sound, the player's.
+     */
+    private fun tapePlayed(t: ExoPlayer, now: Long = SystemClock.elapsedRealtime()): Long {
+        val own = t.currentPosition.coerceAtLeast(0L)
+        // The player's own is a second behind at most (its stream never plays above 1×): one further off is another
+        // stream's, heard before this one's first sound.
+        val heard = sync.tapeHeardMs(now, tapeSounds.toDouble())?.toLong()?.takeIf { kotlin.math.abs(it - own) < HEARD_OFF_MS } ?: return own
+        return heard.coerceAtLeast(0L)
+    }
 
     /** As [landing], [played] ms into its stream: by its map (Cratarr's lengths), then settled on the files' own. */
     private fun landingAt(played: Long): Deck.Walk {
@@ -582,7 +598,7 @@ class StartStop(
             return Deck(w.index, w.ms, p.sign * p.v(gone), p.sign * p.accel(gone), w.edge)
         }
         if (t != null && tapeListener != null && tapeStarted) {
-            val played = t.currentPosition.coerceAtLeast(0L)
+            val played = tapePlayed(t, now)
             val w = if (tapeHold) landingAt(played) else Deck.Walk(tapeIndex, reached(), false)
             val rate = streamRate(envelope(now) ?: tapeRate)
             val v = tapeSign * slope(played) * rate
@@ -1435,11 +1451,12 @@ class StartStop(
     private var brakeSounding = false
 
     /** The plan letting go now makes: from the deck's place at its speed, forwards to 1× ([moving]: not a pause), else
-     *  to still. */
+     *  to still, over as long as its speed takes to come down ([Plan.lengthMs]). */
     private fun planNow(now: Long, moving: Boolean): Plan {
         val d = deck(now)
         val to = if (moving && tapeSign > 0 && !tapeReverse) 1.0 else 0.0
-        return Plan(now, d.index, d.ms, tapeSign, kotlin.math.abs(d.speed), to, tapeRelease)
+        val v0 = kotlin.math.abs(d.speed)
+        return Plan(now, d.index, d.ms, tapeSign, v0, to, Plan.lengthMs(v0, to, tapeRelease))
     }
 
     /** Where the plan [p] has the deck [t] ms after it was let go, through the queue. */
@@ -1458,7 +1475,7 @@ class StartStop(
         val d = deck(now)
         val p = planNow(now, tapeStop == null)
         plan = p
-        planGone0 = holdGone(t.currentPosition.coerceAtLeast(0L)).toDouble()
+        planGone0 = holdGone(tapePlayed(t)).toDouble()
         tapeFlying = false
         landsStill = p.to == 0.0
         landsMoving = p.to > 0.0
@@ -1467,7 +1484,7 @@ class StartStop(
         tapeAim = stand
         player.seekTo(stand.index, stand.ms)
         step("let go", "v0" to p.v0, "track" to stand.index, "stand_ms" to stand.ms, "aim_ms" to tapeAim?.ms)
-        if (!grouped() && slope(t.currentPosition.coerceAtLeast(0L)) * LOW > 1.0 && p.brakeMs > BRAKE_LEAD_MS + 200) askBrake(p)
+        if (!grouped() && slope(tapePlayed(t)) * LOW > 1.0 && p.brakeMs > BRAKE_LEAD_MS + 200) askBrake(p)
     }
 
     /** Cratarr's brake stream for [p], from where the plan will be at [BRAKE_LEAD_MS]: readied, silent, until then. */
@@ -1708,6 +1725,8 @@ class StartStop(
         private const val TICKS_A_SECOND = 10
         /** The deck's change of speed is the speed this much later, less the speed now. */
         private const val DECK_DT_MS = 20L
+        /** How far the heard place may be from the wind player's own and still be its stream's ([tapePlayed]). */
+        private const val HEARD_OFF_MS = 2500L
     }
 }
 

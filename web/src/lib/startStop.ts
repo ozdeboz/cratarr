@@ -42,6 +42,13 @@ export const HOLD_TOP = 16;
 export const FLIGHT_TOP = 128;
 /** How long each heard piece of a wind cut short is (ms; the owner, 2026-10-28: no setting, a good default). */
 export const PIECE_MS = 350;
+/** A held wind's brake, let go or paused (the owner, 2026-10-29: "our fixed duration brake is really kind of weird.
+ *  When spinning down from high speeds, braking takes longer"): constant deceleration, DECEL_X × a second at its mean,
+ *  from its speed `v0` to its end's `to` (1× forwards, a stand backwards or paused); the Brake as set is its shortest,
+ *  a slow wind's as before. Its shape stays the raised cosine. The app's Plan.lengthMs is the same rule (a5,
+ *  0.9.15-2); taps, seeks and the tape's own stop keep the Brake. */
+export const DECEL_X = 64;
+export const brakeLengthMs = (v0: number, to: number, brakeMs: number) => Math.max(brakeMs, Math.round((Math.abs(Math.abs(v0) - to) / DECEL_X) * 1000));
 
 /** `mode`, `ms`, `stopMs`: Start and stop's effect, its start (the wind-up) and its stop (the wind-down; its own, the
  *  tape's Brake being the tape's only: the owner, 2026-10-27); `skips`: it for next and previous too; `rewind`: the tape

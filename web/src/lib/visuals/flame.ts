@@ -245,7 +245,8 @@ const FINALS: Variation[] = [
 ];
 /** The finals a preset draws among: the ones before Cratarr's, so every track's own look stays as it was drawn (the
  *  Cratarr lens is one to pick). */
-const DRAWN_FINALS = FINALS.indexOf(VARIATIONS.cratarr);
+/** The lenses a track's look draws (the shapes' after them are chosen by hand). */
+export const DRAWN_FINALS = FINALS.indexOf(VARIATIONS.cratarr);
 
 /** The finals' names, for the Lens setting (1 is the first). */
 export const LENSES = FINALS.map((v) => {
@@ -565,6 +566,10 @@ export function* drawing(seed: number, fixed: Partial<Preset> = {}): Generator<v
   }
   return best ?? { preset: { ...STANDBY, ...fixed }, own: STANDBY };
 }
+
+/** How well a look draws (0: nothing on the screen; above ½ a flame worth showing): the survey a look is checked by, its
+ *  seed the roll's (the dice's macro rolls: engine/dice.ts). */
+export const drawScore = (p: Preset, seed: number): number => survey(build(p), seed)?.score ?? 0;
 
 /** The flame of a seed, as a track's preset makes it. */
 export const flameFrom = (seed: number): Flame => flameOf(presetOf(seed).preset);

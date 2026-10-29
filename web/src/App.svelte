@@ -522,7 +522,10 @@
   // only then leaves (the owner, 2026-10-25: not its icons folding one by one, leaving a flat glass). The panel's glass
   // it held is kept for the slide.
   const ROW_SLIDE = 200;
-  const rowWanted = $derived(pageRow || !!handedNow);
+  // Where the page keeps room for it, and on Home always: opened first beside the sidebar it keeps none, its pill (the
+  // search, where it plays) floating over the page's top (the owner, 2026-10-29: "the entire glass on the home page"
+  // gone, and the top-right search with it).
+  const rowWanted = $derived(pageRow || !!handedNow || (!playlistLayer && page === 'home'));
   let rowKept = $state(untrack(() => rowWanted));
   let rowAway = $state(false);
   let keptGlass = $state<typeof handedNow>(null);

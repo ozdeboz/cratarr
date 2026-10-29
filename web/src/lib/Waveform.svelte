@@ -18,6 +18,7 @@
   import { untrack } from 'svelte';
   import { reducedMotion } from './motion';
   import { bars, barsIn } from './waveforms.svelte';
+  import { coverOf, placeOf, serves, STRIP_SPAN, type Drawn } from './waveStrip';
 
   let {
     bins,
@@ -71,7 +72,7 @@
     /** The tracks around this one end to end (lib/SeekWave's wide view: a hold's look-ahead in another track): their
      *  bars (0..255 each), the stretch shown (`from`..`to`), this track's place in it (`cur0`..`cur1`) and the
      *  boundaries between them (`marks`), all 0..1 of the whole. Places given in this track are drawn where it stands. */
-    wide?: { bins: Uint8Array; from: number; to: number; cur0: number; cur1: number; marks: number[] } | null;
+    wide?: { bins: Uint8Array; from: number; to: number; cur0: number; cur1: number; marks: number[]; colours?: (string | null)[] } | null;
     onflat?: () => void;
   } = $props();
 
@@ -143,9 +144,68 @@
   const line = $derived((100 * 4) / Math.max(4, height));
   /** Each bar's rise above the quietest, for the waveform shown. */
   const heights = $derived(bins ? bars(bins, n).map((v) => Math.max(LOW, v * 100) - LOW) : null);
-  /** The view's, zoomed: the same pieces, the stretch remapped onto them, in its own range from a quarter zoomed in on
-   *  (the owner, 2026-10-28: its lows lower and its highs higher; none only as it comes back to the whole). */
-  const zoomed = $derived(wide && want === 'wave' ? barsIn(wide.bins, n, wide.from, wide.to).map((v) => Math.max(LOW, v * 100) - LOW) : bins && view && want === 'wave' ? barsIn(bins, n, view.from, view.to, Math.min(1, (1 - (view.to - view.from)) * 4)).map((v) => Math.max(LOW, v * 100) - LOW) : null);
+
+  // A hold's zoom (`view`) or wide view (`wide`) as one strip three times the stretch shown: its bars drawn once, slid and
+  // scaled by the compositor as the stretch moves, drawn anew only once the stretch leaves it or its scale is a quarter
+  // off (the owner, 2026-10-29: a held wind went in strides; the tablet redrew every bar of four layers each frame). The
+  // pieces' own motion has no part in it: a zoom's bars stand where the stretch puts them (the zoom's easing is its
+  // motion, the playhead its focal point). Its range is its own from a quarter zoomed in on (the owner, 2026-10-28: its
+  // lows lower and its highs higher; none as it comes back to the whole).
+  /** The stretch shown, 0..1 of its source's bins: the track's (a zoom) or the queue's around it (a wide view). */
+  const stretch = $derived(
+    want !== 'wave'
+      ? null
+      : wide
+        ? { bins: wide.bins, from: wide.from, to: wide.to, contrast: 0, marks: wide.marks }
+        : bins && view
+          ? { bins, from: view.from, to: view.to, contrast: Math.min(1, (1 - (view.to - view.from)) * 4), marks: [] as number[] }
+          : null,
+  );
+  /** The strip as drawn: the stretch of the source it covers (`e0`..`e1`), the stretch shown's width then (`w0`), its
+   *  pieces (`count`), its paths as made and as heard (at `level`), the boundaries in it, and its heard path track by
+   *  track (`played`, the `k`th track's pieces: each its own colour, none crossing a boundary). */
+  type Strip = Drawn & { bins: Uint8Array; count: number; level: number; made: string; heard: string; marks: number[]; played: { k: number; d: string }[] };
+  let strip = $state<Strip | null>(null);
+  /** A strip's piece, open and risen to its height (the plain draw's at gap 1), at `level`. */
+  const piece = (i: number, rise: number, level: number) => {
+    const h = LOW + rise * level;
+    return `M${f(i + 0.15)} ${f((100 - h) / 2)}h0.7v${f(h)}h-0.7z`;
+  };
+  const stripPath = (hs: number[], level: number) => hs.map((h, i) => piece(i, h, level)).join('');
+  /** The heard pieces track by track: a piece belongs to the track its middle is in. */
+  function byTrack(hs: number[], level: number, d: Drawn, marks: number[]): { k: number; d: string }[] {
+    const out: { k: number; d: string }[] = [];
+    const per = (d.e1 - d.e0) / hs.length;
+    for (let i = 0; i < hs.length; i++) {
+      const x = d.e0 + (i + 0.5) * per;
+      let k = 0;
+      while (k < marks.length && x >= marks[k]) k++;
+      if (out.at(-1)?.k !== k) out.push({ k, d: '' });
+      out.at(-1)!.d += piece(i, hs[i], level);
+    }
+    return out;
+  }
+  /** The `k`th track's colour in a wide view: its cover's (lib/accents), else the app's accent; none in a zoom on one
+   *  track, which has the player's. */
+  const colourOf = (k: number) => (wide?.colours ? (wide.colours[k] ?? 'var(--accent)') : undefined);
+  $effect.pre(() => {
+    const s = stretch;
+    const count = n * STRIP_SPAN;
+    const level = heard;
+    untrack(() => {
+      if (!s) return void (strip = null);
+      if (strip && strip.bins === s.bins && strip.count === count && strip.level === level && serves(strip, s.from, s.to)) return;
+      const cover = coverOf(s.from, s.to);
+      const hs = barsIn(s.bins, count, cover.e0, cover.e1, s.contrast).map((v) => Math.max(LOW, v * 100) - LOW);
+      strip = { ...cover, bins: s.bins, count, level, made: stripPath(hs, 1), heard: stripPath(hs, level), marks: s.marks, played: byTrack(hs, level, cover, s.marks) };
+    });
+  });
+  /** Where the strip stands now: slid and scaled so that the stretch shown fills the waveform. */
+  const stripAt = $derived.by(() => {
+    if (!strip || !stretch) return null;
+    const { x, k } = placeOf(strip, stretch.from, stretch.to, width);
+    return `translateX(${f(x)}px) scaleX(${k.toFixed(4)})`;
+  });
 
   // Where each piece is (not reactive: drawn on `frame`).
   let gap = new Float32Array(0);
@@ -163,14 +223,13 @@
   // of the newest front that has reached it, the pieces to the right of a front still for the one before. A goal starts
   // GOAL_DELAY_MS after it is asked for, one asked for meanwhile in its place (a waveform in within that time: no
   // goal toward the wait first).
-  /** `flat`: reaching every piece at once (a zoom), not a front from the left. */
-  type Goal = { at: number; w: typeof want; heights: number[] | null; heard: number; flat?: boolean };
+  type Goal = { at: number; w: typeof want; heights: number[] | null; heard: number };
   let goals: Goal[] = [];
   const GOAL_DELAY_MS = 100;
   const LEVEL_WAIT_MS = 3000;
   let pending = 0;
   function goalOf(i: number, t: number): Goal {
-    for (let k = goals.length - 1; k > 0; k--) if (t >= goals[k].at + (goals[k].flat ? 0 : (i / n) * SPREAD_MS)) return goals[k];
+    for (let k = goals.length - 1; k > 0; k--) if (t >= goals[k].at + (i / n) * SPREAD_MS) return goals[k];
     return goals[0];
   }
 
@@ -193,7 +252,7 @@
     last = t;
     // The fronts that have passed every piece: only the newest of them still counts.
     let k = goals.length - 1;
-    while (k > 0 && t < goals[k].at + (goals[k].flat ? 0 : SPREAD_MS)) k--;
+    while (k > 0 && t < goals[k].at + SPREAD_MS) k--;
     if (k > 0) goals = goals.slice(k);
     let moving = goals.length > 1;
     for (let i = 0; i < n; i++) {
@@ -206,13 +265,6 @@
       }
       const tr = riseWanted(i, g);
       const tg = gapWanted(i, g.w);
-      // A zoom: each bar at once where the stretch puts it (the zoom's own easing is its motion; a bar easing on top of it
-      // drifted from the playhead, the owner 2026-10-28: the focal point the playhead).
-      if (g.flat && gap[i] >= 1 && tg >= 1) {
-        rise[i] = aim[i] = tr;
-        span[i] = 0;
-        continue;
-      }
       // Down first where it must close its gap, else toward its height.
       const goal = rise[i] > tr || gap[i] === tg || gap[i] >= 1 ? tr : 0;
       if (aim[i] !== goal) {
@@ -296,21 +348,6 @@
       }, known ? GOAL_DELAY_MS : LEVEL_WAIT_MS);
     });
   });
-  // Zoomed (a hold): every piece at once toward the stretch shown, the goal kept up to date as it slides and scales; back
-  // to the whole at once when it ends.
-  $effect(() => {
-    const z = zoomed;
-    untrack(() => {
-      const top = goals.at(-1);
-      if (!top) return;
-      if (z) {
-        if (top.flat && top.heights !== heights) top.heights = z;
-        else goals = [...goals, { at: performance.now(), w: 'wave', heights: z, heard: top.heard, flat: true }];
-      } else if (top.flat && top.heights !== heights) goals = [...goals, { at: performance.now(), w: want, heights, heard: top.heard, flat: true }];
-      else return;
-      run();
-    });
-  });
   // More of it loaded: the gaps run on with it (no waiting for their turn).
   $effect(() => {
     void loading;
@@ -359,6 +396,32 @@
 </script>
 
 <div class="wave" class:paused bind:clientWidth={width} bind:clientHeight={height} aria-hidden="true">
+  {#if strip && stripAt}
+    <!-- A hold's zoom or wide view: the strip slides and scales under clips that stand still (the played colour to the
+         playhead, the landing's tint), its boundaries going with it. -->
+    <div class="layer"><svg class="strip" viewBox="0 0 {strip.count} 100" preserveAspectRatio="none" style:transform={stripAt}><path d={output ? strip.heard : strip.made} /></svg></div>
+    <div class="layer" style:clip-path={`inset(0 ${(1 - done) * 100}% 0 0)`}>
+      <svg class="strip played" viewBox="0 0 {strip.count} 100" preserveAspectRatio="none" style:transform={stripAt}>
+        {#each strip.played as p (p.k)}<path d={p.d} style:--seg={colourOf(p.k)} />{/each}
+      </svg>
+    </div>
+    {#if band && band[1] > band[0]}
+      <div class="layer" style:clip-path={`inset(0 ${(1 - band[1]) * 100}% 0 ${band[0] * 100}%)`}>
+        <svg class="strip ahead" viewBox="0 0 {strip.count} 100" preserveAspectRatio="none" style:transform={stripAt}><path d={strip.heard} /></svg>
+      </div>
+    {/if}
+    {#if strip.marks.length}
+      {@const s = strip}
+      <div class="layer marks">
+        <div class="strip-marks" style:transform={stripAt}>
+          {#each s.marks as m (m)}
+            {@const x = (m - s.e0) / (s.e1 - s.e0)}
+            {#if x > 0 && x < 1}<span class="edge" style:left="{x * 100}%"></span>{/if}
+          {/each}
+        </div>
+      </div>
+    {/if}
+  {:else}
   <!-- The track as made, in the unplayed tint; over it, as far as it has played, the track as heard in the playing
        colour (the owner, 2026-10-27): levelled, what the colour does not reach keeps the unplayed tint, and levelling
        switched off the colour grows into it while those tips shrink to nothing; ahead of the playhead it never moves. -->
@@ -392,6 +455,7 @@
       {@const x = (m - wide.from) / Math.max(1e-6, wide.to - wide.from)}
       {#if x > 0 && x < 1}<span class="edge" style:left="{x * 100}%"></span>{/if}
     {/each}
+  {/if}
   {/if}
   {#if now !== null}<span class="now" style:left="{Math.min(1, Math.max(0, shownAt(now))) * 100}%"></span>{/if}
   <!-- The look-ahead: where a hold let go now lands, the same white line (the owner, 2026-10-28: its tint alone is hard to
@@ -427,6 +491,43 @@
 
   .paused svg.played {
     fill: var(--muted);
+  }
+
+  /* A hold's strip: three times the waveform's width, slid and scaled from its left on a layer of its own; each layer as
+     wide as the waveform, whatever its clip. */
+  .layer {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+  }
+
+  svg.strip {
+    width: 300%;
+    transform-origin: 0 0;
+    will-change: transform;
+  }
+
+  /* Each track's played pieces in its own colour (--seg, a wide view's); the player's where none is given. */
+  svg.strip.played path {
+    fill: var(--seg, var(--art-accent, var(--accent)));
+    transition: fill var(--ramp-ms, 0ms) linear;
+  }
+
+  .paused svg.strip.played path {
+    fill: var(--muted);
+  }
+
+  /* The boundaries' ticks sit below the waveform: their layer reaches down to them. */
+  .layer.marks {
+    bottom: -8px;
+  }
+
+  .strip-marks {
+    position: absolute;
+    inset: 0 auto 8px 0;
+    width: 300%;
+    transform-origin: 0 0;
+    will-change: transform;
   }
 
   /* A boundary between two tracks in a wide view (lib/SeekWave): a small tick below the waveform. */

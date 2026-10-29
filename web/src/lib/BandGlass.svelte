@@ -24,7 +24,7 @@
 
   let {
     spectrum,
-    progress,
+    clock,
     duration,
     paused,
     look,
@@ -40,7 +40,8 @@
     fading = 0,
   }: {
     spectrum: Spectrum;
-    progress: number;
+    /** Where the music is now (s), to the frame, at `at` (performance.now()): lib/trackPlace placeNow. */
+    clock: (at?: number) => number;
     duration: number;
     paused: boolean;
     look: BandLook;
@@ -122,13 +123,14 @@
   });
 
   let width = $state(0);
-  /** Where the playback is now (s): the progress it is told, run on between its updates so the flow is smooth. */
+  /** Where the music is now (s), read each frame from the one clock (lib/trackPlace, as the visuals' Music reads it): no
+   *  clock of its own, so through a wind, a brake or a rewind it moves as the music does. */
+  // Its first frame sets it (the tick, or still: the effect below).
   let now = $state(0);
   /** The waves' own travel, run by `speed` while it plays. */
   let flow = $state(0);
   /** How much of the track's sound is let in: from nothing up when it arrives (a soft takeover, the owner). */
   let input = $state(1);
-  const told = $derived(Math.max(0, Math.min(1, progress)) * duration);
   /** +1: later music to the right (it flows left); -1: the other way. The waves' own travel goes the same way. */
   const way = $derived(direction === 'right' ? -1 : 1);
 
@@ -152,14 +154,13 @@
     last = t;
     flow += dt * speed;
     input = Math.min(1, input + dt / 0.9);
-    // A seek (or a long gap) jumps; small drifts are taken in gently.
-    now = Math.abs(told - now) > 0.75 ? told : now + dt + (told - now) * Math.min(1, dt * 2);
+    now = clock(t);
     if (look === 'meter') fall(dt);
     frame = requestAnimationFrame(tick);
   }
   $effect(() => {
     if (paused || reducedMotion()) {
-      now = told;
+      now = clock();
       input = 1;
       if (look === 'meter') fall(0);
       return;
@@ -290,24 +291,20 @@
     return out;
   });
 
-  /** A smooth curve through points (Catmull-Rom as cubic Béziers) onto `g`'s path: from a move (or on from where the
-   *  path is), forwards or backwards. */
-  function trace(g: CanvasRenderingContext2D, xs: Float32Array, ys: Float32Array, move = true, backwards = false) {
+  /** A smooth curve through points, Catmull-Rom as cubic Béziers, forwards or backwards: the one curve both engines draw,
+   *  its first point to `start`, each piece's two controls and its end to `piece`. */
+  function through(xs: Float32Array, ys: Float32Array, backwards: boolean, start: (x: number, y: number) => void, piece: (x1: number, y1: number, x2: number, y2: number, x: number, y: number) => void) {
     const k = xs.length;
     const X = (i: number) => xs[backwards ? k - 1 - i : i], Y = (i: number) => ys[backwards ? k - 1 - i : i];
-    if (move) g.moveTo(X(0), Y(0));
-    else g.lineTo(X(0), Y(0));
+    start(X(0), Y(0));
     for (let i = 0; i < k - 1; i++) {
       const a = i > 0 ? i - 1 : 0, d = i + 2 < k ? i + 2 : k - 1;
-      g.bezierCurveTo(
-        X(i) + (X(i + 1) - X(a)) / 6,
-        Y(i) + (Y(i + 1) - Y(a)) / 6,
-        X(i + 1) - (X(d) - X(i)) / 6,
-        Y(i + 1) - (Y(d) - Y(i)) / 6,
-        X(i + 1),
-        Y(i + 1),
-      );
+      piece(X(i) + (X(i + 1) - X(a)) / 6, Y(i) + (Y(i + 1) - Y(a)) / 6, X(i + 1) - (X(d) - X(i)) / 6, Y(i + 1) - (Y(d) - Y(i)) / 6, X(i + 1), Y(i + 1));
     }
+  }
+  /** The curve onto `g`'s path (the canvas engine): from a move, or on from where the path is. */
+  function trace(g: CanvasRenderingContext2D, xs: Float32Array, ys: Float32Array, move = true, backwards = false) {
+    through(xs, ys, backwards, (x, y) => (move ? g.moveTo(x, y) : g.lineTo(x, y)), (x1, y1, x2, y2, x, y) => g.bezierCurveTo(x1, y1, x2, y2, x, y));
   }
   /** Easy ease (the owner): in and out softly, 0..1 to 0..1. */
   const ease = (x: number) => x * x * (3 - 2 * x);
@@ -509,15 +506,10 @@
   // The SVG engine (Quality): the same shapes as paths, with their true blur, blend and masks.
   /** A number for a path, to a tenth. */
   const r1 = (v: number) => Math.round(v * 10) / 10;
-  /** A smooth curve through points (Catmull-Rom as cubic Béziers) as path text, from `M` (or `L` to go on). */
+  /** The curve as path text (the SVG engine), from `M` (or `L` to go on). */
   function curve(xs: Float32Array, ys: Float32Array, start = 'M', backwards = false): string {
-    const k = xs.length;
-    const X = (i: number) => xs[backwards ? k - 1 - i : i], Y = (i: number) => ys[backwards ? k - 1 - i : i];
-    const parts: (string | number)[] = [start, r1(X(0)), r1(Y(0))];
-    for (let i = 0; i < k - 1; i++) {
-      const a = i > 0 ? i - 1 : 0, d = i + 2 < k ? i + 2 : k - 1;
-      parts.push('C', r1(X(i) + (X(i + 1) - X(a)) / 6), r1(Y(i) + (Y(i + 1) - Y(a)) / 6), r1(X(i + 1) - (X(d) - X(i)) / 6), r1(Y(i + 1) - (Y(d) - Y(i)) / 6), r1(X(i + 1)), r1(Y(i + 1)));
-    }
+    const parts: (string | number)[] = [];
+    through(xs, ys, backwards, (x, y) => parts.push(start, r1(x), r1(y)), (x1, y1, x2, y2, x, y) => parts.push('C', r1(x1), r1(y1), r1(x2), r1(y2), r1(x), r1(y)));
     return parts.join(' ');
   }
   /** Fade's ramp at each side: over `fading` × 45 % of the width, eased, as gradient stops. */

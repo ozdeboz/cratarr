@@ -3,9 +3,12 @@
 // is the button's own tap. Null: the button is only tapped (winding off). Its label's long-press (lib/labels) gives way.
 // From the press until it is let go, the press is the player's only gesture (the owner, 2026-10-28): its own pointer
 // goes no further than the button (the player's swipes never see it), and any other finger's press or click is
-// swallowed wherever it lands.
+// swallowed wherever it lands. The browser takes no part in it either: an armed button has no touch action of its own
+// (the owner, 2026-10-29: a long hold stopped by itself after a few seconds, the finger's drift of a few pixels starting
+// the player's sideways pan, whose pointercancel let the hold go). How each hold ended goes to the playback log.
 
 import { appInfo, inApp } from './app.svelte';
+import { playback } from './deviceLog';
 import { isLocal } from './output.svelte';
 import { prefs } from './prefs.svelte';
 import { windsBy } from './startStop';
@@ -34,6 +37,8 @@ export function holdWind(node: HTMLElement, hold: Hold) {
   /** The press under way: its pointer; null when none; where it went down. */
   let pressing: number | null = null;
   let downY = 0;
+  /** When the hold began (its HOLD_MS passed). */
+  let heldAt = 0;
 
   /** Another finger, or the press's own moves, while pressed: none of it reaches anything else. */
   function fence(e: PointerEvent) {
@@ -81,6 +86,7 @@ export function holdWind(node: HTMLElement, hold: Hold) {
     timer = setTimeout(() => {
       timer = undefined;
       held = true;
+      heldAt = performance.now();
       navigator.vibrate?.(8);
       h.onhold();
     }, HOLD_MS);
@@ -92,8 +98,11 @@ export function holdWind(node: HTMLElement, hold: Hold) {
     const waiting = timer !== undefined;
     clearTimeout(timer);
     timer = undefined;
-    if (held) now?.onrelease();
-    else if (waiting) now?.oncancel?.();
+    if (held) {
+      // A lift, or the browser or the system taking the touch over (still a let-go: a hold never sticks).
+      playback(e.type === 'pointercancel' ? 'warn' : 'info', 'hold let go', { by: e.type, heldMs: Math.round(performance.now() - heldAt) });
+      now?.onrelease();
+    } else if (waiting) now?.oncancel?.();
   }
   function click(e: MouseEvent) {
     if (!held) return;
@@ -105,6 +114,8 @@ export function holdWind(node: HTMLElement, hold: Hold) {
   function mark() {
     if (now) node.setAttribute('data-longpress', '');
     else node.removeAttribute('data-longpress');
+    // Set before a touch begins (the browser reads it then): an armed button's touch is the hold's alone.
+    node.style.touchAction = now ? 'none' : '';
   }
 
   node.addEventListener('pointerdown', down);
