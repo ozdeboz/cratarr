@@ -45,13 +45,17 @@ As Ableton's Racks: macros per rack, racks nested, the dice rolling macros only.
 
 ## Consequences
 
-- The shipped rack needs a face: macros that say what a look is (its form, shape, colours, light), since the dice no
-  longer roll the Flame's knobs one by one. Which ones is the owner's to choose (open, below).
+- The shipped rack needs a face: macros that say what a look is, since the dice no longer roll the Flame's knobs one
+  by one (below).
 - The Flame's own checks on a roll (it must draw something: the survey) apply where a macro moves its look.
 - The check against the track (the precheck's limits) stays with Everything and the categories; a macro roll stays
   within the ranges its maker chose.
 - Kept racks and snapshots: Calm gets its own Wild, the rack's Wild maps to it; the shipped Dice rolls Macros.
 
-## Open
+## The shipped face (the owner, 2026-10-29: "Eight"; the dice roll "all macros")
 
-- The shipped rack's look macros: which, and their ranges.
+- **Look:** Form (the Flame's form, its survey kept: it must draw something), Shape (Detail, Twist, Warp), Symmetry (and
+  Mirror), Lens (its sides and depth), Colours (the four families of hues a track's look picks; Cover and Fire chosen
+  by hand), Hue, Light (Lightness, Vividness), Effects (the effects' Amounts).
+- **Behaviour:** Intensity, Accent, Speed, Wild.
+- **The dice roll every macro** (the owner: "Yes, all macros"); a macro pinned is kept.
