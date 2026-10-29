@@ -110,3 +110,18 @@ test("a kept rack gains the look's macros once, the look as it was", () => {
   upgraded(p, types);
   assert.equal(p.macros.filter((x) => x.id.startsWith('look-')).length, 7);
 });
+
+test('a knob a macro owns rolls through its owner: Colours, the Flame’s Randomize, Everything', () => {
+  const p = toV2(structuredClone(DEFAULTS));
+  // The long press's Colours: the Flame's hue and family are the Hue and Colours macros' now, so those roll.
+  const colours = rolled(rollOf(p, types, 5, 'colours'));
+  assert.ok(colours.macros && 'look-hue' in colours.macros && 'look-colours' in colours.macros, JSON.stringify(Object.keys(colours.macros ?? {})));
+  assert.ok(!colours.values.flame || (!('hue' in colours.values.flame) && !('family' in colours.values.flame)));
+  // The Flame's own Randomize: its look's macros for its owned knobs; its own for the rest.
+  const flame = rolled(rollOf(p, types, 5, { module: ['flame'] }));
+  for (const id of ['look-form', 'look-shape', 'look-hue']) assert.ok(flame.macros && id in flame.macros, id);
+  for (const k of Object.keys(flame.values.flame ?? {})) assert.ok(!['form', 'detail', 'twist', 'warp', 'hue', 'family', 'lightness', 'vividness'].includes(k), k);
+  // Everything: every macro besides the knobs no macro owns.
+  const all = rolled(rollOf(p, types, 5, 'everything'));
+  assert.deepEqual(Object.keys(all.macros!).sort(), p.macros.map((x) => x.id).sort());
+});

@@ -50,12 +50,30 @@ function lookScore(patch: PatchV2, macros: Record<string, number>, types: Record
   return drawScore(look as unknown as Preset, seed);
 }
 
-/** A face's roll: its macros from `seed`, the next seeds tried where the look would draw nothing. */
-function* faceRoll(patch: PatchV2, types: Record<string, ModuleType>, seed: number, reach: number, at?: readonly string[]): Generator<void, Record<string, number>> {
+/** The macro owning each knob of a flattened patch (0077: one a knob), climbed to the outermost (a device's macro mapped
+ *  one level up is its mapper's): rolling a knob a macro owns rolls its owner. */
+function ownersOf(patch: PatchV2): (module: string, knob: string) => string | undefined {
+  const flat = flatten(patch);
+  return (module, knob) => {
+    const base = knob.replace(/\.\d+$/, '');
+    let owner = flat.macros.find((x) => x.targets.some((t) => t.module === module && (t.knob === knob || t.knob === base)));
+    for (let depth = 0; owner && depth < 8; depth++) {
+      const up = flat.macros.find((y) => y.targets.some((t) => t.module === owner!.id && t.knob === 'value'));
+      if (!up) break;
+      owner = up;
+    }
+    return owner?.id;
+  };
+}
+
+/** A face's roll: its macros from `seed` (those in `only`, where given), the next seeds tried where the look would draw
+ *  nothing. */
+function* faceRoll(patch: PatchV2, types: Record<string, ModuleType>, seed: number, reach: number, at?: readonly string[], only?: ReadonlySet<string>): Generator<void, Record<string, number>> {
   let best: { macros: Record<string, number>; score: number } | null = null;
   for (let t = 0; t < TRIES; t++) {
     if (t > 0) yield;
-    const macros = randomizeMacros(patch, { seed: seed + t, reach, at });
+    const all = randomizeMacros(patch, { seed: seed + t, reach, at });
+    const macros = only ? Object.fromEntries(Object.entries(all).filter(([k]) => only.has(k))) : all;
     const score = lookScore(patch, macros, types, seed + t);
     if (score === null || score > DRAWS) return macros;
     if (!best || score > best.score) best = { macros, score };
@@ -72,13 +90,20 @@ export function* rollOf(patch: PatchV2, types: Record<string, ModuleType>, seed:
     const m = moduleAt(patch, roll.module);
     if (m && isDevice(m) && m.macros.length) return { values: {}, cables: {}, macros: yield* faceRoll(patch, types, seed, reach, roll.module) };
     const id = roll.module[roll.module.length - 1];
-    return { values: yield* randomize(patch, types, { seed, scope: (x) => x.id === id, reach }), cables: {} };
+    const owners = new Set<string>();
+    const values = yield* randomize(patch, types, { seed, scope: (x) => x.id === id, reach, owned: ownersOf(patch), owners });
+    return { values, cables: {}, ...(owners.size ? { macros: yield* faceRoll(patch, types, seed, reach, undefined, owners) } : {}) };
   }
   if (roll === 'macros') return { values: {}, cables: {}, macros: held.includes('macros') ? {} : yield* faceRoll(patch, types, seed, reach) };
   const heldScopes = held.map((x) => scopeNamed(x, types)).filter((x): x is Scope => !!x);
   const asked = scopeNamed(roll, types);
   const knobsScope: Scope | null = asked && heldScopes.length ? (m, k) => asked(m, k) && !heldScopes.some((h) => h(m, k)) : asked;
   const withCables = (roll === 'everything' || roll === 'cables' || roll === 'response') && !held.includes('cables') && !held.includes('response');
-  const values: Randomized = knobsScope ? yield* randomize(patch, types, { seed, scope: knobsScope, reach }) : {};
-  return { values, cables: withCables ? randomizeCables(patch, types, { seed, reach }) : {} };
+  // A knob a macro owns is rolled through its owner; Everything rolls every macro besides.
+  const owners = new Set<string>();
+  const values: Randomized = knobsScope ? yield* randomize(patch, types, { seed, scope: knobsScope, reach, owned: ownersOf(patch), owners }) : {};
+  const cables = withCables ? randomizeCables(patch, types, { seed, reach }) : {};
+  const everything = roll === 'everything';
+  if (held.includes('macros') || (!everything && !owners.size)) return { values, cables };
+  return { values, cables, macros: yield* faceRoll(patch, types, seed, reach, undefined, everything ? undefined : owners) };
 }

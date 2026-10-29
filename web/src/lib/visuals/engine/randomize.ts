@@ -34,6 +34,10 @@ export type RandomizeOptions = {
   /** How far from where each knob is (0: not at all; 1, the default: anywhere in its range). The chain's draw, drawn as
    *  one, is drawn whole. */
   reach?: number;
+  /** The macro that owns a knob, by the knob's module's flattened id (0077: one a knob, its owner rolls it), and where
+   *  each owner of a knob in scope is collected: an owned knob is never rolled itself. */
+  owned?: (module: string, knob: string) => string | undefined;
+  owners?: Set<string>;
 };
 
 /** The new values: each module's knobs by id (a device's modules under `<device>/<module>`, as flatten names them). */
@@ -128,6 +132,8 @@ function* into(
   const isPinned = (m: Module, id: string) => whole(m) || pinned.has(`${m.id}.${id}`) || pinned.has(`${m.id}.${id.replace(/\.\d+$/, '')}`);
   const set = (m: Module, id: string, v: number) => {
     if (isPinned(m, id) || !scope(m, knobOf(m, id))) return;
+    const owner = opts.owned?.(at + m.id, id);
+    if (owner) return void opts.owners?.add(owner);
     (out[at + m.id] ??= {})[id] = v;
   };
 
