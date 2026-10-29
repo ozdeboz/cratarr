@@ -22,7 +22,7 @@ android {
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionName = "0.9.15-2"
-        versionCode = 24
+        versionCode = 25
     }
 
     signingConfigs {

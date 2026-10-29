@@ -57,7 +57,7 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
     /** Where the tape's stream is [nowMs] (elapsed realtime), ms from its start, as its sound is heard; null before any
      *  sound since its start. Its player's own place moves only once a second (2026-10-29, the tablet: a held wind's
      *  place stood still, then leapt up to 128 s). */
-    fun tapeHeardMs(nowMs: Long): Double? = tapeSink?.heardMs(nowMs)
+    fun tapeHeardMs(nowMs: Long, rate: Double? = null): Double? = tapeSink?.heardMs(nowMs, rate)
     /** The announce channel's mix-in (lib Announcer): first in the chain, so a group hears what its leader announces. */
     val announcer = Announcer.Mixer().also { Announcer.mixer = it }
     private val snapclient = Snapclient(context)
@@ -173,11 +173,16 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
 
         override fun play() {
             playing = true
+            // On from where it stood, at the speed it plays at (the player may not ask again for a second).
+            heard = heard?.let { Heard(it.us, SystemClock.elapsedRealtimeNanos(), playbackParameters.speed.toDouble() * speed.rate) }
             super.play()
         }
 
         override fun pause() {
             playing = false
+            // Where it stops: as far as it had got, still.
+            val now = SystemClock.elapsedRealtimeNanos()
+            heard = heard?.let { Heard(it.us + ((now - it.atNs) / 1000.0 * it.rate).toLong(), now, 0.0) }
             super.pause()
         }
 
@@ -197,11 +202,13 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
             return s + media
         }
 
-        /** ms since the first sound after the flush, [nowMs] (elapsed realtime): as last heard, counted on at its rate
-         *  for at most [HEARD_AHEAD_MS]; null before any. */
-        fun heardMs(nowMs: Long): Double? = heard?.let { h ->
+        /** ms since the first sound after the flush, [nowMs] (elapsed realtime): as last heard, counted on for at most
+         *  [HEARD_AHEAD_MS] at [rate] (the speed it plays at now, if the caller knows it; its own as heard if not), or
+         *  not at all if it was paused; null before any. The player asks about once a second while it plays
+         *  (2026-10-29, the tablet). */
+        fun heardMs(nowMs: Long, rate: Double? = null): Double? = heard?.let { h ->
             val ahead = (nowMs - h.atNs / 1_000_000.0).coerceIn(0.0, HEARD_AHEAD_MS)
-            h.us / 1000.0 + ahead * h.rate
+            h.us / 1000.0 + ahead * (if (h.rate == 0.0) 0.0 else rate ?: h.rate)
         }
     }
 
@@ -601,7 +608,7 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
         private const val TAG = "CratarrSyncPlay"
         private const val SNAP_TAG = "snapclient"
         /** How long a heard place is counted on without the player asking again (a stall stops it there). */
-        private const val HEARD_AHEAD_MS = 500.0
+        private const val HEARD_AHEAD_MS = 1_500.0
 
         // Snapcast's binary protocol (its doc/binary_protocol.md), as server/src/snapcast/proto.rs speaks it.
         private const val CODEC_HEADER = 1

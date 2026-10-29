@@ -192,6 +192,8 @@ class StartStop(
     private var tapeReleased = 0L
     private var tapeReleaseFrom = 1f
     private var tapeRate = 0f
+    /** The speed the wind's stream plays at now, as last set ([tapeAt]): what its heard place counts on at. */
+    private var tapeSounds = 1f
     /** A forward hold begun while playing (0.9.12, the owner): it does not stop first but flies off at the track's own
      *  speed, its stream at [FLY_SPEED] played at its lowest rate, and lets go at that rate back into the track. */
     private var tapeFlying = false
@@ -338,6 +340,7 @@ class StartStop(
      */
     private fun tapeAt(speed: Float, share: Float) {
         val t = tape ?: return
+        tapeSounds = speed
         if (grouped() || tapeInChain) {
             sync.tapeSpeed.rate = speed
             sync.tapeSpeed.gain = share
@@ -544,7 +547,7 @@ class StartStop(
         val own = t.currentPosition.coerceAtLeast(0L)
         // The player's own is a second behind at most (its stream never plays above 1×): one further off is another
         // stream's, heard before this one's first sound.
-        val heard = sync.tapeHeardMs(now)?.toLong()?.takeIf { kotlin.math.abs(it - own) < HEARD_OFF_MS } ?: return own
+        val heard = sync.tapeHeardMs(now, tapeSounds.toDouble())?.toLong()?.takeIf { kotlin.math.abs(it - own) < HEARD_OFF_MS } ?: return own
         return heard.coerceAtLeast(0L)
     }
 
