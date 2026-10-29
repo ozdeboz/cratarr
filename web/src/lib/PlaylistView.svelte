@@ -134,6 +134,7 @@
   import { isKept, setKept } from './kept.svelte';
   import { longpress } from './longpress';
   import { isLocal, playlistsKnown, playPlaylistFrom, shownPlaylists, startPlaylists } from './output.svelte';
+  import { shuffled } from './shuffle';
   import { albumMoved, albumOf, artistOf, artistSubject, backToTracks, closePlaylist, goHome, NEW_PLAYLIST, panelDepth, viewOver, viewPlaylist, panel, TABS } from './panel.svelte';
   import ArtistBody from './ArtistBody.svelte';
   import ArtistMenu from './ArtistMenu.svelte';
@@ -1186,7 +1187,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
     }
     const tracks = tracksOf(shownPlayable);
     if (mode === 'play' || mode === 'shuffle') {
-      const order = mode === 'shuffle' ? [...tracks].sort(() => Math.random() - 0.5) : tracks;
+      const order = mode === 'shuffle' ? shuffled(tracks) : tracks;
       return playPlaylistFrom(title, source, order, 0);
     }
     if (isLocal()) return enqueue(tracks, mode);

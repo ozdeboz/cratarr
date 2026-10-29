@@ -85,6 +85,7 @@
   import { TracksToPlaylist, type ToPlaylistStep } from './tracksToPlaylist.svelte';
   import MenuSheet, { type SheetAction } from './MenuSheet.svelte';
   import { isLocal, playPlaylistFrom } from './output.svelte';
+  import { shuffled } from './shuffle';
   import { albumGone, albumSubject, panel, viewPlaylist } from './panel.svelte';
   import { coverKey, localCovers, refreshCover, removeLocalCover, setLocalCover } from './localCovers.svelte';
   import { linkTo, share } from './share';
@@ -248,7 +249,7 @@
         label: 'Shuffle',
         disabled: !t?.length,
         // The server's library through the server's choice (decision 0059); the device's own as before.
-        onclick: () => run(() => (source === DEVICE ? playPlaylistFrom(a.title, source, [...t!].sort(() => Math.random() - 0.5), 0) : playCollection({ kind: 'album', source, id: a.id }, 'shuffle', a.title))),
+        onclick: () => run(() => (source === DEVICE ? playPlaylistFrom(a.title, source, shuffled(t!), 0) : playCollection({ kind: 'album', source, id: a.id }, 'shuffle', a.title))),
       },
       { icon: 'playNext', label: 'Play next', onclick: () => run(() => (source === DEVICE ? playAlbums(listed(), 'next') : playCollection({ kind: 'album', source, id: a.id }, 'next', a.title)), 'Plays next.') },
       { icon: 'listAdd', label: 'Add to queue', onclick: () => run(() => (source === DEVICE ? playAlbums(listed(), 'last') : playCollection({ kind: 'album', source, id: a.id }, 'last', a.title)), 'Added to the queue.') },

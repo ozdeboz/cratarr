@@ -11,7 +11,7 @@ import { toast } from './toast.svelte';
 import { ramping, rampPressed, rampTurned } from './ramping.svelte';
 import { appInfo, inApp } from './app.svelte';
 import { prefs } from './prefs.svelte';
-import { windUpMs } from './localPlayer.svelte';
+import { RESTART_AFTER, windUpMs } from './localPlayer.svelte';
 import { playOn } from './playOn.svelte';
 
 /** What plays where the output is: the server's player, or this browser (decision 0022). */
@@ -247,8 +247,8 @@ export function clockText(secs: number) {
 }
 
 // Commands. What they lead to is shown at once and the server confirms it; only a failure says something, in a toast.
-/** Within this many seconds of the start, Previous goes to the track before; later it restarts the track. */
-const RESTART_SECS = 3;
+// Previous restarts the track past RESTART_AFTER, as every player does (it was 3 s here: from 3 to 5 s in, the remote
+// showed a restart where the player went to the track before).
 
 /** What is shown when `next` starts playing. */
 function starting(next: { id: string; name: string; artist: string | null; album: string | null; album_id: string | null; addable: boolean }, duration: number | null, upcoming: Upcoming[]): NowPlaying {
@@ -270,9 +270,9 @@ function show(command: Transport) {
   if (command === 'next' && was.upcoming.length) {
     const [next, ...rest] = was.upcoming;
     expect(starting(next, next.duration_secs, rest), (s) => (!s ? 'wait' : s.id === next.id ? 'yes' : s.id === was.id ? 'wait' : 'no'));
-  } else if (command === 'previous' && at > RESTART_SECS) {
+  } else if (command === 'previous' && at > RESTART_AFTER) {
     expect({ ...was, progress: was.progress && { ...was.progress, position_secs: 0 } }, (s) =>
-      !s ? 'wait' : s.id !== was.id ? 'no' : (s.progress?.position_secs ?? 0) < Math.max(RESTART_SECS, at - 2) ? 'yes' : 'wait',
+      !s ? 'wait' : s.id !== was.id ? 'no' : (s.progress?.position_secs ?? 0) < Math.max(RESTART_AFTER, at - 2) ? 'yes' : 'wait',
     );
   } else if (command === 'previous' && live.before && live.before.id !== was.id) {
     const back = live.before;
