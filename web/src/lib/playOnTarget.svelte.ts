@@ -379,9 +379,10 @@ if (typeof window !== 'undefined' && !inApp) {
       if (source && n === name) return;
       connect();
     });
-    // Every change reported at once.
+    // Every change reported at once: each of the report's fields but the position, which the heartbeat carries (the
+    // architecture audit, 2026-10-29: winding, a ramp's start, Radio's by and count and the group's leader waited for it).
     $effect(() => {
-      void [local.index, local.paused, local.queue, local.repeat, local.radio, local.autoplay, local.skipFavourites, pageVolume.level, pageVolume.ducked, sleep(), prefs.output, listening.playing, tapeDir.want, prefs.levelling, prefs.levelUnknown, local.levelDb];
+      void [local.index, local.paused, local.queue, local.repeat, local.radio, local.radioBy, local.radioCount, local.autoplay, local.skipFavourites, local.starting, rewindNow.on, pageVolume.level, pageVolume.ducked, sleep(), prefs.output, listening.playing, listening.leader, tapeDir.want, prefs.levelling, prefs.levelUnknown, local.levelDb];
       if (target.connected) reportSoon();
     });
     // Sound has started: no need to ask for the tap any more.
