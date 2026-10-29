@@ -17,6 +17,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use super::ToggleError;
 use super::playon::QueueTrack;
@@ -29,7 +30,7 @@ pub const LANE_AUTOPLAY: &str = "autoplay";
 
 /// How Cratarr chooses, as a player asks: Radio's inserts, or one of Autoplay's modes. Continuous, AlbumMix and
 /// Reshuffle are the modes from before the amendment, still taken from apps not yet updated.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
     /// Close to the seed on playlists, artist, genre, era and tags, weighed equally; drifts as the closest are played.
@@ -64,7 +65,7 @@ impl Mode {
 }
 
 /// Autoplay's modes; off is its absence (`stop` in commands).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum AutoMode {
     #[default]
@@ -75,7 +76,7 @@ pub enum AutoMode {
 }
 
 /// Autoplay's mode in a command: `stop` switches it off.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum AutoplayMode {
     Stop,
@@ -120,7 +121,7 @@ pub fn from_old(mode: Option<Mode>) -> (AutoMode, bool, bool) {
 
 /// What Radio's inserts are like (decision 0036, amended): the track (its artist weighed double), its artist (as
 /// Autoplay's Artist, seeded by the track) or its era (as Autoplay's Era).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum RadioBy {
     #[default]
@@ -140,7 +141,7 @@ pub const RADIO_COUNT: u8 = 5;
 pub const RADIO_MAX: u8 = 10;
 
 /// Autoplay as the queue keeps it (`Queue::autoplay`): on while there is one.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 pub struct Autoplay {
     #[serde(default)]
     pub mode: AutoMode,
@@ -156,6 +157,7 @@ pub struct Autoplay {
     pub seed: Vec<String>,
     /// A crate it plays inside (its id): only the crate's tracks, as its favourites toggle is set ("Play as radio").
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub within: Option<String>,
 }
 
