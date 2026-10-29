@@ -200,13 +200,13 @@
     showChrome();
   }
   type Scope = (typeof RANDOMIZE_SCOPES)[number];
-  function roll(scope: Scope | { module: string[] } = 'everything') {
+  function roll(scope: Scope | { module: string[] } = 'macros') {
     loop?.roll(scope);
     showChrome();
   }
-  // A module's own Randomize: its id as its level has it; a category's whole.
+  // A module's own Randomize, by its path (engine/dice.ts: a device's its macros, a module's its knobs); a category's whole.
   function randomizeFrom(what: { module: string[] } | { category: Category }) {
-    if ('module' in what) roll({ module: [what.module[what.module.length - 1]] });
+    if ('module' in what) roll({ module: what.module });
     // In / Out (Music, the Screen, the Meter) is no scope of the dice: nothing of it to roll.
     else if (what.category !== 'io') roll(what.category);
   }

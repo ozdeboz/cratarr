@@ -23,7 +23,7 @@ const over = (patch: (s: typeof DEFAULTS) => PatchV2): Engine => {
         from = s;
         p = patch(s);
       }
-      return stepEngine(st, p!, {}, m, () => 0, s, dt, opts).aspects!;
+      return stepEngine(st, p!, {}, m, () => 0, dt, opts).aspects!;
     },
   };
 };
@@ -51,7 +51,7 @@ test('a blank slate: an empty patch, or one with only a modulator, runs and draw
     const at = 20 + k / 30;
     const m = musicOf(t.signals, t.beats, at, true, { state: music, at: at * 1000, lighting: DEFAULTS.lighting });
     for (const p of [empty, lfo]) {
-      const f = stepEngine(st, p, {}, m, () => 0, DEFAULTS, 1 / 30, { still: false, now: at * 1000, fluidFull: FLUID_FULL });
+      const f = stepEngine(st, p, {}, m, () => 0, 1 / 30, { still: false, now: at * 1000, fluidFull: FLUID_FULL });
       assert.equal(f.aspects, null);
       if (p === lfo) assert.ok(Number.isFinite(f.outputs.osc));
     }
@@ -113,7 +113,7 @@ test("Music's newtrack fires once as each track starts (the first frame too), it
     const at = 20 + k / 30;
     const key = k < 30 ? 'subsonic/a' : k < 60 ? 'subsonic/b' : 'subsonic/a';
     const m = { ...musicOf(t.signals, t.beats, at, true, { state: music, at: at * 1000, lighting: DEFAULTS.lighting }), key };
-    const f = stepEngine(st, p, {}, m, () => 0, DEFAULTS, 1 / 30, { still: false, now: at * 1000, fluidFull: FLUID_FULL });
+    const f = stepEngine(st, p, {}, m, () => 0, 1 / 30, { still: false, now: at * 1000, fluidFull: FLUID_FULL });
     seen.push({ fired: f.outputs['v.out'], seed: f.outputs['s.out'] });
   }
   assert.deepEqual(seen.flatMap((x, k) => (x.fired > 0.5 ? [k] : [])), [0, 30, 60]);
@@ -131,9 +131,9 @@ test("Fluid's at: the Flame's points by default (its normal), a Grid's where one
   const at = 20;
   const m = musicOf(t.signals, t.beats, at, true, { state: music, at: at * 1000, lighting: DEFAULTS.lighting });
   const opts = { still: false, now: at * 1000, fluidFull: FLUID_FULL, flamePoints: flamePoints as never };
-  const plain = stepEngine(newEngine(), base, {}, m, () => 0, DEFAULTS, 1 / 30, opts);
+  const plain = stepEngine(newEngine(), base, {}, m, () => 0, 1 / 30, opts);
   assert.deepEqual(plain.pointsAt[`${fluid.id}.at`], flamePoints);
-  const gridded = stepEngine(newEngine(), withGrid, {}, m, () => 0, DEFAULTS, 1 / 30, opts);
+  const gridded = stepEngine(newEngine(), withGrid, {}, m, () => 0, 1 / 30, opts);
   const got = gridded.pointsAt[`${fluid.id}.at`]!;
   assert.equal(got.length, 4);
   for (const q of got) assert.ok(q && q[0] >= 0 && q[0] <= 1 && q[1] >= 0 && q[1] <= 1);

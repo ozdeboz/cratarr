@@ -77,7 +77,7 @@ const graph = (): Engine => {
         from = s;
         p = flatten(toV2(s));
       }
-      return stepEngine(st, p!, {}, m, () => 0, s, dt, opts).aspects;
+      return stepEngine(st, p!, {}, m, () => 0, dt, opts).aspects;
     },
   };
 };
@@ -162,7 +162,7 @@ test("the extras (modulators, macros, a layer's knobs) as evaluate.ts moved them
     const at = 20 + k * dt;
     const m = musicOf(t.signals, t.beats, at, true, { state: music, at: at * 1000, lighting: settings.lighting });
     const read = signalsFor(normal, m, at * 1000);
-    const mine = stepEngine(st, v2, types, m, read, settings, dt, { still: false, now: at * 1000, fluidFull: FLUID_FULL });
+    const mine = stepEngine(st, v2, types, m, read, dt, { still: false, now: at * 1000, fluidFull: FLUID_FULL });
     const theirs = evaluate(v1, types, read, ev, dt, { envelope: mine.outputs['envelope.out'], frame: { beat: m.beat } });
     for (const [knob, v] of Object.entries(theirs.knobs['shapes-1'])) {
       const d = Math.abs(v - mine.knobs['shapes-1'][knob]);
@@ -207,7 +207,7 @@ test("each chain module's own node values (step 5, the one engine) are today's, 
       name: 'engine, checked',
       step: (m, s, dt, opts) => {
         if (from !== s) [from, p] = [s, flatten(toV2(s))];
-        const f = stepEngine(st, p!, {}, m, () => 0, s, dt, opts);
+        const f = stepEngine(st, p!, {}, m, () => 0, dt, opts);
         const mod = (id: string) => p!.modules.find((x) => x.id === id);
         // Each module's own node values against today's (aspects.ts, stepped in lockstep).
         const d = ref.step(m, s, dt, opts)!;

@@ -24,7 +24,7 @@ const engineOver = (addOnly: boolean): Engine => {
         from = s;
         p = flatten(toV2(s, { addOnly }));
       }
-      return stepEngine(st, p!, {}, m, () => 0, s, dt, opts).aspects;
+      return stepEngine(st, p!, {}, m, () => 0, dt, opts).aspects;
     },
   };
 };
@@ -103,7 +103,7 @@ test("a Shaper gives each channel its curve's height at its input, as a cable's 
   for (let k = 0; k < 120; k++) {
     const at = 20 + k / 30;
     const m = musicOf(t.signals, t.beats, at, true, { state: music, at: at * 1000, lighting: DEFAULTS.lighting });
-    stepEngine(st, p, {}, m, () => 0, DEFAULTS, 1 / 30, { still: false, now: at * 1000, fluidFull: FLUID_FULL });
+    stepEngine(st, p, {}, m, () => 0, 1 / 30, { still: false, now: at * 1000, fluidFull: FLUID_FULL });
     for (let ch = 0; ch < 6; ch++) {
       const x = m.bands![ch][B.level];
       const want = heightOf(sh, x);

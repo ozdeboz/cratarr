@@ -10,6 +10,7 @@ import type { Module } from '../patch';
 import { SETTING_KNOB } from '../patch';
 import { ownKnob, placeOf, slotModules, SLOT_IDS, SLOT_SETTINGS } from './effect-slots';
 import { SHOW_PARTS, type PatchV2 } from '../ports';
+import type { EffectSettings } from '../effects';
 import { COLUMN_SCALES } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
 
@@ -18,6 +19,29 @@ const MOVED: Readonly<Record<string, [string, string]>> = { intensity: ['envelop
 /** The column scales folded into the cables (all but the fluid's stirring, scaled where it stirs). */
 const FOLDED = new Set<string>(Object.entries(COLUMN_SCALES).filter(([a]) => a !== 'stir' && a !== 'flow' && a !== 'swirl').map(([, k]) => k));
 const SHOW_PART = new Map(SHOW_PARTS.map((p) => [p.knob, p.type]));
+
+/** The effects' slots as the light loop's and the meters' old side still read them (EffectSettings): each slot's effect,
+ *  Amount and controls from the effect module standing for it (0057 §3, its macros in); a slot with none, none of it. */
+export function effectSlotsOf(p: PatchV2): EffectSettings {
+  const out: Record<string, number> = {};
+  const read = (m: Module, knob: string) => {
+    let v = m.knobs[knob];
+    for (const x of p.macros) for (const t of x.targets) if (t.module === m.id && t.knob === knob) v = t.from + (t.to - t.from) * Math.min(1, Math.max(0, x.value));
+    return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+  };
+  const effects = slotModules(p.modules);
+  for (const slot of SLOT_IDS) {
+    const names = SLOT_SETTINGS[slot];
+    const m = effects.get(slot);
+    out[names.effect] = m ? placeOf(slot, m.type) : 0;
+    out[names.amount] = m ? (read(m, 'amount') ?? 1) : 0;
+    for (const k of ['k1', 'k2'] as const) {
+      const own = m && ownKnob(m.type, k);
+      out[names[k]] = (m && own ? read(m, own) : undefined) ?? 0.5;
+    }
+  }
+  return out as unknown as EffectSettings;
+}
 
 /** `p` as today's settings, over `base`. */
 export function settingsOfPatch(p: PatchV2, base: VisualSettings): VisualSettings {

@@ -19,6 +19,11 @@ import { COLUMN_OFFSETS, ENGINE_MODULES, MOST_POINTS, RANDOMIZE_SCOPES, READINGS
 import { A, AMOUNT_ASPECTS, ASPECTS, B, BAND_SIGNALS, KNOB_ASPECTS, LEVEL_ASPECTS, MOMENT_ASPECTS, PART_ASPECTS, T, TRACK_SIGNALS, given, given as columnsFor, type Aspect, type Given } from '../routes';
 import { BANDS, type VisualSettings } from '../settings.svelte';
 import { newFlame, stepFlame, type FlameNow, type FlameState } from './chain';
+import { newFlameNode, stepFlameNode, type FlameNodeState, type FlameView } from './flame-node';
+import type { PaletteColour } from '../palette';
+import type { Flow, Force } from '../fluid';
+import { newStirring, stir, type Stirring } from '../stirring';
+import { fluidGains } from './fluid-gains';
 import { newDucker, stepDucker, type DuckerState } from './compressor';
 import { newClockTriggers, stepClockTriggers, type ClockTriggerState, type ClockTriggers } from './clock';
 import { gridOf, type Grid, type GridPoint } from './grid';
@@ -121,6 +126,10 @@ export type EngineState = {
   accents: Record<string, AccentState>;
   /** Each Flame's own state (its node's, step 5), by module. */
   flames: Record<string, FlameState>;
+  /** Each Flame's look, framing and place on the screen (flame-node.ts), where the engine runs with a view. */
+  flameNodes: Record<string, FlameNodeState>;
+  /** The Fluid's stirring (stirring.ts): its kicks under way, the hits and beats it last kicked for. */
+  stirring: Stirring;
   /** Each Field's time run on. */
   fieldPhases: Record<string, number>;
   modulators: Record<string, { type: string; run: Modulator }>;
@@ -158,6 +167,8 @@ export function newEngine(): EngineState {
     }),
     accents: {},
     flames: {},
+    flameNodes: {},
+    stirring: newStirring(),
     fieldPhases: {},
     modulators: {},
     values: {},
@@ -177,7 +188,8 @@ type FaceKeys = { input: string; reduction: string; in: string[] };
 const faceKeys = (id: string): FaceKeys => ({ input: `${id}.in`, reduction: `${id}.reduction`, in: Array.from({ length: CHANNELS }, (_, ch) => `${id}.in.${ch}`) });
 
 /** A step knob to move on (its module flattened). */
-export type NextRequest = { module: string; knob: string };
+/** A step whose Next fired this frame (0057 §7e), and the step it moves on to (past its last, its first). */
+export type NextRequest = { module: string; knob: string; to: number };
 
 export type EngineFrame = {
   /** What the picture is drawn with this frame (today's renderer's input, until step 3's modules take knob values); null
@@ -207,6 +219,10 @@ export type EngineFrame = {
   /** The Dice whose trigger rose this frame (0057 §7f): each one's seed and scope, for the page to randomize the patch
    *  with (randomize.ts: over frames, as one undoable change through the store). */
   dice: DiceRoll[];
+  /** What each Flame draws with this frame (flame-node.ts: its look, framed), where the engine runs with a view. */
+  flames: Record<string, FlameView>;
+  /** The Cratarr device's Fluid stirred this frame (its pushes and its flow, for the light loop), with a view. */
+  fluid: { forces: Force[]; flow: Flow } | null;
 };
 
 /** A chain module's node values (EngineFrame.params), by its type. */
@@ -254,6 +270,11 @@ export type EngineOptions = {
   flameFrame?: { x: number; y: number; size: number; coverage: number } | null;
   /** The picture's width over its height (where a Flame's parts are, in a Grid's frame). */
   aspect?: number;
+  /** Run with a view (the page's frame loop): each Flame's look, framing and place on the screen worked out by its node
+   *  (flame-node.ts), from the playing track's cover colours as the page has them and how long this frame's change of
+   *  look glides (a new track's, the dice's, a step's; null: as a knob's). Its parts and outputs are then its own, not
+   *  `flamePoints` and `flameFrame` (a lab's or a test's, without a view). */
+  view?: { cover: { key: string | null; colours: PaletteColour[] | null }; glide: number | null };
   /** The Fluid's flow where a Grid drifting on it is (the frame's units a second), as the renderer last read it back. */
   fluidFlow?: (x: number, y: number) => [number, number];
 };
@@ -277,6 +298,9 @@ type Plan = {
   /** The first module of each type (the engine's own are one a patch). */
   first: Map<string, Module>;
   flame: Module | undefined;
+  /** Whether something reads a Flame's parts on the screen: a Fluid (its pushes, normalled to them), a cable from its
+   *  points (a Grid's or Streamlines' seeds). */
+  readsFlameParts: boolean;
   /** The chain's path (beside its Flame). */
   at: string;
   gateOf: Map<string, CableV2>;
@@ -445,7 +469,8 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
   const ids = new Set(nodes.map((x) => x.id));
   const needs = new Map<string, Set<string>>(nodes.map((x) => [x.id, new Set<string>()]));
   for (const c of p.cables) if (ids.has(c.from.module) && ids.has(c.to.module) && c.from.module !== c.to.module) needs.get(c.to.module)!.add(c.from.module);
-  for (const macro of p.macros) for (const t of macro.targets) if (ids.has(t.module) && !macroIds.has(t.module)) needs.get(t.module)!.add(macro.id);
+  // A macro's targets after it: a module's knobs, and a device's macro it maps (0077: one level down).
+  for (const macro of p.macros) for (const t of macro.targets) if (ids.has(t.module) && t.module !== macro.id && (!macroIds.has(t.module) || t.knob === MACRO_KNOB.id)) needs.get(t.module)!.add(macro.id);
   const done = new Set<string>();
   const order: Node[] = [];
   while (done.size < nodes.length) {
@@ -459,6 +484,7 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
     moduleOf,
     first,
     flame,
+    readsFlameParts: p.modules.some((x) => x.type === 'fluid') || p.cables.some((c) => typeOf.get(c.from.module) === 'flame' && c.from.port === 'points'),
     at: flame ? flame.id.slice(0, flame.id.lastIndexOf('/') + 1) : '',
     gateOf,
     into,
@@ -509,7 +535,7 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
 
 /** One frame. `read`: the music's signals on 1 = typical (normal.ts signalsFor), for cables that read them so; `s`: the
  *  chain's knobs as settings (until the chain's modules hold their own). */
-export function stepEngine(st: EngineState, given: PatchV2, types: Record<string, ModuleType>, m: Music, read: (ref: SignalRef) => number, s: VisualSettings, dt: number, opts: EngineOptions): EngineFrame {
+export function stepEngine(st: EngineState, given: PatchV2, types: Record<string, ModuleType>, m: Music, read: (ref: SignalRef) => number, dt: number, opts: EngineOptions): EngineFrame {
   // A Music signal module is Music's port of its signal (music-signals.ts).
   const p = musicView(given);
   const L = opts.levers ?? OPEN;
@@ -530,8 +556,15 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   const ofType = (type: string) => plan.first.get(type);
   const inChain = (rel: string) => moduleOf.get(at + rel);
   const knobOf = (x: Module | undefined, knob: string, or: number) => finite(x?.knobs[knob], or);
-  /** The chain's settings from its modules' knobs (the patch is the truth, 0057 Phase B); a knob a patch has no module
-   *  for, as the settings had it. */
+  /** What a knob gives where the patch has no value for it: its type's default on a module it has; where it has no such
+   *  module, its neutral, so it does nothing (what the rack shows is what runs, never a setting kept from before the
+   *  switch: the owner, 2026-10-29); 0 for a type unknown. */
+  const unset = (x: Module | undefined, type: string, knob: string) => {
+    const k = (types[type] ?? ENGINE_TYPES[type])?.knobs.find((d) => d.id === knob);
+    return (x ? k?.default : k?.neutral) ?? 0;
+  };
+  /** The chain's settings from its modules' knobs (the patch is the truth, 0057 Phase B; a knob it has no value for:
+   *  `unset`). */
   // Intensity, Flash and Speed are the rack's macros on these knobs (0057: the Whole frame gone): as last frame left them.
   const macroedKnob = (x: Module | undefined, knob: string, or: number) => {
     let base = knobOf(x, knob, or);
@@ -539,20 +572,19 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     return base;
   };
   const chainSettings = {
-    lighting: s.lighting,
-    flash: macroedKnob(ofType('accent'), 'accent', s.flash),
-    speed: macroedKnob(ofType('clock'), 'speed', s.speed),
-    intensity: macroedKnob(ofType('envelope'), 'intensity', s.intensity),
-    continuity: s.continuity.map((v, k) => knobOf(flameModule, CONTINUITY_AT[k], v)),
-    evolution: s.evolution.map((v, k) => knobOf(flameModule, EVOLUTION_AT[k], v)),
-    fluid: knobOf(inChain('fluid'), 'fluid', s.fluid),
-    facets: knobOf(inChain('fluid'), 'facets', s.facets),
-    tunnel: knobOf(inChain('tunnel'), 'tunnel', s.tunnel),
-    dive: knobOf(inChain('dive'), 'dive', s.dive),
+    flash: macroedKnob(ofType('accent'), 'accent', unset(ofType('accent'), 'accent', 'accent')),
+    speed: macroedKnob(ofType('clock'), 'speed', unset(ofType('clock'), 'clock', 'speed')),
+    intensity: macroedKnob(ofType('envelope'), 'intensity', unset(ofType('envelope'), 'envelope', 'intensity')),
+    continuity: CONTINUITY_AT.slice(0, BANDS).map((id) => knobOf(flameModule, id, unset(flameModule, 'flame', id))),
+    evolution: EVOLUTION_AT.slice(0, BANDS).map((id) => knobOf(flameModule, id, unset(flameModule, 'flame', id))),
+    fluid: knobOf(inChain('fluid'), 'fluid', unset(inChain('fluid'), 'fluid', 'fluid')),
+    facets: knobOf(inChain('fluid'), 'facets', unset(inChain('fluid'), 'fluid', 'facets')),
+    tunnel: knobOf(inChain('tunnel'), 'tunnel', unset(inChain('tunnel'), 'tunnel', 'tunnel')),
+    dive: knobOf(inChain('dive'), 'dive', unset(inChain('dive'), 'dive', 'dive')),
     // Effects: the rack's macro on the effects' Amounts (folded into them: 1) where the Whole frame is gone.
-    effects: knobOf(inChain('frame'), 'effects', inChain('frame') ? s.effects : 1),
-    smoothing: knobOf(inChain('show/blur'), 'smoothing', s.smoothing),
-    haze: knobOf(inChain('show/curve'), 'haze', s.haze),
+    effects: knobOf(inChain('frame'), 'effects', inChain('frame') ? unset(inChain('frame'), 'frame', 'effects') : 1),
+    smoothing: knobOf(inChain('show/blur'), 'smoothing', unset(inChain('show/blur'), 'blur', 'smoothing')),
+    haze: knobOf(inChain('show/curve'), 'haze', unset(inChain('show/curve'), 'curve', 'haze')),
   } as VisualSettings;
   // How a Music row is read (its `reference.<signal>` knob: 0057 §7e, a cable no longer says); unset, as normal.ts
   // reads it by default.
@@ -638,7 +670,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     // A VCA's or a Merge's output, as it is (a Merge's one channel whichever is asked); a Ducker's too.
     if (PROCESSORS.has(type)) return channelsOf(f.module)[channelled(type, f.module) ? (f.channel ?? 0) : 0];
     if (type === 'meter') return opts.meters ? finite(METER_OF[f.port]?.(opts.meters)) : 0;
-    if (type === 'flame' && (f.port === 'x' || f.port === 'y' || f.port === 'size' || f.port === 'coverage')) return finite(opts.flameFrame?.[f.port]);
+    if (type === 'flame' && (f.port === 'x' || f.port === 'y' || f.port === 'size' || f.port === 'coverage')) return finite(flameFrameOf(f.module)?.[f.port]);
     if (type === 'screen' && f.port === 'guard') return guard;
     if (type === 'adsr') {
       const gate = gateOf.get(f.module);
@@ -884,13 +916,20 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   const macros: Record<string, number> = {};
   const macroOf = (x: Macro) => (x.id in macros ? macros[x.id] : finite(st.macros[x.id], clamp(finite(x.value), 0, 1)));
   const nexts: NextRequest[] = [];
+  /** A step's Next fired: on to its next step, round past its last to its first (a pinned one stays as the store has
+   *  it: the visuals' own changes never move a pinned knob). */
+  const nextOf = (module: string, id: string, k?: Pick<Knob, 'min' | 'max' | 'default'>) => {
+    const v = Math.round(finite(moduleOf.get(module)?.knobs[id], k?.default ?? 0));
+    nexts.push({ module, knob: id, to: k && v + 1 > k.max ? k.min : v + 1 });
+  };
   const modulesNow = plan.modulesNow;
 
   // The macros and the modulators, in the order their cables (and a modulator's macros) need.
   const knobs: Record<string, Record<string, number>> = {};
   for (const next of plan.order) {
     if (next.macro) {
-      macros[next.id] = moved(next.id, MACRO_KNOB, clamp(finite(next.macro.value), 0, 1), into.get(`${next.id}|value`) ?? []);
+      // As set, or as the macro one level up that maps it sets it; then as its cables move it.
+      macros[next.id] = moved(next.id, MACRO_KNOB, macroed(next.id, MACRO_KNOB, clamp(finite(next.macro.value), 0, 1)), into.get(`${next.id}|value`) ?? []);
       continue;
     }
     const x = next.module!;
@@ -1016,6 +1055,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   // Each chain module's node values from its own knobs (step 5): what aspects.ts made of the chain's columns, its
   // Accent's courses its own.
   const params: Record<string, NodeParams> = {};
+  const flames: Record<string, FlameView> = {};
   const follow = courseStep(step, held.swing);
   const accented = (id: string, knob: string, v: number, by = 1) => stepAccent((st.accents[`${id}|${knob}`] ??= newAccent()), v, follow, chainSettings.flash, held.swing, by);
   for (const { own } of plan.owns) {
@@ -1023,7 +1063,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     const x = moduleOf.get(own.id);
     if (own.type === 'tonemap') {
       // Its Auto exposure: as bright however much of the view the Flame covers (against a third of it), as far as the knob.
-      const coverage = opts.flameFrame?.coverage;
+      const coverage = flameFrameOf(flameModule?.id)?.coverage;
       const auto = coverage === undefined ? 1 : clamp(0.33 / Math.max(0.05, coverage), 0.4, 1.5);
       params[own.id] = { flash: (x ? finite(x.knobs.level, 1) * gainOf(own.id, 'level') : env.glow) * clamp(accented(own.id, 'glow', 1 + 0.5 * k.glow), 0.15, 3), exposure: 1 + (auto - 1) * finite(k.exposure, 1) };
     }
@@ -1038,14 +1078,34 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     } else if (own.type === 'tunnel') params[own.id] = { tunnel: k.tunnel };
     else if (own.type === 'dive') params[own.id] = { dive: k.dive };
     else if (own.type === 'flame') {
-      const continuity = Array.from({ length: BANDS }, (_, b) => knobOf(x, CONTINUITY_AT[b], s.continuity[b]));
-      const evolution = Array.from({ length: BANDS }, (_, b) => knobOf(x, EVOLUTION_AT[b], s.evolution[b]));
+      const continuity = Array.from({ length: BANDS }, (_, b) => knobOf(x, CONTINUITY_AT[b], unset(x, 'flame', CONTINUITY_AT[b])));
+      const evolution = Array.from({ length: BANDS }, (_, b) => knobOf(x, EVOLUTION_AT[b], unset(x, 'flame', EVOLUTION_AT[b])));
       const flame = stepFlame((st.flames[own.id] ??= newFlame()), m, (knob, band) => (band === null ? k[knob] : k[`${knob}.${band}`]), { clock, continuity, evolution, accent: chainSettings.flash }, step, held);
-      params[own.id] = { scale: clamp(accented(own.id, 'zoom', 0.5 + 0.5 * k.zoom, held.size), 0.25, 1.4), flame };
+      const scale = clamp(accented(own.id, 'zoom', 0.5 + 0.5 * k.zoom, held.size), 0.25, 1.4);
+      params[own.id] = { scale, flame };
+      if (opts.view && x) {
+        // Framed as far as its Fit; a patch from before the knob framed unless a Transform took its light.
+        const fitSet = x.knobs.fit;
+        const transformed = fitSet === undefined && p.cables.some((c) => c.from.module === own.id && c.from.port === 'light' && typeOf.get(c.to.module) === 'transform');
+        const defaults = types[x.type]?.knobs;
+        flames[own.id] = stepFlameNode((st.flameNodes[own.id] ??= newFlameNode()), {
+          base: (knob) => baseOf(x, knob, defaults?.find((d) => d.id === knob)?.default ?? 0),
+          fit: transformed ? 0 : finite(k.fit, finite(fitSet, 1)),
+          now: flame,
+          scale,
+          at: opts.now,
+          dt: step,
+          cover: opts.view.cover,
+          glide: opts.view.glide,
+          aspect: finite(opts.aspect, 16 / 9),
+          readsParts: plan.readsFlameParts,
+        });
+      }
     }
   }
   for (const id of Object.keys(st.accents)) if (!moduleOf.has(id.slice(0, id.indexOf('|')))) delete st.accents[id];
   for (const id of Object.keys(st.flames)) if (!moduleOf.has(id)) delete st.flames[id];
+  for (const id of Object.keys(st.flameNodes)) if (!moduleOf.has(id)) delete st.flameNodes[id];
 
   // The frame's summary as the meters, the precheck and the labs read it (aspects.ts's AspectsNow): the Cratarr device's
   // modules' own values, each column what its module's is; none without a Flame. A view of the modules, not an engine.
@@ -1125,17 +1185,56 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   // What reaches each Fluid's `at`: the points output cabled into it (a Flame's, a Grid's), else the Flame's (its normal).
   const pointsOf = (r: PortRef): readonly (Point | null)[] | null => {
     const type = typeOf.get(r.module);
-    if (type === 'flame' && r.port === 'points') return opts.flamePoints ?? null;
+    if (type === 'flame' && r.port === 'points') return flamePointsOf(r.module);
     if (type === 'grid' && r.port === 'points') return (st.grids[r.module]?.grid.points ?? []).map((q): Point => [q.x * 0.5 + 0.5, q.y * 0.5 + 0.5]);
     return null;
   };
   const pointsAt: Record<string, readonly (Point | null)[]> = {};
   for (const x of plan.fluids) {
     const cabled = plan.intoOf.get(x.id)?.get('at')?.[0];
-    const got = cabled ? pointsOf(cabled.from) : flameModule ? (opts.flamePoints ?? null) : null;
+    const got = cabled ? pointsOf(cabled.from) : flameModule ? flamePointsOf(flameModule.id) : null;
     if (got) pointsAt[`${x.id}.at`] = got;
   }
-  return { aspects, knobs, params, outputs, macros, nexts, fields, points, pointsAt, dice };
+  // The Cratarr device's Fluid stirred (stirring.ts; the frame loop's until 2026-10-29): its pushes at what reaches its
+  // At (the Flame's parts by default), kicked by the bands' hits, the beats, downbeats and sections, each worth its own
+  // Stir, Flow and Swirl (their macros in) times what the cables into them give.
+  let fluid: EngineFrame['fluid'] = null;
+  if (opts.view && aspects && flameModule) {
+    const fluidOwn = moduleOf.get(at + 'fluid');
+    const fl = params[flameModule.id]?.flame;
+    const bend = ofType('bend');
+    const waves = bend ? (params[bend.id]?.waves ?? aspects.given[A.waves]) : aspects.given[A.waves];
+    const gains = fluidGains(p);
+    const beat = m.playing ? m.beat : null;
+    const own = (aspect: 'stir' | 'flow' | 'swirl') => (fluidOwn ? baseOf(fluidOwn, aspect, unset(fluidOwn, 'fluid', aspect)) : unset(undefined, 'fluid', aspect));
+    fluid = stir(st.stirring, {
+      t: opts.now / 1000,
+      dt: step,
+      amount: aspects.fluid,
+      parts: ((fluidOwn && pointsAt[`${fluidOwn.id}.at`]) ?? flamePointsOf(flameModule.id) ?? []) as ([number, number] | null)[],
+      turns: fl?.rates ?? [],
+      lights: fl?.hits ?? [],
+      level: aspects.bands.map((v) => v[B.level]),
+      continuity: Array.from({ length: BANDS }, (_, b) => baseOf(flameModule, CONTINUITY_AT[b], unset(flameModule, 'flame', CONTINUITY_AT[b]))),
+      hits: m.playing && m.hits ? m.hits.map((hh) => (hh.index < 0 ? null : { index: hh.index, strength: hh.weight, nextIn: hh.nextIn })) : [],
+      beat: beat ? { ...beat, nextIn: beat.length - beat.since } : null,
+      downbeat: aspects.track[T.downbeat],
+      section: aspects.track[T.section],
+      loudness: aspects.lit,
+      swell: aspects.track[T.swell],
+      bps: m.bps,
+      waves,
+      position: m.position,
+      center: [0.5, 0.5],
+      gain: (signal, band, aspect, x) => own(aspect as 'stir' | 'flow' | 'swirl') * gains(signal, band, aspect as 'stir', x),
+    });
+  }
+  // A Flame's points in a Grid's frame (Streamlines' seeds, Instance's): its parts on the screen, where it has a view.
+  for (const id of Object.keys(flames)) {
+    const seeds = gridAt({ module: id, port: 'points' });
+    if (seeds) points[id] = seeds;
+  }
+  return { aspects, knobs, params, outputs, macros, nexts, fields, points, pointsAt, dice, flames, fluid };
 
   /** A module's knobs as its macros and cables move them. */
   /** A knob's base as its macros set it, along its taper (an exponential knob's geometrically: 0057's Wild). */
@@ -1146,6 +1245,15 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     }
     return base;
   }
+  /** A Flame's parts on the screen and its outputs: its node's, as last found, where the engine runs with a view; else
+   *  as the caller gives them (a lab, a test). */
+  function flamePointsOf(id: string | undefined): readonly (Point | null)[] | null {
+    if (opts.view) return (id && st.flameNodes[id]?.parts.length ? st.flameNodes[id].parts : null) ?? null;
+    return opts.flamePoints ?? null;
+  }
+  function flameFrameOf(id: string | undefined) {
+    return opts.view ? (id ? st.flameNodes[id]?.frame : null) : opts.flameFrame;
+  }
   /** An engine module's knob's base: as set, its macros' (the Ducker's threshold under Wild). */
   function baseOf(x: Module, id: string, or: number) {
     return macroed(x.id, (types[x.type] ?? ENGINE_TYPES[x.type])?.knobs.find((k) => k.id === id) ?? ({ id } as Knob), finite(x.knobs[id], or));
@@ -1154,9 +1262,10 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   /** What a Grid's At takes: a Flame's parts where they are on the screen, in the Grid's frame (centred, the short side
    *  -1..1); none for anything else. */
   function gridAt(from: PortRef | undefined): GridPoint[] | null {
-    if (!from || typeOf.get(from.module) !== 'flame' || from.port !== 'points' || !opts.flamePoints) return null;
+    const parts = from && typeOf.get(from.module) === 'flame' && from.port === 'points' ? flamePointsOf(from.module) : null;
+    if (!parts) return null;
     const a = finite(opts.aspect, 16 / 9);
-    return opts.flamePoints.filter((q): q is Point => !!q).map(([px, py]) => (a > 1 ? { x: (2 * px - 1) * a, y: 2 * py - 1 } : { x: 2 * px - 1, y: (2 * py - 1) / a }));
+    return parts.filter((q): q is Point => !!q).map(([px, py]) => (a > 1 ? { x: (2 * px - 1) * a, y: 2 * py - 1 } : { x: 2 * px - 1, y: (2 * py - 1) / a }));
   }
 
   /** A module's step knobs its type declares, past its columns' moments. */
@@ -1195,8 +1304,8 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     const curve = of('curve', 'show/curve');
     const blur = of('blur', 'show/blur');
     const fluidOwn = of('fluid', 'fluid');
-    const fluid = fluidOwn?.fluid ?? opts.fluidFull * clamp(s.fluid, 0, 1);
-    const haze = curve?.gamma !== undefined ? { gamma: curve.gamma, floor: curve.floor ?? 0 } : hazeOf(clamp(s.haze, -1, 1));
+    const fluid = fluidOwn?.fluid ?? opts.fluidFull * clamp(chainSettings.fluid, 0, 1);
+    const haze = curve?.gamma !== undefined ? { gamma: curve.gamma, floor: curve.floor ?? 0 } : hazeOf(clamp(chainSettings.haze, -1, 1));
     const moments = Object.fromEntries(MOMENT_ASPECTS.map((a) => [a, false])) as Record<(typeof MOMENT_ASPECTS)[number], boolean>;
     for (const r of nexts) {
       const own = ownOf.get(r.module);
@@ -1222,15 +1331,15 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
       gamma: haze.gamma,
       flash: tone?.flash ?? glow * clamp(accented(`${flameModule!.id}|chain`, 'glow', 1), 0.15, 3),
       saturation: sat?.saturation ?? clamp(accented(`${flameModule!.id}|chain`, 'saturation', 0.35), 0, 1.25),
-      smoothing: blur?.smoothing ?? 12 * clamp(s.smoothing, 0, 1) ** 2,
+      smoothing: blur?.smoothing ?? 12 * clamp(chainSettings.smoothing, 0, 1) ** 2,
       floor: haze.floor,
       levels: { fluid: level[A.fluid], smoothing: level[A.smoothing], haze: level[A.haze], tunnel: level[A.tunnel], dive: level[A.dive] },
       fluid,
       warp: fluidOwn?.warp ?? 0.12 * fluid,
-      tunnel: of('tunnel', 'tunnel')?.tunnel ?? clamp(s.tunnel, 0, 1),
-      effects: clamp(knobOf(inChain('frame'), 'effects', inChain('frame') ? s.effects : 1) * level[A.effects], 0, 1),
-      facets: fluidOwn?.facets ?? clamp(s.facets, 0, 1),
-      dive: of('dive', 'dive')?.dive ?? clamp(s.dive, 0, 1),
+      tunnel: of('tunnel', 'tunnel')?.tunnel ?? clamp(chainSettings.tunnel, 0, 1),
+      effects: clamp(chainSettings.effects * level[A.effects], 0, 1),
+      facets: fluidOwn?.facets ?? clamp(chainSettings.facets, 0, 1),
+      dive: of('dive', 'dive')?.dive ?? clamp(chainSettings.dive, 0, 1),
       look: walk('look'),
       behaviour: walk('behaviour'),
       nexts: moments,
@@ -1248,7 +1357,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     for (const [id, a] of own.columns) {
       // A moment (a Flame's family, form…) moves on as its Next fires.
       if (IS_MOMENT[a]) {
-        if (fired(own.id, id)) nexts.push({ module: own.id, knob: id });
+        if (fired(own.id, id)) nextOf(own.id, id, declared?.find((x) => x.id === id));
         continue;
       }
       if (IS_LEVEL[a]) {
@@ -1282,7 +1391,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   function moved(module: string, k: Knob, base: number, cables: CableV2[]): number {
     // A step moves on only as a trigger fires its Next (0057 §7e), to its next step; its cables move nothing.
     if (k.kind === 'step') {
-      if (fired(module, k.id)) nexts.push({ module, knob: k.id });
+      if (fired(module, k.id)) nextOf(module, k.id, k);
       return clamp(base, k.min, k.max);
     }
     base = k.time ? base / Math.max(0.01, gainOf(module, k.id)) : base * gainOf(module, k.id);

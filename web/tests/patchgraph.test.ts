@@ -584,10 +584,10 @@ test("a band's knobs are one polyphonic knob, its six as ticks, opened out to si
 
 const await_graph = await import('../src/lib/visuals/patchgraph.ts');
 const import_device = await import('../src/lib/visuals/device-make.ts');
-const { editKey, patchAt, crumbsOf, portsOfModule, macroKnob, typesOf } = await import('../src/lib/visuals/patchgraph.ts');
+const { editKey, patchAt, crumbsOf, macroKnob, typesOf } = await import('../src/lib/visuals/patchgraph.ts');
 const { toV2 } = await import('../src/lib/visuals/v2.ts');
 const { newStore, change, undo, redo } = await import('../src/lib/visuals/patch-store.ts');
-const { ENGINE_MODULES, GRAPH_MODULES, showPartTypes, SHOW_PARTS } = await import('../src/lib/visuals/ports.ts');
+const { ENGINE_MODULES, GRAPH_MODULES, portsOfModule, showPartTypes, SHOW_PARTS } = await import('../src/lib/visuals/ports.ts');
 const { EXTRA_TYPES } = await import('../src/lib/visuals/registry.ts');
 type PatchV2 = import('../src/lib/visuals/ports.ts').PatchV2;
 type Device = import('../src/lib/visuals/ports.ts').Device;

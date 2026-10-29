@@ -158,6 +158,13 @@ const knob = (id: string, label: string, min: number, max: number, def: number, 
 });
 const out = (id: string, label: string, type: PortType = 'value', channels?: number): Port => ({ id, label, type, ...(channels ? { channels } : {}) });
 const label = (id: string) => id.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
+/** A step knob with its choices named (Knob `options`). */
+const choices = (k: Knob, options: readonly string[]): Knob => ({ ...k, options });
+/** A step that is a yes or a no. */
+export const OFF_ON: readonly string[] = ['Off', 'On'];
+/** How a Music row reads its signal (0057, "reference per row"): against this track's typical, lately's, or as it is. */
+export const READINGS = ['track', 'lately', 'absolute'] as const;
+const READING_NAMES: readonly string[] = ['This track', 'Lately', 'As it is'];
 
 /** A part of a module's face (claude-632's face/, the standard panel every node draws): what it shows live past its
  *  knobs. `of`: the output (or else the knob) it reads, `out` by default; `threshold`: a knob drawn as a line across
@@ -180,7 +187,7 @@ type Declared = ModuleType & { ports: Ports; face?: FacePart[] };
 const MUSIC_KNOBS: Knob[] = [
   { ...knob('hold', 'Hold', 0.02, 1, 0.15), channels: 6 },
   // How each row is read (0057 §7e item 10): 0 against this track's typical, 1 lately's, 2 as it is.
-  ...[...TRACK_SIGNALS, ...BAND_SIGNALS].map((s) => ({ ...knob(`reference.${s}`, `${label(s)}: reading`, 0, 2, 0, 'step'), randomize: false as const })),
+  ...[...TRACK_SIGNALS, ...BAND_SIGNALS].map((s) => ({ ...choices(knob(`reference.${s}`, `${label(s)}: reading`, 0, 2, 0, 'step'), READING_NAMES), randomize: false as const })),
 ];
 
 export const MUSIC: Declared = {
@@ -258,7 +265,7 @@ export const MERGE = declared(
   'merge',
   'Merge',
   'modulator',
-  [{ ...knob('mode', 'Mode', 0, MERGES.length - 1, 1, 'step'), randomize: false }],
+  [{ ...choices(knob('mode', 'Mode', 0, MERGES.length - 1, 1, 'step'), MERGES.map(label)), randomize: false }],
   [{ id: 'in', label: 'Input', type: 'value', channels: 6 }],
   [VALUE_OUT],
 );
@@ -300,10 +307,10 @@ export const ADSR = declared(
     ...[knob('attack', 'Attack', 0, 2, 0.04), knob('decay', 'Decay', 0, 4, 0), knob('sustain', 'Sustain', 0, 1, 0, 'level'), knob('release', 'Release', 0.02, 8, 0.2)].map((k) => ({ ...k, channels: 6 })),
     // How a hit that comes while one rings starts: from the higher of the two (0, as today's lights), or from where it
     // is (1, the textbook's).
-    { ...knob('retrigger', 'Retrigger', 0, 1, 0, 'step'), randomize: false },
+    { ...choices(knob('retrigger', 'Retrigger', 0, 1, 0, 'step'), OFF_ON), randomize: false },
     knob('amount', 'Amount', 0, 1, 1, 'level'),
     // How it reads a strike's strength (READINGS): the reading its gate's cable had.
-    { ...knob('reference', 'Reading', 0, 2, 0, 'step'), randomize: false },
+    { ...choices(knob('reference', 'Reading', 0, 2, 0, 'step'), READING_NAMES), randomize: false },
   ],
   [{ id: 'gate', label: 'Gate', type: 'trigger', channels: 6 }],
   [out('out', 'Out', 'value', 6)],
@@ -327,7 +334,7 @@ export const LOOPER = declared(
   'looper',
   'Looper',
   'modulator',
-  [knob('bars', 'Bars', 1, 16, 4, 'step'), knob('record', 'Record', 0, 1, 0, 'step'), knob('overdub', 'Overdub', 0, 1, 0, 'step')],
+  [knob('bars', 'Bars', 1, 16, 4, 'step'), choices(knob('record', 'Record', 0, 1, 0, 'step'), OFF_ON), choices(knob('overdub', 'Overdub', 0, 1, 0, 'step'), OFF_ON)],
   [
     { id: 'in', label: 'Input', type: 'value' },
     { id: 'clock', label: 'Clock', type: 'trigger', normal: { module: 'clock', port: 'bar' } },
@@ -385,7 +392,7 @@ export const GRID = declared(
   'Grid',
   'modulator',
   [
-    knob('lattice', 'Lattice', 0, LATTICES.length - 1, 0, 'step'),
+    choices(knob('lattice', 'Lattice', 0, LATTICES.length - 1, 0, 'step'), LATTICES.map(label)),
     knob('count', 'Count', 1, MOST_POINTS, 16, 'level', 1),
     knob('spacing', 'Spacing', 0.02, 1, 0.25),
     knob('rotation', 'Rotation', 0, 1, 0),
@@ -415,7 +422,7 @@ export const FOLD = declared(
   'Fold',
   'module',
   [
-    knob('mode', 'Mode', 0, FOLDS.length - 1, 1, 'step'),
+    choices(knob('mode', 'Mode', 0, FOLDS.length - 1, 1, 'step'), FOLDS.map(label)),
     knob('count', 'Count', 1, 24, 6),
     knob('turn', 'Turn', -1, 1, 0),
     knob('amount', 'Amount', 0, 1, 1, 'level'),
@@ -452,7 +459,7 @@ export const SHAPE = declared(
   'Shape',
   'module',
   [
-    knob('kind', 'Shape', 0, SHAPES.length - 1, 1, 'step'),
+    choices(knob('kind', 'Shape', 0, SHAPES.length - 1, 1, 'step'), SHAPES.map(label)),
     knob('sides', 'Sides', 3, 12, 6, 'step'),
     knob('size', 'Size', 0.01, 1, 0.1),
     knob('turn', 'Turn', -1, 1, 0),
@@ -512,12 +519,12 @@ export const DUCKER = declared(
 const BY: Port = { id: 'by', label: 'By', type: 'picture' };
 export const GLOW = declared('glow', 'Glow', 'module', [knob('glow', 'Glow', 0, 1, 0.4, 'level')], [PICTURE_IN], [PICTURE_OUT]);
 export const TINT = declared('tint', 'Tint', 'module', [knob('tint', 'Tint', 0, 1, 0.7, 'level')], [PICTURE_IN, BY], [PICTURE_OUT]);
-export const MASK = declared('mask', 'Mask', 'module', [knob('amount', 'Amount', 0, 1, 1, 'level'), knob('invert', 'Invert', 0, 1, 0, 'step')], [PICTURE_IN, BY], [PICTURE_OUT]);
+export const MASK = declared('mask', 'Mask', 'module', [knob('amount', 'Amount', 0, 1, 1, 'level'), choices(knob('invert', 'Invert', 0, 1, 0, 'step'), OFF_ON)], [PICTURE_IN, BY], [PICTURE_OUT]);
 export const DISPLACE = declared(
   'displace',
   'Displace',
   'module',
-  [knob('amount', 'Amount', 0, 1, 0.3, 'level'), knob('scale', 'Scale', 0, 1, 0.5), knob('mode', 'Mode', 0, 1, 0, 'step')],
+  [knob('amount', 'Amount', 0, 1, 0.3, 'level'), knob('scale', 'Scale', 0, 1, 0.5), choices(knob('mode', 'Mode', 0, 1, 0, 'step'), ['Brightness', 'Red and green'])],
   [PICTURE_IN, BY],
   [PICTURE_OUT],
 );
@@ -533,7 +540,7 @@ export const LENS = declared(
   'Lens',
   'module',
   [
-    knob('kind', 'Lens', 1, LENSES.length, 1, 'step'),
+    choices(knob('kind', 'Lens', 1, LENSES.length, 1, 'step'), LENSES),
     knob('amount', 'Amount', 0, 1, 1, 'level'),
     knob('sides', 'Sides', 3, 48, 5),
     knob('depth', 'Depth', 0, 1, 0.5),
@@ -597,7 +604,7 @@ export const DICE = declared(
   'Dice',
   'modulator',
   [
-    { ...knob('scope', 'Scope', 0, RANDOMIZE_SCOPES.length - 1, 0, 'step'), randomize: false },
+    { ...choices(knob('scope', 'Scope', 0, RANDOMIZE_SCOPES.length - 1, 0, 'step'), RANDOMIZE_SCOPES.map(label)), randomize: false },
     // How far each knob it reaches moves toward its roll: all the way at 1, not at all at 0.
     { ...knob('reach', 'Reach', 0, 1, 1, 'level'), randomize: false },
   ],
@@ -637,7 +644,7 @@ export const MUSIC_SIGNAL_MODULES: readonly Declared[] = MUSIC.ports.out.map((o)
     o.label,
     'modulator',
     [
-      ...(MUSIC_KNOBS.some((k) => k.id === `reference.${o.id}`) ? [{ ...knob('reference', 'Reading', 0, 2, 0, 'step'), randomize: false as const }] : []),
+      ...(MUSIC_KNOBS.some((k) => k.id === `reference.${o.id}`) ? [{ ...choices(knob('reference', 'Reading', 0, 2, 0, 'step'), READING_NAMES), randomize: false as const }] : []),
       ...(o.id === 'envelope' ? [{ ...knob('hold', 'Hold', 0.02, 1, 0.15), channels: 6 }] : []),
     ],
     [],
@@ -683,10 +690,8 @@ export type CableV2 = {
   depth?: PortRef | null;
 };
 
-/** How a Music row reads its signal (0057, "reference per row"): against this track's typical, lately's, or as it is. */
-export const READINGS = ['track', 'lately', 'absolute'] as const;
-
-export type PatchV2 = { v: 2; modules: Module[]; cables: CableV2[]; macros: Macro[]; pins: string[] };
+/** `rev`: the model changes it has been brought through (upgrade.ts), none before 0077. */
+export type PatchV2 = { v: 2; modules: Module[]; cables: CableV2[]; macros: Macro[]; pins: string[]; rev?: number };
 
 /** The blends a Mix input takes (0056's, as a step knob per input). */
 // Appended only: a saved Mix keeps its modes by their place (Subtract, 0057 §4: a picture less another, its high-pass
@@ -701,7 +706,7 @@ export const MIX = declared(
   'Mix',
   'module',
   Array.from({ length: MIX_INPUTS }, (_, i) => [
-    knob(`mode${i + 1}`, `Mode ${i + 1}`, 0, MIX_MODES.length - 1, i === 0 ? 2 : 1, 'step'),
+    choices(knob(`mode${i + 1}`, `Mode ${i + 1}`, 0, MIX_MODES.length - 1, i === 0 ? 2 : 1, 'step'), MIX_MODES.map(label)),
     knob(`amount${i + 1}`, `Amount ${i + 1}`, 0, 1, 1, 'level'),
   ]).flat(),
   Array.from({ length: MIX_INPUTS }, (_, i): Port => ({ id: `in${i + 1}`, label: `Picture ${i + 1}`, type: 'picture' })),
@@ -765,3 +770,32 @@ export type DeviceMacro = { id: string; label: string; value: number; targets: {
 export type Device = Module & { type: 'device'; label: string; patch: PatchV2; inputs: ExposedPort[]; outputs: ExposedPort[]; macros: DeviceMacro[] };
 
 export const isDevice = (m: Module): m is Device => m.type === 'device';
+
+/** A module's ports, the one way every view and the engine's helpers find them: its type's, or a device's from what it
+ *  exposes (each exposed port the type of the one behind it, through nested devices; a channel of a bundle as one; an
+ *  input led to several inside, a fan-out, once). */
+export function portsOfModule(types: Record<string, ModuleType>): (m: Module) => Ports | null {
+  const self = (m: Module): Ports | null => {
+    if (!isDevice(m)) {
+      const t = types[m.type];
+      return t ? portsOf(t) : null;
+    }
+    const behind = (e: ExposedPort, dir: 'in' | 'out'): Port | undefined => {
+      const inner = m.patch.modules.find((x) => x.id === e.module);
+      return inner ? self(inner)?.[dir].find((x) => x.id === e.port) : undefined;
+    };
+    const exposed = (e: ExposedPort, dir: 'in' | 'out', or: PortType): Port => {
+      const b = behind(e, dir);
+      return {
+        id: e.as,
+        label: e.label,
+        type: b?.type ?? or,
+        ...(b?.channels && e.channel === undefined ? { channels: b.channels } : {}),
+        ...(b?.polymorphic ? { polymorphic: b.polymorphic } : {}),
+      };
+    };
+    const once = (list: ExposedPort[]) => list.filter((e, i) => list.findIndex((x) => x.as === e.as) === i);
+    return { in: once(m.inputs).map((e) => exposed(e, 'in', 'value')), out: once(m.outputs).map((e) => exposed(e, 'out', 'picture')) };
+  };
+  return self;
+}

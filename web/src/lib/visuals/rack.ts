@@ -3,7 +3,7 @@
 // Modulators make the signals that move knobs, In / Out is where signals enter and leave. The graph's lanes, the module
 // picker and Randomize's scopes all follow them. Pure.
 
-import { portsOf, type PatchV2, type Ports } from './ports';
+import { portsOfModule, type PatchV2, type Ports } from './ports';
 import type { Module, ModuleType, Place } from './patch';
 
 export const CATEGORIES = ['sources', 'effects', 'mixers', 'modulators', 'io'] as const;
@@ -73,22 +73,5 @@ export function byCategory(p: PatchV2, types: Record<string, ModuleType>): ByCat
   return out;
 }
 
-/** A module's ports from its type, or a device's from what it exposes. */
-export function portsFrom(types: Record<string, ModuleType>) {
-  return (m: Module): Ports | null => {
-    if (m.type === 'device') {
-      const d = m as Module & { inputs?: { as: string; label: string; module: string; port: string }[]; outputs?: { as: string; label: string; module: string; port: string }[]; patch?: PatchV2 };
-      const inner = (id: string, port: string, dir: 'in' | 'out') => {
-        const im = d.patch?.modules.find((x) => x.id === id);
-        const t = im ? types[im.type] : undefined;
-        return t ? portsOf(t)[dir].find((x) => x.id === port) : undefined;
-      };
-      return {
-        in: (d.inputs ?? []).map((e) => ({ ...(inner(e.module, e.port, 'in') ?? { type: 'value' as const }), id: e.as, label: e.label })),
-        out: (d.outputs ?? []).map((e) => ({ ...(inner(e.module, e.port, 'out') ?? { type: 'picture' as const }), id: e.as, label: e.label })),
-      };
-    }
-    const t = types[m.type];
-    return t ? portsOf(t) : null;
-  };
-}
+/** A module's ports from its type, or a device's from what it exposes (ports.ts portsOfModule: the one way). */
+export const portsFrom = portsOfModule;

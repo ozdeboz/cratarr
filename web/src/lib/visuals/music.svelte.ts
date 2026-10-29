@@ -9,9 +9,10 @@ import { NEXT } from '../analysisAsks';
 import { getTrackGain, trackState, type TrackGain } from '../api';
 import { appInfo, inApp } from '../app.svelte';
 import { prefs } from '../prefs.svelte';
-import { audioTap, positionNow } from '../localPlayer.svelte';
+import { audioTap } from '../localPlayer.svelte';
 import { isLocal } from '../output.svelte';
 import { paused, playing } from '../remote.svelte';
+import { placeAt } from '../trackPlace.svelte';
 import { loadWaveform, waveformOf } from '../waveforms.svelte';
 import { beatAt, beatsOf, tempoAt } from './beats';
 import { followEnvelopes } from './envelope';
@@ -74,7 +75,7 @@ export function musicNow(at: number, lighting: readonly number[] = visualSetting
     );
   }
   const on = !paused();
-  const pos = positionAt(key, on, at) + (on ? AHEAD : 0);
+  const pos = placeAt(key, on, at) + (on ? AHEAD : 0);
   const beats = beatsOf(np.source, np.id);
   const signals = signalsOf(np.source, np.id);
   // The next track's too, so it pulses from its first beat.
@@ -176,24 +177,7 @@ export function stopMusic() {
   stopLive();
 }
 
-// The position at the frame. This device's player (the app's, or the page's own audio) says it to the frame. Another
-// player reports it now and then, through the server: between reports it moves on with the frame clock, and it is
-// eased toward each report rather than set to it, since a jump back or forth would be a beat played twice or skipped;
-// a report far off (a seek) is taken as it is.
-let clock = { key: '', pos: 0, at: 0, heard: Number.NaN };
-function positionAt(key: string, on: boolean, at: number): number {
-  if (isLocal()) return positionNow();
-  const heard = playing()?.progress?.position_secs ?? 0;
-  if (clock.key !== key) clock = { key, pos: heard, at, heard };
-  if (on) clock.pos += (at - clock.at) / 1000;
-  clock.at = at;
-  if (heard !== clock.heard) {
-    const off = heard - clock.pos;
-    clock.pos += Math.abs(off) > 0.3 ? off : off / 2;
-    clock.heard = heard;
-  }
-  return clock.pos;
-}
+// The position at the frame: lib/trackPlace's, the one clock the player's band glass draws by too.
 
 /** The waveform's loudness at `fraction` of the track, between its bins, against its loudest bin. */
 function loudnessAt(bins: Uint8Array, fraction: number): number {
