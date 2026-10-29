@@ -2256,7 +2256,7 @@ mod tests {
         assert_eq!(names, ["New one", "Another"], "the best fit first");
         let one = &found.artists[0];
         assert_eq!(one.records, ["rg-2", "rg-1"]);
-        assert_eq!(one.why, ["Like Mine", "Like Yours"]);
+        assert_eq!(one.why, ["Like Yours", "Like Mine"], "the best record's reasons first");
         assert_eq!(one.score, 0.9);
         assert_eq!(one.photo.as_deref(), Some("/api/discover/artist/photo?name=New+one"));
         assert!(found.artists[1].photo.is_none());
@@ -2354,7 +2354,7 @@ mod tests {
         assert_eq!(list[0].alike, vec![a("Bonobo", 0.9), a("Air", 0.7)]);
         let lb = one_list(vec![c("X", "Y", Some("rg-x"), "listenbrainz", "Recommended", 1.0)], &|_: &Candidate| false, &HashSet::new(), &HashSet::new(), &HashSet::new());
         assert!(lb[0].alike.is_empty(), "only Last.fm says how alike");
-        assert!(!serde_json::to_string(&lb[0]).unwrap().contains("alike"), "left out when empty");
+        assert!(!serde_json::to_string(&lb[0]).unwrap().contains("\"alike\":["), "left out when empty");
     }
 
     #[test]
