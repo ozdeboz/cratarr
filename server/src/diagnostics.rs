@@ -287,6 +287,23 @@ pub struct Diagnostics {
 
 static LOG: OnceLock<Arc<Diagnostics>> = OnceLock::new();
 
+/// A panic stops Cratarr (`panic = "abort"`): first it is written down, where and why and on which thread, and the
+/// log written out, so the cause outlives the restart (the audit, 2026-10-29: a panic left nothing in the log).
+pub fn keep_panics() {
+    let shown = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let at = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+        let payload = info.payload();
+        let why = payload.downcast_ref::<&str>().map(|s| (*s).to_string()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_default();
+        let thread = std::thread::current().name().unwrap_or("unnamed").to_string();
+        tracing::error!(target: "server", at, why, thread, "panic: Cratarr stops");
+        if let Some(d) = get() {
+            d.flush();
+        }
+        shown(info);
+    }));
+}
+
 /// The server's log, once opened.
 pub fn get() -> Option<Arc<Diagnostics>> {
     LOG.get().cloned()

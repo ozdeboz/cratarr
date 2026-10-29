@@ -11,6 +11,8 @@
 //! again.
 //!
 //! One file is decoded at a time, whoever asked (`HEAVY`): the pass, a page's visuals, a play's waveform, the look ahead.
+//! And only with room for it (`memwatch::room`, the audit's memory budget): the pass waits; one asked for now is not
+//! made then.
 //! The turn is held by the work itself, so a page that stops waiting (a skip, a timeout) cannot let a second decode in
 //! beside one still running: one decode for the visuals takes about half a gigabyte for a moment, and two at once, or
 //! one beside an import, went over the NAS's 768 MB (eighteen restarts, 2026-10-23/24).
@@ -130,6 +132,7 @@ pub fn run(cat: Arc<Catalogue>) {
                         rest_idle().await;
                         continue;
                     };
+                    crate::memwatch::wait_for_room().await;
                     let turn = HEAVY.acquire().await.expect("the turn is never closed");
                     let started = Instant::now();
                     let c = cat.clone();
@@ -164,6 +167,7 @@ pub fn run(cat: Arc<Catalogue>) {
                     tokio::time::sleep(started.elapsed() * REST).await;
                     continue;
                 };
+                crate::memwatch::wait_for_room().await;
                 let turn = HEAVY.acquire().await.expect("the turn is never closed");
                 let started = Instant::now();
                 let c = cat.clone();
@@ -189,6 +193,7 @@ pub fn run(cat: Arc<Catalogue>) {
                 continue;
             }
             for (folder, rel, path, size, mtime) in batch {
+                crate::memwatch::wait_for_room().await;
                 let turn = HEAVY.acquire().await.expect("the turn is never closed");
                 let started = Instant::now();
                 let c = cat.clone();
@@ -245,6 +250,9 @@ pub async fn band_wave(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<
         _ => {}
     }
     let turn = tokio::time::timeout(TURN, HEAVY.acquire()).await.ok()?.ok()?;
+    if !crate::memwatch::room() {
+        return None;
+    }
     let work = tokio::task::spawn_blocking(move || -> anyhow::Result<BandWave> {
         let _turn = turn;
         let _job = crate::memwatch::job(format!("band wave when asked for: {rel}"));
@@ -293,6 +301,9 @@ pub async fn spectrum(cat: Arc<Catalogue>, folder: i64, rel: String) -> Option<S
         _ => {}
     }
     let turn = tokio::time::timeout(TURN, HEAVY.acquire()).await.ok()?.ok()?;
+    if !crate::memwatch::room() {
+        return None;
+    }
     let work = tokio::task::spawn_blocking(move || -> anyhow::Result<Spectrum> {
         let _turn = turn;
         let _job = crate::memwatch::job(format!("spectrum when asked for: {rel}"));
@@ -374,6 +385,9 @@ async fn visual(cat: Arc<Catalogue>, folder: i64, rel: String, with_signals: boo
     }
     // The turn goes with the decode: one past its deadline, or whose page stopped waiting, still holds it until done.
     let turn = tokio::time::timeout(TURN, HEAVY.acquire()).await.ok()?.ok()?;
+    if !crate::memwatch::room() {
+        return None;
+    }
     let work = tokio::task::spawn_blocking(move || {
         let _turn = turn;
         let _job = crate::memwatch::job(format!("visuals when asked for: {rel}"));

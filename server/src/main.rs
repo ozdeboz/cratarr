@@ -158,6 +158,7 @@ async fn main() -> Result<()> {
     serve::proxy::set(cfg.proxies.clone());
     let kept_log = diagnostics::start_global(cfg.data_dir.as_deref().map(|d| std::path::Path::new(d).join("diagnostics.sqlite")).as_deref(), pending)
         .context("cannot start the diagnostics log")?;
+    diagnostics::keep_panics();
     tracing::info!(target: "server", version = env!("CARGO_PKG_VERSION"), "started");
     for retired in config::RETIRED {
         if env(retired).is_some() {
