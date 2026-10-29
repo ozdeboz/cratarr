@@ -16,6 +16,8 @@ export type OrderField<K extends string = string> = { value: K; label: string; m
 /** The page's own button in its pill. `progress` (0 to 1; null while nothing runs): work it starts and shows, ringed on
  *  the button and unfolded in the pill after a tap (lib/TopPill); `line`: what that work is at, said there. */
 export type PageAction = { icon: IconName; label: string; run: () => void; progress?: number | null; line?: string | null };
+/** A page's mode, a button that stays lit while on, left of its own button (Playlists' Quick add, 0.9.18). */
+export type PageMode = { icon: IconName; label: string; on: boolean; toggle: () => void };
 
 /** A playlist chip's least width per size step (prefs.zoom). */
 export const PLAYLIST_WIDTHS: readonly number[] = [110, 140, 170, 210, 260, 340];
@@ -207,6 +209,8 @@ export const pageView = $state({
   searchOpen: false,
   /** The page's own button at the pill's end (usePageAction), while it shows. */
   action: null as PageAction | null,
+  /** The page's mode button (usePageMode), while it shows. */
+  mode: null as PageMode | null,
 });
 
 /** Gives the pill's last button to the calling page while it shows (an effect: it follows what `get` reads). */
@@ -217,6 +221,17 @@ export function usePageAction(get: () => PageAction | null) {
     // Gone with the page, unless the next page has set its own already.
     return () => {
       if (untrack(() => pageView.action?.run) === mine?.run) pageView.action = null;
+    };
+  });
+}
+
+/** Gives the pill a mode button for the calling page while it shows, as usePageAction. */
+export function usePageMode(get: () => PageMode | null) {
+  $effect(() => {
+    const mine = get();
+    pageView.mode = mine;
+    return () => {
+      if (untrack(() => pageView.mode?.toggle) === mine?.toggle) pageView.mode = null;
     };
   });
 }

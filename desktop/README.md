@@ -74,9 +74,11 @@ The `.deb` depends on electron-builder's list plus what Electron needs that it l
 - `preload.js`: `window.CratarrDesktop` for the page (the app's version, the computer's name); the address page's two
   questions.
 - `setup.html`: the address page, the app's one page of its own.
-- `copy-icons.js`: the web app's icons, copied in.
+- `copy-icons.js`: the web app's icons, copied in at 0644 (a copy keeps its checkout's mode).
 - `after-pack.js`: before packing, the app's files writable by their owner alone. Electron's own come out of its archive
   writable by anyone, and a package installs them as they are.
+- `check-deb.js`: after the packages are made, each `.deb`'s list read; any entry writable by group or others stops
+  the build. `npm run dist` builds under `umask 022`.
 - `check-no-house.js`: the check before each build; a house's own names come from `CRATARR_HOUSE_PATTERNS`, so they
   never sit in this repository.
 - `apt-repo.sh`: the APT repository from a `.deb`, signed, as the release workflow deploys it to GitHub Pages.

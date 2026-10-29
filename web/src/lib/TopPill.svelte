@@ -296,6 +296,11 @@
     {#if view && (page || order?.columns?.shown.length || onview) && !searching && !(showing && page && pageAction)}<button aria-label="View" title="View" aria-haspopup="dialog" onclick={() => (onview ? onview() : (viewOpen = true))} transition:paced|global><Icon name="sliders" size={22} /></button>{/if}
     <!-- Where it plays gives way to the open field too, as the rest (the owner, 2026-10-26). -->
     {#if device && !searching}<button aria-label="Where it plays" title="Where it plays" aria-haspopup="dialog" onclick={() => (outputOpen = true)} transition:paced|global><Icon name="speaker" size={22} /></button>{/if}
+    <!-- The page's mode (Playlists' Quick add), lit while on. -->
+    {#if page && pageView.mode && !searching && !(showing && pageAction)}
+      {@const m = pageView.mode}
+      <button class:lit={m.on} aria-pressed={m.on} aria-label={m.label} title={m.label} onclick={m.toggle} transition:paced|global><Icon name={m.icon} size={22} /></button>
+    {/if}
     <!-- A page's own button; a panel's where it hands one (the Map's Full screen, lib/InsightsPanel). -->
     {#if (page || action) && pageAction && !searching}
       {@const a = pageAction}

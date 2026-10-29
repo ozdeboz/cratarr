@@ -4,13 +4,17 @@
   // then ready to change), Standard second (Cratarr's own, not to be renamed or deleted: shared.svelte.ts), then the
   // saved ones, newest first. A tap brings one back (the visuals' `recall`); one held is renamed, saved over with the
   // visuals as they are now (its name and place kept: the owner, 2026-10-18), or deleted. The
-  // owner: "when you press the bookmark button, a sheet opens, because that's our standard format of display".
+  // owner: "when you press the bookmark button, a sheet opens, because that's our standard format of display". After
+  // them, under their heading, the example racks: the one library the panel's Presets read too (library.ts; the owner,
+  // 2026-10-29: "This is where snapshots should be"). An example is Cratarr's own, as Standard: a tap brings it, it is
+  // not renamed or deleted.
   import { deleteVisualsSnapshot, getVisualsSnapshots, renameVisualsSnapshot, saveOverVisualsSnapshot, saveVisualsSnapshot, type VisualsSnapshot } from '../api';
   import Cover from '../Cover.svelte';
   import Icon from '../Icon.svelte';
   import MenuSheet from '../MenuSheet.svelte';
   import { toast } from '../toast.svelte';
   import { held } from './held.svelte';
+  import { libraryGroups, libraryOf } from './library';
   import { longPress } from './longPress';
   import { snapshotNow, STANDARD } from './shared.svelte';
 
@@ -19,6 +23,7 @@
     capture,
     trackName,
     recall,
+    onexample,
     over,
     settingsNow = snapshotNow,
   }: {
@@ -27,6 +32,8 @@
     capture: () => Promise<string | null>;
     trackName: string | null;
     recall: (snap: VisualsSnapshot) => void;
+    /** An example rack chosen (by its id), as the panel's Presets choose one. */
+    onexample: (id: string) => void;
     /** What a snapshot keeps (0057's switch: the patch, snapshot-v2.ts); the settings' by default. */
     settingsNow?: () => Record<string, unknown>;
     /** Over the full-screen visuals (not beside the page). */
@@ -42,6 +49,8 @@
     (got) => (list = got),
     () => {},
   );
+  // The library's other groups (the examples), after the saved ones this sheet keeps itself.
+  const others = $derived(libraryGroups(libraryOf(list)).filter((g) => g.id !== 'saved'));
 
   const time = () => {
     const d = new Date();
@@ -152,6 +161,15 @@
         </button>
       {/if}
     {/each}
+    {#each others as g (g.id)}
+      <h3>{g.label}</h3>
+      {#each g.entries as x (x.id)}
+        <button class="tile" title={x.line} onclick={() => onexample(x.id)}>
+          <span class="pic glyph standard"><Icon name="visuals" size={28} /></span>
+          <span class="name">{x.label}</span>
+        </button>
+      {/each}
+    {/each}
   </div>
 </MenuSheet>
 
@@ -175,6 +193,14 @@
     font: inherit;
     text-align: left;
     cursor: pointer;
+  }
+
+  /* A group's heading (Examples) across the whole row, as the panel's. */
+  h3 {
+    grid-column: 1 / -1;
+    margin: 8px 0 0;
+    font-size: 0.85rem;
+    font-weight: 600;
   }
 
   .tile:disabled {

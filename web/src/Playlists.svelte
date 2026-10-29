@@ -3,7 +3,7 @@
   import { askIfMany } from './lib/many.svelte';
   import { plural } from './lib/insights.svelte';
   import ListHead from './lib/ListHead.svelte';
-  import { matchesSearch, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, playlistBy, usePageAction } from './lib/pageView.svelte';
+  import { matchesSearch, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, playlistBy, usePageAction, usePageMode } from './lib/pageView.svelte';
   import { passing } from './lib/listFilter.svelte';
   import type { Playlist, PlayMode } from './lib/api';
   import { deepMatches } from './lib/deepSearch.svelte';
@@ -152,6 +152,11 @@
   // The pill's last button (lib/TopPill): New playlist, the panel's edit mode with no playlist yet. What is ticked has
   // the select bar.
   usePageAction(() => ({ icon: 'plus', label: 'New playlist', run: () => viewPlaylist(NEW_PLAYLIST) }));
+  // Its two modes (0.9.18; the owner, 2026-10-29): Normal, the playlists only open; Quick add, each one's circle adds or
+  // takes out the playing track. The mode's button is left of New playlist, a double check (the plus is New playlist's).
+  const quick = $derived(prefs.playlistQuickAdd);
+  const toggleQuick = () => (prefs.playlistQuickAdd = !prefs.playlistQuickAdd);
+  usePageMode(() => ({ icon: 'checkCheck', label: 'Quick add', on: quick, toggle: toggleQuick }));
 
   // The select bar's actions on the ticked playlists (one after another, each track once), as the panel's on its
   // ticked tracks: Select ends after each.
@@ -208,25 +213,33 @@
     {#if table && cols.length}
       <!-- The table's column names, a row of the same shape so they line up. -->
       <div class="table-head">
-        <Row size="large" as="div" head title="Name" count="Tracks" cells={cols.map((c) => ({ ...c, text: c.label }))}>
-          {#snippet action()}<span></span>{/snippet}
-        </Row>
+        {#snippet room()}<span></span>{/snippet}
+        <Row size="large" as="div" head title="Name" count="Tracks" cells={cols.map((c) => ({ ...c, text: c.label }))} action={quick ? room : undefined} />
       </div>
     {/if}
-    <ul class="grid" class:table class:pending={pending()} style:--min="{PLAYLIST_WIDTHS[prefs.zoom]}px" bind:clientWidth={gridWidth}>
+    <ul class="grid" class:table class:pending={quick && pending()} style:--min="{PLAYLIST_WIDTHS[prefs.zoom]}px" bind:clientWidth={gridWidth}>
       {#each items as p (p.id)}
         <li>
-          <!-- The label views the playlist (decision 0023), in Select ticks it (decision 0025); the circle adds or removes
-               the playing track. The border: in the panel's selection (or ticked). -->
+          <!-- Quick add's circle: adds or takes out the playing track. -->
+          {#snippet addTo()}
+            <button
+              class="icon"
+              aria-pressed={p.member}
+              aria-label={p.member ? `Take the playing track out of ${p.name}` : `Add the playing track to ${p.name}`}
+              onclick={() => tap(p)}
+              ><Icon name={p.member ? 'circleCheck' : np && !np.addable ? 'circleDashedPlus' : 'circlePlus'} size={26} /></button
+            >
+          {/snippet}
+          <!-- The label views the playlist (decision 0023), in Select ticks it (decision 0025); Quick add's circle adds or
+               removes the playing track. The border: in the panel's selection (or ticked). -->
           <PlaylistItem
             {p}
             sub={deepOf(p.id)}
             size={table ? 'large' : 'medium'}
             cells={table ? cellsOf(p.id) : undefined}
-            class={['chip', busy[p.id] && 'busy', live.queued.includes(p.id) && 'queued', !np && 'idle', !!np && !np.addable && !p.member && 'blocked']
-              .filter(Boolean)
-              .join(' ')}
-            strong={p.member}
+            class={quick ? ['chip', busy[p.id] && 'busy', live.queued.includes(p.id) && 'queued', !np && 'idle', !!np && !np.addable && !p.member && 'blocked'].filter(Boolean).join(' ') : 'chip'}
+            strong={quick && p.member}
+            action={quick ? addTo : undefined}
             active={select.on ? select.picked.includes(p.id) : panel.selection.includes(p.id)}
             label={select.on ? `${select.picked.includes(p.id) ? 'Untick' : 'Tick'} ${p.name}` : `View ${p.name}`}
             onclick={() => (select.on ? tick(p.id) : viewPlaylist(p.id))}
@@ -235,17 +248,7 @@
               if (select.on) return void (selectSheet = true);
               menu = { kind: 'one', id: p.id };
             })}
-          >
-            {#snippet action()}
-              <button
-                class="icon"
-                aria-pressed={p.member}
-                aria-label={p.member ? `Take the playing track out of ${p.name}` : `Add the playing track to ${p.name}`}
-                onclick={() => tap(p)}
-                ><Icon name={p.member ? 'circleCheck' : np && !np.addable ? 'circleDashedPlus' : 'circlePlus'} size={26} /></button
-              >
-            {/snippet}
-          </PlaylistItem>
+          />
         </li>
       {/each}
     </ul>

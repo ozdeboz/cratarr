@@ -187,6 +187,9 @@ export const portHelp: Record<string, Record<string, string>> = {
   fluid: {
     light: LIGHT,
     fluid: 'How much the picture flows like smoke: the most it reaches; cables into its gain take it lower.',
+    lift: 'How hard the light rises by itself, as hot air does: the densest the most. At 0 it goes only where pushed.',
+    open: 'From a sealed box (0) to an open floor and top (1): air comes in below and out above. The sides stay walls.',
+    cooling: 'How fast the light burns out as it climbs (from 40% of the height, and along the sides): flames end as fire does.',
     stir: 'How much of what its cables give pushes the fluid.',
     stirBy: 'A Field stirring it everywhere; the cable’s amount sets how hard.',
     flow: 'How much of what its cables give makes the fluid flow.',

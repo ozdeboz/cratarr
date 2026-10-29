@@ -30,7 +30,7 @@ import { FlamePoints } from './nodes/points';
 import { Screen } from './nodes/screen';
 import { Thumbs } from './nodes/thumbs';
 import { chain, IDENTITY, toScreen, transformOf } from './transform';
-import { Show } from './nodes/show';
+import { densityScale, Show } from './nodes/show';
 import type { NodeParams } from './engine/graph';
 import { DIVE_MOST, TUNNEL_MOST } from './zoom';
 import { none } from './nodes/shared';
@@ -471,7 +471,8 @@ export class FlameRenderer {
       // the next frame, the light as the points land (tone mapping it before the carries reads it unlike Show does).
       const stirring = this.fluidStir ? given?.fields?.(this.fluidStir.field) : undefined;
       const carry = stirring ? { ...now!.carry, flow: { ...now!.carry.flow, field: { ...stirring, amount: this.fluidStir!.amount } } } : now!.carry;
-      fluid = this.carry.draw(light, carry, since, loop);
+      // Lift reads the light on the display's scale, as Show will (the points as the last frame left them).
+      fluid = this.carry.draw(light, carry, since, loop, densityScale(light, this.points.ready, passes, shown!.keep, shown!.exposure));
       if (this.gridOnFluid) this.readFluid(fluid);
       if (lightPhase === 'carried') lightPeek = this.peekLight(shown!, passes, fluid);
       // The light's Transforms, in the patch's order: where the points land, after the camera frames the flame.

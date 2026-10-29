@@ -270,6 +270,11 @@
   const mini = $derived(!playerInPanel);
   // A viewed playlist without room beside the page: a layer of its own, under the mini-player and the player.
   const playlistLayer = $derived(!sidebar && panel.viewed !== null);
+  /** The layer as it shows (lib/Hold): opening, it stays unseen until what it holds is ready, and the page's glass and
+   *  its room stay as they are until then (0.9.18; the owner, 2026-10-29: a crate opened full screen took the glass
+   *  away before it showed, and the page jumped). Under it the page keeps both, covered; on a phone the row shows the
+   *  panel's glass once the layer is seen. */
+  const layerShown = $derived(playlistLayer && panel.shown !== null);
   $effect(() => {
     if (sidebar) untrack(collapse);
   });
@@ -509,17 +514,17 @@
   const backHome = $derived(navAt === 0 && page !== 'home');
   /** The page has the row (its room at its top kept for it). */
   const pageHasRow = $derived(
-    !playlistLayer && (phone || navAt > 0 || backHome || pagePill || page === 'settings' || page === 'insights' || page === 'discover'),
+    phone || navAt > 0 || backHome || pagePill || page === 'settings' || page === 'insights' || page === 'discover',
   );
   /** The room at the page's top as the page shown has it (lib/Hold: the page before stays until the new one is ready;
    *  the owner, 2026-10-28: its room changing under it made the content jump). */
-  const rowOf = (p: string) => !playlistLayer && (phone || navAt > 0 || p !== 'home');
+  const rowOf = (p: string) => phone || navAt > 0 || p !== 'home';
   const shownHasRow = $derived(rowOf(shownPage));
   // Kept under the player over everything, which covers it (the owner, 2026-10-25: "since the full screen player is on
   // top, just don't hide these glass panels"; neither the page's room nor the glass goes as it opens).
   const pageRow = $derived(pageHasRow);
   // The panel on top's glass, handed over on a phone (lib/glass): the row shows it over the panel's layer.
-  const handedNow = $derived(playlistLayer && phone ? glass.panel : null);
+  const handedNow = $derived(layerShown && phone ? glass.panel : null);
   // A row that goes slides up whole (a row along the bottom, down), out under the bar, still showing what it held, and
   // only then leaves (the owner, 2026-10-25: not its icons folding one by one, leaving a flat glass). The panel's glass
   // it held is kept for the slide.
@@ -527,7 +532,7 @@
   // Where the page keeps room for it, and on Home always: opened first beside the sidebar it keeps none, its pill (the
   // search, where it plays) floating over the page's top (the owner, 2026-10-29: "the entire glass on the home page"
   // gone, and the top-right search with it).
-  const rowWanted = $derived(pageRow || !!handedNow || (!playlistLayer && page === 'home'));
+  const rowWanted = $derived(pageRow || !!handedNow || page === 'home');
   let rowKept = $state(untrack(() => rowWanted));
   let rowAway = $state(false);
   let keptGlass = $state<typeof handedNow>(null);
@@ -555,7 +560,7 @@
   const underBar = $derived(phone && !!panelPage && !!(settingsShown || healthShown || insightsShown || requestsShown || downloadsShown));
   /** An index page and its panel share the row's place: going one level deeper (or back) changes what the glass holds,
    *  at once, instead of fading it in anew (the owner, 2026-10-25: "the top left and top right glass hide"). */
-  const leadFade = $derived(reducedMotion() || (phone && !!panelPage && (underBar || !playlistLayer)) ? 0 : 150);
+  const leadFade = $derived(reducedMotion() || (phone && !!panelPage && (underBar || !layerShown)) ? 0 : 150);
   /** The one pill's settings: the panel's where it handed them, else the page's. */
   const pagePillShown = $derived(pagePill || ['settings', 'discover', 'insights', 'health', 'requests', 'home', 'find'].includes(page));
   const pillNow = $derived(
@@ -816,7 +821,7 @@
   $effect(() => {
     serverConnection.value = connection;
   });
-  const MAIN: Page[] = $derived(localMode() ? [HOME, ...LOCAL] : [HOME, LIBRARY, CRATES, PLAYLISTS, DISCOVER]);
+  const MAIN: Page[] = $derived(localMode() ? [HOME, ...LOCAL] : [HOME, CRATES, PLAYLISTS, LIBRARY, DISCOVER]);
   // The sidebar's direct links under Library and Discover (the owner, 2026-10-29): what each one's picker beside back
   // offers, folded away with the sidebar; Spotify's lists as one, to the first of them.
   loadSpotify();
@@ -940,7 +945,7 @@
   <div class="content" class:with-side={sidebar} style:--player-w="{sideWidth}px" bind:this={contentEl}>
     <!-- Its room under the glass kept while a panel covers it on a phone (the owner, 2026-10-25: opening a list on Requests
          shifted the page up under the coming panel). -->
-    <div class="page" class:under-row={shownHasRow || (phone && playlistLayer)} class:away={everywhereShown} bind:this={pageEl}>
+    <div class="page" class:under-row={shownHasRow} class:away={everywhereShown} bind:this={pageEl}>
     <SheetArea area={() => pageEl}>
     <!-- One commit (lib/Hold; the owner, 2026-10-26, "Old page stays, then switch"): the page before stays until the new
          one is ready, and the bar's highlight moves with it. -->
@@ -1080,13 +1085,13 @@
     <!-- The page's glass, or on a phone the panel's on top (lib/glass): one row, one pill whose settings change. Below
          1024 px each half at the edge its setting says (Display: Navigation controls, Content controls). -->
     {#if !leadBottom || !rightBottom}
-      <div inert={page !== shownPage || undefined} class="page-row" class:away={rowAway} class:beside={sidebar && !handed} class:handed={!!handed} class:below={!!handed?.below?.()} class:steady={phone && !!panelPage && !moreOpen} style:--player-w="{sideWidth}px">
+      <div inert={page !== shownPage || (layerShown && !handed) || undefined} class="page-row" class:away={rowAway} class:beside={sidebar && !handed} class:handed={!!handed} class:below={!!handed?.below?.()} class:steady={phone && !!panelPage && !moreOpen} style:--player-w="{sideWidth}px">
         {#if !leadBottom}{@render leadPart()}{:else}<span></span>{/if}
         {#if !rightBottom}{@render rightPart()}{/if}
       </div>
     {/if}
     {#if leadBottom || rightBottom}
-      <div inert={page !== shownPage || undefined} class="page-row at-bottom" class:away={rowAway} class:handed={!!handed} class:steady={phone && !!panelPage && !moreOpen}>
+      <div inert={page !== shownPage || (layerShown && !handed) || undefined} class="page-row at-bottom" class:away={rowAway} class:handed={!!handed} class:steady={phone && !!panelPage && !moreOpen}>
         {#if leadBottom}{@render leadPart()}{:else}<span></span>{/if}
         {#if rightBottom}{@render rightPart()}{/if}
       </div>

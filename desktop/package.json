@@ -16,13 +16,14 @@
     "icons": "node copy-icons.js",
     "start": "npm run icons && electron .",
     "check": "node check-no-house.js",
-    "dist": "npm run icons && npm run check && electron-builder --linux deb --publish never",
+    "dist": "umask 022 && npm run icons && npm run check && electron-builder --linux deb --publish never",
     "dist:win": "npm run icons && npm run check && electron-builder --win nsis --publish never"
   },
   "build": {
     "appId": "org.cratarr.desktop",
     "productName": "Cratarr",
     "afterPack": "./after-pack.js",
+    "afterAllArtifactBuild": "./check-deb.js",
     "files": [
       "main.js",
       "preload.js",
