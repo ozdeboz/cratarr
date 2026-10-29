@@ -31,7 +31,8 @@
   import { applyPanel, type PanelEdit } from './patch-edits';
   import { cratarrTypes } from './patch';
   import { v2Types } from './picture-graph';
-  import { EXAMPLES, exampleOf } from './examples';
+  import { exampleOf } from './examples';
+  import { libraryOf } from './library';
   import { RANDOMIZE_SCOPES } from './ports';
   import type { Category } from './rack';
   import { DEFAULTS, RANGES, visualSettings } from './settings.svelte';
@@ -183,11 +184,8 @@
   // be used"), read when the rack opens; one chosen is recalled as the Snapshots sheet recalls one.
   let library = $state<VisualsSnapshot[]>([]);
   const loadLibrary = () => getVisualsSnapshots().then((l) => (library = l ?? []), () => {});
-  // After them, the example racks (examples.ts): one technique each, to start from.
-  const libraryList = $derived([
-    ...library.map((x) => ({ id: x.id, label: x.name.replace(/ · \d\d:\d\d$/, ''), line: '' })),
-    ...EXAMPLES.map((x) => ({ id: x.id, label: x.label, line: x.line })),
-  ]);
+  // The one library (library.ts): the saved ones, then the example racks, as the Snapshots sheet lists them.
+  const libraryList = $derived(libraryOf(library).map(({ id, label, line, group }) => ({ id, label, line, group })));
   function choosePreset(id: string) {
     const example = exampleOf(id);
     const snap = example ? null : library.find((x) => x.id === id);
@@ -571,6 +569,7 @@
       capture={() => loop?.picture() ?? Promise.resolve(null)}
       trackName={np?.name ?? null}
       {recall}
+      onexample={choosePreset}
       settingsNow={() => snapshotOfPatch(visualsPatch.patch)}
       over={!docked}
     />

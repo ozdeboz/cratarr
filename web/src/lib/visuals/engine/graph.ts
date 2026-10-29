@@ -1234,6 +1234,8 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
       center: [0.5, 0.5],
       gain: (signal, band, aspect, x) => own(aspect as 'stir' | 'flow' | 'swirl') * gains(signal, band, aspect as 'stir', x),
     });
+    // Its Fire (0.9.18): Lift, Open walls and Cooling as set (their macros in); none on a Fluid without them.
+    if (fluidOwn) for (const k of ['lift', 'open', 'cooling'] as const) fluid.flow[k] = baseOf(fluidOwn, k, unset(fluidOwn, 'fluid', k));
   }
   // A Flame's points in a Grid's frame (Streamlines' seeds, Instance's): its parts on the screen, where it has a view.
   for (const id of Object.keys(flames)) {

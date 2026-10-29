@@ -1,14 +1,16 @@
 // The example racks (the owner, 2026-10-29: "maybe we just need a few more example snapshots for the different
 // techniques and methods to get any sort of grid, kaleidoscope shape that we want"): the smallest racks that each show
-// one technique, offered beside the snapshot library's presets. Each draws the sound (Waves, MilkDrop's own source)
+// one technique, in the snapshot library (library.ts) under Examples. Each draws the sound (Waves, MilkDrop's own source)
 // into the picture's loop (Feedback → … → Keep, the new picture over by the brighter), so what the technique does to
 // the picture is what you see; each has a few macros on its face to play it. Data only, as devices.ts: the modules
 // are the declared ones, the renderer flattens them.
 
 import { MIX_MODES, type CableV2, type PatchV2 } from './ports';
+import { DEFAULTS, type VisualSettings } from './settings.svelte';
+import { toV2 } from './v2';
 import type { Module } from './patch';
 
-/** An example: its id (`example:`…, never a snapshot's), its name and line in the presets, its rack. */
+/** An example: its id (`example:`…, never a snapshot's), its name and line in the library, its rack. */
 export type Example = { id: string; label: string; line: string; patch: PatchV2 };
 
 const m = (id: string, type: string, knobs: Record<string, number> = {}): Module => ({ id, type, knobs });
@@ -62,7 +64,7 @@ function sound(c: Parameters<Parameters<typeof rack>[3]>[0], knobs: Record<strin
 const keep = (amount = 0.9, trails = 0.75) => m('keep', 'keep', { amount, trails });
 
 export const EXAMPLES: readonly Example[] = [
-  rack('tunnel', 'Example · Tunnel', 'The edge zooms faster than the middle: the picture falls into a tunnel.', (c) => {
+  rack('tunnel', 'Tunnel', 'The edge zooms faster than the middle: the picture falls into a tunnel.', (c) => {
     const s = sound(c, { circle: 1, radius: 0.22 });
     const l = loop(c, [m('warp', 'warp', { amount: 1, zoom: 0.15, zoomEdge: 0.7 }), keep()]);
     return {
@@ -75,7 +77,7 @@ export const EXAMPLES: readonly Example[] = [
       ],
     };
   }),
-  rack('whirlpool', 'Example · Whirlpool', 'The rim turns, the middle stays: the picture swirls into itself.', (c) => {
+  rack('whirlpool', 'Whirlpool', 'The rim turns, the middle stays: the picture swirls into itself.', (c) => {
     const s = sound(c, { radius: 0.3 });
     const l = loop(c, [m('warp', 'warp', { amount: 1, zoom: 0.08, turnEdge: 0.6 }), keep()]);
     return {
@@ -88,7 +90,7 @@ export const EXAMPLES: readonly Example[] = [
       ],
     };
   }),
-  rack('petals', 'Example · Petals', 'Zooming in and out in petals round the middle, turning; their count glides.', (c) => {
+  rack('petals', 'Petals', 'Zooming in and out in petals round the middle, turning; their count glides.', (c) => {
     const s = sound(c, { circle: 1, radius: 0.18 });
     const l = loop(c, [m('warp', 'warp', { amount: 1, zoom: 0.05, petals: 0.5, petalCount: 5, petalTurn: 0.15 }), keep()]);
     return {
@@ -101,7 +103,7 @@ export const EXAMPLES: readonly Example[] = [
       ],
     };
   }),
-  rack('rings', 'Example · Bass rings', 'Each bass hit sends rings of zoom running out from the middle.', (c) => {
+  rack('rings', 'Bass rings', 'Each bass hit sends rings of zoom running out from the middle.', (c) => {
     const s = sound(c, { radius: 0.3 });
     const l = loop(c, [m('warp', 'warp', { amount: 1, zoom: 0.05, rings: 0.1, ringCount: 4, ringSpeed: 0.5 }), keep(0.9, 0.7)]);
     return {
@@ -115,7 +117,7 @@ export const EXAMPLES: readonly Example[] = [
       ],
     };
   }),
-  rack('wandering', 'Example · Wandering heart', 'The tunnel’s heart wanders off the middle, moved by time, not the music.', (c) => {
+  rack('wandering', 'Wandering heart', 'The tunnel’s heart wanders off the middle, moved by time, not the music.', (c) => {
     const s = sound(c, { circle: 1, radius: 0.2 });
     const l = loop(c, [m('warp', 'warp', { amount: 1, zoom: 0.2, zoomEdge: 0.4, turn: 0.05 }), keep()]);
     return {
@@ -130,7 +132,7 @@ export const EXAMPLES: readonly Example[] = [
       ],
     };
   }),
-  rack('kaleido-feedback', 'Example · Kaleidoscope in the loop', 'Each fold fed back and folded again, the petals turning it.', (c) => {
+  rack('kaleido-feedback', 'Kaleidoscope in the loop', 'Each fold fed back and folded again, the petals turning it.', (c) => {
     const s = sound(c, { radius: 0.25 });
     const l = loop(c, [m('fold', 'fold', { mode: 1, count: 6, amount: 1 }), m('warp', 'warp', { amount: 1, zoom: 0.1, turn: 0.05, petals: 0.2, petalCount: 6 }), keep(0.8, 0.6)]);
     return {
@@ -143,7 +145,7 @@ export const EXAMPLES: readonly Example[] = [
       ],
     };
   }),
-  rack('gradient-field', 'Example · A field from a gradient', 'A gradient’s light pushes the loop: out from the middle, round in petals.', (c) => {
+  rack('gradient-field', 'A field from a gradient', 'A gradient’s light pushes the loop: out from the middle, round in petals.', (c) => {
     const s = sound(c, { radius: 0.25 });
     const l = loop(c, [m('push', 'displace', { amount: 0.4, scale: 0.6, zoom: 0.3, turn: 0.2 }), keep(0.88, 0.7)]);
     return {
@@ -157,7 +159,7 @@ export const EXAMPLES: readonly Example[] = [
       ],
     };
   }),
-  rack('grid-cells', 'Example · Kaleidoscope grid', 'A hexagonal grid, each cell its own kaleidoscope of the sound.', (c) => {
+  rack('grid-cells', 'Kaleidoscope grid', 'A hexagonal grid, each cell its own kaleidoscope of the sound.', (c) => {
     const s = sound(c, { radius: 0.3, amplitude: 0.5 });
     const l = loop(c, [m('warp', 'warp', { amount: 1, zoom: 0.06, turnEdge: 0.15 }), keep(0.85, 0.6)]);
     return {
@@ -178,7 +180,7 @@ export const EXAMPLES: readonly Example[] = [
       ],
     };
   }),
-  rack('shapes-grid', 'Example · Shapes on a grid', 'A shape at every point of a spiral grid, swirled by the loop.', (c) => {
+  rack('shapes-grid', 'Shapes on a grid', 'A shape at every point of a spiral grid, swirled by the loop.', (c) => {
     const l = loop(c, [m('warp', 'warp', { amount: 1, zoom: 0.04, turnEdge: 0.3 }), keep(0.85, 0.65)]);
     return {
       modules: [
@@ -206,6 +208,18 @@ export const EXAMPLES: readonly Example[] = [
       ],
     };
   }),
+  fire(),
 ];
+
+/** Fire (0.9.18; the owner, 2026-10-29: "and yes, fire"): the Cratarr device in the Fire colours, its Fluid open at the
+ *  floor and top, the light lifting by itself and burning out as it climbs (fire-e's 2 and 3 a second), the music's
+ *  shove and flashes held back (the owner wants no flashing in a fire). */
+function fire(): Example {
+  const settings = { ...structuredClone(DEFAULTS), family: 5, fluid: 0.8, stir: 0.4, flash: 0 } as VisualSettings;
+  const patch = toV2(settings);
+  const fluid = patch.modules.find((x) => x.type === 'fluid');
+  if (fluid) fluid.knobs = { ...fluid.knobs, lift: 2, open: 1, cooling: 3 };
+  return { id: 'example:fire', label: 'Fire', line: 'Hot light rises by itself, cools as it climbs and burns out at the top.', patch };
+}
 
 export const exampleOf = (id: string): Example | undefined => EXAMPLES.find((x) => x.id === id);

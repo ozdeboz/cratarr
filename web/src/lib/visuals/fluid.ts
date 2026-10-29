@@ -32,7 +32,15 @@ export type Force = { x: number; y: number; dx: number; dy: number; radius: numb
  *  their cycle (radians). */
 /** `field`: a Field stirring it (the owner: the Field's bands shape the swirls, the fluid gives them inertia): its flow
  *  pushes the fluid everywhere, `amount` how hard (a cable's). */
-export type Flow = { energy: number; swirl: number; wave?: Wave; field?: { scale: number; phase: number; waves?: readonly number[]; shape?: FieldShape; amount: number } };
+/** Fire (0.9.18; the owner via the house session's fire-e, 2026-10-29): `lift` how hard the densest light rises by itself,
+ *  as hot gas does (heights a second, each second; fire-e's 2); `open` how open the floor and top are (0 sealed, as ever;
+ *  1 open: air comes in below and goes out above, the sides still walls); `cooling` how fast the light burns out as it
+ *  climbs, from 40 % of the height up and along the side walls above the bed (its share lost a second; fire-e's 3).
+ *  None of them, nothing changes. */
+export type Flow = { energy: number; swirl: number; wave?: Wave; field?: { scale: number; phase: number; waves?: readonly number[]; shape?: FieldShape; amount: number }; lift?: number; open?: number; cooling?: number };
+/** What lifts the fluid: the light it last carried, and the scale that puts the light's density on the display's
+ *  (nodes/show.ts densityScale), so Lift means the same whatever the points, the buffer's size or the keep. */
+export type Heat = { light: WebGLTexture; k: number };
 /** The slow giant waves: how high and where in their roll (`angle` no longer counts: the Field's sum has every way). */
 export type Wave = { amount: number; angle: number; phase: number };
 
@@ -49,10 +57,17 @@ export type Light = { acc: WebGLTexture; bandsA: WebGLTexture; bandsB: WebGLText
 export const MOST_FORCES = 16;
 /** Jacobi iterations a step: enough for smoke that looks right, few enough for a tablet (each is a pass). */
 const ITERATIONS = 6;
+/** An open box's (fire-e's): its pressure settles against an edge, not a drifting constant, so it takes more. */
+const ITERATIONS_OPEN = 20;
 /** The fastest the fluid moves (cells a second): beyond it, a bad step could blow up. */
 const FASTEST = 400;
 /** What is left of the last step's pressure (a warm start for the iteration). */
 const PRESSURE_KEPT = 0.8;
+/** An open box's warm start: kept whole. */
+const PRESSURE_KEPT_OPEN = 1;
+/** Lift's and Cooling's most (heights a second each second; the share lost a second, as a rate). */
+export const LIFT_MOST = 4;
+export const COOLING_MOST = 6;
 /** How hard a Field stirs at amount 1: its flow's speed reached in about a second, before the fluid's own losses. */
 const FIELD_STIR = 1;
 /** Vorticity confinement at swirl 1 (Dobryakov's WebGL fluid uses 30 at this scale). */
@@ -98,6 +113,9 @@ uniform vec3 uFieldA;
 uniform vec3 uFieldB;
 uniform vec2 uFieldShape;
 uniform vec2 uK;
+uniform sampler2D uHeat;
+uniform float uLift;
+uniform float uHeatK;
 out vec4 o;
 ${FIELD_GLSL}
 float curlAt(vec2 uv) {
@@ -125,6 +143,12 @@ void main() {
     vec2 p = (vUv * 2.0 - 1.0) / uK;
     v += fieldAt(p, uFieldScale, uFieldPhase, uFieldA, uFieldB, uFieldShape) * uK * 0.5 * uGrid * push * uDt;
   }
+  // Lift: the light the fluid last carried is heat, and pushes its cell up (fire-e's buoyancy).
+  if (uLift > 0.0) {
+    // At the light's own level: its coarser ones are made for the smoothing, stale otherwise (as the light pass reads).
+    float heat = 1.0 - exp(-0.25 * textureLod(uHeat, vUv, 0.0).a * uHeatK);
+    v.y += uLift * heat * uGrid.y * uDt;
+  }
   for (int i = 0; i < ${MOST_FORCES}; i++) {
     if (i >= uCount) break;
     vec2 d = vUv - uAt[i].xy;
@@ -136,12 +160,14 @@ void main() {
 }`;
 
 // One Jacobi iteration of the pressure, the velocity's divergence worked out in it (the edges are walls: what flows
-// into one comes back); `uWarm` scales the pressure it starts from (the last step's, a little of it kept).
+// into one comes back); `uWarm` scales the pressure it starts from (the last step's, a little of it kept). `uOpen`: the
+// floor and top open by so much (no reflection there, and the pressure 0 beyond them: Dirichlet); the sides stay walls.
 const JACOBI = `${HEAD}
 uniform sampler2D uPressure;
 uniform sampler2D uVelocity;
 uniform vec2 uTexel;
 uniform float uWarm;
+uniform float uOpen;
 out vec4 o;
 void main() {
   vec2 c = texture(uVelocity, vUv).xy;
@@ -151,35 +177,52 @@ void main() {
   float vt = texture(uVelocity, vUv + vec2(0.0, uTexel.y)).y;
   if (vUv.x - uTexel.x < 0.0) vl = -c.x;
   if (vUv.x + uTexel.x > 1.0) vr = -c.x;
-  if (vUv.y - uTexel.y < 0.0) vb = -c.y;
-  if (vUv.y + uTexel.y > 1.0) vt = -c.y;
+  bool below = vUv.y - uTexel.y < 0.0;
+  bool above = vUv.y + uTexel.y > 1.0;
+  if (below) vb = mix(-c.y, vb, uOpen);
+  if (above) vt = mix(-c.y, vt, uOpen);
   float d = 0.5 * (vr - vl + vt - vb);
   float l = texture(uPressure, vUv - vec2(uTexel.x, 0.0)).x;
   float r = texture(uPressure, vUv + vec2(uTexel.x, 0.0)).x;
   float b = texture(uPressure, vUv - vec2(0.0, uTexel.y)).x;
   float t = texture(uPressure, vUv + vec2(0.0, uTexel.y)).x;
+  if (below) b *= 1.0 - uOpen;
+  if (above) t *= 1.0 - uOpen;
   o = vec4(((l + r + b + t) * uWarm - d) * 0.25, 0.0, 0.0, 1.0);
 }`;
 
 // The pressure's gradient taken away (the flow free of divergence), and the result carried along by itself, a little
-// of it lost: one pass, the free velocity worked out where it is sampled.
+// of it lost: one pass, the free velocity worked out where it is sampled. Open (`uOpen`): the pressure 0 beyond the floor
+// and top, as the iteration has it, and the gradient at the half step the divergence is (sealed, the full one, as ever:
+// it made up for a solve kept loose); nothing flows down through the floor or the top rows; the sideways motion damped
+// (fire is mostly vertical: else one roll sweeps it to a side) and the flow calmed along the side walls (without it,
+// "chaos on the edges and weak in the middle": the owner, of fire-e).
 const CARRY = `${HEAD}
 uniform sampler2D uVelocity;
 uniform sampler2D uPressure;
 uniform vec2 uTexel;
 uniform float uDt;
 uniform float uKeep;
+uniform float uOpen;
 out vec4 o;
 vec2 free(vec2 uv) {
   float l = texture(uPressure, uv - vec2(uTexel.x, 0.0)).x;
   float r = texture(uPressure, uv + vec2(uTexel.x, 0.0)).x;
   float b = texture(uPressure, uv - vec2(0.0, uTexel.y)).x;
   float t = texture(uPressure, uv + vec2(0.0, uTexel.y)).x;
-  return texture(uVelocity, uv).xy - vec2(r - l, t - b);
+  if (uv.y - uTexel.y < 0.0) b *= 1.0 - uOpen;
+  if (uv.y + uTexel.y > 1.0) t *= 1.0 - uOpen;
+  return texture(uVelocity, uv).xy - mix(1.0, 0.5, uOpen) * vec2(r - l, t - b);
 }
 void main() {
   vec2 back = vUv - uDt * free(vUv) * uTexel;
   vec2 v = free(back) * uKeep;
+  if (uOpen > 0.0) {
+    if (vUv.y < uTexel.y || vUv.y > 1.0 - uTexel.y) v.y = mix(v.y, max(v.y, 0.0), uOpen);
+    v.x *= mix(1.0, exp(-2.0 * uDt), uOpen);
+    float side = max(1.0 - smoothstep(0.0, 0.1, vUv.x), smoothstep(0.9, 1.0, vUv.x));
+    v *= mix(1.0, exp(-6.0 * uDt), side * uOpen);
+  }
   o = bad(v.x + v.y) ? vec4(0.0) : vec4(clamp(v, -${FASTEST}.0, ${FASTEST}.0), 0.0, 1.0);
 }`;
 
@@ -202,10 +245,19 @@ uniform float uLoopAspect;
 uniform vec2 uLoopK;
 uniform float uFacets;
 uniform float uLattice;
+uniform float uOpen;
+uniform float uCool;
 layout(location = 0) out vec4 o;
 layout(location = 1) out vec4 bandA;
 layout(location = 2) out vec4 bandB;
 vec4 kept(vec4 v) { return bad(dot(v, vec4(1.0))) ? vec4(0.0) : v * uKeep; }
+// Cooling (uCool: its rate times the step): the light burns out ever faster from 40 % of the height up, and along the
+// side walls above the bed, so the flames end where fire does, and never gather under the top or climb a wall.
+float cooled() {
+  if (uCool <= 0.0) return 1.0;
+  float side = smoothstep(0.15, 0.3, vUv.y) * max(1.0 - smoothstep(0.0, 0.07, vUv.x), smoothstep(0.93, 1.0, vUv.x));
+  return exp(-uCool * max(smoothstep(0.4, 0.95, vUv.y), side));
+}
 ${loop}
 // Facets: where the light is read back, pulled toward its cell's middle (the fluid's cells, square on the screen; or
 // hexagons a cell across), so each cell carries one light: softly at a little, as hard tiles at all of it.
@@ -235,9 +287,12 @@ void main() {
   vec2 at = 0.5 + (vUv - 0.5) * uZoom;
   at = fx_loop(at, uLoopA, uLoopTime, uLoopFrames, uLoopAspect, uLoopK);
   vec2 back = facet(at - uDt * texture(uVelocity, at).xy * uCell);
-  o = kept(textureLod(uAcc, back, 0.0));
-  bandA = kept(textureLod(uBandsA, back, 0.0));
-  bandB = kept(textureLod(uBandsB, back, 0.0));
+  // Air drawn in through an open floor arrives dark: what is read from below it is nothing (clamped, it would be the
+  // bottom row pulled up the screen in a column).
+  float k = (back.y < 0.0 ? 1.0 - uOpen : 1.0) * cooled();
+  o = kept(textureLod(uAcc, back, 0.0)) * k;
+  bandA = kept(textureLod(uBandsA, back, 0.0)) * k;
+  bandB = kept(textureLod(uBandsB, back, 0.0)) * k;
 }`;
 
 // A picture carried along by the velocity (the picture loop's Fluid, decision 0056: `carry`), nothing of it lost: what
@@ -255,6 +310,21 @@ void main() {
 }`;
 
 type Target = { texture: WebGLTexture; fbo: WebGLFramebuffer };
+
+/** A step's Fire as its passes take it (pure): each within its range (none where not a number), Lift only where there is
+ *  heat to read, and the pressure's iterations and warm start from sealed's to open's as the floor and top open. With
+ *  none of them, the fluid as it always was. */
+export function fireOf(flow: Pick<Flow, 'lift' | 'open' | 'cooling'>, heat?: Heat | null) {
+  const within = (v: number | undefined, hi: number) => (v !== undefined && Number.isFinite(v) ? Math.min(hi, Math.max(0, v)) : 0);
+  const open = within(flow.open, 1);
+  return {
+    lift: heat ? within(flow.lift, LIFT_MOST) : 0,
+    open,
+    cooling: within(flow.cooling, COOLING_MOST),
+    iterations: Math.round(ITERATIONS + (ITERATIONS_OPEN - ITERATIONS) * open),
+    warm: PRESSURE_KEPT + (PRESSURE_KEPT_OPEN - PRESSURE_KEPT) * open,
+  };
+}
 
 /** `fx_flow` in the light pass, for a loop effect that reads the flow (effects.ts Stream): the velocity where p is, in
  *  p's units a second (centred, aspect-true), as the picture slot's own. */
@@ -284,6 +354,9 @@ export class Fluid {
   private pressure2: [Target, Target] | null = null;
   private pending: Force[] = [];
   private lastDt = 0;
+  /** The last step's open floor and top, and its cooling, for the light pass after it. */
+  private lastOpen = 0;
+  private lastCooling = 0;
   width = 0;
   height = 0;
 
@@ -343,11 +416,14 @@ export class Fluid {
   }
 
   /** One step of the flow, `dt` seconds on (at most a twentieth: a long pause does not throw it): two passes and the
-   *  pressure's iterations, on the grid. */
-  step(dt: number, flow: Flow) {
+   *  pressure's iterations, on the grid; `heat` what Lift reads (none: no lift). */
+  step(dt: number, flow: Flow, heat?: Heat | null) {
     const gl = this.gl;
     dt = Math.min(0.05, Math.max(0, dt));
     this.lastDt = dt;
+    const fire = fireOf(flow, heat);
+    this.lastOpen = fire.open;
+    this.lastCooling = fire.cooling;
     gl.disable(gl.BLEND);
     gl.bindVertexArray(this.empty);
     gl.viewport(0, 0, this.width, this.height);
@@ -363,7 +439,7 @@ export class Fluid {
       at.set([f.x, f.y, f.radius, f.strength], i * 4);
       way.set([f.dx, f.dy], i * 2);
     });
-    this.draw('FORCE', v[1], { uVelocity: v[0].texture }, (u) => {
+    this.draw('FORCE', v[1], { uVelocity: v[0].texture, uHeat: heat?.light ?? v[0].texture }, (u) => {
       gl.uniform2f(u('uTexel'), ...texel);
       gl.uniform1f(u('uAspect'), this.width / this.height);
       gl.uniform2f(u('uGrid'), this.width, this.height);
@@ -384,13 +460,16 @@ export class Fluid {
       gl.uniform3f(u('uFieldA'), fw[0], fw[1], fw[2]);
       gl.uniform3f(u('uFieldB'), fw[3], fw[4], fw[5]);
       gl.uniform2f(u('uK'), ...toScreen(this.width / this.height));
+      gl.uniform1f(u('uLift'), fire.lift);
+      gl.uniform1f(u('uHeatK'), heat?.k ?? 0);
     });
     v.reverse();
 
-    for (let i = 0; i < ITERATIONS; i++) {
+    for (let i = 0; i < fire.iterations; i++) {
       this.draw('JACOBI', p[1], { uPressure: p[0].texture, uVelocity: v[0].texture }, (u) => {
         gl.uniform2f(u('uTexel'), ...texel);
-        gl.uniform1f(u('uWarm'), i === 0 ? PRESSURE_KEPT : 1);
+        gl.uniform1f(u('uWarm'), i === 0 ? fire.warm : 1);
+        gl.uniform1f(u('uOpen'), fire.open);
       });
       p.reverse();
     }
@@ -402,6 +481,7 @@ export class Fluid {
       gl.uniform2f(u('uTexel'), ...texel);
       gl.uniform1f(u('uDt'), dt);
       gl.uniform1f(u('uKeep'), keep);
+      gl.uniform1f(u('uOpen'), fire.open);
     });
     v.reverse();
   }
@@ -439,6 +519,8 @@ export class Fluid {
     gl.uniform2f(u('uLoopK'), loop?.knobs?.[0] ?? 0.5, loop?.knobs?.[1] ?? 0.5);
     gl.uniform1f(u('uFacets'), facets?.amount ?? 0);
     gl.uniform1f(u('uLattice'), facets?.hex ? 1 : 0);
+    gl.uniform1f(u('uOpen'), this.lastOpen);
+    gl.uniform1f(u('uCool'), this.lastCooling * this.lastDt);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
