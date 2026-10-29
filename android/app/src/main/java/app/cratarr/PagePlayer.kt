@@ -3,6 +3,7 @@ package app.cratarr
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 
 import androidx.annotation.OptIn
@@ -223,6 +224,8 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
         val c = controller
         // The deck's one truth (decision 0075): where it is, across the queue, and how it moves; the page counts on
         // from it each frame (place + speedX·t + ½·accelX·t², t in seconds). Without the service: the controller's.
+        // When the deck was read (elapsed realtime): the page counts on from then, not from when the message reached it.
+        val sampled = SystemClock.elapsedRealtime()
         val deck = StartStop.deckNow?.invoke()?.takeIf { c.mediaItemCount > 0 }
         val index = deck?.index ?: if (c.mediaItemCount == 0) -1 else c.currentMediaItemIndex
         val length = lengthOf(c, index)
@@ -233,6 +236,7 @@ class PagePlayer(private val context: Context, private val controller: MediaCont
             .put("positionMs", deck?.ms ?: c.currentPosition)
             .put("speedX", deck?.speed ?: if (c.isPlaying) c.playbackParameters.speed.toDouble() else 0.0)
             .put("accelX", deck?.accel ?: 0.0)
+            .put("deckAtMs", sampled)
             // The place is a wind's (its stream sounds).
             .put("rewinding", StartStop.winding)
             // A hold's aim (the page's look-ahead, 632): forwards where it plays at 1× again, backwards where it stands;

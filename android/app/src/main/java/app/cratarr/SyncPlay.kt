@@ -17,6 +17,7 @@ import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.C
@@ -50,6 +51,13 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
     val trackSpeed = Varispeed()
     /** The same on the tape's (a wind's envelope): the tape's player is made with [tapeRenderers]. */
     val tapeSpeed = Varispeed()
+    /** The tape's sink, where its sound is heard ([tapeHeardMs]). */
+    private var tapeSink: Paced? = null
+
+    /** Where the tape's stream is [nowMs] (elapsed realtime), ms from its start, as its sound is heard; null before any
+     *  sound since its start. Its player's own place moves only once a second (2026-10-29, the tablet: a held wind's
+     *  place stood still, then leapt up to 128 s). */
+    fun tapeHeardMs(nowMs: Long): Double? = tapeSink?.heardMs(nowMs)
     /** The announce channel's mix-in (lib Announcer): first in the chain, so a group hears what its leader announces. */
     val announcer = Announcer.Mixer().also { Announcer.mixer = it }
     private val snapclient = Snapclient(context)
@@ -133,7 +141,7 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
                     source.tape.brk()
                     super.reset()
                 }
-            }
+            }.also { tapeSink = it }
         }
     }.setEnableAudioTrackPlaybackParams(true)
 
@@ -144,14 +152,33 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
     private open class Paced(sink: AudioSink, private val speed: Varispeed) : ForwardingAudioSink(sink) {
         @Volatile private var start = C.TIME_UNSET
 
+        /** Where its sound was last heard (the player asks every few ms): µs since the first sound after the flush,
+         *  when (elapsed realtime, ns), and how fast it goes on from there (0 paused). */
+        private class Heard(val us: Long, val atNs: Long, val rate: Double)
+
+        @Volatile private var heard: Heard? = null
+        @Volatile private var playing = false
+
         override fun flush() {
             start = C.TIME_UNSET
+            heard = null
             super.flush()
         }
 
         override fun reset() {
             start = C.TIME_UNSET
+            heard = null
             super.reset()
+        }
+
+        override fun play() {
+            playing = true
+            super.play()
+        }
+
+        override fun pause() {
+            playing = false
+            super.pause()
         }
 
         override fun handleBuffer(buffer: ByteBuffer, presentationTimeUs: Long, encodedAccessUnitCount: Int): Boolean {
@@ -163,7 +190,18 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
             val p = super.getCurrentPositionUs(sourceEnded)
             val s = start
             if (p == AudioSink.CURRENT_POSITION_NOT_SET || s == C.TIME_UNSET || p < s) return p
-            return s + speed.mediaUs(p - s)
+            val media = speed.mediaUs(p - s)
+            // On Android's output at its speed, then through the sound's own ([speed]).
+            val rate = if (playing && !sourceEnded) playbackParameters.speed.toDouble() * speed.rate else 0.0
+            heard = Heard(media, SystemClock.elapsedRealtimeNanos(), rate)
+            return s + media
+        }
+
+        /** ms since the first sound after the flush, [nowMs] (elapsed realtime): as last heard, counted on at its rate
+         *  for at most [HEARD_AHEAD_MS]; null before any. */
+        fun heardMs(nowMs: Long): Double? = heard?.let { h ->
+            val ahead = (nowMs - h.atNs / 1_000_000.0).coerceIn(0.0, HEARD_AHEAD_MS)
+            h.us / 1000.0 + ahead * h.rate
         }
     }
 
@@ -562,6 +600,8 @@ class SyncPlay(private val context: Context, private val prefs: Prefs) : Player.
     companion object {
         private const val TAG = "CratarrSyncPlay"
         private const val SNAP_TAG = "snapclient"
+        /** How long a heard place is counted on without the player asking again (a stall stops it there). */
+        private const val HEARD_AHEAD_MS = 500.0
 
         // Snapcast's binary protocol (its doc/binary_protocol.md), as server/src/snapcast/proto.rs speaks it.
         private const val CODEC_HEADER = 1
