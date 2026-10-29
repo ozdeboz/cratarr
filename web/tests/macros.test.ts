@@ -1,0 +1,64 @@
+// Macros (decision 0077: macros are the rack's face; one level down): a device's own macros reach the engine, a macro
+// maps a device's macro, nothing reaches past a device's edge: npm test.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { TRACKS, track } from './harness/aspects-record.ts';
+const { DEFAULTS, FLUID_FULL } = await import('../src/lib/visuals/settings.svelte.ts');
+const { DEVICES } = await import('../src/lib/visuals/devices.ts');
+const { asSet, flatten, toV2 } = await import('../src/lib/visuals/v2.ts');
+await import('../src/lib/visuals/picture-wiring.ts');
+const { v2TypeRecord } = await import('../src/lib/visuals/v2-types.ts');
+const { newEngine, stepEngine } = await import('../src/lib/visuals/engine/graph.ts');
+const { musicOf, newMusicState } = await import('../src/lib/visuals/music-core.ts');
+const { macrosOneLevel } = await import('../src/lib/visuals/macro-levels.ts');
+const { isDevice } = await import('../src/lib/visuals/ports.ts');
+type PatchV2 = import('../src/lib/visuals/ports.ts').PatchV2;
+
+const types = v2TypeRecord();
+const t = track(TRACKS[0]);
+const step = (p: PatchV2) => stepEngine(newEngine(), flatten(p), types, musicOf(t.signals, t.beats, 20, true, { state: newMusicState(), at: 20000, lighting: DEFAULTS.lighting }), () => 0, 1 / 30, { now: 20000, fluidFull: FLUID_FULL });
+
+test("a device's own macro moves what it maps: Bloom's Threshold from 0.9 to 0.4", () => {
+  for (const [value, want] of [[0, 0.9], [1, 0.4], [0.5, 0.65]] as const) {
+    const bloom = structuredClone(DEVICES.find((d) => d.id === 'bloom')!);
+    bloom.macros.find((x) => x.id === 'threshold')!.value = value;
+    const f = step({ v: 2, modules: [bloom], cables: [], macros: [], pins: [] });
+    assert.ok(Math.abs(f.knobs['bloom/bright'].threshold - want) < 1e-9, `${value}: ${f.knobs['bloom/bright'].threshold}`);
+  }
+});
+
+test("one level down: the rack's Wild maps Calm's own Wild, which maps its five thresholds, as before", () => {
+  for (const wild of [0.2, 0.5, 0.9]) {
+    const p = toV2({ ...structuredClone(DEFAULTS), wild });
+    const rack = p.macros.find((x) => x.id === 'wild')!;
+    assert.deepEqual(rack.targets, [{ module: 'calm', knob: 'macro:wild', from: 0, to: 1 }]);
+    const calm = p.modules.find((m) => m.id === 'calm');
+    assert.ok(calm && isDevice(calm));
+    const own = calm.macros.find((x) => x.id === 'wild')!;
+    assert.equal(own.targets.length, 5);
+    assert.ok(own.targets.every((x) => !x.module.includes('/') && x.knob === 'threshold'));
+    // As the rack's Wild reached the thresholds directly.
+    const direct = structuredClone(p);
+    const d = direct.modules.find((m) => m.id === 'calm')!;
+    if (isDevice(d)) d.macros = [];
+    direct.macros.find((x) => x.id === 'wild')!.targets = own.targets.map((x) => ({ ...x, module: `calm/${x.module}` }));
+    // The thresholds as set (the Ducker's base, Wild's along its taper) and what each Ducker gives, both alike.
+    const fa = flatten(p);
+    const fb = flatten(direct);
+    const a = step(p);
+    const b = step(direct);
+    for (const x of own.targets) {
+      const id = `calm/${x.module}`;
+      const ta = asSet(fa, fa.modules.find((m) => m.id === id), 'threshold', types)!;
+      const tb = asSet(fb, fb.modules.find((m) => m.id === id), 'threshold', types)!;
+      assert.ok(Math.abs(ta - tb) < 1e-9 * tb, `${x.module} at Wild ${wild}: ${ta} against ${tb}`);
+      assert.equal(a.outputs[`${id}.out`], b.outputs[`${id}.out`]);
+    }
+  }
+});
+
+test('moved one level down again, a patch is as it was', () => {
+  const p = toV2(structuredClone(DEFAULTS));
+  const once = JSON.stringify(p);
+  assert.equal(JSON.stringify(macrosOneLevel(p)), once);
+});

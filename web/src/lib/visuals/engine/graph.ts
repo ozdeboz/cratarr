@@ -469,7 +469,8 @@ function planOf(p: PatchV2, types: Record<string, ModuleType>): Plan {
   const ids = new Set(nodes.map((x) => x.id));
   const needs = new Map<string, Set<string>>(nodes.map((x) => [x.id, new Set<string>()]));
   for (const c of p.cables) if (ids.has(c.from.module) && ids.has(c.to.module) && c.from.module !== c.to.module) needs.get(c.to.module)!.add(c.from.module);
-  for (const macro of p.macros) for (const t of macro.targets) if (ids.has(t.module) && !macroIds.has(t.module)) needs.get(t.module)!.add(macro.id);
+  // A macro's targets after it: a module's knobs, and a device's macro it maps (0077: one level down).
+  for (const macro of p.macros) for (const t of macro.targets) if (ids.has(t.module) && t.module !== macro.id && (!macroIds.has(t.module) || t.knob === MACRO_KNOB.id)) needs.get(t.module)!.add(macro.id);
   const done = new Set<string>();
   const order: Node[] = [];
   while (done.size < nodes.length) {
@@ -927,7 +928,8 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
   const knobs: Record<string, Record<string, number>> = {};
   for (const next of plan.order) {
     if (next.macro) {
-      macros[next.id] = moved(next.id, MACRO_KNOB, clamp(finite(next.macro.value), 0, 1), into.get(`${next.id}|value`) ?? []);
+      // As set, or as the macro one level up that maps it sets it; then as its cables move it.
+      macros[next.id] = moved(next.id, MACRO_KNOB, macroed(next.id, MACRO_KNOB, clamp(finite(next.macro.value), 0, 1)), into.get(`${next.id}|value`) ?? []);
       continue;
     }
     const x = next.module!;

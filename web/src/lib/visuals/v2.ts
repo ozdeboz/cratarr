@@ -31,7 +31,8 @@ import { isDevice, READINGS, SHOW_PARTS, type CableV2, type Device, type PatchV2
 import { extraType } from './registry';
 import { modulatorOf } from './modulators/modulators';
 import { makeDevice } from './device-make';
-import { namedDevices, RACK_NAMES } from './device-names';
+import { RACK_NAMES } from './device-names';
+import { upgraded } from './upgrade';
 import { v2TypeRecord } from './v2-types';
 import { EFFECTS } from './effects';
 import { effectType } from './effect-modules';
@@ -147,10 +148,21 @@ export function asSet(p: PatchV2, m: Module | undefined, knob: string, types?: R
   for (const x of p.macros)
     for (const t of x.targets)
       if (t.module === m.id && t.knob === knob) {
-        const at = Math.min(1, Math.max(0, x.value));
+        const at = Math.min(1, Math.max(0, macroAsSet(p, x)));
         v = exp && t.from > 0 && t.to > 0 ? t.from * (t.to / t.from) ** at : t.from + (t.to - t.from) * at;
       }
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+}
+
+/** A flattened patch's macro's value as set: its own, or as the macro one level up that maps it sets it. */
+export function macroAsSet(p: PatchV2, x: Macro, seen: Set<string> = new Set([x.id])): number {
+  for (const y of p.macros)
+    for (const t of y.targets)
+      if (t.module === x.id && t.knob === 'value' && !seen.has(y.id)) {
+        seen.add(y.id);
+        return t.from + (t.to - t.from) * Math.min(1, Math.max(0, macroAsSet(p, y, seen)));
+      }
+  return x.value;
 }
 
 /** A device's pin as the flattened patch names it: a module's, a cable's or a knob's under the device's path (a
@@ -158,10 +170,17 @@ export function asSet(p: PatchV2, m: Module | undefined, knob: string, types?: R
 const pinAt = (device: string, pin: string): string[] =>
   pin.startsWith('module:') ? [`module:${device}/${pin.slice(7)}`] : pin.startsWith('cable:') ? [`cable:${device}/${pin.slice(6)}`] : /^[^:]+\.[^:]+$/.test(pin) ? [`${device}/${pin}`] : [];
 
+/** A macro's flattened id inside a device (`<device>/macro:<id>`: apart from a module of the same name). */
+export const macroNode = (device: string, id: string) => `${device}/macro:${id}`;
+/** A level's macro as the flattened patch has it (0077: a macro reaches one level down): a target on a device's macro
+ *  (`<device>`, `macro:<id>`) is that macro's node's value; every other, a knob of the level's own modules. */
+const ownMacro = (x: Macro): Macro => ({ ...x, targets: x.targets.map((t) => (t.knob.startsWith('macro:') ? { ...t, module: macroNode(t.module, t.knob.slice('macro:'.length)), knob: 'value' } : t)) });
+
 function opened(p: PatchV2): { patch: PatchV2; behind: Behind } {
   const modules: Module[] = [];
   const cables: CableV2[] = [];
   const pins = [...p.pins];
+  const macros: Macro[] = p.macros.map(ownMacro);
   const behind: Behind = { in: new Map(), out: new Map() };
   for (const m of p.modules) {
     if (!isDevice(m)) {
@@ -172,6 +191,14 @@ function opened(p: PatchV2): { patch: PatchV2; behind: Behind } {
     const at = (id: string) => `${m.id}/${id}`;
     modules.push(...inner.patch.modules.map((x) => ({ ...x, id: at(x.id) })));
     pins.push(...inner.patch.pins.flatMap((x) => pinAt(m.id, x)));
+    // Its macros, the macros of the level inside it, under its path: its own (its face) as macros of the flattened patch,
+    // each a node of its own; a cable into one (`<device>.macro:<id>`) reaches that node's value.
+    const under = (x: Macro): Macro => ({ ...x, id: at(x.id), targets: x.targets.map((t) => ({ ...t, module: at(t.module) })) });
+    macros.push(...inner.patch.macros.map(under));
+    for (const x of m.macros) {
+      macros.push(under(ownMacro({ id: `macro:${x.id}`, on: m.id, label: x.label, value: x.value, targets: x.targets })));
+      behind.in.set(`${m.id}.macro:${x.id}`, [{ module: macroNode(m.id, x.id), port: 'value' }]);
+    }
     cables.push(...inner.patch.cables.map((c) => ({ ...c, id: at(c.id), from: { ...c.from, module: at(c.from.module) }, to: { ...c.to, module: at(c.to.module) } })));
     for (const [dir, list] of [['in', m.inputs], ['out', m.outputs]] as const)
       for (const e of list) {
@@ -185,7 +212,7 @@ function opened(p: PatchV2): { patch: PatchV2; behind: Behind } {
     const from = lead(c.from, 'out')[0];
     for (const [i, t] of lead(c.to, 'in').entries()) cables.push({ ...c, ...(i ? { id: `${c.id}~${i}` } : {}), from, to: t });
   }
-  return { patch: { ...p, modules, cables, pins }, behind };
+  return { patch: { ...p, modules, cables, pins, macros }, behind };
 }
 
 /** The bands' hits through an ADSR (claude-5f's mapping of today's Linger): `adsr` for the hits, `adsr-drums` for the
@@ -622,5 +649,5 @@ function packed(p: PatchV2): PatchV2 {
   makeDevice(p, ids((m) => m.id.startsWith('pause-')), { id: 'pause', label: 'Pause Dim' });
   makeDevice(p, ids((m) => m.id.startsWith('follow-')), { id: 'loudness-follow', label: 'Loudness Follow' });
   makeDevice(p, ids((m) => m.type === 'adsr' && m.id !== NEWTRACK), { id: 'hit-lights', label: 'Hit Lights' });
-  return namedDevices(p, v2TypeRecord());
+  return upgraded(p, v2TypeRecord());
 }
