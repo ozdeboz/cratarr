@@ -257,6 +257,9 @@ export const portHelp: Record<string, Record<string, string>> = {
     rings: 'Zooms in and out in rings running out from the centre.',
     ringCount: 'How many rings from the centre to the edge.',
     ringSpeed: 'How fast the rings run out; below 0 they run in.',
+    turbulence: 'MilkDrop’s own warp: slow waves that bend the picture as it flows.',
+    turbulenceSpeed: 'How fast the turbulence changes.',
+    turbulenceSize: 'How large its waves are.',
   },
   keep: {
     amount: 'How much of the last picture stays: none at 0, as without a loop.',

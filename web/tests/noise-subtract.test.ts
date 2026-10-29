@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 (globalThis as Record<string, unknown>).$state = <T>(v: T) => v;
-const { NOISE, noiseNow, noiseSeed } = await import('../src/lib/visuals/sources/noise.ts');
+const { NOISE, noiseNow, noiseSeed, noiseStep } = await import('../src/lib/visuals/sources/noise.ts');
 const { defaults } = await import('../src/lib/visuals/sources/knob.ts');
 const { MIX_MODES } = await import('../src/lib/visuals/ports.ts');
 const { BLENDS } = await import('../src/lib/visuals/patch.ts');
@@ -66,4 +66,18 @@ test('Subtract: the picture less the other (by its amount), never below black; a
     assert.equal(subtract(c, c, 0), c);
   }
   assert.equal(subtract(0.2, 0.9, 1), 0);
+});
+
+test('its time runs on a frame at a time: a change of speed or scale goes on from where it is, no jump', () => {
+  const k = Object.fromEntries(NOISE.knobs.map((x) => [x.id, x.default]));
+  let z = 0;
+  for (let i = 0; i < 600; i++) z = noiseStep(z, k, 1 / 60, 1080);
+  const before = z;
+  const changed = { ...k, speed: 1, scale: 0.1 };
+  const faster = noiseStep(z, changed, 1 / 60, 1080);
+  const rate = 2 * noiseNow(changed, 0, 1080).cells;
+  assert.ok(Math.abs(faster - before - rate / 60) < 1e-9, 'one frame on at the new rate');
+  // As it was (the track's time times the speed and scale): a jump the further the later.
+  assert.ok(Math.abs(noiseNow(changed, 10, 1080).z - noiseNow(k, 10, 1080).z) > 100 * (rate / 60), 'where the old z would have jumped');
+  assert.ok(Math.abs(noiseStep(z, { ...k, speed: 0 }, 1 / 60, 1080) - z) < 1e-12, 'still at speed 0');
 });

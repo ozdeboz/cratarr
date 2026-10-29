@@ -67,6 +67,13 @@ export function noiseNow(k: Record<string, number>, time: number, short: number)
   };
 }
 
+/** Where in time it is after `dt` more seconds from `z`, at its speed and scale now: run on a frame at a time, so a
+ *  change of either (a cable, a macro, a morph) goes on from where it is (the owner, 2026-10-29: continuous controls;
+ *  `noiseNow`'s z, the track's time times them, jumped at every change, the further the later in the track). */
+export function noiseStep(z: number, k: Record<string, number>, dt: number, short: number): number {
+  return (z + dt * k.speed * 2 * noiseNow(k, 0, short).cells) % 4096;
+}
+
 const VERTEX = `#version 300 es
 void main() {
   vec2 p = vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0);
@@ -156,6 +163,8 @@ export class Noise implements PictureModule {
   private program: WebGLProgram;
   private at: Record<string, WebGLUniformLocation | null>;
   private seed: [number, number, number];
+  /** Where in time it is (noiseStep). */
+  private z = 0;
 
   constructor(gl: WebGL2RenderingContext, id = '') {
     this.program = program(gl, VERTEX, FRAGMENT);
@@ -165,6 +174,7 @@ export class Noise implements PictureModule {
 
   draw(gl: WebGL2RenderingContext, _input: WebGLTexture | null, out: WebGLFramebuffer | null, width: number, height: number, knobs: Record<string, number>, frame: FrameInfo) {
     const k = values(NOISE, knobs);
+    this.z = noiseStep(this.z, k, frame.dt, Math.min(width, height));
     target(gl, out, width, height);
     if (k.amount <= 0) return;
     const now = noiseNow(k, frame.time, Math.min(width, height));
@@ -172,7 +182,7 @@ export class Noise implements PictureModule {
     gl.uniform2f(this.at.uSize, width, height);
     gl.uniform1f(this.at.uCells, now.cells);
     gl.uniform1f(this.at.uOctaves, now.octaves);
-    gl.uniform1f(this.at.uZ, now.z);
+    gl.uniform1f(this.at.uZ, this.z);
     gl.uniform3f(this.at.uSeed, ...this.seed);
     gl.uniform1f(this.at.uGain, now.gain);
     gl.uniform1f(this.at.uAmount, now.amount);

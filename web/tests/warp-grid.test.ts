@@ -3,7 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { WARP, WARP_GLSL, WarpClock, petalAt, warpFrame, warpFrom, warpUniforms } = await import('../src/lib/visuals/loopmods.ts');
+const loopmodsModule = await import('../src/lib/visuals/loopmods.ts');
+const { WARP, WARP_GLSL, WarpClock, petalAt, warpFrame, warpFrom, warpUniforms } = loopmodsModule;
 
 const defaults = (over: Record<string, number> = {}) => ({ ...Object.fromEntries(WARP.knobs.map((k) => [k.id, k.default])), ...over });
 const still = { petal: 0, ring: 0 };
@@ -101,10 +102,34 @@ test("the shader's uniforms are the frame's, each declared in its GLSL, and ther
 });
 
 test('every new knob is continuous, and each does nothing at its default but its counts and speeds', () => {
-  const grid = ['centreX', 'centreY', 'zoomEdge', 'turnEdge', 'petals', 'petalCount', 'petalTurn', 'rings', 'ringCount', 'ringSpeed'];
+  const grid = ['centreX', 'centreY', 'zoomEdge', 'turnEdge', 'petals', 'petalCount', 'petalTurn', 'rings', 'ringCount', 'ringSpeed', 'turbulence', 'turbulenceSpeed', 'turbulenceSize'];
   for (const id of grid) {
     const k = WARP.knobs.find((x) => x.id === id);
     assert.ok(k, id);
     assert.notEqual(k.kind, 'step', `${id} glides`);
   }
+});
+
+test("MilkDrop's turbulence: none at 0, a point moved at most twice its amount, and its time run on without a jump", () => {
+  const { turbulenceOf } = loopmodsModule;
+  const still2 = { petal: 0, ring: 0, turbulence: 12.5 };
+  const off = warpFrame([defaults()], 1 / 60, 1, 0, still2);
+  for (const p of POINTS) assert.ok(close(warpFrom(p, off), p), 'none at 0');
+  const on = warpFrame([defaults({ turbulence: 1 })], 1 / 60, 1, 0, still2);
+  const most = 2 * on.turbulence.amount;
+  let moved = 0;
+  for (const p of POINTS) {
+    const q = warpFrom(p, on);
+    const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
+    assert.ok(d <= most * Math.SQRT2 + 1e-12, 'at most its amount on each axis, twice');
+    moved = Math.max(moved, d);
+  }
+  assert.ok(moved > 0, 'it moves them');
+  // MilkDrop's own numbers at 1 (0.0035 of the picture a frame at 60 frames a second).
+  assert.ok(Math.abs(turbulenceOf(1, 1, 0, 1 / 60).amount - 0.0035) < 1e-12);
+  const c = new WarpClock();
+  c.run(defaults({ turbulenceSpeed: 2 }), 3);
+  const t = c.turbulence;
+  c.run(defaults({ turbulenceSpeed: 0.1 }), 1 / 1000);
+  assert.ok(Math.abs(c.turbulence - t) < 0.001, 'a change of speed goes on from where its time is');
 });

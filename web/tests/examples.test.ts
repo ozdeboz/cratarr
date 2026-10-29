@@ -51,6 +51,8 @@ for (const x of EXAMPLES) {
         const m = byId.get(t.module);
         assert.ok(m, `${mc.id}: ${t.module} is in the rack`);
         assert.ok(RECORD[m.type].knobs.some((k) => k.id === t.knob), `${mc.id}: ${m.type} has ${t.knob}`);
+        // The Grid is laid out from its stored knobs (graph.ts): a macro on its layout would move nothing.
+        assert.ok(m.type !== 'grid' || ['drift', 'return'].includes(t.knob), `${mc.id}: no macro on a Grid's ${t.knob}`);
       }
     }
     const c = compile(p, PICTURE_TYPES);

@@ -170,10 +170,11 @@ export const EXAMPLES: readonly Example[] = [
         c('grid', 'points', 'fold', 'grid'),
         c('fold', 'picture', 'mix', 'in1'),
       ],
+      // The Grid is laid out from its own knobs (graph.ts reads neither cables nor macros there yet): its cells set by hand.
       macros: [
-        macro('cells', 'Cells', 0.25, [{ module: 'grid', knob: 'count', from: 4, to: 64 }]),
-        macro('spacing', 'Spacing', 0.3, [{ module: 'grid', knob: 'spacing', from: 0.1, to: 0.8 }]),
         macro('folds', 'Folds', 0.33, [{ module: 'fold', knob: 'count', from: 3, to: 12 }]),
+        macro('swirl', 'Swirl', 0.57, [{ module: 'warp', knob: 'turnEdge', from: -1, to: 1 }]),
+        macro('trail', 'Trail', 0.5, [{ module: 'keep', knob: 'trails', from: 0.3, to: 0.95 }]),
       ],
     };
   }),
@@ -197,10 +198,11 @@ export const EXAMPLES: readonly Example[] = [
         c('music', 'loudness', 'pulse', 'in'),
         c('pulse', 'level', 'dot', 'size', 0.5),
       ],
+      // The Grid is laid out from its own knobs (graph.ts reads neither cables nor macros there yet): its points set by hand.
       macros: [
-        macro('count', 'Count', 0.7, [{ module: 'grid', knob: 'count', from: 8, to: 64 }]),
-        macro('spacing', 'Spacing', 0.2, [{ module: 'grid', knob: 'spacing', from: 0.05, to: 0.4 }]),
+        macro('size', 'Size', 0.3, [{ module: 'dot', knob: 'size', from: 0.02, to: 0.1 }]),
         macro('swirl', 'Swirl', 0.65, [{ module: 'warp', knob: 'turnEdge', from: -1, to: 1 }]),
+        macro('trail', 'Trail', 0.5, [{ module: 'keep', knob: 'trails', from: 0.3, to: 0.95 }]),
       ],
     };
   }),
