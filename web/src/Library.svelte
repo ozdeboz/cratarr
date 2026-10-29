@@ -23,9 +23,12 @@
   import { me } from './lib/me.svelte';
   import SpotifyLibrary from './lib/SpotifyLibrary.svelte';
   import { inSpotify, loadSpotify, spotify } from './lib/spotify.svelte';
-  import { isSpotifyView } from './lib/libraryViews';
-  // Opened on the view Settings says, unless that is the one it was left on (the owner, 2026-10-25).
-  if (prefs.libraryOpens !== 'last') prefs.libraryView = prefs.libraryOpens;
+  import { isSpotifyView, libraryViewOf } from './lib/libraryViews';
+  // Opened on the page its address names (`#/library/tracks`, the navigation's); else on the view Settings says,
+  // unless that is the one it was left on (the owner, 2026-10-25).
+  const asked = libraryViewOf(location.hash);
+  if (asked) prefs.libraryView = asked;
+  else if (prefs.libraryOpens !== 'last') prefs.libraryView = prefs.libraryOpens;
   // A Spotify list left on, and the account has none any more (disconnected, the export forgotten): its albums.
   loadSpotify().then(() => {
     if (inSpotify() && spotify.state && !spotify.state.shown) prefs.libraryView = 'albums';

@@ -49,14 +49,15 @@
   import { installLabels } from './lib/labels.svelte';
   import { installKeyWind } from './lib/keyWind';
   import { hasView, pageView } from './lib/pageView.svelte';
-  import { inSpotify } from './lib/spotify.svelte';
+  import { inSpotify, loadSpotify, spotify } from './lib/spotify.svelte';
   import { art, playing } from './lib/remote.svelte';
   import { fade, fly, slide } from 'svelte/transition';
   import { linear, quadInOut } from 'svelte/easing';
   import { decelerate, reducedMotion, SHEET_IN, SHEET_OUT } from './lib/motion';
   import { glass } from './lib/glass.svelte';
   import GlobalResults from './lib/GlobalResults.svelte';
-  import LibraryViewPicker from './lib/LibraryViewPicker.svelte';
+  import AlbumTypePicker from './lib/AlbumTypePicker.svelte';
+  import { libraryHref, libraryPages, libraryViewOf } from './lib/libraryViews';
   import { globalSearch, pageKinds } from './lib/globalSearch.svelte';
   import { provideEverywhere } from './lib/everywhere.svelte';
   import Find from './Find.svelte';
@@ -132,6 +133,8 @@
       return LIBRARY.id;
     }
     if (!h) return HOME.id;
+    // One of the Library's pages (`#/library/tracks`): the Library, showing it (lib/libraryViews).
+    if (libraryViewOf(h)) return LIBRARY.id;
     return [HOME, HEALTH, SETTINGS, LIBRARY, INSIGHTS, CRATES, DISCOVER, REQUESTS, DOWNLOADS, FIND, ...LOCAL].find((p) => p.href === h)?.id ?? PLAYLISTS.id;
   };
   let page = $state(fromHash());
@@ -729,6 +732,8 @@
   $effect(() =>
     followAddress(() => {
       page = fromHash();
+      const view = libraryViewOf(location.hash);
+      if (view) prefs.libraryView = view;
       moreOpen = false;
     }),
   );
@@ -850,6 +855,12 @@
     return () => removeEventListener('resize', on);
   });
   const slots = $derived(Math.max(BAR_SLOTS, Math.floor(barWidth / BAR_SLOT_PX)));
+  // The Library's pages (the owner, 2026-10-29: its views as subpages): under Library in the sidebar, which folds them
+  // away with itself; in the bar a second row of tabs while the Library shows, its own tab named for the page shown.
+  loadSpotify();
+  const libPages = $derived(libraryPages(!!spotify.state?.shown));
+  const libLabel = $derived(libPages.find((v) => v.value === prefs.libraryView)?.label ?? LIBRARY.label);
+  const tabLabel = (p: Page) => (p.id === LIBRARY.id && page === LIBRARY.id ? libLabel : p.label);
   const bar = $derived(ALL.length <= BAR_SLOTS ? ALL : MAIN.slice(0, Math.min(MAIN.length, slots - 1)));
   const overflow = $derived(ALL.filter((p) => !bar.includes(p)));
   /** More's columns: at most the bar's own, its rows evenly filled (the owner, 2026-10-26: six pages on a phone are two
@@ -892,9 +903,17 @@
 
       <nav aria-label="Pages">
         {#each MAIN as p (p.id)}
-          <a href={keepViewed(p.href)} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}
+          {@const within = p.id === LIBRARY.id && page === p.id}
+          <a href={keepViewed(p.href)} class:within aria-current={page === p.id && !within ? 'page' : undefined} onclick={(e) => ((peek = false), samePage(e, p.id))}
             ><Icon name={p.icon} /><span class="label">{p.label}</span>{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</a
           >
+          {#if p.id === LIBRARY.id}
+            <div class="subs" role="group" aria-label="Library pages">
+              {#each libPages as v (v.value)}
+                <a class="sub" href={keepViewed(libraryHref(v.value))} aria-current={within && prefs.libraryView === v.value ? 'page' : undefined} onclick={() => (peek = false)}>{v.label}</a>
+              {/each}
+            </div>
+          {/if}
         {/each}
       </nav>
 
@@ -1012,6 +1031,17 @@
       }}><Icon name="play" size={20} />Tap to play</button
     >
   {/if}
+  {#snippet libraryTabs()}
+    <!-- The Library's pages (the owner, 2026-10-29), while it shows: More's row of tabs, by name, under the bar's own
+         (along the bottom: over them). More open takes the room instead. -->
+    {#if page === LIBRARY.id && !moreOpen}
+      <div class="more-tabs sub-tabs" role="group" aria-label="Library pages" style:--cols={libPages.length}>
+        {#each libPages as v (v.value)}
+          <a href={libraryHref(v.value)} aria-current={prefs.libraryView === v.value ? 'page' : undefined}>{v.label}</a>
+        {/each}
+      </div>
+    {/if}
+  {/snippet}
   {#snippet morePages()}
     <!-- More (the owner, 2026-10-26): the bar itself grows, full width, and the other pages are its tabs there, in
          columns under (along the bottom: over) the bar's own, as they are drawn. -->
@@ -1026,7 +1056,7 @@
       >
         {#each overflow as p (p.id)}
           <a href={p.href} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => barTap(e, p.id)}
-            ><span class="icon"><Icon name={p.icon} />{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{p.label}</span></a
+            ><span class="icon"><Icon name={p.icon} />{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{tabLabel(p)}</span></a
           >
         {/each}
       </div>
@@ -1043,8 +1073,9 @@
           <!-- Wherever the bar of pages is along the top (under 1024 px, as the CSS; the owner, 2026-10-25): from there the
                sidebar of pages names it. -->
           {#if panelPage && phone}<h1 class="page-name">{panelPage.label}</h1>{/if}
-          <!-- The Library's view, on the glass's extension as a control page's name (the owner, 2026-10-25). -->
-          {#if page === 'library'}<LibraryViewPicker />{/if}
+          <!-- On the Albums page, what kind of release it shows, on the glass's extension as a control page's name (the
+               owner, 2026-10-29: the view picker's place, the pages now the navigation's). -->
+          {#if page === 'library' && prefs.libraryView === 'albums'}<AlbumTypePicker />{/if}
         </span>
       {/if}
   {/snippet}
@@ -1100,11 +1131,11 @@
     <!-- The mode switcher's slim row over the tabs (decision 0052, mock C), with a local folder on; under them when the bar
          is along the bottom (the owner, 2026-10-25), the tabs nearest the page either way. -->
     {#if switchInBar && !navBottom}<div class="slim"><ModeSwitcher slim {connection} /></div>{/if}
-    {#if navBottom}{@render morePages()}{/if}
+    {#if navBottom}{@render morePages()}{@render libraryTabs()}{/if}
     <div class="tabs">
     {#each bar as p (p.id)}
       <a href={p.href} aria-current={page === p.id ? 'page' : undefined} onclick={(e) => barTap(e, p.id)}
-        ><span class="icon"><Icon name={p.icon} />{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{p.label}</span></a
+        ><span class="icon"><Icon name={p.icon} />{#if p.id === 'library' && waiting}<span class="count" aria-label="{waiting} converting">{waiting}</span>{/if}</span><span>{tabLabel(p)}</span></a
       >
     {/each}
     {#if overflow.length}
@@ -1116,7 +1147,7 @@
       >
     {/if}
     </div>
-    {#if !navBottom}{@render morePages()}{/if}
+    {#if !navBottom}{@render morePages()}{@render libraryTabs()}{/if}
     {#if switchInBar && navBottom}<div class="slim"><ModeSwitcher slim up {connection} /></div>{/if}
   </nav>
 </div>
@@ -1516,6 +1547,13 @@
     width: 100%;
   }
 
+  /* The Library's pages (the owner, 2026-10-29): More's row, by name alone, so slimmer. */
+  .bar .sub-tabs a {
+    min-height: 34px;
+    justify-content: center;
+    font-size: 13px;
+  }
+
   .bar .slim {
     padding: 0 4px 4px;
   }
@@ -1609,6 +1647,24 @@
   .foot a[aria-current='page'] {
     background: var(--accent);
     color: var(--accent-text);
+    font-weight: 600;
+  }
+
+  /* The Library's pages under it (the owner, 2026-10-29), in line with its name; the Library itself, while one of
+     them shows, in bold rather than lit (the page shown is). */
+  .sidebar nav .subs {
+    display: grid;
+    gap: 2px;
+    margin: 2px 0 4px;
+  }
+
+  .sidebar nav a.sub {
+    min-height: 36px;
+    padding-left: 48px;
+    font-size: 14px;
+  }
+
+  .sidebar nav a.within {
     font-weight: 600;
   }
 
@@ -1768,7 +1824,7 @@
       white-space: nowrap;
     }
 
-    .folded .sidebar:not(.peek) .version {
+    .folded .sidebar:not(.peek) :is(.version, .subs) {
       display: none;
     }
 
