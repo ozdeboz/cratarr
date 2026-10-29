@@ -27,7 +27,7 @@ import { consumed, rate, tapMs } from './windShape';
 import { BANDCAMP } from './bandcampPreview';
 import { DEVICE } from './deviceMusic.svelte';
 import { RATE_FLOOR, RATE_TOP } from './rates';
-import { FLIGHT_TOP, HOLD_TOP, holdWind, PIECE_MS, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
+import { brakeLengthMs, FLIGHT_TOP, HOLD_TOP, holdWind, PIECE_MS, pointWind, windsBy, type HoldWind, type Motion, type PointMotion, type StartStop, type Wind } from './startStop';
 import { isPhone } from './device';
 
 export type LocalTrack = {
@@ -2645,6 +2645,9 @@ type Winding = {
   brake: number | null;
   /** Its speed as the brake began. */
   brakeFrom: number;
+  /** Its plain brake's length (ms): a held one's from its speed (startStop's brakeLengthMs), else the Brake as set
+   *  (null); a let-go's is its plan's. */
+  brakeMs: number | null;
   /** A held one's stream ran out: at the track's edge. */
   edge: boolean;
   /** Its sound's fade (0..1): in as it starts, out as it ends (no plop). */
@@ -2790,7 +2793,7 @@ function windRate(w: Winding, now: number): number {
   // Let go: the curve's speed, played at its stream's own (the hold's: its flight speed; the backwards player's: 1×).
   // Let go: the plan's speed where it stands (the backwards player's stream is the track at 1×; a hold's, its own speed).
   else if (w.letGo) r = planSpeed(w.letGo, now, windPlace(w, now)) / (w.reverse ? 1 : vAt(w, w.clip.currentTime));
-  else if (w.brake !== null) r = floor + ((w.brakeFrom - floor) * (1 + Math.cos(Math.PI * Math.min(1, (now - w.brake) / w.wind.releaseMs)))) / 2;
+  else if (w.brake !== null) r = floor + ((w.brakeFrom - floor) * (1 + Math.cos(Math.PI * Math.min(1, (now - w.brake) / brakeLength(w))))) / 2;
   else r = t >= w.wind.attackMs ? 1 : floor + ((1 - floor) * (1 - Math.cos((Math.PI * t) / w.wind.attackMs))) / 2;
   // Held back by the finger (a hold, not yet let go): geometrically, at most down to the hold's starting speed (the owner,
   // 2026-10-28: its own 1× within reach would undo the winding).
@@ -2897,19 +2900,24 @@ function whenThere(index: number, secs: number, go: () => void) {
 function landingOf(w: Winding, now = performance.now()): { index: number; pos: number } {
   if (w.at === null || w.edge || w.brake === null) return windNow(w);
   if (w.to !== null) return { index: w.seg.index, pos: w.to };
-  const end = w.brake + w.wind.releaseMs;
+  const end = w.brake + brakeLength(w);
   let s = w.clip.currentTime;
   for (let t = now; t < end; t += 10) s += (windRate(w, t) * Math.min(10, end - t)) / 1000;
   return placeAt(w, s);
 }
-/** Brakes a held wind from now (let go, play pressed, settled, the knob back), its landing prepared at once. */
+/** Brakes a held wind from now (let go, play pressed, settled, the knob back), its landing prepared at once. A hold's
+ *  brake as long as its speed asks (constant deceleration, to 1× flown forwards, else to a stand); a tap's, a seek's,
+ *  the edge's and the 1× reverse's the Brake as set. */
 function brakeWind(w: Winding) {
   if (w.brake !== null || w.at === null) return;
   const now = performance.now();
   w.brakeFrom = w.edge ? RATE_LOW : windRate(w, now);
+  w.brakeMs = w.to === null && !w.edge && !w.reverse ? brakeLengthMs(vAt(w, w.clip.currentTime) * w.clip.playbackRate, w.fly ? 1 : 0, w.wind.releaseMs) : null;
   w.brake = now;
   prepare(landingOf(w, now));
 }
+/** How long a wind's brake runs (ms): a let-go's plan's, else its own (brakeWind's), else the Brake as set. */
+const brakeLength = (w: Winding) => w.letGo?.ms ?? w.brakeMs ?? w.wind.releaseMs;
 /** Plays on at `secs` into queue track `index`, winding up as play does (at once from a track's start). */
 function playOnAt(index: number, secs: number) {
   whenThere(index, secs, () => rampIn());
@@ -3062,7 +3070,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
   if (fly) clip.playbackRate = use?.floor ?? 1 / v0;
   // Handed a hold's brake: at the hold's speed from its first moment.
   if (startAt !== null) clip.playbackRate = Math.min(RATE_TOP, startAt);
-  const w: Winding = { clip, seg, from, to, dir, D, wind, fade: 0, map: null, mapSpeed: use?.floor ? 1 / use.floor : null, v0, accel, accelS: hold.doublingS, top: hold.top, fly, handing: false, handArmed: null, letGo: null, startAt, drag: 0, reverse, after: 'play', at: null, brake: null, brakeFrom: 1, edge: false, through, shown: seg.index, timer: undefined };
+  const w: Winding = { clip, seg, from, to, dir, D, wind, fade: 0, map: null, mapSpeed: use?.floor ? 1 / use.floor : null, v0, accel, accelS: hold.doublingS, top: hold.top, fly, handing: false, handArmed: null, letGo: null, startAt, drag: 0, reverse, after: 'play', at: null, brake: null, brakeFrom: 1, brakeMs: null, edge: false, through, shown: seg.index, timer: undefined };
   const mine = () => tape.rewinding === w;
   // Every step timed from the press, in the playback log (the owner, 2026-10-27: find any delay at the deepest level).
   const t0 = performance.now();
@@ -3316,7 +3324,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
         }
         // A held one braked to its end: on from where it got to (a flown one moving, where it plays on).
         // Let go, the plan's end is its aim: there it stands (backwards) or plays on.
-        else if (w.brake !== null && (w.edge || now - w.brake >= w.wind.releaseMs)) {
+        else if (w.brake !== null && (w.edge || now - w.brake >= brakeLength(w))) {
           if (w.fly && !w.edge && w.after === 'play') land(place);
           else arrive(place);
         }
@@ -3638,10 +3646,12 @@ export function windRelease(dir: 'back' | 'forward') {
 /** Where a hold let go now would land, the way letGo lets it go: the tape on to the stream readied ahead of it, then
  *  the brake on the other head (forwards to the track's own speed, backwards to a stand), s into the track. */
 function letGoLanding(w: Winding, place: { index: number; pos: number }): { index: number; pos: number } {
-  // Braked at once either way: the plan's way, from the speed it flies at (forwards to 1×, back to a stand).
+  // Braked at once either way: the plan's way, from the speed it flies at (forwards to 1×, back to a stand), as long as
+  // that speed asks (constant deceleration).
   const v = vAt(w, w.clip.currentTime) * w.clip.playbackRate;
-  const ms = w.wind.releaseMs;
-  return onThrough(w, place, brakeTravel(v, ms, ms / 1000, w.dir > 0 ? 1 : 0));
+  const to = w.dir > 0 ? 1 : 0;
+  const ms = brakeLengthMs(v, to, w.wind.releaseMs);
+  return onThrough(w, place, brakeTravel(v, ms, ms / 1000, to));
 }
 /** `d` s on from `place` the way a held wind goes: past its track's edge on through the queue places it winds through
  *  (the owner, 2026-10-28: a brake past the track's end landed in the next one, the look-ahead stuck at the end). */
@@ -3711,8 +3721,9 @@ function letGo(w: Winding) {
   const now = performance.now();
   const here = windPlace(w, now);
   const speed = vAt(w, w.clip.currentTime) * w.clip.playbackRate;
-  const T = w.wind.releaseMs;
   const to = w.dir > 0 ? 1 : 0;
+  // As long as its speed asks: constant deceleration, the Brake as set its shortest (the owner, 2026-10-29).
+  const T = brakeLengthMs(speed, to, w.wind.releaseMs);
   const landing = letGoLanding(w, here);
   aim(landing);
   playback('info', 'let go', { index: here.index, at: Math.round(here.pos * 1000), speed: Math.round(speed * 100) / 100, landing_index: landing.index, landing: Math.round(landing.pos * 1000) });
