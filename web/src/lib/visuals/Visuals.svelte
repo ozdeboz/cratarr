@@ -31,6 +31,7 @@
   import { applyPanel, type PanelEdit } from './patch-edits';
   import { cratarrTypes } from './patch';
   import { v2Types } from './picture-graph';
+  import { EXAMPLES, exampleOf } from './examples';
   import { RANDOMIZE_SCOPES } from './ports';
   import type { Category } from './rack';
   import { DEFAULTS, RANGES, visualSettings } from './settings.svelte';
@@ -182,11 +183,16 @@
   // be used"), read when the rack opens; one chosen is recalled as the Snapshots sheet recalls one.
   let library = $state<VisualsSnapshot[]>([]);
   const loadLibrary = () => getVisualsSnapshots().then((l) => (library = l ?? []), () => {});
-  const libraryList = $derived(library.map((x) => ({ id: x.id, label: x.name.replace(/ · \d\d:\d\d$/, ''), line: '' })));
+  // After them, the example racks (examples.ts): one technique each, to start from.
+  const libraryList = $derived([
+    ...library.map((x) => ({ id: x.id, label: x.name.replace(/ · \d\d:\d\d$/, ''), line: '' })),
+    ...EXAMPLES.map((x) => ({ id: x.id, label: x.label, line: x.line })),
+  ]);
   function choosePreset(id: string) {
-    const snap = library.find((x) => x.id === id);
-    if (!snap) return;
-    visualsPatch.replace(patchOfSnapshot(snap.settings));
+    const example = exampleOf(id);
+    const snap = example ? null : library.find((x) => x.id === id);
+    if (!example && !snap) return;
+    visualsPatch.replace(example ? structuredClone(example.patch) : patchOfSnapshot(snap!.settings));
     preset = id;
     presetPatch = visualsPatch.patch;
     showChrome();
