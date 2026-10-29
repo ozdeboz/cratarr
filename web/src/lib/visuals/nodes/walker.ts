@@ -11,7 +11,7 @@ import type { Fluid } from '../fluid';
 import { effectRuns, passOf, runIdle, type Fx, type Run } from './effect-runs';
 import type { Finish } from './finish';
 import { FULL, none } from './shared';
-import { keptPerSecond } from '../loopmods';
+import { keptPerSecond, WarpClock, warpFrame, warpUniforms } from '../loopmods';
 import { MIX_INPUTS, MIX_MODES } from '../ports';
 import type { FrameInfo } from '../patch';
 import { newWalkState, outKey, plan, Pool, walk, type Compiled, type PictureNode, type Plan, type Spec, type WalkState } from '../picture-graph';
@@ -95,6 +95,8 @@ export class Walker {
   private now: () => number;
   private fxPrograms = new Map<string, WebGLProgram | null>();
   private clocks = new Map<string, EffectClocks>();
+  /** Each loop's Warp clocks (its petals' turn, its rings' way out), by its Feedback. */
+  private warpClocks = new Map<string, WarpClock>();
   /** What the observed module shows this frame (`run`'s `observe`): its picture, or why it has none. */
   seen: { tex: WebGLTexture } | { why: string } | null = null;
   /** The last plan's modules at rest (each what it passes on), the effects fused into a run's pass, its Feedbacks. */
@@ -265,7 +267,7 @@ void main() { o = texture(uIn, vUv); }`);
     const gl = this.gl;
     const dt = frame.dt;
     let keep = 1;
-    let zoom = 0, turn = 0, dx = 0, dy = 0, stretch = 0, wobble = 0, size = 0.5;
+    const warps: Record<string, number>[] = [];
     for (const { id, type } of l.chain) {
       const k = knobs(id);
       const a = k.amount ?? 0;
@@ -273,14 +275,13 @@ void main() { o = texture(uIn, vUv); }`);
         if (a > 0) keep *= 1 - a + a * keptPerSecond(k.trails ?? 0.5) ** dt;
         continue;
       }
-      zoom += a * (k.zoom ?? 0);
-      turn += a * (k.turn ?? 0);
-      dx += a * (k.driftX ?? 0);
-      dy += a * (k.driftY ?? 0);
-      stretch += a * (k.stretch ?? 0);
-      wobble += a * (k.wobble ?? 0);
-      size = k.wobbleSize ?? size;
+      warps.push(k);
     }
+    // The loop's clocks (its Warps' petals and rings), its own, run on at the last Warp's speeds.
+    let clock = this.warpClocks.get(l.feedback);
+    if (!clock) this.warpClocks.set(l.feedback, (clock = new WarpClock()));
+    if (warps.length) clock.run(warps[warps.length - 1], dt);
+    const w = warpFrame(warps, dt, this.spec.w / this.spec.h, this.time, clock);
     const last = this.state.held.get(l.feedback)?.t ?? this.black!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, out.fbo);
     gl.viewport(0, 0, this.spec.w, this.spec.h);
@@ -296,12 +297,13 @@ void main() { o = texture(uIn, vUv); }`);
     gl.uniform1i(u('uLast'), 1);
     gl.activeTexture(gl.TEXTURE0);
     gl.uniform1f(u('uAspect'), this.spec.w / this.spec.h);
-    // A second's worth at full: zoom half again (in or out), half a turn, a fifth of the picture across.
-    gl.uniform1f(u('uZoom'), Math.exp(0.4 * zoom * dt));
-    gl.uniform1f(u('uTurn'), Math.PI * turn * dt);
-    gl.uniform2f(u('uDrift'), 0.2 * dx * dt, 0.2 * dy * dt);
-    gl.uniform1f(u('uStretch'), Math.exp(0.2 * stretch * dt));
-    gl.uniform3f(u('uWobble'), 0.02 * wobble * Math.min(1, dt * 30), 4 + 20 * size, this.time * 1.7);
+    gl.uniform2f(u('uDrift'), w.drift[0], w.drift[1]);
+    for (const [n, v] of Object.entries(warpUniforms(w))) {
+      if (typeof v === 'number') gl.uniform1f(u(n), v);
+      else if (v.length === 2) gl.uniform2f(u(n), v[0], v[1]);
+      else if (v.length === 3) gl.uniform3f(u(n), v[0], v[1], v[2]);
+      else gl.uniform4f(u(n), v[0], v[1], v[2], v[3]);
+    }
     gl.uniform1f(u('uKeep'), keep);
     gl.bindVertexArray(this.empty);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
