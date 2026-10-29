@@ -27,6 +27,10 @@ pub enum ToggleError {
     /// Not this account's to do (decision 0051): an administrator's, or another user's.
     #[error("{0}")]
     Forbidden(String),
+    /// Another user's shared device, from away from home (the owner, 2026-10-29: others use one's shared devices from
+    /// home only).
+    #[error("Works at home only.")]
+    Fenced,
     /// A player's name another account's player has (decision 0051): the device takes another.
     #[error("{0} is another user's player.")]
     NameTaken(String),

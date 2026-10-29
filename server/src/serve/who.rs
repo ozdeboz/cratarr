@@ -19,6 +19,9 @@ pub struct Who {
     pub user: String,
     pub admin: bool,
     pub scope: Scope,
+    /// Whether the request came from the home network (`serve::proxy::at_home`): another user's shared device is
+    /// theirs to use from there only (`app::playon`).
+    pub home: bool,
 }
 
 tokio::task_local! {
@@ -52,7 +55,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_request_is_for_its_account_and_a_task_of_its_own_for_no_one() {
-        let ann = Who { user: "ann".into(), admin: false, scope: Scope::Full };
+        let ann = Who { user: "ann".into(), admin: false, scope: Scope::Full, home: true };
         assert_eq!(current(), None);
         let (inside, spawned, carried) = acting_as(ann.clone(), async {
             let spawned = tokio::spawn(async { current() }).await.unwrap();

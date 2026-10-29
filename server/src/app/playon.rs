@@ -1120,9 +1120,23 @@ fn belongs_to(e: &Entry, user: &str, first: Option<&str>) -> bool {
     e.owner.as_deref().or(first) == Some(user)
 }
 
-/// Whether `user` sees the player and plays on it: theirs, or shared with everyone (0.9.8).
-fn reaches(e: &Entry, user: &str, first: Option<&str>) -> bool {
-    e.shared || belongs_to(e, user, first)
+/// Whether the running request comes from away from home (`Who::home`): another user's shared device is theirs to
+/// use from home only (the owner, 2026-10-29); its owner uses it from anywhere. Cratarr's own work is at home.
+fn away() -> bool {
+    crate::serve::who::current().is_some_and(|w| !w.home)
+}
+
+/// Whether `user` sees player `e` and plays on it, from where the request came from: theirs from anywhere, one shared
+/// with everyone (0.9.8) from home only (`Err(Fenced)`), any other not at all (as if there were none).
+fn reach(e: &Entry, user: &str, first: Option<&str>, away: bool) -> Result<(), ToggleError> {
+    if belongs_to(e, user, first) {
+        return Ok(());
+    }
+    match (e.shared, away) {
+        (true, false) => Ok(()),
+        (true, true) => Err(ToggleError::Fenced),
+        (false, _) => Err(ToggleError::Refused(String::new())),
+    }
 }
 
 /// The player `name` for whose it is to be: made theirs when new; another account's is refused (a name is one
@@ -1601,9 +1615,11 @@ impl PlayOn {
         self.expire_generic();
         let first = first_owner();
         let entries = self.entries();
+        // Away from home, others' shared devices are left out: they would only be refused.
+        let away = away();
         let mut out: Vec<PlayerView> = entries
             .iter()
-            .filter(|(_, e)| user.is_none_or(|u| reaches(e, u, first.as_deref())))
+            .filter(|(_, e)| user.is_none_or(|u| reach(e, u, first.as_deref(), away).is_ok()))
             .filter_map(|(n, e)| Some(whose_view(view_in(&entries, n, false)?, e, user, first.as_deref())))
             .collect();
         drop(entries);
@@ -1617,13 +1633,14 @@ impl PlayOn {
         out
     }
 
-    /// Whether the running request reaches player `name` (`whose`): its own, or one shared with everyone (0.9.8);
-    /// else it is as if there were none. What Play On does on it, it may do.
+    /// Whether the running request reaches player `name` (`whose`): its own, or one shared with everyone (0.9.8) from
+    /// the home network; else it is as if there were none. What Play On does on it, it may do.
     pub fn reached(&self, name: &str) -> Result<(), ToggleError> {
         let Some(user) = whose() else { return Ok(()) };
         let first = first_owner();
-        match self.entries().get(name) {
-            Some(e) if !reaches(e, &user, first.as_deref()) => Err(ToggleError::Refused(format!("No player is called {name}."))),
+        match self.entries().get(name).map(|e| reach(e, &user, first.as_deref(), away())) {
+            Some(Err(ToggleError::Refused(_))) => Err(ToggleError::Refused(format!("No player is called {name}."))),
+            Some(Err(e)) => Err(e),
             _ => Ok(()),
         }
     }
@@ -3156,6 +3173,35 @@ mod tests {
 
     fn group_of(c: &mut Commands) -> Vec<Option<String>> {
         told(c).iter().filter(|m| m["command"] == "group").map(|m| m["leader"].as_str().map(str::to_string)).collect()
+    }
+
+    #[tokio::test]
+    async fn anothers_shared_device_is_used_from_home_only() {
+        use crate::serve::who::{Scope, Who, acting_as};
+        let mut tablet = Entry::new();
+        (tablet.owner, tablet.shared) = (Some("ann".into()), true);
+        let mut phone = Entry::new();
+        phone.owner = Some("ann".into());
+        assert!(reach(&tablet, "bob", None, false).is_ok(), "another user at home");
+        assert!(matches!(reach(&tablet, "bob", None, true), Err(ToggleError::Fenced)), "another user away");
+        assert!(reach(&tablet, "ann", None, true).is_ok(), "its owner from anywhere");
+        assert!(matches!(reach(&phone, "bob", None, false), Err(ToggleError::Refused(_))), "not shared: none of theirs");
+
+        let p = play_on().await;
+        let _t = p.connect("Tablet").unwrap();
+        let _p = p.connect("Phone").unwrap();
+        p.entries().get_mut("Tablet").unwrap().owner = Some("ann".into());
+        p.entries().get_mut("Tablet").unwrap().shared = true;
+        p.entries().get_mut("Phone").unwrap().owner = Some("bob".into());
+        let listed = |user: &str, home: bool| {
+            let who = Who { user: user.into(), admin: false, scope: Scope::Full, home };
+            let p = p.clone();
+            let user = user.to_string();
+            async move { acting_as(who, async move { p.list_for(Some(&user)).into_iter().map(|v| v.name).collect::<Vec<_>>() }).await }
+        };
+        assert_eq!(listed("bob", true).await, ["Phone", "Tablet"]);
+        assert_eq!(listed("bob", false).await, ["Phone"], "away, another's shared device is left out");
+        assert_eq!(listed("ann", false).await, ["Tablet"], "one's own from anywhere");
     }
 
     #[tokio::test]

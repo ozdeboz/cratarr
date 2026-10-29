@@ -172,8 +172,8 @@ pub fn admitted(serve: &Serve, method: &str, headers: &HeaderMap, path: &str, qu
 
 /// Who a request admitted is for (decision 0051): its session's account, its key's (the owner for a key from before
 /// keys had one), within the key's scope; a signed link's, none (it reads what it names). `None`: not admitted.
-fn who_of(serve: &Serve, method: &str, headers: &HeaderMap, path: &str, query: Option<&str>) -> Option<Option<Who>> {
-    let account = |name: &str, scope: Scope| serve.users.get(name).filter(|u| u.active).map(|u| Who { user: u.name, admin: u.admin, scope });
+fn who_of(serve: &Serve, method: &str, headers: &HeaderMap, path: &str, query: Option<&str>, home: bool) -> Option<Option<Who>> {
+    let account = |name: &str, scope: Scope| serve.users.get(name).filter(|u| u.active).map(|u| Who { user: u.name, admin: u.admin, scope, home });
     if let Some(session) = session_of(serve, headers) {
         return Some(account(&session.user, Scope::Full)).filter(Option::is_some);
     }
@@ -189,9 +189,11 @@ fn who_of(serve: &Serve, method: &str, headers: &HeaderMap, path: &str, query: O
 }
 
 /// The requirement, around every route (`main`): a request without a way in is refused; one let in runs as whoever it
-/// is for (`who`).
+/// is for (`who`), from the home network or not (the client after the proxies' screen, `api::request_ids`).
 pub async fn require(State(serve): State<Arc<Serve>>, request: Request, next: Next) -> Response {
     let (method, uri) = (request.method().as_str().to_string(), request.uri().clone());
+    let peer = request.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0);
+    let home = super::proxy::at_home(&super::signin::client(request.headers(), peer));
     if !serve.sign_in_required() {
         // Off, a key still counts as used: before the switch, Settings shows that a client sends its key.
         if let Some(key) = key_of(request.headers()) {
@@ -199,9 +201,9 @@ pub async fn require(State(serve): State<Arc<Serve>>, request: Request, next: Ne
         }
         // Not required, still heard (decision 0051): one signed in, or with a key, is that account; anyone else is
         // the owner, as an administrator (one user, as before accounts).
-        let who = match who_of(&serve, &method, request.headers(), uri.path(), uri.query()) {
+        let who = match who_of(&serve, &method, request.headers(), uri.path(), uri.query(), home) {
             Some(Some(who)) => Some(who),
-            _ => serve.users.owner().map(|user| Who { user, admin: true, scope: Scope::Full }),
+            _ => serve.users.owner().map(|user| Who { user, admin: true, scope: Scope::Full, home }),
         };
         return match who {
             Some(who) if who.scope == Scope::Read && !matches!(method.as_str(), "GET" | "HEAD") => {
@@ -211,7 +213,7 @@ pub async fn require(State(serve): State<Arc<Serve>>, request: Request, next: Ne
             None => next.run(request).await,
         };
     }
-    match who_of(&serve, &method, request.headers(), uri.path(), uri.query()) {
+    match who_of(&serve, &method, request.headers(), uri.path(), uri.query(), home) {
         // A key that only reads changes nothing.
         Some(Some(who)) if who.scope == Scope::Read && !matches!(method.as_str(), "GET" | "HEAD") => {
             return (StatusCode::FORBIDDEN, axum::Json(json!({ "error": "This key only reads." }))).into_response();
@@ -222,7 +224,6 @@ pub async fn require(State(serve): State<Arc<Serve>>, request: Request, next: Ne
     }
     let shown = uri.path_and_query().map_or("/", |p| p.as_str()).to_string();
     let r = refuse(&method, request.headers(), &shown);
-    let peer = request.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0);
     note_refused(&r, request.headers(), peer, uri.path(), uri.query(), "cratarr");
     r
 }
@@ -579,6 +580,37 @@ mod tests {
         // One who left the directory's group is no one.
         s.users.deactivate("ann").unwrap();
         assert_eq!(status(&s, signed_in("ann", "/api/library")).await.0, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn a_request_is_from_home_as_the_client_after_the_proxies_screen_is() {
+        let s = served(true);
+        let (token, _) = s.sessions.create("me", "d", now()).unwrap();
+        let app = || {
+            Router::new()
+                .route("/api/home", get(|| async { format!("{:?}", current().map(|w| w.home)) }))
+                .layer(axum::middleware::from_fn_with_state(s.clone(), require))
+                .layer(axum::middleware::from_fn(crate::api::request_ids))
+        };
+        let home = |peer: &str, forwarded: Option<&str>| {
+            let mut b = HttpRequest::get("/api/home").header("cookie", format!("{COOKIE}={token}"));
+            if let Some(f) = forwarded {
+                b = b.header("x-forwarded-for", f);
+            }
+            let mut req = b.body(Body::empty()).unwrap();
+            req.extensions_mut().insert(axum::extract::ConnectInfo(std::net::SocketAddr::new(peer.parse().unwrap(), 50000)));
+            let r = app().oneshot(req);
+            async move { String::from_utf8(axum::body::to_bytes(r.await.unwrap().into_body(), 64).await.unwrap().to_vec()).unwrap() }
+        };
+        assert_eq!(home("192.168.178.20", None).await, "Some(true)");
+        assert_eq!(home("203.0.113.9", None).await, "Some(false)");
+        assert_eq!(home("203.0.113.9", Some("192.168.178.20")).await, "Some(false)", "a peer not believed names no one");
+        assert_eq!(home("172.19.0.3", Some("203.0.113.9")).await, "Some(false)", "a local proxy names the client");
+        assert_eq!(home("172.19.0.3", Some("192.168.178.20")).await, "Some(true)");
+        assert_eq!(home("2001:db8:7::5", None).await, "Some(false)");
+        super::super::proxy::set_home(vec!["2001:db8:7::/48".parse().unwrap()]);
+        assert_eq!(home("2001:db8:7::5", None).await, "Some(true)", "a home network named");
+        super::super::proxy::set_home(Vec::new());
     }
 
     #[tokio::test]

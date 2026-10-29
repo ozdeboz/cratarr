@@ -21,6 +21,9 @@ const FORWARDED: [&str; 5] = ["x-forwarded-for", "x-forwarded-proto", "x-forward
 static PROXIES: RwLock<Option<Vec<IpNet>>> = RwLock::new(None);
 /// The peers already written down.
 static NOTED: Mutex<Option<HashSet<IpAddr>>> = Mutex::new(None);
+/// Home besides the local addresses (Settings → Server; none by default): the house's global IPv6 prefix, the
+/// router's public address a request to the public name comes back from.
+static HOME: RwLock<Vec<IpNet>> = RwLock::new(Vec::new());
 
 /// `CRATARR_PROXIES` as read: the ranges, `None` when unset. A part that is not an address or a range is left out.
 pub fn parse(text: Option<&str>) -> Option<Vec<IpNet>> {
@@ -55,6 +58,26 @@ fn believed(proxies: Option<&[IpNet]>, peer: IpAddr) -> bool {
         Some(p) => p.iter().any(|n| n.contains(&peer)),
         None => local(peer),
     }
+}
+
+/// At the start, and whenever Settings changes them.
+pub fn set_home(networks: Vec<IpNet>) {
+    *HOME.write().unwrap_or_else(|p| p.into_inner()) = networks;
+}
+
+/// Whether a client is on the home network (a shared device works from there only, `access::require`): a local
+/// address, or one in the home networks named. `client` as `signin::client` reads it, after `screen`.
+pub fn at_home(client: &str) -> bool {
+    home_in(client, &HOME.read().unwrap_or_else(|p| p.into_inner()))
+}
+
+fn home_in(client: &str, home: &[IpNet]) -> bool {
+    let Ok(ip) = client.parse::<IpAddr>() else { return false };
+    let ip = match ip {
+        IpAddr::V6(a) => a.to_ipv4_mapped().map_or(ip, IpAddr::V4),
+        v4 => v4,
+    };
+    local(ip) || home.iter().any(|n| n.contains(&ip))
 }
 
 /// Loopback, the private ranges, link-local, and IPv6's unique local addresses (an IPv4 address in IPv6 as itself).
@@ -112,5 +135,21 @@ mod tests {
         assert!(believed(None, "::ffff:10.0.0.2".parse().unwrap()), "an IPv4 address in IPv6");
         assert!(!believed(None, "84.1.2.3".parse().unwrap()), "unset: a peer on the internet names no one");
         assert!(!believed(None, "2a02:a210::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn home_is_a_local_address_or_a_home_network_named() {
+        let at = |client: &str, home: &[IpNet]| home_in(client, home);
+        assert!(at("192.168.178.20", &[]));
+        assert!(at("::ffff:192.168.178.20", &[]));
+        assert!(at("fd00::5", &[]));
+        assert!(!at("unknown", &[]));
+        assert!(!at("203.0.113.9", &[]));
+        assert!(!at("2001:db8:7::5", &[]));
+        let home = ["2001:db8:7::/48".parse().unwrap(), "203.0.113.9/32".parse().unwrap()];
+        assert!(at("2001:db8:7::5", &home), "the house's global IPv6 prefix");
+        assert!(at("203.0.113.9", &home), "the router's public address");
+        assert!(at("::ffff:203.0.113.9", &home));
+        assert!(!at("2001:db8:8::5", &home));
     }
 }

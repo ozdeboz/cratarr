@@ -5906,7 +5906,7 @@ impl IntoResponse for ApiError {
                 StatusCode::CONFLICT
             }
             ToggleError::UnknownPlaylist => StatusCode::NOT_FOUND,
-            ToggleError::Forbidden(_) => StatusCode::FORBIDDEN,
+            ToggleError::Forbidden(_) | ToggleError::Fenced => StatusCode::FORBIDDEN,
             ToggleError::Upstream(_) => StatusCode::BAD_GATEWAY,
         };
         if matches!(self.0, ToggleError::Upstream(_)) {
@@ -5916,6 +5916,10 @@ impl IntoResponse for ApiError {
         // The device takes another name (decision 0051).
         if matches!(self.0, ToggleError::NameTaken(_)) {
             body["taken"] = true.into();
+        }
+        // Another user's shared device, away from home: the page says so as it says any refusal.
+        if matches!(self.0, ToggleError::Fenced) {
+            body["fenced"] = true.into();
         }
         (status, Json(body)).into_response()
     }
