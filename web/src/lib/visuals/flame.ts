@@ -245,7 +245,8 @@ const FINALS: Variation[] = [
 ];
 /** The finals a preset draws among: the ones before Cratarr's, so every track's own look stays as it was drawn (the
  *  Cratarr lens is one to pick). */
-const DRAWN_FINALS = FINALS.indexOf(VARIATIONS.cratarr);
+/** The lenses a track's look draws (the shapes' after them are chosen by hand). */
+export const DRAWN_FINALS = FINALS.indexOf(VARIATIONS.cratarr);
 
 /** The finals' names, for the Lens setting (1 is the first). */
 export const LENSES = FINALS.map((v) => {

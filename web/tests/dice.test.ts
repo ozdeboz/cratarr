@@ -65,3 +65,48 @@ test('a kept rack: its new-track Dice moves from Everything to the face once; a 
   upgraded(p, types);
   assert.equal(dice.knobs.scope, RANDOMIZE_SCOPES.indexOf('everything'));
 });
+
+test("the shipped face: the look's seven, Effects, then the behaviour four; the look as it was", async () => {
+  const { asSet, flatten } = await import('../src/lib/visuals/v2.ts');
+  const p = toV2(structuredClone(DEFAULTS));
+  assert.deepEqual(p.macros.map((x) => x.label), ['Form', 'Shape', 'Symmetry', 'Lens', 'Colours', 'Hue', 'Light', 'Effects', 'Intensity', 'Accent', 'Speed', 'Wild']);
+  const flat = flatten(p);
+  const flame = flat.modules.find((m) => m.type === 'flame')!;
+  for (const k of ['form', 'detail', 'twist', 'warp', 'symmetry', 'mirror', 'final', 'family', 'hue', 'lightness', 'vividness'])
+    assert.ok(Math.abs(asSet(flat, flame, k, types)! - flame.knobs[k]) < 1e-9, `${k}: ${asSet(flat, flame, k, types)} for ${flame.knobs[k]}`);
+});
+
+test('a roll of the face draws something, whatever the seed', async () => {
+  const { applyMacros, asSet, flatten } = await import('../src/lib/visuals/v2.ts');
+  const { drawScore } = await import('../src/lib/visuals/flame.ts');
+  const { LOOK_KNOBS } = await import('../src/lib/visuals/engine/flame-node.ts');
+  const p = toV2(structuredClone(DEFAULTS));
+  for (let seed = 1; seed <= 12; seed++) {
+    // Run to its end, counting the seeds it tried (each after the first a yield).
+    const g = rollOf(p, types, seed, 'macros');
+    let n = g.next();
+    let tries = 1;
+    while (!n.done) {
+      n = g.next();
+      tries++;
+    }
+    const r = n.value;
+    const q = structuredClone(p);
+    applyMacros(q, r.macros!);
+    const flat = flatten(q);
+    const flame = flat.modules.find((m) => m.type === 'flame')!;
+    const look = Object.fromEntries(LOOK_KNOBS.map((k) => [k, asSet(flat, flame, k, types) ?? 0]));
+    // The look's own check, at the seed the roll was taken at: above ½, as a track's look always was.
+    assert.ok(drawScore(look as never, seed + tries - 1) > 0.5, `seed ${seed}`);
+  }
+});
+
+test("a kept rack gains the look's macros once, the look as it was", () => {
+  const p = toV2(structuredClone(DEFAULTS));
+  p.macros = p.macros.filter((x) => !x.id.startsWith('look-'));
+  delete p.rev;
+  upgraded(p, types);
+  assert.equal(p.macros.filter((x) => x.id.startsWith('look-')).length, 7);
+  upgraded(p, types);
+  assert.equal(p.macros.filter((x) => x.id.startsWith('look-')).length, 7);
+});

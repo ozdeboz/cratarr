@@ -14,11 +14,13 @@ const types = v2TypeRecord();
 const NO_COVER = { key: null, colours: null };
 
 /** The default rack run `frames` frames from `at` seconds, with a view; `change` turns its Flame's knobs at a frame. */
-function run(frames: number, o: { change?: { frame: number; knobs: Record<string, number>; glide?: number }; fluid?: number } = {}) {
+function run(frames: number, o: { change?: { frame: number; knobs: Record<string, number>; glide?: number; macros?: Record<string, number> }; fluid?: number; macros?: boolean } = {}) {
   const t = track(TRACKS[0]);
   const music = newMusicState();
   const p = flatten(toV2(structuredClone(DEFAULTS)));
   const flame = p.modules.find((x) => x.type === 'flame')!;
+  // The Flame's knobs by hand: its look's macros (0077) off, else they set them.
+  if (!o.macros) p.macros = p.macros.filter((x) => !x.id.startsWith('look-'));
   if (o.fluid !== undefined) p.modules.find((x) => x.type === 'fluid')!.knobs.fluid = o.fluid;
   const st = newEngine();
   const out = [];
@@ -27,6 +29,7 @@ function run(frames: number, o: { change?: { frame: number; knobs: Record<string
     let glide: number | null = null;
     if (o.change && k === o.change.frame) {
       Object.assign(flame.knobs, o.change.knobs);
+      for (const [id, v] of Object.entries(o.change.macros ?? {})) p.macros.find((x) => x.id === id)!.value = v;
       glide = o.change.glide ?? null;
     }
     const m = musicOf(t.signals, t.beats, at, true, { state: music, at: at * 1000, lighting: DEFAULTS.lighting });
@@ -97,4 +100,11 @@ test('a module taken out of the rack does nothing, whatever the settings from be
   assert.equal(f.aspects!.fluid, 0);
   assert.equal(f.aspects!.tunnel, 0);
   assert.equal(f.aspects!.dive, 0);
+});
+
+test("the look's macros move the Flame's look: Hue by degrees at once, as its knob would", () => {
+  const r = run(4, { macros: true, change: { frame: 2, knobs: {}, macros: { 'look-hue': 0.9 } } });
+  const before = r.out[1].flames[r.flame.id].drawn.xforms.map((x) => x.color);
+  const after = r.out[2].flames[r.flame.id].drawn.xforms.map((x) => x.color);
+  assert.notDeepEqual(after, before);
 });

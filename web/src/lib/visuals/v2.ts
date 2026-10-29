@@ -33,6 +33,7 @@ import { modulatorOf } from './modulators/modulators';
 import { makeDevice } from './device-make';
 import { RACK_NAMES } from './device-names';
 import { upgraded } from './upgrade';
+import { lookMacros } from './rack-face';
 import { v2TypeRecord } from './v2-types';
 import { EFFECTS } from './effects';
 import { effectType } from './effect-modules';
@@ -622,7 +623,12 @@ export function toV2(s: VisualSettings, opts: { addOnly?: boolean; sidechain?: b
   const added = opts.sidechain === false ? adding : sidechained(adding.modules, adding.cables, s.wild, opts.limits ?? {}, opts.holds !== false);
   const wiring = pictureWiring(p);
   const wildMacro = (added as { macro?: Macro }).macro;
-  const macros: Macro[] = [...effects.macros, ...rackMacros, ...(wildMacro ? [wildMacro] : [])];
+  // The rack's face (0077): the look's macros over the Flame, then Effects, then the behaviour (Intensity, Accent, Speed,
+  // Wild); a kept patch's own macros after them.
+  const flameModule = added.modules.find((m) => m.type === 'flame');
+  const byId = (id: string) => rackMacros.find((x) => x.id === id);
+  const face = [...(flameModule ? lookMacros(flameModule) : []), ...(['effects', 'intensity', 'flash', 'speed'].map(byId).filter((x): x is Macro => !!x)), ...(wildMacro ? [wildMacro] : [])];
+  const macros: Macro[] = [...face, ...rackMacros.filter((x) => !face.includes(x)), ...effects.macros];
   const wired = toWire(added.modules, added.cables);
   const rack: PatchV2 = { v: 2, modules: [...wired.modules, ...wiring.modules], cables: [...wired.cables, ...wiring.cables], macros, pins: effects.pins };
   // The loudness's VCAs in sight (`follow`, on unless asked not to: the engine has no normal).
