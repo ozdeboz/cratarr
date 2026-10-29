@@ -20,8 +20,6 @@ object Repeat {
     const val ONE = "one"
     const val ALL = "all"
 
-    /** Previous on the first track this far in restarts it rather than going to the last (as the player's previous). */
-    private const val RESTART_AFTER_MS = 5_000L
 
     fun mode(context: Context): String = Prefs(context).repeat
 
@@ -51,7 +49,7 @@ object Repeat {
     /** Previous on the first track under repeat all: to the last one. True when it did. */
     fun previous(context: Context, player: Player): Boolean {
         if (mode(context) != ALL || player.mediaItemCount < 2) return false
-        if (player.currentMediaItemIndex != 0 || player.currentPosition > RESTART_AFTER_MS) return false
+        if (player.currentMediaItemIndex != 0 || player.currentPosition > PlayerService.RESTART_AFTER_MS) return false
         player.seekTo(player.mediaItemCount - 1, 0)
         return true
     }

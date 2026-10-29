@@ -333,7 +333,7 @@ class Prefs(context: Context) {
     )
 
     /** A setting's range and starting value. */
-    private class Range(val min: Float, val max: Float, val start: Float)
+    internal class Range(val min: Float, val max: Float, val start: Float)
 
     /** The tape's mechanics, alike for every motion; a wind to a point back and forward (duration, speed limit); a hold
      *  back and forward (starting and top speed). */
@@ -487,8 +487,9 @@ class Prefs(context: Context) {
         const val START_STOP_SKIPS = "start_stop_skips"
         const val START_STOP_REWIND = "start_stop_rewind"
 
-        /** The Tape page's settings (the owner, 2026-10-27): each one's range and start, as the page's lib/startStop. */
-        private val TAPE_SETTINGS: Map<String, Map<String, Range>> = mapOf(
+        /** The Tape page's settings (the owner, 2026-10-27): each one's range and start, as the page's lib/startStop
+         *  (and shared/rules.json, which the tests check this against). */
+        internal val TAPE_SETTINGS: Map<String, Map<String, Range>> = mapOf(
             "tape" to mapOf(
                 "attackMs" to Range(100f, 1500f, 400f),
                 "brakeMs" to Range(100f, 1500f, 250f),

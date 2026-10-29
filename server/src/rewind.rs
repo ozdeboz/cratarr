@@ -416,6 +416,12 @@ fn half_band() -> &'static [f32; (HALF + 1) / 2] {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_rewinds_longest_and_shortest_are_the_tables() {
+        let r: serde_json::Value = serde_json::from_str(include_str!("../../shared/rules.json")).unwrap();
+        assert_eq!((r["wind_shortest_ms"].as_u64(), r["wind_cap_ms"].as_u64()), (Some(SHORTEST_MS), Some(LONGEST_MS)));
+    }
+
     /// A tone in both channels, `secs` long.
     struct Tone {
         hz: f64,
