@@ -4,7 +4,7 @@
   import { plural } from './lib/insights.svelte';
   import ListHead from './lib/ListHead.svelte';
   import { matchesSearch, PLAYLIST_ORDERS, PLAYLIST_WIDTHS, howMany, pageView, playlistBy, usePageAction } from './lib/pageView.svelte';
-  import { passing, switchOn } from './lib/listFilter.svelte';
+  import { passing } from './lib/listFilter.svelte';
   import type { Playlist, PlayMode } from './lib/api';
   import { deepMatches } from './lib/deepSearch.svelte';
   import { prefs } from './lib/prefs.svelte';
@@ -23,7 +23,7 @@
   import PageLoading from './lib/PageLoading.svelte';
   import PlaylistItem from './lib/PlaylistItem.svelte';
   import { NEW_PLAYLIST, viewPlaylist, panel } from './lib/panel.svelte';
-  import { isPlaylistFavorite, loadPlaylistFavorites, playlistFavoritesKnown, setPlaylistFavorites } from './lib/favourites.svelte';
+  import { isPlaylistFavorite, loadPlaylistFavorites, setPlaylistFavorites } from './lib/favourites.svelte';
   import { endSelect, pickWhich, viewPicked, select, showsPicked, startSelect, tick } from './lib/select.svelte';
   import SelectSheet from './lib/SelectSheet.svelte';
   import Row, { type Cell } from './lib/Row.svelte';
@@ -53,10 +53,11 @@
   let menu = $state<Menu | null>(null);
 
   const np = $derived(playing());
-  // Its conditions (decision 0061): the server says which playlists pass, any or all of their tracks.
+  // Its filter (decisions 0060 and 0061): its switches (Favourites only, Mine only) and its conditions, any or all of
+  // their tracks; the server says which playlists pass (the owner, 2026-10-29: one filter, one engine).
   const pass = passing(() => 'playlists', () => ({ list: { kind: 'playlists' }, source: prefs.source || undefined }));
   /** What a filter goes by is not in yet: the page loads rather than show them all, or none (the owner, 2026-10-23). */
-  const waiting = $derived((switchOn('playlists', 'favourites') && !playlistFavoritesKnown()) || (pass.pending && !pass.keys));
+  const waiting = $derived(pass.pending && !pass.keys);
   // The playlists the server finds by their tracks, with why (the owner, 2026-10-25: "Gardner" found none of those
   // holding his tracks).
   const deepOf = deepMatches('playlist', 'playlist:');
@@ -67,8 +68,6 @@
     });
     // As every search reads (lib/search, decision 0072), and by its tracks (the server's deep search).
     list = list.filter((p) => matchesSearch(p.name) || !!deepOf(p.id));
-    if (switchOn('playlists', 'favourites')) list = list.filter((p) => isPlaylistFavorite(p.id));
-    if (switchOn('playlists', 'mine')) list = list.filter((p) => p.mine !== false);
     const keys = pass.keys;
     if (keys) list = list.filter((p) => keys.has(p.id));
     // Pinned ones first, in the order pinned; the rest in the list's order (its header, or View), either way round.

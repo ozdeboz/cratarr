@@ -39,7 +39,8 @@
 <ol class="list">
   {#each conditions as _, i (i)}
     <ConditionCard
-      bind:condition={conditions[i]}
+      condition={conditions[i]}
+      onchange={(next) => (conditions = conditions.map((c, j) => (j === i ? next : c)))}
       axis={axes?.find((a) => a.key === conditions[i].axis)}
       known={axes !== null}
       {items}
