@@ -11,11 +11,11 @@
 import type { Beats } from '../beats';
 import { BUDGETED, type Budgeted } from '../budget';
 import type { ModuleType } from '../patch';
-import type { CableV2, PatchV2, RANDOMIZE_SCOPES } from '../ports';
+import { DUCKER, type CableV2, type PatchV2, type RANDOMIZE_SCOPES } from '../ports';
 import { precheckingPatch, type Checked } from '../precheck';
 import type { VisualSettings } from '../settings.svelte';
 import type { Signals } from '../signals';
-import { applyKnobs, flatten, METER_BUDGET, THRESHOLD_OVER_LIMIT } from '../v2';
+import { applyKnobs, asSet, flatten, METER_BUDGET, THRESHOLD_OVER_LIMIT } from '../v2';
 import { randomize, randomizeCables, randomizeMacros, scopeNamed, type Randomized, type Scope } from './randomize';
 import { STANDING } from './sidechain';
 
@@ -31,7 +31,7 @@ const TRIES = 8;
 
 /** The limits the rack's Calm holds the picture to: each Ducker keyed by a Meter's kind, its threshold as set (its
  *  macros in, along its taper) over toV2's margin; a kind none holds, the standing limit. */
-export function diceLimits(patch: PatchV2): Record<Budgeted, number> {
+export function diceLimits(patch: PatchV2, types?: Record<string, ModuleType>): Record<Budgeted, number> {
   const flat = flatten(patch);
   const out = { ...STANDING } as Record<Budgeted, number>;
   const typeOf = new Map(flat.modules.map((m) => [m.id, m.type]));
@@ -39,14 +39,8 @@ export function diceLimits(patch: PatchV2): Record<Budgeted, number> {
     const kind = typeOf.get(c.from.module) === 'meter' && typeOf.get(c.to.module) === 'ducker' && c.to.port === 'key' ? METER_BUDGET[c.from.port] : undefined;
     const m = kind && flat.modules.find((x) => x.id === c.to.module);
     if (!kind || !m) continue;
-    let threshold = m.knobs.threshold;
-    for (const x of flat.macros)
-      for (const t of x.targets)
-        if (t.module === m.id && t.knob === 'threshold') {
-          const at = Math.min(1, Math.max(0, x.value));
-          threshold = t.from > 0 && t.to > 0 ? t.from * (t.to / t.from) ** at : t.from + (t.to - t.from) * at;
-        }
-    if (typeof threshold === 'number' && Number.isFinite(threshold) && threshold > 0) out[kind] = threshold / THRESHOLD_OVER_LIMIT;
+    const threshold = asSet(flat, m, 'threshold', types ?? { ducker: DUCKER });
+    if (threshold !== undefined && threshold > 0) out[kind] = threshold / THRESHOLD_OVER_LIMIT;
   }
   for (const k of BUDGETED) if (!(out[k] > 0)) out[k] = STANDING[k];
   return out;
@@ -68,7 +62,7 @@ export function* rollOf(patch: PatchV2, types: Record<string, ModuleType>, how: 
   // Macros: the rack's own ranges, so no check against the track.
   if (scope === 'macros') return { values, cables, macros: held.includes('macros') ? {} : randomizeMacros(patch, { seed, reach }) };
   if (!check) return { values, cables };
-  const limits = diceLimits(patch);
+  const limits = diceLimits(patch, types);
   let best: { values: Randomized; cables: typeof cables; by: number } | null = null;
   for (let t = 0; t < TRIES; t++) {
     const tryValues: Randomized = t === 0 ? values : knobsScope ? yield* randomize(patch, types, { seed: seed + t, scope: knobsScope, reach }) : {};

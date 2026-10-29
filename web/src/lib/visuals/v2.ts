@@ -26,7 +26,7 @@ import { shapeOf } from './evaluate';
 import { DEFAULT_LIMITS, type Budgeted } from './budget';
 import { BUSY } from './engine/sidechain';
 import { slotKnobOf, slotOf } from './engine/effect-slots';
-import { ASPECT_KNOB, cratarrPatch, modulesOf, type Cable, type Macro, type Module, type Patch } from './patch';
+import { ASPECT_KNOB, cratarrPatch, modulesOf, type Cable, type Macro, type Module, type ModuleType, type Patch } from './patch';
 import { isDevice, READINGS, SHOW_PARTS, type CableV2, type Device, type PatchV2, type PortRef } from './ports';
 import { extraType } from './registry';
 import { modulatorOf } from './modulators/modulators';
@@ -136,6 +136,21 @@ export function applyKnobs(p: PatchV2, values: Record<string, Record<string, num
     if (!level || !m) continue;
     for (const [k, v] of Object.entries(knobs)) if (!level.pins.includes(`${m.id}.${k}`) && !level.pins.includes(`${m.id}.${k.replace(/\.\d+$/, '')}`)) m.knobs[k] = v;
   }
+}
+
+/** A knob of a flattened patch's module as set: its value, its macros' targets on it (along its taper: an exponential
+ *  knob's geometrically), as the engine sets its base; undefined where the module has no value for it. */
+export function asSet(p: PatchV2, m: Module | undefined, knob: string, types?: Record<string, ModuleType>): number | undefined {
+  if (!m) return undefined;
+  let v = m.knobs[knob];
+  const exp = types?.[m.type]?.knobs.find((k) => k.id === knob)?.taper === 'exp';
+  for (const x of p.macros)
+    for (const t of x.targets)
+      if (t.module === m.id && t.knob === knob) {
+        const at = Math.min(1, Math.max(0, x.value));
+        v = exp && t.from > 0 && t.to > 0 ? t.from * (t.to / t.from) ** at : t.from + (t.to - t.from) * at;
+      }
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }
 
 /** A device's pin as the flattened patch names it: a module's, a cable's or a knob's under the device's path (a

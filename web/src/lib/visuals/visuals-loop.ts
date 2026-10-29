@@ -17,7 +17,7 @@ import { newEngine, stepEngine, type EngineFrame } from './engine/graph';
 import { LivePatch } from './engine/live-patch';
 import { rollOf, type DiceCheck, type Roll, type Rolled } from './engine/dice';
 import type { Randomized } from './engine/randomize';
-import { settingsOfPatch } from './engine/settings-view';
+import { effectSlotsOf } from './engine/settings-view';
 import { FREE, holding, leversOf, type Levers } from './engine/sidechain';
 import { seedOf } from './flame';
 import type { FrameStats, MeterValues } from './meters';
@@ -29,9 +29,10 @@ import type { PatchV2 } from './ports';
 import { ceilingOf } from './quality';
 import { FlameRenderer, type PictureInputs } from './render';
 import { A, T } from './routes';
-import { FLUID_FULL, type VisualSettings } from './settings.svelte';
+import { BANDS, FLUID_FULL, type VisualSettings } from './settings.svelte';
+import type { EffectSettings } from './effects';
 import { signalsOf } from './signals';
-import { applyKnobs } from './v2';
+import { applyKnobs, asSet } from './v2';
 
 /** A new track's look blends in over this long; one the dice made, quicker (Visuals.svelte's). */
 const BLEND_MS = 6000;
@@ -141,7 +142,11 @@ export class VisualsLoop {
     const live = new LivePatch();
     let rebuildsSeen = -1;
     let storeSeen: PatchV2 | null = null;
-    let how = host.device();
+    // What the old side of the light loop and the meters still read of the patch (the effects' slots, the Fluid's
+    // Lattice, the Clock's Speed) and Music's Hold, each from its module's knobs as set: worked out as the patch changes.
+    let slots: EffectSettings & { lattice: number } = { ...effectSlotsOf(host.store.patch), lattice: 0 };
+    let speed = 1;
+    let lighting: number[] = [];
     const engine = newEngine();
     const normal = newNormalState();
     let meterValues: MeterValues | undefined;
@@ -212,9 +217,9 @@ export class VisualsLoop {
       const signals = signalsOf(source, id);
       return signals ? { signals, beats: beatsOf(source, id) ?? null, position: check.position } : null;
     };
-    const rollFor = (seed: number, roll: Roll, check: { key: string; position: number } | null, reach = 1) => rollOf(host.store.patch, host.types, how, seed, roll, checkOf(check), reach);
+    const rollFor = (seed: number, roll: Roll, check: { key: string; position: number } | null, reach = 1) => rollOf(host.store.patch, host.types, host.device(), seed, roll, checkOf(check), reach);
 
-    let passes = Math.min(ceilingOf(how.quality, devicePixels()).steps, pace?.passes ?? Infinity);
+    let passes = Math.min(ceilingOf(host.device().quality, devicePixels()).steps, pace?.passes ?? Infinity);
     let last = performance.now();
     let drawnAt = 0;
     let refresh = 1000 / 60;
@@ -271,7 +276,14 @@ export class VisualsLoop {
       ease(flat, now);
       if (patch !== storeSeen || easing) {
         storeSeen = patch;
-        how = { ...settingsOfPatch(flat, device), quality: device.quality, fps: device.fps, brightness: device.brightness };
+        const ofType = (type: string) => flat.modules.find((x) => x.type === type);
+        const fluid = ofType('fluid');
+        const clock = ofType('clock');
+        const music = ofType('music');
+        const kind = (type: string, knob: string) => host.types[type]?.knobs.find((k) => k.id === knob);
+        slots = { ...effectSlotsOf(flat), lattice: asSet(flat, fluid, 'lattice', host.types) ?? 0 };
+        speed = asSet(flat, clock, 'speed', host.types) ?? kind('clock', 'speed')?.default ?? 1;
+        lighting = Array.from({ length: BANDS }, (_, b) => asSet(flat, music, `hold.${b}`, host.types) ?? kind('music', 'hold')?.default ?? 0.15);
       }
       if (live.rebuilds !== rebuildsSeen) {
         rebuildsSeen = live.rebuilds;
@@ -285,7 +297,7 @@ export class VisualsLoop {
         }
       }
 
-      const m = musicNow(now, how.lighting, flat.modules.some((x) => x.type === 'waves'));
+      const m = musicNow(now, lighting, flat.modules.some((x) => x.type === 'waves'));
       key = m.key;
       // The dice the owner tapped: a roll over its scope, checked against the track, as an edit.
       if (this.#rollWanted && !rolling) {
@@ -442,7 +454,7 @@ export class VisualsLoop {
 
       renderer.frame(
         passes,
-        chainNow(d, { how, levers, ceiling: device.brightness, coverage: null, fire: fv.fire, position: m.position, beat: beatNow, forces: stirred.forces, flow: stirred.flow, dt, speed: how.speed }),
+        chainNow(d, { how: slots, levers, ceiling: device.brightness, coverage: null, fire: fv.fire, position: m.position, beat: beatNow, forces: stirred.forces, flow: stirred.flow, dt, speed }),
         w,
         h,
         inputs,
@@ -451,7 +463,7 @@ export class VisualsLoop {
       const stats: Omit<FrameStats, 'tiles'> = {
         t: now / 1000,
         extra: (() => {
-          const fx = settingsReport(how, d.effects, levers, d.routed);
+          const fx = settingsReport(slots, d.effects, levers, d.routed);
           const zooms = zoomsMotion(d.tunnel * levers.pace, d.dive * levers.pace);
           return { ...fx, motion: (fx.motion ?? 0) + wavesMotion(wavesNow, d.fluid) + zooms };
         })(),
