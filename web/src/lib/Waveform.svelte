@@ -72,7 +72,7 @@
     /** The tracks around this one end to end (lib/SeekWave's wide view: a hold's look-ahead in another track): their
      *  bars (0..255 each), the stretch shown (`from`..`to`), this track's place in it (`cur0`..`cur1`) and the
      *  boundaries between them (`marks`), all 0..1 of the whole. Places given in this track are drawn where it stands. */
-    wide?: { bins: Uint8Array; from: number; to: number; cur0: number; cur1: number; marks: number[] } | null;
+    wide?: { bins: Uint8Array; from: number; to: number; cur0: number; cur1: number; marks: number[]; colours?: (string | null)[] } | null;
     onflat?: () => void;
   } = $props();
 
@@ -162,18 +162,32 @@
           : null,
   );
   /** The strip as drawn: the stretch of the source it covers (`e0`..`e1`), the stretch shown's width then (`w0`), its
-   *  pieces (`count`), its paths as made and as heard (at `level`) and the boundaries in it. */
-  type Strip = Drawn & { bins: Uint8Array; count: number; level: number; made: string; heard: string; marks: number[] };
+   *  pieces (`count`), its paths as made and as heard (at `level`), the boundaries in it, and its heard path track by
+   *  track (`played`, the `k`th track's pieces: each its own colour, none crossing a boundary). */
+  type Strip = Drawn & { bins: Uint8Array; count: number; level: number; made: string; heard: string; marks: number[]; played: { k: number; d: string }[] };
   let strip = $state<Strip | null>(null);
-  /** A strip's pieces as one path, each open and risen to its height (the plain draw's at gap 1), at `level`. */
-  const stripPath = (hs: number[], level: number) => {
-    let s = '';
-    for (let i = 0; i < hs.length; i++) {
-      const h = LOW + hs[i] * level;
-      s += `M${f(i + 0.15)} ${f((100 - h) / 2)}h0.7v${f(h)}h-0.7z`;
-    }
-    return s;
+  /** A strip's piece, open and risen to its height (the plain draw's at gap 1), at `level`. */
+  const piece = (i: number, rise: number, level: number) => {
+    const h = LOW + rise * level;
+    return `M${f(i + 0.15)} ${f((100 - h) / 2)}h0.7v${f(h)}h-0.7z`;
   };
+  const stripPath = (hs: number[], level: number) => hs.map((h, i) => piece(i, h, level)).join('');
+  /** The heard pieces track by track: a piece belongs to the track its middle is in. */
+  function byTrack(hs: number[], level: number, d: Drawn, marks: number[]): { k: number; d: string }[] {
+    const out: { k: number; d: string }[] = [];
+    const per = (d.e1 - d.e0) / hs.length;
+    for (let i = 0; i < hs.length; i++) {
+      const x = d.e0 + (i + 0.5) * per;
+      let k = 0;
+      while (k < marks.length && x >= marks[k]) k++;
+      if (out.at(-1)?.k !== k) out.push({ k, d: '' });
+      out.at(-1)!.d += piece(i, hs[i], level);
+    }
+    return out;
+  }
+  /** The `k`th track's colour in a wide view: its cover's (lib/accents), else the app's accent; none in a zoom on one
+   *  track, which has the player's. */
+  const colourOf = (k: number) => (wide?.colours ? (wide.colours[k] ?? 'var(--accent)') : undefined);
   $effect.pre(() => {
     const s = stretch;
     const count = n * STRIP_SPAN;
@@ -183,7 +197,7 @@
       if (strip && strip.bins === s.bins && strip.count === count && strip.level === level && serves(strip, s.from, s.to)) return;
       const cover = coverOf(s.from, s.to);
       const hs = barsIn(s.bins, count, cover.e0, cover.e1, s.contrast).map((v) => Math.max(LOW, v * 100) - LOW);
-      strip = { ...cover, bins: s.bins, count, level, made: stripPath(hs, 1), heard: stripPath(hs, level), marks: s.marks };
+      strip = { ...cover, bins: s.bins, count, level, made: stripPath(hs, 1), heard: stripPath(hs, level), marks: s.marks, played: byTrack(hs, level, cover, s.marks) };
     });
   });
   /** Where the strip stands now: slid and scaled so that the stretch shown fills the waveform. */
@@ -387,7 +401,9 @@
          playhead, the landing's tint), its boundaries going with it. -->
     <div class="layer"><svg class="strip" viewBox="0 0 {strip.count} 100" preserveAspectRatio="none" style:transform={stripAt}><path d={output ? strip.heard : strip.made} /></svg></div>
     <div class="layer" style:clip-path={`inset(0 ${(1 - done) * 100}% 0 0)`}>
-      <svg class="strip played" viewBox="0 0 {strip.count} 100" preserveAspectRatio="none" style:transform={stripAt}><path d={strip.heard} /></svg>
+      <svg class="strip played" viewBox="0 0 {strip.count} 100" preserveAspectRatio="none" style:transform={stripAt}>
+        {#each strip.played as p (p.k)}<path d={p.d} style:--seg={colourOf(p.k)} />{/each}
+      </svg>
     </div>
     {#if band && band[1] > band[0]}
       <div class="layer" style:clip-path={`inset(0 ${(1 - band[1]) * 100}% 0 ${band[0] * 100}%)`}>
@@ -489,6 +505,16 @@
     width: 300%;
     transform-origin: 0 0;
     will-change: transform;
+  }
+
+  /* Each track's played pieces in its own colour (--seg, a wide view's); the player's where none is given. */
+  svg.strip.played path {
+    fill: var(--seg, var(--art-accent, var(--accent)));
+    transition: fill var(--ramp-ms, 0ms) linear;
+  }
+
+  .paused svg.strip.played path {
+    fill: var(--muted);
   }
 
   /* The boundaries' ticks sit below the waveform: their layer reaches down to them. */

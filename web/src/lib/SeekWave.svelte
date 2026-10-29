@@ -7,6 +7,7 @@
   // `grab(e)`: the mini player's long press hands the pointer here, held from where it is.
   import { untrack } from 'svelte';
   import Icon from './Icon.svelte';
+  import { accentFor, keepAccent } from './accents.svelte';
   import { appInfo, inApp } from './app.svelte';
   import { deckNow, local } from './localPlayer.svelte';
   import { isLocal } from './output.svelte';
@@ -14,7 +15,7 @@
   import { aimPainted, holdNow, ramping, tapeDir } from './ramping.svelte';
   import { reducedMotion } from './motion';
   import { portal } from './portal';
-  import { clockText } from './remote.svelte';
+  import { art, clockText } from './remote.svelte';
   import type { Seek } from './seekState.svelte';
   import Waveform from './Waveform.svelte';
   import WaveLens from './WaveLens.svelte';
@@ -302,7 +303,20 @@
       all.set(p, o);
       o += p.length;
     }
-    return { bins: all, lo, total, marks: ts.slice(1).map((t) => t.start) };
+    return { bins: all, lo, total, marks: ts.slice(1).map((t) => t.start), tracks: ts.map((t) => t.i) };
+  });
+  // Each track's colour in a wide view, its own (the owner, 2026-10-29: "colors should stay true to their waveform"):
+  // the playing one's as the player has it, kept once it is the track before; the next ones' covers fetched ahead, so
+  // their colours are there before a hold reaches them.
+  $effect(() => {
+    const t = local.queue[local.index];
+    if (t) keepAccent(t, art.accent);
+  });
+  $effect(() => {
+    for (let i = Math.max(0, local.index - 1); i <= local.index + 3; i++) {
+      const t = local.queue[i];
+      if (t) untrack(() => accentFor(t));
+    }
   });
   /** The wide view for lib/Waveform: the strip, the stretch shown, this track's place in it and the boundaries. */
   const wideStrip = $derived.by(() => {
@@ -316,6 +330,7 @@
       cur0: at(0),
       cur1: at(hereLen),
       marks: s.marks.map(at),
+      colours: s.tracks.map((i) => (local.queue[i] ? accentFor(local.queue[i]) : null)),
     };
   });
   /** What it shows: a continuous hold's strip a waveform throughout, whatever the playing track's own is doing. */
