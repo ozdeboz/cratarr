@@ -116,13 +116,21 @@ pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Fi
             (Items::Tracks, row_lines(app, source, rows).await.into_iter().map(|(e, l)| one(e, l.as_deref())).collect())
         }
         List::Library => {
-            // An album is a folder of files: its tracks are the files whose lines are in its folder's.
+            let albums = library_albums(app, &lib.source, &r.without).await;
+            // Cratarr's own albums by their own tracks, wherever their files are (2026-10-29, the owner's "Stellar -
+            // Tunnel": two copies in two artists' folders, so the album's folder was the library's root, and the
+            // filter found none of its files and left it out of every answer, negated ones too).
+            let own = own_album_files(&lib.source, lib.files()).await;
+            // Another server's albums by their folder: its tracks are the files whose lines are in its folder's.
             let mut by_dir: HashMap<&str, Vec<&Facts>> = HashMap::new();
             for f in lib.files() {
                 by_dir.entry(f.rel.rsplit_once('/').map_or("", |(d, _)| d)).or_default().push(f);
             }
-            let albums = library_albums(app, &lib.source, &r.without).await;
-            (Items::Albums, albums.into_iter().map(|(id, dir)| (id, dir.and_then(|d| by_dir.get(d.as_str()).cloned()).unwrap_or_default())).collect())
+            let tracks_of = |id: &str, dir: Option<String>| match own.get(id) {
+                Some(files) => files.clone(),
+                None => dir.and_then(|d| by_dir.get(d.as_str()).cloned()).unwrap_or_default(),
+            };
+            (Items::Albums, albums.into_iter().map(|(id, dir)| (id.clone(), tracks_of(&id, dir))).collect())
         }
     };
     let w = lib.world();
@@ -140,6 +148,29 @@ pub async fn filter(app: &Arc<App>, want: Option<&str>, r: Request) -> Result<Fi
     // A crate's rows are paged on the server: they come filtered there, so its thousands of lines are not sent here.
     let keys = if matches!(r.list, List::Crate { .. }) { Vec::new() } else { keys };
     Ok(Filtered { source: lib.source.clone(), items, keys, passed, total: grouped.len(), axes, tempo, profile })
+}
+
+/// Cratarr's own albums' files (`source` its own library's), by each album's id: its tracks', through the library's
+/// songs; none for another server's (an album there is its folder).
+async fn own_album_files<'a>(source: &str, files: impl Iterator<Item = &'a Facts>) -> HashMap<String, Vec<&'a Facts>> {
+    if source != crate::source::cratarr::KIND.id {
+        return HashMap::new();
+    }
+    let Some(served) = crate::serve::instance() else { return HashMap::new() };
+    let Ok(Ok(album_of)) = tokio::task::spawn_blocking(move || served.library.song_album_map()).await else { return HashMap::new() };
+    by_album(files, &album_of)
+}
+
+/// The files of each album, by its id (`album_of`: a song's album, by the song's id): each file with a catalogue track
+/// goes to its song's album.
+fn by_album<'a>(files: impl Iterator<Item = &'a Facts>, album_of: &HashMap<String, String>) -> HashMap<String, Vec<&'a Facts>> {
+    let mut out: HashMap<String, Vec<&Facts>> = HashMap::new();
+    for f in files {
+        if let Some(album) = f.track.and_then(|t| album_of.get(&crate::serve::ids::song(t))) {
+            out.entry(album.clone()).or_default().push(f);
+        }
+    }
+    out
 }
 
 /// An album's or an artist's rows by their `entry`, each with its file's line (the catalogue's link of the server's
@@ -195,6 +226,18 @@ fn folder_of(roots: &[crate::placement::FolderRoot], folders: &[std::path::PathB
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_albums_files_are_its_tracks_wherever_they_are() {
+        // The owner's "Stellar - Tunnel": two copies in two artists' folders, one album; its folder would be the root.
+        let f = |rel: &str, track: i64| Facts { rel: rel.into(), track: Some(track), ..Facts::default() };
+        let files = [f("Steve Brenner & Peter D. Gulch/Stellar - Tunnel (1985)/01.flac", 1), f("Steve Brenner & Peter Gulch/Stellar - Tunnel (1985)/01.flac", 2), f("Other/Album/01.flac", 3), Facts { rel: "Loose/02.flac".into(), ..Facts::default() }];
+        let album_of: HashMap<String, String> = [(crate::serve::ids::song(1), "al-st".to_string()), (crate::serve::ids::song(2), "al-st".to_string()), (crate::serve::ids::song(3), "al-o".to_string())].into();
+        let by = by_album(files.iter(), &album_of);
+        assert_eq!(by["al-st"].iter().map(|x| x.rel.as_str()).collect::<Vec<_>>(), [files[0].rel.as_str(), files[1].rel.as_str()]);
+        assert_eq!(by["al-o"].len(), 1);
+        assert_eq!(by.values().map(Vec::len).sum::<usize>(), 3, "a file of no catalogue track goes nowhere");
+    }
 
     #[test]
     fn an_albums_folder_is_found_through_the_servers_root() {
