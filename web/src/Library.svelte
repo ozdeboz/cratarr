@@ -129,7 +129,7 @@
   /** What an Incoming album lacks of what the library requires, to see before Keep (the owner, 2026-10-24). */
   const lacksOf = (shelf: ShelfSource, a: ListedAlbum) => sources?.find((x) => x.id === shelf.id)?.lacks?.[a.id] ?? [];
 
-  // The filter's own switches (Favourites only, Not played yet, 4 stars and up), remembered as the Library's (decision
+  // The filter's own switches (Favourites only, Unplayed only, 4 stars and up), remembered as the Library's (decision
   // 0060). Lossless only, Upgrades waiting and Duplicates waiting are none (the owner, 2026-10-24); one left on from
   // before goes by nothing. One filter for the three views, each by its own items (the owner, 2026-10-28: "whole and
   // complete"): the albums here; the artists by theirs (lib/LibraryArtists: a favourite artist, never played, with an
@@ -138,7 +138,7 @@
   const fav = $derived(switchOn('library', 'favourites'));
   const unplayed = $derived(switchOn('library', 'unplayed'));
   const top = $derived(switchOn('library', 'topRated'));
-  // Not played yet and 4 stars and up read how you used the albums, again each time one is switched on.
+  // Unplayed only and 4 stars and up read how you used the albums, again each time one is switched on.
   $effect(() => {
     if (!unplayed && !top) return;
     for (const s of untrack(() => sources ?? [])) loadAlbumUses(s.id);

@@ -2,8 +2,10 @@
 // (lib/pageView SWITCHES), remembered per kind of list (a page's id, or a panel kind) in the prefs. The Filter sheet
 // changes them (lib/FilterSheet); the lists read them.
 import { filterList, type Condition, type FilterList } from './api';
+import { complete } from './filterRow';
 import { SWITCHES } from './pageView.svelte';
 import { prefs, type FilterCondition, type ListFilter } from './prefs.svelte';
+import { toast } from './toast.svelte';
 
 const NO_FILTER: ListFilter = { conditions: [], on: [] };
 
@@ -23,8 +25,14 @@ export function setConditions(kind: string, conditions: FilterCondition[]) {
   prefs.filters[kind] = { ...filterOf(kind), conditions };
 }
 
-/** A kind of list's conditions that apply (not muted). */
-export const activeConditions = (kind: string) => filterOf(kind).conditions.filter((c) => c.enabled !== false);
+/** Back to no filter of the list's own: no conditions, every switch off (the Filter sheet's Reset, the owner,
+ *  2026-10-29). The libraries switched off stay so: they are the one filter that holds everywhere. */
+export function resetFilter(kind: string) {
+  prefs.filters[kind] = { conditions: [], on: [] };
+}
+
+/** A kind of list's conditions that apply: not muted, and saying what they ask (lib/filterRow). */
+export const activeConditions = (kind: string) => filterOf(kind).conditions.filter((c) => c.enabled !== false && complete(c));
 
 /** How many filters a kind of list has on (the funnel's count): its conditions that apply and its switches on. */
 // Only the switches the list still offers: one left on from before (Lossless only, say) is no filter now.
@@ -46,7 +54,7 @@ export function conditionsFor(kind: string): Condition[] | undefined {
 export const inView = $state<Record<string, { list: FilterList; source?: string } | undefined>>({});
 
 /** The keys of a list's items (of the kind `kindOf` says) its conditions let through (lib/api filterList), asked again 300 ms after they change;
- *  null while there are none, or the server cannot tell (then nothing is left out). `pending`: conditions apply and
+ *  null while there are none (a failed ask keeps the last answer, and says so). `pending`: conditions apply and
  *  their answer is on its way; the last answer for the same list stays meanwhile, and before the first a list shows
  *  as loading rather than unfiltered (the owner, 2026-10-23: nothing shown that something else then replaces). */
 export function passing(kindOf: () => string, get: () => { list: FilterList; source?: string } | null): { keys: Set<string> | null; pending: boolean } {
@@ -56,7 +64,9 @@ export function passing(kindOf: () => string, get: () => { list: FilterList; sou
     const kind = kindOf();
     const at = get();
     inView[kind] = at ?? undefined;
-    const conditions = conditionsFor(kind);
+    // A copy, read whole here: a condition's card changes it in place (its Not, its values, its range, Any or All), and
+    // only what this effect reads asks again (the owner, 2026-10-29: Not, then a chip, never asked the server again).
+    const conditions = $state.snapshot(conditionsFor(kind));
     const without = at?.list.kind === 'library' ? hiddenLibraries() : undefined;
     // A crate's rows come filtered (CrateLook.filter): its answer has no keys.
     if (!at || !conditions || at.list.kind === 'crate') {
@@ -80,10 +90,12 @@ export function passing(kindOf: () => string, get: () => { list: FilterList; sou
           out.keys = new Set(f.keys);
           out.pending = false;
         },
-        () => {
+        (e) => {
           if (gone) return;
-          out.keys = null;
+          // Said, the last answer kept: it showed the whole list with the funnel still lit, as if filtered (the
+          // architecture audit, 2026-10-29).
           out.pending = false;
+          toast.fail(e, "The filter couldn't be applied");
         },
       );
     }, 300);
