@@ -59,3 +59,13 @@ As Ableton's Racks: macros per rack, racks nested, the dice rolling macros only.
   by hand), Hue, Light (Lightness, Vividness), Effects (the effects' Amounts).
 - **Behaviour:** Intensity, Accent, Speed, Wild.
 - **The dice roll every macro** (the owner: "Yes, all macros"); a macro pinned is kept.
+
+## The dice (the owner, 2026-10-29: "But keep the dice coherent too!!!")
+
+- **The dice roll the face of where they are, from a seed:** on the rack its macros (and through them its devices');
+  on a device's page its macros; on a module's page its knobs (a module's face is its knobs). The Dice module rolls the
+  face of the level it sits in. A new track's look is the track's seed; a tap, a fresh one; Reset to seed, the track's
+  again. Reach stays (how far a roll moves from where each control is); pins are the only exceptions.
+- **The long press keeps the eleven scopes** (the owner: "Keep the 11 scopes"), beside the face.
+- **No check against the track** (the owner: "No"): its eight tries and its second way of making the picture go; a
+  macro's range and the Calm, live, keep a roll within bounds.
