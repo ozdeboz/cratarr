@@ -15,7 +15,7 @@
   import { viewPlaylist } from './panel.svelte';
   import { playCollection } from './play.svelte';
   import { prefs } from './prefs.svelte';
-  import { CLOSE, TERM_KINDS, chipOf, conditionsOf, countAt, keepsOwn, minAt, nameOf, readAs, readingsFor, seedsOf, splitTerms, type Chip, type Reading } from './quickCrate';
+  import { CLOSE, TERM_KINDS, chipOf, conditionsOf, countAt, keepsOwn, minAt, nameOf, readAs, readLine, readingsFor, seedsOf, type Chip, type Found, type Reading } from './quickCrate';
   import { forgetQuick, keepQuick, quickCrates } from './quickCrates.svelte';
   import Row from './Row.svelte';
   import Seg from './Seg.svelte';
@@ -42,29 +42,46 @@
   const kindOf = (c: Chip) => (c.reading.kind === 'artist' && c.how === 'like' ? 'Like' : c.reading.kind === 'year' && c.reading.label.endsWith('s') ? 'Decade' : KIND[c.reading.kind]);
   const readingShown = (r: Reading) => `${r.kind === 'artist' ? 'Artist' : KIND[r.kind]} · ${r.label}`;
 
-  /** Each word read: search's best of each kind, the best of them its chip (lib/quickCrate); one already a chip, once. */
+  /** How many of each kind a phrase's readings offer (the owner, 2026-10-30: the right one could not be chosen with one). */
+  const EACH = 3;
+  const ask = (phrase: string): Promise<Found> =>
+    search(phrase, [...TERM_KINDS], EACH).then((r) => TERM_KINDS.flatMap((k) => r.groups[k]?.items.slice(0, EACH) ?? []));
+
+  /** The words typed, read as a whole line (lib/quickCrate readLine: years first, then the longest names that fit), each
+   *  phrase a chip of its best reading; one already a chip, once. */
   async function addTerms(words: string) {
-    const terms = splitTerms(words).filter((t) => !chips.some((c) => c.term.toLowerCase() === t.toLowerCase()));
-    if (!terms.length) return;
+    if (!words.trim()) return;
     reading++;
     try {
-      const read = await Promise.all(
-        terms.map(async (term) => {
-          try {
-            const r = await search(term, [...TERM_KINDS], 1);
-            return chipOf(term, readingsFor(term, TERM_KINDS.flatMap((k) => r.groups[k]?.items.slice(0, 1) ?? [])));
-          } catch {
-            return chipOf(term, readingsFor(term, []));
-          }
-        }),
-      );
-      missed = terms.filter((_, i) => !read[i]);
-      chips = [...chips, ...read.filter((c): c is Chip => !!c)];
+      const read = (await readLine(words, ask)).filter((r) => !chips.some((c) => c.term.toLowerCase() === r.term.toLowerCase()));
+      missed = read.filter((r) => !r.readings.length).map((r) => r.term);
+      chips = [...chips, ...read.flatMap((r) => chipOf(r.term, r.readings) ?? [])];
     } finally {
       reading--;
     }
   }
   if (quickCrates.words.trim()) void addTerms(quickCrates.words);
+
+  /** A chip's own word typed again (its step's field): read as one term, the chip in its place; or nothing found. */
+  let again = $state('');
+  let againMissed = $state<string | null>(null);
+  $effect(() => {
+    void at;
+    again = '';
+    againMissed = null;
+  });
+  async function reread(e: KeyboardEvent) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const term = again.trim().replace(/\s+/g, ' ');
+    const i = at;
+    if (!term || i === null) return;
+    const found = await ask(term).catch(() => [] as Found);
+    const c = chipOf(term, readingsFor(term, found));
+    if (!c) return void (againMissed = term);
+    chips[i] = c;
+    at = null;
+  }
 
   /** A comma (or a semicolon) ends a word: those before it read, the rest stays in the field; Enter reads it all. */
   function typed() {
@@ -183,6 +200,8 @@
     { icon: 'pencil', label: 'Edit', onclick: edit, disabled: !chips.length },
   ]);
 
+  /** A chip's other readings shown: the best few (up to EACH of every kind come). */
+  const OTHERS = 8;
   const chip = $derived(at !== null ? (chips[at] ?? null) : null);
   const setChip = (c: Chip) => at !== null && (chips[at] = c);
 </script>
@@ -214,9 +233,13 @@
         <MenuEntry icon="user" label="Their own tracks" switched={!!chip.own} onclick={() => setChip({ ...chip, own: !chip.own })} />
       {/if}
     {/if}
-    {#each chip.others as r (r.kind + r.value)}
+    {#each chip.others.slice(0, OTHERS) as r (r.kind + r.value)}
       <MenuEntry label={readingShown(r)} onclick={() => (setChip(readAs(chip, r)), (at = null))} />
     {/each}
+    <div class="quick">
+      <input type="search" placeholder="Another word for this" aria-label="Another word for this chip" bind:value={again} onkeydown={reread} />
+      {#if againMissed}<p class="note">Nothing found for {againMissed}</p>{/if}
+    </div>
     <MenuEntry
       icon="close"
       label="Remove"
@@ -228,7 +251,7 @@
     />
   {:else}
     <div class="quick">
-      <input type="search" placeholder="Genre, artist, label, year…" aria-label="Words for a quick crate" bind:value={text} oninput={typed} onkeydown={entered} />
+      <input type="search" placeholder="hip hop 90s Miles Davis" aria-label="Words for a quick crate" bind:value={text} oninput={typed} onkeydown={entered} />
       {#if chips.length}
         <div class="chips">
           {#each chips as c, i (c.term)}
