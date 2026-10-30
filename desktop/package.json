@@ -12,6 +12,9 @@
   "private": true,
   "main": "main.js",
   "desktopName": "cratarr.desktop",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "icons": "node copy-icons.js",
     "start": "npm run icons && electron .",
