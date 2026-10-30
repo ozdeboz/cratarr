@@ -1819,10 +1819,11 @@ impl PlaylistService {
 
     /// An export's plan for a list of tracks by their servers' ids (decision 0058: an album, an artist's, a selection,
     /// a queue): each track's file wherever the catalogue has it (the Music folder or another library's), with what it
-    /// knows of it. A track it cannot place is left out, named in the report by its server and id.
+    /// knows of it. A track it cannot place is left out, named in the report by its server and id; so is a Bandcamp
+    /// preview's.
     pub async fn export_tracks(&self, name: &str, tracks: Vec<(String, String)>) -> Result<crate::export::Plan, ToggleError> {
         self.export_places(name, move |c: &crate::catalogue::Catalogue| {
-            tracks.iter().map(|(s, id)| (format!("{s} {id}"), c.track_of_source(s, id).and_then(|t| c.file_of(t)))).collect()
+            tracks.iter().map(|(s, id)| (format!("{s} {id}"), export_place(c, s, id))).collect()
         })
         .await
     }
@@ -3277,6 +3278,39 @@ pub(super) fn tell_sources(lib: &Library, changes: Vec<(String, PlaylistChange)>
                 tracing::warn!("source {}: could not pass on playlist changes: {e:#}", a.cfg.id);
             }
         });
+    }
+}
+
+/// Where an export finds a track by its server's id: its file wherever the catalogue has it. Never a Bandcamp
+/// preview's (decision 0071: played, never downloaded), whatever the catalogue holds: it is left out as missing.
+fn export_place(c: &crate::catalogue::Catalogue, source: &str, id: &str) -> Option<(i64, String)> {
+    if source == crate::bandcamp::SOURCE {
+        return None;
+    }
+    c.track_of_source(source, id).and_then(|t| c.file_of(t))
+}
+
+#[cfg(test)]
+mod export_place_tests {
+    use super::*;
+
+    #[test]
+    fn a_bandcamp_preview_is_never_exported() {
+        let root = std::env::temp_dir().join(format!("cratarr-export-place-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("A")).unwrap();
+        std::fs::write(root.join("A/01.mp3"), "a").unwrap();
+        let cat = crate::catalogue::Catalogue::open(None, vec![root.clone()]).unwrap();
+        cat.walk_all();
+        cat.pretend_read_for_tests();
+        cat.identify().unwrap();
+        // Even were a file linked to it.
+        let link = [("t1".to_string(), 0, "A/01.mp3".to_string())];
+        cat.record_links("jellyfin", "lib", &link, 1).unwrap();
+        cat.record_links(crate::bandcamp::SOURCE, "lib", &link, 1).unwrap();
+        assert_eq!(export_place(&cat, "jellyfin", "t1"), Some((0, "A/01.mp3".to_string())));
+        assert_eq!(export_place(&cat, crate::bandcamp::SOURCE, "t1"), None, "left out as missing");
+        assert_eq!(export_place(&cat, crate::bandcamp::SOURCE, "https://x.bandcamp.com/album/y#1"), None);
+        std::fs::remove_dir_all(&root).ok();
     }
 }
 
