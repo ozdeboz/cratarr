@@ -584,6 +584,20 @@ fn add_annotation_own(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// The rule release types are found by (0.10: a Discogs release must fit the album's tracks or length; an EP or single
+/// far longer than its release group's first release is an album). Rows an older rule wrote that this one could find
+/// otherwise are asked again (`release_types_asked`).
+pub const RELEASE_TYPES_RULE: i64 = 1;
+
+/// Release types from before their rule was kept get the column: rule 0. Safe to repeat.
+fn add_release_types_rule(conn: &Connection) -> Result<()> {
+    let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('release_types') WHERE name = 'rule'")?.exists([])?;
+    if !has {
+        conn.execute_batch("ALTER TABLE release_types ADD COLUMN rule INTEGER NOT NULL DEFAULT 0")?;
+    }
+    Ok(())
+}
+
 /// Snapshots made before they had pictures (preview 63) get the column, empty. Safe to repeat.
 fn add_snapshot_pictures(conn: &Connection) -> Result<()> {
     let has: bool = conn.prepare("SELECT 1 FROM pragma_table_info('visual_snapshot') WHERE name = 'picture'")?.exists([])?;
@@ -619,6 +633,7 @@ impl UserData {
         add_answer_names(&conn)?;
         add_plays_followed(&conn)?;
         add_annotation_own(&conn).context("keeping one's own plays apart from followed ones")?;
+        add_release_types_rule(&conn)?;
         conn.execute_batch(WEEK_BEFORE_THE_LOG).context("writing the week before the log from the last plays")?;
         Ok(Self { db: Mutex::new(conn), starred: tokio::sync::broadcast::channel(64).0 })
     }
@@ -1900,11 +1915,15 @@ impl UserData {
     }
 
     /// The keys starting `prefix` not to ask about again: those with a primary type, and those asked since `since`;
-    /// without their prefix.
+    /// without their prefix. Those an older rule found where `RELEASE_TYPES_RULE` changed it (every one of Discogs', an
+    /// EP or single of MusicBrainz's) are asked again, kept as they are until then.
     pub fn release_types_asked(&self, prefix: &str, since: i64) -> Result<std::collections::HashSet<String>> {
         let db = self.db();
-        let mut st = db.prepare("SELECT key FROM release_types WHERE substr(key, 1, length(?1)) = ?1 AND (primary_type IS NOT NULL OR at >= ?2)")?;
-        let rows = st.query_map(params![prefix, since], |r| r.get::<_, String>(0))?;
+        let mut st = db.prepare(
+            "SELECT key FROM release_types WHERE substr(key, 1, length(?1)) = ?1 AND (primary_type IS NOT NULL OR at >= ?2)
+             AND NOT (rule < ?3 AND (substr(key, 1, 3) = 'dc:' OR coalesce(primary_type, '') IN ('ep', 'single')))",
+        )?;
+        let rows = st.query_map(params![prefix, since, RELEASE_TYPES_RULE], |r| r.get::<_, String>(0))?;
         Ok(rows.filter_map(|k| k.ok().map(|k| k[prefix.len()..].to_string())).collect())
     }
 
@@ -1913,9 +1932,9 @@ impl UserData {
         let mut db = self.db();
         let tx = db.transaction()?;
         {
-            let mut st = tx.prepare("INSERT OR REPLACE INTO release_types (key, primary_type, secondary, at) VALUES (?1, ?2, ?3, ?4)")?;
+            let mut st = tx.prepare("INSERT OR REPLACE INTO release_types (key, primary_type, secondary, at, rule) VALUES (?1, ?2, ?3, ?4, ?5)")?;
             for (key, primary, secondary) in found {
-                st.execute(params![key, primary, secondary.join("\u{1f}"), at])?;
+                st.execute(params![key, primary, secondary.join("\u{1f}"), at, RELEASE_TYPES_RULE])?;
             }
         }
         tx.commit()?;
@@ -2064,6 +2083,26 @@ mod tests {
         assert_eq!(u.release_types_asked("mb:", 200).unwrap(), ["a".to_string()].into(), "b asked again after a while");
         assert_eq!(u.release_types_asked("mb:", 50).unwrap().len(), 2);
         assert_eq!(u.release_types_asked("dc:", 50).unwrap(), ["al-1".to_string()].into());
+    }
+
+    #[test]
+    fn release_types_an_older_rule_found_are_asked_again_where_the_rule_changed_and_kept_until_then() {
+        let u = UserData::open(None).unwrap();
+        let found: [(String, Option<String>, Vec<String>); 5] = [
+            ("mb:ep".into(), Some("ep".into()), Vec::new()),
+            ("mb:none".into(), None, Vec::new()),
+            ("mb:single".into(), Some("single".into()), Vec::new()),
+            ("mb:album".into(), Some("album".into()), Vec::new()),
+            ("dc:al-1".into(), Some("single".into()), Vec::new()),
+        ];
+        u.set_release_types(&found, 100).unwrap();
+        u.db().execute("UPDATE release_types SET rule = 0", []).unwrap();
+        assert_eq!(u.release_types_asked("mb:", 0).unwrap(), ["album".to_string(), "none".to_string()].into(), "an EP or single of MusicBrainz's asked again");
+        assert!(u.release_types_asked("dc:", 0).unwrap().is_empty(), "every one of Discogs' asked again");
+        assert_eq!(u.release_types().unwrap().get("dc:al-1"), Some(&(Some("single".to_string()), Vec::new())), "kept until then");
+        u.set_release_types(&found, 200).unwrap();
+        assert_eq!(u.release_types_asked("mb:", 0).unwrap().len(), 4, "asked by this rule: done");
+        assert_eq!(u.release_types_asked("dc:", 0).unwrap().len(), 1);
     }
 
     #[test]
