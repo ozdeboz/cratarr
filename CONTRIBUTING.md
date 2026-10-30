@@ -35,7 +35,8 @@ desktop app (Electron) around the same page. This is how to build it, check a ch
 ## Proposing a change
 
 - For anything beyond a fix, open an issue first, so the decision behind it can be talked through before the work.
-- Send a pull request against `main`, one task each, with `main` brought in and the checks above run.
+- Send a pull request against `main`, one task each, with the checks above run. `main` is the last release, so a
+  change made on it fits the release it names.
 - **Commits**: one subject line that says what changed for the person using Cratarr, then why, and anything a reader
   of the code later needs: what was measured, what was tried and dropped, which decision it follows. Tests that pin
   the behaviour come in the same commit as the change.
@@ -59,8 +60,10 @@ desktop app (Electron) around the same page. This is how to build it, check a ch
 
   A branch comes back with a merge, never as a copy of its files (no cherry-picks either), so the history tells what is
   where. There the pieces are checked together and run on a real install before they are released. A working branch
-  takes its own base (`trunk` or its release branch) back in whenever it needs what landed there. A pull request
-  against `main` is brought onto `trunk` (a feature) or the release branch (a fix) the same way.
+  takes its own base (`trunk` or its release branch) back in whenever it needs what landed there.
+- A pull request: GitHub's `main` shares no history with `trunk` (it is one commit per release), so its change is taken
+  onto `trunk` (a feature) or the release branch (a fix) as a commit of its own, its author kept, and comes back to
+  `main` with the next release.
 - A release is its branch checked as a whole, with the version raised in one commit (`scripts/version.sh`: plain
   `X.Y.Z`, the server, the web app, the Android and desktop apps), tagged `vX.Y.Z` and put on `main` as one commit.
   - A new version (X.Y.0) is made on `trunk`, and `release/X.Y` is cut there.
