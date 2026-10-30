@@ -59,7 +59,7 @@ pub struct UpcomingView {
     pub album_id: Option<String>,
     pub addable: bool,
     pub duration_secs: Option<f64>,
-    /// Who asked for it, a queue request accepted (0.9.19).
+    /// Who asked for it, a queue request accepted (0.10).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asked_by: Option<String>,
 }

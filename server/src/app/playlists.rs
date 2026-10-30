@@ -824,7 +824,7 @@ mod undo_tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
-    /// A service reads the library it was made with, not a global one (the audit, 0.9.19): two in one process, each
+    /// A service reads the library it was made with, not a global one (the audit, 0.10): two in one process, each
     /// with its own, do not see each other's.
     #[tokio::test]
     async fn a_service_reads_its_own_library_and_not_another() {

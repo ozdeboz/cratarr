@@ -65,7 +65,7 @@ directory never gives out.
 
 ## Amendment, 2026-10-30: the display name
 
-The owner, of the Home greeting's "Capital first letter" switch (0.9.19): "has no right to exist. We use LDAP, which
+The owner, of the Home greeting's "Capital first letter" switch (0.10): "has no right to exist. We use LDAP, which
 offers the display name option, and we should simply use the display name."
 
 - **Read from the directory** with the user: at sign-in (the same search that finds them) and in 0051's hourly check

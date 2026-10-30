@@ -101,7 +101,7 @@ to export playlists … and albums and tracks, not crates"):
 
 One zip, streamed as it is made (0007's export, which now takes any tracks and a format).
 
-Amendment (2026-10-30, 0.9.19): **MP3, and one file or a zip.** Two more formats: MP3 at a constant 320 kb/s and MP3
+Amendment (2026-10-30, 0.10): **MP3, and one file or a zip.** Two more formats: MP3 at a constant 320 kb/s and MP3
 V0 (LAME's best variable rate), lossless files converted and lossy ones as they are, as with Opus; each file with its
 tags and cover in ID3v2 and LAME's header frame (its length and seek table, so V0 seeks). A Bandcamp preview (0071) is
 never exported: it is left out as missing.
@@ -132,7 +132,7 @@ download is saved where its user picks (Android's save dialog); in a browser it 
 
 The owner (2026-10-30): "Download is not coherently present. Also the download sheet itself can be more flexible
 for file formats and organization. Bandcamp files cannot be queued, very annoying! … And overall consistency of our
-context menu population rules." Chosen in a question set, for 0.9.19:
+context menu population rules." Chosen in a question set, for 0.10:
 
 - **The table is code** (`web/src/lib/menuTable.ts`): each kind's large actions and its cards of entries in order.
   Every menu draws its cards from it (`lib/MenuTable.svelte`) and sorts its large actions by it; what is true of the

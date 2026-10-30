@@ -1,5 +1,5 @@
 /*
- * Download… in the app (0.9.19): an export Cratarr prepared (`/api/export/{token}`) saved as the one file it downloads
+ * Download… in the app (0.10): an export Cratarr prepared (`/api/export/{token}`) saved as the one file it downloads
  * as, where the user says in Android's save dialog. Several files come as a zip, one file as that file (Cratarr
  * decides, and names it). The page hears the progress over the bridge; Android shows it in a notification. The saving
  * runs on a thread of its own, the export service holding the app in the foreground meanwhile, so it goes on when the

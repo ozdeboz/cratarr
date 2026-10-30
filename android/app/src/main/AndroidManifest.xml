@@ -82,7 +82,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </service>
-        <!-- Download… (0.9.19): an export saved where the user said, in the foreground while it runs. -->
+        <!-- Download… (0.10): an export saved where the user said, in the foreground while it runs. -->
         <service
             android:name=".ExportService"
             android:exported="false"
