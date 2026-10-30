@@ -77,6 +77,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/export/preview", post(export_preview))
         .route("/api/export", get(export_download).post(export_prepare))
         .route("/api/export/{token}", get(export_token))
+        .route("/api/export/{token}/file", get(export_file))
         .route("/api/playlists/favorites", get(playlist_favorites))
         .route("/api/crates", get(crates).post(crate_create))
         .route("/api/crates/axes", get(crate_axes))
@@ -1491,7 +1492,8 @@ fn combined(c: Option<&str>) -> Result<Option<String>, ApiError> {
 
 /// An export (decision 0058, one step for every object): what (playlists by name, or a list of tracks by their
 /// servers' ids with a name), its format and its layout. For playlists, with their tracks or only the playlist files,
-/// and as they are or combined into one; for tracks, with a playlist file of them or not.
+/// and as they are or combined into one; for tracks, with a playlist file of them or not. As one ZIP, or as loose files
+/// fetched one at a time (`package`).
 #[derive(Deserialize, Clone)]
 struct Export {
     what: ExportWhat,
@@ -1508,6 +1510,8 @@ struct Export {
     combine: Option<String>,
     #[serde(default)]
     m3u: bool,
+    #[serde(default)]
+    package: ExportPackage,
 }
 
 fn yes() -> bool {
@@ -1534,6 +1538,20 @@ enum ExportFormat {
     Original,
     FlacCd,
     Opus,
+    #[serde(rename = "mp3-320")]
+    Mp3Cbr320,
+    #[serde(rename = "mp3-v0")]
+    Mp3V0,
+}
+
+/// How an export is fetched: one ZIP (`GET /api/export/{token}`), or its files one at a time
+/// (`GET /api/export/{token}/file?path=...`, the paths listed when it is prepared).
+#[derive(Deserialize, Clone, Copy, Default, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+enum ExportPackage {
+    #[default]
+    Zip,
+    Files,
 }
 
 #[derive(Deserialize, Clone, Copy, Default)]
@@ -1554,6 +1572,8 @@ impl Export {
                 kbps if OPUS_RATES.contains(&kbps) => Format::Opus(kbps),
                 _ => return Err(ToggleError::Refused("Choose 96, 128, 160 or 256 kb/s.".into()).into()),
             },
+            ExportFormat::Mp3Cbr320 => Format::Mp3Cbr320,
+            ExportFormat::Mp3V0 => Format::Mp3V0,
         };
         let arrange = match self.layout {
             ExportLayout::Flat => Arrange::Flat,
@@ -1594,8 +1614,16 @@ enum PreviewOf {
     Playlists(ExportRequest),
 }
 
+/// An export prepared for its download: what was asked, and as loose files, the files themselves (each track's
+/// treatment already chosen, so each request finds its file at once).
+#[derive(Clone)]
+struct Prepared {
+    export: Export,
+    loose: Option<Arc<crate::export::Loose>>,
+}
+
 /// The exports prepared for a download, by token.
-static EXPORTS: std::sync::LazyLock<std::sync::Mutex<crate::export::Tokens<Export>>> =
+static EXPORTS: std::sync::LazyLock<std::sync::Mutex<crate::export::Tokens<Prepared>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(crate::export::Tokens::new()));
 
 fn unix_now() -> u64 {
@@ -1603,24 +1631,99 @@ fn unix_now() -> u64 {
 }
 
 /// An export made ready for its download (decision 0058): checked, then kept for a few minutes under a token; the
-/// download is `GET /api/export/{token}`, a plain link, so the browser shows its progress.
+/// download is `GET /api/export/{token}`, a plain link, so the browser shows its progress. As loose files, the answer
+/// lists them too (`files`: each its path, the name it has in the ZIP, and its size, exact or `estimate`), each then
+/// fetched by `GET /api/export/{token}/file?path=...`.
 async fn export_prepare(State(app): State<Arc<App>>, Json(e): Json<Export>) -> Result<Json<serde_json::Value>, ApiError> {
     let o = e.options()?;
     let plan = e.plan(&app).await?;
     let name = crate::export::download_name(&plan, &o);
     let token = crate::export::new_token();
-    EXPORTS.lock().unwrap_or_else(|p| p.into_inner()).put(token.clone(), unix_now(), e);
-    Ok(Json(json!({ "token": token, "name": name })))
+    let loose = match e.package {
+        ExportPackage::Zip => None,
+        ExportPackage::Files => Some(Arc::new(
+            tokio::task::spawn_blocking(move || crate::export::loose(plan, o, |t| crate::export::kind_of(&t.path)))
+                .await
+                .map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?,
+        )),
+    };
+    let mut answer = json!({ "token": token, "name": name });
+    if let Some(l) = &loose {
+        answer["files"] = loose_files(l);
+    }
+    EXPORTS.lock().unwrap_or_else(|p| p.into_inner()).put(token, unix_now(), Prepared { export: e, loose });
+    Ok(Json(answer))
+}
+
+/// The loose files as the answer lists them: `[{path, bytes?, estimate}]`, `bytes` left out when it is not known.
+fn loose_files(l: &crate::export::Loose) -> serde_json::Value {
+    l.files
+        .iter()
+        .map(|f| {
+            let mut v = json!({ "path": f.path, "estimate": f.estimate });
+            if let Some(b) = f.bytes {
+                v["bytes"] = b.into();
+            }
+            v
+        })
+        .collect()
 }
 
 /// A prepared export's download; 404 once its token has expired.
 async fn export_token(State(app): State<Arc<App>>, Path(token): Path<String>) -> Result<Response, ApiError> {
-    let Some(e) = EXPORTS.lock().unwrap_or_else(|p| p.into_inner()).get(&token, unix_now()) else {
+    let Some(p) = EXPORTS.lock().unwrap_or_else(|p| p.into_inner()).get(&token, unix_now()) else {
         return Ok(refused(StatusCode::NOT_FOUND, "That export has expired. Start it again."));
     };
-    let o = e.options()?;
-    let plan = e.plan(&app).await?;
+    let o = p.export.options()?;
+    let plan = p.export.plan(&app).await?;
     Ok(export_response(&app, plan, o))
+}
+
+#[derive(Deserialize)]
+struct ExportFileQuery {
+    path: String,
+}
+
+/// One file of an export prepared as loose files, by its path in the list: a track converted first when its format
+/// says so (then sent and removed), else as it is; a playlist file or the report from memory. Each request renews the
+/// token, so an export fetched one file at a time lasts while its files are asked for. 404 for a path not in it, or
+/// once its token has expired; a track that cannot be converted is an error rather than the file as it is.
+async fn export_file(State(app): State<Arc<App>>, Path(token): Path<String>, Query(q): Query<ExportFileQuery>) -> Result<Response, ApiError> {
+    let held = EXPORTS.lock().unwrap_or_else(|p| p.into_inner()).renew(&token, unix_now());
+    let Some(loose) = held.and_then(|p| p.loose) else {
+        return Ok(refused(StatusCode::NOT_FOUND, "That export has expired. Start it again."));
+    };
+    let Some(f) = loose.files.iter().find(|f| f.path == q.path) else {
+        return Ok(refused(StatusCode::NOT_FOUND, "That file is not in the export."));
+    };
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(crate::export::content_type(&f.path)));
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    let file_name = f.path.rsplit('/').next().unwrap_or(&f.path);
+    if let Ok(v) = HeaderValue::from_str(&attachment(file_name)) {
+        headers.insert(header::CONTENT_DISPOSITION, v);
+    }
+    let (at, how) = match &f.part {
+        crate::export::Part::Text(body) => {
+            headers.insert(header::CONTENT_LENGTH, HeaderValue::from(body.len()));
+            return Ok((headers, body.clone()).into_response());
+        }
+        crate::export::Part::Track(at, how) => (*at, *how),
+    };
+    let (work, rt, l) = (app.playlists.export_work(), tokio::runtime::Handle::current(), loose.clone());
+    let sent = tokio::task::spawn_blocking(move || crate::export::send_track(&l.plan.tracks[at], how, &work, &rt))
+        .await
+        .map_err(|e| ToggleError::Upstream(anyhow::anyhow!("{e}")))?;
+    match sent {
+        Ok((len, rx)) => {
+            headers.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+            Ok((headers, axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))).into_response())
+        }
+        Err(e) => {
+            tracing::warn!("Export: {}: {e:#}", q.path);
+            Ok(refused(StatusCode::INTERNAL_SERVER_ERROR, "That file could not be converted."))
+        }
+    }
 }
 
 /// `application/x-www-form-urlencoded` value: `+` is a space, `%XX` a byte (UTF-8 as a whole).
@@ -6011,6 +6114,47 @@ mod tests {
         assert!(parse(r#"{"what":{"kind":"tracks","name":"Q","tracks":[{"source":"s","id":"1"}]},"format":"opus","bitrate":64}"#).is_err(), "a bit rate not offered");
         assert!(parse(r#"{"what":{"kind":"tracks","name":"Q","tracks":[]}}"#).is_err(), "no tracks");
         assert!(matches!(serde_json::from_str::<PreviewOf>(r#"{"playlists":["A"],"tracks":true}"#).unwrap(), PreviewOf::Playlists(_)), "the Export tab's body still");
+        let o = parse(r#"{"what":{"kind":"tracks","name":"Q","tracks":[{"source":"s","id":"1"}]},"format":"mp3-320","bitrate":64}"#).ok().unwrap();
+        assert_eq!(o.format, Format::Mp3Cbr320, "an MP3 takes no bit rate: any is let be");
+        let o = parse(r#"{"what":{"kind":"tracks","name":"Q","tracks":[{"source":"s","id":"1"}]},"format":"mp3-v0"}"#).ok().unwrap();
+        assert_eq!(o.format, Format::Mp3V0);
+        assert!(serde_json::from_str::<PreviewOf>(r#"{"what":{"kind":"tracks","name":"Q","tracks":[]},"format":"mp3"}"#).is_err(), "no such format");
+    }
+
+    #[test]
+    fn an_export_comes_as_a_zip_unless_asked_as_loose_files() {
+        use super::{Export, ExportPackage};
+        let package = |s: &str| serde_json::from_str::<Export>(s).unwrap().package;
+        assert_eq!(package(r#"{"what":{"kind":"playlists","names":["A"]}}"#), ExportPackage::Zip);
+        assert_eq!(package(r#"{"what":{"kind":"playlists","names":["A"]},"package":"zip"}"#), ExportPackage::Zip);
+        assert_eq!(package(r#"{"what":{"kind":"playlists","names":["A"]},"package":"files"}"#), ExportPackage::Files);
+        assert!(serde_json::from_str::<Export>(r#"{"what":{"kind":"playlists","names":["A"]},"package":"tar"}"#).is_err());
+    }
+
+    #[test]
+    fn loose_files_are_listed_with_their_sizes_known_or_about() {
+        use crate::export::{Facts, Format, Loose, Options, Part, Plan, Track};
+        let t = |rel: &str, format: &str, ms: Option<u64>| Track {
+            path: rel.into(),
+            rel: rel.into(),
+            size: 1000,
+            facts: Facts { format: Some(format.into()), kbps: Some(900), duration_ms: ms, ..Facts::default() },
+        };
+        let plan = Plan { lists: vec![("L".into(), vec![0, 1, 2])], tracks: vec![t("a.flac", "FLAC", Some(8000)), t("b.mp3", "MP3", Some(8000)), t("c.flac", "FLAC", None)], missing: vec![] };
+        let o = Options { tracks: true, format: Format::Mp3Cbr320, lists: true, ..Options::default() };
+        let l: Loose = crate::export::loose(plan, o, |t| crate::export::kind_guessed(&t.facts));
+        assert_eq!(l.files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["a.mp3", "b.mp3", "c.mp3", "L.m3u"]);
+        assert!(matches!(l.files[3].part, Part::Text(_)));
+        assert_eq!(
+            super::loose_files(&l),
+            serde_json::json!([
+                { "path": "a.mp3", "bytes": 320_000, "estimate": true },
+                { "path": "b.mp3", "bytes": 1000, "estimate": false },
+                { "path": "c.mp3", "estimate": true },
+                { "path": "L.m3u", "bytes": 21, "estimate": false },
+            ]),
+            "320 kb/s for 8 s; as it is; a length not known"
+        );
     }
 
     #[test]

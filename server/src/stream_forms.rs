@@ -187,6 +187,106 @@ pub fn mp3(input: &Path, from_ms: u64, head: impl FnOnce(Head), mut out: impl Wr
     Ok(true)
 }
 
+/// The MP3 files an export makes: a constant 320 kb/s, or LAME's variable rate at its best quality (V0).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mp3Kind {
+    Cbr320,
+    V0,
+}
+
+/// A lossless track as an MP3 file, as players expect one: an ID3v2 tag with the source's tags and pictures (its
+/// primary tag, through lofty's mapping), then LAME's header frame (Xing for V0, Info for 320: the length, the seek
+/// table, the encoder delay and padding), then the frames. `false` (nothing written) when it is not a lossless file.
+/// The header frame is known only once every frame is made: LAME leaves a frame's room for it at the start, and it is
+/// written over that room at the end, as LAME's own command line does.
+pub fn mp3_file(input: &Path, output: &Path, kind: Mp3Kind) -> Result<bool> {
+    use std::io::{Seek, SeekFrom};
+
+    use anyhow::Context;
+    use lofty::tag::TagExt;
+    use mp3lame_encoder::{Bitrate, Builder, DualPcm, FlushGap, MonoPcm, Quality, VbrMode};
+    let Some((mut source, rate, _, _)) = open(input, 0)? else { return Ok(false) };
+    let (in_rate, in_channels) = (source.format.sample_rate, source.format.channels);
+    let channels = in_channels.min(2);
+    let mut b = Builder::new().ok_or_else(|| anyhow!("LAME could not be started"))?;
+    b.set_num_channels(channels as u8).map_err(|e| anyhow!("LAME: {e:?}"))?;
+    b.set_sample_rate(rate).map_err(|e| anyhow!("LAME: {e:?}"))?;
+    b.set_quality(Quality::NearBest).map_err(|e| anyhow!("LAME: {e:?}"))?;
+    match kind {
+        Mp3Kind::Cbr320 => b.set_brate(Bitrate::Kbps320).map_err(|e| anyhow!("LAME: {e:?}"))?,
+        Mp3Kind::V0 => {
+            b.set_vbr_mode(VbrMode::Mtrh).map_err(|e| anyhow!("LAME: {e:?}"))?;
+            // V0: LAME's `-V 0` (its VBR quality 0, the new VBR code).
+            b.set_vbr_quality(Quality::Best).map_err(|e| anyhow!("LAME: {e:?}"))?;
+        }
+    }
+    b.set_to_write_vbr_tag(true).map_err(|e| anyhow!("LAME: {e:?}"))?;
+    let mut lame = b.build().map_err(|e| anyhow!("LAME: {e:?}"))?;
+
+    let file = std::fs::File::create(output).with_context(|| format!("creating {}", output.display()))?;
+    let mut out = std::io::BufWriter::new(file);
+    // The tag first; the frames start after it.
+    let mut start = 0u64;
+    if let Some(tag) = id3v2_of(input) {
+        let mut bytes = Vec::new();
+        match tag.dump_to(&mut bytes, lofty::config::WriteOptions::default()) {
+            Ok(()) => {
+                out.write_all(&bytes)?;
+                start = bytes.len() as u64;
+            }
+            Err(e) => tracing::warn!("MP3: the tags of {} could not be written: {e}", input.display()),
+        }
+    }
+
+    let mut encoded: Vec<u8> = Vec::new();
+    let (mut left, mut right): (Vec<i16>, Vec<i16>) = (Vec::new(), Vec::new());
+    let mut sink = |planes: &[Vec<f32>], first: usize, len: usize| -> Result<()> {
+        left.clear();
+        right.clear();
+        left.extend(planes[0][first..first + len].iter().map(|x| to_i16(*x)));
+        encoded.reserve(mp3lame_encoder::max_required_buffer_size(len));
+        if channels == 2 {
+            right.extend(planes[1][first..first + len].iter().map(|x| to_i16(*x)));
+            lame.encode_to_vec(DualPcm { left: &left, right: &right }, &mut encoded).map_err(|e| anyhow!("LAME: {e:?}"))?;
+        } else {
+            lame.encode_to_vec(MonoPcm(&left), &mut encoded).map_err(|e| anyhow!("LAME: {e:?}"))?;
+        }
+        out.write_all(&encoded)?;
+        encoded.clear();
+        Ok(())
+    };
+    let mut scratch = Vec::new();
+    convert::stream(|planes| source.read(planes, &mut scratch), in_channels, in_rate, rate, &mut sink)?;
+    drop(sink);
+    // The last frames (at most 7200 bytes), padded as a file ends.
+    encoded.reserve(7200);
+    lame.flush_to_vec::<FlushGap>(&mut encoded).map_err(|e| anyhow!("LAME: {e:?}"))?;
+    out.write_all(&encoded)?;
+    // The header frame, over the room left for it.
+    let size = lame.lame_tag_size();
+    if size > 0 {
+        let mut frame = Vec::with_capacity(size);
+        if lame.lame_tag_encode_to_vec(&mut frame).is_some() {
+            out.seek(SeekFrom::Start(start))?;
+            out.write_all(&frame)?;
+        }
+    }
+    out.flush()?;
+    Ok(true)
+}
+
+/// The source's tags as an ID3v2 tag: its primary tag (else its first), every item lofty can map and its pictures
+/// (the cover inside); `None` when it has none.
+fn id3v2_of(input: &Path) -> Option<lofty::id3::v2::Id3v2Tag> {
+    use lofty::file::TaggedFileExt;
+    use lofty::tag::TagExt;
+    let options = lofty::config::ParseOptions::new().read_properties(false);
+    let tagged = lofty::probe::Probe::open(input).and_then(|p| p.options(options).read()).ok()?;
+    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?.clone();
+    let id3 = lofty::id3::v2::Id3v2Tag::from(tag);
+    (!id3.is_empty()).then_some(id3)
+}
+
 /// LAME's encoder delay at these settings (samples), as its Info header would carry it: asked of LAME itself, set up
 /// as the stream's encoder is (the crate keeps its own encoder's handle to itself).
 fn lame_delay(rate: u32, channels: usize) -> i32 {
@@ -253,6 +353,37 @@ mod tests {
         let mut later = Vec::new();
         assert!(mp3(&p, 1000, |_| {}, &mut later).unwrap());
         assert!(later.len() < out.len() * 3 / 4, "{} of {}", later.len(), out.len());
+        std::fs::remove_dir_all(p.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn an_mp3_file_has_its_tags_then_lames_header_frame() {
+        use lofty::file::TaggedFileExt;
+        use lofty::tag::{Accessor, TagExt};
+        let p = wav("mp3-file");
+        let mut tag = lofty::id3::v2::Id3v2Tag::new();
+        tag.set_title("Tone".into());
+        tag.set_artist("Sine".into());
+        tag.save_to_path(&p, lofty::config::WriteOptions::default()).unwrap();
+        for (kind, name, want) in [(Mp3Kind::Cbr320, "320.mp3", b"Info"), (Mp3Kind::V0, "v0.mp3", b"Xing")] {
+            let out = p.with_file_name(name);
+            assert!(mp3_file(&p, &out, kind).unwrap());
+            let b = std::fs::read(&out).unwrap();
+            assert_eq!(&b[..3], b"ID3", "{kind:?}: the tag first");
+            // The tag's size: four 7-bit bytes, after its 10-byte header.
+            let size = b[6..10].iter().fold(0usize, |n, x| (n << 7) | usize::from(*x & 0x7f)) + 10;
+            assert_eq!((b[size], b[size + 1] & 0xe0), (0xff, 0xe0), "{kind:?}: a frame right after it");
+            let first = &b[size..size + 200];
+            assert!(first.windows(4).any(|w| w == want), "{kind:?}: its first frame is LAME's header");
+            assert!(first.windows(4).any(|w| w == b"LAME"));
+            let read = lofty::read_from_path(&out).unwrap();
+            let t = read.primary_tag().unwrap();
+            assert_eq!((t.title().as_deref(), t.artist().as_deref()), (Some("Tone"), Some("Sine")), "{kind:?}");
+        }
+        let (cbr, v0) = (std::fs::metadata(p.with_file_name("320.mp3")).unwrap().len(), std::fs::metadata(p.with_file_name("v0.mp3")).unwrap().len());
+        assert!((70_000..95_000).contains(&cbr), "about 320 kb/s for two seconds: {cbr}");
+        assert!(v0 < cbr, "a sine needs less than 320 kb/s at V0: {v0}");
+        assert!(!mp3_file(&p.with_file_name("320.mp3"), &p.with_file_name("again.mp3"), Mp3Kind::V0).unwrap(), "not lossless: nothing");
         std::fs::remove_dir_all(p.parent().unwrap()).ok();
     }
 }

@@ -101,6 +101,14 @@ to export playlists … and albums and tracks, not crates"):
 
 One zip, streamed as it is made (0007's export, which now takes any tracks and a format).
 
+Amendment (2026-10-30, 0.9.19): **MP3 and loose files.** Two more formats: MP3 at a constant 320 kb/s and MP3 V0
+(LAME's best variable rate), lossless files converted and lossy ones as they are, as with Opus; each file with its
+tags and cover in ID3v2 and LAME's header frame (its length and seek table, so V0 seeks). And an export may come as
+loose files instead of one zip (`package: "files"`), for the app's folder and offline downloads: the server lists
+every file under the names the zip would give them (the formats' treatment chosen from each file's header, so the
+names are known before anything is converted), and each is fetched on its own, converted as it is asked for. A
+Bandcamp preview (0071) is never exported: it is left out as missing.
+
 ## Consequences
 
 - Albums and playlists: a long-press opens the menu (before: it started selecting); Select is the header's button.
