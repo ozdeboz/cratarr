@@ -26,6 +26,10 @@ import { setOwnSleep, sleep } from './sleep.svelte';
 const HEARTBEAT_MS = 5_000;
 /** After a connection that failed: again after this long, doubled each time, up to a minute. */
 const RETRY_MS = 5_000;
+/** Back from a sleep or a lost network (0.9.19; the owner, 2026-10-30: the ThinkPad came back a minute after its
+ *  Wi-Fi did, and a cast to it failed meanwhile): this long it tries again often, at most this far apart. */
+const WAKE_MS = 30_000;
+const WAKE_RETRY_MS = 1_500;
 
 export const target = $state({ connected: false, tapToPlay: false });
 
@@ -170,6 +174,8 @@ let name: string | null = null;
 let version: number | undefined;
 let sentQueue = '';
 let retry = RETRY_MS;
+/** Until when a wake's quick tries go on (0: none). */
+let wakeUntil = 0;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let reportTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -336,7 +342,7 @@ function connect() {
         waitUntil = Date.now() + wait;
         if (refusedFor() > 0) note('warn', 'waiting', { until: waitUntil, why: 'refused' });
         retryTimer = setTimeout(() => want() && connect(), wait);
-        retry = Math.min(retry * 2, 60_000);
+        retry = Date.now() < wakeUntil ? WAKE_RETRY_MS : Math.min(retry * 2, 60_000);
       };
       // Its name held by another page (another tab, another browser) or the app: this tab takes the next free one
       // after the browser's ("… 2"), at once, for itself only. Held by another user's player (several users, decision
@@ -351,6 +357,21 @@ function connect() {
       }, later);
     }
   };
+}
+
+/** Awake again (the computer, the network, the page in sight): a connection from before may be dead without having
+ *  said so (a suspended computer's), so a fresh one at once, the wait between tries short for a while. Not while the
+ *  proxy refuses this page (lib/reach). */
+function again(why: string) {
+  if (!want() || refusedFor() > 0) return;
+  wakeUntil = Date.now() + WAKE_MS;
+  retry = WAKE_RETRY_MS;
+  clearTimeout(retryTimer);
+  note('info', 'reconnecting', { why });
+  source?.close();
+  source = null;
+  target.connected = false;
+  connect();
 }
 
 function disconnect() {
@@ -391,6 +412,15 @@ if (typeof window !== 'undefined' && !inApp) {
     });
   });
   setInterval(() => target.connected && report(), HEARTBEAT_MS);
+  // Awake again: the network back, the page shown again after a while hidden (a sleep, a locked screen), or the
+  // desktop app's word that the computer woke (desktop/main.js: powerMonitor's resume and unlock-screen).
+  addEventListener('online', () => again('online'));
+  let hiddenAt = 0;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) hiddenAt = Date.now();
+    else if (hiddenAt && Date.now() - hiddenAt > WAKE_MS) again('shown');
+  });
+  desktop?.onWake?.(() => again('woke'));
   setInterval(() => target.connected && name && lastSeq() > logged && sendLog(name), LOG_MS);
   // A warning (a track that will not play): within moments.
   let soonTimer: ReturnType<typeof setTimeout> | undefined;
