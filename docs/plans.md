@@ -14,7 +14,7 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
 
 - **0.11: quick crates.** A crate made from a few typed terms: a genre, an artist meaning "sounds like" that artist,
   a label or an album, each a chip that can switch between "like" and "by"; filtered first, then ranked, with a
-  closeness cutoff and the artist's own tracks left out. The Library's Tracks page goes once these exist. With it: a
+  closeness cutoff and the artist's own tracks left out. (The Library's Tracks page already went, in 0.10.) With it: a
   mark on the tracks that have other versions, and a spike of the rules crate inside the Android app, behind a switch.
   *On trunk:* quick crates (the closeness curve counted among the crate's other words still to come), labels in
   search, the other-versions mark, the spike (done: one crossing per frame for 0075), the server's capabilities, the
