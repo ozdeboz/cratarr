@@ -5,13 +5,15 @@ edition = "2024"
 description = "Cratarr's rules for what plays and in what order: pure, for the server and for players that play on their own"
 license = "AGPL-3.0-or-later"
 
-# The page loads it as WebAssembly (wasm32-unknown-unknown, `cdylib`: the brake's plain exports); the server links it.
+# The page loads it as WebAssembly (wasm32-unknown-unknown, `cdylib`: the brake's and the matcher's plain exports); the server links it.
 [lib]
 crate-type = ["rlib", "cdylib"]
 
 # Pure (no I/O, no clock, no randomness of its own): builds for wasm32-unknown-unknown as it is.
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+# The matcher reads names as search reads them (NFKD, marks dropped): the server's own reading, now here (0.12).
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 serde_json = "1"
