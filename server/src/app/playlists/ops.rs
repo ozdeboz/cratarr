@@ -73,13 +73,29 @@ pub struct OpsEntry {
     pub track: Option<TrackRef>,
 }
 
-/// The answer: the change log's rev after the operations, and the playlist as it now is.
+/// An operation not applied, and why in a short phrase ("not found": an add whose track Cratarr cannot find). Kept
+/// with its `op_id`: sent again, it is refused again; the page drops it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct RefusedOp {
+    pub op_id: String,
+    pub why: String,
+}
+
+/// The answer: the change log's rev after the operations, the playlist as it now is, and the operations refused
+/// (empty when none).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export)]
 pub struct OpsAnswer {
     pub rev: i64,
     pub entries: Vec<OpsEntry>,
+    pub refused: Vec<RefusedOp>,
 }
+
+/// Why an add is refused: its track not found on its server, or not in a library Cratarr sees.
+const NOT_FOUND: &str = "not found";
+/// A Bandcamp preview (decision 0071).
+const NEVER_IN_A_PLAYLIST: &str = "never in a playlist";
 
 /// One call's operations at a time: each reads the playlist's entries, applies, writes and keeps them.
 static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -91,7 +107,7 @@ fn now_ms() -> i64 {
 impl PlaylistService {
     /// Applies a page's operations to one of the asking account's own playlists (as every edit: `own`), merged on
     /// the playlist as it is now, and answers it as it then is. Operations applied before (by `op_id`) are left out;
-    /// an add whose track is not in a library Cratarr sees is left out and not kept, so it can come again.
+    /// an add whose track is not in a library Cratarr sees is refused, and kept so: sent again, refused again.
     pub async fn apply_ops(&self, id: &str, want: Option<&str>, ops: Vec<PlaylistOp>) -> Result<OpsAnswer, ToggleError> {
         if ops.len() > MOST {
             return Err(ToggleError::Refused(format!("At most {MOST} operations at once.")));
@@ -116,21 +132,28 @@ impl PlaylistService {
             let (ud, k, b) = (serve.userdata.clone(), key.clone(), before.clone());
             let mut entries = tokio::task::spawn_blocking(move || ud.entries_of(&k, &b)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
             let now = now_ms();
-            let mut done = Vec::new();
+            let mut done: Vec<(String, Option<String>)> = Vec::new();
             for (i, op) in ops.iter().enumerate() {
-                if applied.contains(op.op_id()) {
+                if applied.contains_key(op.op_id()) {
                     continue;
                 }
                 let one = match op {
-                    PlaylistOp::Add { entry, after, .. } => {
-                        let Some(line) = lines.get(i).cloned().flatten() else { continue };
-                        Do::Add { entry: entry.clone(), line, after: after.clone() }
-                    }
+                    PlaylistOp::Add { entry, after, .. } => match lines.get(i).cloned().flatten() {
+                        Some(Ok(line)) => Do::Add { entry: entry.clone(), line, after: after.clone() },
+                        Some(Err(why)) => {
+                            done.push((op.op_id().to_string(), Some(why.to_string())));
+                            continue;
+                        }
+                        None => {
+                            done.push((op.op_id().to_string(), Some(NOT_FOUND.to_string())));
+                            continue;
+                        }
+                    },
                     PlaylistOp::Remove { entry, .. } => Do::Remove { entry: entry.clone() },
                     PlaylistOp::Move { entry, after, .. } => Do::Move { entry: entry.clone(), after: after.clone() },
                 };
                 entries.apply(&one, op.at(), now);
-                done.push(op.op_id().to_string());
+                done.push((op.op_id().to_string(), None));
             }
             let after = entries.lines();
             if after != before {
@@ -144,10 +167,22 @@ impl PlaylistService {
                     None => return Err(ToggleError::Refused("The playlist kept changing meanwhile: send it again.".into())),
                 }
             }
+            // Refused before (sent again) and now, in the order sent.
+            let refused: Vec<RefusedOp> = ops
+                .iter()
+                .filter_map(|op| {
+                    let why = match applied.get(op.op_id()) {
+                        Some(before) => before.clone(),
+                        None => done.iter().find(|(id, _)| id == op.op_id()).and_then(|(_, why)| why.clone()),
+                    }?;
+                    Some(RefusedOp { op_id: op.op_id().to_string(), why })
+                })
+                .collect();
             let (ud, k, e, who) = (serve.userdata.clone(), key.clone(), entries.clone(), me.clone());
             tokio::task::spawn_blocking(move || ud.keep_entries(&k, &e, &who, &done)).await.map_err(|e| anyhow::anyhow!("{e}"))??;
-            break entries;
+            break (entries, refused);
         };
+        let (entries, refused) = entries;
         let ud = serve.userdata.clone();
         let rev = tokio::task::spawn_blocking(move || ud.change_rev()).await.map_err(|e| anyhow::anyhow!("{e}"))??;
         let source = self.rows_source(want);
@@ -158,12 +193,12 @@ impl PlaylistService {
             .zip(rows)
             .map(|(e, row)| OpsEntry { entry: e.id, track: row.id.map(|id| TrackRef { source: source.clone(), id }) })
             .collect();
-        Ok(OpsAnswer { rev, entries })
+        Ok(OpsAnswer { rev, entries, refused })
     }
 
-    /// Each add's line, from its track as a connected server and the catalogue give it (never a path a page sent);
-    /// `None` for one not in a library Cratarr sees, and for every other operation.
-    async fn lines_added(&self, ops: &[PlaylistOp]) -> Vec<Option<String>> {
+    /// Each add's line, from its track as a connected server and the catalogue give it (never a path a page sent), or
+    /// why there is none; `None` for every other operation.
+    async fn lines_added(&self, ops: &[PlaylistOp]) -> Vec<Option<Result<String, &'static str>>> {
         let folders = self.lib.folders();
         let sources = self.lib.connected();
         let mut out = Vec::with_capacity(ops.len());
@@ -173,8 +208,12 @@ impl PlaylistService {
                 continue;
             };
             // A Bandcamp preview is never in a playlist (decision 0071).
-            if track.source == crate::bandcamp::SOURCE || !crate::covers::valid_item_id(&track.id) {
-                out.push(None);
+            if track.source == crate::bandcamp::SOURCE {
+                out.push(Some(Err(NEVER_IN_A_PLAYLIST)));
+                continue;
+            }
+            if !crate::covers::valid_item_id(&track.id) {
+                out.push(Some(Err(NOT_FOUND)));
                 continue;
             }
             let found = match sources.iter().find(|(a, _)| a.cfg.id == track.source) {
@@ -184,7 +223,7 @@ impl PlaylistService {
                 },
                 None => None,
             };
-            out.push(found);
+            out.push(Some(found.ok_or(NOT_FOUND)));
         }
         out
     }
@@ -218,6 +257,7 @@ mod tests {
     #[test]
     fn the_answer_is_the_rev_and_each_entry_with_its_track() {
         let a = OpsAnswer {
+            refused: vec![RefusedOp { op_id: "o9".into(), why: "not found".into() }],
             rev: 12,
             entries: vec![
                 OpsEntry { entry: "s1".into(), track: Some(TrackRef { source: "cratarr".into(), id: "tr-1".into() }) },
@@ -226,7 +266,11 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_value(&a).unwrap(),
-            serde_json::json!({ "rev": 12, "entries": [{ "entry": "s1", "track": { "source": "cratarr", "id": "tr-1" } }, { "entry": "p1", "track": null }] })
+            serde_json::json!({
+                "rev": 12,
+                "entries": [{ "entry": "s1", "track": { "source": "cratarr", "id": "tr-1" } }, { "entry": "p1", "track": null }],
+                "refused": [{ "op_id": "o9", "why": "not found" }],
+            })
         );
     }
 }

@@ -1885,7 +1885,12 @@ impl PlaylistService {
         if on && !may {
             return Err(ToggleError::Forbidden("This account may not share playlists.".into()));
         }
-        Ok(serve.userdata.set_playlist_shared(&store.key(&name), on)?)
+        let key = store.key(&name);
+        // No longer shared: the others are told it is gone (decision 0087).
+        if serve.userdata.set_playlist_shared(&key, on)? && !on {
+            serve.playlist_gone_for_others(&key);
+        }
+        Ok(())
     }
 
     /// `name`, or the first free one after it ("Evening 2") among the asking account's own playlists.

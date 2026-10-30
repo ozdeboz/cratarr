@@ -651,6 +651,7 @@ impl UserData {
         conn.execute_batch(works::SCHEMA).context("creating the works' tables")?;
         // Offline writes (0.12, decision 0087): what is counted and made once, kept 30 days.
         conn.execute_batch(offline::SCHEMA).context("keeping the plays counted and the changes made")?;
+        offline::migrate(&conn).context("bringing the change log up to date")?;
         conn.execute_batch(ALBUM_HEARTS).context("moving the panel's album hearts to the albums' stars")?;
         move_old_play_queues(&conn).context("moving the saved play queues to their apps")?;
         add_snapshot_pictures(&conn).context("giving the visuals' snapshots their pictures")?;
@@ -1747,21 +1748,23 @@ impl UserData {
         Ok(st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?)
     }
 
-    pub fn set_playlist_shared(&self, playlist: &str, on: bool) -> Result<()> {
+    /// Shares a playlist (by its key) or stops; whether that changed anything. Logged (decision 0087): shared, everyone
+    /// sees it come; no longer, its owner sees it changed (the others are told it is gone: `playlist_gone_for`). A
+    /// playlist deleted (unshared as it goes) is not logged back.
+    pub fn set_playlist_shared(&self, playlist: &str, on: bool) -> Result<bool> {
         let db = self.db();
         let n = if on {
             db.execute("INSERT OR IGNORE INTO playlist_shared (playlist, at) VALUES (?1, ?2)", params![playlist, now()])?
         } else {
             db.execute("DELETE FROM playlist_shared WHERE playlist = ?1", [playlist])?
         };
-        // Others see it come or go (decision 0087); a playlist deleted (unshared as it goes) is not logged back.
         let deleted = db
-            .prepare_cached("SELECT 1 FROM change_log WHERE kind = 'playlist' AND item = ?1 AND op = 'deleted'")?
+            .prepare_cached("SELECT 1 FROM change_log WHERE kind = 'playlist' AND item = ?1 AND op = 'deleted' AND seen_by = ''")?
             .exists([playlist])?;
         if n > 0 && !deleted {
-            offline::log_playlist(&db, playlist, offline::Op::Changed, true)?;
+            offline::log_playlist(&db, playlist, offline::Op::Changed, on)?;
         }
-        Ok(())
+        Ok(n > 0)
     }
 
     /// A playlist was written (every write: the store tells it, `playlists::on_write`): an entry that came now dates

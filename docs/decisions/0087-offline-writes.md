@@ -49,7 +49,10 @@ or newer than the server's counter: `{rev, reset: true}` (read everything again,
 days or 50,000 rows, pruned in the background. Kinds and their ids:
 
 - `playlist`: the playlist's id as the account names it (its own by name, another's shared one `owner/name`);
-  `changed` (made, edited, renamed to it, shared or no longer) or `deleted` (deleted, renamed away);
+  `changed` (made, edited, renamed to it, shared or no longer) or `deleted` (deleted, renamed away). A shared
+  playlist that stops being shared, or is deleted or renamed away while shared, is a `deleted` for every account
+  other than its owner, under its own row (`owner/name`), so a later change of it does not hide that; the page
+  ignores deletes of ids it does not hold;
 - `favourite`: `track:<source>/<id>`, `album:<source>/<id>`, `artist:<source>/<name>`, `playlist:<id>`; `changed`
   is a favourite now, `deleted` no longer;
 - `rating`: `album:<source>/<id>` (a Subsonic app's on a song: `track:<source>/<id>`); `changed`, or `deleted` at no
@@ -60,8 +63,11 @@ Crates come later (0085: a crate's rules are edited online only until the change
 
 **Playlist edits as operations.** `POST /api/playlists/{id}/ops` with
 `{ops: [{op_id, at, op: "add", entry, track: {source, id}, after} | {op_id, at, op: "remove", entry} |
-{op_id, at, op: "move", entry, after}]}` (`after`: an entry or null, the start) → `{rev, entries: [{entry, track}]}`,
-the playlist as it now is (`track` null where the line is not a track on that server, `?source=` as the rows take it).
+{op_id, at, op: "move", entry, after}]}` (`after`: an entry or null, the start) →
+`{rev, entries: [{entry, track}], refused: [{op_id, why}]}`, the playlist as it now is (`track` null where the line
+is not a track on that server, `?source=` as the rows take it) and the operations refused (empty when none; `why` a
+short phrase, "not found" for an add whose track cannot be found). The page drops a refused operation and says so in
+one line.
 
 - Every line has an entry id. The page makes an added line's; the server gives each other line one, kept beside the
   `.m3u` in the user data (playlist, entry, order). The server's own edits (the whole list put back, append, repeats
@@ -73,7 +79,8 @@ the playlist as it now is (`track` null where the line is not a track on that se
   changes nothing; an add after an entry since removed goes after that entry's last known neighbour, and after an
   entry never known, at the end.
 - The order: the last move by its time wins; a move older than the entry's last move or add changes nothing.
-- An operation's `op_id` is kept with the change log's lifetime: one sent again is not applied again.
+- An operation's `op_id` is kept with the change log's lifetime, a refused one with why: one sent again is not
+  applied again, and one refused is refused again, not tried again.
 - Ownership and permissions as every edit's: one's own playlists only.
 
 **The server says it can.** `/api/capabilities` names `offline_writes` (the header honoured and the keys kept),
