@@ -5,7 +5,7 @@ const only = process.argv.slice(2);
 for (const r of RACKS) {
   if (only.length && !only.includes(r.id)) continue;
   const t0 = performance.now();
-  const frames = goldenFrames(r.patch);
+  const frames = goldenFrames(r.patch, r.run);
   writeReference(r.id, frames);
   console.log(`${r.id}: ${frames.length} frames, ${frames[0]?.size ?? 0} numbers a frame, ${Math.round(performance.now() - t0)} ms`);
 }

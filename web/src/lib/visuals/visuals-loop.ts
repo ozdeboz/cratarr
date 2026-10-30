@@ -10,14 +10,13 @@
 import { coverUrl } from '../api';
 import { reducedMotion } from '../motion';
 import { playing } from '../remote.svelte';
-import { wavesMotion, zoomsMotion } from './aspects';
 import { chainNow } from './chain-params';
-import { settingsReport } from './effects';
 import { newEngine, stepEngine, type EngineFrame } from './engine/graph';
 import { LivePatch } from './engine/live-patch';
 import { rollOf, type Roll, type Rolled } from './engine/dice';
 import type { Randomized } from './engine/randomize';
 import { effectSlotsOf } from './engine/settings-view';
+import { frameStats } from './engine/frame-stats';
 import { FREE, holding, leversOf, type Levers } from './engine/sidechain';
 import { seedOf } from './flame';
 import type { FrameStats, MeterValues } from './meters';
@@ -430,8 +429,6 @@ export class VisualsLoop {
         return;
       }
       const d = stepped.aspects;
-      // The Flame's own (step 5): its parts, turn, rates and lights, its module's; the chain's where it has none.
-      const fl = (flameId ? stepped.params[flameId]?.flame : undefined) ?? d;
 
       // A new track's look, as the patch's Dice roll it: worked out over the next frames. Each one after the first is an
       // undo step of its own (the owner: the track may change what is on, Undo brings back the look before it).
@@ -461,8 +458,6 @@ export class VisualsLoop {
 
       // The Fluid's stirring is its own (the engine's, stirred with the frame); the Show's Bend's waves for the meters.
       const beatNow = m.playing ? m.beat : null;
-      const bendId = flat.modules.find((x) => x.type === 'bend')?.id;
-      const wavesNow = (bendId ? (stepped.params[bendId]?.waves ?? d.given[A.waves]) : d.given[A.waves]) * levers.pace;
       const stirred = stepped.fluid ?? { forces: [], flow: { energy: 0, swirl: 0 } };
 
       renderer.frame(
@@ -473,23 +468,7 @@ export class VisualsLoop {
         inputs,
       );
       renderer.measure(w, h, now / 1000);
-      const stats: Omit<FrameStats, 'tiles'> = {
-        t: now / 1000,
-        extra: (() => {
-          const fx = settingsReport(slots, d.effects, levers, d.routed);
-          const zooms = zoomsMotion(d.tunnel * levers.pace, d.dive * levers.pace);
-          return { ...fx, motion: (fx.motion ?? 0) + wavesMotion(wavesNow, d.fluid) + zooms };
-        })(),
-        turnRates: renderer.diveTurnRate ? fl.rates.map((rr) => rr + renderer!.diveTurnRate) : fl.rates,
-        shape: fl.shape,
-        weights: fl.parts.map((p) => p.weight ?? 1),
-        hue: fl.parts.map((p) => p.hue),
-        spread: fl.parts.map((p) => p.spread ?? 1),
-        scale: d.scale,
-        saturation: d.saturation,
-        look: lookCame,
-        symmetry: d.nexts.symmetry,
-      };
+      const stats = frameStats(stepped, { patch: flat, how: slots, levers, t: now / 1000, look: lookCame, diveTurn: renderer.diveTurnRate })!;
       lookCame = null;
       renderer.meterAdd(stats);
       if (now - meteredAt >= 250) {

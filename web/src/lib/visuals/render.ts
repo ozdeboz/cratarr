@@ -32,7 +32,7 @@ import { Thumbs } from './nodes/thumbs';
 import { chain, IDENTITY, toScreen, transformOf } from './transform';
 import { densityScale, Show } from './nodes/show';
 import type { NodeParams } from './engine/graph';
-import { DIVE_MOST, TUNNEL_MOST } from './zoom';
+import { stageIdsOf, stagesNow, type StageIds } from './stage-values';
 import { none } from './nodes/shared';
 
 /** Show's look with only `parts` of Show's drawn in its pass (by type), the rest at their neutral: no bend, no
@@ -49,43 +49,6 @@ function showWith(look: ShowParams, parts: ReadonlySet<string>): ShowParams {
 }
 
 /** The modules whose values the light loop and the camera take (ownLoop). */
-const LOOP_TYPES = new Set(['trails', 'fluid', 'tunnel', 'dive', 'flame']);
-
-/** Show's look with each part's own values (its module's: the engine's `params`, step 5) where it has them. */
-function ownShow(look: ShowParams, of: (type: string) => NodeParams | undefined): ShowParams {
-  const [tone, sat, curve, blur] = [of('tonemap'), of('saturate'), of('curve'), of('blur')];
-  return {
-    ...look,
-    ...(tone?.flash !== undefined ? { flash: tone.flash } : {}),
-    ...(tone?.exposure !== undefined ? { exposure: tone.exposure } : {}),
-    ...(sat?.saturation !== undefined ? { saturation: sat.saturation } : {}),
-    ...(curve?.gamma !== undefined ? { gamma: curve.gamma, floor: curve.floor ?? 0 } : {}),
-    ...(blur?.smoothing !== undefined ? { smoothing: blur.smoothing } : {}),
-  };
-}
-
-/** The light loop's and the camera's values with each module's own (the engine's `params`, step 5) where it has them:
- *  Trails' keep, the Fluid's, Tunnel's, Dive's, the Flame's size. */
-function ownLoop(now: ChainNow, of: (type: string) => NodeParams | undefined): ChainNow {
-  const [trails, fluid, tunnel, dive, flame] = [of('trails'), of('fluid'), of('tunnel'), of('dive'), of('flame')];
-  const keep = trails?.keep ?? now.carry.keep;
-  return {
-    ...now,
-    points: {
-      ...now.points,
-      ...(flame?.scale !== undefined ? { scale: flame.scale } : {}),
-      ...(flame?.flame ? { turn: flame.flame.turn } : {}),
-      ...(dive?.dive !== undefined ? { dive: DIVE_MOST * dive.dive } : {}),
-    },
-    carry: {
-      ...now.carry,
-      keep,
-      ...(fluid?.fluid !== undefined ? { fluid: fluid.fluid, warp: fluid.warp ?? 0, facets: { hex: now.carry.facets?.hex ?? false, amount: fluid.facets ?? 0 } } : {}),
-      ...(tunnel?.tunnel !== undefined ? { tunnel: TUNNEL_MOST * tunnel.tunnel } : {}),
-    },
-    show: { ...now.show, keep, ...(flame?.flame ? { hits: flame.flame.hits } : {}) },
-  };
-}
 
 /** Of `parts`, those as far as `type` in Show's order (a fusion barrier at the observed part). */
 const partsUpTo = (parts: ReadonlySet<string>, type: string) => new Set([...parts].filter((t) => SHOW_PARTS.findIndex((p) => p.type === t) <= SHOW_PARTS.findIndex((p) => p.type === type)));
@@ -226,12 +189,10 @@ export class FlameRenderer {
   private showOut: string | null = null;
   /** The types of Show's parts drawn in its pass (the rest neutral there). */
   private showParts = new Set<string>();
-  /** Show's parts' modules by type (whose values it draws with). */
-  private showIds = new Map<string, string>();
+  /** Which module each stage reads (stage-values.ts): Show's parts, the light loop's and the Flame, by type. */
+  private stageIds: StageIds = { show: new Map(), loop: new Map() };
   /** The effect module on the light in its loop (its carry pass draws it), where there is one. */
   private loopEffect: { id: string; type: string } | null = null;
-  /** The light loop's modules and the Flame by type (whose values the loop and the camera take). */
-  private loopIds = new Map<string, string>();
   /** The observed Show part's picture (Show's pass drawn again as far as it), at the buffer's size. */
   private peek: { tex: WebGLTexture; fbo: WebGLFramebuffer; w: number; h: number } | null = null;
   /** The Music modules, whether one's cover reaches the Screen, and the cover as a texture (made again as it changes). */
@@ -318,12 +279,9 @@ export class FlameRenderer {
     this.lightTransforms = stages ? c.order.filter((n) => n.type === 'transform' && stageOf(n) === 'points').map((n) => n.id) : [];
     this.showOut = stages ? (c.order.filter((n) => stageOf(n) === 'show').at(-1)?.id ?? null) : null;
     this.showParts = new Set(stages ? c.order.filter((n) => stageOf(n) === 'show').map((n) => n.type) : SHOW_PARTS.map((p) => p.type));
-    this.showIds = new Map(stages ? c.order.filter((n) => stageOf(n) === 'show').map((n) => [n.type, n.id]) : []);
     const onLight = stages ? c.order.find((n) => stageOf(n) === 'carry' && fxOfModule(n.type, {})) : undefined;
     this.loopEffect = onLight ? { id: onLight.id, type: onLight.type } : null;
-    // The light loop's modules and the Flame, by type (the first of each: the one light loop).
-    this.loopIds = new Map();
-    for (const m of flat.modules) if (LOOP_TYPES.has(m.type) && !this.loopIds.has(m.type)) this.loopIds.set(m.type, m.id);
+    this.stageIds = stageIdsOf(p, typeOf);
     this.musicIds = new Set(flat.modules.filter((m) => m.type === 'music').map((m) => m.id));
     this.coverDrawn = !!stages && c.order.some((n) => n.type === 'music');
     this.walker?.prune(this.composed?.ids ?? new Set());
@@ -422,11 +380,9 @@ export class FlameRenderer {
   frame(passes: number, now: ChainNow | null, viewWidth: number, viewHeight: number, inputs: PictureInputs | Extras | null = null) {
     const given = inputs && 'extra' in inputs ? inputsOfExtras(inputs) : inputs;
     const knobsAt = (id: string) => given?.knobs(id) ?? this.knobsIn.get(id) ?? {};
-    if (now && given?.params) {
-      const ids = this.loopIds;
-      now = ownLoop(now, (type) => (ids.has(type) ? given.params!(ids.get(type)!) : undefined));
-    }
-    const shown = now ? ownShow(now.show, (type) => (this.showIds.has(type) ? given?.params?.(this.showIds.get(type)!) : undefined)) : null;
+    // Each stage with its own modules' values (stage-values.ts), the device's where it has none.
+    if (now) now = stagesNow(now, this.stageIds, (id) => given?.params?.(id));
+    const shown = now ? now.show : null;
     const [screenWidth, screenHeight] = [viewWidth, viewHeight];
     const gl = this.gl;
     const light = this.light;

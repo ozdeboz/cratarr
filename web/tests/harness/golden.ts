@@ -25,15 +25,35 @@ const { BANDS, DEFAULTS, FLUID_FULL } = await import('../../src/lib/visuals/sett
 const { applyKnobs, applyMacros, asSet, toV2 } = await import('../../src/lib/visuals/v2.ts');
 const { v2TypeRecord } = await import('../../src/lib/visuals/v2-types.ts');
 const { EXAMPLES } = await import('../../src/lib/visuals/examples.ts');
+const { frameStats } = await import('../../src/lib/visuals/engine/frame-stats.ts');
+const { stageIdsOf, stagesNow } = await import('../../src/lib/visuals/stage-values.ts');
+const { v2Types } = await import('../../src/lib/visuals/picture-graph.ts');
+const { cratarrTypes } = await import('../../src/lib/visuals/patch.ts');
+const { RANGES } = await import('../../src/lib/visuals/settings.svelte.ts');
+const { Meters, screenTile } = await import('../../src/lib/visuals/meters.ts');
+const { CHAINS, chainRoutes } = await import('./oracle/chains.ts');
 import type { PatchV2 } from '../../src/lib/visuals/ports.ts';
+import type { MeterValues } from '../../src/lib/visuals/meters.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const GOLDEN = join(HERE, '..', 'golden');
 
-/** The racks the references cover: the Cratarr device at its defaults (the standard rack), and every example rack of
- *  the library (Fire among them). */
-export const RACKS: { id: string; patch: () => PatchV2 }[] = [
-  { id: 'standard', patch: () => toV2(structuredClone(DEFAULTS)) },
+/** How a rack is run: over which track, with reduced motion, its sidechains' loop closed through the meters (each frame
+ *  measured, the meters' values back in four times a second, as the frame loop has them: the screen's flashes from
+ *  the light the chain shows, `metered`). */
+export type RunOptions = { track?: string; still?: boolean; metered?: boolean };
+const settingsRack = (s: object) => () => toV2(structuredClone({ ...DEFAULTS, ...s }) as typeof DEFAULTS);
+/** The racks the references cover: the Cratarr device at its defaults (the standard rack: over the groove, over the
+ *  ambient track, with reduced motion, with every column's scale off 1, its sidechains closed through the meters), the
+ *  preset chains' settings as an old snapshot converts them, and every example rack of the library (Fire among them).
+ *  What the proofs on today's summary covered (the equivalence and sidechain tests, retired with it, 0.9.19). */
+export const RACKS: { id: string; patch: () => PatchV2; run?: RunOptions }[] = [
+  { id: 'standard', patch: settingsRack({}) },
+  { id: 'standard-ambient', patch: settingsRack({}), run: { track: 'tr-8934' } },
+  { id: 'standard-still', patch: settingsRack({}), run: { still: true } },
+  { id: 'standard-scaled', patch: settingsRack({ shape: 1.4, rotation: 0.6, lights: 1.3, glow: 0.7, size: 0.55, saturation: 1.2, trails: 0.8, presence: 1.5, waves: 0.65 }) },
+  { id: 'standard-metered', patch: settingsRack({}), run: { metered: true } },
+  ...CHAINS.map((c) => ({ id: `chain-${c.id}`, patch: settingsRack({ ...(c.settings ?? {}), routes: chainRoutes(c), extra: c.extra }) })),
   ...EXAMPLES.map((x) => ({ id: x.id, patch: () => structuredClone(x.patch) })),
 ];
 /** The groove (its beats in it), from half a minute in; every third frame of eight seconds at 30 fps kept. */
@@ -67,10 +87,20 @@ function put(out: Map<string, number>, key: string, v: unknown) {
   for (const [k, x] of Object.entries(v as object)) put(out, `${key}.${k}`, x);
 }
 
-/** The rack stepped as the frame loop steps it, over `t`: each kept frame's numbers. */
-export function goldenFrames(make: () => PatchV2, t: Track = track(TRACK)): Map<string, number>[] {
+/** About how bright the flame's dense parts show (relative luminance), for the closed loop's screen. */
+const BRIGHT = 0.35;
+
+/** The rack stepped as the frame loop steps it, over its track: each kept frame's numbers. */
+export function goldenFrames(make: () => PatchV2, run: RunOptions = {}): Map<string, number>[] {
+  const t: Track = track(run.track ?? TRACK);
+  const meters = run.metered ? new Meters() : null;
+  let meterValues: MeterValues | undefined;
+  let meteredAt = -Infinity;
   const types = v2TypeRecord();
+  // The renderer's types (Visuals.svelte's PICTURE_TYPES): which module of a type each stage reads.
+  const pictureTypes = v2Types(cratarrTypes(RANGES, DEFAULTS));
   let patch = make();
+  let ids = stageIdsOf(patch, pictureTypes);
   const live = new LivePatch();
   const engine = newEngine();
   const normal = newNormalState();
@@ -133,7 +163,8 @@ export function goldenFrames(make: () => PatchV2, t: Track = track(TRACK)): Map<
     const stepped = stepEngine(engine, flat, types, m, read, dt, {
       now,
       fluidFull: FLUID_FULL,
-      still: false,
+      still: !!run.still,
+      meters: meterValues,
       aspect: 16 / 9,
       view: { cover: { key: m.key ?? null, colours: null }, glide },
     });
@@ -154,8 +185,22 @@ export function goldenFrames(make: () => PatchV2, t: Track = track(TRACK)): Map<
         const d = stepped.aspects;
         const stirred = stepped.fluid ?? { forces: [], flow: { energy: 0, swirl: 0 } };
         put(out, 'camera', fv.camera);
-        put(out, 'chain', chainNow(d, { how: slots, levers: FREE, ceiling: 1, coverage: null, fire: fv.fire, position: m.position, beat: m.playing ? m.beat : null, forces: stirred.forces, flow: stirred.flow, dt, speed }));
+        // What each stage draws with: the device's values, each stage's own modules' over them (the renderer's).
+        const now = chainNow(d, { how: slots, levers: FREE, ceiling: 1, coverage: null, fire: fv.fire, position: m.position, beat: m.playing ? m.beat : null, forces: stirred.forces, flow: stirred.flow, dt, speed });
+        put(out, 'chain', stagesNow(now, ids, (id) => stepped.params[id]));
       }
+    }
+    // The meters' numbers (the frame loop's), and with the loop closed, the meters' values back in.
+    const stats = frameStats(stepped, { patch: flat, how: { ...effectSlotsOf(flat), lattice: asSet(flat, ofType('fluid'), 'lattice', types) ?? 0 }, levers: FREE, t: at, look: null });
+    if (keep && stats) put(out, 'stats', stats);
+    if (meters && stats && stepped.aspects) {
+      const lights = stepped.aspects.hits.reduce((a, h) => a + Math.max(0, h), 0) / Math.max(1, stepped.aspects.hits.length);
+      meters.add({ ...stats, tiles: [screenTile(at, Math.min(1, BRIGHT * stepped.aspects.flash * (1 + 0.6 * lights)))] });
+      if (now - meteredAt >= 250) {
+        meterValues = meters.now();
+        meteredAt = now;
+      }
+      if (keep && meterValues) put(out, 'meters', meterValues);
     }
     // What the loop does with the frame: a new track's look (the Dice) worked out and blended in, a step's Next moved on.
     for (const r of stepped.dice) {

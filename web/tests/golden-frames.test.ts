@@ -12,8 +12,8 @@ const CLOSE = 1e-6;
 
 test('the harness: the same rack twice is the same, frame for frame, and the music moves it', () => {
   for (const r of [RACKS[0], RACKS.find((x) => x.id.endsWith('fire'))!, RACKS[1]]) {
-    const a = goldenFrames(r.patch);
-    const b = goldenFrames(r.patch);
+    const a = goldenFrames(r.patch, r.run);
+    const b = goldenFrames(r.patch, r.run);
     const { worst, missing, extra } = departures(a, b);
     assert.equal(worst.d, 0, `${r.id}: ${worst.key} at frame ${worst.frame}`);
     assert.equal(missing.size + extra.size, 0);
@@ -28,7 +28,7 @@ for (const r of RACKS) {
   test(`${r.id} draws what its reference holds`, () => {
     const ref = readReference(r.id);
     assert.ok(ref, `${r.id}: no reference (make it with harness/golden-make.ts)`);
-    const { frames, worst, missing, extra } = departures(ref, goldenFrames(r.patch));
+    const { frames, worst, missing, extra } = departures(ref, goldenFrames(r.patch, r.run));
     assert.equal(frames, null, `${r.id}: ${frames?.[1]} frames against ${frames?.[0]}`);
     assert.equal(missing.size, 0, `${r.id}: no longer gives ${[...missing].slice(0, 5).join(', ')}`);
     assert.equal(extra.size, 0, `${r.id}: gives ${[...extra].slice(0, 5).join(', ')} besides`);
