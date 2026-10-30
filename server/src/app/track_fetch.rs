@@ -8,6 +8,11 @@
 //! 4. "Add to album" (`add`): tagged from MusicBrainz and the album's own tags, named as its neighbours are, the cover
 //!    inside, into the album's folder; a track it replaces goes to the trash. Undo (`UNDO`) puts it all back.
 //!
+//! A track can come from a file already on the server instead of a search (0.9.19, the owner: tracks found on old
+//! drives): one in Cratarr's own folder under slskd's (`files`), copied into staging with the original left where it is
+//! (`fetch_file`), then the same gate, the same Add to album, the same Undo. Its place on the album is the recording's
+//! on the release, never its own tags'.
+//!
 //! The searches and fetches are kept in memory (a restart forgets them; their staged files are tidied the next time).
 
 use std::collections::HashMap;
@@ -294,18 +299,28 @@ fn query(artist: &str, title: &str) -> String {
     format!("{} {}", words(artist), words(title)).split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Starts a search for the album's track of `recording`; its id.
-pub async fn search(album: &str, recording: &str, replace: Option<String>) -> Result<String> {
-    let view = release(album).await?;
+/// The release's track of `recording`: its place (disc, number) and tags are the release's, whatever a file says.
+fn track_of(view: ReleaseView, recording: &str, replacing: bool) -> Result<ReleaseTrack> {
     let track = view.tracks.into_iter().find(|t| t.recording == recording).context("That recording is not on the album's release")?;
-    if replace.is_none() && track.have.is_some() {
+    if !replacing && track.have.is_some() {
         bail!("The album has that track already");
     }
+    Ok(track)
+}
+
+/// What a search or a file is for: the album's track of `recording`.
+async fn want(album: &str, recording: &str, replace: Option<String>) -> Result<Wanted> {
+    let track = track_of(release(album).await?, recording, replace.is_some())?;
+    Ok(Wanted { album: album.to_string(), track, replace })
+}
+
+/// Starts a search for the album's track of `recording`; its id.
+pub async fn search(album: &str, recording: &str, replace: Option<String>) -> Result<String> {
+    let wanted = want(album, recording, replace).await?;
     let (slskd, _) = slskd().await?;
-    let text = query(&track.artist, &track.title);
+    let text = query(&wanted.track.artist, &wanted.track.title);
     let bandcamp = format!("https://bandcamp.com/search?q={}&item_type=t", text.replace(' ', "+"));
     let id = new_id();
-    let wanted = Wanted { album: album.to_string(), track, replace };
     let length_ms = wanted.track.length_ms;
     jobs(|j| {
         j.searches.insert(id.clone(), SearchJob { wanted, view: SearchView { state: Searching::Searching, candidates: Vec::new(), bandcamp, why: None } });
@@ -483,12 +498,26 @@ fn tidy(staging: &Path) {
 
 /// The gate: decoded whole, of the recording's length, and the recording by AcoustID; its score.
 async fn gate(file: &Path, track: &ReleaseTrack) -> Result<f32> {
+    gate_with(file, track, looked_up).await
+}
+
+/// What AcoustID knows of a file, asked with the server's key.
+async fn looked_up(print: crate::acoustid::Print) -> Result<Vec<crate::acoustid::Found>> {
+    let ud = served()?.userdata.clone();
+    let key = tokio::task::spawn_blocking(move || acoustid_key(&ud)).await??.context("AcoustID is not set up: Settings › Server")?;
+    crate::acoustid::lookup(&key, &print).await
+}
+
+/// [`gate`], asking `lookup` what AcoustID knows of the file (the tests' stands in for AcoustID).
+async fn gate_with<F, Fut>(file: &Path, track: &ReleaseTrack, lookup: F) -> Result<f32>
+where
+    F: FnOnce(crate::acoustid::Print) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<crate::acoustid::Found>>>,
+{
     let f = file.to_path_buf();
     let print = tokio::task::spawn_blocking(move || crate::acoustid::print(&f)).await??;
     refused_for(&print, track.length_ms)?;
-    let ud = served()?.userdata.clone();
-    let key = tokio::task::spawn_blocking(move || acoustid_key(&ud)).await??.context("AcoustID is not set up: Settings › Server")?;
-    let found = crate::acoustid::lookup(&key, &print).await?;
+    let found = lookup(print).await?;
     crate::acoustid::names(&found, &track.recording).context("AcoustID does not know this file as that recording")
 }
 
@@ -504,6 +533,206 @@ fn refused_for(print: &crate::acoustid::Print, length_ms: Option<i64>) -> Result
         }
     }
     Ok(())
+}
+
+// ---- 3b. A file already on the server
+
+/// The formats a file is taken in: the library's, which Cratarr writes tags into (as a search keeps).
+const FORMATS: [&str; 2] = ["flac", "mp3"];
+/// The most files listed, and how many folders deep they are looked for.
+const FILES_AT_MOST: usize = 1000;
+const FILES_DEEP: usize = 6;
+
+/// A file in Cratarr's slskd folder, as the page offers them to pick from (its tags as the file has them).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackFile {
+    /// Relative to the folder, with `/`.
+    pub path: String,
+    pub name: String,
+    pub bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_no: Option<u32>,
+}
+
+/// Where files already on the server are taken from: Cratarr's own folder under slskd's completed downloads
+/// (`<folder>/cratarr`, `/slskd/cratarr` in the container), and the folders the owner makes in it; canonical.
+fn files_folder(ud: &crate::userdata::UserData) -> Result<PathBuf> {
+    let folder = choice(ud, SLSKD_FOLDER)?.context("slskd's folder is not set: Settings › Server")?;
+    let own = Path::new(&folder).join(crate::slskd::FOLDER);
+    std::fs::canonicalize(&own).with_context(|| format!("{} is not a folder Cratarr can see", own.display()))
+}
+
+fn is_taken(path: &Path) -> bool {
+    path.extension().and_then(|x| x.to_str()).is_some_and(|x| FORMATS.contains(&x.to_ascii_lowercase().as_str()))
+}
+
+/// The file `rel` names inside `root` (canonical), when it is one Cratarr takes: named relative to it with no `..`,
+/// not through a link leading out, not in one of Cratarr's own downloads' folders, FLAC or MP3. Its canonical path.
+fn file_in(root: &Path, rel: &str) -> Result<PathBuf> {
+    let p = Path::new(rel);
+    let plain = p.components().next().is_some() && p.components().all(|c| matches!(c, std::path::Component::Normal(_)));
+    if !plain {
+        bail!("Not a file in Cratarr's slskd folder");
+    }
+    let full = std::fs::canonicalize(root.join(p)).context("No such file in Cratarr's slskd folder")?;
+    let inner = full.strip_prefix(root).ok().context("Not a file in Cratarr's slskd folder")?;
+    if inner.components().next().and_then(|c| c.as_os_str().to_str()).is_some_and(crate::slskd::is_batch) {
+        bail!("That file is one of Cratarr's own downloads");
+    }
+    if !full.is_file() {
+        bail!("Not a file in Cratarr's slskd folder");
+    }
+    if !is_taken(&full) {
+        bail!("Only FLAC and MP3 files are taken in");
+    }
+    Ok(full)
+}
+
+/// The FLAC and MP3 files in `root` (canonical) and the folders under it, in path order, at most [`FILES_AT_MOST`];
+/// hidden ones, Cratarr's own downloads' folders and links leading out left out. Blocking.
+fn files_in(root: &Path) -> Vec<TrackFile> {
+    fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            if out.len() >= FILES_AT_MOST {
+                return;
+            }
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || (depth == 0 && crate::slskd::is_batch(&name)) {
+                continue;
+            }
+            let Ok(kind) = e.file_type() else { continue };
+            let path = e.path();
+            if kind.is_dir() {
+                if depth < FILES_DEEP {
+                    walk(root, &path, depth + 1, out);
+                }
+            } else if is_taken(&path) && (kind.is_file() || std::fs::canonicalize(&path).is_ok_and(|t| t.starts_with(root) && t.is_file())) {
+                out.push(path);
+            }
+        }
+    }
+    let mut paths = Vec::new();
+    walk(root, root, 0, &mut paths);
+    paths.iter().filter_map(|p| listed(root, p)).collect()
+}
+
+/// A file as listed: its size, and its length and tags as its headers have them (no pictures read).
+fn listed(root: &Path, path: &Path) -> Option<TrackFile> {
+    use lofty::config::{ParseOptions, ParsingMode};
+    use lofty::prelude::*;
+    let bytes = std::fs::metadata(path).ok()?.len();
+    let rel = path.strip_prefix(root).ok()?.to_string_lossy().replace('\\', "/");
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    fn read(path: &Path) -> Option<lofty::file::TaggedFile> {
+        let options = ParseOptions::new().read_cover_art(false).parsing_mode(ParsingMode::Relaxed);
+        lofty::probe::Probe::open(path).ok()?.options(options).guess_file_type().ok()?.read().ok()
+    }
+    fn text(v: Option<std::borrow::Cow<'_, str>>) -> Option<String> {
+        v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    }
+    let file = read(path);
+    let tag = file.as_ref().and_then(|f| f.primary_tag().or_else(|| f.first_tag()));
+    Some(TrackFile {
+        path: rel,
+        name,
+        bytes,
+        duration_secs: file.as_ref().map(|f| f.properties().duration().as_secs_f64()).filter(|d| *d > 0.0),
+        artist: tag.and_then(|t| text(t.artist())),
+        album: tag.and_then(|t| text(t.album())),
+        title: tag.and_then(|t| text(t.title())),
+        track_no: tag.and_then(|t| t.track()),
+    })
+}
+
+fn words(s: &str) -> Vec<String> {
+    s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+}
+
+/// Best match for `q` first: how many of its words are among a file's artist's, title's and name's (ties keep their
+/// order).
+fn by_words(files: &mut [TrackFile], q: &str) {
+    let asked = words(q);
+    if asked.is_empty() {
+        return;
+    }
+    files.sort_by_cached_key(|f| {
+        let have: std::collections::HashSet<String> = [f.artist.as_deref(), f.title.as_deref(), Some(f.name.as_str())].into_iter().flatten().flat_map(words).collect();
+        std::cmp::Reverse(asked.iter().filter(|w| have.contains(*w)).count())
+    });
+}
+
+/// The files in Cratarr's slskd folder a track can be taken from; with `q`, best match first.
+pub async fn files(q: Option<String>) -> Result<Vec<TrackFile>> {
+    let ud = served()?.userdata.clone();
+    tokio::task::spawn_blocking(move || -> Result<Vec<TrackFile>> {
+        let mut files = files_in(&files_folder(&ud)?);
+        if let Some(q) = q {
+            by_words(&mut files, &q);
+        }
+        Ok(files)
+    })
+    .await?
+}
+
+/// Takes the album's track of `recording` from a file in Cratarr's slskd folder (`rel`, relative to it), as a
+/// search's candidate is fetched: copied into staging, the original left where it is, then gated. The fetch's id, its
+/// state checking, then passed or refused. One file at a time.
+pub async fn fetch_file(album: &str, recording: &str, replace: Option<String>, rel: &str) -> Result<String> {
+    let s = served()?;
+    let (ud, rel) = (s.userdata.clone(), rel.to_string());
+    let from = tokio::task::spawn_blocking(move || file_in(&files_folder(&ud)?, &rel)).await??;
+    let wanted = want(album, recording, replace).await?;
+    let staging = Path::new(s.data_dir.as_deref().context("Cratarr's data folder is needed")?).join("track-fetch");
+    tidy(&staging);
+    let id = new_id();
+    let to = staging.join(&id).join(from.file_name().context("no file name")?);
+    jobs(|j| {
+        let view = FetchView { state: Fetching::Checking, percent: 100.0, why: None, score: None };
+        j.fetches.insert(id.clone(), FetchJob { wanted: wanted.clone(), view, staged: Some(to.clone()) });
+    });
+    tell(&id);
+    let job = id.clone();
+    tokio::spawn(async move {
+        let verdict = take(&from, &to, &wanted.track, looked_up).await;
+        jobs(|j| {
+            if let Some(f) = j.fetches.get_mut(&job) {
+                match &verdict {
+                    Ok(score) => (f.view.state, f.view.score) = (Fetching::Passed, Some(*score)),
+                    Err(e) => (f.view.state, f.view.why) = (Fetching::Refused, Some(format!("{e:#}"))),
+                }
+            }
+        });
+        tell(&job);
+    });
+    Ok(id)
+}
+
+/// The file copied to `to` in staging (the original stays), then gated; its score.
+async fn take<F, Fut>(from: &Path, to: &Path, track: &ReleaseTrack, lookup: F) -> Result<f32>
+where
+    F: FnOnce(crate::acoustid::Print) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<crate::acoustid::Found>>>,
+{
+    let (f, t) = (from.to_path_buf(), to.to_path_buf());
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        std::fs::create_dir_all(t.parent().context("no folder")?)?;
+        std::fs::copy(&f, &t).with_context(|| format!("copying {} into staging", f.display()))?;
+        Ok(())
+    })
+    .await??;
+    gate_with(to, track, lookup).await
 }
 
 // ---- 4. Add to album
@@ -774,5 +1003,169 @@ mod tests {
         assert_eq!(view.tracks[0].have.as_ref().map(|h| h.id.as_str()), Some("f1"));
         assert!(view.tracks[1].have.is_none(), "Bloom is missing");
         assert_eq!((view.tracks[1].recording.as_str(), view.tracks[1].track_id.as_str()), ("r2", "t2"));
+    }
+
+    // ---- A file already on the server
+
+    use crate::retag::fixtures::dir;
+    use lofty::tag::ItemKey;
+
+    fn tags(path: &Path, items: &[(ItemKey, &str)]) {
+        use lofty::tag::{ItemValue, TagItem};
+        crate::retag::rewrite(
+            path,
+            |tag| {
+                for (k, v) in items {
+                    tag.insert(TagItem::new(k.clone(), ItemValue::Text(v.to_string())));
+                }
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+    }
+
+    /// Ten seconds of a tone as FLAC at `path`, tagged as the old drive's file is: its own number 06.
+    fn old_flac(path: &Path, name: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let w = crate::analysis::tests::wav(name, 10.0, |t| 0.2 * (t * (440.0 + 200.0 * (t * 0.7).sin()) * std::f64::consts::TAU).sin() as f32);
+        crate::convert::to_cd_flac(&w, path).unwrap();
+        std::fs::remove_file(&w).ok();
+        tags(path, &[(ItemKey::TrackArtist, "Arushi Jain"), (ItemKey::AlbumTitle, "Delight"), (ItemKey::TrackTitle, "Bloom"), (ItemKey::TrackNumber, "06")]);
+    }
+
+    /// The release: Bloom (r7) is its seventh track, ten seconds long.
+    fn delight() -> ReleaseView {
+        let credit = serde_json::json!([{ "name": "Arushi Jain", "joinphrase": "", "artist": { "id": "art" } }]);
+        release_of(&serde_json::json!({
+            "id": "rel", "title": "Delight", "artist-credit": credit,
+            "media": [{ "position": 1, "tracks": [
+                { "id": "t6", "position": 6, "title": "Euphoria", "length": 300_000, "recording": { "id": "r6" }, "artist-credit": credit },
+                { "id": "t7", "position": 7, "title": "Bloom", "length": 10_000, "recording": { "id": "r7" }, "artist-credit": credit }
+            ]}]
+        }))
+    }
+
+    fn acoustid_says(score: f32, recording: &str) -> impl FnOnce(crate::acoustid::Print) -> std::future::Ready<Result<Vec<crate::acoustid::Found>>> {
+        let found = vec![crate::acoustid::Found { score, recordings: vec![crate::acoustid::Recording { id: recording.to_string() }] }];
+        move |_| std::future::ready(Ok(found))
+    }
+
+    async fn never_asked(_: crate::acoustid::Print) -> Result<Vec<crate::acoustid::Found>> {
+        panic!("AcoustID is not asked about a file refused before it")
+    }
+
+    #[test]
+    fn only_a_file_inside_cratarrs_slskd_folder_is_taken() {
+        let d = dir("trackfile-paths");
+        let root = d.join("cratarr");
+        std::fs::create_dir_all(root.join("Old drive")).unwrap();
+        std::fs::write(root.join("Old drive/06 Bloom.flac"), b"x").unwrap();
+        std::fs::write(root.join("Old drive/notes.txt"), b"x").unwrap();
+        std::fs::write(d.join("outside.flac"), b"x").unwrap();
+        let batch = "0b6f4bd4-2f0c-4b7e-9a51-6c1c0d8f7a11";
+        std::fs::create_dir_all(root.join(batch)).unwrap();
+        std::fs::write(root.join(batch).join("x.flac"), b"x").unwrap();
+        let root = std::fs::canonicalize(&root).unwrap();
+        assert_eq!(file_in(&root, "Old drive/06 Bloom.flac").unwrap(), root.join("Old drive").join("06 Bloom.flac"));
+        assert!(file_in(&root, "../outside.flac").is_err(), "..");
+        assert!(file_in(&root, "Old drive/../../outside.flac").is_err(), ".. further in");
+        assert!(file_in(&root, "Old drive/../Old drive/06 Bloom.flac").is_err(), ".. even when it comes back in");
+        assert!(file_in(&root, d.join("outside.flac").to_str().unwrap()).is_err(), "absolute, outside");
+        assert!(file_in(&root, root.join("Old drive/06 Bloom.flac").to_str().unwrap()).is_err(), "absolute, even inside");
+        assert!(file_in(&root, "Old drive/notes.txt").is_err(), "not FLAC or MP3");
+        assert!(file_in(&root, "Old drive").is_err(), "a folder");
+        assert!(file_in(&root, "").is_err());
+        assert_eq!(file_in(&root, &format!("{batch}/x.flac")).unwrap_err().to_string(), "That file is one of Cratarr's own downloads");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(d.join("outside.flac"), root.join("Old drive/link out.flac")).unwrap();
+            assert!(file_in(&root, "Old drive/link out.flac").is_err(), "a link leading out");
+            std::os::unix::fs::symlink(root.join("Old drive/06 Bloom.flac"), root.join("link in.flac")).unwrap();
+            assert!(file_in(&root, "link in.flac").is_ok(), "a link inside");
+            assert!(files_in(&root).iter().all(|f| f.name != "link out.flac"), "nor listed");
+        }
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn the_listing_reads_tags_and_leaves_out_what_is_not_audio() {
+        let d = dir("trackfile-list");
+        let file = d.join("Old drive/06 Bloom.flac");
+        old_flac(&file, "trackfile-list");
+        std::fs::write(d.join("Old drive/notes.txt"), b"x").unwrap();
+        std::fs::write(d.join("Old drive/cover.jpg"), b"x").unwrap();
+        std::fs::write(d.join("Old drive/.hidden.flac"), b"x").unwrap();
+        let batch = d.join("0b6f4bd4-2f0c-4b7e-9a51-6c1c0d8f7a11");
+        std::fs::create_dir_all(&batch).unwrap();
+        std::fs::copy(&file, batch.join("mid-fetch.flac")).unwrap();
+        let files = files_in(&std::fs::canonicalize(&d).unwrap());
+        assert_eq!(files.len(), 1, "{files:?}");
+        let f = &files[0];
+        assert_eq!((f.path.as_str(), f.name.as_str(), f.bytes), ("Old drive/06 Bloom.flac", "06 Bloom.flac", std::fs::metadata(&file).unwrap().len()));
+        assert_eq!((f.artist.as_deref(), f.album.as_deref(), f.title.as_deref(), f.track_no), (Some("Arushi Jain"), Some("Delight"), Some("Bloom"), Some(6)));
+        assert!(f.duration_secs.is_some_and(|s| (s - 10.0).abs() < 0.1), "{:?}", f.duration_secs);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn asked_words_put_the_best_match_first() {
+        let f = |name: &str, artist: Option<&str>, title: Option<&str>| TrackFile {
+            path: name.into(),
+            name: name.into(),
+            bytes: 1,
+            duration_secs: None,
+            artist: artist.map(Into::into),
+            album: None,
+            title: title.map(Into::into),
+            track_no: None,
+        };
+        let mut files = vec![f("01 Euphoria.flac", Some("Arushi Jain"), Some("Euphoria")), f("x.mp3", None, None), f("07.flac", Some("Arushi Jain"), Some("Bloom"))];
+        by_words(&mut files, "arushi jain - Bloom");
+        let order = |files: &[TrackFile]| files.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+        assert_eq!(order(&files), ["07.flac", "01 Euphoria.flac", "x.mp3"]);
+        by_words(&mut files, " – ");
+        assert_eq!(order(&files), ["07.flac", "01 Euphoria.flac", "x.mp3"], "no words: the order kept");
+    }
+
+    #[test]
+    fn the_recording_places_the_track_never_the_files_own_number() {
+        let t = track_of(delight(), "r7", false).unwrap();
+        assert_eq!((t.disc, t.position, t.title.as_str()), (1, 7, "Bloom"));
+        assert!(track_of(delight(), "r9", false).is_err(), "not on the release");
+        // The file says 06; taken into the album beside 05, it is named and tagged 07.
+        let d = dir("trackfile-number");
+        let file = d.join("06 Bloom.flac");
+        old_flac(&file, "trackfile-number");
+        let neighbour = d.join("05 Euphoria.flac");
+        old_flac(&neighbour, "trackfile-neighbour");
+        tags(&neighbour, &[(ItemKey::TrackTitle, "Euphoria"), (ItemKey::TrackNumber, "05")]);
+        assert_eq!(name_like("05 Euphoria.flac", t.position, &t.title, "flac"), "07 Bloom.flac");
+        tag(&file, &neighbour, &t).unwrap();
+        let got = super::super::fixes::values(&file, &["tracknumber", "title", "album", "musicbrainz_trackid"]).unwrap();
+        assert_eq!(got, [Some("07".to_string()), Some("Bloom".into()), Some("Delight".into()), Some("r7".into())]);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[tokio::test]
+    async fn a_file_on_the_server_is_copied_and_gated_its_original_left() {
+        let d = dir("trackfile-take");
+        let from = d.join("cratarr/Old drive/06 Bloom.flac");
+        old_flac(&from, "trackfile-take");
+        let before = std::fs::read(&from).unwrap();
+        let track = track_of(delight(), "r7", false).unwrap();
+        let to = d.join("staging/f1/06 Bloom.flac");
+        assert_eq!(take(&from, &to, &track, acoustid_says(0.97, "r7")).await.unwrap(), 0.97);
+        assert_eq!(std::fs::read(&from).unwrap(), before, "the original stays as it was");
+        assert_eq!(std::fs::read(&to).unwrap(), before, "a copy staged");
+        // AcoustID names another recording, or is not sure: refused.
+        let err = take(&from, &d.join("staging/f2/06 Bloom.flac"), &track, acoustid_says(0.99, "r6")).await.unwrap_err();
+        assert_eq!(err.to_string(), "AcoustID does not know this file as that recording");
+        assert!(take(&from, &d.join("staging/f3/06 Bloom.flac"), &track, acoustid_says(0.8, "r7")).await.is_err());
+        // Off the recording's length: refused before AcoustID is asked.
+        let longer = ReleaseTrack { length_ms: Some(30_000), ..track.clone() };
+        let err = take(&from, &d.join("staging/f4/06 Bloom.flac"), &longer, never_asked).await.unwrap_err();
+        assert_eq!(err.to_string(), "It is 20 s shorter than the recording");
+        assert_eq!(std::fs::read(&from).unwrap(), before, "and the original still there");
+        std::fs::remove_dir_all(&d).ok();
     }
 }

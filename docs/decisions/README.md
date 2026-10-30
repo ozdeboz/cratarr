@@ -218,3 +218,6 @@ by a later record that says so in its header. A new decision takes the next numb
 - [0079: Listening along: following another listener, asking for a track, and a guest
   page](0079-follow-and-queue-requests.md): accepted. One may follow another user's player, opted in, from anywhere,
   kept in step by Cratarr; followers and guests at home ask for tracks the leader accepts or declines.
+- [0080: Single-track intake: one track into an album, checked before it goes in](0080-single-track-intake.md):
+  accepted; amended 2026-10-30. One track at a time from a Soulseek search or, since 0.9.19, a file in Cratarr's
+  slskd folder, gated by a whole decode, the recording's length and AcoustID, then added to the album with Undo.

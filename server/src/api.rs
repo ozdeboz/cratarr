@@ -269,6 +269,8 @@ pub fn router(app: Arc<App>) -> Router {
             .route("/api/track-search/{id}/fetch", post(start_track_fetch))
             .route("/api/track-fetch/{id}", get(track_fetch).delete(drop_track_fetch))
             .route("/api/track-fetch/{id}/add", post(add_fetched_track))
+            .route("/api/track-files", get(track_files))
+            .route("/api/track-files/fetch", post(start_file_fetch))
             .route("/api/settings/slskd", get(get_slskd).put(put_slskd))
             .route("/api/settings/server-runtime", get(get_runtime).put(put_runtime))
             .route("/api/settings/acoustid", get(get_acoustid).put(put_acoustid))
@@ -5670,12 +5672,18 @@ struct TrackSearch {
     replace: Option<TrackRef>,
 }
 
-/// One slskd search for one of the release's tracks (never bulk).
-async fn start_track_search(Json(b): Json<TrackSearch>) -> Result<Json<serde_json::Value>, ApiError> {
+/// The album is Cratarr's own, and the track to replace on it.
+fn own_track(b: &TrackSearch) -> Result<(), ApiError> {
     own_album(&b.album.source)?;
     if b.replace.as_ref().is_some_and(|r| r.source != b.album.source) {
         return Err(ToggleError::Refused("The track to replace is not on that album.".into()).into());
     }
+    Ok(())
+}
+
+/// One slskd search for one of the release's tracks (never bulk).
+async fn start_track_search(Json(b): Json<TrackSearch>) -> Result<Json<serde_json::Value>, ApiError> {
+    own_track(&b)?;
     let id = crate::app::track_fetch::search(&b.album.id, &b.recording, b.replace.map(|r| r.id)).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!({ "id": id })))
 }
@@ -5702,6 +5710,33 @@ async fn track_fetch(Path(id): Path<String>) -> Result<Json<crate::app::track_fe
 async fn drop_track_fetch(Path(id): Path<String>) -> StatusCode {
     tokio::task::spawn_blocking(move || crate::app::track_fetch::drop_fetch(&id)).await.ok();
     StatusCode::NO_CONTENT
+}
+
+#[derive(Deserialize)]
+struct FilesAsked {
+    #[serde(default)]
+    q: Option<String>,
+}
+
+/// The FLAC and MP3 files in Cratarr's slskd folder to take a track from (0.9.19); with `q`, best match first.
+async fn track_files(Query(a): Query<FilesAsked>) -> Result<Json<Vec<crate::app::track_fetch::TrackFile>>, ApiError> {
+    Ok(Json(crate::app::track_fetch::files(a.q).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
+}
+
+#[derive(Deserialize)]
+struct FileFetch {
+    /// Relative to Cratarr's slskd folder, as listed.
+    path: String,
+    #[serde(flatten)]
+    track: TrackSearch,
+}
+
+/// One file already on the server taken as a fetch is: copied (the original stays) and checked, then Add or drop.
+async fn start_file_fetch(Json(b): Json<FileFetch>) -> Result<Json<serde_json::Value>, ApiError> {
+    own_track(&b.track)?;
+    let t = b.track;
+    let fetch = crate::app::track_fetch::fetch_file(&t.album.id, &t.recording, t.replace.map(|r| r.id), &b.path).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
+    Ok(Json(json!({ "id": fetch })))
 }
 
 /// A checked track into its album; Undo takes it out again (and puts back the one it replaced).
