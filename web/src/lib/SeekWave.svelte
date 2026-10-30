@@ -9,6 +9,7 @@
   import Icon from './Icon.svelte';
   import { accentFor, keepAccent } from './accents.svelte';
   import { appInfo, inApp } from './app.svelte';
+  import { startStopNow } from './device.svelte';
   import { deckNow, local } from './localPlayer.svelte';
   import { isLocal } from './output.svelte';
   import { port } from './player/port.svelte';
@@ -178,7 +179,7 @@
   const anchorOf = () => Math.min(0.9, Math.max(0.1, zoomAnchor ?? 0.5));
   /** Whether a hold winds on through the queue: Start and stop's as the player that winds has it, the app's in the app
    *  (the owner, 2026-10-29: the zoom's other tracks and their boundaries never showed there). */
-  const throughQueue = $derived((inApp ? appInfo.startStop : prefs.startStop).edges === 'queue');
+  const throughQueue = $derived(startStopNow().edges === 'queue');
   const wideTarget = $derived.by((): { W: number } | null => {
     // Until it is let go (the owner, 2026-10-28): then back to this track's own view.
     if (!zoomOn || !holdNow.held || !throughQueue || !hereLen) return null;
