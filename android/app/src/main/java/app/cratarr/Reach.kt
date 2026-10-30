@@ -176,6 +176,12 @@ object Reach {
             prefs.serverUrl?.let { status(context, it) }
             prefs.serverUrl
         } else {
+            // Held back after a refusal there (no session yet, say), while still known as this app's Cratarr on this
+            // network: the other address's session goes there, which ends the hold (0.12: one sign-in for both
+            // addresses, the owner 2026-10-30). Still held, the network has not changed, so neither has what it is.
+            val localOrigin = Prefs.originOf(local)
+            if (localOrigin != null && localTrusted == localOrigin && Net.refused(context, local)) Sessions.toward(context, local)
+            val held = Net.refused(context, local)
             // Both at once: away, the local one's silence and the public one's answer take no longer than the first.
             val l = asks.submit<Health> { kept(context, local, LOCAL_MS) }
             // The proxy's refusal is an answer too: there, the page asks for the sign-in.
@@ -187,7 +193,11 @@ object Reach {
             }
             r.get()
             val own = ownCratarr(prefs, l.get())
-            localTrusted = Prefs.originOf(local)?.takeIf { own }
+            localTrusted = when {
+                own -> localOrigin
+                held && l.get().code == null -> localTrusted
+                else -> null
+            }
             if (!own && l.get().code != null) Log.w(TAG, "$local answers, but not as this app's Cratarr: not used")
             when {
                 own -> prefs.preferredLocal
@@ -198,6 +208,8 @@ object Reach {
         checked = SystemClock.elapsedRealtime()
         // Written down whenever it differs (an address just changed, too): who follows the address in use hears it.
         if (pick != prefs.inUse) {
+            // The session goes along: the address taken into use gets the other's when it has none (0.12, as above).
+            pick?.let { Sessions.toward(context, it) }
             Log.i(TAG, "now on $pick")
             LinkLog.add(context, "info", "playon", "address changed", "from" to prefs.inUse, "to" to pick)
             prefs.use(pick)

@@ -367,6 +367,9 @@ class MainActivity : AppCompatActivity() {
             onError = { cannotReach(url, it) },
             onGone = { show(url) },
             deviceCover = { DeviceMusic.cover(app, it) },
+            // One sign-in for both addresses (0.12, the owner 2026-10-30): the session a page loaded with goes to the
+            // other address too; a sign-in page with the other's session at hand takes it and loads again.
+            onLoaded = { v, loaded -> if (Sessions.loaded(app, loaded) && v === webView) v.reload() },
         )
         // The page's service worker asks for the page's files too (decision 0085): from the app's copy, as above.
         if (WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_BASIC_USAGE) &&
@@ -399,6 +402,8 @@ class MainActivity : AppCompatActivity() {
         webView = view
         keepPagePrefs(view)
         shown = url
+        // The other address's session, when this one has none: no sign-in page for a moment as the address changes.
+        Sessions.toward(app, url)
         view.loadUrl(openAt?.let { "${url.trimEnd('/')}/$it" } ?: url)
         openAt = null
     }
