@@ -23,7 +23,6 @@
   import SwipeBehind from './SwipeBehind.svelte';
   import GroupVolume from './GroupVolume.svelte';
   import { hold } from './hold';
-  import { live } from './live.svelte';
   import MenuEntry from './MenuEntry.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import { canPlayHere } from './localPlayer.svelte';
@@ -41,11 +40,10 @@
   /** A long press, as the rest of the page's (a track's menu). */
   const HOLD_MS = 500;
 
-  // The media server's player, named only where a browser that cannot play here plays on it (lib/player/port).
-  const remoteName = $derived(live.view?.now_playing?.player ?? 'The server’s player');
   const src = $derived(shownCover());
   const here = $derived(prefs.output === 'local' && canPlayHere);
-  const shown = $derived(here || drivenName() !== null ? outputName() : remoteName);
+  // A browser that cannot play here, with no player chosen: nowhere yet (lib/player/port).
+  const shown = $derived(here || drivenName() !== null ? outputName() : 'Choose a player');
   const group = $derived(groupOf(head()));
   // Holding groups: offered while one of Cratarr's players is played on (in the app, this device is one).
   // A group's leader is one of the app's players: a Kodi follows, never leads.

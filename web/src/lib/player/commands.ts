@@ -76,7 +76,7 @@ export const outputOfTarget = (target: string): 'local' | `player:${string}` =>
   target.startsWith('player:') && target.length > 'player:'.length ? (target as `player:${string}`) : 'local';
 export const targetOfOutput = (output: 'local' | `player:${string}`) => (output.startsWith('player:') ? output : 'self');
 
-/** Which player the page drives (decisions 0022, 0031): its own queue (this browser's or app's player, or one of
- *  Cratarr's players it drives); else, a browser that cannot play here with no player chosen, the media server's
- *  player, as the one way it can play at all. */
+/** Whether the page drives a player (decisions 0022, 0031): its own queue (this browser's or app's player, or one of
+ *  Cratarr's players it drives). False: a browser that cannot play here with no player chosen, nowhere to play (0.12:
+ *  no longer the media server's player). */
 export const holdsQueue = (output: string, canPlayHere: boolean, driven: string | null) => (output === 'local' && canPlayHere) || driven !== null;
