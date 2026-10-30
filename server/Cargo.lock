@@ -464,7 +464,6 @@ dependencies = [
  "tracing-subscriber",
  "tract-onnx",
  "ts-rs",
- "unicode-normalization",
  "zip",
 ]
 
