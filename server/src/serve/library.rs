@@ -833,6 +833,13 @@ impl Library {
         Ok(out)
     }
 
+    /// An artist's name by their id (a Subsonic app's star or rating, logged by name: decision 0087).
+    pub fn artist_name(&self, id: &str) -> Result<Option<String>> {
+        let db = self.db();
+        let mut st = db.prepare_cached("SELECT name FROM artists WHERE id = ?1 LIMIT 1")?;
+        Ok(st.query_row([id], |r| r.get(0)).optional()?)
+    }
+
     /// An artist by name, as the library writes it (any case): their id and MusicBrainz id.
     pub fn artist_by_name(&self, name: &str) -> Result<Option<(String, Option<String>)>> {
         let db = self.db();

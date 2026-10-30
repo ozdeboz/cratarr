@@ -33,6 +33,9 @@ pub const CODE: &[&str] = &[
     "intake_check",
     "musicbrainz_settings",
     "offline",
+    // A change's own time (`X-Cratarr-At`) honoured, the last change winning, and `Idempotency-Key`s kept 30 days
+    // (0.12, decision 0087).
+    "offline_writes",
     "other_versions",
     "queue_requests",
     // Quick crates (0.11): Sounds like an artist, the closeness cutoff, the label and album axes.

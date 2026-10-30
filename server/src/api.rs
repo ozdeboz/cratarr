@@ -13,7 +13,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::app::{App, SettingsView, SourceView, StateView, StatusView, ToggleError, TrackStateView};
-use crate::ctx::Ctx;
+use crate::ctx::{ChangeAt, Ctx};
+use crate::userdata::offline::{ChangeKind, Op, item_id};
 use crate::settings::SourceConfig;
 use crate::playlists::{Repair, Repairs};
 
@@ -807,8 +808,67 @@ struct Favorite {
     on: bool,
 }
 
-async fn favorite(State(app): State<Arc<App>>, Query(f): Query<Favorite>) -> Result<Json<StateView>, ApiError> {
-    Ok(Json(app.playing.set_favorite(f.source.as_deref(), f.on).await?))
+async fn favorite(ctx: Ctx, Query(f): Query<Favorite>) -> Result<Json<StateView>, ApiError> {
+    let view = ctx.app.playing.set_favorite(f.source.as_deref(), f.on).await?;
+    // Made now (decision 0087): the track is known only once it is done.
+    if let Some(np) = &view.now_playing
+        && let Some(w) = LastWins::of(&ctx, ChangeAt(None), ChangeKind::Favourite, item_id("track", &np.source, &np.id))
+    {
+        w.made(Op::of(f.on));
+    }
+    Ok(Json(view))
+}
+
+/// A favourite's or a rating's write, the last change winning (0.12, decision 0087): the account's, the item as the
+/// change log names it, and the change's time (`X-Cratarr-At`, else now). None without an account to keep it for:
+/// then every write is made, as before.
+struct LastWins {
+    ud: Arc<crate::userdata::UserData>,
+    account: String,
+    kind: ChangeKind,
+    item: String,
+    at: i64,
+}
+
+impl LastWins {
+    fn of(ctx: &Ctx, at: ChangeAt, kind: ChangeKind, item: String) -> Option<Self> {
+        let account = ctx.account()?;
+        Some(Self { ud: ctx.served.as_ref()?.userdata.clone(), account, kind, item, at: at.or_now() })
+    }
+
+    /// Whether a later change was made already: this one is then not made. Not readable: made.
+    fn older(&self) -> bool {
+        self.ud.change_is_older(&self.account, self.kind, &self.item, self.at).unwrap_or_else(|e| {
+            tracing::warn!("{}: when it last changed not read: {e:#}", self.item);
+            false
+        })
+    }
+
+    /// Made: its time kept, and the change logged.
+    fn made(&self, op: Op) {
+        if let Err(e) = self.ud.mark_changed(&self.account, self.kind, &self.item, op, self.at) {
+            tracing::warn!("{}: its change not kept: {e:#}", self.item);
+        }
+    }
+}
+
+/// Whether `w`'s change is older than one made already (none: made).
+fn is_older(w: &Option<LastWins>) -> bool {
+    w.as_ref().is_some_and(LastWins::older)
+}
+
+/// An answer saying whether the change was made (decision 0087): `applied`, where the device sent its time.
+fn applied(mut v: serde_json::Value, at: ChangeAt, made: bool) -> Json<serde_json::Value> {
+    if at.sent()
+        && let Some(o) = v.as_object_mut()
+    {
+        o.insert("applied".into(), made.into());
+    }
+    Json(v)
+}
+
+fn json_of(v: impl serde::Serialize) -> Result<serde_json::Value, ApiError> {
+    serde_json::to_value(v).map_err(|e| ApiError::from(ToggleError::from(anyhow::Error::from(e))))
 }
 
 async fn toggle(State(app): State<Arc<App>>, Path(id): Path<String>, Query(f): Query<Membership>) -> Result<Json<StateView>, ApiError> {
@@ -1431,12 +1491,23 @@ async fn track_toggle(
     Ok(Json(app.playing.track_toggle(&source, &id, &playlist, f.member).await?))
 }
 
+/// A track's heart, the last change winning (decision 0087): an older one answers the state as it stands.
 async fn track_favorite(
-    State(app): State<Arc<App>>,
+    ctx: Ctx,
+    at: ChangeAt,
     Path((source, id)): Path<(String, String)>,
     Query(f): Query<Favorite>,
-) -> Result<Json<TrackStateView>, ApiError> {
-    Ok(Json(app.playing.track_favorite(&source, &id, f.on).await?))
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let w = LastWins::of(&ctx, at, ChangeKind::Favourite, item_id("track", &source, &id));
+    if is_older(&w) {
+        let now: TrackStateView = ctx.app.playing.track_state(&source, &id).await?;
+        return Ok(applied(json_of(now)?, at, false));
+    }
+    let view = ctx.app.playing.track_favorite(&source, &id, f.on).await?;
+    if let Some(w) = &w {
+        w.made(Op::of(f.on));
+    }
+    Ok(applied(json_of(view)?, at, true))
 }
 
 #[derive(Deserialize)]
@@ -1464,13 +1535,22 @@ async fn artist_is_favorite(
     Ok(Json(json!({ "favorite": app.playing.artist_is_favorite(&source, &q.name).await? })))
 }
 
-/// The artist panel's heart (`?name=&on=`).
+/// The artist panel's heart (`?name=&on=`), the last change winning (decision 0087).
 async fn artist_favorite(
-    State(app): State<Arc<App>>,
+    ctx: Ctx,
+    at: ChangeAt,
     Path(source): Path<String>,
     Query(q): Query<ArtistName>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(json!({ "favorite": app.playing.artist_favorite(&source, &q.name, q.on).await? })))
+    let w = LastWins::of(&ctx, at, ChangeKind::Favourite, item_id("artist", &source, q.name.trim()));
+    if is_older(&w) {
+        return Ok(applied(json!({ "favorite": ctx.app.playing.artist_is_favorite(&source, &q.name).await? }), at, false));
+    }
+    let favorite = ctx.app.playing.artist_favorite(&source, &q.name, q.on).await?;
+    if let Some(w) = &w {
+        w.made(Op::of(q.on));
+    }
+    Ok(applied(json!({ "favorite": favorite }), at, true))
 }
 
 /// Every album the owner played or rated on a server, by id: plays, last played, rating (the Library's orders and
@@ -1482,13 +1562,23 @@ async fn album_uses(
     Ok(Json(app.playing.album_uses(&source).await?))
 }
 
-/// The album panel's heart: an album a favourite or not.
+/// The album panel's heart: an album a favourite or not, the last change winning (decision 0087).
 async fn album_favorite(
-    State(app): State<Arc<App>>,
+    ctx: Ctx,
+    at: ChangeAt,
     Path((source, album)): Path<(String, String)>,
     Query(f): Query<Favorite>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(json!({ "favorite": app.playing.album_favorite(&source, &album, f.on).await? })))
+    let w = LastWins::of(&ctx, at, ChangeKind::Favourite, item_id("album", &source, &album));
+    if is_older(&w) {
+        let now = ctx.app.playing.favorite_albums(&source).await?.contains(&album);
+        return Ok(applied(json!({ "favorite": now }), at, false));
+    }
+    let favorite = ctx.app.playing.album_favorite(&source, &album, f.on).await?;
+    if let Some(w) = &w {
+        w.made(Op::of(f.on));
+    }
+    Ok(applied(json!({ "favorite": favorite }), at, true))
 }
 
 /// An album's rating, 0 to 5 (`null`: the server keeps none): the album menu's stars.
@@ -1501,13 +1591,22 @@ struct Stars {
     stars: u8,
 }
 
-/// Rates an album, 0 (none) to 5.
+/// Rates an album, 0 (none) to 5, the last change winning (decision 0087).
 async fn set_album_rating(
-    State(app): State<Arc<App>>,
+    ctx: Ctx,
+    at: ChangeAt,
     Path((source, album)): Path<(String, String)>,
     Query(q): Query<Stars>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    Ok(Json(json!({ "rating": app.playing.set_album_rating(&source, &album, q.stars).await? })))
+    let w = LastWins::of(&ctx, at, ChangeKind::Rating, item_id("album", &source, &album));
+    if is_older(&w) {
+        return Ok(applied(json!({ "rating": ctx.app.playing.album_rating(&source, &album).await? }), at, false));
+    }
+    let rating = ctx.app.playing.set_album_rating(&source, &album, q.stars).await?;
+    if let Some(w) = &w {
+        w.made(Op::of(rating > 0));
+    }
+    Ok(applied(json!({ "rating": rating }), at, true))
 }
 
 /// Home's Favourite tracks: the favourite tracks of Cratarr's own library, as rows, at most `FAVOURITE_ROWS` (the
@@ -2306,13 +2405,23 @@ async fn playlist_favorites(State(app): State<Arc<App>>, Query(f): Query<Follow>
     Ok(Json(app.playlists.favorites(f.source.as_deref()).await?))
 }
 
+/// A playlist's heart, the last change winning (decision 0087).
 async fn playlist_favorite(
-    State(app): State<Arc<App>>,
+    ctx: Ctx,
+    at: ChangeAt,
     Path(id): Path<String>,
     Query(f): Query<Favorite>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    app.playlists.set_favorite(&id, f.source.as_deref(), f.on).await?;
-    Ok(Json(json!({ "playlist": id, "favorite": f.on })))
+    let w = LastWins::of(&ctx, at, ChangeKind::Favourite, format!("playlist:{id}"));
+    if is_older(&w) {
+        let now = ctx.app.playlists.favorites(f.source.as_deref()).await?.get(&id).copied().unwrap_or(false);
+        return Ok(applied(json!({ "playlist": id, "favorite": now }), at, false));
+    }
+    ctx.app.playlists.set_favorite(&id, f.source.as_deref(), f.on).await?;
+    if let Some(w) = &w {
+        w.made(Op::of(f.on));
+    }
+    Ok(applied(json!({ "playlist": id, "favorite": f.on }), at, true))
 }
 
 /// A playlist edited in its view (decision 0023): `entries` (its lines, reordered or some left out) replaces `expected`
@@ -3749,12 +3858,18 @@ fn refusal(id: &str, e: &ToggleError) -> serde_json::Value {
 }
 
 /// Several playlists favourited, or not (`on`), each as its own heart (decision 0023): those done, those not and why.
-async fn playlists_favorite(State(app): State<Arc<App>>, Json(b): Json<ManyPlaylists>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn playlists_favorite(ctx: Ctx, Json(b): Json<ManyPlaylists>) -> Result<Json<serde_json::Value>, ApiError> {
     let b = b.checked()?;
     let (mut done, mut not) = (Vec::new(), Vec::new());
     for id in &b.ids {
-        match app.playlists.set_favorite(id, b.source.as_deref(), b.on).await {
-            Ok(()) => done.push(id.clone()),
+        match ctx.app.playlists.set_favorite(id, b.source.as_deref(), b.on).await {
+            Ok(()) => {
+                // Made now (decision 0087).
+                if let Some(w) = LastWins::of(&ctx, ChangeAt(None), ChangeKind::Favourite, format!("playlist:{id}")) {
+                    w.made(Op::of(b.on));
+                }
+                done.push(id.clone())
+            }
             Err(e) => not.push(refusal(id, &e)),
         }
     }
@@ -6288,6 +6403,15 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::{ExportRequest, PreviewOf, attachment, form_decode};
+
+    #[test]
+    fn an_answer_says_whether_the_change_was_made_only_where_the_device_sent_its_time() {
+        use super::{ChangeAt, applied};
+        let v = || serde_json::json!({ "favorite": true });
+        assert_eq!(applied(v(), ChangeAt(Some(5)), false).0, serde_json::json!({ "favorite": true, "applied": false }));
+        assert_eq!(applied(v(), ChangeAt(Some(5)), true).0, serde_json::json!({ "favorite": true, "applied": true }));
+        assert_eq!(applied(v(), ChangeAt(None), true).0, v(), "as before without it");
+    }
 
     /// axum refuses to start on a path and method routed twice (0.8.3 did, on `/bands`, and never came up); no test
     /// builds the whole router, so this reads the table here instead: one route a line, its methods on it.
