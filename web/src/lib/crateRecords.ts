@@ -47,11 +47,14 @@ export type CrateRecord = {
 
 const loose = (s: string | null | undefined) => (s ?? '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().trim();
 
+/** The record a row belongs to: its album's id, else its album's name and album artist, loosely. */
+export const recordKey = (r: RecordRow) => (r.album_id ? `id:${r.album_id}` : `name:${loose(r.album)}\n${loose(r.album_artist ?? r.artist)}`);
+
 /** The rows (each with its place in the crate, `i`) grouped by album, in the order the first of each comes. */
 export function recordsOf<R extends RecordRow>(rows: readonly { r: R; i: number }[]): CrateRecord[] {
   const out = new Map<string, CrateRecord>();
   for (const { r, i } of rows) {
-    const key = r.album_id ? `id:${r.album_id}` : `name:${loose(r.album)}\n${loose(r.album_artist ?? r.artist)}`;
+    const key = recordKey(r);
     let rec = out.get(key);
     if (!rec) {
       rec = { key, albumId: r.album_id ?? null, title: r.album ?? '', artist: r.album_artist ?? r.artist, year: r.year ?? null, added: r.added ?? null, at: [], of: null, secs: 0 };
