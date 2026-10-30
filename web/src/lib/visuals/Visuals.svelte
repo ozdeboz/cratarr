@@ -243,7 +243,7 @@
     visualsPatch.change((p) => applyEdit(p, { kind: 'pinOne', scope: [], pin: id, on: !p.pins.includes(id) }, TYPES), null);
     showChrome();
   }
-  const DICE_LABEL: Record<(typeof RANDOMIZE_SCOPES)[number], string> = { everything: 'Everything', sources: 'Sources', effects: 'Effects', mixers: 'Mixers', modulators: 'Modulators', cables: 'Cables', response: 'Response', macros: 'Macros', colours: 'Colours', spatial: 'Spatial', lightness: 'Lightness' };
+  const DICE_LABEL: Record<(typeof RANDOMIZE_SCOPES)[number], string> = { everything: 'Everything', sources: 'Sources', effects: 'Effects', mixers: 'Mixers', modulators: 'Modulators', cables: 'Cables', response: 'Response', macros: 'Macros', colours: 'Colours', spatial: 'Spatial', lightness: 'Lightness', motion: 'Motion' };
   let resetMenu = $state(false);
 
   // ---- Snapshots: saved patches on the server ---------------------------------------------------------------------

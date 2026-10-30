@@ -422,6 +422,18 @@ pub fn locate(cat: &crate::catalogue::Catalogue, source: &str, item: &str) -> Op
     Some((path, kind, duration_ms))
 }
 
+/// The tracks a wind goes on into (`api::stream_wind`, decision 0074), nearest first: each file and its length, as
+/// [`locate`] finds them, up to the first Cratarr keeps no file of (a Bandcamp preview, another server's track). The
+/// catalogue asked once for all of them (0.10.2: the slow answers of 2026-10-30). Blocking.
+pub fn locate_through(cat: &crate::catalogue::Catalogue, items: &[(String, String)]) -> Vec<(std::path::PathBuf, Option<u64>)> {
+    let asked: Vec<(&str, &str)> = items.iter().take_while(|(s, _)| s != crate::bandcamp::SOURCE).map(|(s, i)| (s.as_str(), i.as_str())).collect();
+    let folders = cat.folders();
+    cat.files_of_sources(&asked)
+        .into_iter()
+        .map_while(|(folder, rel, duration_ms)| Some((folders.get(usize::try_from(folder).ok()?)?.join(rel), duration_ms)))
+        .collect()
+}
+
 fn boxed(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
     let mut b = Vec::with_capacity(8 + body.len());
     b.extend(((8 + body.len()) as u32).to_be_bytes());

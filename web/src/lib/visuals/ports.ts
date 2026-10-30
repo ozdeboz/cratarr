@@ -6,7 +6,8 @@
 import type { RouteValue } from './curves';
 import { CLOCK_TRIGGER_KNOBS } from './engine/clock';
 import { ENVELOPE_KNOBS } from './modulators/modulators';
-import { BUSY, type Knob, type Macro, type Module, type ModuleType, type Place } from './patch';
+import { BUSY, type Knob, type KnobAspect, type Macro, type Module, type ModuleType, type Place } from './patch';
+import { withAspects } from './engine/knob-aspects';
 import { BAND_SIGNALS, TRACK_SIGNALS } from './routes';
 import { LENSES } from './flame';
 
@@ -194,8 +195,9 @@ export const MUSIC: Declared = {
   type: 'music',
   label: 'Music',
   place: 'modulator',
-  // A band's envelope's fall (s): its hold, what today's lighting times gave the envelope.
-  knobs: MUSIC_KNOBS,
+  // A band's envelope's fall (s): its hold, what today's lighting times gave the envelope. How it reads the music: none
+  // of the aspect dice's four.
+  knobs: withAspects(MUSIC_KNOBS, {}, null),
   ports: {
     // Hold a cable can move; the readings are set, not cabled (as few jacks as can be).
     in: MUSIC_KNOBS.filter((k) => !k.id.startsWith('reference.')).map(knobPortOf),
@@ -216,8 +218,21 @@ export const MUSIC: Declared = {
 };
 
 /** A module declared by its knobs (each a value input), its other inputs before them, and its outputs. */
-function declared(type: string, name: string, place: Place, knobs: Knob[], inputs: Port[], outputs: Port[]): Declared {
-  return { type, label: name, place, knobs, ports: { in: [...inputs, ...knobs.map(knobPort)], out: outputs } };
+/** A module type with its ports; `aspects`, what its knobs mean to the aspect dice (engine/knob-aspects), every one named
+ *  (`rest` null: none of them, for a module of plumbing). A modulator's knobs (how it follows, its dynamics) mean none
+ *  but what it names. */
+function declared(
+  type: string,
+  name: string,
+  place: Place,
+  knobs: Knob[],
+  inputs: Port[],
+  outputs: Port[],
+  aspects: Readonly<Record<string, KnobAspect | null>> = {},
+  rest?: null,
+): Declared {
+  const own = withAspects(knobs, aspects, place === 'modulator' ? null : rest);
+  return { type, label: name, place, knobs: own, ports: { in: [...inputs, ...own.map(knobPort)], out: outputs } };
 }
 
 /** The Envelope Follower (0057 §7e: the Loudness and the Slow follower one type): its input followed, as far as
@@ -240,6 +255,7 @@ export const CLOCK = declared(
   [knob('speed', 'Speed', 0, 2, 1, 'level', 0), knob('beats', 'Beats a turn', 4, 128, 32), ...CLOCK_TRIGGER_KNOBS],
   [{ id: 'tempo', label: 'Tempo', type: 'value', normal: { module: 'music', port: 'tempo' } }],
   [out('phase', 'Turn'), out('rate', 'Rate'), out('beat', 'Beat', 'trigger'), out('bar', 'Bar', 'trigger'), out('phrase', 'Phrase', 'trigger')],
+  { speed: 'motion' },
 );
 
 /** Accent (0057 §7e; was Flash, renamed so "flash" means only the Screen's guard): a slow course of its input, and
@@ -367,7 +383,8 @@ export function showPartTypes(show: ModuleType): Declared[] {
     const input: Port = type === 'tonemap' ? { id: 'light', label: 'Light', type: 'light' } : polymorphic ? { ...PICTURE_IN, polymorphic } : PICTURE_IN;
     // Bend reads the picture along the Fluid's flow (0057 §4h: today's hidden read-back), the fluid's unless cabled.
     const inputs = type === 'bend' ? [input, FLOW_IN] : [input];
-    return declared(type, name, 'module', knobs, inputs, [polymorphic ? { ...PICTURE_OUT, polymorphic } : PICTURE_OUT]);
+    // Show's own knob keeps the meaning the chain gives it; Tone map's Level and Auto exposure, how light.
+    return declared(type, name, 'module', knobs, inputs, [polymorphic ? { ...PICTURE_OUT, polymorphic } : PICTURE_OUT], { level: 'light', exposure: 'light' });
   });
 }
 
@@ -399,6 +416,10 @@ export const GRID = declared(
     knob('jitter', 'Jitter', 0, 1, 0, 'level'),
     knob('drift', 'Drift', 0, 2, 0.4, 'level'),
     knob('return', 'Return', 0, 3, 0.6, 'level'),
+    // 2026-10-30: Fit Screen works the spacing (and the rows' columns) out from the count so the points
+    // cover the screen, Cover times it (room to turn and sway); Fit Spacing, the default, as before.
+    choices(knob('fit', 'Fit', 0, 1, 0, 'step'), ['Spacing', 'Screen']),
+    knob('cover', 'Cover', 1, 2, 1.2),
   ],
   // A flow cabled in (a Field's) carries its points along it, at Drift, each pulled back to its place at Return; points
   // cabled into At (a Flame's parts) each get a share of the lattice laid round them.
@@ -411,6 +432,7 @@ export const GRID = declared(
     out('row', 'Row', 'value', MOST_POINTS),
     out('column', 'Column', 'value', MOST_POINTS),
   ],
+  { lattice: 'spatial', count: 'spatial', spacing: 'spatial', rotation: 'spatial', jitter: 'spatial', drift: 'motion', return: 'motion', fit: 'spatial', cover: 'spatial' },
 );
 
 /** The symmetries a Fold applies (0057 §4c): Hydra's three first, the wallpaper groups beyond. */
@@ -430,10 +452,27 @@ export const FOLD = declared(
     // between the cells this wide.
     knob('zoom', 'Zoom', 0.25, 4, 1.5),
     knob('edge', 'Edge', 0, 0.05, 0, 'level'),
+    // With a grid (2026-10-30): where each cell looks, its own point (0) to the picture's middle shared by
+    // every cell (1); and how far a kaleidoscope's or mirror's cell reaches into the picture (1: its own cell's size).
+    // Both default to the old behaviour, so saved snapshots keep their look.
+    knob('centre', 'Centre', 0, 1, 0, 'level'),
+    knob('reach', 'Reach', 0.25, 4, 1),
+    // Lift: a dim picture raised towards a mean lightness, as a camera's exposure; 0, the default, as before.
+    knob('lift', 'Lift', 0, 1, 0, 'level'),
+    // Each cell's own offset from the light at Centre; the grid's slow turning and breathing; cells blended
+    // across their borders. All 0, the default, as before.
+    knob('vary', 'Vary', 0, 1, 0, 'level'),
+    knob('gridSpin', 'Grid spin', -1, 1, 0),
+    knob('breathe', 'Breathe', 0, 1, 0, 'level'),
+    knob('melt', 'Melt', 0, 1, 0, 'level'),
   ],
   // Windows 2 and 3: with a grid, each cell shows one of the pictures cabled in (stained glass onto separate layers).
   [PICTURE_IN, { id: 'grid', label: 'Grid', type: 'points' }, { id: 'window2', label: 'Window 2', type: 'picture' }, { id: 'window3', label: 'Window 3', type: 'picture' }],
   [PICTURE_OUT],
+  {
+    mode: null, count: 'spatial', turn: 'spatial', amount: null, zoom: 'spatial', edge: 'spatial', centre: 'spatial', reach: 'spatial', lift: 'light',
+    vary: 'spatial', gridSpin: 'motion', breathe: 'motion', melt: 'spatial',
+  },
 );
 
 /** Along (the owner: flows pushed along shapes): a picture whose outlines a flow runs along (its brightness's swirl,
@@ -449,6 +488,7 @@ export const INSTANCE = declared(
   [knob('amount', 'Amount', 0, 1, 1, 'level'), knob('align', 'Align', 0, 1, 0, 'level'), knob('stretch', 'Stretch', 0, 2, 0, 'level'), knob('follow', 'Follow', -2, 2, 0), knob('reach', 'Reach', 0, 6, 3)],
   [{ id: 'points', label: 'Points', type: 'points' }, PICTURE_IN, FLOW_IN, ALONG_IN],
   [PICTURE_OUT],
+  { amount: null, align: 'spatial', stretch: 'spatial', follow: 'motion', reach: 'spatial' },
 );
 
 /** Shape (the owner: shapes over flow grids): one shape about the frame's middle, a picture of its own (for Instance,
@@ -471,6 +511,7 @@ export const SHAPE = declared(
   ],
   [],
   [PICTURE_OUT],
+  { kind: 'spatial', sides: 'spatial', size: 'spatial', turn: 'spatial', width: 'spatial', softness: null, hue: 'colour', saturation: 'colour', brightness: 'light' },
 );
 
 /** Filter bank (0057 §4b): the sound split into six bands by a crossover (Linkwitz–Riley), a band a channel. Its five
@@ -517,9 +558,9 @@ export const DUCKER = declared(
 
 /** The picture modules of 0057 §5 and §6b (ids): `picture` in and out; `by` a second picture. */
 const BY: Port = { id: 'by', label: 'By', type: 'picture' };
-export const GLOW = declared('glow', 'Glow', 'module', [knob('glow', 'Glow', 0, 1, 0.4, 'level')], [PICTURE_IN], [PICTURE_OUT]);
-export const TINT = declared('tint', 'Tint', 'module', [knob('tint', 'Tint', 0, 1, 0.7, 'level')], [PICTURE_IN, BY], [PICTURE_OUT]);
-export const MASK = declared('mask', 'Mask', 'module', [knob('amount', 'Amount', 0, 1, 1, 'level'), choices(knob('invert', 'Invert', 0, 1, 0, 'step'), OFF_ON)], [PICTURE_IN, BY], [PICTURE_OUT]);
+export const GLOW = declared('glow', 'Glow', 'module', [knob('glow', 'Glow', 0, 1, 0.4, 'level')], [PICTURE_IN], [PICTURE_OUT], { glow: 'light' });
+export const TINT = declared('tint', 'Tint', 'module', [knob('tint', 'Tint', 0, 1, 0.7, 'level')], [PICTURE_IN, BY], [PICTURE_OUT], { tint: 'colour' });
+export const MASK = declared('mask', 'Mask', 'module', [knob('amount', 'Amount', 0, 1, 1, 'level'), choices(knob('invert', 'Invert', 0, 1, 0, 'step'), OFF_ON)], [PICTURE_IN, BY], [PICTURE_OUT], { amount: null, invert: null });
 export const DISPLACE = declared(
   'displace',
   'Displace',
@@ -535,9 +576,10 @@ export const DISPLACE = declared(
   ],
   [PICTURE_IN, BY],
   [PICTURE_OUT],
+  { amount: null, scale: 'spatial', mode: null, zoom: 'spatial', turn: 'spatial' },
 );
 /** Threshold: a luma key, only the picture's bright parts (for Bloom). */
-export const THRESHOLD = declared('threshold', 'Threshold', 'module', [knob('threshold', 'Threshold', 0, 1, 0.6, 'level'), knob('softness', 'Softness', 0, 1, 0.1)], [PICTURE_IN], [PICTURE_OUT]);
+export const THRESHOLD = declared('threshold', 'Threshold', 'module', [knob('threshold', 'Threshold', 0, 1, 0.6, 'level'), knob('softness', 'Softness', 0, 1, 0.1)], [PICTURE_IN], [PICTURE_OUT], { threshold: null, softness: null });
 /** Lens (0057 §4f, §4g; the owner: "Lens should be a modular thing"): points, light or a picture through one of the
  *  flame's lenses (a warp: Spherical, Swirl …; or a shape of the one set: Heart, Cratarr, Polygon, Star …), the same
  *  type out. On points it moves each; on a picture it remaps its pixels the same way. Sides and Depth are Polygon's and
@@ -555,6 +597,7 @@ export const LENS = declared(
   ],
   [{ id: 'in', label: 'In', type: 'points', polymorphic: LENS_TYPES }],
   [{ id: 'out', label: 'Out', type: 'points', polymorphic: LENS_TYPES }],
+  { kind: 'spatial', amount: null, sides: 'spatial', depth: null },
 );
 
 /** Transform (the owner, 2026-10-20: "a transform module"): light or a picture moved across and up, scaled and
@@ -568,6 +611,7 @@ export const TRANSFORM = declared(
   [knob('x', 'Across', -1, 1, 0), knob('y', 'Up', -1, 1, 0), knob('scale', 'Scale', 0.25, 4, 1), knob('rotate', 'Turn', -1, 1, 0)],
   [{ id: 'in', label: 'In', type: 'light', polymorphic: TRANSFORM_TYPES }],
   [{ id: 'out', label: 'Out', type: 'light', polymorphic: TRANSFORM_TYPES }],
+  { x: 'spatial', y: 'spatial', scale: 'spatial', rotate: 'spatial' },
 );
 
 /** Streamlines (the owner's evolving flow field): curves through a flow field from seed points (a Grid's; else an even
@@ -591,17 +635,21 @@ export const STREAMLINES = declared(
   ],
   [{ id: 'seeds', label: 'Seeds', type: 'points' }, FLOW_IN, ALONG_IN],
   [PICTURE_OUT],
+  {
+    length: 'spatial', thickness: 'spatial', calm: 'motion', brightness: 'light', hue: 'colour', hueSpread: 'colour', saturation: 'colour', perSeed: null,
+    ring: 'spatial', follow: 'motion', reach: 'spatial', clusters: 'spatial',
+  },
 );
 
 /** Push: a picture pushed along a flow (a Field's, else the Fluid's): each pixel read from a few steps back along it, as
  *  far as Amount, so what it shows smears and swirls the way the flow goes. */
-export const PUSH = declared('push', 'Push', 'module', [knob('amount', 'Amount', 0, 1, 0.3, 'level'), knob('follow', 'Follow', -2, 2, 0), knob('reach', 'Reach', 0, 6, 3)], [PICTURE_IN, FLOW_IN, ALONG_IN], [PICTURE_OUT]);
+export const PUSH = declared('push', 'Push', 'module', [knob('amount', 'Amount', 0, 1, 0.3, 'level'), knob('follow', 'Follow', -2, 2, 0), knob('reach', 'Reach', 0, 6, 3)], [PICTURE_IN, FLOW_IN, ALONG_IN], [PICTURE_OUT], { amount: null, follow: 'motion', reach: 'spatial' });
 
 export const PICTURE_MODULES: readonly Declared[] = [GLOW, TINT, MASK, DISPLACE, THRESHOLD, LENS, TRANSFORM, STREAMLINES, PUSH, SHAPE];
 
 /** The Randomize scopes (0057 §4d), in the dice's menu's order. */
 // New ones last: a Dice keeps its scope as its place here.
-export const RANDOMIZE_SCOPES = ['everything', 'sources', 'effects', 'mixers', 'modulators', 'cables', 'response', 'macros', 'colours', 'spatial', 'lightness'] as const;
+export const RANDOMIZE_SCOPES = ['everything', 'sources', 'effects', 'mixers', 'modulators', 'cables', 'response', 'macros', 'colours', 'spatial', 'lightness', 'motion'] as const;
 
 /** Dice (0057 §7f, the owner: "same randomize"; named Dice beside Random, the value generator): the panel's dice as a
  *  module. A trigger randomizes every knob in its
@@ -615,6 +663,10 @@ export const DICE = declared(
     { ...choices(knob('scope', 'Scope', 0, RANDOMIZE_SCOPES.length - 1, 0, 'step'), RANDOMIZE_SCOPES.map(label)), randomize: false },
     // How far each knob it reaches moves toward its roll: all the way at 1, not at all at 0.
     { ...knob('reach', 'Reach', 0, 1, 1, 'level'), randomize: false },
+    // Glide (2026-10-30): how many seconds each roll morphs in, as part of the performance (no undo step):
+    // triggered every phrase with a glide as long, the picture is always on its way somewhere. 0, the default, as before
+    // (a new track's look).
+    { ...knob('glide', 'Glide', 0, 60, 0), randomize: false },
   ],
   [
     { id: 'trigger', label: 'Trigger', type: 'trigger' },
@@ -679,6 +731,7 @@ export const FIELD = declared(
   ],
   [],
   [{ id: 'field', label: 'Flow field', type: 'flow' }],
+  { scale: 'spatial', speed: 'motion', waves: 'spatial', range: null, roughness: 'spatial', variety: 'motion' },
 );
 
 export const ENGINE_MODULES: readonly Declared[] = [MUSIC, ENVELOPE, DICE, SHAPER, CLOCK, ACCENT, VCA, MERGE, METER, COMPRESSOR, DUCKER, ADSR, SEQUENCER, LOOPER, GRID, FIELD, FOLD, INSTANCE, FILTER_BANK];
@@ -719,6 +772,7 @@ export const MIX = declared(
   ]).flat(),
   Array.from({ length: MIX_INPUTS }, (_, i): Port => ({ id: `in${i + 1}`, label: `Picture ${i + 1}`, type: 'picture' })),
   [PICTURE_OUT],
+  {}, null,
 );
 
 /** Feedback: the picture its input had last frame (TouchDesigner's Feedback; VCV Rack's one-step cable): the only

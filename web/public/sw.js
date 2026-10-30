@@ -27,7 +27,7 @@ function setAway(on) {
   if (!on) self.clients.matchAll().then((all) => all.forEach((c) => c.postMessage({ type: 'reached' })));
 }
 const keptAfter = () => (self.navigator.onLine === false ? 0 : away ? KEPT_AWAY_MS : KEPT_AFTER_MS);
-const KEPT = /^\/api\/(?:(?:albums|playlists|crates|artists|home|library|discover|insights|history|favorites|excluded|me|requests|visuals)(?:\/|$)|covers\/stamps$|cover\/|track\/[^/]+\/[^/]+\/waveform$)/;
+const KEPT = /^\/api\/(?:(?:albums|playlists|crates|artists|home|library|discover|insights|history|favorites|excluded|me|requests|visuals|capabilities)(?:\/|$)|covers\/stamps$|cover\/|track\/[^/]+\/[^/]+\/waveform$)/;
 const NEVER = /^\/api\/(events|players|player|state|tasks|auth|health|status|time|stream|file|preview|catalogue|diagnostics|search)/;
 const ALBUM_COVER = /^\/api\/albums\/[^/]+\/[^/]+\/cover$/;
 // Tracks kept for offline play in the installed page (0.9.8, lib/offline): each one's stream, whole from its start, under

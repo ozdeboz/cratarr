@@ -16,6 +16,7 @@
   import Notice from './lib/Notice.svelte';
   import PageLoading from './lib/PageLoading.svelte';
   import { deepMatches } from './lib/deepSearch.svelte';
+  import { openQuickCrate, quickOn } from './lib/quickCrates.svelte';
 
   // Asked for when the page shows, and again when the playlists change (sorting a track shrinks Unlisted).
   // And when a library is switched on or off: a crate fills from every library switched on.
@@ -50,9 +51,20 @@
   });
   // A crate's menu (its card's long-press or right-click, decision 0058).
   let menuFor = $state<string | null>(null);
+  // Quick crates (0.11): a few words at the top, Enter reads them into a quick crate (lib/QuickCrateSheet); nothing
+  // typed, it opens on the last ones not saved.
+  let quickWords = $state('');
+  function quickEntered(e: KeyboardEvent) {
+    if (e.key !== 'Enter') return;
+    openQuickCrate(quickWords);
+    quickWords = '';
+  }
 </script>
 
 <main>
+  {#if quickOn()}
+    <input class="quick" type="search" placeholder="Make a crate: genre, artist, year…" aria-label="Make a quick crate" bind:value={quickWords} onkeydown={quickEntered} />
+  {/if}
   {#if crates.error && !crates.list}
     <Notice text={crates.error} />
   {:else if !crates.list}
@@ -94,6 +106,21 @@
     margin: 0;
     padding: 0;
     list-style: none;
+  }
+
+  /* As a condition's search field (lib/ConditionCard), the list's width. */
+  .quick {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 40px;
+    margin: 4px 0 10px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 15px;
   }
 
   .empty {

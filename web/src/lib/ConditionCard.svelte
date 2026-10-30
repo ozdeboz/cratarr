@@ -14,17 +14,20 @@
   // own saying what the condition is tested on: "Matching any | all tracks in each album" (the owner, 2026-10-23: next
   // to the switch, Any and All read as being about the chosen values). The crate editor and the Filter sheet draw the same cards
   // (lib/ConditionList).
+  import { untrack } from 'svelte';
   import { slide } from 'svelte/transition';
   import Icon from './Icon.svelte';
   import type { FilterCondition } from './prefs.svelte';
   import Switch from './Switch.svelte';
   import DensityRange from './DensityRange.svelte';
   import LikeCurve from './LikeCurve.svelte';
-  import { likeCurve } from './api';
+  import { likeCurve, type Condition } from './api';
+  import { curveKey, type CurveAsk } from './likeCurveAsk';
   import { hiddenLibraries } from './listFilter.svelte';
   import TempoRange from './TempoRange.svelte';
   import { WORD_AXES, wordShown } from './facts';
   import { changed } from './filterRow';
+  import { countAt, minAt } from './quickCrate';
 
   let {
     condition,
@@ -33,6 +36,7 @@
     items = null,
     open = $bindable(false),
     bpms = null,
+    within = null,
     onchange,
     onremove,
   }: {
@@ -50,6 +54,9 @@
     open?: boolean;
     /** The list's tempos, for the Tempo condition's spread; absent: its range as two numbers. */
     bpms?: readonly (number | null | undefined)[] | null;
+    /** A crate's other conditions, a Sounds like's curve counting only the tracks they leave, as the crate picks (0.11,
+     *  the owner: "Filtered curve in 0.11"); null: the whole library (a filter's, where the list narrows it too). */
+    within?: readonly Condition[] | null;
     onremove: () => void;
   } = $props();
 
@@ -69,14 +76,18 @@
   let curve = $state<number[] | null>(null);
   /** The count under a finger dragging the curve: the summary follows it before the release sets it. */
   let dragged = $state<number | null>(null);
-  $effect(() => {
+  // Asked again only when what it counts changes, not when its cut moves (lib/likeCurveAsk curveKey).
+  const curveAsk = $derived.by((): CurveAsk | null => {
     const v = condition.value;
-    if (v.kind !== 'like' || !open) return;
-    const of = v.of.join(',');
-    const fresh = !!v.fresh;
-    const weights = v.weights;
+    return v.kind === 'like' ? { of: v.of, within: within ?? [], without: hiddenLibraries(), fresh: !!v.fresh, weights: v.weights, own: !!v.own } : null;
+  });
+  const curveAt = $derived(curveAsk && curveKey(curveAsk));
+  $effect(() => {
+    void curveAt;
+    const ask = untrack(() => curveAsk);
+    if (!ask || !open) return;
     let gone = false;
-    likeCurve(of.split(','), undefined, hiddenLibraries(), fresh, weights).then(
+    likeCurve(ask).then(
       (c) => !gone && (curve = c.alike),
       () => !gone && (curve = null),
     );
@@ -98,6 +109,8 @@
     const v = condition.value;
     let s = '';
     if (v.kind === 'yes') s = 'yes';
+    // Cut by how alike (a quick crate's, 0.11): its floor, the handle's while dragged.
+    else if (v.kind === 'like' && v.min !== undefined) s = `at least ${dragged !== null && curve ? minAt(curve, dragged) : v.min}% alike`;
     else if (v.kind === 'like') s = `the closest ${dragged ?? v.count}`;
     else if (v.kind === 'any_of') s = v.values.length === 0 ? (axis?.kind === 'membership' ? 'any playlist' : 'none chosen') : v.values.length <= 2 ? v.values.map(shown).join(', ') : `${v.values.slice(0, 2).map(shown).join(', ')} +${v.values.length - 2}`;
     else {
@@ -157,8 +170,19 @@
         </div>
       {:else if condition.value.kind === 'like'}
         {@const l = condition.value}
-        <!-- How many: the curve of how alike the closest are, cut where the crate ends. -->
-        {#if curve?.length}<div class="near"><LikeCurve {curve} count={l.count} onpreview={(n) => (dragged = n)} onchange={(n) => change({ value: { ...l, count: n } })} /></div>{/if}
+        <!-- How many: the curve of how alike the closest are, cut where the crate ends; one cut by how alike (a quick
+             crate's) moves its floor to where the handle is let go. -->
+        {#if curve?.length}
+          {@const c = curve}
+          <div class="near">
+            <LikeCurve
+              curve={c}
+              count={l.min !== undefined ? countAt(c, l.min) : l.count}
+              onpreview={(n) => (dragged = n)}
+              onchange={(n) => change({ value: l.min !== undefined ? { ...l, min: minAt(c, n) } : { ...l, count: n } })}
+            />
+          </div>
+        {/if}
       {:else if axis && condition.value.kind === 'range'}
         {@const r = condition.value}
         {#if axis.bins?.length && axis.min !== null && axis.max !== null && axis.max > axis.min}

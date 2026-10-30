@@ -32,6 +32,7 @@
     type TrackFile,
   } from './replaceTrack';
   import { toast } from './toast.svelte';
+  import { offers } from './capabilities.svelte';
 
   let {
     source,
@@ -84,8 +85,14 @@
     }
   }
 
+  // What the server can do (0.11, lib/capabilities): Soulseek where slskd and AcoustID are set up, a file of its own where
+  // its download folder and AcoustID are; only what it can carry through is offered.
+  const searches = $derived(offers('track_search'));
+  const fromFile = $derived(offers('track_intake'));
   async function find(t: ReleaseTrack) {
     wanted = t;
+    // No Soulseek here: straight to the files on the server.
+    if (!searches) return fromFiles();
     step = 'search';
     search = null;
     error = null;
@@ -199,7 +206,7 @@
   chips={step === 'tracks' && release ? [release.artist ?? '', release.year ? String(release.year) : '', missing.length ? `${plural(missing.length, 'track')} missing` : 'Complete'].filter(Boolean) : []}
   {onclose}
   step={step === 'tracks' ? 'menu' : step}
-  onback={step === 'tracks' || (replace && step === 'search') ? null : step === 'fetch' ? () => void drop() : step === 'files' ? backToSearch : () => ((step = 'tracks'), (searchId = null))}
+  onback={step === 'tracks' || (replace && step === 'search') ? null : step === 'fetch' ? () => void drop() : step === 'files' ? (searches ? backToSearch : () => (step = 'tracks')) : () => ((step = 'tracks'), (searchId = null))}
 >
   {#if error}
     <p class="why">{error}</p>
@@ -259,7 +266,7 @@
     <!-- A file already on the server, whatever Soulseek finds (or while it still looks). -->
     <MenuCards>
       <MenuGroup>
-        <MenuEntry icon="intoBox" label="From a file on the server" onclick={() => void fromFiles()} />
+        {#if fromFile}<MenuEntry icon="intoBox" label="From a file on the server" onclick={() => void fromFiles()} />{/if}
       </MenuGroup>
     </MenuCards>
   {:else if step === 'files'}

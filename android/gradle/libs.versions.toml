@@ -1,6 +1,8 @@
 [versions]
 junit = "4.13.2"
 orgJson = "20240303"
+# Spike B: UniFFI's Kotlin calls the rules library through JNA.
+jna = "5.17.0"
 # Android
 android-compileSdk = "37"
 android-minSdk = "29"
@@ -28,6 +30,7 @@ android-app = { id = "com.android.application", version.ref = "android-plugin" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 # The real org.json for the JVM tests (Android's own is a stub there): the shared rules table, the page's commands.
 org-json = { group = "org.json", name = "json", version.ref = "orgJson" }
+jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
 coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 androidx-core = { group = "androidx.core", name = "core", version.ref = "androidx-core" }
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "androidx-appcompat" }

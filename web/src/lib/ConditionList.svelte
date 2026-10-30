@@ -12,6 +12,7 @@
     axes,
     items = null,
     bpms = null,
+    crate = false,
   }: {
     conditions: FilterCondition[];
     /** null: not read yet (the cards then show no name rather than the axis's key first). */
@@ -19,6 +20,9 @@
     /** What the list's items are when they hold tracks: any or all of each one's tracks (lib/ConditionCard). */
     items?: string | null;
     bpms?: readonly (number | null | undefined)[] | null;
+    /** A crate's conditions: a Sounds like's curve counts among the tracks its others leave (0.11, lib/ConditionCard
+     *  `within`); a filter's count the whole library, the list it is on narrowing it besides. */
+    crate?: boolean;
   } = $props();
 
   // One card open at a time keeps the list short; a new one opens.
@@ -45,6 +49,7 @@
       known={axes !== null}
       {items}
       {bpms}
+      within={crate ? conditions.filter((_, j) => j !== i) : null}
       bind:open={() => opened === i, (o) => (opened = o ? i : null)}
       onremove={() => remove(i)}
     />

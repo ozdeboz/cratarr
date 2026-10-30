@@ -28,6 +28,8 @@ import android.util.Log
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.webkit.CookieManager
 import android.webkit.ValueCallback
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebChromeClient.FileChooserParams
 import android.webkit.WebView
 import android.widget.EditText
@@ -49,6 +51,8 @@ import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.ScriptHandler
+import androidx.webkit.ServiceWorkerClientCompat
+import androidx.webkit.ServiceWorkerControllerCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.Dispatchers
@@ -364,6 +368,15 @@ class MainActivity : AppCompatActivity() {
             onGone = { show(url) },
             deviceCover = { DeviceMusic.cover(app, it) },
         )
+        // The page's service worker asks for the page's files too (decision 0085): from the app's copy, as above.
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_BASIC_USAGE) &&
+            WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_SHOULD_INTERCEPT_REQUEST)
+        ) {
+            ServiceWorkerControllerCompat.getInstance().setServiceWorkerClient(object : ServiceWorkerClientCompat() {
+                override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? =
+                    if (Prefs.originOf(request.url.toString()) in origins) BundledPage.answer(app, request.method, request.url) else null
+            })
+        }
         view.webChromeClient = CratarrWebChromeClient { intent, callback ->
             fileCallback?.onReceiveValue(null)
             fileCallback = callback
@@ -510,6 +523,11 @@ class MainActivity : AppCompatActivity() {
                 }
                 message.optString("downloadQuality").takeIf { it.isNotEmpty() }?.let { prefs.downloadQuality = it }
                 if (message.has("levelling")) prefs.levelling = message.optBoolean("levelling")
+                // Spike B (0.11): the players' rules from Rust, off by default.
+                if (message.has("rustRules")) {
+                    prefs.rustRules = message.optBoolean("rustRules")
+                    RustRules.set(this, prefs.rustRules)
+                }
                 message.optString("levelUnknown").takeIf { it.isNotEmpty() }?.let { prefs.levelUnknown = it }
                 // Start and stop (0.9.6): the page's This device setting, kept here for the app's own player.
                 message.optJSONObject("startStop")?.let { s ->
@@ -684,6 +702,7 @@ class MainActivity : AppCompatActivity() {
         .put("syncBudgetGb", prefs.syncBudgetGb)
         .put("syncOnlyCharging", prefs.syncOnlyCharging)
         .put("levelling", prefs.levelling)
+        .put("rustRules", prefs.rustRules)
         .put("levelUnknown", prefs.levelUnknown)
         .put(
             "startStop",

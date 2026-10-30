@@ -9,6 +9,7 @@ import { MODULATORS, RENAMED } from './modulators/modulators';
 import type { Knob, ModuleType } from './patch';
 import { SOURCE_TYPES } from './sources/index';
 import { ADSR, GLOW, TINT } from './ports';
+import { withAspects } from './engine/knob-aspects';
 
 const knob = (id: string, label: string, min: number, max: number, def: number, kind: Knob['kind'], neutral: number): Knob => ({ id, label, min, max, neutral, default: def, kind });
 
@@ -18,12 +19,17 @@ export const ENGINE_TYPES: ModuleType[] = ENGINES.map((e) => ({
   type: `${e.key}-engine`,
   label: e.label,
   place: 'module',
-  knobs: [
-    { ...knob('effect', 'Effect', 1, ENGINE_EFFECTS[e.key].length, 1, 'step', 1), options: ENGINE_EFFECTS[e.key].map((x) => x.name[0].toUpperCase() + x.name.slice(1)) },
-    knob('amount', 'Amount', 0, 1, 1, 'level', 0),
-    knob('k1', 'Control 1', 0, 1, 0.5, 'swing', 0.5),
-    knob('k2', 'Control 2', 0, 1, 0.5, 'swing', 0.5),
-  ],
+  // Which effect, how much, and two controls whose meaning changes with the effect: none of the aspect dice's four.
+  knobs: withAspects(
+    [
+      { ...knob('effect', 'Effect', 1, ENGINE_EFFECTS[e.key].length, 1, 'step', 1), options: ENGINE_EFFECTS[e.key].map((x) => x.name[0].toUpperCase() + x.name.slice(1)) },
+      knob('amount', 'Amount', 0, 1, 1, 'level', 0),
+      knob('k1', 'Control 1', 0, 1, 0.5, 'swing', 0.5),
+      knob('k2', 'Control 2', 0, 1, 0.5, 'swing', 0.5),
+    ],
+    {},
+    null,
+  ),
 }));
 
 /** What can go in the picture's own loop: Warp and Keep (drawn by the compositor) and the fluid. */

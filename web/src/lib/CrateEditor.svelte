@@ -53,7 +53,7 @@
 </script>
 
 <div class="editor">
-  <ConditionList bind:conditions {axes} />
+  <ConditionList bind:conditions {axes} crate />
 
   {#if previewError}
     <p class="error" role="alert">{previewError}</p>

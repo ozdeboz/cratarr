@@ -32,7 +32,7 @@
   import { prefs } from './prefs.svelte';
   import { shownCover } from './remote.svelte';
   import { toast } from './toast.svelte';
-  import { follow, followingNow, loadFollow } from './following.svelte';
+  import { follow, followingNow, followOffered, loadFollow } from './following.svelte';
   import { followOn, stopFollowing } from './api';
   import { mine, setAutoAccept, setFollowable } from './mySettings.svelte';
 
@@ -251,7 +251,7 @@
         <MenuEntry label={remoteName} checked={!here && drivenName() === null} plus={false} onclick={() => pick('remote')} />
       {/if}
       <!-- Others' players, to follow on this device's (who let others follow them; the one followed ticked). -->
-      {#if follow.served && me}
+      {#if followOffered() && me}
         {#each follow.leaders as l (l.user)}
           {#each l.players as pl (pl.name)}
             <MenuEntry
@@ -268,7 +268,7 @@
       {#if group.length > 1}<GroupVolume names={group} />
       {:else if !inApp && here && playOn.self}<GroupVolume names={[playOn.self]} />{/if}
       <!-- At its foot: others may follow one, and those who do, each one's tracks asked for accepted at once or not. -->
-      {#if follow.served && mine.known}
+      {#if followOffered() && mine.known}
         <MenuEntry icon="users" label="Let others follow me" switched={mine.followable} onclick={() => void setFollowable(!mine.followable)} />
         {#if mine.followable}
           {#each follow.followers as f (f.user)}

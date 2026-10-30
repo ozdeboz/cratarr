@@ -104,6 +104,7 @@
   import { progressOf, tasks } from './tasks.svelte';
   import { withUndo } from './undo.svelte';
   import { me } from './me.svelte';
+  import { can, findsTracks, offers } from './capabilities.svelte';
 
   type Ask = 'move' | 'replace' | 'delete' | 'cover' | 'cover-url';
   let {
@@ -329,6 +330,9 @@
   // Its cover on this device (lib/localCovers.svelte.ts): a picture chosen here, or the server's again. Not in
   // Cratarr's own library (the owner, 2026-10-25): there its administrators upload one, for everyone.
   const deviceCovers = $derived(source !== 'cratarr');
+  // What the server can do (0.11, lib/capabilities): Missing tracks where it can look for a track (slskd and AcoustID)
+  // or take one from a file of its own; a cover uploaded where it takes one. A server before 0.11 offers as before.
+  const missingOffered = $derived(findsTracks());
   const ownCover = $derived(deviceCovers && !!localCovers[coverKey(source, a.id)]);
   let picker = $state<HTMLInputElement>();
   async function chosen(e: Event) {
@@ -437,6 +441,16 @@
   async function askCover() {
     ask = 'cover';
     covers = null;
+    // A server whose list says it cannot look as a task (cover_look) is asked for its covers at once, as before 0.9.6.
+    if (can('cover_look') === false) {
+      try {
+        covers = await getAlbumCovers(source, a.id);
+      } catch (e) {
+        toast.fail(e, 'Could not find covers');
+        onclose();
+      }
+      return;
+    }
     try {
       const { task } = await lookAlbumCovers(source, a.id);
       tasks.begun(task);
@@ -645,9 +659,9 @@
     {#if me.admin && source === 'cratarr'}<MenuEntry icon="image" label="Change cover" onclick={askCover} />{/if}
   {:else if e === 'missingTracks'}
     <!-- Its release's tracks, the missing ones found one at a time (0.9.8, single-track replacement). -->
-    {#if me.admin && source === 'cratarr'}<MenuEntry icon="search" label="Missing tracks…" onclick={() => (missingOpen = true)} />{/if}
+    {#if me.admin && source === 'cratarr' && missingOffered}<MenuEntry icon="search" label="Missing tracks…" onclick={() => (missingOpen = true)} />{/if}
   {:else if e === 'classical'}
-    {#if me.admin && (a as ListedAlbum).classical !== undefined}
+    {#if me.admin && offers('classical') && (a as ListedAlbum).classical !== undefined}
       <MenuEntry icon="music" label="Classical…" onclick={() => (classicalOpen = true)} />
     {/if}
   {:else if e === 'deviceCover'}
@@ -698,7 +712,7 @@
     ? [
         ...(coverProgress ? [{ icon: 'search' as const, label: 'Looking for covers', busy: true, onclick: () => {} }] : []),
         { icon: 'link', label: 'From an address', onclick: () => ((coverUrl = ''), (ask = 'cover-url')) },
-        { icon: 'upload', label: 'Upload cover', onclick: () => picker?.click() },
+        ...(offers('cover_upload') ? [{ icon: 'upload' as const, label: 'Upload cover', onclick: () => picker?.click() }] : []),
       ]
     : null}
   onback={ask === 'cover-url' ? () => (ask = 'cover') : ask ? () => (ask = false) : exporting ? () => (exporting = false) : step === 'menu' ? null : () => (step = step === 'again' ? 'lists' : 'menu')}

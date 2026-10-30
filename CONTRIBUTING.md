@@ -5,14 +5,14 @@ desktop app (Electron) around the same page. This is how to build it, check a ch
 
 ## Building and running
 
-- **Web app** (`web/`): Node 22 and pnpm. `pnpm install`, then `pnpm build` (the server embeds `web/dist`, so build it
-  before the server), or `pnpm dev` for Vite's dev server on port 5173, which sends `/api` to a running server
+- **Web app** (`web/`): Node 22 and pnpm. `pnpm install`, then `pnpm build` (the server and the Android app serve
+  `web/dist`, so build it before them), or `pnpm dev` for Vite's dev server on port 5173, which sends `/api` to a running server
   (`CRATARR_URL`, by default `http://127.0.0.1:8080`).
 - **Server** (`server/`): stable Rust. `cargo run` serves on port 8080. Set `CRATARR_DATA_DIR` to keep settings and
-  databases between starts; the other variables are in the [README](README.md#configuration). A debug build reads
-  `web/dist` from disk on every request, so a new `pnpm build` shows without rebuilding the server.
-- **The image**: `docker build -t cratarr:local .` at the top of the repository builds both into one static binary
-  in an otherwise empty image.
+  databases between starts; the other variables are in the [README](README.md#configuration). It reads the page from
+  `web/dist` (`CRATARR_WEB_DIR`) on every request, so a new `pnpm build` shows without rebuilding the server.
+- **The image**: `docker build -t cratarr:local .` at the top of the repository builds both: the static binary and the
+  page beside it in an otherwise empty image.
 - **Android app** (`android/`): see [android/README.md](android/README.md#building) (Android Studio's JDK and the
   Android SDK, then `./gradlew assembleDebug`).
 - **Desktop app** (`desktop/`): see [desktop/README.md](desktop/README.md) (Node 22, `npm ci`, then `npm run dist`).

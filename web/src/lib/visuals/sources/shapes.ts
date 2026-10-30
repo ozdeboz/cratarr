@@ -13,6 +13,7 @@ import { IRREGULAR, SDF_SIZE, SHAPE_LABEL, regularOutline, sdfGrid } from '../sh
 import { MOST_SHAPES, SHAPE_FLOATS, TAU, shapeLayout, sidesOf, type ShapeClocks } from './geometry';
 import { Mesh, QUAD, done, program, target } from './gl';
 import { knob, values } from './knob';
+import { withAspects } from '../engine/knob-aspects';
 
 /** Where both lay their shapes and how they stroke them. */
 const LAYOUT: Knob[] = [
@@ -28,13 +29,15 @@ const LAYOUT: Knob[] = [
   knob('twist', 'Twist', -0.5, 0.5, 0),
   knob('taper', 'Taper', -1, 1, 0),
 ];
+/** What the layout's knobs mean to the aspect dice (engine/knob-aspects). */
+const LAYOUT_ASPECTS = { radius: 'spatial', thickness: 'spatial', fill: 'light', spread: 'spatial', x: 'spatial', y: 'spatial', orbit: 'motion', rotation: 'spatial', spin: 'motion', twist: 'spatial', taper: 'spatial', count: 'spatial', opacity: 'light', additive: null } as const;
 const COUNT = [knob('count', 'Shapes', 0, MOST_SHAPES, 4, 'level'), knob('opacity', 'Opacity', 0, 1, 0.85, 'level')];
 
 export const SHAPES: ModuleType = {
   type: 'shapes',
   label: 'Regular shapes',
   place: 'source',
-  knobs: [
+  knobs: withAspects([
     ...COUNT,
     knob('sides', 'Sides', 3, 48, 5),
     // 0 the polygon (the Shapes of 70, as it was), up to a deep star.
@@ -44,14 +47,15 @@ export const SHAPES: ModuleType = {
     knob('hueSpread', 'Hue spread', 0, 1, 0.12),
     knob('saturation', 'Saturation', 0, 1, 0.75),
     knob('additive', 'Additive', 0, 1, 1),
-  ],
+  ], { ...LAYOUT_ASPECTS, sides: 'spatial', depth: 'spatial', hue: 'colour', hueSpread: 'colour', saturation: 'colour' }),
 };
 
 export const IRREGULAR_SHAPES: ModuleType = {
   type: 'irregular',
   label: 'Irregular shapes',
   place: 'source',
-  knobs: [...COUNT, { ...knob('shape', 'Shape', 0, IRREGULAR.length - 1, 0), kind: 'step', options: IRREGULAR.map((n) => SHAPE_LABEL[n]) }, ...LAYOUT, knob('additive', 'Additive', 0, 1, 1)],
+  // Which shape is a step: the module dice change it, not Spatial's glide.
+  knobs: withAspects([...COUNT, { ...knob('shape', 'Shape', 0, IRREGULAR.length - 1, 0), kind: 'step', options: IRREGULAR.map((n) => SHAPE_LABEL[n]) }, ...LAYOUT, knob('additive', 'Additive', 0, 1, 1)], { ...LAYOUT_ASPECTS, shape: null }),
 };
 
 /** The corners of Regular shapes' shapes this frame (as `shapeLayout` lays them, in its units), into `out` as x, y

@@ -9,6 +9,7 @@ import { FIELD_GLSL, PLAIN, strengthsOf } from '../field';
 import { program } from '../sources/gl';
 import { toScreen } from '../transform';
 import type { FlowField, ModuleNode } from './modules';
+import type { FrameInfo } from '../patch';
 import { none } from './shared';
 
 const QUAD = `#version 300 es
@@ -53,6 +54,16 @@ uniform float uTurn;
 uniform float uAmount;
 uniform float uZoom;
 uniform float uEdge;
+uniform float uCentre;
+uniform float uReach;
+uniform highp sampler2D uLight;
+uniform int uMeasured;
+uniform float uLift;
+uniform float uVary;
+uniform float uSpinAngle;
+uniform float uBreathe;
+uniform float uMelt;
+uniform float uTime;
 uniform vec2 uK;
 out vec4 o;
 // Itself within -1..1, mirrored back into it beyond (fx_repeat's).
@@ -66,27 +77,17 @@ vec4 at(vec2 sq) {
   if (window == 2) return textureLod(uIn3, uv, 0.0);
   return textureLod(uIn, uv, 0.0);
 }
-void main() {
-  vec2 p = (vUv * 2.0 - 1.0) / uK;
-  // The fold's centre: the middle, or the nearest of the grid's points (and how near the next, for the seams).
-  vec2 c = vec2(0.0);
-  float d = 1e9;
-  float d2 = 1e9;
-  int ci = 0;
-  for (int i = 0; i < ${MOST}; i++) {
-    if (i >= uCount) break;
-    vec2 q = texelFetch(uPoints, ivec2(i, 0), 0).xy;
-    vec2 e = p - q;
-    float dd = dot(e, e);
-    if (dd < d) { d2 = d; d = dd; c = q; ci = i; }
-    else if (dd < d2) d2 = dd;
-  }
-  bool grid = uCount > 0;
+// One cell's colour: the picture about its point c (number ci), folded by the mode (Turn turns the fold).
+vec4 cellColour(vec2 p, vec2 c, int ci, bool grid, vec4 lightNow) {
   // Each cell's window: one of the pictures cabled in, as its point's number falls (the same cell, the same window).
+  window = 0;
   if (grid && uWindows > 1) window = int(floor(fract(sin(float(ci) * 12.9898 + 4.1) * 43758.5453) * float(uWindows)));
   vec2 q = turned(p - c, -uTurn);
   vec2 f = q;
-  vec2 base = c;
+  // Where the cell looks: its own point, or (Centre) where the picture's light is, every cell the same window, each
+  // moved off it by an offset of its own, Vary far.
+  vec2 own = vec2(fract(sin(float(ci) * 78.233 + 1.7) * 43758.5453), fract(sin(float(ci) * 39.425 + 9.1) * 24634.6345)) * 2.0 - 1.0;
+  vec2 base = mix(c, lightNow.xy + uVary * 0.35 * own, uCentre);
   if (uMode == 0) {
     // Mosaic: the picture again and again, mirrored at each seam (repeat's); with a grid, its middle in every cell.
     if (grid) base = vec2(0.0);
@@ -99,10 +100,10 @@ void main() {
     float side = 6.28318530718 / n;
     th = mod(th, side);
     th = min(th, side - th);
-    f = r * vec2(cos(th), sin(th));
+    f = r * uReach * vec2(cos(th), sin(th));
   } else if (uMode == 2) {
     // Mirror: the one half over the other, across the line Turn sets.
-    f = vec2(q.x, abs(q.y));
+    f = vec2(q.x, abs(q.y)) * uReach;
   } else if (uMode == 3) {
     // Pixelate: Count cells across the short side (pixelate's); with a grid, each cell its point's colour.
     float cells = max(1.0, uN) * 0.5;
@@ -112,16 +113,86 @@ void main() {
     // without a grid, the whole picture so.
     f = q / max(0.05, uZoom);
   }
-  o = mix(at(p), at(base + turned(f, uTurn)), uAmount);
+  return mix(at(p), at(base + turned(f, uTurn)), uAmount);
+}
+void main() {
+  vec2 p = (vUv * 2.0 - 1.0) / uK;
+  bool grid = uCount > 0;
+  // The grid's own slow movement: Grid spin turns it (the angle summed on the CPU, frame by frame, so a change of the
+  // knob changes the pace and never jumps the grid), Breathe zooms it in and out (never out past its laid size, so no
+  // edge shows); the cells are found in its frame, their points brought back to the screen's.
+  float spin = uSpinAngle;
+  float zoom = 1.0 + 0.25 * uBreathe * (0.5 - 0.5 * cos(6.28318530718 * uTime / 16.0));
+  vec2 g = turned(p, -spin) / zoom;
+  // The nearest of the grid's points, and the next (for the seams and the melt).
+  vec2 c = vec2(0.0);
+  vec2 c2 = vec2(0.0);
+  float d = 1e9;
+  float d2 = 1e9;
+  int ci = 0;
+  int ci2 = 0;
+  for (int i = 0; i < ${MOST}; i++) {
+    if (i >= uCount) break;
+    vec2 q = texelFetch(uPoints, ivec2(i, 0), 0).xy;
+    vec2 e = g - q;
+    float dd = dot(e, e);
+    if (dd < d) { d2 = d; c2 = c; ci2 = ci; d = dd; c = q; ci = i; }
+    else if (dd < d2) { d2 = dd; c2 = q; ci2 = i; }
+  }
+  vec2 cs = turned(c * zoom, spin);
+  vec2 cs2 = turned(c2 * zoom, spin);
+  // Where the light is and how bright it is on the whole (LIGHT_CENTRE); where it cannot be measured (no float
+  // target), the middle at a mean of 0.18: Centre looks at the middle, Lift lifts nothing.
+  vec4 lightNow = uMeasured == 1 ? texelFetch(uLight, ivec2(0, 0), 0) : vec4(0.0, 0.0, 0.0, 0.18);
+  o = cellColour(p, cs, ci, grid, lightNow);
+  float gap = 0.5 * (sqrt(d2) - sqrt(d)) * zoom;
+  // Melt: across the border the next cell's picture blended in, half and half on the border itself.
+  if (grid && uMelt > 0.0 && uCount > 1) {
+    float w = 0.5 * (1.0 - smoothstep(0.0, uMelt * 0.2, gap));
+    if (w > 0.001) o = mix(o, cellColour(p, cs2, ci2, grid, lightNow), w);
+  }
   // Dark seams between a grid's cells, Edge wide: where the nearest point and the next are about as near.
-  if (grid && uEdge > 0.0) o.rgb *= smoothstep(0.0, uEdge, 0.5 * (sqrt(d2) - sqrt(d)));
+  if (grid && uEdge > 0.0) o.rgb *= smoothstep(0.0, uEdge, gap);
+  // Lift: a dim picture raised towards a mean lightness of 0.18 (up to 8 times), as a camera's exposure.
+  if (uLift > 0.0) o.rgb *= pow(clamp(0.18 / max(lightNow.w, 1e-4), 1.0, 8.0), uLift);
 }`;
 
-type Draw = (gl: WebGL2RenderingContext, picture: WebGLTexture | null, out: WebGLFramebuffer, width: number, height: number, knobs: Record<string, number>, points: readonly Point[] | null, windows: readonly (WebGLTexture | null)[]) => void;
+// Where the picture's light is (2026-10-30): its brightness-weighted centre over a
+// coarse grid of samples (24 × 14: 336 reads, once a frame), in Fold's frame (the short side −1..1), and its mean
+// lightness; glided from the last frame's (one texel each, ping-ponged; uGlide the frame's share, from its dt) so
+// Centre's window moves smoothly; with too little light it stays where it was.
+const LIGHT_CENTRE = `#version 300 es
+precision highp float;
+uniform sampler2D uIn;
+uniform highp sampler2D uLast;
+uniform vec2 uK;
+uniform float uGlide;
+out vec4 o;
+void main() {
+  vec4 last = texelFetch(uLast, ivec2(0, 0), 0);
+  vec2 sum = vec2(0.0);
+  float total = 0.0;
+  float mean = 0.0;
+  for (int j = 0; j < 14; j++) {
+    for (int i = 0; i < 24; i++) {
+      vec2 uv = (vec2(float(i), float(j)) + 0.5) / vec2(24.0, 14.0);
+      vec3 c = textureLod(uIn, uv, 0.0).rgb;
+      float w = dot(c, vec3(0.299, 0.587, 0.114));
+      mean += w / 336.0;
+      w *= w;
+      sum += w * ((uv * 2.0 - 1.0) / uK);
+      total += w;
+    }
+  }
+  vec2 now = total > 1e-3 ? sum / total : last.xy;
+  o = vec4(mix(last.xy, now, uGlide), mix(last.z, total, uGlide), mix(last.w, mean, uGlide));
+}`;
+
+type Draw = (gl: WebGL2RenderingContext, picture: WebGLTexture | null, out: WebGLFramebuffer, width: number, height: number, knobs: Record<string, number>, points: readonly Point[] | null, windows: readonly (WebGLTexture | null)[], frame?: FrameInfo) => void;
 
 function node(gl: WebGL2RenderingContext, draw: Draw, dispose: () => void): ModuleNode {
   return {
-    draw: (gl, inputs, out, width, height, knobs, _frame, points) => draw(gl, inputs.picture, out, width, height, knobs, points ?? null, inputs.windows ?? []),
+    draw: (gl, inputs, out, width, height, knobs, frame, points) => draw(gl, inputs.picture, out, width, height, knobs, points ?? null, inputs.windows ?? [], frame),
     dispose,
   };
 }
@@ -200,10 +271,59 @@ export function createFold(gl: WebGL2RenderingContext): ModuleNode {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   gl.bindTexture(gl.TEXTURE_2D, null);
   const vao = gl.createVertexArray()!;
+  // Centre's and Lift's light: one texel each way (the light's centre x, y, its amount, its mean), ping-ponged so each
+  // frame glides from the last. Half floats, which either extension lets a page draw into (the tablet's Mali-G52 and the
+  // phone's G615 have EXT_color_buffer_float; walker.ts's rule), read with texelFetch, so no filtering is asked of them.
+  // It starts at the middle at a mean of 0.18, so Lift lifts nothing until it has measured. Where neither extension is
+  // there, nothing is measured and the shader is told so (uMeasured).
+  const measured = !!(gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'));
+  const light = program(gl, FULL_UV, LIGHT_CENTRE);
+  const texel = () => {
+    const t = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, 1, 1, 0, gl.RGBA, gl.FLOAT, new Float32Array([0, 0, 0, 0.18]));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    const fb = gl.createFramebuffer()!;
+    if (measured) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+    return { t, fb };
+  };
+  const lights = [texel(), texel()];
+  let lit = 0;
+  /** The light's glide: about a quarter of a second to come most of the way (0.06 of the way a frame at 60). */
+  const LIGHT_GLIDE_S = 0.27;
+  /** The grid's turn so far (radians), Grid spin's pace summed frame by frame: a turn in two minutes at 1. */
+  let spun = 0;
   return node(
     gl,
-    (gl, picture, out, width, height, knobs, points, windows) => {
+    (gl, picture, out, width, height, knobs, points, windows, frame) => {
       const n = packed(points, data);
+      const dt = Math.min(0.25, Math.max(0, frame?.dt ?? 1 / 60));
+      spun = (spun + (knobs.gridSpin ?? 0) * ((2 * Math.PI) / 120) * dt) % (2 * Math.PI);
+      if (measured && ((knobs.centre ?? 0) > 0 || (knobs.lift ?? 0) > 0)) {
+        const from = lights[lit];
+        const to = lights[1 - lit];
+        gl.bindFramebuffer(gl.FRAMEBUFFER, to.fb);
+        gl.viewport(0, 0, 1, 1);
+        gl.disable(gl.BLEND);
+        gl.useProgram(light);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, picture ?? none(gl));
+        gl.activeTexture(gl.TEXTURE4);
+        gl.bindTexture(gl.TEXTURE_2D, from.t);
+        gl.uniform1i(gl.getUniformLocation(light, 'uIn'), 0);
+        gl.uniform1i(gl.getUniformLocation(light, 'uLast'), 4);
+        gl.uniform2f(gl.getUniformLocation(light, 'uK'), ...toScreen(width / height));
+        gl.uniform1f(gl.getUniformLocation(light, 'uGlide'), 1 - Math.exp(-dt / LIGHT_GLIDE_S));
+        gl.bindVertexArray(vao);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.bindVertexArray(null);
+        lit = 1 - lit;
+      }
       gl.bindFramebuffer(gl.FRAMEBUFFER, out);
       gl.viewport(0, 0, width, height);
       gl.disable(gl.BLEND);
@@ -237,6 +357,19 @@ export function createFold(gl: WebGL2RenderingContext): ModuleNode {
       gl.uniform1f(u('uAmount'), knobs.amount ?? 1);
       gl.uniform1f(u('uZoom'), knobs.zoom ?? 1.5);
       gl.uniform1f(u('uEdge'), knobs.edge ?? 0);
+      gl.uniform1f(u('uCentre'), knobs.centre ?? 0);
+      gl.uniform1f(u('uReach'), knobs.reach ?? 1);
+      gl.uniform1f(u('uLift'), knobs.lift ?? 0);
+      gl.uniform1f(u('uVary'), knobs.vary ?? 0);
+      gl.uniform1f(u('uSpinAngle'), spun);
+      gl.uniform1f(u('uBreathe'), knobs.breathe ?? 0);
+      gl.uniform1f(u('uMelt'), knobs.melt ?? 0);
+      gl.uniform1f(u('uTime'), (frame?.time ?? 0) % 1920);
+      gl.activeTexture(gl.TEXTURE4);
+      gl.bindTexture(gl.TEXTURE_2D, lights[lit].t);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.uniform1i(u('uLight'), 4);
+      gl.uniform1i(u('uMeasured'), measured ? 1 : 0);
       gl.uniform2f(u('uK'), ...toScreen(width / height));
       gl.bindVertexArray(vao);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -244,8 +377,13 @@ export function createFold(gl: WebGL2RenderingContext): ModuleNode {
     },
     () => {
       gl.deleteProgram(p);
+      gl.deleteProgram(light);
       gl.deleteTexture(table);
       gl.deleteVertexArray(vao);
+      for (const l of lights) {
+        gl.deleteTexture(l.t);
+        gl.deleteFramebuffer(l.fb);
+      }
     },
   );
 }

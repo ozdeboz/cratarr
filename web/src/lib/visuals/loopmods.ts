@@ -4,6 +4,7 @@
 // Their drawing is the compositor's (compose.ts). Rates are a second's, so the picture moves alike at any frame rate.
 
 import type { Knob, ModuleType } from './patch';
+import { withAspects } from './engine/knob-aspects';
 
 const knob = (id: string, label: string, min: number, max: number, def: number, kind: 'level' | 'swing' = 'swing'): Knob => ({
   id,
@@ -25,7 +26,7 @@ export const WARP: ModuleType = {
   type: 'warp',
   label: 'Warp',
   place: 'loop',
-  knobs: [
+  knobs: withAspects([
     knob('amount', 'Amount', 0, 1, 1, 'level'),
     knob('zoom', 'Zoom', -1, 1, 0),
     knob('turn', 'Turn', -1, 1, 0),
@@ -47,7 +48,11 @@ export const WARP: ModuleType = {
     knob('turbulence', 'Turbulence', 0, 1, 0, 'level'),
     knob('turbulenceSpeed', 'Turbulence speed', 0, 2, 1),
     knob('turbulenceSize', 'Turbulence size', 0.25, 4, 1),
-  ],
+  ], {
+    amount: null, zoom: 'spatial', turn: 'spatial', driftX: 'motion', driftY: 'motion', stretch: 'spatial', wobble: 'motion', wobbleSize: 'spatial',
+    centreX: 'spatial', centreY: 'spatial', zoomEdge: 'spatial', turnEdge: 'spatial', petals: 'spatial', petalCount: 'spatial', petalTurn: 'spatial',
+    rings: 'spatial', ringCount: 'spatial', ringSpeed: 'motion', turbulence: 'motion', turbulenceSpeed: 'motion', turbulenceSize: 'spatial',
+  }),
 };
 
 /** Keep: how much of the last picture stays (Amount; 0 none, as without a loop) and how long its trails last. */
@@ -55,7 +60,8 @@ export const KEEP: ModuleType = {
   type: 'keep',
   label: 'Keep',
   place: 'loop',
-  knobs: [knob('amount', 'Amount', 0, 1, 1, 'level'), knob('trails', 'Trails', 0, 1, 0.5)],
+  // How long things linger: motion's.
+  knobs: withAspects([knob('amount', 'Amount', 0, 1, 1, 'level'), knob('trails', 'Trails', 0, 1, 0.5)], { amount: 'motion', trails: 'motion' }),
 };
 
 export const LOOP_TYPES: ModuleType[] = [WARP, KEEP];

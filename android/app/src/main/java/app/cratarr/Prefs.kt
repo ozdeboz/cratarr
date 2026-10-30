@@ -23,6 +23,20 @@ class Prefs(context: Context) {
             p.edit().putString(LOCAL_URL, value).apply()
         }
 
+    /** Spike B (0.11): the players' rules from the shared Rust crate in place of the app's Kotlin ([RustRules]). */
+    var rustRules: Boolean
+        get() = p.getBoolean(RUST_RULES, false)
+        set(value) {
+            p.edit().putBoolean(RUST_RULES, value).apply()
+        }
+
+    /** Cratarr's page as its health check last told it ([BundledPage]): "<release> <build>"; null: not told. */
+    var serverPage: String?
+        get() = p.getString(SERVER_PAGE, null)
+        set(value) {
+            p.edit().putString(SERVER_PAGE, value).apply()
+        }
+
     /** Prefer the local network: its address is used whenever it answers. */
     var preferLocal: Boolean
         get() = p.getBoolean(PREFER_LOCAL, false)
@@ -543,6 +557,8 @@ class Prefs(context: Context) {
         const val SERVER_URL = "server_url"
         const val LOCAL_URL = "local_url"
         const val PREFER_LOCAL = "prefer_local"
+        const val SERVER_PAGE = "server_page"
+        const val RUST_RULES = "rust_rules"
         private const val OLD_SIGN_IN_USER = "sign_in_user"
         private const val OLD_SIGN_IN_PASSWORD = "sign_in_password"
         const val SESSION_MARK = "session_mark"

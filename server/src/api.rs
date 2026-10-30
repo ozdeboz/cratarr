@@ -87,7 +87,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/crates/{id}/rows", get(crate_rows))
         .route("/api/crates/{id}/similar", get(similar_crates))
         .route("/api/crates/{id}/tempo", get(crate_tempo))
-        .route("/api/like-curve", get(like_curve))
+        .route("/api/like-curve", get(like_curve).post(like_curve_within))
         .route("/api/tempo", post(tempo_of).put(adjust_tempo))
         .route("/api/playlists/stats", get(playlist_stats))
         .route("/api/crates/{id}/playlist", post(crate_playlist))
@@ -140,6 +140,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/classical/composers/{key}", get(classical_composer))
         .route("/api/tracks/{source}/{id}/versions", get(track_versions))
         .route("/api/status", get(status))
+        // What this install can do (0.11, decision 0085): behind the sign-in, as the open health check must not say.
+        .route("/api/capabilities", get(capabilities))
         .route("/api/incoming", get(incoming))
         .route("/api/insights", get(insights))
         // A playlist's repairs, as its edits: everyone's while playlists are (decision 0051's third stage gives them
@@ -304,7 +306,7 @@ const SLOW_MS: u128 = 1000;
 /// request runs in a `request` span with its id and the app's connection id (`X-Cratarr-Connection`), so the events it
 /// logs carry both (decision 0045). Outermost: the sign-in layer's refusals have them too. First a peer that is not a
 /// proxy named loses its forwarding headers (serve::proxy); then the client is counted (serve::rate); an answer slower
-/// than [SLOW_MS] is a warning in the log, with what was asked (the path's first three parts) and its status.
+/// than [SLOW_MS] is a warning in the log, with what was asked (its method and route, `route_of`) and its status.
 pub async fn request_ids(mut req: axum::extract::Request, next: axum::middleware::Next) -> Response {
     use tracing::Instrument;
     let peer = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0);
@@ -316,6 +318,7 @@ pub async fn request_ids(mut req: axum::extract::Request, next: axum::middleware
     let client = crate::serve::signin::client(req.headers(), peer);
     crate::serve::rate::RATES.seen(&client, conn.as_deref(), req.uri().path());
     let asked = crate::serve::rate::kind_of(req.uri().path());
+    let route = route_of(req.method(), req.extensions().get::<axum::extract::MatchedPath>().map(|m| m.as_str()), req.uri().path());
     let span = tracing::info_span!("request", request = %id, conn = tracing::field::Empty);
     if let Some(c) = &conn {
         span.record("conn", c.as_str());
@@ -327,13 +330,21 @@ pub async fn request_ids(mut req: axum::extract::Request, next: axum::middleware
     let ms = started.elapsed().as_millis();
     if ms > SLOW_MS {
         let status = res.status().as_u16();
-        span.in_scope(|| tracing::warn!(target: "server", client, path = asked.as_str(), status, ms = ms as u64, "slow response"));
+        span.in_scope(|| tracing::warn!(target: "server", client, path = route.as_str(), status, ms = ms as u64, "slow response"));
     }
     if let Ok(v) = HeaderValue::from_str(&id) {
         res.headers_mut().insert("x-request-id", v);
     }
     res.headers_mut().insert("x-response-time-ms", HeaderValue::from(ms as u64));
     res
+}
+
+/// What a slow answer was asked for, for the log: its method and the route that took it (`GET
+/// /api/stream/{source}/{id}/wind`), so a wind is not taken for a stream (0.10.2: the slow answers of 2026-10-30; the
+/// path's first three parts said `/api/stream/cratarr`). Where no route took it (the web app's pages, the fallback),
+/// the path's first three parts, as before. The runaway count (serve::rate) keeps its own key.
+fn route_of(method: &axum::http::Method, matched: Option<&str>, path: &str) -> String {
+    format!("{method} {}", matched.map_or_else(|| crate::serve::rate::kind_of(path), str::to_string))
 }
 
 /// The diagnostics log (decision 0045), off the async threads; refused while it is not open.
@@ -469,12 +480,13 @@ fn new_request_id() -> String {
 }
 
 /// Open to anyone: that Cratarr answers, and which install it is (the app checks its local address is the same
-/// Cratarr as its public one before the page there may talk to it).
+/// Cratarr as its public one before the page there may talk to it), and its page's build (`web`, decision 0085: an app
+/// with its own copy of the page serves the newer).
 async fn health(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
     let app = ctx.app.clone();
     let n = app.playlists.count().await.map_err(ToggleError::from)?;
     let instance = ctx.served.as_ref().and_then(|s| s.sessions.instance_id().ok());
-    Ok(Json(json!({ "status": "ok", "playlists": n, "instance": instance })))
+    Ok(Json(json!({ "status": "ok", "playlists": n, "instance": instance, "web": crate::web::page_build() })))
 }
 
 /// `?source=<id>`: follow that source; absent (or unknown): whichever started playing most recently.
@@ -1960,7 +1972,7 @@ async fn crate_tempo(
 
 #[derive(serde::Deserialize)]
 struct LikeCurveQuery {
-    /// The seeds, song ids, comma-separated.
+    /// The seeds, comma-separated: song ids, and (0.11, quick crates) albums' and artists' (`al-…`, `ar-…`).
     of: String,
     source: Option<String>,
     /// The libraries switched off (`source/library`, comma-separated), as a crate's tracks leave them out.
@@ -1968,6 +1980,8 @@ struct LikeCurveQuery {
     /// The seeds themselves left out, as a `fresh` Sounds like leaves them (Sounds like your week).
     #[serde(default)]
     fresh: bool,
+    /// An artist seed's own tracks kept, as a Sounds like's `own` (0.11, quick crates); left out by default.
+    own: Option<bool>,
     /// How much each seed counts, by `of`'s order, comma-separated (Sounds like your week); none, all alike.
     weights: Option<String>,
 }
@@ -1977,7 +1991,28 @@ async fn like_curve(State(app): State<Arc<App>>, Query(q): Query<LikeCurveQuery>
     let of: Vec<String> = q.of.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
     let weights: Vec<f32> = q.weights.as_deref().unwrap_or("").split(',').filter_map(|s| s.trim().parse().ok()).collect();
-    Ok(Json(app.playlists.like_curve(&of, &weights, q.source.as_deref(), &without, q.fresh).await?))
+    Ok(Json(app.playlists.like_curve(&of, &weights, q.source.as_deref(), &without, q.fresh, q.own, &[]).await?))
+}
+
+/// The Sounds like curve within a crate's other conditions (0.11, quick crates; the owner: "Filtered curve in 0.11"):
+/// the same as the query's, its seeds as a list, and the crate's other conditions as the preview sends them, so the
+/// curve counts only the tracks the crate can pick among. A Sounds like among them is passed over.
+#[derive(Deserialize)]
+struct LikeCurveWithin {
+    of: Vec<String>,
+    #[serde(default)]
+    without: Vec<String>,
+    #[serde(default)]
+    fresh: bool,
+    own: Option<bool>,
+    #[serde(default)]
+    weights: Vec<f32>,
+    #[serde(default)]
+    conditions: Vec<crate::crates::Condition>,
+}
+
+async fn like_curve_within(State(app): State<Arc<App>>, Query(f): Query<Follow>, Json(b): Json<LikeCurveWithin>) -> Result<Json<crate::app::LikeCurve>, ApiError> {
+    Ok(Json(app.playlists.like_curve(&b.of, &b.weights, f.source.as_deref(), &b.without, b.fresh, b.own, &b.conditions).await?))
 }
 
 #[derive(serde::Deserialize)]
@@ -2365,7 +2400,7 @@ async fn player_command(State(app): State<Arc<App>>, Path(name): Path<String>, J
 }
 
 async fn player_state(State(app): State<Arc<App>>, Path(name): Path<String>, Json(r): Json<crate::app::PlayerReport>) -> Result<StatusCode, ApiError> {
-    app.play_on.report(&name, r)?;
+    app.play_on.report_off(name, r).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -3208,16 +3243,17 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
     let Some((path, _, duration_ms)) = found else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "That track is not in the library." }))).into_response();
     };
+    let located = since();
     // The tracks in the way Cratarr has the files of; the first it has not (a preview, another server's) ends the chain.
+    // All in one hold of the catalogue, not three takes of its lock for each of up to 64 (0.10.2: the slow answers of
+    // 2026-10-30); their lengths place the stream (`x-wind-map`), so they are known before its headers.
     let cat = app.library.catalogue();
-    let joins: Vec<(std::path::PathBuf, Option<u64>)> = tokio::task::spawn_blocking(move || {
-        through
-            .iter()
-            .map_while(|(s, i)| (s != crate::bandcamp::SOURCE).then(|| crate::stream::locate(&cat, s, i)).flatten().map(|(p, _, d)| (p, d)))
-            .collect()
-    })
-    .await
-    .unwrap_or_default();
+    let joins: Vec<(std::path::PathBuf, Option<u64>)> = if through.is_empty() {
+        Vec::new()
+    } else {
+        tokio::task::spawn_blocking(move || crate::stream::locate_through(&cat, &through)).await.unwrap_or_default()
+    };
+    let joined = since();
     // The plan alone (0.9.13, `map=1`): where each moment of the stream stands in the queue's tracks, its speed and length;
     // read from the files' headers, nothing decoded.
     if q.map == Some(1) {
@@ -3248,7 +3284,7 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
         };
     }
     let Some(turn) = crate::app::analysis_pass::wind_turn(REWIND_TURN).await else {
-        tracing::warn!(target: "rewind", track = %what, waited = since(), "wind: the wind's turn did not come");
+        tracing::warn!(target: "rewind", track = %what, located, through = joins.len(), joined, waited = since() - joined, "wind: the wind's turn did not come");
         return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": "Other winds hold the turns." }))).into_response();
     };
     // When its turn came, and when its first sound went (the app gives a wind 1.5 s to sound).
@@ -3267,6 +3303,7 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
                 return;
             }
         };
+        let opened = since();
         // The tracks it winds on into (0.9.14-2, up to [WIND_THROUGH]): planned at the stream's rate, each opened only as
         // the wind reaches it, at its own (`Wind::at_rate`); never all at once.
         let mut tracks = vec![(sound.rate(), sound.channels(), duration_ms)];
@@ -3284,6 +3321,10 @@ async fn stream_wind(State(app): State<Arc<App>>, Path((source, id)): Path<(Stri
         let data: u64 = winds.iter().map(Wind::data).sum();
         let (rate, channels) = winds[0].stream();
         let _ = said.send(Ok((44 + data, winds[0].speed(), serde_json::Value::Array(map).to_string())));
+        // Its headers on their way, and what each step before them took (0.10.2: the slow answers of 2026-10-30: a
+        // wind's slow start showed only as a slow "stream", and its own line only when it ended).
+        tracing::info!(target: "rewind", track = %what2, through = joins.len(), locate = located, locate_through = joined - located, turn_wait = turned - joined,
+            open = opened - turned, headers = since(), "wind: headers (ms; headers since the request)");
         let mut blocks = 0u32;
         let mut first: Option<u64> = None;
         let mut send = |b: Vec<u8>| {
@@ -3822,6 +3863,12 @@ impl From<ToggleError> for ApiError {
 
 async fn status(State(app): State<Arc<App>>) -> Json<StatusView> {
     Json(app.status().await)
+}
+
+/// What this install can do (0.11, decision 0085), asked once a page load: the code's features and what is set up and
+/// switched on, names only (`app::capabilities`).
+async fn capabilities(ctx: Ctx) -> Result<Json<crate::app::capabilities::Capabilities>, ApiError> {
+    Ok(Json(crate::app::capabilities::read(&ctx.app, ctx.served.clone()).await.map_err(ToggleError::from)?))
 }
 
 #[derive(Deserialize)]
@@ -6288,6 +6335,32 @@ mod tests {
         assert!(own.len() == 16 && own.bytes().all(|b| b.is_ascii_hexdigit()), "{own}");
         assert_ne!(id_of(app.clone().oneshot(ask(Some("a b"))).await.unwrap()), "a b");
         assert_ne!(own, id_of(app.oneshot(ask(None)).await.unwrap()));
+    }
+
+    #[tokio::test]
+    async fn a_slow_answer_is_named_by_its_method_and_route() {
+        use axum::body::Body;
+        use tower::ServiceExt;
+        // Where request_ids runs (a layer around the routes), the route that took the request is known.
+        let seen = |req: &axum::extract::Request| super::route_of(req.method(), req.extensions().get::<axum::extract::MatchedPath>().map(|m| m.as_str()), req.uri().path());
+        // On one line: `no_path_and_method_is_routed_twice` reads each line that starts with a route as the table's.
+        let wind = axum::Router::new().route("/api/stream/{source}/{id}/wind", axum::routing::get(|| async { "ok" }));
+        let app = wind
+            .fallback(|| async { "page" })
+            .layer(axum::middleware::from_fn(move |req: axum::extract::Request, next: axum::middleware::Next| async move {
+                let route = seen(&req);
+                let mut res = next.run(req).await;
+                res.headers_mut().insert("x-route", axum::http::HeaderValue::from_str(&route).unwrap());
+                res
+            }));
+        let route = |uri: &str| {
+            let app = app.clone();
+            let uri = uri.to_string();
+            async move { app.oneshot(axum::http::Request::get(uri.as_str()).body(Body::empty()).unwrap()).await.unwrap().headers()["x-route"].to_str().unwrap().to_string() }
+        };
+        assert_eq!(route("/api/stream/cratarr/tr-1/wind?dir=back").await, "GET /api/stream/{source}/{id}/wind");
+        assert_eq!(route("/albums/some/where/deep").await, "GET /albums/some/where", "no route: the path's first three parts");
+        assert_eq!(super::route_of(&axum::http::Method::PUT, Some("/api/players/{name}"), "/api/players/Phone"), "PUT /api/players/{name}");
     }
 
     #[test]

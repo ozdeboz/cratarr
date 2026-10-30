@@ -23,7 +23,8 @@ const knob = (id: string, label: string, kind: Knob['kind'], def: number, neutra
 /** Each effect as a module type: Amount (none at 0), then its own knobs; a picture in and out, light too for one
  *  the loop takes. */
 export const EFFECT_TYPES: readonly (ModuleType & { ports: Ports })[] = EFFECTS.map((e) => {
-  const knobs = [knob('amount', 'Amount', 'level', 1, 0), ...e.knobs.map((k, i) => knob(effectKnobIds(e)[i], k.label, 'swing', 0.5, 0.5))];
+  // Amount means none of the aspect dice's four; each own knob what its effect declares.
+  const knobs: Knob[] = [{ ...knob('amount', 'Amount', 'level', 1, 0), aspect: null }, ...e.knobs.map((k, i) => ({ ...knob(effectKnobIds(e)[i], k.label, 'swing', 0.5, 0.5), aspect: k.aspect }))];
   const poly = e.slots.includes('loop');
   const io: Port = { id: 'picture', label: 'Picture', type: 'picture', ...(poly ? { polymorphic: true } : {}) };
   return {

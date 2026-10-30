@@ -103,6 +103,7 @@
   import { undos, withUndo } from './undo.svelte';
   import { isFavorite, isPlaylistFavorite, loadAlbumFavorites, loadFavorites, loadPlaylistFavorites, setArtistHeart, setFavorite, setPlaylistFavorites } from './favourites.svelte';
   import Icon, { type IconName } from './Icon.svelte';
+  import { offers } from './capabilities.svelte';
   import ProgressRing from './ProgressRing.svelte';
   import { untilAudible } from './audible.svelte';
   import AlbumMenu, { offerIn } from './AlbumMenu.svelte';
@@ -908,7 +909,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       .then((d) => {
         nameLike(c, d.name);
         const v = d.conditions.find((x) => x.value.kind === 'like')?.value;
-        return v && v.kind === 'like' ? likeCurve(v.of, prefs.source || undefined, hiddenLibraries(), v.fresh, v.weights) : null;
+        return v && v.kind === 'like' ? likeCurve({ of: v.of, within: d.conditions, without: hiddenLibraries(), fresh: v.fresh, weights: v.weights, own: v.own }, prefs.source || undefined) : null;
       })
       .then(
         (k) => {
@@ -977,8 +978,8 @@ ${r.album_artist ?? r.artist ?? ''}`;
   /** The menu opens at its entries, or at Delete's confirmation (the edit bar's trash). */
   let menuStart = $state<'menu' | 'delete'>('menu');
   /** `outs`: its list's Remove from (one's own playlist) or Exclude from (a crate: the track, its album). */
-  let trackMenu = $state<{ track: MenuTrack; start: 'menu' | 'lists'; outs?: { label: string; icon: IconName; run: () => void }[] } | null>(null);
-  const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({ source: src, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: album?.id ?? r.album_id ?? null });
+  let trackMenu = $state<{ track: MenuTrack; start: 'menu' | 'lists' | 'versions'; outs?: { label: string; icon: IconName; run: () => void }[] } | null>(null);
+  const asTrack = (r: PlaylistRow, src = source): MenuTrack => ({ source: src, id: r.id!, name: r.name ?? r.file, artist: r.artist, album: r.album, album_id: album?.id ?? r.album_id ?? null, has_versions: r.has_versions });
 
   // The action bar's playback actions, icons only as Symfonium's: a new queue (Play, Shuffle), or the whole of it next
   // or at the end of the queue; an album also Resume. A crate plays and shuffles; its favourites toggle sits at the
@@ -2273,6 +2274,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
       })}
     >
       {#snippet lead()}{@render cover(r, src, here)}{/snippet}
+      {#snippet badges()}{#if ok && album && r.has_versions && !selecting && offers('other_versions')}{@render versionsMark(r, src)}{/if}{/snippet}
       {#snippet sub()}
         {#if r.missing}Missing file{:else if !r.id}Not matched yet{:else if artist}{#if !(columns && shows('album'))}<span class="artist">{r.album ?? ''}</span>{/if}{#if r.year && !(columns && shows('year'))}<span class="album">{r.year}</span>{/if}{:else}<span class="artist">{r.artist ?? ''}</span>{#if r.album && !(columns && shows('album'))}<span class="album">{r.album}</span>{/if}{/if}
       {/snippet}
@@ -2362,6 +2364,22 @@ ${r.album_artist ?? r.artist ?? ''}`;
       {/snippet}
     </Row>
   </li>
+{/snippet}
+
+<!-- An album's track with other recordings of its work (0.10): a quiet mark after its title, a tap its track menu's
+     Other versions (the menu's ⋮ reaches them too, for a keyboard). -->
+{#snippet versionsMark(r: PlaylistRow, src: string)}
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+  <span
+    class="versions-mark"
+    role="img"
+    aria-label="Other versions"
+    title="Other versions"
+    onclick={(e) => {
+      e.stopPropagation();
+      trackMenu = { track: asTrack(r, src), start: 'versions' };
+    }}><Icon name="music" size={13} /></span
+  >
 {/snippet}
 
 {#snippet cover(r: PlaylistRow, src: string, here = false)}
@@ -2604,6 +2622,14 @@ ${r.album_artist ?? r.artist ?? ''}`;
 
   .barbtn:disabled {
     opacity: 0.6;
+  }
+
+  .versions-mark {
+    display: flex;
+    flex: none;
+    padding: 4px;
+    margin: -4px 0;
+    opacity: 0.65;
   }
 
   .tool {

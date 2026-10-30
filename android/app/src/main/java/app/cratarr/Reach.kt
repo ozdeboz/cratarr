@@ -71,7 +71,9 @@ object Reach {
                 ?.let { URL(c.url, it).toString() }?.takeIf { it.endsWith("/api/health") }?.removeSuffix("/api/health")
             when {
                 to != null && to != base && moves > 0 -> reach(context, to, ms, anyway, moves - 1)
-                code == 200 -> head(c).let { body -> Health(url, code, isCratarr(body), instanceOf(body)) }
+                code == 200 -> head(c).let { body ->
+                    Health(url, code, isCratarr(body), instanceOf(body)).also { h -> if (h.cratarr) toldPage(context, h, body) }
+                }
                 else -> Health(url, code, code == 401 && c.getHeaderField("WWW-Authenticate")?.let { it.trim().startsWith("Cookie", ignoreCase = true) && "realm=\"Cratarr\"" in it } == true)
             }
         } catch (e: Exception) {
@@ -97,6 +99,13 @@ object Reach {
         JSONObject(body).let { it.optString("status") == "ok" && it.has("playlists") }
     } catch (e: Exception) {
         false
+    }
+
+    /** Cratarr's page as the app's own Cratarr told it (`web`, decision 0085), for [BundledPage]. */
+    private fun toldPage(context: Context, h: Health, body: String) {
+        val known = Prefs(context).instance
+        if (known != null && h.instance != known) return
+        BundledPage.told(context, try { BundledPage.of(JSONObject(body).optJSONObject("web")) } catch (e: Exception) { null })
     }
 
     private fun instanceOf(body: String) = try {

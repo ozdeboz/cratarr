@@ -15,6 +15,7 @@ mod albums;
 pub mod artists;
 pub mod audiomuse;
 pub mod beat_this;
+pub mod capabilities;
 pub mod analysis_pass;
 pub mod analysis_import;
 mod collection;
@@ -278,7 +279,7 @@ impl App {
         StatusView {
             connected: up > 0,
             music: self.library.music().is_some(),
-            incoming: self.library.live().iter().any(|a| a.cfg.enabled && !a.cfg.libraries.incoming.is_empty()),
+            incoming: self.library.incoming_on(),
             sources,
             server_name,
             version: VERSION,

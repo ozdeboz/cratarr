@@ -24,12 +24,13 @@
 import type { FrameInfo, ModuleType, PictureModule } from '../patch';
 import { done, program, target } from './gl';
 import { knob, values } from './knob';
+import { withAspects } from '../engine/knob-aspects';
 
 export const NOISE: ModuleType = {
   type: 'noise',
   label: 'Noise',
   place: 'source',
-  knobs: [
+  knobs: withAspects([
     knob('amount', 'Amount', 0, 1, 1, 'level'),
     // 0 the finest (a cell about a pixel and a half: grain), 1 the coarsest (a cell the picture's height and a half).
     knob('scale', 'Scale', 0, 1, 0.5),
@@ -38,7 +39,7 @@ export const NOISE: ModuleType = {
     // How fast it changes, by its own size: at the finest scale a new pattern each frame.
     knob('speed', 'Speed', 0, 1, 0.2),
     knob('contrast', 'Contrast', 0, 1, 0.5),
-  ],
+  ], { amount: null, scale: 'spatial', detail: 'spatial', speed: 'motion', contrast: 'light' }),
 };
 
 export const MOST_OCTAVES = 6;

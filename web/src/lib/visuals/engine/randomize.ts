@@ -21,6 +21,7 @@ import { SETTING_KNOB, type Knob, type Module, type ModuleType } from '../patch'
 import { isDevice, type CableV2, type PatchV2 } from '../ports';
 import type { Curve, RouteValue } from '../curves';
 import { categoryOf, deviceCategory, portsFrom } from '../rack';
+import { aspectOf, type KnobAspect } from './knob-aspects';
 import { followsOf } from './follow';
 import { ownKnob, placeOf, slotKnobOf, slotModules, slotOf, SLOT_IDS, SLOT_SETTINGS, type Slot } from './effect-slots';
 
@@ -72,13 +73,22 @@ export function scopeNamed(name: string, types: Record<string, ModuleType>): Sco
   // Response: how the rack answers the music, not how it looks: what lies between the music and the picture (the
   // followers, ADSRs, Shapers, the Clock and the Accent; the cables' amounts with them, visuals-loop rollOf).
   if (name === 'response') return (m) => RESPONSE.has(m.type);
-  // Spatial: where things are and how space is laid out (the owner: so a rack without a Grid still rolls): the Grid, the
-  // Field, the folds and copies, the Streamlines' shape (not their colours), the Flame's framing and symmetry.
-  if (name === 'spatial') return (m, k) => SPATIAL.has(m.type) || (m.type === 'streamlines' && !COLOUR.test(k.id)) || (m.type === 'flame' && FLAME_SPATIAL.has(k.id));
-  // Colours: every knob that sets a colour (a hue, its spread, a saturation, a tint, the Flame's palette), nothing else.
-  // Lightness: every knob that sets how light the picture is (a lightness, a brightness, the exposure, a glow, a gamma).
-  if (name === 'lightness') return (_m, k) => LIGHT.test(k.id) || LIGHT.test(k.label ?? '');
-  if (name === 'colours') return (_m, k) => COLOUR.test(k.id) || COLOUR.test(k.label ?? '');
+  // The aspects (the owner, 2026-10-30: "all nodes should select by what they mean"): each rolls every knob of its
+  // meaning in any module, as the module declares it (engine/knob-aspects), a source's and the loop's too. A knob that
+  // declares none falls back to the old matching (tests/knob-aspects.test.ts lists them, expecting none): Spatial's
+  // module list, the colour and light words.
+  const ASPECT: Record<string, KnobAspect> = { spatial: 'spatial', motion: 'motion', colours: 'colour', lightness: 'light' };
+  if (name in ASPECT) {
+    const want = ASPECT[name];
+    return (m, k) => {
+      const a = aspectOf(k);
+      if (a !== undefined) return a === want;
+      if (want === 'spatial') return SPATIAL.has(m.type) || (m.type === 'flame' && FLAME_SPATIAL.has(k.id));
+      if (want === 'colour') return COLOUR.test(k.id) || COLOUR.test(k.label ?? '');
+      if (want === 'light') return LIGHT.test(k.id) || LIGHT.test(k.label ?? '');
+      return false;
+    };
+  }
   const ports = portsFrom(types);
   return (m) => {
     if (isDevice(m)) {

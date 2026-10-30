@@ -31,6 +31,8 @@
   import { visuals } from './lib/visuals/shown.svelte';
   import Crates from './Crates.svelte';
   import AboutSheet, { about } from './lib/AboutSheet.svelte';
+  import QuickCrateSheet from './lib/QuickCrateSheet.svelte';
+  import { quickCrates } from './lib/quickCrates.svelte';
   import Icon, { type IconName } from './lib/Icon.svelte';
   import { target } from './lib/playOnTarget.svelte';
   import { listening, resumeGroup } from './lib/groupListen.svelte';
@@ -859,13 +861,16 @@
     if (prefs.navFolded && !peek) peek = true;
     opened = opened === id || id === pageSection ? null : id;
   }
+  // Folded on the tap's click, not its press (the owner, 2026-10-30: a tap below landed elsewhere): folding moves what
+  // lies under the finger, and between press and release that sent the click to another link. At the click, what it
+  // hit is already settled.
   $effect(() => {
     if (opened === null) return;
-    const away = (e: PointerEvent) => {
+    const away = (e: MouseEvent) => {
       if (!(e.target as Element | null)?.closest?.(`[data-section="${opened}"]`)) opened = null;
     };
-    addEventListener('pointerdown', away, true);
-    return () => removeEventListener('pointerdown', away, true);
+    addEventListener('click', away, true);
+    return () => removeEventListener('click', away, true);
   });
   // In sight (the owner, 2026-10-30), where the sidebar is too low for all of it: a section opened by hand; else the
   // page's end of it, the top for the pages from Home to Discover, the bottom for those at its foot (Settings…).
@@ -1178,6 +1183,7 @@
   {/if}
 
   {#if about.open}<AboutSheet onclose={() => (about.open = false)} />{/if}
+  {#if quickCrates.open}<QuickCrateSheet onclose={() => (quickCrates.open = false)} />{/if}
 
   {#if moreOpen}
     <!-- The page under the bar grown with the other pages dims; a tap there closes it. -->

@@ -1,6 +1,6 @@
 [package]
 name = "cratarr-server"
-version = "0.10.1"
+version = "0.11.0"
 edition = "2024"
 description = "Cratarr core: Jellyfin playlist index and API"
 license = "AGPL-3.0-or-later"
@@ -9,6 +9,8 @@ repository = "https://github.com/ozdeboz/cratarr"
 # The rules for what plays and in what order (rules/), shared with players that play on their own.
 [workspace]
 members = [".", "rules"]
+# Spike B's UniFFI crate is its own workspace (scripts/rules-android.sh).
+exclude = ["rules-ffi"]
 
 [dependencies]
 unicode-normalization = "0.1"
@@ -37,7 +39,6 @@ sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rubato = { version = "=5.0.0", default-features = false, features = ["fft_resampler"] }
-rust-embed = { version = "8", features = ["mime-guess"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The page's Play On types, generated from these (0.10: one protocol).

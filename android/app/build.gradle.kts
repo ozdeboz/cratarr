@@ -80,6 +80,15 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+            // JNA's native part (Spike B) for ABIs no device of the app's has.
+            excludes += setOf("lib/mips/**", "lib/mips64/**", "lib/armeabi/**")
+        }
+    }
+
+    // Spike B: the rules library as scripts/rules-android.sh builds it (not kept in the repository: an app built without it packs none).
+    sourceSets {
+        getByName("main") {
+            jniLibs.directories.add("build/rustJniLibs")
         }
     }
 }
@@ -116,6 +125,50 @@ abstract class FetchSnapclient : DefaultTask() {
     }
 }
 
+/**
+ * The app's own copy of the page (decision 0085, step 1): the web app's build (web/dist, as `pnpm build` leaves it) packed
+ * under the assets' `page/`, answered in place of the server's (BundledPage.kt). Only a build of this very release: an
+ * app without one, or with an older one, goes to the server's page as before, and says so as it is built;
+ * `-Pcratarr.page=required` makes that a failure, for an app that is handed out.
+ */
+abstract class BundlePage : DefaultTask() {
+    @get:InputFiles @get:Optional abstract val dist: DirectoryProperty
+    @get:Input abstract val version: Property<String>
+    @get:Input abstract val required: Property<Boolean>
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun bundle() {
+        val out = outputDir.get().asFile.resolve("page")
+        out.deleteRecursively()
+        val from = dist.orNull?.asFile
+        val built = from?.resolve("build.json")?.takeIf { it.isFile }?.readText()
+        val release = built?.let { Regex("\"version\"\\s*:\\s*\"([^\"]+)\"").find(it)?.groupValues?.get(1) }
+        val missing = when {
+            built == null -> "web/dist holds no built page"
+            release != version.get() -> "web/dist is ${release ?: "an unnumbered"} page, not ${version.get()}'s"
+            else -> null
+        }
+        if (missing != null) {
+            val said = "This app carries no page of its own: $missing. Run `pnpm build` in web/ first."
+            if (required.get()) throw GradleException(said)
+            logger.warn(said)
+            return
+        }
+        from!!.copyRecursively(out, overwrite = true)
+        // The backdrops' and skies' pictures (17 MB of the page's 21) stay the server's: asked for there, then kept by
+        // the page's service worker, so only an app that never reached its server goes without them.
+        for (heavy in listOf("backdrops", "skies")) out.resolve(heavy).deleteRecursively()
+    }
+}
+
+val bundlePage = tasks.register<BundlePage>("bundlePage") {
+    dist.set(rootProject.layout.projectDirectory.dir("../web/dist"))
+    version.set(cratarrVersion)
+    required.set(providers.gradleProperty("cratarr.page").map { it == "required" }.orElse(false))
+    outputDir.set(layout.buildDirectory.dir("page"))
+}
+
 val fetchSnapclient = tasks.register<FetchSnapclient>("fetchSnapclient") {
     url.set("https://github.com/snapcast/snapdroid/releases/download/v0.29.0.2/Snapcast-signed-v0.29.0.2.apk")
     sha256.set("cd835c12ae3bf084ef06064333599040559a871fee48e83f3539e89224b40010")
@@ -126,6 +179,7 @@ val fetchSnapclient = tasks.register<FetchSnapclient>("fetchSnapclient") {
 androidComponents {
     onVariants { variant ->
         variant.sources.jniLibs?.addGeneratedSourceDirectory(fetchSnapclient, FetchSnapclient::outputDir)
+        variant.sources.assets?.addGeneratedSourceDirectory(bundlePage, BundlePage::outputDir)
     }
 }
 
@@ -141,6 +195,8 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.work.runtime)
+    // Spike B: the rules library's Kotlin (UniFFI) reaches it through JNA; the AAR carries JNA's own native part.
+    implementation(libs.jna) { artifact { type = "aar" } }
     testImplementation(libs.junit)
     testImplementation(libs.org.json)
 }

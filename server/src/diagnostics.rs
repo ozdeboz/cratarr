@@ -616,10 +616,35 @@ fn prune(conn: &Connection, now: i64, keep_ms: i64, max_rows: i64) -> Result<()>
 
 // --- what is logged, by area, while Cratarr runs ---
 
-/// The filter for `directives` (as `RUST_LOG`'s): the tag reader's warnings about every MP3 whose length it estimates
-/// kept out (they are normal, and would flood the output).
+/// Libraries whose warnings about ordinary files are kept out, their errors still logged: the tag reader's (lofty)
+/// about every MP3 whose length it estimates, and the decoder's crates' (symphonia: junk at a file's start, tags it
+/// skips, lengths it estimates; 0.10.2: the slow answers of 2026-10-30, where 4,053 of them in 8 minutes rotated the
+/// container's log away). Cratarr says itself when a file will not open or decode. Each crate by name, as its log
+/// lines are targeted (`symphonia_bundle_mp3::demuxer`).
+const QUIET: [&str; 13] = [
+    "lofty",
+    "symphonia_bundle_flac",
+    "symphonia_bundle_mp3",
+    "symphonia_codec_aac",
+    "symphonia_codec_alac",
+    "symphonia_codec_pcm",
+    "symphonia_codec_vorbis",
+    "symphonia_common",
+    "symphonia_core",
+    "symphonia_format_isomp4",
+    "symphonia_format_ogg",
+    "symphonia_format_riff",
+    "symphonia_metadata",
+];
+
+/// The filter for `directives` (as `RUST_LOG`'s), with the [QUIET] libraries' warnings kept out (they are normal,
+/// and would flood the output).
 pub fn filter(directives: &str) -> Result<EnvFilter> {
-    Ok(EnvFilter::try_new(directives)?.add_directive("lofty=error".parse()?))
+    let mut f = EnvFilter::try_new(directives)?;
+    for target in QUIET {
+        f = f.add_directive(format!("{target}=error").parse()?);
+    }
+    Ok(f)
 }
 
 /// What is logged when nothing else is set: `RUST_LOG`, else "info".
@@ -911,5 +936,21 @@ mod tests {
         assert_eq!(l.current().directives, "info,signin=debug");
         let filters = set.lock().unwrap().clone();
         assert!(filters.iter().all(|f| f.contains("lofty=error")), "{filters:?}");
+    }
+
+    #[test]
+    fn the_decoder_s_warnings_about_ordinary_files_are_kept_out() {
+        let f = filter("info").unwrap();
+        let shown = f.to_string();
+        for target in ["lofty", "symphonia_bundle_mp3", "symphonia_core", "symphonia_metadata"] {
+            assert!(shown.contains(&format!("{target}=error")), "{shown}");
+        }
+        let logged = tracing_subscriber::registry().with(f);
+        tracing::subscriber::with_default(logged, || {
+            assert!(!tracing::enabled!(target: "symphonia_bundle_mp3::demuxer", Level::WARN), "junk at a file's start");
+            assert!(!tracing::enabled!(target: "symphonia_core::formats::probe", Level::WARN));
+            assert!(tracing::enabled!(target: "symphonia_core::formats::probe", Level::ERROR), "its errors still");
+            assert!(tracing::enabled!(target: "rewind", Level::INFO), "Cratarr's own as before");
+        });
     }
 }

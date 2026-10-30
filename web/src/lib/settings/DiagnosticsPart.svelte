@@ -5,6 +5,7 @@
   // and as the player last told; then the log, newest first, by player, area and level (its filter in a sheet from the
   // group's heading). Groups of rows (the settings' North Star, 2026-10-19). The file for a bug report is the bar's
   // Download. The log as it is, no prose.
+  import { offers } from '../capabilities.svelte';
   import { getAbout, getLog, getLogLevels, getPlayers, missingCall, restartServer, serverAnswers, setLogLevels, type LogLevels, type LogRow, type PlayOnPlayer } from '../api';
   import ConfirmSheet from './ConfirmSheet.svelte';
   import { toast } from '../toast.svelte';
@@ -170,7 +171,8 @@
   const filtered = $derived(!!place || !!area || !!level);
 </script>
 
-<Group title="Server">
+<!-- Only where the server can restart itself (0.11, lib/capabilities: server_restart; a server before it, as before). -->
+{#if offers('server_restart')}<Group title="Server">
   <Item
     name="Restart Cratarr"
     line={restarting ? 'Restarting…' : started ? `Running since ${when(started)}` : null}
@@ -178,7 +180,7 @@
     disabled={restarting}
     onclick={() => (restartAsk = true)}
   />
-</Group>
+</Group>{/if}
 {#if restartAsk}
   <ConfirmSheet
     title="Restart Cratarr?"

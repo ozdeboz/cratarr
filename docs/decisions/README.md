@@ -237,3 +237,6 @@ by a later record that says so in its header. A new decision takes the next numb
   Incoming and each user's own music; wants and uploads go straight into one's own music within a GB allocation
   (shared-block copies free) and a disk floor; every library and Incoming switchable per user; export as a read-only
   network drive of one's own music and favourites (from outside too, per account).
+- [0085: Offline first, in five steps](0085-offline-first.md): accepted as a plan, beside 0.11 to 0.14. The apps
+  carry their own pages; Downloads an offline shelf; nothing done offline lost; the whole library's index on the
+  device; crates and the queue on the device, through the shared Rust core. The merge rules are the owner's to set.

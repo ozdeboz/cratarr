@@ -6,6 +6,7 @@ import { coverStamps } from './coverStamps.svelte';
 import { coverKey, coverRounds, localCovers } from './localCovers.svelte';
 import { asksSignIn, notReached, reached, refused, refusedFor, toSignIn, unreached, keptAnswer } from './reach.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
+import { asksWithin, curveBody, curveQuery, type CurveAsk } from './likeCurveAsk';
 
 /** What a page says while Cratarr is out of reach (lib/reach.svelte.ts). */
 export const UNREACHED = 'Cannot reach the Cratarr server';
@@ -405,8 +406,9 @@ export type CrateValue =
   | { kind: 'yes' }
   | { kind: 'any_of'; values: string[] }
   | { kind: 'range'; min: number | null; max: number | null }
-  // Sounds like its seeds (song ids): the `count` tracks that sound most like them.
-  | { kind: 'like'; of: string[]; count: number; fresh?: boolean; weights?: number[] };
+  // Sounds like its seeds (song ids; 0.11 albums' and artists', `al-…`, `ar-…`): the `count` tracks that sound most
+  // like them, at least `min` alike (0–100, the curve's scale), an artist seed's own tracks out unless `own`.
+  | { kind: 'like'; of: string[]; count: number; min?: number; own?: boolean; fresh?: boolean; weights?: number[] };
 export type Quantifier = 'any' | 'all';
 export type Condition = { axis: string; not: boolean; value: CrateValue; enabled?: boolean; quantifier?: Quantifier };
 /** `not_artists`: the artists left out of it by hand (0.10, decision 0083: "Not in this crate", an Artist-is-not row of
@@ -570,16 +572,22 @@ export type TempoBands = { bands: number[]; with_tempo: number; total: number };
 /** How alike the tracks that sound most like these seeds are, closest first, 0 to 100 (lib/LikeCurve), and the profile
  *  of the closest `count` at every step its handle can stop at (the profile follows a drag). */
 export type LikeCurveData = { alike: number[]; profiles: { count: number; profile: ListProfileData }[] };
-export const likeCurve = (of: string[], source?: string, without?: string[], fresh = false, weights?: number[]) =>
-  quietly<LikeCurveData>(
-    `/api/like-curve?${new URLSearchParams({
-      of: of.join(','),
-      ...(source ? { source } : {}),
-      ...(without?.length ? { without: without.join(',') } : {}),
-      ...(fresh ? { fresh: 'true' } : {}),
-      ...(weights?.length ? { weights: weights.map((w) => +w.toFixed(3)).join(',') } : {}),
-    })}`,
-  );
+/** Within a crate's other conditions (lib/likeCurveAsk, 0.11), POSTed; a server before 0.11 has only the GET, and
+ *  is asked that once it said so (the curve then counts the whole library, as before). */
+let curveWithin = true;
+export const likeCurve = (ask: CurveAsk, source?: string): Promise<LikeCurveData> => {
+  const get = () => quietly<LikeCurveData>(`/api/like-curve?${curveQuery(ask, source)}`);
+  if (!curveWithin || !asksWithin(ask)) return get();
+  return quietly<LikeCurveData>(`/api/like-curve${source ? `?${new URLSearchParams({ source })}` : ''}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(curveBody(ask)),
+  }).catch((e) => {
+    if (!missingCall(e)) throw e;
+    curveWithin = false;
+    return get();
+  });
+};
 export const crateTempo = (id: string, source?: string, favourites?: CrateFavourites, favouriteAlbums?: CrateFavourites, look: CrateLook = {}) => {
   const q = new URLSearchParams();
   if (favourites) q.set('favourites', favourites);
@@ -806,6 +814,8 @@ export type PlaylistRow = {
   album_id?: string;
   /** A crate's row: how many tracks its album has (0.10; Cratarr's own library's rows). */
   album_tracks?: number;
+  /** An album's row on Cratarr's own library: the library holds other recordings of its work (0.10, Other versions). */
+  has_versions?: boolean;
 };
 
 /** Take a playlist's repeats out, the first copy of each track staying (decision 0025, amended 2026-10-16). */
@@ -1112,6 +1122,8 @@ export type Me = {
   sessions?: UserSession[];
 };
 export const getMe = () => quietly<Me>('/api/me');
+/** What this server can do (0.11, lib/capabilities): the names of what it has configured and what its code supports. */
+export const getCapabilities = () => quietly<import('./generated/Capabilities').Capabilities>('/api/capabilities');
 /** Ends one of one's own sign-ins, or takes one of one's own devices away. */
 export const endMySession = (id: string) => request<void>(`/api/me/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
 export const removeMyDevice = (id: string) => request<void>(`/api/me/devices/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -2032,11 +2044,12 @@ export type AlbumView = {
  *  item in lib/search's shape; a track's subject is its album's, the track itself in `track`. */
 /** What the server's search finds: the library's kinds, the account's playlists and crates, and what is not in the
  *  library (decision 0072, 7): albums missing from its artists, and what Discover leaves out. */
-export type SearchKind = 'album' | 'artist' | 'track' | 'genre' | 'style' | 'mood' | 'tag' | 'playlist' | 'crate' | 'missing' | 'excluded' | 'spotify' | 'suggested' | 'requested';
+export type SearchKind = 'album' | 'artist' | 'track' | 'genre' | 'style' | 'mood' | 'tag' | 'label' | 'playlist' | 'crate' | 'missing' | 'excluded' | 'spotify' | 'suggested' | 'requested';
+/** An item found: a track's own id in `track`; an artist's library id in `id` (`ar-…`, 0.11: a Sounds like's seed). */
 export type ServerSearch = {
   q: string;
-  groups: Partial<Record<SearchKind, { total: number; items: (SearchResult & { track?: string })[] }>>;
-  top: (SearchResult & { track?: string })[];
+  groups: Partial<Record<SearchKind, { total: number; items: (SearchResult & { track?: string; id?: string })[] }>>;
+  top: (SearchResult & { track?: string; id?: string })[];
 };
 /** Searches the server: `kinds` only (all where none), `limit` a kind (20; 100 at most), from `offset` on (a Show all's
  *  next page, decision 0076; a server before 0.9.13 answers from the start again). */
@@ -2435,11 +2448,18 @@ export const albumsTracks = (albums: { source: string; id: string }[]) =>
 /** Whether the server has 0.9.4's calls for many at once (its library tracks list answers), asked once: a call it
  *  already had with a new meaning (append's only_new) is used only then. */
 let newer: Promise<boolean> | null = null;
-export const hasBatches = () =>
-  (newer ??= quietly(`/api/library/tracks?${new URLSearchParams({ offset: '0', limit: '1' })}`).then(
+export const hasBatches = (): Promise<boolean> => {
+  // The server's list says it, where it has one (0.11, lib/capabilities); else asked as before.
+  const said = canBatch?.();
+  if (said !== null && said !== undefined) return Promise.resolve(said);
+  return (newer ??= quietly(`/api/library/tracks?${new URLSearchParams({ offset: '0', limit: '1' })}`).then(
     () => true,
     (e) => !(e instanceof ApiError && (e.status === 404 || e.status === 405)),
   ));
+};
+/** The capability list's word on batches, given by lib/capabilities (which imports this module, so not the other way). */
+let canBatch: (() => boolean | null) | null = null;
+export const tellBatches = (f: () => boolean | null) => void (canBatch = f);
 /** Those of `ids` a playlist does not hold yet, added in one call (0.9.4). */
 export const appendNew = (id: string, source: string, ids: string[]) =>
   post<{ playlist: string; added: number } & Undo>(`/api/playlists/${encodeURIComponent(id)}/append`, { source, ids, only_new: true });

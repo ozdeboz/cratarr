@@ -65,21 +65,33 @@ data class Deck(val index: Int, val ms: Long, val speed: Double, val accel: Doub
  * tape is where it says.
  */
 data class Plan(val t0: Long, val index: Int, val ms: Long, val sign: Int, val v0: Double, val to: Double, val brakeMs: Long) {
-    /** Its speed [t] ms after it was let go (×). */
-    fun v(t: Long): Double {
+    /** Its speed [t] ms after it was let go (×): Rust's when the device's switch says so (Spike B, [RustRules]). */
+    fun v(t: Long): Double =
+        if (RustRules.on) app.cratarr.rules.brakeV(v0, to, brakeMs.toDouble(), t.toDouble()) else kotlinV(t)
+
+    /** Its way by [t] ms after it was let go (ms of track). */
+    fun way(t: Long): Double =
+        if (RustRules.on) app.cratarr.rules.brakeWay(v0, to, brakeMs.toDouble(), t.toDouble()) else kotlinWay(t)
+
+    /** How fast its speed changes [t] ms after it was let go (× a second). */
+    fun accel(t: Long): Double =
+        if (RustRules.on) app.cratarr.rules.brakeAccel(v0, to, brakeMs.toDouble(), t.toDouble()) else kotlinAccel(t)
+
+    /** The app's own speed (×), until Spike B is judged. */
+    fun kotlinV(t: Long): Double {
         if (t >= brakeMs) return to
         return to + (v0 - to) * (1 + kotlin.math.cos(Math.PI * t.coerceAtLeast(0L) / brakeMs)) / 2
     }
 
-    /** Its way by [t] ms after it was let go (ms of track). */
-    fun way(t: Long): Double {
+    /** The app's own way (ms of track). */
+    fun kotlinWay(t: Long): Double {
         val whole = brakeMs.toDouble()
         val s = t.coerceIn(0L, brakeMs).toDouble()
         return to * s + (v0 - to) * (s / 2 + whole / (2 * Math.PI) * kotlin.math.sin(Math.PI * s / whole)) + to * (t - brakeMs).coerceAtLeast(0L)
     }
 
-    /** How fast its speed changes [t] ms after it was let go (× a second). */
-    fun accel(t: Long): Double =
+    /** The app's own change of speed (× a second). */
+    fun kotlinAccel(t: Long): Double =
         if (t < 0 || t >= brakeMs) 0.0 else -(v0 - to) * Math.PI / (2.0 * brakeMs) * kotlin.math.sin(Math.PI * t / brakeMs) * 1000.0
 
     companion object {
@@ -88,8 +100,9 @@ data class Plan(val t0: Long, val index: Int, val ms: Long, val sign: Int, val v
         const val DECEL_X = 64.0
 
         /** How long a brake from [v0] to [to] lasts (ms): at [DECEL_X], never shorter than the Brake as set
-         *  ([brakeMs]), which a slow one keeps (the web page: the same). */
+         *  ([brakeMs]), which a slow one keeps (the web page: the same). A half rounds up, as the page's and the server's
+         *  do (`kotlin.math.round` would round it to even: 250.5 ms to 250, not 251; shared/rules.json holds that case). */
         fun lengthMs(v0: Double, to: Double, brakeMs: Long): Long =
-            max(brakeMs, kotlin.math.round(kotlin.math.abs(v0 - to) / DECEL_X * 1000.0).toLong())
+            max(brakeMs, kotlin.math.floor(kotlin.math.abs(v0 - to) / DECEL_X * 1000.0 + 0.5).toLong())
     }
 }

@@ -10,6 +10,8 @@ RUN corepack enable
 COPY web/package.json web/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY web/ ./
+# The release the page's build.json names (decision 0085), as vite.config.ts reads it: ../VERSION.
+COPY VERSION /app/VERSION
 RUN pnpm build
 
 # The source and its toolchain, which the release build and the tests each start from (a test run no longer waits
@@ -20,7 +22,6 @@ RUN apk add --no-cache musl-dev build-base cmake
 ARG CARGO_BUILD_JOBS
 WORKDIR /app
 COPY server/ server/
-COPY --from=web /app/web/dist web/dist
 WORKDIR /app/server
 
 FROM source AS build
@@ -35,12 +36,15 @@ COPY shared /app/shared
 # Unoptimised (the owner, 2026-10-26): the tests are their own compile whatever is done, and this one is the quicker.
 RUN --mount=type=cache,id=cratarr-cargo-registry,target=/usr/local/cargo/registry     --mount=type=cache,id=cratarr-target,target=/app/server/target     cargo test --locked --workspace
 
-# The binary alone, to take out (the test server runs on it).
+# The binary alone, to take out (the test server runs on it, with CRATARR_WEB_DIR at a built web/dist).
 FROM scratch AS binary
 COPY --from=build /cratarr-server /cratarr-server
 
 FROM scratch
 COPY --from=build /cratarr-server /cratarr-server
+# The page as a folder beside the binary (0.11): a page-only change rebuilds no Rust, only this layer.
+COPY --from=web /app/web/dist /web
+ENV CRATARR_WEB_DIR=/web
 ENV CRATARR_BIND=0.0.0.0:8080
 # Settings and databases in /data, mounted from outside; an install sets its own `user` (the owner of its music).
 ENV CRATARR_DATA_DIR=/data

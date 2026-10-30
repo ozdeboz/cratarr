@@ -4,6 +4,7 @@
 import { backInCrate, excludeArtist, getCrate, getExcludedArtists, includeArtist, notInCrate, type ExcludedArtist } from './api';
 import { artistKey } from './artistCredits';
 import { toast } from './toast.svelte';
+import { can } from './capabilities.svelte';
 import { withUndo } from './undo.svelte';
 
 export const excludedArtists = $state({
@@ -19,6 +20,8 @@ let asked = false;
 /** Read once (again after a change elsewhere); a server without the list leaves it null. */
 export function loadExcludedArtists(again = false) {
   if (asked && !again) return;
+  // Not asked where the server's list says it has none (0.11, lib/capabilities: exclude_artists); it stays null.
+  if (can('exclude_artists') === false) return;
   asked = true;
   getExcludedArtists().then(
     (l) => (excludedArtists.everywhere = l ?? []),

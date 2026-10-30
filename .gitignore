@@ -1,5 +1,6 @@
 # Rust
 /server/target/
+/server/rules-ffi/target/
 # Node / Svelte
 /web/node_modules/
 /web/dist/

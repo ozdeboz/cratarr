@@ -22,6 +22,7 @@ import { prefs } from './prefs.svelte';
 import { appInfo } from './app.svelte';
 import { asksSignIn, refused, refusedFor, toSignIn } from './reach.svelte';
 import { setOwnSleep, sleep } from './sleep.svelte';
+import { oneInFlight } from './oneInFlight';
 
 /** Every so often a report, even with nothing changed: the position, and that the page is still there. */
 const HEARTBEAT_MS = 5_000;
@@ -152,7 +153,7 @@ let logged = 0;
 const LOG_MS = 30_000;
 
 /** The lines Cratarr has not had yet, to it. */
-async function sendLog(player: string) {
+async function sendLogNow(player: string) {
   const base = `/api/players/${encodeURIComponent(player)}/log`;
   try {
     const held = await fetch(`${base}?log=${encodeURIComponent(LOG)}`);
@@ -183,8 +184,11 @@ let wakeUntil = 0;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let reportTimer: ReturnType<typeof setTimeout> | undefined;
 
+/** The lines Cratarr has not had yet, one sending at a time (lib/oneInFlight). */
+const sendLog = oneInFlight(sendLogNow, (_was: string, now: string) => now);
+
 /** What plays, to Cratarr; with the queue when it changed since the last report (or `withQueue`). */
-async function report(withQueue = false) {
+async function sendReport(withQueue = false) {
   // Not while the proxy refuses this page (lib/reach): each would be one more knock on a ban.
   if (!name || !target.connected || refusedFor() > 0) return;
   // Following a group, it keeps no queue of its own: what it plays is the group's sound.
@@ -258,6 +262,11 @@ async function report(withQueue = false) {
     reported(false, e instanceof Error ? e.message : String(e));
   }
 }
+
+/** A report, one on its way at a time (lib/oneInFlight: those that piled up on a slow server held a hold's stream back
+ *  from it); asked meanwhile, one more after it with what plays then, with the queue if any of the asks wanted it. */
+const reporting = oneInFlight(sendReport, (was: boolean, now: boolean) => was || now);
+const report = (withQueue = false) => reporting(withQueue);
 
 /** Whether reports get through: written down as it changes, not every report. */
 function reported(ok: boolean, error: string) {

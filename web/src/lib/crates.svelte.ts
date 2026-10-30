@@ -197,10 +197,11 @@ export const GENRE = 'genre:';
 export const genreOf = (crate: string | null) => (crate?.startsWith(GENRE) ? crate.slice(GENRE.length) : null);
 export const viewGenre = (name: string) => viewPlaylist(CRATE + GENRE + name);
 /** A word's crate (0.9.7, the harvest: the owner, 2026-10-26): as a genre's, for each kind of word (`crate:style:<w>`,
- *  `crate:mood:<w>`, `crate:tag:<w>`), the server's crates::genre_crate making all four; found by the global search. */
-export const WORD_KINDS = ['genre', 'style', 'mood', 'tag'] as const;
+ *  `crate:mood:<w>`, `crate:tag:<w>`, and 0.11's `crate:label:<w>`), the server's crates::genre_crate making them all;
+ *  found by the global search. */
+export const WORD_KINDS = ['genre', 'style', 'mood', 'tag', 'label'] as const;
 export type WordKind = (typeof WORD_KINDS)[number];
-export const WORD_LABEL: Record<WordKind, string> = { genre: 'Genre', style: 'Style', mood: 'Mood', tag: 'Tag' };
+export const WORD_LABEL: Record<WordKind, string> = { genre: 'Genre', style: 'Style', mood: 'Mood', tag: 'Tag', label: 'Label' };
 export function wordOf(crate: string | null): { kind: WordKind; word: string } | null {
   if (!crate) return null;
   for (const kind of WORD_KINDS) if (crate.startsWith(`${kind}:`)) return { kind, word: crate.slice(kind.length + 1) };

@@ -14,8 +14,11 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
 
 - **0.11: quick crates.** A crate made from a few typed terms: a genre, an artist meaning "sounds like" that artist,
   a label or an album, each a chip that can switch between "like" and "by"; filtered first, then ranked, with a
-  closeness cutoff and the artist's own tracks left out. The Library's Tracks page goes once these exist. With it: a
+  closeness cutoff and the artist's own tracks left out. (The Library's Tracks page already went, in 0.10.) With it: a
   mark on the tracks that have other versions, and a spike of the rules crate inside the Android app, behind a switch.
+  *On trunk:* quick crates (the closeness curve counted among the crate's other words still to come), labels in
+  search, the other-versions mark, the spike (done: one crossing per frame for 0075), the server's capabilities, the
+  page served from a folder, and the apps' own pages ([whats-new-0.11](whats-new-0.11.md)).
 - **0.12: modes per server** (the External library below, taken up). Cratarr's mode is Cratarr's own library, its
   libraries (Music, Incoming, each user's own) still switched on and off within it; each other server (a Jellyfin, a
   Subsonic server) is a mode of its own, with its library and playlists, search and Cratarr's players, but no crates,
@@ -24,6 +27,9 @@ What comes after 0.10, in order. Each becomes a decision when it is taken up.
 - **0.13: each user's own music** ([0084](decisions/0084-each-users-own-music.md)).
 - **Beside these, where there is room:** other versions not in the library (with Discover); matching versions by title
   and composer where MusicBrainz has no work for them.
+- **Offline first, beside these** ([0085](decisions/0085-offline-first.md)), five steps each useful on its own: the
+  apps carry their own pages (beside 0.11); Downloads an offline shelf, and nothing done offline lost (beside 0.12);
+  the whole library's index on the device (beside 0.13); crates and the queue on the device (0.14).
 - **Then:** one tape engine ([0075](decisions/0075-one-tape-engine.md)), as the spike above turns out.
 
 ## External library

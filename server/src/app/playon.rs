@@ -2039,7 +2039,18 @@ impl PlayOn {
         }
     }
 
-    /// What a player says it plays.
+    /// [`PlayOn::report`] on a thread of its own, as the request's account and in its span (0.10.2: the slow answers of
+    /// 2026-10-30): a new track's ids (the catalogue's and the library's SQLite) and its listening start (the accounts'
+    /// data) wait on locks a slow disk can hold for seconds, and on one of the server's few async threads that held up
+    /// every answer. Whole, so its steps and its holds of the players' lock stay as they are.
+    pub async fn report_off(self: &Arc<Self>, name: String, report: Report) -> Result<(), ToggleError> {
+        let (me, who, span) = (Arc::clone(self), crate::serve::who::current(), tracing::Span::current());
+        tokio::task::spawn_blocking(move || span.in_scope(|| crate::serve::who::acting_as_blocking(who, || me.report(&name, report))))
+            .await
+            .map_err(|e| ToggleError::Upstream(anyhow::Error::from(e)))?
+    }
+
+    /// What a player says it plays. Blocking (its SQLite): from a request, [`PlayOn::report_off`].
     pub fn report(self: &Arc<Self>, name: &str, report: Report) -> Result<(), ToggleError> {
         valid_name(name)?;
         let mut entries = self.entries();

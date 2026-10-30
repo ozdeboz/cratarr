@@ -57,7 +57,7 @@ pub struct LikeStep {
 }
 
 /// What sounds like a track or an album (`like:<item>[@<count>]`, `crates::like_crate`): named after it, an album's
-/// seeds its songs.
+/// seeds its songs. An artist's too (0.11, quick crates: `ar-…`, seeded by their id, their own tracks left out).
 async fn like_crate(served: Option<Arc<crate::serve::Serve>>, id: &str, item: &str, count: usize) -> Result<CrateDef, ToggleError> {
     let served = served.ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
     if item == crates::WEEK {
@@ -89,6 +89,9 @@ async fn like_crate(served: Option<Arc<crate::serve::Serve>>, id: &str, item: &s
     let found = tokio::task::spawn_blocking(move || -> Result<Option<(String, Vec<String>)>> {
         if crate::serve::ids::track_of(&item).is_some() {
             return Ok(served.library.songs_by_id(std::slice::from_ref(&item))?.pop().map(|s| (s.title, vec![s.id])));
+        }
+        if item.starts_with(crate::serve::ids::ARTIST) {
+            return Ok(served.library.artist(&item)?.map(|a| (a.name, vec![item.clone()])));
         }
         Ok(served.library.album(&item)?.map(|a| (a.name, a.song.unwrap_or_default().into_iter().map(|s| s.id).collect())))
     })
@@ -2975,24 +2978,31 @@ impl PlaylistService {
         Ok(self.keep(Change::Crate { before, after: None }))
     }
 
-    /// How alike the tracks that sound most like these seeds (song ids) are, closest first, 0 to 100, at most
-    /// `crates::LIKE_MOST` of them: the Sounds like curve (lib/LikeCurve), cut where the crate ends.
+    /// How alike the tracks that sound most like these seeds (song ids; 0.11, quick crates: an album's or an artist's,
+    /// `crates::Alike::seed_places`) are, closest first, 0 to 100 (the scale of a Sounds like's `min`, so the page shows
+    /// where that cut falls), at most `crates::LIKE_MOST` of them: the Sounds like curve (lib/LikeCurve), cut where the
+    /// crate ends.
     /// Over what a seed crate may show, as its tracks are picked (`CrateLibrary::resolved`): the libraries not in
     /// `without`, less the tracks excluded everywhere. With the profile at every step its handle can stop at
-    /// (`crates::profiles_along`), so the profile follows a drag (the owner, 2026-10-23).
-    pub async fn like_curve(&self, of: &[String], weights: &[f32], want: Option<&str>, without: &[String], fresh: bool) -> Result<LikeCurve, ToggleError> {
-        let lib = self.crate_library(want, false, false, without).await?;
+    /// (`crates::profiles_along`), so the profile follows a drag (the owner, 2026-10-23). Among only the tracks that pass
+    /// the crate's other `conditions` (0.11, quick crates; the owner: "Filtered curve in 0.11"), as its Sounds like picks
+    /// its closest among them, so the curve counts what the crate's preview counts.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn like_curve(&self, of: &[String], weights: &[f32], want: Option<&str>, without: &[String], fresh: bool, own: Option<bool>, conditions: &[crates::Condition]) -> Result<LikeCurve, ToggleError> {
+        let lib = self.crate_library_for(conditions, want, without).await?;
         let excluded: HashSet<String> = self.own_crates()?.excluded().await?.into_iter().collect();
         let artists = self.artists_out().await?;
-        let (of, weights, lib) = (of.to_vec(), weights.to_vec(), Arc::new(lib));
+        let (of, weights, lib, conditions) = (of.to_vec(), weights.to_vec(), Arc::new(lib), conditions.to_vec());
         tokio::task::spawn_blocking(move || {
-            let among: Vec<&crates::Facts> = lib.files().filter(|f| !excluded.contains(&f.rel) && !crates::credits_out(f, &artists)).collect();
-            let mut closest = crates::closest_weighted(&of, &weights, lib.alike(), &among, lib.by());
-            // Fresh: the seeds left out, as the crate leaves them (crates::resolved).
-            if fresh {
-                let seeds: HashSet<i64> = of.iter().filter_map(|id| crate::serve::ids::track_of(id)).collect();
-                closest.retain(|(f, _)| !f.track.is_some_and(|t| seeds.contains(&t)));
-            }
+            // Its own left out as the crate leaves them (`crates::resolved`): fresh, its track and album seeds; an
+            // artist seed's own tracks unless `own` keeps them.
+            let out = crates::SeedsOut::of(&of, fresh, own, lib.alike());
+            let w = lib.world();
+            let among: Vec<&crates::Facts> = lib
+                .files()
+                .filter(|f| !excluded.contains(&f.rel) && !crates::credits_out(f, &artists) && !out.holds(f) && crates::holds_besides_like(&conditions, f, &w))
+                .collect();
+            let closest = crates::closest_weighted(&of, &weights, lib.alike(), &among, lib.by());
             let alike = closest.iter().map(|(_, a)| (a * 10.0).round() / 10.0).collect();
             let tracks: Vec<&crates::Facts> = closest.iter().map(|(f, _)| *f).collect();
             let scales = crates::Scales::of(&lib.files().collect::<Vec<_>>());

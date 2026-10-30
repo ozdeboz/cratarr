@@ -936,14 +936,34 @@ impl Catalogue {
         {
             tracing::warn!("crates: Classical not read: {e:#}");
         }
-        // Each file with its album's words (0.9.7): genres, styles, moods and tags from every source.
         if let Some(s) = &served
-            && let (Ok(merged), Ok(albums)) = (crate::app::words::merged(s), s.library.song_album_map())
+            && let Ok(albums) = s.library.song_album_map()
         {
-            for f in &mut facts {
-                if let Some(words) = f.track.and_then(|t| albums.get(&crate::serve::ids::song(t))).and_then(|a| merged.albums.get(a)) {
-                    crate::app::words::add_to(f, words);
+            // Each file with its album's words (0.9.7): genres, styles, moods and tags from every source.
+            if let Ok(merged) = crate::app::words::merged(s) {
+                for f in &mut facts {
+                    if let Some(words) = f.track.and_then(|t| albums.get(&crate::serve::ids::song(t))).and_then(|a| merged.albums.get(a)) {
+                        crate::app::words::add_to(f, words);
+                    }
                 }
+            }
+            // And with its album's id (0.11, quick crates: the Album axis, an album seed), one copy for all its
+            // tracks; its labels Discogs' for its album where its tags name none, as kept (never asked for here).
+            match (s.library.album_bases(), crate::app::discogs_facts::kept_labels(s)) {
+                (Ok(bases), Ok(labels)) => {
+                    let mut shared: HashMap<&str, Arc<str>> = HashMap::new();
+                    for f in &mut facts {
+                        let Some(album) = f.track.and_then(|t| albums.get(&crate::serve::ids::song(t))) else { continue };
+                        let Some(base) = bases.get(album) else { continue };
+                        f.album = Some(shared.entry(album.as_str()).or_insert_with(|| Arc::from(album.as_str())).clone());
+                        if f.labels.is_empty()
+                            && let Some(l) = labels.get(base)
+                        {
+                            f.labels = l.clone();
+                        }
+                    }
+                }
+                (Err(e), _) | (_, Err(e)) => tracing::warn!("crates: albums and labels not read: {e:#}"),
             }
         }
         let facts = Arc::new(facts);
@@ -970,6 +990,20 @@ impl Catalogue {
         for row in st.query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, String>(2)?)))? {
             let (place, value) = row?;
             tag_keys.entry(place).or_insert(value);
+        }
+        // Its labels (0.11, quick crates): Vorbis LABEL or ORGANIZATION and MP4's LABEL (read as "label"), ID3v2 TPUB and
+        // Vorbis PUBLISHER (lofty reads those as the publisher: kept by their raw keys). Every tag is kept, so no file
+        // needs reading again for them.
+        let mut st = db.prepare("SELECT folder, rel, value FROM tags WHERE folder >= 0 AND (name = 'label' OR raw IN ('TPUB', 'PUBLISHER')) ORDER BY folder, rel, n")?;
+        let mut tag_labels: HashMap<Place, Vec<String>> = HashMap::new();
+        for row in st.query_map([], |r| Ok(((r.get::<_, i64>(0)?, r.get::<_, String>(1)?), r.get::<_, String>(2)?)))? {
+            let (place, value) = row?;
+            let into = tag_labels.entry(place).or_default();
+            for l in crate::crates::labels_of(&value) {
+                if !into.iter().any(|x| x.eq_ignore_ascii_case(&l)) {
+                    into.push(l);
+                }
+            }
         }
         let mut st = db.prepare(
             "SELECT folder, rel, name, value FROM tags WHERE folder >= 0 AND name IN ('genre', 'date', 'originaldate', 'bpm', 'artist', 'albumartist', 'artists', 'mood', 'style', 'grouping') ORDER BY folder, rel, n",
@@ -1078,6 +1112,8 @@ impl Catalogue {
                     key: tag_keys.remove(&place).and_then(|k| crate::crates::key_name(&k)).or_else(|| muse_key.and_then(|k| crate::crates::key_name(&k))),
                     release_types: Vec::new(),
                     tags: file_tags,
+                    album: None,
+                    labels: tag_labels.remove(&place).unwrap_or_default(),
                 })
             })
             .collect())
@@ -1632,25 +1668,23 @@ impl Catalogue {
     /// The track a server's item id stands for (decision 0012), when the item is linked to a file the catalogue
     /// counts. Cratarr's own source (decision 0032) needs no links: its ids are the track ids. Blocking.
     pub fn track_of_source(&self, source: &str, item: &str) -> Option<i64> {
-        if source == crate::source::cratarr::KIND.id {
-            let track = crate::serve::ids::track_of(item)?;
-            let present = format!("SELECT 1 FROM files WHERE track = ?1 AND {PRESENT}");
-            return self.db().query_row(&present, [track], |_| Ok(())).optional().ok().flatten().map(|()| track);
-        }
-        self.db()
-            .query_row(
-                &format!(
-                    "SELECT f.track FROM source_ids s JOIN files f ON f.folder = s.folder AND f.rel = s.rel
-                     WHERE s.source = ?1 AND s.track_id = ?2 AND {}",
-                    PRESENT_F
-                ),
-                params![source, item],
-                |r| r.get(0),
-            )
-            .optional()
-            .ok()
-            .flatten()
-            .flatten()
+        track_of_source(&self.db(), source, item)
+    }
+
+    /// Each of these server tracks' file (folder id, relative path) and length, nearest first, as `track_of_source`,
+    /// `file_of` and `duration_of` find them one by one; up to the first it has no file of. In one hold of the catalogue
+    /// (0.10.2: the slow answers of 2026-10-30): a wind through the queue looked up its 64 tracks with three takes of
+    /// the lock each, 192 waits behind whatever else held it, before its headers went. Blocking.
+    pub fn files_of_sources(&self, items: &[(&str, &str)]) -> Vec<(i64, String, Option<u64>)> {
+        let db = self.db();
+        items
+            .iter()
+            .map_while(|(source, item)| {
+                let (folder, rel) = file_of(&db, track_of_source(&db, source, item)?)?;
+                let duration_ms = duration_of(&db, folder, &rel);
+                Some((folder, rel, duration_ms))
+            })
+            .collect()
     }
 
     /// A track's item id on a server (decision 0012), when it is linked. Blocking.
@@ -1735,16 +1769,7 @@ impl Catalogue {
     }
 
     pub fn duration_of(&self, folder: i64, rel: &str) -> Option<u64> {
-        self.db()
-            .query_row(&format!("SELECT duration_ms FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"), params![folder, rel], |r| {
-                r.get::<_, Option<i64>>(0)
-            })
-            .optional()
-            .ok()
-            .flatten()
-            .flatten()
-            .filter(|d| *d > 0)
-            .map(|d| d as u64)
+        duration_of(&self.db(), folder, rel)
     }
 
     // --- A file's analysis (decision 0035) ---
@@ -2105,11 +2130,7 @@ impl Catalogue {
     }
 
     pub fn file_of(&self, track: i64) -> Option<(i64, String)> {
-        self.db()
-            .query_row(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT}"), [track], |r| Ok((r.get(0)?, r.get(1)?)))
-            .optional()
-            .ok()
-            .flatten()
+        file_of(&self.db(), track)
     }
 
     /// A note the catalogue keeps (its `meta` table), by key.
@@ -2622,6 +2643,49 @@ fn album_gains_in(db: &Connection, folder: i64, dir: Option<&str>) -> Result<Has
             crate::analysis::album_gain(&refs).map(|g| (dir, g))
         })
         .collect())
+}
+
+/// See `Catalogue::track_of_source`; on the catalogue's connection, held (`files_of_sources` asks for many at once).
+fn track_of_source(db: &Connection, source: &str, item: &str) -> Option<i64> {
+    if source == crate::source::cratarr::KIND.id {
+        let track = crate::serve::ids::track_of(item)?;
+        let present = format!("SELECT 1 FROM files WHERE track = ?1 AND {PRESENT}");
+        return db.query_row(&present, [track], |_| Ok(())).optional().ok().flatten().map(|()| track);
+    }
+    db.query_row(
+        &format!(
+            "SELECT f.track FROM source_ids s JOIN files f ON f.folder = s.folder AND f.rel = s.rel
+             WHERE s.source = ?1 AND s.track_id = ?2 AND {}",
+            PRESENT_F
+        ),
+        params![source, item],
+        |r| r.get(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .flatten()
+}
+
+/// See `Catalogue::file_of`.
+fn file_of(db: &Connection, track: i64) -> Option<(i64, String)> {
+    db.query_row(&format!("SELECT folder, rel FROM files WHERE track = ?1 AND {PRESENT}"), [track], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()
+        .ok()
+        .flatten()
+}
+
+/// See `Catalogue::duration_of`.
+fn duration_of(db: &Connection, folder: i64, rel: &str) -> Option<u64> {
+    db.query_row(&format!("SELECT duration_ms FROM files WHERE folder = ?1 AND rel = ?2 AND {PRESENT}"), params![folder, rel], |r| {
+        r.get::<_, Option<i64>>(0)
+    })
+    .optional()
+    .ok()
+    .flatten()
+    .flatten()
+    .filter(|d| *d > 0)
+    .map(|d| d as u64)
 }
 
 /// The cover files of each folder of a library folder (0.9.8), as a print: an album built again when its folder's
@@ -3253,6 +3317,26 @@ mod tests {
     }
 
     #[test]
+    fn a_files_labels_are_its_label_tags_by_name_or_by_raw_key() {
+        // 0.11, quick crates: lofty reads ID3v2 TPUB (and Vorbis PUBLISHER) as the publisher, kept by its raw key alone;
+        // Vorbis LABEL as "label". Several in one value are several.
+        let d = music();
+        let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
+        cat.walk_all();
+        let (one, two) = ("A - B (2020)/01 One.mp3".to_string(), "A - B (2020)/02 Two.flac".to_string());
+        let db = cat.db();
+        db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, ?1, 0, 'TPUB', NULL, 'Warp; Bleep')", params![one]).unwrap();
+        db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, ?1, 0, 'LABEL', 'label', 'Ninja Tune')", params![two]).unwrap();
+        db.execute("INSERT INTO tags (folder, rel, n, raw, name, value) VALUES (0, ?1, 1, 'ORGANIZATION', 'label', 'ninja tune')", params![two]).unwrap();
+        drop(db);
+        let facts = cat.crate_facts().unwrap();
+        let labels = |rel: &str| facts.iter().find(|f| f.rel == rel).unwrap().labels.clone();
+        assert_eq!(labels(one.as_str()), ["Warp", "Bleep"]);
+        assert_eq!(labels(two.as_str()), ["Ninja Tune"], "one label once, in any case");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
     fn an_unreadable_folder_keeps_its_rows() {
         let d = music();
         let cat = Catalogue::open(None, vec![d.clone()]).unwrap();
@@ -3401,6 +3485,36 @@ mod tests {
         assert_eq!(cat.status().unwrap().files, 0, "different files: the rows go");
         std::fs::remove_dir_all(&moved).ok();
         std::fs::remove_dir_all(&empty).ok();
+    }
+
+    #[test]
+    fn a_wind_s_tracks_are_found_at_once_as_one_by_one() {
+        let a = music();
+        let cat = Catalogue::open(None, vec![a.clone()]).unwrap();
+        cat.walk_all();
+        read_as_audio(&cat);
+        cat.identify().unwrap();
+        let one = cat.track_of(0, "A - B (2020)/01 One.mp3").unwrap();
+        let two = cat.track_of(0, "A - B (2020)/02 Two.flac").unwrap();
+        cat.record_links("jf", "music", &[("j-2".into(), 0, "A - B (2020)/02 Two.flac".into())], 1).unwrap();
+        let (one, two) = (crate::serve::ids::song(one), crate::serve::ids::song(two));
+        let each = |items: &[(&str, &str)]| -> Vec<(i64, String, Option<u64>)> {
+            items
+                .iter()
+                .map_while(|(s, i)| {
+                    let (folder, rel) = cat.file_of(cat.track_of_source(s, i)?)?;
+                    let d = cat.duration_of(folder, &rel);
+                    Some((folder, rel, d))
+                })
+                .collect()
+        };
+        let asked = [("cratarr", two.as_str()), ("jf", "j-2"), ("cratarr", one.as_str()), ("jf", "j-unknown"), ("cratarr", one.as_str())];
+        let found = cat.files_of_sources(&asked);
+        assert_eq!(found, each(&asked));
+        assert_eq!(found.len(), 3, "up to the first it has no file of: {found:?}");
+        assert_eq!(found[1], (0, "A - B (2020)/02 Two.flac".to_string(), Some(200_000)), "a server's id, linked");
+        assert!(cat.files_of_sources(&[]).is_empty());
+        std::fs::remove_dir_all(&a).ok();
     }
 
     #[test]

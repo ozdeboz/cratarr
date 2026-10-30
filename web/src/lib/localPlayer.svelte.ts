@@ -3197,8 +3197,12 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
   const mapUrl = url ?? use?.url ?? null;
   // A hold's stream flying past its heard top where the server says so (x-flight-max on its map=1 answer; the stream's
   // own headers are not readable from an audio element): its place then follows the flight's cap. An older server caps
-  // it at its heard top, as before.
-  if (accel && mapUrl)
+  // it at its heard top, as before. Asked once the stream sounds, not beside it (lib/oneInFlight: over plain http each
+  // request holds one of six connections, and the stream must not wait for one; the flight comes seconds later).
+  let flightAsked = false;
+  const askFlight = () => {
+    if (flightAsked || !accel || !mapUrl) return;
+    flightAsked = true;
     fetch(`${mapUrl}&map=1`).then(
       (r) => {
         const f = Number(r.headers.get('x-flight-max'));
@@ -3207,6 +3211,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       },
       () => {},
     );
+  };
   if (to !== null && mapUrl)
     windMap(mapUrl).then(
       (m) => {
@@ -3422,6 +3427,7 @@ function startWind(to: number | null, dir: 1 | -1, armed: Armed | null = null, r
       fadeIn(w);
       rewindNow.on = true;
       windAsked(false);
+      askFlight();
       w.timer = setInterval(() => {
         if (!mine()) return clearInterval(w.timer);
         const now = performance.now();

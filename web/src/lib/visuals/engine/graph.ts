@@ -267,7 +267,7 @@ export type NodeParams = {
 
 /** A Dice's roll: which, the seed its seed input gives (Music's `seed`: the track's own), its scope. */
 /** A Dice's roll: its seed, its scope, and how far from where each knob is (`reach` 0..1: 1, anywhere in its range). */
-export type DiceRoll = { module: string; seed: number; scope: (typeof RANDOMIZE_SCOPES)[number]; reach: number };
+export type DiceRoll = { module: string; seed: number; scope: (typeof RANDOMIZE_SCOPES)[number]; reach: number; glide: number };
 
 export type EngineOptions = {
   now: number;
@@ -662,8 +662,8 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     for (const k of gridType?.knobs ?? [])
       if (k.kind !== 'step' && plan.targetsOf.get(x.id)?.has(k.id))
         laid[k.id] = throughMacros(finite(x.knobs[k.id], k.default), plan.targetsOf.get(x.id)!.get(k.id)!, (g) => finite(st.macros[g.macro.id], clamp(finite(g.macro.value), 0, 1)), k.taper === 'exp');
-    const key = JSON.stringify(laid);
-    if (st.grids[x.id]?.key !== key) st.grids[x.id] = { key, grid: gridOf(laid, seedOf(x.id)) };
+    const key = JSON.stringify(laid) + finite(opts.aspect, 16 / 9);
+    if (st.grids[x.id]?.key !== key) st.grids[x.id] = { key, grid: gridOf({ ...laid, aspect: finite(opts.aspect, 16 / 9) }, seedOf(x.id)) };
     points[x.id] = st.grids[x.id].grid.points;
     // Points cabled into At (a Flame's parts, where they are on the screen): the lattice shared out, a part laid round each.
     const at = gridAt(plan.intoOf.get(x.id)?.get('at')?.[0]?.from);
@@ -1205,7 +1205,7 @@ export function stepEngine(st: EngineState, given: PatchV2, types: Record<string
     if (!rose) continue;
     const seeded = plan.ports.get(x.id)?.get('seed');
     const seed = seeded && seeded[0].length ? Math.floor(clamp(sumOf(seeded, 0), 0, 1 - 2 ** -33) * 4294967296) : Math.floor(opts.now) >>> 0;
-    dice.push({ module: x.id, seed, scope: RANDOMIZE_SCOPES[clamp(Math.round(finite(x.knobs.scope, 0)), 0, RANDOMIZE_SCOPES.length - 1)], reach: clamp(finite(x.knobs.reach, 1), 0, 1) });
+    dice.push({ module: x.id, seed, scope: RANDOMIZE_SCOPES[clamp(Math.round(finite(x.knobs.scope, 0)), 0, RANDOMIZE_SCOPES.length - 1)], reach: clamp(finite(x.knobs.reach, 1), 0, 1), glide: clamp(finite(x.knobs.glide, 0), 0, 60) });
   }
   // What reaches each Fluid's `at`: the points output cabled into it (a Flame's, a Grid's), else the Flame's (its normal).
   const pointsOf = (r: PortRef): readonly (Point | null)[] | null => {

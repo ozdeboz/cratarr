@@ -208,7 +208,7 @@ impl Portal {
 }
 
 async fn page() -> Response {
-    crate::web::guest_page()
+    crate::web::guest_page().await
 }
 
 #[derive(Deserialize)]
