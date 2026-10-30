@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig, type Plugin } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 
@@ -11,11 +12,29 @@ const precacheList = (): Plugin => ({
   },
 });
 
+// The page's version, `build.json` (decision 0085, step 1): the release it is (VERSION) and its build (the app's script's
+// content hash, as lib/update tells builds apart), so an app that carries its own pages can tell whether the server's
+// are newer than its own, or the same.
+const buildInfo = (): Plugin => ({
+  name: 'cratarr-build-info',
+  generateBundle(_, bundle) {
+    const main = Object.values(bundle).find((c) => c.type === 'chunk' && c.isEntry && c.name === 'main');
+    const build = main ? (/-([A-Za-z0-9_-]+)\.js$/.exec(main.fileName)?.[1] ?? main.fileName) : null;
+    let version: string | null = null;
+    try {
+      version = readFileSync(new URL('../VERSION', import.meta.url), 'utf8').trim() || null;
+    } catch {
+      /* a checkout without it */
+    }
+    this.emitFile({ type: 'asset', fileName: 'build.json', source: JSON.stringify({ version, build }) });
+  },
+});
+
 // `pnpm dev` proxies the API to a locally running Cratarr server, and its sign-in and sign-out pages (the server's own:
 // an app pointed at the dev server signs in there, 2026-10-26).
 const server = process.env.CRATARR_URL ?? 'http://127.0.0.1:8080';
 export default defineConfig({
-  plugins: [svelte(), precacheList()],
+  plugins: [svelte(), precacheList(), buildInfo()],
   // Two pages: the app, and the guest page (0.9.19), apart from the app's shell, which asks for a sign-in.
   build: { rollupOptions: { input: { main: 'index.html', guest: 'guest.html' } } },
   server: {
