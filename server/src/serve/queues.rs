@@ -197,8 +197,8 @@ struct Player {
 }
 
 /// The asking account's players (decision 0051).
-fn players() -> Vec<Player> {
-    let Some(on) = crate::app::PlayOn::instance() else { return Vec::new() };
+fn players(serve: &Serve) -> Vec<Player> {
+    let Some(on) = serve.play_on() else { return Vec::new() };
     on.list()
         .into_iter()
         .map(|v| Player {
@@ -227,7 +227,7 @@ pub async fn now_playing(serve: &Arc<Serve>, user: &User) -> Result<Answer, Fail
         at: i64,
     }
     let at = now();
-    let mut rows: Vec<Row> = players()
+    let mut rows: Vec<Row> = players(serve)
         .into_iter()
         .filter(|p| p.state != "stopped")
         .filter_map(|p| {
@@ -314,8 +314,8 @@ struct Given {
 }
 
 /// The queue something new was last started in on one of `whose` players (`whose_players`), with where it is now.
-fn latest_player_queue(catalogue: &crate::catalogue::Catalogue, whose: Option<&str>) -> Option<Given> {
-    let on = crate::app::PlayOn::instance()?;
+fn latest_player_queue(on: Option<Arc<crate::app::PlayOn>>, catalogue: &crate::catalogue::Catalogue, whose: Option<&str>) -> Option<Given> {
+    let on = on?;
     let newest = on.list_for(whose).into_iter().filter(|v| v.queue_started > 0 && v.queue_length > 0).max_by_key(|v| v.queue_started)?;
     let v = on.get(&newest.name)?;
     let tracks = v.queue.unwrap_or_default();
@@ -372,8 +372,8 @@ pub async fn get(serve: &Arc<Serve>, user: &User, by_index: bool) -> Result<Answ
         changed: q.changed,
         by: q.client,
     });
-    let (catalogue, whose) = (serve.catalogue().clone(), crate::app::whose_players());
-    let player = tokio::task::spawn_blocking(move || latest_player_queue(&catalogue, whose.as_deref())).await.map_err(|e| Failed(0, e.to_string()))?;
+    let (catalogue, whose, on) = (serve.catalogue().clone(), crate::app::whose_players(), serve.play_on().cloned());
+    let player = tokio::task::spawn_blocking(move || latest_player_queue(on, &catalogue, whose.as_deref())).await.map_err(|e| Failed(0, e.to_string()))?;
     let Some(mut q) = saved.chain(player).max_by_key(|q| q.changed) else {
         return Ok(Answer::Json(json!({})));
     };

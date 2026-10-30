@@ -69,7 +69,7 @@ pub struct Listed {
 #[allow(clippy::too_many_arguments)]
 pub async fn list(app: &super::App, q: &str, order: &str, down: bool, without: &[String], narrow: Narrow, offset: usize, limit: usize) -> Result<Listed, super::ToggleError> {
     let refused = |e: &dyn std::fmt::Display| super::ToggleError::Refused(format!("{e:#}"));
-    let served = crate::serve::instance().context("Cratarr's own library is not open").map_err(|e| refused(&e))?;
+    let served = app.served.clone().context("Cratarr's own library is not open").map_err(|e| refused(&e))?;
     if let Some(c) = narrow.conditions.iter().find(|c| !crate::crates::is_axis(&c.axis)) {
         return Err(super::ToggleError::Refused(format!("Unknown axis: {}.", c.axis)));
     }

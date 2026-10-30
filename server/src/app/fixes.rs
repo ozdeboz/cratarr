@@ -292,7 +292,7 @@ pub async fn of_finding(app: &super::App, key: &str) -> Result<Vec<Fix>> {
         let k = key.to_string();
         return tokio::task::spawn_blocking(move || super::length_fixes::of_finding(&k)).await?;
     }
-    let served = crate::serve::instance().context("Cratarr's own library is not open")?;
+    let served = app.served.clone().context("Cratarr's own library is not open")?;
     let music = app.library.folders().music;
     let folders = app.library.catalogue().folders();
     let music = music.and_then(|m| folders.iter().position(|f| f == Path::new(&m))).map(|i| i as i64);
@@ -493,7 +493,7 @@ pub async fn by_ids(app: &super::App, ids: &[String]) -> Result<Vec<Fix>> {
         let (field, album) = id.split_once(':').with_context(|| format!("Not a fix: {id}"))?;
         // A length's (0.9.14): by its song, worked out again now.
         if super::length_fixes::FIELDS.contains(&field) {
-            let served = crate::serve::instance().context("Cratarr's own library is not open")?;
+            let served = app.served.clone().context("Cratarr's own library is not open")?;
             let (f, s) = (field.to_string(), album.to_string());
             if let Some(fix) = tokio::task::spawn_blocking(move || super::length_fixes::fix(&served, &f, &s)).await?? {
                 out.push(fix);
@@ -519,9 +519,9 @@ pub async fn of_album(app: &super::App, album: &str) -> Result<(Vec<Fix>, bool)>
 
 /// `of_album`, only the fields named (`year`, `genre`, `rule`, `albumartist`, `musicbrainz`, `cover`); all of them for
 /// none.
-async fn of_album_only(_app: &super::App, album: &str, fields: Option<&[&str]>) -> Result<(Vec<Fix>, bool)> {
+async fn of_album_only(app: &super::App, album: &str, fields: Option<&[&str]>) -> Result<(Vec<Fix>, bool)> {
     let wants = |f: &str| fields.is_none_or(|fs| fs.contains(&f));
-    let served = crate::serve::instance().context("Cratarr's own library is not open")?;
+    let served = app.served.clone().context("Cratarr's own library is not open")?;
     let (s, a) = (served.clone(), album.to_string());
     let (rule, year, genre) = (wants("rule"), wants("year"), wants("genre"));
     let lacks = tokio::task::spawn_blocking(move || s.library.lacks_of(&a)).await??;

@@ -138,8 +138,8 @@ fn matched(h: &crate::serve::read::Hit) -> Vec<Matched> {
 }
 
 /// The lines of the tracks the words name (title, artist, album), with why; none without Cratarr's own library.
-async fn found_lines(w: &[String]) -> anyhow::Result<HashMap<String, Entry>> {
-    let Some(served) = crate::serve::instance() else { return Ok(HashMap::new()) };
+async fn found_lines(served: Option<Arc<crate::serve::Serve>>, w: &[String]) -> anyhow::Result<HashMap<String, Entry>> {
+    let Some(served) = served else { return Ok(HashMap::new()) };
     let words = w.to_vec();
     tokio::task::spawn_blocking(move || -> anyhow::Result<HashMap<String, Entry>> {
         let cat = served.catalogue();
@@ -305,7 +305,7 @@ async fn all_missing(app: &super::App, served: &Arc<crate::serve::Serve>) -> any
 /// The asking account's crates with their tracks, kept a minute (`CRATES_KEEP`).
 async fn crate_members(app: &super::App) -> anyhow::Result<Members> {
     static KEPT: OnceLock<Mutex<HashMap<Option<String>, (Instant, Members)>>> = OnceLock::new();
-    let account = super::playlists::asking_account();
+    let account = app.playlists.asking_account();
     let kept = KEPT.get_or_init(Default::default);
     if let Some((at, m)) = kept.lock().unwrap_or_else(|p| p.into_inner()).get(&account).cloned()
         && at.elapsed() < CRATES_KEEP
@@ -333,7 +333,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
     // How many each kind matches in all, where the library shows fewer (`limit`); the rest count what they hold.
     let mut totals: HashMap<&'static str, usize> = HashMap::new();
     if ["album", "artist", "track", "genre"].iter().any(|k| wants(k))
-        && let Some(served) = crate::serve::instance()
+        && let Some(served) = app.served.clone()
     {
         let (lib, words_) = (served.library.clone(), w.clone());
         let found = tokio::task::spawn_blocking(move || lib.find(&words_, reach)).await??;
@@ -441,7 +441,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
     // The library's words (0.9.7, `app::words`): a group per kind, each word opening its crate (`crate:<kind>:<word>`),
     // by how many albums carry it among equals. In place of the library's genres where they can be read.
     if super::words::KINDS.iter().any(|k| wants(k))
-        && let Some(served) = crate::serve::instance()
+        && let Some(served) = app.served.clone()
     {
         let (s, cat) = (served.clone(), app.library.catalogue());
         match tokio::task::spawn_blocking(move || super::words::search_index(&s, &cat)).await? {
@@ -479,7 +479,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
         }
     }
     // Playlists and crates by their names, and by the tracks in them (a track's title, artist or album).
-    let deep = if wants("playlist") || wants("crate") { found_lines(&w).await? } else { HashMap::new() };
+    let deep = if wants("playlist") || wants("crate") { found_lines(app.served.clone(), &w).await? } else { HashMap::new() };
     if wants("playlist") {
         let lines: HashMap<String, Vec<String>> =
             if deep.is_empty() { HashMap::new() } else { app.playlists.visible_lines().await?.into_iter().map(|(id, _, l)| (id, l)).collect() };
@@ -535,7 +535,7 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
         groups.insert("crate", found);
     }
     // What is not in the library (point 7): only from Cratarr's own library; the exclusions an account's own.
-    if let Some(served) = crate::serve::instance() {
+    if let Some(served) = app.served.clone() {
         if wants("missing") {
             let marks = super::requests::marks(app, &served).await.inspect_err(|e| tracing::debug!("search: the requests' marks not read: {e:#}")).ok();
             groups.insert("missing", missing_items(&all_missing(app, &served).await?, &w, marks.as_deref()));
@@ -559,6 +559,8 @@ pub async fn search(app: &super::App, q: &str, kinds: &[String], limit: usize, o
                     .into_iter()
                     .filter(|r| r.status == super::requests::PENDING || r.status == super::requests::APPROVED)
                     .collect();
+                // One in the library is the library's now: requested only on the Requests page.
+                let open = super::requests::not_in_library(&served, open).await;
                 let n = open.len();
                 let items = open
                     .iter()

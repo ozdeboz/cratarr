@@ -1578,13 +1578,20 @@ pub async fn look(
     Ok(found)
 }
 
-/// The library's artists, the account's most played first (its own plays, 0064), and what the library has.
+/// Each artist's plays as Discover weighs them: the account's own, none heard while following another (the owner,
+/// 2026-10-30).
+fn artist_plays(ud: &crate::userdata::UserData, account: &str) -> Result<HashMap<String, u32>> {
+    Ok(ud.used(account, crate::userdata::Kind::Artist)?.into_iter().map(|(id, x)| (id, x.own_count)).collect())
+}
+
+/// The library's artists, the account's most played first (its own plays, 0064, `artist_plays`), and what the library
+/// has.
 pub(super) async fn own(serve: &Arc<crate::serve::Serve>, cat: Arc<crate::catalogue::Catalogue>, account: &str) -> Result<(Have, Vec<OwnArtist>)> {
     let dir = serve.data_dir.clone().context("Discover needs Cratarr's data folder")?;
     let (lib, ud, a) = (serve.library.clone(), serve.userdata.clone(), account.to_string());
     tokio::task::spawn_blocking(move || -> Result<(Have, Vec<OwnArtist>)> {
         let rows = lib.artist_albums()?;
-        let plays: HashMap<String, u32> = ud.used(&a, crate::userdata::Kind::Artist)?.into_iter().map(|(id, x)| (id, x.play_count)).collect();
+        let plays = artist_plays(&ud, &a)?;
         let mut by_id: HashMap<&str, OwnArtist> = HashMap::new();
         for (id, name, mbid, _, _, _) in &rows {
             by_id.entry(id.as_str()).or_insert_with(|| OwnArtist {
@@ -2150,6 +2157,17 @@ pub fn undo(serve: &crate::serve::Serve, account: &str, token: &str) -> Result<S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_artists_plays_are_ones_own_none_heard_while_following() {
+        let u = crate::userdata::UserData::open(None).unwrap();
+        u.count_play("me", ("tr-1", "p1"), "al-1", &["ar-a".to_string()], 100).unwrap();
+        let along = crate::userdata::Heard { event: Some("f1".into()), followed: true, ..crate::userdata::Heard::counted(200) };
+        u.record("me", ("tr-2", "p2"), "al-2", &["ar-a".to_string(), "ar-b".to_string()], &along).unwrap();
+        let plays = artist_plays(&u, "me").unwrap();
+        assert_eq!(plays.get("ar-a"), Some(&1), "the followed play left out");
+        assert_eq!(plays.get("ar-b").copied().unwrap_or(0), 0, "only heard while following: not played");
+    }
 
     #[test]
     fn an_albums_own_pages_else_a_search_there() {

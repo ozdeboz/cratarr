@@ -13,6 +13,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::app::{App, SettingsView, SourceView, StateView, StatusView, ToggleError, TrackStateView};
+use crate::ctx::Ctx;
 use crate::settings::SourceConfig;
 use crate::playlists::{Repair, Repairs};
 
@@ -457,9 +458,10 @@ fn new_request_id() -> String {
 
 /// Open to anyone: that Cratarr answers, and which install it is (the app checks its local address is the same
 /// Cratarr as its public one before the page there may talk to it).
-async fn health(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn health(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = ctx.app.clone();
     let n = app.playlists.count().await.map_err(ToggleError::from)?;
-    let instance = crate::serve::instance().and_then(|s| s.sessions.instance_id().ok());
+    let instance = ctx.served.as_ref().and_then(|s| s.sessions.instance_id().ok());
     Ok(Json(json!({ "status": "ok", "playlists": n, "instance": instance })))
 }
 
@@ -581,9 +583,9 @@ fn own_group(app: &App, group: &str) -> bool {
 }
 
 /// Whose snapshots Cratarr's own calls keep: the first administrator's (as its other calls act on).
-fn snapshot_keeper() -> Result<(Arc<crate::serve::Serve>, String), Response> {
-    let Some(served) = crate::serve::instance() else { return Err(refused(StatusCode::NOT_FOUND, "Cratarr's own library is not served here.")) };
-    let Some(me) = served.current_user() else { return Err(refused(StatusCode::CONFLICT, "There is no account yet: make one in Settings.")) };
+fn snapshot_keeper(ctx: &Ctx) -> Result<(Arc<crate::serve::Serve>, String), Response> {
+    let Some(served) = ctx.served.clone() else { return Err(refused(StatusCode::NOT_FOUND, "Cratarr's own library is not served here.")) };
+    let Some(me) = ctx.account() else { return Err(refused(StatusCode::CONFLICT, "There is no account yet: make one in Settings.")) };
     Ok((served, me))
 }
 
@@ -593,8 +595,8 @@ fn failed(e: anyhow::Error) -> Response {
 }
 
 /// The visuals' snapshots (decision 0046, amended), the newest first.
-async fn visual_snapshots() -> Response {
-    let (served, me) = match snapshot_keeper() {
+async fn visual_snapshots(ctx: Ctx) -> Response {
+    let (served, me) = match snapshot_keeper(&ctx) {
         Ok(k) => k,
         Err(r) => return r,
     };
@@ -641,8 +643,8 @@ fn snapshot_picture(picture: Option<&str>) -> Result<Option<&str>, Response> {
     Ok(Some(p))
 }
 
-async fn add_visual_snapshot(Json(b): Json<NewSnapshot>) -> Response {
-    let (served, me) = match snapshot_keeper() {
+async fn add_visual_snapshot(ctx: Ctx, Json(b): Json<NewSnapshot>) -> Response {
+    let (served, me) = match snapshot_keeper(&ctx) {
         Ok(k) => k,
         Err(r) => return r,
     };
@@ -675,8 +677,8 @@ struct SnapshotChange {
     settings: Option<serde_json::Value>,
 }
 
-async fn rename_visual_snapshot(Path(id): Path<String>, Json(b): Json<SnapshotChange>) -> Response {
-    let (served, me) = match snapshot_keeper() {
+async fn rename_visual_snapshot(ctx: Ctx, Path(id): Path<String>, Json(b): Json<SnapshotChange>) -> Response {
+    let (served, me) = match snapshot_keeper(&ctx) {
         Ok(k) => k,
         Err(r) => return r,
     };
@@ -699,8 +701,8 @@ async fn rename_visual_snapshot(Path(id): Path<String>, Json(b): Json<SnapshotCh
 }
 
 /// The owner's pairwise ratings of the visuals' behaviours (the governor's calibration), the oldest first.
-async fn visual_ratings() -> Response {
-    let (served, me) = match snapshot_keeper() {
+async fn visual_ratings(ctx: Ctx) -> Response {
+    let (served, me) = match snapshot_keeper(&ctx) {
         Ok(k) => k,
         Err(r) => return r,
     };
@@ -725,8 +727,8 @@ struct NewRating {
 /// The most a rating may hold, as JSON (bytes).
 const RATING_BYTES: usize = 32 * 1024;
 
-async fn add_visual_rating(Json(b): Json<NewRating>) -> Response {
-    let (served, me) = match snapshot_keeper() {
+async fn add_visual_rating(ctx: Ctx, Json(b): Json<NewRating>) -> Response {
+    let (served, me) = match snapshot_keeper(&ctx) {
         Ok(k) => k,
         Err(r) => return r,
     };
@@ -746,8 +748,8 @@ async fn add_visual_rating(Json(b): Json<NewRating>) -> Response {
 
 /// What the visuals learned from the owner's thumbs (decision 0048), kept as it is since decision 0057 dropped the
 /// learning (read only, for whenever it returns); 404 while nothing is.
-async fn visual_limits() -> Response {
-    let (served, me) = match snapshot_keeper() {
+async fn visual_limits(ctx: Ctx) -> Response {
+    let (served, me) = match snapshot_keeper(&ctx) {
         Ok(k) => k,
         Err(r) => return r,
     };
@@ -758,8 +760,8 @@ async fn visual_limits() -> Response {
     }
 }
 
-async fn delete_visual_snapshot(Path(id): Path<String>) -> Response {
-    let (served, me) = match snapshot_keeper() {
+async fn delete_visual_snapshot(ctx: Ctx, Path(id): Path<String>) -> Response {
+    let (served, me) = match snapshot_keeper(&ctx) {
         Ok(k) => k,
         Err(r) => return r,
     };
@@ -838,7 +840,7 @@ fn turned_down(gain: Option<f64>, peak: Option<f64>) -> Option<f64> {
 
 /// A track as Cratarr's library serves it: its gains and tempo from its analysis, else from its file's tags.
 async fn served_song(app: &App, source: &str, id: &str) -> Option<crate::serve::api::Song> {
-    let served = crate::serve::instance()?;
+    let served = app.served.clone()?;
     let (cat, source, id) = (app.library.catalogue(), source.to_string(), id.to_string());
     tokio::task::spawn_blocking(move || {
         let song = if source == crate::source::cratarr::KIND.id {
@@ -1096,7 +1098,8 @@ async fn analysis_import(
     Ok(Json(counts))
 }
 
-async fn track_details(State(app): State<Arc<App>>, Path((source, id)): Path<(String, String)>) -> Response {
+async fn track_details(ctx: Ctx, Path((source, id)): Path<(String, String)>) -> Response {
+    let app = ctx.app.clone();
     if source == crate::bandcamp::SOURCE {
         return bandcamp_details(&id).await;
     }
@@ -1104,7 +1107,7 @@ async fn track_details(State(app): State<Arc<App>>, Path((source, id)): Path<(St
     let bpm = served_song(&app, &source, &id).await.and_then(|s| s.bpm);
     let cat = app.library.catalogue();
     // Whose plays these are: the listener's (read here, as the blocking work below has no request of its own).
-    let listener = crate::serve::instance().and_then(|s| s.current_user().map(|u| (s, u)));
+    let listener = ctx.served.clone().and_then(|s| ctx.account().map(|u| (s, u)));
     let read = tokio::task::spawn_blocking(move || -> Option<serde_json::Value> {
         let track = cat.track_of_source(&source, &id)?;
         let (folder, rel) = cat.file_of(track)?;
@@ -1223,10 +1226,11 @@ async fn albums_tracks(State(app): State<Arc<App>>, Json(b): Json<AlbumsTracks>)
     Ok(Json(json!({ "tracks": app.playing.tracks_of_albums(&albums).await })))
 }
 
-async fn album_view(State(app): State<Arc<App>>, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::AlbumView>, ApiError> {
+async fn album_view(ctx: Ctx, Path((source, album)): Path<(String, String)>) -> Result<Json<crate::app::AlbumView>, ApiError> {
     use crate::app::AlbumFate;
+    let app = ctx.app.clone();
     if source == crate::bandcamp::SOURCE {
-        return Ok(Json(bandcamp_album_view(&album).await?));
+        return Ok(Json(bandcamp_album_view(&ctx, &album).await?));
     }
     let failed = match app.playing.album_view(&source, &album).await {
         Ok(v) if !v.rows.is_empty() => return Ok(Json(v)),
@@ -1243,11 +1247,11 @@ async fn album_view(State(app): State<Arc<App>>, Path((source, album)): Path<(St
 
 /// A Bandcamp album in the panel (decision 0071, the owner 2026-10-25: "I don't see why not"): its tracks as its page
 /// gives them, each played through the relay as a preview's; the ones Bandcamp does not stream shown, not playable.
-async fn bandcamp_album_view(album: &str) -> Result<crate::app::AlbumView, ToggleError> {
+async fn bandcamp_album_view(ctx: &Ctx, album: &str) -> Result<crate::app::AlbumView, ToggleError> {
     let (url, _) = crate::bandcamp::read_id(album).ok_or_else(|| ToggleError::Refused("That is not an album on Bandcamp.".into()))?;
     let a = crate::bandcamp::Bandcamp::get().album(&url).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     // What Discover knows of it, where it suggested it (the owner, 2026-10-25: "as much as our own panel").
-    let known = match crate::serve::instance().and_then(|s| s.current_user().map(|a| (s, a))) {
+    let known = match ctx.served.clone().and_then(|s| ctx.account().map(|a| (s, a))) {
         Some((s, account)) => {
             let page = a.url.clone();
             tokio::task::spawn_blocking(move || crate::app::discover::suggestion_on_bandcamp(&s, &account, &page)).await.ok().and_then(Result::ok).flatten()
@@ -2235,8 +2239,9 @@ struct Listening {
 }
 
 /// A group's sound as one long WAV, for a player without Snapcast's player (a Kodi, decision 0037 amended).
-async fn group_listen(State(app): State<Arc<App>>, Path(leader): Path<String>, Query(q): Query<Listening>) -> Response {
-    let Some(snap) = crate::snapcast::Snapcast::instance() else {
+async fn group_listen(ctx: Ctx, Path(leader): Path<String>, Query(q): Query<Listening>) -> Response {
+    let app = ctx.app.clone();
+    let Some(snap) = ctx.snapcast() else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "Sync play is not served here." }))).into_response();
     };
     let delay = u32::from(app.play_on.delay_of(&q.player));
@@ -2246,8 +2251,9 @@ async fn group_listen(State(app): State<Arc<App>>, Path(leader): Path<String>, Q
 
 /// A group's sound as stamped records, for a page in a browser to play each at its moment (decision 0037, amended
 /// 2026-10-23; `Snapcast::frames`).
-async fn group_frames(State(app): State<Arc<App>>, Path(leader): Path<String>, Query(q): Query<Listening>) -> Response {
-    let Some(snap) = crate::snapcast::Snapcast::instance() else {
+async fn group_frames(ctx: Ctx, Path(leader): Path<String>, Query(q): Query<Listening>) -> Response {
+    let app = ctx.app.clone();
+    let Some(snap) = ctx.snapcast() else {
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "Sync play is not served here." }))).into_response();
     };
     if let Err(e) = app.play_on.reached(&q.player) {
@@ -2496,13 +2502,14 @@ async fn offline_prepare(State(app): State<Arc<App>>, Json(b): Json<OfflineTrack
 /// Offline play's facts (0.9.8): each track's row (as the Tracks list has it, with the account's plays), its gains and
 /// what levelling turns it down by, its cover's and waveform's addresses (fetched and kept as they are), and its file
 /// (as `offline/prepare` gives it).
-async fn offline_facts(State(app): State<Arc<App>>, Json(b): Json<OfflineTracks>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn offline_facts(ctx: Ctx, Json(b): Json<OfflineTracks>) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = ctx.app.clone();
     if b.tracks.len() > OFFLINE_MOST {
         return Err(ToggleError::Refused(format!("At most {OFFLINE_MOST} tracks at once.")).into());
     }
     let form = b.form();
     let own: Vec<String> = b.tracks.iter().filter(|t| t.source == crate::source::cratarr::KIND.id).map(|t| t.id.clone()).collect();
-    let (rows, stamps) = match crate::serve::instance() {
+    let (rows, stamps) = match ctx.served.clone() {
         Some(served) => tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let mut rows = served.library.track_rows_by_id(&own)?;
             if let Some(user) = served.current_user() {
@@ -3368,8 +3375,9 @@ async fn album_cover(State(app): State<Arc<App>>, Path((source, album)): Path<(S
 
 /// Every album's cover stamp in Cratarr's own library (0.9.7), as `{"<source>/<album>": "<stamp>"}`: the page puts it
 /// on each cover's address; the live channel's `cover` tells it of changes.
-async fn cover_stamps(State(app): State<Arc<App>>) -> Json<serde_json::Value> {
-    let Some(serve) = crate::serve::instance() else { return Json(json!({})) };
+async fn cover_stamps(ctx: Ctx) -> Json<serde_json::Value> {
+    let app = ctx.app.clone();
+    let Some(serve) = ctx.served.clone() else { return Json(json!({})) };
     let stamps = tokio::task::spawn_blocking(move || serve.cover_stamps()).await.unwrap_or_default();
     let mut out = serde_json::Map::new();
     for source in app.library.own_sources() {
@@ -3617,7 +3625,8 @@ struct UndoRequest {
 /// answer with their redo tokens, in the order they were made: undone newest first in turn, the redo does the action
 /// again in its own order (an edit before the rename that followed it). Incoming's tokens (its event ids) answer with
 /// the albums' titles, and are the administrators' to undo, as their changes are (decision 0051).
-async fn undo(State(app): State<Arc<App>>, Json(req): Json<UndoRequest>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn undo(ctx: Ctx, Json(req): Json<UndoRequest>) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = ctx.app.clone();
     // Playlists' and crates' (`c…`) and Discover's (`d…`, the signed-in account's own) are anyone's; Incoming's are an
     // administrator's.
     if req.tokens.iter().any(|t| !t.starts_with('c') && !t.starts_with('d')) && !crate::serve::access::administering() {
@@ -3626,7 +3635,7 @@ async fn undo(State(app): State<Arc<App>>, Json(req): Json<UndoRequest>) -> Resu
     let (mut redo, mut restored) = (Vec::new(), Vec::new());
     for token in req.tokens.iter().rev() {
         if token.starts_with('d') {
-            let (serve, account) = discoverer()?;
+            let (serve, account) = discoverer(&ctx)?;
             let t = token.clone();
             redo.push(
                 tokio::task::spawn_blocking(move || crate::app::discover::undo(&serve, &account, &t))
@@ -3868,9 +3877,9 @@ struct ListenBrainzImport {
 /// The asking account's listening history from ListenBrainz into its log (decision 0064, amended): how many listens
 /// there were, matched to the library, and new to the log.
 /// Whose history a ListenBrainz import goes into, and whose listens (decision 0067).
-fn listenbrainz_who(b: &ListenBrainzImport) -> Result<(Arc<crate::serve::Serve>, String, String), ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
+fn listenbrainz_who(ctx: &Ctx, b: &ListenBrainzImport) -> Result<(Arc<crate::serve::Serve>, String, String), ApiError> {
+    let serve = ctx.serve()?;
+    let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
     let user = b.user.trim();
     if user.is_empty() {
         return Err(ToggleError::Refused("Say whose ListenBrainz listens.".into()).into());
@@ -3879,17 +3888,17 @@ fn listenbrainz_who(b: &ListenBrainzImport) -> Result<(Arc<crate::serve::Serve>,
 }
 
 /// The asking account's tasks (`app::tasks`): running, or ended within the hour, with their results.
-async fn own_tasks() -> Result<Json<serde_json::Value>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: tasks are an account's own.".into()))?;
+async fn own_tasks(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    ctx.serve()?;
+    let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: tasks are an account's own.".into()))?;
     Ok(Json(json!({ "tasks": crate::app::tasks::tasks().of(&account) })))
 }
 
 /// One's own running task asked to stop (0.9.6: a cover picked ends its look); refused when it is not running. Work that
 /// cannot stop part-way runs on.
-async fn stop_task(Path(id): Path<u64>) -> Result<StatusCode, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: tasks are an account's own.".into()))?;
+async fn stop_task(ctx: Ctx, Path(id): Path<u64>) -> Result<StatusCode, ApiError> {
+    ctx.serve()?;
+    let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: tasks are an account's own.".into()))?;
     if crate::app::tasks::tasks().stop(&account, id) { Ok(StatusCode::NO_CONTENT) } else { Err(ToggleError::Refused("That task is not running.".into()).into()) }
 }
 
@@ -3900,11 +3909,11 @@ struct DescribeBody {
 
 /// What these tracks are (0.9.6, decision 0033 amended: a queue holds identities, Cratarr describes them), in the order
 /// asked, with the signed-in account's favourites; for the browser's player and the app's notification.
-async fn describe_tracks(Json(b): Json<DescribeBody>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn describe_tracks(ctx: Ctx, Json(b): Json<DescribeBody>) -> Result<Json<serde_json::Value>, ApiError> {
     if b.tracks.len() > crate::app::describe::MOST {
         return Err(ToggleError::Refused(format!("At most {} tracks at once.", crate::app::describe::MOST)).into());
     }
-    let account = crate::serve::instance().and_then(|s| s.current_user());
+    let account = ctx.account();
     let tracks = crate::app::describe::describe(b.tracks, account).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!({ "tracks": tracks })))
 }
@@ -3920,20 +3929,20 @@ fn progress_of(h: Arc<crate::app::tasks::Handle>) -> impl Fn(&str, u64, Option<u
 }
 
 /// Refused while the asking account keeps no play history (0.9.5, Tracking off): listening is not brought in either.
-fn keeps_history() -> Result<(), ApiError> {
-    match crate::serve::instance().and_then(|s| s.current_user().map(|me| s.userdata.tracking(&me))) {
+fn keeps_history(ctx: &Ctx) -> Result<(), ApiError> {
+    match ctx.served.as_ref().and_then(|s| ctx.account().map(|me| s.userdata.tracking(&me))) {
         Some(false) => Err(ToggleError::Refused("Play history is off for this account (Settings › Tracking).".into()).into()),
         _ => Ok(()),
     }
 }
 
-async fn import_listenbrainz(Json(b): Json<ListenBrainzImport>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    keeps_history()?;
-    bring_listenbrainz(b, false)
+async fn import_listenbrainz(ctx: Ctx, Json(b): Json<ListenBrainzImport>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    keeps_history(&ctx)?;
+    bring_listenbrainz(&ctx, b, false)
 }
 
-async fn preview_listenbrainz(Json(b): Json<ListenBrainzImport>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    bring_listenbrainz(b, true)
+async fn preview_listenbrainz(ctx: Ctx, Json(b): Json<ListenBrainzImport>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    bring_listenbrainz(&ctx, b, true)
 }
 
 /// The ListenBrainz user an account imports from, kept (an import choice, as Last.fm's): its next import, and
@@ -3943,16 +3952,16 @@ fn listenbrainz_choice(account: &str) -> String {
 }
 
 /// The ListenBrainz user the asking account imported from last.
-async fn listenbrainz_kept() -> Result<Json<serde_json::Value>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
+async fn listenbrainz_kept(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = ctx.serve()?;
+    let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
     let ud = serve.userdata.clone();
     let user = tokio::task::spawn_blocking(move || ud.import_choice(&listenbrainz_choice(&account))).await.ok().and_then(Result::ok).flatten();
     Ok(Json(json!({ "user": user })))
 }
 
-fn bring_listenbrainz(b: ListenBrainzImport, preview: bool) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let (serve, account, user) = listenbrainz_who(&b)?;
+fn bring_listenbrainz(ctx: &Ctx, b: ListenBrainzImport, preview: bool) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let (serve, account, user) = listenbrainz_who(ctx, &b)?;
     // Kept for next time, and for Discover.
     if let Err(e) = serve.userdata.set_import_choice(&listenbrainz_choice(&account), &user) {
         tracing::warn!("import: the ListenBrainz user could not be kept: {e:#}");
@@ -3974,16 +3983,17 @@ async fn request_marks(app: &App, serve: &crate::serve::Serve) -> Option<Arc<std
 }
 
 /// The asking account and Cratarr's own library, for Discover (decision 0069).
-fn discoverer() -> Result<(Arc<crate::serve::Serve>, String), ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: Discover is an account's own.".into()))?;
+fn discoverer(ctx: &Ctx) -> Result<(Arc<crate::serve::Serve>, String), ApiError> {
+    let serve = ctx.serve()?;
+    let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: Discover is an account's own.".into()))?;
     Ok((serve, account))
 }
 
 /// Discover (decision 0069): the account's suggestions as last found, which of its services it asks, and whether Want
 /// can fetch through Lidarr. Looked up again, as a task the page follows, when the last look is a day old.
-async fn discover(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (serve, account) = discoverer()?;
+async fn discover(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = ctx.app.clone();
+    let (serve, account) = discoverer(&ctx)?;
     let (s, a) = (serve.clone(), account.clone());
     let (found, who) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> { Ok((crate::app::discover::kept(&s, &a)?, crate::app::discover::who(&s, &a)?)) })
         .await
@@ -4028,8 +4038,9 @@ async fn discover(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>
 }
 
 /// Discover looked up again now: 202 with its task.
-async fn discover_refresh(State(app): State<Arc<App>>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let (serve, account) = discoverer()?;
+async fn discover_refresh(ctx: Ctx) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let app = ctx.app.clone();
+    let (serve, account) = discoverer(&ctx)?;
     let (s, a) = (serve.clone(), account.clone());
     let who = tokio::task::spawn_blocking(move || crate::app::discover::who(&s, &a))
         .await
@@ -4056,15 +4067,17 @@ async fn mark_cards(app: &App, serve: &crate::serve::Serve, cards: &mut [serde_j
 
 /// Around artists you play (0.9.7, app::around): the group showing, its seeds and their suggestions, and whether it is
 /// still being made (asked again until it is not).
-async fn discover_around(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (serve, account) = discoverer()?;
+async fn discover_around(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = ctx.app.clone();
+    let (serve, account) = discoverer(&ctx)?;
     let shown = crate::app::around::showing(&app, &serve, &account).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(around_json(&app, &serve, shown).await))
 }
 
 /// Around's Refresh: on to the next group, the three most played artists not shown yet.
-async fn discover_around_next(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (serve, account) = discoverer()?;
+async fn discover_around_next(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = ctx.app.clone();
+    let (serve, account) = discoverer(&ctx)?;
     let shown = crate::app::around::next(&app, &serve, &account).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(around_json(&app, &serve, shown).await))
 }
@@ -4082,8 +4095,9 @@ struct DiscoverKey {
 
 /// A suggestion wanted: a request (decision 0070), handed to Lidarr at once where the account may (an administrator's,
 /// or Auto-approve), else waiting for an answer.
-async fn discover_want(State(app): State<Arc<App>>, Json(b): Json<DiscoverKey>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (serve, account) = discoverer()?;
+async fn discover_want(ctx: Ctx, Json(b): Json<DiscoverKey>) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = ctx.app.clone();
+    let (serve, account) = discoverer(&ctx)?;
     let r = crate::app::requests::ask(&app, &serve, &account, &b.key).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!({ "request": r })))
 }
@@ -4102,8 +4116,9 @@ struct WantAlbum {
 
 /// Any album wanted (0.9.3: an artist's missing album), as Discover's Want: a request, handed to Lidarr where the
 /// account may.
-async fn want_album(State(app): State<Arc<App>>, Json(b): Json<WantAlbum>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (serve, account) = discoverer()?;
+async fn want_album(ctx: Ctx, Json(b): Json<WantAlbum>) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = ctx.app.clone();
+    let (serve, account) = discoverer(&ctx)?;
     let r = crate::app::requests::ask_album(&app, &serve, &account, b.release_group, b.artist.trim(), b.album.trim(), b.year, b.cover)
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -4112,8 +4127,9 @@ async fn want_album(State(app): State<Arc<App>>, Json(b): Json<WantAlbum>) -> Re
 
 /// An artist's missing albums (0.9.3): their albums and EPs the library has none of, newest first; read when asked
 /// (a MusicBrainz call or two the first time, kept for every account).
-async fn artist_missing(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) -> Result<Json<serde_json::Value>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+async fn artist_missing(ctx: Ctx, Query(q): Query<AboutQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = ctx.app.clone();
+    let serve = ctx.serve()?;
     let mut albums = crate::app::discover::missing_albums(&serve, app.library.catalogue(), q.name.trim(), q.mbid.as_deref(), q.release_group.as_deref()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     if let Some(marks) = request_marks(&app, &serve).await {
         for a in &mut albums {
@@ -4133,8 +4149,9 @@ struct MbSearch {
 
 /// "Find more music" (0.9.3): the words looked up on MusicBrainz, albums and artists, each marked where the library
 /// has it.
-async fn musicbrainz_search(State(app): State<Arc<App>>, Query(q): Query<MbSearch>) -> Result<Json<serde_json::Value>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+async fn musicbrainz_search(ctx: Ctx, Query(q): Query<MbSearch>) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = ctx.app.clone();
+    let serve = ctx.serve()?;
     let (albums, artists) = crate::app::discover::musicbrainz_search(&serve, app.library.catalogue(), &q.q, q.limit.unwrap_or(20))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -4142,8 +4159,9 @@ async fn musicbrainz_search(State(app): State<Arc<App>>, Query(q): Query<MbSearc
 }
 
 /// Every missing album of the library's artists Discover has read (Insights › Discovery › Missing albums, 0.9.3).
-async fn discover_missing(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+async fn discover_missing(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = ctx.app.clone();
+    let serve = ctx.serve()?;
     let (mut albums, artists) = crate::app::discover::all_missing(&serve, app.library.catalogue()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     if let Some(marks) = request_marks(&app, &serve).await {
         for a in &mut albums {
@@ -4154,8 +4172,8 @@ async fn discover_missing(State(app): State<Arc<App>>) -> Result<Json<serde_json
 }
 
 /// The account's Discover exclusions (Insights › Discovery › Discovery exclusions, 0.9.3): albums and artists.
-async fn discover_excluded() -> Result<Json<serde_json::Value>, ApiError> {
-    let (serve, account) = discoverer()?;
+async fn discover_excluded(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = discoverer(&ctx)?;
     let (albums, artists) = tokio::task::spawn_blocking(move || crate::app::discover::exclusions(&serve, &account))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
@@ -4172,8 +4190,8 @@ struct TakeBack {
 }
 
 /// An exclusion taken back, any time: an album suggested again, or an artist.
-async fn discover_take_back(Query(q): Query<TakeBack>) -> Result<StatusCode, ApiError> {
-    let (serve, account) = discoverer()?;
+async fn discover_take_back(ctx: Ctx, Query(q): Query<TakeBack>) -> Result<StatusCode, ApiError> {
+    let (serve, account) = discoverer(&ctx)?;
     tokio::task::spawn_blocking(move || crate::app::discover::take_back(&serve, &account, q.key.as_deref(), q.artist.as_deref()))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
@@ -4190,8 +4208,8 @@ struct FindOnBandcamp {
 }
 
 /// An album's page on Bandcamp, looked up when it is opened (0.9.3), or null.
-async fn bandcamp_find(Query(q): Query<FindOnBandcamp>) -> Result<Json<serde_json::Value>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+async fn bandcamp_find(ctx: Ctx, Query(q): Query<FindOnBandcamp>) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = ctx.serve()?;
     let page = crate::app::discover::find_on_bandcamp(&serve, q.artist.trim(), q.album.trim(), q.release_group.as_deref())
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -4358,14 +4376,16 @@ async fn kept_cover(of: crate::app::cover_cache::Of) -> Response {
 }
 
 /// The Requests page (decision 0070): the account's requests, everyone's waiting ones for those who answer them.
-async fn requests(State(app): State<Arc<App>>) -> Result<Json<crate::app::requests::Listing>, ApiError> {
-    let (serve, account) = discoverer()?;
+async fn requests(ctx: Ctx) -> Result<Json<crate::app::requests::Listing>, ApiError> {
+    let app = ctx.app.clone();
+    let (serve, account) = discoverer(&ctx)?;
     Ok(Json(crate::app::requests::list(&app, &serve, &account).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?))
 }
 
 /// What Lidarr is looking for and fetching now; `null` without Lidarr.
-async fn requests_watching(State(app): State<Arc<App>>) -> Result<Json<serde_json::Value>, ApiError> {
-    discoverer()?;
+async fn requests_watching(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = ctx.app.clone();
+    discoverer(&ctx)?;
     let w = crate::app::requests::watching(&app).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(json!(w)))
 }
@@ -4379,8 +4399,9 @@ struct RequestsDecide {
 }
 
 /// Requests answered, one or many: each id's outcome, in words.
-async fn requests_decide(State(app): State<Arc<App>>, Json(b): Json<RequestsDecide>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (serve, account) = discoverer()?;
+async fn requests_decide(ctx: Ctx, Json(b): Json<RequestsDecide>) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = ctx.app.clone();
+    let (serve, account) = discoverer(&ctx)?;
     let out = crate::app::requests::decide(&app, &serve, &account, &b.ids, b.approve, b.reason.as_deref())
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -4388,15 +4409,16 @@ async fn requests_decide(State(app): State<Arc<App>>, Json(b): Json<RequestsDeci
 }
 
 /// A request taken back.
-async fn requests_cancel(State(app): State<Arc<App>>, Path(id): Path<i64>) -> Result<StatusCode, ApiError> {
-    let (serve, account) = discoverer()?;
+async fn requests_cancel(ctx: Ctx, Path(id): Path<i64>) -> Result<StatusCode, ApiError> {
+    let app = ctx.app.clone();
+    let (serve, account) = discoverer(&ctx)?;
     crate::app::requests::cancel(&app, &serve, &account, id).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// A suggestion not wanted: it never comes back. Its undo token.
-async fn discover_no(Json(b): Json<DiscoverKey>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (serve, account) = discoverer()?;
+async fn discover_no(ctx: Ctx, Json(b): Json<DiscoverKey>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = discoverer(&ctx)?;
     let undo = tokio::task::spawn_blocking(move || crate::app::discover::not_interested(&serve, &account, &b.key))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
@@ -4406,8 +4428,8 @@ async fn discover_no(Json(b): Json<DiscoverKey>) -> Result<Json<serde_json::Valu
 
 /// Not interested in an artist (the owner, 2026-10-29): they and every record of theirs leave Discover for good. Its
 /// undo token.
-async fn discover_artist_not(Path(name): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (serve, account) = discoverer()?;
+async fn discover_artist_not(ctx: Ctx, Path(name): Path<String>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = discoverer(&ctx)?;
     let undo = tokio::task::spawn_blocking(move || crate::app::discover::artist_not_interested(&serve, &account, &name))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
@@ -4416,8 +4438,8 @@ async fn discover_artist_not(Path(name): Path<String>) -> Result<Json<serde_json
 }
 
 /// A suggestion hidden: it leaves the list, its artist not held against it. Its undo token.
-async fn discover_hide(Json(b): Json<DiscoverKey>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (serve, account) = discoverer()?;
+async fn discover_hide(ctx: Ctx, Json(b): Json<DiscoverKey>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = discoverer(&ctx)?;
     let undo = tokio::task::spawn_blocking(move || crate::app::discover::hide(&serve, &account, &b.key))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
@@ -4426,9 +4448,9 @@ async fn discover_hide(Json(b): Json<DiscoverKey>) -> Result<Json<serde_json::Va
 }
 
 /// The asking account and Cratarr's own library, for scrobbling (decision 0068).
-fn scrobbler() -> Result<(Arc<crate::serve::Serve>, String), ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: scrobbling is an account's own.".into()))?;
+fn scrobbler(ctx: &Ctx) -> Result<(Arc<crate::serve::Serve>, String), ApiError> {
+    let serve = ctx.serve()?;
+    let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: scrobbling is an account's own.".into()))?;
     Ok((serve, account))
 }
 
@@ -4437,8 +4459,8 @@ fn scrobble_refused(e: impl std::fmt::Display) -> ApiError {
 }
 
 /// The asking account's listening services (Connections): whom it scrobbles to, never a secret.
-async fn scrobble_targets() -> Result<Json<serde_json::Value>, ApiError> {
-    let (serve, account) = scrobbler()?;
+async fn scrobble_targets(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = scrobbler(&ctx)?;
     let targets = tokio::task::spawn_blocking(move || serve.userdata.scrobble_targets(&account)).await.map_err(scrobble_refused)?.map_err(|e| scrobble_refused(format!("{e:#}")))?;
     Ok(Json(json!({ "targets": targets })))
 }
@@ -4449,8 +4471,8 @@ struct ListenBrainzToken {
 }
 
 /// ListenBrainz connected with the user token from its settings page, checked first.
-async fn scrobble_listenbrainz(Json(b): Json<ListenBrainzToken>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (serve, account) = scrobbler()?;
+async fn scrobble_listenbrainz(ctx: Ctx, Json(b): Json<ListenBrainzToken>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = scrobbler(&ctx)?;
     let token = b.token.trim().to_string();
     let name = crate::app::scrobble::listenbrainz_user(&token).await.map_err(|e| scrobble_refused(format!("{e:#}")))?;
     let secret = serde_json::to_string(&crate::app::scrobble::Secret { token: Some(token), ..Default::default() }).map_err(scrobble_refused)?;
@@ -4474,8 +4496,8 @@ struct LastFmKeys {
 }
 
 /// Last.fm: the API key and its shared secret kept (not sending yet), and where to send the browser to sign in.
-async fn scrobble_lastfm(Json(b): Json<LastFmKeys>) -> Result<Json<serde_json::Value>, ApiError> {
-    let (serve, account) = scrobbler()?;
+async fn scrobble_lastfm(ctx: Ctx, Json(b): Json<LastFmKeys>) -> Result<Json<serde_json::Value>, ApiError> {
+    let (serve, account) = scrobbler(&ctx)?;
     let (key, secret) = (b.api_key.trim().to_string(), b.api_secret.trim().to_string());
     if key.is_empty() || secret.is_empty() {
         return Err(scrobble_refused("Last.fm needs the API key and its shared secret, from last.fm/api/account/create."));
@@ -4500,7 +4522,7 @@ struct LastFmBack {
 }
 
 /// Last.fm's sign-in coming back: its token traded for a session key, and the browser back to Connections.
-async fn scrobble_lastfm_callback(Path(code): Path<String>, Query(q): Query<LastFmBack>) -> Response {
+async fn scrobble_lastfm_callback(ctx: Ctx, Path(code): Path<String>, Query(q): Query<LastFmBack>) -> Response {
     let pending = crate::app::scrobble::take_pending(&code);
     let app = pending.as_ref().is_some_and(|p| p.app);
     let back = move |why: Option<String>| {
@@ -4517,7 +4539,7 @@ async fn scrobble_lastfm_callback(Path(code): Path<String>, Query(q): Query<Last
         axum::response::Redirect::to(&to).into_response()
     };
     let Some(pending) = pending else { return back(Some("That sign-in has expired; sign in again".into())) };
-    let Some(serve) = crate::serve::instance() else { return back(Some("Cratarr's own library is not open".into())) };
+    let Some(serve) = ctx.served.clone() else { return back(Some("Cratarr's own library is not open".into())) };
     let account = pending.account;
     let (ud, a) = (serve.userdata.clone(), account.clone());
     let kept = tokio::task::spawn_blocking(move || ud.scrobble_secret_any(&a, crate::app::scrobble::LASTFM)).await.ok().and_then(Result::ok).flatten();
@@ -4542,14 +4564,14 @@ async fn scrobble_lastfm_callback(Path(code): Path<String>, Query(q): Query<Last
 // ---- Spotify (decision 0073) ----
 
 /// The signed-in account, for Spotify: its lists are its own.
-fn spotify_account() -> Result<String, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    Ok(serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: Spotify is an account's own.".into()))?)
+fn spotify_account(ctx: &Ctx) -> Result<String, ApiError> {
+    ctx.serve()?;
+    Ok(ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: Spotify is an account's own.".into()))?)
 }
 
 /// Blocking Spotify work for the account, its failure one short line.
-async fn spotify_blocking<T: Send + 'static>(work: impl FnOnce(String) -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
-    let account = spotify_account()?;
+async fn spotify_blocking<T: Send + 'static>(ctx: &Ctx, work: impl FnOnce(String) -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
+    let account = spotify_account(ctx)?;
     tokio::task::spawn_blocking(move || work(account))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e}")))?
@@ -4557,8 +4579,8 @@ async fn spotify_blocking<T: Send + 'static>(work: impl FnOnce(String) -> anyhow
 }
 
 /// The account's Spotify: its app, the live connection, the export, which lists show and how many.
-async fn spotify_state() -> Result<Json<crate::app::spotify::State>, ApiError> {
-    Ok(Json(spotify_blocking(|a| crate::app::spotify::state(&a)).await?))
+async fn spotify_state(ctx: Ctx) -> Result<Json<crate::app::spotify::State>, ApiError> {
+    Ok(Json(spotify_blocking(&ctx, |a| crate::app::spotify::state(&a)).await?))
 }
 
 #[derive(Deserialize)]
@@ -4568,8 +4590,8 @@ struct SpotifyClient {
 }
 
 /// The account's own Spotify app (its Client ID); empty removes it, and a new one disconnects.
-async fn spotify_client(Json(b): Json<SpotifyClient>) -> Result<Json<crate::app::spotify::State>, ApiError> {
-    Ok(Json(spotify_blocking(move |a| crate::app::spotify::set_client(&a, &b.client_id).and_then(|()| crate::app::spotify::state(&a))).await?))
+async fn spotify_client(ctx: Ctx, Json(b): Json<SpotifyClient>) -> Result<Json<crate::app::spotify::State>, ApiError> {
+    Ok(Json(spotify_blocking(&ctx, move |a| crate::app::spotify::set_client(&a, &b.client_id).and_then(|()| crate::app::spotify::state(&a))).await?))
 }
 
 #[derive(Deserialize)]
@@ -4582,8 +4604,8 @@ struct SpotifyConnect {
 }
 
 /// Where to send the browser to sign in to Spotify with the account's own app.
-async fn spotify_connect(Json(b): Json<SpotifyConnect>) -> Result<Json<serde_json::Value>, ApiError> {
-    let url = spotify_blocking(move |a| crate::app::spotify::connect(&a, &b.callback, b.app)).await?;
+async fn spotify_connect(ctx: Ctx, Json(b): Json<SpotifyConnect>) -> Result<Json<serde_json::Value>, ApiError> {
+    let url = spotify_blocking(&ctx, move |a| crate::app::spotify::connect(&a, &b.callback, b.app)).await?;
     Ok(Json(json!({ "url": url })))
 }
 
@@ -4611,22 +4633,22 @@ async fn spotify_callback(Query(q): Query<SpotifyBack>) -> Response {
 }
 
 /// Disconnects the account's Spotify (the export's lists stay).
-async fn spotify_disconnect() -> Result<Json<crate::app::spotify::State>, ApiError> {
-    Ok(Json(spotify_blocking(|a| crate::app::spotify::disconnect(&a).and_then(|()| crate::app::spotify::state(&a))).await?))
+async fn spotify_disconnect(ctx: Ctx) -> Result<Json<crate::app::spotify::State>, ApiError> {
+    Ok(Json(spotify_blocking(&ctx, |a| crate::app::spotify::disconnect(&a).and_then(|()| crate::app::spotify::state(&a))).await?))
 }
 
 /// Reads the account's live lists again now; answers at once.
-async fn spotify_sync() -> Result<Json<crate::app::spotify::State>, ApiError> {
-    let account = spotify_account()?;
+async fn spotify_sync(ctx: Ctx) -> Result<Json<crate::app::spotify::State>, ApiError> {
+    let account = spotify_account(&ctx)?;
     tokio::spawn(crate::app::spotify::read_live(account.clone()));
     // The read marks itself running at once; a moment for it to.
     tokio::task::yield_now().await;
-    Ok(Json(spotify_blocking(|a| crate::app::spotify::state(&a)).await?))
+    Ok(Json(spotify_blocking(&ctx, |a| crate::app::spotify::state(&a)).await?))
 }
 
 /// Forgets the lists the account's Spotify export brought (its listens stay).
-async fn spotify_forget_import() -> Result<Json<crate::app::spotify::State>, ApiError> {
-    Ok(Json(spotify_blocking(|a| crate::app::spotify::forget_export(&a).and_then(|_| crate::app::spotify::state(&a))).await?))
+async fn spotify_forget_import(ctx: Ctx) -> Result<Json<crate::app::spotify::State>, ApiError> {
+    Ok(Json(spotify_blocking(&ctx, |a| crate::app::spotify::forget_export(&a).and_then(|_| crate::app::spotify::state(&a))).await?))
 }
 
 #[derive(Deserialize, Default)]
@@ -4635,38 +4657,38 @@ struct SpotifyFilter {
     q: Option<String>,
 }
 
-async fn spotify_albums(Query(f): Query<SpotifyFilter>) -> Result<Json<serde_json::Value>, ApiError> {
-    let albums = spotify_blocking(move |a| crate::app::spotify::albums(&a, f.status.as_deref(), f.q.as_deref())).await?;
+async fn spotify_albums(ctx: Ctx, Query(f): Query<SpotifyFilter>) -> Result<Json<serde_json::Value>, ApiError> {
+    let albums = spotify_blocking(&ctx, move |a| crate::app::spotify::albums(&a, f.status.as_deref(), f.q.as_deref())).await?;
     Ok(Json(json!({ "albums": albums })))
 }
 
-async fn spotify_tracks(Query(f): Query<SpotifyFilter>) -> Result<Json<serde_json::Value>, ApiError> {
-    let tracks = spotify_blocking(move |a| crate::app::spotify::tracks(&a, f.status.as_deref(), f.q.as_deref())).await?;
+async fn spotify_tracks(ctx: Ctx, Query(f): Query<SpotifyFilter>) -> Result<Json<serde_json::Value>, ApiError> {
+    let tracks = spotify_blocking(&ctx, move |a| crate::app::spotify::tracks(&a, f.status.as_deref(), f.q.as_deref())).await?;
     Ok(Json(json!({ "tracks": tracks })))
 }
 
-async fn spotify_playlists() -> Result<Json<serde_json::Value>, ApiError> {
-    let playlists = spotify_blocking(|a| crate::app::spotify::playlists(&a)).await?;
+async fn spotify_playlists(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let playlists = spotify_blocking(&ctx, |a| crate::app::spotify::playlists(&a)).await?;
     Ok(Json(json!({ "playlists": playlists })))
 }
 
-async fn spotify_playlist(Path(id): Path<String>) -> Result<Response, ApiError> {
-    match spotify_blocking(move |a| crate::app::spotify::playlist(&a, &id)).await? {
+async fn spotify_playlist(ctx: Ctx, Path(id): Path<String>) -> Result<Response, ApiError> {
+    match spotify_blocking(&ctx, move |a| crate::app::spotify::playlist(&a, &id)).await? {
         Some(p) => Ok(Json(p).into_response()),
         None => Ok((StatusCode::NOT_FOUND, Json(json!({ "error": "That playlist is not in your Spotify lists." }))).into_response()),
     }
 }
 
-async fn spotify_artists(Query(f): Query<SpotifyFilter>) -> Result<Json<serde_json::Value>, ApiError> {
-    let artists = spotify_blocking(move |a| crate::app::spotify::artists(&a, f.status.as_deref())).await?;
+async fn spotify_artists(ctx: Ctx, Query(f): Query<SpotifyFilter>) -> Result<Json<serde_json::Value>, ApiError> {
+    let artists = spotify_blocking(&ctx, move |a| crate::app::spotify::artists(&a, f.status.as_deref())).await?;
     Ok(Json(json!({ "artists": artists })))
 }
 
 /// An item's picture: Spotify's (or Cover Art Archive's) relayed, or Cratarr's own cover of the album it matched.
-async fn spotify_cover(Path((kind, id)): Path<(String, String)>) -> Result<Response, ApiError> {
+async fn spotify_cover(ctx: Ctx, Path((kind, id)): Path<(String, String)>) -> Result<Response, ApiError> {
     use crate::app::reach::Sent;
     use crate::app::spotify::Picture;
-    let picture = spotify_blocking(move |a| crate::app::spotify::picture(&a, &kind, &id)).await?;
+    let picture = spotify_blocking(&ctx, move |a| crate::app::spotify::picture(&a, &kind, &id)).await?;
     let url = match picture {
         None => return Ok(StatusCode::NOT_FOUND.into_response()),
         Some(Picture::Own(source, album)) => {
@@ -4699,8 +4721,8 @@ struct SwitchedOn {
 }
 
 /// A listening service switched on or off, its sign-in kept.
-async fn scrobble_on(Path(target): Path<String>, Json(b): Json<SwitchedOn>) -> Result<StatusCode, ApiError> {
-    let (serve, account) = scrobbler()?;
+async fn scrobble_on(ctx: Ctx, Path(target): Path<String>, Json(b): Json<SwitchedOn>) -> Result<StatusCode, ApiError> {
+    let (serve, account) = scrobbler(&ctx)?;
     let found = tokio::task::spawn_blocking(move || serve.userdata.set_scrobble_on(&account, &target, b.on))
         .await
         .map_err(scrobble_refused)?
@@ -4709,8 +4731,8 @@ async fn scrobble_on(Path(target): Path<String>, Json(b): Json<SwitchedOn>) -> R
 }
 
 /// A listening service disconnected, with what waited for it.
-async fn scrobble_forget(Path(target): Path<String>) -> Result<StatusCode, ApiError> {
-    let (serve, account) = scrobbler()?;
+async fn scrobble_forget(ctx: Ctx, Path(target): Path<String>) -> Result<StatusCode, ApiError> {
+    let (serve, account) = scrobbler(&ctx)?;
     tokio::task::spawn_blocking(move || serve.userdata.forget_scrobble_target(&account, &target)).await.map_err(scrobble_refused)?.map_err(|e| scrobble_refused(format!("{e:#}")))?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -4740,9 +4762,9 @@ fn lastfm_choice(account: &str) -> String {
 
 /// Whose import, whose scrobbles and how Cratarr asks: with the account's own Last.fm sign-in (Connections) where it
 /// has one, which also reads a private history; else with the key given (kept for next time), else the one kept.
-async fn lastfm_who(b: LastFmImport) -> Result<(Arc<crate::serve::Serve>, String, String, crate::app::lastfm::Auth), ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
+async fn lastfm_who(ctx: &Ctx, b: LastFmImport) -> Result<(Arc<crate::serve::Serve>, String, String, crate::app::lastfm::Auth), ApiError> {
+    let serve = ctx.serve()?;
+    let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
     let user = b.user.trim().to_string();
     if user.is_empty() {
         return Err(ToggleError::Refused("Say whose Last.fm scrobbles.".into()).into());
@@ -4779,9 +4801,9 @@ async fn lastfm_who(b: LastFmImport) -> Result<(Arc<crate::serve::Serve>, String
 }
 
 /// The Last.fm user an account imported last, and whether a key is kept (never the key).
-async fn lastfm_kept() -> Result<Json<serde_json::Value>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
+async fn lastfm_kept(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = ctx.serve()?;
+    let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
     let ud = serve.userdata.clone();
     let kept = tokio::task::spawn_blocking(move || ud.import_choice(&lastfm_choice(&account)))
         .await
@@ -4792,33 +4814,33 @@ async fn lastfm_kept() -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(json!({ "user": kept.as_ref().map(|k| k.user.clone()), "key": kept.is_some() })))
 }
 
-async fn import_lastfm(Json(b): Json<LastFmImport>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    bring_lastfm(b, false).await
+async fn import_lastfm(ctx: Ctx, Json(b): Json<LastFmImport>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    bring_lastfm(&ctx, b, false).await
 }
 
-async fn preview_lastfm(Json(b): Json<LastFmImport>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    bring_lastfm(b, true).await
+async fn preview_lastfm(ctx: Ctx, Json(b): Json<LastFmImport>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    bring_lastfm(&ctx, b, true).await
 }
 
-async fn bring_lastfm(b: LastFmImport, preview: bool) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+async fn bring_lastfm(ctx: &Ctx, b: LastFmImport, preview: bool) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let what = b.what;
     if !what.scrobbles && !what.loves {
         return Err(ToggleError::Refused("Choose the scrobbles, the loved tracks, or both.".into()).into());
     }
     // The scrobbles are listening; the loved tracks are favourites, and come in either way.
     if what.scrobbles && !preview {
-        keeps_history()?;
+        keeps_history(ctx)?;
     }
-    let (serve, account, user, auth) = lastfm_who(b).await?;
+    let (serve, account, user, auth) = lastfm_who(ctx, b).await?;
     started(crate::app::tasks::spawn("import:lastfm", &account.clone(), preview, move |h| async move {
         crate::app::lastfm::bring(&serve, &account, &user, &auth, what, preview, &progress_of(h)).await
     }))
 }
 
 /// Everything imported from Last.fm out of the account again: its scrobbles, the stars its loved tracks set.
-async fn undo_lastfm(Json(b): Json<LastFmImport>) -> Result<Json<crate::app::lastfm::Undone>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
+async fn undo_lastfm(ctx: Ctx, Json(b): Json<LastFmImport>) -> Result<Json<crate::app::lastfm::Undone>, ApiError> {
+    let serve = ctx.serve()?;
+    let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
     let user = b.user.trim().to_string();
     let undone = tokio::task::spawn_blocking(move || crate::app::lastfm::undo(&serve, &account, &user))
         .await
@@ -4837,9 +4859,10 @@ struct FileImport {
 
 /// A file into the asking account (decision 0067, step 4): its listens into the history, or a playlist of it; the file
 /// is the body, kept nowhere.
-async fn import_file(State(app): State<Arc<App>>, Query(q): Query<FileImport>, body: axum::body::Bytes) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: an import is an account's own.".into()))?;
+async fn import_file(ctx: Ctx, Query(q): Query<FileImport>, body: axum::body::Bytes) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let app = ctx.app.clone();
+    let serve = ctx.serve()?;
+    let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: an import is an account's own.".into()))?;
     started(crate::app::tasks::spawn("import:file", &account.clone(), q.preview, move |h| async move {
         crate::app::import_files::import(&app, &serve, &account, &q.name, &body, q.preview, &progress_of(h)).await
     }))
@@ -4852,11 +4875,11 @@ struct FileUndo {
 }
 
 /// The listens imported from files of one kind out of the account's history again.
-async fn undo_file(Query(q): Query<FileUndo>) -> Result<Json<serde_json::Value>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: an import is an account's own.".into()))?;
-    let ctx = crate::app::import_files::context(&q.from);
-    let removed = tokio::task::spawn_blocking(move || serve.userdata.forget_heard(&account, &ctx))
+async fn undo_file(ctx: Ctx, Query(q): Query<FileUndo>) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = ctx.serve()?;
+    let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: an import is an account's own.".into()))?;
+    let context = crate::app::import_files::context(&q.from);
+    let removed = tokio::task::spawn_blocking(move || serve.userdata.forget_heard(&account, &context))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
@@ -4864,9 +4887,9 @@ async fn undo_file(Query(q): Query<FileUndo>) -> Result<Json<serde_json::Value>,
 }
 
 /// Every listen imported from ListenBrainz out of the account's history again.
-async fn undo_listenbrainz() -> Result<Json<serde_json::Value>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let account = serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
+async fn undo_listenbrainz(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = ctx.serve()?;
+    let account = ctx.account().ok_or_else(|| ToggleError::Refused("Sign in first: the history is an account's own.".into()))?;
     let removed = tokio::task::spawn_blocking(move || crate::app::listenbrainz::undo(&serve, &account))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
@@ -4890,9 +4913,9 @@ async fn artist_picks(State(app): State<Arc<App>>, Query(q): Query<PicksQuery>) 
 }
 
 /// The weather as Home Assistant tells it (the cratarr-ha integration, on each change): Home's moment.
-async fn home_weather(Json(w): Json<crate::app::moment::Weather>) -> Result<Json<serde_json::Value>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    serve.current_user().ok_or_else(|| ToggleError::Refused("Sign in to tell the weather.".into()))?;
+async fn home_weather(ctx: Ctx, Json(w): Json<crate::app::moment::Weather>) -> Result<Json<serde_json::Value>, ApiError> {
+    ctx.serve()?;
+    ctx.account().ok_or_else(|| ToggleError::Refused("Sign in to tell the weather.".into()))?;
     crate::app::moment::tell(w, crate::app::moment::now_secs());
     Ok(Json(json!({})))
 }
@@ -4970,8 +4993,9 @@ const READ_NOW: usize = 3;
 /// Home's Artists to explore (the owner, 2026-10-23): artists of the libraries switched on with two albums or more, in a
 /// new random order each time, only those TheAudioDB has a biography of (the owner, 2026-10-24); the first with a photo
 /// open, each with its four biggest albums.
-async fn home_artists(State(app): State<Arc<App>>, Query(q): Query<TasteQuery>) -> Result<Json<serde_json::Value>, ApiError> {
-    let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+async fn home_artists(ctx: Ctx, Query(q): Query<TasteQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = ctx.app.clone();
+    let served = ctx.serve()?;
     let without: Vec<String> = q.without.as_deref().unwrap_or("").split(',').filter(|s| !s.is_empty()).map(str::to_string).collect();
     let on = app.insights.folders_on(q.source.as_deref(), &without);
     let lib = served.library.clone();
@@ -5066,8 +5090,9 @@ const REFIND_SHOWN: usize = 10;
 /// the owner, 2026-10-23), each with its playlist line. By the line (`line`; the owner, 2026-10-24: the words were too
 /// strict): the same title at heart by the same artist, wherever it lies now, the best first, `sure` on the one
 /// answer when there is one; else by words (`q`), at most 20, the library's search's order.
-async fn library_find(State(app): State<Arc<App>>, Query(q): Query<FindQuery>) -> Result<Json<serde_json::Value>, ApiError> {
-    let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+async fn library_find(ctx: Ctx, Query(q): Query<FindQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = ctx.app.clone();
+    let served = ctx.serve()?;
     let (lib, cat, query, line) = (served.library.clone(), app.library.catalogue(), q.q.clone(), q.line.clone());
     let found = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<serde_json::Value>> {
         let songs = match &line {
@@ -5133,9 +5158,10 @@ struct AboutQuery {
 
 /// About an artist, for their page (the owner, 2026-10-23): TheAudioDB's description and whether there is a photo
 /// (`/api/artists/{id}/photo`), read now when it never was. Nothing known: nulls.
-async fn artist_about(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) -> Json<serde_json::Value> {
+async fn artist_about(ctx: Ctx, Query(q): Query<AboutQuery>) -> Json<serde_json::Value> {
+    let app = ctx.app.clone();
     let found = async {
-        let served = crate::serve::instance()?;
+        let served = ctx.served.clone()?;
         let store = app.artists.clone()?;
         let lib = served.library.clone();
         let name = q.name.clone();
@@ -5174,8 +5200,9 @@ async fn search_all(State(app): State<Arc<App>>, Query(s): Query<SearchQuery>) -
 /// Beyond the library (0076, the unindexed universe): MusicBrainz's albums and Discogs' masters for the words, together,
 /// one album once (by its artist and title), each with where it was found; what the library has marked `have`, what
 /// is asked for its request. MusicBrainz's artists beside. A page of `limit` from `offset`; kept per query.
-async fn search_beyond(State(app): State<Arc<App>>, Query(s): Query<SearchQuery>) -> Result<Json<serde_json::Value>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+async fn search_beyond(ctx: Ctx, Query(s): Query<SearchQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = ctx.app.clone();
+    let serve = ctx.serve()?;
     let (limit, offset) = (s.limit.unwrap_or(20).clamp(1, 50), s.offset.unwrap_or(0).min(500));
     let q = s.q.trim().to_string();
     if crate::search::words(&q).is_empty() {
@@ -5226,8 +5253,8 @@ async fn search_beyond(State(app): State<Arc<App>>, Query(s): Query<SearchQuery>
 
 /// Related artists to explore on an artist's page (0.9.2, app::related), by the artist's name: as last looked up, and
 /// whether a look runs now (started here when none was kept or it is old). An artist without a MusicBrainz id has none.
-async fn artist_related(Query(q): Query<AboutQuery>) -> Result<Json<serde_json::Value>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+async fn artist_related(ctx: Ctx, Query(q): Query<AboutQuery>) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = ctx.serve()?;
     let (s, name) = (serve.clone(), q.name.trim().to_string());
     let found = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<(String, Option<crate::app::related::Found>, bool)>> {
         let Some((_, Some(mbid))) = s.library.artist_by_name(&name)? else { return Ok(None) };
@@ -5249,8 +5276,8 @@ async fn artist_related(Query(q): Query<AboutQuery>) -> Result<Json<serde_json::
 /// the artist store reads it for the library's (read now when it never was), and whether there is a photo.
 /// A name's MusicBrainz id where it is one of the library's artists: the artist store keeps those by it, as the
 /// artist pages read them (the owner, 2026-10-25: the masonry's artist, one the library has, showed no photo).
-async fn library_mbid(name: &str) -> Option<String> {
-    let lib = crate::serve::instance()?.library.clone();
+async fn library_mbid(app: &App, name: &str) -> Option<String> {
+    let lib = app.served.as_ref()?.library.clone();
     let name = name.to_string();
     tokio::task::spawn_blocking(move || lib.artist_by_name(&name)).await.ok()?.ok()??.1.filter(|m| !m.is_empty())
 }
@@ -5258,7 +5285,7 @@ async fn library_mbid(name: &str) -> Option<String> {
 async fn discover_artist(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) -> Json<serde_json::Value> {
     let found = async {
         let store = app.artists.clone()?;
-        let mbid = library_mbid(q.name.trim()).await;
+        let mbid = library_mbid(&app, q.name.trim()).await;
         let info = store.get_or_read(q.name.trim(), mbid.as_deref()).await?;
         Some(json!({ "bio": info.bio, "photo": info.photo.is_some(), "photo_credit": info.credit }))
     }
@@ -5276,7 +5303,7 @@ async fn discover_artist_albums(Query(q): Query<AboutQuery>) -> Json<serde_json:
 async fn discover_artist_photo(State(app): State<Arc<App>>, Query(q): Query<AboutQuery>) -> Response {
     let found = async {
         let store = app.artists.clone()?;
-        let mbid = library_mbid(q.name.trim()).await;
+        let mbid = library_mbid(&app, q.name.trim()).await;
         let file = store.get(&crate::app::artists::key(q.name.trim(), mbid.as_deref()))?.photo?;
         tokio::fs::read(store.photo_path(&file)).await.ok()
     }
@@ -5288,9 +5315,10 @@ async fn discover_artist_photo(State(app): State<Arc<App>>, Query(q): Query<Abou
 }
 
 /// An artist's photo, as the artist store kept it.
-async fn artist_photo(State(app): State<Arc<App>>, Path(id): Path<String>) -> Response {
+async fn artist_photo(ctx: Ctx, Path(id): Path<String>) -> Response {
+    let app = ctx.app.clone();
     let found = async {
-        let served = crate::serve::instance()?;
+        let served = ctx.served.clone()?;
         let store = app.artists.clone()?;
         let lib = served.library.clone();
         let artist = tokio::task::spawn_blocking(move || lib.artist(&id)).await.ok()?.ok()??;
@@ -5366,10 +5394,11 @@ struct ListeningQuery {
 
 /// Insights' Listening (decision 0065): the asking account's listening over a week, a month or a year, of the tracks in
 /// the libraries switched on (`without`, Insights' switches).
-async fn history_listening(State(app): State<Arc<App>>, Query(q): Query<ListeningQuery>, RawQuery(raw): RawQuery) -> Result<Json<crate::app::history::Listening>, ApiError> {
+async fn history_listening(ctx: Ctx, Query(q): Query<ListeningQuery>, RawQuery(raw): RawQuery) -> Result<Json<crate::app::history::Listening>, ApiError> {
     use crate::app::history::{self, Period, SongFacts};
-    let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
-    let user = served.current_user().or_else(|| served.users.owner()).ok_or_else(|| ToggleError::Refused("Nobody is signed in.".into()))?;
+    let app = ctx.app.clone();
+    let served = ctx.serve()?;
+    let user = ctx.account().or_else(|| served.users.owner()).ok_or_else(|| ToggleError::Refused("Nobody is signed in.".into()))?;
     let period = q.period.unwrap_or(Period::Week);
     let tz = q.tz.clamp(-14 * 3600, 14 * 3600);
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
@@ -5461,8 +5490,8 @@ struct LastfmKey {
 
 /// The server's own Last.fm key (Discover's artists like each account's own most played, decision 0069 amended):
 /// whether one is in use, and whether it was saved here (else `LASTFM_API_KEY` gives it). The key is never sent.
-async fn get_lastfm_key() -> Result<Json<serde_json::Value>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+async fn get_lastfm_key(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
     let (saved, used) = tokio::task::spawn_blocking(move || -> anyhow::Result<(bool, bool)> {
         let saved = ud.import_choice(crate::app::discover::SERVER_LASTFM)?.is_some_and(|k| !k.trim().is_empty());
@@ -5475,12 +5504,12 @@ async fn get_lastfm_key() -> Result<Json<serde_json::Value>, ApiError> {
 }
 
 /// The server's own Last.fm key saved; an empty one takes it away.
-async fn put_lastfm_key(Json(b): Json<LastfmKey>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn put_lastfm_key(ctx: Ctx, Json(b): Json<LastfmKey>) -> Result<Json<serde_json::Value>, ApiError> {
     let key = b.key.map(|k| k.trim().to_string());
     if key.as_deref().is_some_and(|k| !k.is_empty() && !crate::app::discover::lastfm_key_ok(k)) {
         return Err(ToggleError::Refused("A Last.fm API key is 32 letters and digits.".into()).into());
     }
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         if let Some(key) = key {
@@ -5494,12 +5523,12 @@ async fn put_lastfm_key(Json(b): Json<LastfmKey>) -> Result<Json<serde_json::Val
     .await
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    get_lastfm_key().await
+    get_lastfm_key(ctx).await
 }
 
 /// Whether the server's Discogs key and secret are saved (never them), and the limit a minute Discogs said last.
-async fn get_discogs_keys() -> Result<Json<serde_json::Value>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+async fn get_discogs_keys(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
     let set = tokio::task::spawn_blocking(move || crate::app::discogs::credentials(&ud))
         .await
@@ -5522,7 +5551,7 @@ struct DiscogsKeys {
 }
 
 /// The server's Discogs key and secret saved (0.9.5, the owner registers the app); both blank takes them away.
-async fn put_discogs_keys(Json(b): Json<DiscogsKeys>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn put_discogs_keys(ctx: Ctx, Json(b): Json<DiscogsKeys>) -> Result<Json<serde_json::Value>, ApiError> {
     let keys = match (b.key, b.secret) {
         (None, None) => None,
         (key, secret) => Some((key.unwrap_or_default().trim().to_string(), secret.unwrap_or_default().trim().to_string())),
@@ -5533,7 +5562,7 @@ async fn put_discogs_keys(Json(b): Json<DiscogsKeys>) -> Result<Json<serde_json:
     {
         return Err(ToggleError::Refused("A Discogs key and secret are both letters and digits.".into()).into());
     }
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
     let enabled = b.enabled;
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
@@ -5549,7 +5578,7 @@ async fn put_discogs_keys(Json(b): Json<DiscogsKeys>) -> Result<Json<serde_json:
     .await
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    get_discogs_keys().await
+    get_discogs_keys(ctx).await
 }
 
 #[derive(Deserialize)]
@@ -5565,8 +5594,8 @@ async fn player_shared(State(app): State<Arc<App>>, Path(name): Path<String>, Js
 // ---- Server settings that were the environment's only (0.9.8)
 
 /// The proxies believed, the analysis pass, Beat this! and sync play's host, with what the environment set.
-async fn get_runtime() -> Result<Json<crate::app::runtime::View>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+async fn get_runtime(ctx: Ctx) -> Result<Json<crate::app::runtime::View>, ApiError> {
+    let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
     Ok(Json(
         tokio::task::spawn_blocking(move || crate::app::runtime::view(&ud))
@@ -5577,8 +5606,9 @@ async fn get_runtime() -> Result<Json<crate::app::runtime::View>, ApiError> {
 }
 
 /// Saved and in force at once (sync play's host for the players asking from now on).
-async fn put_runtime(State(app): State<Arc<App>>, Json(c): Json<crate::app::runtime::Change>) -> Result<Json<crate::app::runtime::View>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+async fn put_runtime(ctx: Ctx, Json(c): Json<crate::app::runtime::Change>) -> Result<Json<crate::app::runtime::View>, ApiError> {
+    let app = ctx.app.clone();
+    let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
     let host_changed = c.snapcast_host.is_some();
     let r = tokio::task::spawn_blocking(move || crate::app::runtime::save(&ud, &c))
@@ -5589,16 +5619,16 @@ async fn put_runtime(State(app): State<Arc<App>>, Json(c): Json<crate::app::runt
         app.play_on.set_sync_host(r.snapcast_host.clone());
         app.play_on.set_lan_base(crate::app::runtime::lan_base(&r));
     }
-    get_runtime().await
+    get_runtime(ctx).await
 }
 
 // ---- Discogs' facts (0.9.8)
 
 /// An album's facts on Discogs: its master's genres, styles and year, its main release's labels and catalogue numbers
 /// and its credits, its page; `{}` where Discogs has none. Asked now where not kept.
-async fn album_discogs(Path((source, album)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn album_discogs(ctx: Ctx, Path((source, album)): Path<(String, String)>) -> Result<Json<serde_json::Value>, ApiError> {
     own_album(&source)?;
-    let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let served = ctx.serve()?;
     let facts = crate::app::discogs_facts::album(&served, &album).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(facts.map_or(json!({}), |f| serde_json::to_value(f).unwrap_or_default())))
 }
@@ -5612,8 +5642,8 @@ struct ArtistAsked {
 
 /// An artist's facts on Discogs: profile (plain), real name, aliases, name variations, members and groups, links, page;
 /// `{}` where Discogs has none.
-async fn artist_discogs(Query(q): Query<ArtistAsked>) -> Result<Json<serde_json::Value>, ApiError> {
-    let served = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+async fn artist_discogs(ctx: Ctx, Query(q): Query<ArtistAsked>) -> Result<Json<serde_json::Value>, ApiError> {
+    let served = ctx.serve()?;
     let facts = crate::app::discogs_facts::artist(&served, &q.name, q.mbid.as_deref()).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     Ok(Json(facts.map_or(json!({}), |f| serde_json::to_value(f).unwrap_or_default())))
 }
@@ -5681,8 +5711,8 @@ async fn add_fetched_track(Path(id): Path<String>) -> Result<Json<serde_json::Va
 }
 
 /// slskd as set (never its key) and whether it answers: its version, or why not.
-async fn get_slskd() -> Result<Json<serde_json::Value>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+async fn get_slskd(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
     let (url, key, folder) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         use crate::app::track_fetch::{SLSKD_FOLDER, SLSKD_KEY, SLSKD_URL};
@@ -5722,14 +5752,14 @@ struct SlskdChoices {
 }
 
 /// slskd's address, key and completed-downloads folder saved; switched on or off.
-async fn put_slskd(Json(b): Json<SlskdChoices>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn put_slskd(ctx: Ctx, Json(b): Json<SlskdChoices>) -> Result<Json<serde_json::Value>, ApiError> {
     if let Some(url) = &b.url
         && !url.trim().is_empty()
         && !(url.trim().starts_with("http://") || url.trim().starts_with("https://"))
     {
         return Err(ToggleError::Refused("slskd's address starts with http:// or https://.".into()).into());
     }
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         use crate::app::track_fetch::{SLSKD_FOLDER, SLSKD_KEY, SLSKD_URL};
@@ -5746,12 +5776,12 @@ async fn put_slskd(Json(b): Json<SlskdChoices>) -> Result<Json<serde_json::Value
     .await
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
     .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    get_slskd().await
+    get_slskd(ctx).await
 }
 
 /// Whether the server's AcoustID key is saved (never it).
-async fn get_acoustid() -> Result<Json<serde_json::Value>, ApiError> {
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+async fn get_acoustid(ctx: Ctx) -> Result<Json<serde_json::Value>, ApiError> {
+    let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
     let set = tokio::task::spawn_blocking(move || crate::app::track_fetch::acoustid_key(&ud))
         .await
@@ -5768,18 +5798,18 @@ struct AcoustidKey {
 }
 
 /// The server's AcoustID application key saved (the owner registers the application).
-async fn put_acoustid(Json(b): Json<AcoustidKey>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn put_acoustid(ctx: Ctx, Json(b): Json<AcoustidKey>) -> Result<Json<serde_json::Value>, ApiError> {
     let key = b.key.trim().to_string();
     if !key.is_empty() && (!(4..=64).contains(&key.len()) || !key.chars().all(|c| c.is_ascii_alphanumeric())) {
         return Err(ToggleError::Refused("An AcoustID key is letters and digits.".into()).into());
     }
-    let serve = crate::serve::instance().ok_or_else(|| ToggleError::Refused("Cratarr's own library is not open.".into()))?;
+    let serve = ctx.serve()?;
     let ud = serve.userdata.clone();
     tokio::task::spawn_blocking(move || ud.set_import_choice(crate::app::track_fetch::ACOUSTID_KEY, &key))
         .await
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?
         .map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
-    get_acoustid().await
+    get_acoustid(ctx).await
 }
 
 /// Change cover (0.9.5): only for Cratarr's own library's albums, whose files Cratarr holds.
@@ -5797,9 +5827,9 @@ async fn album_covers(Path((source, album)): Path<(String, String)>) -> Result<J
 }
 
 /// The covers looked for as a task (0.9.6), its progress on the live channel, its result as `GET …/covers` answers.
-async fn look_album_covers(Path((source, album)): Path<(String, String)>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+async fn look_album_covers(ctx: Ctx, Path((source, album)): Path<(String, String)>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     own_album(&source)?;
-    let account = crate::serve::instance().and_then(|s| s.current_user()).ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
+    let account = ctx.account().ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
     started(crate::app::covers::start(&account, &album))
 }
 
@@ -5811,9 +5841,9 @@ async fn upload_album_cover(Path((source, album)): Path<(String, String)>, body:
 }
 
 /// Renumber's look (0.9.6) as a task: its result the preview, what `POST …/renumber` would write.
-async fn look_renumber(Path((source, album)): Path<(String, String)>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+async fn look_renumber(ctx: Ctx, Path((source, album)): Path<(String, String)>) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     own_album(&source)?;
-    let account = crate::serve::instance().and_then(|s| s.current_user()).ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
+    let account = ctx.account().ok_or_else(|| ToggleError::Refused("No one is signed in.".into()))?;
     started(crate::app::renumber::start(&account, &album))
 }
 
@@ -5830,11 +5860,12 @@ struct FixesOf {
 }
 
 /// A Health finding's fixes (0.9.7, `app::fixes`): each album's, the certain first, and how many are certain.
-async fn health_fixes(State(app): State<Arc<App>>, Query(q): Query<FixesOf>) -> Result<Json<serde_json::Value>, ApiError> {
+async fn health_fixes(ctx: Ctx, Query(q): Query<FixesOf>) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = ctx.app.clone();
     let fixes = crate::app::fixes::of_finding(&app, &q.finding).await.map_err(|e| ToggleError::Refused(format!("{e:#}")))?;
     let certain = fixes.iter().filter(|f| f.certainty == "certain").count();
     // Album artist and MusicBrainz ids come from matches made in a task (`match`): the page asks again as it runs.
-    let matching = crate::serve::instance().and_then(|s| s.current_user()).is_some_and(|a| crate::app::matching::running(&a));
+    let matching = ctx.account().is_some_and(|a| crate::app::matching::running(&a));
     Ok(Json(json!({ "fixes": fixes, "certain": certain, "matching": matching })))
 }
 

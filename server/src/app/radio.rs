@@ -892,11 +892,12 @@ fn starred_songs(userdata: &Path, user: &str) -> Result<HashSet<String>> {
     Ok(st.query_map(params![user], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?)
 }
 
-/// Songs played within seven days, with when (epoch seconds).
+/// Songs played within seven days as one's own, with when (epoch seconds): what was heard while following another
+/// is not kept from the radio (the owner, 2026-10-30).
 fn recent_plays(userdata: &Path, owner: &str) -> Result<HashMap<String, i64>> {
     let conn = read_only(userdata)?;
     let since = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0) - RECENT.as_secs() as i64;
-    let mut st = conn.prepare("SELECT item, play_date FROM annotation WHERE user = ?1 AND kind = 'song' AND play_date >= ?2")?;
+    let mut st = conn.prepare("SELECT item, own_date FROM annotation WHERE user = ?1 AND kind = 'song' AND own_date >= ?2")?;
     let rows = st.query_map(params![owner, since], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
@@ -1147,6 +1148,23 @@ async fn ready() -> Result<(Arc<Index>, HashMap<String, i64>), ToggleError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_radios_recent_plays_are_ones_own() {
+        let dir = std::env::temp_dir().join(format!("cratarr-radio-recent-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("userdata.sqlite");
+        let _ = std::fs::remove_file(&file);
+        let u = crate::userdata::UserData::open(Some(&file)).unwrap();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        u.count_play("me", ("tr-1", "p1"), "al-1", &[], now - 60).unwrap();
+        let along = crate::userdata::Heard { event: Some("f1".into()), followed: true, ..crate::userdata::Heard::counted(now - 30) };
+        u.record("me", ("tr-2", "p2"), "al-1", &[], &along).unwrap();
+        let recent = recent_plays(&file, "me").unwrap();
+        assert_eq!(recent, [("tr-1".to_string(), now - 60)].into(), "a song heard while following may come again");
+        drop(u);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn similar_by_is_the_account_s_setting_with_names_not_known_left_out() {
