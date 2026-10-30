@@ -88,9 +88,8 @@ $effect.root(() => {
   });
 });
 
-/** Something plays, where the output is. */
-const somethingPlays = () =>
-  (prefs.output === 'local' && canPlayHere) || prefs.output.startsWith('player:') ? local.index >= 0 : !!live.view?.now_playing;
+/** Something plays, where the output is (nothing where there is no player to play on, 0.12). */
+const somethingPlays = () => ((prefs.output === 'local' && canPlayHere) || prefs.output.startsWith('player:')) && local.index >= 0;
 
 /** The panel shows beside the page (decisions 0018, 0023): with room for it, a viewed playlist, or the player while
  *  something plays and it was not folded. */

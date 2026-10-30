@@ -1,7 +1,7 @@
 // Where music plays (decisions 0022, 0031): in this browser or app (local, lib/localPlayer.svelte.ts), or on one of
 // Cratarr's own players (Play On, lib/playOn.svelte.ts), which the page drives as it drives the local player. The media
 // server's player (remote, decision 0019) went from Cratarr's mode in 0.12; a Jellyfin mode lists that server's own
-// players by name (0.13). A browser that cannot play here with no player chosen still plays on it (lib/player/port). The player shows each the same way: the queue the page holds is
+// players by name (0.13). A browser that cannot play here with no player chosen has nowhere to play (lib/player/port). The player shows each the same way: the queue the page holds is
 // presented as a now-playing view like the server's. Switching moves the music: the queue and the position go to the
 // other side, which plays from there, and the side that played stops.
 import { away, pickHere } from './away.svelte';
@@ -176,7 +176,7 @@ $effect.root(() => {
   });
 });
 
-/** Plays a playlist where the output is: the server's player, or here (its tracks fetched, then the details). */
+/** Plays a playlist where the page plays (its tracks fetched, then the details); false with no player to play on. */
 export async function playPlaylistHere(id: string, mode: PlayMode): Promise<boolean> {
   const p = port();
   if (!p.holdsQueue) return false;

@@ -92,5 +92,6 @@ any different".
 The owner: in Cratarr's own mode the output sheet no longer offers the media server's player ("remote", a Jellyfin
 session followed by its now-playing). Play On's players and this device remain. An output kept as remote plays here
 again, without a word; an app pointed at it is pointed here. A browser that cannot play itself and has no player
-chosen still plays on the server's player, as the one way it can play at all. With modes per server (0.13) a
-Jellyfin mode lists that server's own players by name.
+chosen has nowhere to play: asked to, it says in one line to choose a player in Where it plays; nothing is handed to
+the media server's player. The server keeps its endpoints for now (a5 audits them in 0.13). With modes per server
+(0.13) a Jellyfin mode lists that server's own players by name.

@@ -8,7 +8,6 @@ import {
   getAlbumRating,
   getAlbums,
   getAlbumUses,
-  playAlbum,
   setAlbumRating,
   type AlbumsView,
   type AlbumUse,
@@ -17,10 +16,10 @@ import {
   ApiError,
 } from './api';
 import type { DownloadedTrack } from './app.svelte';
-import { player, untilNewTrack } from './live.svelte';
+import { player } from './live.svelte';
 import type { LocalTrack } from './localPlayer.svelte';
 import { playAlbumHere, playPlaylistFrom } from './output.svelte';
-import { port } from './player/port.svelte';
+import { choosePlayer, port } from './player/port.svelte';
 import { artistSubject, viewOver } from './panel.svelte';
 import { BANDCAMP } from './bandcampPreview';
 import { cameFrom, DISCOVER } from './discoverArtist';
@@ -90,15 +89,12 @@ export function albumOfDownload(t: DownloadedTrack): string | null {
 /** The album being started (its Play buttons wait meanwhile). */
 export const albumPlay = $state({ starting: null as string | null });
 
-/** Plays an album: here when the output is this browser (decision 0022), else on the server's player. */
+/** Plays an album where the page plays (decision 0022); with no player to play on, it says so (0.12). */
 export async function playListedAlbum(source: string, a: Pick<ListedAlbum, 'id' | 'title'>) {
   if (albumPlay.starting) return;
   albumPlay.starting = a.id;
   try {
-    if (await playAlbumHere(source, a.id, a.title)) return;
-    await playAlbum(source, a.id);
-    // Show the album's track once it plays, not the states on the way.
-    await untilNewTrack();
+    if (!(await playAlbumHere(source, a.id, a.title))) choosePlayer();
   } catch (e) {
     toast.fail(e, 'Could not start playing');
   } finally {
