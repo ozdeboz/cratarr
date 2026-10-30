@@ -37,7 +37,7 @@
   // album panel's ⋮), after Symfonium's album sheet: the album at the top (its heart there), the large actions (Play,
   // Resume, Shuffle, Play next, Add to queue), then its entries on rounded cards in the table's order (lib/menuTable),
   // related ones joined: where to go (View, each of its artists, its genres); its rating; Add to playlist (all its
-  // tracks, the playlists as toggle cards in a step, as a track's), Download…, Keep on this device and Share; Web search
+  // tracks, the playlists as toggle cards in a step, as a track's), Download…, Sync to this device and Share; Web search
   // and Genius search; its cover on this device (a picture chosen here, or the server's read again); what its library
   // allows (Move to another, Replace in Music; decision 0034), each question asked in place; Remove resume point and
   // Delete last.
@@ -584,7 +584,7 @@
     {#if inApp}
       <!-- Kept on this device (decision 0038): stays in step offline; Download… to this device is a one-time copy. -->
       {@const on = isKept('album', source, a.id)}
-      <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('album', source, a.id, !on, a.title)} />
+      <MenuEntry icon="download" label="Sync to this device" switched={on} onclick={() => setKept('album', source, a.id, !on, a.title)} />
     {/if}
   {:else if e === 'removeFromDevice'}
     <!-- Beside what put them there (the owner, 2026-10-26: removing was out of sight, last in the menu). -->

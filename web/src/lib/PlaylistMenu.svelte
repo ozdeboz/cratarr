@@ -4,7 +4,7 @@
   // playlist on its card (a mosaic of its first albums' covers; for several, their covers and "3 playlists"), Play,
   // Shuffle and Start radio as the large actions (several: one playlist after another, each track once), then in the
   // table's order (lib/menuTable) View, the favourite, Pin, Download… (to this device in the app: all their tracks, each
-  // once; or as files) and Keep on this device (each of them), Info, Repair… and Sync… (they show the panel on that tab),
+  // once; or as files) and Sync to this device (each of them), Info, Repair… and Sync… (they show the panel on that tab),
   // Rename and Spoken as… (one playlist only), and Delete (one Undo for all), each done inside the sheet.
   // Since several users (decision 0051): one's own playlist can be shared with the other users; another user's shared
   // one shows whose it is, and is copied rather than changed (nor repaired); Sync… is the administrators'. Ticked with
@@ -57,7 +57,7 @@
     /** Its tracks, for Download… to this device (in the app, by an opener that has its rows: one playlist viewed); else
      *  asked for. */
     downloadable?: Downloadable[] | null;
-    /** The server its tracks are kept from (Keep on this device, decision 0038), given with `downloadable`; else as the
+    /** The server its tracks are kept from (Sync to this device, decision 0038), given with `downloadable`; else as the
      *  rows asked for say. */
     keepFrom?: string | null;
   } = $props();
@@ -342,7 +342,7 @@
       <!-- All of them on, or all off when all are. -->
       <MenuEntry
         icon="download"
-        label="Keep on this device"
+        label="Sync to this device"
         switched={allKept}
         onclick={() => {
           const on = !allKept;

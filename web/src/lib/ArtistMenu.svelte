@@ -2,7 +2,7 @@
   // An artist's menu (the artist panel's ⋮, decided 2026-10-16, after Symfonium's): the artist at the top (their
   // heart there), the large actions (Play, Shuffle, Play next, Add to queue), then on rounded cards Start radio (their
   // Radio mix), then in the table's order (lib/menuTable) Add to playlist (all their tracks, as an album's), Download…,
-  // in the app Keep on this device (decision 0038), Share, and their picture on this device (one chosen here, or their
+  // in the app Sync to this device (decision 0038), Share, and their picture on this device (one chosen here, or their
   // newest album's cover again). No Instant mix (the owner: "a confusing thing"), no rating (the server keeps none for
   // artists).
   import { albumCoverUrl } from './api';
@@ -146,7 +146,7 @@
     {#if inApp && !previews}
       <!-- Kept on this device (decision 0038): their tracks stay in step offline. -->
       {@const on = isKept('artist', source, name)}
-      <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('artist', source, name, !on, name)} />
+      <MenuEntry icon="download" label="Sync to this device" switched={on} onclick={() => setKept('artist', source, name, !on, name)} />
     {/if}
   {:else if e === 'removeFromDevice'}
     <!-- Beside what put them there (the owner, 2026-10-26: removing was out of sight, last in the menu). -->

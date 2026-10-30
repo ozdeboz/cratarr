@@ -67,7 +67,7 @@ test('each menu is drawn from the table: every entry of its kinds has a way to s
   }
 });
 
-test('the names are the same everywhere (Info, View, Keep on this device, Download…), and the old ones are gone', () => {
+test('the names are the same everywhere (Info, View, Sync to this device, Download…), and the old ones are gone', () => {
   for (const [file, kinds] of Object.entries(FILES)) {
     const src = read(file);
     for (const e of new Set(kinds.flatMap((k) => MENUS[k].cards.flatMap((c) => c.entries)))) {

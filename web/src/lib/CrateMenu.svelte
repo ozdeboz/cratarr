@@ -4,7 +4,7 @@
   // and Start radio as the large actions (no Play next or Add to queue: a crate's or a playlist's make no sense, the
   // owner) (its tracks as its favourites settings have them),
   // then the shared groups in the table's order (lib/menuTable): View; Save as playlist (a genre: Start a crate from
-  // it); Download…, Keep on this device and Share; Edit (one's own); Delete (one's own, last).
+  // it); Download…, Sync to this device and Share; Edit (one's own); Delete (one's own, last).
   import { hiddenLibraries } from './listFilter.svelte';
   import MenuSheet from './MenuSheet.svelte';
   import MenuEntry from './MenuEntry.svelte';
@@ -35,7 +35,7 @@
   const viewed = $derived(panel.viewed === CRATE + id);
   const tracks = $derived(crate?.stats?.tracks ?? null);
 
-  // Where its tracks come from (Keep on this device follows that library's).
+  // Where its tracks come from (Sync to this device follows that library's).
   let source = $state<string | null>(null);
   $effect(() => {
     const c = id;
@@ -142,7 +142,7 @@
     {#if inApp && source && genre === null}
       {@const s = source}
       {@const on = isKept('crate', s, id)}
-      <MenuEntry icon="download" label="Keep on this device" switched={on} onclick={() => setKept('crate', s, id, !on, name)} />
+      <MenuEntry icon="download" label="Sync to this device" switched={on} onclick={() => setKept('crate', s, id, !on, name)} />
     {/if}
   {:else if e === 'share'}
     <MenuEntry icon="share" label="Share" onclick={shareIt} />

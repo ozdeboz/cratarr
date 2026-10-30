@@ -161,7 +161,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
   its heart, the large actions (Play, Resume when it has a resume point, Shuffle, Play next, Add to queue), then
   entries on rounded cards: View (not from the panel showing it), Go to each of its artists (the source's list of
   them, else the credit), Go to its genres (two at most); its rating (five stars, when its server keeps ratings; a tap
-  on the rating it has takes it off); Add to playlist, Download…, Keep on this device (in the app), Share; what its library allows
+  on the rating it has takes it off); Add to playlist, Download…, Sync to this device (in the app), Share; what its library allows
   (decision 0034: Move to each other used library, Replace in Music for an upgrade, Delete, a second step when it is
   in Music, Cancel conversion while queued), each question asked in the sheet; Change cover on this device (a
   picture kept in this browser, shown wherever the album's cover is; not in Cratarr's own library, where an
@@ -170,7 +170,7 @@ exception changes this file first. Agreed with the owner on 2026-10-12.
 - **An artist's menu** (`lib/ArtistMenu.svelte`, the artist panel's ⋮, decided 2026-10-16) as the album's: the artist
   with their heart, the large actions (Start radio among them, as on a track's and a playlist's), Add to playlist (all
   their tracks), Download…, Share, and their picture on this device. No Instant mix (the owner) and no rating.
-- **Keep on this device** (decision 0038, in the app; the table's name, Sync to this device from 2026-10-24): a switch
+- **Sync to this device** (decision 0038's Sync to this device, renamed by the owner 2026-10-24; in the app): a switch
   entry (`MenuEntry`'s `switched`: the entry with a switch at its end) in the album's, the artist's, the playlist's and
   the crate's menu, beside **Download…** (decision 0058, amended 2026-10-30; `lib/DownloadStep`): one entry on
   everything with tracks, never Bandcamp's previews. In the app it asks where: to this device (a one-time copy,

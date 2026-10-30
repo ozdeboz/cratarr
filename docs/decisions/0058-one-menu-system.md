@@ -126,8 +126,8 @@ context menu population rules." Chosen in a question set, for 0.9.19:
 - **One "Download…"** ("One Download… everywhere") replaces Export… and Download once, on everything that has tracks:
   albums, artists, tracks, playlists, crates and genres (the owner's choice named them; this lifts "never a crate"
   above), selections and the queue. In the app it asks where first: to this device (the one-time copy Download once
-  was) or as files; in an installed page to this browser or as files; in the browser files only. **Keep on this
-  device** stays the switch beside it, by the table's name (it was Sync to this device from 2026-10-24).
+  was) or as files; in an installed page to this browser or as files; in the browser files only. **Sync to this
+  device** (the table's Keep, renamed by the owner 2026-10-24) stays the switch beside it.
 - **Formats:** MP3 at 320 kb/s and MP3 V0 join the original files, FLAC at CD quality and Opus ("Keep them, add MP3").
   **Packaging:** one zip or the files one by one ("One zip or loose files"); the files one by one only in the app,
   which writes them into a folder picked there. The layout switch stays; no new folder or file-name patterns.

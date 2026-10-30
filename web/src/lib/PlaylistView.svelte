@@ -1828,7 +1828,7 @@ ${r.album_artist ?? r.artist ?? ''}`;
         <span class="grow"></span>
         {#if crate}
           <!-- What shows the crate stays here (its favourites filters); what is done with it is its menu's (decision
-               0058: Keep on this device, Edit, Save as playlist, Start a crate from a genre). -->
+               0058: Sync to this device, Edit, Save as playlist, Start a crate from a genre). -->
           {#if favState}
             <button class="icon" class:fav={favState.filled} aria-label={`Showing: ${favState.label}. Tap for the next`} title={favState.label} onclick={() => crate && cycleFavourites(crate)}
               ><Icon name={favState.icon} size={24} /></button

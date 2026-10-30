@@ -188,7 +188,7 @@ export const ENTRY_NAME: Partial<Record<EntryId, string>> = {
   saveAsPlaylist: 'Save as playlist',
   startCrate: 'Start a crate from it',
   download: 'Download…',
-  keep: 'Keep on this device',
+  keep: 'Sync to this device',
   removeFromDevice: 'Remove from this device',
   share: 'Share',
   sharedWithUsers: 'Shared with other users',
@@ -219,7 +219,7 @@ export const ENTRY_NAME: Partial<Record<EntryId, string>> = {
 };
 
 /** Names no menu uses any more: what 0058 and its amendment renamed. */
-export const RETIRED_NAMES = ['Details', 'View album', 'Sync to this device', 'Download once', 'Export…'];
+export const RETIRED_NAMES = ['Details', 'View album', 'Keep on this device', 'Download once', 'Export…'];
 
 /** A kind's cards, in the table's order. */
 export const cardsOf = (kind: MenuKind): readonly MenuCard[] => MENUS[kind].cards;

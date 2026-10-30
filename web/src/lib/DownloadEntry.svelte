@@ -1,6 +1,6 @@
 <script lang="ts">
   // Download… to this device (the owner, 2026-10-24; in Download…'s step since 0.9.19, lib/DownloadStep): a one-time
-  // copy on this device, as against Keep on this device (decision 0038), which follows the item. The step stays open
+  // copy on this device, as against Sync to this device (decision 0038), which follows the item. The step stays open
   // and the row itself fills as the tracks come in, its
   // label counting them ("Downloading 3 of 12"); opened again later, it shows the same. Some tracks failed: Retry; some
   // not there yet: the rest; all there: no row (Remove from this device stays last in the menu). In the installed page

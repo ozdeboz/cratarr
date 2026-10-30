@@ -6,7 +6,7 @@
   // a small icon after a toggle's label (a group's leader: a crown), `badgeLabel` saying what it means. `onmark`: the
   // toggle's mark (+ or the tick) is a button of its own, `markLabel` saying what it does; the label keeps `onclick`.
   // `plus: false`: no + while off (a choice that adds nothing), the tick only when on.
-  // `switched`: an entry that turns something on or off (Keep on this device), its switch at the end. `sub`: a toggle's
+  // `switched`: an entry that turns something on or off (Sync to this device), its switch at the end. `sub`: a toggle's
   // second line, smaller, after `subIcon` (another player's track and whether it plays, in Play On; no cover).
   // `progress` (0 to 1): the row fills behind its label as its work goes (Download… to this device, lib/DownloadEntry).
   import Icon, { type IconName } from './Icon.svelte';
